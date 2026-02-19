@@ -1,0 +1,31 @@
+(test
+ (name test)
+ (libraries d3t alcotest re))
+
+(executable
+ (name gen_3d)
+ (libraries d3t))
+
+; EverParse integration tests
+; First generate .3d files, then run EverParse on them
+
+(rule
+ (targets Bitfields.3d Enumerations.3d FieldDependence.3d)
+ (deps gen_3d.exe)
+ (action
+  (run ./gen_3d.exe)))
+
+; EverParse 3D validation - runs 3d on generated .3d files
+; Requires 3d to be in PATH (e.g., via ~/.local/bin/3d)
+
+(rule
+ (alias 3d)
+ (deps Bitfields.3d Enumerations.3d FieldDependence.3d)
+ (action
+  (progn
+   (run 3d --version)
+   (run 3d --batch Bitfields.3d)
+   (run 3d --batch Enumerations.3d)
+   (run 3d --batch FieldDependence.3d))))
+
+; Note: C code generation for differential testing is in the diff/ directory

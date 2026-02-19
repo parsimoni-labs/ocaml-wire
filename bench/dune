@@ -1,0 +1,9 @@
+(executable
+ (name bench_d3t_memtrace)
+ (modules bench_d3t_memtrace)
+ (libraries clcw-d3t space-packet.d3t tm-d3t memtrace))
+
+(executable
+ (name bench_alloc)
+ (modules bench_alloc)
+ (libraries d3t))

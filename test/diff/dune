@@ -1,0 +1,64 @@
+; Differential testing: OCaml d3t vs EverParse C parsers
+;
+; Workflow:
+; 1. gen_c generates random schemas as .3d files
+; 2. EverParse 3d generates C parsers from .3d files
+; 3. Test runner generates random bytes, runs both parsers, diffs results
+
+; Schema library for differential testing
+
+(library
+ (name schema)
+ (modules schema)
+ (libraries d3t))
+
+; Generate .3d files from OCaml schemas
+
+(executable
+ (name gen_schemas)
+ (modules gen_schemas)
+ (libraries schema))
+
+(rule
+ (targets SimpleHeader.3d ConstrainedPacket.3d)
+ (deps gen_schemas.exe)
+ (action
+  (run ./gen_schemas.exe)))
+
+; Generate .3d files from random schemas into schemas/ directory
+
+(executable
+ (name gen_c)
+ (modules gen_c)
+ (libraries d3t unix))
+
+(rule
+ (target
+  (dir schemas))
+ (deps gen_c.exe)
+ (action
+  (run ./gen_c.exe schemas 100)))
+
+; Run EverParse 3d to generate C from .3d files
+; Requires EverParse to be installed at ~/.local/everparse
+
+(rule
+ (alias 3d)
+ (deps
+  (source_tree schemas))
+ (action
+  (bash
+   "cd schemas && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" || exit 1; done")))
+
+; Fuzz tests for schemas (OCaml only - no C dependency)
+
+(executable
+ (name fuzz_schema)
+ (modules fuzz_schema)
+ (libraries schema crowbar))
+
+(rule
+ (alias fuzz)
+ (deps fuzz_schema.exe)
+ (action
+  (run %{exe:fuzz_schema.exe})))

@@ -1,0 +1,4 @@
+(library
+ (name d3t_diff)
+ (public_name d3t.diff)
+ (libraries d3t))

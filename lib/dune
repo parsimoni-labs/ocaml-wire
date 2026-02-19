@@ -1,0 +1,4 @@
+(library
+ (name d3t)
+ (public_name d3t)
+ (libraries bytesrw fmt))
