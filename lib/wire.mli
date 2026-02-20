@@ -281,6 +281,12 @@ val bf_uint32be : bitfield_base
 val bits : width:int -> bitfield_base -> int typ
 (** [bits ~width base] extracts [width] bits from a bitfield base type. *)
 
+val bit : bool -> int
+(** [bit b] converts a boolean to a 1-bit integer (0 or 1). *)
+
+val is_set : int -> bool
+(** [is_set n] converts a bitfield integer to boolean ([n <> 0]). *)
+
 (** {2 Special Types} *)
 
 val unit : unit typ
@@ -708,6 +714,17 @@ module Codec : sig
 
   val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
   (** [field name typ get] defines a field with type [typ] and getter [get]. *)
+
+  val cfield :
+    string ->
+    'w typ ->
+    conv:('w -> 'a) * ('a -> 'w) ->
+    ('r -> 'a) ->
+    ('a, 'r) field
+  (** [cfield name typ ~conv:(decode, encode) get] defines a converting field.
+      The wire representation uses type [typ], while the record stores values of
+      type ['a]. [decode] converts wire to field, [encode] converts field to
+      wire. *)
 
   val ( |+ ) : ('a -> 'b, 'r) record -> ('a, 'r) field -> ('b, 'r) record
   (** [r |+ f] adds field [f] to record codec [r]. *)

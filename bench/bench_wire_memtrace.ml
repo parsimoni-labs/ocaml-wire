@@ -25,7 +25,7 @@ let clcw_bytes =
       b)
 
 let clcw_wire_vals =
-  Array.map (fun b -> Wire.Codec.decode Clcw.Packed.codec b 0) clcw_bytes
+  Array.map (fun b -> Wire.Codec.decode Clcw.codec b 0) clcw_bytes
 
 (** {1 Space Packet test data} *)
 
@@ -38,7 +38,7 @@ let sp_bytes =
       b)
 
 let sp_wire_vals =
-  Array.map (fun b -> Space_packet.Packed_header.decode_exn b 0) sp_bytes
+  Array.map (fun b -> Space_packet.decode_packed_header b 0) sp_bytes
 
 (** {1 TM test data} *)
 
@@ -55,47 +55,47 @@ let tm_bytes =
       Bytes.set_uint16_be b 4 ((1 lsl 14) lor (3 lsl 11) lor (i mod 2048));
       b)
 
-let tm_wire_vals = Array.map (fun b -> Tm.Packed_header.decode_exn b 0) tm_bytes
+let tm_wire_vals = Array.map (fun b -> Tm.decode_packed_header b 0) tm_bytes
 
 (** {1 Roundtrip loops} *)
 
 let clcw_roundtrip () =
   for i = 0 to Array.length clcw_bytes - 1 do
-    let t = Wire.Codec.decode Clcw.Packed.codec clcw_bytes.(i) 0 in
+    let t = Wire.Codec.decode Clcw.codec clcw_bytes.(i) 0 in
     let buf = Bytes.create 4 in
-    Wire.Codec.encode Clcw.Packed.codec t buf 0
+    Wire.Codec.encode Clcw.codec t buf 0
   done
 
 let sp_roundtrip () =
   for i = 0 to Array.length sp_bytes - 1 do
-    let t = Space_packet.Packed_header.decode_exn sp_bytes.(i) 0 in
+    let t = Space_packet.decode_packed_header sp_bytes.(i) 0 in
     let buf = Bytes.create 6 in
-    Space_packet.Packed_header.encode t buf 0
+    Space_packet.encode_packed_header t buf 0
   done
 
 let tm_roundtrip () =
   for i = 0 to Array.length tm_bytes - 1 do
-    let t = Tm.Packed_header.decode_exn tm_bytes.(i) 0 in
+    let t = Tm.decode_packed_header tm_bytes.(i) 0 in
     let buf = Bytes.create 6 in
-    Tm.Packed_header.encode t buf 0
+    Tm.encode_packed_header t buf 0
   done
 
 (* Decode-only loops *)
 let clcw_decode () =
   for i = 0 to Array.length clcw_bytes - 1 do
-    let _ = Wire.Codec.decode Clcw.Packed.codec clcw_bytes.(i) 0 in
+    let _ = Wire.Codec.decode Clcw.codec clcw_bytes.(i) 0 in
     ()
   done
 
 let sp_decode () =
   for i = 0 to Array.length sp_bytes - 1 do
-    let _ = Space_packet.Packed_header.decode_exn sp_bytes.(i) 0 in
+    let _ = Space_packet.decode_packed_header sp_bytes.(i) 0 in
     ()
   done
 
 let tm_decode () =
   for i = 0 to Array.length tm_bytes - 1 do
-    let _ = Tm.Packed_header.decode_exn tm_bytes.(i) 0 in
+    let _ = Tm.decode_packed_header tm_bytes.(i) 0 in
     ()
   done
 
@@ -103,19 +103,19 @@ let tm_decode () =
 let clcw_encode () =
   for i = 0 to Array.length clcw_wire_vals - 1 do
     let buf = Bytes.create 4 in
-    Wire.Codec.encode Clcw.Packed.codec clcw_wire_vals.(i) buf 0
+    Wire.Codec.encode Clcw.codec clcw_wire_vals.(i) buf 0
   done
 
 let sp_encode () =
   for i = 0 to Array.length sp_wire_vals - 1 do
     let buf = Bytes.create 6 in
-    Space_packet.Packed_header.encode sp_wire_vals.(i) buf 0
+    Space_packet.encode_packed_header sp_wire_vals.(i) buf 0
   done
 
 let tm_encode () =
   for i = 0 to Array.length tm_wire_vals - 1 do
     let buf = Bytes.create 6 in
-    Tm.Packed_header.encode tm_wire_vals.(i) buf 0
+    Tm.encode_packed_header tm_wire_vals.(i) buf 0
   done
 
 let run label decode encode roundtrip =

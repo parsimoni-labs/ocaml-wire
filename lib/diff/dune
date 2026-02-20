@@ -1,4 +1,4 @@
 (library
  (name wire_diff)
  (public_name wire.diff)
- (libraries wire))
+ (libraries wire eio))

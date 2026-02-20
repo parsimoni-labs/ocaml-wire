@@ -1,9 +1,13 @@
 ; Differential testing: OCaml wire vs EverParse C parsers
 ;
 ; Workflow:
-; 1. gen_c generates random schemas as .3d files
-; 2. EverParse 3d generates C parsers from .3d files
-; 3. Test runner generates random bytes, runs both parsers, diffs results
+; 1. BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/gen_c
+;    (generates .3d schemas, runs EverParse, produces C stubs)
+; 2. BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/diff
+;    (runs differential tests)
+;
+; EverParse is slow, so code generation only runs when BUILD_EVERPARSE=1.
+; Generated C code can be promoted and committed for C API consumers.
 
 ; Schema library for differential testing
 
@@ -20,20 +24,28 @@
  (libraries schema))
 
 (rule
+ (alias gen_schemas)
  (targets SimpleHeader.3d ConstrainedPacket.3d)
  (deps gen_schemas.exe)
  (action
   (run ./gen_schemas.exe)))
 
-; Generate .3d files from random schemas into schemas/ directory
-; Also generates stubs.c, stubs.ml, diff_test.ml and schemas/dune
+; Generate random schemas into schemas/ directory
+; Also generates stubs.c, stubs.ml, diff_test.ml
+;
+; Run with: BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/gen_c
 
 (executable
  (name gen_c)
  (modules gen_c)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries wire unix))
 
 (rule
+ (alias gen_c)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
  (targets
   (dir schemas)
   stubs.c
@@ -44,11 +56,13 @@
   (run ./gen_c.exe schemas 100)))
 
 ; Differential test: compile C stubs (includes EverParse generated C)
-; stubs.c #includes the C files from schemas/
+; NOTE: Only builds with BUILD_EVERPARSE=1 after running @gen_c first
 
 (library
  (name stubs)
  (modules stubs)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
  (foreign_stubs
   (language c)
   (names stubs)
@@ -57,10 +71,14 @@
 (executable
  (name diff_test)
  (modules diff_test)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries stubs))
 
 (rule
  (alias diff)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
  (deps diff_test.exe)
  (action
   (run ./diff_test.exe)))

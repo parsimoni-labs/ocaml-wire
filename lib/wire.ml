@@ -262,6 +262,8 @@ let bf_uint16be = BF_U16 Big
 let bf_uint32 = BF_U32 Little
 let bf_uint32be = BF_U32 Big
 let bits ~width base = Bits { width; base }
+let bit b = Bool.to_int b
+let is_set n = n <> 0
 let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
@@ -1164,6 +1166,7 @@ let rec field_wire_size : type a. a typ -> int option = function
       | BF_U16 _ -> Some 2
       | BF_U32 _ -> Some 4)
   | Unit -> Some 0
+  | Byte_array { size = Int n } -> Some n
   | Where { inner; _ } -> field_wire_size inner
   | Enum { base; _ } -> field_wire_size base
   | _ -> None
@@ -1209,6 +1212,12 @@ let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       fun buf off v ->
         Bytes.set_int64_be buf off v;
         off + 8
+  | Byte_array { size = Int n } ->
+      fun buf off v ->
+        let len = min n (String.length v) in
+        Bytes.blit_string v 0 buf off len;
+        if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
+        off + n
   | Where { inner; _ } -> build_field_encoder inner
   | Enum { base; _ } -> build_field_encoder base
   | Unit -> fun _buf off () -> off
@@ -1237,6 +1246,8 @@ let rec build_field_decoder : type a. a typ -> bytes -> int -> int -> a * int =
       fun buf base off -> (Bytes.get_int64_le buf (base + off), off + 8)
   | Uint64 Big ->
       fun buf base off -> (Bytes.get_int64_be buf (base + off), off + 8)
+  | Byte_array { size = Int n } ->
+      fun buf base off -> (Bytes.sub_string buf (base + off) n, off + n)
   | Where { inner; _ } -> build_field_decoder inner
   | Enum { base; _ } -> build_field_decoder base
   | Unit -> fun _buf _base off -> ((), off)
@@ -1294,6 +1305,11 @@ let rec build_field_decoder_mut : type a. a typ -> bytes -> int -> int ref -> a
       fun buf base off ->
         let v = Bytes.get_int64_be buf (base + !off) in
         off := !off + 8;
+        v
+  | Byte_array { size = Int n } ->
+      fun buf base off ->
+        let v = Bytes.sub_string buf (base + !off) n in
+        off := !off + n;
         v
   | Where { inner; _ } -> build_field_decoder_mut inner
   | Enum { base; _ } -> build_field_decoder_mut base
@@ -1353,6 +1369,11 @@ let rec build_field_decoder_cps : type a.
       fun buf base off k ->
         let v = Bytes.get_int64_be buf (base + !off) in
         off := !off + 8;
+        k v
+  | Byte_array { size = Int n } ->
+      fun buf base off k ->
+        let v = Bytes.sub_string buf (base + !off) n in
+        off := !off + n;
         k v
   | Where { inner; _ } -> build_field_decoder_cps inner
   | Enum { base; _ } -> build_field_decoder_cps base
@@ -1604,6 +1625,8 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Uint63 Big -> fun buf base -> UInt63.get_be buf (base + field_off)
   | Uint64 Little -> fun buf base -> Bytes.get_int64_le buf (base + field_off)
   | Uint64 Big -> fun buf base -> Bytes.get_int64_be buf (base + field_off)
+  | Byte_array { size = Int n } ->
+      fun buf base -> Bytes.sub_string buf (base + field_off) n
   | Where { inner; _ } -> build_field_reader inner field_off
   | Enum { base; _ } -> build_field_reader base field_off
   | Unit -> fun _buf _base -> ()
@@ -1819,6 +1842,7 @@ let rec wire_size_of_typ : type a. a typ -> int option = function
   | Uint16 _ -> Some 2
   | Uint32 _ -> Some 4
   | Uint64 _ -> Some 8
+  | Byte_array { size = Int n } -> Some n
   | Enum { base; _ } -> wire_size_of_int_typ base
   | Where { inner; _ } -> wire_size_of_typ inner
   | _ -> None
@@ -2100,7 +2124,16 @@ let struct_field = field
 let struct' = struct_
 
 module Codec = struct
-  type ('a, 'r) field = { name : string; typ : 'a typ; get : 'r -> 'a }
+  type (_, _) field =
+    | Plain : { name : string; typ : 'a typ; get : 'r -> 'a } -> ('a, 'r) field
+    | Conv : {
+        name : string;
+        typ : 'wire typ;
+        get : 'r -> 'field;
+        encode : 'field -> 'wire;
+        decode : 'wire -> 'field;
+      }
+        -> ('field, 'r) field
 
   (* GADT snoc-list of typed field readers, built in forward order by |+.
      ('full, 'remaining) readers tracks:
@@ -2116,6 +2149,14 @@ module Codec = struct
         ('full, 'a -> 'rest) readers * (bytes -> int -> 'a)
         -> ('full, 'rest) readers
 
+  (* Bitfield group state: tracks the current base word being packed. *)
+  type bf_codec_state = {
+    bfc_base : bitfield_base;
+    bfc_base_off : int; (* byte offset of base word within record *)
+    bfc_bits_used : int; (* bits consumed so far in current group *)
+    bfc_total_bits : int; (* 8, 16, or 32 *)
+  }
+
   type ('f, 'r) record =
     | Record : {
         r_name : string;
@@ -2124,6 +2165,7 @@ module Codec = struct
         r_writers_rev : ('r -> bytes -> int -> unit) list;
         r_wire_size : int;
         r_fields_rev : struct_field list;
+        r_bf : bf_codec_state option;
       }
         -> ('f, 'r) record
 
@@ -2144,34 +2186,149 @@ module Codec = struct
         r_writers_rev = [];
         r_wire_size = 0;
         r_fields_rev = [];
+        r_bf = None;
       }
 
-  let field name typ get = { name; typ; get }
+  let field name typ get = Plain { name; typ; get }
+
+  let cfield name typ ~conv:(decode, encode) get =
+    Conv { name; typ; get; decode; encode }
+
+  (* Bitfield helpers *)
+
+  let bf_base_byte_size = function BF_U8 -> 1 | BF_U16 _ -> 2 | BF_U32 _ -> 4
+
+  let bf_base_total_bits = function
+    | BF_U8 -> 8
+    | BF_U16 _ -> 16
+    | BF_U32 _ -> 32
+
+  let bf_base_equal a b =
+    match (a, b) with
+    | BF_U8, BF_U8 -> true
+    | BF_U16 e1, BF_U16 e2 -> e1 = e2
+    | BF_U32 e1, BF_U32 e2 -> e1 = e2
+    | _ -> false
+
+  let bf_read_base base buf off =
+    match base with
+    | BF_U8 -> Bytes.get_uint8 buf off
+    | BF_U16 Little -> Bytes.get_uint16_le buf off
+    | BF_U16 Big -> Bytes.get_uint16_be buf off
+    | BF_U32 Little -> UInt32.get_le buf off
+    | BF_U32 Big -> UInt32.get_be buf off
+
+  let bf_write_base base buf off v =
+    match base with
+    | BF_U8 -> Bytes.set_uint8 buf off v
+    | BF_U16 Little -> Bytes.set_uint16_le buf off v
+    | BF_U16 Big -> Bytes.set_uint16_be buf off v
+    | BF_U32 Little -> UInt32.set_le buf off v
+    | BF_U32 Big -> UInt32.set_be buf off v
+
+  let build_bf_reader base byte_off shift width =
+    let mask = (1 lsl width) - 1 in
+    fun buf off -> (bf_read_base base buf (off + byte_off) lsr shift) land mask
+
+  let build_bf_writer base byte_off shift width =
+    let mask = (1 lsl width) - 1 in
+    fun buf off value ->
+      let cur = bf_read_base base buf (off + byte_off) in
+      bf_write_base base buf (off + byte_off)
+        (cur lor ((value land mask) lsl shift))
+
+  let build_bf_clear base byte_off =
+   fun buf off -> bf_write_base base buf (off + byte_off) 0
 
   let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
    fun (Record r) f ->
-    let fsize =
-      match field_wire_size f.typ with
-      | Some s -> s
-      | None -> failwith "Codec.(|+): variable-size fields not supported"
+    (* Unpack the field GADT into wire-level operations.
+       [get_wire] extracts the wire value from the record (for encoding).
+       [wrap_reader] wraps a wire-level reader to produce the field value
+       (for decoding). For Plain fields these are identity; for Conv fields
+       they apply the encode/decode conversions. *)
+    let add : type w.
+        string ->
+        w typ ->
+        (r -> w) ->
+        ((bytes -> int -> w) -> bytes -> int -> a) ->
+        (f, r) record =
+     fun name typ get_wire wrap_reader ->
+      match typ with
+      | Bits { width; base } ->
+          let total = bf_base_total_bits base in
+          let need_new_group =
+            match r.r_bf with
+            | None -> true
+            | Some bf ->
+                (not (bf_base_equal bf.bfc_base base))
+                || bf.bfc_bits_used + width > bf.bfc_total_bits
+          in
+          let base_off, bits_used, size_delta, extra_writers =
+            if need_new_group then
+              let base_off = r.r_wire_size in
+              let clear = build_bf_clear base base_off in
+              ( base_off,
+                0,
+                bf_base_byte_size base,
+                [ (fun _v buf off -> clear buf off) ] )
+            else
+              let bf = Option.get r.r_bf in
+              (bf.bfc_base_off, bf.bfc_bits_used, 0, [])
+          in
+          let shift = total - bits_used - width in
+          let raw_reader = build_bf_reader base base_off shift width in
+          let raw_writer = build_bf_writer base base_off shift width in
+          let new_bf =
+            {
+              bfc_base = base;
+              bfc_base_off = base_off;
+              bfc_bits_used = bits_used + width;
+              bfc_total_bits = total;
+            }
+          in
+          Record
+            {
+              r_name = r.r_name;
+              r_make = r.r_make;
+              r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
+              r_writers_rev =
+                (fun v buf off -> raw_writer buf off (get_wire v))
+                :: (extra_writers @ r.r_writers_rev);
+              r_wire_size = r.r_wire_size + size_delta;
+              r_fields_rev = struct_field name typ :: r.r_fields_rev;
+              r_bf = Some new_bf;
+            }
+      | _ ->
+          let fsize =
+            match field_wire_size typ with
+            | Some s -> s
+            | None -> failwith "Codec.(|+): variable-size fields not supported"
+          in
+          let field_off = r.r_wire_size in
+          let raw_reader = build_field_reader typ field_off in
+          let raw_encoder = build_field_encoder typ in
+          Record
+            {
+              r_name = r.r_name;
+              r_make = r.r_make;
+              r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
+              r_writers_rev =
+                (fun v buf off ->
+                  let _ = raw_encoder buf (off + field_off) (get_wire v) in
+                  ())
+                :: r.r_writers_rev;
+              r_wire_size = r.r_wire_size + fsize;
+              r_fields_rev = struct_field name typ :: r.r_fields_rev;
+              r_bf = None;
+            }
     in
-    let field_off = r.r_wire_size in
-    let reader = build_field_reader f.typ field_off in
-    let writer = build_field_encoder f.typ in
-    let getter = f.get in
-    Record
-      {
-        r_name = r.r_name;
-        r_make = r.r_make;
-        r_readers = Snoc (r.r_readers, reader);
-        r_writers_rev =
-          (fun v buf off ->
-            let _ = writer buf (off + field_off) (getter v) in
-            ())
-          :: r.r_writers_rev;
-        r_wire_size = r.r_wire_size + fsize;
-        r_fields_rev = struct_field f.name f.typ :: r.r_fields_rev;
-      }
+    match f with
+    | Plain { name; typ; get } -> add name typ get (fun reader -> reader)
+    | Conv { name; typ; get; decode; encode } ->
+        add name typ
+          (fun v -> encode (get v))
+          (fun reader buf off -> decode (reader buf off))
 
   (* Chunked application: peels off up to 6 fields per recursion step.
      Cost: ceil(n/6) - 1 partial applications instead of n - 1. *)

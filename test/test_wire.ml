@@ -397,6 +397,168 @@ let test_record_with_multi () =
           Alcotest.(check int) "y" original.y decoded.y
       | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e))
 
+(* Record with byte_array field *)
+type ba_record = { id : int; uuid : string; tag : int }
+
+let ba_record_codec =
+  let open Codec in
+  record "BaRecord" (fun id uuid tag -> { id; uuid; tag })
+  |+ field "id" uint32be (fun r -> r.id)
+  |+ field "uuid" (byte_array ~size:(int 16)) (fun r -> r.uuid)
+  |+ field "tag" uint16be (fun r -> r.tag)
+  |> seal
+
+let test_record_byte_array_roundtrip () =
+  let original = { id = 0x12345678; uuid = "0123456789abcdef"; tag = 0xABCD } in
+  match encode_record_to_string ba_record_codec original with
+  | Error e -> Alcotest.fail (Format.asprintf "encode: %a" pp_parse_error e)
+  | Ok encoded -> (
+      Alcotest.(check int) "wire size" 22 (String.length encoded);
+      match decode_record_from_string ba_record_codec encoded with
+      | Ok decoded ->
+          Alcotest.(check int) "id" original.id decoded.id;
+          Alcotest.(check string) "uuid" original.uuid decoded.uuid;
+          Alcotest.(check int) "tag" original.tag decoded.tag
+      | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e))
+
+let test_record_byte_array_padding () =
+  (* Short string should be zero-padded *)
+  let original = { id = 1; uuid = "short"; tag = 2 } in
+  match encode_record_to_string ba_record_codec original with
+  | Error e -> Alcotest.fail (Format.asprintf "encode: %a" pp_parse_error e)
+  | Ok encoded -> (
+      Alcotest.(check int) "wire size" 22 (String.length encoded);
+      (* Verify zero padding: bytes 9..19 should be zero *)
+      for i = 9 to 19 do
+        Alcotest.(check int)
+          (Printf.sprintf "padding byte %d" i)
+          0
+          (Char.code encoded.[i])
+      done;
+      match decode_record_from_string ba_record_codec encoded with
+      | Ok decoded ->
+          (* Decoded uuid includes the zero padding *)
+          Alcotest.(check int) "uuid length" 16 (String.length decoded.uuid);
+          Alcotest.(check string)
+            "uuid prefix" "short"
+            (String.sub decoded.uuid 0 5)
+      | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e))
+
+(* Codec bitfield tests *)
+
+type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
+
+let bf32_codec =
+  let open Codec in
+  record "Bf32Test" (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
+  |+ field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a)
+  |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b)
+  |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c)
+  |+ field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d)
+  |> seal
+
+type bf16_record = {
+  bf_ver : int;
+  bf_flags : int;
+  bf_id : int;
+  bf_count : int;
+  bf_len : int;
+}
+
+let bf16_codec =
+  let open Codec in
+  record "Bf16Test" (fun ver flags id count len ->
+      {
+        bf_ver = ver;
+        bf_flags = flags;
+        bf_id = id;
+        bf_count = count;
+        bf_len = len;
+      })
+  |+ field "ver" (bits ~width:3 bf_uint16be) (fun t -> t.bf_ver)
+  |+ field "flags" (bits ~width:2 bf_uint16be) (fun t -> t.bf_flags)
+  |+ field "id" (bits ~width:11 bf_uint16be) (fun t -> t.bf_id)
+  |+ field "count" (bits ~width:14 bf_uint16be) (fun t -> t.bf_count)
+  |+ field "len" (bits ~width:2 bf_uint16be) (fun t -> t.bf_len)
+  |> seal
+
+let test_codec_bitfield_wire_size () =
+  Alcotest.(check int) "bf32 wire_size" 4 (Codec.wire_size bf32_codec);
+  Alcotest.(check int) "bf16 wire_size" 4 (Codec.wire_size bf16_codec)
+
+let test_codec_bitfield_roundtrip () =
+  let original = { bf_a = 5; bf_b = 20; bf_c = 0x1234; bf_d = 0xAB } in
+  match encode_record_to_string bf32_codec original with
+  | Error e -> Alcotest.fail (Format.asprintf "encode: %a" pp_parse_error e)
+  | Ok encoded -> (
+      match decode_record_from_string bf32_codec encoded with
+      | Ok decoded ->
+          Alcotest.(check int) "a" original.bf_a decoded.bf_a;
+          Alcotest.(check int) "b" original.bf_b decoded.bf_b;
+          Alcotest.(check int) "c" original.bf_c decoded.bf_c;
+          Alcotest.(check int) "d" original.bf_d decoded.bf_d
+      | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e))
+
+let test_codec_bitfield_byte_layout () =
+  (* a=5 (3b), b=20 (5b), c=0x1234 (16b), d=0xAB (8b)
+     MSB-first packing: 101_10100_0001001000110100_10101011
+     = 0xB4 0x12 0x34 0xAB *)
+  let v = { bf_a = 5; bf_b = 20; bf_c = 0x1234; bf_d = 0xAB } in
+  match encode_record_to_string bf32_codec v with
+  | Error e -> Alcotest.fail (Format.asprintf "encode: %a" pp_parse_error e)
+  | Ok encoded ->
+      Alcotest.(check int) "length" 4 (String.length encoded);
+      Alcotest.(check int) "byte 0" 0xB4 (Char.code encoded.[0]);
+      Alcotest.(check int) "byte 1" 0x12 (Char.code encoded.[1]);
+      Alcotest.(check int) "byte 2" 0x34 (Char.code encoded.[2]);
+      Alcotest.(check int) "byte 3" 0xAB (Char.code encoded.[3])
+
+let test_codec_bitfield_decode () =
+  (* Decode 0xB41234AB -> a=5, b=20, c=0x1234, d=0xAB *)
+  let input = "\xB4\x12\x34\xAB" in
+  match decode_record_from_string bf32_codec input with
+  | Ok v ->
+      Alcotest.(check int) "a" 5 v.bf_a;
+      Alcotest.(check int) "b" 20 v.bf_b;
+      Alcotest.(check int) "c" 0x1234 v.bf_c;
+      Alcotest.(check int) "d" 0xAB v.bf_d
+  | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e)
+
+let test_codec_bitfield_multi_group () =
+  (* Two bf_uint16be groups: (3+2+11=16) + (14+2=16) = 32 bits = 4 bytes *)
+  let v =
+    { bf_ver = 5; bf_flags = 2; bf_id = 0x7FF; bf_count = 0x3FFF; bf_len = 3 }
+  in
+  match encode_record_to_string bf16_codec v with
+  | Error e -> Alcotest.fail (Format.asprintf "encode: %a" pp_parse_error e)
+  | Ok encoded -> (
+      Alcotest.(check int) "length" 4 (String.length encoded);
+      (* First group: 101_10_11111111111 = 0xB7FF *)
+      Alcotest.(check int) "byte 0" 0xB7 (Char.code encoded.[0]);
+      Alcotest.(check int) "byte 1" 0xFF (Char.code encoded.[1]);
+      (* Second group: 11111111111111_11 = 0xFFFF *)
+      Alcotest.(check int) "byte 2" 0xFF (Char.code encoded.[2]);
+      Alcotest.(check int) "byte 3" 0xFF (Char.code encoded.[3]);
+      (* Roundtrip decode *)
+      match decode_record_from_string bf16_codec encoded with
+      | Ok decoded ->
+          Alcotest.(check int) "ver" v.bf_ver decoded.bf_ver;
+          Alcotest.(check int) "flags" v.bf_flags decoded.bf_flags;
+          Alcotest.(check int) "id" v.bf_id decoded.bf_id;
+          Alcotest.(check int) "count" v.bf_count decoded.bf_count;
+          Alcotest.(check int) "len" v.bf_len decoded.bf_len
+      | Error e -> Alcotest.fail (Format.asprintf "%a" pp_parse_error e))
+
+let test_codec_bitfield_to_struct () =
+  let s = Codec.to_struct bf32_codec in
+  let m = module_ "Bf32Test" [ typedef s ] in
+  let output = to_3d m in
+  Alcotest.(check bool)
+    "contains UINT32BE" true
+    (contains ~sub:"UINT32BE" output);
+  Alcotest.(check bool) "contains field a" true (contains ~sub:"a" output);
+  Alcotest.(check bool) "contains field b" true (contains ~sub:"b" output)
+
 (* FFI stub generation tests *)
 
 let test_c_stubs () =
@@ -468,6 +630,23 @@ let suite =
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
       Alcotest.test_case "record: to_struct" `Quick test_record_to_struct;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
+      Alcotest.test_case "record: byte_array roundtrip" `Quick
+        test_record_byte_array_roundtrip;
+      Alcotest.test_case "record: byte_array padding" `Quick
+        test_record_byte_array_padding;
+      (* codec bitfields *)
+      Alcotest.test_case "codec bitfield: wire_size" `Quick
+        test_codec_bitfield_wire_size;
+      Alcotest.test_case "codec bitfield: roundtrip" `Quick
+        test_codec_bitfield_roundtrip;
+      Alcotest.test_case "codec bitfield: byte layout" `Quick
+        test_codec_bitfield_byte_layout;
+      Alcotest.test_case "codec bitfield: decode" `Quick
+        test_codec_bitfield_decode;
+      Alcotest.test_case "codec bitfield: multi group" `Quick
+        test_codec_bitfield_multi_group;
+      Alcotest.test_case "codec bitfield: to_struct" `Quick
+        test_codec_bitfield_to_struct;
       (* ffi stubs *)
       Alcotest.test_case "ffi: c_stubs" `Quick test_c_stubs;
     ] )
