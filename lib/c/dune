@@ -1,0 +1,4 @@
+(library
+ (name wire_c)
+ (public_name wire.c)
+ (libraries wire fmt unix))
