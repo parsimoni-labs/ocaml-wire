@@ -273,7 +273,7 @@ let cases variants inner =
   let arr = Array.of_list variants in
   let decode n =
     if n >= 0 && n < Array.length arr then arr.(n)
-    else invalid_arg (Printf.sprintf "Wire.cases: unknown value %d" n)
+    else invalid_arg (Fmt.str "Wire.cases: unknown value %d" n)
   in
   let encode v =
     let rec go i =
