@@ -34,20 +34,24 @@ module UInt32 = struct
     let b3 = Bytes.get_uint8 buf (off + 3) in
     (b0 lsl 24) lor (b1 lsl 16) lor (b2 lsl 8) lor b3
 
+  let mask v = v land ((1 lsl 32) - 1)
+
   let set_le buf off v =
+    let v = mask v in
     Bytes.set_uint8 buf off (v land 0xFF);
     Bytes.set_uint8 buf (off + 1) ((v lsr 8) land 0xFF);
     Bytes.set_uint8 buf (off + 2) ((v lsr 16) land 0xFF);
     Bytes.set_uint8 buf (off + 3) ((v lsr 24) land 0xFF)
 
   let set_be buf off v =
+    let v = mask v in
     Bytes.set_uint8 buf off ((v lsr 24) land 0xFF);
     Bytes.set_uint8 buf (off + 1) ((v lsr 16) land 0xFF);
     Bytes.set_uint8 buf (off + 2) ((v lsr 8) land 0xFF);
     Bytes.set_uint8 buf (off + 3) (v land 0xFF)
 
   let to_int t = t
-  let of_int t = t
+  let of_int t = mask t
 end
 
 (* UInt63: unboxed on 64-bit (uses int), reads 8 bytes but masks to 63 bits *)

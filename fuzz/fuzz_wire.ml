@@ -272,6 +272,7 @@ let test_roundtrip_uint16 n =
 
 (** Roundtrip uint32 - encode then parse. *)
 let test_roundtrip_uint32 n =
+  let n = n land ((1 lsl 32) - 1) in
   let encoded = encode_to_string uint32 n in
   match parse_string uint32 encoded with
   | Ok decoded -> if n <> decoded then Cr.fail "uint32 roundtrip mismatch"
@@ -331,6 +332,7 @@ let test_record_codec =
 let test_record_roundtrip x y z =
   let x = abs x mod 256 in
   let y = abs y mod 65536 in
+  let z = z land 0xFFFFFFFF in
   let original = { x; y; z } in
   match encode_record_to_string test_record_codec original with
   | Error _ -> Cr.fail "record encode failed"
