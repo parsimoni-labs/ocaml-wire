@@ -27,7 +27,7 @@ let minimal_struct = Codec.to_struct minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
 let minimal_default = { m_value = 42 }
 
-let make_minimal_data n =
+let minimal_data n =
   Array.init n (fun i ->
       let b = Bytes.create minimal_size in
       Bytes.set_uint8 b 0 (i mod 256);
@@ -77,7 +77,7 @@ let all_ints_default =
     ai_u64be = 0x0102030405060708L;
   }
 
-let make_all_ints_data n =
+let all_ints_data n =
   Array.init n (fun i ->
       let b = Bytes.create all_ints_size in
       Bytes.set_uint8 b 0 (i mod 256);
@@ -103,7 +103,7 @@ let bf8_struct = Codec.to_struct bf8_codec
 let bf8_size = Codec.wire_size bf8_codec
 let bf8_default = { bf8_tag = 5; bf8_value = 19 }
 
-let make_bf8_data n =
+let bf8_data n =
   Array.init n (fun i ->
       let b = Bytes.create bf8_size in
       let w = ((i mod 8) lsl 5) lor (i mod 32) in
@@ -127,7 +127,7 @@ let bf16_struct = Codec.to_struct bf16_codec
 let bf16_size = Codec.wire_size bf16_codec
 let bf16_default = { bf16_flag = 1; bf16_type = 9; bf16_id = 1023 }
 
-let make_bf16_data n =
+let bf16_data n =
   Array.init n (fun i ->
       let b = Bytes.create bf16_size in
       let w = ((i mod 2) lsl 15) lor (((i * 3) mod 16) lsl 11) lor (i mod 2048) in
@@ -153,7 +153,7 @@ let bf32_struct = Codec.to_struct bf32_codec
 let bf32_size = Codec.wire_size bf32_codec
 let bf32_default = { bf32_flags = 5; bf32_chan = 26; bf32_seq = 4660; bf32_pri = 171 }
 
-let make_bf32_data n =
+let bf32_data n =
   Array.init n (fun i ->
       let b = Bytes.create bf32_size in
       let w =
@@ -191,7 +191,7 @@ let bool_fields_size = Codec.wire_size bool_fields_codec
 let bool_fields_default =
   { bl_active = true; bl_valid = false; bl_mode = 7; bl_code = 0xAB }
 
-let make_bool_fields_data n =
+let bool_fields_data n =
   Array.init n (fun i ->
       let b = Bytes.create bool_fields_size in
       let w = ((i mod 2) lsl 7) lor (((i + 1) mod 2) lsl 6) lor (i mod 64) in
@@ -248,7 +248,7 @@ let space_packet_default =
     sp_data_len = 255;
   }
 
-let make_space_packet_data n =
+let space_packet_data n =
   Array.init n (fun i ->
       let b = Bytes.create space_packet_size in
       let w0 = ((i mod 2) lsl 12) lor (i mod 2048) in
@@ -331,7 +331,7 @@ let clcw_default =
     cw_report = 42;
   }
 
-let make_clcw_data n =
+let clcw_data n =
   Array.init n (fun i ->
       let b = Bytes.create clcw_size in
       let w =
@@ -411,7 +411,7 @@ let tm_frame_default =
     tf_first_hdr = 0x7FE;
   }
 
-let make_tm_frame_data n =
+let tm_frame_data n =
   Array.init n (fun i ->
       let b = Bytes.create tm_frame_size in
       let w0 =
@@ -484,7 +484,7 @@ let large_mixed_default =
     lg_timestamp = 0x0102030405060708L;
   }
 
-let make_large_mixed_data n =
+let large_mixed_data n =
   Array.init n (fun i ->
       let b = Bytes.create large_mixed_size in
       Bytes.set_int32_be b 0 0x1ACFFC1Dl;
@@ -530,25 +530,25 @@ type any_schema = Any : 'a schema -> any_schema
 let all_schemas =
   [
     Any (schema "Minimal" minimal_codec minimal_struct minimal_size
-           minimal_default make_minimal_data);
+           minimal_default minimal_data);
     Any (schema "AllInts" all_ints_codec all_ints_struct all_ints_size
-           all_ints_default make_all_ints_data);
+           all_ints_default all_ints_data);
     Any (schema "Bitfield8" bf8_codec bf8_struct bf8_size
-           bf8_default make_bf8_data);
+           bf8_default bf8_data);
     Any (schema "Bitfield16" bf16_codec bf16_struct bf16_size
-           bf16_default make_bf16_data);
+           bf16_default bf16_data);
     Any (schema "Bitfield32" bf32_codec bf32_struct bf32_size
-           bf32_default make_bf32_data);
+           bf32_default bf32_data);
     Any (schema "BoolFields" bool_fields_codec bool_fields_struct bool_fields_size
-           bool_fields_default make_bool_fields_data);
+           bool_fields_default bool_fields_data);
     Any (schema "SpacePacket" space_packet_codec space_packet_struct space_packet_size
-           space_packet_default make_space_packet_data);
+           space_packet_default space_packet_data);
     Any (schema "CLCW" clcw_codec clcw_struct clcw_size
-           clcw_default make_clcw_data);
+           clcw_default clcw_data);
     Any (schema "TMFrame" tm_frame_codec tm_frame_struct tm_frame_size
-           tm_frame_default make_tm_frame_data);
+           tm_frame_default tm_frame_data);
     Any (schema "LargeMixed" large_mixed_codec large_mixed_struct large_mixed_size
-           large_mixed_default make_large_mixed_data);
+           large_mixed_default large_mixed_data);
   ]
 
 (* All struct_ definitions for 3D generation *)

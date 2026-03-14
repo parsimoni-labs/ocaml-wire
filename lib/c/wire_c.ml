@@ -20,7 +20,7 @@ let copy_file ~src ~dst =
   output_bytes oc buf;
   close_out oc
 
-let get_everparse_dir () =
+let everparse_dir () =
   let ic = Unix.open_process_in "which 3d.exe" in
   let path = input_line ic in
   ignore (Unix.close_process_in ic);
@@ -29,7 +29,7 @@ let get_everparse_dir () =
 let copy_everparse_endianness ~outdir =
   let dst = Filename.concat outdir "EverParseEndianness.h" in
   if not (Sys.file_exists dst) then begin
-    let ep_dir = get_everparse_dir () in
+    let ep_dir = everparse_dir () in
     let src = Filename.concat ep_dir "src/3d/EverParseEndianness.h" in
     if Sys.file_exists src then copy_file ~src ~dst
     else Fmt.failwith "Cannot find EverParseEndianness.h at %s" src
