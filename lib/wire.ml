@@ -614,7 +614,7 @@ let to_3d_file path m =
 (* Binary parsing with bytesrw *)
 
 module Br = Bytesrw.Bytes.Reader
-module Bs = Bytesrw.Bytes.Slice
+module Slice = Bytesrw.Bytes.Slice
 
 type parse_error =
   | Unexpected_eof of { expected : int; got : int }
@@ -683,24 +683,24 @@ let ctx_get ctx name =
 (* Decoder state - tracks position within slices *)
 type decoder = {
   reader : Br.t;
-  mutable slice : Bs.t;
+  mutable slice : Slice.t;
   mutable slice_pos : int;
   mutable position : int;
 }
 
-let decoder reader = { reader; slice = Bs.eod; slice_pos = 0; position = 0 }
+let decoder reader = { reader; slice = Slice.eod; slice_pos = 0; position = 0 }
 
 let refill dec =
   dec.slice <- Br.read dec.reader;
   dec.slice_pos <- 0
 
 let slice_get_byte slice pos =
-  Bytes.get_uint8 (Bs.bytes slice) (Bs.first slice + pos)
+  Bytes.get_uint8 (Slice.bytes slice) (Slice.first slice + pos)
 
 let read_byte dec =
-  if dec.slice_pos >= Bs.length dec.slice then begin
+  if dec.slice_pos >= Slice.length dec.slice then begin
     refill dec;
-    if Bs.is_eod dec.slice then None
+    if Slice.is_eod dec.slice then None
     else begin
       let b = slice_get_byte dec.slice dec.slice_pos in
       dec.slice_pos <- dec.slice_pos + 1;
@@ -724,17 +724,17 @@ let read_bytes dec n =
       if remaining = 0 then Ok buf
       else begin
         (* Refill if needed *)
-        if dec.slice_pos >= Bs.length dec.slice then begin
+        if dec.slice_pos >= Slice.length dec.slice then begin
           refill dec;
-          if Bs.is_eod dec.slice then
+          if Slice.is_eod dec.slice then
             Error (Unexpected_eof { expected = n; got = off })
           else loop off remaining
         end
         else
-          let available = Bs.length dec.slice - dec.slice_pos in
+          let available = Slice.length dec.slice - dec.slice_pos in
           let to_copy = min available remaining in
-          Bytes.blit (Bs.bytes dec.slice)
-            (Bs.first dec.slice + dec.slice_pos)
+          Bytes.blit (Slice.bytes dec.slice)
+            (Slice.first dec.slice + dec.slice_pos)
             buf off to_copy;
           dec.slice_pos <- dec.slice_pos + to_copy;
           dec.position <- dec.position + to_copy;
@@ -747,17 +747,17 @@ let read_bytes dec n =
 let read_all dec =
   let buf = Buffer.create 256 in
   let rec loop () =
-    if dec.slice_pos >= Bs.length dec.slice then begin
+    if dec.slice_pos >= Slice.length dec.slice then begin
       refill dec;
-      if Bs.is_eod dec.slice then Buffer.contents buf else loop ()
+      if Slice.is_eod dec.slice then Buffer.contents buf else loop ()
     end
     else begin
-      let slice_bytes = Bs.bytes dec.slice in
-      let first = Bs.first dec.slice + dec.slice_pos in
-      let len = Bs.length dec.slice - dec.slice_pos in
+      let slice_bytes = Slice.bytes dec.slice in
+      let first = Slice.first dec.slice + dec.slice_pos in
+      let len = Slice.length dec.slice - dec.slice_pos in
       Buffer.add_subbytes buf slice_bytes first len;
       dec.position <- dec.position + len;
-      dec.slice_pos <- Bs.length dec.slice;
+      dec.slice_pos <- Slice.length dec.slice;
       loop ()
     end
   in
@@ -1025,7 +1025,7 @@ type encoder = { writer : Bw.t; buf : bytes }
 let encoder writer = { writer; buf = Bytes.create 8 }
 
 let write_slice enc len =
-  let slice = Bs.make enc.buf ~first:0 ~length:len in
+  let slice = Slice.make enc.buf ~first:0 ~length:len in
   Bw.write enc.writer slice
 
 let write_byte enc b =
@@ -1539,7 +1539,7 @@ let encode_record : type r.
 
     WARNING: The returned slice's underlying buffer may be reused between calls.
     Copy the slice data before the next encode if you need to keep it. *)
-let encode_record_to_slice : type r. r record_codec -> (r -> Bs.t) Staged.t =
+let encode_record_to_slice : type r. r record_codec -> (r -> Slice.t) Staged.t =
  fun codec ->
   match codec.wire_size with
   | Some wire_size ->
@@ -1557,22 +1557,23 @@ let encode_record_to_slice : type r. r record_codec -> (r -> Bs.t) Staged.t =
       in
       if List.length field_encoders <> List.length codec.fields then
         (* Not all fields can be specialized - return empty slice *)
-        Staged.stage (fun _v -> Bs.eod)
+        Staged.stage (fun _v -> Slice.eod)
       else
         (* All fields specialized - this closure captures pre-built encoders *)
         Staged.stage (fun v ->
             let _ =
               List.fold_left (fun off enc -> enc buf off v) 0 field_encoders
             in
-            Bs.make buf ~first:0 ~length:wire_size)
+            Slice.make buf ~first:0 ~length:wire_size)
   | None ->
       (* Variable-size: can't return slice *)
-      Staged.stage (fun _v -> Bs.eod)
+      Staged.stage (fun _v -> Slice.eod)
 
 (** Build a staged record decoder: reads from a slice. Following repr's pattern:
     iteration over fields happens once at staging time, building closures that
     are fast to execute. *)
-let decode_record_from_slice : type r. r record_codec -> (Bs.t -> r) Staged.t =
+let decode_record_from_slice : type r. r record_codec -> (Slice.t -> r) Staged.t
+    =
  fun codec ->
   (* Build field decoders using mutable offset to avoid tuple allocation *)
   let field_decoders =
@@ -1594,8 +1595,8 @@ let decode_record_from_slice : type r. r record_codec -> (Bs.t -> r) Staged.t =
     let decoders = Array.of_list field_decoders in
     let n = Array.length decoders in
     Staged.stage (fun slice ->
-        let buf = Bs.bytes slice in
-        let base = Bs.first slice in
+        let buf = Slice.bytes slice in
+        let base = Slice.first slice in
         let off = Stdlib.ref 0 in
         let acc = Stdlib.ref default in
         for i = 0 to n - 1 do
@@ -2151,6 +2152,7 @@ module Codec = struct
     get : 'r -> 'a;
     mutable f_acc : 'a accessor;
     mutable f_writer : bytes -> int -> 'a -> unit;
+    mutable f_wire_size : int;
   }
 
   (* GADT snoc-list of typed field readers, built in forward order by |+.
@@ -2184,6 +2186,7 @@ module Codec = struct
         r_wire_size : int;
         r_fields_rev : struct_field list;
         r_bf : bf_codec_state option;
+        r_seal_hooks : (int -> unit) list;
       }
         -> ('f, 'r) record
 
@@ -2205,6 +2208,7 @@ module Codec = struct
         r_wire_size = 0;
         r_fields_rev = [];
         r_bf = None;
+        r_seal_hooks = [];
       }
 
   let field name typ get =
@@ -2214,6 +2218,7 @@ module Codec = struct
       get;
       f_acc = Fn (fun _ _ -> failwith "field: not added to a record yet");
       f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
+      f_wire_size = 0;
     }
 
   (* Bitfield helpers *)
@@ -2456,6 +2461,7 @@ module Codec = struct
               bfc_total_bits = total;
             }
           in
+          let seal_hook ws = fld.f_wire_size <- ws in
           Record
             {
               r_name = r.r_name;
@@ -2467,6 +2473,7 @@ module Codec = struct
               r_wire_size = r.r_wire_size + size_delta;
               r_fields_rev = struct_field name typ :: r.r_fields_rev;
               r_bf = Some new_bf;
+              r_seal_hooks = seal_hook :: r.r_seal_hooks;
             }
       | _ ->
           let fsize =
@@ -2482,6 +2489,7 @@ module Codec = struct
             wrap_writer (fun buf off value ->
                 let _ = raw_encoder buf (off + field_off) value in
                 ());
+          let seal_hook ws = fld.f_wire_size <- ws in
           Record
             {
               r_name = r.r_name;
@@ -2495,6 +2503,7 @@ module Codec = struct
               r_wire_size = r.r_wire_size + fsize;
               r_fields_rev = struct_field name typ :: r.r_fields_rev;
               r_bf = None;
+              r_seal_hooks = seal_hook :: r.r_seal_hooks;
             }
     in
     add typ get (fun reader -> reader) (fun writer -> writer) (Some Refl)
@@ -2522,6 +2531,7 @@ module Codec = struct
   let seal : type r. (r, r) record -> r t =
    fun (Record r) ->
     let total = r.r_wire_size in
+    List.iter (fun hook -> hook total) r.r_seal_hooks;
     let writers = Array.of_list (List.rev r.r_writers_rev) in
     let n_writers = Array.length writers in
     let build_decode : type full. full -> (full, r) readers -> bytes -> int -> r
@@ -2684,9 +2694,11 @@ module Codec = struct
   let encode t v buf off = t.t_encode v buf off
   let to_struct t = struct' t.t_name t.t_struct_fields
 
-  let[@inline] get (type a r) (t : r t) (f : (a, r) field) buf off : a =
-    if off + t.t_wire_size > Bytes.length buf then
-      raise_eof ~expected:t.t_wire_size ~got:(Bytes.length buf - off);
+  let[@inline] get (type a) (f : (a, _) field) (slice : Slice.t) : a =
+    if Slice.length slice < f.f_wire_size then
+      raise_eof ~expected:f.f_wire_size ~got:(Slice.length slice);
+    let buf = Slice.bytes slice in
+    let off = Slice.first slice in
     match f.f_acc with
     | Bf_u8 { byte_off; shift; mask } ->
         (unsafe_get_u8 buf (off + byte_off) lsr shift) land mask
@@ -2700,10 +2712,10 @@ module Codec = struct
         (unsafe_get_u32_be buf (off + byte_off) lsr shift) land mask
     | Fn reader -> reader buf off
 
-  let set (type a r) (t : r t) (f : (a, r) field) buf off (x : a) =
-    if off + t.t_wire_size > Bytes.length buf then
-      raise_eof ~expected:t.t_wire_size ~got:(Bytes.length buf - off);
-    f.f_writer buf off x
+  let set (type a) (f : (a, _) field) (slice : Slice.t) (x : a) =
+    if Slice.length slice < f.f_wire_size then
+      raise_eof ~expected:f.f_wire_size ~got:(Slice.length slice);
+    f.f_writer (Slice.bytes slice) (Slice.first slice) x
 end
 
 module Record = struct

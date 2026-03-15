@@ -26,6 +26,8 @@ let alloc_words n f =
   let after = (Gc.quick_stat ()).minor_words in
   (after -. before) /. float_of_int n
 
+module Bs = Bytesrw.Bytes.Slice
+
 (* ── Codecs for micro-benchmarks ── *)
 
 type r3 = { a : int; b : int; c : int }
@@ -74,6 +76,7 @@ let () =
 
   (* CLCW: 13 bitfields in 4 bytes *)
   let clcw_buf = (clcw_data 1).(0) in
+  let clcw_slice = Bs.make clcw_buf ~first:0 ~length:(Bytes.length clcw_buf) in
 
   let clcw_decode_ns =
     time_ns n (fun () ->
@@ -95,11 +98,11 @@ let () =
   let clcw_get_ns =
     time_ns n (fun () ->
         for _ = 1 to n do
-          ignore (Codec.get clcw_codec cw_report clcw_buf 0)
+          ignore (Codec.get cw_report clcw_slice)
         done)
   in
   let clcw_get_alloc =
-    alloc_words n (fun () -> ignore (Codec.get clcw_codec cw_report clcw_buf 0))
+    alloc_words n (fun () -> ignore (Codec.get cw_report clcw_slice))
   in
   table_row widths
     [
@@ -146,6 +149,7 @@ let () =
 
   (* R3: 3 uint16be fields *)
   let buf6 = Bytes.create 6 in
+  let slice6 = Bs.make buf6 ~first:0 ~length:6 in
 
   let r3_decode_ns =
     time_ns n (fun () ->
@@ -156,15 +160,13 @@ let () =
   let r3_get_ns =
     time_ns n (fun () ->
         for _ = 1 to n do
-          ignore (Codec.get codec3 f_c buf6 0)
+          ignore (Codec.get f_c slice6)
         done)
   in
   let r3_decode_alloc =
     alloc_words n (fun () -> ignore (Codec.decode codec3 buf6 0))
   in
-  let r3_get_alloc =
-    alloc_words n (fun () -> ignore (Codec.get codec3 f_c buf6 0))
-  in
+  let r3_get_alloc = alloc_words n (fun () -> ignore (Codec.get f_c slice6)) in
   table_row widths
     [
       "R3 decode (3 uint16)";
@@ -184,6 +186,7 @@ let () =
 
   (* R1: 1 field *)
   let buf2 = Bytes.create 2 in
+  let slice2 = Bs.make buf2 ~first:0 ~length:2 in
 
   let r1_decode_ns =
     time_ns n (fun () ->
@@ -194,7 +197,7 @@ let () =
   let r1_get_ns =
     time_ns n (fun () ->
         for _ = 1 to n do
-          ignore (Codec.get codec1 f_x buf2 0)
+          ignore (Codec.get f_x slice2)
         done)
   in
   table_row widths
@@ -223,7 +226,7 @@ let () =
   let clcw_set_ns =
     time_ns n (fun () ->
         for _ = 1 to n do
-          Codec.set clcw_codec cw_report clcw_buf 0 42
+          Codec.set cw_report clcw_slice 42
         done)
   in
   table_row widths
@@ -260,9 +263,9 @@ let () =
   alloc_row "Codec.decode clcw" (fun () ->
       ignore (Codec.decode clcw_codec clcw_buf 0));
   alloc_row "Codec.get (zero-copy)" (fun () ->
-      ignore (Codec.get clcw_codec cw_report clcw_buf 0));
+      ignore (Codec.get cw_report clcw_slice));
   alloc_row "Codec.set (zero-copy)" (fun () ->
-      Codec.set clcw_codec cw_report clcw_buf 0 42);
+      Codec.set cw_report clcw_slice 42);
 
   Fmt.pr "\n";
 

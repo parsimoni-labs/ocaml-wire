@@ -781,14 +781,13 @@ module Codec : sig
   val to_struct : 'r t -> struct_
   (** [to_struct codec] converts the codec to a struct for 3D generation. *)
 
-  val get : 'r t -> ('a, 'r) field -> bytes -> int -> 'a
-  (** [get codec f buf off] reads field [f] directly from [buf] at offset [off].
-      Validates bounds once, then reads with zero allocation for immediate
-      types. *)
+  val get : ('a, _) field -> Bytesrw.Bytes.Slice.t -> 'a
+  (** [get f slice] reads field [f] from [slice]. Zero allocation for immediate
+      types (int, bool). Raises {!Parse_error} if the slice is too short. *)
 
-  val set : 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
-  (** [set codec f buf off x] writes [x] into [buf] at offset [off]. For
-      bitfields, uses read-modify-write to preserve adjacent bits. *)
+  val set : ('a, _) field -> Bytesrw.Bytes.Slice.t -> 'a -> unit
+  (** [set f slice x] writes [x] into [slice]. For bitfields, uses
+      read-modify-write to preserve adjacent bits. *)
 end
 
 (** {1 FFI Code Generation}
