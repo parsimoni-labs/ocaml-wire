@@ -2221,6 +2221,8 @@ module Codec = struct
     | BF_U32 e1, BF_U32 e2 -> e1 = e2
     | _ -> false
 
+  (* Bounds-checked readers/writers — used by encode/decode which may not
+     have a pre-validated view. *)
   let bf_read_base base buf off =
     match base with
     | BF_U8 -> Bytes.get_uint8 buf off
@@ -2237,24 +2239,136 @@ module Codec = struct
     | BF_U32 Little -> UInt32.set_le buf off v
     | BF_U32 Big -> UInt32.set_be buf off v
 
+  (* Unsafe readers — bounds already checked by view or decode.
+     Eliminates redundant per-byte bounds checks in the hot path. *)
+  let[@inline] unsafe_get_u8 buf off = Char.code (Bytes.unsafe_get buf off)
+
+  let[@inline] unsafe_get_u16_le buf off =
+    let b0 = unsafe_get_u8 buf off in
+    let b1 = unsafe_get_u8 buf (off + 1) in
+    b0 lor (b1 lsl 8)
+
+  let[@inline] unsafe_get_u16_be buf off =
+    let b0 = unsafe_get_u8 buf off in
+    let b1 = unsafe_get_u8 buf (off + 1) in
+    (b0 lsl 8) lor b1
+
+  let[@inline] unsafe_get_u32_le buf off =
+    let b0 = unsafe_get_u8 buf off in
+    let b1 = unsafe_get_u8 buf (off + 1) in
+    let b2 = unsafe_get_u8 buf (off + 2) in
+    let b3 = unsafe_get_u8 buf (off + 3) in
+    b0 lor (b1 lsl 8) lor (b2 lsl 16) lor (b3 lsl 24)
+
+  let[@inline] unsafe_get_u32_be buf off =
+    let b0 = unsafe_get_u8 buf off in
+    let b1 = unsafe_get_u8 buf (off + 1) in
+    let b2 = unsafe_get_u8 buf (off + 2) in
+    let b3 = unsafe_get_u8 buf (off + 3) in
+    (b0 lsl 24) lor (b1 lsl 16) lor (b2 lsl 8) lor b3
+
+  let[@inline] unsafe_set_u8 buf off v =
+    Bytes.unsafe_set buf off (Char.unsafe_chr (v land 0xFF))
+
+  let[@inline] unsafe_set_u16_le buf off v =
+    unsafe_set_u8 buf off v;
+    unsafe_set_u8 buf (off + 1) (v lsr 8)
+
+  let[@inline] unsafe_set_u16_be buf off v =
+    unsafe_set_u8 buf off (v lsr 8);
+    unsafe_set_u8 buf (off + 1) v
+
+  let[@inline] unsafe_set_u32_le buf off v =
+    unsafe_set_u8 buf off v;
+    unsafe_set_u8 buf (off + 1) (v lsr 8);
+    unsafe_set_u8 buf (off + 2) (v lsr 16);
+    unsafe_set_u8 buf (off + 3) (v lsr 24)
+
+  let[@inline] unsafe_set_u32_be buf off v =
+    unsafe_set_u8 buf off (v lsr 24);
+    unsafe_set_u8 buf (off + 1) (v lsr 16);
+    unsafe_set_u8 buf (off + 2) (v lsr 8);
+    unsafe_set_u8 buf (off + 3) v
+
+  (* Build-time dispatch: pattern match on base happens once at codec
+     construction, not on every read/write call. Each returned closure
+     captures only (byte_off, shift, mask) — no variant tag. *)
   let build_bf_reader base byte_off shift width =
     let mask = (1 lsl width) - 1 in
-    fun buf off -> (bf_read_base base buf (off + byte_off) lsr shift) land mask
+    match base with
+    | BF_U8 ->
+        fun buf off -> (unsafe_get_u8 buf (off + byte_off) lsr shift) land mask
+    | BF_U16 Little ->
+        fun buf off ->
+          (unsafe_get_u16_le buf (off + byte_off) lsr shift) land mask
+    | BF_U16 Big ->
+        fun buf off ->
+          (unsafe_get_u16_be buf (off + byte_off) lsr shift) land mask
+    | BF_U32 Little ->
+        fun buf off ->
+          (unsafe_get_u32_le buf (off + byte_off) lsr shift) land mask
+    | BF_U32 Big ->
+        fun buf off ->
+          (unsafe_get_u32_be buf (off + byte_off) lsr shift) land mask
 
   let build_bf_writer base byte_off shift width =
     let mask = (1 lsl width) - 1 in
-    fun buf off value ->
-      let cur = bf_read_base base buf (off + byte_off) in
-      bf_write_base base buf (off + byte_off)
-        (cur lor ((value land mask) lsl shift))
+    match base with
+    | BF_U8 ->
+        fun buf off value ->
+          let cur = unsafe_get_u8 buf (off + byte_off) in
+          unsafe_set_u8 buf (off + byte_off)
+            (cur lor ((value land mask) lsl shift))
+    | BF_U16 Little ->
+        fun buf off value ->
+          let cur = unsafe_get_u16_le buf (off + byte_off) in
+          unsafe_set_u16_le buf (off + byte_off)
+            (cur lor ((value land mask) lsl shift))
+    | BF_U16 Big ->
+        fun buf off value ->
+          let cur = unsafe_get_u16_be buf (off + byte_off) in
+          unsafe_set_u16_be buf (off + byte_off)
+            (cur lor ((value land mask) lsl shift))
+    | BF_U32 Little ->
+        fun buf off value ->
+          let cur = unsafe_get_u32_le buf (off + byte_off) in
+          unsafe_set_u32_le buf (off + byte_off)
+            (cur lor ((value land mask) lsl shift))
+    | BF_U32 Big ->
+        fun buf off value ->
+          let cur = unsafe_get_u32_be buf (off + byte_off) in
+          unsafe_set_u32_be buf (off + byte_off)
+            (cur lor ((value land mask) lsl shift))
 
   let build_bf_accessor_writer base byte_off shift width =
     let mask = (1 lsl width) - 1 in
     let clear_mask = lnot (mask lsl shift) in
-    fun buf off value ->
-      let cur = bf_read_base base buf (off + byte_off) in
-      bf_write_base base buf (off + byte_off)
-        (cur land clear_mask lor ((value land mask) lsl shift))
+    match base with
+    | BF_U8 ->
+        fun buf off value ->
+          let cur = unsafe_get_u8 buf (off + byte_off) in
+          unsafe_set_u8 buf (off + byte_off)
+            (cur land clear_mask lor ((value land mask) lsl shift))
+    | BF_U16 Little ->
+        fun buf off value ->
+          let cur = unsafe_get_u16_le buf (off + byte_off) in
+          unsafe_set_u16_le buf (off + byte_off)
+            (cur land clear_mask lor ((value land mask) lsl shift))
+    | BF_U16 Big ->
+        fun buf off value ->
+          let cur = unsafe_get_u16_be buf (off + byte_off) in
+          unsafe_set_u16_be buf (off + byte_off)
+            (cur land clear_mask lor ((value land mask) lsl shift))
+    | BF_U32 Little ->
+        fun buf off value ->
+          let cur = unsafe_get_u32_le buf (off + byte_off) in
+          unsafe_set_u32_le buf (off + byte_off)
+            (cur land clear_mask lor ((value land mask) lsl shift))
+    | BF_U32 Big ->
+        fun buf off value ->
+          let cur = unsafe_get_u32_be buf (off + byte_off) in
+          unsafe_set_u32_be buf (off + byte_off)
+            (cur land clear_mask lor ((value land mask) lsl shift))
 
   let build_bf_clear base byte_off =
    fun buf off -> bf_write_base base buf (off + byte_off) 0
