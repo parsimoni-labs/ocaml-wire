@@ -1995,14 +1995,14 @@ let c_stub_check ppf (s : struct_) =
   Fmt.pf ppf
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n";
-  (* Call Validate directly instead of going through the Wrapper *)
+  (* Call Validate directly instead of going through the Wrapper.
+     No OCaml allocation or GC interaction, so skip CAMLparam/CAMLreturn. *)
   Fmt.pf ppf "CAMLprim value caml_wire_%s_check(value v_buf) {@\n" lower;
-  Fmt.pf ppf "  CAMLparam1(v_buf);@\n";
   Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
   Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
   Fmt.pf ppf "  uint64_t r = %sValidate%s(NULL, %s_err, data, len, 0);@\n" ep ep
     lower;
-  Fmt.pf ppf "  CAMLreturn(Val_bool(EverParseIsSuccess(r)));@\n";
+  Fmt.pf ppf "  return Val_bool(EverParseIsSuccess(r));@\n";
   Fmt.pf ppf "}@\n@\n"
 
 (** Generate C FFI stubs that call EverParse-generated validators.
@@ -2046,7 +2046,7 @@ let to_ml_stubs (structs : struct_ list) =
     (fun (s : struct_) ->
       let lower = String.lowercase_ascii s.name in
       Fmt.pf ppf "external %s_check : bytes -> bool@\n" lower;
-      Fmt.pf ppf "  = \"caml_wire_%s_check\"@\n@\n" lower)
+      Fmt.pf ppf "  = \"caml_wire_%s_check\" [@@@@noalloc]@\n@\n" lower)
     structs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf

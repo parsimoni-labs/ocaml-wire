@@ -124,6 +124,34 @@ let () =
       bench_one any n ~c_loop_fn ~ffi_check_fn ~zero_copy_time)
     all_schemas;
 
+  (* FFI call overhead breakdown *)
+  let buf = Bytes.create 4 in
+  let noop_time =
+    let ns =
+      time_ns (fun () ->
+          for _ = 1 to n do
+            ignore (Bench_ep_stubs.noop buf)
+          done)
+    in
+    ns /. float_of_int n
+  in
+  let noop_safe_time =
+    let ns =
+      time_ns (fun () ->
+          for _ = 1 to n do
+            ignore (Bench_ep_stubs.noop_safe buf)
+          done)
+    in
+    ns /. float_of_int n
+  in
+  Printf.printf "FFI call overhead:\n";
+  Printf.printf "  noop [@@noalloc]   %6.1f ns/call\n" noop_time;
+  Printf.printf "  noop CAMLparam     %6.1f ns/call\n" noop_safe_time;
+  Printf.printf "  CLCW FFI check     %6.1f ns/call\n"
+    (let (Any s) = List.find (fun (Any s) -> s.name = "CLCW") all_schemas in
+     bench_ffi_check (Bench_ep_dispatch.get_check "clcw") s n);
+  Printf.printf "\n";
+
   Printf.printf
     "Legend:\n\
     \  EverParse C   = generated verified C validator, timed in pure C loop\n\

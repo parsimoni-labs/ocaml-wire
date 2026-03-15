@@ -34,6 +34,16 @@ let () =
   let oc = open_out "bench_ep_stubs.c" in
   output_string oc (Wire.to_c_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
+  (* Noop stub to measure raw OCaml→C call overhead *)
+  pr "\n/* ── Noop FFI stub (measures call overhead) ── */\n\n";
+  pr "CAMLprim value bench_ep_noop(value v_buf) {\n";
+  pr "  (void)v_buf;\n";
+  pr "  return Val_true;\n";
+  pr "}\n\n";
+  pr "CAMLprim value bench_ep_noop_safe(value v_buf) {\n";
+  pr "  CAMLparam1(v_buf);\n";
+  pr "  CAMLreturn(Val_true);\n";
+  pr "}\n\n";
   pr "\n/* ── Timed C benchmark loops ── */\n\n";
   pr "#include <time.h>\n\n";
   pr "static inline int64_t now_ns(void) {\n";
@@ -73,6 +83,9 @@ let () =
   let oc = open_out "bench_ep_stubs.ml" in
   output_string oc (Wire.to_ml_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
+  pr "(* Noop FFI stubs for measuring call overhead *)\n\n";
+  pr "external noop : bytes -> bool = \"bench_ep_noop\" [@@noalloc]\n\n";
+  pr "external noop_safe : bytes -> bool = \"bench_ep_noop_safe\"\n\n";
   pr "(* Timed C benchmark loops *)\n\n";
   List.iter
     (fun s ->
