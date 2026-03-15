@@ -17,7 +17,7 @@
 (executable
  (name bench_alloc)
  (modules bench_alloc)
- (libraries wire))
+ (libraries bench_schemas wire unix))
 
 ; ── EverParse benchmark infrastructure (BUILD_EVERPARSE=1 only) ──
 

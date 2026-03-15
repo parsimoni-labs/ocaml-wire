@@ -1,10 +1,10 @@
 (** Memtrace allocation profiling for Wire codecs.
 
-    Profiles decode, encode, and roundtrip for all benchmark schemas
-    to identify allocation hotspots.
+    Profiles decode, encode, and roundtrip for all benchmark schemas to identify
+    allocation hotspots.
 
-    Usage:
-      MEMTRACE=trace.ctf dune exec bench/bench_wire_memtrace.exe [-- SCHEMA]
+    Usage: MEMTRACE=trace.ctf dune exec bench/bench_wire_memtrace.exe
+    [-- SCHEMA]
 
     SCHEMA is one of the schema names (minimal, allints, ...) or "all". *)
 
@@ -36,11 +36,31 @@ let run_schema (Any s) =
     done
   done
 
+let run_zero_copy () =
+  let data = clcw_data n_values in
+  Fmt.pr "  CLCW zero-copy get...\n%!";
+  for _ = 1 to iterations do
+    for i = 0 to Array.length data - 1 do
+      ignore (Wire.Codec.get clcw_codec cw_report data.(i) 0)
+    done
+  done;
+  Fmt.pr "  CLCW zero-copy set...\n%!";
+  for _ = 1 to iterations do
+    for i = 0 to Array.length data - 1 do
+      Wire.Codec.set clcw_codec cw_report data.(i) 0 42
+    done
+  done;
+  Fmt.pr "  CLCW zero-copy roundtrip...\n%!";
+  for _ = 1 to iterations do
+    for i = 0 to Array.length data - 1 do
+      let x = Wire.Codec.get clcw_codec cw_report data.(i) 0 in
+      Wire.Codec.set clcw_codec cw_report data.(i) 0 x
+    done
+  done
+
 let () =
   Memtrace.trace_if_requested ~context:"wire-codecs" ();
-  let filter =
-    if Array.length Sys.argv > 1 then Some Sys.argv.(1) else None
-  in
+  let filter = if Array.length Sys.argv > 1 then Some Sys.argv.(1) else None in
   Fmt.pr "Wire Codec memtrace profiling\n%!";
   Fmt.pr "(%d iterations x %d values)\n\n%!" iterations n_values;
   List.iter
@@ -52,4 +72,11 @@ let () =
           ()
       | _ -> run_schema any)
     all_schemas;
+  Fmt.pr "\n";
+  (match filter with
+  | Some f
+    when String.lowercase_ascii f <> "all" && String.lowercase_ascii f <> "clcw"
+    ->
+      ()
+  | _ -> run_zero_copy ());
   Fmt.pr "\nDone.\n"

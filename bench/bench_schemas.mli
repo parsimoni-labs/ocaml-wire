@@ -20,9 +20,19 @@ val all_schemas : any_schema list
 val all_structs : Wire.struct_ list
 (** [all_structs] is the list of all benchmark structs. *)
 
-(** {2 CLCW field accessors for zero-copy benchmarks} *)
+(** {2 CLCW} *)
 
 type clcw
 
+val clcw_codec : clcw Wire.Codec.t
+val clcw_size : int
+val clcw_default : clcw
+val clcw_data : int -> bytes array
 val cw_report : (int, clcw) Wire.Codec.field
-(** Zero-copy accessor for the CLCW ReportValue field. *)
+
+(** {2 SpacePacket} *)
+
+type space_packet
+
+val space_packet_codec : space_packet Wire.Codec.t
+val space_packet_data : int -> bytes array

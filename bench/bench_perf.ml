@@ -38,11 +38,10 @@ let bench_ocaml_decode (type a) (s : a schema) n =
 let bench_zero_copy_get (fld : (int, _) Wire.Codec.field) (s : _ schema) n =
   let data = s.make_data 1 in
   let buf = data.(0) in
-  let v = Wire.Codec.view s.codec buf 0 in
   let ns =
     time_ns (fun () ->
         for _ = 1 to n do
-          ignore (Wire.Codec.get fld v)
+          ignore (Wire.Codec.get s.codec fld buf 0)
         done)
   in
   ns /. float_of_int n

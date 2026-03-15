@@ -751,9 +751,6 @@ module Codec : sig
   type 'r t
   (** A sealed record codec for type ['r]. *)
 
-  type view
-  (** A validated buffer region for zero-copy field access. *)
-
   val record : string -> 'f -> ('f, _) record
   (** [record name make] starts building a codec named [name] with constructor
       [make]. *)
@@ -763,7 +760,7 @@ module Codec : sig
       {!val:Wire.map} or {!val:Wire.bool} on the type for conversions.
 
       The returned field can be used both in the record pipeline ({!(|+)}) and
-      as a zero-copy accessor ({!get}/{!set}) on a {!view}. *)
+      as a zero-copy accessor ({!get}/{!set}). *)
 
   val ( |+ ) : ('a -> 'b, 'r) record -> ('a, 'r) field -> ('b, 'r) record
   (** [r |+ f] adds field [f] to record codec [r]. *)
@@ -784,18 +781,14 @@ module Codec : sig
   val to_struct : 'r t -> struct_
   (** [to_struct codec] converts the codec to a struct for 3D generation. *)
 
-  val view : 'r t -> bytes -> int -> view
-  (** [view codec buf off] validates that [buf] has enough bytes at [off] for
-      the codec's wire size and returns a view. Raises {!Parse_error} if the
-      buffer is too short. *)
+  val get : 'r t -> ('a, 'r) field -> bytes -> int -> 'a
+  (** [get codec f buf off] reads field [f] directly from [buf] at offset [off].
+      Validates bounds once, then reads with zero allocation for immediate
+      types. *)
 
-  val get : ('a, _) field -> view -> 'a
-  (** [get f v] reads the field value from the view's buffer. Zero allocation
-      for immediate types (int, bool). *)
-
-  val set : ('a, _) field -> view -> 'a -> unit
-  (** [set f v x] writes [x] into the view's buffer. For bitfields, uses
-      read-modify-write to preserve adjacent bits. *)
+  val set : 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
+  (** [set codec f buf off x] writes [x] into [buf] at offset [off]. For
+      bitfields, uses read-modify-write to preserve adjacent bits. *)
 end
 
 (** {1 FFI Code Generation}

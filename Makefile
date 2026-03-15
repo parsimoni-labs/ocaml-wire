@@ -7,6 +7,9 @@ test:
 	dune runtest
 
 bench:
+	dune exec bench/bench_alloc.exe
+
+bench-everparse:
 	BUILD_EVERPARSE=1 dune exec bench/bench_perf.exe
 
 bench-sample:
