@@ -2132,7 +2132,15 @@ let struct_field = field
 let struct' = struct_
 
 module Codec = struct
-  type ('a, 'r) field = { name : string; typ : 'a typ; get : 'r -> 'a }
+  type view = { v_buf : bytes; v_off : int }
+
+  type ('a, 'r) field = {
+    name : string;
+    typ : 'a typ;
+    get : 'r -> 'a;
+    mutable f_reader : bytes -> int -> 'a;
+    mutable f_writer : bytes -> int -> 'a -> unit;
+  }
 
   (* GADT snoc-list of typed field readers, built in forward order by |+.
      ('full, 'remaining) readers tracks:
@@ -2188,7 +2196,14 @@ module Codec = struct
         r_bf = None;
       }
 
-  let field name typ get = { name; typ; get }
+  let field name typ get =
+    {
+      name;
+      typ;
+      get;
+      f_reader = (fun _ _ -> failwith "field: not added to a record yet");
+      f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
+    }
 
   (* Bitfield helpers *)
 
@@ -2233,24 +2248,35 @@ module Codec = struct
       bf_write_base base buf (off + byte_off)
         (cur lor ((value land mask) lsl shift))
 
+  let build_bf_accessor_writer base byte_off shift width =
+    let mask = (1 lsl width) - 1 in
+    let clear_mask = lnot (mask lsl shift) in
+    fun buf off value ->
+      let cur = bf_read_base base buf (off + byte_off) in
+      bf_write_base base buf (off + byte_off)
+        (cur land clear_mask lor ((value land mask) lsl shift))
+
   let build_bf_clear base byte_off =
    fun buf off -> bf_write_base base buf (off + byte_off) 0
 
   let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
-   fun (Record r) { name; typ; get } ->
+   fun (Record r) ({ name; typ; get; _ } as fld) ->
     (* Recursively unwrap Map layers to reach the wire-level type, composing
        encode/decode conversions along the way. *)
     let rec add : type w.
         w typ ->
         (r -> w) ->
         ((bytes -> int -> w) -> bytes -> int -> a) ->
+        ((bytes -> int -> w -> unit) -> bytes -> int -> a -> unit) ->
         (f, r) record =
-     fun typ get_wire wrap_reader ->
+     fun typ get_wire wrap_reader wrap_writer ->
       match typ with
       | Map { inner; decode; encode } ->
           add inner
             (fun v -> encode (get_wire v))
             (fun reader -> wrap_reader (fun buf off -> decode (reader buf off)))
+            (fun writer ->
+              wrap_writer (fun buf off value -> writer buf off (encode value)))
       | Bits { width; base } ->
           let total = bf_base_total_bits base in
           let need_new_group =
@@ -2275,6 +2301,11 @@ module Codec = struct
           let shift = total - bits_used - width in
           let raw_reader = build_bf_reader base base_off shift width in
           let raw_writer = build_bf_writer base base_off shift width in
+          let accessor_writer =
+            build_bf_accessor_writer base base_off shift width
+          in
+          fld.f_reader <- wrap_reader raw_reader;
+          fld.f_writer <- wrap_writer accessor_writer;
           let new_bf =
             {
               bfc_base = base;
@@ -2304,6 +2335,11 @@ module Codec = struct
           let field_off = r.r_wire_size in
           let raw_reader = build_field_reader typ field_off in
           let raw_encoder = build_field_encoder typ in
+          fld.f_reader <- wrap_reader raw_reader;
+          fld.f_writer <-
+            wrap_writer (fun buf off value ->
+                let _ = raw_encoder buf (off + field_off) value in
+                ());
           Record
             {
               r_name = r.r_name;
@@ -2319,7 +2355,7 @@ module Codec = struct
               r_bf = None;
             }
     in
-    add typ get (fun reader -> reader)
+    add typ get (fun reader -> reader) (fun writer -> writer)
 
   (* Chunked application: peels off up to 6 fields per recursion step.
      Cost: ceil(n/6) - 1 partial applications instead of n - 1. *)
@@ -2505,6 +2541,14 @@ module Codec = struct
   let decode t buf off = t.t_decode buf off
   let encode t v buf off = t.t_encode v buf off
   let to_struct t = struct' t.t_name t.t_struct_fields
+
+  let view t buf off =
+    if off + t.t_wire_size > Bytes.length buf then
+      raise_eof ~expected:t.t_wire_size ~got:(Bytes.length buf - off);
+    { v_buf = buf; v_off = off }
+
+  let get f v = f.f_reader v.v_buf v.v_off
+  let set f v x = f.f_writer v.v_buf v.v_off x
 end
 
 module Record = struct

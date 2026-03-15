@@ -555,6 +555,139 @@ let test_codec_bitfield_to_struct () =
   Alcotest.(check bool) "contains field a" true (contains ~sub:"a" output);
   Alcotest.(check bool) "contains field b" true (contains ~sub:"b" output)
 
+(* Zero-copy view tests *)
+
+let test_view_get_uint () =
+  let f_x = Codec.field "x" uint16be (fun r -> r.x) in
+  let f_y = Codec.field "y" uint16be (fun r -> r.y) in
+  let codec =
+    Codec.(
+      record "ViewUint" (fun a b -> { x = a; y = b }) |+ f_x |+ f_y |> seal)
+  in
+  let buf = Bytes.create 4 in
+  Bytes.set_uint16_be buf 0 0x1234;
+  Bytes.set_uint16_be buf 2 0x5678;
+  let v = Codec.view codec buf 0 in
+  Alcotest.(check int) "get x" 0x1234 (Codec.get f_x v);
+  Alcotest.(check int) "get y" 0x5678 (Codec.get f_y v);
+  let r = Codec.decode codec buf 0 in
+  Alcotest.(check int) "decode x" 0x1234 r.x;
+  Alcotest.(check int) "decode y" 0x5678 r.y
+
+let test_view_get_bitfield () =
+  let f_a = Codec.field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a) in
+  let f_b = Codec.field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b) in
+  let f_c = Codec.field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c) in
+  let f_d = Codec.field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
+  let codec =
+    Codec.(
+      record "ViewBf" (fun a b c d ->
+          { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
+      |+ f_a |+ f_b |+ f_c |+ f_d |> seal)
+  in
+  let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
+  let v = Codec.view codec buf 0 in
+  Alcotest.(check int) "get a" 5 (Codec.get f_a v);
+  Alcotest.(check int) "get d" 0xAB (Codec.get f_d v);
+  let r = Codec.decode codec buf 0 in
+  Alcotest.(check int) "decode a" 5 r.bf_a;
+  Alcotest.(check int) "decode d" 0xAB r.bf_d
+
+let test_view_get_bool () =
+  let f_flag = Codec.field "flag" (bool (bits ~width:1 bf_uint8)) fst in
+  let f_code = Codec.field "code" (bits ~width:7 bf_uint8) snd in
+  let codec =
+    Codec.(
+      record "ViewBool" (fun flag code -> (flag, code))
+      |+ f_flag |+ f_code |> seal)
+  in
+  let buf = Bytes.create 1 in
+  Bytes.set_uint8 buf 0 0x80;
+  let v = Codec.view codec buf 0 in
+  Alcotest.(check bool) "get flag=true" true (Codec.get f_flag v);
+  Bytes.set_uint8 buf 0 0x00;
+  let v = Codec.view codec buf 0 in
+  Alcotest.(check bool) "get flag=false" false (Codec.get f_flag v)
+
+let test_view_set_bitfield () =
+  let f_a = Codec.field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a) in
+  let f_b = Codec.field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b) in
+  let f_c = Codec.field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c) in
+  let f_d = Codec.field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
+  let codec =
+    Codec.(
+      record "ViewSetBf" (fun a b c d ->
+          { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
+      |+ f_a |+ f_b |+ f_c |+ f_d |> seal)
+  in
+  let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
+  let v = Codec.view codec buf 0 in
+  Codec.set f_a v 3;
+  Alcotest.(check int) "get a after set" 3 (Codec.get f_a v);
+  let r = Codec.decode codec buf 0 in
+  Alcotest.(check int) "b preserved" 20 r.bf_b;
+  Alcotest.(check int) "c preserved" 0x1234 r.bf_c;
+  Alcotest.(check int) "d preserved" 0xAB r.bf_d;
+  Codec.set f_d v 0x42;
+  Alcotest.(check int) "get d after set" 0x42 (Codec.get f_d v);
+  let r = Codec.decode codec buf 0 in
+  Alcotest.(check int) "a still 3" 3 r.bf_a;
+  Alcotest.(check int) "b still 20" 20 r.bf_b;
+  Alcotest.(check int) "c still 0x1234" 0x1234 r.bf_c
+
+let test_view_set_uint () =
+  let f_x = Codec.field "x" uint16be (fun r -> r.x) in
+  let f_y = Codec.field "y" uint16be (fun r -> r.y) in
+  let codec =
+    Codec.(record "ViewSetUint" (fun x y -> { x; y }) |+ f_x |+ f_y |> seal)
+  in
+  let buf = Bytes.create 4 in
+  Bytes.set_uint16_be buf 0 0x1234;
+  Bytes.set_uint16_be buf 2 0x5678;
+  let v = Codec.view codec buf 0 in
+  Codec.set f_x v 0xAAAA;
+  Alcotest.(check int) "get x after set" 0xAAAA (Codec.get f_x v);
+  Alcotest.(check int) "y unchanged" 0x5678 (Codec.get f_y v)
+
+let test_view_bounds_check () =
+  let codec =
+    let open Codec in
+    record "ViewBounds" (fun a -> a) |+ field "a" uint32be (fun a -> a) |> seal
+  in
+  let buf = Bytes.create 2 in
+  match Codec.view codec buf 0 with
+  | _ -> Alcotest.fail "expected Parse_error for short buffer"
+  | exception Parse_error (Unexpected_eof _) -> ()
+  | exception e -> Alcotest.failf "wrong exception: %s" (Printexc.to_string e)
+
+let test_view_with_offset () =
+  let f_a = Codec.field "a" uint16be (fun a -> a) in
+  let codec = Codec.(record "ViewOff" (fun a -> a) |+ f_a |> seal) in
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 0x1111;
+  Bytes.set_uint16_be buf 2 0x2222;
+  Bytes.set_uint16_be buf 4 0x3333;
+  let v = Codec.view codec buf 2 in
+  Alcotest.(check int) "get at offset 2" 0x2222 (Codec.get f_a v)
+
+let test_view_set_bool () =
+  let f_flag = Codec.field "flag" (bool (bits ~width:1 bf_uint8)) fst in
+  let f_code = Codec.field "code" (bits ~width:7 bf_uint8) snd in
+  let codec =
+    Codec.(
+      record "ViewSetBool" (fun flag code -> (flag, code))
+      |+ f_flag |+ f_code |> seal)
+  in
+  let buf = Bytes.create 1 in
+  Bytes.set_uint8 buf 0 0x00;
+  let v = Codec.view codec buf 0 in
+  Codec.set f_flag v true;
+  Alcotest.(check bool) "get flag after set true" true (Codec.get f_flag v);
+  Alcotest.(check int) "byte value" 0x80 (Bytes.get_uint8 buf 0);
+  Codec.set f_flag v false;
+  Alcotest.(check bool) "get flag after set false" false (Codec.get f_flag v);
+  Alcotest.(check int) "byte cleared" 0x00 (Bytes.get_uint8 buf 0)
+
 (* FFI stub generation tests *)
 
 let test_c_stubs () =
@@ -643,6 +776,15 @@ let suite =
         test_codec_bitfield_multi_group;
       Alcotest.test_case "codec bitfield: to_struct" `Quick
         test_codec_bitfield_to_struct;
+      (* zero-copy view *)
+      Alcotest.test_case "view: get uint" `Quick test_view_get_uint;
+      Alcotest.test_case "view: get bitfield" `Quick test_view_get_bitfield;
+      Alcotest.test_case "view: get bool" `Quick test_view_get_bool;
+      Alcotest.test_case "view: set bitfield" `Quick test_view_set_bitfield;
+      Alcotest.test_case "view: set uint" `Quick test_view_set_uint;
+      Alcotest.test_case "view: set bool" `Quick test_view_set_bool;
+      Alcotest.test_case "view: bounds check" `Quick test_view_bounds_check;
+      Alcotest.test_case "view: with offset" `Quick test_view_with_offset;
       (* ffi stubs *)
       Alcotest.test_case "ffi: c_stubs" `Quick test_c_stubs;
     ] )

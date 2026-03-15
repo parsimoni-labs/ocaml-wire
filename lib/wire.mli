@@ -59,7 +59,8 @@ module UInt32 : sig
   *)
 
   val get_le : bytes -> int -> t
-  (** [get_le buf off] reads a little-endian value from [buf] at offset [off]. *)
+  (** [get_le buf off] reads a little-endian value from [buf] at offset [off].
+  *)
 
   val get_be : bytes -> int -> t
   (** [get_be buf off] reads a big-endian value from [buf] at offset [off]. *)
@@ -82,7 +83,8 @@ module UInt63 : sig
   (** Unsigned 63-bit integer. Reads 8 bytes but masks to 63 bits. *)
 
   val get_le : bytes -> int -> t
-  (** [get_le buf off] reads a little-endian value from [buf] at offset [off]. *)
+  (** [get_le buf off] reads a little-endian value from [buf] at offset [off].
+  *)
 
   val get_be : bytes -> int -> t
   (** [get_be buf off] reads a big-endian value from [buf] at offset [off]. *)
@@ -749,13 +751,19 @@ module Codec : sig
   type 'r t
   (** A sealed record codec for type ['r]. *)
 
+  type view
+  (** A validated buffer region for zero-copy field access. *)
+
   val record : string -> 'f -> ('f, _) record
   (** [record name make] starts building a codec named [name] with constructor
       [make]. *)
 
   val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
   (** [field name typ get] defines a field with type [typ] and getter [get]. Use
-      {!val:Wire.map} or {!val:Wire.bool} on the type for conversions. *)
+      {!val:Wire.map} or {!val:Wire.bool} on the type for conversions.
+
+      The returned field can be used both in the record pipeline ({!(|+)}) and
+      as a zero-copy accessor ({!get}/{!set}) on a {!view}. *)
 
   val ( |+ ) : ('a -> 'b, 'r) record -> ('a, 'r) field -> ('b, 'r) record
   (** [r |+ f] adds field [f] to record codec [r]. *)
@@ -775,6 +783,19 @@ module Codec : sig
 
   val to_struct : 'r t -> struct_
   (** [to_struct codec] converts the codec to a struct for 3D generation. *)
+
+  val view : 'r t -> bytes -> int -> view
+  (** [view codec buf off] validates that [buf] has enough bytes at [off] for
+      the codec's wire size and returns a view. Raises {!Parse_error} if the
+      buffer is too short. *)
+
+  val get : ('a, _) field -> view -> 'a
+  (** [get f v] reads the field value from the view's buffer. Zero allocation
+      for immediate types (int, bool). *)
+
+  val set : ('a, _) field -> view -> 'a -> unit
+  (** [set f v x] writes [x] into the view's buffer. For bitfields, uses
+      read-modify-write to preserve adjacent bits. *)
 end
 
 (** {1 FFI Code Generation}
@@ -803,8 +824,8 @@ val to_c_stubs : struct_ list -> string
     - Validation stub [caml_wire_foo_check] calling [Validate] directly
 
     The generated C code includes the EverParse headers and sources. Compile
-    with [-I <schema_dir>] to find them. EverParse identifier normalization
-    is handled automatically. *)
+    with [-I <schema_dir>] to find them. EverParse identifier normalization is
+    handled automatically. *)
 
 val to_ml_stubs : struct_ list -> string
 (** [to_ml_stubs structs] generates OCaml [external] declarations matching the C

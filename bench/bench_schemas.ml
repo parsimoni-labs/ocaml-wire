@@ -8,8 +8,8 @@
     - Type combinators: map, bool
     - Various struct sizes: 1B to 26B
 
-    Realistic protocol headers (CCSDS Space Packet, CLCW, TM Frame) are
-    included to show real-world performance. *)
+    Realistic protocol headers (CCSDS Space Packet, CLCW, TM Frame) are included
+    to show real-world performance. *)
 
 open Wire
 
@@ -46,8 +46,7 @@ type all_ints = {
 
 let all_ints_codec =
   Codec.(
-    record "AllInts"
-      (fun u8 u16 u16be u32 u32be u64be ->
+    record "AllInts" (fun u8 u16 u16be u32 u32be u64be ->
         {
           ai_u8 = u8;
           ai_u16 = u16;
@@ -82,7 +81,7 @@ let all_ints_data n =
       let b = Bytes.create all_ints_size in
       Bytes.set_uint8 b 0 (i mod 256);
       Bytes.set_uint16_le b 1 (i mod 65536);
-      Bytes.set_uint16_be b 3 ((i * 7) mod 65536);
+      Bytes.set_uint16_be b 3 (i * 7 mod 65536);
       Bytes.set_int32_le b 5 (Int32.of_int (i * 13));
       Bytes.set_int32_be b 9 (Int32.of_int (i * 17));
       Bytes.set_int64_be b 13 (Int64.of_int (i * 31));
@@ -116,8 +115,8 @@ type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
 let bf16_codec =
   Codec.(
-    record "Bitfield16"
-      (fun flag type_ id -> { bf16_flag = flag; bf16_type = type_; bf16_id = id })
+    record "Bitfield16" (fun flag type_ id ->
+        { bf16_flag = flag; bf16_type = type_; bf16_id = id })
     |+ field "Flag" (bits ~width:1 bf_uint16be) (fun b -> b.bf16_flag)
     |+ field "Type" (bits ~width:4 bf_uint16be) (fun b -> b.bf16_type)
     |+ field "Id" (bits ~width:11 bf_uint16be) (fun b -> b.bf16_id)
@@ -130,18 +129,22 @@ let bf16_default = { bf16_flag = 1; bf16_type = 9; bf16_id = 1023 }
 let bf16_data n =
   Array.init n (fun i ->
       let b = Bytes.create bf16_size in
-      let w = ((i mod 2) lsl 15) lor (((i * 3) mod 16) lsl 11) lor (i mod 2048) in
+      let w = ((i mod 2) lsl 15) lor ((i * 3 mod 16) lsl 11) lor (i mod 2048) in
       Bytes.set_uint16_be b 0 w;
       b)
 
 (* ── 5. Bitfield32: 4+6+14+8 bits in bf_uint32be = 4 bytes ── *)
 
-type bf32 = { bf32_flags : int; bf32_chan : int; bf32_seq : int; bf32_pri : int }
+type bf32 = {
+  bf32_flags : int;
+  bf32_chan : int;
+  bf32_seq : int;
+  bf32_pri : int;
+}
 
 let bf32_codec =
   Codec.(
-    record "Bitfield32"
-      (fun flags chan seq pri ->
+    record "Bitfield32" (fun flags chan seq pri ->
         { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
     |+ field "Flags" (bits ~width:4 bf_uint32be) (fun b -> b.bf32_flags)
     |+ field "Channel" (bits ~width:6 bf_uint32be) (fun b -> b.bf32_chan)
@@ -151,15 +154,17 @@ let bf32_codec =
 
 let bf32_struct = Codec.to_struct bf32_codec
 let bf32_size = Codec.wire_size bf32_codec
-let bf32_default = { bf32_flags = 5; bf32_chan = 26; bf32_seq = 4660; bf32_pri = 171 }
+
+let bf32_default =
+  { bf32_flags = 5; bf32_chan = 26; bf32_seq = 4660; bf32_pri = 171 }
 
 let bf32_data n =
   Array.init n (fun i ->
       let b = Bytes.create bf32_size in
       let w =
         ((i mod 16) lsl 28)
-        lor (((i * 3) mod 64) lsl 22)
-        lor (((i * 17) mod 16384) lsl 8)
+        lor ((i * 3 mod 64) lsl 22)
+        lor ((i * 17 mod 16384) lsl 8)
         lor (i mod 256)
       in
       Bytes.set_int32_be b 0 (Int32.of_int w);
@@ -176,8 +181,7 @@ type bool_fields = {
 
 let bool_fields_codec =
   Codec.(
-    record "BoolFields"
-      (fun active valid mode code ->
+    record "BoolFields" (fun active valid mode code ->
         { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
     |+ field "Active" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_active)
     |+ field "Valid" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_valid)
@@ -276,11 +280,64 @@ type clcw = {
   cw_report : int;
 }
 
+let cw_type =
+  Codec.field "ControlWordType" (bits ~width:1 bf_uint32be) (fun c -> c.cw_type)
+
+let cw_version =
+  Codec.field "CLCWVersion" (bits ~width:2 bf_uint32be) (fun c -> c.cw_version)
+
+let cw_status =
+  Codec.field "StatusField" (bits ~width:3 bf_uint32be) (fun c -> c.cw_status)
+
+let cw_cop =
+  Codec.field "COPInEffect" (bits ~width:2 bf_uint32be) (fun c -> c.cw_cop)
+
+let cw_vcid =
+  Codec.field "VCID" (bits ~width:6 bf_uint32be) (fun c -> c.cw_vcid)
+
+let cw_spare =
+  Codec.field "Spare" (bits ~width:2 bf_uint32be) (fun c -> c.cw_spare)
+
+let cw_no_rf =
+  Codec.field "NoRF" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_rf)
+
+let cw_no_bitlock =
+  Codec.field "NoBitlock" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_bitlock)
+
+let cw_lockout =
+  Codec.field "Lockout" (bits ~width:1 bf_uint32be) (fun c -> c.cw_lockout)
+
+let cw_wait =
+  Codec.field "Wait" (bits ~width:1 bf_uint32be) (fun c -> c.cw_wait)
+
+let cw_retransmit =
+  Codec.field "Retransmit" (bits ~width:1 bf_uint32be) (fun c ->
+      c.cw_retransmit)
+
+let cw_farmb =
+  Codec.field "FARMBCounter" (bits ~width:2 bf_uint32be) (fun c -> c.cw_farmb)
+
+let cw_report =
+  Codec.field "ReportValue" (bits ~width:8 bf_uint32be) (fun c -> c.cw_report)
+
 let clcw_codec =
   Codec.(
     record "CLCW"
-      (fun type_ version status cop vcid spare no_rf no_bitlock lockout wait
-           retransmit farmb report ->
+      (fun
+        type_
+        version
+        status
+        cop
+        vcid
+        spare
+        no_rf
+        no_bitlock
+        lockout
+        wait
+        retransmit
+        farmb
+        report
+      ->
         {
           cw_type = type_;
           cw_version = version;
@@ -296,20 +353,9 @@ let clcw_codec =
           cw_farmb = farmb;
           cw_report = report;
         })
-    |+ field "ControlWordType" (bits ~width:1 bf_uint32be) (fun c -> c.cw_type)
-    |+ field "CLCWVersion" (bits ~width:2 bf_uint32be) (fun c -> c.cw_version)
-    |+ field "StatusField" (bits ~width:3 bf_uint32be) (fun c -> c.cw_status)
-    |+ field "COPInEffect" (bits ~width:2 bf_uint32be) (fun c -> c.cw_cop)
-    |+ field "VCID" (bits ~width:6 bf_uint32be) (fun c -> c.cw_vcid)
-    |+ field "Spare" (bits ~width:2 bf_uint32be) (fun c -> c.cw_spare)
-    |+ field "NoRF" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_rf)
-    |+ field "NoBitlock" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_bitlock)
-    |+ field "Lockout" (bits ~width:1 bf_uint32be) (fun c -> c.cw_lockout)
-    |+ field "Wait" (bits ~width:1 bf_uint32be) (fun c -> c.cw_wait)
-    |+ field "Retransmit" (bits ~width:1 bf_uint32be) (fun c -> c.cw_retransmit)
-    |+ field "FARMBCounter" (bits ~width:2 bf_uint32be) (fun c -> c.cw_farmb)
-    |+ field "ReportValue" (bits ~width:8 bf_uint32be) (fun c -> c.cw_report)
-    |> seal)
+    |+ cw_type |+ cw_version |+ cw_status |+ cw_cop |+ cw_vcid |+ cw_spare
+    |+ cw_no_rf |+ cw_no_bitlock |+ cw_lockout |+ cw_wait |+ cw_retransmit
+    |+ cw_farmb |+ cw_report |> seal)
 
 let clcw_struct = Codec.to_struct clcw_codec
 let clcw_size = Codec.wire_size clcw_codec
@@ -365,8 +411,7 @@ type tm_frame = {
 
 let tm_frame_codec =
   Codec.(
-    record "TMFrame"
-      (fun version scid vcid ocf mc vc sec sync pkt seg hdr ->
+    record "TMFrame" (fun version scid vcid ocf mc vc sec sync pkt seg hdr ->
         {
           tf_version = version;
           tf_scid = scid;
@@ -390,7 +435,8 @@ let tm_frame_codec =
     |+ field "SyncFlag" (bits ~width:1 bf_uint16be) (fun f -> f.tf_sync)
     |+ field "PacketOrder" (bits ~width:1 bf_uint16be) (fun f -> f.tf_pkt_order)
     |+ field "SegLenId" (bits ~width:2 bf_uint16be) (fun f -> f.tf_seg_id)
-    |+ field "FirstHdrPtr" (bits ~width:11 bf_uint16be) (fun f -> f.tf_first_hdr)
+    |+ field "FirstHdrPtr" (bits ~width:11 bf_uint16be) (fun f ->
+        f.tf_first_hdr)
     |> seal)
 
 let tm_frame_struct = Codec.to_struct tm_frame_codec
@@ -442,7 +488,8 @@ type large_mixed = {
 let large_mixed_codec =
   Codec.(
     record "LargeMixed"
-      (fun sync version type_ spacecraft vcid count offset length crc timestamp ->
+      (fun
+        sync version type_ spacecraft vcid count offset length crc timestamp ->
         {
           lg_sync = sync;
           lg_version = version;
@@ -529,26 +576,32 @@ type any_schema = Any : 'a schema -> any_schema
 
 let all_schemas =
   [
-    Any (schema "Minimal" minimal_codec minimal_struct minimal_size
-           minimal_default minimal_data);
-    Any (schema "AllInts" all_ints_codec all_ints_struct all_ints_size
-           all_ints_default all_ints_data);
-    Any (schema "Bitfield8" bf8_codec bf8_struct bf8_size
-           bf8_default bf8_data);
-    Any (schema "Bitfield16" bf16_codec bf16_struct bf16_size
-           bf16_default bf16_data);
-    Any (schema "Bitfield32" bf32_codec bf32_struct bf32_size
-           bf32_default bf32_data);
-    Any (schema "BoolFields" bool_fields_codec bool_fields_struct bool_fields_size
-           bool_fields_default bool_fields_data);
-    Any (schema "SpacePacket" space_packet_codec space_packet_struct space_packet_size
-           space_packet_default space_packet_data);
-    Any (schema "CLCW" clcw_codec clcw_struct clcw_size
-           clcw_default clcw_data);
-    Any (schema "TMFrame" tm_frame_codec tm_frame_struct tm_frame_size
-           tm_frame_default tm_frame_data);
-    Any (schema "LargeMixed" large_mixed_codec large_mixed_struct large_mixed_size
-           large_mixed_default large_mixed_data);
+    Any
+      (schema "Minimal" minimal_codec minimal_struct minimal_size
+         minimal_default minimal_data);
+    Any
+      (schema "AllInts" all_ints_codec all_ints_struct all_ints_size
+         all_ints_default all_ints_data);
+    Any (schema "Bitfield8" bf8_codec bf8_struct bf8_size bf8_default bf8_data);
+    Any
+      (schema "Bitfield16" bf16_codec bf16_struct bf16_size bf16_default
+         bf16_data);
+    Any
+      (schema "Bitfield32" bf32_codec bf32_struct bf32_size bf32_default
+         bf32_data);
+    Any
+      (schema "BoolFields" bool_fields_codec bool_fields_struct bool_fields_size
+         bool_fields_default bool_fields_data);
+    Any
+      (schema "SpacePacket" space_packet_codec space_packet_struct
+         space_packet_size space_packet_default space_packet_data);
+    Any (schema "CLCW" clcw_codec clcw_struct clcw_size clcw_default clcw_data);
+    Any
+      (schema "TMFrame" tm_frame_codec tm_frame_struct tm_frame_size
+         tm_frame_default tm_frame_data);
+    Any
+      (schema "LargeMixed" large_mixed_codec large_mixed_struct large_mixed_size
+         large_mixed_default large_mixed_data);
   ]
 
 (* All struct_ definitions for 3D generation *)
