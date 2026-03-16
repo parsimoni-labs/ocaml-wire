@@ -1,227 +1,250 @@
-# d3t
+# ocaml-wire
 
-Dependent Data Descriptions for binary wire formats.
+Binary wire format DSL with EverParse 3D output.
 
 ## Overview
 
-d3t is a GADT-based DSL for describing binary wire formats compatible with
-EverParse's 3D language. Define your format once, then:
+Wire is a GADT-based OCaml DSL for describing binary wire formats.
+Define your format once, then:
 
-- Emit EverParse 3D files for verified C parser generation
-- Parse and encode directly in OCaml via bytesrw
-- Generate C stubs for differential testing between OCaml and C implementations
+- **Read and write fields in-place** via `Codec.get` / `Codec.set` — zero-copy,
+  zero-allocation for immediate types (int, bool)
+- **Traverse nested protocols** via `Codec.sub` — navigate Ethernet → IPv4 → TCP
+  without intermediate allocations or buffer copies
+- **Emit EverParse `.3d` files** for verified C parser generation
+- **Generate C/OCaml FFI stubs** for differential testing between OCaml and C
+
+Wire covers both parsing *and* serialization from a single schema definition.
+EverParse only generates verified parsers/validators — Wire's `Codec.set`
+complements this with in-place field writes (bounds-checked, with automatic
+read-modify-write for bitfields).
 
 ## Features
 
-- **Integer types** -- UINT8, UINT16, UINT32, UINT64 (little and big endian)
-- **Bitfields** -- extract bit ranges from integer bases with constraints
-- **Enumerations** -- named integer constants with validation
-- **Structs** -- records with dependent fields and constraints
-- **Tagged unions** -- casetype with tag-based dispatch
-- **Arrays** -- fixed-count, byte-sized, and variable-length
-- **Constraints** -- where clauses with arithmetic and logical expressions
-- **Parameterised types** -- reusable type templates
+- **Integer types** — `uint8`, `uint16`, `uint16be`, `uint32`, `uint32be`,
+  `uint64`, `uint64be` (32-bit integers are unboxed on 64-bit platforms)
+- **Bitfields** — `bits ~width:n bf_uint8/bf_uint16be/bf_uint32be` to extract
+  bit ranges from integer bases
+- **Bool** — `bool (bits ~width:1 bf)` maps single-bit fields to `true`/`false`
+- **Byte slices** — `byte_slice ~size:(int n)` for zero-copy sub-protocol access
+- **Enumerations** — named integer constants with validation
+- **Structs** — records with dependent fields and constraints
+- **Tagged unions** — `casetype` with tag-based dispatch
+- **Arrays** — fixed-count, byte-sized, and variable-length
+- **Constraints** — `where` clauses with arithmetic and logical expressions
+- **Parameterised types** — reusable type templates
+- **3D code generation** — emit `.3d` files compatible with EverParse
 
 ## Installation
 
 ```
-opam install d3t
+opam install wire
 ```
+
+Requires OCaml >= 5.1.
 
 ## Usage
 
-### Defining a Format
+### Defining a codec
+
+Define a typed record codec with zero-copy field access:
 
 ```ocaml
-open D3t
+open Wire
 
-(* Simple packet header *)
-let header =
-  struct_ "Header" [
-    field "version" uint8;
-    field "length" uint16;
-    field "flags" uint8;
-  ]
+type packet = { version : int; flags : int; length : int }
 
-(* With constraints *)
-let constrained_header =
-  struct_ "ConstrainedHeader" [
-    field "version" ~constraint_:Expr.(ref "version" >= int 1) uint8;
-    field "length" ~constraint_:Expr.(ref "length" <= int 1500) uint16;
-  ]
+let f_version = Codec.field "Version" (bits ~width:4 bf_uint8) (fun p -> p.version)
+let f_flags   = Codec.field "Flags"   (bits ~width:4 bf_uint8) (fun p -> p.flags)
+let f_length  = Codec.field "Length"   uint16be                 (fun p -> p.length)
 
-(* Bitfields *)
-let flags =
-  struct_ "Flags" [
-    field "priority" (bits ~width:3 bf_uint8);
-    field "encrypted" (bits ~width:1 bf_uint8);
-    field "compressed" (bits ~width:1 bf_uint8);
-    field "reserved" (bits ~width:3 bf_uint8);
-  ]
+let codec =
+  let open Codec in
+  record "Packet" (fun version flags length -> { version; flags; length })
+  |+ f_version |+ f_flags |+ f_length |> seal
+```
 
-(* Tagged union *)
-let message =
-  casetype "Message" uint8 [
-    case 1 (struct_ "Text" [field "text" all_bytes]);
-    case 2 (struct_ "Binary" [field "data" (byte_array ~size:(ref "len"))]);
-  ]
+### Zero-copy field access
+
+Read and write individual fields directly in a buffer — no record allocation,
+no copies:
+
+```ocaml
+(* Read a field *)
+let v = Codec.get codec f_version buf 0
+
+(* Write a field (read-modify-write for bitfields) *)
+let () = Codec.set codec f_length buf 0 1024
+
+(* Full record decode/encode when needed *)
+let pkt = Codec.decode codec buf 0
+let () = Codec.encode codec pkt buf 0
+```
+
+### Nested protocol traversal
+
+Use `byte_slice` fields and `Codec.sub` to navigate layered protocols
+in a single buffer without allocation:
+
+```ocaml
+(* Ethernet → IPv4 → TCP, all in one buffer *)
+let ip_off  = Codec.sub ethernet_codec f_eth_payload buf 0 in
+let tcp_off = Codec.sub ipv4_codec f_ip_payload buf ip_off in
+let dst_port = Codec.get tcp_codec f_tcp_dst_port buf tcp_off
+
+(* In-place mutation through layers *)
+let () = Codec.set tcp_codec f_tcp_dst_port buf tcp_off 8080
 ```
 
 ### Generating EverParse 3D
 
-```ocaml
-let m = module_ "Protocol" [
-  typedef header;
-  typedef constrained_header;
-]
+The same codec definition produces `.3d` files for verified C parser generation:
 
-let () = print_string (to_3d m)
+```ocaml
+let struct_ = Codec.to_struct codec
+let module_ = Wire.module_ "Protocol" [ Wire.typedef ~entrypoint:true struct_ ]
+let () = print_string (Wire.to_3d module_)
 ```
 
 Output:
+
 ```
 module Protocol
 
-typedef struct Header {
-  UINT8 version;
-  UINT16 length;
-  UINT8 flags;
-} Header;
-
-typedef struct ConstrainedHeader {
-  UINT8 version { version >= 1 };
-  UINT16 length { length <= 1500 };
-} ConstrainedHeader;
+typedef struct Packet {
+  UINT8 Version:4;
+  UINT8 Flags:4;
+  UINT16BE Length;
+} Packet;
 ```
 
-### Direct OCaml Parsing
+### Generating FFI stubs
+
+Generate C and OCaml stubs for calling EverParse-generated validators from OCaml:
 
 ```ocaml
-open D3t
-
-(* Define a record codec *)
-let header_codec =
-  Record.(
-    field "version" uint8 ~get:(fun h -> h.version) ~set:(fun h v -> { h with version = v })
-    @@ field "length" uint16 ~get:(fun h -> h.length) ~set:(fun h v -> { h with length = v })
-    @@ field "flags" uint8 ~get:(fun h -> h.flags) ~set:(fun h v -> { h with flags = v })
-    @@ finish { version = 0; length = 0; flags = 0 }
-  )
-
-(* Parse from bytes *)
-let parse_header buf =
-  decode_record_from_string header_codec buf
-
-(* Encode to bytes *)
-let encode_header header =
-  encode_record_to_string header_codec header
+let () = print_string (Wire.to_c_stubs [struct_])
+let () = print_string (Wire.to_ml_stubs [struct_])
 ```
 
-### C Code Generation
+## Real-world examples
 
-Generate C headers and OCaml FFI stubs for differential testing:
+### CCSDS Space Packet (6 bytes, bitfields across uint16be)
 
 ```ocaml
-let structs = [header; constrained_header]
-
-(* Generate C runtime header *)
-let () = Out_channel.write_all "d3t.h" ~data:(to_c_runtime ())
-
-(* Generate per-struct C headers *)
-let () =
-  List.iter (fun s ->
-    Out_channel.write_all (s.name ^ ".h") ~data:(to_c_header s)
-  ) structs
-
-(* Generate OCaml external stubs *)
-let () = print_string (to_ml_stubs structs)
+let packet_codec =
+  let open Codec in
+  record "SpacePacket"
+    (fun version type_ sec_hdr apid seq_flags seq_count data_len -> ...)
+  |+ field "Version"    (bits ~width:3  bf_uint16be) (fun p -> p.sp_version)
+  |+ field "Type"       (bits ~width:1  bf_uint16be) (fun p -> p.sp_type)
+  |+ field "SecHdrFlag" (bits ~width:1  bf_uint16be) (fun p -> p.sp_sec_hdr)
+  |+ field "APID"       (bits ~width:11 bf_uint16be) (fun p -> p.sp_apid)
+  |+ field "SeqFlags"   (bits ~width:2  bf_uint16be) (fun p -> p.sp_seq_flags)
+  |+ field "SeqCount"   (bits ~width:14 bf_uint16be) (fun p -> p.sp_seq_count)
+  |+ field "DataLength"  uint16be                    (fun p -> p.sp_data_len)
+  |> seal
 ```
 
-## Expressions
-
-The `Expr` module provides operators for constraints and computations:
+### TCP header (20 bytes, bool bitfields)
 
 ```ocaml
-open D3t.Expr
+let f_tcp_src_port = Codec.field "SrcPort" uint16be (fun t -> t.tcp_src_port)
+let f_tcp_dst_port = Codec.field "DstPort" uint16be (fun t -> t.tcp_dst_port)
+let f_tcp_syn = Codec.field "SYN" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_syn)
+let f_tcp_ack = Codec.field "ACK" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ack)
 
-(* Arithmetic *)
-let size_check = ref "length" - int 4
-
-(* Comparison *)
-let valid_version = ref "version" >= int 1 && ref "version" <= int 255
-
-(* Bitwise *)
-let masked = ref "flags" land int 0x0F
-
-(* Field references *)
-let dynamic_size = ref "header_length" + ref "payload_length"
+let tcp_codec =
+  let open Codec in
+  record "TCP" (fun src dst seq ack_num ... -> ...)
+  |+ f_tcp_src_port |+ f_tcp_dst_port
+  |+ field "SeqNum" uint32be (fun t -> t.tcp_seq)
+  (* ... flags as individual bool bitfields ... *)
+  |+ f_tcp_syn |+ f_tcp_ack
+  (* ... *)
+  |> seal
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐
-│  OCaml DSL      │  Define formats with GADTs
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    │         │
-    ▼         ▼
-┌───────┐ ┌───────────┐
-│ to_3d │ │ Record    │  EverParse output or direct parsing
-└───┬───┘ │ codecs    │
-    │     └─────┬─────┘
-    ▼           ▼
-┌───────┐ ┌───────────┐
-│ .3d   │ │ OCaml     │
-│ files │ │ parse/    │
-└───┬───┘ │ encode    │
-    │     └───────────┘
-    ▼
-┌───────────────┐
-│ EverParse     │  Verified C parser generation
-│ (external)    │
-└───────────────┘
+                        ┌──────────────────┐
+                        │  Wire OCaml DSL  │
+                        └────────┬─────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              │                  │                   │
+              ▼                  ▼                   ▼
+     ┌─────────────────┐ ┌────────────┐ ┌───────────────────┐
+     │ Codec.get / set │ │  to_3d     │ │  to_c/ml_stubs    │
+     │ Codec.sub       │ │            │ │                   │
+     │ Codec.decode    │ │            │ │                   │
+     │ Codec.encode    │ │            │ │                   │
+     └─────────────────┘ └──────┬─────┘ └───────────────────┘
+      Zero-copy R/W in           │        FFI bindings for
+      OCaml (read+write)         │        differential testing
+                                 ▼
+                        ┌─────────────────┐
+                        │   EverParse 3D  │
+                        │   (external)    │
+                        └─────────────────┘
+                         Verified C parsers
+                         (read/validate only)
+```
+
+## Benchmarks
+
+Benchmarks compare field-level access performance across three approaches,
+all derived from the same Wire DSL definitions:
+
+1. **EverParse C** — generated verified C validator in a tight C loop (baseline)
+2. **OCaml→C FFI** — OCaml calling the EverParse C validator via generated stubs
+3. **Pure OCaml** — `Codec.get` / `Codec.set` (zero-copy, no record allocation)
+
+EverParse only generates parsers/validators, so write benchmarks measure
+`Codec.set` alone — there is no C-side equivalent to compare against. Parsing
+untrusted input is where the security-critical complexity lives; writing a
+known-good value at a compile-time-known offset is inherently simpler.
+
+```
+make bench    # requires EverParse (3d.exe in PATH or ~/.local/everparse/bin/)
 ```
 
 ## Development
 
 ```
-make build              # build the project
-make test               # run tests
-make bench              # timing and allocation benchmark
-make bench-everparse    # EverParse C vs OCaml comparison (requires EverParse)
-make bench-tcpip        # TCP/IP zero-copy nested parsing demo
-make memtrace           # profile allocation hotspots with memtrace
-make clean              # clean build artifacts
+make build      # dune build
+make test       # dune runtest
+make bench      # BUILD_EVERPARSE=1 dune exec bench/bench.exe
+make memtrace   # MEMTRACE=trace.ctf dune exec bench/memtrace.exe && memtrace_hotspots trace.ctf
+make clean      # dune clean
 ```
 
-`make bench-everparse` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
-It compares three validation strategies for the same schemas:
+## Project structure
 
-- **EverParse C** -- verified C validator in a tight C loop (baseline)
-- **OCaml Codec** -- pure OCaml `Wire.Codec.decode`
-- **OCaml->C FFI** -- OCaml calling the EverParse C validator via generated stubs
-
-`make memtrace` profiles all codec operations and prints the top allocation sites.
-Pass a schema name to profile a single schema:
-
-```
-MEMTRACE=trace.ctf dune exec bench/memtrace.exe -- clcw
-memtrace_hotspots trace.ctf
-```
+| Directory | Description |
+|-----------|-------------|
+| `lib/` | Core `wire` library: DSL types, 3D codegen, Codec, FFI stub generators |
+| `lib/c/` | `wire.c` sublibrary: EverParse pipeline (generate .3d, run 3d.exe) |
+| `examples/space/` | CCSDS space protocols (SpacePacket, CLCW, TMFrame) |
+| `examples/net/` | TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy demo |
+| `bench/` | Field-level read/write benchmarks: EverParse C vs FFI vs pure OCaml |
+| `fuzz/` | Crowbar fuzz tests covering all DSL combinators |
+| `test/` | Alcotest unit tests and differential tests |
 
 ## Dependencies
 
 | Library | Purpose |
 |---------|---------|
-| bytesrw | Byte stream reading and writing |
-| fmt | Pretty printing |
+| [bytesrw](https://erratique.ch/software/bytesrw) | Byte stream reading and writing |
+| [fmt](https://erratique.ch/software/fmt) | Pretty printing |
 
 ## References
 
-- [EverParse](https://project-everest.github.io/everparse/) -- verified parser generator
-- [3D Language Reference](https://project-everest.github.io/everparse/3d-lang.html) -- EverParse DSL specification
+- [EverParse](https://project-everest.github.io/everparse/) — verified parser
+  generator from Project Everest
+- [3D Language Reference](https://project-everest.github.io/everparse/3d-lang.html)
+  — EverParse DSL specification
 
 ## Licence
 

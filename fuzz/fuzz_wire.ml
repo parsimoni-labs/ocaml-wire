@@ -810,13 +810,11 @@ type test_record = { x : int; y : int; z : int }
 
 let test_record_codec =
   let open Wire.Codec in
-  let r, _ =
-    record "TestRecord" (fun x y z -> { x; y; z })
-    |+ field "x" Wire.uint8 (fun r -> r.x)
-  in
-  let r, _ = r |+ field "y" Wire.uint16 (fun r -> r.y) in
-  let r, _ = r |+ field "z" Wire.uint32 (fun r -> r.z) in
-  seal r
+  record "TestRecord" (fun x y z -> { x; y; z })
+  |+ field "x" Wire.uint8 (fun r -> r.x)
+  |+ field "y" Wire.uint16 (fun r -> r.y)
+  |+ field "z" Wire.uint32 (fun r -> r.z)
+  |> seal
 
 let test_record_roundtrip x y z =
   let x = abs x mod 256 in
@@ -843,12 +841,10 @@ type be_record = { a : int; b : int }
 
 let be_record_codec =
   let open Wire.Codec in
-  let r, _ =
-    record "BERecord" (fun a b -> { a; b })
-    |+ field "a" Wire.uint16be (fun r -> r.a)
-  in
-  let r, _ = r |+ field "b" Wire.uint32be (fun r -> r.b) in
-  seal r
+  record "BERecord" (fun a b -> { a; b })
+  |+ field "a" Wire.uint16be (fun r -> r.a)
+  |+ field "b" Wire.uint32be (fun r -> r.b)
+  |> seal
 
 let test_record_be_roundtrip a b =
   let a = abs a mod 65536 in
@@ -868,12 +864,10 @@ type bool_record = { flag : bool; value : int }
 
 let bool_record_codec =
   let open Wire.Codec in
-  let r, _ =
-    record "BoolRecord" (fun flag value -> { flag; value })
-    |+ field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag)
-  in
-  let r, _ = r |+ field "value" Wire.uint16 (fun r -> r.value) in
-  seal r
+  record "BoolRecord" (fun flag value -> { flag; value })
+  |+ field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag)
+  |+ field "value" Wire.uint16 (fun r -> r.value)
+  |> seal
 
 let test_record_bool_roundtrip n =
   let flag = n mod 2 = 0 in
@@ -1096,7 +1090,189 @@ let stream_tests =
       test_stream_roundtrip_record;
   ]
 
+(** {1 Dependent-size Field Tests} *)
+
+module Slice = Bytesrw.Bytes.Slice
+
+(* -- byte_slice variant: [length:u16be] [payload:byte_slice(length)] -- *)
+
+type slice_msg = { sl_length : int; sl_payload : Slice.t }
+
+let f_sl_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.sl_length)
+
+let f_sl_payload =
+  Wire.Codec.field "Payload"
+    (Wire.byte_slice ~size:(Wire.Codec.ref f_sl_length))
+    (fun r -> r.sl_payload)
+
+let slice_msg_codec =
+  let open Wire.Codec in
+  record "SliceMsg" (fun length payload ->
+      { sl_length = length; sl_payload = payload })
+  |+ f_sl_length |+ f_sl_payload |> seal
+
+let make_slice_or_eod buf len =
+  if len = 0 then Slice.eod else Slice.make buf ~first:0 ~length:len
+
+let test_depsize_slice_roundtrip payload_str =
+  let len = String.length payload_str mod 201 in
+  let payload_str =
+    if len < String.length payload_str then String.sub payload_str 0 len
+    else payload_str
+  in
+  let len = String.length payload_str in
+  let payload_bytes = Bytes.of_string payload_str in
+  let payload = make_slice_or_eod payload_bytes len in
+  let original = { sl_length = len; sl_payload = payload } in
+  let total = 2 + len in
+  let buf = Bytes.create total in
+  Wire.Codec.encode slice_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode slice_msg_codec buf 0 in
+  if decoded.sl_length <> len then fail "depsize slice length mismatch";
+  let dec_payload =
+    Bytes.sub_string
+      (Slice.bytes decoded.sl_payload)
+      (Slice.first decoded.sl_payload)
+      (Slice.length decoded.sl_payload)
+  in
+  if dec_payload <> payload_str then fail "depsize slice payload mismatch"
+
+let test_depsize_slice_empty () =
+  let payload = Slice.eod in
+  let original = { sl_length = 0; sl_payload = payload } in
+  let buf = Bytes.create 2 in
+  Wire.Codec.encode slice_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode slice_msg_codec buf 0 in
+  if decoded.sl_length <> 0 then fail "depsize slice empty length mismatch";
+  if Slice.length decoded.sl_payload <> 0 then
+    fail "depsize slice empty payload mismatch"
+
+(* -- byte_array variant: [length:u16be] [data:byte_array(length)] -- *)
+
+type array_msg = { ba_length : int; ba_data : string }
+
+let f_ba_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.ba_length)
+
+let f_ba_data =
+  Wire.Codec.field "Data"
+    (Wire.byte_array ~size:(Wire.Codec.ref f_ba_length))
+    (fun r -> r.ba_data)
+
+let array_msg_codec =
+  let open Wire.Codec in
+  record "ArrayMsg" (fun length data -> { ba_length = length; ba_data = data })
+  |+ f_ba_length |+ f_ba_data |> seal
+
+let test_depsize_array_roundtrip payload_str =
+  let len = String.length payload_str mod 201 in
+  let payload_str =
+    if len < String.length payload_str then String.sub payload_str 0 len
+    else payload_str
+  in
+  let len = String.length payload_str in
+  let original = { ba_length = len; ba_data = payload_str } in
+  let total = 2 + len in
+  let buf = Bytes.create total in
+  Wire.Codec.encode array_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode array_msg_codec buf 0 in
+  if decoded.ba_length <> len then fail "depsize array length mismatch";
+  if decoded.ba_data <> payload_str then fail "depsize array data mismatch"
+
+let test_depsize_array_empty () =
+  let original = { ba_length = 0; ba_data = "" } in
+  let buf = Bytes.create 2 in
+  Wire.Codec.encode array_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode array_msg_codec buf 0 in
+  if decoded.ba_length <> 0 then fail "depsize array empty length mismatch";
+  if decoded.ba_data <> "" then fail "depsize array empty data mismatch"
+
+(* -- trailing fixed field: [length:u16be] [payload:byte_slice(length)] [tag:u8] -- *)
+
+type tagged_msg = { tm_length : int; tm_payload : Slice.t; tm_tag : int }
+
+let f_tm_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.tm_length)
+
+let f_tm_payload =
+  Wire.Codec.field "Payload"
+    (Wire.byte_slice ~size:(Wire.Codec.ref f_tm_length))
+    (fun r -> r.tm_payload)
+
+let f_tm_tag = Wire.Codec.field "Tag" Wire.uint8 (fun r -> r.tm_tag)
+
+let tagged_msg_codec =
+  let open Wire.Codec in
+  record "TaggedMsg" (fun length payload tag ->
+      { tm_length = length; tm_payload = payload; tm_tag = tag })
+  |+ f_tm_length |+ f_tm_payload |+ f_tm_tag |> seal
+
+let test_depsize_tagged_roundtrip payload_str tag =
+  let len = String.length payload_str mod 201 in
+  let payload_str =
+    if len < String.length payload_str then String.sub payload_str 0 len
+    else payload_str
+  in
+  let len = String.length payload_str in
+  let tag = abs tag mod 256 in
+  let payload_bytes = Bytes.of_string payload_str in
+  let payload = make_slice_or_eod payload_bytes len in
+  let original = { tm_length = len; tm_payload = payload; tm_tag = tag } in
+  let total = 2 + len + 1 in
+  let buf = Bytes.create total in
+  Wire.Codec.encode tagged_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode tagged_msg_codec buf 0 in
+  if decoded.tm_length <> len then fail "depsize tagged length mismatch";
+  let dec_payload =
+    Bytes.sub_string
+      (Slice.bytes decoded.tm_payload)
+      (Slice.first decoded.tm_payload)
+      (Slice.length decoded.tm_payload)
+  in
+  if dec_payload <> payload_str then fail "depsize tagged payload mismatch";
+  if decoded.tm_tag <> tag then fail "depsize tagged tag mismatch"
+
+let test_depsize_tagged_empty tag =
+  let tag = abs tag mod 256 in
+  let payload = Slice.eod in
+  let original = { tm_length = 0; tm_payload = payload; tm_tag = tag } in
+  let buf = Bytes.create 3 in
+  Wire.Codec.encode tagged_msg_codec original buf 0;
+  let decoded = Wire.Codec.decode tagged_msg_codec buf 0 in
+  if decoded.tm_length <> 0 then fail "depsize tagged empty length mismatch";
+  if Slice.length decoded.tm_payload <> 0 then
+    fail "depsize tagged empty payload mismatch";
+  if decoded.tm_tag <> tag then fail "depsize tagged empty tag mismatch"
+
+let test_depsize_compute_wire_size payload_str =
+  let len = String.length payload_str mod 201 in
+  let payload_str =
+    if len < String.length payload_str then String.sub payload_str 0 len
+    else payload_str
+  in
+  let len = String.length payload_str in
+  let payload_bytes = Bytes.of_string payload_str in
+  let payload = make_slice_or_eod payload_bytes len in
+  let original = { sl_length = len; sl_payload = payload } in
+  let total = 2 + len in
+  let buf = Bytes.create total in
+  Wire.Codec.encode slice_msg_codec original buf 0;
+  let ws = Wire.Codec.compute_wire_size slice_msg_codec buf 0 in
+  if ws <> total then
+    fail (Fmt.str "depsize compute_wire_size: expected %d got %d" total ws)
+
+let depsize_tests =
+  [
+    test_case "depsize slice roundtrip" [ bytes ] test_depsize_slice_roundtrip;
+    test_case "depsize slice empty" [ const () ] test_depsize_slice_empty;
+    test_case "depsize array roundtrip" [ bytes ] test_depsize_array_roundtrip;
+    test_case "depsize array empty" [ const () ] test_depsize_array_empty;
+    test_case "depsize tagged roundtrip" [ bytes; int ]
+      test_depsize_tagged_roundtrip;
+    test_case "depsize tagged empty" [ int ] test_depsize_tagged_empty;
+    test_case "depsize compute_wire_size" [ bytes ]
+      test_depsize_compute_wire_size;
+  ]
+
 let suite =
   ( "wire",
     pp_tests @ codegen_tests @ parse_tests @ roundtrip_tests @ record_tests
-    @ stream_tests )
+    @ stream_tests @ depsize_tests )

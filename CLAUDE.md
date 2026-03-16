@@ -6,7 +6,8 @@
 make build              # dune build
 make test               # dune runtest
 make bench              # BUILD_EVERPARSE=1 dune exec bench/bench.exe
-make memtrace           # MEMTRACE=trace.ctf dune exec bench/memtrace.exe && memtrace_hotspots trace.ctf
+make prof               # CPU profile with Instruments (open prof.trace)
+make memtrace           # allocation hotspots via memtrace
 make clean              # dune clean
 ```
 

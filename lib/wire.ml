@@ -1,7 +1,5 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
-open Result.Syntax
-
 (** Staged computations, following the pattern from Jane Street's Base library.
     Forces users to explicitly unstage functions to make specialization visible.
     See also Irmin's repr which uses the same pattern. *)
@@ -2482,8 +2480,8 @@ module Codec = struct
     name : string;
     typ : 'a typ;
     get : 'r -> 'a;
-    f_acc : 'a accessor;
-    f_writer : bytes -> int -> 'a -> unit;
+    mutable f_acc : 'a accessor;
+    mutable f_writer : bytes -> int -> 'a -> unit;
   }
 
   (* GADT snoc-list of typed field readers, built in forward order by |+.
@@ -2508,23 +2506,74 @@ module Codec = struct
     bfc_total_bits : int; (* 8, 16, or 32 *)
   }
 
+  (* Track the byte offset for the next field: static (constant) until we hit
+     a variable-size field, then dynamic (computed from the buffer). *)
+  type next_off = Static_next of int | Dynamic_next of (bytes -> int -> int)
+  (* [compute buf base] returns the absolute byte offset where the next
+           field starts. [base] is the record's base offset in [buf]. *)
+
+  (* Compile an [int expr] into a closure that evaluates it at runtime by
+     reading previously-declared fields from the buffer. Built once at [|+]
+     time, called at every [get]/[set]/[decode]. *)
+  let rec compile_expr (env : (string * (bytes -> int -> int)) list)
+      (e : int expr) : bytes -> int -> int =
+    match e with
+    | Int n -> fun _buf _base -> n
+    | Ref name -> (
+        match List.assoc_opt name env with
+        | Some reader -> reader
+        | None ->
+            invalid_arg
+              (Printf.sprintf "Codec: unbound field ref %S in size expression"
+                 name))
+    | Add (a, b) ->
+        let fa = compile_expr env a in
+        let fb = compile_expr env b in
+        fun buf base -> fa buf base + fb buf base
+    | Sub (a, b) ->
+        let fa = compile_expr env a in
+        let fb = compile_expr env b in
+        fun buf base -> fa buf base - fb buf base
+    | Mul (a, b) ->
+        let fa = compile_expr env a in
+        let fb = compile_expr env b in
+        fun buf base -> fa buf base * fb buf base
+    | Div (a, b) ->
+        let fa = compile_expr env a in
+        let fb = compile_expr env b in
+        fun buf base -> fa buf base / fb buf base
+    | Sizeof t -> (
+        match field_wire_size t with
+        | Some n -> fun _buf _base -> n
+        | None -> invalid_arg "Codec: sizeof on variable-size type")
+    | _ -> invalid_arg "Codec: unsupported expression in dependent size"
+
   type ('f, 'r) record =
     | Record : {
         r_name : string;
         r_make : 'full;
         r_readers : ('full, 'f) readers;
         r_writers_rev : ('r -> bytes -> int -> unit) list;
-        r_wire_size : int;
+        r_min_wire_size : int;
+            (* sum of all fixed-size fields — minimum buffer size *)
+        r_next_off : next_off; (* where the next field starts *)
         r_fields_rev : struct_field list;
         r_bf : bf_codec_state option;
+        r_configurators_rev : (unit -> unit) list;
+        r_field_readers : (string * (bytes -> int -> int)) list;
+            (* name -> int reader, for evaluating Ref expressions *)
       }
         -> ('f, 'r) record
+
+  type wire_size_info =
+    | Fixed of int
+    | Variable of { min_size : int; compute : bytes -> int -> int }
 
   type 'r t = {
     t_name : string;
     t_decode : bytes -> int -> 'r;
     t_encode : 'r -> bytes -> int -> unit;
-    t_wire_size : int;
+    t_wire_size : wire_size_info;
     t_struct_fields : struct_field list;
   }
 
@@ -2535,9 +2584,12 @@ module Codec = struct
         r_make = make;
         r_readers = Nil;
         r_writers_rev = [];
-        r_wire_size = 0;
+        r_min_wire_size = 0;
+        r_next_off = Static_next 0;
         r_fields_rev = [];
         r_bf = None;
+        r_configurators_rev = [];
+        r_field_readers = [];
       }
 
   let field name typ get =
@@ -2717,19 +2769,18 @@ module Codec = struct
   let build_bf_clear base byte_off =
    fun buf off -> bf_write_base base buf (off + byte_off) 0
 
-  let ( |+ ) : type a f r.
-      (a -> f, r) record -> (a, r) field -> (f, r) record * (a, r) field =
+  let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
    fun (Record r) ({ name; typ; get; _ } as fld) ->
     (* Recursively unwrap Map layers to reach the wire-level type, composing
-       encode/decode conversions along the way. Returns the updated record and
-       a new immutable field with accessor configured. *)
+       encode/decode conversions along the way. Returns the updated record;
+       field accessors are configured later by [seal]. *)
     let rec add : type w.
         w typ ->
         (r -> w) ->
         ((bytes -> int -> w) -> bytes -> int -> a) ->
         ((bytes -> int -> w -> unit) -> bytes -> int -> a -> unit) ->
         (a, w) eq option ->
-        (f, r) record * (a, r) field =
+        (f, r) record =
      fun typ get_wire wrap_reader wrap_writer eq ->
       match typ with
       | Map { inner; decode; encode } ->
@@ -2748,9 +2799,17 @@ module Codec = struct
                 (not (bf_base_equal bf.bfc_base base))
                 || bf.bfc_bits_used + width > bf.bfc_total_bits
           in
+          let static_off =
+            match r.r_next_off with
+            | Static_next n -> n
+            | Dynamic_next _ ->
+                invalid_arg
+                  "Codec.(|+): bitfields after variable-size fields not \
+                   supported"
+          in
           let base_off, bits_used, size_delta, extra_writers =
             if need_new_group then
-              let base_off = r.r_wire_size in
+              let base_off = static_off in
               let clear = build_bf_clear base base_off in
               ( base_off,
                 0,
@@ -2767,10 +2826,10 @@ module Codec = struct
           let accessor_writer =
             build_bf_accessor_writer base base_off shift width
           in
-          let (configured : (a, r) field) =
+          let int_reader buf off = (raw_reader buf off : int) in
+          let configurator () =
             match eq with
             | Some Refl ->
-                (* a = w = int: no Map wrapping — store GADT accessor *)
                 let f_acc =
                   match base with
                   | BF_U8 -> Bf_u8 { byte_off = base_off; shift; mask }
@@ -2781,21 +2840,11 @@ module Codec = struct
                       Bf_u32_le { byte_off = base_off; shift; mask }
                   | BF_U32 Big -> Bf_u32_be { byte_off = base_off; shift; mask }
                 in
-                {
-                  name = fld.name;
-                  typ = fld.typ;
-                  get = fld.get;
-                  f_acc;
-                  f_writer = accessor_writer;
-                }
+                fld.f_acc <- f_acc;
+                fld.f_writer <- accessor_writer
             | None ->
-                {
-                  name = fld.name;
-                  typ = fld.typ;
-                  get = fld.get;
-                  f_acc = Fn (wrap_reader raw_reader);
-                  f_writer = wrap_writer accessor_writer;
-                }
+                fld.f_acc <- Fn (wrap_reader raw_reader);
+                fld.f_writer <- wrap_writer accessor_writer
           in
           let new_bf =
             {
@@ -2805,61 +2854,196 @@ module Codec = struct
               bfc_total_bits = total;
             }
           in
-          ( Record
-              {
-                r_name = r.r_name;
-                r_make = r.r_make;
-                r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
-                r_writers_rev =
-                  (fun v buf off -> raw_writer buf off (get_wire v))
-                  :: (extra_writers @ r.r_writers_rev);
-                r_wire_size = r.r_wire_size + size_delta;
-                r_fields_rev = struct_field name typ :: r.r_fields_rev;
-                r_bf = Some new_bf;
-              },
-            configured )
-      | _ ->
-          let fsize =
-            match field_wire_size typ with
-            | Some s -> s
-            | None -> failwith "Codec.(|+): variable-size fields not supported"
-          in
-          let field_off = r.r_wire_size in
-          let raw_reader = build_field_reader typ field_off in
-          let raw_encoder = build_field_encoder typ in
-          let f_acc : a accessor =
-            match ((typ : w typ), (eq : (a, w) eq option)) with
-            | Byte_slice { size = Int n }, Some Refl ->
-                Sub { field_off; size = n }
-            | _ -> Fn (wrap_reader raw_reader)
-          in
-          let configured =
+          Record
             {
-              name = fld.name;
-              typ = fld.typ;
-              get = fld.get;
-              f_acc;
-              f_writer =
-                wrap_writer (fun buf off value ->
-                    let _ = raw_encoder buf (off + field_off) value in
-                    ());
+              r_name = r.r_name;
+              r_make = r.r_make;
+              r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
+              r_writers_rev =
+                (fun v buf off -> raw_writer buf off (get_wire v))
+                :: (extra_writers @ r.r_writers_rev);
+              r_min_wire_size = r.r_min_wire_size + size_delta;
+              r_next_off = Static_next (static_off + size_delta);
+              r_fields_rev = struct_field name typ :: r.r_fields_rev;
+              r_bf = Some new_bf;
+              r_configurators_rev = configurator :: r.r_configurators_rev;
+              r_field_readers = (name, int_reader) :: r.r_field_readers;
             }
+      | _ -> (
+          (* Helper: get the absolute offset for this field *)
+          let field_off_static =
+            match r.r_next_off with
+            | Static_next n -> Some n
+            | Dynamic_next _ -> None
           in
-          ( Record
-              {
-                r_name = r.r_name;
-                r_make = r.r_make;
-                r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
-                r_writers_rev =
-                  (fun v buf off ->
-                    let _ = raw_encoder buf (off + field_off) (get_wire v) in
-                    ())
-                  :: r.r_writers_rev;
-                r_wire_size = r.r_wire_size + fsize;
-                r_fields_rev = struct_field name typ :: r.r_fields_rev;
-                r_bf = None;
-              },
-            configured )
+          let field_off_fn =
+            match r.r_next_off with
+            | Static_next n -> fun (_buf : bytes) (_base : int) -> n
+            | Dynamic_next f -> fun buf base -> f buf base - base
+            (* convert absolute -> relative to base *)
+          in
+          match field_wire_size typ with
+          | Some fsize ->
+              (* Fixed-size field — may be at static or dynamic offset *)
+              let field_off =
+                match field_off_static with
+                | Some n -> n
+                | None -> -1 (* sentinel: will use dynamic path *)
+              in
+              let raw_reader =
+                match field_off_static with
+                | Some _ -> build_field_reader typ field_off
+                | None ->
+                    let reader_at_0 = build_field_reader typ 0 in
+                    fun buf base ->
+                      let off = field_off_fn buf base in
+                      reader_at_0 buf (base + off)
+              in
+              let raw_encoder = build_field_encoder typ in
+              let configurator () =
+                let f_acc : a accessor =
+                  match
+                    ((typ : w typ), (eq : (a, w) eq option), field_off_static)
+                  with
+                  | Byte_slice { size = Int n }, Some Refl, Some fo ->
+                      Sub { field_off = fo; size = n }
+                  | _ -> Fn (wrap_reader raw_reader)
+                in
+                fld.f_acc <- f_acc;
+                fld.f_writer <-
+                  (match field_off_static with
+                  | Some fo ->
+                      wrap_writer (fun buf off value ->
+                          let _ = raw_encoder buf (off + fo) value in
+                          ())
+                  | None ->
+                      wrap_writer (fun buf off value ->
+                          let fo = field_off_fn buf off in
+                          let _ = raw_encoder buf (off + fo) value in
+                          ()))
+              in
+              (* Track int reader for expression evaluation *)
+              let field_readers =
+                match field_off_static with
+                | Some fo -> (
+                    match typ with
+                    | Uint8 ->
+                        (name, fun buf base -> unsafe_get_u8 buf (base + fo))
+                        :: r.r_field_readers
+                    | Uint16 Little ->
+                        (name, fun buf base -> unsafe_get_u16_le buf (base + fo))
+                        :: r.r_field_readers
+                    | Uint16 Big ->
+                        (name, fun buf base -> unsafe_get_u16_be buf (base + fo))
+                        :: r.r_field_readers
+                    | Uint32 Little ->
+                        (name, fun buf base -> unsafe_get_u32_le buf (base + fo))
+                        :: r.r_field_readers
+                    | Uint32 Big ->
+                        (name, fun buf base -> unsafe_get_u32_be buf (base + fo))
+                        :: r.r_field_readers
+                    | _ -> r.r_field_readers)
+                | None -> r.r_field_readers
+              in
+              let new_next_off =
+                match r.r_next_off with
+                | Static_next n -> Static_next (n + fsize)
+                | Dynamic_next f ->
+                    Dynamic_next (fun buf base -> f buf base + fsize)
+              in
+              Record
+                {
+                  r_name = r.r_name;
+                  r_make = r.r_make;
+                  r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
+                  r_writers_rev =
+                    (match field_off_static with
+                    | Some fo ->
+                        fun v buf off ->
+                          let _ = raw_encoder buf (off + fo) (get_wire v) in
+                          ()
+                    | None ->
+                        fun v buf off ->
+                          let fo = field_off_fn buf off in
+                          let _ = raw_encoder buf (off + fo) (get_wire v) in
+                          ())
+                    :: r.r_writers_rev;
+                  r_min_wire_size = r.r_min_wire_size + fsize;
+                  r_next_off = new_next_off;
+                  r_fields_rev = struct_field name typ :: r.r_fields_rev;
+                  r_bf = None;
+                  r_configurators_rev = configurator :: r.r_configurators_rev;
+                  r_field_readers = field_readers;
+                }
+          | None ->
+              (* Variable-size field (byte_slice/byte_array with dependent
+                  size). The field's start offset is known; its size is
+                  evaluated at runtime from previously-declared fields. *)
+              let size_expr =
+                match typ with
+                | Byte_slice { size } -> size
+                | Byte_array { size } -> size
+                | _ ->
+                    invalid_arg
+                      "Codec.(|+): unsupported variable-size field type"
+              in
+              let size_fn = compile_expr r.r_field_readers size_expr in
+              let field_off =
+                match field_off_static with
+                | Some n -> n
+                | None ->
+                    invalid_arg
+                      "Codec.(|+): multiple variable-size fields not yet \
+                       supported"
+              in
+              let raw_reader : w typ -> bytes -> int -> w =
+               fun typ buf base ->
+                let sz = size_fn buf base in
+                match typ with
+                | Byte_slice _ ->
+                    Slice.make_or_eod buf ~first:(base + field_off) ~length:sz
+                | Byte_array _ -> Bytes.sub_string buf (base + field_off) sz
+                | _ -> assert false
+              in
+              let reader = raw_reader typ in
+              let raw_writer : w typ -> bytes -> int -> w -> unit =
+               fun typ buf base v ->
+                match typ with
+                | Byte_slice _ ->
+                    let src = (v : Slice.t) in
+                    let len = Slice.length src in
+                    Bytes.blit (Slice.bytes src) (Slice.first src) buf
+                      (base + field_off) len
+                | Byte_array _ ->
+                    let s = (v : string) in
+                    Bytes.blit_string s 0 buf (base + field_off)
+                      (String.length s)
+                | _ -> assert false
+              in
+              let writer = raw_writer typ in
+              let configurator () =
+                fld.f_acc <- Fn (wrap_reader reader);
+                fld.f_writer <- wrap_writer writer
+              in
+              let new_next_off =
+                Dynamic_next
+                  (fun buf base -> base + field_off + size_fn buf base)
+              in
+              Record
+                {
+                  r_name = r.r_name;
+                  r_make = r.r_make;
+                  r_readers = Snoc (r.r_readers, wrap_reader reader);
+                  r_writers_rev =
+                    (fun v buf off -> writer buf off (get_wire v))
+                    :: r.r_writers_rev;
+                  r_min_wire_size = r.r_min_wire_size;
+                  r_next_off = new_next_off;
+                  r_fields_rev = struct_field name typ :: r.r_fields_rev;
+                  r_bf = None;
+                  r_configurators_rev = configurator :: r.r_configurators_rev;
+                  r_field_readers = r.r_field_readers;
+                })
     in
     add typ get (fun reader -> reader) (fun writer -> writer) (Some Refl)
 
@@ -2885,7 +3069,13 @@ module Codec = struct
 
   let seal : type r. (r, r) record -> r t =
    fun (Record r) ->
-    let total = r.r_wire_size in
+    List.iter (fun f -> f ()) (List.rev r.r_configurators_rev);
+    let wire_size_info =
+      match r.r_next_off with
+      | Static_next n -> Fixed n
+      | Dynamic_next f -> Variable { min_size = r.r_min_wire_size; compute = f }
+    in
+    let min_size = r.r_min_wire_size in
     let writers = Array.of_list (List.rev r.r_writers_rev) in
     let n_writers = Array.length writers in
     let build_decode : type full. full -> (full, r) readers -> bytes -> int -> r
@@ -3031,45 +3221,44 @@ module Codec = struct
       t_name = r.r_name;
       t_decode =
         (fun buf off ->
-          if off + total > Bytes.length buf then
-            raise_eof ~expected:total ~got:(Bytes.length buf - off);
+          if off + min_size > Bytes.length buf then
+            raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
           raw_decode buf off);
       t_encode =
         (fun v buf off ->
           for i = 0 to n_writers - 1 do
             writers.(i) v buf off
           done);
-      t_wire_size = total;
+      t_wire_size = wire_size_info;
       t_struct_fields = List.rev r.r_fields_rev;
     }
 
-  let wire_size t = t.t_wire_size
+  let wire_size t =
+    match t.t_wire_size with
+    | Fixed n -> n
+    | Variable _ ->
+        invalid_arg
+          "Codec.wire_size: variable-size codec (use min_wire_size or \
+           compute_wire_size instead)"
+
+  let min_wire_size t =
+    match t.t_wire_size with
+    | Fixed n -> n
+    | Variable { min_size; _ } -> min_size
+
+  let compute_wire_size t buf off =
+    match t.t_wire_size with
+    | Fixed n -> n
+    | Variable { compute; _ } -> compute buf off - off
+
+  let is_fixed t =
+    match t.t_wire_size with Fixed _ -> true | Variable _ -> false
+
   let decode t buf off = t.t_decode buf off
   let encode t v buf off = t.t_encode v buf off
   let to_struct t = struct' t.t_name t.t_struct_fields
 
-  let[@inline] get (type a r) (codec : r t) (f : (a, r) field) (slice : Slice.t)
-      : a =
-    if Slice.length slice < codec.t_wire_size then
-      raise_eof ~expected:codec.t_wire_size ~got:(Slice.length slice);
-    let buf = Slice.bytes slice in
-    let off = Slice.first slice in
-    match f.f_acc with
-    | Bf_u8 { byte_off; shift; mask } ->
-        (unsafe_get_u8 buf (off + byte_off) lsr shift) land mask
-    | Bf_u16_le { byte_off; shift; mask } ->
-        (unsafe_get_u16_le buf (off + byte_off) lsr shift) land mask
-    | Bf_u16_be { byte_off; shift; mask } ->
-        (unsafe_get_u16_be buf (off + byte_off) lsr shift) land mask
-    | Bf_u32_le { byte_off; shift; mask } ->
-        (unsafe_get_u32_le buf (off + byte_off) lsr shift) land mask
-    | Bf_u32_be { byte_off; shift; mask } ->
-        (unsafe_get_u32_be buf (off + byte_off) lsr shift) land mask
-    | Sub { field_off; size } ->
-        Slice.make buf ~first:(off + field_off) ~length:size
-    | Fn reader -> reader buf off
-
-  let[@inline] get_raw (type a r) (codec : r t) (f : (a, r) field) (buf : bytes)
+  let[@inline] get (type a r) (_codec : r t) (f : (a, r) field) (buf : bytes)
       (off : int) : a =
     match f.f_acc with
     | Bf_u8 { byte_off; shift; mask } ->
@@ -3086,9 +3275,8 @@ module Codec = struct
         Slice.make buf ~first:(off + field_off) ~length:size
     | Fn reader -> reader buf off
 
-  let[@inline] sub (type r) (codec : r t) (f : (Slice.t, r) field) (buf : bytes)
-      (off : int) : int =
-    ignore (codec : r t);
+  let[@inline] sub (type r) (_codec : r t) (f : (Slice.t, r) field)
+      (buf : bytes) (off : int) : int =
     match f.f_acc with
     | Sub { field_off; _ } -> off + field_off
     | Fn reader ->
@@ -3096,15 +3284,11 @@ module Codec = struct
         Slice.first slice
     | _ -> assert false
 
-  let set (type a r) (codec : r t) (f : (a, r) field) (slice : Slice.t) (x : a)
-      =
-    if Slice.length slice < codec.t_wire_size then
-      raise_eof ~expected:codec.t_wire_size ~got:(Slice.length slice);
-    f.f_writer (Slice.bytes slice) (Slice.first slice) x
-
-  let set_raw (type a r) (_codec : r t) (f : (a, r) field) (buf : bytes)
-      (off : int) (x : a) =
+  let set (type a r) (_codec : r t) (f : (a, r) field) (buf : bytes) (off : int)
+      (x : a) =
     f.f_writer buf off x
+
+  let ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 end
 
 module Record = struct

@@ -4,9 +4,10 @@ open Wire
 
 let simple_codec =
   let open Codec in
-  let r, _ = record "Simple" (fun v l -> (v, l)) |+ field "Version" uint8 fst in
-  let r, _ = r |+ field "Length" uint16be snd in
-  seal r
+  record "Simple" (fun v l -> (v, l))
+  |+ field "Version" uint8 fst
+  |+ field "Length" uint16be snd
+  |> seal
 
 (* Mock C functions that behave identically to OCaml *)
 let mock_c_read buf =

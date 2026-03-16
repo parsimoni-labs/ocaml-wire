@@ -21,29 +21,26 @@ type ethernet = {
   eth_payload : Slice.t;
 }
 
-let ethernet_codec, f_eth_ethertype, f_eth_payload =
+let f_eth_ethertype =
+  Codec.field "EtherType" uint16be (fun e -> e.eth_ethertype)
+
+let f_eth_payload =
+  Codec.field "Payload"
+    (byte_slice ~size:(int ethernet_payload_size))
+    (fun e -> e.eth_payload)
+
+let ethernet_codec =
   let open Codec in
-  let r, _ =
-    record "Ethernet" (fun dst src etype payload ->
-        {
-          eth_dst = dst;
-          eth_src = src;
-          eth_ethertype = etype;
-          eth_payload = payload;
-        })
-    |+ field "DstMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_dst)
-  in
-  let r, _ =
-    r |+ field "SrcMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_src)
-  in
-  let r, f_etype = r |+ field "EtherType" uint16be (fun e -> e.eth_ethertype) in
-  let r, f_payload =
-    r
-    |+ field "Payload"
-         (byte_slice ~size:(int ethernet_payload_size))
-         (fun e -> e.eth_payload)
-  in
-  (seal r, f_etype, f_payload)
+  record "Ethernet" (fun dst src etype payload ->
+      {
+        eth_dst = dst;
+        eth_src = src;
+        eth_ethertype = etype;
+        eth_payload = payload;
+      })
+  |+ field "DstMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_dst)
+  |+ field "SrcMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_src)
+  |+ f_eth_ethertype |+ f_eth_payload |> seal
 
 let ethernet_struct = Codec.to_struct ethernet_codec
 let ethernet_size = Codec.wire_size ethernet_codec
@@ -69,71 +66,63 @@ type ipv4 = {
   ip_payload : Slice.t;
 }
 
-let ipv4_codec, f_ip_protocol, f_ip_src, f_ip_dst, f_ip_payload =
+let f_ip_protocol = Codec.field "Protocol" uint8 (fun p -> p.ip_protocol)
+let f_ip_src = Codec.field "SrcAddr" uint32be (fun p -> p.ip_src)
+let f_ip_dst = Codec.field "DstAddr" uint32be (fun p -> p.ip_dst)
+
+let f_ip_payload =
+  Codec.field "Payload"
+    (byte_slice ~size:(int ipv4_payload_size))
+    (fun p -> p.ip_payload)
+
+let ipv4_codec =
   let open Codec in
-  let r, _ =
-    record "IPv4"
-      (fun
-        version
-        ihl
-        dscp
-        ecn
-        total_length
-        identification
-        flags
-        fragment_offset
-        ttl
-        protocol
-        checksum
-        src
-        dst
-        payload
-      ->
-        {
-          ip_version = version;
-          ip_ihl = ihl;
-          ip_dscp = dscp;
-          ip_ecn = ecn;
-          ip_total_length = total_length;
-          ip_identification = identification;
-          ip_flags = flags;
-          ip_fragment_offset = fragment_offset;
-          ip_ttl = ttl;
-          ip_protocol = protocol;
-          ip_checksum = checksum;
-          ip_src = src;
-          ip_dst = dst;
-          ip_payload = payload;
-        })
-    |+ field "Version" (bits ~width:4 bf_uint8) (fun p -> p.ip_version)
-  in
-  let r, _ = r |+ field "IHL" (bits ~width:4 bf_uint8) (fun p -> p.ip_ihl) in
-  let r, _ = r |+ field "DSCP" (bits ~width:6 bf_uint8) (fun p -> p.ip_dscp) in
-  let r, _ = r |+ field "ECN" (bits ~width:2 bf_uint8) (fun p -> p.ip_ecn) in
-  let r, _ = r |+ field "TotalLength" uint16be (fun p -> p.ip_total_length) in
-  let r, _ =
-    r |+ field "Identification" uint16be (fun p -> p.ip_identification)
-  in
-  let r, _ =
-    r |+ field "Flags" (bits ~width:3 bf_uint16be) (fun p -> p.ip_flags)
-  in
-  let r, _ =
-    r
-    |+ field "FragmentOffset" (bits ~width:13 bf_uint16be) (fun p ->
-        p.ip_fragment_offset)
-  in
-  let r, _ = r |+ field "TTL" uint8 (fun p -> p.ip_ttl) in
-  let r, f_protocol = r |+ field "Protocol" uint8 (fun p -> p.ip_protocol) in
-  let r, _ = r |+ field "HeaderChecksum" uint16be (fun p -> p.ip_checksum) in
-  let r, f_src = r |+ field "SrcAddr" uint32be (fun p -> p.ip_src) in
-  let r, f_dst = r |+ field "DstAddr" uint32be (fun p -> p.ip_dst) in
-  let r, f_payload =
-    r
-    |+ field "Payload"
-         (byte_slice ~size:(int ipv4_payload_size))
-         (fun p -> p.ip_payload)
-  in
-  (seal r, f_protocol, f_src, f_dst, f_payload)
+  record "IPv4"
+    (fun
+      version
+      ihl
+      dscp
+      ecn
+      total_length
+      identification
+      flags
+      fragment_offset
+      ttl
+      protocol
+      checksum
+      src
+      dst
+      payload
+    ->
+      {
+        ip_version = version;
+        ip_ihl = ihl;
+        ip_dscp = dscp;
+        ip_ecn = ecn;
+        ip_total_length = total_length;
+        ip_identification = identification;
+        ip_flags = flags;
+        ip_fragment_offset = fragment_offset;
+        ip_ttl = ttl;
+        ip_protocol = protocol;
+        ip_checksum = checksum;
+        ip_src = src;
+        ip_dst = dst;
+        ip_payload = payload;
+      })
+  |+ field "Version" (bits ~width:4 bf_uint8) (fun p -> p.ip_version)
+  |+ field "IHL" (bits ~width:4 bf_uint8) (fun p -> p.ip_ihl)
+  |+ field "DSCP" (bits ~width:6 bf_uint8) (fun p -> p.ip_dscp)
+  |+ field "ECN" (bits ~width:2 bf_uint8) (fun p -> p.ip_ecn)
+  |+ field "TotalLength" uint16be (fun p -> p.ip_total_length)
+  |+ field "Identification" uint16be (fun p -> p.ip_identification)
+  |+ field "Flags" (bits ~width:3 bf_uint16be) (fun p -> p.ip_flags)
+  |+ field "FragmentOffset" (bits ~width:13 bf_uint16be) (fun p ->
+      p.ip_fragment_offset)
+  |+ field "TTL" uint8 (fun p -> p.ip_ttl)
+  |+ f_ip_protocol
+  |+ field "HeaderChecksum" uint16be (fun p -> p.ip_checksum)
+  |+ f_ip_src |+ f_ip_dst |+ f_ip_payload |> seal
 
 let ipv4_struct = Codec.to_struct ipv4_codec
 let ipv4_size = Codec.wire_size ipv4_codec
@@ -161,94 +150,76 @@ type tcp = {
   tcp_urgent_ptr : int;
 }
 
-let tcp_codec, f_tcp_src_port, f_tcp_dst_port, f_tcp_syn, f_tcp_ack =
+let f_tcp_src_port = Codec.field "SrcPort" uint16be (fun t -> t.tcp_src_port)
+let f_tcp_dst_port = Codec.field "DstPort" uint16be (fun t -> t.tcp_dst_port)
+
+let f_tcp_syn =
+  Codec.field "SYN" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_syn)
+
+let f_tcp_ack =
+  Codec.field "ACK" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ack)
+
+let tcp_codec =
   let open Codec in
-  let r, f_src_port =
-    record "TCP"
-      (fun
-        src_port
-        dst_port
-        seq
-        ack_num
-        data_offset
-        reserved
-        ns
-        cwr
-        ece
-        urg
-        ack
-        psh
-        rst
-        syn
-        fin
-        window
-        checksum
-        urgent_ptr
-      ->
-        {
-          tcp_src_port = src_port;
-          tcp_dst_port = dst_port;
-          tcp_seq = seq;
-          tcp_ack_num = ack_num;
-          tcp_data_offset = data_offset;
-          tcp_reserved = reserved;
-          tcp_ns = ns;
-          tcp_cwr = cwr;
-          tcp_ece = ece;
-          tcp_urg = urg;
-          tcp_ack = ack;
-          tcp_psh = psh;
-          tcp_rst = rst;
-          tcp_syn = syn;
-          tcp_fin = fin;
-          tcp_window = window;
-          tcp_checksum = checksum;
-          tcp_urgent_ptr = urgent_ptr;
-        })
-    |+ field "SrcPort" uint16be (fun t -> t.tcp_src_port)
-  in
-  let r, f_dst_port = r |+ field "DstPort" uint16be (fun t -> t.tcp_dst_port) in
-  let r, _ = r |+ field "SeqNum" uint32be (fun t -> t.tcp_seq) in
-  let r, _ = r |+ field "AckNum" uint32be (fun t -> t.tcp_ack_num) in
-  let r, _ =
-    r
-    |+ field "DataOffset" (bits ~width:4 bf_uint16be) (fun t ->
-        t.tcp_data_offset)
-  in
-  let r, _ =
-    r |+ field "Reserved" (bits ~width:3 bf_uint16be) (fun t -> t.tcp_reserved)
-  in
-  let r, _ =
-    r |+ field "NS" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ns)
-  in
-  let r, _ =
-    r |+ field "CWR" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_cwr)
-  in
-  let r, _ =
-    r |+ field "ECE" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ece)
-  in
-  let r, _ =
-    r |+ field "URG" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_urg)
-  in
-  let r, f_ack =
-    r |+ field "ACK" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ack)
-  in
-  let r, _ =
-    r |+ field "PSH" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_psh)
-  in
-  let r, _ =
-    r |+ field "RST" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_rst)
-  in
-  let r, f_syn =
-    r |+ field "SYN" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_syn)
-  in
-  let r, _ =
-    r |+ field "FIN" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_fin)
-  in
-  let r, _ = r |+ field "Window" uint16be (fun t -> t.tcp_window) in
-  let r, _ = r |+ field "Checksum" uint16be (fun t -> t.tcp_checksum) in
-  let r, _ = r |+ field "UrgentPtr" uint16be (fun t -> t.tcp_urgent_ptr) in
-  (seal r, f_src_port, f_dst_port, f_syn, f_ack)
+  record "TCP"
+    (fun
+      src_port
+      dst_port
+      seq
+      ack_num
+      data_offset
+      reserved
+      ns
+      cwr
+      ece
+      urg
+      ack
+      psh
+      rst
+      syn
+      fin
+      window
+      checksum
+      urgent_ptr
+    ->
+      {
+        tcp_src_port = src_port;
+        tcp_dst_port = dst_port;
+        tcp_seq = seq;
+        tcp_ack_num = ack_num;
+        tcp_data_offset = data_offset;
+        tcp_reserved = reserved;
+        tcp_ns = ns;
+        tcp_cwr = cwr;
+        tcp_ece = ece;
+        tcp_urg = urg;
+        tcp_ack = ack;
+        tcp_psh = psh;
+        tcp_rst = rst;
+        tcp_syn = syn;
+        tcp_fin = fin;
+        tcp_window = window;
+        tcp_checksum = checksum;
+        tcp_urgent_ptr = urgent_ptr;
+      })
+  |+ f_tcp_src_port |+ f_tcp_dst_port
+  |+ field "SeqNum" uint32be (fun t -> t.tcp_seq)
+  |+ field "AckNum" uint32be (fun t -> t.tcp_ack_num)
+  |+ field "DataOffset" (bits ~width:4 bf_uint16be) (fun t -> t.tcp_data_offset)
+  |+ field "Reserved" (bits ~width:3 bf_uint16be) (fun t -> t.tcp_reserved)
+  |+ field "NS" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ns)
+  |+ field "CWR" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_cwr)
+  |+ field "ECE" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_ece)
+  |+ field "URG" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_urg)
+  |+ f_tcp_ack
+  |+ field "PSH" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_psh)
+  |+ field "RST" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_rst)
+  |+ f_tcp_syn
+  |+ field "FIN" (bool (bits ~width:1 bf_uint16be)) (fun t -> t.tcp_fin)
+  |+ field "Window" uint16be (fun t -> t.tcp_window)
+  |+ field "Checksum" uint16be (fun t -> t.tcp_checksum)
+  |+ field "UrgentPtr" uint16be (fun t -> t.tcp_urgent_ptr)
+  |> seal
 
 let tcp_struct = Codec.to_struct tcp_codec
 let tcp_size = Codec.wire_size tcp_codec
@@ -262,22 +233,22 @@ type udp = {
   udp_checksum : int;
 }
 
-let udp_codec, f_udp_src_port, f_udp_dst_port, f_udp_length =
+let f_udp_src_port = Codec.field "SrcPort" uint16be (fun u -> u.udp_src_port)
+let f_udp_dst_port = Codec.field "DstPort" uint16be (fun u -> u.udp_dst_port)
+let f_udp_length = Codec.field "Length" uint16be (fun u -> u.udp_length)
+
+let udp_codec =
   let open Codec in
-  let r, f_src_port =
-    record "UDP" (fun src_port dst_port length checksum ->
-        {
-          udp_src_port = src_port;
-          udp_dst_port = dst_port;
-          udp_length = length;
-          udp_checksum = checksum;
-        })
-    |+ field "SrcPort" uint16be (fun u -> u.udp_src_port)
-  in
-  let r, f_dst_port = r |+ field "DstPort" uint16be (fun u -> u.udp_dst_port) in
-  let r, f_length = r |+ field "Length" uint16be (fun u -> u.udp_length) in
-  let r, _ = r |+ field "Checksum" uint16be (fun u -> u.udp_checksum) in
-  (seal r, f_src_port, f_dst_port, f_length)
+  record "UDP" (fun src_port dst_port length checksum ->
+      {
+        udp_src_port = src_port;
+        udp_dst_port = dst_port;
+        udp_length = length;
+        udp_checksum = checksum;
+      })
+  |+ f_udp_src_port |+ f_udp_dst_port |+ f_udp_length
+  |+ field "Checksum" uint16be (fun u -> u.udp_checksum)
+  |> seal
 
 let udp_struct = Codec.to_struct udp_codec
 let udp_size = Codec.wire_size udp_codec

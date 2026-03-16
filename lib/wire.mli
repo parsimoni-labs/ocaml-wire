@@ -733,14 +733,13 @@ val decode_make4_exn :
     {[
       type packet = { version : int; length : int }
 
-      let codec, f_length =
+      let f_version = Wire.Codec.field "version" uint8 (fun p -> p.version)
+      let f_length = Wire.Codec.field "length" uint16be (fun p -> p.length)
+
+      let codec =
         let open Wire.Codec in
-        let r, _ =
-          record "Packet" (fun version length -> { version; length })
-          |+ field "version" uint8 (fun p -> p.version)
-        in
-        let r, f_length = r |+ field "length" uint16be (fun p -> p.length) in
-        (seal r, f_length)
+        record "Packet" (fun version length -> { version; length })
+        |+ f_version |+ f_length |> seal
 
       (* Zero-copy field access *)
       let get_length = Wire.Codec.get codec f_length
@@ -765,19 +764,32 @@ module Codec : sig
   val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
   (** [field name typ get] defines a field specification with type [typ] and
       getter [get]. Use {!val:Wire.map} or {!val:Wire.bool} on the type for
-      conversions. Pass the result to {!(|+)} to get a configured field for
-      zero-copy access via {!get}/{!set}. *)
+      conversions. The field becomes usable with {!get}/{!set} after the record
+      containing it is {!seal}ed. *)
 
-  val ( |+ ) :
-    ('a -> 'b, 'r) record -> ('a, 'r) field -> ('b, 'r) record * ('a, 'r) field
-  (** [r |+ f] adds field [f] to record codec [r]. Returns the updated record
-      and a configured field that can be used with {!get}/{!set}. *)
+  val ( |+ ) : ('a -> 'b, 'r) record -> ('a, 'r) field -> ('b, 'r) record
+  (** [r |+ f] adds field [f] to record codec [r]. The field's accessor and
+      writer are configured when the record is {!seal}ed. *)
 
   val seal : ('r, 'r) record -> 'r t
   (** [seal r] finalizes the record codec, adding bounds checking. *)
 
   val wire_size : 'r t -> int
-  (** [wire_size codec] returns the fixed wire size of the codec in bytes. *)
+  (** [wire_size codec] returns the fixed wire size of the codec in bytes.
+      Raises [Invalid_argument] for variable-size codecs — use {!min_wire_size}
+      or {!compute_wire_size} instead. *)
+
+  val min_wire_size : 'r t -> int
+  (** [min_wire_size codec] returns the minimum wire size (sum of all fixed-size
+      fields). For fixed-size codecs, this equals {!wire_size}. *)
+
+  val compute_wire_size : 'r t -> bytes -> int -> int
+  (** [compute_wire_size codec buf off] computes the actual wire size by reading
+      dependent-size fields from [buf] at offset [off]. For fixed-size codecs,
+      returns the fixed size without reading the buffer. *)
+
+  val is_fixed : 'r t -> bool
+  (** [is_fixed codec] returns [true] if the codec has a fixed wire size. *)
 
   val decode : 'r t -> bytes -> int -> 'r
   (** [decode codec buf off] decodes a record from [buf] at offset [off]. Raises
@@ -789,27 +801,38 @@ module Codec : sig
   val to_struct : 'r t -> struct_
   (** [to_struct codec] converts the codec to a struct for 3D generation. *)
 
-  val get : 'r t -> ('a, 'r) field -> Bytesrw.Bytes.Slice.t -> 'a
-  (** [get codec f slice] reads field [f] from [slice]. Zero allocation for
-      immediate types (int, bool). Raises {!Parse_error} if the slice is too
-      short for the codec's wire size. *)
+  val get : 'r t -> ('a, 'r) field -> bytes -> int -> 'a
+  (** [get codec f buf off] reads field [f] from [buf] at offset [off]. Zero
+      allocation for immediate types (int, bool). *)
 
-  val set : 'r t -> ('a, 'r) field -> Bytesrw.Bytes.Slice.t -> 'a -> unit
-  (** [set codec f slice x] writes [x] into [slice]. For bitfields, uses
-      read-modify-write to preserve adjacent bits. *)
-
-  val get_raw : 'r t -> ('a, 'r) field -> bytes -> int -> 'a
-  (** [get_raw codec f buf off] reads field [f] from [buf] at offset [off]. Like
-      {!get} but works on raw bytes without a slice. No bounds checking. *)
-
-  val set_raw : 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
-  (** [set_raw codec f buf off x] writes [x] into [buf] at offset [off]. Like
-      {!set} but works on raw bytes without a slice. No bounds checking. *)
+  val set : 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
+  (** [set codec f buf off x] writes [x] into [buf] at offset [off]. For
+      bitfields, uses read-modify-write to preserve adjacent bits. *)
 
   val sub : 'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> bytes -> int -> int
   (** [sub codec f buf off] returns the byte offset of the sub-protocol field
-      [f] within [buf]. Zero allocation — use with {!get_raw} to traverse nested
-      protocols without intermediate slice allocations. *)
+      [f] within [buf]. Zero allocation — use with {!get} to traverse nested
+      protocols without intermediate slice allocations.
+
+      {[
+        let ip_off = Codec.sub ethernet_codec f_eth_payload buf 0 in
+        let tcp_off = Codec.sub ipv4_codec f_ip_payload buf ip_off in
+        Codec.get tcp_codec f_tcp_dst_port buf tcp_off
+      ]} *)
+
+  val ref : ('a, 'r) field -> int expr
+  (** [ref f] returns an expression referencing field [f] by name. Use this
+      instead of {!val:Wire.ref} for type-safe field references in constraints
+      and dependent sizes:
+
+      {[
+        let f_length = Codec.field "Length" uint16be (fun h -> h.length)
+
+        let f_payload =
+          Codec.field "Payload"
+            (byte_slice ~size:(Codec.ref f_length))
+            (fun h -> h.payload)
+      ]} *)
 end
 
 (** {1 FFI Code Generation}

@@ -10,14 +10,11 @@ type simple_header = { version : int; length : int; flags : int }
 
 let simple_header_codec =
   let open Codec in
-  let r, _ =
-    record "SimpleHeader" (fun version length flags ->
-        { version; length; flags })
-    |+ field "version" uint8 (fun h -> h.version)
-  in
-  let r, _ = r |+ field "length" uint16 (fun h -> h.length) in
-  let r, _ = r |+ field "flags" uint8 (fun h -> h.flags) in
-  seal r
+  record "SimpleHeader" (fun version length flags -> { version; length; flags })
+  |+ field "version" uint8 (fun h -> h.version)
+  |+ field "length" uint16 (fun h -> h.length)
+  |+ field "flags" uint8 (fun h -> h.flags)
+  |> seal
 
 (* Generate 3D schema *)
 let simple_header_struct = Codec.to_struct simple_header_codec
@@ -33,13 +30,11 @@ type constrained_packet = { pkt_type : int; pkt_length : int }
 
 let constrained_packet_codec =
   let open Codec in
-  let r, _ =
-    record "ConstrainedPacket" (fun pkt_type pkt_length ->
-        { pkt_type; pkt_length })
-    |+ field "pkt_type" uint8 (fun p -> p.pkt_type)
-  in
-  let r, _ = r |+ field "pkt_length" uint16 (fun p -> p.pkt_length) in
-  seal r
+  record "ConstrainedPacket" (fun pkt_type pkt_length ->
+      { pkt_type; pkt_length })
+  |+ field "pkt_type" uint8 (fun p -> p.pkt_type)
+  |+ field "pkt_length" uint16 (fun p -> p.pkt_length)
+  |> seal
 
 let constrained_packet_module =
   module_ ~doc:"Constrained packet for differential testing" "ConstrainedPacket"

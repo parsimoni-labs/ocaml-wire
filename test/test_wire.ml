@@ -2,8 +2,6 @@
 
 open Wire
 
-let slice buf = Bytesrw.Bytes.Slice.make buf ~first:0 ~length:(Bytes.length buf)
-let slice_off buf off len = Bytesrw.Bytes.Slice.make buf ~first:off ~length:len
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
 (* Helper: parse from a string delivered in slices of [chunk_size] bytes.
@@ -337,13 +335,11 @@ type simple_record = { a : int; b : int; c : int }
 
 let simple_record_codec =
   let open Codec in
-  let r, _ =
-    record "SimpleRecord" (fun a b c -> { a; b; c })
-    |+ field "a" uint8 (fun r -> r.a)
-  in
-  let r, _ = r |+ field "b" uint16 (fun r -> r.b) in
-  let r, _ = r |+ field "c" uint32 (fun r -> r.c) in
-  seal r
+  record "SimpleRecord" (fun a b c -> { a; b; c })
+  |+ field "a" uint8 (fun r -> r.a)
+  |+ field "b" uint16 (fun r -> r.b)
+  |+ field "c" uint32 (fun r -> r.c)
+  |> seal
 
 let test_record_encode () =
   let v = { a = 0x42; b = 0x1234; c = 0x56789ABC } in
@@ -394,12 +390,10 @@ type multi_record = { x : int; y : int }
 
 let multi_record_codec =
   let open Codec in
-  let r, _ =
-    record "MultiRecord" (fun x y -> { x; y })
-    |+ field "x" uint16be (fun r -> r.x)
-  in
-  let r, _ = r |+ field "y" uint16be (fun r -> r.y) in
-  seal r
+  record "MultiRecord" (fun x y -> { x; y })
+  |+ field "x" uint16be (fun r -> r.x)
+  |+ field "y" uint16be (fun r -> r.y)
+  |> seal
 
 let test_record_with_multi () =
   let original = { x = 0x1234; y = 0x5678 } in
@@ -418,13 +412,11 @@ type ba_record = { id : int; uuid : string; tag : int }
 
 let ba_record_codec =
   let open Codec in
-  let r, _ =
-    record "BaRecord" (fun id uuid tag -> { id; uuid; tag })
-    |+ field "id" uint32be (fun r -> r.id)
-  in
-  let r, _ = r |+ field "uuid" (byte_array ~size:(int 16)) (fun r -> r.uuid) in
-  let r, _ = r |+ field "tag" uint16be (fun r -> r.tag) in
-  seal r
+  record "BaRecord" (fun id uuid tag -> { id; uuid; tag })
+  |+ field "id" uint32be (fun r -> r.id)
+  |+ field "uuid" (byte_array ~size:(int 16)) (fun r -> r.uuid)
+  |+ field "tag" uint16be (fun r -> r.tag)
+  |> seal
 
 let test_record_byte_array_roundtrip () =
   let original = { id = 0x12345678; uuid = "0123456789abcdef"; tag = 0xABCD } in
@@ -468,15 +460,12 @@ type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
 
 let bf32_codec =
   let open Codec in
-  let r, _ =
-    record "Bf32Test" (fun a b c d ->
-        { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-    |+ field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a)
-  in
-  let r, _ = r |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b) in
-  let r, _ = r |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c) in
-  let r, _ = r |+ field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
-  seal r
+  record "Bf32Test" (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
+  |+ field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a)
+  |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b)
+  |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c)
+  |+ field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d)
+  |> seal
 
 type bf16_record = {
   bf_ver : int;
@@ -488,26 +477,20 @@ type bf16_record = {
 
 let bf16_codec =
   let open Codec in
-  let r, _ =
-    record "Bf16Test" (fun ver flags id count len ->
-        {
-          bf_ver = ver;
-          bf_flags = flags;
-          bf_id = id;
-          bf_count = count;
-          bf_len = len;
-        })
-    |+ field "ver" (bits ~width:3 bf_uint16be) (fun t -> t.bf_ver)
-  in
-  let r, _ =
-    r |+ field "flags" (bits ~width:2 bf_uint16be) (fun t -> t.bf_flags)
-  in
-  let r, _ = r |+ field "id" (bits ~width:11 bf_uint16be) (fun t -> t.bf_id) in
-  let r, _ =
-    r |+ field "count" (bits ~width:14 bf_uint16be) (fun t -> t.bf_count)
-  in
-  let r, _ = r |+ field "len" (bits ~width:2 bf_uint16be) (fun t -> t.bf_len) in
-  seal r
+  record "Bf16Test" (fun ver flags id count len ->
+      {
+        bf_ver = ver;
+        bf_flags = flags;
+        bf_id = id;
+        bf_count = count;
+        bf_len = len;
+      })
+  |+ field "ver" (bits ~width:3 bf_uint16be) (fun t -> t.bf_ver)
+  |+ field "flags" (bits ~width:2 bf_uint16be) (fun t -> t.bf_flags)
+  |+ field "id" (bits ~width:11 bf_uint16be) (fun t -> t.bf_id)
+  |+ field "count" (bits ~width:14 bf_uint16be) (fun t -> t.bf_count)
+  |+ field "len" (bits ~width:2 bf_uint16be) (fun t -> t.bf_len)
+  |> seal
 
 let test_codec_bitfield_wire_size () =
   Alcotest.(check int) "bf32 wire_size" 4 (Codec.wire_size bf32_codec);
@@ -591,81 +574,80 @@ let test_codec_bitfield_to_struct () =
 let test_view_get_uint () =
   let codec, f_x, f_y =
     let open Codec in
-    let r, f_x =
-      record "ViewUint" (fun a b -> { x = a; y = b })
-      |+ field "x" uint16be (fun r -> r.x)
+    let f_x = field "x" uint16be (fun r -> r.x) in
+    let f_y = field "y" uint16be (fun r -> r.y) in
+    let codec =
+      record "ViewUint" (fun a b -> { x = a; y = b }) |+ f_x |+ f_y |> seal
     in
-    let r, f_y = r |+ field "y" uint16be (fun r -> r.y) in
-    (seal r, f_x, f_y)
+    (codec, f_x, f_y)
   in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x1234;
   Bytes.set_uint16_be buf 2 0x5678;
-  let s = slice buf in
-  Alcotest.(check int) "get x" 0x1234 (Codec.get codec f_x s);
-  Alcotest.(check int) "get y" 0x5678 (Codec.get codec f_y s)
+  Alcotest.(check int) "get x" 0x1234 (Codec.get codec f_x buf 0);
+  Alcotest.(check int) "get y" 0x5678 (Codec.get codec f_y buf 0)
 
 let test_view_get_bitfield () =
   let codec, f_a, f_d =
     let open Codec in
-    let r, f_a =
+    let f_a = field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a) in
+    let f_d = field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
+    let codec =
       record "ViewBf" (fun a b c d ->
           { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-      |+ field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a)
+      |+ f_a
+      |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b)
+      |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c)
+      |+ f_d |> seal
     in
-    let r, _ = r |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b) in
-    let r, _ = r |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c) in
-    let r, f_d = r |+ field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
-    (seal r, f_a, f_d)
+    (codec, f_a, f_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  let s = slice buf in
-  Alcotest.(check int) "get a" 5 (Codec.get codec f_a s);
-  Alcotest.(check int) "get d" 0xAB (Codec.get codec f_d s)
+  Alcotest.(check int) "get a" 5 (Codec.get codec f_a buf 0);
+  Alcotest.(check int) "get d" 0xAB (Codec.get codec f_d buf 0)
 
 let test_view_get_bool () =
   let codec, f_flag =
     let open Codec in
-    let r, f_flag =
+    let f_flag = field "flag" (bool (bits ~width:1 bf_uint8)) fst in
+    let codec =
       record "ViewBool" (fun flag code -> (flag, code))
-      |+ field "flag" (bool (bits ~width:1 bf_uint8)) fst
+      |+ f_flag
+      |+ field "code" (bits ~width:7 bf_uint8) snd
+      |> seal
     in
-    let r, _ = r |+ field "code" (bits ~width:7 bf_uint8) snd in
-    (seal r, f_flag)
+    (codec, f_flag)
   in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x80;
-  Alcotest.(check bool)
-    "get flag=true" true
-    (Codec.get codec f_flag (slice buf));
+  Alcotest.(check bool) "get flag=true" true (Codec.get codec f_flag buf 0);
   Bytes.set_uint8 buf 0 0x00;
-  Alcotest.(check bool)
-    "get flag=false" false
-    (Codec.get codec f_flag (slice buf))
+  Alcotest.(check bool) "get flag=false" false (Codec.get codec f_flag buf 0)
 
 let test_view_set_bitfield () =
   let codec, f_a, f_d =
     let open Codec in
-    let r, f_a =
+    let f_a = field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a) in
+    let f_d = field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
+    let codec =
       record "ViewSetBf" (fun a b c d ->
           { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-      |+ field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a)
+      |+ f_a
+      |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b)
+      |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c)
+      |+ f_d |> seal
     in
-    let r, _ = r |+ field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b) in
-    let r, _ = r |+ field "c" (bits ~width:16 bf_uint32be) (fun t -> t.bf_c) in
-    let r, f_d = r |+ field "d" (bits ~width:8 bf_uint32be) (fun t -> t.bf_d) in
-    (seal r, f_a, f_d)
+    (codec, f_a, f_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  let s = slice buf in
-  Codec.set codec f_a s 3;
-  Alcotest.(check int) "get a after set" 3 (Codec.get codec f_a s);
+  Codec.set codec f_a buf 0 3;
+  Alcotest.(check int) "get a after set" 3 (Codec.get codec f_a buf 0);
   let r = Codec.decode codec buf 0 in
   Alcotest.(check int) "b preserved" 20 r.bf_b;
   Alcotest.(check int) "c preserved" 0x1234 r.bf_c;
   Alcotest.(check int) "d preserved" 0xAB r.bf_d;
-  Codec.set codec f_d s 0x42;
-  Alcotest.(check int) "get d after set" 0x42 (Codec.get codec f_d s);
+  Codec.set codec f_d buf 0 0x42;
+  Alcotest.(check int) "get d after set" 0x42 (Codec.get codec f_d buf 0);
   let r = Codec.decode codec buf 0 in
   Alcotest.(check int) "a still 3" 3 r.bf_a;
   Alcotest.(check int) "b still 20" 20 r.bf_b;
@@ -674,31 +656,27 @@ let test_view_set_bitfield () =
 let test_view_set_uint () =
   let codec, f_x, f_y =
     let open Codec in
-    let r, f_x =
-      record "ViewSetUint" (fun x y -> { x; y })
-      |+ field "x" uint16be (fun r -> r.x)
+    let f_x = field "x" uint16be (fun r -> r.x) in
+    let f_y = field "y" uint16be (fun r -> r.y) in
+    let codec =
+      record "ViewSetUint" (fun x y -> { x; y }) |+ f_x |+ f_y |> seal
     in
-    let r, f_y = r |+ field "y" uint16be (fun r -> r.y) in
-    (seal r, f_x, f_y)
+    (codec, f_x, f_y)
   in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x1234;
   Bytes.set_uint16_be buf 2 0x5678;
-  let s = slice buf in
-  Codec.set codec f_x s 0xAAAA;
-  Alcotest.(check int) "get x after set" 0xAAAA (Codec.get codec f_x s);
-  Alcotest.(check int) "y unchanged" 0x5678 (Codec.get codec f_y s)
+  Codec.set codec f_x buf 0 0xAAAA;
+  Alcotest.(check int) "get x after set" 0xAAAA (Codec.get codec f_x buf 0);
+  Alcotest.(check int) "y unchanged" 0x5678 (Codec.get codec f_y buf 0)
 
 let test_view_bounds_check () =
-  let codec, f =
+  let codec =
     let open Codec in
-    let r, f =
-      record "ViewBounds" (fun a -> a) |+ field "a" uint32be (fun a -> a)
-    in
-    (seal r, f)
+    record "ViewBounds" (fun a -> a) |+ field "a" uint32be (fun a -> a) |> seal
   in
   let buf = Bytes.create 2 in
-  match Codec.get codec f (slice buf) with
+  match Codec.decode codec buf 0 with
   | _ -> Alcotest.fail "expected Parse_error for short buffer"
   | exception Parse_error (Unexpected_eof _) -> ()
   | exception e -> Alcotest.failf "wrong exception: %s" (Printexc.to_string e)
@@ -706,64 +684,61 @@ let test_view_bounds_check () =
 let test_view_with_offset () =
   let codec, f_a =
     let open Codec in
-    let r, f_a =
-      record "ViewOff" (fun a -> a) |+ field "a" uint16be (fun a -> a)
-    in
-    (seal r, f_a)
+    let f_a = field "a" uint16be (fun a -> a) in
+    let codec = record "ViewOff" (fun a -> a) |+ f_a |> seal in
+    (codec, f_a)
   in
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 0x1111;
   Bytes.set_uint16_be buf 2 0x2222;
   Bytes.set_uint16_be buf 4 0x3333;
-  let ws = Codec.wire_size codec in
-  Alcotest.(check int)
-    "get at offset 2" 0x2222
-    (Codec.get codec f_a (slice_off buf 2 ws))
+  Alcotest.(check int) "get at offset 2" 0x2222 (Codec.get codec f_a buf 2)
 
 let test_view_set_bool () =
   let codec, f_flag =
     let open Codec in
-    let r, f_flag =
+    let f_flag = field "flag" (bool (bits ~width:1 bf_uint8)) fst in
+    let codec =
       record "ViewSetBool" (fun flag code -> (flag, code))
-      |+ field "flag" (bool (bits ~width:1 bf_uint8)) fst
+      |+ f_flag
+      |+ field "code" (bits ~width:7 bf_uint8) snd
+      |> seal
     in
-    let r, _ = r |+ field "code" (bits ~width:7 bf_uint8) snd in
-    (seal r, f_flag)
+    (codec, f_flag)
   in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x00;
-  let s = slice buf in
-  Codec.set codec f_flag s true;
+  Codec.set codec f_flag buf 0 true;
   Alcotest.(check bool)
-    "get flag after set true" true (Codec.get codec f_flag s);
+    "get flag after set true" true
+    (Codec.get codec f_flag buf 0);
   Alcotest.(check int) "byte value" 0x80 (Bytes.get_uint8 buf 0);
-  Codec.set codec f_flag s false;
+  Codec.set codec f_flag buf 0 false;
   Alcotest.(check bool)
-    "get flag after set false" false (Codec.get codec f_flag s);
+    "get flag after set false" false
+    (Codec.get codec f_flag buf 0);
   Alcotest.(check int) "byte cleared" 0x00 (Bytes.get_uint8 buf 0)
 
 (* Field sharing tests — same field spec used in two codecs *)
 
 let test_view_shared_field_spec () =
-  (* Same field spec added to two codecs with different layouts.
+  (* Two codecs with different layouts, each with their own field "x".
      Codec1: [u16be x] [u16be y]   → x at offset 0
      Codec2: [u16be pad] [u16be x] → x at offset 2
-     The configured fields must be independent. *)
-  let spec = Codec.field "x" uint16be (fun (x, _) -> x) in
-  let codec1, f1_x =
-    let open Codec in
-    let r, f_x = record "Share1" (fun x y -> (x, y)) |+ spec in
-    let r, _ = r |+ field "y" uint16be (fun (_, y) -> y) in
-    (seal r, f_x)
+     Each codec gets a fresh field object. *)
+  let open Codec in
+  let f1_x = field "x" uint16be (fun (x, _) -> x) in
+  let codec1 =
+    record "Share1" (fun x y -> (x, y))
+    |+ f1_x
+    |+ field "y" uint16be (fun (_, y) -> y)
+    |> seal
   in
-  let codec2, f2_x =
-    let open Codec in
-    let r, _ =
-      record "Share2" (fun _pad x -> (x, 0))
-      |+ field "pad" uint16be (fun _ -> 0)
-    in
-    let r, f_x = r |+ spec in
-    (seal r, f_x)
+  let f2_x = field "x" uint16be (fun (x, _) -> x) in
+  let codec2 =
+    record "Share2" (fun _pad x -> (x, 0))
+    |+ field "pad" uint16be (fun _ -> 0)
+    |+ f2_x |> seal
   in
   let buf1 = Bytes.create 4 in
   Bytes.set_uint16_be buf1 0 0xAAAA;
@@ -771,72 +746,64 @@ let test_view_shared_field_spec () =
   let buf2 = Bytes.create 4 in
   Bytes.set_uint16_be buf2 0 0x0000;
   Bytes.set_uint16_be buf2 2 0xCCCC;
-  let s1 = slice buf1 in
-  let s2 = slice buf2 in
   (* f1_x reads at offset 0, f2_x reads at offset 2 *)
-  Alcotest.(check int) "codec1 get x" 0xAAAA (Codec.get codec1 f1_x s1);
-  Alcotest.(check int) "codec2 get x" 0xCCCC (Codec.get codec2 f2_x s2)
+  Alcotest.(check int) "codec1 get x" 0xAAAA (Codec.get codec1 f1_x buf1 0);
+  Alcotest.(check int) "codec2 get x" 0xCCCC (Codec.get codec2 f2_x buf2 0)
 
 let test_view_shared_bitfield_spec () =
-  (* Same bitfield spec added to two codecs.
+  (* Two codecs with different bitfield layouts, each with their own field "a".
      Codec1: [3-bit a] [5-bit b]            → a is top 3 bits
      Codec2: [5-bit pad] [3-bit a]           → a is bottom 3 bits
-     The configured fields must read different bit positions. *)
-  let spec = Codec.field "a" (bits ~width:3 bf_uint8) (fun (a, _) -> a) in
-  let codec1, f1_a =
-    let open Codec in
-    let r, f_a = record "ShareBf1" (fun a b -> (a, b)) |+ spec in
-    let r, _ = r |+ field "b" (bits ~width:5 bf_uint8) (fun (_, b) -> b) in
-    (seal r, f_a)
+     Each codec gets a fresh field object. *)
+  let open Codec in
+  let f1_a = field "a" (bits ~width:3 bf_uint8) (fun (a, _) -> a) in
+  let codec1 =
+    record "ShareBf1" (fun a b -> (a, b))
+    |+ f1_a
+    |+ field "b" (bits ~width:5 bf_uint8) (fun (_, b) -> b)
+    |> seal
   in
-  let codec2, f2_a =
-    let open Codec in
-    let r, _ =
-      record "ShareBf2" (fun _pad a -> (a, 0))
-      |+ field "pad" (bits ~width:5 bf_uint8) (fun _ -> 0)
-    in
-    let r, f_a = r |+ spec in
-    (seal r, f_a)
+  let f2_a = field "a" (bits ~width:3 bf_uint8) (fun (a, _) -> a) in
+  let codec2 =
+    record "ShareBf2" (fun _pad a -> (a, 0))
+    |+ field "pad" (bits ~width:5 bf_uint8) (fun _ -> 0)
+    |+ f2_a |> seal
   in
   (* 0xE3 = 0b_111_00011
      codec1 reads top 3 bits → 7
      codec2 reads bottom 3 bits → 3 *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xE3;
-  let s = slice buf in
-  Alcotest.(check int) "codec1 get a (top 3)" 7 (Codec.get codec1 f1_a s);
-  Alcotest.(check int) "codec2 get a (bot 3)" 3 (Codec.get codec2 f2_a s)
+  Alcotest.(check int) "codec1 get a (top 3)" 7 (Codec.get codec1 f1_a buf 0);
+  Alcotest.(check int) "codec2 get a (bot 3)" 3 (Codec.get codec2 f2_a buf 0)
 
 let test_view_shared_set_independent () =
   (* set via one codec's field must not affect the other's interpretation *)
-  let spec = Codec.field "v" (bits ~width:4 bf_uint8) (fun (v, _) -> v) in
-  let codec1, f1 =
-    let open Codec in
-    let r, f = record "SetShare1" (fun v pad -> (v, pad)) |+ spec in
-    let r, _ = r |+ field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p) in
-    (seal r, f)
+  let open Codec in
+  let f1 = field "v" (bits ~width:4 bf_uint8) (fun (v, _) -> v) in
+  let codec1 =
+    record "SetShare1" (fun v pad -> (v, pad))
+    |+ f1
+    |+ field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p)
+    |> seal
   in
-  let codec2, f2 =
-    let open Codec in
-    let r, _ =
-      record "SetShare2" (fun pad v -> (v, pad))
-      |+ field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p)
-    in
-    let r, f = r |+ spec in
-    (seal r, f)
+  let f2 = field "v" (bits ~width:4 bf_uint8) (fun (v, _) -> v) in
+  let codec2 =
+    record "SetShare2" (fun pad v -> (v, pad))
+    |+ field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p)
+    |+ f2 |> seal
   in
   (* Start: 0x00. Set codec1's field (top nibble) to 0xA *)
   let buf = Bytes.create 1 in
-  let s = slice buf in
-  Codec.set codec1 f1 s 0xA;
+  Codec.set codec1 f1 buf 0 0xA;
   Alcotest.(check int) "byte after set1" 0xA0 (Bytes.get_uint8 buf 0);
   (* codec2's field is bottom nibble — should still be 0 *)
-  Alcotest.(check int) "codec2 get after set1" 0 (Codec.get codec2 f2 s);
+  Alcotest.(check int) "codec2 get after set1" 0 (Codec.get codec2 f2 buf 0);
   (* Set codec2's field (bottom nibble) to 0x5 *)
-  Codec.set codec2 f2 s 0x5;
+  Codec.set codec2 f2 buf 0 0x5;
   Alcotest.(check int) "byte after set2" 0xA5 (Bytes.get_uint8 buf 0);
   (* codec1's field should still be 0xA *)
-  Alcotest.(check int) "codec1 get after set2" 0xA (Codec.get codec1 f1 s)
+  Alcotest.(check int) "codec1 get after set2" 0xA (Codec.get codec1 f1 buf 0)
 
 (* ── byte_slice tests ── *)
 
@@ -845,22 +812,21 @@ module Bs = Bytesrw.Bytes.Slice
 let test_view_byte_slice_get () =
   (* A record with a fixed-size byte_slice field returns a sub-slice *)
   let open Codec in
-  let r, _ =
+  let f_payload =
+    field "payload" (byte_slice ~size:(int 4)) (fun (_, p) -> p)
+  in
+  let codec =
     record "SliceRec" (fun hdr payload -> (hdr, payload))
     |+ field "hdr" uint16be (fun (h, _) -> h)
+    |+ f_payload |> seal
   in
-  let r, f_payload =
-    r |+ field "payload" (byte_slice ~size:(int 4)) (fun (_, p) -> p)
-  in
-  let codec = seal r in
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 0xABCD;
   Bytes.set_uint8 buf 2 0x10;
   Bytes.set_uint8 buf 3 0x20;
   Bytes.set_uint8 buf 4 0x30;
   Bytes.set_uint8 buf 5 0x40;
-  let s = slice buf in
-  let payload = Codec.get codec f_payload s in
+  let payload = Codec.get codec f_payload buf 0 in
   (* payload should be a slice into buf at offset 2, length 4 *)
   Alcotest.(check int) "payload first" 2 (Bs.first payload);
   Alcotest.(check int) "payload length" 4 (Bs.length payload);
@@ -875,12 +841,12 @@ let test_view_byte_slice_get () =
 let test_view_byte_slice_decode () =
   (* decode also produces a correct sub-slice *)
   let open Codec in
-  let r, _ =
+  let codec =
     record "SliceDec" (fun tag payload -> (tag, payload))
     |+ field "tag" uint8 (fun (t, _) -> t)
+    |+ field "data" (byte_slice ~size:(int 3)) (fun (_, p) -> p)
+    |> seal
   in
-  let r, _ = r |+ field "data" (byte_slice ~size:(int 3)) (fun (_, p) -> p) in
-  let codec = seal r in
   let buf = Bytes.create 4 in
   Bytes.set_uint8 buf 0 0xFF;
   Bytes.set_uint8 buf 1 0xAA;
@@ -897,127 +863,110 @@ let test_view_byte_slice_decode () =
 let test_view_byte_slice_nested () =
   (* Two-layer nested protocol: get payload slice, then get inner field *)
   let open Codec in
-  let inner_r, f_val =
-    record "Inner" (fun v -> v) |+ field "val" uint16be (fun v -> v)
+  let f_val = field "val" uint16be (fun v -> v) in
+  let inner_codec = record "Inner" (fun v -> v) |+ f_val |> seal in
+  let f_payload =
+    field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
   in
-  let inner_codec = seal inner_r in
-  let r, _ =
+  let outer_codec =
     record "Outer" (fun hdr payload -> (hdr, payload))
     |+ field "hdr" uint16be (fun (h, _) -> h)
+    |+ f_payload |> seal
   in
-  let r, f_payload =
-    r |+ field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
-  in
-  let outer_codec = seal r in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x0001;
   Bytes.set_uint16_be buf 2 0x1234;
-  let s = slice buf in
-  let payload = Codec.get outer_codec f_payload s in
-  let inner_val = Codec.get inner_codec f_val payload in
+  let payload_off = Codec.sub outer_codec f_payload buf 0 in
+  let inner_val = Codec.get inner_codec f_val buf payload_off in
   Alcotest.(check int) "inner val via zero-copy" 0x1234 inner_val
 
-(* ── Raw access: get_raw / set_raw / sub ── *)
+(* ── Raw access: get / set / sub ── *)
 
 let test_raw_get_uint () =
   let open Codec in
-  let r, f_a =
-    record "RawU" (fun a b -> (a, b)) |+ field "a" uint16be (fun (a, _) -> a)
-  in
-  let r, f_b = r |+ field "b" uint8 (fun (_, b) -> b) in
-  let codec = seal r in
+  let f_a = field "a" uint16be (fun (a, _) -> a) in
+  let f_b = field "b" uint8 (fun (_, b) -> b) in
+  let codec = record "RawU" (fun a b -> (a, b)) |+ f_a |+ f_b |> seal in
   let buf = Bytes.create 3 in
   Bytes.set_uint16_be buf 0 0x1234;
   Bytes.set_uint8 buf 2 0xFF;
-  Alcotest.(check int) "get_raw a" 0x1234 (Codec.get_raw codec f_a buf 0);
-  Alcotest.(check int) "get_raw b" 0xFF (Codec.get_raw codec f_b buf 0)
+  Alcotest.(check int) "get a" 0x1234 (Codec.get codec f_a buf 0);
+  Alcotest.(check int) "get b" 0xFF (Codec.get codec f_b buf 0)
 
 let test_raw_get_bitfield () =
   let open Codec in
-  let r, f_hi =
-    record "RawBF" (fun hi lo -> (hi, lo))
-    |+ field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h)
-  in
-  let r, f_lo = r |+ field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
-  let codec = seal r in
+  let f_hi = field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h) in
+  let f_lo = field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
+  let codec = record "RawBF" (fun hi lo -> (hi, lo)) |+ f_hi |+ f_lo |> seal in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
   (* hi=0xA=10, lo=0x7=7 *)
-  Alcotest.(check int) "get_raw hi" 0xA (Codec.get_raw codec f_hi buf 0);
-  Alcotest.(check int) "get_raw lo" 0x7 (Codec.get_raw codec f_lo buf 0)
+  Alcotest.(check int) "get hi" 0xA (Codec.get codec f_hi buf 0);
+  Alcotest.(check int) "get lo" 0x7 (Codec.get codec f_lo buf 0)
 
 let test_raw_set_uint () =
   let open Codec in
-  let r, f_a =
-    record "RawSU" (fun a b -> (a, b)) |+ field "a" uint16be (fun (a, _) -> a)
-  in
-  let r, f_b = r |+ field "b" uint8 (fun (_, b) -> b) in
-  let codec = seal r in
+  let f_a = field "a" uint16be (fun (a, _) -> a) in
+  let f_b = field "b" uint8 (fun (_, b) -> b) in
+  let codec = record "RawSU" (fun a b -> (a, b)) |+ f_a |+ f_b |> seal in
   let buf = Bytes.create 3 in
   Bytes.fill buf 0 3 '\x00';
-  Codec.set_raw codec f_a buf 0 0xABCD;
-  Codec.set_raw codec f_b buf 0 0x42;
-  Alcotest.(check int) "set_raw a" 0xABCD (Bytes.get_uint16_be buf 0);
-  Alcotest.(check int) "set_raw b" 0x42 (Bytes.get_uint8 buf 2)
+  Codec.set codec f_a buf 0 0xABCD;
+  Codec.set codec f_b buf 0 0x42;
+  Alcotest.(check int) "set a" 0xABCD (Bytes.get_uint16_be buf 0);
+  Alcotest.(check int) "set b" 0x42 (Bytes.get_uint8 buf 2)
 
 let test_raw_set_bitfield () =
   let open Codec in
-  let r, f_hi =
-    record "RawSBF" (fun hi lo -> (hi, lo))
-    |+ field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h)
-  in
-  let r, f_lo = r |+ field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
-  let codec = seal r in
+  let f_hi = field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h) in
+  let f_lo = field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
+  let codec = record "RawSBF" (fun hi lo -> (hi, lo)) |+ f_hi |+ f_lo |> seal in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x00;
-  Codec.set_raw codec f_hi buf 0 0xC;
-  Codec.set_raw codec f_lo buf 0 0x3;
-  Alcotest.(check int) "set_raw bf byte" 0xC3 (Bytes.get_uint8 buf 0)
+  Codec.set codec f_hi buf 0 0xC;
+  Codec.set codec f_lo buf 0 0x3;
+  Alcotest.(check int) "set bf byte" 0xC3 (Bytes.get_uint8 buf 0)
 
 let test_raw_sub_nested () =
-  (* Two-layer nested protocol using sub + get_raw: zero alloc *)
+  (* Two-layer nested protocol using sub + get: zero alloc *)
   let open Codec in
-  let inner_r, f_val =
-    record "Inner" (fun v -> v) |+ field "val" uint16be (fun v -> v)
+  let f_val = field "val" uint16be (fun v -> v) in
+  let inner_codec = record "Inner" (fun v -> v) |+ f_val |> seal in
+  let f_payload =
+    field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
   in
-  let inner_codec = seal inner_r in
-  let r, _ =
+  let outer_codec =
     record "Outer" (fun hdr payload -> (hdr, payload))
     |+ field "hdr" uint16be (fun (h, _) -> h)
+    |+ f_payload |> seal
   in
-  let r, f_payload =
-    r |+ field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
-  in
-  let outer_codec = seal r in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x0001;
   Bytes.set_uint16_be buf 2 0x5678;
   let inner_off = Codec.sub outer_codec f_payload buf 0 in
   Alcotest.(check int) "sub offset" 2 inner_off;
-  let inner_val = Codec.get_raw inner_codec f_val buf inner_off in
-  Alcotest.(check int) "inner val via sub+get_raw" 0x5678 inner_val
+  let inner_val = Codec.get inner_codec f_val buf inner_off in
+  Alcotest.(check int) "inner val via sub+get" 0x5678 inner_val
 
 let test_raw_sub_three_layers () =
-  (* Three-layer: outer -> mid -> inner, all zero-alloc via sub+get_raw *)
+  (* Three-layer: outer -> mid -> inner, all zero-alloc via sub+get *)
   let open Codec in
-  let inner_r, f_x = record "L3" (fun x -> x) |+ field "x" uint8 (fun x -> x) in
-  let inner = seal inner_r in
-  let mid_r, _ =
+  let f_x = field "x" uint8 (fun x -> x) in
+  let inner = record "L3" (fun x -> x) |+ f_x |> seal in
+  let f_mid_payload =
+    field "data" (byte_slice ~size:(int 1)) (fun (_, p) -> p)
+  in
+  let mid =
     record "L2" (fun tag payload -> (tag, payload))
     |+ field "tag" uint8 (fun (t, _) -> t)
+    |+ f_mid_payload |> seal
   in
-  let mid_r, f_mid_payload =
-    mid_r |+ field "data" (byte_slice ~size:(int 1)) (fun (_, p) -> p)
-  in
-  let mid = seal mid_r in
-  let outer_r, _ =
+  let f_body = field "body" (byte_slice ~size:(int 2)) (fun (_, b) -> b) in
+  let outer =
     record "L1" (fun hdr body -> (hdr, body))
     |+ field "hdr" uint16be (fun (h, _) -> h)
+    |+ f_body |> seal
   in
-  let outer_r, f_body =
-    outer_r |+ field "body" (byte_slice ~size:(int 2)) (fun (_, b) -> b)
-  in
-  let outer = seal outer_r in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0xAAAA;
   Bytes.set_uint8 buf 2 0xBB;
@@ -1026,22 +975,20 @@ let test_raw_sub_three_layers () =
   Alcotest.(check int) "mid offset" 2 mid_off;
   let inner_off = Codec.sub mid f_mid_payload buf mid_off in
   Alcotest.(check int) "inner offset" 3 inner_off;
-  let x = Codec.get_raw inner f_x buf inner_off in
-  Alcotest.(check int) "3-layer get_raw" 0xCC x
+  let x = Codec.get inner f_x buf inner_off in
+  Alcotest.(check int) "3-layer get" 0xCC x
 
 let test_raw_with_offset () =
-  (* get_raw / set_raw work correctly with non-zero base offset *)
+  (* get / set work correctly with non-zero base offset *)
   let open Codec in
-  let r, f_v =
-    record "RawOff" (fun v -> v) |+ field "v" uint32be (fun v -> v)
-  in
-  let codec = seal r in
+  let f_v = field "v" uint32be (fun v -> v) in
+  let codec = record "RawOff" (fun v -> v) |+ f_v |> seal in
   let buf = Bytes.create 20 in
   Bytes.fill buf 0 20 '\x00';
-  Codec.set_raw codec f_v buf 10 0xDEADBEEF;
+  Codec.set codec f_v buf 10 0xDEADBEEF;
   Alcotest.(check int)
-    "get_raw at offset 10" 0xDEADBEEF
-    (Codec.get_raw codec f_v buf 10)
+    "get at offset 10" 0xDEADBEEF
+    (Codec.get codec f_v buf 10)
 
 (* FFI stub generation tests *)
 
@@ -1135,6 +1082,360 @@ let test_stream_encode_chunk3 () =
   match parse_string uint32be encoded with
   | Ok decoded -> Alcotest.(check int) "encode chunk=3" v decoded
   | Error e -> Alcotest.failf "encode chunk=3: %a" pp_parse_error e
+
+(* ── Dependent-size byte_slice tests ── *)
+
+type dep_slice_record = { ds_length : int; ds_payload : Bs.t }
+
+let f_ds_length = Codec.field "Length" uint16be (fun r -> r.ds_length)
+
+let f_ds_payload =
+  Codec.field "Payload"
+    (byte_slice ~size:(Codec.ref f_ds_length))
+    (fun r -> r.ds_payload)
+
+let dep_slice_codec =
+  let open Codec in
+  record "DepSlice" (fun length payload ->
+      { ds_length = length; ds_payload = payload })
+  |+ f_ds_length |+ f_ds_payload |> seal
+
+let test_dep_byte_slice_decode_empty () =
+  (* length=0, no payload bytes *)
+  let buf = Bytes.create 2 in
+  Bytes.set_uint16_be buf 0 0;
+  let r = Codec.decode dep_slice_codec buf 0 in
+  Alcotest.(check int) "length" 0 r.ds_length;
+  Alcotest.(check int) "payload length" 0 (Bs.length r.ds_payload)
+
+let test_dep_byte_slice_decode_4 () =
+  (* length=4, 4 payload bytes *)
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 4;
+  Bytes.set_uint8 buf 2 0xAA;
+  Bytes.set_uint8 buf 3 0xBB;
+  Bytes.set_uint8 buf 4 0xCC;
+  Bytes.set_uint8 buf 5 0xDD;
+  let r = Codec.decode dep_slice_codec buf 0 in
+  Alcotest.(check int) "length" 4 r.ds_length;
+  Alcotest.(check int) "payload length" 4 (Bs.length r.ds_payload);
+  Alcotest.(check int) "payload first" 2 (Bs.first r.ds_payload);
+  Alcotest.(check int)
+    "payload[0]" 0xAA
+    (Bytes.get_uint8 (Bs.bytes r.ds_payload) (Bs.first r.ds_payload));
+  Alcotest.(check int)
+    "payload[3]" 0xDD
+    (Bytes.get_uint8 (Bs.bytes r.ds_payload) (Bs.first r.ds_payload + 3))
+
+let test_dep_byte_slice_decode_100 () =
+  (* length=100, 100 payload bytes *)
+  let buf = Bytes.create 102 in
+  Bytes.set_uint16_be buf 0 100;
+  for i = 0 to 99 do
+    Bytes.set_uint8 buf (2 + i) (i land 0xFF)
+  done;
+  let r = Codec.decode dep_slice_codec buf 0 in
+  Alcotest.(check int) "length" 100 r.ds_length;
+  Alcotest.(check int) "payload length" 100 (Bs.length r.ds_payload);
+  Alcotest.(check int)
+    "payload[50]" 50
+    (Bytes.get_uint8 (Bs.bytes r.ds_payload) (Bs.first r.ds_payload + 50))
+
+let test_dep_byte_slice_roundtrip () =
+  (* encode then decode: 2 bytes length + 4 bytes payload = 6 total *)
+  let payload_data = Bytes.of_string "\x01\x02\x03\x04" in
+  let original =
+    { ds_length = 4; ds_payload = Bs.make payload_data ~first:0 ~length:4 }
+  in
+  let buf = Bytes.create 6 in
+  Codec.encode dep_slice_codec original buf 0;
+  (* Verify encoded length field *)
+  Alcotest.(check int) "encoded length field" 4 (Bytes.get_uint16_be buf 0);
+  (* Verify compute_wire_size reads the buffer correctly *)
+  Alcotest.(check int)
+    "compute_wire_size" 6
+    (Codec.compute_wire_size dep_slice_codec buf 0);
+  let decoded = Codec.decode dep_slice_codec buf 0 in
+  Alcotest.(check int) "roundtrip length" 4 decoded.ds_length;
+  Alcotest.(check int) "roundtrip payload len" 4 (Bs.length decoded.ds_payload);
+  Alcotest.(check int)
+    "roundtrip payload[0]" 0x01
+    (Bytes.get_uint8
+       (Bs.bytes decoded.ds_payload)
+       (Bs.first decoded.ds_payload))
+
+let test_dep_byte_slice_get_payload () =
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 4;
+  Bytes.set_uint8 buf 2 0x10;
+  Bytes.set_uint8 buf 3 0x20;
+  Bytes.set_uint8 buf 4 0x30;
+  Bytes.set_uint8 buf 5 0x40;
+  let payload = Codec.get dep_slice_codec f_ds_payload buf 0 in
+  Alcotest.(check int) "get payload first" 2 (Bs.first payload);
+  Alcotest.(check int) "get payload length" 4 (Bs.length payload);
+  Alcotest.(check int)
+    "get payload[0]" 0x10
+    (Bytes.get_uint8 (Bs.bytes payload) (Bs.first payload))
+
+let test_dep_byte_slice_sub () =
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 4;
+  let off = Codec.sub dep_slice_codec f_ds_payload buf 0 in
+  Alcotest.(check int) "sub offset" 2 off
+
+let test_dep_byte_slice_set_length () =
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 4;
+  Codec.set dep_slice_codec f_ds_length buf 0 8;
+  Alcotest.(check int)
+    "set length" 8
+    (Codec.get dep_slice_codec f_ds_length buf 0)
+
+let test_dep_byte_slice_get_length () =
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 42;
+  Alcotest.(check int)
+    "get length" 42
+    (Codec.get dep_slice_codec f_ds_length buf 0)
+
+(* ── Dependent-size byte_array tests ── *)
+
+type dep_array_record = { da_length : int; da_payload : string }
+
+let f_da_length = Codec.field "Length" uint16be (fun r -> r.da_length)
+
+let f_da_payload =
+  Codec.field "Payload"
+    (byte_array ~size:(Codec.ref f_da_length))
+    (fun r -> r.da_payload)
+
+let dep_array_codec =
+  let open Codec in
+  record "DepArray" (fun length payload ->
+      { da_length = length; da_payload = payload })
+  |+ f_da_length |+ f_da_payload |> seal
+
+let test_dep_byte_array_decode () =
+  let buf = Bytes.create 7 in
+  Bytes.set_uint16_be buf 0 5;
+  Bytes.blit_string "hello" 0 buf 2 5;
+  let r = Codec.decode dep_array_codec buf 0 in
+  Alcotest.(check int) "length" 5 r.da_length;
+  Alcotest.(check string) "payload is string copy" "hello" r.da_payload
+
+let test_dep_byte_array_roundtrip () =
+  let original = { da_length = 3; da_payload = "abc" } in
+  let buf = Bytes.create 5 in
+  Codec.encode dep_array_codec original buf 0;
+  let decoded = Codec.decode dep_array_codec buf 0 in
+  Alcotest.(check int) "roundtrip length" 3 decoded.da_length;
+  Alcotest.(check string) "roundtrip payload" "abc" decoded.da_payload
+
+let test_dep_byte_array_get () =
+  let buf = Bytes.create 5 in
+  Bytes.set_uint16_be buf 0 3;
+  Bytes.blit_string "xyz" 0 buf 2 3;
+  let payload = Codec.get dep_array_codec f_da_payload buf 0 in
+  Alcotest.(check string) "get payload" "xyz" payload
+
+(* ── Fixed field after variable field tests ── *)
+
+type trailer_record = { tr_length : int; tr_payload : Bs.t; tr_checksum : int }
+
+let f_tr_length = Codec.field "Length" uint16be (fun r -> r.tr_length)
+
+let f_tr_payload =
+  Codec.field "Payload"
+    (byte_slice ~size:(Codec.ref f_tr_length))
+    (fun r -> r.tr_payload)
+
+let f_tr_checksum = Codec.field "Checksum" uint16be (fun r -> r.tr_checksum)
+
+let trailer_codec =
+  let open Codec in
+  record "Trailer" (fun length payload checksum ->
+      { tr_length = length; tr_payload = payload; tr_checksum = checksum })
+  |+ f_tr_length |+ f_tr_payload |+ f_tr_checksum |> seal
+
+let test_dep_fixed_after_variable_get_checksum () =
+  (* [length:u16be=3] [payload:3 bytes] [checksum:u16be=0xBEEF] *)
+  let buf = Bytes.create 7 in
+  Bytes.set_uint16_be buf 0 3;
+  Bytes.set_uint8 buf 2 0x11;
+  Bytes.set_uint8 buf 3 0x22;
+  Bytes.set_uint8 buf 4 0x33;
+  Bytes.set_uint16_be buf 5 0xBEEF;
+  let checksum = Codec.get trailer_codec f_tr_checksum buf 0 in
+  Alcotest.(check int) "get checksum" 0xBEEF checksum
+
+let test_dep_fixed_after_variable_set_checksum () =
+  let buf = Bytes.create 7 in
+  Bytes.set_uint16_be buf 0 3;
+  Bytes.set_uint8 buf 2 0x11;
+  Bytes.set_uint8 buf 3 0x22;
+  Bytes.set_uint8 buf 4 0x33;
+  Bytes.set_uint16_be buf 5 0x0000;
+  Codec.set trailer_codec f_tr_checksum buf 0 0xCAFE;
+  Alcotest.(check int) "set checksum" 0xCAFE (Bytes.get_uint16_be buf 5)
+
+let test_dep_fixed_after_variable_decode () =
+  let buf = Bytes.create 7 in
+  Bytes.set_uint16_be buf 0 3;
+  Bytes.set_uint8 buf 2 0xAA;
+  Bytes.set_uint8 buf 3 0xBB;
+  Bytes.set_uint8 buf 4 0xCC;
+  Bytes.set_uint16_be buf 5 0xDEAD;
+  let r = Codec.decode trailer_codec buf 0 in
+  Alcotest.(check int) "length" 3 r.tr_length;
+  Alcotest.(check int) "payload length" 3 (Bs.length r.tr_payload);
+  Alcotest.(check int) "payload first" 2 (Bs.first r.tr_payload);
+  Alcotest.(check int)
+    "payload[0]" 0xAA
+    (Bytes.get_uint8 (Bs.bytes r.tr_payload) (Bs.first r.tr_payload));
+  Alcotest.(check int) "checksum" 0xDEAD r.tr_checksum
+
+let test_dep_fixed_after_variable_roundtrip () =
+  let payload_data = Bytes.of_string "\x01\x02" in
+  let original =
+    {
+      tr_length = 2;
+      tr_payload = Bs.make payload_data ~first:0 ~length:2;
+      tr_checksum = 0x1234;
+    }
+  in
+  let buf = Bytes.create 6 in
+  Codec.encode trailer_codec original buf 0;
+  let decoded = Codec.decode trailer_codec buf 0 in
+  Alcotest.(check int) "rt length" 2 decoded.tr_length;
+  Alcotest.(check int) "rt payload len" 2 (Bs.length decoded.tr_payload);
+  Alcotest.(check int) "rt checksum" 0x1234 decoded.tr_checksum
+
+(* ── wire_size API for variable codecs ── *)
+
+let test_dep_is_fixed () =
+  Alcotest.(check bool)
+    "fixed codec is_fixed" true
+    (Codec.is_fixed simple_record_codec);
+  Alcotest.(check bool)
+    "variable codec is_fixed" false
+    (Codec.is_fixed dep_slice_codec);
+  Alcotest.(check bool)
+    "trailer codec is_fixed" false
+    (Codec.is_fixed trailer_codec)
+
+let test_dep_wire_size_raises () =
+  (* wire_size raises Invalid_argument for variable-size codecs *)
+  (match Codec.wire_size dep_slice_codec with
+  | _ -> Alcotest.fail "expected Invalid_argument from wire_size"
+  | exception Invalid_argument _ -> ());
+  (match Codec.wire_size trailer_codec with
+  | _ -> Alcotest.fail "expected Invalid_argument from wire_size"
+  | exception Invalid_argument _ -> ());
+  (* wire_size succeeds for fixed codecs *)
+  Alcotest.(check int) "fixed wire_size" 7 (Codec.wire_size simple_record_codec)
+
+let test_dep_min_wire_size () =
+  (* min_wire_size for dep_slice_codec: just uint16be = 2 *)
+  Alcotest.(check int) "dep_slice min" 2 (Codec.min_wire_size dep_slice_codec);
+  (* min_wire_size for trailer_codec: uint16be + uint16be = 4 (variable payload excluded) *)
+  Alcotest.(check int) "trailer min" 4 (Codec.min_wire_size trailer_codec);
+  (* min_wire_size for fixed codec equals wire_size *)
+  Alcotest.(check int)
+    "fixed min"
+    (Codec.wire_size simple_record_codec)
+    (Codec.min_wire_size simple_record_codec)
+
+let test_dep_compute_wire_size () =
+  (* dep_slice: length=4 -> total = 2 + 4 = 6 *)
+  let buf = Bytes.create 6 in
+  Bytes.set_uint16_be buf 0 4;
+  Alcotest.(check int)
+    "dep_slice compute" 6
+    (Codec.compute_wire_size dep_slice_codec buf 0);
+  (* dep_slice: length=0 -> total = 2 + 0 = 2 *)
+  Bytes.set_uint16_be buf 0 0;
+  Alcotest.(check int)
+    "dep_slice compute 0" 2
+    (Codec.compute_wire_size dep_slice_codec buf 0);
+  (* trailer: length=3 -> total = 2 + 3 + 2 = 7 *)
+  let buf2 = Bytes.create 7 in
+  Bytes.set_uint16_be buf2 0 3;
+  Alcotest.(check int)
+    "trailer compute" 7
+    (Codec.compute_wire_size trailer_codec buf2 0);
+  (* fixed codec: compute returns fixed size without reading buffer *)
+  Alcotest.(check int)
+    "fixed compute"
+    (Codec.wire_size simple_record_codec)
+    (Codec.compute_wire_size simple_record_codec (Bytes.create 7) 0)
+
+(* ── Codec.ref expression tests ── *)
+
+let test_dep_codec_ref () =
+  (* Codec.ref produces a valid expression used as byte_slice size *)
+  let f_len = Codec.field "Len" uint8 (fun (l, _) -> l) in
+  let f_data =
+    Codec.field "Data" (byte_slice ~size:(Codec.ref f_len)) (fun (_, d) -> d)
+  in
+  let codec =
+    let open Codec in
+    record "RefTest" (fun len data -> (len, data)) |+ f_len |+ f_data |> seal
+  in
+  (* buf: [len=5] [5 bytes payload] *)
+  let buf = Bytes.create 6 in
+  Bytes.set_uint8 buf 0 5;
+  for i = 0 to 4 do
+    Bytes.set_uint8 buf (1 + i) (0x10 + i)
+  done;
+  let len, data = Codec.decode codec buf 0 in
+  Alcotest.(check int) "ref len" 5 len;
+  Alcotest.(check int) "ref data length" 5 (Bs.length data);
+  Alcotest.(check int)
+    "ref data[0]" 0x10
+    (Bytes.get_uint8 (Bs.bytes data) (Bs.first data));
+  Alcotest.(check int)
+    "ref data[4]" 0x14
+    (Bytes.get_uint8 (Bs.bytes data) (Bs.first data + 4))
+
+let test_dep_codec_ref_size_eval () =
+  (* Test that the size expression is evaluated correctly for compute_wire_size *)
+  let f_sz = Codec.field "Size" uint8 (fun (s, _) -> s) in
+  let _f_body =
+    Codec.field "Body" (byte_slice ~size:(Codec.ref f_sz)) (fun (_, b) -> b)
+  in
+  let codec =
+    let open Codec in
+    record "RefSizeEval" (fun sz body -> (sz, body)) |+ f_sz |+ _f_body |> seal
+  in
+  let buf = Bytes.create 11 in
+  Bytes.set_uint8 buf 0 10;
+  Alcotest.(check int) "compute size" 11 (Codec.compute_wire_size codec buf 0);
+  Bytes.set_uint8 buf 0 0;
+  Alcotest.(check int) "compute size 0" 1 (Codec.compute_wire_size codec buf 0)
+
+(* ── to_struct for variable-size codecs ── *)
+
+let test_dep_to_struct () =
+  (* to_struct should produce a valid struct for variable-size codecs *)
+  let s = Codec.to_struct dep_slice_codec in
+  let m = module_ "DepSlice" [ typedef s ] in
+  let output = to_3d m in
+  Alcotest.(check bool)
+    "contains UINT16BE" true
+    (contains ~sub:"UINT16BE" output);
+  Alcotest.(check bool) "contains Length" true (contains ~sub:"Length" output);
+  Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output)
+
+let test_dep_trailer_to_struct () =
+  let s = Codec.to_struct trailer_codec in
+  let m = module_ "Trailer" [ typedef s ] in
+  let output = to_3d m in
+  Alcotest.(check bool) "contains Length" true (contains ~sub:"Length" output);
+  Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output);
+  Alcotest.(check bool)
+    "contains Checksum" true
+    (contains ~sub:"Checksum" output)
 
 let suite =
   ( "wire",
@@ -1231,7 +1532,7 @@ let suite =
         test_view_byte_slice_decode;
       Alcotest.test_case "view: byte_slice nested" `Quick
         test_view_byte_slice_nested;
-      (* raw access: get_raw / set_raw / sub *)
+      (* raw access: get / set / sub *)
       Alcotest.test_case "raw: get uint" `Quick test_raw_get_uint;
       Alcotest.test_case "raw: get bitfield" `Quick test_raw_get_bitfield;
       Alcotest.test_case "raw: set uint" `Quick test_raw_set_uint;
@@ -1263,4 +1564,50 @@ let suite =
         test_stream_encode_chunk3;
       (* ffi stubs *)
       Alcotest.test_case "ffi: c_stubs" `Quick test_c_stubs;
+      (* dependent-size byte_slice *)
+      Alcotest.test_case "dep: byte_slice decode empty" `Quick
+        test_dep_byte_slice_decode_empty;
+      Alcotest.test_case "dep: byte_slice decode 4" `Quick
+        test_dep_byte_slice_decode_4;
+      Alcotest.test_case "dep: byte_slice decode 100" `Quick
+        test_dep_byte_slice_decode_100;
+      Alcotest.test_case "dep: byte_slice roundtrip" `Quick
+        test_dep_byte_slice_roundtrip;
+      Alcotest.test_case "dep: byte_slice get payload" `Quick
+        test_dep_byte_slice_get_payload;
+      Alcotest.test_case "dep: byte_slice sub" `Quick test_dep_byte_slice_sub;
+      Alcotest.test_case "dep: byte_slice set length" `Quick
+        test_dep_byte_slice_set_length;
+      Alcotest.test_case "dep: byte_slice get length" `Quick
+        test_dep_byte_slice_get_length;
+      (* dependent-size byte_array *)
+      Alcotest.test_case "dep: byte_array decode" `Quick
+        test_dep_byte_array_decode;
+      Alcotest.test_case "dep: byte_array roundtrip" `Quick
+        test_dep_byte_array_roundtrip;
+      Alcotest.test_case "dep: byte_array get" `Quick test_dep_byte_array_get;
+      (* fixed field after variable field *)
+      Alcotest.test_case "dep: fixed after variable get checksum" `Quick
+        test_dep_fixed_after_variable_get_checksum;
+      Alcotest.test_case "dep: fixed after variable set checksum" `Quick
+        test_dep_fixed_after_variable_set_checksum;
+      Alcotest.test_case "dep: fixed after variable decode" `Quick
+        test_dep_fixed_after_variable_decode;
+      Alcotest.test_case "dep: fixed after variable roundtrip" `Quick
+        test_dep_fixed_after_variable_roundtrip;
+      (* wire_size API for variable codecs *)
+      Alcotest.test_case "dep: is_fixed" `Quick test_dep_is_fixed;
+      Alcotest.test_case "dep: wire_size raises" `Quick
+        test_dep_wire_size_raises;
+      Alcotest.test_case "dep: min_wire_size" `Quick test_dep_min_wire_size;
+      Alcotest.test_case "dep: compute_wire_size" `Quick
+        test_dep_compute_wire_size;
+      (* Codec.ref expressions *)
+      Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
+      Alcotest.test_case "dep: codec ref size eval" `Quick
+        test_dep_codec_ref_size_eval;
+      (* to_struct for variable-size codecs *)
+      Alcotest.test_case "dep: to_struct" `Quick test_dep_to_struct;
+      Alcotest.test_case "dep: trailer to_struct" `Quick
+        test_dep_trailer_to_struct;
     ] )

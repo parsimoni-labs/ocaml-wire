@@ -14,13 +14,11 @@ open Wire
 
 type minimal = { m_value : int }
 
-let minimal_codec, f_minimal_value =
+let f_minimal_value = Codec.field "Value" uint8 (fun m -> m.m_value)
+
+let minimal_codec =
   let open Codec in
-  let r, f =
-    record "Minimal" (fun v -> { m_value = v })
-    |+ field "Value" uint8 (fun m -> m.m_value)
-  in
-  (seal r, f)
+  record "Minimal" (fun v -> { m_value = v }) |+ f_minimal_value |> seal
 
 let minimal_struct = Codec.to_struct minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
@@ -43,26 +41,25 @@ type all_ints = {
   ai_u64be : int64;
 }
 
-let all_ints_codec, f_ints_u64be =
+let f_ints_u64be = Codec.field "U64BE" uint64be (fun a -> a.ai_u64be)
+
+let all_ints_codec =
   let open Codec in
-  let r, _ =
-    record "AllInts" (fun u8 u16 u16be u32 u32be u64be ->
-        {
-          ai_u8 = u8;
-          ai_u16 = u16;
-          ai_u16be = u16be;
-          ai_u32 = u32;
-          ai_u32be = u32be;
-          ai_u64be = u64be;
-        })
-    |+ field "U8" uint8 (fun a -> a.ai_u8)
-  in
-  let r, _ = r |+ field "U16" uint16 (fun a -> a.ai_u16) in
-  let r, _ = r |+ field "U16BE" uint16be (fun a -> a.ai_u16be) in
-  let r, _ = r |+ field "U32" uint32 (fun a -> a.ai_u32) in
-  let r, _ = r |+ field "U32BE" uint32be (fun a -> a.ai_u32be) in
-  let r, f = r |+ field "U64BE" uint64be (fun a -> a.ai_u64be) in
-  (seal r, f)
+  record "AllInts" (fun u8 u16 u16be u32 u32be u64be ->
+      {
+        ai_u8 = u8;
+        ai_u16 = u16;
+        ai_u16be = u16be;
+        ai_u32 = u32;
+        ai_u32be = u32be;
+        ai_u64be = u64be;
+      })
+  |+ field "U8" uint8 (fun a -> a.ai_u8)
+  |+ field "U16" uint16 (fun a -> a.ai_u16)
+  |+ field "U16BE" uint16be (fun a -> a.ai_u16be)
+  |+ field "U32" uint32 (fun a -> a.ai_u32)
+  |+ field "U32BE" uint32be (fun a -> a.ai_u32be)
+  |+ f_ints_u64be |> seal
 
 let all_ints_struct = Codec.to_struct all_ints_codec
 let all_ints_size = Codec.wire_size all_ints_codec
@@ -92,16 +89,14 @@ let all_ints_data n =
 
 type bf8 = { bf8_tag : int; bf8_value : int }
 
-let bf8_codec, f_bf8_value =
+let f_bf8_value =
+  Codec.field "Value" (bits ~width:5 bf_uint8) (fun b -> b.bf8_value)
+
+let bf8_codec =
   let open Codec in
-  let r, _ =
-    record "Bitfield8" (fun tag value -> { bf8_tag = tag; bf8_value = value })
-    |+ field "Tag" (bits ~width:3 bf_uint8) (fun b -> b.bf8_tag)
-  in
-  let r, f =
-    r |+ field "Value" (bits ~width:5 bf_uint8) (fun b -> b.bf8_value)
-  in
-  (seal r, f)
+  record "Bitfield8" (fun tag value -> { bf8_tag = tag; bf8_value = value })
+  |+ field "Tag" (bits ~width:3 bf_uint8) (fun b -> b.bf8_tag)
+  |+ f_bf8_value |> seal
 
 let bf8_struct = Codec.to_struct bf8_codec
 let bf8_size = Codec.wire_size bf8_codec
@@ -118,20 +113,16 @@ let bf8_data n =
 
 type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
-let bf16_codec, f_bf16_id =
+let f_bf16_id =
+  Codec.field "Id" (bits ~width:11 bf_uint16be) (fun b -> b.bf16_id)
+
+let bf16_codec =
   let open Codec in
-  let r, _ =
-    record "Bitfield16" (fun flag type_ id ->
-        { bf16_flag = flag; bf16_type = type_; bf16_id = id })
-    |+ field "Flag" (bits ~width:1 bf_uint16be) (fun b -> b.bf16_flag)
-  in
-  let r, _ =
-    r |+ field "Type" (bits ~width:4 bf_uint16be) (fun b -> b.bf16_type)
-  in
-  let r, f =
-    r |+ field "Id" (bits ~width:11 bf_uint16be) (fun b -> b.bf16_id)
-  in
-  (seal r, f)
+  record "Bitfield16" (fun flag type_ id ->
+      { bf16_flag = flag; bf16_type = type_; bf16_id = id })
+  |+ field "Flag" (bits ~width:1 bf_uint16be) (fun b -> b.bf16_flag)
+  |+ field "Type" (bits ~width:4 bf_uint16be) (fun b -> b.bf16_type)
+  |+ f_bf16_id |> seal
 
 let bf16_struct = Codec.to_struct bf16_codec
 let bf16_size = Codec.wire_size bf16_codec
@@ -153,23 +144,17 @@ type bf32 = {
   bf32_pri : int;
 }
 
-let bf32_codec, f_bf32_pri =
+let f_bf32_pri =
+  Codec.field "Priority" (bits ~width:8 bf_uint32be) (fun b -> b.bf32_pri)
+
+let bf32_codec =
   let open Codec in
-  let r, _ =
-    record "Bitfield32" (fun flags chan seq pri ->
-        { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
-    |+ field "Flags" (bits ~width:4 bf_uint32be) (fun b -> b.bf32_flags)
-  in
-  let r, _ =
-    r |+ field "Channel" (bits ~width:6 bf_uint32be) (fun b -> b.bf32_chan)
-  in
-  let r, _ =
-    r |+ field "Seq" (bits ~width:14 bf_uint32be) (fun b -> b.bf32_seq)
-  in
-  let r, f =
-    r |+ field "Priority" (bits ~width:8 bf_uint32be) (fun b -> b.bf32_pri)
-  in
-  (seal r, f)
+  record "Bitfield32" (fun flags chan seq pri ->
+      { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
+  |+ field "Flags" (bits ~width:4 bf_uint32be) (fun b -> b.bf32_flags)
+  |+ field "Channel" (bits ~width:6 bf_uint32be) (fun b -> b.bf32_chan)
+  |+ field "Seq" (bits ~width:14 bf_uint32be) (fun b -> b.bf32_seq)
+  |+ f_bf32_pri |> seal
 
 let bf32_struct = Codec.to_struct bf32_codec
 let bf32_size = Codec.wire_size bf32_codec
@@ -198,19 +183,18 @@ type bool_fields = {
   bl_code : int;
 }
 
-let bool_fields_codec, f_bool_active =
+let f_bool_active =
+  Codec.field "Active" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_active)
+
+let bool_fields_codec =
   let open Codec in
-  let r, f =
-    record "BoolFields" (fun active valid mode code ->
-        { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
-    |+ field "Active" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_active)
-  in
-  let r, _ =
-    r |+ field "Valid" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_valid)
-  in
-  let r, _ = r |+ field "Mode" (bits ~width:6 bf_uint8) (fun b -> b.bl_mode) in
-  let r, _ = r |+ field "Code" uint8 (fun b -> b.bl_code) in
-  (seal r, f)
+  record "BoolFields" (fun active valid mode code ->
+      { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
+  |+ f_bool_active
+  |+ field "Valid" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_valid)
+  |+ field "Mode" (bits ~width:6 bf_uint8) (fun b -> b.bl_mode)
+  |+ field "Code" uint8 (fun b -> b.bl_code)
+  |> seal
 
 let bool_fields_struct = Codec.to_struct bool_fields_codec
 let bool_fields_size = Codec.wire_size bool_fields_codec
@@ -241,36 +225,35 @@ type large_mixed = {
   lg_timestamp : int64;
 }
 
-let large_mixed_codec, f_mixed_timestamp =
+let f_mixed_timestamp =
+  Codec.field "Timestamp" uint64be (fun l -> l.lg_timestamp)
+
+let large_mixed_codec =
   let open Codec in
-  let r, _ =
-    record "LargeMixed"
-      (fun
-        sync version type_ spacecraft vcid count offset length crc timestamp ->
-        {
-          lg_sync = sync;
-          lg_version = version;
-          lg_type = type_;
-          lg_spacecraft = spacecraft;
-          lg_vcid = vcid;
-          lg_count = count;
-          lg_offset = offset;
-          lg_length = length;
-          lg_crc = crc;
-          lg_timestamp = timestamp;
-        })
-    |+ field "SyncMarker" uint32be (fun l -> l.lg_sync)
-  in
-  let r, _ = r |+ field "Version" uint8 (fun l -> l.lg_version) in
-  let r, _ = r |+ field "Type" uint8 (fun l -> l.lg_type) in
-  let r, _ = r |+ field "SpacecraftId" uint16be (fun l -> l.lg_spacecraft) in
-  let r, _ = r |+ field "VCID" uint8 (fun l -> l.lg_vcid) in
-  let r, _ = r |+ field "FrameCount" uint8 (fun l -> l.lg_count) in
-  let r, _ = r |+ field "DataOffset" uint16be (fun l -> l.lg_offset) in
-  let r, _ = r |+ field "DataLength" uint16be (fun l -> l.lg_length) in
-  let r, _ = r |+ field "CRC" uint32be (fun l -> l.lg_crc) in
-  let r, f = r |+ field "Timestamp" uint64be (fun l -> l.lg_timestamp) in
-  (seal r, f)
+  record "LargeMixed"
+    (fun sync version type_ spacecraft vcid count offset length crc timestamp ->
+      {
+        lg_sync = sync;
+        lg_version = version;
+        lg_type = type_;
+        lg_spacecraft = spacecraft;
+        lg_vcid = vcid;
+        lg_count = count;
+        lg_offset = offset;
+        lg_length = length;
+        lg_crc = crc;
+        lg_timestamp = timestamp;
+      })
+  |+ field "SyncMarker" uint32be (fun l -> l.lg_sync)
+  |+ field "Version" uint8 (fun l -> l.lg_version)
+  |+ field "Type" uint8 (fun l -> l.lg_type)
+  |+ field "SpacecraftId" uint16be (fun l -> l.lg_spacecraft)
+  |+ field "VCID" uint8 (fun l -> l.lg_vcid)
+  |+ field "FrameCount" uint8 (fun l -> l.lg_count)
+  |+ field "DataOffset" uint16be (fun l -> l.lg_offset)
+  |+ field "DataLength" uint16be (fun l -> l.lg_length)
+  |+ field "CRC" uint32be (fun l -> l.lg_crc)
+  |+ f_mixed_timestamp |> seal
 
 let large_mixed_struct = Codec.to_struct large_mixed_codec
 let large_mixed_size = Codec.wire_size large_mixed_codec
