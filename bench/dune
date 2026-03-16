@@ -5,13 +5,6 @@
  (modules memtrace)
  (libraries demo space wire memtrace))
 
-; Timing and allocation benchmark (always builds)
-
-(executable
- (name timing)
- (modules timing)
- (libraries space net wire unix))
-
 ; ── EverParse benchmark infrastructure (BUILD_EVERPARSE=1 only) ──
 
 ; Step 1: Generator — produces .3d files, runs EverParse, generates C/ML stubs
@@ -21,7 +14,7 @@
  (modules gen_stubs)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo space wire wire.c unix))
+ (libraries demo space net wire wire.c unix))
 
 ; Step 2: Run the generator to produce all artifacts
 
@@ -29,40 +22,30 @@
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (targets
-  (dir ep_schemas)
-  ep_stubs.c
-  ep_stubs.ml
-  ep_dispatch.ml)
+  (dir schemas)
+  c_stubs.c
+  c_stubs.ml)
  (deps gen_stubs.exe)
  (action
-  (run ./gen_stubs.exe ep_schemas)))
+  (run ./gen_stubs.exe schemas)))
 
-; Step 3: EverParse stubs library (C validation + timed loops + OCaml externals)
+; Step 3: C stubs library (EverParse validation + timed loops + OCaml externals)
 
 (library
- (name ep_stubs)
- (modules ep_stubs)
+ (name c_stubs)
+ (modules c_stubs)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (foreign_stubs
   (language c)
-  (names ep_stubs)
-  (flags :standard -I ep_schemas)))
+  (names c_stubs)
+  (flags :standard -I schemas)))
 
-; Step 4: Dispatch module (generated, maps names to functions)
-
-(library
- (name ep_dispatch)
- (modules ep_dispatch)
- (enabled_if
-  (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries ep_stubs))
-
-; Step 5: Performance benchmark — all 3 columns
+; Step 4: Benchmark — EverParse C vs OCaml FFI vs pure OCaml field access
 
 (executable
- (name perf)
- (modules perf)
+ (name bench)
+ (modules bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo space ep_dispatch wire unix))
+ (libraries demo space net c_stubs wire unix))

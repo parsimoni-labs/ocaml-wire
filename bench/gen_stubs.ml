@@ -5,16 +5,24 @@
 
     Outputs:
     - <schema_dir>/*.3d -- EverParse 3D schema files
-    - ep_stubs.c -- C validation stubs + noop stubs + timed C loops
-    - ep_stubs.ml -- OCaml externals for all stubs *)
+    - c_stubs.c -- C validation stubs + noop stubs + timed C loops
+    - c_stubs.ml -- OCaml externals for all stubs *)
 
-let schema_dir =
-  if Array.length Sys.argv > 1 then Sys.argv.(1) else "ep_schemas"
+let schema_dir = if Array.length Sys.argv > 1 then Sys.argv.(1) else "schemas"
 
-(* Only the schemas we actually benchmark: CLCW (space) + Ethernet/IPv4/TCP (net) *)
 let entries =
   [
+    (* Demo: synthetic schemas covering every Wire type *)
+    ("Minimal", Demo.minimal_struct, Demo.minimal_size);
+    ("Bitfield8", Demo.bf8_struct, Demo.bf8_size);
+    ("Bitfield16", Demo.bf16_struct, Demo.bf16_size);
+    ("BoolFields", Demo.bool_fields_struct, Demo.bool_fields_size);
+    ("Bitfield32", Demo.bf32_struct, Demo.bf32_size);
+    ("AllInts", Demo.all_ints_struct, Demo.all_ints_size);
+    ("LargeMixed", Demo.large_mixed_struct, Demo.large_mixed_size);
+    (* Space: real protocol *)
     ("CLCW", Space.clcw_struct, Space.clcw_size);
+    (* Net: TCP/IP headers *)
     ("Ethernet", Net.ethernet_struct, Net.ethernet_size);
     ("IPv4", Net.ipv4_struct, Net.ipv4_size);
     ("TCP", Net.tcp_struct, Net.tcp_size);
@@ -35,8 +43,8 @@ let () =
   Wire_c.generate_3d ~outdir:schema_dir schemas;
   Wire_c.run_everparse ~outdir:schema_dir schemas;
 
-  (* Step 2: Generate ep_stubs.c *)
-  let oc = open_out "ep_stubs.c" in
+  (* Step 2: Generate c_stubs.c *)
+  let oc = open_out "c_stubs.c" in
   output_string oc (Wire.to_c_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
 
@@ -83,8 +91,8 @@ let () =
     structs;
   close_out oc;
 
-  (* Step 3: Generate ep_stubs.ml *)
-  let oc = open_out "ep_stubs.ml" in
+  (* Step 3: Generate c_stubs.ml *)
+  let oc = open_out "c_stubs.ml" in
   output_string oc (Wire.to_ml_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
   pr "(* Noop FFI stubs *)\n\n";
@@ -100,4 +108,4 @@ let () =
   close_out oc;
 
   Printf.printf "Generated %d schemas in %s/\n" (List.length structs) schema_dir;
-  Printf.printf "Generated ep_stubs.c, ep_stubs.ml\n"
+  Printf.printf "Generated c_stubs.c, c_stubs.ml\n"

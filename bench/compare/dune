@@ -1,4 +1,0 @@
-(executable
- (name compare)
- (modules compare)
- (libraries net wire ethernet tcpip.ipv4 tcpip.tcp unix))

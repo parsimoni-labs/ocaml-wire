@@ -5,14 +5,12 @@
 ```
 make build              # dune build
 make test               # dune runtest
-make bench              # dune exec bench/timing.exe
-make bench-everparse    # BUILD_EVERPARSE=1 dune exec bench/perf.exe
-make bench-tcpip        # dune exec examples/tcpip/example.exe
+make bench              # BUILD_EVERPARSE=1 dune exec bench/bench.exe
 make memtrace           # MEMTRACE=trace.ctf dune exec bench/memtrace.exe && memtrace_hotspots trace.ctf
 make clean              # dune clean
 ```
 
-`make bench-everparse` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
+`make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
 
 ## Project structure
 
@@ -21,12 +19,11 @@ make clean              # dune clean
 - `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
-  - `examples/tcpip/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
+  - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
-  - `bench/timing.ml` -- decode vs zero-copy get/set timing and allocation
+  - `bench/bench.ml` -- field-level read/write: EverParse C vs OCaml FFI vs pure OCaml get/set
+  - `bench/gen_stubs.ml` -- generates C/OCaml stubs for EverParse comparison
   - `bench/memtrace.ml` -- allocation profiling
-  - `bench/perf.ml` -- EverParse C vs OCaml vs FFI comparison (space protocols)
-  - `bench/tcpip/` -- EverParse C vs OCaml vs FFI comparison (TCP/IP)
 - `fuzz/` -- Crowbar fuzz tests (`fuzz_wire.ml`) covering all DSL combinators
 - `test/` -- Alcotest unit tests and differential tests (`test/diff/`)
 
@@ -39,14 +36,13 @@ All C code generation flows through `Wire_c` (no duplication):
 
 ## Benchmarking principles
 
-Benchmarks compare four columns, all derived from the same Wire DSL definitions:
+Benchmarks compare field-level access, all derived from the same Wire DSL definitions:
 
-1. **Pure OCaml** -- `Wire.Codec.decode` and `Wire.Codec.get` (zero-copy). Always use ocaml-wire, never custom OCaml parsers.
-2. **EverParse C** -- generated verified C validator from `.3d` files, timed in a pure C loop.
-3. **OCaml→C FFI** -- OCaml calling the EverParse-generated C validator via generated stubs.
-4. **Existing C implementations** -- when available (e.g., lwip, mirage-tcpip). Never write custom C parsers.
+1. **EverParse C** -- generated verified C validator from `.3d` files, timed in a pure C loop.
+2. **OCaml→C FFI** -- OCaml calling the EverParse-generated C validator via generated stubs.
+3. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access, no record allocation).
 
-Never benchmark hand-written/custom parsers on either side. The point is to compare the Wire DSL's OCaml codegen against its 3D/EverParse C codegen, and optionally against existing third-party implementations.
+Every Wire type is covered: uint8, uint16be, uint32be, uint64be, bf_uint8, bf_uint16be, bf_uint32be, bool(bf1), and nested protocol traversals via byte_slice.
 
 ## Style
 

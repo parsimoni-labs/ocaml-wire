@@ -11,6 +11,9 @@ val ethernet_codec : ethernet Wire.Codec.t
 (** Codec for the 14-byte Ethernet II frame header including a zero-copy payload
     slice. *)
 
+val ethernet_struct : Wire.struct_
+(** Wire struct descriptor for EverParse code generation. *)
+
 val ethernet_size : int
 (** Wire size of an Ethernet II frame in bytes. *)
 
@@ -29,6 +32,9 @@ type ipv4
 
 val ipv4_codec : ipv4 Wire.Codec.t
 (** Codec for the 20-byte IPv4 header including a zero-copy payload slice. *)
+
+val ipv4_struct : Wire.struct_
+(** Wire struct descriptor for EverParse code generation. *)
 
 val ipv4_size : int
 (** Wire size of an IPv4 header in bytes. *)
@@ -55,6 +61,9 @@ type tcp
 val tcp_codec : tcp Wire.Codec.t
 (** Codec for the 20-byte TCP header. *)
 
+val tcp_struct : Wire.struct_
+(** Wire struct descriptor for EverParse code generation. *)
+
 val tcp_size : int
 (** Wire size of a TCP header in bytes. *)
 
@@ -76,6 +85,9 @@ type udp
 
 val udp_codec : udp Wire.Codec.t
 (** Codec for the 8-byte UDP header. *)
+
+val udp_struct : Wire.struct_
+(** Wire struct descriptor for EverParse code generation. *)
 
 val udp_size : int
 (** Wire size of a UDP header in bytes. *)

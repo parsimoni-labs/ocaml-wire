@@ -7,6 +7,9 @@ type minimal = { m_value : int }
 val minimal_codec : minimal Wire.Codec.t
 (** Codec for the minimal 1-byte schema. *)
 
+val f_minimal_value : (int, minimal) Wire.Codec.field
+(** Zero-copy field accessor for the Value field. *)
+
 val minimal_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -33,6 +36,9 @@ type all_ints = {
 val all_ints_codec : all_ints Wire.Codec.t
 (** Codec covering all integer widths and endiannesses. *)
 
+val f_ints_u64be : (int64, all_ints) Wire.Codec.field
+(** Zero-copy field accessor for the U64BE field (boxed int64). *)
+
 val all_ints_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -52,6 +58,9 @@ type bf8 = { bf8_tag : int; bf8_value : int }
 val bf8_codec : bf8 Wire.Codec.t
 (** Codec with two bitfields packed into a single uint8. *)
 
+val f_bf8_value : (int, bf8) Wire.Codec.field
+(** Zero-copy field accessor for the Value bitfield (5 bits in bf_uint8). *)
+
 val bf8_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -70,6 +79,9 @@ type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
 val bf16_codec : bf16 Wire.Codec.t
 (** Codec with three bitfields packed into a uint16be. *)
+
+val f_bf16_id : (int, bf16) Wire.Codec.field
+(** Zero-copy field accessor for the Id bitfield (11 bits in bf_uint16be). *)
 
 val bf16_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
@@ -95,6 +107,10 @@ type bf32 = {
 val bf32_codec : bf32 Wire.Codec.t
 (** Codec with four bitfields packed into a uint32be. *)
 
+val f_bf32_pri : (int, bf32) Wire.Codec.field
+(** Zero-copy field accessor for the Priority bitfield (8 bits in bf_uint32be).
+*)
+
 val bf32_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -118,6 +134,10 @@ type bool_fields = {
 
 val bool_fields_codec : bool_fields Wire.Codec.t
 (** Codec with boolean and integer bitfields in a uint16be. *)
+
+val f_bool_active : (bool, bool_fields) Wire.Codec.field
+(** Zero-copy field accessor for the Active field (bool from bf1 in bf_uint8).
+*)
 
 val bool_fields_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
@@ -148,6 +168,10 @@ type large_mixed = {
 
 val large_mixed_codec : large_mixed Wire.Codec.t
 (** Codec mixing uint8/16/32/64 and bitfield groups. *)
+
+val f_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
+(** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
+    fields). *)
 
 val large_mixed_struct : Wire.struct_
 (** Struct definition for 3D codegen. *)
