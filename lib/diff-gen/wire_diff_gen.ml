@@ -22,7 +22,7 @@ let run_everparse ~schema_dir =
   let cmd =
     Fmt.str
       "cd %s && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" \
-       || exit 1; done"
+       > /dev/null 2>&1 || exit 1; done"
       schema_dir
   in
   let ret = Sys.command cmd in

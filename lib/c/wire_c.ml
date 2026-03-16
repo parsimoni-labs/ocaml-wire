@@ -67,7 +67,9 @@ let run_everparse ~outdir schemas =
   List.iter
     (fun s ->
       let f = s.name ^ ".3d" in
-      let cmd = Fmt.str "cd %s && %s --batch %s > /dev/null" outdir exe f in
+      let cmd =
+        Fmt.str "cd %s && %s --batch %s > /dev/null 2>&1" outdir exe f
+      in
       let ret = Sys.command cmd in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret)
     schemas;

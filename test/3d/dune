@@ -17,10 +17,10 @@
   CLCW.3d
   SpacePacket.3d
   TMFrame.3d
-  NetEthernet.3d
-  NetIPv4.3d
-  NetTCP.3d
-  NetUDP.3d)
+  Ethernet.3d
+  IPv4.3d
+  TCP.3d
+  UDP.3d)
  (deps gen_3d.exe)
  (action
   (run ./gen_3d.exe)))
@@ -32,4 +32,4 @@
  (deps Bitfields.3d Enumerations.3d FieldDependence.3d)
  (action
   (bash
-   "~/.local/everparse/bin/3d.exe --version && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" || exit 1; done")))
+   "~/.local/everparse/bin/3d.exe --version && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" > /dev/null 2>&1 || exit 1; done")))
