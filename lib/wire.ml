@@ -684,37 +684,57 @@ let ctx_get ctx name =
   | Some v -> v
   | None -> failwith ("unbound field: " ^ name)
 
-(* Decoder state - tracks position within slices *)
+(* Decoder state — destructured slice fields à la Bünzli.
+   Avoids repeated Slice.bytes/first/length accessor calls in the hot path. *)
 type decoder = {
   reader : Br.t;
-  mutable slice : Slice.t;
-  mutable slice_pos : int;
+  mutable i : bytes;
+  mutable i_next : int;
+  mutable i_max : int;
+  mutable is_eod : bool;
   mutable position : int;
 }
 
-let decoder reader = { reader; slice = Slice.eod; slice_pos = 0; position = 0 }
+let decoder reader =
+  {
+    reader;
+    i = Bytes.empty;
+    i_next = 0;
+    i_max = -1;
+    is_eod = true;
+    position = 0;
+  }
 
-let refill dec =
-  dec.slice <- Br.read dec.reader;
-  dec.slice_pos <- 0
+let[@inline] set_slice dec slice =
+  if Slice.is_eod slice then begin
+    dec.i <- Bytes.empty;
+    dec.i_next <- 0;
+    dec.i_max <- -1;
+    dec.is_eod <- true
+  end
+  else begin
+    dec.i <- Slice.bytes slice;
+    dec.i_next <- Slice.first slice;
+    dec.i_max <- Slice.first slice + Slice.length slice - 1;
+    dec.is_eod <- false
+  end
 
-let slice_get_byte slice pos =
-  Bytes.get_uint8 (Slice.bytes slice) (Slice.first slice + pos)
+let refill dec = set_slice dec (Br.read dec.reader)
 
 let read_byte dec =
-  if dec.slice_pos >= Slice.length dec.slice then begin
+  if dec.i_next > dec.i_max then begin
     refill dec;
-    if Slice.is_eod dec.slice then None
+    if dec.is_eod then None
     else begin
-      let b = slice_get_byte dec.slice dec.slice_pos in
-      dec.slice_pos <- dec.slice_pos + 1;
+      let b = Bytes.get_uint8 dec.i dec.i_next in
+      dec.i_next <- dec.i_next + 1;
       dec.position <- dec.position + 1;
       Some b
     end
   end
   else begin
-    let b = slice_get_byte dec.slice dec.slice_pos in
-    dec.slice_pos <- dec.slice_pos + 1;
+    let b = Bytes.get_uint8 dec.i dec.i_next in
+    dec.i_next <- dec.i_next + 1;
     dec.position <- dec.position + 1;
     Some b
   end
@@ -726,24 +746,18 @@ let read_bytes dec n =
     let buf = Bytes.create n in
     let rec loop off remaining =
       if remaining = 0 then Ok buf
-      else begin
-        (* Refill if needed *)
-        if dec.slice_pos >= Slice.length dec.slice then begin
-          refill dec;
-          if Slice.is_eod dec.slice then
-            Error (Unexpected_eof { expected = n; got = off })
-          else loop off remaining
-        end
-        else
-          let available = Slice.length dec.slice - dec.slice_pos in
-          let to_copy = min available remaining in
-          Bytes.blit (Slice.bytes dec.slice)
-            (Slice.first dec.slice + dec.slice_pos)
-            buf off to_copy;
-          dec.slice_pos <- dec.slice_pos + to_copy;
-          dec.position <- dec.position + to_copy;
-          loop (off + to_copy) (remaining - to_copy)
+      else if dec.i_next > dec.i_max then begin
+        refill dec;
+        if dec.is_eod then Error (Unexpected_eof { expected = n; got = off })
+        else loop off remaining
       end
+      else
+        let available = dec.i_max - dec.i_next + 1 in
+        let to_copy = min available remaining in
+        Bytes.blit dec.i dec.i_next buf off to_copy;
+        dec.i_next <- dec.i_next + to_copy;
+        dec.position <- dec.position + to_copy;
+        loop (off + to_copy) (remaining - to_copy)
     in
     loop 0 n
 
@@ -751,17 +765,15 @@ let read_bytes dec n =
 let read_all dec =
   let buf = Buffer.create 256 in
   let rec loop () =
-    if dec.slice_pos >= Slice.length dec.slice then begin
+    if dec.i_next > dec.i_max then begin
       refill dec;
-      if Slice.is_eod dec.slice then Buffer.contents buf else loop ()
+      if dec.is_eod then Buffer.contents buf else loop ()
     end
     else begin
-      let slice_bytes = Slice.bytes dec.slice in
-      let first = Slice.first dec.slice + dec.slice_pos in
-      let len = Slice.length dec.slice - dec.slice_pos in
-      Buffer.add_subbytes buf slice_bytes first len;
+      let len = dec.i_max - dec.i_next + 1 in
+      Buffer.add_subbytes buf dec.i dec.i_next len;
       dec.position <- dec.position + len;
-      dec.slice_pos <- Slice.length dec.slice;
+      dec.i_next <- dec.i_max + 1;
       loop ()
     end
   in
