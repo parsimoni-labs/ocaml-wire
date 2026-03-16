@@ -685,7 +685,9 @@ let ctx_get ctx name =
   | None -> failwith ("unbound field: " ^ name)
 
 (* Decoder state — destructured slice fields à la Bünzli.
-   Avoids repeated Slice.bytes/first/length accessor calls in the hot path. *)
+   Avoids repeated Slice.bytes/first/length accessor calls in the hot path.
+   The overlap buffer handles multi-byte values that straddle slice boundaries
+   without allocating. *)
 type decoder = {
   reader : Br.t;
   mutable i : bytes;
@@ -693,6 +695,7 @@ type decoder = {
   mutable i_max : int;
   mutable is_eod : bool;
   mutable position : int;
+  overlap : bytes; (* fixed 8-byte buffer for cross-slice reads *)
 }
 
 let decoder reader =
@@ -703,6 +706,7 @@ let decoder reader =
     i_max = -1;
     is_eod = true;
     position = 0;
+    overlap = Bytes.create 8;
   }
 
 let[@inline] set_slice dec slice =
@@ -739,9 +743,55 @@ let[@inline] read_byte dec =
     Some b
   end
 
-(* Read exactly n bytes *)
+(* Read n bytes for small fixed-size fields (n <= 8).
+   Fast path: all bytes in current slice — return (buf, off) pointing directly
+   into the slice data, zero allocation.
+   Slow path: straddle — copy into the overlap buffer, zero allocation. *)
+let[@inline] read_small dec n =
+  let available = dec.i_max - dec.i_next + 1 in
+  if available >= n then begin
+    (* Fast path: entirely within current slice *)
+    let buf = dec.i in
+    let off = dec.i_next in
+    dec.i_next <- dec.i_next + n;
+    dec.position <- dec.position + n;
+    Ok (buf, off)
+  end
+  else
+    (* Slow path: straddle slice boundary, use overlap buffer *)
+    let rec fill off remaining =
+      if remaining = 0 then begin
+        dec.position <- dec.position + n;
+        Ok (dec.overlap, 0)
+      end
+      else if dec.i_next > dec.i_max then begin
+        refill dec;
+        if dec.is_eod then Error (Unexpected_eof { expected = n; got = off })
+        else fill off remaining
+      end
+      else
+        let avail = dec.i_max - dec.i_next + 1 in
+        let to_copy = min avail remaining in
+        Bytes.blit dec.i dec.i_next dec.overlap off to_copy;
+        dec.i_next <- dec.i_next + to_copy;
+        fill (off + to_copy) (remaining - to_copy)
+    in
+    (* Copy what's available from current slice first *)
+    let have = max 0 available in
+    if have > 0 then Bytes.blit dec.i dec.i_next dec.overlap 0 have;
+    dec.i_next <- dec.i_next + have;
+    fill have (n - have)
+
+(* Read exactly n bytes into a fresh buffer (for variable-size fields). *)
 let read_bytes dec n =
   if n = 0 then Ok Bytes.empty
+  else if n <= 8 then
+    (* Small reads: use overlap, then copy out since caller owns the result *)
+    match read_small dec n with
+    | Ok (buf, off) ->
+        if buf == dec.overlap then Ok (Bytes.sub buf off n)
+        else Ok (Bytes.sub buf off n)
+    | Error e -> Error e
   else
     let buf = Bytes.create n in
     let rec loop off remaining =
@@ -834,16 +884,16 @@ let bf_compatible base1 base2 =
 
 let bf_read_word dec base =
   let size = bf_base_size base in
-  match read_bytes dec size with
+  match read_small dec size with
   | Error e -> Error e
-  | Ok buf ->
+  | Ok (buf, off) ->
       let v =
         match base with
-        | BF_U8 -> Bytes.get_uint8 buf 0
-        | BF_U16 Little -> Bytes.get_uint16_le buf 0
-        | BF_U16 Big -> Bytes.get_uint16_be buf 0
-        | BF_U32 Little -> Int32.to_int (Bytes.get_int32_le buf 0)
-        | BF_U32 Big -> Int32.to_int (Bytes.get_int32_be buf 0)
+        | BF_U8 -> Bytes.get_uint8 buf off
+        | BF_U16 Little -> Bytes.get_uint16_le buf off
+        | BF_U16 Big -> Bytes.get_uint16_be buf off
+        | BF_U32 Little -> Int32.to_int (Bytes.get_int32_le buf off)
+        | BF_U32 Big -> Int32.to_int (Bytes.get_int32_be buf off)
       in
       Ok v
 
@@ -864,10 +914,10 @@ let parse_bits dec base width =
   | Error e -> Error e
   | Ok v -> Ok (v land ((1 lsl width) - 1))
 
-(* Helper: parse fixed-size integer from decoder *)
+(* Helper: parse fixed-size integer from decoder — zero allocation via read_small *)
 let parse_int dec n get ctx =
-  match read_bytes dec n with
-  | Ok buf -> Ok (get buf 0, ctx)
+  match read_small dec n with
+  | Ok (buf, off) -> Ok (get buf off, ctx)
   | Error e -> Error e
 
 (* Parse a type from a decoder *)
