@@ -89,7 +89,29 @@ let field_dependence () =
       typedef ~entrypoint:true s2;
     ]
 
+let gen_struct name s =
+  let m = module_ name [ typedef ~entrypoint:true s ] in
+  to_3d_file (name ^ ".3d") m
+
 let () =
   to_3d_file "Bitfields.3d" (bitfields ());
   to_3d_file "Enumerations.3d" (enumerations ());
-  to_3d_file "FieldDependence.3d" (field_dependence ())
+  to_3d_file "FieldDependence.3d" (field_dependence ());
+
+  (* Demo schemas *)
+  gen_struct "Minimal" Demo.minimal_struct;
+  gen_struct "AllInts" Demo.all_ints_struct;
+  gen_struct "Bitfield8" Demo.bf8_struct;
+  gen_struct "Bitfield16" Demo.bf16_struct;
+  gen_struct "Bitfield32" Demo.bf32_struct;
+  gen_struct "BoolFields" Demo.bool_fields_struct;
+  gen_struct "LargeMixed" Demo.large_mixed_struct;
+
+  (* Space schemas *)
+  gen_struct "CLCW" Space.clcw_struct;
+  gen_struct "SpacePacket" Space.packet_struct;
+  gen_struct "TMFrame" Space.tm_frame_struct;
+
+  (* Net schemas — also exercises all_schemas and all_structs *)
+  List.iter (fun s -> gen_struct (struct_name s) s) Net.all_structs;
+  assert (List.length Net.all_schemas = List.length Net.all_structs)

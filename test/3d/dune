@@ -1,9 +1,26 @@
 (executable
  (name gen_3d)
- (libraries wire))
+ (libraries wire demo space net))
 
 (rule
- (targets Bitfields.3d Enumerations.3d FieldDependence.3d)
+ (targets
+  Bitfields.3d
+  Enumerations.3d
+  FieldDependence.3d
+  Minimal.3d
+  AllInts.3d
+  Bitfield8.3d
+  Bitfield16.3d
+  Bitfield32.3d
+  BoolFields.3d
+  LargeMixed.3d
+  CLCW.3d
+  SpacePacket.3d
+  TMFrame.3d
+  Ethernet.3d
+  IPv4.3d
+  TCP.3d
+  UDP.3d)
  (deps gen_3d.exe)
  (action
   (run ./gen_3d.exe)))

@@ -38,10 +38,36 @@ let test_roundtrip_struct () =
   | Ok rt -> Alcotest.(check string) "roundtrip" buf rt
   | Error _ -> Alcotest.fail "roundtrip failed"
 
+let test_write () =
+  let s = mk_schema () in
+  let v = (7, 1000) in
+  let result = Wire_diff.write s v in
+  (* mock_c_write accepts any 3-byte buffer, so a valid 3-byte encode matches *)
+  Alcotest.(check bool) "write result" true (result = Wire_diff.Match)
+
+let test_full_roundtrip () =
+  let s = mk_schema () in
+  let v = (3, 512) in
+  let result = Wire_diff.full_roundtrip s v in
+  Alcotest.(check bool) "full_roundtrip result" true (result = Wire_diff.Match)
+
+let test_pack () =
+  let s = mk_schema () in
+  let pt = Wire_diff.pack s ~wire_size:3 in
+  Alcotest.(check string) "pack name" "Simple" pt.Wire_diff.name;
+  Alcotest.(check int) "pack wire_size" 3 pt.Wire_diff.wire_size;
+  (* test_read on a valid 3-byte buffer should match *)
+  let buf = "\x01\x01\x00" in
+  let result = pt.Wire_diff.test_read buf in
+  Alcotest.(check bool) "pack test_read" true (result = Wire_diff.Match)
+
 let suite =
   ( "wire_diff",
     [
       Alcotest.test_case "read match" `Quick test_read_match;
       Alcotest.test_case "read both failed" `Quick test_read_both_failed;
       Alcotest.test_case "roundtrip struct" `Quick test_roundtrip_struct;
+      Alcotest.test_case "write" `Quick test_write;
+      Alcotest.test_case "full_roundtrip" `Quick test_full_roundtrip;
+      Alcotest.test_case "pack" `Quick test_pack;
     ] )

@@ -279,13 +279,19 @@ let () =
   Fmt.pr "\n";
 
   (* ── Part 3: Nested protocol ── *)
+  (* Sanity check: wire sizes match codec definitions *)
+  assert (inner_cmd_size = 4);
+  assert (outer_hdr_size = 8);
+
   let nested_buf = (nested_data 1).(0) in
   let nested_slice =
     Bs.make nested_buf ~first:0 ~length:(Bytes.length nested_buf)
   in
 
   let widths =
-    table_header "Nested Protocol (outer 4B + inner 4B)"
+    table_header
+      (Fmt.str "Nested Protocol (outer %dB + inner %dB)" outer_hdr_size
+         inner_cmd_size)
       [ ("Operation", 38); ("ns/op", 8); ("alloc", 12) ]
   in
 
@@ -527,7 +533,171 @@ let () =
 
   Fmt.pr "\n";
 
-  (* ── Part 5: Streaming parse/encode (uint32be = 4B, same as CLCW) ── *)
+  (* ── Part 5: UDP nested zero-copy (Ethernet -> IPv4 -> UDP) ── *)
+  let udp_buf = (Net.udp_frame_data 1).(0) in
+  let udp_frame = Bs.make udp_buf ~first:0 ~length:(Bytes.length udp_buf) in
+
+  (* Sanity check: sizes *)
+  assert (Net.ethernet_payload_size >= Net.ipv4_size);
+  assert (Net.ipv4_payload_size >= Net.udp_size);
+
+  let widths =
+    table_header
+      (Fmt.str "UDP/IP Nested Zero-Copy (Ethernet %dB -> IPv4 %dB -> UDP %dB)"
+         Net.ethernet_size Net.ipv4_size Net.udp_size)
+      [ ("Operation", 42); ("ns/op", 8); ("alloc", 12) ]
+  in
+
+  (* Decode Ethernet header from UDP frame *)
+  let udp_eth_decode_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          ignore (Codec.decode Net.ethernet_codec udp_buf 0)
+        done)
+  in
+  let udp_eth_decode_alloc =
+    alloc_words n (fun () -> ignore (Codec.decode Net.ethernet_codec udp_buf 0))
+  in
+  table_row widths
+    [
+      Fmt.str "Ethernet decode (%dB + %dB payload)" Net.ethernet_size
+        Net.ethernet_payload_size;
+      Fmt.str "%.1f" udp_eth_decode_ns;
+      Fmt.str "%.0fw" udp_eth_decode_alloc;
+    ];
+
+  (* Navigate to the IPv4 and UDP sub-slices *)
+  let udp_ip_slice = Codec.get Net.ethernet_codec Net.f_eth_payload udp_frame in
+  let udp_udp_slice = Codec.get Net.ipv4_codec Net.f_ip_payload udp_ip_slice in
+
+  (* Log the src/dst addresses from the test data using ipv4_addr *)
+  let src_ip = Codec.get Net.ipv4_codec Net.f_ip_src udp_ip_slice in
+  let dst_ip = Codec.get Net.ipv4_codec Net.f_ip_dst udp_ip_slice in
+  assert (src_ip = Net.ipv4_addr 192 168 1 100);
+  assert (dst_ip = Net.ipv4_addr 10 0 0 1);
+
+  (* Zero-copy get of UDP source port *)
+  let udp_src_get_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          ignore (Codec.get Net.udp_codec Net.f_udp_src_port udp_udp_slice)
+        done)
+  in
+  table_row widths
+    [
+      "Codec.get UDP.src_port (from sub-slice)";
+      Fmt.str "%.1f" udp_src_get_ns;
+      "0w";
+    ];
+
+  (* Zero-copy get of UDP destination port *)
+  let udp_dst_get_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          ignore (Codec.get Net.udp_codec Net.f_udp_dst_port udp_udp_slice)
+        done)
+  in
+  table_row widths
+    [
+      "Codec.get UDP.dst_port (from sub-slice)";
+      Fmt.str "%.1f" udp_dst_get_ns;
+      "0w";
+    ];
+
+  (* Zero-copy get of UDP length *)
+  let udp_length_get_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          ignore (Codec.get Net.udp_codec Net.f_udp_length udp_udp_slice)
+        done)
+  in
+  table_row widths
+    [
+      "Codec.get UDP.length (from sub-slice)";
+      Fmt.str "%.1f" udp_length_get_ns;
+      "0w";
+    ];
+
+  Fmt.pr "\n";
+
+  (* 3-layer traversal: frame -> UDP.dst_port *)
+  let udp_three_layer_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          let ip = Codec.get Net.ethernet_codec Net.f_eth_payload udp_frame in
+          let udp = Codec.get Net.ipv4_codec Net.f_ip_payload ip in
+          ignore (Codec.get Net.udp_codec Net.f_udp_dst_port udp)
+        done)
+  in
+  let udp_three_layer_alloc =
+    alloc_words n (fun () ->
+        let ip = Codec.get Net.ethernet_codec Net.f_eth_payload udp_frame in
+        let udp = Codec.get Net.ipv4_codec Net.f_ip_payload ip in
+        ignore (Codec.get Net.udp_codec Net.f_udp_dst_port udp))
+  in
+  table_row widths
+    [
+      "3-layer: frame -> UDP.dst_port";
+      Fmt.str "%.1f" udp_three_layer_ns;
+      Fmt.str "%.0fw" udp_three_layer_alloc;
+    ];
+
+  (* 3-layer traversal using sub+get_raw: zero allocation *)
+  let udp_three_layer_raw_ns =
+    time_ns n (fun () ->
+        for _ = 1 to n do
+          let ip_off =
+            Codec.sub Net.ethernet_codec Net.f_eth_payload udp_buf 0
+          in
+          let udp_off =
+            Codec.sub Net.ipv4_codec Net.f_ip_payload udp_buf ip_off
+          in
+          ignore
+            (Codec.get_raw Net.udp_codec Net.f_udp_dst_port udp_buf udp_off)
+        done)
+  in
+  let udp_three_layer_raw_alloc =
+    alloc_words n (fun () ->
+        let ip_off = Codec.sub Net.ethernet_codec Net.f_eth_payload udp_buf 0 in
+        let udp_off =
+          Codec.sub Net.ipv4_codec Net.f_ip_payload udp_buf ip_off
+        in
+        ignore (Codec.get_raw Net.udp_codec Net.f_udp_dst_port udp_buf udp_off))
+  in
+  table_row widths
+    [
+      "3-layer: sub+get_raw -> UDP.dst_port";
+      Fmt.str "%.1f" udp_three_layer_raw_ns;
+      Fmt.str "%.0fw" udp_three_layer_raw_alloc;
+    ];
+
+  table_row widths
+    [
+      "  sub+get_raw vs Ethernet decode";
+      Fmt.str "%.0fx" (udp_eth_decode_ns /. udp_three_layer_raw_ns);
+      Fmt.str "%.0fw->0w" udp_eth_decode_alloc;
+    ];
+
+  (* Wire size summary row *)
+  table_row widths
+    [
+      Fmt.str "  sizes: Eth=%dB IPv4=%dB TCP=%dB UDP=%dB" Net.ethernet_size
+        Net.ipv4_size Net.tcp_size Net.udp_size;
+      "-";
+      "-";
+    ];
+
+  (* IPv4 address format sanity check *)
+  table_row widths
+    [
+      Fmt.str "  src=%a dst=%a" Net.pp_ipv4_addr src_ip Net.pp_ipv4_addr dst_ip;
+      "-";
+      "-";
+    ];
+
+  Fmt.pr "\n";
+
+  (* ── Part 6: Streaming parse/encode (uint32be = 4B, same as CLCW) ── *)
   let widths =
     table_header "Streaming Parse/Encode (uint32be 4B)"
       [ ("Operation", 42); ("ns/op", 8); ("alloc", 12) ]
