@@ -561,29 +561,6 @@ val encode_to_bytes : 'a typ -> 'a -> bytes
 val encode_to_string : 'a typ -> 'a -> string
 (** [encode_to_string typ v] encodes [v] to a string. *)
 
-(** {1 Typed Record Codec}
-
-    Define typed record schemas for encoding and decoding fixed-size binary
-    structs. Uses a Bunzli-style compositional API with closure chaining for
-    zero intermediate allocations.
-
-    {2 Example}
-
-    {[
-      type packet = { version : int; length : int }
-
-      let f_version = Wire.Codec.field "version" uint8 (fun p -> p.version)
-      let f_length = Wire.Codec.field "length" uint16be (fun p -> p.length)
-
-      let codec =
-        let open Wire.Codec in
-        record "Packet" (fun version length -> { version; length })
-        |+ f_version |+ f_length |> seal
-
-      (* Zero-copy field access *)
-      let get_length = Wire.Staged.unstage (Wire.Codec.get codec f_length)
-    ]} *)
-
 module Codec : sig
   type ('a, 'r) field
   (** A field specification for a value of type ['a] in a record of type ['r].
