@@ -113,25 +113,42 @@ let run_zero_copy () =
     done
   done
 
+let run_clcw_polling () =
+  let data = clcw_data n_values in
+  let get_lockout =
+    Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_lockout)
+  in
+  let get_wait = Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_wait) in
+  let get_retransmit =
+    Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_retransmit)
+  in
+  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_report) in
+  Fmt.pr "  CLCW polling (4 bitfield reads per word)...\n%!";
+  for _ = 1 to iterations do
+    for i = 0 to Array.length data - 1 do
+      let buf = data.(i) in
+      let lockout = get_lockout buf 0 in
+      let wait = get_wait buf 0 in
+      let retransmit = get_retransmit buf 0 in
+      let report = get_report buf 0 in
+      ignore (Sys.opaque_identity (lockout + wait + retransmit + report))
+    done
+  done
+
 let () =
   Memtrace.trace_if_requested ~context:"wire-codecs" ();
   let filter = if Array.length Sys.argv > 1 then Some Sys.argv.(1) else None in
   Fmt.pr "Wire Codec memtrace profiling\n%!";
   Fmt.pr "(%d iterations x %d values)\n\n%!" iterations n_values;
+  let filter_matches s =
+    match filter with
+    | None | Some "all" -> true
+    | Some f -> String.lowercase_ascii f = String.lowercase_ascii s
+  in
   List.iter
-    (fun (Any s as any) ->
-      match filter with
-      | Some f
-        when String.lowercase_ascii f <> "all"
-             && String.lowercase_ascii f <> String.lowercase_ascii s.name ->
-          ()
-      | _ -> run_schema any)
+    (fun (Any s as any) -> if filter_matches s.name then run_schema any)
     all_schemas;
   Fmt.pr "\n";
-  (match filter with
-  | Some f
-    when String.lowercase_ascii f <> "all" && String.lowercase_ascii f <> "clcw"
-    ->
-      ()
-  | _ -> run_zero_copy ());
+  if filter_matches "clcw" then run_zero_copy ();
+  if filter_matches "polling" || filter_matches "clcw" then run_clcw_polling ();
   Fmt.pr "\nDone.\n"
