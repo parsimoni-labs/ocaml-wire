@@ -1,19 +1,28 @@
+; ── Pure C scenario baselines (always build) ──
+
+(library
+ (name c_scenarios)
+ (modules c_scenarios)
+ (foreign_stubs
+  (language c)
+  (names c_scenarios)))
+
 ; ── Realistic scenario benchmarks (always build) ──
 
 (executable
  (name bench_routing)
  (modules bench_routing)
- (libraries space wire unix fmt))
+ (libraries space wire c_scenarios unix fmt))
 
 (executable
  (name bench_gateway)
  (modules bench_gateway)
- (libraries space net wire unix fmt))
+ (libraries space wire c_scenarios unix fmt))
 
 (executable
  (name bench_clcw)
  (modules bench_clcw)
- (libraries space wire unix fmt))
+ (libraries space wire c_scenarios unix fmt))
 
 ; Memtrace allocation profiling (always builds)
 

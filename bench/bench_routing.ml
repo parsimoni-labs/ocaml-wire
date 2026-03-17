@@ -7,7 +7,7 @@
       DataLength, pass payload pointer to handler (no copy)
     - Measure packets/sec and MB/s of payload delivered
 
-    Compares Wire zero-copy get vs hand-written OCaml Bytes (shift/mask). *)
+    Compares: pure C (shift/mask) vs Wire OCaml (Codec.get) vs hand OCaml. *)
 
 module C = Wire.Codec
 
@@ -30,7 +30,6 @@ let payload_size_of_apid apid =
 (* Generate a contiguous buffer of n variable-size Space Packets. Returns
    (buf, n_packets, total_payload_bytes). *)
 let generate_stream n =
-  (* First pass: compute total size *)
   let total = ref 0 in
   let hdr = Space.packet_size in
   for i = 0 to n - 1 do
@@ -38,31 +37,27 @@ let generate_stream n =
     total := !total + hdr + payload_size_of_apid apid
   done;
   let buf = Bytes.create !total in
-  (* Second pass: fill packets *)
   let off = ref 0 in
   let payload_total = ref 0 in
   for i = 0 to n - 1 do
     let apid = apid_of_index i in
     let plen = payload_size_of_apid apid in
-    (* CCSDS primary header: 3 uint16be words *)
-    let w0 = (0 lsl 13) lor (0 lsl 12) lor (1 lsl 11) lor apid in
+    let w0 = (1 lsl 11) lor apid in
     Bytes.set_uint16_be buf !off w0;
     let w1 = (3 lsl 14) lor (i mod 16384) in
     Bytes.set_uint16_be buf (!off + 2) w1;
-    (* DataLength = payload bytes - 1 per CCSDS convention *)
     Bytes.set_uint16_be buf (!off + 4) (plen - 1);
     off := !off + hdr + plen;
     payload_total := !payload_total + plen
   done;
   (buf, !total, !payload_total)
 
-(* Routing table: array indexed by APID (2048 entries) *)
 let routing_table =
   Array.init 2048 (fun apid ->
-      if apid < 256 then 0 (* HK handler *)
-      else if apid < 1024 then 1 (* science handler *)
-      else if apid < 1536 then 2 (* diagnostic handler *)
-      else 3 (* idle handler *))
+      if apid < 256 then 0
+      else if apid < 1024 then 1
+      else if apid < 1536 then 2
+      else 3)
 
 let handler_counts = Array.make 4 0
 
@@ -91,11 +86,20 @@ let () =
 
   let hdr = Space.packet_size in
 
-  (* Wire: zero-copy field access (partial-apply get outside loop) *)
+  (* Pure C: shift/mask in tight loop *)
+  let c_ns = C_scenarios.routing buf n in
+  let c_dt = float c_ns /. 1e9 in
+  Fmt.pr "  %-50s %5.1f ns/pkt  %5.1f Mpkt/s  %6.0f MB/s\n"
+    "C: shift/mask + dispatch (tight loop)"
+    (float c_ns /. float n)
+    (float n /. c_dt /. 1e6)
+    (float payload_bytes /. c_dt /. 1e6);
+
+  (* Wire (staged): partial-apply get outside loop *)
   let get_apid = C.get Space.packet_codec Space.f_sp_apid in
   let get_seq = C.get Space.packet_codec Space.f_sp_seq_count in
   let get_dlen = C.get Space.packet_codec Space.f_sp_data_len in
-  time "wire: get APID + SeqCount + DataLen + dispatch" (fun () ->
+  time "wire (staged): get APID + SeqCount + DataLen" (fun () ->
       let off = ref 0 in
       for _ = 1 to n do
         let o = !off in
@@ -106,7 +110,19 @@ let () =
         off := o + hdr + dlen + 1
       done);
 
-  (* Hand-written: hardcoded offsets + shift/mask *)
+  (* Wire (naive): full 4-arg get inside loop *)
+  time "wire (naive): Codec.get codec field buf off" (fun () ->
+      let off = ref 0 in
+      for _ = 1 to n do
+        let o = !off in
+        let apid = C.get Space.packet_codec Space.f_sp_apid buf o in
+        let _seq = C.get Space.packet_codec Space.f_sp_seq_count buf o in
+        let dlen = C.get Space.packet_codec Space.f_sp_data_len buf o in
+        dispatch routing_table.(apid);
+        off := o + hdr + dlen + 1
+      done);
+
+  (* Hand-written OCaml: hardcoded offsets + shift/mask *)
   time "hand: Bytes.get_uint16_be + shift/mask + dispatch" (fun () ->
       let off = ref 0 in
       for _ = 1 to n do

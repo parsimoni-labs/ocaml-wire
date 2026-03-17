@@ -6,10 +6,7 @@
     - Compare with expected sequence number
     - Flag anomaly on mismatch or error flags set
 
-    All 4 reads are from a single 32-bit word (bf_uint32be), exercising the
-    bitfield closure dispatch path.
-
-    Compares Wire zero-copy get vs hand-written OCaml Bytes (shift/mask). *)
+    Compares: pure C (shift/mask) vs Wire OCaml (Codec.get) vs hand OCaml. *)
 
 module C = Wire.Codec
 
@@ -28,6 +25,16 @@ let time label f =
 let () =
   let words = Space.clcw_data n_words in
   Fmt.pr "CLCW polling loop (%d words, %dB each)\n\n" n_words Space.clcw_size;
+
+  (* Pure C: single 32-bit read + shift/mask *)
+  let c_ns = C_scenarios.clcw words n_words in
+  let c_anomalies = C_scenarios.clcw_anomalies () in
+  let c_dt = float c_ns /. 1e9 in
+  Fmt.pr "  %-50s %6.1f ns/word  %5.1f Mcheck/s  (%d anomalies)\n"
+    "C: uint32 read + shift/mask x4 (tight loop)"
+    (float c_ns /. float n_words)
+    (float n_words /. c_dt /. 1e6)
+    c_anomalies;
 
   (* Wire: bitfield accessors (partial-apply get outside loop) *)
   let get_lockout = C.get Space.clcw_codec Space.cw_lockout in
@@ -51,15 +58,13 @@ let () =
         words;
       !anomalies);
 
-  (* Hand-written: single 32-bit read + mask/shift *)
+  (* Hand-written OCaml: single 32-bit read + mask/shift *)
   time "hand: get_int32_be + mask/shift x4" (fun () ->
       let anomalies = ref 0 in
       let expected_seq = ref 0 in
       Array.iter
         (fun buf ->
           let w = Bytes.get_int32_be buf 0 |> Int32.to_int in
-          (* CLCW layout: ...| Lockout(1) | Wait(1) | Retransmit(1) |
-             FARM-B(2) | ReportValue(8) | *)
           let lockout = (w lsr 8) land 1 in
           let wait = (w lsr 7) land 1 in
           let retransmit = (w lsr 6) land 1 in

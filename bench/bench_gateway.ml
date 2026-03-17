@@ -7,42 +7,33 @@
       Packet, extract packets from the data field (packets may span frames)
     - Measure frames/sec and packets reassembled/sec
 
-    Compares Wire zero-copy get vs hand-written OCaml Bytes (shift/mask). *)
+    Compares: pure C (shift/mask) vs Wire OCaml (Codec.get) vs hand OCaml. *)
 
 module C = Wire.Codec
 
-(* CADU = 1115 bytes. TM frame header = 6 bytes. Data field = 1109 bytes. *)
 let cadu_size = 1115
-let tm_hdr = Space.tm_frame_size (* 6 *)
-let data_field_size = cadu_size - tm_hdr (* 1109 *)
-let sp_hdr = Space.packet_size (* 6 *)
+let tm_hdr = Space.tm_frame_size
+let data_field_size = cadu_size - tm_hdr
+let sp_hdr = Space.packet_size
 
-(* Generate a stream of n CADUs with embedded Space Packets. Packets are packed
-   contiguously across frame boundaries. Returns (buf, total_embedded_packets). *)
 let generate_frames n =
   let buf = Bytes.create (n * cadu_size) in
   let total_pkts = ref 0 in
-  (* Walk through data fields, packing Space Packets *)
   let data_off = ref tm_hdr in
   let remaining_in_frame = ref data_field_size in
   let pkt_payload = 64 in
   let pkt_size = sp_hdr + pkt_payload in
   for frame = 0 to n - 1 do
     let base = frame * cadu_size in
-    (* Write TM frame header *)
-    (* w0: version=0, SCID=0x1FF (10 bits), VCID=frame%8 (3 bits), OCF=0 *)
     let vcid = frame mod 8 in
     let w0 = (0x1FF lsl 4) lor (vcid lsl 1) in
     Bytes.set_uint16_be buf base w0;
-    (* w1: MCCount, VCCount *)
     Bytes.set_uint16_be buf (base + 2) ((frame mod 256) lsl 8);
-    (* w2: SecHdr=0, Sync=1, PktOrder=0, SegId=3, FirstHdrPtr *)
     let first_hdr_ptr =
       if !remaining_in_frame >= pkt_size then 0 else !remaining_in_frame
     in
     let w2 = (1 lsl 14) lor (3 lsl 11) lor first_hdr_ptr in
     Bytes.set_uint16_be buf (base + 4) w2;
-    (* Pack packets into this frame's data field *)
     data_off := base + tm_hdr;
     remaining_in_frame := data_field_size;
     while !remaining_in_frame >= pkt_size do
@@ -81,6 +72,16 @@ let () =
   let pkt_payload = 64 in
   let pkt_size = sp_hdr + pkt_payload in
 
+  (* Pure C: shift/mask in tight loop *)
+  let c_ns = C_scenarios.gateway buf n cadu_size in
+  let c_pkts = C_scenarios.gateway_pkts () in
+  let c_dt = float c_ns /. 1e9 in
+  Fmt.pr "  %-45s %5.0f ns/frm  %4.1f Mfrm/s  %4.1f Mpkt/s\n"
+    "C: shift/mask (tight loop)"
+    (float c_ns /. float n)
+    (float n /. c_dt /. 1e6)
+    (float c_pkts /. c_dt /. 1e6);
+
   (* Wire: zero-copy field access (partial-apply get outside loop) *)
   let get_vcid = C.get Space.tm_frame_codec Space.f_tf_vcid in
   let get_fhp = C.get Space.tm_frame_codec Space.f_tf_first_hdr in
@@ -104,15 +105,13 @@ let () =
       done;
       !pkts);
 
-  (* Hand-written: hardcoded offsets + shift/mask *)
+  (* Hand-written OCaml: hardcoded offsets + shift/mask *)
   time "hand: Bytes.get_uint16_be + shift/mask" (fun () ->
       let pkts = ref 0 in
       for frame = 0 to n - 1 do
         let base = frame * cadu_size in
-        (* VCID: bits [4:1] of first uint16be (3 bits after 10-bit SCID) *)
         let w0 = Bytes.get_uint16_be buf base in
         let vcid = (w0 lsr 1) land 0x7 in
-        (* FirstHdrPtr: low 11 bits of third uint16be *)
         let w2 = Bytes.get_uint16_be buf (base + 4) in
         let fhp = w2 land 0x7FF in
         ignore (Sys.opaque_identity vcid);
