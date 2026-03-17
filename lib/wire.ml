@@ -4,52 +4,26 @@
     Forces users to explicitly unstage functions to make specialization visible.
     See also Irmin's repr which uses the same pattern. *)
 module Staged = struct
-  type +'a t = { unstage : 'a } [@@unboxed]
+  type +'a t = 'a
 
-  let stage x = { unstage = x }
-  let unstage { unstage } = unstage
+  let stage x = x
+  let unstage x = x
 end
 
 (* UInt32: unboxed on 64-bit (uses int), boxed on 32-bit (uses int32) *)
 module UInt32 = struct
-  type t = int (* On 64-bit, int is 63 bits - enough for uint32 *)
-
-  let () =
-    if Sys.int_size < 32 then
-      failwith "Wire.UInt32 requires 64-bit OCaml (int must be >= 32 bits)"
+  type t = int
 
   let get_le buf off =
-    let b0 = Bytes.get_uint8 buf off in
-    let b1 = Bytes.get_uint8 buf (off + 1) in
-    let b2 = Bytes.get_uint8 buf (off + 2) in
-    let b3 = Bytes.get_uint8 buf (off + 3) in
-    b0 lor (b1 lsl 8) lor (b2 lsl 16) lor (b3 lsl 24)
+    Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
   let get_be buf off =
-    let b0 = Bytes.get_uint8 buf off in
-    let b1 = Bytes.get_uint8 buf (off + 1) in
-    let b2 = Bytes.get_uint8 buf (off + 2) in
-    let b3 = Bytes.get_uint8 buf (off + 3) in
-    (b0 lsl 24) lor (b1 lsl 16) lor (b2 lsl 8) lor b3
+    Bytes.get_int32_be buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
-  let mask v = v land ((1 lsl 32) - 1)
-
-  let set_le buf off v =
-    let v = mask v in
-    Bytes.set_uint8 buf off (v land 0xFF);
-    Bytes.set_uint8 buf (off + 1) ((v lsr 8) land 0xFF);
-    Bytes.set_uint8 buf (off + 2) ((v lsr 16) land 0xFF);
-    Bytes.set_uint8 buf (off + 3) ((v lsr 24) land 0xFF)
-
-  let set_be buf off v =
-    let v = mask v in
-    Bytes.set_uint8 buf off ((v lsr 24) land 0xFF);
-    Bytes.set_uint8 buf (off + 1) ((v lsr 16) land 0xFF);
-    Bytes.set_uint8 buf (off + 2) ((v lsr 8) land 0xFF);
-    Bytes.set_uint8 buf (off + 3) (v land 0xFF)
-
+  let set_le buf off v = Bytes.set_int32_le buf off (Int32.of_int v)
+  let set_be buf off v = Bytes.set_int32_be buf off (Int32.of_int v)
   let to_int t = t
-  let of_int t = mask t
+  let of_int t = t land 0xFFFF_FFFF
 end
 
 (* UInt63: unboxed on 64-bit (uses int), reads 8 bytes but masks to 63 bits *)
