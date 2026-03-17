@@ -2745,7 +2745,7 @@ module Codec = struct
                   | BF_U32 Big -> Bf_u32_be { byte_off = base_off; shift; mask }
                 in
                 fld.f_acc <- f_acc;
-                fld.f_reader <- int_reader;
+                fld.f_reader <- raw_reader;
                 fld.f_writer <- accessor_writer
             | None ->
                 fld.f_acc <- Fn (wrap_reader raw_reader);
@@ -3126,26 +3126,7 @@ module Codec = struct
 
   let get (type a r) (_codec : r t) (f : (a, r) field) :
       (bytes -> int -> a) Staged.t =
-    match f.f_acc with
-    | Bf_u8 { byte_off; shift; mask } ->
-        Staged.stage (fun buf off ->
-            (u8 buf (off + byte_off) lsr shift) land mask)
-    | Bf_u16_le { byte_off; shift; mask } ->
-        Staged.stage (fun buf off ->
-            (u16_le buf (off + byte_off) lsr shift) land mask)
-    | Bf_u16_be { byte_off; shift; mask } ->
-        Staged.stage (fun buf off ->
-            (u16_be buf (off + byte_off) lsr shift) land mask)
-    | Bf_u32_le { byte_off; shift; mask } ->
-        Staged.stage (fun buf off ->
-            (u32_le buf (off + byte_off) lsr shift) land mask)
-    | Bf_u32_be { byte_off; shift; mask } ->
-        Staged.stage (fun buf off ->
-            (u32_be buf (off + byte_off) lsr shift) land mask)
-    | Sub { field_off; size } ->
-        Staged.stage (fun buf off ->
-            Slice.make buf ~first:(off + field_off) ~length:size)
-    | Fn reader -> Staged.stage reader
+    Staged.stage f.f_reader
 
   let sub (type r) (_codec : r t) (f : (Slice.t, r) field) :
       (bytes -> int -> int) Staged.t =

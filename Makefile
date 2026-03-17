@@ -18,10 +18,12 @@ bench-gateway:
 bench-clcw:
 	dune exec --profile=release bench/bench_clcw.exe
 
+PROF_EXE ?= bench/bench_clcw.exe
+
 prof:
-	dune build --profile=release bench/bench_clcw.exe
+	dune build --profile=release $(PROF_EXE)
 	xctrace record --template 'Time Profiler' --output prof.trace \
-		--launch -- _build/default/bench/bench_clcw.exe
+		--launch -- _build/default/$(PROF_EXE)
 	@echo "Profile written to prof.trace — open with: open prof.trace"
 
 memtrace:
