@@ -11,78 +11,27 @@ module Staged = struct
 end
 
 (* UInt32: unboxed on 64-bit (uses int), boxed on 32-bit (uses int32) *)
-module UInt32 = struct
-  type t = int
+(* Byte-level readers and writers using stdlib single-load primitives. *)
+let[@inline] u8 buf off = Bytes.get_uint8 buf off
+let[@inline] u16_le buf off = Bytes.get_uint16_le buf off
+let[@inline] u16_be buf off = Bytes.get_uint16_be buf off
 
-  let get_le buf off =
-    Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
+let[@inline] u32_le buf off =
+  Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
-  let get_be buf off =
-    Bytes.get_int32_be buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
+let[@inline] u32_be buf off =
+  Bytes.get_int32_be buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
-  let set_le buf off v = Bytes.set_int32_le buf off (Int32.of_int v)
-  let set_be buf off v = Bytes.set_int32_be buf off (Int32.of_int v)
-  let to_int t = t
-  let of_int t = t land 0xFFFF_FFFF
-end
+let[@inline] u64_le buf off = Bytes.get_int64_le buf off
+let[@inline] u64_be buf off = Bytes.get_int64_be buf off
+let[@inline] w_u8 buf off v = Bytes.set_uint8 buf off v
+let[@inline] w_u16_le buf off v = Bytes.set_uint16_le buf off v
+let[@inline] w_u16_be buf off v = Bytes.set_uint16_be buf off v
+let[@inline] w_u32_le buf off v = Bytes.set_int32_le buf off (Int32.of_int v)
+let[@inline] w_u32_be buf off v = Bytes.set_int32_be buf off (Int32.of_int v)
 
-(* UInt63: unboxed on 64-bit (uses int), reads 8 bytes but masks to 63 bits *)
-module UInt63 = struct
-  type t = int (* 63-bit int on 64-bit platforms *)
-
-  let () =
-    if Sys.int_size < 63 then
-      failwith "Wire.UInt63 requires 64-bit OCaml (int must be 63 bits)"
-
-  let get_le buf off =
-    let b0 = Bytes.get_uint8 buf off in
-    let b1 = Bytes.get_uint8 buf (off + 1) in
-    let b2 = Bytes.get_uint8 buf (off + 2) in
-    let b3 = Bytes.get_uint8 buf (off + 3) in
-    let b4 = Bytes.get_uint8 buf (off + 4) in
-    let b5 = Bytes.get_uint8 buf (off + 5) in
-    let b6 = Bytes.get_uint8 buf (off + 6) in
-    let b7 = Bytes.get_uint8 buf (off + 7) in
-    b0 lor (b1 lsl 8) lor (b2 lsl 16) lor (b3 lsl 24) lor (b4 lsl 32)
-    lor (b5 lsl 40) lor (b6 lsl 48)
-    lor ((b7 land 0x7F) lsl 56)
-
-  let get_be buf off =
-    let b0 = Bytes.get_uint8 buf off in
-    let b1 = Bytes.get_uint8 buf (off + 1) in
-    let b2 = Bytes.get_uint8 buf (off + 2) in
-    let b3 = Bytes.get_uint8 buf (off + 3) in
-    let b4 = Bytes.get_uint8 buf (off + 4) in
-    let b5 = Bytes.get_uint8 buf (off + 5) in
-    let b6 = Bytes.get_uint8 buf (off + 6) in
-    let b7 = Bytes.get_uint8 buf (off + 7) in
-    ((b0 land 0x7F) lsl 56)
-    lor (b1 lsl 48) lor (b2 lsl 40) lor (b3 lsl 32) lor (b4 lsl 24)
-    lor (b5 lsl 16) lor (b6 lsl 8) lor b7
-
-  let set_le buf off v =
-    Bytes.set_uint8 buf off (v land 0xFF);
-    Bytes.set_uint8 buf (off + 1) ((v lsr 8) land 0xFF);
-    Bytes.set_uint8 buf (off + 2) ((v lsr 16) land 0xFF);
-    Bytes.set_uint8 buf (off + 3) ((v lsr 24) land 0xFF);
-    Bytes.set_uint8 buf (off + 4) ((v lsr 32) land 0xFF);
-    Bytes.set_uint8 buf (off + 5) ((v lsr 40) land 0xFF);
-    Bytes.set_uint8 buf (off + 6) ((v lsr 48) land 0xFF);
-    Bytes.set_uint8 buf (off + 7) ((v lsr 56) land 0x7F)
-
-  let set_be buf off v =
-    Bytes.set_uint8 buf off ((v lsr 56) land 0x7F);
-    Bytes.set_uint8 buf (off + 1) ((v lsr 48) land 0xFF);
-    Bytes.set_uint8 buf (off + 2) ((v lsr 40) land 0xFF);
-    Bytes.set_uint8 buf (off + 3) ((v lsr 32) land 0xFF);
-    Bytes.set_uint8 buf (off + 4) ((v lsr 24) land 0xFF);
-    Bytes.set_uint8 buf (off + 5) ((v lsr 16) land 0xFF);
-    Bytes.set_uint8 buf (off + 6) ((v lsr 8) land 0xFF);
-    Bytes.set_uint8 buf (off + 7) (v land 0xFF)
-
-  let to_int t = t
-  let of_int t = t
-end
+module UInt32 = Uint32
+module UInt63 = Uint63
 
 type endian = Little | Big
 
@@ -1885,29 +1834,6 @@ let encode_record_to_bytes : type r. r record_codec -> r encode_context option =
         in
         Some { buffer = buf; wire_size; encode }
   | None -> None
-
-(* Readers using stdlib primitives. Bytes.get_uint16_be etc. are single C
-   loads + bswap, well-optimized. One bounds check per call. For u32/u64,
-   use Bytes.get_int32_be / Bytes.get_int64_be directly. *)
-let[@inline] u8 buf off = Bytes.get_uint8 buf off
-let[@inline] u16_le buf off = Bytes.get_uint16_le buf off
-let[@inline] u16_be buf off = Bytes.get_uint16_be buf off
-
-let[@inline] u32_le buf off =
-  Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
-
-let[@inline] u32_be buf off =
-  Bytes.get_int32_be buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
-
-let[@inline] u64_le buf off = Bytes.get_int64_le buf off
-let[@inline] u64_be buf off = Bytes.get_int64_be buf off
-
-(* Writers using stdlib primitives. *)
-let[@inline] w_u8 buf off v = Bytes.set_uint8 buf off v
-let[@inline] w_u16_le buf off v = Bytes.set_uint16_le buf off v
-let[@inline] w_u16_be buf off v = Bytes.set_uint16_be buf off v
-let[@inline] w_u32_le buf off v = Bytes.set_int32_le buf off (Int32.of_int v)
-let[@inline] w_u32_be buf off v = Bytes.set_int32_be buf off (Int32.of_int v)
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
