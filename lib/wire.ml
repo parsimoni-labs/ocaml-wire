@@ -2555,15 +2555,6 @@ module Codec = struct
         r_field_readers = [];
       }
 
-  (* Heterogeneous field list. [] seals the record; (::) adds a field.
-     Tracks the constructor type: ('a -> 'b -> 'r, 'r) fields matches a
-     constructor (fun a b -> ...). Use Fields.[f1; f2; f3] syntax. *)
-  module Fields = struct
-    type ('f, 'r) t =
-      | [] : ('r, 'r) t
-      | ( :: ) : ('a, 'r) field * ('f, 'r) t -> ('a -> 'f, 'r) t
-  end
-
   let field name typ get =
     let not_ready _ _ = failwith "field: not added to a record yet" in
     {
@@ -3107,13 +3098,20 @@ module Codec = struct
       t_struct_fields = List.rev r.r_fields_rev;
     }
 
-  let view : type f r. string -> f -> (f, r) Fields.t -> r t =
-   fun name constructor fields ->
-    let rec add : type g. (g, r) record -> (g, r) Fields.t -> r t =
-     fun r fields ->
-      match fields with Fields.[] -> seal r | f :: rest -> add (r |+ f) rest
+  (* Heterogeneous field list. [] seals the view; (::) adds a field.
+     Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
+     constructor (fun a b -> ...). *)
+  type ('f, 'r) fields =
+    | [] : ('r, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
+
+  let view : type f r. string -> f -> (f, r) fields -> r t =
+   fun name constructor flds ->
+    let rec add : type g. (g, r) record -> (g, r) fields -> r t =
+     fun r flds ->
+      match flds with [] -> seal r | f :: rest -> add (r |+ f) rest
     in
-    add (record_start name constructor) fields
+    add (record_start name constructor) flds
 
   let wire_size t =
     match t.t_wire_size with

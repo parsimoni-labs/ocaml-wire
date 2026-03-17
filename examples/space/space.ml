@@ -38,7 +38,7 @@ let packet_codec =
         sp_seq_count = seq_count;
         sp_data_len = data_len;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Version" (bits ~width:3 bf_uint16be) (fun p ->
             p.sp_version);
@@ -126,7 +126,7 @@ let clcw_codec =
         cw_farmb = farmb;
         cw_report = report;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "ControlWordType" (bits ~width:1 bf_uint32be) (fun c ->
             c.cw_type);
@@ -224,7 +224,7 @@ let tm_frame_codec =
         tf_seg_id = seg;
         tf_first_hdr = hdr;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Version" (bits ~width:2 bf_uint16be) (fun f ->
             f.tf_version);
@@ -292,7 +292,7 @@ let f_cmd_seq = Codec.field "Seq" uint16be (fun c -> c.cmd_seq)
 let inner_cmd_codec =
   Codec.view "InnerCmd"
     (fun id seq flags -> { cmd_id = id; cmd_seq = seq; cmd_flags = flags })
-    Codec.Fields.
+    Codec.
       [ f_cmd_id; f_cmd_seq; Codec.field "Flags" uint8 (fun c -> c.cmd_flags) ]
 
 let inner_cmd_size = Codec.wire_size inner_cmd_codec
@@ -320,7 +320,7 @@ let outer_hdr_codec =
         oh_length = length;
         oh_payload = payload;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Version" uint8 (fun h -> h.oh_version);
         Codec.field "Type" uint8 (fun h -> h.oh_type);

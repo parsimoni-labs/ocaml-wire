@@ -811,7 +811,7 @@ type test_record = { x : int; y : int; z : int }
 let test_record_codec =
   Wire.Codec.view "TestRecord"
     (fun x y z -> { x; y; z })
-    Wire.Codec.Fields.
+    Wire.Codec.
       [
         Wire.Codec.field "x" Wire.uint8 (fun r -> r.x);
         Wire.Codec.field "y" Wire.uint16 (fun r -> r.y);
@@ -844,7 +844,7 @@ type be_record = { a : int; b : int }
 let be_record_codec =
   Wire.Codec.view "BERecord"
     (fun a b -> { a; b })
-    Wire.Codec.Fields.
+    Wire.Codec.
       [
         Wire.Codec.field "a" Wire.uint16be (fun r -> r.a);
         Wire.Codec.field "b" Wire.uint32be (fun r -> r.b);
@@ -869,7 +869,7 @@ type bool_record = { flag : bool; value : int }
 let bool_record_codec =
   Wire.Codec.view "BoolRecord"
     (fun flag value -> { flag; value })
-    Wire.Codec.Fields.
+    Wire.Codec.
       [
         Wire.Codec.field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag);
         Wire.Codec.field "value" Wire.uint16 (fun r -> r.value);
@@ -1114,7 +1114,7 @@ let f_sl_payload =
 let slice_msg_codec =
   Wire.Codec.view "SliceMsg"
     (fun length payload -> { sl_length = length; sl_payload = payload })
-    Wire.Codec.Fields.[ f_sl_length; f_sl_payload ]
+    Wire.Codec.[ f_sl_length; f_sl_payload ]
 
 let slice_or_eod buf len =
   if len = 0 then Slice.eod else Slice.make buf ~first:0 ~length:len
@@ -1166,7 +1166,7 @@ let f_ba_data =
 let array_msg_codec =
   Wire.Codec.view "ArrayMsg"
     (fun length data -> { ba_length = length; ba_data = data })
-    Wire.Codec.Fields.[ f_ba_length; f_ba_data ]
+    Wire.Codec.[ f_ba_length; f_ba_data ]
 
 let test_depsize_array_roundtrip payload_str =
   let len = String.length payload_str mod 201 in
@@ -1208,7 +1208,7 @@ let tagged_msg_codec =
   Wire.Codec.view "TaggedMsg"
     (fun length payload tag ->
       { tm_length = length; tm_payload = payload; tm_tag = tag })
-    Wire.Codec.Fields.[ f_tm_length; f_tm_payload; f_tm_tag ]
+    Wire.Codec.[ f_tm_length; f_tm_payload; f_tm_tag ]
 
 let test_depsize_tagged_roundtrip payload_str tag =
   let len = String.length payload_str mod 201 in

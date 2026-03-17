@@ -17,9 +17,7 @@ type minimal = { m_value : int }
 let f_minimal_value = Codec.field "Value" uint8 (fun m -> m.m_value)
 
 let minimal_codec =
-  Codec.view "Minimal"
-    (fun v -> { m_value = v })
-    Codec.Fields.[ f_minimal_value ]
+  Codec.view "Minimal" (fun v -> { m_value = v }) Codec.[ f_minimal_value ]
 
 let minimal_struct = Codec.to_struct minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
@@ -55,7 +53,7 @@ let all_ints_codec =
         ai_u32be = u32be;
         ai_u64be = u64be;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "U8" uint8 (fun a -> a.ai_u8);
         Codec.field "U16" uint16 (fun a -> a.ai_u16);
@@ -99,7 +97,7 @@ let f_bf8_value =
 let bf8_codec =
   Codec.view "Bitfield8"
     (fun tag value -> { bf8_tag = tag; bf8_value = value })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Tag" (bits ~width:3 bf_uint8) (fun b -> b.bf8_tag);
         f_bf8_value;
@@ -126,7 +124,7 @@ let f_bf16_id =
 let bf16_codec =
   Codec.view "Bitfield16"
     (fun flag type_ id -> { bf16_flag = flag; bf16_type = type_; bf16_id = id })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Flag" (bits ~width:1 bf_uint16be) (fun b -> b.bf16_flag);
         Codec.field "Type" (bits ~width:4 bf_uint16be) (fun b -> b.bf16_type);
@@ -160,7 +158,7 @@ let bf32_codec =
   Codec.view "Bitfield32"
     (fun flags chan seq pri ->
       { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Flags" (bits ~width:4 bf_uint32be) (fun b -> b.bf32_flags);
         Codec.field "Channel" (bits ~width:6 bf_uint32be) (fun b -> b.bf32_chan);
@@ -202,7 +200,7 @@ let bool_fields_codec =
   Codec.view "BoolFields"
     (fun active valid mode code ->
       { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
-    Codec.Fields.
+    Codec.
       [
         f_bool_active;
         Codec.field "Valid"
@@ -259,7 +257,7 @@ let large_mixed_codec =
         lg_crc = crc;
         lg_timestamp = timestamp;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "SyncMarker" uint32be (fun l -> l.lg_sync);
         Codec.field "Version" uint8 (fun l -> l.lg_version);

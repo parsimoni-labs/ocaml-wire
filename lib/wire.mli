@@ -753,30 +753,23 @@ module Codec : sig
   type 'r t
   (** A sealed record codec for type ['r]. *)
 
-  (** Heterogeneous field list. Use [Fields.[f1; f2; f3]] syntax. *)
-  module Fields : sig
-    type ('f, 'r) t =
-      | [] : ('r, 'r) t
-      | ( :: ) : ('a, 'r) field * ('f, 'r) t -> ('a -> 'f, 'r) t
-  end
+  type ('f, 'r) fields =
+    | [] : ('r, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
+        (** Heterogeneous field list. [open Codec] brings [[]] and [(::)] into
+            scope for list syntax. *)
 
   val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
   (** [field name typ get] defines a field specification with type [typ] and
       getter [get]. Use {!val:Wire.map} or {!val:Wire.bool} on the type for
       conversions. *)
 
-  val view : string -> 'f -> ('f, 'r) Fields.t -> 'r t
-  (** [make name constructor fields] creates a sealed record codec.
+  val view : string -> 'f -> ('f, 'r) fields -> 'r t
+  (** [view name constructor fields] creates a sealed view codec:
       {[
-        let f_apid =
-          Codec.field "APID" (bits ~width:11 bf_uint16be) (fun p -> p.apid)
-
-        let f_dlen = Codec.field "DataLen" uint16be (fun p -> p.dlen)
-
-        let codec =
-          Codec.view "Packet"
-            (fun apid dlen -> { apid; dlen })
-            Fields.[ f_apid; f_dlen ]
+        let open Codec in
+        let codec = view "Packet" (fun apid dlen -> {apid; dlen})
+          [f_apid; f_dlen]
       ]} *)
 
   val wire_size : 'r t -> int

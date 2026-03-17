@@ -60,7 +60,7 @@ let f_length  = Codec.field "Length"   uint16be                 (fun p -> p.leng
 
 let codec =
   Codec.make "Packet" (fun version flags length -> { version; flags; length })
-    Codec.Fields.[f_version; f_flags; f_length]
+    Codec.[f_version; f_flags; f_length]
 ```
 
 ### Zero-copy field access
@@ -134,7 +134,7 @@ let () = print_string (Wire.to_ml_stubs [struct_])
 let packet_codec =
   Codec.make "SpacePacket"
     (fun version type_ sec_hdr apid seq_flags seq_count data_len -> ...)
-    Codec.Fields.[
+    Codec.[
       Codec.field "Version"    (bits ~width:3  bf_uint16be) (fun p -> p.sp_version);
       Codec.field "Type"       (bits ~width:1  bf_uint16be) (fun p -> p.sp_type);
       Codec.field "SecHdrFlag" (bits ~width:1  bf_uint16be) (fun p -> p.sp_sec_hdr);
@@ -155,7 +155,7 @@ let f_tcp_ack = Codec.field "ACK" (bool (bits ~width:1 bf_uint16be)) (fun t -> t
 
 let tcp_codec =
   Codec.make "TCP" (fun src dst seq ack_num ... -> ...)
-    Codec.Fields.[
+    Codec.[
       f_tcp_src_port; f_tcp_dst_port;
       Codec.field "SeqNum" uint32be (fun t -> t.tcp_seq);
       (* ... flags as individual bool bitfields ... *)

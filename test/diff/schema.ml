@@ -11,7 +11,7 @@ type simple_header = { version : int; length : int; flags : int }
 let simple_header_codec =
   Codec.view "SimpleHeader"
     (fun version length flags -> { version; length; flags })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "version" uint8 (fun h -> h.version);
         Codec.field "length" uint16 (fun h -> h.length);
@@ -33,7 +33,7 @@ type constrained_packet = { pkt_type : int; pkt_length : int }
 let constrained_packet_codec =
   Codec.view "ConstrainedPacket"
     (fun pkt_type pkt_length -> { pkt_type; pkt_length })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "pkt_type" uint8 (fun p -> p.pkt_type);
         Codec.field "pkt_length" uint16 (fun p -> p.pkt_length);

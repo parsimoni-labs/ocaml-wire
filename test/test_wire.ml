@@ -336,7 +336,7 @@ type simple_record = { a : int; b : int; c : int }
 let simple_record_codec =
   Codec.view "SimpleRecord"
     (fun a b c -> { a; b; c })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "a" uint8 (fun r -> r.a);
         Codec.field "b" uint16 (fun r -> r.b);
@@ -393,7 +393,7 @@ type multi_record = { x : int; y : int }
 let multi_record_codec =
   Codec.view "MultiRecord"
     (fun x y -> { x; y })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "x" uint16be (fun r -> r.x);
         Codec.field "y" uint16be (fun r -> r.y);
@@ -417,7 +417,7 @@ type ba_record = { id : int; uuid : string; tag : int }
 let ba_record_codec =
   Codec.view "BaRecord"
     (fun id uuid tag -> { id; uuid; tag })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "id" uint32be (fun r -> r.id);
         Codec.field "uuid" (byte_array ~size:(int 16)) (fun r -> r.uuid);
@@ -467,7 +467,7 @@ type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
 let bf32_codec =
   Codec.view "Bf32Test"
     (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "a" (bits ~width:3 bf_uint32be) (fun t -> t.bf_a);
         Codec.field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b);
@@ -493,7 +493,7 @@ let bf16_codec =
         bf_count = count;
         bf_len = len;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "ver" (bits ~width:3 bf_uint16be) (fun t -> t.bf_ver);
         Codec.field "flags" (bits ~width:2 bf_uint16be) (fun t -> t.bf_flags);
@@ -586,9 +586,7 @@ let test_view_get_uint () =
     let f_x = Codec.field "x" uint16be (fun r -> r.x) in
     let f_y = Codec.field "y" uint16be (fun r -> r.y) in
     let codec =
-      Codec.view "ViewUint"
-        (fun a b -> { x = a; y = b })
-        Codec.Fields.[ f_x; f_y ]
+      Codec.view "ViewUint" (fun a b -> { x = a; y = b }) Codec.[ f_x; f_y ]
     in
     (codec, f_x, f_y)
   in
@@ -609,7 +607,7 @@ let test_view_get_bitfield () =
     let codec =
       Codec.view "ViewBf"
         (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-        Codec.Fields.
+        Codec.
           [
             f_a;
             Codec.field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b);
@@ -631,7 +629,7 @@ let test_view_get_bool () =
     let codec =
       Codec.view "ViewBool"
         (fun flag code -> (flag, code))
-        Codec.Fields.[ f_flag; Codec.field "code" (bits ~width:7 bf_uint8) snd ]
+        Codec.[ f_flag; Codec.field "code" (bits ~width:7 bf_uint8) snd ]
     in
     (codec, f_flag)
   in
@@ -652,7 +650,7 @@ let test_view_set_bitfield () =
     let codec =
       Codec.view "ViewSetBf"
         (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
-        Codec.Fields.
+        Codec.
           [
             f_a;
             Codec.field "b" (bits ~width:5 bf_uint32be) (fun t -> t.bf_b);
@@ -685,7 +683,7 @@ let test_view_set_uint () =
     let f_x = Codec.field "x" uint16be (fun r -> r.x) in
     let f_y = Codec.field "y" uint16be (fun r -> r.y) in
     let codec =
-      Codec.view "ViewSetUint" (fun x y -> { x; y }) Codec.Fields.[ f_x; f_y ]
+      Codec.view "ViewSetUint" (fun x y -> { x; y }) Codec.[ f_x; f_y ]
     in
     (codec, f_x, f_y)
   in
@@ -704,7 +702,7 @@ let test_view_bounds_check () =
   let codec =
     Codec.view "ViewBounds"
       (fun a -> a)
-      Codec.Fields.[ Codec.field "a" uint32be (fun a -> a) ]
+      Codec.[ Codec.field "a" uint32be (fun a -> a) ]
   in
   let buf = Bytes.create 2 in
   match Codec.decode codec buf 0 with
@@ -715,7 +713,7 @@ let test_view_bounds_check () =
 let test_view_with_offset () =
   let codec, f_a =
     let f_a = Codec.field "a" uint16be (fun a -> a) in
-    let codec = Codec.view "ViewOff" (fun a -> a) Codec.Fields.[ f_a ] in
+    let codec = Codec.view "ViewOff" (fun a -> a) Codec.[ f_a ] in
     (codec, f_a)
   in
   let buf = Bytes.create 6 in
@@ -732,7 +730,7 @@ let test_view_set_bool () =
     let codec =
       Codec.view "ViewSetBool"
         (fun flag code -> (flag, code))
-        Codec.Fields.[ f_flag; Codec.field "code" (bits ~width:7 bf_uint8) snd ]
+        Codec.[ f_flag; Codec.field "code" (bits ~width:7 bf_uint8) snd ]
     in
     (codec, f_flag)
   in
@@ -760,13 +758,13 @@ let test_view_shared_field_spec () =
   let codec1 =
     Codec.view "Share1"
       (fun x y -> (x, y))
-      Codec.Fields.[ f1_x; Codec.field "y" uint16be (fun (_, y) -> y) ]
+      Codec.[ f1_x; Codec.field "y" uint16be (fun (_, y) -> y) ]
   in
   let f2_x = Codec.field "x" uint16be (fun (x, _) -> x) in
   let codec2 =
     Codec.view "Share2"
       (fun _pad x -> (x, 0))
-      Codec.Fields.[ Codec.field "pad" uint16be (fun _ -> 0); f2_x ]
+      Codec.[ Codec.field "pad" uint16be (fun _ -> 0); f2_x ]
   in
   let buf1 = Bytes.create 4 in
   Bytes.set_uint16_be buf1 0 0xAAAA;
@@ -791,15 +789,13 @@ let test_view_shared_bitfield_spec () =
   let codec1 =
     Codec.view "ShareBf1"
       (fun a b -> (a, b))
-      Codec.Fields.
-        [ f1_a; Codec.field "b" (bits ~width:5 bf_uint8) (fun (_, b) -> b) ]
+      Codec.[ f1_a; Codec.field "b" (bits ~width:5 bf_uint8) (fun (_, b) -> b) ]
   in
   let f2_a = Codec.field "a" (bits ~width:3 bf_uint8) (fun (a, _) -> a) in
   let codec2 =
     Codec.view "ShareBf2"
       (fun _pad a -> (a, 0))
-      Codec.Fields.
-        [ Codec.field "pad" (bits ~width:5 bf_uint8) (fun _ -> 0); f2_a ]
+      Codec.[ Codec.field "pad" (bits ~width:5 bf_uint8) (fun _ -> 0); f2_a ]
   in
   (* 0xE3 = 0b_111_00011
      codec1 reads top 3 bits → 7
@@ -819,15 +815,13 @@ let test_view_shared_set_independent () =
   let codec1 =
     Codec.view "SetShare1"
       (fun v pad -> (v, pad))
-      Codec.Fields.
-        [ f1; Codec.field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p) ]
+      Codec.[ f1; Codec.field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p) ]
   in
   let f2 = Codec.field "v" (bits ~width:4 bf_uint8) (fun (v, _) -> v) in
   let codec2 =
     Codec.view "SetShare2"
       (fun pad v -> (v, pad))
-      Codec.Fields.
-        [ Codec.field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p); f2 ]
+      Codec.[ Codec.field "pad" (bits ~width:4 bf_uint8) (fun (_, p) -> p); f2 ]
   in
   (* Start: 0x00. Set codec1's field (top nibble) to 0xA *)
   let buf = Bytes.create 1 in
@@ -857,7 +851,7 @@ let test_view_byte_slice_get () =
   let codec =
     Codec.view "SliceRec"
       (fun hdr payload -> (hdr, payload))
-      Codec.Fields.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
+      Codec.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
   in
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 0xABCD;
@@ -882,7 +876,7 @@ let test_view_byte_slice_decode () =
   let codec =
     Codec.view "SliceDec"
       (fun tag payload -> (tag, payload))
-      Codec.Fields.
+      Codec.
         [
           Codec.field "tag" uint8 (fun (t, _) -> t);
           Codec.field "data" (byte_slice ~size:(int 3)) (fun (_, p) -> p);
@@ -904,14 +898,14 @@ let test_view_byte_slice_decode () =
 let test_view_byte_slice_nested () =
   (* Two-layer nested protocol: get payload slice, then get inner field *)
   let f_val = Codec.field "val" uint16be (fun v -> v) in
-  let inner_codec = Codec.view "Inner" (fun v -> v) Codec.Fields.[ f_val ] in
+  let inner_codec = Codec.view "Inner" (fun v -> v) Codec.[ f_val ] in
   let f_payload =
     Codec.field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
   in
   let outer_codec =
     Codec.view "Outer"
       (fun hdr payload -> (hdr, payload))
-      Codec.Fields.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
+      Codec.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
   in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x0001;
@@ -927,7 +921,7 @@ let test_view_byte_slice_nested () =
 let test_raw_get_uint () =
   let f_a = Codec.field "a" uint16be (fun (a, _) -> a) in
   let f_b = Codec.field "b" uint8 (fun (_, b) -> b) in
-  let codec = Codec.view "RawU" (fun a b -> (a, b)) Codec.Fields.[ f_a; f_b ] in
+  let codec = Codec.view "RawU" (fun a b -> (a, b)) Codec.[ f_a; f_b ] in
   let buf = Bytes.create 3 in
   Bytes.set_uint16_be buf 0 0x1234;
   Bytes.set_uint8 buf 2 0xFF;
@@ -941,9 +935,7 @@ let test_raw_get_uint () =
 let test_raw_get_bitfield () =
   let f_hi = Codec.field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h) in
   let f_lo = Codec.field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
-  let codec =
-    Codec.view "RawBF" (fun hi lo -> (hi, lo)) Codec.Fields.[ f_hi; f_lo ]
-  in
+  let codec = Codec.view "RawBF" (fun hi lo -> (hi, lo)) Codec.[ f_hi; f_lo ] in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
   (* hi=0xA=10, lo=0x7=7 *)
@@ -957,9 +949,7 @@ let test_raw_get_bitfield () =
 let test_raw_set_uint () =
   let f_a = Codec.field "a" uint16be (fun (a, _) -> a) in
   let f_b = Codec.field "b" uint8 (fun (_, b) -> b) in
-  let codec =
-    Codec.view "RawSU" (fun a b -> (a, b)) Codec.Fields.[ f_a; f_b ]
-  in
+  let codec = Codec.view "RawSU" (fun a b -> (a, b)) Codec.[ f_a; f_b ] in
   let buf = Bytes.create 3 in
   Bytes.fill buf 0 3 '\x00';
   (Staged.unstage (Codec.set codec f_a)) buf 0 0xABCD;
@@ -971,7 +961,7 @@ let test_raw_set_bitfield () =
   let f_hi = Codec.field "hi" (bits ~width:4 bf_uint8) (fun (h, _) -> h) in
   let f_lo = Codec.field "lo" (bits ~width:4 bf_uint8) (fun (_, l) -> l) in
   let codec =
-    Codec.view "RawSBF" (fun hi lo -> (hi, lo)) Codec.Fields.[ f_hi; f_lo ]
+    Codec.view "RawSBF" (fun hi lo -> (hi, lo)) Codec.[ f_hi; f_lo ]
   in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x00;
@@ -982,14 +972,14 @@ let test_raw_set_bitfield () =
 let test_raw_sub_nested () =
   (* Two-layer nested protocol using sub + get: zero alloc *)
   let f_val = Codec.field "val" uint16be (fun v -> v) in
-  let inner_codec = Codec.view "Inner" (fun v -> v) Codec.Fields.[ f_val ] in
+  let inner_codec = Codec.view "Inner" (fun v -> v) Codec.[ f_val ] in
   let f_payload =
     Codec.field "payload" (byte_slice ~size:(int 2)) (fun (_, p) -> p)
   in
   let outer_codec =
     Codec.view "Outer"
       (fun hdr payload -> (hdr, payload))
-      Codec.Fields.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
+      Codec.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_payload ]
   in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x0001;
@@ -1004,14 +994,14 @@ let test_raw_sub_nested () =
 let test_raw_sub_three_layers () =
   (* Three-layer: outer -> mid -> inner, all zero-alloc via sub+get *)
   let f_x = Codec.field "x" uint8 (fun x -> x) in
-  let inner = Codec.view "L3" (fun x -> x) Codec.Fields.[ f_x ] in
+  let inner = Codec.view "L3" (fun x -> x) Codec.[ f_x ] in
   let f_mid_payload =
     Codec.field "data" (byte_slice ~size:(int 1)) (fun (_, p) -> p)
   in
   let mid =
     Codec.view "L2"
       (fun tag payload -> (tag, payload))
-      Codec.Fields.[ Codec.field "tag" uint8 (fun (t, _) -> t); f_mid_payload ]
+      Codec.[ Codec.field "tag" uint8 (fun (t, _) -> t); f_mid_payload ]
   in
   let f_body =
     Codec.field "body" (byte_slice ~size:(int 2)) (fun (_, b) -> b)
@@ -1019,7 +1009,7 @@ let test_raw_sub_three_layers () =
   let outer =
     Codec.view "L1"
       (fun hdr body -> (hdr, body))
-      Codec.Fields.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_body ]
+      Codec.[ Codec.field "hdr" uint16be (fun (h, _) -> h); f_body ]
   in
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0xAAAA;
@@ -1035,7 +1025,7 @@ let test_raw_sub_three_layers () =
 let test_raw_with_offset () =
   (* get / set work correctly with non-zero base offset *)
   let f_v = Codec.field "v" uint32be (fun v -> v) in
-  let codec = Codec.view "RawOff" (fun v -> v) Codec.Fields.[ f_v ] in
+  let codec = Codec.view "RawOff" (fun v -> v) Codec.[ f_v ] in
   let buf = Bytes.create 20 in
   Bytes.fill buf 0 20 '\x00';
   (Staged.unstage (Codec.set codec f_v)) buf 10 0xDEADBEEF;
@@ -1150,7 +1140,7 @@ let f_ds_payload =
 let dep_slice_codec =
   Codec.view "DepSlice"
     (fun length payload -> { ds_length = length; ds_payload = payload })
-    Codec.Fields.[ f_ds_length; f_ds_payload ]
+    Codec.[ f_ds_length; f_ds_payload ]
 
 let test_dep_bslice_decode_empty () =
   (* length=0, no payload bytes *)
@@ -1267,7 +1257,7 @@ let f_da_payload =
 let dep_array_codec =
   Codec.view "DepArray"
     (fun length payload -> { da_length = length; da_payload = payload })
-    Codec.Fields.[ f_da_length; f_da_payload ]
+    Codec.[ f_da_length; f_da_payload ]
 
 let test_dep_byte_array_decode () =
   let buf = Bytes.create 7 in
@@ -1311,7 +1301,7 @@ let trailer_codec =
   Codec.view "Trailer"
     (fun length payload checksum ->
       { tr_length = length; tr_payload = payload; tr_checksum = checksum })
-    Codec.Fields.[ f_tr_length; f_tr_payload; f_tr_checksum ]
+    Codec.[ f_tr_length; f_tr_payload; f_tr_checksum ]
 
 let test_dep_trailer_get_checksum () =
   (* [length:u16be=3] [payload:3 bytes] [checksum:u16be=0xBEEF] *)
@@ -1436,9 +1426,7 @@ let test_dep_codec_ref () =
     Codec.field "Data" (byte_slice ~size:(Codec.ref f_len)) (fun (_, d) -> d)
   in
   let codec =
-    Codec.view "RefTest"
-      (fun len data -> (len, data))
-      Codec.Fields.[ f_len; f_data ]
+    Codec.view "RefTest" (fun len data -> (len, data)) Codec.[ f_len; f_data ]
   in
   (* buf: [len=5] [5 bytes payload] *)
   let buf = Bytes.create 6 in
@@ -1463,9 +1451,7 @@ let test_dep_ref_size_eval () =
     Codec.field "Body" (byte_slice ~size:(Codec.ref f_sz)) (fun (_, b) -> b)
   in
   let codec =
-    Codec.view "RefSizeEval"
-      (fun sz body -> (sz, body))
-      Codec.Fields.[ f_sz; f_body ]
+    Codec.view "RefSizeEval" (fun sz body -> (sz, body)) Codec.[ f_sz; f_body ]
   in
   let buf = Bytes.create 11 in
   Bytes.set_uint8 buf 0 10;

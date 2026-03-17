@@ -38,7 +38,7 @@ let ethernet_codec =
         eth_ethertype = etype;
         eth_payload = payload;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "DstMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_dst);
         Codec.field "SrcMAC" (byte_slice ~size:(int 6)) (fun e -> e.eth_src);
@@ -99,7 +99,7 @@ let ipv4_codec =
         ip_dst = dst;
         ip_payload = payload;
       })
-    Codec.Fields.
+    Codec.
       [
         Codec.field "Version" (bits ~width:4 bf_uint8) (fun p -> p.ip_version);
         Codec.field "IHL" (bits ~width:4 bf_uint8) (fun p -> p.ip_ihl);
@@ -178,7 +178,7 @@ let tcp_of_fields src_port dst_port seq ack_num data_offset reserved ns cwr ece
 
 let tcp_codec =
   Codec.view "TCP" tcp_of_fields
-    Codec.Fields.
+    Codec.
       [
         f_tcp_src_port;
         f_tcp_dst_port;
@@ -240,8 +240,7 @@ let udp_codec =
         udp_length = length;
         udp_checksum = checksum;
       })
-    Codec.Fields.
-      [ f_udp_src_port; f_udp_dst_port; f_udp_length; f_udp_checksum ]
+    Codec.[ f_udp_src_port; f_udp_dst_port; f_udp_length; f_udp_checksum ]
 
 let udp_struct = Codec.to_struct udp_codec
 let udp_size = Codec.wire_size udp_codec
