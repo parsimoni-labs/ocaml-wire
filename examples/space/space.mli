@@ -19,6 +19,15 @@ val clcw_default : clcw
 val clcw_data : int -> bytes array
 (** [clcw_data n] generates [n] synthetic CLCW byte buffers. *)
 
+val cw_lockout : (int, clcw) Wire.Codec.field
+(** Zero-copy field accessor for the CLCW Lockout flag. *)
+
+val cw_wait : (int, clcw) Wire.Codec.field
+(** Zero-copy field accessor for the CLCW Wait flag. *)
+
+val cw_retransmit : (int, clcw) Wire.Codec.field
+(** Zero-copy field accessor for the CLCW Retransmit flag. *)
+
 val cw_report : (int, clcw) Wire.Codec.field
 (** Zero-copy field accessor for the CLCW ReportValue field. *)
 
@@ -37,6 +46,15 @@ val packet_size : int
 
 val packet_default : packet
 (** Default Space Packet value for benchmarks and tests. *)
+
+val f_sp_apid : (int, packet) Wire.Codec.field
+(** Zero-copy field accessor for the APID field (11-bit bitfield). *)
+
+val f_sp_seq_count : (int, packet) Wire.Codec.field
+(** Zero-copy field accessor for the SeqCount field (14-bit bitfield). *)
+
+val f_sp_data_len : (int, packet) Wire.Codec.field
+(** Zero-copy field accessor for the DataLength field. *)
 
 val packet_data : int -> bytes array
 (** [packet_data n] generates [n] synthetic Space Packet byte buffers. *)

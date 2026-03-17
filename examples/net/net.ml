@@ -218,6 +218,7 @@ type udp = {
 let f_udp_src_port = Codec.field "SrcPort" uint16be (fun u -> u.udp_src_port)
 let f_udp_dst_port = Codec.field "DstPort" uint16be (fun u -> u.udp_dst_port)
 let f_udp_length = Codec.field "Length" uint16be (fun u -> u.udp_length)
+let f_udp_checksum = Codec.field "Checksum" uint16be (fun u -> u.udp_checksum)
 
 let udp_codec =
   let open Codec in
@@ -228,9 +229,7 @@ let udp_codec =
         udp_length = length;
         udp_checksum = checksum;
       })
-  |+ f_udp_src_port |+ f_udp_dst_port |+ f_udp_length
-  |+ field "Checksum" uint16be (fun u -> u.udp_checksum)
-  |> seal
+  |+ f_udp_src_port |+ f_udp_dst_port |+ f_udp_length |+ f_udp_checksum |> seal
 
 let udp_struct = Codec.to_struct udp_codec
 let udp_size = Codec.wire_size udp_codec

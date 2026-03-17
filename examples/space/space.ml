@@ -18,6 +18,14 @@ type packet = {
   sp_data_len : int;
 }
 
+let f_sp_apid =
+  Codec.field "APID" (bits ~width:11 bf_uint16be) (fun p -> p.sp_apid)
+
+let f_sp_seq_count =
+  Codec.field "SeqCount" (bits ~width:14 bf_uint16be) (fun p -> p.sp_seq_count)
+
+let f_sp_data_len = Codec.field "DataLength" uint16be (fun p -> p.sp_data_len)
+
 let packet_codec =
   let open Codec in
   record "SpacePacket"
@@ -34,11 +42,9 @@ let packet_codec =
   |+ field "Version" (bits ~width:3 bf_uint16be) (fun p -> p.sp_version)
   |+ field "Type" (bits ~width:1 bf_uint16be) (fun p -> p.sp_type)
   |+ field "SecHdrFlag" (bits ~width:1 bf_uint16be) (fun p -> p.sp_sec_hdr)
-  |+ field "APID" (bits ~width:11 bf_uint16be) (fun p -> p.sp_apid)
+  |+ f_sp_apid
   |+ field "SeqFlags" (bits ~width:2 bf_uint16be) (fun p -> p.sp_seq_flags)
-  |+ field "SeqCount" (bits ~width:14 bf_uint16be) (fun p -> p.sp_seq_count)
-  |+ field "DataLength" uint16be (fun p -> p.sp_data_len)
-  |> seal
+  |+ f_sp_seq_count |+ f_sp_data_len |> seal
 
 let packet_struct = Codec.to_struct packet_codec
 let packet_size = Codec.wire_size packet_codec
@@ -81,6 +87,16 @@ type clcw = {
   cw_farmb : int;
   cw_report : int;
 }
+
+let cw_lockout =
+  Codec.field "Lockout" (bits ~width:1 bf_uint32be) (fun c -> c.cw_lockout)
+
+let cw_wait =
+  Codec.field "Wait" (bits ~width:1 bf_uint32be) (fun c -> c.cw_wait)
+
+let cw_retransmit =
+  Codec.field "Retransmit" (bits ~width:1 bf_uint32be) (fun c ->
+      c.cw_retransmit)
 
 let cw_report =
   Codec.field "ReportValue" (bits ~width:8 bf_uint32be) (fun c -> c.cw_report)
@@ -126,9 +142,7 @@ let clcw_codec =
   |+ field "Spare" (bits ~width:2 bf_uint32be) (fun c -> c.cw_spare)
   |+ field "NoRF" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_rf)
   |+ field "NoBitlock" (bits ~width:1 bf_uint32be) (fun c -> c.cw_no_bitlock)
-  |+ field "Lockout" (bits ~width:1 bf_uint32be) (fun c -> c.cw_lockout)
-  |+ field "Wait" (bits ~width:1 bf_uint32be) (fun c -> c.cw_wait)
-  |+ field "Retransmit" (bits ~width:1 bf_uint32be) (fun c -> c.cw_retransmit)
+  |+ cw_lockout |+ cw_wait |+ cw_retransmit
   |+ field "FARMBCounter" (bits ~width:2 bf_uint32be) (fun c -> c.cw_farmb)
   |+ cw_report |> seal
 

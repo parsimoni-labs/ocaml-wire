@@ -101,6 +101,9 @@ val f_udp_dst_port : (int, udp) Wire.Codec.field
 val f_udp_length : (int, udp) Wire.Codec.field
 (** Zero-copy field accessor for the UDP length field. *)
 
+val f_udp_checksum : (int, udp) Wire.Codec.field
+(** Zero-copy field accessor for the UDP checksum field. *)
+
 (** {2 Utilities} *)
 
 val pp_ipv4_addr : Format.formatter -> int -> unit

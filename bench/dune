@@ -1,3 +1,20 @@
+; ── Realistic scenario benchmarks (always build) ──
+
+(executable
+ (name bench_routing)
+ (modules bench_routing)
+ (libraries space wire unix fmt))
+
+(executable
+ (name bench_gateway)
+ (modules bench_gateway)
+ (libraries space net wire unix fmt))
+
+(executable
+ (name bench_clcw)
+ (modules bench_clcw)
+ (libraries space wire unix fmt))
+
 ; Memtrace allocation profiling (always builds)
 
 (executable
