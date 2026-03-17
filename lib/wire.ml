@@ -2601,8 +2601,7 @@ module Codec = struct
     | BF_U32 Big -> UInt32.set_be buf off v
 
   (* Build-time dispatch: pattern match on base happens once at codec
-     construction, not on every read/write call. Each returned closure
-     captures only (byte_off, shift, mask) — no variant tag. *)
+     construction, not on every read/write call. *)
   let build_bf_reader base byte_off shift width =
     let mask = (1 lsl width) - 1 in
     match base with
@@ -3139,6 +3138,32 @@ module Codec = struct
   let set (type a r) (_codec : r t) (f : (a, r) field) :
       (bytes -> int -> a -> unit) Staged.t =
     Staged.stage f.f_writer
+
+  let load (type r) (_codec : r t) (f : (int, r) field) :
+      (bytes -> int -> int) Staged.t =
+    match f.f_acc with
+    | Bf_u8 { byte_off; _ } ->
+        Staged.stage (fun buf off -> u8 buf (off + byte_off))
+    | Bf_u16_le { byte_off; _ } ->
+        Staged.stage (fun buf off -> u16_le buf (off + byte_off))
+    | Bf_u16_be { byte_off; _ } ->
+        Staged.stage (fun buf off -> u16_be buf (off + byte_off))
+    | Bf_u32_le { byte_off; _ } ->
+        Staged.stage (fun buf off -> u32_le buf (off + byte_off))
+    | Bf_u32_be { byte_off; _ } ->
+        Staged.stage (fun buf off -> u32_be buf (off + byte_off))
+    | Sub _ | Fn _ -> invalid_arg "Codec.load: not a bitfield"
+
+  let extract (type r) (_codec : r t) (f : (int, r) field) :
+      (int -> int) Staged.t =
+    match f.f_acc with
+    | Bf_u8 { shift; mask; _ }
+    | Bf_u16_le { shift; mask; _ }
+    | Bf_u16_be { shift; mask; _ }
+    | Bf_u32_le { shift; mask; _ }
+    | Bf_u32_be { shift; mask; _ } ->
+        Staged.stage (fun word -> (word lsr shift) land mask)
+    | Sub _ | Fn _ -> invalid_arg "Codec.extract: not a bitfield"
 
   let ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 end

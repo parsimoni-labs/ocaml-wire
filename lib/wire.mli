@@ -836,6 +836,26 @@ module Codec : sig
       ]}
       Does not bounds-check. *)
 
+  val load : 'r t -> (int, 'r) field -> (bytes -> int -> int) Staged.t
+  (** [load codec f] returns a staged reader for the base bitfield word
+      underlying field [f]. Use with {!extract} to read the word once and
+      extract multiple fields — one memory load for all fields in the group:
+      {[
+        let load_clcw = Staged.unstage (Codec.load clcw_codec cw_lockout) in
+        let x_lockout = Staged.unstage (Codec.extract clcw_codec cw_lockout) in
+        let x_wait = Staged.unstage (Codec.extract clcw_codec cw_wait) in
+        (* hot loop: *)
+        let word = load_clcw buf off in
+        let lockout = x_lockout word in
+        let wait = x_wait word in
+      ]}
+      Only works for bitfield (int) fields. Any field in the same bitfield group
+      can be passed to [load] — they all share the same base word. *)
+
+  val extract : 'r t -> (int, 'r) field -> (int -> int) Staged.t
+  (** [extract codec f] returns a staged extractor that reads field [f] from a
+      pre-loaded bitfield word. Pure ALU (shift + mask), no memory access. *)
+
   val ref : ('a, 'r) field -> int expr
   (** [ref f] returns an expression referencing field [f] by name. Use this
       instead of {!val:Wire.ref} for type-safe field references in constraints
