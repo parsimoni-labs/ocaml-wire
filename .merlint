@@ -12,7 +12,7 @@ rules:
     exclude: [E350]
 
   # Crowbar_util.test_case vs Crowbar.test_case — type alias, not wrong
-  - files: fuzz/fuzz_wire.mli
+  - files: fuzz/fuzz_*.mli
     exclude: [E705]
 
   # Linter contradiction: wants both lowercase and matching uInt filename
