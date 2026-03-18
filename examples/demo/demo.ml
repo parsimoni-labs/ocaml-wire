@@ -520,8 +520,9 @@ let action_struct =
 (* ── 18. Actions: full — Action.var, Action.if_, Action.assign, Action.abort ── *)
 
 let action_full_struct =
+  let out_value = Param.output "out_value" uint32be in
   param_struct "ActionFull"
-    [ mutable_param "out_value" uint32be ]
+    [ Param.v out_value ]
     [
       field "Tag" uint8;
       field "Value"
@@ -531,7 +532,7 @@ let action_full_struct =
                Action.var "x" Expr.(field_ref "Tag" + field_ref "Value");
                Action.if_
                  Expr.(field_ref "x" > int 0)
-                 [ Action.assign "out_value" (field_ref "x") ]
+                 [ Action.assign out_value (field_ref "x") ]
                  (Some [ Action.abort ]);
              ])
         uint16be;
@@ -540,13 +541,14 @@ let action_full_struct =
 (* ── 19. Parameterized struct: reusable with constraints ── *)
 
 let param_demo_struct =
+  let out_len = Param.output "out_len" uint16be in
   param_struct "BoundedPayload"
-    [ param "max_len" uint16be; mutable_param "out_len" uint16be ]
+    [ param "max_len" uint16be; Param.v out_len ]
     ~where:Expr.(field_ref "Length" <= field_ref "max_len")
     [
       field "Length"
         ~action:
-          (Action.on_success [ Action.assign "out_len" (field_ref "Length") ])
+          (Action.on_success [ Action.assign out_len (field_ref "Length") ])
         uint16be;
       field "Data" (byte_array ~size:(field_ref "Length"));
     ]

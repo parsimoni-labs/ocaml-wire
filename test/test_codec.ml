@@ -120,11 +120,9 @@ let test_metadata_action_fail () =
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 let projection_codec =
+  let outx = Param.output "outx" uint8 in
   Codec.view "ProjectionCodec"
-    ~params:
-      [
-        Param.v (Param.input "limit" uint8); Param.v (Param.output "outx" uint8);
-      ]
+    ~params:[ Param.v (Param.input "limit" uint8); Param.v outx ]
     ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
     (fun x -> { x })
     Codec.
@@ -132,7 +130,7 @@ let projection_codec =
         Codec.field "x"
           ~constraint_:Expr.(Wire.field_ref "x" <= int 8)
           ~action:
-            (Action.on_success [ Action.assign "outx" (Wire.field_ref "x") ])
+            (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
           uint8
           (fun r -> r.x);
       ]

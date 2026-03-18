@@ -18,11 +18,13 @@ let test_assign_propagates () =
   (* Field "x" is parsed, action assigns x to "out", field "y" has a
      constraint that references "out". If assign propagates correctly,
      the constraint on y (out + y <= 255) is evaluated with out = x. *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "AssignProp"
+    param_struct "AssignProp"
+      [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign "out" (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
           uint8;
         field "y"
           ~constraint_:Expr.(field_ref "out" + field_ref "y" <= int 255)
@@ -31,16 +33,19 @@ let test_assign_propagates () =
   in
   (* x=10, y=20 => out=10, 10+20=30 <= 255: OK *)
   let input = "\x0A\x14" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_assign_propagates_fail () =
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "AssignPropFail"
+    param_struct "AssignPropFail"
+      [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign "out" (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
           uint8;
         field "y"
           ~constraint_:Expr.(field_ref "out" + field_ref "y" <= int 10)
@@ -49,27 +54,31 @@ let test_assign_propagates_fail () =
   in
   (* x=100, y=200 => out=100, 100+200=300 > 10: FAIL *)
   let input = "\x64\xC8" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected constraint failure"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_assign_expr () =
   (* Action assigns computed expression: out = x + 1 *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "AssignExpr"
+    param_struct "AssignExpr"
+      [ Param.v out ]
       [
         field "x"
           ~action:
             (Action.on_success
-               [ Action.assign "out" Expr.(field_ref "x" + int 1) ])
+               [ Action.assign out Expr.(field_ref "x" + int 1) ])
           uint8;
         field "y" ~constraint_:Expr.(field_ref "out" = int 43) uint8;
       ]
   in
   (* x=42 => out=43, constraint out=43: OK *)
   let input = "\x2A\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -156,15 +165,17 @@ let test_abort () =
 
 let test_var_local () =
   (* var tmp = x * 2; assign out = tmp; later field checks out *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "VarLocal"
+    param_struct "VarLocal"
+      [ Param.v out ]
       [
         field "x"
           ~action:
             (Action.on_success
                [
                  Action.var "tmp" Expr.(field_ref "x" * int 2);
-                 Action.assign "out" (field_ref "tmp");
+                 Action.assign out (field_ref "tmp");
                ])
           uint8;
         field "y" ~constraint_:Expr.(field_ref "out" = int 84) uint8;
@@ -172,7 +183,8 @@ let test_var_local () =
   in
   (* x=42 => tmp=84, out=84, constraint out=84: OK *)
   let input = "\x2A\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -180,17 +192,19 @@ let test_var_local () =
 
 let test_if_true_branch () =
   (* if (x > 0) { out = 1 } => out should be 1 when x=42 *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "IfTrue"
+    param_struct "IfTrue"
+      [ Param.v out ]
       [
         field "x"
           ~action:
             (Action.on_success
                [
-                 Action.assign "out" (int 0);
+                 Action.assign out (int 0);
                  Action.if_
                    Expr.(field_ref "x" > int 0)
-                   [ Action.assign "out" (int 1) ]
+                   [ Action.assign out (int 1) ]
                    None;
                ])
           uint8;
@@ -198,23 +212,26 @@ let test_if_true_branch () =
       ]
   in
   let input = "\x2A\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_if_false_branch () =
   (* if (x > 100) { out = 1 } => out stays 0 when x=5 *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "IfFalse"
+    param_struct "IfFalse"
+      [ Param.v out ]
       [
         field "x"
           ~action:
             (Action.on_success
                [
-                 Action.assign "out" (int 0);
+                 Action.assign out (int 0);
                  Action.if_
                    Expr.(field_ref "x" > int 100)
-                   [ Action.assign "out" (int 1) ]
+                   [ Action.assign out (int 1) ]
                    None;
                ])
           uint8;
@@ -222,14 +239,17 @@ let test_if_false_branch () =
       ]
   in
   let input = "\x05\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_if_else () =
   (* if (x = 0) { out = 10 } else { out = 20 } *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "IfElse"
+    param_struct "IfElse"
+      [ Param.v out ]
       [
         field "x"
           ~action:
@@ -237,8 +257,8 @@ let test_if_else () =
                [
                  Action.if_
                    Expr.(field_ref "x" = int 0)
-                   [ Action.assign "out" (int 10) ]
-                   (Some [ Action.assign "out" (int 20) ]);
+                   [ Action.assign out (int 10) ]
+                   (Some [ Action.assign out (int 20) ]);
                ])
           uint8;
         field "y" ~constraint_:Expr.(field_ref "out" = int 20) uint8;
@@ -246,14 +266,17 @@ let test_if_else () =
   in
   (* x=1 => else branch => out=20 *)
   let input = "\x01\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_if_abort_in_else () =
   (* if (x > 0) { out = x } else { abort } *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "IfAbort"
+    param_struct "IfAbort"
+      [ Param.v out ]
       [
         field "x"
           ~action:
@@ -261,7 +284,7 @@ let test_if_abort_in_else () =
                [
                  Action.if_
                    Expr.(field_ref "x" > int 0)
-                   [ Action.assign "out" (field_ref "x") ]
+                   [ Action.assign out (field_ref "x") ]
                    (Some [ Action.abort ]);
                ])
           uint8;
@@ -269,28 +292,31 @@ let test_if_abort_in_else () =
   in
   (* x=0 => else branch => abort *)
   let input = "\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected abort from else branch"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_if_nested () =
   (* if (x > 0) { if (x < 100) { out = 1 } else { out = 2 } } *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "IfNested"
+    param_struct "IfNested"
+      [ Param.v out ]
       [
         field "x"
           ~action:
             (Action.on_success
                [
-                 Action.assign "out" (int 0);
+                 Action.assign out (int 0);
                  Action.if_
                    Expr.(field_ref "x" > int 0)
                    [
                      Action.if_
                        Expr.(field_ref "x" < int 100)
-                       [ Action.assign "out" (int 1) ]
-                       (Some [ Action.assign "out" (int 2) ]);
+                       [ Action.assign out (int 1) ]
+                       (Some [ Action.assign out (int 2) ]);
                    ]
                    None;
                ])
@@ -300,7 +326,8 @@ let test_if_nested () =
   in
   (* x=50: 50>0 => true, 50<100 => true, out=1 *)
   let input = "\x32\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -331,8 +358,10 @@ let test_on_act () =
 
 let test_stmt_sequencing () =
   (* var a = x; var b = a + 1; assign out = b * 2 *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "Sequence"
+    param_struct "Sequence"
+      [ Param.v out ]
       [
         field "x"
           ~action:
@@ -340,7 +369,7 @@ let test_stmt_sequencing () =
                [
                  Action.var "a" (field_ref "x");
                  Action.var "b" Expr.(field_ref "a" + int 1);
-                 Action.assign "out" Expr.(field_ref "b" * int 2);
+                 Action.assign out Expr.(field_ref "b" * int 2);
                ])
           uint8;
         field "y" ~constraint_:Expr.(field_ref "out" = int 86) uint8;
@@ -348,7 +377,8 @@ let test_stmt_sequencing () =
   in
   (* x=42 => a=42, b=43, out=86 *)
   let input = "\x2A\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -370,18 +400,21 @@ let test_return_short_circuits () =
 
 let test_abort_short_circuits () =
   (* abort; assign out = 1 => should fail (assign never reached) *)
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "AbortShort"
+    param_struct "AbortShort"
+      [ Param.v out ]
       [
         field "x"
           ~action:
-            (Action.on_success [ Action.abort; Action.assign "out" (int 1) ])
+            (Action.on_success [ Action.abort; Action.assign out (int 1) ])
           uint8;
         field "y" ~constraint_:Expr.(field_ref "out" = int 1) uint8;
       ]
   in
   let input = "\x42\x00" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected abort"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -398,11 +431,13 @@ let test_empty_action () =
 (* ── Action on bitfield ── *)
 
 let test_action_on_bitfield () =
+  let out = Param.output "out" uint8 in
   let s =
-    struct_ "BFAction"
+    param_struct "BFAction"
+      [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign "out" (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
           (bits ~width:4 U8);
         field "y"
           ~constraint_:Expr.(field_ref "out" <= int 15)
@@ -410,7 +445,8 @@ let test_action_on_bitfield () =
       ]
   in
   let input = "\xAB" in
-  match decode_string (struct_typ s) input with
+  let params = Param.init Param.empty out 0 in
+  match decode_string ~env:params (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 

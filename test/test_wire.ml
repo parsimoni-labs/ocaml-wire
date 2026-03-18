@@ -229,7 +229,7 @@ let test_parse_param_with_params () =
       [
         field "Length"
           ~action:
-            (Action.on_success [ Action.assign "out_len" (field_ref "Length") ])
+            (Action.on_success [ Action.assign out_len (field_ref "Length") ])
           uint16be;
         field "Data" (byte_array ~size:(field_ref "Length"));
       ]
@@ -252,7 +252,7 @@ let test_parse_param_where_fail () =
       [
         field "Length"
           ~action:
-            (Action.on_success [ Action.assign "out_len" (field_ref "Length") ])
+            (Action.on_success [ Action.assign out_len (field_ref "Length") ])
           uint16be;
         field "Data" (byte_array ~size:(field_ref "Length"));
       ]
@@ -353,7 +353,7 @@ let test_sizeof_this_with_action () =
         field "a" uint8;
         field "b" uint16be;
         field "c"
-          ~action:(Action.on_success [ Action.assign "out" sizeof_this ])
+          ~action:(Action.on_success [ Action.assign out sizeof_this ])
           uint8;
       ]
   in

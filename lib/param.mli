@@ -14,6 +14,9 @@ val output : string -> 'a Types.typ -> ('a, output) t
 val v : ('a, 'k) t -> Types.param
 (** Extract the formal declaration from a typed handle. *)
 
+val name : ('a, 'k) t -> string
+(** [name p] is the string name of the parameter. *)
+
 val empty : env
 (** Empty runtime parameter environment. *)
 

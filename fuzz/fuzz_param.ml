@@ -87,7 +87,7 @@ let test_parse_param_struct buf =
         Wire.C.field "x"
           ~action:
             (Wire.Action.on_success
-               [ Wire.Action.assign "out" (Wire.field_ref "x") ])
+               [ Wire.Action.assign out (Wire.field_ref "x") ])
           Wire.uint8;
       ]
   in

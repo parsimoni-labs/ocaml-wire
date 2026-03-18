@@ -347,15 +347,18 @@ let test_qualified_ref () =
 
 (** Test action generation. *)
 let test_action () =
+  let ptr = Wire.Param.output "ptr" Wire.uint32 in
   let act =
     Wire.Action.on_success
       [
-        Wire.Action.assign "ptr" (Wire.int 42);
+        Wire.Action.assign ptr (Wire.int 42);
         Wire.Action.return_bool Wire.Expr.true_;
       ]
   in
   let s =
-    Wire.C.struct_ "WithAction" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+    Wire.C.param_struct "WithAction"
+      [ Wire.Param.v ptr ]
+      [ Wire.C.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in
@@ -363,9 +366,12 @@ let test_action () =
 
 (** Test Action.on_act action. *)
 let test_on_act () =
-  let act = Wire.Action.on_act [ Wire.Action.assign "ptr" (Wire.int 0) ] in
+  let ptr = Wire.Param.output "ptr" Wire.uint32 in
+  let act = Wire.Action.on_act [ Wire.Action.assign ptr (Wire.int 0) ] in
   let s =
-    Wire.C.struct_ "WithOnAct" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+    Wire.C.param_struct "WithOnAct"
+      [ Wire.Param.v ptr ]
+      [ Wire.C.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in
@@ -383,29 +389,37 @@ let test_abort () =
 
 (** Test Action.if_. *)
 let test_action_if () =
+  let ptr = Wire.Param.output "ptr" Wire.uint32 in
   let stmt =
     Wire.Action.if_
       Wire.Expr.(Wire.field_ref "x" > Wire.int 10)
-      [ Wire.Action.assign "ptr" (Wire.int 1) ]
-      (Some [ Wire.Action.assign "ptr" (Wire.int 0) ])
+      [ Wire.Action.assign ptr (Wire.int 1) ]
+      (Some [ Wire.Action.assign ptr (Wire.int 0) ])
   in
   let act = Wire.Action.on_success [ stmt ] in
-  let s = Wire.C.struct_ "WithIf" [ Wire.C.field "x" ~action:act Wire.uint8 ] in
+  let s =
+    Wire.C.param_struct "WithIf"
+      [ Wire.Param.v ptr ]
+      [ Wire.C.field "x" ~action:act Wire.uint8 ]
+  in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in
   ()
 
 (** Test Action.var action statement. *)
 let test_var () =
+  let ptr = Wire.Param.output "ptr" Wire.uint32 in
   let act =
     Wire.Action.on_success
       [
         Wire.Action.var "tmp" (Wire.int 42);
-        Wire.Action.assign "ptr" (Wire.field_ref "tmp");
+        Wire.Action.assign ptr (Wire.field_ref "tmp");
       ]
   in
   let s =
-    Wire.C.struct_ "WithVar" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+    Wire.C.param_struct "WithVar"
+      [ Wire.Param.v ptr ]
+      [ Wire.C.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in

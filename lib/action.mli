@@ -17,8 +17,10 @@ val on_success : stmt list -> t
 val on_act : stmt list -> t
 (** [on_act stmts] builds an action block for the 3D [:act] form. *)
 
-val assign : string -> int Types.expr -> stmt
-(** Assignment through a mutable out-parameter. *)
+val assign : ('a, Param.output) Param.t -> int Types.expr -> stmt
+(** [assign out e] assigns the value of expression [e] to the mutable output
+    parameter [out]. The compiler enforces that only output parameters can be
+    assigned to. *)
 
 val return_bool : bool Types.expr -> stmt
 (** Boolean return statement. *)

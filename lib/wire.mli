@@ -145,8 +145,10 @@ module Action : sig
   val on_act : stmt list -> t
   (** Action block for the 3D [:act] form. *)
 
-  val assign : string -> int expr -> stmt
-  (** Assignment to a named mutable out-parameter. *)
+  val assign : ('a, Param.output) Param.t -> int expr -> stmt
+  (** [assign out e] assigns expression [e] to the mutable output parameter
+      [out]. Only output parameters (created with {!Param.output}) can be
+      assigned to — the type system prevents assigning to input parameters. *)
 
   val return_bool : bool expr -> stmt
   (** Boolean return: [true] continues, [false] fails validation. *)

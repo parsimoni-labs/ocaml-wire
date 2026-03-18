@@ -16,15 +16,16 @@ let bitfields () =
           (bits ~width:16 U32);
       ]
   in
+  let outx = Param.output "outx" uint32 in
   let bf2 =
     param_struct "BF2"
-      [ mutable_param "outx" uint32 ]
+      [ Param.v outx ]
       [
         field "x"
           ~action:
             (Action.on_success
                [
-                 Action.assign "outx" (field_ref "x");
+                 Action.assign outx (field_ref "x");
                  Action.return_bool Expr.true_;
                ])
           (type_ref "BF");

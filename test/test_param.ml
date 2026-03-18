@@ -78,8 +78,7 @@ let test_output_param_action () =
       [ Param.v out ]
       [
         field "x"
-          ~action:
-            (Action.on_success [ Action.assign "out" (Wire.field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (Wire.field_ref "x") ])
           uint8;
       ]
   in
@@ -97,7 +96,7 @@ let test_output_param_computed () =
         field "x"
           ~action:
             (Action.on_success
-               [ Action.assign "out" Expr.(Wire.field_ref "x" * int 2) ])
+               [ Action.assign out Expr.(Wire.field_ref "x" * int 2) ])
           uint8;
       ]
   in
@@ -155,13 +154,13 @@ let test_mixed_params () =
       [
         field "a"
           ~action:
-            (Action.on_success [ Action.assign "out_sum" (Wire.field_ref "a") ])
+            (Action.on_success [ Action.assign out_sum (Wire.field_ref "a") ])
           uint8;
         field "b"
           ~action:
             (Action.on_success
                [
-                 Action.assign "out_sum"
+                 Action.assign out_sum
                    Expr.(Wire.field_ref "out_sum" + Wire.field_ref "b");
                ])
           uint8;
@@ -200,7 +199,7 @@ let param_codec =
       [
         Codec.field "x"
           ~action:
-            (Action.on_success [ Action.assign "outx" (Wire.field_ref "x") ])
+            (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
           uint8
           (fun r -> r.x);
       ]
@@ -245,8 +244,7 @@ let test_3d_rendering () =
       ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
       [
         field "x"
-          ~action:
-            (Action.on_success [ Action.assign "out" (Wire.field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (Wire.field_ref "x") ])
           uint16be;
       ]
   in

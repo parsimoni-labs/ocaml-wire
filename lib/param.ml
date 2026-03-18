@@ -53,6 +53,7 @@ let output name typ =
   { id = next_id (); spec = Types.mutable_param name typ; typ }
 
 let v t = t.spec
+let name t = t.spec.param_name
 let same_handle t (Pack (u, _)) = t.id = u.id
 let same_name name (Pack (u, _)) = String.equal name u.spec.param_name
 let empty = []
