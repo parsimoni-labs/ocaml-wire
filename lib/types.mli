@@ -2,16 +2,32 @@
 
 type endian = Little | Big  (** Byte order. *)
 
+(** {1 Param handles} *)
+
+type param_input
+type param_output
+
+type ('a, 'k) param_handle = {
+  ph_name : string;
+  ph_typ : 'a typ;
+  ph_packed_typ : packed_typ;
+  ph_mutable : bool;
+  ph_cell : int ref;
+}
+
+and packed_typ = Pack_typ : 'a typ -> packed_typ
+
 (** {1 Expressions}
 
     Typed expression language used in constraints, actions and size
     computations. Arithmetic and bitwise operators mirror OCaml conventions. *)
 
-type _ expr =
+and _ expr =
   | Int : int -> int expr
   | Int64 : int64 -> int64 expr
   | Bool : bool -> bool expr
   | Ref : string -> int expr
+  | Param_ref : ('a, 'k) param_handle -> int expr
   | Sizeof : 'a typ -> int expr
   | Sizeof_this : int expr
   | Field_pos : int expr
@@ -106,15 +122,12 @@ and field =
 and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
 (** Formal parameter. *)
 
-and packed_typ =
-  | Pack_typ : 'a typ -> packed_typ  (** Existentially packed type. *)
-
 and action =
   | On_success of action_stmt list
   | On_act of action_stmt list  (** Action attached to a field. *)
 
 and action_stmt =
-  | Assign of string * int expr
+  | Assign : ('a, param_output) param_handle * int expr -> action_stmt
   | Return of bool expr
   | Abort
   | If of bool expr * action_stmt list * action_stmt list option
@@ -375,7 +388,7 @@ val on_success : action_stmt list -> action
 val on_act : action_stmt list -> action
 (** Wrap statements as an on-act action. *)
 
-val assign : string -> int expr -> action_stmt
+val assign : ('a, param_output) param_handle -> int expr -> action_stmt
 (** Assign to a mutable parameter. *)
 
 val return_bool : bool expr -> action_stmt

@@ -93,8 +93,6 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
 
 type ctx = Eval.ctx
 
-let ctx_of_params = Eval.of_params
-let commit_params = Eval.commit
 let ctx_add name v ctx = Eval.bind ctx name v
 let int_of_typ_value = Eval.int_of
 let eval_expr_ctx = Eval.expr
@@ -230,7 +228,7 @@ type 'r t = {
   t_where : bool expr option;
 }
 
-let record_start ?(params = []) ?where name make =
+let record_start ?where name make =
   Record
     {
       r_name = name;
@@ -240,11 +238,11 @@ let record_start ?(params = []) ?where name make =
       r_min_wire_size = 0;
       r_next_off = Static_next 0;
       r_fields_rev = [];
-      r_validators_rev = [] (* (byte_offset, validator) pairs *);
+      r_validators_rev = [];
       r_bf = None;
       r_configurators_rev = [];
       r_field_readers = [];
-      r_params = params;
+      r_params = [];
       r_where = where;
     }
 
@@ -775,19 +773,13 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-let view : type f r.
-    string ->
-    ?params:Param.packed list ->
-    ?where:bool expr ->
-    f ->
-    (f, r) fields ->
-    r t =
- fun name ?(params = []) ?where constructor flds ->
+let view : type f r. string -> ?where:bool expr -> f -> (f, r) fields -> r t =
+ fun name ?where constructor flds ->
   let rec add : type g. (g, r) record -> (g, r) fields -> r t =
    fun r flds ->
     match flds with [] -> seal r | f :: rest -> add (add_field r f) rest
   in
-  add (record_start ~params ?where name constructor) flds
+  add (record_start ?where name constructor) flds
 
 let wire_size t =
   match t.t_wire_size with
@@ -810,8 +802,7 @@ let is_fixed t =
 
 let decode t buf off =
   let v = t.t_decode buf off in
-  let ctx = t.t_validate (ctx_of_params t.t_params) buf off in
-  commit_params ctx t.t_params;
+  let _ctx = t.t_validate Eval.empty buf off in
   v
 
 let encode t v buf off = t.t_encode v buf off

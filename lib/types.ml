@@ -1,11 +1,26 @@
 type endian = Little | Big
 
+(* Param handles — defined here so expr and action_stmt can reference them *)
+type param_input
+type param_output
+
+type ('a, 'k) param_handle = {
+  ph_name : string;
+  ph_typ : 'a typ;
+  ph_packed_typ : packed_typ;
+  ph_mutable : bool;
+  ph_cell : int ref;
+}
+
+and packed_typ = Pack_typ : 'a typ -> packed_typ
+
 (* Expressions *)
-type _ expr =
+and _ expr =
   | Int : int -> int expr
   | Int64 : int64 -> int64 expr
   | Bool : bool -> bool expr
   | Ref : string -> int expr
+  | Param_ref : ('a, 'k) param_handle -> int expr
   | Sizeof : 'a typ -> int expr
   | Sizeof_this : int expr
   | Field_pos : int expr
@@ -88,13 +103,12 @@ and field =
       -> field
 
 and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
-and packed_typ = Pack_typ : 'a typ -> packed_typ
 
 (* Actions *)
 and action = On_success of action_stmt list | On_act of action_stmt list
 
 and action_stmt =
-  | Assign of string * int expr
+  | Assign : ('a, param_output) param_handle * int expr -> action_stmt
   | Return of bool expr
   | Abort
   | If of bool expr * action_stmt list * action_stmt list option
@@ -254,7 +268,7 @@ let qualified_ref module_ name = Qualified_ref { module_; name }
 (* Actions *)
 let on_success stmts = On_success stmts
 let on_act stmts = On_act stmts
-let assign ptr e = Assign (ptr, e)
+let assign (p : ('a, param_output) param_handle) e = Assign (p, e)
 let return_bool e = Return e
 let abort = Abort
 let action_if cond then_ else_ = If (cond, then_, else_)
@@ -377,6 +391,7 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Bool true -> Fmt.string ppf "true"
   | Bool false -> Fmt.string ppf "false"
   | Ref name -> Fmt.string ppf name
+  | Param_ref p -> Fmt.string ppf p.ph_name
   | Sizeof t -> Fmt.pf ppf "sizeof (%a)" pp_typ t
   | Sizeof_this -> Fmt.string ppf "sizeof (this)"
   | Field_pos -> Fmt.string ppf "field_pos"
@@ -436,7 +451,7 @@ and pp_typ : type a. a typ Fmt.t =
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
 let rec pp_action_stmt ppf = function
-  | Assign (ptr, e) -> Fmt.pf ppf "*%s = %a;" ptr pp_expr e
+  | Assign (p, e) -> Fmt.pf ppf "*%s = %a;" p.ph_name pp_expr e
   | Return e -> Fmt.pf ppf "return %a;" pp_expr e
   | Abort -> Fmt.string ppf "abort;"
   | If (cond, then_, None) ->

@@ -101,26 +101,29 @@ module Param : sig
   type ('a, 'k) t = ('a, 'k) Param.t
   (** Typed handle for one formal parameter. *)
 
-  val input : string -> 'a typ -> 'a -> ('a, input) t
-  (** [input name typ value] creates an input parameter bound to [value]. *)
+  val input : string -> 'a typ -> ('a, input) t
+  (** [input name typ] declares an input parameter. Set its value with {!init}
+      before decoding. *)
 
   val output : string -> 'a typ -> ('a, output) t
-  (** [output name typ] creates a mutable output parameter. *)
+  (** [output name typ] declares a mutable output parameter. *)
 
   val v : ('a, 'k) t -> param
-  (** Formal declaration for codecs and 3D structs. *)
+  (** Formal declaration for 3D rendering. *)
 
   val name : ('a, 'k) t -> string
-  (** Parameter name. *)
 
   val get : ('a, 'k) t -> 'a
-  (** Read the current value. For output params, call after decoding. *)
+  (** Read the current value. *)
 
   val set : ('a, 'k) t -> 'a -> unit
-  (** Set the value of a parameter. *)
+  (** Set the value. *)
 
-  type packed = Param.packed =
-    | Pack : ('a, 'k) t -> packed  (** Existentially packed parameter handle. *)
+  val init : ('a, input) t -> 'a -> int expr
+  (** [init p v] sets input param [p] to [v] and returns its expression. *)
+
+  val expr : ('a, 'k) t -> int expr
+  (** [expr p] returns the expression referencing this param. *)
 end
 
 module Action : sig
@@ -513,22 +516,15 @@ module Codec : sig
       Field constraints and actions share the same semantics as in direct
       decoding. *)
 
-  val view :
-    string ->
-    ?params:Param.packed list ->
-    ?where:bool expr ->
-    'f ->
-    ('f, 'r) fields ->
-    'r t
+  val view : string -> ?where:bool expr -> 'f -> ('f, 'r) fields -> 'r t
   (** Builds a sealed record codec from a constructor and its fields.
 
       The constructor is applied in field order at decode time; the field
       projections are used at encode time.
 
-      [params] passes the parameter handles (packed with {!Param.Pack}). Input
-      params carry their values; output params carry mutable cells that actions
-      update during decoding. [where] is a record-level constraint checked after
-      all fields and actions have run.
+      Parameters are discovered automatically from {!Param_ref} expressions in
+      constraints and {!Action.assign} statements in field actions. [where] is a
+      record-level constraint checked after all fields and actions have run.
 
       Example:
       {[

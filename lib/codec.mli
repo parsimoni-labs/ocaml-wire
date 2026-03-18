@@ -19,13 +19,7 @@ val field :
   ('a, 'r) field
 (** Declare a named field with optional constraint and action. *)
 
-val view :
-  string ->
-  ?params:Param.packed list ->
-  ?where:bool Types.expr ->
-  'f ->
-  ('f, 'r) fields ->
-  'r t
+val view : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) fields -> 'r t
 (** Seal a list of fields into a record codec. *)
 
 val wire_size : 'r t -> int

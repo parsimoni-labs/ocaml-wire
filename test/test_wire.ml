@@ -222,7 +222,8 @@ let test_parse_struct_action_abort () =
 type bounded_payload = { bp_length : int; bp_data : string }
 
 let test_parse_param_with_params () =
-  let max_len = Param.input "max_len" uint16be 3 in
+  let max_len = Param.input "max_len" uint16be in
+  let _max_len_expr = Param.init max_len 3 in
   let out_len = Param.output "out_len" uint16be in
   let f_length =
     Codec.field "Length"
@@ -232,8 +233,7 @@ let test_parse_param_with_params () =
   in
   let c =
     Codec.view "BoundedPayload"
-      ~params:[ Param.Pack max_len; Param.Pack out_len ]
-      ~where:Expr.(field_ref "Length" <= field_ref "max_len")
+      ~where:Expr.(field_ref "Length" <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
@@ -249,7 +249,8 @@ let test_parse_param_with_params () =
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_param_where_fail () =
-  let max_len = Param.input "max_len" uint16be 2 in
+  let max_len = Param.input "max_len" uint16be in
+  let _max_len_expr = Param.init max_len 2 in
   let out_len = Param.output "out_len" uint16be in
   let f_length =
     Codec.field "Length"
@@ -259,8 +260,7 @@ let test_parse_param_where_fail () =
   in
   let c =
     Codec.view "BoundedPayload"
-      ~params:[ Param.Pack max_len; Param.Pack out_len ]
-      ~where:Expr.(field_ref "Length" <= field_ref "max_len")
+      ~where:Expr.(field_ref "Length" <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
@@ -359,7 +359,7 @@ let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
   let out = Param.output "out" uint8 in
   let c =
-    Codec.view "SizeofThisAction" ~params:[ Param.Pack out ]
+    Codec.view "SizeofThisAction"
       (fun a b c -> { sa_a = a; sa_b = b; sa_c = c })
       Codec.
         [

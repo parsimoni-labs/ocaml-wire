@@ -7,7 +7,7 @@ open Wire.C
 (* ── Param.input / Param.output / Param.v ── *)
 
 let test_input_spec () =
-  let p = Param.input "limit" uint8 0 in
+  let p = Param.input "limit" uint8 in
   let spec = Param.v p in
   let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
   let m = module_ [ typedef s ] in
@@ -35,7 +35,7 @@ let test_output_spec () =
 (* ── Param.set / Param.get ── *)
 
 let test_input_binding () =
-  let p = Param.input "limit" uint8 0 in
+  let p = Param.input "limit" uint8 in
   Param.set p 42;
   Alcotest.(check int) "value" 42 (Param.get p)
 
@@ -49,14 +49,15 @@ let test_output_binding () =
 type bounded_record = { x : int }
 
 let test_input_param_constraint () =
-  let limit = Param.input "limit" uint8 10 in
+  let limit = Param.input "limit" uint8 in
+  let _limit_expr = Param.init limit 10 in
   let c =
-    Codec.view "Bounded" ~params:[ Param.Pack limit ]
+    Codec.view "Bounded"
       (fun x -> { x })
       Codec.
         [
           Codec.field "x"
-            ~constraint_:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+            ~constraint_:Expr.(Wire.field_ref "x" <= Param.expr limit)
             uint8
             (fun r -> r.x);
         ]
@@ -78,7 +79,7 @@ let test_input_param_constraint () =
 let test_output_param_action () =
   let out = Param.output "out" uint8 in
   let c =
-    Codec.view "Writer" ~params:[ Param.Pack out ]
+    Codec.view "Writer"
       (fun x -> { x })
       Codec.
         [
@@ -97,7 +98,7 @@ let test_output_param_action () =
 let test_output_param_computed () =
   let out = Param.output "out" uint16be in
   let c =
-    Codec.view "Computed" ~params:[ Param.Pack out ]
+    Codec.view "Computed"
       (fun x -> { x })
       Codec.
         [
@@ -119,10 +120,11 @@ let test_output_param_computed () =
 type bounded_value = { bv_value : int }
 
 let test_where_clause_pass () =
-  let max_val = Param.input "max_val" uint16be 100 in
+  let max_val = Param.input "max_val" uint16be in
+  let _max_val_expr = Param.init max_val 100 in
   let c =
-    Codec.view "Bounded" ~params:[ Param.Pack max_val ]
-      ~where:Expr.(Wire.field_ref "value" <= Wire.field_ref "max_val")
+    Codec.view "Bounded"
+      ~where:Expr.(Wire.field_ref "value" <= Param.expr max_val)
       (fun value -> { bv_value = value })
       Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
@@ -133,10 +135,11 @@ let test_where_clause_pass () =
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_where_clause_fail () =
-  let max_val = Param.input "max_val" uint16be 10 in
+  let max_val = Param.input "max_val" uint16be in
+  let _max_val_expr = Param.init max_val 10 in
   let c =
-    Codec.view "Bounded" ~params:[ Param.Pack max_val ]
-      ~where:Expr.(Wire.field_ref "value" <= Wire.field_ref "max_val")
+    Codec.view "Bounded"
+      ~where:Expr.(Wire.field_ref "value" <= Param.expr max_val)
       (fun value -> { bv_value = value })
       Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
@@ -152,12 +155,12 @@ let test_where_clause_fail () =
 type mixed_record = { a : int; b : int }
 
 let test_mixed_params () =
-  let max_val = Param.input "max_val" uint8 50 in
+  let max_val = Param.input "max_val" uint8 in
+  let _max_val_expr = Param.init max_val 50 in
   let out_sum = Param.output "out_sum" uint8 in
   let c =
     Codec.view "Mixed"
-      ~params:[ Param.Pack max_val; Param.Pack out_sum ]
-      ~where:Expr.(Wire.field_ref "out_sum" <= Wire.field_ref "max_val")
+      ~where:Expr.(Param.expr out_sum <= Param.expr max_val)
       (fun a b -> { a; b })
       Codec.
         [
@@ -171,7 +174,7 @@ let test_mixed_params () =
               (Action.on_success
                  [
                    Action.assign out_sum
-                     Expr.(Wire.field_ref "out_sum" + Wire.field_ref "b");
+                     Expr.(Param.expr out_sum + Wire.field_ref "b");
                  ])
             uint8
             (fun r -> r.b);
@@ -195,11 +198,11 @@ let test_mixed_params () =
 type record_with_param = { x : int }
 
 let param_codec =
-  let limit = Param.input "limit" uint8 10 in
+  let limit = Param.input "limit" uint8 in
+  let _limit_expr = Param.init limit 10 in
   let outx = Param.output "outx" uint8 in
   Codec.view "ParamCodec"
-    ~params:[ Param.Pack limit; Param.Pack outx ]
-    ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+    ~where:Expr.(Wire.field_ref "x" <= Param.expr limit)
     (fun x -> { x })
     Codec.
       [
@@ -220,12 +223,12 @@ let test_codec_param_decode () =
   Alcotest.(check int) "x" 5 v.x
 
 let test_codec_param_where_fail () =
-  let limit = Param.input "limit" uint8 3 in
+  let limit = Param.input "limit" uint8 in
+  let _limit_expr = Param.init limit 3 in
   let outx = Param.output "outx" uint8 in
   let c =
     Codec.view "ParamCodecFail"
-      ~params:[ Param.Pack limit; Param.Pack outx ]
-      ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+      ~where:Expr.(Wire.field_ref "x" <= Param.expr limit)
       (fun x -> { x })
       Codec.
         [
@@ -245,7 +248,7 @@ let test_codec_param_where_fail () =
 (* ── 3D rendering ── *)
 
 let test_3d_rendering () =
-  let limit = Param.input "limit" uint16be 0 in
+  let limit = Param.input "limit" uint16be in
   let out = Param.output "out" uint32be in
   let s =
     param_struct "Rendered"

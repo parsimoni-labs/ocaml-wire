@@ -1,37 +1,35 @@
 (** Typed parameter handles.
 
-    Input parameters carry their value. Output parameters carry a mutable cell
-    that actions write to during decoding. Both are passed as regular OCaml
-    function arguments — no separate environment needed. *)
+    Input parameters are set before decoding with {!init}, which returns the
+    corresponding expression. Output parameters are mutable cells written by
+    actions during decoding, read back with {!get}. *)
 
-type input
-type output
-type ('a, 'k) t
+type input = Types.param_input
+type output = Types.param_output
+type ('a, 'k) t = ('a, 'k) Types.param_handle
 
-val input : string -> 'a Types.typ -> 'a -> ('a, input) t
-(** [input name typ value] creates an input parameter bound to [value]. *)
+val input : string -> 'a Types.typ -> ('a, input) t
+(** [input name typ] declares an input parameter. *)
 
 val output : string -> 'a Types.typ -> ('a, output) t
-(** [output name typ] creates an output parameter with an internal mutable cell,
-    initially zero. Actions update it during decoding. *)
+(** [output name typ] declares an output parameter (mutable cell, initially 0).
+*)
 
 val v : ('a, 'k) t -> Types.param
-(** Formal declaration for codecs and 3D structs. *)
+(** Formal declaration for 3D rendering. *)
 
 val name : ('a, 'k) t -> string
-(** Parameter name. *)
 
 val get : ('a, 'k) t -> 'a
-(** Read the current value of a parameter. For output params, call this after
-    decoding to observe action results. *)
+(** Read the current value. *)
 
 val set : ('a, 'k) t -> 'a -> unit
-(** Set the value of a parameter. *)
+(** Set the value. *)
+
+val init : ('a, input) t -> 'a -> int Types.expr
+(** [init p v] sets the input param to [v] and returns its expression. *)
+
+val expr : ('a, 'k) t -> int Types.expr
+(** [expr p] returns the expression referencing this param. *)
 
 type packed = Pack : ('a, 'k) t -> packed
-
-val to_ctx : packed list -> (string * int) list
-(** Export bindings as name-value pairs for the eval context. *)
-
-val store_name : packed list -> string -> int -> unit
-(** Update a parameter by name (used by action execution). *)

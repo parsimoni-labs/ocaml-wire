@@ -6,15 +6,6 @@ module Fields = Map.Make (String)
 type ctx = { fields : int Fields.t; sizeof_this : int; field_pos : int }
 
 let empty = { fields = Fields.empty; sizeof_this = 0; field_pos = 0 }
-
-let of_params params =
-  List.fold_left
-    (fun ctx (name, v) -> { ctx with fields = Fields.add name v ctx.fields })
-    empty (Param.to_ctx params)
-
-let commit ctx params =
-  Fields.iter (fun name v -> Param.store_name params name v) ctx.fields
-
 let bind ctx name v = { ctx with fields = Fields.add name v ctx.fields }
 let set_pos ctx ~sizeof_this ~field_pos = { ctx with sizeof_this; field_pos }
 
@@ -51,6 +42,7 @@ let rec expr : type a. ctx -> a expr -> a =
   | Int64 n -> n
   | Bool b -> b
   | Ref name -> get ctx name
+  | Param_ref p -> !(p.ph_cell)
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> ctx.sizeof_this
   | Field_pos -> ctx.field_pos
@@ -85,7 +77,10 @@ let rec expr : type a. ctx -> a expr -> a =
 type action_outcome = Continue of ctx | Return of bool * ctx | Abort
 
 let rec exec_stmt ctx = function
-  | Assign (name, e) -> Continue (bind ctx name (expr ctx e))
+  | Assign (p, e) ->
+      let v = expr ctx e in
+      p.Types.ph_cell := v;
+      Continue (bind ctx p.Types.ph_name v)
   | Return e -> Return (expr ctx e, ctx)
   | Types.Abort -> Abort
   | If (cond, then_, else_) ->

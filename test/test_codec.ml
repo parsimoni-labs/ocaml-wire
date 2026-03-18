@@ -119,13 +119,13 @@ let test_metadata_action_fail () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
-let projection_limit = Param.input "limit" uint8 10
+let projection_limit = Param.input "limit" uint8
+let _projection_limit_expr = Param.init projection_limit 10
 let projection_outx = Param.output "outx" uint8
 
 let projection_codec =
   Codec.view "ProjectionCodec"
-    ~params:[ Param.Pack projection_limit; Param.Pack projection_outx ]
-    ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+    ~where:Expr.(Wire.field_ref "x" <= Param.expr projection_limit)
     (fun x -> { x })
     Codec.
       [
@@ -159,10 +159,6 @@ let test_codec_metadata_to_struct () =
   let s = C.struct_of_codec projection_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
-  Alcotest.(check bool) "contains param" true (contains ~sub:"limit" output);
-  Alcotest.(check bool)
-    "contains mutable param" true
-    (contains ~sub:"mutable" output);
   Alcotest.(check bool) "contains where" true (contains ~sub:"where" output);
   Alcotest.(check bool)
     "contains on-success" true
@@ -1204,7 +1200,7 @@ type pos_record = { pa : int; pb : int; pc : int }
 let test_codec_sizeof_this () =
   let out = Param.output "out" uint8 in
   let codec =
-    Codec.view "SizeofThisCodec" ~params:[ Param.Pack out ]
+    Codec.view "SizeofThisCodec"
       (fun a b c -> { pa = a; pb = b; pc = c })
       Codec.
         [
@@ -1224,7 +1220,7 @@ let test_codec_sizeof_this () =
 let test_codec_field_pos () =
   let out = Param.output "out" uint8 in
   let codec =
-    Codec.view "FieldPosCodec" ~params:[ Param.Pack out ]
+    Codec.view "FieldPosCodec"
       (fun a b c -> { pa = a; pb = b; pc = c })
       Codec.
         [
