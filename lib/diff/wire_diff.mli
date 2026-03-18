@@ -1,10 +1,5 @@
 (** Generic differential testing: OCaml codec vs wire-generated C code. *)
 
-val roundtrip_struct :
-  Wire.struct_ -> string -> (string, Wire.parse_error) Stdlib.result
-(** [roundtrip_struct s buf] parses [buf] as struct [s] and re-encodes it.
-    Equivalent to [write_struct s (read_struct s buf)]. *)
-
 type 'r schema
 (** A schema bundles everything needed for differential testing. *)
 

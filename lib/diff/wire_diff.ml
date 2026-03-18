@@ -78,11 +78,6 @@ let full_roundtrip schema value =
       if schema.equal value final then Match
       else Value_mismatch "values differ after full roundtrip"
 
-let roundtrip_struct s buf =
-  match Wire.read_struct s buf with
-  | Error e -> Error e
-  | Ok ps -> Wire.write_struct s ps
-
 type packed_test = {
   name : string;
   wire_size : int;

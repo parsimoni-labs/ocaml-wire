@@ -746,7 +746,7 @@ let wire_size t =
 let min_wire_size t =
   match t.t_wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
-let compute_wire_size t buf off =
+let wire_size_at t buf off =
   match t.t_wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
@@ -766,4 +766,4 @@ let set (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
   Staged.stage f.f_writer
 
-let ref (type a r) (f : (a, r) field) : int expr = Ref f.name
+let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name

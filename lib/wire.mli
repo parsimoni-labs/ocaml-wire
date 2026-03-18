@@ -1,520 +1,229 @@
-(** Dependent Data Descriptions for binary wire formats.
+(** Typed descriptions of binary wire formats.
 
-    Wire is a GADT-based DSL for describing binary wire formats compatible with
-    EverParse's 3D language. Define your format once, then:
+    A value of type ['a typ] says how values of type ['a] are represented on the
+    wire. That description can then be used in three complementary ways:
 
-    - Use {!to_3d} to emit EverParse 3D format for verified C parser generation
+    - {!decode}, {!decode_string}, {!decode_bytes}, {!encode},
+      {!encode_to_bytes}, and {!encode_to_string} interpret the description
+      directly and exchange OCaml values with byte streams or buffers;
+    - {!Codec} specialises record-shaped descriptions into typed zero-copy field
+      accessors over existing buffers;
+    - {!C} projects descriptions to EverParse 3D declarations.
 
-    {b EverParse 3D Language Support}
+    [Wire] is thus about binary values and their layout. The 3D declaration
+    language has its own vocabulary in {!C}. *)
 
-    This module supports the full EverParse 3D language including:
-    - Base types: UINT8, UINT16, UINT32, UINT64 (LE and BE)
-    - Bitfields with constraints
-    - Enumerations
-    - Structs with dependent fields
-    - Tagged unions (casetype)
-    - Arrays (fixed-size, byte-size, variable)
-    - Parameterized types
-    - Constraints (where clauses)
-    - Actions (:on-success, :act)
-    - Extern declarations *)
-
-(** {1 Staged Computations}
-
-    Following the pattern from
-    {{:https://mirage.github.io/repr/repr/Repr/index.html}Irmin's repr}, staged
-    functions make specialization explicit. The cost of building a specialized
-    encoder/decoder is paid once when [unstage] is called, then subsequent calls
-    to the resulting function are fast.
-
-    Example:
-    {[
-      let get_length = Staged.unstage (Codec.get codec f_length)  (* pay cost here *)
-      for _ = 1 to n do
-        let _ = get_length buf off in  (* fast - no interpretation overhead *)
-        ...
-      done
-    ]} *)
-module Staged : sig
-  type +'a t
-  (** A staged computation of type ['a]. *)
-
-  val stage : 'a -> 'a t
-  (** [stage x] wraps [x] in a staged computation. *)
-
-  val unstage : 'a t -> 'a
-  (** [unstage t] extracts the value from a staged computation. This is where
-      the cost of specialization is paid. *)
-end
-
-(** {1 Unboxed Integer Types}
-
-    On 64-bit platforms, these types are unboxed (immediate) for zero-allocation
-    parsing. On 32-bit platforms, the module will fail at initialization. *)
-
-module UInt32 : sig
-  type t = int
-  (** Unsigned 32-bit integer. Unboxed on 64-bit platforms (fits in 63-bit int).
-  *)
-
-  val get_le : bytes -> int -> t
-  (** [get_le buf off] reads a little-endian value from [buf] at offset [off].
-  *)
-
-  val get_be : bytes -> int -> t
-  (** [get_be buf off] reads a big-endian value from [buf] at offset [off]. *)
-
-  val set_le : bytes -> int -> t -> unit
-  (** [set_le buf off v] writes [v] in little-endian at offset [off]. *)
-
-  val set_be : bytes -> int -> t -> unit
-  (** [set_be buf off v] writes [v] in big-endian at offset [off]. *)
-
-  val to_int : t -> int
-  (** [to_int v] converts [v] to an OCaml int. *)
-
-  val of_int : int -> t
-  (** [of_int n] converts an OCaml int to [t]. *)
-end
-
-module UInt63 : sig
-  type t = int
-  (** Unsigned 63-bit integer. Reads 8 bytes but masks to 63 bits. *)
-
-  val get_le : bytes -> int -> t
-  (** [get_le buf off] reads a little-endian value from [buf] at offset [off].
-  *)
-
-  val get_be : bytes -> int -> t
-  (** [get_be buf off] reads a big-endian value from [buf] at offset [off]. *)
-
-  val set_le : bytes -> int -> t -> unit
-  (** [set_le buf off v] writes [v] in little-endian at offset [off]. *)
-
-  val set_be : bytes -> int -> t -> unit
-  (** [set_be buf off v] writes [v] in big-endian at offset [off]. *)
-
-  val to_int : t -> int
-  (** [to_int v] converts [v] to an OCaml int. *)
-
-  val of_int : int -> t
-  (** [of_int n] converts an OCaml int to [t]. *)
-end
-
-(** {1 Endianness} *)
-
-type endian =
-  | Little  (** Little-endian (native for most systems) *)
-  | Big  (** Big-endian (network byte order) *)
-
-(** {1 Types} *)
-
-type _ typ
-(** ['a typ] describes how to parse/serialize values of type ['a]. *)
-
-type _ expr
-(** ['a expr] represents a computation yielding type ['a]. *)
-
-type action
-(** An imperative action. *)
-
-type action_stmt
-(** An action statement. *)
+module Staged = Staged
+module UInt32 = UInt32
+module UInt63 = UInt63
 
 (** {1 Expressions}
 
-    Expressions for constraints, array sizes, and computations. *)
+    Expressions describe sizes, constraints, and dependencies between fields.
+    They are part of the wire description itself: no evaluation happens at
+    interface construction time.
 
-(** {2 Literals} *)
+    They are used whenever the layout depends on previously decoded data: array
+    lengths, byte-slice sizes, field constraints, and similar dependent
+    structure. *)
 
-val int : int -> int expr
-(** [int n] is the constant integer [n]. *)
+type 'a expr
+type bitfield = U8 | U16 | U16be | U32 | U32be
+type 'a typ
 
-val int64 : int64 -> int64 expr
-(** [int64 n] is the constant 64-bit integer [n]. *)
+module Action : sig
+  type t = Action.t
+  type stmt = Action.stmt
 
-val true_ : bool expr
-(** [true_] is the constant [true] expression. *)
-
-val false_ : bool expr
-(** [false_] is the constant [false] expression. *)
-
-(** {2 Field References} *)
-
-val ref : string -> int expr
-(** [ref name] references the integer value of field [name] from the current
-    struct. Field values are converted to [int] via {!val_to_int}. *)
-
-(** {2 Sizeof} *)
-
-val sizeof : 'a typ -> int expr
-(** [sizeof t] is the size of type [t] in bytes. *)
-
-val sizeof_this : int expr
-(** [sizeof_this] is the size of the non-variable prefix of the current struct.
-*)
-
-val field_pos : int expr
-(** [field_pos] is the current field position. *)
-
-(** {2 Arithmetic Operators} *)
-
-module Expr : sig
-  (** {2 Arithmetic operators} *)
-
-  val ( + ) : int expr -> int expr -> int expr
-  (** [x + y] is the sum of [x] and [y]. *)
-
-  val ( - ) : int expr -> int expr -> int expr
-  (** [x - y] is [x] minus [y]. *)
-
-  val ( * ) : int expr -> int expr -> int expr
-  (** [x * y] is the product of [x] and [y]. *)
-
-  val ( / ) : int expr -> int expr -> int expr
-  (** [x / y] is [x] divided by [y]. *)
-
-  val ( mod ) : int expr -> int expr -> int expr
-  (** [x mod y] is the remainder of [x] divided by [y]. *)
-
-  (** {2 Bitwise operators} *)
-
-  val ( land ) : int expr -> int expr -> int expr
-  (** [x land y] is the bitwise AND of [x] and [y]. *)
-
-  val ( lor ) : int expr -> int expr -> int expr
-  (** [x lor y] is the bitwise OR of [x] and [y]. *)
-
-  val ( lxor ) : int expr -> int expr -> int expr
-  (** [x lxor y] is the bitwise XOR of [x] and [y]. *)
-
-  val lnot : int expr -> int expr
-  (** [lnot x] is the bitwise complement of [x]. *)
-
-  val ( lsl ) : int expr -> int expr -> int expr
-  (** [x lsl n] is [x] shifted left by [n] bits. *)
-
-  val ( lsr ) : int expr -> int expr -> int expr
-  (** [x lsr n] is [x] shifted right by [n] bits (logical). *)
-
-  (** {2 Comparison operators} *)
-
-  val ( = ) : 'a expr -> 'a expr -> bool expr
-  (** [x = y] is [true] if [x] equals [y]. *)
-
-  val ( <> ) : 'a expr -> 'a expr -> bool expr
-  (** [x <> y] is [true] if [x] does not equal [y]. *)
-
-  val ( < ) : int expr -> int expr -> bool expr
-  (** [x < y] is [true] if [x] is less than [y]. *)
-
-  val ( <= ) : int expr -> int expr -> bool expr
-  (** [x <= y] is [true] if [x] is less than or equal to [y]. *)
-
-  val ( > ) : int expr -> int expr -> bool expr
-  (** [x > y] is [true] if [x] is greater than [y]. *)
-
-  val ( >= ) : int expr -> int expr -> bool expr
-  (** [x >= y] is [true] if [x] is greater than or equal to [y]. *)
-
-  (** {2 Logical operators} *)
-
-  val ( && ) : bool expr -> bool expr -> bool expr
-  (** [x && y] is the logical AND of [x] and [y]. *)
-
-  val ( || ) : bool expr -> bool expr -> bool expr
-  (** [x || y] is the logical OR of [x] and [y]. *)
-
-  val not : bool expr -> bool expr
-  (** [not x] is the logical negation of [x]. *)
-
-  (** {2 Casts} *)
-
-  val to_uint8 : int expr -> int expr
-  (** [to_uint8 e] casts [e] to an 8-bit unsigned integer. *)
-
-  val to_uint16 : int expr -> int expr
-  (** [to_uint16 e] casts [e] to a 16-bit unsigned integer. *)
-
-  val to_uint32 : int expr -> int expr
-  (** [to_uint32 e] casts [e] to a 32-bit unsigned integer. *)
-
-  val to_uint64 : int expr -> int expr
-  (** [to_uint64 e] casts [e] to a 64-bit unsigned integer. *)
+  val on_success : stmt list -> t
+  val on_act : stmt list -> t
+  val assign : string -> int expr -> stmt
+  val return_bool : bool expr -> stmt
+  val abort : stmt
+  val if_ : bool expr -> stmt list -> stmt list option -> stmt
+  val var : string -> int expr -> stmt
 end
 
-(** {1 Type Constructors} *)
+val int : int -> int expr
+(** Constant integer expression. *)
 
-(** {2 Integer Types} *)
+val int64 : int64 -> int64 expr
+(** Constant 64-bit integer expression. *)
+
+val field_ref : string -> int expr
+(** Reference to a previously named field. *)
+
+val sizeof : 'a typ -> int expr
+(** Size of a fixed-size wire description. *)
+
+val sizeof_this : int expr
+(** Number of bytes already consumed in the enclosing sequential description.
+
+    This is meaningful only while interpreting a larger description, typically a
+    struct or record-shaped layout. It is used in dependent sizes and
+    constraints for later fields. *)
+
+val field_pos : int expr
+(** Zero-based index of the current field in the enclosing sequential
+    description.
+
+    Like {!sizeof_this}, this is context-dependent and is mainly used inside
+    dependent field constraints and projections. *)
+
+module Expr : sig
+  val ( + ) : int expr -> int expr -> int expr
+  val ( - ) : int expr -> int expr -> int expr
+  val ( * ) : int expr -> int expr -> int expr
+  val ( / ) : int expr -> int expr -> int expr
+  val ( mod ) : int expr -> int expr -> int expr
+  val ( land ) : int expr -> int expr -> int expr
+  val ( lor ) : int expr -> int expr -> int expr
+  val ( lxor ) : int expr -> int expr -> int expr
+  val lnot : int expr -> int expr
+  val ( lsl ) : int expr -> int expr -> int expr
+  val ( lsr ) : int expr -> int expr -> int expr
+  val ( = ) : 'a expr -> 'a expr -> bool expr
+  val ( <> ) : 'a expr -> 'a expr -> bool expr
+  val ( < ) : int expr -> int expr -> bool expr
+  val ( <= ) : int expr -> int expr -> bool expr
+  val ( > ) : int expr -> int expr -> bool expr
+  val ( >= ) : int expr -> int expr -> bool expr
+  val ( && ) : bool expr -> bool expr -> bool expr
+  val ( || ) : bool expr -> bool expr -> bool expr
+  val not : bool expr -> bool expr
+  val true_ : bool expr
+  val false_ : bool expr
+  val to_uint8 : int expr -> int expr
+  val to_uint16 : int expr -> int expr
+  val to_uint32 : int expr -> int expr
+  val to_uint64 : int expr -> int expr
+end
+
+(** {1 Type Descriptions}
+
+    The primitive constructors describe immediate wire values. The combinators
+    build larger descriptions out of them.
+
+    In ordinary use, one starts from primitive integer or byte descriptions and
+    combines them with {!bits}, {!array}, {!byte_slice}, {!where}, {!enum}, and
+    related combinators. *)
 
 val uint8 : int typ
 (** Unsigned 8-bit integer. *)
 
 val uint16 : int typ
-(** Unsigned 16-bit integer, little-endian. *)
+(** Unsigned 16-bit little-endian integer. *)
 
 val uint16be : int typ
-(** Unsigned 16-bit integer, big-endian. *)
+(** Unsigned 16-bit big-endian integer. *)
 
 val uint32 : UInt32.t typ
-(** Unsigned 32-bit integer, little-endian. Unboxed on 64-bit. *)
+(** Unsigned 32-bit little-endian integer. *)
 
 val uint32be : UInt32.t typ
-(** Unsigned 32-bit integer, big-endian. Unboxed on 64-bit. *)
+(** Unsigned 32-bit big-endian integer. *)
 
 val uint63 : UInt63.t typ
-(** Unsigned 63-bit integer, little-endian. Unboxed on 64-bit. Reads 8 bytes. *)
+(** Unsigned 63-bit little-endian integer carried on 8 bytes. *)
 
 val uint63be : UInt63.t typ
-(** Unsigned 63-bit integer, big-endian. Unboxed on 64-bit. Reads 8 bytes. *)
+(** Unsigned 63-bit big-endian integer carried on 8 bytes. *)
 
 val uint64 : int64 typ
-(** Unsigned 64-bit integer, little-endian. Boxed (full 64-bit precision). *)
+(** Unsigned 64-bit little-endian integer represented as [int64]. *)
 
 val uint64be : int64 typ
-(** Unsigned 64-bit integer, big-endian. Boxed (full 64-bit precision). *)
+(** Unsigned 64-bit big-endian integer represented as [int64]. *)
 
-(** {2 Bitfields} *)
-
-type bitfield_base
-(** Base type for bitfields (UINT8, UINT16, UINT32). *)
-
-val bf_uint8 : bitfield_base
-(** 8-bit bitfield base. *)
-
-val bf_uint16 : bitfield_base
-(** 16-bit bitfield base, little-endian. *)
-
-val bf_uint16be : bitfield_base
-(** 16-bit bitfield base, big-endian. *)
-
-val bf_uint32 : bitfield_base
-(** 32-bit bitfield base, little-endian. *)
-
-val bf_uint32be : bitfield_base
-(** 32-bit bitfield base, big-endian. *)
-
-val bits : width:int -> bitfield_base -> int typ
-(** [bits ~width base] extracts [width] bits from a bitfield base type. *)
-
-(** {2 Type Combinators} *)
+val bits : width:int -> bitfield -> int typ
+(** Bitfield of the given width within the given base word. *)
 
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
-(** [map dec enc t] maps wire type [t] through [dec] and [enc].
-    {[
-      let status = map status_of_int int_of_status (bits ~width:3 bf_uint32be)
-    ]} *)
+(** View a wire value through decode and encode functions. *)
 
-val bool : int typ -> bool typ
-(** [bool t] maps integer type [t] to boolean (0 = false).
-    {[
-      let flag = bool (bits ~width:1 bf_uint16be)
-    ]} *)
+val to_bool : int typ -> bool typ
+(** Boolean view over an integer wire value. Zero is [false], non-zero is
+    [true]. *)
 
-val variants : string -> (string * 'a) list -> int typ -> 'a typ
-(** [variants name cases base] maps integer type [base] to named variants with
-    EverParse enum validation. Wire values are inferred from position
-    (0-indexed). Each pair [(3d_name, ocaml_value)] defines one variant.
-    {[
-      type status = [ `Ok | `Warn | `Err | `Crit ]
+val cases : 'a list -> int typ -> 'a typ
+(** Finite positional mapping over an integer representation.
 
-      let status_typ =
-        variants "Status"
-          [ ("OK", `Ok); ("WARN", `Warn); ("ERR", `Err); ("CRIT", `Crit) ]
-          uint8
-    ]}
+    The decoded integer is used as a zero-based index into the list. Decoding or
+    encoding raises [Invalid_argument] if the value falls outside the list or
+    the encoded value is not present in it. *)
 
-    Use {!enum_decls} to extract the 3D enum declaration for module output. *)
-
-(** {2 Special Types} *)
-
-val unit : unit typ
-(** Empty type (zero bytes). *)
+val empty : unit typ
+(** Empty description carrying no bytes and producing [()]. *)
 
 val all_bytes : string typ
-(** Consume all remaining bytes. *)
+(** All remaining bytes of the enclosing sequential description as a string.
+
+    This is mainly useful as the final field of a struct or record-shaped
+    layout. *)
 
 val all_zeros : string typ
-(** Consume all remaining bytes, validating they are zeros. *)
+(** All remaining bytes of the enclosing sequential description, requiring each
+    of them to be zero.
 
-(** {2 Constraints} *)
+    This is mainly useful as the final field of a struct or record-shaped
+    layout. *)
 
 val where : bool expr -> 'a typ -> 'a typ
-(** [where cond t] adds constraint [cond] to type [t]. *)
-
-(** {2 Arrays} *)
+(** Refine a description with a boolean constraint. *)
 
 val array : len:int expr -> 'a typ -> 'a list typ
-(** [array ~len t] is a fixed-count array of [len] elements. *)
+(** Repetition of a description, with length computed from an expression. *)
 
 val byte_array : size:int expr -> string typ
-(** [byte_array ~size] is [UINT8[:byte-size size]] in 3D. Copies bytes on
-    decode. *)
+(** Fixed-size byte sequence copied as a string. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** [byte_slice ~size] is the zero-copy variant of {!byte_array}. Returns a
-    {!Bytesrw.Bytes.Slice.t} pointing into the decode buffer. Same 3D wire
-    format as [byte_array]. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice. *)
 
 val single_elem_array : size:int expr -> 'a typ -> 'a typ
-(** [single_elem_array ~size t] is a single element consuming exactly [size]
-    bytes. Emits as [[:byte-size-single-element-array size]] in 3D. *)
+(** One logical value carried inside a region described by an array-sized byte
+    count.
+
+    This is for layouts where a length expression denotes the size of a region,
+    but that region is known to contain exactly one value, such as a single
+    nested message. *)
 
 val single_elem_array_at_most : size:int expr -> 'a typ -> 'a typ
-(** [single_elem_array_at_most ~size t] is a single element consuming at most
-    [size] bytes with padding. *)
+(** Like {!single_elem_array}, but treating [size] as an upper bound rather than
+    an exact size.
 
-(** {2 Tagged Unions (casetype)} *)
+    This is for length-prefixed regions where the one logical element may
+    consume fewer bytes than the available space. *)
+
+val enum : string -> (string * int) list -> int typ -> int typ
+(** Named integer enumeration with validation. *)
+
+val variants : string -> (string * 'a) list -> int typ -> 'a typ
+(** Enumeration viewed as an OCaml variant-like value. *)
 
 type ('tag, 'a) case
-(** A case in a tagged union. *)
 
 val case : 'tag -> 'a typ -> ('tag, 'a) case
-(** [case tag t] matches when the discriminant equals [tag]. *)
+(** Tagged branch of a casetype. *)
 
 val default : 'a typ -> ('tag, 'a) case
-(** [default t] is the default case. *)
+(** Default branch of a casetype. *)
 
 val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
-(** [casetype name tag cases] defines a tagged union. *)
+(** Tag-dispatched choice between several descriptions. *)
 
-(** {2 Structs} *)
+val pp_3d_typ : Format.formatter -> 'a typ -> unit
+(** Pretty-printer for wire descriptions in 3D syntax. *)
 
-type field
-(** A struct field (type-erased). *)
+val wire_size : 'a typ -> int option
+(** Fixed wire size of a description, if known statically. *)
 
-val field :
-  string -> ?constraint_:bool expr -> ?action:action -> 'a typ -> field
-(** [field name ?constraint_ ?action t] defines a named field. *)
+(** {1 Parsing Errors}
 
-val anon_field : 'a typ -> field
-(** [anon_field t] defines a padding field. *)
-
-type struct_
-(** A struct definition. *)
-
-val struct_ : string -> field list -> struct_
-(** [struct_ name fields] defines a struct type. *)
-
-val struct_name : struct_ -> string
-(** [struct_name s] returns the name of struct [s]. *)
-
-val struct_typ : struct_ -> unit typ
-(** [struct_typ s] converts a struct to a type. *)
-
-(** {2 Parameterized Types} *)
-
-type param
-(** A type parameter. *)
-
-val param : string -> 'a typ -> param
-(** [param name t] declares a parameter with type [t]. *)
-
-val mutable_param : string -> 'a typ -> param
-(** [mutable_param name t] declares a mutable output parameter. *)
-
-val param_struct :
-  string -> param list -> ?where:bool expr -> field list -> struct_
-(** [param_struct name params ?where fields] defines a parameterized struct. *)
-
-val apply : 'a typ -> int expr list -> 'a typ
-(** [apply t args] applies arguments to a parameterized type. *)
-
-(** {2 Type References} *)
-
-val type_ref : string -> 'a typ
-(** [type_ref name] references a type by name. *)
-
-val qualified_ref : string -> string -> 'a typ
-(** [qualified_ref module_ name] references [Module::Type]. *)
-
-(** {1 Actions}
-
-    Actions execute during validation. *)
-
-val on_success : action_stmt list -> action
-(** [on_success stmts] creates an [:on-success] action from [stmts]. *)
-
-val on_act : action_stmt list -> action
-(** [on_act stmts] creates an [:act] action that always succeeds. *)
-
-val assign : string -> int expr -> action_stmt
-(** [assign ptr expr] is [*ptr = expr]. *)
-
-val return_bool : bool expr -> action_stmt
-(** [return_bool e] is [return e]. *)
-
-val abort : action_stmt
-(** [abort] aborts validation. *)
-
-val action_if :
-  bool expr -> action_stmt list -> action_stmt list option -> action_stmt
-(** [action_if cond then_ else_] is a conditional. *)
-
-val var : string -> int expr -> action_stmt
-(** [var name e] binds a local variable. *)
-
-(** {1 Declarations} *)
-
-type decl
-(** A top-level declaration. *)
-
-val typedef : ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
-(** [typedef ?entrypoint ?export ?doc s] declares a type. *)
-
-val define : string -> int -> decl
-(** [define name value] is [#define name value]. *)
-
-val extern_fn : string -> param list -> 'a typ -> decl
-(** [extern_fn name params ret] declares an external function. *)
-
-val extern_probe : ?init:bool -> string -> decl
-(** [extern_probe ?init name] declares an external probe. *)
-
-val enum_decl : string -> (string * int) list -> 'a typ -> decl
-(** [enum_decl name cases base] declares a top-level enum. *)
-
-type decl_case
-(** A case in a top-level casetype declaration. *)
-
-val decl_case : int -> 'a typ -> decl_case
-(** [decl_case tag t] matches when the discriminant equals [tag]. *)
-
-val decl_default : 'a typ -> decl_case
-(** [decl_default t] is the default case. *)
-
-val casetype_decl : string -> param list -> 'a typ -> decl_case list -> decl
-(** [casetype_decl name params tag cases] declares a top-level casetype. *)
-
-(** {1 Modules} *)
-
-type module_
-(** A 3D module (file). *)
-
-val module_ : ?doc:string -> decl list -> module_
-(** [module_ ?doc decls] creates a module. *)
-
-(** {1 3D Output} *)
-
-val to_3d : module_ -> string
-(** [to_3d m] emits the module as EverParse 3D format text. *)
-
-val to_3d_file : string -> module_ -> unit
-(** [to_3d_file path m] writes the module to a .3d file. *)
-
-(** {1 Pretty Printing} *)
-
-val pp_typ : Format.formatter -> 'a typ -> unit
-(** [pp_typ ppf t] pretty-prints type [t] to formatter [ppf]. *)
-
-val pp_module : Format.formatter -> module_ -> unit
-(** [pp_module ppf m] pretty-prints module [m] to formatter [ppf]. *)
-
-(** {1 Binary Parsing (bytesrw)}
-
-    Parse binary data according to type schemas. This parser is designed to be
-    semantically equivalent to EverParse-generated C parsers, enabling
-    differential fuzzing. *)
+    Direct decoding reports failures as values of type {!parse_error}. The cases
+    distinguish structural failure on input, such as unexpected end of input or
+    a constraint violation, from semantic failure such as an invalid enum or
+    tag. *)
 
 type parse_error =
   | Unexpected_eof of { expected : int; got : int }
@@ -524,159 +233,285 @@ type parse_error =
   | All_zeros_failed of { offset : int }
 
 val pp_parse_error : Format.formatter -> parse_error -> unit
-(** [pp_parse_error ppf e] pretty-prints parse error [e] to formatter [ppf]. *)
+(** Pretty-printer for decode errors. *)
 
 exception Parse_error of parse_error
-(** Exception raised by [_exn] decode functions on parse errors. *)
+(** Exception form of {!parse_error}.
 
-(** {2 Parsing Context}
+    The direct decoding functions in {!Wire} return results; lower-level and
+    codec-oriented operations use the exception form on hot paths. *)
 
-    The parsing context tracks field values for dependent type evaluation. *)
+(** {1 Direct Decoding and Encoding}
 
-type ctx
-(** Parsing context with field bindings. *)
+    These functions interpret a ['a typ] directly and exchange ordinary OCaml
+    values with bytes.
 
-val empty_ctx : ctx
-(** Empty parsing context. *)
+    Use them when you want a value now: one-shot decoding, streaming code built
+    around {!Bytesrw}, tests, small tools, and formats that are naturally
+    consumed as values.
 
-(** {2 Parsing Functions} *)
+    Use {!Codec} instead when the format is record-shaped and the main goal is
+    repeated access to individual fields in an existing buffer, without
+    allocating an OCaml record for each read. *)
 
-val parse : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
-(** [parse typ reader] parses a value of type [typ] from [reader]. *)
+val decode : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
+(** Decodes one value from the current reader position.
 
-val parse_string : 'a typ -> string -> ('a, parse_error) result
-(** [parse_string typ s] parses a value from a string. *)
+    Decoding is prefix-based: success does not imply that the reader is
+    exhausted afterwards. *)
 
-val parse_bytes : 'a typ -> bytes -> ('a, parse_error) result
-(** [parse_bytes typ b] parses a value from bytes. *)
+val decode_string : 'a typ -> string -> ('a, parse_error) result
+(** Decodes one value from the start of the string.
 
-(** {1 Binary Encoding (bytesrw)}
+    Trailing bytes, if any, are left uninterpreted. *)
 
-    Encode OCaml values to binary according to type schemas. *)
+val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
+(** Decodes one value from the start of the byte sequence.
+
+    Trailing bytes, if any, are left uninterpreted. *)
+
+(** {1 Direct Encoding}
+
+    Encoding follows the same description language as decoding. The functions in
+    this section are the direct counterparts of {!decode}, {!decode_string}, and
+    {!decode_bytes}: they work with whole OCaml values rather than field-level
+    accessors. *)
 
 val encode : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
-(** [encode typ v writer] encodes [v] to [writer]. *)
+(** Encodes one value to a {!Bytesrw.Bytes.Writer.t}.
+
+    This function is exception-based. Unsupported description forms, such as
+    unresolved type references, raise an exception rather than returning an
+    error value. *)
 
 val encode_to_bytes : 'a typ -> 'a -> bytes
-(** [encode_to_bytes typ v] encodes [v] to bytes. *)
+(** Encodes one value to freshly allocated bytes. *)
 
 val encode_to_string : 'a typ -> 'a -> string
-(** [encode_to_string typ v] encodes [v] to a string. *)
+(** Encodes one value to a freshly allocated string. *)
+
+(** {1 Zero-Copy Codecs}
+
+    A codec is the record-oriented companion to a wire description.
+
+    Where {!decode} and {!encode} turn whole values into bytes and back, a codec
+    seals a record description together with its typed fields and can then:
+
+    - decode or encode a whole record value;
+    - compute its wire size;
+    - derive staged readers and writers for individual fields.
+
+    Codecs are the right tool for hot paths that inspect or update a few fields
+    repeatedly in existing buffers.
+
+    The underlying wire description remains the same; what changes is the mode
+    of use. Direct decoding gives you values. A codec gives you a sealed,
+    record-specific operational interface. *)
 
 module Codec : sig
-  type ('a, 'r) field
-  (** A field specification for a value of type ['a] in a record of type ['r].
-  *)
+  type ('a, 'r) field = ('a, 'r) Codec.field
+  (** Description of one typed field in a record codec. *)
 
-  type 'r t
-  (** A sealed record codec for type ['r]. *)
+  type 'r t = 'r Codec.t
+  (** Sealed codec for record values of type ['r]. *)
 
-  type ('f, 'r) fields =
+  type ('f, 'r) fields = ('f, 'r) Codec.fields =
     | [] : ('r, 'r) fields
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
-        (** Heterogeneous field list. [open Codec] brings [[]] and [(::)] into
-            scope for list syntax. *)
+        (** Heterogeneous field list in record order. *)
 
   val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
-  (** [field name typ get] defines a field specification with type [typ] and
-      getter [get]. Use {!val:Wire.map} or {!val:Wire.bool} on the type for
-      conversions. *)
+  (** Declares one field of a record codec. *)
 
   val view : string -> 'f -> ('f, 'r) fields -> 'r t
-  (** [view name constructor fields] creates a sealed view codec:
+  (** Builds a record codec from a constructor and its fields.
+
+      The constructor is applied in field order at decode time; the field
+      projections are used at encode time.
+
+      Example:
       {[
-        let open Codec in
-        let codec = view "Packet" (fun apid dlen -> {apid; dlen})
-          [f_apid; f_dlen]
+        type header = { version : int; length : int }
+
+        let header_codec =
+          Codec.view "Header"
+            (fun version length -> { version; length })
+            Codec.
+              [
+                Codec.field "version" uint8 (fun h -> h.version);
+                Codec.field "length" uint16 (fun h -> h.length);
+              ]
       ]} *)
 
   val wire_size : 'r t -> int
-  (** [wire_size codec] returns the fixed wire size of the codec in bytes.
-      Raises [Invalid_argument] for variable-size codecs — use {!min_wire_size}
-      or {!compute_wire_size} instead. *)
+  (** Fixed wire size of the codec.
+
+      Raises [Invalid_argument] if the codec is variable-size. *)
 
   val min_wire_size : 'r t -> int
-  (** [min_wire_size codec] returns the minimum wire size (sum of all fixed-size
-      fields). For fixed-size codecs, this equals {!wire_size}. *)
+  (** Minimum wire size of the codec. *)
 
-  val compute_wire_size : 'r t -> bytes -> int -> int
-  (** [compute_wire_size codec buf off] computes the actual wire size by reading
-      dependent-size fields from [buf] at offset [off]. For fixed-size codecs,
-      returns the fixed size without reading the buffer. *)
+  val wire_size_at : 'r t -> bytes -> int -> int
+  (** Computes the actual wire size from a buffer at the given base offset. *)
 
   val is_fixed : 'r t -> bool
-  (** [is_fixed codec] returns [true] if the codec has a fixed wire size. *)
+  (** [true] iff the codec has a statically known size. *)
 
   val decode : 'r t -> bytes -> int -> 'r
-  (** [decode codec buf off] decodes a record from [buf] at offset [off]. Raises
-      {!Parse_error} if the buffer is too short. *)
+  (** Decodes one record value from a buffer at the given base offset.
+
+      This function is exception-based and raises {!Parse_error} on malformed
+      input. *)
 
   val encode : 'r t -> 'r -> bytes -> int -> unit
-  (** [encode codec v buf off] encodes [v] into [buf] at offset [off]. Raises
-      [Invalid_argument] if the buffer is too short. *)
+  (** Encodes one record value into a buffer at the given base offset.
 
-  val to_struct : 'r t -> struct_
-  (** [to_struct codec] converts the codec to a struct for 3D generation. *)
+      Raises [Invalid_argument] if the destination buffer is too short. *)
 
   val get : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-  (** [get codec f] returns a staged reader for field [f]. Unstage once outside
-      the hot loop to resolve field dispatch:
-      {[
-        let get_apid = Staged.unstage (Codec.get packet_codec f_apid) in
-        for _ = 1 to n do
-          get_apid buf off
-        done
-      ]}
-      Does not bounds-check — the caller must ensure [buf] has at least
-      [wire_size codec] bytes from [off]. *)
+  (** Staged field reader specialised for one field of one codec.
+
+      Force the staged value once, then reuse the resulting function for many
+      reads. *)
 
   val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-  (** [set codec f] returns a staged writer for field [f]. Unstage once outside
-      the hot loop:
-      {[
-        let set_port = Staged.unstage (Codec.set tcp_codec f_dst_port) in
-        set_port buf off 8080
-      ]}
-      For bitfields, uses read-modify-write to preserve adjacent bits. Does not
-      bounds-check. *)
+  (** Staged field writer specialised for one field of one codec.
 
-  val ref : ('a, 'r) field -> int expr
-  (** [ref f] returns an expression referencing field [f] by name. Use this
-      instead of {!val:Wire.ref} for type-safe field references in constraints
-      and dependent sizes:
+      Force the staged value once, then reuse the resulting function for many
+      writes. *)
 
-      {[
-        let f_length = Codec.field "Length" uint16be (fun h -> h.length)
-
-        let f_payload =
-          Codec.field "Payload"
-            (byte_slice ~size:(Codec.ref f_length))
-            (fun h -> h.payload)
-      ]} *)
+  val field_ref : ('a, 'r) field -> int expr
+  (** Field reference expression, used in dependent sizes and constraints. *)
 end
 
-(** {1 EverParse Helpers} *)
+(** {1 3D Projection}
 
-val size_of_struct : struct_ -> int option
-(** [size_of_struct s] computes the fixed wire size of struct [s] in bytes.
-    Returns [None] if the struct contains variable-length fields. *)
+    {!C} is the 3D-facing companion to {!Wire}. It reuses the same description
+    language, but introduces names for declarations, modules, and schema
+    generation.
 
-val ml_type_of : 'a typ -> string
-(** [ml_type_of typ] returns the OCaml type name for a wire type (e.g., ["int"],
-    ["int32"], ["int64"]). *)
+    This is the part of the library to use when the goal is not to decode bytes
+    in OCaml, but to describe or emit EverParse 3D artefacts from the same wire
+    definitions. *)
 
-(** {1 Struct-level Read/Write}
+module C : sig
+  type schema = C.schema
+  (** A named 3D schema together with its output module and wire size. *)
 
-    Parse and re-encode struct field values without requiring a typed record
-    codec. Field values are retained in an opaque existential representation. *)
+  type struct_ = C.struct_
+  (** 3D struct declaration. *)
 
-type parsed_struct
-(** Opaque representation of parsed struct field values. *)
+  type field = C.field
+  (** Field of a 3D struct. *)
 
-val read_struct : struct_ -> string -> (parsed_struct, parse_error) result
-(** [read_struct s buf] parses struct [s] from [buf], retaining field values for
-    re-encoding via {!write_struct}. *)
+  type param = C.param
+  (** Parameter of a parameterised 3D declaration. *)
 
-val write_struct : struct_ -> parsed_struct -> (string, parse_error) result
-(** [write_struct s ps] encodes previously-parsed field values [ps] back to
-    bytes using the schema of struct [s]. *)
+  type action = Action.t
+  (** 3D action attached to a field. *)
+
+  type action_stmt = Action.stmt
+  (** Statement inside a 3D action. *)
+
+  type decl = C.decl
+  (** Top-level 3D declaration. *)
+
+  type decl_case = C.decl_case
+  (** Case of a top-level 3D casetype declaration. *)
+
+  type module_ = C.module_
+  (** A 3D module. *)
+
+  val struct_of_codec : 'r Codec.t -> struct_
+  (** Projects a record codec to a 3D struct. *)
+
+  val schema : 'r Codec.t -> schema
+  (** Builds a one-struct schema from a codec. *)
+
+  val generate : outdir:string -> schema list -> unit
+  (** Writes one [.3d] file per schema into [outdir]. *)
+
+  val typedef :
+    ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
+  (** Top-level typedef declaration. *)
+
+  val define : string -> int -> decl
+  (** Top-level integer definition. *)
+
+  val extern_fn : string -> param list -> 'a typ -> decl
+  (** External function declaration. *)
+
+  val extern_probe : ?init:bool -> string -> decl
+  (** External probe declaration. *)
+
+  val enum_decl : string -> (string * int) list -> 'a typ -> decl
+  (** Top-level enum declaration. *)
+
+  val decl_case : int -> 'a typ -> decl_case
+  (** One tagged case in a top-level casetype declaration. *)
+
+  val decl_default : 'a typ -> decl_case
+  (** Default case in a top-level casetype declaration. *)
+
+  val casetype_decl : string -> param list -> 'a typ -> decl_case list -> decl
+  (** Top-level casetype declaration. *)
+
+  val module_ : ?doc:string -> decl list -> module_
+  (** Builds a 3D module from declarations. *)
+
+  val to_3d : module_ -> string
+  (** Renders a 3D module to text. *)
+
+  val to_3d_file : string -> module_ -> unit
+  (** Writes a rendered 3D module to a file. *)
+
+  val field :
+    string -> ?constraint_:bool expr -> ?action:action -> 'a typ -> field
+  (** Named field in a 3D struct. *)
+
+  val anon_field : 'a typ -> field
+  (** Anonymous field in a 3D struct. *)
+
+  val struct_ : string -> field list -> struct_
+  (** Non-parameterised 3D struct. *)
+
+  val struct_name : struct_ -> string
+  (** Name of a struct declaration. *)
+
+  val struct_typ : struct_ -> unit typ
+  (** View a 3D struct as a wire description. *)
+
+  val param : string -> 'a typ -> param
+  (** Immutable parameter declaration. *)
+
+  val mutable_param : string -> 'a typ -> param
+  (** Mutable parameter declaration. *)
+
+  val param_struct :
+    string -> param list -> ?where:bool expr -> field list -> struct_
+  (** Parameterised 3D struct. *)
+
+  val apply : 'a typ -> int expr list -> 'a typ
+  (** Apply a parameterised description to integer arguments. *)
+
+  val type_ref : string -> 'a typ
+  (** Unqualified type reference. *)
+
+  val qualified_ref : string -> string -> 'a typ
+  (** Qualified type reference. *)
+
+  val pp_typ : Format.formatter -> 'a typ -> unit
+  (** Pretty-printer for 3D-facing type syntax. *)
+
+  val pp_module : Format.formatter -> module_ -> unit
+  (** Pretty-printer for 3D modules. *)
+
+  val wire_size : struct_ -> int option
+  (** Fixed wire size of a struct, if known statically. *)
+
+  val ml_type_of : 'a typ -> string
+  (** OCaml type name used by stub generators. *)
+
+  val of_module : name:string -> module_:module_ -> wire_size:int -> schema
+  (** Wraps an existing 3D module as a schema. *)
+end

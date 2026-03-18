@@ -3,7 +3,31 @@
 module Staged = Staged
 module UInt32 = UInt32
 module UInt63 = UInt63
+module Action = Action
 include Types
+
+type bitfield = U8 | U16 | U16be | U32 | U32be
+
+let field_ref = Types.ref
+let to_bool = Types.bool
+let empty = Types.unit
+let pp_3d_typ = Types.pp_typ
+let wire_size = Types.field_wire_size
+
+let bits ~width = function
+  | U8 -> Types.bits ~width Types.bf_uint8
+  | U16 -> Types.bits ~width Types.bf_uint16
+  | U16be -> Types.bits ~width Types.bf_uint16be
+  | U32 -> Types.bits ~width Types.bf_uint32
+  | U32be -> Types.bits ~width Types.bf_uint32be
+
+module Expr = struct
+  include Expr
+
+  let true_ = Types.true_
+  let false_ = Types.false_
+end
+
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
@@ -409,6 +433,8 @@ let parse typ reader =
   | v, _ -> Ok v
   | exception Parse_exn e -> Error e
 
+let decode = parse
+
 let[@inline] check_eof len need =
   if need > len then
     raise (Parse_exn (Unexpected_eof { expected = need; got = len }))
@@ -477,10 +503,14 @@ let parse_string typ s =
   | v -> Ok v
   | exception Parse_exn e -> Error e
 
+let decode_string = parse_string
+
 let parse_bytes typ b =
   match parse_direct typ b 0 (Bytes.length b) with
   | v -> Ok v
   | exception Parse_exn e -> Error e
+
+let decode_bytes = parse_bytes
 
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
@@ -743,108 +773,5 @@ let encode_to_string typ v =
       encode typ v writer;
       Buffer.contents buf
 
-(* ==================== EverParse FFI Helpers ==================== *)
-
-(** Compute the fixed wire size of a struct (None if variable-length) *)
-let rec size_of_typ : type a. a typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | Uint32 _ -> Some 4
-  | Uint64 _ -> Some 8
-  | Byte_array { size = Int n } | Byte_slice { size = Int n } -> Some n
-  | Enum { base; _ } -> size_of_int_typ base
-  | Where { inner; _ } -> size_of_typ inner
-  | Map { inner; _ } -> size_of_typ inner
-  | _ -> None
-
-and size_of_int_typ : int typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | Enum { base; _ } -> size_of_int_typ base
-  | Where { inner; _ } -> size_base inner
-  | _ -> None
-
-and size_base : type a. a typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | _ -> None
-
-let size_of_struct (s : struct_) =
-  List.fold_left
-    (fun acc (Field f) ->
-      match (acc, size_of_typ f.field_typ) with
-      | Some a, Some b -> Some (a + b)
-      | _ -> None)
-    (Some 0) s.fields
-
-(** OCaml type name for a wire type (for generated external declarations). *)
-let rec ml_type_of : type a. a typ -> string = function
-  | Uint8 -> "int"
-  | Uint16 _ -> "int"
-  | Uint32 _ -> "int32"
-  | Uint64 _ -> "int64"
-  | Bits _ -> "int"
-  | Enum { base; _ } -> ml_type_of_int base
-  | Where { inner; _ } -> ml_type_of inner
-  | Map { inner; _ } -> ml_type_of inner
-  | Apply { typ; _ } -> ml_type_of typ
-  | _ -> failwith "ml_type_of: unsupported type"
-
-and ml_type_of_int : int typ -> string = function
-  | Uint8 -> "int"
-  | Uint16 _ -> "int"
-  | Enum { base; _ } -> ml_type_of_int base
-  | Where { inner; _ } -> ml_type_of_int inner
-  | Map { inner; _ } -> ml_type_of inner
-  | _ -> failwith "ml_type_of_int: unsupported type"
-
-(* ==================== Struct-level read/write ==================== *)
-
-type parsed_value = Parsed : 'a typ * 'a -> parsed_value
-type parsed_struct = (string option * parsed_value) list
-
-let read_struct (s : struct_) buf =
-  let reader = Reader.of_string buf in
-  let dec = decoder reader in
-  let rec go ctx acc = function
-    | [] -> Ok (List.rev acc)
-    | Field { field_name; field_typ; constraint_; _ } :: rest -> (
-        let v, ctx' = parse_with dec ctx field_typ in
-        let ctx' =
-          match field_name with
-          | Some n -> Ctx.add n (val_to_int field_typ v) ctx'
-          | None -> ctx'
-        in
-        match constraint_ with
-        | Some cond when not (eval_expr ctx' cond) ->
-            Error (Constraint_failed "field constraint")
-        | _ -> go ctx' ((field_name, Parsed (field_typ, v)) :: acc) rest)
-  in
-  match go empty_ctx [] s.fields with
-  | r -> r
-  | exception Parse_exn e -> Error e
-
-let write_struct (s : struct_) (ps : parsed_struct) =
-  let buf = Buffer.create 64 in
-  let writer = Writer.of_buffer buf in
-  let enc = encoder writer in
-  let fields_with_vals = List.combine s.fields ps in
-  let rec go ctx = function
-    | [] ->
-        flush enc;
-        Ok (Buffer.contents buf)
-    | (Field { field_name; constraint_; _ }, (_, Parsed (typ, v))) :: rest -> (
-        let ctx' = encode_with_ctx ctx typ v enc in
-        let ctx' =
-          match field_name with
-          | Some n -> Ctx.add n (val_to_int typ v) ctx'
-          | None -> ctx'
-        in
-        match constraint_ with
-        | Some cond when not (eval_expr ctx' cond) ->
-            Error (Constraint_failed "field constraint")
-        | _ -> go ctx' rest)
-  in
-  go empty_ctx fields_with_vals
-
 module Codec = Codec
+module C = C

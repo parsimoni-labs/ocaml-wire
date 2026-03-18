@@ -4,11 +4,12 @@
     on real protocols. They cover:
 
     - Integer types: uint8, uint16, uint16be, uint32, uint32be, uint64be
-    - Bitfields: bf_uint8 (8 bits), bf_uint16be (16 bits), bf_uint32be (32 bits)
+    - Bitfields: U8 (8 bits), U16be (16 bits), U32be (32 bits)
     - Type combinators: map, bool
     - Various struct sizes: 1B to 26B *)
 
 open Wire
+open Wire.C
 
 (* ── 1. Minimal: single uint8 = 1 byte ── *)
 
@@ -19,7 +20,7 @@ let f_minimal_value = Codec.field "Value" uint8 (fun m -> m.m_value)
 let minimal_codec =
   Codec.view "Minimal" (fun v -> { m_value = v }) Codec.[ f_minimal_value ]
 
-let minimal_struct = Codec.to_struct minimal_codec
+let minimal_struct = C.struct_of_codec minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
 let minimal_default = { m_value = 42 }
 
@@ -63,7 +64,7 @@ let all_ints_codec =
         f_ints_u64be;
       ]
 
-let all_ints_struct = Codec.to_struct all_ints_codec
+let all_ints_struct = C.struct_of_codec all_ints_codec
 let all_ints_size = Codec.wire_size all_ints_codec
 
 let all_ints_default =
@@ -87,23 +88,19 @@ let all_ints_data n =
       Bytes.set_int64_be b 13 (Int64.of_int (i * 31));
       b)
 
-(* ── 3. Bitfield8: 3+5 bits in bf_uint8 = 1 byte ── *)
+(* ── 3. Bitfield8: 3+5 bits in U8 = 1 byte ── *)
 
 type bf8 = { bf8_tag : int; bf8_value : int }
 
-let f_bf8_value =
-  Codec.field "Value" (bits ~width:5 bf_uint8) (fun b -> b.bf8_value)
+let f_bf8_value = Codec.field "Value" (bits ~width:5 U8) (fun b -> b.bf8_value)
 
 let bf8_codec =
   Codec.view "Bitfield8"
     (fun tag value -> { bf8_tag = tag; bf8_value = value })
     Codec.
-      [
-        Codec.field "Tag" (bits ~width:3 bf_uint8) (fun b -> b.bf8_tag);
-        f_bf8_value;
-      ]
+      [ Codec.field "Tag" (bits ~width:3 U8) (fun b -> b.bf8_tag); f_bf8_value ]
 
-let bf8_struct = Codec.to_struct bf8_codec
+let bf8_struct = C.struct_of_codec bf8_codec
 let bf8_size = Codec.wire_size bf8_codec
 let bf8_default = { bf8_tag = 5; bf8_value = 19 }
 
@@ -114,24 +111,23 @@ let bf8_data n =
       Bytes.set_uint8 b 0 w;
       b)
 
-(* ── 4. Bitfield16: 1+4+11 bits in bf_uint16be = 2 bytes ── *)
+(* ── 4. Bitfield16: 1+4+11 bits in U16be = 2 bytes ── *)
 
 type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
-let f_bf16_id =
-  Codec.field "Id" (bits ~width:11 bf_uint16be) (fun b -> b.bf16_id)
+let f_bf16_id = Codec.field "Id" (bits ~width:11 U16be) (fun b -> b.bf16_id)
 
 let bf16_codec =
   Codec.view "Bitfield16"
     (fun flag type_ id -> { bf16_flag = flag; bf16_type = type_; bf16_id = id })
     Codec.
       [
-        Codec.field "Flag" (bits ~width:1 bf_uint16be) (fun b -> b.bf16_flag);
-        Codec.field "Type" (bits ~width:4 bf_uint16be) (fun b -> b.bf16_type);
+        Codec.field "Flag" (bits ~width:1 U16be) (fun b -> b.bf16_flag);
+        Codec.field "Type" (bits ~width:4 U16be) (fun b -> b.bf16_type);
         f_bf16_id;
       ]
 
-let bf16_struct = Codec.to_struct bf16_codec
+let bf16_struct = C.struct_of_codec bf16_codec
 let bf16_size = Codec.wire_size bf16_codec
 let bf16_default = { bf16_flag = 1; bf16_type = 9; bf16_id = 1023 }
 
@@ -142,7 +138,7 @@ let bf16_data n =
       Bytes.set_uint16_be b 0 w;
       b)
 
-(* ── 5. Bitfield32: 4+6+14+8 bits in bf_uint32be = 4 bytes ── *)
+(* ── 5. Bitfield32: 4+6+14+8 bits in U32be = 4 bytes ── *)
 
 type bf32 = {
   bf32_flags : int;
@@ -152,7 +148,7 @@ type bf32 = {
 }
 
 let f_bf32_pri =
-  Codec.field "Priority" (bits ~width:8 bf_uint32be) (fun b -> b.bf32_pri)
+  Codec.field "Priority" (bits ~width:8 U32be) (fun b -> b.bf32_pri)
 
 let bf32_codec =
   Codec.view "Bitfield32"
@@ -160,13 +156,13 @@ let bf32_codec =
       { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
     Codec.
       [
-        Codec.field "Flags" (bits ~width:4 bf_uint32be) (fun b -> b.bf32_flags);
-        Codec.field "Channel" (bits ~width:6 bf_uint32be) (fun b -> b.bf32_chan);
-        Codec.field "Seq" (bits ~width:14 bf_uint32be) (fun b -> b.bf32_seq);
+        Codec.field "Flags" (bits ~width:4 U32be) (fun b -> b.bf32_flags);
+        Codec.field "Channel" (bits ~width:6 U32be) (fun b -> b.bf32_chan);
+        Codec.field "Seq" (bits ~width:14 U32be) (fun b -> b.bf32_seq);
         f_bf32_pri;
       ]
 
-let bf32_struct = Codec.to_struct bf32_codec
+let bf32_struct = C.struct_of_codec bf32_codec
 let bf32_size = Codec.wire_size bf32_codec
 
 let bf32_default =
@@ -194,7 +190,7 @@ type bool_fields = {
 }
 
 let f_bool_active =
-  Codec.field "Active" (bool (bits ~width:1 bf_uint8)) (fun b -> b.bl_active)
+  Codec.field "Active" (to_bool (bits ~width:1 U8)) (fun b -> b.bl_active)
 
 let bool_fields_codec =
   Codec.view "BoolFields"
@@ -203,14 +199,12 @@ let bool_fields_codec =
     Codec.
       [
         f_bool_active;
-        Codec.field "Valid"
-          (bool (bits ~width:1 bf_uint8))
-          (fun b -> b.bl_valid);
-        Codec.field "Mode" (bits ~width:6 bf_uint8) (fun b -> b.bl_mode);
+        Codec.field "Valid" (to_bool (bits ~width:1 U8)) (fun b -> b.bl_valid);
+        Codec.field "Mode" (bits ~width:6 U8) (fun b -> b.bl_mode);
         Codec.field "Code" uint8 (fun b -> b.bl_code);
       ]
 
-let bool_fields_struct = Codec.to_struct bool_fields_codec
+let bool_fields_struct = C.struct_of_codec bool_fields_codec
 let bool_fields_size = Codec.wire_size bool_fields_codec
 
 let bool_fields_default =
@@ -271,7 +265,7 @@ let large_mixed_codec =
         f_mixed_timestamp;
       ]
 
-let large_mixed_struct = Codec.to_struct large_mixed_codec
+let large_mixed_struct = C.struct_of_codec large_mixed_codec
 let large_mixed_size = Codec.wire_size large_mixed_codec
 
 let large_mixed_default =
@@ -335,7 +329,7 @@ let mapped_codec =
     (fun pri value -> { mp_priority = pri; mp_value = value })
     Codec.[ f_mp_priority; f_mp_value ]
 
-let mapped_struct = Codec.to_struct mapped_codec
+let mapped_struct = C.struct_of_codec mapped_codec
 let mapped_size = Codec.wire_size mapped_codec
 let mapped_default = { mp_priority = High; mp_value = 42 }
 
@@ -360,17 +354,17 @@ let f_cd_type =
   Codec.field "PacketType"
     (variants "PacketType"
        [ ("TM", Telemetry); ("TC", Telecommand) ]
-       (bits ~width:1 bf_uint8))
+       (bits ~width:1 U8))
     (fun c -> c.cd_type)
 
-let f_cd_id = Codec.field "Id" (bits ~width:7 bf_uint8) (fun c -> c.cd_id)
+let f_cd_id = Codec.field "Id" (bits ~width:7 U8) (fun c -> c.cd_id)
 
 let cases_demo_codec =
   Codec.view "CasesDemo"
     (fun ptype id -> { cd_type = ptype; cd_id = id })
     Codec.[ f_cd_type; f_cd_id ]
 
-let cases_demo_struct = Codec.to_struct cases_demo_codec
+let cases_demo_struct = C.struct_of_codec cases_demo_codec
 let cases_demo_size = Codec.wire_size cases_demo_codec
 let cases_demo_default = { cd_type = Telemetry; cd_id = 42 }
 
@@ -408,7 +402,7 @@ let enum_demo_codec =
     (fun status code -> { en_status = status; en_code = code })
     Codec.[ f_en_status; f_en_code ]
 
-let enum_demo_struct = Codec.to_struct enum_demo_codec
+let enum_demo_struct = C.struct_of_codec enum_demo_codec
 let enum_demo_size = Codec.wire_size enum_demo_codec
 let enum_demo_default = { en_status = `Ok; en_code = 42 }
 
@@ -431,7 +425,7 @@ type constrained = { co_version : int; co_data : int }
 
 let f_co_version =
   Codec.field "Version"
-    (where Expr.(ref "Version" = int 0) uint8)
+    (where Expr.(field_ref "Version" = int 0) uint8)
     (fun c -> c.co_version)
 
 let f_co_data = Codec.field "Data" uint8 (fun c -> c.co_data)
@@ -441,7 +435,7 @@ let constrained_codec =
     (fun version data -> { co_version = version; co_data = data })
     Codec.[ f_co_version; f_co_data ]
 
-let constrained_struct = Codec.to_struct constrained_codec
+let constrained_struct = C.struct_of_codec constrained_codec
 let constrained_size = Codec.wire_size constrained_codec
 let constrained_default = { co_version = 0; co_data = 42 }
 
@@ -465,13 +459,19 @@ let constrained_data n =
 
 let array_struct =
   struct_ "ArrayDemo"
-    [ field "Count" uint8; field "Items" (array ~len:(ref "Count") uint16be) ]
+    [
+      field "Count" uint8;
+      field "Items" (array ~len:(field_ref "Count") uint16be);
+    ]
 
 (* ── 13. ByteArray: byte blob with copy (vs byte_slice zero-copy) ── *)
 
 let byte_array_struct =
   struct_ "ByteArrayDemo"
-    [ field "Length" uint16be; field "Data" (byte_array ~size:(ref "Length")) ]
+    [
+      field "Length" uint16be;
+      field "Data" (byte_array ~size:(field_ref "Length"));
+    ]
 
 (* ── 14. Trailing / padding types ── *)
 
@@ -487,14 +487,15 @@ let single_elem_struct =
   struct_ "SingleElem"
     [
       field "Size" uint16be;
-      field "Elem" (single_elem_array ~size:(ref "Size") uint32be);
+      field "Elem" (single_elem_array ~size:(field_ref "Size") uint32be);
     ]
 
 let single_elem_at_most_struct =
   struct_ "SingleElemAtMost"
     [
       field "MaxSize" uint16be;
-      field "Elem" (single_elem_array_at_most ~size:(ref "MaxSize") uint16be);
+      field "Elem"
+        (single_elem_array_at_most ~size:(field_ref "MaxSize") uint16be);
     ]
 
 (* ── 16. Anonymous fields (padding) ── *)
@@ -510,11 +511,13 @@ let action_struct =
     [
       field "Magic" uint32be;
       field "Data"
-        ~action:(on_success [ return_bool Expr.(ref "Magic" = int 0x1ACFFC1D) ])
+        ~action:
+          (Action.on_success
+             [ Action.return_bool Expr.(field_ref "Magic" = int 0x1ACFFC1D) ])
         uint16be;
     ]
 
-(* ── 18. Actions: full — var, action_if, assign, abort ── *)
+(* ── 18. Actions: full — Action.var, Action.if_, Action.assign, Action.abort ── *)
 
 let action_full_struct =
   param_struct "ActionFull"
@@ -523,13 +526,13 @@ let action_full_struct =
       field "Tag" uint8;
       field "Value"
         ~action:
-          (on_act
+          (Action.on_act
              [
-               var "x" Expr.(ref "Tag" + ref "Value");
-               action_if
-                 Expr.(ref "x" > int 0)
-                 [ assign "out_value" (ref "x") ]
-                 (Some [ abort ]);
+               Action.var "x" Expr.(field_ref "Tag" + field_ref "Value");
+               Action.if_
+                 Expr.(field_ref "x" > int 0)
+                 [ Action.assign "out_value" (field_ref "x") ]
+                 (Some [ Action.abort ]);
              ])
         uint16be;
     ]
@@ -539,12 +542,13 @@ let action_full_struct =
 let param_demo_struct =
   param_struct "BoundedPayload"
     [ param "max_len" uint16be; mutable_param "out_len" uint16be ]
-    ~where:Expr.(ref "Length" <= ref "max_len")
+    ~where:Expr.(field_ref "Length" <= field_ref "max_len")
     [
       field "Length"
-        ~action:(on_success [ assign "out_len" (ref "Length") ])
+        ~action:
+          (Action.on_success [ Action.assign "out_len" (field_ref "Length") ])
         uint16be;
-      field "Data" (byte_array ~size:(ref "Length"));
+      field "Data" (byte_array ~size:(field_ref "Length"));
     ]
 
 (* ── 20. Casetype: tagged union (different wire layout per tag) ──
@@ -560,7 +564,7 @@ let casetype_module =
            [
              field "SeqNo" uint32be;
              field "Length" uint16be;
-             field "Body" (byte_array ~size:(ref "Length"));
+             field "Body" (byte_array ~size:(field_ref "Length"));
            ]);
       typedef (struct_ "AckPayload" [ field "AckedSeqNo" uint32be ]);
       casetype_decl "MsgBody"
@@ -576,7 +580,7 @@ let casetype_module =
         (struct_ "Message"
            [
              field "Kind" uint8;
-             field "Body" (apply (type_ref "MsgBody") [ ref "Kind" ]);
+             field "Body" (apply (type_ref "MsgBody") [ field_ref "Kind" ]);
            ]);
     ]
 
@@ -595,7 +599,7 @@ let extern_module =
         (struct_ "ExternDemo"
            [
              field "Length" uint16be;
-             field "Payload" (byte_array ~size:(ref "Length"));
+             field "Payload" (byte_array ~size:(field_ref "Length"));
            ]);
     ]
 

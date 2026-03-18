@@ -77,7 +77,7 @@ type random_field = {
 }
 
 type random_schema = {
-  struct_ : Wire.struct_;
+  struct_ : Wire.C.struct_;
   fields : random_field list;
   total_wire_size : int;
 }
@@ -103,7 +103,7 @@ let random_struct seed =
       (fun rf ->
         let constraint_ =
           Option.map
-            (fun k -> Wire.Expr.(Wire.ref rf.name <= Wire.int k))
+            (fun k -> Wire.Expr.(Wire.field_ref rf.name <= Wire.int k))
             rf.constraint_val
         in
         rf.ft.make_field rf.name constraint_)
@@ -112,7 +112,7 @@ let random_struct seed =
   let total_wire_size =
     List.fold_left (fun acc rf -> acc + rf.ft.wire_size) 0 fields
   in
-  { struct_ = Wire.struct_ struct_name wire_fields; fields; total_wire_size }
+  { struct_ = Wire.C.struct_ struct_name wire_fields; fields; total_wire_size }
 
 (* ---- Code generation for differential testing ---- *)
 
@@ -126,14 +126,14 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Include all wrapper headers - they declare the check functions *)
   List.iter
     (fun rs ->
-      let name = Wire.struct_name rs.struct_ in
+      let name = Wire.C.struct_name rs.struct_ in
       pr "#include \"%s/%sWrapper.h\"\n" schema_dir name)
     schemas;
   pr "\n";
   (* Include wrapper implementations with unique error handlers *)
   List.iteri
     (fun i rs ->
-      let name = Wire.struct_name rs.struct_ in
+      let name = Wire.C.struct_name rs.struct_ in
       (* Include EverParse.h and parser *)
       if i = 0 then pr "#include \"%s/EverParse.h\"\n" schema_dir;
       pr "#include \"%s/%s.h\"\n" schema_dir name;
@@ -158,7 +158,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Generate OCaml stubs *)
   List.iter
     (fun rs ->
-      let name = Wire.struct_name rs.struct_ in
+      let name = Wire.C.struct_name rs.struct_ in
       pr "CAMLprim value caml_%s_check(value v_bytes) {\n"
         (String.lowercase_ascii name);
       pr "  CAMLparam1(v_bytes);\n";
@@ -175,7 +175,7 @@ let generate_ml_stubs outdir schemas =
   let pr fmt = Printf.fprintf oc fmt in
   List.iter
     (fun rs ->
-      let name = Wire.struct_name rs.struct_ in
+      let name = Wire.C.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr "external %s_check : bytes -> bool = \"caml_%s_check\"\n" lower lower)
     schemas;
@@ -214,7 +214,7 @@ let fields_with_offsets fields =
 
 let emit_wire_checker oc rs =
   let pr fmt = Printf.fprintf oc fmt in
-  let name = Wire.struct_name rs.struct_ in
+  let name = Wire.C.struct_name rs.struct_ in
   let lower = String.lowercase_ascii name in
   pr "(* %s: wire_size=%d *)\n" name rs.total_wire_size;
   pr "let %s_wire_check (buf : bytes) : bool =\n" lower;
@@ -246,7 +246,7 @@ let generate_test_runner outdir schemas =
   pr "let schemas = [\n";
   List.iter
     (fun rs ->
-      let name = Wire.struct_name rs.struct_ in
+      let name = Wire.C.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr
         "  { name = %S; wire_size = %d; wire_check = %s_wire_check; c_check = \
@@ -297,7 +297,7 @@ let () =
     List.map
       (fun rs ->
         Wire_c.schema
-          ~name:(Wire.struct_name rs.struct_)
+          ~name:(Wire.C.struct_name rs.struct_)
           ~module_:(Wire.module_ [ Wire.typedef ~entrypoint:true rs.struct_ ])
           ~wire_size:rs.total_wire_size)
       schemas

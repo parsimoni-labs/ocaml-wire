@@ -1,6 +1,7 @@
 (** Tests for Wire_c — C library generation from Wire codecs. *)
 
 open Wire
+open Wire.C
 
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]

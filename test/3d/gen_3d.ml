@@ -1,18 +1,19 @@
 (* Generate .3d files for EverParse integration tests *)
 
 open Wire
+open Wire.C
 
 let bitfields () =
   let bf =
     struct_ "BF"
       [
-        field "x" (bits ~width:6 bf_uint32);
+        field "x" (bits ~width:6 U32);
         field "y"
-          ~constraint_:Expr.(ref "y" <= int 900)
-          (bits ~width:10 bf_uint32);
+          ~constraint_:Expr.(field_ref "y" <= int 900)
+          (bits ~width:10 U32);
         field "z"
-          ~constraint_:Expr.(ref "y" + ref "z" <= int 60000)
-          (bits ~width:16 bf_uint32);
+          ~constraint_:Expr.(field_ref "y" + field_ref "z" <= int 60000)
+          (bits ~width:16 U32);
       ]
   in
   let bf2 =
@@ -20,7 +21,12 @@ let bitfields () =
       [ mutable_param "outx" uint32 ]
       [
         field "x"
-          ~action:(on_success [ assign "outx" (ref "x"); return_bool true_ ])
+          ~action:
+            (Action.on_success
+               [
+                 Action.assign "outx" (field_ref "x");
+                 Action.return_bool Expr.true_;
+               ])
           (type_ref "BF");
       ]
   in
@@ -28,9 +34,9 @@ let bitfields () =
     struct_ "BF3"
       [
         field "a" uint8;
-        field "x" ~constraint_:Expr.(ref "x" = int 0) (bits ~width:6 bf_uint32);
-        field "y" (bits ~width:10 bf_uint32);
-        field "z" (bits ~width:16 bf_uint32);
+        field "x" ~constraint_:Expr.(field_ref "x" = int 0) (bits ~width:6 U32);
+        field "y" (bits ~width:10 U32);
+        field "z" (bits ~width:16 U32);
       ]
   in
   module_ [ typedef bf; typedef ~entrypoint:true bf2; typedef bf3 ]
@@ -53,7 +59,7 @@ let field_dependence () =
   let t_struct = param_struct "t" [ param "a" uint32 ] [ field "x" uint32 ] in
   let s_struct =
     struct_ "s"
-      [ field "a" uint32; field "b" (apply (type_ref "t") [ ref "a" ]) ]
+      [ field "a" uint32; field "b" (apply (type_ref "t") [ field_ref "a" ]) ]
   in
   let d_casetype =
     casetype_decl "_D"
@@ -73,12 +79,12 @@ let field_dependence () =
         field "length" uint32;
         field "key" uint32;
         field "pl"
-          (single_elem_array_at_most ~size:(ref "length")
-             (apply (type_ref "D") [ ref "key" ]));
+          (single_elem_array_at_most ~size:(field_ref "length")
+             (apply (type_ref "D") [ field_ref "key" ]));
         field "pl_array2"
-          (single_elem_array ~size:(ref "length")
-             (apply (type_ref "D") [ ref "key" ]));
-        field "payload" (apply (type_ref "D") [ ref "key" ]);
+          (single_elem_array ~size:(field_ref "length")
+             (apply (type_ref "D") [ field_ref "key" ]));
+        field "payload" (apply (type_ref "D") [ field_ref "key" ]);
       ]
   in
   module_

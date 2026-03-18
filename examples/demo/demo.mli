@@ -10,7 +10,7 @@ val minimal_codec : minimal Wire.Codec.t
 val f_minimal_value : (int, minimal) Wire.Codec.field
 (** Zero-copy field accessor for the Value field. *)
 
-val minimal_struct : Wire.struct_
+val minimal_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val minimal_size : int
@@ -39,7 +39,7 @@ val all_ints_codec : all_ints Wire.Codec.t
 val f_ints_u64be : (int64, all_ints) Wire.Codec.field
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
-val all_ints_struct : Wire.struct_
+val all_ints_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val all_ints_size : int
@@ -61,7 +61,7 @@ val bf8_codec : bf8 Wire.Codec.t
 val f_bf8_value : (int, bf8) Wire.Codec.field
 (** Zero-copy field accessor for the Value bitfield (5 bits in bf_uint8). *)
 
-val bf8_struct : Wire.struct_
+val bf8_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf8_size : int
@@ -83,7 +83,7 @@ val bf16_codec : bf16 Wire.Codec.t
 val f_bf16_id : (int, bf16) Wire.Codec.field
 (** Zero-copy field accessor for the Id bitfield (11 bits in bf_uint16be). *)
 
-val bf16_struct : Wire.struct_
+val bf16_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf16_size : int
@@ -111,7 +111,7 @@ val f_bf32_pri : (int, bf32) Wire.Codec.field
 (** Zero-copy field accessor for the Priority bitfield (8 bits in bf_uint32be).
 *)
 
-val bf32_struct : Wire.struct_
+val bf32_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf32_size : int
@@ -139,7 +139,7 @@ val f_bool_active : (bool, bool_fields) Wire.Codec.field
 (** Zero-copy field accessor for the Active field (bool from bf1 in bf_uint8).
 *)
 
-val bool_fields_struct : Wire.struct_
+val bool_fields_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val bool_fields_size : int
@@ -173,7 +173,7 @@ val f_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
 (** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
     fields). *)
 
-val large_mixed_struct : Wire.struct_
+val large_mixed_struct : Wire.C.struct_
 (** Struct definition for 3D codegen. *)
 
 val large_mixed_size : int
@@ -191,9 +191,9 @@ type priority = Low | Medium | High | Critical
 type mapped = { mp_priority : priority; mp_value : int }
 
 val mapped_codec : mapped Wire.Codec.t
+val mapped_struct : Wire.C.struct_
 val f_mp_priority : (priority, mapped) Wire.Codec.field
 val f_mp_value : (int, mapped) Wire.Codec.field
-val mapped_struct : Wire.struct_
 val mapped_size : int
 val mapped_default : mapped
 val mapped_data : int -> bytes
@@ -204,9 +204,9 @@ type ptype = Telemetry | Telecommand
 type cases_demo = { cd_type : ptype; cd_id : int }
 
 val cases_demo_codec : cases_demo Wire.Codec.t
+val cases_demo_struct : Wire.C.struct_
 val f_cd_type : (ptype, cases_demo) Wire.Codec.field
 val f_cd_id : (int, cases_demo) Wire.Codec.field
-val cases_demo_struct : Wire.struct_
 val cases_demo_size : int
 val cases_demo_default : cases_demo
 val cases_demo_data : int -> bytes
@@ -217,9 +217,9 @@ type status = [ `Ok | `Warn | `Err | `Crit ]
 type enum_demo = { en_status : status; en_code : int }
 
 val enum_demo_codec : enum_demo Wire.Codec.t
+val enum_demo_struct : Wire.C.struct_
 val f_en_status : (status, enum_demo) Wire.Codec.field
 val f_en_code : (int, enum_demo) Wire.Codec.field
-val enum_demo_struct : Wire.struct_
 val enum_demo_size : int
 val enum_demo_default : enum_demo
 val enum_demo_data : int -> bytes
@@ -229,9 +229,9 @@ val enum_demo_data : int -> bytes
 type constrained = { co_version : int; co_data : int }
 
 val constrained_codec : constrained Wire.Codec.t
+val constrained_struct : Wire.C.struct_
 val f_co_version : (int, constrained) Wire.Codec.field
 val f_co_data : (int, constrained) Wire.Codec.field
-val constrained_struct : Wire.struct_
 val constrained_size : int
 val constrained_default : constrained
 val constrained_data : int -> bytes
@@ -241,17 +241,17 @@ val constrained_data : int -> bytes
     The following are struct/module definitions exercising Wire DSL features
     that target EverParse 3D output. They don't have Codec views. *)
 
-val array_struct : Wire.struct_
-val byte_array_struct : Wire.struct_
-val all_bytes_struct : Wire.struct_
-val all_zeros_struct : Wire.struct_
-val single_elem_struct : Wire.struct_
-val single_elem_at_most_struct : Wire.struct_
-val anon_field_struct : Wire.struct_
-val action_struct : Wire.struct_
-val action_full_struct : Wire.struct_
-val param_demo_struct : Wire.struct_
-val casetype_module : Wire.module_
-val extern_module : Wire.module_
-val type_ref_module : Wire.module_
+val array_struct : Wire.C.struct_
+val byte_array_struct : Wire.C.struct_
+val all_bytes_struct : Wire.C.struct_
+val all_zeros_struct : Wire.C.struct_
+val single_elem_struct : Wire.C.struct_
+val single_elem_at_most_struct : Wire.C.struct_
+val anon_field_struct : Wire.C.struct_
+val action_struct : Wire.C.struct_
+val action_full_struct : Wire.C.struct_
+val param_demo_struct : Wire.C.struct_
+val casetype_module : Wire.C.module_
+val extern_module : Wire.C.module_
+val type_ref_module : Wire.C.module_
 val qualified_ref_example : unit Wire.typ

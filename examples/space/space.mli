@@ -7,7 +7,7 @@ type clcw
 val clcw_codec : clcw Wire.Codec.t
 (** Codec for the 4-byte CLCW bitfield structure. *)
 
-val clcw_struct : Wire.struct_
+val clcw_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val clcw_size : int
@@ -38,7 +38,7 @@ type packet
 val packet_codec : packet Wire.Codec.t
 (** Codec for the 6-byte CCSDS Space Packet primary header. *)
 
-val packet_struct : Wire.struct_
+val packet_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val packet_size : int
@@ -66,7 +66,7 @@ type tm_frame
 val tm_frame_codec : tm_frame Wire.Codec.t
 (** Codec for the 6-byte TM Transfer Frame primary header. *)
 
-val tm_frame_struct : Wire.struct_
+val tm_frame_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val tm_frame_size : int
@@ -104,7 +104,7 @@ val f_cmd_seq : (int, inner_cmd) Wire.Codec.field
 val outer_hdr_codec : outer_hdr Wire.Codec.t
 (** [outer_hdr_codec] is the variable-size outer header codec with dependent
     payload length. The Payload field size comes from the runtime value of the
-    Length field via [Codec.ref]. *)
+    Length field via [Codec.field_ref]. *)
 
 val outer_hdr_size : int
 (** Total size of an OuterHdr with an InnerCmd payload (4 + 4 = 8 bytes). Since

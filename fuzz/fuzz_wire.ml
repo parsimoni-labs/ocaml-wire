@@ -32,101 +32,101 @@ let truncate buf =
 (** {1 Pretty-printing Tests} *)
 
 let test_pp_uint8 () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint8 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint8 in
   ()
 
 let test_pp_uint16 () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint16 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint16 in
   ()
 
 let test_pp_uint16be () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint16be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint16be in
   ()
 
 let test_pp_uint32 () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint32 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint32 in
   ()
 
 let test_pp_uint32be () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint32be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint32be in
   ()
 
 let test_pp_uint63 () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint63 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint63 in
   ()
 
 let test_pp_uint63be () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint63be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint63be in
   ()
 
 let test_pp_uint64 () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint64 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint64 in
   ()
 
 let test_pp_uint64be () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.uint64be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.uint64be in
   ()
 
 let test_pp_bitfield width =
   if width > 0 && width <= 32 then begin
-    let t = Wire.bits ~width Wire.bf_uint32 in
-    let _ = Fmt.str "%a" Wire.pp_typ t in
+    let t = Wire.bits ~width Wire.U32 in
+    let _ = Fmt.str "%a" Wire.C.pp_typ t in
     ()
   end
 
 let test_pp_bf_uint8 width =
   let width = (abs width mod 8) + 1 in
-  let t = Wire.bits ~width Wire.bf_uint8 in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let t = Wire.bits ~width Wire.U8 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_bf_uint16 width =
   let width = (abs width mod 16) + 1 in
-  let t = Wire.bits ~width Wire.bf_uint16 in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let t = Wire.bits ~width Wire.U16 in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_bf_uint16be width =
   let width = (abs width mod 16) + 1 in
-  let t = Wire.bits ~width Wire.bf_uint16be in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let t = Wire.bits ~width Wire.U16be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_bf_uint32be width =
   let width = (abs width mod 32) + 1 in
-  let t = Wire.bits ~width Wire.bf_uint32be in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let t = Wire.bits ~width Wire.U32be in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_map () =
   let t = Wire.map (fun n -> n * 2) (fun n -> n / 2) Wire.uint8 in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_bool () =
-  let t = Wire.bool (Wire.bits ~width:1 Wire.bf_uint8) in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let t = Wire.to_bool (Wire.bits ~width:1 Wire.U8) in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_variants () =
   let t =
     Wire.variants "Test" [ ("A", "a"); ("B", "b"); ("C", "c") ] Wire.uint8
   in
-  let _ = Fmt.str "%a" Wire.pp_typ t in
+  let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_unit () =
-  let _ = Fmt.str "%a" Wire.pp_typ Wire.unit in
+  let _ = Fmt.str "%a" Wire.C.pp_typ Wire.empty in
   ()
 
 (** Test pp_module doesn't crash on valid modules. *)
 let test_pp_module_simple () =
   let s =
-    Wire.struct_ "Test"
-      [ Wire.field "a" Wire.uint8; Wire.field "b" Wire.uint16 ]
+    Wire.C.struct_ "Test"
+      [ Wire.C.field "a" Wire.uint8; Wire.C.field "b" Wire.uint16 ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** {1 3D Code Generation Tests} *)
@@ -134,32 +134,34 @@ let test_pp_module_simple () =
 (** Test struct with random field count. *)
 let test_struct_random_fields n =
   let n = (n mod 10) + 1 in
-  let fields = List.init n (fun i -> Wire.field (Fmt.str "f%d" i) Wire.uint8) in
-  let s = Wire.struct_ "Random" fields in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let fields =
+    List.init n (fun i -> Wire.C.field (Fmt.str "f%d" i) Wire.uint8)
+  in
+  let s = Wire.C.struct_ "Random" fields in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test enum with random cases. *)
 let test_enum_random_cases n =
   let n = (n mod 10) + 1 in
   let cases = List.init n (fun i -> (Fmt.str "C%d" i, i)) in
-  let e = Wire.enum_decl "RandEnum" cases Wire.uint8 in
-  let m = Wire.module_ [ e ] in
-  let _ = Wire.to_3d m in
+  let e = Wire.C.enum_decl "RandEnum" cases Wire.uint8 in
+  let m = Wire.C.module_ [ e ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test casetype with random cases. *)
 let test_casetype_random n =
   let n = (n mod 5) + 1 in
-  let cases = List.init n (fun i -> Wire.decl_case i Wire.uint8) in
+  let cases = List.init n (fun i -> Wire.C.decl_case i Wire.uint8) in
   let ct =
-    Wire.casetype_decl "_RandCase"
-      [ Wire.param "tag" Wire.uint8 ]
+    Wire.C.casetype_decl "_RandCase"
+      [ Wire.C.param "tag" Wire.uint8 ]
       Wire.uint8 cases
   in
-  let m = Wire.module_ [ ct ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ ct ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test inline casetype. *)
@@ -173,83 +175,89 @@ let test_casetype_inline () =
       ]
   in
   let s =
-    Wire.struct_ "WithCase" [ Wire.field "tag" Wire.uint8; Wire.field "data" t ]
+    Wire.C.struct_ "WithCase"
+      [ Wire.C.field "tag" Wire.uint8; Wire.C.field "data" t ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test constraint expression generation. *)
 let test_constraint_expr a =
   let v = abs a mod 1000 in
-  let cond = Wire.Expr.(Wire.ref "x" <= Wire.int v) in
+  let cond = Wire.Expr.(Wire.field_ref "x" <= Wire.int v) in
   let s =
-    Wire.struct_ "Constrained" [ Wire.field "x" ~constraint_:cond Wire.uint16 ]
+    Wire.C.struct_ "Constrained"
+      [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test bitfield constraints. *)
 let test_bitfield_constraint width =
   let width = (width mod 16) + 1 in
-  let t = Wire.bits ~width Wire.bf_uint16 in
-  let cond = Wire.Expr.(Wire.ref "x" <= Wire.int 100) in
-  let s = Wire.struct_ "BFConstrained" [ Wire.field "x" ~constraint_:cond t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let t = Wire.bits ~width Wire.U16 in
+  let cond = Wire.Expr.(Wire.field_ref "x" <= Wire.int 100) in
+  let s =
+    Wire.C.struct_ "BFConstrained" [ Wire.C.field "x" ~constraint_:cond t ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test bitwise expression operators in 3D output. *)
 let test_bitwise_expr a =
   let v = abs a mod 256 in
   let open Wire.Expr in
-  let cond = Wire.ref "x" land Wire.int 0xFF <= Wire.int v in
+  let cond = Wire.field_ref "x" land Wire.int 0xFF <= Wire.int v in
   let s =
-    Wire.struct_ "Bitwise" [ Wire.field "x" ~constraint_:cond Wire.uint16 ]
+    Wire.C.struct_ "Bitwise" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test logical expression operators. *)
 let test_logical_expr () =
   let open Wire.Expr in
-  let cond = Wire.ref "x" <= Wire.int 100 && Wire.ref "x" >= Wire.int 0 in
-  let s =
-    Wire.struct_ "Logical" [ Wire.field "x" ~constraint_:cond Wire.uint8 ]
+  let cond =
+    Wire.field_ref "x" <= Wire.int 100 && Wire.field_ref "x" >= Wire.int 0
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s =
+    Wire.C.struct_ "Logical" [ Wire.C.field "x" ~constraint_:cond Wire.uint8 ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test all bitwise/shift operators. *)
 let test_bitwise_ops () =
   let open Wire.Expr in
-  let _ = Wire.ref "x" lor Wire.int 1 in
-  let _ = Wire.ref "x" lxor Wire.int 0xFF in
-  let _ = lnot (Wire.ref "x") in
-  let _ = Wire.ref "x" lsl Wire.int 2 in
-  let _ = Wire.ref "x" lsr Wire.int 3 in
+  let _ = Wire.field_ref "x" lor Wire.int 1 in
+  let _ = Wire.field_ref "x" lxor Wire.int 0xFF in
+  let _ = lnot (Wire.field_ref "x") in
+  let _ = Wire.field_ref "x" lsl Wire.int 2 in
+  let _ = Wire.field_ref "x" lsr Wire.int 3 in
   ()
 
 (** Test logical operators. *)
 let test_logical_ops () =
   let open Wire.Expr in
-  let _ = Wire.true_ || Wire.false_ in
-  let _ = Wire.Expr.not Wire.true_ in
-  let _ = Wire.ref "x" = Wire.int 0 || Wire.ref "x" <> Wire.int 1 in
+  let _ = Wire.Expr.true_ || Wire.Expr.false_ in
+  let _ = Wire.Expr.not Wire.Expr.true_ in
+  let _ = Wire.field_ref "x" = Wire.int 0 || Wire.field_ref "x" <> Wire.int 1 in
   ()
 
 (** Test cast operators in 3D output. *)
 let test_cast_expr () =
   let open Wire.Expr in
-  let cond = to_uint8 (Wire.ref "x") <= Wire.int 100 in
+  let cond = to_uint8 (Wire.field_ref "x") <= Wire.int 100 in
   let s =
-    Wire.struct_ "Cast" [ Wire.field "x" ~constraint_:cond Wire.uint16 ]
+    Wire.C.struct_ "Cast" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test all cast variants. *)
@@ -272,319 +280,337 @@ let test_sizeof_expr () =
 let test_array_type len =
   let len = (abs len mod 100) + 1 in
   let arr = Wire.array ~len:(Wire.int len) Wire.uint8 in
-  let s = Wire.struct_ "WithArray" [ Wire.field "arr" arr ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s = Wire.C.struct_ "WithArray" [ Wire.C.field "arr" arr ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test byte_array types. *)
 let test_byte_array size =
   let size = (abs size mod 1000) + 1 in
   let ba = Wire.byte_array ~size:(Wire.int size) in
-  let s = Wire.struct_ "WithByteArray" [ Wire.field "data" ba ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s = Wire.C.struct_ "WithByteArray" [ Wire.C.field "data" ba ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test single_elem_array. *)
 let test_single_elem_array () =
   let t = Wire.single_elem_array ~size:(Wire.int 4) Wire.uint32 in
-  let s = Wire.struct_ "WithSingle" [ Wire.field "x" t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s = Wire.C.struct_ "WithSingle" [ Wire.C.field "x" t ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test single_elem_array_at_most. *)
 let test_single_elem_at_most () =
   let t = Wire.single_elem_array_at_most ~size:(Wire.int 8) Wire.uint32 in
-  let s = Wire.struct_ "WithAtMost" [ Wire.field "x" t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s = Wire.C.struct_ "WithAtMost" [ Wire.C.field "x" t ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test anon_field (padding). *)
 let test_anon_field () =
   let s =
-    Wire.struct_ "WithPadding"
+    Wire.C.struct_ "WithPadding"
       [
-        Wire.field "x" Wire.uint8;
-        Wire.anon_field Wire.uint8;
-        Wire.field "y" Wire.uint16;
+        Wire.C.field "x" Wire.uint8;
+        Wire.C.anon_field Wire.uint8;
+        Wire.C.field "y" Wire.uint16;
       ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test parameterized struct. *)
 let test_param_struct n =
   let n = (n mod 5) + 1 in
   let params =
-    List.init n (fun i -> Wire.param (Fmt.str "p%d" i) Wire.uint32)
+    List.init n (fun i -> Wire.C.param (Fmt.str "p%d" i) Wire.uint32)
   in
   let ps =
-    Wire.param_struct "Parametric" params [ Wire.field "x" Wire.uint8 ]
+    Wire.C.param_struct "Parametric" params [ Wire.C.field "x" Wire.uint8 ]
   in
-  let m = Wire.module_ [ Wire.typedef ps ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef ps ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test mutable_param. *)
 let test_mutable_param () =
   let ps =
-    Wire.param_struct "MutParam"
-      [ Wire.mutable_param "out" Wire.uint32 ]
-      [ Wire.field "x" Wire.uint8 ]
+    Wire.C.param_struct "MutParam"
+      [ Wire.C.mutable_param "out" Wire.uint32 ]
+      [ Wire.C.field "x" Wire.uint8 ]
   in
-  let m = Wire.module_ [ Wire.typedef ps ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef ps ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test apply (parameterized type application). *)
 let test_apply () =
-  let t = Wire.apply (Wire.type_ref "Param") [ Wire.int 42 ] in
-  let s = Wire.struct_ "WithApply" [ Wire.field "x" t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let t = Wire.C.apply (Wire.C.type_ref "Param") [ Wire.int 42 ] in
+  let s = Wire.C.struct_ "WithApply" [ Wire.C.field "x" t ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test type_ref. *)
 let test_type_ref () =
-  let t : int Wire.typ = Wire.type_ref "SomeType" in
-  let s = Wire.struct_ "WithRef" [ Wire.field "x" t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let t : int Wire.typ = Wire.C.type_ref "SomeType" in
+  let s = Wire.C.struct_ "WithRef" [ Wire.C.field "x" t ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test qualified_ref. *)
 let test_qualified_ref () =
-  let t : int Wire.typ = Wire.qualified_ref "Other" "SomeType" in
-  let s = Wire.struct_ "WithQRef" [ Wire.field "x" t ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let t : int Wire.typ = Wire.C.qualified_ref "Other" "SomeType" in
+  let s = Wire.C.struct_ "WithQRef" [ Wire.C.field "x" t ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test action generation. *)
 let test_action () =
   let act =
-    Wire.on_success
-      [ Wire.assign "ptr" (Wire.int 42); Wire.return_bool Wire.true_ ]
+    Wire.Action.on_success
+      [
+        Wire.Action.assign "ptr" (Wire.int 42);
+        Wire.Action.return_bool Wire.Expr.true_;
+      ]
   in
-  let s = Wire.struct_ "WithAction" [ Wire.field "x" ~action:act Wire.uint8 ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s =
+    Wire.C.struct_ "WithAction" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
-(** Test on_act action. *)
+(** Test Action.on_act action. *)
 let test_on_act () =
-  let act = Wire.on_act [ Wire.assign "ptr" (Wire.int 0) ] in
-  let s = Wire.struct_ "WithOnAct" [ Wire.field "x" ~action:act Wire.uint8 ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let act = Wire.Action.on_act [ Wire.Action.assign "ptr" (Wire.int 0) ] in
+  let s =
+    Wire.C.struct_ "WithOnAct" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
-(** Test abort action. *)
+(** Test Action.abort action. *)
 let test_abort () =
-  let act = Wire.on_success [ Wire.abort ] in
-  let s = Wire.struct_ "WithAbort" [ Wire.field "x" ~action:act Wire.uint8 ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let act = Wire.Action.on_success [ Wire.Action.abort ] in
+  let s =
+    Wire.C.struct_ "WithAbort" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
-(** Test action_if. *)
+(** Test Action.if_. *)
 let test_action_if () =
   let stmt =
-    Wire.action_if
-      Wire.Expr.(Wire.ref "x" > Wire.int 10)
-      [ Wire.assign "ptr" (Wire.int 1) ]
-      (Some [ Wire.assign "ptr" (Wire.int 0) ])
+    Wire.Action.if_
+      Wire.Expr.(Wire.field_ref "x" > Wire.int 10)
+      [ Wire.Action.assign "ptr" (Wire.int 1) ]
+      (Some [ Wire.Action.assign "ptr" (Wire.int 0) ])
   in
-  let act = Wire.on_success [ stmt ] in
-  let s = Wire.struct_ "WithIf" [ Wire.field "x" ~action:act Wire.uint8 ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let act = Wire.Action.on_success [ stmt ] in
+  let s = Wire.C.struct_ "WithIf" [ Wire.C.field "x" ~action:act Wire.uint8 ] in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
-(** Test var action statement. *)
+(** Test Action.var action statement. *)
 let test_var () =
   let act =
-    Wire.on_success
-      [ Wire.var "tmp" (Wire.int 42); Wire.assign "ptr" (Wire.ref "tmp") ]
+    Wire.Action.on_success
+      [
+        Wire.Action.var "tmp" (Wire.int 42);
+        Wire.Action.assign "ptr" (Wire.field_ref "tmp");
+      ]
   in
-  let s = Wire.struct_ "WithVar" [ Wire.field "x" ~action:act Wire.uint8 ] in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let s =
+    Wire.C.struct_ "WithVar" [ Wire.C.field "x" ~action:act Wire.uint8 ]
+  in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test define declaration. *)
 let test_define () =
   let m =
-    Wire.module_
+    Wire.C.module_
       [
-        Wire.define "MAX_SIZE" 1024;
-        Wire.typedef (Wire.struct_ "S" [ Wire.field "x" Wire.uint8 ]);
+        Wire.C.define "MAX_SIZE" 1024;
+        Wire.C.typedef (Wire.C.struct_ "S" [ Wire.C.field "x" Wire.uint8 ]);
       ]
   in
-  let _ = Wire.to_3d m in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test extern_fn declaration. *)
 let test_extern_fn () =
   let m =
-    Wire.module_
+    Wire.C.module_
       [
-        Wire.extern_fn "validate" [ Wire.param "len" Wire.uint32 ] Wire.uint8;
-        Wire.typedef (Wire.struct_ "S" [ Wire.field "x" Wire.uint8 ]);
+        Wire.C.extern_fn "validate"
+          [ Wire.C.param "len" Wire.uint32 ]
+          Wire.uint8;
+        Wire.C.typedef (Wire.C.struct_ "S" [ Wire.C.field "x" Wire.uint8 ]);
       ]
   in
-  let _ = Wire.to_3d m in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test extern_probe declaration. *)
 let test_extern_probe () =
   let m =
-    Wire.module_
+    Wire.C.module_
       [
-        Wire.extern_probe "my_probe";
-        Wire.extern_probe ~init:true "my_init_probe";
-        Wire.typedef (Wire.struct_ "S" [ Wire.field "x" Wire.uint8 ]);
+        Wire.C.extern_probe "my_probe";
+        Wire.C.extern_probe ~init:true "my_init_probe";
+        Wire.C.typedef (Wire.C.struct_ "S" [ Wire.C.field "x" Wire.uint8 ]);
       ]
   in
-  let _ = Wire.to_3d m in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test complex nested structure. *)
 let test_complex_nested () =
-  let inner = Wire.struct_ "Inner" [ Wire.field "a" Wire.uint8 ] in
+  let inner = Wire.C.struct_ "Inner" [ Wire.C.field "a" Wire.uint8 ] in
   let outer =
-    Wire.struct_ "Outer"
-      [ Wire.field "i" (Wire.struct_typ inner); Wire.field "b" Wire.uint16 ]
+    Wire.C.struct_ "Outer"
+      [
+        Wire.C.field "i" (Wire.C.struct_typ inner); Wire.C.field "b" Wire.uint16;
+      ]
   in
-  let m = Wire.module_ [ Wire.typedef inner; Wire.typedef outer ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef inner; Wire.C.typedef outer ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** Test big-endian struct with all BE types. *)
 let test_be_struct () =
   let s =
-    Wire.struct_ "BigEndian"
+    Wire.C.struct_ "BigEndian"
       [
-        Wire.field "a" Wire.uint16be;
-        Wire.field "b" Wire.uint32be;
-        Wire.field "c" Wire.uint64be;
-        Wire.field "d" Wire.uint63be;
+        Wire.C.field "a" Wire.uint16be;
+        Wire.C.field "b" Wire.uint32be;
+        Wire.C.field "c" Wire.uint64be;
+        Wire.C.field "d" Wire.uint63be;
       ]
   in
-  let m = Wire.module_ [ Wire.typedef s ] in
-  let _ = Wire.to_3d m in
+  let m = Wire.C.module_ [ Wire.C.typedef s ] in
+  let _ = Wire.C.to_3d m in
   ()
 
 (** {1 Parsing Tests} *)
 
 let test_parse_uint8 buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint8 buf in
+  let _ = Wire.decode_string Wire.uint8 buf in
   ()
 
 let test_parse_uint16 buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint16 buf in
+  let _ = Wire.decode_string Wire.uint16 buf in
   ()
 
 let test_parse_uint16be buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint16be buf in
+  let _ = Wire.decode_string Wire.uint16be buf in
   ()
 
 let test_parse_uint32 buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint32 buf in
+  let _ = Wire.decode_string Wire.uint32 buf in
   ()
 
 let test_parse_uint32be buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint32be buf in
+  let _ = Wire.decode_string Wire.uint32be buf in
   ()
 
 let test_parse_uint63 buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint63 buf in
+  let _ = Wire.decode_string Wire.uint63 buf in
   ()
 
 let test_parse_uint63be buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint63be buf in
+  let _ = Wire.decode_string Wire.uint63be buf in
   ()
 
 let test_parse_uint64 buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint64 buf in
+  let _ = Wire.decode_string Wire.uint64 buf in
   ()
 
 let test_parse_uint64be buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.uint64be buf in
+  let _ = Wire.decode_string Wire.uint64be buf in
   ()
 
 let test_parse_bitfield buf =
   let buf = truncate buf in
-  let t = Wire.bits ~width:6 Wire.bf_uint32 in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.bits ~width:6 Wire.U32 in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bf_uint8 buf =
   let buf = truncate buf in
-  let t = Wire.bits ~width:3 Wire.bf_uint8 in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.bits ~width:3 Wire.U8 in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bf_uint16 buf =
   let buf = truncate buf in
-  let t = Wire.bits ~width:10 Wire.bf_uint16 in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.bits ~width:10 Wire.U16 in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bf_uint16be buf =
   let buf = truncate buf in
-  let t = Wire.bits ~width:10 Wire.bf_uint16be in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.bits ~width:10 Wire.U16be in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bf_uint32be buf =
   let buf = truncate buf in
-  let t = Wire.bits ~width:20 Wire.bf_uint32be in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.bits ~width:20 Wire.U32be in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_map buf =
   let buf = truncate buf in
   let t = Wire.map (fun n -> n * 2) (fun n -> n / 2) Wire.uint8 in
-  let _ = Wire.parse_string t buf in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bool buf =
   let buf = truncate buf in
-  let t = Wire.bool Wire.uint8 in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.to_bool Wire.uint8 in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_unit buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.unit buf in
+  let _ = Wire.decode_string Wire.empty buf in
   ()
 
 let test_parse_array buf =
   let buf = truncate buf in
   let len = min 10 (String.length buf) in
   let arr = Wire.array ~len:(Wire.int len) Wire.uint8 in
-  let _ = Wire.parse_string arr buf in
+  let _ = Wire.decode_string arr buf in
   ()
 
 let test_parse_byte_array buf =
   let buf = truncate buf in
   let size = min 10 (String.length buf) in
   let ba = Wire.byte_array ~size:(Wire.int size) in
-  let _ = Wire.parse_string ba buf in
+  let _ = Wire.decode_string ba buf in
   ()
 
 let test_parse_variants buf =
@@ -592,94 +618,94 @@ let test_parse_variants buf =
   let e =
     Wire.variants "TestEnum" [ ("A", `A); ("B", `B); ("C", `C) ] Wire.uint8
   in
-  let _ = Wire.parse_string e buf in
+  let _ = Wire.decode_string e buf in
   ()
 
 let test_parse_where buf =
   let buf = truncate buf in
-  let t = Wire.where Wire.true_ Wire.uint8 in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.where Wire.Expr.true_ Wire.uint8 in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_all_bytes buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.all_bytes buf in
+  let _ = Wire.decode_string Wire.all_bytes buf in
   ()
 
 let test_parse_all_zeros buf =
   let buf = truncate buf in
-  let _ = Wire.parse_string Wire.all_zeros buf in
+  let _ = Wire.decode_string Wire.all_zeros buf in
   ()
 
 let test_parse_struct buf =
   let buf = truncate buf in
   let s =
-    Wire.struct_ "Test"
+    Wire.C.struct_ "Test"
       [
-        Wire.field "a" Wire.uint8;
-        Wire.field "b" Wire.uint16;
-        Wire.field "c" Wire.uint32;
+        Wire.C.field "a" Wire.uint8;
+        Wire.C.field "b" Wire.uint16;
+        Wire.C.field "c" Wire.uint32;
       ]
   in
-  let t = Wire.struct_typ s in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.C.struct_typ s in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_struct_constrained buf =
   let buf = truncate buf in
   let s =
-    Wire.struct_ "Constrained"
+    Wire.C.struct_ "Constrained"
       [
-        Wire.field "x"
-          ~constraint_:Wire.Expr.(Wire.ref "x" <= Wire.int 100)
+        Wire.C.field "x"
+          ~constraint_:Wire.Expr.(Wire.field_ref "x" <= Wire.int 100)
           Wire.uint8;
       ]
   in
-  let t = Wire.struct_typ s in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.C.struct_typ s in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_struct_be buf =
   let buf = truncate buf in
   let s =
-    Wire.struct_ "BE"
+    Wire.C.struct_ "BE"
       [
-        Wire.field "a" Wire.uint16be;
-        Wire.field "b" Wire.uint32be;
-        Wire.field "c" Wire.uint64be;
+        Wire.C.field "a" Wire.uint16be;
+        Wire.C.field "b" Wire.uint32be;
+        Wire.C.field "c" Wire.uint64be;
       ]
   in
-  let t = Wire.struct_typ s in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.C.struct_typ s in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_struct_bitfields buf =
   let buf = truncate buf in
   let s =
-    Wire.struct_ "BF"
+    Wire.C.struct_ "BF"
       [
-        Wire.field "a" (Wire.bits ~width:3 Wire.bf_uint8);
-        Wire.field "b" (Wire.bits ~width:5 Wire.bf_uint8);
-        Wire.field "c" (Wire.bits ~width:10 Wire.bf_uint16);
-        Wire.field "d" (Wire.bits ~width:6 Wire.bf_uint16);
+        Wire.C.field "a" (Wire.bits ~width:3 Wire.U8);
+        Wire.C.field "b" (Wire.bits ~width:5 Wire.U8);
+        Wire.C.field "c" (Wire.bits ~width:10 Wire.U16);
+        Wire.C.field "d" (Wire.bits ~width:6 Wire.U16);
       ]
   in
-  let t = Wire.struct_typ s in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.C.struct_typ s in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_anon_field buf =
   let buf = truncate buf in
   let s =
-    Wire.struct_ "Anon"
+    Wire.C.struct_ "Anon"
       [
-        Wire.field "x" Wire.uint8;
-        Wire.anon_field Wire.uint8;
-        Wire.field "y" Wire.uint16;
+        Wire.C.field "x" Wire.uint8;
+        Wire.C.anon_field Wire.uint8;
+        Wire.C.field "y" Wire.uint16;
       ]
   in
-  let t = Wire.struct_typ s in
-  let _ = Wire.parse_string t buf in
+  let t = Wire.C.struct_typ s in
+  let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_casetype buf =
@@ -692,7 +718,7 @@ let test_parse_casetype buf =
         Wire.default Wire.uint32;
       ]
   in
-  let _ = Wire.parse_string t buf in
+  let _ = Wire.decode_string t buf in
   ()
 
 (** {1 Roundtrip Tests} *)
@@ -700,61 +726,61 @@ let test_parse_casetype buf =
 let test_roundtrip_uint8 n =
   let n = abs n mod 256 in
   let encoded = Wire.encode_to_string Wire.uint8 n in
-  match Wire.parse_string Wire.uint8 encoded with
+  match Wire.decode_string Wire.uint8 encoded with
   | Ok decoded -> if n <> decoded then fail "uint8 roundtrip mismatch"
   | Error _ -> fail "uint8 roundtrip parse failed"
 
 let test_roundtrip_uint16 n =
   let n = abs n mod 65536 in
   let encoded = Wire.encode_to_string Wire.uint16 n in
-  match Wire.parse_string Wire.uint16 encoded with
+  match Wire.decode_string Wire.uint16 encoded with
   | Ok decoded -> if n <> decoded then fail "uint16 roundtrip mismatch"
   | Error _ -> fail "uint16 roundtrip parse failed"
 
 let test_roundtrip_uint16be n =
   let n = abs n mod 65536 in
   let encoded = Wire.encode_to_string Wire.uint16be n in
-  match Wire.parse_string Wire.uint16be encoded with
+  match Wire.decode_string Wire.uint16be encoded with
   | Ok decoded -> if n <> decoded then fail "uint16be roundtrip mismatch"
   | Error _ -> fail "uint16be roundtrip parse failed"
 
 let test_roundtrip_uint32 n =
   let n = n land ((1 lsl 32) - 1) in
   let encoded = Wire.encode_to_string Wire.uint32 n in
-  match Wire.parse_string Wire.uint32 encoded with
+  match Wire.decode_string Wire.uint32 encoded with
   | Ok decoded -> if n <> decoded then fail "uint32 roundtrip mismatch"
   | Error _ -> fail "uint32 roundtrip parse failed"
 
 let test_roundtrip_uint32be n =
   let n = n land ((1 lsl 32) - 1) in
   let encoded = Wire.encode_to_string Wire.uint32be n in
-  match Wire.parse_string Wire.uint32be encoded with
+  match Wire.decode_string Wire.uint32be encoded with
   | Ok decoded -> if n <> decoded then fail "uint32be roundtrip mismatch"
   | Error _ -> fail "uint32be roundtrip parse failed"
 
 let test_roundtrip_uint63 n =
   let n = abs n in
   let encoded = Wire.encode_to_string Wire.uint63 n in
-  match Wire.parse_string Wire.uint63 encoded with
+  match Wire.decode_string Wire.uint63 encoded with
   | Ok decoded -> if n <> decoded then fail "uint63 roundtrip mismatch"
   | Error _ -> fail "uint63 roundtrip parse failed"
 
 let test_roundtrip_uint63be n =
   let n = abs n in
   let encoded = Wire.encode_to_string Wire.uint63be n in
-  match Wire.parse_string Wire.uint63be encoded with
+  match Wire.decode_string Wire.uint63be encoded with
   | Ok decoded -> if n <> decoded then fail "uint63be roundtrip mismatch"
   | Error _ -> fail "uint63be roundtrip parse failed"
 
 let test_roundtrip_uint64 n =
   let encoded = Wire.encode_to_string Wire.uint64 n in
-  match Wire.parse_string Wire.uint64 encoded with
+  match Wire.decode_string Wire.uint64 encoded with
   | Ok decoded -> if n <> decoded then fail "uint64 roundtrip mismatch"
   | Error _ -> fail "uint64 roundtrip parse failed"
 
 let test_roundtrip_uint64be n =
   let encoded = Wire.encode_to_string Wire.uint64be n in
-  match Wire.parse_string Wire.uint64be encoded with
+  match Wire.decode_string Wire.uint64be encoded with
   | Ok decoded -> if n <> decoded then fail "uint64be roundtrip mismatch"
   | Error _ -> fail "uint64be roundtrip parse failed"
 
@@ -762,15 +788,15 @@ let test_roundtrip_map n =
   let n = abs n mod 256 in
   let t = Wire.map (fun x -> x * 2) (fun x -> x / 2) Wire.uint8 in
   let encoded = Wire.encode_to_string t (n * 2) in
-  match Wire.parse_string t encoded with
+  match Wire.decode_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
   | Error _ -> fail "map roundtrip parse failed"
 
 let test_roundtrip_bool n =
   let v = n mod 2 = 0 in
-  let t = Wire.bool Wire.uint8 in
+  let t = Wire.to_bool Wire.uint8 in
   let encoded = Wire.encode_to_string t v in
-  match Wire.parse_string t encoded with
+  match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "bool roundtrip mismatch"
   | Error _ -> fail "bool roundtrip parse failed"
 
@@ -778,7 +804,7 @@ let test_roundtrip_array a b c =
   let arr = [ abs a mod 256; abs b mod 256; abs c mod 256 ] in
   let t = Wire.array ~len:(Wire.int 3) Wire.uint8 in
   let encoded = Wire.encode_to_string t arr in
-  match Wire.parse_string t encoded with
+  match Wire.decode_string t encoded with
   | Ok decoded -> if arr <> decoded then fail "array roundtrip mismatch"
   | Error _ -> fail "array roundtrip parse failed"
 
@@ -788,7 +814,7 @@ let test_roundtrip_byte_array buf =
   if len > 0 then begin
     let t = Wire.byte_array ~size:(Wire.int len) in
     let encoded = Wire.encode_to_string t buf in
-    match Wire.parse_string t encoded with
+    match Wire.decode_string t encoded with
     | Ok decoded -> if buf <> decoded then fail "byte_array roundtrip mismatch"
     | Error _ -> fail "byte_array roundtrip parse failed"
   end
@@ -799,7 +825,7 @@ let test_roundtrip_variants n =
   let t = Wire.variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] Wire.uint8 in
   let v = variants.(n) in
   let encoded = Wire.encode_to_string t v in
-  match Wire.parse_string t encoded with
+  match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "variants roundtrip mismatch"
   | Error _ -> fail "variants roundtrip parse failed"
 
@@ -870,7 +896,7 @@ let bool_record_codec =
     (fun flag value -> { flag; value })
     Wire.Codec.
       [
-        Wire.Codec.field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag);
+        Wire.Codec.field "flag" (Wire.to_bool Wire.uint8) (fun r -> r.flag);
         Wire.Codec.field "value" Wire.uint16 (fun r -> r.value);
       ]
 
@@ -893,7 +919,7 @@ let test_record_bool_roundtrip n =
 (* Parse from a chunked reader — forces multi-byte values to straddle slices *)
 let parse_chunked ~chunk_size typ s =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:chunk_size s in
-  Wire.parse typ reader
+  Wire.decode typ reader
 
 let test_stream_roundtrip_uint16 n =
   let n = abs n mod 65536 in
@@ -974,10 +1000,10 @@ let pp_tests =
     test_case "pp uint64" [ const () ] test_pp_uint64;
     test_case "pp uint64be" [ const () ] test_pp_uint64be;
     test_case "pp bitfield" [ range 33 ] test_pp_bitfield;
-    test_case "pp bf_uint8" [ int ] test_pp_bf_uint8;
-    test_case "pp bf_uint16" [ int ] test_pp_bf_uint16;
-    test_case "pp bf_uint16be" [ int ] test_pp_bf_uint16be;
-    test_case "pp bf_uint32be" [ int ] test_pp_bf_uint32be;
+    test_case "pp U8" [ int ] test_pp_bf_uint8;
+    test_case "pp U16" [ int ] test_pp_bf_uint16;
+    test_case "pp U16be" [ int ] test_pp_bf_uint16be;
+    test_case "pp U32be" [ int ] test_pp_bf_uint32be;
     test_case "pp map" [ const () ] test_pp_map;
     test_case "pp bool" [ const () ] test_pp_bool;
     test_case "pp cases" [ const () ] test_pp_variants;
@@ -1011,10 +1037,10 @@ let codegen_tests =
     test_case "type ref" [ const () ] test_type_ref;
     test_case "qualified ref" [ const () ] test_qualified_ref;
     test_case "action" [ const () ] test_action;
-    test_case "on_act" [ const () ] test_on_act;
-    test_case "abort" [ const () ] test_abort;
-    test_case "action_if" [ const () ] test_action_if;
-    test_case "var" [ const () ] test_var;
+    test_case "Action.on_act" [ const () ] test_on_act;
+    test_case "Action.abort" [ const () ] test_abort;
+    test_case "Action.if_" [ const () ] test_action_if;
+    test_case "Action.var" [ const () ] test_var;
     test_case "define" [ const () ] test_define;
     test_case "extern_fn" [ const () ] test_extern_fn;
     test_case "extern_probe" [ const () ] test_extern_probe;
@@ -1034,10 +1060,10 @@ let parse_tests =
     test_case "parse uint64" [ bytes ] test_parse_uint64;
     test_case "parse uint64be" [ bytes ] test_parse_uint64be;
     test_case "parse bitfield" [ bytes ] test_parse_bitfield;
-    test_case "parse bf_uint8" [ bytes ] test_parse_bf_uint8;
-    test_case "parse bf_uint16" [ bytes ] test_parse_bf_uint16;
-    test_case "parse bf_uint16be" [ bytes ] test_parse_bf_uint16be;
-    test_case "parse bf_uint32be" [ bytes ] test_parse_bf_uint32be;
+    test_case "parse U8" [ bytes ] test_parse_bf_uint8;
+    test_case "parse U16" [ bytes ] test_parse_bf_uint16;
+    test_case "parse U16be" [ bytes ] test_parse_bf_uint16be;
+    test_case "parse U32be" [ bytes ] test_parse_bf_uint32be;
     test_case "parse map" [ bytes ] test_parse_map;
     test_case "parse bool" [ bytes ] test_parse_bool;
     test_case "parse unit" [ bytes ] test_parse_unit;
@@ -1107,7 +1133,7 @@ let f_sl_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.sl_length)
 
 let f_sl_payload =
   Wire.Codec.field "Payload"
-    (Wire.byte_slice ~size:(Wire.Codec.ref f_sl_length))
+    (Wire.byte_slice ~size:(Wire.Codec.field_ref f_sl_length))
     (fun r -> r.sl_payload)
 
 let slice_msg_codec =
@@ -1159,7 +1185,7 @@ let f_ba_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.ba_length)
 
 let f_ba_data =
   Wire.Codec.field "Data"
-    (Wire.byte_array ~size:(Wire.Codec.ref f_ba_length))
+    (Wire.byte_array ~size:(Wire.Codec.field_ref f_ba_length))
     (fun r -> r.ba_data)
 
 let array_msg_codec =
@@ -1198,7 +1224,7 @@ let f_tm_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.tm_length)
 
 let f_tm_payload =
   Wire.Codec.field "Payload"
-    (Wire.byte_slice ~size:(Wire.Codec.ref f_tm_length))
+    (Wire.byte_slice ~size:(Wire.Codec.field_ref f_tm_length))
     (fun r -> r.tm_payload)
 
 let f_tm_tag = Wire.Codec.field "Tag" Wire.uint8 (fun r -> r.tm_tag)
@@ -1259,9 +1285,9 @@ let test_depsize_compute_wire_size payload_str =
   let total = 2 + len in
   let buf = Bytes.create total in
   Wire.Codec.encode slice_msg_codec original buf 0;
-  let ws = Wire.Codec.compute_wire_size slice_msg_codec buf 0 in
+  let ws = Wire.Codec.wire_size_at slice_msg_codec buf 0 in
   if ws <> total then
-    fail (Fmt.str "depsize compute_wire_size: expected %d got %d" total ws)
+    fail (Fmt.str "depsize wire_size_at: expected %d got %d" total ws)
 
 let depsize_tests =
   [
@@ -1272,8 +1298,7 @@ let depsize_tests =
     test_case "depsize tagged roundtrip" [ bytes; int ]
       test_depsize_tagged_roundtrip;
     test_case "depsize tagged empty" [ int ] test_depsize_tagged_empty;
-    test_case "depsize compute_wire_size" [ bytes ]
-      test_depsize_compute_wire_size;
+    test_case "depsize wire_size_at" [ bytes ] test_depsize_compute_wire_size;
   ]
 
 let suite =

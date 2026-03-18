@@ -30,13 +30,6 @@ let test_read_both_failed () =
   let result = Wire_diff.read s "" in
   Alcotest.(check bool) "both_failed" true (result = Wire_diff.Both_failed)
 
-let test_roundtrip_struct () =
-  let s = struct_ "Simple" [ field "Version" uint8; field "Length" uint16be ] in
-  let buf = "\x01\x01\x00" in
-  match Wire_diff.roundtrip_struct s buf with
-  | Ok rt -> Alcotest.(check string) "roundtrip" buf rt
-  | Error _ -> Alcotest.fail "roundtrip failed"
-
 let test_write () =
   let s = mk_schema () in
   let v = (7, 1000) in
@@ -65,7 +58,6 @@ let suite =
     [
       Alcotest.test_case "read match" `Quick test_read_match;
       Alcotest.test_case "read both failed" `Quick test_read_both_failed;
-      Alcotest.test_case "roundtrip struct" `Quick test_roundtrip_struct;
       Alcotest.test_case "write" `Quick test_write;
       Alcotest.test_case "full_roundtrip" `Quick test_full_roundtrip;
       Alcotest.test_case "pack" `Quick test_pack;

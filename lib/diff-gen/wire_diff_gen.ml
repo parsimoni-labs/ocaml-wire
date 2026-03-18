@@ -4,10 +4,10 @@
     stubs, OCaml externals, and a test runner for comparing OCaml codecs against
     EverParse-generated C parsers. *)
 
-type schema = { name : string; module_ : Wire.module_; wire_size : int }
+type schema = { name : string; module_ : Wire.C.module_; wire_size : int }
 
 let schema ~name ~struct_ ~module_ =
-  match Wire_c.size_of_struct struct_ with
+  match Wire_c.wire_size struct_ with
   | Some wire_size -> Some { name; module_; wire_size }
   | None -> None
 
@@ -64,7 +64,7 @@ let extract_validate_fn ~schema_dir name =
 let generate_3d_files ~schema_dir schemas =
   List.iter
     (fun s ->
-      Wire.to_3d_file (Filename.concat schema_dir (s.name ^ ".3d")) s.module_)
+      Wire.C.to_3d_file (Filename.concat schema_dir (s.name ^ ".3d")) s.module_)
     schemas
 
 let generate_c_stubs ~schema_dir ~outdir schemas =

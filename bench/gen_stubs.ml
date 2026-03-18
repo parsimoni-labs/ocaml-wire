@@ -43,7 +43,8 @@ let () =
       (fun (name, s, wire_size, extra_decls) ->
         Wire_c.schema ~name
           ~module_:
-            (Wire.module_ (extra_decls @ [ Wire.typedef ~entrypoint:true s ]))
+            (Wire.C.module_
+               (extra_decls @ [ Wire.C.typedef ~entrypoint:true s ]))
           ~wire_size)
       entries
   in
@@ -80,7 +81,7 @@ let () =
   pr "}\n\n";
   List.iter
     (fun s ->
-      let name = Wire.struct_name s in
+      let name = Wire.C.struct_name s in
       let ep = Wire_c.everparse_name name in
       let lower = String.lowercase_ascii name in
       pr "CAMLprim value ep_loop_%s(value v_buf, value v_off, value v_n) {\n"
@@ -110,7 +111,7 @@ let () =
   pr "(* Timed C benchmark loops *)\n\n";
   List.iter
     (fun s ->
-      let lower = String.lowercase_ascii (Wire.struct_name s) in
+      let lower = String.lowercase_ascii (Wire.C.struct_name s) in
       pr "external %s_loop : bytes -> int -> int -> int = \"ep_loop_%s\"\n\n"
         lower lower)
     structs;

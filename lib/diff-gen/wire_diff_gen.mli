@@ -21,7 +21,10 @@ type schema
 (** A schema bundles a Wire struct, module, and computed wire size. *)
 
 val schema :
-  name:string -> struct_:Wire.struct_ -> module_:Wire.module_ -> schema option
+  name:string ->
+  struct_:Wire.C.struct_ ->
+  module_:Wire.C.module_ ->
+  schema option
 (** [schema ~name ~struct_ ~module_] creates a schema if the struct has a known
     fixed wire size. Returns [None] for variable-length structs. *)
 

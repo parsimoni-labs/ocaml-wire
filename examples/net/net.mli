@@ -11,7 +11,7 @@ val ethernet_codec : ethernet Wire.Codec.t
 (** Codec for the 14-byte Ethernet II frame header including a zero-copy payload
     slice. *)
 
-val ethernet_struct : Wire.struct_
+val ethernet_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val ethernet_size : int
@@ -33,7 +33,7 @@ type ipv4
 val ipv4_codec : ipv4 Wire.Codec.t
 (** Codec for the 20-byte IPv4 header including a zero-copy payload slice. *)
 
-val ipv4_struct : Wire.struct_
+val ipv4_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val ipv4_size : int
@@ -61,7 +61,7 @@ type tcp
 val tcp_codec : tcp Wire.Codec.t
 (** Codec for the 20-byte TCP header. *)
 
-val tcp_struct : Wire.struct_
+val tcp_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val tcp_size : int
@@ -86,7 +86,7 @@ type udp
 val udp_codec : udp Wire.Codec.t
 (** Codec for the 8-byte UDP header. *)
 
-val udp_struct : Wire.struct_
+val udp_struct : Wire.C.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val udp_size : int
@@ -128,7 +128,7 @@ val udp_frame_data : int -> bytes array
 type 'a schema = {
   name : string;
   codec : 'a Wire.Codec.t;
-  struct_ : Wire.struct_;
+  struct_ : Wire.C.struct_;
   size : int;
   decode : bytes -> int -> 'a;
 }
@@ -139,6 +139,6 @@ val all_schemas : any_schema list
 (** List of all protocol schemas (Ethernet, IPv4, TCP, UDP) as existential
     wrappers. *)
 
-val all_structs : Wire.struct_ list
+val all_structs : Wire.C.struct_ list
 (** List of Wire struct descriptors for all protocols, used for EverParse code
     generation. *)
