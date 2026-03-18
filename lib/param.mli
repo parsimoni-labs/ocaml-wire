@@ -1,39 +1,37 @@
-(** Typed parameter handles and runtime environments. *)
+(** Typed parameter handles.
+
+    Input parameters carry their value. Output parameters carry a mutable cell
+    that actions write to during decoding. Both are passed as regular OCaml
+    function arguments — no separate environment needed. *)
 
 type input
 type output
 type ('a, 'k) t
-type env
 
-val input : string -> 'a Types.typ -> ('a, input) t
-(** Create an immutable input parameter handle. *)
+val input : string -> 'a Types.typ -> 'a -> ('a, input) t
+(** [input name typ value] creates an input parameter bound to [value]. *)
 
 val output : string -> 'a Types.typ -> ('a, output) t
-(** Create a mutable output parameter handle. *)
+(** [output name typ] creates an output parameter with an internal mutable cell,
+    initially zero. Actions update it during decoding. *)
 
 val v : ('a, 'k) t -> Types.param
-(** Extract the formal declaration from a typed handle. *)
+(** Formal declaration for codecs and 3D structs. *)
 
 val name : ('a, 'k) t -> string
-(** [name p] is the string name of the parameter. *)
+(** Parameter name. *)
 
-val empty : env
-(** Empty runtime parameter environment. *)
+val get : ('a, 'k) t -> 'a
+(** Read the current value of a parameter. For output params, call this after
+    decoding to observe action results. *)
 
-val is_empty : env -> bool
-(** [is_empty env] is [true] iff no parameters are bound. *)
+val set : ('a, 'k) t -> 'a -> unit
+(** Set the value of a parameter. *)
 
-val bind : env -> ('a, input) t -> 'a -> env
-(** Bind an input parameter to a value. *)
+type packed = Pack : ('a, 'k) t -> packed
 
-val init : env -> ('a, output) t -> 'a -> env
-(** Initialise an output parameter to a value. *)
+val to_ctx : packed list -> (string * int) list
+(** Export bindings as name-value pairs for the eval context. *)
 
-val get : env -> ('a, 'k) t -> 'a
-(** Read back the current value of a bound parameter. *)
-
-val to_ctx : env -> (string * int) list
-(** Export bindings as name-value pairs for the decode context. *)
-
-val store_name : env -> string -> int -> unit
+val store_name : packed list -> string -> int -> unit
 (** Update a parameter by name (used by action execution). *)

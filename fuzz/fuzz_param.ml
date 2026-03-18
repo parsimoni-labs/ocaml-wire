@@ -77,25 +77,24 @@ let test_parse_struct_sizeof buf =
 (* Parse crash safety: param struct with random input *)
 let test_parse_param_struct buf =
   let buf = truncate buf in
-  let limit = Wire.Param.input "limit" Wire.uint8 in
+  let limit = Wire.Param.input "limit" Wire.uint8 128 in
   let out = Wire.Param.output "out" Wire.uint8 in
-  let s =
-    Wire.C.param_struct "ParamFuzz"
-      [ Wire.Param.v limit; Wire.Param.v out ]
+  let c =
+    Wire.Codec.view "ParamFuzz"
+      ~params:[ Wire.Param.Pack limit; Wire.Param.Pack out ]
       ~where:Wire.Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
-      [
-        Wire.C.field "x"
-          ~action:
-            (Wire.Action.on_success
-               [ Wire.Action.assign out (Wire.field_ref "x") ])
-          Wire.uint8;
-      ]
+      (fun x -> x)
+      Wire.Codec.
+        [
+          Wire.Codec.field "x"
+            ~action:
+              (Wire.Action.on_success
+                 [ Wire.Action.assign out (Wire.field_ref "x") ])
+            Wire.uint8
+            (fun x -> x);
+        ]
   in
-  let env =
-    Wire.Param.empty |> fun env ->
-    Wire.Param.bind env limit 128 |> fun env -> Wire.Param.init env out 0
-  in
-  let _ = Wire.decode_string ~env (Wire.C.struct_typ s) buf in
+  let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
   ()
 
 (** {1 Test Registration} *)

@@ -39,8 +39,6 @@ module Slice = Bytesrw.Bytes.Slice
 type ctx = Eval.ctx
 
 let empty_ctx = Eval.empty
-let ctx_of_params = Eval.of_params
-let commit_params = Eval.commit
 let val_to_int = Eval.int_of
 let eval_expr = Eval.expr
 
@@ -392,16 +390,11 @@ and parse_struct_fields dec ctx fields =
   in
   go ctx None 0 fields
 
-let parse ?(env = Param.empty) typ reader =
+let decode typ reader =
   let dec = decoder reader in
-  let ctx = ctx_of_params env in
-  match parse_with dec ctx typ with
-  | v, ctx' ->
-      commit_params ctx' env;
-      Ok v
+  match parse_with dec empty_ctx typ with
+  | v, _ -> Ok v
   | exception Parse_exn e -> Error e
-
-let decode = parse
 
 let[@inline] check_eof len need =
   if need > len then
@@ -467,39 +460,17 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
       let v, _ = parse_with dec empty_ctx typ in
       v
 
-let parse_string ?(env = Param.empty) typ s =
+let decode_string typ s =
   let buf = Bytes.unsafe_of_string s in
   let len = Bytes.length buf in
-  if not (Param.is_empty env) then
-    let dec = decoder_of_bytes buf len in
-    let ctx = ctx_of_params env in
-    match parse_with dec ctx typ with
-    | v, ctx' ->
-        commit_params ctx' env;
-        Ok v
-    | exception Parse_exn e -> Error e
-  else
-    match parse_direct typ buf 0 len with
-    | v -> Ok v
-    | exception Parse_exn e -> Error e
+  match parse_direct typ buf 0 len with
+  | v -> Ok v
+  | exception Parse_exn e -> Error e
 
-let decode_string = parse_string
-
-let parse_bytes ?(env = Param.empty) typ b =
-  if not (Param.is_empty env) then
-    let dec = decoder_of_bytes b (Bytes.length b) in
-    let ctx = ctx_of_params env in
-    match parse_with dec ctx typ with
-    | v, ctx' ->
-        commit_params ctx' env;
-        Ok v
-    | exception Parse_exn e -> Error e
-  else
-    match parse_direct typ b 0 (Bytes.length b) with
-    | v -> Ok v
-    | exception Parse_exn e -> Error e
-
-let decode_bytes = parse_bytes
+let decode_bytes typ b =
+  match parse_direct typ b 0 (Bytes.length b) with
+  | v -> Ok v
+  | exception Parse_exn e -> Error e
 
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
@@ -765,8 +736,8 @@ let encode_to_string typ v =
 module Codec = struct
   include Codec_backend
 
-  let decode ?(env = Param.empty) t buf off =
-    try Ok (Codec_backend.decode ~env t buf off) with Parse_error e -> Error e
+  let decode t buf off =
+    try Ok (Codec_backend.decode t buf off) with Parse_error e -> Error e
 end
 
 module C = C_backend

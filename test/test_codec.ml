@@ -119,10 +119,12 @@ let test_metadata_action_fail () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
+let projection_limit = Param.input "limit" uint8 10
+let projection_outx = Param.output "outx" uint8
+
 let projection_codec =
-  let outx = Param.output "outx" uint8 in
   Codec.view "ProjectionCodec"
-    ~params:[ Param.v (Param.input "limit" uint8); Param.v outx ]
+    ~params:[ Param.Pack projection_limit; Param.Pack projection_outx ]
     ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
     (fun x -> { x })
     Codec.
@@ -130,32 +132,25 @@ let projection_codec =
         Codec.field "x"
           ~constraint_:Expr.(Wire.field_ref "x" <= int 8)
           ~action:
-            (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
+            (Action.on_success
+               [ Action.assign projection_outx (Wire.field_ref "x") ])
           uint8
           (fun r -> r.x);
       ]
 
 let test_metadata_with_params () =
-  let limit = Param.input "limit" uint8 in
-  let outx = Param.output "outx" uint8 in
+  Param.set projection_limit 10;
+  Param.set projection_outx 0;
   let buf = Bytes.of_string "\x08" in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env limit 10 |> fun env -> Param.init env outx 0
-  in
-  let v = decode_ok (Codec.decode ~env:params projection_codec buf 0) in
+  let v = decode_ok (Codec.decode projection_codec buf 0) in
   Alcotest.(check int) "x" 8 v.x;
-  Alcotest.(check int) "outx" 8 (Param.get params outx)
+  Alcotest.(check int) "outx" 8 (Param.get projection_outx)
 
 let test_metadata_where_fail () =
-  let limit = Param.input "limit" uint8 in
-  let outx = Param.output "outx" uint8 in
+  Param.set projection_limit 7;
+  Param.set projection_outx 0;
   let buf = Bytes.of_string "\x08" in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env limit 7 |> fun env -> Param.init env outx 0
-  in
-  match Codec.decode ~env:params projection_codec buf 0 with
+  match Codec.decode projection_codec buf 0 with
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
@@ -1209,8 +1204,7 @@ type pos_record = { pa : int; pb : int; pc : int }
 let test_codec_sizeof_this () =
   let out = Param.output "out" uint8 in
   let codec =
-    Codec.view "SizeofThisCodec"
-      ~params:[ Param.v out ]
+    Codec.view "SizeofThisCodec" ~params:[ Param.Pack out ]
       (fun a b c -> { pa = a; pb = b; pc = c })
       Codec.
         [
@@ -1223,16 +1217,14 @@ let test_codec_sizeof_this () =
         ]
   in
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
-  let env = Param.init Param.empty out 0 in
-  let _v = decode_ok (Codec.decode ~env codec buf 0) in
+  let _v = decode_ok (Codec.decode codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 3 (Param.get env out)
+  Alcotest.(check int) "sizeof_this at c" 3 (Param.get out)
 
 let test_codec_field_pos () =
   let out = Param.output "out" uint8 in
   let codec =
-    Codec.view "FieldPosCodec"
-      ~params:[ Param.v out ]
+    Codec.view "FieldPosCodec" ~params:[ Param.Pack out ]
       (fun a b c -> { pa = a; pb = b; pc = c })
       Codec.
         [
@@ -1245,10 +1237,9 @@ let test_codec_field_pos () =
         ]
   in
   let buf = Bytes.of_string "\x01\x02\x03" in
-  let env = Param.init Param.empty out 0 in
-  let _v = decode_ok (Codec.decode ~env codec buf 0) in
+  let _v = decode_ok (Codec.decode codec buf 0) in
   (* field_pos at c = 2 (third field, zero-indexed) *)
-  Alcotest.(check int) "field_pos at c" 2 (Param.get env out)
+  Alcotest.(check int) "field_pos at c" 2 (Param.get out)
 
 (* ── Suite ── *)
 

@@ -7,7 +7,7 @@ open Wire.C
 (* ── Param.input / Param.output / Param.v ── *)
 
 let test_input_spec () =
-  let p = Param.input "limit" uint8 in
+  let p = Param.input "limit" uint8 0 in
   let spec = Param.v p in
   let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
   let m = module_ [ typedef s ] in
@@ -32,154 +32,160 @@ let test_output_spec () =
     "contains out" true
     (Re.execp (Re.compile (Re.str "out")) output)
 
-(* ── Param.bind / Param.get ── *)
+(* ── Param.set / Param.get ── *)
 
 let test_input_binding () =
-  let p = Param.input "limit" uint8 in
-  let env = Param.bind Param.empty p 42 in
-  Alcotest.(check int) "value" 42 (Param.get env p)
+  let p = Param.input "limit" uint8 0 in
+  Param.set p 42;
+  Alcotest.(check int) "value" 42 (Param.get p)
 
 let test_output_binding () =
   let p = Param.output "out" uint8 in
-  let env = Param.init Param.empty p 7 in
-  Alcotest.(check int) "initial value" 7 (Param.get env p)
+  Param.set p 7;
+  Alcotest.(check int) "initial value" 7 (Param.get p)
 
-(* ── Input param visible to constraints ── *)
+(* ── Input param visible to constraints (via Codec) ── *)
+
+type bounded_record = { x : int }
 
 let test_input_param_constraint () =
-  let limit = Param.input "limit" uint8 in
-  let s =
-    param_struct "Bounded"
-      [ Param.v limit ]
-      [
-        field "x"
-          ~constraint_:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
-          uint8;
-      ]
+  let limit = Param.input "limit" uint8 10 in
+  let c =
+    Codec.view "Bounded" ~params:[ Param.Pack limit ]
+      (fun x -> { x })
+      Codec.
+        [
+          Codec.field "x"
+            ~constraint_:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+            uint8
+            (fun r -> r.x);
+        ]
   in
-  let params = Param.bind Param.empty limit 10 in
   (* limit=10, x=5: passes *)
-  (match decode_string ~env:params (struct_typ s) "\x05" with
-  | Ok () -> ()
+  let buf = Bytes.of_string "\x05" in
+  (match Codec.decode c buf 0 with
+  | Ok r -> Alcotest.(check int) "x" 5 r.x
   | Error e -> Alcotest.failf "pass: %a" pp_parse_error e);
   (* limit=3, x=5: fails *)
-  let params = Param.bind Param.empty limit 3 in
-  match decode_string ~env:params (struct_typ s) "\x05" with
+  Param.set limit 3;
+  match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected constraint failure"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Output param written by action ── *)
+(* ── Output param written by action (via Codec) ── *)
 
 let test_output_param_action () =
   let out = Param.output "out" uint8 in
-  let s =
-    param_struct "Writer"
-      [ Param.v out ]
-      [
-        field "x"
-          ~action:(Action.on_success [ Action.assign out (Wire.field_ref "x") ])
-          uint8;
-      ]
+  let c =
+    Codec.view "Writer" ~params:[ Param.Pack out ]
+      (fun x -> { x })
+      Codec.
+        [
+          Codec.field "x"
+            ~action:
+              (Action.on_success [ Action.assign out (Wire.field_ref "x") ])
+            uint8
+            (fun r -> r.x);
+        ]
   in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) "\x2A" with
-  | Ok () -> Alcotest.(check int) "out" 42 (Param.get params out)
+  let buf = Bytes.of_string "\x2A" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.(check int) "out" 42 (Param.get out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_output_param_computed () =
   let out = Param.output "out" uint16be in
-  let s =
-    param_struct "Computed"
-      [ Param.v out ]
-      [
-        field "x"
-          ~action:
-            (Action.on_success
-               [ Action.assign out Expr.(Wire.field_ref "x" * int 2) ])
-          uint8;
-      ]
+  let c =
+    Codec.view "Computed" ~params:[ Param.Pack out ]
+      (fun x -> { x })
+      Codec.
+        [
+          Codec.field "x"
+            ~action:
+              (Action.on_success
+                 [ Action.assign out Expr.(Wire.field_ref "x" * int 2) ])
+            uint8
+            (fun r -> r.x);
+        ]
   in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) "\x15" with
-  | Ok () -> Alcotest.(check int) "out" 42 (Param.get params out)
+  let buf = Bytes.of_string "\x15" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.(check int) "out" 42 (Param.get out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Where clause with params ── *)
+(* ── Where clause with params (via Codec) ── *)
+
+type bounded_value = { bv_value : int }
 
 let test_where_clause_pass () =
-  let max_len = Param.input "max_len" uint16be in
-  let s =
-    param_struct "Bounded"
-      [ Param.v max_len ]
-      ~where:Expr.(Wire.field_ref "len" <= Wire.field_ref "max_len")
-      [
-        field "len" uint16be;
-        field "data" (byte_array ~size:(Wire.field_ref "len"));
-      ]
+  let max_val = Param.input "max_val" uint16be 100 in
+  let c =
+    Codec.view "Bounded" ~params:[ Param.Pack max_val ]
+      ~where:Expr.(Wire.field_ref "value" <= Wire.field_ref "max_val")
+      (fun value -> { bv_value = value })
+      Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
-  (* max_len=5, len=3, data="abc" *)
-  let params = Param.bind Param.empty max_len 5 in
-  match decode_string ~env:params (struct_typ s) "\x00\x03abc" with
-  | Ok () -> ()
+  (* max_val=100, value=50: passes *)
+  let buf = Bytes.of_string "\x00\x32" in
+  match Codec.decode c buf 0 with
+  | Ok r -> Alcotest.(check int) "value" 50 r.bv_value
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_where_clause_fail () =
-  let max_len = Param.input "max_len" uint16be in
-  let s =
-    param_struct "Bounded"
-      [ Param.v max_len ]
-      ~where:Expr.(Wire.field_ref "len" <= Wire.field_ref "max_len")
-      [
-        field "len" uint16be;
-        field "data" (byte_array ~size:(Wire.field_ref "len"));
-      ]
+  let max_val = Param.input "max_val" uint16be 10 in
+  let c =
+    Codec.view "Bounded" ~params:[ Param.Pack max_val ]
+      ~where:Expr.(Wire.field_ref "value" <= Wire.field_ref "max_val")
+      (fun value -> { bv_value = value })
+      Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
-  (* max_len=2, len=3: where clause fails *)
-  let params = Param.bind Param.empty max_len 2 in
-  match decode_string ~env:params (struct_typ s) "\x00\x03abc" with
+  (* max_val=10, value=50: where clause fails *)
+  let buf = Bytes.of_string "\x00\x32" in
+  match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Mixed input + output params ── *)
+(* ── Mixed input + output params (via Codec) ── *)
+
+type mixed_record = { a : int; b : int }
 
 let test_mixed_params () =
-  let max_val = Param.input "max_val" uint8 in
+  let max_val = Param.input "max_val" uint8 50 in
   let out_sum = Param.output "out_sum" uint8 in
-  let s =
-    param_struct "Mixed"
-      [ Param.v max_val; Param.v out_sum ]
+  let c =
+    Codec.view "Mixed"
+      ~params:[ Param.Pack max_val; Param.Pack out_sum ]
       ~where:Expr.(Wire.field_ref "out_sum" <= Wire.field_ref "max_val")
-      [
-        field "a"
-          ~action:
-            (Action.on_success [ Action.assign out_sum (Wire.field_ref "a") ])
-          uint8;
-        field "b"
-          ~action:
-            (Action.on_success
-               [
-                 Action.assign out_sum
-                   Expr.(Wire.field_ref "out_sum" + Wire.field_ref "b");
-               ])
-          uint8;
-      ]
+      (fun a b -> { a; b })
+      Codec.
+        [
+          Codec.field "a"
+            ~action:
+              (Action.on_success [ Action.assign out_sum (Wire.field_ref "a") ])
+            uint8
+            (fun r -> r.a);
+          Codec.field "b"
+            ~action:
+              (Action.on_success
+                 [
+                   Action.assign out_sum
+                     Expr.(Wire.field_ref "out_sum" + Wire.field_ref "b");
+                 ])
+            uint8
+            (fun r -> r.b);
+        ]
   in
   (* a=10, b=20 => out_sum=30, max_val=50 => 30 <= 50: OK *)
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env max_val 50 |> fun env -> Param.init env out_sum 0
-  in
-  (match decode_string ~env:params (struct_typ s) "\x0A\x14" with
-  | Ok () -> Alcotest.(check int) "out_sum" 30 (Param.get params out_sum)
+  let buf = Bytes.of_string "\x0A\x14" in
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.(check int) "out_sum" 30 (Param.get out_sum)
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
   (* a=10, b=20 => out_sum=30, max_val=20 => 30 > 20: FAIL *)
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env max_val 20 |> fun env -> Param.init env out_sum 0
-  in
-  match decode_string ~env:params (struct_typ s) "\x0A\x14" with
+  Param.set max_val 20;
+  Param.set out_sum 0;
+  match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -189,10 +195,10 @@ let test_mixed_params () =
 type record_with_param = { x : int }
 
 let param_codec =
-  let limit = Param.input "limit" uint8 in
+  let limit = Param.input "limit" uint8 10 in
   let outx = Param.output "outx" uint8 in
   Codec.view "ParamCodec"
-    ~params:[ Param.v limit; Param.v outx ]
+    ~params:[ Param.Pack limit; Param.Pack outx ]
     ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
     (fun x -> { x })
     Codec.
@@ -205,30 +211,33 @@ let param_codec =
       ]
 
 let test_codec_param_decode () =
-  let limit = Param.input "limit" uint8 in
-  let outx = Param.output "outx" uint8 in
   let buf = Bytes.of_string "\x05" in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env limit 10 |> fun env -> Param.init env outx 0
-  in
   let v =
-    match Codec.decode ~env:params param_codec buf 0 with
+    match Codec.decode param_codec buf 0 with
     | Ok v -> v
     | Error e -> Alcotest.failf "%a" pp_parse_error e
   in
-  Alcotest.(check int) "x" 5 v.x;
-  Alcotest.(check int) "outx" 5 (Param.get params outx)
+  Alcotest.(check int) "x" 5 v.x
 
 let test_codec_param_where_fail () =
-  let limit = Param.input "limit" uint8 in
+  let limit = Param.input "limit" uint8 3 in
   let outx = Param.output "outx" uint8 in
-  let buf = Bytes.of_string "\x05" in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env limit 3 |> fun env -> Param.init env outx 0
+  let c =
+    Codec.view "ParamCodecFail"
+      ~params:[ Param.Pack limit; Param.Pack outx ]
+      ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+      (fun x -> { x })
+      Codec.
+        [
+          Codec.field "x"
+            ~action:
+              (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
+            uint8
+            (fun r -> r.x);
+        ]
   in
-  match Codec.decode ~env:params param_codec buf 0 with
+  let buf = Bytes.of_string "\x05" in
+  match Codec.decode c buf 0 with
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
@@ -236,7 +245,7 @@ let test_codec_param_where_fail () =
 (* ── 3D rendering ── *)
 
 let test_3d_rendering () =
-  let limit = Param.input "limit" uint16be in
+  let limit = Param.input "limit" uint16be 0 in
   let out = Param.output "out" uint32be in
   let s =
     param_struct "Rendered"

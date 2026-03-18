@@ -60,26 +60,37 @@ type param
 (** Untyped formal parameter declaration. Create via {!Param.v}. *)
 
 module Param : sig
-  (** Typed handles for formal parameters and their runtime environment.
+  (** Typed parameter handles.
 
-      The central design fact is that input and output roles are distinct in the
-      type system: an [('a, input) t] is immutable and seeds the decode
-      environment, while an [('a, output) t] is mutable and can be updated by
-      actions during decoding. The phantom kind prevents mixing the two at
-      compile time.
+      Input parameters carry their value. Output parameters carry a mutable cell
+      that actions write to during decoding. Both are passed as regular OCaml
+      function arguments to codec constructors — no separate environment.
 
-      A parameter has two lives:
+      {[
+        let bounded ~max_len ~out_len =
+          Codec.view "Bounded"
+            ~params:[ Param.v max_len; Param.v out_len ]
+            ~where:Expr.(field_ref "Length" <= field_ref "max_len")
+            (fun len data -> { len; data })
+            Codec.
+              [
+                Codec.field "Length"
+                  ~action:(Action.on_success [ Action.assign out_len ... ])
+                  uint16be (fun r -> r.len);
+                Codec.field "Data" (byte_array ~size:(field_ref "Length"))
+                  (fun r -> r.data);
+              ]
 
-      - as a formal declaration ({!v}) attached to a parameterised description,
-        codec, or 3D struct;
-      - as a runtime binding carried in an {!env} supplied to {!Wire.decode},
-        {!Wire.decode_string}, {!Wire.decode_bytes}, or {!Codec.decode}.
+        let out = Param.output "out_len" uint16be
+        let c = bounded
+          ~max_len:(Param.input "max_len" uint16be 1024)
+          ~out_len:out
+        let v = Codec.decode c buf 0
+        let len = Param.get out
+      ]}
 
-      {!input} and {!output} build typed handles. {!v} turns such a handle into
-      a formal declaration for codecs and 3D structs. {!bind} assembles a
-      runtime environment from input handles, {!init} from output handles, and
-      {!get} reads back the current value of a bound parameter after decoding.
-  *)
+      Output parameters are mutable — do not share an output handle across
+      concurrent decodes. *)
 
   type input = Param.input
   (** Phantom kind for immutable input parameters. *)
@@ -90,41 +101,26 @@ module Param : sig
   type ('a, 'k) t = ('a, 'k) Param.t
   (** Typed handle for one formal parameter. *)
 
-  type env = Param.env
-  (** Runtime environment for the parameters of one decode.
-
-      {b Mutation warning.} Output parameters are backed by mutable storage.
-      Decoding updates the storage in place, so {!get} on the same [env] after
-      decode observes the final values. Do not reuse the same [env] across
-      independent decodes — build a fresh one each time. *)
-
-  val input : string -> 'a typ -> ('a, input) t
-  (** Declares a named immutable input parameter. *)
+  val input : string -> 'a typ -> 'a -> ('a, input) t
+  (** [input name typ value] creates an input parameter bound to [value]. *)
 
   val output : string -> 'a typ -> ('a, output) t
-  (** Declares a named mutable output parameter. In 3D this becomes a mutable
-      pointer parameter; in OCaml decoding it can be bound to a slot. *)
+  (** [output name typ] creates a mutable output parameter. *)
 
   val v : ('a, 'k) t -> param
-  (** Formal declaration corresponding to the typed handle. Use this when
-      attaching parameters to codecs or 3D declarations. *)
+  (** Formal declaration for codecs and 3D structs. *)
 
-  val empty : env
-  (** Empty runtime parameter environment. *)
+  val name : ('a, 'k) t -> string
+  (** Parameter name. *)
 
-  val bind : env -> ('a, input) t -> 'a -> env
-  (** Binds an input parameter handle to a runtime value. *)
+  val get : ('a, 'k) t -> 'a
+  (** Read the current value. For output params, call after decoding. *)
 
-  val init : env -> ('a, output) t -> 'a -> env
-  (** Initialises an output parameter handle to an initial value.
+  val set : ('a, 'k) t -> 'a -> unit
+  (** Set the value of a parameter. *)
 
-      Actions may update the output during decoding; use {!get} afterwards to
-      read back the final value. *)
-
-  val get : env -> ('a, 'k) t -> 'a
-  (** Reads back the current value of a bound parameter.
-
-      This is how callers observe output parameters after decode. *)
+  type packed = Param.packed =
+    | Pack : ('a, 'k) t -> packed  (** Existentially packed parameter handle. *)
 end
 
 module Action : sig
@@ -429,24 +425,22 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
     repeated access to individual fields in an existing buffer, without
     allocating an OCaml record for each read. *)
 
-val decode :
-  ?env:Param.env -> 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
-(** [decode ?env t reader] decodes one value from the current reader position.
+val decode : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
+(** Decodes one value from the current reader position.
 
-    [env] provides runtime bindings for any formal parameters referenced by the
-    description. Input bindings seed the decode environment; output bindings are
-    updated by actions during decoding.
+    Parameters referenced by the description must be bound in the closed-over
+    {!Param} handles before decoding. Output parameters are updated by actions
+    during decoding; read them back with {!Param.get}.
 
     Decoding is prefix-based: success does not imply that the reader is
     exhausted afterwards. *)
 
-val decode_string :
-  ?env:Param.env -> 'a typ -> string -> ('a, parse_error) result
+val decode_string : 'a typ -> string -> ('a, parse_error) result
 (** Decodes one value from the start of the string.
 
     Trailing bytes, if any, are left uninterpreted. *)
 
-val decode_bytes : ?env:Param.env -> 'a typ -> bytes -> ('a, parse_error) result
+val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
 (** Decodes one value from the start of the byte sequence.
 
     Trailing bytes, if any, are left uninterpreted. *)
@@ -521,7 +515,7 @@ module Codec : sig
 
   val view :
     string ->
-    ?params:param list ->
+    ?params:Param.packed list ->
     ?where:bool expr ->
     'f ->
     ('f, 'r) fields ->
@@ -531,10 +525,10 @@ module Codec : sig
       The constructor is applied in field order at decode time; the field
       projections are used at encode time.
 
-      [params] declares {e formal} parameter specifications (the [param list]
-      produced by {!Param.v}). Runtime values for these are supplied later via
-      the [~env] argument of {!decode}, which takes a {!Param.env}. [where] is a
-      record-level constraint checked after all fields and actions have run.
+      [params] passes the parameter handles (packed with {!Param.Pack}). Input
+      params carry their values; output params carry mutable cells that actions
+      update during decoding. [where] is a record-level constraint checked after
+      all fields and actions have run.
 
       Example:
       {[
@@ -564,12 +558,8 @@ module Codec : sig
   val is_fixed : 'r t -> bool
   (** [true] iff the codec has a statically known size. *)
 
-  val decode :
-    ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
-  (** Decodes one record value from a buffer at the given base offset.
-
-      The optional runtime [env] plays the same role as for {!Wire.decode}:
-      inputs seed the environment and outputs receive action assignments. *)
+  val decode : 'r t -> bytes -> int -> ('r, parse_error) result
+  (** Decodes one record value from a buffer at the given base offset. *)
 
   val encode : 'r t -> 'r -> bytes -> int -> unit
   (** Encodes one record value into a buffer at the given base offset.

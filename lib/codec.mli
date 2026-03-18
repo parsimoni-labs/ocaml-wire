@@ -21,7 +21,7 @@ val field :
 
 val view :
   string ->
-  ?params:Types.param list ->
+  ?params:Param.packed list ->
   ?where:bool Types.expr ->
   'f ->
   ('f, 'r) fields ->
@@ -40,8 +40,8 @@ val wire_size_at : 'r t -> bytes -> int -> int
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 
-val decode : ?env:Param.env -> 'r t -> bytes -> int -> 'r
-(** [decode ?env c buf off] decodes a record from [buf] at offset [off]. *)
+val decode : 'r t -> bytes -> int -> 'r
+(** [decode c buf off] decodes a record from [buf] at offset [off]. *)
 
 val encode : 'r t -> 'r -> bytes -> int -> unit
 (** [encode c r buf off] encodes record [r] into [buf] at offset [off]. *)

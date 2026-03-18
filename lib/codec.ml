@@ -210,7 +210,7 @@ type ('f, 'r) record =
       r_bf : bf_codec_state option;
       r_configurators_rev : (unit -> unit) list;
       r_field_readers : (string * (bytes -> int -> int)) list;
-      r_params : param list;
+      r_params : Param.packed list;
       r_where : bool expr option;
     }
       -> ('f, 'r) record
@@ -226,7 +226,7 @@ type 'r t = {
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
   t_validate : ctx -> bytes -> int -> ctx;
-  t_params : param list;
+  t_params : Param.packed list;
   t_where : bool expr option;
 }
 
@@ -777,7 +777,7 @@ type ('f, 'r) fields =
 
 let view : type f r.
     string ->
-    ?params:param list ->
+    ?params:Param.packed list ->
     ?where:bool expr ->
     f ->
     (f, r) fields ->
@@ -808,18 +808,19 @@ let wire_size_at t buf off =
 let is_fixed t =
   match t.t_wire_size with Fixed _ -> true | Variable _ -> false
 
-let decode ?(env = Param.empty) t buf off =
+let decode t buf off =
   let v = t.t_decode buf off in
-  let ctx = t.t_validate (ctx_of_params env) buf off in
-  commit_params ctx env;
+  let ctx = t.t_validate (ctx_of_params t.t_params) buf off in
+  commit_params ctx t.t_params;
   v
 
 let encode t v buf off = t.t_encode v buf off
 
 let to_struct t =
-  match (t.t_params, t.t_where) with
+  let formals = List.map (fun (Param.Pack p) -> Param.v p) t.t_params in
+  match (formals, t.t_where) with
   | [], None -> struct' t.t_name t.t_struct_fields
-  | _ -> param_struct t.t_name t.t_params ?where:t.t_where t.t_struct_fields
+  | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
 
 let get (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =

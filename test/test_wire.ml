@@ -219,50 +219,60 @@ let test_parse_struct_action_abort () =
   | Error (Constraint_failed "field action") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
+type bounded_payload = { bp_length : int; bp_data : string }
+
 let test_parse_param_with_params () =
-  let max_len = Param.input "max_len" uint16be in
+  let max_len = Param.input "max_len" uint16be 3 in
   let out_len = Param.output "out_len" uint16be in
-  let s =
-    param_struct "BoundedPayload"
-      [ Param.v max_len; Param.v out_len ]
+  let f_length =
+    Codec.field "Length"
+      ~action:(Action.on_success [ Action.assign out_len (field_ref "Length") ])
+      uint16be
+      (fun r -> r.bp_length)
+  in
+  let c =
+    Codec.view "BoundedPayload"
+      ~params:[ Param.Pack max_len; Param.Pack out_len ]
       ~where:Expr.(field_ref "Length" <= field_ref "max_len")
-      [
-        field "Length"
-          ~action:
-            (Action.on_success [ Action.assign out_len (field_ref "Length") ])
-          uint16be;
-        field "Data" (byte_array ~size:(field_ref "Length"));
-      ]
+      (fun length data -> { bp_length = length; bp_data = data })
+      Codec.
+        [
+          f_length;
+          Codec.field "Data"
+            (byte_array ~size:(Codec.field_ref f_length))
+            (fun r -> r.bp_data);
+        ]
   in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env max_len 3 |> fun env -> Param.init env out_len 0
-  in
-  match decode_string ~env:params (struct_typ s) "\x00\x03abc" with
-  | Ok () -> Alcotest.(check int) "out_len" 3 (Param.get params out_len)
+  let buf = Bytes.of_string "\x00\x03abc" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.(check int) "out_len" 3 (Param.get out_len)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_param_where_fail () =
-  let max_len = Param.input "max_len" uint16be in
+  let max_len = Param.input "max_len" uint16be 2 in
   let out_len = Param.output "out_len" uint16be in
-  let s =
-    param_struct "BoundedPayload"
-      [ Param.v max_len; Param.v out_len ]
+  let f_length =
+    Codec.field "Length"
+      ~action:(Action.on_success [ Action.assign out_len (field_ref "Length") ])
+      uint16be
+      (fun r -> r.bp_length)
+  in
+  let c =
+    Codec.view "BoundedPayload"
+      ~params:[ Param.Pack max_len; Param.Pack out_len ]
       ~where:Expr.(field_ref "Length" <= field_ref "max_len")
-      [
-        field "Length"
-          ~action:
-            (Action.on_success [ Action.assign out_len (field_ref "Length") ])
-          uint16be;
-        field "Data" (byte_array ~size:(field_ref "Length"));
-      ]
+      (fun length data -> { bp_length = length; bp_data = data })
+      Codec.
+        [
+          f_length;
+          Codec.field "Data"
+            (byte_array ~size:(Codec.field_ref f_length))
+            (fun r -> r.bp_data);
+        ]
   in
-  let params =
-    Param.empty |> fun env ->
-    Param.bind env max_len 2 |> fun env -> Param.init env out_len 0
-  in
-  match decode_string ~env:params (struct_typ s) "\x00\x03abc" with
-  | Ok () -> Alcotest.fail "expected where failure"
+  let buf = Bytes.of_string "\x00\x03abc" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "expected where failure"
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
@@ -343,24 +353,27 @@ let test_field_pos_fail () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
+type sizeof_action_record = { sa_a : int; sa_b : int; sa_c : int }
+
 let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
   let out = Param.output "out" uint8 in
-  let s =
-    param_struct "SizeofThisAction"
-      [ Param.v out ]
-      [
-        field "a" uint8;
-        field "b" uint16be;
-        field "c"
-          ~action:(Action.on_success [ Action.assign out sizeof_this ])
-          uint8;
-      ]
+  let c =
+    Codec.view "SizeofThisAction" ~params:[ Param.Pack out ]
+      (fun a b c -> { sa_a = a; sa_b = b; sa_c = c })
+      Codec.
+        [
+          Codec.field "a" uint8 (fun r -> r.sa_a);
+          Codec.field "b" uint16be (fun r -> r.sa_b);
+          Codec.field "c"
+            ~action:(Action.on_success [ Action.assign out sizeof_this ])
+            uint8
+            (fun r -> r.sa_c);
+        ]
   in
-  let params = Param.empty |> fun env -> Param.init env out 0 in
-  match decode_string ~env:params (struct_typ s) "\x01\x00\x02\x00" with
-  | Ok () ->
-      Alcotest.(check int) "sizeof_this via action" 3 (Param.get params out)
+  let buf = Bytes.of_string "\x01\x00\x02\x00" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.(check int) "sizeof_this via action" 3 (Param.get out)
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
 (* ── Encoding tests ── *)

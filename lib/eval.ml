@@ -7,13 +7,13 @@ type ctx = { fields : int Fields.t; sizeof_this : int; field_pos : int }
 
 let empty = { fields = Fields.empty; sizeof_this = 0; field_pos = 0 }
 
-let of_params env =
+let of_params params =
   List.fold_left
     (fun ctx (name, v) -> { ctx with fields = Fields.add name v ctx.fields })
-    empty (Param.to_ctx env)
+    empty (Param.to_ctx params)
 
-let commit ctx env =
-  Fields.iter (fun name v -> Param.store_name env name v) ctx.fields
+let commit ctx params =
+  Fields.iter (fun name v -> Param.store_name params name v) ctx.fields
 
 let bind ctx name v = { ctx with fields = Fields.add name v ctx.fields }
 let set_pos ctx ~sizeof_this ~field_pos = { ctx with sizeof_this; field_pos }

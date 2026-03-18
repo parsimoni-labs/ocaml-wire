@@ -33,8 +33,7 @@ let test_assign_propagates () =
   in
   (* x=10, y=20 => out=10, 10+20=30 <= 255: OK *)
   let input = "\x0A\x14" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -54,8 +53,7 @@ let test_assign_propagates_fail () =
   in
   (* x=100, y=200 => out=100, 100+200=300 > 10: FAIL *)
   let input = "\x64\xC8" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected constraint failure"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -77,8 +75,7 @@ let test_assign_expr () =
   in
   (* x=42 => out=43, constraint out=43: OK *)
   let input = "\x2A\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -183,8 +180,7 @@ let test_var_local () =
   in
   (* x=42 => tmp=84, out=84, constraint out=84: OK *)
   let input = "\x2A\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -212,8 +208,7 @@ let test_if_true_branch () =
       ]
   in
   let input = "\x2A\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -239,8 +234,7 @@ let test_if_false_branch () =
       ]
   in
   let input = "\x05\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -266,8 +260,7 @@ let test_if_else () =
   in
   (* x=1 => else branch => out=20 *)
   let input = "\x01\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -292,8 +285,7 @@ let test_if_abort_in_else () =
   in
   (* x=0 => else branch => abort *)
   let input = "\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected abort from else branch"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -326,8 +318,7 @@ let test_if_nested () =
   in
   (* x=50: 50>0 => true, 50<100 => true, out=1 *)
   let input = "\x32\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -377,8 +368,7 @@ let test_stmt_sequencing () =
   in
   (* x=42 => a=42, b=43, out=86 *)
   let input = "\x2A\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -413,8 +403,7 @@ let test_abort_short_circuits () =
       ]
   in
   let input = "\x42\x00" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok _ -> Alcotest.fail "expected abort"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -445,8 +434,7 @@ let test_action_on_bitfield () =
       ]
   in
   let input = "\xAB" in
-  let params = Param.init Param.empty out 0 in
-  match decode_string ~env:params (struct_typ s) input with
+  match decode_string (struct_typ s) input with
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 

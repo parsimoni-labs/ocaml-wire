@@ -12,10 +12,10 @@ type ctx
 val empty : ctx
 (** Empty context. *)
 
-val of_params : Param.env -> ctx
-(** Seed a context from a parameter environment. *)
+val of_params : Param.packed list -> ctx
+(** Seed a context from parameter handles. *)
 
-val commit : ctx -> Param.env -> unit
+val commit : ctx -> Param.packed list -> unit
 (** Write final field values back into mutable output parameters. *)
 
 val bind : ctx -> string -> int -> ctx
