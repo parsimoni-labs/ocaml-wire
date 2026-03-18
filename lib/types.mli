@@ -306,10 +306,10 @@ val byte_array : size:int expr -> string typ
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Zero-copy byte span. *)
 
-val single_elem_array : size:int expr -> 'a typ -> 'a typ
+val nested : size:int expr -> 'a typ -> 'a typ
 (** Single element in a sized region (exact fit). *)
 
-val single_elem_array_at_most : size:int expr -> 'a typ -> 'a typ
+val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** Single element in a sized region (may be smaller). *)
 
 val enum : string -> (string * int) list -> int typ -> int typ

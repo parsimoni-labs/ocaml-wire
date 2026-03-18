@@ -72,12 +72,14 @@ let test_pp_bf_uint32be width =
   ()
 
 let test_pp_map () =
-  let t = Wire.map (fun n -> n * 2) (fun n -> n / 2) Wire.uint8 in
+  let t =
+    Wire.map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) Wire.uint8
+  in
   let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
 let test_pp_bool () =
-  let t = Wire.bool_of (Wire.bits ~width:1 Wire.U8) in
+  let t = Wire.bool (Wire.bits ~width:1 Wire.U8) in
   let _ = Fmt.str "%a" Wire.C.pp_typ t in
   ()
 
@@ -267,17 +269,17 @@ let test_byte_array size =
   let _ = Wire.C.to_3d m in
   ()
 
-(** Test single_elem_array. *)
-let test_single_elem_array () =
-  let t = Wire.single_elem_array ~size:(Wire.int 4) Wire.uint32 in
+(** Test nested. *)
+let test_nested () =
+  let t = Wire.nested ~size:(Wire.int 4) Wire.uint32 in
   let s = Wire.C.struct_ "WithSingle" [ Wire.C.field "x" t ] in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in
   ()
 
-(** Test single_elem_array_at_most. *)
+(** Test nested_at_most. *)
 let test_single_elem_at_most () =
-  let t = Wire.single_elem_array_at_most ~size:(Wire.int 8) Wire.uint32 in
+  let t = Wire.nested_at_most ~size:(Wire.int 8) Wire.uint32 in
   let s = Wire.C.struct_ "WithAtMost" [ Wire.C.field "x" t ] in
   let m = Wire.C.module_ [ Wire.C.typedef s ] in
   let _ = Wire.C.to_3d m in
@@ -534,8 +536,8 @@ let codegen_tests =
     test_case "sizeof expr" [ const () ] test_sizeof_expr;
     test_case "array type" [ int ] test_array_type;
     test_case "byte array" [ int ] test_byte_array;
-    test_case "single elem array" [ const () ] test_single_elem_array;
-    test_case "single elem at most" [ const () ] test_single_elem_at_most;
+    test_case "nested" [ const () ] test_nested;
+    test_case "nested at most" [ const () ] test_single_elem_at_most;
     test_case "anon field" [ const () ] test_anon_field;
     test_case "param struct" [ range 20 ] test_param_struct;
     test_case "mutable param" [ const () ] test_mutable_param;

@@ -13,7 +13,8 @@ type bitfield = U8 | U16 | U16be | U32 | U32be
 type param = Types.param
 
 let field_ref = Types.ref
-let bool_of = Types.bool
+let map ~decode ~encode inner = Types.map decode encode inner
+let bool = Types.bool
 let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases

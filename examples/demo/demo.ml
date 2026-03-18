@@ -190,7 +190,7 @@ type bool_fields = {
 }
 
 let f_bool_active =
-  Codec.field "Active" (bool_of (bits ~width:1 U8)) (fun b -> b.bl_active)
+  Codec.field "Active" (bool (bits ~width:1 U8)) (fun b -> b.bl_active)
 
 let bool_fields_codec =
   Codec.view "BoolFields"
@@ -199,7 +199,7 @@ let bool_fields_codec =
     Codec.
       [
         f_bool_active;
-        Codec.field "Valid" (bool_of (bits ~width:1 U8)) (fun b -> b.bl_valid);
+        Codec.field "Valid" (bool (bits ~width:1 U8)) (fun b -> b.bl_valid);
         Codec.field "Mode" (bits ~width:6 U8) (fun b -> b.bl_mode);
         Codec.field "Code" uint8 (fun b -> b.bl_code);
       ]
@@ -319,7 +319,8 @@ let int_of_priority = function
 type mapped = { mp_priority : priority; mp_value : int }
 
 let f_mp_priority =
-  Codec.field "Priority" (map priority_of_int int_of_priority uint8) (fun m ->
+  Codec.field "Priority"
+    (map ~decode:priority_of_int ~encode:int_of_priority uint8) (fun m ->
       m.mp_priority)
 
 let f_mp_value = Codec.field "Value" uint8 (fun m -> m.mp_value)
@@ -487,15 +488,14 @@ let single_elem_struct =
   struct_ "SingleElem"
     [
       field "Size" uint16be;
-      field "Elem" (single_elem_array ~size:(field_ref "Size") uint32be);
+      field "Elem" (nested ~size:(field_ref "Size") uint32be);
     ]
 
 let single_elem_at_most_struct =
   struct_ "SingleElemAtMost"
     [
       field "MaxSize" uint16be;
-      field "Elem"
-        (single_elem_array_at_most ~size:(field_ref "MaxSize") uint16be);
+      field "Elem" (nested_at_most ~size:(field_ref "MaxSize") uint16be);
     ]
 
 (* ── 16. Anonymous fields (padding) ── *)

@@ -195,11 +195,8 @@ let where cond inner = Where { cond; inner }
 let array ~len elem = Array { len; elem }
 let byte_array ~size = Byte_array { size }
 let byte_slice ~size = Byte_slice { size }
-let single_elem_array ~size elem = Single_elem { size; elem; at_most = false }
-
-let single_elem_array_at_most ~size elem =
-  Single_elem { size; elem; at_most = true }
-
+let nested ~size elem = Single_elem { size; elem; at_most = false }
+let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
 
 let variants name cases base =

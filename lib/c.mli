@@ -115,7 +115,7 @@ val pp_module : Format.formatter -> module_ -> unit
 
 (** {1 Struct Helpers} *)
 
-val wire_size : struct_ -> int option
+val size : struct_ -> int option
 (** Fixed wire size if determinable. *)
 
 val ml_type_of : 'a Types.typ -> string

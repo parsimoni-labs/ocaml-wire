@@ -104,13 +104,15 @@ let test_parse_bf_uint32be buf =
 
 let test_parse_map buf =
   let buf = truncate buf in
-  let t = Wire.map (fun n -> n * 2) (fun n -> n / 2) Wire.uint8 in
+  let t =
+    Wire.map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) Wire.uint8
+  in
   let _ = Wire.decode_string t buf in
   ()
 
 let test_parse_bool buf =
   let buf = truncate buf in
-  let t = Wire.bool_of Wire.uint8 in
+  let t = Wire.bool Wire.uint8 in
   let _ = Wire.decode_string t buf in
   ()
 
@@ -323,7 +325,9 @@ let test_roundtrip_uint64be n =
 
 let test_roundtrip_map n =
   let n = abs n mod 256 in
-  let t = Wire.map (fun x -> x * 2) (fun x -> x / 2) Wire.uint8 in
+  let t =
+    Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
+  in
   let encoded = Wire.encode_to_string t (n * 2) in
   match Wire.decode_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
@@ -331,7 +335,7 @@ let test_roundtrip_map n =
 
 let test_roundtrip_bool n =
   let v = n mod 2 = 0 in
-  let t = Wire.bool_of Wire.uint8 in
+  let t = Wire.bool Wire.uint8 in
   let encoded = Wire.encode_to_string t v in
   match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "bool roundtrip mismatch"
@@ -433,7 +437,7 @@ let bool_record_codec =
     (fun flag value -> { flag; value })
     Wire.Codec.
       [
-        Wire.Codec.field "flag" (Wire.bool_of Wire.uint8) (fun r -> r.flag);
+        Wire.Codec.field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag);
         Wire.Codec.field "value" Wire.uint16 (fun r -> r.value);
       ]
 

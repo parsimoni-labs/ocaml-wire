@@ -25,7 +25,7 @@ read-modify-write for bitfields).
   `uint64`, `uint64be` (32-bit integers are unboxed on 64-bit platforms)
 - **Bitfields** — `bits ~width:n U8/U16be/U32be` to extract
   bit ranges from integer bases
-- **Bool** — `bool_of (bits ~width:1 bf)` maps single-bit fields to `true`/`false`
+- **Bool** — `bool (bits ~width:1 bf)` maps single-bit fields to `true`/`false`
 - **Byte slices** — `byte_slice ~size:(int n)` for zero-copy sub-protocol access
 - **Enumerations** — named integer constants with validation
 - **Structs** — records with dependent fields and constraints
@@ -150,8 +150,8 @@ let packet_codec =
 ```ocaml
 let f_tcp_src_port = Codec.field "SrcPort" uint16be (fun t -> t.tcp_src_port)
 let f_tcp_dst_port = Codec.field "DstPort" uint16be (fun t -> t.tcp_dst_port)
-let f_tcp_syn = Codec.field "SYN" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_syn)
-let f_tcp_ack = Codec.field "ACK" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_ack)
+let f_tcp_syn = Codec.field "SYN" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_syn)
+let f_tcp_ack = Codec.field "ACK" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_ack)
 
 let tcp_codec =
   Codec.make "TCP" (fun src dst seq ack_num ... -> ...)

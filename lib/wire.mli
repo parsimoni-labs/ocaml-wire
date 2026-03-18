@@ -70,15 +70,16 @@ module Param : sig
 
       A parameter has two lives:
 
-      - as a formal declaration ({!decl}) attached to a parameterised
-        description, codec, or 3D struct;
+      - as a formal declaration ({!v}) attached to a parameterised description,
+        codec, or 3D struct;
       - as a runtime binding carried in an {!env} supplied to {!Wire.decode},
         {!Wire.decode_string}, {!Wire.decode_bytes}, or {!Codec.decode}.
 
-      {!input} and {!output} build typed handles. {!decl} turns such a handle
-      into a formal declaration. {!bind} assembles a runtime environment from
-      input handles, {!init} from output handles, and {!get} reads back the
-      current value of a bound parameter after decoding. *)
+      {!input} and {!output} build typed handles. {!v} turns such a handle into
+      a formal declaration for codecs and 3D structs. {!bind} assembles a
+      runtime environment from input handles, {!init} from output handles, and
+      {!get} reads back the current value of a bound parameter after decoding.
+  *)
 
   type input = Param.input
   (** Phantom kind for immutable input parameters. *)
@@ -315,12 +316,12 @@ val uint64be : int64 typ
 val bits : width:int -> bitfield -> int typ
 (** Bitfield of the given width within the given base word. *)
 
-val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
-(** View a wire value through decode and encode functions. *)
+val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
+(** [map ~decode ~encode t] views a wire value through conversion functions. *)
 
-val bool_of : int typ -> bool typ
-(** [bool_of t] views an integer wire value as a boolean. Zero is [false],
-    non-zero is [true]. *)
+val bool : int typ -> bool typ
+(** [bool t] views an integer wire value as a boolean. Zero is [false], non-zero
+    is [true]. *)
 
 val lookup : 'a list -> int typ -> 'a typ
 (** [lookup table t] decodes an integer as a zero-based index into a finite
@@ -359,26 +360,30 @@ val byte_array : size:int expr -> string typ
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice. *)
 
-val single_elem_array : size:int expr -> 'a typ -> 'a typ
-(** One logical value carried inside a region described by an array-sized byte
-    count.
+val nested : size:int expr -> 'a typ -> 'a typ
+(** [nested ~size t] parses one value of type [t] inside a length-prefixed
+    region of [size] bytes.
 
     This is for layouts where a length expression denotes the size of a region,
     but that region is known to contain exactly one value, such as a single
     nested message. *)
 
-val single_elem_array_at_most : size:int expr -> 'a typ -> 'a typ
-(** [single_elem_array_at_most ~size t] is like {!single_elem_array}, but treats
-    [size] as an upper bound rather than an exact size.
+val nested_at_most : size:int expr -> 'a typ -> 'a typ
+(** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
+    bound rather than an exact size.
 
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. *)
 
 val enum : string -> (string * int) list -> int typ -> int typ
-(** Named integer enumeration with validation. *)
+(** [enum name cases base] validates that the decoded integer is one of the
+    named values. The result is still [int] — use {!variants} instead if you
+    want to decode to proper OCaml values. [enum] is mainly useful for 3D
+    projection where the name and cases appear in the generated [.3d] file. *)
 
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
-(** Enumeration viewed as an OCaml variant-like value. *)
+(** [variants name cases base] maps integer values to OCaml values via a named
+    enumeration. Unlike {!enum}, this converts to proper OCaml values. *)
 
 type ('tag, 'a) case
 
@@ -563,7 +568,7 @@ module Codec : sig
     ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
   (** Decodes one record value from a buffer at the given base offset.
 
-      The optional runtime [params] play the same role as for {!Wire.decode}:
+      The optional runtime [env] plays the same role as for {!Wire.decode}:
       inputs seed the environment and outputs receive action assignments. *)
 
   val encode : 'r t -> 'r -> bytes -> int -> unit
@@ -765,11 +770,13 @@ module C : sig
   val pp_module : Format.formatter -> module_ -> unit
   (** Pretty-printer for 3D modules. *)
 
-  val wire_size : struct_ -> int option
+  val size : struct_ -> int option
   (** Fixed wire size of a struct, if known statically. *)
 
   val ml_type_of : 'a typ -> string
-  (** OCaml type name for a wire type, used by the {!Wire_c} stub generators. *)
+  (** OCaml type name for stub generation: ["int"] for integer types that fit in
+      OCaml [int], ["int64"] for uint64. Used by {!Wire_c} when generating FFI
+      bindings. *)
 
   val of_module : name:string -> module_:module_ -> wire_size:int -> schema
   (** Wraps an existing 3D module as a schema. *)

@@ -59,7 +59,7 @@ let pp_module = Types.pp_module
 
 (* Struct helpers *)
 
-let wire_size (s : Types.struct_) =
+let size (s : Types.struct_) =
   List.fold_left
     (fun acc (Types.Field f) ->
       match (acc, Types.field_wire_size f.field_typ) with

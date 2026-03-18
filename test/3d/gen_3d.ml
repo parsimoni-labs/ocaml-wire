@@ -80,10 +80,10 @@ let field_dependence () =
         field "length" uint32;
         field "key" uint32;
         field "pl"
-          (single_elem_array_at_most ~size:(field_ref "length")
+          (nested_at_most ~size:(field_ref "length")
              (apply (type_ref "D") [ field_ref "key" ]));
         field "pl_array2"
-          (single_elem_array ~size:(field_ref "length")
+          (nested ~size:(field_ref "length")
              (apply (type_ref "D") [ field_ref "key" ]));
         field "payload" (apply (type_ref "D") [ field_ref "key" ]);
       ]

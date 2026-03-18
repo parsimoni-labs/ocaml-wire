@@ -148,10 +148,10 @@ let f_tcp_src_port = Codec.field "SrcPort" uint16be (fun t -> t.tcp_src_port)
 let f_tcp_dst_port = Codec.field "DstPort" uint16be (fun t -> t.tcp_dst_port)
 
 let f_tcp_syn =
-  Codec.field "SYN" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_syn)
+  Codec.field "SYN" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_syn)
 
 let f_tcp_ack =
-  Codec.field "ACK" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_ack)
+  Codec.field "ACK" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_ack)
 
 let tcp_of_fields src_port dst_port seq ack_num data_offset reserved ns cwr ece
     urg ack psh rst syn fin window checksum urgent_ptr =
@@ -187,15 +187,15 @@ let tcp_codec =
         Codec.field "DataOffset" (bits ~width:4 U16be) (fun t ->
             t.tcp_data_offset);
         Codec.field "Reserved" (bits ~width:3 U16be) (fun t -> t.tcp_reserved);
-        Codec.field "NS" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_ns);
-        Codec.field "CWR" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_cwr);
-        Codec.field "ECE" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_ece);
-        Codec.field "URG" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_urg);
+        Codec.field "NS" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_ns);
+        Codec.field "CWR" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_cwr);
+        Codec.field "ECE" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_ece);
+        Codec.field "URG" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_urg);
         f_tcp_ack;
-        Codec.field "PSH" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_psh);
-        Codec.field "RST" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_rst);
+        Codec.field "PSH" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_psh);
+        Codec.field "RST" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_rst);
         f_tcp_syn;
-        Codec.field "FIN" (bool_of (bits ~width:1 U16be)) (fun t -> t.tcp_fin);
+        Codec.field "FIN" (bool (bits ~width:1 U16be)) (fun t -> t.tcp_fin);
         Codec.field "Window" uint16be (fun t -> t.tcp_window);
         Codec.field "Checksum" uint16be (fun t -> t.tcp_checksum);
         Codec.field "UrgentPtr" uint16be (fun t -> t.tcp_urgent_ptr);

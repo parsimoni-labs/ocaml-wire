@@ -12,7 +12,7 @@
    3. Run EverParse to generate C parser (.h with struct + read/write)
    4. Use to_c_stubs to generate OCaml FFI bindings to call EverParse C *)
 
-let wire_size = Wire.C.wire_size
+let size = Wire.C.size
 let ml_type_of = Wire.C.ml_type_of
 
 (** Compute the EverParse-normalized identifier for a struct name.
@@ -142,7 +142,7 @@ let schema_of_struct s =
   let name = Wire.C.struct_name s in
   let m = Wire.C.module_ [ Wire.C.typedef ~entrypoint:true s ] in
   let wire_size =
-    match wire_size s with
+    match size s with
     | Some n -> n
     | None -> Fmt.failwith "schema %s has variable-length fields" name
   in

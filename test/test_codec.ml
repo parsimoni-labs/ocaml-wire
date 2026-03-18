@@ -411,7 +411,7 @@ let test_view_get_bitfield () =
 
 let test_view_get_bool () =
   let codec, f_flag =
-    let f_flag = Codec.field "flag" (bool_of (bits ~width:1 U8)) fst in
+    let f_flag = Codec.field "flag" (bool (bits ~width:1 U8)) fst in
     let codec =
       Codec.view "ViewBool"
         (fun flag code -> (flag, code))
@@ -512,7 +512,7 @@ let test_view_with_offset () =
 
 let test_view_set_bool () =
   let codec, f_flag =
-    let f_flag = Codec.field "flag" (bool_of (bits ~width:1 U8)) fst in
+    let f_flag = Codec.field "flag" (bool (bits ~width:1 U8)) fst in
     let codec =
       Codec.view "ViewSetBool"
         (fun flag code -> (flag, code))
