@@ -36,7 +36,10 @@ module Staged : sig
   type +'a t
 
   val stage : 'a -> 'a t
+  (** [stage v] wraps [v] as a staged value. *)
+
   val unstage : 'a t -> 'a
+  (** [unstage s] forces the staged value [s]. *)
 end
 
 (** {1 Expressions}
@@ -191,31 +194,82 @@ module Expr : sig
       [Expr.(field_ref "x" + int 1)]. *)
 
   val ( + ) : int expr -> int expr -> int expr
+  (** Addition. *)
+
   val ( - ) : int expr -> int expr -> int expr
+  (** Subtraction. *)
+
   val ( * ) : int expr -> int expr -> int expr
+  (** Multiplication. *)
+
   val ( / ) : int expr -> int expr -> int expr
+  (** Division. *)
+
   val ( mod ) : int expr -> int expr -> int expr
+  (** Modulo. *)
+
   val ( land ) : int expr -> int expr -> int expr
+  (** Bitwise AND. *)
+
   val ( lor ) : int expr -> int expr -> int expr
+  (** Bitwise OR. *)
+
   val ( lxor ) : int expr -> int expr -> int expr
+  (** Bitwise XOR. *)
+
   val lnot : int expr -> int expr
+  (** Bitwise NOT. *)
+
   val ( lsl ) : int expr -> int expr -> int expr
+  (** Logical shift left. *)
+
   val ( lsr ) : int expr -> int expr -> int expr
+  (** Logical shift right. *)
+
   val ( = ) : 'a expr -> 'a expr -> bool expr
+  (** Equality. *)
+
   val ( <> ) : 'a expr -> 'a expr -> bool expr
+  (** Inequality. *)
+
   val ( < ) : int expr -> int expr -> bool expr
+  (** Less than. *)
+
   val ( <= ) : int expr -> int expr -> bool expr
+  (** Less than or equal. *)
+
   val ( > ) : int expr -> int expr -> bool expr
+  (** Greater than. *)
+
   val ( >= ) : int expr -> int expr -> bool expr
+  (** Greater than or equal. *)
+
   val ( && ) : bool expr -> bool expr -> bool expr
+  (** Boolean conjunction. *)
+
   val ( || ) : bool expr -> bool expr -> bool expr
+  (** Boolean disjunction. *)
+
   val not : bool expr -> bool expr
+  (** Boolean negation. *)
+
   val true_ : bool expr
+  (** Constant [true]. *)
+
   val false_ : bool expr
+  (** Constant [false]. *)
+
   val to_uint8 : int expr -> int expr
+  (** Cast to unsigned 8-bit range. *)
+
   val to_uint16 : int expr -> int expr
+  (** Cast to unsigned 16-bit range. *)
+
   val to_uint32 : int expr -> int expr
+  (** Cast to unsigned 32-bit range. *)
+
   val to_uint64 : int expr -> int expr
+  (** Cast to unsigned 64-bit range. *)
 end
 
 (** {1 Type Descriptions}
@@ -249,10 +303,12 @@ val uint63be : int typ
 (** Unsigned 63-bit big-endian integer carried on 8 bytes. *)
 
 val uint64 : int64 typ
-(** Unsigned 64-bit little-endian integer represented as [int64]. *)
+(** [uint64] is an unsigned 64-bit little-endian integer represented as [int64].
+*)
 
 val uint64be : int64 typ
-(** Unsigned 64-bit big-endian integer represented as [int64]. *)
+(** [uint64be] is an unsigned 64-bit big-endian integer represented as [int64].
+*)
 
 val bits : width:int -> bitfield -> int typ
 (** Bitfield of the given width within the given base word. *)
@@ -261,18 +317,19 @@ val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** View a wire value through decode and encode functions. *)
 
 val bool_of : int typ -> bool typ
-(** Boolean view over an integer wire value. Zero is [false], non-zero is
-    [true]. *)
+(** [bool_of t] views an integer wire value as a boolean. Zero is [false],
+    non-zero is [true]. *)
 
 val lookup : 'a list -> int typ -> 'a typ
-(** Decode an integer as a zero-based index into a finite table.
+(** [lookup table t] decodes an integer as a zero-based index into a finite
+    table.
 
     The decoded integer selects the corresponding element from the list.
     Decoding raises [Invalid_argument] if the index is out of bounds; encoding
     raises [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
-(** Empty description carrying no bytes and producing [()]. *)
+(** [empty] is a description carrying no bytes and producing [()]. *)
 
 val all_bytes : string typ
 (** All remaining bytes of the enclosing sequential description as a string.
@@ -308,8 +365,8 @@ val single_elem_array : size:int expr -> 'a typ -> 'a typ
     nested message. *)
 
 val single_elem_array_at_most : size:int expr -> 'a typ -> 'a typ
-(** Like {!single_elem_array}, but treating [size] as an upper bound rather than
-    an exact size.
+(** [single_elem_array_at_most ~size t] is like {!single_elem_array}, but treats
+    [size] as an upper bound rather than an exact size.
 
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. *)
@@ -331,8 +388,8 @@ val default : 'a typ -> ('tag, 'a) case
 val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
 (** Tag-dispatched choice between several descriptions. *)
 
-val wire_size : 'a typ -> int option
-(** Fixed wire size of a description, if known statically. *)
+val size : 'a typ -> int option
+(** [size t] is the fixed wire size of a description, if known statically. *)
 
 (** {1 Parsing Errors}
 
@@ -366,7 +423,7 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
 
 val decode :
   ?env:Param.env -> 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
-(** Decodes one value from the current reader position.
+(** [decode ?env t reader] decodes one value from the current reader position.
 
     [env] provides runtime bindings for any formal parameters referenced by the
     description. Input bindings seed the decode environment; output bindings are
@@ -732,4 +789,16 @@ module Ascii : sig
 
   val pp_codec : Format.formatter -> 'r Codec.t -> unit
   (** Pretty-print a codec as an RFC-style bit diagram. *)
+end
+
+(**/**)
+
+(** {1 Private}
+
+    Unstable internals exposed for testing. Do not depend on this module. *)
+
+module Private : sig
+  module UInt32 = UInt32
+  module UInt63 = UInt63
+  module Types = Types
 end

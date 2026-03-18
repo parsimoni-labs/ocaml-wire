@@ -15,7 +15,7 @@ type param = Types.param
 let field_ref = Types.ref
 let bool_of = Types.bool
 let empty = Types.unit
-let wire_size = Types.field_wire_size
+let size = Types.field_wire_size
 let lookup = Types.cases
 
 let bits ~width = function
@@ -856,3 +856,9 @@ end
 
 module C = C_backend
 module Ascii = Ascii
+
+module Private = struct
+  module UInt32 = UInt32
+  module UInt63 = UInt63
+  module Types = Types
+end

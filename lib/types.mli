@@ -1,4 +1,11 @@
-type endian = Little | Big
+(** Core type definitions for the Wire DSL. *)
+
+type endian = Little | Big  (** Byte order. *)
+
+(** {1 Expressions}
+
+    Typed expression language used in constraints, actions and size
+    computations. Arithmetic and bitwise operators mirror OCaml conventions. *)
 
 type _ expr =
   | Int : int -> int expr
@@ -30,42 +37,54 @@ type _ expr =
   | Not : bool expr -> bool expr
   | Cast : [ `U8 | `U16 | `U32 | `U64 ] * int expr -> int expr
 
-and bitfield_base = BF_U8 | BF_U16 of endian | BF_U32 of endian
+(** {1 Types} *)
+
+and bitfield_base =
+  | BF_U8
+  | BF_U16 of endian
+  | BF_U32 of endian  (** Base storage for bitfield extractions. *)
 
 and _ typ =
-  | Uint8 : int typ
-  | Uint16 : endian -> int typ
-  | Uint32 : endian -> UInt32.t typ
-  | Uint63 : endian -> UInt63.t typ
-  | Uint64 : endian -> int64 typ
-  | Bits : { width : int; base : bitfield_base } -> int typ
-  | Unit : unit typ
-  | All_bytes : string typ
-  | All_zeros : string typ
-  | Where : { cond : bool expr; inner : 'a typ } -> 'a typ
+  | Uint8 : int typ  (** 8-bit unsigned. *)
+  | Uint16 : endian -> int typ  (** 16-bit unsigned. *)
+  | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
+  | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
+  | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
+  | Bits : { width : int; base : bitfield_base } -> int typ  (** Bitfield. *)
+  | Unit : unit typ  (** Zero-width. *)
+  | All_bytes : string typ  (** Remaining bytes as string. *)
+  | All_zeros : string typ  (** Remaining bytes, must be zero. *)
+  | Where : { cond : bool expr; inner : 'a typ } -> 'a typ  (** Guarded. *)
   | Array : { len : int expr; elem : 'a typ } -> 'a list typ
-  | Byte_array : { size : int expr } -> string typ
+      (** Fixed-count array. *)
+  | Byte_array : { size : int expr } -> string typ  (** Byte span as string. *)
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
+      (** Zero-copy byte span. *)
   | Single_elem : { size : int expr; elem : 'a typ; at_most : bool } -> 'a typ
+      (** Single element in a sized region. *)
   | Enum : {
       name : string;
       cases : (string * int) list;
       base : int typ;
     }
-      -> int typ
+      -> int typ  (** Named enumeration. *)
   | Casetype : {
       name : string;
       tag : 'tag typ;
       cases : ('tag option * 'a typ) list;
     }
-      -> 'a typ
-  | Struct : struct_ -> unit typ
-  | Type_ref : string -> 'a typ
+      -> 'a typ  (** Tag-dispatched union. *)
+  | Struct : struct_ -> unit typ  (** Nested struct. *)
+  | Type_ref : string -> 'a typ  (** Forward reference by name. *)
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
+      (** Qualified reference. *)
   | Map : { inner : 'w typ; decode : 'w -> 'a; encode : 'a -> 'w } -> 'a typ
+      (** Mapped type. *)
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
+      (** Parameterised type application. *)
 
-and packed_expr = Pack_expr : 'a expr -> packed_expr
+and packed_expr =
+  | Pack_expr : 'a expr -> packed_expr  (** Existentially packed expression. *)
 
 and struct_ = {
   name : string;
@@ -73,6 +92,7 @@ and struct_ = {
   where : bool expr option;
   fields : field list;
 }
+(** Struct declaration. *)
 
 and field =
   | Field : {
@@ -81,29 +101,55 @@ and field =
       constraint_ : bool expr option;
       action : action option;
     }
-      -> field
+      -> field  (** A single struct field. *)
 
 and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
-and packed_typ = Pack_typ : 'a typ -> packed_typ
-and action = On_success of action_stmt list | On_act of action_stmt list
+(** Formal parameter. *)
+
+and packed_typ =
+  | Pack_typ : 'a typ -> packed_typ  (** Existentially packed type. *)
+
+and action =
+  | On_success of action_stmt list
+  | On_act of action_stmt list  (** Action attached to a field. *)
 
 and action_stmt =
   | Assign of string * int expr
   | Return of bool expr
   | Abort
   | If of bool expr * action_stmt list * action_stmt list option
-  | Var of string * int expr
+  | Var of string * int expr  (** Action statement. *)
+
+(** {1 Expression Constructors} *)
 
 val int : int -> int expr
-val int64 : int64 -> int64 expr
-val true_ : bool expr
-val false_ : bool expr
-val ref : string -> int expr
-val sizeof : 'a typ -> int expr
-val sizeof_this : int expr
-val field_pos : int expr
+(** Integer literal. *)
 
+val int64 : int64 -> int64 expr
+(** 64-bit integer literal. *)
+
+val true_ : bool expr
+(** Boolean true. *)
+
+val false_ : bool expr
+(** Boolean false. *)
+
+val ref : string -> int expr
+(** Reference a field or parameter by name. *)
+
+val sizeof : 'a typ -> int expr
+(** Size of a type in bytes. *)
+
+val sizeof_this : int expr
+(** Size of the enclosing struct. *)
+
+val field_pos : int expr
+(** Byte offset of the current field. *)
+
+(** Infix operators for building expressions. *)
 module Expr : sig
+  (** {2 Arithmetic and bitwise operators} *)
+
   val ( + ) : int expr -> int expr -> int expr
   val ( - ) : int expr -> int expr -> int expr
   val ( * ) : int expr -> int expr -> int expr
@@ -115,83 +161,193 @@ module Expr : sig
   val lnot : int expr -> int expr
   val ( lsl ) : int expr -> int expr -> int expr
   val ( lsr ) : int expr -> int expr -> int expr
+
+  (** {2 Comparison operators} *)
+
   val ( = ) : 'a expr -> 'a expr -> bool expr
   val ( <> ) : 'a expr -> 'a expr -> bool expr
   val ( < ) : int expr -> int expr -> bool expr
   val ( <= ) : int expr -> int expr -> bool expr
   val ( > ) : int expr -> int expr -> bool expr
   val ( >= ) : int expr -> int expr -> bool expr
+
+  (** {2 Boolean operators} *)
+
   val ( && ) : bool expr -> bool expr -> bool expr
   val ( || ) : bool expr -> bool expr -> bool expr
   val not : bool expr -> bool expr
+
+  (** {2 Integer casts} *)
+
   val to_uint8 : int expr -> int expr
   val to_uint16 : int expr -> int expr
   val to_uint32 : int expr -> int expr
   val to_uint64 : int expr -> int expr
 end
 
+(** {1 Type Constructors} *)
+
 val uint8 : int typ
+(** 8-bit unsigned, native endian. *)
+
 val uint16 : int typ
+(** 16-bit unsigned, little-endian. *)
+
 val uint16be : int typ
+(** 16-bit unsigned, big-endian. *)
+
 val uint32 : UInt32.t typ
+(** 32-bit unsigned, little-endian. *)
+
 val uint32be : UInt32.t typ
+(** 32-bit unsigned, big-endian. *)
+
 val uint63 : UInt63.t typ
+(** 63-bit unsigned, little-endian. *)
+
 val uint63be : UInt63.t typ
+(** 63-bit unsigned, big-endian. *)
+
 val uint64 : int64 typ
+(** 64-bit unsigned, little-endian. *)
+
 val uint64be : int64 typ
+(** 64-bit unsigned, big-endian. *)
+
 val bf_uint8 : bitfield_base
+(** 8-bit bitfield base. *)
+
 val bf_uint16 : bitfield_base
+(** 16-bit bitfield base, little-endian. *)
+
 val bf_uint16be : bitfield_base
+(** 16-bit bitfield base, big-endian. *)
+
 val bf_uint32 : bitfield_base
+(** 32-bit bitfield base, little-endian. *)
+
 val bf_uint32be : bitfield_base
+(** 32-bit bitfield base, big-endian. *)
+
 val bits : width:int -> bitfield_base -> int typ
+(** Extract [width] bits from a bitfield base. *)
+
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
+(** Map a wire type to a different OCaml type. *)
+
 val bool : int typ -> bool typ
+(** Map an integer type to boolean (0 = false). *)
+
 val cases : 'a list -> int typ -> 'a typ
+(** Map integer values to a list of cases by index. *)
+
 val unit : unit typ
+(** Zero-width unit type. *)
+
 val all_bytes : string typ
+(** Consume all remaining bytes. *)
+
 val all_zeros : string typ
+(** Consume remaining bytes, asserting all zero. *)
+
 val where : bool expr -> 'a typ -> 'a typ
+(** Guard a type with a boolean constraint. *)
+
 val array : len:int expr -> 'a typ -> 'a list typ
+(** Fixed-count array of elements. *)
+
 val byte_array : size:int expr -> string typ
+(** Byte span as a string. *)
+
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
+(** Zero-copy byte span. *)
+
 val single_elem_array : size:int expr -> 'a typ -> 'a typ
+(** Single element in a sized region (exact fit). *)
+
 val single_elem_array_at_most : size:int expr -> 'a typ -> 'a typ
+(** Single element in a sized region (may be smaller). *)
+
 val enum : string -> (string * int) list -> int typ -> int typ
+(** Named enumeration over an integer base. *)
+
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
+(** Named variant mapping over an integer base. *)
 
 type ('tag, 'a) case = 'tag option * 'a typ
+(** A casetype branch. *)
 
 val case : 'tag -> 'a typ -> ('tag, 'a) case
+(** A branch matching a specific tag value. *)
+
 val default : 'a typ -> ('tag, 'a) case
+(** A default branch. *)
+
 val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
+(** Tag-dispatched union type. *)
+
+(** {1 Struct Constructors} *)
 
 val field :
   string -> ?constraint_:bool expr -> ?action:action -> 'a typ -> field
+(** Declare a named field. *)
 
 val anon_field : 'a typ -> field
+(** Declare an anonymous (padding) field. *)
+
 val struct_ : string -> field list -> struct_
+(** Construct a struct from fields. *)
+
 val struct_name : struct_ -> string
+(** Return the struct name. *)
+
 val struct_typ : struct_ -> unit typ
+(** Return the struct wrapped as a type. *)
+
 val param : string -> 'a typ -> param
+(** Declare an immutable parameter. *)
+
 val mutable_param : string -> 'a typ -> param
+(** Declare a mutable parameter. *)
 
 val param_struct :
   string -> param list -> ?where:bool expr -> field list -> struct_
+(** Construct a parameterised struct. *)
 
 val apply : 'a typ -> int expr list -> 'a typ
+(** Apply arguments to a parameterised type. *)
+
 val type_ref : string -> 'a typ
+(** Reference a type by name. *)
+
 val qualified_ref : string -> string -> 'a typ
+(** Reference a type by module and name. *)
+
+(** {1 Action Constructors} *)
+
 val on_success : action_stmt list -> action
+(** Wrap statements as an on-success action. *)
+
 val on_act : action_stmt list -> action
+(** Wrap statements as an on-act action. *)
+
 val assign : string -> int expr -> action_stmt
+(** Assign to a mutable parameter. *)
+
 val return_bool : bool expr -> action_stmt
+(** Return a boolean result. *)
+
 val abort : action_stmt
+(** Abort parsing. *)
 
 val action_if :
   bool expr -> action_stmt list -> action_stmt list option -> action_stmt
+(** Conditional action. *)
 
 val var : string -> int expr -> action_stmt
+(** Declare a local variable. *)
+
+(** {1 Module-level Declarations} *)
 
 type decl =
   | Typedef of {
@@ -216,35 +372,74 @@ type decl =
     }
 
 val typedef : ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
+(** Create a typedef declaration. *)
+
 val define : string -> int -> decl
+(** Create a [#define] constant. *)
+
 val extern_fn : string -> param list -> 'a typ -> decl
+(** Declare an extern function. *)
+
 val extern_probe : ?init:bool -> string -> decl
+(** Declare an extern probe. *)
+
 val enum_decl : string -> (string * int) list -> 'a typ -> decl
+(** Declare an enum type. *)
 
 type decl_case = packed_expr option * packed_typ
+(** A case branch in a casetype declaration. *)
 
 val decl_case : int -> 'a typ -> decl_case
+(** A case branch matching a tag value. *)
+
 val decl_default : 'a typ -> decl_case
+(** A default case branch. *)
+
 val casetype_decl : string -> param list -> 'a typ -> decl_case list -> decl
+(** Declare a casetype. *)
 
 type module_ = { doc : string option; decls : decl list }
+(** A 3D module. *)
 
 val module_ : ?doc:string -> decl list -> module_
+(** Build a module from declarations. *)
+
+(** {1 Pretty Printing} *)
+
 val pp_expr : Format.formatter -> 'a expr -> unit
+(** Pretty-print an expression. *)
+
 val pp_typ : Format.formatter -> 'a typ -> unit
+(** Pretty-print a type. *)
+
+val pp_action : Format.formatter -> action -> unit
+(** Pretty-print an action block. *)
+
 val pp_module : Format.formatter -> module_ -> unit
+(** Pretty-print a module as 3D source. *)
+
 val to_3d : module_ -> string
+(** Render a module as a 3D source string. *)
+
 val to_3d_file : string -> module_ -> unit
+(** Write a module to a [.3d] file. *)
+
+(** {1 Parse Errors} *)
 
 type parse_error =
   | Unexpected_eof of { expected : int; got : int }
   | Constraint_failed of string
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
-  | All_zeros_failed of { offset : int }
+  | All_zeros_failed of { offset : int }  (** Structured parse error. *)
 
 exception Parse_error of parse_error
 
 val raise_eof : expected:int -> got:int -> 'a
+(** Raise {!Parse_error} for unexpected end-of-input. *)
+
 val pp_parse_error : Format.formatter -> parse_error -> unit
+(** Pretty-print a parse error. *)
+
 val field_wire_size : 'a typ -> int option
+(** Fixed wire size of a field type, if determinable. *)

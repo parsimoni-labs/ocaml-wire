@@ -200,7 +200,7 @@ let variants name cases base =
   let encode v =
     let rec go i =
       if i >= Array.length arr then
-        invalid_arg (Fmt.str "Wire.variants %s: unknown variant" name)
+        Fmt.invalid_arg "Wire.variants %s: unknown variant" name
       else if arr.(i) = v then i
       else go (i + 1)
     in

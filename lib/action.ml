@@ -8,3 +8,4 @@ let return_bool = Types.return_bool
 let abort = Types.abort
 let if_ = Types.action_if
 let var = Types.var
+let pp = Types.pp_action

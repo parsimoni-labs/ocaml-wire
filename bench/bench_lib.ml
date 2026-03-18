@@ -99,8 +99,6 @@ let ratio_fmt num denom =
 let gbps_fmt ns size =
   if ns > 0.1 then Fmt.str "%.1f" (float size /. ns) else "-"
 
-type widths = (string * int) list
-
 let print_header title cols =
   Fmt.pr "\n%s\n%s\n\n" title (String.make (String.length title) '=');
   let widths =

@@ -940,4 +940,5 @@ let set (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
   Staged.stage f.f_writer
 
+let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name

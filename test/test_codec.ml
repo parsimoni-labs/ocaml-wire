@@ -105,14 +105,14 @@ let test_codec_metadata_decode_ok () =
   let v = decode_ok (Codec.decode meta_codec buf 0) in
   Alcotest.(check int) "x" 8 v.x
 
-let test_codec_metadata_decode_constraint_fail () =
+let test_metadata_constraint_fail () =
   let buf = Bytes.of_string "\x0B" in
   match Codec.decode meta_codec buf 0 with
   | Error (Constraint_failed "field constraint") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
-let test_codec_metadata_decode_action_fail () =
+let test_metadata_action_fail () =
   let buf = Bytes.of_string "\x09" in
   match Codec.decode meta_codec buf 0 with
   | Error (Constraint_failed "field action") -> ()
@@ -137,7 +137,7 @@ let projection_codec =
           (fun r -> r.x);
       ]
 
-let test_codec_metadata_decode_with_params () =
+let test_metadata_with_params () =
   let limit = Param.input "limit" uint8 in
   let outx = Param.output "outx" uint8 in
   let buf = Bytes.of_string "\x08" in
@@ -149,7 +149,7 @@ let test_codec_metadata_decode_with_params () =
   Alcotest.(check int) "x" 8 v.x;
   Alcotest.(check int) "outx" 8 (Param.get params outx)
 
-let test_codec_metadata_decode_where_fail () =
+let test_metadata_where_fail () =
   let limit = Param.input "limit" uint8 in
   let outx = Param.output "outx" uint8 in
   let buf = Bytes.of_string "\x08" in
@@ -1217,13 +1217,13 @@ let suite =
       Alcotest.test_case "record: metadata decode ok" `Quick
         test_codec_metadata_decode_ok;
       Alcotest.test_case "record: metadata constraint fail" `Quick
-        test_codec_metadata_decode_constraint_fail;
+        test_metadata_constraint_fail;
       Alcotest.test_case "record: metadata action fail" `Quick
-        test_codec_metadata_decode_action_fail;
+        test_metadata_action_fail;
       Alcotest.test_case "record: metadata decode with params" `Quick
-        test_codec_metadata_decode_with_params;
+        test_metadata_with_params;
       Alcotest.test_case "record: metadata where fail" `Quick
-        test_codec_metadata_decode_where_fail;
+        test_metadata_where_fail;
       Alcotest.test_case "record: metadata struct_of_codec" `Quick
         test_codec_metadata_to_struct;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;

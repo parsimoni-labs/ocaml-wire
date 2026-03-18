@@ -2,18 +2,14 @@
 
 (* Schema from Codec *)
 
-type schema = {
-  name : string;
-  module_ : Types.module_;
-  wire_size : int; [@warning "-69"]
-}
+type schema = { name : string; module_ : Types.module_; _wire_size : int }
 
 let schema (type r) (codec : r Codec.t) : schema =
   let s = Codec.to_struct codec in
   let name = Types.struct_name s in
   let wire_size = Codec.wire_size codec in
   let m = Types.module_ [ Types.typedef ~entrypoint:true s ] in
-  { name; module_ = m; wire_size }
+  { name; module_ = m; _wire_size = wire_size }
 
 let generate ~outdir schemas =
   List.iter
@@ -79,4 +75,5 @@ let ml_type_of : type a. a Types.typ -> string = function
 
 (* Schema from module *)
 
-let of_module ~name ~module_ ~wire_size = { name; module_; wire_size }
+let of_module ~name ~module_ ~wire_size =
+  { name; module_; _wire_size = wire_size }

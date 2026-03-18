@@ -31,3 +31,6 @@ val if_ : bool Types.expr -> stmt list -> stmt list option -> stmt
 
 val var : string -> int Types.expr -> stmt
 (** Local variable binding. *)
+
+val pp : Format.formatter -> t -> unit
+(** Pretty-print an action block. *)

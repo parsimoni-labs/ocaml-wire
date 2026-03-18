@@ -156,7 +156,7 @@ let test_parse_struct_constraint_fail () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-let test_parse_struct_action_return_true () =
+let test_parse_action_return_true () =
   let input = "\x0A" in
   let s =
     struct_ "ActionOk"
@@ -172,7 +172,7 @@ let test_parse_struct_action_return_true () =
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-let test_parse_struct_action_return_false () =
+let test_parse_action_return_false () =
   let input = "\x0B" in
   let s =
     struct_ "ActionFail"
@@ -219,7 +219,7 @@ let test_parse_struct_action_abort () =
   | Error (Constraint_failed "field action") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-let test_parse_param_struct_with_params () =
+let test_parse_param_with_params () =
   let max_len = Param.input "max_len" uint16be in
   let out_len = Param.output "out_len" uint16be in
   let s =
@@ -242,7 +242,7 @@ let test_parse_param_struct_with_params () =
   | Ok () -> Alcotest.(check int) "out_len" 3 (Param.get params out_len)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-let test_parse_param_struct_where_fail () =
+let test_parse_param_where_fail () =
   let max_len = Param.input "max_len" uint16be in
   let out_len = Param.output "out_len" uint16be in
   let s =
@@ -458,17 +458,17 @@ let suite =
       Alcotest.test_case "parse: struct constraint fail" `Quick
         test_parse_struct_constraint_fail;
       Alcotest.test_case "parse: struct action return true" `Quick
-        test_parse_struct_action_return_true;
+        test_parse_action_return_true;
       Alcotest.test_case "parse: struct action return false" `Quick
-        test_parse_struct_action_return_false;
+        test_parse_action_return_false;
       Alcotest.test_case "parse: struct action var" `Quick
         test_parse_struct_action_var;
       Alcotest.test_case "parse: struct action abort" `Quick
         test_parse_struct_action_abort;
       Alcotest.test_case "parse: param struct with params" `Quick
-        test_parse_param_struct_with_params;
+        test_parse_param_with_params;
       Alcotest.test_case "parse: param struct where fail" `Quick
-        test_parse_param_struct_where_fail;
+        test_parse_param_where_fail;
       (* encoding *)
       Alcotest.test_case "encode: uint8" `Quick test_encode_uint8;
       Alcotest.test_case "encode: uint16 le" `Quick test_encode_uint16_le;
