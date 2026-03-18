@@ -6,13 +6,13 @@ let test_roundtrip_le () =
   let buf = Bytes.create 4 in
   let v = 0xDEAD_BEEF in
   UInt32.set_le buf 0 v;
-  Alcotest.(check int) "le roundtrip" (v land 0xFFFF_FFFF) (UInt32.get_le buf 0)
+  Alcotest.(check int) "le roundtrip" (v land 0xFFFF_FFFF) (UInt32.le buf 0)
 
 let test_roundtrip_be () =
   let buf = Bytes.create 4 in
   let v = 0xCAFE_BABE in
   UInt32.set_be buf 0 v;
-  Alcotest.(check int) "be roundtrip" (v land 0xFFFF_FFFF) (UInt32.get_be buf 0)
+  Alcotest.(check int) "be roundtrip" (v land 0xFFFF_FFFF) (UInt32.be buf 0)
 
 let test_of_int_masks () =
   Alcotest.(check int) "mask" 0xFF (UInt32.of_int 0xFF);

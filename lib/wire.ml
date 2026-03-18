@@ -389,10 +389,10 @@ let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
   | Uint8 -> (parse_int dec 1 Bytes.get_uint8, ctx)
   | Uint16 Little -> (parse_int dec 2 Bytes.get_uint16_le, ctx)
   | Uint16 Big -> (parse_int dec 2 Bytes.get_uint16_be, ctx)
-  | Uint32 Little -> (parse_int dec 4 UInt32.get_le, ctx)
-  | Uint32 Big -> (parse_int dec 4 UInt32.get_be, ctx)
-  | Uint63 Little -> (parse_int dec 8 UInt63.get_le, ctx)
-  | Uint63 Big -> (parse_int dec 8 UInt63.get_be, ctx)
+  | Uint32 Little -> (parse_int dec 4 UInt32.le, ctx)
+  | Uint32 Big -> (parse_int dec 4 UInt32.be, ctx)
+  | Uint63 Little -> (parse_int dec 8 UInt63.le, ctx)
+  | Uint63 Big -> (parse_int dec 8 UInt63.be, ctx)
   | Uint64 Little -> (parse_int dec 8 Bytes.get_int64_le, ctx)
   | Uint64 Big -> (parse_int dec 8 Bytes.get_int64_be, ctx)
   | Bits { width; base } -> (parse_bits dec base width, ctx)
@@ -525,16 +525,16 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
       Bytes.get_uint16_be buf off
   | Uint32 Little ->
       check_eof len (off + 4);
-      UInt32.get_le buf off
+      UInt32.le buf off
   | Uint32 Big ->
       check_eof len (off + 4);
-      UInt32.get_be buf off
+      UInt32.be buf off
   | Uint63 Little ->
       check_eof len (off + 8);
-      UInt63.get_le buf off
+      UInt63.le buf off
   | Uint63 Big ->
       check_eof len (off + 8);
-      UInt63.get_be buf off
+      UInt63.be buf off
   | Uint64 Little ->
       check_eof len (off + 8);
       Bytes.get_int64_le buf off

@@ -18,7 +18,7 @@ val empty : env
 (** Empty runtime parameter environment. *)
 
 val is_empty : env -> bool
-(** [true] iff no parameters are bound. *)
+(** [is_empty env] is [true] iff no parameters are bound. *)
 
 val bind : env -> ('a, input) t -> 'a -> env
 (** Bind an input parameter to a value. *)

@@ -1,9 +1,9 @@
 type t = int
 
-let get_le buf off =
+let le buf off =
   Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
-let get_be buf off =
+let be buf off =
   Bytes.get_int32_be buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
 let set_le buf off v = Bytes.set_int32_le buf off (Int32.of_int v)

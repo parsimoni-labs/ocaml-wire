@@ -151,38 +151,82 @@ module Expr : sig
   (** {2 Arithmetic and bitwise operators} *)
 
   val ( + ) : int expr -> int expr -> int expr
+  (** Addition. *)
+
   val ( - ) : int expr -> int expr -> int expr
+  (** Subtraction. *)
+
   val ( * ) : int expr -> int expr -> int expr
+  (** Multiplication. *)
+
   val ( / ) : int expr -> int expr -> int expr
+  (** Division. *)
+
   val ( mod ) : int expr -> int expr -> int expr
+  (** Modulo. *)
+
   val ( land ) : int expr -> int expr -> int expr
+  (** Bitwise AND. *)
+
   val ( lor ) : int expr -> int expr -> int expr
+  (** Bitwise OR. *)
+
   val ( lxor ) : int expr -> int expr -> int expr
+  (** Bitwise XOR. *)
+
   val lnot : int expr -> int expr
+  (** Bitwise NOT. *)
+
   val ( lsl ) : int expr -> int expr -> int expr
+  (** Logical shift left. *)
+
   val ( lsr ) : int expr -> int expr -> int expr
+  (** Logical shift right. *)
 
   (** {2 Comparison operators} *)
 
   val ( = ) : 'a expr -> 'a expr -> bool expr
+  (** Equality. *)
+
   val ( <> ) : 'a expr -> 'a expr -> bool expr
+  (** Inequality. *)
+
   val ( < ) : int expr -> int expr -> bool expr
+  (** Strictly less than. *)
+
   val ( <= ) : int expr -> int expr -> bool expr
+  (** Less than or equal. *)
+
   val ( > ) : int expr -> int expr -> bool expr
+  (** Strictly greater than. *)
+
   val ( >= ) : int expr -> int expr -> bool expr
+  (** Greater than or equal. *)
 
   (** {2 Boolean operators} *)
 
   val ( && ) : bool expr -> bool expr -> bool expr
+  (** Logical AND. *)
+
   val ( || ) : bool expr -> bool expr -> bool expr
+  (** Logical OR. *)
+
   val not : bool expr -> bool expr
+  (** Logical NOT. *)
 
   (** {2 Integer casts} *)
 
   val to_uint8 : int expr -> int expr
+  (** Cast to 8-bit unsigned. *)
+
   val to_uint16 : int expr -> int expr
+  (** Cast to 16-bit unsigned. *)
+
   val to_uint32 : int expr -> int expr
+  (** Cast to 32-bit unsigned. *)
+
   val to_uint64 : int expr -> int expr
+  (** Cast to 64-bit unsigned. *)
 end
 
 (** {1 Type Constructors} *)
@@ -230,7 +274,7 @@ val bf_uint32be : bitfield_base
 (** 32-bit bitfield base, big-endian. *)
 
 val bits : width:int -> bitfield_base -> int typ
-(** Extract [width] bits from a bitfield base. *)
+(** [bits ~width base] extracts [width] bits from a bitfield base. *)
 
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)
@@ -375,7 +419,7 @@ val typedef : ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
 (** Create a typedef declaration. *)
 
 val define : string -> int -> decl
-(** Create a [#define] constant. *)
+(** [define name value] creates a [#define] constant. *)
 
 val extern_fn : string -> param list -> 'a typ -> decl
 (** Declare an extern function. *)
@@ -422,7 +466,7 @@ val to_3d : module_ -> string
 (** Render a module as a 3D source string. *)
 
 val to_3d_file : string -> module_ -> unit
-(** Write a module to a [.3d] file. *)
+(** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. *)
 
 (** {1 Parse Errors} *)
 

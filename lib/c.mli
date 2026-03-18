@@ -26,7 +26,7 @@ val schema : 'r Codec.t -> schema
     single entrypoint typedef. *)
 
 val generate : outdir:string -> schema list -> unit
-(** Writes one [.3d] file per schema in [outdir]. *)
+(** [generate ~outdir schemas] writes one [.3d] file per schema in [outdir]. *)
 
 (** {1 3D Declarations} *)
 
@@ -34,7 +34,7 @@ val typedef : ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
 (** Declare a typedef. *)
 
 val define : string -> int -> decl
-(** Declare a [#define] constant. *)
+(** [define name value] declares a [#define] constant. *)
 
 val extern_fn : string -> Types.param list -> 'a Types.typ -> decl
 (** Declare an extern function. *)
@@ -62,7 +62,7 @@ val to_3d : module_ -> string
 (** Render a module as a 3D source string. *)
 
 val to_3d_file : string -> module_ -> unit
-(** Write a module to a [.3d] file. *)
+(** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. *)
 
 (** {1 Struct Construction} *)
 

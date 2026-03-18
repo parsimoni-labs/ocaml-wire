@@ -2,17 +2,18 @@
 
 type t = int
 
-val get_le : bytes -> int -> t
-(** Read little-endian from [bytes] at offset. *)
+val le : bytes -> int -> t
+(** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
 
-val get_be : bytes -> int -> t
-(** Read big-endian from [bytes] at offset. *)
+val be : bytes -> int -> t
+(** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
 
 val set_le : bytes -> int -> t -> unit
-(** Write little-endian into [bytes] at offset. *)
+(** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
+*)
 
 val set_be : bytes -> int -> t -> unit
-(** Write big-endian into [bytes] at offset. *)
+(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off]. *)
 
 val to_int : t -> int
 (** Identity coercion. *)

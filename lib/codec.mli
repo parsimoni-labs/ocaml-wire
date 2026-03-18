@@ -38,13 +38,13 @@ val wire_size_at : 'r t -> bytes -> int -> int
 (** Compute the actual wire size from a buffer at a given offset. *)
 
 val is_fixed : 'r t -> bool
-(** [true] iff the codec has a fixed wire size. *)
+(** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 
 val decode : ?env:Param.env -> 'r t -> bytes -> int -> 'r
-(** Decode a record from [bytes] at offset. *)
+(** [decode ?env c buf off] decodes a record from [buf] at offset [off]. *)
 
 val encode : 'r t -> 'r -> bytes -> int -> unit
-(** Encode a record into [bytes] at offset. *)
+(** [encode c r buf off] encodes record [r] into [buf] at offset [off]. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)

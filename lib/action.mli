@@ -15,7 +15,7 @@ val on_success : stmt list -> t
 (** Action run after successful validation of the annotated field. *)
 
 val on_act : stmt list -> t
-(** Action block for the 3D [:act] form. *)
+(** [on_act stmts] builds an action block for the 3D [:act] form. *)
 
 val assign : string -> int Types.expr -> stmt
 (** Assignment through a mutable out-parameter. *)

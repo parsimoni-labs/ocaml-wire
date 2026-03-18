@@ -73,10 +73,10 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Uint8 -> fun buf base -> Bytes.get_uint8 buf (base + field_off)
   | Uint16 Little -> fun buf base -> Bytes.get_uint16_le buf (base + field_off)
   | Uint16 Big -> fun buf base -> Bytes.get_uint16_be buf (base + field_off)
-  | Uint32 Little -> fun buf base -> UInt32.get_le buf (base + field_off)
-  | Uint32 Big -> fun buf base -> UInt32.get_be buf (base + field_off)
-  | Uint63 Little -> fun buf base -> UInt63.get_le buf (base + field_off)
-  | Uint63 Big -> fun buf base -> UInt63.get_be buf (base + field_off)
+  | Uint32 Little -> fun buf base -> UInt32.le buf (base + field_off)
+  | Uint32 Big -> fun buf base -> UInt32.be buf (base + field_off)
+  | Uint63 Little -> fun buf base -> UInt63.le buf (base + field_off)
+  | Uint63 Big -> fun buf base -> UInt63.be buf (base + field_off)
   | Uint64 Little -> fun buf base -> Bytes.get_int64_le buf (base + field_off)
   | Uint64 Big -> fun buf base -> Bytes.get_int64_be buf (base + field_off)
   | Byte_array { size = Int n } ->
@@ -224,7 +224,7 @@ let struct_field : type a r. (a, r) field -> Types.field =
 
 let struct' = struct_
 
-(* GADT snoc-list of typed field readers, built in forward order by |+.
+(* GADT snoc-list of typed field readers, built in forward order by add_field.
    ('full, 'remaining) readers tracks:
    - 'full:      the original constructor type
    - 'remaining: what's left after consuming the readers in this list
@@ -253,7 +253,7 @@ type next_off = Static_next of int | Dynamic_next of (bytes -> int -> int)
          field starts. [base] is the record's base offset in [buf]. *)
 
 (* Compile an [int expr] into a closure that evaluates it at runtime by
-   reading previously-declared fields from the buffer. Built once at [|+]
+   reading previously-declared fields from the buffer. Built once at [add_field]
    time, called at every [get]/[set]/[decode]. *)
 let rec compile_expr (env : (string * (bytes -> int -> int)) list)
     (e : int expr) : bytes -> int -> int =
@@ -386,9 +386,9 @@ let build_bf_reader base byte_off shift width =
       fun buf off ->
         (Bytes.get_uint16_be buf (off + byte_off) lsr shift) land mask
   | BF_U32 Little ->
-      fun buf off -> (UInt32.get_le buf (off + byte_off) lsr shift) land mask
+      fun buf off -> (UInt32.le buf (off + byte_off) lsr shift) land mask
   | BF_U32 Big ->
-      fun buf off -> (UInt32.get_be buf (off + byte_off) lsr shift) land mask
+      fun buf off -> (UInt32.be buf (off + byte_off) lsr shift) land mask
 
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
@@ -410,12 +410,12 @@ let build_bf_writer base byte_off shift width =
           (cur lor ((value land mask) lsl shift))
   | BF_U32 Little ->
       fun buf off value ->
-        let cur = UInt32.get_le buf (off + byte_off) in
+        let cur = UInt32.le buf (off + byte_off) in
         UInt32.set_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | BF_U32 Big ->
       fun buf off value ->
-        let cur = UInt32.get_be buf (off + byte_off) in
+        let cur = UInt32.be buf (off + byte_off) in
         UInt32.set_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
@@ -440,19 +440,20 @@ let build_bf_accessor_writer base byte_off shift width =
           (cur land clear_mask lor ((value land mask) lsl shift))
   | BF_U32 Little ->
       fun buf off value ->
-        let cur = UInt32.get_le buf (off + byte_off) in
+        let cur = UInt32.le buf (off + byte_off) in
         UInt32.set_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | BF_U32 Big ->
       fun buf off value ->
-        let cur = UInt32.get_be buf (off + byte_off) in
+        let cur = UInt32.be buf (off + byte_off) in
         UInt32.set_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
 
 let build_bf_clear base byte_off =
  fun buf off -> bf_write_base base buf (off + byte_off) 0
 
-let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
+let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
+    =
  fun (Record r) ({ name; typ; get; _ } as fld) ->
   (* Recursively unwrap Map layers to reach the wire-level type, composing
      encode/decode conversions along the way. Returns the updated record;
@@ -487,7 +488,7 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
           | Static_next n -> n
           | Dynamic_next _ ->
               invalid_arg
-                "Codec.(|+): bitfields after variable-size fields not supported"
+                "add_field: bitfields after variable-size fields not supported"
         in
         let base_off, bits_used, size_delta, extra_writers =
           if need_new_group then
@@ -661,7 +662,7 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
               | Byte_slice { size } -> size
               | Byte_array { size } -> size
               | _ ->
-                  invalid_arg "Codec.(|+): unsupported variable-size field type"
+                  invalid_arg "add_field: unsupported variable-size field type"
             in
             let size_fn = compile_expr r.r_field_readers size_expr in
             let field_off =
@@ -669,8 +670,7 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
               | Some n -> n
               | None ->
                   invalid_arg
-                    "Codec.(|+): multiple variable-size fields not yet \
-                     supported"
+                    "add_field: multiple variable-size fields not yet supported"
             in
             let raw_reader : w typ -> bytes -> int -> w =
              fun typ buf base ->
@@ -904,7 +904,8 @@ let view : type f r.
     r t =
  fun name ?(params = []) ?where constructor flds ->
   let rec add : type g. (g, r) record -> (g, r) fields -> r t =
-   fun r flds -> match flds with [] -> seal r | f :: rest -> add (r |+ f) rest
+   fun r flds ->
+    match flds with [] -> seal r | f :: rest -> add (add_field r f) rest
   in
   add (record_start ~params ?where name constructor) flds
 
