@@ -773,11 +773,6 @@ module C : sig
   val size : struct_ -> int option
   (** Fixed wire size of a struct, if known statically. *)
 
-  val ml_type_of : 'a typ -> string
-  (** OCaml type name for stub generation: ["int"] for integer types that fit in
-      OCaml [int], ["int64"] for uint64. Used by {!Wire_c} when generating FFI
-      bindings. *)
-
   val of_module : name:string -> module_:module_ -> wire_size:int -> schema
   (** Wraps an existing 3D module as a schema. *)
 end
@@ -812,4 +807,7 @@ module Private : sig
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+
+  val ml_type_of : 'a typ -> string
+  (** OCaml type name for FFI stub generation. *)
 end

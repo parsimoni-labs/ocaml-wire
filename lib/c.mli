@@ -118,9 +118,6 @@ val pp_module : Format.formatter -> module_ -> unit
 val size : struct_ -> int option
 (** Fixed wire size if determinable. *)
 
-val ml_type_of : 'a Types.typ -> string
-(** OCaml type name for a wire type. *)
-
 (** {1 Schema from Module} *)
 
 val of_module : name:string -> module_:module_ -> wire_size:int -> schema

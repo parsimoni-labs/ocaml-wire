@@ -67,12 +67,6 @@ let size (s : Types.struct_) =
       | _ -> None)
     (Some 0) s.fields
 
-let ml_type_of : type a. a Types.typ -> string = function
-  | Uint8 | Uint16 _ | Bits _ -> "int"
-  | Uint32 _ | Uint63 _ -> "int"
-  | Uint64 _ -> "int64"
-  | _ -> "int"
-
 (* Schema from module *)
 
 let of_module ~name ~module_ ~wire_size =

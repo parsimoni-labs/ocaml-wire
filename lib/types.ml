@@ -605,3 +605,9 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Enum { base; _ } -> field_wire_size base
   | Map { inner; _ } -> field_wire_size inner
   | _ -> None
+
+let ml_type_of : type a. a typ -> string = function
+  | Uint8 | Uint16 _ | Bits _ -> "int"
+  | Uint32 _ | Uint63 _ -> "int"
+  | Uint64 _ -> "int64"
+  | _ -> "int"

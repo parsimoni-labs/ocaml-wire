@@ -13,7 +13,7 @@
    4. Use to_c_stubs to generate OCaml FFI bindings to call EverParse C *)
 
 let size = Wire.C.size
-let ml_type_of = Wire.C.ml_type_of
+let ml_type_of = Wire.Private.ml_type_of
 
 (** Compute the EverParse-normalized identifier for a struct name.
 

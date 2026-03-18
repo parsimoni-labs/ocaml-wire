@@ -777,4 +777,6 @@ module Private = struct
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+
+  let ml_type_of = Types.ml_type_of
 end
