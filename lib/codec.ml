@@ -91,107 +91,14 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Unit -> fun _buf _base -> ()
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
-module Fields = Map.Make (String)
+type ctx = Eval.ctx
 
-type ctx = { fields : int Fields.t; sizeof_this : int; field_pos : int }
-
-let empty_ctx = { fields = Fields.empty; sizeof_this = 0; field_pos = 0 }
-
-let ctx_of_params params =
-  List.fold_left
-    (fun ctx (name, v) -> { ctx with fields = Fields.add name v ctx.fields })
-    empty_ctx (Param.to_ctx params)
-
-let commit_params ctx params =
-  Fields.iter (fun name v -> Param.store_name params name v) ctx.fields
-
-let ctx_add name v ctx = { ctx with fields = Fields.add name v ctx.fields }
-
-let rec int_of_typ_value : type a. a typ -> a -> int =
- fun typ v ->
-  match typ with
-  | Uint8 -> v
-  | Uint16 _ -> v
-  | Uint32 _ -> UInt32.to_int v
-  | Uint63 _ -> UInt63.to_int v
-  | Uint64 _ -> Int64.unsigned_to_int v |> Option.value ~default:max_int
-  | Bits _ -> v
-  | Enum { base; _ } -> int_of_typ_value base v
-  | Where { inner; _ } -> int_of_typ_value inner v
-  | Single_elem { elem; _ } -> int_of_typ_value elem v
-  | Apply { typ; _ } -> int_of_typ_value typ v
-  | Map { inner; encode; _ } -> int_of_typ_value inner (encode v)
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ ->
-      0
-
-let rec eval_expr_ctx : type a. ctx -> a expr -> a =
- fun ctx -> function
-  | Int n -> n
-  | Int64 n -> n
-  | Bool b -> b
-  | Ref name -> Fields.find name ctx.fields
-  | Sizeof t -> field_wire_size t |> Option.value ~default:0
-  | Sizeof_this -> ctx.sizeof_this
-  | Field_pos -> ctx.field_pos
-  | Add (a, b) -> eval_expr_ctx ctx a + eval_expr_ctx ctx b
-  | Sub (a, b) -> eval_expr_ctx ctx a - eval_expr_ctx ctx b
-  | Mul (a, b) -> eval_expr_ctx ctx a * eval_expr_ctx ctx b
-  | Div (a, b) -> eval_expr_ctx ctx a / eval_expr_ctx ctx b
-  | Mod (a, b) -> eval_expr_ctx ctx a mod eval_expr_ctx ctx b
-  | Land (a, b) -> eval_expr_ctx ctx a land eval_expr_ctx ctx b
-  | Lor (a, b) -> eval_expr_ctx ctx a lor eval_expr_ctx ctx b
-  | Lxor (a, b) -> eval_expr_ctx ctx a lxor eval_expr_ctx ctx b
-  | Lnot a -> lnot (eval_expr_ctx ctx a)
-  | Lsl (a, b) -> eval_expr_ctx ctx a lsl eval_expr_ctx ctx b
-  | Lsr (a, b) -> eval_expr_ctx ctx a lsr eval_expr_ctx ctx b
-  | Eq (a, b) -> eval_expr_ctx ctx a = eval_expr_ctx ctx b
-  | Ne (a, b) -> eval_expr_ctx ctx a <> eval_expr_ctx ctx b
-  | Lt (a, b) -> eval_expr_ctx ctx a < eval_expr_ctx ctx b
-  | Le (a, b) -> eval_expr_ctx ctx a <= eval_expr_ctx ctx b
-  | Gt (a, b) -> eval_expr_ctx ctx a > eval_expr_ctx ctx b
-  | Ge (a, b) -> eval_expr_ctx ctx a >= eval_expr_ctx ctx b
-  | And (a, b) -> eval_expr_ctx ctx a && eval_expr_ctx ctx b
-  | Or (a, b) -> eval_expr_ctx ctx a || eval_expr_ctx ctx b
-  | Not a -> not (eval_expr_ctx ctx a)
-  | Cast (_, e) -> eval_expr_ctx ctx e
-
-type action_outcome =
-  | Action_continue of ctx
-  | Action_return of bool * ctx
-  | Action_abort
-
-let rec exec_action_stmt ctx = function
-  | Assign (name, e) ->
-      Action_continue
-        { ctx with fields = Fields.add name (eval_expr_ctx ctx e) ctx.fields }
-  | Return e -> Action_return (eval_expr_ctx ctx e, ctx)
-  | Abort -> Action_abort
-  | If (cond, then_, else_) ->
-      exec_action_stmts ctx
-        (if eval_expr_ctx ctx cond then then_
-         else Option.value else_ ~default:[])
-  | Var (name, e) ->
-      Action_continue
-        { ctx with fields = Fields.add name (eval_expr_ctx ctx e) ctx.fields }
-
-and exec_action_stmts ctx = function
-  | [] -> Action_continue ctx
-  | stmt :: rest -> (
-      match exec_action_stmt ctx stmt with
-      | Action_continue ctx' -> exec_action_stmts ctx' rest
-      | Action_return _ as r -> r
-      | Action_abort -> Action_abort)
-
-let apply_action ctx = function
-  | None -> ctx
-  | Some (On_success stmts | On_act stmts) -> (
-      match exec_action_stmts ctx stmts with
-      | Action_continue ctx' -> ctx'
-      | Action_return (true, ctx') -> ctx'
-      | Action_return (false, _) ->
-          raise (Parse_error (Constraint_failed "field action"))
-      | Action_abort -> raise (Parse_error (Constraint_failed "field action")))
+let ctx_of_params = Eval.of_params
+let commit_params = Eval.commit
+let ctx_add name v ctx = Eval.bind ctx name v
+let int_of_typ_value = Eval.int_of
+let eval_expr_ctx = Eval.expr
+let apply_action = Eval.action
 
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
@@ -455,9 +362,36 @@ let build_bf_clear base byte_off =
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     =
  fun (Record r) ({ name; typ; get; _ } as fld) ->
-  (* Recursively unwrap Map layers to reach the wire-level type, composing
-     encode/decode conversions along the way. Returns the updated record;
-     field accessors are configured later by [seal]. *)
+  let build_validator typ reader =
+   fun ctx buf base ->
+    let ctx' = ctx_add name (int_of_typ_value typ (reader buf base)) ctx in
+    let ctx' =
+      match fld.constraint_ with
+      | Some c when not (eval_expr_ctx ctx' c) ->
+          raise (Parse_error (Constraint_failed "field constraint"))
+      | _ -> ctx'
+    in
+    apply_action ctx' fld.action
+  in
+  let extend ~readers ~writers_rev ~min_wire_size ~next_off ~fields_rev
+      ~validators_rev ~bf ~configurators_rev ~field_readers =
+    Record
+      {
+        r_name = r.r_name;
+        r_make = r.r_make;
+        r_readers = readers;
+        r_writers_rev = writers_rev;
+        r_min_wire_size = min_wire_size;
+        r_next_off = next_off;
+        r_fields_rev = fields_rev;
+        r_validators_rev = validators_rev;
+        r_bf = bf;
+        r_configurators_rev = configurators_rev;
+        r_field_readers = field_readers;
+        r_params = r.r_params;
+        r_where = r.r_where;
+      }
+  in
   let rec add : type w.
       w typ ->
       (r -> w) ->
@@ -526,38 +460,19 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             bfc_total_bits = total;
           }
         in
-        Record
-          {
-            r_name = r.r_name;
-            r_make = r.r_make;
-            r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
-            r_writers_rev =
-              (fun v buf off -> raw_writer buf off (get_wire v))
-              :: (extra_writers @ r.r_writers_rev);
-            r_min_wire_size = r.r_min_wire_size + size_delta;
-            r_next_off = Static_next (static_off + size_delta);
-            r_fields_rev = struct_field fld :: r.r_fields_rev;
-            r_validators_rev =
-              (fun ctx buf base ->
-                let ctx' =
-                  ctx_add name (int_of_typ_value typ (raw_reader buf base)) ctx
-                in
-                let ctx' =
-                  match fld.constraint_ with
-                  | Some c when not (eval_expr_ctx ctx' c) ->
-                      raise (Parse_error (Constraint_failed "field constraint"))
-                  | _ -> ctx'
-                in
-                apply_action ctx' fld.action)
-              :: r.r_validators_rev;
-            r_bf = Some new_bf;
-            r_configurators_rev = configurator :: r.r_configurators_rev;
-            r_field_readers = (name, int_reader) :: r.r_field_readers;
-            r_params = r.r_params;
-            r_where = r.r_where;
-          }
+        extend
+          ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+          ~writers_rev:
+            ((fun v buf off -> raw_writer buf off (get_wire v))
+            :: (extra_writers @ r.r_writers_rev))
+          ~min_wire_size:(r.r_min_wire_size + size_delta)
+          ~next_off:(Static_next (static_off + size_delta))
+          ~fields_rev:(struct_field fld :: r.r_fields_rev)
+          ~validators_rev:(build_validator typ raw_reader :: r.r_validators_rev)
+          ~bf:(Some new_bf)
+          ~configurators_rev:(configurator :: r.r_configurators_rev)
+          ~field_readers:((name, int_reader) :: r.r_field_readers)
     | _ -> (
-        (* Helper: get the absolute offset for this field *)
         let field_off_static =
           match r.r_next_off with
           | Static_next n -> Some n
@@ -567,15 +482,11 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           match r.r_next_off with
           | Static_next n -> fun (_buf : bytes) (_base : int) -> n
           | Dynamic_next f -> fun buf base -> f buf base - base
-          (* convert absolute -> relative to base *)
         in
         match field_wire_size typ with
         | Some fsize ->
-            (* Fixed-size field — may be at static or dynamic offset *)
             let field_off =
-              match field_off_static with
-              | Some n -> n
-              | None -> -1 (* sentinel: will use dynamic path *)
+              match field_off_static with Some n -> n | None -> -1
             in
             let raw_reader =
               match field_off_static with
@@ -601,7 +512,6 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
                         let _ = raw_encoder buf (off + fo) value in
                         ()))
             in
-            (* Track int reader for expression evaluation *)
             let new_next_off =
               match r.r_next_off with
               | Static_next n -> Static_next (n + fsize)
@@ -611,52 +521,30 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             let int_reader buf base =
               int_of_typ_value typ (raw_reader buf base)
             in
-            Record
-              {
-                r_name = r.r_name;
-                r_make = r.r_make;
-                r_readers = Snoc (r.r_readers, wrap_reader raw_reader);
-                r_writers_rev =
-                  (match field_off_static with
-                  | Some fo ->
-                      fun v buf off ->
-                        let _ = raw_encoder buf (off + fo) (get_wire v) in
-                        ()
-                  | None ->
-                      fun v buf off ->
-                        let fo = field_off_fn buf off in
-                        let _ = raw_encoder buf (off + fo) (get_wire v) in
-                        ())
-                  :: r.r_writers_rev;
-                r_min_wire_size = r.r_min_wire_size + fsize;
-                r_next_off = new_next_off;
-                r_fields_rev = struct_field fld :: r.r_fields_rev;
-                r_validators_rev =
-                  (fun ctx buf base ->
-                    let ctx' =
-                      ctx_add name
-                        (int_of_typ_value typ (raw_reader buf base))
-                        ctx
-                    in
-                    let ctx' =
-                      match fld.constraint_ with
-                      | Some c when not (eval_expr_ctx ctx' c) ->
-                          raise
-                            (Parse_error (Constraint_failed "field constraint"))
-                      | _ -> ctx'
-                    in
-                    apply_action ctx' fld.action)
-                  :: r.r_validators_rev;
-                r_bf = None;
-                r_configurators_rev = configurator :: r.r_configurators_rev;
-                r_field_readers = (name, int_reader) :: r.r_field_readers;
-                r_params = r.r_params;
-                r_where = r.r_where;
-              }
+            let encode_writer =
+              match field_off_static with
+              | Some fo ->
+                  fun v buf off ->
+                    let _ = raw_encoder buf (off + fo) (get_wire v) in
+                    ()
+              | None ->
+                  fun v buf off ->
+                    let fo = field_off_fn buf off in
+                    let _ = raw_encoder buf (off + fo) (get_wire v) in
+                    ()
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(encode_writer :: r.r_writers_rev)
+              ~min_wire_size:(r.r_min_wire_size + fsize)
+              ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:
+                (build_validator typ raw_reader :: r.r_validators_rev)
+              ~bf:None
+              ~configurators_rev:(configurator :: r.r_configurators_rev)
+              ~field_readers:((name, int_reader) :: r.r_field_readers)
         | None ->
-            (* Variable-size field (byte_slice/byte_array with dependent
-                size). The field's start offset is known; its size is
-                evaluated at runtime from previously-declared fields. *)
             let size_expr =
               match typ with
               | Byte_slice { size } -> size
@@ -704,36 +592,17 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
               Dynamic_next (fun buf base -> base + field_off + size_fn buf base)
             in
             let int_reader buf base = int_of_typ_value typ (reader buf base) in
-            Record
-              {
-                r_name = r.r_name;
-                r_make = r.r_make;
-                r_readers = Snoc (r.r_readers, wrap_reader reader);
-                r_writers_rev =
-                  (fun v buf off -> writer buf off (get_wire v))
-                  :: r.r_writers_rev;
-                r_min_wire_size = r.r_min_wire_size;
-                r_next_off = new_next_off;
-                r_fields_rev = struct_field fld :: r.r_fields_rev;
-                r_validators_rev =
-                  (fun ctx buf base ->
-                    let v = reader buf base in
-                    let ctx' = ctx_add name (int_of_typ_value typ v) ctx in
-                    let ctx' =
-                      match fld.constraint_ with
-                      | Some c when not (eval_expr_ctx ctx' c) ->
-                          raise
-                            (Parse_error (Constraint_failed "field constraint"))
-                      | _ -> ctx'
-                    in
-                    apply_action ctx' fld.action)
-                  :: r.r_validators_rev;
-                r_bf = None;
-                r_configurators_rev = configurator :: r.r_configurators_rev;
-                r_field_readers = (name, int_reader) :: r.r_field_readers;
-                r_params = r.r_params;
-                r_where = r.r_where;
-              })
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader reader))
+              ~writers_rev:
+                ((fun v buf off -> writer buf off (get_wire v))
+                :: r.r_writers_rev)
+              ~min_wire_size:r.r_min_wire_size ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(build_validator typ reader :: r.r_validators_rev)
+              ~bf:None
+              ~configurators_rev:(configurator :: r.r_configurators_rev)
+              ~field_readers:((name, int_reader) :: r.r_field_readers))
   in
   add typ get (fun reader -> reader) (fun writer -> writer) (Some Refl)
 

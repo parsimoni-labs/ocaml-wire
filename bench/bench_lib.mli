@@ -53,7 +53,8 @@ type result = { c_ns : float; ffi_ns : float; ocaml_ns : float; alloc : float }
 (** Timing results for a single read benchmark. *)
 
 val run_one : n:int -> read_spec -> result
-(** Run a single read benchmark with [n] iterations per tier. *)
+(** [run_one ~n spec] runs a single read benchmark with [n] iterations per tier.
+*)
 
 val run_reads : n:int -> read_spec list -> unit
 (** Run and print a table of read benchmarks. *)

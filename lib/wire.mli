@@ -801,4 +801,5 @@ module Private : sig
   module UInt32 = UInt32
   module UInt63 = UInt63
   module Types = Types
+  module Eval = Eval
 end
