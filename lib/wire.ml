@@ -7,10 +7,13 @@ module Action = Action
 include Types
 
 type bitfield = U8 | U16 | U16be | U32 | U32be
+type param = Types.param
 
 let field_ref = Types.ref
 let to_bool = Types.bool
 let empty = Types.unit
+let param = Types.param
+let mutable_param = Types.mutable_param
 let pp_3d_typ = Types.pp_typ
 let wire_size = Types.field_wire_size
 
@@ -325,6 +328,38 @@ let check_constraint ctx cond =
       raise (Parse_exn (Constraint_failed "field constraint"))
   | _ -> ()
 
+type action_outcome =
+  | Action_continue of ctx
+  | Action_return of bool * ctx
+  | Action_abort
+
+let rec exec_action_stmt ctx = function
+  | Assign (name, e) -> Action_continue (Ctx.add name (eval_expr ctx e) ctx)
+  | Return e -> Action_return (eval_expr ctx e, ctx)
+  | Abort -> Action_abort
+  | If (cond, then_, else_) ->
+      exec_action_stmts ctx
+        (if eval_expr ctx cond then then_ else Option.value else_ ~default:[])
+  | Var (name, e) -> Action_continue (Ctx.add name (eval_expr ctx e) ctx)
+
+and exec_action_stmts ctx = function
+  | [] -> Action_continue ctx
+  | stmt :: rest -> (
+      match exec_action_stmt ctx stmt with
+      | Action_continue ctx' -> exec_action_stmts ctx' rest
+      | Action_return _ as r -> r
+      | Action_abort -> Action_abort)
+
+let apply_action ctx = function
+  | None -> ctx
+  | Some (On_success stmts | On_act stmts) -> (
+      match exec_action_stmts ctx stmts with
+      | Action_continue ctx' -> ctx'
+      | Action_return (true, ctx') -> ctx'
+      | Action_return (false, _) ->
+          raise (Parse_exn (Constraint_failed "field action"))
+      | Action_abort -> raise (Parse_exn (Constraint_failed "field action")))
+
 let parse_all_zeros dec =
   let s = read_all dec in
   let rec check i =
@@ -408,14 +443,16 @@ and parse_struct_fields dec ctx fields =
   in
   let rec go ctx' accum_opt = function
     | [] -> ((), ctx')
-    | Field { field_name; field_typ = Bits _ as ft; constraint_; _ } :: rest ->
+    | Field { field_name; field_typ = Bits _ as ft; constraint_; action }
+      :: rest ->
         let v, accum_opt' = parse_field_with_bf accum_opt ft in
         let ctx'' =
           match field_name with Some n -> Ctx.add n v ctx' | None -> ctx'
         in
         check_constraint ctx'' constraint_;
-        go ctx'' accum_opt' rest
-    | Field { field_name; field_typ; constraint_; _ } :: rest ->
+        let ctx''' = apply_action ctx'' action in
+        go ctx''' accum_opt' rest
+    | Field { field_name; field_typ; constraint_; action } :: rest ->
         let v, ctx'' = parse_with dec ctx' field_typ in
         let ctx'' =
           match field_name with
@@ -423,7 +460,8 @@ and parse_struct_fields dec ctx fields =
           | None -> ctx''
         in
         check_constraint ctx'' constraint_;
-        go ctx'' None rest
+        let ctx''' = apply_action ctx'' action in
+        go ctx''' None rest
   in
   go ctx None fields
 

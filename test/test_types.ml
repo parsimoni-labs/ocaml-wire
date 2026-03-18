@@ -235,6 +235,69 @@ let test_parse_struct_constraint_fail () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
+let test_parse_struct_action_return_true () =
+  let input = "\x0A" in
+  let s =
+    struct_ "ActionOk"
+      [
+        field "x"
+          ~action:
+            (Action.on_success
+               [ Action.return_bool Expr.(field_ref "x" <= int 10) ])
+          uint8;
+      ]
+  in
+  match decode_string (struct_typ s) input with
+  | Ok () -> ()
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_parse_struct_action_return_false () =
+  let input = "\x0B" in
+  let s =
+    struct_ "ActionFail"
+      [
+        field "x"
+          ~action:
+            (Action.on_success
+               [ Action.return_bool Expr.(field_ref "x" <= int 10) ])
+          uint8;
+      ]
+  in
+  match decode_string (struct_typ s) input with
+  | Ok () -> Alcotest.fail "expected action failure"
+  | Error (Constraint_failed "field action") -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
+let test_parse_struct_action_var () =
+  let input = "\x04" in
+  let s =
+    struct_ "ActionVar"
+      [
+        field "x"
+          ~action:
+            (Action.on_success
+               [
+                 Action.var "twice" Expr.(field_ref "x" * int 2);
+                 Action.return_bool Expr.(field_ref "twice" = int 8);
+               ])
+          uint8;
+      ]
+  in
+  match decode_string (struct_typ s) input with
+  | Ok () -> ()
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_parse_struct_action_abort () =
+  let input = "\x01" in
+  let s =
+    struct_ "ActionAbort"
+      [ field "x" ~action:(Action.on_success [ Action.abort ]) uint8 ]
+  in
+  match decode_string (struct_typ s) input with
+  | Ok () -> Alcotest.fail "expected abort"
+  | Error (Constraint_failed "field action") -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
 (* ── Encoding tests ── *)
 
 let test_encode_uint8 () =
@@ -433,6 +496,14 @@ let suite =
         test_parse_struct_constraint;
       Alcotest.test_case "parse: struct constraint fail" `Quick
         test_parse_struct_constraint_fail;
+      Alcotest.test_case "parse: struct action return true" `Quick
+        test_parse_struct_action_return_true;
+      Alcotest.test_case "parse: struct action return false" `Quick
+        test_parse_struct_action_return_false;
+      Alcotest.test_case "parse: struct action var" `Quick
+        test_parse_struct_action_var;
+      Alcotest.test_case "parse: struct action abort" `Quick
+        test_parse_struct_action_abort;
       (* encoding *)
       Alcotest.test_case "encode: uint8" `Quick test_encode_uint8;
       Alcotest.test_case "encode: uint16 le" `Quick test_encode_uint16_le;

@@ -30,6 +30,7 @@ module UInt63 = UInt63
 type 'a expr
 type bitfield = U8 | U16 | U16be | U32 | U32be
 type 'a typ
+type param
 
 module Action : sig
   type t = Action.t
@@ -212,6 +213,12 @@ val default : 'a typ -> ('tag, 'a) case
 val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
 (** Tag-dispatched choice between several descriptions. *)
 
+val param : string -> 'a typ -> param
+(** Immutable parameter of a parameterised description. *)
+
+val mutable_param : string -> 'a typ -> param
+(** Mutable out-parameter of a parameterised description. *)
+
 val pp_3d_typ : Format.formatter -> 'a typ -> unit
 (** Pretty-printer for wire descriptions in 3D syntax. *)
 
@@ -320,10 +327,22 @@ module Codec : sig
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
         (** Heterogeneous field list in record order. *)
 
-  val field : string -> 'a typ -> ('r -> 'a) -> ('a, 'r) field
+  val field :
+    string ->
+    ?constraint_:bool expr ->
+    ?action:Action.t ->
+    'a typ ->
+    ('r -> 'a) ->
+    ('a, 'r) field
   (** Declares one field of a record codec. *)
 
-  val view : string -> 'f -> ('f, 'r) fields -> 'r t
+  val view :
+    string ->
+    ?params:param list ->
+    ?where:bool expr ->
+    'f ->
+    ('f, 'r) fields ->
+    'r t
   (** Builds a record codec from a constructor and its fields.
 
       The constructor is applied in field order at decode time; the field
@@ -404,7 +423,7 @@ module C : sig
   type field = C.field
   (** Field of a 3D struct. *)
 
-  type param = C.param
+  type nonrec param = param
   (** Parameter of a parameterised 3D declaration. *)
 
   type action = Action.t

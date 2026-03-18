@@ -77,6 +77,72 @@ let test_record_to_struct () =
   Alcotest.(check bool) "contains field b" true (contains ~sub:"b;" output);
   Alcotest.(check bool) "contains field c" true (contains ~sub:"c;" output)
 
+type meta_record = { x : int }
+
+let meta_codec =
+  Codec.view "MetaRecord"
+    ~where:Expr.(Wire.field_ref "x" = int 8)
+    (fun x -> { x })
+    Codec.
+      [
+        Codec.field "x"
+          ~constraint_:Expr.(Wire.field_ref "x" <= int 10)
+          ~action:
+            (Action.on_success
+               [
+                 Action.return_bool Expr.(Wire.field_ref "x" mod int 2 = int 0);
+               ])
+          uint8
+          (fun r -> r.x);
+      ]
+
+let test_codec_metadata_decode_ok () =
+  let buf = Bytes.of_string "\x08" in
+  let v = Codec.decode meta_codec buf 0 in
+  Alcotest.(check int) "x" 8 v.x
+
+let test_codec_metadata_decode_constraint_fail () =
+  let buf = Bytes.of_string "\x0B" in
+  match Codec.decode meta_codec buf 0 with
+  | _ -> Alcotest.fail "expected Parse_error"
+  | exception Parse_error (Constraint_failed "field constraint") -> ()
+  | exception Parse_error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
+let test_codec_metadata_decode_action_fail () =
+  let buf = Bytes.of_string "\x09" in
+  match Codec.decode meta_codec buf 0 with
+  | _ -> Alcotest.fail "expected Parse_error"
+  | exception Parse_error (Constraint_failed "field action") -> ()
+  | exception Parse_error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
+let projection_codec =
+  Codec.view "ProjectionCodec"
+    ~params:[ Wire.param "limit" uint8; Wire.mutable_param "outx" uint8 ]
+    ~where:Expr.(Wire.field_ref "x" <= int 10)
+    (fun x -> { x })
+    Codec.
+      [
+        Codec.field "x"
+          ~constraint_:Expr.(Wire.field_ref "x" <= int 8)
+          ~action:
+            (Action.on_success [ Action.assign "outx" (Wire.field_ref "x") ])
+          uint8
+          (fun r -> r.x);
+      ]
+
+let test_codec_metadata_to_struct () =
+  let s = C.struct_of_codec projection_codec in
+  let m = module_ [ typedef s ] in
+  let output = to_3d m in
+  Alcotest.(check bool) "contains param" true (contains ~sub:"limit" output);
+  Alcotest.(check bool)
+    "contains mutable param" true
+    (contains ~sub:"mutable" output);
+  Alcotest.(check bool) "contains where" true (contains ~sub:"where" output);
+  Alcotest.(check bool)
+    "contains on-success" true
+    (contains ~sub:":on-success" output)
+
 (* Record with multiple uint16be fields *)
 type multi_record = { x : int; y : int }
 
@@ -1116,6 +1182,14 @@ let suite =
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
       Alcotest.test_case "record: struct_of_codec" `Quick test_record_to_struct;
+      Alcotest.test_case "record: metadata decode ok" `Quick
+        test_codec_metadata_decode_ok;
+      Alcotest.test_case "record: metadata constraint fail" `Quick
+        test_codec_metadata_decode_constraint_fail;
+      Alcotest.test_case "record: metadata action fail" `Quick
+        test_codec_metadata_decode_action_fail;
+      Alcotest.test_case "record: metadata struct_of_codec" `Quick
+        test_codec_metadata_to_struct;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
       Alcotest.test_case "record: byte_array roundtrip" `Quick
         test_record_byte_array_roundtrip;

@@ -90,16 +90,91 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Unit -> fun _buf _base -> ()
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
-(* Capture top-level names before field/struct_ are shadowed.
-   Extract Where constraints so that Codec.to_struct produces correct 3D:
-   [where cond uint8] → field ~constraint_:cond uint8, not field (Where ...) *)
-let struct_field : type a. string -> a typ -> Types.field =
- fun name typ ->
-  match typ with
-  | Where { cond; inner } -> field name ~constraint_:cond inner
-  | _ -> field name typ
+module Ctx = Map.Make (String)
 
-let struct' = struct_
+type ctx = int Ctx.t
+
+let rec int_of_typ_value : type a. a typ -> a -> int =
+ fun typ v ->
+  match typ with
+  | Uint8 -> v
+  | Uint16 _ -> v
+  | Uint32 _ -> UInt32.to_int v
+  | Uint63 _ -> UInt63.to_int v
+  | Uint64 _ -> Int64.unsigned_to_int v |> Option.value ~default:max_int
+  | Bits _ -> v
+  | Enum { base; _ } -> int_of_typ_value base v
+  | Where { inner; _ } -> int_of_typ_value inner v
+  | Single_elem { elem; _ } -> int_of_typ_value elem v
+  | Apply { typ; _ } -> int_of_typ_value typ v
+  | Map { inner; encode; _ } -> int_of_typ_value inner (encode v)
+  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
+  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ ->
+      0
+
+let rec eval_expr_ctx : type a. ctx -> a expr -> a =
+ fun ctx -> function
+  | Int n -> n
+  | Int64 n -> n
+  | Bool b -> b
+  | Ref name -> Ctx.find name ctx
+  | Sizeof t -> field_wire_size t |> Option.value ~default:0
+  | Sizeof_this -> 0
+  | Field_pos -> 0
+  | Add (a, b) -> eval_expr_ctx ctx a + eval_expr_ctx ctx b
+  | Sub (a, b) -> eval_expr_ctx ctx a - eval_expr_ctx ctx b
+  | Mul (a, b) -> eval_expr_ctx ctx a * eval_expr_ctx ctx b
+  | Div (a, b) -> eval_expr_ctx ctx a / eval_expr_ctx ctx b
+  | Mod (a, b) -> eval_expr_ctx ctx a mod eval_expr_ctx ctx b
+  | Land (a, b) -> eval_expr_ctx ctx a land eval_expr_ctx ctx b
+  | Lor (a, b) -> eval_expr_ctx ctx a lor eval_expr_ctx ctx b
+  | Lxor (a, b) -> eval_expr_ctx ctx a lxor eval_expr_ctx ctx b
+  | Lnot a -> lnot (eval_expr_ctx ctx a)
+  | Lsl (a, b) -> eval_expr_ctx ctx a lsl eval_expr_ctx ctx b
+  | Lsr (a, b) -> eval_expr_ctx ctx a lsr eval_expr_ctx ctx b
+  | Eq (a, b) -> eval_expr_ctx ctx a = eval_expr_ctx ctx b
+  | Ne (a, b) -> eval_expr_ctx ctx a <> eval_expr_ctx ctx b
+  | Lt (a, b) -> eval_expr_ctx ctx a < eval_expr_ctx ctx b
+  | Le (a, b) -> eval_expr_ctx ctx a <= eval_expr_ctx ctx b
+  | Gt (a, b) -> eval_expr_ctx ctx a > eval_expr_ctx ctx b
+  | Ge (a, b) -> eval_expr_ctx ctx a >= eval_expr_ctx ctx b
+  | And (a, b) -> eval_expr_ctx ctx a && eval_expr_ctx ctx b
+  | Or (a, b) -> eval_expr_ctx ctx a || eval_expr_ctx ctx b
+  | Not a -> not (eval_expr_ctx ctx a)
+  | Cast (_, e) -> eval_expr_ctx ctx e
+
+type action_outcome =
+  | Action_continue of ctx
+  | Action_return of bool * ctx
+  | Action_abort
+
+let rec exec_action_stmt ctx = function
+  | Assign (name, e) -> Action_continue (Ctx.add name (eval_expr_ctx ctx e) ctx)
+  | Return e -> Action_return (eval_expr_ctx ctx e, ctx)
+  | Abort -> Action_abort
+  | If (cond, then_, else_) ->
+      exec_action_stmts ctx
+        (if eval_expr_ctx ctx cond then then_
+         else Option.value else_ ~default:[])
+  | Var (name, e) -> Action_continue (Ctx.add name (eval_expr_ctx ctx e) ctx)
+
+and exec_action_stmts ctx = function
+  | [] -> Action_continue ctx
+  | stmt :: rest -> (
+      match exec_action_stmt ctx stmt with
+      | Action_continue ctx' -> exec_action_stmts ctx' rest
+      | Action_return _ as r -> r
+      | Action_abort -> Action_abort)
+
+let apply_action ctx = function
+  | None -> ctx
+  | Some (On_success stmts | On_act stmts) -> (
+      match exec_action_stmts ctx stmts with
+      | Action_continue ctx' -> ctx'
+      | Action_return (true, ctx') -> ctx'
+      | Action_return (false, _) ->
+          raise (Parse_error (Constraint_failed "field action"))
+      | Action_abort -> raise (Parse_error (Constraint_failed "field action")))
 
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
@@ -107,10 +182,30 @@ type (_, _) eq = Refl : ('a, 'a) eq
 type ('a, 'r) field = {
   name : string;
   typ : 'a typ;
+  constraint_ : bool expr option;
+  action : action option;
   get : 'r -> 'a;
   mutable f_reader : bytes -> int -> 'a;
   mutable f_writer : bytes -> int -> 'a -> unit;
 }
+
+let combine_constraint a b =
+  match (a, b) with
+  | None, x | x, None -> x
+  | Some a, Some b -> Some Expr.(a && b)
+
+(* Capture top-level names before field/struct_ are shadowed.
+   Extract Where constraints so that Codec.to_struct produces correct 3D. *)
+let struct_field : type a r. (a, r) field -> Types.field =
+ fun fld ->
+  match fld.typ with
+  | Where { cond; inner } ->
+      field fld.name
+        ?constraint_:(combine_constraint fld.constraint_ (Some cond))
+        ?action:fld.action inner
+  | _ -> field fld.name ?constraint_:fld.constraint_ ?action:fld.action fld.typ
+
+let struct' = struct_
 
 (* GADT snoc-list of typed field readers, built in forward order by |+.
    ('full, 'remaining) readers tracks:
@@ -186,10 +281,12 @@ type ('f, 'r) record =
           (* sum of all fixed-size fields — minimum buffer size *)
       r_next_off : next_off; (* where the next field starts *)
       r_fields_rev : Types.field list;
+      r_validators_rev : (ctx -> bytes -> int -> ctx) list;
       r_bf : bf_codec_state option;
       r_configurators_rev : (unit -> unit) list;
       r_field_readers : (string * (bytes -> int -> int)) list;
-          (* name -> int reader, for evaluating Ref expressions *)
+      r_params : param list;
+      r_where : bool expr option;
     }
       -> ('f, 'r) record
 
@@ -203,9 +300,11 @@ type 'r t = {
   t_encode : 'r -> bytes -> int -> unit;
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
+  t_params : param list;
+  t_where : bool expr option;
 }
 
-let record_start name make =
+let record_start ?(params = []) ?where name make =
   Record
     {
       r_name = name;
@@ -215,16 +314,21 @@ let record_start name make =
       r_min_wire_size = 0;
       r_next_off = Static_next 0;
       r_fields_rev = [];
+      r_validators_rev = [];
       r_bf = None;
       r_configurators_rev = [];
       r_field_readers = [];
+      r_params = params;
+      r_where = where;
     }
 
-let field name typ get =
+let field name ?constraint_ ?action typ get =
   let not_ready _ _ = failwith "field: not added to a record yet" in
   {
     name;
     typ;
+    constraint_;
+    action;
     get;
     f_reader = not_ready;
     f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
@@ -413,10 +517,25 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
               :: (extra_writers @ r.r_writers_rev);
             r_min_wire_size = r.r_min_wire_size + size_delta;
             r_next_off = Static_next (static_off + size_delta);
-            r_fields_rev = struct_field name typ :: r.r_fields_rev;
+            r_fields_rev = struct_field fld :: r.r_fields_rev;
+            r_validators_rev =
+              (fun ctx buf base ->
+                let ctx' =
+                  Ctx.add name (int_of_typ_value typ (raw_reader buf base)) ctx
+                in
+                let ctx' =
+                  match fld.constraint_ with
+                  | Some c when not (eval_expr_ctx ctx' c) ->
+                      raise (Parse_error (Constraint_failed "field constraint"))
+                  | _ -> ctx'
+                in
+                apply_action ctx' fld.action)
+              :: r.r_validators_rev;
             r_bf = Some new_bf;
             r_configurators_rev = configurator :: r.r_configurators_rev;
             r_field_readers = (name, int_reader) :: r.r_field_readers;
+            r_params = r.r_params;
+            r_where = r.r_where;
           }
     | _ -> (
         (* Helper: get the absolute offset for this field *)
@@ -464,33 +583,14 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
                         ()))
             in
             (* Track int reader for expression evaluation *)
-            let field_readers =
-              match field_off_static with
-              | Some fo -> (
-                  match typ with
-                  | Uint8 ->
-                      (name, fun buf base -> Bytes.get_uint8 buf (base + fo))
-                      :: r.r_field_readers
-                  | Uint16 Little ->
-                      (name, fun buf base -> Bytes.get_uint16_le buf (base + fo))
-                      :: r.r_field_readers
-                  | Uint16 Big ->
-                      (name, fun buf base -> Bytes.get_uint16_be buf (base + fo))
-                      :: r.r_field_readers
-                  | Uint32 Little ->
-                      (name, fun buf base -> UInt32.get_le buf (base + fo))
-                      :: r.r_field_readers
-                  | Uint32 Big ->
-                      (name, fun buf base -> UInt32.get_be buf (base + fo))
-                      :: r.r_field_readers
-                  | _ -> r.r_field_readers)
-              | None -> r.r_field_readers
-            in
             let new_next_off =
               match r.r_next_off with
               | Static_next n -> Static_next (n + fsize)
               | Dynamic_next f ->
                   Dynamic_next (fun buf base -> f buf base + fsize)
+            in
+            let int_reader buf base =
+              int_of_typ_value typ (raw_reader buf base)
             in
             Record
               {
@@ -511,10 +611,28 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
                   :: r.r_writers_rev;
                 r_min_wire_size = r.r_min_wire_size + fsize;
                 r_next_off = new_next_off;
-                r_fields_rev = struct_field name typ :: r.r_fields_rev;
+                r_fields_rev = struct_field fld :: r.r_fields_rev;
+                r_validators_rev =
+                  (fun ctx buf base ->
+                    let ctx' =
+                      Ctx.add name
+                        (int_of_typ_value typ (raw_reader buf base))
+                        ctx
+                    in
+                    let ctx' =
+                      match fld.constraint_ with
+                      | Some c when not (eval_expr_ctx ctx' c) ->
+                          raise
+                            (Parse_error (Constraint_failed "field constraint"))
+                      | _ -> ctx'
+                    in
+                    apply_action ctx' fld.action)
+                  :: r.r_validators_rev;
                 r_bf = None;
                 r_configurators_rev = configurator :: r.r_configurators_rev;
-                r_field_readers = field_readers;
+                r_field_readers = (name, int_reader) :: r.r_field_readers;
+                r_params = r.r_params;
+                r_where = r.r_where;
               }
         | None ->
             (* Variable-size field (byte_slice/byte_array with dependent
@@ -567,6 +685,7 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
             let new_next_off =
               Dynamic_next (fun buf base -> base + field_off + size_fn buf base)
             in
+            let int_reader buf base = int_of_typ_value typ (reader buf base) in
             Record
               {
                 r_name = r.r_name;
@@ -577,10 +696,25 @@ let ( |+ ) : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record =
                   :: r.r_writers_rev;
                 r_min_wire_size = r.r_min_wire_size;
                 r_next_off = new_next_off;
-                r_fields_rev = struct_field name typ :: r.r_fields_rev;
+                r_fields_rev = struct_field fld :: r.r_fields_rev;
+                r_validators_rev =
+                  (fun ctx buf base ->
+                    let v = reader buf base in
+                    let ctx' = Ctx.add name (int_of_typ_value typ v) ctx in
+                    let ctx' =
+                      match fld.constraint_ with
+                      | Some c when not (eval_expr_ctx ctx' c) ->
+                          raise
+                            (Parse_error (Constraint_failed "field constraint"))
+                      | _ -> ctx'
+                    in
+                    apply_action ctx' fld.action)
+                  :: r.r_validators_rev;
                 r_bf = None;
                 r_configurators_rev = configurator :: r.r_configurators_rev;
-                r_field_readers = r.r_field_readers;
+                r_field_readers = (name, int_reader) :: r.r_field_readers;
+                r_params = r.r_params;
+                r_where = r.r_where;
               })
   in
   add typ get (fun reader -> reader) (fun writer -> writer) (Some Refl)
@@ -700,13 +834,27 @@ let seal : type r. (r, r) record -> r t =
         fun buf off -> apply_fwd make fwd buf off
   in
   let raw_decode = build_decode r.r_make r.r_readers in
+  let validate buf off =
+    let ctx =
+      List.fold_left
+        (fun ctx f -> f ctx buf off)
+        Ctx.empty
+        (List.rev r.r_validators_rev)
+    in
+    match r.r_where with
+    | Some cond when not (eval_expr_ctx ctx cond) ->
+        raise (Parse_error (Constraint_failed "where clause"))
+    | _ -> ()
+  in
   {
     t_name = r.r_name;
     t_decode =
       (fun buf off ->
         if off + min_size > Bytes.length buf then
           raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
-        raw_decode buf off);
+        let v = raw_decode buf off in
+        validate buf off;
+        v);
     t_encode =
       (fun v buf off ->
         if off + min_size > Bytes.length buf then
@@ -719,6 +867,8 @@ let seal : type r. (r, r) record -> r t =
         done);
     t_wire_size = wire_size_info;
     t_struct_fields = List.rev r.r_fields_rev;
+    t_params = r.r_params;
+    t_where = r.r_where;
   }
 
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
@@ -728,12 +878,18 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-let view : type f r. string -> f -> (f, r) fields -> r t =
- fun name constructor flds ->
+let view : type f r.
+    string ->
+    ?params:param list ->
+    ?where:bool expr ->
+    f ->
+    (f, r) fields ->
+    r t =
+ fun name ?(params = []) ?where constructor flds ->
   let rec add : type g. (g, r) record -> (g, r) fields -> r t =
    fun r flds -> match flds with [] -> seal r | f :: rest -> add (r |+ f) rest
   in
-  add (record_start name constructor) flds
+  add (record_start ~params ?where name constructor) flds
 
 let wire_size t =
   match t.t_wire_size with
@@ -756,7 +912,11 @@ let is_fixed t =
 
 let decode t buf off = t.t_decode buf off
 let encode t v buf off = t.t_encode v buf off
-let to_struct t = struct' t.t_name t.t_struct_fields
+
+let to_struct t =
+  match (t.t_params, t.t_where) with
+  | [], None -> struct' t.t_name t.t_struct_fields
+  | _ -> param_struct t.t_name t.t_params ?where:t.t_where t.t_struct_fields
 
 let get (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =

@@ -10,8 +10,22 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-val field : string -> 'a Types.typ -> ('r -> 'a) -> ('a, 'r) field
-val view : string -> 'f -> ('f, 'r) fields -> 'r t
+val field :
+  string ->
+  ?constraint_:bool Types.expr ->
+  ?action:Types.action ->
+  'a Types.typ ->
+  ('r -> 'a) ->
+  ('a, 'r) field
+
+val view :
+  string ->
+  ?params:Types.param list ->
+  ?where:bool Types.expr ->
+  'f ->
+  ('f, 'r) fields ->
+  'r t
+
 val wire_size : 'r t -> int
 val min_wire_size : 'r t -> int
 val wire_size_at : 'r t -> bytes -> int -> int
