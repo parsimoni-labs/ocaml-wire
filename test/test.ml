@@ -6,4 +6,5 @@ let () =
       Test_codec.suite;
       Test_c.suite;
       Test_param.suite;
+      Test_ascii.suite;
     ]

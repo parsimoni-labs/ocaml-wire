@@ -16,7 +16,7 @@ let field_ref = Types.ref
 let to_bool = Types.bool
 let empty = Types.unit
 let wire_size = Types.field_wire_size
-let indexed = Types.cases
+let lookup = Types.cases
 
 let bits ~width = function
   | U8 -> Types.bits ~width Types.bf_uint8
@@ -856,3 +856,4 @@ module Codec = struct
 end
 
 module C = C_backend
+module Ascii = Ascii

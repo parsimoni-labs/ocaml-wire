@@ -24,27 +24,19 @@
     that description, not a second source of truth to keep in sync.
 
     [Wire] is thus about binary values and their layout. {!C} gives names to the
-    3D declaration vocabulary when a 3D artefact is wanted. *)
+    3D declaration vocabulary when a 3D artefact is wanted.
+
+    See also the official EverParse manual:
+    {{:https://project-everest.github.io/everparse/3d.html}3d: Dependent Data
+     Descriptions for Verified Validation} and the
+    {{:https://project-everest.github.io/everparse/3d-lang.html}3d language
+     reference}. *)
 
 module Staged : sig
   type +'a t
 
   val stage : 'a -> 'a t
   val unstage : 'a t -> 'a
-end
-
-module UInt32 : sig
-  type t = int
-
-  val of_int : int -> t
-  val to_int : t -> int
-end
-
-module UInt63 : sig
-  type t = int
-
-  val of_int : int -> t
-  val to_int : t -> int
 end
 
 (** {1 Expressions}
@@ -65,16 +57,23 @@ type param
 module Param : sig
   (** Typed handles for formal parameters and their runtime environment.
 
+      The central design fact is that input and output roles are distinct in the
+      type system: an [('a, input) t] is immutable and seeds the decode
+      environment, while an [('a, output) t] is mutable and can be updated by
+      actions during decoding. The phantom kind prevents mixing the two at
+      compile time.
+
       A parameter has two lives:
 
-      - as a declaration attached to a parameterised description or codec;
-      - as a runtime binding carried in an environment supplied to {!decode},
-        {!decode_string}, {!decode_bytes}, or {!Codec.decode}.
+      - as a formal declaration ({!decl}) attached to a parameterised
+        description, codec, or 3D struct;
+      - as a runtime binding carried in an {!env} supplied to {!Wire.decode},
+        {!Wire.decode_string}, {!Wire.decode_bytes}, or {!Codec.decode}.
 
       {!input} and {!output} build typed handles. {!decl} turns such a handle
       into a formal declaration. {!bind} assembles a runtime environment from
-      these handles, and {!get} reads back the current value of a bound
-      parameter after decoding. *)
+      input handles, {!init} from output handles, and {!get} reads back the
+      current value of a bound parameter after decoding. *)
 
   type input = Param.input
   (** Phantom kind for immutable input parameters. *)
@@ -203,16 +202,16 @@ val uint16 : int typ
 val uint16be : int typ
 (** Unsigned 16-bit big-endian integer. *)
 
-val uint32 : UInt32.t typ
+val uint32 : int typ
 (** Unsigned 32-bit little-endian integer. *)
 
-val uint32be : UInt32.t typ
+val uint32be : int typ
 (** Unsigned 32-bit big-endian integer. *)
 
-val uint63 : UInt63.t typ
+val uint63 : int typ
 (** Unsigned 63-bit little-endian integer carried on 8 bytes. *)
 
-val uint63be : UInt63.t typ
+val uint63be : int typ
 (** Unsigned 63-bit big-endian integer carried on 8 bytes. *)
 
 val uint64 : int64 typ
@@ -231,12 +230,12 @@ val to_bool : int typ -> bool typ
 (** Boolean view over an integer wire value. Zero is [false], non-zero is
     [true]. *)
 
-val indexed : 'a list -> int typ -> 'a typ
-(** Finite index-based mapping over an integer representation.
+val lookup : 'a list -> int typ -> 'a typ
+(** Decode an integer as a zero-based index into a finite table.
 
-    The decoded integer is used as a zero-based index into the list. Decoding or
-    encoding raises [Invalid_argument] if the value falls outside the list or
-    the encoded value is not present in it. *)
+    The decoded integer selects the corresponding element from the list.
+    Decoding raises [Invalid_argument] if the index is out of bounds; encoding
+    raises [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
 (** Empty description carrying no bytes and producing [()]. *)
@@ -362,7 +361,13 @@ val decode_bytes :
     Encoding follows the same description language as decoding. The functions in
     this section are the direct counterparts of {!decode}, {!decode_string}, and
     {!decode_bytes}: they work with whole OCaml values rather than field-level
-    accessors. *)
+    accessors.
+
+    Unlike decoding, encoding is exception-based rather than result-based.
+    Decoding fails on untrusted input (truncated data, constraint violations),
+    so callers need structured errors. Encoding fails only on programmer errors
+    (wrong description for the value, unsupported form), which are not
+    data-dependent and should not be silently ignored. *)
 
 val encode : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
 (** Encodes one value to a {!Bytesrw.Bytes.Writer.t}.
@@ -500,7 +505,25 @@ end
 
     This is the part of the library to use when the goal is not to decode bytes
     in OCaml, but to describe or emit EverParse 3D artefacts from the same wire
-    definitions. *)
+    definitions.
+
+    For the target language itself, see the official EverParse manual:
+    {{:https://project-everest.github.io/everparse/3d.html}3d manual} and the
+    {{:https://project-everest.github.io/everparse/3d-lang.html}language
+    {{:https://project-everest.github.io/everparse/3d-lang.html#base-types}base
+    types},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#structs}structs},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#constraints}constraints},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations}constants
+    and enumerations},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types}parameterized
+    data types},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#tagged-unions-or-casetype}casetype},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#arrays}arrays},
+    {{:https://project-everest.github.io/everparse/3d-lang.html#actions}actions},
+    and
+    {{:https://project-everest.github.io/everparse/3d-lang.html#modular-structure-and-files}modular
+    structure}. *)
 
 module C : sig
   type schema = C.schema
@@ -513,13 +536,10 @@ module C : sig
   (** Field of a 3D struct. *)
 
   type nonrec param = param
-  (** Parameter of a parameterised 3D declaration. *)
+  (** Parameter of a parameterised 3D declaration.
 
-  type action = Action.t
-  (** 3D action attached to a field. *)
-
-  type action_stmt = Action.stmt
-  (** Statement inside a 3D action. *)
+      Construct via {!Param.input} or {!Param.output} followed by {!Param.decl}.
+  *)
 
   type decl = C.decl
   (** Top-level 3D declaration. *)
@@ -541,19 +561,35 @@ module C : sig
 
   val typedef :
     ?entrypoint:bool -> ?export:bool -> ?doc:string -> struct_ -> decl
-  (** Top-level typedef declaration. *)
+  (** Top-level typedef declaration.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#structs}struct
+       definitions}. *)
 
   val define : string -> int -> decl
-  (** Top-level integer definition. *)
+  (** Top-level integer definition.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations}constants}.
+  *)
 
   val extern_fn : string -> param list -> 'a typ -> decl
-  (** External function declaration. *)
+  (** External function declaration used by 3D actions.
+
+      See the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#actions}actions}
+      section. *)
 
   val extern_probe : ?init:bool -> string -> decl
   (** External probe declaration. *)
 
   val enum_decl : string -> (string * int) list -> 'a typ -> decl
-  (** Top-level enum declaration. *)
+  (** Top-level enum declaration.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations}enumerations}.
+  *)
 
   val decl_case : int -> 'a typ -> decl_case
   (** One tagged case in a top-level casetype declaration. *)
@@ -562,10 +598,18 @@ module C : sig
   (** Default case in a top-level casetype declaration. *)
 
   val casetype_decl : string -> param list -> 'a typ -> decl_case list -> decl
-  (** Top-level casetype declaration. *)
+  (** Top-level casetype declaration.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#tagged-unions-or-casetype}casetype}.
+  *)
 
   val module_ : ?doc:string -> decl list -> module_
-  (** Builds a 3D module from declarations. *)
+  (** Builds a 3D module from declarations.
+
+      See the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#modular-structure-and-files}modular
+       structure} section. *)
 
   val to_3d : module_ -> string
   (** Renders a 3D module to text. *)
@@ -574,14 +618,24 @@ module C : sig
   (** Writes a rendered 3D module to a file. *)
 
   val field :
-    string -> ?constraint_:bool expr -> ?action:action -> 'a typ -> field
-  (** Named field in a 3D struct. *)
+    string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field
+  (** Named field in a 3D struct.
+
+      Field constraints correspond to the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#constraints}constraints}
+      language; field actions correspond to the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#actions}actions}
+      language. *)
 
   val anon_field : 'a typ -> field
   (** Anonymous field in a 3D struct. *)
 
   val struct_ : string -> field list -> struct_
-  (** Non-parameterised 3D struct. *)
+  (** Non-parameterised 3D struct.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#structs}structs}.
+  *)
 
   val struct_name : struct_ -> string
   (** Name of a struct declaration. *)
@@ -589,24 +643,35 @@ module C : sig
   val struct_typ : struct_ -> unit typ
   (** View a 3D struct as a wire description. *)
 
-  val param : string -> 'a typ -> param
-  (** Immutable parameter declaration. *)
-
-  val mutable_param : string -> 'a typ -> param
-  (** Mutable parameter declaration. *)
-
   val param_struct :
     string -> param list -> ?where:bool expr -> field list -> struct_
-  (** Parameterised 3D struct. *)
+  (** Parameterised 3D struct.
+
+      Corresponds to 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types}parameterized
+       data types}. The optional [where] clause corresponds to the same
+      section's precondition form. *)
 
   val apply : 'a typ -> int expr list -> 'a typ
-  (** Apply a parameterised description to integer arguments. *)
+  (** Apply a parameterised description to integer arguments.
+
+      Corresponds to instantiation of 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types}parameterized
+       data types}. *)
 
   val type_ref : string -> 'a typ
-  (** Unqualified type reference. *)
+  (** Unqualified type reference.
+
+      See the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#modular-structure-and-files}modular
+       structure} section. *)
 
   val qualified_ref : string -> string -> 'a typ
-  (** Qualified type reference. *)
+  (** Qualified type reference.
+
+      See the 3D
+      {{:https://project-everest.github.io/everparse/3d-lang.html#modular-structure-and-files}modular
+       structure} section. *)
 
   val pp_typ : Format.formatter -> 'a typ -> unit
   (** Pretty-printer for 3D-facing type syntax. *)
@@ -617,9 +682,25 @@ module C : sig
   val wire_size : struct_ -> int option
   (** Fixed wire size of a struct, if known statically. *)
 
-  val ml_type_of : 'a typ -> string
-  (** OCaml type name used by stub generators. *)
-
   val of_module : name:string -> module_:module_ -> wire_size:int -> schema
   (** Wraps an existing 3D module as a schema. *)
+end
+
+(** {1 ASCII Bit Diagrams}
+
+    RFC-style 32-bit-wide ASCII bit layout diagrams, following the conventions
+    of RFC 791 and similar documents. *)
+
+module Ascii : sig
+  val of_struct : C.struct_ -> string
+  (** Render a struct as an RFC-style bit diagram. *)
+
+  val of_codec : 'r Codec.t -> string
+  (** Render a codec as an RFC-style bit diagram. *)
+
+  val pp_struct : Format.formatter -> C.struct_ -> unit
+  (** Pretty-print a struct as an RFC-style bit diagram. *)
+
+  val pp_codec : Format.formatter -> 'r Codec.t -> unit
+  (** Pretty-print a codec as an RFC-style bit diagram. *)
 end
