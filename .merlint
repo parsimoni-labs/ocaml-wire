@@ -1,0 +1,22 @@
+rules:
+  # GADT function with existential types — cannot be split further
+  - files: lib/codec.ml
+    exclude: [E005]
+
+  # Bench accessors wrap Codec.get — get_ prefix is semantically correct
+  - files: bench/demo/bench.ml
+    exclude: [E331]
+
+  # TCP has 9 flag bits — positional constructor imposed by Codec.view
+  - files: examples/net/net.ml
+    exclude: [E350]
+
+  # Crowbar_util.test_case vs Crowbar.test_case — type alias, not wrong
+  - files: fuzz/fuzz_wire.mli
+    exclude: [E705]
+
+  # Linter contradiction: wants both lowercase and matching uInt filename
+  - files: test/test_uInt32.ml
+    exclude: [E617]
+  - files: test/test_uInt63.ml
+    exclude: [E617]

@@ -5,7 +5,7 @@
 
 (executable
  (name fuzz)
- (modules fuzz fuzz_wire)
+ (modules fuzz fuzz_wire fuzz_c fuzz_param)
  (libraries wire crowbar crowbar_util))
 
 (executable
