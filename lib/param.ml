@@ -38,7 +38,23 @@ let rec of_int : type a. a Types.typ -> int -> a =
   | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ ->
       invalid_arg "Param: unsupported parameter type"
 
+let rec is_int_representable : type a. a Types.typ -> bool = function
+  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint63 _
+  | Types.Uint64 _ | Types.Bits _ ->
+      true
+  | Types.Enum { base; _ } -> is_int_representable base
+  | Types.Map { inner; _ } -> is_int_representable inner
+  | Types.Where { inner; _ } -> is_int_representable inner
+  | _ -> false
+
+let check_typ name typ =
+  if not (is_int_representable typ) then
+    invalid_arg
+      (Printf.sprintf "Param.%s: only integer-representable types are supported"
+         name)
+
 let input name typ =
+  check_typ "input" typ;
   {
     Types.ph_name = name;
     ph_typ = typ;
@@ -48,6 +64,7 @@ let input name typ =
   }
 
 let output name typ =
+  check_typ "output" typ;
   {
     Types.ph_name = name;
     ph_typ = typ;

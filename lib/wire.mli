@@ -271,16 +271,18 @@ module Expr : sig
   (** Constant [false]. *)
 
   val to_uint8 : int expr -> int expr
-  (** Cast to unsigned 8-bit range. *)
+  (** Truncate to unsigned 8-bit range (mask [0xFF]). *)
 
   val to_uint16 : int expr -> int expr
-  (** Cast to unsigned 16-bit range. *)
+  (** Truncate to unsigned 16-bit range (mask [0xFFFF]). *)
 
   val to_uint32 : int expr -> int expr
-  (** Cast to unsigned 32-bit range. *)
+  (** Truncate to unsigned 32-bit range (mask [0xFFFFFFFF]). *)
 
   val to_uint64 : int expr -> int expr
-  (** Cast to unsigned 64-bit range. *)
+  (** 3D codegen cast. At runtime this is the identity — OCaml [int] cannot
+      represent the full unsigned 64-bit range. Use only for 3D output where
+      EverParse needs an explicit [(UINT64)] cast annotation. *)
 end
 
 (** {1 Type Descriptions}
