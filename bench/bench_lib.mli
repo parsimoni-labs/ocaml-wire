@@ -22,8 +22,10 @@ val alloc_words : int -> (unit -> unit) -> float
 type t
 (** A benchmark spec with up to 3 tiers. *)
 
-val v : string -> size:int -> (unit -> unit) -> t
-(** [v label ~size ocaml] creates a benchmark with the OCaml tier only. *)
+val v : string -> size:int -> ?reset:(unit -> unit) -> (unit -> unit) -> t
+(** [v label ~size ?reset ocaml] creates a benchmark with the OCaml tier only.
+    [reset] is called before each measurement phase to reinitialize mutable
+    state (cycling index, counters, etc.). *)
 
 val with_c : (bytes -> int -> int -> int) -> bytes -> t -> t
 (** [with_c c_loop buf t] adds the EverParse C tier. *)
@@ -36,10 +38,10 @@ val cycling :
   n_items:int ->
   size:int ->
   (bytes -> int -> unit) ->
-  unit ->
-  unit
-(** [cycling ~data ~n_items ~size read_fn] returns a closure that cycles through
-    [n_items] packed items in [data], calling [read_fn buf off] for each. *)
+  (unit -> unit) * (unit -> unit)
+(** [cycling ~data ~n_items ~size read_fn] returns [(fn, reset)] where [fn]
+    cycles through [n_items] packed items in [data], and [reset] rewinds the
+    index to 0. *)
 
 (** {1 Running and reporting} *)
 

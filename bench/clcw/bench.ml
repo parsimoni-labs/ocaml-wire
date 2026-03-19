@@ -41,7 +41,7 @@ let () =
   let expected_seq = ref 0 in
 
   (* OCaml tier: poll one CLCW word, cycling through the buffer *)
-  let ocaml_fn =
+  let fn, cycling_reset =
     cycling ~data:buf ~n_items:n_words ~size:word_size (fun buf off ->
         let lockout = get_lockout buf off in
         let wait = get_wait buf off in
@@ -53,10 +53,15 @@ let () =
         then incr anomalies;
         expected_seq := report)
   in
+  let reset () =
+    cycling_reset ();
+    anomalies := 0;
+    expected_seq := 0
+  in
 
   let single_word = Bytes.sub buf 0 word_size in
   let t =
-    ( v "Wire (staged Codec.get)" ~size:word_size ocaml_fn |> fun t ->
+    ( v "Wire (staged Codec.get)" ~size:word_size ~reset fn |> fun t ->
       match C_tier.clcw_loop with Some f -> with_c f buf t | None -> t )
     |> fun t ->
     match C_tier.clcw_check with

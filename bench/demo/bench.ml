@@ -107,8 +107,10 @@ let set_cases = Staged.unstage (Codec.set Demo.cases_demo_codec Demo.f_cd_type)
 (* ── Benchmark helpers ── *)
 
 let rd ~label ~size ~data ?(n_items = n_items) ~c_loop ~ffi_check read_fn =
-  v label ~size (cycling ~data ~n_items ~size (fun buf off -> read_fn buf off))
-  |> with_c c_loop data
+  let fn, reset =
+    cycling ~data ~n_items ~size (fun buf off -> read_fn buf off)
+  in
+  v label ~size ~reset fn |> with_c c_loop data
   |> with_ffi ffi_check (Bytes.sub data 0 size)
 
 (* ── Main ── *)

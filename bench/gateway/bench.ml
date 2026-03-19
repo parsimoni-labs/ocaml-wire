@@ -78,7 +78,7 @@ let () =
   in
 
   (* OCaml tier: process one frame, cycling through the buffer *)
-  let ocaml_fn =
+  let ocaml_fn, reset =
     cycling ~data:buf ~n_items:n ~size:cadu_size (fun buf base ->
         let vcid = get_vcid buf base in
         let fhp = get_fhp buf base in
@@ -94,7 +94,7 @@ let () =
 
   let single_frame = Bytes.sub buf 0 cadu_size in
   let t =
-    ( v "Wire (staged Codec.get)" ~size:cadu_size ocaml_fn |> fun t ->
+    ( v "Wire (staged Codec.get)" ~size:cadu_size ~reset ocaml_fn |> fun t ->
       match C_tier.tmframe_loop with
       | Some f -> with_c f single_frame t
       | None -> t )

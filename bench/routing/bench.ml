@@ -92,12 +92,16 @@ let () =
     dispatch routing_table.(apid);
     off := o + hdr + dlen + 1
   in
+  let reset () =
+    off := 0;
+    Array.fill handler_counts 0 4 0
+  in
 
   let single_pkt =
     Bytes.sub buf 0 (hdr + payload_size_of_apid (get_apid buf 0) + 1)
   in
   let t =
-    ( v "Wire (staged Codec.get)" ~size:hdr ocaml_fn |> fun t ->
+    ( v "Wire (staged Codec.get)" ~size:hdr ~reset ocaml_fn |> fun t ->
       match C_tier.spacepacket_loop with Some f -> with_c f buf t | None -> t )
     |> fun t ->
     match C_tier.spacepacket_check with

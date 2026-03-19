@@ -19,10 +19,12 @@ let time_ns n f =
 
 let alloc_words n f =
   Gc.full_major ();
+  Gc.minor ();
   let before = (Gc.quick_stat ()).minor_words in
   for _ = 1 to n do
     f ()
   done;
+  Gc.minor ();
   let after = (Gc.quick_stat ()).minor_words in
   (after -. before) /. float_of_int n
 
@@ -32,20 +34,26 @@ type t = {
   label : string;
   size : int;
   ocaml : unit -> unit;
+  reset : unit -> unit;
   c : ((bytes -> int -> int -> int) * bytes) option;
   ffi : ((bytes -> bool) * bytes) option;
 }
 
-let v label ~size ocaml = { label; size; ocaml; c = None; ffi = None }
+let v label ~size ?(reset = ignore) ocaml =
+  { label; size; ocaml; reset; c = None; ffi = None }
+
 let with_c c_loop c_buf t = { t with c = Some (c_loop, c_buf) }
 let with_ffi ffi_check ffi_buf t = { t with ffi = Some (ffi_check, ffi_buf) }
 
 let cycling ~data ~n_items ~size read_fn =
   let i = ref 0 in
-  fun () ->
+  let reset () = i := 0 in
+  let fn () =
     let off = !i mod n_items * size in
     read_fn data off;
     incr i
+  in
+  (fn, reset)
 
 (** Pack a bytes array into a contiguous buffer. *)
 let pack arr ~size =
@@ -65,6 +73,7 @@ type result = {
 
 let check t =
   (* Verify OCaml tier doesn't crash *)
+  t.reset ();
   t.ocaml ();
   (* Verify FFI tier accepts the data *)
   (match t.ffi with
@@ -96,12 +105,14 @@ let run_one ~n t =
                  ignore (ffi_check ffi_buf)
                done))
   in
+  t.reset ();
   let ocaml_ns =
     time_ns n (fun () ->
         for _ = 1 to n do
           t.ocaml ()
         done)
   in
+  t.reset ();
   let alloc = alloc_words n t.ocaml in
   { c_ns; ffi_ns; ocaml_ns; alloc }
 
