@@ -502,5 +502,5 @@ val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)
 
 val ml_type_of : 'a typ -> string
-(** OCaml type name for FFI stub generation: ["int"] for integer types that fit
-    in OCaml [int], ["int64"] for uint64. *)
+(** [ml_type_of typ] returns the OCaml type name for FFI stub generation:
+    ["int"] for integer types that fit in OCaml [int], ["int64"] for uint64. *)
