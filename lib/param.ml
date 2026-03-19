@@ -65,10 +65,11 @@ let v (t : ('a, 'k) t) : Types.param =
 
 let name t = t.Types.ph_name
 let get t = of_int t.Types.ph_typ !(t.Types.ph_cell)
-let set t v = t.Types.ph_cell := to_int t.Types.ph_typ v
+let set_cell t v = t.Types.ph_cell := to_int t.Types.ph_typ v
+let set (t : ('a, output) t) v = set_cell t v
 
 let init (t : ('a, input) t) (v : 'a) : int Types.expr =
-  set t v;
+  set_cell t v;
   Types.Param_ref t
 
 let expr t : int Types.expr = Types.Param_ref t

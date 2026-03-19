@@ -409,6 +409,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           (fun writer ->
             wrap_writer (fun buf off value -> writer buf off (encode value)))
           None
+    | Enum { base; _ } -> add base get_wire wrap_reader wrap_writer eq
     | Bits { width; base } ->
         let total = bf_base_total_bits base in
         let need_new_group =

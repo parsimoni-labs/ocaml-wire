@@ -60,32 +60,35 @@ type param
 (** Untyped formal parameter declaration. Create via {!Param.v}. *)
 
 module Param : sig
-  (** Typed parameter handles.
+  (** Typed parameter handles for integer-valued parameters.
 
-      Input parameters carry their value. Output parameters carry a mutable cell
-      that actions write to during decoding. Both are passed as regular OCaml
-      function arguments to codec constructors — no separate environment.
+      Only integer-like wire types (uint8, uint16, uint32, etc.) are supported
+      as parameters. This matches EverParse 3D, where parameters are always
+      integers.
+
+      Input parameters are set once before decoding with {!init}, which returns
+      the corresponding expression node. Output parameters are mutable cells
+      written by {!Action.assign} during decoding, read back with {!get}.
 
       {[
-        let bounded ~max_len ~out_len =
+        let max_len = Param.input "max_len" uint16be
+        let out_len = Param.output "out_len" uint16be
+
+        let bounded ~max_len:ml ~out_len =
+          let ml_expr = Param.init ml max_len in
           Codec.view "Bounded"
-            ~params:[ Param.v max_len; Param.v out_len ]
-            ~where:Expr.(field_ref "Length" <= field_ref "max_len")
+            ~where:Expr.(Codec.field_ref f_len <= ml_expr)
             (fun len data -> { len; data })
-            Codec.
-              [
-                Codec.field "Length"
-                  ~action:(Action.on_success [ Action.assign out_len ... ])
-                  uint16be (fun r -> r.len);
-                Codec.field "Data" (byte_array ~size:(field_ref "Length"))
-                  (fun r -> r.data);
-              ]
+            Codec.[
+              Codec.field "Length"
+                ~action:(Action.on_success [ Action.assign out_len ... ])
+                uint16be (fun r -> r.len);
+              f_data;
+            ]
 
         let out = Param.output "out_len" uint16be
-        let c = bounded
-          ~max_len:(Param.input "max_len" uint16be 1024)
-          ~out_len:out
-        let v = Codec.decode c buf 0
+        let c = bounded ~max_len:1024 ~out_len:out
+        let _ = Codec.decode c buf 0
         let len = Param.get out
       ]}
 
@@ -93,7 +96,7 @@ module Param : sig
       concurrent decodes. *)
 
   type input = Param.input
-  (** Phantom kind for immutable input parameters. *)
+  (** Phantom kind for input parameters (set once before decode). *)
 
   type output = Param.output
   (** Phantom kind for mutable output parameters. *)
@@ -102,8 +105,7 @@ module Param : sig
   (** Typed handle for one formal parameter. *)
 
   val input : string -> 'a typ -> ('a, input) t
-  (** [input name typ] declares an input parameter. Set its value with {!init}
-      before decoding. *)
+  (** [input name typ] declares an input parameter. *)
 
   val output : string -> 'a typ -> ('a, output) t
   (** [output name typ] declares a mutable output parameter. *)
@@ -116,11 +118,12 @@ module Param : sig
   val get : ('a, 'k) t -> 'a
   (** Read the current value. *)
 
-  val set : ('a, 'k) t -> 'a -> unit
-  (** Set the value. *)
+  val set : ('a, output) t -> 'a -> unit
+  (** Set the value of an output parameter. *)
 
   val init : ('a, input) t -> 'a -> int expr
-  (** [init p v] sets input param [p] to [v] and returns its expression. *)
+  (** [init p v] sets input param [p] to [v] and returns its expression. Call
+      this once before decoding to bind the input value. *)
 
   val expr : ('a, 'k) t -> int expr
   (** [expr p] returns the expression referencing this param. *)

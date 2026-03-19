@@ -92,8 +92,9 @@ val to_ml_stubs : Wire.C.struct_ list -> string
     ]} *)
 
 val to_ml_stub_name : Wire.C.struct_ -> string
-(** [to_ml_stub_name s] returns the OCaml module name for the generated stub
-    file (e.g., ["foo"] for struct [Foo]). *)
+(** [to_ml_stub_name s] returns the lowercase filename stem for the generated
+    stub file (e.g., ["foo"] for struct [Foo]). The corresponding OCaml module
+    is [Foo]. *)
 
 val to_ml_stub : Wire.C.struct_ -> string
 (** [to_ml_stub s] generates a flat OCaml stub module for a single struct:

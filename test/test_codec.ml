@@ -139,16 +139,16 @@ let projection_codec =
       ]
 
 let test_metadata_with_params () =
-  Param.set projection_limit 10;
-  Param.set projection_outx 0;
+  ignore (Param.init projection_limit 10);
+  ignore (Param.expr projection_outx);
   let buf = Bytes.of_string "\x08" in
   let v = decode_ok (Codec.decode projection_codec buf 0) in
   Alcotest.(check int) "x" 8 v.x;
   Alcotest.(check int) "outx" 8 (Param.get projection_outx)
 
 let test_metadata_where_fail () =
-  Param.set projection_limit 7;
-  Param.set projection_outx 0;
+  ignore (Param.init projection_limit 7);
+  ignore (Param.expr projection_outx);
   let buf = Bytes.of_string "\x08" in
   match Codec.decode projection_codec buf 0 with
   | Error (Constraint_failed "where clause") -> ()

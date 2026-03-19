@@ -23,8 +23,8 @@ val name : ('a, 'k) t -> string
 val get : ('a, 'k) t -> 'a
 (** Read the current value. *)
 
-val set : ('a, 'k) t -> 'a -> unit
-(** Set the value. *)
+val set : ('a, output) t -> 'a -> unit
+(** Set the value of an output parameter. *)
 
 val init : ('a, input) t -> 'a -> int Types.expr
 (** [init p v] sets the input param to [v] and returns its expression. *)

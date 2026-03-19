@@ -318,14 +318,21 @@ type module_ = { doc : string option; decls : decl list }
 
 (* Extract enum declarations needed by struct fields. Scans field types for
    Enum constructors (including under Map/Where wrappers) and returns the
-   corresponding enum_decl entries, deduplicated by name. *)
+   corresponding enum_decl entries, deduplicated by name. Enums over bitfield
+   bases are skipped: they map to plain bitfields in 3D (the enum/variant
+   mapping is OCaml-only). *)
 let enum_decls (s : struct_) : decl list =
   let seen = Hashtbl.create 4 in
   let decls = Stdlib.ref [] in
+  let is_bits : type a. a typ -> bool = function
+    | Bits _ -> true
+    | _ -> false
+  in
   List.iter
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
-        | Enum { name; cases; base } when not (Hashtbl.mem seen name) ->
+        | Enum { name; cases; base }
+          when (not (Hashtbl.mem seen name)) && not (is_bits base) ->
             Hashtbl.add seen name ();
             decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
         | Map { inner; _ } -> extract inner
@@ -480,7 +487,8 @@ type field_suffix =
   | Single_elem of { size : int expr; at_most : bool }
   | Array of int expr
 
-let field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
+let rec field_suffix : type a.
+    a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
   | Bits { width; base } ->
@@ -490,6 +498,8 @@ let field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
   | Single_elem { size; elem; at_most } ->
       (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
   | Array { len; elem } -> (Array len, fun ppf -> pp_typ ppf elem)
+  | Map { inner; _ } -> field_suffix inner
+  | Enum { base; _ } -> field_suffix base
   | _ -> (No_suffix, fun ppf -> pp_typ ppf typ)
 
 let pp_field ppf (Field f) =

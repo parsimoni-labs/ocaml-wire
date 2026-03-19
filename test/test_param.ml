@@ -32,11 +32,11 @@ let test_output_spec () =
     "contains out" true
     (Re.execp (Re.compile (Re.str "out")) output)
 
-(* ── Param.set / Param.get ── *)
+(* ── Param.init / Param.set / Param.get ── *)
 
 let test_input_binding () =
   let p = Param.input "limit" uint8 in
-  Param.set p 42;
+  ignore (Param.init p 42);
   Alcotest.(check int) "value" 42 (Param.get p)
 
 let test_output_binding () =
@@ -68,7 +68,7 @@ let test_input_param_constraint () =
   | Ok r -> Alcotest.(check int) "x" 5 r.x
   | Error e -> Alcotest.failf "pass: %a" pp_parse_error e);
   (* limit=3, x=5: fails *)
-  Param.set limit 3;
+  ignore (Param.init limit 3);
   match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected constraint failure"
   | Error (Constraint_failed _) -> ()
@@ -186,7 +186,7 @@ let test_mixed_params () =
   | Ok _ -> Alcotest.(check int) "out_sum" 30 (Param.get out_sum)
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
   (* a=10, b=20 => out_sum=30, max_val=20 => 30 > 20: FAIL *)
-  Param.set max_val 20;
+  ignore (Param.init max_val 20);
   Param.set out_sum 0;
   match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
