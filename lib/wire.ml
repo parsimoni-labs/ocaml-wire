@@ -5,6 +5,7 @@ module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action
 module Param = Param
+module Field = Field
 module Codec_backend = Codec
 module C_backend = C
 include Types

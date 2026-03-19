@@ -243,17 +243,20 @@ let record_start ?where name make =
       r_where = where;
     }
 
-let field name ?constraint_ ?action typ get =
+let bind (f : 'a Field.t) get =
   let not_ready _ _ = failwith "field: not added to a record yet" in
   {
-    name;
-    typ;
-    constraint_;
-    action;
+    name = Field.name f;
+    typ = Field.typ f;
+    constraint_ = Field.constraint_ f;
+    action = Field.action f;
     get;
     f_reader = not_ready;
     f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
   }
+
+let field name ?constraint_ ?action typ get =
+  bind (Field.v name ?constraint_ ?action typ) get
 
 (* Bitfield helpers — shared module for base operations, specialized closures
    for performance-critical read/write dispatched at codec construction time. *)

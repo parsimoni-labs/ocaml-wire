@@ -10,6 +10,9 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
+val bind : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
+(** [bind f proj] binds a field to a record projection for codec use. *)
+
 val field :
   string ->
   ?constraint_:bool Types.expr ->
@@ -17,7 +20,8 @@ val field :
   'a Types.typ ->
   ('r -> 'a) ->
   ('a, 'r) field
-(** Declare a named field with optional constraint and action. *)
+(** [field name typ proj] is [bind (Field.v name typ) proj]. Convenience
+    shorthand when the field is not referenced elsewhere. *)
 
 val view : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) fields -> 'r t
 (** Seal a list of fields into a record codec. *)

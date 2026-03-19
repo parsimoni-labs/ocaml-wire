@@ -285,6 +285,19 @@ module Expr : sig
       EverParse needs an explicit [(UINT64)] cast annotation. *)
 end
 
+(** {1 Fields} *)
+
+module Field : sig
+  type 'a t
+  (** A named wire field with a type. *)
+
+  val v : string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> 'a t
+  (** [v name typ] creates a named field. *)
+
+  val ref : 'a t -> int expr
+  (** [ref f] returns the expression referencing this field. *)
+end
+
 (** {1 Type Descriptions}
 
     The primitive constructors describe immediate wire values. The combinators
@@ -515,6 +528,9 @@ module Codec : sig
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
         (** Heterogeneous field list in record order. *)
 
+  val bind : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
+  (** [bind f proj] binds a {!Field.t} to a record projection for codec use. *)
+
   val field :
     string ->
     ?constraint_:bool expr ->
@@ -522,10 +538,8 @@ module Codec : sig
     'a typ ->
     ('r -> 'a) ->
     ('a, 'r) field
-  (** Declares one field of a record codec.
-
-      Field constraints and actions share the same semantics as in direct
-      decoding. *)
+  (** [field name typ proj] is [bind (Field.v name typ) proj]. Shorthand for
+      inline fields not referenced elsewhere. *)
 
   val view : string -> ?where:bool expr -> 'f -> ('f, 'r) fields -> 'r t
   (** Builds a sealed record codec from a constructor and its fields.
