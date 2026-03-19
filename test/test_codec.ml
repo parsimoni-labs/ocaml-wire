@@ -83,19 +83,21 @@ let test_record_to_struct () =
 
 type meta_record = { x : int }
 
+let meta_f_x = field "x" uint8
+
 let meta_codec =
   Codec.view "MetaRecord"
-    ~where:Expr.(Wire.C.field_ref "x" = int 8)
+    ~where:Expr.(C.field_ref meta_f_x = int 8)
     (fun x -> { x })
     Codec.
       [
         Codec.field "x"
-          ~constraint_:Expr.(Wire.C.field_ref "x" <= int 10)
+          ~constraint_:Expr.(C.field_ref meta_f_x <= int 10)
           ~action:
             (Action.on_success
                [
                  Action.return_bool
-                   Expr.(Wire.C.field_ref "x" mod int 2 = int 0);
+                   Expr.(C.field_ref meta_f_x mod int 2 = int 0);
                ])
           uint8
           (fun r -> r.x);
@@ -123,18 +125,19 @@ let test_metadata_action_fail () =
 let projection_limit = Param.input "limit" uint8
 let _projection_limit_expr = Param.init projection_limit 10
 let projection_outx = Param.output "outx" uint8
+let projection_f_x = field "x" uint8
 
 let projection_codec =
   Codec.view "ProjectionCodec"
-    ~where:Expr.(Wire.C.field_ref "x" <= Param.expr projection_limit)
+    ~where:Expr.(C.field_ref projection_f_x <= Param.expr projection_limit)
     (fun x -> { x })
     Codec.
       [
         Codec.field "x"
-          ~constraint_:Expr.(Wire.C.field_ref "x" <= int 8)
+          ~constraint_:Expr.(C.field_ref projection_f_x <= int 8)
           ~action:
             (Action.on_success
-               [ Action.assign projection_outx (Wire.C.field_ref "x") ])
+               [ Action.assign projection_outx (C.field_ref projection_f_x) ])
           uint8
           (fun r -> r.x);
       ]

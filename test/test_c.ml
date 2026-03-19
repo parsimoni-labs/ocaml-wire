@@ -6,15 +6,17 @@ open Wire.C
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
 let test_bitfields () =
+  let f_y = field "y" (bits ~width:10 U32) in
+  let f_z = field "z" (bits ~width:16 U32) in
   let bf =
     struct_ "BF"
       [
         field "x" (bits ~width:6 U32);
         field "y"
-          ~constraint_:Expr.(field_ref "y" <= int 900)
+          ~constraint_:Expr.(field_ref f_y <= int 900)
           (bits ~width:10 U32);
         field "z"
-          ~constraint_:Expr.(field_ref "y" + field_ref "z" <= int 60000)
+          ~constraint_:Expr.(field_ref f_y + field_ref f_z <= int 60000)
           (bits ~width:16 U32);
       ]
   in
@@ -40,9 +42,10 @@ let test_enumerations () =
 
 let test_field_dependence () =
   let t_struct = param_struct "t" [ param "a" uint32 ] [ field "x" uint32 ] in
+  let f_a = field "a" uint32 in
   let s_struct =
     struct_ "s"
-      [ field "a" uint32; field "b" (apply (type_ref "t") [ field_ref "a" ]) ]
+      [ field "a" uint32; field "b" (apply (type_ref "t") [ field_ref f_a ]) ]
   in
   let m = module_ [ typedef t_struct; typedef s_struct ] in
   let output = to_3d m in

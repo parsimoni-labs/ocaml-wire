@@ -4,19 +4,22 @@ open Wire
 open Wire.C
 
 let bitfields () =
+  let f_y = field "y" (bits ~width:10 U32) in
+  let f_z = field "z" (bits ~width:16 U32) in
   let bf =
     struct_ "BF"
       [
         field "x" (bits ~width:6 U32);
         field "y"
-          ~constraint_:Expr.(field_ref "y" <= int 900)
+          ~constraint_:Expr.(field_ref f_y <= int 900)
           (bits ~width:10 U32);
         field "z"
-          ~constraint_:Expr.(field_ref "y" + field_ref "z" <= int 60000)
+          ~constraint_:Expr.(field_ref f_y + field_ref f_z <= int 60000)
           (bits ~width:16 U32);
       ]
   in
   let outx = Param.output "outx" uint32 in
+  let f_x = field "x" (type_ref "BF") in
   let bf2 =
     param_struct "BF2"
       [ Param.v outx ]
@@ -25,17 +28,18 @@ let bitfields () =
           ~action:
             (Action.on_success
                [
-                 Action.assign outx (field_ref "x");
+                 Action.assign outx (field_ref f_x);
                  Action.return_bool Expr.true_;
                ])
           (type_ref "BF");
       ]
   in
+  let f_x3 = field "x" (bits ~width:6 U32) in
   let bf3 =
     struct_ "BF3"
       [
         field "a" uint8;
-        field "x" ~constraint_:Expr.(field_ref "x" = int 0) (bits ~width:6 U32);
+        field "x" ~constraint_:Expr.(field_ref f_x3 = int 0) (bits ~width:6 U32);
         field "y" (bits ~width:10 U32);
         field "z" (bits ~width:16 U32);
       ]
@@ -58,9 +62,10 @@ let enumerations () =
 
 let field_dependence () =
   let t_struct = param_struct "t" [ param "a" uint32 ] [ field "x" uint32 ] in
+  let f_a = field "a" uint32 in
   let s_struct =
     struct_ "s"
-      [ field "a" uint32; field "b" (apply (type_ref "t") [ field_ref "a" ]) ]
+      [ field "a" uint32; field "b" (apply (type_ref "t") [ field_ref f_a ]) ]
   in
   let d_casetype =
     casetype_decl "_D"
@@ -73,6 +78,8 @@ let field_dependence () =
         decl_case 4 all_zeros;
       ]
   in
+  let f_length = field "length" uint32 in
+  let f_key = field "key" uint32 in
   let s2 =
     struct_ "s2"
       [
@@ -80,12 +87,12 @@ let field_dependence () =
         field "length" uint32;
         field "key" uint32;
         field "pl"
-          (nested_at_most ~size:(field_ref "length")
-             (apply (type_ref "D") [ field_ref "key" ]));
+          (nested_at_most ~size:(field_ref f_length)
+             (apply (type_ref "D") [ field_ref f_key ]));
         field "pl_array2"
-          (nested ~size:(field_ref "length")
-             (apply (type_ref "D") [ field_ref "key" ]));
-        field "payload" (apply (type_ref "D") [ field_ref "key" ]);
+          (nested ~size:(field_ref f_length)
+             (apply (type_ref "D") [ field_ref f_key ]));
+        field "payload" (apply (type_ref "D") [ field_ref f_key ]);
       ]
   in
   module_

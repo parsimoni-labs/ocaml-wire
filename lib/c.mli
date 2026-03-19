@@ -77,8 +77,8 @@ val field :
 val anon_field : 'a Types.typ -> field
 (** Construct an anonymous (padding) field. *)
 
-val field_ref : string -> int Types.expr
-(** Reference a field by name in 3D constraint/size expressions. *)
+val field_ref : field -> int Types.expr
+(** [field_ref f] returns the expression referencing field [f]. *)
 
 val struct_ : string -> field list -> struct_
 (** Construct a struct from fields. *)

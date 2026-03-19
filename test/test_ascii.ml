@@ -63,10 +63,11 @@ let test_bitfield_struct () =
 (* ── Variable-length fields ── *)
 
 let test_variable_length () =
+  let f_len = field "len" uint16be in
   let s =
     struct_ "VarLen"
       [
-        field "len" uint16be; field "data" (byte_array ~size:(field_ref "len"));
+        field "len" uint16be; field "data" (byte_array ~size:(field_ref f_len));
       ]
   in
   let output = Ascii.of_struct s in

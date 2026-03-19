@@ -134,10 +134,9 @@ let test_parse_struct () =
 let test_parse_struct_constraint () =
   (* Test struct with constraint that should pass *)
   let input = "\x0A" in
-  let s =
-    struct_ "Constrained"
-      [ field "x" ~constraint_:Expr.(field_ref "x" <= int 100) uint8 ]
-  in
+  let f_x = field "x" uint8 in
+  let f_x = field "x" ~constraint_:Expr.(field_ref f_x <= int 100) uint8 in
+  let s = struct_ "Constrained" [ f_x ] in
   let t = struct_typ s in
   match decode_string t input with
   | Ok () -> ()
@@ -146,10 +145,9 @@ let test_parse_struct_constraint () =
 let test_parse_struct_constraint_fail () =
   (* Test struct with constraint that should fail *)
   let input = "\xFF" in
-  let s =
-    struct_ "Constrained"
-      [ field "x" ~constraint_:Expr.(field_ref "x" <= int 100) uint8 ]
-  in
+  let f_x = field "x" uint8 in
+  let f_x = field "x" ~constraint_:Expr.(field_ref f_x <= int 100) uint8 in
+  let s = struct_ "Constrained" [ f_x ] in
   let t = struct_typ s in
   match decode_string t input with
   | Ok _ -> Alcotest.fail "expected constraint failure"
@@ -158,13 +156,14 @@ let test_parse_struct_constraint_fail () =
 
 let test_parse_action_return_true () =
   let input = "\x0A" in
+  let f_x = field "x" uint8 in
   let s =
     struct_ "ActionOk"
       [
         field "x"
           ~action:
             (Action.on_success
-               [ Action.return_bool Expr.(field_ref "x" <= int 10) ])
+               [ Action.return_bool Expr.(field_ref f_x <= int 10) ])
           uint8;
       ]
   in
@@ -174,13 +173,14 @@ let test_parse_action_return_true () =
 
 let test_parse_action_return_false () =
   let input = "\x0B" in
+  let f_x = field "x" uint8 in
   let s =
     struct_ "ActionFail"
       [
         field "x"
           ~action:
             (Action.on_success
-               [ Action.return_bool Expr.(field_ref "x" <= int 10) ])
+               [ Action.return_bool Expr.(field_ref f_x <= int 10) ])
           uint8;
       ]
   in
@@ -191,6 +191,8 @@ let test_parse_action_return_false () =
 
 let test_parse_struct_action_var () =
   let input = "\x04" in
+  let f_x = field "x" uint8 in
+  let f_twice = field "twice" uint8 in
   let s =
     struct_ "ActionVar"
       [
@@ -198,8 +200,8 @@ let test_parse_struct_action_var () =
           ~action:
             (Action.on_success
                [
-                 Action.var "twice" Expr.(field_ref "x" * int 2);
-                 Action.return_bool Expr.(field_ref "twice" = int 8);
+                 Action.var "twice" Expr.(field_ref f_x * int 2);
+                 Action.return_bool Expr.(field_ref f_twice = int 8);
                ])
           uint8;
       ]
@@ -225,15 +227,17 @@ let test_parse_param_with_params () =
   let max_len = Param.input "max_len" uint16be in
   let _max_len_expr = Param.init max_len 3 in
   let out_len = Param.output "out_len" uint16be in
+  let f_length_c = field "Length" uint16be in
   let f_length =
     Codec.field "Length"
-      ~action:(Action.on_success [ Action.assign out_len (field_ref "Length") ])
+      ~action:
+        (Action.on_success [ Action.assign out_len (field_ref f_length_c) ])
       uint16be
       (fun r -> r.bp_length)
   in
   let c =
     Codec.view "BoundedPayload"
-      ~where:Expr.(field_ref "Length" <= Param.expr max_len)
+      ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
@@ -252,15 +256,17 @@ let test_parse_param_where_fail () =
   let max_len = Param.input "max_len" uint16be in
   let _max_len_expr = Param.init max_len 2 in
   let out_len = Param.output "out_len" uint16be in
+  let f_length_c = field "Length" uint16be in
   let f_length =
     Codec.field "Length"
-      ~action:(Action.on_success [ Action.assign out_len (field_ref "Length") ])
+      ~action:
+        (Action.on_success [ Action.assign out_len (field_ref f_length_c) ])
       uint16be
       (fun r -> r.bp_length)
   in
   let c =
     Codec.view "BoundedPayload"
-      ~where:Expr.(field_ref "Length" <= Param.expr max_len)
+      ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
@@ -280,9 +286,10 @@ let test_parse_param_where_fail () =
 
 let test_sizeof () =
   (* sizeof(uint32) = 4, use it in a constraint *)
+  let f_x = field "x" uint8 in
   let s =
     struct_ "SizeofTest"
-      [ field "x" ~constraint_:Expr.(field_ref "x" = sizeof uint32be) uint8 ]
+      [ field "x" ~constraint_:Expr.(field_ref f_x = sizeof uint32be) uint8 ]
   in
   (* x=4 => sizeof(uint32be) = 4, constraint passes *)
   (match decode_string (struct_typ s) "\x04" with

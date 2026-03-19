@@ -42,7 +42,12 @@ let to_3d_file = Types.to_3d_file
 let struct_of_codec = Codec.to_struct
 let field = Types.field
 let anon_field = Types.anon_field
-let field_ref = Types.ref
+
+let field_ref (Types.Field f) =
+  match f.field_name with
+  | Some name -> Types.Ref name
+  | None -> invalid_arg "C.field_ref: anonymous field has no name"
+
 let struct_ = Types.struct_
 let struct_name = Types.struct_name
 let struct_params (s : Types.struct_) = s.params

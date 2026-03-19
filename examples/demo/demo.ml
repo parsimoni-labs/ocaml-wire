@@ -424,9 +424,11 @@ let enum_demo_data n =
 
 type constrained = { co_version : int; co_data : int }
 
+let f_co_version_c = field "Version" uint8
+
 let f_co_version =
   Codec.field "Version"
-    (where Expr.(field_ref "Version" = int 0) uint8)
+    (where Expr.(field_ref f_co_version_c = int 0) uint8)
     (fun c -> c.co_version)
 
 let f_co_data = Codec.field "Data" uint8 (fun c -> c.co_data)
@@ -458,20 +460,24 @@ let constrained_data n =
 
 (* ── 12. Array: repeated fixed-count elements ── *)
 
+let f_count = field "Count" uint8
+
 let array_struct =
   struct_ "ArrayDemo"
     [
       field "Count" uint8;
-      field "Items" (array ~len:(field_ref "Count") uint16be);
+      field "Items" (array ~len:(field_ref f_count) uint16be);
     ]
 
 (* ── 13. ByteArray: byte blob with copy (vs byte_slice zero-copy) ── *)
+
+let f_ba_length = field "Length" uint16be
 
 let byte_array_struct =
   struct_ "ByteArrayDemo"
     [
       field "Length" uint16be;
-      field "Data" (byte_array ~size:(field_ref "Length"));
+      field "Data" (byte_array ~size:(field_ref f_ba_length));
     ]
 
 (* ── 14. Trailing / padding types ── *)
@@ -484,18 +490,22 @@ let all_zeros_struct =
 
 (* ── 15. SingleElemArray: single element with byte-size constraint ── *)
 
+let f_se_size = field "Size" uint16be
+
 let single_elem_struct =
   struct_ "SingleElem"
     [
       field "Size" uint16be;
-      field "Elem" (nested ~size:(field_ref "Size") uint32be);
+      field "Elem" (nested ~size:(field_ref f_se_size) uint32be);
     ]
+
+let f_se_maxsize = field "MaxSize" uint16be
 
 let single_elem_at_most_struct =
   struct_ "SingleElemAtMost"
     [
       field "MaxSize" uint16be;
-      field "Elem" (nested_at_most ~size:(field_ref "MaxSize") uint16be);
+      field "Elem" (nested_at_most ~size:(field_ref f_se_maxsize) uint16be);
     ]
 
 (* ── 16. Anonymous fields (padding) ── *)
@@ -506,6 +516,8 @@ let anon_field_struct =
 
 (* ── 17. Actions: side-effects during EverParse validation ── *)
 
+let f_magic = field "Magic" uint32be
+
 let action_struct =
   struct_ "Validated"
     [
@@ -513,7 +525,7 @@ let action_struct =
       field "Data"
         ~action:
           (Action.on_success
-             [ Action.return_bool Expr.(field_ref "Magic" = int 0x1ACFFC1D) ])
+             [ Action.return_bool Expr.(field_ref f_magic = int 0x1ACFFC1D) ])
         uint16be;
     ]
 
@@ -521,6 +533,9 @@ let action_struct =
 
 let action_full_struct =
   let out_value = Param.output "out_value" uint32be in
+  let f_tag = field "Tag" uint8 in
+  let f_value = field "Value" uint16be in
+  let f_x = field "x" uint16be in
   param_struct "ActionFull"
     [ Param.v out_value ]
     [
@@ -529,10 +544,10 @@ let action_full_struct =
         ~action:
           (Action.on_act
              [
-               Action.var "x" Expr.(field_ref "Tag" + field_ref "Value");
+               Action.var "x" Expr.(field_ref f_tag + field_ref f_value);
                Action.if_
-                 Expr.(field_ref "x" > int 0)
-                 [ Action.assign out_value (field_ref "x") ]
+                 Expr.(field_ref f_x > int 0)
+                 [ Action.assign out_value (field_ref f_x) ]
                  (Some [ Action.abort ]);
              ])
         uint16be;
@@ -542,15 +557,17 @@ let action_full_struct =
 
 let param_demo_struct =
   let out_len = Param.output "out_len" uint16be in
+  let f_pd_length = field "Length" uint16be in
+  let f_pd_max_len = field "max_len" uint16be in
   param_struct "BoundedPayload"
     [ param "max_len" uint16be; Param.v out_len ]
-    ~where:Expr.(field_ref "Length" <= field_ref "max_len")
+    ~where:Expr.(field_ref f_pd_length <= field_ref f_pd_max_len)
     [
       field "Length"
         ~action:
-          (Action.on_success [ Action.assign out_len (field_ref "Length") ])
+          (Action.on_success [ Action.assign out_len (field_ref f_pd_length) ])
         uint16be;
-      field "Data" (byte_array ~size:(field_ref "Length"));
+      field "Data" (byte_array ~size:(field_ref f_pd_length));
     ]
 
 (* ── 20. Casetype: tagged union (different wire layout per tag) ──
@@ -558,6 +575,8 @@ let param_demo_struct =
    a different struct/type based on a discriminant field. *)
 
 let casetype_module =
+  let f_dp_length = field "Length" uint16be in
+  let f_msg_kind = field "Kind" uint8 in
   module_
     [
       typedef (struct_ "PingPayload" [ field "Timestamp" uint64be ]);
@@ -566,7 +585,7 @@ let casetype_module =
            [
              field "SeqNo" uint32be;
              field "Length" uint16be;
-             field "Body" (byte_array ~size:(field_ref "Length"));
+             field "Body" (byte_array ~size:(field_ref f_dp_length));
            ]);
       typedef (struct_ "AckPayload" [ field "AckedSeqNo" uint32be ]);
       casetype_decl "MsgBody"
@@ -582,13 +601,14 @@ let casetype_module =
         (struct_ "Message"
            [
              field "Kind" uint8;
-             field "Body" (apply (type_ref "MsgBody") [ field_ref "Kind" ]);
+             field "Body" (apply (type_ref "MsgBody") [ field_ref f_msg_kind ]);
            ]);
     ]
 
 (* ── 21. Module-level declarations: define, extern_fn, extern_probe ── *)
 
 let extern_module =
+  let f_ext_length = field "Length" uint16be in
   module_
     [
       define "MAX_PAYLOAD" 1024;
@@ -601,7 +621,7 @@ let extern_module =
         (struct_ "ExternDemo"
            [
              field "Length" uint16be;
-             field "Payload" (byte_array ~size:(field_ref "Length"));
+             field "Payload" (byte_array ~size:(field_ref f_ext_length));
            ]);
     ]
 

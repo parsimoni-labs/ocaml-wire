@@ -704,9 +704,9 @@ module C : sig
   val anon_field : 'a typ -> field
   (** Anonymous field in a 3D struct. *)
 
-  val field_ref : string -> int expr
-  (** Reference a field by name in constraints and size expressions. For codec
-      fields, prefer {!Codec.field_ref} which takes a typed handle. *)
+  val field_ref : field -> int expr
+  (** [field_ref f] returns the expression referencing field [f] by name. The
+      field must have been created with {!field} (not {!anon_field}). *)
 
   val struct_ : string -> field list -> struct_
   (** Non-parameterised 3D struct.

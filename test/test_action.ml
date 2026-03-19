@@ -19,15 +19,18 @@ let test_assign_propagates () =
      constraint that references "out". If assign propagates correctly,
      the constraint on y (out + y <= 255) is evaluated with out = x. *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
+  let f_y = field "y" uint8 in
   let s =
     param_struct "AssignProp"
       [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref f_x) ])
           uint8;
         field "y"
-          ~constraint_:Expr.(field_ref "out" + field_ref "y" <= int 255)
+          ~constraint_:Expr.(field_ref f_out + field_ref f_y <= int 255)
           uint8;
       ]
   in
@@ -39,15 +42,18 @@ let test_assign_propagates () =
 
 let test_assign_propagates_fail () =
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
+  let f_y = field "y" uint8 in
   let s =
     param_struct "AssignPropFail"
       [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref f_x) ])
           uint8;
         field "y"
-          ~constraint_:Expr.(field_ref "out" + field_ref "y" <= int 10)
+          ~constraint_:Expr.(field_ref f_out + field_ref f_y <= int 10)
           uint8;
       ]
   in
@@ -61,6 +67,8 @@ let test_assign_propagates_fail () =
 let test_assign_expr () =
   (* Action assigns computed expression: out = x + 1 *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "AssignExpr"
       [ Param.v out ]
@@ -68,9 +76,9 @@ let test_assign_expr () =
         field "x"
           ~action:
             (Action.on_success
-               [ Action.assign out Expr.(field_ref "x" + int 1) ])
+               [ Action.assign out Expr.(field_ref f_x + int 1) ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 43) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 43) uint8;
       ]
   in
   (* x=42 => out=43, constraint out=43: OK *)
@@ -112,13 +120,14 @@ let test_return_false () =
 
 let test_return_bool_expr () =
   (* return (x > 10): succeeds when x=42 *)
+  let f_x = field "x" uint8 in
   let s =
     struct_ "RetExprOk"
       [
         field "x"
           ~action:
             (Action.on_success
-               [ Action.return_bool Expr.(field_ref "x" > int 10) ])
+               [ Action.return_bool Expr.(field_ref f_x > int 10) ])
           uint8;
       ]
   in
@@ -129,13 +138,14 @@ let test_return_bool_expr () =
 
 let test_return_bool_expr_fail () =
   (* return (x > 10): fails when x=5 *)
+  let f_x = field "x" uint8 in
   let s =
     struct_ "RetExprFail"
       [
         field "x"
           ~action:
             (Action.on_success
-               [ Action.return_bool Expr.(field_ref "x" > int 10) ])
+               [ Action.return_bool Expr.(field_ref f_x > int 10) ])
           uint8;
       ]
   in
@@ -163,6 +173,9 @@ let test_abort () =
 let test_var_local () =
   (* var tmp = x * 2; assign out = tmp; later field checks out *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_tmp = field "tmp" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "VarLocal"
       [ Param.v out ]
@@ -171,11 +184,11 @@ let test_var_local () =
           ~action:
             (Action.on_success
                [
-                 Action.var "tmp" Expr.(field_ref "x" * int 2);
-                 Action.assign out (field_ref "tmp");
+                 Action.var "tmp" Expr.(field_ref f_x * int 2);
+                 Action.assign out (field_ref f_tmp);
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 84) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 84) uint8;
       ]
   in
   (* x=42 => tmp=84, out=84, constraint out=84: OK *)
@@ -189,6 +202,8 @@ let test_var_local () =
 let test_if_true_branch () =
   (* if (x > 0) { out = 1 } => out should be 1 when x=42 *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "IfTrue"
       [ Param.v out ]
@@ -199,12 +214,12 @@ let test_if_true_branch () =
                [
                  Action.assign out (int 0);
                  Action.if_
-                   Expr.(field_ref "x" > int 0)
+                   Expr.(field_ref f_x > int 0)
                    [ Action.assign out (int 1) ]
                    None;
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 1) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 1) uint8;
       ]
   in
   let input = "\x2A\x00" in
@@ -215,6 +230,8 @@ let test_if_true_branch () =
 let test_if_false_branch () =
   (* if (x > 100) { out = 1 } => out stays 0 when x=5 *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "IfFalse"
       [ Param.v out ]
@@ -225,12 +242,12 @@ let test_if_false_branch () =
                [
                  Action.assign out (int 0);
                  Action.if_
-                   Expr.(field_ref "x" > int 100)
+                   Expr.(field_ref f_x > int 100)
                    [ Action.assign out (int 1) ]
                    None;
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 0) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 0) uint8;
       ]
   in
   let input = "\x05\x00" in
@@ -241,6 +258,8 @@ let test_if_false_branch () =
 let test_if_else () =
   (* if (x = 0) { out = 10 } else { out = 20 } *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "IfElse"
       [ Param.v out ]
@@ -250,12 +269,12 @@ let test_if_else () =
             (Action.on_success
                [
                  Action.if_
-                   Expr.(field_ref "x" = int 0)
+                   Expr.(field_ref f_x = int 0)
                    [ Action.assign out (int 10) ]
                    (Some [ Action.assign out (int 20) ]);
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 20) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 20) uint8;
       ]
   in
   (* x=1 => else branch => out=20 *)
@@ -267,6 +286,7 @@ let test_if_else () =
 let test_if_abort_in_else () =
   (* if (x > 0) { out = x } else { abort } *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
   let s =
     param_struct "IfAbort"
       [ Param.v out ]
@@ -276,8 +296,8 @@ let test_if_abort_in_else () =
             (Action.on_success
                [
                  Action.if_
-                   Expr.(field_ref "x" > int 0)
-                   [ Action.assign out (field_ref "x") ]
+                   Expr.(field_ref f_x > int 0)
+                   [ Action.assign out (field_ref f_x) ]
                    (Some [ Action.abort ]);
                ])
           uint8;
@@ -293,6 +313,8 @@ let test_if_abort_in_else () =
 let test_if_nested () =
   (* if (x > 0) { if (x < 100) { out = 1 } else { out = 2 } } *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "IfNested"
       [ Param.v out ]
@@ -303,17 +325,17 @@ let test_if_nested () =
                [
                  Action.assign out (int 0);
                  Action.if_
-                   Expr.(field_ref "x" > int 0)
+                   Expr.(field_ref f_x > int 0)
                    [
                      Action.if_
-                       Expr.(field_ref "x" < int 100)
+                       Expr.(field_ref f_x < int 100)
                        [ Action.assign out (int 1) ]
                        (Some [ Action.assign out (int 2) ]);
                    ]
                    None;
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 1) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 1) uint8;
       ]
   in
   (* x=50: 50>0 => true, 50<100 => true, out=1 *)
@@ -326,12 +348,13 @@ let test_if_nested () =
 
 let test_on_act () =
   (* on_act should execute identically to on_success *)
+  let f_x = field "x" uint8 in
   let s =
     struct_ "OnAct"
       [
         field "x"
           ~action:
-            (Action.on_act [ Action.return_bool Expr.(field_ref "x" = int 42) ])
+            (Action.on_act [ Action.return_bool Expr.(field_ref f_x = int 42) ])
           uint8;
       ]
   in
@@ -350,6 +373,10 @@ let test_on_act () =
 let test_stmt_sequencing () =
   (* var a = x; var b = a + 1; assign out = b * 2 *)
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_a = field "a" uint8 in
+  let f_b = field "b" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "Sequence"
       [ Param.v out ]
@@ -358,12 +385,12 @@ let test_stmt_sequencing () =
           ~action:
             (Action.on_success
                [
-                 Action.var "a" (field_ref "x");
-                 Action.var "b" Expr.(field_ref "a" + int 1);
-                 Action.assign out Expr.(field_ref "b" * int 2);
+                 Action.var "a" (field_ref f_x);
+                 Action.var "b" Expr.(field_ref f_a + int 1);
+                 Action.assign out Expr.(field_ref f_b * int 2);
                ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 86) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 86) uint8;
       ]
   in
   (* x=42 => a=42, b=43, out=86 *)
@@ -391,6 +418,7 @@ let test_return_short_circuits () =
 let test_abort_short_circuits () =
   (* abort; assign out = 1 => should fail (assign never reached) *)
   let out = Param.output "out" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "AbortShort"
       [ Param.v out ]
@@ -399,7 +427,7 @@ let test_abort_short_circuits () =
           ~action:
             (Action.on_success [ Action.abort; Action.assign out (int 1) ])
           uint8;
-        field "y" ~constraint_:Expr.(field_ref "out" = int 1) uint8;
+        field "y" ~constraint_:Expr.(field_ref f_out = int 1) uint8;
       ]
   in
   let input = "\x42\x00" in
@@ -421,15 +449,17 @@ let test_empty_action () =
 
 let test_action_on_bitfield () =
   let out = Param.output "out" uint8 in
+  let f_x = field "x" uint8 in
+  let f_out = field "out" uint8 in
   let s =
     param_struct "BFAction"
       [ Param.v out ]
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign out (field_ref "x") ])
+          ~action:(Action.on_success [ Action.assign out (field_ref f_x) ])
           (bits ~width:4 U8);
         field "y"
-          ~constraint_:Expr.(field_ref "out" <= int 15)
+          ~constraint_:Expr.(field_ref f_out <= int 15)
           (bits ~width:4 U8);
       ]
   in

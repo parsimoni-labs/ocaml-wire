@@ -17,6 +17,8 @@ let test_parse_lookup buf =
 (* Parse crash safety: struct with action on random input *)
 let test_parse_struct_action buf =
   let buf = truncate buf in
+  let f_x = Wire.C.field "x" Wire.uint8 in
+  let f_tmp = Wire.C.field "tmp" Wire.uint8 in
   let s =
     Wire.C.struct_ "ActionFuzz"
       [
@@ -25,9 +27,9 @@ let test_parse_struct_action buf =
             (Wire.Action.on_success
                [
                  Wire.Action.var "tmp"
-                   Wire.Expr.(Wire.C.field_ref "x" * Wire.int 2);
+                   Wire.Expr.(Wire.C.field_ref f_x * Wire.int 2);
                  Wire.Action.return_bool
-                   Wire.Expr.(Wire.C.field_ref "tmp" <= Wire.int 510);
+                   Wire.Expr.(Wire.C.field_ref f_tmp <= Wire.int 510);
                ])
           Wire.uint8;
         Wire.C.field "y" Wire.uint8;
@@ -39,6 +41,7 @@ let test_parse_struct_action buf =
 (* Parse crash safety: struct with action abort on random input *)
 let test_parse_struct_action_abort buf =
   let buf = truncate buf in
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let s =
     Wire.C.struct_ "AbortFuzz"
       [
@@ -47,7 +50,7 @@ let test_parse_struct_action_abort buf =
             (Wire.Action.on_success
                [
                  Wire.Action.if_
-                   Wire.Expr.(Wire.C.field_ref "x" = Wire.int 0)
+                   Wire.Expr.(Wire.C.field_ref f_x = Wire.int 0)
                    [ Wire.Action.abort ] None;
                ])
           Wire.uint8;
@@ -80,16 +83,17 @@ let test_parse_param_struct buf =
   let limit = Wire.Param.input "limit" Wire.uint8 in
   let _limit_expr = Wire.Param.init limit 128 in
   let out = Wire.Param.output "out" Wire.uint8 in
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let c =
     Wire.Codec.view "ParamFuzz"
-      ~where:Wire.Expr.(Wire.C.field_ref "x" <= Wire.Param.expr limit)
+      ~where:Wire.Expr.(Wire.C.field_ref f_x <= Wire.Param.expr limit)
       (fun x -> x)
       Wire.Codec.
         [
           Wire.Codec.field "x"
             ~action:
               (Wire.Action.on_success
-                 [ Wire.Action.assign out (Wire.C.field_ref "x") ])
+                 [ Wire.Action.assign out (Wire.C.field_ref f_x) ])
             Wire.uint8
             (fun x -> x);
         ]
@@ -119,9 +123,10 @@ let test_param_ref_constraint buf =
   let buf = truncate buf in
   let limit = Wire.Param.input "limit" Wire.uint8 in
   let _ = Wire.Param.init limit 50 in
+  let f_v = Wire.C.field "v" Wire.uint8 in
   let f =
     Wire.Codec.field "v"
-      ~constraint_:Wire.Expr.(Wire.C.field_ref "v" <= Wire.Param.expr limit)
+      ~constraint_:Wire.Expr.(Wire.C.field_ref f_v <= Wire.Param.expr limit)
       Wire.uint8
       (fun v -> v)
   in
@@ -133,11 +138,12 @@ let test_param_ref_constraint buf =
 let test_typed_assign buf =
   let buf = truncate buf in
   let out = Wire.Param.output "out" Wire.uint8 in
+  let f_v = Wire.C.field "v" Wire.uint8 in
   let f =
     Wire.Codec.field "v"
       ~action:
         (Wire.Action.on_success
-           [ Wire.Action.assign out (Wire.C.field_ref "v") ])
+           [ Wire.Action.assign out (Wire.C.field_ref f_v) ])
       Wire.uint8
       (fun v -> v)
   in

@@ -160,7 +160,8 @@ let test_casetype_inline () =
 (** Test constraint expression generation. *)
 let test_constraint_expr a =
   let v = abs a mod 1000 in
-  let cond = Wire.Expr.(Wire.C.field_ref "x" <= Wire.int v) in
+  let f_x = Wire.C.field "x" Wire.uint16 in
+  let cond = Wire.Expr.(Wire.C.field_ref f_x <= Wire.int v) in
   let s =
     Wire.C.struct_ "Constrained"
       [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
@@ -173,7 +174,8 @@ let test_constraint_expr a =
 let test_bitfield_constraint width =
   let width = (width mod 16) + 1 in
   let t = Wire.bits ~width Wire.U16 in
-  let cond = Wire.Expr.(Wire.C.field_ref "x" <= Wire.int 100) in
+  let f_x = Wire.C.field "x" t in
+  let cond = Wire.Expr.(Wire.C.field_ref f_x <= Wire.int 100) in
   let s =
     Wire.C.struct_ "BFConstrained" [ Wire.C.field "x" ~constraint_:cond t ]
   in
@@ -184,8 +186,9 @@ let test_bitfield_constraint width =
 (** Test bitwise expression operators in 3D output. *)
 let test_bitwise_expr a =
   let v = abs a mod 256 in
+  let f_x = Wire.C.field "x" Wire.uint16 in
   let open Wire.Expr in
-  let cond = Wire.C.field_ref "x" land Wire.int 0xFF <= Wire.int v in
+  let cond = Wire.C.field_ref f_x land Wire.int 0xFF <= Wire.int v in
   let s =
     Wire.C.struct_ "Bitwise" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
@@ -195,9 +198,10 @@ let test_bitwise_expr a =
 
 (** Test logical expression operators. *)
 let test_logical_expr () =
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let open Wire.Expr in
   let cond =
-    Wire.C.field_ref "x" <= Wire.int 100 && Wire.C.field_ref "x" >= Wire.int 0
+    Wire.C.field_ref f_x <= Wire.int 100 && Wire.C.field_ref f_x >= Wire.int 0
   in
   let s =
     Wire.C.struct_ "Logical" [ Wire.C.field "x" ~constraint_:cond Wire.uint8 ]
@@ -208,28 +212,31 @@ let test_logical_expr () =
 
 (** Test all bitwise/shift operators. *)
 let test_bitwise_ops () =
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let open Wire.Expr in
-  let _ = Wire.C.field_ref "x" lor Wire.int 1 in
-  let _ = Wire.C.field_ref "x" lxor Wire.int 0xFF in
-  let _ = lnot (Wire.C.field_ref "x") in
-  let _ = Wire.C.field_ref "x" lsl Wire.int 2 in
-  let _ = Wire.C.field_ref "x" lsr Wire.int 3 in
+  let _ = Wire.C.field_ref f_x lor Wire.int 1 in
+  let _ = Wire.C.field_ref f_x lxor Wire.int 0xFF in
+  let _ = lnot (Wire.C.field_ref f_x) in
+  let _ = Wire.C.field_ref f_x lsl Wire.int 2 in
+  let _ = Wire.C.field_ref f_x lsr Wire.int 3 in
   ()
 
 (** Test logical operators. *)
 let test_logical_ops () =
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let open Wire.Expr in
   let _ = Wire.Expr.true_ || Wire.Expr.false_ in
   let _ = Wire.Expr.not Wire.Expr.true_ in
   let _ =
-    Wire.C.field_ref "x" = Wire.int 0 || Wire.C.field_ref "x" <> Wire.int 1
+    Wire.C.field_ref f_x = Wire.int 0 || Wire.C.field_ref f_x <> Wire.int 1
   in
   ()
 
 (** Test cast operators in 3D output. *)
 let test_cast_expr () =
+  let f_x = Wire.C.field "x" Wire.uint16 in
   let open Wire.Expr in
-  let cond = to_uint8 (Wire.C.field_ref "x") <= Wire.int 100 in
+  let cond = to_uint8 (Wire.C.field_ref f_x) <= Wire.int 100 in
   let s =
     Wire.C.struct_ "Cast" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
@@ -394,9 +401,10 @@ let test_abort () =
 (** Test Action.if_. *)
 let test_action_if () =
   let ptr = Wire.Param.output "ptr" Wire.uint32 in
+  let f_x = Wire.C.field "x" Wire.uint8 in
   let stmt =
     Wire.Action.if_
-      Wire.Expr.(Wire.C.field_ref "x" > Wire.int 10)
+      Wire.Expr.(Wire.C.field_ref f_x > Wire.int 10)
       [ Wire.Action.assign ptr (Wire.int 1) ]
       (Some [ Wire.Action.assign ptr (Wire.int 0) ])
   in
@@ -413,11 +421,12 @@ let test_action_if () =
 (** Test Action.var action statement. *)
 let test_var () =
   let ptr = Wire.Param.output "ptr" Wire.uint32 in
+  let f_tmp = Wire.C.field "tmp" Wire.uint32 in
   let act =
     Wire.Action.on_success
       [
         Wire.Action.var "tmp" (Wire.int 42);
-        Wire.Action.assign ptr (Wire.C.field_ref "tmp");
+        Wire.Action.assign ptr (Wire.C.field_ref f_tmp);
       ]
   in
   let s =
