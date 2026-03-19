@@ -10,7 +10,7 @@ type schema = Wire.C.schema = {
 }
 
 let schema ~name ~struct_ ~module_ =
-  match Wire_c.size struct_ with
+  match Wire.C.size struct_ with
   | Some wire_size -> Some (Wire.C.of_module ~name ~module_ ~wire_size)
   | None -> None
 

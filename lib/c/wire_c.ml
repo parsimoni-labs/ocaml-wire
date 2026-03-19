@@ -12,7 +12,6 @@
    3. Run EverParse to generate C parser (.h with struct + read/write)
    4. Use to_c_stubs to generate OCaml FFI bindings to call EverParse C *)
 
-let size = Wire.C.size
 let ml_type_of = Wire.Private.ml_type_of
 
 (** Compute the EverParse-normalized identifier for a struct name.
@@ -246,20 +245,14 @@ let schema_of_struct s =
   let name = Wire.C.struct_name s in
   let m = Wire.C.module_ [ Wire.C.typedef ~entrypoint:true s ] in
   let wire_size =
-    match size s with
+    match Wire.C.size s with
     | Some n -> n
     | None -> Fmt.failwith "schema %s has variable-length fields" name
   in
   Wire.C.of_module ~name ~module_:m ~wire_size
 
-let schema ~name ~module_ ~wire_size =
-  Wire.C.of_module ~name ~module_ ~wire_size
-
-let generate_3d_files ~outdir schemas =
-  List.iter
-    (fun s ->
-      Wire.C.to_3d_file (Filename.concat outdir (s.name ^ ".3d")) s.module_)
-    schemas
+let schema = Wire.C.of_module
+let generate_3d = Wire.C.generate
 
 let copy_file ~src ~dst =
   let ic = open_in_bin src in
@@ -399,7 +392,7 @@ let ensure_dir outdir =
 
 let generate_3d ~outdir schemas =
   ensure_dir outdir;
-  generate_3d_files ~outdir schemas
+  generate_3d ~outdir schemas
 
 let generate_c ?(quiet = true) ~outdir schemas =
   ensure_dir outdir;
