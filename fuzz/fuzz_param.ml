@@ -97,6 +97,67 @@ let test_parse_param_struct buf =
   let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
   ()
 
+let f_fuzz_x = Wire.Codec.field "x" Wire.uint8 (fun x -> x)
+
+(* Fuzz: Param_ref in where clause with random values *)
+let test_param_ref_where buf =
+  let buf = truncate buf in
+  let max_val = Wire.Param.input "max_val" Wire.uint16be in
+  let _ = Wire.Param.init max_val 200 in
+  let c =
+    Wire.Codec.view "ParamRefWhere"
+      ~where:
+        Wire.Expr.(Wire.Codec.field_ref f_fuzz_x <= Wire.Param.expr max_val)
+      (fun x -> x)
+      Wire.Codec.[ f_fuzz_x ]
+  in
+  let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
+  ()
+
+(* Fuzz: Param_ref in constraint with random input *)
+let test_param_ref_constraint buf =
+  let buf = truncate buf in
+  let limit = Wire.Param.input "limit" Wire.uint8 in
+  let _ = Wire.Param.init limit 50 in
+  let f =
+    Wire.Codec.field "v"
+      ~constraint_:Wire.Expr.(Wire.C.field_ref "v" <= Wire.Param.expr limit)
+      Wire.uint8
+      (fun v -> v)
+  in
+  let c = Wire.Codec.view "ParamRefConst" (fun v -> v) Wire.Codec.[ f ] in
+  let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
+  ()
+
+(* Fuzz: typed Assign to output param *)
+let test_typed_assign buf =
+  let buf = truncate buf in
+  let out = Wire.Param.output "out" Wire.uint8 in
+  let f =
+    Wire.Codec.field "v"
+      ~action:
+        (Wire.Action.on_success
+           [ Wire.Action.assign out (Wire.C.field_ref "v") ])
+      Wire.uint8
+      (fun v -> v)
+  in
+  let c = Wire.Codec.view "TypedAssign" (fun v -> v) Wire.Codec.[ f ] in
+  let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
+  (* Verify output was set (no crash) *)
+  let _ = Wire.Param.get out in
+  ()
+
+(* Fuzz: map ~decode ~encode roundtrip *)
+let test_map_roundtrip n =
+  let n = abs n mod 256 in
+  let t =
+    Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
+  in
+  let encoded = Wire.encode_to_string t (n * 2) in
+  match Wire.decode_string t encoded with
+  | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
+  | Error _ -> fail "map roundtrip parse failed"
+
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -109,4 +170,12 @@ let parse_tests =
     test_case "parse param struct" [ bytes ] test_parse_param_struct;
   ]
 
-let suite = ("param", parse_tests)
+let param_ref_tests =
+  [
+    test_case "param_ref where" [ bytes ] test_param_ref_where;
+    test_case "param_ref constraint" [ bytes ] test_param_ref_constraint;
+    test_case "typed assign" [ bytes ] test_typed_assign;
+    test_case "map roundtrip" [ int ] test_map_roundtrip;
+  ]
+
+let suite = ("param", parse_tests @ param_ref_tests)
