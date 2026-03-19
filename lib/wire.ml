@@ -188,9 +188,7 @@ let read_all dec =
 
 (* Evaluate an expression in context *)
 
-(* Bitfield accumulator for packed struct parsing.
-   Consecutive bitfields sharing the same base type are packed together.
-   Bits are extracted from MSB to LSB (big-endian style) per EverParse 3D. *)
+(* Bitfield accumulator for packed struct parsing. *)
 type bf_accum = {
   bf_base : bitfield_base;
   bf_word : int;
@@ -198,40 +196,18 @@ type bf_accum = {
   bf_total_bits : int;
 }
 
-let bf_total_bits = function BF_U8 -> 8 | BF_U16 _ -> 16 | BF_U32 _ -> 32
-let bf_base_size = function BF_U8 -> 1 | BF_U16 _ -> 2 | BF_U32 _ -> 4
-
-let bf_compatible base1 base2 =
-  match (base1, base2) with
-  | BF_U8, BF_U8 -> true
-  | BF_U16 e1, BF_U16 e2 -> e1 = e2
-  | BF_U32 e1, BF_U32 e2 -> e1 = e2
-  | _ -> false
-
 let bf_read_word dec base =
-  let size = bf_base_size base in
-  let off = read_small dec size in
-  let buf = dec.i in
-  match base with
-  | BF_U8 -> Bytes.get_uint8 buf off
-  | BF_U16 Little -> Bytes.get_uint16_le buf off
-  | BF_U16 Big -> Bytes.get_uint16_be buf off
-  | BF_U32 Little -> Int32.to_int (Bytes.get_int32_le buf off)
-  | BF_U32 Big -> Int32.to_int (Bytes.get_int32_be buf off)
+  let off = read_small dec (Bitfield.byte_size base) in
+  Bitfield.read_word base dec.i off
 
-(* Extract bits from accumulated word (MSB first, big-endian style) *)
 let bf_extract accum width =
-  let shift = accum.bf_total_bits - accum.bf_bits_used - width in
-  let mask = (1 lsl width) - 1 in
-  let value = (accum.bf_word lsr shift) land mask in
-  let new_accum = { accum with bf_bits_used = accum.bf_bits_used + width } in
-  (value, new_accum)
+  let value =
+    Bitfield.extract ~total:accum.bf_total_bits ~bits_used:accum.bf_bits_used
+      ~width accum.bf_word
+  in
+  (value, { accum with bf_bits_used = accum.bf_bits_used + width })
 
-(* Check if accumulator can provide more bits *)
 let bf_has_room accum width = accum.bf_bits_used + width <= accum.bf_total_bits
-
-(* All parse helpers raise Parse_exn on error — no Result on the hot path. *)
-
 let parse_bits dec base width = bf_read_word dec base land ((1 lsl width) - 1)
 
 let[@inline] parse_int dec n get =
@@ -240,7 +216,7 @@ let[@inline] parse_int dec n get =
 
 let parse_bf_field dec accum_opt base width =
   match accum_opt with
-  | Some accum when bf_compatible accum.bf_base base && bf_has_room accum width
+  | Some accum when Bitfield.equal accum.bf_base base && bf_has_room accum width
     ->
       let v, new_accum = bf_extract accum width in
       let accum_opt' =
@@ -250,7 +226,7 @@ let parse_bf_field dec accum_opt base width =
       (v, accum_opt')
   | _ ->
       let word = bf_read_word dec base in
-      let total = bf_total_bits base in
+      let total = Bitfield.total_bits base in
       let accum =
         {
           bf_base = base;
@@ -438,17 +414,8 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
       check_eof len (off + 8);
       Bytes.get_int64_be buf off
   | Bits { width; base } ->
-      let size = match base with BF_U8 -> 1 | BF_U16 _ -> 2 | BF_U32 _ -> 4 in
-      check_eof len (off + size);
-      let word =
-        match base with
-        | BF_U8 -> Bytes.get_uint8 buf off
-        | BF_U16 Little -> Bytes.get_uint16_le buf off
-        | BF_U16 Big -> Bytes.get_uint16_be buf off
-        | BF_U32 Little -> Int32.to_int (Bytes.get_int32_le buf off)
-        | BF_U32 Big -> Int32.to_int (Bytes.get_int32_be buf off)
-      in
-      word land ((1 lsl width) - 1)
+      check_eof len (off + Bitfield.byte_size base);
+      Bitfield.read_word base buf off land ((1 lsl width) - 1)
   | Unit -> ()
   | Map { inner; decode; _ } -> (
       match decode (parse_direct inner buf off len) with

@@ -255,25 +255,13 @@ let field name ?constraint_ ?action typ get =
     f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
   }
 
-(* Bitfield helpers *)
+(* Bitfield helpers — shared module for base operations, specialized closures
+   for performance-critical read/write dispatched at codec construction time. *)
 
-let bf_base_byte_size = function BF_U8 -> 1 | BF_U16 _ -> 2 | BF_U32 _ -> 4
-let bf_base_total_bits = function BF_U8 -> 8 | BF_U16 _ -> 16 | BF_U32 _ -> 32
-
-let bf_base_equal a b =
-  match (a, b) with
-  | BF_U8, BF_U8 -> true
-  | BF_U16 e1, BF_U16 e2 -> e1 = e2
-  | BF_U32 e1, BF_U32 e2 -> e1 = e2
-  | _ -> false
-
-let bf_write_base base buf off v =
-  match base with
-  | BF_U8 -> Bytes.set_uint8 buf off v
-  | BF_U16 Little -> Bytes.set_uint16_le buf off v
-  | BF_U16 Big -> Bytes.set_uint16_be buf off v
-  | BF_U32 Little -> UInt32.set_le buf off v
-  | BF_U32 Big -> UInt32.set_be buf off v
+let bf_base_byte_size = Bitfield.byte_size
+let bf_base_total_bits = Bitfield.total_bits
+let bf_base_equal = Bitfield.equal
+let bf_write_base = Bitfield.write_word
 
 (* Build-time dispatch: pattern match on base happens once at codec
    construction, not on every read/write call. *)
