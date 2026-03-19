@@ -14,7 +14,7 @@
           |> Option.get;
         ]
 
-      let () = Diff_gen.generate ~schema_dir:"schemas" ~outdir:"." schemas
+      let () = Diff_gen.generate ~outdir:"schemas" ~outdir:"." schemas
     ]} *)
 
 type schema = Wire.C.schema
@@ -32,27 +32,25 @@ val schema :
 
 val generate :
   schema_dir:string -> outdir:string -> ?num_values:int -> schema list -> unit
-(** [generate ~schema_dir ~outdir schemas] runs the full pipeline: 1. Generates
-    .3d files in [schema_dir] 2. Invokes EverParse to produce C parsers 3.
-    Generates [stubs.c], [stubs.ml], [diff_test.ml] in [outdir]
+(** [generate ~schema_dir ~outdir schemas] runs the full pipeline: 1. Generate
+    .3d files in [schema_dir] 2. Invoke EverParse to produce C parsers 3.
+    Generate [stubs.c], [stubs.ml], [diff_test.ml] in [outdir]
 
     Requires EverParse installed at [~/.local/everparse/]. *)
 
 (** {1 Individual Steps} *)
 
-val generate_3d_files : schema_dir:string -> schema list -> unit
+val generate_3d_files : outdir:string -> schema list -> unit
+(** Delegates to {!Wire_c.generate_3d}. *)
 
-val run_everparse : schema_dir:string -> unit
-(** [run_everparse ~schema_dir] invokes EverParse on all [.3d] files in
-    [schema_dir]. *)
+val run_everparse : ?quiet:bool -> outdir:string -> schema list -> unit
+(** Delegates to {!Wire_c.run_everparse}. *)
 
 val generate_c_stubs : schema_dir:string -> outdir:string -> schema list -> unit
-(** [generate_c_stubs ~schema_dir ~outdir schemas] generates [stubs.c] with
-    OCaml C stubs. *)
+(** Generate [stubs.c] with OCaml C stubs using {!Wire_c.everparse_name}. *)
 
 val generate_ml_stubs : outdir:string -> schema list -> unit
-(** [generate_ml_stubs ~outdir schemas] generates [stubs.ml] with OCaml
-    externals. *)
+(** Generate [stubs.ml] with OCaml externals. *)
 
 val generate_test_runner :
   outdir:string -> ?num_values:int -> schema list -> unit

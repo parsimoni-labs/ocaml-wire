@@ -1,8 +1,7 @@
 (** Code generation for EverParse differential testing.
 
-    Generates .3d files from Wire schemas, invokes EverParse, and produces C
-    stubs, OCaml externals, and a test runner for comparing OCaml codecs against
-    EverParse-generated C parsers. *)
+    Thin layer on top of {!Wire_c}: generates .3d files, runs EverParse,
+    produces C/OCaml stubs, and adds a differential test runner. *)
 
 type schema = Wire.C.schema = {
   name : string;
@@ -15,61 +14,10 @@ let schema ~name ~struct_ ~module_ =
   | Some wire_size -> Some (Wire.C.of_module ~name ~module_ ~wire_size)
   | None -> None
 
-(** {1 EverParse Invocation} *)
-
-let run_everparse ~schema_dir =
-  let cmd =
-    Fmt.str
-      "cd %s && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" \
-       > /dev/null 2>&1 || exit 1; done"
-      schema_dir
-  in
-  let ret = Sys.command cmd in
-  if ret <> 0 then Fmt.failwith "EverParse failed with code %d" ret
-
-(** {1 Extracting EverParse-generated Function Names}
-
-    EverParse normalizes C identifiers in a way that depends on consecutive
-    uppercase runs (e.g., [SpaceOSFrame] becomes [SpaceOsframe]). Rather than
-    replicating the algorithm, we read the generated header files. *)
-
-let extract_validate_fn ~schema_dir name =
-  let header = Filename.concat schema_dir (name ^ ".h") in
-  let ic = open_in header in
-  let result = ref None in
-  (try
-     while true do
-       let line = input_line ic in
-       let trimmed = String.trim line in
-       if String.length trimmed > 0 && String.contains trimmed '(' then begin
-         let fn = String.sub trimmed 0 (String.index trimmed '(') in
-         let fn = String.trim fn in
-         let has_validate =
-           let vlen = String.length "Validate" in
-           let rec check i =
-             if i + vlen > String.length fn then false
-             else if String.sub fn i vlen = "Validate" then true
-             else check (i + 1)
-           in
-           check 0
-         in
-         if has_validate && fn <> "" && fn.[0] <> '#' && fn.[0] <> '*' then
-           result := Some fn
-       end
-     done
-   with End_of_file -> ());
-  close_in ic;
-  match !result with
-  | Some fn -> fn
-  | None -> Fmt.failwith "Could not find Validate function in %s" header
-
 (** {1 Code Generation} *)
 
-let generate_3d_files ~schema_dir schemas =
-  List.iter
-    (fun s ->
-      Wire.C.to_3d_file (Filename.concat schema_dir (s.name ^ ".3d")) s.module_)
-    schemas
+let generate_3d_files = Wire_c.generate_3d
+let run_everparse = Wire_c.run_everparse
 
 let generate_c_stubs ~schema_dir ~outdir schemas =
   let oc = open_out (Filename.concat outdir "stubs.c") in
@@ -87,7 +35,7 @@ let generate_c_stubs ~schema_dir ~outdir schemas =
   pr "}\n\n";
   List.iter
     (fun s ->
-      let validate_fn = extract_validate_fn ~schema_dir s.name in
+      let ep = Wire_c.everparse_name s.name in
       let lower = String.lowercase_ascii s.name in
       pr "/* --- %s --- */\n" s.name;
       pr "#include \"%s/%s.h\"\n" schema_dir s.name;
@@ -100,8 +48,10 @@ let generate_c_stubs ~schema_dir ~outdir schemas =
       pr "  CAMLparam1(v_bytes);\n";
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_bytes);\n";
       pr "  uint32_t len = caml_string_length(v_bytes);\n";
-      pr "  uint64_t result = %s(NULL, noop_error_handler, data, len, 0);\n"
-        validate_fn;
+      pr
+        "  uint64_t result = %sValidate%s(NULL, noop_error_handler, data, len, \
+         0);\n"
+        ep ep;
       pr "  CAMLreturn(Val_bool(EverParseIsSuccess(result)));\n";
       pr "}\n\n")
     schemas;
@@ -173,9 +123,9 @@ let generate_test_runner ~outdir ?(num_values = 1000) schemas =
 let generate ~schema_dir ~outdir ?(num_values = 1000) schemas =
   (try Unix.mkdir schema_dir 0o755
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  generate_3d_files ~schema_dir schemas;
+  generate_3d_files ~outdir:schema_dir schemas;
   Fmt.pr "Generated %d .3d files in %s/\n" (List.length schemas) schema_dir;
-  run_everparse ~schema_dir;
+  run_everparse ~outdir:schema_dir schemas;
   generate_c_stubs ~schema_dir ~outdir schemas;
   generate_ml_stubs ~outdir schemas;
   generate_test_runner ~outdir ~num_values schemas;

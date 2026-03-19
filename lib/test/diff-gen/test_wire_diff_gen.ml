@@ -22,7 +22,7 @@ let test_generate_3d_files () =
       ~module_:simple_module
     |> Option.get
   in
-  Wire_diff_gen.generate_3d_files ~schema_dir:tmpdir [ s ];
+  Wire_diff_gen.generate_3d_files ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestDiffGen.3d" in
   Alcotest.(check bool) "3d file exists" true (Sys.file_exists path);
   Sys.remove path;
@@ -55,8 +55,8 @@ let test_generate_c_stubs () =
         ~module_:simple_module
       |> Option.get
     in
-    Wire_diff_gen.generate_3d_files ~schema_dir [ s ];
-    Wire_diff_gen.run_everparse ~schema_dir;
+    Wire_diff_gen.generate_3d_files ~outdir:schema_dir [ s ];
+    Wire_diff_gen.run_everparse ~outdir:schema_dir [ s ];
     Wire_diff_gen.generate_c_stubs ~schema_dir ~outdir [ s ];
     let path = Filename.concat outdir "stubs.c" in
     Alcotest.(check bool) "stubs.c exists" true (Sys.file_exists path)
