@@ -162,7 +162,14 @@ let test_codec_metadata_to_struct () =
   Alcotest.(check bool) "contains where" true (contains ~sub:"where" output);
   Alcotest.(check bool)
     "contains on-success" true
-    (contains ~sub:":on-success" output)
+    (contains ~sub:":on-success" output);
+  (* Params should be recovered from Param_ref/Assign in the AST *)
+  Alcotest.(check bool)
+    "contains limit param" true
+    (contains ~sub:"limit" output);
+  Alcotest.(check bool)
+    "contains mutable outx param" true
+    (contains ~sub:"mutable" output)
 
 (* Record with multiple uint16be fields *)
 type multi_record = { x : int; y : int }

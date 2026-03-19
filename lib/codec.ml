@@ -208,7 +208,6 @@ type ('f, 'r) record =
       r_bf : bf_codec_state option;
       r_configurators_rev : (unit -> unit) list;
       r_field_readers : (string * (bytes -> int -> int)) list;
-      r_params : Param.packed list;
       r_where : bool expr option;
     }
       -> ('f, 'r) record
@@ -224,7 +223,6 @@ type 'r t = {
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
   t_validate : ctx -> bytes -> int -> ctx;
-  t_params : Param.packed list;
   t_where : bool expr option;
 }
 
@@ -242,7 +240,6 @@ let record_start ?where name make =
       r_bf = None;
       r_configurators_rev = [];
       r_field_readers = [];
-      r_params = [];
       r_where = where;
     }
 
@@ -389,7 +386,6 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         r_bf = bf;
         r_configurators_rev = configurators_rev;
         r_field_readers = field_readers;
-        r_params = r.r_params;
         r_where = r.r_where;
       }
   in
@@ -763,7 +759,6 @@ let seal : type r. (r, r) record -> r t =
     t_wire_size = wire_size_info;
     t_struct_fields = List.rev r.r_fields_rev;
     t_validate = validate;
-    t_params = r.r_params;
     t_where = r.r_where;
   }
 
@@ -808,8 +803,117 @@ let decode t buf off =
 
 let encode t v buf off = t.t_encode v buf off
 
+(* Collect param declarations from Param_ref/Assign nodes in fields and where *)
+let collect_params (fields : Types.field list) where =
+  let module L = Stdlib.List in
+  let seen = Hashtbl.create 4 in
+  let params = Stdlib.ref ([] : param list) in
+  let add_param name decl =
+    if not (Hashtbl.mem seen name) then begin
+      Hashtbl.add seen name ();
+      params := L.cons decl !params
+    end
+  in
+  let rec scan_expr : type a. a expr -> unit =
+   fun e ->
+    match e with
+    | Param_ref p ->
+        add_param p.ph_name
+          {
+            param_name = p.ph_name;
+            param_typ = p.ph_packed_typ;
+            mutable_ = p.ph_mutable;
+          }
+    | Add (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Sub (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Mul (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Div (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Mod (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Land (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Lor (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Lxor (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Lsl (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Lsr (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Lt (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Le (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Gt (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Ge (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Eq (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Ne (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | And (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Or (a, b) ->
+        scan_expr a;
+        scan_expr b
+    | Not a -> scan_expr a
+    | Lnot a -> scan_expr a
+    | Cast (_, e) -> scan_expr e
+    | Sizeof _ | Sizeof_this | Field_pos | Int _ | Int64 _ | Bool _ | Ref _ ->
+        ()
+  in
+  let rec scan_action_stmt = function
+    | Assign (p, e) ->
+        add_param p.ph_name
+          {
+            param_name = p.ph_name;
+            param_typ = p.ph_packed_typ;
+            mutable_ = p.ph_mutable;
+          };
+        scan_expr e
+    | Return e -> scan_expr e
+    | Abort -> ()
+    | If (c, t, e) ->
+        scan_expr c;
+        L.iter scan_action_stmt t;
+        Option.iter (L.iter scan_action_stmt) e
+    | Var (_, e) -> scan_expr e
+  in
+  let scan_action = function
+    | On_success stmts | On_act stmts -> L.iter scan_action_stmt stmts
+  in
+  L.iter
+    (fun (Field f) ->
+      Option.iter scan_expr f.constraint_;
+      Option.iter scan_action f.action)
+    fields;
+  Option.iter scan_expr where;
+  L.rev !params
+
 let to_struct t =
-  let formals = List.map (fun (Param.Pack p) -> Param.v p) t.t_params in
+  let formals = collect_params t.t_struct_fields t.t_where in
   match (formals, t.t_where) with
   | [], None -> struct' t.t_name t.t_struct_fields
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
