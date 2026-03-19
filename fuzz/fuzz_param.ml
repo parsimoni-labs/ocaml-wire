@@ -25,9 +25,9 @@ let test_parse_struct_action buf =
             (Wire.Action.on_success
                [
                  Wire.Action.var "tmp"
-                   Wire.Expr.(Wire.field_ref "x" * Wire.int 2);
+                   Wire.Expr.(Wire.C.field_ref "x" * Wire.int 2);
                  Wire.Action.return_bool
-                   Wire.Expr.(Wire.field_ref "tmp" <= Wire.int 510);
+                   Wire.Expr.(Wire.C.field_ref "tmp" <= Wire.int 510);
                ])
           Wire.uint8;
         Wire.C.field "y" Wire.uint8;
@@ -47,7 +47,7 @@ let test_parse_struct_action_abort buf =
             (Wire.Action.on_success
                [
                  Wire.Action.if_
-                   Wire.Expr.(Wire.field_ref "x" = Wire.int 0)
+                   Wire.Expr.(Wire.C.field_ref "x" = Wire.int 0)
                    [ Wire.Action.abort ] None;
                ])
           Wire.uint8;
@@ -82,14 +82,14 @@ let test_parse_param_struct buf =
   let out = Wire.Param.output "out" Wire.uint8 in
   let c =
     Wire.Codec.view "ParamFuzz"
-      ~where:Wire.Expr.(Wire.field_ref "x" <= Wire.Param.expr limit)
+      ~where:Wire.Expr.(Wire.C.field_ref "x" <= Wire.Param.expr limit)
       (fun x -> x)
       Wire.Codec.
         [
           Wire.Codec.field "x"
             ~action:
               (Wire.Action.on_success
-                 [ Wire.Action.assign out (Wire.field_ref "x") ])
+                 [ Wire.Action.assign out (Wire.C.field_ref "x") ])
             Wire.uint8
             (fun x -> x);
         ]

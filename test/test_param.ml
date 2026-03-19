@@ -57,7 +57,7 @@ let test_input_param_constraint () =
       Codec.
         [
           Codec.field "x"
-            ~constraint_:Expr.(Wire.field_ref "x" <= Param.expr limit)
+            ~constraint_:Expr.(Wire.C.field_ref "x" <= Param.expr limit)
             uint8
             (fun r -> r.x);
         ]
@@ -85,7 +85,7 @@ let test_output_param_action () =
         [
           Codec.field "x"
             ~action:
-              (Action.on_success [ Action.assign out (Wire.field_ref "x") ])
+              (Action.on_success [ Action.assign out (Wire.C.field_ref "x") ])
             uint8
             (fun r -> r.x);
         ]
@@ -105,7 +105,7 @@ let test_output_param_computed () =
           Codec.field "x"
             ~action:
               (Action.on_success
-                 [ Action.assign out Expr.(Wire.field_ref "x" * int 2) ])
+                 [ Action.assign out Expr.(Wire.C.field_ref "x" * int 2) ])
             uint8
             (fun r -> r.x);
         ]
@@ -124,7 +124,7 @@ let test_where_clause_pass () =
   let _max_val_expr = Param.init max_val 100 in
   let c =
     Codec.view "Bounded"
-      ~where:Expr.(Wire.field_ref "value" <= Param.expr max_val)
+      ~where:Expr.(Wire.C.field_ref "value" <= Param.expr max_val)
       (fun value -> { bv_value = value })
       Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
@@ -139,7 +139,7 @@ let test_where_clause_fail () =
   let _max_val_expr = Param.init max_val 10 in
   let c =
     Codec.view "Bounded"
-      ~where:Expr.(Wire.field_ref "value" <= Param.expr max_val)
+      ~where:Expr.(Wire.C.field_ref "value" <= Param.expr max_val)
       (fun value -> { bv_value = value })
       Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
   in
@@ -166,7 +166,8 @@ let test_mixed_params () =
         [
           Codec.field "a"
             ~action:
-              (Action.on_success [ Action.assign out_sum (Wire.field_ref "a") ])
+              (Action.on_success
+                 [ Action.assign out_sum (Wire.C.field_ref "a") ])
             uint8
             (fun r -> r.a);
           Codec.field "b"
@@ -174,7 +175,7 @@ let test_mixed_params () =
               (Action.on_success
                  [
                    Action.assign out_sum
-                     Expr.(Param.expr out_sum + Wire.field_ref "b");
+                     Expr.(Param.expr out_sum + Wire.C.field_ref "b");
                  ])
             uint8
             (fun r -> r.b);
@@ -202,13 +203,13 @@ let param_codec =
   let _limit_expr = Param.init limit 10 in
   let outx = Param.output "outx" uint8 in
   Codec.view "ParamCodec"
-    ~where:Expr.(Wire.field_ref "x" <= Param.expr limit)
+    ~where:Expr.(Wire.C.field_ref "x" <= Param.expr limit)
     (fun x -> { x })
     Codec.
       [
         Codec.field "x"
           ~action:
-            (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
+            (Action.on_success [ Action.assign outx (Wire.C.field_ref "x") ])
           uint8
           (fun r -> r.x);
       ]
@@ -228,13 +229,13 @@ let test_codec_param_where_fail () =
   let outx = Param.output "outx" uint8 in
   let c =
     Codec.view "ParamCodecFail"
-      ~where:Expr.(Wire.field_ref "x" <= Param.expr limit)
+      ~where:Expr.(Wire.C.field_ref "x" <= Param.expr limit)
       (fun x -> { x })
       Codec.
         [
           Codec.field "x"
             ~action:
-              (Action.on_success [ Action.assign outx (Wire.field_ref "x") ])
+              (Action.on_success [ Action.assign outx (Wire.C.field_ref "x") ])
             uint8
             (fun r -> r.x);
         ]
@@ -253,10 +254,11 @@ let test_3d_rendering () =
   let s =
     param_struct "Rendered"
       [ Param.v limit; Param.v out ]
-      ~where:Expr.(Wire.field_ref "x" <= Wire.field_ref "limit")
+      ~where:Expr.(Wire.C.field_ref "x" <= Wire.C.field_ref "limit")
       [
         field "x"
-          ~action:(Action.on_success [ Action.assign out (Wire.field_ref "x") ])
+          ~action:
+            (Action.on_success [ Action.assign out (Wire.C.field_ref "x") ])
           uint16be;
       ]
   in

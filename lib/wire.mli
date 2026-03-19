@@ -181,9 +181,6 @@ val int : int -> int expr
 val int64 : int64 -> int64 expr
 (** Constant 64-bit integer expression. *)
 
-val field_ref : string -> int expr
-(** Reference to a previously named field. *)
-
 val sizeof : 'a typ -> int expr
 (** Size of a fixed-size wire description. *)
 
@@ -205,7 +202,7 @@ module Expr : sig
   (** Arithmetic, bitwise, and comparison operators on expressions.
 
       Open this module locally to build constraint and size expressions:
-      [Expr.(field_ref "x" + int 1)]. *)
+      [Expr.(C.field_ref "x" + int 1)]. *)
 
   val ( + ) : int expr -> int expr -> int expr
   (** Addition. *)
@@ -704,6 +701,10 @@ module C : sig
 
   val anon_field : 'a typ -> field
   (** Anonymous field in a 3D struct. *)
+
+  val field_ref : string -> int expr
+  (** Reference a field by name in constraints and size expressions. For codec
+      fields, prefer {!Codec.field_ref} which takes a typed handle. *)
 
   val struct_ : string -> field list -> struct_
   (** Non-parameterised 3D struct.

@@ -19,7 +19,7 @@ let param_c_type (p : param) =
   let (Types.Pack_typ t) = p.param_typ in
   Types.c_type_of t
 
-let field_ref = Types.ref
+let _field_ref = Types.ref
 let map ~decode ~encode inner = Types.map decode encode inner
 let bool = Types.bool
 let empty = Types.unit

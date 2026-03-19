@@ -103,7 +103,7 @@ let random_struct seed =
       (fun rf ->
         let constraint_ =
           Option.map
-            (fun k -> Wire.Expr.(Wire.field_ref rf.name <= Wire.int k))
+            (fun k -> Wire.Expr.(Wire.C.field_ref rf.name <= Wire.int k))
             rf.constraint_val
         in
         rf.ft.make_field rf.name constraint_)
@@ -314,7 +314,7 @@ let action_schema () =
           ~action:
             (Wire.Action.on_success
                [
-                 Wire.Action.assign outx (Wire.field_ref "x");
+                 Wire.Action.assign outx (Wire.C.field_ref "x");
                  Wire.Action.return_bool Wire.Expr.true_;
                ])
           Wire.uint8;

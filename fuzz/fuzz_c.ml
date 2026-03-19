@@ -160,7 +160,7 @@ let test_casetype_inline () =
 (** Test constraint expression generation. *)
 let test_constraint_expr a =
   let v = abs a mod 1000 in
-  let cond = Wire.Expr.(Wire.field_ref "x" <= Wire.int v) in
+  let cond = Wire.Expr.(Wire.C.field_ref "x" <= Wire.int v) in
   let s =
     Wire.C.struct_ "Constrained"
       [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
@@ -173,7 +173,7 @@ let test_constraint_expr a =
 let test_bitfield_constraint width =
   let width = (width mod 16) + 1 in
   let t = Wire.bits ~width Wire.U16 in
-  let cond = Wire.Expr.(Wire.field_ref "x" <= Wire.int 100) in
+  let cond = Wire.Expr.(Wire.C.field_ref "x" <= Wire.int 100) in
   let s =
     Wire.C.struct_ "BFConstrained" [ Wire.C.field "x" ~constraint_:cond t ]
   in
@@ -185,7 +185,7 @@ let test_bitfield_constraint width =
 let test_bitwise_expr a =
   let v = abs a mod 256 in
   let open Wire.Expr in
-  let cond = Wire.field_ref "x" land Wire.int 0xFF <= Wire.int v in
+  let cond = Wire.C.field_ref "x" land Wire.int 0xFF <= Wire.int v in
   let s =
     Wire.C.struct_ "Bitwise" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
@@ -197,7 +197,7 @@ let test_bitwise_expr a =
 let test_logical_expr () =
   let open Wire.Expr in
   let cond =
-    Wire.field_ref "x" <= Wire.int 100 && Wire.field_ref "x" >= Wire.int 0
+    Wire.C.field_ref "x" <= Wire.int 100 && Wire.C.field_ref "x" >= Wire.int 0
   in
   let s =
     Wire.C.struct_ "Logical" [ Wire.C.field "x" ~constraint_:cond Wire.uint8 ]
@@ -209,11 +209,11 @@ let test_logical_expr () =
 (** Test all bitwise/shift operators. *)
 let test_bitwise_ops () =
   let open Wire.Expr in
-  let _ = Wire.field_ref "x" lor Wire.int 1 in
-  let _ = Wire.field_ref "x" lxor Wire.int 0xFF in
-  let _ = lnot (Wire.field_ref "x") in
-  let _ = Wire.field_ref "x" lsl Wire.int 2 in
-  let _ = Wire.field_ref "x" lsr Wire.int 3 in
+  let _ = Wire.C.field_ref "x" lor Wire.int 1 in
+  let _ = Wire.C.field_ref "x" lxor Wire.int 0xFF in
+  let _ = lnot (Wire.C.field_ref "x") in
+  let _ = Wire.C.field_ref "x" lsl Wire.int 2 in
+  let _ = Wire.C.field_ref "x" lsr Wire.int 3 in
   ()
 
 (** Test logical operators. *)
@@ -221,13 +221,15 @@ let test_logical_ops () =
   let open Wire.Expr in
   let _ = Wire.Expr.true_ || Wire.Expr.false_ in
   let _ = Wire.Expr.not Wire.Expr.true_ in
-  let _ = Wire.field_ref "x" = Wire.int 0 || Wire.field_ref "x" <> Wire.int 1 in
+  let _ =
+    Wire.C.field_ref "x" = Wire.int 0 || Wire.C.field_ref "x" <> Wire.int 1
+  in
   ()
 
 (** Test cast operators in 3D output. *)
 let test_cast_expr () =
   let open Wire.Expr in
-  let cond = to_uint8 (Wire.field_ref "x") <= Wire.int 100 in
+  let cond = to_uint8 (Wire.C.field_ref "x") <= Wire.int 100 in
   let s =
     Wire.C.struct_ "Cast" [ Wire.C.field "x" ~constraint_:cond Wire.uint16 ]
   in
@@ -394,7 +396,7 @@ let test_action_if () =
   let ptr = Wire.Param.output "ptr" Wire.uint32 in
   let stmt =
     Wire.Action.if_
-      Wire.Expr.(Wire.field_ref "x" > Wire.int 10)
+      Wire.Expr.(Wire.C.field_ref "x" > Wire.int 10)
       [ Wire.Action.assign ptr (Wire.int 1) ]
       (Some [ Wire.Action.assign ptr (Wire.int 0) ])
   in
@@ -415,7 +417,7 @@ let test_var () =
     Wire.Action.on_success
       [
         Wire.Action.var "tmp" (Wire.int 42);
-        Wire.Action.assign ptr (Wire.field_ref "tmp");
+        Wire.Action.assign ptr (Wire.C.field_ref "tmp");
       ]
   in
   let s =

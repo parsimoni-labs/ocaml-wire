@@ -120,7 +120,7 @@ let random_struct rng i =
         let constraint_ =
           if Random.State.int rng 4 = 0 then
             let k = gen_constraint_val rng ft.wire_size in
-            Some Wire.Expr.(Wire.field_ref name <= Wire.int k)
+            Some Wire.Expr.(Wire.C.field_ref name <= Wire.int k)
           else None
         in
         (ft.make_field name constraint_, ft.wire_size))
