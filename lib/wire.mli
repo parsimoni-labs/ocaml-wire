@@ -1,34 +1,37 @@
-(** Typed descriptions of binary wire formats.
+(** Binary wire format descriptions.
 
-    [Wire] is the source language of the library: describe the binary layout
-    once, then reuse that same description in several ways.
+    {b Author} a format with {!Field} and {!Codec}. {b Export} it with {!C}.
+    {b Tool} with [Wire_c]. {b Test} with [Wire_diff].
 
-    The intended mental model is:
+    {[
+      (* 1. Describe fields *)
+      let f_version = Field.v "Version" (bits ~width:4 U8)
+      let f_length = Field.v "Length" uint16be
 
-    - ['a typ] describes how values of type ['a] are laid out on the wire;
-    - {!Field} gives names to reusable pieces of that description;
-    - {!Codec} turns record-shaped descriptions into an operational OCaml view
-      with decode, encode, wire-size, and field accessors;
-    - {!C} turns the same description into a named EverParse-facing schema.
+      (* 2. Build a codec *)
+      let codec =
+        Codec.view "Header"
+          (fun version length -> { version; length })
+          Codec.
+            [
+              Codec.bind f_version (fun h -> h.version);
+              Codec.bind f_length (fun h -> h.length);
+            ]
 
-    This is the point of the library: one binary description, several views. The
-    generated 3D is a projection of the OCaml description, not a second source
-    of truth to keep in sync.
+      (* 3. Use it *)
+      let v = Codec.decode codec buf 0 (* decode *)
+      let () = Codec.encode codec v buf 0 (* encode *)
+      let rd = Staged.unstage (Codec.get codec f_version)
+      let n = rd buf 0 (* zero-copy read *)
 
-    Concretely, the same description can be used in three main ways:
+      (* 4. Export to EverParse 3D *)
+      let s = C.struct_of_codec codec
+      let m = C.module_ [ C.typedef ~entrypoint:true s ]
+      let _ = C.to_3d m
+    ]}
 
-    - {!decode}, {!decode_string}, {!decode_bytes}, {!encode},
-      {!encode_to_bytes}, and {!encode_to_string} interpret it directly as OCaml
-      values;
-    - {!Codec} seals record-shaped descriptions into efficient field-oriented
-      codecs;
-    - {!C} packages descriptions for EverParse export.
-
-    See also the official EverParse manual:
-    {{:https://project-everest.github.io/everparse/3d.html}3d: Dependent Data
-     Descriptions for Verified Validation} and the
-    {{:https://project-everest.github.io/everparse/3d-lang.html}3d language
-     reference}. *)
+    The generated 3D is a projection of the OCaml description, not a second
+    source of truth. *)
 
 module Staged : sig
   type +'a t
@@ -509,23 +512,14 @@ val encode_to_bytes : 'a typ -> 'a -> bytes
 val encode_to_string : 'a typ -> 'a -> string
 (** Encodes one value to a freshly allocated string. *)
 
-(** {1 Zero-Copy Codecs}
+(** {1 Codecs}
 
-    A codec is the record-oriented operational view over a wire description.
+    This is the main API for record-shaped formats. Create fields with
+    {!Field.v}, assemble them with {!Codec.view}, then decode, encode, and
+    access individual fields at zero cost.
 
-    Where {!decode} and {!encode} turn whole values into bytes and back, a codec
-    seals a record description together with its typed fields and can then:
-
-    - decode or encode a whole record value;
-    - compute its wire size;
-    - derive staged readers and writers for individual fields.
-
-    Codecs are the right tool for hot paths that inspect or update a few fields
-    repeatedly in existing buffers.
-
-    The underlying wire description remains the same; what changes is the mode
-    of use. Direct decoding gives whole values. A codec is the single OCaml
-    authority for record-level decode, encode, wire-size, and field access. *)
+    The codec is the single OCaml authority for a format's decode, encode,
+    wire-size, and field access. {!C.struct_of_codec} projects it to 3D. *)
 
 module Codec : sig
   type ('a, 'r) field = ('a, 'r) Codec.field
@@ -614,22 +608,15 @@ module Codec : sig
   (** Field reference expression, used in dependent sizes and constraints. *)
 end
 
-(** {1 3D Projection}
+(** {1 Export}
 
-    {!C} is the EverParse-facing export view over the same descriptions.
+    {!C} exports codec descriptions as EverParse 3D schemas.
 
-    It does not define a second binary-description language. Instead, it gives
-    names to declarations, modules, and schemas so that descriptions already
-    written in {!Wire}, {!Field}, and {!Codec} can be exported as 3D artefacts.
-
-    This is the part of the library to use when the goal is not to decode bytes
-    in OCaml, but to package the same description for EverParse.
-
-    For the target language itself, see the
-    {{:https://project-everest.github.io/everparse/3d.html}EverParse manual} and
-    the
-    {{:https://project-everest.github.io/everparse/3d-lang.html}3d language
-     reference}. *)
+    The normal workflow is: build a codec with {!Field} and {!Codec}, then call
+    {!C.struct_of_codec} to project it. The remaining constructors ({!C.field},
+    {!C.struct_}, {!C.param_struct}, etc.) are an advanced escape hatch for 3D
+    constructs that have no codec equivalent yet (e.g. [type_ref], [apply],
+    [casetype_decl]). *)
 
 module C : sig
   type struct_
@@ -717,15 +704,15 @@ module C : sig
   val to_3d_file : string -> module_ -> unit
   (** Writes a rendered 3D module to a file. *)
 
+  (** {2 Advanced: manual 3D construction}
+
+      The functions below are an escape hatch for 3D constructs that cannot be
+      expressed through {!Codec} (e.g. [type_ref], [apply], [casetype_decl]).
+      Prefer {!struct_of_codec} for all codec-derived formats. *)
+
   val field :
     string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field
-  (** Named field in a 3D struct.
-
-      Field constraints correspond to the 3D
-      {{:https://project-everest.github.io/everparse/3d-lang.html#constraints}constraints}
-      language; field actions correspond to the 3D
-      {{:https://project-everest.github.io/everparse/3d-lang.html#actions}actions}
-      language. *)
+  (** Named field. Returns a packed {!Field.t}. *)
 
   val anon_field : 'a typ -> field
   (** Anonymous field in a 3D struct. *)
