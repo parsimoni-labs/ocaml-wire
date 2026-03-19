@@ -44,7 +44,7 @@ let struct_of_codec = Codec.to_struct
 let field name ?constraint_ ?action typ =
   Field.Pack (Field.v name ?constraint_ ?action typ)
 
-let anon_field typ = Field.Pack (Field.v "_" typ)
+let anon_field typ = Field.Pack (Field.anon typ)
 let field_ref (Field.Pack f) = Field.ref f
 
 let unpack_fields fields =

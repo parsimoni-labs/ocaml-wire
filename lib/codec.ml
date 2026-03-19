@@ -245,8 +245,9 @@ let record_start ?where name make =
 
 let bind (f : 'a Field.t) get =
   let not_ready _ _ = failwith "field: not added to a record yet" in
+  let name = match Field.name_opt f with Some n -> n | None -> "_" in
   {
-    name = Field.name f;
+    name;
     typ = Field.typ f;
     constraint_ = Field.constraint_ f;
     action = Field.action f;

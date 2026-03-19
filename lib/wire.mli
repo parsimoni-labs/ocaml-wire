@@ -303,7 +303,7 @@ end
 
 module Field : sig
   type 'a t
-  (** A named wire field with a type. *)
+  (** A field carrying values of type ['a]. *)
 
   type packed =
     | Pack : 'a t -> packed
@@ -312,8 +312,12 @@ module Field : sig
   val v : string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> 'a t
   (** [v name typ] creates a named field. *)
 
+  val anon : ?action:Action.t -> 'a typ -> 'a t
+  (** [anon typ] creates an anonymous (padding) field. Cannot be referenced. *)
+
   val ref : 'a t -> int expr
-  (** [ref f] returns the expression referencing this field. *)
+  (** [ref f] returns the expression referencing this field. Raises
+      [Invalid_argument] on anonymous fields. *)
 end
 
 (** {1 Type Descriptions}
