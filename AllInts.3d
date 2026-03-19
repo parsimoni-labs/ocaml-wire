@@ -1,0 +1,12 @@
+entrypoint
+typedef struct _AllInts
+{
+   UINT8 U8;
+   UINT16 U16;
+   UINT16BE U16BE;
+   UINT32 U32;
+   UINT32BE U32BE;
+   UINT64BE U64BE;
+} AllInts;
+
+

@@ -1,0 +1,10 @@
+entrypoint
+typedef struct _UDP
+{
+   UINT16BE SrcPort;
+   UINT16BE DstPort;
+   UINT16BE Length;
+   UINT16BE Checksum;
+} UDP;
+
+

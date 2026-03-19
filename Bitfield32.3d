@@ -1,0 +1,10 @@
+entrypoint
+typedef struct _Bitfield32
+{
+   UINT32BE Flags : 4;
+   UINT32BE Channel : 6;
+   UINT32BE Seq : 14;
+   UINT32BE Priority : 8;
+} Bitfield32;
+
+

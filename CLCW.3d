@@ -1,0 +1,19 @@
+entrypoint
+typedef struct _CLCW
+{
+   UINT32BE ControlWordType : 1;
+   UINT32BE CLCWVersion : 2;
+   UINT32BE StatusField : 3;
+   UINT32BE COPInEffect : 2;
+   UINT32BE VCID : 6;
+   UINT32BE Spare : 2;
+   UINT32BE NoRF : 1;
+   UINT32BE NoBitlock : 1;
+   UINT32BE Lockout : 1;
+   UINT32BE Wait : 1;
+   UINT32BE Retransmit : 1;
+   UINT32BE FARMBCounter : 2;
+   UINT32BE ReportValue : 8;
+} CLCW;
+
+

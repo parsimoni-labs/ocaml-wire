@@ -1,0 +1,24 @@
+entrypoint
+typedef struct _TCP
+{
+   UINT16BE SrcPort;
+   UINT16BE DstPort;
+   UINT32BE SeqNum;
+   UINT32BE AckNum;
+   UINT16BE DataOffset : 4;
+   UINT16BE Reserved : 3;
+   UINT16BE NS : 1;
+   UINT16BE CWR : 1;
+   UINT16BE ECE : 1;
+   UINT16BE URG : 1;
+   UINT16BE ACK : 1;
+   UINT16BE PSH : 1;
+   UINT16BE RST : 1;
+   UINT16BE SYN : 1;
+   UINT16BE FIN : 1;
+   UINT16BE Window;
+   UINT16BE Checksum;
+   UINT16BE UrgentPtr;
+} TCP;
+
+

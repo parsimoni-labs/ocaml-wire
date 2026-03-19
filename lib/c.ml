@@ -44,6 +44,7 @@ let field = Types.field
 let anon_field = Types.anon_field
 let struct_ = Types.struct_
 let struct_name = Types.struct_name
+let struct_params (s : Types.struct_) = s.params
 let struct_typ = Types.struct_typ
 let param = Types.param
 let mutable_param = Types.mutable_param

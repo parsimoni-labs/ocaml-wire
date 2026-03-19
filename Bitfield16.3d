@@ -1,0 +1,9 @@
+entrypoint
+typedef struct _Bitfield16
+{
+   UINT16BE Flag : 1;
+   UINT16BE Type : 4;
+   UINT16BE Id : 11;
+} Bitfield16;
+
+

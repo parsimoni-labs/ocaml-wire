@@ -1,0 +1,17 @@
+entrypoint
+typedef struct _TMFrame
+{
+   UINT16BE Version : 2;
+   UINT16BE SCID : 10;
+   UINT16BE VCID : 3;
+   UINT16BE OCFFlag : 1;
+   UINT16BE MCCount : 8;
+   UINT16BE VCCount : 8;
+   UINT16BE SecHdrFlag : 1;
+   UINT16BE SyncFlag : 1;
+   UINT16BE PacketOrder : 1;
+   UINT16BE SegLenId : 2;
+   UINT16BE FirstHdrPtr : 11;
+} TMFrame;
+
+

@@ -59,6 +59,15 @@ type 'a typ
 type param
 (** Untyped formal parameter declaration. Create via {!Param.v}. *)
 
+val param_name : param -> string
+(** Name of a formal parameter. *)
+
+val param_is_mutable : param -> bool
+(** [true] for output (mutable) parameters. *)
+
+val param_c_type : param -> string
+(** C type name of a parameter (e.g., ["uint16_t"]). *)
+
 module Param : sig
   (** Typed parameter handles.
 
@@ -706,6 +715,9 @@ module C : sig
   val struct_name : struct_ -> string
   (** Name of a struct declaration. *)
 
+  val struct_params : struct_ -> param list
+  (** Formal parameters of a struct (empty for non-parameterised structs). *)
+
   val struct_typ : struct_ -> unit typ
   (** View a 3D struct as a wire description. *)
 
@@ -799,4 +811,7 @@ module Private : sig
 
   val ml_type_of : 'a typ -> string
   (** OCaml type name for FFI stub generation. *)
+
+  val c_type_of : 'a typ -> string
+  (** C type name for FFI stub generation. *)
 end

@@ -1,0 +1,16 @@
+entrypoint
+typedef struct _LargeMixed
+{
+   UINT32BE SyncMarker;
+   UINT8 Version;
+   UINT8 Type;
+   UINT16BE SpacecraftId;
+   UINT8 VCID;
+   UINT8 FrameCount;
+   UINT16BE DataOffset;
+   UINT16BE DataLength;
+   UINT32BE CRC;
+   UINT64BE Timestamp;
+} LargeMixed;
+
+

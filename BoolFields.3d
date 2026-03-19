@@ -1,0 +1,10 @@
+entrypoint
+typedef struct _BoolFields
+{
+   UINT8 Active : 1;
+   UINT8 Valid : 1;
+   UINT8 Mode : 6;
+   UINT8 Code;
+} BoolFields;
+
+

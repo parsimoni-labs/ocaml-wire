@@ -34,29 +34,104 @@ let everparse_name name =
         if i = 0 then Char.uppercase_ascii c else c)
   else name
 
-(** Generate C check stub: [bytes -> bool]. Calls EverParse-generated
-    [FooCheckFoo] validation function. *)
-let c_stub_check ppf (s : Wire.C.struct_) =
-  let name = Wire.C.struct_name s in
-  let ep = everparse_name name in
-  let lower = String.lowercase_ascii name in
-  (* Define a static error handler for this schema *)
+(* Capitalize first letter for EverParse param names *)
+let _capitalize_param name =
+  if String.length name = 0 then name else String.capitalize_ascii name
+
+(** Generate the error handler for a struct *)
+let c_stub_error_handler ppf lower =
   Fmt.pf ppf
     "static void %s_err(const char *t, const char *f, const char *r,@\n" lower;
   Fmt.pf ppf
     "  uint64_t c, uint8_t *ctx, EVERPARSE_INPUT_BUFFER i, uint64_t p) {@\n";
   Fmt.pf ppf
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
-  Fmt.pf ppf "}@\n";
-  (* Call Validate directly instead of going through the Wrapper.
-     No OCaml allocation or GC interaction, so skip CAMLparam/CAMLreturn. *)
-  Fmt.pf ppf "CAMLprim value caml_wire_%s_check(value v_buf) {@\n" lower;
-  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
-  Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
-  Fmt.pf ppf "  uint64_t r = %sValidate%s(NULL, %s_err, data, len, 0);@\n" ep ep
-    lower;
-  Fmt.pf ppf "  return Val_bool(EverParseIsSuccess(r));@\n";
-  Fmt.pf ppf "}@\n@\n"
+  Fmt.pf ppf "}@\n"
+
+(** Generate C check stub: [bytes -> bool]. Calls EverParse-generated
+    [FooCheckFoo] validation function. *)
+let c_stub_check ppf (s : Wire.C.struct_) =
+  let name = Wire.C.struct_name s in
+  let params = Wire.C.struct_params s in
+  let ep = everparse_name name in
+  let lower = String.lowercase_ascii name in
+  c_stub_error_handler ppf lower;
+  let input_params =
+    List.filter (fun (p : Wire.param) -> not (Wire.param_is_mutable p)) params
+  in
+  let output_params =
+    List.filter (fun (p : Wire.param) -> Wire.param_is_mutable p) params
+  in
+  if params = [] then begin
+    (* Simple stub: bytes -> bool *)
+    Fmt.pf ppf "CAMLprim value caml_wire_%s_check(value v_buf) {@\n" lower;
+    Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
+    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
+    Fmt.pf ppf "  uint64_t r = %sValidate%s(NULL, %s_err, data, len, 0);@\n" ep
+      ep lower;
+    Fmt.pf ppf "  return Val_bool(EverParseIsSuccess(r));@\n";
+    Fmt.pf ppf "}@\n@\n"
+  end
+  else begin
+    (* Parameterized stub *)
+    let n_args = 1 + List.length input_params + List.length output_params in
+    let arg_names =
+      "v_buf"
+      :: List.map
+           (fun (p : Wire.param) -> "v_" ^ Wire.param_name p)
+           input_params
+      @ List.map
+          (fun (p : Wire.param) -> "v_" ^ Wire.param_name p)
+          output_params
+    in
+    (* OCaml function signature *)
+    if n_args <= 5 then begin
+      Fmt.pf ppf "CAMLprim value caml_wire_%s_check(%s) {@\n" lower
+        (String.concat ", " (List.map (fun a -> "value " ^ a) arg_names))
+    end
+    else begin
+      Fmt.pf ppf
+        "CAMLprim value caml_wire_%s_check_bytecode(value *argv, int argn) {@\n"
+        lower;
+      Fmt.pf ppf "  (void)argn;@\n";
+      List.iteri
+        (fun i a -> Fmt.pf ppf "  value %s = argv[%d];@\n" a i)
+        arg_names;
+      Fmt.pf ppf "@\n"
+    end;
+    Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
+    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
+    (* Declare locals for input params *)
+    List.iter
+      (fun p ->
+        let n = Wire.param_name p in
+        Fmt.pf ppf "  %s %s_val = Int_val(v_%s);@\n" (Wire.param_c_type p) n n)
+      input_params;
+    (* Declare locals for output params *)
+    List.iter
+      (fun p ->
+        let n = Wire.param_name p in
+        Fmt.pf ppf "  %s %s_val = 0;@\n" (Wire.param_c_type p) n)
+      output_params;
+    (* Call validator: input params as values, output params as pointers *)
+    let param_args =
+      List.map (fun p -> Wire.param_name p ^ "_val") input_params
+      @ List.map (fun p -> "&" ^ Wire.param_name p ^ "_val") output_params
+    in
+    let all_args =
+      param_args @ [ "NULL"; lower ^ "_err"; "data"; "len"; "0" ]
+    in
+    Fmt.pf ppf "  uint64_t r = %sValidate%s(%s);@\n" ep ep
+      (String.concat ", " all_args);
+    (* Write output params back to OCaml *)
+    List.iter
+      (fun p ->
+        let n = Wire.param_name p in
+        Fmt.pf ppf "  Store_field(v_%s, 0, Val_int(%s_val));@\n" n n)
+      output_params;
+    Fmt.pf ppf "  return Val_bool(EverParseIsSuccess(r));@\n";
+    Fmt.pf ppf "}@\n@\n"
+  end
 
 (** Generate C FFI stubs that call EverParse-generated validators.
 
@@ -99,8 +174,33 @@ let to_ml_stubs (structs : Wire.C.struct_ list) =
   List.iter
     (fun (s : Wire.C.struct_) ->
       let lower = String.lowercase_ascii (Wire.C.struct_name s) in
-      Fmt.pf ppf "external %s_check : bytes -> bool@\n" lower;
-      Fmt.pf ppf "  = \"caml_wire_%s_check\" [@@@@noalloc]@\n@\n" lower)
+      let params = Wire.C.struct_params s in
+      let input_params =
+        List.filter
+          (fun (p : Wire.param) -> not (Wire.param_is_mutable p))
+          params
+      in
+      let output_params =
+        List.filter (fun (p : Wire.param) -> Wire.param_is_mutable p) params
+      in
+      if params = [] then begin
+        Fmt.pf ppf "external %s_check : bytes -> bool@\n" lower;
+        Fmt.pf ppf "  = \"caml_wire_%s_check\" [@@@@noalloc]@\n@\n" lower
+      end
+      else begin
+        (* Type: bytes -> int -> ... -> int -> int array -> ... -> bool *)
+        let input_types = List.map (fun _ -> "int") input_params in
+        let output_types = List.map (fun _ -> "int array") output_params in
+        let all_types = ("bytes" :: input_types) @ output_types @ [ "bool" ] in
+        let n_args = List.length all_types - 1 in
+        Fmt.pf ppf "external %s_check : %s@\n" lower
+          (String.concat " -> " all_types);
+        if n_args > 5 then
+          Fmt.pf ppf
+            "  = \"caml_wire_%s_check_bytecode\" \"caml_wire_%s_check\"@\n@\n"
+            lower lower
+        else Fmt.pf ppf "  = \"caml_wire_%s_check\"@\n@\n" lower
+      end)
     structs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf

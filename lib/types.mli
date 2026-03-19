@@ -501,6 +501,10 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
 val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)
 
+val c_type_of : 'a typ -> string
+(** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).
+*)
+
 val ml_type_of : 'a typ -> string
 (** [ml_type_of typ] returns the OCaml type name for FFI stub generation:
     ["int"] for integer types that fit in OCaml [int], ["int64"] for uint64. *)

@@ -1,0 +1,23 @@
+typedef struct _BF
+{
+   UINT32 x : 6;
+   UINT32 y : 10 { (y <= 900) };
+   UINT32 z : 16 { ((y + z) <= 60000) };
+} BF;
+
+entrypoint
+typedef struct _BF2(mutable UINT32 *outx)
+{
+   BF x {:on-success *outx = x;
+   return true; };
+} BF2;
+
+typedef struct _BF3
+{
+   UINT8 a;
+   UINT32 x : 6 { (x == 0) };
+   UINT32 y : 10;
+   UINT32 z : 16;
+} BF3;
+
+

@@ -1,0 +1,8 @@
+entrypoint
+typedef struct _Bitfield8
+{
+   UINT8 Tag : 3;
+   UINT8 Value : 5;
+} Bitfield8;
+
+

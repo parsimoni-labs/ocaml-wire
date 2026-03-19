@@ -12,13 +12,13 @@ bench-demo:
 	BUILD_EVERPARSE=1 dune exec --profile=release bench/demo/bench.exe
 
 bench-routing:
-	dune exec --profile=release bench/routing/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=release bench/routing/bench.exe
 
 bench-gateway:
-	dune exec --profile=release bench/gateway/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=release bench/gateway/bench.exe
 
 bench-clcw:
-	dune exec --profile=release bench/clcw/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
 
 PROF_EXE ?= bench/clcw/bench.exe
 

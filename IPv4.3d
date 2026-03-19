@@ -1,0 +1,20 @@
+entrypoint
+typedef struct _IPv4
+{
+   UINT8 Version : 4;
+   UINT8 IHL : 4;
+   UINT8 DSCP : 6;
+   UINT8 ECN : 2;
+   UINT16BE TotalLength;
+   UINT16BE Identification;
+   UINT16BE Flags : 3;
+   UINT16BE FragmentOffset : 13;
+   UINT8 TTL;
+   UINT8 Protocol;
+   UINT16BE HeaderChecksum;
+   UINT32BE SrcAddr;
+   UINT32BE DstAddr;
+   UINT8 Payload[:byte-size 20];
+} IPv4;
+
+

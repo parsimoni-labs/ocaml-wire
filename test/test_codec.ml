@@ -831,6 +831,35 @@ let test_c_stubs () =
     "contains error handler" true
     (contains ~sub:"simpleheader_err" stubs)
 
+let test_c_stubs_with_params () =
+  let s =
+    param_struct "Bounded"
+      [
+        Wire.C.param "max_len" uint16be; Wire.C.mutable_param "out_len" uint16be;
+      ]
+      [ field "Length" uint16be ]
+  in
+  let c_stubs = Wire_c.to_c_stubs [ s ] in
+  Alcotest.(check bool)
+    "contains param check stub" true
+    (contains ~sub:"caml_wire_bounded_check" c_stubs);
+  Alcotest.(check bool)
+    "contains max_len local" true
+    (contains ~sub:"max_len_val" c_stubs);
+  Alcotest.(check bool)
+    "contains out_len local" true
+    (contains ~sub:"out_len_val" c_stubs);
+  Alcotest.(check bool)
+    "contains Store_field for output" true
+    (contains ~sub:"Store_field" c_stubs);
+  let ml_stubs = Wire_c.to_ml_stubs [ s ] in
+  Alcotest.(check bool)
+    "contains int param type" true
+    (contains ~sub:"int ->" ml_stubs);
+  Alcotest.(check bool)
+    "contains int array output type" true
+    (contains ~sub:"int array" ml_stubs)
+
 (* ── Dependent-size byte_slice tests ── *)
 
 type dep_slice_record = { ds_length : int; ds_payload : Bs.t }
@@ -1309,6 +1338,8 @@ let suite =
       Alcotest.test_case "raw: with offset" `Quick test_raw_with_offset;
       (* ffi stubs *)
       Alcotest.test_case "ffi: c_stubs" `Quick test_c_stubs;
+      Alcotest.test_case "ffi: c_stubs with params" `Quick
+        test_c_stubs_with_params;
       (* dependent-size byte_slice *)
       Alcotest.test_case "dep: byte_slice decode empty" `Quick
         test_dep_bslice_decode_empty;

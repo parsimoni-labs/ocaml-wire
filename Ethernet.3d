@@ -1,0 +1,10 @@
+entrypoint
+typedef struct _Ethernet
+{
+   UINT8 DstMAC[:byte-size 6];
+   UINT8 SrcMAC[:byte-size 6];
+   UINT16BE EtherType;
+   UINT8 Payload[:byte-size 40];
+} Ethernet;
+
+

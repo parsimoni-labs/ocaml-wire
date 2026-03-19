@@ -1,0 +1,13 @@
+entrypoint
+typedef struct _SpacePacket
+{
+   UINT16BE Version : 3;
+   UINT16BE Type : 1;
+   UINT16BE SecHdrFlag : 1;
+   UINT16BE APID : 11;
+   UINT16BE SeqFlags : 2;
+   UINT16BE SeqCount : 14;
+   UINT16BE DataLength;
+} SpacePacket;
+
+

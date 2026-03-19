@@ -1,0 +1,21 @@
+UINT8 enum Enum8 {
+                    Enum8_1 = 0,
+                    Enum8_2 = 1,
+                    Enum8_3 = 2
+}
+
+UINT32 enum Enum32 {
+                      Enum32_0 = 0,
+                      Enum32_1 = 1,
+                      Enum32_2 = 2,
+                      Enum32_Next = 100
+}
+
+entrypoint
+typedef struct _Dummy
+{
+   Enum8 e_8;
+   Enum32 e_32;
+} Dummy;
+
+

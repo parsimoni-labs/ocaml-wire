@@ -12,6 +12,13 @@ include Types
 type bitfield = U8 | U16 | U16be | U32 | U32be
 type param = Types.param
 
+let param_name (p : param) = p.param_name
+let param_is_mutable (p : param) = p.mutable_
+
+let param_c_type (p : param) =
+  let (Types.Pack_typ t) = p.param_typ in
+  Types.c_type_of t
+
 let field_ref = Types.ref
 let map ~decode ~encode inner = Types.map decode encode inner
 let bool = Types.bool
@@ -750,4 +757,5 @@ module Private = struct
   module Eval = Eval
 
   let ml_type_of = Types.ml_type_of
+  let c_type_of = Types.c_type_of
 end

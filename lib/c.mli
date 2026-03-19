@@ -83,6 +83,9 @@ val struct_ : string -> field list -> struct_
 val struct_name : struct_ -> string
 (** Return the struct name. *)
 
+val struct_params : struct_ -> Types.param list
+(** Return the formal parameters (empty for non-parameterised structs). *)
+
 val struct_typ : struct_ -> unit Types.typ
 (** Return the struct as a type. *)
 

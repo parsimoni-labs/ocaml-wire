@@ -631,6 +631,13 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Map { inner; _ } -> field_wire_size inner
   | _ -> None
 
+let c_type_of : type a. a typ -> string = function
+  | Uint8 | Bits { base = BF_U8; _ } -> "uint8_t"
+  | Uint16 _ | Bits { base = BF_U16 _; _ } -> "uint16_t"
+  | Uint32 _ | Uint63 _ | Bits { base = BF_U32 _; _ } -> "uint32_t"
+  | Uint64 _ -> "uint64_t"
+  | _ -> "uint32_t"
+
 let ml_type_of : type a. a typ -> string = function
   | Uint8 | Uint16 _ | Bits _ -> "int"
   | Uint32 _ | Uint63 _ -> "int"
