@@ -13,10 +13,10 @@
 
       (* 2. Build a codec *)
       let codec =
-        Codec.v "Header" (fun version length -> { version; length })
-        |+ f_version (fun h -> h.version)
-        |+ f_length (fun h -> h.length)
-        |> Codec.seal
+        Codec.v "Header"
+          (fun version length -> { version; length })
+          Codec.
+            [ (f_version $ fun h -> h.version); (f_length $ fun h -> h.length) ]
 
       (* 3. Use it *)
       let buf = Bytes.create (Codec.wire_size codec)
@@ -518,59 +518,31 @@ val encode_to_string : 'a typ -> 'a -> string
     wire-size, and field access. {!C.schema} projects it to EverParse 3D. *)
 
 module Codec : sig
-  type ('a, 'r) field
-  (** Description of one typed field in a record codec. *)
-
   type 'r t
   (** Sealed codec for record values of type ['r]. *)
 
-  (** {2 Builder API}
-
-      The recommended way to build codecs:
-      {[
-        let codec =
-          Codec.v "Packet" (fun version length -> { version; length })
-          |+ f_version (fun p -> p.version)
-          |+ f_length (fun p -> p.length)
-          |> Codec.seal
-      ]} *)
-
-  type ('f, 'r) builder
-  (** A codec under construction. *)
-
-  val v : string -> ?where:bool expr -> 'f -> ('f, 'r) builder
-  (** [v name constructor] starts building a codec. *)
-
-  val ( |+ ) :
-    ('a -> 'f, 'r) builder -> 'a Field.t -> ('r -> 'a) -> ('f, 'r) builder
-  (** [b |+ field getter] adds a field to the codec being built. *)
-
-  val seal : ('r, 'r) builder -> 'r t
-  (** [seal b] finalises the codec when all constructor args are consumed. *)
-
-  (** {2 Inline field shorthand}
-
-      When fields don't need to be referenced elsewhere, [field] creates and
-      binds in one step. Use with [view] and the heterogeneous list syntax. *)
+  type ('a, 'r) field
+  (** A field bound to a record projection. *)
 
   type ('f, 'r) fields =
     | [] : ('r, 'r) fields
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-  val bind : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
-  (** [bind f proj] binds a {!Field.t} to a record projection. *)
+  val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
+  (** [f $ proj] binds a {!Field.t} to a record projection. *)
 
-  val field :
-    string ->
-    ?constraint_:bool expr ->
-    ?action:Action.t ->
-    'a typ ->
-    ('r -> 'a) ->
-    ('a, 'r) field
-  (** [field name typ proj] is [bind (Field.v name typ) proj]. *)
+  val v : string -> ?where:bool expr -> 'f -> ('f, 'r) fields -> 'r t
+  (** [v name constructor fields] seals a codec.
 
-  val view : string -> ?where:bool expr -> 'f -> ('f, 'r) fields -> 'r t
-  (** [view name constructor fields] seals a codec from a field list. *)
+      {[
+        let codec =
+          Codec.v "Packet"
+            (fun version length -> { version; length })
+            Codec.
+              [
+                (f_version $ fun p -> p.version); (f_length $ fun p -> p.length);
+              ]
+      ]} *)
 
   val wire_size : 'r t -> int
   (** Fixed wire size of the codec.
@@ -607,7 +579,7 @@ module Codec : sig
       writes. *)
 
   val field_ref : ('a, 'r) field -> int expr
-  (** Field reference expression, used in dependent sizes and constraints. *)
+  (** Field reference expression from a bound field handle. *)
 end
 
 (** {1 Export}

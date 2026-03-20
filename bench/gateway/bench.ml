@@ -10,6 +10,11 @@ let cadu_size = 1115
 let tm_hdr = Wire.Codec.wire_size Space.tm_frame_codec
 let data_field_size = cadu_size - tm_hdr
 let sp_hdr = Wire.Codec.wire_size Space.packet_codec
+let cf_tf_vcid = Space.bf_tf_vcid
+let cf_tf_first_hdr = Space.bf_tf_first_hdr
+let cf_sp_apid = Space.bf_sp_apid
+let cf_sp_seq_count = Space.bf_sp_seq_count
+let cf_sp_data_len = Space.bf_sp_data_len
 
 let generate_frames n =
   let buf = Bytes.create (n * cadu_size) in
@@ -18,20 +23,16 @@ let generate_frames n =
   let pkt_payload = 64 in
   let pkt_size = sp_hdr + pkt_payload in
   (* Use Wire Codec.set for frame headers *)
-  let set_vcid =
-    Wire.Staged.unstage (C.set Space.tm_frame_codec Space.f_tf_vcid)
-  in
+  let set_vcid = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_vcid) in
   let set_fhp =
-    Wire.Staged.unstage (C.set Space.tm_frame_codec Space.f_tf_first_hdr)
+    Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_first_hdr)
   in
-  let set_apid =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_apid)
-  in
+  let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid) in
   let set_seq =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_seq_count)
+    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
   in
   let set_dlen =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_data_len)
+    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
   in
   for frame = 0 to n - 1 do
     let base = frame * cadu_size in
@@ -56,6 +57,7 @@ let generate_frames n =
   (buf, !total_pkts)
 
 let () =
+  Memtrace.trace_if_requested ~context:"gateway" ();
   let n = 1_000_000 in
   let buf, total_pkts = generate_frames n in
   Fmt.pr
@@ -64,17 +66,13 @@ let () =
 
   let pkt_payload = 64 in
   let pkt_size = sp_hdr + pkt_payload in
-  let get_vcid =
-    Wire.Staged.unstage (C.get Space.tm_frame_codec Space.f_tf_vcid)
-  in
+  let get_vcid = Wire.Staged.unstage (C.get Space.tm_frame_codec cf_tf_vcid) in
   let get_fhp =
-    Wire.Staged.unstage (C.get Space.tm_frame_codec Space.f_tf_first_hdr)
+    Wire.Staged.unstage (C.get Space.tm_frame_codec cf_tf_first_hdr)
   in
-  let get_apid =
-    Wire.Staged.unstage (C.get Space.packet_codec Space.f_sp_apid)
-  in
+  let get_apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid) in
   let get_seq =
-    Wire.Staged.unstage (C.get Space.packet_codec Space.f_sp_seq_count)
+    Wire.Staged.unstage (C.get Space.packet_codec cf_sp_seq_count)
   in
 
   (* OCaml tier: process one frame, cycling through the buffer *)

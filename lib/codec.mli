@@ -1,46 +1,20 @@
 (** Zero-copy record codecs for binary wire formats. *)
 
 type ('a, 'r) field
-(** Description of one typed field in a record codec. *)
+(** A field bound to a record projection. *)
 
 type 'r t
 (** A sealed record codec for type ['r]. *)
-
-(** {1 Builder API} *)
-
-type ('f, 'r) builder
-(** A codec under construction. ['f] tracks the remaining constructor args. *)
-
-val v : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) builder
-(** [v name constructor] starts building a codec. *)
-
-val ( |+ ) :
-  ('a -> 'f, 'r) builder -> 'a Field.t -> ('r -> 'a) -> ('f, 'r) builder
-(** [b |+ field getter] adds a field to the codec being built. *)
-
-val seal : ('r, 'r) builder -> 'r t
-(** [seal b] finalises the codec when all constructor args are consumed. *)
-
-(** {1 List API} *)
 
 type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-val bind : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
-(** [bind f proj] binds a field to a record projection. *)
+val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
+(** [f $ proj] binds a field to a record projection. *)
 
-val field :
-  string ->
-  ?constraint_:bool Types.expr ->
-  ?action:Types.action ->
-  'a Types.typ ->
-  ('r -> 'a) ->
-  ('a, 'r) field
-(** [field name typ proj] is [bind (Field.v name typ) proj]. *)
-
-val view : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) fields -> 'r t
-(** [view name constructor fields] seals a codec from a field list. *)
+val v : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) fields -> 'r t
+(** [v name constructor fields] seals a codec from a field list. *)
 
 val wire_size : 'r t -> int
 (** Fixed wire size in bytes. Raises if variable-length. *)

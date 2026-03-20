@@ -11,6 +11,29 @@ open Wire
 open Bench_lib
 module Slice = Bytesrw.Bytes.Slice
 
+(* ── Bound fields ── *)
+
+let cf_minimal_value = Codec.(Demo.f_minimal_value $ fun m -> m.Demo.m_value)
+let cf_bf8_value = Codec.(Demo.f_bf8_value $ fun b -> b.Demo.bf8_value)
+let cf_bf16_id = Codec.(Demo.f_bf16_id $ fun b -> b.Demo.bf16_id)
+let cf_bool_active = Codec.(Demo.f_bool_active $ fun b -> b.Demo.bl_active)
+let cf_bf32_pri = Codec.(Demo.f_bf32_pri $ fun b -> b.Demo.bf32_pri)
+let cf_ints_u64be = Codec.(Demo.f_ints_u64be $ fun a -> a.Demo.ai_u64be)
+
+let cf_mixed_timestamp =
+  Codec.(Demo.f_mixed_timestamp $ fun l -> l.Demo.lg_timestamp)
+
+let cf_mp_priority = Codec.(Demo.f_mp_priority $ fun m -> m.Demo.mp_priority)
+let cf_cd_type = Codec.(Demo.f_cd_type $ fun c -> c.Demo.cd_type)
+let cf_en_status = Codec.(Demo.f_en_status $ fun e -> e.Demo.en_status)
+let cf_co_data = Codec.(Demo.f_co_data $ fun c -> c.Demo.co_data)
+let cf_cw_report = Space.bf_cw_report
+let cf_ip_src = Codec.(Net.f_ip_src $ fun p -> p.Net.ip_src)
+let cf_tcp_dst_port = Codec.(Net.f_tcp_dst_port $ fun t -> t.Net.tcp_dst_port)
+let cf_tcp_syn = Codec.(Net.f_tcp_syn $ fun t -> t.Net.tcp_syn)
+let cf_tcp_src_port = Codec.(Net.f_tcp_src_port $ fun t -> t.Net.tcp_src_port)
+let cf_eth_payload = Codec.(Net.f_eth_payload $ fun e -> e.Net.eth_payload)
+let cf_ip_payload = Codec.(Net.f_ip_payload $ fun p -> p.Net.ip_payload)
 let n_data = 1024
 
 (* ── Contiguous test data ── *)
@@ -41,68 +64,50 @@ let tcp_buf = (Net.tcp_frame_data 1).(0)
 
 let ip_off =
   Slice.first
-    ((Staged.unstage (Codec.get Net.ethernet_codec Net.f_eth_payload))
-       tcp_buf 0)
+    ((Staged.unstage (Codec.get Net.ethernet_codec cf_eth_payload)) tcp_buf 0)
 
 let tcp_off =
   Slice.first
-    ((Staged.unstage (Codec.get Net.ipv4_codec Net.f_ip_payload))
-       tcp_buf ip_off)
+    ((Staged.unstage (Codec.get Net.ipv4_codec cf_ip_payload)) tcp_buf ip_off)
 
 let ipv4_only_buf = Bytes.sub tcp_buf 14 Net.ipv4_size
 let tcp_only_buf = Bytes.sub tcp_buf 34 Net.tcp_size
 
 (* ── Pre-staged accessors ── *)
 
-let get_minimal =
-  Staged.unstage (Codec.get Demo.minimal_codec Demo.f_minimal_value)
-
-let read_bf8 = Staged.unstage (Codec.get Demo.bf8_codec Demo.f_bf8_value)
-let read_bf16 = Staged.unstage (Codec.get Demo.bf16_codec Demo.f_bf16_id)
-
-let read_bool =
-  Staged.unstage (Codec.get Demo.bool_fields_codec Demo.f_bool_active)
-
-let read_bf32 = Staged.unstage (Codec.get Demo.bf32_codec Demo.f_bf32_pri)
-
-let read_u64be =
-  Staged.unstage (Codec.get Demo.all_ints_codec Demo.f_ints_u64be)
+let get_minimal = Staged.unstage (Codec.get Demo.minimal_codec cf_minimal_value)
+let read_bf8 = Staged.unstage (Codec.get Demo.bf8_codec cf_bf8_value)
+let read_bf16 = Staged.unstage (Codec.get Demo.bf16_codec cf_bf16_id)
+let read_bool = Staged.unstage (Codec.get Demo.bool_fields_codec cf_bool_active)
+let read_bf32 = Staged.unstage (Codec.get Demo.bf32_codec cf_bf32_pri)
+let read_u64be = Staged.unstage (Codec.get Demo.all_ints_codec cf_ints_u64be)
 
 let read_mixed =
-  Staged.unstage (Codec.get Demo.large_mixed_codec Demo.f_mixed_timestamp)
+  Staged.unstage (Codec.get Demo.large_mixed_codec cf_mixed_timestamp)
 
-let read_clcw = Staged.unstage (Codec.get Space.clcw_codec Space.cw_report)
-let read_ip_src = Staged.unstage (Codec.get Net.ipv4_codec Net.f_ip_src)
-let read_tcp_port = Staged.unstage (Codec.get Net.tcp_codec Net.f_tcp_dst_port)
-let read_tcp_syn = Staged.unstage (Codec.get Net.tcp_codec Net.f_tcp_syn)
-
-let read_mapped =
-  Staged.unstage (Codec.get Demo.mapped_codec Demo.f_mp_priority)
-
-let read_cases = Staged.unstage (Codec.get Demo.cases_demo_codec Demo.f_cd_type)
-let read_enum = Staged.unstage (Codec.get Demo.enum_demo_codec Demo.f_en_status)
+let read_clcw = Staged.unstage (Codec.get Space.clcw_codec cf_cw_report)
+let read_ip_src = Staged.unstage (Codec.get Net.ipv4_codec cf_ip_src)
+let read_tcp_port = Staged.unstage (Codec.get Net.tcp_codec cf_tcp_dst_port)
+let read_tcp_syn = Staged.unstage (Codec.get Net.tcp_codec cf_tcp_syn)
+let read_mapped = Staged.unstage (Codec.get Demo.mapped_codec cf_mp_priority)
+let read_cases = Staged.unstage (Codec.get Demo.cases_demo_codec cf_cd_type)
+let read_enum = Staged.unstage (Codec.get Demo.enum_demo_codec cf_en_status)
 
 let read_constrained =
-  Staged.unstage (Codec.get Demo.constrained_codec Demo.f_co_data)
+  Staged.unstage (Codec.get Demo.constrained_codec cf_co_data)
 
 let read_eth_payload =
-  Staged.unstage (Codec.get Net.ethernet_codec Net.f_eth_payload)
+  Staged.unstage (Codec.get Net.ethernet_codec cf_eth_payload)
 
-let read_ip_payload = Staged.unstage (Codec.get Net.ipv4_codec Net.f_ip_payload)
-
-let set_minimal =
-  Staged.unstage (Codec.set Demo.minimal_codec Demo.f_minimal_value)
-
-let set_bf8 = Staged.unstage (Codec.set Demo.bf8_codec Demo.f_bf8_value)
-
-let set_bool =
-  Staged.unstage (Codec.set Demo.bool_fields_codec Demo.f_bool_active)
-
-let set_clcw = Staged.unstage (Codec.set Space.clcw_codec Space.cw_report)
-let set_tcp_port = Staged.unstage (Codec.set Net.tcp_codec Net.f_tcp_dst_port)
-let set_tcp_syn = Staged.unstage (Codec.set Net.tcp_codec Net.f_tcp_syn)
-let set_mapped = Staged.unstage (Codec.set Demo.mapped_codec Demo.f_mp_priority)
-let set_cases = Staged.unstage (Codec.set Demo.cases_demo_codec Demo.f_cd_type)
+let read_ip_payload = Staged.unstage (Codec.get Net.ipv4_codec cf_ip_payload)
+let set_minimal = Staged.unstage (Codec.set Demo.minimal_codec cf_minimal_value)
+let set_bf8 = Staged.unstage (Codec.set Demo.bf8_codec cf_bf8_value)
+let set_bool = Staged.unstage (Codec.set Demo.bool_fields_codec cf_bool_active)
+let set_clcw = Staged.unstage (Codec.set Space.clcw_codec cf_cw_report)
+let set_tcp_port = Staged.unstage (Codec.set Net.tcp_codec cf_tcp_dst_port)
+let set_tcp_syn = Staged.unstage (Codec.set Net.tcp_codec cf_tcp_syn)
+let set_mapped = Staged.unstage (Codec.set Demo.mapped_codec cf_mp_priority)
+let set_cases = Staged.unstage (Codec.set Demo.cases_demo_codec cf_cd_type)
 
 (* ── Benchmark helpers ── *)
 
@@ -116,6 +121,7 @@ let rd ~label ~size ~data ?(n_items = n_items) ~c_loop ~ffi_check read_fn =
 (* ── Main ── *)
 
 let () =
+  Memtrace.trace_if_requested ~context:"demo" ();
   let n =
     if Array.length Sys.argv > 1 then int_of_string Sys.argv.(1) else 10_000_000
   in

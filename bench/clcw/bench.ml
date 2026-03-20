@@ -8,12 +8,14 @@ module C = Wire.Codec
 
 let n_words = 10_000_000
 let word_size = Wire.Codec.wire_size Space.clcw_codec
+let cf_report = Space.bf_cw_report
+let cf_lockout = Space.bf_cw_lockout
+let cf_wait = Space.bf_cw_wait
+let cf_retransmit = Space.bf_cw_retransmit
 
 let generate_stream n =
   let buf = Bytes.create (n * word_size) in
-  let set_report =
-    Wire.Staged.unstage (C.set Space.clcw_codec Space.cw_report)
-  in
+  let set_report = Wire.Staged.unstage (C.set Space.clcw_codec cf_report) in
   for i = 0 to n - 1 do
     let off = i * word_size in
     Wire.Codec.encode Space.clcw_codec Space.clcw_default buf off;
@@ -22,20 +24,17 @@ let generate_stream n =
   buf
 
 let () =
+  Memtrace.trace_if_requested ~context:"clcw" ();
   let buf = generate_stream n_words in
   Fmt.pr "CLCW polling loop (%d words, %dB each, contiguous buffer)\n\n" n_words
     word_size;
 
-  let get_lockout =
-    Wire.Staged.unstage (C.get Space.clcw_codec Space.cw_lockout)
-  in
-  let get_wait = Wire.Staged.unstage (C.get Space.clcw_codec Space.cw_wait) in
+  let get_lockout = Wire.Staged.unstage (C.get Space.clcw_codec cf_lockout) in
+  let get_wait = Wire.Staged.unstage (C.get Space.clcw_codec cf_wait) in
   let get_retransmit =
-    Wire.Staged.unstage (C.get Space.clcw_codec Space.cw_retransmit)
+    Wire.Staged.unstage (C.get Space.clcw_codec cf_retransmit)
   in
-  let get_report =
-    Wire.Staged.unstage (C.get Space.clcw_codec Space.cw_report)
-  in
+  let get_report = Wire.Staged.unstage (C.get Space.clcw_codec cf_report) in
 
   let anomalies = ref 0 in
   let expected_seq = ref 0 in

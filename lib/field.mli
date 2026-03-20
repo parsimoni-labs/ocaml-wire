@@ -38,6 +38,18 @@ val constraint_ : 'a t -> bool Types.expr option
 val action : 'a t -> Types.action option
 (** Field action, if any. *)
 
+val set_reader : 'a t -> (bytes -> int -> 'a) -> unit
+(** Set the staged reader (called by Codec during seal). *)
+
+val set_writer : 'a t -> (bytes -> int -> 'a -> unit) -> unit
+(** Set the staged writer (called by Codec during seal). *)
+
+val get_reader : 'a t -> (bytes -> int -> 'a) option
+(** Get the staged reader, if set. *)
+
+val get_writer : 'a t -> (bytes -> int -> 'a -> unit) option
+(** Get the staged writer, if set. *)
+
 type packed =
   | Named : 'a t -> packed
   | Anon : 'a anon -> packed

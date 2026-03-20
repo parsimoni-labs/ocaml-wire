@@ -2,10 +2,12 @@
 
 open Wire
 
+let f_diff_version = Field.v "Version" uint8
+let f_diff_length = Field.v "Length" uint16be
+
 let simple_codec =
-  Codec.view "Simple"
-    (fun v l -> (v, l))
-    Codec.[ Codec.field "Version" uint8 fst; Codec.field "Length" uint16be snd ]
+  let open Codec in
+  v "Simple" (fun v l -> (v, l)) [ f_diff_version $ fst; f_diff_length $ snd ]
 
 (* Mock C functions that behave identically to OCaml *)
 let mock_c_read buf =

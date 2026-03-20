@@ -1,4 +1,5 @@
-.PHONY: build test bench bench-demo bench-routing bench-gateway bench-clcw prof memtrace clean
+.PHONY: build test bench bench-demo bench-routing bench-gateway bench-clcw \
+       prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw clean
 
 build:
 	dune build
@@ -28,9 +29,23 @@ prof:
 		--launch -- _build/default/$(PROF_EXE)
 	@echo "Profile written to prof.trace — open with: open prof.trace"
 
-memtrace:
-	MEMTRACE=trace.ctf dune exec --profile=release bench/memtrace/bench.exe
-	memtrace_hotspots trace.ctf
+memtrace: memtrace-routing memtrace-gateway memtrace-clcw
+
+memtrace-demo:
+	BUILD_EVERPARSE=1 MEMTRACE=demo.ctf dune exec --profile=release bench/demo/bench.exe
+	memtrace_hotspots demo.ctf
+
+memtrace-routing:
+	MEMTRACE=routing.ctf dune exec --profile=release bench/routing/bench.exe
+	memtrace_hotspots routing.ctf
+
+memtrace-gateway:
+	MEMTRACE=gateway.ctf dune exec --profile=release bench/gateway/bench.exe
+	memtrace_hotspots gateway.ctf
+
+memtrace-clcw:
+	MEMTRACE=clcw.ctf dune exec --profile=release bench/clcw/bench.exe
+	memtrace_hotspots clcw.ctf
 
 clean:
 	dune clean

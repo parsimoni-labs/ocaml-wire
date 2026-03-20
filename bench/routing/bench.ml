@@ -6,6 +6,10 @@
 open Bench_lib
 module C = Wire.Codec
 
+let cf_sp_apid = Space.bf_sp_apid
+let cf_sp_seq_count = Space.bf_sp_seq_count
+let cf_sp_data_len = Space.bf_sp_data_len
+
 let apid_of_index i =
   let r = i mod 100 in
   if r < 40 then i mod 256
@@ -29,14 +33,12 @@ let generate_stream n =
   let buf = Bytes.create !total in
   let off = ref 0 in
   let payload_total = ref 0 in
-  let set_apid =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_apid)
-  in
+  let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid) in
   let set_seq =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_seq_count)
+    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
   in
   let set_dlen =
-    Wire.Staged.unstage (C.set Space.packet_codec Space.f_sp_data_len)
+    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
   in
   for i = 0 to n - 1 do
     let apid = apid_of_index i in
@@ -63,6 +65,7 @@ let[@inline] dispatch handler_id =
   handler_counts.(handler_id) <- handler_counts.(handler_id) + 1
 
 let () =
+  Memtrace.trace_if_requested ~context:"routing" ();
   let n_pkts = 10_000_000 in
   let buf, total_bytes, payload_bytes = generate_stream n_pkts in
   let hdr = Wire.Codec.wire_size Space.packet_codec in
@@ -70,14 +73,12 @@ let () =
     (total_bytes / 1_000_000)
     (payload_bytes / 1_000_000);
 
-  let get_apid =
-    Wire.Staged.unstage (C.get Space.packet_codec Space.f_sp_apid)
-  in
+  let get_apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid) in
   let get_seq =
-    Wire.Staged.unstage (C.get Space.packet_codec Space.f_sp_seq_count)
+    Wire.Staged.unstage (C.get Space.packet_codec cf_sp_seq_count)
   in
   let get_dlen =
-    Wire.Staged.unstage (C.get Space.packet_codec Space.f_sp_data_len)
+    Wire.Staged.unstage (C.get Space.packet_codec cf_sp_data_len)
   in
 
   (* OCaml tier: route one packet at a time, cycling through the stream *)

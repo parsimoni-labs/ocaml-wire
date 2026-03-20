@@ -52,17 +52,10 @@ let test_input_param_constraint () =
   let limit = Param.input "limit" uint8 in
   let _limit_expr = Param.init limit 10 in
   let f_x = Field.v "x" uint8 in
-  let c =
-    Codec.view "Bounded"
-      (fun x -> { x })
-      Codec.
-        [
-          Codec.field "x"
-            ~constraint_:Expr.(Field.ref f_x <= Param.expr limit)
-            uint8
-            (fun r -> r.x);
-        ]
+  let cf_x =
+    Field.v "x" ~constraint_:Expr.(Field.ref f_x <= Param.expr limit) uint8
   in
+  let c = Codec.v "Bounded" (fun x -> { x }) Codec.[ (cf_x $ fun r -> r.x) ] in
   (* limit=10, x=5: passes *)
   let buf = Bytes.of_string "\x05" in
   (match Codec.decode c buf 0 with
@@ -80,17 +73,12 @@ let test_input_param_constraint () =
 let test_output_param_action () =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
-  let c =
-    Codec.view "Writer"
-      (fun x -> { x })
-      Codec.
-        [
-          Codec.field "x"
-            ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
-            uint8
-            (fun r -> r.x);
-        ]
+  let cf_x =
+    Field.v "x"
+      ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
+      uint8
   in
+  let c = Codec.v "Writer" (fun x -> { x }) Codec.[ (cf_x $ fun r -> r.x) ] in
   let buf = Bytes.of_string "\x2A" in
   match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 42 (Param.get out)
@@ -99,19 +87,13 @@ let test_output_param_action () =
 let test_output_param_computed () =
   let out = Param.output "out" uint16be in
   let f_x = Field.v "x" uint8 in
-  let c =
-    Codec.view "Computed"
-      (fun x -> { x })
-      Codec.
-        [
-          Codec.field "x"
-            ~action:
-              (Action.on_success
-                 [ Action.assign out Expr.(Field.ref f_x * int 2) ])
-            uint8
-            (fun r -> r.x);
-        ]
+  let cf_x =
+    Field.v "x"
+      ~action:
+        (Action.on_success [ Action.assign out Expr.(Field.ref f_x * int 2) ])
+      uint8
   in
+  let c = Codec.v "Computed" (fun x -> { x }) Codec.[ (cf_x $ fun r -> r.x) ] in
   let buf = Bytes.of_string "\x15" in
   match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 42 (Param.get out)
@@ -125,11 +107,12 @@ let test_where_clause_pass () =
   let max_val = Param.input "max_val" uint16be in
   let _max_val_expr = Param.init max_val 100 in
   let f_value = Field.v "value" uint16be in
+  let cf_value = Field.v "value" uint16be in
   let c =
-    Codec.view "Bounded"
+    Codec.v "Bounded"
       ~where:Expr.(Field.ref f_value <= Param.expr max_val)
       (fun value -> { bv_value = value })
-      Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
+      Codec.[ (cf_value $ fun r -> r.bv_value) ]
   in
   (* max_val=100, value=50: passes *)
   let buf = Bytes.of_string "\x00\x32" in
@@ -141,11 +124,12 @@ let test_where_clause_fail () =
   let max_val = Param.input "max_val" uint16be in
   let _max_val_expr = Param.init max_val 10 in
   let f_value = Field.v "value" uint16be in
+  let cf_value = Field.v "value" uint16be in
   let c =
-    Codec.view "Bounded"
+    Codec.v "Bounded"
       ~where:Expr.(Field.ref f_value <= Param.expr max_val)
       (fun value -> { bv_value = value })
-      Codec.[ Codec.field "value" uint16be (fun r -> r.bv_value) ]
+      Codec.[ (cf_value $ fun r -> r.bv_value) ]
   in
   (* max_val=10, value=50: where clause fails *)
   let buf = Bytes.of_string "\x00\x32" in
@@ -164,27 +148,23 @@ let test_mixed_params () =
   let out_sum = Param.output "out_sum" uint8 in
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
+  let cf_a =
+    Field.v "a"
+      ~action:(Action.on_success [ Action.assign out_sum (Field.ref f_a) ])
+      uint8
+  in
+  let cf_b =
+    Field.v "b"
+      ~action:
+        (Action.on_success
+           [ Action.assign out_sum Expr.(Param.expr out_sum + Field.ref f_b) ])
+      uint8
+  in
   let c =
-    Codec.view "Mixed"
+    Codec.v "Mixed"
       ~where:Expr.(Param.expr out_sum <= Param.expr max_val)
       (fun a b -> { a; b })
-      Codec.
-        [
-          Codec.field "a"
-            ~action:
-              (Action.on_success [ Action.assign out_sum (Field.ref f_a) ])
-            uint8
-            (fun r -> r.a);
-          Codec.field "b"
-            ~action:
-              (Action.on_success
-                 [
-                   Action.assign out_sum
-                     Expr.(Param.expr out_sum + Field.ref f_b);
-                 ])
-            uint8
-            (fun r -> r.b);
-        ]
+      Codec.[ (cf_a $ fun r -> r.a); (cf_b $ fun r -> r.b) ]
   in
   (* a=10, b=20 => out_sum=30, max_val=50 => 30 <= 50: OK *)
   let buf = Bytes.of_string "\x0A\x14" in
@@ -208,16 +188,15 @@ let param_codec =
   let _limit_expr = Param.init limit 10 in
   let outx = Param.output "outx" uint8 in
   let f_x = Field.v "x" uint8 in
-  Codec.view "ParamCodec"
+  let cf_x =
+    Field.v "x"
+      ~action:(Action.on_success [ Action.assign outx (Field.ref f_x) ])
+      uint8
+  in
+  Codec.v "ParamCodec"
     ~where:Expr.(Field.ref f_x <= Param.expr limit)
     (fun x -> { x })
-    Codec.
-      [
-        Codec.field "x"
-          ~action:(Action.on_success [ Action.assign outx (Field.ref f_x) ])
-          uint8
-          (fun r -> r.x);
-      ]
+    Codec.[ (cf_x $ fun r -> r.x) ]
 
 let test_codec_param_decode () =
   let buf = Bytes.of_string "\x05" in
@@ -233,17 +212,16 @@ let test_codec_param_where_fail () =
   let _limit_expr = Param.init limit 3 in
   let outx = Param.output "outx" uint8 in
   let f_x = Field.v "x" uint8 in
+  let cf_x =
+    Field.v "x"
+      ~action:(Action.on_success [ Action.assign outx (Field.ref f_x) ])
+      uint8
+  in
   let c =
-    Codec.view "ParamCodecFail"
+    Codec.v "ParamCodecFail"
       ~where:Expr.(Field.ref f_x <= Param.expr limit)
       (fun x -> { x })
-      Codec.
-        [
-          Codec.field "x"
-            ~action:(Action.on_success [ Action.assign outx (Field.ref f_x) ])
-            uint8
-            (fun r -> r.x);
-        ]
+      Codec.[ (cf_x $ fun r -> r.x) ]
   in
   let buf = Bytes.of_string "\x05" in
   match Codec.decode c buf 0 with

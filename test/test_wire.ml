@@ -229,22 +229,20 @@ let test_parse_param_with_params () =
   let out_len = Param.output "out_len" uint16be in
   let f_length_c = field "Length" uint16be in
   let f_length =
-    Codec.field "Length"
+    Field.v "Length"
       ~action:
         (Action.on_success [ Action.assign out_len (field_ref f_length_c) ])
       uint16be
-      (fun r -> r.bp_length)
   in
   let c =
-    Codec.view "BoundedPayload"
+    Codec.v "BoundedPayload"
       ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
-          f_length;
-          Codec.field "Data"
-            (byte_array ~size:(Codec.field_ref f_length))
-            (fun r -> r.bp_data);
+          (f_length $ fun r -> r.bp_length);
+          ( Field.v "Data" (byte_array ~size:(Field.ref f_length)) $ fun r ->
+            r.bp_data );
         ]
   in
   let buf = Bytes.of_string "\x00\x03abc" in
@@ -258,22 +256,20 @@ let test_parse_param_where_fail () =
   let out_len = Param.output "out_len" uint16be in
   let f_length_c = field "Length" uint16be in
   let f_length =
-    Codec.field "Length"
+    Field.v "Length"
       ~action:
         (Action.on_success [ Action.assign out_len (field_ref f_length_c) ])
       uint16be
-      (fun r -> r.bp_length)
   in
   let c =
-    Codec.view "BoundedPayload"
+    Codec.v "BoundedPayload"
       ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
       (fun length data -> { bp_length = length; bp_data = data })
       Codec.
         [
-          f_length;
-          Codec.field "Data"
-            (byte_array ~size:(Codec.field_ref f_length))
-            (fun r -> r.bp_data);
+          (f_length $ fun r -> r.bp_length);
+          ( Field.v "Data" (byte_array ~size:(Field.ref f_length)) $ fun r ->
+            r.bp_data );
         ]
   in
   let buf = Bytes.of_string "\x00\x03abc" in
@@ -366,16 +362,16 @@ let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
   let out = Param.output "out" uint8 in
   let c =
-    Codec.view "SizeofThisAction"
+    Codec.v "SizeofThisAction"
       (fun a b c -> { sa_a = a; sa_b = b; sa_c = c })
       Codec.
         [
-          Codec.field "a" uint8 (fun r -> r.sa_a);
-          Codec.field "b" uint16be (fun r -> r.sa_b);
-          Codec.field "c"
-            ~action:(Action.on_success [ Action.assign out sizeof_this ])
-            uint8
-            (fun r -> r.sa_c);
+          (Field.v "a" uint8 $ fun r -> r.sa_a);
+          (Field.v "b" uint16be $ fun r -> r.sa_b);
+          ( Field.v "c"
+              ~action:(Action.on_success [ Action.assign out sizeof_this ])
+              uint8
+          $ fun r -> r.sa_c );
         ]
   in
   let buf = Bytes.of_string "\x01\x00\x02\x00" in

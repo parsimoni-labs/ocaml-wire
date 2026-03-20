@@ -87,10 +87,15 @@ let run_schema (Any s) =
     done
   done
 
+let cf_report = Space.bf_cw_report
+let cf_lockout = Space.bf_cw_lockout
+let cf_wait = Space.bf_cw_wait
+let cf_retransmit = Space.bf_cw_retransmit
+
 let run_zero_copy () =
   let data = clcw_data n_values in
-  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_report) in
-  let set_report = Wire.Staged.unstage (Wire.Codec.set clcw_codec cw_report) in
+  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_report) in
+  let set_report = Wire.Staged.unstage (Wire.Codec.set clcw_codec cf_report) in
   Fmt.pr "  CLCW zero-copy get...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
@@ -114,13 +119,13 @@ let run_zero_copy () =
 let run_clcw_polling () =
   let data = clcw_data n_values in
   let get_lockout =
-    Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_lockout)
+    Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_lockout)
   in
-  let get_wait = Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_wait) in
+  let get_wait = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_wait) in
   let get_retransmit =
-    Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_retransmit)
+    Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_retransmit)
   in
-  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cw_report) in
+  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_report) in
   Fmt.pr "  CLCW polling (4 bitfield reads per word)...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do

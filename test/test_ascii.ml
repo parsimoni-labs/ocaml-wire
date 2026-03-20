@@ -82,12 +82,12 @@ let test_variable_length () =
 type simple_record = { x : int; y : int }
 
 let simple_codec =
-  Codec.view "Simple"
+  Codec.v "Simple"
     (fun x y -> { x; y })
     Codec.
       [
-        Codec.field "x" uint16be (fun r -> r.x);
-        Codec.field "y" uint16be (fun r -> r.y);
+        (Field.v "x" uint16be $ fun r -> r.x);
+        (Field.v "y" uint16be $ fun r -> r.y);
       ]
 
 let test_of_codec () =

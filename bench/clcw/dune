@@ -1,3 +1,3 @@
 (executable
  (name bench)
- (libraries space wire bench_lib c_tier unix fmt))
+ (libraries space wire bench_lib c_tier memtrace unix fmt))

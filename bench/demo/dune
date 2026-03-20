@@ -4,4 +4,4 @@
  (name bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo space net c_stubs c_tier bench_lib wire unix))
+ (libraries demo space net c_stubs c_tier bench_lib wire memtrace unix))

@@ -20,11 +20,17 @@ val ethernet_size : int
 val ethernet_payload_size : int
 (** Fixed payload size carried inside an Ethernet frame in bytes. *)
 
-val f_eth_ethertype : (int, ethernet) Wire.Codec.field
+val f_eth_ethertype : int Wire.Field.t
 (** Zero-copy field accessor for the Ethernet EtherType field. *)
 
-val f_eth_payload : (Bytesrw.Bytes.Slice.t, ethernet) Wire.Codec.field
+val f_eth_payload : Bytesrw.Bytes.Slice.t Wire.Field.t
 (** Zero-copy field accessor for the Ethernet payload byte slice. *)
+
+val bf_eth_ethertype : (int, ethernet) Wire.Codec.field
+(** Bound field handle for the Ethernet EtherType field. *)
+
+val bf_eth_payload : (Bytesrw.Bytes.Slice.t, ethernet) Wire.Codec.field
+(** Bound field handle for the Ethernet payload byte slice. *)
 
 (** {2 IPv4} *)
 
@@ -42,17 +48,29 @@ val ipv4_size : int
 val ipv4_payload_size : int
 (** Fixed payload size carried inside an IPv4 packet in bytes. *)
 
-val f_ip_protocol : (int, ipv4) Wire.Codec.field
+val f_ip_protocol : int Wire.Field.t
 (** Zero-copy field accessor for the IPv4 Protocol field. *)
 
-val f_ip_src : (int, ipv4) Wire.Codec.field
+val f_ip_src : int Wire.Field.t
 (** Zero-copy field accessor for the IPv4 source address field. *)
 
-val f_ip_dst : (int, ipv4) Wire.Codec.field
+val f_ip_dst : int Wire.Field.t
 (** Zero-copy field accessor for the IPv4 destination address field. *)
 
-val f_ip_payload : (Bytesrw.Bytes.Slice.t, ipv4) Wire.Codec.field
+val f_ip_payload : Bytesrw.Bytes.Slice.t Wire.Field.t
 (** Zero-copy field accessor for the IPv4 payload byte slice. *)
+
+val bf_ip_protocol : (int, ipv4) Wire.Codec.field
+(** Bound field handle for the IPv4 Protocol field. *)
+
+val bf_ip_src : (int, ipv4) Wire.Codec.field
+(** Bound field handle for the IPv4 source address field. *)
+
+val bf_ip_dst : (int, ipv4) Wire.Codec.field
+(** Bound field handle for the IPv4 destination address field. *)
+
+val bf_ip_payload : (Bytesrw.Bytes.Slice.t, ipv4) Wire.Codec.field
+(** Bound field handle for the IPv4 payload byte slice. *)
 
 (** {2 TCP} *)
 
@@ -67,17 +85,29 @@ val tcp_struct : Wire.C.Raw.struct_
 val tcp_size : int
 (** Wire size of a TCP header in bytes. *)
 
-val f_tcp_src_port : (int, tcp) Wire.Codec.field
+val f_tcp_src_port : int Wire.Field.t
 (** Zero-copy field accessor for the TCP source port field. *)
 
-val f_tcp_dst_port : (int, tcp) Wire.Codec.field
+val f_tcp_dst_port : int Wire.Field.t
 (** Zero-copy field accessor for the TCP destination port field. *)
 
-val f_tcp_syn : (bool, tcp) Wire.Codec.field
+val f_tcp_syn : bool Wire.Field.t
 (** Zero-copy field accessor for the TCP SYN flag. *)
 
-val f_tcp_ack : (bool, tcp) Wire.Codec.field
+val f_tcp_ack : bool Wire.Field.t
 (** Zero-copy field accessor for the TCP ACK flag. *)
+
+val bf_tcp_src_port : (int, tcp) Wire.Codec.field
+(** Bound field handle for the TCP source port field. *)
+
+val bf_tcp_dst_port : (int, tcp) Wire.Codec.field
+(** Bound field handle for the TCP destination port field. *)
+
+val bf_tcp_syn : (bool, tcp) Wire.Codec.field
+(** Bound field handle for the TCP SYN flag. *)
+
+val bf_tcp_ack : (bool, tcp) Wire.Codec.field
+(** Bound field handle for the TCP ACK flag. *)
 
 (** {2 UDP} *)
 
@@ -92,16 +122,16 @@ val udp_struct : Wire.C.Raw.struct_
 val udp_size : int
 (** Wire size of a UDP header in bytes. *)
 
-val f_udp_src_port : (int, udp) Wire.Codec.field
+val f_udp_src_port : int Wire.Field.t
 (** Zero-copy field accessor for the UDP source port field. *)
 
-val f_udp_dst_port : (int, udp) Wire.Codec.field
+val f_udp_dst_port : int Wire.Field.t
 (** Zero-copy field accessor for the UDP destination port field. *)
 
-val f_udp_length : (int, udp) Wire.Codec.field
+val f_udp_length : int Wire.Field.t
 (** Zero-copy field accessor for the UDP length field. *)
 
-val f_udp_checksum : (int, udp) Wire.Codec.field
+val f_udp_checksum : int Wire.Field.t
 (** Zero-copy field accessor for the UDP checksum field. *)
 
 (** {2 Utilities} *)

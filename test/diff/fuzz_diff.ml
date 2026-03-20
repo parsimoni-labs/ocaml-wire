@@ -33,21 +33,19 @@ let decode_from_bytes codec =
 type request_hdr = { req_index : int; req_length : int }
 
 let request_hdr_codec =
-  Wire.Codec.view "WireReq"
-    (fun req_index req_length -> { req_index; req_length })
-    Wire.Codec.
-      [
-        Wire.Codec.field "index" Wire.uint32 (fun r -> r.req_index);
-        Wire.Codec.field "length" Wire.uint32 (fun r -> r.req_length);
-      ]
+  let open Wire.Codec in
+  ((v "WireReq" (fun req_index req_length -> { req_index; req_length })
+   |+ Wire.Field.v "index" Wire.uint32) (fun r -> r.req_index)
+  |+ Wire.Field.v "length" Wire.uint32) (fun r -> r.req_length)
+  |> seal
 
 type response_hdr = { resp_result : int }
 
 let response_hdr_codec =
-  Wire.Codec.view "WireResp"
-    (fun resp_result -> { resp_result })
-    Wire.Codec.
-      [ Wire.Codec.field "result" Wire.uint32 (fun r -> r.resp_result) ]
+  let open Wire.Codec in
+  (v "WireResp" (fun resp_result -> { resp_result })
+  |+ Wire.Field.v "result" Wire.uint32) (fun r -> r.resp_result)
+  |> seal
 
 let request_hdr_struct = Wire.C.Raw.struct_of_codec request_hdr_codec
 let response_hdr_struct = Wire.C.Raw.struct_of_codec response_hdr_codec

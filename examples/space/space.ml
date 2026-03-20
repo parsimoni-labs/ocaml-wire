@@ -5,8 +5,7 @@
 
 open Wire
 
-(* ── 1. CCSDS Space Packet primary header: 6 bytes ──
-   Real-world protocol: 3+1+1+11 bits (uint16be) + 2+14 bits (uint16be) + uint16be *)
+(* -- 1. CCSDS Space Packet primary header: 6 bytes -- *)
 
 type packet = {
   sp_version : int;
@@ -18,15 +17,12 @@ type packet = {
   sp_data_len : int;
 }
 
-let f_sp_apid = Codec.field "APID" (bits ~width:11 U16be) (fun p -> p.sp_apid)
-
-let f_sp_seq_count =
-  Codec.field "SeqCount" (bits ~width:14 U16be) (fun p -> p.sp_seq_count)
-
-let f_sp_data_len = Codec.field "DataLength" uint16be (fun p -> p.sp_data_len)
+let f_sp_apid = Field.v "APID" (bits ~width:11 U16be)
+let f_sp_seq_count = Field.v "SeqCount" (bits ~width:14 U16be)
+let f_sp_data_len = Field.v "DataLength" uint16be
 
 let packet_codec =
-  Codec.view "SpacePacket"
+  Codec.v "SpacePacket"
     (fun version type_ sec_hdr apid seq_flags seq_count data_len ->
       {
         sp_version = version;
@@ -39,13 +35,13 @@ let packet_codec =
       })
     Codec.
       [
-        Codec.field "Version" (bits ~width:3 U16be) (fun p -> p.sp_version);
-        Codec.field "Type" (bits ~width:1 U16be) (fun p -> p.sp_type);
-        Codec.field "SecHdrFlag" (bits ~width:1 U16be) (fun p -> p.sp_sec_hdr);
-        f_sp_apid;
-        Codec.field "SeqFlags" (bits ~width:2 U16be) (fun p -> p.sp_seq_flags);
-        f_sp_seq_count;
-        f_sp_data_len;
+        (Field.v "Version" (bits ~width:3 U16be) $ fun p -> p.sp_version);
+        (Field.v "Type" (bits ~width:1 U16be) $ fun p -> p.sp_type);
+        (Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun p -> p.sp_sec_hdr);
+        (f_sp_apid $ fun p -> p.sp_apid);
+        (Field.v "SeqFlags" (bits ~width:2 U16be) $ fun p -> p.sp_seq_flags);
+        (f_sp_seq_count $ fun p -> p.sp_seq_count);
+        (f_sp_data_len $ fun p -> p.sp_data_len);
       ]
 
 let packet_struct = C.struct_of_codec packet_codec
@@ -62,6 +58,10 @@ let packet_default =
     sp_data_len = 255;
   }
 
+let bf_sp_apid = Codec.(f_sp_apid $ fun p -> p.sp_apid)
+let bf_sp_seq_count = Codec.(f_sp_seq_count $ fun p -> p.sp_seq_count)
+let bf_sp_data_len = Codec.(f_sp_data_len $ fun p -> p.sp_data_len)
+
 let packet_data n =
   Array.init n (fun i ->
       let b = Bytes.create packet_size in
@@ -71,8 +71,7 @@ let packet_data n =
       Bytes.set_uint16_be b 4 (i mod 256);
       b)
 
-(* ── 2. CLCW: 4 bytes of bitfields ──
-   Real-world protocol: 1+2+3+2+6+2+1+1+1+1+1+2+8 = 31 bits + 1 spare = 32 *)
+(* -- 2. CLCW: 4 bytes of bitfields -- *)
 
 type clcw = {
   cw_type : int;
@@ -90,19 +89,13 @@ type clcw = {
   cw_report : int;
 }
 
-let cw_lockout =
-  Codec.field "Lockout" (bits ~width:1 U32be) (fun c -> c.cw_lockout)
-
-let cw_wait = Codec.field "Wait" (bits ~width:1 U32be) (fun c -> c.cw_wait)
-
-let cw_retransmit =
-  Codec.field "Retransmit" (bits ~width:1 U32be) (fun c -> c.cw_retransmit)
-
-let cw_report =
-  Codec.field "ReportValue" (bits ~width:8 U32be) (fun c -> c.cw_report)
+let cw_lockout = Field.v "Lockout" (bits ~width:1 U32be)
+let cw_wait = Field.v "Wait" (bits ~width:1 U32be)
+let cw_retransmit = Field.v "Retransmit" (bits ~width:1 U32be)
+let cw_report = Field.v "ReportValue" (bits ~width:8 U32be)
 
 let clcw_codec =
-  Codec.view "CLCW"
+  Codec.v "CLCW"
     (fun type_ version status cop vcid spare no_rf no_bitlock lockout wait
          retransmit farmb report ->
       {
@@ -122,19 +115,19 @@ let clcw_codec =
       })
     Codec.
       [
-        Codec.field "ControlWordType" (bits ~width:1 U32be) (fun c -> c.cw_type);
-        Codec.field "CLCWVersion" (bits ~width:2 U32be) (fun c -> c.cw_version);
-        Codec.field "StatusField" (bits ~width:3 U32be) (fun c -> c.cw_status);
-        Codec.field "COPInEffect" (bits ~width:2 U32be) (fun c -> c.cw_cop);
-        Codec.field "VCID" (bits ~width:6 U32be) (fun c -> c.cw_vcid);
-        Codec.field "Spare" (bits ~width:2 U32be) (fun c -> c.cw_spare);
-        Codec.field "NoRF" (bits ~width:1 U32be) (fun c -> c.cw_no_rf);
-        Codec.field "NoBitlock" (bits ~width:1 U32be) (fun c -> c.cw_no_bitlock);
-        cw_lockout;
-        cw_wait;
-        cw_retransmit;
-        Codec.field "FARMBCounter" (bits ~width:2 U32be) (fun c -> c.cw_farmb);
-        cw_report;
+        (Field.v "ControlWordType" (bits ~width:1 U32be) $ fun c -> c.cw_type);
+        (Field.v "CLCWVersion" (bits ~width:2 U32be) $ fun c -> c.cw_version);
+        (Field.v "StatusField" (bits ~width:3 U32be) $ fun c -> c.cw_status);
+        (Field.v "COPInEffect" (bits ~width:2 U32be) $ fun c -> c.cw_cop);
+        (Field.v "VCID" (bits ~width:6 U32be) $ fun c -> c.cw_vcid);
+        (Field.v "Spare" (bits ~width:2 U32be) $ fun c -> c.cw_spare);
+        (Field.v "NoRF" (bits ~width:1 U32be) $ fun c -> c.cw_no_rf);
+        (Field.v "NoBitlock" (bits ~width:1 U32be) $ fun c -> c.cw_no_bitlock);
+        (cw_lockout $ fun c -> c.cw_lockout);
+        (cw_wait $ fun c -> c.cw_wait);
+        (cw_retransmit $ fun c -> c.cw_retransmit);
+        (Field.v "FARMBCounter" (bits ~width:2 U32be) $ fun c -> c.cw_farmb);
+        (cw_report $ fun c -> c.cw_report);
       ]
 
 let clcw_struct = C.struct_of_codec clcw_codec
@@ -157,6 +150,11 @@ let clcw_default =
     cw_report = 42;
   }
 
+let bf_cw_lockout = Codec.(cw_lockout $ fun c -> c.cw_lockout)
+let bf_cw_wait = Codec.(cw_wait $ fun c -> c.cw_wait)
+let bf_cw_retransmit = Codec.(cw_retransmit $ fun c -> c.cw_retransmit)
+let bf_cw_report = Codec.(cw_report $ fun c -> c.cw_report)
+
 let clcw_data n =
   Array.init n (fun i ->
       let b = Bytes.create clcw_size in
@@ -172,8 +170,7 @@ let clcw_data n =
       Bytes.set_int32_be b 0 (Int32.of_int w);
       b)
 
-(* ── 3. TM Transfer Frame primary header: 6 bytes ──
-   Real-world protocol: 2+10+3+1 (uint16be) + 8+8 (uint16be) + 1+1+1+2+11 (uint16be) *)
+(* -- 3. TM Transfer Frame primary header: 6 bytes -- *)
 
 type tm_frame = {
   tf_version : int;
@@ -189,13 +186,11 @@ type tm_frame = {
   tf_first_hdr : int;
 }
 
-let f_tf_vcid = Codec.field "VCID" (bits ~width:3 U16be) (fun f -> f.tf_vcid)
-
-let f_tf_first_hdr =
-  Codec.field "FirstHdrPtr" (bits ~width:11 U16be) (fun f -> f.tf_first_hdr)
+let f_tf_vcid = Field.v "VCID" (bits ~width:3 U16be)
+let f_tf_first_hdr = Field.v "FirstHdrPtr" (bits ~width:11 U16be)
 
 let tm_frame_codec =
-  Codec.view "TMFrame"
+  Codec.v "TMFrame"
     (fun version scid vcid ocf mc vc sec sync pkt seg hdr ->
       {
         tf_version = version;
@@ -212,18 +207,17 @@ let tm_frame_codec =
       })
     Codec.
       [
-        Codec.field "Version" (bits ~width:2 U16be) (fun f -> f.tf_version);
-        Codec.field "SCID" (bits ~width:10 U16be) (fun f -> f.tf_scid);
-        f_tf_vcid;
-        Codec.field "OCFFlag" (bits ~width:1 U16be) (fun f -> f.tf_ocf_flag);
-        Codec.field "MCCount" (bits ~width:8 U16be) (fun f -> f.tf_mc_count);
-        Codec.field "VCCount" (bits ~width:8 U16be) (fun f -> f.tf_vc_count);
-        Codec.field "SecHdrFlag" (bits ~width:1 U16be) (fun f -> f.tf_sec_hdr);
-        Codec.field "SyncFlag" (bits ~width:1 U16be) (fun f -> f.tf_sync);
-        Codec.field "PacketOrder" (bits ~width:1 U16be) (fun f ->
-            f.tf_pkt_order);
-        Codec.field "SegLenId" (bits ~width:2 U16be) (fun f -> f.tf_seg_id);
-        f_tf_first_hdr;
+        (Field.v "Version" (bits ~width:2 U16be) $ fun f -> f.tf_version);
+        (Field.v "SCID" (bits ~width:10 U16be) $ fun f -> f.tf_scid);
+        (f_tf_vcid $ fun f -> f.tf_vcid);
+        (Field.v "OCFFlag" (bits ~width:1 U16be) $ fun f -> f.tf_ocf_flag);
+        (Field.v "MCCount" (bits ~width:8 U16be) $ fun f -> f.tf_mc_count);
+        (Field.v "VCCount" (bits ~width:8 U16be) $ fun f -> f.tf_vc_count);
+        (Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun f -> f.tf_sec_hdr);
+        (Field.v "SyncFlag" (bits ~width:1 U16be) $ fun f -> f.tf_sync);
+        (Field.v "PacketOrder" (bits ~width:1 U16be) $ fun f -> f.tf_pkt_order);
+        (Field.v "SegLenId" (bits ~width:2 U16be) $ fun f -> f.tf_seg_id);
+        (f_tf_first_hdr $ fun f -> f.tf_first_hdr);
       ]
 
 let tm_frame_struct = C.struct_of_codec tm_frame_codec
@@ -244,6 +238,9 @@ let tm_frame_default =
     tf_first_hdr = 0x7FE;
   }
 
+let bf_tf_vcid = Codec.(f_tf_vcid $ fun f -> f.tf_vcid)
+let bf_tf_first_hdr = Codec.(f_tf_first_hdr $ fun f -> f.tf_first_hdr)
+
 let tm_frame_data n =
   Array.init n (fun i ->
       let b = Bytes.create tm_frame_size in
@@ -257,24 +254,25 @@ let tm_frame_data n =
       Bytes.set_uint16_be b 4 ((1 lsl 14) lor (3 lsl 11) lor (i mod 2048));
       b)
 
-(* ── 4. Nested protocol: outer header (4B fixed + variable payload) ──
-   Demonstrates zero-copy field access across protocol layers with dependent
-   sizes: the payload length is determined at runtime by the Length field.
-   Outer: [version:u8] [type:u8] [length:u16be] [payload:length bytes]
-   Inner: [cmd_id:u8] [seq:u16be] [flags:u8]
-   The outer "payload" field is a byte_slice whose size comes from Codec.field_ref. *)
+(* -- 4. Nested protocol -- *)
 
 type inner_cmd = { cmd_id : int; cmd_seq : int; cmd_flags : int }
 
-let f_cmd_id = Codec.field "CmdId" uint8 (fun c -> c.cmd_id)
-let f_cmd_seq = Codec.field "Seq" uint16be (fun c -> c.cmd_seq)
+let f_cmd_id = Field.v "CmdId" uint8
+let f_cmd_seq = Field.v "Seq" uint16be
 
 let inner_cmd_codec =
-  Codec.view "InnerCmd"
+  Codec.v "InnerCmd"
     (fun id seq flags -> { cmd_id = id; cmd_seq = seq; cmd_flags = flags })
     Codec.
-      [ f_cmd_id; f_cmd_seq; Codec.field "Flags" uint8 (fun c -> c.cmd_flags) ]
+      [
+        (f_cmd_id $ fun c -> c.cmd_id);
+        (f_cmd_seq $ fun c -> c.cmd_seq);
+        (Field.v "Flags" uint8 $ fun c -> c.cmd_flags);
+      ]
 
+let bf_cmd_id = Codec.(f_cmd_id $ fun c -> c.cmd_id)
+let bf_cmd_seq = Codec.(f_cmd_seq $ fun c -> c.cmd_seq)
 let inner_cmd_size = Codec.wire_size inner_cmd_codec
 
 type outer_hdr = {
@@ -284,15 +282,11 @@ type outer_hdr = {
   oh_payload : Bytesrw.Bytes.Slice.t;
 }
 
-let f_oh_length = Codec.field "Length" uint16be (fun h -> h.oh_length)
-
-let f_oh_payload =
-  Codec.field "Payload"
-    (byte_slice ~size:(Codec.field_ref f_oh_length))
-    (fun h -> h.oh_payload)
+let f_oh_length = Field.v "Length" uint16be
+let f_oh_payload = Field.v "Payload" (byte_slice ~size:(Field.ref f_oh_length))
 
 let outer_hdr_codec =
-  Codec.view "OuterHdr"
+  Codec.v "OuterHdr"
     (fun version type_ length payload ->
       {
         oh_version = version;
@@ -302,27 +296,23 @@ let outer_hdr_codec =
       })
     Codec.
       [
-        Codec.field "Version" uint8 (fun h -> h.oh_version);
-        Codec.field "Type" uint8 (fun h -> h.oh_type);
-        f_oh_length;
-        f_oh_payload;
+        (Field.v "Version" uint8 $ fun h -> h.oh_version);
+        (Field.v "Type" uint8 $ fun h -> h.oh_type);
+        (f_oh_length $ fun h -> h.oh_length);
+        (f_oh_payload $ fun h -> h.oh_payload);
       ]
 
+let bf_oh_length = Codec.(f_oh_length $ fun h -> h.oh_length)
+let bf_oh_payload = Codec.(f_oh_payload $ fun h -> h.oh_payload)
 let outer_hdr_size = Codec.min_wire_size outer_hdr_codec + inner_cmd_size
 
 let nested_data n =
   Array.init n (fun i ->
       let b = Bytes.create outer_hdr_size in
       Bytes.set_uint8 b 0 1;
-      (* version *)
       Bytes.set_uint8 b 1 (i mod 4);
-      (* type *)
       Bytes.set_uint16_be b 2 inner_cmd_size;
-      (* length *)
       Bytes.set_uint8 b 4 (i mod 256);
-      (* cmd_id *)
       Bytes.set_uint16_be b 5 (i mod 65536);
-      (* seq *)
       Bytes.set_uint8 b 7 (i mod 8);
-      (* flags *)
       b)

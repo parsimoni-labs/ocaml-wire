@@ -10,13 +10,13 @@ open Wire.C.Raw
 type simple_header = { version : int; length : int; flags : int }
 
 let simple_header_codec =
-  Codec.view "SimpleHeader"
+  Codec.v "SimpleHeader"
     (fun version length flags -> { version; length; flags })
     Codec.
       [
-        Codec.field "version" uint8 (fun h -> h.version);
-        Codec.field "length" uint16 (fun h -> h.length);
-        Codec.field "flags" uint8 (fun h -> h.flags);
+        (Field.v "version" uint8 $ fun h -> h.version);
+        (Field.v "length" uint16 $ fun h -> h.length);
+        (Field.v "flags" uint8 $ fun h -> h.flags);
       ]
 
 (* Generate 3D schema *)
@@ -32,12 +32,12 @@ let simple_header_module =
 type constrained_packet = { pkt_type : int; pkt_length : int }
 
 let constrained_packet_codec =
-  Codec.view "ConstrainedPacket"
+  Codec.v "ConstrainedPacket"
     (fun pkt_type pkt_length -> { pkt_type; pkt_length })
     Codec.
       [
-        Codec.field "pkt_type" uint8 (fun p -> p.pkt_type);
-        Codec.field "pkt_length" uint16 (fun p -> p.pkt_length);
+        (Field.v "pkt_type" uint8 $ fun p -> p.pkt_type);
+        (Field.v "pkt_length" uint16 $ fun p -> p.pkt_length);
       ]
 
 let constrained_packet_module =

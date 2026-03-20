@@ -162,13 +162,13 @@ let test_parse_all_zeros buf =
 type test_struct = { ts_a : int; ts_b : int; ts_c : int }
 
 let test_struct_codec =
-  Wire.Codec.view "Test"
+  Wire.Codec.v "Test"
     (fun a b c -> { ts_a = a; ts_b = b; ts_c = c })
     Wire.Codec.
       [
-        Wire.Codec.field "a" Wire.uint8 (fun r -> r.ts_a);
-        Wire.Codec.field "b" Wire.uint16 (fun r -> r.ts_b);
-        Wire.Codec.field "c" Wire.uint32 (fun r -> r.ts_c);
+        (Wire.Field.v "a" Wire.uint8 $ fun r -> r.ts_a);
+        (Wire.Field.v "b" Wire.uint16 $ fun r -> r.ts_b);
+        (Wire.Field.v "c" Wire.uint32 $ fun r -> r.ts_c);
       ]
 
 let test_parse_struct buf =
@@ -178,13 +178,13 @@ let test_parse_struct buf =
 
 type constrained_struct = { cs_x : int }
 
-let f_cs_x = Wire.Codec.field "x" Wire.uint8 (fun r -> r.cs_x)
+let f_cs_x = Wire.Field.v "x" Wire.uint8
 
 let constrained_codec =
-  Wire.Codec.view "Constrained"
-    ~where:Wire.Expr.(Wire.Codec.field_ref f_cs_x <= Wire.int 100)
+  Wire.Codec.v "Constrained"
+    ~where:Wire.Expr.(Wire.Field.ref f_cs_x <= Wire.int 100)
     (fun x -> { cs_x = x })
-    Wire.Codec.[ f_cs_x ]
+    Wire.Codec.[ (f_cs_x $ fun r -> r.cs_x) ]
 
 let test_parse_struct_constrained buf =
   let buf = truncate buf in
@@ -194,13 +194,13 @@ let test_parse_struct_constrained buf =
 type be_struct = { be_a : int; be_b : int; be_c : int64 }
 
 let be_codec =
-  Wire.Codec.view "BE"
+  Wire.Codec.v "BE"
     (fun a b c -> { be_a = a; be_b = b; be_c = c })
     Wire.Codec.
       [
-        Wire.Codec.field "a" Wire.uint16be (fun r -> r.be_a);
-        Wire.Codec.field "b" Wire.uint32be (fun r -> r.be_b);
-        Wire.Codec.field "c" Wire.uint64be (fun r -> r.be_c);
+        (Wire.Field.v "a" Wire.uint16be $ fun r -> r.be_a);
+        (Wire.Field.v "b" Wire.uint32be $ fun r -> r.be_b);
+        (Wire.Field.v "c" Wire.uint64be $ fun r -> r.be_c);
       ]
 
 let test_parse_struct_be buf =
@@ -211,14 +211,14 @@ let test_parse_struct_be buf =
 type bf_struct = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
 
 let bf_codec =
-  Wire.Codec.view "BF"
+  Wire.Codec.v "BF"
     (fun a b c d -> { bf_a = a; bf_b = b; bf_c = c; bf_d = d })
     Wire.Codec.
       [
-        Wire.Codec.field "a" (Wire.bits ~width:3 Wire.U8) (fun r -> r.bf_a);
-        Wire.Codec.field "b" (Wire.bits ~width:5 Wire.U8) (fun r -> r.bf_b);
-        Wire.Codec.field "c" (Wire.bits ~width:10 Wire.U16) (fun r -> r.bf_c);
-        Wire.Codec.field "d" (Wire.bits ~width:6 Wire.U16) (fun r -> r.bf_d);
+        (Wire.Field.v "a" (Wire.bits ~width:3 Wire.U8) $ fun r -> r.bf_a);
+        (Wire.Field.v "b" (Wire.bits ~width:5 Wire.U8) $ fun r -> r.bf_b);
+        (Wire.Field.v "c" (Wire.bits ~width:10 Wire.U16) $ fun r -> r.bf_c);
+        (Wire.Field.v "d" (Wire.bits ~width:6 Wire.U16) $ fun r -> r.bf_d);
       ]
 
 let test_parse_struct_bitfields buf =
@@ -229,13 +229,13 @@ let test_parse_struct_bitfields buf =
 let test_parse_anon_field buf =
   let buf = truncate buf in
   let c =
-    Wire.Codec.view "Anon"
+    Wire.Codec.v "Anon"
       (fun x _pad y -> (x, _pad, y))
       Wire.Codec.
         [
-          Wire.Codec.field "x" Wire.uint8 (fun (x, _, _) -> x);
-          Wire.Codec.field "_pad" Wire.uint8 (fun (_, p, _) -> p);
-          Wire.Codec.field "y" Wire.uint16 (fun (_, _, y) -> y);
+          (Wire.Field.v "x" Wire.uint8 $ fun (x, _, _) -> x);
+          (Wire.Field.v "_pad" Wire.uint8 $ fun (_, p, _) -> p);
+          (Wire.Field.v "y" Wire.uint16 $ fun (_, _, y) -> y);
         ]
   in
   let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
@@ -386,13 +386,13 @@ let test_roundtrip_variants n =
 type test_record = { x : int; y : int; z : int }
 
 let test_record_codec =
-  Wire.Codec.view "TestRecord"
+  Wire.Codec.v "TestRecord"
     (fun x y z -> { x; y; z })
     Wire.Codec.
       [
-        Wire.Codec.field "x" Wire.uint8 (fun r -> r.x);
-        Wire.Codec.field "y" Wire.uint16 (fun r -> r.y);
-        Wire.Codec.field "z" Wire.uint32 (fun r -> r.z);
+        (Wire.Field.v "x" Wire.uint8 $ fun r -> r.x);
+        (Wire.Field.v "y" Wire.uint16 $ fun r -> r.y);
+        (Wire.Field.v "z" Wire.uint32 $ fun r -> r.z);
       ]
 
 let test_record_roundtrip x y z =
@@ -419,12 +419,12 @@ type be_record = { a : int; b : int }
 (** Record codec with big-endian fields. *)
 
 let be_record_codec =
-  Wire.Codec.view "BERecord"
+  Wire.Codec.v "BERecord"
     (fun a b -> { a; b })
     Wire.Codec.
       [
-        Wire.Codec.field "a" Wire.uint16be (fun r -> r.a);
-        Wire.Codec.field "b" Wire.uint32be (fun r -> r.b);
+        (Wire.Field.v "a" Wire.uint16be $ fun r -> r.a);
+        (Wire.Field.v "b" Wire.uint32be $ fun r -> r.b);
       ]
 
 let test_record_be_roundtrip a b =
@@ -444,12 +444,12 @@ type bool_record = { flag : bool; value : int }
 (** Record codec with bool/map fields. *)
 
 let bool_record_codec =
-  Wire.Codec.view "BoolRecord"
+  Wire.Codec.v "BoolRecord"
     (fun flag value -> { flag; value })
     Wire.Codec.
       [
-        Wire.Codec.field "flag" (Wire.bool Wire.uint8) (fun r -> r.flag);
-        Wire.Codec.field "value" Wire.uint16 (fun r -> r.value);
+        (Wire.Field.v "flag" (Wire.bool Wire.uint8) $ fun r -> r.flag);
+        (Wire.Field.v "value" Wire.uint16 $ fun r -> r.value);
       ]
 
 let test_record_bool_roundtrip n =
@@ -546,17 +546,19 @@ module Slice = Bytesrw.Bytes.Slice
 
 type slice_msg = { sl_length : int; sl_payload : Slice.t }
 
-let f_sl_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.sl_length)
+let f_sl_length = Wire.Field.v "Length" Wire.uint16be
 
 let f_sl_payload =
-  Wire.Codec.field "Payload"
-    (Wire.byte_slice ~size:(Wire.Codec.field_ref f_sl_length))
-    (fun r -> r.sl_payload)
+  Wire.Field.v "Payload" (Wire.byte_slice ~size:(Wire.Field.ref f_sl_length))
 
 let slice_msg_codec =
-  Wire.Codec.view "SliceMsg"
+  Wire.Codec.v "SliceMsg"
     (fun length payload -> { sl_length = length; sl_payload = payload })
-    Wire.Codec.[ f_sl_length; f_sl_payload ]
+    Wire.Codec.
+      [
+        (f_sl_length $ fun r -> r.sl_length);
+        (f_sl_payload $ fun r -> r.sl_payload);
+      ]
 
 let slice_or_eod buf len =
   if len = 0 then Slice.eod else Slice.make buf ~first:0 ~length:len
@@ -607,17 +609,16 @@ let test_depsize_slice_empty () =
 
 type array_msg = { ba_length : int; ba_data : string }
 
-let f_ba_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.ba_length)
+let f_ba_length = Wire.Field.v "Length" Wire.uint16be
 
 let f_ba_data =
-  Wire.Codec.field "Data"
-    (Wire.byte_array ~size:(Wire.Codec.field_ref f_ba_length))
-    (fun r -> r.ba_data)
+  Wire.Field.v "Data" (Wire.byte_array ~size:(Wire.Field.ref f_ba_length))
 
 let array_msg_codec =
-  Wire.Codec.view "ArrayMsg"
+  Wire.Codec.v "ArrayMsg"
     (fun length data -> { ba_length = length; ba_data = data })
-    Wire.Codec.[ f_ba_length; f_ba_data ]
+    Wire.Codec.
+      [ (f_ba_length $ fun r -> r.ba_length); (f_ba_data $ fun r -> r.ba_data) ]
 
 let test_depsize_array_roundtrip payload_str =
   let len = String.length payload_str mod 201 in
@@ -655,20 +656,23 @@ let test_depsize_array_empty () =
 
 type tagged_msg = { tm_length : int; tm_payload : Slice.t; tm_tag : int }
 
-let f_tm_length = Wire.Codec.field "Length" Wire.uint16be (fun r -> r.tm_length)
+let f_tm_length = Wire.Field.v "Length" Wire.uint16be
 
 let f_tm_payload =
-  Wire.Codec.field "Payload"
-    (Wire.byte_slice ~size:(Wire.Codec.field_ref f_tm_length))
-    (fun r -> r.tm_payload)
+  Wire.Field.v "Payload" (Wire.byte_slice ~size:(Wire.Field.ref f_tm_length))
 
-let f_tm_tag = Wire.Codec.field "Tag" Wire.uint8 (fun r -> r.tm_tag)
+let f_tm_tag = Wire.Field.v "Tag" Wire.uint8
 
 let tagged_msg_codec =
-  Wire.Codec.view "TaggedMsg"
+  Wire.Codec.v "TaggedMsg"
     (fun length payload tag ->
       { tm_length = length; tm_payload = payload; tm_tag = tag })
-    Wire.Codec.[ f_tm_length; f_tm_payload; f_tm_tag ]
+    Wire.Codec.
+      [
+        (f_tm_length $ fun r -> r.tm_length);
+        (f_tm_payload $ fun r -> r.tm_payload);
+        (f_tm_tag $ fun r -> r.tm_tag);
+      ]
 
 let test_depsize_tagged_roundtrip payload_str tag =
   let len = String.length payload_str mod 201 in

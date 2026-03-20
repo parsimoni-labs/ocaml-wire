@@ -7,7 +7,7 @@ type minimal = { m_value : int }
 val minimal_codec : minimal Wire.Codec.t
 (** Codec for the minimal 1-byte schema. *)
 
-val f_minimal_value : (int, minimal) Wire.Codec.field
+val f_minimal_value : int Wire.Field.t
 (** Zero-copy field accessor for the Value field. *)
 
 val minimal_struct : Wire.C.Raw.struct_
@@ -36,7 +36,7 @@ type all_ints = {
 val all_ints_codec : all_ints Wire.Codec.t
 (** Codec covering all integer widths and endiannesses. *)
 
-val f_ints_u64be : (int64, all_ints) Wire.Codec.field
+val f_ints_u64be : int64 Wire.Field.t
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
 val all_ints_struct : Wire.C.Raw.struct_
@@ -58,7 +58,7 @@ type bf8 = { bf8_tag : int; bf8_value : int }
 val bf8_codec : bf8 Wire.Codec.t
 (** Codec with two bitfields packed into a single uint8. *)
 
-val f_bf8_value : (int, bf8) Wire.Codec.field
+val f_bf8_value : int Wire.Field.t
 (** Zero-copy field accessor for the Value bitfield (5 bits in bf_uint8). *)
 
 val bf8_struct : Wire.C.Raw.struct_
@@ -80,7 +80,7 @@ type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 val bf16_codec : bf16 Wire.Codec.t
 (** Codec with three bitfields packed into a uint16be. *)
 
-val f_bf16_id : (int, bf16) Wire.Codec.field
+val f_bf16_id : int Wire.Field.t
 (** Zero-copy field accessor for the Id bitfield (11 bits in bf_uint16be). *)
 
 val bf16_struct : Wire.C.Raw.struct_
@@ -107,7 +107,7 @@ type bf32 = {
 val bf32_codec : bf32 Wire.Codec.t
 (** Codec with four bitfields packed into a uint32be. *)
 
-val f_bf32_pri : (int, bf32) Wire.Codec.field
+val f_bf32_pri : int Wire.Field.t
 (** Zero-copy field accessor for the Priority bitfield (8 bits in bf_uint32be).
 *)
 
@@ -135,7 +135,7 @@ type bool_fields = {
 val bool_fields_codec : bool_fields Wire.Codec.t
 (** Codec with boolean and integer bitfields in a uint16be. *)
 
-val f_bool_active : (bool, bool_fields) Wire.Codec.field
+val f_bool_active : bool Wire.Field.t
 (** Zero-copy field accessor for the Active field (bool from bf1 in bf_uint8).
 *)
 
@@ -169,7 +169,7 @@ type large_mixed = {
 val large_mixed_codec : large_mixed Wire.Codec.t
 (** Codec mixing uint8/16/32/64 and bitfield groups. *)
 
-val f_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
+val f_mixed_timestamp : int64 Wire.Field.t
 (** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
     fields). *)
 
@@ -196,10 +196,10 @@ val mapped_codec : mapped Wire.Codec.t
 val mapped_struct : Wire.C.Raw.struct_
 (** 3D struct for mapped. *)
 
-val f_mp_priority : (priority, mapped) Wire.Codec.field
+val f_mp_priority : priority Wire.Field.t
 (** Priority field. *)
 
-val f_mp_value : (int, mapped) Wire.Codec.field
+val f_mp_value : int Wire.Field.t
 (** Value field. *)
 
 val mapped_size : int
@@ -222,10 +222,10 @@ val cases_demo_codec : cases_demo Wire.Codec.t
 val cases_demo_struct : Wire.C.Raw.struct_
 (** 3D struct for cases-demo. *)
 
-val f_cd_type : (ptype, cases_demo) Wire.Codec.field
+val f_cd_type : ptype Wire.Field.t
 (** Type field. *)
 
-val f_cd_id : (int, cases_demo) Wire.Codec.field
+val f_cd_id : int Wire.Field.t
 (** ID field. *)
 
 val cases_demo_size : int
@@ -248,10 +248,10 @@ val enum_demo_codec : enum_demo Wire.Codec.t
 val enum_demo_struct : Wire.C.Raw.struct_
 (** 3D struct for enum-demo. *)
 
-val f_en_status : (status, enum_demo) Wire.Codec.field
+val f_en_status : status Wire.Field.t
 (** Status field. *)
 
-val f_en_code : (int, enum_demo) Wire.Codec.field
+val f_en_code : int Wire.Field.t
 (** Code field. *)
 
 val enum_demo_size : int
@@ -273,10 +273,10 @@ val constrained_codec : constrained Wire.Codec.t
 val constrained_struct : Wire.C.Raw.struct_
 (** 3D struct for constrained. *)
 
-val f_co_version : (int, constrained) Wire.Codec.field
+val f_co_version : int Wire.Field.t
 (** Version field. *)
 
-val f_co_data : (int, constrained) Wire.Codec.field
+val f_co_data : int Wire.Field.t
 (** Data field. *)
 
 val constrained_size : int
