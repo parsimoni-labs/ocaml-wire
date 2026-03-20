@@ -46,6 +46,6 @@ make memtrace             # allocation hotspots via memtrace
 
 1. `gen_stubs.exe` generates `.3d` files from Wire DSL definitions
 2. EverParse (`3d.exe`) compiles `.3d` to verified C validators
-3. Generated C/OCaml FFI stubs wrap the validators for benchmarking
+3. `Wire_stubs` generates C/OCaml FFI stubs to wrap the validators for benchmarking
 
-All schemas (demo, space, net) flow through `Wire_c` -- no duplication.
+All schemas (demo, space, net) flow through `Wire.C` -> `Wire_3d` -> `Wire_stubs`.

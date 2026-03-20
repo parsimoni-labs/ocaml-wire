@@ -12,8 +12,10 @@ Define your format once, then:
   zero-allocation for immediate types (int, bool)
 - **Decode and encode records** via `Codec.decode` / `Codec.encode`
 - **Export EverParse `.3d` schemas** via `C.schema` / `C.generate`
+- **Generate verified C artifacts** via `Wire_3d`
+- **Generate OCaml FFI stubs** via `Wire_stubs` when OCaml should call the C
 - **Render RFC-style ASCII diagrams** via `Ascii.of_codec`
-- **Generate C/OCaml FFI stubs** for differential testing between OCaml and C
+- **Differential-test OCaml against C** via `Wire_diff`
 
 ## Quick start
 
@@ -65,11 +67,26 @@ let pkt =
 
 ### EverParse 3D output
 
-The same codec produces `.3d` files for verified C parser generation:
+The same codec produces `.3d` files:
 
 ```ocaml
 let schema = C.schema codec
 let () = C.generate ~outdir:"schemas" [ schema ]
+```
+
+To turn those schemas into EverParse-generated C:
+
+```ocaml
+let () = Wire_3d.generate ~outdir:"schemas" [ schema ]
+```
+
+If OCaml needs to call the generated C validators, generate stubs separately
+from the exported structs:
+
+```ocaml
+let struct_ = C.struct_of_codec codec
+let c_stubs = Wire_stubs.to_c_stubs [ struct_ ]
+let ml_stubs = Wire_stubs.to_ml_stubs [ struct_ ]
 ```
 
 For unusual EverParse constructs that have no codec equivalent yet, use the
@@ -185,11 +202,20 @@ let len = Param.get out_len
   +-------+-------+
           |
           v
-  +---------------+
-  | Wire_c        |
-  | EverParse     |
-  | tooling       |
-  +---------------+
+  +---------------+       +---------------+
+  | Wire_3d       | ----> | Wire_stubs    |
+  | EverParse/C   |       | OCaml FFI     |
+  | tooling       |       | glue          |
+  +-------+-------+       +-------+-------+
+          |                       |
+          +-----------+-----------+
+                      |
+                      v
+                +---------------+
+                | Wire_diff     |
+                | compare       |
+                | OCaml vs C    |
+                +---------------+
 ```
 
 ## Development
@@ -206,7 +232,8 @@ make clean      # dune clean
 | Directory | Description |
 |-----------|-------------|
 | `lib/` | Core `wire` library: DSL types, Codec, Eval, Param, Action, Ascii, C |
-| `lib/c/` | `wire.c` sublibrary: EverParse pipeline (generate .3d, run 3d.exe) |
+| `lib/3d/` | `wire.3d` sublibrary: EverParse tooling (write `.3d`, run `3d.exe`, generate C artifacts) |
+| `lib/stubs/` | `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators |
 | `examples/space/` | CCSDS space protocols (SpacePacket, CLCW, TMFrame) |
 | `examples/net/` | TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy demo |
 | `bench/` | Field-level read/write benchmarks: EverParse C vs FFI vs pure OCaml |

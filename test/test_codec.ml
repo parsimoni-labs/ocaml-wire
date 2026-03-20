@@ -833,7 +833,7 @@ let test_c_stubs () =
     struct_ "SimpleHeader"
       [ field "version" uint8; field "length" uint16; field "flags" uint8 ]
   in
-  let stubs = Wire_c.to_c_stubs [ s ] in
+  let stubs = Wire_stubs.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "contains check stub" true
     (contains ~sub:"caml_wire_simpleheader_check" stubs);
@@ -850,7 +850,7 @@ let test_c_stubs_with_params () =
       ]
       [ field "Length" uint16be ]
   in
-  let c_stubs = Wire_c.to_c_stubs [ s ] in
+  let c_stubs = Wire_stubs.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "contains param check stub" true
     (contains ~sub:"caml_wire_bounded_check" c_stubs);
@@ -863,7 +863,7 @@ let test_c_stubs_with_params () =
   Alcotest.(check bool)
     "contains Store_field for output" true
     (contains ~sub:"Store_field" c_stubs);
-  let ml_stubs = Wire_c.to_ml_stubs [ s ] in
+  let ml_stubs = Wire_stubs.to_ml_stubs [ s ] in
   Alcotest.(check bool)
     "contains int param type" true
     (contains ~sub:"int ->" ml_stubs);

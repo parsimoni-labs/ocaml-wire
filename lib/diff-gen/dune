@@ -1,4 +1,4 @@
 (library
  (name wire_diff_gen)
  (public_name wire.diff-gen)
- (libraries wire wire.c fmt unix))
+ (libraries wire wire.3d fmt unix))

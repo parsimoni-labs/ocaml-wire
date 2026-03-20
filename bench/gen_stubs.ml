@@ -43,7 +43,7 @@ let () =
   let schemas =
     List.map
       (fun (name, s, wire_size, extra_decls) ->
-        Wire_c.schema ~name
+        Wire_3d.schema ~name
           ~module_:
             (Wire.C.Raw.module_
                (extra_decls @ [ Wire.C.Raw.typedef ~entrypoint:true s ]))
@@ -52,13 +52,13 @@ let () =
   in
 
   (* Step 1: Generate .3d files and run EverParse *)
-  Wire_c.generate_3d ~outdir:schema_dir schemas;
+  Wire_3d.generate_3d ~outdir:schema_dir schemas;
   let quiet = Sys.getenv_opt "EVERPARSE_VERBOSE" = None in
-  Wire_c.run_everparse ~quiet ~outdir:schema_dir schemas;
+  Wire_3d.run_everparse ~quiet ~outdir:schema_dir schemas;
 
   (* Step 2: Generate c_stubs.c *)
   let oc = open_out "c_stubs.c" in
-  output_string oc (Wire_c.to_c_stubs structs);
+  output_string oc (Wire_stubs.to_c_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
 
   pr "\n/* ── Noop FFI stubs (measure call overhead) ── */\n\n";
@@ -85,7 +85,7 @@ let () =
   List.iter
     (fun s ->
       let name = Wire.C.Raw.struct_name s in
-      let ep = Wire_c.everparse_name name in
+      let ep = Wire_3d.everparse_name name in
       let lower = String.lowercase_ascii name in
       pr "CAMLprim value ep_loop_%s(value v_buf, value v_off, value v_n) {\n"
         lower;
@@ -106,7 +106,7 @@ let () =
 
   (* Step 3: Generate c_stubs.ml *)
   let oc = open_out "c_stubs.ml" in
-  output_string oc (Wire_c.to_ml_stubs structs);
+  output_string oc (Wire_stubs.to_ml_stubs structs);
   let pr fmt = Printf.fprintf oc fmt in
   pr "(* Noop FFI stubs *)\n\n";
   pr "external noop : bytes -> bool = \"ep_noop\" [@@noalloc]\n\n";

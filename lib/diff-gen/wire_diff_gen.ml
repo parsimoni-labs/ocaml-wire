@@ -1,6 +1,6 @@
 (** Code generation for EverParse differential testing.
 
-    Thin layer on top of {!Wire_c}: generates .3d files, runs EverParse,
+    Thin layer on top of {!Wire_3d}: generates .3d files, runs EverParse,
     produces C/OCaml stubs, and adds a differential test runner. *)
 
 type schema = Wire.C.t = {
@@ -16,8 +16,8 @@ let schema ~name ~struct_ ~module_ =
 
 (** {1 Code Generation} *)
 
-let generate_3d_files = Wire_c.generate_3d
-let run_everparse = Wire_c.run_everparse
+let generate_3d_files = Wire_3d.generate_3d
+let run_everparse = Wire_3d.run_everparse
 
 let generate_c_stubs ~schema_dir ~outdir schemas =
   let oc = open_out (Filename.concat outdir "stubs.c") in
@@ -35,7 +35,7 @@ let generate_c_stubs ~schema_dir ~outdir schemas =
   pr "}\n\n";
   List.iter
     (fun s ->
-      let ep = Wire_c.everparse_name s.name in
+      let ep = Wire_3d.everparse_name s.name in
       let lower = String.lowercase_ascii s.name in
       pr "/* --- %s --- */\n" s.name;
       pr "#include \"%s/%s.h\"\n" schema_dir s.name;

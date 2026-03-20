@@ -20,7 +20,7 @@ All bench/prof/memtrace targets use `--profile=release`.
 ## Project structure
 
 - `lib/` -- core `wire` library: DSL types, 3D codegen, Codec (parse/encode), FFI stub generators
-- `lib/c/` -- `wire.c` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
+- `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
 - `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
@@ -36,9 +36,9 @@ All bench/prof/memtrace targets use `--profile=release`.
 
 ## Code generation pipeline
 
-All C code generation flows through `Wire_c` (no duplication):
+All C code generation flows through `Wire_3d` (no duplication):
 1. `Wire.to_3d` / `Wire.to_3d_file` -- generate .3d files from Wire DSL
-2. `Wire_c.run_everparse` -- invoke EverParse to produce C parsers
+2. `Wire_3d.run_everparse` -- invoke EverParse to produce C parsers
 3. `Wire.to_c_stubs` / `Wire.to_ml_stubs` -- generate OCaml FFI bindings calling `Validate` directly (not through EverParse Wrapper)
 
 ## Benchmarking principles

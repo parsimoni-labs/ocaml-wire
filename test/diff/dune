@@ -40,7 +40,7 @@
  (modules gen_c)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries wire wire.c unix))
+ (libraries wire wire.3d wire.stubs unix))
 
 (rule
  (alias gen_c)

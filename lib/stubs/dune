@@ -1,0 +1,4 @@
+(library
+ (name wire_stubs)
+ (public_name wire.stubs)
+ (libraries wire wire.3d fmt))

@@ -1,7 +1,8 @@
 (** Binary wire format descriptions.
 
     {b Author} a format with {!Field} and {!Codec}. {b Export} it with {!C}.
-    {b Tool} with [Wire_c]. {b Test} with [Wire_diff].
+    {b Generate C} with [Wire_3d]. {b Call generated C from OCaml} with
+    [Wire_stubs]. {b Test} with [Wire_diff].
 
     {[
       type header = { version : int; length : int }
@@ -31,6 +32,9 @@
       (* 4. Export to EverParse 3D *)
       let schema = C.schema codec
       let () = C.generate ~outdir:"schemas" [ schema ]
+
+      (* 5. Turn 3D into generated C *)
+      let () = Wire_3d.generate ~outdir:"schemas" [ schema ]
     ]}
 
     The generated 3D is a projection of the OCaml description, not a second
@@ -616,12 +620,13 @@ end
 
 (** {1 Export}
 
-    {!C} is the export layer. The normal workflow is:
+    {!C} is the pure export layer. The normal workflow is:
 
     - build a record-shaped description with {!Field} and {!Codec};
     - project it with {!C.schema};
     - emit one [.3d] file per schema with {!C.generate};
-    - run external tooling with [Wire_c].
+    - run EverParse/C tooling with [Wire_3d];
+    - optionally generate OCaml FFI stubs with [Wire_stubs].
 
     For unusual EverParse constructs that have no codec equivalent yet, see the
     explicit escape hatch {!C.Raw}. *)

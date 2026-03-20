@@ -26,7 +26,7 @@
  (modules gen_stubs)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo space net wire wire.c unix))
+ (libraries demo space net wire wire.3d wire.stubs unix))
 
 ; Step 2: Run the generator to produce all artifacts
 

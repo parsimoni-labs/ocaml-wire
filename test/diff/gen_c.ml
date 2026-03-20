@@ -360,17 +360,17 @@ let () =
   let schemas =
     List.init num_random (fun i -> random_struct i) @ [ action_schema () ]
   in
-  let wire_c_schemas =
+  let wire_3d_schemas =
     List.map
       (fun rs ->
-        Wire_c.schema
+        Wire_3d.schema
           ~name:(Wire.C.Raw.struct_name rs.struct_)
           ~module_:(Wire.module_ [ Wire.typedef ~entrypoint:true rs.struct_ ])
           ~wire_size:rs.total_wire_size)
       schemas
   in
-  Wire_c.generate_3d ~outdir:schema_dir wire_c_schemas;
-  Wire_c.run_everparse ~outdir:schema_dir wire_c_schemas;
+  Wire_3d.generate_3d ~outdir:schema_dir wire_3d_schemas;
+  Wire_3d.run_everparse ~outdir:schema_dir wire_3d_schemas;
   (* Generate FFI stubs and test runner in current dir *)
   generate_c_stubs ~schema_dir "." schemas;
   generate_ml_stubs "." schemas;
