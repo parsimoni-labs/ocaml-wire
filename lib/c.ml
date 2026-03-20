@@ -42,14 +42,15 @@ let to_3d_file = Types.to_3d_file
 let struct_of_codec = Codec.to_struct
 
 let field name ?constraint_ ?action typ =
-  Field.Pack (Field.v name ?constraint_ ?action typ)
+  Field.Named (Field.v name ?constraint_ ?action typ)
 
-let anon_field typ = Field.Pack (Field.anon typ)
-let field_ref (Field.Pack f) = Field.ref f
+let anon_field typ = Field.Anon (Field.anon typ)
 
-let unpack_fields fields =
-  List.map (fun (Field.Pack f) -> Field.to_decl f) fields
+let field_ref = function
+  | Field.Named f -> Field.ref f
+  | Field.Anon _ -> invalid_arg "C.field_ref: anonymous field"
 
+let unpack_fields fields = List.map Field.to_decl fields
 let struct_ name fields = Types.struct_ name (unpack_fields fields)
 let struct_name = Types.struct_name
 let struct_params (s : Types.struct_) = s.params

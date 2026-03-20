@@ -1,11 +1,16 @@
 (** Wire fields.
 
-    A field is a slot with a wire type, optional constraint, and optional
-    action. Named fields ({!v}) can be referenced in expressions via {!ref}.
-    Anonymous fields ({!anon}) are padding — they cannot be referenced. *)
+    Named fields ({!t}) carry a name, type, constraint, and action. They can be
+    referenced in expressions ({!ref}) and bound into codecs ({!Codec.bind}).
+
+    Anonymous fields ({!anon}) are padding — they have a type but no name and
+    cannot be referenced. The type system prevents misuse. *)
 
 type 'a t
-(** A field carrying values of type ['a]. *)
+(** A named field carrying values of type ['a]. *)
+
+type 'a anon
+(** An anonymous (padding) field. Cannot be referenced. *)
 
 val v :
   string ->
@@ -15,18 +20,14 @@ val v :
   'a t
 (** [v name typ] creates a named field. *)
 
-val anon : ?action:Types.action -> 'a Types.typ -> 'a t
-(** [anon typ] creates an anonymous (padding) field. It cannot be referenced. *)
+val anon : 'a Types.typ -> 'a anon
+(** [anon typ] creates an anonymous (padding) field. *)
 
 val ref : 'a t -> int Types.expr
-(** [ref f] returns the expression referencing this field. Raises
-    [Invalid_argument] on anonymous fields. *)
+(** [ref f] returns the expression referencing this field. *)
 
 val name : 'a t -> string
-(** Field name. Raises [Invalid_argument] on anonymous fields. *)
-
-val name_opt : 'a t -> string option
-(** Field name, or [None] for anonymous fields. *)
+(** Field name. *)
 
 val typ : 'a t -> 'a Types.typ
 (** Wire type. *)
@@ -38,8 +39,9 @@ val action : 'a t -> Types.action option
 (** Field action, if any. *)
 
 type packed =
-  | Pack : 'a t -> packed
+  | Named : 'a t -> packed
+  | Anon : 'a anon -> packed
       (** Existentially packed field for heterogeneous lists. *)
 
-val to_decl : 'a t -> Types.field
-(** Convert to a {!Types.field} declaration. *)
+val to_decl : packed -> Types.field
+(** Convert a packed field to a {!Types.field} declaration. *)

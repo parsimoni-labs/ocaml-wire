@@ -303,21 +303,21 @@ end
 
 module Field : sig
   type 'a t
-  (** A field carrying values of type ['a]. *)
+  (** A named field carrying values of type ['a]. *)
 
-  type packed =
-    | Pack : 'a t -> packed
-        (** Existentially packed field for heterogeneous lists. *)
+  type 'a anon
+  (** An anonymous (padding) field. Cannot be referenced. *)
+
+  type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
   val v : string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> 'a t
   (** [v name typ] creates a named field. *)
 
-  val anon : ?action:Action.t -> 'a typ -> 'a t
-  (** [anon typ] creates an anonymous (padding) field. Cannot be referenced. *)
+  val anon : 'a typ -> 'a anon
+  (** [anon typ] creates an anonymous (padding) field. *)
 
   val ref : 'a t -> int expr
-  (** [ref f] returns the expression referencing this field. Raises
-      [Invalid_argument] on anonymous fields. *)
+  (** [ref f] returns the expression referencing this field. *)
 end
 
 (** {1 Type Descriptions}
