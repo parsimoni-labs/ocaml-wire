@@ -9,8 +9,7 @@
 
     {b Typical usage} ([gen.ml]):
     {[
-      let () =
-        Wire_c.main ~package:"clcw" [ Wire_c.schema_of_struct Clcw.struct_ ]
+      let () = Wire_c.main ~package:"clcw" [ Wire.C.schema Clcw.codec ]
     ]}
 
     With a minimal [dune] that includes the generated rules:
