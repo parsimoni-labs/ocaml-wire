@@ -7,34 +7,25 @@
     {[
       type header = { version : int; length : int }
 
-      (* 1. Describe fields *)
+      (* 1. Name the fields *)
       let f_version = Field.v "Version" (bits ~width:4 U8)
       let f_length = Field.v "Length" uint16be
 
-      (* 2. Build a codec — bind fields to record projections *)
-      let cf_version = Codec.bind f_version (fun h -> h.version)
-      let cf_length = Codec.bind f_length (fun h -> h.length)
-
+      (* 2. Build a codec *)
       let codec =
-        Codec.view "Header"
-          (fun version length -> { version; length })
-          Codec.[ cf_version; cf_length ]
+        Codec.v "Header" (fun version length -> { version; length })
+        |+ f_version (fun h -> h.version)
+        |+ f_length (fun h -> h.length)
+        |> Codec.seal
 
       (* 3. Use it *)
       let buf = Bytes.create (Codec.wire_size codec)
       let () = Codec.encode codec { version = 1; length = 42 } buf 0
-      let (Ok v) = Codec.decode codec buf 0 (* returns result *)
-
-      (* Zero-copy field access *)
-      let get_version = Staged.unstage (Codec.get codec cf_version)
-      let n = get_version buf 0
+      let (Ok v) = Codec.decode codec buf 0
 
       (* 4. Export to EverParse 3D *)
       let schema = C.schema codec
       let () = C.generate ~outdir:"schemas" [ schema ]
-
-      (* 5. Turn 3D into generated C *)
-      let () = Wire_3d.generate ~outdir:"schemas" [ schema ]
     ]}
 
     The generated 3D is a projection of the OCaml description, not a second
@@ -91,14 +82,12 @@ module Param : sig
 
         let bounded ~max_len:ml =
           let ml_expr = Param.init max_len ml in
-          Codec.view "Bounded"
+          Codec.v "Bounded"
             ~where:Expr.(Field.ref f_length <= ml_expr)
             (fun len data -> { len; data })
-            Codec.
-              [
-                Codec.bind f_length (fun r -> r.len);
-                Codec.bind f_data (fun r -> r.data);
-              ]
+          |+ f_length (fun r -> r.len)
+          |+ f_data (fun r -> r.data)
+          |> Codec.seal
 
         let codec = bounded ~max_len:1024
         let _ = Codec.decode codec buf 0
@@ -522,8 +511,8 @@ val encode_to_string : 'a typ -> 'a -> string
 (** {1 Codecs}
 
     This is the main API for record-shaped formats. Create fields with
-    {!Field.v}, assemble them with {!Codec.view}, then decode, encode, and
-    access individual fields at zero cost.
+    {!Field.v}, assemble them with {!Codec.v} / {!Codec.|+} / {!Codec.seal},
+    then decode, encode, and access individual fields at zero cost.
 
     The codec is the single OCaml authority for a format's decode, encode,
     wire-size, and field access. {!C.schema} projects it to EverParse 3D. *)
@@ -535,13 +524,41 @@ module Codec : sig
   type 'r t
   (** Sealed codec for record values of type ['r]. *)
 
+  (** {2 Builder API}
+
+      The recommended way to build codecs:
+      {[
+        let codec =
+          Codec.v "Packet" (fun version length -> { version; length })
+          |+ f_version (fun p -> p.version)
+          |+ f_length (fun p -> p.length)
+          |> Codec.seal
+      ]} *)
+
+  type ('f, 'r) builder
+  (** A codec under construction. *)
+
+  val v : string -> ?where:bool expr -> 'f -> ('f, 'r) builder
+  (** [v name constructor] starts building a codec. *)
+
+  val ( |+ ) :
+    ('a -> 'f, 'r) builder -> 'a Field.t -> ('r -> 'a) -> ('f, 'r) builder
+  (** [b |+ field getter] adds a field to the codec being built. *)
+
+  val seal : ('r, 'r) builder -> 'r t
+  (** [seal b] finalises the codec when all constructor args are consumed. *)
+
+  (** {2 Inline field shorthand}
+
+      When fields don't need to be referenced elsewhere, [field] creates and
+      binds in one step. Use with [view] and the heterogeneous list syntax. *)
+
   type ('f, 'r) fields =
     | [] : ('r, 'r) fields
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
-        (** Heterogeneous field list in record order. *)
 
   val bind : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
-  (** [bind f proj] binds a {!Field.t} to a record projection for codec use. *)
+  (** [bind f proj] binds a {!Field.t} to a record projection. *)
 
   val field :
     string ->
@@ -550,35 +567,10 @@ module Codec : sig
     'a typ ->
     ('r -> 'a) ->
     ('a, 'r) field
-  (** [field name typ proj] is [bind (Field.v name typ) proj]. Shorthand for
-      inline fields not referenced elsewhere. *)
+  (** [field name typ proj] is [bind (Field.v name typ) proj]. *)
 
   val view : string -> ?where:bool expr -> 'f -> ('f, 'r) fields -> 'r t
-  (** Builds a sealed record codec from a constructor and its fields.
-
-      The constructor is applied in field order at decode time; the field
-      projections are used at encode time.
-
-      Parameters are discovered automatically from {!Param_ref} expressions in
-      constraints and {!Action.assign} statements in field actions. [where] is a
-      record-level constraint checked after all fields and actions have run.
-
-      Example:
-      {[
-        type header = { version : int; length : int }
-
-        let f_version = Field.v "version" uint8
-        let f_length = Field.v "length" uint16
-
-        let header_codec =
-          Codec.view "Header"
-            (fun version length -> { version; length })
-            Codec.
-              [
-                Codec.bind f_version (fun h -> h.version);
-                Codec.bind f_length (fun h -> h.length);
-              ]
-      ]} *)
+  (** [view name constructor fields] seals a codec from a field list. *)
 
   val wire_size : 'r t -> int
   (** Fixed wire size of the codec.

@@ -760,6 +760,14 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
+type ('f, 'r) builder = ('f, 'r) record
+
+let v name ?where constructor = record_start ?where name constructor
+
+let ( |+ ) (type a f r) (b : (a -> f, r) builder) (fld : a Field.t)
+    (get : r -> a) : (f, r) builder =
+  add_field b (bind fld get)
+
 let view : type f r. string -> ?where:bool expr -> f -> (f, r) fields -> r t =
  fun name ?where constructor flds ->
   let rec add : type g. (g, r) record -> (g, r) fields -> r t =

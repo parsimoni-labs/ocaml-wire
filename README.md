@@ -24,17 +24,16 @@ open Wire
 
 type packet = { version : int; flags : int; length : int }
 
-let f_version = Field.v "Version" (bits ~width:4 U8)
-let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
-let f_length  = Field.v "Length"   uint16be
-let cf_version = Codec.bind f_version (fun p -> p.version)
-let cf_flags   = Codec.bind f_flags   (fun p -> p.flags)
-let cf_length  = Codec.bind f_length  (fun p -> p.length)
+let version = Field.v "Version" (bits ~width:4 U8)
+let flags   = Field.v "Flags"   (bits ~width:4 U8)
+let length  = Field.v "Length"  uint16be
 
 let codec =
-  Codec.view "Packet"
-    (fun version flags length -> { version; flags; length })
-    Codec.[ cf_version; cf_flags; cf_length ]
+  Codec.v "Packet" (fun version flags length -> { version; flags; length })
+  |+ version (fun p -> p.version)
+  |+ flags   (fun p -> p.flags)
+  |+ length  (fun p -> p.length)
+  |> Codec.seal
 ```
 
 ```
@@ -47,22 +46,26 @@ let codec =
 
 ### Zero-copy field access
 
-Read and write individual fields directly in a buffer:
+The same field handles work for `get`/`set`, dependent sizes, and `Field.ref`:
 
 ```ocaml
+(* Bind into codec fields for get/set *)
+let cf_version = Codec.bind version (fun p -> p.version)
+
 (* Staged for performance — force once, reuse *)
 let get_version = Staged.unstage (Codec.get codec cf_version)
-let set_length  = Staged.unstage (Codec.set codec cf_length)
+let set_version = Staged.unstage (Codec.set codec cf_version)
 
 let v = get_version buf 0
-let () = set_length buf 0 1024
+let () = set_version buf 0 3
+
+(* Dependent sizes use Field.ref *)
+let f_len  = Field.v "Length" uint16be
+let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len))
 
 (* Full record decode/encode *)
 let () = Codec.encode codec { version = 1; flags = 2; length = 1024 } buf 0
-let pkt =
-  match Codec.decode codec buf 0 with
-  | Ok pkt -> pkt
-  | Error _ -> failwith "decode failed"
+let (Ok pkt) = Codec.decode codec buf 0
 ```
 
 ### EverParse 3D output
