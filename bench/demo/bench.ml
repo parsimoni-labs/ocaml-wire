@@ -28,12 +28,12 @@ let cf_cd_type = Codec.(Demo.f_cd_type $ fun c -> c.Demo.cd_type)
 let cf_en_status = Codec.(Demo.f_en_status $ fun e -> e.Demo.en_status)
 let cf_co_data = Codec.(Demo.f_co_data $ fun c -> c.Demo.co_data)
 let cf_cw_report = Space.bf_cw_report
-let cf_ip_src = Codec.(Net.f_ip_src $ fun p -> p.Net.ip_src)
-let cf_tcp_dst_port = Codec.(Net.f_tcp_dst_port $ fun t -> t.Net.tcp_dst_port)
-let cf_tcp_syn = Codec.(Net.f_tcp_syn $ fun t -> t.Net.tcp_syn)
-let cf_tcp_src_port = Codec.(Net.f_tcp_src_port $ fun t -> t.Net.tcp_src_port)
-let cf_eth_payload = Codec.(Net.f_eth_payload $ fun e -> e.Net.eth_payload)
-let cf_ip_payload = Codec.(Net.f_ip_payload $ fun p -> p.Net.ip_payload)
+let cf_ip_src = Net.bf_ip_src
+let cf_tcp_dst_port = Net.bf_tcp_dst_port
+let cf_tcp_syn = Net.bf_tcp_syn
+let cf_tcp_src_port = Net.bf_tcp_src_port
+let cf_eth_payload = Net.bf_eth_payload
+let cf_ip_payload = Net.bf_ip_payload
 let n_data = 1024
 
 (* ── Contiguous test data ── *)
