@@ -101,6 +101,12 @@ let apply_action = Eval.action
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
 
+type bf_info = {
+  bf_word_reader : bytes -> int -> int;
+  bf_shift : int;
+  bf_mask : int;
+}
+
 type ('a, 'r) field = {
   name : string;
   typ : 'a typ;
@@ -109,6 +115,7 @@ type ('a, 'r) field = {
   get : 'r -> 'a;
   mutable f_reader : bytes -> int -> 'a;
   mutable f_writer : bytes -> int -> 'a -> unit;
+  mutable f_bf : bf_info option;
 }
 
 let combine_constraint a b =
@@ -253,6 +260,7 @@ let bind (f : 'a Field.t) get =
     get;
     f_reader = not_ready;
     f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
+    f_bf = None;
   }
 
 let ( $ ) = bind
@@ -431,7 +439,17 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           build_bf_accessor_writer base base_off shift width
         in
         let int_reader buf off = (raw_reader buf off : int) in
+        let mask = (1 lsl width) - 1 in
+        let word_reader = Bitfield.read_word base in
         let configurator () =
+          fld.f_bf <-
+            Some
+              {
+                bf_word_reader =
+                  (fun buf off -> word_reader buf (off + base_off));
+                bf_shift = shift;
+                bf_mask = mask;
+              };
           match eq with
           | Some Refl ->
               fld.f_reader <- raw_reader;
@@ -920,5 +938,20 @@ let set (type a r) (_codec : r t) (f : (a, r) field) :
 
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
+
+(* ── Bitfield batch access ── *)
+
+type bitfield = bf_info
+
+let bitfield (type r) (_codec : r t) (f : (int, r) field) : bitfield =
+  match f.f_bf with
+  | Some info -> info
+  | None -> invalid_arg "Codec.bitfield: field is not a bitfield"
+
+let read_bitfield (bf : bitfield) buf off =
+  (bf.bf_word_reader buf off lsr bf.bf_shift) land bf.bf_mask
+
+let load_word (bf : bitfield) buf off = bf.bf_word_reader buf off
+let extract (bf : bitfield) word = (word lsr bf.bf_shift) land bf.bf_mask
 
 (* ── Snapshot: batch bitfield access ── *)

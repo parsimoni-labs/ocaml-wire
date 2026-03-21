@@ -48,3 +48,20 @@ val pp : Format.formatter -> 'r t -> unit
 
 val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
+
+type bitfield
+(** A bitfield accessor. *)
+
+val bitfield : 'r t -> (int, 'r) field -> bitfield
+(** [bitfield codec field] returns a bitfield accessor for [field]. Raises if
+    [field] is not a bitfield. *)
+
+val read_bitfield : bitfield -> bytes -> int -> int
+(** Read one bitfield value from the buffer. *)
+
+val load_word : bitfield -> bytes -> int -> int
+(** Read the packed word. Use with {!extract} to read multiple fields from the
+    same word without redundant memory loads. *)
+
+val extract : bitfield -> int -> int
+(** [extract bf word_value] extracts the field from a pre-loaded word. *)

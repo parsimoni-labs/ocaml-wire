@@ -33,22 +33,21 @@ let () =
   Fmt.pr "CLCW polling loop (%d words, %dB each, contiguous buffer)\n\n" n_words
     word_size;
 
-  let get_lockout = Wire.Staged.unstage (C.get Space.clcw_codec cf_lockout) in
-  let get_wait = Wire.Staged.unstage (C.get Space.clcw_codec cf_wait) in
-  let get_retransmit =
-    Wire.Staged.unstage (C.get Space.clcw_codec cf_retransmit)
-  in
-  let get_report = Wire.Staged.unstage (C.get Space.clcw_codec cf_report) in
+  let bf_lockout = C.bitfield Space.clcw_codec cf_lockout in
+  let bf_wait = C.bitfield Space.clcw_codec cf_wait in
+  let bf_retransmit = C.bitfield Space.clcw_codec cf_retransmit in
+  let bf_report = C.bitfield Space.clcw_codec cf_report in
 
   let anomalies = ref 0 in
   let expected_seq = ref 0 in
 
   let fn, cycling_reset =
     cycling ~data:buf ~n_items:n_words ~size:word_size (fun buf off ->
-        let lockout = get_lockout buf off in
-        let wait = get_wait buf off in
-        let retransmit = get_retransmit buf off in
-        let report = get_report buf off in
+        let w = C.load_word bf_lockout buf off in
+        let lockout = C.extract bf_lockout w in
+        let wait = C.extract bf_wait w in
+        let retransmit = C.extract bf_retransmit w in
+        let report = C.extract bf_report w in
         if
           lockout <> 0 || wait <> 0 || retransmit <> 0
           || report <> !expected_seq land 0xFF
@@ -64,10 +63,11 @@ let () =
   let poll_all () =
     for i = 0 to n_words - 1 do
       let off = i * word_size in
-      let lockout = get_lockout buf off in
-      let wait = get_wait buf off in
-      let retransmit = get_retransmit buf off in
-      let report = get_report buf off in
+      let w = C.load_word bf_lockout buf off in
+      let lockout = C.extract bf_lockout w in
+      let wait = C.extract bf_wait w in
+      let retransmit = C.extract bf_retransmit w in
+      let report = C.extract bf_report w in
       if
         lockout <> 0 || wait <> 0 || retransmit <> 0
         || report <> !expected_seq land 0xFF

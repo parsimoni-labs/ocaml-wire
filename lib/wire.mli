@@ -582,6 +582,27 @@ module Codec : sig
 
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
+
+  (** {2 Bitfield batch access}
+
+      For multiple bitfield fields sharing the same base word, {!load_word}
+      reads the word once and {!extract} retrieves individual fields with pure
+      shift+mask — no redundant memory loads. *)
+
+  type bitfield
+  (** A bitfield accessor — bundles word reader + field extractor. *)
+
+  val bitfield : 'r t -> (int, 'r) field -> bitfield
+  (** [bitfield codec field] returns a bitfield accessor. *)
+
+  val read_bitfield : bitfield -> bytes -> int -> int
+  (** Read one bitfield value from the buffer. *)
+
+  val load_word : bitfield -> bytes -> int -> int
+  (** Read the packed word once. *)
+
+  val extract : bitfield -> int -> int
+  (** [extract bf word] extracts the field from a pre-loaded word. *)
 end
 
 (** {1 Export}
