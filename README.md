@@ -22,29 +22,32 @@ Define your format once, then:
 ```ocaml
 open Wire
 
-type packet = { version : int; flags : int; length : int }
+type packet = { version : int; flags : int; length : int; tag : int }
 
 let f_version = Field.v "Version" (bits ~width:4 U8)
 let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
 let f_length  = Field.v "Length"  uint16be
+let f_tag     = Field.v "Tag"     uint8
 
 (* Bind fields before the codec — same objects used for get/set *)
 let bf_version = Codec.(f_version $ (fun p -> p.version))
 let bf_flags   = Codec.(f_flags   $ (fun p -> p.flags))
 let bf_length  = Codec.(f_length  $ (fun p -> p.length))
+let bf_tag     = Codec.(f_tag     $ (fun p -> p.tag))
 
 let codec =
   let open Codec in
-  v "Packet" (fun version flags length -> { version; flags; length })
-    [ bf_version; bf_flags; bf_length ]
+  v "Packet" (fun version flags length tag ->
+      { version; flags; length; tag })
+    [ bf_version; bf_flags; bf_length; bf_tag ]
 ```
 
 ```
   0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- |Version| Flags |            Length             |
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ |Version| Flags |            Length             |      Tag      |
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
 ### Zero-copy field access
@@ -55,7 +58,8 @@ let get_version = Staged.unstage (Codec.get codec bf_version)
 let set_version = Staged.unstage (Codec.set codec bf_version)
 
 let buf = Bytes.create (Codec.wire_size codec)
-let () = Codec.encode codec { version = 1; flags = 2; length = 1024 } buf 0
+let () =
+  Codec.encode codec { version = 1; flags = 2; length = 1024; tag = 0 } buf 0
 let v = get_version buf 0        (* read version without allocating a record *)
 let () = set_version buf 0 3     (* mutate version in place *)
 ```
