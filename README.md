@@ -102,21 +102,29 @@ let () = print_string (Ascii.of_codec codec)
 
 ## Features
 
-- **Integer types** — `uint8`, `uint16`, `uint16be`, `uint32`, `uint32be`,
-  `uint64`, `uint64be`
-- **Bitfields** — `bits ~width:n U8/U16be/U32be`
-- **Bool** — `bool (bits ~width:1 U8)` maps single-bit fields to `true`/`false`
-- **Byte slices** — `byte_slice ~size:(int n)` for zero-copy sub-protocol access
-- **Enumerations** — `enum` for named integer constants, `variants` for OCaml values
-- **Constraints** — `where` clauses and field-level `~constraint_`
-- **Actions** — `Action.assign`, `Action.return_bool`, `Action.abort`, `Action.if_`
-- **Parameters** — `Param.input` / `Param.output` with typed handles
-- **Tagged unions** — `casetype` with tag-based dispatch
-- **Arrays** — `array ~len`, `byte_array ~size`, `nested ~size`
-- **Dependent sizes** — `byte_slice ~size:(Field.ref f_len)`
-- **3D code generation** — emit `.3d` files compatible with EverParse
-- **ASCII diagrams** — RFC 791-style 32-bit-wide bit layout diagrams
-- **Labeled map** — `map ~decode ~encode` for custom value conversions
+| Feature | OCaml | [EverParse 3D][3d-ref] |
+|---------|-------|------------------------|
+| Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, … |
+| Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
+| Bool | `bool (bits ~width:1 U8)` | — |
+| Byte slices | `byte_slice ~size:e` (zero-copy) | `UINT8 [: e]` |
+| Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
+| Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
+| Constraints | `where`, `~constraint_` | [`where`][3d-where] |
+| Actions | `Action.assign`, `abort`, `if_` | [`:on-success`][3d-act] |
+| Parameters | `Param.input` / `Param.output` | [`entrypoint … (params)`][3d-param] |
+| Tagged unions | `casetype` | [`casetype`][3d-case] |
+| Arrays | `array ~len:e`, `nested ~size:e` | `t [: e]` |
+| Dependent sizes | `Field.ref f_len` | field references |
+| Custom mappings | `map ~decode ~encode` | — |
+| ASCII diagrams | `Ascii.of_codec` | — |
+
+[3d-ref]: https://project-everest.github.io/everparse/3d-lang.html
+[3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#enums
+[3d-where]: https://project-everest.github.io/everparse/3d-lang.html#constraints
+[3d-act]: https://project-everest.github.io/everparse/3d-lang.html#actions
+[3d-param]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-types
+[3d-case]: https://project-everest.github.io/everparse/3d-lang.html#tagged-unions
 
 ## Real-world examples
 
