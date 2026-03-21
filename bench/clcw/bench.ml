@@ -37,13 +37,14 @@ let () =
   let bf_wait = C.bitfield Space.clcw_codec cf_wait in
   let bf_retransmit = C.bitfield Space.clcw_codec cf_retransmit in
   let bf_report = C.bitfield Space.clcw_codec cf_report in
+  let load = Wire.Staged.unstage (C.load_word bf_lockout) in
 
   let anomalies = ref 0 in
   let expected_seq = ref 0 in
 
   let fn, cycling_reset =
     cycling ~data:buf ~n_items:n_words ~size:word_size (fun buf off ->
-        let w = C.load_word bf_lockout buf off in
+        let w = load buf off in
         let lockout = C.extract bf_lockout w in
         let wait = C.extract bf_wait w in
         let retransmit = C.extract bf_retransmit w in
@@ -63,7 +64,7 @@ let () =
   let poll_all () =
     for i = 0 to n_words - 1 do
       let off = i * word_size in
-      let w = C.load_word bf_lockout buf off in
+      let w = load buf off in
       let lockout = C.extract bf_lockout w in
       let wait = C.extract bf_wait w in
       let retransmit = C.extract bf_retransmit w in

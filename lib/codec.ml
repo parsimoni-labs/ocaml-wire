@@ -101,10 +101,12 @@ let apply_action = Eval.action
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
 
+(* Bitfield extraction descriptor: word reader + packed shift/mask.
+   Packing shift and mask into a single int lets [extract] be a direct
+   [@inline always] function instead of an indirect closure call. *)
 type bf_info = {
   bf_word_reader : bytes -> int -> int;
-  bf_shift : int;
-  bf_mask : int;
+  bf_packed : int; (* shift in bits 0-7, mask in bits 8+ *)
 }
 
 type ('a, 'r) field = {
@@ -447,8 +449,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
               {
                 bf_word_reader =
                   (fun buf off -> word_reader buf (off + base_off));
-                bf_shift = shift;
-                bf_mask = mask;
+                bf_packed = shift lor (mask lsl 8);
               };
           match eq with
           | Some Refl ->
@@ -948,10 +949,11 @@ let bitfield (type r) (_codec : r t) (f : (int, r) field) : bitfield =
   | Some info -> info
   | None -> invalid_arg "Codec.bitfield: field is not a bitfield"
 
-let read_bitfield (bf : bitfield) buf off =
-  (bf.bf_word_reader buf off lsr bf.bf_shift) land bf.bf_mask
+let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
+  Staged.stage bf.bf_word_reader
 
-let load_word (bf : bitfield) buf off = bf.bf_word_reader buf off
-let extract (bf : bitfield) word = (word lsr bf.bf_shift) land bf.bf_mask
+let[@inline always] extract (bf : bitfield) word =
+  let p = bf.bf_packed in
+  (word lsr (p land 0xFF)) land (p lsr 8)
 
 (* ── Snapshot: batch bitfield access ── *)

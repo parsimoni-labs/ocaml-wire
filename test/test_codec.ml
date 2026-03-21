@@ -1254,6 +1254,83 @@ let test_codec_field_pos () =
   (* field_pos at c = 2 (third field, zero-indexed) *)
   Alcotest.(check int) "field_pos at c" 2 (Param.get out)
 
+(* ── Bitfield batch access ── *)
+
+type bf_rec = { bf_hi : int; bf_lo : int }
+
+let bf_f_hi = Field.v "hi" (bits ~width:4 U8)
+let bf_f_lo = Field.v "lo" (bits ~width:4 U8)
+let bf_cf_hi = Codec.(bf_f_hi $ fun r -> r.bf_hi)
+let bf_cf_lo = Codec.(bf_f_lo $ fun r -> r.bf_lo)
+
+let bf_codec =
+  Codec.v "BfBatch"
+    (fun hi lo -> { bf_hi = hi; bf_lo = lo })
+    Codec.[ bf_cf_hi; bf_cf_lo ]
+
+let test_bitfield_extract () =
+  let buf = Bytes.create 1 in
+  Bytes.set_uint8 buf 0 0xA7;
+  (* hi=0xA=10, lo=0x7=7 *)
+  let bf_hi = Codec.bitfield bf_codec bf_cf_hi in
+  let bf_lo = Codec.bitfield bf_codec bf_cf_lo in
+  let load = Staged.unstage (Codec.load_word bf_hi) in
+  let w = load buf 0 in
+  let hi = Codec.extract bf_hi w in
+  let lo = Codec.extract bf_lo w in
+  (* Compare against Codec.get *)
+  let get_hi = Staged.unstage (Codec.get bf_codec bf_cf_hi) in
+  let get_lo = Staged.unstage (Codec.get bf_codec bf_cf_lo) in
+  Alcotest.(check int) "extract hi = get hi" (get_hi buf 0) hi;
+  Alcotest.(check int) "extract lo = get lo" (get_lo buf 0) lo;
+  Alcotest.(check int) "hi" 0xA hi;
+  Alcotest.(check int) "lo" 0x7 lo
+
+let test_bitfield_non_bf_raises () =
+  let f_x = Field.v "x" uint16be in
+  let cf_x = Codec.(f_x $ fun x -> x) in
+  let codec = Codec.v "NonBf" (fun x -> x) Codec.[ cf_x ] in
+  match Codec.bitfield codec cf_x with
+  | _ -> Alcotest.fail "expected Invalid_argument"
+  | exception Invalid_argument _ -> ()
+
+let test_bitfield_short_buffer () =
+  (* Reading a uint32be bitfield from a 2-byte buffer should not segfault *)
+  let f_a = Field.v "a" (bits ~width:8 U32be) in
+  let cf_a = Codec.(f_a $ fun a -> a) in
+  let codec = Codec.v "Short" (fun a -> a) Codec.[ cf_a ] in
+  let bf = Codec.bitfield codec cf_a in
+  let load = Staged.unstage (Codec.load_word bf) in
+  (* Short buffer — should read garbage but not crash *)
+  let buf = Bytes.create 8 in
+  Bytes.set_int32_be buf 0 0x12345678l;
+  let w = load buf 0 in
+  let v = Codec.extract bf w in
+  Alcotest.(check int) "extract from valid buf" 0x12 v
+
+let test_bitfield_load_shared () =
+  (* Two fields in the same base word should get the same word value *)
+  let f_a = Field.v "a" (bits ~width:4 U32be) in
+  let f_b = Field.v "b" (bits ~width:4 U32be) in
+  let cf_a = Codec.(f_a $ fst) in
+  let cf_b = Codec.(f_b $ snd) in
+  let codec = Codec.v "Shared" (fun a b -> (a, b)) Codec.[ cf_a; cf_b ] in
+  let bf_a = Codec.bitfield codec cf_a in
+  let bf_b = Codec.bitfield codec cf_b in
+  let load_a = Staged.unstage (Codec.load_word bf_a) in
+  let load_b = Staged.unstage (Codec.load_word bf_b) in
+  let buf = Bytes.create 4 in
+  Bytes.set_int32_be buf 0 0xABCDEF01l;
+  let wa = load_a buf 0 in
+  let wb = load_b buf 0 in
+  (* Same base word, same value *)
+  Alcotest.(check int) "same word" wa wb;
+  let a = Codec.extract bf_a wa in
+  let b = Codec.extract bf_b wa in
+  (* a = top 4 bits of 0xABCDEF01 = 0xA, b = next 4 bits = 0xB *)
+  Alcotest.(check int) "a" 0xA a;
+  Alcotest.(check int) "b" 0xB b
+
 (* ── Suite ── *)
 
 let suite =
@@ -1372,4 +1449,13 @@ let suite =
       (* sizeof_this / field_pos *)
       Alcotest.test_case "codec: sizeof_this" `Quick test_codec_sizeof_this;
       Alcotest.test_case "codec: field_pos" `Quick test_codec_field_pos;
+      (* bitfield batch access *)
+      Alcotest.test_case "bitfield: extract matches get" `Quick
+        test_bitfield_extract;
+      Alcotest.test_case "bitfield: non-bf field raises" `Quick
+        test_bitfield_non_bf_raises;
+      Alcotest.test_case "bitfield: short buffer" `Quick
+        test_bitfield_short_buffer;
+      Alcotest.test_case "bitfield: load_word shared" `Quick
+        test_bitfield_load_shared;
     ] )

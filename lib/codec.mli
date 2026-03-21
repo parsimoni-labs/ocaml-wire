@@ -50,18 +50,18 @@ val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
 type bitfield
-(** A bitfield accessor. *)
+(** A bitfield accessor — shift and mask for one field in a packed word. *)
 
 val bitfield : 'r t -> (int, 'r) field -> bitfield
-(** [bitfield codec field] returns a bitfield accessor for [field]. Raises if
-    [field] is not a bitfield. *)
+(** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
+    a bitfield. *)
 
-val read_bitfield : bitfield -> bytes -> int -> int
-(** Read one bitfield value from the buffer. *)
-
-val load_word : bitfield -> bytes -> int -> int
-(** Read the packed word. Use with {!extract} to read multiple fields from the
-    same word without redundant memory loads. *)
+val load_word : bitfield -> (bytes -> int -> int) Staged.t
+(** [load_word bf] returns a staged word reader. Force once, then call the
+    resulting function to read the packed base word. Fields sharing the same
+    base word return readers that read the same bytes — call once and pass the
+    result to multiple {!extract} calls. *)
 
 val extract : bitfield -> int -> int
-(** [extract bf word_value] extracts the field from a pre-loaded word. *)
+(** [extract bf word] extracts the field from a pre-loaded word value. Pure
+    shift+mask, no memory access. *)

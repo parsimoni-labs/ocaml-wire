@@ -590,19 +590,19 @@ module Codec : sig
       shift+mask — no redundant memory loads. *)
 
   type bitfield
-  (** A bitfield accessor — bundles word reader + field extractor. *)
+  (** A bitfield accessor — shift and mask for one field in a packed word. *)
 
   val bitfield : 'r t -> (int, 'r) field -> bitfield
   (** [bitfield codec field] returns a bitfield accessor. *)
 
-  val read_bitfield : bitfield -> bytes -> int -> int
-  (** Read one bitfield value from the buffer. *)
-
-  val load_word : bitfield -> bytes -> int -> int
-  (** Read the packed word once. *)
+  val load_word : bitfield -> (bytes -> int -> int) Staged.t
+  (** Staged word reader. Force once, reuse for every read. Fields in the same
+      base word share the same underlying reader — call once and use {!extract}
+      on the result for each field. *)
 
   val extract : bitfield -> int -> int
-  (** [extract bf word] extracts the field from a pre-loaded word. *)
+  (** [extract bf word] extracts the field from a pre-loaded word. Pure
+      shift+mask, no memory access. *)
 end
 
 (** {1 Export}
