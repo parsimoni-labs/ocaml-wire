@@ -16,11 +16,10 @@ open Wire.C.Raw
 type minimal = { m_value : int }
 
 let f_minimal_value = Field.v "Value" uint8
+let bf_minimal_value = Codec.(f_minimal_value $ fun m -> m.m_value)
 
 let minimal_codec =
-  Codec.v "Minimal"
-    (fun v -> { m_value = v })
-    Codec.[ (f_minimal_value $ fun m -> m.m_value) ]
+  Codec.v "Minimal" (fun v -> { m_value = v }) [ bf_minimal_value ]
 
 let minimal_struct = C.struct_of_codec minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
@@ -44,6 +43,7 @@ type all_ints = {
 }
 
 let f_ints_u64be = Field.v "U64BE" uint64be
+let bf_ints_u64be = Codec.(f_ints_u64be $ fun a -> a.ai_u64be)
 
 let all_ints_codec =
   Codec.v "AllInts"
@@ -63,7 +63,7 @@ let all_ints_codec =
         (Field.v "U16BE" uint16be $ fun a -> a.ai_u16be);
         (Field.v "U32" uint32 $ fun a -> a.ai_u32);
         (Field.v "U32BE" uint32be $ fun a -> a.ai_u32be);
-        (f_ints_u64be $ fun a -> a.ai_u64be);
+        bf_ints_u64be;
       ]
 
 let all_ints_struct = C.struct_of_codec all_ints_codec
@@ -95,15 +95,13 @@ let all_ints_data n =
 type bf8 = { bf8_tag : int; bf8_value : int }
 
 let f_bf8_value = Field.v "Value" (bits ~width:5 U8)
+let bf_bf8_value = Codec.(f_bf8_value $ fun b -> b.bf8_value)
 
 let bf8_codec =
   Codec.v "Bitfield8"
     (fun tag value -> { bf8_tag = tag; bf8_value = value })
     Codec.
-      [
-        (Field.v "Tag" (bits ~width:3 U8) $ fun b -> b.bf8_tag);
-        (f_bf8_value $ fun b -> b.bf8_value);
-      ]
+      [ (Field.v "Tag" (bits ~width:3 U8) $ fun b -> b.bf8_tag); bf_bf8_value ]
 
 let bf8_struct = C.struct_of_codec bf8_codec
 let bf8_size = Codec.wire_size bf8_codec
@@ -121,6 +119,7 @@ let bf8_data n =
 type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
 let f_bf16_id = Field.v "Id" (bits ~width:11 U16be)
+let bf_bf16_id = Codec.(f_bf16_id $ fun b -> b.bf16_id)
 
 let bf16_codec =
   Codec.v "Bitfield16"
@@ -129,7 +128,7 @@ let bf16_codec =
       [
         (Field.v "Flag" (bits ~width:1 U16be) $ fun b -> b.bf16_flag);
         (Field.v "Type" (bits ~width:4 U16be) $ fun b -> b.bf16_type);
-        (f_bf16_id $ fun b -> b.bf16_id);
+        bf_bf16_id;
       ]
 
 let bf16_struct = C.struct_of_codec bf16_codec
@@ -153,6 +152,7 @@ type bf32 = {
 }
 
 let f_bf32_pri = Field.v "Priority" (bits ~width:8 U32be)
+let bf_bf32_pri = Codec.(f_bf32_pri $ fun b -> b.bf32_pri)
 
 let bf32_codec =
   Codec.v "Bitfield32"
@@ -163,7 +163,7 @@ let bf32_codec =
         (Field.v "Flags" (bits ~width:4 U32be) $ fun b -> b.bf32_flags);
         (Field.v "Channel" (bits ~width:6 U32be) $ fun b -> b.bf32_chan);
         (Field.v "Seq" (bits ~width:14 U32be) $ fun b -> b.bf32_seq);
-        (f_bf32_pri $ fun b -> b.bf32_pri);
+        bf_bf32_pri;
       ]
 
 let bf32_struct = C.struct_of_codec bf32_codec
@@ -194,6 +194,7 @@ type bool_fields = {
 }
 
 let f_bool_active = Field.v "Active" (bool (bits ~width:1 U8))
+let bf_bool_active = Codec.(f_bool_active $ fun b -> b.bl_active)
 
 let bool_fields_codec =
   Codec.v "BoolFields"
@@ -201,7 +202,7 @@ let bool_fields_codec =
       { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
     Codec.
       [
-        (f_bool_active $ fun b -> b.bl_active);
+        bf_bool_active;
         (Field.v "Valid" (bool (bits ~width:1 U8)) $ fun b -> b.bl_valid);
         (Field.v "Mode" (bits ~width:6 U8) $ fun b -> b.bl_mode);
         (Field.v "Code" uint8 $ fun b -> b.bl_code);
@@ -237,6 +238,7 @@ type large_mixed = {
 }
 
 let f_mixed_timestamp = Field.v "Timestamp" uint64be
+let bf_mixed_timestamp = Codec.(f_mixed_timestamp $ fun l -> l.lg_timestamp)
 
 let large_mixed_codec =
   Codec.v "LargeMixed"
@@ -264,7 +266,7 @@ let large_mixed_codec =
         (Field.v "DataOffset" uint16be $ fun l -> l.lg_offset);
         (Field.v "DataLength" uint16be $ fun l -> l.lg_length);
         (Field.v "CRC" uint32be $ fun l -> l.lg_crc);
-        (f_mixed_timestamp $ fun l -> l.lg_timestamp);
+        bf_mixed_timestamp;
       ]
 
 let large_mixed_struct = C.struct_of_codec large_mixed_codec
@@ -324,15 +326,12 @@ let f_mp_priority =
   Field.v "Priority" (map ~decode:priority_of_int ~encode:int_of_priority uint8)
 
 let f_mp_value = Field.v "Value" uint8
+let bf_mp_priority = Codec.(f_mp_priority $ fun m -> m.mp_priority)
 
 let mapped_codec =
   Codec.v "Mapped"
     (fun pri value -> { mp_priority = pri; mp_value = value })
-    Codec.
-      [
-        (f_mp_priority $ fun m -> m.mp_priority);
-        (f_mp_value $ fun m -> m.mp_value);
-      ]
+    Codec.[ bf_mp_priority; (f_mp_value $ fun m -> m.mp_value) ]
 
 let mapped_struct = C.struct_of_codec mapped_codec
 let mapped_size = Codec.wire_size mapped_codec
@@ -362,11 +361,12 @@ let f_cd_type =
        (bits ~width:1 U8))
 
 let f_cd_id = Field.v "Id" (bits ~width:7 U8)
+let bf_cd_type = Codec.(f_cd_type $ fun c -> c.cd_type)
 
 let cases_demo_codec =
   Codec.v "CasesDemo"
     (fun ptype id -> { cd_type = ptype; cd_id = id })
-    Codec.[ (f_cd_type $ fun c -> c.cd_type); (f_cd_id $ fun c -> c.cd_id) ]
+    Codec.[ bf_cd_type; (f_cd_id $ fun c -> c.cd_id) ]
 
 let cases_demo_struct = C.struct_of_codec cases_demo_codec
 let cases_demo_size = Codec.wire_size cases_demo_codec
@@ -399,12 +399,12 @@ let f_en_status =
        uint8)
 
 let f_en_code = Field.v "Code" uint8
+let bf_en_status = Codec.(f_en_status $ fun e -> e.en_status)
 
 let enum_demo_codec =
   Codec.v "EnumDemo"
     (fun status code -> { en_status = status; en_code = code })
-    Codec.
-      [ (f_en_status $ fun e -> e.en_status); (f_en_code $ fun e -> e.en_code) ]
+    Codec.[ bf_en_status; (f_en_code $ fun e -> e.en_code) ]
 
 let enum_demo_struct = C.struct_of_codec enum_demo_codec
 let enum_demo_size = Codec.wire_size enum_demo_codec
@@ -433,14 +433,12 @@ let f_co_version =
   Field.v "Version" (where Expr.(field_ref f_co_version_c = int 0) uint8)
 
 let f_co_data = Field.v "Data" uint8
+let bf_co_data = Codec.(f_co_data $ fun c -> c.co_data)
 
 let constrained_codec =
   Codec.v "Constrained"
     (fun version data -> { co_version = version; co_data = data })
-    Codec.
-      [
-        (f_co_version $ fun c -> c.co_version); (f_co_data $ fun c -> c.co_data);
-      ]
+    Codec.[ (f_co_version $ fun c -> c.co_version); bf_co_data ]
 
 let constrained_struct = C.struct_of_codec constrained_codec
 let constrained_size = Codec.wire_size constrained_codec

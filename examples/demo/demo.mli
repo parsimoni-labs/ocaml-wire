@@ -10,6 +10,9 @@ val minimal_codec : minimal Wire.Codec.t
 val f_minimal_value : int Wire.Field.t
 (** Zero-copy field accessor for the Value field. *)
 
+val bf_minimal_value : (int, minimal) Wire.Codec.field
+(** Bound field for Codec.get/set on Value. *)
+
 val minimal_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -39,6 +42,9 @@ val all_ints_codec : all_ints Wire.Codec.t
 val f_ints_u64be : int64 Wire.Field.t
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
+val bf_ints_u64be : (int64, all_ints) Wire.Codec.field
+(** Bound field for Codec.get/set on U64BE. *)
+
 val all_ints_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -61,6 +67,9 @@ val bf8_codec : bf8 Wire.Codec.t
 val f_bf8_value : int Wire.Field.t
 (** Zero-copy field accessor for the Value bitfield (5 bits in bf_uint8). *)
 
+val bf_bf8_value : (int, bf8) Wire.Codec.field
+(** Bound field for Codec.get/set on Value. *)
+
 val bf8_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -82,6 +91,9 @@ val bf16_codec : bf16 Wire.Codec.t
 
 val f_bf16_id : int Wire.Field.t
 (** Zero-copy field accessor for the Id bitfield (11 bits in bf_uint16be). *)
+
+val bf_bf16_id : (int, bf16) Wire.Codec.field
+(** Bound field for Codec.get/set on Id. *)
 
 val bf16_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
@@ -111,6 +123,9 @@ val f_bf32_pri : int Wire.Field.t
 (** Zero-copy field accessor for the Priority bitfield (8 bits in bf_uint32be).
 *)
 
+val bf_bf32_pri : (int, bf32) Wire.Codec.field
+(** Bound field for Codec.get/set on Priority. *)
+
 val bf32_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -138,6 +153,9 @@ val bool_fields_codec : bool_fields Wire.Codec.t
 val f_bool_active : bool Wire.Field.t
 (** Zero-copy field accessor for the Active field (bool from bf1 in bf_uint8).
 *)
+
+val bf_bool_active : (bool, bool_fields) Wire.Codec.field
+(** Bound field for Codec.get/set on Active. *)
 
 val bool_fields_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
@@ -173,6 +191,9 @@ val f_mixed_timestamp : int64 Wire.Field.t
 (** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
     fields). *)
 
+val bf_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
+(** Bound field for Codec.get/set on Timestamp. *)
+
 val large_mixed_struct : Wire.C.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
@@ -198,6 +219,9 @@ val mapped_struct : Wire.C.Raw.struct_
 
 val f_mp_priority : priority Wire.Field.t
 (** Priority field. *)
+
+val bf_mp_priority : (priority, mapped) Wire.Codec.field
+(** Bound field for Codec.get/set on Priority. *)
 
 val f_mp_value : int Wire.Field.t
 (** Value field. *)
@@ -225,6 +249,9 @@ val cases_demo_struct : Wire.C.Raw.struct_
 val f_cd_type : ptype Wire.Field.t
 (** Type field. *)
 
+val bf_cd_type : (ptype, cases_demo) Wire.Codec.field
+(** Bound field for Codec.get/set on PacketType. *)
+
 val f_cd_id : int Wire.Field.t
 (** ID field. *)
 
@@ -250,6 +277,9 @@ val enum_demo_struct : Wire.C.Raw.struct_
 
 val f_en_status : status Wire.Field.t
 (** Status field. *)
+
+val bf_en_status : (status, enum_demo) Wire.Codec.field
+(** Bound field for Codec.get/set on StatusCode. *)
 
 val f_en_code : int Wire.Field.t
 (** Code field. *)
@@ -278,6 +308,9 @@ val f_co_version : int Wire.Field.t
 
 val f_co_data : int Wire.Field.t
 (** Data field. *)
+
+val bf_co_data : (int, constrained) Wire.Codec.field
+(** Bound field for Codec.get/set on Data. *)
 
 val constrained_size : int
 (** Wire size. *)

@@ -13,25 +13,21 @@ module Slice = Bytesrw.Bytes.Slice
 
 (* ── Bound fields ── *)
 
-let cf_minimal_value = Codec.(Demo.f_minimal_value $ fun m -> m.Demo.m_value)
-let cf_bf8_value = Codec.(Demo.f_bf8_value $ fun b -> b.Demo.bf8_value)
-let cf_bf16_id = Codec.(Demo.f_bf16_id $ fun b -> b.Demo.bf16_id)
-let cf_bool_active = Codec.(Demo.f_bool_active $ fun b -> b.Demo.bl_active)
-let cf_bf32_pri = Codec.(Demo.f_bf32_pri $ fun b -> b.Demo.bf32_pri)
-let cf_ints_u64be = Codec.(Demo.f_ints_u64be $ fun a -> a.Demo.ai_u64be)
-
-let cf_mixed_timestamp =
-  Codec.(Demo.f_mixed_timestamp $ fun l -> l.Demo.lg_timestamp)
-
-let cf_mp_priority = Codec.(Demo.f_mp_priority $ fun m -> m.Demo.mp_priority)
-let cf_cd_type = Codec.(Demo.f_cd_type $ fun c -> c.Demo.cd_type)
-let cf_en_status = Codec.(Demo.f_en_status $ fun e -> e.Demo.en_status)
-let cf_co_data = Codec.(Demo.f_co_data $ fun c -> c.Demo.co_data)
+let cf_minimal_value = Demo.bf_minimal_value
+let cf_bf8_value = Demo.bf_bf8_value
+let cf_bf16_id = Demo.bf_bf16_id
+let cf_bool_active = Demo.bf_bool_active
+let cf_bf32_pri = Demo.bf_bf32_pri
+let cf_ints_u64be = Demo.bf_ints_u64be
+let cf_mixed_timestamp = Demo.bf_mixed_timestamp
+let cf_mp_priority = Demo.bf_mp_priority
+let cf_cd_type = Demo.bf_cd_type
+let cf_en_status = Demo.bf_en_status
+let cf_co_data = Demo.bf_co_data
 let cf_cw_report = Space.bf_cw_report
 let cf_ip_src = Net.bf_ip_src
 let cf_tcp_dst_port = Net.bf_tcp_dst_port
 let cf_tcp_syn = Net.bf_tcp_syn
-let cf_tcp_src_port = Net.bf_tcp_src_port
 let cf_eth_payload = Net.bf_eth_payload
 let cf_ip_payload = Net.bf_ip_payload
 let n_data = 1024
