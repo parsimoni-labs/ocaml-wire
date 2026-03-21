@@ -1,10 +1,16 @@
 (** APID demux throughput benchmark.
 
     Simulates a SpaceWire CCSDS Packet Transfer Protocol router using Wire's
-    staged Codec.get — all field access is generated from the Wire DSL. *)
+    staged Codec.get — all field access is generated from the Wire DSL. The C
+    baseline does the same work with hand-written bitfield extraction. *)
 
 open Bench_lib
 module C = Wire.Codec
+
+external c_apid_route : bytes -> int -> int -> int = "c_apid_route"
+
+external c_apid_route_counts : bytes -> int -> int -> int
+  = "c_apid_route_counts"
 
 let cf_sp_apid = Space.bf_sp_apid
 let cf_sp_seq_count = Space.bf_sp_seq_count
@@ -98,19 +104,48 @@ let () =
     Array.fill handler_counts 0 4 0
   in
 
-  let single_pkt =
-    Bytes.sub buf 0 (hdr + payload_size_of_apid (get_apid buf 0) + 1)
+  (* Verify OCaml and C produce the same hk handler count *)
+  let verify () =
+    reset ();
+    off := 0;
+    for _ = 0 to n_pkts - 1 do
+      let o = !off in
+      if o + hdr > total_bytes then off := 0;
+      let o = !off in
+      let apid = get_apid buf o in
+      let _seq = get_seq buf o in
+      let dlen = get_dlen buf o in
+      dispatch routing_table.(apid);
+      off := o + hdr + dlen + 1
+    done;
+    let ocaml_hk = handler_counts.(0) in
+    let c_hk = c_apid_route_counts buf 0 n_pkts in
+    if ocaml_hk <> c_hk then
+      Fmt.failwith "Routing result mismatch: OCaml hk=%d C hk=%d" ocaml_hk c_hk;
+    reset ()
   in
+
   let t =
-    ( v "Wire (staged Codec.get)" ~size:hdr ~reset ocaml_fn |> fun t ->
-      match C_tier.spacepacket_loop with Some f -> with_c f buf t | None -> t )
-    |> fun t ->
-    match C_tier.spacepacket_check with
-    | Some f -> with_ffi f single_pkt t
-    | None -> t
+    v "Wire (staged Codec.get)" ~size:hdr ~reset ocaml_fn
+    |> with_c c_apid_route buf |> with_verify verify
   in
 
   run_table ~title:"APID routing" ~n:n_pkts ~unit:"pkt" [ t ];
 
-  Fmt.pr "\n  routed: hk=%d sci=%d diag=%d idle=%d\n" handler_counts.(0)
-    handler_counts.(1) handler_counts.(2) handler_counts.(3)
+  (* Print final results *)
+  reset ();
+  off := 0;
+  for _ = 0 to n_pkts - 1 do
+    let o = !off in
+    if o + hdr > total_bytes then off := 0;
+    let o = !off in
+    let apid = get_apid buf o in
+    let _seq = get_seq buf o in
+    let dlen = get_dlen buf o in
+    dispatch routing_table.(apid);
+    off := o + hdr + dlen + 1
+  done;
+  let c_hk = c_apid_route_counts buf 0 n_pkts in
+  Fmt.pr "\n  OCaml: hk=%d sci=%d diag=%d idle=%d\n" handler_counts.(0)
+    handler_counts.(1) handler_counts.(2) handler_counts.(3);
+  Fmt.pr "  C:     hk=%d\n" c_hk

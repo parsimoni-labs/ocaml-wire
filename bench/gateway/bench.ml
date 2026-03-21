@@ -1,10 +1,13 @@
 (** TM frame reassembly benchmark.
 
     Simulates a downlink TM frame processor using Wire's staged Codec.get — all
-    field access is generated from the Wire DSL. *)
+    field access is generated from the Wire DSL. The C baseline does the same
+    work with hand-written bitfield extraction. *)
 
 open Bench_lib
 module C = Wire.Codec
+
+external c_tm_reassemble : bytes -> int -> int -> int = "c_tm_reassemble"
 
 let cadu_size = 1115
 let tm_hdr = Wire.Codec.wire_size Space.tm_frame_codec
@@ -90,16 +93,9 @@ let () =
         done)
   in
 
-  let single_frame = Bytes.sub buf 0 cadu_size in
   let t =
-    ( v "Wire (staged Codec.get)" ~size:cadu_size ~reset ocaml_fn |> fun t ->
-      match C_tier.tmframe_loop with
-      | Some f -> with_c f single_frame t
-      | None -> t )
-    |> fun t ->
-    match C_tier.tmframe_check with
-    | Some f -> with_ffi f single_frame t
-    | None -> t
+    v "Wire (staged Codec.get)" ~size:cadu_size ~reset ocaml_fn
+    |> with_c c_tm_reassemble buf
   in
 
   run_table ~title:"TM frame reassembly" ~n ~unit:"frm" [ t ]

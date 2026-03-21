@@ -33,6 +33,10 @@ val with_c : (bytes -> int -> int -> int) -> bytes -> t -> t
 val with_ffi : (bytes -> bool) -> bytes -> t -> t
 (** [with_ffi ffi_check buf t] adds the OCaml->C FFI tier. *)
 
+val with_verify : (unit -> unit) -> t -> t
+(** [with_verify f t] adds a verification function that runs during {!check} to
+    confirm OCaml and C tiers produce the same results. *)
+
 val cycling :
   data:bytes ->
   n_items:int ->

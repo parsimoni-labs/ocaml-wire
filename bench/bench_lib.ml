@@ -37,13 +37,15 @@ type t = {
   reset : unit -> unit;
   c : ((bytes -> int -> int -> int) * bytes) option;
   ffi : ((bytes -> bool) * bytes) option;
+  verify : (unit -> unit) option;
 }
 
 let v label ~size ?(reset = ignore) ocaml =
-  { label; size; ocaml; reset; c = None; ffi = None }
+  { label; size; ocaml; reset; c = None; ffi = None; verify = None }
 
 let with_c c_loop c_buf t = { t with c = Some (c_loop, c_buf) }
 let with_ffi ffi_check ffi_buf t = { t with ffi = Some (ffi_check, ffi_buf) }
+let with_verify f t = { t with verify = Some f }
 
 let cycling ~data ~n_items ~size read_fn =
   let i = ref 0 in
@@ -82,8 +84,12 @@ let check t =
         Fmt.failwith "%s: FFI validation failed on test data" t.label
   | None -> ());
   (* Verify C tier accepts the data *)
-  match t.c with
+  (match t.c with
   | Some (c_loop, c_buf) -> ignore (c_loop c_buf 0 1)
+  | None -> ());
+  (* Run verify function if present — checks OCaml and C agree *)
+  match t.verify with
+  | Some f -> f ()
   | None -> ()
 
 let run_one ~n t =
@@ -120,7 +126,7 @@ let run_one ~n t =
 
 let ns_fmt_opt = function
   | None -> "-"
-  | Some t -> if t < 0.1 then "-" else Fmt.str "%.1f" t
+  | Some t -> if t < 0.05 then "<0.1" else Fmt.str "%.1f" t
 
 let ns_fmt t = if t < 0.1 then "-" else Fmt.str "%.1f" t
 let alloc_fmt w = if w < 0.5 then "0w" else Fmt.str "%.0fw" w
@@ -128,7 +134,8 @@ let alloc_fmt w = if w < 0.5 then "0w" else Fmt.str "%.0fw" w
 let ratio_fmt ocaml_ns = function
   | None -> "-"
   | Some c ->
-      if c > 0.1 && ocaml_ns > 0.1 then Fmt.str "%.1fx" (ocaml_ns /. c) else "-"
+      if c > 0.01 && ocaml_ns > 0.1 then Fmt.str "%.1fx" (ocaml_ns /. c)
+      else "-"
 
 let throughput_fmt ocaml_ns =
   if ocaml_ns > 0.1 then Fmt.str "%.1f" (1e3 /. ocaml_ns) else "-"
@@ -137,7 +144,7 @@ let cols unit_ =
   [
     ("Label", 42);
     ("Size", 5);
-    ("EverParse C", 11);
+    ("C", 11);
     ("OCaml->C FFI", 12);
     ("OCaml", 9);
     ("alloc", 5);

@@ -1,10 +1,14 @@
 (** CLCW polling loop benchmark.
 
     Simulates a COP-1 receiver polling CLCW words using Wire's staged Codec.get
-    — all field access is generated from the Wire DSL. *)
+    — all field access is generated from the Wire DSL. The C baseline does the
+    same work with hand-written bitfield extraction. *)
 
 open Bench_lib
 module C = Wire.Codec
+
+external c_clcw_poll : bytes -> int -> int -> int = "c_clcw_poll"
+external c_clcw_poll_result : bytes -> int -> int = "c_clcw_poll_result"
 
 let n_words = 10_000_000
 let word_size = Wire.Codec.wire_size Space.clcw_codec
@@ -58,15 +62,49 @@ let () =
     expected_seq := 0
   in
 
-  let single_word = Bytes.sub buf 0 word_size in
+  (* Verify OCaml and C produce the same anomaly count *)
+  let verify () =
+    reset ();
+    for i = 0 to n_words - 1 do
+      let off = i * word_size in
+      let lockout = get_lockout buf off in
+      let wait = get_wait buf off in
+      let retransmit = get_retransmit buf off in
+      let report = get_report buf off in
+      if
+        lockout <> 0 || wait <> 0 || retransmit <> 0
+        || report <> !expected_seq land 0xFF
+      then incr anomalies;
+      expected_seq := report
+    done;
+    let ocaml_anomalies = !anomalies in
+    let c_anomalies = c_clcw_poll_result buf 0 in
+    if ocaml_anomalies <> c_anomalies then
+      Fmt.failwith "CLCW result mismatch: OCaml=%d C=%d" ocaml_anomalies
+        c_anomalies;
+    reset ()
+  in
+
   let t =
-    ( v "Wire (staged Codec.get)" ~size:word_size ~reset fn |> fun t ->
-      match C_tier.clcw_loop with Some f -> with_c f buf t | None -> t )
-    |> fun t ->
-    match C_tier.clcw_check with
-    | Some f -> with_ffi f single_word t
-    | None -> t
+    v "Wire (staged Codec.get)" ~size:word_size ~reset fn
+    |> with_c c_clcw_poll buf |> with_verify verify
   in
 
   run_table ~title:"CLCW polling" ~n:(n_words * 10) ~unit:"word" [ t ];
-  Fmt.pr "\n  %d anomalies\n" !anomalies
+
+  (* Print final results *)
+  reset ();
+  for i = 0 to n_words - 1 do
+    let off = i * word_size in
+    let lockout = get_lockout buf off in
+    let wait = get_wait buf off in
+    let retransmit = get_retransmit buf off in
+    let report = get_report buf off in
+    if
+      lockout <> 0 || wait <> 0 || retransmit <> 0
+      || report <> !expected_seq land 0xFF
+    then incr anomalies;
+    expected_seq := report
+  done;
+  let c_result = c_clcw_poll_result buf 0 in
+  Fmt.pr "\n  OCaml anomalies: %d\n  C anomalies:     %d\n" !anomalies c_result

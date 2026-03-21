@@ -102,6 +102,7 @@ let () =
       pr "  return Val_int(t1 - t0);\n";
       pr "}\n\n")
     structs;
+
   close_out oc;
 
   (* Step 3: Generate c_stubs.ml *)
@@ -111,7 +112,7 @@ let () =
   pr "(* Noop FFI stubs *)\n\n";
   pr "external noop : bytes -> bool = \"ep_noop\" [@@noalloc]\n\n";
   pr "external noop_safe : bytes -> bool = \"ep_noop_safe\"\n\n";
-  pr "(* Timed C benchmark loops *)\n\n";
+  pr "(* Timed C benchmark loops — EverParse validation *)\n\n";
   List.iter
     (fun s ->
       let lower = String.lowercase_ascii (Wire.C.Raw.struct_name s) in

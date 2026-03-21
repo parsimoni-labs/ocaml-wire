@@ -1,3 +1,6 @@
 (executable
  (name bench)
+ (foreign_stubs
+  (language c)
+  (names routing_c))
  (libraries space wire bench_lib c_tier memtrace unix fmt))
