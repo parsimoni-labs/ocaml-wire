@@ -563,6 +563,71 @@ let test_output_with_existing_action () =
     (contains ~sub:"out_len" s3d);
   Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
 
+(* ── Full pipeline e2e: 3D → EverParse → WireSet* → compile → call ── *)
+
+let test_e2e_output_parse () =
+  if not has_3d then ()
+  else begin
+    let dir = Filename.temp_dir "wire_e2e_output" "" in
+    (* 1. Build a codec *)
+    let f_id = Wire.Field.v "Id" Wire.uint32be in
+    let f_len = Wire.Field.v "Length" Wire.uint16be in
+    let f_tag = Wire.Field.v "Tag" Wire.uint8 in
+    let codec =
+      let open Wire.Codec in
+      v "TestParse"
+        (fun id len tag -> (id, len, tag))
+        [
+          (f_id $ fun (id, _, _) -> id);
+          (f_len $ fun (_, l, _) -> l);
+          (f_tag $ fun (_, _, t) -> t);
+        ]
+    in
+    let s = Wire.C.struct_of_codec codec in
+    let name = Wire.C.Raw.struct_name s in
+    (* 2. Generate 3D with output pattern and run EverParse *)
+    let schema = Wire.C.schema ~output:true codec in
+    Wire.C.generate ~outdir:dir [ schema ];
+    Wire_3d.run_everparse ~outdir:dir [ schema ];
+    (* 3. Generate ExternalTypedefs.h *)
+    let ext_h = Wire_stubs.to_external_typedefs name in
+    write_file (Filename.concat dir (name ^ "_ExternalTypedefs.h")) ext_h;
+    (* 4. Generate WireSet* implementations + parse stub *)
+    let setters = Wire_stubs.to_wire_setters () in
+    let c_stubs = Wire_stubs.to_c_stubs ~output:true [ s ] in
+    write_file (Filename.concat dir "wire_setters.c") setters;
+    write_file (Filename.concat dir "wire_stubs.c") c_stubs;
+    (* 5. Generate ML stubs *)
+    let ml_stubs = Wire_stubs.to_ml_stubs ~output:true [ s ] in
+    write_file (Filename.concat dir "stubs.ml") ml_stubs;
+    (* 6. Write test program *)
+    write_file
+      (Filename.concat dir "main.ml")
+      {|type test_parse = { id : int; length : int; tag : int }
+
+let () =
+  let buf = Bytes.create 7 in
+  Bytes.set_int32_be buf 0 0x12345678l;
+  Bytes.set_uint16_be buf 4 1000;
+  Bytes.set_uint8 buf 6 42;
+  let (r : test_parse) = Stubs.testparse_parse buf in
+  assert (r.id = 0x12345678);
+  assert (r.length = 1000);
+  assert (r.tag = 42);
+  Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.id r.length r.tag
+|};
+    (* 7. Compile everything *)
+    let cmd =
+      Fmt.str
+        "cd %s && ocamlfind ocamlopt -package wire -linkpkg -ccopt '-I %s' \
+         wire_setters.c wire_stubs.c stubs.ml main.ml -o test_output 2>&1"
+        dir dir
+    in
+    run cmd;
+    (* 8. Run *)
+    run (Filename.concat dir "test_output")
+  end
+
 (* ── Suite ── *)
 
 let suite =
@@ -603,6 +668,7 @@ let suite =
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
+      Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       (* output types *)
       Alcotest.test_case "output: pure uint" `Slow test_output_pure_uint;
       Alcotest.test_case "output: pure bitfield" `Slow test_output_pure_bitfield;

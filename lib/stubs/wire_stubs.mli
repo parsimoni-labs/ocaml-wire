@@ -36,3 +36,11 @@ val to_ml_stub_name : Wire.C.Raw.struct_ -> string
 
 val to_ml_stub : ?output:bool -> Wire.C.Raw.struct_ -> string
 (** [to_ml_stub ?output s] generates a single-struct stub module. *)
+
+val to_external_typedefs : string -> string
+(** [to_external_typedefs name] generates the [*_ExternalTypedefs.h] header that
+    EverParse expects, defining [WIRECTX]. *)
+
+val to_wire_setters : unit -> string
+(** [to_wire_setters ()] generates C implementations of all [WireSet*] functions
+    that store field values into an OCaml record via the [WIRECTX] context. *)
