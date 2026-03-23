@@ -68,6 +68,7 @@ module Raw : sig
   val struct_ : string -> field list -> struct_
   val struct_name : struct_ -> string
   val field_names : struct_ -> string list
+  val field_kinds : struct_ -> (string * Types.ocaml_kind) list
   val struct_params : struct_ -> Types.param list
   val struct_typ : struct_ -> unit Types.typ
   val param : string -> 'a Types.typ -> Types.param

@@ -254,6 +254,36 @@ let struct_name s = s.name
 let struct_typ s = Struct s
 let field_names s = List.filter_map (fun (Field f) -> f.field_name) s.fields
 
+(* What kind of OCaml value a field produces — used by Wire_stubs to
+   generate the right C-to-OCaml conversion in output stubs. *)
+type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
+
+let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ -> K_int
+  | Uint64 _ -> K_int64
+  | Bits _ -> K_int
+  | Map { inner = Bits _; decode = _; encode = _ } ->
+      (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
+      (* We can't distinguish bool from other maps here without checking
+         the decode function. Use K_int as safe default — the EverParse
+         output struct stores the raw int anyway. *)
+      K_int
+  | Map { inner; _ } -> ocaml_kind_of inner
+  | Enum { base; _ } -> ocaml_kind_of base
+  | Where { inner; _ } -> ocaml_kind_of inner
+  | Byte_array _ -> K_string
+  | Byte_slice _ -> K_string (* approximate: slice becomes string in output *)
+  | Unit | All_bytes | All_zeros -> K_unit
+  | _ -> K_int (* fallback *)
+
+let field_kinds s =
+  List.filter_map
+    (fun (Field f) ->
+      match f.field_name with
+      | Some name -> Some (name, ocaml_kind_of f.field_typ)
+      | None -> None)
+    s.fields
+
 (* Parameters *)
 let param name typ =
   { param_name = name; param_typ = Pack_typ typ; mutable_ = false }

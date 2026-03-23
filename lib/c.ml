@@ -123,6 +123,7 @@ module Raw = struct
   let struct_ name fields = Types.struct_ name (unpack_fields fields)
   let struct_name = Types.struct_name
   let field_names = Types.field_names
+  let field_kinds = Types.field_kinds
   let struct_params (s : Types.struct_) = s.params
   let struct_typ = Types.struct_typ
   let param = Types.param

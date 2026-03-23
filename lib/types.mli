@@ -357,8 +357,11 @@ val struct_ : string -> field list -> struct_
 (** Construct a struct from fields. *)
 
 val struct_name : struct_ -> string
-
 val field_names : struct_ -> string list
+
+type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
+
+val field_kinds : struct_ -> (string * ocaml_kind) list
 (** Return the struct name. *)
 
 val struct_typ : struct_ -> unit typ
