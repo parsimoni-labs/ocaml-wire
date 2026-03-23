@@ -3,52 +3,65 @@
 type t = { name : string; module_ : Types.module_; wire_size : int }
 
 (* Rewrite a struct to add the EverParse output-types pattern *)
+let is_bitfield : type a. a Types.typ -> bool = function
+  | Types.Bits _ -> true
+  | Types.Map { inner = Types.Bits _; _ } -> true
+  | _ -> false
+
 let with_output (s : Types.struct_) : Types.decl list =
   let out_name = "O" ^ s.name in
+  (* Output struct: non-bitfield named fields only (EverParse rejects
+     per-field actions on bitfield sub-fields) *)
   let out_fields =
     List.filter_map
       (fun (Types.Field f) ->
         match f.field_name with
-        | Some name -> Some (Types.field name f.field_typ)
-        | None -> None)
+        | Some name when not (is_bitfield f.field_typ) ->
+            Some (Types.field name f.field_typ)
+        | _ -> None)
       s.fields
   in
-  let out_struct = Types.struct_ out_name out_fields in
-  let out_decl = Types.typedef ~output:true out_struct in
-  let out_param = Types.mutable_param "out" (Types.struct_typ out_struct) in
-  let parse_fields =
-    List.map
-      (fun (Types.Field f) ->
-        match f.field_name with
-        | Some name ->
-            let assign = Types.Field_assign ("out", name, Types.Ref name) in
-            let new_action =
-              match f.action with
-              | None ->
-                  Some (Types.On_success [ assign; Types.Return Types.true_ ])
-              | Some (Types.On_success stmts) ->
-                  Some
-                    (Types.On_success
-                       (stmts @ [ assign; Types.Return Types.true_ ]))
-              | Some (Types.On_act stmts) ->
-                  Some (Types.On_act (stmts @ [ assign ]))
-            in
-            Types.Field
-              {
-                field_name = Some name;
-                field_typ = f.field_typ;
-                constraint_ = f.constraint_;
-                action = new_action;
-              }
-        | None -> Types.Field f)
-      s.fields
-  in
-  let parse_struct =
-    Types.param_struct s.name (s.params @ [ out_param ]) ?where:s.where
-      parse_fields
-  in
-  let parse_decl = Types.typedef ~entrypoint:true parse_struct in
-  [ out_decl; parse_decl ]
+  let has_output_fields = out_fields <> [] in
+  if not has_output_fields then
+    (* No non-bitfield fields — fall back to plain typedef *)
+    [ Types.typedef ~entrypoint:true s ]
+  else
+    let out_struct = Types.struct_ out_name out_fields in
+    let out_decl = Types.typedef ~output:true out_struct in
+    let out_param = Types.mutable_param "out" (Types.struct_typ out_struct) in
+    let parse_fields =
+      List.map
+        (fun (Types.Field f) ->
+          match f.field_name with
+          | Some name when not (is_bitfield f.field_typ) ->
+              let assign = Types.Field_assign ("out", name, Types.Ref name) in
+              let new_action =
+                match f.action with
+                | None ->
+                    Some (Types.On_success [ assign; Types.Return Types.true_ ])
+                | Some (Types.On_success stmts) ->
+                    Some
+                      (Types.On_success
+                         (stmts @ [ assign; Types.Return Types.true_ ]))
+                | Some (Types.On_act stmts) ->
+                    Some (Types.On_act (stmts @ [ assign ]))
+              in
+              Types.Field
+                {
+                  field_name = Some name;
+                  field_typ = f.field_typ;
+                  constraint_ = f.constraint_;
+                  action = new_action;
+                }
+          | _ -> Types.Field f)
+        s.fields
+    in
+    let parse_struct =
+      Types.param_struct s.name (s.params @ [ out_param ]) ?where:s.where
+        parse_fields
+    in
+    let parse_decl = Types.typedef ~entrypoint:true parse_struct in
+    [ out_decl; parse_decl ]
 
 let schema ?(output = false) (type r) (codec : r Codec.t) : t =
   let s = Codec.to_struct codec in

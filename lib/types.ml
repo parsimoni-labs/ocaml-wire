@@ -481,9 +481,11 @@ let rec pp_action_stmt ppf = function
 
 let pp_action ppf = function
   | On_success stmts ->
-      Fmt.pf ppf "{:on-success %a }" Fmt.(list ~sep:sp pp_action_stmt) stmts
+      Fmt.pf ppf "@[<h>{:on-success %a }@]"
+        Fmt.(list ~sep:sp pp_action_stmt)
+        stmts
   | On_act stmts ->
-      Fmt.pf ppf "{:act %a }" Fmt.(list ~sep:sp pp_action_stmt) stmts
+      Fmt.pf ppf "@[<h>{:act %a }@]" Fmt.(list ~sep:sp pp_action_stmt) stmts
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =
