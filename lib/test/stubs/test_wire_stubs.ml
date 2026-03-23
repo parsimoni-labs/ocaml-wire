@@ -390,6 +390,203 @@ let test_e2e_bitfields () =
   assert (not (Stubs.bfheader_check (Bytes.create 2)))
 |}
 
+(* ── Output types ── *)
+
+(** Helper: build a codec, generate 3D with output:true, check patterns in the
+    generated string, and optionally run EverParse to validate. *)
+let check_output_3d ~name codec expected_patterns =
+  let schema = Wire.C.schema ~output:true codec in
+  let td = Wire.C.Raw.to_3d schema.module_ in
+  (* Check expected patterns in the generated 3D *)
+  List.iter
+    (fun pat ->
+      Alcotest.(check bool)
+        (Fmt.str "%s: contains %S" name pat)
+        true (contains ~sub:pat td))
+    expected_patterns;
+  (* If 3d.exe is available, write and validate *)
+  if has_3d then begin
+    let dir = Filename.temp_dir ("wire_output_" ^ name) "" in
+    Wire.C.generate ~outdir:dir [ schema ];
+    Wire_3d.run_everparse ~outdir:dir [ schema ]
+  end
+
+let test_output_pure_uint () =
+  let f_a = Field.v "a" uint8 in
+  let f_b = Field.v "b" uint16be in
+  let f_c = Field.v "c" uint32be in
+  let codec =
+    let open Codec in
+    v "PureUint"
+      (fun a b c -> (a, b, c))
+      [
+        (f_a $ fun (a, _, _) -> a);
+        (f_b $ fun (_, b, _) -> b);
+        (f_c $ fun (_, _, c) -> c);
+      ]
+  in
+  check_output_3d ~name:"PureUint" codec
+    [ "output"; ":on-success"; "out->a"; "out->b"; "out->c"; "OPureUint" ]
+
+let test_output_pure_bitfield () =
+  let f_hi = Field.v "hi" (bits ~width:4 U8) in
+  let f_lo = Field.v "lo" (bits ~width:4 U8) in
+  let codec =
+    let open Codec in
+    v "PureBitfield"
+      (fun hi lo -> (hi, lo))
+      [ (f_hi $ fun (h, _) -> h); (f_lo $ fun (_, l) -> l) ]
+  in
+  check_output_3d ~name:"PureBitfield" codec
+    [ "output"; ":act"; "out->hi"; "out->lo"; "OPureBitfield" ]
+
+let test_output_mixed () =
+  let f_version = Field.v "version" (bits ~width:4 U8) in
+  let f_flags = Field.v "flags" (bits ~width:4 U8) in
+  let f_length = Field.v "length" uint16be in
+  let codec =
+    let open Codec in
+    v "MixedOutput"
+      (fun v f l -> (v, f, l))
+      [
+        (f_version $ fun (v, _, _) -> v);
+        (f_flags $ fun (_, f, _) -> f);
+        (f_length $ fun (_, _, l) -> l);
+      ]
+  in
+  check_output_3d ~name:"MixedOutput" codec
+    [
+      "output";
+      ":act";
+      "out->version";
+      "out->flags";
+      ":on-success";
+      "out->length";
+      "OMixedOutput";
+    ]
+
+let test_output_bool_bitfield () =
+  let f_flag = Field.v "flag" (bool (bits ~width:1 U8)) in
+  let f_data = Field.v "data" uint8 in
+  let codec =
+    let open Codec in
+    v "BoolBf"
+      (fun flag data -> (flag, data))
+      [ (f_flag $ fun (f, _) -> f); (f_data $ fun (_, d) -> d) ]
+  in
+  (* bool(bits ~width:1 U8) is Map { inner = Bits _; ... } — should be :act *)
+  check_output_3d ~name:"BoolBf" codec
+    [ "output"; ":act"; "out->flag"; ":on-success"; "out->data"; "OBoolBf" ]
+
+let test_output_constrained () =
+  let f_x_ref = Field.v "x" uint8 in
+  let f_x =
+    Field.v "x" ~constraint_:Expr.(Field.ref f_x_ref <= int 100) uint8
+  in
+  let codec =
+    let open Codec in
+    v "ConstrainedOut" (fun x -> x) [ (f_x $ fun x -> x) ]
+  in
+  check_output_3d ~name:"ConstrainedOut" codec
+    [ "output"; ":on-success"; "out->x"; "OConstrainedOut" ]
+
+let test_output_byte_array () =
+  let f_tag = Field.v "tag" uint8 in
+  let f_payload = Field.v "payload" (byte_array ~size:(int 4)) in
+  let codec =
+    let open Codec in
+    v "ByteArrayOut"
+      (fun tag payload -> (tag, payload))
+      [ (f_tag $ fun (t, _) -> t); (f_payload $ fun (_, p) -> p) ]
+  in
+  (* byte_array fields generate output assignments that EverParse cannot
+     handle (assigning whole arrays is not valid 3D). We still check that
+     the generated 3D string has the expected structure. *)
+  let schema = Wire.C.schema ~output:true codec in
+  let td = Wire.C.Raw.to_3d schema.module_ in
+  List.iter
+    (fun pat ->
+      Alcotest.(check bool)
+        (Fmt.str "ByteArrayOut: contains %S" pat)
+        true (contains ~sub:pat td))
+    [ "output"; ":on-success"; "out->tag"; "OByteArrayOut"; "payload" ]
+
+let test_output_only_bitfields () =
+  let f_a = Field.v "a" (bits ~width:3 U8) in
+  let f_b = Field.v "b" (bits ~width:5 U8) in
+  let f_c = Field.v "c" (bits ~width:8 U16be) in
+  let f_d = Field.v "d" (bits ~width:8 U16be) in
+  let codec =
+    let open Codec in
+    v "OnlyBitfields"
+      (fun a b c d -> (a, b, c, d))
+      [
+        (f_a $ fun (a, _, _, _) -> a);
+        (f_b $ fun (_, b, _, _) -> b);
+        (f_c $ fun (_, _, c, _) -> c);
+        (f_d $ fun (_, _, _, d) -> d);
+      ]
+  in
+  let schema = Wire.C.schema ~output:true codec in
+  let td = Wire.C.Raw.to_3d schema.module_ in
+  (* All fields are bitfields, so only :act, no :on-success *)
+  Alcotest.(check bool)
+    "only bitfields: has :act" true (contains ~sub:":act" td);
+  Alcotest.(check bool)
+    "only bitfields: no :on-success" false
+    (contains ~sub:":on-success" td);
+  check_output_3d ~name:"OnlyBitfields" codec
+    [ "output"; ":act"; "out->a"; "out->b"; "out->c"; "out->d" ]
+
+let test_output_only_nonbitfields () =
+  let f_a = Field.v "a" uint8 in
+  let f_b = Field.v "b" uint16be in
+  let f_c = Field.v "c" uint32be in
+  let codec =
+    let open Codec in
+    v "OnlyNonBf"
+      (fun a b c -> (a, b, c))
+      [
+        (f_a $ fun (a, _, _) -> a);
+        (f_b $ fun (_, b, _) -> b);
+        (f_c $ fun (_, _, c) -> c);
+      ]
+  in
+  let schema = Wire.C.schema ~output:true codec in
+  let td = Wire.C.Raw.to_3d schema.module_ in
+  (* All fields are non-bitfields, so only :on-success, no :act *)
+  Alcotest.(check bool)
+    "only non-bf: has :on-success" true
+    (contains ~sub:":on-success" td);
+  Alcotest.(check bool) "only non-bf: no :act" false (contains ~sub:":act" td);
+  check_output_3d ~name:"OnlyNonBf" codec
+    [ "output"; ":on-success"; "out->a"; "out->b"; "out->c" ]
+
+let test_output_with_existing_action () =
+  let out_len = Param.output "out_len" uint16be in
+  let f_len = Field.v "len" uint16be in
+  let f_data =
+    Field.v "data" uint8
+      ~action:(Action.on_success [ Action.assign out_len (Field.ref f_len) ])
+  in
+  let codec =
+    let open Codec in
+    v "WithAction"
+      (fun len data -> (len, data))
+      [ (f_len $ fun (l, _) -> l); (f_data $ fun (_, d) -> d) ]
+  in
+  let schema = Wire.C.schema ~output:true codec in
+  let td = Wire.C.Raw.to_3d schema.module_ in
+  (* data field had an existing :on-success action; output should merge *)
+  Alcotest.(check bool)
+    "existing action: has out_len assign" true
+    (contains ~sub:"out_len" td);
+  Alcotest.(check bool)
+    "existing action: has out->data" true
+    (contains ~sub:"out->data" td);
+  check_output_3d ~name:"WithAction" codec
+    [ "output"; "out->len"; "out->data"; "OWithAction" ]
+
 (* ── Suite ── *)
 
 let suite =
@@ -430,4 +627,19 @@ let suite =
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
+      (* output types *)
+      Alcotest.test_case "output: pure uint" `Slow test_output_pure_uint;
+      Alcotest.test_case "output: pure bitfield" `Slow test_output_pure_bitfield;
+      Alcotest.test_case "output: mixed bf + non-bf" `Slow test_output_mixed;
+      Alcotest.test_case "output: bool mapped bitfield" `Slow
+        test_output_bool_bitfield;
+      Alcotest.test_case "output: constrained field" `Slow
+        test_output_constrained;
+      Alcotest.test_case "output: byte_array field" `Slow test_output_byte_array;
+      Alcotest.test_case "output: only bitfields" `Slow
+        test_output_only_bitfields;
+      Alcotest.test_case "output: only non-bitfields" `Slow
+        test_output_only_nonbitfields;
+      Alcotest.test_case "output: existing action" `Slow
+        test_output_with_existing_action;
     ] )
