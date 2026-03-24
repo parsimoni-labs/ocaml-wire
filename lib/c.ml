@@ -135,13 +135,11 @@ let with_output (s : Types.struct_) : Types.decl list =
   in
   [ ctx_decl ] @ extern_decls @ [ parse_decl ]
 
-let schema ?(output = false) (type r) (codec : r Codec.t) : t =
+let schema (type r) (codec : r Codec.t) : t =
   let s = Codec.to_struct codec in
   let name = Types.struct_name s in
   let wire_size = Codec.wire_size codec in
-  let decls =
-    if output then with_output s else [ Types.typedef ~entrypoint:true s ]
-  in
+  let decls = with_output s in
   let m = Types.module_ decls in
   { name; module_ = m; wire_size }
 

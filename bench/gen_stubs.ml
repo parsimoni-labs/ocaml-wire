@@ -39,7 +39,7 @@ let write_file path content =
 let () =
   let structs = List.map (fun (E (_, _, s)) -> s) entries in
   let schemas =
-    List.map (fun (E (_, codec, _)) -> Wire.C.schema ~output:true codec) entries
+    List.map (fun (E (_, codec, _)) -> Wire.C.schema codec) entries
   in
 
   (* 1. Generate .3d + ExternalTypedefs.h *)
@@ -59,7 +59,7 @@ let () =
   (* 3. Generate c_stubs.c: WireSet* + parse stubs + timed C loops *)
   let oc = open_out "c_stubs.c" in
   output_string oc (Wire_stubs.to_wire_setters ());
-  output_string oc (Wire_stubs.to_c_stubs ~output:true structs);
+  output_string oc (Wire_stubs.to_c_stubs structs);
 
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
@@ -105,7 +105,7 @@ let () =
 
   (* 4. Generate c_stubs.ml: parse externals + loop externals *)
   let oc = open_out "c_stubs.ml" in
-  output_string oc (Wire_stubs.to_ml_stubs ~output:true structs);
+  output_string oc (Wire_stubs.to_ml_stubs structs);
 
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in

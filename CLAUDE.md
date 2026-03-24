@@ -42,10 +42,10 @@ All bench/prof/memtrace targets use `--profile=release`.
 ## Code generation pipeline
 
 All C code generation flows through `Wire_3d` (no duplication):
-1. `C.schema codec` / `C.schema ~output:true codec` -- project a codec to a 3D schema (with optional output-types pattern)
+1. `C.schema codec` -- project a codec to a 3D schema (with extern callbacks for field extraction)
 2. `C.generate ~outdir [ schema ]` -- write `.3d` files; `C.Raw.to_3d` / `C.Raw.to_3d_file` for low-level rendering
 3. `Wire_3d.generate` -- invoke EverParse to produce C parsers
-4. `Wire_stubs.to_c_stubs` / `Wire_stubs.to_ml_stubs` -- generate OCaml FFI bindings calling `Validate` directly (not through EverParse Wrapper); `~output:true` for output-struct extraction
+4. `Wire_stubs.to_c_stubs` / `Wire_stubs.to_ml_stubs` -- generate OCaml FFI bindings calling `Validate` directly (not through EverParse Wrapper)
 
 ## Benchmarking principles
 

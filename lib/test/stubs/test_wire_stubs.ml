@@ -40,43 +40,16 @@ let check_struct s =
   let multi = Wire_stubs.to_ml_stubs [ s ] in
   compile_ml_stub single;
   compile_ml_stub multi;
-  (* Both must have the same type signature (modulo function name) *)
-  let params = struct_params s in
-  let input_params =
-    List.filter (fun p -> not (Wire.Private.param_is_mutable p)) params
-  in
-  let output_params =
-    List.filter (fun p -> Wire.Private.param_is_mutable p) params
-  in
-  let n_inputs = List.length input_params in
-  let n_outputs = List.length output_params in
-  (* Count arrows in signatures *)
+  (* Both must declare external parse : bytes -> 'a *)
+  Alcotest.(check bool) "single has parse" true (contains ~sub:"parse" single);
+  Alcotest.(check bool) "multi has parse" true (contains ~sub:"_parse" multi);
+  (* Count arrows — always exactly 1 (bytes -> 'a) *)
   let count_arrows s =
     let r = Re.compile (Re.str "->") in
     List.length (Re.all r s)
   in
-  let single_arrows = count_arrows single in
-  let multi_arrows = count_arrows multi in
-  let expected = 1 + n_inputs + n_outputs in
-  Alcotest.(check int) "single arity" expected single_arrows;
-  Alcotest.(check int) "multi arity" expected multi_arrows;
-  if n_inputs > 0 then
-    Alcotest.(check bool)
-      "single has int ->" true
-      (contains ~sub:"int ->" single);
-  if n_outputs > 0 then
-    Alcotest.(check bool)
-      "single has int array" true
-      (contains ~sub:"int array" single);
-  let n_args = 1 + n_inputs + n_outputs in
-  if n_args > 5 then begin
-    Alcotest.(check bool)
-      "single has bytecode" true
-      (contains ~sub:"_bytecode" single);
-    Alcotest.(check bool)
-      "multi has bytecode" true
-      (contains ~sub:"_bytecode" multi)
-  end
+  Alcotest.(check int) "single arity" 1 (count_arrows single);
+  Alcotest.(check int) "multi arity" 1 (count_arrows multi)
 
 (* ── No params ── *)
 
@@ -171,20 +144,16 @@ let test_many_params_bytecode () =
        [ field "x" uint8 ])
 
 let test_exactly_five_args () =
-  (* bytes + 4 inputs = 5 args, should NOT trigger bytecode *)
+  (* params are ignored in parse stubs — always bytes -> 'a *)
   let s =
     param_struct "FiveArgs"
       [ param "a" uint8; param "b" uint8; param "c" uint8; param "d" uint8 ]
       [ field "x" uint8 ]
   in
-  check_struct s;
-  let ml = Wire_stubs.to_ml_stub s in
-  Alcotest.(check bool)
-    "no bytecode at exactly 5" false
-    (contains ~sub:"_bytecode" ml)
+  check_struct s
 
-let test_six_args_bytecode () =
-  (* bytes + 5 inputs = 6 args, SHOULD trigger bytecode *)
+let test_six_args () =
+  (* params are ignored in parse stubs — always bytes -> 'a *)
   let s =
     param_struct "SixArgs"
       [
@@ -196,9 +165,7 @@ let test_six_args_bytecode () =
       ]
       [ field "x" uint8 ]
   in
-  check_struct s;
-  let ml = Wire_stubs.to_ml_stub s in
-  Alcotest.(check bool) "bytecode at 6" true (contains ~sub:"_bytecode" ml)
+  check_struct s
 
 (* ── Bitfield params ── *)
 
@@ -216,11 +183,9 @@ let test_multiple_structs () =
   let s3 = param_struct "Baz" [ param "limit" uint8 ] [ field "z" uint32be ] in
   let ml = Wire_stubs.to_ml_stubs [ s1; s2; s3 ] in
   compile_ml_stub ml;
-  Alcotest.(check bool) "has foo" true (contains ~sub:"foo_check" ml);
-  Alcotest.(check bool) "has bar" true (contains ~sub:"bar_check" ml);
-  Alcotest.(check bool) "has baz" true (contains ~sub:"baz_check" ml);
-  (* baz has params *)
-  Alcotest.(check bool) "baz has int" true (contains ~sub:"int ->" ml)
+  Alcotest.(check bool) "has foo" true (contains ~sub:"foo_parse" ml);
+  Alcotest.(check bool) "has bar" true (contains ~sub:"bar_parse" ml);
+  Alcotest.(check bool) "has baz" true (contains ~sub:"baz_parse" ml)
 
 (* ── C stubs (string checks, cannot compile without EverParse headers) ── *)
 
@@ -231,8 +196,8 @@ let test_c_stubs_no_params () =
   in
   let c = Wire_stubs.to_c_stubs [ s ] in
   Alcotest.(check bool)
-    "has check" true
-    (contains ~sub:"caml_wire_simpleheader_check" c);
+    "has parse" true
+    (contains ~sub:"caml_wire_simpleheader_parse" c);
   Alcotest.(check bool)
     "has error handler" true
     (contains ~sub:"simpleheader_err" c);
@@ -246,13 +211,12 @@ let test_c_stubs_with_params () =
   in
   let c = Wire_stubs.to_c_stubs [ s ] in
   Alcotest.(check bool)
-    "has check" true
-    (contains ~sub:"caml_wire_bounded_check" c);
-  Alcotest.(check bool) "has max_len local" true (contains ~sub:"max_len_val" c);
-  Alcotest.(check bool) "has out_len local" true (contains ~sub:"out_len_val" c);
-  Alcotest.(check bool) "has Store_field" true (contains ~sub:"Store_field" c)
+    "has parse" true
+    (contains ~sub:"caml_wire_bounded_parse" c);
+  Alcotest.(check bool) "has WIRECTX" true (contains ~sub:"WIRECTX" c);
+  Alcotest.(check bool) "has error handler" true (contains ~sub:"bounded_err" c)
 
-let test_c_stubs_bytecode () =
+let test_c_stubs_many_params () =
   let s =
     param_struct "ManyParams"
       [
@@ -266,8 +230,10 @@ let test_c_stubs_bytecode () =
       [ field "x" uint8 ]
   in
   let c = Wire_stubs.to_c_stubs [ s ] in
-  Alcotest.(check bool) "has bytecode" true (contains ~sub:"_bytecode" c);
-  Alcotest.(check bool) "has argv" true (contains ~sub:"argv" c)
+  Alcotest.(check bool)
+    "has parse" true
+    (contains ~sub:"caml_wire_manyparams_parse" c);
+  Alcotest.(check bool) "has WIRECTX" true (contains ~sub:"WIRECTX" c)
 
 (* ── to_ml_stub_name ── *)
 
@@ -316,10 +282,19 @@ let e2e ~name ~structs ~module_ ~test_ml =
       (* wire_size unused for generation *)
     in
     Wire_3d.generate_3d ~outdir:dir [ schema ];
+    List.iter
+      (fun s ->
+        let sname = Wire.C.Raw.struct_name s in
+        write_file
+          (Filename.concat dir (sname ^ "_ExternalTypedefs.h"))
+          (Wire_stubs.to_external_typedefs sname))
+      structs;
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     (* 2. Generate C and ML stubs *)
+    let setters = Wire_stubs.to_wire_setters () in
     let c_stubs = Wire_stubs.to_c_stubs structs in
     let ml_stubs = Wire_stubs.to_ml_stubs structs in
+    write_file (Filename.concat dir "wire_setters.c") setters;
     write_file (Filename.concat dir "wire_ffi.c") c_stubs;
     write_file (Filename.concat dir "stubs.ml") ml_stubs;
     write_file (Filename.concat dir "main.ml") test_ml;
@@ -327,7 +302,7 @@ let e2e ~name ~structs ~module_ ~test_ml =
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire -linkpkg -ccopt '-I %s' \
-         wire_ffi.c stubs.ml main.ml -o test_e2e 2>&1"
+         wire_setters.c wire_ffi.c stubs.ml main.ml -o test_e2e 2>&1"
         dir dir
     in
     run cmd;
@@ -336,67 +311,91 @@ let e2e ~name ~structs ~module_ ~test_ml =
   end
 
 let test_e2e_no_params () =
-  let s =
-    struct_ "TestHeader" [ field "version" uint8; field "length" uint16be ]
+  let f_version = Wire.Field.v "version" uint8 in
+  let f_length = Wire.Field.v "length" uint16be in
+  let codec =
+    let open Wire.Codec in
+    v "TestHeader"
+      (fun version length -> (version, length))
+      [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
   in
-  let m = module_ [ typedef ~entrypoint:true s ] in
-  e2e ~name:"TestHeader" ~structs:[ s ] ~module_:m
+  let schema = Wire.C.schema codec in
+  let s = Wire.C.struct_of_codec codec in
+  e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|let () =
+      {|type test_header = { version : int; length : int }
+let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  assert (Stubs.testheader_check buf);
-  (* Truncated buffer should fail *)
-  assert (not (Stubs.testheader_check (Bytes.create 1)))
+  let (r : test_header) = Stubs.testheader_parse buf in
+  assert (r.version = 1);
+  assert (r.length = 42)
 |}
 
 let test_e2e_with_constraint () =
-  let f_x = field "x" uint8 in
-  let s =
-    struct_ "Constrained"
-      [ field "x" ~constraint_:Expr.(field_ref f_x <= int 100) uint8 ]
+  let f_x_ref = Wire.Field.v "x" uint8 in
+  let f_x =
+    Wire.Field.v "x" ~constraint_:Expr.(Wire.Field.ref f_x_ref <= int 100) uint8
   in
-  let m = module_ [ typedef ~entrypoint:true s ] in
-  e2e ~name:"Constrained" ~structs:[ s ] ~module_:m
+  let codec =
+    let open Wire.Codec in
+    v "Constrained" (fun x -> x) [ (f_x $ fun x -> x) ]
+  in
+  let schema = Wire.C.schema codec in
+  let s = Wire.C.struct_of_codec codec in
+  e2e ~name:"Constrained" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|let () =
+      {|type constrained = { x : int }
+let () =
   let buf = Bytes.create 1 in
   (* x=50 <= 100: passes *)
   Bytes.set_uint8 buf 0 50;
-  assert (Stubs.constrained_check buf);
-  (* x=200 > 100: fails *)
+  let (r : constrained) = Stubs.constrained_parse buf in
+  assert (r.x = 50);
+  (* x=200 > 100: fails — parse returns Atom(0), a zero-size block *)
   Bytes.set_uint8 buf 0 200;
-  assert (not (Stubs.constrained_check buf))
+  let v = Obj.repr (Stubs.constrained_parse buf) in
+  assert (Obj.size v = 0)
 |}
 
 let test_e2e_bitfields () =
-  let s =
-    struct_ "BfHeader"
+  let f_version = Wire.Field.v "version" (bits ~width:4 U8) in
+  let f_flags = Wire.Field.v "flags" (bits ~width:4 U8) in
+  let f_length = Wire.Field.v "length" uint16be in
+  let codec =
+    let open Wire.Codec in
+    v "BfHeader"
+      (fun version flags length -> (version, flags, length))
       [
-        field "version" (bits ~width:4 U8);
-        field "flags" (bits ~width:4 U8);
-        field "length" uint16be;
+        (f_version $ fun (v, _, _) -> v);
+        (f_flags $ fun (_, f, _) -> f);
+        (f_length $ fun (_, _, l) -> l);
       ]
   in
-  let m = module_ [ typedef ~entrypoint:true s ] in
-  e2e ~name:"BfHeader" ~structs:[ s ] ~module_:m
+  let schema = Wire.C.schema codec in
+  let s = Wire.C.struct_of_codec codec in
+  e2e ~name:"BfHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|let () =
+      {|type bf_header = { version : int; flags : int; length : int }
+let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
-  assert (Stubs.bfheader_check buf);
-  assert (not (Stubs.bfheader_check (Bytes.create 2)))
+  let (r : bf_header) = Stubs.bfheader_parse buf in
+  (* EverParse uses LSB-first bit numbering: version=bits[0..4], flags=bits[4..8] *)
+  assert (r.version = 5);
+  assert (r.flags = 4);
+  assert (r.length = 100)
 |}
 
 (* ── Output types ── *)
 
-(* Helper: build a codec, generate 3D with output:true, check that the
-   generated string uses extern typedef + Extern_call (WireSet) pattern,
-   and optionally run EverParse to validate. Returns the 3D string. *)
+(* Helper: build a codec, generate 3D, check that the generated string
+   uses extern typedef + Extern_call (WireSet) pattern, and optionally run
+   EverParse to validate. Returns the 3D string. *)
 let check_output_3d ?(run_everparse = true) codec =
-  let schema = Wire.C.schema ~output:true codec in
+  let schema = Wire.C.schema codec in
   let s3d = Wire.C.Raw.to_3d schema.module_ in
   Alcotest.(check bool)
     "has extern typedef" true
@@ -586,7 +585,7 @@ let test_e2e_output_parse () =
     let s = Wire.C.struct_of_codec codec in
     let name = Wire.C.Raw.struct_name s in
     (* 2. Generate 3D with output pattern and run EverParse *)
-    let schema = Wire.C.schema ~output:true codec in
+    let schema = Wire.C.schema codec in
     Wire.C.generate ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     (* 3. Generate ExternalTypedefs.h *)
@@ -594,11 +593,11 @@ let test_e2e_output_parse () =
     write_file (Filename.concat dir (name ^ "_ExternalTypedefs.h")) ext_h;
     (* 4. Generate WireSet* implementations + parse stub *)
     let setters = Wire_stubs.to_wire_setters () in
-    let c_stubs = Wire_stubs.to_c_stubs ~output:true [ s ] in
+    let c_stubs = Wire_stubs.to_c_stubs [ s ] in
     write_file (Filename.concat dir "wire_setters.c") setters;
     write_file (Filename.concat dir "wire_stubs.c") c_stubs;
     (* 5. Generate ML stubs *)
-    let ml_stubs = Wire_stubs.to_ml_stubs ~output:true [ s ] in
+    let ml_stubs = Wire_stubs.to_ml_stubs [ s ] in
     write_file (Filename.concat dir "stubs.ml") ml_stubs;
     (* 6. Write test program *)
     write_file
@@ -652,14 +651,14 @@ let suite =
         test_many_params_bytecode;
       Alcotest.test_case "exactly 5 args (no bytecode)" `Quick
         test_exactly_five_args;
-      Alcotest.test_case "6 args (bytecode)" `Quick test_six_args_bytecode;
+      Alcotest.test_case "6 args" `Quick test_six_args;
       (* ML stubs — other *)
       Alcotest.test_case "bitfield param" `Quick test_bitfield_param;
       Alcotest.test_case "multiple structs" `Quick test_multiple_structs;
       (* C stubs *)
       Alcotest.test_case "c stubs: no params" `Quick test_c_stubs_no_params;
       Alcotest.test_case "c stubs: with params" `Quick test_c_stubs_with_params;
-      Alcotest.test_case "c stubs: bytecode" `Quick test_c_stubs_bytecode;
+      Alcotest.test_case "c stubs: many params" `Quick test_c_stubs_many_params;
       (* stub name *)
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;

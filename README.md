@@ -80,12 +80,8 @@ let schema = C.schema codec
 let () = C.generate ~outdir:"schemas" [ schema ]
 ```
 
-Use `~output:true` to generate the EverParse output-types pattern, where the
-generated C validates AND extracts all field values into an output struct:
-
-```ocaml
-let schema = C.schema ~output:true codec
-```
+The generated 3D uses the EverParse output-types pattern, where the generated C
+validates AND extracts all field values via extern callbacks (`WireSet*`).
 
 To turn those schemas into EverParse-generated C:
 
@@ -98,8 +94,8 @@ from the exported structs:
 
 ```ocaml
 let struct_ = C.struct_of_codec codec
-let c_stubs = Wire_stubs.to_c_stubs ~output:true [ struct_ ]
-let ml_stubs = Wire_stubs.to_ml_stubs ~output:true [ struct_ ]
+let c_stubs = Wire_stubs.to_c_stubs [ struct_ ]
+let ml_stubs = Wire_stubs.to_ml_stubs [ struct_ ]
 ```
 
 For unusual EverParse constructs that have no codec equivalent yet, use the

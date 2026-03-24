@@ -50,6 +50,7 @@ let mixed_buf, _ =
   pack (Demo.large_mixed_data n_data) ~size:Demo.large_mixed_size
 
 let clcw_buf, _ = pack (Space.clcw_data n_data) ~size:Space.clcw_size
+let pkt_buf, _ = pack (Space.packet_data n_data) ~size:Space.packet_size
 let mapped_buf = Demo.mapped_data n_data
 let cases_buf = Demo.cases_demo_data n_data
 let enum_buf = Demo.enum_demo_data n_data
@@ -129,88 +130,69 @@ let () =
   Fmt.pr "  FFI      = same EverParse, called from OCaml\n";
   Fmt.pr "  OCaml    = Wire Codec.decode (full record)\n";
 
-  (* ── Read benchmarks ── *)
-  run_table ~title:"Read: field access (ns/op)" ~n
+  (* ── Decode benchmarks: all three tiers validate + decode full record ── *)
+  run_table ~title:"Decode: full record (ns/op)" ~n
     [
-      (* Integer types *)
-      rd ~label:"Minimal.value (uint8)" ~size:Demo.minimal_size
-        ~data:minimal_buf ~c_loop:C_stubs.minimal_loop
+      rd ~label:"Minimal (1B)" ~size:Demo.minimal_size ~data:minimal_buf
+        ~c_loop:C_stubs.minimal_loop
         ~ffi:(fun b -> ignore (C_stubs.minimal_parse b))
-        (fun buf off -> ignore (get_minimal buf off));
-      rd ~label:"AllInts.u64be (uint64be, boxed)" ~size:Demo.all_ints_size
-        ~data:ints_buf ~c_loop:C_stubs.allints_loop
+        (fun buf off -> ignore (Codec.decode Demo.minimal_codec buf off));
+      rd ~label:"AllInts (21B)" ~size:Demo.all_ints_size ~data:ints_buf
+        ~c_loop:C_stubs.allints_loop
         ~ffi:(fun b -> ignore (C_stubs.allints_parse b))
-        (fun buf off -> ignore (read_u64be buf off));
-      rd ~label:"LargeMixed.timestamp (uint64be, 26B)"
-        ~size:Demo.large_mixed_size ~data:mixed_buf
+        (fun buf off -> ignore (Codec.decode Demo.all_ints_codec buf off));
+      rd ~label:"LargeMixed (26B)" ~size:Demo.large_mixed_size ~data:mixed_buf
         ~c_loop:C_stubs.largemixed_loop
         ~ffi:(fun b -> ignore (C_stubs.largemixed_parse b))
-        (fun buf off -> ignore (read_mixed buf off));
-      (* Bitfields *)
-      rd ~label:"Bitfield8.value (bf5 in bf_uint8)" ~size:Demo.bf8_size
-        ~data:bf8_buf ~c_loop:C_stubs.bitfield8_loop
+        (fun buf off -> ignore (Codec.decode Demo.large_mixed_codec buf off));
+      rd ~label:"Bitfield8 (1B)" ~size:Demo.bf8_size ~data:bf8_buf
+        ~c_loop:C_stubs.bitfield8_loop
         ~ffi:(fun b -> ignore (C_stubs.bitfield8_parse b))
-        (fun buf off -> ignore (read_bf8 buf off));
-      rd ~label:"Bitfield16.id (bf11 in bf_uint16be)" ~size:Demo.bf16_size
-        ~data:bf16_buf ~c_loop:C_stubs.bitfield16_loop
+        (fun buf off -> ignore (Codec.decode Demo.bf8_codec buf off));
+      rd ~label:"Bitfield16 (2B)" ~size:Demo.bf16_size ~data:bf16_buf
+        ~c_loop:C_stubs.bitfield16_loop
         ~ffi:(fun b -> ignore (C_stubs.bitfield16_parse b))
-        (fun buf off -> ignore (read_bf16 buf off));
-      rd ~label:"Bitfield32.pri (bf8 in bf_uint32be)" ~size:Demo.bf32_size
-        ~data:bf32_buf ~c_loop:C_stubs.bitfield32_loop
+        (fun buf off -> ignore (Codec.decode Demo.bf16_codec buf off));
+      rd ~label:"Bitfield32 (4B)" ~size:Demo.bf32_size ~data:bf32_buf
+        ~c_loop:C_stubs.bitfield32_loop
         ~ffi:(fun b -> ignore (C_stubs.bitfield32_parse b))
-        (fun buf off -> ignore (read_bf32 buf off));
-      (* Bool (map) *)
-      rd ~label:"BoolFields.active (bool bf1 in bf_uint8)"
-        ~size:Demo.bool_fields_size ~data:bool_buf
+        (fun buf off -> ignore (Codec.decode Demo.bf32_codec buf off));
+      rd ~label:"BoolFields (2B)" ~size:Demo.bool_fields_size ~data:bool_buf
         ~c_loop:C_stubs.boolfields_loop
         ~ffi:(fun b -> ignore (C_stubs.boolfields_parse b))
-        (fun buf off -> ignore (read_bool buf off));
-      (* Real protocols *)
-      rd ~label:"CLCW.report (bf8 in bf32be)" ~size:Space.clcw_size
-        ~data:clcw_buf ~c_loop:C_stubs.clcw_loop
+        (fun buf off -> ignore (Codec.decode Demo.bool_fields_codec buf off));
+      rd ~label:"CLCW (4B)" ~size:Space.clcw_size ~data:clcw_buf
+        ~c_loop:C_stubs.clcw_loop
         ~ffi:(fun b -> ignore (C_stubs.clcw_parse b))
-        (fun buf off -> ignore (read_clcw buf off));
-      rd ~label:"IPv4.src (uint32be, unboxed)" ~size:Net.ipv4_size
-        ~data:ipv4_only_buf ~n_items:1
+        (fun buf off -> ignore (Codec.decode Space.clcw_codec buf off));
+      rd ~label:"SpacePacket (6B)" ~size:Space.packet_size ~data:pkt_buf
+        ~c_loop:C_stubs.spacepacket_loop
+        ~ffi:(fun b -> ignore (C_stubs.spacepacket_parse b))
+        (fun buf off -> ignore (Codec.decode Space.packet_codec buf off));
+      rd ~label:"IPv4 (40B)" ~size:Net.ipv4_size ~data:ipv4_only_buf ~n_items:1
         ~c_loop:(fun buf _off n -> C_stubs.ipv4_loop buf 0 n)
         ~ffi:(fun b -> ignore (C_stubs.ipv4_parse b))
-        (fun _buf _off -> ignore (read_ip_src tcp_buf ip_off));
-      rd ~label:"TCP.dst_port (uint16be)" ~size:Net.tcp_size ~data:tcp_only_buf
-        ~n_items:1
+        (fun buf off -> ignore (Codec.decode Net.ipv4_codec buf off));
+      rd ~label:"TCP (20B)" ~size:Net.tcp_size ~data:tcp_only_buf ~n_items:1
         ~c_loop:(fun buf _off n -> C_stubs.tcp_loop buf 0 n)
         ~ffi:(fun b -> ignore (C_stubs.tcp_parse b))
-        (fun _buf _off -> ignore (read_tcp_port tcp_buf tcp_off));
-      rd ~label:"TCP.syn (bool bf1 in bf16be)" ~size:Net.tcp_size
-        ~data:tcp_only_buf ~n_items:1
-        ~c_loop:(fun buf _off n -> C_stubs.tcp_loop buf 0 n)
-        ~ffi:(fun b -> ignore (C_stubs.tcp_parse b))
-        (fun _buf _off -> ignore (read_tcp_syn tcp_buf tcp_off));
-    ];
-
-  section "Type combinators";
-
-  run_table ~title:"Read: type combinators (ns/op)" ~n
-    [
-      (* map: user decode function on every Codec.get *)
-      rd ~label:"Mapped.priority (map fn, 2B)" ~size:Demo.mapped_size
-        ~data:mapped_buf ~c_loop:C_stubs.mapped_loop
+        (fun buf off -> ignore (Codec.decode Net.tcp_codec buf off));
+      rd ~label:"Mapped (2B)" ~size:Demo.mapped_size ~data:mapped_buf
+        ~c_loop:C_stubs.mapped_loop
         ~ffi:(fun b -> ignore (C_stubs.mapped_parse b))
-        (fun buf off -> ignore (read_mapped buf off));
-      (* cases: variant dispatch via array lookup *)
-      rd ~label:"CasesDemo.type (cases variant, 1B)" ~size:Demo.cases_demo_size
-        ~data:cases_buf ~c_loop:C_stubs.casesdemo_loop
+        (fun buf off -> ignore (Codec.decode Demo.mapped_codec buf off));
+      rd ~label:"CasesDemo (2B)" ~size:Demo.cases_demo_size ~data:cases_buf
+        ~c_loop:C_stubs.casesdemo_loop
         ~ffi:(fun b -> ignore (C_stubs.casesdemo_parse b))
-        (fun buf off -> ignore (read_cases buf off));
-      (* enum + map: C validates enum, OCaml decodes variant *)
-      rd ~label:"EnumDemo.status (enum+map variant, 2B)"
-        ~size:Demo.enum_demo_size ~data:enum_buf ~c_loop:C_stubs.enumdemo_loop
+        (fun buf off -> ignore (Codec.decode Demo.cases_demo_codec buf off));
+      rd ~label:"EnumDemo (2B)" ~size:Demo.enum_demo_size ~data:enum_buf
+        ~c_loop:C_stubs.enumdemo_loop
         ~ffi:(fun b -> ignore (C_stubs.enumdemo_parse b))
-        (fun buf off -> ignore (read_enum buf off));
-      (* where: C validates constraint, OCaml skips it *)
-      rd ~label:"Constrained.data (where, 2B)" ~size:Demo.constrained_size
+        (fun buf off -> ignore (Codec.decode Demo.enum_demo_codec buf off));
+      rd ~label:"Constrained (2B)" ~size:Demo.constrained_size
         ~data:constrained_buf ~c_loop:C_stubs.constrained_loop
         ~ffi:(fun b -> ignore (C_stubs.constrained_parse b))
-        (fun buf off -> ignore (read_constrained buf off));
+        (fun buf off -> ignore (Codec.decode Demo.constrained_codec buf off));
     ];
 
   (* ── Write benchmarks ── *)

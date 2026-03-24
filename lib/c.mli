@@ -14,15 +14,10 @@ type module_ = Types.module_
 val struct_of_codec : 'r Codec.t -> struct_
 (** Project a codec to a 3D struct. *)
 
-val with_output : struct_ -> decl list
-(** [with_output s] rewrites struct [s] into the EverParse output-types pattern:
-    an [output typedef struct] with plain fields, plus a parsing struct with a
-    mutable output pointer and [:on-success] actions that assign each field to
-    the output struct. *)
-
-val schema : ?output:bool -> 'r Codec.t -> t
+val schema : 'r Codec.t -> t
 (** Builds a one-struct schema from a codec. The resulting module contains a
-    single entrypoint typedef. *)
+    single entrypoint typedef with the EverParse output-types pattern: extern
+    callbacks ([WireSet*]) that extract all field values during validation. *)
 
 val generate : outdir:string -> t list -> unit
 (** [generate ~outdir ts] writes one [.3d] file per schema in [outdir]. *)

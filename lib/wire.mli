@@ -639,13 +639,10 @@ module C : sig
   val struct_of_codec : 'r Codec.t -> struct_
   (** Projects a record codec to a 3D struct. *)
 
-  val schema : ?output:bool -> 'r Codec.t -> t
-  (** [schema ?output codec] builds a schema from a codec. When [~output:true],
-      generates the EverParse output-types pattern: the generated C validates
-      AND extracts all field values into an output struct. *)
-
-  val with_output : struct_ -> decl list
-  (** Rewrite a struct into an output typedef + parsing struct pair. *)
+  val schema : 'r Codec.t -> t
+  (** [schema codec] builds a schema from a codec. The resulting module uses the
+      EverParse output-types pattern: the generated C validates AND extracts all
+      field values via extern callbacks ([WireSet*]). *)
 
   val generate : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
