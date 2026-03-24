@@ -81,29 +81,14 @@ let test_check_ocaml_only () =
   Alcotest.(check bool) "called by check" true !called
 
 let test_check_with_ffi () =
-  let t =
-    v "test" ~size:4 noop |> with_ffi (fun _buf -> true) (Bytes.create 4)
-  in
+  let t = v "test" ~size:4 noop |> with_ffi (fun _buf -> ()) (Bytes.create 4) in
   check t
-
-let test_check_ffi_failure () =
-  let t =
-    v "test" ~size:4 noop |> with_ffi (fun _buf -> false) (Bytes.create 4)
-  in
-  match check t with
-  | exception Failure _ -> ()
-  | () -> Alcotest.fail "expected Failure"
 
 let test_ffi_buf_correct () =
   let expected = Bytes.of_string "DEADBEEF" in
   let received = ref Bytes.empty in
   let t =
-    v "test" ~size:8 noop
-    |> with_ffi
-         (fun buf ->
-           received := buf;
-           true)
-         expected
+    v "test" ~size:8 noop |> with_ffi (fun buf -> received := buf) expected
   in
   check t;
   Alcotest.(check string) "ffi buf" "DEADBEEF" (Bytes.to_string !received)
@@ -115,10 +100,7 @@ let test_c_ffi_order () =
     c_called := true;
     0
   in
-  let ffi_check _buf =
-    ffi_called := true;
-    true
-  in
+  let ffi_check _buf = ffi_called := true in
   let buf = Bytes.create 4 in
   (* with_c then with_ffi *)
   let t1 = v "t1" ~size:4 noop |> with_c c_loop buf |> with_ffi ffi_check buf in
@@ -334,7 +316,6 @@ let () =
         [
           Alcotest.test_case "ocaml only" `Quick test_check_ocaml_only;
           Alcotest.test_case "with ffi" `Quick test_check_with_ffi;
-          Alcotest.test_case "ffi failure" `Quick test_check_ffi_failure;
           Alcotest.test_case "ffi receives correct buf" `Quick
             test_ffi_buf_correct;
         ] );

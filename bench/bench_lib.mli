@@ -30,8 +30,8 @@ val v : string -> size:int -> ?reset:(unit -> unit) -> (unit -> unit) -> t
 val with_c : (bytes -> int -> int -> int) -> bytes -> t -> t
 (** [with_c c_loop buf t] adds the EverParse C tier. *)
 
-val with_ffi : (bytes -> bool) -> bytes -> t -> t
-(** [with_ffi ffi_check buf t] adds the OCaml->C FFI tier. *)
+val with_ffi : (bytes -> unit) -> bytes -> t -> t
+(** [with_ffi ffi_fn buf t] adds the OCaml->C FFI tier. *)
 
 val with_verify : (unit -> unit) -> t -> t
 (** [with_verify f t] adds a verification function that runs during {!check} to

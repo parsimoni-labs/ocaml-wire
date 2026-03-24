@@ -36,7 +36,7 @@ type t = {
   ocaml : unit -> unit;
   reset : unit -> unit;
   c : ((bytes -> int -> int -> int) * bytes) option;
-  ffi : ((bytes -> bool) * bytes) option;
+  ffi : ((bytes -> unit) * bytes) option;
   verify : (unit -> unit) option;
 }
 
@@ -77,11 +77,9 @@ let check t =
   (* Verify OCaml tier doesn't crash *)
   t.reset ();
   t.ocaml ();
-  (* Verify FFI tier accepts the data *)
+  (* Verify FFI tier doesn't crash *)
   (match t.ffi with
-  | Some (ffi_check, ffi_buf) ->
-      if not (ffi_check ffi_buf) then
-        Fmt.failwith "%s: FFI validation failed on test data" t.label
+  | Some (ffi_fn, ffi_buf) -> ffi_fn ffi_buf
   | None -> ());
   (* Verify C tier accepts the data *)
   (match t.c with
@@ -104,11 +102,11 @@ let run_one ~n t =
   let ffi_ns =
     match t.ffi with
     | None -> None
-    | Some (ffi_check, ffi_buf) ->
+    | Some (ffi_fn, ffi_buf) ->
         Some
           (time_ns n (fun () ->
                for _ = 1 to n do
-                 ignore (ffi_check ffi_buf)
+                 ffi_fn ffi_buf
                done))
   in
   t.reset ();

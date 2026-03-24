@@ -107,12 +107,12 @@ let set_cases = Staged.unstage (Codec.set Demo.cases_demo_codec cf_cd_type)
 
 (* ── Benchmark helpers ── *)
 
-let rd ~label ~size ~data ?(n_items = n_items) ~c_loop ~ffi_check read_fn =
+let rd ~label ~size ~data ?(n_items = n_items) ~c_loop ~ffi read_fn =
   let fn, reset =
     cycling ~data ~n_items ~size (fun buf off -> read_fn buf off)
   in
   v label ~size ~reset fn |> with_c c_loop data
-  |> with_ffi ffi_check (Bytes.sub data 0 size)
+  |> with_ffi ffi (Bytes.sub data 0 size)
 
 (* ── Main ── *)
 
@@ -137,52 +137,55 @@ let () =
       (* Integer types *)
       rd ~label:"Minimal.value (uint8)" ~size:Demo.minimal_size
         ~data:minimal_buf ~c_loop:C_stubs.minimal_loop
-        ~ffi_check:C_stubs.minimal_check (fun buf off ->
-          ignore (get_minimal buf off));
+        ~ffi:(fun b -> ignore (C_stubs.minimal_parse b))
+        (fun buf off -> ignore (get_minimal buf off));
       rd ~label:"AllInts.u64be (uint64be, boxed)" ~size:Demo.all_ints_size
         ~data:ints_buf ~c_loop:C_stubs.allints_loop
-        ~ffi_check:C_stubs.allints_check (fun buf off ->
-          ignore (read_u64be buf off));
+        ~ffi:(fun b -> ignore (C_stubs.allints_parse b))
+        (fun buf off -> ignore (read_u64be buf off));
       rd ~label:"LargeMixed.timestamp (uint64be, 26B)"
         ~size:Demo.large_mixed_size ~data:mixed_buf
-        ~c_loop:C_stubs.largemixed_loop ~ffi_check:C_stubs.largemixed_check
+        ~c_loop:C_stubs.largemixed_loop
+        ~ffi:(fun b -> ignore (C_stubs.largemixed_parse b))
         (fun buf off -> ignore (read_mixed buf off));
       (* Bitfields *)
       rd ~label:"Bitfield8.value (bf5 in bf_uint8)" ~size:Demo.bf8_size
         ~data:bf8_buf ~c_loop:C_stubs.bitfield8_loop
-        ~ffi_check:C_stubs.bitfield8_check (fun buf off ->
-          ignore (read_bf8 buf off));
+        ~ffi:(fun b -> ignore (C_stubs.bitfield8_parse b))
+        (fun buf off -> ignore (read_bf8 buf off));
       rd ~label:"Bitfield16.id (bf11 in bf_uint16be)" ~size:Demo.bf16_size
         ~data:bf16_buf ~c_loop:C_stubs.bitfield16_loop
-        ~ffi_check:C_stubs.bitfield16_check (fun buf off ->
-          ignore (read_bf16 buf off));
+        ~ffi:(fun b -> ignore (C_stubs.bitfield16_parse b))
+        (fun buf off -> ignore (read_bf16 buf off));
       rd ~label:"Bitfield32.pri (bf8 in bf_uint32be)" ~size:Demo.bf32_size
         ~data:bf32_buf ~c_loop:C_stubs.bitfield32_loop
-        ~ffi_check:C_stubs.bitfield32_check (fun buf off ->
-          ignore (read_bf32 buf off));
+        ~ffi:(fun b -> ignore (C_stubs.bitfield32_parse b))
+        (fun buf off -> ignore (read_bf32 buf off));
       (* Bool (map) *)
       rd ~label:"BoolFields.active (bool bf1 in bf_uint8)"
         ~size:Demo.bool_fields_size ~data:bool_buf
-        ~c_loop:C_stubs.boolfields_loop ~ffi_check:C_stubs.boolfields_check
+        ~c_loop:C_stubs.boolfields_loop
+        ~ffi:(fun b -> ignore (C_stubs.boolfields_parse b))
         (fun buf off -> ignore (read_bool buf off));
       (* Real protocols *)
       rd ~label:"CLCW.report (bf8 in bf32be)" ~size:Space.clcw_size
-        ~data:clcw_buf ~c_loop:C_stubs.clcw_loop ~ffi_check:C_stubs.clcw_check
+        ~data:clcw_buf ~c_loop:C_stubs.clcw_loop
+        ~ffi:(fun b -> ignore (C_stubs.clcw_parse b))
         (fun buf off -> ignore (read_clcw buf off));
       rd ~label:"IPv4.src (uint32be, unboxed)" ~size:Net.ipv4_size
         ~data:ipv4_only_buf ~n_items:1
         ~c_loop:(fun buf _off n -> C_stubs.ipv4_loop buf 0 n)
-        ~ffi_check:C_stubs.ipv4_check
+        ~ffi:(fun b -> ignore (C_stubs.ipv4_parse b))
         (fun _buf _off -> ignore (read_ip_src tcp_buf ip_off));
       rd ~label:"TCP.dst_port (uint16be)" ~size:Net.tcp_size ~data:tcp_only_buf
         ~n_items:1
         ~c_loop:(fun buf _off n -> C_stubs.tcp_loop buf 0 n)
-        ~ffi_check:C_stubs.tcp_check
+        ~ffi:(fun b -> ignore (C_stubs.tcp_parse b))
         (fun _buf _off -> ignore (read_tcp_port tcp_buf tcp_off));
       rd ~label:"TCP.syn (bool bf1 in bf16be)" ~size:Net.tcp_size
         ~data:tcp_only_buf ~n_items:1
         ~c_loop:(fun buf _off n -> C_stubs.tcp_loop buf 0 n)
-        ~ffi_check:C_stubs.tcp_check
+        ~ffi:(fun b -> ignore (C_stubs.tcp_parse b))
         (fun _buf _off -> ignore (read_tcp_syn tcp_buf tcp_off));
     ];
 
@@ -193,23 +196,23 @@ let () =
       (* map: user decode function on every Codec.get *)
       rd ~label:"Mapped.priority (map fn, 2B)" ~size:Demo.mapped_size
         ~data:mapped_buf ~c_loop:C_stubs.mapped_loop
-        ~ffi_check:C_stubs.mapped_check (fun buf off ->
-          ignore (read_mapped buf off));
+        ~ffi:(fun b -> ignore (C_stubs.mapped_parse b))
+        (fun buf off -> ignore (read_mapped buf off));
       (* cases: variant dispatch via array lookup *)
       rd ~label:"CasesDemo.type (cases variant, 1B)" ~size:Demo.cases_demo_size
         ~data:cases_buf ~c_loop:C_stubs.casesdemo_loop
-        ~ffi_check:C_stubs.casesdemo_check (fun buf off ->
-          ignore (read_cases buf off));
+        ~ffi:(fun b -> ignore (C_stubs.casesdemo_parse b))
+        (fun buf off -> ignore (read_cases buf off));
       (* enum + map: C validates enum, OCaml decodes variant *)
       rd ~label:"EnumDemo.status (enum+map variant, 2B)"
         ~size:Demo.enum_demo_size ~data:enum_buf ~c_loop:C_stubs.enumdemo_loop
-        ~ffi_check:C_stubs.enumdemo_check (fun buf off ->
-          ignore (read_enum buf off));
+        ~ffi:(fun b -> ignore (C_stubs.enumdemo_parse b))
+        (fun buf off -> ignore (read_enum buf off));
       (* where: C validates constraint, OCaml skips it *)
       rd ~label:"Constrained.data (where, 2B)" ~size:Demo.constrained_size
         ~data:constrained_buf ~c_loop:C_stubs.constrained_loop
-        ~ffi_check:C_stubs.constrained_check (fun buf off ->
-          ignore (read_constrained buf off));
+        ~ffi:(fun b -> ignore (C_stubs.constrained_parse b))
+        (fun buf off -> ignore (read_constrained buf off));
     ];
 
   (* ── Write benchmarks ── *)
@@ -240,21 +243,4 @@ let () =
           set_tcp_syn tcp_buf tcp true);
     ];
 
-  (* ── FFI overhead ── *)
-  let buf4 = Bytes.create 4 in
-  let noop_ns =
-    time_ns n (fun () ->
-        for _ = 1 to n do
-          ignore (C_stubs.noop buf4)
-        done)
-  in
-  let noop_safe_ns =
-    time_ns n (fun () ->
-        for _ = 1 to n do
-          ignore (C_stubs.noop_safe buf4)
-        done)
-  in
-  Fmt.pr "\nFFI overhead:\n";
-  Fmt.pr "  noop [@@noalloc]  %5.1f ns/call\n" noop_ns;
-  Fmt.pr "  noop CAMLparam    %5.1f ns/call\n" noop_safe_ns;
   Fmt.pr "\n"
