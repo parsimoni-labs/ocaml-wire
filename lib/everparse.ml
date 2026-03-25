@@ -90,9 +90,7 @@ let map_field_action idx (Types.Field f) =
           constraint_ = f.constraint_;
           action = new_action;
         }
-  | None ->
-      incr idx;
-      Types.Field f
+  | None -> Types.Field f
 
 let with_output (s : Types.struct_) : Types.decl list =
   (* Extern declarations for the callback mechanism *)
