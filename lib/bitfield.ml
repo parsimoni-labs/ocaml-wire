@@ -50,8 +50,19 @@ let write_word base buf off v =
   | BF_U32 Little -> UInt32.set_le buf off v
   | BF_U32 Big -> UInt32.set_be buf off v
 
-(** Extract [width] bits from MSB position [bits_used] in a [total]-bit word. *)
-let extract ~total ~bits_used ~width word =
-  let shift = total - bits_used - width in
+(** Is this base type LSB-first (matching EverParse convention)? UINT8, UINT16
+    (little), UINT32 (little) are LSBFirst. UINT16BE, UINT32BE are MSBFirst. *)
+let is_lsb_first = function
+  | BF_U8 | BF_U16 Little | BF_U32 Little -> true
+  | BF_U16 Big | BF_U32 Big -> false
+
+(** Extract [width] bits at position [bits_used] in a [total]-bit word. Bit
+    ordering follows EverParse 3D conventions:
+    - LSBFirst (UINT8, UINT16, UINT32): first declared field at bit 0
+    - MSBFirst (UINT16BE, UINT32BE): first declared field at MSB *)
+let extract ~base ~total ~bits_used ~width word =
+  let shift =
+    if is_lsb_first base then bits_used else total - bits_used - width
+  in
   let mask = (1 lsl width) - 1 in
   (word lsr shift) land mask

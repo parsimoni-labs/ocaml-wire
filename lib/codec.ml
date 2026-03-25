@@ -665,7 +665,10 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             let bf = Option.get r.r_bf in
             (bf.bfc_base_off, bf.bfc_bits_used, 0, [])
         in
-        let shift = total - bits_used - width in
+        let shift =
+          if Bitfield.is_lsb_first base then bits_used
+          else total - bits_used - width
+        in
         let raw_reader = build_bf_reader base base_off shift width in
         let raw_writer = build_bf_writer base base_off shift width in
         let accessor_writer =

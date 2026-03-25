@@ -122,9 +122,12 @@ let tcp_dataset =
 
 let minimal_struct = struct_ "Minimal" [ field "Value" uint8 ]
 
+(* EverParse 3D uses LSB-first bit ordering for UINT8 bitfields but
+   MSB-first for UINT16BE/UINT32BE. Wire always uses MSB-first. For UINT8
+   projections, reverse the field order so EverParse extracts the right bits. *)
 let bf8_struct =
   struct_ "Bitfield8"
-    [ anon_field (bits ~width:3 U8); field "Value" (bits ~width:5 U8) ]
+    [ field "Value" (bits ~width:5 U8); anon_field (bits ~width:3 U8) ]
 
 let bf16_struct =
   struct_ "Bitfield16"
@@ -137,9 +140,9 @@ let bf16_struct =
 let bool_fields_struct =
   struct_ "BoolFields"
     [
-      field "Active" (bool (bits ~width:1 U8));
-      anon_field (bool (bits ~width:1 U8));
       anon_field (bits ~width:6 U8);
+      anon_field (bool (bits ~width:1 U8));
+      field "Active" (bool (bits ~width:1 U8));
       anon_field uint8;
     ]
 

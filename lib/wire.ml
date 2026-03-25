@@ -203,13 +203,17 @@ let bf_read_word dec base =
 
 let bf_extract accum width =
   let value =
-    Bitfield.extract ~total:accum.bf_total_bits ~bits_used:accum.bf_bits_used
-      ~width accum.bf_word
+    Bitfield.extract ~base:accum.bf_base ~total:accum.bf_total_bits
+      ~bits_used:accum.bf_bits_used ~width accum.bf_word
   in
   (value, { accum with bf_bits_used = accum.bf_bits_used + width })
 
 let bf_has_room accum width = accum.bf_bits_used + width <= accum.bf_total_bits
-let parse_bits dec base width = bf_read_word dec base land ((1 lsl width) - 1)
+
+let parse_bits dec base width =
+  let word = bf_read_word dec base in
+  let total = Bitfield.total_bits base in
+  Bitfield.extract ~base ~total ~bits_used:0 ~width word
 
 let[@inline] parse_int dec n get =
   let off = read_small dec n in

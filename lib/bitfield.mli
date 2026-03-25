@@ -14,5 +14,17 @@ val read_word : Types.bitfield_base -> bytes -> int -> int
 val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
 (** Write the base word to bytes at offset. *)
 
-val extract : total:int -> bits_used:int -> width:int -> int -> int
-(** Extract bits from a word given total, bits_used, and width. *)
+val is_lsb_first : Types.bitfield_base -> bool
+(** [true] for LSBFirst bases (UINT8, UINT16, UINT32), [false] for MSBFirst
+    (UINT16BE, UINT32BE). Matches EverParse 3D convention. *)
+
+val extract :
+  base:Types.bitfield_base ->
+  total:int ->
+  bits_used:int ->
+  width:int ->
+  int ->
+  int
+(** Extract bits from a word. Bit ordering follows EverParse 3D: LSBFirst bases
+    pack the first declared field at bit 0, MSBFirst bases pack the first
+    declared field at the MSB. *)

@@ -6,7 +6,7 @@
 (* ---- Field type metadata ---- *)
 
 type ft = {
-  make_field : string -> bool Wire.expr option -> Wire.field;
+  make_field : string -> bool Wire.expr option -> Wire.Everparse.Raw.field;
   wire_size : int;
   gen_constraint : Random.State.t -> int;
   big_endian : bool;
@@ -24,43 +24,50 @@ let gen_uint64 rng =
 let field_types =
   [|
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint8);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint8);
       wire_size = 1;
       gen_constraint = gen_uint8;
       big_endian = false;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint16);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint16);
       wire_size = 2;
       gen_constraint = gen_uint16;
       big_endian = false;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint16be);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint16be);
       wire_size = 2;
       gen_constraint = gen_uint16;
       big_endian = true;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint32);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint32);
       wire_size = 4;
       gen_constraint = gen_uint32;
       big_endian = false;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint32be);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint32be);
       wire_size = 4;
       gen_constraint = gen_uint32;
       big_endian = true;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint64);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint64);
       wire_size = 8;
       gen_constraint = gen_uint64;
       big_endian = false;
     };
     {
-      make_field = (fun n c -> Wire.field n ?constraint_:c Wire.uint64be);
+      make_field =
+        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint64be);
       wire_size = 8;
       gen_constraint = gen_uint64;
       big_endian = true;
