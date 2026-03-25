@@ -7,7 +7,7 @@ type clcw
 val clcw_codec : clcw Wire.Codec.t
 (** Codec for the 4-byte CLCW bitfield structure. *)
 
-val clcw_struct : Wire.C.Raw.struct_
+val clcw_struct : Wire.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val clcw_size : int
@@ -50,7 +50,7 @@ type packet
 val packet_codec : packet Wire.Codec.t
 (** Codec for the 6-byte CCSDS Space Packet primary header. *)
 
-val packet_struct : Wire.C.Raw.struct_
+val packet_struct : Wire.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val packet_size : int
@@ -87,7 +87,7 @@ type tm_frame
 val tm_frame_codec : tm_frame Wire.Codec.t
 (** Codec for the 6-byte TM Transfer Frame primary header. *)
 
-val tm_frame_struct : Wire.C.Raw.struct_
+val tm_frame_struct : Wire.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val tm_frame_size : int

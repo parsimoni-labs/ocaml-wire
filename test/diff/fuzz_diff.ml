@@ -47,8 +47,8 @@ let response_hdr_codec =
   |+ Wire.Field.v "result" Wire.uint32) (fun r -> r.resp_result)
   |> seal
 
-let request_hdr_struct = Wire.C.Raw.struct_of_codec request_hdr_codec
-let response_hdr_struct = Wire.C.Raw.struct_of_codec response_hdr_codec
+let request_hdr_struct = Wire.Everparse.Raw.struct_of_codec request_hdr_codec
+let response_hdr_struct = Wire.Everparse.Raw.struct_of_codec response_hdr_codec
 
 (* Stage the protocol encoders/decoders once *)
 let encode_request_hdr = encode_to_string request_hdr_codec
@@ -95,7 +95,7 @@ let field_types =
 
 (* ---- Random schema generation ---- *)
 
-type random_schema = { struct_ : Wire.C.Raw.struct_; wire_size : int }
+type random_schema = { struct_ : Wire.Everparse.Raw.struct_; wire_size : int }
 
 let gen_constraint_val rng wire_size =
   match wire_size with
@@ -127,7 +127,7 @@ let random_struct rng i =
   let wire_fields = List.map fst fields_data in
   let wire_size = List.fold_left (fun acc (_, ws) -> acc + ws) 0 fields_data in
   let struct_name = Fmt.str "Fuzz%d" i in
-  { struct_ = Wire.C.Raw.struct_ struct_name wire_fields; wire_size }
+  { struct_ = Wire.Everparse.Raw.struct_ struct_name wire_fields; wire_size }
 
 (* ---- Stage 0: Generate C code ---- *)
 
@@ -144,7 +144,7 @@ let generate_c_main schemas =
   p "#include \"WireResp.h\"";
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       p "#include \"%s.h\"" name)
     schemas;
   p "";
@@ -154,7 +154,7 @@ let generate_c_main schemas =
   p "  switch (idx) {";
   List.iteri
     (fun i rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       p "  case %d: {" i;
       p "    %s val;" name;
       p "    int32_t rc = %s_read(buf, len, &val);" name;
@@ -261,7 +261,7 @@ let () =
 
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       write_file
         (Filename.concat tmpdir (name ^ ".h"))
         (Wire.to_c_header rs.struct_))
@@ -290,7 +290,7 @@ let () =
   Cr.run "diff"
     (List.mapi
        (fun idx rs ->
-         let name = Wire.C.Raw.struct_name rs.struct_ in
+         let name = Wire.Everparse.Raw.struct_name rs.struct_ in
          Cr.test_case (name ^ " fuzz-diff") [ Cr.bytes ] (fun buf ->
              let buf = pad rs.wire_size buf in
              ignore idx;

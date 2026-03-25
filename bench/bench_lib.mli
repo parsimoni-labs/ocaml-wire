@@ -24,8 +24,8 @@ type t
 
 val v : string -> size:int -> ?reset:(unit -> unit) -> (unit -> unit) -> t
 (** [v label ~size ?reset ocaml] creates a benchmark with the OCaml tier only.
-    [reset] is called before each measurement phase to reinitialize mutable
-    state (cycling index, counters, etc.). *)
+    [reset] is called before each tier-check and each measurement phase to
+    reinitialize mutable state (cycling indexes, counters, etc.). *)
 
 val with_c : (bytes -> int -> int -> int) -> bytes -> t -> t
 (** [with_c c_loop buf t] adds the EverParse C tier. *)
@@ -36,6 +36,18 @@ val with_ffi : (bytes -> unit) -> bytes -> t -> t
 val with_verify : (unit -> unit) -> t -> t
 (** [with_verify f t] adds a verification function that runs during {!check} to
     confirm OCaml and C tiers produce the same results. *)
+
+val with_expect :
+  ?ffi:(unit -> 'a) ->
+  ?c:(unit -> 'a) ->
+  equal:('a -> 'a -> bool) ->
+  pp:'a Fmt.t ->
+  (unit -> 'a) ->
+  t ->
+  t
+(** [with_expect ?ffi ?c ~equal ~pp ocaml_result t] adds a typed result check.
+    During {!check}, [ocaml_result] is compared against optional FFI/C result
+    thunks after resetting the benchmark state before each tier. *)
 
 val cycling :
   data:bytes ->
@@ -51,7 +63,8 @@ val cycling :
 
 val check : t -> unit
 (** [check t] verifies all tiers agree on the test data: OCaml read succeeds,
-    FFI validation returns [true], and C loop accepts the buffer. Raises on
+    FFI validation succeeds, and C loop accepts the buffer. [reset] runs before
+    each tier so stateful closures see the same starting point. Raises on
     mismatch. Called automatically by {!run_table} before timing. *)
 
 val run_table : title:string -> n:int -> ?unit:string -> t list -> unit

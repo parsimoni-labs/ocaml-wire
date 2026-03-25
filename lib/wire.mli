@@ -1,8 +1,8 @@
 (** Binary wire format descriptions.
 
-    {b Author} a format with {!Field} and {!Codec}. {b Export} it with {!C}.
-    {b Generate C} with [Wire_3d]. {b Call generated C from OCaml} with
-    [Wire_stubs]. {b Test} with [Wire_diff].
+    {b Author} a format with {!Field} and {!Codec}. {b Export} it with
+    {!Everparse}. {b Generate C} with [Wire_3d]. {b Call generated C from OCaml}
+    with [Wire_stubs]. {b Test} with [Wire_diff].
 
     {[
       type header = { version : int; length : int }
@@ -27,8 +27,8 @@
       let v = get_version buf 0
 
       (* 4. Export to EverParse 3D *)
-      let schema = C.schema codec
-      let () = C.generate ~outdir:"schemas" [ schema ]
+      let schema = Everparse.schema codec
+      let () = Everparse.write_3d ~outdir:"schemas" [ schema ]
     ]}
 
     The generated 3D is a projection of the OCaml description, not a second
@@ -289,7 +289,7 @@ end
 
     - bound into a {!Codec} with {!Codec.($)};
     - referenced from dependent expressions with {!Field.ref};
-    - reused by advanced export code through {!C.Raw}. *)
+    - reused by advanced export code through {!Everparse.Raw}. *)
 
 module Field : sig
   type 'a t
@@ -519,7 +519,8 @@ val encode_to_string : 'a typ -> 'a -> string
     decode, encode, and access individual fields at zero cost.
 
     The codec is the single OCaml authority for a format's decode, encode,
-    wire-size, and field access. {!C.schema} projects it to EverParse 3D. *)
+    wire-size, and field access. {!Everparse.schema} projects it to EverParse
+    3D. *)
 
 module Codec : sig
   type 'r t
@@ -609,18 +610,18 @@ end
 
 (** {1 Export}
 
-    {!C} is the pure export layer. The normal workflow is:
+    {!Everparse} is the pure export layer. The normal workflow is:
 
     - build a record-shaped description with {!Field} and {!Codec};
-    - project it with {!C.schema};
-    - emit one [.3d] file per schema with {!C.generate};
+    - project it with {!Everparse.schema};
+    - emit one [.3d] file per schema with {!Everparse.write_3d};
     - run EverParse/C tooling with [Wire_3d];
     - optionally generate OCaml FFI stubs with [Wire_stubs].
 
     For unusual EverParse constructs that have no codec equivalent yet, see the
-    explicit escape hatch {!C.Raw}. *)
+    explicit escape hatch {!Everparse.Raw}. *)
 
-module C : sig
+module Everparse : sig
   type struct_
   (** 3D struct declaration. *)
 
@@ -639,12 +640,17 @@ module C : sig
   val struct_of_codec : 'r Codec.t -> struct_
   (** Projects a record codec to a 3D struct. *)
 
+  val schema_of_struct : struct_ -> t
+  (** [schema_of_struct s] builds a schema from a raw 3D struct while using the
+      same EverParse output-types pattern as {!schema}. Named fields extract via
+      [WireSet*] callbacks; anonymous fields remain validation-only. *)
+
   val schema : 'r Codec.t -> t
   (** [schema codec] builds a schema from a codec. The resulting module uses the
       EverParse output-types pattern: the generated C validates AND extracts all
       field values via extern callbacks ([WireSet*]). *)
 
-  val generate : outdir:string -> t list -> unit
+  val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
 
   module Raw : sig
@@ -766,13 +772,13 @@ end
     of RFC 791 and similar documents. *)
 
 module Ascii : sig
-  val of_struct : C.struct_ -> string
+  val of_struct : Everparse.struct_ -> string
   (** Render a struct as an RFC-style bit diagram. *)
 
   val of_codec : 'r Codec.t -> string
   (** Render a codec as an RFC-style bit diagram. *)
 
-  val pp_struct : Format.formatter -> C.struct_ -> unit
+  val pp_struct : Format.formatter -> Everparse.struct_ -> unit
   (** Pretty-print a struct as an RFC-style bit diagram. *)
 
   val pp_codec : Format.formatter -> 'r Codec.t -> unit

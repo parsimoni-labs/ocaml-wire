@@ -5,16 +5,29 @@
     code. *)
 
 type 'r harness
-(** A test harness bundling a codec with C read/write oracles. *)
+(** A test harness bundling a codec with external read/write oracles. *)
 
 val harness :
   name:string ->
   codec:'r Wire.Codec.t ->
-  c_read:(string -> string option) ->
-  c_write:(string -> string option) ->
-  equal:('r -> 'r -> bool) ->
+  read:(string -> 'a option) ->
+  write:('a -> string option) ->
+  project:('r -> 'a) ->
+  equal:('a -> 'a -> bool) ->
+  ?ocaml_read:(string -> 'a option) ->
+  unit ->
   'r harness
-(** [harness ~name ~codec ~c_read ~c_write ~equal] creates a test harness. *)
+(** [harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read ()] creates a
+    test harness.
+
+    The harness compares both implementations in a single semantic domain ['a]:
+    [project] maps OCaml-decoded values into that domain, [read] extracts an
+    external value from wire bytes, and [write] serializes a value in that same
+    domain back to wire bytes. This makes full-record diff tests and
+    projected-field diff tests use the same API. [ocaml_read], when provided,
+    overrides the default OCaml byte-reading path derived from [codec] and
+    [project]. This is useful when the OCaml code under test uses a staged
+    accessor such as [Codec.get] instead of full decode. *)
 
 type result =
   | Match
@@ -24,14 +37,18 @@ type result =
   | Only_ocaml_ok of string
 
 val read : 'r harness -> string -> result
-(** [read h buf] parses [buf] with both OCaml and C, compares results. *)
+(** [read h buf] compares the OCaml-decoded value of [buf] against the external
+    value read from [buf]. *)
 
 val write : 'r harness -> 'r -> result
-(** [write h v] encodes [v] with OCaml, roundtrips through C, compares. *)
+(** [write h v] projects [v], serializes it with the external writer, reads the
+    resulting bytes with the OCaml side of the harness, and compares projected
+    values. *)
 
 val full_roundtrip : 'r harness -> 'r -> result
-(** [full_roundtrip h v] encodes with OCaml, roundtrips through C, decodes with
-    OCaml, and compares the final value to the original. *)
+(** [full_roundtrip h v] encodes [v] with OCaml, reads and re-writes it through
+    the external implementation, then reads the result with the OCaml side of
+    the harness and compares projected values. *)
 
 (** {1 Type-erased testing} *)
 

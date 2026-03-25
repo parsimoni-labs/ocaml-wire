@@ -1,15 +1,15 @@
-(** Tooling over {!Wire.C.t}.
+(** Tooling over {!Wire.Everparse.t}.
 
     [Wire_3d] does not define another schema language. It takes exported schemas
-    from {!Wire.C}, writes their [.3d] files, invokes EverParse, and generates C
-    parser artifacts around the result.
+    from {!Wire.Everparse}, writes their [.3d] files, invokes EverParse, and
+    generates C parser artifacts around the result.
 
     The output directory contains a self-contained C library: [EverParse.h],
     [<Name>.h], [<Name>.c], and a [test.c] that exercises the validators.
 
     {b Typical usage} ([gen.ml]):
     {[
-      let () = Wire_3d.main ~package:"clcw" [ Wire.C.schema Clcw.codec ]
+      let () = Wire_3d.main ~package:"clcw" [ Wire.Everparse.schema Clcw.codec ]
     ]}
 
     With a minimal [dune] that includes the generated rules:
@@ -21,18 +21,19 @@
     v}
 
     If you want OCaml to call the generated C validators, use {!Wire_stubs} on
-    the resulting {!Wire.C.Raw.struct_} values. *)
+    the resulting {!Wire.Everparse.Raw.struct_} values. *)
 
-type schema = Wire.C.t
-(** Same as {!Wire.C.t}; [Wire_3d] is tooling over this exported schema. *)
+type schema = Wire.Everparse.t
+(** Same as {!Wire.Everparse.t}; [Wire_3d] is tooling over this exported schema.
+*)
 
-val schema_of_struct : Wire.C.Raw.struct_ -> schema
+val schema_of_struct : Wire.Everparse.Raw.struct_ -> schema
 (** [schema_of_struct s] creates a schema from a fixed-size struct. The name,
     module, and wire size are derived from the struct. Raises [Failure] if the
     struct has variable-length fields. *)
 
 val schema :
-  name:string -> module_:Wire.C.Raw.module_ -> wire_size:int -> schema
+  name:string -> module_:Wire.Everparse.Raw.module_ -> wire_size:int -> schema
 (** [schema ~name ~module_ ~wire_size] creates a schema with explicit
     parameters. Prefer {!schema_of_struct} when possible. *)
 
@@ -64,16 +65,17 @@ val generate_c : ?quiet:bool -> outdir:string -> schema list -> unit
 
     Requires [3d.exe] (EverParse) in PATH. *)
 
-val generate : ?quiet:bool -> outdir:string -> schema list -> unit
-(** [generate ?quiet ~outdir schemas] runs both steps: {!generate_3d} then
-    {!generate_c}. The [quiet] flag is passed through to EverParse execution. *)
+val run : ?quiet:bool -> outdir:string -> schema list -> unit
+(** [run ?quiet ~outdir schemas] runs the full pipeline: writes [.3d] files,
+    invokes EverParse, and produces C validators. The [quiet] flag is passed
+    through to EverParse execution. *)
 
 val main : package:string -> schema list -> unit
 (** [main ~package schemas] dispatches based on [Sys.argv]:
     - [3d] runs {!generate_3d}
     - [c] runs {!generate_c}
     - [dune] generates [dune.inc] with build rules, test, and install stanzas
-    - otherwise runs {!generate}. *)
+    - otherwise runs {!run}. *)
 
 val has_3d_exe : unit -> bool
 (** [has_3d_exe ()] returns [true] if [3d.exe] is available in PATH or

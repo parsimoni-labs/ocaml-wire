@@ -4,7 +4,7 @@
     results as the EverParse-generated C parser. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 (* Simple header schema: version (u8) + length (u16) + flags (u8) *)
 type simple_header = { version : int; length : int; flags : int }
@@ -20,7 +20,7 @@ let simple_header_codec =
       ]
 
 (* Generate 3D schema *)
-let simple_header_struct = C.struct_of_codec simple_header_codec
+let simple_header_struct = Everparse.struct_of_codec simple_header_codec
 
 let simple_header_module =
   module_ ~doc:"Simple header for differential testing"
@@ -42,4 +42,7 @@ let constrained_packet_codec =
 
 let constrained_packet_module =
   module_ ~doc:"Constrained packet for differential testing"
-    [ typedef ~entrypoint:true (C.struct_of_codec constrained_packet_codec) ]
+    [
+      typedef ~entrypoint:true
+        (Everparse.struct_of_codec constrained_packet_codec);
+    ]

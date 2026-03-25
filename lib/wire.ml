@@ -7,7 +7,7 @@ module Action = Action
 module Param = Param
 module Field = Field
 module Codec_backend = Codec
-module C_backend = C
+module Everparse_backend = Everparse
 include Types
 
 type bitfield = U8 | U16 | U16be | U32 | U32be
@@ -721,7 +721,7 @@ module Codec = struct
     try Ok (Codec_backend.decode t buf off) with Parse_error e -> Error e
 end
 
-module C = C_backend
+module Everparse = Everparse_backend
 module Ascii = Ascii
 
 module Private = struct

@@ -545,25 +545,49 @@ let rec field_suffix : type a.
   | Enum { base; _ } -> field_suffix base
   | _ -> (No_suffix, fun ppf -> pp_typ ppf typ)
 
+let anon_counter = Stdlib.ref 0
+
+let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
+ fun typ ->
+  match typ with
+  | Where { cond; inner } -> (
+      match extract_where_constraint inner with
+      | Some c2, inner' -> (Some (And (cond, c2)), inner')
+      | None, inner' -> (Some cond, inner'))
+  | _ -> (None, typ)
+
+let combine_constraints a b =
+  match (a, b) with
+  | None, x | x, None -> x
+  | Some a, Some b -> Some (And (a, b))
+
 let pp_field ppf (Field f) =
-  match f.field_name with
-  | Some name ->
-      let suffix, pp_base = field_suffix f.field_typ in
-      Fmt.pf ppf "@,%t %s" pp_base name;
-      (* Print suffix after field name *)
-      (match suffix with
-      | No_suffix -> ()
-      | Bitwidth w -> Fmt.pf ppf " : %d" w
-      | Byte_array size -> Fmt.pf ppf "[:byte-size %a]" pp_expr size
-      | Single_elem { size; at_most = false } ->
-          Fmt.pf ppf "[:byte-size-single-element-array %a]" pp_expr size
-      | Single_elem { size; at_most = true } ->
-          Fmt.pf ppf "[:byte-size-single-element-array-at-most %a]" pp_expr size
-      | Array len -> Fmt.pf ppf "[%a]" pp_expr len);
-      Option.iter (Fmt.pf ppf " { %a }" pp_expr) f.constraint_;
-      Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
-      Fmt.string ppf ";"
-  | None -> Fmt.pf ppf "@,%a;" pp_typ f.field_typ
+  let name =
+    match f.field_name with
+    | Some name -> name
+    | None ->
+        let n = !anon_counter in
+        incr anon_counter;
+        Fmt.str "_anon_%d" n
+  in
+  (* Extract Where constraints from the type so they appear as field
+     constraints in the 3D output, not inline in the type. *)
+  let where_cond, typ = extract_where_constraint f.field_typ in
+  let constraint_ = combine_constraints f.constraint_ where_cond in
+  let suffix, pp_base = field_suffix typ in
+  Fmt.pf ppf "@,%t %s" pp_base name;
+  (match suffix with
+  | No_suffix -> ()
+  | Bitwidth w -> Fmt.pf ppf " : %d" w
+  | Byte_array size -> Fmt.pf ppf "[:byte-size %a]" pp_expr size
+  | Single_elem { size; at_most = false } ->
+      Fmt.pf ppf "[:byte-size-single-element-array %a]" pp_expr size
+  | Single_elem { size; at_most = true } ->
+      Fmt.pf ppf "[:byte-size-single-element-array-at-most %a]" pp_expr size
+  | Array len -> Fmt.pf ppf "[%a]" pp_expr len);
+  Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
+  Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
+  Fmt.string ppf ";"
 
 let pp_param ppf p =
   let (Pack_typ t) = p.param_typ in
@@ -575,6 +599,7 @@ let pp_params ppf params =
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma pp_param) params
 
 let pp_struct ppf (s : struct_) =
+  anon_counter := 0;
   Fmt.pf ppf "typedef struct _%s%a" s.name pp_params s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) s.where;
   Fmt.pf ppf "@,{@[<v 2>";

@@ -1,7 +1,7 @@
 (* Tests for codec.ml: Codec.get/set/v *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -71,7 +71,7 @@ let test_record_roundtrip () =
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
 let test_record_to_struct () =
-  let s = C.struct_of_codec simple_record_codec in
+  let s = Everparse.struct_of_codec simple_record_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
   Alcotest.(check bool) "contains UINT8" true (contains ~sub:"UINT8" output);
@@ -159,7 +159,7 @@ let test_metadata_where_fail () =
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 let test_codec_metadata_to_struct () =
-  let s = C.struct_of_codec projection_codec in
+  let s = Everparse.struct_of_codec projection_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
   Alcotest.(check bool) "contains where" true (contains ~sub:"where" output);
@@ -357,7 +357,7 @@ let test_codec_bitfield_multi_group () =
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
 let test_codec_bitfield_to_struct () =
-  let s = C.struct_of_codec bf32_codec in
+  let s = Everparse.struct_of_codec bf32_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
   Alcotest.(check bool)
@@ -1191,7 +1191,7 @@ let test_dep_ref_size_eval () =
 
 let test_dep_to_struct () =
   (* struct_of_codec should produce a valid struct for variable-size codecs *)
-  let s = C.struct_of_codec dep_slice_codec in
+  let s = Everparse.struct_of_codec dep_slice_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
   Alcotest.(check bool)
@@ -1201,7 +1201,7 @@ let test_dep_to_struct () =
   Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output)
 
 let test_dep_trailer_to_struct () =
-  let s = C.struct_of_codec trailer_codec in
+  let s = Everparse.struct_of_codec trailer_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
   Alcotest.(check bool) "contains Length" true (contains ~sub:"Length" output);

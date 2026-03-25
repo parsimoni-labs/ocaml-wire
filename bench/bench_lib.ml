@@ -37,15 +37,32 @@ type t = {
   reset : unit -> unit;
   c : ((bytes -> int -> int -> int) * bytes) option;
   ffi : ((bytes -> unit) * bytes) option;
-  verify : (unit -> unit) option;
+  check : check option;
 }
 
+and check =
+  | Custom_check of (unit -> unit)
+  | Expectation : {
+      ocaml_result : unit -> 'a;
+      ffi_result : (unit -> 'a) option;
+      c_result : (unit -> 'a) option;
+      equal : 'a -> 'a -> bool;
+      pp : 'a Fmt.t;
+    }
+      -> check
+
 let v label ~size ?(reset = ignore) ocaml =
-  { label; size; ocaml; reset; c = None; ffi = None; verify = None }
+  { label; size; ocaml; reset; c = None; ffi = None; check = None }
 
 let with_c c_loop c_buf t = { t with c = Some (c_loop, c_buf) }
 let with_ffi ffi_check ffi_buf t = { t with ffi = Some (ffi_check, ffi_buf) }
-let with_verify f t = { t with verify = Some f }
+let with_verify f t = { t with check = Some (Custom_check f) }
+
+let with_expect ?ffi ?c ~equal ~pp ocaml_result t =
+  let check =
+    Expectation { ocaml_result; ffi_result = ffi; c_result = c; equal; pp }
+  in
+  { t with check = Some check }
 
 let cycling ~data ~n_items ~size read_fn =
   let i = ref 0 in
@@ -79,15 +96,42 @@ let check t =
   t.ocaml ();
   (* Verify FFI tier doesn't crash *)
   (match t.ffi with
-  | Some (ffi_fn, ffi_buf) -> ffi_fn ffi_buf
+  | Some (ffi_fn, ffi_buf) ->
+      t.reset ();
+      ffi_fn ffi_buf
   | None -> ());
   (* Verify C tier accepts the data *)
   (match t.c with
-  | Some (c_loop, c_buf) -> ignore (c_loop c_buf 0 1)
+  | Some (c_loop, c_buf) ->
+      t.reset ();
+      ignore (c_loop c_buf 0 1)
   | None -> ());
-  (* Run verify function if present — checks OCaml and C agree *)
-  match t.verify with
-  | Some f -> f ()
+  (* Run structured result checks when present. *)
+  match t.check with
+  | Some (Custom_check f) ->
+      t.reset ();
+      f ()
+  | Some (Expectation check) -> (
+      let fail label lhs rhs =
+        Fmt.failwith "%s mismatch: OCaml=%a %s=%a" t.label check.pp lhs label
+          check.pp rhs
+      in
+      t.reset ();
+      let ocaml_value = check.ocaml_result () in
+      (match check.ffi_result with
+      | Some ffi_result ->
+          t.reset ();
+          let ffi_value = ffi_result () in
+          if not (check.equal ocaml_value ffi_value) then
+            fail "FFI" ocaml_value ffi_value
+      | None -> ());
+      match check.c_result with
+      | Some c_result ->
+          t.reset ();
+          let c_value = c_result () in
+          if not (check.equal ocaml_value c_value) then
+            fail "C" ocaml_value c_value
+      | None -> ())
   | None -> ()
 
 let run_one ~n t =
@@ -96,6 +140,7 @@ let run_one ~n t =
     match t.c with
     | None -> None
     | Some (c_loop, c_buf) ->
+        t.reset ();
         let c_total = n * 10 in
         Some (float (c_loop c_buf 0 c_total) /. float c_total)
   in
@@ -103,6 +148,7 @@ let run_one ~n t =
     match t.ffi with
     | None -> None
     | Some (ffi_fn, ffi_buf) ->
+        t.reset ();
         Some
           (time_ns n (fun () ->
                for _ = 1 to n do

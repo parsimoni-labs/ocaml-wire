@@ -1,7 +1,31 @@
 ; Field-level codec benchmark: EverParse C vs OCaml->C FFI vs pure OCaml
 
-(executable
- (name bench)
+(library
+ (name demo_bench_cases)
+ (modules demo_bench_cases)
+ (libraries demo space net wire bench_lib bytesrw fmt))
+
+(library
+ (name demo_bench_diff)
+ (modules demo_bench_diff)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo space net c_stubs c_tier bench_lib wire memtrace unix))
+ (libraries demo_bench_cases c_stubs wire wire.diff bytesrw fmt))
+
+(executable
+ (name bench)
+ (modules bench)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries
+  demo
+  space
+  net
+  demo_bench_cases
+  demo_bench_diff
+  c_stubs
+  c_tier
+  bench_lib
+  wire
+  memtrace
+  unix))

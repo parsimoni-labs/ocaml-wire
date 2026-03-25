@@ -1,6 +1,12 @@
-(executable
- (name bench)
+(library
+ (name routing_bench)
+ (modules routing_bench)
  (foreign_stubs
   (language c)
   (names routing_c))
  (libraries space wire bench_lib c_tier memtrace unix fmt))
+
+(executable
+ (name bench)
+ (modules bench)
+ (libraries routing_bench))

@@ -258,17 +258,20 @@ let test_parse_casetype buf =
 let test_parse_nested_struct buf =
   let buf = truncate buf in
   let inner =
-    Wire.C.Raw.struct_ "Inner"
-      [ Wire.C.Raw.field "a" Wire.uint8; Wire.C.Raw.field "b" Wire.uint8 ]
-  in
-  let outer =
-    Wire.C.Raw.struct_ "Outer"
+    Wire.Everparse.Raw.struct_ "Inner"
       [
-        Wire.C.Raw.field "hdr" Wire.uint16be;
-        Wire.C.Raw.field "payload" (Wire.C.Raw.struct_typ inner);
+        Wire.Everparse.Raw.field "a" Wire.uint8;
+        Wire.Everparse.Raw.field "b" Wire.uint8;
       ]
   in
-  let _ = Wire.decode_string (Wire.C.Raw.struct_typ outer) buf in
+  let outer =
+    Wire.Everparse.Raw.struct_ "Outer"
+      [
+        Wire.Everparse.Raw.field "hdr" Wire.uint16be;
+        Wire.Everparse.Raw.field "payload" (Wire.Everparse.Raw.struct_typ inner);
+      ]
+  in
+  let _ = Wire.decode_string (Wire.Everparse.Raw.struct_typ outer) buf in
   ()
 
 (** {1 Roundtrip Tests} *)

@@ -1,6 +1,6 @@
 (executable
  (name fuzz)
- (modules fuzz fuzz_wire fuzz_c fuzz_param)
+ (modules fuzz fuzz_wire fuzz_everparse fuzz_param)
  (libraries wire alcobar))
 
 (rule

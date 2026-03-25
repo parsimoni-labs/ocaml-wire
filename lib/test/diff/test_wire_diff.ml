@@ -9,6 +9,11 @@ let simple_codec =
   let open Codec in
   v "Simple" (fun v l -> (v, l)) [ f_diff_version $ fst; f_diff_length $ snd ]
 
+let encode_simple v =
+  let buf = Bytes.create (Codec.wire_size simple_codec) in
+  Codec.encode simple_codec v buf 0;
+  Bytes.unsafe_to_string buf
+
 (* Mock C functions that behave identically to OCaml *)
 let mock_c_read buf =
   if String.length buf < 3 then None else Some (String.sub buf 0 3)
@@ -16,8 +21,8 @@ let mock_c_read buf =
 let mock_c_write buf = if String.length buf < 3 then None else Some buf
 
 let mk_schema () =
-  Wire_diff.harness ~name:"Simple" ~codec:simple_codec ~c_read:mock_c_read
-    ~c_write:mock_c_write ~equal:(fun (a1, a2) (b1, b2) -> a1 = b1 && a2 = b2)
+  Wire_diff.harness ~name:"Simple" ~codec:simple_codec ~read:mock_c_read
+    ~write:mock_c_write ~project:encode_simple ~equal:String.equal ()
 
 let test_read_match () =
   let s = mk_schema () in
@@ -32,12 +37,37 @@ let test_read_both_failed () =
   let result = Wire_diff.read s "" in
   Alcotest.(check bool) "both_failed" true (result = Wire_diff.Both_failed)
 
+let test_read_uses_ocaml_read_override () =
+  let c_read buf = if String.length buf < 3 then None else Some "override" in
+  let ocaml_read buf =
+    if String.length buf < 3 then None else Some "override"
+  in
+  let s =
+    Wire_diff.harness ~name:"Override" ~codec:simple_codec ~read:c_read
+      ~write:mock_c_write ~project:encode_simple ~equal:String.equal ~ocaml_read
+      ()
+  in
+  let result = Wire_diff.read s (encode_simple (7, 1000)) in
+  Alcotest.(check bool) "read uses override" true (result = Wire_diff.Match)
+
 let test_write () =
   let s = mk_schema () in
   let v = (7, 1000) in
   let result = Wire_diff.write s v in
   (* mock_c_write accepts any 3-byte buffer, so a valid 3-byte encode matches *)
   Alcotest.(check bool) "write result" true (result = Wire_diff.Match)
+
+let test_write_uses_ocaml_read_override () =
+  let c_write _ = Some "abc" in
+  let ocaml_read buf = if buf = "abc" then Some "override" else None in
+  let s =
+    Wire_diff.harness ~name:"OverrideWrite" ~codec:simple_codec
+      ~read:mock_c_read ~write:c_write
+      ~project:(fun _ -> "override")
+      ~equal:String.equal ~ocaml_read ()
+  in
+  let result = Wire_diff.write s (7, 1000) in
+  Alcotest.(check bool) "write uses override" true (result = Wire_diff.Match)
 
 let test_full_roundtrip () =
   let s = mk_schema () in
@@ -49,27 +79,56 @@ let test_full_roundtrip_c_rejects () =
   (* C rejects OCaml-encoded bytes → Only_ocaml_ok *)
   let c_write_reject _ = None in
   let s =
-    Wire_diff.harness ~name:"CReject" ~codec:simple_codec ~c_read:mock_c_read
-      ~c_write:c_write_reject ~equal:(fun (a1, a2) (b1, b2) ->
-        a1 = b1 && a2 = b2)
+    Wire_diff.harness ~name:"CReject" ~codec:simple_codec ~read:mock_c_read
+      ~write:c_write_reject ~project:encode_simple ~equal:String.equal ()
   in
   let result = Wire_diff.full_roundtrip s (3, 512) in
   Alcotest.(check bool)
     "c rejects → Only_ocaml_ok" true
-    (result = Wire_diff.Only_ocaml_ok "C rejected OCaml-encoded bytes")
+    (result = Wire_diff.Only_ocaml_ok "External write failed")
 
 let test_write_c_rejects () =
   (* Same scenario in write: C rejects → Only_ocaml_ok *)
   let c_write_reject _ = None in
   let s =
-    Wire_diff.harness ~name:"CRejectW" ~codec:simple_codec ~c_read:mock_c_read
-      ~c_write:c_write_reject ~equal:(fun (a1, a2) (b1, b2) ->
-        a1 = b1 && a2 = b2)
+    Wire_diff.harness ~name:"CRejectW" ~codec:simple_codec ~read:mock_c_read
+      ~write:c_write_reject ~project:encode_simple ~equal:String.equal ()
   in
   let result = Wire_diff.write s (3, 512) in
   Alcotest.(check bool)
     "write c rejects → Only_ocaml_ok" true
-    (result = Wire_diff.Only_ocaml_ok "C rejected OCaml-encoded bytes")
+    (result = Wire_diff.Only_ocaml_ok "External write failed")
+
+let projection_codec =
+  let open Codec in
+  v "Projection"
+    (fun version _length -> version)
+    [ f_diff_version $ Fun.id; (f_diff_length $ fun _ -> 0) ]
+
+let projection_read buf =
+  if String.length buf < 3 then None else Some (String.get_uint8 buf 0)
+
+let projection_write version =
+  let buf = Bytes.create 3 in
+  Bytes.set_uint8 buf 0 version;
+  Bytes.set_uint16_be buf 1 0;
+  Some (Bytes.unsafe_to_string buf)
+
+let mk_projection () =
+  Wire_diff.harness ~name:"Projection" ~codec:projection_codec
+    ~read:projection_read ~write:projection_write ~project:Fun.id
+    ~equal:Int.equal ()
+
+let test_projection_read () =
+  let s = mk_projection () in
+  let buf = "\x09\x12\x34" in
+  let result = Wire_diff.read s buf in
+  Alcotest.(check bool) "projection read" true (result = Wire_diff.Match)
+
+let test_projection_roundtrip () =
+  let s = mk_projection () in
+  let result = Wire_diff.full_roundtrip s 7 in
+  Alcotest.(check bool) "projection roundtrip" true (result = Wire_diff.Match)
 
 let test_pack () =
   let s = mk_schema () in
@@ -86,10 +145,16 @@ let suite =
     [
       Alcotest.test_case "read match" `Quick test_read_match;
       Alcotest.test_case "read both failed" `Quick test_read_both_failed;
+      Alcotest.test_case "read uses ocaml_read override" `Quick
+        test_read_uses_ocaml_read_override;
       Alcotest.test_case "write" `Quick test_write;
+      Alcotest.test_case "write uses ocaml_read override" `Quick
+        test_write_uses_ocaml_read_override;
       Alcotest.test_case "full_roundtrip" `Quick test_full_roundtrip;
       Alcotest.test_case "full_roundtrip: c rejects" `Quick
         test_full_roundtrip_c_rejects;
       Alcotest.test_case "write: c rejects" `Quick test_write_c_rejects;
+      Alcotest.test_case "projection read" `Quick test_projection_read;
+      Alcotest.test_case "projection roundtrip" `Quick test_projection_roundtrip;
       Alcotest.test_case "pack" `Quick test_pack;
     ] )

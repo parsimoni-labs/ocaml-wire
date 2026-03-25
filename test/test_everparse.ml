@@ -1,7 +1,7 @@
 (* Tests for c.ml: 3D generation and projection-facing syntax. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 

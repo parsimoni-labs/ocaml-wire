@@ -2,8 +2,8 @@
 
     Actions are attached to fields in parameterised 3D descriptions. They form a
     small imperative language over expressions, mutable out-parameters, and
-    local variables. {!Wire.C} renders them to EverParse 3D; other consumers may
-    interpret them directly. *)
+    local variables. {!Wire.Everparse} renders them to EverParse 3D; other
+    consumers may interpret them directly. *)
 
 type t = Types.action
 (** An action block. *)

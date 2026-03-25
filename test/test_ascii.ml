@@ -3,7 +3,7 @@
    Each test compares the exact rendered output against an expected string. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let check name s expected =
   let output = Ascii.of_struct s in

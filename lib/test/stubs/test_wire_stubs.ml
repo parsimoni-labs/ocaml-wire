@@ -4,7 +4,7 @@
     arity mismatches, syntax errors, and type errors in the generated code. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -284,7 +284,7 @@ let e2e ~name ~structs ~module_ ~test_ml =
     Wire_3d.generate_3d ~outdir:dir [ schema ];
     List.iter
       (fun s ->
-        let sname = Wire.C.Raw.struct_name s in
+        let sname = Wire.Everparse.Raw.struct_name s in
         write_file
           (Filename.concat dir (sname ^ "_ExternalTypedefs.h"))
           (Wire_stubs.to_external_typedefs sname))
@@ -319,8 +319,8 @@ let test_e2e_no_params () =
       (fun version length -> (version, length))
       [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
   in
-  let schema = Wire.C.schema codec in
-  let s = Wire.C.struct_of_codec codec in
+  let schema = Wire.Everparse.schema codec in
+  let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|type test_header = { version : int; length : int }
@@ -342,8 +342,8 @@ let test_e2e_with_constraint () =
     let open Wire.Codec in
     v "Constrained" (fun x -> x) [ (f_x $ fun x -> x) ]
   in
-  let schema = Wire.C.schema codec in
-  let s = Wire.C.struct_of_codec codec in
+  let schema = Wire.Everparse.schema codec in
+  let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"Constrained" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|type constrained = { x : int }
@@ -373,8 +373,8 @@ let test_e2e_bitfields () =
         (f_length $ fun (_, _, l) -> l);
       ]
   in
-  let schema = Wire.C.schema codec in
-  let s = Wire.C.struct_of_codec codec in
+  let schema = Wire.Everparse.schema codec in
+  let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"BfHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|type bf_header = { version : int; flags : int; length : int }
@@ -395,15 +395,15 @@ let () =
    uses extern typedef + Extern_call (WireSet) pattern, and optionally run
    EverParse to validate. Returns the 3D string. *)
 let check_output_3d ?(run_everparse = true) codec =
-  let schema = Wire.C.schema codec in
-  let s3d = Wire.C.Raw.to_3d schema.module_ in
+  let schema = Wire.Everparse.schema codec in
+  let s3d = Wire.Everparse.Raw.to_3d schema.module_ in
   Alcotest.(check bool)
     "has extern typedef" true
     (contains ~sub:"extern typedef" s3d);
   Alcotest.(check bool) "has WireSet" true (contains ~sub:"WireSet" s3d);
   if run_everparse && has_3d then begin
     let dir = Filename.temp_dir "wire_output_test" "" in
-    Wire.C.generate ~outdir:dir [ schema ];
+    Wire.Everparse.write_3d ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     ignore (Sys.command (Fmt.str "rm -rf %s" dir))
   end;
@@ -582,11 +582,11 @@ let test_e2e_output_parse () =
           (f_tag $ fun (_, _, t) -> t);
         ]
     in
-    let s = Wire.C.struct_of_codec codec in
-    let name = Wire.C.Raw.struct_name s in
+    let s = Wire.Everparse.struct_of_codec codec in
+    let name = Wire.Everparse.Raw.struct_name s in
     (* 2. Generate 3D with output pattern and run EverParse *)
-    let schema = Wire.C.schema codec in
-    Wire.C.generate ~outdir:dir [ schema ];
+    let schema = Wire.Everparse.schema codec in
+    Wire.Everparse.write_3d ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     (* 3. Generate ExternalTypedefs.h *)
     let ext_h = Wire_stubs.to_external_typedefs name in

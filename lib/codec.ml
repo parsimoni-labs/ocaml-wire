@@ -91,12 +91,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Unit -> fun _buf _base -> ()
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
-type ctx = Eval.ctx
-
-let ctx_add name v ctx = Eval.bind ctx name v
 let int_of_typ_value = Eval.int_of
-let eval_expr_ctx = Eval.expr
-let apply_action = Eval.action
 
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
@@ -201,6 +196,186 @@ let rec compile_expr (env : (string * (bytes -> int -> int)) list)
       | None -> invalid_arg "Codec: sizeof on variable-size type")
   | _ -> invalid_arg "Codec: unsupported expression in dependent size"
 
+(* Compile expressions to read from a per-decode int array instead of a Map.
+   The [idx] function maps field names to array indices. Built at [seal] time,
+   used at every [decode]. Zero allocation per decode. *)
+type idx = string -> int
+
+(* Per-field compile context: field name→index mapping plus sizeof_this
+   and field_pos constants (known at seal time for each field). *)
+type compile_ctx = { idx : idx; sizeof_this : int; field_pos : int }
+
+let rec compile_int_arr (cc : compile_ctx) (e : int expr) : int array -> int =
+  match e with
+  | Int n -> fun _ -> n
+  | Ref name ->
+      let i = cc.idx name in
+      fun a -> a.(i)
+  | Param_ref p -> fun _ -> !(p.ph_cell)
+  | Sizeof t ->
+      let n = field_wire_size t |> Option.value ~default:0 in
+      fun _ -> n
+  | Sizeof_this ->
+      let n = cc.sizeof_this in
+      fun _ -> n
+  | Field_pos ->
+      let n = cc.field_pos in
+      fun _ -> n
+  | Add (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a + fb a
+  | Sub (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a - fb a
+  | Mul (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a * fb a
+  | Div (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a / fb a
+  | Mod (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a mod fb a
+  | Land (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a land fb a
+  | Lor (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a lor fb a
+  | Lxor (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a lxor fb a
+  | Lnot e ->
+      let fe = compile_int_arr cc e in
+      fun a -> lnot (fe a)
+  | Lsl (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a lsl fb a
+  | Lsr (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun a -> fa a lsr fb a
+  | Cast (w, e) -> (
+      let fe = compile_int_arr cc e in
+      match w with
+      | `U8 -> fun a -> fe a land 0xFF
+      | `U16 -> fun a -> fe a land 0xFFFF
+      | `U32 -> fun a -> fe a land 0xFFFF_FFFF
+      | `U64 -> fun a -> fe a)
+
+(* Try to compile an expression of unknown type as int.
+   Returns None if the expression is not an int expr. *)
+and try_compile_int : type a. compile_ctx -> a expr -> (int array -> int) option
+    =
+ fun cc -> function
+  | Int _ as e -> Some (compile_int_arr cc e)
+  | Ref _ as e -> Some (compile_int_arr cc e)
+  | Param_ref _ as e -> Some (compile_int_arr cc e)
+  | Sizeof _ as e -> Some (compile_int_arr cc e)
+  | Sizeof_this as e -> Some (compile_int_arr cc e)
+  | Field_pos as e -> Some (compile_int_arr cc e)
+  | Add _ as e -> Some (compile_int_arr cc e)
+  | Sub _ as e -> Some (compile_int_arr cc e)
+  | Mul _ as e -> Some (compile_int_arr cc e)
+  | Div _ as e -> Some (compile_int_arr cc e)
+  | Mod _ as e -> Some (compile_int_arr cc e)
+  | Land _ as e -> Some (compile_int_arr cc e)
+  | Lor _ as e -> Some (compile_int_arr cc e)
+  | Lxor _ as e -> Some (compile_int_arr cc e)
+  | Lnot _ as e -> Some (compile_int_arr cc e)
+  | Lsl _ as e -> Some (compile_int_arr cc e)
+  | Lsr _ as e -> Some (compile_int_arr cc e)
+  | Cast _ as e -> Some (compile_int_arr cc e)
+  | _ -> None
+
+and compile_bool_arr (cc : compile_ctx) (e : bool expr) : int array -> bool =
+  match e with
+  | Bool b -> fun _ -> b
+  | Eq (a, b) -> (
+      match (try_compile_int cc a, try_compile_int cc b) with
+      | Some fa, Some fb -> fun arr -> fa arr = fb arr
+      | _ -> fun _ -> true)
+  | Ne (a, b) -> (
+      match (try_compile_int cc a, try_compile_int cc b) with
+      | Some fa, Some fb -> fun arr -> fa arr <> fb arr
+      | _ -> fun _ -> true)
+  | Lt (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun arr -> fa arr < fb arr
+  | Le (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun arr -> fa arr <= fb arr
+  | Gt (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun arr -> fa arr > fb arr
+  | Ge (a, b) ->
+      let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
+      fun arr -> fa arr >= fb arr
+  | And (a, b) ->
+      let fa = compile_bool_arr cc a and fb = compile_bool_arr cc b in
+      fun arr -> fa arr && fb arr
+  | Or (a, b) ->
+      let fa = compile_bool_arr cc a and fb = compile_bool_arr cc b in
+      fun arr -> fa arr || fb arr
+  | Not e ->
+      let fe = compile_bool_arr cc e in
+      fun arr -> not (fe arr)
+
+(* Compile action statements to operate on an int array instead of Eval.ctx.
+   Assign writes to ph_cell (mutable param) and updates the array.
+   Var binds a local by extending the index — but since we can't grow the
+   array, local vars in actions use ph_cell-style mutation or are inlined. *)
+type compiled_action = int array -> unit
+
+let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
+    compiled_action =
+  match s with
+  | Assign (p, e) -> (
+      let fe = compile_int_arr cc e in
+      fun arr ->
+        let v = fe arr in
+        p.Types.ph_cell := v;
+        (* If the param is also a field, update the array *)
+        try arr.(cc.idx p.Types.ph_name) <- v with _ -> ())
+  | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
+  | Return e ->
+      let fe = compile_bool_arr cc e in
+      fun arr ->
+        if not (fe arr) then
+          raise (Parse_error (Constraint_failed "field action"))
+  | Types.Abort ->
+      fun _ -> raise (Parse_error (Constraint_failed "field action"))
+  | If (cond, then_, else_) ->
+      let fc = compile_bool_arr cc cond in
+      let ft = compile_stmts cc then_ in
+      let fe =
+        match else_ with
+        | Some stmts -> compile_stmts cc stmts
+        | None -> fun _ -> ()
+      in
+      fun arr -> if fc arr then ft arr else fe arr
+  | Var (name, e) -> (
+      (* Extend index for subsequent statements — but since Var only affects
+         later statements in the same block, we handle it at the block level *)
+      let fe = compile_int_arr cc e in
+      fun arr ->
+        (* Store in array if name is a known field *)
+        try arr.(cc.idx name) <- fe arr with _ -> ())
+
+and compile_stmts (cc : compile_ctx) (stmts : Types.action_stmt list) :
+    compiled_action =
+  match stmts with
+  | [] -> fun _ -> ()
+  | [ s ] -> compile_stmt cc s
+  | stmts ->
+      let compiled = List.map (compile_stmt cc) stmts in
+      fun arr -> List.iter (fun f -> f arr) compiled
+
+let compile_action (cc : compile_ctx) (act : action option) :
+    compiled_action option =
+  match act with
+  | None -> None
+  | Some (On_success stmts | On_act stmts) -> Some (compile_stmts cc stmts)
+
 type ('f, 'r) record =
   | Record : {
       r_name : string;
@@ -212,7 +387,10 @@ type ('f, 'r) record =
       r_next_off : next_off; (* where the next field starts *)
       r_fields_rev : Types.field list;
       r_validators_rev :
-        (int (* byte offset *) * (ctx -> bytes -> int -> ctx)) list;
+        (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
+      r_n_fields : int; (* count of named fields (for field indexing) *)
+      r_n_array_slots : int;
+          (* fields + action-local vars (for array allocation) *)
       r_bf : bf_codec_state option;
       r_configurators_rev : (unit -> unit) list;
       r_field_readers : (string * (bytes -> int -> int)) list;
@@ -230,7 +408,7 @@ type 'r t = {
   t_encode : 'r -> bytes -> int -> unit;
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
-  t_validate : ctx -> bytes -> int -> ctx;
+  t_validate : bytes -> int -> unit;
   t_where : bool expr option;
 }
 
@@ -245,6 +423,8 @@ let record_start ?where name make =
       r_next_off = Static_next 0;
       r_fields_rev = [];
       r_validators_rev = [];
+      r_n_fields = 0;
+      r_n_array_slots = 0;
       r_bf = None;
       r_configurators_rev = [];
       r_field_readers = [];
@@ -357,20 +537,66 @@ let build_bf_clear base byte_off =
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     =
  fun (Record r) ({ name; typ; get; _ } as fld) ->
+  let field_idx = r.r_n_fields in
+  (* Build name→index mapping for constraint/action compilation *)
+  let build_idx readers =
+    let rev_readers = List.rev readers in
+    fun name ->
+      let rec find i = function
+        | [] -> failwith ("unbound field: " ^ name)
+        | (n, _) :: _ when n = name -> i
+        | _ :: rest -> find (i + 1) rest
+      in
+      find 0 rev_readers
+  in
+  (* Collect local variable names from action statements *)
+  let rec action_vars acc = function
+    | Types.Var (name, _) -> name :: acc
+    | Types.If (_, then_, else_) -> (
+        let acc = List.fold_left action_vars acc then_ in
+        match else_ with
+        | Some stmts -> List.fold_left action_vars acc stmts
+        | None -> acc)
+    | _ -> acc
+  in
+  let action_var_names =
+    match fld.action with
+    | None -> []
+    | Some (Types.On_success stmts | Types.On_act stmts) ->
+        List.fold_left action_vars [] stmts
+  in
+  (* Build compile context including current field and action locals in the index *)
+  let build_cc ~byte_off readers =
+    let dummy_reader _buf _base = 0 in
+    (* Add current field and action-local vars to the index *)
+    let readers = (name, dummy_reader) :: readers in
+    let readers =
+      List.fold_left
+        (fun acc vn -> (vn, dummy_reader) :: acc)
+        readers action_var_names
+    in
+    let idx = build_idx readers in
+    { idx; sizeof_this = byte_off; field_pos = field_idx }
+  in
+  let n_extra_vars = List.length action_var_names in
   let build_validator ~byte_off typ reader =
-    let v ctx buf base =
-      let ctx' =
-        match int_of_typ_value typ (reader buf base) with
-        | Some v -> ctx_add name v ctx
-        | None -> ctx
-      in
-      let ctx' =
-        match fld.constraint_ with
-        | Some c when not (eval_expr_ctx ctx' c) ->
-            raise (Parse_error (Constraint_failed "field constraint"))
-        | _ -> ctx'
-      in
-      apply_action ctx' fld.action
+    let cc = build_cc ~byte_off r.r_field_readers in
+    let check =
+      match fld.constraint_ with
+      | None -> None
+      | Some c -> Some (compile_bool_arr cc c)
+    in
+    let act = compile_action cc fld.action in
+    let idx = field_idx in
+    let v arr buf base =
+      (match int_of_typ_value typ (reader buf base) with
+      | Some v -> arr.(idx) <- v
+      | None -> ());
+      (match check with
+      | Some f when not (f arr) ->
+          raise (Parse_error (Constraint_failed "field constraint"))
+      | _ -> ());
+      match act with Some f -> f arr | None -> ()
     in
     (byte_off, v)
   in
@@ -386,6 +612,8 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         r_next_off = next_off;
         r_fields_rev = fields_rev;
         r_validators_rev = validators_rev;
+        r_n_fields = List.length field_readers;
+        r_n_array_slots = List.length field_readers + n_extra_vars;
         r_bf = bf;
         r_configurators_rev = configurators_rev;
         r_field_readers = field_readers;
@@ -743,19 +971,30 @@ let seal : type r. (r, r) record -> r t =
   in
   let raw_decode = build_decode r.r_make r.r_readers in
   let validators = List.rev r.r_validators_rev in
-  let validate ctx buf off =
-    let ctx =
-      List.fold_left
-        (fun (field_pos, ctx) (byte_off, f) ->
-          let ctx = Eval.set_pos ctx ~sizeof_this:byte_off ~field_pos in
-          (field_pos + 1, f ctx buf off))
-        (0, ctx) validators
-      |> snd
-    in
+  let n_fields = r.r_n_array_slots in
+  let compiled_where =
     match r.r_where with
-    | Some cond when not (eval_expr_ctx ctx cond) ->
+    | None -> None
+    | Some cond ->
+        let rev_readers = List.rev r.r_field_readers in
+        let idx name =
+          let rec find i = function
+            | [] -> failwith ("unbound field: " ^ name)
+            | (n, _) :: _ when n = name -> i
+            | _ :: rest -> find (i + 1) rest
+          in
+          find 0 rev_readers
+        in
+        let cc = { idx; sizeof_this = 0; field_pos = 0 } in
+        Some (compile_bool_arr cc cond)
+  in
+  let validate buf off =
+    let arr = Array.make n_fields 0 in
+    List.iter (fun (_byte_off, f) -> f arr buf off) validators;
+    match compiled_where with
+    | Some f when not (f arr) ->
         raise (Parse_error (Constraint_failed "where clause"))
-    | _ -> ctx
+    | _ -> ()
   in
   {
     t_name = r.r_name;
@@ -818,7 +1057,7 @@ let is_fixed t =
 
 let decode t buf off =
   let v = t.t_decode buf off in
-  let _ctx = t.t_validate Eval.empty buf off in
+  t.t_validate buf off;
   v
 
 let encode t v buf off = t.t_encode v buf off

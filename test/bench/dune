@@ -1,3 +1,21 @@
 (test
  (name test_bench_lib)
+ (modules test_bench_lib)
  (libraries bench_lib alcotest unix))
+
+(test
+ (name test_application_benches)
+ (modules test_application_benches)
+ (libraries routing_bench clcw_bench gateway_bench alcotest))
+
+(test
+ (name test_demo_bench_cases)
+ (modules test_demo_bench_cases)
+ (libraries demo_bench_cases alcotest))
+
+(executable
+ (name test_demo_bench_diff)
+ (modules test_demo_bench_diff)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries demo_bench_diff alcotest))

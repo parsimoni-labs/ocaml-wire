@@ -3,15 +3,16 @@
     Thin layer on top of {!Wire_3d}: generates .3d files, runs EverParse,
     produces C/OCaml stubs, and adds a differential test runner. *)
 
-type schema = Wire.C.t = {
+type schema = Wire.Everparse.t = {
   name : string;
-  module_ : Wire.C.Raw.module_;
+  module_ : Wire.Everparse.Raw.module_;
   wire_size : int;
 }
 
 let schema ~name ~struct_ ~module_ =
-  match Wire.C.Raw.struct_size struct_ with
-  | Some wire_size -> Some (Wire.C.Raw.of_module ~name ~module_ ~wire_size)
+  match Wire.Everparse.Raw.struct_size struct_ with
+  | Some wire_size ->
+      Some (Wire.Everparse.Raw.of_module ~name ~module_ ~wire_size)
   | None -> None
 
 (** {1 Code Generation} *)

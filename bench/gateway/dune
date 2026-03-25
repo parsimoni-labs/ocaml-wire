@@ -1,6 +1,12 @@
-(executable
- (name bench)
+(library
+ (name gateway_bench)
+ (modules gateway_bench)
  (foreign_stubs
   (language c)
   (names gateway_c))
  (libraries space wire bench_lib c_tier memtrace unix fmt))
+
+(executable
+ (name bench)
+ (modules bench)
+ (libraries gateway_bench))

@@ -2,7 +2,7 @@
    decode-time semantics. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 (* ── Param.input / Param.output / Param.v ── *)
 

@@ -6,6 +6,11 @@ build:
 
 test:
 	dune runtest
+	@if [ -x "$$HOME/.local/everparse/bin/3d.exe" ] || command -v 3d.exe >/dev/null 2>&1; then \
+		PATH="$$HOME/.local/everparse/bin:$$PATH" BUILD_EVERPARSE=1 dune runtest; \
+	else \
+		echo "Skipping EverParse-gated tests (3d.exe not found)"; \
+	fi
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 

@@ -77,7 +77,7 @@ type random_field = {
 }
 
 type random_schema = {
-  struct_ : Wire.C.Raw.struct_;
+  struct_ : Wire.Everparse.Raw.struct_;
   fields : random_field list;
   total_wire_size : int;
 }
@@ -115,7 +115,7 @@ let random_struct seed =
     List.fold_left (fun acc rf -> acc + rf.ft.wire_size) 0 fields
   in
   {
-    struct_ = Wire.C.Raw.struct_ struct_name wire_fields;
+    struct_ = Wire.Everparse.Raw.struct_ struct_name wire_fields;
     fields;
     total_wire_size;
   }
@@ -136,14 +136,14 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Include all wrapper headers - they declare the check functions *)
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       pr "#include \"%s/%sWrapper.h\"\n" schema_dir name)
     schemas;
   pr "\n";
   (* Include wrapper implementations with unique error handlers *)
   List.iteri
     (fun i rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       (* Include EverParse.h and parser *)
       if i = 0 then pr "#include \"%s/EverParse.h\"\n" schema_dir;
       pr "#include \"%s/%s.h\"\n" schema_dir name;
@@ -158,7 +158,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
       pr "  uint64_t c, uint8_t *ctx, EVERPARSE_INPUT_BUFFER i, uint64_t p) {\n";
       pr "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;\n";
       pr "}\n";
-      let params = Wire.C.Raw.struct_params rs.struct_ in
+      let params = Wire.Everparse.Raw.struct_params rs.struct_ in
       let input_params =
         List.filter (fun p -> not (param_is_mutable p)) params
       in
@@ -184,7 +184,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Generate OCaml stubs *)
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       pr "CAMLprim value caml_%s_check(value v_bytes) {\n"
         (String.lowercase_ascii name);
       pr "  CAMLparam1(v_bytes);\n";
@@ -203,7 +203,7 @@ let generate_ml_stubs outdir schemas =
   let pr fmt = Fmt.pf ppf fmt in
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr "external %s_check : bytes -> bool = \"caml_%s_check\"\n" lower lower)
     schemas;
@@ -241,7 +241,7 @@ let fields_with_offsets fields =
 
 let emit_wire_checker ppf rs =
   let pr fmt = Fmt.pf ppf fmt in
-  let name = Wire.C.Raw.struct_name rs.struct_ in
+  let name = Wire.Everparse.Raw.struct_name rs.struct_ in
   let lower = String.lowercase_ascii name in
   pr "(* %s: wire_size=%d *)\n" name rs.total_wire_size;
   pr "let %s_wire_check (buf : bytes) : bool =\n" lower;
@@ -274,7 +274,7 @@ let generate_test_runner outdir schemas =
   pr "let schemas = [\n";
   List.iter
     (fun rs ->
-      let name = Wire.C.Raw.struct_name rs.struct_ in
+      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr
         "  { name = %S; wire_size = %d; wire_check = %s_wire_check; c_check = \
@@ -318,10 +318,10 @@ let action_schema () =
   let outx = Wire.Param.output "outx" Wire.uint8 in
   let f_x = Wire.Field.v "x" Wire.uint8 in
   let s =
-    Wire.C.Raw.param_struct "ActionDemo"
-      [ Wire.C.Raw.mutable_param "outx" Wire.uint32 ]
+    Wire.Everparse.Raw.param_struct "ActionDemo"
+      [ Wire.Everparse.Raw.mutable_param "outx" Wire.uint32 ]
       [
-        Wire.C.Raw.field "x"
+        Wire.Everparse.Raw.field "x"
           ~action:
             (Wire.Action.on_success
                [
@@ -329,7 +329,7 @@ let action_schema () =
                  Wire.Action.return_bool Wire.Expr.true_;
                ])
           Wire.uint8;
-        Wire.C.Raw.field "y" Wire.uint8;
+        Wire.Everparse.Raw.field "y" Wire.uint8;
       ]
   in
   {
@@ -368,7 +368,7 @@ let () =
     List.map
       (fun rs ->
         Wire_3d.schema
-          ~name:(Wire.C.Raw.struct_name rs.struct_)
+          ~name:(Wire.Everparse.Raw.struct_name rs.struct_)
           ~module_:(Wire.module_ [ Wire.typedef ~entrypoint:true rs.struct_ ])
           ~wire_size:rs.total_wire_size)
       schemas

@@ -135,15 +135,27 @@ let with_output (s : Types.struct_) : Types.decl list =
   in
   [ ctx_decl ] @ extern_decls @ [ parse_decl ]
 
-let schema (type r) (codec : r Codec.t) : t =
-  let s = Codec.to_struct codec in
+let schema_of_struct (s : Types.struct_) : t =
   let name = Types.struct_name s in
-  let wire_size = Codec.wire_size codec in
+  let wire_size =
+    List.fold_left
+      (fun acc (Types.Field f) ->
+        match (acc, Types.field_wire_size f.field_typ) with
+        | Some a, Some b -> Some (a + b)
+        | _ -> None)
+      (Some 0) s.fields
+    |> function
+    | Some n -> n
+    | None -> Fmt.failwith "schema %s has variable-length fields" name
+  in
   let decls = with_output s in
   let m = Types.module_ decls in
   { name; module_ = m; wire_size }
 
-let generate ~outdir schemas =
+let schema (type r) (codec : r Codec.t) : t =
+  schema_of_struct (Codec.to_struct codec)
+
+let write_3d ~outdir schemas =
   List.iter
     (fun s ->
       Types.to_3d_file (Filename.concat outdir (s.name ^ ".3d")) s.module_)
@@ -185,7 +197,7 @@ module Raw = struct
 
   let field_ref = function
     | Field.Named f -> Types.Ref (Field.name f)
-    | Field.Anon _ -> invalid_arg "C.Raw.field_ref: anonymous field"
+    | Field.Anon _ -> invalid_arg "Everparse.Raw.field_ref: anonymous field"
 
   let unpack_fields fields = List.map Field.to_decl fields
   let struct_ name fields = Types.struct_ name (unpack_fields fields)

@@ -1,8 +1,8 @@
 (** Generate verified C libraries from Wire codecs via EverParse. *)
 
-type schema = Wire.C.t = {
+type schema = Wire.Everparse.t = {
   name : string;
-  module_ : Wire.C.Raw.module_;
+  module_ : Wire.Everparse.Raw.module_;
   wire_size : int;
 }
 
@@ -19,17 +19,19 @@ let everparse_name name =
   else name
 
 let schema_of_struct s =
-  let name = Wire.C.Raw.struct_name s in
-  let m = Wire.C.Raw.module_ [ Wire.C.Raw.typedef ~entrypoint:true s ] in
+  let name = Wire.Everparse.Raw.struct_name s in
+  let m =
+    Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef ~entrypoint:true s ]
+  in
   let wire_size =
-    match Wire.C.Raw.struct_size s with
+    match Wire.Everparse.Raw.struct_size s with
     | Some n -> n
     | None -> Fmt.failwith "schema %s has variable-length fields" name
   in
-  Wire.C.Raw.of_module ~name ~module_:m ~wire_size
+  Wire.Everparse.Raw.of_module ~name ~module_:m ~wire_size
 
-let schema = Wire.C.Raw.of_module
-let write_3d = Wire.C.generate
+let schema = Wire.Everparse.Raw.of_module
+let write_3d = Wire.Everparse.write_3d
 
 let copy_file ~src ~dst =
   let ic = open_in_bin src in
@@ -181,7 +183,7 @@ let generate_c ?(quiet = true) ~outdir schemas =
     failwith
       "3d.exe not found in PATH. Install EverParse to regenerate C files."
 
-let generate ?(quiet = true) ~outdir schemas =
+let run ?(quiet = true) ~outdir schemas =
   generate_3d ~outdir schemas;
   generate_c ~quiet ~outdir schemas
 
@@ -237,4 +239,4 @@ let main ~package schemas =
   | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
   | [ _; "c" ] -> generate_c ~outdir:"." schemas
   | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
-  | _ -> generate ~outdir:"." schemas
+  | _ -> run ~outdir:"." schemas

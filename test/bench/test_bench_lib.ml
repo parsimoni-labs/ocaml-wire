@@ -84,6 +84,53 @@ let test_check_with_ffi () =
   let t = v "test" ~size:4 noop |> with_ffi (fun _buf -> ()) (Bytes.create 4) in
   check t
 
+let test_check_with_expect () =
+  let trace = ref [] in
+  let reset () = trace := "reset" :: !trace in
+  let ocaml () = trace := "timed-ocaml" :: !trace in
+  let ffi _buf = trace := "timed-ffi" :: !trace in
+  let c_loop _buf _off _n =
+    trace := "timed-c" :: !trace;
+    0
+  in
+  let ocaml_result () =
+    trace := "result-ocaml" :: !trace;
+    42
+  in
+  let ffi_result () =
+    trace := "result-ffi" :: !trace;
+    42
+  in
+  let c_result () =
+    trace := "result-c" :: !trace;
+    42
+  in
+  let t =
+    v "test" ~size:4 ~reset ocaml
+    |> with_ffi ffi Bytes.empty |> with_c c_loop Bytes.empty
+    |> with_expect ~equal:Int.equal ~pp:Fmt.int ~ffi:ffi_result ~c:c_result
+         ocaml_result
+  in
+  check t;
+  let rev = List.rev !trace in
+  Alcotest.(check (list string))
+    "expectation order"
+    [
+      "reset";
+      "timed-ocaml";
+      "reset";
+      "timed-ffi";
+      "reset";
+      "timed-c";
+      "reset";
+      "result-ocaml";
+      "reset";
+      "result-ffi";
+      "reset";
+      "result-c";
+    ]
+    rev
+
 let test_ffi_buf_correct () =
   let expected = Bytes.of_string "DEADBEEF" in
   let received = ref Bytes.empty in
@@ -126,6 +173,19 @@ let test_reset_called_before_check () =
   (* reset must come before ocaml *)
   let rev = List.rev !trace in
   Alcotest.(check (list string)) "order" [ "reset"; "ocaml" ] rev
+
+let test_reset_called_before_ffi_check () =
+  let trace = ref [] in
+  let reset () = trace := "reset" :: !trace in
+  let ocaml () = trace := "ocaml" :: !trace in
+  let ffi _buf = trace := "ffi" :: !trace in
+  let t = v "test" ~size:4 ~reset ocaml |> with_ffi ffi Bytes.empty in
+  check t;
+  let rev = List.rev !trace in
+  Alcotest.(check (list string))
+    "order"
+    [ "reset"; "ocaml"; "reset"; "ffi" ]
+    rev
 
 let test_run_one_reset () =
   (* run_one calls reset: once in check, once before timing, once before alloc
@@ -273,6 +333,19 @@ let test_run_table_size_zero () =
   (* Write benchmarks use size:0 *)
   run_table ~title:"writes" ~n:100 [ v "write" ~size:0 noop ]
 
+let test_run_table_resets_ffi_phase () =
+  let idx = ref 0 in
+  let seen = ref [] in
+  let reset () = idx := 0 in
+  let ffi _buf =
+    seen := string_of_int !idx :: !seen;
+    incr idx
+  in
+  let t = v "ffi" ~size:4 ~reset noop |> with_ffi ffi Bytes.empty in
+  run_table ~title:"ffi reset" ~n:2 [ t ];
+  Alcotest.(check (list string))
+    "ffi sequence" [ "0"; "0"; "1" ] (List.rev !seen)
+
 (* ── integration: cycling + reset + run_table ── *)
 
 let test_cycling_through_run_table () =
@@ -316,6 +389,7 @@ let () =
         [
           Alcotest.test_case "ocaml only" `Quick test_check_ocaml_only;
           Alcotest.test_case "with ffi" `Quick test_check_with_ffi;
+          Alcotest.test_case "with expect" `Quick test_check_with_expect;
           Alcotest.test_case "ffi receives correct buf" `Quick
             test_ffi_buf_correct;
         ] );
@@ -328,6 +402,8 @@ let () =
         [
           Alcotest.test_case "called before check" `Quick
             test_reset_called_before_check;
+          Alcotest.test_case "called before ffi check" `Quick
+            test_reset_called_before_ffi_check;
           Alcotest.test_case "count in run_one" `Quick test_run_one_reset;
           Alcotest.test_case "reinitializes cycling" `Quick
             test_reset_reinitializes_cycling;
@@ -358,6 +434,7 @@ let () =
           Alcotest.test_case "multiple specs" `Quick
             test_run_table_multiple_specs;
           Alcotest.test_case "size zero" `Quick test_run_table_size_zero;
+          Alcotest.test_case "ffi reset" `Quick test_run_table_resets_ffi_phase;
         ] );
       ( "integration",
         [

@@ -1,7 +1,7 @@
 (** Tests for Diff_gen — EverParse differential test generation. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let simple_struct =
   struct_ "TestDiffGen" [ field "A" uint8; field "B" uint16be ]

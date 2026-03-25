@@ -17,13 +17,13 @@
       let () = Diff_gen.generate ~outdir:"schemas" ~outdir:"." schemas
     ]} *)
 
-type schema = Wire.C.t
-(** Same as {!Wire.C.t}. *)
+type schema = Wire.Everparse.t
+(** Same as {!Wire.Everparse.t}. *)
 
 val schema :
   name:string ->
-  struct_:Wire.C.Raw.struct_ ->
-  module_:Wire.C.Raw.module_ ->
+  struct_:Wire.Everparse.Raw.struct_ ->
+  module_:Wire.Everparse.Raw.module_ ->
   schema option
 (** [schema ~name ~struct_ ~module_] creates a schema if the struct has a known
     fixed wire size. Returns [None] for variable-length structs. *)

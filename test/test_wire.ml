@@ -1,7 +1,7 @@
 (* Tests for wire.ml: direct decoding, encoding, and streaming semantics. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 (* Helper: parse from a string delivered in slices of [chunk_size] bytes.
    Forces multi-byte values to straddle slice boundaries. *)

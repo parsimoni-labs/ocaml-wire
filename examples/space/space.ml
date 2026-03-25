@@ -49,7 +49,7 @@ let packet_codec =
         bf_sp_data_len;
       ]
 
-let packet_struct = C.struct_of_codec packet_codec
+let packet_struct = Everparse.struct_of_codec packet_codec
 let packet_size = Codec.wire_size packet_codec
 
 let packet_default =
@@ -137,7 +137,7 @@ let clcw_codec =
         bf_cw_report;
       ]
 
-let clcw_struct = C.struct_of_codec clcw_codec
+let clcw_struct = Everparse.struct_of_codec clcw_codec
 let clcw_size = Codec.wire_size clcw_codec
 
 let clcw_default =
@@ -165,9 +165,9 @@ let clcw_data n =
         lor ((i mod 8) lsl 26)
         lor ((i mod 4) lsl 24)
         lor ((i mod 64) lsl 18)
-        lor ((i mod 32) lsl 11)
-        lor ((i mod 4) lsl 9)
-        lor (i mod 256)
+        lor ((i mod 32) lsl 12)
+        lor ((i mod 4) lsl 10)
+        lor ((i mod 256) lsl 1)
       in
       Bytes.set_int32_be b 0 (Int32.of_int w);
       b)
@@ -226,7 +226,7 @@ let tm_frame_codec =
         bf_tf_first_hdr;
       ]
 
-let tm_frame_struct = C.struct_of_codec tm_frame_codec
+let tm_frame_struct = Everparse.struct_of_codec tm_frame_codec
 let tm_frame_size = Codec.wire_size tm_frame_codec
 
 let tm_frame_default =

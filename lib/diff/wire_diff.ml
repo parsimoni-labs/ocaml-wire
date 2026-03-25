@@ -4,16 +4,17 @@
     {!Wire_stubs.to_c_stubs} and {!Wire_stubs.to_ml_stubs}). All diff logic is
     generic over any record codec. *)
 
-type 'r harness = {
-  name : string;
-  codec : 'r Wire.Codec.t;
-  c_read : string -> string option;
-  c_write : string -> string option;
-  equal : 'r -> 'r -> bool;
-}
-
-let harness ~name ~codec ~c_read ~c_write ~equal =
-  { name; codec; c_read; c_write; equal }
+type 'r harness =
+  | Harness : {
+      name : string;
+      codec : 'r Wire.Codec.t;
+      ocaml_read : string -> 'a option;
+      read : string -> 'a option;
+      write : 'a -> string option;
+      project : 'r -> 'a;
+      equal : 'a -> 'a -> bool;
+    }
+      -> 'r harness
 
 type result =
   | Match
@@ -22,54 +23,71 @@ type result =
   | Only_c_ok of string
   | Only_ocaml_ok of string
 
-let c_roundtrip h buf =
-  match h.c_read buf with None -> None | Some fields -> h.c_write fields
+let wire_size (Harness h) = Wire.Codec.wire_size h.codec
 
-let wire_size h = Wire.Codec.wire_size h.codec
-
-let encode_to_string h v =
-  let buf = Bytes.create (wire_size h) in
-  Wire.Codec.encode h.codec v buf 0;
+let encode_to_string codec v =
+  let buf = Bytes.create (Wire.Codec.wire_size codec) in
+  Wire.Codec.encode codec v buf 0;
   Bytes.unsafe_to_string buf
 
-let decode_from_string h s = Wire.Codec.decode h.codec (Bytes.of_string s) 0
+let decode_from_string codec s = Wire.Codec.decode codec (Bytes.of_string s) 0
 
-let read h buf =
-  let c_result = c_roundtrip h buf in
-  let buf_too_short = String.length buf < wire_size h in
-  let ocaml_result =
-    if String.length buf = 0 || buf_too_short then None
-    else Some (decode_from_string h buf)
+let default_ocaml_read codec project buf =
+  let buf_too_short = String.length buf < Wire.Codec.wire_size codec in
+  if String.length buf = 0 || buf_too_short then None
+  else
+    match decode_from_string codec buf with
+    | Ok v -> Some (project v)
+    | Error _ -> None
+
+let harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
+  let ocaml_read =
+    match ocaml_read with
+    | Some read -> read
+    | None -> default_ocaml_read codec project
   in
+  Harness { name; codec; ocaml_read; read; write; project; equal }
+
+let read (Harness h) buf =
+  let c_result = h.read buf in
+  let ocaml_result = h.ocaml_read buf in
   match (c_result, ocaml_result) with
-  | Some c_bytes, Some (Ok v) ->
-      let ocaml_bytes = encode_to_string h v in
-      if c_bytes = ocaml_bytes then Match
-      else Value_mismatch "roundtrip bytes differ"
-  | None, Some (Error _) -> Both_failed
-  | Some _, Some (Error _) -> Only_c_ok "OCaml decode failed"
+  | Some c_value, Some ocaml_value ->
+      if h.equal c_value ocaml_value then Match
+      else Value_mismatch "values differ"
   | None, None -> Both_failed
   | Some _, None -> Only_c_ok "OCaml decode returned empty"
-  | None, Some _ -> Only_ocaml_ok "C roundtrip failed"
+  | None, Some _ -> Only_ocaml_ok "External read failed"
 
-let write h value =
-  let ocaml_bytes = encode_to_string h value in
-  match c_roundtrip h ocaml_bytes with
-  | Some c_bytes ->
-      if c_bytes = ocaml_bytes then Match
-      else Value_mismatch "C roundtrip bytes differ from OCaml encoding"
-  | None -> Only_ocaml_ok "C rejected OCaml-encoded bytes"
-
-let full_roundtrip h value =
-  let ocaml_bytes = encode_to_string h value in
-  match c_roundtrip h ocaml_bytes with
-  | None -> Only_ocaml_ok "C rejected OCaml-encoded bytes"
+let write (Harness h) value =
+  let projected = h.project value in
+  match h.write projected with
   | Some c_bytes -> (
-      match decode_from_string h c_bytes with
-      | Ok final ->
-          if h.equal value final then Match
-          else Value_mismatch "values differ after full roundtrip"
-      | Error _ -> Only_c_ok "OCaml rejected C-encoded bytes")
+      match h.ocaml_read c_bytes with
+      | Some ocaml_value ->
+          if h.equal projected ocaml_value then Match
+          else Value_mismatch "values differ after external write"
+      | None -> Only_c_ok "OCaml rejected external bytes")
+  | None -> Only_ocaml_ok "External write failed"
+
+let full_roundtrip (Harness h) value =
+  let ocaml_bytes = encode_to_string h.codec value in
+  match (h.read ocaml_bytes, h.ocaml_read ocaml_bytes) with
+  | None, Some _ -> Only_ocaml_ok "External read failed on OCaml-encoded bytes"
+  | Some _, None -> Only_c_ok "OCaml rejected OCaml-encoded bytes"
+  | None, None -> Both_failed
+  | Some c_value, Some ocaml_value -> (
+      if not (h.equal c_value ocaml_value) then
+        Value_mismatch "values differ during external read"
+      else
+        match h.write c_value with
+        | None -> Only_ocaml_ok "External write failed"
+        | Some c_bytes -> (
+            match h.ocaml_read c_bytes with
+            | Some final ->
+                if h.equal c_value final then Match
+                else Value_mismatch "values differ after full roundtrip"
+            | None -> Only_c_ok "OCaml rejected external bytes"))
 
 type packed_test = {
   name : string;
@@ -81,6 +99,7 @@ type packed_test = {
 
 let pack (type r) (h : r harness) =
   let ws = wire_size h in
+  let codec = match h with Harness h -> h.codec in
   let decode_value buf =
     let padded =
       if String.length buf >= ws then String.sub buf 0 ws
@@ -90,10 +109,10 @@ let pack (type r) (h : r harness) =
         Bytes.to_string b
     in
     if String.length padded = 0 then None
-    else Some (decode_from_string h padded)
+    else Some (decode_from_string codec padded)
   in
   {
-    name = h.name;
+    name = (match h with Harness h -> h.name);
     wire_size = ws;
     test_read = (fun buf -> read h buf);
     test_write =

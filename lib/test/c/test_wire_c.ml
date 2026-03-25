@@ -1,7 +1,7 @@
 (** Tests for Wire_3d — C library generation from Wire codecs. *)
 
 open Wire
-open Wire.C.Raw
+open Wire.Everparse.Raw
 
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]
@@ -27,6 +27,16 @@ let test_schema_of_struct () =
   let path = Filename.concat tmpdir "TestSimple.3d" in
   Alcotest.(check bool)
     "3d file from schema_of_struct" true (Sys.file_exists path);
+  Sys.remove path;
+  Unix.rmdir tmpdir
+
+let test_c_schema_of_struct () =
+  let tmpdir = Filename.temp_dir "wire_c_schema" "" in
+  let s = Wire.Everparse.schema_of_struct simple_struct in
+  Wire.Everparse.write_3d ~outdir:tmpdir [ s ];
+  let path = Filename.concat tmpdir "TestSimple.3d" in
+  Alcotest.(check bool)
+    "3d file from C.schema_of_struct" true (Sys.file_exists path);
   Sys.remove path;
   Unix.rmdir tmpdir
 
@@ -64,6 +74,8 @@ let suite =
     [
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
+      Alcotest.test_case "Everparse.schema_of_struct" `Quick
+        test_c_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;

@@ -19,27 +19,35 @@ static inline int64_t now_ns(void) {
   return ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
+static int count_anomalies(uint8_t *buf, int n_words, int n_iters) {
+  int word_size = 4;
+  int anomalies = 0;
+  int expected_seq = 0;
+  for (int i = 0; i < n_iters; i++) {
+    uint8_t *p = buf + (i % n_words) * word_size;
+    uint32_t w = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
+              | ((uint32_t)p[2] << 8) | p[3];
+    int lockout    = (w >> 14) & 1;
+    int wait_      = (w >> 13) & 1;
+    int retransmit = (w >> 12) & 1;
+    int report     = (w >> 1) & 0xFF;
+    int expected_report = expected_seq & 0xFF;
+    if (lockout || wait_ || retransmit || report != expected_report)
+      anomalies++;
+    expected_seq = (report + 1) & 0xFF;
+  }
+  return anomalies;
+}
+
 CAMLprim value c_clcw_poll(value v_buf, value v_off, value v_n) {
   uint8_t *buf = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);
   int buf_len = caml_string_length(v_buf) - Int_val(v_off);
   int n = Int_val(v_n);
   int word_size = 4;
   int n_words = buf_len / word_size;
-  volatile int anomalies = 0;
-  volatile int expected_seq = 0;
   int64_t t0 = now_ns();
-  for (int i = 0; i < n; i++) {
-    uint8_t *p = buf + (i % n_words) * word_size;
-    uint32_t w = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-              | ((uint32_t)p[2] << 8) | p[3];
-    int lockout    = (w >> 12) & 1;
-    int wait_      = (w >> 11) & 1;
-    int retransmit = (w >> 10) & 1;
-    int report     = w & 0xFF;
-    if (lockout || wait_ || retransmit || report != (expected_seq & 0xFF))
-      anomalies++;
-    expected_seq = report;
-  }
+  volatile int anomalies = count_anomalies(buf, n_words, n);
+  (void)anomalies;
   int64_t t1 = now_ns();
   return Val_int(t1 - t0);
 }
@@ -50,18 +58,5 @@ CAMLprim value c_clcw_poll_result(value v_buf, value v_off) {
   int buf_len = caml_string_length(v_buf) - Int_val(v_off);
   int word_size = 4;
   int n_words = buf_len / word_size;
-  int anomalies = 0, expected_seq = 0;
-  for (int i = 0; i < n_words; i++) {
-    uint8_t *p = buf + i * word_size;
-    uint32_t w = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-              | ((uint32_t)p[2] << 8) | p[3];
-    int lockout    = (w >> 12) & 1;
-    int wait_      = (w >> 11) & 1;
-    int retransmit = (w >> 10) & 1;
-    int report     = w & 0xFF;
-    if (lockout || wait_ || retransmit || report != (expected_seq & 0xFF))
-      anomalies++;
-    expected_seq = report;
-  }
-  return Val_int(anomalies);
+  return Val_int(count_anomalies(buf, n_words, n_words));
 }

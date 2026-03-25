@@ -1,0 +1,80 @@
+(executable
+ (name gen_3d)
+ (modules gen_3d)
+ (libraries wire demo space net))
+
+(rule
+ (targets
+  Minimal.3d
+  AllInts.3d
+  Bitfield8.3d
+  Bitfield16.3d
+  Bitfield32.3d
+  BoolFields.3d
+  LargeMixed.3d
+  Mapped.3d
+  CasesDemo.3d
+  EnumDemo.3d
+  Constrained.3d
+  ArrayDemo.3d
+  ByteArrayDemo.3d
+  TrailingData.3d
+  PaddedMsg.3d
+  SingleElem.3d
+  SingleElemAtMost.3d
+  WithPadding.3d
+  Validated.3d
+  ActionFull.3d
+  BoundedPayload.3d
+  Message.3d
+  ExternDemo.3d
+  Outer.3d
+  CLCW.3d
+  SpacePacket.3d
+  TMFrame.3d
+  InnerCmd.3d
+  OuterHdr.3d
+  Ethernet.3d
+  IPv4.3d
+  TCP.3d
+  UDP.3d)
+ (deps gen_3d.exe)
+ (action
+  (run ./gen_3d.exe)))
+
+(alias
+ (name 3d)
+ (deps
+  Minimal.3d
+  AllInts.3d
+  Bitfield8.3d
+  Bitfield16.3d
+  Bitfield32.3d
+  BoolFields.3d
+  LargeMixed.3d
+  Mapped.3d
+  CasesDemo.3d
+  EnumDemo.3d
+  Constrained.3d
+  ArrayDemo.3d
+  ByteArrayDemo.3d
+  TrailingData.3d
+  PaddedMsg.3d
+  SingleElem.3d
+  SingleElemAtMost.3d
+  WithPadding.3d
+  Validated.3d
+  ActionFull.3d
+  BoundedPayload.3d
+  Message.3d
+  ExternDemo.3d
+  Outer.3d
+  CLCW.3d
+  SpacePacket.3d
+  TMFrame.3d
+  InnerCmd.3d
+  OuterHdr.3d
+  Ethernet.3d
+  IPv4.3d
+  TCP.3d
+  UDP.3d))
