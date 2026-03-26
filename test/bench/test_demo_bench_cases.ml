@@ -24,7 +24,7 @@ let test_read_benchmark_cases_are_subset () =
     read_benchmark_cases
 
 let suite =
-  ( "demo_cases",
+  ( "demo_bench_cases",
     [
       Alcotest.test_case "write verifiers" `Quick test_write_cases;
       Alcotest.test_case "projection ids unique" `Quick
