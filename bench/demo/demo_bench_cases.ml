@@ -572,7 +572,7 @@ let verify_nested_write ~label ~set ~get ~equal value () =
   if not (equal actual value) then
     Fmt.failwith "%s write verification failed" label
 
-let nested_tcp_dst_port_write_case =
+let nested_tcp_dst_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
   let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
   let value = 8080 in
@@ -640,6 +640,6 @@ let write_benchmark_cases =
     tcp_syn_write_case;
     write_case_of_read ~label:"Mapped.priority (map fn encode)" mapped_case;
     write_case_of_read ~label:"CasesDemo.type (cases variant encode)" cases_case;
-    nested_tcp_dst_port_write_case;
+    nested_tcp_dst_write_case;
     nested_tcp_syn_write_case;
   ]

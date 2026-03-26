@@ -37,7 +37,7 @@ let test_read_both_failed () =
   let result = Wire_diff.read s "" in
   Alcotest.(check bool) "both_failed" true (result = Wire_diff.Both_failed)
 
-let test_read_uses_ocaml_read_override () =
+let test_read_ocaml_override () =
   let c_read buf = if String.length buf < 3 then None else Some "override" in
   let ocaml_read buf =
     if String.length buf < 3 then None else Some "override"
@@ -57,7 +57,7 @@ let test_write () =
   (* mock_c_write accepts any 3-byte buffer, so a valid 3-byte encode matches *)
   Alcotest.(check bool) "write result" true (result = Wire_diff.Match)
 
-let test_write_uses_ocaml_read_override () =
+let test_write_ocaml_override () =
   let c_write _ = Some "abc" in
   let ocaml_read buf = if buf = "abc" then Some "override" else None in
   let s =
@@ -146,10 +146,10 @@ let suite =
       Alcotest.test_case "read match" `Quick test_read_match;
       Alcotest.test_case "read both failed" `Quick test_read_both_failed;
       Alcotest.test_case "read uses ocaml_read override" `Quick
-        test_read_uses_ocaml_read_override;
+        test_read_ocaml_override;
       Alcotest.test_case "write" `Quick test_write;
       Alcotest.test_case "write uses ocaml_read override" `Quick
-        test_write_uses_ocaml_read_override;
+        test_write_ocaml_override;
       Alcotest.test_case "full_roundtrip" `Quick test_full_roundtrip;
       Alcotest.test_case "full_roundtrip: c rejects" `Quick
         test_full_roundtrip_c_rejects;

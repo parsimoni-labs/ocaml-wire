@@ -174,7 +174,7 @@ let test_reset_called_before_check () =
   let rev = List.rev !trace in
   Alcotest.(check (list string)) "order" [ "reset"; "ocaml" ] rev
 
-let test_reset_called_before_ffi_check () =
+let test_reset_before_ffi () =
   let trace = ref [] in
   let reset () = trace := "reset" :: !trace in
   let ocaml () = trace := "ocaml" :: !trace in
@@ -333,7 +333,7 @@ let test_run_table_size_zero () =
   (* Write benchmarks use size:0 *)
   run_table ~title:"writes" ~n:100 [ v "write" ~size:0 noop ]
 
-let test_run_table_resets_ffi_phase () =
+let test_run_table_ffi_reset () =
   let idx = ref 0 in
   let seen = ref [] in
   let reset () = idx := 0 in
@@ -393,7 +393,7 @@ let suite =
       Alcotest.test_case "reset: called before check" `Quick
         test_reset_called_before_check;
       Alcotest.test_case "reset: called before ffi check" `Quick
-        test_reset_called_before_ffi_check;
+        test_reset_before_ffi;
       Alcotest.test_case "reset: count in run_one" `Quick test_run_one_reset;
       Alcotest.test_case "reset: reinitializes cycling" `Quick
         test_reset_reinitializes_cycling;
@@ -417,8 +417,7 @@ let suite =
       Alcotest.test_case "run_table: multiple specs" `Quick
         test_run_table_multiple_specs;
       Alcotest.test_case "run_table: size zero" `Quick test_run_table_size_zero;
-      Alcotest.test_case "run_table: ffi reset" `Quick
-        test_run_table_resets_ffi_phase;
+      Alcotest.test_case "run_table: ffi reset" `Quick test_run_table_ffi_reset;
       Alcotest.test_case "integration: cycling through run_table" `Quick
         test_cycling_through_run_table;
       Alcotest.test_case "verify: routing counts" `Quick

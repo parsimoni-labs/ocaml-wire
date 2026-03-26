@@ -12,7 +12,7 @@ let test_projection_case_ids_unique () =
       Hashtbl.add seen case.id ())
     projection_cases
 
-let test_read_benchmark_cases_are_subset () =
+let test_read_cases_subset () =
   let projection_ids =
     List.fold_left
       (fun acc (Read_case case) -> case.id :: acc)
@@ -29,6 +29,5 @@ let suite =
       Alcotest.test_case "write verifiers" `Quick test_write_cases;
       Alcotest.test_case "projection ids unique" `Quick
         test_projection_case_ids_unique;
-      Alcotest.test_case "read cases subset" `Quick
-        test_read_benchmark_cases_are_subset;
+      Alcotest.test_case "read cases subset" `Quick test_read_cases_subset;
     ] )

@@ -1,5 +1,0 @@
-(executable
- (name debug_bf8)
- (enabled_if
-  (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries demo c_stubs wire))
