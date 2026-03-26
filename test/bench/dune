@@ -1,6 +1,5 @@
 (test
  (name test)
- (modules test test_bench_lib test_application_benches test_demo_bench_cases)
  (libraries
   bench_lib
   routing_bench
