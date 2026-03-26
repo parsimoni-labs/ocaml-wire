@@ -1,3 +1,5 @@
+(** CLCW polling loop benchmark harness. *)
+
 val verify : n_words:int -> unit -> unit
 (** [verify ~n_words ()] checks that the OCaml and C CLCW polling loops produce
     identical results. *)

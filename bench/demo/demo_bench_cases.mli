@@ -1,3 +1,6 @@
+(** Demo benchmark case definitions: datasets, codecs, and projection structs.
+*)
+
 type dataset = { items : bytes array; packed : bytes; n_items : int }
 
 type id =

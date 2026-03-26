@@ -1,3 +1,5 @@
+(** Differential testing of demo bench cases against EverParse C stubs. *)
+
 type case = {
   id : Demo_bench_cases.id;
   label : string;
