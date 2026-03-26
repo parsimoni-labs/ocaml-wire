@@ -373,68 +373,52 @@ let test_cycling_through_run_table () =
   Alcotest.(check int) "EFGH visits" 3 (Hashtbl.find phase_seen "EFGH");
   Alcotest.(check int) "IJKL visits" 3 (Hashtbl.find phase_seen "IJKL")
 
-let suites =
-  [
-    ( "cycling",
-      [
-        Alcotest.test_case "sequence" `Quick test_cycling_sequence;
-        Alcotest.test_case "wraps" `Quick test_cycling_wraps;
-        Alcotest.test_case "reset" `Quick test_cycling_reset;
-        Alcotest.test_case "reads correct data" `Quick
-          test_cycling_reads_correct_data;
-        Alcotest.test_case "single item" `Quick test_cycling_single_item;
-      ] );
-    ( "check",
-      [
-        Alcotest.test_case "ocaml only" `Quick test_check_ocaml_only;
-        Alcotest.test_case "with ffi" `Quick test_check_with_ffi;
-        Alcotest.test_case "with expect" `Quick test_check_with_expect;
-        Alcotest.test_case "ffi receives correct buf" `Quick
-          test_ffi_buf_correct;
-      ] );
-    ( "builder",
-      [
-        Alcotest.test_case "v ocaml only" `Quick test_v_ocaml_only;
-        Alcotest.test_case "with_c/with_ffi order" `Quick test_c_ffi_order;
-      ] );
-    ( "reset",
-      [
-        Alcotest.test_case "called before check" `Quick
-          test_reset_called_before_check;
-        Alcotest.test_case "called before ffi check" `Quick
-          test_reset_called_before_ffi_check;
-        Alcotest.test_case "count in run_one" `Quick test_run_one_reset;
-        Alcotest.test_case "reinitializes cycling" `Quick
-          test_reset_reinitializes_cycling;
-        Alcotest.test_case "mutable counter" `Quick
-          test_reset_with_mutable_counter;
-      ] );
-    ( "pack",
-      [
-        Alcotest.test_case "basic" `Quick test_pack;
-        Alcotest.test_case "single" `Quick test_pack_single;
-        Alcotest.test_case "byte layout" `Quick test_pack_preserves_byte_layout;
-      ] );
-    ( "timing",
-      [
-        Alcotest.test_case "time_ns non-negative" `Quick
-          test_time_ns_non_negative;
-        Alcotest.test_case "time_ns divides by n" `Quick test_time_ns_division;
-        Alcotest.test_case "alloc_words zero" `Quick test_alloc_words_zero;
-        Alcotest.test_case "alloc_words nonzero" `Quick test_alloc_words_nonzero;
-        Alcotest.test_case "alloc_words scales" `Quick test_alloc_words_scales;
-      ] );
-    ( "run_table",
-      [
-        Alcotest.test_case "smoke" `Quick test_run_table_smoke;
-        Alcotest.test_case "with unit" `Quick test_run_table_with_unit;
-        Alcotest.test_case "multiple specs" `Quick test_run_table_multiple_specs;
-        Alcotest.test_case "size zero" `Quick test_run_table_size_zero;
-        Alcotest.test_case "ffi reset" `Quick test_run_table_resets_ffi_phase;
-      ] );
-    ( "integration",
-      [
-        Alcotest.test_case "cycling through run_table" `Quick
-          test_cycling_through_run_table;
-      ] );
-  ]
+let suite =
+  ( "bench_lib",
+    [
+      Alcotest.test_case "cycling: sequence" `Quick test_cycling_sequence;
+      Alcotest.test_case "cycling: wraps" `Quick test_cycling_wraps;
+      Alcotest.test_case "cycling: reset" `Quick test_cycling_reset;
+      Alcotest.test_case "cycling: reads correct data" `Quick
+        test_cycling_reads_correct_data;
+      Alcotest.test_case "cycling: single item" `Quick test_cycling_single_item;
+      Alcotest.test_case "check: ocaml only" `Quick test_check_ocaml_only;
+      Alcotest.test_case "check: with ffi" `Quick test_check_with_ffi;
+      Alcotest.test_case "check: with expect" `Quick test_check_with_expect;
+      Alcotest.test_case "check: ffi receives correct buf" `Quick
+        test_ffi_buf_correct;
+      Alcotest.test_case "builder: v ocaml only" `Quick test_v_ocaml_only;
+      Alcotest.test_case "builder: with_c/with_ffi order" `Quick
+        test_c_ffi_order;
+      Alcotest.test_case "reset: called before check" `Quick
+        test_reset_called_before_check;
+      Alcotest.test_case "reset: called before ffi check" `Quick
+        test_reset_called_before_ffi_check;
+      Alcotest.test_case "reset: count in run_one" `Quick test_run_one_reset;
+      Alcotest.test_case "reset: reinitializes cycling" `Quick
+        test_reset_reinitializes_cycling;
+      Alcotest.test_case "reset: mutable counter" `Quick
+        test_reset_with_mutable_counter;
+      Alcotest.test_case "pack: basic" `Quick test_pack;
+      Alcotest.test_case "pack: single" `Quick test_pack_single;
+      Alcotest.test_case "pack: byte layout" `Quick
+        test_pack_preserves_byte_layout;
+      Alcotest.test_case "timing: time_ns non-negative" `Quick
+        test_time_ns_non_negative;
+      Alcotest.test_case "timing: time_ns divides by n" `Quick
+        test_time_ns_division;
+      Alcotest.test_case "timing: alloc_words zero" `Quick test_alloc_words_zero;
+      Alcotest.test_case "timing: alloc_words nonzero" `Quick
+        test_alloc_words_nonzero;
+      Alcotest.test_case "timing: alloc_words scales" `Quick
+        test_alloc_words_scales;
+      Alcotest.test_case "run_table: smoke" `Quick test_run_table_smoke;
+      Alcotest.test_case "run_table: with unit" `Quick test_run_table_with_unit;
+      Alcotest.test_case "run_table: multiple specs" `Quick
+        test_run_table_multiple_specs;
+      Alcotest.test_case "run_table: size zero" `Quick test_run_table_size_zero;
+      Alcotest.test_case "run_table: ffi reset" `Quick
+        test_run_table_resets_ffi_phase;
+      Alcotest.test_case "integration: cycling through run_table" `Quick
+        test_cycling_through_run_table;
+    ] )
