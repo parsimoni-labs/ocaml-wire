@@ -39,6 +39,17 @@ type read_case =
 type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
 val projection_cases : read_case list
+(** [projection_cases] is the subset of read cases used for EverParse C
+    projection. *)
+
 val projection_structs : Wire.Everparse.struct_ list
+(** [projection_structs] is the list of EverParse struct definitions derived
+    from projection cases. *)
+
 val read_benchmark_cases : read_case list
+(** [read_benchmark_cases] is the full list of read benchmark cases covering all
+    Wire types. *)
+
 val write_benchmark_cases : write_case list
+(** [write_benchmark_cases] is the list of write benchmark cases for Codec.set.
+*)
