@@ -1,0 +1,3 @@
+(library
+ (name alcobar)
+ (libraries crowbar))

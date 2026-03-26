@@ -4,7 +4,6 @@
     inputs. The [packed_test] abstraction generates valid record values by
     decoding random bytes through the OCaml codec. *)
 
-module Cr = Alcobar
 module D = Wire_diff.Diff
 
 let truncate buf =
@@ -21,22 +20,22 @@ let pad wire_size buf =
 let check name = function
   | D.Match | D.Both_failed -> ()
   | D.Value_mismatch msg ->
-      Cr.fail (Printf.sprintf "%s: value mismatch: %s" name msg)
+      Alcobar.fail (Printf.sprintf "%s: value mismatch: %s" name msg)
   | D.Only_c_ok msg ->
-      Cr.fail (Printf.sprintf "%s: only C succeeded: %s" name msg)
+      Alcobar.fail (Printf.sprintf "%s: only C succeeded: %s" name msg)
   | D.Only_ocaml_ok msg ->
-      Cr.fail (Printf.sprintf "%s: only OCaml succeeded: %s" name msg)
+      Alcobar.fail (Printf.sprintf "%s: only OCaml succeeded: %s" name msg)
 
 let () =
-  Cr.run "diff"
+  Alcobar.run "diff"
     (List.concat_map
        (fun (t : D.packed_test) ->
          [
-           Cr.test_case (t.name ^ " read") [ Cr.bytes ] (fun buf ->
+           Alcobar.test_case (t.name ^ " read") [ Alcobar.bytes ] (fun buf ->
                check t.name (t.test_read (truncate buf)));
-           Cr.test_case (t.name ^ " write") [ Cr.bytes ] (fun buf ->
+           Alcobar.test_case (t.name ^ " write") [ Alcobar.bytes ] (fun buf ->
                check t.name (t.test_write (pad t.wire_size buf)));
-           Cr.test_case (t.name ^ " roundtrip") [ Cr.bytes ] (fun buf ->
-               check t.name (t.test_roundtrip (pad t.wire_size buf)));
+           Alcobar.test_case (t.name ^ " roundtrip") [ Alcobar.bytes ]
+             (fun buf -> check t.name (t.test_roundtrip (pad t.wire_size buf)));
          ])
        All_schemas.all)

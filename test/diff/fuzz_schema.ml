@@ -3,8 +3,6 @@
     These tests verify that our OCaml encoder/decoder round-trips correctly.
     When EverParse C integration is available, we can add differential tests. *)
 
-module Cr = Alcobar
-module Cu = Alcobar
 open Wire
 
 let truncate buf =
@@ -32,14 +30,16 @@ let test_simple_header_roundtrip version length flags =
   let flags = abs flags mod 256 in
   let original = Schema.{ version; length; flags } in
   match encode_record_to_string Schema.simple_header_codec original with
-  | Error _ -> Cr.fail "encode failed"
+  | Error _ -> Alcobar.fail "encode failed"
   | Ok encoded -> (
       match decode_record_from_string Schema.simple_header_codec encoded with
       | Ok decoded ->
-          if original.version <> decoded.version then Cr.fail "version mismatch";
-          if original.length <> decoded.length then Cr.fail "length mismatch";
-          if original.flags <> decoded.flags then Cr.fail "flags mismatch"
-      | Error _ -> Cr.fail "decode failed")
+          if original.version <> decoded.version then
+            Alcobar.fail "version mismatch";
+          if original.length <> decoded.length then
+            Alcobar.fail "length mismatch";
+          if original.flags <> decoded.flags then Alcobar.fail "flags mismatch"
+      | Error _ -> Alcobar.fail "decode failed")
 
 (** Test SimpleHeader decode crash safety *)
 let test_simple_header_crash buf =
@@ -53,17 +53,17 @@ let test_constrained_packet_roundtrip pkt_type pkt_length =
   let pkt_length = abs pkt_length mod 1025 in
   let original = Schema.{ pkt_type; pkt_length } in
   match encode_record_to_string Schema.constrained_packet_codec original with
-  | Error _ -> Cr.fail "encode failed"
+  | Error _ -> Alcobar.fail "encode failed"
   | Ok encoded -> (
       match
         decode_record_from_string Schema.constrained_packet_codec encoded
       with
       | Ok decoded ->
           if original.pkt_type <> decoded.pkt_type then
-            Cr.fail "pkt_type mismatch";
+            Alcobar.fail "pkt_type mismatch";
           if original.pkt_length <> decoded.pkt_length then
-            Cr.fail "pkt_length mismatch"
-      | Error _ -> Cr.fail "decode failed")
+            Alcobar.fail "pkt_length mismatch"
+      | Error _ -> Alcobar.fail "decode failed")
 
 (** Test ConstrainedPacket decode crash safety *)
 let test_constrained_packet_crash buf =
@@ -72,17 +72,19 @@ let test_constrained_packet_crash buf =
   ()
 
 let () =
-  Cu.run "schema"
+  Alcobar.run "schema"
     [
       ( "schema",
         [
-          Cu.test_case "simple_header roundtrip" [ Cr.int; Cr.int; Cr.int ]
+          Alcobar.test_case "simple_header roundtrip"
+            [ Alcobar.int; Alcobar.int; Alcobar.int ]
             test_simple_header_roundtrip;
-          Cu.test_case "simple_header crash" [ Cr.bytes ]
+          Alcobar.test_case "simple_header crash" [ Alcobar.bytes ]
             test_simple_header_crash;
-          Cu.test_case "constrained_packet roundtrip" [ Cr.int; Cr.int ]
+          Alcobar.test_case "constrained_packet roundtrip"
+            [ Alcobar.int; Alcobar.int ]
             test_constrained_packet_roundtrip;
-          Cu.test_case "constrained_packet crash" [ Cr.bytes ]
+          Alcobar.test_case "constrained_packet crash" [ Alcobar.bytes ]
             test_constrained_packet_crash;
         ] );
     ]

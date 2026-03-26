@@ -10,8 +10,6 @@
 
    Both sides use wire-generated read/write functions. *)
 
-module Cr = Alcobar
-
 (* Helper: encode record to string using Codec API *)
 let encode_to_string codec =
   let ws = Wire.Codec.wire_size codec in
@@ -287,11 +285,11 @@ let () =
   let sub = { ic; oc } in
 
   (* Stage 2: register Crowbar tests *)
-  Cr.run "diff"
+  Alcobar.run "diff"
     (List.mapi
        (fun idx rs ->
          let name = Wire.Everparse.Raw.struct_name rs.struct_ in
-         Cr.test_case (name ^ " fuzz-diff") [ Cr.bytes ] (fun buf ->
+         Alcobar.test_case (name ^ " fuzz-diff") [ Alcobar.bytes ] (fun buf ->
              let buf = pad rs.wire_size buf in
              ignore idx;
              ignore name;
