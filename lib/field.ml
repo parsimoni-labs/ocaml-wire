@@ -7,6 +7,7 @@ type 'a t = {
 
 type 'a anon = { anon_typ : 'a Types.typ }
 
+let pp ppf f = Fmt.pf ppf "%s" f.name
 let v name ?constraint_ ?action typ = { name; typ; constraint_; action }
 let anon typ = { anon_typ = typ }
 let ref f = Types.Ref f.name

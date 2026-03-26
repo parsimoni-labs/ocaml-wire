@@ -6,6 +6,8 @@
 type t = { name : string; module_ : Types.module_; wire_size : int }
 (** A named 3D schema with its module and wire size. *)
 
+val pp : Format.formatter -> t -> unit
+
 type struct_ = Types.struct_
 type decl = Types.decl
 type decl_case = Types.decl_case

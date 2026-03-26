@@ -9,6 +9,8 @@
 type 'a t
 (** A named field carrying values of type ['a]. *)
 
+val pp : Format.formatter -> 'a t -> unit
+
 type 'a anon
 (** An anonymous (padding) field. Cannot be referenced. *)
 

@@ -2,6 +2,8 @@
 
 type t = { name : string; module_ : Types.module_; wire_size : int }
 
+let pp ppf t = Fmt.pf ppf "%s(%d)" t.name t.wire_size
+
 let rec is_bitfield : type a. a Types.typ -> bool = function
   | Types.Bits _ -> true
   | Types.Map { inner; _ } -> is_bitfield inner
