@@ -560,31 +560,30 @@ let build_bf_accessor_writer base byte_off shift width =
 let build_bf_clear base byte_off =
  fun buf off -> bf_write_base base buf (off + byte_off) 0
 
+let build_idx readers =
+  let rev_readers = List.rev readers in
+  fun name ->
+    let rec find i = function
+      | [] -> failwith ("unbound field: " ^ name)
+      | (n, _) :: _ when n = name -> i
+      | _ :: rest -> find (i + 1) rest
+    in
+    find 0 rev_readers
+
+(* Collect local variable names from action statements *)
+let rec action_vars acc = function
+  | Types.Var (name, _) -> name :: acc
+  | Types.If (_, then_, else_) -> (
+      let acc = List.fold_left action_vars acc then_ in
+      match else_ with
+      | Some stmts -> List.fold_left action_vars acc stmts
+      | None -> acc)
+  | _ -> acc
+
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     =
  fun (Record r) ({ name; typ; get; _ } as fld) ->
   let field_idx = r.r_n_fields in
-  (* Build name→index mapping for constraint/action compilation *)
-  let build_idx readers =
-    let rev_readers = List.rev readers in
-    fun name ->
-      let rec find i = function
-        | [] -> failwith ("unbound field: " ^ name)
-        | (n, _) :: _ when n = name -> i
-        | _ :: rest -> find (i + 1) rest
-      in
-      find 0 rev_readers
-  in
-  (* Collect local variable names from action statements *)
-  let rec action_vars acc = function
-    | Types.Var (name, _) -> name :: acc
-    | Types.If (_, then_, else_) -> (
-        let acc = List.fold_left action_vars acc then_ in
-        match else_ with
-        | Some stmts -> List.fold_left action_vars acc stmts
-        | None -> acc)
-    | _ -> acc
-  in
   let action_var_names =
     match fld.action with
     | None -> []
