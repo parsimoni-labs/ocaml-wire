@@ -1,4 +1,4 @@
-(** Tests for Wire_3d — C library generation from Wire codecs. *)
+(** Tests for the EverParse pipeline — schema generation and 3D output. *)
 
 open Wire
 open Wire.Everparse.Raw
@@ -8,8 +8,26 @@ let simple_struct =
 
 let simple_module = module_ [ typedef ~entrypoint:true simple_struct ]
 
+let test_everparse_name () =
+  (* All-caps names get lowercased with first letter capitalized *)
+  Alcotest.(check string) "CLCW -> Clcw" "Clcw" (Wire_3d.everparse_name "CLCW");
+  Alcotest.(check string)
+    "TMFrame -> Tmframe" "Tmframe"
+    (Wire_3d.everparse_name "TMFrame");
+  (* Standard camelCase is preserved *)
+  Alcotest.(check string) "Foo -> Foo" "Foo" (Wire_3d.everparse_name "Foo");
+  Alcotest.(check string)
+    "myField -> myField" "myField"
+    (Wire_3d.everparse_name "myField");
+  (* Single uppercase letter at start is not >=2 consecutive uppercase *)
+  Alcotest.(check string)
+    "Hello -> Hello" "Hello"
+    (Wire_3d.everparse_name "Hello");
+  (* Empty string *)
+  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "")
+
 let test_generate_3d_files () =
-  let tmpdir = Filename.temp_dir "wire_c_test" "" in
+  let tmpdir = Filename.temp_dir "wire_3d_test" "" in
   let s =
     Wire_3d.schema ~name:"TestSimple" ~module_:simple_module ~wire_size:3
   in
@@ -22,7 +40,7 @@ let test_generate_3d_files () =
 let test_schema_of_struct () =
   let s = Wire_3d.schema_of_struct simple_struct in
   (* generate_3d uses the schema — check we can produce a .3d file *)
-  let tmpdir = Filename.temp_dir "wire_c_test2" "" in
+  let tmpdir = Filename.temp_dir "wire_3d_test2" "" in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
   Alcotest.(check bool)
@@ -31,17 +49,17 @@ let test_schema_of_struct () =
   Unix.rmdir tmpdir
 
 let test_c_schema_of_struct () =
-  let tmpdir = Filename.temp_dir "wire_c_schema" "" in
+  let tmpdir = Filename.temp_dir "wire_3d_schema" "" in
   let s = Wire.Everparse.schema_of_struct simple_struct in
   Wire.Everparse.write_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
   Alcotest.(check bool)
-    "3d file from C.schema_of_struct" true (Sys.file_exists path);
+    "3d file from Everparse.schema_of_struct" true (Sys.file_exists path);
   Sys.remove path;
   Unix.rmdir tmpdir
 
 let test_ensure_dir () =
-  let tmpdir = Filename.temp_dir "wire_c_ensure" "" in
+  let tmpdir = Filename.temp_dir "wire_3d_ensure" "" in
   Unix.rmdir tmpdir;
   Wire_3d.ensure_dir tmpdir;
   Alcotest.(check bool) "dir created" true (Sys.file_exists tmpdir);
@@ -50,7 +68,7 @@ let test_ensure_dir () =
 let test_generate_c () =
   (* generate_c requires 3d.exe; skip when not available *)
   if Wire_3d.has_3d_exe () then begin
-    let tmpdir = Filename.temp_dir "wire_c_gen_c" "" in
+    let tmpdir = Filename.temp_dir "wire_3d_gen_c" "" in
     let s = Wire_3d.schema_of_struct simple_struct in
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
     Wire_3d.generate_c ~outdir:tmpdir [ s ];
@@ -70,8 +88,9 @@ let test_main_exists () =
   ()
 
 let suite =
-  ( "wire_c",
+  ( "wire_3d",
     [
+      Alcotest.test_case "everparse_name" `Quick test_everparse_name;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "Everparse.schema_of_struct" `Quick
