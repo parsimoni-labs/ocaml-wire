@@ -282,27 +282,15 @@ let e2e ~name ~structs ~module_ ~test_ml =
       (* wire_size unused for generation *)
     in
     Wire_3d.generate_3d ~outdir:dir [ schema ];
-    List.iter
-      (fun s ->
-        let sname = Wire.Everparse.Raw.struct_name s in
-        write_file
-          (Filename.concat dir (sname ^ "_ExternalTypedefs.h"))
-          (Wire_stubs.to_external_typedefs sname))
-      structs;
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     (* 2. Generate C and ML stubs *)
-    let setters = Wire_stubs.to_wire_setters () in
-    let c_stubs = Wire_stubs.to_c_stubs structs in
-    let ml_stubs = Wire_stubs.to_ml_stubs structs in
-    write_file (Filename.concat dir "wire_setters.c") setters;
-    write_file (Filename.concat dir "wire_ffi.c") c_stubs;
-    write_file (Filename.concat dir "stubs.ml") ml_stubs;
+    Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir structs;
     write_file (Filename.concat dir "main.ml") test_ml;
     (* 3. Compile *)
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire -linkpkg -ccopt '-I %s' \
-         wire_setters.c wire_ffi.c stubs.ml main.ml -o test_e2e 2>&1"
+         wire_ffi.c stubs.ml main.ml -o test_e2e 2>&1"
         dir dir
     in
     run cmd;

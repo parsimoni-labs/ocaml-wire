@@ -95,6 +95,11 @@ let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
   Format.pp_print_flush ppf ();
   Buffer.contents buf
 
+let write_file path content =
+  let oc = open_out path in
+  output_string oc content;
+  close_out oc
+
 (* Generate the _ExternalTypedefs.h for EverParse output schemas.
    Defines WIRECTX as a struct holding an OCaml value. *)
 let to_external_typedefs name =
@@ -143,3 +148,24 @@ let to_wire_setters () =
   Fmt.pf ppf "}@\n@\n";
   Format.pp_print_flush ppf ();
   Buffer.contents buf
+
+type packed_codec = C : _ Wire.Codec.t -> packed_codec
+
+let of_structs ~schema_dir ~outdir structs =
+  List.iter
+    (fun s ->
+      let name = Wire.Everparse.Raw.struct_name s in
+      write_file
+        (Filename.concat schema_dir (name ^ "_ExternalTypedefs.h"))
+        (to_external_typedefs name))
+    structs;
+  write_file
+    (Filename.concat outdir "wire_ffi.c")
+    (to_wire_setters () ^ to_c_stubs structs);
+  write_file (Filename.concat outdir "stubs.ml") (to_ml_stubs structs)
+
+let generate ~schema_dir ~outdir codecs =
+  let structs =
+    List.map (fun (C c) -> Wire.Everparse.struct_of_codec c) codecs
+  in
+  of_structs ~schema_dir ~outdir structs

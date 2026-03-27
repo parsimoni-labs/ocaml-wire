@@ -89,21 +89,11 @@ To turn those schemas into EverParse-generated C:
 let () = Wire_3d.run ~outdir:"schemas" [ schema ]
 ```
 
-If OCaml needs to call the generated C validators, generate FFI stubs.
-The output-types pipeline requires four artifacts:
+If OCaml needs to call the generated C validators, generate FFI stubs:
 
 ```ocaml
-let struct_ = Everparse.struct_of_codec codec
-let name = Everparse.Raw.struct_name struct_
-
-(* 1. ExternalTypedefs.h — required by EverParse output types *)
-let typedefs = Wire_stubs.to_external_typedefs name
-
-(* 2. WireSet* implementations + C parse stubs *)
-let c = Wire_stubs.to_wire_setters () ^ Wire_stubs.to_c_stubs [ struct_ ]
-
-(* 3. OCaml external declarations *)
-let ml = Wire_stubs.to_ml_stubs [ struct_ ]
+let () =
+  Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"." [ C codec ]
 ```
 
 For unusual EverParse constructs that have no codec equivalent yet, use the
