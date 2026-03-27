@@ -51,17 +51,17 @@ let generate_ml oc =
     (fun s ->
       let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
       match Wire.Everparse.Raw.field_kinds s with
-      | [ (_, kind) ] ->
-          let ml_type, suffix =
+      | [ (field_name, kind) ] ->
+          let suffix =
             match kind with
-            | Wire.Private.Types.K_int64 -> ("int64", "_int64")
-            | _ -> ("int", "_int")
+            | Wire.Private.Types.K_int64 -> "_int64"
+            | _ -> "_int"
           in
-          pr "type %s_raw = { v : %s }\n" lower ml_type;
+          let ml_field = String.lowercase_ascii field_name in
           pr
-            "let %s_projected%s buf = match (%s_parse buf : %s_raw option) \
-             with Some r -> r.v | None -> failwith \"%s: parse failed\"\n\n"
-            lower suffix lower lower lower
+            "let %s_projected%s buf = match %s_parse buf with Some r -> r.%s | \
+             None -> failwith \"%s: parse failed\"\n\n"
+            lower suffix lower ml_field lower
       | _ -> ())
     projection_structs;
   pr "\n(* ── Per-schema stub registry ── *)\n\n";

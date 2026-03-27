@@ -311,16 +311,15 @@ let test_e2e_no_params () =
   let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|type test_header = { version : int; length : int }
-let () =
+      {|let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  match (Stubs.testheader_parse buf : test_header option) with
+  match Stubs.testheader_parse buf with
   | None -> assert false
   | Some r ->
-    assert (r.version = 1);
-    assert (r.length = 42)
+    assert (r.Stubs.version = 1);
+    assert (r.Stubs.length = 42)
 |}
 
 let test_e2e_with_constraint () =
@@ -336,17 +335,16 @@ let test_e2e_with_constraint () =
   let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"Constrained" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|type constrained = { x : int }
-let () =
+      {|let () =
   let buf = Bytes.create 1 in
   (* x=50 <= 100: passes *)
   Bytes.set_uint8 buf 0 50;
-  (match (Stubs.constrained_parse buf : constrained option) with
+  (match Stubs.constrained_parse buf with
   | None -> assert false
-  | Some r -> assert (r.x = 50));
+  | Some r -> assert (r.Stubs.x = 50));
   (* x=200 > 100: fails — parse returns None *)
   Bytes.set_uint8 buf 0 200;
-  assert ((Stubs.constrained_parse buf : constrained option) = None)
+  assert (Stubs.constrained_parse buf = None)
 |}
 
 let test_e2e_bitfields () =
@@ -367,18 +365,17 @@ let test_e2e_bitfields () =
   let s = Wire.Everparse.struct_of_codec codec in
   e2e ~name:"BfHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
-      {|type bf_header = { version : int; flags : int; length : int }
-let () =
+      {|let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
-  match (Stubs.bfheader_parse buf : bf_header option) with
+  match Stubs.bfheader_parse buf with
   | None -> assert false
   | Some r ->
     (* EverParse uses LSB-first bit numbering: version=bits[0..4], flags=bits[4..8] *)
-    assert (r.version = 5);
-    assert (r.flags = 4);
-    assert (r.length = 100)
+    assert (r.Stubs.version = 5);
+    assert (r.Stubs.flags = 4);
+    assert (r.Stubs.length = 100)
 |}
 
 (* ── Output types ── *)
@@ -594,20 +591,18 @@ let test_e2e_output_parse () =
     (* 6. Write test program *)
     write_file
       (Filename.concat dir "main.ml")
-      {|type test_parse = { id : int; length : int; tag : int }
-
-let () =
+      {|let () =
   let buf = Bytes.create 7 in
   Bytes.set_int32_be buf 0 0x12345678l;
   Bytes.set_uint16_be buf 4 1000;
   Bytes.set_uint8 buf 6 42;
-  match (Stubs.testparse_parse buf : test_parse option) with
+  match Stubs.testparse_parse buf with
   | None -> assert false
   | Some r ->
-    assert (r.id = 0x12345678);
-    assert (r.length = 1000);
-    assert (r.tag = 42);
-    Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.id r.length r.tag
+    assert (r.Stubs.id = 0x12345678);
+    assert (r.Stubs.length = 1000);
+    assert (r.Stubs.tag = 42);
+    Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.Stubs.id r.Stubs.length r.Stubs.tag
 |};
     (* 7. Compile everything *)
     let cmd =
