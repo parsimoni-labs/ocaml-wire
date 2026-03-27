@@ -21,6 +21,10 @@ type id =
   | Enum_status
   | Constrained_data
 
+type _ c_field_decode =
+  | Of_int : (int -> 'a) -> 'a c_field_decode
+  | Of_int64 : (int64 -> 'a) -> 'a c_field_decode
+
 type 'a read_case =
   | Read_case : {
       id : id;
@@ -36,6 +40,7 @@ type 'a read_case =
       write_value : 'a;
       equal : 'a -> 'a -> bool;
       bench_read : bool;
+      of_c_field : 'a c_field_decode;
     }
       -> 'a read_case
 

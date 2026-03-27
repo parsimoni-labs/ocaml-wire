@@ -26,6 +26,8 @@ let struct_size s =
       Fmt.failwith "benchmark schema %s has variable-length fields"
         (Wire.Everparse.Raw.struct_name s)
 
+let projection_structs = Demo_bench_cases.projection_structs
+
 let generate_ml oc =
   output_string oc (Wire_stubs.to_ml_stubs structs);
   let ppf = Format.formatter_of_out_channel oc in
@@ -43,21 +45,54 @@ let generate_ml oc =
       pr "external %s_loop : bytes -> int -> int -> int = \"ep_loop_%s\"\n\n"
         lower lower)
     structs;
+  (* Projected field extraction for single-output projection structs *)
+  pr "(* ── Projected field extraction ── *)\n\n";
+  List.iter
+    (fun s ->
+      let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
+      match Wire.Everparse.Raw.field_kinds s with
+      | [ (_, kind) ] ->
+          let ml_type, suffix =
+            match kind with
+            | Wire.Private.Types.K_int64 -> ("int64", "_int64")
+            | _ -> ("int", "_int")
+          in
+          pr "type %s_raw = { v : %s }\n" lower ml_type;
+          pr "let %s_projected%s buf = (%s_parse buf : %s_raw).v\n\n" lower
+            suffix lower lower
+      | _ -> ())
+    projection_structs;
   pr "\n(* ── Per-schema stub registry ── *)\n\n";
   pr "type stubs = {\n";
   pr "  check : bytes -> bool;\n";
   pr "  ffi_parse : bytes -> unit;\n";
   pr "  loop : bytes -> int -> int -> int;\n";
+  pr "  projected_int : bytes -> int;\n";
+  pr "  projected_int64 : bytes -> int64;\n";
   pr "}\n\n";
   pr "let stubs_of_name = function\n";
   List.iter
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
       let lower = String.lowercase_ascii name in
+      let proj_int, proj_int64 =
+        let is_proj =
+          List.exists
+            (fun p -> Wire.Everparse.Raw.struct_name p = name)
+            projection_structs
+        in
+        if is_proj then
+          match Wire.Everparse.Raw.field_kinds s with
+          | [ (_, Wire.Private.Types.K_int64) ] ->
+              ("(fun _ -> 0)", Fmt.str "%s_projected_int64" lower)
+          | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ -> 0L)")
+          | _ -> ("(fun _ -> 0)", "(fun _ -> 0L)")
+        else ("(fun _ -> 0)", "(fun _ -> 0L)")
+      in
       pr
         "  | %S -> { check = %s_check; ffi_parse = (fun b -> ignore (%s_parse \
-         b)); loop = %s_loop }\n"
-        name lower lower lower)
+         b)); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
+        name lower lower lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n";
   Format.pp_print_flush ppf ()
