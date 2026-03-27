@@ -49,20 +49,25 @@ All C code generation flows through `Wire.Everparse` (no duplication):
 
 ## Benchmarking principles
 
-**Never use hand-written parsers in benchmarks.** Compare only:
-- Wire OCaml (`Codec.get`/`Codec.set`)
-- EverParse-generated C (via `Wire_3d`)
-- EverParse FFI (OCaml calling generated C via `Wire_stubs`)
+The **only** goal of benchmarks is to compare these three tiers — all derived
+from the same Wire DSL definition:
 
-**Demo bench** (`bench/demo/`) compares field-level access, all derived from the same Wire DSL definitions:
+1. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access)
+2. **EverParse C** -- EverParse-generated verified C validator in a C loop
+3. **OCaml→C FFI** -- OCaml calling the EverParse-generated C validator
 
-1. **EverParse C** -- generated verified C validator from `.3d` files, timed in a pure C loop (validation only, different operation from OCaml `Codec.get`).
-2. **OCaml→C FFI** -- OCaml calling the EverParse-generated C validator via generated stubs.
-3. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access, no record allocation).
+**Never use hand-written C parsers.** Field extraction in C benchmarks must go
+through EverParse-generated validators (output types + WireSet callbacks), not
+manual bitfield manipulation. C benchmark loops may contain application logic
+(routing, anomaly counting, reassembly) but all field access must use the
+generated EverParse API.
 
-Every Wire type is covered: uint8, uint16be, uint32be, uint64be, bf_uint8, bf_uint16be, bf_uint32be, bool(bf1), map, cases, enum, where, and nested protocol traversals via byte_slice.
+**Demo bench** (`bench/demo/`) covers every Wire type at the field level.
 
-**Application benchmarks** should use the same three tiers via `c_tier`.
+**Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
+add real workloads on top of field access. The C loop calls the EverParse
+validator for field extraction, then runs application logic. The OCaml loop
+does the same work with `Codec.get`/`Codec.set`.
 
 ## Style
 

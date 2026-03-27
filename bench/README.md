@@ -1,13 +1,21 @@
 # Wire Benchmarks
 
-All benchmarks derive from the same Wire DSL definitions. Every benchmark
-compares three tiers:
+All benchmarks compare three tiers derived from the same Wire DSL definition:
 
-1. **EverParse C** -- generated verified C validator in a tight C loop
-2. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
-3. **Pure OCaml** -- `Wire.Codec.get/set` (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec.get/set` (zero-copy field access)
+2. **EverParse C** -- EverParse-generated verified C validator in a tight C loop
+3. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
 
-Metrics: ns/op, allocation (words), ratio vs C, GB/s.
+Metrics: ns/op, allocation (words), ratio vs C, throughput.
+
+## Rules
+
+- **No hand-written C parsers.** All field extraction in C must go through
+  EverParse-generated validators (output types + WireSet callbacks).
+- C benchmark loops may contain application logic (routing decisions, anomaly
+  counting, frame reassembly), but field access must use the generated
+  EverParse API — never manual bitfield manipulation.
+- All three tiers must operate on the same data and produce the same results.
 
 ## Field-level codec (`bench/demo/`)
 
@@ -23,9 +31,11 @@ Per-field read/write performance across all Wire DSL constructs:
 make bench                # requires EverParse (3d.exe in PATH)
 ```
 
-## Scenario benchmarks
+## Application benchmarks
 
-Throughput on realistic workloads (Wire OCaml vs hand-written C):
+Throughput on realistic workloads. The C loop calls the EverParse validator for
+field extraction, then runs application logic. The OCaml loop does the same
+work with `Codec.get`/`Codec.set`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -46,6 +56,4 @@ make memtrace             # allocation hotspots via memtrace
 
 1. `gen_stubs.exe` generates `.3d` files from Wire DSL definitions
 2. EverParse (`3d.exe`) compiles `.3d` to verified C validators
-3. `Wire_stubs` generates C/OCaml FFI stubs to wrap the validators for benchmarking
-
-All schemas (demo, space, net) flow through `Wire.C` -> `Wire_3d` -> `Wire_stubs`.
+3. `Wire_stubs` generates C/OCaml FFI stubs
