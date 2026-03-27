@@ -270,7 +270,7 @@ let e2e ~name ~structs ~module_ ~test_ml =
     let dir = Filename.temp_dir ("wire_e2e_" ^ name) "" in
     (* 1. Generate .3d and run EverParse *)
     let schema =
-      Wire_3d.schema ~name ~module_ ~wire_size:0
+      Wire.Everparse.Raw.of_module ~name ~module_ ~wire_size:0
       (* wire_size unused for generation *)
     in
     Wire_3d.generate_3d ~outdir:dir [ schema ];

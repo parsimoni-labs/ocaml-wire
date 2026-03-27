@@ -62,3 +62,18 @@
 (library
  (name c_stubs)
  (modules c_stubs))
+
+; C foreign stubs — gated (provides the C implementations for c_stubs externals)
+
+(library
+ (name c_stubs_c)
+ (modules)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (foreign_stubs
+  (language c)
+  (names c_stubs)
+  (extra_deps
+   (glob_files schemas/*.c)
+   (glob_files schemas/*.h))
+  (flags :standard -I schemas)))

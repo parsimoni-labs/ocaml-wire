@@ -23,15 +23,6 @@
     If you want OCaml to call the generated C validators, use {!Wire_stubs} on
     the resulting {!Wire.Everparse.Raw.struct_} values. *)
 
-type schema = Wire.Everparse.t
-(** Same as {!Wire.Everparse.t}; [Wire_3d] is tooling over this exported schema.
-*)
-
-val schema :
-  name:string -> module_:Wire.Everparse.Raw.module_ -> wire_size:int -> schema
-(** [schema ~name ~module_ ~wire_size] creates a schema with explicit
-    parameters. Prefer {!schema_of_struct} when possible. *)
-
 val everparse_name : string -> string
 (** [everparse_name name] returns the EverParse-normalized identifier for a
     struct name. EverParse 3D normalizes names that start with two or more
@@ -39,10 +30,11 @@ val everparse_name : string -> string
     only the first letter (e.g., [CLCW] becomes [Clcw], [TMFrame] becomes
     [Tmframe]). Names with standard camelCase are preserved. *)
 
-val generate_3d : outdir:string -> schema list -> unit
+val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules. *)
 
-val run_everparse : ?quiet:bool -> outdir:string -> schema list -> unit
+val run_everparse :
+  ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [run_everparse ?quiet ~outdir schemas] invokes EverParse on [.3d] files in
     [outdir].
 
@@ -51,7 +43,7 @@ val run_everparse : ?quiet:bool -> outdir:string -> schema list -> unit
 
     Requires [3d.exe] in PATH. *)
 
-val generate_c : ?quiet:bool -> outdir:string -> schema list -> unit
+val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
     files to produce C parsers and generates [test.c].
 
@@ -60,12 +52,12 @@ val generate_c : ?quiet:bool -> outdir:string -> schema list -> unit
 
     Requires [3d.exe] (EverParse) in PATH. *)
 
-val run : ?quiet:bool -> outdir:string -> schema list -> unit
+val run : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [run ?quiet ~outdir schemas] runs the full pipeline: writes [.3d] files,
     invokes EverParse, and produces C validators. The [quiet] flag is passed
     through to EverParse execution. *)
 
-val main : package:string -> schema list -> unit
+val main : package:string -> Wire.Everparse.t list -> unit
 (** [main ~package schemas] dispatches based on [Sys.argv]:
     - [3d] runs {!generate_3d}
     - [c] runs {!generate_c}

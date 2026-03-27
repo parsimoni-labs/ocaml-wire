@@ -118,13 +118,12 @@ let generate_c oc =
       let ep = Wire_3d.everparse_name name in
       let lower = String.lowercase_ascii name in
       let n_fields = List.length (Wire.Everparse.Raw.field_names s) in
+      ignore n_fields;
       pr "CAMLprim value caml_wire_%s_check(value v_buf) {\n" lower;
       pr "  CAMLparam1(v_buf);\n";
-      pr "  CAMLlocal1(v_record);\n";
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);\n";
       pr "  uint32_t len = caml_string_length(v_buf);\n";
-      pr "  v_record = caml_alloc(%d, 0);\n" n_fields;
-      pr "  WIRECTX ctx = { v_record };\n";
+      pr "  WIRECTX ctx = { NULL };\n";
       pr "  uint64_t r = %sValidate%s(&ctx, NULL, %s_err, data, len, 0);\n" ep
         ep lower;
       pr "  CAMLreturn(Val_bool(EverParseIsSuccess(r)));\n";
@@ -133,7 +132,6 @@ let generate_c oc =
       pr "CAMLprim value ep_loop_%s(value v_buf, value v_off, value v_n) {\n"
         lower;
       pr "  CAMLparam3(v_buf, v_off, v_n);\n";
-      pr "  CAMLlocal1(v_record);\n";
       pr "  uint8_t *buf = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);\n";
       pr "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);\n";
       pr "  const uint32_t item_size = %d;\n" item_size;
@@ -141,8 +139,7 @@ let generate_c oc =
       pr "  int count = Int_val(v_n);\n";
       pr "  volatile uint64_t result = 0;\n";
       pr "  if (n_items == 0) CAMLreturn(Val_int(0));\n";
-      pr "  v_record = caml_alloc(%d, 0);\n" n_fields;
-      pr "  WIRECTX ctx = { v_record };\n";
+      pr "  WIRECTX ctx = { NULL };\n";
       pr "  int64_t t0 = now_ns();\n";
       pr "  for (int i = 0; i < count; i++) {\n";
       pr "    uint8_t *item = buf + ((uint32_t)i %% n_items) * item_size;\n";

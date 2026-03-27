@@ -208,8 +208,9 @@ let to_wire_setters () =
     (fun (c_type, fn_name) ->
       Fmt.pf ppf "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" fn_name c_type;
       Fmt.pf ppf "  (void)idx;@\n";
+      Fmt.pf ppf "  if (ctx->v_ptr)@\n";
       Fmt.pf ppf
-        "  *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), Val_long((long)v));@\n";
+        "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), Val_long((long)v));@\n";
       Fmt.pf ppf "}@\n@\n")
     [
       ("uint8_t", "WireSetU8");
@@ -220,13 +221,15 @@ let to_wire_setters () =
     ];
   Fmt.pf ppf "void WireSetU64(WIRECTX *ctx, uint32_t idx, uint64_t v) {@\n";
   Fmt.pf ppf "  (void)idx;@\n";
+  Fmt.pf ppf "  if (ctx->v_ptr)@\n";
   Fmt.pf ppf
-    "  *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
+    "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
   Fmt.pf ppf "}@\n@\n";
   Fmt.pf ppf "void WireSetU64be(WIRECTX *ctx, uint32_t idx, uint64_t v) {@\n";
   Fmt.pf ppf "  (void)idx;@\n";
+  Fmt.pf ppf "  if (ctx->v_ptr)@\n";
   Fmt.pf ppf
-    "  *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
+    "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
   Fmt.pf ppf "}@\n@\n";
   Format.pp_print_flush ppf ();
   Buffer.contents buf

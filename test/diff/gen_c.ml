@@ -374,7 +374,7 @@ let () =
   let wire_3d_schemas =
     List.map
       (fun rs ->
-        Wire_3d.schema
+        Wire.Everparse.Raw.of_module
           ~name:(Wire.Everparse.Raw.struct_name rs.struct_)
           ~module_:(Wire.module_ [ Wire.typedef ~entrypoint:true rs.struct_ ])
           ~wire_size:rs.total_wire_size)

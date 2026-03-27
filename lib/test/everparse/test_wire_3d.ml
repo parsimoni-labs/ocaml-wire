@@ -29,7 +29,8 @@ let test_everparse_name () =
 let test_generate_3d_files () =
   let tmpdir = Filename.temp_dir "wire_3d_test" "" in
   let s =
-    Wire_3d.schema ~name:"TestSimple" ~module_:simple_module ~wire_size:3
+    Wire.Everparse.Raw.of_module ~name:"TestSimple" ~module_:simple_module
+      ~wire_size:3
   in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
@@ -74,7 +75,7 @@ let test_has_3d_exe () =
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
      verify that the value exists and has the right type. *)
-  let _ = (Wire_3d.main : package:string -> Wire_3d.schema list -> unit) in
+  let _ = (Wire_3d.main : package:string -> Wire.Everparse.t list -> unit) in
   ()
 
 let suite =

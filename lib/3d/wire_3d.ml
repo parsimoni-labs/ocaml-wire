@@ -1,10 +1,6 @@
 (** Generate verified C libraries from Wire codecs via EverParse. *)
 
-type schema = Wire.Everparse.t = {
-  name : string;
-  module_ : Wire.Everparse.Raw.module_;
-  wire_size : int;
-}
+open Wire.Everparse
 
 let everparse_name name =
   let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c in
@@ -18,7 +14,6 @@ let everparse_name name =
         if i = 0 then Char.uppercase_ascii c else c)
   else name
 
-let schema = Wire.Everparse.Raw.of_module
 let write_3d = Wire.Everparse.write_3d
 
 let copy_file ~src ~dst =
