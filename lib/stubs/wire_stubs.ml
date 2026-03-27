@@ -206,7 +206,7 @@ let to_wire_setters () =
   Fmt.pf ppf "#include <caml/callback.h>@\n@\n";
   Fmt.pf ppf "#ifndef WIRECTX_DEFINED@\n";
   Fmt.pf ppf "#define WIRECTX_DEFINED@\n";
-  Fmt.pf ppf "typedef struct { value *v_ptr; } WIRECTX;@\n";
+  Fmt.pf ppf "typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;@\n";
   Fmt.pf ppf "#endif@\n@\n";
   List.iter
     (fun (c_type, fn_name) ->

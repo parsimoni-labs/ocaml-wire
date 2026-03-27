@@ -178,11 +178,6 @@ let () =
     generate_c oc;
     close_out oc;
 
-    (* 4. Generate c_stubs.ml *)
-    let oc = open_out "c_stubs.ml" in
-    generate_ml oc;
-    close_out oc;
-
     Fmt.pr "Generated %d schemas in %s/@." (List.length structs) schema_dir;
-    Fmt.pr "Generated c_stubs.c, c_stubs.ml@."
+    Fmt.pr "Generated c_stubs.c@."
   end

@@ -100,7 +100,7 @@ let check ~n_words =
 
 let main () =
   Memtrace.trace_if_requested ~context:"clcw" ();
-  let n_words = 10_000_000 in
+  let n_words = 100_000 in
   let t, st = benchmark ~n_words in
   Fmt.pr "CLCW polling loop (%d words, %dB each, contiguous buffer)\n\n" n_words
     word_size;

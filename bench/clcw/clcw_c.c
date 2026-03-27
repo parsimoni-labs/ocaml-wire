@@ -9,30 +9,24 @@
 #include <stdint.h>
 #include <time.h>
 
-/* WIRECTX + WireSet — field extraction via EverParse output types.
-   v_ptr mode: OCaml continuation callbacks (unused here).
-   fields mode: store extracted values into a C int64_t array. */
+/* WIRECTX definition — must match wire_stubs generated version */
 #ifndef WIRECTX_DEFINED
 #define WIRECTX_DEFINED
 typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;
 #endif
 
-#define WIRESET_IMPL(NAME, CTYPE) \
-  void NAME(WIRECTX *ctx, uint32_t idx, CTYPE v) { \
-    if (ctx->fields) ctx->fields[idx] = (int64_t)v; \
-  }
-WIRESET_IMPL(WireSetU8, uint8_t)
-WIRESET_IMPL(WireSetU16, uint16_t)
-WIRESET_IMPL(WireSetU16be, uint16_t)
-WIRESET_IMPL(WireSetU32, uint32_t)
-WIRESET_IMPL(WireSetU32be, uint32_t)
-WIRESET_IMPL(WireSetU64, uint64_t)
-WIRESET_IMPL(WireSetU64be, uint64_t)
+/* WireSet functions are provided by c_stubs_c at link time */
+void WireSetU8(WIRECTX *ctx, uint32_t idx, uint8_t v);
+void WireSetU16(WIRECTX *ctx, uint32_t idx, uint16_t v);
+void WireSetU16be(WIRECTX *ctx, uint32_t idx, uint16_t v);
+void WireSetU32(WIRECTX *ctx, uint32_t idx, uint32_t v);
+void WireSetU32be(WIRECTX *ctx, uint32_t idx, uint32_t v);
+void WireSetU64(WIRECTX *ctx, uint32_t idx, uint64_t v);
+void WireSetU64be(WIRECTX *ctx, uint32_t idx, uint64_t v);
 
-/* EverParse generated headers and sources */
+/* EverParse generated headers (implementation linked from c_stubs_c) */
 #include "EverParse.h"
 #include "CLCW.h"
-#include "CLCW.c"
 
 static void clcw_err(const char *t, const char *f, const char *r,
   uint64_t c, uint8_t *ctx, EVERPARSE_INPUT_BUFFER i, uint64_t p) {
@@ -47,6 +41,7 @@ enum {
   CLCW_STATUSFIELD,
   CLCW_COPINEFFECT,
   CLCW_VCID,
+  CLCW_SPARE,
   CLCW_NORF,
   CLCW_NOBITLOCK,
   CLCW_LOCKOUT,
