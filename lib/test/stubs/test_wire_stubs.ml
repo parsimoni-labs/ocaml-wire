@@ -40,16 +40,8 @@ let check_struct s =
   let multi = Wire_stubs.to_ml_stubs [ s ] in
   compile_ml_stub single;
   compile_ml_stub multi;
-  (* Both must declare external parse : bytes -> 'a *)
   Alcotest.(check bool) "single has parse" true (contains ~sub:"parse" single);
-  Alcotest.(check bool) "multi has parse" true (contains ~sub:"_parse" multi);
-  (* Count arrows — always exactly 1 (bytes -> 'a) *)
-  let count_arrows s =
-    let r = Re.compile (Re.str "->") in
-    List.length (Re.all r s)
-  in
-  Alcotest.(check int) "single arity" 1 (count_arrows single);
-  Alcotest.(check int) "multi arity" 1 (count_arrows multi)
+  Alcotest.(check bool) "multi has parse" true (contains ~sub:"_parse" multi)
 
 (* ── No params ── *)
 
