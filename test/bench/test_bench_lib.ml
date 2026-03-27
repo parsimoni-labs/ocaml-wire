@@ -124,9 +124,7 @@ let test_check_with_expect () =
       "timed-c";
       "reset";
       "result-ocaml";
-      "reset";
       "result-ffi";
-      "reset";
       "result-c";
     ]
     rev

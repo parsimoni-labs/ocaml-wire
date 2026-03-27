@@ -37,32 +37,35 @@ type t = {
   reset : unit -> unit;
   c : ((bytes -> int -> int -> int) * bytes) option;
   ffi : ((bytes -> unit) * bytes) option;
-  check : check option;
+  verify : (unit -> unit) option;
 }
 
-and check =
-  | Custom_check of (unit -> unit)
-  | Expectation : {
-      ocaml_result : unit -> 'a;
-      ffi_result : (unit -> 'a) option;
-      c_result : (unit -> 'a) option;
-      equal : 'a -> 'a -> bool;
-      pp : 'a Fmt.t;
-    }
-      -> check
-
 let v label ~size ?(reset = ignore) ocaml =
-  { label; size; ocaml; reset; c = None; ffi = None; check = None }
+  { label; size; ocaml; reset; c = None; ffi = None; verify = None }
 
 let with_c c_loop c_buf t = { t with c = Some (c_loop, c_buf) }
 let with_ffi ffi_check ffi_buf t = { t with ffi = Some (ffi_check, ffi_buf) }
-let with_verify f t = { t with check = Some (Custom_check f) }
+let with_verify f t = { t with verify = Some f }
 
 let with_expect ?ffi ?c ~equal ~pp ocaml_result t =
-  let check =
-    Expectation { ocaml_result; ffi_result = ffi; c_result = c; equal; pp }
+  let verify () =
+    let fail label lhs rhs =
+      Fmt.failwith "%s mismatch: OCaml=%a %s=%a" t.label pp lhs label pp rhs
+    in
+    let ocaml_value = ocaml_result () in
+    (match ffi with
+    | Some ffi_result ->
+        let ffi_value = ffi_result () in
+        if not (equal ocaml_value ffi_value) then
+          fail "FFI" ocaml_value ffi_value
+    | None -> ());
+    match c with
+    | Some c_result ->
+        let c_value = c_result () in
+        if not (equal ocaml_value c_value) then fail "C" ocaml_value c_value
+    | None -> ()
   in
-  { t with check = Some check }
+  { t with verify = Some verify }
 
 let cycling ~data ~n_items ~size read_fn =
   let i = ref 0 in
@@ -106,32 +109,10 @@ let check t =
       t.reset ();
       ignore (c_loop c_buf 0 1)
   | None -> ());
-  (* Run structured result checks when present. *)
-  match t.check with
-  | Some (Custom_check f) ->
+  match t.verify with
+  | Some f ->
       t.reset ();
       f ()
-  | Some (Expectation check) -> (
-      let fail label lhs rhs =
-        Fmt.failwith "%s mismatch: OCaml=%a %s=%a" t.label check.pp lhs label
-          check.pp rhs
-      in
-      t.reset ();
-      let ocaml_value = check.ocaml_result () in
-      (match check.ffi_result with
-      | Some ffi_result ->
-          t.reset ();
-          let ffi_value = ffi_result () in
-          if not (check.equal ocaml_value ffi_value) then
-            fail "FFI" ocaml_value ffi_value
-      | None -> ());
-      match check.c_result with
-      | Some c_result ->
-          t.reset ();
-          let c_value = c_result () in
-          if not (check.equal ocaml_value c_value) then
-            fail "C" ocaml_value c_value
-      | None -> ())
   | None -> ()
 
 let run_one ~n t =

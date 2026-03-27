@@ -34,8 +34,8 @@ val with_ffi : (bytes -> unit) -> bytes -> t -> t
 (** [with_ffi ffi_fn buf t] adds the OCaml->C FFI tier. *)
 
 val with_verify : (unit -> unit) -> t -> t
-(** [with_verify f t] adds a verification function that runs during {!check} to
-    confirm OCaml and C tiers produce the same results. *)
+(** [with_verify f t] adds a verification callback that runs during {!check}.
+    Raises on failure. See also {!with_expect} for typed comparisons. *)
 
 val with_expect :
   ?ffi:(unit -> 'a) ->
@@ -45,9 +45,9 @@ val with_expect :
   (unit -> 'a) ->
   t ->
   t
-(** [with_expect ?ffi ?c ~equal ~pp ocaml_result t] adds a typed result check.
-    During {!check}, [ocaml_result] is compared against optional FFI/C result
-    thunks after resetting the benchmark state before each tier. *)
+(** [with_expect ?ffi ?c ~equal ~pp ocaml_result t] is {!with_verify} with a
+    typed result check: [ocaml_result ()] is compared against optional FFI/C
+    result thunks using [equal], with mismatches formatted by [pp]. *)
 
 val cycling :
   data:bytes ->
