@@ -6,9 +6,9 @@
 make build              # dune build
 make test               # dune runtest
 make bench              # EverParse C vs OCaml (needs 3d.exe)
-make bench-routing      # APID demux throughput (Wire OCaml vs hand-written C)
-make bench-gateway      # TM frame reassembly (Wire OCaml vs hand-written C)
-make bench-clcw         # CLCW polling loop (Wire OCaml vs hand-written C)
+make bench-routing      # APID demux throughput
+make bench-gateway      # TM frame reassembly
+make bench-clcw         # CLCW polling loop
 make prof               # CPU profile with Instruments (open prof.trace)
 make memtrace           # allocation hotspots via memtrace
 make clean              # dune clean
@@ -19,7 +19,7 @@ All bench/prof/memtrace targets use `--profile=release`.
 
 ## Project structure
 
-- `lib/` -- core `wire` library: DSL types, 3D codegen, Codec (parse/encode)
+- `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
@@ -29,9 +29,9 @@ All bench/prof/memtrace targets use `--profile=release`.
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
   - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set`)
-  - `bench/clcw/` -- CLCW polling loop (Wire OCaml vs hand-written C), uses `Codec.bitfield`/`load_word`/`extract`
-  - `bench/routing/` -- APID demux throughput (Wire OCaml vs hand-written C)
-  - `bench/gateway/` -- TM frame reassembly (Wire OCaml vs hand-written C)
+  - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
+  - `bench/routing/` -- APID demux throughput
+  - `bench/gateway/` -- TM frame reassembly
   - `bench/gen_stubs.ml` -- generates C/OCaml stubs for EverParse comparison
   - `bench/bench_lib.ml` -- shared benchmark framework (timing, tables, comparison)
   - `bench/memtrace/` -- allocation profiling
@@ -41,13 +41,18 @@ All bench/prof/memtrace targets use `--profile=release`.
 
 ## Code generation pipeline
 
-All C code generation flows through `Wire_3d` (no duplication):
-1. `C.schema codec` -- project a codec to a 3D schema (with extern callbacks for field extraction)
-2. `C.generate ~outdir [ schema ]` -- write `.3d` files; `C.Raw.to_3d` / `C.Raw.to_3d_file` for low-level rendering
-3. `Wire_3d.generate` -- invoke EverParse to produce C parsers
-4. `Wire_stubs.to_c_stubs` / `Wire_stubs.to_ml_stubs` -- generate OCaml FFI bindings calling `Validate` directly (not through EverParse Wrapper)
+All C code generation flows through `Wire.Everparse` (no duplication):
+1. `Everparse.schema codec` -- project a codec to a 3D schema (with extern callbacks for field extraction)
+2. `Everparse.write_3d ~outdir [ schema ]` -- write `.3d` files
+3. `Wire_3d.run ~outdir [ schema ]` -- invoke EverParse to produce C parsers
+4. `Wire_stubs.generate ~schema_dir ~outdir [ C codec ]` -- generate OCaml FFI bindings
 
 ## Benchmarking principles
+
+**Never use hand-written parsers in benchmarks.** Compare only:
+- Wire OCaml (`Codec.get`/`Codec.set`)
+- EverParse-generated C (via `Wire_3d`)
+- EverParse FFI (OCaml calling generated C via `Wire_stubs`)
 
 **Demo bench** (`bench/demo/`) compares field-level access, all derived from the same Wire DSL definitions:
 
@@ -57,11 +62,7 @@ All C code generation flows through `Wire_3d` (no duplication):
 
 Every Wire type is covered: uint8, uint16be, uint32be, uint64be, bf_uint8, bf_uint16be, bf_uint32be, bool(bf1), map, cases, enum, where, and nested protocol traversals via byte_slice.
 
-**Application benchmarks** compare Wire OCaml against hand-written C doing the same work:
-
-- `bench/clcw/` -- CLCW polling loop: batch bitfield reads via `Codec.bitfield`/`load_word`/`extract` vs hand-written C bitfield extraction (`clcw_c.c`)
-- `bench/routing/` -- APID demux: Wire `Codec.get` for packet routing vs hand-written C (`routing_c.c`)
-- `bench/gateway/` -- TM frame reassembly: Wire codec vs hand-written C (`gateway_c.c`)
+**Application benchmarks** should use the same three tiers via `c_tier`.
 
 ## Style
 

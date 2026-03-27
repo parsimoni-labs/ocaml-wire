@@ -127,9 +127,7 @@ let benchmark ~n_pkts =
   let ocaml_result () = run_packets st n_pkts in
   let c_result () = c_apid_route_counts buf 0 n_pkts in
   let t =
-    v "Wire (staged Codec.get)" ~size:st.hdr
-      ~reset:(fun () -> reset st)
-      (step st)
+    v "Wire OCaml" ~size:st.hdr ~reset:(fun () -> reset st) (step st)
     |> with_c c_apid_route buf
     |> with_expect ~equal:( = ) ~pp:pp_counts ~c:c_result ocaml_result
   in

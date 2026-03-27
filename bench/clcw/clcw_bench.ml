@@ -88,9 +88,7 @@ let benchmark ~n_words =
   let ocaml_result () = run_all st in
   let c_result () = c_clcw_poll_result st.buf 0 in
   let t =
-    v "Wire (staged Codec.get)" ~size:word_size
-      ~reset:(fun () -> reset st)
-      (step st)
+    v "Wire OCaml" ~size:word_size ~reset:(fun () -> reset st) (step st)
     |> with_c c_clcw_poll st.buf
     |> with_expect ~equal:Int.equal ~pp:Fmt.int ~c:c_result ocaml_result
   in

@@ -140,9 +140,7 @@ let benchmark ~n_frames =
   let ocaml_result () = process_all_frames st in
   let c_result () = c_tm_reassemble_checksum st.buf 0 in
   let t =
-    v "Wire (staged Codec.get)" ~size:cadu_size
-      ~reset:(fun () -> reset st)
-      (step st)
+    v "Wire OCaml" ~size:cadu_size ~reset:(fun () -> reset st) (step st)
     |> with_c c_tm_reassemble st.buf
     |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~c:c_result ocaml_result
   in
