@@ -143,7 +143,7 @@ let benchmark ~n_frames =
   let ffi_reset () = ffi_frame := 0 in
   let ffi_fn _buf =
     let off = !ffi_frame mod st.n_frames * cadu_size in
-    ignore (C_stubs.tmframe_parse (Bytes.sub st.buf off tm_hdr));
+    ignore (C_stubs.tmframe_parse st.buf off);
     incr ffi_frame
   in
   let reset () =

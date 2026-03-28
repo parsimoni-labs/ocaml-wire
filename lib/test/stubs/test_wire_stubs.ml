@@ -307,7 +307,7 @@ let test_e2e_no_params () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  let r = Stubs.testheader_parse buf in
+  let r = Stubs.testheader_parse buf 0 in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
@@ -329,11 +329,11 @@ let test_e2e_with_constraint () =
   let buf = Bytes.create 1 in
   (* x=50 <= 100: passes *)
   Bytes.set_uint8 buf 0 50;
-  let r = Stubs.constrained_parse buf in
+  let r = Stubs.constrained_parse buf 0 in
   assert (r.Stubs.x = 50);
   (* x=200 > 100: fails — parse raises *)
   Bytes.set_uint8 buf 0 200;
-  (try ignore (Stubs.constrained_parse buf); assert false
+  (try ignore (Stubs.constrained_parse buf 0); assert false
    with Failure _ -> ())
 |}
 
@@ -359,7 +359,7 @@ let test_e2e_bitfields () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
-  let r = Stubs.bfheader_parse buf in
+  let r = Stubs.bfheader_parse buf 0 in
   (* EverParse uses LSB-first bit numbering: version=bits[0..4], flags=bits[4..8] *)
   assert (r.Stubs.version = 5);
   assert (r.Stubs.flags = 4);
@@ -584,7 +584,7 @@ let test_e2e_output_parse () =
   Bytes.set_int32_be buf 0 0x12345678l;
   Bytes.set_uint16_be buf 4 1000;
   Bytes.set_uint8 buf 6 42;
-  let r = Stubs.testparse_parse buf in
+  let r = Stubs.testparse_parse buf 0 in
   assert (r.Stubs.id = 0x12345678);
   assert (r.Stubs.length = 1000);
   assert (r.Stubs.tag = 42);

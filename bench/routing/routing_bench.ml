@@ -131,7 +131,7 @@ let benchmark ~n_pkts =
   let ffi_reset () = ffi_off := 0 in
   let ffi_fn _buf =
     if !ffi_off + hdr > total_bytes then ffi_off := 0;
-    ignore (C_stubs.spacepacket_parse (Bytes.sub buf !ffi_off hdr));
+    ignore (C_stubs.spacepacket_parse buf !ffi_off);
     ffi_off := !ffi_off + hdr
   in
   let reset () =

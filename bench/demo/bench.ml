@@ -21,7 +21,7 @@ let read_row (C rc) =
   let ffi_reset () = ffi_index := 0 in
   let ffi_fn _buf =
     let item = case.dataset.items.(!ffi_index mod case.dataset.n_items) in
-    stubs.ffi_parse item;
+    stubs.ffi_parse item 0;
     incr ffi_index
   in
   let reset () =

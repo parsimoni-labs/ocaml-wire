@@ -91,7 +91,7 @@ let benchmark ~n_words =
   let ffi_reset () = ffi_index := 0 in
   let ffi_fn _buf =
     let off = !ffi_index mod st.n_words * word_size in
-    ignore (C_stubs.clcw_parse (Bytes.sub st.buf off word_size));
+    ignore (C_stubs.clcw_parse st.buf off);
     incr ffi_index
   in
   let reset () =

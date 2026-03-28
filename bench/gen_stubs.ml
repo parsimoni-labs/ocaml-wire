@@ -64,10 +64,10 @@ let generate_ml oc =
   pr "\n(* ── Per-schema stub registry ── *)\n\n";
   pr "type stubs = {\n";
   pr "  check : bytes -> bool;\n";
-  pr "  ffi_parse : bytes -> unit;\n";
+  pr "  ffi_parse : bytes -> int -> unit;\n";
   pr "  loop : bytes -> int -> int -> int;\n";
-  pr "  projected_int : bytes -> int;\n";
-  pr "  projected_int64 : bytes -> int64;\n";
+  pr "  projected_int : bytes -> int -> int;\n";
+  pr "  projected_int64 : bytes -> int -> int64;\n";
   pr "}\n\n";
   pr "let stubs_of_name = function\n";
   List.iter
@@ -83,14 +83,15 @@ let generate_ml oc =
         if is_proj then
           match Wire.Everparse.Raw.field_kinds s with
           | [ (_, Wire.Private.Types.K_int64) ] ->
-              ("(fun _ -> 0)", Fmt.str "%s_projected_int64" lower)
-          | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ -> 0L)")
-          | _ -> ("(fun _ -> 0)", "(fun _ -> 0L)")
-        else ("(fun _ -> 0)", "(fun _ -> 0L)")
+              ("(fun _ _ -> 0)", Fmt.str "%s_projected_int64" lower)
+          | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ _ -> 0L)")
+          | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+        else ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
       in
       pr
-        "  | %S -> { check = %s_check; ffi_parse = (fun b -> ignore (%s_parse \
-         b)); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
+        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> ignore \
+         (%s_parse b off)); loop = %s_loop; projected_int = %s; \
+         projected_int64 = %s }\n"
         name lower lower lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n";

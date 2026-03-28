@@ -14,8 +14,8 @@ let of_case (type a) (Read_case c : a read_case) =
   let size = Codec.wire_size c.codec in
   let c_parse : bytes -> a =
     match c.of_c_field with
-    | Of_int f -> fun buf -> f (stubs.projected_int buf)
-    | Of_int64 f -> fun buf -> f (stubs.projected_int64 buf)
+    | Of_int f -> fun buf -> f (stubs.projected_int buf 0)
+    | Of_int64 f -> fun buf -> f (stubs.projected_int64 buf 0)
   in
   let read buf =
     let bytes = Bytes.of_string buf in
