@@ -21,4 +21,4 @@
  (modules bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries gateway_bench gateway_bench_c))
+ (libraries gateway_bench gateway_bench_c c_stubs_c wire.stubs))

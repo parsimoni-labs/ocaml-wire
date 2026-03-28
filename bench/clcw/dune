@@ -21,4 +21,4 @@
  (modules bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries clcw_bench clcw_bench_c c_stubs_c))
+ (libraries clcw_bench clcw_bench_c c_stubs_c wire.stubs))

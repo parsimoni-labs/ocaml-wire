@@ -23,6 +23,7 @@
   demo_bench_diff
   c_stubs
   c_stubs_c
+  wire.stubs
   c_tier
   bench_lib
   wire
