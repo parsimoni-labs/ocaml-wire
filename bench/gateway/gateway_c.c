@@ -14,7 +14,7 @@
 /* WIRECTX definition — must match wire_stubs generated version */
 #ifndef WIRECTX_DEFINED
 #define WIRECTX_DEFINED
-typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;
+typedef struct { int64_t *fields; } WIRECTX;
 #endif
 
 /* WireSet functions provided by c_stubs_c at link time */
@@ -67,7 +67,7 @@ static inline uint64_t hash_int(uint64_t state, int value) {
 static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
                         int data_field_size, uint64_t *checksum) {
   int64_t tf[TF_N_FIELDS];
-  WIRECTX tf_ctx = { NULL, tf };
+  WIRECTX tf_ctx = { tf };
   TmframeValidateTmframe(&tf_ctx, NULL, gw_err, frame, tm_hdr, 0);
 
   int vcid = (int)tf[TF_VCID];
@@ -80,7 +80,7 @@ static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
   }
 
   int64_t sp[SP_N_FIELDS];
-  WIRECTX sp_ctx = { NULL, sp };
+  WIRECTX sp_ctx = { sp };
   int sp_hdr = 6;
   int off = tm_hdr + fhp;
   while (off + pkt_size <= tm_hdr + data_field_size) {

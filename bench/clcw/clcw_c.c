@@ -12,7 +12,7 @@
 /* WIRECTX definition — must match wire_stubs generated version */
 #ifndef WIRECTX_DEFINED
 #define WIRECTX_DEFINED
-typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;
+typedef struct { int64_t *fields; } WIRECTX;
 #endif
 
 /* WireSet functions are provided by c_stubs_c at link time */
@@ -63,7 +63,7 @@ static int count_anomalies(uint8_t *buf, int n_words, int n_iters) {
   int anomalies = 0;
   int expected_seq = 0;
   int64_t fields[CLCW_N_FIELDS];
-  WIRECTX ctx = { NULL, fields };
+  WIRECTX ctx = { fields };
 
   for (int i = 0; i < n_iters; i++) {
     uint8_t *p = buf + (i % n_words) * word_size;

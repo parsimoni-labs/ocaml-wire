@@ -12,29 +12,70 @@ let c_stub_error_handler ppf lower =
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n"
 
-let c_stub_output ppf ~lower ~ep =
-  Fmt.pf ppf "CAMLprim value caml_wire_%s_parse(value v_k, value v_buf) {@\n"
-    lower;
-  Fmt.pf ppf "  CAMLparam2(v_k, v_buf);@\n";
-  Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
-  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
-  Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
-  Fmt.pf ppf "  v_result = v_k;@\n";
-  Fmt.pf ppf "  WIRECTX ctx = { &v_result, NULL };@\n";
+let c_stub_validate ppf ~lower ~ep n_fields =
+  Fmt.pf ppf "  int64_t fields[%d];@\n" (max 1 n_fields);
+  Fmt.pf ppf "  WIRECTX ctx = { %s };@\n"
+    (if n_fields > 0 then "fields" else "NULL");
   Fmt.pf ppf "  uint64_t r = %sValidate%s(&ctx, NULL, %s_err, data, len, 0);@\n"
     ep ep lower;
   Fmt.pf ppf
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
-    lower;
+    lower
+
+let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
+  let kinds = Wire.Everparse.Raw.field_kinds s in
+  let n_fields = List.length kinds in
+  (* _parse: allocate record directly in C, no constructor needed *)
+  Fmt.pf ppf "CAMLprim value caml_wire_%s_parse(value v_buf) {@\n" lower;
+  Fmt.pf ppf "  CAMLparam1(v_buf);@\n";
+  Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
+  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
+  Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
+  c_stub_validate ppf ~lower ~ep n_fields;
+  if n_fields > 0 then begin
+    Fmt.pf ppf "  v_result = caml_alloc(%d, 0);@\n" n_fields;
+    List.iteri
+      (fun i (_, kind) ->
+        match kind with
+        | Wire.Private.Types.K_int64 ->
+            Fmt.pf ppf
+              "  Store_field(v_result, %d, caml_copy_int64(fields[%d]));@\n" i i
+        | _ ->
+            Fmt.pf ppf "  Store_field(v_result, %d, Val_long(fields[%d]));@\n" i
+              i)
+      kinds
+  end
+  else Fmt.pf ppf "  v_result = Val_unit;@\n";
   Fmt.pf ppf "  CAMLreturn(v_result);@\n";
-  Fmt.pf ppf "}@\n@\n"
+  Fmt.pf ppf "}@\n@\n";
+  (* _parse_k: apply constructor via caml_callbackN *)
+  if n_fields > 0 then begin
+    Fmt.pf ppf
+      "CAMLprim value caml_wire_%s_parse_k(value v_k, value v_buf) {@\n" lower;
+    Fmt.pf ppf "  CAMLparam2(v_k, v_buf);@\n";
+    Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
+    Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);@\n";
+    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf);@\n";
+    c_stub_validate ppf ~lower ~ep n_fields;
+    Fmt.pf ppf "  value args[%d];@\n" n_fields;
+    List.iteri
+      (fun i (_, kind) ->
+        match kind with
+        | Wire.Private.Types.K_int64 ->
+            Fmt.pf ppf "  args[%d] = caml_copy_int64(fields[%d]);@\n" i i
+        | _ -> Fmt.pf ppf "  args[%d] = Val_long(fields[%d]);@\n" i i)
+      kinds;
+    Fmt.pf ppf "  v_result = caml_callbackN(v_k, %d, args);@\n" n_fields;
+    Fmt.pf ppf "  CAMLreturn(v_result);@\n";
+    Fmt.pf ppf "}@\n@\n"
+  end
 
 let c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
   let lower = String.lowercase_ascii name in
   c_stub_error_handler ppf lower;
-  c_stub_output ppf ~lower ~ep
+  c_stub_output ppf ~lower ~ep s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 4096 in
@@ -45,6 +86,7 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "#include <caml/memory.h>@\n";
   Fmt.pf ppf "#include <caml/alloc.h>@\n";
   Fmt.pf ppf "#include <caml/fail.h>@\n";
+  Fmt.pf ppf "#include <caml/callback.h>@\n";
   Fmt.pf ppf "#include <stdint.h>@\n";
   Fmt.pf ppf "#include <string.h>@\n";
   Fmt.pf ppf "@\n";
@@ -90,17 +132,6 @@ let gen_ml_record ppf ~type_name kinds =
     kinds;
   Fmt.pf ppf " }@\n@\n"
 
-let gen_ml_constructor ppf ~type_name kinds =
-  Fmt.pf ppf "(fun";
-  List.iter (fun (name, _) -> Fmt.pf ppf " %s" (ml_field_name name)) kinds;
-  Fmt.pf ppf " -> ({ ";
-  List.iteri
-    (fun i (name, _) ->
-      if i > 0 then Fmt.pf ppf "; ";
-      Fmt.pf ppf "%s" (ml_field_name name))
-    kinds;
-  Fmt.pf ppf " } : %s))" type_name
-
 let gen_ml_k_type ppf kinds =
   Fmt.pf ppf "(";
   List.iter (fun (_, kind) -> Fmt.pf ppf "%s -> " (ml_kind_string kind)) kinds;
@@ -116,18 +147,17 @@ let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
       let kinds = Wire.Everparse.Raw.field_kinds s in
       if kinds <> [] then begin
         gen_ml_record ppf ~type_name:lower kinds;
+        Fmt.pf ppf "external %s_parse : bytes -> %s@\n" lower lower;
+        Fmt.pf ppf "  = \"caml_wire_%s_parse\" [@@@@warning \"-61\"]@\n@\n"
+          lower;
         Fmt.pf ppf "external %s_parse_k : %a -> bytes -> 'r@\n" lower
           (fun ppf () -> gen_ml_k_type ppf kinds)
           ();
-        Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-        Fmt.pf ppf "let %s_parse =@\n  %s_parse_k %a@\n@\n" lower lower
-          (fun ppf () -> gen_ml_constructor ppf ~type_name:lower kinds)
-          ()
+        Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower
       end
       else begin
-        Fmt.pf ppf "external %s_parse_k : 'a -> bytes -> 'a@\n" lower;
-        Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-        Fmt.pf ppf "let %s_parse = %s_parse_k ()@\n@\n" lower lower
+        Fmt.pf ppf "external %s_parse : bytes -> unit@\n" lower;
+        Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower
       end)
     structs;
   Format.pp_print_flush ppf ();
@@ -152,18 +182,16 @@ let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
   Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
   if kinds <> [] then begin
     gen_ml_record ppf ~type_name:"t" kinds;
+    Fmt.pf ppf "external parse : bytes -> t@\n";
+    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
     Fmt.pf ppf "external parse_k : %a -> bytes -> 'r@\n"
       (fun ppf () -> gen_ml_k_type ppf kinds)
       ();
-    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-    Fmt.pf ppf "let parse =@\n  parse_k %a@\n"
-      (fun ppf () -> gen_ml_constructor ppf ~type_name:"t" kinds)
-      ()
+    Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n" lower
   end
   else begin
-    Fmt.pf ppf "external parse_k : 'a -> bytes -> 'a@\n";
-    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-    Fmt.pf ppf "let parse = parse_k ()@\n"
+    Fmt.pf ppf "external parse : bytes -> unit@\n";
+    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n" lower
   end;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
@@ -174,48 +202,36 @@ let write_file path content =
   close_out oc
 
 (* Generate the _ExternalTypedefs.h for EverParse output schemas.
-   WIRECTX supports two modes:
-   - v_ptr non-NULL: OCaml continuation (caml_callback per field)
-   - fields non-NULL: C array (store raw int64 per field index)
-   - both NULL: no-op (validation only) *)
+   WIRECTX holds a pointer to a C int64_t array. WireSet callbacks store
+   extracted field values by index. NULL means validation-only (no extraction). *)
 let to_external_typedefs name =
   let buf = Buffer.create 256 in
   let ppf = Format.formatter_of_buffer buf in
   Fmt.pf ppf "/* Generated by wire — defines WireCtx for %s */@\n" name;
   Fmt.pf ppf "#ifndef WIRECTX_DEFINED@\n";
   Fmt.pf ppf "#define WIRECTX_DEFINED@\n@\n";
-  Fmt.pf ppf "#include <caml/mlvalues.h>@\n";
   Fmt.pf ppf "#include <stdint.h>@\n@\n";
-  Fmt.pf ppf "typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;@\n@\n";
+  Fmt.pf ppf "typedef struct { int64_t *fields; } WIRECTX;@\n@\n";
   Fmt.pf ppf "#endif@\n";
   Format.pp_print_flush ppf ();
   Buffer.contents buf
 
 (* Generate WireSet* C function implementations.
-   Each callback applies one field value to the constructor continuation
-   via caml_callback, producing a new partial application or the final record.
-   The idx parameter is unused — fields are applied in declaration order. *)
+   Each callback stores the extracted field value into the C int64_t array
+   at the field's index. When fields is NULL (validation-only), no-op. *)
 let to_wire_setters () =
   let buf = Buffer.create 512 in
   let ppf = Format.formatter_of_buffer buf in
-  Fmt.pf ppf "/* Generated by wire — WireSet* continuation callbacks */@\n@\n";
-  Fmt.pf ppf "#include <stdint.h>@\n";
-  Fmt.pf ppf "#include <caml/mlvalues.h>@\n";
-  Fmt.pf ppf "#include <caml/memory.h>@\n";
-  Fmt.pf ppf "#include <caml/alloc.h>@\n";
-  Fmt.pf ppf "#include <caml/callback.h>@\n@\n";
+  Fmt.pf ppf "/* Generated by wire — WireSet* field extraction */@\n@\n";
+  Fmt.pf ppf "#include <stdint.h>@\n@\n";
   Fmt.pf ppf "#ifndef WIRECTX_DEFINED@\n";
   Fmt.pf ppf "#define WIRECTX_DEFINED@\n";
-  Fmt.pf ppf "typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;@\n";
+  Fmt.pf ppf "typedef struct { int64_t *fields; } WIRECTX;@\n";
   Fmt.pf ppf "#endif@\n@\n";
   List.iter
     (fun (c_type, fn_name) ->
       Fmt.pf ppf "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" fn_name c_type;
-      Fmt.pf ppf "  if (ctx->v_ptr)@\n";
-      Fmt.pf ppf
-        "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), Val_long((long)v));@\n";
-      Fmt.pf ppf "  else if (ctx->fields)@\n";
-      Fmt.pf ppf "    ctx->fields[idx] = (int64_t)v;@\n";
+      Fmt.pf ppf "  if (ctx->fields) ctx->fields[idx] = (int64_t)v;@\n";
       Fmt.pf ppf "}@\n@\n")
     [
       ("uint8_t", "WireSetU8");
@@ -225,18 +241,10 @@ let to_wire_setters () =
       ("uint32_t", "WireSetU32be");
     ];
   Fmt.pf ppf "void WireSetU64(WIRECTX *ctx, uint32_t idx, uint64_t v) {@\n";
-  Fmt.pf ppf "  if (ctx->v_ptr)@\n";
-  Fmt.pf ppf
-    "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
-  Fmt.pf ppf "  else if (ctx->fields)@\n";
-  Fmt.pf ppf "    ctx->fields[idx] = (int64_t)v;@\n";
+  Fmt.pf ppf "  if (ctx->fields) ctx->fields[idx] = (int64_t)v;@\n";
   Fmt.pf ppf "}@\n@\n";
   Fmt.pf ppf "void WireSetU64be(WIRECTX *ctx, uint32_t idx, uint64_t v) {@\n";
-  Fmt.pf ppf "  if (ctx->v_ptr)@\n";
-  Fmt.pf ppf
-    "    *(ctx->v_ptr) = caml_callback(*(ctx->v_ptr), caml_copy_int64(v));@\n";
-  Fmt.pf ppf "  else if (ctx->fields)@\n";
-  Fmt.pf ppf "    ctx->fields[idx] = (int64_t)v;@\n";
+  Fmt.pf ppf "  if (ctx->fields) ctx->fields[idx] = (int64_t)v;@\n";
   Fmt.pf ppf "}@\n@\n";
   Format.pp_print_flush ppf ();
   Buffer.contents buf

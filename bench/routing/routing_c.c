@@ -14,7 +14,7 @@
 /* WIRECTX definition — must match wire_stubs generated version */
 #ifndef WIRECTX_DEFINED
 #define WIRECTX_DEFINED
-typedef struct { value *v_ptr; int64_t *fields; } WIRECTX;
+typedef struct { int64_t *fields; } WIRECTX;
 #endif
 
 /* WireSet functions provided by c_stubs_c at link time */
@@ -68,7 +68,7 @@ static void route_counts(uint8_t *buf, int total_bytes, int n, int counts[4]) {
   int hdr = 6;  /* SpacePacket primary header size */
   int off = 0;
   int64_t fields[SP_N_FIELDS];
-  WIRECTX ctx = { NULL, fields };
+  WIRECTX ctx = { fields };
 
   for (int i = 0; i < n; i++) {
     if (off + hdr > total_bytes) off = 0;
