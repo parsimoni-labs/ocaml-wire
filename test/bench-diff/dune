@@ -3,3 +3,11 @@
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries demo_bench_diff alcotest))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps test.exe)
+ (action
+  (run ./test.exe)))

@@ -16,3 +16,11 @@
   gateway_bench_c
   alcotest
   unix))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps test_app.exe)
+ (action
+  (run ./test_app.exe)))
