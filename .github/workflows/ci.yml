@@ -26,7 +26,6 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
           dune-version: '3.21'
 
-      - run: opam pin add alcobar https://github.com/samoht/alcobar.git --no-action
       - run: opam install . --deps-only --with-test
       - run: opam exec -- dune build @install
       - run: opam exec -- dune runtest
