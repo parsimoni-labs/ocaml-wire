@@ -281,14 +281,22 @@ end
 
 (** {1 Fields}
 
-    A field is a named piece of a wire description.
+    A field is a named, typed piece of a wire layout — the building block for
+    everything else.
 
-    Use {!Field.v} to define reusable named fields once. The same field
-    description can then be:
+    Define each field once with {!Field.v}, then reuse it everywhere: bind it
+    into a {!Codec} for zero-copy access and full-record round-trips, reference
+    it from dependent expressions with {!Field.ref}, or project it to EverParse
+    3D via {!Everparse.schema}.
 
-    - bound into a {!Codec} with {!Codec.($)};
-    - referenced from dependent expressions with {!Field.ref};
-    - reused by advanced export code through {!Everparse.Raw}. *)
+    {[
+      let f_version = Field.v "Version" (bits ~width:4 U8)
+      let f_length = Field.v "Length" uint16be
+      let f_data = Field.v "Data" (byte_slice ~size:(Field.ref f_length))
+    ]}
+
+    Fields carry no buffer position — that comes from the {!Codec} they are
+    bound into. The same field can appear in multiple codecs. *)
 
 module Field : sig
   type 'a t
@@ -513,13 +521,19 @@ val encode_to_string : 'a typ -> 'a -> string
 
 (** {1 Codecs}
 
-    This is the main API for record-shaped formats. Create fields with
-    {!Field.v}, bind them with {!Codec.($)}, and assemble with {!Codec.v}. Then
-    decode, encode, and access individual fields at zero cost.
+    A codec is the primary way to work with a wire format. It binds {!Field}s to
+    an OCaml record type and provides:
 
-    The codec is the single OCaml authority for a format's decode, encode,
-    wire-size, and field access. {!Everparse.schema} projects it to EverParse
-    3D. *)
+    - {b Zero-copy field access}: {!Codec.get} and {!Codec.set} read and write
+      individual fields directly in a buffer — no intermediate record allocated.
+    - {b Full-record round-trip}: {!Codec.decode} and {!Codec.encode} convert
+      between bytes and OCaml values.
+    - {b Bitfield batch access}: {!Codec.load_word} reads a packed word once,
+      then {!Codec.extract} retrieves each sub-field with pure shift+mask.
+
+    All three modes derive from the same definition, so the layout is always
+    consistent. {!Everparse.schema} projects the same codec to a verified C
+    parser — no separate description to maintain. *)
 
 module Codec : sig
   type 'r t
