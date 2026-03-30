@@ -1,38 +1,37 @@
 (** Binary wire format descriptions.
 
-    {b Author} a format with {!Field} and {!Codec}. {b Export} it with
-    {!Everparse}. {b Generate C} with [Wire_3d]. {b Call generated C from OCaml}
-    with [Wire_stubs]. {b Test} with [Wire_diff].
+    A wire format is a sequence of typed {!Field}s — integers, bitfields,
+    enumerations, byte arrays — laid out at fixed bit offsets in a buffer. A
+    {!Codec} binds those fields to an OCaml record, giving you:
+
+    - Zero-copy field access via staged getters and setters.
+    - Full-record [decode] / [encode] between bytes and OCaml values.
+    - Constraint checking and dependent-size fields.
 
     {[
       type header = { version : int; length : int }
 
-      (* 1. Name fields and bind them *)
       let f_version = Field.v "Version" (bits ~width:4 U8)
       let f_length = Field.v "Length" uint16be
       let bf_version = Codec.(f_version $ fun h -> h.version)
       let bf_length = Codec.(f_length $ fun h -> h.length)
 
-      (* 2. Build a codec *)
       let codec =
-        let open Codec in
-        v "Header"
+        Codec.v "Header"
           (fun version length -> { version; length })
           [ bf_version; bf_length ]
 
-      (* 3. Use it *)
-      let buf = Bytes.create (Codec.wire_size codec)
-      let () = Codec.encode codec { version = 1; length = 42 } buf 0
+      (* Staged zero-copy access *)
       let get_version = Staged.unstage (Codec.get codec bf_version)
       let v = get_version buf 0
 
-      (* 4. Export to EverParse 3D *)
-      let schema = Everparse.schema codec
-      let () = Everparse.write_3d ~outdir:"schemas" [ schema ]
+      (* Full-record round-trip *)
+      let () = Codec.encode codec { version = 1; length = 42 } buf 0
+      let h = Codec.decode codec buf 0
     ]}
 
-    The generated 3D is a projection of the OCaml description, not a second
-    source of truth. *)
+    The same description can be projected to an EverParse 3D schema via
+    {!Everparse}, for verified C parser generation. *)
 
 module Staged : sig
   type +'a t
