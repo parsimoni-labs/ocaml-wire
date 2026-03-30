@@ -29,10 +29,15 @@ val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 
 val decode : 'r t -> bytes -> int -> 'r
-(** [decode c buf off] decodes a record from [buf] at offset [off]. *)
+(** [decode c buf off] decodes a record from [buf] at offset [off].
+
+    Raises {!Types.Parse_error} if the buffer is too short or a field constraint
+    or where-clause fails. *)
 
 val encode : 'r t -> 'r -> bytes -> int -> unit
-(** [encode c r buf off] encodes record [r] into [buf] at offset [off]. *)
+(** [encode c r buf off] encodes record [r] into [buf] at offset [off].
+
+    Raises [Invalid_argument] if the destination buffer is too short. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
