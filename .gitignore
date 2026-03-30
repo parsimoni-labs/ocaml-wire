@@ -5,6 +5,7 @@ _build/
 *.cmi
 *.cmo
 *.o
+*.class
 prof.txt
 prof.trace/
 *.3d
