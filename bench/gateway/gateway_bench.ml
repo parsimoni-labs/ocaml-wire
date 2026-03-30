@@ -139,12 +139,38 @@ let benchmark ~n_frames =
   let st = state n_frames in
   let ocaml_result () = process_all_frames st in
   let c_result () = c_tm_reassemble_checksum st.buf 0 in
+  let pkt_payload = 64 in
+  let pkt_size = sp_hdr + pkt_payload in
   let ffi_frame = ref 0 in
   let ffi_reset () = ffi_frame := 0 in
   let ffi_fn _buf =
-    let off = !ffi_frame mod st.n_frames * cadu_size in
-    ignore (C_stubs.tmframe_parse st.buf off);
+    let base = !ffi_frame mod st.n_frames * cadu_size in
+    let tf = C_stubs.tmframe_parse st.buf base in
+    ignore (Sys.opaque_identity tf.vcid);
+    ignore (Sys.opaque_identity tf.firsthdrptr);
+    let off = ref (base + tm_hdr + tf.firsthdrptr) in
+    while !off + pkt_size <= base + tm_hdr + data_field_size do
+      let sp = C_stubs.spacepacket_parse st.buf !off in
+      ignore (Sys.opaque_identity sp.apid);
+      ignore (Sys.opaque_identity sp.seqcount);
+      off := !off + pkt_size
+    done;
     incr ffi_frame
+  in
+  let ffi_result () =
+    let checksum = ref checksum_init in
+    for frame = 0 to st.n_frames - 1 do
+      let base = frame * cadu_size in
+      let tf = C_stubs.tmframe_parse st.buf base in
+      checksum := hash_int (hash_int !checksum tf.vcid) tf.firsthdrptr;
+      let off = ref (base + tm_hdr + tf.firsthdrptr) in
+      while !off + pkt_size <= base + tm_hdr + data_field_size do
+        let sp = C_stubs.spacepacket_parse st.buf !off in
+        checksum := hash_int (hash_int !checksum sp.apid) sp.seqcount;
+        off := !off + pkt_size
+      done
+    done;
+    !checksum
   in
   let reset () =
     reset st;
@@ -154,7 +180,8 @@ let benchmark ~n_frames =
     v "Wire OCaml" ~size:cadu_size ~reset (step st)
     |> with_c c_tm_reassemble st.buf
     |> with_ffi ffi_fn Bytes.empty
-    |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~c:c_result ocaml_result
+    |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~ffi:ffi_result ~c:c_result
+         ocaml_result
   in
   (t, st)
 

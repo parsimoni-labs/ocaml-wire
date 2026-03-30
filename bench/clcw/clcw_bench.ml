@@ -88,11 +88,30 @@ let benchmark ~n_words =
   let ocaml_result () = run_all st in
   let c_result () = c_clcw_poll_result st.buf 0 in
   let ffi_index = ref 0 in
-  let ffi_reset () = ffi_index := 0 in
+  let ffi_anomalies = ref 0 in
+  let ffi_expected_seq = ref 0 in
+  let ffi_reset () =
+    ffi_index := 0;
+    ffi_anomalies := 0;
+    ffi_expected_seq := 0
+  in
   let ffi_fn _buf =
     let off = !ffi_index mod st.n_words * word_size in
-    ignore (C_stubs.clcw_parse st.buf off);
+    let r = C_stubs.clcw_parse st.buf off in
+    let expected_report = !ffi_expected_seq land 0xFF in
+    if
+      r.lockout <> 0 || r.wait <> 0 || r.retransmit <> 0
+      || r.reportvalue <> expected_report
+    then incr ffi_anomalies;
+    ffi_expected_seq := (r.reportvalue + 1) land 0xFF;
     incr ffi_index
+  in
+  let ffi_result () =
+    ffi_reset ();
+    for _ = 0 to st.n_words - 1 do
+      ffi_fn Bytes.empty
+    done;
+    !ffi_anomalies
   in
   let reset () =
     reset st;
@@ -102,7 +121,8 @@ let benchmark ~n_words =
     v "Wire OCaml" ~size:word_size ~reset (step st)
     |> with_c c_clcw_poll st.buf
     |> with_ffi ffi_fn Bytes.empty
-    |> with_expect ~equal:Int.equal ~pp:Fmt.int ~c:c_result ocaml_result
+    |> with_expect ~equal:Int.equal ~pp:Fmt.int ~ffi:ffi_result ~c:c_result
+         ocaml_result
   in
   (t, st)
 

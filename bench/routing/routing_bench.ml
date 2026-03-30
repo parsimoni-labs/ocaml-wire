@@ -128,11 +128,24 @@ let benchmark ~n_pkts =
   let c_result () = c_apid_route_counts buf 0 n_pkts in
   let hdr = st.hdr in
   let ffi_off = ref 0 in
-  let ffi_reset () = ffi_off := 0 in
+  let ffi_counts = Array.make 4 0 in
+  let ffi_reset () =
+    ffi_off := 0;
+    Array.fill ffi_counts 0 4 0
+  in
   let ffi_fn _buf =
     if !ffi_off + hdr > total_bytes then ffi_off := 0;
-    ignore (C_stubs.spacepacket_parse buf !ffi_off);
-    ffi_off := !ffi_off + hdr
+    let r = C_stubs.spacepacket_parse buf !ffi_off in
+    let handler_id = routing_table.(r.apid) in
+    ffi_counts.(handler_id) <- ffi_counts.(handler_id) + 1;
+    ffi_off := !ffi_off + hdr + r.datalength + 1
+  in
+  let ffi_result () =
+    ffi_reset ();
+    for _ = 0 to n_pkts - 1 do
+      ffi_fn Bytes.empty
+    done;
+    (ffi_counts.(0), ffi_counts.(1), ffi_counts.(2), ffi_counts.(3))
   in
   let reset () =
     reset st;
@@ -142,7 +155,8 @@ let benchmark ~n_pkts =
     v "Wire OCaml" ~size:hdr ~reset (step st)
     |> with_c c_apid_route buf
     |> with_ffi ffi_fn Bytes.empty
-    |> with_expect ~equal:( = ) ~pp:pp_counts ~c:c_result ocaml_result
+    |> with_expect ~equal:( = ) ~pp:pp_counts ~ffi:ffi_result ~c:c_result
+         ocaml_result
   in
   (t, payload_bytes, st, buf)
 
