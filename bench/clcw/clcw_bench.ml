@@ -26,6 +26,12 @@ let generate_stream n =
   done;
   buf
 
+let detect_anomaly ~lockout ~wait ~retransmit ~report anomalies expected_seq =
+  let expected_report = !expected_seq land 0xFF in
+  if lockout <> 0 || wait <> 0 || retransmit <> 0 || report <> expected_report
+  then incr anomalies;
+  expected_seq := (report + 1) land 0xFF
+
 type state = {
   buf : bytes;
   n_words : int;
@@ -47,14 +53,9 @@ let state n_words =
   let expected_seq = ref 0 in
   let process_word buf off =
     let w = load buf off in
-    let lockout = C.extract bf_lockout w in
-    let wait = C.extract bf_wait w in
-    let retransmit = C.extract bf_retransmit w in
-    let report = C.extract bf_report w in
-    let expected_report = !expected_seq land 0xFF in
-    if lockout <> 0 || wait <> 0 || retransmit <> 0 || report <> expected_report
-    then incr anomalies;
-    expected_seq := (report + 1) land 0xFF
+    detect_anomaly ~lockout:(C.extract bf_lockout w) ~wait:(C.extract bf_wait w)
+      ~retransmit:(C.extract bf_retransmit w)
+      ~report:(C.extract bf_report w) anomalies expected_seq
   in
   let step_once, reset_cycle =
     cycling ~data:buf ~n_items:n_words ~size:word_size process_word
@@ -87,42 +88,10 @@ let benchmark ~n_words =
   let st = state n_words in
   let ocaml_result () = run_all st in
   let c_result () = c_clcw_poll_result st.buf 0 in
-  let ffi_index = ref 0 in
-  let ffi_anomalies = ref 0 in
-  let ffi_expected_seq = ref 0 in
-  let ffi_reset () =
-    ffi_index := 0;
-    ffi_anomalies := 0;
-    ffi_expected_seq := 0
-  in
-  let ffi_fn _buf =
-    let off = !ffi_index mod st.n_words * word_size in
-    let r = C_stubs.clcw_parse st.buf off in
-    let expected_report = !ffi_expected_seq land 0xFF in
-    if
-      r.lockout <> 0 || r.wait <> 0 || r.retransmit <> 0
-      || r.reportvalue <> expected_report
-    then incr ffi_anomalies;
-    ffi_expected_seq := (r.reportvalue + 1) land 0xFF;
-    incr ffi_index
-  in
-  let ffi_result () =
-    ffi_reset ();
-    for _ = 0 to st.n_words - 1 do
-      ffi_fn Bytes.empty
-    done;
-    !ffi_anomalies
-  in
-  let reset () =
-    reset st;
-    ffi_reset ()
-  in
   let t =
-    v "Wire OCaml" ~size:word_size ~reset (step st)
+    v "Wire OCaml" ~size:word_size ~reset:(fun () -> reset st) (step st)
     |> with_c c_clcw_poll st.buf
-    |> with_ffi ffi_fn Bytes.empty
-    |> with_expect ~equal:Int.equal ~pp:Fmt.int ~ffi:ffi_result ~c:c_result
-         ocaml_result
+    |> with_expect ~equal:Int.equal ~pp:Fmt.int ~c:c_result ocaml_result
   in
   (t, st)
 

@@ -119,69 +119,34 @@ let state n_frames =
 let reset state = state.reset_cycle ()
 let step state () = state.scan_once ()
 
-let checksum_frame state checksum base =
-  let vcid = state.get_vcid state.buf base in
-  let fhp = state.get_fhp state.buf base in
+let checksum_walk ~vcid ~fhp ~walk checksum base =
   let checksum = hash_int (hash_int checksum vcid) fhp in
   let checksum = ref checksum in
-  state.walk_frame base (fun apid seq ->
-      checksum := hash_int (hash_int !checksum apid) seq);
+  walk base (fun apid seq -> checksum := hash_int (hash_int !checksum apid) seq);
   !checksum
 
-let process_all_frames state =
+let process_all ~n_frames ~walk ~get_vcid ~get_fhp =
   let checksum = ref checksum_init in
-  for frame = 0 to state.n_frames - 1 do
-    checksum := checksum_frame state !checksum (frame * cadu_size)
+  for frame = 0 to n_frames - 1 do
+    let base = frame * cadu_size in
+    checksum :=
+      checksum_walk ~vcid:(get_vcid base) ~fhp:(get_fhp base) ~walk !checksum
+        base
   done;
   !checksum
 
 let benchmark ~n_frames =
   let st = state n_frames in
-  let ocaml_result () = process_all_frames st in
+  let ocaml_result () =
+    process_all ~n_frames:st.n_frames ~walk:st.walk_frame
+      ~get_vcid:(fun base -> st.get_vcid st.buf base)
+      ~get_fhp:(fun base -> st.get_fhp st.buf base)
+  in
   let c_result () = c_tm_reassemble_checksum st.buf 0 in
-  let pkt_payload = 64 in
-  let pkt_size = sp_hdr + pkt_payload in
-  let ffi_frame = ref 0 in
-  let ffi_reset () = ffi_frame := 0 in
-  let ffi_fn _buf =
-    let base = !ffi_frame mod st.n_frames * cadu_size in
-    let tf = C_stubs.tmframe_parse st.buf base in
-    ignore (Sys.opaque_identity tf.vcid);
-    ignore (Sys.opaque_identity tf.firsthdrptr);
-    let off = ref (base + tm_hdr + tf.firsthdrptr) in
-    while !off + pkt_size <= base + tm_hdr + data_field_size do
-      let sp = C_stubs.spacepacket_parse st.buf !off in
-      ignore (Sys.opaque_identity sp.apid);
-      ignore (Sys.opaque_identity sp.seqcount);
-      off := !off + pkt_size
-    done;
-    incr ffi_frame
-  in
-  let ffi_result () =
-    let checksum = ref checksum_init in
-    for frame = 0 to st.n_frames - 1 do
-      let base = frame * cadu_size in
-      let tf = C_stubs.tmframe_parse st.buf base in
-      checksum := hash_int (hash_int !checksum tf.vcid) tf.firsthdrptr;
-      let off = ref (base + tm_hdr + tf.firsthdrptr) in
-      while !off + pkt_size <= base + tm_hdr + data_field_size do
-        let sp = C_stubs.spacepacket_parse st.buf !off in
-        checksum := hash_int (hash_int !checksum sp.apid) sp.seqcount;
-        off := !off + pkt_size
-      done
-    done;
-    !checksum
-  in
-  let reset () =
-    reset st;
-    ffi_reset ()
-  in
   let t =
-    v "Wire OCaml" ~size:cadu_size ~reset (step st)
+    v "Wire OCaml" ~size:cadu_size ~reset:(fun () -> reset st) (step st)
     |> with_c c_tm_reassemble st.buf
-    |> with_ffi ffi_fn Bytes.empty
-    |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~ffi:ffi_result ~c:c_result
-         ocaml_result
+    |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~c:c_result ocaml_result
   in
   (t, st)
 
@@ -197,7 +162,11 @@ let main () =
     "TM frame reassembly (%d frames, %d-byte CADUs, %d embedded packets)\n\n"
     n_frames cadu_size st.total_pkts;
   run_table ~title:"TM frame reassembly" ~n:n_frames ~unit:"frm" [ t ];
-  let ocaml_checksum = process_all_frames st in
+  let ocaml_checksum =
+    process_all ~n_frames:st.n_frames ~walk:st.walk_frame
+      ~get_vcid:(fun base -> st.get_vcid st.buf base)
+      ~get_fhp:(fun base -> st.get_fhp st.buf base)
+  in
   let c_checksum = c_tm_reassemble_checksum st.buf 0 in
   Fmt.pr "\n  OCaml checksum: 0x%Lx\n  C checksum:     0x%Lx\n" ocaml_checksum
     c_checksum

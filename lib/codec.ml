@@ -1346,11 +1346,11 @@ let to_struct t =
   | [], None -> struct' t.t_name t.t_struct_fields
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
 
-let get (type a r) (_codec : r t) (f : (a, r) field) :
+let[@inline] get (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
   Staged.stage f.f_reader
 
-let set (type a r) (_codec : r t) (f : (a, r) field) :
+let[@inline] set (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
   Staged.stage f.f_writer
 
