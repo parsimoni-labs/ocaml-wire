@@ -127,7 +127,7 @@ let clcw_codec =
         (Field.v "StatusField" (bits ~width:3 U32be) $ fun c -> c.cw_status);
         (Field.v "COPInEffect" (bits ~width:2 U32be) $ fun c -> c.cw_cop);
         (Field.v "VCID" (bits ~width:6 U32be) $ fun c -> c.cw_vcid);
-        (Field.v "Spare" (bits ~width:2 U32be) $ fun c -> c.cw_spare);
+        (Field.v "Spare" (bits ~width:3 U32be) $ fun c -> c.cw_spare);
         (Field.v "NoRF" (bits ~width:1 U32be) $ fun c -> c.cw_no_rf);
         (Field.v "NoBitlock" (bits ~width:1 U32be) $ fun c -> c.cw_no_bitlock);
         bf_cw_lockout;
