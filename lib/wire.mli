@@ -121,9 +121,6 @@ module Param : sig
   (** Parameter environment. Create with {!Codec.env}, bind inputs with {!bind},
       read outputs with {!get}. *)
 
-  val empty_env : env
-  (** Empty environment (for codecs with no parameters). *)
-
   val bind : ('a, input) t -> 'a -> env -> env
   (** [bind p v env] returns an environment with input [p] set to [v]. *)
 
@@ -478,9 +475,12 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
 val decode : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 (** Decodes one value from the current reader position.
 
-    Parameters referenced by the description must be bound in the closed-over
-    {!Param} handles before decoding. Output parameters are updated by actions
-    during decoding; read them back with {!Param.get}.
+    If the description references parameters, bind them with {!Param.bind}
+    before calling decode. Output parameters are updated during decoding; read
+    them back with {!Param.get}.
+
+    For the zero-copy codec path, prefer {!Codec.decode_with} which takes an
+    explicit {!Param.env}.
 
     Decoding is prefix-based: success does not imply that the reader is
     exhausted afterwards. *)

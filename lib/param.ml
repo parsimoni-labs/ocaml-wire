@@ -90,8 +90,6 @@ let expr t : int Types.expr = Types.Param_ref t
 
 type env = Types.param_env
 
-let empty_env : env = { Types.pe_slots = [||] }
-
 let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   let iv = to_int p.Types.ph_typ v in
   let slots = Array.copy env.pe_slots in

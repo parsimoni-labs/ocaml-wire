@@ -27,9 +27,6 @@ type env = Types.param_env
 (** Immutable parameter environment backed by a flat [int array]. Create one
     with {!Codec.env}, bind inputs with {!bind}, read outputs with {!get}. *)
 
-val empty_env : env
-(** Empty environment (for codecs with no parameters). *)
-
 val bind : ('a, input) t -> 'a -> env -> env
 (** [bind p v env] returns an environment with input [p] set to [v]. *)
 
