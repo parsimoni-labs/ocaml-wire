@@ -252,8 +252,9 @@ make clean         # dune clean
 | `bench/clcw/` | CLCW polling loop: Wire OCaml vs EverParse C |
 | `bench/routing/` | APID demux throughput: Wire OCaml vs EverParse C |
 | `bench/gateway/` | TM frame reassembly: Wire OCaml vs EverParse C |
-| `fuzz/` | Fuzz tests (wire, c, param) covering all DSL combinators |
-| `test/` | Alcotest unit tests and differential tests |
+| `fuzz/` | Fuzz tests: crash safety and roundtrip correctness (OCaml-only, no C dependency) |
+| `test/` | Alcotest unit tests |
+| `test/diff/` | Differential fuzz tests: random schemas, OCaml vs EverParse C (needs `3d.exe`) |
 | `.github/workflows/` | CI workflow |
 
 ## References
