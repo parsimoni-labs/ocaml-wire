@@ -1,21 +1,23 @@
 # Wire Benchmarks
 
-All benchmarks compare three tiers derived from the same Wire DSL definition:
+All benchmarks derive from the same Wire DSL definition. The field-level
+demo benchmark (`bench/demo/`) compares three tiers:
 
 1. **Pure OCaml** -- `Wire.Codec.get/set` (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a tight C loop
 3. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
+
+The application benchmarks (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
+compare two tiers: Pure OCaml vs EverParse C.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
 ## Rules
 
 - **No hand-written C parsers.** All field extraction in C must go through
-  EverParse-generated validators (output types + WireSet callbacks).
-- C benchmark loops may contain application logic (routing decisions, anomaly
-  counting, frame reassembly), but field access must use the generated
-  EverParse API — never manual bitfield manipulation.
-- All three tiers must operate on the same data and produce the same results.
+  EverParse-generated validators (output types + WireSet callbacks), not
+  manual bitfield manipulation.
+- Both tiers must operate on the same data and produce the same results.
 
 ## Field-level codec (`bench/demo/`)
 

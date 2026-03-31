@@ -2,7 +2,7 @@
 
     Simulates a SpaceWire CCSDS Packet Transfer Protocol router using Wire's
     staged Codec.get — all field access is generated from the Wire DSL. The C
-    baseline does the same work with hand-written bitfield extraction. *)
+    baseline uses EverParse-generated validators for field extraction. *)
 
 open Bench_lib
 module C = Wire.Codec
