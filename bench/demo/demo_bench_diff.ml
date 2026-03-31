@@ -44,11 +44,13 @@ let verify_of_id id =
   let (C (Read_case r)) =
     List.find (fun (C (Read_case r)) -> r.id = id) projection_cases
   in
+  let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name r.struct_) in
   fun () ->
     Array.iteri
       (fun i item ->
         let buf = Bytes.unsafe_to_string item in
-        match c.packed.test_read buf with
+        (* Check projected C path vs OCaml *)
+        (match c.packed.test_read buf with
         | Wire_diff.Match -> ()
         | Wire_diff.Both_failed ->
             Fmt.failwith "%s: read failed on item %d" c.label i
@@ -57,5 +59,7 @@ let verify_of_id id =
         | Wire_diff.Only_c_ok msg ->
             Fmt.failwith "%s: only C succeeded on item %d: %s" c.label i msg
         | Wire_diff.Only_ocaml_ok msg ->
-            Fmt.failwith "%s: only OCaml succeeded on item %d: %s" c.label i msg)
+            Fmt.failwith "%s: only OCaml succeeded on item %d: %s" c.label i msg);
+        (* Check FFI parse path doesn't crash *)
+        stubs.ffi_parse item 0)
       r.dataset.items
