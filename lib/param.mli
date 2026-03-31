@@ -13,8 +13,8 @@ val input : string -> 'a Types.typ -> ('a, input) t
 val output : string -> 'a Types.typ -> ('a, output) t
 (** [output name typ] declares an output parameter (initially 0). *)
 
-val v : ('a, 'k) t -> Types.param
-(** Formal declaration for 3D rendering. *)
+val decl : ('a, 'k) t -> Types.param
+(** Project to an untyped formal declaration (for 3D rendering). *)
 
 val name : ('a, 'k) t -> string
 

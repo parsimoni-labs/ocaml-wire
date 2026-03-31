@@ -406,7 +406,7 @@ let test_action () =
   in
   let s =
     Wire.Everparse.Raw.param_struct "WithAction"
-      [ Wire.Param.v ptr ]
+      [ Wire.Param.decl ptr ]
       [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
@@ -419,7 +419,7 @@ let test_on_act () =
   let act = Wire.Action.on_act [ Wire.Action.assign ptr (Wire.int 0) ] in
   let s =
     Wire.Everparse.Raw.param_struct "WithOnAct"
-      [ Wire.Param.v ptr ]
+      [ Wire.Param.decl ptr ]
       [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
@@ -450,7 +450,7 @@ let test_action_if () =
   let act = Wire.Action.on_success [ stmt ] in
   let s =
     Wire.Everparse.Raw.param_struct "WithIf"
-      [ Wire.Param.v ptr ]
+      [ Wire.Param.decl ptr ]
       [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
@@ -470,7 +470,7 @@ let test_var () =
   in
   let s =
     Wire.Everparse.Raw.param_struct "WithVar"
-      [ Wire.Param.v ptr ]
+      [ Wire.Param.decl ptr ]
       [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in

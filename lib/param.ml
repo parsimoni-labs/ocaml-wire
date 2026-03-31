@@ -76,7 +76,7 @@ let output name typ =
     ph_env_idx = -1;
   }
 
-let v (t : ('a, 'k) t) : Types.param =
+let decl (t : ('a, 'k) t) : Types.param =
   {
     param_name = t.ph_name;
     param_typ = t.ph_packed_typ;

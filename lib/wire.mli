@@ -112,8 +112,8 @@ module Param : sig
   val output : string -> 'a typ -> ('a, output) t
   (** [output name typ] declares an output parameter. *)
 
-  val v : ('a, 'k) t -> param
-  (** Formal declaration for 3D rendering. *)
+  val decl : ('a, 'k) t -> param
+  (** Project to an untyped formal declaration (for 3D rendering). *)
 
   val name : ('a, 'k) t -> string
 

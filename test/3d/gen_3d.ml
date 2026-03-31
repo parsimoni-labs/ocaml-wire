@@ -22,7 +22,7 @@ let bitfields () =
   let f_x = field "x" (type_ref "BF") in
   let bf2 =
     param_struct "BF2"
-      [ Param.v outx ]
+      [ Param.decl outx ]
       [
         field "x"
           ~action:

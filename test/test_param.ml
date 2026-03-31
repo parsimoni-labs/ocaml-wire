@@ -4,11 +4,11 @@
 open Wire
 open Wire.Everparse.Raw
 
-(* ── Param.input / Param.output / Param.v ── *)
+(* ── Param.input / Param.output / Param.decl ── *)
 
 let test_input_spec () =
   let p = Param.input "limit" uint8 in
-  let spec = Param.v p in
+  let spec = Param.decl p in
   let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
@@ -21,7 +21,7 @@ let test_input_spec () =
 
 let test_output_spec () =
   let p = Param.output "out" uint16be in
-  let spec = Param.v p in
+  let spec = Param.decl p in
   let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
@@ -257,7 +257,7 @@ let test_3d_rendering () =
   let f_limit = Field.v "limit" uint16be in
   let s =
     param_struct "Rendered"
-      [ Param.v limit; Param.v out ]
+      [ Param.decl limit; Param.decl out ]
       ~where:Expr.(Field.ref f_x <= Field.ref f_limit)
       [
         field "x"

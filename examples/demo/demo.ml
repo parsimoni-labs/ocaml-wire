@@ -539,7 +539,7 @@ let action_full_struct =
   let f_value = field "Value" uint16be in
   let f_x = field "x" uint16be in
   param_struct "ActionFull"
-    [ Param.v out_value ]
+    [ Param.decl out_value ]
     [
       field "Tag" uint8;
       field "Value"
@@ -562,7 +562,7 @@ let param_demo_struct =
   let f_pd_length = field "Length" uint16be in
   let f_pd_max_len = field "max_len" uint16be in
   param_struct "BoundedPayload"
-    [ param "max_len" uint16be; Param.v out_len ]
+    [ param "max_len" uint16be; Param.decl out_len ]
     ~where:Expr.(field_ref f_pd_length <= field_ref f_pd_max_len)
     [
       field "Length"
