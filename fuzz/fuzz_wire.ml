@@ -226,6 +226,29 @@ let test_parse_struct_bitfields buf =
   let _ = Wire.Codec.decode bf_codec (Bytes.of_string buf) 0 in
   ()
 
+(* Bitfield encode overflow: arbitrary ints must either fit and roundtrip,
+   or raise Invalid_argument when they exceed the field width. *)
+let test_bf_encode_overflow a b c d =
+  let v = { bf_a = a; bf_b = b; bf_c = c; bf_d = d } in
+  let fits_a = a lsr 3 = 0 && a >= 0 in
+  let fits_b = b lsr 5 = 0 && b >= 0 in
+  let fits_c = c lsr 10 = 0 && c >= 0 in
+  let fits_d = d lsr 6 = 0 && d >= 0 in
+  let all_fit = fits_a && fits_b && fits_c && fits_d in
+  match encode_record_to_string bf_codec v with
+  | exception Invalid_argument _ ->
+      if all_fit then fail "unexpected overflow for in-range values"
+  | Error _ -> fail "unexpected encode error"
+  | Ok encoded -> (
+      if not all_fit then fail "expected overflow but encode succeeded";
+      match decode_record_from_string bf_codec encoded with
+      | Ok decoded ->
+          if v.bf_a <> decoded.bf_a then fail "bf_a mismatch";
+          if v.bf_b <> decoded.bf_b then fail "bf_b mismatch";
+          if v.bf_c <> decoded.bf_c then fail "bf_c mismatch";
+          if v.bf_d <> decoded.bf_d then fail "bf_d mismatch"
+      | Error _ -> fail "bf roundtrip decode failed")
+
 let test_parse_anon_field buf =
   let buf = truncate buf in
   let c =
@@ -801,6 +824,8 @@ let record_tests =
     test_case "record decode crash" [ bytes ] test_record_decode_crash;
     test_case "record be roundtrip" [ int; int ] test_record_be_roundtrip;
     test_case "record bool roundtrip" [ int ] test_record_bool_roundtrip;
+    test_case "bf encode overflow" [ int; int; int; int ]
+      test_bf_encode_overflow;
   ]
 
 let stream_tests =

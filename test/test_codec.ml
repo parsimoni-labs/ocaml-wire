@@ -354,6 +354,61 @@ let test_codec_bitfield_multi_group () =
           Alcotest.(check int) "len" v.bf_len decoded.bf_len
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+let test_codec_bitfield_overflow_u8 () =
+  let v = { bf_a = 0x8; bf_b = 0; bf_c = 0; bf_d = 0 } in
+  (* bf_a is 3 bits, 0x8 = 8 exceeds max 7 *)
+  match encode_record_to_string bf32_codec v with
+  | Ok _ -> Alcotest.fail "expected overflow for 3-bit field with value 0x8"
+  | Error _ -> ()
+  | exception Invalid_argument _ -> ()
+
+let test_codec_bitfield_overflow_u16 () =
+  let v =
+    { bf_ver = 0; bf_flags = 0; bf_id = 0x800; bf_count = 0; bf_len = 0 }
+  in
+  (* bf_id is 11 bits, 0x800 = 2048 exceeds max 2047 *)
+  match encode_record_to_string bf16_codec v with
+  | Ok _ -> Alcotest.fail "expected overflow for 11-bit field with value 0x800"
+  | Error _ -> ()
+  | exception Invalid_argument _ -> ()
+
+let test_codec_bitfield_overflow_u32 () =
+  let v = { bf_a = 0; bf_b = 0; bf_c = 0x10000; bf_d = 0 } in
+  (* bf_c is 16 bits, 0x10000 exceeds max 0xFFFF *)
+  match encode_record_to_string bf32_codec v with
+  | Ok _ ->
+      Alcotest.fail "expected overflow for 16-bit field with value 0x10000"
+  | Error _ -> ()
+  | exception Invalid_argument _ -> ()
+
+let test_codec_bitfield_max_valid () =
+  (* All fields at their maximum valid values *)
+  let v = { bf_a = 7; bf_b = 31; bf_c = 0xFFFF; bf_d = 0xFF } in
+  match encode_record_to_string bf32_codec v with
+  | Error e -> Alcotest.failf "encode max valid: %a" pp_parse_error e
+  | Ok encoded -> (
+      match decode_record_from_string bf32_codec encoded with
+      | Ok decoded ->
+          Alcotest.(check int) "a" 7 decoded.bf_a;
+          Alcotest.(check int) "b" 31 decoded.bf_b;
+          Alcotest.(check int) "c" 0xFFFF decoded.bf_c;
+          Alcotest.(check int) "d" 0xFF decoded.bf_d
+      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+
+let test_codec_bitfield_overflow_1bit () =
+  (* Single-bit field: only 0 and 1 are valid *)
+  let f = Field.v "flag" (bits ~width:1 U8) in
+  let codec = Codec.v "OneBit" Fun.id Codec.[ f $ Fun.id ] in
+  let ws = Codec.wire_size codec in
+  let buf = Bytes.create ws in
+  (try
+     Codec.encode codec 2 buf 0;
+     Alcotest.fail "expected overflow for 1-bit field with value 2"
+   with Invalid_argument _ -> ());
+  (* 0 and 1 should work *)
+  Codec.encode codec 0 buf 0;
+  Codec.encode codec 1 buf 0
+
 let test_codec_bitfield_to_struct () =
   let s = Everparse.struct_of_codec bf32_codec in
   let m = module_ [ typedef s ] in
@@ -1371,6 +1426,16 @@ let suite =
         test_codec_bitfield_multi_group;
       Alcotest.test_case "codec bitfield: struct_of_codec" `Quick
         test_codec_bitfield_to_struct;
+      Alcotest.test_case "codec bitfield: overflow u8" `Quick
+        test_codec_bitfield_overflow_u8;
+      Alcotest.test_case "codec bitfield: overflow u16" `Quick
+        test_codec_bitfield_overflow_u16;
+      Alcotest.test_case "codec bitfield: overflow u32" `Quick
+        test_codec_bitfield_overflow_u32;
+      Alcotest.test_case "codec bitfield: max valid" `Quick
+        test_codec_bitfield_max_valid;
+      Alcotest.test_case "codec bitfield: overflow 1-bit" `Quick
+        test_codec_bitfield_overflow_1bit;
       (* zero-copy view *)
       Alcotest.test_case "view: get uint" `Quick test_view_get_uint;
       Alcotest.test_case "view: get bitfield" `Quick test_view_get_bitfield;

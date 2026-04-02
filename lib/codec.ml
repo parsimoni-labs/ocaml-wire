@@ -509,31 +509,43 @@ let build_bf_reader base byte_off shift width =
   | BF_U32 Big ->
       fun buf off -> (UInt32.be buf (off + byte_off) lsr shift) land mask
 
+let err_bf_overflow width value =
+  Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" value
+    width
+
+let[@inline] check_bf_overflow width value =
+  if value lsr width <> 0 then err_bf_overflow width value
+
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
   | BF_U8 ->
       fun buf off value ->
+        check_bf_overflow width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | BF_U16 Little ->
       fun buf off value ->
+        check_bf_overflow width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | BF_U16 Big ->
       fun buf off value ->
+        check_bf_overflow width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | BF_U32 Little ->
       fun buf off value ->
+        check_bf_overflow width value;
         let cur = UInt32.le buf (off + byte_off) in
         UInt32.set_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | BF_U32 Big ->
       fun buf off value ->
+        check_bf_overflow width value;
         let cur = UInt32.be buf (off + byte_off) in
         UInt32.set_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
