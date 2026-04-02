@@ -93,6 +93,27 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
 
 let int_of_typ_value = Eval.int_of
 
+(* Build a populate function that writes a field value into the validator
+   array without allocating. Resolves the type at seal time so the hot
+   path is a direct arr.(idx) <- reader buf base. *)
+let rec build_populate : type a.
+    a typ -> int -> (bytes -> int -> a) -> int array -> bytes -> int -> unit =
+ fun typ idx reader ->
+  match typ with
+  | Uint8 -> fun arr buf base -> arr.(idx) <- reader buf base
+  | Uint16 _ -> fun arr buf base -> arr.(idx) <- reader buf base
+  | Uint32 _ -> fun arr buf base -> arr.(idx) <- UInt32.to_int (reader buf base)
+  | Uint63 _ -> fun arr buf base -> arr.(idx) <- UInt63.to_int (reader buf base)
+  | Bits _ -> fun arr buf base -> arr.(idx) <- reader buf base
+  | Where { inner; _ } -> build_populate inner idx reader
+  | Enum { base; _ } -> build_populate base idx reader
+  | Map { inner; encode; _ } ->
+      let inner_populate =
+        build_populate inner idx (fun buf base -> encode (reader buf base))
+      in
+      inner_populate
+  | _ -> fun _arr _buf _base -> ()
+
 (* Type equality witness for GADT-safe accessor setting *)
 type (_, _) eq = Refl : ('a, 'a) eq
 
@@ -636,10 +657,11 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     in
     let act = compile_action cc fld.action in
     let idx = field_idx in
+    (* Build a specialized populate function that avoids the Some allocation
+       from int_of for common types. The type is known at seal time. *)
+    let populate = build_populate typ idx reader in
     let v arr buf base =
-      (match int_of_typ_value typ (reader buf base) with
-      | Some v -> arr.(idx) <- v
-      | None -> ());
+      populate arr buf base;
       (match check with
       | Some f when not (f arr) ->
           raise (Parse_error (Constraint_failed "field constraint"))
@@ -1142,16 +1164,30 @@ let seal : type r. (r, r) record -> r t =
         let cc = { idx; sizeof_this = 0; field_pos = 0 } in
         Some (compile_bool_arr cc cond)
   in
+  let validator_fns = Array.of_list (List.map snd validators) in
+  let n_validators = Array.length validator_fns in
   let validate_arr arr buf off =
-    List.iter (fun (_byte_off, f) -> f arr buf off) validators;
+    for i = 0 to n_validators - 1 do
+      validator_fns.(i) arr buf off
+    done;
     match compiled_where with
     | Some f when not (f arr) ->
         raise (Parse_error (Constraint_failed "where clause"))
     | _ -> ()
   in
-  let validate buf off =
-    let arr = Array.make n_total 0 in
-    validate_arr arr buf off
+  let has_checks =
+    compiled_where <> None
+    || List.exists
+         (fun (Types.Field f) -> f.constraint_ <> None || f.action <> None)
+         struct_fields
+  in
+  let validate =
+    if has_checks then (
+      let arr = Array.make n_total 0 in
+      fun buf off ->
+        Array.fill arr 0 n_total 0;
+        validate_arr arr buf off)
+    else fun _buf _off -> ()
   in
   {
     t_name = r.r_name;
@@ -1357,6 +1393,8 @@ let to_struct t =
   match (formals, t.t_where) with
   | [], None -> struct' t.t_name t.t_struct_fields
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
+
+let validate t buf off = t.t_validate buf off
 
 let[@inline] get (type a r) (_codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =

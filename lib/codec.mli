@@ -52,11 +52,28 @@ val encode : 'r t -> 'r -> bytes -> int -> unit
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
 
+val validate : 'r t -> bytes -> int -> unit
+(** [validate c buf off] checks all field constraints, where-clauses, and
+    actions for the record at [buf]/[off] without constructing a record value.
+
+    Raises {!Types.Parse_error} on constraint/where-clause failure.
+
+    {b Typical usage:} call {!validate} once before a batch of {!get} calls on
+    untrusted input, or once after a batch of {!set} calls to verify constraints
+    still hold. *)
+
 val get : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-(** Staged zero-copy field getter. *)
+(** Staged zero-copy field getter.
+
+    {b Note:} reads raw field values without checking [where]-clauses, field
+    [~constraint_] checks, or [~action] side-effects. Call {!validate} first
+    when processing untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter. *)
+(** Staged zero-copy field setter.
+
+    {b Note:} writes raw field values without checking constraints. Call
+    {!validate} after a batch of writes to verify constraints still hold. *)
 
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)

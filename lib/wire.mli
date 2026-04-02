@@ -456,6 +456,9 @@ type parse_error =
   | Invalid_tag of int
   | All_zeros_failed of { offset : int }
 
+exception Validation_error of parse_error
+(** Raised by {!Codec.validate} on constraint or where-clause failure. *)
+
 val pp_parse_error : Format.formatter -> parse_error -> unit
 (** Pretty-printer for decode errors. *)
 
@@ -593,17 +596,33 @@ module Codec : sig
 
       Raises [Invalid_argument] if the destination buffer is too short. *)
 
+  val validate : 'r t -> bytes -> int -> unit
+  (** [validate c buf off] checks all field constraints, where-clauses, and
+      actions without constructing a record value.
+
+      Raises {!Validation_error} on failure.
+
+      {b Typical usage:} call {!validate} once before a batch of {!get} calls on
+      untrusted input, or once after a batch of {!set} calls to verify
+      constraints still hold. *)
+
   val get : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
   (** Staged field reader specialised for one field of one codec.
 
       Force the staged value once, then reuse the resulting function for many
-      reads. *)
+      reads.
+
+      {b Note:} reads raw field values without checking constraints or
+      where-clauses. Call {!validate} first on untrusted input. *)
 
   val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
   (** Staged field writer specialised for one field of one codec.
 
       Force the staged value once, then reuse the resulting function for many
-      writes. *)
+      writes.
+
+      {b Note:} writes raw field values without checking constraints. Call
+      {!validate} after a batch of writes to verify constraints still hold. *)
 
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
