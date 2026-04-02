@@ -51,6 +51,7 @@ let val_to_int = Eval.int_of
 let eval_expr = Eval.expr
 
 exception Parse_exn of parse_error
+exception Validation_error = Parse_error
 
 (* Buffered decoder — all reads go through a local buffer [i].
    [i_next] and [i_len] track the valid region. Two construction modes:
@@ -727,6 +728,8 @@ module Codec = struct
   let decode_with t env buf off =
     try Ok (Codec_backend.decode_with t env buf off)
     with Parse_error e -> Error e
+
+  let validate = Codec_backend.validate
 end
 
 module Everparse = Everparse_backend

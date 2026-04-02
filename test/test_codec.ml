@@ -156,6 +156,49 @@ let test_metadata_where_fail () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
+let validate_f_x = Field.v "x" uint8
+
+let validate_codec, validate_cf_x =
+  let open Codec in
+  let cf_x =
+    Field.v "x" ~constraint_:Expr.(Field.ref validate_f_x <= int 10) uint8
+    $ fun r -> r.x
+  in
+  let codec =
+    v "ValidateTest"
+      ~where:Expr.(Field.ref validate_f_x = int 8)
+      (fun x -> { x })
+      [ cf_x ]
+  in
+  (codec, cf_x)
+
+let test_validate_rejects_bad_where () =
+  (* where requires x = 8, set x = 7 *)
+  let buf = Bytes.of_string "\x07" in
+  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  (* get returns raw value without checking *)
+  Alcotest.(check int) "get bypasses where" 7 (get_x buf 0);
+  (* validate catches the violation *)
+  match Codec.validate validate_codec buf 0 with
+  | () -> Alcotest.fail "expected validate to reject where violation"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_validate_rejects_bad_constraint () =
+  (* constraint requires x <= 10, set x = 11 *)
+  let buf = Bytes.of_string "\x0B" in
+  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  Alcotest.(check int) "get bypasses constraint" 11 (get_x buf 0);
+  match Codec.validate validate_codec buf 0 with
+  | () -> Alcotest.fail "expected validate to reject constraint violation"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_validate_then_get () =
+  (* x = 8 satisfies both where (= 8) and constraint (<= 10) *)
+  let buf = Bytes.of_string "\x08" in
+  Codec.validate validate_codec buf 0;
+  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  Alcotest.(check int) "validate then get" 8 (get_x buf 0)
+
 let test_codec_metadata_to_struct () =
   let s = Everparse.struct_of_codec projection_codec in
   let m = module_ [ typedef s ] in
@@ -1353,6 +1396,11 @@ let suite =
         test_metadata_where_fail;
       Alcotest.test_case "record: metadata struct_of_codec" `Quick
         test_codec_metadata_to_struct;
+      Alcotest.test_case "validate: rejects bad where" `Quick
+        test_validate_rejects_bad_where;
+      Alcotest.test_case "validate: rejects bad constraint" `Quick
+        test_validate_rejects_bad_constraint;
+      Alcotest.test_case "validate: then get" `Quick test_validate_then_get;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
       Alcotest.test_case "record: byte_array roundtrip" `Quick
         test_record_byte_array_roundtrip;
