@@ -120,7 +120,7 @@ and action_stmt =
   | If of bool expr * action_stmt list * action_stmt list option
   | Var of string * int expr
 
-type param_env = { pe_slots : int array }
+type param_env = { pe_codec_id : int; pe_slots : int array }
 
 (* Expression constructors *)
 let int n = Int n

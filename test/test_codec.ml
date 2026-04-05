@@ -756,31 +756,30 @@ let test_action_fires_on_decode_with () =
     "outx after decode_with" 5
     (Param.get env projection_outx)
 
-let test_action_skipped_by_get () =
-  (* get does NOT fire actions — output params stay at 0.
-     This test documents the current (broken) behavior from issue #6. *)
-  let action_out = Param.output "act_out" uint8 in
+let test_action_fires_on_get () =
+  (* get fires field actions. A return_bool action that rejects odd values
+     should cause get to raise on odd input. *)
   let f_ref = Field.v "v" uint8 in
   let cf_v =
     Codec.(
       Field.v "v"
         ~action:
-          (Action.on_success [ Action.assign action_out (Field.ref f_ref) ])
+          (Action.on_success
+             [ Action.return_bool Expr.(Field.ref f_ref mod int 2 = int 0) ])
         uint8
       $ fun v -> v)
   in
   let codec = Codec.v "ActionGet" (fun v -> v) [ cf_v ] in
-  let env = Codec.env codec in
-  let buf = Bytes.of_string "\x42" in
   let get_v = Staged.unstage (Codec.get codec cf_v) in
-  let v = get_v buf 0 in
-  Alcotest.(check int) "get returns value" 0x42 v;
-  Alcotest.(check int) "action NOT fired by get" 0 (Param.get env action_out)
+  (* Even value: action passes *)
+  Alcotest.(check int) "get even" 0x42 (get_v (Bytes.of_string "\x42") 0);
+  (* Odd value: action rejects *)
+  match get_v (Bytes.of_string "\x43") 0 with
+  | _ -> Alcotest.fail "expected action to reject odd value"
+  | exception Validation_error (Constraint_failed _) -> ()
 
-let test_action_fires_on_validate () =
-  (* validate currently fires actions (via validate_arr).
-     This test documents the current behavior — actions fire but output
-     params are NOT synced back to any env. *)
+let test_action_not_fired_by_validate () =
+  (* validate checks constraints + where, but does NOT fire actions. *)
   let action_out2 = Param.output "act_out2" uint8 in
   let f_ref2 = Field.v "v" uint8 in
   let cf_v2 =
@@ -792,11 +791,434 @@ let test_action_fires_on_validate () =
       $ fun v -> v)
   in
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
-  let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
   Codec.validate codec buf 0;
-  (* validate fires the action internally but has no env to sync to *)
-  Alcotest.(check int) "action output not synced" 0 (Param.get env action_out2)
+  (* validate does NOT fire actions *)
+  Alcotest.(check int)
+    "action not fired by validate" 0
+    !(action_out2.Wire.Private.Types.ph_cell)
+
+let test_get_no_action_zero_overhead () =
+  (* get on a field without an action should not allocate.
+     We just verify it works — allocation is checked by benchmarks. *)
+  let cf_v = Codec.(Field.v "v" uint8 $ fun v -> v) in
+  let codec = Codec.v "NoAction" (fun v -> v) [ cf_v ] in
+  let buf = Bytes.of_string "\x42" in
+  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  Alcotest.(check int) "get returns value" 0x42 (get_v buf 0)
+
+let test_get_with_env () =
+  (* get ~env fires action and syncs output params to env *)
+  let out = Param.output "out" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "GetEnv" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let buf = Bytes.of_string "\x42" in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let v = get_v buf 0 in
+  Alcotest.(check int) "get returns value" 0x42 v;
+  Alcotest.(check int) "output param synced" 0x42 (Param.get env out)
+
+let test_get_action_field_two_codecs () =
+  (* Same action field in two codecs — each codec gets its own action runner *)
+  let out1 = Param.output "out1" uint8 in
+  let out2 = Param.output "out2" uint16be in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out1 (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  (* Codec1: [v] at offset 0 *)
+  let codec1 = Codec.v "ActTwo1" (fun v -> v) [ cf_v ] in
+  (* Codec2: [pad] [v] — v at offset 1, different action *)
+  let cf_v2 =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out2 (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec2 =
+    let open Codec in
+    v "ActTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v2 ]
+  in
+  let env1 = Codec.env codec1 in
+  let env2 = Codec.env codec2 in
+  let buf = Bytes.of_string "\xAA\xBB" in
+  let get1 = Staged.unstage (Codec.get ~env:env1 codec1 cf_v) in
+  let get2 = Staged.unstage (Codec.get ~env:env2 codec2 cf_v2) in
+  (* codec1 reads offset 0 = 0xAA *)
+  Alcotest.(check int) "codec1 get" 0xAA (get1 buf 0);
+  Alcotest.(check int) "codec1 out" 0xAA (Param.get env1 out1);
+  (* codec2 reads offset 1 = 0xBB *)
+  Alcotest.(check int) "codec2 get" 0xBB (get2 buf 0);
+  Alcotest.(check int) "codec2 out" 0xBB (Param.get env2 out2)
+
+let test_get_action_no_env () =
+  (* get without ~env on action field: action fires but output not accessible *)
+  let out = Param.output "out_noenv" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "NoEnv" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let buf = Bytes.of_string "\x42" in
+  (* No ~env: action fires (no crash) but output stays 0 *)
+  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  Alcotest.(check int) "get returns value" 0x42 (get_v buf 0);
+  Alcotest.(check int) "output not synced without env" 0 (Param.get env out)
+
+let test_get_action_abort_field () =
+  (* get on a field with abort action always raises *)
+  let cf_v =
+    Codec.(
+      Field.v "v" ~action:(Action.on_success [ Action.abort ]) uint8 $ fun v ->
+      v)
+  in
+  let codec = Codec.v "AbortGet" (fun v -> v) [ cf_v ] in
+  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  match get_v (Bytes.of_string "\x42") 0 with
+  | _ -> Alcotest.fail "expected abort"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_get_no_action_ignores_env () =
+  (* Passing ~env to get on a field without action is harmless *)
+  let cf_v = Codec.(Field.v "v" uint8 $ fun v -> v) in
+  let codec = Codec.v "NoActEnv" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  Alcotest.(check int)
+    "get returns value" 0x42
+    (get_v (Bytes.of_string "\x42") 0)
+
+let test_get_action_multiple_calls () =
+  (* get with ~env updates output on every call *)
+  let out = Param.output "out_multi" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "Multi" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  ignore (get_v (Bytes.of_string "\x10") 0);
+  Alcotest.(check int) "after first" 0x10 (Param.get env out);
+  ignore (get_v (Bytes.of_string "\x20") 0);
+  Alcotest.(check int) "after second" 0x20 (Param.get env out)
+
+let test_get_action_with_input_param () =
+  (* Action references an input param — get ~env must blit it into the
+     scratch array so the action sees the bound value. *)
+  let limit = Param.input "limit" uint8 in
+  let out = Param.output "result" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success
+             [
+               Action.assign out (Field.ref f_ref);
+               Action.return_bool Expr.(Field.ref f_ref <= Param.expr limit);
+             ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "InputParam" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec |> Param.bind limit 50 in
+  let buf_ok = Bytes.of_string "\x30" in
+  let buf_bad = Bytes.of_string "\x40" in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  (* 0x30 = 48 <= 50: passes *)
+  Alcotest.(check int) "get with input param" 0x30 (get_v buf_ok 0);
+  Alcotest.(check int) "output synced" 0x30 (Param.get env out);
+  (* 0x40 = 64 > 50: action rejects *)
+  match get_v buf_bad 0 with
+  | _ -> Alcotest.fail "expected rejection from input param check"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_get_action_input_param_no_env () =
+  (* Action references an input param but no env passed — param reads as 0 *)
+  let limit = Param.input "lim2" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success
+             [ Action.return_bool Expr.(Field.ref f_ref <= Param.expr limit) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "NoEnvInput" (fun v -> v) [ cf_v ] in
+  (* No env: limit defaults to 0, so any positive value > 0 fails *)
+  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  (* 0 <= 0: passes *)
+  Alcotest.(check int) "zero passes" 0 (get_v (Bytes.of_string "\x00") 0);
+  (* 1 > 0: fails *)
+  match get_v (Bytes.of_string "\x01") 0 with
+  | _ -> Alcotest.fail "expected rejection without env"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_get_action_output_only () =
+  (* Action with only assign (no return_bool/abort) — should never fail *)
+  let out = Param.output "out_only" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "OutOnly" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  (* Any value should work — no validation in this action *)
+  Alcotest.(check int) "get 0xFF" 0xFF (get_v (Bytes.of_string "\xFF") 0);
+  Alcotest.(check int) "output 0xFF" 0xFF (Param.get env out);
+  Alcotest.(check int) "get 0x00" 0x00 (get_v (Bytes.of_string "\x00") 0);
+  Alcotest.(check int) "output 0x00" 0x00 (Param.get env out)
+
+let test_get_action_var_then_assign () =
+  (* Action with local var computation then assign to output *)
+  let out = Param.output "doubled" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success
+             [
+               Action.var "tmp" Expr.(Field.ref f_ref * int 2);
+               Action.assign out (Field.ref (Field.v "tmp" uint8));
+             ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "VarAssign" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  Alcotest.(check int) "get value" 21 (get_v (Bytes.of_string "\x15") 0);
+  Alcotest.(check int) "doubled output" 42 (Param.get env out)
+
+let test_get_action_cross_field_ref () =
+  (* Action on field y references field x's value *)
+  let f_x = Field.v "x" uint8 in
+  let out = Param.output "sum" uint8 in
+  let cf_x = Codec.(f_x $ fun (x, _) -> x) in
+  let cf_y =
+    Codec.(
+      Field.v "y"
+        ~action:
+          (Action.on_success
+             [ Action.assign out Expr.(Field.ref f_x + int 100) ])
+        uint8
+      $ fun (_, y) -> y)
+  in
+  let codec = Codec.v "CrossRef" (fun x y -> (x, y)) [ cf_x; cf_y ] in
+  let env = Codec.env codec in
+  let buf = Bytes.of_string "\x0A\x14" in
+  let get_y = Staged.unstage (Codec.get ~env codec cf_y) in
+  let y = get_y buf 0 in
+  Alcotest.(check int) "y value" 0x14 y;
+  (* Action computed x + 100 = 10 + 100 = 110 *)
+  Alcotest.(check int) "cross-field output" 110 (Param.get env out)
+
+let test_validate_constraint_only () =
+  (* Codec with constraint but no where clause *)
+  let f_x = Field.v "x" uint8 in
+  let cf_x =
+    Codec.(
+      Field.v "x" ~constraint_:Expr.(Field.ref f_x <= int 10) uint8 $ fun v -> v)
+  in
+  let codec = Codec.v "ConstOnly" (fun v -> v) [ cf_x ] in
+  let good = Bytes.of_string "\x05" in
+  let bad = Bytes.of_string "\x0B" in
+  Codec.validate codec good 0;
+  match Codec.validate codec bad 0 with
+  | () -> Alcotest.fail "expected constraint failure"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_validate_where_only () =
+  (* Codec with where clause but no field constraints *)
+  let f_x = Field.v "x" uint8 in
+  let cf_x = Codec.(f_x $ fun v -> v) in
+  let codec =
+    Codec.v "WhereOnly"
+      ~where:Expr.(Field.ref f_x = int 42)
+      (fun v -> v)
+      [ cf_x ]
+  in
+  let good = Bytes.of_string "\x2A" in
+  let bad = Bytes.of_string "\x00" in
+  Codec.validate codec good 0;
+  match Codec.validate codec bad 0 with
+  | () -> Alcotest.fail "expected where failure"
+  | exception Validation_error (Constraint_failed _) -> ()
+
+let test_get_two_staged_same_field () =
+  (* Two staged getters from the same codec+field with different envs *)
+  let out = Param.output "out_two" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "TwoStaged" (fun v -> v) [ cf_v ] in
+  let env1 = Codec.env codec in
+  let env2 = Codec.env codec in
+  let get1 = Staged.unstage (Codec.get ~env:env1 codec cf_v) in
+  let get2 = Staged.unstage (Codec.get ~env:env2 codec cf_v) in
+  (* Each staged getter has its own scratch array and env *)
+  ignore (get1 (Bytes.of_string "\xAA") 0);
+  ignore (get2 (Bytes.of_string "\xBB") 0);
+  Alcotest.(check int) "env1" 0xAA (Param.get env1 out);
+  Alcotest.(check int) "env2" 0xBB (Param.get env2 out)
+
+let test_encode_shared_bitfield () =
+  (* Encode via a codec that shares a bitfield with another codec *)
+  let f_a = Field.v "a" (bits ~width:4 U8) in
+  let cf_a = Codec.(f_a $ fun a -> a) in
+  let codec1 =
+    let open Codec in
+    v "EncBf1"
+      (fun a _b -> a)
+      [ cf_a; (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0) ]
+  in
+  let _codec2 =
+    let open Codec in
+    v "EncBf2"
+      (fun _b a -> a)
+      [ (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0); cf_a ]
+  in
+  (* Encode via codec1: a in bottom nibble *)
+  let buf = Bytes.make 1 '\x00' in
+  Codec.encode codec1 0xA buf 0;
+  Alcotest.(check int) "bottom nibble" 0x0A (Bytes.get_uint8 buf 0)
+
+(* ── API misuse / safety tests ── *)
+
+let test_get_field_not_in_codec () =
+  (* get with a field that was never added to this codec raises Not_found
+     at staging time *)
+  let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
+  let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
+  let codec = Codec.v "OnlyX" (fun v -> v) [ cf_x ] in
+  match Codec.get codec cf_y with
+  | _ -> Alcotest.fail "expected Invalid_argument for unknown field"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "mentions field name" true
+        (Re.execp (Re.compile (Re.str "y")) msg);
+      Alcotest.(check bool)
+        "mentions codec name" true
+        (Re.execp (Re.compile (Re.str "OnlyX")) msg)
+
+let test_set_field_not_in_codec () =
+  (* set with a field not in the codec raises Invalid_argument at staging *)
+  let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
+  let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
+  let codec = Codec.v "OnlyX2" (fun v -> v) [ cf_x ] in
+  match Codec.set codec cf_y with
+  | _ -> Alcotest.fail "expected Invalid_argument for unknown field"
+  | exception Invalid_argument _ -> ()
+
+let test_bitfield_on_non_bitfield () =
+  (* bitfield on a uint8 (non-bitfield) field *)
+  let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
+  let codec = Codec.v "NoBf" (fun v -> v) [ cf_x ] in
+  match Codec.bitfield codec cf_x with
+  | _ -> Alcotest.fail "expected error for non-bitfield"
+  | exception Invalid_argument _ -> ()
+
+let test_env_from_wrong_codec () =
+  (* Using env from codec1 with get ~env on codec2 *)
+  let out1 = Param.output "out_wrong" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v1 =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out1 (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec1 = Codec.v "Wrong1" (fun v -> v) [ cf_v1 ] in
+  let cf_v2 = Codec.(Field.v "v" uint8 $ fun v -> v) in
+  let codec2 = Codec.v "Wrong2" (fun v -> v) [ cf_v2 ] in
+  let env1 = Codec.env codec1 in
+  (* Use env1 (from codec1) with codec2's get — should not crash *)
+  let get_v2 = Staged.unstage (Codec.get ~env:env1 codec2 cf_v2) in
+  (* No action on cf_v2, so env is ignored — should work fine *)
+  Alcotest.(check int)
+    "wrong env ignored" 0x42
+    (get_v2 (Bytes.of_string "\x42") 0)
+
+let test_env_wrong_codec_with_action () =
+  (* Using env from a different codec with an action field.
+     The env has too few param slots — get raises Invalid_argument
+     at staging time. *)
+  let out = Param.output "out_oob" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec_with_action = Codec.v "WithAct" (fun v -> v) [ cf_v ] in
+  (* codec_empty has zero params, so its env has pe_slots = [||] *)
+  let cf_w = Codec.(Field.v "w" uint8 $ fun v -> v) in
+  let codec_empty = Codec.v "NoParams" (fun v -> v) [ cf_w ] in
+  let wrong_env = Codec.env codec_empty in
+  match Codec.get ~env:wrong_env codec_with_action cf_v with
+  | _ -> Alcotest.fail "expected Invalid_argument for wrong env"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "mentions codec name" true
+        (Re.execp (Re.compile (Re.str "WithAct")) msg)
+
+let test_decode_short_buffer () =
+  (* Decode with buffer shorter than wire_size *)
+  let cf_x = Codec.(Field.v "x" uint16be $ fun v -> v) in
+  let codec = Codec.v "Short" (fun v -> v) [ cf_x ] in
+  let buf = Bytes.of_string "\x42" in
+  match Codec.decode codec buf 0 with
+  | Ok _ -> Alcotest.fail "expected EOF error"
+  | Error (Unexpected_eof _) -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
+let test_encode_short_buffer () =
+  (* Encode into buffer shorter than wire_size *)
+  let cf_x = Codec.(Field.v "x" uint16be $ fun v -> v) in
+  let codec = Codec.v "ShortEnc" (fun v -> v) [ cf_x ] in
+  let buf = Bytes.of_string "\x42" in
+  match Codec.encode codec 0x1234 buf 0 with
+  | () -> Alcotest.fail "expected error for short buffer"
+  | exception Invalid_argument _ -> ()
 
 (* ── same bound field in two codecs ── *)
 
@@ -1694,10 +2116,53 @@ let suite =
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_with" `Quick
         test_action_fires_on_decode_with;
-      Alcotest.test_case "action: skipped by get" `Quick
-        test_action_skipped_by_get;
-      Alcotest.test_case "action: fires on validate" `Quick
-        test_action_fires_on_validate;
+      Alcotest.test_case "action: fires on get" `Quick test_action_fires_on_get;
+      Alcotest.test_case "action: not fired by validate" `Quick
+        test_action_not_fired_by_validate;
+      Alcotest.test_case "action: no action zero overhead" `Quick
+        test_get_no_action_zero_overhead;
+      Alcotest.test_case "action: get with env" `Quick test_get_with_env;
+      Alcotest.test_case "action: field in two codecs" `Quick
+        test_get_action_field_two_codecs;
+      Alcotest.test_case "action: get without env" `Quick test_get_action_no_env;
+      Alcotest.test_case "action: abort on get" `Quick
+        test_get_action_abort_field;
+      Alcotest.test_case "action: no action ignores env" `Quick
+        test_get_no_action_ignores_env;
+      Alcotest.test_case "action: multiple calls update env" `Quick
+        test_get_action_multiple_calls;
+      Alcotest.test_case "action: with input param" `Quick
+        test_get_action_with_input_param;
+      Alcotest.test_case "action: input param no env" `Quick
+        test_get_action_input_param_no_env;
+      Alcotest.test_case "action: output only" `Quick
+        test_get_action_output_only;
+      Alcotest.test_case "action: var then assign" `Quick
+        test_get_action_var_then_assign;
+      Alcotest.test_case "action: cross-field ref" `Quick
+        test_get_action_cross_field_ref;
+      Alcotest.test_case "validate: constraint only" `Quick
+        test_validate_constraint_only;
+      Alcotest.test_case "validate: where only" `Quick test_validate_where_only;
+      Alcotest.test_case "action: two staged same field" `Quick
+        test_get_two_staged_same_field;
+      Alcotest.test_case "shared: encode bitfield" `Quick
+        test_encode_shared_bitfield;
+      (* API misuse *)
+      Alcotest.test_case "misuse: get field not in codec" `Quick
+        test_get_field_not_in_codec;
+      Alcotest.test_case "misuse: set field not in codec" `Quick
+        test_set_field_not_in_codec;
+      Alcotest.test_case "misuse: bitfield on non-bitfield" `Quick
+        test_bitfield_on_non_bitfield;
+      Alcotest.test_case "misuse: env from wrong codec" `Quick
+        test_env_from_wrong_codec;
+      Alcotest.test_case "misuse: wrong env with action" `Quick
+        test_env_wrong_codec_with_action;
+      Alcotest.test_case "misuse: decode short buffer" `Quick
+        test_decode_short_buffer;
+      Alcotest.test_case "misuse: encode short buffer" `Quick
+        test_encode_short_buffer;
       (* same field in two codecs *)
       Alcotest.test_case "shared: same field two codecs get" `Quick
         test_same_field_two_codecs;

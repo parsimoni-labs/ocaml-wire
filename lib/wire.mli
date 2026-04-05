@@ -597,31 +597,22 @@ module Codec : sig
       Raises [Invalid_argument] if the destination buffer is too short. *)
 
   val validate : 'r t -> bytes -> int -> unit
-  (** [validate c buf off] checks all field constraints, where-clauses, and
-      actions without constructing a record value.
+  (** [validate c buf off] checks field [~constraint_] and [~where] clauses
+      without constructing a record and without firing actions.
 
-      Raises {!Validation_error} on failure.
+      Raises {!Validation_error} on failure. *)
 
-      {b Typical usage:} call {!validate} once before a batch of {!get} calls on
-      untrusted input, or once after a batch of {!set} calls to verify
-      constraints still hold. *)
+  val get :
+    ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
+  (** Staged field reader. If the field has an [~action], the action fires on
+      every read. Pass [~env] to sync output parameters after each action.
+      Fields without actions have zero overhead regardless of [~env].
 
-  val get : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-  (** Staged field reader specialised for one field of one codec.
-
-      Force the staged value once, then reuse the resulting function for many
-      reads.
-
-      {b Note:} reads raw field values without checking constraints or
-      where-clauses. Call {!validate} first on untrusted input. *)
+      Does not check [~where] clauses or other fields' constraints — call
+      {!validate} first on untrusted input. *)
 
   val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-  (** Staged field writer specialised for one field of one codec.
-
-      Force the staged value once, then reuse the resulting function for many
-      writes.
-
-      {b Note:} writes raw field values without checking constraints. Call
+  (** Staged field writer. Does not check constraints or fire actions — call
       {!validate} after a batch of writes to verify constraints still hold. *)
 
   val field_ref : ('a, 'r) field -> int expr

@@ -1,4 +1,21 @@
-(** Zero-copy record codecs for binary wire formats. *)
+(** Zero-copy record codecs for binary wire formats.
+
+    {2 Access model}
+
+    Three ways to access decoded data, with different trade-offs:
+
+    - {!decode} constructs a full record. It checks field constraints,
+      [where]-clauses, and fires field actions. This is the safest path but
+      allocates the record value.
+
+    - {!get} / {!set} provide zero-copy field access. {!get} fires the field's
+      [~action] (if any), so output parameters are updated. It does {b not}
+      check record-level [~where] clauses or other fields' [~constraint_]
+      checks. Fields without actions have zero overhead.
+
+    - {!validate} checks all field [~constraint_] checks and [~where] clauses
+      without constructing a record and without firing actions. Use it before a
+      batch of {!get} calls on untrusted input. *)
 
 type ('a, 'r) field
 (** A field bound to a record projection. *)
@@ -53,27 +70,24 @@ val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
 
 val validate : 'r t -> bytes -> int -> unit
-(** [validate c buf off] checks all field constraints, where-clauses, and
-    actions for the record at [buf]/[off] without constructing a record value.
+(** [validate c buf off] checks field [~constraint_] and [~where] clauses
+    without constructing a record and without firing actions.
 
-    Raises {!Types.Parse_error} on constraint/where-clause failure.
+    Raises {!Types.Parse_error} on constraint/where-clause failure. *)
 
-    {b Typical usage:} call {!validate} once before a batch of {!get} calls on
-    untrusted input, or once after a batch of {!set} calls to verify constraints
-    still hold. *)
+val get :
+  ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
+(** Staged zero-copy field getter. If the field has an [~action], the action
+    fires on every read. Pass [~env] to sync output parameters after each
+    action. Fields without actions have zero overhead regardless of [~env].
 
-val get : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-(** Staged zero-copy field getter.
-
-    {b Note:} reads raw field values without checking [where]-clauses, field
-    [~constraint_] checks, or [~action] side-effects. Call {!validate} first
-    when processing untrusted input. *)
+    Does not check record-level [~where] clauses or other fields' [~constraint_]
+    checks — call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter.
-
-    {b Note:} writes raw field values without checking constraints. Call
-    {!validate} after a batch of writes to verify constraints still hold. *)
+(** Staged zero-copy field setter. Does not check constraints or fire actions —
+    call {!validate} after a batch of writes to verify constraints still hold.
+*)
 
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)

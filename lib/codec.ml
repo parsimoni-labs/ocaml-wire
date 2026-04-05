@@ -429,6 +429,9 @@ type ('f, 'r) record =
       r_fields_rev : Types.field list;
       r_validators_rev :
         (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
+      r_checkers_rev :
+        (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
+      r_field_actions_rev : (string * compiled_action) list;
       r_n_fields : int; (* count of named fields (for field indexing) *)
       r_n_array_slots : int;
           (* fields + action-local vars (for array allocation) *)
@@ -443,15 +446,20 @@ type wire_size_info =
   | Fixed of int
   | Variable of { min_size : int; compute : bytes -> int -> int }
 
+let codec_id_counter = Atomic.make 0
+
 type 'r t = {
+  t_id : int;
   t_name : string;
   t_field_access : (string * field_access) list;
+  t_field_actions : (string * compiled_action) list;
   t_decode : bytes -> int -> 'r;
   t_encode : 'r -> bytes -> int -> unit;
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
   t_validate : bytes -> int -> unit;
   t_validate_arr : int array -> bytes -> int -> unit;
+  t_populate : int array -> bytes -> int -> unit;
   t_n_array_slots : int;
   t_param_base : int;
   t_n_params : int;
@@ -470,6 +478,8 @@ let record_start ?where name make =
       r_next_off = Static_next 0;
       r_fields_rev = [];
       r_validators_rev = [];
+      r_checkers_rev = [];
+      r_field_actions_rev = [];
       r_n_fields = 0;
       r_n_array_slots = 0;
       r_bf = None;
@@ -645,7 +655,8 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     (* Build a specialized populate function that avoids the Some allocation
        from int_of for common types. The type is known at seal time. *)
     let populate = build_populate typ idx reader in
-    let v arr buf base =
+    (* Full validator: populate + constraints + actions (used by decode) *)
+    let full arr buf base =
       populate arr buf base;
       (match check with
       | Some f when not (f arr) ->
@@ -653,10 +664,23 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
       | _ -> ());
       match act with Some f -> f arr | None -> ()
     in
-    (byte_off, v)
+    (* Check-only: populate + constraints, no actions (used by validate) *)
+    let check_only arr buf base =
+      populate arr buf base;
+      match check with
+      | Some f when not (f arr) ->
+          raise (Parse_error (Constraint_failed "field constraint"))
+      | _ -> ()
+    in
+    (* Per-field action runner (used by get) *)
+    let field_action =
+      match act with None -> None | Some act_fn -> Some (name, act_fn)
+    in
+    ((byte_off, full), (byte_off, check_only), field_action)
   in
   let extend ~readers ~writers_rev ~min_wire_size ~next_off ~fields_rev
-      ~validators_rev ~bf ~field_access_rev ~field_readers =
+      ~validators_rev ~checkers_rev ~field_actions_rev ~bf ~field_access_rev
+      ~field_readers =
     Record
       {
         r_name = r.r_name;
@@ -667,6 +691,8 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         r_next_off = next_off;
         r_fields_rev = fields_rev;
         r_validators_rev = validators_rev;
+        r_checkers_rev = checkers_rev;
+        r_field_actions_rev = field_actions_rev;
         r_n_fields = List.length field_readers;
         r_n_array_slots = List.length field_readers + n_extra_vars;
         r_bf = bf;
@@ -730,6 +756,9 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             bfc_total_bits = total;
           }
         in
+        let vfull, vcheck, faction =
+          build_validator ~byte_off:static_off typ raw_reader
+        in
         extend
           ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
           ~writers_rev:
@@ -738,9 +767,12 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           ~min_wire_size:(r.r_min_wire_size + size_delta)
           ~next_off:(Static_next (static_off + size_delta))
           ~fields_rev:(struct_field fld :: r.r_fields_rev)
-          ~validators_rev:
-            (build_validator ~byte_off:static_off typ raw_reader
-            :: r.r_validators_rev)
+          ~validators_rev:(vfull :: r.r_validators_rev)
+          ~checkers_rev:(vcheck :: r.r_checkers_rev)
+          ~field_actions_rev:
+            (match faction with
+            | Some fa -> fa :: r.r_field_actions_rev
+            | None -> r.r_field_actions_rev)
           ~bf:(Some new_bf)
           ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
@@ -808,15 +840,21 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
                 let _ = raw_encoder buf (off + fo) (get_wire v) in
                 ()
         in
+        let vfull, vcheck, faction =
+          build_validator ~byte_off:field_off typ raw_reader
+        in
         extend
           ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
           ~writers_rev:(encode_writer :: r.r_writers_rev)
           ~min_wire_size:(r.r_min_wire_size + fsize)
           ~next_off:new_next_off
           ~fields_rev:(struct_field fld :: r.r_fields_rev)
-          ~validators_rev:
-            (build_validator ~byte_off:field_off typ raw_reader
-            :: r.r_validators_rev)
+          ~validators_rev:(vfull :: r.r_validators_rev)
+          ~checkers_rev:(vcheck :: r.r_checkers_rev)
+          ~field_actions_rev:
+            (match faction with
+            | Some fa -> fa :: r.r_field_actions_rev
+            | None -> r.r_field_actions_rev)
           ~bf:None
           ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
@@ -868,15 +906,21 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           | Some v -> v
           | None -> 0
         in
+        let vfull, vcheck, faction =
+          build_validator ~byte_off:field_off typ reader
+        in
         extend
           ~readers:(Snoc (r.r_readers, wrap_reader reader))
           ~writers_rev:
             ((fun v buf off -> writer buf off (get_wire v)) :: r.r_writers_rev)
           ~min_wire_size:r.r_min_wire_size ~next_off:new_next_off
           ~fields_rev:(struct_field fld :: r.r_fields_rev)
-          ~validators_rev:
-            (build_validator ~byte_off:field_off typ reader
-            :: r.r_validators_rev)
+          ~validators_rev:(vfull :: r.r_validators_rev)
+          ~checkers_rev:(vcheck :: r.r_checkers_rev)
+          ~field_actions_rev:
+            (match faction with
+            | Some fa -> fa :: r.r_field_actions_rev
+            | None -> r.r_field_actions_rev)
           ~bf:None
           ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
@@ -950,6 +994,7 @@ let rec apply_fwd : type mid result.
 
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
+  let codec_id = Atomic.fetch_and_add codec_id_counter 1 in
   let field_access = List.rev r.r_field_access_rev in
   let wire_size_info =
     match r.r_next_off with
@@ -1122,6 +1167,7 @@ let seal : type r. (r, r) record -> r t =
         let cc = { idx; sizeof_this = 0; field_pos = 0 } in
         Some (compile_bool_arr cc cond)
   in
+  (* Full validators: populate + constraints + actions (used by decode) *)
   let validator_fns = Array.of_list (List.map snd validators) in
   let n_validators = Array.length validator_fns in
   let validate_arr arr buf off =
@@ -1133,23 +1179,39 @@ let seal : type r. (r, r) record -> r t =
         raise (Parse_error (Constraint_failed "where clause"))
     | _ -> ()
   in
+  (* Check-only validators: populate + constraints, no actions (used by
+     validate). Actions fire via get instead. *)
+  let checkers = List.rev r.r_checkers_rev in
+  let checker_fns = Array.of_list (List.map snd checkers) in
+  let n_checkers = Array.length checker_fns in
+  let populate arr buf off =
+    for i = 0 to n_checkers - 1 do
+      checker_fns.(i) arr buf off
+    done
+  in
   let has_checks =
     compiled_where <> None
-    || List.exists
-         (fun (Types.Field f) -> f.constraint_ <> None || f.action <> None)
-         struct_fields
+    || List.exists (fun (Types.Field f) -> f.constraint_ <> None) struct_fields
   in
   let validate =
     if has_checks then (
       let arr = Array.make n_total 0 in
       fun buf off ->
         Array.fill arr 0 n_total 0;
-        validate_arr arr buf off)
+        populate arr buf off;
+        match compiled_where with
+        | Some f when not (f arr) ->
+            raise (Parse_error (Constraint_failed "where clause"))
+        | _ -> ())
     else fun _buf _off -> ()
   in
+  (* Per-field action runners *)
+  let field_actions = List.rev r.r_field_actions_rev in
   {
+    t_id = codec_id;
     t_name = r.r_name;
     t_field_access = field_access;
+    t_field_actions = field_actions;
     t_decode =
       (fun buf off ->
         if off + min_size > Bytes.length buf then
@@ -1169,6 +1231,7 @@ let seal : type r. (r, r) record -> r t =
     t_struct_fields = struct_fields;
     t_validate = validate;
     t_validate_arr = validate_arr;
+    t_populate = populate;
     t_n_array_slots = n_total;
     t_param_base = param_base;
     t_n_params = n_params;
@@ -1214,10 +1277,13 @@ let is_fixed t =
 
 let decode t buf off =
   let v = t.t_decode buf off in
-  t.t_validate buf off;
+  (* Full validation: constraints + where + actions *)
+  let arr = Array.make t.t_n_array_slots 0 in
+  t.t_validate_arr arr buf off;
   v
 
-let env t : Param.env = { Types.pe_slots = Array.make t.t_n_params 0 }
+let env t : Param.env =
+  { Types.pe_codec_id = t.t_id; pe_slots = Array.make t.t_n_params 0 }
 
 let decode_with t (e : Param.env) buf off =
   let v = t.t_decode buf off in
@@ -1426,14 +1492,57 @@ let rec build_staged_writer : type a.
   | _, Variable _ ->
       invalid_arg "Codec.set: unsupported variable-size field type"
 
-let[@inline] get (type a r) (codec : r t) (f : (a, r) field) :
+let field_access codec name =
+  match List.assoc_opt name codec.t_field_access with
+  | Some a -> a
+  | None ->
+      invalid_arg
+        (Fmt.str "Codec: field %S not found in codec %S" name codec.t_name)
+
+let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
-  let access = List.assoc f.name codec.t_field_access in
-  Staged.stage (build_staged_reader f.typ access)
+  let access = field_access codec f.name in
+  let read = build_staged_reader f.typ access in
+  match List.assoc_opt f.name codec.t_field_actions with
+  | None -> Staged.stage read
+  | Some act ->
+      let arr = Array.make codec.t_n_array_slots 0 in
+      let n = Array.length arr in
+      let populate = codec.t_populate in
+      let n_params = codec.t_n_params in
+      let sync, blit_input =
+        match env with
+        | None -> ((fun _arr -> ()), fun _arr -> ())
+        | Some (e : Param.env) ->
+            if e.pe_codec_id <> codec.t_id then
+              invalid_arg
+                (Fmt.str "Codec.get: env was not created by Codec.env for %S"
+                   codec.t_name);
+            let param_handles = codec.t_param_handles in
+            let param_base = codec.t_param_base in
+            ( (fun arr ->
+                List.iter
+                  (fun (Param.Pack p) ->
+                    let v = arr.(p.ph_slot) in
+                    e.pe_slots.(p.ph_env_idx) <- v;
+                    p.ph_cell := v)
+                  param_handles),
+              fun arr ->
+                if n_params > 0 then
+                  Array.blit e.pe_slots 0 arr param_base n_params )
+      in
+      Staged.stage (fun buf off ->
+          let v = read buf off in
+          Array.fill arr 0 n 0;
+          blit_input arr;
+          populate arr buf off;
+          act arr;
+          sync arr;
+          v)
 
 let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
-  let access = List.assoc f.name codec.t_field_access in
+  let access = field_access codec f.name in
   Staged.stage (build_staged_writer f.typ access)
 
 let pp ppf t = Fmt.string ppf t.t_name
@@ -1444,7 +1553,7 @@ let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 type bitfield = bf_info
 
 let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
-  match List.assoc f.name codec.t_field_access with
+  match field_access codec f.name with
   | Bitfield { base; byte_off; shift; width } ->
       let word_reader = Bitfield.read_word base in
       let mask = (1 lsl width) - 1 in
@@ -1452,7 +1561,8 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
         bf_word_reader = (fun buf off -> word_reader buf (off + byte_off));
         bf_packed = shift lor (mask lsl 8);
       }
-  | _ -> invalid_arg "Codec.bitfield: field is not a bitfield"
+  | _ ->
+      invalid_arg (Fmt.str "Codec.bitfield: field %S is not a bitfield" f.name)
 
 let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
   Staged.stage bf.bf_word_reader

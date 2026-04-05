@@ -95,7 +95,7 @@ let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   let slots = Array.copy env.pe_slots in
   if p.ph_env_idx >= 0 then slots.(p.ph_env_idx) <- iv;
   p.ph_cell := iv;
-  { Types.pe_slots = slots }
+  { Types.pe_codec_id = env.pe_codec_id; pe_slots = slots }
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
   if p.Types.ph_env_idx < 0 then of_int p.ph_typ !(p.ph_cell)
