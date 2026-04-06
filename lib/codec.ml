@@ -125,15 +125,23 @@ type bf_info = {
   bf_packed : int; (* shift in bits 0-7, mask in bits 8+ *)
 }
 
+type field_access =
+  | Fixed of int
+  | Bitfield of {
+      base : bitfield_base;
+      byte_off : int;
+      shift : int;
+      width : int;
+    }
+  | Dynamic of (bytes -> int -> int)
+  | Variable of { off : int; size_fn : bytes -> int -> int }
+
 type ('a, 'r) field = {
   name : string;
   typ : 'a typ;
   constraint_ : bool expr option;
   action : action option;
   get : 'r -> 'a;
-  mutable f_reader : bytes -> int -> 'a;
-  mutable f_writer : bytes -> int -> 'a -> unit;
-  mutable f_bf : bf_info option;
 }
 
 let combine_constraint a b =
@@ -425,7 +433,7 @@ type ('f, 'r) record =
       r_n_array_slots : int;
           (* fields + action-local vars (for array allocation) *)
       r_bf : bf_codec_state option;
-      r_configurators_rev : (unit -> unit) list;
+      r_field_access_rev : (string * field_access) list;
       r_field_readers : (string * (bytes -> int -> int)) list;
       r_where : bool expr option;
     }
@@ -437,6 +445,7 @@ type wire_size_info =
 
 type 'r t = {
   t_name : string;
+  t_field_access : (string * field_access) list;
   t_decode : bytes -> int -> 'r;
   t_encode : 'r -> bytes -> int -> unit;
   t_wire_size : wire_size_info;
@@ -464,48 +473,24 @@ let record_start ?where name make =
       r_n_fields = 0;
       r_n_array_slots = 0;
       r_bf = None;
-      r_configurators_rev = [];
+      r_field_access_rev = [];
       r_field_readers = [];
       r_where = where;
     }
 
 let bind (f : 'a Field.t) get =
-  let not_ready _ _ = failwith "field: not added to a record yet" in
   {
     name = Field.name f;
     typ = Field.typ f;
     constraint_ = Field.constraint_ f;
     action = Field.action f;
     get;
-    f_reader = not_ready;
-    f_writer = (fun _ _ _ -> failwith "field: not added to a record yet");
-    f_bf = None;
   }
 
 let ( $ ) = bind
 
 (* Bitfield helpers — shared module for base operations, specialized closures
    for performance-critical read/write dispatched at codec construction time. *)
-
-(* Configure a field's reader/writer from a GADT equality witness.
-   When eq = Some Refl, a = w so we can assign the raw reader/writer directly.
-   Otherwise we wrap through the field's reader/writer adaptor. *)
-let configure_field_rw : type a r w.
-    (a, r) field ->
-    (a, w) eq option ->
-    (bytes -> int -> w) ->
-    (bytes -> int -> w -> unit) ->
-    ((bytes -> int -> w) -> bytes -> int -> a) ->
-    ((bytes -> int -> w -> unit) -> bytes -> int -> a -> unit) ->
-    unit =
- fun fld eq raw_reader raw_writer wrap_reader wrap_writer ->
-  match eq with
-  | Some Refl ->
-      fld.f_reader <- raw_reader;
-      fld.f_writer <- raw_writer
-  | None ->
-      fld.f_reader <- wrap_reader raw_reader;
-      fld.f_writer <- wrap_writer raw_writer
 
 let bf_base_byte_size = Bitfield.byte_size
 let bf_base_total_bits = Bitfield.total_bits
@@ -671,7 +656,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     (byte_off, v)
   in
   let extend ~readers ~writers_rev ~min_wire_size ~next_off ~fields_rev
-      ~validators_rev ~bf ~configurators_rev ~field_readers =
+      ~validators_rev ~bf ~field_access_rev ~field_readers =
     Record
       {
         r_name = r.r_name;
@@ -685,7 +670,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         r_n_fields = List.length field_readers;
         r_n_array_slots = List.length field_readers + n_extra_vars;
         r_bf = bf;
-        r_configurators_rev = configurators_rev;
+        r_field_access_rev = field_access_rev;
         r_field_readers = field_readers;
         r_where = r.r_where;
       }
@@ -735,23 +720,8 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         in
         let raw_reader = build_bf_reader base base_off shift width in
         let raw_writer = build_bf_writer base base_off shift width in
-        let accessor_writer =
-          build_bf_accessor_writer base base_off shift width
-        in
         let int_reader buf off = (raw_reader buf off : int) in
-        let mask = (1 lsl width) - 1 in
-        let word_reader = Bitfield.read_word base in
-        let configurator () =
-          fld.f_bf <-
-            Some
-              {
-                bf_word_reader =
-                  (fun buf off -> word_reader buf (off + base_off));
-                bf_packed = shift lor (mask lsl 8);
-              };
-          configure_field_rw fld eq raw_reader accessor_writer wrap_reader
-            wrap_writer
-        in
+        let fa = Bitfield { base; byte_off = base_off; shift; width } in
         let new_bf =
           {
             bfc_base = base;
@@ -772,7 +742,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             (build_validator ~byte_off:static_off typ raw_reader
             :: r.r_validators_rev)
           ~bf:(Some new_bf)
-          ~configurators_rev:(configurator :: r.r_configurators_rev)
+          ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
     | _ ->
         let field_off_static =
@@ -795,7 +765,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
       int option ->
       (bytes -> int -> int) ->
       (f, r) record =
-   fun typ get_wire wrap_reader wrap_writer field_off_static field_off_fn ->
+   fun typ get_wire wrap_reader _wrap_writer field_off_static field_off_fn ->
     match field_wire_size typ with
     | Some fsize ->
         let field_off =
@@ -811,19 +781,10 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
                 reader_at_0 buf (base + off)
         in
         let raw_encoder = build_field_encoder typ in
-        let configurator () =
-          fld.f_reader <- wrap_reader raw_reader;
-          fld.f_writer <-
-            (match field_off_static with
-            | Some fo ->
-                wrap_writer (fun buf off value ->
-                    let _ = raw_encoder buf (off + fo) value in
-                    ())
-            | None ->
-                wrap_writer (fun buf off value ->
-                    let fo = field_off_fn buf off in
-                    let _ = raw_encoder buf (off + fo) value in
-                    ()))
+        let fa : field_access =
+          match field_off_static with
+          | Some fo -> Fixed fo
+          | None -> Dynamic field_off_fn
         in
         let new_next_off =
           match r.r_next_off with
@@ -857,7 +818,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             (build_validator ~byte_off:field_off typ raw_reader
             :: r.r_validators_rev)
           ~bf:None
-          ~configurators_rev:(configurator :: r.r_configurators_rev)
+          ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
     | None ->
         let size_expr =
@@ -898,10 +859,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           | _ -> assert false
         in
         let writer = raw_writer typ in
-        let configurator () =
-          fld.f_reader <- wrap_reader reader;
-          fld.f_writer <- wrap_writer writer
-        in
+        let fa : field_access = Variable { off = field_off; size_fn } in
         let new_next_off =
           Dynamic_next (fun buf base -> base + field_off + size_fn buf base)
         in
@@ -920,7 +878,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             (build_validator ~byte_off:field_off typ reader
             :: r.r_validators_rev)
           ~bf:None
-          ~configurators_rev:(configurator :: r.r_configurators_rev)
+          ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
   in
   add typ get (fun reader -> reader) (fun writer -> writer) (Some Refl)
@@ -992,7 +950,7 @@ let rec apply_fwd : type mid result.
 
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
-  List.iter (fun f -> f ()) (List.rev r.r_configurators_rev);
+  let field_access = List.rev r.r_field_access_rev in
   let wire_size_info =
     match r.r_next_off with
     | Static_next n -> Fixed n
@@ -1191,6 +1149,7 @@ let seal : type r. (r, r) record -> r t =
   in
   {
     t_name = r.r_name;
+    t_field_access = field_access;
     t_decode =
       (fun buf off ->
         if off + min_size > Bytes.length buf then
@@ -1396,13 +1355,86 @@ let to_struct t =
 
 let validate t buf off = t.t_validate buf off
 
-let[@inline] get (type a r) (_codec : r t) (f : (a, r) field) :
-    (bytes -> int -> a) Staged.t =
-  Staged.stage f.f_reader
+(* Build a staged reader from field type and access info.
+   For Fixed: use build_field_reader which handles Where/Enum/Map.
+   For Bitfield: the GADT ensures 'a = int via Bits constructor.
+   For Dynamic: compute offset at read time. *)
+let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
+    =
+ fun typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      build_bf_reader base byte_off shift width
+  | _, Fixed off -> build_field_reader typ off
+  | _, Dynamic fn ->
+      let reader_at_0 = build_field_reader typ 0 in
+      fun buf base ->
+        let off = fn buf base in
+        reader_at_0 buf (base + off)
+  | Byte_slice _, Variable { off; size_fn } ->
+      fun buf base ->
+        let sz = size_fn buf base in
+        Slice.make_or_eod buf ~first:(base + off) ~length:sz
+  | Byte_array _, Variable { off; size_fn } ->
+      fun buf base ->
+        let sz = size_fn buf base in
+        Bytes.sub_string buf (base + off) sz
+  | Where { inner; _ }, _ -> build_staged_reader inner access
+  | Enum { base; _ }, _ -> build_staged_reader base access
+  | Map { inner; decode; _ }, _ ->
+      let read = build_staged_reader inner access in
+      fun buf base -> decode (read buf base)
+  | _, Bitfield _ ->
+      invalid_arg "Codec.get: non-bitfield type with bitfield access"
+  | _, Variable _ ->
+      invalid_arg "Codec.get: unsupported variable-size field type"
 
-let[@inline] set (type a r) (_codec : r t) (f : (a, r) field) :
+(* Build a staged writer from field type and access info. *)
+let rec build_staged_writer : type a.
+    a typ -> field_access -> bytes -> int -> a -> unit =
+ fun typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      build_bf_accessor_writer base byte_off shift width
+  | _, Fixed off ->
+      let enc = build_field_encoder typ in
+      fun buf base value ->
+        let _ = enc buf (base + off) value in
+        ()
+  | _, Dynamic fn ->
+      let enc = build_field_encoder typ in
+      fun buf base value ->
+        let off = fn buf base in
+        let _ = enc buf (base + off) value in
+        ()
+  | Byte_slice _, Variable { off; _ } ->
+      fun buf base value ->
+        let src = (value : Slice.t) in
+        let len = Slice.length src in
+        Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + off) len
+  | Byte_array _, Variable { off; _ } ->
+      fun buf base value ->
+        let s = (value : string) in
+        Bytes.blit_string s 0 buf (base + off) (String.length s)
+  | Where { inner; _ }, _ -> build_staged_writer inner access
+  | Enum { base; _ }, _ -> build_staged_writer base access
+  | Map { inner; encode; _ }, _ ->
+      let write = build_staged_writer inner access in
+      fun buf base value -> write buf base (encode value)
+  | _, Bitfield _ ->
+      invalid_arg "Codec.set: non-bitfield type with bitfield access"
+  | _, Variable _ ->
+      invalid_arg "Codec.set: unsupported variable-size field type"
+
+let[@inline] get (type a r) (codec : r t) (f : (a, r) field) :
+    (bytes -> int -> a) Staged.t =
+  let access = List.assoc f.name codec.t_field_access in
+  Staged.stage (build_staged_reader f.typ access)
+
+let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
-  Staged.stage f.f_writer
+  let access = List.assoc f.name codec.t_field_access in
+  Staged.stage (build_staged_writer f.typ access)
 
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
@@ -1411,10 +1443,16 @@ let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 
 type bitfield = bf_info
 
-let bitfield (type r) (_codec : r t) (f : (int, r) field) : bitfield =
-  match f.f_bf with
-  | Some info -> info
-  | None -> invalid_arg "Codec.bitfield: field is not a bitfield"
+let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
+  match List.assoc f.name codec.t_field_access with
+  | Bitfield { base; byte_off; shift; width } ->
+      let word_reader = Bitfield.read_word base in
+      let mask = (1 lsl width) - 1 in
+      {
+        bf_word_reader = (fun buf off -> word_reader buf (off + byte_off));
+        bf_packed = shift lor (mask lsl 8);
+      }
+  | _ -> invalid_arg "Codec.bitfield: field is not a bitfield"
 
 let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
   Staged.stage bf.bf_word_reader

@@ -744,6 +744,213 @@ let test_view_shared_set_independent () =
     "codec1 get after set2" 0xA
     ((Staged.unstage (Codec.get codec1 cf1)) buf 0)
 
+(* ── action semantics ── *)
+
+let test_action_fires_on_decode_with () =
+  (* decode_with fires actions and syncs output params *)
+  let env = Codec.env projection_codec |> Param.bind projection_limit 10 in
+  let buf = Bytes.of_string "\x05" in
+  Alcotest.(check int) "outx before" 0 (Param.get env projection_outx);
+  let _v = decode_ok (Codec.decode_with projection_codec env buf 0) in
+  Alcotest.(check int)
+    "outx after decode_with" 5
+    (Param.get env projection_outx)
+
+let test_action_skipped_by_get () =
+  (* get does NOT fire actions — output params stay at 0.
+     This test documents the current (broken) behavior from issue #6. *)
+  let action_out = Param.output "act_out" uint8 in
+  let f_ref = Field.v "v" uint8 in
+  let cf_v =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success [ Action.assign action_out (Field.ref f_ref) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "ActionGet" (fun v -> v) [ cf_v ] in
+  let env = Codec.env codec in
+  let buf = Bytes.of_string "\x42" in
+  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  let v = get_v buf 0 in
+  Alcotest.(check int) "get returns value" 0x42 v;
+  Alcotest.(check int) "action NOT fired by get" 0 (Param.get env action_out)
+
+let test_action_fires_on_validate () =
+  (* validate currently fires actions (via validate_arr).
+     This test documents the current behavior — actions fire but output
+     params are NOT synced back to any env. *)
+  let action_out2 = Param.output "act_out2" uint8 in
+  let f_ref2 = Field.v "v" uint8 in
+  let cf_v2 =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success [ Action.assign action_out2 (Field.ref f_ref2) ])
+        uint8
+      $ fun v -> v)
+  in
+  let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
+  let env = Codec.env codec in
+  let buf = Bytes.of_string "\x42" in
+  Codec.validate codec buf 0;
+  (* validate fires the action internally but has no env to sync to *)
+  Alcotest.(check int) "action output not synced" 0 (Param.get env action_out2)
+
+(* ── same bound field in two codecs ── *)
+
+let test_same_field_two_codecs () =
+  (* A single bound field used in two codecs with different layouts.
+     Codec1: [u16be x] [u16be y]   -> x at offset 0
+     Codec2: [u16be pad] [u16be x] -> x at offset 2
+     If f_reader is mutable and set at seal time, the second seal clobbers
+     the first. Both get/set must use the correct offset for their codec. *)
+  let f_x = Field.v "x" uint16be in
+  let cf_x = Codec.(f_x $ fun x -> x) in
+  let codec1 =
+    let open Codec in
+    v "TwoCodec1" (fun x _y -> x) [ cf_x; (Field.v "y" uint16be $ fun _ -> 0) ]
+  in
+  let codec2 =
+    let open Codec in
+    v "TwoCodec2"
+      (fun _pad x -> x)
+      [ (Field.v "pad" uint16be $ fun _ -> 0); cf_x ]
+  in
+  let buf = Bytes.create 4 in
+  Bytes.set_uint16_be buf 0 0xAAAA;
+  Bytes.set_uint16_be buf 2 0xBBBB;
+  (* codec1 should read x at offset 0 -> 0xAAAA *)
+  Alcotest.(check int)
+    "codec1 get x" 0xAAAA
+    ((Staged.unstage (Codec.get codec1 cf_x)) buf 0);
+  (* codec2 should read x at offset 2 -> 0xBBBB *)
+  Alcotest.(check int)
+    "codec2 get x" 0xBBBB
+    ((Staged.unstage (Codec.get codec2 cf_x)) buf 0)
+
+let test_same_field_two_codecs_set () =
+  (* Same field in two codecs: set via each must write to the correct offset. *)
+  let f_v = Field.v "v" uint8 in
+  let cf_v = Codec.(f_v $ fun v -> v) in
+  let codec1 =
+    let open Codec in
+    v "SetTwo1" (fun v _pad -> v) [ cf_v; (Field.v "pad" uint8 $ fun _ -> 0) ]
+  in
+  let codec2 =
+    let open Codec in
+    v "SetTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v ]
+  in
+  let buf = Bytes.make 2 '\x00' in
+  (* set via codec1 should write to offset 0 *)
+  (Staged.unstage (Codec.set codec1 cf_v)) buf 0 0xAA;
+  Alcotest.(check int) "codec1 set -> byte 0" 0xAA (Bytes.get_uint8 buf 0);
+  Alcotest.(check int)
+    "codec1 set -> byte 1 untouched" 0 (Bytes.get_uint8 buf 1);
+  Bytes.fill buf 0 2 '\x00';
+  (* set via codec2 should write to offset 1 *)
+  (Staged.unstage (Codec.set codec2 cf_v)) buf 0 0xBB;
+  Alcotest.(check int)
+    "codec2 set -> byte 0 untouched" 0 (Bytes.get_uint8 buf 0);
+  Alcotest.(check int) "codec2 set -> byte 1" 0xBB (Bytes.get_uint8 buf 1)
+
+let test_same_field_two_codecs_decode () =
+  (* Decode via the first codec after sealing both.
+     The second seal clobbers f_reader, so decode uses the wrong offset. *)
+  let f_x = Field.v "x" uint16be in
+  let cf_x = Codec.(f_x $ fun x -> x) in
+  let codec1 =
+    let open Codec in
+    v "DecTwo1" (fun x _y -> x) [ cf_x; (Field.v "y" uint16be $ fun _ -> 0) ]
+  in
+  let _codec2 =
+    let open Codec in
+    v "DecTwo2"
+      (fun _pad x -> x)
+      [ (Field.v "pad" uint16be $ fun _ -> 0); cf_x ]
+  in
+  let buf = Bytes.create 4 in
+  Bytes.set_uint16_be buf 0 0x1234;
+  Bytes.set_uint16_be buf 2 0x5678;
+  (* codec1 decode should construct record with x from offset 0 *)
+  match Codec.decode codec1 buf 0 with
+  | Ok v -> Alcotest.(check int) "decoded x" 0x1234 v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_same_field_two_codecs_encode () =
+  (* Encode via the first codec after sealing both.
+     The second seal clobbers f_writer, so encode writes to the wrong offset. *)
+  let f_v = Field.v "v" uint8 in
+  let cf_v = Codec.(f_v $ fun v -> v) in
+  let codec1 =
+    let open Codec in
+    v "EncTwo1" (fun v _pad -> v) [ cf_v; (Field.v "pad" uint8 $ fun _ -> 0) ]
+  in
+  let _codec2 =
+    let open Codec in
+    v "EncTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v ]
+  in
+  let buf = Bytes.make 2 '\x00' in
+  Codec.encode codec1 0xAA buf 0;
+  (* codec1 should write v at offset 0 *)
+  Alcotest.(check int) "byte 0" 0xAA (Bytes.get_uint8 buf 0);
+  Alcotest.(check int) "byte 1" 0x00 (Bytes.get_uint8 buf 1)
+
+let test_same_bitfield_two_codecs () =
+  (* Same bitfield bound field in two codecs with different bit positions. *)
+  let f_a = Field.v "a" (bits ~width:4 U8) in
+  let cf_a = Codec.(f_a $ fun a -> a) in
+  let codec1 =
+    let open Codec in
+    v "BfTwo1"
+      (fun a _b -> a)
+      [ cf_a; (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0) ]
+  in
+  let codec2 =
+    let open Codec in
+    v "BfTwo2"
+      (fun _b a -> a)
+      [ (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0); cf_a ]
+  in
+  (* 0xA3: bottom nibble = 3, top nibble = 0xA *)
+  let buf = Bytes.create 1 in
+  Bytes.set_uint8 buf 0 0xA3;
+  (* codec1: a is bottom 4 bits -> 3 *)
+  Alcotest.(check int)
+    "codec1 get a (bottom)" 3
+    ((Staged.unstage (Codec.get codec1 cf_a)) buf 0);
+  (* codec2: a is top 4 bits -> 0xA *)
+  Alcotest.(check int)
+    "codec2 get a (top)" 0xA
+    ((Staged.unstage (Codec.get codec2 cf_a)) buf 0)
+
+let test_same_field_staged_before_second_seal () =
+  (* Stage get from codec1 BEFORE sealing codec2.
+     The staged function captures f_reader at staging time. If f_reader
+     is a mutable slot, the staged function sees the clobbered value
+     after codec2 seals. *)
+  let f_x = Field.v "x" uint8 in
+  let cf_x = Codec.(f_x $ fun x -> x) in
+  let codec1 =
+    let open Codec in
+    v "StagedTwo1" (fun x _y -> x) [ cf_x; (Field.v "y" uint8 $ fun _ -> 0) ]
+  in
+  (* Stage get from codec1 *)
+  let get_x_1 = Staged.unstage (Codec.get codec1 cf_x) in
+  (* Now seal codec2 — this clobbers f_reader *)
+  let _codec2 =
+    let open Codec in
+    v "StagedTwo2"
+      (fun _pad x -> x)
+      [ (Field.v "pad" uint8 $ fun _ -> 0); cf_x ]
+  in
+  let buf = Bytes.create 2 in
+  Bytes.set_uint8 buf 0 0xAA;
+  Bytes.set_uint8 buf 1 0xBB;
+  (* get_x_1 was staged before codec2 — should still read offset 0 *)
+  Alcotest.(check int) "staged before second seal" 0xAA (get_x_1 buf 0)
+
 (* ── byte_slice tests ── *)
 
 module Bs = Bytesrw.Bytes.Slice
@@ -1484,6 +1691,26 @@ let suite =
         test_codec_bitfield_max_valid;
       Alcotest.test_case "codec bitfield: overflow 1-bit" `Quick
         test_codec_bitfield_overflow_1bit;
+      (* action semantics *)
+      Alcotest.test_case "action: fires on decode_with" `Quick
+        test_action_fires_on_decode_with;
+      Alcotest.test_case "action: skipped by get" `Quick
+        test_action_skipped_by_get;
+      Alcotest.test_case "action: fires on validate" `Quick
+        test_action_fires_on_validate;
+      (* same field in two codecs *)
+      Alcotest.test_case "shared: same field two codecs get" `Quick
+        test_same_field_two_codecs;
+      Alcotest.test_case "shared: same field two codecs set" `Quick
+        test_same_field_two_codecs_set;
+      Alcotest.test_case "shared: same field two codecs decode" `Quick
+        test_same_field_two_codecs_decode;
+      Alcotest.test_case "shared: same field two codecs encode" `Quick
+        test_same_field_two_codecs_encode;
+      Alcotest.test_case "shared: same bitfield two codecs" `Quick
+        test_same_bitfield_two_codecs;
+      Alcotest.test_case "shared: staged before second seal" `Quick
+        test_same_field_staged_before_second_seal;
       (* zero-copy view *)
       Alcotest.test_case "view: get uint" `Quick test_view_get_uint;
       Alcotest.test_case "view: get bitfield" `Quick test_view_get_bitfield;
