@@ -26,7 +26,8 @@ let rec int_of : type a. a typ -> a -> int option =
   | Apply { typ; _ } -> int_of typ v
   | Map { inner; encode; _ } -> int_of inner (encode v)
   | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ ->
+  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       None
 
 let get ctx name =

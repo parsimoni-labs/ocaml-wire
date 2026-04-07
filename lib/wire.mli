@@ -263,6 +263,9 @@ module Expr : sig
   val false_ : bool expr
   (** Constant [false]. *)
 
+  val bool : bool -> bool expr
+  (** Constant boolean expression. *)
+
   val to_uint8 : int expr -> int expr
   (** Truncate to unsigned 8-bit range (mask [0xFF]). *)
 
@@ -362,8 +365,11 @@ val bits : width:int -> bitfield -> int typ
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions. *)
 
-val bool : int typ -> bool typ
-(** [bool t] views an integer wire value as a boolean. Zero is [false], non-zero
+val bool : bool -> bool expr
+(** Constant boolean expression. *)
+
+val bit : int typ -> bool typ
+(** [bit t] views an integer wire value as a boolean. Zero is [false], non-zero
     is [true]. *)
 
 val lookup : 'a list -> int typ -> 'a typ
@@ -394,8 +400,24 @@ val all_zeros : string typ
 val where : bool expr -> 'a typ -> 'a typ
 (** Refine a description with a boolean constraint. *)
 
+type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
+  | Seq_map : {
+      empty : 'b;
+      add : 'b -> 'elt -> 'b;
+      finish : 'b -> 'seq;
+      iter : ('elt -> unit) -> 'seq -> unit;
+    }
+      -> ('elt, 'seq) seq_map
+      (** Builder for sequence accumulation (Jsont-style). *)
+
+val seq_list : ('a, 'a list) seq_map
+(** Default builder: accumulate into a list. *)
+
 val array : len:int expr -> 'a typ -> 'a list typ
 (** Repetition of a description, with length computed from an expression. *)
+
+val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
+(** Repetition with custom builder. *)
 
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string. *)
@@ -639,6 +661,33 @@ module Codec : sig
   (** [extract bf word] extracts the field from a pre-loaded word. Pure
       shift+mask, no memory access. *)
 end
+
+(** {1 Nested Codec Combinators}
+
+    These combinators extend the type language with structured sub-codecs,
+    optional fields, and repeated elements — for protocols like CCSDS TM frames
+    where the layout depends on mission configuration. *)
+
+val codec : 'r Codec.t -> 'r typ
+(** [codec c] embeds a sub-codec as a field type. The sub-codec's decode and
+    encode functions are called at the appropriate offset. *)
+
+val optional : bool expr -> 'a typ -> 'a option typ
+(** [optional present t] is a field that is present when [present] evaluates to
+    [true], absent otherwise. Absent fields decode as [None] and consume zero
+    bytes. *)
+
+val optional_or : bool expr -> default:'a -> 'a typ -> 'a typ
+(** [optional_or present ~default t] is a field that decodes to the inner value
+    when [present] is true, or returns [default] when absent. No option wrapper
+    — zero allocation for the absent case. *)
+
+val repeat : size:int expr -> 'a typ -> 'a list typ
+(** [repeat ~size t] parses elements of type [t] repeatedly until [size] bytes
+    have been consumed. *)
+
+val repeat_seq : ('a, 'seq) seq_map -> size:int expr -> 'a typ -> 'seq typ
+(** Repeat with custom builder. *)
 
 (** {1 Export}
 

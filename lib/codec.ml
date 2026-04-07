@@ -219,6 +219,7 @@ let rec compile_expr (env : (string * (bytes -> int -> int)) list)
       let fa = compile_expr env a in
       let fb = compile_expr env b in
       fun buf base -> fa buf base / fb buf base
+  | Param_ref p -> fun _buf _base -> !(p.ph_cell)
   | Sizeof t -> (
       match field_wire_size t with
       | Some n -> fun _buf _base -> n
@@ -619,6 +620,55 @@ let rec action_vars acc = function
       | None -> acc)
   | _ -> acc
 
+(* Read one element of a typ at a given buffer position. Used by Repeat. *)
+let rec read_elem : type a. a typ -> bytes -> int -> a =
+ fun typ buf off ->
+  match typ with
+  | Uint8 -> Bytes.get_uint8 buf off
+  | Uint16 Little -> Bytes.get_uint16_le buf off
+  | Uint16 Big -> Bytes.get_uint16_be buf off
+  | Uint32 Little -> UInt32.le buf off
+  | Uint32 Big -> UInt32.be buf off
+  | Uint63 Little -> UInt63.le buf off
+  | Uint63 Big -> UInt63.be buf off
+  | Uint64 Little -> Bytes.get_int64_le buf off
+  | Uint64 Big -> Bytes.get_int64_be buf off
+  | Codec { codec_decode; _ } -> codec_decode buf off
+  | Map { inner; decode; _ } -> decode (read_elem inner buf off)
+  | Where { inner; _ } -> read_elem inner buf off
+  | Enum { base; _ } -> read_elem base buf off
+  | _ -> failwith "read_elem: unsupported element type in repeat"
+
+(* Write one element of a typ at a given buffer position. Used by Repeat. *)
+let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
+ fun typ buf off v ->
+  match typ with
+  | Uint8 -> Bytes.set_uint8 buf off v
+  | Uint16 Little -> Bytes.set_uint16_le buf off v
+  | Uint16 Big -> Bytes.set_uint16_be buf off v
+  | Uint32 Little -> UInt32.set_le buf off v
+  | Uint32 Big -> UInt32.set_be buf off v
+  | Uint63 Little -> UInt63.set_le buf off v
+  | Uint63 Big -> UInt63.set_be buf off v
+  | Uint64 Little -> Bytes.set_int64_le buf off v
+  | Uint64 Big -> Bytes.set_int64_be buf off v
+  | Codec { codec_encode; _ } -> codec_encode v buf off
+  | Map { inner; encode; _ } -> write_elem inner buf off (encode v)
+  | Where { inner; _ } -> write_elem inner buf off v
+  | Enum { base; _ } -> write_elem base buf off v
+  | _ -> failwith "write_elem: unsupported element type in repeat"
+
+(* Compute the wire size of one element at a buffer position. Used by Repeat
+   for variable-size elements. *)
+let elem_size_of : type a. a typ -> bytes -> int -> int =
+ fun typ buf off ->
+  match typ with
+  | Codec { codec_size_of; _ } -> codec_size_of buf off
+  | _ -> (
+      match field_wire_size typ with
+      | Some n -> n
+      | None -> failwith "elem_size_of: cannot determine element size")
+
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
     =
  fun (Record r) ({ name; typ; get; _ } as fld) ->
@@ -776,6 +826,442 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           ~bf:(Some new_bf)
           ~field_access_rev:((name, fa) :: r.r_field_access_rev)
           ~field_readers:((name, int_reader) :: r.r_field_readers)
+    | Codec { codec_decode; codec_encode; codec_fixed_size; codec_size_of; _ }
+      -> (
+        let field_off_static =
+          match r.r_next_off with
+          | Static_next n -> Some n
+          | Dynamic_next _ -> None
+        in
+        let field_off_fn =
+          match r.r_next_off with
+          | Static_next n -> fun (_buf : bytes) (_base : int) -> n
+          | Dynamic_next f -> fun buf base -> f buf base - base
+        in
+        match codec_fixed_size with
+        | Some fsize ->
+            let raw_reader =
+              match field_off_static with
+              | Some fo -> fun buf base -> codec_decode buf (base + fo)
+              | None ->
+                  fun buf base ->
+                    let fo = field_off_fn buf base in
+                    codec_decode buf (base + fo)
+            in
+            let raw_writer =
+              match field_off_static with
+              | Some fo ->
+                  fun v buf off -> codec_encode (get_wire v) buf (off + fo)
+              | None ->
+                  fun v buf off ->
+                    let fo = field_off_fn buf off in
+                    codec_encode (get_wire v) buf (off + fo)
+            in
+            let fa : field_access =
+              match field_off_static with
+              | Some fo -> Fixed fo
+              | None -> Dynamic field_off_fn
+            in
+            let new_next_off =
+              match r.r_next_off with
+              | Static_next n -> Static_next (n + fsize)
+              | Dynamic_next f ->
+                  Dynamic_next (fun buf base -> f buf base + fsize)
+            in
+            let vfull, vcheck, faction =
+              build_validator
+                ~byte_off:
+                  (match field_off_static with Some n -> n | None -> -1)
+                typ raw_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:(r.r_min_wire_size + fsize)
+              ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
+        | None ->
+            let field_off =
+              match field_off_static with
+              | Some n -> n
+              | None ->
+                  invalid_arg
+                    "add_field: variable-size codec after variable-size field \
+                     not yet supported"
+            in
+            let raw_reader buf base = codec_decode buf (base + field_off) in
+            let raw_writer v buf off =
+              codec_encode (get_wire v) buf (off + field_off)
+            in
+            let fa : field_access =
+              Variable
+                {
+                  off = field_off;
+                  size_fn =
+                    (fun buf base -> codec_size_of buf (base + field_off));
+                }
+            in
+            let new_next_off =
+              Dynamic_next
+                (fun buf base ->
+                  base + field_off + codec_size_of buf (base + field_off))
+            in
+            let vfull, vcheck, faction =
+              build_validator ~byte_off:field_off typ raw_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:r.r_min_wire_size ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers))
+    | Optional { present; inner } -> (
+        let field_off_static =
+          match r.r_next_off with
+          | Static_next n -> Some n
+          | Dynamic_next _ -> None
+        in
+        let field_off_fn =
+          match r.r_next_off with
+          | Static_next n -> fun (_buf : bytes) (_base : int) -> n
+          | Dynamic_next f -> fun buf base -> f buf base - base
+        in
+        let inner_size = field_wire_size inner in
+        (* Evaluate 'present' at codec construction time if it's a literal *)
+        let present_literal =
+          match present with Bool b -> Some b | _ -> None
+        in
+        match (present_literal, inner_size) with
+        | Some true, Some fsize ->
+            (* Statically present, fixed inner: behave like a normal fixed field
+                but wrap in Some *)
+            let inner_reader =
+              match inner with
+              | Codec { codec_decode; _ } -> (
+                  match field_off_static with
+                  | Some fo -> fun buf base -> codec_decode buf (base + fo)
+                  | None ->
+                      fun buf base ->
+                        let fo = field_off_fn buf base in
+                        codec_decode buf (base + fo))
+              | _ -> (
+                  match field_off_static with
+                  | Some fo -> build_field_reader inner fo
+                  | None ->
+                      let reader_at_0 = build_field_reader inner 0 in
+                      fun buf base ->
+                        let fo = field_off_fn buf base in
+                        reader_at_0 buf (base + fo))
+            in
+            let raw_reader buf base = Some (inner_reader buf base) in
+            let inner_writer =
+              match inner with
+              | Codec { codec_encode; _ } -> (
+                  match field_off_static with
+                  | Some fo -> fun buf off iv -> codec_encode iv buf (off + fo)
+                  | None ->
+                      fun buf off iv ->
+                        let fo = field_off_fn buf off in
+                        codec_encode iv buf (off + fo))
+              | _ -> (
+                  let enc = build_field_encoder inner in
+                  match field_off_static with
+                  | Some fo -> fun buf off iv -> ignore (enc buf (off + fo) iv)
+                  | None ->
+                      fun buf off iv ->
+                        let fo = field_off_fn buf off in
+                        ignore (enc buf (off + fo) iv))
+            in
+            let raw_writer =
+             fun v buf off ->
+              match get_wire v with
+              | Some iv -> inner_writer buf off iv
+              | None -> ()
+            in
+            let fa : field_access =
+              match field_off_static with
+              | Some fo -> Fixed fo
+              | None -> Dynamic field_off_fn
+            in
+            let new_next_off =
+              match r.r_next_off with
+              | Static_next n -> Static_next (n + fsize)
+              | Dynamic_next f ->
+                  Dynamic_next (fun buf base -> f buf base + fsize)
+            in
+            let vfull, vcheck, faction =
+              build_validator
+                ~byte_off:
+                  (match field_off_static with Some n -> n | None -> -1)
+                typ raw_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:(r.r_min_wire_size + fsize)
+              ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
+        | Some false, _ ->
+            (* Statically absent: zero bytes, always None *)
+            let raw_reader _buf _base = None in
+            let raw_writer _v _buf _off = () in
+            let fa : field_access =
+              match field_off_static with
+              | Some fo -> Fixed fo
+              | None -> Dynamic field_off_fn
+            in
+            let vfull, vcheck, faction =
+              build_validator
+                ~byte_off:
+                  (match field_off_static with Some n -> n | None -> -1)
+                typ raw_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:r.r_min_wire_size ~next_off:r.r_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
+        | _ ->
+            invalid_arg
+              "add_field: dynamic optional (non-literal bool expr) not yet \
+               supported")
+    | Optional_or { present; inner; default } -> (
+        let field_off_static =
+          match r.r_next_off with
+          | Static_next n -> Some n
+          | Dynamic_next _ -> None
+        in
+        let field_off_fn =
+          match r.r_next_off with
+          | Static_next n -> fun (_buf : bytes) (_base : int) -> n
+          | Dynamic_next f -> fun buf base -> f buf base - base
+        in
+        let inner_size = field_wire_size inner in
+        let present_literal =
+          match present with Bool b -> Some b | _ -> None
+        in
+        match (present_literal, inner_size) with
+        | Some true, Some fsize ->
+            (* Statically present: read inner directly *)
+            let inner_reader =
+              match inner with
+              | Codec { codec_decode; _ } -> (
+                  match field_off_static with
+                  | Some fo -> fun buf base -> codec_decode buf (base + fo)
+                  | None ->
+                      fun buf base ->
+                        let fo = field_off_fn buf base in
+                        codec_decode buf (base + fo))
+              | _ -> (
+                  match field_off_static with
+                  | Some fo -> build_field_reader inner fo
+                  | None ->
+                      let reader_at_0 = build_field_reader inner 0 in
+                      fun buf base ->
+                        let fo = field_off_fn buf base in
+                        reader_at_0 buf (base + fo))
+            in
+            let inner_writer =
+              match inner with
+              | Codec { codec_encode; _ } -> (
+                  match field_off_static with
+                  | Some fo -> fun buf off iv -> codec_encode iv buf (off + fo)
+                  | None ->
+                      fun buf off iv ->
+                        let fo = field_off_fn buf off in
+                        codec_encode iv buf (off + fo))
+              | _ -> (
+                  let enc = build_field_encoder inner in
+                  match field_off_static with
+                  | Some fo -> fun buf off iv -> ignore (enc buf (off + fo) iv)
+                  | None ->
+                      fun buf off iv ->
+                        let fo = field_off_fn buf off in
+                        ignore (enc buf (off + fo) iv))
+            in
+            let raw_writer v buf off = inner_writer buf off (get_wire v) in
+            let fa : field_access =
+              match field_off_static with
+              | Some fo -> Fixed fo
+              | None -> Dynamic field_off_fn
+            in
+            let new_next_off =
+              match r.r_next_off with
+              | Static_next n -> Static_next (n + fsize)
+              | Dynamic_next f ->
+                  Dynamic_next (fun buf base -> f buf base + fsize)
+            in
+            let vfull, vcheck, faction =
+              build_validator
+                ~byte_off:
+                  (match field_off_static with Some n -> n | None -> -1)
+                typ inner_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader inner_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:(r.r_min_wire_size + fsize)
+              ~next_off:new_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
+        | Some false, _ ->
+            (* Statically absent: return default, zero bytes *)
+            let raw_reader _buf _base = default in
+            let raw_writer _v _buf _off = () in
+            let fa : field_access =
+              match field_off_static with
+              | Some fo -> Fixed fo
+              | None -> Dynamic field_off_fn
+            in
+            let vfull, vcheck, faction =
+              build_validator
+                ~byte_off:
+                  (match field_off_static with Some n -> n | None -> -1)
+                typ raw_reader
+            in
+            extend
+              ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+              ~writers_rev:(raw_writer :: r.r_writers_rev)
+              ~min_wire_size:r.r_min_wire_size ~next_off:r.r_next_off
+              ~fields_rev:(struct_field fld :: r.r_fields_rev)
+              ~validators_rev:(vfull :: r.r_validators_rev)
+              ~checkers_rev:(vcheck :: r.r_checkers_rev)
+              ~field_actions_rev:
+                (match faction with
+                | Some fa -> fa :: r.r_field_actions_rev
+                | None -> r.r_field_actions_rev)
+              ~bf:None
+              ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+              ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
+        | _ ->
+            invalid_arg
+              "add_field: dynamic optional_or (non-literal bool expr) not yet \
+               supported")
+    | Repeat { size = size_expr; elem; seq = Seq_map seq } ->
+        let field_off =
+          match r.r_next_off with
+          | Static_next n -> n
+          | Dynamic_next _ ->
+              invalid_arg
+                "add_field: repeat after variable-size field not yet supported"
+        in
+        let elem_size = field_wire_size elem in
+        let size_fn = compile_expr r.r_field_readers size_expr in
+        let raw_reader =
+          match elem_size with
+          | Some esz ->
+              (* Fixed-size elements: direct fill via builder *)
+              fun buf base ->
+                let budget = size_fn buf base in
+                let n = if esz > 0 then budget / esz else 0 in
+                let start = base + field_off in
+                let rec loop acc i =
+                  if i >= n then seq.finish acc
+                  else
+                    loop
+                      (seq.add acc (read_elem elem buf (start + (i * esz))))
+                      (i + 1)
+                in
+                loop seq.empty 0
+          | None ->
+              (* Variable-size elements: builder accumulation *)
+              fun buf base ->
+                let budget = size_fn buf base in
+                let rec loop acc pos remaining =
+                  if remaining <= 0 then seq.finish acc
+                  else
+                    let v = read_elem elem buf pos in
+                    let esz = elem_size_of elem buf pos in
+                    loop (seq.add acc v) (pos + esz) (remaining - esz)
+                in
+                loop seq.empty (base + field_off) budget
+        in
+        let raw_writer =
+          match elem_size with
+          | Some esz ->
+              fun (v : r) (buf : bytes) (off : int) ->
+                let items : w = get_wire v in
+                let pos = Stdlib.ref (off + field_off) in
+                seq.iter
+                  (fun item ->
+                    write_elem elem buf !pos item;
+                    pos := !pos + esz)
+                  items
+          | None ->
+              fun (v : r) (buf : bytes) (off : int) ->
+                let items : w = get_wire v in
+                let pos = Stdlib.ref (off + field_off) in
+                seq.iter
+                  (fun item ->
+                    write_elem elem buf !pos item;
+                    let esz = elem_size_of elem buf !pos in
+                    pos := !pos + esz)
+                  items
+        in
+        let fa : field_access = Variable { off = field_off; size_fn } in
+        let new_next_off =
+          Dynamic_next (fun buf base -> base + field_off + size_fn buf base)
+        in
+        let vfull, vcheck, faction =
+          build_validator ~byte_off:field_off typ raw_reader
+        in
+        extend
+          ~readers:(Snoc (r.r_readers, wrap_reader raw_reader))
+          ~writers_rev:(raw_writer :: r.r_writers_rev)
+          ~min_wire_size:r.r_min_wire_size ~next_off:new_next_off
+          ~fields_rev:(struct_field fld :: r.r_fields_rev)
+          ~validators_rev:(vfull :: r.r_validators_rev)
+          ~checkers_rev:(vcheck :: r.r_checkers_rev)
+          ~field_actions_rev:
+            (match faction with
+            | Some fa -> fa :: r.r_field_actions_rev
+            | None -> r.r_field_actions_rev)
+          ~bf:None
+          ~field_access_rev:((name, fa) :: r.r_field_access_rev)
+          ~field_readers:((name, fun _buf _base -> 0) :: r.r_field_readers)
     | _ ->
         let field_off_static =
           match r.r_next_off with
@@ -1275,6 +1761,14 @@ let wire_size_at t buf off =
 let is_fixed t =
   match t.t_wire_size with Fixed _ -> true | Variable _ -> false
 
+let raw_decode t buf off = t.t_decode buf off
+let raw_encode t v buf off = t.t_encode v buf off
+
+let wire_size_info t =
+  match t.t_wire_size with
+  | Fixed n -> `Fixed n
+  | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
+
 let decode t buf off =
   let v = t.t_decode buf off in
   (* Full validation: constraints + where + actions *)
@@ -1545,6 +2039,7 @@ let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
   let access = field_access codec f.name in
   Staged.stage (build_staged_writer f.typ access)
 
+let name t = t.t_name
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 

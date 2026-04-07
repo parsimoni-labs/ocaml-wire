@@ -291,6 +291,60 @@ let test_no_params () =
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+(* ── Param-driven size ── *)
+
+let decode_ok = function
+  | Ok v -> v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+type param_size_record = { ps_data : string; ps_tag : int }
+
+let ps_size_param = Param.input "data_size" uint8
+
+let param_size_codec =
+  Codec.v "ParamSize"
+    (fun data tag -> { ps_data = data; ps_tag = tag })
+    Codec.
+      [
+        ( Field.v "Data" (byte_array ~size:(Param.expr ps_size_param)) $ fun r ->
+          r.ps_data );
+        (Field.v "Tag" uint8 $ fun r -> r.ps_tag);
+      ]
+
+let test_param_size_decode () =
+  let env = Codec.env param_size_codec |> Param.bind ps_size_param 4 in
+  let buf = Bytes.create 5 in
+  Bytes.blit_string "ABCD" 0 buf 0 4;
+  Bytes.set_uint8 buf 4 0xFF;
+  let r = decode_ok (Codec.decode_with param_size_codec env buf 0) in
+  Alcotest.(check string) "data" "ABCD" r.ps_data;
+  Alcotest.(check int) "tag" 0xFF r.ps_tag
+
+let test_param_size_different_sizes () =
+  (* Same codec, different param values *)
+  let env2 = Codec.env param_size_codec |> Param.bind ps_size_param 2 in
+  let buf2 = Bytes.create 3 in
+  Bytes.blit_string "XY" 0 buf2 0 2;
+  Bytes.set_uint8 buf2 2 0xAA;
+  let r2 = decode_ok (Codec.decode_with param_size_codec env2 buf2 0) in
+  Alcotest.(check string) "data 2" "XY" r2.ps_data;
+  Alcotest.(check int) "tag 2" 0xAA r2.ps_tag;
+  let env8 = Codec.env param_size_codec |> Param.bind ps_size_param 8 in
+  let buf8 = Bytes.create 9 in
+  Bytes.blit_string "12345678" 0 buf8 0 8;
+  Bytes.set_uint8 buf8 8 0xBB;
+  let r8 = decode_ok (Codec.decode_with param_size_codec env8 buf8 0) in
+  Alcotest.(check string) "data 8" "12345678" r8.ps_data;
+  Alcotest.(check int) "tag 8" 0xBB r8.ps_tag
+
+let test_param_size_zero () =
+  let env = Codec.env param_size_codec |> Param.bind ps_size_param 0 in
+  let buf = Bytes.create 1 in
+  Bytes.set_uint8 buf 0 0xFF;
+  let r = decode_ok (Codec.decode_with param_size_codec env buf 0) in
+  Alcotest.(check string) "data" "" r.ps_data;
+  Alcotest.(check int) "tag" 0xFF r.ps_tag
+
 (* ── Suite ── *)
 
 let suite =
@@ -322,4 +376,9 @@ let suite =
       Alcotest.test_case "3D rendering" `Quick test_3d_rendering;
       (* default *)
       Alcotest.test_case "no params" `Quick test_no_params;
+      (* param-driven size *)
+      Alcotest.test_case "param: size decode" `Quick test_param_size_decode;
+      Alcotest.test_case "param: different sizes" `Quick
+        test_param_size_different_sizes;
+      Alcotest.test_case "param: size zero" `Quick test_param_size_zero;
     ] )

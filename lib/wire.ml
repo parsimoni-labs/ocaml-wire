@@ -22,10 +22,53 @@ let param_c_type (p : param) =
 
 let _field_ref = Types.ref
 let map ~decode ~encode inner = Types.map decode encode inner
-let bool = Types.bool
+
+let bool (b : Stdlib.Bool.t) : _ Types.expr =
+  if b then Types.true_ else Types.false_
+
+let bit = Types.bool
 let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases
+
+let codec (c : 'r Codec_backend.t) : 'r typ =
+  let codec_decode = Codec_backend.raw_decode c in
+  let codec_encode = Codec_backend.raw_encode c in
+  match Codec_backend.wire_size_info c with
+  | `Fixed n ->
+      Codec
+        {
+          codec_name = Codec_backend.name c;
+          codec_decode;
+          codec_encode;
+          codec_fixed_size = Some n;
+          codec_size_of = (fun _buf _off -> n);
+        }
+  | `Variable size_of ->
+      Codec
+        {
+          codec_name = Codec_backend.name c;
+          codec_decode;
+          codec_encode;
+          codec_fixed_size = None;
+          codec_size_of = size_of;
+        }
+
+type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
+  | Seq_map : {
+      empty : 'b;
+      add : 'b -> 'elt -> 'b;
+      finish : 'b -> 'seq;
+      iter : ('elt -> unit) -> 'seq -> unit;
+    }
+      -> ('elt, 'seq) seq_map
+
+let seq_list = Types.seq_list
+let array_seq = Types.array_seq
+let optional = Types.optional
+let optional_or = Types.optional_or
+let repeat = Types.repeat
+let repeat_seq = Types.repeat_seq
 
 let bits ~width = function
   | U8 -> Types.bits ~width Types.bf_uint8
@@ -39,6 +82,7 @@ module Expr = struct
 
   let true_ = Types.true_
   let false_ = Types.false_
+  let bool b = if b then Types.true_ else Types.false_
 end
 
 module Reader = Bytesrw.Bytes.Reader
@@ -287,15 +331,15 @@ let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
       let v, ctx' = parse_with dec ctx inner in
       if eval_expr ctx' cond then (v, ctx')
       else raise (Parse_exn (Constraint_failed "where clause"))
-  | Array { len; elem } ->
+  | Array { len; elem; seq = Seq_map seq } ->
       let n = eval_expr ctx len in
       let rec loop acc i ctx' =
-        if i >= n then (List.rev acc, ctx')
+        if i >= n then (seq.finish acc, ctx')
         else
           let v, ctx'' = parse_with dec ctx' elem in
-          loop (v :: acc) (i + 1) ctx''
+          loop (seq.add acc v) (i + 1) ctx''
       in
-      loop [] 0 ctx
+      loop seq.empty 0 ctx
   | Byte_array { size } ->
       let n = eval_expr ctx size in
       let buf = read_bytes dec n in
@@ -335,6 +379,40 @@ let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
       match decode v with
       | r -> (r, ctx')
       | exception Parse_error e -> raise (Parse_exn e))
+  | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
+      (* Buffer enough bytes for the sub-codec, then decode from a flat buffer *)
+      let sz =
+        match codec_fixed_size with
+        | Some n -> n
+        | None ->
+            (* For variable-size: peek at available data to determine size *)
+            if available dec = 0 then refill dec;
+            codec_size_of dec.i dec.i_next
+      in
+      let buf = read_bytes dec sz in
+      let v = codec_decode buf 0 in
+      (v, ctx)
+  | Optional { present; inner } ->
+      if Eval.expr ctx present then
+        let v, ctx' = parse_with dec ctx inner in
+        (Some v, ctx')
+      else (None, ctx)
+  | Optional_or { present; inner; default } ->
+      if Eval.expr ctx present then
+        let v, ctx' = parse_with dec ctx inner in
+        (v, ctx')
+      else (default, ctx)
+  | Repeat { size; elem; seq = Seq_map seq } ->
+      let budget = Eval.expr ctx size in
+      let start = dec.position in
+      let rec loop acc =
+        let consumed = dec.position - start in
+        if consumed >= budget then (seq.finish acc, ctx)
+        else
+          let v, _ = parse_with dec ctx elem in
+          loop (seq.add acc v)
+      in
+      loop seq.empty
   | Type_ref _ -> failwith "type_ref requires a type registry"
   | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
   | Apply _ -> failwith "apply requires a type registry"
@@ -601,10 +679,10 @@ let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
       write_string enc v;
       ctx
   | Where { inner; _ } -> encode_with_ctx ctx inner v enc
-  | Array { elem; _ } ->
-      List.fold_left
-        (fun ctx' elem_v -> encode_with_ctx ctx' elem elem_v enc)
-        ctx v
+  | Array { elem; seq = Seq_map seq; _ } ->
+      let ctx' = Stdlib.ref ctx in
+      seq.iter (fun elem_v -> ctx' := encode_with_ctx !ctx' elem elem_v enc) v;
+      !ctx'
   | Byte_array _ ->
       write_string enc v;
       ctx
@@ -617,6 +695,29 @@ let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
   | Single_elem { elem; _ } -> encode_with_ctx ctx elem v enc
   | Enum { base; _ } -> encode_with_ctx ctx base v enc
   | Map { inner; encode; _ } -> encode_with_ctx ctx inner (encode v) enc
+  | Codec { codec_encode; codec_fixed_size; codec_size_of; _ } ->
+      let sz =
+        match codec_fixed_size with
+        | Some n -> n
+        | None ->
+            (* For variable-size, encode to a temp buffer to determine size *)
+            let tmp = Bytes.create 4096 in
+            codec_encode v tmp 0;
+            codec_size_of tmp 0
+      in
+      let tmp = Bytes.create sz in
+      codec_encode v tmp 0;
+      write_string enc (Bytes.unsafe_to_string tmp);
+      ctx
+  | Optional { present; inner } ->
+      if Eval.expr ctx present then encode_with_ctx ctx inner (Option.get v) enc
+      else ctx
+  | Optional_or { present; inner; _ } ->
+      if Eval.expr ctx present then encode_with_ctx ctx inner v enc else ctx
+  | Repeat { elem; seq = Seq_map seq; _ } ->
+      let ctx' = Stdlib.ref ctx in
+      seq.iter (fun elem_v -> ctx' := encode_with_ctx !ctx' elem elem_v enc) v;
+      !ctx'
   | Casetype _ -> failwith "casetype encoding: use Record module"
   | Struct _ -> failwith "struct encoding: use Record module"
   | Type_ref _ -> failwith "type_ref requires a type registry"

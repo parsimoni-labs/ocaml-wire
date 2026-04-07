@@ -193,7 +193,7 @@ type bool_fields = {
   bl_code : int;
 }
 
-let f_bool_active = Field.v "Active" (bool (bits ~width:1 U8))
+let f_bool_active = Field.v "Active" (bit (bits ~width:1 U8))
 let bf_bool_active = Codec.(f_bool_active $ fun b -> b.bl_active)
 
 let bool_fields_codec =
@@ -203,7 +203,7 @@ let bool_fields_codec =
     Codec.
       [
         bf_bool_active;
-        (Field.v "Valid" (bool (bits ~width:1 U8)) $ fun b -> b.bl_valid);
+        (Field.v "Valid" (bit (bits ~width:1 U8)) $ fun b -> b.bl_valid);
         (Field.v "Mode" (bits ~width:6 U8) $ fun b -> b.bl_mode);
         (Field.v "Code" uint8 $ fun b -> b.bl_code);
       ]

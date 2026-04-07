@@ -434,7 +434,7 @@ let test_output_mixed () =
   Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
 
 let test_output_bool_bitfield () =
-  let f_flag = Field.v "flag" (bool (bits ~width:1 U8)) in
+  let f_flag = Field.v "flag" (bit (bits ~width:1 U8)) in
   let f_data = Field.v "data" uint8 in
   let codec =
     let open Codec in

@@ -1,5 +1,16 @@
 type endian = Little | Big
 
+(* Sequence builder for Array/Repeat — Jsont-style accumulator pattern.
+   Existentially hides the builder type so callers control the output container. *)
+type ('elt, 'seq) seq_map =
+  | Seq_map : {
+      empty : 'b;
+      add : 'b -> 'elt -> 'b;
+      finish : 'b -> 'seq;
+      iter : ('elt -> unit) -> 'seq -> unit;
+    }
+      -> ('elt, 'seq) seq_map
+
 (* Param handles — defined here so expr and action_stmt can reference them *)
 type param_input
 type param_output
@@ -63,7 +74,12 @@ and _ typ =
   | All_bytes : string typ
   | All_zeros : string typ
   | Where : { cond : bool expr; inner : 'a typ } -> 'a typ
-  | Array : { len : int expr; elem : 'a typ } -> 'a list typ
+  | Array : {
+      len : int expr;
+      elem : 'a typ;
+      seq : ('a, 'seq) seq_map;
+    }
+      -> 'seq typ
   | Byte_array : { size : int expr } -> string typ
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
   | Single_elem : { size : int expr; elem : 'a typ; at_most : bool } -> 'a typ
@@ -84,6 +100,27 @@ and _ typ =
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
   | Map : { inner : 'w typ; decode : 'w -> 'a; encode : 'a -> 'w } -> 'a typ
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
+  | Codec : {
+      codec_name : string;
+      codec_decode : bytes -> int -> 'r;
+      codec_encode : 'r -> bytes -> int -> unit;
+      codec_fixed_size : int option;
+      codec_size_of : bytes -> int -> int;
+    }
+      -> 'r typ
+  | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ
+  | Optional_or : {
+      present : bool expr;
+      inner : 'a typ;
+      default : 'a;
+    }
+      -> 'a typ
+  | Repeat : {
+      size : int expr;
+      elem : 'a typ;
+      seq : ('a, 'seq) seq_map;
+    }
+      -> 'seq typ
 
 and packed_expr = Pack_expr : 'a expr -> packed_expr
 
@@ -214,9 +251,24 @@ let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
 let where cond inner = Where { cond; inner }
-let array ~len elem = Array { len; elem }
+
+let seq_list : ('a, 'a list) seq_map =
+  Seq_map
+    {
+      empty = [];
+      add = (fun acc x -> x :: acc);
+      finish = List.rev;
+      iter = List.iter;
+    }
+
+let array ~len elem = Array { len; elem; seq = seq_list }
+let array_seq seq ~len elem = Array { len; elem; seq }
 let byte_array ~size = Byte_array { size }
 let byte_slice ~size = Byte_slice { size }
+let optional present inner = Optional { present; inner }
+let optional_or present ~default inner = Optional_or { present; inner; default }
+let repeat ~size elem = Repeat { size; elem; seq = seq_list }
+let repeat_seq seq ~size elem = Repeat { size; elem; seq }
 let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
@@ -493,7 +545,7 @@ and pp_typ : type a. a typ Fmt.t =
   | All_bytes -> Fmt.string ppf "all_bytes"
   | All_zeros -> Fmt.string ppf "all_zeros"
   | Where { cond; inner } -> Fmt.pf ppf "%a { %a }" pp_typ inner pp_expr cond
-  | Array { len; elem } -> Fmt.pf ppf "%a[%a]" pp_typ elem pp_expr len
+  | Array { len; elem; _ } -> Fmt.pf ppf "%a[%a]" pp_typ elem pp_expr len
   | Byte_array { size } | Byte_slice { size } ->
       Fmt.pf ppf "UINT8[:byte-size %a]" pp_expr size
   | Single_elem { size; elem; at_most = false } ->
@@ -510,6 +562,14 @@ and pp_typ : type a. a typ Fmt.t =
   | Apply { typ; args } ->
       Fmt.pf ppf "%a(%a)" pp_typ typ Fmt.(list ~sep:comma pp_packed_expr) args
   | Map { inner; _ } -> pp_typ ppf inner
+  | Codec { codec_name; _ } -> Fmt.string ppf codec_name
+  | Optional { present = Bool true; inner } -> pp_typ ppf inner
+  | Optional { present = Bool false; _ } -> Fmt.string ppf "UINT8"
+  | Optional { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
+  | Optional_or { present = Bool true; inner; _ } -> pp_typ ppf inner
+  | Optional_or { present = Bool false; _ } -> Fmt.string ppf "UINT8"
+  | Optional_or { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
+  | Repeat { elem; _ } -> pp_typ ppf elem
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
@@ -558,9 +618,18 @@ let rec field_suffix : type a.
       (Byte_array size, fun ppf -> Fmt.string ppf "UINT8")
   | Single_elem { size; elem; at_most } ->
       (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
-  | Array { len; elem } -> (Array len, fun ppf -> pp_typ ppf elem)
+  | Array { len; elem; _ } -> (Array len, fun ppf -> pp_typ ppf elem)
   | Map { inner; _ } -> field_suffix inner
   | Enum { base; _ } -> field_suffix base
+  | Optional { present = Bool true; inner } -> field_suffix inner
+  | Optional { present = Bool false; _ } ->
+      (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
+  | Optional_or { present = Bool true; inner; _ } -> field_suffix inner
+  | Optional_or { present = Bool false; _ } ->
+      (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
+  | Repeat { size; elem; _ } ->
+      (* Variable-length array with byte-size budget *)
+      (Byte_array size, fun ppf -> pp_typ ppf elem)
   | _ -> (No_suffix, fun ppf -> pp_typ ppf typ)
 
 let anon_counter = Stdlib.ref 0
@@ -721,6 +790,14 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Where { inner; _ } -> field_wire_size inner
   | Enum { base; _ } -> field_wire_size base
   | Map { inner; _ } -> field_wire_size inner
+  | Codec { codec_fixed_size; _ } -> codec_fixed_size
+  | Optional { present = Bool true; inner } -> field_wire_size inner
+  | Optional { present = Bool false; _ } -> Some 0
+  | Optional _ -> None
+  | Optional_or { present = Bool true; inner; _ } -> field_wire_size inner
+  | Optional_or { present = Bool false; _ } -> Some 0
+  | Optional_or _ -> None
+  | Repeat _ -> None
   | _ -> None
 
 let c_type_of : type a. a typ -> string = function

@@ -112,7 +112,7 @@ let test_parse_map buf =
 
 let test_parse_bool buf =
   let buf = truncate buf in
-  let t = Wire.bool Wire.uint8 in
+  let t = Wire.bit Wire.uint8 in
   let _ = Wire.decode_string t buf in
   ()
 
@@ -372,7 +372,7 @@ let test_roundtrip_map n =
 
 let test_roundtrip_bool n =
   let v = n mod 2 = 0 in
-  let t = Wire.bool Wire.uint8 in
+  let t = Wire.bit Wire.uint8 in
   let encoded = Wire.encode_to_string t v in
   match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "bool roundtrip mismatch"
@@ -474,7 +474,7 @@ let bool_record_codec =
     (fun flag value -> { flag; value })
     Wire.Codec.
       [
-        (Wire.Field.v "flag" (Wire.bool Wire.uint8) $ fun r -> r.flag);
+        (Wire.Field.v "flag" (Wire.bit Wire.uint8) $ fun r -> r.flag);
         (Wire.Field.v "value" Wire.uint16 $ fun r -> r.value);
       ]
 

@@ -79,7 +79,7 @@ let test_pp_map () =
   ()
 
 let test_pp_bool () =
-  let t = Wire.bool (Wire.bits ~width:1 Wire.U8) in
+  let t = Wire.bit (Wire.bits ~width:1 Wire.U8) in
   let _ = Fmt.str "%a" Wire.Everparse.Raw.pp_typ t in
   ()
 

@@ -89,6 +89,18 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
     call {!validate} after a batch of writes to verify constraints still hold.
 *)
 
+val raw_decode : 'r t -> bytes -> int -> 'r
+(** [raw_decode c buf off] decodes without validation. Internal use. *)
+
+val raw_encode : 'r t -> 'r -> bytes -> int -> unit
+(** [raw_encode c r buf off] encodes a record. Internal use. *)
+
+val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
+(** Wire size information for embedding. *)
+
+val name : 'r t -> string
+(** [name c] returns the codec's name. *)
+
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)
 

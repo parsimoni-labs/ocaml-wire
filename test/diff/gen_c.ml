@@ -376,7 +376,9 @@ let () =
       (fun rs ->
         Wire.Everparse.Raw.of_module
           ~name:(Wire.Everparse.Raw.struct_name rs.struct_)
-          ~module_:(Wire.module_ [ Wire.typedef ~entrypoint:true rs.struct_ ])
+          ~module_:
+            (Wire.Everparse.Raw.module_
+               [ Wire.Everparse.Raw.typedef ~entrypoint:true rs.struct_ ])
           ~wire_size:rs.total_wire_size)
       schemas
   in

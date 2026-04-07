@@ -146,8 +146,8 @@ type tcp = {
 
 let f_tcp_src_port = Field.v "SrcPort" uint16be
 let f_tcp_dst_port = Field.v "DstPort" uint16be
-let f_tcp_syn = Field.v "SYN" (bool (bits ~width:1 U16be))
-let f_tcp_ack = Field.v "ACK" (bool (bits ~width:1 U16be))
+let f_tcp_syn = Field.v "SYN" (bit (bits ~width:1 U16be))
+let f_tcp_ack = Field.v "ACK" (bit (bits ~width:1 U16be))
 
 let tcp_of_fields src_port dst_port seq ack_num data_offset reserved ns cwr ece
     urg ack psh rst syn fin window checksum urgent_ptr =
@@ -187,15 +187,15 @@ let tcp_codec =
         (Field.v "AckNum" uint32be $ fun t -> t.tcp_ack_num);
         (Field.v "DataOffset" (bits ~width:4 U16be) $ fun t -> t.tcp_data_offset);
         (Field.v "Reserved" (bits ~width:3 U16be) $ fun t -> t.tcp_reserved);
-        (Field.v "NS" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_ns);
-        (Field.v "CWR" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_cwr);
-        (Field.v "ECE" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_ece);
-        (Field.v "URG" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_urg);
+        (Field.v "NS" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_ns);
+        (Field.v "CWR" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_cwr);
+        (Field.v "ECE" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_ece);
+        (Field.v "URG" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_urg);
         bf_tcp_ack;
-        (Field.v "PSH" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_psh);
-        (Field.v "RST" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_rst);
+        (Field.v "PSH" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_psh);
+        (Field.v "RST" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_rst);
         bf_tcp_syn;
-        (Field.v "FIN" (bool (bits ~width:1 U16be)) $ fun t -> t.tcp_fin);
+        (Field.v "FIN" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_fin);
         (Field.v "Window" uint16be $ fun t -> t.tcp_window);
         (Field.v "Checksum" uint16be $ fun t -> t.tcp_checksum);
         (Field.v "UrgentPtr" uint16be $ fun t -> t.tcp_urgent_ptr);

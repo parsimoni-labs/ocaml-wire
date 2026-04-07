@@ -2,6 +2,22 @@
 
 type endian = Little | Big  (** Byte order. *)
 
+(** {1 Sequence builders} *)
+
+type ('elt, 'seq) seq_map =
+  | Seq_map : {
+      empty : 'b;
+      add : 'b -> 'elt -> 'b;
+      finish : 'b -> 'seq;
+      iter : ('elt -> unit) -> 'seq -> unit;
+    }
+      -> ('elt, 'seq) seq_map
+      (** Builder for sequence accumulation. Existentially hides the builder
+          type. *)
+
+val seq_list : ('a, 'a list) seq_map
+(** Default builder: accumulate into a list. *)
+
 (** {1 Param handles} *)
 
 type param_input
@@ -73,8 +89,12 @@ and _ typ =
   | All_bytes : string typ  (** Remaining bytes as string. *)
   | All_zeros : string typ  (** Remaining bytes, must be zero. *)
   | Where : { cond : bool expr; inner : 'a typ } -> 'a typ  (** Guarded. *)
-  | Array : { len : int expr; elem : 'a typ } -> 'a list typ
-      (** Fixed-count array. *)
+  | Array : {
+      len : int expr;
+      elem : 'a typ;
+      seq : ('a, 'seq) seq_map;
+    }
+      -> 'seq typ  (** Fixed-count array. *)
   | Byte_array : { size : int expr } -> string typ  (** Byte span as string. *)
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
       (** Zero-copy byte span. *)
@@ -100,6 +120,28 @@ and _ typ =
       (** Mapped type. *)
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
       (** Parameterised type application. *)
+  | Codec : {
+      codec_name : string;
+      codec_decode : bytes -> int -> 'r;
+      codec_encode : 'r -> bytes -> int -> unit;
+      codec_fixed_size : int option;
+      codec_size_of : bytes -> int -> int;
+    }
+      -> 'r typ  (** Embedded sub-codec. *)
+  | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ
+      (** Conditionally present field. *)
+  | Optional_or : {
+      present : bool expr;
+      inner : 'a typ;
+      default : 'a;
+    }
+      -> 'a typ  (** Conditionally present field with default. *)
+  | Repeat : {
+      size : int expr;
+      elem : 'a typ;
+      seq : ('a, 'seq) seq_map;
+    }
+      -> 'seq typ  (** Repeated elements filling a byte budget. *)
 
 and packed_expr =
   | Pack_expr : 'a expr -> packed_expr  (** Existentially packed expression. *)
@@ -319,11 +361,26 @@ val where : bool expr -> 'a typ -> 'a typ
 val array : len:int expr -> 'a typ -> 'a list typ
 (** Fixed-count array of elements. *)
 
+val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
+(** Fixed-count array with custom builder. *)
+
 val byte_array : size:int expr -> string typ
 (** Byte span as a string. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Zero-copy byte span. *)
+
+val optional : bool expr -> 'a typ -> 'a option typ
+(** Conditionally present field. *)
+
+val optional_or : bool expr -> default:'a -> 'a typ -> 'a typ
+(** Conditionally present field with default when absent. *)
+
+val repeat : size:int expr -> 'a typ -> 'a list typ
+(** Repeated elements filling a byte budget. *)
+
+val repeat_seq : ('a, 'seq) seq_map -> size:int expr -> 'a typ -> 'seq typ
+(** Repeated elements with custom builder. *)
 
 val nested : size:int expr -> 'a typ -> 'a typ
 (** Single element in a sized region (exact fit). *)

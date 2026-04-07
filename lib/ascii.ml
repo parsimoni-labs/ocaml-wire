@@ -121,7 +121,7 @@ let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
             match field_typ with
             | Byte_array { size } | Byte_slice { size } ->
                 Fmt.str "%s (%s bytes)" name (expr_to_string size)
-            | Array { len; elem } ->
+            | Array { len; elem; _ } ->
                 let elem_info =
                   match Types.field_wire_size elem with
                   | Some n -> Fmt.str "%d-byte elems" n
