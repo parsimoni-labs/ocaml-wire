@@ -50,19 +50,18 @@ let write_word base buf off v =
   | BF_U32 Little -> UInt32.set_le buf off v
   | BF_U32 Big -> UInt32.set_be buf off v
 
-(** Is this base type LSB-first (matching EverParse convention)? UINT8, UINT16
-    (little), UINT32 (little) are LSBFirst. UINT16BE, UINT32BE are MSBFirst. *)
-let is_lsb_first = function
-  | BF_U8 | BF_U16 Little | BF_U32 Little -> true
-  | BF_U16 Big | BF_U32 Big -> false
+(** EverParse's native bit order for a base: LE bases default to LSB-first (MSVC
+    C bit-field packing), BE bases to MSB-first (network byte order). *)
+let native_bit_order = function
+  | BF_U8 | BF_U16 Little | BF_U32 Little -> Lsb_first
+  | BF_U16 Big | BF_U32 Big -> Msb_first
 
-(** Extract [width] bits at position [bits_used] in a [total]-bit word. Bit
-    ordering follows EverParse 3D conventions:
-    - LSBFirst (UINT8, UINT16, UINT32): first declared field at bit 0
-    - MSBFirst (UINT16BE, UINT32BE): first declared field at MSB *)
-let extract ~base ~total ~bits_used ~width word =
-  let shift =
-    if is_lsb_first base then bits_used else total - bits_used - width
-  in
+let[@inline] shift ~bit_order ~total ~bits_used ~width =
+  match bit_order with
+  | Lsb_first -> bits_used
+  | Msb_first -> total - bits_used - width
+
+let extract ~bit_order ~total ~bits_used ~width word =
+  let s = shift ~bit_order ~total ~bits_used ~width in
   let mask = (1 lsl width) - 1 in
-  (word lsr shift) land mask
+  (word lsr s) land mask

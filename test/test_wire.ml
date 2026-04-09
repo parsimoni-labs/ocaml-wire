@@ -418,10 +418,61 @@ let test_encode_variants () =
   Alcotest.(check string) "variants encoding" "\x01" encoded
 
 let test_encode_bitfield () =
+  (* Default [bit_order] is [Msb_first]: a 6-bit field lives in the top
+     6 bits of the base word. On a LE U32 base, writing 63 = 0x3F gives
+     word = 0x3F lsl 26 = 0xFC000000, which serialises to [\x00\x00\x00\xFC]. *)
   let t = bits ~width:6 U32 in
   let encoded = encode_to_string t 63 in
-  (* 63 = 0x3F, but stored in 4 bytes as uint32 LE *)
-  Alcotest.(check string) "bitfield encoding" "\x3F\x00\x00\x00" encoded
+  Alcotest.(check string)
+    "bitfield encoding (MSB-first)" "\x00\x00\x00\xFC" encoded
+
+let test_encode_bitfield_lsb_first () =
+  (* Explicit [~bit_order:Lsb_first] recovers the C bit-field packing: the
+     value goes into the low 6 bits of the word. *)
+  let t = bits ~bit_order:Lsb_first ~width:6 U32 in
+  let encoded = encode_to_string t 63 in
+  Alcotest.(check string)
+    "bitfield encoding (LSB-first)" "\x3F\x00\x00\x00" encoded
+
+(* Adversarial bit-order tests: hardcoded byte positions anchor the new
+   default [bit_order = Msb_first] so a regression in the shift logic
+   surfaces as a noisy test failure, not a silent interop bug. *)
+
+let test_bits_single_field_positions () =
+  (* A 3-bit field holding value 0b101 = 5. *)
+  let t_msb = bits ~width:3 U8 in
+  let t_lsb = bits ~bit_order:Lsb_first ~width:3 U8 in
+  let s_msb = encode_to_string t_msb 5 in
+  let s_lsb = encode_to_string t_lsb 5 in
+  (* Msb_first: value at bits 5..7 -> 0b1010_0000 = 0xA0. *)
+  Alcotest.(check string) "msb-first single field" "\xA0" s_msb;
+  (* Lsb_first: value at bits 0..2 -> 0b0000_0101 = 0x05. *)
+  Alcotest.(check string) "lsb-first single field" "\x05" s_lsb
+
+let test_bits_roundtrip_all_combos () =
+  (* Property: for every (base, bit_order), encode then decode is identity.
+     Covers all five Wire bitfield bases crossed with both bit orders. *)
+  let bases = [ (U8, 4); (U16, 5); (U16be, 6); (U32, 7); (U32be, 3) ] in
+  let orders = [ Msb_first; Lsb_first ] in
+  List.iter
+    (fun (base, width) ->
+      let max_val = (1 lsl width) - 1 in
+      let values = [ 0; 1; max_val; max_val / 2 ] in
+      List.iter
+        (fun order ->
+          let t = bits ~bit_order:order ~width base in
+          List.iter
+            (fun expected ->
+              let s = encode_to_string t expected in
+              match decode_string t s with
+              | Ok got ->
+                  Alcotest.(check int)
+                    (Fmt.str "roundtrip width=%d" width)
+                    expected got
+              | Error e -> Alcotest.failf "decode failed: %a" pp_parse_error e)
+            values)
+        orders)
+    bases
 
 (* ── Roundtrip tests ── *)
 
@@ -601,6 +652,12 @@ let suite =
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;
+      Alcotest.test_case "encode: bitfield LSB-first" `Quick
+        test_encode_bitfield_lsb_first;
+      Alcotest.test_case "bits: single-field positions" `Quick
+        test_bits_single_field_positions;
+      Alcotest.test_case "bits: roundtrip all (base, bit_order)" `Quick
+        test_bits_roundtrip_all_combos;
       (* roundtrip *)
       Alcotest.test_case "roundtrip: uint8" `Quick test_roundtrip_uint8;
       Alcotest.test_case "roundtrip: uint16" `Quick test_roundtrip_uint16;

@@ -511,6 +511,8 @@ let test_view_get_bitfield () =
     ((Staged.unstage (Codec.get codec cf_d)) buf 0)
 
 let test_view_get_bool () =
+  (* Default [bit_order = Msb_first]: first-declared field lives at the MSB,
+     so the flag bit is bit 7 of the byte. *)
   let codec, cf_flag =
     let f_flag = Field.v "flag" (bit (bits ~width:1 U8)) in
     let cf_flag = Codec.(f_flag $ fst) in
@@ -523,7 +525,7 @@ let test_view_get_bool () =
     (codec, cf_flag)
   in
   let buf = Bytes.create 1 in
-  Bytes.set_uint8 buf 0 0x01;
+  Bytes.set_uint8 buf 0 0x80;
   Alcotest.(check bool)
     "get flag=true" true
     ((Staged.unstage (Codec.get codec cf_flag)) buf 0);
@@ -616,6 +618,7 @@ let test_view_with_offset () =
     ((Staged.unstage (Codec.get codec cf_a)) buf 2)
 
 let test_view_set_bool () =
+  (* Default [bit_order = Msb_first]: first-declared field lives at bit 7. *)
   let codec, cf_flag =
     let f_flag = Field.v "flag" (bit (bits ~width:1 U8)) in
     let cf_flag = Codec.(f_flag $ fst) in
@@ -633,7 +636,7 @@ let test_view_set_bool () =
   Alcotest.(check bool)
     "get flag after set true" true
     ((Staged.unstage (Codec.get codec cf_flag)) buf 0);
-  Alcotest.(check int) "byte value" 0x01 (Bytes.get_uint8 buf 0);
+  Alcotest.(check int) "byte value (MSB-first)" 0x80 (Bytes.get_uint8 buf 0);
   (Staged.unstage (Codec.set codec cf_flag)) buf 0 false;
   Alcotest.(check bool)
     "get flag after set false" false
@@ -678,10 +681,10 @@ let test_view_shared_field_spec () =
     ((Staged.unstage (Codec.get codec2 cf2_x)) buf2 0)
 
 let test_view_shared_bitfield_spec () =
-  (* Two codecs with different bitfield layouts, each with their own field "a".
-     Codec1: [3-bit a] [5-bit b]            -> a is bottom 3 bits (LSBFirst)
-     Codec2: [5-bit pad] [3-bit a]           -> a is top 3 bits (LSBFirst)
-     Each codec gets a fresh field object. *)
+  (* Two codecs with different bitfield layouts using the default
+     [bit_order = Msb_first].
+     Codec1: [3-bit a] [5-bit b]       -> a is top 3 bits
+     Codec2: [5-bit pad] [3-bit a]     -> a is bottom 3 bits *)
   let f1_a = Field.v "a" (bits ~width:3 U8) in
   let cf1_a = Codec.(f1_a $ fun (a, _) -> a) in
   let codec1 =
@@ -699,19 +702,20 @@ let test_view_shared_bitfield_spec () =
       [ (Field.v "pad" (bits ~width:5 U8) $ fun _ -> 0); cf2_a ]
   in
   (* 0xE3 = 0b_1110_0011
-     codec1 reads bottom 3 bits -> 3
-     codec2 reads top 3 bits -> 7 *)
+     codec1 reads top 3 bits    -> 0b111 = 7
+     codec2 reads bottom 3 bits -> 0b011 = 3 *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xE3;
   Alcotest.(check int)
-    "codec1 get a (bot 3)" 3
+    "codec1 get a (top 3)" 7
     ((Staged.unstage (Codec.get codec1 cf1_a)) buf 0);
   Alcotest.(check int)
-    "codec2 get a (top 3)" 7
+    "codec2 get a (bot 3)" 3
     ((Staged.unstage (Codec.get codec2 cf2_a)) buf 0)
 
 let test_view_shared_set_independent () =
-  (* set via one codec's field must not affect the other's interpretation *)
+  (* set via one codec's field must not affect the other's interpretation.
+     Default [bit_order = Msb_first]: first-declared field at top. *)
   let f1 = Field.v "v" (bits ~width:4 U8) in
   let cf1 = Codec.(f1 $ fun (v, _) -> v) in
   let codec1 =
@@ -728,18 +732,18 @@ let test_view_shared_set_independent () =
       (fun pad v -> (v, pad))
       [ (Field.v "pad" (bits ~width:4 U8) $ fun (_, p) -> p); cf2 ]
   in
-  (* Start: 0x00. Set codec1's field (bottom nibble) to 0xA *)
+  (* Codec1's v is the top nibble; set to 0xA. *)
   let buf = Bytes.create 1 in
   (Staged.unstage (Codec.set codec1 cf1)) buf 0 0xA;
-  Alcotest.(check int) "byte after set1" 0x0A (Bytes.get_uint8 buf 0);
-  (* codec2's field is top nibble -- should still be 0 *)
+  Alcotest.(check int) "byte after set1" 0xA0 (Bytes.get_uint8 buf 0);
+  (* Codec2's v is the bottom nibble -- should still be 0. *)
   Alcotest.(check int)
     "codec2 get after set1" 0
     ((Staged.unstage (Codec.get codec2 cf2)) buf 0);
-  (* Set codec2's field (top nibble) to 0x5 *)
+  (* Set codec2's v (bottom nibble) to 0x5. *)
   (Staged.unstage (Codec.set codec2 cf2)) buf 0 0x5;
-  Alcotest.(check int) "byte after set2" 0x5A (Bytes.get_uint8 buf 0);
-  (* codec1's field should still be 0xA *)
+  Alcotest.(check int) "byte after set2" 0xA5 (Bytes.get_uint8 buf 0);
+  (* Codec1's v should still be 0xA. *)
   Alcotest.(check int)
     "codec1 get after set2" 0xA
     ((Staged.unstage (Codec.get codec1 cf1)) buf 0)
@@ -1099,7 +1103,9 @@ let test_get_two_staged_same_field () =
   Alcotest.(check int) "env2" 0xBB (Param.get env2 out)
 
 let test_encode_shared_bitfield () =
-  (* Encode via a codec that shares a bitfield with another codec *)
+  (* Encode via a codec that shares a bitfield with another codec.
+     Default [bit_order] is [Msb_first], so the first-declared field [a]
+     lives in the top nibble of the byte. *)
   let f_a = Field.v "a" (bits ~width:4 U8) in
   let cf_a = Codec.(f_a $ fun a -> a) in
   let codec1 =
@@ -1114,10 +1120,9 @@ let test_encode_shared_bitfield () =
       (fun _b a -> a)
       [ (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0); cf_a ]
   in
-  (* Encode via codec1: a in bottom nibble *)
   let buf = Bytes.make 1 '\x00' in
   Codec.encode codec1 0xA buf 0;
-  Alcotest.(check int) "bottom nibble" 0x0A (Bytes.get_uint8 buf 0)
+  Alcotest.(check int) "top nibble (MSB-first)" 0xA0 (Bytes.get_uint8 buf 0)
 
 (* ── API misuse / safety tests ── *)
 
@@ -1320,7 +1325,8 @@ let test_same_field_two_codecs_encode () =
   Alcotest.(check int) "byte 1" 0x00 (Bytes.get_uint8 buf 1)
 
 let test_same_bitfield_two_codecs () =
-  (* Same bitfield bound field in two codecs with different bit positions. *)
+  (* Same bitfield bound field in two codecs with different bit positions.
+     Default [bit_order = Msb_first]: first-declared field at top of byte. *)
   let f_a = Field.v "a" (bits ~width:4 U8) in
   let cf_a = Codec.(f_a $ fun a -> a) in
   let codec1 =
@@ -1335,16 +1341,16 @@ let test_same_bitfield_two_codecs () =
       (fun _b a -> a)
       [ (Field.v "b" (bits ~width:4 U8) $ fun _ -> 0); cf_a ]
   in
-  (* 0xA3: bottom nibble = 3, top nibble = 0xA *)
+  (* 0xA3: top nibble = 0xA, bottom nibble = 3. *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA3;
-  (* codec1: a is bottom 4 bits -> 3 *)
+  (* codec1: a is first-declared, so top 4 bits -> 0xA. *)
   Alcotest.(check int)
-    "codec1 get a (bottom)" 3
+    "codec1 get a (top)" 0xA
     ((Staged.unstage (Codec.get codec1 cf_a)) buf 0);
-  (* codec2: a is top 4 bits -> 0xA *)
+  (* codec2: a is second-declared, so bottom 4 bits -> 3. *)
   Alcotest.(check int)
-    "codec2 get a (top)" 0xA
+    "codec2 get a (bottom)" 3
     ((Staged.unstage (Codec.get codec2 cf_a)) buf 0)
 
 let test_same_field_staged_before_second_seal () =
@@ -1472,6 +1478,8 @@ let test_raw_get_uint () =
     ((Staged.unstage (Codec.get codec cf_b)) buf 0)
 
 let test_raw_get_bitfield () =
+  (* Default [bit_order = Msb_first]: [hi] (first declared) is the top nibble,
+     matching the natural naming. *)
   let f_hi = Field.v "hi" (bits ~width:4 U8) in
   let f_lo = Field.v "lo" (bits ~width:4 U8) in
   let cf_hi = Codec.(f_hi $ fun (h, _) -> h) in
@@ -1479,12 +1487,11 @@ let test_raw_get_bitfield () =
   let codec = Codec.v "RawBF" (fun hi lo -> (hi, lo)) [ cf_hi; cf_lo ] in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
-  (* hi=bits 3-0=0x7, lo=bits 7-4=0xA *)
   Alcotest.(check int)
-    "get hi" 0x7
+    "get hi" 0xA
     ((Staged.unstage (Codec.get codec cf_hi)) buf 0);
   Alcotest.(check int)
-    "get lo" 0xA
+    "get lo" 0x7
     ((Staged.unstage (Codec.get codec cf_lo)) buf 0)
 
 let test_raw_set_uint () =
@@ -1501,6 +1508,7 @@ let test_raw_set_uint () =
   Alcotest.(check int) "set b" 0x42 (Bytes.get_uint8 buf 2)
 
 let test_raw_set_bitfield () =
+  (* Default [bit_order = Msb_first]: [hi] goes to the top nibble. *)
   let f_hi = Field.v "hi" (bits ~width:4 U8) in
   let f_lo = Field.v "lo" (bits ~width:4 U8) in
   let cf_hi = Codec.(f_hi $ fun (h, _) -> h) in
@@ -1510,7 +1518,7 @@ let test_raw_set_bitfield () =
   Bytes.set_uint8 buf 0 0x00;
   (Staged.unstage (Codec.set codec cf_hi)) buf 0 0xC;
   (Staged.unstage (Codec.set codec cf_lo)) buf 0 0x3;
-  Alcotest.(check int) "set bf byte" 0x3C (Bytes.get_uint8 buf 0)
+  Alcotest.(check int) "set bf byte" 0xC3 (Bytes.get_uint8 buf 0)
 
 let test_raw_sub_nested () =
   (* Two-layer nested protocol using sub + get: zero alloc *)
@@ -1996,9 +2004,9 @@ let bf_codec =
     Codec.[ bf_cf_hi; bf_cf_lo ]
 
 let test_bitfield_extract () =
+  (* Default [bit_order = Msb_first]: [hi] is the top nibble. *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
-  (* hi=bits 3-0=0x7, lo=bits 7-4=0xA *)
   let bf_hi = Codec.bitfield bf_codec bf_cf_hi in
   let bf_lo = Codec.bitfield bf_codec bf_cf_lo in
   let load = Staged.unstage (Codec.load_word bf_hi) in
@@ -2010,8 +2018,8 @@ let test_bitfield_extract () =
   let get_lo = Staged.unstage (Codec.get bf_codec bf_cf_lo) in
   Alcotest.(check int) "extract hi = get hi" (get_hi buf 0) hi;
   Alcotest.(check int) "extract lo = get lo" (get_lo buf 0) lo;
-  Alcotest.(check int) "hi" 0x7 hi;
-  Alcotest.(check int) "lo" 0xA lo
+  Alcotest.(check int) "hi" 0xA hi;
+  Alcotest.(check int) "lo" 0x7 lo
 
 let test_bitfield_non_bf_raises () =
   let f_x = Field.v "x" uint16be in
@@ -2152,9 +2160,9 @@ let bf_outer_codec =
 let test_codec_embed_bitfield () =
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x1234;
-  (* U8 bitfield is LSB-first: version in bits 0-3, flags in bits 4-7 *)
-  (* version=0xA, flags=0x5 -> byte = 0x5A *)
-  Bytes.set_uint8 buf 2 0x5A;
+  (* Default [bit_order = Msb_first]: version (first declared) at top nibble,
+     flags at bottom nibble. version=0xA, flags=0x5 -> byte = 0xA5. *)
+  Bytes.set_uint8 buf 2 0xA5;
   Bytes.set_uint8 buf 3 0xFF;
   let r = decode_ok (Codec.decode bf_outer_codec buf 0) in
   Alcotest.(check int) "id" 0x1234 r.id;
@@ -2440,9 +2448,10 @@ let bf_frame_codec =
       ]
 
 let test_codec_cross_field_ref_bitfield () =
-  (* len=3 (low nibble) and flags=0xA (high nibble) -> byte = 0xA3 *)
+  (* Default [bit_order = Msb_first]: [BfLen] (first declared) is the top
+     nibble, [BfFlags] is the bottom nibble. len=3, flags=0xA -> byte = 0x3A. *)
   let buf = Bytes.create 4 in
-  Bytes.set_uint8 buf 0 0xA3;
+  Bytes.set_uint8 buf 0 0x3A;
   Bytes.blit_string "XYZ" 0 buf 1 3;
   let r = decode_ok (Codec.decode bf_frame_codec buf 0) in
   Alcotest.(check int) "len" 3 r.bff_hdr.bh_len;
@@ -2954,6 +2963,101 @@ let test_tm_like_roundtrip () =
   Alcotest.(check (option int)) "ocf" original.tm_ocf decoded.tm_ocf;
   Alcotest.(check (option int)) "fecf" original.tm_fecf decoded.tm_fecf
 
+(* ── Adversarial bit-order tests ──
+
+   These pin the default [bit_order = Msb_first] against real protocol
+   bytes drawn from published specs. If anything shifts the bit layout,
+   these tests fail with a concrete "0x45 decoded as (5, 4) instead of
+   (4, 5)" error, not silently. *)
+
+type ipv4_vihl = { v : int; ihl : int }
+
+let ipv4_vihl_codec =
+  let open Codec in
+  v "IPv4VIHL"
+    (fun v ihl -> { v; ihl })
+    [
+      (Field.v "Version" (bits ~width:4 U8) $ fun p -> p.v);
+      (Field.v "IHL" (bits ~width:4 U8) $ fun p -> p.ihl);
+    ]
+
+let test_bit_order_ipv4_vihl_decode () =
+  (* RFC 791: first byte of an IPv4 header with Version=4, IHL=5 is 0x45,
+     Version in the top nibble, IHL in the bottom nibble. *)
+  let buf = Bytes.of_string "\x45" in
+  let r = decode_ok (Codec.decode ipv4_vihl_codec buf 0) in
+  Alcotest.(check int) "Version = 4 (top nibble)" 4 r.v;
+  Alcotest.(check int) "IHL = 5 (bottom nibble)" 5 r.ihl
+
+let test_bit_order_ipv4_vihl_encode_roundtrip () =
+  let original = { v = 4; ihl = 5 } in
+  let buf = Bytes.create 1 in
+  Codec.encode ipv4_vihl_codec original buf 0;
+  Alcotest.(check int) "encoded byte" 0x45 (Bytes.get_uint8 buf 0);
+  let decoded = decode_ok (Codec.decode ipv4_vihl_codec buf 0) in
+  Alcotest.(check int) "roundtrip v" original.v decoded.v;
+  Alcotest.(check int) "roundtrip ihl" original.ihl decoded.ihl
+
+type ipv4_flags_frag = { flags : int; frag : int }
+
+let ipv4_flags_frag_codec =
+  let open Codec in
+  v "IPv4FF"
+    (fun flags frag -> { flags; frag })
+    [
+      (Field.v "Flags" (bits ~width:3 U16be) $ fun p -> p.flags);
+      (Field.v "FragmentOffset" (bits ~width:13 U16be) $ fun p -> p.frag);
+    ]
+
+let test_bit_order_ipv4_flags_frag () =
+  (* RFC 791: Flags (3 bits) then Fragment Offset (13 bits), MSB-first.
+     Flags = 0b010 (DF set), FragOffset = 0 -> 0x4000. *)
+  let buf = Bytes.of_string "\x40\x00" in
+  let r = decode_ok (Codec.decode ipv4_flags_frag_codec buf 0) in
+  Alcotest.(check int) "Flags = 0b010" 0b010 r.flags;
+  Alcotest.(check int) "FragOffset = 0" 0 r.frag
+
+type mcu_reg = { lo : int; hi : int }
+
+let mcu_reg_codec =
+  let open Codec in
+  v "McuReg"
+    (fun lo hi -> { lo; hi })
+    [
+      (Field.v "lo" (bits ~bit_order:Lsb_first ~width:4 U8) $ fun r -> r.lo);
+      (Field.v "hi" (bits ~bit_order:Lsb_first ~width:4 U8) $ fun r -> r.hi);
+    ]
+
+let test_bit_order_lsb_first_opt_in () =
+  (* MSVC-style C struct: first declared field in the low bits. *)
+  let buf = Bytes.of_string "\xA5" in
+  let r = decode_ok (Codec.decode mcu_reg_codec buf 0) in
+  Alcotest.(check int) "lo (Lsb_first)" 0x5 r.lo;
+  Alcotest.(check int) "hi (Lsb_first)" 0xA r.hi
+
+type bit_order_split = { bos_x : int; bos_y : int }
+
+let bit_order_split_codec =
+  let open Codec in
+  v "BitOrderSplit"
+    (fun x y -> { bos_x = x; bos_y = y })
+    [
+      (Field.v "x" (bits ~bit_order:Msb_first ~width:4 U8) $ fun r -> r.bos_x);
+      (Field.v "y" (bits ~bit_order:Lsb_first ~width:4 U8) $ fun r -> r.bos_y);
+    ]
+
+let test_bit_order_different_start_new_word () =
+  (* Two fields with the same base but different [bit_order] must NOT share
+     a base word — the codec allocates a fresh byte for each. Catches any
+     regression that would let mismatched bit orders silently collide. *)
+  Alcotest.(check int) "wire size = 2" 2 (Codec.wire_size bit_order_split_codec);
+  let buf = Bytes.create 2 in
+  Codec.encode bit_order_split_codec { bos_x = 0xA; bos_y = 0x5 } buf 0;
+  Alcotest.(check int)
+    "byte 0 = 0xA0 (Msb_first x)" 0xA0 (Bytes.get_uint8 buf 0);
+  Alcotest.(check int)
+    "byte 1 = 0x05 (Lsb_first y)" 0x05 (Bytes.get_uint8 buf 1)
+
 (* ── Suite ── *)
 
 let suite =
@@ -3088,6 +3192,17 @@ let suite =
         test_view_shared_bitfield_spec;
       Alcotest.test_case "view: shared set independent" `Quick
         test_view_shared_set_independent;
+      (* bit_order adversarial tests *)
+      Alcotest.test_case "bit_order: IPv4 Version/IHL decode" `Quick
+        test_bit_order_ipv4_vihl_decode;
+      Alcotest.test_case "bit_order: IPv4 Version/IHL roundtrip" `Quick
+        test_bit_order_ipv4_vihl_encode_roundtrip;
+      Alcotest.test_case "bit_order: IPv4 Flags/FragOffset" `Quick
+        test_bit_order_ipv4_flags_frag;
+      Alcotest.test_case "bit_order: Lsb_first opt-in" `Quick
+        test_bit_order_lsb_first_opt_in;
+      Alcotest.test_case "bit_order: different orders separate words" `Quick
+        test_bit_order_different_start_new_word;
       (* byte_slice *)
       Alcotest.test_case "view: byte_slice get" `Quick test_view_byte_slice_get;
       Alcotest.test_case "view: byte_slice decode" `Quick

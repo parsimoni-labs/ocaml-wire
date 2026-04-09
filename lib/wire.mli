@@ -55,6 +55,27 @@ end
 
 type 'a expr
 type bitfield = U8 | U16 | U16be | U32 | U32be
+
+type bit_order = Types.bit_order =
+  | Msb_first
+  | Lsb_first
+      (** Which end of a packed base word the first declared bitfield occupies.
+
+          - [Msb_first] (default): the first declared field lands at the most
+            significant bit of the base word, matching how RFC, CCSDS, and IETF
+            specs draw their bit diagrams. Copy-pasting a spec into field
+            declarations just works.
+
+          - [Lsb_first]: the first declared field lands at bit 0 of the base
+            word, matching MSVC's C bit-field packing. Useful when mirroring a C
+            struct.
+
+          Bit order is independent of byte order: any combination of base word
+          and bit order is a valid wire description, and the EverParse 3D
+          projection reverses declaration order within a bit group when
+          necessary so that every pairing emits a valid 3D schema with identical
+          byte layout. *)
+
 type 'a typ
 
 type param
@@ -359,8 +380,13 @@ val uint64be : int64 typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as [int64].
 *)
 
-val bits : width:int -> bitfield -> int typ
-(** Bitfield of the given width within the given base word. *)
+val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
+(** [bits ~width base] declares a bitfield of [width] bits inside [base].
+
+    [~bit_order] selects which end of the base word the first declared bitfield
+    occupies. It defaults to {!Msb_first}, which makes the DSL match how
+    protocol specifications draw their bit diagrams. Pass [~bit_order:Lsb_first]
+    when mirroring MSVC-style C bit-fields. *)
 
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions. *)

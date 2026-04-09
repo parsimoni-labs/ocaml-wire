@@ -338,6 +338,11 @@ let test_e2e_with_constraint () =
 |}
 
 let test_e2e_bitfields () =
+  (* Adversarial: drive the EverParse-generated C parser on a real IPv4-style
+     byte [0x45] and check that Wire's default [bit_order = Msb_first] makes
+     [version] land at the top nibble (=4) and [flags] at the bottom (=5).
+     This is the end-to-end interop witness: if Wire and EverParse disagree
+     on bit placement, this test breaks. *)
   let f_version = Wire.Field.v "version" (bits ~width:4 U8) in
   let f_flags = Wire.Field.v "flags" (bits ~width:4 U8) in
   let f_length = Wire.Field.v "length" uint16be in
@@ -360,9 +365,9 @@ let test_e2e_bitfields () =
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
   let r = Stubs.bfheader_parse buf 0 in
-  (* EverParse uses LSB-first bit numbering: version=bits[0..4], flags=bits[4..8] *)
-  assert (r.Stubs.version = 5);
-  assert (r.Stubs.flags = 4);
+  (* Default Msb_first: version = top nibble (4), flags = bottom nibble (5). *)
+  assert (r.Stubs.version = 4);
+  assert (r.Stubs.flags = 5);
   assert (r.Stubs.length = 100)
 |}
 

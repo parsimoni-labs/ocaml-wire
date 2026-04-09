@@ -179,6 +179,7 @@ type (_, _) readers =
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
   bfc_base : bitfield_base;
+  bfc_bit_order : bit_order;
   bfc_base_off : int; (* byte offset of base word within record *)
   bfc_bits_used : int; (* bits consumed so far in current group *)
   bfc_total_bits : int; (* 8, 16, or 32 *)
@@ -769,7 +770,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
             wrap_writer (fun buf off value -> writer buf off (encode value)))
           None
     | Enum { base; _ } -> add base get_wire wrap_reader wrap_writer eq
-    | Bits { width; base } ->
+    | Bits { width; base; bit_order } ->
         let total = bf_base_total_bits base in
         let static_off =
           match r.r_next_off with
@@ -782,6 +783,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
           match r.r_bf with
           | Some bf
             when bf_base_equal bf.bfc_base base
+                 && bf.bfc_bit_order = bit_order
                  && bf.bfc_bits_used + width <= bf.bfc_total_bits ->
               (bf.bfc_base_off, bf.bfc_bits_used, 0, [])
           | _ ->
@@ -791,10 +793,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
                 bf_base_byte_size base,
                 [ (fun _v buf off -> clear buf off) ] )
         in
-        let shift =
-          if Bitfield.is_lsb_first base then bits_used
-          else total - bits_used - width
-        in
+        let shift = Bitfield.shift ~bit_order ~total ~bits_used ~width in
         let raw_reader = build_bf_reader base base_off shift width in
         let raw_writer = build_bf_writer base base_off shift width in
         let int_reader buf off = (raw_reader buf off : int) in
@@ -802,6 +801,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
         let new_bf =
           {
             bfc_base = base;
+            bfc_bit_order = bit_order;
             bfc_base_off = base_off;
             bfc_bits_used = bits_used + width;
             bfc_total_bits = total;

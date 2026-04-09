@@ -300,6 +300,119 @@ let test_3d_tm_like () =
     "Packet type referenced" true
     (contains ~sub:"Packet" output)
 
+(* ── Bit-order projection tests ──
+
+   Non-native (base, bit_order) combinations should still emit a valid 3D
+   struct by reversing declaration order within the bit group and, if the
+   widths don't fill the word, prepending anonymous padding. These tests
+   lock in that the reorder actually happens in the emitted 3D text. *)
+
+(* Return the byte offset of the first occurrence of [sub] in [s],
+   or -1 if not found. Used to assert relative field ordering. *)
+let index_of ~sub s =
+  let re = Re.compile (Re.str sub) in
+  match Re.exec_opt re s with Some g -> Re.Group.start g 0 | None -> -1
+
+let test_3d_bit_order_u8_msb_first_reorder () =
+  (* Non-native: (U8, Msb_first). EverParse native for UINT8 is LSB-first,
+     so the projection reverses [a; b] to [b; a] in the emitted 3D text.
+     Widths sum to 8 -> no padding. *)
+  let codec =
+    let open Codec in
+    v "ReorderU8"
+      (fun a b -> (a, b))
+      [
+        Field.v "a" (bits ~width:3 U8) $ fst;
+        Field.v "b" (bits ~width:5 U8) $ snd;
+      ]
+  in
+  let schema = Everparse.schema codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let ia = index_of ~sub:"UINT8 a" s in
+  let ib = index_of ~sub:"UINT8 b" s in
+  Alcotest.(check bool) "a found" true (ia >= 0);
+  Alcotest.(check bool) "b found" true (ib >= 0);
+  Alcotest.(check bool) "reordered: b before a" true (ib < ia)
+
+let test_3d_bit_order_u8_msb_first_padding () =
+  (* Non-native and incomplete: two 3-bit fields in (U8, Msb_first).
+     Reversal alone would place the 6 bits at LSB-first positions 0..5;
+     the projection prepends 2 bits of anonymous padding so the user's
+     fields land at bits 2..7 (matching their Msb_first intent). *)
+  let codec =
+    let open Codec in
+    v "ReorderU8Pad"
+      (fun a b -> (a, b))
+      [
+        Field.v "a" (bits ~width:3 U8) $ fst;
+        Field.v "b" (bits ~width:3 U8) $ snd;
+      ]
+  in
+  let schema = Everparse.schema codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  Alcotest.(check bool)
+    "has anonymous padding field" true
+    (contains ~sub:"UINT8 _anon_" s);
+  Alcotest.(check bool) "padding width = 2" true (contains ~sub:": 2" s)
+
+let test_3d_bit_order_constraint_collapse () =
+  (* Non-native: (U8, Msb_first) with a backward-reference constraint.
+     Original order [a {a<=5}; b {a+b<=10}]. After reversal to [b; a],
+     a constraint [a+b<=10] attached to b would fire before [a] was
+     parsed. The projection therefore collapses all group constraints
+     onto the last reversed field (here [a]), where every referent is
+     available. *)
+  let f_a_placeholder = Field.v "a" (bits ~width:4 U8) in
+  let f_b_placeholder = Field.v "b" (bits ~width:4 U8) in
+  let f_a =
+    Field.v "a"
+      ~constraint_:Expr.(Field.ref f_a_placeholder <= int 5)
+      (bits ~width:4 U8)
+  in
+  let f_b =
+    Field.v "b"
+      ~constraint_:
+        Expr.(Field.ref f_a_placeholder + Field.ref f_b_placeholder <= int 10)
+      (bits ~width:4 U8)
+  in
+  let codec =
+    let open Codec in
+    v "Ranged" (fun a b -> (a, b)) [ f_a $ fst; f_b $ snd ]
+  in
+  let schema = Wire.Everparse.schema codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  (* b appears first in 3D (reversed), without a constraint block. *)
+  let ia = index_of ~sub:"UINT8 a : 4" s in
+  let ib = index_of ~sub:"UINT8 b : 4" s in
+  Alcotest.(check bool) "b before a" true (ib < ia);
+  (* The combined constraint lands on [a] (last in reversed order),
+     including both the original [a <= 5] and [a + b <= 10]. *)
+  Alcotest.(check bool)
+    "a still referenced in combined constraint" true (contains ~sub:"a <= 5" s);
+  Alcotest.(check bool)
+    "b still referenced in combined constraint" true
+    (contains ~sub:"(a + b) <= 10" s)
+
+let test_3d_bit_order_native_no_reorder () =
+  (* Native: (U32be, Msb_first). Fields stay in declared order, no padding. *)
+  let codec =
+    let open Codec in
+    v "NativeU32Be"
+      (fun a b -> (a, b))
+      [
+        Field.v "x" (bits ~width:4 U32be) $ fst;
+        Field.v "y" (bits ~width:28 U32be) $ snd;
+      ]
+  in
+  let schema = Everparse.schema codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let ix = index_of ~sub:"UINT32BE x" s in
+  let iy = index_of ~sub:"UINT32BE y" s in
+  Alcotest.(check bool) "x found" true (ix >= 0);
+  Alcotest.(check bool) "y found" true (iy >= 0);
+  Alcotest.(check bool) "x before y (no reorder)" true (ix < iy);
+  Alcotest.(check bool) "no padding" false (contains ~sub:"_anon_" s)
+
 let suite =
   ( "everparse",
     [
@@ -315,4 +428,12 @@ let suite =
       Alcotest.test_case "3d: optional absent" `Quick test_3d_optional_absent;
       Alcotest.test_case "3d: repeat" `Quick test_3d_repeat;
       Alcotest.test_case "3d: tm-like" `Quick test_3d_tm_like;
+      Alcotest.test_case "3d: bit_order U8 Msb_first reorder" `Quick
+        test_3d_bit_order_u8_msb_first_reorder;
+      Alcotest.test_case "3d: bit_order U8 Msb_first padding" `Quick
+        test_3d_bit_order_u8_msb_first_padding;
+      Alcotest.test_case "3d: bit_order native no reorder" `Quick
+        test_3d_bit_order_native_no_reorder;
+      Alcotest.test_case "3d: bit_order constraint collapse" `Quick
+        test_3d_bit_order_constraint_collapse;
     ] )
