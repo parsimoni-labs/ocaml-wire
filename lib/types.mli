@@ -2,6 +2,22 @@
 
 type endian = Little | Big  (** Byte order. *)
 
+type bit_order =
+  | Msb_first
+  | Lsb_first
+      (** Which end of a packed base word the first declared bitfield occupies.
+
+          [Msb_first] places the first declared field at the most significant
+          bit, matching how RFC, CCSDS, and IETF specs draw their bit diagrams.
+          [Lsb_first] places it at bit 0, matching MSVC C bit-field packing.
+
+          Bit order is independent of byte order. Every combination of base word
+          and bit order is a valid wire description. When projecting to
+          EverParse 3D, the export layer reverses field declaration order within
+          a bit group if the user's bit order differs from EverParse's native
+          choice for the base; this preserves byte layout in memory and is
+          invisible to the user. *)
+
 (** {1 Sequence builders} *)
 
 type ('elt, 'seq) seq_map =
@@ -84,7 +100,12 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
   | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
-  | Bits : { width : int; base : bitfield_base } -> int typ  (** Bitfield. *)
+  | Bits : {
+      width : int;
+      base : bitfield_base;
+      bit_order : bit_order;
+    }
+      -> int typ  (** Bitfield. *)
   | Unit : unit typ  (** Zero-width. *)
   | All_bytes : string typ  (** Remaining bytes as string. *)
   | All_zeros : string typ  (** Remaining bytes, must be zero. *)
@@ -335,8 +356,9 @@ val bf_uint32 : bitfield_base
 val bf_uint32be : bitfield_base
 (** 32-bit bitfield base, big-endian. *)
 
-val bits : width:int -> bitfield_base -> int typ
-(** [bits ~width base] extracts [width] bits from a bitfield base. *)
+val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
+(** [bits ~width base] extracts [width] bits from a bitfield base. [bit_order]
+    defaults to {!Msb_first}. *)
 
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)

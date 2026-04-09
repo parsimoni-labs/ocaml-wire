@@ -55,12 +55,22 @@ let test_read_write_roundtrip () =
     "u32be roundtrip" 0x12345678
     (Bitfield.read_word bf_u32_be buf 0)
 
-let test_is_lsb_first () =
-  Alcotest.(check bool) "u8 is lsb" true (Bitfield.is_lsb_first bf_u8);
-  Alcotest.(check bool) "u16le is lsb" true (Bitfield.is_lsb_first bf_u16_le);
-  Alcotest.(check bool) "u16be is msb" false (Bitfield.is_lsb_first bf_u16_be);
-  Alcotest.(check bool) "u32le is lsb" true (Bitfield.is_lsb_first bf_u32_le);
-  Alcotest.(check bool) "u32be is msb" false (Bitfield.is_lsb_first bf_u32_be)
+let test_native_bit_order () =
+  Alcotest.(check bool)
+    "u8 native lsb" true
+    (Bitfield.native_bit_order bf_u8 = Types.Lsb_first);
+  Alcotest.(check bool)
+    "u16le native lsb" true
+    (Bitfield.native_bit_order bf_u16_le = Types.Lsb_first);
+  Alcotest.(check bool)
+    "u16be native msb" true
+    (Bitfield.native_bit_order bf_u16_be = Types.Msb_first);
+  Alcotest.(check bool)
+    "u32le native lsb" true
+    (Bitfield.native_bit_order bf_u32_le = Types.Lsb_first);
+  Alcotest.(check bool)
+    "u32be native msb" true
+    (Bitfield.native_bit_order bf_u32_be = Types.Msb_first)
 
 let test_extract_lsb_first () =
   (* LSBFirst: first declared field at bit 0 *)
@@ -68,24 +78,44 @@ let test_extract_lsb_first () =
   let word = 0xD6 in
   Alcotest.(check int)
     "lsb bits 0..3" 6
-    (Bitfield.extract ~base:bf_u8 ~total:8 ~bits_used:0 ~width:4 word);
+    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:8 ~bits_used:0 ~width:4
+       word);
   (* Extract 4 bits at offset 4 -> 0b1101 = 13 *)
   Alcotest.(check int)
     "lsb bits 4..7" 13
-    (Bitfield.extract ~base:bf_u8 ~total:8 ~bits_used:4 ~width:4 word)
+    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:8 ~bits_used:4 ~width:4
+       word)
 
 let test_extract_msb_first () =
   (* MSBFirst: first declared field at MSB *)
-  (* Word 0xD600 = 0b1101011000000000 in 16-bit BE context *)
+  (* Word 0xD600 = 0b1101011000000000 in 16-bit context *)
   let word = 0xD600 in
   (* Extract 4 bits at offset 0 (MSB side) -> 0b1101 = 13 *)
   Alcotest.(check int)
     "msb bits 0..3" 13
-    (Bitfield.extract ~base:bf_u16_be ~total:16 ~bits_used:0 ~width:4 word);
+    (Bitfield.extract ~bit_order:Types.Msb_first ~total:16 ~bits_used:0 ~width:4
+       word);
   (* Extract 4 bits at offset 4 -> 0b0110 = 6 *)
   Alcotest.(check int)
     "msb bits 4..7" 6
-    (Bitfield.extract ~base:bf_u16_be ~total:16 ~bits_used:4 ~width:4 word)
+    (Bitfield.extract ~bit_order:Types.Msb_first ~total:16 ~bits_used:4 ~width:4
+       word)
+
+(* Independence: bit_order is orthogonal to the base's byte order. Show that
+   an LSB-first extraction on a BE base and MSB-first extraction on a LE base
+   both behave according to the bit_order choice, not the base endian. *)
+let test_extract_bit_order_independent () =
+  (* LSB-first extraction on a BE base: still operates on the low bits. *)
+  let word = 0xD6 in
+  Alcotest.(check int)
+    "lsb-first on u16be base" 6
+    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:16 ~bits_used:0 ~width:4
+       word);
+  (* MSB-first extraction on an 8-bit LE base: operates on the top bits. *)
+  Alcotest.(check int)
+    "msb-first on u8 base" 13
+    (Bitfield.extract ~bit_order:Types.Msb_first ~total:8 ~bits_used:0 ~width:4
+       word)
 
 let suite =
   ( "bitfield",
@@ -95,7 +125,9 @@ let suite =
       Alcotest.test_case "equal" `Quick test_equal;
       Alcotest.test_case "read_word/write_word roundtrip" `Quick
         test_read_write_roundtrip;
-      Alcotest.test_case "is_lsb_first" `Quick test_is_lsb_first;
-      Alcotest.test_case "extract LSBFirst" `Quick test_extract_lsb_first;
-      Alcotest.test_case "extract MSBFirst" `Quick test_extract_msb_first;
+      Alcotest.test_case "native_bit_order" `Quick test_native_bit_order;
+      Alcotest.test_case "extract LSB-first" `Quick test_extract_lsb_first;
+      Alcotest.test_case "extract MSB-first" `Quick test_extract_msb_first;
+      Alcotest.test_case "bit_order independent of base endian" `Quick
+        test_extract_bit_order_independent;
     ] )

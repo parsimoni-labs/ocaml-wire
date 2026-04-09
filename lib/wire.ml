@@ -73,12 +73,16 @@ let optional_or = Types.optional_or
 let repeat = Types.repeat
 let repeat_seq = Types.repeat_seq
 
-let bits ~width = function
-  | U8 -> Types.bits ~width Types.bf_uint8
-  | U16 -> Types.bits ~width Types.bf_uint16
-  | U16be -> Types.bits ~width Types.bf_uint16be
-  | U32 -> Types.bits ~width Types.bf_uint32
-  | U32be -> Types.bits ~width Types.bf_uint32be
+let bits ?(bit_order = Types.Msb_first) ~width bf =
+  let base =
+    match bf with
+    | U8 -> Types.bf_uint8
+    | U16 -> Types.bf_uint16
+    | U16be -> Types.bf_uint16be
+    | U32 -> Types.bf_uint32
+    | U32be -> Types.bf_uint32be
+  in
+  Types.bits ~bit_order ~width base
 
 module Expr = struct
   include Expr
@@ -240,6 +244,7 @@ let read_all dec =
 (* Bitfield accumulator for packed struct parsing. *)
 type bf_accum = {
   bf_base : bitfield_base;
+  bf_bit_order : bit_order;
   bf_word : int;
   bf_bits_used : int;
   bf_total_bits : int;
@@ -251,26 +256,28 @@ let bf_read_word dec base =
 
 let bf_extract accum width =
   let value =
-    Bitfield.extract ~base:accum.bf_base ~total:accum.bf_total_bits
+    Bitfield.extract ~bit_order:accum.bf_bit_order ~total:accum.bf_total_bits
       ~bits_used:accum.bf_bits_used ~width accum.bf_word
   in
   (value, { accum with bf_bits_used = accum.bf_bits_used + width })
 
 let bf_has_room accum width = accum.bf_bits_used + width <= accum.bf_total_bits
 
-let parse_bits dec base width =
+let parse_bits dec base bit_order width =
   let word = bf_read_word dec base in
   let total = Bitfield.total_bits base in
-  Bitfield.extract ~base ~total ~bits_used:0 ~width word
+  Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word
 
 let[@inline] parse_int dec n get =
   let off = read_small dec n in
   get dec.i off
 
-let parse_bf_field dec accum_opt base width =
+let parse_bf_field dec accum_opt base bit_order width =
   match accum_opt with
-  | Some accum when Bitfield.equal accum.bf_base base && bf_has_room accum width
-    ->
+  | Some accum
+    when Bitfield.equal accum.bf_base base
+         && accum.bf_bit_order = bit_order
+         && bf_has_room accum width ->
       let v, new_accum = bf_extract accum width in
       let accum_opt' =
         if new_accum.bf_bits_used = new_accum.bf_total_bits then None
@@ -283,6 +290,7 @@ let parse_bf_field dec accum_opt base width =
       let accum =
         {
           bf_base = base;
+          bf_bit_order = bit_order;
           bf_word = word;
           bf_bits_used = 0;
           bf_total_bits = total;
@@ -326,7 +334,7 @@ let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
   | Uint63 Big -> (parse_int dec 8 UInt63.be, ctx)
   | Uint64 Little -> (parse_int dec 8 Bytes.get_int64_le, ctx)
   | Uint64 Big -> (parse_int dec 8 Bytes.get_int64_be, ctx)
-  | Bits { width; base } -> (parse_bits dec base width, ctx)
+  | Bits { width; base; bit_order } -> (parse_bits dec base bit_order width, ctx)
   | Unit -> ((), ctx)
   | All_bytes -> (read_all dec, ctx)
   | All_zeros -> (parse_all_zeros dec, ctx)
@@ -426,7 +434,8 @@ and parse_struct_fields dec ctx fields =
       bf_accum option -> a typ -> a * bf_accum option =
    fun accum_opt typ ->
     match typ with
-    | Bits { width; base } -> parse_bf_field dec accum_opt base width
+    | Bits { width; base; bit_order } ->
+        parse_bf_field dec accum_opt base bit_order width
     | _ ->
         let v, _ = parse_with dec ctx typ in
         (v, None)
@@ -506,9 +515,11 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
   | Uint64 Big ->
       check_eof len (off + 8);
       Bytes.get_int64_be buf off
-  | Bits { width; base } ->
+  | Bits { width; base; bit_order } ->
       check_eof len (off + Bitfield.byte_size base);
-      Bitfield.read_word base buf off land ((1 lsl width) - 1)
+      let total = Bitfield.total_bits base in
+      let word = Bitfield.read_word base buf off in
+      Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word
   | Unit -> ()
   | Map { inner; decode; _ } -> (
       match decode (parse_direct inner buf off len) with
@@ -664,9 +675,11 @@ let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
   | Uint64 Big ->
       write_int64_be enc v;
       ctx
-  | Bits { width; base } ->
+  | Bits { width; base; bit_order } ->
       let mask = (1 lsl width) - 1 in
-      let masked = v land mask in
+      let total = Bitfield.total_bits base in
+      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
+      let masked = (v land mask) lsl shift in
       (match base with
       | BF_U8 -> write_byte enc masked
       | BF_U16 Little -> write_uint16_le enc masked
@@ -764,9 +777,11 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Uint64 Big ->
       Bytes.set_int64_be buf off v;
       off + 8
-  | Bits { width; base } -> (
+  | Bits { width; base; bit_order } -> (
       let mask = (1 lsl width) - 1 in
-      let masked = v land mask in
+      let total = Bitfield.total_bits base in
+      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
+      let masked = (v land mask) lsl shift in
       match base with
       | BF_U8 ->
           Bytes.set_uint8 buf off masked;

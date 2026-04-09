@@ -91,6 +91,105 @@ let map_field_action idx (Types.Field f) =
         }
   | None -> Types.Field f
 
+(* Conjoin a list of constraint expressions, skipping [None]s. *)
+let conjoin_constraints constraints =
+  List.fold_left
+    (fun acc c ->
+      match (acc, c) with
+      | acc, None -> acc
+      | None, Some c -> Some c
+      | Some a, Some b -> Some (Types.And (a, b)))
+    None constraints
+
+(* Collapse all constraints in a reversed bit group onto the last field,
+   where every referenced field has already been parsed. Backward
+   references to other fields in the group would otherwise break under
+   reversal, because the reversed field is parsed before its referents.
+
+   The combined constraint is semantically equivalent for validation
+   (accept/reject) — EverParse's per-field constraints are pure boolean
+   predicates, so moving them later in the parse still produces the same
+   overall verdict. Bitfield actions use 3D's [:act] form, which fires
+   regardless of validation outcome, so moving constraints does not
+   affect callback behaviour. *)
+let collapse_constraints_to_last group =
+  let constraints = List.map (fun (Types.Field f) -> f.constraint_) group in
+  let combined = conjoin_constraints constraints in
+  let rec walk = function
+    | [] -> []
+    | [ Types.Field f ] -> [ Types.Field { f with constraint_ = combined } ]
+    | Types.Field f :: rest ->
+        Types.Field { f with constraint_ = None } :: walk rest
+  in
+  walk group
+
+(* Reorder consecutive bitfield groups so every pairing of [bitfield_base] and
+   [bit_order] projects to a valid EverParse 3D struct while keeping the same
+   byte layout. EverParse couples bit order to the base's byte order
+   (LE -> LSB-first, BE -> MSB-first). When the user's [bit_order] differs
+   from that native choice, we reverse the group's declaration order and
+   prepend [total_bits - used_bits] of anonymous padding; in EverParse's
+   native packing this produces the identical bit layout. Fields outside
+   bit groups are left untouched. Extern-call indices embedded in actions
+   are stamped before reordering, so WireSet callbacks still write into the
+   original (wire-declaration) slots — the stub generator never sees the
+   reordered struct. *)
+let reorder_bit_groups_for_3d fields =
+  let is_same_bit_group base bit_order = function
+    | Types.Field
+        { field_typ = Types.Bits { base = b2; bit_order = bo2; _ }; _ } ->
+        b2 = base && bo2 = bit_order
+    | _ -> false
+  in
+  let bit_width = function
+    | Types.Field { field_typ = Types.Bits { width; _ }; _ } -> width
+    | _ -> 0
+  in
+  let rec go acc = function
+    | [] -> List.rev acc
+    | (Types.Field { field_typ = Types.Bits { base; bit_order; _ }; _ } as f0)
+      :: rest ->
+        let total = Bitfield.total_bits base in
+        let native = Bitfield.native_bit_order base in
+        (* Greedy: collect consecutive Bits with the same (base, bit_order)
+           that still fit in one base word. *)
+        let rec collect used group = function
+          | f :: rest' when is_same_bit_group base bit_order f ->
+              let w = bit_width f in
+              if used + w <= total then collect (used + w) (f :: group) rest'
+              else (used, List.rev group, f :: rest')
+          | rest' -> (used, List.rev group, rest')
+        in
+        let used, group, rest' = collect (bit_width f0) [ f0 ] rest in
+        if bit_order = native then go (List.rev_append group acc) rest'
+        else begin
+          let reversed = List.rev group in
+          (* Backward references in reversed order would break: fields now
+             come before the values their constraints read. Collapse all
+             constraints onto the last reversed field. *)
+          let reversed = collapse_constraints_to_last reversed in
+          let padded =
+            let padding = total - used in
+            if padding > 0 then
+              let pad_typ =
+                Types.Bits { width = padding; base; bit_order = native }
+              in
+              Types.Field
+                {
+                  field_name = None;
+                  field_typ = pad_typ;
+                  constraint_ = None;
+                  action = None;
+                }
+              :: reversed
+            else reversed
+          in
+          go (List.rev_append padded acc) rest'
+        end
+    | other :: rest -> go (other :: acc) rest
+  in
+  go [] fields
+
 let with_output (s : Types.struct_) : Types.decl list =
   (* Extern declarations for the callback mechanism *)
   let ctx_struct = Types.struct_ "WireCtx" [] in
@@ -98,9 +197,12 @@ let with_output (s : Types.struct_) : Types.decl list =
   let ctx_param = Types.mutable_param "ctx" (Types.struct_typ ctx_struct) in
   (* Extern setter functions *)
   let u32 = Types.Uint32 Types.Little in
-  (* Count named fields to assign indices *)
+  (* Count named fields to assign indices in the ORIGINAL declaration order.
+     The idx baked into each Extern_call is preserved through the reorder
+     below, so WireSet callbacks still populate the original field slot. *)
   let idx = ref 0 in
   let parse_fields = List.map (map_field_action idx) s.fields in
+  let parse_fields = reorder_bit_groups_for_3d parse_fields in
   let parse_struct =
     Types.param_struct s.name (s.params @ [ ctx_param ]) ?where:s.where
       parse_fields

@@ -1,4 +1,5 @@
 type endian = Little | Big
+type bit_order = Msb_first | Lsb_first
 
 (* Sequence builder for Array/Repeat — Jsont-style accumulator pattern.
    Existentially hides the builder type so callers control the output container. *)
@@ -69,7 +70,12 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ
   | Uint63 : endian -> UInt63.t typ
   | Uint64 : endian -> int64 typ (* boxed, for full 64-bit *)
-  | Bits : { width : int; base : bitfield_base } -> int typ
+  | Bits : {
+      width : int;
+      base : bitfield_base;
+      bit_order : bit_order;
+    }
+      -> int typ
   | Unit : unit typ
   | All_bytes : string typ
   | All_zeros : string typ
@@ -214,7 +220,7 @@ let bf_uint16 = BF_U16 Little
 let bf_uint16be = BF_U16 Big
 let bf_uint32 = BF_U32 Little
 let bf_uint32be = BF_U32 Big
-let bits ~width base = Bits { width; base }
+let bits ?(bit_order = Msb_first) ~width base = Bits { width; base; bit_order }
 let bit b = Bool.to_int b
 let is_set n = n <> 0
 let map decode encode inner = Map { inner; decode; encode }
@@ -613,7 +619,7 @@ let rec field_suffix : type a.
     a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
-  | Bits { width; base } ->
+  | Bits { width; base; _ } ->
       (Bitwidth width, fun ppf -> pp_bitfield_base ppf base)
   | Byte_array { size } | Byte_slice { size } ->
       (Byte_array size, fun ppf -> Fmt.string ppf "UINT8")
