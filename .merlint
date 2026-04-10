@@ -8,3 +8,8 @@ rules:
     exclude: [E617]
   - files: test/test_uInt63.ml
     exclude: [E617]
+
+  # Crowbar/Alcobar fuzzer uses random mode for runtest and AFL mode for
+  # the fuzz alias; --gen-corpus is not applicable
+  - files: fuzz/dune
+    exclude: [E718, E724]
