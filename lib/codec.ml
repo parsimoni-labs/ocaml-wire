@@ -132,6 +132,10 @@ type field_access =
     }
   | Dynamic of (bytes -> int -> int)
   | Variable of { off : int; size_fn : bytes -> int -> int }
+  | Variable_dynamic of {
+      off_fn : bytes -> int -> int;
+      size_fn : bytes -> int -> int;
+    }
 
 type ('a, 'r) field = {
   name : string;
@@ -1251,6 +1255,32 @@ and compile_scalar_or_var : type a r.
       }
   | None -> compile_var_bytes ctx fld
 
+and var_bytes_reader : type a.
+    a typ -> (bytes -> int -> int) -> (bytes -> int -> int) -> bytes -> int -> a
+    =
+ fun typ off_fn size_fn buf base ->
+  let fo = off_fn buf base in
+  let sz = size_fn buf base in
+  match typ with
+  | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
+  | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
+  | _ -> assert false
+
+and var_bytes_writer : type a r.
+    a typ -> (r -> a) -> (bytes -> int -> int) -> r -> bytes -> int -> unit =
+ fun typ get off_fn v buf off ->
+  let fo = off_fn buf off in
+  let value = get v in
+  match typ with
+  | Byte_slice _ ->
+      let src = (value : Slice.t) in
+      Bytes.blit (Slice.bytes src) (Slice.first src) buf (off + fo)
+        (Slice.length src)
+  | Byte_array _ ->
+      let s = (value : string) in
+      Bytes.blit_string s 0 buf (off + fo) (String.length s)
+  | _ -> assert false
+
 and compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1262,31 +1292,18 @@ and compile_var_bytes : type a r.
     | _ -> invalid_arg "add_field: unsupported variable-size field type"
   in
   let size_fn = compile_expr ctx.lc_field_readers size_expr in
-  let field_off =
-    require_static_off ctx ~what:"multiple variable-size fields"
+  let off_fn, (field_access : field_access), validator_off =
+    match ctx.lc_next_off with
+    | Static_next n ->
+        ( (fun (_buf : bytes) (_base : int) -> n),
+          Variable { off = n; size_fn },
+          n )
+    | Dynamic_next prev_end ->
+        let off_fn buf base = prev_end buf base - base in
+        (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
   in
-  let raw_reader : bytes -> int -> a =
-   fun buf base ->
-    let sz = size_fn buf base in
-    match typ with
-    | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + field_off) ~length:sz
-    | Byte_array _ -> Bytes.sub_string buf (base + field_off) sz
-    | _ -> assert false
-  in
-  let get = fld.get in
-  let raw_writer : r -> bytes -> int -> unit =
-   fun v buf off ->
-    let value = get v in
-    match typ with
-    | Byte_slice _ ->
-        let src = (value : Slice.t) in
-        let len = Slice.length src in
-        Bytes.blit (Slice.bytes src) (Slice.first src) buf (off + field_off) len
-    | Byte_array _ ->
-        let s = (value : string) in
-        Bytes.blit_string s 0 buf (off + field_off) (String.length s)
-    | _ -> assert false
-  in
+  let raw_reader = var_bytes_reader typ off_fn size_fn in
+  let raw_writer = var_bytes_writer typ fld.get off_fn in
   let int_reader buf base =
     match int_of_typ_value typ (raw_reader buf base) with
     | Some v -> v
@@ -1297,14 +1314,17 @@ and compile_var_bytes : type a r.
     raw_reader;
     raw_writer;
     extra_writers = [];
-    field_access = Variable { off = field_off; size_fn };
+    field_access;
     size_delta = 0;
     next_off =
-      Dynamic_next (fun buf base -> base + field_off + size_fn buf base);
+      Dynamic_next
+        (fun buf base ->
+          let fo = off_fn buf base in
+          base + fo + size_fn buf base);
     bf_after = None;
     int_reader;
     nested_readers = [];
-    validator_off = field_off;
+    validator_off;
     populate;
   }
 
@@ -1761,6 +1781,16 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
       fun buf base ->
         let sz = size_fn buf base in
         Bytes.sub_string buf (base + off) sz
+  | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
+      fun buf base ->
+        let fo = off_fn buf base in
+        let sz = size_fn buf base in
+        Slice.make_or_eod buf ~first:(base + fo) ~length:sz
+  | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
+      fun buf base ->
+        let fo = off_fn buf base in
+        let sz = size_fn buf base in
+        Bytes.sub_string buf (base + fo) sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; _ }, _ -> build_staged_reader base access
   | Map { inner; decode; _ }, _ ->
@@ -1768,7 +1798,7 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
       fun buf base -> decode (read buf base)
   | _, Bitfield _ ->
       invalid_arg "Codec.get: non-bitfield type with bitfield access"
-  | _, Variable _ ->
+  | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.get: unsupported variable-size field type"
 
 (* Build a staged writer from field type and access info. *)
@@ -1798,6 +1828,17 @@ let rec build_staged_writer : type a.
       fun buf base value ->
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + off) (String.length s)
+  | Byte_slice _, Variable_dynamic { off_fn; _ } ->
+      fun buf base value ->
+        let fo = off_fn buf base in
+        let src = (value : Slice.t) in
+        let len = Slice.length src in
+        Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + fo) len
+  | Byte_array _, Variable_dynamic { off_fn; _ } ->
+      fun buf base value ->
+        let fo = off_fn buf base in
+        let s = (value : string) in
+        Bytes.blit_string s 0 buf (base + fo) (String.length s)
   | Where { inner; _ }, _ -> build_staged_writer inner access
   | Enum { base; _ }, _ -> build_staged_writer base access
   | Map { inner; encode; _ }, _ ->
@@ -1805,7 +1846,7 @@ let rec build_staged_writer : type a.
       fun buf base value -> write buf base (encode value)
   | _, Bitfield _ ->
       invalid_arg "Codec.set: non-bitfield type with bitfield access"
-  | _, Variable _ ->
+  | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.set: unsupported variable-size field type"
 
 let field_access codec name =

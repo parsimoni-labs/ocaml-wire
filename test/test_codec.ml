@@ -2963,6 +2963,138 @@ let test_tm_like_roundtrip () =
   Alcotest.(check (option int)) "ocf" original.tm_ocf decoded.tm_ocf;
   Alcotest.(check (option int)) "fecf" original.tm_fecf decoded.tm_fecf
 
+(* ── Multiple consecutive variable-size fields (CFDP-style) ──
+
+   CCSDS CFDP (727.0-B-5) has three consecutive variable-size byte_array
+   fields in its PDU header, each sized by expressions over earlier fixed
+   fields. This layout was previously rejected by [require_static_off]. *)
+
+type cfdp_hdr = {
+  cfdp_eid_len : int;
+  cfdp_txseq_len : int;
+  cfdp_src : string;
+  cfdp_txseq : string;
+  cfdp_dst : string;
+}
+
+let f_cfdp_eid_len = Field.v "EIDLen" uint8
+let f_cfdp_txseq_len = Field.v "TxSeqLen" uint8
+
+let cfdp_codec =
+  let open Codec in
+  v "CFDPHeader"
+    (fun eid_len txseq_len src txseq dst ->
+      {
+        cfdp_eid_len = eid_len;
+        cfdp_txseq_len = txseq_len;
+        cfdp_src = src;
+        cfdp_txseq = txseq;
+        cfdp_dst = dst;
+      })
+    [
+      (f_cfdp_eid_len $ fun r -> r.cfdp_eid_len);
+      (f_cfdp_txseq_len $ fun r -> r.cfdp_txseq_len);
+      ( Field.v "SourceEID"
+          (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
+      $ fun r -> r.cfdp_src );
+      ( Field.v "TxSeqNum"
+          (byte_array ~size:Expr.(Field.ref f_cfdp_txseq_len + int 1))
+      $ fun r -> r.cfdp_txseq );
+      ( Field.v "DestEID"
+          (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
+      $ fun r -> r.cfdp_dst );
+    ]
+
+let test_multi_var_decode () =
+  (* EIDLen=1 -> 2-byte entities, TxSeqLen=2 -> 3-byte txseq.
+     Layout: [1] [2] [AA BB] [CC DD EE] [FF 00] *)
+  let buf = Bytes.create 9 in
+  Bytes.set_uint8 buf 0 1;
+  Bytes.set_uint8 buf 1 2;
+  Bytes.blit_string "\xAA\xBB" 0 buf 2 2;
+  Bytes.blit_string "\xCC\xDD\xEE" 0 buf 4 3;
+  Bytes.blit_string "\xFF\x00" 0 buf 7 2;
+  let r = decode_ok (Codec.decode cfdp_codec buf 0) in
+  Alcotest.(check int) "eid_len" 1 r.cfdp_eid_len;
+  Alcotest.(check int) "txseq_len" 2 r.cfdp_txseq_len;
+  Alcotest.(check string) "src" "\xAA\xBB" r.cfdp_src;
+  Alcotest.(check string) "txseq" "\xCC\xDD\xEE" r.cfdp_txseq;
+  Alcotest.(check string) "dst" "\xFF\x00" r.cfdp_dst
+
+let test_multi_var_roundtrip () =
+  let original =
+    {
+      cfdp_eid_len = 1;
+      cfdp_txseq_len = 2;
+      cfdp_src = "\xAA\xBB";
+      cfdp_txseq = "\xCC\xDD\xEE";
+      cfdp_dst = "\xFF\x00";
+    }
+  in
+  let buf = Bytes.create 9 in
+  Codec.encode cfdp_codec original buf 0;
+  let decoded = decode_ok (Codec.decode cfdp_codec buf 0) in
+  Alcotest.(check string) "src roundtrip" original.cfdp_src decoded.cfdp_src;
+  Alcotest.(check string)
+    "txseq roundtrip" original.cfdp_txseq decoded.cfdp_txseq;
+  Alcotest.(check string) "dst roundtrip" original.cfdp_dst decoded.cfdp_dst
+
+let test_multi_var_get () =
+  (* Staged get must work on the second and third variable-size fields. *)
+  let buf = Bytes.create 9 in
+  Bytes.set_uint8 buf 0 1;
+  Bytes.set_uint8 buf 1 2;
+  Bytes.blit_string "\xAA\xBB" 0 buf 2 2;
+  Bytes.blit_string "\xCC\xDD\xEE" 0 buf 4 3;
+  Bytes.blit_string "\xFF\x00" 0 buf 7 2;
+  let cf_txseq =
+    Codec.(
+      Field.v "TxSeqNum"
+        (byte_array ~size:Expr.(Field.ref f_cfdp_txseq_len + int 1))
+      $ fun r -> r.cfdp_txseq)
+  in
+  let cf_dst =
+    Codec.(
+      Field.v "DestEID"
+        (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
+      $ fun r -> r.cfdp_dst)
+  in
+  let get_txseq = Staged.unstage (Codec.get cfdp_codec cf_txseq) in
+  let get_dst = Staged.unstage (Codec.get cfdp_codec cf_dst) in
+  Alcotest.(check string) "get txseq" "\xCC\xDD\xEE" (get_txseq buf 0);
+  Alcotest.(check string) "get dst" "\xFF\x00" (get_dst buf 0)
+
+let test_multi_var_fixed_after () =
+  (* A fixed-size field after multiple variable-size fields must also work. *)
+  let f_elen = Field.v "ELen" uint8 in
+  let f_tlen = Field.v "TLen" uint8 in
+  let codec =
+    let open Codec in
+    v "VarTrail"
+      (fun elen tlen src txseq trail -> (elen, tlen, src, txseq, trail))
+      [
+        (f_elen $ fun (e, _, _, _, _) -> e);
+        (f_tlen $ fun (_, t, _, _, _) -> t);
+        ( Field.v "Src" (byte_array ~size:Expr.(Field.ref f_elen + int 1))
+        $ fun (_, _, s, _, _) -> s );
+        ( Field.v "Tx" (byte_array ~size:Expr.(Field.ref f_tlen + int 1))
+        $ fun (_, _, _, t, _) -> t );
+        (Field.v "Trail" uint16be $ fun (_, _, _, _, tr) -> tr);
+      ]
+  in
+  (* elen=0 -> 1-byte src, tlen=1 -> 2-byte tx, trail=0xBEEF
+     Layout: [0] [1] [AA] [BB CC] [BE EF] *)
+  let buf = Bytes.create 7 in
+  Bytes.set_uint8 buf 0 0;
+  Bytes.set_uint8 buf 1 1;
+  Bytes.set_uint8 buf 2 0xAA;
+  Bytes.blit_string "\xBB\xCC" 0 buf 3 2;
+  Bytes.set_uint16_be buf 5 0xBEEF;
+  let _, _, src, tx, trail = decode_ok (Codec.decode codec buf 0) in
+  Alcotest.(check string) "src" "\xAA" src;
+  Alcotest.(check string) "tx" "\xBB\xCC" tx;
+  Alcotest.(check int) "trail" 0xBEEF trail
+
 (* ── Adversarial bit-order tests ──
 
    These pin the default [bit_order = Msb_first] against real protocol
@@ -3342,4 +3474,10 @@ let suite =
         test_tm_like_no_trailing;
       Alcotest.test_case "composition: tm-like roundtrip" `Quick
         test_tm_like_roundtrip;
+      (* multiple consecutive variable-size fields *)
+      Alcotest.test_case "multi-var: decode" `Quick test_multi_var_decode;
+      Alcotest.test_case "multi-var: roundtrip" `Quick test_multi_var_roundtrip;
+      Alcotest.test_case "multi-var: get" `Quick test_multi_var_get;
+      Alcotest.test_case "multi-var: fixed after" `Quick
+        test_multi_var_fixed_after;
     ] )
