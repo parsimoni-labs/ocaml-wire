@@ -61,6 +61,25 @@ let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       let enc = build_field_encoder inner in
       fun buf off v -> enc buf off (encode v)
   | Unit -> fun _buf off () -> off
+  | Casetype { tag; cases; _ } ->
+      let tag_enc = build_field_encoder tag in
+      fun buf off v ->
+        let rec find = function
+          | [] -> failwith "build_field_encoder: casetype: no matching case"
+          | Case_branch { cb_tag; cb_inner; cb_project; _ } :: rest -> (
+              match cb_project v with
+              | Some body ->
+                  let off' =
+                    match cb_tag with
+                    | Some t -> tag_enc buf off t
+                    | None ->
+                        failwith
+                          "build_field_encoder: cannot encode default case"
+                  in
+                  build_field_encoder cb_inner buf off' body
+              | None -> find rest)
+        in
+        find cases
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"

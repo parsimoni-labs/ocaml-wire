@@ -129,8 +129,8 @@ and _ typ =
       -> int typ  (** Named enumeration. *)
   | Casetype : {
       name : string;
-      tag : 'tag typ;
-      cases : ('tag option * 'a typ) list;
+      tag : int typ;
+      cases : 'a case_branch list;
     }
       -> 'a typ  (** Tag-dispatched union. *)
   | Struct : struct_ -> unit typ  (** Nested struct. *)
@@ -164,6 +164,15 @@ and _ typ =
       seq : ('a, 'seq) seq_map;
     }
       -> 'seq typ  (** Repeated elements filling a byte budget. *)
+
+and 'a case_branch =
+  | Case_branch : {
+      cb_tag : int option;
+      cb_inner : 'w typ;
+      cb_inject : 'w -> 'a;
+      cb_project : 'a -> 'w option;
+    }
+      -> 'a case_branch
 
 and packed_expr =
   | Pack_expr : 'a expr -> packed_expr  (** Existentially packed expression. *)
@@ -417,16 +426,23 @@ val enum : string -> (string * int) list -> int typ -> int typ
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** Named variant mapping over an integer base. *)
 
-type ('tag, 'a) case = 'tag option * 'a typ
-(** A casetype branch. *)
+type 'a case_def
+(** A casetype branch definition. *)
 
-val case : 'tag -> 'a typ -> ('tag, 'a) case
+val case :
+  ?index:int ->
+  'w typ ->
+  inject:('w -> 'a) ->
+  project:('a -> 'w option) ->
+  'a case_def
 (** A branch matching a specific tag value. *)
 
-val default : 'a typ -> ('tag, 'a) case
+val default :
+  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> 'a case_def
 (** A default branch. *)
 
-val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
+val casetype :
+  ?first:int -> ?step:int -> string -> int typ -> 'a case_def list -> 'a typ
 (** Tag-dispatched union type. *)
 
 (** {1 Struct Constructors} *)

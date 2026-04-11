@@ -476,15 +476,22 @@ val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** [variants name cases base] maps integer values to OCaml values via a named
     enumeration. Unlike {!enum}, this converts to proper OCaml values. *)
 
-type ('tag, 'a) case
+type 'a case_def
 
-val case : 'tag -> 'a typ -> ('tag, 'a) case
+val case :
+  ?index:int ->
+  'w typ ->
+  inject:('w -> 'a) ->
+  project:('a -> 'w option) ->
+  'a case_def
 (** Tagged branch of a casetype. *)
 
-val default : 'a typ -> ('tag, 'a) case
+val default :
+  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> 'a case_def
 (** Default branch of a casetype. *)
 
-val casetype : string -> 'tag typ -> ('tag, 'a) case list -> 'a typ
+val casetype :
+  ?first:int -> ?step:int -> string -> int typ -> 'a case_def list -> 'a typ
 (** Tag-dispatched choice between several descriptions. *)
 
 val size : 'a typ -> int option
