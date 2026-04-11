@@ -647,6 +647,19 @@ let write_string enc s =
     Writer.write_string enc.writer s
   end
 
+let encode_codec ~encode ~fixed_size ~size_of v enc =
+  let sz =
+    match fixed_size with
+    | Some n -> n
+    | None ->
+        let tmp = Bytes.create 4096 in
+        encode v tmp 0;
+        size_of tmp 0
+  in
+  let tmp = Bytes.create sz in
+  encode v tmp 0;
+  write_string enc (Bytes.unsafe_to_string tmp)
+
 let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
  fun ctx typ v enc ->
   match typ with
@@ -714,18 +727,8 @@ let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
   | Enum { base; _ } -> encode_with_ctx ctx base v enc
   | Map { inner; encode; _ } -> encode_with_ctx ctx inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of; _ } ->
-      let sz =
-        match codec_fixed_size with
-        | Some n -> n
-        | None ->
-            (* For variable-size, encode to a temp buffer to determine size *)
-            let tmp = Bytes.create 4096 in
-            codec_encode v tmp 0;
-            codec_size_of tmp 0
-      in
-      let tmp = Bytes.create sz in
-      codec_encode v tmp 0;
-      write_string enc (Bytes.unsafe_to_string tmp);
+      encode_codec ~encode:codec_encode ~fixed_size:codec_fixed_size
+        ~size_of:codec_size_of v enc;
       ctx
   | Optional { present; inner } ->
       if Eval.expr ctx present then encode_with_ctx ctx inner (Option.get v) enc
