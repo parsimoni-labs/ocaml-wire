@@ -247,6 +247,54 @@ let rec compile_expr (env : (string * (bytes -> int -> int)) list)
       | None -> invalid_arg "Codec: sizeof on variable-size type")
   | _ -> invalid_arg "Codec: unsupported expression in dependent size"
 
+let try_compile_int_reader : type a.
+    (string * (bytes -> int -> int)) list ->
+    a expr ->
+    (bytes -> int -> int) option =
+ fun env -> function
+  | Int _ as e -> Some (compile_expr env e)
+  | Ref _ as e -> Some (compile_expr env e)
+  | Param_ref _ as e -> Some (compile_expr env e)
+  | Add _ as e -> Some (compile_expr env e)
+  | Sub _ as e -> Some (compile_expr env e)
+  | Mul _ as e -> Some (compile_expr env e)
+  | Div _ as e -> Some (compile_expr env e)
+  | _ -> None
+
+let rec compile_bool_expr (env : (string * (bytes -> int -> int)) list)
+    (e : bool expr) : bytes -> int -> bool =
+  match e with
+  | Bool b -> fun _buf _base -> b
+  | Eq (a, b) -> (
+      match (try_compile_int_reader env a, try_compile_int_reader env b) with
+      | Some fa, Some fb -> fun buf base -> fa buf base = fb buf base
+      | _ -> fun _buf _base -> true)
+  | Ne (a, b) -> (
+      match (try_compile_int_reader env a, try_compile_int_reader env b) with
+      | Some fa, Some fb -> fun buf base -> fa buf base <> fb buf base
+      | _ -> fun _buf _base -> true)
+  | Lt (a, b) ->
+      let fa = compile_expr env a and fb = compile_expr env b in
+      fun buf base -> fa buf base < fb buf base
+  | Le (a, b) ->
+      let fa = compile_expr env a and fb = compile_expr env b in
+      fun buf base -> fa buf base <= fb buf base
+  | Gt (a, b) ->
+      let fa = compile_expr env a and fb = compile_expr env b in
+      fun buf base -> fa buf base > fb buf base
+  | Ge (a, b) ->
+      let fa = compile_expr env a and fb = compile_expr env b in
+      fun buf base -> fa buf base >= fb buf base
+  | And (a, b) ->
+      let fa = compile_bool_expr env a and fb = compile_bool_expr env b in
+      fun buf base -> fa buf base && fb buf base
+  | Or (a, b) ->
+      let fa = compile_bool_expr env a and fb = compile_bool_expr env b in
+      fun buf base -> fa buf base || fb buf base
+  | Not e ->
+      let fe = compile_bool_expr env e in
+      fun buf base -> not (fe buf base)
+
 (* Compile expressions to read from a per-decode int array instead of a Map.
    The [idx] function maps field names to array indices. Built at [seal] time,
    used at every [decode]. Zero allocation per decode. *)
@@ -1048,6 +1096,40 @@ and compile_codec : type a r.
         populate = no_populate;
       }
 
+and dynamic_optional_next_off ctx present_fn fsize =
+  let base_off = ctx.lc_next_off in
+  Dynamic_next
+    (fun buf base ->
+      let off =
+        match base_off with
+        | Static_next n -> base + n
+        | Dynamic_next f -> f buf base
+      in
+      if present_fn buf base then off + fsize else off)
+
+and optional_compiled : type a r.
+    layout_ctx ->
+    raw_reader:(bytes -> int -> a) ->
+    raw_writer:(r -> bytes -> int -> unit) ->
+    size_delta:int ->
+    next_off:next_off ->
+    populate:(int array -> bytes -> int -> unit) ->
+    (a, r) compiled_field =
+ fun ctx ~raw_reader ~raw_writer ~size_delta ~next_off ~populate ->
+  {
+    raw_reader;
+    raw_writer;
+    extra_writers = [];
+    field_access = fixed_or_dynamic_fa ctx;
+    size_delta;
+    next_off;
+    bf_after = None;
+    int_reader = null_int_reader;
+    nested_readers = [];
+    validator_off = validator_off_of ctx;
+    populate;
+  }
+
 and compile_optional : type a r.
     layout_ctx ->
     (a option, r) field ->
@@ -1055,51 +1137,38 @@ and compile_optional : type a r.
     a typ ->
     (a option, r) compiled_field =
  fun ctx fld present inner ->
-  let present_literal = match present with Bool b -> Some b | _ -> None in
   let inner_size = field_wire_size inner in
-  match (present_literal, inner_size) with
-  | Some true, Some fsize ->
-      (* Statically present, fixed inner: behave like a normal fixed field
-         but wrap in Some. *)
+  match (present, inner_size) with
+  | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let raw_reader buf base = Some (inner_reader buf base) in
       let get = fld.get in
-      let raw_writer v buf off =
-        match get v with Some iv -> inner_writer buf off iv | None -> ()
-      in
-      {
-        raw_reader;
-        raw_writer;
-        extra_writers = [];
-        field_access = fixed_or_dynamic_fa ctx;
-        size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
-        bf_after = None;
-        int_reader = null_int_reader;
-        nested_readers = [];
-        validator_off = validator_off_of ctx;
-        populate = no_populate;
-      }
-  | Some false, _ ->
-      (* Statically absent: zero bytes, always [None]. *)
-      let raw_reader _buf _base = None in
-      let raw_writer _v _buf _off = () in
-      {
-        raw_reader;
-        raw_writer;
-        extra_writers = [];
-        field_access = fixed_or_dynamic_fa ctx;
-        size_delta = 0;
-        next_off = ctx.lc_next_off;
-        bf_after = None;
-        int_reader = null_int_reader;
-        nested_readers = [];
-        validator_off = validator_off_of ctx;
-        populate = no_populate;
-      }
+      optional_compiled ctx
+        ~raw_reader:(fun buf base -> Some (inner_reader buf base))
+        ~raw_writer:(fun v buf off ->
+          match get v with Some iv -> inner_writer buf off iv | None -> ())
+        ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~populate:no_populate
+  | Bool false, _ ->
+      optional_compiled ctx
+        ~raw_reader:(fun _buf _base -> None)
+        ~raw_writer:(fun _v _buf _off -> ())
+        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+  | _, Some fsize ->
+      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let get = fld.get in
+      optional_compiled ctx
+        ~raw_reader:(fun buf base ->
+          if present_fn buf base then Some (inner_reader buf base) else None)
+        ~raw_writer:(fun v buf off ->
+          match get v with Some iv -> inner_writer buf off iv | None -> ())
+        ~size_delta:0
+        ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
+        ~populate:no_populate
   | _ ->
       invalid_arg
-        "add_field: dynamic optional (non-literal bool expr) not yet supported"
+        "add_field: dynamic optional with variable-size inner not yet supported"
 
 and compile_optional_or : type a r.
     layout_ctx ->
@@ -1109,48 +1178,39 @@ and compile_optional_or : type a r.
     a ->
     (a, r) compiled_field =
  fun ctx fld present inner default ->
-  let present_literal = match present with Bool b -> Some b | _ -> None in
   let inner_size = field_wire_size inner in
-  match (present_literal, inner_size) with
-  | Some true, Some fsize ->
-      (* Statically present: read inner directly. *)
+  match (present, inner_size) with
+  | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
-      let raw_writer v buf off = inner_writer buf off (get v) in
       let populate = build_populate fld.typ ctx.lc_n_fields inner_reader in
-      {
-        raw_reader = inner_reader;
-        raw_writer;
-        extra_writers = [];
-        field_access = fixed_or_dynamic_fa ctx;
-        size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
-        bf_after = None;
-        int_reader = null_int_reader;
-        nested_readers = [];
-        validator_off = validator_off_of ctx;
-        populate;
-      }
-  | Some false, _ ->
-      (* Statically absent: return default, zero bytes. *)
-      let raw_reader _buf _base = default in
-      let raw_writer _v _buf _off = () in
-      {
-        raw_reader;
-        raw_writer;
-        extra_writers = [];
-        field_access = fixed_or_dynamic_fa ctx;
-        size_delta = 0;
-        next_off = ctx.lc_next_off;
-        bf_after = None;
-        int_reader = null_int_reader;
-        nested_readers = [];
-        validator_off = validator_off_of ctx;
-        populate = no_populate;
-      }
+      optional_compiled ctx ~raw_reader:inner_reader
+        ~raw_writer:(fun v buf off -> inner_writer buf off (get v))
+        ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~populate
+  | Bool false, _ ->
+      optional_compiled ctx
+        ~raw_reader:(fun _buf _base -> default)
+        ~raw_writer:(fun _v _buf _off -> ())
+        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+  | _, Some fsize ->
+      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let get = fld.get in
+      let raw_reader buf base =
+        if present_fn buf base then inner_reader buf base else default
+      in
+      let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
+      optional_compiled ctx ~raw_reader
+        ~raw_writer:(fun v buf off ->
+          if present_fn buf off then inner_writer buf off (get v))
+        ~size_delta:0
+        ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
+        ~populate
   | _ ->
       invalid_arg
-        "add_field: dynamic optional_or (non-literal bool expr) not yet \
+        "add_field: dynamic optional_or with variable-size inner not yet \
          supported"
 
 and compile_repeat : type elt seq r.
