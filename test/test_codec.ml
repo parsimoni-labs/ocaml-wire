@@ -2640,6 +2640,61 @@ let test_optional_mixed () =
   Alcotest.(check (option int)) "ocf" (Some 0x22222222) r.mo_ocf;
   Alcotest.(check (option int)) "fecf" None r.mo_fecf
 
+(* Dynamic optional: presence determined by a previously-parsed field. *)
+
+type dyn_opt = { do_flags : int; do_payload : int option; do_trail : int }
+
+let f_do_flags = Field.v "Flags" uint8
+
+let dyn_opt_codec =
+  Codec.v "DynOpt"
+    (fun flags payload trail ->
+      { do_flags = flags; do_payload = payload; do_trail = trail })
+    Codec.
+      [
+        (f_do_flags $ fun r -> r.do_flags);
+        ( Field.v "Payload"
+            (optional Expr.(Field.ref f_do_flags <> int 0) uint16be)
+        $ fun r -> r.do_payload );
+        (Field.v "Trail" uint8 $ fun r -> r.do_trail);
+      ]
+
+let test_dyn_opt_present () =
+  (* flags=1 -> payload present. Layout: [01] [12 34] [FF] *)
+  let buf = Bytes.create 4 in
+  Bytes.set_uint8 buf 0 1;
+  Bytes.set_uint16_be buf 1 0x1234;
+  Bytes.set_uint8 buf 3 0xFF;
+  let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+  Alcotest.(check int) "flags" 1 r.do_flags;
+  Alcotest.(check (option int)) "payload" (Some 0x1234) r.do_payload;
+  Alcotest.(check int) "trail" 0xFF r.do_trail
+
+let test_dyn_opt_absent () =
+  (* flags=0 -> payload absent. Layout: [00] [FF] *)
+  let buf = Bytes.create 2 in
+  Bytes.set_uint8 buf 0 0;
+  Bytes.set_uint8 buf 1 0xFF;
+  let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+  Alcotest.(check int) "flags" 0 r.do_flags;
+  Alcotest.(check (option int)) "payload" None r.do_payload;
+  Alcotest.(check int) "trail" 0xFF r.do_trail
+
+let test_dyn_opt_get_trail () =
+  let cf_trail = Codec.(Field.v "Trail" uint8 $ fun r -> r.do_trail) in
+  let get_trail = Staged.unstage (Codec.get dyn_opt_codec cf_trail) in
+  (* Present: trail at offset 3. *)
+  let buf1 = Bytes.create 4 in
+  Bytes.set_uint8 buf1 0 1;
+  Bytes.set_uint16_be buf1 1 0x1234;
+  Bytes.set_uint8 buf1 3 0xAA;
+  Alcotest.(check int) "trail (present)" 0xAA (get_trail buf1 0);
+  (* Absent: trail at offset 1. *)
+  let buf2 = Bytes.create 2 in
+  Bytes.set_uint8 buf2 0 0;
+  Bytes.set_uint8 buf2 1 0xBB;
+  Alcotest.(check int) "trail (absent)" 0xBB (get_trail buf2 0)
+
 (* ── Nested: Repeat typ: parse elements until byte budget exhausted ── *)
 
 type container = { cnt_length : int; cnt_items : inner list }
@@ -3457,6 +3512,10 @@ let suite =
       Alcotest.test_case "optional: both absent" `Quick
         test_optional_both_absent;
       Alcotest.test_case "optional: mixed" `Quick test_optional_mixed;
+      Alcotest.test_case "optional: dynamic present" `Quick test_dyn_opt_present;
+      Alcotest.test_case "optional: dynamic absent" `Quick test_dyn_opt_absent;
+      Alcotest.test_case "optional: dynamic get trail" `Quick
+        test_dyn_opt_get_trail;
       (* repeat *)
       Alcotest.test_case "repeat: decode empty" `Quick test_repeat_decode_empty;
       Alcotest.test_case "repeat: decode one" `Quick test_repeat_decode_one;
