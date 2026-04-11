@@ -264,14 +264,23 @@ let test_parse_anon_field buf =
   let _ = Wire.Codec.decode c (Bytes.of_string buf) 0 in
   ()
 
+type test_case_val = [ `U8 of int | `U16 of int | `Default of int ]
+
 let test_parse_casetype buf =
   let buf = truncate buf in
-  let t =
+  let t : test_case_val Wire.typ =
     Wire.casetype "Tag" Wire.uint8
       [
-        Wire.case 0 Wire.uint8;
-        Wire.case 1 Wire.uint16;
-        Wire.default Wire.uint32;
+        Wire.case Wire.uint8
+          ~inject:(fun v -> `U8 v)
+          ~project:(function `U8 v -> Some v | _ -> None);
+        Wire.case Wire.uint16
+          ~inject:(fun v -> `U16 v)
+          ~project:(function `U16 v -> Some v | _ -> None);
+        Wire.default Wire.uint32
+          ~inject:(fun v -> `Default (Wire.Private.UInt32.to_int v))
+          ~project:(function
+            | `Default v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
       ]
   in
   let _ = Wire.decode_string t buf in

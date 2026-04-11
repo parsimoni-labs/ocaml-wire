@@ -97,8 +97,8 @@ and _ typ =
       -> int typ
   | Casetype : {
       name : string;
-      tag : 'tag typ;
-      cases : ('tag option * 'a typ) list;
+      tag : int typ;
+      cases : 'a case_branch list;
     }
       -> 'a typ
   | Struct : struct_ -> unit typ
@@ -128,6 +128,15 @@ and _ typ =
       seq : ('a, 'seq) seq_map;
     }
       -> 'seq typ
+
+and 'a case_branch =
+  | Case_branch : {
+      cb_tag : int option;
+      cb_inner : 'w typ;
+      cb_inject : 'w -> 'a;
+      cb_project : 'a -> 'w option;
+    }
+      -> 'a case_branch
 
 and packed_expr = Pack_expr : 'a expr -> packed_expr
 
@@ -299,11 +308,64 @@ let variants name cases base =
   map decode encode (enum name enum_cases base)
 
 (* Casetype *)
-type ('tag, 'a) case = 'tag option * 'a typ
+type 'a case_def =
+  | Case_def : {
+      cd_index : int option;
+      cd_inner : 'w typ;
+      cd_inject : 'w -> 'a;
+      cd_project : 'a -> 'w option;
+    }
+      -> 'a case_def
+  | Default_def : {
+      dd_inner : 'w typ;
+      dd_inject : 'w -> 'a;
+      dd_project : 'a -> 'w option;
+    }
+      -> 'a case_def
 
-let case tag typ = (Some tag, typ)
-let default typ = (None, typ)
-let casetype name tag cases = Casetype { name; tag; cases }
+let case ?index inner ~inject ~project =
+  Case_def
+    {
+      cd_index = index;
+      cd_inner = inner;
+      cd_inject = inject;
+      cd_project = project;
+    }
+
+let default inner ~inject ~project =
+  Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
+
+let casetype ?(first = 0) ?(step = 1) name tag defs =
+  let counter = Stdlib.ref first in
+  let resolve = function
+    | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
+        let idx =
+          match cd_index with
+          | Some i ->
+              counter := i + step;
+              i
+          | None ->
+              let i = !counter in
+              counter := i + step;
+              i
+        in
+        Case_branch
+          {
+            cb_tag = Some idx;
+            cb_inner = cd_inner;
+            cb_inject = cd_inject;
+            cb_project = cd_project;
+          }
+    | Default_def { dd_inner; dd_inject; dd_project } ->
+        Case_branch
+          {
+            cb_tag = None;
+            cb_inner = dd_inner;
+            cb_inject = dd_inject;
+            cb_project = dd_project;
+          }
+  in
+  Casetype { name; tag; cases = List.map resolve defs }
 
 (* Struct fields *)
 let field name ?constraint_ ?action typ =

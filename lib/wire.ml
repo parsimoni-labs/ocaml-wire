@@ -368,14 +368,16 @@ let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
   | Casetype { cases; tag; _ } ->
       let tag_val, ctx' = parse_with dec ctx tag in
       let rec find_case = function
-        | [] ->
-            raise
-              (Parse_exn
-                 (Invalid_tag (val_to_int tag tag_val |> Option.value ~default:0)))
-        | (Some expected, case_typ) :: rest ->
-            if expected = tag_val then parse_with dec ctx' case_typ
+        | [] -> raise (Parse_exn (Invalid_tag tag_val))
+        | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest
+          ->
+            if expected = tag_val then
+              let body, ctx'' = parse_with dec ctx' cb_inner in
+              (cb_inject body, ctx'')
             else find_case rest
-        | (None, case_typ) :: _ -> parse_with dec ctx' case_typ
+        | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
+            let body, ctx'' = parse_with dec ctx' cb_inner in
+            (cb_inject body, ctx'')
       in
       find_case cases
   | Struct { fields; where; _ } ->
@@ -734,7 +736,22 @@ let rec encode_with_ctx : type a. ctx -> a typ -> a -> encoder -> ctx =
       let ctx' = Stdlib.ref ctx in
       seq.iter (fun elem_v -> ctx' := encode_with_ctx !ctx' elem elem_v enc) v;
       !ctx'
-  | Casetype _ -> failwith "casetype encoding: use Record module"
+  | Casetype { tag; cases; _ } ->
+      let rec find_case = function
+        | [] -> failwith "casetype encoding: no matching case"
+        | Case_branch { cb_tag; cb_inner; cb_project; _ } :: rest -> (
+            match cb_project v with
+            | Some body ->
+                let ctx' =
+                  match cb_tag with
+                  | Some t -> encode_with_ctx ctx tag t enc
+                  | None ->
+                      failwith "casetype encoding: cannot encode default case"
+                in
+                encode_with_ctx ctx' cb_inner body enc
+            | None -> find_case rest)
+      in
+      find_case cases
   | Struct _ -> failwith "struct encoding: use Record module"
   | Type_ref _ -> failwith "type_ref requires a type registry"
   | Qualified_ref _ -> failwith "qualified_ref requires a type registry"

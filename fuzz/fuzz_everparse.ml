@@ -144,14 +144,23 @@ let test_casetype_random n =
   let _ = Wire.Everparse.Raw.to_3d m in
   ()
 
+type ep_case_val = [ `U16 of int | `U32 of int | `Default of int ]
 (** Test inline casetype. *)
+
 let test_casetype_inline () =
-  let t =
+  let t : ep_case_val Wire.typ =
     Wire.casetype "Tag" Wire.uint8
       [
-        Wire.case 0 Wire.uint16;
-        Wire.case 1 Wire.uint32;
-        Wire.default Wire.uint8;
+        Wire.case Wire.uint16
+          ~inject:(fun v -> `U16 v)
+          ~project:(function `U16 v -> Some v | _ -> None);
+        Wire.case Wire.uint32
+          ~inject:(fun v -> `U32 (Wire.Private.UInt32.to_int v))
+          ~project:(function
+            | `U32 v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
+        Wire.default Wire.uint8
+          ~inject:(fun v -> `Default v)
+          ~project:(function `Default v -> Some v | _ -> None);
       ]
   in
   let s =
