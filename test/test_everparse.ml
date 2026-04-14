@@ -477,6 +477,46 @@ let test_3d_param_in_size () =
     (contains ~sub:"UINT16BE len" s);
   Alcotest.(check bool) "size uses len" true (contains ~sub:":byte-size len" s)
 
+(* ── Reserved word escaping ── *)
+
+let test_reserved_word_escaping () =
+  let f_type = field "type" uint8 in
+  let f_case = field "case" uint16be in
+  let s =
+    struct_ "Reserved"
+      [ field "type" uint8; field "case" uint16be; field "value" uint32 ]
+  in
+  let m =
+    module_
+      [
+        typedef ~entrypoint:true
+          (param_struct "Reserved"
+             [ param "return" uint8 ]
+             [
+               field "type" uint8;
+               field "case"
+                 ~constraint_:
+                   Expr.(field_ref f_type + field_ref f_case <= int 10)
+                 uint16be;
+             ]);
+      ]
+  in
+  ignore s;
+  let output = to_3d m in
+  Alcotest.(check bool) "type escaped" true (contains ~sub:"UINT8 type_" output);
+  Alcotest.(check bool)
+    "case escaped" true
+    (contains ~sub:"UINT16BE case_" output);
+  Alcotest.(check bool)
+    "return escaped in param" true
+    (contains ~sub:"UINT8 return_" output);
+  Alcotest.(check bool)
+    "type_ in constraint" true
+    (contains ~sub:"type_" output);
+  Alcotest.(check bool)
+    "no bare reserved word as field" false
+    (contains ~sub:"UINT8 type;" output)
+
 let suite =
   ( "everparse",
     [
@@ -504,4 +544,6 @@ let suite =
       Alcotest.test_case "3d: dep-size roundtrip" `Quick
         test_3d_dep_size_roundtrip;
       Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
+      Alcotest.test_case "3d: reserved word escaping" `Quick
+        test_reserved_word_escaping;
     ] )
