@@ -20,6 +20,8 @@ let schemas =
     s Demo.constrained_codec;
     s Demo.lowercase_codec;
     s Demo.reserved_fields_codec;
+    s Demo.bf_reorder_codec;
+    s Demo.bf_constrained_codec;
     s Space.clcw_codec;
     s Space.packet_codec;
     s Space.full_packet_codec;

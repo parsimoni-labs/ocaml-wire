@@ -333,6 +333,18 @@ val reserved_fields_codec : reserved_fields Wire.Codec.t
 (** Codec with reserved-word field names (type, case). Exercises 3D identifier
     escaping in both field declarations and action value references. *)
 
+type bf_reorder
+
+val bf_reorder_codec : bf_reorder Wire.Codec.t
+(** Bitfield with MSB-first on U8 base (non-native). Exercises the 3D bit-group
+    reordering logic. *)
+
+type bf_constrained
+
+val bf_constrained_codec : bf_constrained Wire.Codec.t
+(** Bitfield with a cross-field constraint. Exercises constraint collapsing
+    under bit-group reordering. *)
+
 (** {1 3D Feature Coverage}
 
     The following are struct/module definitions exercising Wire DSL features

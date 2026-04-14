@@ -482,6 +482,36 @@ let reserved_fields_codec =
         (Field.v "value" uint16be $ fun r -> r.rf_value);
       ]
 
+(* ── 14. Bitfield reorder: MSB-first on U8 (non-native) ── *)
+
+type bf_reorder = { bfr_a : int; bfr_b : int }
+
+let bf_reorder_codec =
+  Codec.v "BfReorder"
+    (fun a b -> { bfr_a = a; bfr_b = b })
+    Codec.
+      [
+        (Field.v "a" (bits ~width:3 U8) $ fun r -> r.bfr_a);
+        (Field.v "b" (bits ~width:5 U8) $ fun r -> r.bfr_b);
+      ]
+
+(* ── 15. Constrained bitfield ── *)
+
+type bf_constrained = { bfc_version : int; bfc_flags : int }
+
+let bf_constrained_codec =
+  let f_version = Field.v "Version" (bits ~width:4 U8) in
+  Codec.v "BfConstrained"
+    (fun version flags -> { bfc_version = version; bfc_flags = flags })
+    Codec.
+      [
+        (f_version $ fun r -> r.bfc_version);
+        ( Field.v "Flags"
+            ~constraint_:Expr.(Field.ref f_version <= int 5)
+            (bits ~width:4 U8)
+        $ fun r -> r.bfc_flags );
+      ]
+
 (* ══════════════════════════════════════════════════════════════════════════
    3D Feature Coverage
    ══════════════════════════════════════════════════════════════════════════
