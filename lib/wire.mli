@@ -774,6 +774,9 @@ module Everparse : sig
       EverParse output-types pattern: the generated C validates AND extracts all
       field values via extern callbacks ([WireSet*]). *)
 
+  val filename : t -> string
+  (** [filename s] is the [.3d] output filename for schema [s]. *)
+
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
 

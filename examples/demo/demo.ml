@@ -453,6 +453,19 @@ let constrained_data n =
   done;
   buf
 
+(* ── 12. Lowercase name: exercises filename capitalization ── *)
+
+type lowercase_record = { lc_x : int; lc_y : int }
+
+let lowercase_codec =
+  Codec.v "lowercase_record"
+    (fun x y -> { lc_x = x; lc_y = y })
+    Codec.
+      [
+        (Field.v "x" uint8 $ fun r -> r.lc_x);
+        (Field.v "y" uint16be $ fun r -> r.lc_y);
+      ]
+
 (* ══════════════════════════════════════════════════════════════════════════
    3D Feature Coverage
    ══════════════════════════════════════════════════════════════════════════

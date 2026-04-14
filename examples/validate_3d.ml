@@ -18,6 +18,7 @@ let schemas =
     s Demo.cases_demo_codec;
     s Demo.enum_demo_codec;
     s Demo.constrained_codec;
+    s Demo.lowercase_codec;
     s Space.clcw_codec;
     s Space.packet_codec;
     s Space.full_packet_codec;
@@ -39,7 +40,7 @@ let validate_one ~tmpdir s =
     Fmt.pr "  OK  %s\n%!" name;
     true
   with Failure msg ->
-    let path = Filename.concat tmpdir (name ^ ".3d") in
+    let path = Filename.concat tmpdir (Wire.Everparse.filename s) in
     let content =
       try In_channel.with_open_text path In_channel.input_all
       with Sys_error _ -> "(could not read .3d file)"

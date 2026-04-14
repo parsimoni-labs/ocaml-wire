@@ -62,7 +62,7 @@ let run_everparse ?(quiet = true) ~outdir schemas =
   in
   List.iter
     (fun s ->
-      let f = s.name ^ ".3d" in
+      let f = Wire.Everparse.filename s in
       let redirect = if quiet then " > /dev/null 2>&1" else "" in
       let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
       let ret = Sys.command cmd in

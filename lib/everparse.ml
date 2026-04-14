@@ -298,10 +298,11 @@ let schema_of_struct (s : Types.struct_) : t =
 let schema (type r) (codec : r Codec.t) : t =
   schema_of_struct (Codec.to_struct codec)
 
+let filename s = String.capitalize_ascii s.name ^ ".3d"
+
 let write_3d ~outdir schemas =
   List.iter
-    (fun s ->
-      Types.to_3d_file (Filename.concat outdir (s.name ^ ".3d")) s.module_)
+    (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
     schemas
 
 (* Public C-facing types *)

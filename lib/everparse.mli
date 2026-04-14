@@ -50,6 +50,10 @@ type t = { name : string; module_ : Types.module_; wire_size : int option }
 
 val pp : Format.formatter -> t -> unit
 
+val filename : t -> string
+(** [filename s] is the [.3d] output filename for schema [s]. EverParse requires
+    filenames to start with a capital letter. *)
+
 type struct_ = Types.struct_
 type decl = Types.decl
 type decl_case = Types.decl_case

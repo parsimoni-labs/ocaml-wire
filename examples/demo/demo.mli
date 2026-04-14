@@ -321,6 +321,12 @@ val constrained_default : constrained
 val constrained_data : int -> bytes
 (** Test data. *)
 
+type lowercase_record
+
+val lowercase_codec : lowercase_record Wire.Codec.t
+(** Codec with a lowercase snake_case name. Exercises filename capitalization in
+    the 3D pipeline (EverParse requires filenames to start uppercase). *)
+
 (** {1 3D Feature Coverage}
 
     The following are struct/module definitions exercising Wire DSL features
