@@ -572,6 +572,17 @@ let param_demo_struct =
       field "Data" (byte_array ~size:(field_ref f_pd_length));
     ]
 
+(* ── 19b. Parameterized byte_array: payload sized by input parameter ── *)
+
+let param_payload_struct =
+  let p_size = Wire.Param.input "payload_size" uint8 in
+  param_struct "ParamPayload"
+    [ param "payload_size" uint8 ]
+    [
+      field "Tag" uint8;
+      field "Data" (byte_array ~size:(Wire.Param.expr p_size));
+    ]
+
 (* ── 20. Casetype: tagged union (different wire layout per tag) ──
    Unlike enum (same wire size, different named values), casetype selects
    a different struct/type based on a discriminant field. *)

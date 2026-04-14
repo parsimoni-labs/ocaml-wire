@@ -16,6 +16,10 @@ let rec is_bitfield : type a. a Types.typ -> bool = function
 
 let rec is_byte_field : type a. a Types.typ -> bool = function
   | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ -> true
+  | Types.Optional { present = Types.Bool _; _ } -> false
+  | Types.Optional _ -> true
+  | Types.Optional_or { present = Types.Bool _; _ } -> false
+  | Types.Optional_or _ -> true
   | Types.Map { inner; _ } -> is_byte_field inner
   | _ -> false
 
@@ -43,11 +47,13 @@ let rec type_suffix : type a. a Types.typ -> string = function
   | _ -> "Bytes"
 
 let rec setter_of : type a. a Types.typ -> setter_info = function
-  | Types.Byte_array _ | Types.Byte_slice _ ->
+  | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ ->
       {
         setter_name = "WireSetBytes";
         setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
       }
+  | Types.Optional { inner; _ } -> setter_of inner
+  | Types.Optional_or { inner; _ } -> setter_of inner
   | Types.Map { inner; _ } -> setter_of inner
   | Types.Enum { base; _ } -> setter_of base
   | Types.Where { inner; _ } -> setter_of inner
@@ -55,44 +61,65 @@ let rec setter_of : type a. a Types.typ -> setter_info = function
       let suffix = type_suffix t in
       { setter_name = "WireSet" ^ suffix; setter_val_typ = Types.Pack_typ t }
 
-let map_field_action idx (Types.Field f) =
-  match f.field_name with
-  | Some name ->
-      let field_idx = !idx in
-      incr idx;
-      let new_action =
-        let { setter_name = setter; _ } = setter_of f.field_typ in
-        let value =
-          if is_byte_field f.field_typ then "(UINT32) field_pos" else name
-        in
-        let call =
-          Types.Extern_call
-            (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
-        in
-        if is_bitfield f.field_typ then
-          (* Bitfields: :act (non-failing, required for coalescing) *)
-          match f.action with
-          | None -> Some (Types.On_act [ call ])
-          | Some (Types.On_act stmts) -> Some (Types.On_act (stmts @ [ call ]))
-          | Some (Types.On_success stmts) ->
-              Some (Types.On_act (stmts @ [ call ]))
-        else
-          (* Non-bitfields: :on-success (runs after validation) *)
-          match f.action with
-          | None -> Some (Types.On_success [ call; Types.Return Types.true_ ])
-          | Some (Types.On_success stmts) ->
-              Some
-                (Types.On_success (stmts @ [ call; Types.Return Types.true_ ]))
-          | Some (Types.On_act stmts) -> Some (Types.On_act (stmts @ [ call ]))
+let setter_call : type a.
+    a Types.typ -> string -> int -> int option -> Types.action_stmt =
+ fun typ name field_idx byte_off ->
+  let setter, value =
+    if is_byte_field typ then
+      let off =
+        match byte_off with
+        | Some off -> Fmt.str "(UINT32) %d" off
+        | None -> Fmt.str "(UINT32) 0"
       in
-      Types.Field
-        {
-          field_name = Some name;
-          field_typ = f.field_typ;
-          constraint_ = f.constraint_;
-          action = new_action;
-        }
-  | None -> Types.Field f
+      ("WireSetBytes", off)
+    else
+      let { setter_name; _ } = setter_of typ in
+      (setter_name, name)
+  in
+  Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
+
+let map_field_action idx byte_off (Types.Field f) =
+  let field_size = Types.field_wire_size f.field_typ in
+  let next_off =
+    match (byte_off, field_size) with
+    | Some o, Some s -> Some (o + s)
+    | _ -> None
+  in
+  let result =
+    match f.field_name with
+    | Some name ->
+        let field_idx = !idx in
+        incr idx;
+        let call = setter_call f.field_typ name field_idx byte_off in
+        let new_action =
+          if is_bitfield f.field_typ then
+            (* Bitfields: :act fires per sub-field during coalesced parsing *)
+            match f.action with
+            | None -> Some (Types.On_act [ call ])
+            | Some (Types.On_act stmts) ->
+                Some (Types.On_act (stmts @ [ call ]))
+            | Some (Types.On_success stmts) ->
+                Some (Types.On_act (stmts @ [ call ]))
+          else
+            (* Scalars and byte-size fields: :on-success *)
+            match f.action with
+            | None -> Some (Types.On_success [ call; Types.Return Types.true_ ])
+            | Some (Types.On_success stmts) ->
+                Some
+                  (Types.On_success (stmts @ [ call; Types.Return Types.true_ ]))
+            | Some (Types.On_act stmts) ->
+                Some (Types.On_act (stmts @ [ call ]))
+        in
+        Types.Field
+          {
+            field_name = Some name;
+            field_typ = f.field_typ;
+            constraint_ = f.constraint_;
+            action = new_action;
+          }
+    | None -> Types.Field f
+  in
+  (result, next_off)
 
 (* Conjoin a list of constraint expressions, skipping [None]s. *)
 let conjoin_constraints constraints =
@@ -193,6 +220,38 @@ let reorder_bit_groups_for_3d fields =
   in
   go [] fields
 
+let bytes_setter =
+  {
+    setter_name = "WireSetBytes";
+    setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
+  }
+
+let collect_extern_setters ctx_struct u32 fields =
+  let seen = Hashtbl.create 8 in
+  List.filter_map
+    (fun (Types.Field f) ->
+      match f.field_name with
+      | None -> None
+      | Some _ ->
+          let si =
+            if is_byte_field f.field_typ then bytes_setter
+            else setter_of f.field_typ
+          in
+          if Hashtbl.mem seen si.setter_name then None
+          else begin
+            Hashtbl.add seen si.setter_name ();
+            let (Types.Pack_typ val_typ) = si.setter_val_typ in
+            Some
+              (Types.extern_fn si.setter_name
+                 [
+                   Types.mutable_param "ctx" (Types.struct_typ ctx_struct);
+                   Types.param "idx" u32;
+                   Types.param "v" val_typ;
+                 ]
+                 Types.Unit)
+          end)
+    fields
+
 let with_output (s : Types.struct_) : Types.decl list =
   (* Extern declarations for the callback mechanism *)
   let ctx_struct = Types.struct_ "WireCtx" [] in
@@ -204,37 +263,22 @@ let with_output (s : Types.struct_) : Types.decl list =
      The idx baked into each Extern_call is preserved through the reorder
      below, so WireSet callbacks still populate the original field slot. *)
   let idx = ref 0 in
-  let parse_fields = List.map (map_field_action idx) s.fields in
+  let parse_fields =
+    let off = ref (Some 0) in
+    List.map
+      (fun f ->
+        let f', next = map_field_action idx !off f in
+        off := next;
+        f')
+      s.fields
+  in
   let parse_fields = reorder_bit_groups_for_3d parse_fields in
   let parse_struct =
     Types.param_struct s.name (s.params @ [ ctx_param ]) ?where:s.where
       parse_fields
   in
   let parse_decl = Types.typedef ~entrypoint:true parse_struct in
-  (* Collect unique extern function declarations *)
-  let seen = Hashtbl.create 8 in
-  let extern_decls =
-    List.filter_map
-      (fun (Types.Field f) ->
-        match f.field_name with
-        | None -> None
-        | Some _ ->
-            let si = setter_of f.field_typ in
-            if Hashtbl.mem seen si.setter_name then None
-            else begin
-              Hashtbl.add seen si.setter_name ();
-              let (Types.Pack_typ val_typ) = si.setter_val_typ in
-              Some
-                (Types.extern_fn si.setter_name
-                   [
-                     Types.mutable_param "ctx" (Types.struct_typ ctx_struct);
-                     Types.param "idx" u32;
-                     Types.param "v" val_typ;
-                   ]
-                   Types.Unit)
-            end)
-      s.fields
-  in
+  let extern_decls = collect_extern_setters ctx_struct u32 s.fields in
   [ ctx_decl ] @ extern_decls @ [ parse_decl ]
 
 let schema_of_struct (s : Types.struct_) : t =

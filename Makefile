@@ -1,4 +1,4 @@
-.PHONY: build test bench bench-demo bench-routing bench-gateway bench-clcw \
+.PHONY: build test 3d bench bench-demo bench-routing bench-gateway bench-clcw \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw clean
 
 build:
@@ -6,6 +6,9 @@ build:
 
 test:
 	dune runtest
+
+3d:
+	dune exec examples/validate_3d.exe
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 

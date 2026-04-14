@@ -5,6 +5,7 @@
 ```
 make build              # dune build
 make test               # dune runtest
+make 3d                 # validate all schemas with 3d.exe (needs 3d.exe)
 make bench              # EverParse C vs OCaml (needs 3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly

@@ -375,6 +375,10 @@ let rec compile_int_arr (cc : compile_ctx) (e : int expr) : int array -> int =
       | `U16 -> fun a -> fe a land 0xFFFF
       | `U32 -> fun a -> fe a land 0xFFFF_FFFF
       | `U64 -> fun a -> fe a)
+  | If_then_else (c, t, e) ->
+      let fc = compile_bool_arr cc c in
+      let ft = compile_int_arr cc t and fe = compile_int_arr cc e in
+      fun a -> if fc a then ft a else fe a
 
 (* Try to compile an expression of unknown type as int.
    Returns None if the expression is not an int expr. *)
@@ -733,6 +737,10 @@ let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
   | Not a -> iter_param_refs f a
   | Lnot a -> iter_param_refs f a
   | Cast (_, a) -> iter_param_refs f a
+  | If_then_else (c, t, e) ->
+      iter_param_refs f c;
+      iter_param_refs f t;
+      iter_param_refs f e
   | Int _ | Int64 _ | Bool _ | Ref _ | Sizeof _ | Sizeof_this | Field_pos -> ()
 
 let rec iter_param_refs_stmt f = function

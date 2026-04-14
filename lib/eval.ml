@@ -74,6 +74,7 @@ let rec expr : type a. ctx -> a expr -> a =
       | `U16 -> v land 0xFFFF
       | `U32 -> v land 0xFFFF_FFFF
       | `U64 -> v)
+  | If_then_else (c, t, e) -> if expr ctx c then expr ctx t else expr ctx e
 
 type action_outcome = Continue of ctx | Return of bool * ctx | Abort
 

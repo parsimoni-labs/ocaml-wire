@@ -356,6 +356,9 @@ val action_full_struct : Wire.Everparse.Raw.struct_
 val param_demo_struct : Wire.Everparse.Raw.struct_
 (** Parameterised struct demo. *)
 
+val param_payload_struct : Wire.Everparse.Raw.struct_
+(** Parameterised byte_array demo: payload sized by input parameter. *)
+
 val casetype_module : Wire.Everparse.Raw.module_
 (** Casetype module demo. *)
 

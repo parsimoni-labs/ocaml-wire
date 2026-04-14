@@ -80,6 +80,15 @@ val bf_sp_data_len : (int, packet) Wire.Codec.field
 val packet_data : int -> bytes array
 (** [packet_data n] generates [n] synthetic Space Packet byte buffers. *)
 
+(** {2 FullPacket} *)
+
+type full_packet
+
+val full_packet_codec : full_packet Wire.Codec.t
+(** Full Space Packet: 6-byte header + variable-size data payload. Exercises
+    [byte_array ~size:Expr.(Field.ref f + int 1)] — CCSDS defines DataLength as
+    num_octets_in_data_field minus 1. *)
+
 (** {2 TMFrame} *)
 
 type tm_frame
@@ -110,6 +119,15 @@ val bf_tf_first_hdr : (int, tm_frame) Wire.Codec.field
 
 val tm_frame_data : int -> bytes array
 (** [tm_frame_data n] generates [n] synthetic TM Frame byte buffers. *)
+
+(** {2 TMWithOCF} *)
+
+type tm_with_ocf
+
+val tm_with_ocf_codec : tm_with_ocf Wire.Codec.t
+(** TM Frame header with optional 4-byte Operational Control Field. Exercises
+    [optional Expr.(Field.ref f <> int 0) uint32be] — CCSDS defines the OCF as
+    present when OCFFlag == 1. *)
 
 (** {2 Nested protocol} *)
 

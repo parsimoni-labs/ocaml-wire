@@ -86,6 +86,8 @@ and _ expr =
   | Or : bool expr * bool expr -> bool expr
   | Not : bool expr -> bool expr
   | Cast : [ `U8 | `U16 | `U32 | `U64 ] * int expr -> int expr
+  | If_then_else : bool expr * int expr * int expr -> int expr
+      (** Ternary [(cond ? then_ : else_)] for conditional byte-size. *)
 
 (** {1 Types} *)
 

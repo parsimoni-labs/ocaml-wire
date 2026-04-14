@@ -3,6 +3,11 @@
  (modules gen_3d)
  (libraries wire demo space net))
 
+(executable
+ (name validate_3d)
+ (modules validate_3d)
+ (libraries wire wire.3d demo space net))
+
 (rule
  (targets
   Minimal.3d

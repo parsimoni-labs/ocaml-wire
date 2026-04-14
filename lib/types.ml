@@ -59,6 +59,7 @@ and _ expr =
   | Or : bool expr * bool expr -> bool expr
   | Not : bool expr -> bool expr
   | Cast : [ `U8 | `U16 | `U32 | `U64 ] * int expr -> int expr
+  | If_then_else : bool expr * int expr * int expr -> int expr
 
 (* Bitfield base types - standalone, not mutually recursive *)
 and bitfield_base = BF_U8 | BF_U16 of endian | BF_U32 of endian
@@ -608,6 +609,8 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Or (a, b) -> Fmt.pf ppf "(%a || %a)" pp_expr a pp_expr b
   | Not a -> Fmt.pf ppf "(!%a)" pp_expr a
   | Cast (t, e) -> Fmt.pf ppf "((%a) %a)" pp_cast_type t pp_expr e
+  | If_then_else (c, t, e) ->
+      Fmt.pf ppf "((%a) ? %a : %a)" pp_expr c pp_expr t pp_expr e
 
 and pp_typ : type a. a typ Fmt.t =
  fun ppf typ ->
@@ -687,8 +690,30 @@ type field_suffix =
   | Single_elem of { size : int expr; at_most : bool }
   | Array of int expr
 
-let rec field_suffix : type a.
-    a typ -> field_suffix * (Format.formatter -> unit) =
+let rec inner_wire_size : type a. a typ -> int option = function
+  | Uint8 -> Some 1
+  | Uint16 _ -> Some 2
+  | Uint32 _ -> Some 4
+  | Uint64 _ -> Some 8
+  | Bits { base = BF_U8; _ } -> Some 1
+  | Bits { base = BF_U16 _; _ } -> Some 2
+  | Bits { base = BF_U32 _; _ } -> Some 4
+  | Unit -> Some 0
+  | Map { inner; _ } -> inner_wire_size inner
+  | Enum { base; _ } -> inner_wire_size base
+  | Where { inner; _ } -> inner_wire_size inner
+  | _ -> None
+
+and optional_suffix : type a.
+    bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
+ fun present inner ->
+  match inner_wire_size inner with
+  | Some n ->
+      let size = If_then_else (present, Int n, Int 0) in
+      (Byte_array size, fun ppf -> pp_typ ppf inner)
+  | None -> (No_suffix, fun ppf -> Fmt.pf ppf "optional(%a)" pp_typ inner)
+
+and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
   | Bits { width; base; _ } ->
@@ -704,9 +729,11 @@ let rec field_suffix : type a.
   | Optional { present = Bool true; inner } -> field_suffix inner
   | Optional { present = Bool false; _ } ->
       (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
+  | Optional { present; inner } -> optional_suffix present inner
   | Optional_or { present = Bool true; inner; _ } -> field_suffix inner
   | Optional_or { present = Bool false; _ } ->
       (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
+  | Optional_or { present; inner; _ } -> optional_suffix present inner
   | Repeat { size; elem; _ } ->
       (* Variable-length array with byte-size budget *)
       (Byte_array size, fun ppf -> pp_typ ppf elem)

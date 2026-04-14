@@ -31,9 +31,12 @@ let () =
       Demo.action_struct;
       Demo.action_full_struct;
       Demo.param_demo_struct;
+      Demo.param_payload_struct;
       Space.clcw_struct;
       Space.packet_struct;
+      Wire.Everparse.struct_of_codec Space.full_packet_codec;
       Space.tm_frame_struct;
+      Wire.Everparse.struct_of_codec Space.tm_with_ocf_codec;
       Wire.Everparse.struct_of_codec Space.inner_cmd_codec;
       Wire.Everparse.struct_of_codec Space.outer_hdr_codec;
       Net.ethernet_struct;

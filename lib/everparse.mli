@@ -1,7 +1,48 @@
 (** EverParse 3D export derived from wire descriptions.
 
     The main path is {!struct_of_codec}, {!schema}, and {!write_3d}. For unusual
-    3D constructs that have no codec equivalent yet, use {!Raw}. *)
+    3D constructs that have no codec equivalent yet, use {!Raw}.
+
+    {2 3D projection rules}
+
+    Wire types project to EverParse 3D struct fields. Each named field gets a
+    [WireSet*] callback that extracts its value into a flat array during
+    validation. Three EverParse limitations shape the projection:
+
+    + The 3D parser rejects [field_pos] inside actions on [[:byte-size]] fields,
+      so byte-field callbacks receive a static byte offset precomputed at schema
+      generation time instead.
+    + EverParse coalesces adjacent bitfields into a single base word. Callbacks
+      must fire per sub-field as each is parsed, so bitfields use the [:act]
+      form (fires unconditionally) rather than [:on-success] (fires only after
+      the entire coalesced word validates).
+    + 3D has no field-level [if]/[else] syntax. Dynamic optional fields are
+      expressed as [[:byte-size ((cond) ? n : 0)]], which conditionally includes
+      [n] bytes or zero bytes depending on a previously-parsed field.
+
+    {b Scalar fields} ([uint8], [uint16be], ...) project to their 3D equivalents
+    ([UINT8], [UINT16BE], ...) with an [:on-success] action:
+    [{:on-success WireSet*(ctx, idx, Name); return true; }].
+
+    {b Bitfields} ([bits ~width:n base]) project to [BASE Name : n] with an
+    [:act] action: [{:act WireSet*(ctx, idx, Name); }].
+
+    {b Byte-size fields} ([byte_array], [byte_slice], [repeat], and dynamic
+    [optional]) project to [UINT8 Name[:byte-size expr]] with an [:on-success]
+    action: [{:on-success WireSetBytes(ctx, idx, (UINT32) off); return true; }]
+    where [off] is the static byte offset.
+
+    {b Dynamic optional} ([optional cond inner]) where [cond] is not a literal
+    bool projects to [TYPE Name[:byte-size ((cond) ? inner_size : 0)]] where
+    [TYPE] is the 3D base type of [inner] and [inner_size] its fixed wire size.
+
+    {b Static optional} ([optional (Bool true) inner]) projects as the inner
+    field directly; [optional (Bool false) _] projects as [UINT8[:byte-size 0]]
+    (zero bytes).
+
+    {b Constraints} project as [{{ expr }}] on the field. Constraints are not
+    supported on [[:byte-size]] fields; they should be placed on the field whose
+    value the expression references. *)
 
 type t = { name : string; module_ : Types.module_; wire_size : int option }
 (** A named 3D schema with its module and wire size ([None] for variable-size

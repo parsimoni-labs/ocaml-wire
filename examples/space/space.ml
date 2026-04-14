@@ -72,6 +72,47 @@ let packet_data n =
       Bytes.set_uint16_be b 4 (i mod 256);
       b)
 
+(* -- 1b. Proximity-1-style frame: header + dependent-size payload --
+   The FrameLength field gives the total frame size in bytes; the data
+   payload occupies FrameLength - header_size bytes. This exercises
+   byte_array ~size:(Field.ref f - int n) with arithmetic. *)
+
+type full_packet = {
+  fp_version : int;
+  fp_type : int;
+  fp_apid : int;
+  fp_frame_len : int;
+  fp_data : string;
+}
+
+let fp_header_size = 6
+let f_fp_frame_len = Field.v "FrameLength" uint16be
+
+let full_packet_codec =
+  Codec.v "FullPacket"
+    (fun version type_ apid frame_len data ->
+      {
+        fp_version = version;
+        fp_type = type_;
+        fp_apid = apid;
+        fp_frame_len = frame_len;
+        fp_data = data;
+      })
+    Codec.
+      [
+        (Field.v "Version" (bits ~width:3 U16be) $ fun p -> p.fp_version);
+        (Field.v "Type" (bits ~width:1 U16be) $ fun p -> p.fp_type);
+        (Field.v "APID" (bits ~width:12 U16be) $ fun p -> p.fp_apid);
+        ( Field.v "FrameLength"
+            ~constraint_:Expr.(Field.ref f_fp_frame_len >= int fp_header_size)
+            uint16be
+        $ fun p -> p.fp_frame_len );
+        ( Field.v "Data"
+            (byte_array
+               ~size:Expr.(Field.ref f_fp_frame_len - int fp_header_size))
+        $ fun p -> p.fp_data );
+      ]
+
 (* -- 2. CLCW: 4 bytes of bitfields -- *)
 
 type clcw = {
@@ -256,6 +297,50 @@ let tm_frame_data n =
       Bytes.set_uint16_be b 2 (((i mod 256) lsl 8) lor (i * 7 mod 256));
       Bytes.set_uint16_be b 4 ((1 lsl 14) lor (3 lsl 11) lor (i mod 2048));
       b)
+
+(* -- 3b. TM Frame with optional OCF --
+   CCSDS: the 4-byte Operational Control Field is present when OCFFlag == 1.
+   This exercises optional (Field.ref f <> int 0) typ. *)
+
+type tm_with_ocf = {
+  tmo_version : int;
+  tmo_scid : int;
+  tmo_vcid : int;
+  tmo_ocf_flag : bool;
+  tmo_mc_count : int;
+  tmo_vc_count : int;
+  tmo_first_hdr : int;
+  tmo_ocf : int option;
+}
+
+let f_tmo_ocf_flag = Field.v "OCFFlag" (bit (bits ~width:1 U16be))
+
+let tm_with_ocf_codec =
+  Codec.v "TMWithOCF"
+    (fun version scid vcid ocf_flag mc vc hdr ocf ->
+      {
+        tmo_version = version;
+        tmo_scid = scid;
+        tmo_vcid = vcid;
+        tmo_ocf_flag = ocf_flag;
+        tmo_mc_count = mc;
+        tmo_vc_count = vc;
+        tmo_first_hdr = hdr;
+        tmo_ocf = ocf;
+      })
+    Codec.
+      [
+        (Field.v "Version" (bits ~width:2 U16be) $ fun f -> f.tmo_version);
+        (Field.v "SCID" (bits ~width:10 U16be) $ fun f -> f.tmo_scid);
+        (Field.v "VCID" (bits ~width:3 U16be) $ fun f -> f.tmo_vcid);
+        (f_tmo_ocf_flag $ fun f -> f.tmo_ocf_flag);
+        (Field.v "MCCount" (bits ~width:8 U16be) $ fun f -> f.tmo_mc_count);
+        (Field.v "VCCount" (bits ~width:8 U16be) $ fun f -> f.tmo_vc_count);
+        (Field.v "FirstHdrPtr" (bits ~width:11 U16be) $ fun f -> f.tmo_first_hdr);
+        ( Field.v "OCF"
+            (optional Expr.(Field.ref f_tmo_ocf_flag <> int 0) uint32be)
+        $ fun f -> f.tmo_ocf );
+      ]
 
 (* -- 4. Nested protocol -- *)
 
