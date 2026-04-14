@@ -454,6 +454,29 @@ let test_3d_dep_size_roundtrip () =
       Alcotest.(check string) "data" "HELLO" v.data
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+type param_frame = { pf_data : string }
+
+let p_len = Param.input "len" uint16be
+
+let param_frame_codec =
+  Codec.v "ParamFrame"
+    (fun data -> { pf_data = data })
+    Codec.
+      [
+        ( Field.v "Data" (byte_array ~size:(Param.expr p_len)) $ fun r ->
+          r.pf_data );
+      ]
+
+let test_3d_param_in_size () =
+  (* A byte_array whose size is driven by a formal parameter must thread
+     the parameter into the 3D typedef signature. *)
+  let schema = Everparse.schema param_frame_codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  Alcotest.(check bool)
+    "typedef carries len param" true
+    (contains ~sub:"UINT16BE len" s);
+  Alcotest.(check bool) "size uses len" true (contains ~sub:":byte-size len" s)
+
 let suite =
   ( "everparse",
     [
@@ -480,4 +503,5 @@ let suite =
       Alcotest.test_case "3d: dep-size schema" `Quick test_3d_dep_size_schema;
       Alcotest.test_case "3d: dep-size roundtrip" `Quick
         test_3d_dep_size_roundtrip;
+      Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
     ] )
