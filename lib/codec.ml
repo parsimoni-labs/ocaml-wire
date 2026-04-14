@@ -753,9 +753,48 @@ let iter_param_refs_action f = function
   | Types.On_success stmts | Types.On_act stmts ->
       List.iter (iter_param_refs_stmt f) stmts
 
+let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
+ fun f typ ->
+  match typ with
+  | Byte_array { size } | Byte_slice { size } -> iter_param_refs f size
+  | Uint_var { size; _ } -> iter_param_refs f size
+  | Single_elem { size; elem; _ } ->
+      iter_param_refs f size;
+      iter_param_refs_typ f elem
+  | Array { len; elem; _ } ->
+      iter_param_refs f len;
+      iter_param_refs_typ f elem
+  | Repeat { size; elem; _ } ->
+      iter_param_refs f size;
+      iter_param_refs_typ f elem
+  | Where { cond; inner } ->
+      iter_param_refs f cond;
+      iter_param_refs_typ f inner
+  | Optional { present; inner } ->
+      iter_param_refs f present;
+      iter_param_refs_typ f inner
+  | Optional_or { present; inner; _ } ->
+      iter_param_refs f present;
+      iter_param_refs_typ f inner
+  | Apply { typ; args } ->
+      iter_param_refs_typ f typ;
+      List.iter (fun (Types.Pack_expr e) -> iter_param_refs f e) args
+  | Map { inner; _ } -> iter_param_refs_typ f inner
+  | Enum { base; _ } -> iter_param_refs_typ f base
+  | Casetype { tag; cases; _ } ->
+      iter_param_refs_typ f tag;
+      List.iter
+        (fun (Types.Case_branch { cb_inner; _ }) ->
+          iter_param_refs_typ f cb_inner)
+        cases
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Bits _ | Unit
+  | All_bytes | All_zeros | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ ->
+      ()
+
 let iter_param_refs_fields f fields where =
   List.iter
     (fun (Types.Field fld) ->
+      iter_param_refs_typ f fld.field_typ;
       Option.iter (iter_param_refs f) fld.constraint_;
       Option.iter (iter_param_refs_action f) fld.action)
     fields;
