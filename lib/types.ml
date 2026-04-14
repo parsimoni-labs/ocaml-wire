@@ -561,6 +561,22 @@ let module_ ?doc decls =
   in
   { doc; decls = List.rev extra @ decls }
 
+(* 3D and C reserved words that cannot be used as field/param names. *)
+module Reserved_3d = Set.Make (String)
+
+let reserved_3d =
+  Reserved_3d.of_list
+    (String.split_on_char ' '
+       "typedef struct casetype switch case default enum extern mutable \
+        entrypoint export output where if else return abort var unit bool true \
+        false sizeof this int char void float double long short unsigned \
+        signed static const volatile auto register union while for do break \
+        continue goto type inline UINT8 UINT16 UINT16BE UINT32 UINT32BE UINT64 \
+        UINT64BE Bool PUINT8")
+
+let escape_3d name =
+  if Reserved_3d.mem name reserved_3d then name ^ "_" else name
+
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
 
 let pp_bitfield_base ppf = function
@@ -582,8 +598,8 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Int64 n -> Fmt.pf ppf "%LduL" n
   | Bool true -> Fmt.string ppf "true"
   | Bool false -> Fmt.string ppf "false"
-  | Ref name -> Fmt.string ppf name
-  | Param_ref p -> Fmt.string ppf p.ph_name
+  | Ref name -> Fmt.string ppf (escape_3d name)
+  | Param_ref p -> Fmt.string ppf (escape_3d p.ph_name)
   | Sizeof t -> Fmt.pf ppf "sizeof (%a)" pp_typ t
   | Sizeof_this -> Fmt.string ppf "sizeof (this)"
   | Field_pos -> Fmt.string ppf "field_pos"
@@ -653,7 +669,7 @@ and pp_typ : type a. a typ Fmt.t =
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
 let rec pp_action_stmt ppf = function
-  | Assign (p, e) -> Fmt.pf ppf "*%s = %a;" p.ph_name pp_expr e
+  | Assign (p, e) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr e
   | Field_assign (ptr, field_name, e) ->
       Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr e
   | Extern_call (fn, args) -> Fmt.pf ppf "%s(%s);" fn (String.concat ", " args)
@@ -669,7 +685,7 @@ let rec pp_action_stmt ppf = function
         then_
         Fmt.(list ~sep:sp pp_action_stmt)
         else_
-  | Var (name, e) -> Fmt.pf ppf "var %s = %a;" name pp_expr e
+  | Var (name, e) -> Fmt.pf ppf "var %s = %a;" (escape_3d name) pp_expr e
 
 let pp_action ppf = function
   | On_success stmts ->
@@ -731,7 +747,7 @@ let combine_constraints a b =
 let pp_field ppf (Field f) =
   let name =
     match f.field_name with
-    | Some name -> name
+    | Some name -> escape_3d name
     | None ->
         let n = !anon_counter in
         incr anon_counter;
@@ -758,8 +774,9 @@ let pp_field ppf (Field f) =
 
 let pp_param ppf p =
   let (Pack_typ t) = p.param_typ in
-  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_typ t p.param_name
-  else Fmt.pf ppf "%a %s" pp_typ t p.param_name
+  let name = escape_3d p.param_name in
+  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_typ t name
+  else Fmt.pf ppf "%a %s" pp_typ t name
 
 let pp_params ppf params =
   if not (List.is_empty params) then
@@ -767,18 +784,20 @@ let pp_params ppf params =
 
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
-  Fmt.pf ppf "typedef struct _%s%a" s.name pp_params s.params;
+  let name = escape_3d s.name in
+  Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) s.where;
   Fmt.pf ppf "@,{@[<v 2>";
   List.iter (pp_field ppf) s.fields;
-  Fmt.pf ppf "@]@,} %s" s.name
+  Fmt.pf ppf "@]@,} %s" name
 
 let pp_decl ppf = function
   | Typedef { entrypoint; export; output; extern_; doc; struct_ = st } ->
       Option.iter (Fmt.pf ppf "/*++ %s --*/@,") doc;
       if extern_ then
         (* extern typedef struct _Name Name *)
-        Fmt.pf ppf "extern typedef struct _%s %s@,@," st.name st.name
+        let n = escape_3d st.name in
+        Fmt.pf ppf "extern typedef struct _%s %s@,@," n n
       else begin
         if output then Fmt.pf ppf "output@,";
         if export then Fmt.pf ppf "export@,";
