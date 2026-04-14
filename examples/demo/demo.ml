@@ -466,6 +466,22 @@ let lowercase_codec =
         (Field.v "y" uint16be $ fun r -> r.lc_y);
       ]
 
+(* ── 13. Reserved-word field names ── *)
+
+type reserved_fields = { rf_type : int; rf_case : int; rf_value : int }
+
+let reserved_fields_codec =
+  let f_type = Field.v "type" uint8 in
+  Codec.v "ReservedFields"
+    (fun t c v -> { rf_type = t; rf_case = c; rf_value = v })
+    Codec.
+      [
+        (f_type $ fun r -> r.rf_type);
+        ( Field.v "case" ~constraint_:Expr.(Field.ref f_type <= int 10) uint8
+        $ fun r -> r.rf_case );
+        (Field.v "value" uint16be $ fun r -> r.rf_value);
+      ]
+
 (* ══════════════════════════════════════════════════════════════════════════
    3D Feature Coverage
    ══════════════════════════════════════════════════════════════════════════

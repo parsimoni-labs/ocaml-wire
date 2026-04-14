@@ -611,6 +611,9 @@ val to_3d : module_ -> string
 val to_3d_file : string -> module_ -> unit
 (** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. *)
 
+val escape_3d : string -> string
+(** [escape_3d name] appends [_] if [name] is a 3D or C reserved word. *)
+
 (** {1 Parse Errors} *)
 
 type parse_error =

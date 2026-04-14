@@ -327,6 +327,12 @@ val lowercase_codec : lowercase_record Wire.Codec.t
 (** Codec with a lowercase snake_case name. Exercises filename capitalization in
     the 3D pipeline (EverParse requires filenames to start uppercase). *)
 
+type reserved_fields
+
+val reserved_fields_codec : reserved_fields Wire.Codec.t
+(** Codec with reserved-word field names (type, case). Exercises 3D identifier
+    escaping in both field declarations and action value references. *)
+
 (** {1 3D Feature Coverage}
 
     The following are struct/module definitions exercising Wire DSL features

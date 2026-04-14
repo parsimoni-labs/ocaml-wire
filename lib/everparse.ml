@@ -74,7 +74,7 @@ let setter_call : type a.
       ("WireSetBytes", off)
     else
       let { setter_name; _ } = setter_of typ in
-      (setter_name, name)
+      (setter_name, Types.escape_3d name)
   in
   Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
 
