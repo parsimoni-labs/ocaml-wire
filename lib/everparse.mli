@@ -44,7 +44,15 @@
     supported on [[:byte-size]] fields; they should be placed on the field whose
     value the expression references. *)
 
-type t = { name : string; module_ : Types.module_; wire_size : int option }
+type t = {
+  name : string;
+  module_ : Types.module_;
+  wire_size : int option;
+  source : Types.struct_ option;
+      (** Pre-[with_output] source struct, [Some] for codec-derived schemas and
+          [None] for raw-module schemas. Used by downstream codegen to walk
+          named fields without parsing back the post-[with_output] output. *)
+}
 (** A named 3D schema with its module and wire size ([None] for variable-size
     schemas). *)
 
@@ -61,6 +69,26 @@ val uses_wire_ctx : t -> bool
     {!schema_of_struct} always satisfy this; raw modules assembled via
     {!Raw.of_module} do so only if they explicitly declare the extern typedef.
 *)
+
+type plug_field = {
+  pf_name : string;  (** Field name as declared in the codec. *)
+  pf_idx : int;  (** Index passed to the [WireSet*] callback. *)
+  pf_c_type : string;  (** C type for the generated struct member. *)
+  pf_setter : string;  (** [WireSet*] name that extracts this field. *)
+  pf_val_c_type : string;  (** C type of the value argument to the setter. *)
+}
+(** Plug info: the data needed by a concrete [WIRECTX] implementation (e.g.
+    {!Wire_3d}'s [<Name>_Fields] default plug) to materialise a typed struct
+    plus [WireSet*] switch dispatchers from a schema. *)
+
+val plug_fields : t -> plug_field list
+(** [plug_fields s] enumerates the named fields of the source struct in
+    declaration order. Returns [[]] for schemas without a [source] struct. *)
+
+val plug_setters : t -> (string * string) list
+(** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
+    [(setter_name, val_c_type)] pairs. Each one needs an implementation in the
+    plug. *)
 
 type struct_ = Types.struct_
 type decl = Types.decl

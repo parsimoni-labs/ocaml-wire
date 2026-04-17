@@ -1,6 +1,11 @@
 (** 3D code generation from Wire codecs. *)
 
-type t = { name : string; module_ : Types.module_; wire_size : int option }
+type t = {
+  name : string;
+  module_ : Types.module_;
+  wire_size : int option;
+  source : Types.struct_ option;
+}
 
 let pp ppf t =
   match t.wire_size with
@@ -293,7 +298,7 @@ let schema_of_struct (s : Types.struct_) : t =
   in
   let decls = with_output s in
   let m = Types.module_ decls in
-  { name; module_ = m; wire_size }
+  { name; module_ = m; wire_size; source = Some s }
 
 let schema (type r) (codec : r Codec.t) : t =
   schema_of_struct (Codec.to_struct codec)
@@ -308,6 +313,49 @@ let uses_wire_ctx s =
           true
       | _ -> false)
     s.module_.decls
+
+type plug_field = {
+  pf_name : string;
+  pf_idx : int;
+  pf_c_type : string;
+  pf_setter : string;
+  pf_val_c_type : string;
+}
+
+let plug_fields s =
+  match s.source with
+  | None -> []
+  | Some src ->
+      let idx = ref 0 in
+      List.filter_map
+        (fun (Types.Field f) ->
+          match f.field_name with
+          | None -> None
+          | Some name ->
+              let i = !idx in
+              incr idx;
+              let setter = setter_of f.field_typ in
+              let (Types.Pack_typ val_typ) = setter.setter_val_typ in
+              Some
+                {
+                  pf_name = name;
+                  pf_idx = i;
+                  pf_c_type = Types.c_type_of f.field_typ;
+                  pf_setter = setter.setter_name;
+                  pf_val_c_type = Types.c_type_of val_typ;
+                })
+        src.fields
+
+let plug_setters s =
+  let seen = Hashtbl.create 8 in
+  List.filter_map
+    (fun f ->
+      if Hashtbl.mem seen f.pf_setter then None
+      else begin
+        Hashtbl.add seen f.pf_setter ();
+        Some (f.pf_setter, f.pf_val_c_type)
+      end)
+    (plug_fields s)
 
 let write_3d ~outdir schemas =
   List.iter
@@ -391,5 +439,5 @@ module Raw = struct
       (Some 0) s.fields
 
   let of_module ~name ~module_ ~wire_size =
-    { name; module_; wire_size = Some wire_size }
+    { name; module_; wire_size = Some wire_size; source = None }
 end

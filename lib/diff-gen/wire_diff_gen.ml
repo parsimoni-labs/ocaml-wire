@@ -7,6 +7,7 @@ type schema = Wire.Everparse.t = {
   name : string;
   module_ : Wire.Everparse.Raw.module_;
   wire_size : int option;
+  source : Wire.Everparse.Raw.struct_ option;
 }
 
 let schema ~name ~struct_ ~module_ =

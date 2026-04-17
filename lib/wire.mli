@@ -757,7 +757,14 @@ module Everparse : sig
   type module_
   (** A 3D module. *)
 
-  type t = { name : string; module_ : module_; wire_size : int option }
+  type t = {
+    name : string;
+    module_ : module_;
+    wire_size : int option;
+    source : struct_ option;
+        (** Pre-[with_output] source struct, [Some] for codec-derived schemas
+            and [None] for raw-module schemas. *)
+  }
   (** A named 3D schema with its module and wire size ([None] for variable-size
       schemas). *)
 
@@ -782,6 +789,24 @@ module Everparse : sig
       typedef. The generated C header then [#include]s
       [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
       Schemas built via {!schema} always satisfy this. *)
+
+  type plug_field = {
+    pf_name : string;
+    pf_idx : int;
+    pf_c_type : string;
+    pf_setter : string;
+    pf_val_c_type : string;
+  }
+  (** Plug info: the data needed to materialise a typed struct and [WireSet*]
+      dispatchers for a schema. See {!Everparse.plug_field}. *)
+
+  val plug_fields : t -> plug_field list
+  (** [plug_fields s] enumerates the named fields of the source struct in
+      declaration order. Returns [[]] for schemas without a source struct. *)
+
+  val plug_setters : t -> (string * string) list
+  (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
+      [(setter_name, val_c_type)] pairs. *)
 
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)

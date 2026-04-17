@@ -2,8 +2,9 @@
 
 open Wire.Everparse
 
+let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
+
 let everparse_name name =
-  let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c in
   let len = String.length name in
   let rec count_upper i =
     if i < len && is_upper name.[i] then count_upper (i + 1) else i
@@ -13,6 +14,28 @@ let everparse_name name =
         let c = Char.lowercase_ascii name.[i] in
         if i = 0 then Char.uppercase_ascii c else c)
   else name
+
+(* EverParse separately lowercases any trailing run of 2+ consecutive uppercase
+   letters in extern callback names, turning [WireSetU16BE] in the [.3d] source
+   into [WireSetU16be] in the generated [.c] and [_ExternalAPI.h]. Our
+   [_Fields.c] implementations must match the name the validator actually
+   calls, not the name we declared. *)
+let everparse_extern_name name =
+  let len = String.length name in
+  let rec trailing_upper i =
+    if i < len && is_upper name.[i] then trailing_upper (i + 1) else i
+  in
+  let rec find_trailing_run i =
+    if i >= len then None
+    else if is_upper name.[i] && trailing_upper i = len && len - i >= 2 then
+      Some i
+    else find_trailing_run (i + 1)
+  in
+  match find_trailing_run 0 with
+  | None -> name
+  | Some start ->
+      String.init len (fun i ->
+          if i >= start then Char.lowercase_ascii name.[i] else name.[i])
 
 let write_3d = Wire.Everparse.write_3d
 
@@ -54,27 +77,96 @@ let copy_everparse_endianness ~outdir =
 
 let has_3d_exe () = locate_3d_exe () <> None
 
-let external_typedefs_content =
-  "#ifndef WIRECTX_DEFINED\n\
-   #define WIRECTX_DEFINED\n\
-   #include <stdint.h>\n\
-   typedef struct { int64_t *fields; } WIRECTX;\n\
-   #endif\n"
-
+(* The [_ExternalTypedefs.h] header seen by the EverParse-generated validator
+   and wrapper. The default shipped by wire.3d is a forward declaration that
+   ties WIRECTX to the matching [<Name>_Fields] plug struct. Users who want
+   their own plug (e.g. {!Wire_stubs} for OCaml FFI) overwrite this file with
+   a different WIRECTX definition; they must then also omit the default
+   [<Name>_Fields.c] from their link. *)
 let write_external_typedefs ~outdir schemas =
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
         let path = Filename.concat outdir (s.name ^ "_ExternalTypedefs.h") in
         let oc = open_out path in
-        output_string oc external_typedefs_content;
+        Fmt.pf
+          (Format.formatter_of_out_channel oc)
+          "#ifndef WIRECTX_DEFINED@\n\
+           #define WIRECTX_DEFINED@\n\
+           typedef struct %sFields WIRECTX;@\n\
+           #endif@\n"
+          s.name;
         close_out oc
       end)
     schemas
 
-(* Extra headers and wrapper files emitted by EverParse when a schema uses the
-   WireCtx extern typedef. The ExternalTypedefs header is written by
-   {!write_external_typedefs}; the other three are produced by 3d.exe itself. *)
+(* Typed-struct plug: one C struct per schema with one member per named field,
+   plus a [WireSet*] implementation that switches on idx to populate it. *)
+let write_fields_header ~outdir s =
+  let fields = Wire.Everparse.plug_fields s in
+  let path = Filename.concat outdir (s.name ^ "_Fields.h") in
+  let oc = open_out path in
+  let ppf = Format.formatter_of_out_channel oc in
+  let pr fmt = Fmt.pf ppf fmt in
+  let guard =
+    String.uppercase_ascii s.name ^ "_FIELDS_H" |> fun g ->
+    String.map (fun c -> if c = '-' then '_' else c) g
+  in
+  pr "#ifndef %s@\n" guard;
+  pr "#define %s@\n" guard;
+  pr "#include <stdint.h>@\n@\n";
+  pr "typedef struct %sFields {@\n" s.name;
+  List.iter
+    (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.pf_c_type f.pf_name)
+    fields;
+  if fields = [] then pr "  int _unused;@\n";
+  pr "} %sFields;@\n" s.name;
+  pr "#endif@\n";
+  Format.pp_print_flush ppf ();
+  close_out oc
+
+let write_fields_impl ~outdir s =
+  let fields = Wire.Everparse.plug_fields s in
+  let setters = Wire.Everparse.plug_setters s in
+  let path = Filename.concat outdir (s.name ^ "_Fields.c") in
+  let oc = open_out path in
+  let ppf = Format.formatter_of_out_channel oc in
+  let pr fmt = Fmt.pf ppf fmt in
+  pr "#include <stdint.h>@\n";
+  pr "#include \"%s_Fields.h\"@\n" s.name;
+  pr "#include \"%s_ExternalTypedefs.h\"@\n@\n" s.name;
+  List.iter
+    (fun (setter, val_c_type) ->
+      let symbol = everparse_extern_name setter in
+      pr "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" symbol val_c_type;
+      pr "  switch (idx) {@\n";
+      List.iter
+        (fun f ->
+          if String.equal f.Wire.Everparse.pf_setter setter then
+            pr "    case %d: ctx->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
+              f.pf_c_type)
+        fields;
+      pr "    default: (void) ctx; (void) v; break;@\n";
+      pr "  }@\n";
+      pr "}@\n@\n")
+    setters;
+  Format.pp_print_flush ppf ();
+  close_out oc
+
+let write_fields ~outdir schemas =
+  List.iter
+    (fun s ->
+      if Wire.Everparse.uses_wire_ctx s then begin
+        write_fields_header ~outdir s;
+        write_fields_impl ~outdir s
+      end)
+    schemas
+
+(* Files shipped with a schema whose validator depends on the WireCtx contract:
+   the forward-decl header, the EverParse-emitted API / wrapper, and the
+   default plug pair. Every file in this list is installed and accounted for
+   in the dune rules; wrapper artefacts are only needed at install time,
+   while [_Fields.{c,h}] also link into the runtest. *)
 let wire_ctx_files schemas =
   List.concat_map
     (fun s ->
@@ -84,14 +176,16 @@ let wire_ctx_files schemas =
           s.name ^ "_ExternalAPI.h";
           s.name ^ "Wrapper.c";
           s.name ^ "Wrapper.h";
+          s.name ^ "_Fields.h";
+          s.name ^ "_Fields.c";
         ]
       else [])
     schemas
 
-let wrapper_c_files schemas =
+let fields_c_files schemas =
   List.filter_map
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then Some (s.name ^ "Wrapper.c")
+      if Wire.Everparse.uses_wire_ctx s then Some (s.name ^ "_Fields.c")
       else None)
     schemas
 
@@ -115,13 +209,15 @@ let emit_schema_test ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   let ep = everparse_name s.name in
   let lower = String.lowercase_ascii s.name in
-  (* Schemas using WireCtx have an extra [WIRECTX *Ctx] parameter first. *)
-  let ctx_arg = if Wire.Everparse.uses_wire_ctx s then "NULL, " else "" in
+  let uses_ctx = Wire.Everparse.uses_wire_ctx s in
+  let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
   pr "\n  /* %s (%d bytes) */\n" s.name wire_size;
   pr "  {\n";
   pr "    int pass = 0, fail = 0;\n";
   pr "    uint8_t buf[%d];\n" wire_size;
-  pr "    uint64_t r;\n\n";
+  pr "    uint64_t r;\n";
+  if uses_ctx then pr "    %sFields ctx = {0};\n" s.name;
+  pr "\n";
   pr "    memset(buf, 0, %d);\n" wire_size;
   pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
     ctx_arg wire_size;
@@ -155,6 +251,7 @@ let emit_schema_test ppf s wire_size =
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n";
   pr "\n";
+  if uses_ctx then pr "    (void) ctx;\n";
   pr "    printf(\"%s: %%d passed, %%d failed\\n\", pass, fail);\n" lower;
   pr "    failures += fail;\n";
   pr "  }\n"
@@ -173,7 +270,12 @@ let generate_test ~outdir schemas =
       (fun s -> Option.map (fun ws -> (s, ws)) s.wire_size)
       schemas
   in
-  List.iter (fun (s, _) -> pr "#include \"%s.h\"\n" s.name) fixed_schemas;
+  List.iter
+    (fun (s, _) ->
+      pr "#include \"%s.h\"\n" s.name;
+      if Wire.Everparse.uses_wire_ctx s then
+        pr "#include \"%s_Fields.h\"\n" s.name)
+    fixed_schemas;
   pr "\nstatic int error_count;\n\n";
   pr "static void counting_error_handler(\n";
   pr "  EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,\n";
@@ -209,6 +311,7 @@ let generate_c ?(quiet = true) ~outdir schemas =
   if has_3d_exe () then begin
     run_everparse ~quiet ~outdir schemas;
     write_external_typedefs ~outdir schemas;
+    write_fields ~outdir schemas;
     generate_test ~outdir schemas
   end
   else
@@ -226,7 +329,7 @@ let generate_dune ~outdir ~package schemas =
   let names = List.map (fun s -> s.name) schemas in
   let c_files = List.concat_map (fun n -> [ n ^ ".h"; n ^ ".c" ]) names in
   let ctx_files = wire_ctx_files schemas in
-  let wrapper_srcs = wrapper_c_files schemas in
+  let fields_srcs = fields_c_files schemas in
   let three_d_files = List.map (fun n -> n ^ ".3d") names in
   let test_bin =
     "test_" ^ String.map (fun c -> if c = '-' then '_' else c) package
@@ -249,7 +352,7 @@ let generate_dune ~outdir ~package schemas =
   let all_deps =
     [ "test.c"; "EverParse.h"; "EverParseEndianness.h" ] @ c_files @ ctx_files
   in
-  let c_srcs = List.map (fun n -> n ^ ".c") names @ wrapper_srcs in
+  let c_srcs = List.map (fun n -> n ^ ".c") names @ fields_srcs in
   pr "(rule\n";
   pr " (alias runtest)\n";
   pr " (deps %s)\n" (String.concat " " all_deps);
