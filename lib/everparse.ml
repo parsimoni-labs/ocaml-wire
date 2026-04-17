@@ -51,24 +51,33 @@ let rec type_suffix : type a. a Types.typ -> string = function
   | Types.Where { inner; _ } -> type_suffix inner
   | _ -> "Bytes"
 
-let rec setter_of : type a. a Types.typ -> setter_info = function
+(* Each schema gets its own namespace of [WireSet*] setters, prefixed with
+   the schema name, so multiple schemas can be linked into a single binary
+   without symbol collisions. E.g. [SsidSetU8] and [MbrPartitionSetU8]
+   coexist, each calling into its own [Fields] struct. *)
+let rec setter_of : type a. string -> a Types.typ -> setter_info =
+ fun schema_name t ->
+  match t with
   | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ ->
       {
-        setter_name = "WireSetBytes";
+        setter_name = schema_name ^ "SetBytes";
         setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
       }
-  | Types.Optional { inner; _ } -> setter_of inner
-  | Types.Optional_or { inner; _ } -> setter_of inner
-  | Types.Map { inner; _ } -> setter_of inner
-  | Types.Enum { base; _ } -> setter_of base
-  | Types.Where { inner; _ } -> setter_of inner
-  | t ->
+  | Types.Optional { inner; _ } -> setter_of schema_name inner
+  | Types.Optional_or { inner; _ } -> setter_of schema_name inner
+  | Types.Map { inner; _ } -> setter_of schema_name inner
+  | Types.Enum { base; _ } -> setter_of schema_name base
+  | Types.Where { inner; _ } -> setter_of schema_name inner
+  | _ ->
       let suffix = type_suffix t in
-      { setter_name = "WireSet" ^ suffix; setter_val_typ = Types.Pack_typ t }
+      {
+        setter_name = schema_name ^ "Set" ^ suffix;
+        setter_val_typ = Types.Pack_typ t;
+      }
 
 let setter_call : type a.
-    a Types.typ -> string -> int -> int option -> Types.action_stmt =
- fun typ name field_idx byte_off ->
+    string -> a Types.typ -> string -> int -> int option -> Types.action_stmt =
+ fun schema_name typ name field_idx byte_off ->
   let setter, value =
     if is_byte_field typ then
       let off =
@@ -76,14 +85,14 @@ let setter_call : type a.
         | Some off -> Fmt.str "(UINT32) %d" off
         | None -> Fmt.str "(UINT32) 0"
       in
-      ("WireSetBytes", off)
+      (schema_name ^ "SetBytes", off)
     else
-      let { setter_name; _ } = setter_of typ in
+      let { setter_name; _ } = setter_of schema_name typ in
       (setter_name, Types.escape_3d name)
   in
   Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
 
-let map_field_action idx byte_off (Types.Field f) =
+let map_field_action schema_name idx byte_off (Types.Field f) =
   let field_size = Types.field_wire_size f.field_typ in
   let next_off =
     match (byte_off, field_size) with
@@ -95,7 +104,9 @@ let map_field_action idx byte_off (Types.Field f) =
     | Some name ->
         let field_idx = !idx in
         incr idx;
-        let call = setter_call f.field_typ name field_idx byte_off in
+        let call =
+          setter_call schema_name f.field_typ name field_idx byte_off
+        in
         let new_action =
           if is_bitfield f.field_typ then
             (* Bitfields: :act fires per sub-field during coalesced parsing *)
@@ -225,13 +236,13 @@ let reorder_bit_groups_for_3d fields =
   in
   go [] fields
 
-let bytes_setter =
+let bytes_setter schema_name =
   {
-    setter_name = "WireSetBytes";
+    setter_name = schema_name ^ "SetBytes";
     setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
   }
 
-let collect_extern_setters ctx_struct u32 fields =
+let collect_extern_setters schema_name ctx_struct u32 fields =
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun (Types.Field f) ->
@@ -239,8 +250,8 @@ let collect_extern_setters ctx_struct u32 fields =
       | None -> None
       | Some _ ->
           let si =
-            if is_byte_field f.field_typ then bytes_setter
-            else setter_of f.field_typ
+            if is_byte_field f.field_typ then bytes_setter schema_name
+            else setter_of schema_name f.field_typ
           in
           if Hashtbl.mem seen si.setter_name then None
           else begin
@@ -272,7 +283,7 @@ let with_output (s : Types.struct_) : Types.decl list =
     let off = ref (Some 0) in
     List.map
       (fun f ->
-        let f', next = map_field_action idx !off f in
+        let f', next = map_field_action s.name idx !off f in
         off := next;
         f')
       s.fields
@@ -283,7 +294,7 @@ let with_output (s : Types.struct_) : Types.decl list =
       parse_fields
   in
   let parse_decl = Types.typedef ~entrypoint:true parse_struct in
-  let extern_decls = collect_extern_setters ctx_struct u32 s.fields in
+  let extern_decls = collect_extern_setters s.name ctx_struct u32 s.fields in
   [ ctx_decl ] @ extern_decls @ [ parse_decl ]
 
 let schema_of_struct (s : Types.struct_) : t =
@@ -334,7 +345,10 @@ let plug_fields s =
           | Some name ->
               let i = !idx in
               incr idx;
-              let setter = setter_of f.field_typ in
+              let setter =
+                if is_byte_field f.field_typ then bytes_setter s.name
+                else setter_of s.name f.field_typ
+              in
               let (Types.Pack_typ val_typ) = setter.setter_val_typ in
               Some
                 {
@@ -356,6 +370,33 @@ let plug_setters s =
         Some (f.pf_setter, f.pf_val_c_type)
       end)
     (plug_fields s)
+
+let entrypoint_struct s =
+  List.find_map
+    (function
+      | Types.Typedef { entrypoint = true; extern_ = false; struct_ = st; _ } ->
+          Some st
+      | _ -> None)
+    s.module_.decls
+
+let extern_fn_names s =
+  List.filter_map
+    (function Types.Extern_fn { name; _ } -> Some name | _ -> None)
+    s.module_.decls
+
+type field_action_form = No_action | On_act | On_success
+
+let field_action_forms (st : Types.struct_) =
+  List.map
+    (fun (Types.Field f) ->
+      let form =
+        match f.action with
+        | None -> No_action
+        | Some (Types.On_act _) -> On_act
+        | Some (Types.On_success _) -> On_success
+      in
+      (f.field_name, is_bitfield f.field_typ, form))
+    st.fields
 
 let write_3d ~outdir schemas =
   List.iter

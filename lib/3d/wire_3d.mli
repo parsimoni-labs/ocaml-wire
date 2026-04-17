@@ -43,6 +43,16 @@ val run_everparse :
 
     Requires [3d.exe] in PATH. *)
 
+val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
+(** Write the default [<Name>_ExternalTypedefs.h] for each schema that uses the
+    WireCtx contract. Declares [WIRECTX] as a forward reference to the matching
+    [<Name>Fields] plug struct. *)
+
+val write_fields : outdir:string -> Wire.Everparse.t list -> unit
+(** Write the default [<Name>_Fields.{c,h}] plug for each schema that uses the
+    WireCtx contract: a typed struct (one member per named field) and the
+    [WireSet*] switch dispatchers that populate it. *)
+
 val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
     files to produce C parsers and generates [test.c].

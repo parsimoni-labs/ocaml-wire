@@ -808,6 +808,20 @@ module Everparse : sig
   (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
       [(setter_name, val_c_type)] pairs. *)
 
+  val entrypoint_struct : t -> struct_ option
+  (** Entrypoint typedef struct in the schema's module, if any. *)
+
+  val extern_fn_names : t -> string list
+  (** Names of every extern function declared in the schema's module. *)
+
+  type field_action_form = No_action | On_act | On_success
+
+  val field_action_forms :
+    struct_ -> (string option * bool * field_action_form) list
+  (** [field_action_forms st] enumerates fields as [(name, is_bitfield, form)]
+      tuples. Used by tests to assert the codegen invariant that bitfields carry
+      [On_act], scalars [On_success], anonymous fields [No_action]. *)
+
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
 

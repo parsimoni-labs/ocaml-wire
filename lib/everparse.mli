@@ -90,6 +90,10 @@ val plug_setters : t -> (string * string) list
     [(setter_name, val_c_type)] pairs. Each one needs an implementation in the
     plug. *)
 
+val extern_fn_names : t -> string list
+(** [extern_fn_names s] lists the names of every extern function declared in the
+    schema's module (the [WireSet*] setters). *)
+
 type struct_ = Types.struct_
 type decl = Types.decl
 type decl_case = Types.decl_case
@@ -111,6 +115,21 @@ val schema : 'r Codec.t -> t
     contains a single entrypoint typedef with the EverParse output-types
     pattern: extern callbacks ([WireSet*]) that extract all field values during
     validation. *)
+
+val entrypoint_struct : t -> struct_ option
+(** [entrypoint_struct s] returns the entrypoint typedef struct in the schema's
+    module, if any. Returns [None] for schemas without an entrypoint. *)
+
+type field_action_form = No_action | On_act | On_success
+
+val field_action_forms :
+  struct_ -> (string option * bool * field_action_form) list
+(** [field_action_forms st] enumerates the fields of [st] in declaration order.
+    Each tuple is [(name, is_bitfield, action_form)]: [name] is [None] for
+    anonymous fields; [is_bitfield] is [true] if the field's type is (or reduces
+    to) a bitfield; [action_form] is the currently attached action kind. Used by
+    tests to assert the [map_field_action] invariant: bitfields must carry
+    [On_act], scalars [On_success], anonymous fields [No_action]. *)
 
 val write_3d : outdir:string -> t list -> unit
 (** [write_3d ~outdir ts] writes one [.3d] file per schema in [outdir]. *)
