@@ -99,6 +99,82 @@ let () =
 For unusual EverParse constructs that have no codec equivalent yet, use the
 `Everparse.Raw` API.
 
+## Consuming from C
+
+After `Wire_3d.run`, each schema ships a small set of files:
+
+| File | Role |
+|------|------|
+| `<Name>.h`, `<Name>.c` | Verified validator. Do not edit. |
+| `<Name>_ExternalAPI.h` | Declares the extern `<Name>Set*` callbacks. |
+| `<Name>_ExternalTypedefs.h` | Declares `WIRECTX` (forward decl). |
+| `<Name>Wrapper.{c,h}` | Convenience `<Name>Check<Name>` entry point + error plumbing. |
+| `<Name>_Fields.h` | `<Name>Fields` struct (one typed member per named field) and `<NAME>_IDX_<FIELD>` constants. |
+| `<Name>_Fields.c` | Default plug: `<Name>Set*` callbacks that populate `<Name>Fields`. |
+
+The validator invokes extern `<Name>Set*` callbacks that write field values
+into a caller-supplied `WIRECTX *` — the "socket" for field extraction. The
+shipped `<Name>_Fields` pair is the default plug; you can swap in your own.
+
+### Validate only
+
+Does the buffer conform? Link `<Name>_Fields.c` and pass a stack `<Name>Fields`.
+The fields get populated and ignored.
+
+```c
+#include "SpacePacket.h"
+#include "SpacePacket_Fields.h"
+
+static void err(const char *t, const char *f, const char *r,
+                uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) { (void)0; }
+
+int accept(uint8_t *buf, uint32_t len) {
+  SpacePacketFields fields = {0};
+  uint64_t r = SpacePacketValidateSpacePacket(
+      (WIRECTX *)&fields, NULL, err, buf, len, 0);
+  return EverParseIsSuccess(r);
+}
+```
+
+### Capture every field
+
+Same link, read struct members:
+
+```c
+SpacePacketFields p = {0};
+if (EverParseIsSuccess(SpacePacketValidateSpacePacket(
+        (WIRECTX *)&p, NULL, err, buf, len, 0))) {
+  printf("APID=%u SeqCount=%u\n", p.APID, p.SeqCount);
+}
+```
+
+### Capture only the fields you want
+
+Replace `<Name>_ExternalTypedefs.h` and `<Name>_Fields.c` with your own. The
+indices live in `<Name>_Fields.h` as `<NAME>_IDX_<FIELD>` constants, so you
+don't have to count:
+
+```c
+/* your_ExternalTypedefs.h — overrides wire.3d's default */
+typedef struct { uint16_t apid; } WIRECTX;
+
+/* your_plug.c — overrides _Fields.c. Every SpacePacketSet* declared in
+   SpacePacket_ExternalAPI.h must be defined, but you can leave the ones you
+   don't care about empty. */
+#include "SpacePacket_ExternalAPI.h"
+#include "SpacePacket_Fields.h"     /* for the IDX_* constants */
+
+void SpacePacketSetU16be(WIRECTX *ctx, uint32_t idx, uint16_t v) {
+  if (idx == SPACEPACKET_IDX_APID) ctx->apid = v;
+}
+void SpacePacketSetU8(WIRECTX *ctx, uint32_t idx, uint8_t v) {
+  (void)ctx; (void)idx; (void)v;
+}
+/* stubs for any other SpacePacketSet* declared in _ExternalAPI.h */
+```
+
+Same validator call, now only `apid` lands in your context struct.
+
 ### ASCII diagrams
 
 ```ocaml

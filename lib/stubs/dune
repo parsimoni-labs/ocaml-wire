@@ -1,7 +1,4 @@
 (library
  (name wire_stubs)
  (public_name wire.stubs)
- (foreign_stubs
-  (language c)
-  (names wire_setters))
  (libraries wire wire.3d fmt))

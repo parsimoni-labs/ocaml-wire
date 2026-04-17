@@ -15,27 +15,38 @@ let everparse_name name =
         if i = 0 then Char.uppercase_ascii c else c)
   else name
 
-(* EverParse separately lowercases any trailing run of 2+ consecutive uppercase
-   letters in extern callback names, turning [WireSetU16BE] in the [.3d] source
-   into [WireSetU16be] in the generated [.c] and [_ExternalAPI.h]. Our
-   [_Fields.c] implementations must match the name the validator actually
-   calls, not the name we declared. *)
-let everparse_extern_name name =
-  let len = String.length name in
-  let rec trailing_upper i =
-    if i < len && is_upper name.[i] then trailing_upper (i + 1) else i
-  in
-  let rec find_trailing_run i =
-    if i >= len then None
-    else if is_upper name.[i] && trailing_upper i = len && len - i >= 2 then
-      Some i
-    else find_trailing_run (i + 1)
-  in
-  match find_trailing_run 0 with
-  | None -> name
-  | Some start ->
-      String.init len (fun i ->
-          if i >= start then Char.lowercase_ascii name.[i] else name.[i])
+(* EverParse normalizes extern callback names in ways that are awkward to
+   mirror exactly (runs of uppercase after a digit get lowercased, trailing
+   uppercase runs get lowercased, …). Rather than re-implement EverParse's
+   rule and drift from it over time, we read the normalized names straight
+   out of the [_ExternalAPI.h] file EverParse has just generated. *)
+let read_extern_names ~outdir s =
+  let path = Filename.concat outdir (s.name ^ "_ExternalAPI.h") in
+  let ic = open_in path in
+  let names = ref [] in
+  (try
+     while true do
+       let line = input_line ic in
+       match
+         ( String.index_opt line '(',
+           String.index_opt line ' ',
+           String.length line )
+       with
+       | Some lp, _, _ when String.length line >= 11 ->
+           let prefix = "extern void " in
+           let plen = String.length prefix in
+           if
+             String.length line > plen
+             && String.sub line 0 plen = prefix
+             && lp > plen
+           then
+             let name = String.sub line plen (lp - plen) in
+             names := name :: !names
+       | _ -> ()
+     done
+   with End_of_file -> ());
+  close_in ic;
+  List.rev !names
 
 let write_3d = Wire.Everparse.write_3d
 
@@ -112,9 +123,25 @@ let write_fields_header ~outdir s =
     String.uppercase_ascii s.name ^ "_FIELDS_H" |> fun g ->
     String.map (fun c -> if c = '-' then '_' else c) g
   in
+  let prefix =
+    String.uppercase_ascii s.name |> fun p ->
+    String.map (fun c -> if c = '-' then '_' else c) p
+  in
   pr "#ifndef %s@\n" guard;
   pr "#define %s@\n" guard;
   pr "#include <stdint.h>@\n@\n";
+  pr "/* Field indices — use with the schema's WireSet* callbacks in a@\n";
+  pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
+  List.iter
+    (fun f ->
+      pr "#define %s_IDX_%s %d@\n" prefix
+        (String.uppercase_ascii f.Wire.Everparse.pf_name)
+        f.pf_idx)
+    fields;
+  if fields <> [] then pr "@\n";
+  pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
+  pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
+    s.name;
   pr "typedef struct %sFields {@\n" s.name;
   List.iter
     (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.pf_c_type f.pf_name)
@@ -128,6 +155,12 @@ let write_fields_header ~outdir s =
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
   let setters = Wire.Everparse.plug_setters s in
+  (* EverParse renames some setter symbols when emitting [.c] (for example,
+     uppercase runs after a digit are lowercased). Read the actual symbol
+     names from the just-generated [_ExternalAPI.h] rather than re-deriving
+     them. Order matches the declaration order of the extern functions,
+     which matches [plug_setters]. *)
+  let physical_names = read_extern_names ~outdir s in
   let path = Filename.concat outdir (s.name ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
@@ -135,21 +168,26 @@ let write_fields_impl ~outdir s =
   pr "#include <stdint.h>@\n";
   pr "#include \"%s_Fields.h\"@\n" s.name;
   pr "#include \"%s_ExternalTypedefs.h\"@\n@\n" s.name;
-  List.iter
-    (fun (setter, val_c_type) ->
-      let symbol = everparse_extern_name setter in
-      pr "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" symbol val_c_type;
+  (* Cast [WIRECTX *] to the schema's concrete struct type. In a translation
+     unit that includes multiple schemas' [_Fields.c] files, only the first
+     [_ExternalTypedefs.h] defines [WIRECTX]; subsequent headers are skipped
+     by the include guard. The explicit cast to [<Name>Fields *] makes each
+     setter work regardless of which schema's typedef won. *)
+  List.iter2
+    (fun (logical, val_c_type) physical ->
+      pr "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" physical val_c_type;
+      pr "  %sFields *f = (%sFields *) ctx;@\n" s.name s.name;
       pr "  switch (idx) {@\n";
       List.iter
         (fun f ->
-          if String.equal f.Wire.Everparse.pf_setter setter then
-            pr "    case %d: ctx->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
+          if String.equal f.Wire.Everparse.pf_setter logical then
+            pr "    case %d: f->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
               f.pf_c_type)
         fields;
-      pr "    default: (void) ctx; (void) v; break;@\n";
+      pr "    default: (void) f; (void) v; break;@\n";
       pr "  }@\n";
       pr "}@\n@\n")
-    setters;
+    setters physical_names;
   Format.pp_print_flush ppf ();
   close_out oc
 

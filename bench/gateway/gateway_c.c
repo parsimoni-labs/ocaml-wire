@@ -1,38 +1,22 @@
 /* TM frame reassembly — application logic with EverParse field extraction.
 
    Uses EverParse-generated TmframeValidateTmframe and
-   SpacePacketValidateSpacePacket to extract fields via WireSet callbacks
-   into C arrays. Application logic (checksum computation) uses the extracted
-   values. No hand-written bitfield manipulation. */
+   SpacePacketValidateSpacePacket to extract fields into typed struct plugs.
+   Application logic (checksum computation) reads named struct members.
+   No hand-written bitfield manipulation. */
 
 #include <caml/mlvalues.h>
 #include <caml/alloc.h>
 #include <caml/memory.h>
 #include <stdint.h>
 
-#include "wire_setters.h"
-
-/* EverParse generated headers (implementation linked from c_stubs_c) */
 #include "EverParse.h"
 #include "TMFrame.h"
+#include "TMFrame_Fields.h"
 #include "SpacePacket.h"
+#include "SpacePacket_Fields.h"
 
 #include "bench_common.h"
-
-/* TMFrame field indices (declaration order) */
-enum {
-  TF_VERSION = 0, TF_SCID, TF_VCID, TF_OCFFLAG,
-  TF_MCCOUNT, TF_VCCOUNT, TF_SECHDRFLAG, TF_SYNCFLAG,
-  TF_PACKETORDER, TF_SEGLENID, TF_FIRSTHDRPTR,
-  TF_N_FIELDS
-};
-
-/* SpacePacket field indices (declaration order) */
-enum {
-  SP_VERSION = 0, SP_TYPE, SP_SECHDRFLAG, SP_APID,
-  SP_SEQFLAGS, SP_SEQCOUNT, SP_DATALENGTH,
-  SP_N_FIELDS
-};
 
 /* Must match gateway_bench.ml — derived from Space.tm_frame_codec / Space.packet_codec */
 static const int CADU_SIZE = 1115;
@@ -49,12 +33,11 @@ static inline uint64_t hash_int(uint64_t state, int value) {
 
 static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
                         int data_field_size, uint64_t *checksum) {
-  int64_t tf[TF_N_FIELDS];
-  WIRECTX tf_ctx = { tf };
-  TmframeValidateTmframe(&tf_ctx, NULL, bench_err, frame, tm_hdr, 0);
+  TMFrameFields tf = {0};
+  TmframeValidateTmframe((WIRECTX *)&tf, NULL, bench_err, frame, tm_hdr, 0);
 
-  int vcid = (int)tf[TF_VCID];
-  int fhp = (int)tf[TF_FIRSTHDRPTR];
+  int vcid = (int)tf.VCID;
+  int fhp = (int)tf.FirstHdrPtr;
   if (checksum != NULL) {
     *checksum = hash_int(hash_int(*checksum, vcid), fhp);
   } else {
@@ -62,15 +45,14 @@ static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
     (void)keep;
   }
 
-  int64_t sp[SP_N_FIELDS];
-  WIRECTX sp_ctx = { sp };
+  SpacePacketFields sp = {0};
   int sp_hdr = 6;
   int off = tm_hdr + fhp;
   while (off + pkt_size <= tm_hdr + data_field_size) {
-    SpacePacketValidateSpacePacket(&sp_ctx, NULL, bench_err,
+    SpacePacketValidateSpacePacket((WIRECTX *)&sp, NULL, bench_err,
         frame + off, sp_hdr, 0);
-    int apid = (int)sp[SP_APID];
-    int seq = (int)sp[SP_SEQCOUNT];
+    int apid = (int)sp.APID;
+    int seq = (int)sp.SeqCount;
     if (checksum != NULL) {
       *checksum = hash_int(hash_int(*checksum, apid), seq);
     } else {

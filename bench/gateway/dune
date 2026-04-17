@@ -14,7 +14,7 @@
   (extra_deps
    (glob_files ../schemas/*.c)
    (glob_files ../schemas/*.h))
-  (flags :standard -I .. -I ../schemas -I ../../lib/stubs)))
+  (flags :standard -I .. -I ../schemas)))
 
 (executable
  (name bench)
