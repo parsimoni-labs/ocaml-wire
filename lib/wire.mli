@@ -777,6 +777,12 @@ module Everparse : sig
   val filename : t -> string
   (** [filename s] is the [.3d] output filename for schema [s]. *)
 
+  val uses_wire_ctx : t -> bool
+  (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
+      typedef. The generated C header then [#include]s
+      [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
+      Schemas built via {!schema} always satisfy this. *)
+
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
 

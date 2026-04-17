@@ -54,6 +54,14 @@ val filename : t -> string
 (** [filename s] is the [.3d] output filename for schema [s]. EverParse requires
     filenames to start with a capital letter. *)
 
+val uses_wire_ctx : t -> bool
+(** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
+    typedef, meaning its generated C header [#include]s
+    [<Name>_ExternalTypedefs.h]. Schemas built via {!schema} /
+    {!schema_of_struct} always satisfy this; raw modules assembled via
+    {!Raw.of_module} do so only if they explicitly declare the extern typedef.
+*)
+
 type struct_ = Types.struct_
 type decl = Types.decl
 type decl_case = Types.decl_case

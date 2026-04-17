@@ -300,6 +300,15 @@ let schema (type r) (codec : r Codec.t) : t =
 
 let filename s = String.capitalize_ascii s.name ^ ".3d"
 
+let uses_wire_ctx s =
+  List.exists
+    (function
+      | Types.Typedef { extern_ = true; struct_ = { name = "WireCtx"; _ }; _ }
+        ->
+          true
+      | _ -> false)
+    s.module_.decls
+
 let write_3d ~outdir schemas =
   List.iter
     (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)

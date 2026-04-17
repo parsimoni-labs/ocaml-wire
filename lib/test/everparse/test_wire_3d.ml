@@ -64,8 +64,24 @@ let test_generate_c () =
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
     Wire_3d.generate_c ~outdir:tmpdir [ s ];
     let c_path = Filename.concat tmpdir "TestSimple.c" in
-    Alcotest.(check bool) "C file generated" true (Sys.file_exists c_path)
+    Alcotest.(check bool) "C file generated" true (Sys.file_exists c_path);
+    let ext_path = Filename.concat tmpdir "TestSimple_ExternalTypedefs.h" in
+    Alcotest.(check bool)
+      "ExternalTypedefs.h generated" true (Sys.file_exists ext_path)
   end
+
+let test_uses_wire_ctx () =
+  let s = Wire.Everparse.schema_of_struct simple_struct in
+  Alcotest.(check bool)
+    "schema_of_struct uses WireCtx" true
+    (Wire.Everparse.uses_wire_ctx s);
+  let raw =
+    Wire.Everparse.Raw.of_module ~name:"TestSimple" ~module_:simple_module
+      ~wire_size:3
+  in
+  Alcotest.(check bool)
+    "raw module without extern WireCtx" false
+    (Wire.Everparse.uses_wire_ctx raw)
 
 let test_has_3d_exe () =
   (* Just check the function is callable and returns a bool *)
@@ -86,6 +102,7 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
     ] )
