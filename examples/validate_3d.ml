@@ -1,8 +1,8 @@
 (** Validate all example schemas through the EverParse 3d.exe pipeline.
 
-    For each codec, this generates the full output-types schema (with WireSet
-    callbacks), writes the .3d file, and runs 3d.exe to verify it produces valid
-    C. Exits with code 1 if 3d.exe rejects any schema. *)
+    For each codec, this generates the full output-types schema (with
+    [<Name>Set*] callbacks), writes the .3d file, and runs 3d.exe to verify it
+    produces valid C. Exits with code 1 if 3d.exe rejects any schema. *)
 
 let schemas =
   let s = Wire.Everparse.schema in

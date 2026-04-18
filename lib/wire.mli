@@ -757,7 +757,14 @@ module Everparse : sig
   type module_
   (** A 3D module. *)
 
-  type t = { name : string; module_ : module_; wire_size : int option }
+  type t = {
+    name : string;
+    module_ : module_;
+    wire_size : int option;
+    source : struct_ option;
+        (** Pre-[with_output] source struct, [Some] for codec-derived schemas
+            and [None] for raw-module schemas. *)
+  }
   (** A named 3D schema with its module and wire size ([None] for variable-size
       schemas). *)
 
@@ -772,7 +779,7 @@ module Everparse : sig
   val schema : 'r Codec.t -> t
   (** [schema codec] builds a schema from a codec. The resulting module uses the
       EverParse output-types pattern: the generated C validates AND extracts all
-      field values via extern callbacks ([WireSet*]). *)
+      field values via schema-prefixed extern callbacks ([<Name>Set*]). *)
 
   val filename : t -> string
   (** [filename s] is the [.3d] output filename for schema [s]. *)
@@ -782,6 +789,38 @@ module Everparse : sig
       typedef. The generated C header then [#include]s
       [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
       Schemas built via {!schema} always satisfy this. *)
+
+  type plug_field = {
+    pf_name : string;
+    pf_idx : int;
+    pf_c_type : string;
+    pf_setter : string;
+    pf_val_c_type : string;
+  }
+  (** Plug info: the data needed to materialise a typed struct and [<Name>Set*]
+      dispatchers for a schema. See {!Everparse.plug_field}. *)
+
+  val plug_fields : t -> plug_field list
+  (** [plug_fields s] enumerates the named fields of the source struct in
+      declaration order. Returns [[]] for schemas without a source struct. *)
+
+  val plug_setters : t -> (string * string) list
+  (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
+      [(setter_name, val_c_type)] pairs. *)
+
+  val entrypoint_struct : t -> struct_ option
+  (** Entrypoint typedef struct in the schema's module, if any. *)
+
+  val extern_fn_names : t -> string list
+  (** Names of every extern function declared in the schema's module. *)
+
+  type field_action_form = No_action | On_act | On_success
+
+  val field_action_forms :
+    struct_ -> (string option * bool * field_action_form) list
+  (** [field_action_forms st] enumerates fields as [(name, is_bitfield, form)]
+      tuples. Used by tests to assert the codegen invariant that bitfields carry
+      [On_act], scalars [On_success], anonymous fields [No_action]. *)
 
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)

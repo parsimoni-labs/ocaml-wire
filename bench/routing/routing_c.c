@@ -1,8 +1,9 @@
 /* APID routing — application logic with EverParse field extraction.
 
    Uses EverParse-generated SpacePacketValidateSpacePacket to extract fields
-   via WireSet callbacks into a C array. Application logic (routing dispatch)
-   uses the extracted values. No hand-written bitfield manipulation. */
+   into a typed SpacePacketFields struct via the default plug. Application
+   logic (routing dispatch) reads named members. No hand-written bitfield
+   manipulation. */
 
 #include <caml/alloc.h>
 #include <caml/memory.h>
@@ -10,25 +11,11 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "wire_setters.h"
-
-/* EverParse generated headers (implementation linked from c_stubs_c) */
 #include "EverParse.h"
 #include "SpacePacket.h"
+#include "SpacePacket_Fields.h"
 
 #include "bench_common.h"
-
-/* SpacePacket field indices (declaration order) */
-enum {
-  SP_VERSION = 0,
-  SP_TYPE,
-  SP_SECHDRFLAG,
-  SP_APID,
-  SP_SEQFLAGS,
-  SP_SEQCOUNT,
-  SP_DATALENGTH,
-  SP_N_FIELDS
-};
 
 static int routing_table[2048];
 
@@ -44,17 +31,14 @@ static void init_routing_table(void) {
 static void route_counts(uint8_t *buf, int total_bytes, int n, int counts[4]) {
   int hdr = 6;  /* Wire.Codec.wire_size Space.packet_codec */
   int off = 0;
-  int64_t fields[SP_N_FIELDS];
-  WIRECTX ctx = { fields };
+  SpacePacketFields fields = {0};
 
   for (int i = 0; i < n; i++) {
     if (off + hdr > total_bytes) off = 0;
-    SpacePacketValidateSpacePacket(&ctx, NULL, bench_err,
+    SpacePacketValidateSpacePacket((WIRECTX *)&fields, NULL, bench_err,
         buf + off, hdr, 0);
-    int apid = (int)fields[SP_APID];
-    int dlen = (int)fields[SP_DATALENGTH];
-    counts[routing_table[apid]]++;
-    off += hdr + dlen + 1;
+    counts[routing_table[fields.APID]]++;
+    off += hdr + (int)fields.DataLength + 1;
   }
 }
 

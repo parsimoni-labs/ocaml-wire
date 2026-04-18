@@ -80,8 +80,10 @@ let schema = Everparse.schema codec
 let () = Everparse.write_3d ~outdir:"schemas" [ schema ]
 ```
 
-The generated 3D uses the EverParse output-types pattern, where the generated C
-validates AND extracts all field values via extern callbacks (`WireSet*`).
+The generated 3D uses the EverParse output-types pattern: the generated C
+validates AND extracts every field via schema-prefixed extern callbacks
+(`<Name>SetU8`, `<Name>SetU16be`, …). See [Consuming from C](#consuming-from-c)
+for what that means at the C level.
 
 To turn those schemas into EverParse-generated C:
 
@@ -98,6 +100,71 @@ let () =
 
 For unusual EverParse constructs that have no codec equivalent yet, use the
 `Everparse.Raw` API.
+
+## Consuming from C
+
+After `Wire_3d.run`, each schema ships a small set of files:
+
+| File | Role |
+|------|------|
+| `<Name>.h`, `<Name>.c` | Verified validator. Do not edit. |
+| `<Name>_ExternalAPI.h` | Declares the extern `<Name>Set*` callbacks. |
+| `<Name>_ExternalTypedefs.h` | Declares `WIRECTX`. |
+| `<Name>Wrapper.{c,h}` | Convenience `<Name>Check<Name>` entry point + error plumbing. |
+| `<Name>_Fields.h` | `<Name>Fields` struct (one typed member per named field) and `<NAME>_IDX_<FIELD>` constants. |
+| `<Name>_Fields.c` | Default plug: `<Name>Set*` callbacks that populate `<Name>Fields`. |
+
+Default workflow: link `<Name>_Fields.c`, pass a stack-allocated
+`<Name>Fields` as the context, read the members you care about. The
+setter cost is negligible; don't think about it.
+
+```c
+#include "SpacePacket.h"
+#include "SpacePacket_Fields.h"
+
+static void err(const char *t, const char *f, const char *r,
+                uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) { (void)0; }
+
+SpacePacketFields p = {0};
+if (EverParseIsSuccess(SpacePacketValidateSpacePacket(
+        (WIRECTX *)&p, NULL, err, buf, len, 0))) {
+  printf("APID=%u SeqCount=%u\n", p.APID, p.SeqCount);
+}
+```
+
+### Custom plug (hot-path optimization)
+
+If profiling says the field stores are hot, copy the shipped `<Name>_Fields.c`
+to your own `my_plug.c`, delete the `case`s for fields you don't need, and
+link your copy instead of the default. Override `<Name>_ExternalTypedefs.h`
+and `<Name>_Fields.h` in your include path if you also want a smaller
+`WIRECTX` struct; skip the override and the default struct just carries a
+few unused bytes.
+
+```c
+/* my_plug.c — started from SpacePacket_Fields.c, trimmed to one field */
+#include <stdint.h>
+#include "SpacePacket_Fields.h"
+#include "SpacePacket_ExternalTypedefs.h"
+#include "SpacePacket_ExternalAPI.h"
+
+void SpacePacketSetU16be(WIRECTX *ctx, uint32_t idx, uint16_t v) {
+  SpacePacketFields *f = (SpacePacketFields *)ctx;
+  switch (idx) {
+    case SPACEPACKET_IDX_APID: f->APID = v; break;
+    default: (void)f; (void)v; break;
+  }
+}
+```
+
+If your schema uses multiple setter type families (e.g. `u8` fields *and*
+`u16be` fields), the shipped `_Fields.c` defines one function per family.
+Your copy keeps all of those functions — delete `case`s, not whole
+functions. A family you don't care about reduces to a function whose
+`switch` has no real cases, just the `default`. Usually one or two
+short one-liners.
+
+No weak symbols, no linker magic: whichever plug `.c` you link gets used.
 
 ### ASCII diagrams
 

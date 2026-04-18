@@ -2,9 +2,10 @@
 
     Usage: gen_stubs.exe <schema_dir>
 
-    1. Generates .3d files with output pattern (extern callbacks) 2. Runs
-    EverParse to produce C validators 3. Generates WireSet* implementations +
-    parse stubs + timed C loops *)
+    1. Generates .3d files with output pattern (extern callbacks). 2. Runs
+    EverParse to produce C validators. 3. Writes the default [<Name>_Fields]
+    plug (typed struct + switch dispatchers) and the FFI parse / timed-loop C
+    stubs that consume it. *)
 
 let ml_only = Array.length Sys.argv > 1 && Sys.argv.(1) = "--ml-only"
 let schema_dir = if Array.length Sys.argv > 1 then Sys.argv.(1) else "schemas"
@@ -13,11 +14,6 @@ let schema_dir = if Array.length Sys.argv > 1 then Sys.argv.(1) else "schemas"
 let structs =
   Demo_bench_cases.projection_structs
   @ [ Space.clcw_struct; Space.packet_struct; Space.tm_frame_struct ]
-
-let write_file path content =
-  let oc = open_out path in
-  output_string oc content;
-  close_out oc
 
 let struct_size s =
   match Wire.Everparse.Raw.struct_size s with
@@ -116,8 +112,10 @@ let generate_c oc =
       pr "  CAMLparam1(v_buf);\n";
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);\n";
       pr "  uint32_t len = caml_string_length(v_buf);\n";
-      pr "  WIRECTX ctx = { NULL };\n";
-      pr "  uint64_t r = %sValidate%s(&ctx, NULL, bench_err, data, len, 0);\n"
+      pr "  %sFields ctx = {0};\n" name;
+      pr
+        "  uint64_t r = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, data, \
+         len, 0);\n"
         ep ep;
       pr "  CAMLreturn(Val_bool(EverParseIsSuccess(r)));\n";
       pr "}\n\n";
@@ -132,12 +130,13 @@ let generate_c oc =
       pr "  int count = Int_val(v_n);\n";
       pr "  volatile uint64_t result = 0;\n";
       pr "  if (n_items == 0) CAMLreturn(Val_int(0));\n";
-      pr "  WIRECTX ctx = { NULL };\n";
+      pr "  %sFields ctx = {0};\n" name;
       pr "  int64_t t0 = now_ns();\n";
       pr "  for (int i = 0; i < count; i++) {\n";
       pr "    uint8_t *item = buf + ((uint32_t)i %% n_items) * item_size;\n";
       pr
-        "    result = %sValidate%s(&ctx, NULL, bench_err, item, item_size, 0);\n"
+        "    result = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, item, \
+         item_size, 0);\n"
         ep ep;
       pr "  }\n";
       pr "  (void)result;\n";
@@ -152,19 +151,14 @@ let () =
   else begin
     let schemas = List.map Wire.Everparse.schema_of_struct structs in
 
-    (* 1. Generate .3d + ExternalTypedefs.h *)
+    (* 1. Generate .3d *)
     Wire_3d.generate_3d ~outdir:schema_dir schemas;
-    List.iter
-      (fun s ->
-        let name = Wire.Everparse.Raw.struct_name s in
-        write_file
-          (Filename.concat schema_dir (name ^ "_ExternalTypedefs.h"))
-          (Wire_stubs.to_external_typedefs name))
-      structs;
 
-    (* 2. Run EverParse *)
+    (* 2. Run EverParse, then write default ExternalTypedefs + _Fields plug *)
     let quiet = Sys.getenv_opt "EVERPARSE_VERBOSE" = None in
     Wire_3d.run_everparse ~quiet ~outdir:schema_dir schemas;
+    Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
+    Wire_3d.write_fields ~outdir:schema_dir schemas;
 
     (* 3. Generate c_stubs.c *)
     let oc = open_out "c_stubs.c" in

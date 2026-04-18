@@ -6,8 +6,13 @@
     {2 3D projection rules}
 
     Wire types project to EverParse 3D struct fields. Each named field gets a
-    [WireSet*] callback that extracts its value into a flat array during
-    validation. Three EverParse limitations shape the projection:
+    [<Name>Set*] callback (schema-prefixed per type family: [<Name>SetU8],
+    [<Name>SetU16be], …) that extracts its value during validation. The default
+    plug {!Wire_3d} ships, [<Name>_Fields.c], switches on the field index to
+    populate a typed [<Name>Fields] struct; consumers that want a different
+    layout supply their own plug.
+
+    Three EverParse limitations shape the projection:
 
     + The 3D parser rejects [field_pos] inside actions on [[:byte-size]] fields,
       so byte-field callbacks receive a static byte offset precomputed at schema
@@ -22,15 +27,16 @@
 
     {b Scalar fields} ([uint8], [uint16be], ...) project to their 3D equivalents
     ([UINT8], [UINT16BE], ...) with an [:on-success] action:
-    [{:on-success WireSet*(ctx, idx, Name); return true; }].
+    [{:on-success <Name>Set*(ctx, idx, Name); return true; }].
 
     {b Bitfields} ([bits ~width:n base]) project to [BASE Name : n] with an
-    [:act] action: [{:act WireSet*(ctx, idx, Name); }].
+    [:act] action: [{:act <Name>Set*(ctx, idx, Name); }].
 
     {b Byte-size fields} ([byte_array], [byte_slice], [repeat], and dynamic
     [optional]) project to [UINT8 Name[:byte-size expr]] with an [:on-success]
-    action: [{:on-success WireSetBytes(ctx, idx, (UINT32) off); return true; }]
-    where [off] is the static byte offset.
+    action:
+    [{:on-success <Name>SetBytes(ctx, idx, (UINT32) off); return true; }] where
+    [off] is the static byte offset.
 
     {b Dynamic optional} ([optional cond inner]) where [cond] is not a literal
     bool projects to [TYPE Name[:byte-size ((cond) ? inner_size : 0)]] where
@@ -44,7 +50,15 @@
     supported on [[:byte-size]] fields; they should be placed on the field whose
     value the expression references. *)
 
-type t = { name : string; module_ : Types.module_; wire_size : int option }
+type t = {
+  name : string;
+  module_ : Types.module_;
+  wire_size : int option;
+  source : Types.struct_ option;
+      (** Pre-[with_output] source struct, [Some] for codec-derived schemas and
+          [None] for raw-module schemas. Used by downstream codegen to walk
+          named fields without parsing back the post-[with_output] output. *)
+}
 (** A named 3D schema with its module and wire size ([None] for variable-size
     schemas). *)
 
@@ -61,6 +75,30 @@ val uses_wire_ctx : t -> bool
     {!schema_of_struct} always satisfy this; raw modules assembled via
     {!Raw.of_module} do so only if they explicitly declare the extern typedef.
 *)
+
+type plug_field = {
+  pf_name : string;  (** Field name as declared in the codec. *)
+  pf_idx : int;  (** Index passed to the [WireSet*] callback. *)
+  pf_c_type : string;  (** C type for the generated struct member. *)
+  pf_setter : string;  (** [WireSet*] name that extracts this field. *)
+  pf_val_c_type : string;  (** C type of the value argument to the setter. *)
+}
+(** Plug info: the data needed by a concrete [WIRECTX] implementation (e.g.
+    {!Wire_3d}'s [<Name>_Fields] default plug) to materialise a typed struct
+    plus [WireSet*] switch dispatchers from a schema. *)
+
+val plug_fields : t -> plug_field list
+(** [plug_fields s] enumerates the named fields of the source struct in
+    declaration order. Returns [[]] for schemas without a [source] struct. *)
+
+val plug_setters : t -> (string * string) list
+(** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
+    [(setter_name, val_c_type)] pairs. Each one needs an implementation in the
+    plug. *)
+
+val extern_fn_names : t -> string list
+(** [extern_fn_names s] lists the names of every extern function declared in the
+    schema's module (the [WireSet*] setters). *)
 
 type struct_ = Types.struct_
 type decl = Types.decl
@@ -83,6 +121,21 @@ val schema : 'r Codec.t -> t
     contains a single entrypoint typedef with the EverParse output-types
     pattern: extern callbacks ([WireSet*]) that extract all field values during
     validation. *)
+
+val entrypoint_struct : t -> struct_ option
+(** [entrypoint_struct s] returns the entrypoint typedef struct in the schema's
+    module, if any. Returns [None] for schemas without an entrypoint. *)
+
+type field_action_form = No_action | On_act | On_success
+
+val field_action_forms :
+  struct_ -> (string option * bool * field_action_form) list
+(** [field_action_forms st] enumerates the fields of [st] in declaration order.
+    Each tuple is [(name, is_bitfield, action_form)]: [name] is [None] for
+    anonymous fields; [is_bitfield] is [true] if the field's type is (or reduces
+    to) a bitfield; [action_form] is the currently attached action kind. Used by
+    tests to assert the [map_field_action] invariant: bitfields must carry
+    [On_act], scalars [On_success], anonymous fields [No_action]. *)
 
 val write_3d : outdir:string -> t list -> unit
 (** [write_3d ~outdir ts] writes one [.3d] file per schema in [outdir]. *)

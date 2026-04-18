@@ -15,8 +15,10 @@ Metrics: ns/op, allocation (words), ratio vs C, throughput.
 ## Rules
 
 - **No hand-written C parsers.** All field extraction in C must go through
-  EverParse-generated validators (output types + WireSet callbacks), not
-  manual bitfield manipulation.
+  EverParse-generated validators using the default `<Name>_Fields` plug:
+  stack-allocate `<Name>Fields`, pass `(WIRECTX *)&ctx` to the validator,
+  read named struct members. No manual bitfield manipulation, no index
+  arrays, no hand-rolled `WIRECTX`.
 - Both tiers must operate on the same data and produce the same results.
 
 ## Field-level codec (`bench/demo/`)

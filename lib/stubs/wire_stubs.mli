@@ -1,10 +1,10 @@
 (** OCaml FFI stub generation for EverParse-produced C validators.
 
     [Wire_stubs] generates C stubs and matching OCaml [external] declarations so
-    OCaml code can call EverParse-generated validators. The generated stubs call
-    a validator that fills an output struct (from {!Wire.Everparse.schema}),
-    returning field values as an OCaml record via continuation callbacks
-    ([WireSet*]). On validation failure, [Failure] is raised.
+    OCaml code can call EverParse-generated validators. Each stub stack-
+    allocates the schema's default plug struct ([<Name>Fields] from {!Wire_3d}),
+    runs the EverParse validator against it, then marshals the populated struct
+    members into an OCaml record. On validation failure, [Failure] is raised.
 
     {b Typical usage} (in a code-generation executable):
     {[
@@ -12,8 +12,9 @@
         Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"." [ C my_codec ]
     ]}
 
-    This writes [*_ExternalTypedefs.h] into [schema_dir], and [wire_ffi.c] +
-    [stubs.ml] into [outdir]. *)
+    This writes [wire_ffi.c] + [stubs.ml] into [outdir]. The [WIRECTX] socket
+    and the [<Name>_Fields] plug come from {!Wire_3d}; this module is just one
+    particular consumer of that plug. *)
 
 type packed_codec = C : _ Wire.Codec.t -> packed_codec
 
@@ -39,10 +40,6 @@ val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
 
 val to_ml_stub_name : Wire.Everparse.Raw.struct_ -> string
 (** Derive the OCaml snake_case module name from a struct's CamelCase name. *)
-
-val to_external_typedefs : string -> string
-(** Generate the _ExternalTypedefs.h header defining the WIRECTX output struct.
-*)
 
 val everparse_name : string -> string
 (** Convert a Wire struct name to the EverParse CamelCase convention. *)

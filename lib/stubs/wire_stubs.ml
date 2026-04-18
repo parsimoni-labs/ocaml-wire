@@ -12,17 +12,23 @@ let c_stub_error_handler ppf lower =
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n"
 
-let c_stub_validate ppf ~lower ~ep n_fields =
-  Fmt.pf ppf "  int64_t fields[%d];@\n" (max 1 n_fields);
-  Fmt.pf ppf "  WIRECTX ctx = { %s };@\n"
-    (if n_fields > 0 then "fields" else "NULL");
-  Fmt.pf ppf "  uint64_t r = %sValidate%s(&ctx, NULL, %s_err, data, len, 0);@\n"
+let c_stub_validate ppf ~name ~lower ~ep =
+  Fmt.pf ppf "  %sFields fields = {0};@\n" name;
+  Fmt.pf ppf
+    "  uint64_t r = %sValidate%s((WIRECTX *) &fields, NULL, %s_err, data, len, \
+     0);@\n"
     ep ep lower;
   Fmt.pf ppf
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
     lower
 
-let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
+let field_value ppf (fname, kind) =
+  match kind with
+  | Wire.Everparse.Raw.K_int64 ->
+      Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
+  | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
+
+let c_stub_output ppf ~name ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   let kinds = Wire.Everparse.Raw.field_kinds s in
   let n_fields = List.length kinds in
   (* _parse: validate at offset, allocate record directly in C *)
@@ -33,18 +39,12 @@ let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   Fmt.pf ppf
     "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
   Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
-  c_stub_validate ppf ~lower ~ep n_fields;
+  c_stub_validate ppf ~name ~lower ~ep;
   if n_fields > 0 then begin
     Fmt.pf ppf "  v_result = caml_alloc(%d, 0);@\n" n_fields;
     List.iteri
-      (fun i (_, kind) ->
-        match kind with
-        | Wire.Everparse.Raw.K_int64 ->
-            Fmt.pf ppf
-              "  Store_field(v_result, %d, caml_copy_int64(fields[%d]));@\n" i i
-        | _ ->
-            Fmt.pf ppf "  Store_field(v_result, %d, Val_long(fields[%d]));@\n" i
-              i)
+      (fun i kind ->
+        Fmt.pf ppf "  Store_field(v_result, %d, %a);@\n" i field_value kind)
       kinds
   end
   else Fmt.pf ppf "  v_result = Val_unit;@\n";
@@ -61,14 +61,10 @@ let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf
       "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
     Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
-    c_stub_validate ppf ~lower ~ep n_fields;
+    c_stub_validate ppf ~name ~lower ~ep;
     Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
-      (fun i (_, kind) ->
-        match kind with
-        | Wire.Everparse.Raw.K_int64 ->
-            Fmt.pf ppf "  args[%d] = caml_copy_int64(fields[%d]);@\n" i i
-        | _ -> Fmt.pf ppf "  args[%d] = Val_long(fields[%d]);@\n" i i)
+      (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i field_value kind)
       kinds;
     Fmt.pf ppf "  v_result = caml_callbackN(v_k, %d, args);@\n" n_fields;
     Fmt.pf ppf "  CAMLreturn(v_result);@\n";
@@ -80,7 +76,7 @@ let c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let ep = everparse_name name in
   let lower = String.lowercase_ascii name in
   c_stub_error_handler ppf lower;
-  c_stub_output ppf ~lower ~ep s
+  c_stub_output ppf ~name ~lower ~ep s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 4096 in
@@ -95,13 +91,15 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "#include <stdint.h>@\n";
   Fmt.pf ppf "#include <string.h>@\n";
   Fmt.pf ppf "@\n";
-  Fmt.pf ppf "/* EverParse headers and sources */@\n";
+  Fmt.pf ppf "/* EverParse headers + default <Name>_Fields plug */@\n";
   List.iteri
     (fun i (s : Wire.Everparse.Raw.struct_) ->
       let name = Wire.Everparse.Raw.struct_name s in
       if i = 0 then Fmt.pf ppf "#include \"EverParse.h\"@\n";
+      Fmt.pf ppf "#include \"%s_Fields.h\"@\n" name;
       Fmt.pf ppf "#include \"%s.h\"@\n" name;
-      Fmt.pf ppf "#include \"%s.c\"@\n" name)
+      Fmt.pf ppf "#include \"%s.c\"@\n" name;
+      Fmt.pf ppf "#include \"%s_Fields.c\"@\n" name)
     structs;
   Fmt.pf ppf "@\n/* Stubs */@\n";
   List.iter (fun s -> c_stub ppf s) structs;
@@ -206,23 +204,12 @@ let write_file path content =
   output_string oc content;
   close_out oc
 
-let to_external_typedefs _name =
-  "#ifndef WIRECTX_DEFINED\n\
-   #define WIRECTX_DEFINED\n\
-   #include <stdint.h>\n\
-   typedef struct { int64_t *fields; } WIRECTX;\n\
-   #endif\n"
-
 type packed_codec = C : _ Wire.Codec.t -> packed_codec
 
 let of_structs ~schema_dir ~outdir structs =
-  List.iter
-    (fun s ->
-      let name = Wire.Everparse.Raw.struct_name s in
-      write_file
-        (Filename.concat schema_dir (name ^ "_ExternalTypedefs.h"))
-        (to_external_typedefs name))
-    structs;
+  let schemas = List.map Wire.Everparse.schema_of_struct structs in
+  Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
+  Wire_3d.write_fields ~outdir:schema_dir schemas;
   write_file (Filename.concat outdir "wire_ffi.c") (to_c_stubs structs);
   write_file (Filename.concat outdir "stubs.ml") (to_ml_stubs structs)
 

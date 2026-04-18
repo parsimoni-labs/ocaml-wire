@@ -371,179 +371,194 @@ let test_e2e_bitfields () =
   assert (r.Stubs.length = 100)
 |}
 
-(* ── Output types ── *)
+(* ── Output pattern invariants ──
 
-(* Helper: build a codec, generate 3D, check that the generated string
-   uses extern typedef + Extern_call (WireSet) pattern, and optionally run
-   EverParse to validate. Returns the 3D string. *)
-let check_output_3d ?(run_everparse = true) codec =
+   Structural tests over the post-[with_output] module. Every assertion
+   inspects typed AST data returned by the public [Wire.Everparse] API so
+   cosmetic output format changes don't break the tests and real regressions
+   are caught precisely. *)
+
+let pp_action_form = function
+  | Wire.Everparse.No_action -> "none"
+  | On_act -> ":act"
+  | On_success -> ":on-success"
+
+let expected_action_form ~named ~is_bitfield =
+  if not named then Wire.Everparse.No_action
+  else if is_bitfield then Wire.Everparse.On_act
+  else Wire.Everparse.On_success
+
+(* Invariant 1: every named field in the output module carries an action
+   whose form matches the field's kind (bitfield -> :act, otherwise
+   :on-success). Anonymous fields carry no action. *)
+let check_action_forms codec =
   let schema = Wire.Everparse.schema codec in
-  let s3d = Wire.Everparse.Raw.to_3d schema.module_ in
-  Alcotest.(check bool)
-    "has extern typedef" true
-    (contains ~sub:"extern typedef" s3d);
-  Alcotest.(check bool) "has WireSet" true (contains ~sub:"WireSet" s3d);
-  if run_everparse && has_3d then begin
-    let dir = Filename.temp_dir "wire_output_test" "" in
-    Wire.Everparse.write_3d ~outdir:dir [ schema ];
-    Wire_3d.run_everparse ~outdir:dir [ schema ];
-    ignore (Sys.command (Fmt.str "rm -rf %s" dir))
-  end;
-  s3d
+  let ep =
+    match Wire.Everparse.entrypoint_struct schema with
+    | Some st -> st
+    | None -> Alcotest.failf "%s: no entrypoint struct" schema.name
+  in
+  List.iter
+    (fun (name, is_bitfield, form) ->
+      let expected =
+        expected_action_form ~named:(Option.is_some name) ~is_bitfield
+      in
+      if form <> expected then
+        Alcotest.failf "%s field %s: expected %s, got %s" schema.name
+          (Option.value name ~default:"<anon>")
+          (pp_action_form expected) (pp_action_form form))
+    (Wire.Everparse.field_action_forms ep)
 
-let test_output_pure_uint () =
+let plug_field_names s =
+  List.map (fun f -> f.Wire.Everparse.pf_name) (Wire.Everparse.plug_fields s)
+
+(* Invariant 2: [plug_fields] enumerates exactly the named fields of the
+   source struct in declaration order, with consecutive indices starting at
+   0. Catches indexing drift between the schema pipeline and the plug
+   generator. *)
+let check_plug_completeness codec =
+  let schema = Wire.Everparse.schema codec in
+  let source = Option.get schema.source in
+  let expected = Wire.Everparse.Raw.field_names source in
+  let got = plug_field_names schema in
+  Alcotest.(check (list string))
+    "plug_fields matches named source fields" expected got;
+  let idxs =
+    List.map
+      (fun f -> f.Wire.Everparse.pf_idx)
+      (Wire.Everparse.plug_fields schema)
+  in
+  let expected_idxs = List.init (List.length idxs) Fun.id in
+  Alcotest.(check (list int)) "indices consecutive from 0" expected_idxs idxs
+
+(* Invariant 3: setter names are namespaced per schema; two schemas' setter
+   sets never collide. *)
+let check_setter_scoping codec_a codec_b =
+  let sa = Wire.Everparse.schema codec_a in
+  let sb = Wire.Everparse.schema codec_b in
+  let names s = List.map fst (Wire.Everparse.plug_setters s) in
+  let na = names sa in
+  let nb = names sb in
+  let intersection =
+    List.filter (fun n -> List.mem n nb) na |> List.sort_uniq String.compare
+  in
+  Alcotest.(check (list string))
+    "no shared setter names across schemas" [] intersection;
+  List.iter
+    (fun n ->
+      if not (String.starts_with ~prefix:sa.name n) then
+        Alcotest.failf "setter %s missing schema prefix %s" n sa.name)
+    na
+
+(* Invariant 4: every pf_setter appears in plug_setters, and every setter in
+   plug_setters is actually declared in the module as an extern_fn. Catches
+   drift between what plug_fields claims and what the 3D module declares. *)
+let check_setter_declarations codec =
+  let schema = Wire.Everparse.schema codec in
+  let declared_externs = Wire.Everparse.extern_fn_names schema in
+  List.iter
+    (fun (setter, _) ->
+      if not (List.mem setter declared_externs) then
+        Alcotest.failf
+          "plug_setters claims %s but module has no Extern_fn for it" setter)
+    (Wire.Everparse.plug_setters schema);
+  List.iter
+    (fun f ->
+      let setter = f.Wire.Everparse.pf_setter in
+      if not (List.mem_assoc setter (Wire.Everparse.plug_setters schema)) then
+        Alcotest.failf "field %s references setter %s not in plug_setters"
+          f.Wire.Everparse.pf_name setter)
+    (Wire.Everparse.plug_fields schema)
+
+(* Test fixtures. Each codec exercises a specific combination so invariants
+   1-4 cover mixed/pure/byte/constrained/action scenarios. *)
+
+let scalars_codec =
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint16be in
   let f_c = Field.v "c" uint32be in
-  let codec =
-    let open Codec in
-    v "PureUint"
-      (fun a b c -> (a, b, c))
-      [
-        (f_a $ fun (a, _, _) -> a);
-        (f_b $ fun (_, b, _) -> b);
-        (f_c $ fun (_, _, c) -> c);
-      ]
-  in
-  let s3d = check_output_3d codec in
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
+  let open Codec in
+  v "PureUint"
+    (fun a b c -> (a, b, c))
+    [
+      (f_a $ fun (a, _, _) -> a);
+      (f_b $ fun (_, b, _) -> b);
+      (f_c $ fun (_, _, c) -> c);
+    ]
 
-let test_output_pure_bitfield () =
+let bitfields_codec =
   let f_hi = Field.v "hi" (bits ~width:4 U8) in
   let f_lo = Field.v "lo" (bits ~width:4 U8) in
-  let codec =
-    let open Codec in
-    v "PureBitfield"
-      (fun hi lo -> (hi, lo))
-      [ (f_hi $ fun (h, _) -> h); (f_lo $ fun (_, l) -> l) ]
-  in
-  let s3d = check_output_3d ~run_everparse:false codec in
-  Alcotest.(check bool) "has :act" true (contains ~sub:":act" s3d)
+  let open Codec in
+  v "PureBitfield"
+    (fun hi lo -> (hi, lo))
+    [ (f_hi $ fun (h, _) -> h); (f_lo $ fun (_, l) -> l) ]
 
-let test_output_mixed () =
+let mixed_codec =
   let f_version = Field.v "version" (bits ~width:4 U8) in
   let f_flags = Field.v "flags" (bits ~width:4 U8) in
   let f_length = Field.v "length" uint16be in
-  let codec =
-    let open Codec in
-    v "MixedOutput"
-      (fun v f l -> (v, f, l))
-      [
-        (f_version $ fun (v, _, _) -> v);
-        (f_flags $ fun (_, f, _) -> f);
-        (f_length $ fun (_, _, l) -> l);
-      ]
-  in
-  let s3d = check_output_3d ~run_everparse:false codec in
-  Alcotest.(check bool) "has :act" true (contains ~sub:":act" s3d);
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
+  let open Codec in
+  v "MixedOutput"
+    (fun v f l -> (v, f, l))
+    [
+      (f_version $ fun (v, _, _) -> v);
+      (f_flags $ fun (_, f, _) -> f);
+      (f_length $ fun (_, _, l) -> l);
+    ]
 
-let test_output_bool_bitfield () =
-  let f_flag = Field.v "flag" (bit (bits ~width:1 U8)) in
-  let f_data = Field.v "data" uint8 in
-  let codec =
-    let open Codec in
-    v "BoolBf"
-      (fun flag data -> (flag, data))
-      [ (f_flag $ fun (f, _) -> f); (f_data $ fun (_, d) -> d) ]
-  in
-  (* bool(bits ~width:1 U8) is Map { inner = Bits _; ... } — should be :act *)
-  let s3d = check_output_3d ~run_everparse:false codec in
-  Alcotest.(check bool) "has :act" true (contains ~sub:":act" s3d);
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
+let byte_array_codec =
+  let f_tag = Field.v "tag" uint8 in
+  let f_payload = Field.v "payload" (byte_array ~size:(int 4)) in
+  let open Codec in
+  v "ByteArrayOut"
+    (fun tag payload -> (tag, payload))
+    [ (f_tag $ fun (t, _) -> t); (f_payload $ fun (_, p) -> p) ]
 
-let test_output_constrained () =
+let constrained_codec =
   let f_x_ref = Field.v "x" uint8 in
   let f_x =
     Field.v "x" ~constraint_:Expr.(Field.ref f_x_ref <= int 100) uint8
   in
-  let codec =
-    let open Codec in
-    v "ConstrainedOut" (fun x -> x) [ (f_x $ fun x -> x) ]
-  in
-  let s3d = check_output_3d codec in
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
+  let open Codec in
+  v "ConstrainedOut" (fun x -> x) [ (f_x $ fun x -> x) ]
 
-let test_output_byte_array () =
-  let f_tag = Field.v "tag" uint8 in
-  let f_payload = Field.v "payload" (byte_array ~size:(int 4)) in
-  let codec =
-    let open Codec in
-    v "ByteArrayOut"
-      (fun tag payload -> (tag, payload))
-      [ (f_tag $ fun (t, _) -> t); (f_payload $ fun (_, p) -> p) ]
-  in
-  let s3d = check_output_3d ~run_everparse:false codec in
-  Alcotest.(check bool)
-    "has WireSetBytes" true
-    (contains ~sub:"WireSetBytes" s3d);
-  Alcotest.(check bool) "has field_pos" true (contains ~sub:"field_pos" s3d);
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
-
-let test_output_only_bitfields () =
-  let f_a = Field.v "a" (bits ~width:3 U8) in
-  let f_b = Field.v "b" (bits ~width:5 U8) in
-  let f_c = Field.v "c" (bits ~width:8 U16be) in
-  let f_d = Field.v "d" (bits ~width:8 U16be) in
-  let codec =
-    let open Codec in
-    v "OnlyBitfields"
-      (fun a b c d -> (a, b, c, d))
-      [
-        (f_a $ fun (a, _, _, _) -> a);
-        (f_b $ fun (_, b, _, _) -> b);
-        (f_c $ fun (_, _, c, _) -> c);
-        (f_d $ fun (_, _, _, d) -> d);
-      ]
-  in
-  let s3d = check_output_3d ~run_everparse:false codec in
-  (* All fields are bitfields, so only :act, no :on-success *)
-  Alcotest.(check bool)
-    "only bitfields: has :act" true (contains ~sub:":act" s3d);
-  Alcotest.(check bool)
-    "only bitfields: no :on-success" false
-    (contains ~sub:":on-success" s3d)
-
-let test_output_only_nonbitfields () =
-  let f_a = Field.v "a" uint8 in
-  let f_b = Field.v "b" uint16be in
-  let f_c = Field.v "c" uint32be in
-  let codec =
-    let open Codec in
-    v "OnlyNonBf"
-      (fun a b c -> (a, b, c))
-      [
-        (f_a $ fun (a, _, _) -> a);
-        (f_b $ fun (_, b, _) -> b);
-        (f_c $ fun (_, _, c) -> c);
-      ]
-  in
-  let s3d = check_output_3d codec in
-  (* All fields are non-bitfields, so only :on-success, no :act *)
-  Alcotest.(check bool)
-    "only non-bf: has :on-success" true
-    (contains ~sub:":on-success" s3d);
-  Alcotest.(check bool) "only non-bf: no :act" false (contains ~sub:":act" s3d)
-
-let test_output_with_existing_action () =
+let with_existing_action_codec =
   let out_len = Param.output "out_len" uint16be in
   let f_len = Field.v "len" uint16be in
   let f_data =
     Field.v "data" uint8
       ~action:(Action.on_success [ Action.assign out_len (Field.ref f_len) ])
   in
-  let codec =
-    let open Codec in
-    v "WithAction"
-      (fun len data -> (len, data))
-      [ (f_len $ fun (l, _) -> l); (f_data $ fun (_, d) -> d) ]
-  in
-  let s3d = check_output_3d codec in
-  (* data field had an existing :on-success action; output should merge *)
-  Alcotest.(check bool)
-    "existing action: has out_len assign" true
-    (contains ~sub:"out_len" s3d);
-  Alcotest.(check bool) "has :on-success" true (contains ~sub:":on-success" s3d)
+  let open Codec in
+  v "WithAction"
+    (fun len data -> (len, data))
+    [ (f_len $ fun (l, _) -> l); (f_data $ fun (_, d) -> d) ]
+
+let test_action_forms_scalars () = check_action_forms scalars_codec
+let test_action_forms_bitfields () = check_action_forms bitfields_codec
+let test_action_forms_mixed () = check_action_forms mixed_codec
+let test_action_forms_bytes () = check_action_forms byte_array_codec
+let test_action_forms_constrained () = check_action_forms constrained_codec
+
+let test_action_forms_with_action () =
+  check_action_forms with_existing_action_codec
+
+let test_plug_completeness_scalars () = check_plug_completeness scalars_codec
+let test_plug_completeness_mixed () = check_plug_completeness mixed_codec
+let test_plug_completeness_bytes () = check_plug_completeness byte_array_codec
+
+let test_setter_scoping () =
+  check_setter_scoping scalars_codec mixed_codec;
+  check_setter_scoping bitfields_codec byte_array_codec
+
+let test_setter_declarations_scalars () =
+  check_setter_declarations scalars_codec
+
+let test_setter_declarations_mixed () = check_setter_declarations mixed_codec
+
+let test_setter_declarations_bytes () =
+  check_setter_declarations byte_array_codec
 
 (* ── Full pipeline e2e: 3D → EverParse → WireSet* → compile → call ── *)
 
@@ -571,10 +586,12 @@ let test_e2e_output_parse () =
     let schema = Wire.Everparse.schema codec in
     Wire.Everparse.write_3d ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
-    (* 3. Generate ExternalTypedefs.h *)
-    let ext_h = Wire_stubs.to_external_typedefs name in
-    write_file (Filename.concat dir (name ^ "_ExternalTypedefs.h")) ext_h;
-    (* 4. Generate parse stubs — wire_setters linked from wire.stubs *)
+    (* 3. Emit default ExternalTypedefs + _Fields plug (Fields plug is what
+       wire.stubs now stack-allocates against in wire_ffi.c). *)
+    Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
+    Wire_3d.write_fields ~outdir:dir [ schema ];
+    ignore name;
+    (* 4. Generate parse stubs *)
     Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir [ s ];
     (* 5. Generate ML stubs *)
     let ml_stubs = Wire_stubs.to_ml_stubs [ s ] in
@@ -646,19 +663,29 @@ let suite =
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
-      (* output types *)
-      Alcotest.test_case "output: pure uint" `Slow test_output_pure_uint;
-      Alcotest.test_case "output: pure bitfield" `Slow test_output_pure_bitfield;
-      Alcotest.test_case "output: mixed bf + non-bf" `Slow test_output_mixed;
-      Alcotest.test_case "output: bool mapped bitfield" `Slow
-        test_output_bool_bitfield;
-      Alcotest.test_case "output: constrained field" `Slow
-        test_output_constrained;
-      Alcotest.test_case "output: byte_array field" `Slow test_output_byte_array;
-      Alcotest.test_case "output: only bitfields" `Slow
-        test_output_only_bitfields;
-      Alcotest.test_case "output: only non-bitfields" `Slow
-        test_output_only_nonbitfields;
-      Alcotest.test_case "output: existing action" `Slow
-        test_output_with_existing_action;
+      (* output pattern invariants *)
+      Alcotest.test_case "action forms: scalars" `Quick
+        test_action_forms_scalars;
+      Alcotest.test_case "action forms: bitfields" `Quick
+        test_action_forms_bitfields;
+      Alcotest.test_case "action forms: mixed" `Quick test_action_forms_mixed;
+      Alcotest.test_case "action forms: bytes" `Quick test_action_forms_bytes;
+      Alcotest.test_case "action forms: constrained" `Quick
+        test_action_forms_constrained;
+      Alcotest.test_case "action forms: with user action" `Quick
+        test_action_forms_with_action;
+      Alcotest.test_case "plug completeness: scalars" `Quick
+        test_plug_completeness_scalars;
+      Alcotest.test_case "plug completeness: mixed" `Quick
+        test_plug_completeness_mixed;
+      Alcotest.test_case "plug completeness: bytes" `Quick
+        test_plug_completeness_bytes;
+      Alcotest.test_case "setter scoping: disjoint across schemas" `Quick
+        test_setter_scoping;
+      Alcotest.test_case "setter declarations: scalars" `Quick
+        test_setter_declarations_scalars;
+      Alcotest.test_case "setter declarations: mixed" `Quick
+        test_setter_declarations_mixed;
+      Alcotest.test_case "setter declarations: bytes" `Quick
+        test_setter_declarations_bytes;
     ] )
