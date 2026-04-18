@@ -17,11 +17,11 @@ let test_int_of () =
   Alcotest.(check (option int))
     "uint64 small" (Some 42)
     (Eval.int_of Types.uint64be 42L);
-  (* uint64 exceeding 63-bit range → None *)
+  (* uint64 exceeding 63-bit range -> None *)
   Alcotest.(check (option int))
     "uint64 overflow" None
     (Eval.int_of Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
-  (* non-numeric → None *)
+  (* non-numeric -> None *)
   Alcotest.(check (option int)) "unit" None (Eval.int_of Types.Unit ())
 
 let test_set_pos () =

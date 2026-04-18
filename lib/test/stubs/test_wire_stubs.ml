@@ -1,4 +1,4 @@
-(** Tests for Wire_stubs — OCaml FFI stub generation.
+(** Tests for Wire_stubs -- OCaml FFI stub generation.
 
     Every test that generates ML stubs compiles them with ocamlfind to catch
     arity mismatches, syntax errors, and type errors in the generated code. *)
@@ -43,7 +43,7 @@ let check_struct s =
   Alcotest.(check bool) "single has parse" true (contains ~sub:"parse" single);
   Alcotest.(check bool) "multi has parse" true (contains ~sub:"_parse" multi)
 
-(* ── No params ── *)
+(* -- No params -- *)
 
 let test_no_params () =
   check_struct
@@ -75,7 +75,7 @@ let test_many_fields () =
          field "h" uint16be;
        ])
 
-(* ── Input params only ── *)
+(* -- Input params only -- *)
 
 let test_one_input () =
   check_struct
@@ -87,7 +87,7 @@ let test_two_inputs () =
        [ param "lo" uint8; param "hi" uint16be ]
        [ field "x" uint8 ])
 
-(* ── Output params only ── *)
+(* -- Output params only -- *)
 
 let test_one_output () =
   check_struct
@@ -101,7 +101,7 @@ let test_two_outputs () =
        [ mutable_param "out_a" uint8; mutable_param "out_b" uint16be ]
        [ field "x" uint8 ])
 
-(* ── Mixed input + output ── *)
+(* -- Mixed input + output -- *)
 
 let test_mixed () =
   check_struct
@@ -120,7 +120,7 @@ let test_mixed_many () =
        ]
        [ field "x" uint8 ])
 
-(* ── >5 args (bytecode path) ── *)
+(* -- >5 args (bytecode path) -- *)
 
 let test_many_params_bytecode () =
   check_struct
@@ -136,7 +136,7 @@ let test_many_params_bytecode () =
        [ field "x" uint8 ])
 
 let test_exactly_five_args () =
-  (* params are ignored in parse stubs — always bytes -> 'a *)
+  (* params are ignored in parse stubs -- always bytes -> 'a *)
   let s =
     param_struct "FiveArgs"
       [ param "a" uint8; param "b" uint8; param "c" uint8; param "d" uint8 ]
@@ -145,7 +145,7 @@ let test_exactly_five_args () =
   check_struct s
 
 let test_six_args () =
-  (* params are ignored in parse stubs — always bytes -> 'a *)
+  (* params are ignored in parse stubs -- always bytes -> 'a *)
   let s =
     param_struct "SixArgs"
       [
@@ -159,7 +159,7 @@ let test_six_args () =
   in
   check_struct s
 
-(* ── Bitfield params ── *)
+(* -- Bitfield params -- *)
 
 let test_bitfield_param () =
   check_struct
@@ -167,7 +167,7 @@ let test_bitfield_param () =
        [ param "mask" (bits ~width:4 U8) ]
        [ field "v" uint8 ])
 
-(* ── Multiple structs in one to_ml_stubs call ── *)
+(* -- Multiple structs in one to_ml_stubs call -- *)
 
 let test_multiple_structs () =
   let s1 = struct_ "Foo" [ field "x" uint8 ] in
@@ -179,7 +179,7 @@ let test_multiple_structs () =
   Alcotest.(check bool) "has bar" true (contains ~sub:"bar_parse" ml);
   Alcotest.(check bool) "has baz" true (contains ~sub:"baz_parse" ml)
 
-(* ── C stubs (string checks, cannot compile without EverParse headers) ── *)
+(* -- C stubs (string checks, cannot compile without EverParse headers) -- *)
 
 let test_c_stubs_no_params () =
   let s =
@@ -227,7 +227,7 @@ let test_c_stubs_many_params () =
     (contains ~sub:"caml_wire_manyparams_parse" c);
   Alcotest.(check bool) "has WIRECTX" true (contains ~sub:"WIRECTX" c)
 
-(* ── to_ml_stub_name ── *)
+(* -- to_ml_stub_name -- *)
 
 let test_name_camel () =
   Alcotest.(check string)
@@ -244,7 +244,7 @@ let test_name_single () =
     "single" "foo"
     (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
 
-(* ── End-to-end: generate → EverParse → compile C+ML → call ── *)
+(* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
 let has_3d = Wire_3d.has_3d_exe ()
 
@@ -261,9 +261,9 @@ let write_file path contents =
   output_string oc contents;
   close_out oc
 
-(** End-to-end: .3d → EverParse → C stubs → ML stubs → compile → call. [test_ml]
-    is the OCaml source that calls the generated stubs and exits 0 on success,
-    non-zero on failure. *)
+(** End-to-end: .3d -> EverParse -> C stubs -> ML stubs -> compile -> call.
+    [test_ml] is the OCaml source that calls the generated stubs and exits 0 on
+    success, non-zero on failure. *)
 let e2e ~name ~structs ~module_ ~test_ml =
   if not has_3d then ()
   else begin
@@ -331,7 +331,7 @@ let test_e2e_with_constraint () =
   Bytes.set_uint8 buf 0 50;
   let r = Stubs.constrained_parse buf 0 in
   assert (r.Stubs.x = 50);
-  (* x=200 > 100: fails — parse raises *)
+  (* x=200 > 100: fails -- parse raises *)
   Bytes.set_uint8 buf 0 200;
   (try ignore (Stubs.constrained_parse buf 0); assert false
    with Failure _ -> ())
@@ -371,7 +371,7 @@ let test_e2e_bitfields () =
   assert (r.Stubs.length = 100)
 |}
 
-(* ── Output pattern invariants ──
+(* -- Output pattern invariants --
 
    Structural tests over the post-[with_output] module. Every assertion
    inspects typed AST data returned by the public [Wire.Everparse] API so
@@ -560,7 +560,7 @@ let test_setter_declarations_mixed () = check_setter_declarations mixed_codec
 let test_setter_declarations_bytes () =
   check_setter_declarations byte_array_codec
 
-(* ── Full pipeline e2e: 3D → EverParse → WireSet* → compile → call ── *)
+(* -- Full pipeline e2e: 3D -> EverParse -> WireSet* -> compile -> call -- *)
 
 let test_e2e_output_parse () =
   if not has_3d then ()
@@ -622,32 +622,32 @@ let test_e2e_output_parse () =
     run (Filename.concat dir "test_output")
   end
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "wire_stubs",
     [
-      (* ML stubs — no params *)
+      (* ML stubs -- no params *)
       Alcotest.test_case "no params" `Quick test_no_params;
       Alcotest.test_case "single field" `Quick test_single_field;
       Alcotest.test_case "bitfield struct" `Quick test_bitfield_struct;
       Alcotest.test_case "many fields" `Quick test_many_fields;
-      (* ML stubs — input params *)
+      (* ML stubs -- input params *)
       Alcotest.test_case "one input" `Quick test_one_input;
       Alcotest.test_case "two inputs" `Quick test_two_inputs;
-      (* ML stubs — output params *)
+      (* ML stubs -- output params *)
       Alcotest.test_case "one output" `Quick test_one_output;
       Alcotest.test_case "two outputs" `Quick test_two_outputs;
-      (* ML stubs — mixed *)
+      (* ML stubs -- mixed *)
       Alcotest.test_case "mixed input+output" `Quick test_mixed;
       Alcotest.test_case "mixed many" `Quick test_mixed_many;
-      (* ML stubs — bytecode threshold *)
+      (* ML stubs -- bytecode threshold *)
       Alcotest.test_case "many params (bytecode)" `Quick
         test_many_params_bytecode;
       Alcotest.test_case "exactly 5 args (no bytecode)" `Quick
         test_exactly_five_args;
       Alcotest.test_case "6 args" `Quick test_six_args;
-      (* ML stubs — other *)
+      (* ML stubs -- other *)
       Alcotest.test_case "bitfield param" `Quick test_bitfield_param;
       Alcotest.test_case "multiple structs" `Quick test_multiple_structs;
       (* C stubs *)
@@ -658,7 +658,7 @@ let suite =
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;
       Alcotest.test_case "name: single word" `Quick test_name_single;
-      (* end-to-end: generate → EverParse → compile → call *)
+      (* end-to-end: generate -> EverParse -> compile -> call *)
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;

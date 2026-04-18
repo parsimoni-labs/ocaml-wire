@@ -23,7 +23,7 @@ let decode_record_from_string codec s =
     Error (Unexpected_eof { expected = ws; got = String.length s })
   else Codec.decode codec (Bytes.of_string s) 0
 
-(* ── Record codec tests ── *)
+(* -- Record codec tests -- *)
 
 type simple_record = { a : int; b : int; c : int }
 
@@ -288,7 +288,7 @@ let test_record_byte_array_padding () =
             (String.sub decoded.uuid 0 5)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
-(* ── Codec bitfield tests ── *)
+(* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
 
@@ -462,7 +462,7 @@ let test_codec_bitfield_to_struct () =
   Alcotest.(check bool) "contains field a" true (contains ~sub:"a" output);
   Alcotest.(check bool) "contains field b" true (contains ~sub:"b" output)
 
-(* ── Zero-copy view tests ── *)
+(* -- Zero-copy view tests -- *)
 
 let test_view_get_uint () =
   let codec, cf_x, cf_y =
@@ -643,7 +643,7 @@ let test_view_set_bool () =
     ((Staged.unstage (Codec.get codec cf_flag)) buf 0);
   Alcotest.(check int) "byte cleared" 0x00 (Bytes.get_uint8 buf 0)
 
-(* ── Field sharing tests -- same field spec used in two codecs ── *)
+(* -- Field sharing tests -- same field spec used in two codecs -- *)
 
 let test_view_shared_field_spec () =
   (* Two codecs with different layouts, each with their own field "x".
@@ -748,7 +748,7 @@ let test_view_shared_set_independent () =
     "codec1 get after set2" 0xA
     ((Staged.unstage (Codec.get codec1 cf1)) buf 0)
 
-(* ── action semantics ── *)
+(* -- action semantics -- *)
 
 let test_action_fires_decode_with () =
   (* decode_with fires actions and syncs output params *)
@@ -804,7 +804,7 @@ let test_action_unfired_by_validate () =
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.
-     We just verify it works — allocation is checked by benchmarks. *)
+     We just verify it works -- allocation is checked by benchmarks. *)
   let cf_v = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec = Codec.v "NoAction" (fun v -> v) [ cf_v ] in
   let buf = Bytes.of_string "\x42" in
@@ -831,7 +831,7 @@ let test_get_with_env () =
   Alcotest.(check int) "output param synced" 0x42 (Param.get env out)
 
 let test_get_action_field_twocodecs () =
-  (* Same action field in two codecs — each codec gets its own action runner *)
+  (* Same action field in two codecs -- each codec gets its own action runner *)
   let out1 = Param.output "out1" uint8 in
   let out2 = Param.output "out2" uint16be in
   let f_ref = Field.v "v" uint8 in
@@ -844,7 +844,7 @@ let test_get_action_field_twocodecs () =
   in
   (* Codec1: [v] at offset 0 *)
   let codec1 = Codec.v "ActTwo1" (fun v -> v) [ cf_v ] in
-  (* Codec2: [pad] [v] — v at offset 1, different action *)
+  (* Codec2: [pad] [v] -- v at offset 1, different action *)
   let cf_v2 =
     Codec.(
       Field.v "v"
@@ -930,7 +930,7 @@ let test_get_action_multiple_calls () =
   Alcotest.(check int) "after second" 0x20 (Param.get env out)
 
 let test_get_action_with_inputparam () =
-  (* Action references an input param — get ~env must blit it into the
+  (* Action references an input param -- get ~env must blit it into the
      scratch array so the action sees the bound value. *)
   let limit = Param.input "limit" uint8 in
   let out = Param.output "result" uint8 in
@@ -961,7 +961,7 @@ let test_get_action_with_inputparam () =
   | exception Validation_error (Constraint_failed _) -> ()
 
 let test_get_action_inputparam_noenv () =
-  (* Action references an input param but no env passed — param reads as 0 *)
+  (* Action references an input param but no env passed -- param reads as 0 *)
   let limit = Param.input "lim2" uint8 in
   let f_ref = Field.v "v" uint8 in
   let cf_v =
@@ -984,7 +984,7 @@ let test_get_action_inputparam_noenv () =
   | exception Validation_error (Constraint_failed _) -> ()
 
 let test_get_action_output_only () =
-  (* Action with only assign (no return_bool/abort) — should never fail *)
+  (* Action with only assign (no return_bool/abort) -- should never fail *)
   let out = Param.output "out_only" uint8 in
   let f_ref = Field.v "v" uint8 in
   let cf_v =
@@ -997,7 +997,7 @@ let test_get_action_output_only () =
   let codec = Codec.v "OutOnly" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
-  (* Any value should work — no validation in this action *)
+  (* Any value should work -- no validation in this action *)
   Alcotest.(check int) "get 0xFF" 0xFF (get_v (Bytes.of_string "\xFF") 0);
   Alcotest.(check int) "output 0xFF" 0xFF (Param.get env out);
   Alcotest.(check int) "get 0x00" 0x00 (get_v (Bytes.of_string "\x00") 0);
@@ -1124,7 +1124,7 @@ let test_encode_shared_bitfield () =
   Codec.encode codec1 0xA buf 0;
   Alcotest.(check int) "top nibble (MSB-first)" 0xA0 (Bytes.get_uint8 buf 0)
 
-(* ── API misuse / safety tests ── *)
+(* -- API misuse / safety tests -- *)
 
 let test_get_field_notin_codec () =
   (* get with a field that was never added to this codec raises Not_found
@@ -1174,16 +1174,16 @@ let test_env_from_wrong_codec () =
   let cf_v2 = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec2 = Codec.v "Wrong2" (fun v -> v) [ cf_v2 ] in
   let env1 = Codec.env codec1 in
-  (* Use env1 (from codec1) with codec2's get — should not crash *)
+  (* Use env1 (from codec1) with codec2's get -- should not crash *)
   let get_v2 = Staged.unstage (Codec.get ~env:env1 codec2 cf_v2) in
-  (* No action on cf_v2, so env is ignored — should work fine *)
+  (* No action on cf_v2, so env is ignored -- should work fine *)
   Alcotest.(check int)
     "wrong env ignored" 0x42
     (get_v2 (Bytes.of_string "\x42") 0)
 
 let test_env_wrongcodec_with_action () =
   (* Using env from a different codec with an action field.
-     The env has too few param slots — get raises Invalid_argument
+     The env has too few param slots -- get raises Invalid_argument
      at staging time. *)
   let out = Param.output "out_oob" uint8 in
   let f_ref = Field.v "v" uint8 in
@@ -1225,7 +1225,7 @@ let test_encode_short_buffer () =
   | () -> Alcotest.fail "expected error for short buffer"
   | exception Invalid_argument _ -> ()
 
-(* ── same bound field in two codecs ── *)
+(* -- same bound field in two codecs -- *)
 
 let test_same_field_two_codecs () =
   (* A single bound field used in two codecs with different layouts.
@@ -1366,7 +1366,7 @@ let test_samefield_staged_before_secondseal () =
   in
   (* Stage get from codec1 *)
   let get_x_1 = Staged.unstage (Codec.get codec1 cf_x) in
-  (* Now seal codec2 — this clobbers f_reader *)
+  (* Now seal codec2 -- this clobbers f_reader *)
   let _codec2 =
     let open Codec in
     v "StagedTwo2"
@@ -1376,10 +1376,10 @@ let test_samefield_staged_before_secondseal () =
   let buf = Bytes.create 2 in
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
-  (* get_x_1 was staged before codec2 — should still read offset 0 *)
+  (* get_x_1 was staged before codec2 -- should still read offset 0 *)
   Alcotest.(check int) "staged before second seal" 0xAA (get_x_1 buf 0)
 
-(* ── byte_slice tests ── *)
+(* -- byte_slice tests -- *)
 
 module Bs = Bytesrw.Bytes.Slice
 
@@ -1459,7 +1459,7 @@ let test_view_byte_slice_nested () =
   in
   Alcotest.(check int) "inner val via zero-copy" 0x1234 inner_val
 
-(* ── Raw access: get / set / sub ── *)
+(* -- Raw access: get / set / sub -- *)
 
 let test_raw_get_uint () =
   let f_a = Field.v "a" uint16be in
@@ -1591,7 +1591,7 @@ let test_raw_with_offset () =
     "get at offset 10" 0xDEADBEEF
     ((Staged.unstage (Codec.get codec cf_v)) buf 10)
 
-(* ── Dependent-size byte_slice tests ── *)
+(* -- Dependent-size byte_slice tests -- *)
 
 type dep_slice_record = { ds_length : int; ds_payload : Bs.t }
 
@@ -1708,7 +1708,7 @@ let test_dep_bslice_get_length () =
     "get length" 42
     ((Staged.unstage (Codec.get dep_slice_codec cf_ds_length)) buf 0)
 
-(* ── Dependent-size byte_array tests ── *)
+(* -- Dependent-size byte_array tests -- *)
 
 type dep_array_record = { da_length : int; da_payload : string }
 
@@ -1747,7 +1747,7 @@ let test_dep_byte_array_get () =
   in
   Alcotest.(check string) "get payload" "xyz" payload
 
-(* ── Fixed field after variable field tests ── *)
+(* -- Fixed field after variable field tests -- *)
 
 type trailer_record = { tr_length : int; tr_payload : Bs.t; tr_checksum : int }
 
@@ -1819,7 +1819,7 @@ let test_dep_trailer_roundtrip () =
   Alcotest.(check int) "rt payload len" 2 (Bs.length decoded.tr_payload);
   Alcotest.(check int) "rt checksum" 0x1234 decoded.tr_checksum
 
-(* ── wire_size API for variable codecs ── *)
+(* -- wire_size API for variable codecs -- *)
 
 let test_dep_is_fixed () =
   Alcotest.(check bool)
@@ -1878,7 +1878,7 @@ let test_dep_compute_wire_size () =
     (Codec.wire_size simple_record_codec)
     (Codec.wire_size_at simple_record_codec (Bytes.create 7) 0)
 
-(* ── Field.ref expression tests ── *)
+(* -- Field.ref expression tests -- *)
 
 let test_dep_codec_ref () =
   (* Field.ref produces a valid expression used as byte_slice size *)
@@ -1920,7 +1920,7 @@ let test_dep_ref_size_eval () =
   Bytes.set_uint8 buf 0 0;
   Alcotest.(check int) "compute size 0" 1 (Codec.wire_size_at codec buf 0)
 
-(* ── struct_of_codec for variable-size codecs ── *)
+(* -- struct_of_codec for variable-size codecs -- *)
 
 let test_dep_to_struct () =
   (* struct_of_codec should produce a valid struct for variable-size codecs *)
@@ -1943,7 +1943,7 @@ let test_dep_trailer_to_struct () =
     "contains Checksum" true
     (contains ~sub:"Checksum" output)
 
-(* ── sizeof_this / field_pos in codec ── *)
+(* -- sizeof_this / field_pos in codec -- *)
 
 type pos_record = { pa : int; pb : int; pc : int }
 
@@ -1989,7 +1989,7 @@ let test_codec_field_pos () =
   (* field_pos at c = 2 (third field, zero-indexed) *)
   Alcotest.(check int) "field_pos at c" 2 (Param.get env out)
 
-(* ── Bitfield batch access ── *)
+(* -- Bitfield batch access -- *)
 
 type bf_rec = { bf_hi : int; bf_lo : int }
 
@@ -2036,7 +2036,7 @@ let test_bitfield_short_buffer () =
   let codec = Codec.v "Short" (fun a -> a) Codec.[ cf_a ] in
   let bf = Codec.bitfield codec cf_a in
   let load = Staged.unstage (Codec.load_word bf) in
-  (* Short buffer — should read garbage but not crash *)
+  (* Short buffer -- should read garbage but not crash *)
   let buf = Bytes.create 8 in
   Bytes.set_int32_be buf 0 0x12345678l;
   let w = load buf 0 in
@@ -2066,7 +2066,7 @@ let test_bitfield_load_shared () =
   Alcotest.(check int) "a" 0xA a;
   Alcotest.(check int) "b" 0xB b
 
-(* ── Nested: sub-codec used for embedding ── *)
+(* -- Nested: sub-codec used for embedding -- *)
 
 type inner = { tag : int; value : int }
 
@@ -2078,7 +2078,7 @@ let inner_codec =
     (fun tag value -> { tag; value })
     Codec.[ (f_inner_tag $ fun r -> r.tag); (f_inner_value $ fun r -> r.value) ]
 
-(* ── Nested: Codec typ: embed a sub-codec as a field ── *)
+(* -- Nested: Codec typ: embed a sub-codec as a field -- *)
 
 type outer = { header : int; inner : inner; trailer : int }
 
@@ -2222,7 +2222,7 @@ let test_codec_embed_nested_roundtrip () =
   Alcotest.(check int) "l1.y" original.l0_inner.l1_y decoded.l0_inner.l1_y;
   Alcotest.(check int) "l0.z" original.l0_z decoded.l0_z
 
-(* ── Cross-codec Field.ref: parent expression references sub-codec field ── *)
+(* -- Cross-codec Field.ref: parent expression references sub-codec field -- *)
 
 (* TC/TM-style frame: header contains a length field, the data field's size
    is computed from that nested header field via Field.ref. *)
@@ -2285,10 +2285,10 @@ let test_codec_crossref_field_varying () =
   Alcotest.(check string) "data" "AB" r.tc_data;
   Alcotest.(check int) "check" 0xFF r.tc_check
 
-(* ── Adversarial: cross-codec Field.ref edge cases ── *)
+(* -- Adversarial: cross-codec Field.ref edge cases -- *)
 
 (* Attacker sets frame_len=255 in a 5-byte buffer. The data field's computed
-   size (255-3=252) exceeds available bytes — must report Unexpected_eof,
+   size (255-3=252) exceeds available bytes -- must report Unexpected_eof,
    not crash or silently truncate. *)
 let test_codec_crossref_field_oversized () =
   let buf = Bytes.create 5 in
@@ -2458,7 +2458,7 @@ let test_codec_crossref_field_bitfield () =
   Alcotest.(check int) "flags" 0xA r.bff_hdr.bh_flags;
   Alcotest.(check string) "data" "XYZ" r.bff_data
 
-(* ── Nested: Optional typ: conditional field presence ── *)
+(* -- Nested: Optional typ: conditional field presence -- *)
 
 type opt_record = { opt_hdr : int; opt_payload : int option; opt_trail : int }
 
@@ -2695,7 +2695,7 @@ let test_dyn_opt_get_trail () =
   Bytes.set_uint8 buf2 1 0xBB;
   Alcotest.(check int) "trail (absent)" 0xBB (get_trail buf2 0)
 
-(* Dynamic optional via Field.ref on a bool field — the TM frame pattern.
+(* Dynamic optional via Field.ref on a bool field -- the TM frame pattern.
    Field.ref now accepts 'a t, so a bool field created with [bit] can be
    referenced directly in expressions. *)
 
@@ -2764,7 +2764,7 @@ let test_uint64_ref_in_size () =
   Alcotest.(check int64) "len" 3L len;
   Alcotest.(check string) "data" "ABC" data
 
-(* ── Nested: Repeat typ: parse elements until byte budget exhausted ── *)
+(* -- Nested: Repeat typ: parse elements until byte budget exhausted -- *)
 
 type container = { cnt_length : int; cnt_items : inner list }
 
@@ -2971,7 +2971,7 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check int) "item1.len" 3 i1.vi_len;
   Alcotest.(check string) "item1.data" "cde" i1.vi_data
 
-(* ── Nested: Composition: optional + repeat + codec ── *)
+(* -- Nested: Composition: optional + repeat + codec -- *)
 
 (* TM-frame-like structure: header + data zone (repeat of packets) + optional OCF + optional FECF *)
 
@@ -3087,7 +3087,7 @@ let test_tm_like_roundtrip () =
   Alcotest.(check (option int)) "ocf" original.tm_ocf decoded.tm_ocf;
   Alcotest.(check (option int)) "fecf" original.tm_fecf decoded.tm_fecf
 
-(* ── Multiple consecutive variable-size fields (CFDP-style) ──
+(* -- Multiple consecutive variable-size fields (CFDP-style) --
 
    CCSDS CFDP (727.0-B-5) has three consecutive variable-size byte_array
    fields in its PDU header, each sized by expressions over earlier fixed
@@ -3219,7 +3219,7 @@ let test_multi_var_fixed_after () =
   Alcotest.(check string) "tx" "\xBB\xCC" tx;
   Alcotest.(check int) "trail" 0xBEEF trail
 
-(* ── uint: variable-width unsigned integer ── *)
+(* -- uint: variable-width unsigned integer -- *)
 
 type uint_rec = { tag : int; value : int }
 
@@ -3293,7 +3293,7 @@ let test_uint_dynamic () =
   Alcotest.(check int) "n" 2 n;
   Alcotest.(check int) "value" 0x1234 value
 
-(* ── Adversarial bit-order tests ──
+(* -- Adversarial bit-order tests --
 
    These pin the default [bit_order = Msb_first] against real protocol
    bytes drawn from published specs. If anything shifts the bit layout,
@@ -3378,7 +3378,7 @@ let bit_order_split_codec =
 
 let test_bitorder_diff_start_newword () =
   (* Two fields with the same base but different [bit_order] must NOT share
-     a base word — the codec allocates a fresh byte for each. Catches any
+     a base word -- the codec allocates a fresh byte for each. Catches any
      regression that would let mismatched bit orders silently collide. *)
   Alcotest.(check int) "wire size = 2" 2 (Codec.wire_size bit_order_split_codec);
   let buf = Bytes.create 2 in
@@ -3388,7 +3388,7 @@ let test_bitorder_diff_start_newword () =
   Alcotest.(check int)
     "byte 1 = 0x05 (Lsb_first y)" 0x05 (Bytes.get_uint8 buf 1)
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "codec",

@@ -2,7 +2,7 @@
 
 open Bench_lib
 
-(* ── cycling ── *)
+(* -- cycling -- *)
 
 let test_cycling_sequence () =
   let buf = Bytes.of_string "AABBCC" in
@@ -64,7 +64,7 @@ let test_cycling_single_item () =
   (* Always offset 0 *)
   Alcotest.(check (list int)) "single" [ 0; 0; 0 ] !log
 
-(* ── v / with_c / with_ffi ── *)
+(* -- v / with_c / with_ffi -- *)
 
 let noop () = ()
 
@@ -160,7 +160,7 @@ let test_c_ffi_order () =
   Alcotest.(check bool) "c called (ffi then c)" true !c_called;
   Alcotest.(check bool) "ffi called (ffi then c)" true !ffi_called
 
-(* ── reset semantics ── *)
+(* -- reset semantics -- *)
 
 let test_reset_called_before_check () =
   let trace = ref [] in
@@ -227,7 +227,7 @@ let test_reset_with_mutable_counter () =
   (* After run_table, counter reflects only the alloc phase (last phase) *)
   Alcotest.(check int) "counter = n" 10 !counter
 
-(* ── pack ── *)
+(* -- pack -- *)
 
 let test_pack () =
   let a = Bytes.of_string "AB" in
@@ -267,7 +267,7 @@ let test_pack_preserves_byte_layout () =
       (Bytes.get_uint8 buf (off + 1))
   done
 
-(* ── time_ns / alloc_words ── *)
+(* -- time_ns / alloc_words -- *)
 
 let test_time_ns_non_negative () =
   let ns = time_ns 1 noop in
@@ -306,7 +306,7 @@ let test_alloc_words_scales () =
   in
   Alcotest.(check bool) "large > small" true (w_large > w_small)
 
-(* ── run_table ── *)
+(* -- run_table -- *)
 
 let test_run_table_smoke () =
   let fn, reset =
@@ -344,7 +344,7 @@ let test_run_table_ffi_reset () =
   Alcotest.(check (list string))
     "ffi sequence" [ "0"; "0"; "1" ] (List.rev !seen)
 
-(* ── integration: cycling + reset + run_table ── *)
+(* -- integration: cycling + reset + run_table -- *)
 
 let test_cycling_through_run_table () =
   (* End-to-end: cycling visits all items, and each phase is balanced *)

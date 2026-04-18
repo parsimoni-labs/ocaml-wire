@@ -50,12 +50,12 @@ All C code generation flows through `Wire.Everparse` (no duplication):
 
 ## Benchmarking principles
 
-The **only** goal of benchmarks is to compare these three tiers — all derived
+The **only** goal of benchmarks is to compare these three tiers -- all derived
 from the same Wire DSL definition:
 
 1. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a C loop
-3. **OCaml→C FFI** -- OCaml calling the EverParse-generated C validator
+3. **OCaml->C FFI** -- OCaml calling the EverParse-generated C validator
 
 **Never use hand-written C parsers.** Field extraction in C benchmarks must go
 through EverParse-generated validators: stack-allocate the schema's default

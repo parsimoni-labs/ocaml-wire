@@ -17,7 +17,7 @@ let everparse_name name =
 
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
-   uppercase runs get lowercased, …). Rather than re-implement EverParse's
+   uppercase runs get lowercased, ...). Rather than re-implement EverParse's
    rule and drift from it over time, we read the normalized names straight
    out of the [_ExternalAPI.h] file EverParse has just generated. *)
 let read_extern_names ~outdir s =
@@ -130,7 +130,7 @@ let write_fields_header ~outdir s =
   pr "#ifndef %s@\n" guard;
   pr "#define %s@\n" guard;
   pr "#include <stdint.h>@\n@\n";
-  pr "/* Field indices — use with the schema's WireSet* callbacks in a@\n";
+  pr "/* Field indices -- use with the schema's WireSet* callbacks in a@\n";
   pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
   List.iter
     (fun f ->

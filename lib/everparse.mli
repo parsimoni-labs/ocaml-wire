@@ -7,10 +7,10 @@
 
     Wire types project to EverParse 3D struct fields. Each named field gets a
     [<Name>Set*] callback (schema-prefixed per type family: [<Name>SetU8],
-    [<Name>SetU16be], …) that extracts its value during validation. The default
-    plug {!Wire_3d} ships, [<Name>_Fields.c], switches on the field index to
-    populate a typed [<Name>Fields] struct; consumers that want a different
-    layout supply their own plug.
+    [<Name>SetU16be], ...) that extracts its value during validation. The
+    default plug {!Wire_3d} ships, [<Name>_Fields.c], switches on the field
+    index to populate a typed [<Name>Fields] struct; consumers that want a
+    different layout supply their own plug.
 
     Three EverParse limitations shape the projection:
 

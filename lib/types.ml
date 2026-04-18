@@ -1,7 +1,7 @@
 type endian = Little | Big
 type bit_order = Msb_first | Lsb_first
 
-(* Sequence builder for Array/Repeat — Jsont-style accumulator pattern.
+(* Sequence builder for Array/Repeat -- Jsont-style accumulator pattern.
    Existentially hides the builder type so callers control the output container. *)
 type ('elt, 'seq) seq_map =
   | Seq_map : {
@@ -12,7 +12,7 @@ type ('elt, 'seq) seq_map =
     }
       -> ('elt, 'seq) seq_map
 
-(* Param handles — defined here so expr and action_stmt can reference them *)
+(* Param handles -- defined here so expr and action_stmt can reference them *)
 type param_input
 type param_output
 
@@ -228,7 +228,7 @@ let uint64be = Uint64 Big
 let uint ?(endian = Big) size =
   (match size with
   | Int n when n < 1 || n > 7 ->
-      Fmt.invalid_arg "uint: size must be 1–7, got %d" n
+      Fmt.invalid_arg "uint: size must be 1-7, got %d" n
   | _ -> ());
   Uint_var { size; endian }
 
@@ -244,7 +244,7 @@ let is_set n = n <> 0
 let map decode encode inner = Map { inner; decode; encode }
 let bool inner = Map { inner; decode = is_set; encode = bit }
 
-(* Parse errors — moved here so combinators like [cases] can raise them
+(* Parse errors -- moved here so combinators like [cases] can raise them
    directly rather than through intermediate exceptions. *)
 
 type parse_error =
@@ -404,7 +404,7 @@ let struct_project s ~name ~keep =
   in
   { s with name; fields }
 
-(* What kind of OCaml value a field produces — used by Wire_stubs to
+(* What kind of OCaml value a field produces -- used by Wire_stubs to
    generate the right C-to-OCaml conversion in output stubs. *)
 type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
 
@@ -415,7 +415,7 @@ let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Map { inner = Bits _; decode = _; encode = _ } ->
       (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
       (* We can't distinguish bool from other maps here without checking
-         the decode function. Use K_int as safe default — the EverParse
+         the decode function. Use K_int as safe default -- the EverParse
          output struct stores the raw int anyway. *)
       K_int
   | Map { inner; _ } -> ocaml_kind_of inner

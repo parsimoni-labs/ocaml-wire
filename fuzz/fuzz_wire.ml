@@ -503,7 +503,7 @@ let test_record_bool_roundtrip n =
 
 (** {1 Streaming: cross-slice boundary roundtrips} *)
 
-(* Parse from a chunked reader — forces multi-byte values to straddle slices *)
+(* Parse from a chunked reader -- forces multi-byte values to straddle slices *)
 let parse_chunked ~chunk_size typ s =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:chunk_size s in
   Wire.decode typ reader

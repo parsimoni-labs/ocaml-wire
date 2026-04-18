@@ -4,7 +4,7 @@
 open Wire
 open Wire.Everparse.Raw
 
-(* ── Param.input / Param.output / Param.decl ── *)
+(* -- Param.input / Param.output / Param.decl -- *)
 
 let test_input_spec () =
   let p = Param.input "limit" uint8 in
@@ -32,7 +32,7 @@ let test_output_spec () =
     "contains out" true
     (Re.execp (Re.compile (Re.str "out")) output)
 
-(* ── Param.bind / Param.get / Param.env ── *)
+(* -- Param.bind / Param.get / Param.env -- *)
 
 let test_input_binding () =
   let p = Param.input "limit" uint8 in
@@ -62,7 +62,7 @@ let test_output_binding () =
   | Ok _ -> Alcotest.(check int) "after decode" 7 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Input param visible to constraints (via Codec) ── *)
+(* -- Input param visible to constraints (via Codec) -- *)
 
 type bounded_record = { x : int }
 
@@ -86,7 +86,7 @@ let test_input_param_constraint () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Output param written by action (via Codec) ── *)
+(* -- Output param written by action (via Codec) -- *)
 
 let test_output_param_action () =
   let out = Param.output "out" uint8 in
@@ -119,7 +119,7 @@ let test_output_param_computed () =
   | Ok _ -> Alcotest.(check int) "out" 42 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Where clause with params (via Codec) ── *)
+(* -- Where clause with params (via Codec) -- *)
 
 type bounded_value = { bv_value : int }
 
@@ -158,7 +158,7 @@ let test_where_clause_fail () =
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Mixed input + output params (via Codec) ── *)
+(* -- Mixed input + output params (via Codec) -- *)
 
 type mixed_record = { a : int; b : int }
 
@@ -198,7 +198,7 @@ let test_mixed_params () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Codec.decode_with with params ── *)
+(* -- Codec.decode_with with params -- *)
 
 type record_with_param = { x : int }
 
@@ -248,7 +248,7 @@ let test_codec_param_where_fail () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
-(* ── 3D rendering ── *)
+(* -- 3D rendering -- *)
 
 let test_3d_rendering () =
   let limit = Param.input "limit" uint16be in
@@ -283,7 +283,7 @@ let test_3d_rendering () =
     "contains entrypoint" true
     (Re.execp (Re.compile (Re.str "entrypoint")) output)
 
-(* ── No params (default behavior) ── *)
+(* -- No params (default behavior) -- *)
 
 let test_no_params () =
   let s = struct_ "Simple" [ field "x" uint8 ] in
@@ -291,7 +291,7 @@ let test_no_params () =
   | Ok () -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Param-driven size ── *)
+(* -- Param-driven size -- *)
 
 let decode_ok = function
   | Ok v -> v
@@ -345,7 +345,7 @@ let test_param_size_zero () =
   Alcotest.(check string) "data" "" r.ps_data;
   Alcotest.(check int) "tag" 0xFF r.ps_tag
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "param",

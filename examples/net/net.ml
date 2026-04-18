@@ -10,7 +10,7 @@
 open Wire
 module Slice = Bytesrw.Bytes.Slice
 
-(* ── Ethernet II frame header: 14 bytes + payload ── *)
+(* -- Ethernet II frame header: 14 bytes + payload -- *)
 
 let ethernet_payload_size = 40
 
@@ -49,7 +49,7 @@ let ethernet_codec =
 let ethernet_struct = Everparse.struct_of_codec ethernet_codec
 let ethernet_size = Codec.wire_size ethernet_codec
 
-(* ── IPv4 header: 20 bytes fixed (no options) + payload ── *)
+(* -- IPv4 header: 20 bytes fixed (no options) + payload -- *)
 
 let ipv4_payload_size = 20
 
@@ -121,7 +121,7 @@ let ipv4_codec =
 let ipv4_struct = Everparse.struct_of_codec ipv4_codec
 let ipv4_size = Codec.wire_size ipv4_codec
 
-(* ── TCP header: 20 bytes fixed (no options) ── *)
+(* -- TCP header: 20 bytes fixed (no options) -- *)
 
 type tcp = {
   tcp_src_port : int;
@@ -204,7 +204,7 @@ let tcp_codec =
 let tcp_struct = Everparse.struct_of_codec tcp_codec
 let tcp_size = Codec.wire_size tcp_codec
 
-(* ── UDP header: 8 bytes ── *)
+(* -- UDP header: 8 bytes -- *)
 
 type udp = {
   udp_src_port : int;
@@ -238,7 +238,7 @@ let udp_codec =
 let udp_struct = Everparse.struct_of_codec udp_codec
 let udp_size = Codec.wire_size udp_codec
 
-(* ── Utilities ── *)
+(* -- Utilities -- *)
 
 let pp_ipv4_addr ppf addr =
   Fmt.pf ppf "%d.%d.%d.%d"
@@ -249,7 +249,7 @@ let pp_ipv4_addr ppf addr =
 
 let ipv4_addr a b c d = (a lsl 24) lor (b lsl 16) lor (c lsl 8) lor d
 
-(* ── Data generators ── *)
+(* -- Data generators -- *)
 
 let tcp_frame_data n =
   Array.init n (fun i ->
@@ -328,7 +328,7 @@ let udp_frame_data n =
       Bytes.set_uint16_be b (udp + 6) 0;
       b)
 
-(* ── Schema registry (for EverParse benchmark infrastructure) ── *)
+(* -- Schema registry (for EverParse benchmark infrastructure) -- *)
 
 type 'a schema = {
   name : string;

@@ -12,7 +12,7 @@ let equal a b =
   | BF_U32 e1, BF_U32 e2 -> e1 = e2
   | _ -> false
 
-(* Fast word reads — avoid Bytes.get_int32_be which goes through Int32
+(* Fast word reads -- avoid Bytes.get_int32_be which goes through Int32
    boxing/unboxing and byte-by-byte assembly on ARM64. *)
 let[@inline always] u16_le buf off =
   Char.code (Bytes.unsafe_get buf off)

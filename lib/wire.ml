@@ -104,7 +104,7 @@ let eval_expr = Eval.expr
 exception Parse_exn of parse_error
 exception Validation_error = Parse_error
 
-(* Buffered decoder — all reads go through a local buffer [i].
+(* Buffered decoder -- all reads go through a local buffer [i].
    [i_next] and [i_len] track the valid region. Two construction modes:
    - [decoder reader]: streaming from a Reader, refills by copying slices in
    - [decoder_of_bytes buf len]: direct from bytes, no Reader, no copy *)
@@ -566,7 +566,7 @@ let decode_bytes typ b =
 module Writer = Bytesrw.Bytes.Writer
 
 (* Encoder state *)
-(* Buffered encoder — writes accumulate in o, flushed as a single Slice.t.
+(* Buffered encoder -- writes accumulate in o, flushed as a single Slice.t.
    Mirrors the decoder's destructured-slice pattern. *)
 type encoder = {
   writer : Writer.t;

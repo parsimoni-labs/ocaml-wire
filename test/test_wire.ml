@@ -17,7 +17,7 @@ let encode_chunked ~chunk_size typ v =
   Bytesrw.Bytes.Writer.write_eod writer;
   Buffer.contents buf
 
-(* ── Parsing tests ── *)
+(* -- Parsing tests -- *)
 
 let test_parse_uint8 () =
   let input = "\x42" in
@@ -278,7 +278,7 @@ let test_parse_param_where_fail () =
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── sizeof / sizeof_this / field_pos ── *)
+(* -- sizeof / sizeof_this / field_pos -- *)
 
 let test_sizeof () =
   (* sizeof(uint32) = 4, use it in a constraint *)
@@ -380,7 +380,7 @@ let test_sizeof_this_with_action () =
   | Ok _ -> Alcotest.(check int) "sizeof_this via action" 3 (Param.get env out)
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
-(* ── Encoding tests ── *)
+(* -- Encoding tests -- *)
 
 let test_encode_uint8 () =
   let encoded = encode_to_string uint8 0x42 in
@@ -467,7 +467,7 @@ let test_bits_roundtrip_all_combos () =
       List.iter (fun order -> List.iter (check base width order) values) orders)
     bases
 
-(* ── Roundtrip tests ── *)
+(* -- Roundtrip tests -- *)
 
 let test_roundtrip_uint8 () =
   let original = 0x42 in
@@ -507,7 +507,7 @@ let test_roundtrip_byte_array () =
       Alcotest.(check string) "roundtrip byte_array" original decoded
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Streaming: cross-slice boundary tests ── *)
+(* -- Streaming: cross-slice boundary tests -- *)
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
 let test_stream_uint8 () =
@@ -523,7 +523,7 @@ let test_stream_uint16_chunk1 () =
   | Error e -> Alcotest.failf "uint16 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk3 () =
-  (* chunk=3 means 2-byte value fits in one slice — fast path *)
+  (* chunk=3 means 2-byte value fits in one slice -- fast path *)
   let encoded = encode_to_string uint16be 0xBEEF in
   match parse_chunked ~chunk_size:3 uint16be encoded with
   | Ok v -> Alcotest.(check int) "uint16be chunk=3" 0xBEEF v
@@ -585,7 +585,7 @@ let test_stream_encode_chunk3 () =
   | Ok decoded -> Alcotest.(check int) "encode chunk=3" v decoded
   | Error e -> Alcotest.failf "encode chunk=3: %a" pp_parse_error e
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "wire",

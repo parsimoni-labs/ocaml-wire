@@ -126,6 +126,6 @@ let () =
   gen_struct "SpacePacket" Space.packet_struct;
   gen_struct "TMFrame" Space.tm_frame_struct;
 
-  (* Net schemas — also exercises all_schemas and all_structs *)
+  (* Net schemas -- also exercises all_schemas and all_structs *)
   List.iter (fun s -> gen_struct (struct_name s) s) Net.all_structs;
   assert (List.length Net.all_schemas = List.length Net.all_structs)

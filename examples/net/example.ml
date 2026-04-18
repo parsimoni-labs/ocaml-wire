@@ -1,6 +1,6 @@
 (** Demonstrates zero-copy TCP/IP header parsing with Wire.
 
-    Three nested protocol layers accessed via [get] — no intermediate record
+    Three nested protocol layers accessed via [get] -- no intermediate record
     allocation, no buffer copies. *)
 
 open Wire
@@ -14,7 +14,7 @@ let () =
   Fmt.pr "==========================================\n\n";
   Fmt.pr "Frame: %d bytes in a single buffer\n\n" (Bytes.length buf);
 
-  (* Layer 1: Ethernet — read ethertype, navigate to IPv4 sub-region *)
+  (* Layer 1: Ethernet -- read ethertype, navigate to IPv4 sub-region *)
   let etype =
     (Staged.unstage (Codec.get ethernet_codec bf_eth_ethertype)) buf 0
   in
@@ -24,7 +24,7 @@ let () =
   in
   Fmt.pr "Ethernet: ethertype=0x%04X payload_off=%d\n" etype ip_off;
 
-  (* Layer 2: IPv4 — read fields, navigate to TCP sub-region *)
+  (* Layer 2: IPv4 -- read fields, navigate to TCP sub-region *)
   let protocol =
     (Staged.unstage (Codec.get ipv4_codec bf_ip_protocol)) buf ip_off
   in
@@ -37,7 +37,7 @@ let () =
   Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n" protocol
     pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
 
-  (* Layer 3: TCP — read fields *)
+  (* Layer 3: TCP -- read fields *)
   let src_port =
     (Staged.unstage (Codec.get tcp_codec bf_tcp_src_port)) buf tcp_off
   in

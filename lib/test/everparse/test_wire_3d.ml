@@ -1,4 +1,4 @@
-(** Tests for the EverParse pipeline — schema generation and 3D output. *)
+(** Tests for the EverParse pipeline -- schema generation and 3D output. *)
 
 open Wire
 open Wire.Everparse.Raw
@@ -40,7 +40,7 @@ let test_generate_3d_files () =
 
 let test_schema_of_struct () =
   let s = Wire.Everparse.schema_of_struct simple_struct in
-  (* generate_3d uses the schema — check we can produce a .3d file *)
+  (* generate_3d uses the schema -- check we can produce a .3d file *)
   let tmpdir = Filename.temp_dir "wire_3d_test2" "" in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in

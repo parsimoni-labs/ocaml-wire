@@ -1,6 +1,6 @@
 (** TM frame reassembly benchmark.
 
-    Simulates a downlink TM frame processor using Wire's staged Codec.get — all
+    Simulates a downlink TM frame processor using Wire's staged Codec.get -- all
     field access is generated from the Wire DSL. The C baseline uses
     EverParse-generated validators for field extraction. *)
 

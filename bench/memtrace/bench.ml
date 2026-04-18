@@ -30,7 +30,7 @@ let schema name codec size default make_data =
     encode = Wire.Codec.encode codec;
   }
 
-(* ── Nested codec schemas for allocation tracking ── *)
+(* -- Nested codec schemas for allocation tracking -- *)
 
 (* Codec embed: outer record containing an inner sub-codec *)
 type inner_rec = { i_tag : int; i_value : int }

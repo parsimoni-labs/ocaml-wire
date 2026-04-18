@@ -153,7 +153,7 @@ let conjoin_constraints constraints =
    reversal, because the reversed field is parsed before its referents.
 
    The combined constraint is semantically equivalent for validation
-   (accept/reject) — EverParse's per-field constraints are pure boolean
+   (accept/reject) -- EverParse's per-field constraints are pure boolean
    predicates, so moving them later in the parse still produces the same
    overall verdict. Bitfield actions use 3D's [:act] form, which fires
    regardless of validation outcome, so moving constraints does not
@@ -178,7 +178,7 @@ let collapse_constraints_to_last group =
    native packing this produces the identical bit layout. Fields outside
    bit groups are left untouched. Extern-call indices embedded in actions
    are stamped before reordering, so WireSet callbacks still write into the
-   original (wire-declaration) slots — the stub generator never sees the
+   original (wire-declaration) slots -- the stub generator never sees the
    reordered struct. *)
 let reorder_bit_groups_for_3d fields =
   let is_same_bit_group base bit_order = function

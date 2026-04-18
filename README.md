@@ -8,7 +8,7 @@ Wire is a GADT-based OCaml DSL for describing binary wire formats.
 Define your format once, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
-- **Read and write fields in-place** via `Codec.get` / `Codec.set` — zero-copy,
+- **Read and write fields in-place** via `Codec.get` / `Codec.set` -- zero-copy,
   zero-allocation for immediate types (int, bool)
 - **Decode and encode records** via `Codec.decode` / `Codec.encode`
 - **Export EverParse `.3d` schemas** via `Everparse.schema` / `Everparse.write_3d`
@@ -29,7 +29,7 @@ let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
 let f_length  = Field.v "Length"  uint16be
 let f_tag     = Field.v "Tag"     uint8
 
-(* Bind fields before the codec — same objects used for get/set *)
+(* Bind fields before the codec -- same objects used for get/set *)
 let bf_version = Codec.(f_version $ (fun p -> p.version))
 let bf_flags   = Codec.(f_flags   $ (fun p -> p.flags))
 let bf_length  = Codec.(f_length  $ (fun p -> p.length))
@@ -53,7 +53,7 @@ let codec =
 ### Zero-copy field access
 
 ```ocaml
-(* Staged for performance — force once, reuse the closure *)
+(* Staged for performance -- force once, reuse the closure *)
 let get_version = Staged.unstage (Codec.get codec bf_version)
 let set_version = Staged.unstage (Codec.set codec bf_version)
 
@@ -82,7 +82,7 @@ let () = Everparse.write_3d ~outdir:"schemas" [ schema ]
 
 The generated 3D uses the EverParse output-types pattern: the generated C
 validates AND extracts every field via schema-prefixed extern callbacks
-(`<Name>SetU8`, `<Name>SetU16be`, …). See [Consuming from C](#consuming-from-c)
+(`<Name>SetU8`, `<Name>SetU16be`, ...). See [Consuming from C](#consuming-from-c)
 for what that means at the C level.
 
 To turn those schemas into EverParse-generated C:
@@ -142,7 +142,7 @@ and `<Name>_Fields.h` in your include path if you also want a smaller
 few unused bytes.
 
 ```c
-/* my_plug.c — started from SpacePacket_Fields.c, trimmed to one field */
+/* my_plug.c -- started from SpacePacket_Fields.c, trimmed to one field */
 #include <stdint.h>
 #include "SpacePacket_Fields.h"
 #include "SpacePacket_ExternalTypedefs.h"
@@ -159,7 +159,7 @@ void SpacePacketSetU16be(WIRECTX *ctx, uint32_t idx, uint16_t v) {
 
 If your schema uses multiple setter type families (e.g. `u8` fields *and*
 `u16be` fields), the shipped `_Fields.c` defines one function per family.
-Your copy keeps all of those functions — delete `case`s, not whole
+Your copy keeps all of those functions -- delete `case`s, not whole
 functions. A family you don't care about reduces to a function whose
 `switch` has no real cases, just the `default`. Usually one or two
 short one-liners.
@@ -176,20 +176,20 @@ let () = print_string (Ascii.of_codec codec)
 
 | Feature | OCaml | [EverParse 3D][3d-ref] |
 |---------|-------|------------------------|
-| Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, … |
+| Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, ... |
 | Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
-| Bool | `bool (bits ~width:1 U8)` | — |
+| Bool | `bool (bits ~width:1 U8)` | -- |
 | Byte slices | `byte_slice ~size:e` (zero-copy) | `UINT8 [: e]` |
 | Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
 | Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
 | Constraints | `where`, `~constraint_` | [`where`][3d-where] |
 | Actions | `Action.assign`, `abort`, `if_` | [`:on-success`][3d-act] |
-| Parameters | `Param.input` / `Param.output` | [`entrypoint … (params)`][3d-param] |
+| Parameters | `Param.input` / `Param.output` | [`entrypoint ... (params)`][3d-param] |
 | Tagged unions | `casetype` | [`casetype`][3d-case] |
 | Arrays | `array ~len:e`, `nested ~size:e` | `t [: e]` |
 | Dependent sizes | `Field.ref f_len` | field references |
-| Custom mappings | `map ~decode ~encode` | — |
-| ASCII diagrams | `Ascii.of_codec` | — |
+| Custom mappings | `map ~decode ~encode` | -- |
+| ASCII diagrams | `Ascii.of_codec` | -- |
 
 [3d-ref]: https://project-everest.github.io/everparse/3d-lang.html
 [3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#enums
@@ -328,10 +328,10 @@ make clean          # dune clean
 
 ## References
 
-- [EverParse](https://project-everest.github.io/everparse/) — verified parser
+- [EverParse](https://project-everest.github.io/everparse/) -- verified parser
   generator from Project Everest
 - [3D Language Reference](https://project-everest.github.io/everparse/3d-lang.html)
-  — EverParse DSL specification
+  -- EverParse DSL specification
 
 ## Licence
 

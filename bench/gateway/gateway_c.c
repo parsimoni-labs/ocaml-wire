@@ -1,4 +1,4 @@
-/* TM frame reassembly — application logic with EverParse field extraction.
+/* TM frame reassembly -- application logic with EverParse field extraction.
 
    Uses EverParse-generated TmframeValidateTmframe and
    SpacePacketValidateSpacePacket to extract fields into typed struct plugs.
@@ -18,7 +18,7 @@
 
 #include "bench_common.h"
 
-/* Must match gateway_bench.ml — derived from Space.tm_frame_codec / Space.packet_codec */
+/* Must match gateway_bench.ml -- derived from Space.tm_frame_codec / Space.packet_codec */
 static const int CADU_SIZE = 1115;
 static const int TM_HDR = 6;       /* Wire.Codec.wire_size Space.tm_frame_codec */
 static const int PKT_SIZE = 70;    /* sp_hdr (6) + pkt_payload (64) */

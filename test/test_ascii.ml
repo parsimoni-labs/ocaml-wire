@@ -13,7 +13,7 @@ let ruler =
   "  0               1               2               3              \n\
   \  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1\n"
 
-(* ── Fixed-width fields ── *)
+(* -- Fixed-width fields -- *)
 
 let test_simple () =
   check "32-bit row"
@@ -91,7 +91,7 @@ let test_non_aligned () =
 
 let test_empty () = check "empty" (struct_ "E" []) ""
 
-(* ── Variable-length fields ── *)
+(* -- Variable-length fields -- *)
 
 let test_variable () =
   let f_len = field "len" uint16be in
@@ -110,7 +110,7 @@ let test_variable () =
     "contains data" true
     (Re.execp (Re.compile (Re.str "data")) output)
 
-(* ── Codec rendering ── *)
+(* -- Codec rendering -- *)
 
 type simple_record = { x : int; y : int }
 
@@ -133,7 +133,7 @@ let test_of_codec () =
   in
   Alcotest.(check string) "of_codec" expected output
 
-(* ── pp formatters ── *)
+(* -- pp formatters -- *)
 
 let test_pp_codec () =
   let buf = Buffer.create 128 in
@@ -157,7 +157,7 @@ let test_pp_struct () =
   Alcotest.(check string)
     "pp_struct matches of_struct" (Ascii.of_struct s) output
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "ascii",

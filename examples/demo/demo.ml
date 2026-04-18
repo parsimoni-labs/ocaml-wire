@@ -11,7 +11,7 @@
 open Wire
 open Wire.Everparse.Raw
 
-(* ── 1. Minimal: single uint8 = 1 byte ── *)
+(* -- 1. Minimal: single uint8 = 1 byte -- *)
 
 type minimal = { m_value : int }
 
@@ -31,7 +31,7 @@ let minimal_data n =
       Bytes.set_uint8 b 0 (i mod 256);
       b)
 
-(* ── 2. AllInts: all integer widths = 1+2+2+4+4+8 = 21 bytes ── *)
+(* -- 2. AllInts: all integer widths = 1+2+2+4+4+8 = 21 bytes -- *)
 
 type all_ints = {
   ai_u8 : int;
@@ -90,7 +90,7 @@ let all_ints_data n =
       Bytes.set_int64_be b 13 (Int64.of_int (i * 31));
       b)
 
-(* ── 3. Bitfield8: 3+5 bits in U8 = 1 byte ── *)
+(* -- 3. Bitfield8: 3+5 bits in U8 = 1 byte -- *)
 
 type bf8 = { bf8_tag : int; bf8_value : int }
 
@@ -114,7 +114,7 @@ let bf8_data n =
       Bytes.set_uint8 b 0 w;
       b)
 
-(* ── 4. Bitfield16: 1+4+11 bits in U16be = 2 bytes ── *)
+(* -- 4. Bitfield16: 1+4+11 bits in U16be = 2 bytes -- *)
 
 type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
 
@@ -142,7 +142,7 @@ let bf16_data n =
       Bytes.set_uint16_be b 0 w;
       b)
 
-(* ── 5. Bitfield32: 4+6+14+8 bits in U32be = 4 bytes ── *)
+(* -- 5. Bitfield32: 4+6+14+8 bits in U32be = 4 bytes -- *)
 
 type bf32 = {
   bf32_flags : int;
@@ -184,7 +184,7 @@ let bf32_data n =
       Bytes.set_int32_be b 0 (Int32.of_int w);
       b)
 
-(* ── 6. BoolFields: bool(1bit)+bool(1bit)+6bits+uint8 = 2 bytes ── *)
+(* -- 6. BoolFields: bool(1bit)+bool(1bit)+6bits+uint8 = 2 bytes -- *)
 
 type bool_fields = {
   bl_active : bool;
@@ -222,7 +222,7 @@ let bool_fields_data n =
       Bytes.set_uint8 b 1 (i mod 256);
       b)
 
-(* ── 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes ── *)
+(* -- 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes -- *)
 
 type large_mixed = {
   lg_sync : int;
@@ -301,7 +301,7 @@ let large_mixed_data n =
       Bytes.set_int64_be b 18 (Int64.of_int (i * 1_000_000));
       b)
 
-(* ── 8. Mapped: user-defined decode/encode via map combinator = 2 bytes ──
+(* -- 8. Mapped: user-defined decode/encode via map combinator = 2 bytes --
    The map decode function runs on every Codec.get call, adding a function
    call to the hot path. On the C side, map is invisible (3D sees the inner
    type), so this measures the OCaml mapping overhead vs bare C validation. *)
@@ -346,10 +346,10 @@ let mapped_data n =
   done;
   buf
 
-(* ── 9. CasesDemo: variant dispatch via cases combinator = 1 byte ──
+(* -- 9. CasesDemo: variant dispatch via cases combinator = 1 byte --
    The cases combinator uses an array lookup on decode (Codec.get) and a
    linear scan on encode (Codec.set). On the C side, it's just a 1-bit
-   bitfield — the variant mapping is OCaml-only. *)
+   bitfield -- the variant mapping is OCaml-only. *)
 
 type ptype = Telemetry | Telecommand
 type cases_demo = { cd_type : ptype; cd_id : int }
@@ -384,7 +384,7 @@ let cases_demo_data n =
   done;
   buf
 
-(* ── 10. EnumDemo: enum + map for OCaml variant types = 2 bytes ──
+(* -- 10. EnumDemo: enum + map for OCaml variant types = 2 bytes --
    Combines enum (3D validation: rejects values outside {0,1,2,3}) with map
    (OCaml variant decode/encode). EverParse C validates enum membership;
    Codec.get calls the map decode on every read. *)
@@ -420,7 +420,7 @@ let enum_demo_data n =
   done;
   buf
 
-(* ── 11. Constrained: where clause, validation on C side only = 2 bytes ──
+(* -- 11. Constrained: where clause, validation on C side only = 2 bytes --
    The where constraint generates a check in the EverParse C validator
    (Version must be 0) but Codec.get strips the constraint entirely.
    This measures C constraint-checking overhead vs OCaml unchecked read. *)
@@ -453,7 +453,7 @@ let constrained_data n =
   done;
   buf
 
-(* ── 12. Lowercase name: exercises filename capitalization ── *)
+(* -- 12. Lowercase name: exercises filename capitalization -- *)
 
 type lowercase_record = { lc_x : int; lc_y : int }
 
@@ -466,7 +466,7 @@ let lowercase_codec =
         (Field.v "y" uint16be $ fun r -> r.lc_y);
       ]
 
-(* ── 13. Reserved-word field names ── *)
+(* -- 13. Reserved-word field names -- *)
 
 type reserved_fields = { rf_type : int; rf_case : int; rf_value : int }
 
@@ -482,7 +482,7 @@ let reserved_fields_codec =
         (Field.v "value" uint16be $ fun r -> r.rf_value);
       ]
 
-(* ── 14. Bitfield reorder: MSB-first on U8 (non-native) ── *)
+(* -- 14. Bitfield reorder: MSB-first on U8 (non-native) -- *)
 
 type bf_reorder = { bfr_a : int; bfr_b : int }
 
@@ -495,7 +495,7 @@ let bf_reorder_codec =
         (Field.v "b" (bits ~width:5 U8) $ fun r -> r.bfr_b);
       ]
 
-(* ── 15. Constrained bitfield ── *)
+(* -- 15. Constrained bitfield -- *)
 
 type bf_constrained = { bfc_version : int; bfc_flags : int }
 
@@ -512,14 +512,14 @@ let bf_constrained_codec =
         $ fun r -> r.bfc_flags );
       ]
 
-(* ══════════════════════════════════════════════════════════════════════════
+(* ==========================================================================
    3D Feature Coverage
-   ══════════════════════════════════════════════════════════════════════════
+   ==========================================================================
    The following demonstrate Wire DSL features targeting EverParse 3D output.
    They don't have Codec views (variable-size or 3D-only) but exercise the
    full API surface and produce valid 3D modules via Wire.to_3d. *)
 
-(* ── 12. Array: repeated fixed-count elements ── *)
+(* -- 12. Array: repeated fixed-count elements -- *)
 
 let f_count = field "Count" uint8
 
@@ -530,7 +530,7 @@ let array_struct =
       field "Items" (array ~len:(field_ref f_count) uint16be);
     ]
 
-(* ── 13. ByteArray: byte blob with copy (vs byte_slice zero-copy) ── *)
+(* -- 13. ByteArray: byte blob with copy (vs byte_slice zero-copy) -- *)
 
 let f_ba_length = field "Length" uint16be
 
@@ -541,7 +541,7 @@ let byte_array_struct =
       field "Data" (byte_array ~size:(field_ref f_ba_length));
     ]
 
-(* ── 14. Trailing / padding types ── *)
+(* -- 14. Trailing / padding types -- *)
 
 let all_bytes_struct =
   struct_ "TrailingData" [ field "Header" uint32be; field "Rest" all_bytes ]
@@ -549,7 +549,7 @@ let all_bytes_struct =
 let all_zeros_struct =
   struct_ "PaddedMsg" [ field "Value" uint16be; field "Padding" all_zeros ]
 
-(* ── 15. SingleElemArray: single element with byte-size constraint ── *)
+(* -- 15. SingleElemArray: single element with byte-size constraint -- *)
 
 let f_se_size = field "Size" uint16be
 
@@ -569,13 +569,13 @@ let single_elem_at_most_struct =
       field "Elem" (nested_at_most ~size:(field_ref f_se_maxsize) uint16be);
     ]
 
-(* ── 16. Anonymous fields (padding) ── *)
+(* -- 16. Anonymous fields (padding) -- *)
 
 let anon_field_struct =
   struct_ "WithPadding"
     [ field "X" uint8; anon_field uint8; field "Y" uint16be ]
 
-(* ── 17. Actions: side-effects during EverParse validation ── *)
+(* -- 17. Actions: side-effects during EverParse validation -- *)
 
 let f_magic = field "Magic" uint32be
 
@@ -590,7 +590,7 @@ let action_struct =
         uint16be;
     ]
 
-(* ── 18. Actions: full — Action.var, Action.if_, Action.assign, Action.abort ── *)
+(* -- 18. Actions: full -- Action.var, Action.if_, Action.assign, Action.abort -- *)
 
 let action_full_struct =
   let out_value = Param.output "out_value" uint32be in
@@ -614,7 +614,7 @@ let action_full_struct =
         uint16be;
     ]
 
-(* ── 19. Parameterized struct: reusable with constraints ── *)
+(* -- 19. Parameterized struct: reusable with constraints -- *)
 
 let param_demo_struct =
   let out_len = Param.output "out_len" uint16be in
@@ -631,7 +631,7 @@ let param_demo_struct =
       field "Data" (byte_array ~size:(field_ref f_pd_length));
     ]
 
-(* ── 19b. Parameterized byte_array: payload sized by input parameter ── *)
+(* -- 19b. Parameterized byte_array: payload sized by input parameter -- *)
 
 let param_payload_struct =
   let p_size = Wire.Param.input "payload_size" uint8 in
@@ -642,7 +642,7 @@ let param_payload_struct =
       field "Data" (byte_array ~size:(Wire.Param.expr p_size));
     ]
 
-(* ── 20. Casetype: tagged union (different wire layout per tag) ──
+(* -- 20. Casetype: tagged union (different wire layout per tag) --
    Unlike enum (same wire size, different named values), casetype selects
    a different struct/type based on a discriminant field. *)
 
@@ -677,7 +677,7 @@ let casetype_module =
            ]);
     ]
 
-(* ── 21. Module-level declarations: define, extern_fn, extern_probe ── *)
+(* -- 21. Module-level declarations: define, extern_fn, extern_probe -- *)
 
 let extern_module =
   let f_ext_length = field "Length" uint16be in
@@ -697,7 +697,7 @@ let extern_module =
            ]);
     ]
 
-(* ── 22. Type references: type_ref, qualified_ref ── *)
+(* -- 22. Type references: type_ref, qualified_ref -- *)
 
 let type_ref_module =
   module_

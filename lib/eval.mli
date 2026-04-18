@@ -1,7 +1,7 @@
 (** Expression evaluator, action interpreter, and parsing context.
 
     Shared by {!Wire} (streaming decode) and {!Codec} (zero-copy access). Not
-    part of the public API — consumers use {!Wire.decode} or {!Codec.decode}
+    part of the public API -- consumers use {!Wire.decode} or {!Codec.decode}
     instead. *)
 
 (** {1 Context} *)

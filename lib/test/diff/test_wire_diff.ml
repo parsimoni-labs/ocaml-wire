@@ -1,4 +1,4 @@
-(** Tests for Wire_diff — differential testing logic. *)
+(** Tests for Wire_diff -- differential testing logic. *)
 
 open Wire
 
@@ -86,7 +86,7 @@ let test_full_roundtrip_c_rejects () =
   let buf = encode_simple (3, 512) in
   let result = s.Wire_diff.test_roundtrip buf in
   Alcotest.(check bool)
-    "c rejects → Only_ocaml_ok" true
+    "c rejects -> Only_ocaml_ok" true
     (result = Wire_diff.Only_ocaml_ok "External write failed")
 
 let test_write_c_rejects () =
@@ -98,7 +98,7 @@ let test_write_c_rejects () =
   let buf = encode_simple (3, 512) in
   let result = s.Wire_diff.test_write buf in
   Alcotest.(check bool)
-    "write c rejects → Only_ocaml_ok" true
+    "write c rejects -> Only_ocaml_ok" true
     (result = Wire_diff.Only_ocaml_ok "External write failed")
 
 let projection_codec =

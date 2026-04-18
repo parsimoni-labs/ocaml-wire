@@ -99,7 +99,7 @@ let generate_c oc =
   output_string oc (Wire_stubs.to_c_stubs structs);
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
-  pr "\n/* ── Timed C benchmark loops ── */\n\n";
+  pr "\n/* -- Timed C benchmark loops -- */\n\n";
   pr "#include \"bench_common.h\"\n\n";
   List.iter
     (fun s ->

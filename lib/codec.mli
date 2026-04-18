@@ -81,10 +81,10 @@ val get :
     [f] has an action, it fires on every read. [env] syncs output parameters
     after each action; fields without actions have zero overhead regardless of
     [env]. Does not check record-level where-clauses or other fields'
-    constraints — call {!validate} first on untrusted input. *)
+    constraints -- call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter. Does not check constraints or fire actions —
+(** Staged zero-copy field setter. Does not check constraints or fire actions --
     call {!validate} after a batch of writes to verify constraints still hold.
 *)
 
@@ -112,7 +112,7 @@ val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
 type bitfield
-(** A bitfield accessor — shift and mask for one field in a packed word. *)
+(** A bitfield accessor -- shift and mask for one field in a packed word. *)
 
 val bitfield : 'r t -> (int, 'r) field -> bitfield
 (** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
@@ -121,7 +121,7 @@ val bitfield : 'r t -> (int, 'r) field -> bitfield
 val load_word : bitfield -> (bytes -> int -> int) Staged.t
 (** [load_word bf] returns a staged word reader. Force once, then call the
     resulting function to read the packed base word. Fields sharing the same
-    base word return readers that read the same bytes — call once and pass the
+    base word return readers that read the same bytes -- call once and pass the
     result to multiple {!extract} calls. *)
 
 val extract : bitfield -> int -> int

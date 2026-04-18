@@ -82,7 +82,7 @@ let test_pretty_print () =
     "contains UINT16BE" true
     (contains ~sub:"UINT16BE" output)
 
-(* ── Codec definitions for 3D extraction tests ── *)
+(* -- Codec definitions for 3D extraction tests -- *)
 
 type inner = { tag : int; value : int }
 
@@ -202,7 +202,7 @@ let tm_like_codec ~ocf ~fecf =
         (Field.v "FECF" (optional (bool fecf) uint16be) $ fun r -> r.fecf);
       ]
 
-(* ── 3D extraction tests ── *)
+(* -- 3D extraction tests -- *)
 
 let test_3d_codec_embed () =
   (* Codec embed: field type should reference the sub-codec's struct name *)
@@ -300,7 +300,7 @@ let test_3d_tm_like () =
     "Packet type referenced" true
     (contains ~sub:"Packet" output)
 
-(* ── Bit-order projection tests ──
+(* -- Bit-order projection tests --
 
    Non-native (base, bit_order) combinations should still emit a valid 3D
    struct by reversing declaration order within the bit group and, if the
@@ -413,7 +413,7 @@ let test_3d_bitorder_native_noreorder () =
   Alcotest.(check bool) "x before y (no reorder)" true (ix < iy);
   Alcotest.(check bool) "no padding" false (contains ~sub:"_anon_" s)
 
-(* ── Variable-size schema projection ── *)
+(* -- Variable-size schema projection -- *)
 
 type dep_frame = { frame_length : int; data : string }
 
@@ -477,7 +477,7 @@ let test_3d_param_in_size () =
     (contains ~sub:"UINT16BE len" s);
   Alcotest.(check bool) "size uses len" true (contains ~sub:":byte-size len" s)
 
-(* ── Reserved word escaping ── *)
+(* -- Reserved word escaping -- *)
 
 let test_reserved_word_escaping () =
   let f_type = field "type" uint8 in

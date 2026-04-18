@@ -8,7 +8,7 @@
 
     Reporting is standardized: ns/op, alloc (words), ratio vs C, throughput. *)
 
-(* ── Timing primitives ── *)
+(* -- Timing primitives -- *)
 
 let time_ns n f =
   Gc.compact ();
@@ -28,7 +28,7 @@ let alloc_words n f =
   let after = (Gc.quick_stat ()).minor_words in
   (after -. before) /. float_of_int n
 
-(* ── Benchmark specification ── *)
+(* -- Benchmark specification -- *)
 
 type t = {
   label : string;
@@ -84,7 +84,7 @@ let pack arr ~size =
   Array.iteri (fun i b -> Bytes.blit b 0 buf (i * size) size) arr;
   (buf, n)
 
-(* ── Result ── *)
+(* -- Result -- *)
 
 type result = {
   c_ns : float option;
@@ -147,7 +147,7 @@ let run_one ~n t =
   let alloc = alloc_words n t.ocaml in
   { c_ns; ffi_ns; ocaml_ns; alloc }
 
-(* ── Table formatting ── *)
+(* -- Table formatting -- *)
 
 let ns_fmt_opt = function
   | None -> "-"

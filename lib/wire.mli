@@ -1,7 +1,7 @@
 (** Binary wire format descriptions.
 
-    A wire format is a sequence of typed {!Field}s — integers, bitfields,
-    enumerations, byte arrays — laid out at fixed bit offsets in a buffer. A
+    A wire format is a sequence of typed {!Field}s -- integers, bitfields,
+    enumerations, byte arrays -- laid out at fixed bit offsets in a buffer. A
     {!Codec} binds those fields to an OCaml record, giving you:
 
     - Zero-copy field access via staged getters and setters.
@@ -89,12 +89,12 @@ module Param : sig
   (** Formal parameters for codecs.
 
       A parameter lets a codec depend on a value that is not in the buffer. An
-      {e input} parameter is supplied by the caller before decoding — use it in
+      {e input} parameter is supplied by the caller before decoding -- use it in
       constraints or size expressions. An {e output} parameter is written by an
-      action during decoding — read it back afterwards to extract a computed
+      action during decoding -- read it back afterwards to extract a computed
       result.
 
-      Both kinds carry a wire type (uint8 … uint64, bool, enum) so the same
+      Both kinds carry a wire type (uint8 ... uint64, bool, enum) so the same
       definition can be projected to EverParse 3D.
 
       {[
@@ -178,7 +178,7 @@ module Action : sig
   val assign : ('a, Param.output) Param.t -> int expr -> stmt
   (** [assign out e] assigns expression [e] to the mutable output parameter
       [out]. Only output parameters (created with {!Param.output}) can be
-      assigned to — the type system prevents assigning to input parameters. *)
+      assigned to -- the type system prevents assigning to input parameters. *)
 
   val return_bool : bool expr -> stmt
   (** Boolean return: [true] continues, [false] fails validation. *)
@@ -301,14 +301,14 @@ module Expr : sig
   (** Truncate to unsigned 32-bit range (mask [0xFFFFFFFF]). *)
 
   val to_uint64 : int expr -> int expr
-  (** 3D codegen cast. At runtime this is the identity — OCaml [int] cannot
+  (** 3D codegen cast. At runtime this is the identity -- OCaml [int] cannot
       represent the full unsigned 64-bit range. Use only for 3D output where
       EverParse needs an explicit [(UINT64)] cast annotation. *)
 end
 
 (** {1 Fields}
 
-    A field is a named, typed piece of a wire layout — the building block for
+    A field is a named, typed piece of a wire layout -- the building block for
     everything else.
 
     Define each field once with {!Field.v}, then reuse it everywhere: bind it
@@ -322,7 +322,7 @@ end
       let f_data = Field.v "Data" (byte_slice ~size:(Field.ref f_length))
     ]}
 
-    Fields carry no buffer position — that comes from the {!Codec} they are
+    Fields carry no buffer position -- that comes from the {!Codec} they are
     bound into. The same field can appear in multiple codecs. *)
 
 module Field : sig
@@ -385,7 +385,7 @@ val uint64be : int64 typ
 *)
 
 val uint : ?endian:endian -> int expr -> int typ
-(** [uint size] is an unsigned integer of [size] bytes (1–7) with the given byte
+(** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
     order (default {!Big}). The size may be a dynamic expression for
     parameter-driven widths. *)
 
@@ -477,7 +477,7 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** [enum name cases base] validates that the decoded integer is one of the
-    named values. The result is still [int] — use {!variants} instead if you
+    named values. The result is still [int] -- use {!variants} instead if you
     want to decode to proper OCaml values. [enum] is mainly useful for 3D
     projection where the name and cases appear in the generated [.3d] file. *)
 
@@ -594,7 +594,8 @@ val encode_to_string : 'a typ -> 'a -> string
     an OCaml record type and provides:
 
     - {b Zero-copy field access}: {!Codec.get} and {!Codec.set} read and write
-      individual fields directly in a buffer — no intermediate record allocated.
+      individual fields directly in a buffer -- no intermediate record
+      allocated.
     - {b Full-record round-trip}: {!Codec.decode} and {!Codec.encode} convert
       between bytes and OCaml values.
     - {b Bitfield batch access}: {!Codec.load_word} reads a packed word once,
@@ -602,7 +603,7 @@ val encode_to_string : 'a typ -> 'a -> string
 
     All three modes derive from the same definition, so the layout is always
     consistent. {!Everparse.schema} projects the same codec to a verified C
-    parser — no separate description to maintain. *)
+    parser -- no separate description to maintain. *)
 
 module Codec : sig
   type 'r t
@@ -672,11 +673,11 @@ module Codec : sig
       every read. Pass [~env] to sync output parameters after each action.
       Fields without actions have zero overhead regardless of [~env].
 
-      Does not check [~where] clauses or other fields' constraints — call
+      Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
 
   val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-  (** Staged field writer. Does not check constraints or fire actions — call
+  (** Staged field writer. Does not check constraints or fire actions -- call
       {!validate} after a batch of writes to verify constraints still hold. *)
 
   val field_ref : ('a, 'r) field -> int expr
@@ -686,17 +687,17 @@ module Codec : sig
 
       For multiple bitfield fields sharing the same base word, {!load_word}
       reads the word once and {!extract} retrieves individual fields with pure
-      shift+mask — no redundant memory loads. *)
+      shift+mask -- no redundant memory loads. *)
 
   type bitfield
-  (** A bitfield accessor — shift and mask for one field in a packed word. *)
+  (** A bitfield accessor -- shift and mask for one field in a packed word. *)
 
   val bitfield : 'r t -> (int, 'r) field -> bitfield
   (** [bitfield codec field] returns a bitfield accessor. *)
 
   val load_word : bitfield -> (bytes -> int -> int) Staged.t
   (** Staged word reader. Force once, reuse for every read. Fields in the same
-      base word share the same underlying reader — call once and use {!extract}
+      base word share the same underlying reader -- call once and use {!extract}
       on the result for each field. *)
 
   val extract : bitfield -> int -> int
@@ -707,7 +708,7 @@ end
 (** {1 Nested Codec Combinators}
 
     These combinators extend the type language with structured sub-codecs,
-    optional fields, and repeated elements — for protocols like CCSDS TM frames
+    optional fields, and repeated elements -- for protocols like CCSDS TM frames
     where the layout depends on mission configuration. *)
 
 val codec : 'r Codec.t -> 'r typ
@@ -722,7 +723,7 @@ val optional : bool expr -> 'a typ -> 'a option typ
 val optional_or : bool expr -> default:'a -> 'a typ -> 'a typ
 (** [optional_or present ~default t] is a field that decodes to the inner value
     when [present] is true, or returns [default] when absent. No option wrapper
-    — zero allocation for the absent case. *)
+    -- zero allocation for the absent case. *)
 
 val repeat : size:int expr -> 'a typ -> 'a list typ
 (** [repeat ~size t] parses elements of type [t] repeatedly until [size] bytes

@@ -57,7 +57,7 @@ let test_no_constraint () =
   | Some _ -> Alcotest.fail "expected no constraint"
 
 (* ref on non-int fields: bool, mapped, uint64. The expression is always
-   Ref name — the type system no longer restricts the field's OCaml type. *)
+   Ref name -- the type system no longer restricts the field's OCaml type. *)
 
 let test_ref_bool_field () =
   let f = Field.v "Flag" (Types.bool Types.uint8) in

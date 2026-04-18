@@ -157,7 +157,7 @@ let centre label width =
 
 (* Build the bit-position ruler lines (RFC 791 style).
    Line 1: byte offsets at every 8th bit
-   Line 2: bit positions 0–9 repeating *)
+   Line 2: bit positions 0-9 repeating *)
 let ruler () =
   let bytes_line = Buffer.create 80 in
   let bits_line = Buffer.create 80 in

@@ -1,11 +1,11 @@
-; ── Shared benchmark framework ──
+; -- Shared benchmark framework --
 
 (library
  (name bench_lib)
  (modules bench_lib)
  (libraries unix fmt))
 
-; ── Optional C tier (select: c_stubs when available, else stubs returning None) ──
+; -- Optional C tier (select: c_stubs when available, else stubs returning None) --
 
 (library
  (name c_tier)
@@ -17,9 +17,9 @@
    (c_stubs -> c_tier.everparse.ml)
    (-> c_tier.none.ml))))
 
-; ── EverParse benchmark infrastructure ──
+; -- EverParse benchmark infrastructure --
 
-; Generator — pure OCaml, always builds
+; Generator -- pure OCaml, always builds
 
 (executable
  (name gen_stubs)
@@ -35,7 +35,7 @@
   bench_lib
   unix))
 
-; Generate c_stubs.ml (OCaml external declarations) — always
+; Generate c_stubs.ml (OCaml external declarations) -- always
 
 (rule
  (target c_stubs.ml)
@@ -45,7 +45,7 @@
    %{target}
    (run ./gen_stubs.exe --ml-only))))
 
-; Generate .3d files, run EverParse, produce C code — gated
+; Generate .3d files, run EverParse, produce C code -- gated
 
 (rule
  (enabled_if
@@ -57,13 +57,13 @@
  (action
   (run ./gen_stubs.exe schemas)))
 
-; OCaml stubs library — always builds (externals resolved at link time)
+; OCaml stubs library -- always builds (externals resolved at link time)
 
 (library
  (name c_stubs)
  (modules c_stubs))
 
-; C foreign stubs — gated (provides the C implementations for c_stubs externals)
+; C foreign stubs -- gated (provides the C implementations for c_stubs externals)
 
 (library
  (name c_stubs_c)

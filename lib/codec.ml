@@ -312,7 +312,7 @@ let rec compile_bool_expr (env : (string * (bytes -> int -> int)) list)
    used at every [decode]. Zero allocation per decode. *)
 type idx = string -> int
 
-(* Per-field compile context: field name→index mapping plus sizeof_this
+(* Per-field compile context: field name->index mapping plus sizeof_this
    and field_pos constants (known at seal time for each field). *)
 type compile_ctx = { idx : idx; sizeof_this : int; field_pos : int }
 
@@ -440,7 +440,7 @@ and compile_bool_arr (cc : compile_ctx) (e : bool expr) : int array -> bool =
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign writes to ph_cell (mutable param) and updates the array.
-   Var binds a local by extending the index — but since we can't grow the
+   Var binds a local by extending the index -- but since we can't grow the
    array, local vars in actions use ph_cell-style mutation or are inlined.
 
    Return true short-circuits remaining statements (the action succeeds).
@@ -476,7 +476,7 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
       in
       fun arr -> if fc arr then ft arr else fe arr
   | Var (name, e) -> (
-      (* Extend index for subsequent statements — but since Var only affects
+      (* Extend index for subsequent statements -- but since Var only affects
          later statements in the same block, we handle it at the block level *)
       let fe = compile_int_arr cc e in
       fun arr ->
@@ -510,7 +510,7 @@ type ('f, 'r) record =
       r_readers : ('full, 'f) readers;
       r_writers_rev : ('r -> bytes -> int -> unit) list;
       r_min_wire_size : int;
-          (* sum of all fixed-size fields — minimum buffer size *)
+          (* sum of all fixed-size fields -- minimum buffer size *)
       r_next_off : next_off; (* where the next field starts *)
       r_fields_rev : Types.field list;
       r_validators_rev :
@@ -586,7 +586,7 @@ let bind (f : 'a Field.t) get =
 
 let ( $ ) = bind
 
-(* Bitfield helpers — shared module for base operations, specialized closures
+(* Bitfield helpers -- shared module for base operations, specialized closures
    for performance-critical read/write dispatched at codec construction time. *)
 
 let bf_base_byte_size = Bitfield.byte_size
@@ -859,7 +859,7 @@ let elem_size_of : type a. a typ -> bytes -> int -> int =
       | Some n -> n
       | None -> failwith "elem_size_of: cannot determine element size")
 
-(* ── Compiled field: intermediate plan for one field's contribution ── *)
+(* -- Compiled field: intermediate plan for one field's contribution -- *)
 
 (* A [compiled_field] is the self-contained plan for appending one field to a
    record state. The per-type [compile_*] helpers build one; [apply_compiled]
@@ -868,7 +868,7 @@ type ('a, 'r) compiled_field = {
   raw_reader : bytes -> int -> 'a;
   raw_writer : 'r -> bytes -> int -> unit;
   extra_writers : ('r -> bytes -> int -> unit) list;
-      (* Writers that run strictly before [raw_writer] — e.g. a bf_clear that
+      (* Writers that run strictly before [raw_writer] -- e.g. a bf_clear that
          opens a new packed base word. *)
   field_access : field_access;
   size_delta : int; (* added to [r_min_wire_size] *)
@@ -905,7 +905,7 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
     lc_n_fields = r.r_n_fields;
   }
 
-(* ── Layout helpers shared by per-type plans ── *)
+(* -- Layout helpers shared by per-type plans -- *)
 
 let static_off_of (ctx : layout_ctx) : int option =
   match ctx.lc_next_off with Static_next n -> Some n | Dynamic_next _ -> None
@@ -1001,11 +1001,11 @@ let build_nested_readers ctx readers =
           (n, fun buf base -> reader buf (base + off_fn buf base)))
         readers
 
-(* ── Per-type [compile_field] helpers ── *)
+(* -- Per-type [compile_field] helpers -- *)
 
 (* Dispatch on the field's typ once, then delegate to the relevant per-type
    helper. Each helper builds the [compiled_field] for its case; neither the
-   helpers nor [compile_field] itself apply constraints or actions — that
+   helpers nor [compile_field] itself apply constraints or actions -- that
    happens in [apply_compiled]. *)
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
@@ -1490,7 +1490,7 @@ and compile_var_bytes : type a r.
     populate;
   }
 
-(* ── Apply a compiled plan to the record state ── *)
+(* -- Apply a compiled plan to the record state -- *)
 
 (* The single place that mutates the record accumulator: assemble constraint
    and action checkers, then fold the [compiled_field] into a new record
@@ -2069,7 +2069,7 @@ let field_readers t = t.t_field_readers
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 
-(* ── Bitfield batch access ── *)
+(* -- Bitfield batch access -- *)
 
 type bitfield = bf_info
 
@@ -2091,4 +2091,4 @@ let[@inline always] extract (bf : bitfield) word =
   let p = bf.bf_packed in
   (word lsr (p land 0xFF)) land (p lsr 8)
 
-(* ── Snapshot: batch bitfield access ── *)
+(* -- Snapshot: batch bitfield access -- *)

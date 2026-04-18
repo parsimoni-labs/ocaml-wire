@@ -90,7 +90,7 @@ let decl (t : ('a, 'k) t) : Types.param =
 let name t = t.Types.ph_name
 let expr t : int Types.expr = Types.Param_ref t
 
-(* ── Param.env ── *)
+(* -- Param.env -- *)
 
 type env = Types.param_env
 

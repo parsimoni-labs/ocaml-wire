@@ -103,7 +103,7 @@ and _ typ =
   | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
   | Uint_var : { size : int expr; endian : endian } -> int typ
-      (** Variable-width unsigned integer (1–7 bytes). *)
+      (** Variable-width unsigned integer (1-7 bytes). *)
   | Bits : {
       width : int;
       base : bitfield_base;
@@ -355,7 +355,7 @@ val uint64be : int64 typ
 (** 64-bit unsigned, big-endian. *)
 
 val uint : ?endian:endian -> int expr -> int typ
-(** [uint size] is an unsigned integer of [size] bytes (1–7). Default endian is
+(** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
     {!Big}. The size may be a dynamic expression for parameter-driven widths. *)
 
 val bf_uint8 : bitfield_base

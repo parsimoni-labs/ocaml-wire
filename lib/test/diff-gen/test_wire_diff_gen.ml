@@ -1,4 +1,4 @@
-(** Tests for Diff_gen — EverParse differential test generation. *)
+(** Tests for Diff_gen -- EverParse differential test generation. *)
 
 open Wire
 open Wire.Everparse.Raw
@@ -46,7 +46,7 @@ let has_everparse () =
 
 let test_generate_c_stubs () =
   (* generate_c_stubs reads EverParse-generated .h files, so it requires
-     EverParse to have been run first — skip when 3d.exe is unavailable *)
+     EverParse to have been run first -- skip when 3d.exe is unavailable *)
   if has_everparse () then begin
     let schema_dir = Filename.temp_dir "diff_gen_c_stubs_schema" "" in
     let outdir = Filename.temp_dir "diff_gen_c_stubs_out" "" in

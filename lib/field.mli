@@ -3,7 +3,7 @@
     Named fields ({!t}) carry a name, type, constraint, and action. They can be
     referenced in expressions ({!ref}) and bound into codecs with {!Codec.($)}.
 
-    Anonymous fields ({!anon}) are padding — they have a type but no name and
+    Anonymous fields ({!anon}) are padding -- they have a type but no name and
     cannot be referenced. The type system prevents misuse. *)
 
 type 'a t

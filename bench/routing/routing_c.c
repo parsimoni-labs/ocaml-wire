@@ -1,4 +1,4 @@
-/* APID routing — application logic with EverParse field extraction.
+/* APID routing -- application logic with EverParse field extraction.
 
    Uses EverParse-generated SpacePacketValidateSpacePacket to extract fields
    into a typed SpacePacketFields struct via the default plug. Application

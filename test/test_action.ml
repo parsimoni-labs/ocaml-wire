@@ -14,7 +14,7 @@ open Wire
 (* Record type for two-field codecs *)
 type xy = { x : int; y : int }
 
-(* ── Assign ── *)
+(* -- Assign -- *)
 
 let test_assign_propagates () =
   (* Field "x" is parsed, action assigns x to "out". After decode, out = x. *)
@@ -96,7 +96,7 @@ let test_assign_expr () =
   | Ok _ -> Alcotest.(check int) "out" 43 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Return ── *)
+(* -- Return -- *)
 
 let test_return_true () =
   let codec =
@@ -172,7 +172,7 @@ let test_return_bool_expr_fail () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Abort ── *)
+(* -- Abort -- *)
 
 let test_abort () =
   let codec =
@@ -188,7 +188,7 @@ let test_abort () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Var ── *)
+(* -- Var -- *)
 
 let test_var_local () =
   (* var tmp = x * 2; assign out = tmp; check out after decode *)
@@ -220,7 +220,7 @@ let test_var_local () =
   | Ok _ -> Alcotest.(check int) "out" 84 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── If ── *)
+(* -- If -- *)
 
 let test_if_true_branch () =
   (* if (x > 0) { out = 1 } => out should be 1 when x=42 *)
@@ -381,7 +381,7 @@ let test_if_nested () =
   | Ok _ -> Alcotest.(check int) "out" 1 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── On_act vs On_success ── *)
+(* -- On_act vs On_success -- *)
 
 let test_on_act () =
   (* on_act should execute identically to on_success *)
@@ -407,7 +407,7 @@ let test_on_act () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Multiple statements sequencing ── *)
+(* -- Multiple statements sequencing -- *)
 
 let test_stmt_sequencing () =
   (* var a = x; var b = a + 1; assign out = b * 2 *)
@@ -483,7 +483,7 @@ let test_abort_short_circuits () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-(* ── Empty action ── *)
+(* -- Empty action -- *)
 
 let test_empty_action () =
   let codec =
@@ -496,7 +496,7 @@ let test_empty_action () =
   | Ok _ -> ()
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Action on bitfield ── *)
+(* -- Action on bitfield -- *)
 
 let test_action_on_bitfield () =
   let out = Param.output "out" uint8 in
@@ -521,7 +521,7 @@ let test_action_on_bitfield () =
       Alcotest.(check bool) "out <= 15" true (out_val <= 15)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* ── Suite ── *)
+(* -- Suite -- *)
 
 let suite =
   ( "action",

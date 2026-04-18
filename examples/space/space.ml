@@ -21,7 +21,7 @@ let f_sp_apid = Field.v "APID" (bits ~width:11 U16be)
 let f_sp_seq_count = Field.v "SeqCount" (bits ~width:14 U16be)
 let f_sp_data_len = Field.v "DataLength" uint16be
 
-(* Bound fields — created before the codec so they ARE the codec's fields *)
+(* Bound fields -- created before the codec so they ARE the codec's fields *)
 let bf_sp_apid = Codec.(f_sp_apid $ fun p -> p.sp_apid)
 let bf_sp_seq_count = Codec.(f_sp_seq_count $ fun p -> p.sp_seq_count)
 let bf_sp_data_len = Codec.(f_sp_data_len $ fun p -> p.sp_data_len)
@@ -136,7 +136,7 @@ let cw_wait = Field.v "Wait" (bits ~width:1 U32be)
 let cw_retransmit = Field.v "Retransmit" (bits ~width:1 U32be)
 let cw_report = Field.v "ReportValue" (bits ~width:8 U32be)
 
-(* Bound fields — created before the codec so they ARE the codec's fields *)
+(* Bound fields -- created before the codec so they ARE the codec's fields *)
 let bf_cw_lockout = Codec.(cw_lockout $ fun c -> c.cw_lockout)
 let bf_cw_wait = Codec.(cw_wait $ fun c -> c.cw_wait)
 let bf_cw_retransmit = Codec.(cw_retransmit $ fun c -> c.cw_retransmit)
@@ -232,7 +232,7 @@ type tm_frame = {
 let f_tf_vcid = Field.v "VCID" (bits ~width:3 U16be)
 let f_tf_first_hdr = Field.v "FirstHdrPtr" (bits ~width:11 U16be)
 
-(* Bound fields — created before the codec so they ARE the codec's fields *)
+(* Bound fields -- created before the codec so they ARE the codec's fields *)
 let bf_tf_vcid = Codec.(f_tf_vcid $ fun f -> f.tf_vcid)
 let bf_tf_first_hdr = Codec.(f_tf_first_hdr $ fun f -> f.tf_first_hdr)
 
@@ -349,7 +349,7 @@ type inner_cmd = { cmd_id : int; cmd_seq : int; cmd_flags : int }
 let f_cmd_id = Field.v "CmdId" uint8
 let f_cmd_seq = Field.v "Seq" uint16be
 
-(* Bound fields — created before the codec so they ARE the codec's fields *)
+(* Bound fields -- created before the codec so they ARE the codec's fields *)
 let bf_cmd_id = Codec.(f_cmd_id $ fun c -> c.cmd_id)
 let bf_cmd_seq = Codec.(f_cmd_seq $ fun c -> c.cmd_seq)
 
@@ -371,7 +371,7 @@ type outer_hdr = {
 let f_oh_length = Field.v "Length" uint16be
 let f_oh_payload = Field.v "Payload" (byte_slice ~size:(Field.ref f_oh_length))
 
-(* Bound fields — created before the codec so they ARE the codec's fields *)
+(* Bound fields -- created before the codec so they ARE the codec's fields *)
 let bf_oh_length = Codec.(f_oh_length $ fun h -> h.oh_length)
 let bf_oh_payload = Codec.(f_oh_payload $ fun h -> h.oh_payload)
 
