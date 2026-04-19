@@ -80,6 +80,78 @@ let test_generate_c () =
       "ExternalTypedefs.h generated" true (Sys.file_exists ext_path)
   end
 
+(* End-to-end compile+run. Generates C for a schema, invokes the same
+   cc command [generate_dune] emits, runs the resulting binary. This is
+   the one test that catches every kind of name mismatch between what
+   wire.3d emits and what EverParse actually produces: filenames in
+   [dune.inc], validator function names in [test.c], setter names in
+   [_Fields.c], struct types, [#include]s. If any one of them is off,
+   cc/ld fails and the test fails with the actual compiler error.
+   Parameterised over the schema so tricky names (underscores, all-
+   caps prefixes, mixed case) each exercise the pipeline end-to-end. *)
+let compile_and_run ~name codec =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let tmpdir = Filename.temp_dir ("wire_3d_e2e_" ^ name) "" in
+    let schema = Everparse.schema codec in
+    Wire_3d.generate_3d ~outdir:tmpdir [ schema ];
+    Wire_3d.generate_c ~outdir:tmpdir [ schema ];
+    let base = String.capitalize_ascii schema.Everparse.name in
+    let cmd =
+      Fmt.str
+        "cd %s && cc -std=c99 -Wall -Wextra -Werror -Wpedantic \
+         -Wstrict-prototypes -Wmissing-prototypes -Wshadow -Wcast-qual -o \
+         test_bin test.c %s.c %s_Fields.c 2>&1 && ./test_bin"
+        tmpdir base base
+    in
+    let ic = Unix.open_process_in cmd in
+    let output = In_channel.input_all ic in
+    let status = Unix.close_process_in ic in
+    ignore (Sys.command (Fmt.str "rm -rf %s" tmpdir));
+    match status with
+    | Unix.WEXITED 0 -> ()
+    | Unix.WEXITED n ->
+        Alcotest.failf "%s: compile/run failed with exit %d:\n%s" name n output
+    | _ ->
+        Alcotest.failf "%s: compile/run terminated abnormally:\n%s" name output
+  end
+
+(* Schemas exercising every name-normalization edge case we know about. *)
+let e2e_simple_codec =
+  let open Wire in
+  let f = Field.v "x" uint8 in
+  Codec.v "Demo" (fun x -> x) [ Codec.( $ ) f (fun x -> x) ]
+
+let e2e_allcaps_codec =
+  let open Wire in
+  let f = Field.v "x" uint8 in
+  Codec.v "CLCW" (fun x -> x) [ Codec.( $ ) f (fun x -> x) ]
+
+let e2e_tm_codec =
+  let open Wire in
+  let f = Field.v "version" (bits ~width:4 U8) in
+  Codec.v "TMFrame" (fun v -> v) [ Codec.( $ ) f (fun v -> v) ]
+
+let e2e_snake_codec =
+  let open Wire in
+  let fv = Field.v "v" uint8 in
+  let fl = Field.v "len" uint16be in
+  Codec.v "rpmsg_endpoint_info"
+    (fun v l -> (v, l))
+    [ Codec.( $ ) fv fst; Codec.( $ ) fl snd ]
+
+let e2e_mixed_codec =
+  let open Wire in
+  let fh = Field.v "h" uint8 in
+  Codec.v "EP_Header" (fun h -> h) [ Codec.( $ ) fh (fun h -> h) ]
+
+let test_e2e_compile_run () =
+  compile_and_run ~name:"Demo" e2e_simple_codec;
+  compile_and_run ~name:"CLCW" e2e_allcaps_codec;
+  compile_and_run ~name:"TMFrame" e2e_tm_codec;
+  compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
+  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.schema_of_struct simple_struct in
   Alcotest.(check bool)
@@ -217,6 +289,45 @@ let test_projection_sizes () =
   (* 4+4 = 8 bits, one U8, Where wrapping the first field. *)
   check_size ~name:"WhereWrapped" ~expected:1 where_wrapped_codec
 
+(* Filenames must match what EverParse actually produces from the [.3d]
+   (which wire writes as [String.capitalize_ascii name ^ ".3d"]). The
+   C identifier inside is [everparse_name name]: strip underscores,
+   CamelCase segments. Verify both together for a lowercase-underscore
+   schema name like [rpmsg_endpoint_info] that exercises the split. *)
+let test_projection_filenames () =
+  let s =
+    Everparse.Raw.struct_ "rpmsg_endpoint_info"
+      [ Everparse.Raw.field "v" uint8; Everparse.Raw.field "id" uint16be ]
+  in
+  let schema = Everparse.schema_of_struct s in
+  let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
+  Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
+  let dune_inc =
+    let ic = open_in (Filename.concat tmpdir "dune.inc") in
+    let n = in_channel_length ic in
+    let buf = Bytes.create n in
+    really_input ic buf 0 n;
+    close_in ic;
+    Bytes.unsafe_to_string buf
+  in
+  ignore (Sys.command (Fmt.str "rm -rf %s" tmpdir));
+  let contains_exact sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
+  Alcotest.(check bool)
+    ".3d uses String.capitalize_ascii name" true
+    (contains_exact "Rpmsg_endpoint_info.3d");
+  Alcotest.(check bool)
+    ".h uses String.capitalize_ascii name" true
+    (contains_exact "Rpmsg_endpoint_info.h");
+  Alcotest.(check bool)
+    "Wrapper.c uses String.capitalize_ascii name" true
+    (contains_exact "Rpmsg_endpoint_infoWrapper.c");
+  Alcotest.(check bool)
+    "_Fields.c uses String.capitalize_ascii name" true
+    (contains_exact "Rpmsg_endpoint_info_Fields.c");
+  Alcotest.(check bool)
+    "raw schema name not used as filename" false
+    (contains_exact "rpmsg_endpoint_info.h")
+
 let suite =
   ( "wire_3d",
     [
@@ -230,4 +341,8 @@ let suite =
       Alcotest.test_case "main exists" `Quick test_main_exists;
       Alcotest.test_case "projection: wire_size matches Codec" `Quick
         test_projection_sizes;
+      Alcotest.test_case "projection: filenames match EverParse output" `Quick
+        test_projection_filenames;
+      Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
+        test_e2e_compile_run;
     ] )

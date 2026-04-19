@@ -33,6 +33,11 @@ val everparse_name : string -> string
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules. *)
 
+val generate_dune :
+  outdir:string -> package:string -> Wire.Everparse.t list -> unit
+(** [generate_dune ~outdir ~package schemas] writes [dune.inc] listing the
+    build, runtest, and install rules for the generated C artifacts. *)
+
 val run_everparse :
   ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [run_everparse ?quiet ~outdir schemas] invokes EverParse on [.3d] files in
