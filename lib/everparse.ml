@@ -180,21 +180,33 @@ let collapse_constraints_to_last group =
    are stamped before reordering, so WireSet callbacks still write into the
    original (wire-declaration) slots -- the stub generator never sees the
    reordered struct. *)
+(* Extract bitfield info through any number of [Map]/[Enum]/[Where] wrappers.
+   [bit (bits ~width:1 U8)] is [Map { inner = Bits _ }] at the outer level;
+   without unwrapping, grouping logic would treat it as a non-bitfield and
+   break apart consecutive bit groups, producing wrong .3d layouts. *)
+let rec unwrap_bits : type a.
+    a Types.typ -> (Types.bitfield_base * Types.bit_order * int) option =
+  function
+  | Types.Bits { base; bit_order; width } -> Some (base, bit_order, width)
+  | Types.Map { inner; _ } -> unwrap_bits inner
+  | Types.Enum { base; _ } -> unwrap_bits base
+  | Types.Where { inner; _ } -> unwrap_bits inner
+  | _ -> None
+
 let reorder_bit_groups_for_3d fields =
-  let is_same_bit_group base bit_order = function
-    | Types.Field
-        { field_typ = Types.Bits { base = b2; bit_order = bo2; _ }; _ } ->
-        b2 = base && bo2 = bit_order
-    | _ -> false
+  let is_same_bit_group base bit_order (Types.Field f) =
+    match unwrap_bits f.field_typ with
+    | Some (b2, bo2, _) -> b2 = base && bo2 = bit_order
+    | None -> false
   in
-  let bit_width = function
-    | Types.Field { field_typ = Types.Bits { width; _ }; _ } -> width
-    | _ -> 0
+  let bit_width (Types.Field f) =
+    match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
   in
   let rec go acc = function
     | [] -> List.rev acc
-    | (Types.Field { field_typ = Types.Bits { base; bit_order; _ }; _ } as f0)
-      :: rest ->
+    | (Types.Field f as f0) :: rest
+      when Option.is_some (unwrap_bits f.field_typ) ->
+        let base, bit_order, _ = Option.get (unwrap_bits f.field_typ) in
         let total = Bitfield.total_bits base in
         let native = Bitfield.native_bit_order base in
         (* Greedy: collect consecutive Bits with the same (base, bit_order)
@@ -297,16 +309,44 @@ let with_output (s : Types.struct_) : Types.decl list =
   let extern_decls = collect_extern_setters s.name ctx_struct u32 s.fields in
   [ ctx_decl ] @ extern_decls @ [ parse_decl ]
 
+(* Byte size of a struct after bitfield coalescing, mirroring Codec.compile_bits'
+   logic: consecutive same-base, same-bit_order bitfields pack into one base
+   word if their widths sum within the word; they roll over to a new base word
+   otherwise. Matches what EverParse's validator actually consumes. Returns
+   [None] for schemas with variable-size fields. *)
+let coalesced_wire_size fields =
+  let exception Bail in
+  let close_bit_group total = function
+    | None -> total
+    | Some base -> total + Bitfield.byte_size base
+  in
+  try
+    let total, open_base, _, _ =
+      List.fold_left
+        (fun (total, open_base, bits_used, bit_order) (Types.Field f) ->
+          match unwrap_bits f.field_typ with
+          | Some (base, order, width) -> (
+              match open_base with
+              | Some b
+                when b = base && bit_order = Some order
+                     && bits_used + width <= Bitfield.total_bits base ->
+                  (total, open_base, bits_used + width, bit_order)
+              | _ ->
+                  let total' = close_bit_group total open_base in
+                  (total', Some base, width, Some order))
+          | None -> (
+              let total' = close_bit_group total open_base in
+              match Types.field_wire_size f.field_typ with
+              | Some n -> (total' + n, None, 0, None)
+              | None -> raise Bail))
+        (0, None, 0, None) fields
+    in
+    Some (close_bit_group total open_base)
+  with Bail -> None
+
 let schema_of_struct (s : Types.struct_) : t =
   let name = Types.struct_name s in
-  let wire_size =
-    List.fold_left
-      (fun acc (Types.Field f) ->
-        match (acc, Types.field_wire_size f.field_typ) with
-        | Some a, Some b -> Some (a + b)
-        | _ -> None)
-      (Some 0) s.fields
-  in
+  let wire_size = coalesced_wire_size s.fields in
   let decls = with_output s in
   let m = Types.module_ decls in
   { name; module_ = m; wire_size; source = Some s }
