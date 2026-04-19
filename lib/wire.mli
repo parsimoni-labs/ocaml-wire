@@ -334,8 +334,17 @@ module Field : sig
 
   type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
-  val v : string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> 'a t
-  (** [v name typ] creates a named field. *)
+  val v :
+    string ->
+    ?constraint_:bool expr ->
+    ?self_constraint:(int expr -> bool expr) ->
+    ?action:Action.t ->
+    'a typ ->
+    'a t
+  (** [v name typ] creates a named field. [?self_constraint] receives the
+      field's own ref and returns a constraint over it; useful for proving a
+      later size-expression safe (e.g. [self >= int 7] when a later field uses
+      [byte_slice ~size:(ref len - int 7)]). *)
 
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)

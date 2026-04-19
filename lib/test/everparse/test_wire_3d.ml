@@ -145,12 +145,31 @@ let e2e_mixed_codec =
   let fh = Field.v "h" uint8 in
   Codec.v "EP_Header" (fun h -> h) [ Codec.( $ ) fh (fun h -> h) ]
 
+(* Proximity1-style: variable-length data whose size is expressed as
+   [length - header]. EverParse's SMT needs a constraint on [length]
+   to prove the subtraction doesn't underflow, or verification of the
+   generated .fst fails. [?self_constraint] on the length field emits
+   that constraint inline. *)
+let e2e_underflow_codec =
+  let open Wire in
+  let header_size = 7 in
+  let f_len =
+    Field.v "Length" uint16be ~self_constraint:(fun self ->
+        Expr.(self >= int header_size))
+  in
+  let f_data =
+    Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int header_size))
+  in
+  let open Codec in
+  v "UnderflowCheck" (fun len data -> (len, data)) [ f_len $ fst; f_data $ snd ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
-  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+  compile_and_run ~name:"EP_Header" e2e_mixed_codec;
+  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
 
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.schema_of_struct simple_struct in
