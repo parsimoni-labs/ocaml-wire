@@ -26,13 +26,25 @@ let everparse_name name =
   String.split_on_char '_' name
   |> List.map normalize_segment |> String.concat ""
 
+(* EverParse derives the C output filename from the [.3d] filename, which
+   [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
+   All filenames wire.3d emits or references must go through the same
+   capitalization so dune targets match the files EverParse actually
+   produces. Identifiers inside C code -- the [<Name>Set*] setters and the
+   typed struct name -- use [everparse_name], which also strips underscores
+   and CamelCases segments ([rpmsg_endpoint_info] -> [RpmsgEndpointInfo]).
+   Keep the two concerns separate: [file_base] for filenames, [c_ident] for
+   C identifiers. *)
+let file_base s = String.capitalize_ascii s.name
+let c_ident s = everparse_name s.name
+
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
    uppercase runs get lowercased, ...). Rather than re-implement EverParse's
    rule and drift from it over time, we read the normalized names straight
    out of the [_ExternalAPI.h] file EverParse has just generated. *)
 let read_extern_names ~outdir s =
-  let path = Filename.concat outdir (s.name ^ "_ExternalAPI.h") in
+  let path = Filename.concat outdir (file_base s ^ "_ExternalAPI.h") in
   let ic = open_in path in
   let names = ref [] in
   (try
@@ -58,6 +70,35 @@ let read_extern_names ~outdir s =
    with End_of_file -> ());
   close_in ic;
   List.rev !names
+
+(* EverParse's top-level validator function follows its own normalization
+   rule (different from extern callbacks: it preserves underscores when the
+   name doesn't start with 2+ uppercase, strips them when it does). Rather
+   than duplicate EverParse's logic, extract the actual name from the
+   generated [<Name>.h]: [uint64_t <Name>Validate<Name>(...)]. *)
+let read_validate_name ~outdir s =
+  let path = Filename.concat outdir (file_base s ^ ".h") in
+  let ic = open_in path in
+  let found = ref None in
+  (try
+     while !found = None do
+       let line = input_line ic in
+       let line = String.trim line in
+       let needle = "Validate" in
+       match String.index_opt line 'V' with
+       | Some i
+         when i > 0
+              && String.length line >= i + String.length needle
+              && String.sub line i (String.length needle) = needle ->
+           (* the prefix before "Validate" is the base name *)
+           found := Some (String.sub line 0 i)
+       | _ -> ()
+     done
+   with End_of_file -> ());
+  close_in ic;
+  match !found with
+  | Some n -> n
+  | None -> Fmt.failwith "could not find Validate function name in %s" path
 
 let write_3d = Wire.Everparse.write_3d
 
@@ -109,7 +150,9 @@ let write_external_typedefs ~outdir schemas =
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
-        let path = Filename.concat outdir (s.name ^ "_ExternalTypedefs.h") in
+        let path =
+          Filename.concat outdir (file_base s ^ "_ExternalTypedefs.h")
+        in
         let oc = open_out path in
         Fmt.pf
           (Format.formatter_of_out_channel oc)
@@ -117,7 +160,7 @@ let write_external_typedefs ~outdir schemas =
            #define WIRECTX_DEFINED@\n\
            typedef struct %sFields WIRECTX;@\n\
            #endif@\n"
-          s.name;
+          (c_ident s);
         close_out oc
       end)
     schemas
@@ -126,16 +169,18 @@ let write_external_typedefs ~outdir schemas =
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
-  let path = Filename.concat outdir (s.name ^ "_Fields.h") in
+  let base = file_base s in
+  let ident = c_ident s in
+  let path = Filename.concat outdir (base ^ "_Fields.h") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
   let guard =
-    String.uppercase_ascii s.name ^ "_FIELDS_H" |> fun g ->
+    String.uppercase_ascii ident ^ "_FIELDS_H" |> fun g ->
     String.map (fun c -> if c = '-' then '_' else c) g
   in
   let prefix =
-    String.uppercase_ascii s.name |> fun p ->
+    String.uppercase_ascii ident |> fun p ->
     String.map (fun c -> if c = '-' then '_' else c) p
   in
   pr "#ifndef %s@\n" guard;
@@ -152,13 +197,13 @@ let write_fields_header ~outdir s =
   if fields <> [] then pr "@\n";
   pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
-    s.name;
-  pr "typedef struct %sFields {@\n" s.name;
+    ident;
+  pr "typedef struct %sFields {@\n" ident;
   List.iter
     (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.pf_c_type f.pf_name)
     fields;
   if fields = [] then pr "  int _unused;@\n";
-  pr "} %sFields;@\n" s.name;
+  pr "} %sFields;@\n" ident;
   pr "#endif@\n";
   Format.pp_print_flush ppf ();
   close_out oc
@@ -166,20 +211,22 @@ let write_fields_header ~outdir s =
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
   let setters = Wire.Everparse.plug_setters s in
+  let base = file_base s in
+  let ident = c_ident s in
   (* EverParse renames some setter symbols when emitting [.c] (for example,
      uppercase runs after a digit are lowercased). Read the actual symbol
      names from the just-generated [_ExternalAPI.h] rather than re-deriving
      them. Order matches the declaration order of the extern functions,
      which matches [plug_setters]. *)
   let physical_names = read_extern_names ~outdir s in
-  let path = Filename.concat outdir (s.name ^ "_Fields.c") in
+  let path = Filename.concat outdir (base ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
   pr "#include <stdint.h>@\n";
-  pr "#include \"%s_Fields.h\"@\n" s.name;
-  pr "#include \"%s_ExternalTypedefs.h\"@\n" s.name;
-  pr "#include \"%s_ExternalAPI.h\"@\n@\n" s.name;
+  pr "#include \"%s_Fields.h\"@\n" base;
+  pr "#include \"%s_ExternalTypedefs.h\"@\n" base;
+  pr "#include \"%s_ExternalAPI.h\"@\n@\n" base;
   (* Cast [WIRECTX *] to the schema's concrete struct type. In a translation
      unit that includes multiple schemas' [_Fields.c] files, only the first
      [_ExternalTypedefs.h] defines [WIRECTX]; subsequent headers are skipped
@@ -188,7 +235,7 @@ let write_fields_impl ~outdir s =
   List.iter2
     (fun (logical, val_c_type) physical ->
       pr "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" physical val_c_type;
-      pr "  %sFields *f = (%sFields *) ctx;@\n" s.name s.name;
+      pr "  %sFields *f = (%sFields *) ctx;@\n" ident ident;
       pr "  switch (idx) {@\n";
       List.iter
         (fun f ->
@@ -221,13 +268,14 @@ let wire_ctx_files schemas =
   List.concat_map
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then
+        let base = file_base s in
         [
-          s.name ^ "_ExternalTypedefs.h";
-          s.name ^ "_ExternalAPI.h";
-          s.name ^ "Wrapper.c";
-          s.name ^ "Wrapper.h";
-          s.name ^ "_Fields.h";
-          s.name ^ "_Fields.c";
+          base ^ "_ExternalTypedefs.h";
+          base ^ "_ExternalAPI.h";
+          base ^ "Wrapper.c";
+          base ^ "Wrapper.h";
+          base ^ "_Fields.h";
+          base ^ "_Fields.c";
         ]
       else [])
     schemas
@@ -235,7 +283,7 @@ let wire_ctx_files schemas =
 let fields_c_files schemas =
   List.filter_map
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then Some (s.name ^ "_Fields.c")
+      if Wire.Everparse.uses_wire_ctx s then Some (file_base s ^ "_Fields.c")
       else None)
     schemas
 
@@ -305,9 +353,17 @@ let emit_random_checks ppf ~ep ~ctx_arg wire_size =
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n"
 
-let emit_schema_test ppf s wire_size =
+let emit_schema_test ?outdir ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  let ep = everparse_name s.name in
+  (* Read the validator name straight out of EverParse's generated [.h]
+     -- the one authoritative source. EverParse applies its own naming
+     rules (different for the top-level Validate function vs. the extern
+     callbacks); any attempt to re-implement them here has drifted before. *)
+  let ep =
+    match outdir with
+    | Some dir -> read_validate_name ~outdir:dir s
+    | None -> file_base s
+  in
   let lower = String.lowercase_ascii s.name in
   let uses_ctx = Wire.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
@@ -316,7 +372,7 @@ let emit_schema_test ppf s wire_size =
   pr "    int pass = 0, fail = 0;\n";
   pr "    uint8_t buf[%d];\n" wire_size;
   pr "    uint64_t r;\n";
-  if uses_ctx then pr "    %sFields ctx = {0};\n" s.name;
+  if uses_ctx then pr "    %sFields ctx = {0};\n" (c_ident s);
   pr "\n";
   pr "    memset(buf, 0, %d);\n" wire_size;
   emit_sanity_check ppf ~name:s.name ~ep ~ctx_arg wire_size;
@@ -348,9 +404,10 @@ let generate_test ~outdir schemas =
   in
   List.iter
     (fun (s, _) ->
-      pr "#include \"%s.h\"\n" s.name;
+      let base = file_base s in
+      pr "#include \"%s.h\"\n" base;
       if Wire.Everparse.uses_wire_ctx s then
-        pr "#include \"%s_Fields.h\"\n" s.name)
+        pr "#include \"%s_Fields.h\"\n" base)
     fixed_schemas;
   pr "\nstatic int error_count;\n\n";
   pr "static void counting_error_handler(\n";
@@ -365,7 +422,7 @@ let generate_test ~outdir schemas =
   pr "} while(0)\n\n";
   pr "int main(void) {\n";
   pr "  int failures = 0;\n";
-  List.iter (fun (s, ws) -> emit_schema_test ppf s ws) fixed_schemas;
+  List.iter (fun (s, ws) -> emit_schema_test ~outdir ppf s ws) fixed_schemas;
   pr "\n  if (failures == 0)\n";
   pr "    printf(\"All tests passed.\\n\");\n";
   pr "  else\n";
@@ -445,7 +502,7 @@ let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files =
 let generate_dune ~outdir ~package schemas =
   let oc = open_out (Filename.concat outdir "dune.inc") in
   let ppf = Format.formatter_of_out_channel oc in
-  let names = List.map (fun s -> s.name) schemas in
+  let names = List.map file_base schemas in
   let c_files = List.concat_map (fun n -> [ n ^ ".h"; n ^ ".c" ]) names in
   let ctx_files = wire_ctx_files schemas in
   let fields_srcs = fields_c_files schemas in
