@@ -4,16 +4,27 @@ open Wire.Everparse
 
 let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
 
-let everparse_name name =
-  let len = String.length name in
+(* Apply EverParse's normalization to a single identifier segment (no
+   underscores): if the segment begins with two or more uppercase letters,
+   lowercase the whole segment and capitalize the first letter ([SSID ->
+   Ssid], [TMFrame -> Tmframe]); otherwise leave it alone. *)
+let normalize_segment seg =
+  let len = String.length seg in
   let rec count_upper i =
-    if i < len && is_upper name.[i] then count_upper (i + 1) else i
+    if i < len && is_upper seg.[i] then count_upper (i + 1) else i
   in
   if len > 0 && count_upper 0 >= 2 then
     String.init len (fun i ->
-        let c = Char.lowercase_ascii name.[i] in
+        let c = Char.lowercase_ascii seg.[i] in
         if i = 0 then Char.uppercase_ascii c else c)
-  else name
+  else seg
+
+(* EverParse strips underscores when generating C identifiers and
+   CamelCases each segment. [EP_Header -> EpHeader],
+   [MC_Status_Reply -> McStatusReply], [SSID -> Ssid]. *)
+let everparse_name name =
+  String.split_on_char '_' name
+  |> List.map normalize_segment |> String.concat ""
 
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
@@ -244,25 +255,27 @@ let run_everparse ?(quiet = true) ~outdir schemas =
     schemas;
   copy_everparse_endianness ~outdir
 
-let emit_schema_test ppf s wire_size =
+let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  let ep = everparse_name s.name in
-  let lower = String.lowercase_ascii s.name in
-  let uses_ctx = Wire.Everparse.uses_wire_ctx s in
-  let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
-  pr "\n  /* %s (%d bytes) */\n" s.name wire_size;
-  pr "  {\n";
-  pr "    int pass = 0, fail = 0;\n";
-  pr "    uint8_t buf[%d];\n" wire_size;
-  pr "    uint64_t r;\n";
-  if uses_ctx then pr "    %sFields ctx = {0};\n" s.name;
-  pr "\n";
-  pr "    memset(buf, 0, %d);\n" wire_size;
+  (* Sanity: the OCaml codec's wire_size must match what the EverParse
+     validator consumes. A mismatch means the .3d projection of the codec
+     packs to a different size than the codec declares -- almost always a
+     bug in the codec's bitfield declarations. Later checks are meaningless
+     if this fails, so abort the whole test binary with a clear message. *)
   pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
     ctx_arg wire_size;
-  pr "    CHECK(\"zero buffer validates\", EverParseIsSuccess(r));\n";
-  pr "    CHECK(\"position advanced to %d\", r == %d);\n" wire_size wire_size;
-  pr "\n";
+  pr "    if (!EverParseIsSuccess(r) || r != %d) {\n" wire_size;
+  pr "      fprintf(stderr,\n";
+  pr "        \"FATAL: %s wire_size mismatch -- codec declared %d bytes, \"\n"
+    name wire_size;
+  pr "        \"EverParse validator returned %%llu. Fix the OCaml codec's \"\n";
+  pr "        \"wire_size or the .3d projection.\\n\",\n";
+  pr "        (unsigned long long) r);\n";
+  pr "      return 2;\n";
+  pr "    }\n"
+
+let emit_truncation_checks ppf ~ep ~ctx_arg wire_size =
+  let pr fmt = Fmt.pf ppf fmt in
   pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
     ctx_arg (wire_size * 2);
   pr "    CHECK(\"larger buffer validates\", EverParseIsSuccess(r));\n";
@@ -278,8 +291,10 @@ let emit_schema_test ppf s wire_size =
   pr "\n";
   pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, 0, 0);\n" ep ep
     ctx_arg;
-  pr "    CHECK(\"empty input fails\", EverParseIsError(r));\n";
-  pr "\n";
+  pr "    CHECK(\"empty input fails\", EverParseIsError(r));\n"
+
+let emit_random_checks ppf ~ep ~ctx_arg wire_size =
+  let pr fmt = Fmt.pf ppf fmt in
   pr "    srand(42);\n";
   pr "    for (int i = 0; i < 1000; i++) {\n";
   pr "      for (int j = 0; j < %d; j++)\n" wire_size;
@@ -288,7 +303,29 @@ let emit_schema_test ppf s wire_size =
     ep ctx_arg wire_size;
   pr "      CHECK(\"random buffer validates\", EverParseIsSuccess(r));\n";
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
-  pr "    }\n";
+  pr "    }\n"
+
+let emit_schema_test ppf s wire_size =
+  let pr fmt = Fmt.pf ppf fmt in
+  let ep = everparse_name s.name in
+  let lower = String.lowercase_ascii s.name in
+  let uses_ctx = Wire.Everparse.uses_wire_ctx s in
+  let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
+  pr "\n  /* %s (%d bytes) */\n" s.name wire_size;
+  pr "  {\n";
+  pr "    int pass = 0, fail = 0;\n";
+  pr "    uint8_t buf[%d];\n" wire_size;
+  pr "    uint64_t r;\n";
+  if uses_ctx then pr "    %sFields ctx = {0};\n" s.name;
+  pr "\n";
+  pr "    memset(buf, 0, %d);\n" wire_size;
+  emit_sanity_check ppf ~name:s.name ~ep ~ctx_arg wire_size;
+  pr "    CHECK(\"zero buffer validates\", EverParseIsSuccess(r));\n";
+  pr "    CHECK(\"position advanced to %d\", r == %d);\n" wire_size wire_size;
+  pr "\n";
+  emit_truncation_checks ppf ~ep ~ctx_arg wire_size;
+  pr "\n";
+  emit_random_checks ppf ~ep ~ctx_arg wire_size;
   pr "\n";
   if uses_ctx then pr "    (void) ctx;\n";
   pr "    printf(\"%s: %%d passed, %%d failed\\n\", pass, fail);\n" lower;
