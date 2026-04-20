@@ -8,7 +8,16 @@ type 'a t = {
 type 'a anon = { anon_typ : 'a Types.typ }
 
 let pp ppf f = Fmt.pf ppf "%s" f.name
-let v name ?constraint_ ?action typ = { name; typ; constraint_; action }
+
+let v name ?constraint_ ?self_constraint ?action typ =
+  let constraint_ =
+    match (constraint_, self_constraint) with
+    | c, None -> c
+    | None, Some f -> Some (f (Types.Ref name))
+    | Some c, Some f -> Some (Types.And (c, f (Types.Ref name)))
+  in
+  { name; typ; constraint_; action }
+
 let anon typ = { anon_typ = typ }
 let ref f = Types.Ref f.name
 let name f = f.name

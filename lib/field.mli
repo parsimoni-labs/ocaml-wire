@@ -17,10 +17,26 @@ type 'a anon
 val v :
   string ->
   ?constraint_:bool Types.expr ->
+  ?self_constraint:(int Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   'a Types.typ ->
   'a t
-(** [v name typ] creates a named field. *)
+(** [v name typ] creates a named field.
+
+    [?self_constraint] receives a reference to the field being declared and
+    returns a constraint over it; the typical use is to prove a later
+    size-expression safe, e.g.:
+
+    {[
+      let f_len =
+        Field.v "Length" uint16be ~self_constraint:(fun self ->
+            Expr.(self >= int 7))
+    ]}
+
+    projects to [UINT16BE Length {{ Length >= 7 }}], which EverParse's SMT can
+    then use to discharge [byte-size (Length - 7)] on a later field. If both
+    [?constraint_] and [?self_constraint] are given, the two are combined with
+    [And]. *)
 
 val anon : 'a Types.typ -> 'a anon
 (** [anon typ] creates an anonymous (padding) field. *)

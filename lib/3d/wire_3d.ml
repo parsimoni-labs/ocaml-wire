@@ -409,13 +409,19 @@ let generate_test ~outdir schemas =
       if Wire.Everparse.uses_wire_ctx s then
         pr "#include \"%s_Fields.h\"\n" base)
     fixed_schemas;
-  pr "\nstatic int error_count;\n\n";
-  pr "static void counting_error_handler(\n";
-  pr "  EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,\n";
-  pr "  uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) {\n";
-  pr "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;\n";
-  pr "  error_count++;\n";
-  pr "}\n\n";
+  (* counting_error_handler is only referenced from the per-schema test
+     blocks emit_schema_test emits, which run only for fixed-size schemas.
+     Skip it entirely when there are none, otherwise -Wunused-function
+     under strict flags rejects the file. *)
+  if fixed_schemas <> [] then begin
+    pr "\nstatic int error_count;\n\n";
+    pr "static void counting_error_handler(\n";
+    pr "  EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,\n";
+    pr "  uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) {\n";
+    pr "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;\n";
+    pr "  error_count++;\n";
+    pr "}\n\n"
+  end;
   pr "#define CHECK(msg, cond) do { \\\n";
   pr "  if (cond) { pass++; } \\\n";
   pr "  else { fail++; fprintf(stderr, \"  FAIL: %%s\\n\", msg); } \\\n";
