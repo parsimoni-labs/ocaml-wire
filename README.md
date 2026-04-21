@@ -17,6 +17,14 @@ Define your format once, then:
 - **Render RFC-style ASCII diagrams** via `Ascii.of_codec`
 - **Differential-test OCaml against C** via `Wire_diff`
 
+## Install
+
+```
+opam install wire
+```
+
+API reference: [odoc on ocaml.org](https://ocaml.org/p/wire/latest/doc/Wire/index.html).
+
 ## Quick start
 
 ```ocaml
@@ -103,20 +111,10 @@ For unusual EverParse constructs that have no codec equivalent yet, use the
 
 ## Consuming from C
 
-After `Wire_3d.run`, each schema ships a small set of files:
-
-| File | Role |
-|------|------|
-| `<Name>.h`, `<Name>.c` | Verified validator. Do not edit. |
-| `<Name>_ExternalAPI.h` | Declares the extern `<Name>Set*` callbacks. |
-| `<Name>_ExternalTypedefs.h` | Declares `WIRECTX`. |
-| `<Name>Wrapper.{c,h}` | Convenience `<Name>Check<Name>` entry point + error plumbing. |
-| `<Name>_Fields.h` | `<Name>Fields` struct (one typed member per named field) and `<NAME>_IDX_<FIELD>` constants. |
-| `<Name>_Fields.c` | Default plug: `<Name>Set*` callbacks that populate `<Name>Fields`. |
-
-Default workflow: link `<Name>_Fields.c`, pass a stack-allocated
-`<Name>Fields` as the context, read the members you care about. The
-setter cost is negligible; don't think about it.
+`Wire_3d.run` emits a verified validator (`<Name>.h`/`.c`) alongside a
+default "plug" (`<Name>_Fields.h`/`.c`) that extracts every named field
+into a typed `<Name>Fields` struct. Link the plug, stack-allocate the
+struct, pass it as the context, read the members you care about.
 
 ```c
 #include "SpacePacket.h"
@@ -237,6 +235,8 @@ let f_ack = Field.v "ACK" (bool (bits ~width:1 U16be))
 ### Parameters and actions
 
 ```ocaml
+type bounded = { len : int; data : string }
+
 let max_len = Param.input "max_len" uint16be
 let out_len = Param.output "out_len" uint16be
 let f_len = Field.v "Length" uint16be
