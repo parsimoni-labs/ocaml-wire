@@ -112,7 +112,7 @@ let generate_c oc =
       pr "  CAMLparam1(v_buf);\n";
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);\n";
       pr "  uint32_t len = caml_string_length(v_buf);\n";
-      pr "  %sFields ctx = {0};\n" name;
+      pr "  %sFields ctx = {0};\n" ep;
       pr
         "  uint64_t r = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, data, \
          len, 0);\n"
@@ -130,7 +130,7 @@ let generate_c oc =
       pr "  int count = Int_val(v_n);\n";
       pr "  volatile uint64_t result = 0;\n";
       pr "  if (n_items == 0) CAMLreturn(Val_int(0));\n";
-      pr "  %sFields ctx = {0};\n" name;
+      pr "  %sFields ctx = {0};\n" ep;
       pr "  int64_t t0 = now_ns();\n";
       pr "  for (int i = 0; i < count; i++) {\n";
       pr "    uint8_t *item = buf + ((uint32_t)i %% n_items) * item_size;\n";
