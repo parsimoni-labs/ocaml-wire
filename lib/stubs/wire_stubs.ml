@@ -12,8 +12,8 @@ let c_stub_error_handler ppf lower =
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n"
 
-let c_stub_validate ppf ~name ~lower ~ep =
-  Fmt.pf ppf "  %sFields fields = {0};@\n" name;
+let c_stub_validate ppf ~lower ~ep =
+  Fmt.pf ppf "  %sFields fields = {0};@\n" ep;
   Fmt.pf ppf
     "  uint64_t r = %sValidate%s((WIRECTX *) &fields, NULL, %s_err, data, len, \
      0);@\n"
@@ -28,7 +28,7 @@ let field_value ppf (fname, kind) =
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
   | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
 
-let c_stub_output ppf ~name ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
+let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   let kinds = Wire.Everparse.Raw.field_kinds s in
   let n_fields = List.length kinds in
   (* _parse: validate at offset, allocate record directly in C *)
@@ -39,7 +39,7 @@ let c_stub_output ppf ~name ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   Fmt.pf ppf
     "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
   Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
-  c_stub_validate ppf ~name ~lower ~ep;
+  c_stub_validate ppf ~lower ~ep;
   if n_fields > 0 then begin
     Fmt.pf ppf "  v_result = caml_alloc(%d, 0);@\n" n_fields;
     List.iteri
@@ -61,7 +61,7 @@ let c_stub_output ppf ~name ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf
       "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
     Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
-    c_stub_validate ppf ~name ~lower ~ep;
+    c_stub_validate ppf ~lower ~ep;
     Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
       (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i field_value kind)
@@ -76,7 +76,7 @@ let c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let ep = everparse_name name in
   let lower = String.lowercase_ascii name in
   c_stub_error_handler ppf lower;
-  c_stub_output ppf ~name ~lower ~ep s
+  c_stub_output ppf ~lower ~ep s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 4096 in

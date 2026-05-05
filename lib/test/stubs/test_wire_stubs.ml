@@ -208,6 +208,16 @@ let test_c_stubs_with_params () =
   Alcotest.(check bool) "has WIRECTX" true (contains ~sub:"WIRECTX" c);
   Alcotest.(check bool) "has error handler" true (contains ~sub:"bounded_err" c)
 
+let test_c_stubs_normalised_fields_name () =
+  let s = struct_ "CLCWReport" [ field "x" uint8 ] in
+  let c = Wire_stubs.to_c_stubs [ s ] in
+  Alcotest.(check bool)
+    "uses EverParse-normalised <Name>Fields type" true
+    (contains ~sub:"ClcwreportFields" c);
+  Alcotest.(check bool)
+    "does not reference the raw-name Fields type" false
+    (contains ~sub:"CLCWReportFields" c)
+
 let test_c_stubs_many_params () =
   let s =
     param_struct "ManyParams"
@@ -654,6 +664,8 @@ let suite =
       Alcotest.test_case "c stubs: no params" `Quick test_c_stubs_no_params;
       Alcotest.test_case "c stubs: with params" `Quick test_c_stubs_with_params;
       Alcotest.test_case "c stubs: many params" `Quick test_c_stubs_many_params;
+      Alcotest.test_case "c stubs: <Name>Fields uses EverParse-normalised name"
+        `Quick test_c_stubs_normalised_fields_name;
       (* stub name *)
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;

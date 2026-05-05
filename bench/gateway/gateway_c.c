@@ -33,7 +33,7 @@ static inline uint64_t hash_int(uint64_t state, int value) {
 
 static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
                         int data_field_size, uint64_t *checksum) {
-  TMFrameFields tf = {0};
+  TmframeFields tf = {0};
   TmframeValidateTmframe((WIRECTX *)&tf, NULL, bench_err, frame, tm_hdr, 0);
 
   int vcid = (int)tf.VCID;
