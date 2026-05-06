@@ -2230,6 +2230,52 @@ let field_readers t = t.t_field_readers
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 
+(* -- Slice navigation: zero-copy access to the offset/length of a
+      [Byte_slice] field. Used to descend into a nested codec without
+      allocating a [Slice.t]. The type signature constrains the field's
+      payload type to [Slice.t], so passing a non-slice field is a
+      compile-time error. -- *)
+
+(* All access flavours produce an absolute byte offset for a slice field:
+   - [Fixed off]: byte_slice with static size (and no preceding variable
+     fields) -- offset is [base + off].
+   - [Dynamic fn]: byte_slice with static size after a variable field --
+     offset is [base + fn buf base].
+   - [Variable { off; _ }]: byte_slice with variable size, statically
+     positioned -- offset is [base + off].
+   - [Variable_dynamic { off_fn; _ }]: variable size, dynamic position. *)
+let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
+    (bytes -> int -> int) Staged.t =
+  match field_access codec f.name with
+  | Fixed off -> Staged.stage (fun _buf base -> base + off)
+  | Dynamic fn -> Staged.stage (fun buf base -> base + fn buf base)
+  | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
+  | Variable_dynamic { off_fn; _ } ->
+      Staged.stage (fun buf base -> base + off_fn buf base)
+  | Bitfield _ ->
+      Fmt.invalid_arg
+        "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
+
+let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
+    (bytes -> int -> int) Staged.t =
+  match (f.typ, field_access codec f.name) with
+  | Byte_slice { size }, Fixed _ | Byte_slice { size }, Dynamic _ -> (
+      (* Static-size byte_slice: size is a constant expression. *)
+      match size with
+      | Int n -> Staged.stage (fun _buf _base -> n)
+      | _ ->
+          Fmt.invalid_arg
+            "Codec.slice_length: field %S has dynamic size in a static access \
+             -- internal inconsistency"
+            f.name)
+  | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
+      Staged.stage size_fn
+  | _, (Fixed _ | Dynamic _) ->
+      Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
+  | _, Bitfield _ ->
+      Fmt.invalid_arg
+        "Codec.slice_length: field %S is a bitfield, not a byte slice" f.name
+
 (* -- Bitfield batch access -- *)
 
 type bitfield = bf_info

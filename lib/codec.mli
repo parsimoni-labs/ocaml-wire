@@ -111,6 +111,30 @@ val pp : Format.formatter -> 'r t -> unit
 val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
+val slice_offset :
+  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+(** [slice_offset c f] is a staged reader that returns the absolute byte offset
+    of slice field [f] within the buffer (i.e. [base + relative_off]).
+
+    Use it to descend into a nested codec without allocating a
+    [Bytesrw.Bytes.Slice.t]:
+
+    {[
+    (* Was: Slice.first (read_eth_payload buf 0)  -- 4w/op alloc *)
+    let eth_payload_off =
+      Staged.unstage (Codec.slice_offset Net.ethernet_codec Net.bf_eth_payload)
+
+    let ip = eth_payload_off buf 0 (* 0w/op *)
+    ]}
+
+    Type-restricted to [Slice.t] fields, so passing a non-slice field is a
+    compile-time error. *)
+
+val slice_length :
+  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+(** [slice_length c f] is a staged reader returning the byte length of slice
+    field [f]. *)
+
 type validator
 (** A struct validator without a constructor. The same int-array validation
     kernel that backs {!validate} on a [Codec.t], but built directly from a

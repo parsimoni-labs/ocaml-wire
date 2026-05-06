@@ -690,6 +690,35 @@ module Codec : sig
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
 
+  (** {2 Slice navigation}
+
+      Zero-copy access to the offset/length of a [byte_slice] field. Use this
+      instead of [Slice.first (Codec.get c f buf base)] when descending into a
+      nested codec -- the latter allocates a {!Bytesrw.Bytes.Slice.t} just to
+      read its first field. *)
+
+  val slice_offset :
+    'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  (** [slice_offset c f] is a staged reader returning the absolute byte offset
+      of slice field [f] within the buffer.
+
+      {[
+      (* Was: 4w/op alloc per call *)
+      let off = Slice.first (Codec.get c f buf base)
+
+      (* Now: 0w/op *)
+      let read_off = Staged.unstage (Codec.slice_offset c f)
+      let off = read_off buf base
+      ]}
+
+      Type-restricted to [Slice.t] fields, so passing a non-slice field is a
+      compile-time error. *)
+
+  val slice_length :
+    'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  (** [slice_length c f] is a staged reader returning the byte length of slice
+      field [f]. *)
+
   (** {2 Bitfield batch access}
 
       For multiple bitfield fields sharing the same base word, {!load_word}
@@ -710,6 +739,31 @@ module Codec : sig
   val extract : bitfield -> int -> int
   (** [extract bf word] extracts the field from a pre-loaded word. Pure
       shift+mask, no memory access. *)
+
+  (** {2 Struct validator}
+
+      For a {!Types.struct_} (e.g. from EverParse 3D), build a validator
+      directly without going through {!v}'s record-constructor machinery. The
+      same int-array kernel that backs {!validate} on a [Codec.t]. *)
+
+  type validator
+  (** A struct validator without a constructor. *)
+
+  val validator_of_struct : Types.struct_ -> validator
+  (** [validator_of_struct s] compiles [s] into a validator. *)
+
+  val validate_struct : validator -> bytes -> int -> unit
+  (** Run the validator. Raises {!Validation_error} on failure. *)
+
+  val struct_size_of : validator -> bytes -> int -> int
+  (** Byte size of the struct starting at [off]. *)
+
+  val struct_min_size : validator -> int
+  (** Minimum byte size accepted. *)
+
+  val wire_size_info_of_validator :
+    validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
+  (** Wire-size info for the validator. *)
 end
 
 (** {1 Nested Codec Combinators}

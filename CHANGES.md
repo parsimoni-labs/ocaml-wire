@@ -52,6 +52,14 @@
   helpers, the `bf_accum` accumulator, `check_constraint`, and
   `apply_action`. The legacy reader-based decoder has no remaining
   surface area.
+- `Codec.slice_offset` / `Codec.slice_length`: zero-allocation access
+  to the offset/length of a `byte_slice` field. Replaces
+  `Slice.first (Codec.get c f buf base)` (4w/op alloc per call) with
+  a staged reader that returns the absolute byte offset directly
+  (0w/op). On the demo `Eth->TCP.dst_port (3 layers)` write case the
+  full chain drops from 8w/op to 0w/op. Type-restricted to
+  `(Slice.t, _) field`, so passing a non-slice field is a compile-time
+  error.
 
 ## 0.9.0
 
