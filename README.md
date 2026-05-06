@@ -297,12 +297,11 @@ let len = Param.get env out_len
 ```
 make build          # dune build
 make test           # dune runtest
-make bench          # all benchmarks (most need 3d.exe)
+make bench          # all benchmarks (needs 3d.exe)
 make bench-demo     # field-level codec: EverParse C vs FFI vs OCaml
 make bench-clcw     # CLCW polling loop: Wire OCaml vs EverParse C
 make bench-routing  # APID demux throughput: Wire OCaml vs EverParse C
 make bench-gateway  # TM frame reassembly: Wire OCaml vs EverParse C
-make bench-bitfield # bitfield word-reader microbench (stock OCaml only)
 make clean          # dune clean
 ```
 
@@ -322,7 +321,6 @@ make clean          # dune clean
 | `bench/clcw/` | CLCW polling loop: Wire OCaml vs EverParse C |
 | `bench/routing/` | APID demux throughput: Wire OCaml vs EverParse C |
 | `bench/gateway/` | TM frame reassembly: Wire OCaml vs EverParse C |
-| `bench/bitfield/` | Bitfield word-reader microbench (stock OCaml, no EverParse) |
 | `fuzz/` | Fuzz tests: crash safety and roundtrip correctness (OCaml-only, no C dependency) |
 | `test/` | Alcotest unit tests |
 | `test/diff/` | Differential fuzz tests: random schemas, OCaml vs EverParse C (needs `3d.exe`) |

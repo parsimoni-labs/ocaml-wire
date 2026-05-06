@@ -47,17 +47,6 @@ work with `Codec.get`/`Codec.set`.
 | `make bench-gateway` | TM frame reassembly (1M frames) | TMFrame + Space Packet |
 | `make bench-clcw` | COP-1 CLCW polling (10M words) | CLCW |
 
-## Bitfield word-reader microbench (`bench/bitfield/`)
-
-Stock-OCaml microbench (no EverParse, no OxCaml) comparing the
-pre-refactor partial-application word reader against the post-refactor
-direct closure produced by `Codec.bitfield`, across all five
-`bitfield_base` arms (BF_U8, BF_U16 LE/BE, BF_U32 LE/BE).
-
-```
-make bench-bitfield
-```
-
 ## Profiling
 
 ```
