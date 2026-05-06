@@ -95,474 +95,108 @@ end
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
+(* [ctx]/[eval_expr] are kept here because the legacy encode-side
+   ([encode_with_ctx], reachable via [Wire.encode] for variable-size types)
+   still threads an [Eval.ctx]. The decode side has been migrated off
+   [Eval.ctx] in favour of [Codec.validator_of_struct]; the encode side is
+   the next consolidation step. *)
 type ctx = Eval.ctx
 
 let empty_ctx = Eval.empty
-let val_to_int = Eval.int_of
 let eval_expr = Eval.expr
 
 exception Parse_exn of parse_error
 exception Validation_error = Parse_error
 
-(* Buffered decoder -- all reads go through a local buffer [i].
-   [i_next] and [i_len] track the valid region. Two construction modes:
-   - [decoder reader]: streaming from a Reader, refills by copying slices in
-   - [decoder_of_bytes buf len]: direct from bytes, no Reader, no copy *)
-let i_size = 256
-
-type decoder = {
-  reader : Reader.t option;
-  i : bytes;
-  mutable i_next : int;
-  mutable i_len : int;
-  mutable is_eod : bool;
-  mutable position : int;
-}
-
-let decoder reader =
-  {
-    reader = Some reader;
-    i = Bytes.create i_size;
-    i_next = 0;
-    i_len = 0;
-    is_eod = false;
-    position = 0;
-  }
-
-let decoder_of_bytes buf len =
-  {
-    reader = None;
-    i = buf;
-    i_next = 0;
-    i_len = len;
-    is_eod = true;
-    position = 0;
-  }
-
-(* Compact remaining bytes to front, then fill from reader. *)
-let refill dec =
-  match dec.reader with
-  | None -> () (* direct mode: no reader to refill from *)
-  | Some reader ->
-      let rem = dec.i_len - dec.i_next in
-      if rem > 0 then Bytes.blit dec.i dec.i_next dec.i 0 rem;
-      dec.i_next <- 0;
-      dec.i_len <- rem;
-      let cap = Bytes.length dec.i in
-      let rec fill () =
-        if dec.i_len >= cap then ()
-        else
-          let slice = Reader.read reader in
-          if Slice.is_eod slice then dec.is_eod <- true
-          else begin
-            let len = Slice.length slice in
-            let space = cap - dec.i_len in
-            let n = min len space in
-            Bytes.blit (Slice.bytes slice) (Slice.first slice) dec.i dec.i_len n;
-            dec.i_len <- dec.i_len + n;
-            if n < len then
-              Reader.push_back reader
-                (Slice.make (Slice.bytes slice)
-                   ~first:(Slice.first slice + n)
-                   ~length:(len - n));
-            if dec.i_len < cap && not dec.is_eod then fill ()
-          end
-      in
-      fill ()
-
-let[@inline] available dec = dec.i_len - dec.i_next
-
-(* Read n bytes for small fixed-size fields (n <= 8).
-   Returns offset into dec.i. Raises Parse_exn on EOF. *)
-let[@inline] read_small dec n =
-  if available dec >= n then begin
-    let off = dec.i_next in
-    dec.i_next <- dec.i_next + n;
-    dec.position <- dec.position + n;
-    off
-  end
-  else begin
-    refill dec;
-    if available dec >= n then begin
-      let off = dec.i_next in
-      dec.i_next <- dec.i_next + n;
-      dec.position <- dec.position + n;
-      off
-    end
-    else
-      raise (Parse_exn (Unexpected_eof { expected = n; got = available dec }))
-  end
-
-(* Read exactly n bytes into a fresh buffer (for variable-size fields).
-   Raises Parse_exn on EOF. *)
-let read_bytes dec n =
-  if n = 0 then Bytes.empty
-  else if n <= 8 then begin
-    let off = read_small dec n in
-    Bytes.sub dec.i off n
-  end
-  else
-    let buf = Bytes.create n in
-    let rec loop off remaining =
-      if remaining = 0 then buf
-      else if available dec = 0 then begin
-        refill dec;
-        if dec.is_eod && available dec = 0 then
-          raise (Parse_exn (Unexpected_eof { expected = n; got = off }))
-        else loop off remaining
-      end
-      else
-        let avail = available dec in
-        let to_copy = min avail remaining in
-        Bytes.blit dec.i dec.i_next buf off to_copy;
-        dec.i_next <- dec.i_next + to_copy;
-        dec.position <- dec.position + to_copy;
-        loop (off + to_copy) (remaining - to_copy)
-    in
-    loop 0 n
-
-(* Read all remaining bytes *)
-let read_all dec =
-  let buf = Buffer.create 256 in
-  let rec loop () =
-    if available dec = 0 then begin
-      refill dec;
-      if dec.is_eod && available dec = 0 then Buffer.contents buf else loop ()
-    end
-    else begin
-      let len = available dec in
-      Buffer.add_subbytes buf dec.i dec.i_next len;
-      dec.position <- dec.position + len;
-      dec.i_next <- dec.i_len;
-      loop ()
-    end
-  in
-  loop ()
-
-(* Evaluate an expression in context *)
-
-(* Bitfield accumulator for packed struct parsing. *)
-type bf_accum = {
-  bf_base : bitfield_base;
-  bf_bit_order : bit_order;
-  bf_word : int;
-  bf_bits_used : int;
-  bf_total_bits : int;
-}
-
-let bf_read_word dec base =
-  let off = read_small dec (Bitfield.byte_size base) in
-  Bitfield.read_word base dec.i off
-
-let bf_extract accum width =
-  let value =
-    Bitfield.extract ~bit_order:accum.bf_bit_order ~total:accum.bf_total_bits
-      ~bits_used:accum.bf_bits_used ~width accum.bf_word
-  in
-  (value, { accum with bf_bits_used = accum.bf_bits_used + width })
-
-let bf_has_room accum width = accum.bf_bits_used + width <= accum.bf_total_bits
-
-let parse_bits dec base bit_order width =
-  let word = bf_read_word dec base in
-  let total = Bitfield.total_bits base in
-  Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word
-
-let[@inline] parse_int dec n get =
-  let off = read_small dec n in
-  get dec.i off
-
-let parse_bf_field dec accum_opt base bit_order width =
-  match accum_opt with
-  | Some accum
-    when Bitfield.equal accum.bf_base base
-         && accum.bf_bit_order = bit_order
-         && bf_has_room accum width ->
-      let v, new_accum = bf_extract accum width in
-      let accum_opt' =
-        if new_accum.bf_bits_used = new_accum.bf_total_bits then None
-        else Some new_accum
-      in
-      (v, accum_opt')
-  | _ ->
-      let word = bf_read_word dec base in
-      let total = Bitfield.total_bits base in
-      let accum =
-        {
-          bf_base = base;
-          bf_bit_order = bit_order;
-          bf_word = word;
-          bf_bits_used = 0;
-          bf_total_bits = total;
-        }
-      in
-      let v, new_accum = bf_extract accum width in
-      let accum_opt' =
-        if new_accum.bf_bits_used = new_accum.bf_total_bits then None
-        else Some new_accum
-      in
-      (v, accum_opt')
-
-let check_constraint ctx cond =
-  match cond with
-  | Some c when not (eval_expr ctx c) ->
-      raise (Parse_exn (Constraint_failed "field constraint"))
-  | _ -> ()
-
-let apply_action ctx action =
-  try Eval.action ctx action with Parse_error e -> raise (Parse_exn e)
-
-let parse_all_zeros dec =
-  let s = read_all dec in
-  let rec check i =
-    if i >= String.length s then s
-    else if s.[i] <> '\000' then
-      raise (Parse_exn (All_zeros_failed { offset = i }))
-    else check (i + 1)
-  in
-  check 0
-
-let parse_codec dec ~codec_decode ~codec_fixed_size ~codec_size_of =
-  let sz =
-    match codec_fixed_size with
-    | Some n -> n
-    | None ->
-        if available dec = 0 then refill dec;
-        codec_size_of dec.i dec.i_next
-  in
-  let buf = read_bytes dec sz in
-  codec_decode buf 0
-
-let rec parse_with : type a. decoder -> ctx -> a typ -> a * ctx =
- fun dec ctx typ ->
-  match typ with
-  | Uint8 -> (parse_int dec 1 Bytes.get_uint8, ctx)
-  | Uint16 Little -> (parse_int dec 2 Bytes.get_uint16_le, ctx)
-  | Uint16 Big -> (parse_int dec 2 Bytes.get_uint16_be, ctx)
-  | Uint32 Little -> (parse_int dec 4 UInt32.le, ctx)
-  | Uint32 Big -> (parse_int dec 4 UInt32.be, ctx)
-  | Uint63 Little -> (parse_int dec 8 UInt63.le, ctx)
-  | Uint63 Big -> (parse_int dec 8 UInt63.be, ctx)
-  | Uint64 Little -> (parse_int dec 8 Bytes.get_int64_le, ctx)
-  | Uint64 Big -> (parse_int dec 8 Bytes.get_int64_be, ctx)
-  | Uint_var { size; endian } ->
-      let n = eval_expr ctx size in
-      let off = read_small dec n in
-      (Uint_var.read endian dec.i off n, ctx)
-  | Bits { width; base; bit_order } -> (parse_bits dec base bit_order width, ctx)
-  | Unit -> ((), ctx)
-  | All_bytes -> (read_all dec, ctx)
-  | All_zeros -> (parse_all_zeros dec, ctx)
-  | Where { cond; inner } ->
-      let v, ctx' = parse_with dec ctx inner in
-      if eval_expr ctx' cond then (v, ctx')
-      else raise (Parse_exn (Constraint_failed "where clause"))
-  | Array { len; elem; seq = Seq_map seq } ->
-      let n = eval_expr ctx len in
-      let rec loop acc i ctx' =
-        if i >= n then (seq.finish acc, ctx')
-        else
-          let v, ctx'' = parse_with dec ctx' elem in
-          loop (seq.add acc v) (i + 1) ctx''
-      in
-      loop seq.empty 0 ctx
-  | Byte_array { size } ->
-      let n = eval_expr ctx size in
-      let buf = read_bytes dec n in
-      (Bytes.to_string buf, ctx)
-  | Byte_slice { size } ->
-      let n = eval_expr ctx size in
-      let buf = read_bytes dec n in
-      (Slice.make buf ~first:0 ~length:n, ctx)
-  | Single_elem { size = _; elem; at_most = _ } -> parse_with dec ctx elem
-  | Enum { cases; base; _ } ->
-      let v, ctx' = parse_with dec ctx base in
-      let valid = List.map snd cases in
-      if List.mem v valid then (v, ctx')
-      else raise (Parse_exn (Invalid_enum { value = v; valid }))
-  | Casetype { cases; tag; _ } ->
-      let tag_val, ctx' = parse_with dec ctx tag in
-      let rec find_case = function
-        | [] -> raise (Parse_exn (Invalid_tag tag_val))
-        | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest
-          ->
-            if expected = tag_val then
-              let body, ctx'' = parse_with dec ctx' cb_inner in
-              (cb_inject body, ctx'')
-            else find_case rest
-        | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-            let body, ctx'' = parse_with dec ctx' cb_inner in
-            (cb_inject body, ctx'')
-      in
-      find_case cases
-  | Struct { fields; where; _ } ->
-      let (), ctx' = parse_struct_fields dec ctx fields in
-      (match where with
-      | Some cond when not (eval_expr ctx' cond) ->
-          raise (Parse_exn (Constraint_failed "where clause"))
-      | _ -> ());
-      ((), ctx')
-  | Map { inner; decode; _ } -> (
-      let v, ctx' = parse_with dec ctx inner in
-      match decode v with
-      | r -> (r, ctx')
-      | exception Parse_error e -> raise (Parse_exn e))
-  | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
-      let v = parse_codec dec ~codec_decode ~codec_fixed_size ~codec_size_of in
-      (v, ctx)
-  | Optional { present; inner } ->
-      if Eval.expr ctx present then
-        let v, ctx' = parse_with dec ctx inner in
-        (Some v, ctx')
-      else (None, ctx)
-  | Optional_or { present; inner; default } ->
-      if Eval.expr ctx present then
-        let v, ctx' = parse_with dec ctx inner in
-        (v, ctx')
-      else (default, ctx)
-  | Repeat { size; elem; seq = Seq_map seq } ->
-      let budget = Eval.expr ctx size in
-      let start = dec.position in
-      let rec loop acc =
-        let consumed = dec.position - start in
-        if consumed >= budget then (seq.finish acc, ctx)
-        else
-          let v, _ = parse_with dec ctx elem in
-          loop (seq.add acc v)
-      in
-      loop seq.empty
-  | Type_ref _ -> failwith "type_ref requires a type registry"
-  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
-  | Apply _ -> failwith "apply requires a type registry"
-
-and parse_struct_fields dec ctx fields =
-  let start_pos = dec.position in
-  let parse_field_with_bf : type a.
-      bf_accum option -> a typ -> a * bf_accum option =
-   fun accum_opt typ ->
-    match typ with
-    | Bits { width; base; bit_order } ->
-        parse_bf_field dec accum_opt base bit_order width
-    | _ ->
-        let v, _ = parse_with dec ctx typ in
-        (v, None)
-  in
-  let rec go ctx' accum_opt field_idx = function
-    | [] -> ((), ctx')
-    | Field { field_name; field_typ = Bits _ as ft; constraint_; action }
-      :: rest ->
-        let ctx' =
-          Eval.set_pos ctx' ~sizeof_this:(dec.position - start_pos)
-            ~field_pos:field_idx
-        in
-        let v, accum_opt' = parse_field_with_bf accum_opt ft in
-        let ctx'' =
-          match field_name with Some n -> Eval.bind ctx' n v | None -> ctx'
-        in
-        check_constraint ctx'' constraint_;
-        let ctx''' = apply_action ctx'' action in
-        go ctx''' accum_opt' (field_idx + 1) rest
-    | Field { field_name; field_typ; constraint_; action } :: rest ->
-        let ctx' =
-          Eval.set_pos ctx' ~sizeof_this:(dec.position - start_pos)
-            ~field_pos:field_idx
-        in
-        let v, ctx'' = parse_with dec ctx' field_typ in
-        let ctx'' =
-          match field_name with
-          | Some n -> (
-              match val_to_int field_typ v with
-              | Some iv -> Eval.bind ctx'' n iv
-              | None -> ctx'')
-          | None -> ctx''
-        in
-        check_constraint ctx'' constraint_;
-        let ctx''' = apply_action ctx'' action in
-        go ctx''' None (field_idx + 1) rest
-  in
-  go ctx None 0 fields
-
-let decode typ reader =
-  let dec = decoder reader in
-  match parse_with dec empty_ctx typ with
-  | v, _ -> Ok v
-  | exception Parse_exn e -> Error e
-
 let[@inline] check_eof len need =
   if need > len then
     raise (Parse_exn (Unexpected_eof { expected = need; got = len }))
 
-let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
+(* The single decoder kernel. Bytes-based, returns [(value, end_off)].
+   All types handled here -- no fallback. Expressions are evaluated in
+   [Eval.empty] (no field bindings); types using [Ref]/[Sizeof_this]/
+   [Field_pos] only make sense inside a [Struct], which goes through
+   [Codec.validator_of_struct] where the int-array context is wired up. *)
+let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
   match typ with
   | Uint8 ->
       check_eof len (off + 1);
-      Bytes.get_uint8 buf off
+      (Bytes.get_uint8 buf off, off + 1)
   | Uint16 Little ->
       check_eof len (off + 2);
-      Bytes.get_uint16_le buf off
+      (Bytes.get_uint16_le buf off, off + 2)
   | Uint16 Big ->
       check_eof len (off + 2);
-      Bytes.get_uint16_be buf off
+      (Bytes.get_uint16_be buf off, off + 2)
   | Uint32 Little ->
       check_eof len (off + 4);
-      UInt32.le buf off
+      (UInt32.le buf off, off + 4)
   | Uint32 Big ->
       check_eof len (off + 4);
-      UInt32.be buf off
+      (UInt32.be buf off, off + 4)
   | Uint63 Little ->
       check_eof len (off + 8);
-      UInt63.le buf off
+      (UInt63.le buf off, off + 8)
   | Uint63 Big ->
       check_eof len (off + 8);
-      UInt63.be buf off
+      (UInt63.be buf off, off + 8)
   | Uint64 Little ->
       check_eof len (off + 8);
-      Bytes.get_int64_le buf off
+      (Bytes.get_int64_le buf off, off + 8)
   | Uint64 Big ->
       check_eof len (off + 8);
-      Bytes.get_int64_be buf off
-  | Uint_var { size = Int n; endian } ->
+      (Bytes.get_int64_be buf off, off + 8)
+  | Uint_var { size; endian } ->
+      let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      Uint_var.read endian buf off n
-  | Uint_var _ -> failwith "parse_direct: Uint_var with dynamic size"
+      (Uint_var.read endian buf off n, off + n)
   | Bits { width; base; bit_order } ->
-      check_eof len (off + Bitfield.byte_size base);
+      let sz = Bitfield.byte_size base in
+      check_eof len (off + sz);
       let total = Bitfield.total_bits base in
       let word = Bitfield.read_word base buf off in
-      Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word
-  | Unit -> ()
-  | All_bytes -> Bytes.sub_string buf off (len - off)
+      (Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word, off + sz)
+  | Unit -> ((), off)
+  | All_bytes ->
+      let n = len - off in
+      (Bytes.sub_string buf off n, len)
   | All_zeros ->
-      let s = Bytes.sub_string buf off (len - off) in
+      let n = len - off in
+      let s = Bytes.sub_string buf off n in
       let rec check i =
-        if i >= String.length s then s
+        if i >= n then s
         else if s.[i] <> '\000' then
           raise (Parse_exn (All_zeros_failed { offset = off + i }))
         else check (i + 1)
       in
-      check 0
-  | Byte_array { size = Int n } ->
+      (check 0, len)
+  | Byte_array { size } ->
+      let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      Bytes.sub_string buf off n
-  | Byte_slice { size = Int n } ->
+      (Bytes.sub_string buf off n, off + n)
+  | Byte_slice { size } ->
+      let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      Slice.make buf ~first:off ~length:n
-  | Single_elem { size = Int n; elem; at_most } ->
+      (Slice.make buf ~first:off ~length:n, off + n)
+  | Single_elem { size; elem; at_most = _ } ->
+      let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      (* Bound the inner decode to the static size. [at_most] permits short
-         elements (only [n] bytes are consumed regardless). *)
-      let _ = at_most in
-      parse_direct elem buf off (off + n)
+      let v, _ = parse_direct elem buf off (off + n) in
+      (v, off + n)
   | Map { inner; decode; _ } -> (
-      match decode (parse_direct inner buf off len) with
-      | r -> r
+      let v, off' = parse_direct inner buf off len in
+      match decode v with
+      | r -> (r, off')
       | exception Parse_error e -> raise (Parse_exn e))
-  | Where { inner; _ } -> parse_direct inner buf off len
+  | Where { cond; inner } ->
+      let v, off' = parse_direct inner buf off len in
+      if Eval.expr Eval.empty cond then (v, off')
+      else raise (Parse_exn (Constraint_failed "where clause"))
   | Enum { base; cases; _ } ->
-      let v = parse_direct base buf off len in
+      let v, off' = parse_direct base buf off len in
       let valid = List.map snd cases in
-      if List.mem v valid then v
+      if List.mem v valid then (v, off')
       else raise (Parse_exn (Invalid_enum { value = v; valid }))
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
       let sz =
@@ -571,29 +205,91 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
         | None -> codec_size_of buf off
       in
       check_eof len (off + sz);
-      codec_decode buf off
-  | _ ->
-      (* Types that genuinely need a [ctx] (cross-field [Ref], [Sizeof_this],
-         [Field_pos], parameterised structs): fall back to the streaming
-         decoder. At top level these only succeed if the [ctx] expression
-         evaluates without bound fields, so the fallback is rare. *)
-      let dec = decoder_of_bytes buf len in
-      dec.i_next <- off;
-      let v, _ = parse_with dec empty_ctx typ in
-      v
+      (codec_decode buf off, off + sz)
+  | Struct s ->
+      (* Struct validation goes through the same int-array kernel as
+         [Codec.decode]. Returns [unit] -- the [Struct] result type. *)
+      let v = Codec_backend.validator_of_struct s in
+      let sz = Codec_backend.struct_size_of v buf off in
+      check_eof len (off + sz);
+      Codec_backend.validate_struct v buf off;
+      ((), off + sz)
+  | Casetype { cases; tag; _ } ->
+      let tag_val, off' = parse_direct tag buf off len in
+      let rec find_case = function
+        | [] -> raise (Parse_exn (Invalid_tag tag_val))
+        | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest
+          ->
+            if expected = tag_val then
+              let body, off'' = parse_direct cb_inner buf off' len in
+              (cb_inject body, off'')
+            else find_case rest
+        | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
+            let body, off'' = parse_direct cb_inner buf off' len in
+            (cb_inject body, off'')
+      in
+      find_case cases
+  | Optional { present; inner } ->
+      if Eval.expr Eval.empty present then
+        let v, off' = parse_direct inner buf off len in
+        (Some v, off')
+      else (None, off)
+  | Optional_or { present; inner; default } ->
+      if Eval.expr Eval.empty present then parse_direct inner buf off len
+      else (default, off)
+  | Array { len = len_expr; elem; seq = Seq_map seq } ->
+      let n = Eval.expr Eval.empty len_expr in
+      let rec loop acc off' i =
+        if i >= n then (seq.finish acc, off')
+        else
+          let v, off'' = parse_direct elem buf off' len in
+          loop (seq.add acc v) off'' (i + 1)
+      in
+      loop seq.empty off 0
+  | Repeat { size; elem; seq = Seq_map seq } ->
+      let budget = Eval.expr Eval.empty size in
+      let start = off in
+      let rec loop acc off' =
+        if off' - start >= budget then (seq.finish acc, off')
+        else
+          let v, off'' = parse_direct elem buf off' len in
+          loop (seq.add acc v) off''
+      in
+      loop seq.empty off
+  | Type_ref _ -> failwith "type_ref requires a type registry"
+  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
+  | Apply _ -> failwith "apply requires a type registry"
 
 let decode_string typ s =
   let buf = Bytes.unsafe_of_string s in
   let len = Bytes.length buf in
   match parse_direct typ buf 0 len with
-  | v -> Ok v
+  | v, _ -> Ok v
   | exception Parse_exn e -> Error e
 
 let decode_bytes typ b =
   match parse_direct typ b 0 (Bytes.length b) with
-  | v -> Ok v
+  | v, _ -> Ok v
   | exception Parse_exn e -> Error e
 
+let decode typ reader =
+  (* Streaming becomes a thin buffering layer: drain the reader, then run
+     [parse_direct]. *)
+  let buf = Buffer.create 256 in
+  let rec drain () =
+    let slice = Reader.read reader in
+    if Slice.is_eod slice then Buffer.to_bytes buf
+    else begin
+      Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
+        (Slice.length slice);
+      drain ()
+    end
+  in
+  let bytes = drain () in
+  let len = Bytes.length bytes in
+  match parse_direct typ bytes 0 len with
+  | v, _ -> Ok v
+  | exception Parse_exn e -> Error e
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
 module Writer = Bytesrw.Bytes.Writer
