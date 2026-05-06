@@ -15,6 +15,15 @@
   behaviour. Pure refactor, no API change.
 - Expose the byte-level word readers (`u16_le`, `u16_be`, `u32_le`,
   `u32_be`) in `Bitfield.mli` so the dispatch above can reach them.
+- Add `bench/bitfield/`: stock-OCaml microbench comparing the old
+  partial-application word reader against the post-refactor closure,
+  for each of the five `bitfield_base` arms. Run with
+  `make bench-bitfield` -- no EverParse required.
+- `Wire.variants`: lift the lookup loop in `encode` to a top-level
+  function. The previous `let rec go i = ... in go 0` closed over `v`
+  and `arr`, allocating a fresh closure on every encode (~6w/op on the
+  demo `CasesDemo.type` write case). Calling a top-level function
+  takes 0w/op. No behavioural change.
 
 ## 0.9.0
 

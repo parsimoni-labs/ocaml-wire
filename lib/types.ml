@@ -298,21 +298,26 @@ let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
 
+(* Top-level so [variants_lookup] does not allocate a closure per call.
+   Returns -1 if [v] is not in [arr] (used as a non-allocating sentinel
+   instead of [int option]). *)
+let rec variants_lookup arr v i =
+  if i >= Array.length arr then -1
+  else if arr.(i) = v then i
+  else variants_lookup arr v (i + 1)
+
 let variants name cases base =
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
   let arr = Array.of_list (List.map snd cases) in
+  let len = Array.length arr in
   let decode n =
-    if n >= 0 && n < Array.length arr then arr.(n)
+    if n >= 0 && n < len then arr.(n)
     else Fmt.invalid_arg "Wire.variants %s: unknown value %d" name n
   in
   let encode v =
-    let rec go i =
-      if i >= Array.length arr then
-        Fmt.invalid_arg "Wire.variants %s: unknown variant" name
-      else if arr.(i) = v then i
-      else go (i + 1)
-    in
-    go 0
+    let i = variants_lookup arr v 0 in
+    if i < 0 then Fmt.invalid_arg "Wire.variants %s: unknown variant" name
+    else i
   in
   map decode encode (enum name enum_cases base)
 
