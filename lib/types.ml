@@ -256,19 +256,23 @@ type parse_error =
 
 exception Parse_error of parse_error
 
+(* Top-level so [variants_lookup] does not allocate a closure per call.
+   Returns -1 if [v] is not in [arr] (used as a non-allocating sentinel
+   instead of [int option]). Shared with [variants] below. *)
+let rec variants_lookup arr v i =
+  if i >= Array.length arr then -1
+  else if arr.(i) = v then i
+  else variants_lookup arr v (i + 1)
+
 let cases variants inner =
   let arr = Array.of_list variants in
+  let len = Array.length arr in
   let decode n =
-    if n >= 0 && n < Array.length arr then arr.(n)
-    else raise (Parse_error (Invalid_tag n))
+    if n >= 0 && n < len then arr.(n) else raise (Parse_error (Invalid_tag n))
   in
   let encode v =
-    let rec go i =
-      if i >= Array.length arr then invalid_arg "Wire.lookup: unknown variant"
-      else if arr.(i) = v then i
-      else go (i + 1)
-    in
-    go 0
+    let i = variants_lookup arr v 0 in
+    if i < 0 then invalid_arg "Wire.lookup: unknown variant" else i
   in
   Map { inner; decode; encode }
 
@@ -297,14 +301,6 @@ let repeat_seq seq ~size elem = Repeat { size; elem; seq }
 let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
-
-(* Top-level so [variants_lookup] does not allocate a closure per call.
-   Returns -1 if [v] is not in [arr] (used as a non-allocating sentinel
-   instead of [int option]). *)
-let rec variants_lookup arr v i =
-  if i >= Array.length arr then -1
-  else if arr.(i) = v then i
-  else variants_lookup arr v (i + 1)
 
 let variants name cases base =
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
