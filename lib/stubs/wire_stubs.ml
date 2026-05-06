@@ -31,26 +31,11 @@ let field_value ppf (fname, kind) =
 let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   let kinds = Wire.Everparse.Raw.field_kinds s in
   let n_fields = List.length kinds in
-  (* _parse: validate at offset, allocate record directly in C *)
-  Fmt.pf ppf "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n"
-    lower;
-  Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
-  Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
-  Fmt.pf ppf
-    "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
-  Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
-  c_stub_validate ppf ~lower ~ep;
-  if n_fields > 0 then begin
-    Fmt.pf ppf "  v_result = caml_alloc(%d, 0);@\n" n_fields;
-    List.iteri
-      (fun i kind ->
-        Fmt.pf ppf "  Store_field(v_result, %d, %a);@\n" i field_value kind)
-      kinds
-  end
-  else Fmt.pf ppf "  v_result = Val_unit;@\n";
-  Fmt.pf ppf "  CAMLreturn(v_result);@\n";
-  Fmt.pf ppf "}@\n@\n";
-  (* _parse_k: apply constructor via caml_callbackN *)
+  (* Single C entry point per schema: [caml_wire_<name>_parse_k] takes a
+     continuation and applies it to the parsed field values via
+     [caml_callbackN]. The OCaml side derives the record-returning
+     [<name>_parse] from [<name>_parse_k] with a constructor continuation
+     (see [to_ml_stubs] below); both flavours share this one C function. *)
   if n_fields > 0 then begin
     Fmt.pf ppf
       "CAMLprim value caml_wire_%s_parse_k(value v_k, value v_buf, value \
@@ -68,6 +53,18 @@ let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
       kinds;
     Fmt.pf ppf "  v_result = caml_callbackN(v_k, %d, args);@\n" n_fields;
     Fmt.pf ppf "  CAMLreturn(v_result);@\n";
+    Fmt.pf ppf "}@\n@\n"
+  end
+  else begin
+    (* Zero-field schema: no callback needed, just validate and return unit. *)
+    Fmt.pf ppf
+      "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n" lower;
+    Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
+    Fmt.pf ppf
+      "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
+    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
+    c_stub_validate ppf ~lower ~ep;
+    Fmt.pf ppf "  CAMLreturn(Val_unit);@\n";
     Fmt.pf ppf "}@\n@\n"
   end
 
@@ -140,6 +137,22 @@ let gen_ml_k_type ppf kinds =
   List.iter (fun (_, kind) -> Fmt.pf ppf "%s -> " (ml_kind_string kind)) kinds;
   Fmt.pf ppf "'r)"
 
+(* Emit [<name>_parse] as an OCaml-side wrapper over the single C
+   [<name>_parse_k]. The continuation is a record constructor; the OCaml
+   compiler eliminates it when the caller only wants the record (the
+   record is built directly from the field values). Single C codepath
+   per schema; both record-returning and CPS ergonomics preserved. *)
+let gen_ml_record_constructor ppf kinds =
+  Fmt.pf ppf "(fun ";
+  List.iteri (fun i _ -> Fmt.pf ppf "v%d " i) kinds;
+  Fmt.pf ppf "-> { ";
+  List.iteri
+    (fun i (name, _) ->
+      if i > 0 then Fmt.pf ppf "; ";
+      Fmt.pf ppf "%s = v%d" (ml_field_name name) i)
+    kinds;
+  Fmt.pf ppf " })"
+
 let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 256 in
   let ppf = Format.formatter_of_buffer buf in
@@ -150,13 +163,16 @@ let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
       let kinds = Wire.Everparse.Raw.field_kinds s in
       if kinds <> [] then begin
         gen_ml_record ppf ~type_name:lower kinds;
-        Fmt.pf ppf "external %s_parse : bytes -> int -> %s@\n" lower lower;
-        Fmt.pf ppf "  = \"caml_wire_%s_parse\" [@@@@warning \"-61\"]@\n@\n"
-          lower;
+        (* Single external: the CPS variant. *)
         Fmt.pf ppf "external %s_parse_k : %a -> bytes -> int -> 'r@\n" lower
           (fun ppf () -> gen_ml_k_type ppf kinds)
           ();
-        Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower
+        Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower;
+        (* OCaml-side record-returning wrapper. *)
+        Fmt.pf ppf "let %s_parse buf off =@\n" lower;
+        Fmt.pf ppf "  %s_parse_k@\n" lower;
+        Fmt.pf ppf "    %a@\n" gen_ml_record_constructor kinds;
+        Fmt.pf ppf "    buf off@\n@\n"
       end
       else begin
         Fmt.pf ppf "external %s_parse : bytes -> int -> unit@\n" lower;
