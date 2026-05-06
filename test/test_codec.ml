@@ -3217,6 +3217,127 @@ let test_multi_var_fixed_after () =
   Alcotest.(check string) "tx" "\xBB\xCC" tx;
   Alcotest.(check int) "trail" 0xBEEF trail
 
+(* -- Multiple variable-size sub-codecs back-to-back (SSH disconnect /
+      debug shape). [compile_codec] used to bail with [require_static_off]
+      when a [Wire.codec]-embedded variable-size sub-codec sat after
+      another variable-size field. -- *)
+
+module Slice = Bytesrw.Bytes.Slice
+
+type ssh_string = { ss_len : int; ss_data : Slice.t }
+
+let ssh_f_len = Field.v "len" uint32be
+let ssh_f_data = Field.v "data" (byte_slice ~size:(Field.ref ssh_f_len))
+
+let ssh_string_codec =
+  Codec.v "SshString"
+    (fun len data -> { ss_len = len; ss_data = data })
+    Codec.[ (ssh_f_len $ fun s -> s.ss_len); (ssh_f_data $ fun s -> s.ss_data) ]
+
+let mk_ssh_string s =
+  let b = Bytes.of_string s in
+  {
+    ss_len = String.length s;
+    ss_data = Slice.make b ~first:0 ~length:(Bytes.length b);
+  }
+
+let test_ssh_two_var_slices () =
+  (* SSH_MSG_DISCONNECT: reason (uint32) + len + desc + len + lang *)
+  let f_reason = Field.v "reason" uint32be in
+  let f_desc_len = Field.v "desc_len" uint32be in
+  let f_desc = Field.v "desc" (byte_slice ~size:(Field.ref f_desc_len)) in
+  let f_lang_len = Field.v "lang_len" uint32be in
+  let f_lang = Field.v "lang" (byte_slice ~size:(Field.ref f_lang_len)) in
+  let codec =
+    let open Codec in
+    v "Disconnect"
+      (fun reason _ desc _ lang -> (reason, desc, lang))
+      [
+        (f_reason $ fun (r, _, _) -> r);
+        (f_desc_len $ fun (_, d, _) -> Slice.length d);
+        (f_desc $ fun (_, d, _) -> d);
+        (f_lang_len $ fun (_, _, l) -> Slice.length l);
+        (f_lang $ fun (_, _, l) -> l);
+      ]
+  in
+  let v =
+    (11, (mk_ssh_string "bye").ss_data, (mk_ssh_string "en-US").ss_data)
+  in
+  let buf = Bytes.create 200 in
+  Codec.encode codec v buf 0;
+  let r, d, l = decode_ok (Codec.decode codec buf 0) in
+  Alcotest.(check int) "reason" 11 r;
+  Alcotest.(check string) "desc" "bye" (Slice.to_string d);
+  Alcotest.(check string) "lang" "en-US" (Slice.to_string l)
+
+let test_two_var_codecs_embedded () =
+  (* Two consecutive [Wire.codec ssh_string_codec] embedded fields.
+     This is the case that previously tripped [require_static_off]. *)
+  let f_a = Field.v "a" (codec ssh_string_codec) in
+  let f_b = Field.v "b" (codec ssh_string_codec) in
+  let pair_codec =
+    let open Codec in
+    v "Pair" (fun a b -> (a, b)) [ f_a $ fst; f_b $ snd ]
+  in
+  let v = (mk_ssh_string "abcd", mk_ssh_string "xy") in
+  let buf = Bytes.create 200 in
+  Codec.encode pair_codec v buf 0;
+  let a, b = decode_ok (Codec.decode pair_codec buf 0) in
+  Alcotest.(check int) "a.len" 4 a.ss_len;
+  Alcotest.(check string) "a.data" "abcd" (Slice.to_string a.ss_data);
+  Alcotest.(check int) "b.len" 2 b.ss_len;
+  Alcotest.(check string) "b.data" "xy" (Slice.to_string b.ss_data)
+
+let test_three_var_codecs_embedded () =
+  (* SSH_MSG_DEBUG-shaped payload: three variable-size sub-codecs. *)
+  let f_a = Field.v "a" (codec ssh_string_codec) in
+  let f_b = Field.v "b" (codec ssh_string_codec) in
+  let f_c = Field.v "c" (codec ssh_string_codec) in
+  let triple_codec =
+    let open Codec in
+    v "Triple"
+      (fun a b c -> (a, b, c))
+      [
+        (f_a $ fun (a, _, _) -> a);
+        (f_b $ fun (_, b, _) -> b);
+        (f_c $ fun (_, _, c) -> c);
+      ]
+  in
+  let v = (mk_ssh_string "alpha", mk_ssh_string "be", mk_ssh_string "gamma!") in
+  let buf = Bytes.create 200 in
+  Codec.encode triple_codec v buf 0;
+  let a, b, c = decode_ok (Codec.decode triple_codec buf 0) in
+  Alcotest.(check string) "a" "alpha" (Slice.to_string a.ss_data);
+  Alcotest.(check string) "b" "be" (Slice.to_string b.ss_data);
+  Alcotest.(check string) "c" "gamma!" (Slice.to_string c.ss_data)
+
+let test_repeat_after_var_slice () =
+  (* [Repeat] after a variable-size field used to trip [require_static_off]
+     in [compile_repeat]. The fix mirrors [compile_codec]'s. *)
+  let f_prefix_len = Field.v "prefix_len" uint8 in
+  let f_prefix = Field.v "prefix" (byte_slice ~size:(Field.ref f_prefix_len)) in
+  let f_count = Field.v "count" uint8 in
+  let f_items =
+    Field.v "items" (Wire.repeat ~size:(Field.ref f_count) Wire.uint16be)
+  in
+  let codec =
+    let open Codec in
+    v "PrefixedItems"
+      (fun _ prefix _ items -> (prefix, items))
+      [
+        (f_prefix_len $ fun (p, _) -> Slice.length p);
+        (f_prefix $ fun (p, _) -> p);
+        (f_count $ fun (_, items) -> 2 * List.length items);
+        (f_items $ fun (_, items) -> items);
+      ]
+  in
+  let buf = Bytes.create 200 in
+  let v = ((mk_ssh_string "PREFIX").ss_data, [ 0x0102; 0x0304; 0x0506 ]) in
+  Codec.encode codec v buf 0;
+  let prefix, items = decode_ok (Codec.decode codec buf 0) in
+  Alcotest.(check string) "prefix" "PREFIX" (Slice.to_string prefix);
+  Alcotest.(check (list int)) "items" [ 0x0102; 0x0304; 0x0506 ] items
+
 (* -- uint: variable-width unsigned integer -- *)
 
 type uint_rec = { tag : int; value : int }
@@ -3686,6 +3807,14 @@ let suite =
       Alcotest.test_case "multi-var: get" `Quick test_multi_var_get;
       Alcotest.test_case "multi-var: fixed after" `Quick
         test_multi_var_fixed_after;
+      Alcotest.test_case "multi-var: ssh disconnect (two var byte_slice)" `Quick
+        test_ssh_two_var_slices;
+      Alcotest.test_case "multi-var: two embedded sub-codecs" `Quick
+        test_two_var_codecs_embedded;
+      Alcotest.test_case "multi-var: three embedded sub-codecs" `Quick
+        test_three_var_codecs_embedded;
+      Alcotest.test_case "multi-var: repeat after variable byte_slice" `Quick
+        test_repeat_after_var_slice;
       (* uint: variable-width unsigned integer *)
       Alcotest.test_case "uint: 3-byte BE roundtrip" `Quick test_uint_3byte_be;
       Alcotest.test_case "uint: 1-byte like uint8" `Quick test_uint_1byte;
