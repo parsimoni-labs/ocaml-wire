@@ -116,15 +116,17 @@ val slice_offset :
 (** [slice_offset c f] is a staged reader that returns the absolute byte offset
     of slice field [f] within the buffer (i.e. [base + relative_off]).
 
-    Use it to descend into a nested codec without allocating a
-    [Bytesrw.Bytes.Slice.t]:
+    The naive [Slice.first (Codec.get c f buf base)] pattern allocates a fresh
+    [Slice.t] (4 words) inside [Codec.get] only to discard it after extracting
+    one int. [slice_offset] skips the make and returns the int directly:
 
     {[
-    (* Was: Slice.first (read_eth_payload buf 0)  -- 4w/op alloc *)
-    let eth_payload_off =
-      Staged.unstage (Codec.slice_offset Net.ethernet_codec Net.bf_eth_payload)
+    (* Was: 4w/op alloc per call (inside Codec.get) *)
+    let off = Slice.first (Codec.get c f buf base)
 
-    let ip = eth_payload_off buf 0 (* 0w/op *)
+    (* Now: 0w/op *)
+    let read_off = Staged.unstage (Codec.slice_offset c f)
+    let off = read_off buf base
     ]}
 
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a

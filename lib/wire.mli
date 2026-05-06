@@ -692,10 +692,18 @@ module Codec : sig
 
   (** {2 Slice navigation}
 
-      Zero-copy access to the offset/length of a [byte_slice] field. Use this
-      instead of [Slice.first (Codec.get c f buf base)] when descending into a
-      nested codec -- the latter allocates a {!Bytesrw.Bytes.Slice.t} just to
-      read its first field. *)
+      Zero-copy access to the offset/length of a [byte_slice] field. The naive
+      nesting pattern is
+
+      {[
+      let off = Slice.first (Codec.get c f buf base)
+      ]}
+
+      where [Codec.get] (specifically [Slice.make] inside the staged reader)
+      allocates a fresh {!Bytesrw.Bytes.Slice.t} -- 4 words -- and [Slice.first]
+      then extracts a single int from it. The slice record is discarded
+      immediately. {!slice_offset} skips the make and returns the int directly.
+  *)
 
   val slice_offset :
     'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
