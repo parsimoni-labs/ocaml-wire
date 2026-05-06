@@ -1822,6 +1822,167 @@ let seal : type r. (r, r) record -> r t =
     t_where = r.r_where;
   }
 
+(* -- Validator-only path: build a struct validator from [Types.struct_]
+      without requiring a record constructor. Reuses the same int-array
+      validation kernel ([compile_field], [build_validators]) that
+      [Codec.v]/[Codec.decode] uses; only the writer/reader projections
+      are skipped. Lets [Wire.decode_string]/[Wire.decode] for [Struct]
+      types share one code path with [Codec.decode]. *)
+
+type validator = {
+  vt_min_size : int;
+  vt_wire_size : wire_size_info;
+  vt_validate : bytes -> int -> unit;
+}
+
+(* Internal accumulator -- the validator-relevant subset of [record]. *)
+type validator_acc = {
+  va_validators_rev : (int * (int array -> bytes -> int -> unit)) list;
+  va_checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
+  va_field_readers : (string * (bytes -> int -> int)) list;
+  va_n_fields : int;
+  va_n_array_slots : int;
+  va_min_size : int;
+  va_next_off : next_off;
+  va_bf : bf_codec_state option;
+}
+
+let empty_validator_acc =
+  {
+    va_validators_rev = [];
+    va_checkers_rev = [];
+    va_field_readers = [];
+    va_n_fields = 0;
+    va_n_array_slots = 0;
+    va_min_size = 0;
+    va_next_off = Static_next 0;
+    va_bf = None;
+  }
+
+let layout_ctx_of_validator_acc acc =
+  {
+    lc_next_off = acc.va_next_off;
+    lc_bf = acc.va_bf;
+    lc_field_readers = acc.va_field_readers;
+    lc_n_fields = acc.va_n_fields;
+  }
+
+(* Per-field step: open [Types.Field]'s existential ['a], build a fake
+   [('a, unit) field] with an [assert false] projection (never invoked on
+   the validator path), call [compile_field], and accumulate the
+   validator-relevant pieces of the resulting [compiled_field]. *)
+let apply_field_to_validator_acc acc (Types.Field f) =
+  let codec_field : (_, unit) field =
+    {
+      name = Option.value f.field_name ~default:"";
+      typ = f.field_typ;
+      constraint_ = f.constraint_;
+      action = f.action;
+      get = (fun () -> assert false);
+    }
+  in
+  let layout = layout_ctx_of_validator_acc acc in
+  let cf = compile_field layout codec_field in
+  let action_var_names =
+    match f.action with
+    | None -> []
+    | Some (Types.On_success stmts | Types.On_act stmts) ->
+        List.fold_left action_vars [] stmts
+  in
+  let n_extra_vars = List.length action_var_names in
+  let field_idx = acc.va_n_fields in
+  let dummy_reader _buf _base = 0 in
+  let cc_readers =
+    let base = (codec_field.name, dummy_reader) :: acc.va_field_readers in
+    List.fold_left
+      (fun acc' vn -> (vn, dummy_reader) :: acc')
+      base action_var_names
+  in
+  let idx = build_idx cc_readers in
+  let cc = { idx; sizeof_this = cf.validator_off; field_pos = field_idx } in
+  let check =
+    match f.constraint_ with
+    | None -> None
+    | Some c -> Some (compile_bool_arr cc c)
+  in
+  let act = compile_action cc f.action in
+  let populate = cf.populate in
+  let full arr buf base =
+    populate arr buf base;
+    (match check with
+    | Some f when not (f arr) ->
+        raise (Parse_error (Constraint_failed "field constraint"))
+    | _ -> ());
+    match act with Some f -> f arr | None -> ()
+  in
+  let check_only arr buf base =
+    populate arr buf base;
+    match check with
+    | Some f when not (f arr) ->
+        raise (Parse_error (Constraint_failed "field constraint"))
+    | _ -> ()
+  in
+  let byte_off = cf.validator_off in
+  let new_field_readers =
+    cf.nested_readers
+    @ ((codec_field.name, cf.int_reader) :: acc.va_field_readers)
+  in
+  {
+    va_validators_rev = (byte_off, full) :: acc.va_validators_rev;
+    va_checkers_rev = (byte_off, check_only) :: acc.va_checkers_rev;
+    va_field_readers = new_field_readers;
+    va_n_fields = List.length new_field_readers;
+    va_n_array_slots = List.length new_field_readers + n_extra_vars;
+    va_min_size = acc.va_min_size + cf.size_delta;
+    va_next_off = cf.next_off;
+    va_bf = cf.bf_after;
+  }
+
+let validator_of_struct (s : Types.struct_) : validator =
+  let acc =
+    List.fold_left apply_field_to_validator_acc empty_validator_acc s.fields
+  in
+  let wire_size_info =
+    match acc.va_next_off with
+    | Static_next n -> Fixed n
+    | Dynamic_next f -> Variable { min_size = acc.va_min_size; compute = f }
+  in
+  let param_handles = collect_param_handles s.fields s.where in
+  let n_params = List.length param_handles in
+  let param_base = acc.va_n_array_slots in
+  List.iteri
+    (fun i (Param.Pack p) ->
+      p.ph_slot <- param_base + i;
+      p.ph_env_idx <- i)
+    param_handles;
+  let n_total = param_base + n_params in
+  let compiled_where = compile_where_clause acc.va_field_readers s.where in
+  let _validate_arr, _populate, validate =
+    build_validators
+      (List.rev acc.va_validators_rev)
+      (List.rev acc.va_checkers_rev)
+      compiled_where s.fields n_total
+  in
+  {
+    vt_min_size = acc.va_min_size;
+    vt_wire_size = wire_size_info;
+    vt_validate = validate;
+  }
+
+let validate_struct v buf off = v.vt_validate buf off
+
+let struct_size_of v buf off =
+  match v.vt_wire_size with
+  | Fixed n -> n
+  | Variable { compute; _ } -> compute buf off - off
+
+let struct_min_size v = v.vt_min_size
+
+let wire_size_info_of_validator v =
+  match v.vt_wire_size with
+  | Fixed n -> `Fixed n
+  | Variable { compute; _ } -> `Variable compute
+
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
    constructor (fun a b -> ...). *)

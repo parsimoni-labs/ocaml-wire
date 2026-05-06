@@ -111,6 +111,32 @@ val pp : Format.formatter -> 'r t -> unit
 val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
+type validator
+(** A struct validator without a constructor. The same int-array validation
+    kernel that backs {!validate} on a [Codec.t], but built directly from a
+    {!Types.struct_}. Used by [Wire.decode_string] /[Wire.decode] for [Struct]
+    types so all struct validation goes through the same code path. *)
+
+val validator_of_struct : Types.struct_ -> validator
+(** [validator_of_struct s] compiles [s] into a validator. Constraints, [where]
+    clauses, and per-field actions are compiled to operate on a per-decode int
+    array; the resulting validator is reusable. *)
+
+val validate_struct : validator -> bytes -> int -> unit
+(** [validate_struct v buf off] runs the validator. Raises {!Types.Parse_error}
+    on failure. *)
+
+val struct_size_of : validator -> bytes -> int -> int
+(** Byte size of the struct starting at [off]. Independent of [buf] for
+    fixed-size structs; inspects the buffer otherwise. *)
+
+val struct_min_size : validator -> int
+(** Minimum byte size accepted. *)
+
+val wire_size_info_of_validator :
+  validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
+(** Wire-size info (parallels {!wire_size_info} for codecs). *)
+
 type bitfield
 (** A bitfield accessor -- shift and mask for one field in a packed word. *)
 
