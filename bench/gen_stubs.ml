@@ -52,11 +52,27 @@ let generate_stub_registry ppf structs projection_structs =
           | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
         else ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
       in
+      (* [ffi_parse] uses [_parse_k] directly (the single C entry point)
+         with a no-op continuation. The OCaml-side record-returning
+         [_parse] wrapper adds an extra C-to-OCaml callback hop just to
+         build a record we'd then discard; the bench measures pure
+         validation cost, so skip the wrapper. *)
+      let n_args =
+        List.length
+          (Wire.Everparse.Raw.field_kinds
+             (List.find
+                (fun p -> Wire.Everparse.Raw.struct_name p = name)
+                (structs @ projection_structs)))
+      in
+      let cont =
+        "(fun "
+        ^ String.concat " " (List.init n_args (fun _ -> "_"))
+        ^ " -> ())"
+      in
       pr
-        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> ignore \
-         (%s_parse b off)); loop = %s_loop; projected_int = %s; \
-         projected_int64 = %s }\n"
-        name lower lower lower proj_int proj_int64)
+        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> %s_parse_k %s \
+         b off); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
+        name lower lower cont lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n"
 

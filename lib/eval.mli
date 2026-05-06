@@ -1,37 +1,23 @@
-(** Expression evaluator, action interpreter, and parsing context.
+(** Top-level expression evaluator and value-to-int conversion.
 
-    Shared by {!Wire} (streaming decode) and {!Codec} (zero-copy access). Not
-    part of the public API -- consumers use {!Wire.decode} or {!Codec.decode}
-    instead. *)
+    The full struct-internal expression machinery (with [Ref]/[Sizeof_this]/
+    [Field_pos] resolution against bound fields) lives in {!Codec} as the
+    [compile_int_arr] family, which compiles expressions to [int array]
+    accessors at codec construction. This module is the residual evaluator for
+    the {!Wire.decode_string}/{!Wire.encode} paths, which only ever evaluate
+    expressions in {!empty}: no field references, no cross-field dependencies.
+*)
 
-(** {1 Context} *)
-
-type ctx
-(** Evaluation context: field bindings, sizeof_this, field_pos. *)
+type ctx = unit
+(** Empty context type. Cross-field state lives in [Codec]'s int-array
+    machinery; at top level there is nothing to thread. *)
 
 val empty : ctx
-(** Empty context. *)
-
-val bind : ctx -> string -> int -> ctx
-(** [bind ctx name v] adds a field binding. *)
-
-val set_pos : ctx -> sizeof_this:int -> field_pos:int -> ctx
-(** Update the positional metadata for the current field. *)
-
-(** {1 Type-to-int conversion} *)
 
 val int_of : 'a Types.typ -> 'a -> int option
-(** [int_of typ v] converts a typed value to [int] for context storage. Returns
-    [None] for types that don't fit in OCaml int (uint64 > 2^62, non-numeric
-    types). *)
-
-(** {1 Expression evaluation} *)
+(** [int_of typ v] converts a typed value to [int]. Returns [None] for types
+    that don't fit in OCaml int (uint64 > 2^62, non-numeric). *)
 
 val expr : ctx -> 'a Types.expr -> 'a
-(** Evaluate an expression in the given context. *)
-
-(** {1 Action execution} *)
-
-val action : ctx -> Types.action option -> ctx
-(** [action ctx act] executes an optional action block, returning the updated
-    context. Raises {!Types.Parse_error} on [return false] or [abort]. *)
+(** Evaluate a top-level expression. Raises on [Ref] (cross-field references are
+    only valid inside a struct). [Sizeof_this] and [Field_pos] return 0. *)

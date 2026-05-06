@@ -141,6 +141,15 @@ let read_eth_payload =
 let read_ip_payload =
   Staged.unstage (Codec.get Net.ipv4_codec Net.bf_ip_payload)
 
+(* Zero-alloc offset readers for the nested-write benches below: replaces
+   [Slice.first (Codec.get c f buf base)] (which allocates a [Slice.t]
+   per call). *)
+let eth_payload_off =
+  Staged.unstage (Codec.slice_offset Net.ethernet_codec Net.bf_eth_payload)
+
+let ip_payload_off =
+  Staged.unstage (Codec.slice_offset Net.ipv4_codec Net.bf_ip_payload)
+
 let ip_off = Slice.first (read_eth_payload tcp_frame 0)
 let tcp_off = Slice.first (read_ip_payload tcp_frame ip_off)
 
@@ -614,8 +623,8 @@ let nested_tcp_dst_write_case =
     label = "Eth->TCP.dst_port (3 layers)";
     run =
       (fun () ->
-        let ip = Slice.first (read_eth_payload tcp_frame 0) in
-        let tcp = Slice.first (read_ip_payload tcp_frame ip) in
+        let ip = eth_payload_off tcp_frame 0 in
+        let tcp = ip_payload_off tcp_frame ip in
         set tcp_frame tcp value);
     verify =
       verify_nested_write ~label:"Eth->TCP.dst_port (3 layers)" ~set ~get
@@ -642,8 +651,8 @@ let nested_tcp_syn_write_case =
     label = "Eth->TCP.syn (3 layers)";
     run =
       (fun () ->
-        let ip = Slice.first (read_eth_payload tcp_frame 0) in
-        let tcp = Slice.first (read_ip_payload tcp_frame ip) in
+        let ip = eth_payload_off tcp_frame 0 in
+        let tcp = ip_payload_off tcp_frame ip in
         set tcp_frame tcp value);
     verify =
       verify_nested_write ~label:"Eth->TCP.syn (3 layers)" ~set ~get

@@ -1822,6 +1822,228 @@ let seal : type r. (r, r) record -> r t =
     t_where = r.r_where;
   }
 
+(* -- Validator-only path: build a struct validator from [Types.struct_]
+      without requiring a record constructor. Reuses the same int-array
+      validation kernel ([compile_field], [build_validators]) that
+      [Codec.v]/[Codec.decode] uses; only the writer/reader projections
+      are skipped. Lets [Wire.decode_string]/[Wire.decode] for [Struct]
+      types share one code path with [Codec.decode]. *)
+
+type validator = {
+  vt_min_size : int;
+  vt_wire_size : wire_size_info;
+  vt_validate : bytes -> int -> unit;
+}
+
+(* Internal accumulator -- the validator-relevant subset of [record]. *)
+type validator_acc = {
+  va_validators_rev : (int * (int array -> bytes -> int -> unit)) list;
+  va_checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
+  va_field_readers : (string * (bytes -> int -> int)) list;
+  va_n_fields : int;
+  va_n_array_slots : int;
+  va_min_size : int;
+  va_next_off : next_off;
+  va_bf : bf_codec_state option;
+}
+
+let empty_validator_acc =
+  {
+    va_validators_rev = [];
+    va_checkers_rev = [];
+    va_field_readers = [];
+    va_n_fields = 0;
+    va_n_array_slots = 0;
+    va_min_size = 0;
+    va_next_off = Static_next 0;
+    va_bf = None;
+  }
+
+let layout_ctx_of_validator_acc acc =
+  {
+    lc_next_off = acc.va_next_off;
+    lc_bf = acc.va_bf;
+    lc_field_readers = acc.va_field_readers;
+    lc_n_fields = acc.va_n_fields;
+  }
+
+(* Per-field step: open [Types.Field]'s existential ['a], build a fake
+   [('a, unit) field] with an [assert false] projection (never invoked on
+   the validator path), call [compile_field], and accumulate the
+   validator-relevant pieces of the resulting [compiled_field].
+
+   [Struct]-typed fields are handled specially -- [compile_field] does
+   not support them (a struct has no [field_wire_size] without its inner
+   fields being walked). For nested structs we build a sub-validator
+   recursively and inline its [vt_validate] at the right offset. Inner
+   field references stay scoped to the inner struct, matching the old
+   [parse_struct_fields] semantics. *)
+let rec apply_field_to_validator_acc acc (Types.Field f) =
+  match f.field_typ with
+  | Types.Struct inner_struct ->
+      let inner_v = validator_of_struct inner_struct in
+      let static_off =
+        match acc.va_next_off with Static_next n -> n | Dynamic_next _ -> -1
+      in
+      let off_fn =
+        match acc.va_next_off with
+        | Static_next n -> fun _buf _base -> n
+        | Dynamic_next f -> fun buf base -> f buf base - base
+      in
+      let validator _arr buf base =
+        let fo = off_fn buf base in
+        inner_v.vt_validate buf (base + fo)
+      in
+      let size_delta, next_off =
+        match (acc.va_next_off, inner_v.vt_wire_size) with
+        | Static_next n, Fixed sz -> (sz, Static_next (n + sz))
+        | _, Fixed sz ->
+            let prev_end =
+              match acc.va_next_off with
+              | Static_next n -> fun _buf base -> base + n
+              | Dynamic_next f -> f
+            in
+            (sz, Dynamic_next (fun buf base -> prev_end buf base + sz))
+        | _, Variable { min_size; compute } ->
+            let prev_end =
+              match acc.va_next_off with
+              | Static_next n -> fun _buf base -> base + n
+              | Dynamic_next f -> f
+            in
+            ( min_size,
+              Dynamic_next (fun buf base -> compute buf (prev_end buf base)) )
+      in
+      {
+        va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
+        va_checkers_rev = (static_off, validator) :: acc.va_checkers_rev;
+        va_field_readers = acc.va_field_readers;
+        va_n_fields = acc.va_n_fields;
+        va_n_array_slots = acc.va_n_array_slots;
+        va_min_size = acc.va_min_size + size_delta;
+        va_next_off = next_off;
+        va_bf = None;
+      }
+  | _ ->
+      let codec_field : (_, unit) field =
+        {
+          name = Option.value f.field_name ~default:"";
+          typ = f.field_typ;
+          constraint_ = f.constraint_;
+          action = f.action;
+          get = (fun () -> assert false);
+        }
+      in
+      let layout = layout_ctx_of_validator_acc acc in
+      let cf = compile_field layout codec_field in
+      let action_var_names =
+        match f.action with
+        | None -> []
+        | Some (Types.On_success stmts | Types.On_act stmts) ->
+            List.fold_left action_vars [] stmts
+      in
+      let n_extra_vars = List.length action_var_names in
+      let field_idx = acc.va_n_fields in
+      let dummy_reader _buf _base = 0 in
+      let cc_readers =
+        let base = (codec_field.name, dummy_reader) :: acc.va_field_readers in
+        List.fold_left
+          (fun acc' vn -> (vn, dummy_reader) :: acc')
+          base action_var_names
+      in
+      let idx = build_idx cc_readers in
+      let cc = { idx; sizeof_this = cf.validator_off; field_pos = field_idx } in
+      let check =
+        match f.constraint_ with
+        | None -> None
+        | Some c -> Some (compile_bool_arr cc c)
+      in
+      let act = compile_action cc f.action in
+      let populate = cf.populate in
+      let full arr buf base =
+        populate arr buf base;
+        (match check with
+        | Some f when not (f arr) ->
+            raise (Parse_error (Constraint_failed "field constraint"))
+        | _ -> ());
+        match act with Some f -> f arr | None -> ()
+      in
+      let check_only arr buf base =
+        populate arr buf base;
+        match check with
+        | Some f when not (f arr) ->
+            raise (Parse_error (Constraint_failed "field constraint"))
+        | _ -> ()
+      in
+      let byte_off = cf.validator_off in
+      let new_field_readers =
+        cf.nested_readers
+        @ ((codec_field.name, cf.int_reader) :: acc.va_field_readers)
+      in
+      {
+        va_validators_rev = (byte_off, full) :: acc.va_validators_rev;
+        va_checkers_rev = (byte_off, check_only) :: acc.va_checkers_rev;
+        va_field_readers = new_field_readers;
+        va_n_fields = List.length new_field_readers;
+        va_n_array_slots = List.length new_field_readers + n_extra_vars;
+        va_min_size = acc.va_min_size + cf.size_delta;
+        va_next_off = cf.next_off;
+        va_bf = cf.bf_after;
+      }
+
+and validator_of_struct (s : Types.struct_) : validator =
+  let acc =
+    List.fold_left apply_field_to_validator_acc empty_validator_acc s.fields
+  in
+  let wire_size_info =
+    match acc.va_next_off with
+    | Static_next n -> Fixed n
+    | Dynamic_next f -> Variable { min_size = acc.va_min_size; compute = f }
+  in
+  let param_handles = collect_param_handles s.fields s.where in
+  let n_params = List.length param_handles in
+  let param_base = acc.va_n_array_slots in
+  List.iteri
+    (fun i (Param.Pack p) ->
+      p.ph_slot <- param_base + i;
+      p.ph_env_idx <- i)
+    param_handles;
+  let n_total = param_base + n_params in
+  let compiled_where = compile_where_clause acc.va_field_readers s.where in
+  let validate_arr, _populate, _validate =
+    build_validators
+      (List.rev acc.va_validators_rev)
+      (List.rev acc.va_checkers_rev)
+      compiled_where s.fields n_total
+  in
+  (* Full validation: fire field actions and check the where clause.
+     [build_validators]'s third return [validate] is checkers-only (no
+     actions). [validate_arr] runs full validators -- pre-allocate one
+     scratch [int array], zero it on entry. *)
+  let arr = Array.make n_total 0 in
+  let validate buf off =
+    if n_total > 0 then Array.fill arr 0 n_total 0;
+    validate_arr arr buf off
+  in
+  {
+    vt_min_size = acc.va_min_size;
+    vt_wire_size = wire_size_info;
+    vt_validate = validate;
+  }
+
+let validate_struct v buf off = v.vt_validate buf off
+
+let struct_size_of v buf off =
+  match v.vt_wire_size with
+  | Fixed n -> n
+  | Variable { compute; _ } -> compute buf off - off
+
+let struct_min_size v = v.vt_min_size
+
+let wire_size_info_of_validator v =
+  match v.vt_wire_size with
+  | Fixed n -> `Fixed n
+  | Variable { compute; _ } -> `Variable compute
+
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
    constructor (fun a b -> ...). *)
@@ -2069,6 +2291,52 @@ let field_readers t = t.t_field_readers
 let pp ppf t = Fmt.string ppf t.t_name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 
+(* -- Slice navigation: zero-copy access to the offset/length of a
+      [Byte_slice] field. Used to descend into a nested codec without
+      allocating a [Slice.t]. The type signature constrains the field's
+      payload type to [Slice.t], so passing a non-slice field is a
+      compile-time error. -- *)
+
+(* All access flavours produce an absolute byte offset for a slice field:
+   - [Fixed off]: byte_slice with static size (and no preceding variable
+     fields) -- offset is [base + off].
+   - [Dynamic fn]: byte_slice with static size after a variable field --
+     offset is [base + fn buf base].
+   - [Variable { off; _ }]: byte_slice with variable size, statically
+     positioned -- offset is [base + off].
+   - [Variable_dynamic { off_fn; _ }]: variable size, dynamic position. *)
+let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
+    (bytes -> int -> int) Staged.t =
+  match field_access codec f.name with
+  | Fixed off -> Staged.stage (fun _buf base -> base + off)
+  | Dynamic fn -> Staged.stage (fun buf base -> base + fn buf base)
+  | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
+  | Variable_dynamic { off_fn; _ } ->
+      Staged.stage (fun buf base -> base + off_fn buf base)
+  | Bitfield _ ->
+      Fmt.invalid_arg
+        "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
+
+let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
+    (bytes -> int -> int) Staged.t =
+  match (f.typ, field_access codec f.name) with
+  | Byte_slice { size }, Fixed _ | Byte_slice { size }, Dynamic _ -> (
+      (* Static-size byte_slice: size is a constant expression. *)
+      match size with
+      | Int n -> Staged.stage (fun _buf _base -> n)
+      | _ ->
+          Fmt.invalid_arg
+            "Codec.slice_length: field %S has dynamic size in a static access \
+             -- internal inconsistency"
+            f.name)
+  | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
+      Staged.stage size_fn
+  | _, (Fixed _ | Dynamic _) ->
+      Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
+  | _, Bitfield _ ->
+      Fmt.invalid_arg
+        "Codec.slice_length: field %S is a bitfield, not a byte slice" f.name
+
 (* -- Bitfield batch access -- *)
 
 type bitfield = bf_info
@@ -2076,12 +2344,20 @@ type bitfield = bf_info
 let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
   match field_access codec f.name with
   | Bitfield { base; byte_off; shift; width } ->
-      let word_reader = Bitfield.read_word base in
+      (* Dispatch on [base] once at construction so the resulting closure
+         is a direct read of the right width with [byte_off] baked in.
+         Avoids the partial-application + runtime [match] that
+         [Bitfield.read_word base] would create. *)
+      let word_reader =
+        match base with
+        | BF_U8 -> fun buf off -> Bytes.get_uint8 buf (off + byte_off)
+        | BF_U16 Little -> fun buf off -> Bitfield.u16_le buf (off + byte_off)
+        | BF_U16 Big -> fun buf off -> Bitfield.u16_be buf (off + byte_off)
+        | BF_U32 Little -> fun buf off -> Bitfield.u32_le buf (off + byte_off)
+        | BF_U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
+      in
       let mask = (1 lsl width) - 1 in
-      {
-        bf_word_reader = (fun buf off -> word_reader buf (off + byte_off));
-        bf_packed = shift lor (mask lsl 8);
-      }
+      { bf_word_reader = word_reader; bf_packed = shift lor (mask lsl 8) }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
 let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =

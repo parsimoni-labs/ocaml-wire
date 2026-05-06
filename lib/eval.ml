@@ -1,16 +1,21 @@
-(* Expression evaluator, action interpreter, and parsing context. *)
+(* Top-level expression evaluator and value-to-int conversion.
+
+   The full struct-internal expression machinery (with [Ref]/[Sizeof_this]/
+   [Field_pos] resolution against bound fields) lives in [Codec] as the
+   [compile_int_arr] family, which compiles expressions to [int array]
+   accessors at codec construction. This module is the residual evaluator
+   for the [Wire.decode_string]/[Wire.encode] paths, which only ever
+   evaluate expressions in [empty]: no field references, no cross-field
+   dependencies. *)
 
 open Types
-module Fields = Map.Make (String)
 
-type ctx = { fields : int Fields.t; sizeof_this : int; field_pos : int }
+type ctx = unit
 
-let empty = { fields = Fields.empty; sizeof_this = 0; field_pos = 0 }
-let bind ctx name v = { ctx with fields = Fields.add name v ctx.fields }
-let set_pos ctx ~sizeof_this ~field_pos = { ctx with sizeof_this; field_pos }
+let empty : ctx = ()
 
-(* Convert a typed value to [int] for context storage. Returns [None]
-   for types that don't fit in OCaml int (uint64, non-numeric). *)
+(* Convert a typed value to [int]. Returns [None] for types that don't
+   fit in OCaml int (uint64 over 2^63, non-numeric). *)
 let rec int_of : type a. a typ -> a -> int option =
  fun typ v ->
   match typ with
@@ -31,22 +36,20 @@ let rec int_of : type a. a typ -> a -> int option =
   | Optional_or _ | Repeat _ ->
       None
 
-let get ctx name =
-  match Fields.find_opt name ctx.fields with
-  | Some v -> v
-  | None -> failwith ("unbound field: " ^ name)
-
 let rec expr : type a. ctx -> a expr -> a =
  fun ctx e ->
   match e with
   | Int n -> n
   | Int64 n -> n
   | Bool b -> b
-  | Ref name -> get ctx name
+  | Ref name ->
+      failwith
+        ("Eval.expr: unbound field " ^ name
+       ^ " (cross-field references are only valid inside a struct)")
   | Param_ref p -> !(p.ph_cell)
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
-  | Sizeof_this -> ctx.sizeof_this
-  | Field_pos -> ctx.field_pos
+  | Sizeof_this -> 0
+  | Field_pos -> 0
   | Add (a, b) -> expr ctx a + expr ctx b
   | Sub (a, b) -> expr ctx a - expr ctx b
   | Mul (a, b) -> expr ctx a * expr ctx b
@@ -75,38 +78,3 @@ let rec expr : type a. ctx -> a expr -> a =
       | `U32 -> v land 0xFFFF_FFFF
       | `U64 -> v)
   | If_then_else (c, t, e) -> if expr ctx c then expr ctx t else expr ctx e
-
-type action_outcome = Continue of ctx | Return of bool * ctx | Abort
-
-let rec exec_stmt ctx = function
-  | Assign (p, e) ->
-      let v = expr ctx e in
-      p.Types.ph_cell := v;
-      Continue (bind ctx p.Types.ph_name v)
-  | Field_assign (_, _, _) | Extern_call (_, _) ->
-      (* 3D-only constructs for output/extern patterns. No-op at runtime. *)
-      Continue ctx
-  | Return e -> Return (expr ctx e, ctx)
-  | Types.Abort -> Abort
-  | If (cond, then_, else_) ->
-      exec_stmts ctx
-        (if expr ctx cond then then_ else Option.value else_ ~default:[])
-  | Var (name, e) -> Continue (bind ctx name (expr ctx e))
-
-and exec_stmts ctx = function
-  | [] -> Continue ctx
-  | stmt :: rest -> (
-      match exec_stmt ctx stmt with
-      | Continue ctx' -> exec_stmts ctx' rest
-      | Return _ as r -> r
-      | Abort -> Abort)
-
-let action ctx = function
-  | None -> ctx
-  | Some (On_success stmts | On_act stmts) -> (
-      match exec_stmts ctx stmts with
-      | Continue ctx' -> ctx'
-      | Return (true, ctx') -> ctx'
-      | Return (false, _) ->
-          raise (Parse_error (Constraint_failed "field action"))
-      | Abort -> raise (Parse_error (Constraint_failed "field action")))

@@ -11,6 +11,18 @@ val equal : Types.bitfield_base -> Types.bitfield_base -> bool
 val read_word : Types.bitfield_base -> bytes -> int -> int
 (** Read the base word from bytes at offset. *)
 
+val u16_le : bytes -> int -> int
+(** Inline little-endian 16-bit word read. *)
+
+val u16_be : bytes -> int -> int
+(** Inline big-endian 16-bit word read. *)
+
+val u32_le : bytes -> int -> int
+(** Inline little-endian 32-bit word read. *)
+
+val u32_be : bytes -> int -> int
+(** Inline big-endian 32-bit word read. *)
+
 val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
 (** Write the base word to bytes at offset. *)
 
