@@ -532,6 +532,28 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
       let word = Bitfield.read_word base buf off in
       Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word
   | Unit -> ()
+  | All_bytes -> Bytes.sub_string buf off (len - off)
+  | All_zeros ->
+      let s = Bytes.sub_string buf off (len - off) in
+      let rec check i =
+        if i >= String.length s then s
+        else if s.[i] <> '\000' then
+          raise (Parse_exn (All_zeros_failed { offset = off + i }))
+        else check (i + 1)
+      in
+      check 0
+  | Byte_array { size = Int n } ->
+      check_eof len (off + n);
+      Bytes.sub_string buf off n
+  | Byte_slice { size = Int n } ->
+      check_eof len (off + n);
+      Slice.make buf ~first:off ~length:n
+  | Single_elem { size = Int n; elem; at_most } ->
+      check_eof len (off + n);
+      (* Bound the inner decode to the static size. [at_most] permits short
+         elements (only [n] bytes are consumed regardless). *)
+      let _ = at_most in
+      parse_direct elem buf off (off + n)
   | Map { inner; decode; _ } -> (
       match decode (parse_direct inner buf off len) with
       | r -> r
@@ -542,8 +564,19 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a =
       let valid = List.map snd cases in
       if List.mem v valid then v
       else raise (Parse_exn (Invalid_enum { value = v; valid }))
+  | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
+      let sz =
+        match codec_fixed_size with
+        | Some n -> n
+        | None -> codec_size_of buf off
+      in
+      check_eof len (off + sz);
+      codec_decode buf off
   | _ ->
-      (* Variable-size or complex types: fall back to decoder *)
+      (* Types that genuinely need a [ctx] (cross-field [Ref], [Sizeof_this],
+         [Field_pos], parameterised structs): fall back to the streaming
+         decoder. At top level these only succeed if the [ctx] expression
+         evaluates without bound fields, so the fallback is rare. *)
       let dec = decoder_of_bytes buf len in
       dec.i_next <- off;
       let v, _ = parse_with dec empty_ctx typ in
@@ -841,9 +874,46 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
           Bytes.set_int32_be buf off (Int32.of_int masked);
           off + 4)
   | Unit -> off
+  | All_bytes ->
+      let s = (v : string) in
+      let n = String.length s in
+      Bytes.blit_string s 0 buf off n;
+      off + n
+  | All_zeros ->
+      let s = (v : string) in
+      let n = String.length s in
+      Bytes.blit_string s 0 buf off n;
+      off + n
+  | Byte_array { size = Int n } ->
+      let s = (v : string) in
+      let len = min n (String.length s) in
+      Bytes.blit_string s 0 buf off len;
+      if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
+      off + n
+  | Byte_slice { size = Int n } ->
+      let src = (v : Slice.t) in
+      let len = min n (Slice.length src) in
+      Bytes.blit (Slice.bytes src) (Slice.first src) buf off len;
+      if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
+      off + n
+  | Single_elem { size = Int n; elem; at_most = _ } ->
+      let off' = encode_direct elem buf off v in
+      (* Pad up to [n] if the inner write was shorter. *)
+      if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
+      off + n
   | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
   | Where { inner; _ } -> encode_direct inner buf off v
   | Enum { base; _ } -> encode_direct base buf off v
+  | Codec { codec_encode; _ } ->
+      codec_encode v buf off;
+      (* Codecs are responsible for advancing through the full struct.
+         The wire size determines how many bytes they wrote. *)
+      let sz =
+        match field_wire_size typ with
+        | Some n -> n
+        | None -> failwith "encode_direct: Codec without static wire size"
+      in
+      off + sz
   | _ ->
       (* Variable-size: fall back to streaming encoder *)
       let tmp = Buffer.create 64 in
