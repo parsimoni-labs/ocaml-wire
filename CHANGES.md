@@ -24,6 +24,34 @@
   and `arr`, allocating a fresh closure on every encode (~6w/op on the
   demo `CasesDemo.type` write case). Calling a top-level function
   takes 0w/op. No behavioural change.
+- `Wire.cases`: same closure-capture fix as `variants` above; the two
+  combinators shared the same `let rec go` anti-pattern.
+- **Single decode/encode codepath.** `Wire.decode_string` /
+  `Wire.decode_bytes` / `Wire.decode (Reader)` previously dispatched
+  through `parse_with`, a streaming reader-based decoder that threaded
+  an `Eval.ctx` (a `Map.Make (String)`) for cross-field references.
+  The decoder is now a single `parse_direct : 'a typ -> bytes -> int ->
+  int -> 'a * int` kernel handling all DSL types directly; streaming
+  becomes a thin buffering layer. Struct types validate via the new
+  `Codec.validator_of_struct` (the same int-array validation kernel as
+  `Codec.decode`). No more parallel implementation, no more String
+  Map. Same migration on the encode side: `Wire.encode` (Writer-based)
+  goes through a single `encode_to_writer` kernel.
+- `Codec.validator` / `Codec.validator_of_struct` / `Codec.validate_struct`
+  / `Codec.struct_size_of` / `Codec.struct_min_size` /
+  `Codec.wire_size_info_of_validator`: new public API exposing the
+  int-array validation kernel for arbitrary `Types.struct_` (no record
+  constructor required). Used internally by `Wire.decode_string` for
+  `Struct` types.
+- `Eval` module slimmed: `ctx` is now `unit`; `bind`, `get`, `set_pos`,
+  and the streaming `action` interpreter are gone. Only `expr`
+  (top-level, fails on `Ref`) and `int_of` remain.
+- Deleted from `lib/wire.ml`: `parse_with`, `parse_struct_fields`,
+  `parse_codec`, `parse_all_zeros`, `parse_bits`, `parse_bf_field`,
+  `parse_int`, the buffered `decoder` type and its `refill`/`read_*`
+  helpers, the `bf_accum` accumulator, `check_constraint`, and
+  `apply_action`. The legacy reader-based decoder has no remaining
+  surface area.
 
 ## 0.9.0
 
