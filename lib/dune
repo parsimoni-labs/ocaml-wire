@@ -2,3 +2,7 @@
  (name wire)
  (public_name wire)
  (libraries bytesrw fmt))
+
+(mdx
+ (files codec.mli field.mli wire.mli)
+ (libraries wire bytesrw))

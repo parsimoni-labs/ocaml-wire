@@ -17,6 +17,11 @@
   `Wire.encode_to_bytes` to `Wire.encode_bytes` for symmetry with
   `Wire.decode_string` / `Wire.decode_bytes` (@samoht)
 
+### Documentation
+
+- Type-check `README.md` and every public `.mli` example under `mdx`
+  (`(using mdx 0.4)`). Stale snippets now break `dune runtest`. (@samoht)
+
 ### Fixed
 
 - Allow `Wire.codec` sub-codecs and `Wire.repeat` after a variable-size

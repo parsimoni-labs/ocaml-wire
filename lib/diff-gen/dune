@@ -2,3 +2,7 @@
  (name wire_diff_gen)
  (public_name wire.diff-gen)
  (libraries wire wire.3d fmt unix))
+
+(mdx
+ (files wire_diff_gen.mli)
+ (libraries wire wire.3d wire.diff-gen))

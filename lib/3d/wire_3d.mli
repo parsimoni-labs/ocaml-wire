@@ -9,7 +9,20 @@
 
     {b Typical usage} ([gen.ml]):
     {[
-    let () = Wire_3d.main ~package:"clcw" [ Wire.Everparse.schema Clcw.codec ]
+    open Wire
+
+    type header = { version : int; length : int }
+
+    let codec =
+      Codec.v "Header"
+        (fun version length -> { version; length })
+        Codec.
+          [
+            (Field.v "Version" (bits ~width:4 U8) $ fun h -> h.version);
+            (Field.v "Length" uint16be $ fun h -> h.length);
+          ]
+
+    let main () = Wire_3d.main ~package:"hdr" [ Everparse.schema codec ]
     ]}
 
     With a minimal [dune] that includes the generated rules:

@@ -118,16 +118,9 @@ val slice_offset :
 
     The naive [Slice.first (Codec.get c f buf base)] pattern allocates a fresh
     [Slice.t] (4 words) inside [Codec.get] only to discard it after extracting
-    one int. [slice_offset] skips the make and returns the int directly:
-
-    {[
-    (* Was: 4w/op alloc per call (inside Codec.get) *)
-    let off = Slice.first (Codec.get c f buf base)
-
-    (* Now: 0w/op *)
-    let read_off = Staged.unstage (Codec.slice_offset c f)
-    let off = read_off buf base
-    ]}
+    one int. [slice_offset] skips the make and returns the int directly: stage
+    once with [Codec.slice_offset c f |> Staged.unstage], then call the
+    resulting [buf -> base -> int] reader on the hot path.
 
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a
     compile-time error. *)
