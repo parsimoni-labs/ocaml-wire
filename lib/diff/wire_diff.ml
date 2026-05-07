@@ -25,7 +25,7 @@ type result =
 
 let wire_size (Harness h) = Wire.Codec.wire_size h.codec
 
-let encode_to_string codec v =
+let encode_string codec v =
   let buf = Bytes.create (Wire.Codec.wire_size codec) in
   Wire.Codec.encode codec v buf 0;
   Bytes.unsafe_to_string buf
@@ -71,7 +71,7 @@ let write_test (Harness h) value =
   | None -> Only_ocaml_ok "External write failed"
 
 let roundtrip_test (Harness h) value =
-  let ocaml_bytes = encode_to_string h.codec value in
+  let ocaml_bytes = encode_string h.codec value in
   match (h.read ocaml_bytes, h.ocaml_read ocaml_bytes) with
   | None, Some _ -> Only_ocaml_ok "External read failed on OCaml-encoded bytes"
   | Some _, None -> Only_c_ok "OCaml rejected OCaml-encoded bytes"

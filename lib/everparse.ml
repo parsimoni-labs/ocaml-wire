@@ -158,7 +158,7 @@ let conjoin_constraints constraints =
    overall verdict. Bitfield actions use 3D's [:act] form, which fires
    regardless of validation outcome, so moving constraints does not
    affect callback behaviour. *)
-let collapse_constraints_to_last group =
+let collapse_constraints_into_last group =
   let constraints = List.map (fun (Types.Field f) -> f.constraint_) group in
   let combined = conjoin_constraints constraints in
   let rec walk = function
@@ -225,7 +225,7 @@ let reorder_bit_groups_for_3d fields =
           (* Backward references in reversed order would break: fields now
              come before the values their constraints read. Collapse all
              constraints onto the last reversed field. *)
-          let reversed = collapse_constraints_to_last reversed in
+          let reversed = collapse_constraints_into_last reversed in
           let padded =
             let padding = total - used in
             if padding > 0 then

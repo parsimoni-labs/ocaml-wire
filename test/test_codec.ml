@@ -10,14 +10,14 @@ let decode_ok = function
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 (* Helper: encode record to string using Codec API *)
-let encode_record_to_string codec v =
+let encode_record codec v =
   let ws = Codec.wire_size codec in
   let buf = Bytes.create ws in
   Codec.encode codec v buf 0;
   Ok (Bytes.unsafe_to_string buf)
 
 (* Helper: decode record from string using Codec API *)
-let decode_record_from_string codec s =
+let decode_record codec s =
   let ws = Codec.wire_size codec in
   if String.length s < ws then
     Error (Unexpected_eof { expected = ws; got = String.length s })
@@ -39,7 +39,7 @@ let simple_record_codec =
 
 let test_record_encode () =
   let v = { a = 0x42; b = 0x1234; c = 0x56789ABC } in
-  match encode_record_to_string simple_record_codec v with
+  match encode_record simple_record_codec v with
   | Error e -> Alcotest.failf "%a" pp_parse_error e
   | Ok encoded ->
       (* uint8 + uint16_le + uint32_le *)
@@ -51,7 +51,7 @@ let test_record_encode () =
 
 let test_record_decode () =
   let input = "\x42\x34\x12\xBC\x9A\x78\x56" in
-  match decode_record_from_string simple_record_codec input with
+  match decode_record simple_record_codec input with
   | Ok v ->
       Alcotest.(check int) "a" 0x42 v.a;
       Alcotest.(check int) "b" 0x1234 v.b;
@@ -60,10 +60,10 @@ let test_record_decode () =
 
 let test_record_roundtrip () =
   let original = { a = 0xAB; b = 0xCDEF; c = 0x12345678 } in
-  match encode_record_to_string simple_record_codec original with
+  match encode_record simple_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
-      match decode_record_from_string simple_record_codec encoded with
+      match decode_record simple_record_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "a roundtrip" original.a decoded.a;
           Alcotest.(check int) "b roundtrip" original.b decoded.b;
@@ -229,11 +229,11 @@ let multi_record_codec =
 
 let test_record_with_multi () =
   let original = { x = 0x1234; y = 0x5678 } in
-  match encode_record_to_string multi_record_codec original with
+  match encode_record multi_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       Alcotest.(check int) "length" 4 (String.length encoded);
-      match decode_record_from_string multi_record_codec encoded with
+      match decode_record multi_record_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "x" original.x decoded.x;
           Alcotest.(check int) "y" original.y decoded.y
@@ -254,11 +254,11 @@ let ba_record_codec =
 
 let test_record_byte_array_roundtrip () =
   let original = { id = 0x12345678; uuid = "0123456789abcdef"; tag = 0xABCD } in
-  match encode_record_to_string ba_record_codec original with
+  match encode_record ba_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       Alcotest.(check int) "wire size" 22 (String.length encoded);
-      match decode_record_from_string ba_record_codec encoded with
+      match decode_record ba_record_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "id" original.id decoded.id;
           Alcotest.(check string) "uuid" original.uuid decoded.uuid;
@@ -268,7 +268,7 @@ let test_record_byte_array_roundtrip () =
 let test_record_byte_array_padding () =
   (* Short string should be zero-padded *)
   let original = { id = 1; uuid = "short"; tag = 2 } in
-  match encode_record_to_string ba_record_codec original with
+  match encode_record ba_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       Alcotest.(check int) "wire size" 22 (String.length encoded);
@@ -279,7 +279,7 @@ let test_record_byte_array_padding () =
           0
           (Char.code encoded.[i])
       done;
-      match decode_record_from_string ba_record_codec encoded with
+      match decode_record ba_record_codec encoded with
       | Ok decoded ->
           (* Decoded uuid includes the zero padding *)
           Alcotest.(check int) "uuid length" 16 (String.length decoded.uuid);
@@ -336,10 +336,10 @@ let test_codec_bitfield_wire_size () =
 
 let test_codec_bitfield_roundtrip () =
   let original = { bf_a = 5; bf_b = 20; bf_c = 0x1234; bf_d = 0xAB } in
-  match encode_record_to_string bf32_codec original with
+  match encode_record bf32_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
-      match decode_record_from_string bf32_codec encoded with
+      match decode_record bf32_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "a" original.bf_a decoded.bf_a;
           Alcotest.(check int) "b" original.bf_b decoded.bf_b;
@@ -352,7 +352,7 @@ let test_codec_bitfield_byte_layout () =
      MSB-first packing: 101_10100_0001001000110100_10101011
      = 0xB4 0x12 0x34 0xAB *)
   let v = { bf_a = 5; bf_b = 20; bf_c = 0x1234; bf_d = 0xAB } in
-  match encode_record_to_string bf32_codec v with
+  match encode_record bf32_codec v with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded ->
       Alcotest.(check int) "length" 4 (String.length encoded);
@@ -364,7 +364,7 @@ let test_codec_bitfield_byte_layout () =
 let test_codec_bitfield_decode () =
   (* Decode 0xB41234AB -> a=5, b=20, c=0x1234, d=0xAB *)
   let input = "\xB4\x12\x34\xAB" in
-  match decode_record_from_string bf32_codec input with
+  match decode_record bf32_codec input with
   | Ok v ->
       Alcotest.(check int) "a" 5 v.bf_a;
       Alcotest.(check int) "b" 20 v.bf_b;
@@ -377,7 +377,7 @@ let test_codec_bitfield_multi_group () =
   let v =
     { bf_ver = 5; bf_flags = 2; bf_id = 0x7FF; bf_count = 0x3FFF; bf_len = 3 }
   in
-  match encode_record_to_string bf16_codec v with
+  match encode_record bf16_codec v with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       Alcotest.(check int) "length" 4 (String.length encoded);
@@ -388,7 +388,7 @@ let test_codec_bitfield_multi_group () =
       Alcotest.(check int) "byte 2" 0xFF (Char.code encoded.[2]);
       Alcotest.(check int) "byte 3" 0xFF (Char.code encoded.[3]);
       (* Roundtrip decode *)
-      match decode_record_from_string bf16_codec encoded with
+      match decode_record bf16_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "ver" v.bf_ver decoded.bf_ver;
           Alcotest.(check int) "flags" v.bf_flags decoded.bf_flags;
@@ -400,7 +400,7 @@ let test_codec_bitfield_multi_group () =
 let test_codec_bitfield_overflow_u8 () =
   let v = { bf_a = 0x8; bf_b = 0; bf_c = 0; bf_d = 0 } in
   (* bf_a is 3 bits, 0x8 = 8 exceeds max 7 *)
-  match encode_record_to_string bf32_codec v with
+  match encode_record bf32_codec v with
   | Ok _ -> Alcotest.fail "expected overflow for 3-bit field with value 0x8"
   | Error _ -> ()
   | exception Invalid_argument _ -> ()
@@ -410,7 +410,7 @@ let test_codec_bitfield_overflow_u16 () =
     { bf_ver = 0; bf_flags = 0; bf_id = 0x800; bf_count = 0; bf_len = 0 }
   in
   (* bf_id is 11 bits, 0x800 = 2048 exceeds max 2047 *)
-  match encode_record_to_string bf16_codec v with
+  match encode_record bf16_codec v with
   | Ok _ -> Alcotest.fail "expected overflow for 11-bit field with value 0x800"
   | Error _ -> ()
   | exception Invalid_argument _ -> ()
@@ -418,7 +418,7 @@ let test_codec_bitfield_overflow_u16 () =
 let test_codec_bitfield_overflow_u32 () =
   let v = { bf_a = 0; bf_b = 0; bf_c = 0x10000; bf_d = 0 } in
   (* bf_c is 16 bits, 0x10000 exceeds max 0xFFFF *)
-  match encode_record_to_string bf32_codec v with
+  match encode_record bf32_codec v with
   | Ok _ ->
       Alcotest.fail "expected overflow for 16-bit field with value 0x10000"
   | Error _ -> ()
@@ -427,10 +427,10 @@ let test_codec_bitfield_overflow_u32 () =
 let test_codec_bitfield_max_valid () =
   (* All fields at their maximum valid values *)
   let v = { bf_a = 7; bf_b = 31; bf_c = 0xFFFF; bf_d = 0xFF } in
-  match encode_record_to_string bf32_codec v with
+  match encode_record bf32_codec v with
   | Error e -> Alcotest.failf "encode max valid: %a" pp_parse_error e
   | Ok encoded -> (
-      match decode_record_from_string bf32_codec encoded with
+      match decode_record bf32_codec encoded with
       | Ok decoded ->
           Alcotest.(check int) "a" 7 decoded.bf_a;
           Alcotest.(check int) "b" 31 decoded.bf_b;
