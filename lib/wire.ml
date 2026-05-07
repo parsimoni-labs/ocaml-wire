@@ -484,9 +484,8 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         (fun i c ->
           let n = Char.code c in
           if not (Eval.expr (Eval.bind elt_var n Eval.empty) cond) then
-            invalid_arg
-              (Fmt.str "byte_array_where: byte %d=0x%02x violates constraint" i
-                 n))
+            Fmt.invalid_arg
+              "byte_array_where: byte %d=0x%02x violates constraint" i n)
         v;
       write_string enc v
   | Byte_slice _ ->
