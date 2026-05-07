@@ -178,7 +178,7 @@ let test_map_roundtrip n =
   let t =
     Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
   in
-  let encoded = Wire.encode_to_string t (n * 2) in
+  let encoded = Wire.encode_string t (n * 2) in
   match Wire.decode_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
   | Error _ -> fail "map roundtrip parse failed"

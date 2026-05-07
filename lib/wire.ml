@@ -616,7 +616,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       off + sz
   | _ -> encode_via_writer typ buf off v
 
-let encode_to_bytes typ v =
+let encode_bytes typ v =
   match field_wire_size typ with
   | Some n ->
       let buf = Bytes.create n in
@@ -628,7 +628,7 @@ let encode_to_bytes typ v =
       encode typ v writer;
       Buffer.to_bytes buf
 
-let encode_to_string typ v =
+let encode_string typ v =
   match field_wire_size typ with
   | Some n ->
       let buf = Bytes.create n in

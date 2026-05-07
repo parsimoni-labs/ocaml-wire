@@ -383,38 +383,38 @@ let test_sizeof_this_with_action () =
 (* -- Encoding tests -- *)
 
 let test_encode_uint8 () =
-  let encoded = encode_to_string uint8 0x42 in
+  let encoded = encode_string uint8 0x42 in
   Alcotest.(check string) "uint8 encoding" "\x42" encoded
 
 let test_encode_uint16_le () =
-  let encoded = encode_to_string uint16 0x0201 in
+  let encoded = encode_string uint16 0x0201 in
   Alcotest.(check string) "uint16 le encoding" "\x01\x02" encoded
 
 let test_encode_uint16_be () =
-  let encoded = encode_to_string uint16be 0x0102 in
+  let encoded = encode_string uint16be 0x0102 in
   Alcotest.(check string) "uint16 be encoding" "\x01\x02" encoded
 
 let test_encode_uint32_le () =
-  let encoded = encode_to_string uint32 0x04030201 in
+  let encoded = encode_string uint32 0x04030201 in
   Alcotest.(check string) "uint32 le encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_uint32_be () =
-  let encoded = encode_to_string uint32be 0x01020304 in
+  let encoded = encode_string uint32be 0x01020304 in
   Alcotest.(check string) "uint32 be encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_array () =
   let t = array ~len:(int 3) uint8 in
-  let encoded = encode_to_string t [ 1; 2; 3 ] in
+  let encoded = encode_string t [ 1; 2; 3 ] in
   Alcotest.(check string) "array encoding" "\x01\x02\x03" encoded
 
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
-  let encoded = encode_to_string t "hello" in
+  let encoded = encode_string t "hello" in
   Alcotest.(check string) "byte_array encoding" "hello" encoded
 
 let test_encode_variants () =
   let t = variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] uint8 in
-  let encoded = encode_to_string t `B in
+  let encoded = encode_string t `B in
   Alcotest.(check string) "variants encoding" "\x01" encoded
 
 let test_encode_bitfield () =
@@ -422,7 +422,7 @@ let test_encode_bitfield () =
      6 bits of the base word. On a LE U32 base, writing 63 = 0x3F gives
      word = 0x3F lsl 26 = 0xFC000000, which serialises to [\x00\x00\x00\xFC]. *)
   let t = bits ~width:6 U32 in
-  let encoded = encode_to_string t 63 in
+  let encoded = encode_string t 63 in
   Alcotest.(check string)
     "bitfield encoding (MSB-first)" "\x00\x00\x00\xFC" encoded
 
@@ -430,7 +430,7 @@ let test_encode_bitfield_lsb_first () =
   (* Explicit [~bit_order:Lsb_first] recovers the C bit-field packing: the
      value goes into the low 6 bits of the word. *)
   let t = bits ~bit_order:Lsb_first ~width:6 U32 in
-  let encoded = encode_to_string t 63 in
+  let encoded = encode_string t 63 in
   Alcotest.(check string)
     "bitfield encoding (LSB-first)" "\x3F\x00\x00\x00" encoded
 
@@ -442,8 +442,8 @@ let test_bits_single_field_positions () =
   (* A 3-bit field holding value 0b101 = 5. *)
   let t_msb = bits ~width:3 U8 in
   let t_lsb = bits ~bit_order:Lsb_first ~width:3 U8 in
-  let s_msb = encode_to_string t_msb 5 in
-  let s_lsb = encode_to_string t_lsb 5 in
+  let s_msb = encode_string t_msb 5 in
+  let s_lsb = encode_string t_lsb 5 in
   (* Msb_first: value at bits 5..7 -> 0b1010_0000 = 0xA0. *)
   Alcotest.(check string) "msb-first single field" "\xA0" s_msb;
   (* Lsb_first: value at bits 0..2 -> 0b0000_0101 = 0x05. *)
@@ -452,7 +452,7 @@ let test_bits_single_field_positions () =
 let test_bits_roundtrip_all_combos () =
   let check base width order expected =
     let t = bits ~bit_order:order ~width base in
-    let s = encode_to_string t expected in
+    let s = encode_string t expected in
     match decode_string t s with
     | Ok got ->
         Alcotest.(check int) (Fmt.str "roundtrip width=%d" width) expected got
@@ -471,21 +471,21 @@ let test_bits_roundtrip_all_combos () =
 
 let test_roundtrip_uint8 () =
   let original = 0x42 in
-  let encoded = encode_to_string uint8 original in
+  let encoded = encode_string uint8 original in
   match decode_string uint8 encoded with
   | Ok decoded -> Alcotest.(check int) "roundtrip uint8" original decoded
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_roundtrip_uint16 () =
   let original = 0x1234 in
-  let encoded = encode_to_string uint16 original in
+  let encoded = encode_string uint16 original in
   match decode_string uint16 encoded with
   | Ok decoded -> Alcotest.(check int) "roundtrip uint16" original decoded
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_roundtrip_uint32 () =
   let original = 0x12345678 in
-  let encoded = encode_to_string uint32 original in
+  let encoded = encode_string uint32 original in
   match decode_string uint32 encoded with
   | Ok decoded -> Alcotest.(check int) "roundtrip uint32" original decoded
   | Error e -> Alcotest.failf "%a" pp_parse_error e
@@ -493,7 +493,7 @@ let test_roundtrip_uint32 () =
 let test_roundtrip_array () =
   let original = [ 1; 2; 3; 4; 5 ] in
   let t = array ~len:(int 5) uint8 in
-  let encoded = encode_to_string t original in
+  let encoded = encode_string t original in
   match decode_string t encoded with
   | Ok decoded -> Alcotest.(check (list int)) "roundtrip array" original decoded
   | Error e -> Alcotest.failf "%a" pp_parse_error e
@@ -501,7 +501,7 @@ let test_roundtrip_array () =
 let test_roundtrip_byte_array () =
   let original = "hello" in
   let t = byte_array ~size:(int 5) in
-  let encoded = encode_to_string t original in
+  let encoded = encode_string t original in
   match decode_string t encoded with
   | Ok decoded ->
       Alcotest.(check string) "roundtrip byte_array" original decoded
@@ -511,51 +511,51 @@ let test_roundtrip_byte_array () =
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
 let test_stream_uint8 () =
-  let encoded = encode_to_string uint8 42 in
+  let encoded = encode_string uint8 42 in
   match parse_chunked ~chunk_size:1 uint8 encoded with
   | Ok v -> Alcotest.(check int) "uint8 chunk=1" 42 v
   | Error e -> Alcotest.failf "uint8 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk1 () =
-  let encoded = encode_to_string uint16 0xCAFE in
+  let encoded = encode_string uint16 0xCAFE in
   match parse_chunked ~chunk_size:1 uint16 encoded with
   | Ok v -> Alcotest.(check int) "uint16 chunk=1" 0xCAFE v
   | Error e -> Alcotest.failf "uint16 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk3 () =
   (* chunk=3 means 2-byte value fits in one slice -- fast path *)
-  let encoded = encode_to_string uint16be 0xBEEF in
+  let encoded = encode_string uint16be 0xBEEF in
   match parse_chunked ~chunk_size:3 uint16be encoded with
   | Ok v -> Alcotest.(check int) "uint16be chunk=3" 0xBEEF v
   | Error e -> Alcotest.failf "uint16be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint32_chunk1 () =
-  let encoded = encode_to_string uint32 0xDEADBEEF in
+  let encoded = encode_string uint32 0xDEADBEEF in
   match parse_chunked ~chunk_size:1 uint32 encoded with
   | Ok v -> Alcotest.(check int) "uint32 chunk=1" 0xDEADBEEF v
   | Error e -> Alcotest.failf "uint32 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint32_chunk3 () =
   (* chunk=3: 4-byte value straddles at byte 3 *)
-  let encoded = encode_to_string uint32be 0x12345678 in
+  let encoded = encode_string uint32be 0x12345678 in
   match parse_chunked ~chunk_size:3 uint32be encoded with
   | Ok v -> Alcotest.(check int) "uint32be chunk=3" 0x12345678 v
   | Error e -> Alcotest.failf "uint32be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk1 () =
-  let encoded = encode_to_string uint64 0x0102030405060708L in
+  let encoded = encode_string uint64 0x0102030405060708L in
   match parse_chunked ~chunk_size:1 uint64 encoded with
   | Ok v -> Alcotest.(check int64) "uint64 chunk=1" 0x0102030405060708L v
   | Error e -> Alcotest.failf "uint64 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint64_chunk3 () =
-  let encoded = encode_to_string uint64be 0xFEDCBA9876543210L in
+  let encoded = encode_string uint64be 0xFEDCBA9876543210L in
   match parse_chunked ~chunk_size:3 uint64be encoded with
   | Ok v -> Alcotest.(check int64) "uint64be chunk=3" 0xFEDCBA9876543210L v
   | Error e -> Alcotest.failf "uint64be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk5 () =
-  let encoded = encode_to_string uint64 0xAAAABBBBCCCCDDDDL in
+  let encoded = encode_string uint64 0xAAAABBBBCCCCDDDDL in
   match parse_chunked ~chunk_size:5 uint64 encoded with
   | Ok v -> Alcotest.(check int64) "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL v
   | Error e -> Alcotest.failf "uint64 chunk=5: %a" pp_parse_error e
@@ -563,7 +563,7 @@ let test_stream_uint64_chunk5 () =
 let test_stream_bitfield_chunk1 () =
   (* Bitfield: 6+10+16 bits packed in a uint32 *)
   let bf = bits ~width:6 U32 in
-  let encoded = encode_to_string bf 42 in
+  let encoded = encode_string bf 42 in
   match parse_chunked ~chunk_size:1 bf encoded with
   | Ok v ->
       (* 42 written in top 6 bits of uint32: 42 << 26, then read back as 6-bit *)

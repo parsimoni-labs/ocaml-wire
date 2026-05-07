@@ -591,10 +591,10 @@ val encode : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
     unresolved type references, raise an exception rather than returning an
     error value. *)
 
-val encode_to_bytes : 'a typ -> 'a -> bytes
+val encode_bytes : 'a typ -> 'a -> bytes
 (** Encodes one value to freshly allocated bytes. *)
 
-val encode_to_string : 'a typ -> 'a -> string
+val encode_string : 'a typ -> 'a -> string
 (** Encodes one value to a freshly allocated string. *)
 
 (** {1 Codecs}

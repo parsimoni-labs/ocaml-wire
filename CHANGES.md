@@ -13,6 +13,9 @@
 
 - `Codec.bitfield`: ~5% faster on bitfield-heavy workloads (CLCW polling
   +5%) (#37, @samoht)
+- Rename `Wire.encode_to_string` to `Wire.encode_string` and
+  `Wire.encode_to_bytes` to `Wire.encode_bytes` for symmetry with
+  `Wire.decode_string` / `Wire.decode_bytes` (@samoht)
 
 ### Fixed
 

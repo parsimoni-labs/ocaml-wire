@@ -310,61 +310,61 @@ let test_parse_nested_struct buf =
 
 let test_roundtrip_uint8 n =
   let n = abs n mod 256 in
-  let encoded = Wire.encode_to_string Wire.uint8 n in
+  let encoded = Wire.encode_string Wire.uint8 n in
   match Wire.decode_string Wire.uint8 encoded with
   | Ok decoded -> if n <> decoded then fail "uint8 roundtrip mismatch"
   | Error _ -> fail "uint8 roundtrip parse failed"
 
 let test_roundtrip_uint16 n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_to_string Wire.uint16 n in
+  let encoded = Wire.encode_string Wire.uint16 n in
   match Wire.decode_string Wire.uint16 encoded with
   | Ok decoded -> if n <> decoded then fail "uint16 roundtrip mismatch"
   | Error _ -> fail "uint16 roundtrip parse failed"
 
 let test_roundtrip_uint16be n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_to_string Wire.uint16be n in
+  let encoded = Wire.encode_string Wire.uint16be n in
   match Wire.decode_string Wire.uint16be encoded with
   | Ok decoded -> if n <> decoded then fail "uint16be roundtrip mismatch"
   | Error _ -> fail "uint16be roundtrip parse failed"
 
 let test_roundtrip_uint32 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_to_string Wire.uint32 n in
+  let encoded = Wire.encode_string Wire.uint32 n in
   match Wire.decode_string Wire.uint32 encoded with
   | Ok decoded -> if n <> decoded then fail "uint32 roundtrip mismatch"
   | Error _ -> fail "uint32 roundtrip parse failed"
 
 let test_roundtrip_uint32be n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_to_string Wire.uint32be n in
+  let encoded = Wire.encode_string Wire.uint32be n in
   match Wire.decode_string Wire.uint32be encoded with
   | Ok decoded -> if n <> decoded then fail "uint32be roundtrip mismatch"
   | Error _ -> fail "uint32be roundtrip parse failed"
 
 let test_roundtrip_uint63 n =
   let n = abs n in
-  let encoded = Wire.encode_to_string Wire.uint63 n in
+  let encoded = Wire.encode_string Wire.uint63 n in
   match Wire.decode_string Wire.uint63 encoded with
   | Ok decoded -> if n <> decoded then fail "uint63 roundtrip mismatch"
   | Error _ -> fail "uint63 roundtrip parse failed"
 
 let test_roundtrip_uint63be n =
   let n = abs n in
-  let encoded = Wire.encode_to_string Wire.uint63be n in
+  let encoded = Wire.encode_string Wire.uint63be n in
   match Wire.decode_string Wire.uint63be encoded with
   | Ok decoded -> if n <> decoded then fail "uint63be roundtrip mismatch"
   | Error _ -> fail "uint63be roundtrip parse failed"
 
 let test_roundtrip_uint64 n =
-  let encoded = Wire.encode_to_string Wire.uint64 n in
+  let encoded = Wire.encode_string Wire.uint64 n in
   match Wire.decode_string Wire.uint64 encoded with
   | Ok decoded -> if n <> decoded then fail "uint64 roundtrip mismatch"
   | Error _ -> fail "uint64 roundtrip parse failed"
 
 let test_roundtrip_uint64be n =
-  let encoded = Wire.encode_to_string Wire.uint64be n in
+  let encoded = Wire.encode_string Wire.uint64be n in
   match Wire.decode_string Wire.uint64be encoded with
   | Ok decoded -> if n <> decoded then fail "uint64be roundtrip mismatch"
   | Error _ -> fail "uint64be roundtrip parse failed"
@@ -374,7 +374,7 @@ let test_roundtrip_map n =
   let t =
     Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
   in
-  let encoded = Wire.encode_to_string t (n * 2) in
+  let encoded = Wire.encode_string t (n * 2) in
   match Wire.decode_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
   | Error _ -> fail "map roundtrip parse failed"
@@ -382,7 +382,7 @@ let test_roundtrip_map n =
 let test_roundtrip_bool n =
   let v = n mod 2 = 0 in
   let t = Wire.bit Wire.uint8 in
-  let encoded = Wire.encode_to_string t v in
+  let encoded = Wire.encode_string t v in
   match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "bool roundtrip mismatch"
   | Error _ -> fail "bool roundtrip parse failed"
@@ -390,7 +390,7 @@ let test_roundtrip_bool n =
 let test_roundtrip_array a b c =
   let arr = [ abs a mod 256; abs b mod 256; abs c mod 256 ] in
   let t = Wire.array ~len:(Wire.int 3) Wire.uint8 in
-  let encoded = Wire.encode_to_string t arr in
+  let encoded = Wire.encode_string t arr in
   match Wire.decode_string t encoded with
   | Ok decoded -> if arr <> decoded then fail "array roundtrip mismatch"
   | Error _ -> fail "array roundtrip parse failed"
@@ -400,7 +400,7 @@ let test_roundtrip_byte_array buf =
   let len = String.length buf in
   if len > 0 then begin
     let t = Wire.byte_array ~size:(Wire.int len) in
-    let encoded = Wire.encode_to_string t buf in
+    let encoded = Wire.encode_string t buf in
     match Wire.decode_string t encoded with
     | Ok decoded -> if buf <> decoded then fail "byte_array roundtrip mismatch"
     | Error _ -> fail "byte_array roundtrip parse failed"
@@ -411,7 +411,7 @@ let test_roundtrip_variants n =
   let variants = [| `A; `B; `C |] in
   let t = Wire.variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] Wire.uint8 in
   let v = variants.(n) in
-  let encoded = Wire.encode_to_string t v in
+  let encoded = Wire.encode_string t v in
   match Wire.decode_string t encoded with
   | Ok decoded -> if v <> decoded then fail "variants roundtrip mismatch"
   | Error _ -> fail "variants roundtrip parse failed"
@@ -510,40 +510,40 @@ let parse_chunked ~chunk_size typ s =
 
 let test_stream_roundtrip_uint16 n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_to_string Wire.uint16 n in
+  let encoded = Wire.encode_string Wire.uint16 n in
   match parse_chunked ~chunk_size:1 Wire.uint16 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint16 mismatch"
   | Error _ -> fail "stream uint16 parse failed"
 
 let test_stream_roundtrip_uint16be n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_to_string Wire.uint16be n in
+  let encoded = Wire.encode_string Wire.uint16be n in
   match parse_chunked ~chunk_size:1 Wire.uint16be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint16be mismatch"
   | Error _ -> fail "stream uint16be parse failed"
 
 let test_stream_roundtrip_uint32 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_to_string Wire.uint32 n in
+  let encoded = Wire.encode_string Wire.uint32 n in
   match parse_chunked ~chunk_size:1 Wire.uint32 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint32 chunk=1 mismatch"
   | Error _ -> fail "stream uint32 chunk=1 parse failed"
 
 let test_stream_roundtrip_uint32be_chunk3 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_to_string Wire.uint32be n in
+  let encoded = Wire.encode_string Wire.uint32be n in
   match parse_chunked ~chunk_size:3 Wire.uint32be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint32be chunk=3 mismatch"
   | Error _ -> fail "stream uint32be chunk=3 parse failed"
 
 let test_stream_roundtrip_uint64 n =
-  let encoded = Wire.encode_to_string Wire.uint64 n in
+  let encoded = Wire.encode_string Wire.uint64 n in
   match parse_chunked ~chunk_size:1 Wire.uint64 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint64 chunk=1 mismatch"
   | Error _ -> fail "stream uint64 chunk=1 parse failed"
 
 let test_stream_roundtrip_uint64be_chunk5 n =
-  let encoded = Wire.encode_to_string Wire.uint64be n in
+  let encoded = Wire.encode_string Wire.uint64be n in
   match parse_chunked ~chunk_size:5 Wire.uint64be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint64be chunk=5 mismatch"
   | Error _ -> fail "stream uint64be chunk=5 parse failed"
