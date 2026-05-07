@@ -8,8 +8,22 @@
 
     {b Typical usage} (in a code-generation executable):
     {[
-    let () =
-      Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"." [ C my_codec ]
+    open Wire
+
+    type header = { version : int; length : int }
+
+    let codec =
+      Codec.v "Header"
+        (fun version length -> { version; length })
+        Codec.
+          [
+            (Field.v "Version" (bits ~width:4 U8) $ fun h -> h.version);
+            (Field.v "Length" uint16be $ fun h -> h.length);
+          ]
+
+    let run () =
+      Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"."
+        [ Wire_stubs.C codec ]
     ]}
 
     This writes [wire_ffi.c] + [stubs.ml] into [outdir]. The [WIRECTX] socket

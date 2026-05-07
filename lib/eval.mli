@@ -4,7 +4,7 @@
     [Field_pos] resolution against bound fields) lives in {!Codec} as the
     [compile_int_arr] family, which compiles expressions to [int array]
     accessors at codec construction. This module is the residual evaluator for
-    the {!Wire.decode_string}/{!Wire.encode} paths, which only ever evaluate
+    the {!Wire.of_string}/{!Wire.encode} paths, which only ever evaluate
     expressions in {!empty}: no field references, no cross-field dependencies.
 *)
 
@@ -19,5 +19,6 @@ val int_of : 'a Types.typ -> 'a -> int option
     that don't fit in OCaml int (uint64 > 2^62, non-numeric). *)
 
 val expr : ctx -> 'a Types.expr -> 'a
-(** Evaluate a top-level expression. Raises on [Ref] (cross-field references are
-    only valid inside a struct). [Sizeof_this] and [Field_pos] return 0. *)
+(** [expr ctx e] evaluates a top-level expression. Raises on [Ref] (cross-field
+    references are only valid inside a struct). [Sizeof_this] and [Field_pos]
+    return 0. *)

@@ -32,6 +32,6 @@ val bind : ('a, input) t -> 'a -> env -> env
 
 val get : env -> ('a, 'k) t -> 'a
 (** [get env p] reads the current value of param [p] from [env]. For output
-    params, call after {!Codec.decode_with}. *)
+    params, call after {!Codec.decode}. *)
 
 type packed = Pack : ('a, 'k) t -> packed

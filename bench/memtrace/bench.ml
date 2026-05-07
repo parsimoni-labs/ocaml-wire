@@ -14,7 +14,7 @@ type 'a schema = {
   size : int;
   default : 'a;
   make_data : int -> bytes array;
-  decode : bytes -> int -> ('a, Wire.parse_error) result;
+  decode : bytes -> int -> 'a;
   encode : 'a -> bytes -> int -> unit;
 }
 
@@ -26,7 +26,7 @@ let schema name codec size default make_data =
     size;
     default;
     make_data;
-    decode = Wire.Codec.decode codec;
+    decode = Wire.Codec.decode_exn codec;
     encode = Wire.Codec.encode codec;
   }
 
@@ -193,8 +193,7 @@ let run_schema (Any s) =
   Fmt.pr "  %s roundtrip...\n%!" s.name;
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      let v = s.decode data.(i) 0 in
-      match v with Ok v -> s.encode v buf 0 | Error _ -> ()
+      try s.encode (s.decode data.(i) 0) buf 0 with Wire.Parse_error _ -> ()
     done
   done
 

@@ -45,21 +45,20 @@ val wire_size_at : 'r t -> bytes -> int -> int
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 
-val decode : 'r t -> bytes -> int -> 'r
-(** [decode c buf off] decodes a record from [buf] at offset [off].
-
-    Raises {!Types.Parse_error} if the buffer is too short or a field constraint
-    or where-clause fails. *)
-
 val env : 'r t -> Param.env
 (** [env c] creates a fresh parameter environment for codec [c], with all params
     initialised to 0. *)
 
-val decode_with : 'r t -> Param.env -> bytes -> int -> 'r
-(** [decode_with c env buf off] decodes with parameters. Input params are read
-    from [env]; output params are written back to [env] after decoding.
+val decode :
+  ?env:Param.env -> 'r t -> bytes -> int -> ('r, Types.parse_error) result
+(** [decode ?env c buf off] decodes a record from [buf] at offset [off].
 
-    Raises {!Types.Parse_error} on constraint/where-clause failure. *)
+    If [?env] is supplied, input params are read from it and output params are
+    written back to it after decoding. *)
+
+val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+(** [decode_exn ?env c buf off] is like {!decode} but raises
+    {!Types.Parse_error} on failure. *)
 
 val encode : 'r t -> 'r -> bytes -> int -> unit
 (** [encode c r buf off] encodes record [r] into [buf] at offset [off].
@@ -118,16 +117,9 @@ val slice_offset :
 
     The naive [Slice.first (Codec.get c f buf base)] pattern allocates a fresh
     [Slice.t] (4 words) inside [Codec.get] only to discard it after extracting
-    one int. [slice_offset] skips the make and returns the int directly:
-
-    {[
-    (* Was: 4w/op alloc per call (inside Codec.get) *)
-    let off = Slice.first (Codec.get c f buf base)
-
-    (* Now: 0w/op *)
-    let read_off = Staged.unstage (Codec.slice_offset c f)
-    let off = read_off buf base
-    ]}
+    one int. [slice_offset] skips the make and returns the int directly: stage
+    once with [Codec.slice_offset c f |> Staged.unstage], then call the
+    resulting [buf -> base -> int] reader on the hot path.
 
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a
     compile-time error. *)
@@ -140,8 +132,8 @@ val slice_length :
 type validator
 (** A struct validator without a constructor. The same int-array validation
     kernel that backs {!validate} on a [Codec.t], but built directly from a
-    {!Types.struct_}. Used by [Wire.decode_string] /[Wire.decode] for [Struct]
-    types so all struct validation goes through the same code path. *)
+    {!Types.struct_}. Used by [Wire.of_string] /[Wire.decode] for [Struct] types
+    so all struct validation goes through the same code path. *)
 
 val validator_of_struct : Types.struct_ -> validator
 (** [validator_of_struct s] compiles [s] into a validator. Constraints, [where]
@@ -153,8 +145,9 @@ val validate_struct : validator -> bytes -> int -> unit
     on failure. *)
 
 val struct_size_of : validator -> bytes -> int -> int
-(** Byte size of the struct starting at [off]. Independent of [buf] for
-    fixed-size structs; inspects the buffer otherwise. *)
+(** [struct_size_of v buf off] is the byte size of the struct starting at [off].
+    Independent of [buf] for fixed-size structs; inspects the buffer otherwise.
+*)
 
 val struct_min_size : validator -> int
 (** Minimum byte size accepted. *)

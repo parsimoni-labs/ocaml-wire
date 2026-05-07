@@ -25,20 +25,19 @@ type result =
 
 let wire_size (Harness h) = Wire.Codec.wire_size h.codec
 
-let encode_to_string codec v =
+let string_of_record codec v =
   let buf = Bytes.create (Wire.Codec.wire_size codec) in
   Wire.Codec.encode codec v buf 0;
   Bytes.unsafe_to_string buf
 
-let decode_from_string codec s = Wire.Codec.decode codec (Bytes.of_string s) 0
+let record_of_string codec s = Wire.Codec.decode_exn codec (Bytes.of_string s) 0
 
 let default_ocaml_read codec project buf =
   let buf_too_short = String.length buf < Wire.Codec.wire_size codec in
   if String.length buf = 0 || buf_too_short then None
   else
-    match decode_from_string codec buf with
-    | Ok v -> Some (project v)
-    | Error _ -> None
+    try Some (project (record_of_string codec buf))
+    with Wire.Parse_error _ -> None
 
 let v ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
   let ocaml_read =
@@ -71,7 +70,7 @@ let write_test (Harness h) value =
   | None -> Only_ocaml_ok "External write failed"
 
 let roundtrip_test (Harness h) value =
-  let ocaml_bytes = encode_to_string h.codec value in
+  let ocaml_bytes = string_of_record h.codec value in
   match (h.read ocaml_bytes, h.ocaml_read ocaml_bytes) with
   | None, Some _ -> Only_ocaml_ok "External read failed on OCaml-encoded bytes"
   | Some _, None -> Only_c_ok "OCaml rejected OCaml-encoded bytes"
@@ -110,7 +109,9 @@ let harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
         Bytes.to_string b
     in
     if String.length padded = 0 then None
-    else Some (decode_from_string codec_inner padded)
+    else
+      try Some (record_of_string codec_inner padded)
+      with Wire.Parse_error _ -> None
   in
   {
     name = (match h with Harness h -> h.name);
@@ -119,13 +120,11 @@ let harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
     test_write =
       (fun buf ->
         match decode_value buf with
-        | Some (Ok v) -> write_test h v
-        | Some (Error _) -> Both_failed
+        | Some v -> write_test h v
         | None -> Both_failed);
     test_roundtrip =
       (fun buf ->
         match decode_value buf with
-        | Some (Ok v) -> roundtrip_test h v
-        | Some (Error _) -> Both_failed
+        | Some v -> roundtrip_test h v
         | None -> Both_failed);
   }

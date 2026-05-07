@@ -28,6 +28,8 @@ val v :
     size-expression safe, e.g.:
 
     {[
+    open Wire
+
     let f_len =
       Field.v "Length" uint16be ~self_constraint:(fun self ->
           Expr.(self >= int 7))

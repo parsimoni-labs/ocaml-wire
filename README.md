@@ -85,7 +85,8 @@ The same codec produces `.3d` files:
 
 ```ocaml
 let schema = Everparse.schema codec
-let () = Everparse.write_3d ~outdir:"schemas" [ schema ]
+
+let _write () = Everparse.write_3d ~outdir:"schemas" [ schema ]
 ```
 
 The generated 3D uses the EverParse output-types pattern: the generated C
@@ -96,14 +97,15 @@ for what that means at the C level.
 To turn those schemas into EverParse-generated C:
 
 ```ocaml
-let () = Wire_3d.run ~outdir:"schemas" [ schema ]
+let _run_3d () = Wire_3d.run ~outdir:"schemas" [ schema ]
 ```
 
 If OCaml needs to call the generated C validators, generate FFI stubs:
 
 ```ocaml
-let () =
-  Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"." [ C codec ]
+let _stubs () =
+  Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"."
+    [ Wire_stubs.C codec ]
 ```
 
 For unusual EverParse constructs that have no codec equivalent yet, use the
@@ -228,8 +230,8 @@ let f_tot_len  = Field.v "TotalLen" (bits ~width:16 U32)
 ### TCP flags (bool bitfields)
 
 ```ocaml
-let f_syn = Field.v "SYN" (bool (bits ~width:1 U16be))
-let f_ack = Field.v "ACK" (bool (bits ~width:1 U16be))
+let f_syn = Field.v "SYN" (bit (bits ~width:1 U16be))
+let f_ack = Field.v "ACK" (bit (bits ~width:1 U16be))
 ```
 
 ### Parameters and actions
@@ -254,7 +256,7 @@ let codec =
       f_data $ (fun r -> r.data) ]
 
 let env = Codec.env codec |> Param.bind max_len 1024
-let _ = Codec.decode_with codec env buf 0
+let _ = Codec.decode ~env codec buf 0
 let len = Param.get env out_len
 ```
 

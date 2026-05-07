@@ -9,7 +9,20 @@
 
     {b Typical usage} ([gen.ml]):
     {[
-    let () = Wire_3d.main ~package:"clcw" [ Wire.Everparse.schema Clcw.codec ]
+    open Wire
+
+    type header = { version : int; length : int }
+
+    let codec =
+      Codec.v "Header"
+        (fun version length -> { version; length })
+        Codec.
+          [
+            (Field.v "Version" (bits ~width:4 U8) $ fun h -> h.version);
+            (Field.v "Length" uint16be $ fun h -> h.length);
+          ]
+
+    let main () = Wire_3d.main ~package:"hdr" [ Everparse.schema codec ]
     ]}
 
     With a minimal [dune] that includes the generated rules:
@@ -21,7 +34,7 @@
     v}
 
     If you want OCaml to call the generated C validators, use {!Wire_stubs} on
-    the resulting {!Wire.Everparse.Raw.struct_} values. *)
+    the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
 (** [everparse_name name] returns the EverParse-normalized identifier for a

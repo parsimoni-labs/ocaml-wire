@@ -9,25 +9,29 @@
     - Constraint checking and dependent-size fields.
 
     {[
+    open Wire
+
     type header = { version : int; length : int }
 
     let f_version = Field.v "Version" (bits ~width:4 U8)
     let f_length = Field.v "Length" uint16be
-    let bf_version = Codec.(f_version $ fun h -> h.version)
-    let bf_length = Codec.(f_length $ fun h -> h.length)
+    let bf_version = Codec.(f_version $ fun (h : header) -> h.version)
+    let bf_length = Codec.(f_length $ fun (h : header) -> h.length)
 
-    let codec =
+    let codec : header Codec.t =
       Codec.v "Header"
         (fun version length -> { version; length })
-        [ bf_version; bf_length ]
+        Codec.[ bf_version; bf_length ]
 
-    (* Staged zero-copy access *)
-    let get_version = Staged.unstage (Codec.get codec bf_version)
-    let v = get_version buf 0
-
-    (* Full-record round-trip *)
+    let buf = Bytes.create (Codec.wire_size codec)
     let () = Codec.encode codec { version = 1; length = 42 } buf 0
-    let h = Codec.decode codec buf 0
+    let get_version = Staged.unstage (Codec.get codec bf_version)
+    let () = assert (get_version buf 0 = 1)
+
+    let () =
+      match Codec.decode codec buf 0 with
+      | Ok h -> assert (h.version = 1 && h.length = 42)
+      | Error _ -> assert false
     ]}
 
     The same description can be projected to an EverParse 3D schema via
@@ -83,7 +87,8 @@ type endian = Types.endian =
 type 'a typ
 
 type param
-(** Untyped formal parameter declaration. Create via {!Param.v}. *)
+(** Untyped formal parameter declaration. Create via {!val:Param.input} or
+    {!val:Param.output}. *)
 
 module Param : sig
   (** Formal parameters for codecs.
@@ -98,6 +103,10 @@ module Param : sig
       definition can be projected to EverParse 3D.
 
       {[
+      open Wire
+
+      type bounded = { len : int; data : Bytesrw.Bytes.Slice.t }
+
       let max_len = Param.input "max_len" uint16be
       let out_len = Param.output "out_len" uint16be
       let f_length = Field.v "Length" uint16be
@@ -114,10 +123,6 @@ module Param : sig
           ~where:Expr.(Field.ref f_length <= Param.expr max_len)
           (fun len data -> { len; data })
           [ (f_length $ fun r -> r.len); (f_data $ fun r -> r.data) ]
-
-      let env = Codec.env codec |> Param.bind max_len 1024
-      let _ = Codec.decode_with codec env buf 0
-      let len = Param.get env out_len
       ]}
 
       Do not share an {!env} across concurrent decodes. *)
@@ -177,7 +182,7 @@ module Action : sig
 
   val assign : ('a, Param.output) Param.t -> int expr -> stmt
   (** [assign out e] assigns expression [e] to the mutable output parameter
-      [out]. Only output parameters (created with {!Param.output}) can be
+      [out]. Only output parameters (created with {!val:Param.output}) can be
       assigned to -- the type system prevents assigning to input parameters. *)
 
   val return_bool : bool expr -> stmt
@@ -317,6 +322,8 @@ end
     3D via {!Everparse.schema}.
 
     {[
+    open Wire
+
     let f_version = Field.v "Version" (bits ~width:4 U8)
     let f_length = Field.v "Length" uint16be
     let f_data = Field.v "Data" (byte_slice ~size:(Field.ref f_length))
@@ -422,7 +429,7 @@ val lookup : 'a list -> int typ -> 'a typ
 
     The decoded integer selects the corresponding element from the list. An
     out-of-range index produces an {!Invalid_tag} parse error (reported via
-    [result] in {!decode} / {!decode_string} / {!decode_bytes}). Encoding raises
+    [result] in {!of_reader} / {!of_string} / {!of_bytes}). Encoding raises
     [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
@@ -529,6 +536,10 @@ type parse_error =
   | Invalid_tag of int
   | All_zeros_failed of { offset : int }
 
+exception Parse_error of parse_error
+(** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
+    {!of_reader_exn}) and by {!Codec.decode_exn} on parse failure. *)
+
 exception Validation_error of parse_error
 (** Raised by {!Codec.validate} on constraint or where-clause failure. *)
 
@@ -548,34 +559,41 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
     repeated access to individual fields in an existing buffer, without
     allocating an OCaml record for each read. *)
 
-val decode : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
+val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 (** Decodes one value from the current reader position.
 
     If the description references parameters, bind them with {!Param.bind}
-    before calling decode. Output parameters are updated during decoding; read
-    them back with {!Param.get}.
+    before calling. Output parameters are updated during decoding; read them
+    back with {!Param.get}.
 
-    For the zero-copy codec path, prefer {!Codec.decode_with} which takes an
-    explicit {!Param.env}.
+    For the zero-copy codec path, prefer {!Codec.decode} which takes an explicit
+    {!Param.env}.
 
     Decoding is prefix-based: success does not imply that the reader is
     exhausted afterwards. *)
 
-val decode_string : 'a typ -> string -> ('a, parse_error) result
-(** Decodes one value from the start of the string.
+val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
+(** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
 
-    Trailing bytes, if any, are left uninterpreted. *)
+val of_string : 'a typ -> string -> ('a, parse_error) result
+(** Decodes one value from the start of the string. Trailing bytes, if any, are
+    left uninterpreted. *)
 
-val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
-(** Decodes one value from the start of the byte sequence.
+val of_string_exn : 'a typ -> string -> 'a
+(** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
 
-    Trailing bytes, if any, are left uninterpreted. *)
+val of_bytes : 'a typ -> bytes -> ('a, parse_error) result
+(** Decodes one value from the start of the byte sequence. Trailing bytes, if
+    any, are left uninterpreted. *)
+
+val of_bytes_exn : 'a typ -> bytes -> 'a
+(** Like {!of_bytes} but raises {!exception:Parse_error} on failure. *)
 
 (** {1 Direct Encoding}
 
     Encoding follows the same description language as decoding. The functions in
-    this section are the direct counterparts of {!decode}, {!decode_string}, and
-    {!decode_bytes}: they work with whole OCaml values rather than field-level
+    this section are the direct counterparts of {!of_reader}, {!of_string}, and
+    {!of_bytes}: they work with whole OCaml values rather than field-level
     accessors.
 
     Unlike decoding, encoding is exception-based rather than result-based.
@@ -584,17 +602,17 @@ val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
     (wrong description for the value, unsupported form), which are not
     data-dependent and should not be silently ignored. *)
 
-val encode : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
+val to_writer : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
 (** Encodes one value to a {!Bytesrw.Bytes.Writer.t}.
 
     This function is exception-based. Unsupported description forms, such as
     unresolved type references, raise an exception rather than returning an
     error value. *)
 
-val encode_to_bytes : 'a typ -> 'a -> bytes
+val to_bytes : 'a typ -> 'a -> bytes
 (** Encodes one value to freshly allocated bytes. *)
 
-val encode_to_string : 'a typ -> 'a -> string
+val to_string : 'a typ -> 'a -> string
 (** Encodes one value to a freshly allocated string. *)
 
 (** {1 Codecs}
@@ -653,15 +671,17 @@ module Codec : sig
   val is_fixed : 'r t -> bool
   (** [true] iff the codec has a statically known size. *)
 
-  val decode : 'r t -> bytes -> int -> ('r, parse_error) result
-  (** Decodes one record value from a buffer at the given base offset. *)
-
   val env : 'r t -> Param.env
   (** [env c] creates a fresh parameter environment for codec [c]. *)
 
-  val decode_with :
-    'r t -> Param.env -> bytes -> int -> ('r, parse_error) result
-  (** Decode with parameters. Output params in [env] are updated on success. *)
+  val decode :
+    ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
+  (** [decode ?env c buf off] decodes one record value at the given base offset.
+      If [?env] is supplied, input params are read from it and output params are
+      written back to it on success. *)
+
+  val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+  (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
   val encode : 'r t -> 'r -> bytes -> int -> unit
   (** Encodes one record value into a buffer at the given base offset.
@@ -693,31 +713,18 @@ module Codec : sig
   (** {2 Slice navigation}
 
       Zero-copy access to the offset/length of a [byte_slice] field. The naive
-      nesting pattern is
-
-      {[
-      let off = Slice.first (Codec.get c f buf base)
-      ]}
-
-      where [Codec.get] (specifically [Slice.make] inside the staged reader)
-      allocates a fresh {!Bytesrw.Bytes.Slice.t} -- 4 words -- and [Slice.first]
-      then extracts a single int from it. The slice record is discarded
-      immediately. {!slice_offset} skips the make and returns the int directly.
-  *)
+      nesting [Slice.first (Codec.get c f buf base)] forces [Codec.get] to
+      allocate a fresh {!Bytesrw.Bytes.Slice.t} -- 4 words -- only for
+      [Slice.first] to extract one int and discard the rest. {!slice_offset}
+      skips the make and returns the int directly. *)
 
   val slice_offset :
     'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
   (** [slice_offset c f] is a staged reader returning the absolute byte offset
-      of slice field [f] within the buffer.
-
-      {[
-      (* Was: 4w/op alloc per call *)
-      let off = Slice.first (Codec.get c f buf base)
-
-      (* Now: 0w/op *)
-      let read_off = Staged.unstage (Codec.slice_offset c f)
-      let off = read_off buf base
-      ]}
+      of slice field [f] within the buffer. Stage once with
+      [Codec.slice_offset c f |> Staged.unstage], then call the resulting
+      [buf -> base -> int] reader on the hot path -- 0 allocations versus
+      [Slice.first (Codec.get c f buf base)]'s 4 words.
 
       Type-restricted to [Slice.t] fields, so passing a non-slice field is a
       compile-time error. *)
@@ -750,9 +757,9 @@ module Codec : sig
 
   (** {2 Struct validator}
 
-      For a {!Types.struct_} (e.g. from EverParse 3D), build a validator
-      directly without going through {!v}'s record-constructor machinery. The
-      same int-array kernel that backs {!validate} on a [Codec.t]. *)
+      For a [Types.struct_] (e.g. from EverParse 3D), build a validator directly
+      without going through {!v}'s record-constructor machinery. The same
+      int-array kernel that backs {!validate} on a [Codec.t]. *)
 
   type validator
   (** A struct validator without a constructor. *)
@@ -773,6 +780,15 @@ module Codec : sig
     validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
   (** Wire-size info for the validator. *)
 end
+
+type 'r codec = 'r Codec.t
+(** Convenience alias so callers can write [Wire.codec] instead of
+    [Wire.Codec.t]. *)
+
+val pp_value : 'r codec -> 'r Fmt.t
+(** [pp_value c] is a formatter that prints a record field-by-field through
+    codec [c]. Integer-valued fields show as [name = value]; non-integer fields
+    are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v]. *)
 
 (** {1 Nested Codec Combinators}
 
@@ -958,7 +974,7 @@ module Everparse : sig
 
     val field_ref : field -> int expr
     (** [field_ref f] returns the expression referencing field [f] by name. The
-        field must have been created with {!field} (not {!anon_field}). *)
+        field must have been created with {!val:field} (not {!anon_field}). *)
 
     val struct_ : string -> field list -> struct_
     (** Non-parameterised 3D struct. *)

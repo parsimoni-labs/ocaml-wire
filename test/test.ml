@@ -8,8 +8,8 @@ let () =
       Test_param.suite;
       Test_ascii.suite;
       Test_staged.suite;
-      Test_uInt32.suite;
-      Test_uInt63.suite;
+      Test_uint32.suite;
+      Test_uint63.suite;
       Test_types.suite;
       Test_eval.suite;
     ]

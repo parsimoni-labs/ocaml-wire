@@ -1,5 +1,6 @@
 (lang dune 3.21)
 (using directory-targets 0.1)
+(using mdx 0.4)
 
 (name wire)
 (version 0.9.0)
@@ -28,4 +29,5 @@
   (alcotest :with-test)
   (alcobar :with-test)
   (re :with-test)
+  (mdx :with-test)
   (odoc :with-doc)))

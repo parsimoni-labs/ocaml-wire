@@ -1,0 +1,4 @@
+# TCP has 9 flag bits.
+[[rules]]
+files = "examples/net/net.ml"
+exclude = ["E350"]

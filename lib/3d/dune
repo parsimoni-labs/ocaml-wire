@@ -2,3 +2,7 @@
  (name wire_3d)
  (public_name wire.3d)
  (libraries wire fmt unix))
+
+(mdx
+ (files wire_3d.mli)
+ (libraries wire wire.3d))

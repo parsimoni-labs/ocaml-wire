@@ -1826,7 +1826,7 @@ let seal : type r. (r, r) record -> r t =
       without requiring a record constructor. Reuses the same int-array
       validation kernel ([compile_field], [build_validators]) that
       [Codec.v]/[Codec.decode] uses; only the writer/reader projections
-      are skipped. Lets [Wire.decode_string]/[Wire.decode] for [Struct]
+      are skipped. Lets [Wire.of_string]/[Wire.decode] for [Struct]
       types share one code path with [Codec.decode]. *)
 
 type validator = {
@@ -1878,55 +1878,101 @@ let layout_ctx_of_validator_acc acc =
    recursively and inline its [vt_validate] at the right offset. Inner
    field references stay scoped to the inner struct, matching the old
    [parse_struct_fields] semantics. *)
-let rec apply_field_to_validator_acc acc (Types.Field f) =
+(* Common access patterns over [va_next_off]: a fresh-buffer offset
+   function and a "previous end" helper that hides the static/dynamic
+   split. *)
+let acc_off_fn (acc : validator_acc) : bytes -> int -> int =
+  match acc.va_next_off with
+  | Static_next n -> fun _buf _base -> n
+  | Dynamic_next f -> fun buf base -> f buf base - base
+
+let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
+  match acc.va_next_off with
+  | Static_next n -> fun _buf base -> base + n
+  | Dynamic_next f -> f
+
+(* Validator step for a [Struct]-typed field. [compile_field] doesn't
+   accept [Struct] (it has no [field_wire_size] without walking inner
+   fields), so build a sub-validator recursively and inline its
+   [vt_validate] at the right offset. *)
+let rec apply_struct_field acc inner_struct =
+  let inner_v = validator_of_struct inner_struct in
+  let static_off =
+    match acc.va_next_off with Static_next n -> n | Dynamic_next _ -> -1
+  in
+  let off_fn = acc_off_fn acc in
+  let validator _arr buf base =
+    inner_v.vt_validate buf (base + off_fn buf base)
+  in
+  let prev_end = acc_prev_end acc in
+  let size_delta, next_off =
+    match (acc.va_next_off, inner_v.vt_wire_size) with
+    | Static_next n, Fixed sz -> (sz, Static_next (n + sz))
+    | _, Fixed sz -> (sz, Dynamic_next (fun buf base -> prev_end buf base + sz))
+    | _, Variable { min_size; compute } ->
+        ( min_size,
+          Dynamic_next (fun buf base -> compute buf (prev_end buf base)) )
+  in
+  {
+    va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
+    va_checkers_rev = (static_off, validator) :: acc.va_checkers_rev;
+    va_field_readers = acc.va_field_readers;
+    va_n_fields = acc.va_n_fields;
+    va_n_array_slots = acc.va_n_array_slots;
+    va_min_size = acc.va_min_size + size_delta;
+    va_next_off = next_off;
+    va_bf = None;
+  }
+
+(* Build the [full] / [check_only] per-field validator functions and
+   return the action var count. Takes only the non-existential fields
+   of [compiled_field] ([populate], [validator_off]) so the caller can
+   open the [Types.Field] existential, call [compile_field], and pass
+   the relevant pieces here without leaking the field's ['a]. *)
+and build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
+  let action_var_names =
+    match action with
+    | None -> []
+    | Some (Types.On_success stmts | Types.On_act stmts) ->
+        List.fold_left action_vars [] stmts
+  in
+  let dummy_reader _buf _base = 0 in
+  let cc_readers =
+    let base = (name, dummy_reader) :: acc.va_field_readers in
+    List.fold_left
+      (fun acc' vn -> (vn, dummy_reader) :: acc')
+      base action_var_names
+  in
+  let idx = build_idx cc_readers in
+  let cc = { idx; sizeof_this = validator_off; field_pos = acc.va_n_fields } in
+  let check = Option.map (compile_bool_arr cc) constraint_ in
+  let act = compile_action cc action in
+  let raise_check_failed () =
+    raise (Parse_error (Constraint_failed "field constraint"))
+  in
+  let full arr buf base =
+    populate arr buf base;
+    (match check with
+    | Some f when not (f arr) -> raise_check_failed ()
+    | _ -> ());
+    Option.iter (fun f -> f arr) act
+  in
+  let check_only arr buf base =
+    populate arr buf base;
+    match check with
+    | Some f when not (f arr) -> raise_check_failed ()
+    | _ -> ()
+  in
+  (full, check_only, List.length action_var_names)
+
+and apply_field_to_validator_acc acc (Types.Field f) =
   match f.field_typ with
-  | Types.Struct inner_struct ->
-      let inner_v = validator_of_struct inner_struct in
-      let static_off =
-        match acc.va_next_off with Static_next n -> n | Dynamic_next _ -> -1
-      in
-      let off_fn =
-        match acc.va_next_off with
-        | Static_next n -> fun _buf _base -> n
-        | Dynamic_next f -> fun buf base -> f buf base - base
-      in
-      let validator _arr buf base =
-        let fo = off_fn buf base in
-        inner_v.vt_validate buf (base + fo)
-      in
-      let size_delta, next_off =
-        match (acc.va_next_off, inner_v.vt_wire_size) with
-        | Static_next n, Fixed sz -> (sz, Static_next (n + sz))
-        | _, Fixed sz ->
-            let prev_end =
-              match acc.va_next_off with
-              | Static_next n -> fun _buf base -> base + n
-              | Dynamic_next f -> f
-            in
-            (sz, Dynamic_next (fun buf base -> prev_end buf base + sz))
-        | _, Variable { min_size; compute } ->
-            let prev_end =
-              match acc.va_next_off with
-              | Static_next n -> fun _buf base -> base + n
-              | Dynamic_next f -> f
-            in
-            ( min_size,
-              Dynamic_next (fun buf base -> compute buf (prev_end buf base)) )
-      in
-      {
-        va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
-        va_checkers_rev = (static_off, validator) :: acc.va_checkers_rev;
-        va_field_readers = acc.va_field_readers;
-        va_n_fields = acc.va_n_fields;
-        va_n_array_slots = acc.va_n_array_slots;
-        va_min_size = acc.va_min_size + size_delta;
-        va_next_off = next_off;
-        va_bf = None;
-      }
+  | Types.Struct inner_struct -> apply_struct_field acc inner_struct
   | _ ->
+      let name = Option.value f.field_name ~default:"" in
       let codec_field : (_, unit) field =
         {
-          name = Option.value f.field_name ~default:"";
+          name;
           typ = f.field_typ;
           constraint_ = f.constraint_;
           action = f.action;
@@ -1935,53 +1981,17 @@ let rec apply_field_to_validator_acc acc (Types.Field f) =
       in
       let layout = layout_ctx_of_validator_acc acc in
       let cf = compile_field layout codec_field in
-      let action_var_names =
-        match f.action with
-        | None -> []
-        | Some (Types.On_success stmts | Types.On_act stmts) ->
-            List.fold_left action_vars [] stmts
+      let full, check_only, n_extra_vars =
+        build_field_checks acc ~populate:cf.populate
+          ~validator_off:cf.validator_off ~name ~action:f.action
+          ~constraint_:f.constraint_
       in
-      let n_extra_vars = List.length action_var_names in
-      let field_idx = acc.va_n_fields in
-      let dummy_reader _buf _base = 0 in
-      let cc_readers =
-        let base = (codec_field.name, dummy_reader) :: acc.va_field_readers in
-        List.fold_left
-          (fun acc' vn -> (vn, dummy_reader) :: acc')
-          base action_var_names
-      in
-      let idx = build_idx cc_readers in
-      let cc = { idx; sizeof_this = cf.validator_off; field_pos = field_idx } in
-      let check =
-        match f.constraint_ with
-        | None -> None
-        | Some c -> Some (compile_bool_arr cc c)
-      in
-      let act = compile_action cc f.action in
-      let populate = cf.populate in
-      let full arr buf base =
-        populate arr buf base;
-        (match check with
-        | Some f when not (f arr) ->
-            raise (Parse_error (Constraint_failed "field constraint"))
-        | _ -> ());
-        match act with Some f -> f arr | None -> ()
-      in
-      let check_only arr buf base =
-        populate arr buf base;
-        match check with
-        | Some f when not (f arr) ->
-            raise (Parse_error (Constraint_failed "field constraint"))
-        | _ -> ()
-      in
-      let byte_off = cf.validator_off in
       let new_field_readers =
-        cf.nested_readers
-        @ ((codec_field.name, cf.int_reader) :: acc.va_field_readers)
+        cf.nested_readers @ ((name, cf.int_reader) :: acc.va_field_readers)
       in
       {
-        va_validators_rev = (byte_off, full) :: acc.va_validators_rev;
-        va_checkers_rev = (byte_off, check_only) :: acc.va_checkers_rev;
+        va_validators_rev = (cf.validator_off, full) :: acc.va_validators_rev;
+        va_checkers_rev = (cf.validator_off, check_only) :: acc.va_checkers_rev;
         va_field_readers = new_field_readers;
         va_n_fields = List.length new_field_readers;
         va_n_array_slots = List.length new_field_readers + n_extra_vars;
@@ -2088,30 +2098,30 @@ let wire_size_info t =
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
 
-let decode t buf off =
-  let v = t.t_decode buf off in
-  (* Full validation: constraints + where + actions *)
-  let arr = Array.make t.t_n_array_slots 0 in
-  t.t_validate_arr arr buf off;
-  v
-
 let env t : Param.env =
   { Types.pe_codec_id = t.t_id; pe_slots = Array.make t.t_n_params 0 }
 
-let decode_with t (e : Param.env) buf off =
+let decode_exn ?env:e t buf off =
   let v = t.t_decode buf off in
   let arr = Array.make t.t_n_array_slots 0 in
-  if t.t_n_params > 0 then
-    Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params;
+  (match e with
+  | Some (e : Param.env) when t.t_n_params > 0 ->
+      Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params
+  | _ -> ());
   t.t_validate_arr arr buf off;
-  (* Sync output params back to env and ph_cell *)
-  List.iter
-    (fun (Param.Pack p) ->
-      let v = arr.(p.ph_slot) in
-      e.pe_slots.(p.ph_env_idx) <- v;
-      p.ph_cell := v)
-    t.t_param_handles;
+  (match e with
+  | Some (e : Param.env) ->
+      List.iter
+        (fun (Param.Pack p) ->
+          let v = arr.(p.ph_slot) in
+          e.pe_slots.(p.ph_env_idx) <- v;
+          p.ph_cell := v)
+        t.t_param_handles
+  | None -> ());
   v
+
+let decode ?env t buf off =
+  try Ok (decode_exn ?env t buf off) with Types.Parse_error e -> Error e
 
 let encode t v buf off = t.t_encode v buf off
 

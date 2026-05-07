@@ -69,7 +69,7 @@ let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
       pp_expr buf a
   | _ -> Buffer.add_string buf "?"
 
-let expr_to_string (type a) (e : a Types.expr) =
+let string_of_expr (type a) (e : a Types.expr) =
   let buf = Buffer.create 32 in
   pp_expr buf e;
   Buffer.contents buf
@@ -97,7 +97,7 @@ let annotate_fixed name typ constraint_ bits =
   in
   match constraint_ with
   | Some cond ->
-      let ann = Fmt.str "%s [%s]" base (expr_to_string cond) in
+      let ann = Fmt.str "%s [%s]" base (string_of_expr cond) in
       if String.length ann <= (bits * bit_chars) - 1 then ann else base
   | None -> base
 
@@ -120,28 +120,28 @@ let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
           let annotation =
             match field_typ with
             | Byte_array { size } | Byte_slice { size } ->
-                Fmt.str "%s (%s bytes)" name (expr_to_string size)
+                Fmt.str "%s (%s bytes)" name (string_of_expr size)
             | Array { len; elem; _ } ->
                 let elem_info =
                   match Types.field_wire_size elem with
                   | Some n -> Fmt.str "%d-byte elems" n
                   | None -> "var elems"
                 in
-                Fmt.str "%s (%s x %s)" name (expr_to_string len) elem_info
+                Fmt.str "%s (%s x %s)" name (string_of_expr len) elem_info
             | Where { inner; cond } ->
                 let inner_label =
                   match Types.field_wire_size inner with
                   | Some n -> Fmt.str "%s (%d)" name (n * 8)
                   | None -> name
                 in
-                Fmt.str "%s [%s]" inner_label (expr_to_string cond)
+                Fmt.str "%s [%s]" inner_label (string_of_expr cond)
             | _ ->
                 if name = "" then "(variable)" else Fmt.str "%s (variable)" name
           in
           let label =
             match constraint_ with
             | None -> annotation
-            | Some cond -> Fmt.str "%s [%s]" annotation (expr_to_string cond)
+            | Some cond -> Fmt.str "%s [%s]" annotation (string_of_expr cond)
           in
           Variable { label })
 
