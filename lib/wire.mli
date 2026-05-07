@@ -87,7 +87,8 @@ type endian = Types.endian =
 type 'a typ
 
 type param
-(** Untyped formal parameter declaration. Create via {!Param.v}. *)
+(** Untyped formal parameter declaration. Create via {!val:Param.input} or
+    {!val:Param.output}. *)
 
 module Param : sig
   (** Formal parameters for codecs.
@@ -181,7 +182,7 @@ module Action : sig
 
   val assign : ('a, Param.output) Param.t -> int expr -> stmt
   (** [assign out e] assigns expression [e] to the mutable output parameter
-      [out]. Only output parameters (created with {!Param.output}) can be
+      [out]. Only output parameters (created with {!val:Param.output}) can be
       assigned to -- the type system prevents assigning to input parameters. *)
 
   val return_bool : bool expr -> stmt
@@ -743,9 +744,9 @@ module Codec : sig
 
   (** {2 Struct validator}
 
-      For a {!Types.struct_} (e.g. from EverParse 3D), build a validator
-      directly without going through {!v}'s record-constructor machinery. The
-      same int-array kernel that backs {!validate} on a [Codec.t]. *)
+      For a [Types.struct_] (e.g. from EverParse 3D), build a validator directly
+      without going through {!v}'s record-constructor machinery. The same
+      int-array kernel that backs {!validate} on a [Codec.t]. *)
 
   type validator
   (** A struct validator without a constructor. *)
@@ -951,7 +952,7 @@ module Everparse : sig
 
     val field_ref : field -> int expr
     (** [field_ref f] returns the expression referencing field [f] by name. The
-        field must have been created with {!field} (not {!anon_field}). *)
+        field must have been created with {!val:field} (not {!anon_field}). *)
 
     val struct_ : string -> field list -> struct_
     (** Non-parameterised 3D struct. *)

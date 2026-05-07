@@ -34,7 +34,7 @@
     v}
 
     If you want OCaml to call the generated C validators, use {!Wire_stubs} on
-    the resulting {!Wire.Everparse.Raw.struct_} values. *)
+    the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
 (** [everparse_name name] returns the EverParse-normalized identifier for a
