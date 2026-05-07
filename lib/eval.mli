@@ -8,11 +8,17 @@
     expressions in {!empty}: no field references, no cross-field dependencies.
 *)
 
-type ctx = unit
-(** Empty context type. Cross-field state lives in [Codec]'s int-array
-    machinery; at top level there is nothing to thread. *)
+type ctx
+(** Top-level evaluation context. Used by [Byte_array_where]'s per-element
+    refinement, which binds the element variable to the byte value before
+    evaluating its constraint. Cross-field state lives in [Codec]'s int-array
+    machinery; at top level the binding is empty unless explicitly extended. *)
 
 val empty : ctx
+(** Empty context, no bindings. *)
+
+val bind : string -> int -> ctx -> ctx
+(** [bind name v ctx] extends [ctx] so that [Ref name] evaluates to [v]. *)
 
 val int_of : 'a Types.typ -> 'a -> int option
 (** [int_of typ v] converts a typed value to [int]. Returns [None] for types

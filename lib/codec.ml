@@ -4,6 +4,12 @@ module Param = Param
 
 (** Build a specialized field encoder: writes field value to bytes at offset.
     Returns the new offset. Works directly on the slice's underlying bytes. *)
+let blit_string_padded n buf off v =
+  let len = min n (String.length v) in
+  Bytes.blit_string v 0 buf off len;
+  if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
+  off + n
+
 let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
  fun typ ->
   match typ with
@@ -47,12 +53,8 @@ let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       fun buf off v ->
         Uint_var.write endian buf off n v;
         off + n
-  | Byte_array { size = Int n } ->
-      fun buf off v ->
-        let len = min n (String.length v) in
-        Bytes.blit_string v 0 buf off len;
-        if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
-        off + n
+  | Byte_array { size = Int n } -> blit_string_padded n
+  | Byte_array_where { size = Int n; _ } -> blit_string_padded n
   | Byte_slice { size = Int n } ->
       fun buf off v ->
         let len = min n (Slice.length v) in
@@ -105,6 +107,8 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Uint_var { size = Int n; endian } ->
       fun buf base -> Uint_var.read endian buf (base + field_off) n
   | Byte_array { size = Int n } ->
+      fun buf base -> Bytes.sub_string buf (base + field_off) n
+  | Byte_array_where { size = Int n; _ } ->
       fun buf base -> Bytes.sub_string buf (base + field_off) n
   | Byte_slice { size = Int n } ->
       fun buf base -> Slice.make buf ~first:(base + field_off) ~length:n
@@ -764,6 +768,9 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
  fun f typ ->
   match typ with
   | Byte_array { size } | Byte_slice { size } -> iter_param_refs f size
+  | Byte_array_where { size; cond; _ } ->
+      iter_param_refs f size;
+      iter_param_refs f cond
   | Uint_var { size; _ } -> iter_param_refs f size
   | Single_elem { size; elem; _ } ->
       iter_param_refs f size;
@@ -1403,6 +1410,7 @@ and var_bytes_reader : type a.
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
+  | Byte_array_where _ -> Bytes.sub_string buf (base + fo) sz
   | _ -> assert false
 
 and var_bytes_writer : type a r.
@@ -1418,6 +1426,9 @@ and var_bytes_writer : type a r.
   | Byte_array _ ->
       let s = (value : string) in
       Bytes.blit_string s 0 buf (off + fo) (String.length s)
+  | Byte_array_where _ ->
+      let s = (value : string) in
+      Bytes.blit_string s 0 buf (off + fo) (String.length s)
   | _ -> assert false
 
 and compile_var_bytes : type a r.
@@ -1428,6 +1439,7 @@ and compile_var_bytes : type a r.
     match typ with
     | Byte_slice { size } -> size
     | Byte_array { size } -> size
+    | Byte_array_where { size; _ } -> size
     | Uint_var { size; _ } -> size
     | _ -> invalid_arg "add_field: unsupported variable-size field type"
   in
@@ -2173,12 +2185,21 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
       fun buf base ->
         let sz = size_fn buf base in
         Bytes.sub_string buf (base + off) sz
+  | Byte_array_where _, Variable { off; size_fn } ->
+      fun buf base ->
+        let sz = size_fn buf base in
+        Bytes.sub_string buf (base + off) sz
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun buf base ->
         let fo = off_fn buf base in
         let sz = size_fn buf base in
         Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
+      fun buf base ->
+        let fo = off_fn buf base in
+        let sz = size_fn buf base in
+        Bytes.sub_string buf (base + fo) sz
+  | Byte_array_where _, Variable_dynamic { off_fn; size_fn } ->
       fun buf base ->
         let fo = off_fn buf base in
         let sz = size_fn buf base in
@@ -2220,6 +2241,10 @@ let rec build_staged_writer : type a.
       fun buf base value ->
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + off) (String.length s)
+  | Byte_array_where _, Variable { off; _ } ->
+      fun buf base value ->
+        let s = (value : string) in
+        Bytes.blit_string s 0 buf (base + off) (String.length s)
   | Byte_slice _, Variable_dynamic { off_fn; _ } ->
       fun buf base value ->
         let fo = off_fn buf base in
@@ -2227,6 +2252,11 @@ let rec build_staged_writer : type a.
         let len = Slice.length src in
         Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + fo) len
   | Byte_array _, Variable_dynamic { off_fn; _ } ->
+      fun buf base value ->
+        let fo = off_fn buf base in
+        let s = (value : string) in
+        Bytes.blit_string s 0 buf (base + fo) (String.length s)
+  | Byte_array_where _, Variable_dynamic { off_fn; _ } ->
       fun buf base value ->
         let fo = off_fn buf base in
         let s = (value : string) in

@@ -89,6 +89,12 @@ and _ typ =
     }
       -> 'seq typ
   | Byte_array : { size : int expr } -> string typ
+  | Byte_array_where : {
+      size : int expr;
+      elt_var : string;
+      cond : bool expr;
+    }
+      -> string typ
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
   | Single_elem : { size : int expr; elem : 'a typ; at_most : bool } -> 'a typ
   | Enum : {
@@ -293,6 +299,26 @@ let seq_list : ('a, 'a list) seq_map =
 let array ~len elem = Array { len; elem; seq = seq_list }
 let array_seq seq ~len elem = Array { len; elem; seq }
 let byte_array ~size = Byte_array { size }
+let byte_array_where_counter = Stdlib.ref 0
+let elt_var_prefix = "__elt_"
+
+let byte_array_where ~size ~per_byte =
+  let n = !byte_array_where_counter in
+  Stdlib.incr byte_array_where_counter;
+  let elt_var = elt_var_prefix ^ string_of_int n in
+  let cond = per_byte (Ref elt_var) in
+  Byte_array_where { size; elt_var; cond }
+
+(* The 3D synthesized typedef name derived from an elt_var. The element
+   field inside the synthesized struct keeps the elt_var as its name so the
+   captured [cond] (which references [elt_var] via [Ref]) renders as a
+   constraint on that field directly. *)
+let synth_name_of_elt_var ev =
+  let plen = String.length elt_var_prefix in
+  if String.length ev > plen && String.sub ev 0 plen = elt_var_prefix then
+    "_RefByte_" ^ String.sub ev plen (String.length ev - plen)
+  else "_RefByte_" ^ ev
+
 let byte_slice ~size = Byte_slice { size }
 let optional present inner = Optional { present; inner }
 let optional_or present ~default inner = Optional_or { present; inner; default }
@@ -423,6 +449,7 @@ let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Enum { base; _ } -> ocaml_kind_of base
   | Where { inner; _ } -> ocaml_kind_of inner
   | Byte_array _ -> K_string
+  | Byte_array_where _ -> K_string
   | Byte_slice _ -> K_string (* approximate: slice becomes string in output *)
   | Unit | All_bytes | All_zeros -> K_unit
   | _ -> K_int (* fallback *)
@@ -647,6 +674,8 @@ and pp_typ : type a. a typ Fmt.t =
   | Array { len; elem; _ } -> Fmt.pf ppf "%a[%a]" pp_typ elem pp_expr len
   | Byte_array { size } | Byte_slice { size } ->
       Fmt.pf ppf "UINT8[:byte-size %a]" pp_expr size
+  | Byte_array_where { size; cond; _ } ->
+      Fmt.pf ppf "UINT8 { %a }[:byte-size %a]" pp_expr cond pp_expr size
   | Single_elem { size; elem; at_most = false } ->
       Fmt.pf ppf "%a[:byte-size-single-element-array %a]" pp_typ elem pp_expr
         size
@@ -738,6 +767,9 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
   | Uint_var { size; _ } -> (Byte_array size, fun ppf -> Fmt.string ppf "UINT8")
   | Byte_array { size } | Byte_slice { size } ->
       (Byte_array size, fun ppf -> Fmt.string ppf "UINT8")
+  | Byte_array_where { size; elt_var; _ } ->
+      let synth = synth_name_of_elt_var elt_var in
+      (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
       (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
   | Array { len; elem; _ } -> (Array len, fun ppf -> pp_typ ppf elem)
@@ -915,7 +947,10 @@ let rec field_wire_size : type a. a typ -> int option = function
       | BF_U16 _ -> Some 2
       | BF_U32 _ -> Some 4)
   | Unit -> Some 0
-  | Byte_array { size = Int n } | Byte_slice { size = Int n } -> Some n
+  | Byte_array { size = Int n }
+  | Byte_array_where { size = Int n; _ }
+  | Byte_slice { size = Int n } ->
+      Some n
   | Where { inner; _ } -> field_wire_size inner
   | Enum { base; _ } -> field_wire_size base
   | Map { inner; _ } -> field_wire_size inner

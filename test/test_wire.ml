@@ -69,6 +69,28 @@ let test_parse_byte_array () =
   | Ok v -> Alcotest.(check string) "byte_array value" "hello" v
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
+
+let test_bawhere_accepts () =
+  let t = byte_array_where ~size:(int 5) ~per_byte:printable_byte in
+  match of_string t "abc D" with
+  | Ok v -> Alcotest.(check string) "printable" "abc D" v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_bawhere_rejects () =
+  let t = byte_array_where ~size:(int 4) ~per_byte:printable_byte in
+  match of_string t "ab\x01c" with
+  | Ok _ -> Alcotest.fail "expected per-byte refinement to reject"
+  | Error (Constraint_failed _) -> ()
+  | Error e ->
+      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
+let test_bawhere_enc_rejects () =
+  let t = byte_array_where ~size:(int 3) ~per_byte:printable_byte in
+  match to_string t "a\x01b" with
+  | exception Invalid_argument _ -> ()
+  | _ -> Alcotest.fail "expected encode to reject non-printable byte"
+
 let test_parse_variants_valid () =
   let input = "\x01" in
   let t = variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] uint8 in
@@ -599,6 +621,12 @@ let suite =
       Alcotest.test_case "parse: uint64 le" `Quick test_parse_uint64_le;
       Alcotest.test_case "parse: array" `Quick test_parse_array;
       Alcotest.test_case "parse: byte_array" `Quick test_parse_byte_array;
+      Alcotest.test_case "parse: byte_array_where accepts" `Quick
+        test_bawhere_accepts;
+      Alcotest.test_case "parse: byte_array_where rejects" `Quick
+        test_bawhere_rejects;
+      Alcotest.test_case "encode: byte_array_where rejects" `Quick
+        test_bawhere_enc_rejects;
       Alcotest.test_case "parse: variants valid" `Quick
         test_parse_variants_valid;
       Alcotest.test_case "parse: variants invalid" `Quick

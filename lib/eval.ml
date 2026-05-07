@@ -10,9 +10,10 @@
 
 open Types
 
-type ctx = unit
+type ctx = (string * int) list
 
-let empty : ctx = ()
+let empty : ctx = []
+let bind name v ctx = (name, v) :: ctx
 
 (* Convert a typed value to [int]. Returns [None] for types that don't
    fit in OCaml int (uint64 over 2^63, non-numeric). *)
@@ -31,9 +32,9 @@ let rec int_of : type a. a typ -> a -> int option =
   | Single_elem { elem; _ } -> int_of elem v
   | Apply { typ; _ } -> int_of typ v
   | Map { inner; encode; _ } -> int_of inner (encode v)
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ ->
+  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_array_where _
+  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
+  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
       None
 
 let rec expr : type a. ctx -> a expr -> a =
@@ -42,10 +43,13 @@ let rec expr : type a. ctx -> a expr -> a =
   | Int n -> n
   | Int64 n -> n
   | Bool b -> b
-  | Ref name ->
-      failwith
-        ("Eval.expr: unbound field " ^ name
-       ^ " (cross-field references are only valid inside a struct)")
+  | Ref name -> (
+      match List.assoc_opt name ctx with
+      | Some v -> v
+      | None ->
+          failwith
+            ("Eval.expr: unbound field " ^ name
+           ^ " (cross-field references are only valid inside a struct)"))
   | Param_ref p -> !(p.ph_cell)
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> 0

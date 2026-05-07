@@ -517,6 +517,40 @@ let test_reserved_word_escaping () =
     "no bare reserved word as field" false
     (contains ~sub:"UINT8 type;" output)
 
+let test_3d_byte_array_where () =
+  (* Synthesises a refinement struct so 3D can apply the per-byte constraint
+     to each element of the byte-size array. *)
+  let f_len = Field.v "Length" uint16be in
+  let f_data =
+    Field.v "Data"
+      (byte_array_where ~size:(Field.ref f_len)
+         ~per_byte:Expr.(fun b -> b >= int 0x20 && b <= int 0x7e))
+  in
+  let codec =
+    Codec.v "Printable"
+      (fun len data -> (len, data))
+      Codec.[ f_len $ fst; f_data $ snd ]
+  in
+  let schema = Wire.Everparse.schema codec in
+  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  Alcotest.(check bool)
+    "synth typedef present" true
+    (contains ~sub:"struct __RefByte_" s);
+  Alcotest.(check bool)
+    "field references synth" true
+    (contains ~sub:"_RefByte_" s);
+  Alcotest.(check bool)
+    "constraint inlined" true
+    (contains ~sub:">= 32" s && contains ~sub:"<= 126" s);
+  let synth_ref =
+    Re.execp
+      (Re.compile
+         (Re.seq
+            [ Re.str "_RefByte_"; Re.rep1 Re.digit; Re.str " Data[:byte-size" ]))
+      s
+  in
+  Alcotest.(check bool) "Data references synth not raw UINT8" true synth_ref
+
 let suite =
   ( "everparse",
     [
@@ -546,4 +580,6 @@ let suite =
       Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
       Alcotest.test_case "3d: reserved word escaping" `Quick
         test_reserved_word_escaping;
+      Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
+        test_3d_byte_array_where;
     ] )

@@ -177,6 +177,15 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
       (Bytes.sub_string buf off n, off + n)
+  | Byte_array_where { size; elt_var; cond } ->
+      let n = Eval.expr Eval.empty size in
+      check_eof len (off + n);
+      for i = 0 to n - 1 do
+        let v = Bytes.get_uint8 buf (off + i) in
+        if not (Eval.expr (Eval.bind elt_var v Eval.empty) cond) then
+          raise (Parse_exn (Constraint_failed "byte_array_where: per-byte"))
+      done;
+      (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
@@ -470,6 +479,15 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Array { elem; seq = Seq_map seq; _ } ->
       seq.iter (fun elem_v -> encode_into elem elem_v enc) v
   | Byte_array _ -> write_string enc v
+  | Byte_array_where { elt_var; cond; _ } ->
+      String.iteri
+        (fun i c ->
+          let n = Char.code c in
+          if not (Eval.expr (Eval.bind elt_var n Eval.empty) cond) then
+            Fmt.invalid_arg
+              "byte_array_where: byte %d=0x%02x violates constraint" i n)
+        v;
+      write_string enc v
   | Byte_slice _ ->
       let src = Slice.bytes v in
       let off = Slice.first v in

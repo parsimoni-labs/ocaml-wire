@@ -17,9 +17,9 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Single_elem { elem; _ } -> to_int elem v
   | Map { inner; encode; _ } -> to_int inner (encode v)
   | Apply { typ; _ } -> to_int typ v
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ ->
+  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_array_where _
+  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
+  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
       invalid_arg "Param: unsupported parameter type"
 
 let rec of_int : type a. a Types.typ -> int -> a =
@@ -37,9 +37,9 @@ let rec of_int : type a. a Types.typ -> int -> a =
   | Single_elem { elem; _ } -> of_int elem v
   | Map { inner; decode; _ } -> decode (of_int inner v)
   | Apply { typ; _ } -> of_int typ v
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_slice _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ ->
+  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_array_where _
+  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
+  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
       invalid_arg "Param: unsupported parameter type"
 
 let rec is_int_representable : type a. a Types.typ -> bool = function

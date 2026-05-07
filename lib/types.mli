@@ -121,6 +121,14 @@ and _ typ =
     }
       -> 'seq typ  (** Fixed-count array. *)
   | Byte_array : { size : int expr } -> string typ  (** Byte span as string. *)
+  | Byte_array_where : {
+      size : int expr;
+      elt_var : string;
+      cond : bool expr;
+    }
+      -> string typ
+      (** Byte span with a per-byte refinement: each decoded byte must satisfy
+          [cond], where [elt_var] is bound to the byte's value. *)
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
       (** Zero-copy byte span. *)
   | Single_elem : { size : int expr; elem : 'a typ; at_most : bool } -> 'a typ
@@ -406,6 +414,19 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 
 val byte_array : size:int expr -> string typ
 (** Byte span as a string. *)
+
+val byte_array_where :
+  size:int expr -> per_byte:(int expr -> bool expr) -> string typ
+(** [byte_array_where ~size ~per_byte] is a byte span of [size] bytes where each
+    byte must satisfy [per_byte]. The argument to [per_byte] is an expression
+    bound to the current byte's integer value. Decode raises [Parse_error] on
+    the first byte that violates the constraint; encode raises
+    [Invalid_argument]. *)
+
+val synth_name_of_elt_var : string -> string
+(** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
+    name derived from a [byte_array_where] element variable. Internal: used by
+    the EverParse projection. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Zero-copy byte span. *)

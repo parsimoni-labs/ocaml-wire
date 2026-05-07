@@ -20,7 +20,9 @@ let rec is_bitfield : type a. a Types.typ -> bool = function
   | _ -> false
 
 let rec is_byte_field : type a. a Types.typ -> bool = function
-  | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ -> true
+  | Types.Byte_array _ | Types.Byte_array_where _ | Types.Byte_slice _
+  | Types.Uint_var _ ->
+      true
   | Types.Optional { present = Types.Bool _; _ } -> false
   | Types.Optional _ -> true
   | Types.Optional_or { present = Types.Bool _; _ } -> false
@@ -58,7 +60,8 @@ let rec type_suffix : type a. a Types.typ -> string = function
 let rec setter_of : type a. string -> a Types.typ -> setter_info =
  fun schema_name t ->
   match t with
-  | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ ->
+  | Types.Byte_array _ | Types.Byte_array_where _ | Types.Byte_slice _
+  | Types.Uint_var _ ->
       {
         setter_name = schema_name ^ "SetBytes";
         setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
@@ -280,6 +283,24 @@ let collect_extern_setters schema_name ctx_struct u32 fields =
           end)
     fields
 
+(* For each [Byte_array_where] field in [s], synthesise a 1-byte struct that
+   names the element [elt_var] and applies [cond] as a field constraint.
+   3D's syntax does not allow per-element refinement on the byte-size array
+   itself, so we lift the refinement into a wrapper struct and reference it
+   from the parent field. The naming convention shared with
+   [Types.synth_name_of_elt_var] keeps the field rendering and the typedef
+   name in sync without threading state. *)
+let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
+  List.filter_map
+    (fun (Types.Field f) ->
+      match f.field_typ with
+      | Types.Byte_array_where { elt_var; cond; _ } ->
+          let synth = Types.synth_name_of_elt_var elt_var in
+          let elt_field = Types.field elt_var ~constraint_:cond Types.uint8 in
+          Some (Types.typedef (Types.struct_ synth [ elt_field ]))
+      | _ -> None)
+    s.fields
+
 let with_output (s : Types.struct_) : Types.decl list =
   (* Extern declarations for the callback mechanism *)
   let ctx_struct = Types.struct_ "WireCtx" [] in
@@ -307,7 +328,8 @@ let with_output (s : Types.struct_) : Types.decl list =
   in
   let parse_decl = Types.typedef ~entrypoint:true parse_struct in
   let extern_decls = collect_extern_setters s.name ctx_struct u32 s.fields in
-  [ ctx_decl ] @ extern_decls @ [ parse_decl ]
+  let refined_decls = refined_byte_typedefs s in
+  [ ctx_decl ] @ extern_decls @ refined_decls @ [ parse_decl ]
 
 (* Byte size of a struct after bitfield coalescing, mirroring Codec.compile_bits'
    logic: consecutive same-base, same-bit_order bitfields pack into one base

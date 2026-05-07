@@ -10,6 +10,13 @@
   `Slice.first (Codec.get ...)` pattern (#37, @samoht)
 - `Wire.codec` type alias for `'r Codec.t`, and `Wire.pp_value` to
   print a record field-by-field through its codec (@samoht)
+- `Wire.byte_array_where ~size ~per_byte`: byte span with a per-byte
+  refinement. Decode raises `Parse_error` on the first byte that
+  violates the constraint; encode raises `Invalid_argument`. The 3D
+  projection synthesises a 1-byte refinement struct per use and
+  references it from the parent field, so both wire and EverParse C
+  enforce the same per-element constraint. Motivating shape:
+  printable-ASCII bodies (SSH name-list, RFC 4251 sec 5) (@samoht)
 
 ### Changed
 

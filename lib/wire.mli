@@ -473,6 +473,17 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string. *)
 
+val byte_array_where :
+  size:int expr -> per_byte:(int expr -> bool expr) -> string typ
+(** [byte_array_where ~size ~per_byte] is a byte sequence of [size] bytes where
+    each byte must satisfy [per_byte]. The argument to [per_byte] is an
+    expression bound to the current byte's integer value.
+
+    Decode raises {!exception:Parse_error} on the first byte that violates the
+    constraint; encode raises [Invalid_argument]. The motivating shape is SSH
+    name-list payloads (RFC 4251 sec 5), where every byte must be printable
+    US-ASCII. *)
+
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice. *)
 
