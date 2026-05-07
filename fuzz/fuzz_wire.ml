@@ -29,77 +29,77 @@ let truncate buf =
 
 let test_parse_uint8 buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint8 buf in
+  let _ = Wire.of_string Wire.uint8 buf in
   ()
 
 let test_parse_uint16 buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint16 buf in
+  let _ = Wire.of_string Wire.uint16 buf in
   ()
 
 let test_parse_uint16be buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint16be buf in
+  let _ = Wire.of_string Wire.uint16be buf in
   ()
 
 let test_parse_uint32 buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint32 buf in
+  let _ = Wire.of_string Wire.uint32 buf in
   ()
 
 let test_parse_uint32be buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint32be buf in
+  let _ = Wire.of_string Wire.uint32be buf in
   ()
 
 let test_parse_uint63 buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint63 buf in
+  let _ = Wire.of_string Wire.uint63 buf in
   ()
 
 let test_parse_uint63be buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint63be buf in
+  let _ = Wire.of_string Wire.uint63be buf in
   ()
 
 let test_parse_uint64 buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint64 buf in
+  let _ = Wire.of_string Wire.uint64 buf in
   ()
 
 let test_parse_uint64be buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.uint64be buf in
+  let _ = Wire.of_string Wire.uint64be buf in
   ()
 
 let test_parse_bitfield buf =
   let buf = truncate buf in
   let t = Wire.bits ~width:6 Wire.U32 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_bf_uint8 buf =
   let buf = truncate buf in
   let t = Wire.bits ~width:3 Wire.U8 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_bf_uint16 buf =
   let buf = truncate buf in
   let t = Wire.bits ~width:10 Wire.U16 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_bf_uint16be buf =
   let buf = truncate buf in
   let t = Wire.bits ~width:10 Wire.U16be in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_bf_uint32be buf =
   let buf = truncate buf in
   let t = Wire.bits ~width:20 Wire.U32be in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_map buf =
@@ -107,32 +107,32 @@ let test_parse_map buf =
   let t =
     Wire.map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) Wire.uint8
   in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_bool buf =
   let buf = truncate buf in
   let t = Wire.bit Wire.uint8 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_unit buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.empty buf in
+  let _ = Wire.of_string Wire.empty buf in
   ()
 
 let test_parse_array buf =
   let buf = truncate buf in
   let len = min 10 (String.length buf) in
   let arr = Wire.array ~len:(Wire.int len) Wire.uint8 in
-  let _ = Wire.decode_string arr buf in
+  let _ = Wire.of_string arr buf in
   ()
 
 let test_parse_byte_array buf =
   let buf = truncate buf in
   let size = min 10 (String.length buf) in
   let ba = Wire.byte_array ~size:(Wire.int size) in
-  let _ = Wire.decode_string ba buf in
+  let _ = Wire.of_string ba buf in
   ()
 
 let test_parse_variants buf =
@@ -140,23 +140,23 @@ let test_parse_variants buf =
   let e =
     Wire.variants "TestEnum" [ ("A", `A); ("B", `B); ("C", `C) ] Wire.uint8
   in
-  let _ = Wire.decode_string e buf in
+  let _ = Wire.of_string e buf in
   ()
 
 let test_parse_where buf =
   let buf = truncate buf in
   let t = Wire.where Wire.Expr.true_ Wire.uint8 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 let test_parse_all_bytes buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.all_bytes buf in
+  let _ = Wire.of_string Wire.all_bytes buf in
   ()
 
 let test_parse_all_zeros buf =
   let buf = truncate buf in
-  let _ = Wire.decode_string Wire.all_zeros buf in
+  let _ = Wire.of_string Wire.all_zeros buf in
   ()
 
 type test_struct = { ts_a : int; ts_b : int; ts_c : int }
@@ -283,7 +283,7 @@ let test_parse_casetype buf =
             | `Default v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
       ]
   in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 (* Parse crash safety: nested struct with random input *)
@@ -303,69 +303,69 @@ let test_parse_nested_struct buf =
         Wire.Everparse.Raw.field "payload" (Wire.Everparse.Raw.struct_typ inner);
       ]
   in
-  let _ = Wire.decode_string (Wire.Everparse.Raw.struct_typ outer) buf in
+  let _ = Wire.of_string (Wire.Everparse.Raw.struct_typ outer) buf in
   ()
 
 (** {1 Roundtrip Tests} *)
 
 let test_roundtrip_uint8 n =
   let n = abs n mod 256 in
-  let encoded = Wire.encode_string Wire.uint8 n in
-  match Wire.decode_string Wire.uint8 encoded with
+  let encoded = Wire.to_string Wire.uint8 n in
+  match Wire.of_string Wire.uint8 encoded with
   | Ok decoded -> if n <> decoded then fail "uint8 roundtrip mismatch"
   | Error _ -> fail "uint8 roundtrip parse failed"
 
 let test_roundtrip_uint16 n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_string Wire.uint16 n in
-  match Wire.decode_string Wire.uint16 encoded with
+  let encoded = Wire.to_string Wire.uint16 n in
+  match Wire.of_string Wire.uint16 encoded with
   | Ok decoded -> if n <> decoded then fail "uint16 roundtrip mismatch"
   | Error _ -> fail "uint16 roundtrip parse failed"
 
 let test_roundtrip_uint16be n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_string Wire.uint16be n in
-  match Wire.decode_string Wire.uint16be encoded with
+  let encoded = Wire.to_string Wire.uint16be n in
+  match Wire.of_string Wire.uint16be encoded with
   | Ok decoded -> if n <> decoded then fail "uint16be roundtrip mismatch"
   | Error _ -> fail "uint16be roundtrip parse failed"
 
 let test_roundtrip_uint32 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_string Wire.uint32 n in
-  match Wire.decode_string Wire.uint32 encoded with
+  let encoded = Wire.to_string Wire.uint32 n in
+  match Wire.of_string Wire.uint32 encoded with
   | Ok decoded -> if n <> decoded then fail "uint32 roundtrip mismatch"
   | Error _ -> fail "uint32 roundtrip parse failed"
 
 let test_roundtrip_uint32be n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_string Wire.uint32be n in
-  match Wire.decode_string Wire.uint32be encoded with
+  let encoded = Wire.to_string Wire.uint32be n in
+  match Wire.of_string Wire.uint32be encoded with
   | Ok decoded -> if n <> decoded then fail "uint32be roundtrip mismatch"
   | Error _ -> fail "uint32be roundtrip parse failed"
 
 let test_roundtrip_uint63 n =
   let n = abs n in
-  let encoded = Wire.encode_string Wire.uint63 n in
-  match Wire.decode_string Wire.uint63 encoded with
+  let encoded = Wire.to_string Wire.uint63 n in
+  match Wire.of_string Wire.uint63 encoded with
   | Ok decoded -> if n <> decoded then fail "uint63 roundtrip mismatch"
   | Error _ -> fail "uint63 roundtrip parse failed"
 
 let test_roundtrip_uint63be n =
   let n = abs n in
-  let encoded = Wire.encode_string Wire.uint63be n in
-  match Wire.decode_string Wire.uint63be encoded with
+  let encoded = Wire.to_string Wire.uint63be n in
+  match Wire.of_string Wire.uint63be encoded with
   | Ok decoded -> if n <> decoded then fail "uint63be roundtrip mismatch"
   | Error _ -> fail "uint63be roundtrip parse failed"
 
 let test_roundtrip_uint64 n =
-  let encoded = Wire.encode_string Wire.uint64 n in
-  match Wire.decode_string Wire.uint64 encoded with
+  let encoded = Wire.to_string Wire.uint64 n in
+  match Wire.of_string Wire.uint64 encoded with
   | Ok decoded -> if n <> decoded then fail "uint64 roundtrip mismatch"
   | Error _ -> fail "uint64 roundtrip parse failed"
 
 let test_roundtrip_uint64be n =
-  let encoded = Wire.encode_string Wire.uint64be n in
-  match Wire.decode_string Wire.uint64be encoded with
+  let encoded = Wire.to_string Wire.uint64be n in
+  match Wire.of_string Wire.uint64be encoded with
   | Ok decoded -> if n <> decoded then fail "uint64be roundtrip mismatch"
   | Error _ -> fail "uint64be roundtrip parse failed"
 
@@ -374,24 +374,24 @@ let test_roundtrip_map n =
   let t =
     Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
   in
-  let encoded = Wire.encode_string t (n * 2) in
-  match Wire.decode_string t encoded with
+  let encoded = Wire.to_string t (n * 2) in
+  match Wire.of_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
   | Error _ -> fail "map roundtrip parse failed"
 
 let test_roundtrip_bool n =
   let v = n mod 2 = 0 in
   let t = Wire.bit Wire.uint8 in
-  let encoded = Wire.encode_string t v in
-  match Wire.decode_string t encoded with
+  let encoded = Wire.to_string t v in
+  match Wire.of_string t encoded with
   | Ok decoded -> if v <> decoded then fail "bool roundtrip mismatch"
   | Error _ -> fail "bool roundtrip parse failed"
 
 let test_roundtrip_array a b c =
   let arr = [ abs a mod 256; abs b mod 256; abs c mod 256 ] in
   let t = Wire.array ~len:(Wire.int 3) Wire.uint8 in
-  let encoded = Wire.encode_string t arr in
-  match Wire.decode_string t encoded with
+  let encoded = Wire.to_string t arr in
+  match Wire.of_string t encoded with
   | Ok decoded -> if arr <> decoded then fail "array roundtrip mismatch"
   | Error _ -> fail "array roundtrip parse failed"
 
@@ -400,8 +400,8 @@ let test_roundtrip_byte_array buf =
   let len = String.length buf in
   if len > 0 then begin
     let t = Wire.byte_array ~size:(Wire.int len) in
-    let encoded = Wire.encode_string t buf in
-    match Wire.decode_string t encoded with
+    let encoded = Wire.to_string t buf in
+    match Wire.of_string t encoded with
     | Ok decoded -> if buf <> decoded then fail "byte_array roundtrip mismatch"
     | Error _ -> fail "byte_array roundtrip parse failed"
   end
@@ -411,8 +411,8 @@ let test_roundtrip_variants n =
   let variants = [| `A; `B; `C |] in
   let t = Wire.variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] Wire.uint8 in
   let v = variants.(n) in
-  let encoded = Wire.encode_string t v in
-  match Wire.decode_string t encoded with
+  let encoded = Wire.to_string t v in
+  match Wire.of_string t encoded with
   | Ok decoded -> if v <> decoded then fail "variants roundtrip mismatch"
   | Error _ -> fail "variants roundtrip parse failed"
 
@@ -506,44 +506,44 @@ let test_record_bool_roundtrip n =
 (* Parse from a chunked reader -- forces multi-byte values to straddle slices *)
 let parse_chunked ~chunk_size typ s =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:chunk_size s in
-  Wire.decode typ reader
+  Wire.of_reader typ reader
 
 let test_stream_roundtrip_uint16 n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_string Wire.uint16 n in
+  let encoded = Wire.to_string Wire.uint16 n in
   match parse_chunked ~chunk_size:1 Wire.uint16 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint16 mismatch"
   | Error _ -> fail "stream uint16 parse failed"
 
 let test_stream_roundtrip_uint16be n =
   let n = abs n mod 65536 in
-  let encoded = Wire.encode_string Wire.uint16be n in
+  let encoded = Wire.to_string Wire.uint16be n in
   match parse_chunked ~chunk_size:1 Wire.uint16be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint16be mismatch"
   | Error _ -> fail "stream uint16be parse failed"
 
 let test_stream_roundtrip_uint32 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_string Wire.uint32 n in
+  let encoded = Wire.to_string Wire.uint32 n in
   match parse_chunked ~chunk_size:1 Wire.uint32 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint32 chunk=1 mismatch"
   | Error _ -> fail "stream uint32 chunk=1 parse failed"
 
 let test_stream_roundtrip_uint32be_chunk3 n =
   let n = n land ((1 lsl 32) - 1) in
-  let encoded = Wire.encode_string Wire.uint32be n in
+  let encoded = Wire.to_string Wire.uint32be n in
   match parse_chunked ~chunk_size:3 Wire.uint32be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint32be chunk=3 mismatch"
   | Error _ -> fail "stream uint32be chunk=3 parse failed"
 
 let test_stream_roundtrip_uint64 n =
-  let encoded = Wire.encode_string Wire.uint64 n in
+  let encoded = Wire.to_string Wire.uint64 n in
   match parse_chunked ~chunk_size:1 Wire.uint64 encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint64 chunk=1 mismatch"
   | Error _ -> fail "stream uint64 chunk=1 parse failed"
 
 let test_stream_roundtrip_uint64be_chunk5 n =
-  let encoded = Wire.encode_string Wire.uint64be n in
+  let encoded = Wire.to_string Wire.uint64be n in
   match parse_chunked ~chunk_size:5 Wire.uint64be encoded with
   | Ok decoded -> if n <> decoded then fail "stream uint64be chunk=5 mismatch"
   | Error _ -> fail "stream uint64be chunk=5 parse failed"

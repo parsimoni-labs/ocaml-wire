@@ -4,7 +4,7 @@
    [Field_pos] resolution against bound fields) lives in [Codec] as the
    [compile_int_arr] family, which compiles expressions to [int array]
    accessors at codec construction. This module is the residual evaluator
-   for the [Wire.decode_string]/[Wire.encode] paths, which only ever
+   for the [Wire.of_string]/[Wire.encode] paths, which only ever
    evaluate expressions in [empty]: no field references, no cross-field
    dependencies. *)
 

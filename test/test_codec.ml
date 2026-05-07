@@ -144,14 +144,14 @@ let projection_codec =
 let test_metadata_with_params () =
   let env = Codec.env projection_codec |> Param.bind projection_limit 10 in
   let buf = Bytes.of_string "\x08" in
-  let v = decode_ok (Codec.decode_with projection_codec env buf 0) in
+  let v = decode_ok (Codec.decode ~env projection_codec buf 0) in
   Alcotest.(check int) "x" 8 v.x;
   Alcotest.(check int) "outx" 8 (Param.get env projection_outx)
 
 let test_metadata_where_fail () =
   let env = Codec.env projection_codec |> Param.bind projection_limit 7 in
   let buf = Bytes.of_string "\x08" in
-  match Codec.decode_with projection_codec env buf 0 with
+  match Codec.decode ~env projection_codec buf 0 with
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
@@ -750,15 +750,13 @@ let test_view_shared_set_independent () =
 
 (* -- action semantics -- *)
 
-let test_action_fires_decode_with () =
-  (* decode_with fires actions and syncs output params *)
+let test_action_fires_decode_env () =
+  (* decode_env fires actions and syncs output params *)
   let env = Codec.env projection_codec |> Param.bind projection_limit 10 in
   let buf = Bytes.of_string "\x05" in
   Alcotest.(check int) "outx before" 0 (Param.get env projection_outx);
-  let _v = decode_ok (Codec.decode_with projection_codec env buf 0) in
-  Alcotest.(check int)
-    "outx after decode_with" 5
-    (Param.get env projection_outx)
+  let _v = decode_ok (Codec.decode ~env projection_codec buf 0) in
+  Alcotest.(check int) "outx after decode_env" 5 (Param.get env projection_outx)
 
 let test_action_fires_on_get () =
   (* get fires field actions. A return_bool action that rejects odd values
@@ -1964,7 +1962,7 @@ let test_codec_sizeof_this () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
-  let _v = decode_ok (Codec.decode_with codec env buf 0) in
+  let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
   Alcotest.(check int) "sizeof_this at c" 3 (Param.get env out)
 
@@ -1985,7 +1983,7 @@ let test_codec_field_pos () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x02\x03" in
-  let _v = decode_ok (Codec.decode_with codec env buf 0) in
+  let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* field_pos at c = 2 (third field, zero-indexed) *)
   Alcotest.(check int) "field_pos at c" 2 (Param.get env out)
 
@@ -3444,8 +3442,8 @@ let suite =
       Alcotest.test_case "codec bitfield: overflow 1-bit" `Quick
         test_codec_bitfield_overflow_1bit;
       (* action semantics *)
-      Alcotest.test_case "action: fires on decode_with" `Quick
-        test_action_fires_decode_with;
+      Alcotest.test_case "action: fires on decode_env" `Quick
+        test_action_fires_decode_env;
       Alcotest.test_case "action: fires on get" `Quick test_action_fires_on_get;
       Alcotest.test_case "action: not fired by validate" `Quick
         test_action_unfired_by_validate;

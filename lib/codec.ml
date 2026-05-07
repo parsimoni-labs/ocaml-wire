@@ -1826,7 +1826,7 @@ let seal : type r. (r, r) record -> r t =
       without requiring a record constructor. Reuses the same int-array
       validation kernel ([compile_field], [build_validators]) that
       [Codec.v]/[Codec.decode] uses; only the writer/reader projections
-      are skipped. Lets [Wire.decode_string]/[Wire.decode] for [Struct]
+      are skipped. Lets [Wire.of_string]/[Wire.decode] for [Struct]
       types share one code path with [Codec.decode]. *)
 
 type validator = {
@@ -2098,30 +2098,30 @@ let wire_size_info t =
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
 
-let decode t buf off =
-  let v = t.t_decode buf off in
-  (* Full validation: constraints + where + actions *)
-  let arr = Array.make t.t_n_array_slots 0 in
-  t.t_validate_arr arr buf off;
-  v
-
 let env t : Param.env =
   { Types.pe_codec_id = t.t_id; pe_slots = Array.make t.t_n_params 0 }
 
-let decode_with t (e : Param.env) buf off =
+let decode_exn ?env:e t buf off =
   let v = t.t_decode buf off in
   let arr = Array.make t.t_n_array_slots 0 in
-  if t.t_n_params > 0 then
-    Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params;
+  (match e with
+  | Some (e : Param.env) when t.t_n_params > 0 ->
+      Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params
+  | _ -> ());
   t.t_validate_arr arr buf off;
-  (* Sync output params back to env and ph_cell *)
-  List.iter
-    (fun (Param.Pack p) ->
-      let v = arr.(p.ph_slot) in
-      e.pe_slots.(p.ph_env_idx) <- v;
-      p.ph_cell := v)
-    t.t_param_handles;
+  (match e with
+  | Some (e : Param.env) ->
+      List.iter
+        (fun (Param.Pack p) ->
+          let v = arr.(p.ph_slot) in
+          e.pe_slots.(p.ph_env_idx) <- v;
+          p.ph_cell := v)
+        t.t_param_handles
+  | None -> ());
   v
+
+let decode ?env t buf off =
+  try Ok (decode_exn ?env t buf off) with Types.Parse_error e -> Error e
 
 let encode t v buf off = t.t_encode v buf off
 

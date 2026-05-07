@@ -36,7 +36,7 @@ let test_assign_propagates () =
   (* x=10, y=20 => out=10 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x0A\x14" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok r ->
       Alcotest.(check int) "x" 10 r.x;
       Alcotest.(check int) "out" 10 (Param.get env out)
@@ -65,7 +65,7 @@ let test_assign_propagates_fail () =
   (* x=100, y=200 => out=100, 100+200=300 > 10: FAIL *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x64\xC8" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.fail "expected constraint failure"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -92,7 +92,7 @@ let test_assign_expr () =
   (* x=42 => out=43 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 43 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -216,7 +216,7 @@ let test_var_local () =
   (* x=42 => tmp=84, out=84 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 84 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -249,7 +249,7 @@ let test_if_true_branch () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 1 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -280,7 +280,7 @@ let test_if_false_branch () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x05\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 0 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -311,7 +311,7 @@ let test_if_else () =
   (* x=1 => else branch => out=20 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 20 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -339,7 +339,7 @@ let test_if_abort_in_else () =
   (* x=0 => else branch => abort *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.fail "expected abort from else branch"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -377,7 +377,7 @@ let test_if_nested () =
   (* x=50: 50>0 => true, 50<100 => true, out=1 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x32\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 1 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -437,7 +437,7 @@ let test_stmt_sequencing () =
   (* x=42 => a=42, b=43, out=86 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.(check int) "out" 86 (Param.get env out)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -478,7 +478,7 @@ let test_abort_short_circuits () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42\x00" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ -> Alcotest.fail "expected abort"
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -515,7 +515,7 @@ let test_action_on_bitfield () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\xAB" in
-  match Codec.decode_with codec env buf 0 with
+  match Codec.decode ~env codec buf 0 with
   | Ok _ ->
       let out_val = Param.get env out in
       Alcotest.(check bool) "out <= 15" true (out_val <= 15)

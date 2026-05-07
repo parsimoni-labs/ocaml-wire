@@ -6,8 +6,8 @@ module UInt63 = UInt63
 module Action = Action
 module Param = Param
 module Field = Field
-module Codec_backend = Codec
-module Everparse_backend = Everparse
+module Codec = Codec
+module Everparse = Everparse
 include Types
 
 type bitfield = U8 | U16 | U16be | U32 | U32be
@@ -31,15 +31,15 @@ let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases
 
-let codec (c : 'r Codec_backend.t) : 'r typ =
-  let codec_decode = Codec_backend.raw_decode c in
-  let codec_encode = Codec_backend.raw_encode c in
-  let codec_field_readers = Codec_backend.field_readers c in
-  match Codec_backend.wire_size_info c with
+let codec (c : 'r Codec.t) : 'r typ =
+  let codec_decode = Codec.raw_decode c in
+  let codec_encode = Codec.raw_encode c in
+  let codec_field_readers = Codec.field_readers c in
+  match Codec.wire_size_info c with
   | `Fixed n ->
       Codec
         {
-          codec_name = Codec_backend.name c;
+          codec_name = Codec.name c;
           codec_decode;
           codec_encode;
           codec_fixed_size = Some n;
@@ -49,7 +49,7 @@ let codec (c : 'r Codec_backend.t) : 'r typ =
   | `Variable size_of ->
       Codec
         {
-          codec_name = Codec_backend.name c;
+          codec_name = Codec.name c;
           codec_decode;
           codec_encode;
           codec_fixed_size = None;
@@ -122,11 +122,11 @@ let parse_all_zeros buf off len =
   (check 0, len)
 
 let parse_struct_typ s buf off len =
-  let v = Codec_backend.validator_of_struct s in
-  let sz = Codec_backend.struct_size_of v buf off in
+  let v = Codec.validator_of_struct s in
+  let sz = Codec.struct_size_of v buf off in
   check_eof len (off + sz);
   try
-    Codec_backend.validate_struct v buf off;
+    Codec.validate_struct v buf off;
     ((), off + sz)
   with Parse_error e -> raise (Parse_exn e)
 
@@ -280,36 +280,50 @@ and parse_repeat_loop : type elt seq.
   in
   loop s.empty off
 
-let decode_string typ s =
+exception Parse_error = Parse_error
+
+let of_string_exn typ s =
   let buf = Bytes.unsafe_of_string s in
-  let len = Bytes.length buf in
-  match parse_direct typ buf 0 len with
-  | v, _ -> Ok v
-  | exception Parse_exn e -> Error e
+  match parse_direct typ buf 0 (Bytes.length buf) with
+  | v, _ -> v
+  | exception Parse_exn e -> raise (Parse_error e)
 
-let decode_bytes typ b =
+let of_string typ s =
+  match of_string_exn typ s with
+  | v -> Ok v
+  | exception Parse_error e -> Error e
+
+let of_bytes_exn typ b =
   match parse_direct typ b 0 (Bytes.length b) with
-  | v, _ -> Ok v
-  | exception Parse_exn e -> Error e
+  | v, _ -> v
+  | exception Parse_exn e -> raise (Parse_error e)
 
-let decode typ reader =
-  (* Streaming becomes a thin buffering layer: drain the reader, then run
-     [parse_direct]. *)
+let of_bytes typ b =
+  match of_bytes_exn typ b with v -> Ok v | exception Parse_error e -> Error e
+
+let drain_reader reader =
   let buf = Buffer.create 256 in
-  let rec drain () =
+  let rec loop () =
     let slice = Reader.read reader in
     if Slice.is_eod slice then Buffer.to_bytes buf
     else begin
       Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
         (Slice.length slice);
-      drain ()
+      loop ()
     end
   in
-  let bytes = drain () in
-  let len = Bytes.length bytes in
-  match parse_direct typ bytes 0 len with
-  | v, _ -> Ok v
-  | exception Parse_exn e -> Error e
+  loop ()
+
+let of_reader_exn typ reader =
+  let bytes = drain_reader reader in
+  match parse_direct typ bytes 0 (Bytes.length bytes) with
+  | v, _ -> v
+  | exception Parse_exn e -> raise (Parse_error e)
+
+let of_reader typ reader =
+  match of_reader_exn typ reader with
+  | v -> Ok v
+  | exception Parse_error e -> Error e
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
 module Writer = Bytesrw.Bytes.Writer
@@ -496,7 +510,7 @@ and encode_casetype : type a.
   in
   find_case cases
 
-let encode typ v writer =
+let to_writer typ v writer =
   let enc = encoder writer in
   encode_to_writer typ v enc;
   flush enc
@@ -616,7 +630,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       off + sz
   | _ -> encode_via_writer typ buf off v
 
-let encode_bytes typ v =
+let to_bytes typ v =
   match field_wire_size typ with
   | Some n ->
       let buf = Bytes.create n in
@@ -625,10 +639,10 @@ let encode_bytes typ v =
   | None ->
       let buf = Buffer.create 64 in
       let writer = Writer.of_buffer buf in
-      encode typ v writer;
+      to_writer typ v writer;
       Buffer.to_bytes buf
 
-let encode_string typ v =
+let to_string typ v =
   match field_wire_size typ with
   | Some n ->
       let buf = Bytes.create n in
@@ -637,23 +651,9 @@ let encode_string typ v =
   | None ->
       let buf = Buffer.create 64 in
       let writer = Writer.of_buffer buf in
-      encode typ v writer;
+      to_writer typ v writer;
       Buffer.contents buf
 
-module Codec = struct
-  include Codec_backend
-
-  let decode t buf off =
-    try Ok (Codec_backend.decode t buf off) with Parse_error e -> Error e
-
-  let decode_with t env buf off =
-    try Ok (Codec_backend.decode_with t env buf off)
-    with Parse_error e -> Error e
-
-  let validate = Codec_backend.validate
-end
-
-module Everparse = Everparse_backend
 module Ascii = Ascii
 
 module Private = struct

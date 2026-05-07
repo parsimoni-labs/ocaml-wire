@@ -429,7 +429,7 @@ val lookup : 'a list -> int typ -> 'a typ
 
     The decoded integer selects the corresponding element from the list. An
     out-of-range index produces an {!Invalid_tag} parse error (reported via
-    [result] in {!decode} / {!decode_string} / {!decode_bytes}). Encoding raises
+    [result] in {!of_reader} / {!of_string} / {!of_bytes}). Encoding raises
     [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
@@ -536,6 +536,10 @@ type parse_error =
   | Invalid_tag of int
   | All_zeros_failed of { offset : int }
 
+exception Parse_error of parse_error
+(** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
+    {!of_reader_exn}) and by {!Codec.decode_exn} on parse failure. *)
+
 exception Validation_error of parse_error
 (** Raised by {!Codec.validate} on constraint or where-clause failure. *)
 
@@ -555,34 +559,41 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
     repeated access to individual fields in an existing buffer, without
     allocating an OCaml record for each read. *)
 
-val decode : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
+val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 (** Decodes one value from the current reader position.
 
     If the description references parameters, bind them with {!Param.bind}
-    before calling decode. Output parameters are updated during decoding; read
-    them back with {!Param.get}.
+    before calling. Output parameters are updated during decoding; read them
+    back with {!Param.get}.
 
-    For the zero-copy codec path, prefer {!Codec.decode_with} which takes an
-    explicit {!Param.env}.
+    For the zero-copy codec path, prefer {!Codec.decode} which takes an explicit
+    {!Param.env}.
 
     Decoding is prefix-based: success does not imply that the reader is
     exhausted afterwards. *)
 
-val decode_string : 'a typ -> string -> ('a, parse_error) result
-(** Decodes one value from the start of the string.
+val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
+(** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
 
-    Trailing bytes, if any, are left uninterpreted. *)
+val of_string : 'a typ -> string -> ('a, parse_error) result
+(** Decodes one value from the start of the string. Trailing bytes, if any, are
+    left uninterpreted. *)
 
-val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
-(** Decodes one value from the start of the byte sequence.
+val of_string_exn : 'a typ -> string -> 'a
+(** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
 
-    Trailing bytes, if any, are left uninterpreted. *)
+val of_bytes : 'a typ -> bytes -> ('a, parse_error) result
+(** Decodes one value from the start of the byte sequence. Trailing bytes, if
+    any, are left uninterpreted. *)
+
+val of_bytes_exn : 'a typ -> bytes -> 'a
+(** Like {!of_bytes} but raises {!exception:Parse_error} on failure. *)
 
 (** {1 Direct Encoding}
 
     Encoding follows the same description language as decoding. The functions in
-    this section are the direct counterparts of {!decode}, {!decode_string}, and
-    {!decode_bytes}: they work with whole OCaml values rather than field-level
+    this section are the direct counterparts of {!of_reader}, {!of_string}, and
+    {!of_bytes}: they work with whole OCaml values rather than field-level
     accessors.
 
     Unlike decoding, encoding is exception-based rather than result-based.
@@ -591,17 +602,17 @@ val decode_bytes : 'a typ -> bytes -> ('a, parse_error) result
     (wrong description for the value, unsupported form), which are not
     data-dependent and should not be silently ignored. *)
 
-val encode : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
+val to_writer : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
 (** Encodes one value to a {!Bytesrw.Bytes.Writer.t}.
 
     This function is exception-based. Unsupported description forms, such as
     unresolved type references, raise an exception rather than returning an
     error value. *)
 
-val encode_bytes : 'a typ -> 'a -> bytes
+val to_bytes : 'a typ -> 'a -> bytes
 (** Encodes one value to freshly allocated bytes. *)
 
-val encode_string : 'a typ -> 'a -> string
+val to_string : 'a typ -> 'a -> string
 (** Encodes one value to a freshly allocated string. *)
 
 (** {1 Codecs}
@@ -660,15 +671,17 @@ module Codec : sig
   val is_fixed : 'r t -> bool
   (** [true] iff the codec has a statically known size. *)
 
-  val decode : 'r t -> bytes -> int -> ('r, parse_error) result
-  (** Decodes one record value from a buffer at the given base offset. *)
-
   val env : 'r t -> Param.env
   (** [env c] creates a fresh parameter environment for codec [c]. *)
 
-  val decode_with :
-    'r t -> Param.env -> bytes -> int -> ('r, parse_error) result
-  (** Decode with parameters. Output params in [env] are updated on success. *)
+  val decode :
+    ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
+  (** [decode ?env c buf off] decodes one record value at the given base offset.
+      If [?env] is supplied, input params are read from it and output params are
+      written back to it on success. *)
+
+  val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+  (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
   val encode : 'r t -> 'r -> bytes -> int -> unit
   (** Encodes one record value into a buffer at the given base offset.

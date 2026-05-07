@@ -13,9 +13,16 @@
 
 - `Codec.bitfield`: ~5% faster on bitfield-heavy workloads (CLCW polling
   +5%) (#37, @samoht)
-- Rename `Wire.encode_to_string` to `Wire.encode_string` and
-  `Wire.encode_to_bytes` to `Wire.encode_bytes` for symmetry with
-  `Wire.decode_string` / `Wire.decode_bytes` (@samoht)
+- Rename direct-IO entry points to the standard `of_string` /
+  `to_string` / `of_bytes` / `to_bytes` / `of_reader` / `to_writer`
+  vocabulary, matching the encoding-library convention. Each
+  decoder ships an `_exn` twin that raises `Parse_error` instead
+  of returning a result, for hot paths where `Ok _` allocation
+  matters (@samoht)
+- Merge `Codec.decode_with` into `Codec.decode` via an optional
+  `?env`, and split into `Codec.decode` (returns result) and
+  `Codec.decode_exn` (raises). Internal callers use the [_exn]
+  variant (@samoht)
 
 ### Documentation
 

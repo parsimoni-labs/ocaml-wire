@@ -11,7 +11,7 @@ let truncate buf =
 let test_parse_lookup buf =
   let buf = truncate buf in
   let t = Wire.lookup [ `A; `B; `C ] Wire.uint8 in
-  let _ = Wire.decode_string t buf in
+  let _ = Wire.of_string t buf in
   ()
 
 (* Parse crash safety: struct with action on random input *)
@@ -108,7 +108,7 @@ let test_parse_param_struct buf =
         ]
   in
   let env = Wire.Codec.env c |> Wire.Param.bind limit 128 in
-  let _ = Wire.Codec.decode_with c env (Bytes.of_string buf) 0 in
+  let _ = Wire.Codec.decode ~env c (Bytes.of_string buf) 0 in
   ()
 
 let f_fuzz_x = Wire.Field.v "x" Wire.uint8
@@ -124,7 +124,7 @@ let test_param_ref_where buf =
       Wire.Codec.[ (f_fuzz_x $ fun x -> x) ]
   in
   let env = Wire.Codec.env c |> Wire.Param.bind max_val 200 in
-  let _ = Wire.Codec.decode_with c env (Bytes.of_string buf) 0 in
+  let _ = Wire.Codec.decode ~env c (Bytes.of_string buf) 0 in
   ()
 
 (* Fuzz: Param_ref in constraint with random input *)
@@ -145,7 +145,7 @@ let test_param_ref_constraint buf =
         ]
   in
   let env = Wire.Codec.env c |> Wire.Param.bind limit 50 in
-  let _ = Wire.Codec.decode_with c env (Bytes.of_string buf) 0 in
+  let _ = Wire.Codec.decode ~env c (Bytes.of_string buf) 0 in
   ()
 
 (* Fuzz: typed Assign to output param *)
@@ -167,7 +167,7 @@ let test_typed_assign buf =
         ]
   in
   let env = Wire.Codec.env c in
-  let _ = Wire.Codec.decode_with c env (Bytes.of_string buf) 0 in
+  let _ = Wire.Codec.decode ~env c (Bytes.of_string buf) 0 in
   (* Verify output was set (no crash) *)
   let _ = Wire.Param.get env out in
   ()
@@ -178,8 +178,8 @@ let test_map_roundtrip n =
   let t =
     Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
   in
-  let encoded = Wire.encode_string t (n * 2) in
-  match Wire.decode_string t encoded with
+  let encoded = Wire.to_string t (n * 2) in
+  match Wire.of_string t encoded with
   | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
   | Error _ -> fail "map roundtrip parse failed"
 

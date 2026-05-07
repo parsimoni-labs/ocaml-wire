@@ -160,7 +160,7 @@ type 'a schema = {
   codec : 'a Wire.Codec.t;
   struct_ : Wire.Everparse.Raw.struct_;
   size : int;
-  decode : bytes -> int -> ('a, Wire.parse_error) result;
+  decode : bytes -> int -> 'a;
 }
 
 type any_schema = Any : 'a schema -> any_schema

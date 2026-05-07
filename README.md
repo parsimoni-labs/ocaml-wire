@@ -256,7 +256,7 @@ let codec =
       f_data $ (fun r -> r.data) ]
 
 let env = Codec.env codec |> Param.bind max_len 1024
-let _ = Codec.decode_with codec env buf 0
+let _ = Codec.decode ~env codec buf 0
 let len = Param.get env out_len
 ```
 

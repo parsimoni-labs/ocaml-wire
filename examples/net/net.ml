@@ -335,11 +335,11 @@ type 'a schema = {
   codec : 'a Codec.t;
   struct_ : Wire.Everparse.Raw.struct_;
   size : int;
-  decode : bytes -> int -> ('a, Wire.parse_error) result;
+  decode : bytes -> int -> 'a;
 }
 
 let schema name codec struct_ size =
-  { name; codec; struct_; size; decode = Codec.decode codec }
+  { name; codec; struct_; size; decode = Codec.decode_exn codec }
 
 type any_schema = Any : 'a schema -> any_schema
 
