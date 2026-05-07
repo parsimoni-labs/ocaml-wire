@@ -16,7 +16,7 @@
   projection synthesises a 1-byte refinement struct per use and
   references it from the parent field, so both wire and EverParse C
   enforce the same per-element constraint. Motivating shape:
-  printable-ASCII bodies (SSH name-list, RFC 4251 §5) (@samoht)
+  printable-ASCII bodies (SSH name-list, RFC 4251 sec 5) (@samoht)
 
 ### Changed
 

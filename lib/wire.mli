@@ -481,7 +481,7 @@ val byte_array_where :
 
     Decode raises {!exception:Parse_error} on the first byte that violates the
     constraint; encode raises [Invalid_argument]. The motivating shape is SSH
-    name-list payloads (RFC 4251 §5), where every byte must be printable
+    name-list payloads (RFC 4251 sec 5), where every byte must be printable
     US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ

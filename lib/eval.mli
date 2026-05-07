@@ -15,7 +15,7 @@ type ctx
     machinery; at top level the binding is empty unless explicitly extended. *)
 
 val empty : ctx
-(** Empty context — no bindings. *)
+(** Empty context, no bindings. *)
 
 val bind : string -> int -> ctx -> ctx
 (** [bind name v ctx] extends [ctx] so that [Ref name] evaluates to [v]. *)
