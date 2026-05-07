@@ -234,8 +234,7 @@ let rec compile_expr (env : (string * (bytes -> int -> int)) list)
       match List.assoc_opt name env with
       | Some reader -> reader
       | None ->
-          invalid_arg
-            (Fmt.str "Codec: unbound field ref %S in size expression" name))
+          Fmt.invalid_arg "Codec: unbound field ref %S in size expression" name)
   | Add (a, b) ->
       let fa = compile_expr env a in
       let fb = compile_expr env b in
@@ -1803,10 +1802,9 @@ let seal : type r. (r, r) record -> r t =
     t_encode =
       (fun v buf off ->
         if off + min_size > Bytes.length buf then
-          invalid_arg
-            (Fmt.str "Codec.encode %s: buffer too short (need %d, got %d)"
-               r.r_name min_size
-               (Bytes.length buf - off));
+          Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
+            r.r_name min_size
+            (Bytes.length buf - off);
         for i = 0 to n_writers - 1 do
           writers.(i) v buf off
         done);
@@ -2247,8 +2245,7 @@ let field_access codec name =
   match List.assoc_opt name codec.t_field_access with
   | Some a -> a
   | None ->
-      invalid_arg
-        (Fmt.str "Codec: field %S not found in codec %S" name codec.t_name)
+      Fmt.invalid_arg "Codec: field %S not found in codec %S" name codec.t_name
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
@@ -2266,9 +2263,9 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
             if e.pe_codec_id <> codec.t_id then
-              invalid_arg
-                (Fmt.str "Codec.get: env was not created by Codec.env for %S"
-                   codec.t_name);
+              Fmt.invalid_arg
+                "Codec.get: env was not created by Codec.env for %S"
+                codec.t_name;
             let param_handles = codec.t_param_handles in
             let param_base = codec.t_param_base in
             ( (fun arr ->

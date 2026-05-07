@@ -53,8 +53,8 @@ let rec is_int_representable : type a. a Types.typ -> bool = function
 
 let check_typ name typ =
   if not (is_int_representable typ) then
-    invalid_arg
-      (Fmt.str "Param.%s: only integer-representable types are supported" name)
+    Fmt.invalid_arg "Param.%s: only integer-representable types are supported"
+      name
 
 let input name typ =
   check_typ "input" typ;

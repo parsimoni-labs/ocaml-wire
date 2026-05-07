@@ -107,7 +107,7 @@ let compile_and_run ~name codec =
     let ic = Unix.open_process_in cmd in
     let output = In_channel.input_all ic in
     let status = Unix.close_process_in ic in
-    ignore (Sys.command (Fmt.str "rm -rf %s" tmpdir));
+    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
     match status with
     | Unix.WEXITED 0 -> ()
     | Unix.WEXITED n ->
@@ -329,7 +329,7 @@ let test_projection_filenames () =
     close_in ic;
     Bytes.unsafe_to_string buf
   in
-  ignore (Sys.command (Fmt.str "rm -rf %s" tmpdir));
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   let contains_exact sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
   Alcotest.(check bool)
     ".3d uses String.capitalize_ascii name" true
