@@ -71,6 +71,10 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ
   | Uint63 : endian -> UInt63.t typ
   | Uint64 : endian -> int64 typ (* boxed, for full 64-bit *)
+  | Int8 : int typ
+  | Int16 : endian -> int typ
+  | Int32 : endian -> int typ (* fits OCaml int on 64-bit hosts *)
+  | Int64 : endian -> int64 typ
   | Uint_var : { size : int expr; endian : endian } -> int typ
   | Bits : {
       width : int;
@@ -185,7 +189,6 @@ type param_env = { pe_codec_id : int; pe_slots : int array }
 
 (* Expression constructors *)
 let int n = Int n
-let int64 n = Int64 n
 let true_ = Bool true
 let false_ = Bool false
 let ref name = Ref name
@@ -230,6 +233,13 @@ let uint63 = Uint63 Little
 let uint63be = Uint63 Big
 let uint64 = Uint64 Little
 let uint64be = Uint64 Big
+let int8 = Int8
+let int16 = Int16 Little
+let int16be = Int16 Big
+let int32 = Int32 Little
+let int32be = Int32 Big
+let (int64 : int64 typ) = Int64 Little
+let (int64be : int64 typ) = Int64 Big
 
 let uint ?(endian = Big) size =
   (match size with
@@ -438,6 +448,8 @@ type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
 let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ -> K_int
   | Uint64 _ -> K_int64
+  | Int8 | Int16 _ | Int32 _ -> K_int
+  | Int64 _ -> K_int64
   | Bits _ -> K_int
   | Map { inner = Bits _; decode = _; encode = _ } ->
       (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
@@ -664,6 +676,12 @@ and pp_typ : type a. a typ Fmt.t =
   | Uint32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
   | Uint63 e -> Fmt.pf ppf "UINT63%a" pp_endian e
   | Uint64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
+  (* 3D has no native signed types: project to the same-width UINT*. The
+     two's-complement reinterpretation lives in the OCaml decoder. *)
+  | Int8 -> Fmt.string ppf "UINT8"
+  | Int16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
+  | Int32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
+  | Int64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   | Uint_var { size; endian } ->
       Fmt.pf ppf "UINT%a(%a)" pp_endian endian pp_expr size
   | Bits { base; _ } -> pp_bitfield_base ppf base
@@ -939,6 +957,10 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Uint16 _ -> Some 2
   | Uint32 _ -> Some 4
   | Uint64 _ -> Some 8
+  | Int8 -> Some 1
+  | Int16 _ -> Some 2
+  | Int32 _ -> Some 4
+  | Int64 _ -> Some 8
   | Uint_var { size = Int n; _ } -> Some n
   | Uint_var _ -> None
   | Bits { base; _ } -> (
@@ -969,6 +991,12 @@ let c_type_of : type a. a typ -> string = function
   | Uint16 _ | Bits { base = BF_U16 _; _ } -> "uint16_t"
   | Uint32 _ | Uint63 _ | Bits { base = BF_U32 _; _ } -> "uint32_t"
   | Uint64 _ -> "uint64_t"
+  (* Signed types project to UINT* in 3D so EverParse only sees unsigned
+     widths; the same width drives the C field type. *)
+  | Int8 -> "uint8_t"
+  | Int16 _ -> "uint16_t"
+  | Int32 _ -> "uint32_t"
+  | Int64 _ -> "uint64_t"
   | Uint_var _ -> "uint32_t"
   | _ -> "uint32_t"
 
@@ -976,4 +1004,6 @@ let ml_type_of : type a. a typ -> string = function
   | Uint8 | Uint16 _ | Uint_var _ | Bits _ -> "int"
   | Uint32 _ | Uint63 _ -> "int"
   | Uint64 _ -> "int64"
+  | Int8 | Int16 _ | Int32 _ -> "int"
+  | Int64 _ -> "int64"
   | _ -> "int"

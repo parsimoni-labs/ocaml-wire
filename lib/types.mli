@@ -102,6 +102,11 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
   | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
+  | Int8 : int typ  (** 8-bit signed. *)
+  | Int16 : endian -> int typ  (** 16-bit signed. *)
+  | Int32 : endian -> int typ
+      (** 32-bit signed, returned as OCaml [int] (64-bit hosts only). *)
+  | Int64 : endian -> int64 typ  (** 64-bit signed. *)
   | Uint_var : { size : int expr; endian : endian } -> int typ
       (** Variable-width unsigned integer (1-7 bytes). *)
   | Bits : {
@@ -228,9 +233,6 @@ type param_env = { pe_codec_id : int; pe_slots : int array }
 
 val int : int -> int expr
 (** Integer literal. *)
-
-val int64 : int64 -> int64 expr
-(** 64-bit integer literal. *)
 
 val true_ : bool expr
 (** Boolean true. *)
@@ -361,6 +363,28 @@ val uint64 : int64 typ
 
 val uint64be : int64 typ
 (** 64-bit unsigned, big-endian. *)
+
+val int8 : int typ
+(** 8-bit signed two's-complement integer. *)
+
+val int16 : int typ
+(** 16-bit signed, little-endian. *)
+
+val int16be : int typ
+(** 16-bit signed, big-endian. *)
+
+val int32 : int typ
+(** [int32] is a 32-bit signed little-endian integer, returned as OCaml [int]
+    (64-bit hosts only). *)
+
+val int32be : int typ
+(** [int32be] is a 32-bit signed big-endian integer, returned as OCaml [int]. *)
+
+val int64 : int64 typ
+(** 64-bit signed, little-endian. *)
+
+val int64be : int64 typ
+(** 64-bit signed, big-endian. *)
 
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is

@@ -121,6 +121,11 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
+let parse_codec_typ codec_decode fixed_size size_of buf off len =
+  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+  check_eof len (off + sz);
+  (codec_decode buf off, off + sz)
+
 let parse_struct_typ s buf off len =
   let v = Codec.validator_of_struct s in
   let sz = Codec.struct_size_of v buf off in
@@ -158,6 +163,27 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       check_eof len (off + 8);
       (Bytes.get_int64_le buf off, off + 8)
   | Uint64 Big ->
+      check_eof len (off + 8);
+      (Bytes.get_int64_be buf off, off + 8)
+  | Int8 ->
+      check_eof len (off + 1);
+      (Bytes.get_int8 buf off, off + 1)
+  | Int16 Little ->
+      check_eof len (off + 2);
+      (Bytes.get_int16_le buf off, off + 2)
+  | Int16 Big ->
+      check_eof len (off + 2);
+      (Bytes.get_int16_be buf off, off + 2)
+  | Int32 Little ->
+      check_eof len (off + 4);
+      (Int32.to_int (Bytes.get_int32_le buf off), off + 4)
+  | Int32 Big ->
+      check_eof len (off + 4);
+      (Int32.to_int (Bytes.get_int32_be buf off), off + 4)
+  | Int64 Little ->
+      check_eof len (off + 8);
+      (Bytes.get_int64_le buf off, off + 8)
+  | Int64 Big ->
       check_eof len (off + 8);
       (Bytes.get_int64_be buf off, off + 8)
   | Uint_var { size; endian } ->
@@ -210,13 +236,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       if List.mem v valid then (v, off')
       else raise (Parse_exn (Invalid_enum { value = v; valid }))
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
-      let sz =
-        match codec_fixed_size with
-        | Some n -> n
-        | None -> codec_size_of buf off
-      in
-      check_eof len (off + sz);
-      (codec_decode buf off, off + sz)
+      parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
   | Optional { present; inner } ->
@@ -365,6 +385,21 @@ let[@inline] write_byte enc b =
   Bytes.set_uint8 enc.o enc.o_next b;
   enc.o_next <- enc.o_next + 1
 
+let[@inline] write_int8 enc v =
+  ensure enc 1;
+  Bytes.set_int8 enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 1
+
+let[@inline] write_int16_le enc v =
+  ensure enc 2;
+  Bytes.set_int16_le enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 2
+
+let[@inline] write_int16_be enc v =
+  ensure enc 2;
+  Bytes.set_int16_be enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 2
+
 let[@inline] write_uint16_le enc v =
   ensure enc 2;
   Bytes.set_uint16_le enc.o enc.o_next v;
@@ -456,6 +491,13 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Uint63 Big -> write_uint63_be enc v
   | Uint64 Little -> write_int64_le enc v
   | Uint64 Big -> write_int64_be enc v
+  | Int8 -> write_int8 enc v
+  | Int16 Little -> write_int16_le enc v
+  | Int16 Big -> write_int16_be enc v
+  | Int32 Little -> write_int32_le enc (Int32.of_int v)
+  | Int32 Big -> write_int32_be enc (Int32.of_int v)
+  | Int64 Little -> write_int64_le enc v
+  | Int64 Big -> write_int64_be enc v
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       ensure enc n;

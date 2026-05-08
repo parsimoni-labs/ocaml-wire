@@ -201,9 +201,6 @@ end
 val int : int -> int expr
 (** Constant integer expression. *)
 
-val int64 : int64 -> int64 expr
-(** Constant 64-bit integer expression. *)
-
 val sizeof : 'a typ -> int expr
 (** Size of a fixed-size wire description. *)
 
@@ -399,6 +396,28 @@ val uint64 : int64 typ
 val uint64be : int64 typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as [int64].
 *)
+
+val int8 : int typ
+(** Signed 8-bit two's-complement integer. *)
+
+val int16 : int typ
+(** Signed 16-bit little-endian integer. *)
+
+val int16be : int typ
+(** Signed 16-bit big-endian integer. *)
+
+val int32 : int typ
+(** [int32] is a signed 32-bit little-endian integer, returned as OCaml [int]
+    (64-bit hosts only: on a 32-bit host, the top bit may not fit). *)
+
+val int32be : int typ
+(** [int32be] is a signed 32-bit big-endian integer, returned as OCaml [int]. *)
+
+val int64 : int64 typ
+(** Signed 64-bit little-endian integer. *)
+
+val int64be : int64 typ
+(** Signed 64-bit big-endian integer. *)
 
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte

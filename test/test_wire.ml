@@ -69,6 +69,29 @@ let test_parse_byte_array () =
   | Ok v -> Alcotest.(check string) "byte_array value" "hello" v
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let test_int8_negative () =
+  let buf = Bytes.of_string "\xFE" in
+  Alcotest.(check int) "-2" (-2) (of_bytes_exn int8 buf)
+
+let test_int8_full_range () =
+  for i = -128 to 127 do
+    let s = to_string int8 i in
+    Alcotest.(check int) (Fmt.str "%d" i) i (of_string_exn int8 s)
+  done
+
+let test_int16be_negative () =
+  let buf = Bytes.of_string "\xFF\xFE" in
+  Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int16be buf)
+
+let test_int32be_negative () =
+  let buf = Bytes.of_string "\xFF\xFF\xFF\xFE" in
+  Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int32be buf)
+
+let test_int64le_roundtrip () =
+  let v = -0x0102_0304_0506_0708L in
+  let s = to_string int64 v in
+  Alcotest.(check int64) "roundtrip" v (of_string_exn int64 s)
+
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
 let test_bawhere_accepts () =
@@ -621,6 +644,12 @@ let suite =
       Alcotest.test_case "parse: uint64 le" `Quick test_parse_uint64_le;
       Alcotest.test_case "parse: array" `Quick test_parse_array;
       Alcotest.test_case "parse: byte_array" `Quick test_parse_byte_array;
+      Alcotest.test_case "parse: int8 negative" `Quick test_int8_negative;
+      Alcotest.test_case "parse: int8 full range" `Quick test_int8_full_range;
+      Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;
+      Alcotest.test_case "parse: int32be negative" `Quick test_int32be_negative;
+      Alcotest.test_case "parse: int64le roundtrip" `Quick
+        test_int64le_roundtrip;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick
