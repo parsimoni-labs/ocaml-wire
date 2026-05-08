@@ -26,19 +26,11 @@ let field_value ppf (fname, kind) =
   match kind with
   | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
-  | Float32 ->
-      (* The plug stores [Float32] as [uint32_t]; reinterpret the bits as
-         single-precision then widen to OCaml [float]. *)
-      Fmt.pf ppf
-        "({ union { uint32_t u; float f; } _w = { .u = (uint32_t) fields.%s }; \
-         caml_copy_double((double) _w.f); })"
-        fname
-  | Float64 ->
-      (* The plug stores [Float64] as [uint64_t]; reinterpret as [double]. *)
-      Fmt.pf ppf
-        "({ union { uint64_t u; double d; } _w = { .u = (uint64_t) fields.%s \
-         }; caml_copy_double(_w.d); })"
-        fname
+  | Float32 | Float64 ->
+      (* The 3D plug stores floats with their typed C type ([float] /
+         [double]) and bit-reinterprets in the setter, so we hand the
+         value straight to [caml_copy_double]. *)
+      Fmt.pf ppf "caml_copy_double((double) fields.%s)" fname
   | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
 
 let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =

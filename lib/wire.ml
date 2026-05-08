@@ -41,15 +41,11 @@ let lookup = Types.cases
    on both wire's OCaml decoder and EverParse's verified C decoder. *)
 type float_layout = { exp_shift : int; exp_max : int; mant_mask : int }
 
-let f32_layout = { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
-
-let f64_layout =
-  { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
-
 let float_layout_of (typ : float Types.typ) =
   match typ with
-  | Float32 _ -> f32_layout
-  | Float64 _ -> f64_layout
+  | Float32 _ -> { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
+  | Float64 _ ->
+      { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
   | _ -> invalid_arg "Wire: not a float field"
 
 let is_finite (f : float Field.t) : bool Types.expr =
