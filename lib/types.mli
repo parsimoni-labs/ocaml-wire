@@ -107,6 +107,9 @@ and _ typ =
   | Int32 : endian -> int typ
       (** 32-bit signed, returned as OCaml [int] (64-bit hosts only). *)
   | Int64 : endian -> int64 typ  (** 64-bit signed. *)
+  | Float32 : endian -> float typ
+      (** IEEE 754 binary32, widened to OCaml [float]. *)
+  | Float64 : endian -> float typ  (** IEEE 754 binary64. *)
   | Uint_var : { size : int expr; endian : endian } -> int typ
       (** Variable-width unsigned integer (1-7 bytes). *)
   | Bits : {
@@ -386,6 +389,19 @@ val int64 : int64 typ
 val int64be : int64 typ
 (** 64-bit signed, big-endian. *)
 
+val float32 : float typ
+(** [float32] is an IEEE 754 binary32 little-endian, widened to OCaml [float].
+*)
+
+val float32be : float typ
+(** [float32be] is an IEEE 754 binary32 big-endian, widened to OCaml [float]. *)
+
+val float64 : float typ
+(** [float64] is an IEEE 754 binary64 little-endian. *)
+
+val float64be : float typ
+(** [float64be] is an IEEE 754 binary64 big-endian. *)
+
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
     {!Big}. The size may be a dynamic expression for parameter-driven widths. *)
@@ -519,7 +535,7 @@ val struct_project : struct_ -> name:string -> keep:field list -> struct_
 (** [struct_project s ~name ~keep] keeps only the fields in [keep], making all
     others anonymous. *)
 
-type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
+type ocaml_kind = K_int | K_int64 | K_float | K_bool | K_string | K_unit
 
 val field_kinds : struct_ -> (string * ocaml_kind) list
 (** Return the struct name. *)

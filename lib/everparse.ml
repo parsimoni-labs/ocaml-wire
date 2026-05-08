@@ -514,6 +514,7 @@ module Raw = struct
   type ocaml_kind = Types.ocaml_kind =
     | K_int
     | K_int64
+    | K_float
     | K_bool
     | K_string
     | K_unit

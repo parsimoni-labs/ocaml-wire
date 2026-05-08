@@ -75,6 +75,10 @@ and _ typ =
   | Int16 : endian -> int typ
   | Int32 : endian -> int typ (* fits OCaml int on 64-bit hosts *)
   | Int64 : endian -> int64 typ
+  | Float32 :
+      endian
+      -> float typ (* IEEE 754 binary32, widened to OCaml float *)
+  | Float64 : endian -> float typ (* IEEE 754 binary64 *)
   | Uint_var : { size : int expr; endian : endian } -> int typ
   | Bits : {
       width : int;
@@ -240,6 +244,10 @@ let int32 = Int32 Little
 let int32be = Int32 Big
 let (int64 : int64 typ) = Int64 Little
 let (int64be : int64 typ) = Int64 Big
+let float32 = Float32 Little
+let float32be = Float32 Big
+let float64 = Float64 Little
+let float64be = Float64 Big
 
 let uint ?(endian = Big) size =
   (match size with
@@ -443,13 +451,14 @@ let struct_project s ~name ~keep =
 
 (* What kind of OCaml value a field produces -- used by Wire_stubs to
    generate the right C-to-OCaml conversion in output stubs. *)
-type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
+type ocaml_kind = K_int | K_int64 | K_float | K_bool | K_string | K_unit
 
 let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ -> K_int
   | Uint64 _ -> K_int64
   | Int8 | Int16 _ | Int32 _ -> K_int
   | Int64 _ -> K_int64
+  | Float32 _ | Float64 _ -> K_float
   | Bits _ -> K_int
   | Map { inner = Bits _; decode = _; encode = _ } ->
       (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
@@ -682,6 +691,10 @@ and pp_typ : type a. a typ Fmt.t =
   | Int16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
   | Int32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
   | Int64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
+  (* IEEE 754 has no native 3D type; project to the underlying unsigned width.
+     Float predicates (is_nan, is_finite) compile to bit-pattern refinements. *)
+  | Float32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
+  | Float64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   | Uint_var { size; endian } ->
       Fmt.pf ppf "UINT%a(%a)" pp_endian endian pp_expr size
   | Bits { base; _ } -> pp_bitfield_base ppf base
@@ -961,6 +974,8 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Int16 _ -> Some 2
   | Int32 _ -> Some 4
   | Int64 _ -> Some 8
+  | Float32 _ -> Some 4
+  | Float64 _ -> Some 8
   | Uint_var { size = Int n; _ } -> Some n
   | Uint_var _ -> None
   | Bits { base; _ } -> (
@@ -997,6 +1012,11 @@ let c_type_of : type a. a typ -> string = function
   | Int16 _ -> "uint16_t"
   | Int32 _ -> "uint32_t"
   | Int64 _ -> "uint64_t"
+  (* Floats are also projected as the same-width UINT* in 3D, since the
+     verified parser sees the bit pattern; the float reinterpretation is
+     OCaml-side. *)
+  | Float32 _ -> "uint32_t"
+  | Float64 _ -> "uint64_t"
   | Uint_var _ -> "uint32_t"
   | _ -> "uint32_t"
 
@@ -1006,4 +1026,5 @@ let ml_type_of : type a. a typ -> string = function
   | Uint64 _ -> "int64"
   | Int8 | Int16 _ | Int32 _ -> "int"
   | Int64 _ -> "int64"
+  | Float32 _ | Float64 _ -> "float"
   | _ -> "int"

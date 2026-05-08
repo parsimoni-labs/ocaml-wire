@@ -17,6 +17,15 @@
   references it from the parent field, so both wire and EverParse C
   enforce the same per-element constraint. Motivating shape:
   printable-ASCII bodies (SSH name-list, RFC 4251 sec 5) (@samoht)
+- Signed integers: `int8` / `int16(be)` / `int32(be)` / `int64(be)`.
+  Two's-complement read/write OCaml-side; 3D projects to the same-width
+  `UINT*` (3D's prelude has only unsigned primitives). `int32` returns
+  OCaml `int` on 64-bit hosts; `int64` returns boxed `int64` (@samoht)
+- IEEE 754 floats: `float32(be)` / `float64(be)`. OCaml side uses
+  `Int32.float_of_bits` / `Int64.float_of_bits` for round-tripping
+  including NaN, signed zero, infinities. 3D projects to the same-width
+  `UINT*`; semantic predicates (`is_finite`, range bounds) will land
+  later as bit-pattern refinements over the unsigned width (@samoht)
 
 ### Changed
 

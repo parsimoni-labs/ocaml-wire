@@ -92,6 +92,23 @@ let test_int64le_roundtrip () =
   let s = to_string int64 v in
   Alcotest.(check int64) "roundtrip" v (of_string_exn int64 s)
 
+let test_float32be_roundtrip () =
+  let v = 1.5 in
+  let s = to_string float32be v in
+  Alcotest.(check (float 0.0)) "1.5" v (of_string_exn float32be s)
+
+let test_float64le_roundtrip () =
+  List.iter
+    (fun v ->
+      let s = to_string float64 v in
+      Alcotest.(check (float 0.0)) "roundtrip" v (of_string_exn float64 s))
+    [ 0.0; -0.0; 3.14159; -1e300; Float.infinity; Float.neg_infinity ]
+
+let test_float64_nan_roundtrip () =
+  let s = to_string float64be Float.nan in
+  let v = of_string_exn float64be s in
+  Alcotest.(check bool) "nan preserved" true (Float.is_nan v)
+
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
 let test_bawhere_accepts () =
@@ -650,6 +667,11 @@ let suite =
       Alcotest.test_case "parse: int32be negative" `Quick test_int32be_negative;
       Alcotest.test_case "parse: int64le roundtrip" `Quick
         test_int64le_roundtrip;
+      Alcotest.test_case "parse: float32be roundtrip" `Quick
+        test_float32be_roundtrip;
+      Alcotest.test_case "parse: float64le roundtrip" `Quick
+        test_float64le_roundtrip;
+      Alcotest.test_case "parse: float64 nan" `Quick test_float64_nan_roundtrip;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick

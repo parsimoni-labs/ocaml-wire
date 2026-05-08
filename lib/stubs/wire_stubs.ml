@@ -119,6 +119,7 @@ let ml_field_name name =
 let ml_kind_string = function
   | Wire.Everparse.Raw.K_int -> "int"
   | K_int64 -> "int64"
+  | K_float -> "float"
   | K_bool -> "int"
   | K_string -> "string"
   | K_unit -> "unit"

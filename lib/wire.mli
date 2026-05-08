@@ -419,6 +419,20 @@ val int64 : int64 typ
 val int64be : int64 typ
 (** Signed 64-bit big-endian integer. *)
 
+val float32 : float typ
+(** [float32] is an IEEE 754 binary32 little-endian, widened to OCaml [float].
+    The 3D projection emits [UINT32] (no native float in 3D); float predicates
+    compile to bit-pattern refinements over the unsigned width. *)
+
+val float32be : float typ
+(** [float32be] is an IEEE 754 binary32 big-endian. *)
+
+val float64 : float typ
+(** [float64] is an IEEE 754 binary64 little-endian. *)
+
+val float64be : float typ
+(** [float64be] is an IEEE 754 binary64 big-endian. *)
+
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
     order (default {!Big}). The size may be a dynamic expression for
@@ -1018,6 +1032,7 @@ module Everparse : sig
     type ocaml_kind =
       | K_int
       | K_int64
+      | K_float
       | K_bool
       | K_string
       | K_unit

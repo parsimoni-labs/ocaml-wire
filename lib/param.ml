@@ -15,6 +15,8 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Int16 _ -> v
   | Int32 _ -> v
   | Int64 _ -> Int64.to_int v
+  | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
+  | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
   | Bits _ -> v
   | Enum { base; _ } -> to_int base v
   | Where { inner; _ } -> to_int inner v
@@ -39,6 +41,8 @@ let rec of_int : type a. a Types.typ -> int -> a =
   | Int16 _ -> v
   | Int32 _ -> v
   | Int64 _ -> Int64.of_int v
+  | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
+  | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
   | Bits _ -> v
   | Enum { base; _ } -> of_int base v
   | Where { inner; _ } -> of_int inner v

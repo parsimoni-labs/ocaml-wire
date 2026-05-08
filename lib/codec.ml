@@ -67,6 +67,22 @@ let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
   | Int32 Big -> setter_off_int32 4 Bytes.set_int32_be
   | Int64 Little -> setter_off 8 Bytes.set_int64_le
   | Int64 Big -> setter_off 8 Bytes.set_int64_be
+  | Float32 Little ->
+      fun buf off v ->
+        Bytes.set_int32_le buf off (Int32.bits_of_float v);
+        off + 4
+  | Float32 Big ->
+      fun buf off v ->
+        Bytes.set_int32_be buf off (Int32.bits_of_float v);
+        off + 4
+  | Float64 Little ->
+      fun buf off v ->
+        Bytes.set_int64_le buf off (Int64.bits_of_float v);
+        off + 8
+  | Float64 Big ->
+      fun buf off v ->
+        Bytes.set_int64_be buf off (Int64.bits_of_float v);
+        off + 8
   | Uint_var { size = Int n; endian } ->
       fun buf off v ->
         Uint_var.write endian buf off n v;
@@ -131,6 +147,18 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
       fun buf base -> Int32.to_int (Bytes.get_int32_be buf (base + field_off))
   | Int64 Little -> fun buf base -> Bytes.get_int64_le buf (base + field_off)
   | Int64 Big -> fun buf base -> Bytes.get_int64_be buf (base + field_off)
+  | Float32 Little ->
+      fun buf base ->
+        Int32.float_of_bits (Bytes.get_int32_le buf (base + field_off))
+  | Float32 Big ->
+      fun buf base ->
+        Int32.float_of_bits (Bytes.get_int32_be buf (base + field_off))
+  | Float64 Little ->
+      fun buf base ->
+        Int64.float_of_bits (Bytes.get_int64_le buf (base + field_off))
+  | Float64 Big ->
+      fun buf base ->
+        Int64.float_of_bits (Bytes.get_int64_be buf (base + field_off))
   | Uint_var { size = Int n; endian } ->
       fun buf base -> Uint_var.read endian buf (base + field_off) n
   | Byte_array { size = Int n } ->
@@ -834,8 +862,8 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
           iter_param_refs_typ f cb_inner)
         cases
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Bits _ | Unit | All_bytes | All_zeros | Struct _ | Type_ref _
-  | Qualified_ref _ | Codec _ ->
+  | Int64 _ | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ ->
       ()
 
 let iter_param_refs_fields f fields where =
@@ -867,6 +895,10 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Int32 Big -> Int32.to_int (Bytes.get_int32_be buf off)
   | Int64 Little -> Bytes.get_int64_le buf off
   | Int64 Big -> Bytes.get_int64_be buf off
+  | Float32 Little -> Int32.float_of_bits (Bytes.get_int32_le buf off)
+  | Float32 Big -> Int32.float_of_bits (Bytes.get_int32_be buf off)
+  | Float64 Little -> Int64.float_of_bits (Bytes.get_int64_le buf off)
+  | Float64 Big -> Int64.float_of_bits (Bytes.get_int64_be buf off)
   | Uint_var { size = Int n; endian } -> Uint_var.read endian buf off n
   | Codec { codec_decode; _ } -> codec_decode buf off
   | Map { inner; decode; _ } -> decode (read_elem inner buf off)
@@ -894,6 +926,10 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
   | Int32 Big -> Bytes.set_int32_be buf off (Int32.of_int v)
   | Int64 Little -> Bytes.set_int64_le buf off v
   | Int64 Big -> Bytes.set_int64_be buf off v
+  | Float32 Little -> Bytes.set_int32_le buf off (Int32.bits_of_float v)
+  | Float32 Big -> Bytes.set_int32_be buf off (Int32.bits_of_float v)
+  | Float64 Little -> Bytes.set_int64_le buf off (Int64.bits_of_float v)
+  | Float64 Big -> Bytes.set_int64_be buf off (Int64.bits_of_float v)
   | Uint_var { size = Int n; endian } -> Uint_var.write endian buf off n v
   | Codec { codec_encode; _ } -> codec_encode v buf off
   | Map { inner; encode; _ } -> write_elem inner buf off (encode v)

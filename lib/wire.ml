@@ -186,6 +186,18 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Int64 Big ->
       check_eof len (off + 8);
       (Bytes.get_int64_be buf off, off + 8)
+  | Float32 Little ->
+      check_eof len (off + 4);
+      (Int32.float_of_bits (Bytes.get_int32_le buf off), off + 4)
+  | Float32 Big ->
+      check_eof len (off + 4);
+      (Int32.float_of_bits (Bytes.get_int32_be buf off), off + 4)
+  | Float64 Little ->
+      check_eof len (off + 8);
+      (Int64.float_of_bits (Bytes.get_int64_le buf off), off + 8)
+  | Float64 Big ->
+      check_eof len (off + 8);
+      (Int64.float_of_bits (Bytes.get_int64_be buf off), off + 8)
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
@@ -498,6 +510,10 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Int32 Big -> write_int32_be enc (Int32.of_int v)
   | Int64 Little -> write_int64_le enc v
   | Int64 Big -> write_int64_be enc v
+  | Float32 Little -> write_int32_le enc (Int32.bits_of_float v)
+  | Float32 Big -> write_int32_be enc (Int32.bits_of_float v)
+  | Float64 Little -> write_int64_le enc (Int64.bits_of_float v)
+  | Float64 Big -> write_int64_be enc (Int64.bits_of_float v)
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       ensure enc n;
