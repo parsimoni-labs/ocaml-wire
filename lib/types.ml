@@ -451,29 +451,30 @@ let struct_project s ~name ~keep =
 
 (* What kind of OCaml value a field produces -- used by Wire_stubs to
    generate the right C-to-OCaml conversion in output stubs. *)
-type ocaml_kind = K_int | K_int64 | K_float | K_bool | K_string | K_unit
+type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
 
 let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ -> K_int
-  | Uint64 _ -> K_int64
-  | Int8 | Int16 _ | Int32 _ -> K_int
-  | Int64 _ -> K_int64
-  | Float32 _ | Float64 _ -> K_float
-  | Bits _ -> K_int
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ -> Int
+  | Uint64 _ -> Int64
+  | Int8 | Int16 _ | Int32 _ -> Int
+  | Int64 _ -> Int64
+  | Float32 _ -> Float32
+  | Float64 _ -> Float64
+  | Bits _ -> Int
   | Map { inner = Bits _; decode = _; encode = _ } ->
       (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
       (* We can't distinguish bool from other maps here without checking
-         the decode function. Use K_int as safe default -- the EverParse
+         the decode function. Use Int as safe default -- the EverParse
          output struct stores the raw int anyway. *)
-      K_int
+      Int
   | Map { inner; _ } -> ocaml_kind_of inner
   | Enum { base; _ } -> ocaml_kind_of base
   | Where { inner; _ } -> ocaml_kind_of inner
-  | Byte_array _ -> K_string
-  | Byte_array_where _ -> K_string
-  | Byte_slice _ -> K_string (* approximate: slice becomes string in output *)
-  | Unit | All_bytes | All_zeros -> K_unit
-  | _ -> K_int (* fallback *)
+  | Byte_array _ -> String
+  | Byte_array_where _ -> String
+  | Byte_slice _ -> String (* approximate: slice becomes string in output *)
+  | Unit | All_bytes | All_zeros -> Unit
+  | _ -> Int (* fallback *)
 
 let field_kinds s =
   List.filter_map

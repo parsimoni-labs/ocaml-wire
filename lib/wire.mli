@@ -433,6 +433,18 @@ val float64 : float typ
 val float64be : float typ
 (** [float64be] is an IEEE 754 binary64 big-endian. *)
 
+val is_finite : float Field.t -> bool expr
+(** [is_finite f] is a constraint that holds iff [f]'s decoded IEEE 754 value is
+    neither [NaN] nor [+/- infinity]. Compiles to a bit-mask check on the
+    field's exponent (against [0x7F80_0000] for [float32] and
+    [0x7FF0_0000_0000_0000] for [float64]); the same expression is emitted into
+    the 3D output, so wire's OCaml decoder and EverParse's verified C decoder
+    reject the same set of inputs. *)
+
+val is_nan : float Field.t -> bool expr
+(** [is_nan f] holds iff [f] decodes to a NaN bit pattern (exponent all-ones AND
+    mantissa non-zero). *)
+
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
     order (default {!Big}). The size may be a dynamic expression for
@@ -1030,12 +1042,13 @@ module Everparse : sig
     (** Named field names in declaration order. *)
 
     type ocaml_kind =
-      | K_int
-      | K_int64
-      | K_float
-      | K_bool
-      | K_string
-      | K_unit
+      | Int
+      | Int64
+      | Float32
+      | Float64
+      | Bool
+      | String
+      | Unit
           (** The OCaml representation kind of a field (for FFI stub
               generation). *)
 

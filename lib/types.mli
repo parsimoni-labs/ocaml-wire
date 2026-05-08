@@ -535,7 +535,7 @@ val struct_project : struct_ -> name:string -> keep:field list -> struct_
 (** [struct_project s ~name ~keep] keeps only the fields in [keep], making all
     others anonymous. *)
 
-type ocaml_kind = K_int | K_int64 | K_float | K_bool | K_string | K_unit
+type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
 
 val field_kinds : struct_ -> (string * ocaml_kind) list
 (** Return the struct name. *)

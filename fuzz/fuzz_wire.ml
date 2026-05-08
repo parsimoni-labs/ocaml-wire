@@ -863,7 +863,53 @@ let depsize_tests =
     test_case "depsize wire_size_at" [ bytes ] test_depsize_compute_wire_size;
   ]
 
+(* Fuzz the IEEE 754 boundary: any 8-byte input must either decode to a
+   finite [float] or fall on the [Constraint_failed] branch when a codec
+   asserts [is_finite] on the field. The validator's bit-mask check and
+   [Float.is_finite] of the same value must agree. *)
+let test_is_finite_agrees buf =
+  let buf = truncate buf in
+  if String.length buf < 8 then ()
+  else
+    let bytes_in = Bytes.of_string (String.sub buf 0 8) in
+    let template = Wire.Field.v "v" Wire.float64be in
+    let f_v =
+      Wire.Field.v "v" ~constraint_:(Wire.is_finite template) Wire.float64be
+    in
+    let codec =
+      Wire.Codec.v "T" (fun v -> v) Wire.Codec.[ (f_v $ fun v -> v) ]
+    in
+    let raw = Wire.of_bytes_exn Wire.float64be bytes_in in
+    let codec_finite =
+      try
+        let _ = Wire.Codec.decode_exn codec bytes_in 0 in
+        true
+      with Wire.Parse_error _ -> false
+    in
+    if Float.is_finite raw <> codec_finite then
+      fail
+        (Fmt.str "is_finite disagreement: raw=%h Float.is_finite=%b codec=%b"
+           raw (Float.is_finite raw) codec_finite)
+
+let test_float64_roundtrip buf =
+  let buf = truncate buf in
+  if String.length buf < 8 then ()
+  else
+    let bytes_in = Bytes.of_string (String.sub buf 0 8) in
+    let v = Wire.of_bytes_exn Wire.float64be bytes_in in
+    let s = Wire.to_string Wire.float64be v in
+    let v' = Wire.of_string_exn Wire.float64be s in
+    let bits = Int64.bits_of_float v and bits' = Int64.bits_of_float v' in
+    if Int64.equal bits bits' || (Float.is_nan v && Float.is_nan v') then ()
+    else fail (Fmt.str "float64 bit-pattern roundtrip failed: %h vs %h" v v')
+
+let float_tests =
+  [
+    test_case "is_finite vs Float.is_finite" [ bytes ] test_is_finite_agrees;
+    test_case "float64 roundtrip" [ bytes ] test_float64_roundtrip;
+  ]
+
 let suite =
   ( "wire",
     parse_tests @ roundtrip_tests @ record_tests @ stream_tests @ depsize_tests
-  )
+    @ float_tests )

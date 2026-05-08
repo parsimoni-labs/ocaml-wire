@@ -109,6 +109,36 @@ let test_float64_nan_roundtrip () =
   let v = of_string_exn float64be s in
   Alcotest.(check bool) "nan preserved" true (Float.is_nan v)
 
+let finite_field name typ =
+  let template = Field.v name typ in
+  Field.v name ~constraint_:(is_finite template) typ
+
+let finite_codec () =
+  let f_v = finite_field "v" float64be in
+  Codec.v "Tel" (fun v -> v) Codec.[ (f_v $ fun v -> v) ]
+
+let test_finite_rejects_nan () =
+  let buf = Bytes.create 8 in
+  Bytes.set_int64_be buf 0 0x7FF8_0000_0000_0001L;
+  match Codec.decode (finite_codec ()) buf 0 with
+  | Error (Constraint_failed _) -> ()
+  | Ok _ -> Alcotest.fail "is_finite should have rejected NaN"
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+
+let test_finite_accepts () =
+  let buf = Bytes.create 8 in
+  Bytes.set_int64_be buf 0 (Int64.bits_of_float 3.14);
+  match Codec.decode (finite_codec ()) buf 0 with
+  | Ok v -> Alcotest.(check (float 0.0)) "finite ok" 3.14 v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_finite_rejects_inf () =
+  let buf = Bytes.create 8 in
+  Bytes.set_int64_be buf 0 (Int64.bits_of_float Float.infinity);
+  match Codec.decode (finite_codec ()) buf 0 with
+  | Error (Constraint_failed _) -> ()
+  | _ -> Alcotest.fail "is_finite should have rejected +inf"
+
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
 let test_bawhere_accepts () =
@@ -672,6 +702,9 @@ let suite =
       Alcotest.test_case "parse: float64le roundtrip" `Quick
         test_float64le_roundtrip;
       Alcotest.test_case "parse: float64 nan" `Quick test_float64_nan_roundtrip;
+      Alcotest.test_case "is_finite: rejects nan" `Quick test_finite_rejects_nan;
+      Alcotest.test_case "is_finite: accepts finite" `Quick test_finite_accepts;
+      Alcotest.test_case "is_finite: rejects inf" `Quick test_finite_rejects_inf;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick

@@ -24,8 +24,10 @@
 - IEEE 754 floats: `float32(be)` / `float64(be)`. OCaml side uses
   `Int32.float_of_bits` / `Int64.float_of_bits` for round-tripping
   including NaN, signed zero, infinities. 3D projects to the same-width
-  `UINT*`; semantic predicates (`is_finite`, range bounds) will land
-  later as bit-pattern refinements over the unsigned width (@samoht)
+  `UINT*` and `Wire.is_finite` / `Wire.is_nan` compile to bit-pattern
+  refinements over the unsigned width, so wire's OCaml decoder and
+  EverParse's verified C decoder reject the same NaN / Inf inputs
+  (@samoht)
 
 ### Changed
 

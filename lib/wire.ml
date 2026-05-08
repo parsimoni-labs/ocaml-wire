@@ -31,6 +31,39 @@ let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases
 
+(* IEEE 754 predicates compile to bit-mask checks over the float's bit
+   pattern (which [build_populate] stores into [int_array] for float fields).
+   We use shift-based forms instead of the natural [v & 0x7FF0_..._0000]
+   because that mask exceeds OCaml's 62-bit signed [int] range and renders
+   as a negative literal that 3D rejects. Shifting the exponent down to the
+   low bits and comparing against a small constant keeps every literal
+   fitting in 31 bits and produces identical [(v >> N) & M] / [== M] checks
+   on both wire's OCaml decoder and EverParse's verified C decoder. *)
+type float_layout = { exp_shift : int; exp_max : int; mant_mask : int }
+
+let f32_layout = { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
+
+let f64_layout =
+  { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
+
+let float_layout_of (typ : float Types.typ) =
+  match typ with
+  | Float32 _ -> f32_layout
+  | Float64 _ -> f64_layout
+  | _ -> invalid_arg "Wire: not a float field"
+
+let is_finite (f : float Field.t) : bool Types.expr =
+  let r = Field.ref f in
+  let { exp_shift; exp_max; _ } = float_layout_of (Field.typ f) in
+  Expr.(Land (Lsr (r, Int exp_shift), Int exp_max) <> Int exp_max)
+
+let is_nan (f : float Field.t) : bool Types.expr =
+  let r = Field.ref f in
+  let { exp_shift; exp_max; mant_mask } = float_layout_of (Field.typ f) in
+  Expr.(
+    Land (Lsr (r, Int exp_shift), Int exp_max) = Int exp_max
+    && Land (r, Int mant_mask) <> Int 0)
+
 let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.raw_decode c in
   let codec_encode = Codec.raw_encode c in

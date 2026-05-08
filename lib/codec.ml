@@ -199,6 +199,22 @@ let rec build_populate : type a.
         | Some v -> arr.(idx) <- v
         | None -> ())
   | Int64 _ -> fun arr buf base -> arr.(idx) <- Int64.to_int (reader buf base)
+  (* Floats store their IEEE 754 bit pattern in [int_array] so [Ref name]
+     in a constraint sees the same value the 3D-side sees. The user-facing
+     reader still returns the [float], reinterpreted via [Int*.float_of_bits]
+     elsewhere. *)
+  | Float32 Little ->
+      fun arr buf base ->
+        arr.(idx) <- Bytes.get_int32_le buf base |> Int32.to_int
+  | Float32 Big ->
+      fun arr buf base ->
+        arr.(idx) <- Bytes.get_int32_be buf base |> Int32.to_int
+  | Float64 Little ->
+      fun arr buf base ->
+        arr.(idx) <- Bytes.get_int64_le buf base |> Int64.to_int
+  | Float64 Big ->
+      fun arr buf base ->
+        arr.(idx) <- Bytes.get_int64_be buf base |> Int64.to_int
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; _ } -> build_populate base idx reader
   | Map { inner; encode; _ } ->
