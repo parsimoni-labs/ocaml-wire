@@ -31,6 +31,35 @@ let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases
 
+(* IEEE 754 predicates compile to bit-mask checks over the float's bit
+   pattern (which [build_populate] stores into [int_array] for float fields).
+   We use shift-based forms instead of the natural [v & 0x7FF0_..._0000]
+   because that mask exceeds OCaml's 62-bit signed [int] range and renders
+   as a negative literal that 3D rejects. Shifting the exponent down to the
+   low bits and comparing against a small constant keeps every literal
+   fitting in 31 bits and produces identical [(v >> N) & M] / [== M] checks
+   on both wire's OCaml decoder and EverParse's verified C decoder. *)
+type float_layout = { exp_shift : int; exp_max : int; mant_mask : int }
+
+let float_layout_of (typ : float Types.typ) =
+  match typ with
+  | Float32 _ -> { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
+  | Float64 _ ->
+      { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
+  | _ -> invalid_arg "Wire: not a float field"
+
+let is_finite (f : float Field.t) : bool Types.expr =
+  let r = Field.ref f in
+  let { exp_shift; exp_max; _ } = float_layout_of (Field.typ f) in
+  Expr.(Land (Lsr (r, Int exp_shift), Int exp_max) <> Int exp_max)
+
+let is_nan (f : float Field.t) : bool Types.expr =
+  let r = Field.ref f in
+  let { exp_shift; exp_max; mant_mask } = float_layout_of (Field.typ f) in
+  Expr.(
+    Land (Lsr (r, Int exp_shift), Int exp_max) = Int exp_max
+    && Land (r, Int mant_mask) <> Int 0)
+
 let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.raw_decode c in
   let codec_encode = Codec.raw_encode c in
@@ -121,6 +150,11 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
+let parse_codec_typ codec_decode fixed_size size_of buf off len =
+  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+  check_eof len (off + sz);
+  (codec_decode buf off, off + sz)
+
 let parse_struct_typ s buf off len =
   let v = Codec.validator_of_struct s in
   let sz = Codec.struct_size_of v buf off in
@@ -160,6 +194,39 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Uint64 Big ->
       check_eof len (off + 8);
       (Bytes.get_int64_be buf off, off + 8)
+  | Int8 ->
+      check_eof len (off + 1);
+      (Bytes.get_int8 buf off, off + 1)
+  | Int16 Little ->
+      check_eof len (off + 2);
+      (Bytes.get_int16_le buf off, off + 2)
+  | Int16 Big ->
+      check_eof len (off + 2);
+      (Bytes.get_int16_be buf off, off + 2)
+  | Int32 Little ->
+      check_eof len (off + 4);
+      (Int32.to_int (Bytes.get_int32_le buf off), off + 4)
+  | Int32 Big ->
+      check_eof len (off + 4);
+      (Int32.to_int (Bytes.get_int32_be buf off), off + 4)
+  | Int64 Little ->
+      check_eof len (off + 8);
+      (Bytes.get_int64_le buf off, off + 8)
+  | Int64 Big ->
+      check_eof len (off + 8);
+      (Bytes.get_int64_be buf off, off + 8)
+  | Float32 Little ->
+      check_eof len (off + 4);
+      (Int32.float_of_bits (Bytes.get_int32_le buf off), off + 4)
+  | Float32 Big ->
+      check_eof len (off + 4);
+      (Int32.float_of_bits (Bytes.get_int32_be buf off), off + 4)
+  | Float64 Little ->
+      check_eof len (off + 8);
+      (Int64.float_of_bits (Bytes.get_int64_le buf off), off + 8)
+  | Float64 Big ->
+      check_eof len (off + 8);
+      (Int64.float_of_bits (Bytes.get_int64_be buf off), off + 8)
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
@@ -210,13 +277,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       if List.mem v valid then (v, off')
       else raise (Parse_exn (Invalid_enum { value = v; valid }))
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
-      let sz =
-        match codec_fixed_size with
-        | Some n -> n
-        | None -> codec_size_of buf off
-      in
-      check_eof len (off + sz);
-      (codec_decode buf off, off + sz)
+      parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
   | Optional { present; inner } ->
@@ -365,6 +426,21 @@ let[@inline] write_byte enc b =
   Bytes.set_uint8 enc.o enc.o_next b;
   enc.o_next <- enc.o_next + 1
 
+let[@inline] write_int8 enc v =
+  ensure enc 1;
+  Bytes.set_int8 enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 1
+
+let[@inline] write_int16_le enc v =
+  ensure enc 2;
+  Bytes.set_int16_le enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 2
+
+let[@inline] write_int16_be enc v =
+  ensure enc 2;
+  Bytes.set_int16_be enc.o enc.o_next v;
+  enc.o_next <- enc.o_next + 2
+
 let[@inline] write_uint16_le enc v =
   ensure enc 2;
   Bytes.set_uint16_le enc.o enc.o_next v;
@@ -456,6 +532,17 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Uint63 Big -> write_uint63_be enc v
   | Uint64 Little -> write_int64_le enc v
   | Uint64 Big -> write_int64_be enc v
+  | Int8 -> write_int8 enc v
+  | Int16 Little -> write_int16_le enc v
+  | Int16 Big -> write_int16_be enc v
+  | Int32 Little -> write_int32_le enc (Int32.of_int v)
+  | Int32 Big -> write_int32_be enc (Int32.of_int v)
+  | Int64 Little -> write_int64_le enc v
+  | Int64 Big -> write_int64_be enc v
+  | Float32 Little -> write_int32_le enc (Int32.bits_of_float v)
+  | Float32 Big -> write_int32_be enc (Int32.bits_of_float v)
+  | Float64 Little -> write_int64_le enc (Int64.bits_of_float v)
+  | Float64 Big -> write_int64_be enc (Int64.bits_of_float v)
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       ensure enc n;

@@ -512,11 +512,13 @@ module Raw = struct
     Types.struct_project s ~name ~keep:(List.map Field.to_decl keep)
 
   type ocaml_kind = Types.ocaml_kind =
-    | K_int
-    | K_int64
-    | K_bool
-    | K_string
-    | K_unit
+    | Int
+    | Int64
+    | Float32
+    | Float64
+    | Bool
+    | String
+    | Unit
 
   let field_kinds = Types.field_kinds
   let struct_params (s : Types.struct_) = s.params

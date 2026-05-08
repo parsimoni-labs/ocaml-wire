@@ -218,11 +218,13 @@ module Raw : sig
       others anonymous. *)
 
   type ocaml_kind = Types.ocaml_kind =
-    | K_int
-    | K_int64
-    | K_bool
-    | K_string
-    | K_unit
+    | Int
+    | Int64
+    | Float32
+    | Float64
+    | Bool
+    | String
+    | Unit
 
   val field_kinds : struct_ -> (string * ocaml_kind) list
   (** Field names with their OCaml kind. *)

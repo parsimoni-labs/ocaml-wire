@@ -102,6 +102,14 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
   | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
+  | Int8 : int typ  (** 8-bit signed. *)
+  | Int16 : endian -> int typ  (** 16-bit signed. *)
+  | Int32 : endian -> int typ
+      (** 32-bit signed, returned as OCaml [int] (64-bit hosts only). *)
+  | Int64 : endian -> int64 typ  (** 64-bit signed. *)
+  | Float32 : endian -> float typ
+      (** IEEE 754 binary32, widened to OCaml [float]. *)
+  | Float64 : endian -> float typ  (** IEEE 754 binary64. *)
   | Uint_var : { size : int expr; endian : endian } -> int typ
       (** Variable-width unsigned integer (1-7 bytes). *)
   | Bits : {
@@ -228,9 +236,6 @@ type param_env = { pe_codec_id : int; pe_slots : int array }
 
 val int : int -> int expr
 (** Integer literal. *)
-
-val int64 : int64 -> int64 expr
-(** 64-bit integer literal. *)
 
 val true_ : bool expr
 (** Boolean true. *)
@@ -361,6 +366,41 @@ val uint64 : int64 typ
 
 val uint64be : int64 typ
 (** 64-bit unsigned, big-endian. *)
+
+val int8 : int typ
+(** 8-bit signed two's-complement integer. *)
+
+val int16 : int typ
+(** 16-bit signed, little-endian. *)
+
+val int16be : int typ
+(** 16-bit signed, big-endian. *)
+
+val int32 : int typ
+(** [int32] is a 32-bit signed little-endian integer, returned as OCaml [int]
+    (64-bit hosts only). *)
+
+val int32be : int typ
+(** [int32be] is a 32-bit signed big-endian integer, returned as OCaml [int]. *)
+
+val int64 : int64 typ
+(** 64-bit signed, little-endian. *)
+
+val int64be : int64 typ
+(** 64-bit signed, big-endian. *)
+
+val float32 : float typ
+(** [float32] is an IEEE 754 binary32 little-endian, widened to OCaml [float].
+*)
+
+val float32be : float typ
+(** [float32be] is an IEEE 754 binary32 big-endian, widened to OCaml [float]. *)
+
+val float64 : float typ
+(** [float64] is an IEEE 754 binary64 little-endian. *)
+
+val float64be : float typ
+(** [float64be] is an IEEE 754 binary64 big-endian. *)
 
 val uint : ?endian:endian -> int expr -> int typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
@@ -495,7 +535,7 @@ val struct_project : struct_ -> name:string -> keep:field list -> struct_
 (** [struct_project s ~name ~keep] keeps only the fields in [keep], making all
     others anonymous. *)
 
-type ocaml_kind = K_int | K_int64 | K_bool | K_string | K_unit
+type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
 
 val field_kinds : struct_ -> (string * ocaml_kind) list
 (** Return the struct name. *)

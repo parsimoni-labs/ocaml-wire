@@ -26,6 +26,12 @@ let rec int_of : type a. a typ -> a -> int option =
   | Uint32 _ -> Some (UInt32.to_int v)
   | Uint63 _ -> Some (UInt63.to_int v)
   | Uint64 _ -> Int64.unsigned_to_int v
+  | Int8 -> Some v
+  | Int16 _ -> Some v
+  | Int32 _ -> Some v
+  | Int64 _ -> Int64.unsigned_to_int v
+  | Float32 _ -> None
+  | Float64 _ -> None
   | Bits _ -> Some v
   | Enum { base; _ } -> int_of base v
   | Where { inner; _ } -> int_of inner v

@@ -208,6 +208,22 @@ let write_fields_header ~outdir s =
   Format.pp_print_flush ppf ();
   close_out oc
 
+(* Emit one [case N:] body inside a [WireSet*] setter. [float] / [double]
+   fields get a [memcpy] bit-reinterpret because the parser hands us the
+   underlying [UINT32] / [UINT64] but the plug struct stores the typed
+   float; everyone else takes a value cast. *)
+let emit_setter_case ppf logical f =
+  if String.equal f.Wire.Everparse.pf_setter logical then
+    match f.pf_c_type with
+    | "float" | "double" ->
+        Fmt.pf ppf
+          "    case %d: { %s _x; memcpy(&_x, &v, sizeof _x); f->%s = _x; \
+           break; }@\n"
+          f.pf_idx f.pf_c_type f.pf_name
+    | _ ->
+        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
+          f.pf_c_type
+
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
   let setters = Wire.Everparse.plug_setters s in
@@ -224,6 +240,7 @@ let write_fields_impl ~outdir s =
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
   pr "#include <stdint.h>@\n";
+  pr "#include <string.h>@\n";
   pr "#include \"%s_Fields.h\"@\n" base;
   pr "#include \"%s_ExternalTypedefs.h\"@\n" base;
   pr "#include \"%s_ExternalAPI.h\"@\n@\n" base;
@@ -237,12 +254,7 @@ let write_fields_impl ~outdir s =
       pr "void %s(WIRECTX *ctx, uint32_t idx, %s v) {@\n" physical val_c_type;
       pr "  %sFields *f = (%sFields *) ctx;@\n" ident ident;
       pr "  switch (idx) {@\n";
-      List.iter
-        (fun f ->
-          if String.equal f.Wire.Everparse.pf_setter logical then
-            pr "    case %d: f->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
-              f.pf_c_type)
-        fields;
+      List.iter (fun f -> emit_setter_case ppf logical f) fields;
       pr "    default: (void) f; (void) v; break;@\n";
       pr "  }@\n";
       pr "}@\n@\n")

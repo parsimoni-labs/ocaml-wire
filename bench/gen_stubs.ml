@@ -46,7 +46,7 @@ let generate_stub_registry ppf structs projection_structs =
         in
         if is_proj then
           match Wire.Everparse.Raw.field_kinds s with
-          | [ (_, Wire.Everparse.Raw.K_int64) ] ->
+          | [ (_, Wire.Everparse.Raw.Int64) ] ->
               ("(fun _ _ -> 0)", Fmt.str "%s_projected_int64" lower)
           | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ _ -> 0L)")
           | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
@@ -100,9 +100,7 @@ let generate_ml oc =
       match Wire.Everparse.Raw.field_kinds s with
       | [ (_, kind) ] ->
           let suffix =
-            match kind with
-            | Wire.Everparse.Raw.K_int64 -> "_int64"
-            | _ -> "_int"
+            match kind with Wire.Everparse.Raw.Int64 -> "_int64" | _ -> "_int"
           in
           pr "let %s_projected%s = %s_parse_k Fun.id\n\n" lower suffix lower
       | _ -> ())

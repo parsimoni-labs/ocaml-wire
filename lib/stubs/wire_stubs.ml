@@ -24,8 +24,13 @@ let c_stub_validate ppf ~lower ~ep =
 
 let field_value ppf (fname, kind) =
   match kind with
-  | Wire.Everparse.Raw.K_int64 ->
+  | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
+  | Float32 | Float64 ->
+      (* The 3D plug stores floats with their typed C type ([float] /
+         [double]) and bit-reinterprets in the setter, so we hand the
+         value straight to [caml_copy_double]. *)
+      Fmt.pf ppf "caml_copy_double((double) fields.%s)" fname
   | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
 
 let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
@@ -117,11 +122,12 @@ let ml_field_name name =
   | _ -> lower
 
 let ml_kind_string = function
-  | Wire.Everparse.Raw.K_int -> "int"
-  | K_int64 -> "int64"
-  | K_bool -> "int"
-  | K_string -> "string"
-  | K_unit -> "unit"
+  | Wire.Everparse.Raw.Int -> "int"
+  | Int64 -> "int64"
+  | Float32 | Float64 -> "float"
+  | Bool -> "int"
+  | String -> "string"
+  | Unit -> "unit"
 
 let gen_ml_record ppf ~type_name kinds =
   Fmt.pf ppf "type %s = {" type_name;

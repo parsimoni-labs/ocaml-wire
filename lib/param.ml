@@ -11,6 +11,12 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Uint32 _ -> UInt32.to_int v
   | Uint63 _ -> UInt63.to_int v
   | Uint64 _ -> Int64.unsigned_to_int v |> Option.value ~default:max_int
+  | Int8 -> v
+  | Int16 _ -> v
+  | Int32 _ -> v
+  | Int64 _ -> Int64.to_int v
+  | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
+  | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
   | Bits _ -> v
   | Enum { base; _ } -> to_int base v
   | Where { inner; _ } -> to_int inner v
@@ -31,6 +37,12 @@ let rec of_int : type a. a Types.typ -> int -> a =
   | Uint32 _ -> UInt32.of_int v
   | Uint63 _ -> UInt63.of_int v
   | Uint64 _ -> Int64.of_int v
+  | Int8 -> v
+  | Int16 _ -> v
+  | Int32 _ -> v
+  | Int64 _ -> Int64.of_int v
+  | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
+  | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
   | Bits _ -> v
   | Enum { base; _ } -> of_int base v
   | Where { inner; _ } -> of_int inner v
@@ -44,7 +56,8 @@ let rec of_int : type a. a Types.typ -> int -> a =
 
 let rec is_int_representable : type a. a Types.typ -> bool = function
   | Types.Uint8 | Types.Uint16 _ | Types.Uint_var _ | Types.Uint32 _
-  | Types.Uint63 _ | Types.Uint64 _ | Types.Bits _ ->
+  | Types.Uint63 _ | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _
+  | Types.Int64 _ | Types.Bits _ ->
       true
   | Types.Enum { base; _ } -> is_int_representable base
   | Types.Map { inner; _ } -> is_int_representable inner
