@@ -38,8 +38,10 @@
 ### Fixed
 
 - Allow `Wire.codec` sub-codecs and `Wire.repeat` after a variable-size
-  field. Previously raised `add_field: variable-size codec after
-  variable-size field not supported` (#38, @samoht)
+  field. Two consecutive variable-size sub-codecs (e.g. SSH-style
+  back-to-back length-prefixed strings) used to raise `add_field:
+  variable-size codec after variable-size field not supported`
+  (#38, @samoht)
 - Fix C stub generator: use the EverParse-normalised `<Name>Fields`
   type name. Schemas with a name segment of 2+ leading capitals (e.g.
   `IPv4`, `EP_Header`) previously emitted C that referenced an
