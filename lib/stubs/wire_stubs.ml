@@ -3,7 +3,7 @@
 let ml_type_of = Wire.Private.ml_type_of
 let everparse_name = Wire_3d.everparse_name
 
-let c_stub_error_handler ppf lower =
+let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
     "static void %s_err(const char *t, const char *f, const char *r,@\n" lower;
   Fmt.pf ppf
@@ -22,7 +22,7 @@ let c_stub_validate ppf ~lower ~ep =
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
     lower
 
-let field_value ppf (fname, kind) =
+let pp_field_value ppf (fname, kind) =
   match kind with
   | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
@@ -33,7 +33,7 @@ let field_value ppf (fname, kind) =
       Fmt.pf ppf "caml_copy_double((double) fields.%s)" fname
   | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
 
-let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
+let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
   let kinds = Wire.Everparse.Raw.field_kinds s in
   let n_fields = List.length kinds in
   (* Single C entry point per schema: [caml_wire_<name>_parse_k] takes a
@@ -54,7 +54,7 @@ let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     c_stub_validate ppf ~lower ~ep;
     Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
-      (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i field_value kind)
+      (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i pp_field_value kind)
       kinds;
     Fmt.pf ppf "  v_result = caml_callbackN(v_k, %d, args);@\n" n_fields;
     Fmt.pf ppf "  CAMLreturn(v_result);@\n";
@@ -73,12 +73,12 @@ let c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf "}@\n@\n"
   end
 
-let c_stub ppf (s : Wire.Everparse.Raw.struct_) =
+let pp_c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
   let lower = String.lowercase_ascii name in
-  c_stub_error_handler ppf lower;
-  c_stub_output ppf ~lower ~ep s
+  pp_c_stub_error_handler ppf lower;
+  pp_c_stub_output ppf ~lower ~ep s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 4096 in
@@ -104,7 +104,7 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
       Fmt.pf ppf "#include \"%s_Fields.c\"@\n" name)
     structs;
   Fmt.pf ppf "@\n/* Stubs */@\n";
-  List.iter (fun s -> c_stub ppf s) structs;
+  List.iter (fun s -> pp_c_stub ppf s) structs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
 
@@ -138,7 +138,7 @@ let gen_ml_record ppf ~type_name kinds =
     kinds;
   Fmt.pf ppf " }@\n@\n"
 
-let gen_ml_k_type ppf kinds =
+let pp_ml_k_type ppf kinds =
   Fmt.pf ppf "(";
   List.iter (fun (_, kind) -> Fmt.pf ppf "%s -> " (ml_kind_string kind)) kinds;
   Fmt.pf ppf "'r)"
@@ -148,7 +148,7 @@ let gen_ml_k_type ppf kinds =
    compiler eliminates it when the caller only wants the record (the
    record is built directly from the field values). Single C codepath
    per schema; both record-returning and CPS ergonomics preserved. *)
-let gen_ml_record_constructor ppf kinds =
+let pp_ml_record_constructor ppf kinds =
   Fmt.pf ppf "(fun ";
   List.iteri (fun i _ -> Fmt.pf ppf "v%d " i) kinds;
   Fmt.pf ppf "-> { ";
@@ -171,13 +171,13 @@ let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
         gen_ml_record ppf ~type_name:lower kinds;
         (* Single external: the CPS variant. *)
         Fmt.pf ppf "external %s_parse_k : %a -> bytes -> int -> 'r@\n" lower
-          (fun ppf () -> gen_ml_k_type ppf kinds)
+          (fun ppf () -> pp_ml_k_type ppf kinds)
           ();
         Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower;
         (* OCaml-side record-returning wrapper. *)
         Fmt.pf ppf "let %s_parse buf off =@\n" lower;
         Fmt.pf ppf "  %s_parse_k@\n" lower;
-        Fmt.pf ppf "    %a@\n" gen_ml_record_constructor kinds;
+        Fmt.pf ppf "    %a@\n" pp_ml_record_constructor kinds;
         Fmt.pf ppf "    buf off@\n@\n"
       end
       else begin
@@ -210,7 +210,7 @@ let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf "external parse : bytes -> int -> t@\n";
     Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
     Fmt.pf ppf "external parse_k : %a -> bytes -> int -> 'r@\n"
-      (fun ppf () -> gen_ml_k_type ppf kinds)
+      (fun ppf () -> pp_ml_k_type ppf kinds)
       ();
     Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n" lower
   end

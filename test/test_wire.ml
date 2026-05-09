@@ -139,6 +139,25 @@ let test_finite_rejects_inf () =
   | Error (Constraint_failed _) -> ()
   | _ -> Alcotest.fail "is_finite should have rejected +inf"
 
+let test_rest_of_buffer_codec () =
+  (* "Header then rest-of-buffer payload" idiom: the trailing payload's
+     size is [total - sizeof_this], where [total] is a length param
+     bound to [Bytes.length buf]. Works in OCaml and projects to 3D as
+     [UINT8[:byte-size (total - sizeof(this))]]. *)
+  let total = Param.input "total" uint32be in
+  let f_h = Field.v "Header" uint8 in
+  let f_d = Field.v "Data" (rest_bytes total) in
+  let codec =
+    Codec.v "RestDemo" (fun h d -> (h, d)) Codec.[ f_h $ fst; f_d $ snd ]
+  in
+  let buf = Bytes.of_string "\x01HELLO" in
+  let env = Codec.env codec |> Param.bind total (Bytes.length buf) in
+  match Codec.decode ~env codec buf 0 with
+  | Ok (h, d) ->
+      Alcotest.(check int) "header" 1 h;
+      Alcotest.(check string) "data" "HELLO" d
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
 let test_bawhere_accepts () =
@@ -705,6 +724,8 @@ let suite =
       Alcotest.test_case "is_finite: rejects nan" `Quick test_finite_rejects_nan;
       Alcotest.test_case "is_finite: accepts finite" `Quick test_finite_accepts;
       Alcotest.test_case "is_finite: rejects inf" `Quick test_finite_rejects_inf;
+      Alcotest.test_case "codec: rest-of-buffer payload" `Quick
+        test_rest_of_buffer_codec;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick

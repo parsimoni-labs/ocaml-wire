@@ -307,9 +307,13 @@ type field_reader = string * (bytes -> int -> int)
 
 (* Compile an [int expr] into a closure that evaluates it at runtime by
    reading previously-declared fields from the buffer. Built once at [add_field]
-   time, called at every [get]/[set]/[decode]. *)
-let rec compile_expr (env : field_reader list) (e : int expr) :
-    bytes -> int -> int =
+   time, called at every [get]/[set]/[decode]. [?sizeof_this] is the byte
+   offset of the field currently being compiled, expressed as a function of
+   the buffer; defaults to [0] when [Sizeof_this] cannot meaningfully resolve
+   (e.g. inside a top-level wire description). *)
+let rec compile_expr ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
+    (env : field_reader list) (e : int expr) : bytes -> int -> int =
+  let rec_ e = compile_expr ~sizeof_this env e in
   match e with
   | Int n -> fun _buf _base -> n
   | Ref name -> (
@@ -318,26 +322,27 @@ let rec compile_expr (env : field_reader list) (e : int expr) :
       | None ->
           Fmt.invalid_arg "Codec: unbound field ref %S in size expression" name)
   | Add (a, b) ->
-      let fa = compile_expr env a in
-      let fb = compile_expr env b in
+      let fa = rec_ a in
+      let fb = rec_ b in
       fun buf base -> fa buf base + fb buf base
   | Sub (a, b) ->
-      let fa = compile_expr env a in
-      let fb = compile_expr env b in
+      let fa = rec_ a in
+      let fb = rec_ b in
       fun buf base -> fa buf base - fb buf base
   | Mul (a, b) ->
-      let fa = compile_expr env a in
-      let fb = compile_expr env b in
+      let fa = rec_ a in
+      let fb = rec_ b in
       fun buf base -> fa buf base * fb buf base
   | Div (a, b) ->
-      let fa = compile_expr env a in
-      let fb = compile_expr env b in
+      let fa = rec_ a in
+      let fb = rec_ b in
       fun buf base -> fa buf base / fb buf base
   | Param_ref p -> fun _buf _base -> !(p.ph_cell)
   | Sizeof t -> (
       match field_wire_size t with
       | Some n -> fun _buf _base -> n
       | None -> invalid_arg "Codec: sizeof on variable-size type")
+  | Sizeof_this -> sizeof_this
   | _ -> invalid_arg "Codec: unsupported expression in dependent size"
 
 let try_compile_int_reader : type a.
@@ -1459,7 +1464,12 @@ and compile_repeat : type elt seq r.
      when a [Repeat] sits after a variable-size field, the running offset
      is [Dynamic_next], which previously tripped [require_static_off]. *)
   let off_fn, (field_access : field_access), validator_off =
-    let size_fn = compile_expr ctx.lc_field_readers size_expr in
+    let sizeof_this : bytes -> int -> int =
+      match ctx.lc_next_off with
+      | Static_next n -> fun _buf _base -> n
+      | Dynamic_next prev_end -> fun buf base -> prev_end buf base - base
+    in
+    let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
     match ctx.lc_next_off with
     | Static_next n -> ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
     | Dynamic_next prev_end ->
@@ -1599,9 +1609,19 @@ and compile_var_bytes : type a r.
     | Byte_array { size } -> size
     | Byte_array_where { size; _ } -> size
     | Uint_var { size; _ } -> size
+    | All_bytes | All_zeros ->
+        invalid_arg
+          "add_field: [all_bytes] / [all_zeros] are top-level decoders only; \
+           inside a record, use [byte_array ~size:Expr.(Param.expr total - \
+           sizeof_this)] with an explicit length param"
     | _ -> invalid_arg "add_field: unsupported variable-size field type"
   in
-  let size_fn = compile_expr ctx.lc_field_readers size_expr in
+  let sizeof_this : bytes -> int -> int =
+    match ctx.lc_next_off with
+    | Static_next n -> fun _buf _base -> n
+    | Dynamic_next prev_end -> fun buf base -> prev_end buf base - base
+  in
+  let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
   let off_fn, (field_access : field_access), validator_off =
     match ctx.lc_next_off with
     | Static_next n ->
