@@ -4,6 +4,7 @@
 
 open Wire
 open Wire.Everparse.Raw
+open Test_fixtures
 
 let check name s expected =
   let output = Ascii.of_struct s in
@@ -110,21 +111,11 @@ let test_variable () =
     "contains data" true
     (Re.execp (Re.compile (Re.str "data")) output)
 
-(* -- Codec rendering -- *)
-
-type simple_record = { x : int; y : int }
-
-let simple_codec =
-  Codec.v "Simple"
-    (fun x y -> { x; y })
-    Codec.
-      [
-        (Field.v "x" uint16be $ fun r -> r.x);
-        (Field.v "y" uint16be $ fun r -> r.y);
-      ]
+(* -- Codec rendering --
+   [multi_record_codec] lives in {!Test_fixtures}. *)
 
 let test_of_codec () =
-  let output = Ascii.of_codec simple_codec in
+  let output = Ascii.of_codec multi_record_codec in
   let expected =
     ruler
     ^ " +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+\n\
@@ -138,13 +129,13 @@ let test_of_codec () =
 let test_pp_codec () =
   let buf = Buffer.create 128 in
   let ppf = Format.formatter_of_buffer buf in
-  Ascii.pp_codec ppf simple_codec;
+  Ascii.pp_codec ppf multi_record_codec;
   Format.pp_print_flush ppf ();
   let output = Buffer.contents buf in
   Alcotest.(check bool) "pp_codec non-empty" true (String.length output > 0);
   Alcotest.(check string)
     "pp_codec matches of_codec"
-    (Ascii.of_codec simple_codec)
+    (Ascii.of_codec multi_record_codec)
     output
 
 let test_pp_struct () =
