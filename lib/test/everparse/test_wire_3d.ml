@@ -347,6 +347,158 @@ let test_projection_filenames () =
     "raw schema name not used as filename" false
     (contains_exact "rpmsg_endpoint_info.h")
 
+(* -- Adversarial projection tests for 3D-shape transformations -- *)
+
+let to_3d_string s =
+  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
+  Wire.Everparse.Raw.to_3d m
+
+let contains s sub =
+  let lsub = String.length sub in
+  let n = String.length s - lsub in
+  let rec go i = i <= n && (String.sub s i lsub = sub || go (i + 1)) in
+  lsub = 0 || go 0
+
+(* [Action.var name e] must not project to [var name = e;] -- 3D's [var]
+   binds an atomic action, not a pure expression. The DSL combinator [Var]
+   has to be lowered by inlining the bound expression at every use site. *)
+let test_var_inlines () =
+  let f_a = field "Tag" uint8 in
+  let f_b = field "Value" uint16be in
+  let f_x = field "x" uint16be in
+  let s =
+    let out = Param.output "out" uint32be in
+    param_struct "VarTest"
+      [ Param.decl out ]
+      [
+        field "Tag" uint8;
+        field "Value"
+          ~action:
+            (Action.on_act
+               [
+                 Action.var "x" Expr.(field_ref f_a + field_ref f_b);
+                 Action.assign out Expr.(field_ref f_x + int 1);
+               ])
+          uint16be;
+      ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool)
+    "no [var x = ...] in 3D output" false (contains out "var x");
+  Alcotest.(check bool)
+    "x usage replaced by inlined expression" true
+    (contains out "(Tag + Value) + 1")
+
+(* Var bindings inside if-branches must not leak between sibling branches. *)
+let test_var_scoping_in_if () =
+  let f_a = field "Tag" uint8 in
+  let f_x = field "x" uint16be in
+  let s =
+    let out = Param.output "out" uint32be in
+    param_struct "VarIf"
+      [ Param.decl out ]
+      [
+        field "Tag" uint8;
+        field "Value"
+          ~action:
+            (Action.on_act
+               [
+                 Action.var "x" Expr.(field_ref f_a + int 7);
+                 Action.if_
+                   Expr.(field_ref f_x > int 100)
+                   [ Action.assign out (field_ref f_x) ]
+                   (Some [ Action.assign out (int 0) ]);
+               ])
+          uint8;
+      ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool) "no var leak" false (contains out "var x");
+  Alcotest.(check bool)
+    "inlined inside then-branch" true
+    (contains out "*out = (Tag + 7);");
+  Alcotest.(check bool)
+    "inlined inside cond" true
+    (contains out "(Tag + 7) > 100")
+
+(* Struct-level [where] referencing fields must lower to a constraint on
+   the latest referenced field, not stay at struct level. 3D's [where]
+   only sees parameters. *)
+let test_where_lowers_to_field () =
+  let f_len = field "Length" uint16be in
+  let f_max = field "max" uint16be in
+  let s =
+    param_struct "WhereTest"
+      [ param "max" uint16be ]
+      ~where:Expr.(field_ref f_len <= field_ref f_max)
+      [ field "Length" uint16be ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool) "no top-level where" false (contains out "where (");
+  Alcotest.(check bool)
+    "constraint moved onto the field" true
+    (contains out "Length <= max")
+
+(* A param-only [where] must remain at the struct level. *)
+let test_where_param_only_stays () =
+  let s =
+    let max_ = Param.input "max" uint16be in
+    let lim = Param.input "lim" uint16be in
+    param_struct "WhereParam"
+      [ Param.decl max_; Param.decl lim ]
+      ~where:Expr.(Param.expr max_ <= Param.expr lim)
+      [ field "Length" uint16be ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool)
+    "where stays at struct level" true (contains out "where (")
+
+(* The [where] must combine with any pre-existing field constraint via AND. *)
+let test_where_combines_field_constraint () =
+  let f_self = field "Length" uint16be in
+  let f_len =
+    field "Length" ~constraint_:Expr.(field_ref f_self > int 0) uint16be
+  in
+  let s =
+    param_struct "WhereAnd" []
+      ~where:Expr.(field_ref f_len < int 1024)
+      [ f_len ]
+  in
+  let out = to_3d_string s in
+  (* Both clauses must end up next to the field. *)
+  Alcotest.(check bool) "left clause present" true (contains out "Length > 0");
+  Alcotest.(check bool)
+    "right clause present" true
+    (contains out "Length < 1024")
+
+(* Param/field names that collide with 3D or F* keywords must be escaped
+   in the projected 3D output (not rejected at the API). The user keeps
+   writing [Param.input "total" ...], the 3D output reads [total_]. *)
+let test_keyword_param_escaped () =
+  let p = Param.input "total" uint32be in
+  let f = field "data" (byte_array ~size:(Param.expr p)) in
+  let s = param_struct "Esc" [ Param.decl p ] [ f ] in
+  let out = to_3d_string s in
+  Alcotest.(check bool)
+    "param decl uses escaped name" true
+    (contains out "UINT32BE total_");
+  Alcotest.(check bool)
+    "param ref uses escaped name" true
+    (contains out "byte-size total_");
+  Alcotest.(check bool)
+    "raw [total] keyword does not appear" false
+    (Re.execp (Re.compile (Re.seq [ Re.bow; Re.str "total"; Re.eow ])) out)
+
+let test_keyword_field_escaped () =
+  let s =
+    struct_ "Esc2"
+      [ field "let" uint8; field "match" uint8; field "type" uint16be ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool) "let_ field" true (contains out "let_");
+  Alcotest.(check bool) "match_ field" true (contains out "match_");
+  Alcotest.(check bool) "type_ field" true (contains out "type_")
+
 let suite =
   ( "wire_3d",
     [
@@ -362,6 +514,20 @@ let suite =
         test_projection_sizes;
       Alcotest.test_case "projection: filenames match EverParse output" `Quick
         test_projection_filenames;
+      Alcotest.test_case "projection: var inlines into uses" `Quick
+        test_var_inlines;
+      Alcotest.test_case "projection: var scoping inside if" `Quick
+        test_var_scoping_in_if;
+      Alcotest.test_case "projection: where lowers to field constraint" `Quick
+        test_where_lowers_to_field;
+      Alcotest.test_case "projection: param-only where stays at struct" `Quick
+        test_where_param_only_stays;
+      Alcotest.test_case "projection: where ANDs with field constraint" `Quick
+        test_where_combines_field_constraint;
+      Alcotest.test_case "projection: F*-keyword param escaped" `Quick
+        test_keyword_param_escaped;
+      Alcotest.test_case "projection: F*-keyword field escaped" `Quick
+        test_keyword_field_escaped;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
     ] )

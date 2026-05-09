@@ -618,13 +618,26 @@ module Reserved_3d = Set.Make (String)
 let reserved_3d =
   Reserved_3d.of_list
     (String.split_on_char ' '
+       (* 3D / EverParse keywords *)
        "typedef struct casetype switch case default enum extern mutable \
         entrypoint export output where if else return abort var unit bool true \
         false sizeof this int char void float double long short unsigned \
         signed static const volatile auto register union while for do break \
         continue goto type inline UINT8 UINT16 UINT16BE UINT32 UINT32BE UINT64 \
-        UINT64BE Bool PUINT8")
+        UINT64BE Bool PUINT8 abstract and as assert assume attributes begin by \
+        calc class decreases default downto effect eliminate ensures exception \
+        exists forall friend fun function ghost include inline_for_extraction \
+        instance introduce irreducible layered_effect let logic match module \
+        new new_effect noeq noextract opaque_to_smt open polymonadic_bind \
+        polymonadic_subcomp private range_of rec reflectable reifiable reify \
+        requires restart_solver returns set_range_of sub_effect synth then tot \
+        total try unfold unopteq val when with")
 
+(* Append a trailing underscore to names that 3D or F* reserves so the
+   projection always produces a parseable identifier even when the user
+   picks something like [total]. The same escaping is applied wherever a
+   user-chosen name reaches 3D output: param decls, [Param_ref], [Ref],
+   field names. The OCaml-side name is unchanged. *)
 let escape_3d name =
   if Reserved_3d.mem name reserved_3d then name ^ "_" else name
 
@@ -725,40 +738,94 @@ and pp_typ : type a. a typ Fmt.t =
   | Codec { codec_name; _ } -> Fmt.string ppf codec_name
   | Optional { present = Bool true; inner } -> pp_typ ppf inner
   | Optional { present = Bool false; _ } -> Fmt.string ppf "UINT8"
-  | Optional { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
+  | Optional _ ->
+      invalid_arg
+        "Wire 3D projection: [optional] with a non-trivial predicate has no \
+         standalone 3D type; use it as a struct field so it projects via the \
+         field-suffix [byte-size] rule."
   | Optional_or { present = Bool true; inner; _ } -> pp_typ ppf inner
   | Optional_or { present = Bool false; _ } -> Fmt.string ppf "UINT8"
-  | Optional_or { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
-  | Repeat { elem; _ } -> pp_typ ppf elem
+  | Optional_or _ ->
+      invalid_arg
+        "Wire 3D projection: [optional_or] with a non-trivial predicate has no \
+         standalone 3D type; use it as a struct field so it projects via the \
+         field-suffix [byte-size] rule."
+  | Repeat _ ->
+      invalid_arg
+        "Wire 3D projection: [repeat] has no standalone 3D type; use it as a \
+         struct field so it projects via the field-suffix [byte-size] rule."
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
-let rec pp_action_stmt ppf = function
-  | Assign (p, e) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr e
-  | Field_assign (ptr, field_name, e) ->
-      Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr e
+(* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
+   field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
+   binds a name to a pure expression, so we lower it by substituting
+   [Ref name -> e] in subsequent stmts and dropping the [var] emission. *)
+let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
+ fun env e ->
+  let r e = subst_expr env e in
+  match e with
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      e
+  | Ref name -> ( try List.assoc name env with Not_found -> e)
+  | Add (a, b) -> Add (r a, r b)
+  | Sub (a, b) -> Sub (r a, r b)
+  | Mul (a, b) -> Mul (r a, r b)
+  | Div (a, b) -> Div (r a, r b)
+  | Mod (a, b) -> Mod (r a, r b)
+  | Land (a, b) -> Land (r a, r b)
+  | Lor (a, b) -> Lor (r a, r b)
+  | Lxor (a, b) -> Lxor (r a, r b)
+  | Lnot a -> Lnot (r a)
+  | Lsl (a, b) -> Lsl (r a, r b)
+  | Lsr (a, b) -> Lsr (r a, r b)
+  | Eq (a, b) -> Eq (r a, r b)
+  | Ne (a, b) -> Ne (r a, r b)
+  | Lt (a, b) -> Lt (r a, r b)
+  | Le (a, b) -> Le (r a, r b)
+  | Gt (a, b) -> Gt (r a, r b)
+  | Ge (a, b) -> Ge (r a, r b)
+  | And (a, b) -> And (r a, r b)
+  | Or (a, b) -> Or (r a, r b)
+  | Not a -> Not (r a)
+  | Cast (w, x) -> Cast (w, r x)
+  | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
+
+let pp_stmt env ppf stmt =
+  let e a = subst_expr env a in
+  match stmt with
+  | Assign (p, x) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr (e x)
+  | Field_assign (ptr, field_name, x) ->
+      Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr (e x)
   | Extern_call (fn, args) -> Fmt.pf ppf "%s(%s);" fn (String.concat ", " args)
-  | Return e -> Fmt.pf ppf "return %a;" pp_expr e
+  | Return x -> Fmt.pf ppf "return %a;" pp_expr (e x)
   | Abort -> Fmt.string ppf "abort;"
-  | If (cond, then_, None) ->
-      Fmt.pf ppf "if (%a) { %a }" pp_expr cond
-        Fmt.(list ~sep:sp pp_action_stmt)
-        then_
-  | If (cond, then_, Some else_) ->
-      Fmt.pf ppf "if (%a) { %a } else { %a }" pp_expr cond
-        Fmt.(list ~sep:sp pp_action_stmt)
-        then_
-        Fmt.(list ~sep:sp pp_action_stmt)
-        else_
-  | Var (name, e) -> Fmt.pf ppf "var %s = %a;" (escape_3d name) pp_expr e
+  | If _ | Var _ ->
+      (* Handled by [pp_stmts] which threads the substitution env. *)
+      assert false
+
+let rec pp_stmts env ppf = function
+  | [] -> ()
+  | Var (name, x) :: rest -> pp_stmts ((name, subst_expr env x) :: env) ppf rest
+  | If (cond, then_, else_opt) :: rest ->
+      let cond = subst_expr env cond in
+      (match else_opt with
+      | None -> Fmt.pf ppf "if (%a) { %a }" pp_expr cond (pp_stmts env) then_
+      | Some else_ ->
+          Fmt.pf ppf "if (%a) { %a } else { %a }" pp_expr cond (pp_stmts env)
+            then_ (pp_stmts env) else_);
+      if rest <> [] then Fmt.sp ppf ();
+      pp_stmts env ppf rest
+  | stmt :: rest ->
+      pp_stmt env ppf stmt;
+      if rest <> [] then Fmt.sp ppf ();
+      pp_stmts env ppf rest
 
 let pp_action ppf = function
   | On_success stmts ->
-      Fmt.pf ppf "@[<h>{:on-success %a }@]"
-        Fmt.(list ~sep:sp pp_action_stmt)
-        stmts
-  | On_act stmts ->
-      Fmt.pf ppf "@[<h>{:act %a }@]" Fmt.(list ~sep:sp pp_action_stmt) stmts
+      Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
+  | On_act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =
@@ -789,7 +856,10 @@ and optional_suffix : type a.
   | Some n ->
       let size = If_then_else (present, Int n, Int 0) in
       (Byte_array size, fun ppf -> pp_typ ppf inner)
-  | None -> (No_suffix, fun ppf -> Fmt.pf ppf "optional(%a)" pp_typ inner)
+  | None ->
+      invalid_arg
+        "Wire 3D projection: [optional]/[optional_or] requires a fixed-size \
+         inner type; the predicate compiles to a 0-or-N byte-size suffix."
 
 and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
@@ -804,7 +874,17 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
       (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
-  | Array { len; elem; _ } -> (Array len, fun ppf -> pp_typ ppf elem)
+  | Array { len; elem; _ } -> (
+      (* 3D's [name[len]] suffix only accepts byte-sized elements; for wider
+         elements the size in bytes must be made explicit via [:byte-size]. *)
+      match inner_wire_size elem with
+      | Some 1 -> (Array len, fun ppf -> pp_typ ppf elem)
+      | Some n -> (Byte_array (Mul (len, Int n)), fun ppf -> pp_typ ppf elem)
+      | None ->
+          invalid_arg
+            "Wire 3D projection: array element with no fixed wire size has no \
+             3D representation; use [byte_array]/[byte_slice] for variable \
+             sizes or wrap in a [Codec] with a fixed [wire_size].")
   | Map { inner; _ } -> field_suffix inner
   | Enum { base; _ } -> field_suffix base
   | Optional { present = Bool true; inner } -> field_suffix inner
@@ -874,13 +954,91 @@ let pp_params ppf params =
   if not (List.is_empty params) then
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma pp_param) params
 
+(* Collect every [Ref name] occurring in an expression. Used to detect
+   field references in struct-level [where] clauses, which 3D's grammar
+   does not allow (the [where] there sees only parameters). *)
+let rec collect_refs : type a. a expr -> string list = function
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      []
+  | Ref name -> [ name ]
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      collect_refs a @ collect_refs b
+  | Lnot a -> collect_refs a
+  | Lt (a, b) | Le (a, b) | Gt (a, b) | Ge (a, b) ->
+      collect_refs a @ collect_refs b
+  | And (a, b) | Or (a, b) -> collect_refs a @ collect_refs b
+  | Not a -> collect_refs a
+  | Cast (_, a) -> collect_refs a
+  | If_then_else (c, a, b) -> collect_refs c @ collect_refs a @ collect_refs b
+  | Eq (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Ne (a, b) -> collect_refs_packed a @ collect_refs_packed b
+
+and collect_refs_packed : type a. a expr -> string list =
+ fun e -> collect_refs e
+
+(* If a struct-level [where] references fields (rather than only params),
+   attach it as the [constraint_] of the last referenced field instead --
+   3D's [where] clause only sees parameters. *)
+let lower_where_to_field_constraint where fields =
+  match where with
+  | None -> (None, fields)
+  | Some w ->
+      let refs = collect_refs w in
+      let field_names =
+        List.filter_map (fun (Field f) -> f.field_name) fields
+      in
+      let referenced_field_names =
+        List.filter (fun r -> List.mem r field_names) refs
+      in
+      if referenced_field_names = [] then (Some w, fields)
+      else
+        (* Attach to the last referenced field by struct position so every
+           name in the constraint is decoded by the time it runs. *)
+        let last_pos =
+          List.fold_left
+            (fun acc (Field f) ->
+              match f.field_name with
+              | Some n when List.mem n referenced_field_names -> Some n
+              | _ -> acc)
+            None fields
+        in
+        let target =
+          match last_pos with
+          | Some n -> n
+          | None -> List.hd (List.rev referenced_field_names)
+        in
+        let fields =
+          List.map
+            (fun (Field f as field) ->
+              match f.field_name with
+              | Some n when n = target ->
+                  let constraint_ =
+                    combine_constraints f.constraint_ (Some w)
+                  in
+                  Field { f with constraint_ }
+              | _ -> field)
+            fields
+        in
+        (None, fields)
+
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
   let name = escape_3d s.name in
+  let where, fields = lower_where_to_field_constraint s.where s.fields in
   Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
-  Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) s.where;
+  Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field ppf) s.fields;
+  List.iter (pp_field ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
 let pp_decl ppf = function
@@ -904,8 +1062,9 @@ let pp_decl ppf = function
         Fmt.(list ~sep:comma pp_param)
         params
   | Extern_probe { init; name } ->
-      if init then Fmt.pf ppf "extern probe (INIT) %s;@,@," name
-      else Fmt.pf ppf "extern probe %s;@,@," name
+      (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
+      if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
+      else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
       Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
       List.iteri

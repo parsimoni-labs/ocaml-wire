@@ -315,6 +315,33 @@ let run_everparse ?(quiet = true) ~outdir schemas =
     schemas;
   copy_everparse_endianness ~outdir
 
+let parse_3d ~outdir file =
+  let exe =
+    match locate_3d_exe () with
+    | Some e -> e
+    | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
+  in
+  let log_path = Filename.temp_file "wire_parse_3d" ".log" in
+  (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
+  let cmd = Fmt.str "cd %s && %s %s > %s 2>&1" outdir exe file log_path in
+  let ret = Sys.command cmd in
+  let captured =
+    try In_channel.with_open_text log_path In_channel.input_all
+    with Sys_error _ -> ""
+  in
+  (try Sys.remove log_path with Sys_error _ -> ());
+  if ret = 0 then Ok ()
+  else
+    let msg =
+      String.split_on_char '\n' captured
+      |> List.filter (fun l ->
+          let l = String.trim l in
+          l <> ""
+          && not (String.length l >= 11 && String.sub l 0 11 = "Processing "))
+      |> String.concat "\n"
+    in
+    Error (if msg = "" then Fmt.str "exit %d" ret else msg)
+
 let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   (* Sanity: the OCaml codec's wire_size must match what the EverParse

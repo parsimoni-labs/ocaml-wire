@@ -273,9 +273,11 @@ let test_3d_rendering () =
   Alcotest.(check bool)
     "contains mutable UINT32BE *out" true
     (Re.execp (Re.compile (Re.str "mutable")) output);
+  (* The struct-level [where] referencing fields is lowered to a field-level
+     [{ ... }] constraint -- 3D's struct [where] only sees parameters. *)
   Alcotest.(check bool)
-    "contains where" true
-    (Re.execp (Re.compile (Re.str "where")) output);
+    "contains lowered where expression" true
+    (Re.execp (Re.compile (Re.str "x <= limit")) output);
   Alcotest.(check bool)
     "contains on-success" true
     (Re.execp (Re.compile (Re.str ":on-success")) output);

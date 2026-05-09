@@ -140,10 +140,8 @@ let test_finite_rejects_inf () =
   | _ -> Alcotest.fail "is_finite should have rejected +inf"
 
 let test_rest_of_buffer_codec () =
-  (* "Header then rest-of-buffer payload" idiom: the trailing payload's
-     size is [total - sizeof_this], where [total] is a length param
-     bound to [Bytes.length buf]. Works in OCaml and projects to 3D as
-     [UINT8[:byte-size (total - sizeof(this))]]. *)
+  (* "Header then rest-of-buffer payload" idiom -- both formulations
+     should work in a Codec field and round-trip OCaml decode/encode. *)
   let total = Param.input "total" uint32be in
   let f_h = Field.v "Header" uint8 in
   let f_d = Field.v "Data" (rest_bytes total) in
@@ -157,6 +155,41 @@ let test_rest_of_buffer_codec () =
       Alcotest.(check int) "header" 1 h;
       Alcotest.(check string) "data" "HELLO" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_all_bytes_in_codec () =
+  (* [field "Rest" all_bytes] inside a Codec must just work -- the
+     buffer length implicitly bounds the field. No length param needed. *)
+  let f_h = Field.v "Header" uint8 in
+  let f_d = Field.v "Data" all_bytes in
+  let codec =
+    Codec.v "Trailing" (fun h d -> (h, d)) Codec.[ f_h $ fst; f_d $ snd ]
+  in
+  let buf = Bytes.of_string "\x2AHello" in
+  match Codec.decode codec buf 0 with
+  | Ok (h, d) ->
+      Alcotest.(check int) "header" 0x2A h;
+      Alcotest.(check string) "data" "Hello" d
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_all_zeros_in_codec () =
+  let f_h = Field.v "Tag" uint8 in
+  let f_p = Field.v "Pad" all_zeros in
+  let codec =
+    Codec.v "Padded" (fun h p -> (h, p)) Codec.[ f_h $ fst; f_p $ snd ]
+  in
+  let ok_buf = Bytes.of_string "\x55\x00\x00\x00" in
+  (match Codec.decode codec ok_buf 0 with
+  | Ok (h, p) ->
+      Alcotest.(check int) "tag" 0x55 h;
+      Alcotest.(check string) "padding" "\000\000\000" p
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  let bad_buf = Bytes.of_string "\x55\x00\x01\x00" in
+  match
+    try Ok (Codec.decode codec bad_buf 0)
+    with Invalid_argument _ -> Error `Bad
+  with
+  | Ok (Ok _) -> Alcotest.fail "all_zeros must reject non-zero pad byte"
+  | _ -> ()
 
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
@@ -726,6 +759,10 @@ let suite =
       Alcotest.test_case "is_finite: rejects inf" `Quick test_finite_rejects_inf;
       Alcotest.test_case "codec: rest-of-buffer payload" `Quick
         test_rest_of_buffer_codec;
+      Alcotest.test_case "codec: all_bytes as field" `Quick
+        test_all_bytes_in_codec;
+      Alcotest.test_case "codec: all_zeros as field" `Quick
+        test_all_zeros_in_codec;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick

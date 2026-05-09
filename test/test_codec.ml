@@ -204,7 +204,11 @@ let test_struct_of_codec_metadata () =
   let s = Everparse.struct_of_codec projection_codec in
   let m = module_ [ typedef s ] in
   let output = to_3d m in
-  Alcotest.(check bool) "contains where" true (contains ~sub:"where" output);
+  (* The struct-level [where] referencing the field [x] is lowered onto the
+     field as a [{ ... }] constraint -- 3D's [where] only sees params. *)
+  Alcotest.(check bool)
+    "contains lowered where expression" true
+    (contains ~sub:"x <= limit" output);
   Alcotest.(check bool)
     "contains on-success" true
     (contains ~sub:":on-success" output);
