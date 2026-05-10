@@ -38,7 +38,56 @@ val v :
     projects to [UINT16BE Length {{ Length >= 7 }}], which EverParse's SMT can
     then use to discharge [byte-size (Length - 7)] on a later field. If both
     [?constraint_] and [?self_constraint] are given, the two are combined with
-    [And]. *)
+    [And].
+
+    For optional / repeating payloads use {!optional} / {!optional_or} /
+    {!repeat} -- those decorations only have a 3D projection at the top of a
+    struct field, never as a nested type. *)
+
+val optional :
+  string ->
+  ?constraint_:bool Types.expr ->
+  ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?action:Types.action ->
+  present:bool Types.expr ->
+  'a Types.typ ->
+  'a option t
+(** [optional name ~present t] is a field present iff [present] evaluates to
+    [true]. Absent fields decode as [None] and consume zero bytes. *)
+
+val optional_or :
+  string ->
+  ?constraint_:bool Types.expr ->
+  ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?action:Types.action ->
+  present:bool Types.expr ->
+  default:'a ->
+  'a Types.typ ->
+  'a t
+(** [optional_or name ~present ~default t] is a field that decodes to the inner
+    value when [present], or [default] when absent. No option wrapper. *)
+
+val repeat :
+  string ->
+  ?constraint_:bool Types.expr ->
+  ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?action:Types.action ->
+  size:int Types.expr ->
+  'a Types.typ ->
+  'a list t
+(** [repeat name ~size t] parses elements of type [t] until [size] bytes have
+    been consumed. *)
+
+val repeat_seq :
+  string ->
+  ?constraint_:bool Types.expr ->
+  ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?action:Types.action ->
+  seq:('a, 'seq) Types.seq_map ->
+  size:int Types.expr ->
+  'a Types.typ ->
+  'seq t
+(** Repeat with a custom sequence builder. *)
 
 val anon : 'a Types.typ -> 'a anon
 (** [anon typ] creates an anonymous (padding) field. *)

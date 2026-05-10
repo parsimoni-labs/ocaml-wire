@@ -101,11 +101,6 @@ let array_seq = Types.array_seq
 let rest_bytes (total : (int, _) Param.t) =
   Types.byte_array ~size:Types.(Sub (Param_ref total, Sizeof_this))
 
-let optional = Types.optional
-let optional_or = Types.optional_or
-let repeat = Types.repeat
-let repeat_seq = Types.repeat_seq
-
 let bits ?(bit_order = Types.Msb_first) ~width bf =
   let base =
     match bf with

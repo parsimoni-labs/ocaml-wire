@@ -348,7 +348,56 @@ module Field : sig
   (** [v name typ] creates a named field. [?self_constraint] receives the
       field's own ref and returns a constraint over it; useful for proving a
       later size-expression safe (e.g. [self >= int 7] when a later field uses
-      [byte_slice ~size:(ref len - int 7)]). *)
+      [byte_slice ~size:(ref len - int 7)]).
+
+      Use {!optional} / {!optional_or} / {!repeat} for optional and repeating
+      payloads -- they only project to 3D as the top of a struct field, never as
+      a nested type. *)
+
+  val optional :
+    string ->
+    ?constraint_:bool expr ->
+    ?self_constraint:(int expr -> bool expr) ->
+    ?action:Action.t ->
+    present:bool expr ->
+    'a typ ->
+    'a option t
+  (** [optional name ~present t] is a field present iff [present] evaluates to
+      [true]. Absent fields decode as [None] and consume zero bytes. *)
+
+  val optional_or :
+    string ->
+    ?constraint_:bool expr ->
+    ?self_constraint:(int expr -> bool expr) ->
+    ?action:Action.t ->
+    present:bool expr ->
+    default:'a ->
+    'a typ ->
+    'a t
+  (** [optional_or name ~present ~default t] is a field that decodes to the
+      inner value when [present], or [default] when absent. *)
+
+  val repeat :
+    string ->
+    ?constraint_:bool expr ->
+    ?self_constraint:(int expr -> bool expr) ->
+    ?action:Action.t ->
+    size:int expr ->
+    'a typ ->
+    'a list t
+  (** [repeat name ~size t] parses elements of type [t] until [size] bytes have
+      been consumed. *)
+
+  val repeat_seq :
+    string ->
+    ?constraint_:bool expr ->
+    ?self_constraint:(int expr -> bool expr) ->
+    ?action:Action.t ->
+    seq:('a, 'seq) Types.seq_map ->
+    size:int expr ->
+    'a typ ->
+    'seq t
+  (** Repeat with a custom sequence builder. *)
 
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)
@@ -863,22 +912,11 @@ val codec : 'r Codec.t -> 'r typ
 (** [codec c] embeds a sub-codec as a field type. The sub-codec's decode and
     encode functions are called at the appropriate offset. *)
 
-val optional : bool expr -> 'a typ -> 'a option typ
-(** [optional present t] is a field that is present when [present] evaluates to
-    [true], absent otherwise. Absent fields decode as [None] and consume zero
-    bytes. *)
-
-val optional_or : bool expr -> default:'a -> 'a typ -> 'a typ
-(** [optional_or present ~default t] is a field that decodes to the inner value
-    when [present] is true, or returns [default] when absent. No option wrapper
-    -- zero allocation for the absent case. *)
-
-val repeat : size:int expr -> 'a typ -> 'a list typ
-(** [repeat ~size t] parses elements of type [t] repeatedly until [size] bytes
-    have been consumed. *)
-
-val repeat_seq : ('a, 'seq) seq_map -> size:int expr -> 'a typ -> 'seq typ
-(** Repeat with custom builder. *)
+(** Optional and repeated payloads are field decorations only -- see
+    {!Field.optional} / {!Field.optional_or} / {!Field.repeat}. They are not
+    exposed at the typ level because there is no 3D projection for them outside
+    the top of a struct field (e.g. nested in [array] or [casetype] case
+    bodies). *)
 
 (** {1 Export}
 

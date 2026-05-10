@@ -2486,7 +2486,7 @@ let opt_inner_codec ~present =
     Codec.
       [
         (Field.v "Hdr" uint8 $ fun r -> r.oc_hdr);
-        ( Field.v "Inner" (optional (bool present) (codec inner_codec))
+        ( Field.optional "Inner" ~present:(bool present) (codec inner_codec)
         $ fun r -> r.oc_inner );
         (Field.v "Trail" uint8 $ fun r -> r.oc_trail);
       ]
@@ -2531,10 +2531,12 @@ let multi_opt_codec ~ocf ~fecf =
     Codec.
       [
         (Field.v "Data" uint16be $ fun r -> r.mo_data);
-        ( Field.v "OCF"
-            (optional (if ocf then Expr.true_ else Expr.false_) uint32be)
+        ( Field.optional "OCF"
+            ~present:(if ocf then Expr.true_ else Expr.false_)
+            uint32be
         $ fun r -> r.mo_ocf );
-        (Field.v "FECF" (optional (bool fecf) uint16be) $ fun r -> r.mo_fecf);
+        ( Field.optional "FECF" ~present:(bool fecf) uint16be $ fun r ->
+          r.mo_fecf );
       ]
 
 let test_optional_both_present () =
@@ -2583,8 +2585,9 @@ let dyn_opt_codec =
     Codec.
       [
         (f_do_flags $ fun r -> r.do_flags);
-        ( Field.v "Payload"
-            (optional Expr.(Field.ref f_do_flags <> int 0) uint16be)
+        ( Field.optional "Payload"
+            ~present:Expr.(Field.ref f_do_flags <> int 0)
+            uint16be
         $ fun r -> r.do_payload );
         (Field.v "Trail" uint8 $ fun r -> r.do_trail);
       ]
@@ -2647,8 +2650,9 @@ let tm_opt_codec =
         (f_to_ocf_flag $ fun r -> r.to_ocf_flag);
         (Field.v "Pad" (bits ~width:7 U8) $ fun _ -> 0);
         (Field.v "Data" uint16be $ fun r -> r.to_data);
-        ( Field.v "OCF"
-            (optional Expr.(Field.ref f_to_ocf_flag <> int 0) uint32be)
+        ( Field.optional "OCF"
+            ~present:Expr.(Field.ref f_to_ocf_flag <> int 0)
+            uint32be
         $ fun r -> r.to_ocf );
         (Field.v "Trail" uint8 $ fun r -> r.to_trail);
       ]
@@ -2788,8 +2792,8 @@ let repeat_int_codec =
     Codec.
       [
         (f_ic_count $ fun r -> r.ic_count);
-        ( Field.v "Values" (repeat ~size:(Field.ref f_ic_count) uint16be)
-        $ fun r -> r.ic_values );
+        ( Field.repeat "Values" ~size:(Field.ref f_ic_count) uint16be $ fun r ->
+          r.ic_values );
       ]
 
 let test_repeat_primitive () =
@@ -2817,7 +2821,7 @@ let repeat_trailer_codec =
     Codec.
       [
         (f_rt_len $ fun r -> r.rt_len);
-        ( Field.v "Items" (repeat ~size:(Field.ref f_rt_len) (codec inner_codec))
+        ( Field.repeat "Items" ~size:(Field.ref f_rt_len) (codec inner_codec)
         $ fun r -> r.rt_items );
         (Field.v "Check" uint8 $ fun r -> r.rt_check);
       ]
@@ -2862,8 +2866,8 @@ let var_repeat_codec =
     Codec.
       [
         (f_vc_size $ fun r -> r.vc_size);
-        ( Field.v "Items"
-            (repeat ~size:(Field.ref f_vc_size) (codec var_inner_codec))
+        ( Field.repeat "Items" ~size:(Field.ref f_vc_size)
+            (codec var_inner_codec)
         $ fun r -> r.vc_items );
       ]
 
@@ -2915,13 +2919,15 @@ let tm_like_codec ~ocf ~fecf =
       [
         (Field.v "Hdr" uint16be $ fun r -> r.tm_hdr);
         (f_tm_data_len $ fun r -> r.tm_data_len);
-        ( Field.v "Packets"
-            (repeat ~size:(Field.ref f_tm_data_len) (codec packet_codec))
+        ( Field.repeat "Packets" ~size:(Field.ref f_tm_data_len)
+            (codec packet_codec)
         $ fun r -> r.tm_packets );
-        ( Field.v "OCF"
-            (optional (if ocf then Expr.true_ else Expr.false_) uint32be)
+        ( Field.optional "OCF"
+            ~present:(if ocf then Expr.true_ else Expr.false_)
+            uint32be
         $ fun r -> r.tm_ocf );
-        (Field.v "FECF" (optional (bool fecf) uint16be) $ fun r -> r.tm_fecf);
+        ( Field.optional "FECF" ~present:(bool fecf) uint16be $ fun r ->
+          r.tm_fecf );
       ]
 
 let test_tm_like_full () =
@@ -3224,9 +3230,7 @@ let test_repeat_after_var_slice () =
   let f_prefix_len = Field.v "prefix_len" uint8 in
   let f_prefix = Field.v "prefix" (byte_slice ~size:(Field.ref f_prefix_len)) in
   let f_count = Field.v "count" uint8 in
-  let f_items =
-    Field.v "items" (Wire.repeat ~size:(Field.ref f_count) Wire.uint16be)
-  in
+  let f_items = Field.repeat "items" ~size:(Field.ref f_count) Wire.uint16be in
   let codec =
     let open Codec in
     v "PrefixedItems"

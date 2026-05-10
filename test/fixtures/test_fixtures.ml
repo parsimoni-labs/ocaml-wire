@@ -58,7 +58,7 @@ let opt_codec ~present =
     Codec.
       [
         (Field.v "Hdr" uint8 $ fun r -> r.opt_hdr);
-        ( Field.v "Payload" (optional (bool present) uint16be) $ fun r ->
+        ( Field.optional "Payload" ~present:(bool present) uint16be $ fun r ->
           r.opt_payload );
         (Field.v "Trail" uint8 $ fun r -> r.opt_trail);
       ]
@@ -76,8 +76,7 @@ let repeat_codec =
     Codec.
       [
         (f_cnt_length $ fun r -> r.cnt_length);
-        ( Field.v "Items"
-            (repeat ~size:(Field.ref f_cnt_length) (codec inner_codec))
+        ( Field.repeat "Items" ~size:(Field.ref f_cnt_length) (codec inner_codec)
         $ fun r -> r.cnt_items );
       ]
 
