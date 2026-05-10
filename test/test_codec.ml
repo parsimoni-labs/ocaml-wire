@@ -2891,6 +2891,101 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check int) "item1.len" 3 i1.vi_len;
   Alcotest.(check string) "item1.data" "cde" i1.vi_data
 
+(* -- Casetype as a trailing variable-size codec field -- *)
+
+type ev_payload = [ `Login of int | `Logout of int | `Other of int ]
+
+let casetype_field_event_typ : ev_payload Wire.typ =
+  Wire.casetype "EvPayload" Wire.uint8
+    [
+      Wire.case ~index:1 Wire.uint16be
+        ~inject:(fun v -> `Login v)
+        ~project:(function `Login v -> Some v | _ -> None);
+      Wire.case ~index:2 Wire.uint32be
+        ~inject:(fun v -> `Logout v)
+        ~project:(function `Logout v -> Some v | _ -> None);
+      Wire.default Wire.uint8
+        ~inject:(fun v -> `Other v)
+        ~project:(function `Other v -> Some v | _ -> None);
+    ]
+
+type ev_event = { ev_ts : int64; ev_data : ev_payload }
+
+let casetype_field_codec =
+  Codec.v "CasetypeFieldEvt"
+    (fun ts data -> { ev_ts = ts; ev_data = data })
+    Codec.
+      [
+        (Field.v "Timestamp" int64be $ fun e -> e.ev_ts);
+        (Field.v "Data" casetype_field_event_typ $ fun e -> e.ev_data);
+      ]
+
+let test_casetype_field_login () =
+  let buf = Bytes.create 11 in
+  Bytes.set_int64_be buf 0 42L;
+  Bytes.set_uint8 buf 8 1;
+  Bytes.set_uint16_be buf 9 0x1234;
+  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Alcotest.(check int64) "ts" 42L r.ev_ts;
+  Alcotest.(check bool) "Login 0x1234" true (r.ev_data = `Login 0x1234)
+
+let test_casetype_field_logout () =
+  let buf = Bytes.create 13 in
+  Bytes.set_int64_be buf 0 99L;
+  Bytes.set_uint8 buf 8 2;
+  Bytes.set_int32_be buf 9 0x55667788l;
+  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Alcotest.(check bool) "Logout" true (r.ev_data = `Logout 0x55667788)
+
+let test_casetype_field_default () =
+  let buf = Bytes.create 10 in
+  Bytes.set_int64_be buf 0 0L;
+  Bytes.set_uint8 buf 8 99;
+  Bytes.set_uint8 buf 9 7;
+  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Alcotest.(check bool) "Other 7" true (r.ev_data = `Other 7)
+
+let test_casetype_field_roundtrip () =
+  let buf = Bytes.create 11 in
+  let original = { ev_ts = 123L; ev_data = `Login 0xabcd } in
+  Codec.encode casetype_field_codec original buf 0;
+  let decoded = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Alcotest.(check int64) "ts roundtrip" original.ev_ts decoded.ev_ts;
+  Alcotest.(check bool)
+    "data roundtrip" true
+    (original.ev_data = decoded.ev_data)
+
+(* Length-prefixed casetype dispatch: [tag][length][body] where length
+   bounds the inner casetype's tag + body. *)
+
+type lp_event = { lp_tag : int; lp_len : int; lp_data : ev_payload }
+
+let lp_event_len = Field.v "Length" uint16be
+
+let lp_event_codec =
+  Codec.v "LpEvent"
+    (fun tag len data -> { lp_tag = tag; lp_len = len; lp_data = data })
+    Codec.
+      [
+        (Field.v "Tag" uint8 $ fun e -> e.lp_tag);
+        (lp_event_len $ fun e -> e.lp_len);
+        ( Field.v "Data"
+            (Wire.nested ~size:(Field.ref lp_event_len) casetype_field_event_typ)
+        $ fun e -> e.lp_data );
+      ]
+
+let test_length_prefixed_casetype () =
+  (* tag=0xAA, len=3 (1 byte casetype tag + 2 bytes uint16be), inner tag=1, body=0x4242 *)
+  let buf = Bytes.create 6 in
+  Bytes.set_uint8 buf 0 0xAA;
+  Bytes.set_uint16_be buf 1 3;
+  Bytes.set_uint8 buf 3 1;
+  Bytes.set_uint16_be buf 4 0x4242;
+  let r = decode_ok (Codec.decode lp_event_codec buf 0) in
+  Alcotest.(check int) "tag" 0xAA r.lp_tag;
+  Alcotest.(check int) "len" 3 r.lp_len;
+  Alcotest.(check bool) "data" true (r.lp_data = `Login 0x4242)
+
 (* -- Nested: Composition: optional + repeat + codec --
    TM-frame-like structure: header + data zone (repeat of packets) + optional
    OCF + optional FECF. [packet] / [packet_codec] live in {!Test_fixtures}. *)
@@ -3703,6 +3798,16 @@ let suite =
       Alcotest.test_case "repeat: encode" `Quick test_repeat_encode;
       Alcotest.test_case "repeat: roundtrip" `Quick test_repeat_roundtrip;
       Alcotest.test_case "repeat: primitive" `Quick test_repeat_primitive;
+      Alcotest.test_case "casetype field: login" `Quick
+        test_casetype_field_login;
+      Alcotest.test_case "casetype field: logout" `Quick
+        test_casetype_field_logout;
+      Alcotest.test_case "casetype field: default" `Quick
+        test_casetype_field_default;
+      Alcotest.test_case "casetype field: roundtrip" `Quick
+        test_casetype_field_roundtrip;
+      Alcotest.test_case "casetype field: length-prefixed" `Quick
+        test_length_prefixed_casetype;
       Alcotest.test_case "repeat: with trailer" `Quick test_repeat_with_trailer;
       Alcotest.test_case "repeat: variable size elements" `Quick
         test_repeat_variable_size_elements;

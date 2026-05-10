@@ -925,6 +925,24 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Map { inner; decode; _ } -> decode (read_elem inner buf off)
   | Where { inner; _ } -> read_elem inner buf off
   | Enum { base; _ } -> read_elem base buf off
+  | Casetype { tag; cases; _ } ->
+      let tag_size =
+        match field_wire_size tag with
+        | Some n -> n
+        | None -> assert false (* casetype tag is always fixed-size int *)
+      in
+      let tag_val = read_elem tag buf off in
+      let body_off = off + tag_size in
+      let rec find = function
+        | [] -> raise (Parse_error (Invalid_tag tag_val))
+        | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
+          when t = tag_val ->
+            cb_inject (read_elem cb_inner buf body_off)
+        | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
+            cb_inject (read_elem cb_inner buf body_off)
+        | _ :: rest -> find rest
+      in
+      find cases
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -960,10 +978,27 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
    for variable-size elements. *)
-let elem_size_of : type a. a typ -> bytes -> int -> int =
+let rec elem_size_of : type a. a typ -> bytes -> int -> int =
  fun typ buf off ->
   match typ with
   | Codec { codec_size_of; _ } -> codec_size_of buf off
+  | Casetype { tag; cases; _ } ->
+      let tag_size =
+        match field_wire_size tag with Some n -> n | None -> assert false
+      in
+      let tag_val = read_elem tag buf off in
+      let body_off = off + tag_size in
+      let rec find = function
+        | [] -> raise (Parse_error (Invalid_tag tag_val))
+        | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
+            tag_size + elem_size_of cb_inner buf body_off
+        | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
+            tag_size + elem_size_of cb_inner buf body_off
+        | _ :: rest -> find rest
+      in
+      find cases
+  | Map { inner; _ } -> elem_size_of inner buf off
+  | Where { inner; _ } -> elem_size_of inner buf off
   | _ -> (
       match field_wire_size typ with
       | Some n -> n
@@ -1586,6 +1621,8 @@ and var_bytes_reader : type a.
             invalid_arg "add_field: [all_zeros] field has a non-zero byte")
         s;
       s
+  | Casetype _ -> read_elem typ buf (base + fo)
+  | Single_elem { elem; _ } -> read_elem elem buf (base + fo)
   | _ -> assert false
 
 and var_bytes_writer : type a r.
@@ -1610,6 +1647,9 @@ and var_bytes_writer : type a r.
   | All_zeros ->
       let s = (value : string) in
       Bytes.blit_string s 0 buf (off + fo) (String.length s)
+  | Casetype _ -> ignore (build_field_encoder typ buf (off + fo) value)
+  | Single_elem { elem; _ } ->
+      ignore (build_field_encoder elem buf (off + fo) value)
   | _ -> assert false
 
 and compile_var_size_fn : type a.
@@ -1622,6 +1662,10 @@ and compile_var_size_fn : type a.
          [Bytes.length buf]; the 3D projection emits [all_bytes], which
          3D handles natively. *)
       fun buf base -> Bytes.length buf - (base + off_fn buf base)
+  | Casetype _ ->
+      (* Tag is decoded first; the case body's size is whatever the
+         selected case's inner typ reports. *)
+      fun buf base -> elem_size_of typ buf (base + off_fn buf base)
   | _ ->
       let size_expr =
         match typ with
@@ -1629,6 +1673,7 @@ and compile_var_size_fn : type a.
         | Byte_array { size } -> size
         | Byte_array_where { size; _ } -> size
         | Uint_var { size; _ } -> size
+        | Single_elem { size; _ } -> size
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
       let sizeof_this : bytes -> int -> int =
