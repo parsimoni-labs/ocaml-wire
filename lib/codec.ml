@@ -298,7 +298,7 @@ type bf_codec_state = {
 
 (* Track the byte offset for the next field: static (constant) until we hit
    a variable-size field, then dynamic (computed from the buffer). *)
-type next_off = Static_next of int | Dynamic_next of (bytes -> int -> int)
+type next_off = Static of int | Dynamic of (bytes -> int -> int)
 (* [compute buf base] returns the absolute byte offset where the next
          field starts. [base] is the record's base offset in [buf]. *)
 
@@ -646,7 +646,7 @@ let record_start ?where name make =
       r_readers = Nil;
       r_writers_rev = [];
       r_min_wire_size = 0;
-      r_next_off = Static_next 0;
+      r_next_off = Static 0;
       r_fields_rev = [];
       r_validators_rev = [];
       r_checkers_rev = [];
@@ -1018,36 +1018,36 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
 (* -- Layout helpers shared by per-type plans -- *)
 
 let static_off_of (ctx : layout_ctx) : int option =
-  match ctx.lc_next_off with Static_next n -> Some n | Dynamic_next _ -> None
+  match ctx.lc_next_off with Static n -> Some n | Dynamic _ -> None
 
 let off_fn_of (ctx : layout_ctx) : bytes -> int -> int =
   match ctx.lc_next_off with
-  | Static_next n -> fun _buf _base -> n
-  | Dynamic_next f -> fun buf base -> f buf base - base
+  | Static n -> fun _buf _base -> n
+  | Dynamic f -> fun buf base -> f buf base - base
 
 (* Byte offset used as [sizeof_this] when compiling constraints/actions: a
    real static offset when known, the [-1] sentinel otherwise. *)
 let validator_off_of (ctx : layout_ctx) : int =
-  match ctx.lc_next_off with Static_next n -> n | Dynamic_next _ -> -1
+  match ctx.lc_next_off with Static n -> n | Dynamic _ -> -1
 
 (* Field access that stores a constant or dynamic offset, based on [ctx]. *)
 let fixed_or_dynamic_fa (ctx : layout_ctx) : field_access =
   match ctx.lc_next_off with
-  | Static_next n -> Fixed n
-  | Dynamic_next _ -> Dynamic (off_fn_of ctx)
+  | Static n -> Fixed n
+  | Dynamic _ -> Dynamic (off_fn_of ctx)
 
 let require_static_off (ctx : layout_ctx) ~what : int =
   match ctx.lc_next_off with
-  | Static_next n -> n
-  | Dynamic_next _ ->
+  | Static n -> n
+  | Dynamic _ ->
       invalid_arg
         ("add_field: " ^ what ^ " after variable-size field not supported")
 
 (* New [next_off] after appending a fixed-size contribution of [n] bytes. *)
 let advance_next_off (no : next_off) (n : int) : next_off =
   match no with
-  | Static_next k -> Static_next (k + n)
-  | Dynamic_next f -> Dynamic_next (fun buf base -> f buf base + n)
+  | Static k -> Static (k + n)
+  | Dynamic f -> Dynamic (fun buf base -> f buf base + n)
 
 let null_int_reader : bytes -> int -> int = fun _buf _base -> 0
 let no_populate : int array -> bytes -> int -> unit = fun _arr _buf _base -> ()
@@ -1210,7 +1210,7 @@ and compile_bits : type r.
     extra_writers;
     field_access;
     size_delta;
-    next_off = Static_next (static_off + size_delta);
+    next_off = Static (static_off + size_delta);
     bf_after;
     int_reader = raw_reader;
     nested_readers = [];
@@ -1269,10 +1269,10 @@ and compile_codec_variable : type a r.
  fun ctx ~get ~codec_decode ~codec_encode ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
     match ctx.lc_next_off with
-    | Static_next n ->
+    | Static n ->
         let size_fn buf base = codec_size_of buf (base + n) in
         ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
-    | Dynamic_next prev_end ->
+    | Dynamic prev_end ->
         let off_fn buf base = prev_end buf base - base in
         let size_fn buf base = codec_size_of buf (base + off_fn buf base) in
         (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
@@ -1291,7 +1291,7 @@ and compile_codec_variable : type a r.
     field_access;
     size_delta = 0;
     next_off =
-      Dynamic_next (fun buf base -> base + off_fn buf base + size_fn buf base);
+      Dynamic (fun buf base -> base + off_fn buf base + size_fn buf base);
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers;
@@ -1301,12 +1301,10 @@ and compile_codec_variable : type a r.
 
 and dynamic_optional_next_off ctx present_fn fsize =
   let base_off = ctx.lc_next_off in
-  Dynamic_next
+  Dynamic
     (fun buf base ->
       let off =
-        match base_off with
-        | Static_next n -> base + n
-        | Dynamic_next f -> f buf base
+        match base_off with Static n -> base + n | Dynamic f -> f buf base
       in
       if present_fn buf base then off + fsize else off)
 
@@ -1462,17 +1460,17 @@ and compile_repeat : type elt seq r.
  fun ctx fld size_expr elem (Seq_map seq) ->
   (* Same dynamic-offset dispatch as [compile_var_bytes] / [compile_codec]:
      when a [Repeat] sits after a variable-size field, the running offset
-     is [Dynamic_next], which previously tripped [require_static_off]. *)
+     is [Dynamic], which previously tripped [require_static_off]. *)
   let off_fn, (field_access : field_access), validator_off =
     let sizeof_this : bytes -> int -> int =
       match ctx.lc_next_off with
-      | Static_next n -> fun _buf _base -> n
-      | Dynamic_next prev_end -> fun buf base -> prev_end buf base - base
+      | Static n -> fun _buf _base -> n
+      | Dynamic prev_end -> fun buf base -> prev_end buf base - base
     in
     let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
     match ctx.lc_next_off with
-    | Static_next n -> ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
-    | Dynamic_next prev_end ->
+    | Static n -> ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
+    | Dynamic prev_end ->
         let off_fn buf base = prev_end buf base - base in
         (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
   in
@@ -1508,7 +1506,7 @@ and compile_repeat : type elt seq r.
     field_access;
     size_delta = 0;
     next_off =
-      Dynamic_next (fun buf base -> base + off_fn buf base + size_fn buf base);
+      Dynamic (fun buf base -> base + off_fn buf base + size_fn buf base);
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -1579,6 +1577,15 @@ and var_bytes_reader : type a.
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
   | Byte_array_where _ -> Bytes.sub_string buf (base + fo) sz
+  | All_bytes -> Bytes.sub_string buf (base + fo) sz
+  | All_zeros ->
+      let s = Bytes.sub_string buf (base + fo) sz in
+      String.iter
+        (fun c ->
+          if c <> '\000' then
+            invalid_arg "add_field: [all_zeros] field has a non-zero byte")
+        s;
+      s
   | _ -> assert false
 
 and var_bytes_writer : type a r.
@@ -1597,40 +1604,54 @@ and var_bytes_writer : type a r.
   | Byte_array_where _ ->
       let s = (value : string) in
       Bytes.blit_string s 0 buf (off + fo) (String.length s)
+  | All_bytes ->
+      let s = (value : string) in
+      Bytes.blit_string s 0 buf (off + fo) (String.length s)
+  | All_zeros ->
+      let s = (value : string) in
+      Bytes.blit_string s 0 buf (off + fo) (String.length s)
   | _ -> assert false
+
+and compile_var_size_fn : type a.
+    layout_ctx -> a typ -> off_fn:(bytes -> int -> int) -> bytes -> int -> int =
+ fun ctx typ ~off_fn ->
+  match typ with
+  | All_bytes | All_zeros ->
+      (* Trailing "rest of buffer": size is whatever bytes remain past the
+         current offset. The OCaml decoder gets the buffer length via
+         [Bytes.length buf]; the 3D projection emits [all_bytes], which
+         3D handles natively. *)
+      fun buf base -> Bytes.length buf - (base + off_fn buf base)
+  | _ ->
+      let size_expr =
+        match typ with
+        | Byte_slice { size } -> size
+        | Byte_array { size } -> size
+        | Byte_array_where { size; _ } -> size
+        | Uint_var { size; _ } -> size
+        | _ -> invalid_arg "add_field: unsupported variable-size field type"
+      in
+      let sizeof_this : bytes -> int -> int =
+        match ctx.lc_next_off with
+        | Static n -> fun _buf _base -> n
+        | Dynamic prev_end -> fun buf base -> prev_end buf base - base
+      in
+      compile_expr ~sizeof_this ctx.lc_field_readers size_expr
 
 and compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   let typ = fld.typ in
-  let size_expr =
-    match typ with
-    | Byte_slice { size } -> size
-    | Byte_array { size } -> size
-    | Byte_array_where { size; _ } -> size
-    | Uint_var { size; _ } -> size
-    | All_bytes | All_zeros ->
-        invalid_arg
-          "add_field: [all_bytes] / [all_zeros] are top-level decoders only; \
-           inside a record, use [byte_array ~size:Expr.(Param.expr total - \
-           sizeof_this)] with an explicit length param"
-    | _ -> invalid_arg "add_field: unsupported variable-size field type"
-  in
-  let sizeof_this : bytes -> int -> int =
+  let off_fn, validator_off =
     match ctx.lc_next_off with
-    | Static_next n -> fun _buf _base -> n
-    | Dynamic_next prev_end -> fun buf base -> prev_end buf base - base
+    | Static n -> ((fun (_buf : bytes) (_base : int) -> n), n)
+    | Dynamic prev_end -> ((fun buf base -> prev_end buf base - base), -1)
   in
-  let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
-  let off_fn, (field_access : field_access), validator_off =
+  let size_fn = compile_var_size_fn ctx typ ~off_fn in
+  let field_access : field_access =
     match ctx.lc_next_off with
-    | Static_next n ->
-        ( (fun (_buf : bytes) (_base : int) -> n),
-          Variable { off = n; size_fn },
-          n )
-    | Dynamic_next prev_end ->
-        let off_fn buf base = prev_end buf base - base in
-        (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
+    | Static n -> Variable { off = n; size_fn }
+    | Dynamic _ -> Variable_dynamic { off_fn; size_fn }
   in
   let raw_reader, raw_writer, int_reader =
     match typ with
@@ -1668,7 +1689,7 @@ and compile_var_bytes : type a r.
     field_access;
     size_delta = 0;
     next_off =
-      Dynamic_next
+      Dynamic
         (fun buf base ->
           let fo = off_fn buf base in
           base + fo + size_fn buf base);
@@ -1955,8 +1976,8 @@ let seal : type r. (r, r) record -> r t =
   let field_access = List.rev r.r_field_access_rev in
   let wire_size_info =
     match r.r_next_off with
-    | Static_next n -> Fixed n
-    | Dynamic_next f -> Variable { min_size = r.r_min_wire_size; compute = f }
+    | Static n -> Fixed n
+    | Dynamic f -> Variable { min_size = r.r_min_wire_size; compute = f }
   in
   let min_size = r.r_min_wire_size in
   let writers = Array.of_list (List.rev r.r_writers_rev) in
@@ -2043,7 +2064,7 @@ let empty_validator_acc =
     va_n_fields = 0;
     va_n_array_slots = 0;
     va_min_size = 0;
-    va_next_off = Static_next 0;
+    va_next_off = Static 0;
     va_bf = None;
   }
 
@@ -2071,13 +2092,13 @@ let layout_ctx_of_validator_acc acc =
    split. *)
 let acc_off_fn (acc : validator_acc) : bytes -> int -> int =
   match acc.va_next_off with
-  | Static_next n -> fun _buf _base -> n
-  | Dynamic_next f -> fun buf base -> f buf base - base
+  | Static n -> fun _buf _base -> n
+  | Dynamic f -> fun buf base -> f buf base - base
 
 let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
   match acc.va_next_off with
-  | Static_next n -> fun _buf base -> base + n
-  | Dynamic_next f -> f
+  | Static n -> fun _buf base -> base + n
+  | Dynamic f -> f
 
 (* Validator step for a [Struct]-typed field. [compile_field] doesn't
    accept [Struct] (it has no [field_wire_size] without walking inner
@@ -2086,7 +2107,7 @@ let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
 let rec apply_struct_field acc inner_struct =
   let inner_v = validator_of_struct inner_struct in
   let static_off =
-    match acc.va_next_off with Static_next n -> n | Dynamic_next _ -> -1
+    match acc.va_next_off with Static n -> n | Dynamic _ -> -1
   in
   let off_fn = acc_off_fn acc in
   let validator _arr buf base =
@@ -2095,11 +2116,10 @@ let rec apply_struct_field acc inner_struct =
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
     match (acc.va_next_off, inner_v.vt_wire_size) with
-    | Static_next n, Fixed sz -> (sz, Static_next (n + sz))
-    | _, Fixed sz -> (sz, Dynamic_next (fun buf base -> prev_end buf base + sz))
+    | Static n, Fixed sz -> (sz, Static (n + sz))
+    | _, Fixed sz -> (sz, Dynamic (fun buf base -> prev_end buf base + sz))
     | _, Variable { min_size; compute } ->
-        ( min_size,
-          Dynamic_next (fun buf base -> compute buf (prev_end buf base)) )
+        (min_size, Dynamic (fun buf base -> compute buf (prev_end buf base)))
   in
   {
     va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
@@ -2194,8 +2214,8 @@ and validator_of_struct (s : Types.struct_) : validator =
   in
   let wire_size_info =
     match acc.va_next_off with
-    | Static_next n -> Fixed n
-    | Dynamic_next f -> Variable { min_size = acc.va_min_size; compute = f }
+    | Static n -> Fixed n
+    | Dynamic f -> Variable { min_size = acc.va_min_size; compute = f }
   in
   let param_handles = collect_param_handles s.fields s.where in
   let n_params = List.length param_handles in

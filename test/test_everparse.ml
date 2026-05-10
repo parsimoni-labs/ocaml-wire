@@ -105,13 +105,14 @@ let tm_like_codec ~ocf ~fecf =
       [
         (Field.v "Hdr" uint16be $ fun r -> r.hdr);
         (f_tm_data_len $ fun r -> r.data_len);
-        ( Field.v "Packets"
-            (repeat ~size:(Field.ref f_tm_data_len) (codec packet_codec))
+        ( Field.repeat "Packets" ~size:(Field.ref f_tm_data_len)
+            (codec packet_codec)
         $ fun r -> r.packets );
-        ( Field.v "OCF"
-            (optional (if ocf then Expr.true_ else Expr.false_) uint32be)
+        ( Field.optional "OCF"
+            ~present:(if ocf then Expr.true_ else Expr.false_)
+            uint32be
         $ fun r -> r.ocf );
-        (Field.v "FECF" (optional (bool fecf) uint16be) $ fun r -> r.fecf);
+        (Field.optional "FECF" ~present:(bool fecf) uint16be $ fun r -> r.fecf);
       ]
 
 (* -- 3D extraction tests -- *)

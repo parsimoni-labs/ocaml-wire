@@ -61,6 +61,15 @@ val run_everparse :
 
     Requires [3d.exe] in PATH. *)
 
+val parse_3d : outdir:string -> string -> (unit, string) result
+(** [parse_3d ~outdir file] runs [3d.exe] (without [--batch]) on a single [.3d]
+    file in [outdir]. Returns [Ok ()] when 3D accepts the file, or
+    [Error stderr] with the captured error message otherwise. Faster than
+    {!run_everparse} -- it stops after the 3D type-checker, before F* and
+    KaRaMeL. Intended for projection coverage tests.
+
+    Requires [3d.exe] in PATH. *)
+
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
     [<Name>_ExternalTypedefs.h] for each schema that uses the WireCtx contract,

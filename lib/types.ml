@@ -265,7 +265,32 @@ let bf_uint32be = BF_U32 Big
 let bits ?(bit_order = Msb_first) ~width base = Bits { width; base; bit_order }
 let bit b = Bool.to_int b
 let is_set n = n <> 0
-let map decode encode inner = Map { inner; decode; encode }
+
+(* Field decorations [Optional], [Optional_or], [Repeat] only have a 3D
+   projection when they appear at the top of a struct field's type --
+   anywhere else (array elem, casetype case body, [where]/[map]/[apply]
+   wrapper) there is no 3D shape that captures the semantics. Reject the
+   construction at the user's call site so the error points at the
+   wrapping combinator rather than surfacing later inside [pp_typ]. *)
+let rec is_field_decoration : type a. a typ -> bool = function
+  | Optional _ | Optional_or _ | Repeat _ -> true
+  | Map { inner; _ } -> is_field_decoration inner
+  | Where { inner; _ } -> is_field_decoration inner
+  | Apply { typ; _ } -> is_field_decoration typ
+  | _ -> false
+
+let reject_decoration ~combinator t =
+  if is_field_decoration t then
+    Fmt.invalid_arg
+      "Wire.%s: [optional]/[optional_or]/[repeat] are field decorations and \
+       cannot appear nested inside [%s] -- attach them as the field type \
+       directly via [Field.v]."
+      combinator combinator
+
+let map decode encode inner =
+  reject_decoration ~combinator:"map" inner;
+  Map { inner; decode; encode }
+
 let bool inner = Map { inner; decode = is_set; encode = bit }
 
 (* Parse errors -- moved here so combinators like [cases] can raise them
@@ -303,7 +328,10 @@ let cases variants inner =
 let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
-let where cond inner = Where { cond; inner }
+
+let where cond inner =
+  reject_decoration ~combinator:"where" inner;
+  Where { cond; inner }
 
 let seq_list : ('a, 'a list) seq_map =
   Seq_map
@@ -314,8 +342,47 @@ let seq_list : ('a, 'a list) seq_map =
       iter = List.iter;
     }
 
-let array ~len elem = Array { len; elem; seq = seq_list }
-let array_seq seq ~len elem = Array { len; elem; seq }
+(* The 3D projection of [array]/[optional]/[optional_or]/[repeat] turns
+   their length / predicate / byte budget into a [byte-size] suffix.
+   That works as long as the wrapped element exposes a wire size we can
+   plumb into the suffix expression -- either a fixed scalar width, an
+   already-sized payload like [byte_array {size}], or a codec with a
+   fixed [wire_size]. Reject everything else at the smart constructor
+   so the error fires at the user's call site. *)
+let rec has_wire_size_expr : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
+  | Float32 _ | Float64 _ -> true
+  | Bits _ -> true
+  | Unit -> true
+  | Uint_var _ -> true
+  | Byte_array _ | Byte_slice _ | Byte_array_where _ -> true
+  | Single_elem _ -> true
+  | Map { inner; _ } -> has_wire_size_expr inner
+  | Enum { base; _ } -> has_wire_size_expr base
+  | Where { inner; _ } -> has_wire_size_expr inner
+  | Apply { typ; _ } -> has_wire_size_expr typ
+  | Array { elem; _ } -> has_wire_size_expr elem
+  | Codec { codec_fixed_size; _ } -> codec_fixed_size <> None
+  | _ -> false
+
+let reject_variable_size ~combinator t =
+  if not (has_wire_size_expr t) then
+    Fmt.invalid_arg
+      "Wire.%s: inner type must expose a wire size -- 3D projects %s through a \
+       [byte-size] suffix that needs the element width."
+      combinator combinator
+
+let array ~len elem =
+  reject_decoration ~combinator:"array" elem;
+  reject_variable_size ~combinator:"array" elem;
+  Array { len; elem; seq = seq_list }
+
+let array_seq seq ~len elem =
+  reject_decoration ~combinator:"array_seq" elem;
+  reject_variable_size ~combinator:"array_seq" elem;
+  Array { len; elem; seq }
+
 let byte_array ~size = Byte_array { size }
 let byte_array_where_counter = Stdlib.ref 0
 let elt_var_prefix = "__elt_"
@@ -338,10 +405,28 @@ let synth_name_of_elt_var ev =
   else "_RefByte_" ^ ev
 
 let byte_slice ~size = Byte_slice { size }
-let optional present inner = Optional { present; inner }
-let optional_or present ~default inner = Optional_or { present; inner; default }
-let repeat ~size elem = Repeat { size; elem; seq = seq_list }
-let repeat_seq seq ~size elem = Repeat { size; elem; seq }
+
+let optional present inner =
+  reject_variable_size ~combinator:"optional" inner;
+  Optional { present; inner }
+
+let optional_or present ~default inner =
+  reject_variable_size ~combinator:"optional_or" inner;
+  Optional_or { present; inner; default }
+
+(* [repeat ~size elem] is more permissive than [array]: 3D's
+   [<elem>[:byte-size <size>]] parses elements until the byte budget is
+   exhausted, so variable-size elements are fine as long as each one is
+   self-bounded by its 3D type (struct, codec, ...). The only thing we
+   refuse is a field decoration nested inside [elem]. *)
+let repeat ~size elem =
+  reject_decoration ~combinator:"repeat" elem;
+  Repeat { size; elem; seq = seq_list }
+
+let repeat_seq seq ~size elem =
+  reject_decoration ~combinator:"repeat_seq" elem;
+  Repeat { size; elem; seq }
+
 let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
@@ -393,6 +478,7 @@ let casetype ?(first = 0) ?(step = 1) name tag defs =
   let counter = Stdlib.ref first in
   let resolve = function
     | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
+        reject_decoration ~combinator:"casetype" cd_inner;
         let idx =
           match cd_index with
           | Some i ->
@@ -411,6 +497,7 @@ let casetype ?(first = 0) ?(step = 1) name tag defs =
             cb_project = cd_project;
           }
     | Default_def { dd_inner; dd_inject; dd_project } ->
+        reject_decoration ~combinator:"casetype" dd_inner;
         Case_branch
           {
             cb_tag = None;
@@ -492,7 +579,10 @@ let mutable_param name typ =
   { param_name = name; param_typ = Pack_typ typ; mutable_ = true }
 
 let param_struct name params ?where fields = { name; params; where; fields }
-let apply typ args = Apply { typ; args = List.map (fun e -> Pack_expr e) args }
+
+let apply typ args =
+  reject_decoration ~combinator:"apply" typ;
+  Apply { typ; args = List.map (fun e -> Pack_expr e) args }
 
 (* Type references *)
 let type_ref name = Type_ref name
@@ -618,13 +708,26 @@ module Reserved_3d = Set.Make (String)
 let reserved_3d =
   Reserved_3d.of_list
     (String.split_on_char ' '
+       (* 3D / EverParse keywords *)
        "typedef struct casetype switch case default enum extern mutable \
         entrypoint export output where if else return abort var unit bool true \
         false sizeof this int char void float double long short unsigned \
         signed static const volatile auto register union while for do break \
         continue goto type inline UINT8 UINT16 UINT16BE UINT32 UINT32BE UINT64 \
-        UINT64BE Bool PUINT8")
+        UINT64BE Bool PUINT8 abstract and as assert assume attributes begin by \
+        calc class decreases default downto effect eliminate ensures exception \
+        exists forall friend fun function ghost include inline_for_extraction \
+        instance introduce irreducible layered_effect let logic match module \
+        new new_effect noeq noextract opaque_to_smt open polymonadic_bind \
+        polymonadic_subcomp private range_of rec reflectable reifiable reify \
+        requires restart_solver returns set_range_of sub_effect synth then tot \
+        total try unfold unopteq val when with")
 
+(* Append a trailing underscore to names that 3D or F* reserves so the
+   projection always produces a parseable identifier even when the user
+   picks something like [total]. The same escaping is applied wherever a
+   user-chosen name reaches 3D output: param decls, [Param_ref], [Ref],
+   field names. The OCaml-side name is unchanged. *)
 let escape_3d name =
   if Reserved_3d.mem name reserved_3d then name ^ "_" else name
 
@@ -723,42 +826,90 @@ and pp_typ : type a. a typ Fmt.t =
       Fmt.pf ppf "%a(%a)" pp_typ typ Fmt.(list ~sep:comma pp_packed_expr) args
   | Map { inner; _ } -> pp_typ ppf inner
   | Codec { codec_name; _ } -> Fmt.string ppf codec_name
+  (* [Optional]/[Optional_or]/[Repeat] are field decorations: their
+     wrapping combinators ([map], [where], [array], [casetype], [apply])
+     reject them at construction, so reaching this branch from a typ
+     emitted by 3D projection means a struct field is being printed
+     standalone -- caller's job, never our pp_typ. The trivial-predicate
+     branches survive because they erase the decoration entirely. *)
   | Optional { present = Bool true; inner } -> pp_typ ppf inner
   | Optional { present = Bool false; _ } -> Fmt.string ppf "UINT8"
-  | Optional { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
   | Optional_or { present = Bool true; inner; _ } -> pp_typ ppf inner
   | Optional_or { present = Bool false; _ } -> Fmt.string ppf "UINT8"
-  | Optional_or { inner; _ } -> Fmt.pf ppf "optional(%a)" pp_typ inner
-  | Repeat { elem; _ } -> pp_typ ppf elem
+  | Optional _ | Optional_or _ | Repeat _ ->
+      assert false (* unreachable: rejected by the wrapping combinator *)
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
-let rec pp_action_stmt ppf = function
-  | Assign (p, e) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr e
-  | Field_assign (ptr, field_name, e) ->
-      Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr e
+(* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
+   field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
+   binds a name to a pure expression, so we lower it by substituting
+   [Ref name -> e] in subsequent stmts and dropping the [var] emission. *)
+let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
+ fun env e ->
+  let r e = subst_expr env e in
+  match e with
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      e
+  | Ref name -> ( try List.assoc name env with Not_found -> e)
+  | Add (a, b) -> Add (r a, r b)
+  | Sub (a, b) -> Sub (r a, r b)
+  | Mul (a, b) -> Mul (r a, r b)
+  | Div (a, b) -> Div (r a, r b)
+  | Mod (a, b) -> Mod (r a, r b)
+  | Land (a, b) -> Land (r a, r b)
+  | Lor (a, b) -> Lor (r a, r b)
+  | Lxor (a, b) -> Lxor (r a, r b)
+  | Lnot a -> Lnot (r a)
+  | Lsl (a, b) -> Lsl (r a, r b)
+  | Lsr (a, b) -> Lsr (r a, r b)
+  | Eq (a, b) -> Eq (r a, r b)
+  | Ne (a, b) -> Ne (r a, r b)
+  | Lt (a, b) -> Lt (r a, r b)
+  | Le (a, b) -> Le (r a, r b)
+  | Gt (a, b) -> Gt (r a, r b)
+  | Ge (a, b) -> Ge (r a, r b)
+  | And (a, b) -> And (r a, r b)
+  | Or (a, b) -> Or (r a, r b)
+  | Not a -> Not (r a)
+  | Cast (w, x) -> Cast (w, r x)
+  | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
+
+let pp_stmt env ppf stmt =
+  let e a = subst_expr env a in
+  match stmt with
+  | Assign (p, x) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr (e x)
+  | Field_assign (ptr, field_name, x) ->
+      Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr (e x)
   | Extern_call (fn, args) -> Fmt.pf ppf "%s(%s);" fn (String.concat ", " args)
-  | Return e -> Fmt.pf ppf "return %a;" pp_expr e
+  | Return x -> Fmt.pf ppf "return %a;" pp_expr (e x)
   | Abort -> Fmt.string ppf "abort;"
-  | If (cond, then_, None) ->
-      Fmt.pf ppf "if (%a) { %a }" pp_expr cond
-        Fmt.(list ~sep:sp pp_action_stmt)
-        then_
-  | If (cond, then_, Some else_) ->
-      Fmt.pf ppf "if (%a) { %a } else { %a }" pp_expr cond
-        Fmt.(list ~sep:sp pp_action_stmt)
-        then_
-        Fmt.(list ~sep:sp pp_action_stmt)
-        else_
-  | Var (name, e) -> Fmt.pf ppf "var %s = %a;" (escape_3d name) pp_expr e
+  | If _ | Var _ ->
+      (* Handled by [pp_stmts] which threads the substitution env. *)
+      assert false
+
+let rec pp_stmts env ppf = function
+  | [] -> ()
+  | Var (name, x) :: rest -> pp_stmts ((name, subst_expr env x) :: env) ppf rest
+  | If (cond, then_, else_opt) :: rest ->
+      let cond = subst_expr env cond in
+      (match else_opt with
+      | None -> Fmt.pf ppf "if (%a) { %a }" pp_expr cond (pp_stmts env) then_
+      | Some else_ ->
+          Fmt.pf ppf "if (%a) { %a } else { %a }" pp_expr cond (pp_stmts env)
+            then_ (pp_stmts env) else_);
+      if rest <> [] then Fmt.sp ppf ();
+      pp_stmts env ppf rest
+  | stmt :: rest ->
+      pp_stmt env ppf stmt;
+      if rest <> [] then Fmt.sp ppf ();
+      pp_stmts env ppf rest
 
 let pp_action ppf = function
   | On_success stmts ->
-      Fmt.pf ppf "@[<h>{:on-success %a }@]"
-        Fmt.(list ~sep:sp pp_action_stmt)
-        stmts
-  | On_act stmts ->
-      Fmt.pf ppf "@[<h>{:act %a }@]" Fmt.(list ~sep:sp pp_action_stmt) stmts
+      Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
+  | On_act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =
@@ -780,16 +931,38 @@ let rec inner_wire_size : type a. a typ -> int option = function
   | Map { inner; _ } -> inner_wire_size inner
   | Enum { base; _ } -> inner_wire_size base
   | Where { inner; _ } -> inner_wire_size inner
+  | Codec { codec_fixed_size = Some n; _ } -> Some n
   | _ -> None
+
+(* Like [inner_wire_size] but as an [int expr], so explicitly-sized
+   types ([byte_array], [byte_slice], [single_elem], etc.) can drive
+   the [byte-size] suffix of an enclosing [optional]/[array]. Returns
+   [None] only for shapes whose total wire size is genuinely not
+   expressible at projection time (variable-size codec without an
+   exposed [wire_size_expr], casetype, struct ref, all_bytes/all_zeros). *)
+and inner_wire_size_expr : type a. a typ -> int expr option = function
+  | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ } ->
+      Some size
+  | Single_elem { size; _ } -> Some size
+  | Uint_var { size; _ } -> Some size
+  | Array { len; elem; _ } -> (
+      match inner_wire_size_expr elem with
+      | Some s -> Some (Mul (len, s))
+      | None -> None)
+  | Apply { typ; _ } -> inner_wire_size_expr typ
+  | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
 and optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
-  match inner_wire_size inner with
-  | Some n ->
-      let size = If_then_else (present, Int n, Int 0) in
-      (Byte_array size, fun ppf -> pp_typ ppf inner)
-  | None -> (No_suffix, fun ppf -> Fmt.pf ppf "optional(%a)" pp_typ inner)
+  match inner_wire_size_expr inner with
+  | Some s ->
+      ( Byte_array (If_then_else (present, s, Int 0)),
+        fun ppf -> pp_typ ppf inner )
+  | None ->
+      (* Unreachable: [optional]/[optional_or] reject variable-size inner
+         at construction (smart constructor uses [has_wire_size_expr]). *)
+      assert false
 
 and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
@@ -804,7 +977,17 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
       (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
-  | Array { len; elem; _ } -> (Array len, fun ppf -> pp_typ ppf elem)
+  | Array { len; elem; _ } -> (
+      (* 3D's [name[len]] suffix only accepts byte-sized elements; for wider
+         elements the size in bytes must be made explicit via [:byte-size].
+         [inner_wire_size_expr] handles fixed scalars, [byte_array]-style
+         sized payloads, codec-with-fixed-size, and nested arrays. *)
+      match (inner_wire_size elem, inner_wire_size_expr elem) with
+      | Some 1, _ -> (Array len, fun ppf -> pp_typ ppf elem)
+      | _, Some s -> (Byte_array (Mul (len, s)), fun ppf -> pp_typ ppf elem)
+      | _ ->
+          (* Unreachable: [array] rejects variable-size elem at construction. *)
+          assert false)
   | Map { inner; _ } -> field_suffix inner
   | Enum { base; _ } -> field_suffix base
   | Optional { present = Bool true; inner } -> field_suffix inner
@@ -874,13 +1057,91 @@ let pp_params ppf params =
   if not (List.is_empty params) then
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma pp_param) params
 
+(* Collect every [Ref name] occurring in an expression. Used to detect
+   field references in struct-level [where] clauses, which 3D's grammar
+   does not allow (the [where] there sees only parameters). *)
+let rec collect_refs : type a. a expr -> string list = function
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      []
+  | Ref name -> [ name ]
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      collect_refs a @ collect_refs b
+  | Lnot a -> collect_refs a
+  | Lt (a, b) | Le (a, b) | Gt (a, b) | Ge (a, b) ->
+      collect_refs a @ collect_refs b
+  | And (a, b) | Or (a, b) -> collect_refs a @ collect_refs b
+  | Not a -> collect_refs a
+  | Cast (_, a) -> collect_refs a
+  | If_then_else (c, a, b) -> collect_refs c @ collect_refs a @ collect_refs b
+  | Eq (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Ne (a, b) -> collect_refs_packed a @ collect_refs_packed b
+
+and collect_refs_packed : type a. a expr -> string list =
+ fun e -> collect_refs e
+
+(* If a struct-level [where] references fields (rather than only params),
+   attach it as the [constraint_] of the last referenced field instead --
+   3D's [where] clause only sees parameters. *)
+let lower_where_to_field_constraint where fields =
+  match where with
+  | None -> (None, fields)
+  | Some w ->
+      let refs = collect_refs w in
+      let field_names =
+        List.filter_map (fun (Field f) -> f.field_name) fields
+      in
+      let referenced_field_names =
+        List.filter (fun r -> List.mem r field_names) refs
+      in
+      if referenced_field_names = [] then (Some w, fields)
+      else
+        (* Attach to the last referenced field by struct position so every
+           name in the constraint is decoded by the time it runs. *)
+        let last_pos =
+          List.fold_left
+            (fun acc (Field f) ->
+              match f.field_name with
+              | Some n when List.mem n referenced_field_names -> Some n
+              | _ -> acc)
+            None fields
+        in
+        let target =
+          match last_pos with
+          | Some n -> n
+          | None -> List.hd (List.rev referenced_field_names)
+        in
+        let fields =
+          List.map
+            (fun (Field f as field) ->
+              match f.field_name with
+              | Some n when n = target ->
+                  let constraint_ =
+                    combine_constraints f.constraint_ (Some w)
+                  in
+                  Field { f with constraint_ }
+              | _ -> field)
+            fields
+        in
+        (None, fields)
+
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
   let name = escape_3d s.name in
+  let where, fields = lower_where_to_field_constraint s.where s.fields in
   Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
-  Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) s.where;
+  Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field ppf) s.fields;
+  List.iter (pp_field ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
 let pp_decl ppf = function
@@ -904,8 +1165,9 @@ let pp_decl ppf = function
         Fmt.(list ~sep:comma pp_param)
         params
   | Extern_probe { init; name } ->
-      if init then Fmt.pf ppf "extern probe (INIT) %s;@,@," name
-      else Fmt.pf ppf "extern probe %s;@,@," name
+      (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
+      if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
+      else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
       Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
       List.iteri

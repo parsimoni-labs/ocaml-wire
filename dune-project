@@ -1,6 +1,7 @@
 (lang dune 3.21)
 (using directory-targets 0.1)
 (using mdx 0.4)
+(cram enable)
 
 (name wire)
 (version 0.9.0)

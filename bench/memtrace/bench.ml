@@ -79,7 +79,7 @@ let opt_codec_present =
       [
         (Wire.Field.v "Hdr" Wire.uint16be $ fun r -> r.opt_hdr);
         (Wire.Field.v "Data" Wire.uint16be $ fun r -> r.opt_data);
-        ( Wire.Field.v "FECF" (Wire.optional (Wire.bool true) Wire.uint16be)
+        ( Wire.Field.optional "FECF" ~present:(Wire.bool true) Wire.uint16be
         $ fun r -> r.opt_fecf );
       ]
 
@@ -105,8 +105,8 @@ let repeat_codec =
     Wire.Codec.
       [
         (f_r_len $ fun r -> r.r_len);
-        ( Wire.Field.v "Items"
-            (Wire.repeat ~size:(Wire.Field.ref f_r_len) (Wire.codec inner_codec))
+        ( Wire.Field.repeat "Items" ~size:(Wire.Field.ref f_r_len)
+            (Wire.codec inner_codec)
         $ fun r -> r.r_items );
       ]
 

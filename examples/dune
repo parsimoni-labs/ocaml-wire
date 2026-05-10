@@ -3,10 +3,10 @@
  (modules gen_3d)
  (libraries wire demo space net))
 
-(executable
+(test
  (name validate_3d)
  (modules validate_3d)
- (libraries wire wire.3d demo space net))
+ (libraries wire wire.3d demo space net alcotest unix fmt))
 
 (rule
  (targets

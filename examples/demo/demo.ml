@@ -545,7 +545,8 @@ let byte_array_struct =
 
 (* "Rest of buffer" payloads in a struct take an explicit length param and
    use [Wire.rest_bytes total]; this projects to 3D as
-   [UINT8[:byte-size (total - sizeof(this))]]. *)
+   [UINT8[:byte-size (total_ - sizeof(this))]] -- [total] is an F*
+   keyword and gets escaped automatically. *)
 let all_bytes_struct =
   let total = Wire.Param.input "total" Wire.uint32be in
   param_struct "TrailingData"

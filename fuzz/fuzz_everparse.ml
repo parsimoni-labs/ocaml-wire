@@ -551,6 +551,191 @@ let test_complex_nested () =
   let _ = Wire.Everparse.Raw.to_3d m in
   ()
 
+(** Field-level decorations through {!Field.optional} / {!Field.repeat}.
+    Verifies that the construction-time invariant ("decorations only at field
+    top level") doesn't degrade for arbitrary inner sizes. *)
+let test_field_optional_random size =
+  let size = (abs size mod 32) + 1 in
+  let f_p = Wire.Field.v "p" Wire.uint8 in
+  let f =
+    Wire.Field.optional "Body"
+      ~present:Wire.Expr.(Wire.Field.ref f_p <> Wire.int 0)
+      (Wire.byte_array ~size:(Wire.int size))
+  in
+  let codec =
+    Wire.Codec.v "OptR"
+      (fun p body -> (p, body))
+      Wire.Codec.[ f_p $ fst; f $ snd ]
+  in
+  let s = Wire.Everparse.struct_of_codec codec in
+  let m =
+    Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef ~entrypoint:true s ]
+  in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
+let test_field_repeat_random size =
+  let size = (abs size mod 64) + 1 in
+  let f_n = Wire.Field.v "n" Wire.uint16be in
+  let f = Wire.Field.repeat "Items" ~size:(Wire.int size) Wire.uint32be in
+  let codec =
+    Wire.Codec.v "RepR"
+      (fun n items -> (n, items))
+      Wire.Codec.[ f_n $ fst; f $ snd ]
+  in
+  let s = Wire.Everparse.struct_of_codec codec in
+  let m =
+    Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef ~entrypoint:true s ]
+  in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
+(** Reserved-name escaping holds across the projection: any name from the
+    keyword set, used as a param or field, must round-trip through
+    [pp_typ]/[to_3d] without raising. *)
+let test_keyword_param_random idx =
+  let names =
+    [|
+      "total";
+      "let";
+      "fun";
+      "match";
+      "type";
+      "true";
+      "false";
+      "module";
+      "open";
+      "include";
+      "with";
+      "when";
+      "as";
+      "of";
+      "and";
+      "or";
+      "rec";
+      "begin";
+      "end";
+      "ghost";
+      "noeq";
+      "private";
+      "abstract";
+      "synth";
+    |]
+  in
+  let name = names.(abs idx mod Array.length names) in
+  let p = Wire.Param.input name Wire.uint32be in
+  let s =
+    Wire.Everparse.Raw.param_struct "KwParam"
+      [ Wire.Param.decl p ]
+      [
+        Wire.Everparse.Raw.field "x" Wire.uint8;
+        Wire.Everparse.Raw.field "rest"
+          (Wire.byte_array ~size:(Wire.Param.expr p));
+      ]
+  in
+  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
+let test_keyword_field_random idx =
+  let names =
+    [|
+      "let";
+      "fun";
+      "match";
+      "type";
+      "with";
+      "when";
+      "as";
+      "of";
+      "and";
+      "or";
+      "rec";
+      "begin";
+      "end";
+      "ghost";
+      "noeq";
+      "private";
+    |]
+  in
+  let name = names.(abs idx mod Array.length names) in
+  let s =
+    Wire.Everparse.Raw.struct_ "KwField"
+      [
+        Wire.Everparse.Raw.field name Wire.uint8;
+        Wire.Everparse.Raw.field "tail" Wire.uint16;
+      ]
+  in
+  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
+(** Where-clause lowering: a struct-level [where] referencing fields must
+    project through without raising, regardless of the field arrangement or how
+    many of them the predicate touches. *)
+let test_where_lowering n =
+  let n = (abs n mod 4) + 1 in
+  let max_ = Wire.Param.input "max" Wire.uint16be in
+  let f_len = Wire.Everparse.Raw.field "Length" Wire.uint16be in
+  let f_len_ref = Wire.Everparse.Raw.field "Length" Wire.uint16be in
+  let extras =
+    List.init n (fun i ->
+        Wire.Everparse.Raw.field (Fmt.str "extra%d" i) Wire.uint8)
+  in
+  let s =
+    Wire.Everparse.Raw.param_struct "WhereLower"
+      [ Wire.Param.decl max_ ]
+      ~where:
+        Wire.Expr.(
+          Wire.Everparse.Raw.field_ref f_len_ref <= Wire.Param.expr max_)
+      (f_len :: extras)
+  in
+  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
+(** [Action.var name e]: substitution into use sites must hold across arbitrary
+    expression shapes. *)
+let test_action_var_random k =
+  let f_a = Wire.Everparse.Raw.field "Tag" Wire.uint8 in
+  let f_b = Wire.Everparse.Raw.field "Value" Wire.uint16be in
+  let f_x = Wire.Everparse.Raw.field "x" Wire.uint16be in
+  let n = abs k mod 4 in
+  let bound =
+    let open Wire.Expr in
+    match n with
+    | 0 -> Wire.Everparse.Raw.field_ref f_a + Wire.Everparse.Raw.field_ref f_b
+    | 1 -> Wire.Everparse.Raw.field_ref f_a * Wire.int 2
+    | 2 ->
+        Wire.Everparse.Raw.field_ref f_a
+        - (Wire.Everparse.Raw.field_ref f_b / Wire.int 4)
+    | _ -> Wire.Everparse.Raw.field_ref f_a land Wire.int 0xff
+  in
+  let out_value = Wire.Param.output "out" Wire.uint32be in
+  let s =
+    Wire.Everparse.Raw.param_struct "VarFuzz"
+      [ Wire.Param.decl out_value ]
+      [
+        Wire.Everparse.Raw.field "Tag" Wire.uint8;
+        Wire.Everparse.Raw.field "Value" Wire.uint16be
+          ~action:
+            (Wire.Action.on_act
+               [
+                 Wire.Action.var "x" bound;
+                 Wire.Action.if_
+                   Wire.Expr.(Wire.Everparse.Raw.field_ref f_x > Wire.int 0)
+                   [
+                     Wire.Action.assign out_value
+                       (Wire.Everparse.Raw.field_ref f_x);
+                   ]
+                   None;
+               ]);
+      ]
+  in
+  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
+  let _ = Wire.Everparse.Raw.to_3d m in
+  ()
+
 (** Test big-endian struct with all BE types. *)
 let test_be_struct () =
   let s =
@@ -626,6 +811,12 @@ let codegen_tests =
     test_case "extern_probe" [ const () ] test_extern_probe;
     test_case "complex nested" [ const () ] test_complex_nested;
     test_case "be struct" [ const () ] test_be_struct;
+    test_case "field optional random" [ int ] test_field_optional_random;
+    test_case "field repeat random" [ int ] test_field_repeat_random;
+    test_case "keyword param random" [ int ] test_keyword_param_random;
+    test_case "keyword field random" [ int ] test_keyword_field_random;
+    test_case "where lowering random" [ int ] test_where_lowering;
+    test_case "action var random" [ int ] test_action_var_random;
   ]
 
 let suite = ("everparse", pp_tests @ codegen_tests)

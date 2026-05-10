@@ -337,8 +337,9 @@ let tm_with_ocf_codec =
         (Field.v "MCCount" (bits ~width:8 U16be) $ fun f -> f.tmo_mc_count);
         (Field.v "VCCount" (bits ~width:8 U16be) $ fun f -> f.tmo_vc_count);
         (Field.v "FirstHdrPtr" (bits ~width:11 U16be) $ fun f -> f.tmo_first_hdr);
-        ( Field.v "OCF"
-            (optional Expr.(Field.ref f_tmo_ocf_flag <> int 0) uint32be)
+        ( Field.optional "OCF"
+            ~present:Expr.(Field.ref f_tmo_ocf_flag <> int 0)
+            uint32be
         $ fun f -> f.tmo_ocf );
       ]
 
