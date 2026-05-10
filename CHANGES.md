@@ -2,6 +2,9 @@
 
 ### Added
 
+- `Wire.rest_bytes total` for trailing rest-of-buffer fields, plus
+  direct `all_bytes` / `all_zeros` support as `Codec` field types
+  (#44, @samoht)
 - `Codec.validator_of_struct` / `validate_struct` / `struct_size_of` /
   `struct_min_size`: build and run a validator from any `Types.struct_`,
   no record constructor needed (#37, @samoht)
