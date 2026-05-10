@@ -489,6 +489,88 @@ let test_keyword_param_escaped () =
     "raw [total] keyword does not appear" false
     (Re.execp (Re.compile (Re.seq [ Re.bow; Re.str "total"; Re.eow ])) out)
 
+(* Field decorations [optional]/[optional_or]/[repeat] have no 3D
+   meaning outside a field's top-level type, so the smart constructors
+   for the wrapping combinators must reject them at the call site. *)
+let expect_invalid_arg ~combinator f =
+  match
+    try
+      let _ = f () in
+      Ok ()
+    with Invalid_argument msg -> Error msg
+  with
+  | Ok () ->
+      Alcotest.failf "%s should have rejected the construction" combinator
+  | Error _ -> ()
+
+let test_array_rejects_decoration () =
+  expect_invalid_arg ~combinator:"array (optional)" (fun () ->
+      array ~len:(int 4) (optional Expr.true_ uint8));
+  expect_invalid_arg ~combinator:"array (optional_or)" (fun () ->
+      array ~len:(int 4) (optional_or Expr.true_ ~default:0 uint8));
+  expect_invalid_arg ~combinator:"array (repeat)" (fun () ->
+      array ~len:(int 4) (repeat ~size:(int 8) uint8))
+
+(* [array ~len:N (byte_array ~size:M)] is valid -- it projects to
+   [UINT8 name[:byte-size (N * M)]]. The smart constructor only refuses
+   element types that have no derivable wire size expression at all. *)
+let test_array_accepts_sized_elem () =
+  let s =
+    struct_ "ArrSized"
+      [ field "Items" (array ~len:(int 3) (byte_array ~size:(int 5))) ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool)
+    "byte-size suffix uses len * elem_size" true (contains out "byte-size")
+
+let test_array_rejects_unsized_elem () =
+  expect_invalid_arg ~combinator:"array (all_bytes)" (fun () ->
+      array ~len:(int 4) all_bytes)
+
+(* [optional]/[optional_or] now accept any element with a derivable size --
+   plain scalars, fixed bitfields, AND already-sized payloads like
+   [byte_array {size}], so [field "Foo" (optional cond (byte_array ~size:N))]
+   projects to [UINT8 Foo[:byte-size if cond then N else 0]]. *)
+let test_optional_accepts_byte_array () =
+  let s =
+    let cond = Param.input "cond" uint8 in
+    param_struct "OptByteArr"
+      [ Param.decl cond ]
+      [
+        field "Hdr" uint8;
+        field "Body"
+          (optional Expr.(Param.expr cond <> int 0) (byte_array ~size:(int 8)));
+      ]
+  in
+  let out = to_3d_string s in
+  Alcotest.(check bool)
+    "byte-size suffix uses inner size" true (contains out "8")
+
+let test_optional_rejects_unsized () =
+  expect_invalid_arg ~combinator:"optional (all_bytes)" (fun () ->
+      optional Expr.true_ all_bytes)
+
+(* [repeat] is permissive: 3D's [<T>[:byte-size budget]] parses Ts until
+   the byte budget is exhausted, so variable-size T (struct, codec) is
+   fine. The only refusal is decoration nesting. *)
+let test_repeat_rejects_decoration () =
+  expect_invalid_arg ~combinator:"repeat (optional)" (fun () ->
+      repeat ~size:(int 32) (optional Expr.true_ uint8))
+
+let test_where_rejects_decoration () =
+  expect_invalid_arg ~combinator:"where (optional)" (fun () ->
+      where Expr.true_ (optional Expr.true_ uint8))
+
+let test_casetype_rejects_decoration () =
+  expect_invalid_arg ~combinator:"casetype (case = optional)" (fun () ->
+      casetype "Bad" uint8
+        [
+          case ~index:0
+            (optional Expr.true_ uint8)
+            ~inject:(fun x -> x)
+            ~project:(fun x -> Some x);
+        ])
+
 let test_keyword_field_escaped () =
   let s =
     struct_ "Esc2"
@@ -528,6 +610,22 @@ let suite =
         test_keyword_param_escaped;
       Alcotest.test_case "projection: F*-keyword field escaped" `Quick
         test_keyword_field_escaped;
+      Alcotest.test_case "ctor: array rejects decoration elem" `Quick
+        test_array_rejects_decoration;
+      Alcotest.test_case "ctor: array accepts sized variable elem" `Quick
+        test_array_accepts_sized_elem;
+      Alcotest.test_case "ctor: array rejects unsized elem" `Quick
+        test_array_rejects_unsized_elem;
+      Alcotest.test_case "ctor: optional accepts byte_array" `Quick
+        test_optional_accepts_byte_array;
+      Alcotest.test_case "ctor: optional rejects unsized inner" `Quick
+        test_optional_rejects_unsized;
+      Alcotest.test_case "ctor: repeat rejects decoration elem" `Quick
+        test_repeat_rejects_decoration;
+      Alcotest.test_case "ctor: where rejects decoration inner" `Quick
+        test_where_rejects_decoration;
+      Alcotest.test_case "ctor: casetype rejects decoration case" `Quick
+        test_casetype_rejects_decoration;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
     ] )
