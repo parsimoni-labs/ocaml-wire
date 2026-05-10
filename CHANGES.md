@@ -2,8 +2,10 @@
 
 ### Added
 
+- Support `Wire.casetype` and `Wire.nested ~size` as `Codec` fields
+  (#47, @samoht)
 - Add `Field.optional` / `Field.optional_or` / `Field.repeat` /
-  `Field.repeat_seq` (@samoht)
+  `Field.repeat_seq` (#46, @samoht)
 - Add `Wire.rest_bytes` for trailing "rest of buffer" fields, plus
   direct `all_bytes` / `all_zeros` support as `Codec` fields
   (#44, @samoht)
@@ -17,13 +19,13 @@
   / `struct_min_size` (#37, @samoht)
 - Add `Codec.slice_offset` / `Codec.slice_length` (#37, @samoht)
 - Add `Wire.codec` type alias for `'r Codec.t` and `Wire.pp_value`
-  (@samoht)
+  (#39, @samoht)
 
 ### Changed
 
 - Remove `Wire.optional` / `Wire.optional_or` / `Wire.repeat` /
   `Wire.repeat_seq` from the typ-level surface; use the matching
-  `Field.*` combinators instead (@samoht)
+  `Field.*` combinators instead (#46, @samoht)
 - Rename `Wire.decode_*` / `Wire.encode_*` to `of_string` / `of_bytes` /
   `of_reader` / `to_string` / `to_bytes` / `to_writer`; add `_exn` twins
   that raise on parse error (#39, @samoht)
@@ -33,7 +35,8 @@
 
 ### Documentation
 
-- Type-check `README.md` and every public `.mli` under `mdx` (@samoht)
+- Type-check `README.md` and every public `.mli` under `mdx`
+  (#39, @samoht)
 
 ### Fixed
 
