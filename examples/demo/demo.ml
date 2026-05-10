@@ -543,11 +543,20 @@ let byte_array_struct =
 
 (* -- 14. Trailing / padding types -- *)
 
+(* "Rest of buffer" payloads in a struct take an explicit length param and
+   use [Wire.rest_bytes total]; this projects to 3D as
+   [UINT8[:byte-size (total - sizeof(this))]]. *)
 let all_bytes_struct =
-  struct_ "TrailingData" [ field "Header" uint32be; field "Rest" all_bytes ]
+  let total = Wire.Param.input "total" Wire.uint32be in
+  param_struct "TrailingData"
+    [ Wire.Param.decl total ]
+    [ field "Header" uint32be; field "Rest" (Wire.rest_bytes total) ]
 
 let all_zeros_struct =
-  struct_ "PaddedMsg" [ field "Value" uint16be; field "Padding" all_zeros ]
+  let total = Wire.Param.input "total" Wire.uint32be in
+  param_struct "PaddedMsg"
+    [ Wire.Param.decl total ]
+    [ field "Value" uint16be; field "Padding" (Wire.rest_bytes total) ]
 
 (* -- 15. SingleElemArray: single element with byte-size constraint -- *)
 

@@ -97,6 +97,10 @@ type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
 
 let seq_list = Types.seq_list
 let array_seq = Types.array_seq
+
+let rest_bytes (total : (int, _) Param.t) =
+  Types.byte_array ~size:Types.(Sub (Param_ref total, Sizeof_this))
+
 let optional = Types.optional
 let optional_or = Types.optional_or
 let repeat = Types.repeat

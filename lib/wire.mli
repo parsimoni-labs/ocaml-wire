@@ -532,6 +532,13 @@ val byte_array_where :
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice. *)
 
+val rest_bytes : (int, _) Param.t -> string typ
+(** [rest_bytes total] is the trailing payload of a record whose total decoded
+    length is bound to [total]. Equivalent to
+    [byte_array ~size:Expr.(Param.expr total - sizeof_this)]. Use this as the
+    final field of a struct when the caller passes the buffer length as a
+    parameter. Projects to 3D as [UINT8[:byte-size (total - sizeof(this))]]. *)
+
 val nested : size:int expr -> 'a typ -> 'a typ
 (** [nested ~size t] parses one value of type [t] inside a length-prefixed
     region of [size] bytes.
