@@ -2,6 +2,7 @@
 
 open Wire
 open Wire.Everparse.Raw
+open Test_fixtures
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -215,17 +216,8 @@ let test_struct_of_codec_metadata () =
     "contains mutable outx param" true
     (contains ~sub:"mutable" output)
 
-(* Record with multiple uint16be fields *)
-type multi_record = { x : int; y : int }
-
-let multi_record_codec =
-  let open Codec in
-  v "MultiRecord"
-    (fun x y -> { x; y })
-    [
-      (Field.v "x" uint16be $ fun r -> r.x);
-      (Field.v "y" uint16be $ fun r -> r.y);
-    ]
+(* Record with multiple uint16be fields --
+   [multi_record] / [multi_record_codec] live in {!Test_fixtures}. *)
 
 let test_record_with_multi () =
   let original = { x = 0x1234; y = 0x5678 } in
@@ -468,8 +460,8 @@ let test_view_get_uint () =
   let codec, cf_x, cf_y =
     let f_x = Field.v "x" uint16be in
     let f_y = Field.v "y" uint16be in
-    let cf_x = Codec.(f_x $ fun r -> r.x) in
-    let cf_y = Codec.(f_y $ fun r -> r.y) in
+    let cf_x = Codec.(f_x $ fun (r : multi_record) -> r.x) in
+    let cf_y = Codec.(f_y $ fun (r : multi_record) -> r.y) in
     let codec =
       Codec.v "ViewUint" (fun a b -> { x = a; y = b }) [ cf_x; cf_y ]
     in
@@ -575,8 +567,8 @@ let test_view_set_uint () =
   let codec, cf_x, cf_y =
     let f_x = Field.v "x" uint16be in
     let f_y = Field.v "y" uint16be in
-    let cf_x = Codec.(f_x $ fun r -> r.x) in
-    let cf_y = Codec.(f_y $ fun r -> r.y) in
+    let cf_x = Codec.(f_x $ fun (r : multi_record) -> r.x) in
+    let cf_y = Codec.(f_y $ fun (r : multi_record) -> r.y) in
     let codec = Codec.v "ViewSetUint" (fun x y -> { x; y }) [ cf_x; cf_y ] in
     (codec, cf_x, cf_y)
   in
@@ -2064,31 +2056,8 @@ let test_bitfield_load_shared () =
   Alcotest.(check int) "a" 0xA a;
   Alcotest.(check int) "b" 0xB b
 
-(* -- Nested: sub-codec used for embedding -- *)
-
-type inner = { tag : int; value : int }
-
-let f_inner_tag = Field.v "Tag" uint8
-let f_inner_value = Field.v "Value" uint16be
-
-let inner_codec =
-  Codec.v "Inner"
-    (fun tag value -> { tag; value })
-    Codec.[ (f_inner_tag $ fun r -> r.tag); (f_inner_value $ fun r -> r.value) ]
-
-(* -- Nested: Codec typ: embed a sub-codec as a field -- *)
-
-type outer = { header : int; inner : inner; trailer : int }
-
-let outer_codec =
-  Codec.v "Outer"
-    (fun header inner trailer -> { header; inner; trailer })
-    Codec.
-      [
-        (Field.v "Header" uint8 $ fun r -> r.header);
-        (Field.v "Inner" (codec inner_codec) $ fun r -> r.inner);
-        (Field.v "Trailer" uint8 $ fun r -> r.trailer);
-      ]
+(* -- Nested: Codec typ: embed a sub-codec as a field --
+   [inner] / [outer] / [inner_codec] / [outer_codec] live in {!Test_fixtures}. *)
 
 let test_codec_embed_decode () =
   (* header(1) + tag(1) + value(2) + trailer(1) = 5 bytes *)
@@ -2168,34 +2137,8 @@ let test_codec_embed_bitfield () =
   Alcotest.(check int) "flags" 0x5 r.bf.flags;
   Alcotest.(check int) "checksum" 0xFF r.checksum
 
-(* Two levels of nesting *)
-
-type l2 = { l2_x : int }
-type l1 = { l1_inner : l2; l1_y : int }
-type l0 = { l0_inner : l1; l0_z : int }
-
-let l2_codec =
-  Codec.v "L2"
-    (fun x -> { l2_x = x })
-    Codec.[ (Field.v "X" uint8 $ fun r -> r.l2_x) ]
-
-let l1_codec =
-  Codec.v "L1"
-    (fun inner y -> { l1_inner = inner; l1_y = y })
-    Codec.
-      [
-        (Field.v "Inner" (codec l2_codec) $ fun r -> r.l1_inner);
-        (Field.v "Y" uint16be $ fun r -> r.l1_y);
-      ]
-
-let l0_codec =
-  Codec.v "L0"
-    (fun inner z -> { l0_inner = inner; l0_z = z })
-    Codec.
-      [
-        (Field.v "Inner" (codec l1_codec) $ fun r -> r.l0_inner);
-        (Field.v "Z" uint8 $ fun r -> r.l0_z);
-      ]
+(* Two levels of nesting --
+   [l0] / [l1] / [l2] and their codecs live in {!Test_fixtures}. *)
 
 let test_codec_embed_nested () =
   (* l2(1) + l1_y(2) + z(1) = 4 bytes *)
@@ -2456,24 +2399,9 @@ let test_codec_crossref_field_bitfield () =
   Alcotest.(check int) "flags" 0xA r.bff_hdr.bh_flags;
   Alcotest.(check string) "data" "XYZ" r.bff_data
 
-(* -- Nested: Optional typ: conditional field presence -- *)
-
-type opt_record = { opt_hdr : int; opt_payload : int option; opt_trail : int }
-
-let opt_codec ~present =
-  Codec.v "OptRecord"
-    (fun hdr payload trail ->
-      { opt_hdr = hdr; opt_payload = payload; opt_trail = trail })
-    Codec.
-      [
-        (Field.v "Hdr" uint8 $ fun r -> r.opt_hdr);
-        ( Field.v "Payload" (optional (bool present) uint16be) $ fun r ->
-          r.opt_payload );
-        (Field.v "Trail" uint8 $ fun r -> r.opt_trail);
-      ]
-
-let opt_codec_present = opt_codec ~present:true
-let opt_codec_absent = opt_codec ~present:false
+(* -- Nested: Optional typ: conditional field presence --
+   [opt_record], [opt_codec], [opt_codec_present], [opt_codec_absent] live
+   in {!Test_fixtures}. *)
 
 let test_optional_present_decode () =
   (* hdr(1) + payload(2) + trail(1) = 4 bytes *)
@@ -2586,7 +2514,7 @@ let test_optional_codec_absent () =
   Alcotest.(check int) "hdr" 0xAA r.oc_hdr;
   Alcotest.(check (option int))
     "inner" None
-    (Option.map (fun i -> i.tag) r.oc_inner);
+    (Option.map (fun (i : inner) -> i.tag) r.oc_inner);
   Alcotest.(check int) "trail" 0xBB r.oc_trail
 
 (* Multiple optional fields (TM frame pattern) *)
@@ -2762,22 +2690,8 @@ let test_uint64_ref_in_size () =
   Alcotest.(check int64) "len" 3L len;
   Alcotest.(check string) "data" "ABC" data
 
-(* -- Nested: Repeat typ: parse elements until byte budget exhausted -- *)
-
-type container = { cnt_length : int; cnt_items : inner list }
-
-let f_cnt_length = Field.v "Length" uint8
-
-let repeat_codec =
-  Codec.v "Container"
-    (fun length items -> { cnt_length = length; cnt_items = items })
-    Codec.
-      [
-        (f_cnt_length $ fun r -> r.cnt_length);
-        ( Field.v "Items"
-            (repeat ~size:(Field.ref f_cnt_length) (codec inner_codec))
-        $ fun r -> r.cnt_items );
-      ]
+(* -- Nested: Repeat typ: parse elements until byte budget exhausted --
+   [container], [f_cnt_length], [repeat_codec] live in {!Test_fixtures}. *)
 
 let test_repeat_decode_empty () =
   (* length=0 -> no items *)
@@ -2817,7 +2731,7 @@ let test_repeat_decode_multiple () =
   Alcotest.(check int) "length" 9 r.cnt_length;
   Alcotest.(check int) "item count" 3 (List.length r.cnt_items);
   List.iteri
-    (fun i item ->
+    (fun i (item : inner) ->
       Alcotest.(check int) (Fmt.str "item[%d].tag" i) (i + 1) item.tag;
       Alcotest.(check int) (Fmt.str "item[%d].value" i) (i + 1) item.value)
     r.cnt_items
@@ -2853,7 +2767,7 @@ let test_repeat_roundtrip () =
   Alcotest.(check int) "length" original.cnt_length decoded.cnt_length;
   Alcotest.(check int) "item count" 3 (List.length decoded.cnt_items);
   List.iter2
-    (fun orig dec ->
+    (fun (orig : inner) (dec : inner) ->
       Alcotest.(check int) "tag" orig.tag dec.tag;
       Alcotest.(check int) "value" orig.value dec.value)
     original.cnt_items decoded.cnt_items
@@ -2969,20 +2883,9 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check int) "item1.len" 3 i1.vi_len;
   Alcotest.(check string) "item1.data" "cde" i1.vi_data
 
-(* -- Nested: Composition: optional + repeat + codec -- *)
-
-(* TM-frame-like structure: header + data zone (repeat of packets) + optional OCF + optional FECF *)
-
-type packet = { pkt_id : int; pkt_data : int }
-
-let packet_codec =
-  Codec.v "Packet"
-    (fun id data -> { pkt_id = id; pkt_data = data })
-    Codec.
-      [
-        (Field.v "Id" uint8 $ fun r -> r.pkt_id);
-        (Field.v "Data" uint16be $ fun r -> r.pkt_data);
-      ]
+(* -- Nested: Composition: optional + repeat + codec --
+   TM-frame-like structure: header + data zone (repeat of packets) + optional
+   OCF + optional FECF. [packet] / [packet_codec] live in {!Test_fixtures}. *)
 
 type tm_like = {
   tm_hdr : int;

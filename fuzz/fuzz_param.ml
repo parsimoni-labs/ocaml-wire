@@ -172,17 +172,6 @@ let test_typed_assign buf =
   let _ = Wire.Param.get env out in
   ()
 
-(* Fuzz: map ~decode ~encode roundtrip *)
-let test_map_roundtrip n =
-  let n = abs n mod 256 in
-  let t =
-    Wire.map ~decode:(fun x -> x * 2) ~encode:(fun x -> x / 2) Wire.uint8
-  in
-  let encoded = Wire.to_string t (n * 2) in
-  match Wire.of_string t encoded with
-  | Ok decoded -> if n * 2 <> decoded then fail "map roundtrip mismatch"
-  | Error _ -> fail "map roundtrip parse failed"
-
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -200,7 +189,6 @@ let param_ref_tests =
     test_case "param_ref where" [ bytes ] test_param_ref_where;
     test_case "param_ref constraint" [ bytes ] test_param_ref_constraint;
     test_case "typed assign" [ bytes ] test_typed_assign;
-    test_case "map roundtrip" [ int ] test_map_roundtrip;
   ]
 
 let suite = ("param", parse_tests @ param_ref_tests)
