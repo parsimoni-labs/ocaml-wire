@@ -40,6 +40,14 @@ All bench/prof/memtrace targets use `--profile=release`.
 - `test/` -- Alcotest unit tests and differential tests (`test/diff/`)
 - `.github/workflows/ci.yml` -- CI workflow
 
+## Feature shippability
+
+Every feature in `ocaml-wire` must project cleanly to EverParse 3D. A
+feature that decodes/encodes on the OCaml side but has no clean 3D
+projection is **not shipped**. The OCaml side and the 3D side are part
+of the same release-shaped unit; partial work goes in a branch but
+does not merge until both halves land.
+
 ## Code generation pipeline
 
 All C code generation flows through `Wire.Everparse` (no duplication):

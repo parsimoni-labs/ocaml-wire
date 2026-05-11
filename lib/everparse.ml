@@ -23,11 +23,16 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
   | Types.Byte_array _ | Types.Byte_array_where _ | Types.Byte_slice _
   | Types.Uint_var _ ->
       true
+  | Types.All_bytes | Types.All_zeros -> true
   | Types.Optional { present = Types.Bool _; _ } -> false
   | Types.Optional _ -> true
   | Types.Optional_or { present = Types.Bool _; _ } -> false
   | Types.Optional_or _ -> true
   | Types.Map { inner; _ } -> is_byte_field inner
+  (* Casetype projects to a struct value, which is not "readable" in 3D
+     actions. Treat it like a byte span: the SetBytes setter receives an
+     offset into the buffer, and the C side decodes if it wants to. *)
+  | Types.Casetype _ -> true
   | _ -> false
 
 type setter_info = { setter_name : string; setter_val_typ : Types.packed_typ }
@@ -367,6 +372,11 @@ let coalesced_wire_size fields =
   with Bail -> None
 
 let schema_of_struct (s : Types.struct_) : t =
+  (* Split string-tagged casetype fields up-front so [source] and
+     [with_output] see the same field list. Downstream codegen
+     (plug fields, stubs) walks [source] to expose every named field --
+     it must include the synthesised body field of each casetype. *)
+  let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
   let decls = with_output s in

@@ -151,10 +151,10 @@ let test_casetype_inline () =
   let t : ep_case_val Wire.typ =
     Wire.casetype "Tag" Wire.uint8
       [
-        Wire.case Wire.uint16
+        Wire.case ~index:0 Wire.uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        Wire.case Wire.uint32
+        Wire.case ~index:1 Wire.uint32
           ~inject:(fun v -> `U32 (Wire.Private.UInt32.to_int v))
           ~project:(function
             | `U32 v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);

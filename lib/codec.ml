@@ -949,7 +949,8 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       let tag_val = read_elem tag buf off in
       let body_off = off + tag_size in
       let rec find = function
-        | [] -> raise (Parse_error (Invalid_tag tag_val))
+        | [] ->
+            raise (Parse_error (Constraint_failed "casetype: no matching case"))
         | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
           when t = tag_val ->
             cb_inject (read_elem cb_inner buf body_off)
@@ -1004,7 +1005,8 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
       let tag_val = read_elem tag buf off in
       let body_off = off + tag_size in
       let rec find = function
-        | [] -> raise (Parse_error (Invalid_tag tag_val))
+        | [] ->
+            raise (Parse_error (Constraint_failed "casetype: no matching case"))
         | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
             tag_size + elem_size_of cb_inner buf body_off
         | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->

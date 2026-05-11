@@ -163,10 +163,58 @@ let e2e_underflow_codec =
   let open Codec in
   v "UnderflowCheck" (fun len data -> (len, data)) [ f_len $ fst; f_data $ snd ]
 
+(* [Wire.casetype] in a codec field. The Everparse projection auto-emits
+   a [casetype_decl] dispatch + wrapper typedef per unique int-tagged
+   [Casetype], then references the wrapper as the field type. End-to-end
+   check that 3d.exe accepts the synthesised module and the generated C
+   compiles. *)
+type ep_case_v = [ `U16 of int | `Default of int ]
+
+let e2e_casetype_codec =
+  let open Wire in
+  let body : ep_case_v typ =
+    casetype "CtBody" uint8
+      [
+        case ~index:1 uint16
+          ~inject:(fun v -> `U16 v)
+          ~project:(function `U16 v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun v -> `Default v)
+          ~project:(function `Default v -> Some v | _ -> None);
+      ]
+  in
+  let f = Field.v "msg" body in
+  Codec.v "Ctt" (fun m -> m) [ Codec.( $ ) f (fun m -> m) ]
+
+(* String-tagged casetype: the 3D projection rewrites the casetype field
+   into two adjacent byte spans (tag and body) so dispatch happens in
+   caller code, mirroring OpenSSH's two-step pattern. No 3D-side extern,
+   scratch slot or runtime helper -- just two SetBytes setters. *)
+type ssh_auth = [ `Publickey of int | `Other of int ]
+
+let e2e_ssh_casetype_codec =
+  let open Wire in
+  let body : ssh_auth typ =
+    casetype "AuthMethod"
+      (byte_array ~size:(int 9))
+      [
+        case ~index:"publickey" uint8
+          ~inject:(fun v -> `Publickey v)
+          ~project:(function `Publickey v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun v -> `Other v)
+          ~project:(function `Other v -> Some v | _ -> None);
+      ]
+  in
+  let f = Field.v "method" body in
+  Codec.v "Sshauth" (fun m -> m) [ Codec.( $ ) f (fun m -> m) ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
+  compile_and_run ~name:"Ctt" e2e_casetype_codec;
+  compile_and_run ~name:"Sshauth" e2e_ssh_casetype_codec;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
   compile_and_run ~name:"EP_Header" e2e_mixed_codec;
   compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec

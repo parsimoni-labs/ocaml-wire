@@ -149,8 +149,8 @@ and _ typ =
       -> int typ  (** Named enumeration. *)
   | Casetype : {
       name : string;
-      tag : int typ;
-      cases : 'a case_branch list;
+      tag : 'k typ;
+      cases : ('a, 'k) case_branch list;
     }
       -> 'a typ  (** Tag-dispatched union. *)
   | Struct : struct_ -> unit typ  (** Nested struct. *)
@@ -185,14 +185,14 @@ and _ typ =
     }
       -> 'seq typ  (** Repeated elements filling a byte budget. *)
 
-and 'a case_branch =
+and ('a, 'k) case_branch =
   | Case_branch : {
-      cb_tag : int option;
+      cb_tag : 'k option;
       cb_inner : 'w typ;
       cb_inject : 'w -> 'a;
       cb_project : 'a -> 'w option;
     }
-      -> 'a case_branch
+      -> ('a, 'k) case_branch
 
 and packed_expr =
   | Pack_expr : 'a expr -> packed_expr  (** Existentially packed expression. *)
@@ -495,24 +495,33 @@ val enum : string -> (string * int) list -> int typ -> int typ
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** Named variant mapping over an integer base. *)
 
-type 'a case_def
-(** A casetype branch definition. *)
+type ('a, 'k) case_def
+(** A casetype branch definition. ['k] is the discriminator type. *)
 
 val case :
-  ?index:int ->
+  ?index:'k ->
   'w typ ->
   inject:('w -> 'a) ->
   project:('a -> 'w option) ->
-  'a case_def
+  ('a, 'k) case_def
 (** A branch matching a specific tag value. *)
 
 val default :
-  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> 'a case_def
+  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> ('a, 'k) case_def
 (** A default branch. *)
 
-val casetype :
-  ?first:int -> ?step:int -> string -> int typ -> 'a case_def list -> 'a typ
-(** Tag-dispatched union type. *)
+val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
+(** [casetype name tag defs] is a tag-dispatched union. Every case must supply
+    an explicit [~index]; the discriminator type ['k] can be [int], [string], or
+    any other typ with decidable equality. *)
+
+val split_string_casetype_fields : struct_ -> struct_
+(** [split_string_casetype_fields s] rewrites each [Casetype] field of [s] whose
+    tag is not an int-shaped typ into two adjacent byte fields: the tag bytes
+    and a trailing [all_bytes] body. Used by the 3D projection so string-tagged
+    casetype dispatch becomes caller code instead of parser code, matching how
+    real protocol implementations like OpenSSH split the parse and dispatch
+    steps. *)
 
 (** {1 Struct Constructors} *)
 

@@ -2,6 +2,12 @@
 
 ### Added
 
+- `Wire.casetype` now accepts any tag typ (`'k typ`, not just `int`) and
+  projects cleanly to 3D: int-tagged casetypes get an auto-emitted
+  `casetype_decl` + wrapper typedef; byte-tagged casetypes (e.g.
+  `byte_array ~size`) project as two adjacent byte spans so dispatch
+  happens in caller code, matching how OpenSSH and similar protocol
+  parsers handle string-discriminated messages (#49, @samoht)
 - Support `Wire.casetype` and `Wire.nested ~size` as `Codec` fields
   (#47, @samoht)
 - Add `Field.optional` / `Field.optional_or` / `Field.repeat` /
