@@ -2731,6 +2731,32 @@ let test_optional_lor_predicate () =
   let r = decode_ok (Codec.decode c (Bytes.of_string "\xFF") 0) in
   Alcotest.(check (option int)) "lor no match" None r.bg_body
 
+(* [Field.ref] on an [optional] field must read the inner value, not 0.
+   The codec engine used to skip populating the int_array slot for
+   [Optional] fields, so any constraint or size expression referring to
+   the optional silently saw 0. *)
+
+type ref_opt = { ro_x : int option; ro_check : int }
+
+let f_ro_x = Field.optional "X" ~present:Expr.true_ uint8
+
+let ref_opt_codec =
+  let f_check =
+    Field.v "Check" uint8 ~constraint_:Expr.(Field.ref f_ro_x > int 0)
+  in
+  Codec.v "RefOpt"
+    (fun x check -> { ro_x = x; ro_check = check })
+    Codec.[ (f_ro_x $ fun r -> r.ro_x); (f_check $ fun r -> r.ro_check) ]
+
+let test_field_ref_through_optional () =
+  (* x=0x80 (present); the constraint reads ref(x) and asserts it's
+     non-zero. With the populate bug, ref(x) read 0 and the constraint
+     failed; with the fix it reads 0x80 and the decode succeeds. *)
+  let buf = Bytes.of_string "\x80\x7F" in
+  let r = decode_ok (Codec.decode ref_opt_codec buf 0) in
+  Alcotest.(check (option int)) "x" (Some 0x80) r.ro_x;
+  Alcotest.(check int) "check" 0x7F r.ro_check
+
 let test_uint64_ref_in_size () =
   let f_len = Field.v "Len" uint64be in
   let codec =
@@ -3752,6 +3778,8 @@ let suite =
         test_optional_mod_predicate;
       Alcotest.test_case "optional: lor predicate" `Quick
         test_optional_lor_predicate;
+      Alcotest.test_case "optional: Field.ref reads inner value" `Quick
+        test_field_ref_through_optional;
       Alcotest.test_case "ref: uint64 in size expr" `Quick
         test_uint64_ref_in_size;
       (* repeat *)

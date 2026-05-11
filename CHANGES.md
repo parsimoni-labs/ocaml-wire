@@ -39,7 +39,8 @@
 
 - Fix silent always-true compilation of `Field.optional` /
   `Field.optional_or` predicates that use bitwise / shift / mod
-  operators (#48, @samoht)
+  operators, and fix `Field.ref` on an `optional` field reading 0
+  instead of the decoded inner value (#48, @samoht)
 - Allow variable-size sub-codecs and `Field.repeat` after a
   variable-size field (#38, @samoht)
 - Fix C stub generator for schema names with 2+ leading capitals

@@ -218,11 +218,28 @@ let rec build_populate : type a.
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; _ } -> build_populate base idx reader
   | Map { inner; encode; _ } ->
+      build_populate inner idx (fun buf base -> encode (reader buf base))
+  | Optional_or { inner; _ } ->
+      (* [Optional_or] returns the inner type directly (no [option] wrapper),
+         so the reader is already of the inner's value type. *)
+      build_populate inner idx reader
+  | Optional { inner; _ } -> (
+      (* The optional decodes as ['inner option]; populate from the inner
+         value when present, leave the slot at 0 when absent. *)
       let inner_populate =
-        build_populate inner idx (fun buf base -> encode (reader buf base))
+        build_populate inner idx (fun buf base ->
+            match reader buf base with Some v -> v | None -> assert false)
       in
-      inner_populate
-  | _ -> fun _arr _buf _base -> ()
+      fun arr buf base ->
+        match reader buf base with
+        | Some _ -> inner_populate arr buf base
+        | None -> ())
+  | _ ->
+      (* Aggregate / string-valued types have no scalar int projection.
+         [Field.ref] over them reads 0; treat as deliberate (no slot
+         write) rather than an error since [ref] currently accepts any
+         field type. *)
+      fun _arr _buf _base -> ()
 
 (* Bitfield extraction descriptor: word reader + packed shift/mask.
    Packing shift and mask into a single int lets [extract] be a direct
@@ -1449,9 +1466,11 @@ and compile_optional : type a r.
     (a option, r) compiled_field =
  fun ctx fld present inner ->
   let inner_size = field_wire_size inner in
+  let nfields = ctx.lc_n_fields in
   match (present, inner_size) with
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let inner_populate = build_populate inner nfields inner_reader in
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun buf base -> Some (inner_reader buf base))
@@ -1459,7 +1478,7 @@ and compile_optional : type a r.
           match get v with Some iv -> inner_writer buf off iv | None -> ())
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.lc_next_off fsize)
-        ~populate:no_populate
+        ~populate:inner_populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> None)
@@ -1468,6 +1487,7 @@ and compile_optional : type a r.
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.lc_field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let inner_populate = build_populate inner nfields inner_reader in
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun buf base ->
@@ -1476,7 +1496,8 @@ and compile_optional : type a r.
           match get v with Some iv -> inner_writer buf off iv | None -> ())
         ~size_delta:0
         ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
-        ~populate:no_populate
+        ~populate:(fun arr buf base ->
+          if present_fn buf base then inner_populate arr buf base)
   | _ ->
       invalid_arg
         "add_field: dynamic optional with variable-size inner not yet supported"
