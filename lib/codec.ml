@@ -572,16 +572,18 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
         | None -> fun _ -> ()
       in
       fun arr -> if fc arr then ft arr else fe arr
-  | Var (name, e) -> (
-      (* Extend index for subsequent statements -- but since Var only affects
-         later statements in the same block, we handle it at the block level *)
+  | Var (name, e) ->
+      (* [Action.var name e] writes [e]'s value to the int_array slot for
+         [name]. The slot is auto-registered by [action_vars] before the
+         index is built, so [cc.idx name] always resolves; the
+         out-of-bounds and [Failure] catches that used to live here were
+         dead defensive code, and matched the silent-default shape that
+         hid the predicate / [Field.ref] bugs in the parallel compilers.
+         Drop the catches -- if [cc.idx name] ever raises here we want it
+         to surface, not write to nowhere. *)
+      let i = cc.idx name in
       let fe = compile_int_arr cc e in
-      fun arr ->
-        (* Store in array if name is a known field *)
-        match cc.idx name with
-        | i when i < Array.length arr -> arr.(i) <- fe arr
-        | _ -> ()
-        | exception Failure _ -> ())
+      fun arr -> arr.(i) <- fe arr
 
 and compile_stmts (cc : compile_ctx) (stmts : Types.action_stmt list) :
     compiled_action =
