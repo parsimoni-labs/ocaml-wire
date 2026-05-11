@@ -172,6 +172,76 @@ let test_typed_assign buf =
   let _ = Wire.Param.get env out in
   ()
 
+(* Property: an [optional] predicate built from any [int expr] operator
+   must agree with the same operator evaluated in plain OCaml. Catches
+   the silent-true fallback that [compile_bool_expr] used for operators
+   missing from its dispatch (Land, Lor, Lxor, Lsr, Lsl, Mod, Cast,
+   If_then_else). *)
+
+type opt_rec = { ovr_flags : int; ovr_body : int option }
+
+let f_ovr_flags = Wire.Field.v "Flags" Wire.uint8
+
+let build_predicate ~op_idx ~k =
+  let module E = Wire.Expr in
+  let lhs = E.( land ) (Wire.Field.ref f_ovr_flags) (Wire.int 0xFF) in
+  let r =
+    match abs op_idx mod 7 with
+    | 0 -> E.( land ) lhs (Wire.int k)
+    | 1 -> E.( lor ) lhs (Wire.int k)
+    | 2 -> E.( lxor ) lhs (Wire.int k)
+    | 3 -> E.( lsr ) lhs (Wire.int (abs k mod 8))
+    | 4 -> E.( lsl ) lhs (Wire.int (abs k mod 8))
+    | 5 -> E.( mod ) lhs (Wire.int ((abs k mod 7) + 1))
+    | _ -> E.( + ) lhs (Wire.int k)
+  in
+  E.( <> ) r (Wire.int 0)
+
+let eval_predicate ~op_idx ~k ~flags =
+  let l = flags land 0xFF in
+  match abs op_idx mod 7 with
+  | 0 -> l land k <> 0
+  | 1 -> l lor k <> 0
+  | 2 -> l lxor k <> 0
+  | 3 -> l lsr (abs k mod 8) <> 0
+  | 4 -> l lsl (abs k mod 8) <> 0
+  | 5 -> l mod ((abs k mod 7) + 1) <> 0
+  | _ -> l + k <> 0
+
+let test_optional_predicate_operator op_idx k flags =
+  let flags = abs flags mod 256 in
+  let present = build_predicate ~op_idx ~k in
+  let c =
+    Wire.Codec.v "OptVar"
+      (fun flags body -> { ovr_flags = flags; ovr_body = body })
+      Wire.Codec.
+        [
+          (f_ovr_flags $ fun r -> r.ovr_flags);
+          (Wire.Field.optional "Body" ~present Wire.uint8 $ fun r -> r.ovr_body);
+        ]
+  in
+  let expected_present = eval_predicate ~op_idx ~k ~flags in
+  let buf =
+    if expected_present then (
+      let b = Bytes.create 2 in
+      Bytes.set_uint8 b 0 flags;
+      Bytes.set_uint8 b 1 0x42;
+      b)
+    else
+      let b = Bytes.create 1 in
+      Bytes.set_uint8 b 0 flags;
+      b
+  in
+  match Wire.Codec.decode c buf 0 with
+  | Ok r ->
+      let actual_present = r.ovr_body <> None in
+      if actual_present <> expected_present then
+        fail
+          (Fmt.str "op=%d k=%d flags=0x%02x: expected present=%b got present=%b"
+             (abs op_idx mod 7)
+             k flags expected_present actual_present)
+  | Error e -> fail (Fmt.str "decode error: %a" Wire.pp_parse_error e)
+
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -191,4 +261,10 @@ let param_ref_tests =
     test_case "typed assign" [ bytes ] test_typed_assign;
   ]
 
-let suite = ("param", parse_tests @ param_ref_tests)
+let predicate_tests =
+  [
+    test_case "optional predicate matches OCaml eval" [ int; int; int ]
+      test_optional_predicate_operator;
+  ]
+
+let suite = ("param", parse_tests @ param_ref_tests @ predicate_tests)

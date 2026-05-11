@@ -322,73 +322,151 @@ let rec compile_expr ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
       | None ->
           Fmt.invalid_arg "Codec: unbound field ref %S in size expression" name)
   | Add (a, b) ->
-      let fa = rec_ a in
-      let fb = rec_ b in
+      let fa = rec_ a and fb = rec_ b in
       fun buf base -> fa buf base + fb buf base
   | Sub (a, b) ->
-      let fa = rec_ a in
-      let fb = rec_ b in
+      let fa = rec_ a and fb = rec_ b in
       fun buf base -> fa buf base - fb buf base
   | Mul (a, b) ->
-      let fa = rec_ a in
-      let fb = rec_ b in
+      let fa = rec_ a and fb = rec_ b in
       fun buf base -> fa buf base * fb buf base
   | Div (a, b) ->
-      let fa = rec_ a in
-      let fb = rec_ b in
+      let fa = rec_ a and fb = rec_ b in
       fun buf base -> fa buf base / fb buf base
+  | Mod (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base mod fb buf base
+  | Land (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base land fb buf base
+  | Lor (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base lor fb buf base
+  | Lxor (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base lxor fb buf base
+  | Lnot a ->
+      let fa = rec_ a in
+      fun buf base -> lnot (fa buf base)
+  | Lsl (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base lsl fb buf base
+  | Lsr (a, b) ->
+      let fa = rec_ a and fb = rec_ b in
+      fun buf base -> fa buf base lsr fb buf base
+  | Cast (w, a) -> (
+      let fa = rec_ a in
+      match w with
+      | `U8 -> fun buf base -> fa buf base land 0xFF
+      | `U16 -> fun buf base -> fa buf base land 0xFFFF
+      | `U32 -> fun buf base -> fa buf base land 0xFFFF_FFFF
+      | `U64 -> fa)
+  | If_then_else (c, t, e) ->
+      let fc = compile_bool_expr ~sizeof_this env c in
+      let ft = rec_ t and fe = rec_ e in
+      fun buf base -> if fc buf base then ft buf base else fe buf base
   | Param_ref p -> fun _buf _base -> !(p.ph_cell)
   | Sizeof t -> (
       match field_wire_size t with
       | Some n -> fun _buf _base -> n
       | None -> invalid_arg "Codec: sizeof on variable-size type")
   | Sizeof_this -> sizeof_this
-  | _ -> invalid_arg "Codec: unsupported expression in dependent size"
+  | Field_pos -> invalid_arg "Codec: [field_pos] only valid inside an action"
 
-let try_compile_int_reader : type a.
-    field_reader list -> a expr -> (bytes -> int -> int) option =
- fun env -> function
-  | Int _ as e -> Some (compile_expr env e)
-  | Ref _ as e -> Some (compile_expr env e)
-  | Param_ref _ as e -> Some (compile_expr env e)
-  | Add _ as e -> Some (compile_expr env e)
-  | Sub _ as e -> Some (compile_expr env e)
-  | Mul _ as e -> Some (compile_expr env e)
-  | Div _ as e -> Some (compile_expr env e)
+(* Try compiling [a expr] as an [int expr] reader. Pattern matches each
+   int constructor so the GADT refines the type to [int expr] in each
+   arm. Used by [compile_bool_expr] to dispatch typed equality. *)
+and try_compile_int_reader : type a.
+    sizeof_this:(bytes -> int -> int) ->
+    field_reader list ->
+    a expr ->
+    (bytes -> int -> int) option =
+ fun ~sizeof_this env e ->
+  let go e = Some (compile_expr ~sizeof_this env e) in
+  match e with
+  | Int _ as e -> go e
+  | Ref _ as e -> go e
+  | Param_ref _ as e -> go e
+  | Sizeof _ as e -> go e
+  | Sizeof_this as e -> go e
+  | Field_pos as e -> go e
+  | Add _ as e -> go e
+  | Sub _ as e -> go e
+  | Mul _ as e -> go e
+  | Div _ as e -> go e
+  | Mod _ as e -> go e
+  | Land _ as e -> go e
+  | Lor _ as e -> go e
+  | Lxor _ as e -> go e
+  | Lnot _ as e -> go e
+  | Lsl _ as e -> go e
+  | Lsr _ as e -> go e
+  | Cast _ as e -> go e
+  | If_then_else _ as e -> go e
   | _ -> None
 
-let rec compile_bool_expr (env : field_reader list) (e : bool expr) :
-    bytes -> int -> bool =
+and try_compile_bool_reader : type a.
+    sizeof_this:(bytes -> int -> int) ->
+    field_reader list ->
+    a expr ->
+    (bytes -> int -> bool) option =
+ fun ~sizeof_this env e ->
+  let go e = Some (compile_bool_expr ~sizeof_this env e) in
+  match e with
+  | Bool _ as e -> go e
+  | Eq _ as e -> go e
+  | Ne _ as e -> go e
+  | Lt _ as e -> go e
+  | Le _ as e -> go e
+  | Gt _ as e -> go e
+  | Ge _ as e -> go e
+  | And _ as e -> go e
+  | Or _ as e -> go e
+  | Not _ as e -> go e
+  | _ -> None
+
+and compile_bool_expr ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
+    (env : field_reader list) (e : bool expr) : bytes -> int -> bool =
+  let bool_rec e = compile_bool_expr ~sizeof_this env e in
+  let int_rec e = compile_expr ~sizeof_this env e in
+  let try_int : type a. a expr -> (bytes -> int -> int) option =
+   fun e -> try_compile_int_reader ~sizeof_this env e
+  in
+  let try_bool : type a. a expr -> (bytes -> int -> bool) option =
+   fun e -> try_compile_bool_reader ~sizeof_this env e
+  in
   match e with
   | Bool b -> fun _buf _base -> b
   | Eq (a, b) -> (
-      match (try_compile_int_reader env a, try_compile_int_reader env b) with
-      | Some fa, Some fb -> fun buf base -> fa buf base = fb buf base
-      | _ -> fun _buf _base -> true)
+      match (try_int a, try_int b, try_bool a, try_bool b) with
+      | Some fa, Some fb, _, _ -> fun buf base -> fa buf base = fb buf base
+      | _, _, Some fa, Some fb -> fun buf base -> fa buf base = fb buf base
+      | _ -> assert false)
   | Ne (a, b) -> (
-      match (try_compile_int_reader env a, try_compile_int_reader env b) with
-      | Some fa, Some fb -> fun buf base -> fa buf base <> fb buf base
-      | _ -> fun _buf _base -> true)
+      match (try_int a, try_int b, try_bool a, try_bool b) with
+      | Some fa, Some fb, _, _ -> fun buf base -> fa buf base <> fb buf base
+      | _, _, Some fa, Some fb -> fun buf base -> fa buf base <> fb buf base
+      | _ -> assert false)
   | Lt (a, b) ->
-      let fa = compile_expr env a and fb = compile_expr env b in
+      let fa = int_rec a and fb = int_rec b in
       fun buf base -> fa buf base < fb buf base
   | Le (a, b) ->
-      let fa = compile_expr env a and fb = compile_expr env b in
+      let fa = int_rec a and fb = int_rec b in
       fun buf base -> fa buf base <= fb buf base
   | Gt (a, b) ->
-      let fa = compile_expr env a and fb = compile_expr env b in
+      let fa = int_rec a and fb = int_rec b in
       fun buf base -> fa buf base > fb buf base
   | Ge (a, b) ->
-      let fa = compile_expr env a and fb = compile_expr env b in
+      let fa = int_rec a and fb = int_rec b in
       fun buf base -> fa buf base >= fb buf base
   | And (a, b) ->
-      let fa = compile_bool_expr env a and fb = compile_bool_expr env b in
+      let fa = bool_rec a and fb = bool_rec b in
       fun buf base -> fa buf base && fb buf base
   | Or (a, b) ->
-      let fa = compile_bool_expr env a and fb = compile_bool_expr env b in
+      let fa = bool_rec a and fb = bool_rec b in
       fun buf base -> fa buf base || fb buf base
   | Not e ->
-      let fe = compile_bool_expr env e in
+      let fe = bool_rec e in
       fun buf base -> not (fe buf base)
 
 (* Compile expressions to read from a per-decode int array instead of a Map.
@@ -468,38 +546,70 @@ let rec compile_int_arr (cc : compile_ctx) (e : int expr) : int array -> int =
    Returns None if the expression is not an int expr. *)
 and try_compile_int : type a. compile_ctx -> a expr -> (int array -> int) option
     =
- fun cc -> function
-  | Int _ as e -> Some (compile_int_arr cc e)
-  | Ref _ as e -> Some (compile_int_arr cc e)
-  | Param_ref _ as e -> Some (compile_int_arr cc e)
-  | Sizeof _ as e -> Some (compile_int_arr cc e)
-  | Sizeof_this as e -> Some (compile_int_arr cc e)
-  | Field_pos as e -> Some (compile_int_arr cc e)
-  | Add _ as e -> Some (compile_int_arr cc e)
-  | Sub _ as e -> Some (compile_int_arr cc e)
-  | Mul _ as e -> Some (compile_int_arr cc e)
-  | Div _ as e -> Some (compile_int_arr cc e)
-  | Mod _ as e -> Some (compile_int_arr cc e)
-  | Land _ as e -> Some (compile_int_arr cc e)
-  | Lor _ as e -> Some (compile_int_arr cc e)
-  | Lxor _ as e -> Some (compile_int_arr cc e)
-  | Lnot _ as e -> Some (compile_int_arr cc e)
-  | Lsl _ as e -> Some (compile_int_arr cc e)
-  | Lsr _ as e -> Some (compile_int_arr cc e)
-  | Cast _ as e -> Some (compile_int_arr cc e)
+ fun cc e ->
+  let go e = Some (compile_int_arr cc e) in
+  match e with
+  | Int _ as e -> go e
+  | Ref _ as e -> go e
+  | Param_ref _ as e -> go e
+  | Sizeof _ as e -> go e
+  | Sizeof_this as e -> go e
+  | Field_pos as e -> go e
+  | Add _ as e -> go e
+  | Sub _ as e -> go e
+  | Mul _ as e -> go e
+  | Div _ as e -> go e
+  | Mod _ as e -> go e
+  | Land _ as e -> go e
+  | Lor _ as e -> go e
+  | Lxor _ as e -> go e
+  | Lnot _ as e -> go e
+  | Lsl _ as e -> go e
+  | Lsr _ as e -> go e
+  | Cast _ as e -> go e
+  | If_then_else _ as e -> go e
+  | _ -> None
+
+and try_compile_bool : type a.
+    compile_ctx -> a expr -> (int array -> bool) option =
+ fun cc e ->
+  let go e = Some (compile_bool_arr cc e) in
+  match e with
+  | Bool _ as e -> go e
+  | Eq _ as e -> go e
+  | Ne _ as e -> go e
+  | Lt _ as e -> go e
+  | Le _ as e -> go e
+  | Gt _ as e -> go e
+  | Ge _ as e -> go e
+  | And _ as e -> go e
+  | Or _ as e -> go e
+  | Not _ as e -> go e
   | _ -> None
 
 and compile_bool_arr (cc : compile_ctx) (e : bool expr) : int array -> bool =
   match e with
   | Bool b -> fun _ -> b
   | Eq (a, b) -> (
-      match (try_compile_int cc a, try_compile_int cc b) with
-      | Some fa, Some fb -> fun arr -> fa arr = fb arr
-      | _ -> fun _ -> true)
+      match
+        ( try_compile_int cc a,
+          try_compile_int cc b,
+          try_compile_bool cc a,
+          try_compile_bool cc b )
+      with
+      | Some fa, Some fb, _, _ -> fun arr -> fa arr = fb arr
+      | _, _, Some fa, Some fb -> fun arr -> fa arr = fb arr
+      | _ -> assert false)
   | Ne (a, b) -> (
-      match (try_compile_int cc a, try_compile_int cc b) with
-      | Some fa, Some fb -> fun arr -> fa arr <> fb arr
-      | _ -> fun _ -> true)
+      match
+        ( try_compile_int cc a,
+          try_compile_int cc b,
+          try_compile_bool cc a,
+          try_compile_bool cc b )
+      with
+      | Some fa, Some fb, _, _ -> fun arr -> fa arr <> fb arr
+      | _, _, Some fa, Some fb -> fun arr -> fa arr <> fb arr
+      | _ -> assert false)
   | Lt (a, b) ->
       let fa = compile_int_arr cc a and fb = compile_int_arr cc b in
       fun arr -> fa arr < fb arr
