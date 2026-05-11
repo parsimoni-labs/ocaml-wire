@@ -242,6 +242,52 @@ let test_optional_predicate_operator op_idx k flags =
              k flags expected_present actual_present)
   | Error e -> fail (Fmt.str "decode error: %a" Wire.pp_parse_error e)
 
+(* Property: [Field.ref f] reads the same int the codec decoded for
+   [f], for every typ shape that can host a ref. *)
+let test_field_ref_matches_decode typ_idx v =
+  let v = abs v mod 256 in
+  let buf = Bytes.create 2 in
+  Bytes.set_uint8 buf 0 v;
+  Bytes.set_uint8 buf 1 v;
+  let check_int_pair name (f : int Wire.Field.t) =
+    let constraint_ =
+      Wire.Expr.(
+        Wire.Field.ref f = Wire.Field.ref (Wire.Field.v "Guard" Wire.uint8))
+    in
+    let f_g = Wire.Field.v "Guard" Wire.uint8 ~constraint_ in
+    let c =
+      Wire.Codec.v ("R_" ^ name)
+        (fun x g -> (x, g))
+        Wire.Codec.[ f $ fst; f_g $ snd ]
+    in
+    match Wire.Codec.decode c buf 0 with
+    | Ok _ -> ()
+    | Error _ -> fail (Fmt.str "%s: decoded != ref for v=0x%02x" name v)
+  in
+  match abs typ_idx mod 4 with
+  | 0 -> check_int_pair "u8" (Wire.Field.v "F" Wire.uint8)
+  | 1 ->
+      let m = Wire.map ~decode:(fun x -> x) ~encode:(fun x -> x) Wire.uint8 in
+      check_int_pair "map" (Wire.Field.v "F" m)
+  | 2 ->
+      let bit = Wire.bits ~width:8 Wire.U8 in
+      check_int_pair "bits" (Wire.Field.v "F" bit)
+  | _ -> (
+      let opt = Wire.Field.optional "F" ~present:Wire.Expr.true_ Wire.uint8 in
+      let constraint_ =
+        Wire.Expr.(
+          Wire.Field.ref opt = Wire.Field.ref (Wire.Field.v "Guard" Wire.uint8))
+      in
+      let f_g = Wire.Field.v "Guard" Wire.uint8 ~constraint_ in
+      let c =
+        Wire.Codec.v "R_opt"
+          (fun x g -> (x, g))
+          Wire.Codec.[ opt $ fst; f_g $ snd ]
+      in
+      match Wire.Codec.decode c buf 0 with
+      | Ok _ -> ()
+      | Error _ -> fail (Fmt.str "opt: decoded != ref for v=0x%02x" v))
+
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -265,6 +311,8 @@ let predicate_tests =
   [
     test_case "optional predicate matches OCaml eval" [ int; int; int ]
       test_optional_predicate_operator;
+    test_case "Field.ref matches decoded value" [ int; int ]
+      test_field_ref_matches_decode;
   ]
 
 let suite = ("param", parse_tests @ param_ref_tests @ predicate_tests)
