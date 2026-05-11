@@ -172,6 +172,122 @@ let test_typed_assign buf =
   let _ = Wire.Param.get env out in
   ()
 
+(* Property: an [optional] predicate built from any [int expr] operator
+   must agree with the same operator evaluated in plain OCaml. Catches
+   the silent-true fallback that [compile_bool_expr] used for operators
+   missing from its dispatch (Land, Lor, Lxor, Lsr, Lsl, Mod, Cast,
+   If_then_else). *)
+
+type opt_rec = { ovr_flags : int; ovr_body : int option }
+
+let f_ovr_flags = Wire.Field.v "Flags" Wire.uint8
+
+let build_predicate ~op_idx ~k =
+  let module E = Wire.Expr in
+  let lhs = E.( land ) (Wire.Field.ref f_ovr_flags) (Wire.int 0xFF) in
+  let r =
+    match abs op_idx mod 7 with
+    | 0 -> E.( land ) lhs (Wire.int k)
+    | 1 -> E.( lor ) lhs (Wire.int k)
+    | 2 -> E.( lxor ) lhs (Wire.int k)
+    | 3 -> E.( lsr ) lhs (Wire.int (abs k mod 8))
+    | 4 -> E.( lsl ) lhs (Wire.int (abs k mod 8))
+    | 5 -> E.( mod ) lhs (Wire.int ((abs k mod 7) + 1))
+    | _ -> E.( + ) lhs (Wire.int k)
+  in
+  E.( <> ) r (Wire.int 0)
+
+let eval_predicate ~op_idx ~k ~flags =
+  let l = flags land 0xFF in
+  match abs op_idx mod 7 with
+  | 0 -> l land k <> 0
+  | 1 -> l lor k <> 0
+  | 2 -> l lxor k <> 0
+  | 3 -> l lsr (abs k mod 8) <> 0
+  | 4 -> l lsl (abs k mod 8) <> 0
+  | 5 -> l mod ((abs k mod 7) + 1) <> 0
+  | _ -> l + k <> 0
+
+let test_optional_predicate_operator op_idx k flags =
+  let flags = abs flags mod 256 in
+  let present = build_predicate ~op_idx ~k in
+  let c =
+    Wire.Codec.v "OptVar"
+      (fun flags body -> { ovr_flags = flags; ovr_body = body })
+      Wire.Codec.
+        [
+          (f_ovr_flags $ fun r -> r.ovr_flags);
+          (Wire.Field.optional "Body" ~present Wire.uint8 $ fun r -> r.ovr_body);
+        ]
+  in
+  let expected_present = eval_predicate ~op_idx ~k ~flags in
+  let buf =
+    if expected_present then (
+      let b = Bytes.create 2 in
+      Bytes.set_uint8 b 0 flags;
+      Bytes.set_uint8 b 1 0x42;
+      b)
+    else
+      let b = Bytes.create 1 in
+      Bytes.set_uint8 b 0 flags;
+      b
+  in
+  match Wire.Codec.decode c buf 0 with
+  | Ok r ->
+      let actual_present = r.ovr_body <> None in
+      if actual_present <> expected_present then
+        fail
+          (Fmt.str "op=%d k=%d flags=0x%02x: expected present=%b got present=%b"
+             (abs op_idx mod 7)
+             k flags expected_present actual_present)
+  | Error e -> fail (Fmt.str "decode error: %a" Wire.pp_parse_error e)
+
+(* Property: [Field.ref f] reads the same int the codec decoded for
+   [f], for every typ shape that can host a ref. *)
+let test_field_ref_matches_decode typ_idx v =
+  let v = abs v mod 256 in
+  let buf = Bytes.create 2 in
+  Bytes.set_uint8 buf 0 v;
+  Bytes.set_uint8 buf 1 v;
+  let check_int_pair name (f : int Wire.Field.t) =
+    let constraint_ =
+      Wire.Expr.(
+        Wire.Field.ref f = Wire.Field.ref (Wire.Field.v "Guard" Wire.uint8))
+    in
+    let f_g = Wire.Field.v "Guard" Wire.uint8 ~constraint_ in
+    let c =
+      Wire.Codec.v ("R_" ^ name)
+        (fun x g -> (x, g))
+        Wire.Codec.[ f $ fst; f_g $ snd ]
+    in
+    match Wire.Codec.decode c buf 0 with
+    | Ok _ -> ()
+    | Error _ -> fail (Fmt.str "%s: decoded != ref for v=0x%02x" name v)
+  in
+  match abs typ_idx mod 4 with
+  | 0 -> check_int_pair "u8" (Wire.Field.v "F" Wire.uint8)
+  | 1 ->
+      let m = Wire.map ~decode:(fun x -> x) ~encode:(fun x -> x) Wire.uint8 in
+      check_int_pair "map" (Wire.Field.v "F" m)
+  | 2 ->
+      let bit = Wire.bits ~width:8 Wire.U8 in
+      check_int_pair "bits" (Wire.Field.v "F" bit)
+  | _ -> (
+      let opt = Wire.Field.optional "F" ~present:Wire.Expr.true_ Wire.uint8 in
+      let constraint_ =
+        Wire.Expr.(
+          Wire.Field.ref opt = Wire.Field.ref (Wire.Field.v "Guard" Wire.uint8))
+      in
+      let f_g = Wire.Field.v "Guard" Wire.uint8 ~constraint_ in
+      let c =
+        Wire.Codec.v "R_opt"
+          (fun x g -> (x, g))
+          Wire.Codec.[ opt $ fst; f_g $ snd ]
+      in
+      match Wire.Codec.decode c buf 0 with
+      | Ok _ -> ()
+      | Error _ -> fail (Fmt.str "opt: decoded != ref for v=0x%02x" v))
+
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -191,4 +307,12 @@ let param_ref_tests =
     test_case "typed assign" [ bytes ] test_typed_assign;
   ]
 
-let suite = ("param", parse_tests @ param_ref_tests)
+let predicate_tests =
+  [
+    test_case "optional predicate matches OCaml eval" [ int; int; int ]
+      test_optional_predicate_operator;
+    test_case "Field.ref matches decoded value" [ int; int ]
+      test_field_ref_matches_decode;
+  ]
+
+let suite = ("param", parse_tests @ param_ref_tests @ predicate_tests)

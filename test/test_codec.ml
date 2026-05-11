@@ -2680,6 +2680,83 @@ let test_dyn_opt_anyref_absent () =
   Alcotest.(check (option int)) "ocf" None r.to_ocf;
   Alcotest.(check int) "trail" 0xFF r.to_trail
 
+(* -- Predicates with bitwise/shift/mod operators in [optional] --
+   Reproduces the silent miscompile where [compile_bool_expr]'s
+   [try_compile_int_reader] fell back to [fun _ -> true] for any
+   predicate using [Land] / [Lor] / [Lsr] / [Mod] / [Cast] / etc.,
+   so a high-bit-gated optional would always read its payload. *)
+
+type bit_gated = { bg_flags : int; bg_body : int option }
+
+let f_bg_flags = Field.v "Flags" uint8
+
+let bg_codec ~present =
+  Codec.v "BgRec"
+    (fun flags body -> { bg_flags = flags; bg_body = body })
+    Codec.
+      [
+        (f_bg_flags $ fun r -> r.bg_flags);
+        (Field.optional "Body" ~present uint8 $ fun r -> r.bg_body);
+      ]
+
+let test_optional_land_predicate () =
+  let c =
+    bg_codec ~present:Expr.(Field.ref f_bg_flags land int 0x80 <> int 0)
+  in
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x80\x2A") 0) in
+  Alcotest.(check (option int)) "high bit set" (Some 0x2A) r.bg_body;
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x00") 0) in
+  Alcotest.(check (option int)) "high bit clear" None r.bg_body
+
+let test_optional_lsr_predicate () =
+  let c = bg_codec ~present:Expr.(Field.ref f_bg_flags lsr int 4 <> int 0) in
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x10\x2A") 0) in
+  Alcotest.(check (option int)) "top nibble set" (Some 0x2A) r.bg_body;
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x0F") 0) in
+  Alcotest.(check (option int)) "top nibble clear" None r.bg_body
+
+let test_optional_mod_predicate () =
+  let c = bg_codec ~present:Expr.(Field.ref f_bg_flags mod int 2 <> int 0) in
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x03\x2A") 0) in
+  Alcotest.(check (option int)) "odd" (Some 0x2A) r.bg_body;
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x02") 0) in
+  Alcotest.(check (option int)) "even" None r.bg_body
+
+let test_optional_lor_predicate () =
+  let c =
+    bg_codec ~present:Expr.(Field.ref f_bg_flags lor int 0x01 = int 0x01)
+  in
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\x01\x2A") 0) in
+  Alcotest.(check (option int)) "lor matches" (Some 0x2A) r.bg_body;
+  let r = decode_ok (Codec.decode c (Bytes.of_string "\xFF") 0) in
+  Alcotest.(check (option int)) "lor no match" None r.bg_body
+
+(* [Field.ref] on an [optional] field must read the inner value, not 0.
+   The codec engine used to skip populating the int_array slot for
+   [Optional] fields, so any constraint or size expression referring to
+   the optional silently saw 0. *)
+
+type ref_opt = { ro_x : int option; ro_check : int }
+
+let f_ro_x = Field.optional "X" ~present:Expr.true_ uint8
+
+let ref_opt_codec =
+  let f_check =
+    Field.v "Check" uint8 ~constraint_:Expr.(Field.ref f_ro_x > int 0)
+  in
+  Codec.v "RefOpt"
+    (fun x check -> { ro_x = x; ro_check = check })
+    Codec.[ (f_ro_x $ fun r -> r.ro_x); (f_check $ fun r -> r.ro_check) ]
+
+let test_field_ref_through_optional () =
+  (* x=0x80 (present); the constraint reads ref(x) and asserts it's
+     non-zero. With the populate bug, ref(x) read 0 and the constraint
+     failed; with the fix it reads 0x80 and the decode succeeds. *)
+  let buf = Bytes.of_string "\x80\x7F" in
+  let r = decode_ok (Codec.decode ref_opt_codec buf 0) in
+  Alcotest.(check (option int)) "x" (Some 0x80) r.ro_x;
+  Alcotest.(check int) "check" 0x7F r.ro_check
+
 let test_uint64_ref_in_size () =
   let f_len = Field.v "Len" uint64be in
   let codec =
@@ -3788,6 +3865,16 @@ let suite =
         test_dyn_opt_anyref_present;
       Alcotest.test_case "optional: bool ref absent" `Quick
         test_dyn_opt_anyref_absent;
+      Alcotest.test_case "optional: land predicate" `Quick
+        test_optional_land_predicate;
+      Alcotest.test_case "optional: lsr predicate" `Quick
+        test_optional_lsr_predicate;
+      Alcotest.test_case "optional: mod predicate" `Quick
+        test_optional_mod_predicate;
+      Alcotest.test_case "optional: lor predicate" `Quick
+        test_optional_lor_predicate;
+      Alcotest.test_case "optional: Field.ref reads inner value" `Quick
+        test_field_ref_through_optional;
       Alcotest.test_case "ref: uint64 in size expr" `Quick
         test_uint64_ref_in_size;
       (* repeat *)
