@@ -271,10 +271,10 @@ let test_parse_casetype buf =
   let t : test_case_val Wire.typ =
     Wire.casetype "Tag" Wire.uint8
       [
-        Wire.case Wire.uint8
+        Wire.case ~index:0 Wire.uint8
           ~inject:(fun v -> `U8 v)
           ~project:(function `U8 v -> Some v | _ -> None);
-        Wire.case Wire.uint16
+        Wire.case ~index:1 Wire.uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
         Wire.default Wire.uint32

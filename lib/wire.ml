@@ -297,12 +297,12 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
   | Apply _ -> failwith "apply requires a type registry"
 
-and parse_casetype : type a.
-    int typ -> a case_branch list -> bytes -> int -> int -> a * int =
+and parse_casetype : type a k.
+    k typ -> (a, k) case_branch list -> bytes -> int -> int -> a * int =
  fun tag cases buf off len ->
   let tag_val, off' = parse_direct tag buf off len in
   let rec find_case = function
-    | [] -> raise (Parse_exn (Invalid_tag tag_val))
+    | [] -> raise (Parse_exn (Constraint_failed "casetype: no matching case"))
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
           let body, off'' = parse_direct cb_inner buf off' len in
@@ -597,8 +597,8 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
   | Apply _ -> failwith "apply requires a type registry"
 
-and encode_casetype : type a.
-    int typ -> a case_branch list -> a -> encoder -> unit =
+and encode_casetype : type a k.
+    k typ -> (a, k) case_branch list -> a -> encoder -> unit =
  fun tag cases v enc ->
   let rec find_case = function
     | [] -> failwith "casetype encoding: no matching case"

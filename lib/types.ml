@@ -113,8 +113,8 @@ and _ typ =
       -> int typ
   | Casetype : {
       name : string;
-      tag : int typ;
-      cases : 'a case_branch list;
+      tag : 'k typ;
+      cases : ('a, 'k) case_branch list;
     }
       -> 'a typ
   | Struct : struct_ -> unit typ
@@ -145,14 +145,14 @@ and _ typ =
     }
       -> 'seq typ
 
-and 'a case_branch =
+and ('a, 'k) case_branch =
   | Case_branch : {
-      cb_tag : int option;
+      cb_tag : 'k option;
       cb_inner : 'w typ;
       cb_inject : 'w -> 'a;
       cb_project : 'a -> 'w option;
     }
-      -> 'a case_branch
+      -> ('a, 'k) case_branch
 
 and packed_expr = Pack_expr : 'a expr -> packed_expr
 
@@ -447,20 +447,20 @@ let variants name cases base =
   map decode encode (enum name enum_cases base)
 
 (* Casetype *)
-type 'a case_def =
+type ('a, 'k) case_def =
   | Case_def : {
-      cd_index : int option;
+      cd_index : 'k option;
       cd_inner : 'w typ;
       cd_inject : 'w -> 'a;
       cd_project : 'a -> 'w option;
     }
-      -> 'a case_def
+      -> ('a, 'k) case_def
   | Default_def : {
       dd_inner : 'w typ;
       dd_inject : 'w -> 'a;
       dd_project : 'a -> 'w option;
     }
-      -> 'a case_def
+      -> ('a, 'k) case_def
 
 let case ?index inner ~inject ~project =
   Case_def
@@ -474,24 +474,20 @@ let case ?index inner ~inject ~project =
 let default inner ~inject ~project =
   Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
 
-let casetype ?(first = 0) ?(step = 1) name tag defs =
-  let counter = Stdlib.ref first in
+let casetype name tag defs =
   let resolve = function
     | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
         reject_decoration ~combinator:"casetype" cd_inner;
-        let idx =
+        let cb_tag =
           match cd_index with
-          | Some i ->
-              counter := i + step;
-              i
+          | Some _ as k -> k
           | None ->
-              let i = !counter in
-              counter := i + step;
-              i
+              invalid_arg
+                "Wire.casetype: every case must supply an explicit [~index]"
         in
         Case_branch
           {
-            cb_tag = Some idx;
+            cb_tag;
             cb_inner = cd_inner;
             cb_inject = cd_inject;
             cb_project = cd_project;
@@ -669,38 +665,171 @@ let enum_decls (s : struct_) : decl list =
     s.fields;
   List.rev !decls
 
-let module_ ?doc decls =
-  (* Auto-prepend enum declarations for any enum types used in typedefs
-     that aren't already declared in the module. *)
-  let already_declared =
-    List.fold_left
-      (fun acc d ->
-        match d with Enum_decl { name; _ } -> name :: acc | _ -> acc)
-      [] decls
+(* True for tag types that the 3D side can dispatch on natively: integer-
+   shaped scalars plus enums. String/byte tags use the two-step shape
+   (split into adjacent fields, dispatch in caller code) instead. *)
+let is_int_dispatch_typ : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ | Int8 | Int16 _
+  | Int32 _ | Bits _ | Enum _ ->
+      true
+  | _ -> false
+
+(* Project a case-branch discriminator value of type ['k] to a 3D constant
+   expression. Only called for int-shaped tags; non-int tags don't reach
+   here because their casetype field is rewritten away before
+   [casetype_decls_of_struct] walks it. *)
+let case_index_to_expr : type k. k typ -> k -> packed_expr =
+ fun tag_typ k ->
+  match tag_typ with
+  | Uint8 -> Pack_expr (Int k)
+  | Uint16 _ -> Pack_expr (Int k)
+  | Uint32 _ -> Pack_expr (Int k)
+  | Uint63 _ -> Pack_expr (Int k)
+  | Uint_var _ -> Pack_expr (Int k)
+  | Int8 -> Pack_expr (Int k)
+  | Int16 _ -> Pack_expr (Int k)
+  | Int32 _ -> Pack_expr (Int k)
+  | Bits _ -> Pack_expr (Int k)
+  | Enum _ -> Pack_expr (Int k)
+  | _ -> assert false (* guarded by [is_int_dispatch_typ] *)
+
+(* Auto-emit a dispatch + wrapper for each [Casetype] used in a struct.
+
+   [Wire.casetype "Foo" tag cases] parses the tag inline in OCaml; the 3D
+   side has no equivalent (its [casetype_decl] takes the tag as a
+   parameter, leaving the caller to supply it). To project cleanly we
+   synthesise two declarations per unique casetype name:
+
+   - [Casetype_decl "Foo_Body"] -- the dispatch table, parameterised on
+     the tag value.
+   - [Typedef "Foo"] -- a small wrapper struct holding [tag; body] where
+     [body] is [Foo_Body(tag)].
+
+   The user's [Casetype] typ then prints as the wrapper's name (already
+   the existing [pp_typ] behaviour) and references the wrapper. *)
+let decl_case_of_branch : type a k. k typ -> (a, k) case_branch -> decl_case =
+ fun tag (Case_branch { cb_tag; cb_inner; _ }) ->
+  let tag_expr =
+    match cb_tag with None -> None | Some k -> Some (case_index_to_expr tag k)
   in
-  let extra =
+  (tag_expr, Pack_typ cb_inner)
+
+let casetype_pair : type a k.
+    string -> k typ -> (a, k) case_branch list -> decl * decl =
+ fun name tag cases ->
+  let body_name = name ^ "_Body" in
+  let decl_cases = List.map (decl_case_of_branch tag) cases in
+  let dispatch =
+    Casetype_decl
+      {
+        name = body_name;
+        params = [ param "tag" tag ];
+        tag = Pack_typ tag;
+        cases = decl_cases;
+      }
+  in
+  let tag_field = field "tag" tag in
+  let body_field =
+    field "body"
+      (Apply { typ = Type_ref body_name; args = [ Pack_expr (Ref "tag") ] })
+  in
+  let wrapper = typedef (struct_ name [ tag_field; body_field ]) in
+  (dispatch, wrapper)
+
+let casetype_decls_of_struct (s : struct_) : decl list =
+  let seen = Hashtbl.create 4 in
+  let acc = Stdlib.ref [] in
+  let rec extract : type a. a typ -> unit = function
+    | Casetype { name; tag; cases }
+      when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
+        Hashtbl.add seen name ();
+        let dispatch, wrapper = casetype_pair name tag cases in
+        acc := wrapper :: dispatch :: !acc;
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
+    | Casetype { cases; _ } ->
+        (* String-tagged casetype: handled by [split_string_casetype_fields].
+           Still walk inner case typs for nested int-tagged casetypes. *)
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
+    | Map { inner; _ } -> extract inner
+    | Where { inner; _ } -> extract inner
+    | Optional { inner; _ } -> extract inner
+    | Optional_or { inner; _ } -> extract inner
+    | Apply { typ; _ } -> extract typ
+    | Repeat { elem; _ } -> extract elem
+    | Array { elem; _ } -> extract elem
+    | Single_elem { elem; _ } -> extract elem
+    | _ -> ()
+  in
+  List.iter (fun (Field f) -> extract f.field_typ) s.fields;
+  List.rev !acc
+
+(* Two-step projection for string-tagged casetype: split the field into
+   two adjacent fields, the tag bytes and the body bytes.
+
+   The 3D side validates wire framing only; case dispatch is the caller's
+   job (OCaml [parse_casetype] already does this on its side, and C
+   consumers receive both spans through the plug and dispatch with their
+   own [strcmp] table -- exactly what real protocol implementations like
+   OpenSSH do). No 3D-side extern, no scratch slot, no runtime helper.
+
+   The body field uses [All_bytes] ("rest of buffer"), so the casetype
+   must be the trailing field of its parent struct -- matching the
+   existing codec.ml constraint for variable-size casetype fields. *)
+let split_string_casetype_fields (s : struct_) : struct_ =
+  let split (Field f) =
+    match (f.field_name, f.field_typ) with
+    | Some fname, Casetype { tag; _ } when not (is_int_dispatch_typ tag) ->
+        let tag_field = Field { f with field_typ = tag } in
+        let body_field = field (fname ^ "_body") All_bytes in
+        [ tag_field; body_field ]
+    | _ -> [ Field f ]
+  in
+  { s with fields = List.concat_map split s.fields }
+
+let module_ ?doc decls =
+  (* Auto-prepend enum and casetype declarations needed by typedefs in
+     [decls] but not already declared in the module. Output order matches
+     the order [casetype_decls_of_struct] returns: dispatch before
+     wrapper, since the wrapper applies the dispatch. *)
+  let decl_name = function
+    | Enum_decl { name; _ } -> Some name
+    | Casetype_decl { name; _ } -> Some name
+    | Typedef { struct_ = { name; _ }; _ } -> Some name
+    | _ -> None
+  in
+  let already_declared =
+    List.filter_map decl_name decls |> List.fold_left (fun acc n -> n :: acc) []
+  in
+  (* First pass: split string-tagged casetype fields in every typedef.
+     This must happen before [casetype_decls_of_struct] runs so the
+     wrapper-and-dispatch projection only sees int-tagged casetypes. *)
+  let split_decls =
+    List.map
+      (function
+        | Typedef ({ struct_; _ } as t) ->
+            Typedef { t with struct_ = split_string_casetype_fields struct_ }
+        | d -> d)
+      decls
+  in
+  let extra_rev, _ =
     List.fold_left
-      (fun acc d ->
+      (fun (acc_rev, seen) d ->
         match d with
         | Typedef { struct_; _ } ->
-            List.filter
-              (fun e ->
-                match e with
-                | Enum_decl { name; _ } ->
-                    not
-                      (List.mem name already_declared
-                      || List.exists
-                           (function
-                             | Enum_decl { name = n; _ } -> String.equal n name
-                             | _ -> false)
-                           acc)
-                | _ -> false)
-              (enum_decls struct_)
-            @ acc
-        | _ -> acc)
-      [] decls
+            let candidates =
+              enum_decls struct_ @ casetype_decls_of_struct struct_
+            in
+            List.fold_left
+              (fun (acc_rev, seen) e ->
+                match decl_name e with
+                | None -> (acc_rev, seen)
+                | Some n when List.mem n seen -> (acc_rev, seen)
+                | Some n -> (e :: acc_rev, n :: seen))
+              (acc_rev, seen) candidates
+        | _ -> (acc_rev, seen))
+      ([], already_declared) split_decls
   in
-  { doc; decls = List.rev extra @ decls }
+  { doc; decls = List.rev extra_rev @ split_decls }
 
 (* 3D and C reserved words that cannot be used as field/param names. *)
 module Reserved_3d = Set.Make (String)
