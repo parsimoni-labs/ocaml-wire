@@ -969,7 +969,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       let tag_size =
         match field_wire_size tag with
         | Some n -> n
-        | None -> assert false (* casetype tag is always fixed-size int *)
+        | None -> assert false (* casetype tag is always fixed-size *)
       in
       let tag_val = read_elem tag buf off in
       let body_off = off + tag_size in
@@ -984,6 +984,12 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
         | _ :: rest -> find rest
       in
       find cases
+  | Byte_array { size } ->
+      let n = match size with Int n -> n | _ -> assert false in
+      Bytes.sub_string buf off n
+  | Byte_array_where { size; _ } ->
+      let n = match size with Int n -> n | _ -> assert false in
+      Bytes.sub_string buf off n
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)

@@ -1,5 +1,18 @@
 ## unreleased
 
+### Tests
+
+- Composable `'a gen = { codec; positive_cases; negative_cases; equal }`
+  in [fuzz_wire.ml](fuzz/fuzz_wire.ml) for the structured combinators
+  (parametric `byte_array`, variable-element `repeat`, codec with
+  `all_bytes` tail, string-tag casetype) plus a `gen_pair` cross-product
+  that mixes valid/invalid halves into "almost valid" byte streams.
+  Adds leaf gens for `byte_slice`, `byte_array_where`, `uint_var`,
+  `where`, `map`, `single_elem`, `all_zeros`, `optional`, `optional_or`
+  and a casetype with int tag, plus a meta-test that round-trips one
+  representative value per `Wire.typ` constructor through `Wire.to_string`
+  / `Wire.of_string` (#55, @samoht)
+
 ### Added
 
 - `Wire.casetype` now accepts any tag typ (`'k typ`, not just `int`) and
@@ -62,6 +75,11 @@
   of using the dynamic gate as an encode-side size oracle; the gate
   remains the decode-side selector between the decoded inner and the
   default (#58, @samoht)
+- `size_of_typ_value` now walks `Repeat` (per-element from the value
+  sequence) and `Casetype` (tag size plus matched-branch body size).
+  The previous code returned `0` for variable-element repeats and for
+  casetypes, leading `Wire.to_string` to allocate too-small buffers
+  (#55, @samoht)
 - `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
   / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
   tail. The encoded size is now computed from the value via

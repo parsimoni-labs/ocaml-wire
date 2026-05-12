@@ -1442,14 +1442,43 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
   | Single_elem { size = Int n; _ } -> n
   | Single_elem _ -> 0
-  | Repeat { size = Int n; _ } -> n
-  | Repeat _ -> 0
+  | Repeat { elem; seq = Seq_map s; _ } ->
+      (* Sum per-element sizes from the value -- the byte-budget [size]
+         expression is what we just produced when encoding, not an
+         independent ground truth. *)
+      let total = Stdlib.ref 0 in
+      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
+      !total
   | Array { elem; seq = Seq_map s; _ } ->
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
       !total
   | Apply { typ; _ } -> size_of_typ_value typ v
-  | Casetype _ -> 0
+  | Casetype { tag; cases; _ } ->
+      let tag_size : type k. k typ -> int = function
+        | Uint8 | Int8 -> 1
+        | Uint16 _ | Int16 _ -> 2
+        | Uint32 _ | Int32 _ | Float32 _ -> 4
+        | Uint63 _ | Uint64 _ | Int64 _ | Float64 _ -> 8
+        | Bits { base = BF_U8; _ } -> 1
+        | Bits { base = BF_U16 _; _ } -> 2
+        | Bits { base = BF_U32 _; _ } -> 4
+        | Byte_array { size = Int n } -> n
+        | Byte_array_where { size = Int n; _ } -> n
+        | _ ->
+            invalid_arg
+              "Wire.casetype: variable-size tag unsupported by the encoder"
+      in
+      let sz = tag_size tag in
+      let rec find_case = function
+        | [] ->
+            invalid_arg "Wire.casetype: value matches no case at encode time"
+        | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+            match cb_project v with
+            | Some body -> sz + size_of_typ_value cb_inner body
+            | None -> find_case rest)
+      in
+      find_case cases
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
