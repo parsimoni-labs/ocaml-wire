@@ -157,6 +157,9 @@ and _ typ =
 and ('a, 'k) case_branch =
   | Case_branch : {
       cb_tag : 'k option;
+      cb_default_tag : 'k option;
+          (* Encode-time tag for the default branch ([cb_tag = None]).
+             [None] means encoding this branch is unsupported. *)
       cb_inner : 'w typ;
       cb_inject : 'w -> 'a;
       cb_project : 'a -> 'w option;
@@ -472,6 +475,7 @@ type ('a, 'k) case_def =
     }
       -> ('a, 'k) case_def
   | Default_def : {
+      dd_tag : 'k;
       dd_inner : 'w typ;
       dd_inject : 'w -> 'a;
       dd_project : 'a -> 'w option;
@@ -487,8 +491,9 @@ let case ?index inner ~inject ~project =
       cd_project = project;
     }
 
-let default inner ~inject ~project =
-  Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
+let default ~tag inner ~inject ~project =
+  Default_def
+    { dd_tag = tag; dd_inner = inner; dd_inject = inject; dd_project = project }
 
 let casetype name tag defs =
   let resolve = function
@@ -504,15 +509,17 @@ let casetype name tag defs =
         Case_branch
           {
             cb_tag;
+            cb_default_tag = None;
             cb_inner = cd_inner;
             cb_inject = cd_inject;
             cb_project = cd_project;
           }
-    | Default_def { dd_inner; dd_inject; dd_project } ->
+    | Default_def { dd_tag; dd_inner; dd_inject; dd_project } ->
         reject_decoration ~combinator:"casetype" dd_inner;
         Case_branch
           {
             cb_tag = None;
+            cb_default_tag = Some dd_tag;
             cb_inner = dd_inner;
             cb_inject = dd_inject;
             cb_project = dd_project;

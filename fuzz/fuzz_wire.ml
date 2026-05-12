@@ -364,7 +364,7 @@ let test_parse_casetype buf =
         Wire.case ~index:1 Wire.uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        Wire.default Wire.uint32
+        Wire.default ~tag:0xFF Wire.uint32
           ~inject:(fun v -> `Default (Wire.Private.UInt32.to_int v))
           ~project:(function
             | `Default v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);

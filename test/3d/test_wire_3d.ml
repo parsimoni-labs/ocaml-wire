@@ -178,7 +178,7 @@ let e2e_casetype_codec =
         case ~index:1 uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        default uint8
+        default ~tag:0xFF uint8
           ~inject:(fun v -> `Default v)
           ~project:(function `Default v -> Some v | _ -> None);
       ]
@@ -201,7 +201,7 @@ let e2e_ssh_casetype_codec =
         case ~index:"publickey" uint8
           ~inject:(fun v -> `Publickey v)
           ~project:(function `Publickey v -> Some v | _ -> None);
-        default uint8
+        default ~tag:"xxxxxxxxx" uint8
           ~inject:(fun v -> `Other v)
           ~project:(function `Other v -> Some v | _ -> None);
       ]
