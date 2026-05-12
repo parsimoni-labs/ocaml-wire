@@ -2,13 +2,23 @@ open Types
 module Slice = Bytesrw.Bytes.Slice
 module Param = Param
 
-(** Build a specialized field encoder: writes field value to bytes at offset.
-    Returns the new offset. Works directly on the slice's underlying bytes. *)
-let blit_string_padded n buf off v =
-  let len = min n (String.length v) in
-  Bytes.blit_string v 0 buf off len;
+(** Generic blit-with-padding into a fixed [n]-byte window. The caller supplies
+    the source length and a copy callback that writes exactly [len] bytes
+    starting at the given destination offset; this helper handles bounding by
+    [n] and zeroing the tail. *)
+let blit_padded n buf off ~src_len ~blit =
+  let len = min n src_len in
+  blit ~dst_off:off ~len;
   if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
   off + n
+
+let blit_string_padded n buf off v =
+  blit_padded n buf off ~src_len:(String.length v) ~blit:(fun ~dst_off ~len ->
+      Bytes.blit_string v 0 buf dst_off len)
+
+let blit_slice_padded n buf off src =
+  blit_padded n buf off ~src_len:(Slice.length src) ~blit:(fun ~dst_off ~len ->
+      Bytes.blit (Slice.bytes src) (Slice.first src) buf dst_off len)
 
 (* Pack a fixed-width integer setter into a [bytes -> int -> int -> int]
    field encoder that returns the offset advance. Used by the scalar cases
@@ -2400,22 +2410,13 @@ let decode ?env t buf off =
 let encode t v buf off = t.t_encode v buf off
 
 let collect_params (fields : Types.field list) where =
-  let seen = Hashtbl.create 4 in
-  let params = Stdlib.ref ([] : param list) in
-  let visit (Param.Pack p) =
-    if not (Hashtbl.mem seen p.ph_name) then begin
-      Hashtbl.add seen p.ph_name ();
-      params :=
-        {
-          param_name = p.ph_name;
-          param_typ = p.ph_packed_typ;
-          mutable_ = p.ph_mutable;
-        }
-        :: !params
-    end
-  in
-  iter_param_refs_fields visit fields where;
-  List.rev !params
+  collect_param_handles fields where
+  |> List.map (fun (Param.Pack p) ->
+      {
+        param_name = p.ph_name;
+        param_typ = p.ph_packed_typ;
+        mutable_ = p.ph_mutable;
+      })
 
 let to_struct t =
   let formals = collect_params t.t_struct_fields t.t_where in
