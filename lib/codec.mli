@@ -42,6 +42,13 @@ val min_wire_size : 'r t -> int
 val wire_size_at : 'r t -> bytes -> int -> int
 (** Compute the actual wire size from a buffer at a given offset. *)
 
+val size_of_value : 'r t -> 'r -> int
+(** [size_of_value c v] returns the number of bytes that [encode c v] will
+    write. Computed from [v], not from a buffer: works for variable-size codecs
+    whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
+    buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
+    "remaining buffer space". *)
+
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 

@@ -53,6 +53,11 @@
 
 ### Fixed
 
+- `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
+  / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
+  tail. The encoded size is now computed from the value via
+  `Codec.size_of_value`; the buffer-driven `size_of` mismeasured
+  variable tails as "remaining buffer space" (#54, @samoht)
 - `Codec.encode` / `Codec.raw_encode` accept `?env:Param.env`, mirroring
   `Codec.decode`. Encoding a parametric codec without an env (or with an
   env that left an input param unbound) now raises `Invalid_argument`
