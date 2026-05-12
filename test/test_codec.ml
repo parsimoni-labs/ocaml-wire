@@ -3033,7 +3033,7 @@ let casetype_field_event_typ : ev_payload Wire.typ =
       Wire.case ~index:2 Wire.uint32be
         ~inject:(fun v -> `Logout v)
         ~project:(function `Logout v -> Some v | _ -> None);
-      Wire.default Wire.uint8
+      Wire.default ~tag:0xFF Wire.uint8
         ~inject:(fun v -> `Other v)
         ~project:(function `Other v -> Some v | _ -> None);
     ]

@@ -89,6 +89,12 @@
   fewer than `n` bytes. `encode_direct` already padded; `encode_into`
   silently dropped the padding, so `Wire.to_string` produced shorter
   bytes than `Wire.of_string` expected (#55, @samoht)
+- `Wire.default` now takes a required `~tag:'k`: the discriminator
+  the encoder writes when projecting the default branch back to bytes.
+  Previously encoding any default-branch value crashed with
+  `Failure "casetype encoding: cannot encode default case"`; the
+  decoder side still uses the default branch as the match-anything
+  fallback (#55, @samoht)
 - `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
   / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
   tail. The encoded size is now computed from the value via

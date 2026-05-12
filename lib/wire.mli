@@ -624,8 +624,16 @@ val case :
 (** Tagged branch of a casetype. *)
 
 val default :
-  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> ('a, 'k) case_def
-(** Default branch of a casetype. *)
+  tag:'k ->
+  'w typ ->
+  inject:('w -> 'a) ->
+  project:('a -> 'w option) ->
+  ('a, 'k) case_def
+(** [default ~tag inner ~inject ~project] is the default branch of a casetype.
+
+    The decoder uses the default branch when no [~index]-tagged case matches.
+    The encoder writes [~tag] when projecting the default variant back to bytes.
+*)
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. The discriminator typ

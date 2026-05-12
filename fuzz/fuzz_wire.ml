@@ -364,7 +364,7 @@ let test_parse_casetype buf =
         Wire.case ~index:1 Wire.uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        Wire.default Wire.uint32
+        Wire.default ~tag:0xFF Wire.uint32
           ~inject:(fun v -> `Default (Wire.Private.UInt32.to_int v))
           ~project:(function
             | `Default v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
@@ -1156,7 +1156,7 @@ let ssh_auth_codec =
         Wire.case ~index:"publickey" Wire.uint8
           ~inject:(fun v -> `Publickey v)
           ~project:(function `Publickey v -> Some v | _ -> None);
-        Wire.default Wire.uint8
+        Wire.default ~tag:"xxxxxxxxx" Wire.uint8
           ~inject:(fun v -> `Other v)
           ~project:(function `Other v -> Some v | _ -> None);
       ]
@@ -1507,7 +1507,7 @@ let gen_casetype_int_tag n =
         Wire.case ~index:1 Wire.uint16be
           ~inject:(fun v -> U16 v)
           ~project:(function U16 v -> Some v | _ -> None);
-        Wire.default Wire.uint8
+        Wire.default ~tag:0xFF Wire.uint8
           ~inject:(fun v -> Default v)
           ~project:(function Default v -> Some v | _ -> None);
       ]
@@ -1641,7 +1641,7 @@ let meta_composite_cases =
               Wire.case ~index:1 Wire.uint16be
                 ~inject:(fun v -> U16 v)
                 ~project:(function U16 v -> Some v | _ -> None);
-              Wire.default Wire.uint8
+              Wire.default ~tag:0xFF Wire.uint8
                 ~inject:(fun v -> Default v)
                 ~project:(function Default v -> Some v | _ -> None);
             ]
