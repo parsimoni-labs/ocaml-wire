@@ -168,6 +168,8 @@ and _ typ =
       codec_fixed_size : int option;
       codec_size_of : bytes -> int -> int;
       codec_field_readers : (string * (bytes -> int -> int)) list;
+      codec_struct : struct_;
+          (** Structural form of the codec, used by the 3D projection. *)
     }
       -> 'r typ  (** Embedded sub-codec. *)
   | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ

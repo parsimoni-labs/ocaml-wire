@@ -64,6 +64,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.raw_decode c in
   let codec_encode = Codec.raw_encode c in
   let codec_field_readers = Codec.field_readers c in
+  let codec_struct = Codec.to_struct c in
   match Codec.wire_size_info c with
   | `Fixed n ->
       Codec
@@ -74,6 +75,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_fixed_size = Some n;
           codec_size_of = (fun _buf _off -> n);
           codec_field_readers;
+          codec_struct;
         }
   | `Variable size_of ->
       Codec
@@ -84,6 +86,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_fixed_size = None;
           codec_size_of = size_of;
           codec_field_readers;
+          codec_struct;
         }
 
 type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =

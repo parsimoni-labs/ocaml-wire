@@ -129,6 +129,9 @@ and _ typ =
       codec_fixed_size : int option;
       codec_size_of : bytes -> int -> int;
       codec_field_readers : (string * (bytes -> int -> int)) list;
+      codec_struct : struct_;
+          (** Structural representation of the codec. Mirrors [codec_decode] /
+              [codec_encode] but in a form 3D projection can walk. *)
     }
       -> 'r typ
   | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ
@@ -743,13 +746,24 @@ let casetype_decls_of_struct (s : struct_) : decl list =
     | Casetype { name; tag; cases }
       when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
         Hashtbl.add seen name ();
+        (* Visit case inners first so any sub-codecs / nested casetypes they
+           reference are declared before the dispatch that names them. *)
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
         let dispatch, wrapper = casetype_pair name tag cases in
-        acc := wrapper :: dispatch :: !acc;
-        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
+        acc := wrapper :: dispatch :: !acc
     | Casetype { cases; _ } ->
         (* String-tagged casetype: handled by [split_string_casetype_fields].
            Still walk inner case typs for nested int-tagged casetypes. *)
         List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
+    | Codec { codec_name; codec_struct; _ }
+      when not (Hashtbl.mem seen codec_name) ->
+        (* Embedded sub-codec: emit its struct alongside the parent so 3D
+           references to [codec_name] resolve. Recurse into the sub-codec's
+           own fields to catch nested casetype / sub-codec dependencies. *)
+        Hashtbl.add seen codec_name ();
+        acc := typedef codec_struct :: !acc;
+        List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields
+    | Codec _ -> ()
     | Map { inner; _ } -> extract inner
     | Where { inner; _ } -> extract inner
     | Optional { inner; _ } -> extract inner

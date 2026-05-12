@@ -209,12 +209,48 @@ let e2e_ssh_casetype_codec =
   let f = Field.v "method" body in
   Codec.v "Sshauth" (fun m -> m) [ Codec.( $ ) f (fun m -> m) ]
 
+(* Casetype with a sub-codec body that itself contains a trailing
+   [all_bytes]. The 3D projection emits the sub-codec as its own typedef
+   before the casetype's dispatch decl, and [all_bytes] inside the
+   sub-codec consumes through end-of-buffer -- correct because the
+   casetype is constrained to be the last field of its parent. *)
+type session = { recipient : int; rest : string }
+type channel_confirm = Session of session | Tcpip of int
+
+let session_codec =
+  let open Wire in
+  let f_recip = Field.v "recipient" uint32be in
+  let f_rest = Field.v "rest" all_bytes in
+  Codec.v "Session"
+    (fun r b -> { recipient = Wire.Private.UInt32.to_int r; rest = b })
+    [
+      Codec.( $ ) f_recip (fun s -> Wire.Private.UInt32.of_int s.recipient);
+      Codec.( $ ) f_rest (fun s -> s.rest);
+    ]
+
+let e2e_codec_in_casetype =
+  let open Wire in
+  let body : channel_confirm typ =
+    casetype "Confirm" uint8
+      [
+        case ~index:1 (codec session_codec)
+          ~inject:(fun s -> Session s)
+          ~project:(function Session s -> Some s | _ -> None);
+        case ~index:2 uint16be
+          ~inject:(fun n -> Tcpip n)
+          ~project:(function Tcpip n -> Some n | _ -> None);
+      ]
+  in
+  let f = Field.v "msg" body in
+  Codec.v "ChannelOpen" (fun m -> m) [ Codec.( $ ) f (fun m -> m) ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
   compile_and_run ~name:"Ctt" e2e_casetype_codec;
   compile_and_run ~name:"Sshauth" e2e_ssh_casetype_codec;
+  compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
   compile_and_run ~name:"EP_Header" e2e_mixed_codec;
   compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
