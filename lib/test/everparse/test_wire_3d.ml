@@ -325,39 +325,34 @@ let check_size ~name ~expected codec =
     (Fmt.str "%s: schema.wire_size = %d" name expected)
     (Some expected) schema.Everparse.wire_size
 
+let pack_four_u8 name ta tb tc td =
+  let fa = Field.v "a" ta in
+  let fb = Field.v "b" tb in
+  let fc = Field.v "c" tc in
+  let fd = Field.v "d" td in
+  let open Codec in
+  v name
+    (fun a b c d -> (a, b, c, d))
+    [
+      (fa $ fun (a, _, _, _) -> a);
+      (fb $ fun (_, b, _, _) -> b);
+      (fc $ fun (_, _, c, _) -> c);
+      (fd $ fun (_, _, _, d) -> d);
+    ]
+
 (* SSID-like layout: mix of [bit (bits 1 U8)] and bare [bits N U8] summing to
    exactly one U8. Historical bug: the Map-wrapped fields fell out of the bit
    group and produced spurious anon padding. *)
 let ssid_style_codec =
-  let f1 = Field.v "a" (bit (bits ~width:1 U8)) in
-  let f2 = Field.v "b" (bits ~width:2 U8) in
-  let f3 = Field.v "c" (bits ~width:4 U8) in
-  let f4 = Field.v "d" (bit (bits ~width:1 U8)) in
-  let open Codec in
-  v "SsidStyle"
-    (fun a b c d -> (a, b, c, d))
-    [
-      (f1 $ fun (a, _, _, _) -> a);
-      (f2 $ fun (_, b, _, _) -> b);
-      (f3 $ fun (_, _, c, _) -> c);
-      (f4 $ fun (_, _, _, d) -> d);
-    ]
+  pack_four_u8 "SsidStyle"
+    (bit (bits ~width:1 U8))
+    (bits ~width:2 U8) (bits ~width:4 U8)
+    (bit (bits ~width:1 U8))
 
 (* All [bit] (Map-wrapped), packed into one U8. *)
 let all_bool_codec =
-  let f1 = Field.v "a" (bit (bits ~width:1 U8)) in
-  let f2 = Field.v "b" (bit (bits ~width:1 U8)) in
-  let f3 = Field.v "c" (bit (bits ~width:1 U8)) in
-  let f4 = Field.v "d" (bit (bits ~width:1 U8)) in
-  let open Codec in
-  v "AllBool"
-    (fun a b c d -> (a, b, c, d))
-    [
-      (f1 $ fun (a, _, _, _) -> a);
-      (f2 $ fun (_, b, _, _) -> b);
-      (f3 $ fun (_, _, c, _) -> c);
-      (f4 $ fun (_, _, _, d) -> d);
-    ]
+  let b = bit (bits ~width:1 U8) in
+  pack_four_u8 "AllBool" b b b b
 
 (* Spilling across a base-word boundary: 5+5 bits on U8 must roll into two U8s. *)
 let spill_u8_codec =

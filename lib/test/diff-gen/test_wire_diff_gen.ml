@@ -15,18 +15,22 @@ let test_schema_creation () =
   in
   Alcotest.(check bool) "some" true (Option.is_some s)
 
-let test_generate_3d_files () =
-  let tmpdir = Filename.temp_dir "diff_gen_test" "" in
-  let s =
-    Wire_diff_gen.schema ~name:"TestDiffGen" ~struct_:simple_struct
-      ~module_:simple_module
-    |> Option.get
-  in
-  Wire_diff_gen.generate_3d_files ~outdir:tmpdir [ s ];
-  let path = Filename.concat tmpdir "TestDiffGen.3d" in
-  Alcotest.(check bool) "3d file exists" true (Sys.file_exists path);
+let schema_for name =
+  Wire_diff_gen.schema ~name ~struct_:simple_struct ~module_:simple_module
+  |> Option.get
+
+let run_generator label ~tag ~generate ~filename =
+  let outdir = Filename.temp_dir tag "" in
+  let s = schema_for "TestDiffGen" in
+  generate ~outdir [ s ];
+  let path = Filename.concat outdir filename in
+  Alcotest.(check bool) label true (Sys.file_exists path);
   Sys.remove path;
-  Unix.rmdir tmpdir
+  Unix.rmdir outdir
+
+let test_generate_3d_files () =
+  run_generator "3d file exists" ~tag:"diff_gen_test"
+    ~generate:Wire_diff_gen.generate_3d_files ~filename:"TestDiffGen.3d"
 
 let has_everparse () =
   let ic = Unix.open_process_in "command -v 3d.exe 2>/dev/null" in
@@ -63,30 +67,13 @@ let test_generate_c_stubs () =
   end
 
 let test_generate_ml_stubs () =
-  let outdir = Filename.temp_dir "diff_gen_ml_stubs" "" in
-  let s =
-    Wire_diff_gen.schema ~name:"TestDiffGen" ~struct_:simple_struct
-      ~module_:simple_module
-    |> Option.get
-  in
-  Wire_diff_gen.generate_ml_stubs ~outdir [ s ];
-  let path = Filename.concat outdir "stubs.ml" in
-  Alcotest.(check bool) "stubs.ml exists" true (Sys.file_exists path);
-  Sys.remove path;
-  Unix.rmdir outdir
+  run_generator "stubs.ml exists" ~tag:"diff_gen_ml_stubs"
+    ~generate:Wire_diff_gen.generate_ml_stubs ~filename:"stubs.ml"
 
 let test_generate_test_runner () =
-  let outdir = Filename.temp_dir "diff_gen_test_runner" "" in
-  let s =
-    Wire_diff_gen.schema ~name:"TestDiffGen" ~struct_:simple_struct
-      ~module_:simple_module
-    |> Option.get
-  in
-  Wire_diff_gen.generate_test_runner ~outdir [ s ];
-  let path = Filename.concat outdir "diff_test.ml" in
-  Alcotest.(check bool) "diff_test.ml exists" true (Sys.file_exists path);
-  Sys.remove path;
-  Unix.rmdir outdir
+  run_generator "diff_test.ml exists" ~tag:"diff_gen_test_runner"
+    ~generate:(fun ~outdir s -> Wire_diff_gen.generate_test_runner ~outdir s)
+    ~filename:"diff_test.ml"
 
 let suite =
   ( "wire_diff_gen",

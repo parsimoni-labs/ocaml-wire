@@ -72,50 +72,32 @@ let test_native_bit_order () =
     "u32be native msb" true
     (Bitfield.native_bit_order bf_u32_be = Types.Msb_first)
 
+let check_extract label ~expected ~bit_order ~total ~bits_used ~width word =
+  Alcotest.(check int)
+    label expected
+    (Bitfield.extract ~bit_order ~total ~bits_used ~width word)
+
 let test_extract_lsb_first () =
-  (* LSBFirst: first declared field at bit 0 *)
-  (* Word 0b11010110 = 0xD6, extract 4 bits at offset 0 -> 0b0110 = 6 *)
   let word = 0xD6 in
-  Alcotest.(check int)
-    "lsb bits 0..3" 6
-    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:8 ~bits_used:0 ~width:4
-       word);
-  (* Extract 4 bits at offset 4 -> 0b1101 = 13 *)
-  Alcotest.(check int)
-    "lsb bits 4..7" 13
-    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:8 ~bits_used:4 ~width:4
-       word)
+  check_extract "lsb bits 0..3" ~expected:6 ~bit_order:Types.Lsb_first ~total:8
+    ~bits_used:0 ~width:4 word;
+  check_extract "lsb bits 4..7" ~expected:13 ~bit_order:Types.Lsb_first ~total:8
+    ~bits_used:4 ~width:4 word
 
 let test_extract_msb_first () =
-  (* MSBFirst: first declared field at MSB *)
-  (* Word 0xD600 = 0b1101011000000000 in 16-bit context *)
   let word = 0xD600 in
-  (* Extract 4 bits at offset 0 (MSB side) -> 0b1101 = 13 *)
-  Alcotest.(check int)
-    "msb bits 0..3" 13
-    (Bitfield.extract ~bit_order:Types.Msb_first ~total:16 ~bits_used:0 ~width:4
-       word);
-  (* Extract 4 bits at offset 4 -> 0b0110 = 6 *)
-  Alcotest.(check int)
-    "msb bits 4..7" 6
-    (Bitfield.extract ~bit_order:Types.Msb_first ~total:16 ~bits_used:4 ~width:4
-       word)
+  check_extract "msb bits 0..3" ~expected:13 ~bit_order:Types.Msb_first
+    ~total:16 ~bits_used:0 ~width:4 word;
+  check_extract "msb bits 4..7" ~expected:6 ~bit_order:Types.Msb_first ~total:16
+    ~bits_used:4 ~width:4 word
 
-(* Independence: bit_order is orthogonal to the base's byte order. Show that
-   an LSB-first extraction on a BE base and MSB-first extraction on a LE base
-   both behave according to the bit_order choice, not the base endian. *)
+(* Independence: bit_order is orthogonal to the base's byte order. *)
 let test_extract_bit_order_independent () =
-  (* LSB-first extraction on a BE base: still operates on the low bits. *)
   let word = 0xD6 in
-  Alcotest.(check int)
-    "lsb-first on u16be base" 6
-    (Bitfield.extract ~bit_order:Types.Lsb_first ~total:16 ~bits_used:0 ~width:4
-       word);
-  (* MSB-first extraction on an 8-bit LE base: operates on the top bits. *)
-  Alcotest.(check int)
-    "msb-first on u8 base" 13
-    (Bitfield.extract ~bit_order:Types.Msb_first ~total:8 ~bits_used:0 ~width:4
-       word)
+  check_extract "lsb-first on u16be base" ~expected:6 ~bit_order:Types.Lsb_first
+    ~total:16 ~bits_used:0 ~width:4 word;
+  check_extract "msb-first on u8 base" ~expected:13 ~bit_order:Types.Msb_first
+    ~total:8 ~bits_used:0 ~width:4 word
 
 let suite =
   ( "bitfield",

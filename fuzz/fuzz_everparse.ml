@@ -174,48 +174,39 @@ let test_casetype_inline () =
   let _ = Wire.Everparse.Raw.to_3d m in
   ()
 
-(** Test constraint expression generation. *)
-let test_constraint_expr a =
-  let v = abs a mod 1000 in
-  let f_x = Wire.Everparse.Raw.field "x" Wire.uint16 in
-  let cond = Wire.Expr.(Wire.Everparse.Raw.field_ref f_x <= Wire.int v) in
+(* Render a one-field struct constrained by [build_cond f_x] through the
+   3D emitter. The fuzz target is "does this typecheck and produce output";
+   the actual rendered string is dropped. *)
+let render_constrained_x ~name typ build_cond =
+  let f_x = Wire.Everparse.Raw.field "x" typ in
+  let cond = build_cond f_x in
   let s =
-    Wire.Everparse.Raw.struct_ "Constrained"
-      [ Wire.Everparse.Raw.field "x" ~constraint_:cond Wire.uint16 ]
+    Wire.Everparse.Raw.struct_ name
+      [ Wire.Everparse.Raw.field "x" ~constraint_:cond typ ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
   let _ = Wire.Everparse.Raw.to_3d m in
   ()
+
+(** Test constraint expression generation. *)
+let test_constraint_expr a =
+  let v = abs a mod 1000 in
+  render_constrained_x ~name:"Constrained" Wire.uint16 (fun f_x ->
+      Wire.Expr.(Wire.Everparse.Raw.field_ref f_x <= Wire.int v))
 
 (** Test bitfield constraints. *)
 let test_bitfield_constraint width =
   let width = (width mod 16) + 1 in
   let t = Wire.bits ~width Wire.U16 in
-  let f_x = Wire.Everparse.Raw.field "x" t in
-  let cond = Wire.Expr.(Wire.Everparse.Raw.field_ref f_x <= Wire.int 100) in
-  let s =
-    Wire.Everparse.Raw.struct_ "BFConstrained"
-      [ Wire.Everparse.Raw.field "x" ~constraint_:cond t ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_constrained_x ~name:"BFConstrained" t (fun f_x ->
+      Wire.Expr.(Wire.Everparse.Raw.field_ref f_x <= Wire.int 100))
 
 (** Test bitwise expression operators in 3D output. *)
 let test_bitwise_expr a =
   let v = abs a mod 256 in
-  let f_x = Wire.Everparse.Raw.field "x" Wire.uint16 in
-  let open Wire.Expr in
-  let cond =
-    Wire.Everparse.Raw.field_ref f_x land Wire.int 0xFF <= Wire.int v
-  in
-  let s =
-    Wire.Everparse.Raw.struct_ "Bitwise"
-      [ Wire.Everparse.Raw.field "x" ~constraint_:cond Wire.uint16 ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_constrained_x ~name:"Bitwise" Wire.uint16 (fun f_x ->
+      let open Wire.Expr in
+      Wire.Everparse.Raw.field_ref f_x land Wire.int 0xFF <= Wire.int v)
 
 (** Test logical expression operators. *)
 let test_logical_expr () =
@@ -285,49 +276,36 @@ let test_sizeof_expr () =
   let _ = Wire.field_pos in
   ()
 
-(** Test array types. *)
-let test_array_type len =
-  let len = (abs len mod 100) + 1 in
-  let arr = Wire.array ~len:(Wire.int len) Wire.uint8 in
+let render_single_field_struct ~struct_name ~field_name typ =
   let s =
-    Wire.Everparse.Raw.struct_ "WithArray"
-      [ Wire.Everparse.Raw.field "arr" arr ]
+    Wire.Everparse.Raw.struct_ struct_name
+      [ Wire.Everparse.Raw.field field_name typ ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
   let _ = Wire.Everparse.Raw.to_3d m in
   ()
+
+(** Test array types. *)
+let test_array_type len =
+  let len = (abs len mod 100) + 1 in
+  render_single_field_struct ~struct_name:"WithArray" ~field_name:"arr"
+    (Wire.array ~len:(Wire.int len) Wire.uint8)
 
 (** Test byte_array types. *)
 let test_byte_array size =
   let size = (abs size mod 1000) + 1 in
-  let ba = Wire.byte_array ~size:(Wire.int size) in
-  let s =
-    Wire.Everparse.Raw.struct_ "WithByteArray"
-      [ Wire.Everparse.Raw.field "data" ba ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_single_field_struct ~struct_name:"WithByteArray" ~field_name:"data"
+    (Wire.byte_array ~size:(Wire.int size))
 
 (** Test nested. *)
 let test_nested () =
-  let t = Wire.nested ~size:(Wire.int 4) Wire.uint32 in
-  let s =
-    Wire.Everparse.Raw.struct_ "WithSingle" [ Wire.Everparse.Raw.field "x" t ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_single_field_struct ~struct_name:"WithSingle" ~field_name:"x"
+    (Wire.nested ~size:(Wire.int 4) Wire.uint32)
 
 (** Test nested_at_most. *)
 let test_single_elem_at_most () =
-  let t = Wire.nested_at_most ~size:(Wire.int 8) Wire.uint32 in
-  let s =
-    Wire.Everparse.Raw.struct_ "WithAtMost" [ Wire.Everparse.Raw.field "x" t ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_single_field_struct ~struct_name:"WithAtMost" ~field_name:"x"
+    (Wire.nested_at_most ~size:(Wire.int 8) Wire.uint32)
 
 (** Test anon_field (padding). *)
 let test_anon_field () =
@@ -386,18 +364,18 @@ let test_apply () =
 (** Test type_ref. *)
 let test_type_ref () =
   let t : int Wire.typ = Wire.Everparse.Raw.type_ref "SomeType" in
-  let s =
-    Wire.Everparse.Raw.struct_ "WithRef" [ Wire.Everparse.Raw.field "x" t ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_single_field_struct ~struct_name:"WithRef" ~field_name:"x" t
 
 (** Test qualified_ref. *)
 let test_qualified_ref () =
   let t : int Wire.typ = Wire.Everparse.Raw.qualified_ref "Other" "SomeType" in
+  render_single_field_struct ~struct_name:"WithQRef" ~field_name:"x" t
+
+let render_action_struct ~name ptr act =
   let s =
-    Wire.Everparse.Raw.struct_ "WithQRef" [ Wire.Everparse.Raw.field "x" t ]
+    Wire.Everparse.Raw.param_struct name
+      [ Wire.Param.decl ptr ]
+      [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
   in
   let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
   let _ = Wire.Everparse.Raw.to_3d m in
@@ -413,27 +391,13 @@ let test_action () =
         Wire.Action.return_bool Wire.Expr.true_;
       ]
   in
-  let s =
-    Wire.Everparse.Raw.param_struct "WithAction"
-      [ Wire.Param.decl ptr ]
-      [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_action_struct ~name:"WithAction" ptr act
 
 (** Test Action.on_act action. *)
 let test_on_act () =
   let ptr = Wire.Param.output "ptr" Wire.uint32 in
   let act = Wire.Action.on_act [ Wire.Action.assign ptr (Wire.int 0) ] in
-  let s =
-    Wire.Everparse.Raw.param_struct "WithOnAct"
-      [ Wire.Param.decl ptr ]
-      [ Wire.Everparse.Raw.field "x" ~action:act Wire.uint8 ]
-  in
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  let _ = Wire.Everparse.Raw.to_3d m in
-  ()
+  render_action_struct ~name:"WithOnAct" ptr act
 
 (** Test Action.abort action. *)
 let test_abort () =
