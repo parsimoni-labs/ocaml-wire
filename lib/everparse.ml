@@ -212,6 +212,8 @@ let is_same_bit_group base bit_order (Types.Field f) =
 let bit_width (Types.Field f) =
   match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
 
+(* Greedy: collect consecutive Bits with the same (base, bit_order)
+   that still fit in one base word. *)
 let collect_bit_group base bit_order total f0 rest =
   let rec collect used group = function
     | f :: rest' when is_same_bit_group base bit_order f ->
@@ -243,6 +245,9 @@ let reorder_bit_group base bit_order f0 rest =
   let emitted =
     if bit_order = native then group
     else
+      (* Backward references in reversed order would break: fields now
+         come before the values their constraints read. Collapse all
+         constraints onto the last reversed field. *)
       let reversed = collapse_constraints_into_last (List.rev group) in
       pad_reversed_group total used base native reversed
   in
