@@ -192,7 +192,14 @@ and action_stmt =
   | If of bool expr * action_stmt list * action_stmt list option
   | Var of string * int expr
 
-type param_env = { pe_codec_id : int; pe_slots : int array }
+type param_env = {
+  pe_codec_id : int;
+  pe_slots : int array;
+  pe_bound : bool array;
+      (* Parallel to [pe_slots]: one bit per slot, set by [Param.bind] so
+         encoders can reject envs that left an input param at its
+         default-zero value. *)
+}
 
 (* Expression constructors *)
 let int n = Int n

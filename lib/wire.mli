@@ -796,10 +796,19 @@ module Codec : sig
   val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
-  val encode : 'r t -> 'r -> bytes -> int -> unit
-  (** Encodes one record value into a buffer at the given base offset.
+  val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
+  (** [encode ?env c r buf off] encodes one record value into a buffer at the
+      given base offset.
 
-      Raises [Invalid_argument] if the destination buffer is too short. *)
+      For codecs with input parameters (e.g. [byte_array ~size:(Param.expr p)]),
+      the caller picks each parametric field's width and tells the encoder via
+      [?env] (built with [Codec.env c |> Param.bind p N]). The bound widths must
+      match the field values in [r]; the encoder cross-checks them.
+
+      Raises [Invalid_argument] when the codec has parameters and no env is
+      supplied, when the env left any input param unbound (the error names it),
+      when the destination buffer is too short, or when a parametric byte
+      field's value length does not match its env-bound size. *)
 
   val validate : 'r t -> bytes -> int -> unit
   (** [validate c buf off] checks field [~constraint_] and [~where] clauses

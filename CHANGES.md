@@ -53,6 +53,12 @@
 
 ### Fixed
 
+- `Codec.encode` / `Codec.raw_encode` accept `?env:Param.env`, mirroring
+  `Codec.decode`. Encoding a parametric codec without an env (or with an
+  env that left an input param unbound) now raises `Invalid_argument`
+  naming the offending param instead of silently writing zero-sized
+  regions. A parametric byte field whose value length disagrees with its
+  env-bound size also raises rather than truncating (#53, @samoht)
 - Fix silent always-true compilation of `Field.optional` /
   `Field.optional_or` predicates that use bitwise / shift / mod
   operators, and fix `Field.ref` on an `optional` field reading 0

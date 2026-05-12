@@ -394,6 +394,75 @@ let test_parse_param_with_params () =
   | Ok _ -> Alcotest.(check int) "out_len" 3 (Param.get env out_len)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+(* Encoding a parametric [byte_array ~size:(Param.expr p)] field must use
+   the env-bound size, not the (zero) default. Same env shape that
+   [decode ~env] accepts on the other side. *)
+type param_payload = { payload : string }
+
+let param_codec () =
+  let p_len = Param.input "len" uint8 in
+  let c =
+    Codec.v "ParamPayload"
+      (fun b -> { payload = b })
+      Codec.
+        [
+          ( Field.v "Data" (byte_array ~size:(Param.expr p_len)) $ fun r ->
+            r.payload );
+        ]
+  in
+  (c, p_len)
+
+let test_param_size_encode () =
+  let c, p_len = param_codec () in
+  List.iter
+    (fun n ->
+      let env = Codec.env c |> Param.bind p_len n in
+      let payload = String.make n 'A' in
+      let buf = Bytes.create 32 in
+      Codec.encode ~env c { payload } buf 0;
+      let actual = Bytes.sub_string buf 0 n in
+      Alcotest.(check string) (Fmt.str "encode len=%d" n) payload actual;
+      match Codec.decode ~env c buf 0 with
+      | Ok { payload = decoded } ->
+          Alcotest.(check string) (Fmt.str "roundtrip len=%d" n) payload decoded
+      | Error e -> Alcotest.failf "decode after encode: %a" pp_parse_error e)
+    [ 0; 1; 7; 32 ]
+
+let test_param_encode_length_mismatch () =
+  let c, p_len = param_codec () in
+  let env = Codec.env c |> Param.bind p_len 4 in
+  let buf = Bytes.create 16 in
+  match Codec.encode ~env c { payload = "ab" } buf 0 with
+  | () -> Alcotest.fail "expected Invalid_argument"
+  | exception Invalid_argument _ -> ()
+
+let test_param_encode_no_env () =
+  let c, _ = param_codec () in
+  let buf = Bytes.create 16 in
+  match Codec.encode c { payload = "" } buf 0 with
+  | () -> Alcotest.fail "expected Invalid_argument for missing env"
+  | exception Invalid_argument _ -> ()
+
+let test_param_encode_unbound () =
+  let c, _ = param_codec () in
+  let env =
+    Codec.env c
+    (* p_len never bound *)
+  in
+  let buf = Bytes.create 16 in
+  match Codec.encode ~env c { payload = "" } buf 0 with
+  | () -> Alcotest.fail "expected Invalid_argument for unbound param"
+  | exception Invalid_argument msg ->
+      if not (String.length msg > 0) then Alcotest.fail "empty error message";
+      (* Error must name the offending param so the user can fix it. *)
+      let needle = "len" in
+      let found = ref false in
+      let limit = String.length msg - String.length needle in
+      for i = 0 to limit do
+        if String.sub msg i (String.length needle) = needle then found := true
+      done;
+      Alcotest.(check bool) "error names missing param" true !found
+
 let test_parse_param_where_fail () =
   let max_len = Param.input "max_len" uint16be in
   let out_len = Param.output "out_len" uint16be in
@@ -797,6 +866,14 @@ let suite =
         test_parse_param_with_params;
       Alcotest.test_case "parse: param struct where fail" `Quick
         test_parse_param_where_fail;
+      Alcotest.test_case "encode: param size threads env" `Quick
+        test_param_size_encode;
+      Alcotest.test_case "encode: param size length mismatch" `Quick
+        test_param_encode_length_mismatch;
+      Alcotest.test_case "encode: param codec without env rejected" `Quick
+        test_param_encode_no_env;
+      Alcotest.test_case "encode: env with unbound param rejected" `Quick
+        test_param_encode_unbound;
       (* sizeof / sizeof_this / field_pos *)
       Alcotest.test_case "sizeof" `Quick test_sizeof;
       Alcotest.test_case "sizeof_this" `Quick test_sizeof_this;
