@@ -128,6 +128,12 @@ and _ typ =
       codec_encode : 'r -> bytes -> int -> unit;
       codec_fixed_size : int option;
       codec_size_of : bytes -> int -> int;
+      codec_size_of_value : 'r -> int;
+          (* Encoded byte length of a value, computed from the value rather
+             than by re-reading the buffer. The buffer-driven [codec_size_of]
+             is wrong for variable-size codecs ending in [all_bytes] /
+             [rest_bytes] / [all_zeros]: it reads "remaining buffer space",
+             not the value's actual tail length. *)
       codec_field_readers : (string * (bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
@@ -1377,7 +1383,67 @@ let pp_parse_error ppf = function
   | All_zeros_failed { offset } ->
       Fmt.pf ppf "non-zero byte at offset %d" offset
 
+(* Encoded byte size of [v] under [typ], computed from the value rather
+   than from a buffer. Mirrors [field_wire_size] for fixed cases and
+   reads the value for variable byte fields. Sub-codecs delegate to the
+   value-driven [codec_size_of_value] baked in at codec construction.
+
+   Typs whose size depends on a parameter or sibling field ([Uint_var]
+   with non-constant size, dynamic [Optional]/[Optional_or], parametric
+   [Repeat] / [Single_elem]) are not handled here -- they only appear
+   inside a codec, which threads its own value-driven size at seal. *)
+
 (** Compute wire size of a type (None for variable-size types). *)
+let rec size_of_typ_value : type a. a typ -> a -> int =
+ fun typ v ->
+  match typ with
+  | Uint8 -> 1
+  | Uint16 _ -> 2
+  | Uint32 _ -> 4
+  | Uint63 _ -> 8
+  | Uint64 _ -> 8
+  | Int8 -> 1
+  | Int16 _ -> 2
+  | Int32 _ -> 4
+  | Int64 _ -> 8
+  | Float32 _ -> 4
+  | Float64 _ -> 8
+  | Bits { base = BF_U8; _ } -> 1
+  | Bits { base = BF_U16 _; _ } -> 2
+  | Bits { base = BF_U32 _; _ } -> 4
+  | Unit -> 0
+  | All_bytes -> String.length v
+  | All_zeros -> String.length v
+  | Byte_array _ -> String.length v
+  | Byte_array_where _ -> String.length v
+  | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
+  | Uint_var { size = Int n; _ } -> n
+  | Uint_var _ -> 0
+  | Map { inner; encode; _ } -> size_of_typ_value inner (encode v)
+  | Where { inner; _ } -> size_of_typ_value inner v
+  | Enum { base; _ } -> size_of_typ_value base v
+  | Optional { present = Bool true; inner } ->
+      size_of_typ_value inner (Option.get v)
+  | Optional { present = Bool false; _ } -> 0
+  | Optional _ -> 0
+  | Optional_or { present = Bool true; inner; _ } -> size_of_typ_value inner v
+  | Optional_or { present = Bool false; _ } -> 0
+  | Optional_or _ -> 0
+  | Codec { codec_size_of_value; _ } -> codec_size_of_value v
+  | Single_elem { size = Int n; _ } -> n
+  | Single_elem _ -> 0
+  | Repeat { size = Int n; _ } -> n
+  | Repeat _ -> 0
+  | Array { elem; seq = Seq_map s; _ } ->
+      let total = Stdlib.ref 0 in
+      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
+      !total
+  | Apply { typ; _ } -> size_of_typ_value typ v
+  | Casetype _ -> 0
+  | Struct _ -> 0
+  | Type_ref _ -> 0
+  | Qualified_ref _ -> 0
+
 let rec field_wire_size : type a. a typ -> int option = function
   | Uint8 -> Some 1
   | Uint16 _ -> Some 2

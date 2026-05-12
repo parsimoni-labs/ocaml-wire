@@ -171,6 +171,38 @@ let test_all_bytes_in_codec () =
       Alcotest.(check string) "data" "Hello" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+(* Regression: encoding a codec-as-typ-field whose inner codec ends in
+   [all_bytes] used to size the scratch via a 4096-byte buffer, then ask
+   the buffer-driven size_of for the encoded size -- which for an
+   all_bytes tail returns "remaining buffer" (4096), so the encoder
+   shipped 4096 bytes including uninitialised scratch. Now the size is
+   computed from the value. Cover payloads spanning < 4096, = 4096 and
+   > 4096 to catch the scratch ceiling as well. *)
+let test_codec_all_bytes_tail () =
+  let f_h = Field.v "Header" uint8 in
+  let f_d = Field.v "Data" all_bytes in
+  let inner =
+    Codec.v "Inner" (fun h d -> (h, d)) Codec.[ f_h $ fst; f_d $ snd ]
+  in
+  let f_payload = Field.v "Payload" (codec inner) in
+  let outer = Codec.v "Outer" (fun p -> p) Codec.[ (f_payload $ fun p -> p) ] in
+  let roundtrip label tail =
+    let v = (0x42, tail) in
+    let sz = 1 + String.length tail in
+    let buf = Bytes.create sz in
+    Codec.encode outer v buf 0;
+    Alcotest.(check int) (label ^ ": buf length") sz (Bytes.length buf);
+    match Codec.decode outer buf 0 with
+    | Ok (h, d) ->
+        Alcotest.(check int) (label ^ ": header") 0x42 h;
+        Alcotest.(check string) (label ^ ": tail") tail d
+    | Error e -> Alcotest.failf "%s decode: %a" label pp_parse_error e
+  in
+  roundtrip "small" "Hello";
+  roundtrip "<4096" (String.make 1024 'A');
+  roundtrip "=4095" (String.make 4095 'B');
+  roundtrip ">4096" (String.make 8192 'C')
+
 let test_all_zeros_in_codec () =
   let f_h = Field.v "Tag" uint8 in
   let f_p = Field.v "Pad" all_zeros in
@@ -830,6 +862,8 @@ let suite =
         test_rest_of_buffer_codec;
       Alcotest.test_case "codec: all_bytes as field" `Quick
         test_all_bytes_in_codec;
+      Alcotest.test_case "encode: codec-with-all_bytes tail roundtrip" `Quick
+        test_codec_all_bytes_tail;
       Alcotest.test_case "codec: all_zeros as field" `Quick
         test_all_zeros_in_codec;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick

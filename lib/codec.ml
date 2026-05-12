@@ -618,6 +618,12 @@ type ('f, 'r) record =
       r_make : 'full;
       r_readers : ('full, 'f) readers;
       r_writers_rev : ('r -> bytes -> int -> unit) list;
+      r_size_of_value_rev : ('r -> int) list;
+          (* Per-field value-driven size functions (one per writer). At
+             seal we sum them into [t_size_of_value]; encode uses that
+             instead of the buffer-driven [t_wire_size.compute] when sizing
+             scratch buffers, because the latter misreads variable tails
+             (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
       r_min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)
       r_next_off : next_off; (* where the next field starts *)
@@ -646,6 +652,7 @@ let id_counter = Atomic.make 0
 type 'r t = {
   t_id : int;
   t_name : string;
+  t_size_of_value : 'r -> int;
   t_field_access : (string * field_access) list;
   t_field_readers : field_reader list;
   t_field_actions : (string * compiled_action) list;
@@ -670,6 +677,7 @@ let record_start ?where name make =
       r_make = make;
       r_readers = Nil;
       r_writers_rev = [];
+      r_size_of_value_rev = [];
       r_min_wire_size = 0;
       r_next_off = Static 0;
       r_fields_rev = [];
@@ -1850,12 +1858,16 @@ let apply_compiled : type a f r.
   let new_field_readers =
     cf.nested_readers @ ((fld.name, cf.int_reader) :: r.r_field_readers)
   in
+  let field_typ = fld.typ in
+  let field_get = fld.get in
+  let field_size_of_value v = size_of_typ_value field_typ (field_get v) in
   Record
     {
       r_name = r.r_name;
       r_make = r.r_make;
       r_readers = Snoc (r.r_readers, cf.raw_reader);
       r_writers_rev = new_writers_rev;
+      r_size_of_value_rev = field_size_of_value :: r.r_size_of_value_rev;
       r_min_wire_size = r.r_min_wire_size + cf.size_delta;
       r_next_off = cf.next_off;
       r_fields_rev = struct_field fld :: r.r_fields_rev;
@@ -2097,9 +2109,19 @@ let seal : type r. (r, r) record -> r t =
   in
   (* Per-field action runners *)
   let field_actions = List.rev r.r_field_actions_rev in
+  let size_funcs = Array.of_list (List.rev r.r_size_of_value_rev) in
+  let n_size_funcs = Array.length size_funcs in
+  let size_of_value v =
+    let total = Stdlib.ref 0 in
+    for i = 0 to n_size_funcs - 1 do
+      total := !total + size_funcs.(i) v
+    done;
+    !total
+  in
   {
     t_id = codec_id;
     t_name = r.r_name;
+    t_size_of_value = size_of_value;
     t_field_access = field_access;
     t_field_readers = List.rev r.r_field_readers;
     t_field_actions = field_actions;
@@ -2388,6 +2410,8 @@ let wire_size_at t buf off =
   match t.t_wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
+
+let size_of_value t v = t.t_size_of_value v
 
 let is_fixed t =
   match t.t_wire_size with Fixed _ -> true | Variable _ -> false

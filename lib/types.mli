@@ -167,6 +167,9 @@ and _ typ =
       codec_encode : 'r -> bytes -> int -> unit;
       codec_fixed_size : int option;
       codec_size_of : bytes -> int -> int;
+      codec_size_of_value : 'r -> int;
+          (** Encoded byte length of a value, computed from the value rather
+              than by re-reading the buffer. *)
       codec_field_readers : (string * (bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
@@ -711,6 +714,13 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
 
 val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)
+
+val size_of_typ_value : 'a typ -> 'a -> int
+(** [size_of_typ_value typ v] is the encoded byte size of [v] under [typ],
+    computed from the value rather than from a buffer. Falls back to [0] for
+    typs whose size depends on an out-of-band parameter or sibling field --
+    those only appear inside a codec, where {!Codec.size_of_value} sums per-
+    field projections instead. *)
 
 val c_type_of : 'a typ -> string
 (** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).

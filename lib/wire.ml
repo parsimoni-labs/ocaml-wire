@@ -65,6 +65,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_encode = Codec.raw_encode c in
   let codec_field_readers = Codec.field_readers c in
   let codec_struct = Codec.to_struct c in
+  let codec_size_of_value = Codec.size_of_value c in
   match Codec.wire_size_info c with
   | `Fixed n ->
       Codec
@@ -74,6 +75,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_encode;
           codec_fixed_size = Some n;
           codec_size_of = (fun _buf _off -> n);
+          codec_size_of_value;
           codec_field_readers;
           codec_struct;
         }
@@ -85,6 +87,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_encode;
           codec_fixed_size = None;
           codec_size_of = size_of;
+          codec_size_of_value;
           codec_field_readers;
           codec_struct;
         }
@@ -506,15 +509,8 @@ let write_string enc s =
     Writer.write_string enc.writer s
   end
 
-let encode_codec ~encode ~fixed_size ~size_of v enc =
-  let sz =
-    match fixed_size with
-    | Some n -> n
-    | None ->
-        let tmp = Bytes.create 4096 in
-        encode v tmp 0;
-        size_of tmp 0
-  in
+let encode_codec ~encode ~fixed_size ~size_of_value v enc =
+  let sz = match fixed_size with Some n -> n | None -> size_of_value v in
   let tmp = Bytes.create sz in
   encode v tmp 0;
   write_string enc (Bytes.unsafe_to_string tmp)
@@ -585,9 +581,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Single_elem { elem; _ } -> encode_into elem v enc
   | Enum { base; _ } -> encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
-  | Codec { codec_encode; codec_fixed_size; codec_size_of; _ } ->
+  | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
       encode_codec ~encode:codec_encode ~fixed_size:codec_fixed_size
-        ~size_of:codec_size_of v enc
+        ~size_of_value:codec_size_of_value v enc
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
   | Optional_or { present; inner; _ } ->
