@@ -232,7 +232,13 @@ and action_stmt =
   | If of bool expr * action_stmt list * action_stmt list option
   | Var of string * int expr  (** Action statement. *)
 
-type param_env = { pe_codec_id : int; pe_slots : int array }
+type param_env = {
+  pe_codec_id : int;
+  pe_slots : int array;
+  pe_bound : bool array;
+      (** Parallel to [pe_slots]; set by [Param.bind] so consumers can detect
+          unbound input params. *)
+}
 
 (** {1 Expression Constructors} *)
 

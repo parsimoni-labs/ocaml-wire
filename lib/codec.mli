@@ -60,10 +60,43 @@ val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
 (** [decode_exn ?env c buf off] is like {!decode} but raises
     {!Types.Parse_error} on failure. *)
 
-val encode : 'r t -> 'r -> bytes -> int -> unit
-(** [encode c r buf off] encodes record [r] into [buf] at offset [off].
+val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
+(** [encode ?env c r buf off] encodes record [r] into [buf] at offset [off].
 
-    Raises [Invalid_argument] if the destination buffer is too short. *)
+    For codecs with input parameters (e.g. [byte_array ~size:(Param.expr p)]),
+    the caller decides the width of each parametric field and tells the encoder
+    via [?env]:
+
+    {[
+    open Wire
+
+    let p_iv_len = Param.input "iv_len" uint8
+
+    let codec =
+      Codec.v "Hdr"
+        (fun iv -> iv)
+        Codec.
+          [
+            (Field.v "iv" (byte_array ~size:(Param.expr p_iv_len)) $ fun s -> s);
+          ]
+
+    let buf = Bytes.create 12
+    let env = Codec.env codec |> Param.bind p_iv_len 12
+
+    let () =
+      Codec.encode ~env codec (String.make 12 'a') buf 0;
+      assert (Bytes.to_string buf = String.make 12 'a')
+    ]}
+
+    Each bound width must match the length of the corresponding field value in
+    [record] -- the encoder cross-checks them. The same env shape works for
+    {!decode} when reading the bytes back, but [encode] does not need a prior
+    decode to obtain it.
+
+    Raises [Invalid_argument] when the codec has parameters and no env is
+    supplied, when the env left any input param unbound (the error names the
+    offending param), when the destination buffer is too short, or when a
+    parametric byte field's value length does not match its env-bound size. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
@@ -90,8 +123,9 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)
 
-val raw_encode : 'r t -> 'r -> bytes -> int -> unit
-(** [raw_encode c r buf off] encodes a record. Internal use. *)
+val raw_encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
+(** [raw_encode ?env c r buf off] encodes a record without [where]-clause
+    validation. Same env semantics as {!encode}. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)

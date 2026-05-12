@@ -1657,20 +1657,38 @@ and var_bytes_reader : type a.
   | _ -> assert false
 
 and var_bytes_writer : type a r.
-    a typ -> (r -> a) -> (bytes -> int -> int) -> r -> bytes -> int -> unit =
- fun typ get off_fn v buf off ->
+    a typ ->
+    (r -> a) ->
+    (bytes -> int -> int) ->
+    (bytes -> int -> int) ->
+    r ->
+    bytes ->
+    int ->
+    unit =
+ fun typ get off_fn size_fn v buf off ->
   let fo = off_fn buf off in
   let value = get v in
+  let check_len ~actual =
+    let expected = size_fn buf off in
+    if actual <> expected then
+      Fmt.invalid_arg
+        "Codec.encode: byte field length %d does not match expected %d \
+         (parametric size, bind via ?env)"
+        actual expected
+  in
   match typ with
   | Byte_slice _ ->
       let src = (value : Slice.t) in
+      check_len ~actual:(Slice.length src);
       Bytes.blit (Slice.bytes src) (Slice.first src) buf (off + fo)
         (Slice.length src)
   | Byte_array _ ->
       let s = (value : string) in
+      check_len ~actual:(String.length s);
       Bytes.blit_string s 0 buf (off + fo) (String.length s)
   | Byte_array_where _ ->
       let s = (value : string) in
+      check_len ~actual:(String.length s);
       Bytes.blit_string s 0 buf (off + fo) (String.length s)
   | All_bytes ->
       let s = (value : string) in
@@ -1749,7 +1767,7 @@ and compile_var_bytes : type a r.
         (raw_reader, raw_writer, int_reader)
     | _ ->
         let raw_reader = var_bytes_reader typ off_fn size_fn in
-        let raw_writer = var_bytes_writer typ fld.get off_fn in
+        let raw_writer = var_bytes_writer typ fld.get off_fn size_fn in
         let int_reader buf base =
           match int_of_typ_value typ (raw_reader buf base) with
           | Some v -> v
@@ -2375,7 +2393,54 @@ let is_fixed t =
   match t.t_wire_size with Fixed _ -> true | Variable _ -> false
 
 let raw_decode t buf off = t.t_decode buf off
-let raw_encode t v buf off = t.t_encode v buf off
+
+(* Copy each input param's env value into its [ph_cell]. The encode
+   closures read [Param_ref p] via [!(p.ph_cell)] (see [bytes_leaves]
+   in [compile_expr]), so the cells are the runtime backing for
+   parametric field sizes. Mirror of the env -> array blit in
+   [decode_exn]. *)
+let load_env_into_cells (t : 'r t) (env : Param.env) =
+  List.iter
+    (fun (Param.Pack p) ->
+      if p.ph_env_idx >= 0 then p.ph_cell := env.pe_slots.(p.ph_env_idx))
+    t.t_param_handles
+
+(* Reject [encode] on a parametric codec without an env, and reject envs
+   that left an input param unbound. Either case would silently resolve
+   parametric sizes to 0 (the ph_cell init value), producing zero-byte
+   regions for byte_array / byte_slice / uint_var fields and writing the
+   rest of the record at the wrong offsets. *)
+let unbound_params (t : 'r t) (env : Param.env) : string list =
+  List.filter_map
+    (fun (Param.Pack p) ->
+      if
+        (not p.Types.ph_mutable) && p.ph_env_idx >= 0
+        && not env.pe_bound.(p.ph_env_idx)
+      then Some p.ph_name
+      else None)
+    t.t_param_handles
+
+let require_env t = function
+  | None when t.t_n_params = 0 -> ()
+  | None ->
+      Fmt.invalid_arg
+        "Codec.encode: codec %s has parameters; pass ?env (e.g. [Codec.env c \
+         |> Param.bind p N])."
+        t.t_name
+  | Some env -> (
+      match unbound_params t env with
+      | [] -> ()
+      | missing ->
+          Fmt.invalid_arg
+            "Codec.encode: codec %s has unbound input params [%s]; bind every \
+             one before encoding."
+            t.t_name
+            (String.concat ", " missing))
+
+let raw_encode ?env:e t v buf off =
+  require_env t e;
+  (match e with Some env -> load_env_into_cells t env | None -> ());
+  t.t_encode v buf off
 
 let wire_size_info t =
   match t.t_wire_size with
@@ -2383,7 +2448,11 @@ let wire_size_info t =
   | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
 
 let env t : Param.env =
-  { Types.pe_codec_id = t.t_id; pe_slots = Array.make t.t_n_params 0 }
+  {
+    Types.pe_codec_id = t.t_id;
+    pe_slots = Array.make t.t_n_params 0;
+    pe_bound = Array.make t.t_n_params false;
+  }
 
 let decode_exn ?env:e t buf off =
   let v = t.t_decode buf off in
@@ -2407,7 +2476,10 @@ let decode_exn ?env:e t buf off =
 let decode ?env t buf off =
   try Ok (decode_exn ?env t buf off) with Types.Parse_error e -> Error e
 
-let encode t v buf off = t.t_encode v buf off
+let encode ?env:e t v buf off =
+  require_env t e;
+  (match e with Some env -> load_env_into_cells t env | None -> ());
+  t.t_encode v buf off
 
 let collect_params (fields : Types.field list) where =
   collect_param_handles fields where
