@@ -84,6 +84,11 @@
   `Constraint_failed` decode error instead of raising `Invalid_argument`.
   The old behaviour broke the decoder's "never raise on adversarial
   input" contract (#55, @samoht)
+- `Wire.encode_into` on a `Single_elem` (`Wire.nested ~size:n inner`)
+  now pads zero bytes up to the declared `size` when `inner` writes
+  fewer than `n` bytes. `encode_direct` already padded; `encode_into`
+  silently dropped the padding, so `Wire.to_string` produced shorter
+  bytes than `Wire.of_string` expected (#55, @samoht)
 - `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
   / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
   tail. The encoded size is now computed from the value via
