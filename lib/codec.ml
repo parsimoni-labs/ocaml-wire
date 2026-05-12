@@ -1695,7 +1695,7 @@ and var_bytes_reader : type a.
       String.iter
         (fun c ->
           if c <> '\000' then
-            invalid_arg "add_field: [all_zeros] field has a non-zero byte")
+            raise (Parse_error (Constraint_failed "all_zeros: non-zero byte")))
         s;
       s
   | Casetype _ -> read_elem typ buf (base + fo)

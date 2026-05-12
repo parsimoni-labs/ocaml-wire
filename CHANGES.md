@@ -62,6 +62,10 @@
   of using the dynamic gate as an encode-side size oracle; the gate
   remains the decode-side selector between the decoded inner and the
   default (#58, @samoht)
+- Decoding an `all_zeros` field that contains a non-zero byte returns a
+  `Constraint_failed` decode error instead of raising `Invalid_argument`.
+  The old behaviour broke the decoder's "never raise on adversarial
+  input" contract (@samoht)
 - `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
   / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
   tail. The encoded size is now computed from the value via
