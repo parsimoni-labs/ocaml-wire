@@ -69,24 +69,31 @@ let write_test (Harness h) value =
       | None -> Only_c_ok "OCaml rejected external bytes")
   | None -> Only_ocaml_ok "External write failed"
 
+let check_after_external_write ~ocaml_read ~equal c_value c_bytes =
+  match ocaml_read c_bytes with
+  | Some final ->
+      if equal c_value final then Match
+      else Value_mismatch "values differ after full roundtrip"
+  | None -> Only_c_ok "OCaml rejected external bytes"
+
+let roundtrip_after_external_read ~write ~ocaml_read ~equal c_value =
+  match write c_value with
+  | None -> Only_ocaml_ok "External write failed"
+  | Some c_bytes ->
+      check_after_external_write ~ocaml_read ~equal c_value c_bytes
+
 let roundtrip_test (Harness h) value =
   let ocaml_bytes = string_of_record h.codec value in
   match (h.read ocaml_bytes, h.ocaml_read ocaml_bytes) with
   | None, Some _ -> Only_ocaml_ok "External read failed on OCaml-encoded bytes"
   | Some _, None -> Only_c_ok "OCaml rejected OCaml-encoded bytes"
   | None, None -> Both_failed
-  | Some c_value, Some ocaml_value -> (
+  | Some c_value, Some ocaml_value ->
       if not (h.equal c_value ocaml_value) then
         Value_mismatch "values differ during external read"
       else
-        match h.write c_value with
-        | None -> Only_ocaml_ok "External write failed"
-        | Some c_bytes -> (
-            match h.ocaml_read c_bytes with
-            | Some final ->
-                if h.equal c_value final then Match
-                else Value_mismatch "values differ after full roundtrip"
-            | None -> Only_c_ok "OCaml rejected external bytes"))
+        roundtrip_after_external_read ~write:h.write ~ocaml_read:h.ocaml_read
+          ~equal:h.equal c_value
 
 type t = {
   name : string;

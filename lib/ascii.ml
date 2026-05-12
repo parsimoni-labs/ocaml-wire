@@ -102,6 +102,31 @@ let annotate_fixed name typ constraint_ bits =
   | None -> base
 
 (* Extract segment info from a Types.field. *)
+let variable_annotation : type a. string -> a Types.typ -> string =
+ fun name typ ->
+  match typ with
+  | Types.Byte_array { size } ->
+      Fmt.str "%s (%s bytes)" name (string_of_expr size)
+  | Types.Byte_slice { size } ->
+      Fmt.str "%s (%s bytes)" name (string_of_expr size)
+  | Byte_array_where { size; _ } ->
+      Fmt.str "%s (%s bytes, refined)" name (string_of_expr size)
+  | Array { len; elem; _ } ->
+      let elem_info =
+        match Types.field_wire_size elem with
+        | Some n -> Fmt.str "%d-byte elems" n
+        | None -> "var elems"
+      in
+      Fmt.str "%s (%s x %s)" name (string_of_expr len) elem_info
+  | Where { inner; cond } ->
+      let inner_label =
+        match Types.field_wire_size inner with
+        | Some n -> Fmt.str "%s (%d)" name (n * 8)
+        | None -> name
+      in
+      Fmt.str "%s [%s]" inner_label (string_of_expr cond)
+  | _ -> if name = "" then "(variable)" else Fmt.str "%s (variable)" name
+
 let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
   let name = Option.value field_name ~default:"" in
   match field_typ with
@@ -117,29 +142,7 @@ let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
               bits = n * 8;
             }
       | None ->
-          let annotation =
-            match field_typ with
-            | Byte_array { size } | Byte_slice { size } ->
-                Fmt.str "%s (%s bytes)" name (string_of_expr size)
-            | Byte_array_where { size; _ } ->
-                Fmt.str "%s (%s bytes, refined)" name (string_of_expr size)
-            | Array { len; elem; _ } ->
-                let elem_info =
-                  match Types.field_wire_size elem with
-                  | Some n -> Fmt.str "%d-byte elems" n
-                  | None -> "var elems"
-                in
-                Fmt.str "%s (%s x %s)" name (string_of_expr len) elem_info
-            | Where { inner; cond } ->
-                let inner_label =
-                  match Types.field_wire_size inner with
-                  | Some n -> Fmt.str "%s (%d)" name (n * 8)
-                  | None -> name
-                in
-                Fmt.str "%s [%s]" inner_label (string_of_expr cond)
-            | _ ->
-                if name = "" then "(variable)" else Fmt.str "%s (variable)" name
-          in
+          let annotation = variable_annotation name field_typ in
           let label =
             match constraint_ with
             | None -> annotation
@@ -249,6 +252,20 @@ let layout segments =
   flush ();
   List.rev !rows
 
+let row_bits_used = function
+  | Fixed_row fields -> List.fold_left (fun acc (_, b) -> acc + b) 0 fields
+  | Variable_row _ -> row_bits
+
+let render_row buf last_bits row =
+  let used = row_bits_used row in
+  Buffer.add_string buf (sep (max !last_bits used));
+  Buffer.add_char buf '\n';
+  (match row with
+  | Fixed_row fields -> Buffer.add_string buf (render_fixed_row fields)
+  | Variable_row label -> Buffer.add_string buf (render_variable_row label));
+  Buffer.add_char buf '\n';
+  last_bits := used
+
 let render_struct (s : Types.struct_) =
   let segments = List.map field_segment s.fields in
   let rows = layout segments in
@@ -261,24 +278,7 @@ let render_struct (s : Types.struct_) =
     Buffer.add_string buf ones;
     Buffer.add_char buf '\n';
     let last_bits = ref row_bits in
-    List.iter
-      (fun row ->
-        let row_bits_used =
-          match row with
-          | Fixed_row fields ->
-              List.fold_left (fun acc (_, b) -> acc + b) 0 fields
-          | Variable_row _ -> row_bits
-        in
-        (* Separator matches the wider of previous row and current row *)
-        Buffer.add_string buf (sep (max !last_bits row_bits_used));
-        Buffer.add_char buf '\n';
-        (match row with
-        | Fixed_row fields -> Buffer.add_string buf (render_fixed_row fields)
-        | Variable_row label ->
-            Buffer.add_string buf (render_variable_row label));
-        Buffer.add_char buf '\n';
-        last_bits := row_bits_used)
-      rows;
+    List.iter (render_row buf last_bits) rows;
     Buffer.add_string buf (sep !last_bits);
     Buffer.add_char buf '\n';
     Buffer.contents buf

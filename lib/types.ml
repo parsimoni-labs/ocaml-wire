@@ -813,17 +813,30 @@ let split_string_casetype_fields (s : struct_) : struct_ =
   in
   { s with fields = List.concat_map split s.fields }
 
+let decl_name = function
+  | Enum_decl { name; _ } -> Some name
+  | Casetype_decl { name; _ } -> Some name
+  | Typedef { struct_ = { name; _ }; _ } -> Some name
+  | _ -> None
+
+let absorb_candidate (acc_rev, seen) e =
+  match decl_name e with
+  | None -> (acc_rev, seen)
+  | Some n when List.mem n seen -> (acc_rev, seen)
+  | Some n -> (e :: acc_rev, n :: seen)
+
+let absorb_typedef_dependencies acc d =
+  match d with
+  | Typedef { struct_; _ } ->
+      let candidates = enum_decls struct_ @ casetype_decls_of_struct struct_ in
+      List.fold_left absorb_candidate acc candidates
+  | _ -> acc
+
 let module_ ?doc decls =
   (* Auto-prepend enum and casetype declarations needed by typedefs in
      [decls] but not already declared in the module. Output order matches
      the order [casetype_decls_of_struct] returns: dispatch before
      wrapper, since the wrapper applies the dispatch. *)
-  let decl_name = function
-    | Enum_decl { name; _ } -> Some name
-    | Casetype_decl { name; _ } -> Some name
-    | Typedef { struct_ = { name; _ }; _ } -> Some name
-    | _ -> None
-  in
   let already_declared =
     List.filter_map decl_name decls |> List.fold_left (fun acc n -> n :: acc) []
   in
@@ -839,22 +852,8 @@ let module_ ?doc decls =
       decls
   in
   let extra_rev, _ =
-    List.fold_left
-      (fun (acc_rev, seen) d ->
-        match d with
-        | Typedef { struct_; _ } ->
-            let candidates =
-              enum_decls struct_ @ casetype_decls_of_struct struct_
-            in
-            List.fold_left
-              (fun (acc_rev, seen) e ->
-                match decl_name e with
-                | None -> (acc_rev, seen)
-                | Some n when List.mem n seen -> (acc_rev, seen)
-                | Some n -> (e :: acc_rev, n :: seen))
-              (acc_rev, seen) candidates
-        | _ -> (acc_rev, seen))
-      ([], already_declared) split_decls
+    List.fold_left absorb_typedef_dependencies ([], already_declared)
+      split_decls
   in
   { doc; decls = List.rev extra_rev @ split_decls }
 
@@ -1248,6 +1247,24 @@ and collect_refs_packed : type a. a expr -> string list =
 (* If a struct-level [where] references fields (rather than only params),
    attach it as the [constraint_] of the last referenced field instead --
    3D's [where] clause only sees parameters. *)
+let attach_where_to_target w target fields =
+  List.map
+    (fun (Field f as field) ->
+      if f.field_name = Some target then
+        let constraint_ = combine_constraints f.constraint_ (Some w) in
+        Field { f with constraint_ }
+      else field)
+    fields
+
+(* Last [field_name] that occurs in [names], by struct position. *)
+let last_referenced_field names fields =
+  List.fold_left
+    (fun acc (Field f) ->
+      match f.field_name with
+      | Some n when List.mem n names -> Some n
+      | _ -> acc)
+    None fields
+
 let lower_where_to_field_constraint where fields =
   match where with
   | None -> (None, fields)
@@ -1256,39 +1273,17 @@ let lower_where_to_field_constraint where fields =
       let field_names =
         List.filter_map (fun (Field f) -> f.field_name) fields
       in
-      let referenced_field_names =
-        List.filter (fun r -> List.mem r field_names) refs
-      in
-      if referenced_field_names = [] then (Some w, fields)
+      let referenced = List.filter (fun r -> List.mem r field_names) refs in
+      if referenced = [] then (Some w, fields)
       else
         (* Attach to the last referenced field by struct position so every
            name in the constraint is decoded by the time it runs. *)
-        let last_pos =
-          List.fold_left
-            (fun acc (Field f) ->
-              match f.field_name with
-              | Some n when List.mem n referenced_field_names -> Some n
-              | _ -> acc)
-            None fields
-        in
         let target =
-          match last_pos with
+          match last_referenced_field referenced fields with
           | Some n -> n
-          | None -> List.hd (List.rev referenced_field_names)
+          | None -> List.hd (List.rev referenced)
         in
-        let fields =
-          List.map
-            (fun (Field f as field) ->
-              match f.field_name with
-              | Some n when n = target ->
-                  let constraint_ =
-                    combine_constraints f.constraint_ (Some w)
-                  in
-                  Field { f with constraint_ }
-              | _ -> field)
-            fields
-        in
-        (None, fields)
+        (None, attach_where_to_target w target fields)
 
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
@@ -1300,11 +1295,27 @@ let pp_struct ppf (s : struct_) =
   List.iter (pp_field ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
+let pp_enum_cases ppf cases =
+  List.iteri
+    (fun i (cname, value) ->
+      if not (Int.equal i 0) then Fmt.string ppf ",";
+      Fmt.pf ppf "@,%s = %d" cname value)
+    cases
+
+let pp_casetype_cases ppf cases =
+  List.iteri
+    (fun i (tag_opt, Pack_typ typ) ->
+      let field_name = Fmt.str "v%d" i in
+      match tag_opt with
+      | Some e ->
+          Fmt.pf ppf "@,case %a: %a %s;" pp_packed_expr e pp_typ typ field_name
+      | None -> Fmt.pf ppf "@,default: %a %s;" pp_typ typ field_name)
+    cases
+
 let pp_decl ppf = function
   | Typedef { entrypoint; export; output; extern_; doc; struct_ = st } ->
       Option.iter (Fmt.pf ppf "/*++ %s --*/@,") doc;
       if extern_ then
-        (* extern typedef struct _Name Name *)
         let n = escape_3d st.name in
         Fmt.pf ppf "extern typedef struct _%s %s@,@," n n
       else begin
@@ -1321,23 +1332,16 @@ let pp_decl ppf = function
         Fmt.(list ~sep:comma pp_param)
         params
   | Extern_probe { init; name } ->
-      (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
       if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
       Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
-      List.iteri
-        (fun i (cname, value) ->
-          if not (Int.equal i 0) then Fmt.string ppf ",";
-          Fmt.pf ppf "@,%s = %d" cname value)
-        cases;
+      pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ _; cases } ->
-      (* First param is the switch discriminant *)
       let disc_name =
         match params with p :: _ -> p.param_name | [] -> "tag"
       in
-      (* Internal name has underscore prefix, public name doesn't *)
       let internal_name, public_name =
         if String.length name > 0 && name.[0] = '_' then
           (name, String.sub name 1 (String.length name - 1))
@@ -1345,15 +1349,7 @@ let pp_decl ppf = function
       in
       Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name pp_params
         params disc_name;
-      List.iteri
-        (fun i (tag_opt, Pack_typ typ) ->
-          let field_name = Fmt.str "v%d" i in
-          match tag_opt with
-          | Some e ->
-              Fmt.pf ppf "@,case %a: %a %s;" pp_packed_expr e pp_typ typ
-                field_name
-          | None -> Fmt.pf ppf "@,default: %a %s;" pp_typ typ field_name)
-        cases;
+      pp_casetype_cases ppf cases;
       Fmt.pf ppf "@,}@]@,} %s;@,@," public_name
 
 let pp_module ppf m =

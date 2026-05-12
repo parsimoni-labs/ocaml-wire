@@ -548,6 +548,11 @@ let test_stream_roundtrip_uint64be_chunk5 n =
   | Ok decoded -> if n <> decoded then fail "stream uint64be chunk=5 mismatch"
   | Error _ -> fail "stream uint64be chunk=5 parse failed"
 
+let stream_check_field ~label ~expected typ slice =
+  match parse_chunked ~chunk_size:1 typ slice with
+  | Error _ -> fail (label ^ " parse failed")
+  | Ok v -> if expected <> v then fail (label ^ " mismatch")
+
 let test_stream_roundtrip_record x y z =
   let x = abs x mod 256 in
   let y = abs y mod 65536 in
@@ -555,23 +560,13 @@ let test_stream_roundtrip_record x y z =
   let original = { x; y; z } in
   match string_of_record test_record_codec original with
   | Error _ -> fail "stream record encode failed"
-  | Ok encoded -> (
-      (* Parse individual fields through chunked reader *)
-      match parse_chunked ~chunk_size:1 Wire.uint8 (String.sub encoded 0 1) with
-      | Error _ -> fail "stream record x parse failed"
-      | Ok vx -> (
-          if x <> vx then fail "stream record x mismatch";
-          match
-            parse_chunked ~chunk_size:1 Wire.uint16 (String.sub encoded 1 2)
-          with
-          | Error _ -> fail "stream record y parse failed"
-          | Ok vy -> (
-              if y <> vy then fail "stream record y mismatch";
-              match
-                parse_chunked ~chunk_size:1 Wire.uint32 (String.sub encoded 3 4)
-              with
-              | Error _ -> fail "stream record z parse failed"
-              | Ok vz -> if z <> vz then fail "stream record z mismatch")))
+  | Ok encoded ->
+      stream_check_field ~label:"stream record x" ~expected:x Wire.uint8
+        (String.sub encoded 0 1);
+      stream_check_field ~label:"stream record y" ~expected:y Wire.uint16
+        (String.sub encoded 1 2);
+      stream_check_field ~label:"stream record z" ~expected:z Wire.uint32
+        (String.sub encoded 3 4)
 
 (** {1 Dependent-size Field Tests} *)
 
