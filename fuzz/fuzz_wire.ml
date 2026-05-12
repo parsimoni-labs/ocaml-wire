@@ -978,25 +978,42 @@ let float_tests =
 type 'a positive = { value : 'a; bytes : unit -> bytes }
 type negative = { bytes : unit -> bytes }
 
+(* An ['a gen] is a byte-stream generator paired with the codec the
+   stream is meant to feed. The streams come in three semantic flavors,
+   each tested by [run_gen]:
+
+   - [valid] -- valid by construction: the bytes must decode to [value]
+     and re-encode byte-identically. Round-trip property.
+   - [almost_valid] -- almost-valid by construction: a compound stream
+     in which one slot has been replaced by noise while sibling slots
+     stayed well-shaped. The decoder must not crash (it may return
+     [Error] or surface a partially-decoded value, but raising is a
+     bug).
+   - [adversarial] -- adversarial by construction: many slots noisy or
+     wholly random bytes. Same crash-safety property as [almost_valid].
+
+   The [almost_valid] / [adversarial] split lets [Record.v] compose
+   compound generators that exercise both "one bad slot" and "many bad
+   slots" stress paths; for primitive leaves where there's no internal
+   structure to corrupt selectively, [almost_valid] is empty. *)
 type 'a gen = {
   codec : 'a Wire.Codec.t;
   env : Wire.Param.env option;
-  positive_cases : 'a positive list;
-      (* Bytes that should decode to [value] and re-encode byte-identically.*)
-  negative_cases : negative list;
-      (* Bytes the decoder must handle without crashing (return [Error] or
-         decode to some value -- either outcome is acceptable, but raising
-         is a bug). *)
+  valid : 'a positive list;
+  almost_valid : negative list;
+  adversarial : negative list;
   equal : 'a -> 'a -> bool;
 }
 
-(* A [leaf] is a gen exposed as its bare typ -- usable as one field of
-   a flat record codec built with [record] below. *)
+(* A [leaf] is the typ form of a gen, ready to slot into a flat record
+   codec via [Record.v]. Mirrors [gen] but carries the bare typ
+   instead of a sealed codec. *)
 type 'a leaf = {
   typ : 'a Wire.typ;
   env : Wire.Param.env option;
-  positive_cases : 'a positive list;
-  negative_cases : negative list;
+  valid : 'a positive list;
+  almost_valid : negative list;
+  adversarial : negative list;
   equal : 'a -> 'a -> bool;
 }
 
@@ -1015,13 +1032,13 @@ let run_gen label (g : _ gen) =
       (match Wire.Codec.decode ?env:g.env g.codec bs 0 with
       | Ok decoded ->
           if not (g.equal decoded p.value) then
-            fail (label ^ ": positive decode mismatch")
-      | Error _ -> fail (label ^ ": positive decode failed"));
+            fail (label ^ ": valid decode mismatch")
+      | Error _ -> fail (label ^ ": valid decode failed"));
       let out = Bytes.create (Bytes.length bs) in
       (try Wire.Codec.encode ?env:g.env g.codec p.value out 0
-       with Invalid_argument _ -> fail (label ^ ": positive reencode raised"));
+       with Invalid_argument _ -> fail (label ^ ": valid reencode raised"));
       if Bytes.unsafe_to_string out <> Bytes.unsafe_to_string bs then
-        fail (label ^ ": positive reencode bytes mismatch");
+        fail (label ^ ": valid reencode bytes mismatch");
       (* Also exercise the top-level [Wire.to_string] path: this drives
          [encode_into] -> [encode_codec], which uses [size_of_value] to
          pre-size the scratch. A mismatch here surfaces encoder bugs that
@@ -1031,13 +1048,14 @@ let run_gen label (g : _ gen) =
         if via_wire <> Bytes.unsafe_to_string bs then
           fail (label ^ ": Wire.to_string mismatch")
       end)
-    g.positive_cases;
-  List.iter
-    (fun (n : negative) ->
-      let bs = n.bytes () in
-      try ignore (Wire.Codec.decode ?env:g.env g.codec bs 0)
-      with Invalid_argument _ -> fail (label ^ ": negative crashed decoder"))
-    g.negative_cases
+    g.valid;
+  let must_not_crash kind (n : negative) =
+    let bs = n.bytes () in
+    try ignore (Wire.Codec.decode ?env:g.env g.codec bs 0)
+    with Invalid_argument _ -> fail (label ^ ": " ^ kind ^ " crashed decoder")
+  in
+  List.iter (must_not_crash "almost_valid") g.almost_valid;
+  List.iter (must_not_crash "adversarial") g.adversarial
 
 (* Leaf generators *)
 
@@ -1062,8 +1080,9 @@ let gen_param_byte_array n =
   {
     codec;
     env = Some env;
-    positive_cases = [ { value = { payload }; bytes = (fun () -> valid) } ];
-    negative_cases = [ { bytes = (fun () -> noise) } ];
+    valid = [ { value = { payload }; bytes = (fun () -> valid) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> noise) } ];
     equal = (fun a b -> a.payload = b.payload);
   }
 
@@ -1117,8 +1136,9 @@ let gen_repeat_var_elem buf =
   {
     codec;
     env = None;
-    positive_cases = [ { value = exts; bytes = (fun () -> framed) } ];
-    negative_cases = [ { bytes = (fun () -> noise) } ];
+    valid = [ { value = exts; bytes = (fun () -> framed) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> noise) } ];
     equal = ( = );
   }
 
@@ -1150,9 +1170,9 @@ let gen_codec_all_bytes_tail buf =
   {
     codec = outer_trailing;
     env = None;
-    positive_cases =
-      [ { value = { header; tail }; bytes = (fun () -> framed) } ];
-    negative_cases = [ { bytes = (fun () -> noise) } ];
+    valid = [ { value = { header; tail }; bytes = (fun () -> framed) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> noise) } ];
     equal = (fun a b -> a.header = b.header && a.tail = b.tail);
   }
 
@@ -1188,8 +1208,9 @@ let leaf_casetype_string_tag body_byte =
   ({
      typ = ssh_auth_body;
      env = None;
-     positive_cases = [ { value = `Publickey v; bytes = (fun () -> framed) } ];
-     negative_cases = [ { bytes = (fun () -> noise) } ];
+     valid = [ { value = `Publickey v; bytes = (fun () -> framed) } ];
+     almost_valid = [];
+     adversarial = [ { bytes = (fun () -> noise) } ];
      equal = ( = );
    }
     : ssh_auth leaf)
@@ -1208,8 +1229,9 @@ let gen_casetype_string_tag body_byte =
   {
     codec = ssh_auth_codec;
     env = None;
-    positive_cases = [ { value = `Publickey v; bytes = (fun () -> framed) } ];
-    negative_cases = [ { bytes = (fun () -> noise) } ];
+    valid = [ { value = `Publickey v; bytes = (fun () -> framed) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> noise) } ];
     equal = ( = );
   }
 
@@ -1291,44 +1313,65 @@ module Record = struct
         List.concat_map
           (fun (p : _ positive) ->
             positives (partial p.value) (p.bytes :: bytes_acc) rest)
-          rf.leaf.positive_cases
+          rf.leaf.valid
 
   let rec pos_thunks : type f r. (f, r) fields -> (unit -> bytes) list =
     function
     | [] -> []
     | rf :: rest ->
         let h =
-          match rf.leaf.positive_cases with
+          match rf.leaf.valid with
           | p :: _ -> p.bytes
           | [] -> fun () -> Bytes.empty
         in
         h :: pos_thunks rest
 
-  (* For each field, emit a compound bytes stream where that one slot
-     is noisy and every other slot uses its first positive sample. One
-     bad slot, rest valid -- the realistic adversarial input. *)
-  let rec negatives : type f r.
+  (* "One bad slot, rest valid": for each field, swap its slot for one
+     of its bad samples (adversarial OR already-almost_valid) and keep
+     siblings at their first valid sample. The realistic adversarial
+     shape; promoted into the compound's [almost_valid]. *)
+  let rec almost : type f r.
       (unit -> bytes) list -> (f, r) fields -> negative list =
    fun bytes_acc fields ->
     match fields with
     | [] -> []
     | rf :: rest ->
         let tail = pos_thunks rest in
+        let mk (n : negative) =
+          {
+            bytes =
+              cat_bytes_thunks (List.rev_append bytes_acc (n.bytes :: tail));
+          }
+        in
         let here =
-          List.map
-            (fun (n : negative) ->
-              {
-                bytes =
-                  cat_bytes_thunks (List.rev_append bytes_acc (n.bytes :: tail));
-              })
-            rf.leaf.negative_cases
+          List.map mk rf.leaf.adversarial @ List.map mk rf.leaf.almost_valid
         in
         let pos_thunk =
-          match rf.leaf.positive_cases with
+          match rf.leaf.valid with
           | p :: _ -> p.bytes
           | [] -> fun () -> Bytes.empty
         in
-        here @ negatives (pos_thunk :: bytes_acc) rest
+        here @ almost (pos_thunk :: bytes_acc) rest
+
+  (* "Many bad slots": concatenate every field's first adversarial
+     sample (falling back to its valid sample if no adversarial). One
+     fully-noisy stream per record. Stays in [adversarial]. *)
+  let rec all_bad : type f r. (f, r) fields -> (unit -> bytes) list = function
+    | [] -> []
+    | rf :: rest ->
+        let h =
+          match (rf.leaf.adversarial, rf.leaf.valid) with
+          | n :: _, _ -> n.bytes
+          | [], p :: _ -> p.bytes
+          | [], [] -> fun () -> Bytes.empty
+        in
+        h :: all_bad rest
+
+  let adversarial_of : type f r. (f, r) fields -> negative list =
+   fun fields ->
+    match fields with
+    | [] -> []
+    | _ -> [ { bytes = cat_bytes_thunks (all_bad fields) } ]
 
   let v : type f r.
       string -> equal:(r -> r -> bool) -> f -> (f, r) fields -> r gen =
@@ -1337,8 +1380,9 @@ module Record = struct
     {
       codec;
       env = merge_envs (envs fields);
-      positive_cases = positives builder [] fields;
-      negative_cases = negatives [] fields;
+      valid = positives builder [] fields;
+      almost_valid = almost [] fields;
+      adversarial = adversarial_of fields;
       equal;
     }
 end
@@ -1399,8 +1443,9 @@ let gen_byte_slice buf =
   {
     codec;
     env = None;
-    positive_cases = positive;
-    negative_cases = negative;
+    valid = positive;
+    almost_valid = [];
+    adversarial = negative;
     equal =
       (fun a b ->
         Bytesrw.Bytes.Slice.length a = Bytesrw.Bytes.Slice.length b
@@ -1425,8 +1470,9 @@ let gen_uint_var n =
   {
     codec;
     env = None;
-    positive_cases = [ { value; bytes = (fun () -> buf) } ];
-    negative_cases = [ { bytes = (fun () -> Bytes.empty) } ];
+    valid = [ { value; bytes = (fun () -> buf) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> Bytes.empty) } ];
     equal = Int.equal;
   }
 
@@ -1461,10 +1507,11 @@ let gen_byte_array_where buf =
   {
     codec;
     env = None;
-    positive_cases = [ { value = payload; bytes = (fun () -> bytes_in) } ];
+    valid = [ { value = payload; bytes = (fun () -> bytes_in) } ];
     (* Noise: bytes that violate the per-byte predicate -- decoder must
        surface [Constraint_failed], not crash. *)
-    negative_cases = [ { bytes = (fun () -> bad) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> bad) } ];
     equal = String.equal;
   }
 
@@ -1482,8 +1529,9 @@ let gen_where n =
   {
     codec;
     env = None;
-    positive_cases = [ { value; bytes = (fun () -> valid) } ];
-    negative_cases = [ { bytes = (fun () -> bad) } ];
+    valid = [ { value; bytes = (fun () -> valid) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> bad) } ];
     equal = Int.equal;
   }
 
@@ -1506,8 +1554,9 @@ let gen_map n =
   {
     codec;
     env = None;
-    positive_cases = positive;
-    negative_cases = negative;
+    valid = positive;
+    almost_valid = [];
+    adversarial = negative;
     equal = Int.equal;
   }
 
@@ -1528,8 +1577,9 @@ let gen_single_elem n =
   {
     codec;
     env = None;
-    positive_cases = [ { value = inner_v; bytes = (fun () -> buf) } ];
-    negative_cases = [ { bytes = (fun () -> Bytes.empty) } ];
+    valid = [ { value = inner_v; bytes = (fun () -> buf) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> Bytes.empty) } ];
     equal = Int.equal;
   }
 
@@ -1545,9 +1595,9 @@ let gen_all_zeros n =
   {
     codec;
     env = None;
-    positive_cases =
-      [ { value = String.make len '\x00'; bytes = (fun () -> zeros) } ];
-    negative_cases = [ { bytes = (fun () -> nonzero) } ];
+    valid = [ { value = String.make len '\x00'; bytes = (fun () -> zeros) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> nonzero) } ];
     equal = String.equal;
   }
 
@@ -1561,8 +1611,9 @@ let gen_optional n =
   {
     codec;
     env = None;
-    positive_cases = [ { value = Some inner; bytes = (fun () -> buf) } ];
-    negative_cases = [ { bytes = (fun () -> Bytes.empty) } ];
+    valid = [ { value = Some inner; bytes = (fun () -> buf) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> Bytes.empty) } ];
     equal = ( = );
   }
 
@@ -1578,8 +1629,9 @@ let gen_optional_or n =
   {
     codec;
     env = None;
-    positive_cases = [ { value = inner; bytes = (fun () -> buf) } ];
-    negative_cases = [ { bytes = (fun () -> Bytes.empty) } ];
+    valid = [ { value = inner; bytes = (fun () -> buf) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> Bytes.empty) } ];
     equal = Int.equal;
   }
 
@@ -1620,8 +1672,9 @@ let gen_casetype_int_tag n =
   {
     codec;
     env = None;
-    positive_cases = [ { value = v; bytes = (fun () -> buf) } ];
-    negative_cases = [ { bytes = (fun () -> Bytes.empty) } ];
+    valid = [ { value = v; bytes = (fun () -> buf) } ];
+    almost_valid = [];
+    adversarial = [ { bytes = (fun () -> Bytes.empty) } ];
     equal = ( = );
   }
 
