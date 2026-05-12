@@ -53,11 +53,15 @@ let test_read_ocaml_override () =
   let result = s.Wire_diff.test_read (encode_simple (7, 1000)) in
   Alcotest.(check bool) "read uses override" true (result = Wire_diff.Match)
 
+let check_result label ~expected ~f s buf =
+  Alcotest.(check bool) label true (f s buf = expected)
+
 let test_write () =
   let s = mk_schema () in
-  let buf = encode_simple (7, 1000) in
-  let result = s.Wire_diff.test_write buf in
-  Alcotest.(check bool) "write result" true (result = Wire_diff.Match)
+  check_result "write result" ~expected:Wire_diff.Match
+    ~f:(fun s buf -> s.Wire_diff.test_write buf)
+    s
+    (encode_simple (7, 1000))
 
 let test_write_ocaml_override () =
   let c_write _ = Some "abc" in
@@ -73,33 +77,29 @@ let test_write_ocaml_override () =
 
 let test_full_roundtrip () =
   let s = mk_schema () in
-  let buf = encode_simple (3, 512) in
-  let result = s.Wire_diff.test_roundtrip buf in
-  Alcotest.(check bool) "full_roundtrip result" true (result = Wire_diff.Match)
+  check_result "full_roundtrip result" ~expected:Wire_diff.Match
+    ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
+    s
+    (encode_simple (3, 512))
+
+let c_reject_schema name =
+  let c_write_reject _ = None in
+  v ~name ~read:mock_c_read ~write:c_write_reject ~project:encode_simple
+    ~equal:String.equal ()
 
 let test_full_roundtrip_c_rejects () =
-  let c_write_reject _ = None in
-  let s =
-    v ~name:"CReject" ~read:mock_c_read ~write:c_write_reject
-      ~project:encode_simple ~equal:String.equal ()
-  in
-  let buf = encode_simple (3, 512) in
-  let result = s.Wire_diff.test_roundtrip buf in
-  Alcotest.(check bool)
-    "c rejects -> Only_ocaml_ok" true
-    (result = Wire_diff.Only_ocaml_ok "External write failed")
+  check_result "c rejects -> Only_ocaml_ok"
+    ~expected:(Wire_diff.Only_ocaml_ok "External write failed")
+    ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
+    (c_reject_schema "CReject")
+    (encode_simple (3, 512))
 
 let test_write_c_rejects () =
-  let c_write_reject _ = None in
-  let s =
-    v ~name:"CRejectW" ~read:mock_c_read ~write:c_write_reject
-      ~project:encode_simple ~equal:String.equal ()
-  in
-  let buf = encode_simple (3, 512) in
-  let result = s.Wire_diff.test_write buf in
-  Alcotest.(check bool)
-    "write c rejects -> Only_ocaml_ok" true
-    (result = Wire_diff.Only_ocaml_ok "External write failed")
+  check_result "write c rejects -> Only_ocaml_ok"
+    ~expected:(Wire_diff.Only_ocaml_ok "External write failed")
+    ~f:(fun s buf -> s.Wire_diff.test_write buf)
+    (c_reject_schema "CRejectW")
+    (encode_simple (3, 512))
 
 let projection_codec =
   let open Codec in
@@ -128,10 +128,10 @@ let test_projection_read () =
   Alcotest.(check bool) "projection read" true (result = Wire_diff.Match)
 
 let test_projection_roundtrip () =
-  let s = mk_projection () in
-  let buf = encode_simple (7, 0) in
-  let result = s.Wire_diff.test_roundtrip buf in
-  Alcotest.(check bool) "projection roundtrip" true (result = Wire_diff.Match)
+  check_result "projection roundtrip" ~expected:Wire_diff.Match
+    ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
+    (mk_projection ())
+    (encode_simple (7, 0))
 
 let test_harness () =
   let s =

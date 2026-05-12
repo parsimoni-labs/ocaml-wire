@@ -31,7 +31,32 @@ let setter_off_int32 n set buf off v =
   set buf off (Int32.of_int v);
   off + n
 
-let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
+let rec encode_case_match : type k w.
+    (bytes -> int -> k -> int) -> k option -> w typ -> w -> bytes -> int -> int
+    =
+ fun tag_enc cb_tag cb_inner body buf off ->
+  let t =
+    match cb_tag with
+    | Some t -> t
+    | None -> failwith "build_field_encoder: cannot encode default case"
+  in
+  let off' = tag_enc buf off t in
+  build_field_encoder cb_inner buf off' body
+
+and build_casetype_encoder : type a k.
+    k typ -> (a, k) case_branch list -> bytes -> int -> a -> int =
+ fun tag cases ->
+  let tag_enc = build_field_encoder tag in
+  let rec find buf off v = function
+    | [] -> failwith "build_field_encoder: casetype: no matching case"
+    | Case_branch { cb_tag; cb_inner; cb_project; _ } :: rest -> (
+        match cb_project v with
+        | Some body -> encode_case_match tag_enc cb_tag cb_inner body buf off
+        | None -> find buf off v rest)
+  in
+  fun buf off v -> find buf off v cases
+
+and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
  fun typ ->
   match typ with
   | Uint8 ->
@@ -111,25 +136,7 @@ let rec build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       let enc = build_field_encoder inner in
       fun buf off v -> enc buf off (encode v)
   | Unit -> fun _buf off () -> off
-  | Casetype { tag; cases; _ } ->
-      let tag_enc = build_field_encoder tag in
-      fun buf off v ->
-        let rec find = function
-          | [] -> failwith "build_field_encoder: casetype: no matching case"
-          | Case_branch { cb_tag; cb_inner; cb_project; _ } :: rest -> (
-              match cb_project v with
-              | Some body ->
-                  let off' =
-                    match cb_tag with
-                    | Some t -> tag_enc buf off t
-                    | None ->
-                        failwith
-                          "build_field_encoder: cannot encode default case"
-                  in
-                  build_field_encoder cb_inner buf off' body
-              | None -> find rest)
-        in
-        find cases
+  | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1488,6 +1495,44 @@ and compile_optional_or : type a r.
         "add_field: dynamic optional_or with variable-size inner not yet \
          supported"
 
+and repeat_raw_fixed : type elt seq.
+    (elt, seq) seq_map ->
+    elt typ ->
+    int ->
+    off_fn:(bytes -> int -> int) ->
+    size_fn:(bytes -> int -> int) ->
+    bytes ->
+    int ->
+    seq =
+ fun (Seq_map seq) elem esz ~off_fn ~size_fn buf base ->
+  let budget = size_fn buf base in
+  let n = if esz > 0 then budget / esz else 0 in
+  let start = base + off_fn buf base in
+  let rec loop acc i =
+    if i >= n then seq.finish acc
+    else loop (seq.add acc (read_elem elem buf (start + (i * esz)))) (i + 1)
+  in
+  loop seq.empty 0
+
+and repeat_raw_variable : type elt seq.
+    (elt, seq) seq_map ->
+    elt typ ->
+    off_fn:(bytes -> int -> int) ->
+    size_fn:(bytes -> int -> int) ->
+    bytes ->
+    int ->
+    seq =
+ fun (Seq_map seq) elem ~off_fn ~size_fn buf base ->
+  let budget = size_fn buf base in
+  let rec loop acc pos remaining =
+    if remaining <= 0 then seq.finish acc
+    else
+      let v = read_elem elem buf pos in
+      let esz = elem_size_of elem buf pos in
+      loop (seq.add acc v) (pos + esz) (remaining - esz)
+  in
+  loop seq.empty (base + off_fn buf base) budget
+
 and repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
     elt typ ->
@@ -1497,32 +1542,10 @@ and repeat_raw_reader : type elt seq.
     bytes ->
     int ->
     seq =
- fun (Seq_map seq) elem ~elem_size ~off_fn ~size_fn ->
+ fun seq elem ~elem_size ~off_fn ~size_fn ->
   match elem_size with
-  | Some esz ->
-      (* Fixed-size elements: direct fill via builder. *)
-      fun buf base ->
-        let budget = size_fn buf base in
-        let n = if esz > 0 then budget / esz else 0 in
-        let start = base + off_fn buf base in
-        let rec loop acc i =
-          if i >= n then seq.finish acc
-          else
-            loop (seq.add acc (read_elem elem buf (start + (i * esz)))) (i + 1)
-        in
-        loop seq.empty 0
-  | None ->
-      (* Variable-size elements: builder accumulation. *)
-      fun buf base ->
-        let budget = size_fn buf base in
-        let rec loop acc pos remaining =
-          if remaining <= 0 then seq.finish acc
-          else
-            let v = read_elem elem buf pos in
-            let esz = elem_size_of elem buf pos in
-            loop (seq.add acc v) (pos + esz) (remaining - esz)
-        in
-        loop seq.empty (base + off_fn buf base) budget
+  | Some esz -> repeat_raw_fixed seq elem esz ~off_fn ~size_fn
+  | None -> repeat_raw_variable seq elem ~off_fn ~size_fn
 
 and compile_repeat : type elt seq r.
     layout_ctx ->
@@ -1992,19 +2015,20 @@ let build_decode : type full r. full -> (full, r) readers -> bytes -> int -> r =
       let fwd = to_fwd readers in
       fun buf off -> apply_fwd make fwd buf off
 
+let lookup_reader_idx rev_readers name =
+  let rec find i = function
+    | [] -> failwith ("unbound field: " ^ name)
+    | (n, _) :: _ when n = name -> i
+    | _ :: rest -> find (i + 1) rest
+  in
+  find 0 rev_readers
+
 let compile_where_clause field_readers where =
   match where with
   | None -> None
   | Some cond ->
       let rev_readers = List.rev field_readers in
-      let idx name =
-        let rec find i = function
-          | [] -> failwith ("unbound field: " ^ name)
-          | (n, _) :: _ when n = name -> i
-          | _ :: rest -> find (i + 1) rest
-        in
-        find 0 rev_readers
-      in
+      let idx name = lookup_reader_idx rev_readers name in
       let cc = { idx; sizeof_this = 0; field_pos = 0 } in
       Some (compile_bool_arr cc cond)
 

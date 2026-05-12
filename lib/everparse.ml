@@ -204,58 +204,59 @@ let rec unwrap_bits : type a.
   | Types.Where { inner; _ } -> unwrap_bits inner
   | _ -> None
 
+let is_same_bit_group base bit_order (Types.Field f) =
+  match unwrap_bits f.field_typ with
+  | Some (b2, bo2, _) -> b2 = base && bo2 = bit_order
+  | None -> false
+
+let bit_width (Types.Field f) =
+  match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
+
+let collect_bit_group base bit_order total f0 rest =
+  let rec collect used group = function
+    | f :: rest' when is_same_bit_group base bit_order f ->
+        let w = bit_width f in
+        if used + w <= total then collect (used + w) (f :: group) rest'
+        else (used, List.rev group, f :: rest')
+    | rest' -> (used, List.rev group, rest')
+  in
+  collect (bit_width f0) [ f0 ] rest
+
+let pad_reversed_group total used base native reversed =
+  let padding = total - used in
+  if padding > 0 then
+    let pad_typ = Types.Bits { width = padding; base; bit_order = native } in
+    Types.Field
+      {
+        field_name = None;
+        field_typ = pad_typ;
+        constraint_ = None;
+        action = None;
+      }
+    :: reversed
+  else reversed
+
+let reorder_bit_group base bit_order f0 rest =
+  let total = Bitfield.total_bits base in
+  let native = Bitfield.native_bit_order base in
+  let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  let emitted =
+    if bit_order = native then group
+    else
+      let reversed = collapse_constraints_into_last (List.rev group) in
+      pad_reversed_group total used base native reversed
+  in
+  (emitted, rest')
+
 let reorder_bit_groups_for_3d fields =
-  let is_same_bit_group base bit_order (Types.Field f) =
-    match unwrap_bits f.field_typ with
-    | Some (b2, bo2, _) -> b2 = base && bo2 = bit_order
-    | None -> false
-  in
-  let bit_width (Types.Field f) =
-    match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
-  in
   let rec go acc = function
     | [] -> List.rev acc
-    | (Types.Field f as f0) :: rest
-      when Option.is_some (unwrap_bits f.field_typ) ->
-        let base, bit_order, _ = Option.get (unwrap_bits f.field_typ) in
-        let total = Bitfield.total_bits base in
-        let native = Bitfield.native_bit_order base in
-        (* Greedy: collect consecutive Bits with the same (base, bit_order)
-           that still fit in one base word. *)
-        let rec collect used group = function
-          | f :: rest' when is_same_bit_group base bit_order f ->
-              let w = bit_width f in
-              if used + w <= total then collect (used + w) (f :: group) rest'
-              else (used, List.rev group, f :: rest')
-          | rest' -> (used, List.rev group, rest')
-        in
-        let used, group, rest' = collect (bit_width f0) [ f0 ] rest in
-        if bit_order = native then go (List.rev_append group acc) rest'
-        else begin
-          let reversed = List.rev group in
-          (* Backward references in reversed order would break: fields now
-             come before the values their constraints read. Collapse all
-             constraints onto the last reversed field. *)
-          let reversed = collapse_constraints_into_last reversed in
-          let padded =
-            let padding = total - used in
-            if padding > 0 then
-              let pad_typ =
-                Types.Bits { width = padding; base; bit_order = native }
-              in
-              Types.Field
-                {
-                  field_name = None;
-                  field_typ = pad_typ;
-                  constraint_ = None;
-                  action = None;
-                }
-              :: reversed
-            else reversed
-          in
-          go (List.rev_append padded acc) rest'
-        end
-    | other :: rest -> go (other :: acc) rest
+    | (Types.Field f as f0) :: rest -> (
+        match unwrap_bits f.field_typ with
+        | Some (base, bit_order, _) ->
+            let emitted, rest' = reorder_bit_group base bit_order f0 rest in
+            go (List.rev_append emitted acc) rest'
+        | None -> go (f0 :: acc) rest)
   in
   go [] fields
 
@@ -408,32 +409,32 @@ type plug_field = {
   pf_val_c_type : string;
 }
 
+let plug_field s idx (Types.Field f) =
+  match f.field_name with
+  | None -> None
+  | Some name ->
+      let i = !idx in
+      incr idx;
+      let setter =
+        if is_byte_field f.field_typ then bytes_setter s.name
+        else setter_of s.name f.field_typ
+      in
+      let (Types.Pack_typ val_typ) = setter.setter_val_typ in
+      Some
+        {
+          pf_name = name;
+          pf_idx = i;
+          pf_c_type = Types.c_type_of f.field_typ;
+          pf_setter = setter.setter_name;
+          pf_val_c_type = Types.c_type_of val_typ;
+        }
+
 let plug_fields s =
   match s.source with
   | None -> []
   | Some src ->
       let idx = ref 0 in
-      List.filter_map
-        (fun (Types.Field f) ->
-          match f.field_name with
-          | None -> None
-          | Some name ->
-              let i = !idx in
-              incr idx;
-              let setter =
-                if is_byte_field f.field_typ then bytes_setter s.name
-                else setter_of s.name f.field_typ
-              in
-              let (Types.Pack_typ val_typ) = setter.setter_val_typ in
-              Some
-                {
-                  pf_name = name;
-                  pf_idx = i;
-                  pf_c_type = Types.c_type_of f.field_typ;
-                  pf_setter = setter.setter_name;
-                  pf_val_c_type = Types.c_type_of val_typ;
-                })
-        src.fields
+      List.filter_map (plug_field s idx) src.fields
 
 let plug_setters s =
   let seen = Hashtbl.create 8 in
@@ -516,13 +517,13 @@ module Raw = struct
     | Field.Named f -> Types.Ref (Field.name f)
     | Field.Anon _ -> invalid_arg "Everparse.Raw.field_ref: anonymous field"
 
-  let unpack_fields fields = List.map Field.to_decl fields
+  let unpack_fields fields = List.map Field.decl_of_packed fields
   let struct_ name fields = Types.struct_ name (unpack_fields fields)
   let struct_name = Types.struct_name
   let field_names = Types.field_names
 
   let struct_project s ~name ~keep =
-    Types.struct_project s ~name ~keep:(List.map Field.to_decl keep)
+    Types.struct_project s ~name ~keep:(List.map Field.decl_of_packed keep)
 
   type ocaml_kind = Types.ocaml_kind =
     | Int
