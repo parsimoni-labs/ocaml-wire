@@ -647,18 +647,6 @@ let encode_bits buf off v width base bit_order =
       Bytes.set_int32_be buf off (Int32.of_int masked);
       off + 4
 
-let encode_padded_string buf off n s =
-  let len = min n (String.length s) in
-  Bytes.blit_string s 0 buf off len;
-  if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
-  off + n
-
-let encode_padded_slice buf off n src =
-  let len = min n (Slice.length src) in
-  Bytes.blit (Slice.bytes src) (Slice.first src) buf off len;
-  if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
-  off + n
-
 (* Variable-size fallback: encode via the writer kernel into a Buffer,
    then blit. Used by [encode_direct]'s catch-all. *)
 let encode_via_writer typ buf off v =
@@ -717,8 +705,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       let n = String.length v in
       Bytes.blit_string v 0 buf off n;
       off + n
-  | Byte_array { size = Int n } -> encode_padded_string buf off n v
-  | Byte_slice { size = Int n } -> encode_padded_slice buf off n v
+  | Byte_array { size = Int n } -> Codec.blit_string_padded n buf off v
+  | Byte_slice { size = Int n } -> Codec.blit_slice_padded n buf off v
   | Single_elem { size = Int n; elem; at_most = _ } ->
       let off' = encode_direct elem buf off v in
       if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
@@ -748,17 +736,7 @@ let to_bytes typ v =
       to_writer typ v writer;
       Buffer.to_bytes buf
 
-let to_string typ v =
-  match field_wire_size typ with
-  | Some n ->
-      let buf = Bytes.create n in
-      ignore (encode_direct typ buf 0 v);
-      Bytes.unsafe_to_string buf
-  | None ->
-      let buf = Buffer.create 64 in
-      let writer = Writer.of_buffer buf in
-      to_writer typ v writer;
-      Buffer.contents buf
+let to_string typ v = Bytes.unsafe_to_string (to_bytes typ v)
 
 type 'r codec = 'r Codec.t
 

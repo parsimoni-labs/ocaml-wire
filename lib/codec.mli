@@ -172,3 +172,13 @@ val load_word : bitfield -> (bytes -> int -> int) Staged.t
 val extract : bitfield -> int -> int
 (** [extract bf word] extracts the field from a pre-loaded word value. Pure
     shift+mask, no memory access. *)
+
+val blit_string_padded : int -> bytes -> int -> string -> int
+(** [blit_string_padded n buf off s] writes [s] into [buf] at [off], zero-pads
+    the trailing bytes if [String.length s < n], and returns [off + n]. Shared
+    helper for both record and top-level encoders. *)
+
+val blit_slice_padded : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
+(** [blit_slice_padded n buf off src] is like {!blit_string_padded} but copies
+    from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
+    [byte_slice] fields. *)
