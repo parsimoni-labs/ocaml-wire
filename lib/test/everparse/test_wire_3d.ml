@@ -244,6 +244,36 @@ let e2e_codec_in_casetype =
   let f = Field.v "msg" body in
   Codec.v "ChannelOpen" (fun m -> m) [ Codec.( $ ) f (fun m -> m) ]
 
+(* [Field.repeat] over a sub-codec whose own size is dynamic (here a
+   length-prefixed name). Projects to a byte-budget repeat
+   [Ext exts[:byte-size total]] in 3D. *)
+type ext = { name : string }
+
+let ext_codec =
+  let open Wire in
+  let f_len = Field.v "name_len" uint8 in
+  let f_name = Field.v "name" (byte_array ~size:(Field.ref f_len)) in
+  Codec.v "Ext"
+    (fun _l n -> { name = n })
+    [
+      Codec.( $ ) f_len (fun e -> String.length e.name);
+      Codec.( $ ) f_name (fun e -> e.name);
+    ]
+
+let e2e_repeat_var_elem =
+  let open Wire in
+  let f_total = Field.v "total" uint8 in
+  let f_exts =
+    Field.repeat "exts" ~size:(Field.ref f_total) (codec ext_codec)
+  in
+  Codec.v "Exts"
+    (fun _t xs -> xs)
+    [
+      Codec.( $ ) f_total (fun xs ->
+          List.fold_left (fun a e -> a + 1 + String.length e.name) 0 xs);
+      Codec.( $ ) f_exts (fun xs -> xs);
+    ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
@@ -251,6 +281,7 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"Ctt" e2e_casetype_codec;
   compile_and_run ~name:"Sshauth" e2e_ssh_casetype_codec;
   compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
+  compile_and_run ~name:"Exts" e2e_repeat_var_elem;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
   compile_and_run ~name:"EP_Header" e2e_mixed_codec;
   compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec

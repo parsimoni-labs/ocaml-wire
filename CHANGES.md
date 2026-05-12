@@ -12,6 +12,9 @@
   separate 3D struct. Sub-codecs may end in `all_bytes`; the
   declaration order places the sub-codec before the dispatch decl
   that names it (#50, @samoht)
+- `Field.repeat` now projects to 3D for variable-size elements (e.g.
+  a sub-codec with its own length-prefixed bytes), emitting
+  `<Elem> name[:byte-size budget]` (#51, @samoht)
 - Support `Wire.casetype` and `Wire.nested ~size` as `Codec` fields
   (#47, @samoht)
 - Add `Field.optional` / `Field.optional_or` / `Field.repeat` /

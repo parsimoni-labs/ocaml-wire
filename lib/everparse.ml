@@ -33,6 +33,9 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
      actions. Treat it like a byte span: the SetBytes setter receives an
      offset into the buffer, and the C side decodes if it wants to. *)
   | Types.Casetype _ -> true
+  (* A repeat-into-list field has no single value 3D can read; expose its
+     bytes via the [SetBytes] offset just like other variable-size fields. *)
+  | Types.Repeat _ -> true
   | _ -> false
 
 type setter_info = { setter_name : string; setter_val_typ : Types.packed_typ }
