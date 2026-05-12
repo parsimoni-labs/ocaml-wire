@@ -114,5 +114,5 @@ type packed =
   | Anon : 'a anon -> packed
       (** Existentially packed field for heterogeneous lists. *)
 
-val to_decl : packed -> Types.field
-(** Convert a packed field to a {!Types.field} declaration. *)
+val decl_of_packed : packed -> Types.field
+(** [decl_of_packed p] is the {!Types.field} declaration of [p]. *)

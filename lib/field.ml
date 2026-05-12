@@ -46,7 +46,7 @@ let action f = f.action
 
 type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
-let to_decl = function
+let decl_of_packed = function
   | Named f ->
       Types.field f.name ?constraint_:f.constraint_ ?action:f.action f.typ
   | Anon a -> Types.anon_field a.anon_typ
