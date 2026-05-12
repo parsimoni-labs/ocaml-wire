@@ -578,7 +578,13 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let off = Slice.first v in
       let len = Slice.length v in
       write_string enc (Bytes.sub_string src off len)
-  | Single_elem { elem; _ } -> encode_into elem v enc
+  | Single_elem { size; elem; _ } ->
+      let n = Eval.expr Eval.empty size in
+      encode_into elem v enc;
+      let inner_sz = Types.size_of_typ_value elem v in
+      for _ = inner_sz to n - 1 do
+        write_byte enc 0
+      done
   | Enum { base; _ } -> encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
