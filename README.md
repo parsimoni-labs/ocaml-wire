@@ -316,7 +316,7 @@ make clean          # dune clean
 | `lib/stubs/` | `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators |
 | `lib/diff/` | `wire.diff` sublibrary: differential testing harness (OCaml codec vs C stubs) |
 | `lib/diff-gen/` | `wire.diff-gen`: generate differential test schemas and runners |
-| `lib/test/stubs/` | Wire\_stubs test suite (compile + EverParse e2e tests) |
+| `test/stubs/` | Wire\_stubs test suite (compile + EverParse e2e tests) |
 | `examples/space/` | CCSDS space protocols (SpacePacket, CLCW, TMFrame) |
 | `examples/net/` | TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy demo |
 | `bench/demo/` | Field-level codec benchmark: EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set` |

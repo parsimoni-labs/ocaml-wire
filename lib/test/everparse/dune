@@ -1,3 +1,0 @@
-(test
- (name test)
- (libraries wire wire.3d alcotest re unix))
