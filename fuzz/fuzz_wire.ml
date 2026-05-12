@@ -990,6 +990,16 @@ type 'a gen = {
   equal : 'a -> 'a -> bool;
 }
 
+(* A [leaf] is a gen exposed as its bare typ -- usable as one field of
+   a flat record codec built with [record] below. *)
+type 'a leaf = {
+  typ : 'a Wire.typ;
+  env : Wire.Param.env option;
+  positive_cases : 'a positive list;
+  negative_cases : negative list;
+  equal : 'a -> 'a -> bool;
+}
+
 let mk_random buf =
   let n = String.length buf in
   if n = 0 then Bytes.empty
@@ -998,7 +1008,7 @@ let mk_random buf =
     Bytes.blit_string buf 0 out 0 n;
     out
 
-let run_gen label g =
+let run_gen label (g : _ gen) =
   List.iter
     (fun (p : _ positive) ->
       let bs = p.bytes () in
@@ -1148,21 +1158,41 @@ let gen_codec_all_bytes_tail buf =
 
 type ssh_auth = [ `Publickey of int | `Other of int ]
 
+let ssh_auth_body : ssh_auth Wire.typ =
+  Wire.casetype "AuthMethod"
+    (Wire.byte_array ~size:(Wire.int 9))
+    [
+      Wire.case ~index:"publickey" Wire.uint8
+        ~inject:(fun v -> `Publickey v)
+        ~project:(function `Publickey v -> Some v | _ -> None);
+      Wire.default ~tag:"xxxxxxxxx" Wire.uint8
+        ~inject:(fun v -> `Other v)
+        ~project:(function `Other v -> Some v | _ -> None);
+    ]
+
 let ssh_auth_codec =
-  let body : ssh_auth Wire.typ =
-    Wire.casetype "AuthMethod"
-      (Wire.byte_array ~size:(Wire.int 9))
-      [
-        Wire.case ~index:"publickey" Wire.uint8
-          ~inject:(fun v -> `Publickey v)
-          ~project:(function `Publickey v -> Some v | _ -> None);
-        Wire.default ~tag:"xxxxxxxxx" Wire.uint8
-          ~inject:(fun v -> `Other v)
-          ~project:(function `Other v -> Some v | _ -> None);
-      ]
-  in
-  let f = Wire.Field.v "method" body in
+  let f = Wire.Field.v "method" ssh_auth_body in
   Wire.Codec.v "SshAuth" (fun m -> m) Wire.Codec.[ (f $ fun m -> m) ]
+
+let leaf_casetype_string_tag body_byte =
+  let v = abs body_byte mod 256 in
+  let framed = Bytes.create 10 in
+  Bytes.blit_string "publickey" 0 framed 0 9;
+  Bytes.set_uint8 framed 9 v;
+  let noise =
+    let n = Bytes.create 10 in
+    Bytes.blit_string "xxxxxxxxx" 0 n 0 9;
+    Bytes.set_uint8 n 9 (v lxor 0xFF);
+    n
+  in
+  ({
+     typ = ssh_auth_body;
+     env = None;
+     positive_cases = [ { value = `Publickey v; bytes = (fun () -> framed) } ];
+     negative_cases = [ { bytes = (fun () -> noise) } ];
+     equal = ( = );
+   }
+    : ssh_auth leaf)
 
 let gen_casetype_string_tag body_byte =
   let v = abs body_byte mod 256 in
@@ -1170,8 +1200,6 @@ let gen_casetype_string_tag body_byte =
   Bytes.blit_string "publickey" 0 framed 0 9;
   Bytes.set_uint8 framed 9 v;
   let noise =
-    (* Method-name bytes that match no case; decoder hits the default
-       branch and yields [`Other], not a crash. *)
     let n = Bytes.create 10 in
     Bytes.blit_string "xxxxxxxxx" 0 n 0 9;
     Bytes.set_uint8 n 9 (v lxor 0xFF);
@@ -1185,85 +1213,135 @@ let gen_casetype_string_tag body_byte =
     equal = ( = );
   }
 
-(* Combinator: glue two leaf gens into a pair-codec gen.
+(* Compositional record builder.
 
-   Cross-products produce four sets of bytes:
-   - positive x positive: clean tuples, the both-valid base case.
-   - positive x negative and negative x positive: "almost valid" -- one
-     side is well-shaped, the other isn't. These are the inputs that
-     stress decoder error paths most realistically.
-   - negative x negative: fully invalid; included for completeness so
-     the decoder isn't tested only on near-valid data.
+   A [leaf] carries the wire typ for one component of a record plus its
+   positive/negative samples and (optional) param env. [Field] binds a
+   leaf to a getter on the enclosing record type, and [( :: )] grows a
+   heterogeneous field list whose type parameters mirror
+   [Wire.Codec.fields]: as you cons one more leaf on the front, the
+   builder type grows from ['f] to ['a -> 'f] (one more curried
+   argument).
 
-   The split keeps the positive/negative distribution from collapsing
-   into one direction: as long as both leaves contribute roughly
-   balanced positive/negative cases, the product stays roughly half
-   positive (1 of 4) and half negative (3 of 4). *)
-let cat_bytes_thunks a b () =
-  let av = a () and bv = b () in
-  let na = Bytes.length av and nb = Bytes.length bv in
-  let out = Bytes.create (na + nb) in
-  Bytes.blit av 0 out 0 na;
-  Bytes.blit bv 0 out na nb;
-  out
+   [record name builder fields ~equal] seals the fields into a flat
+   [Wire.Codec.v name builder fs] -- no sub-codec wrapping, byte-
+   identical to what you'd write by hand. Positive cases are the cross-
+   product of per-field positives, with the builder applied along the
+   way to assemble the record value; negative cases pick one field's
+   noise stream and pair it with positives elsewhere, which is the
+   "one bad slot, everything else valid" adversarial shape.
 
-let pair_positives g1 g2 =
-  List.concat_map
-    (fun (p1 : _ positive) ->
-      List.map
-        (fun (p2 : _ positive) ->
-          {
-            value = (p1.value, p2.value);
-            bytes = cat_bytes_thunks p1.bytes p2.bytes;
-          })
-        g2.positive_cases)
-    g1.positive_cases
+   Envs from each field are merged; two fields binding the same param
+   raise rather than silently keeping one side. *)
 
-let pair_negatives g1 g2 =
-  let cross_pn =
-    List.concat_map
-      (fun (p1 : _ positive) ->
-        List.map
-          (fun (n2 : negative) ->
-            { bytes = cat_bytes_thunks p1.bytes n2.bytes })
-          g2.negative_cases)
-      g1.positive_cases
-  in
-  let cross_np =
-    List.concat_map
-      (fun (n1 : negative) ->
-        List.map
-          (fun (p2 : _ positive) ->
-            { bytes = cat_bytes_thunks n1.bytes p2.bytes })
-          g2.positive_cases)
-      g1.negative_cases
-  in
-  let cross_nn =
-    List.concat_map
-      (fun (n1 : negative) ->
-        List.map
-          (fun (n2 : negative) ->
-            { bytes = cat_bytes_thunks n1.bytes n2.bytes })
-          g2.negative_cases)
-      g1.negative_cases
-  in
-  cross_pn @ cross_np @ cross_nn
+module Record = struct
+  type ('a, 'r) field = { name : string; leaf : 'a leaf; getter : 'r -> 'a }
 
-let gen_pair name g1 g2 =
-  let f1 = Wire.Field.v "x" (Wire.codec g1.codec) in
-  let f2 = Wire.Field.v "y" (Wire.codec g2.codec) in
-  let codec =
-    Wire.Codec.v name (fun x y -> (x, y)) Wire.Codec.[ f1 $ fst; f2 $ snd ]
-  in
-  let env = match (g1.env, g2.env) with None, None -> None | _ -> None in
-  let equal (x1, y1) (x2, y2) = g1.equal x1 x2 && g2.equal y1 y2 in
-  {
-    codec;
-    env;
-    positive_cases = pair_positives g1 g2;
-    negative_cases = pair_negatives g1 g2;
-    equal;
-  }
+  type ('f, 'r) fields =
+    | [] : ('r, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
+
+  let bind : string -> 'a leaf -> ('r -> 'a) -> ('a, 'r) field =
+   fun name leaf getter -> { name; leaf; getter }
+
+  let cat_bytes_thunks ts () =
+    let bs = List.map (fun t -> t ()) ts in
+    let total = List.fold_left (fun n b -> n + Bytes.length b) 0 bs in
+    let out = Bytes.create total in
+    let _ =
+      List.fold_left
+        (fun off b ->
+          let n = Bytes.length b in
+          Bytes.blit b 0 out off n;
+          off + n)
+        0 bs
+    in
+    out
+
+  let merge_envs : Wire.Param.env option list -> Wire.Param.env option =
+   fun envs ->
+    List.fold_left
+      (fun acc e ->
+        match (acc, e) with
+        | None, e | e, None -> e
+        | Some _, Some _ ->
+            invalid_arg "fuzz_wire.record: cross-field env merge not supported")
+      None envs
+
+  let rec codec_fields : type f r. (f, r) fields -> (f, r) Wire.Codec.fields =
+   fun fields ->
+    match fields with
+    | [] -> Wire.Codec.[]
+    | rf :: rest ->
+        Wire.Codec.( $ ) (Wire.Field.v rf.name rf.leaf.typ) rf.getter
+        :: codec_fields rest
+
+  let rec envs : type f r. (f, r) fields -> Wire.Param.env option list =
+    function
+    | [] -> []
+    | rf :: rest -> rf.leaf.env :: envs rest
+
+  let rec positives : type f r.
+      f -> (unit -> bytes) list -> (f, r) fields -> r positive list =
+   fun partial bytes_acc fields ->
+    match fields with
+    | [] ->
+        [ { value = partial; bytes = cat_bytes_thunks (List.rev bytes_acc) } ]
+    | rf :: rest ->
+        List.concat_map
+          (fun (p : _ positive) ->
+            positives (partial p.value) (p.bytes :: bytes_acc) rest)
+          rf.leaf.positive_cases
+
+  let rec pos_thunks : type f r. (f, r) fields -> (unit -> bytes) list =
+    function
+    | [] -> []
+    | rf :: rest ->
+        let h =
+          match rf.leaf.positive_cases with
+          | p :: _ -> p.bytes
+          | [] -> fun () -> Bytes.empty
+        in
+        h :: pos_thunks rest
+
+  (* For each field, emit a compound bytes stream where that one slot
+     is noisy and every other slot uses its first positive sample. One
+     bad slot, rest valid -- the realistic adversarial input. *)
+  let rec negatives : type f r.
+      (unit -> bytes) list -> (f, r) fields -> negative list =
+   fun bytes_acc fields ->
+    match fields with
+    | [] -> []
+    | rf :: rest ->
+        let tail = pos_thunks rest in
+        let here =
+          List.map
+            (fun (n : negative) ->
+              {
+                bytes =
+                  cat_bytes_thunks (List.rev_append bytes_acc (n.bytes :: tail));
+              })
+            rf.leaf.negative_cases
+        in
+        let pos_thunk =
+          match rf.leaf.positive_cases with
+          | p :: _ -> p.bytes
+          | [] -> fun () -> Bytes.empty
+        in
+        here @ negatives (pos_thunk :: bytes_acc) rest
+
+  let v : type f r.
+      string -> equal:(r -> r -> bool) -> f -> (f, r) fields -> r gen =
+   fun name ~equal builder fields ->
+    let codec = Wire.Codec.v name builder (codec_fields fields) in
+    {
+      codec;
+      env = merge_envs (envs fields);
+      positive_cases = positives builder [] fields;
+      negative_cases = negatives [] fields;
+      equal;
+    }
+end
 
 let test_gen_param_byte_array n =
   run_gen "param_byte_array" (gen_param_byte_array n)
@@ -1277,14 +1355,20 @@ let test_gen_codec_tail buf =
 let test_gen_casetype_string_tag n =
   run_gen "casetype_string_tag" (gen_casetype_string_tag n)
 
-(* Fixed-size leaf used for composition tests: an embedded sub-codec with
-   variable-size tail can't be the left half of a pair (the right half
-   has no way to find its starting offset). The string-tag casetype's
-   per-case body sizes are known (uint8 in both branches), so two of
-   them compose cleanly. *)
-let test_gen_pair m n =
-  run_gen "pair"
-    (gen_pair "Pair" (gen_casetype_string_tag m) (gen_casetype_string_tag n))
+(* Compositional record test: build a two-field record codec from two
+   leaf gens via the new [record] combinator. The fixed-size string-tag
+   casetype is chosen because every variant of it ships a 10-byte body,
+   so the right half always knows where its bytes start. *)
+let test_gen_record m n =
+  let g1 = leaf_casetype_string_tag m in
+  let g2 = leaf_casetype_string_tag n in
+  let equal (a1, b1) (a2, b2) = g1.equal a1 a2 && g2.equal b1 b2 in
+  let g =
+    Record.v "Pair" ~equal
+      (fun a b -> (a, b))
+      Record.[ bind "x" g1 fst; bind "y" g2 snd ]
+  in
+  run_gen "record" g
 
 (* Remaining leaves so every codec-targetable Wire.typ constructor has
    at least one fuzz target. Each leaf wraps the constructor under test
@@ -1306,12 +1390,12 @@ let gen_byte_slice buf =
           (Wire.Field.v "s" (Wire.byte_slice ~size:(Wire.int len)) $ fun s -> s);
         ]
   in
-  let positive =
+  let positive : _ positive list =
     let bytes_payload = Bytes.of_string payload in
     let slice = Bytesrw.Bytes.Slice.make bytes_payload ~first:0 ~length:len in
     [ { value = slice; bytes = (fun () -> bytes_payload) } ]
   in
-  let negative = [ { bytes = (fun () -> Bytes.empty) } ] in
+  let negative : negative list = [ { bytes = (fun () -> Bytes.empty) } ] in
   {
     codec;
     env = None;
@@ -1415,8 +1499,10 @@ let gen_map n =
   in
   let raw = value in
   let buf = Bytes.make 1 (Char.chr raw) in
-  let positive = [ { value = raw * 2; bytes = (fun () -> buf) } ] in
-  let negative = [ { bytes = (fun () -> Bytes.empty) } ] in
+  let positive : _ positive list =
+    [ { value = raw * 2; bytes = (fun () -> buf) } ]
+  in
+  let negative : negative list = [ { bytes = (fun () -> Bytes.empty) } ] in
   {
     codec;
     env = None;
@@ -1668,7 +1754,7 @@ let encoder_tests =
     test_case "gen repeat var-elem" [ bytes ] test_gen_repeat_var_elem;
     test_case "gen codec all_bytes-tail" [ bytes ] test_gen_codec_tail;
     test_case "gen casetype string-tag" [ int ] test_gen_casetype_string_tag;
-    test_case "gen pair (casetype + casetype)" [ int; int ] test_gen_pair;
+    test_case "gen record (casetype + casetype)" [ int; int ] test_gen_record;
     test_case "gen uint_var" [ int ] test_gen_uint_var;
     test_case "gen where" [ int ] test_gen_where;
     test_case "gen map" [ int ] test_gen_map;

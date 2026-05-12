@@ -2,16 +2,9 @@
 
 ### Tests
 
-- Composable `'a gen = { codec; positive_cases; negative_cases; equal }`
-  in [fuzz_wire.ml](fuzz/fuzz_wire.ml) for the structured combinators
-  (parametric `byte_array`, variable-element `repeat`, codec with
-  `all_bytes` tail, string-tag casetype) plus a `gen_pair` cross-product
-  that mixes valid/invalid halves into "almost valid" byte streams.
-  Adds leaf gens for `byte_slice`, `byte_array_where`, `uint_var`,
-  `where`, `map`, `single_elem`, `all_zeros`, `optional`, `optional_or`
-  and a casetype with int tag, plus a meta-test that round-trips one
-  representative value per `Wire.typ` constructor through `Wire.to_string`
-  / `Wire.of_string` (#55, @samoht)
+- Fuzz coverage of every codec-targetable `Wire.typ` constructor, with
+  a meta-test that round-trips one value per constructor through
+  `Wire.to_string` / `Wire.of_string` (#55, @samoht)
 
 ### Added
 
