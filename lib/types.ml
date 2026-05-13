@@ -450,13 +450,16 @@ let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
 
+let fail_parse_error fmt =
+  Fmt.kstr (fun s -> raise (Parse_error (Constraint_failed s))) fmt
+
 let variants name cases base =
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
   let arr = Array.of_list (List.map snd cases) in
   let len = Array.length arr in
   let decode n =
     if n >= 0 && n < len then arr.(n)
-    else Fmt.invalid_arg "Wire.variants %s: unknown value %d" name n
+    else fail_parse_error "Wire.variants %s: unknown value %d" name n
   in
   let encode v =
     let i = variants_lookup arr v 0 in
@@ -1102,7 +1105,7 @@ let rec inner_wire_size : type a. a typ -> int option = function
    [None] only for shapes whose total wire size is genuinely not
    expressible at projection time (variable-size codec without an
    exposed [wire_size_expr], casetype, struct ref, all_bytes/all_zeros). *)
-and inner_wire_size_expr : type a. a typ -> int expr option = function
+let rec inner_wire_size_expr : type a. a typ -> int expr option = function
   | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ } ->
       Some size
   | Single_elem { size; _ } -> Some size
@@ -1114,7 +1117,7 @@ and inner_wire_size_expr : type a. a typ -> int expr option = function
   | Apply { typ; _ } -> inner_wire_size_expr typ
   | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
-and optional_suffix : type a.
+let optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
   match inner_wire_size_expr inner with
@@ -1126,7 +1129,8 @@ and optional_suffix : type a.
          at construction (smart constructor uses [has_wire_size_expr]). *)
       assert false
 
-and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
+let rec field_suffix : type a.
+    a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
   | Bits { width; base; _ } ->
@@ -1465,6 +1469,7 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Uint8 -> Some 1
   | Uint16 _ -> Some 2
   | Uint32 _ -> Some 4
+  | Uint63 _ -> Some 8
   | Uint64 _ -> Some 8
   | Int8 -> Some 1
   | Int16 _ -> Some 2
