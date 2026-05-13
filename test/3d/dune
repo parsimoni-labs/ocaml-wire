@@ -1,6 +1,12 @@
 (executable
  (name gen_3d)
+ (modules gen_3d)
  (libraries wire demo space net))
+
+(test
+ (name test)
+ (modules test test_wire_3d)
+ (libraries wire wire.3d alcotest re unix))
 
 (rule
  (targets

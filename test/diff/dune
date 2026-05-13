@@ -16,6 +16,11 @@
  (modules schema)
  (libraries wire))
 
+(test
+ (name test)
+ (modules test test_wire_diff)
+ (libraries wire wire.diff alcotest))
+
 ; Generate .3d files from OCaml schemas
 
 (executable

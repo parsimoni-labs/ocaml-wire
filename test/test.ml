@@ -12,4 +12,7 @@ let () =
       Test_uint63.suite;
       Test_types.suite;
       Test_eval.suite;
+      Test_bitfield.suite;
+      Test_field.suite;
+      Test_uint_var.suite;
     ]

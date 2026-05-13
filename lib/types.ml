@@ -1316,6 +1316,7 @@ let pp_decl ppf = function
   | Typedef { entrypoint; export; output; extern_; doc; struct_ = st } ->
       Option.iter (Fmt.pf ppf "/*++ %s --*/@,") doc;
       if extern_ then
+        (* extern typedef struct _Name Name *)
         let n = escape_3d st.name in
         Fmt.pf ppf "extern typedef struct _%s %s@,@," n n
       else begin
@@ -1332,6 +1333,7 @@ let pp_decl ppf = function
         Fmt.(list ~sep:comma pp_param)
         params
   | Extern_probe { init; name } ->
+      (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
       if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
@@ -1339,9 +1341,11 @@ let pp_decl ppf = function
       pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ _; cases } ->
+      (* First param is the switch discriminant *)
       let disc_name =
         match params with p :: _ -> p.param_name | [] -> "tag"
       in
+      (* Internal name has underscore prefix, public name doesn't *)
       let internal_name, public_name =
         if String.length name > 0 && name.[0] = '_' then
           (name, String.sub name 1 (String.length name - 1))

@@ -24,7 +24,7 @@ All bench/prof/memtrace targets use `--profile=release`.
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
-- `lib/test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
+- `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo

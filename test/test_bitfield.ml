@@ -77,25 +77,33 @@ let check_extract label ~expected ~bit_order ~total ~bits_used ~width word =
     label expected
     (Bitfield.extract ~bit_order ~total ~bits_used ~width word)
 
+(* LSBFirst: first declared field at bit 0. *)
 let test_extract_lsb_first () =
   let word = 0xD6 in
+  (* 0b11010110 = 0xD6; low 4 bits = 0b0110 = 6 *)
   check_extract "lsb bits 0..3" ~expected:6 ~bit_order:Types.Lsb_first ~total:8
     ~bits_used:0 ~width:4 word;
+  (* high 4 bits = 0b1101 = 13 *)
   check_extract "lsb bits 4..7" ~expected:13 ~bit_order:Types.Lsb_first ~total:8
     ~bits_used:4 ~width:4 word
 
+(* MSBFirst: first declared field at the MSB. *)
 let test_extract_msb_first () =
   let word = 0xD600 in
+  (* 0xD600 = 0b1101011000000000; top 4 bits = 0b1101 = 13 *)
   check_extract "msb bits 0..3" ~expected:13 ~bit_order:Types.Msb_first
     ~total:16 ~bits_used:0 ~width:4 word;
+  (* next 4 bits = 0b0110 = 6 *)
   check_extract "msb bits 4..7" ~expected:6 ~bit_order:Types.Msb_first ~total:16
     ~bits_used:4 ~width:4 word
 
 (* Independence: bit_order is orthogonal to the base's byte order. *)
 let test_extract_bit_order_independent () =
   let word = 0xD6 in
+  (* LSB-first on a BE base still reads the low bits: low 4 of 0xD6 = 6 *)
   check_extract "lsb-first on u16be base" ~expected:6 ~bit_order:Types.Lsb_first
     ~total:16 ~bits_used:0 ~width:4 word;
+  (* MSB-first on a U8 base reads the top bits: high 4 of 0xD6 = 13 *)
   check_extract "msb-first on u8 base" ~expected:13 ~bit_order:Types.Msb_first
     ~total:8 ~bits_used:0 ~width:4 word
 
