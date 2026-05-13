@@ -1,0 +1,3 @@
+(library
+ (name fuzz_gen)
+ (libraries wire alcobar bytesrw))
