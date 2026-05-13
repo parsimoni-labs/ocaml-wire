@@ -962,7 +962,91 @@ let float_tests =
     test_case "float64 roundtrip" [ bytes ] test_float64_roundtrip;
   ]
 
+(* [Field.repeat] over a variable-size sub-codec. Each [ext] on the wire
+   is [u8 name_len; name_len bytes name]; the outer wraps a count of
+   total body bytes followed by the repeat. The fuzz draws a fresh
+   element count and per-element name length on every iteration, so
+   round-trip across {0, 1, many} counts and short/medium/long name
+   bands lands here. *)
+type fuzz_ext = { ext_name : string }
+
+let fuzz_ext_codec =
+  let f_len = Wire.Field.v "name_len" Wire.uint8 in
+  let f_name =
+    Wire.Field.v "name" (Wire.byte_array ~size:(Wire.Field.ref f_len))
+  in
+  Wire.Codec.v "FuzzExt"
+    (fun _ name -> { ext_name = name })
+    Wire.Codec.
+      [
+        (f_len $ fun e -> String.length e.ext_name);
+        (f_name $ fun e -> e.ext_name);
+      ]
+
+type fuzz_exts = { exts : fuzz_ext list }
+
+let fuzz_exts_codec =
+  let f_total = Wire.Field.v "total" Wire.uint16be in
+  let f_exts =
+    Wire.Field.repeat "exts" ~size:(Wire.Field.ref f_total)
+      (Wire.codec fuzz_ext_codec)
+  in
+  let total_bytes exts =
+    List.fold_left (fun n e -> n + 1 + String.length e.ext_name) 0 exts
+  in
+  Wire.Codec.v "FuzzExts"
+    (fun _t xs -> { exts = xs })
+    Wire.Codec.
+      [ (f_total $ fun r -> total_bytes r.exts); (f_exts $ fun r -> r.exts) ]
+
+(* Cut [seed] into a list of length-prefixed slices, each at most 255
+   bytes (one byte for [name_len]). Empty seed yields an empty list,
+   single-byte seed yields one zero-name element, and longer seeds
+   span the {0, 1, many} count axis as well as the small/medium/large
+   name-length axis. *)
+let extract_exts seed =
+  let len = String.length seed in
+  let rec loop i acc =
+    if i >= len then List.rev acc
+    else
+      let take = max 0 (min 255 (Char.code seed.[i])) in
+      let take = min take (len - i - 1) in
+      let name = if take > 0 then String.sub seed (i + 1) take else "" in
+      loop (i + 1 + take) ({ ext_name = name } :: acc)
+  in
+  loop 0 []
+
+let test_repeat_var_elem_roundtrip seed =
+  let exts = extract_exts (truncate seed) in
+  let v = { exts } in
+  let total =
+    List.fold_left (fun n e -> n + 1 + String.length e.ext_name) 0 exts
+  in
+  let buf = Bytes.create (2 + total) in
+  Wire.Codec.encode fuzz_exts_codec v buf 0;
+  let decoded =
+    match Wire.Codec.decode fuzz_exts_codec buf 0 with
+    | Ok x -> x
+    | Error e -> fail (Fmt.str "repeat-var decode: %a" Wire.pp_parse_error e)
+  in
+  if List.length decoded.exts <> List.length v.exts then
+    fail
+      (Fmt.str "repeat-var count: expected %d, got %d" (List.length v.exts)
+         (List.length decoded.exts));
+  List.iter2
+    (fun a b ->
+      if a.ext_name <> b.ext_name then
+        fail
+          (Fmt.str "repeat-var name mismatch: %S vs %S" a.ext_name b.ext_name))
+    v.exts decoded.exts
+
+let repeat_tests =
+  [
+    test_case "repeat var-elem roundtrip" [ bytes ]
+      test_repeat_var_elem_roundtrip;
+  ]
+
 let suite =
   ( "wire",
     parse_tests @ roundtrip_tests @ record_tests @ stream_tests @ depsize_tests
-    @ float_tests )
+    @ float_tests @ repeat_tests )
