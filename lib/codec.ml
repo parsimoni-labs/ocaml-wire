@@ -1443,7 +1443,17 @@ and compile_optional : type a r.
         ~raw_reader:(fun buf base ->
           if present_fn buf base then Some (inner_reader buf base) else None)
         ~raw_writer:(fun v buf off ->
-          match get v with Some iv -> inner_writer buf off iv | None -> ())
+          match (present_fn buf off, get v) with
+          | true, Some iv -> inner_writer buf off iv
+          | false, None -> ()
+          | true, None ->
+              invalid_arg
+                "Codec.encode: optional field absent but presence predicate is \
+                 true"
+          | false, Some _ ->
+              invalid_arg
+                "Codec.encode: optional field present but presence predicate \
+                 is false")
         ~size_delta:0
         ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
         ~populate:(fun arr buf base ->
@@ -1484,11 +1494,16 @@ and compile_optional_or : type a r.
         if present_fn buf base then inner_reader buf base else default
       in
       let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
-      optional_compiled ctx ~raw_reader
-        ~raw_writer:(fun v buf off ->
-          if present_fn buf off then inner_writer buf off (get v))
-        ~size_delta:0
-        ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
+      (* Encode is value-driven: the user always has a value, so always
+         write [fsize] bytes. The gate is the decode-side oracle that
+         chooses between the decoded inner and [default]. Round-trips
+         exactly when the gate is set consistently with the user's
+         choice; if the user sets the gate to [absent] while the value
+         differs from [default], decoding loses the value and falls
+         back to [default]. *)
+      let raw_writer v buf off = inner_writer buf off (get v) in
+      optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.lc_next_off fsize)
         ~populate
   | _ ->
       invalid_arg

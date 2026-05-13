@@ -1425,10 +1425,20 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Optional { present = Bool true; inner } ->
       size_of_typ_value inner (Option.get v)
   | Optional { present = Bool false; _ } -> 0
-  | Optional _ -> 0
+  | Optional { inner; _ } -> (
+      (* Dynamic gate: value drives presence at encode time. The
+         buffer-driven [present_fn] is the decode-side oracle and would
+         disagree with [v] here, so consult [v] directly. *)
+      match v with
+      | Some inner_v -> size_of_typ_value inner inner_v
+      | None -> 0)
   | Optional_or { present = Bool true; inner; _ } -> size_of_typ_value inner v
   | Optional_or { present = Bool false; _ } -> 0
-  | Optional_or _ -> 0
+  | Optional_or { inner; _ } ->
+      (* Dynamic gate: encode always has a value (the default fills in
+         for [None]); the encoder writes the inner regardless of what
+         the runtime gate would have said at decode. *)
+      size_of_typ_value inner v
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
   | Single_elem { size = Int n; _ } -> n
   | Single_elem _ -> 0

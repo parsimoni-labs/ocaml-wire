@@ -781,6 +781,11 @@ module Codec : sig
   val wire_size_at : 'r t -> bytes -> int -> int
   (** Computes the actual wire size from a buffer at the given base offset. *)
 
+  val size_of_value : 'r t -> 'r -> int
+  (** [size_of_value c v] returns the number of bytes that [encode c v] will
+      write for value [v]. For fixed-size codecs, this is the same as
+      {!wire_size}; for dynamic-size codecs, the result depends on [v]. *)
+
   val is_fixed : 'r t -> bool
   (** [true] iff the codec has a statically known size. *)
 
