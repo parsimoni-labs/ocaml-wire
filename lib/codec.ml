@@ -146,6 +146,12 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       fun buf off v -> enc buf off (encode v)
   | Unit -> fun _buf off () -> off
   | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
+  | Array { len = Int _; elem; seq = Seq_map s } ->
+      let enc_elem = build_field_encoder elem in
+      fun buf start_off vs ->
+        let cur = Stdlib.ref start_off in
+        s.iter (fun v -> cur := enc_elem buf !cur v) vs;
+        !cur
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -199,6 +205,19 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
       let read = build_field_reader inner field_off in
       fun buf base -> decode (read buf base)
   | Unit -> fun _buf _base -> ()
+  | Array { len = Int n; elem; seq = Seq_map s } -> (
+      match field_wire_size elem with
+      | Some elem_sz ->
+          let read_elem = build_field_reader elem 0 in
+          fun buf base ->
+            let acc = Stdlib.ref s.empty in
+            for i = 0 to n - 1 do
+              let v = read_elem buf (base + field_off + (i * elem_sz)) in
+              acc := s.add !acc v
+            done;
+            s.finish !acc
+      | None ->
+          fun _buf _base -> failwith "build_field_reader: unsupported type")
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
 let int_of_typ_value = Eval.int_of

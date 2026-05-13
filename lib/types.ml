@@ -1500,6 +1500,8 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Optional_or { present = Bool false; _ } -> Some 0
   | Optional_or _ -> None
   | Repeat _ -> None
+  | Array { len = Int n; elem; _ } -> (
+      match field_wire_size elem with Some k -> Some (n * k) | None -> None)
   | _ -> None
 
 let c_type_of : type a. a typ -> string = function
