@@ -2628,6 +2628,58 @@ let test_dyn_opt_get_trail () =
   Bytes.set_uint8 buf2 1 0xBB;
   Alcotest.(check int) "trail (absent)" 0xBB (get_trail buf2 0)
 
+let check_dyn_opt_roundtrip label expected_len expected_bytes original =
+  Alcotest.(check int)
+    (label ^ " size_of_value") expected_len
+    (Codec.size_of_value dyn_opt_codec original);
+  let buf = Bytes.create expected_len in
+  Codec.encode dyn_opt_codec original buf 0;
+  Alcotest.(check string)
+    (label ^ " bytes") expected_bytes (Bytes.to_string buf);
+  Alcotest.(check int)
+    (label ^ " wire_size_at") expected_len
+    (Codec.wire_size_at dyn_opt_codec buf 0);
+  let decoded = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+  Alcotest.(check int) (label ^ " flags") original.do_flags decoded.do_flags;
+  Alcotest.(check (option int))
+    (label ^ " payload") original.do_payload decoded.do_payload;
+  Alcotest.(check int) (label ^ " trail") original.do_trail decoded.do_trail
+
+let test_field_optional_dynamic_roundtrip () =
+  check_dyn_opt_roundtrip "present" 4 "\x01\x12\x34\xFF"
+    { do_flags = 1; do_payload = Some 0x1234; do_trail = 0xFF };
+  check_dyn_opt_roundtrip "absent" 2 "\x00\xEE"
+    { do_flags = 0; do_payload = None; do_trail = 0xEE }
+
+let test_dyn_opt_reject_gate () =
+  let check_reject label v =
+    let len = Codec.size_of_value dyn_opt_codec v + 4 in
+    match Codec.encode dyn_opt_codec v (Bytes.create len) 0 with
+    | () -> Alcotest.failf "%s: encode unexpectedly succeeded" label
+    | exception Invalid_argument _ -> ()
+  in
+  check_reject "gate true / value None"
+    { do_flags = 1; do_payload = None; do_trail = 0xEE };
+  check_reject "gate false / value Some"
+    { do_flags = 0; do_payload = Some 0x1234; do_trail = 0xEE }
+
+let test_encode_totality () =
+  let check_exact label original =
+    let len = Codec.size_of_value dyn_opt_codec original in
+    let buf = Bytes.create len in
+    Codec.encode dyn_opt_codec original buf 0;
+    Alcotest.(check int)
+      (label ^ " wire_size_at") len
+      (Codec.wire_size_at dyn_opt_codec buf 0);
+    if len > 0 then
+      match Codec.encode dyn_opt_codec original (Bytes.create (len - 1)) 0 with
+      | () -> Alcotest.failf "%s: short buffer accepted" label
+      | exception Invalid_argument _ -> ()
+  in
+  check_exact "present"
+    { do_flags = 1; do_payload = Some 0x1234; do_trail = 0xFF };
+  check_exact "absent" { do_flags = 0; do_payload = None; do_trail = 0xEE }
+
 (* Dynamic optional via Field.ref on a bool field -- the TM frame pattern.
    Field.ref now accepts 'a t, so a bool field created with [bit] can be
    referenced directly in expressions. *)
@@ -3396,6 +3448,86 @@ let test_three_var_codecs_embedded () =
   Alcotest.(check string) "b" "be" (Slice.to_string b.ss_data);
   Alcotest.(check string) "c" "gamma!" (Slice.to_string c.ss_data)
 
+let test_four_var_codecs_embedded () =
+  let f_a = Field.v "a" (codec ssh_string_codec) in
+  let f_b = Field.v "b" (codec ssh_string_codec) in
+  let f_c = Field.v "c" (codec ssh_string_codec) in
+  let f_d = Field.v "d" (codec ssh_string_codec) in
+  let quad_codec =
+    let open Codec in
+    v "Quad"
+      (fun a b c d -> (a, b, c, d))
+      [
+        (f_a $ fun (a, _, _, _) -> a);
+        (f_b $ fun (_, b, _, _) -> b);
+        (f_c $ fun (_, _, c, _) -> c);
+        (f_d $ fun (_, _, _, d) -> d);
+      ]
+  in
+  let v =
+    ( mk_ssh_string "alpha",
+      mk_ssh_string "bravo",
+      mk_ssh_string "charlie",
+      mk_ssh_string "d" )
+  in
+  let len = Codec.size_of_value quad_codec v in
+  let buf = Bytes.create len in
+  Codec.encode quad_codec v buf 0;
+  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at quad_codec buf 0);
+  let a, b, c, d = decode_ok (Codec.decode quad_codec buf 0) in
+  Alcotest.(check string) "a" "alpha" (Slice.to_string a.ss_data);
+  Alcotest.(check string) "b" "bravo" (Slice.to_string b.ss_data);
+  Alcotest.(check string) "c" "charlie" (Slice.to_string c.ss_data);
+  Alcotest.(check string) "d" "d" (Slice.to_string d.ss_data)
+
+let test_slice_then_array () =
+  let f_slice_len = Field.v "slice_len" uint8 in
+  let f_slice = Field.v "slice" (byte_slice ~size:(Field.ref f_slice_len)) in
+  let f_array_len = Field.v "array_len" uint8 in
+  let f_array = Field.v "array" (byte_array ~size:(Field.ref f_array_len)) in
+  let mixed_codec =
+    let open Codec in
+    v "SliceThenArray"
+      (fun _ slice _ array -> (slice, array))
+      [
+        (f_slice_len $ fun (slice, _) -> Slice.length slice);
+        (f_slice $ fun (slice, _) -> slice);
+        (f_array_len $ fun (_, array) -> String.length array);
+        (f_array $ fun (_, array) -> array);
+      ]
+  in
+  let v = ((mk_ssh_string "slice").ss_data, "array-data") in
+  let len = Codec.size_of_value mixed_codec v in
+  let buf = Bytes.create len in
+  Codec.encode mixed_codec v buf 0;
+  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at mixed_codec buf 0);
+  let slice, array = decode_ok (Codec.decode mixed_codec buf 0) in
+  Alcotest.(check string) "slice" "slice" (Slice.to_string slice);
+  Alcotest.(check string) "array" "array-data" array
+
+let test_codec_then_array () =
+  let f_msg = Field.v "msg" (codec ssh_string_codec) in
+  let f_array_len = Field.v "array_len" uint8 in
+  let f_array = Field.v "array" (byte_array ~size:(Field.ref f_array_len)) in
+  let mixed_codec =
+    let open Codec in
+    v "CodecThenArray"
+      (fun msg _ array -> (msg, array))
+      [
+        (f_msg $ fun (msg, _) -> msg);
+        (f_array_len $ fun (_, array) -> String.length array);
+        (f_array $ fun (_, array) -> array);
+      ]
+  in
+  let v = (mk_ssh_string "message", "tail") in
+  let len = Codec.size_of_value mixed_codec v in
+  let buf = Bytes.create len in
+  Codec.encode mixed_codec v buf 0;
+  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at mixed_codec buf 0);
+  let msg, array = decode_ok (Codec.decode mixed_codec buf 0) in
+  Alcotest.(check string) "msg" "message" (Slice.to_string msg.ss_data);
+  Alcotest.(check string) "array" "tail" array
+
 let test_repeat_after_var_slice () =
   (* [Repeat] after a variable-size field used to trip [require_static_off]
      in [compile_repeat]. The fix mirrors [compile_codec]'s. *)
@@ -3861,6 +3993,12 @@ let suite =
       Alcotest.test_case "optional: dynamic absent" `Quick test_dyn_opt_absent;
       Alcotest.test_case "optional: dynamic get trail" `Quick
         test_dyn_opt_get_trail;
+      Alcotest.test_case "optional: dynamic roundtrip" `Quick
+        test_field_optional_dynamic_roundtrip;
+      Alcotest.test_case "optional: dynamic rejects inconsistent gate" `Quick
+        test_dyn_opt_reject_gate;
+      Alcotest.test_case "optional: encode size totality" `Quick
+        test_encode_totality;
       Alcotest.test_case "optional: bool ref present" `Quick
         test_dyn_opt_anyref_present;
       Alcotest.test_case "optional: bool ref absent" `Quick
@@ -3916,6 +4054,12 @@ let suite =
         test_two_var_codecs_embedded;
       Alcotest.test_case "multi-var: three embedded sub-codecs" `Quick
         test_three_var_codecs_embedded;
+      Alcotest.test_case "multi-var: four embedded sub-codecs" `Quick
+        test_four_var_codecs_embedded;
+      Alcotest.test_case "multi-var: byte_slice then byte_array" `Quick
+        test_slice_then_array;
+      Alcotest.test_case "multi-var: sub-codec then byte_array" `Quick
+        test_codec_then_array;
       Alcotest.test_case "multi-var: repeat after variable byte_slice" `Quick
         test_repeat_after_var_slice;
       (* uint: variable-width unsigned integer *)

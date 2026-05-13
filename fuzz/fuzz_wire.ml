@@ -249,6 +249,93 @@ let test_bf_encode_overflow a b c d =
           if v.bf_d <> decoded.bf_d then fail "bf_d mismatch"
       | Error _ -> fail "bf roundtrip decode failed")
 
+type optional_struct = {
+  os_gate : int;
+  os_payload : int option;
+  os_trail : int;
+}
+
+let f_os_gate = Wire.Field.v "Gate" Wire.uint8
+
+let optional_static_codec =
+  Wire.Codec.v "OptionalStatic"
+    (fun gate payload trail ->
+      { os_gate = gate; os_payload = payload; os_trail = trail })
+    Wire.Codec.
+      [
+        (f_os_gate $ fun r -> r.os_gate);
+        ( Wire.Field.optional "Payload" ~present:Wire.Expr.true_ Wire.uint8
+        $ fun r -> r.os_payload );
+        (Wire.Field.v "Trail" Wire.uint8 $ fun r -> r.os_trail);
+      ]
+
+let optional_dynamic_codec =
+  Wire.Codec.v "OptionalDynamic"
+    (fun gate payload trail ->
+      { os_gate = gate; os_payload = payload; os_trail = trail })
+    Wire.Codec.
+      [
+        (f_os_gate $ fun r -> r.os_gate);
+        ( Wire.Field.optional "Payload"
+            ~present:Wire.Expr.(Wire.Field.ref f_os_gate <> Wire.int 0)
+            Wire.uint8
+        $ fun r -> r.os_payload );
+        (Wire.Field.v "Trail" Wire.uint8 $ fun r -> r.os_trail);
+      ]
+
+let option_is_some = function Some _ -> true | None -> false
+
+let optional_equal a b =
+  a.os_gate = b.os_gate
+  && a.os_payload = b.os_payload
+  && a.os_trail = b.os_trail
+
+let check_optional_encode_totality label codec ~roundtrip original =
+  let len = Wire.Codec.size_of_value codec original in
+  let buf = Bytes.create len in
+  match Wire.Codec.encode codec original buf 0 with
+  | exception Invalid_argument _ ->
+      if roundtrip then fail (label ^ " rejected a consistent value")
+  | () ->
+      if not roundtrip then fail (label ^ " accepted an inconsistent value");
+      let ws = Wire.Codec.wire_size_at codec buf 0 in
+      if ws <> len then
+        fail (Fmt.str "%s wire size: expected %d got %d" label len ws);
+      let decoded =
+        match Wire.Codec.decode codec buf 0 with
+        | Ok v -> v
+        | Error e -> fail (Fmt.str "%s decode: %a" label Wire.pp_parse_error e)
+      in
+      if not (optional_equal original decoded) then
+        fail (label ^ " roundtrip mismatch")
+
+let test_optional_static_true_totality gate_seed payload_seed trail_seed =
+  let original =
+    {
+      os_gate = gate_seed land 0xFF;
+      os_payload = Some (payload_seed land 0xFF);
+      os_trail = trail_seed land 0xFF;
+    }
+  in
+  check_optional_encode_totality "optional static true" optional_static_codec
+    ~roundtrip:true original
+
+let test_optional_dynamic_totality gate_seed payload_seed trail_seed =
+  let payload =
+    if payload_seed land 1 = 0 then None
+    else Some ((payload_seed lsr 1) land 0xFF)
+  in
+  let original =
+    {
+      os_gate = gate_seed land 1;
+      os_payload = payload;
+      os_trail = trail_seed land 0xFF;
+    }
+  in
+  let roundtrip = original.os_gate <> 0 = option_is_some original.os_payload in
+  check_optional_encode_totality "optional dynamic" optional_dynamic_codec
+    ~roundtrip original
+
 let test_parse_anon_field buf =
   let buf = truncate buf in
   let c =
@@ -797,6 +884,10 @@ let record_tests =
     test_case "record bool roundtrip" [ int ] test_record_bool_roundtrip;
     test_case "bf encode overflow" [ int; int; int; int ]
       test_bf_encode_overflow;
+    test_case "optional static true totality" [ int; int; int ]
+      test_optional_static_true_totality;
+    test_case "optional dynamic totality" [ int; int; int ]
+      test_optional_dynamic_totality;
   ]
 
 let stream_tests =

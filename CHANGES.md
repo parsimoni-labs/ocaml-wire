@@ -15,6 +15,7 @@
 - `Field.repeat` now projects to 3D for variable-size elements (e.g.
   a sub-codec with its own length-prefixed bytes), emitting
   `<Elem> name[:byte-size budget]` (#51, @samoht)
+- `Wire.Codec.size_of_value` (#58, @samoht)
 - Support `Wire.casetype` and `Wire.nested ~size` as `Codec` fields
   (#47, @samoht)
 - Add `Field.optional` / `Field.optional_or` / `Field.repeat` /
@@ -53,6 +54,14 @@
 
 ### Fixed
 
+- `Field.optional` with a dynamic gate no longer ships a silent phantom
+  byte or overruns the buffer on inconsistent input; the encoder raises
+  `Invalid_argument` when the gate and the option value disagree
+  (#58, @samoht)
+- Dynamic `Field.optional_or` now sizes and writes from the value instead
+  of using the dynamic gate as an encode-side size oracle; the gate
+  remains the decode-side selector between the decoded inner and the
+  default (#58, @samoht)
 - `Wire.encode_into` on a `codec` field whose inner ends in `all_bytes`
   / `rest_bytes` / `all_zeros` no longer ships a 4096-byte scratch
   tail. The encoded size is now computed from the value via
