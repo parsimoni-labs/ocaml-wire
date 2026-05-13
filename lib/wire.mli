@@ -823,9 +823,10 @@ module Codec : sig
       when the destination buffer is too short, or when a parametric byte
       field's value length does not match its env-bound size. *)
 
-  val validate : 'r t -> bytes -> int -> unit
-  (** [validate c buf off] checks field [~constraint_] and [~where] clauses
-      without constructing a record and without firing actions.
+  val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
+  (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+      without constructing a record and without firing actions. [?env] supplies
+      bindings for any [Param.input] referenced in those clauses.
 
       Raises {!Validation_error} on failure. *)
 

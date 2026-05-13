@@ -695,7 +695,7 @@ type 'r t = {
   t_encode : 'r -> bytes -> int -> unit;
   t_wire_size : wire_size_info;
   t_struct_fields : Types.field list;
-  t_validate : bytes -> int -> unit;
+  t_validate : ?env_slots:int array -> bytes -> int -> unit;
   t_validate_arr : int array -> bytes -> int -> unit;
   t_populate : int array -> bytes -> int -> unit;
   t_n_array_slots : int;
@@ -2102,14 +2102,21 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   let validate =
     if has_checks then (
       let arr = Array.make n_total 0 in
-      fun buf off ->
+      fun ?env_slots buf off ->
         Array.fill arr 0 n_total 0;
+        (match env_slots with
+        | Some slots ->
+            (* Seed param slots from the supplied env so [where] clauses
+               that reference [Param.input] evaluate correctly. *)
+            let n = Array.length slots in
+            Array.blit slots 0 arr (n_total - n) n
+        | None -> ());
         populate arr buf off;
         match compiled_where with
         | Some f when not (f arr) ->
             raise (Parse_error (Constraint_failed "where clause"))
         | _ -> ())
-    else fun _buf _off -> ()
+    else fun ?env_slots:_ _buf _off -> ()
   in
   (validate_arr, populate, validate)
 
@@ -2587,7 +2594,9 @@ let to_struct t =
   | [], None -> struct' t.t_name t.t_struct_fields
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
 
-let validate t buf off = t.t_validate buf off
+let validate ?env t buf off =
+  let env_slots = Option.map (fun (e : Param.env) -> e.pe_slots) env in
+  t.t_validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
    For Fixed: use build_field_reader which handles Where/Enum/Map.
