@@ -2235,9 +2235,9 @@ let seal : type r. (r, r) record -> r t =
       types share one code path with [Codec.decode]. *)
 
 type validator = {
-  vt_min_size : int;
-  vt_wire_size : wire_size_info;
-  vt_validate : bytes -> int -> unit;
+  min_size : int;
+  wire_size : wire_size_info;
+  validate : bytes -> int -> unit;
 }
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
@@ -2280,7 +2280,7 @@ let layout_ctx_of_validator_acc acc =
    [Struct]-typed fields are handled specially -- [compile_field] does
    not support them (a struct has no [field_wire_size] without its inner
    fields being walked). For nested structs we build a sub-validator
-   recursively and inline its [vt_validate] at the right offset. Inner
+   recursively and inline its [validate] at the right offset. Inner
    field references stay scoped to the inner struct, matching the old
    [parse_struct_fields] semantics. *)
 (* Common access patterns over [va_next_off]: a fresh-buffer offset
@@ -2299,7 +2299,7 @@ let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
 (* Validator step for a [Struct]-typed field. [compile_field] doesn't
    accept [Struct] (it has no [field_wire_size] without walking inner
    fields), so build a sub-validator recursively and inline its
-   [vt_validate] at the right offset. *)
+   [validate] at the right offset. *)
 (* Build the [full] / [check_only] per-field validator functions and
    return the action var count. Takes only the non-existential fields
    of [compiled_field] ([populate], [validator_off]) so the caller can
@@ -2347,12 +2347,10 @@ let rec apply_struct_field acc inner_struct =
     match acc.va_next_off with Static n -> n | Dynamic _ -> -1
   in
   let off_fn = acc_off_fn acc in
-  let validator _arr buf base =
-    inner_v.vt_validate buf (base + off_fn buf base)
-  in
+  let validator _arr buf base = inner_v.validate buf (base + off_fn buf base) in
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
-    match (acc.va_next_off, inner_v.vt_wire_size) with
+    match (acc.va_next_off, inner_v.wire_size) with
     | Static n, Fixed sz -> (sz, Static (n + sz))
     | _, Fixed sz -> (sz, Dynamic (fun buf base -> prev_end buf base + sz))
     | _, Variable { min_size; compute } ->
@@ -2438,23 +2436,19 @@ and validator_of_struct (s : Types.struct_) : validator =
     if n_total > 0 then Array.fill arr 0 n_total 0;
     validate_arr arr buf off
   in
-  {
-    vt_min_size = acc.va_min_size;
-    vt_wire_size = wire_size_info;
-    vt_validate = validate;
-  }
+  { min_size = acc.va_min_size; wire_size = wire_size_info; validate }
 
-let validate_struct v buf off = v.vt_validate buf off
+let validate_struct v buf off = v.validate buf off
 
 let struct_size_of v buf off =
-  match v.vt_wire_size with
+  match v.wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
 
-let struct_min_size v = v.vt_min_size
+let struct_min_size v = v.min_size
 
 let wire_size_info_of_validator v =
-  match v.vt_wire_size with
+  match v.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable compute
 
