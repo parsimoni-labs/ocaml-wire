@@ -2584,7 +2584,21 @@ let decode ?env t buf off =
 let encode ?env:e t v buf off =
   require_env t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
-  t.t_encode v buf off
+  let expected = t.t_size_of_value v in
+  t.t_encode v buf off;
+  let actual =
+    match t.t_wire_size with
+    | Fixed n -> n
+    | Variable { compute; _ } -> compute buf off - off
+  in
+  (* Underrun = silent data corruption: the trailing bytes the caller
+     allocated stay uninitialised and the decoder reads them as part
+     of the value. Overrun is loud already. *)
+  if actual < expected then
+    Fmt.invalid_arg
+      "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
+       spans %d -- writer wrote fewer bytes than promised"
+      t.t_name expected actual
 
 let collect_params (fields : Types.field list) where =
   collect_param_handles fields where

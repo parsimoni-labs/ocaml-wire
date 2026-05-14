@@ -448,6 +448,24 @@ let test_codec_bitfield_overflow_1bit () =
   Codec.encode codec 0 buf 0;
   Codec.encode codec 1 buf 0
 
+let test_encode_underrun_raises () =
+  (* byte_array ~size:n truncates a value longer than n at write time,
+     while size_of_value reports String.length v. Passing a 5-byte value
+     to a 3-byte field is the simplest underrun: the assertion must fire. *)
+  let codec =
+    Codec.v "Mismatch" Fun.id
+      Codec.[ Field.v "data" (byte_array ~size:(Wire.int 3)) $ Fun.id ]
+  in
+  let buf = Bytes.create 5 in
+  match Codec.encode codec "AAAAA" buf 0 with
+  | exception Invalid_argument m
+    when String.length m > 0
+         && contains ~sub:"writer wrote fewer bytes than promised" m ->
+      ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "wrong Invalid_argument message: %s" m
+  | () -> Alcotest.fail "expected underrun assertion to fire"
+
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
   let f_b = Field.v "b" (bits ~width:7 U8) in
@@ -3789,6 +3807,8 @@ let suite =
         test_codec_bitfield_overflow_1bit;
       Alcotest.test_case "codec bitfield: size_of_value packed" `Quick
         test_packed_bf_size;
+      Alcotest.test_case "encode: underrun raises" `Quick
+        test_encode_underrun_raises;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;
