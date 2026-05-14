@@ -2242,34 +2242,34 @@ type validator = {
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
 type validator_acc = {
-  va_validators_rev : (int * (int array -> bytes -> int -> unit)) list;
-  va_checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
-  va_field_readers : field_reader list;
-  va_n_fields : int;
-  va_n_array_slots : int;
-  va_min_size : int;
-  va_next_off : next_off;
-  va_bf : bf_codec_state option;
+  validators_rev : (int * (int array -> bytes -> int -> unit)) list;
+  checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
+  field_readers : field_reader list;
+  n_fields : int;
+  n_array_slots : int;
+  min_size : int;
+  next_off : next_off;
+  bf : bf_codec_state option;
 }
 
 let empty_validator_acc =
   {
-    va_validators_rev = [];
-    va_checkers_rev = [];
-    va_field_readers = [];
-    va_n_fields = 0;
-    va_n_array_slots = 0;
-    va_min_size = 0;
-    va_next_off = Static 0;
-    va_bf = None;
+    validators_rev = [];
+    checkers_rev = [];
+    field_readers = [];
+    n_fields = 0;
+    n_array_slots = 0;
+    min_size = 0;
+    next_off = Static 0;
+    bf = None;
   }
 
 let layout_ctx_of_validator_acc acc =
   {
-    next_off = acc.va_next_off;
-    bf = acc.va_bf;
-    field_readers = acc.va_field_readers;
-    n_fields = acc.va_n_fields;
+    next_off = acc.next_off;
+    bf = acc.bf;
+    field_readers = acc.field_readers;
+    n_fields = acc.n_fields;
   }
 
 (* Per-field step: open [Types.Field]'s existential ['a], build a fake
@@ -2283,16 +2283,16 @@ let layout_ctx_of_validator_acc acc =
    recursively and inline its [validate] at the right offset. Inner
    field references stay scoped to the inner struct, matching the old
    [parse_struct_fields] semantics. *)
-(* Common access patterns over [va_next_off]: a fresh-buffer offset
+(* Common access patterns over [next_off]: a fresh-buffer offset
    function and a "previous end" helper that hides the static/dynamic
    split. *)
 let acc_off_fn (acc : validator_acc) : bytes -> int -> int =
-  match acc.va_next_off with
+  match acc.next_off with
   | Static n -> fun _buf _base -> n
   | Dynamic f -> fun buf base -> f buf base - base
 
 let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
-  match acc.va_next_off with
+  match acc.next_off with
   | Static n -> fun _buf base -> base + n
   | Dynamic f -> f
 
@@ -2314,13 +2314,13 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let dummy_reader _buf _base = 0 in
   let cc_readers =
-    let base = (name, dummy_reader) :: acc.va_field_readers in
+    let base = (name, dummy_reader) :: acc.field_readers in
     List.fold_left
       (fun acc' vn -> (vn, dummy_reader) :: acc')
       base action_var_names
   in
   let idx = build_idx cc_readers in
-  let cc = { idx; sizeof_this = validator_off; field_pos = acc.va_n_fields } in
+  let cc = { idx; sizeof_this = validator_off; field_pos = acc.n_fields } in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
   let raise_check_failed () =
@@ -2343,28 +2343,26 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
 
 let rec apply_struct_field acc inner_struct =
   let inner_v = validator_of_struct inner_struct in
-  let static_off =
-    match acc.va_next_off with Static n -> n | Dynamic _ -> -1
-  in
+  let static_off = match acc.next_off with Static n -> n | Dynamic _ -> -1 in
   let off_fn = acc_off_fn acc in
   let validator _arr buf base = inner_v.validate buf (base + off_fn buf base) in
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
-    match (acc.va_next_off, inner_v.wire_size) with
+    match (acc.next_off, inner_v.wire_size) with
     | Static n, Fixed sz -> (sz, Static (n + sz))
     | _, Fixed sz -> (sz, Dynamic (fun buf base -> prev_end buf base + sz))
     | _, Variable { min_size; compute } ->
         (min_size, Dynamic (fun buf base -> compute buf (prev_end buf base)))
   in
   {
-    va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
-    va_checkers_rev = (static_off, validator) :: acc.va_checkers_rev;
-    va_field_readers = acc.va_field_readers;
-    va_n_fields = acc.va_n_fields;
-    va_n_array_slots = acc.va_n_array_slots;
-    va_min_size = acc.va_min_size + size_delta;
-    va_next_off = next_off;
-    va_bf = None;
+    validators_rev = (static_off, validator) :: acc.validators_rev;
+    checkers_rev = (static_off, validator) :: acc.checkers_rev;
+    field_readers = acc.field_readers;
+    n_fields = acc.n_fields;
+    n_array_slots = acc.n_array_slots;
+    min_size = acc.min_size + size_delta;
+    next_off;
+    bf = None;
   }
 
 and apply_field_to_validator_acc acc (Types.Field f) =
@@ -2389,17 +2387,17 @@ and apply_field_to_validator_acc acc (Types.Field f) =
           ~constraint_:f.constraint_
       in
       let new_field_readers =
-        cf.nested_readers @ ((name, cf.int_reader) :: acc.va_field_readers)
+        cf.nested_readers @ ((name, cf.int_reader) :: acc.field_readers)
       in
       {
-        va_validators_rev = (cf.validator_off, full) :: acc.va_validators_rev;
-        va_checkers_rev = (cf.validator_off, check_only) :: acc.va_checkers_rev;
-        va_field_readers = new_field_readers;
-        va_n_fields = List.length new_field_readers;
-        va_n_array_slots = List.length new_field_readers + n_extra_vars;
-        va_min_size = acc.va_min_size + cf.size_delta;
-        va_next_off = cf.next_off;
-        va_bf = cf.bf_after;
+        validators_rev = (cf.validator_off, full) :: acc.validators_rev;
+        checkers_rev = (cf.validator_off, check_only) :: acc.checkers_rev;
+        field_readers = new_field_readers;
+        n_fields = List.length new_field_readers;
+        n_array_slots = List.length new_field_readers + n_extra_vars;
+        min_size = acc.min_size + cf.size_delta;
+        next_off = cf.next_off;
+        bf = cf.bf_after;
       }
 
 and validator_of_struct (s : Types.struct_) : validator =
@@ -2407,24 +2405,24 @@ and validator_of_struct (s : Types.struct_) : validator =
     List.fold_left apply_field_to_validator_acc empty_validator_acc s.fields
   in
   let wire_size_info =
-    match acc.va_next_off with
+    match acc.next_off with
     | Static n -> Fixed n
-    | Dynamic f -> Variable { min_size = acc.va_min_size; compute = f }
+    | Dynamic f -> Variable { min_size = acc.min_size; compute = f }
   in
   let param_handles = collect_param_handles s.fields s.where in
   let n_params = List.length param_handles in
-  let param_base = acc.va_n_array_slots in
+  let param_base = acc.n_array_slots in
   List.iteri
     (fun i (Param.Pack p) ->
       p.ph_slot <- param_base + i;
       p.ph_env_idx <- i)
     param_handles;
   let n_total = param_base + n_params in
-  let compiled_where = compile_where_clause acc.va_field_readers s.where in
+  let compiled_where = compile_where_clause acc.field_readers s.where in
   let validate_arr, _populate, _validate =
     build_validators
-      (List.rev acc.va_validators_rev)
-      (List.rev acc.va_checkers_rev)
+      (List.rev acc.validators_rev)
+      (List.rev acc.checkers_rev)
       compiled_where s.fields n_total
   in
   (* Full validation: fire field actions and check the where clause.
@@ -2436,18 +2434,18 @@ and validator_of_struct (s : Types.struct_) : validator =
     if n_total > 0 then Array.fill arr 0 n_total 0;
     validate_arr arr buf off
   in
-  { min_size = acc.va_min_size; wire_size = wire_size_info; validate }
+  { min_size = acc.min_size; wire_size = wire_size_info; validate }
 
-let validate_struct v buf off = v.validate buf off
+let validate_struct (v : validator) buf off = v.validate buf off
 
-let struct_size_of v buf off =
+let struct_size_of (v : validator) buf off =
   match v.wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
 
-let struct_min_size v = v.min_size
+let struct_min_size (v : validator) = v.min_size
 
-let wire_size_info_of_validator v =
+let wire_size_info_of_validator (v : validator) =
   match v.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable compute
