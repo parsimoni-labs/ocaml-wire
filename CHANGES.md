@@ -54,6 +54,11 @@
 
 ### Fixed
 
+- `Codec.encode` now raises `Invalid_argument` when the writer emits fewer
+  bytes than `Codec.size_of_value v` promised, so a buggy writer that
+  leaves trailing bytes uninitialised fails loudly at the encode site
+  instead of shipping silently-corrupted bytes that a decoder reads as
+  part of the value (#62, @samoht)
 - `Codec.encode` checks the buffer against `Codec.size_of_value v` instead
   of the static `min_size` lower bound, so a variable-size codec encoded
   into a too-small buffer fails loudly with a precise byte count instead
