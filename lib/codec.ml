@@ -290,8 +290,8 @@ let rec build_populate : type a.
    Packing shift and mask into a single int lets [extract] be a direct
    [@inline always] function instead of an indirect closure call. *)
 type bf_info = {
-  bf_word_reader : bytes -> int -> int;
-  bf_packed : int; (* shift in bits 0-7, mask in bits 8+ *)
+  word_reader : bytes -> int -> int;
+  packed : int; (* shift in bits 0-7, mask in bits 8+ *)
 }
 
 type field_access =
@@ -2852,14 +2852,14 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
         | BF_U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
       in
       let mask = (1 lsl width) - 1 in
-      { bf_word_reader = word_reader; bf_packed = shift lor (mask lsl 8) }
+      { word_reader; packed = shift lor (mask lsl 8) }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
 let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
-  Staged.stage bf.bf_word_reader
+  Staged.stage bf.word_reader
 
 let[@inline always] extract (bf : bitfield) word =
-  let p = bf.bf_packed in
+  let p = bf.packed in
   (word lsr (p land 0xFF)) land (p lsr 8)
 
 (* -- Snapshot: batch bitfield access -- *)
