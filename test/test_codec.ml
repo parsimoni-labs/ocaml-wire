@@ -448,6 +448,16 @@ let test_codec_bitfield_overflow_1bit () =
   Codec.encode codec 0 buf 0;
   Codec.encode codec 1 buf 0
 
+let test_packed_bf_size () =
+  let f_a = Field.v "a" (bits ~width:1 U8) in
+  let f_b = Field.v "b" (bits ~width:7 U8) in
+  let codec =
+    Codec.v "Packed" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  Alcotest.(check int)
+    "size_of_value matches wire_size" (Codec.wire_size codec)
+    (Codec.size_of_value codec (0, 0))
+
 let test_struct_of_codec_bitfield () =
   let s = Everparse.struct_of_codec bf32_codec in
   let m = module_ [ typedef s ] in
@@ -3777,6 +3787,8 @@ let suite =
         test_codec_bitfield_max_valid;
       Alcotest.test_case "codec bitfield: overflow 1-bit" `Quick
         test_codec_bitfield_overflow_1bit;
+      Alcotest.test_case "codec bitfield: size_of_value packed" `Quick
+        test_packed_bf_size;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;

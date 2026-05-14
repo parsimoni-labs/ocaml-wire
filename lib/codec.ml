@@ -1926,7 +1926,13 @@ let apply_compiled : type a f r.
   in
   let field_typ = fld.typ in
   let field_get = fld.get in
-  let field_size_of_value v = size_of_typ_value field_typ (field_get v) in
+  (* Bitfields share a base byte; [cf.size_delta] is the correct
+     non-overlapping contribution. *)
+  let field_size_of_value =
+    match field_typ with
+    | Bits _ -> fun _ -> cf.size_delta
+    | _ -> fun v -> size_of_typ_value field_typ (field_get v)
+  in
   Record
     {
       r_name = r.r_name;
@@ -2202,9 +2208,10 @@ let seal : type r. (r, r) record -> r t =
     t_decode = build_checked_decode raw_decode wire_size_info min_size;
     t_encode =
       (fun v buf off ->
-        if off + min_size > Bytes.length buf then
+        let need = size_of_value v in
+        if off + need > Bytes.length buf then
           Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
-            r.r_name min_size
+            r.r_name need
             (Bytes.length buf - off);
         for i = 0 to n_writers - 1 do
           writers.(i) v buf off

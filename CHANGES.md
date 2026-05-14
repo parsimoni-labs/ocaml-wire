@@ -54,6 +54,13 @@
 
 ### Fixed
 
+- `Codec.encode` checks the buffer against `Codec.size_of_value v` instead
+  of the static `min_size` lower bound, so a variable-size codec encoded
+  into a too-small buffer fails loudly with a precise byte count instead
+  of writing past the end. Also fixes a latent overcount in
+  `Codec.size_of_value` where each bitfield in a packed group reported the
+  full base size, returning `base_count * base_size` for codecs that
+  actually fit in one base word (#61, @samoht)
 - `Field.optional` with a dynamic gate no longer ships a silent phantom
   byte or overruns the buffer on inconsistent input; the encoder raises
   `Invalid_argument` when the gate and the option value disagree
