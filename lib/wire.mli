@@ -624,8 +624,16 @@ val case :
 (** Tagged branch of a casetype. *)
 
 val default :
-  'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> ('a, 'k) case_def
-(** Default branch of a casetype. *)
+  tag:'k ->
+  'w typ ->
+  inject:('w -> 'a) ->
+  project:('a -> 'w option) ->
+  ('a, 'k) case_def
+(** [default ~tag inner ~inject ~project] is the default branch of a casetype.
+
+    The decoder uses the default branch when no [~index]-tagged case matches.
+    The encoder writes [~tag] when projecting the default variant back to bytes.
+*)
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. The discriminator typ
@@ -815,9 +823,10 @@ module Codec : sig
       when the destination buffer is too short, or when a parametric byte
       field's value length does not match its env-bound size. *)
 
-  val validate : 'r t -> bytes -> int -> unit
-  (** [validate c buf off] checks field [~constraint_] and [~where] clauses
-      without constructing a record and without firing actions.
+  val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
+  (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+      without constructing a record and without firing actions. [?env] supplies
+      bindings for any [Param.input] referenced in those clauses.
 
       Raises {!Validation_error} on failure. *)
 

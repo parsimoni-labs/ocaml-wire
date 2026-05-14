@@ -364,7 +364,7 @@ let test_parse_casetype buf =
         Wire.case ~index:1 Wire.uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        Wire.default Wire.uint32
+        Wire.default ~tag:0xFF Wire.uint32
           ~inject:(fun v -> `Default (Wire.Private.UInt32.to_int v))
           ~project:(function
             | `Default v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
@@ -1046,7 +1046,137 @@ let repeat_tests =
       test_repeat_var_elem_roundtrip;
   ]
 
+(* {1 Gen DSL tests}
+
+   Each leaf and the [Codec.v] composer drive three Alcobar generators
+   per gen (positive / random / adversarial). The Gen module mirrors
+   Wire's surface so a fuzz harness reads like the codec it tests. *)
+
+type pair = { p_a : int; p_b : int }
+
+let pair_gen =
+  let open Fuzz_gen in
+  Codec.v "Pair"
+    ~equal:(fun a b -> a.p_a = b.p_a && a.p_b = b.p_b)
+    (fun a b -> { p_a = a; p_b = b })
+    Codec.
+      [
+        Codec.( $ ) uint8 (fun r -> r.p_a);
+        Codec.( $ ) uint16be (fun r -> r.p_b);
+      ]
+
+let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7E)
+
+let scalar_gen_tests =
+  let open Fuzz_gen in
+  test_cases "uint8" uint8 @ test_cases "uint16" uint16
+  @ test_cases "uint16be" uint16be
+  @ test_cases "uint32" uint32
+  @ test_cases "uint32be" uint32be
+  @ test_cases "uint63" uint63
+  @ test_cases "uint63be" uint63be
+  @ test_cases "uint64" uint64
+  @ test_cases "uint64be" uint64be
+  @ test_cases "int8" int8 @ test_cases "int16" int16
+  @ test_cases "int16be" int16be
+  @ test_cases "int32" int32
+  @ test_cases "int32be" int32be
+  @ test_cases "int64" int64
+  @ test_cases "int64be" int64be
+  @ test_cases "float32" float32
+  @ test_cases "float32be" float32be
+  @ test_cases "float64" float64
+  @ test_cases "float64be" float64be
+  @ test_cases "empty" empty
+
+let bytes_gen_tests =
+  let open Fuzz_gen in
+  test_cases "byte_array(5)" (byte_array 5)
+  @ test_cases "byte_slice(3)" (byte_slice 3)
+  @ test_cases "byte_array_where(4, printable)"
+      (byte_array_where 4 ~per_byte:printable_byte)
+  @ test_cases "all_bytes" all_bytes
+  @ test_cases "all_zeros" all_zeros
+  @ test_cases "nested(4, uint16be)" (nested 4 uint16be)
+  @ test_cases "nested_at_most(4, uint16be)" (nested_at_most 4 uint16be)
+
+let wrapper_gen_tests =
+  let open Fuzz_gen in
+  test_cases "map(uint8, *2)"
+    (map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) uint8)
+  @ test_cases "variants" (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ])
+  @ test_cases "bits(3, U8)" (bits ~width:3 Wire.U8)
+  @ test_cases "bits(10, U16be)" (bits ~width:10 Wire.U16be)
+  @ test_cases "bit" (bit uint8)
+  @ test_cases "uint_var(3, big)" (uint_var ~endian:Wire.Big 3)
+  @ test_cases "uint_var(7, big)" (uint_var ~endian:Wire.Big 7)
+  @ test_cases "optional ~present:true (uint8)" (optional uint8)
+  @ test_cases "optional ~present:false (uint8)" (optional ~present:false uint8)
+  @ test_cases "optional_or ~present:true (uint8)"
+      (optional_or ~default:0 uint8)
+  @ test_cases "optional_or ~present:false (uint8)"
+      (optional_or ~present:false ~default:42 uint8)
+  @ test_cases "repeat(8 bytes, uint8)" (repeat ~bytes:8 uint8)
+
+let casetype_gen_tests =
+  let open Fuzz_gen in
+  test_cases "array(3, uint16be)" (array 3 uint16be)
+  @ test_cases "enum" (enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ])
+  @ test_cases "bounded_u8(10..100)" (bounded_u8 ~min:10 ~max:100)
+  @ test_cases "codec_where" codec_where
+  @ test_cases "lookup(['a'..'d'])" (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8)
+  @ test_cases "where(uint8)" (where uint8)
+  @ test_cases "bits(4, U16be)" (bits ~width:4 Wire.U16be)
+  @ test_cases "bits(4, U32, Lsb_first)"
+      (bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U32)
+  @ test_cases "bit(uint16)" (bit uint16)
+  @ test_cases "array_seq(3, uint16be)" (array_seq 3 uint16be)
+  @ test_cases "repeat_seq(8 bytes, uint8)" (repeat_seq ~bytes:8 uint8)
+  @ test_cases "field_anon" field_anon
+  @ test_cases "param_input" param_input
+  @ test_cases "action" action
+  @ test_cases "action_on_act" action_on_act
+  @ reject_cases "action_abort" action_abort
+  @ test_cases "finite_float64" finite_float64
+  @ test_cases "nan_float64" nan_float64
+  @ test_cases "optional_dynamic" optional_dynamic
+  @ test_cases "optional_or_dynamic" optional_or_dynamic
+  @ test_cases "expr_ops" expr_ops
+  @ test_cases "rest_bytes" rest_bytes
+  @ test_cases "sizeof" sizeof
+  @ test_cases "casetype_u8"
+      (casetype_u8 "Payload"
+         [
+           case ~index:1 uint16be
+             ~inject:(fun v -> `A v)
+             ~project:(function `A v -> Some v | _ -> None);
+           case ~index:2 uint32be
+             ~inject:(fun v -> `B v)
+             ~project:(function `B v -> Some v | _ -> None);
+           default_case ~tag:0xFF uint8
+             ~inject:(fun v -> `Other v)
+             ~project:(function `Other v -> Some v | _ -> None);
+         ])
+  @ test_cases "record(uint8, uint16be)" pair_gen
+
+let gen_tests =
+  scalar_gen_tests @ bytes_gen_tests @ wrapper_gen_tests @ casetype_gen_tests
+
+(* Alternate entry-point coverage: each driver is exercised on one
+   representative gen so the full validate / of_string / of_reader paths
+   are touched without 3x-ing the suite size. *)
+let alt_entry_tests =
+  let open Fuzz_gen in
+  direct_cases "uint16be (direct)" uint16be
+  @ direct_cases "byte_array(5) (direct)" (byte_array 5)
+  @ direct_cases "record (direct)" pair_gen
+  @ streaming_cases "uint16be (streaming)" uint16be
+  @ streaming_cases "record (streaming)" pair_gen
+  @ validate_cases "uint16be (validate)" uint16be
+  @ validate_cases "param_input (validate)" param_input
+  @ validate_cases "bounded_u8 (validate)" (bounded_u8 ~min:10 ~max:100)
+
 let suite =
   ( "wire",
     parse_tests @ roundtrip_tests @ record_tests @ stream_tests @ depsize_tests
-    @ float_tests @ repeat_tests )
+    @ float_tests @ repeat_tests @ gen_tests @ alt_entry_tests )

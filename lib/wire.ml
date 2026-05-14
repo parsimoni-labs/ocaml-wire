@@ -578,7 +578,13 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let off = Slice.first v in
       let len = Slice.length v in
       write_string enc (Bytes.sub_string src off len)
-  | Single_elem { elem; _ } -> encode_into elem v enc
+  | Single_elem { size; elem; _ } ->
+      let n = Eval.expr Eval.empty size in
+      encode_into elem v enc;
+      let inner_sz = Types.size_of_typ_value elem v in
+      for _ = inner_sz to n - 1 do
+        write_byte enc 0
+      done
   | Enum { base; _ } -> encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
@@ -601,12 +607,16 @@ and encode_casetype : type a k.
  fun tag cases v enc ->
   let rec find_case = function
     | [] -> failwith "casetype encoding: no matching case"
-    | Case_branch { cb_tag; cb_inner; cb_project; _ } :: rest -> (
+    | Case_branch { cb_tag; cb_default_tag; cb_inner; cb_project; _ } :: rest
+      -> (
         match cb_project v with
         | Some body ->
-            (match cb_tag with
-            | Some t -> encode_into tag t enc
-            | None -> failwith "casetype encoding: cannot encode default case");
+            let t =
+              match (cb_tag, cb_default_tag) with
+              | Some t, _ | _, Some t -> t
+              | None, None -> failwith "casetype encoding: case missing tag"
+            in
+            encode_into tag t enc;
             encode_into cb_inner body enc
         | None -> find_case rest)
   in

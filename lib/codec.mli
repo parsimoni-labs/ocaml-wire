@@ -108,9 +108,10 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
 
-val validate : 'r t -> bytes -> int -> unit
-(** [validate c buf off] checks field [~constraint_] and [~where] clauses
-    without constructing a record and without firing actions.
+val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
+(** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+    without constructing a record and without firing actions. [?env] supplies
+    bindings for any [Param.input] referenced in those clauses.
 
     Raises {!Types.Parse_error} on constraint/where-clause failure. *)
 

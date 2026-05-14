@@ -157,6 +157,9 @@ and _ typ =
 and ('a, 'k) case_branch =
   | Case_branch : {
       cb_tag : 'k option;
+      cb_default_tag : 'k option;
+          (* Encode-time tag for the default branch ([cb_tag = None]).
+             [None] means encoding this branch is unsupported. *)
       cb_inner : 'w typ;
       cb_inject : 'w -> 'a;
       cb_project : 'a -> 'w option;
@@ -447,13 +450,16 @@ let nested ~size elem = Single_elem { size; elem; at_most = false }
 let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
 let enum name cases base = Enum { name; cases; base }
 
+let fail_parse_error fmt =
+  Fmt.kstr (fun s -> raise (Parse_error (Constraint_failed s))) fmt
+
 let variants name cases base =
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
   let arr = Array.of_list (List.map snd cases) in
   let len = Array.length arr in
   let decode n =
     if n >= 0 && n < len then arr.(n)
-    else Fmt.invalid_arg "Wire.variants %s: unknown value %d" name n
+    else fail_parse_error "Wire.variants %s: unknown value %d" name n
   in
   let encode v =
     let i = variants_lookup arr v 0 in
@@ -472,6 +478,7 @@ type ('a, 'k) case_def =
     }
       -> ('a, 'k) case_def
   | Default_def : {
+      dd_tag : 'k;
       dd_inner : 'w typ;
       dd_inject : 'w -> 'a;
       dd_project : 'a -> 'w option;
@@ -487,8 +494,9 @@ let case ?index inner ~inject ~project =
       cd_project = project;
     }
 
-let default inner ~inject ~project =
-  Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
+let default ~tag inner ~inject ~project =
+  Default_def
+    { dd_tag = tag; dd_inner = inner; dd_inject = inject; dd_project = project }
 
 let casetype name tag defs =
   let resolve = function
@@ -504,15 +512,17 @@ let casetype name tag defs =
         Case_branch
           {
             cb_tag;
+            cb_default_tag = None;
             cb_inner = cd_inner;
             cb_inject = cd_inject;
             cb_project = cd_project;
           }
-    | Default_def { dd_inner; dd_inject; dd_project } ->
+    | Default_def { dd_tag; dd_inner; dd_inject; dd_project } ->
         reject_decoration ~combinator:"casetype" dd_inner;
         Case_branch
           {
             cb_tag = None;
+            cb_default_tag = Some dd_tag;
             cb_inner = dd_inner;
             cb_inject = dd_inject;
             cb_project = dd_project;
@@ -1095,7 +1105,7 @@ let rec inner_wire_size : type a. a typ -> int option = function
    [None] only for shapes whose total wire size is genuinely not
    expressible at projection time (variable-size codec without an
    exposed [wire_size_expr], casetype, struct ref, all_bytes/all_zeros). *)
-and inner_wire_size_expr : type a. a typ -> int expr option = function
+let rec inner_wire_size_expr : type a. a typ -> int expr option = function
   | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ } ->
       Some size
   | Single_elem { size; _ } -> Some size
@@ -1107,7 +1117,7 @@ and inner_wire_size_expr : type a. a typ -> int expr option = function
   | Apply { typ; _ } -> inner_wire_size_expr typ
   | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
-and optional_suffix : type a.
+let optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
   match inner_wire_size_expr inner with
@@ -1119,7 +1129,8 @@ and optional_suffix : type a.
          at construction (smart constructor uses [has_wire_size_expr]). *)
       assert false
 
-and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
+let rec field_suffix : type a.
+    a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
   | Bits { width; base; _ } ->
@@ -1458,6 +1469,7 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Uint8 -> Some 1
   | Uint16 _ -> Some 2
   | Uint32 _ -> Some 4
+  | Uint63 _ -> Some 8
   | Uint64 _ -> Some 8
   | Int8 -> Some 1
   | Int16 _ -> Some 2
@@ -1488,6 +1500,8 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Optional_or { present = Bool false; _ } -> Some 0
   | Optional_or _ -> None
   | Repeat _ -> None
+  | Array { len = Int n; elem; _ } -> (
+      match field_wire_size elem with Some k -> Some (n * k) | None -> None)
   | _ -> None
 
 let c_type_of : type a. a typ -> string = function
