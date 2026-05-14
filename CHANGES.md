@@ -46,6 +46,10 @@
 - Fold `Codec.decode_with` into `Codec.decode` via `?env`; split into
   `Codec.decode` (result) and `Codec.decode_exn` (raises) (#39, @samoht)
 - Speed up `Codec.bitfield` ~5% (#37, @samoht)
+- Drop the `pe_` prefix on `Types.param_env` fields: they are now
+  `codec_id`, `slots`, `bound`. Callers using `Param.bind` / `Param.get`
+  are unaffected; code that pattern-matches the record or reads fields
+  directly needs to update (#63, @samoht)
 
 ### Documentation
 
