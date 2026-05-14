@@ -1105,44 +1105,44 @@ type ('a, 'r) compiled_field = {
    separate so the per-type helpers do not need polymorphic recursion across
    the record's 'f type. *)
 type layout_ctx = {
-  lc_next_off : next_off;
-  lc_bf : bf_codec_state option;
-  lc_field_readers : field_reader list;
-  lc_n_fields : int;
+  next_off : next_off;
+  bf : bf_codec_state option;
+  field_readers : field_reader list;
+  n_fields : int;
 }
 
 let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
  fun (Record r) ->
   {
-    lc_next_off = r.r_next_off;
-    lc_bf = r.r_bf;
-    lc_field_readers = r.r_field_readers;
-    lc_n_fields = r.r_n_fields;
+    next_off = r.r_next_off;
+    bf = r.r_bf;
+    field_readers = r.r_field_readers;
+    n_fields = r.r_n_fields;
   }
 
 (* -- Layout helpers shared by per-type plans -- *)
 
 let static_off_of (ctx : layout_ctx) : int option =
-  match ctx.lc_next_off with Static n -> Some n | Dynamic _ -> None
+  match ctx.next_off with Static n -> Some n | Dynamic _ -> None
 
 let off_fn_of (ctx : layout_ctx) : bytes -> int -> int =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> fun _buf _base -> n
   | Dynamic f -> fun buf base -> f buf base - base
 
 (* Byte offset used as [sizeof_this] when compiling constraints/actions: a
    real static offset when known, the [-1] sentinel otherwise. *)
 let validator_off_of (ctx : layout_ctx) : int =
-  match ctx.lc_next_off with Static n -> n | Dynamic _ -> -1
+  match ctx.next_off with Static n -> n | Dynamic _ -> -1
 
 (* Field access that stores a constant or dynamic offset, based on [ctx]. *)
 let fixed_or_dynamic_fa (ctx : layout_ctx) : field_access =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> Fixed n
   | Dynamic _ -> Dynamic (off_fn_of ctx)
 
 let require_static_off (ctx : layout_ctx) ~what : int =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> n
   | Dynamic _ ->
       invalid_arg
@@ -1233,7 +1233,7 @@ let compile_bits : type r.
   let total = bf_base_total_bits base in
   let static_off = require_static_off ctx ~what:"bitfields" in
   let base_off, bits_used, size_delta, extra_writers =
-    match ctx.lc_bf with
+    match ctx.bf with
     | Some bf
       when bf_base_equal bf.base base && bf.bit_order = bit_order
            && bf.bits_used + width <= bf.total_bits ->
@@ -1261,7 +1261,7 @@ let compile_bits : type r.
         total_bits = total;
       }
   in
-  let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
+  let populate = build_populate fld.typ ctx.n_fields raw_reader in
   {
     raw_reader;
     raw_writer;
@@ -1286,7 +1286,7 @@ let compile_codec_variable : type a r.
     (a, r) compiled_field =
  fun ctx ~get ~codec_decode ~codec_encode ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n ->
         let size_fn buf base = codec_size_of buf (base + n) in
         ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
@@ -1340,7 +1340,7 @@ let compile_codec : type a r.
         extra_writers = [];
         field_access = fixed_or_dynamic_fa ctx;
         size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
+        next_off = advance_next_off ctx.next_off fsize;
         bf_after = None;
         int_reader = null_int_reader;
         nested_readers;
@@ -1358,7 +1358,7 @@ let compile_codec : type a r.
    Without the dynamic case, two consecutive variable-size sub-codec fields
    trip [require_static_off]. *)
 let dynamic_optional_next_off ctx present_fn fsize =
-  let base_off = ctx.lc_next_off in
+  let base_off = ctx.next_off in
   Dynamic
     (fun buf base ->
       let off =
@@ -1397,7 +1397,7 @@ let compile_optional : type a r.
     (a option, r) compiled_field =
  fun ctx fld present inner ->
   let inner_size = field_wire_size inner in
-  let nfields = ctx.lc_n_fields in
+  let nfields = ctx.n_fields in
   match (present, inner_size) with
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
@@ -1408,15 +1408,15 @@ let compile_optional : type a r.
         ~raw_writer:(fun v buf off ->
           match get v with Some iv -> inner_writer buf off iv | None -> ())
         ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate:inner_populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> None)
         ~raw_writer:(fun _v _buf _off -> ())
-        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let inner_populate = build_populate inner nfields inner_reader in
       let get = fld.get in
@@ -1456,25 +1456,25 @@ let compile_optional_or : type a r.
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
-      let populate = build_populate fld.typ ctx.lc_n_fields inner_reader in
+      let populate = build_populate fld.typ ctx.n_fields inner_reader in
       optional_compiled ctx ~raw_reader:inner_reader
         ~raw_writer:(fun v buf off -> inner_writer buf off (get v))
         ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> default)
         ~raw_writer:(fun _v _buf _off -> ())
-        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
       let raw_reader buf base =
         if present_fn buf base then inner_reader buf base else default
       in
-      let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
+      let populate = build_populate fld.typ ctx.n_fields raw_reader in
       (* Encode is value-driven: the user always has a value, so always
          write [fsize] bytes. The gate is the decode-side oracle that
          chooses between the decoded inner and [default]. Round-trips
@@ -1484,7 +1484,7 @@ let compile_optional_or : type a r.
          back to [default]. *)
       let raw_writer v buf off = inner_writer buf off (get v) in
       optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
   | _ ->
       invalid_arg
@@ -1556,12 +1556,12 @@ let compile_repeat : type elt seq r.
      is [Dynamic], which previously tripped [require_static_off]. *)
   let off_fn, (field_access : field_access), validator_off =
     let sizeof_this : bytes -> int -> int =
-      match ctx.lc_next_off with
+      match ctx.next_off with
       | Static n -> fun _buf _base -> n
       | Dynamic prev_end -> fun buf base -> prev_end buf base - base
     in
-    let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
-    match ctx.lc_next_off with
+    let size_fn = compile_expr ~sizeof_this ctx.field_readers size_expr in
+    match ctx.next_off with
     | Static n -> ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
     | Dynamic prev_end ->
         let off_fn buf base = prev_end buf base - base in
@@ -1700,24 +1700,24 @@ let compile_var_size_fn : type a.
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
       let sizeof_this : bytes -> int -> int =
-        match ctx.lc_next_off with
+        match ctx.next_off with
         | Static n -> fun _buf _base -> n
         | Dynamic prev_end -> fun buf base -> prev_end buf base - base
       in
-      compile_expr ~sizeof_this ctx.lc_field_readers size_expr
+      compile_expr ~sizeof_this ctx.field_readers size_expr
 
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   let typ = fld.typ in
   let off_fn, validator_off =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n -> ((fun (_buf : bytes) (_base : int) -> n), n)
     | Dynamic prev_end -> ((fun buf base -> prev_end buf base - base), -1)
   in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
   let field_access : field_access =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n -> Variable { off = n; size_fn }
     | Dynamic _ -> Variable_dynamic { off_fn; size_fn }
   in
@@ -1749,7 +1749,7 @@ let compile_var_bytes : type a r.
         in
         (raw_reader, raw_writer, int_reader)
   in
-  let populate = build_populate typ ctx.lc_n_fields raw_reader in
+  let populate = build_populate typ ctx.n_fields raw_reader in
   {
     raw_reader;
     raw_writer;
@@ -1805,14 +1805,14 @@ let compile_scalar_or_var : type a r.
         | Some v -> v
         | None -> 0
       in
-      let populate = build_populate typ ctx.lc_n_fields raw_reader in
+      let populate = build_populate typ ctx.n_fields raw_reader in
       {
         raw_reader;
         raw_writer;
         extra_writers = [];
         field_access = fixed_or_dynamic_fa ctx;
         size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
+        next_off = advance_next_off ctx.next_off fsize;
         bf_after = None;
         int_reader;
         nested_readers = [];
@@ -2266,10 +2266,10 @@ let empty_validator_acc =
 
 let layout_ctx_of_validator_acc acc =
   {
-    lc_next_off = acc.va_next_off;
-    lc_bf = acc.va_bf;
-    lc_field_readers = acc.va_field_readers;
-    lc_n_fields = acc.va_n_fields;
+    next_off = acc.va_next_off;
+    bf = acc.va_bf;
+    field_readers = acc.va_field_readers;
+    n_fields = acc.va_n_fields;
   }
 
 (* Per-field step: open [Types.Field]'s existential ['a], build a fake
