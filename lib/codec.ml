@@ -2507,7 +2507,7 @@ let raw_decode t buf off = t.t_decode buf off
 let load_env_into_cells (t : 'r t) (env : Param.env) =
   List.iter
     (fun (Param.Pack p) ->
-      if p.ph_env_idx >= 0 then p.ph_cell := env.pe_slots.(p.ph_env_idx))
+      if p.ph_env_idx >= 0 then p.ph_cell := env.slots.(p.ph_env_idx))
     t.t_param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
@@ -2520,7 +2520,7 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
     (fun (Param.Pack p) ->
       if
         (not p.Types.ph_mutable) && p.ph_env_idx >= 0
-        && not env.pe_bound.(p.ph_env_idx)
+        && not env.bound.(p.ph_env_idx)
       then Some p.ph_name
       else None)
     t.t_param_handles
@@ -2554,9 +2554,9 @@ let wire_size_info t =
 
 let env t : Param.env =
   {
-    Types.pe_codec_id = t.t_id;
-    pe_slots = Array.make t.t_n_params 0;
-    pe_bound = Array.make t.t_n_params false;
+    Types.codec_id = t.t_id;
+    slots = Array.make t.t_n_params 0;
+    bound = Array.make t.t_n_params false;
   }
 
 let decode_exn ?env:e t buf off =
@@ -2564,7 +2564,7 @@ let decode_exn ?env:e t buf off =
   let arr = Array.make t.t_n_array_slots 0 in
   (match e with
   | Some (e : Param.env) when t.t_n_params > 0 ->
-      Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params
+      Array.blit e.slots 0 arr t.t_param_base t.t_n_params
   | _ -> ());
   t.t_validate_arr arr buf off;
   (match e with
@@ -2572,7 +2572,7 @@ let decode_exn ?env:e t buf off =
       List.iter
         (fun (Param.Pack p) ->
           let v = arr.(p.ph_slot) in
-          e.pe_slots.(p.ph_env_idx) <- v;
+          e.slots.(p.ph_env_idx) <- v;
           p.ph_cell := v)
         t.t_param_handles
   | None -> ());
@@ -2616,7 +2616,7 @@ let to_struct t =
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
 
 let validate ?env t buf off =
-  let env_slots = Option.map (fun (e : Param.env) -> e.pe_slots) env in
+  let env_slots = Option.map (fun (e : Param.env) -> e.slots) env in
   t.t_validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
@@ -2750,7 +2750,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            if e.pe_codec_id <> codec.t_id then
+            if e.codec_id <> codec.t_id then
               Fmt.invalid_arg
                 "Codec.get: env was not created by Codec.env for %S"
                 codec.t_name;
@@ -2760,12 +2760,12 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                 List.iter
                   (fun (Param.Pack p) ->
                     let v = arr.(p.ph_slot) in
-                    e.pe_slots.(p.ph_env_idx) <- v;
+                    e.slots.(p.ph_env_idx) <- v;
                     p.ph_cell := v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
-                  Array.blit e.pe_slots 0 arr param_base n_params )
+                  Array.blit e.slots 0 arr param_base n_params )
       in
       Staged.stage (fun buf off ->
           let v = read buf off in

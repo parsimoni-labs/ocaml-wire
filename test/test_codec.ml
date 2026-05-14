@@ -1217,7 +1217,7 @@ let test_env_wrongcodec_with_action () =
       $ fun v -> v)
   in
   let codec_with_action = Codec.v "WithAct" (fun v -> v) [ cf_v ] in
-  (* codec_empty has zero params, so its env has pe_slots = [||] *)
+  (* codec_empty has zero params, so its env has slots = [||] *)
   let cf_w = Codec.(Field.v "w" uint8 $ fun v -> v) in
   let codec_empty = Codec.v "NoParams" (fun v -> v) [ cf_w ] in
   let wrong_env = Codec.env codec_empty in
