@@ -351,11 +351,11 @@ type (_, _) readers =
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
-  bfc_base : bitfield_base;
-  bfc_bit_order : bit_order;
-  bfc_base_off : int; (* byte offset of base word within record *)
-  bfc_bits_used : int; (* bits consumed so far in current group *)
-  bfc_total_bits : int; (* 8, 16, or 32 *)
+  base : bitfield_base;
+  bit_order : bit_order;
+  base_off : int; (* byte offset of base word within record *)
+  bits_used : int; (* bits consumed so far in current group *)
+  total_bits : int; (* 8, 16, or 32 *)
 }
 
 (* Track the byte offset for the next field: static (constant) until we hit
@@ -1235,10 +1235,9 @@ let compile_bits : type r.
   let base_off, bits_used, size_delta, extra_writers =
     match ctx.lc_bf with
     | Some bf
-      when bf_base_equal bf.bfc_base base
-           && bf.bfc_bit_order = bit_order
-           && bf.bfc_bits_used + width <= bf.bfc_total_bits ->
-        (bf.bfc_base_off, bf.bfc_bits_used, 0, [])
+      when bf_base_equal bf.base base && bf.bit_order = bit_order
+           && bf.bits_used + width <= bf.total_bits ->
+        (bf.base_off, bf.bits_used, 0, [])
     | _ ->
         let clear = build_bf_clear base static_off in
         ( static_off,
@@ -1255,11 +1254,11 @@ let compile_bits : type r.
   let bf_after =
     Some
       {
-        bfc_base = base;
-        bfc_bit_order = bit_order;
-        bfc_base_off = base_off;
-        bfc_bits_used = bits_used + width;
-        bfc_total_bits = total;
+        base;
+        bit_order;
+        base_off;
+        bits_used = bits_used + width;
+        total_bits = total;
       }
   in
   let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
