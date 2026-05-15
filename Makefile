@@ -1,5 +1,6 @@
 .PHONY: build test 3d bench bench-demo bench-routing bench-gateway bench-clcw \
-       prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw clean
+       prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
+       cppcheck clean
 
 build:
 	dune build
@@ -49,6 +50,19 @@ memtrace-gateway:
 memtrace-clcw:
 	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=release bench/clcw/bench.exe
 	memtrace_hotspots clcw.ctf
+
+cppcheck:
+	@command -v cppcheck >/dev/null 2>&1 || { \
+	  echo "cppcheck not installed; skipping. Install with: brew install cppcheck"; \
+	  exit 0; }
+	cppcheck --enable=all --check-level=exhaustive --inconclusive \
+	  --std=c11 --language=c \
+	  --suppress=missingIncludeSystem --suppress=missingInclude \
+	  --suppress=unusedFunction --suppress=checkersReport \
+	  --suppress=normalCheckLevelMaxBranches --suppress=unmatchedSuppression \
+	  --inline-suppr --quiet --error-exitcode=1 \
+	  c_stubs.c bench/bench_common.h bench/clcw/clcw_c.c \
+	  bench/gateway/gateway_c.c bench/routing/routing_c.c
 
 clean:
 	dune clean
