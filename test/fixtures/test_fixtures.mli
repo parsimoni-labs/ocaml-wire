@@ -21,9 +21,9 @@ val outer_codec : outer Codec.t
 (** [outer_codec] embeds [inner_codec] between a header and trailer byte;
     exercises the [codec] field combinator. *)
 
-type l2 = { l2_x : int }
-type l1 = { l1_inner : l2; l1_y : int }
-type l0 = { l0_inner : l1; l0_z : int }
+type l2 = { x : int }
+type l1 = { inner : l2; y : int }
+type l0 = { inner : l1; z : int }
 
 val l2_codec : l2 Codec.t
 (** [l2_codec] is the innermost level of a 3-deep codec nesting. *)
@@ -35,7 +35,7 @@ val l0_codec : l0 Codec.t
 (** [l0_codec] is the outermost level, embedding [l1_codec]; exercises two-level
     nesting. *)
 
-type opt_record = { opt_hdr : int; opt_payload : int option; opt_trail : int }
+type opt_record = { hdr : int; payload : int option; trail : int }
 
 val opt_codec : present:bool -> opt_record Codec.t
 (** [opt_codec ~present] is a record with an optional middle field; [present]
@@ -47,16 +47,16 @@ val opt_codec_present : opt_record Codec.t
 val opt_codec_absent : opt_record Codec.t
 (** [opt_codec_absent] is [opt_codec ~present:false]. *)
 
-type container = { cnt_length : int; cnt_items : inner list }
+type container = { length : int; items : inner list }
 
 val f_cnt_length : int Field.t
-(** [f_cnt_length] is the field reference for [container.cnt_length], used to
-    size the trailing [repeat] body. *)
+(** [f_cnt_length] is the field reference for [container.length], used to size
+    the trailing [repeat] body. *)
 
 val repeat_codec : container Codec.t
 (** [repeat_codec] is a length-prefixed list of [inner] elements. *)
 
-type packet = { pkt_id : int; pkt_data : int }
+type packet = { id : int; data : int }
 
 val packet_codec : packet Codec.t
 (** [packet_codec] is a fixed-shape packet record reused by TM-frame style

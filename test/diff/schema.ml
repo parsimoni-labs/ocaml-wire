@@ -11,12 +11,12 @@ type simple_header = { version : int; length : int; flags : int }
 
 let simple_header_codec =
   Codec.v "SimpleHeader"
-    (fun version length flags -> { version; length; flags })
+    (fun version length flags -> ({ version; length; flags } : simple_header))
     Codec.
       [
-        (Field.v "version" uint8 $ fun h -> h.version);
-        (Field.v "length" uint16 $ fun h -> h.length);
-        (Field.v "flags" uint8 $ fun h -> h.flags);
+        (Field.v "version" uint8 $ fun (h : simple_header) -> h.version);
+        (Field.v "length" uint16 $ fun (h : simple_header) -> h.length);
+        (Field.v "flags" uint8 $ fun (h : simple_header) -> h.flags);
       ]
 
 (* Generate 3D schema *)
@@ -29,15 +29,15 @@ let simple_header_module =
 (* Constrained schema - constraints are applied in 3D generation,
    the OCaml parser doesn't validate constraints on individual fields.
    For differential testing, we validate manually or use the C parser. *)
-type constrained_packet = { pkt_type : int; pkt_length : int }
+type constrained_packet = { type_ : int; length : int }
 
 let constrained_packet_codec =
   Codec.v "ConstrainedPacket"
-    (fun pkt_type pkt_length -> { pkt_type; pkt_length })
+    (fun type_ length -> ({ type_; length } : constrained_packet))
     Codec.
       [
-        (Field.v "pkt_type" uint8 $ fun p -> p.pkt_type);
-        (Field.v "pkt_length" uint16 $ fun p -> p.pkt_length);
+        (Field.v "pkt_type" uint8 $ fun (p : constrained_packet) -> p.type_);
+        (Field.v "pkt_length" uint16 $ fun (p : constrained_packet) -> p.length);
       ]
 
 let constrained_packet_module =

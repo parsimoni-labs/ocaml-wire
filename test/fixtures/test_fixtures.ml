@@ -7,97 +7,100 @@ let f_inner_value = Field.v "Value" uint16be
 
 let inner_codec =
   Codec.v "Inner"
-    (fun tag value -> { tag; value })
-    Codec.[ (f_inner_tag $ fun r -> r.tag); (f_inner_value $ fun r -> r.value) ]
+    (fun tag value -> ({ tag; value } : inner))
+    Codec.
+      [
+        (f_inner_tag $ fun (r : inner) -> r.tag);
+        (f_inner_value $ fun (r : inner) -> r.value);
+      ]
 
 type outer = { header : int; inner : inner; trailer : int }
 
 let outer_codec =
   Codec.v "Outer"
-    (fun header inner trailer -> { header; inner; trailer })
+    (fun header inner trailer -> ({ header; inner; trailer } : outer))
     Codec.
       [
-        (Field.v "Header" uint8 $ fun r -> r.header);
-        (Field.v "Inner" (codec inner_codec) $ fun r -> r.inner);
-        (Field.v "Trailer" uint8 $ fun r -> r.trailer);
+        (Field.v "Header" uint8 $ fun (r : outer) -> r.header);
+        (Field.v "Inner" (codec inner_codec) $ fun (r : outer) -> r.inner);
+        (Field.v "Trailer" uint8 $ fun (r : outer) -> r.trailer);
       ]
 
-type l2 = { l2_x : int }
-type l1 = { l1_inner : l2; l1_y : int }
-type l0 = { l0_inner : l1; l0_z : int }
+type l2 = { x : int }
+type l1 = { inner : l2; y : int }
+type l0 = { inner : l1; z : int }
 
 let l2_codec =
   Codec.v "L2"
-    (fun x -> { l2_x = x })
-    Codec.[ (Field.v "X" uint8 $ fun r -> r.l2_x) ]
+    (fun x -> ({ x } : l2))
+    Codec.[ (Field.v "X" uint8 $ fun (r : l2) -> r.x) ]
 
 let l1_codec =
   Codec.v "L1"
-    (fun inner y -> { l1_inner = inner; l1_y = y })
+    (fun inner y -> ({ inner; y } : l1))
     Codec.
       [
-        (Field.v "Inner" (codec l2_codec) $ fun r -> r.l1_inner);
-        (Field.v "Y" uint16be $ fun r -> r.l1_y);
+        (Field.v "Inner" (codec l2_codec) $ fun (r : l1) -> r.inner);
+        (Field.v "Y" uint16be $ fun (r : l1) -> r.y);
       ]
 
 let l0_codec =
   Codec.v "L0"
-    (fun inner z -> { l0_inner = inner; l0_z = z })
+    (fun inner z -> ({ inner; z } : l0))
     Codec.
       [
-        (Field.v "Inner" (codec l1_codec) $ fun r -> r.l0_inner);
-        (Field.v "Z" uint8 $ fun r -> r.l0_z);
+        (Field.v "Inner" (codec l1_codec) $ fun (r : l0) -> r.inner);
+        (Field.v "Z" uint8 $ fun (r : l0) -> r.z);
       ]
 
-type opt_record = { opt_hdr : int; opt_payload : int option; opt_trail : int }
+type opt_record = { hdr : int; payload : int option; trail : int }
 
 let opt_codec ~present =
   Codec.v "OptRecord"
-    (fun hdr payload trail ->
-      { opt_hdr = hdr; opt_payload = payload; opt_trail = trail })
+    (fun hdr payload trail -> ({ hdr; payload; trail } : opt_record))
     Codec.
       [
-        (Field.v "Hdr" uint8 $ fun r -> r.opt_hdr);
-        ( Field.optional "Payload" ~present:(bool present) uint16be $ fun r ->
-          r.opt_payload );
-        (Field.v "Trail" uint8 $ fun r -> r.opt_trail);
+        (Field.v "Hdr" uint8 $ fun (r : opt_record) -> r.hdr);
+        ( Field.optional "Payload" ~present:(bool present) uint16be
+        $ fun (r : opt_record) -> r.payload );
+        (Field.v "Trail" uint8 $ fun (r : opt_record) -> r.trail);
       ]
 
 let opt_codec_present = opt_codec ~present:true
 let opt_codec_absent = opt_codec ~present:false
 
-type container = { cnt_length : int; cnt_items : inner list }
+type container = { length : int; items : inner list }
 
 let f_cnt_length = Field.v "Length" uint8
 
 let repeat_codec =
   Codec.v "Container"
-    (fun length items -> { cnt_length = length; cnt_items = items })
+    (fun length items -> ({ length; items } : container))
     Codec.
       [
-        (f_cnt_length $ fun r -> r.cnt_length);
+        (f_cnt_length $ fun (r : container) -> r.length);
         ( Field.repeat "Items" ~size:(Field.ref f_cnt_length) (codec inner_codec)
-        $ fun r -> r.cnt_items );
+        $ fun (r : container) -> r.items );
       ]
 
-type packet = { pkt_id : int; pkt_data : int }
+type packet = { id : int; data : int }
 
 let packet_codec =
   Codec.v "Packet"
-    (fun id data -> { pkt_id = id; pkt_data = data })
+    (fun id data -> ({ id; data } : packet))
     Codec.
       [
-        (Field.v "Id" uint8 $ fun r -> r.pkt_id);
-        (Field.v "Data" uint16be $ fun r -> r.pkt_data);
+        (Field.v "Id" uint8 $ fun (r : packet) -> r.id);
+        (Field.v "Data" uint16be $ fun (r : packet) -> r.data);
       ]
 
 type multi_record = { x : int; y : int }
 
 let multi_record_codec =
   Codec.v "MultiRecord"
-    (fun x y -> { x; y })
+    (fun x y -> ({ x; y } : multi_record))
     Codec.
       [
-        (Field.v "x" uint16be $ fun r -> r.x);
-        (Field.v "y" uint16be $ fun r -> r.y);
+        (Field.v "x" uint16be $ fun (r : multi_record) -> r.x);
+        (Field.v "y" uint16be $ fun (r : multi_record) -> r.y);
       ]

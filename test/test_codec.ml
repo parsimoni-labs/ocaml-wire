@@ -2179,21 +2179,20 @@ let test_codec_embed_nested () =
   Bytes.set_uint16_be buf 1 0xABCD;
   Bytes.set_uint8 buf 3 0xFF;
   let r = decode_ok (Codec.decode l0_codec buf 0) in
-  Alcotest.(check int) "l2.x" 0x42 r.l0_inner.l1_inner.l2_x;
-  Alcotest.(check int) "l1.y" 0xABCD r.l0_inner.l1_y;
-  Alcotest.(check int) "l0.z" 0xFF r.l0_z
+  Alcotest.(check int) "l2.x" 0x42 r.inner.inner.x;
+  Alcotest.(check int) "l1.y" 0xABCD r.inner.y;
+  Alcotest.(check int) "l0.z" 0xFF r.z
 
 let test_codec_embed_nested_roundtrip () =
-  let original =
-    { l0_inner = { l1_inner = { l2_x = 0x42 }; l1_y = 0xABCD }; l0_z = 0xFF }
+  let original : l0 =
+    { inner = { inner = { x = 0x42 }; y = 0xABCD }; z = 0xFF }
   in
   let buf = Bytes.create 4 in
   Codec.encode l0_codec original buf 0;
   let decoded = decode_ok (Codec.decode l0_codec buf 0) in
-  Alcotest.(check int)
-    "l2.x" original.l0_inner.l1_inner.l2_x decoded.l0_inner.l1_inner.l2_x;
-  Alcotest.(check int) "l1.y" original.l0_inner.l1_y decoded.l0_inner.l1_y;
-  Alcotest.(check int) "l0.z" original.l0_z decoded.l0_z
+  Alcotest.(check int) "l2.x" original.inner.inner.x decoded.inner.inner.x;
+  Alcotest.(check int) "l1.y" original.inner.y decoded.inner.y;
+  Alcotest.(check int) "l0.z" original.z decoded.z
 
 (* -- Cross-codec Field.ref: parent expression references sub-codec field -- *)
 
@@ -2442,9 +2441,9 @@ let test_optional_present_decode () =
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xBB;
   let r = decode_ok (Codec.decode opt_codec_present buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.opt_hdr;
-  Alcotest.(check (option int)) "payload" (Some 0x1234) r.opt_payload;
-  Alcotest.(check int) "trail" 0xBB r.opt_trail
+  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check (option int)) "payload" (Some 0x1234) r.payload;
+  Alcotest.(check int) "trail" 0xBB r.trail
 
 let test_optional_absent_decode () =
   (* hdr(1) + trail(1) = 2 bytes (no payload) *)
@@ -2452,12 +2451,12 @@ let test_optional_absent_decode () =
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
   let r = decode_ok (Codec.decode opt_codec_absent buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.opt_hdr;
-  Alcotest.(check (option int)) "payload" None r.opt_payload;
-  Alcotest.(check int) "trail" 0xBB r.opt_trail
+  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check (option int)) "payload" None r.payload;
+  Alcotest.(check int) "trail" 0xBB r.trail
 
 let test_optional_present_encode () =
-  let v = { opt_hdr = 0xAA; opt_payload = Some 0x1234; opt_trail = 0xBB } in
+  let v : opt_record = { hdr = 0xAA; payload = Some 0x1234; trail = 0xBB } in
   let buf = Bytes.create 4 in
   Codec.encode opt_codec_present v buf 0;
   Alcotest.(check int) "hdr" 0xAA (Bytes.get_uint8 buf 0);
@@ -2465,33 +2464,31 @@ let test_optional_present_encode () =
   Alcotest.(check int) "trail" 0xBB (Bytes.get_uint8 buf 3)
 
 let test_optional_absent_encode () =
-  let v = { opt_hdr = 0xAA; opt_payload = None; opt_trail = 0xBB } in
+  let v : opt_record = { hdr = 0xAA; payload = None; trail = 0xBB } in
   let buf = Bytes.create 2 in
   Codec.encode opt_codec_absent v buf 0;
   Alcotest.(check int) "hdr" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "trail" 0xBB (Bytes.get_uint8 buf 1)
 
 let test_optional_present_roundtrip () =
-  let original =
-    { opt_hdr = 0x11; opt_payload = Some 0x2233; opt_trail = 0x44 }
+  let original : opt_record =
+    { hdr = 0x11; payload = Some 0x2233; trail = 0x44 }
   in
   let buf = Bytes.create 4 in
   Codec.encode opt_codec_present original buf 0;
   let decoded = decode_ok (Codec.decode opt_codec_present buf 0) in
-  Alcotest.(check int) "hdr" original.opt_hdr decoded.opt_hdr;
-  Alcotest.(check (option int))
-    "payload" original.opt_payload decoded.opt_payload;
-  Alcotest.(check int) "trail" original.opt_trail decoded.opt_trail
+  Alcotest.(check int) "hdr" original.hdr decoded.hdr;
+  Alcotest.(check (option int)) "payload" original.payload decoded.payload;
+  Alcotest.(check int) "trail" original.trail decoded.trail
 
 let test_optional_absent_roundtrip () =
-  let original = { opt_hdr = 0x11; opt_payload = None; opt_trail = 0x44 } in
+  let original : opt_record = { hdr = 0x11; payload = None; trail = 0x44 } in
   let buf = Bytes.create 2 in
   Codec.encode opt_codec_absent original buf 0;
   let decoded = decode_ok (Codec.decode opt_codec_absent buf 0) in
-  Alcotest.(check int) "hdr" original.opt_hdr decoded.opt_hdr;
-  Alcotest.(check (option int))
-    "payload" original.opt_payload decoded.opt_payload;
-  Alcotest.(check int) "trail" original.opt_trail decoded.opt_trail
+  Alcotest.(check int) "hdr" original.hdr decoded.hdr;
+  Alcotest.(check (option int)) "payload" original.payload decoded.payload;
+  Alcotest.(check int) "trail" original.trail decoded.trail
 
 let test_optional_wire_size_present () =
   Alcotest.(check int) "wire_size present" 4 (Codec.wire_size opt_codec_present)
@@ -2863,8 +2860,8 @@ let test_repeat_decode_empty () =
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 0 r.cnt_length;
-  Alcotest.(check int) "item count" 0 (List.length r.cnt_items)
+  Alcotest.(check int) "length" 0 r.length;
+  Alcotest.(check int) "item count" 0 (List.length r.items)
 
 let test_repeat_decode_one () =
   (* length=3 -> one inner (tag=1byte, value=2bytes) *)
@@ -2873,9 +2870,9 @@ let test_repeat_decode_one () =
   Bytes.set_uint8 buf 1 0x42;
   Bytes.set_uint16_be buf 2 0x1234;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 3 r.cnt_length;
-  Alcotest.(check int) "item count" 1 (List.length r.cnt_items);
-  let item = List.hd r.cnt_items in
+  Alcotest.(check int) "length" 3 r.length;
+  Alcotest.(check int) "item count" 1 (List.length r.items);
+  let item = List.hd r.items in
   Alcotest.(check int) "item.tag" 0x42 item.tag;
   Alcotest.(check int) "item.value" 0x1234 item.value
 
@@ -2893,20 +2890,19 @@ let test_repeat_decode_multiple () =
   Bytes.set_uint8 buf 7 0x03;
   Bytes.set_uint16_be buf 8 0x0003;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 9 r.cnt_length;
-  Alcotest.(check int) "item count" 3 (List.length r.cnt_items);
+  Alcotest.(check int) "length" 9 r.length;
+  Alcotest.(check int) "item count" 3 (List.length r.items);
   List.iteri
     (fun i (item : inner) ->
       Alcotest.(check int) (Fmt.str "item[%d].tag" i) (i + 1) item.tag;
       Alcotest.(check int) (Fmt.str "item[%d].value" i) (i + 1) item.value)
-    r.cnt_items
+    r.items
 
 let test_repeat_encode () =
   let v =
     {
-      cnt_length = 6;
-      cnt_items =
-        [ { tag = 0x01; value = 0x0001 }; { tag = 0x02; value = 0x0002 } ];
+      length = 6;
+      items = [ { tag = 0x01; value = 0x0001 }; { tag = 0x02; value = 0x0002 } ];
     }
   in
   let buf = Bytes.create 7 in
@@ -2925,17 +2921,17 @@ let test_repeat_roundtrip () =
       { tag = 0x0C; value = 0x000C };
     ]
   in
-  let original = { cnt_length = 9; cnt_items = items } in
+  let original : container = { length = 9; items } in
   let buf = Bytes.create 10 in
   Codec.encode repeat_codec original buf 0;
   let decoded = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" original.cnt_length decoded.cnt_length;
-  Alcotest.(check int) "item count" 3 (List.length decoded.cnt_items);
+  Alcotest.(check int) "length" original.length decoded.length;
+  Alcotest.(check int) "item count" 3 (List.length decoded.items);
   List.iter2
     (fun (orig : inner) (dec : inner) ->
       Alcotest.(check int) "tag" orig.tag dec.tag;
       Alcotest.(check int) "value" orig.value dec.value)
-    original.cnt_items decoded.cnt_items
+    original.items decoded.items
 
 (* Repeat with fixed-size primitive elements *)
 
@@ -3203,8 +3199,8 @@ let test_tm_like_full () =
   Alcotest.(check int) "hdr" 0xAAAA r.tm_hdr;
   Alcotest.(check int) "data_len" 6 r.tm_data_len;
   Alcotest.(check int) "packet count" 2 (List.length r.tm_packets);
-  Alcotest.(check int) "pkt0.id" 0x01 (List.nth r.tm_packets 0).pkt_id;
-  Alcotest.(check int) "pkt1.id" 0x02 (List.nth r.tm_packets 1).pkt_id;
+  Alcotest.(check int) "pkt0.id" 0x01 (List.nth r.tm_packets 0).id;
+  Alcotest.(check int) "pkt1.id" 0x02 (List.nth r.tm_packets 1).id;
   Alcotest.(check (option int)) "ocf" (Some 0x33333333) r.tm_ocf;
   Alcotest.(check (option int)) "fecf" (Some 0x4444) r.tm_fecf
 
@@ -3229,9 +3225,9 @@ let test_tm_like_roundtrip () =
       tm_data_len = 9;
       tm_packets =
         [
-          { pkt_id = 0x0A; pkt_data = 0x000A };
-          { pkt_id = 0x0B; pkt_data = 0x000B };
-          { pkt_id = 0x0C; pkt_data = 0x000C };
+          ({ id = 0x0A; data = 0x000A } : packet);
+          ({ id = 0x0B; data = 0x000B } : packet);
+          ({ id = 0x0C; data = 0x000C } : packet);
         ];
       tm_ocf = Some 0xDEADBEEF;
       tm_fecf = Some 0xCAFE;
@@ -3243,9 +3239,9 @@ let test_tm_like_roundtrip () =
   Alcotest.(check int) "hdr" original.tm_hdr decoded.tm_hdr;
   Alcotest.(check int) "packet count" 3 (List.length decoded.tm_packets);
   List.iter2
-    (fun o d ->
-      Alcotest.(check int) "pkt.id" o.pkt_id d.pkt_id;
-      Alcotest.(check int) "pkt.data" o.pkt_data d.pkt_data)
+    (fun (o : packet) (d : packet) ->
+      Alcotest.(check int) "pkt.id" o.id d.id;
+      Alcotest.(check int) "pkt.data" o.data d.data)
     original.tm_packets decoded.tm_packets;
   Alcotest.(check (option int)) "ocf" original.tm_ocf decoded.tm_ocf;
   Alcotest.(check (option int)) "fecf" original.tm_fecf decoded.tm_fecf

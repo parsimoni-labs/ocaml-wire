@@ -49,17 +49,17 @@ let test_simple_header_crash buf =
 
 (** Test ConstrainedPacket roundtrip with valid values *)
 let test_constrained_packet_roundtrip pkt_type pkt_length =
-  let pkt_type = abs pkt_type mod 4 in
-  let pkt_length = abs pkt_length mod 1025 in
-  let original = Schema.{ pkt_type; pkt_length } in
+  let type_ = abs pkt_type mod 4 in
+  let length = abs pkt_length mod 1025 in
+  let original = Schema.{ type_; length } in
   match encode_record Schema.constrained_packet_codec original with
   | Error _ -> Alcobar.fail "encode failed"
   | Ok encoded -> (
       match decode_record Schema.constrained_packet_codec encoded with
       | Ok decoded ->
-          if original.pkt_type <> decoded.pkt_type then
+          if original.type_ <> decoded.type_ then
             Alcobar.fail "pkt_type mismatch";
-          if original.pkt_length <> decoded.pkt_length then
+          if original.length <> decoded.length then
             Alcobar.fail "pkt_length mismatch"
       | Error _ -> Alcobar.fail "decode failed")
 
