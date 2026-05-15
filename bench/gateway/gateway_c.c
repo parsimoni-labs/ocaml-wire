@@ -41,8 +41,7 @@ static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
   if (checksum != NULL) {
     *checksum = hash_int(hash_int(*checksum, vcid), fhp);
   } else {
-    volatile int keep = vcid + fhp;
-    (void)keep;
+    wire_compiler_barrier((uint64_t)(vcid + fhp));
   }
 
   SpacePacketFields sp = {0};
@@ -56,8 +55,7 @@ static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
     if (checksum != NULL) {
       *checksum = hash_int(hash_int(*checksum, apid), seq);
     } else {
-      volatile int keep = apid + seq;
-      (void)keep;
+      wire_compiler_barrier((uint64_t)(apid + seq));
     }
     off += pkt_size;
   }

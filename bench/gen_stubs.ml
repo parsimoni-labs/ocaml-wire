@@ -142,18 +142,17 @@ let generate_c oc =
       pr "  const uint32_t item_size = %d;\n" item_size;
       pr "  const uint32_t n_items = len / item_size;\n";
       pr "  int count = Int_val(v_n);\n";
-      pr "  volatile uint64_t result = 0;\n";
       pr "  if (n_items == 0) CAMLreturn(Val_int(0));\n";
       pr "  %sFields ctx = {0};\n" ep;
       pr "  int64_t t0 = now_ns();\n";
       pr "  for (int i = 0; i < count; i++) {\n";
       pr "    uint8_t *item = buf + ((uint32_t)i %% n_items) * item_size;\n";
       pr
-        "    result = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, item, \
-         item_size, 0);\n"
+        "    uint64_t r = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, \
+         item, item_size, 0);\n"
         ep ep;
+      pr "    wire_compiler_barrier(r);\n";
       pr "  }\n";
-      pr "  (void)result;\n";
       pr "  int64_t t1 = now_ns();\n";
       pr "  CAMLreturn(Val_int(t1 - t0));\n";
       pr "}\n\n")

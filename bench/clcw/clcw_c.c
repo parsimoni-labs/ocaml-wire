@@ -43,8 +43,8 @@ CAMLprim value c_clcw_poll(value v_buf, value v_off, value v_n) {
 
   int n_words = buf_len / WORD_SIZE;
   int64_t t0 = now_ns();
-  volatile int anomalies = count_anomalies(buf, n_words, n);
-  (void)anomalies;
+  int anomalies = count_anomalies(buf, n_words, n);
+  wire_compiler_barrier((uint64_t)anomalies);
   int64_t t1 = now_ns();
   return Val_int(t1 - t0);
 }
