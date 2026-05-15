@@ -290,8 +290,8 @@ let rec build_populate : type a.
    Packing shift and mask into a single int lets [extract] be a direct
    [@inline always] function instead of an indirect closure call. *)
 type bf_info = {
-  bf_word_reader : bytes -> int -> int;
-  bf_packed : int; (* shift in bits 0-7, mask in bits 8+ *)
+  word_reader : bytes -> int -> int;
+  packed : int; (* shift in bits 0-7, mask in bits 8+ *)
 }
 
 type field_access =
@@ -351,11 +351,11 @@ type (_, _) readers =
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
-  bfc_base : bitfield_base;
-  bfc_bit_order : bit_order;
-  bfc_base_off : int; (* byte offset of base word within record *)
-  bfc_bits_used : int; (* bits consumed so far in current group *)
-  bfc_total_bits : int; (* 8, 16, or 32 *)
+  base : bitfield_base;
+  bit_order : bit_order;
+  base_off : int; (* byte offset of base word within record *)
+  bits_used : int; (* bits consumed so far in current group *)
+  total_bits : int; (* 8, 16, or 32 *)
 }
 
 (* Track the byte offset for the next field: static (constant) until we hit
@@ -649,32 +649,32 @@ let compile_action (cc : compile_ctx) (act : action option) :
 
 type ('f, 'r) record =
   | Record : {
-      r_name : string;
-      r_make : 'full;
-      r_readers : ('full, 'f) readers;
-      r_writers_rev : ('r -> bytes -> int -> unit) list;
-      r_size_of_value_rev : ('r -> int) list;
+      name : string;
+      make : 'full;
+      readers : ('full, 'f) readers;
+      writers_rev : ('r -> bytes -> int -> unit) list;
+      size_of_value_rev : ('r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [t_size_of_value]; encode uses that
              instead of the buffer-driven [t_wire_size.compute] when sizing
              scratch buffers, because the latter misreads variable tails
              (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
-      r_min_wire_size : int;
+      min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)
-      r_next_off : next_off; (* where the next field starts *)
-      r_fields_rev : Types.field list;
-      r_validators_rev :
+      next_off : next_off; (* where the next field starts *)
+      fields_rev : Types.field list;
+      validators_rev :
         (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
-      r_checkers_rev :
+      checkers_rev :
         (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
-      r_field_actions_rev : (string * compiled_action) list;
-      r_n_fields : int; (* count of named fields (for field indexing) *)
-      r_n_array_slots : int;
+      field_actions_rev : (string * compiled_action) list;
+      n_fields : int; (* count of named fields (for field indexing) *)
+      n_array_slots : int;
           (* fields + action-local vars (for array allocation) *)
       r_bf : bf_codec_state option;
-      r_field_access_rev : (string * field_access) list;
-      r_field_readers : field_reader list;
-      r_where : bool expr option;
+      field_access_rev : (string * field_access) list;
+      field_readers : field_reader list;
+      where : bool expr option;
     }
       -> ('f, 'r) record
 
@@ -708,23 +708,23 @@ type 'r t = {
 let record_start ?where name make =
   Record
     {
-      r_name = name;
-      r_make = make;
-      r_readers = Nil;
-      r_writers_rev = [];
-      r_size_of_value_rev = [];
-      r_min_wire_size = 0;
-      r_next_off = Static 0;
-      r_fields_rev = [];
-      r_validators_rev = [];
-      r_checkers_rev = [];
-      r_field_actions_rev = [];
-      r_n_fields = 0;
-      r_n_array_slots = 0;
+      name;
+      make;
+      readers = Nil;
+      writers_rev = [];
+      size_of_value_rev = [];
+      min_wire_size = 0;
+      next_off = Static 0;
+      fields_rev = [];
+      validators_rev = [];
+      checkers_rev = [];
+      field_actions_rev = [];
+      n_fields = 0;
+      n_array_slots = 0;
       r_bf = None;
-      r_field_access_rev = [];
-      r_field_readers = [];
-      r_where = where;
+      field_access_rev = [];
+      field_readers = [];
+      where;
     }
 
 let bind (f : 'a Field.t) get =
@@ -1086,18 +1086,18 @@ type ('a, 'r) compiled_field = {
       (* Writers that run strictly before [raw_writer] -- e.g. a bf_clear that
          opens a new packed base word. *)
   field_access : field_access;
-  size_delta : int; (* added to [r_min_wire_size] *)
-  next_off : next_off; (* new [r_next_off] *)
+  size_delta : int; (* added to [min_wire_size] *)
+  next_off : next_off; (* new [next_off] *)
   bf_after : bf_codec_state option;
   int_reader : bytes -> int -> int;
-      (* Entry stored in [r_field_readers] under the field name; const 0 for
+      (* Entry stored in [field_readers] under the field name; const 0 for
          composite types that have no int-array slot of their own. *)
   nested_readers : field_reader list;
       (* Embedded sub-codec field readers, shifted into the parent frame. *)
   validator_off : int; (* [-1] when the byte offset is dynamic *)
   populate : int array -> bytes -> int -> unit;
       (* Pre-built populate function for the int-array validator path; the
-         slot index (r_n_fields at the time the field is compiled) is baked
+         slot index (n_fields at the time the field is compiled) is baked
          in. Composite types use a no-op. *)
 }
 
@@ -1105,44 +1105,44 @@ type ('a, 'r) compiled_field = {
    separate so the per-type helpers do not need polymorphic recursion across
    the record's 'f type. *)
 type layout_ctx = {
-  lc_next_off : next_off;
-  lc_bf : bf_codec_state option;
-  lc_field_readers : field_reader list;
-  lc_n_fields : int;
+  next_off : next_off;
+  bf : bf_codec_state option;
+  field_readers : field_reader list;
+  n_fields : int;
 }
 
 let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
  fun (Record r) ->
   {
-    lc_next_off = r.r_next_off;
-    lc_bf = r.r_bf;
-    lc_field_readers = r.r_field_readers;
-    lc_n_fields = r.r_n_fields;
+    next_off = r.next_off;
+    bf = r.r_bf;
+    field_readers = r.field_readers;
+    n_fields = r.n_fields;
   }
 
 (* -- Layout helpers shared by per-type plans -- *)
 
 let static_off_of (ctx : layout_ctx) : int option =
-  match ctx.lc_next_off with Static n -> Some n | Dynamic _ -> None
+  match ctx.next_off with Static n -> Some n | Dynamic _ -> None
 
 let off_fn_of (ctx : layout_ctx) : bytes -> int -> int =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> fun _buf _base -> n
   | Dynamic f -> fun buf base -> f buf base - base
 
 (* Byte offset used as [sizeof_this] when compiling constraints/actions: a
    real static offset when known, the [-1] sentinel otherwise. *)
 let validator_off_of (ctx : layout_ctx) : int =
-  match ctx.lc_next_off with Static n -> n | Dynamic _ -> -1
+  match ctx.next_off with Static n -> n | Dynamic _ -> -1
 
 (* Field access that stores a constant or dynamic offset, based on [ctx]. *)
 let fixed_or_dynamic_fa (ctx : layout_ctx) : field_access =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> Fixed n
   | Dynamic _ -> Dynamic (off_fn_of ctx)
 
 let require_static_off (ctx : layout_ctx) ~what : int =
-  match ctx.lc_next_off with
+  match ctx.next_off with
   | Static n -> n
   | Dynamic _ ->
       invalid_arg
@@ -1233,12 +1233,11 @@ let compile_bits : type r.
   let total = bf_base_total_bits base in
   let static_off = require_static_off ctx ~what:"bitfields" in
   let base_off, bits_used, size_delta, extra_writers =
-    match ctx.lc_bf with
+    match ctx.bf with
     | Some bf
-      when bf_base_equal bf.bfc_base base
-           && bf.bfc_bit_order = bit_order
-           && bf.bfc_bits_used + width <= bf.bfc_total_bits ->
-        (bf.bfc_base_off, bf.bfc_bits_used, 0, [])
+      when bf_base_equal bf.base base && bf.bit_order = bit_order
+           && bf.bits_used + width <= bf.total_bits ->
+        (bf.base_off, bf.bits_used, 0, [])
     | _ ->
         let clear = build_bf_clear base static_off in
         ( static_off,
@@ -1255,14 +1254,14 @@ let compile_bits : type r.
   let bf_after =
     Some
       {
-        bfc_base = base;
-        bfc_bit_order = bit_order;
-        bfc_base_off = base_off;
-        bfc_bits_used = bits_used + width;
-        bfc_total_bits = total;
+        base;
+        bit_order;
+        base_off;
+        bits_used = bits_used + width;
+        total_bits = total;
       }
   in
-  let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
+  let populate = build_populate fld.typ ctx.n_fields raw_reader in
   {
     raw_reader;
     raw_writer;
@@ -1287,7 +1286,7 @@ let compile_codec_variable : type a r.
     (a, r) compiled_field =
  fun ctx ~get ~codec_decode ~codec_encode ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n ->
         let size_fn buf base = codec_size_of buf (base + n) in
         ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
@@ -1341,7 +1340,7 @@ let compile_codec : type a r.
         extra_writers = [];
         field_access = fixed_or_dynamic_fa ctx;
         size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
+        next_off = advance_next_off ctx.next_off fsize;
         bf_after = None;
         int_reader = null_int_reader;
         nested_readers;
@@ -1359,7 +1358,7 @@ let compile_codec : type a r.
    Without the dynamic case, two consecutive variable-size sub-codec fields
    trip [require_static_off]. *)
 let dynamic_optional_next_off ctx present_fn fsize =
-  let base_off = ctx.lc_next_off in
+  let base_off = ctx.next_off in
   Dynamic
     (fun buf base ->
       let off =
@@ -1398,7 +1397,7 @@ let compile_optional : type a r.
     (a option, r) compiled_field =
  fun ctx fld present inner ->
   let inner_size = field_wire_size inner in
-  let nfields = ctx.lc_n_fields in
+  let nfields = ctx.n_fields in
   match (present, inner_size) with
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
@@ -1409,15 +1408,15 @@ let compile_optional : type a r.
         ~raw_writer:(fun v buf off ->
           match get v with Some iv -> inner_writer buf off iv | None -> ())
         ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate:inner_populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> None)
         ~raw_writer:(fun _v _buf _off -> ())
-        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let inner_populate = build_populate inner nfields inner_reader in
       let get = fld.get in
@@ -1457,25 +1456,25 @@ let compile_optional_or : type a r.
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
-      let populate = build_populate fld.typ ctx.lc_n_fields inner_reader in
+      let populate = build_populate fld.typ ctx.n_fields inner_reader in
       optional_compiled ctx ~raw_reader:inner_reader
         ~raw_writer:(fun v buf off -> inner_writer buf off (get v))
         ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> default)
         ~raw_writer:(fun _v _buf _off -> ())
-        ~size_delta:0 ~next_off:ctx.lc_next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.lc_field_readers present in
+      let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
       let raw_reader buf base =
         if present_fn buf base then inner_reader buf base else default
       in
-      let populate = build_populate fld.typ ctx.lc_n_fields raw_reader in
+      let populate = build_populate fld.typ ctx.n_fields raw_reader in
       (* Encode is value-driven: the user always has a value, so always
          write [fsize] bytes. The gate is the decode-side oracle that
          chooses between the decoded inner and [default]. Round-trips
@@ -1485,7 +1484,7 @@ let compile_optional_or : type a r.
          back to [default]. *)
       let raw_writer v buf off = inner_writer buf off (get v) in
       optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.lc_next_off fsize)
+        ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
   | _ ->
       invalid_arg
@@ -1557,12 +1556,12 @@ let compile_repeat : type elt seq r.
      is [Dynamic], which previously tripped [require_static_off]. *)
   let off_fn, (field_access : field_access), validator_off =
     let sizeof_this : bytes -> int -> int =
-      match ctx.lc_next_off with
+      match ctx.next_off with
       | Static n -> fun _buf _base -> n
       | Dynamic prev_end -> fun buf base -> prev_end buf base - base
     in
-    let size_fn = compile_expr ~sizeof_this ctx.lc_field_readers size_expr in
-    match ctx.lc_next_off with
+    let size_fn = compile_expr ~sizeof_this ctx.field_readers size_expr in
+    match ctx.next_off with
     | Static n -> ((fun _buf _base -> n), Variable { off = n; size_fn }, n)
     | Dynamic prev_end ->
         let off_fn buf base = prev_end buf base - base in
@@ -1701,24 +1700,24 @@ let compile_var_size_fn : type a.
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
       let sizeof_this : bytes -> int -> int =
-        match ctx.lc_next_off with
+        match ctx.next_off with
         | Static n -> fun _buf _base -> n
         | Dynamic prev_end -> fun buf base -> prev_end buf base - base
       in
-      compile_expr ~sizeof_this ctx.lc_field_readers size_expr
+      compile_expr ~sizeof_this ctx.field_readers size_expr
 
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   let typ = fld.typ in
   let off_fn, validator_off =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n -> ((fun (_buf : bytes) (_base : int) -> n), n)
     | Dynamic prev_end -> ((fun buf base -> prev_end buf base - base), -1)
   in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
   let field_access : field_access =
-    match ctx.lc_next_off with
+    match ctx.next_off with
     | Static n -> Variable { off = n; size_fn }
     | Dynamic _ -> Variable_dynamic { off_fn; size_fn }
   in
@@ -1750,7 +1749,7 @@ let compile_var_bytes : type a r.
         in
         (raw_reader, raw_writer, int_reader)
   in
-  let populate = build_populate typ ctx.lc_n_fields raw_reader in
+  let populate = build_populate typ ctx.n_fields raw_reader in
   {
     raw_reader;
     raw_writer;
@@ -1806,14 +1805,14 @@ let compile_scalar_or_var : type a r.
         | Some v -> v
         | None -> 0
       in
-      let populate = build_populate typ ctx.lc_n_fields raw_reader in
+      let populate = build_populate typ ctx.n_fields raw_reader in
       {
         raw_reader;
         raw_writer;
         extra_writers = [];
         field_access = fixed_or_dynamic_fa ctx;
         size_delta = fsize;
-        next_off = advance_next_off ctx.lc_next_off fsize;
+        next_off = advance_next_off ctx.next_off fsize;
         bf_after = None;
         int_reader;
         nested_readers = [];
@@ -1877,20 +1876,18 @@ let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
     =
  fun (Record r) fld cf ->
-  let action_var_names =
+  let action_vanames =
     match fld.action with
     | None -> []
     | Some (Types.On_success stmts | Types.On_act stmts) ->
         List.fold_left action_vars [] stmts
   in
-  let n_extra_vars = List.length action_var_names in
-  let field_idx = r.r_n_fields in
+  let n_extra_vars = List.length action_vanames in
+  let field_idx = r.n_fields in
   let dummy_reader _buf _base = 0 in
   let cc_readers =
-    let base = (fld.name, dummy_reader) :: r.r_field_readers in
-    List.fold_left
-      (fun acc vn -> (vn, dummy_reader) :: acc)
-      base action_var_names
+    let base = (fld.name, dummy_reader) :: r.field_readers in
+    List.fold_left (fun acc vn -> (vn, dummy_reader) :: acc) base action_vanames
   in
   let idx = build_idx cc_readers in
   let cc = { idx; sizeof_this = cf.validator_off; field_pos = field_idx } in
@@ -1920,9 +1917,9 @@ let apply_compiled : type a f r.
     match act with None -> None | Some act_fn -> Some (fld.name, act_fn)
   in
   let byte_off = cf.validator_off in
-  let new_writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.r_writers_rev in
+  let new_writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev in
   let new_field_readers =
-    cf.nested_readers @ ((fld.name, cf.int_reader) :: r.r_field_readers)
+    cf.nested_readers @ ((fld.name, cf.int_reader) :: r.field_readers)
   in
   let field_typ = fld.typ in
   let field_get = fld.get in
@@ -1935,26 +1932,26 @@ let apply_compiled : type a f r.
   in
   Record
     {
-      r_name = r.r_name;
-      r_make = r.r_make;
-      r_readers = Snoc (r.r_readers, cf.raw_reader);
-      r_writers_rev = new_writers_rev;
-      r_size_of_value_rev = field_size_of_value :: r.r_size_of_value_rev;
-      r_min_wire_size = r.r_min_wire_size + cf.size_delta;
-      r_next_off = cf.next_off;
-      r_fields_rev = struct_field fld :: r.r_fields_rev;
-      r_validators_rev = (byte_off, full) :: r.r_validators_rev;
-      r_checkers_rev = (byte_off, check_only) :: r.r_checkers_rev;
-      r_field_actions_rev =
+      name = r.name;
+      make = r.make;
+      readers = Snoc (r.readers, cf.raw_reader);
+      writers_rev = new_writers_rev;
+      size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
+      min_wire_size = r.min_wire_size + cf.size_delta;
+      next_off = cf.next_off;
+      fields_rev = struct_field fld :: r.fields_rev;
+      validators_rev = (byte_off, full) :: r.validators_rev;
+      checkers_rev = (byte_off, check_only) :: r.checkers_rev;
+      field_actions_rev =
         (match faction with
-        | Some fa -> fa :: r.r_field_actions_rev
-        | None -> r.r_field_actions_rev);
-      r_n_fields = List.length new_field_readers;
-      r_n_array_slots = List.length new_field_readers + n_extra_vars;
+        | Some fa -> fa :: r.field_actions_rev
+        | None -> r.field_actions_rev);
+      n_fields = List.length new_field_readers;
+      n_array_slots = List.length new_field_readers + n_extra_vars;
       r_bf = cf.bf_after;
-      r_field_access_rev = (fld.name, cf.field_access) :: r.r_field_access_rev;
-      r_field_readers = new_field_readers;
-      r_where = r.r_where;
+      field_access_rev = (fld.name, cf.field_access) :: r.field_access_rev;
+      field_readers = new_field_readers;
+      where = r.where;
     }
 
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
@@ -2159,21 +2156,21 @@ let build_checked_decode raw_decode wire_size_info min_size =
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
   let codec_id = Atomic.fetch_and_add id_counter 1 in
-  let field_access = List.rev r.r_field_access_rev in
+  let field_access = List.rev r.field_access_rev in
   let wire_size_info =
-    match r.r_next_off with
+    match r.next_off with
     | Static n -> Fixed n
-    | Dynamic f -> Variable { min_size = r.r_min_wire_size; compute = f }
+    | Dynamic f -> Variable { min_size = r.min_wire_size; compute = f }
   in
-  let min_size = r.r_min_wire_size in
-  let writers = Array.of_list (List.rev r.r_writers_rev) in
+  let min_size = r.min_wire_size in
+  let writers = Array.of_list (List.rev r.writers_rev) in
   let n_writers = Array.length writers in
-  let raw_decode = build_decode r.r_make r.r_readers in
-  let validators = List.rev r.r_validators_rev in
-  let param_base = r.r_n_array_slots in
+  let raw_decode = build_decode r.make r.readers in
+  let validators = List.rev r.validators_rev in
+  let param_base = r.n_array_slots in
   (* Collect and index params *)
-  let struct_fields = List.rev r.r_fields_rev in
-  let param_handles = collect_param_handles struct_fields r.r_where in
+  let struct_fields = List.rev r.fields_rev in
+  let param_handles = collect_param_handles struct_fields r.where in
   let n_params = List.length param_handles in
   List.iteri
     (fun i (Param.Pack p) ->
@@ -2181,15 +2178,14 @@ let seal : type r. (r, r) record -> r t =
       p.ph_env_idx <- i)
     param_handles;
   let n_total = param_base + n_params in
-  let compiled_where = compile_where_clause r.r_field_readers r.r_where in
+  let compiled_where = compile_where_clause r.field_readers r.where in
   let validate_arr, populate, validate =
-    build_validators validators
-      (List.rev r.r_checkers_rev)
-      compiled_where struct_fields n_total
+    build_validators validators (List.rev r.checkers_rev) compiled_where
+      struct_fields n_total
   in
   (* Per-field action runners *)
-  let field_actions = List.rev r.r_field_actions_rev in
-  let size_funcs = Array.of_list (List.rev r.r_size_of_value_rev) in
+  let field_actions = List.rev r.field_actions_rev in
+  let size_funcs = Array.of_list (List.rev r.size_of_value_rev) in
   let n_size_funcs = Array.length size_funcs in
   let size_of_value v =
     let total = Stdlib.ref 0 in
@@ -2200,10 +2196,10 @@ let seal : type r. (r, r) record -> r t =
   in
   {
     t_id = codec_id;
-    t_name = r.r_name;
+    t_name = r.name;
     t_size_of_value = size_of_value;
     t_field_access = field_access;
-    t_field_readers = List.rev r.r_field_readers;
+    t_field_readers = List.rev r.field_readers;
     t_field_actions = field_actions;
     t_decode = build_checked_decode raw_decode wire_size_info min_size;
     t_encode =
@@ -2211,7 +2207,7 @@ let seal : type r. (r, r) record -> r t =
         let need = size_of_value v in
         if off + need > Bytes.length buf then
           Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
-            r.r_name need
+            r.name need
             (Bytes.length buf - off);
         for i = 0 to n_writers - 1 do
           writers.(i) v buf off
@@ -2225,7 +2221,7 @@ let seal : type r. (r, r) record -> r t =
     t_param_base = param_base;
     t_n_params = n_params;
     t_param_handles = param_handles;
-    t_where = r.r_where;
+    t_where = r.where;
   }
 
 (* -- Validator-only path: build a struct validator from [Types.struct_]
@@ -2236,41 +2232,41 @@ let seal : type r. (r, r) record -> r t =
       types share one code path with [Codec.decode]. *)
 
 type validator = {
-  vt_min_size : int;
-  vt_wire_size : wire_size_info;
-  vt_validate : bytes -> int -> unit;
+  min_size : int;
+  wire_size : wire_size_info;
+  validate : bytes -> int -> unit;
 }
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
 type validator_acc = {
-  va_validators_rev : (int * (int array -> bytes -> int -> unit)) list;
-  va_checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
-  va_field_readers : field_reader list;
-  va_n_fields : int;
-  va_n_array_slots : int;
-  va_min_size : int;
-  va_next_off : next_off;
-  va_bf : bf_codec_state option;
+  validators_rev : (int * (int array -> bytes -> int -> unit)) list;
+  checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
+  field_readers : field_reader list;
+  n_fields : int;
+  n_array_slots : int;
+  min_size : int;
+  next_off : next_off;
+  bf : bf_codec_state option;
 }
 
 let empty_validator_acc =
   {
-    va_validators_rev = [];
-    va_checkers_rev = [];
-    va_field_readers = [];
-    va_n_fields = 0;
-    va_n_array_slots = 0;
-    va_min_size = 0;
-    va_next_off = Static 0;
-    va_bf = None;
+    validators_rev = [];
+    checkers_rev = [];
+    field_readers = [];
+    n_fields = 0;
+    n_array_slots = 0;
+    min_size = 0;
+    next_off = Static 0;
+    bf = None;
   }
 
 let layout_ctx_of_validator_acc acc =
   {
-    lc_next_off = acc.va_next_off;
-    lc_bf = acc.va_bf;
-    lc_field_readers = acc.va_field_readers;
-    lc_n_fields = acc.va_n_fields;
+    next_off = acc.next_off;
+    bf = acc.bf;
+    field_readers = acc.field_readers;
+    n_fields = acc.n_fields;
   }
 
 (* Per-field step: open [Types.Field]'s existential ['a], build a fake
@@ -2281,33 +2277,33 @@ let layout_ctx_of_validator_acc acc =
    [Struct]-typed fields are handled specially -- [compile_field] does
    not support them (a struct has no [field_wire_size] without its inner
    fields being walked). For nested structs we build a sub-validator
-   recursively and inline its [vt_validate] at the right offset. Inner
+   recursively and inline its [validate] at the right offset. Inner
    field references stay scoped to the inner struct, matching the old
    [parse_struct_fields] semantics. *)
-(* Common access patterns over [va_next_off]: a fresh-buffer offset
+(* Common access patterns over [next_off]: a fresh-buffer offset
    function and a "previous end" helper that hides the static/dynamic
    split. *)
 let acc_off_fn (acc : validator_acc) : bytes -> int -> int =
-  match acc.va_next_off with
+  match acc.next_off with
   | Static n -> fun _buf _base -> n
   | Dynamic f -> fun buf base -> f buf base - base
 
 let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
-  match acc.va_next_off with
+  match acc.next_off with
   | Static n -> fun _buf base -> base + n
   | Dynamic f -> f
 
 (* Validator step for a [Struct]-typed field. [compile_field] doesn't
    accept [Struct] (it has no [field_wire_size] without walking inner
    fields), so build a sub-validator recursively and inline its
-   [vt_validate] at the right offset. *)
+   [validate] at the right offset. *)
 (* Build the [full] / [check_only] per-field validator functions and
    return the action var count. Takes only the non-existential fields
    of [compiled_field] ([populate], [validator_off]) so the caller can
    open the [Types.Field] existential, call [compile_field], and pass
    the relevant pieces here without leaking the field's ['a]. *)
 let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
-  let action_var_names =
+  let action_vanames =
     match action with
     | None -> []
     | Some (Types.On_success stmts | Types.On_act stmts) ->
@@ -2315,13 +2311,13 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let dummy_reader _buf _base = 0 in
   let cc_readers =
-    let base = (name, dummy_reader) :: acc.va_field_readers in
+    let base = (name, dummy_reader) :: acc.field_readers in
     List.fold_left
       (fun acc' vn -> (vn, dummy_reader) :: acc')
-      base action_var_names
+      base action_vanames
   in
   let idx = build_idx cc_readers in
-  let cc = { idx; sizeof_this = validator_off; field_pos = acc.va_n_fields } in
+  let cc = { idx; sizeof_this = validator_off; field_pos = acc.n_fields } in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
   let raise_check_failed () =
@@ -2340,34 +2336,30 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
     | Some f when not (f arr) -> raise_check_failed ()
     | _ -> ()
   in
-  (full, check_only, List.length action_var_names)
+  (full, check_only, List.length action_vanames)
 
 let rec apply_struct_field acc inner_struct =
   let inner_v = validator_of_struct inner_struct in
-  let static_off =
-    match acc.va_next_off with Static n -> n | Dynamic _ -> -1
-  in
+  let static_off = match acc.next_off with Static n -> n | Dynamic _ -> -1 in
   let off_fn = acc_off_fn acc in
-  let validator _arr buf base =
-    inner_v.vt_validate buf (base + off_fn buf base)
-  in
+  let validator _arr buf base = inner_v.validate buf (base + off_fn buf base) in
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
-    match (acc.va_next_off, inner_v.vt_wire_size) with
+    match (acc.next_off, inner_v.wire_size) with
     | Static n, Fixed sz -> (sz, Static (n + sz))
     | _, Fixed sz -> (sz, Dynamic (fun buf base -> prev_end buf base + sz))
     | _, Variable { min_size; compute } ->
         (min_size, Dynamic (fun buf base -> compute buf (prev_end buf base)))
   in
   {
-    va_validators_rev = (static_off, validator) :: acc.va_validators_rev;
-    va_checkers_rev = (static_off, validator) :: acc.va_checkers_rev;
-    va_field_readers = acc.va_field_readers;
-    va_n_fields = acc.va_n_fields;
-    va_n_array_slots = acc.va_n_array_slots;
-    va_min_size = acc.va_min_size + size_delta;
-    va_next_off = next_off;
-    va_bf = None;
+    validators_rev = (static_off, validator) :: acc.validators_rev;
+    checkers_rev = (static_off, validator) :: acc.checkers_rev;
+    field_readers = acc.field_readers;
+    n_fields = acc.n_fields;
+    n_array_slots = acc.n_array_slots;
+    min_size = acc.min_size + size_delta;
+    next_off;
+    bf = None;
   }
 
 and apply_field_to_validator_acc acc (Types.Field f) =
@@ -2392,17 +2384,17 @@ and apply_field_to_validator_acc acc (Types.Field f) =
           ~constraint_:f.constraint_
       in
       let new_field_readers =
-        cf.nested_readers @ ((name, cf.int_reader) :: acc.va_field_readers)
+        cf.nested_readers @ ((name, cf.int_reader) :: acc.field_readers)
       in
       {
-        va_validators_rev = (cf.validator_off, full) :: acc.va_validators_rev;
-        va_checkers_rev = (cf.validator_off, check_only) :: acc.va_checkers_rev;
-        va_field_readers = new_field_readers;
-        va_n_fields = List.length new_field_readers;
-        va_n_array_slots = List.length new_field_readers + n_extra_vars;
-        va_min_size = acc.va_min_size + cf.size_delta;
-        va_next_off = cf.next_off;
-        va_bf = cf.bf_after;
+        validators_rev = (cf.validator_off, full) :: acc.validators_rev;
+        checkers_rev = (cf.validator_off, check_only) :: acc.checkers_rev;
+        field_readers = new_field_readers;
+        n_fields = List.length new_field_readers;
+        n_array_slots = List.length new_field_readers + n_extra_vars;
+        min_size = acc.min_size + cf.size_delta;
+        next_off = cf.next_off;
+        bf = cf.bf_after;
       }
 
 and validator_of_struct (s : Types.struct_) : validator =
@@ -2410,24 +2402,24 @@ and validator_of_struct (s : Types.struct_) : validator =
     List.fold_left apply_field_to_validator_acc empty_validator_acc s.fields
   in
   let wire_size_info =
-    match acc.va_next_off with
+    match acc.next_off with
     | Static n -> Fixed n
-    | Dynamic f -> Variable { min_size = acc.va_min_size; compute = f }
+    | Dynamic f -> Variable { min_size = acc.min_size; compute = f }
   in
   let param_handles = collect_param_handles s.fields s.where in
   let n_params = List.length param_handles in
-  let param_base = acc.va_n_array_slots in
+  let param_base = acc.n_array_slots in
   List.iteri
     (fun i (Param.Pack p) ->
       p.ph_slot <- param_base + i;
       p.ph_env_idx <- i)
     param_handles;
   let n_total = param_base + n_params in
-  let compiled_where = compile_where_clause acc.va_field_readers s.where in
+  let compiled_where = compile_where_clause acc.field_readers s.where in
   let validate_arr, _populate, _validate =
     build_validators
-      (List.rev acc.va_validators_rev)
-      (List.rev acc.va_checkers_rev)
+      (List.rev acc.validators_rev)
+      (List.rev acc.checkers_rev)
       compiled_where s.fields n_total
   in
   (* Full validation: fire field actions and check the where clause.
@@ -2439,23 +2431,19 @@ and validator_of_struct (s : Types.struct_) : validator =
     if n_total > 0 then Array.fill arr 0 n_total 0;
     validate_arr arr buf off
   in
-  {
-    vt_min_size = acc.va_min_size;
-    vt_wire_size = wire_size_info;
-    vt_validate = validate;
-  }
+  { min_size = acc.min_size; wire_size = wire_size_info; validate }
 
-let validate_struct v buf off = v.vt_validate buf off
+let validate_struct (v : validator) buf off = v.validate buf off
 
-let struct_size_of v buf off =
-  match v.vt_wire_size with
+let struct_size_of (v : validator) buf off =
+  match v.wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
 
-let struct_min_size v = v.vt_min_size
+let struct_min_size (v : validator) = v.min_size
 
-let wire_size_info_of_validator v =
-  match v.vt_wire_size with
+let wire_size_info_of_validator (v : validator) =
+  match v.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable compute
 
@@ -2507,7 +2495,7 @@ let raw_decode t buf off = t.t_decode buf off
 let load_env_into_cells (t : 'r t) (env : Param.env) =
   List.iter
     (fun (Param.Pack p) ->
-      if p.ph_env_idx >= 0 then p.ph_cell := env.pe_slots.(p.ph_env_idx))
+      if p.ph_env_idx >= 0 then p.ph_cell := env.slots.(p.ph_env_idx))
     t.t_param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
@@ -2520,7 +2508,7 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
     (fun (Param.Pack p) ->
       if
         (not p.Types.ph_mutable) && p.ph_env_idx >= 0
-        && not env.pe_bound.(p.ph_env_idx)
+        && not env.bound.(p.ph_env_idx)
       then Some p.ph_name
       else None)
     t.t_param_handles
@@ -2554,9 +2542,9 @@ let wire_size_info t =
 
 let env t : Param.env =
   {
-    Types.pe_codec_id = t.t_id;
-    pe_slots = Array.make t.t_n_params 0;
-    pe_bound = Array.make t.t_n_params false;
+    Types.codec_id = t.t_id;
+    slots = Array.make t.t_n_params 0;
+    bound = Array.make t.t_n_params false;
   }
 
 let decode_exn ?env:e t buf off =
@@ -2564,7 +2552,7 @@ let decode_exn ?env:e t buf off =
   let arr = Array.make t.t_n_array_slots 0 in
   (match e with
   | Some (e : Param.env) when t.t_n_params > 0 ->
-      Array.blit e.pe_slots 0 arr t.t_param_base t.t_n_params
+      Array.blit e.slots 0 arr t.t_param_base t.t_n_params
   | _ -> ());
   t.t_validate_arr arr buf off;
   (match e with
@@ -2572,7 +2560,7 @@ let decode_exn ?env:e t buf off =
       List.iter
         (fun (Param.Pack p) ->
           let v = arr.(p.ph_slot) in
-          e.pe_slots.(p.ph_env_idx) <- v;
+          e.slots.(p.ph_env_idx) <- v;
           p.ph_cell := v)
         t.t_param_handles
   | None -> ());
@@ -2616,7 +2604,7 @@ let to_struct t =
   | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
 
 let validate ?env t buf off =
-  let env_slots = Option.map (fun (e : Param.env) -> e.pe_slots) env in
+  let env_slots = Option.map (fun (e : Param.env) -> e.slots) env in
   t.t_validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
@@ -2750,7 +2738,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            if e.pe_codec_id <> codec.t_id then
+            if e.codec_id <> codec.t_id then
               Fmt.invalid_arg
                 "Codec.get: env was not created by Codec.env for %S"
                 codec.t_name;
@@ -2760,12 +2748,12 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                 List.iter
                   (fun (Param.Pack p) ->
                     let v = arr.(p.ph_slot) in
-                    e.pe_slots.(p.ph_env_idx) <- v;
+                    e.slots.(p.ph_env_idx) <- v;
                     p.ph_cell := v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
-                  Array.blit e.pe_slots 0 arr param_base n_params )
+                  Array.blit e.slots 0 arr param_base n_params )
       in
       Staged.stage (fun buf off ->
           let v = read buf off in
@@ -2852,14 +2840,14 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
         | BF_U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
       in
       let mask = (1 lsl width) - 1 in
-      { bf_word_reader = word_reader; bf_packed = shift lor (mask lsl 8) }
+      { word_reader; packed = shift lor (mask lsl 8) }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
 let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
-  Staged.stage bf.bf_word_reader
+  Staged.stage bf.word_reader
 
 let[@inline always] extract (bf : bitfield) word =
-  let p = bf.bf_packed in
+  let p = bf.packed in
   (word lsr (p land 0xFF)) land (p lsr 8)
 
 (* -- Snapshot: batch bitfield access -- *)

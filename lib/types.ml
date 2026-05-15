@@ -202,10 +202,10 @@ and action_stmt =
   | Var of string * int expr
 
 type param_env = {
-  pe_codec_id : int;
-  pe_slots : int array;
-  pe_bound : bool array;
-      (* Parallel to [pe_slots]: one bit per slot, set by [Param.bind] so
+  codec_id : int;
+  slots : int array;
+  bound : bool array;
+      (* Parallel to [slots]: one bit per slot, set by [Param.bind] so
          encoders can reject envs that left an input param at its
          default-zero value. *)
 }

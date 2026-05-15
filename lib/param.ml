@@ -99,17 +99,17 @@ type env = Types.param_env
 
 let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   let iv = to_int p.Types.ph_typ v in
-  let slots = Array.copy env.pe_slots in
-  let bound = Array.copy env.pe_bound in
+  let slots = Array.copy env.slots in
+  let bound = Array.copy env.bound in
   if p.ph_env_idx >= 0 then begin
     slots.(p.ph_env_idx) <- iv;
     bound.(p.ph_env_idx) <- true
   end;
   p.ph_cell := iv;
-  { Types.pe_codec_id = env.pe_codec_id; pe_slots = slots; pe_bound = bound }
+  { Types.codec_id = env.codec_id; slots; bound }
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
   if p.Types.ph_env_idx < 0 then of_int p.ph_typ !(p.ph_cell)
-  else of_int p.ph_typ env.pe_slots.(p.ph_env_idx)
+  else of_int p.ph_typ env.slots.(p.ph_env_idx)
 
 type packed = Pack : ('a, 'k) t -> packed
