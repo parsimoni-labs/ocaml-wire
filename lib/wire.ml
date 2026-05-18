@@ -512,7 +512,7 @@ let write_string enc s =
 let encode_codec ~encode ~fixed_size ~size_of_value v enc =
   let sz = match fixed_size with Some n -> n | None -> size_of_value v in
   let tmp = Bytes.create sz in
-  encode v tmp 0;
+  let _ : int = encode v tmp 0 in
   write_string enc (Bytes.unsafe_to_string tmp)
 
 (* The single encoder kernel. Writes [v] to [enc]. Top-level expressions
@@ -720,14 +720,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
   | Where { inner; _ } -> encode_direct inner buf off v
   | Enum { base; _ } -> encode_direct base buf off v
-  | Codec { codec_encode; _ } ->
-      codec_encode v buf off;
-      let sz =
-        match field_wire_size typ with
-        | Some n -> n
-        | None -> failwith "encode_direct: Codec without static wire size"
-      in
-      off + sz
+  | Codec { codec_encode; _ } -> codec_encode v buf off
   | _ -> encode_via_writer typ buf off v
 
 let to_bytes typ v =
@@ -762,6 +755,8 @@ module Private = struct
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+  module Bitfield = Bitfield
+  module Uint_var = Uint_var
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

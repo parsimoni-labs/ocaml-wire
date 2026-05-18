@@ -164,7 +164,7 @@ and _ typ =
   | Codec : {
       codec_name : string;
       codec_decode : bytes -> int -> 'r;
-      codec_encode : 'r -> bytes -> int -> unit;
+      codec_encode : 'r -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_size_of : bytes -> int -> int;
       codec_size_of_value : 'r -> int;

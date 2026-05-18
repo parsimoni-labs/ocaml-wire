@@ -131,9 +131,10 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)
 
-val raw_encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
+val raw_encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> int
 (** [raw_encode ?env c r buf off] encodes a record without [where]-clause
-    validation. Same env semantics as {!encode}. Internal use. *)
+    validation and returns the offset after the written bytes. Same env
+    semantics as {!encode}. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
