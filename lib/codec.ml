@@ -655,8 +655,8 @@ type ('f, 'r) record =
       writers_rev : ('r -> bytes -> int -> unit) list;
       size_of_value_rev : ('r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
-             seal we sum them into [t_size_of_value]; encode uses that
-             instead of the buffer-driven [t_wire_size.compute] when sizing
+             seal we sum them into [size_of_value]; encode uses that
+             instead of the buffer-driven [wire_size.compute] when sizing
              scratch buffers, because the latter misreads variable tails
              (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
       min_wire_size : int;
@@ -685,24 +685,24 @@ type wire_size_info =
 let id_counter = Atomic.make 0
 
 type 'r t = {
-  t_id : int;
-  t_name : string;
-  t_size_of_value : 'r -> int;
-  t_field_access : (string * field_access) list;
-  t_field_readers : field_reader list;
-  t_field_actions : (string * compiled_action) list;
-  t_decode : bytes -> int -> 'r;
-  t_encode : 'r -> bytes -> int -> unit;
-  t_wire_size : wire_size_info;
-  t_struct_fields : Types.field list;
-  t_validate : ?env_slots:int array -> bytes -> int -> unit;
-  t_validate_arr : int array -> bytes -> int -> unit;
-  t_populate : int array -> bytes -> int -> unit;
-  t_n_array_slots : int;
-  t_param_base : int;
-  t_n_params : int;
-  t_param_handles : Param.packed list;
-  t_where : bool expr option;
+  id : int;
+  name : string;
+  size_of_value : 'r -> int;
+  field_access : (string * field_access) list;
+  field_readers : field_reader list;
+  field_actions : (string * compiled_action) list;
+  decode : bytes -> int -> 'r;
+  encode : 'r -> bytes -> int -> unit;
+  wire_size : wire_size_info;
+  struct_fields : Types.field list;
+  validate : ?env_slots:int array -> bytes -> int -> unit;
+  validate_arr : int array -> bytes -> int -> unit;
+  populate : int array -> bytes -> int -> unit;
+  n_array_slots : int;
+  param_base : int;
+  n_params : int;
+  param_handles : Param.packed list;
+  where : bool expr option;
 }
 
 let record_start ?where name make =
@@ -2195,14 +2195,14 @@ let seal : type r. (r, r) record -> r t =
     !total
   in
   {
-    t_id = codec_id;
-    t_name = r.name;
-    t_size_of_value = size_of_value;
-    t_field_access = field_access;
-    t_field_readers = List.rev r.field_readers;
-    t_field_actions = field_actions;
-    t_decode = build_checked_decode raw_decode wire_size_info min_size;
-    t_encode =
+    id = codec_id;
+    name = r.name;
+    size_of_value = size_of_value;
+    field_access = field_access;
+    field_readers = List.rev r.field_readers;
+    field_actions = field_actions;
+    decode = build_checked_decode raw_decode wire_size_info min_size;
+    encode =
       (fun v buf off ->
         let need = size_of_value v in
         if off + need > Bytes.length buf then
@@ -2212,16 +2212,16 @@ let seal : type r. (r, r) record -> r t =
         for i = 0 to n_writers - 1 do
           writers.(i) v buf off
         done);
-    t_wire_size = wire_size_info;
-    t_struct_fields = struct_fields;
-    t_validate = validate;
-    t_validate_arr = validate_arr;
-    t_populate = populate;
-    t_n_array_slots = n_total;
-    t_param_base = param_base;
-    t_n_params = n_params;
-    t_param_handles = param_handles;
-    t_where = r.where;
+    wire_size = wire_size_info;
+    struct_fields = struct_fields;
+    validate = validate;
+    validate_arr = validate_arr;
+    populate = populate;
+    n_array_slots = n_total;
+    param_base = param_base;
+    n_params = n_params;
+    param_handles = param_handles;
+    where = r.where;
   }
 
 (* -- Validator-only path: build a struct validator from [Types.struct_]
@@ -2464,28 +2464,28 @@ let view : type f r. string -> ?where:bool expr -> f -> (f, r) fields -> r t =
 
 let v = view
 
-let wire_size t =
-  match t.t_wire_size with
+let wire_size (t : _ t) =
+  match t.wire_size with
   | Fixed n -> n
   | Variable _ ->
       invalid_arg
         "Codec.wire_size: variable-size codec (use min_wire_size or \
          compute_wire_size instead)"
 
-let min_wire_size t =
-  match t.t_wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+let min_wire_size (t : _ t) =
+  match t.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
-let wire_size_at t buf off =
-  match t.t_wire_size with
+let wire_size_at (t : _ t) buf off =
+  match t.wire_size with
   | Fixed n -> n
   | Variable { compute; _ } -> compute buf off - off
 
-let size_of_value t v = t.t_size_of_value v
+let size_of_value (t : _ t) v = t.size_of_value v
 
-let is_fixed t =
-  match t.t_wire_size with Fixed _ -> true | Variable _ -> false
+let is_fixed (t : _ t) =
+  match t.wire_size with Fixed _ -> true | Variable _ -> false
 
-let raw_decode t buf off = t.t_decode buf off
+let raw_decode (t : _ t) buf off = t.decode buf off
 
 (* Copy each input param's env value into its [ph_cell]. The encode
    closures read [Param_ref p] via [!(p.ph_cell)] (see [bytes_leaves]
@@ -2496,7 +2496,7 @@ let load_env_into_cells (t : 'r t) (env : Param.env) =
   List.iter
     (fun (Param.Pack p) ->
       if p.ph_env_idx >= 0 then p.ph_cell := env.slots.(p.ph_env_idx))
-    t.t_param_handles
+    t.param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
@@ -2511,15 +2511,15 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
         && not env.bound.(p.ph_env_idx)
       then Some p.ph_name
       else None)
-    t.t_param_handles
+    t.param_handles
 
 let require_env t = function
-  | None when t.t_n_params = 0 -> ()
+  | None when t.n_params = 0 -> ()
   | None ->
       Fmt.invalid_arg
         "Codec.encode: codec %s has parameters; pass ?env (e.g. [Codec.env c \
          |> Param.bind p N])."
-        t.t_name
+        t.name
   | Some env -> (
       match unbound_params t env with
       | [] -> ()
@@ -2527,34 +2527,34 @@ let require_env t = function
           Fmt.invalid_arg
             "Codec.encode: codec %s has unbound input params [%s]; bind every \
              one before encoding."
-            t.t_name
+            t.name
             (String.concat ", " missing))
 
 let raw_encode ?env:e t v buf off =
   require_env t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
-  t.t_encode v buf off
+  t.encode v buf off
 
-let wire_size_info t =
-  match t.t_wire_size with
+let wire_size_info (t : _ t) =
+  match t.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
 
-let env t : Param.env =
+let env (t : _ t) : Param.env =
   {
-    Types.codec_id = t.t_id;
-    slots = Array.make t.t_n_params 0;
-    bound = Array.make t.t_n_params false;
+    Types.codec_id = t.id;
+    slots = Array.make t.n_params 0;
+    bound = Array.make t.n_params false;
   }
 
 let decode_exn ?env:e t buf off =
-  let v = t.t_decode buf off in
-  let arr = Array.make t.t_n_array_slots 0 in
+  let v = t.decode buf off in
+  let arr = Array.make t.n_array_slots 0 in
   (match e with
-  | Some (e : Param.env) when t.t_n_params > 0 ->
-      Array.blit e.slots 0 arr t.t_param_base t.t_n_params
+  | Some (e : Param.env) when t.n_params > 0 ->
+      Array.blit e.slots 0 arr t.param_base t.n_params
   | _ -> ());
-  t.t_validate_arr arr buf off;
+  t.validate_arr arr buf off;
   (match e with
   | Some (e : Param.env) ->
       List.iter
@@ -2562,7 +2562,7 @@ let decode_exn ?env:e t buf off =
           let v = arr.(p.ph_slot) in
           e.slots.(p.ph_env_idx) <- v;
           p.ph_cell := v)
-        t.t_param_handles
+        t.param_handles
   | None -> ());
   v
 
@@ -2572,10 +2572,10 @@ let decode ?env t buf off =
 let encode ?env:e t v buf off =
   require_env t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
-  let expected = t.t_size_of_value v in
-  t.t_encode v buf off;
+  let expected = t.size_of_value v in
+  t.encode v buf off;
   let actual =
-    match t.t_wire_size with
+    match t.wire_size with
     | Fixed n -> n
     | Variable { compute; _ } -> compute buf off - off
   in
@@ -2586,7 +2586,7 @@ let encode ?env:e t v buf off =
     Fmt.invalid_arg
       "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
-      t.t_name expected actual
+      t.name expected actual
 
 let collect_params (fields : Types.field list) where =
   collect_param_handles fields where
@@ -2598,14 +2598,14 @@ let collect_params (fields : Types.field list) where =
       })
 
 let to_struct t =
-  let formals = collect_params t.t_struct_fields t.t_where in
-  match (formals, t.t_where) with
-  | [], None -> struct' t.t_name t.t_struct_fields
-  | _ -> param_struct t.t_name formals ?where:t.t_where t.t_struct_fields
+  let formals = collect_params t.struct_fields t.where in
+  match (formals, t.where) with
+  | [], None -> struct' t.name t.struct_fields
+  | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
-let validate ?env t buf off =
+let validate ?env (t : _ t) buf off =
   let env_slots = Option.map (fun (e : Param.env) -> e.slots) env in
-  t.t_validate ?env_slots buf off
+  t.validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
    For Fixed: use build_field_reader which handles Where/Enum/Map.
@@ -2717,33 +2717,33 @@ let rec build_staged_writer : type a.
   | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.set: unsupported variable-size field type"
 
-let field_access codec name =
-  match List.assoc_opt name codec.t_field_access with
+let field_access (codec : _ t) name =
+  match List.assoc_opt name codec.field_access with
   | Some a -> a
   | None ->
-      Fmt.invalid_arg "Codec: field %S not found in codec %S" name codec.t_name
+      Fmt.invalid_arg "Codec: field %S not found in codec %S" name codec.name
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
-  match List.assoc_opt f.name codec.t_field_actions with
+  match List.assoc_opt f.name codec.field_actions with
   | None -> Staged.stage read
   | Some act ->
-      let arr = Array.make codec.t_n_array_slots 0 in
+      let arr = Array.make codec.n_array_slots 0 in
       let n = Array.length arr in
-      let populate = codec.t_populate in
-      let n_params = codec.t_n_params in
+      let populate = codec.populate in
+      let n_params = codec.n_params in
       let sync, blit_input =
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            if e.codec_id <> codec.t_id then
+            if e.codec_id <> codec.id then
               Fmt.invalid_arg
                 "Codec.get: env was not created by Codec.env for %S"
-                codec.t_name;
-            let param_handles = codec.t_param_handles in
-            let param_base = codec.t_param_base in
+                codec.name;
+            let param_handles = codec.param_handles in
+            let param_base = codec.param_base in
             ( (fun arr ->
                 List.iter
                   (fun (Param.Pack p) ->
@@ -2769,9 +2769,9 @@ let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
   let access = field_access codec f.name in
   Staged.stage (build_staged_writer f.typ access)
 
-let name t = t.t_name
-let field_readers t = t.t_field_readers
-let pp ppf t = Fmt.string ppf t.t_name
+let name (t : _ t) = t.name
+let field_readers (t : _ t) = t.field_readers
+let pp ppf (t : _ t) = Fmt.string ppf t.name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
 
 (* -- Slice navigation: zero-copy access to the offset/length of a
