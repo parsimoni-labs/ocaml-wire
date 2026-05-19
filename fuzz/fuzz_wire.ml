@@ -300,11 +300,11 @@ let check_optional_encode_totality label codec ~roundtrip original =
       if not roundtrip then fail (label ^ " accepted an inconsistent value");
       let ws = Wire.Codec.wire_size_at codec buf 0 in
       if ws <> len then
-        fail (Fmt.str "%s wire size: expected %d got %d" label len ws);
+        failf "%s wire size: expected %d got %d" label len ws;
       let decoded =
         match Wire.Codec.decode codec buf 0 with
         | Ok v -> v
-        | Error e -> fail (Fmt.str "%s decode: %a" label Wire.pp_parse_error e)
+        | Error e -> failf "%s decode: %a" label Wire.pp_parse_error e
       in
       if not (optional_equal original decoded) then
         fail (label ^ " roundtrip mismatch")
@@ -663,7 +663,7 @@ let test_depsize_slice_roundtrip payload_str =
   let decoded =
     match Wire.Codec.decode slice_msg_codec buf 0 with
     | Ok v -> v
-    | Error e -> fail (Fmt.str "depsize slice decode: %a" Wire.pp_parse_error e)
+    | Error e -> failf "depsize slice decode: %a" Wire.pp_parse_error e
   in
   if decoded.sl_length <> len then fail "depsize slice length mismatch";
   let dec_payload =
@@ -683,7 +683,7 @@ let test_depsize_slice_empty () =
     match Wire.Codec.decode slice_msg_codec buf 0 with
     | Ok v -> v
     | Error e ->
-        fail (Fmt.str "depsize slice empty decode: %a" Wire.pp_parse_error e)
+        failf "depsize slice empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.sl_length <> 0 then fail "depsize slice empty length mismatch";
   if Slice.length decoded.sl_payload <> 0 then
@@ -718,7 +718,7 @@ let test_depsize_array_roundtrip payload_str =
   let decoded =
     match Wire.Codec.decode array_msg_codec buf 0 with
     | Ok v -> v
-    | Error e -> fail (Fmt.str "depsize array decode: %a" Wire.pp_parse_error e)
+    | Error e -> failf "depsize array decode: %a" Wire.pp_parse_error e
   in
   if decoded.ba_length <> len then fail "depsize array length mismatch";
   if decoded.ba_data <> payload_str then fail "depsize array data mismatch"
@@ -731,7 +731,7 @@ let test_depsize_array_empty () =
     match Wire.Codec.decode array_msg_codec buf 0 with
     | Ok v -> v
     | Error e ->
-        fail (Fmt.str "depsize array empty decode: %a" Wire.pp_parse_error e)
+        failf "depsize array empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.ba_length <> 0 then fail "depsize array empty length mismatch";
   if decoded.ba_data <> "" then fail "depsize array empty data mismatch"
@@ -776,7 +776,7 @@ let test_depsize_tagged_roundtrip payload_str tag =
     match Wire.Codec.decode tagged_msg_codec buf 0 with
     | Ok v -> v
     | Error e ->
-        fail (Fmt.str "depsize tagged decode: %a" Wire.pp_parse_error e)
+        failf "depsize tagged decode: %a" Wire.pp_parse_error e
   in
   if decoded.tm_length <> len then fail "depsize tagged length mismatch";
   let dec_payload =
@@ -798,7 +798,7 @@ let test_depsize_tagged_empty tag =
     match Wire.Codec.decode tagged_msg_codec buf 0 with
     | Ok v -> v
     | Error e ->
-        fail (Fmt.str "depsize tagged empty decode: %a" Wire.pp_parse_error e)
+        failf "depsize tagged empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.tm_length <> 0 then fail "depsize tagged empty length mismatch";
   if Slice.length decoded.tm_payload <> 0 then
@@ -820,7 +820,7 @@ let test_depsize_compute_wire_size payload_str =
   Wire.Codec.encode slice_msg_codec original buf 0;
   let ws = Wire.Codec.wire_size_at slice_msg_codec buf 0 in
   if ws <> total then
-    fail (Fmt.str "depsize wire_size_at: expected %d got %d" total ws)
+    failf "depsize wire_size_at: expected %d got %d" total ws
 
 (** {1 Test Registration} *)
 
@@ -940,9 +940,8 @@ let test_is_finite_agrees buf =
       with Wire.Parse_error _ -> false
     in
     if Float.is_finite raw <> codec_finite then
-      fail
-        (Fmt.str "is_finite disagreement: raw=%h Float.is_finite=%b codec=%b"
-           raw (Float.is_finite raw) codec_finite)
+      failf "is_finite disagreement: raw=%h Float.is_finite=%b codec=%b" raw
+        (Float.is_finite raw) codec_finite
 
 let test_float64_roundtrip buf =
   let buf = truncate buf in
@@ -954,7 +953,7 @@ let test_float64_roundtrip buf =
     let v' = Wire.of_string_exn Wire.float64be s in
     let bits = Int64.bits_of_float v and bits' = Int64.bits_of_float v' in
     if Int64.equal bits bits' || (Float.is_nan v && Float.is_nan v') then ()
-    else fail (Fmt.str "float64 bit-pattern roundtrip failed: %h vs %h" v v')
+    else failf "float64 bit-pattern roundtrip failed: %h vs %h" v v'
 
 let float_tests =
   [
@@ -1027,17 +1026,15 @@ let test_repeat_var_elem_roundtrip seed =
   let decoded =
     match Wire.Codec.decode fuzz_exts_codec buf 0 with
     | Ok x -> x
-    | Error e -> fail (Fmt.str "repeat-var decode: %a" Wire.pp_parse_error e)
+    | Error e -> failf "repeat-var decode: %a" Wire.pp_parse_error e
   in
   if List.length decoded.exts <> List.length v.exts then
-    fail
-      (Fmt.str "repeat-var count: expected %d, got %d" (List.length v.exts)
-         (List.length decoded.exts));
+    failf "repeat-var count: expected %d, got %d" (List.length v.exts)
+      (List.length decoded.exts);
   List.iter2
     (fun a b ->
       if a.ext_name <> b.ext_name then
-        fail
-          (Fmt.str "repeat-var name mismatch: %S vs %S" a.ext_name b.ext_name))
+        failf "repeat-var name mismatch: %S vs %S" a.ext_name b.ext_name)
     v.exts decoded.exts
 
 let repeat_tests =
