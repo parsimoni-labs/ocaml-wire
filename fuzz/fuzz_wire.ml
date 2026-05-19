@@ -822,6 +822,103 @@ let test_depsize_compute_wire_size payload_str =
   if ws <> total then
     fail (Fmt.str "depsize wire_size_at: expected %d got %d" total ws)
 
+(* -- multi-var sequential: [a_len:u16be][a_data:byte_array(a_len)]
+                             [b_len:u16be][b_data:byte_array(b_len)]
+                             [tail:u8] --
+
+   SSH-shape: two consecutive variable-size byte strings followed by a
+   fixed field. Catches encode/decode drift when the second variable
+   field's offset has to compose with the first's dynamic length. *)
+type multi_var_msg = {
+  mv_a_len : int;
+  mv_a_data : string;
+  mv_b_len : int;
+  mv_b_data : string;
+  mv_tail : int;
+}
+
+let f_mv_a_len = Wire.Field.v "ALen" Wire.uint16be
+
+let f_mv_a_data =
+  Wire.Field.v "AData" (Wire.byte_array ~size:(Wire.Field.ref f_mv_a_len))
+
+let f_mv_b_len = Wire.Field.v "BLen" Wire.uint16be
+
+let f_mv_b_data =
+  Wire.Field.v "BData" (Wire.byte_array ~size:(Wire.Field.ref f_mv_b_len))
+
+let f_mv_tail = Wire.Field.v "Tail" Wire.uint8
+
+let multi_var_msg_codec =
+  Wire.Codec.v "MultiVar"
+    (fun a_len a_data b_len b_data tail ->
+      {
+        mv_a_len = a_len;
+        mv_a_data = a_data;
+        mv_b_len = b_len;
+        mv_b_data = b_data;
+        mv_tail = tail;
+      })
+    Wire.Codec.
+      [
+        (f_mv_a_len $ fun r -> r.mv_a_len);
+        (f_mv_a_data $ fun r -> r.mv_a_data);
+        (f_mv_b_len $ fun r -> r.mv_b_len);
+        (f_mv_b_data $ fun r -> r.mv_b_data);
+        (f_mv_tail $ fun r -> r.mv_tail);
+      ]
+
+(* Split [seed] into two variable-size payloads. The first byte of each
+   half encodes its target length modulo a small band so the fuzz hits
+   {empty, short, medium} for each independently. *)
+let split_two seed =
+  let len = String.length seed in
+  if len < 2 then ("", "")
+  else
+    let band b cap =
+      let n = Char.code b mod (cap + 1) in
+      min n (len - 1)
+    in
+    let a_cap = band seed.[0] 64 in
+    let b_cap = band seed.[1] 64 in
+    let a_off = 2 in
+    let a_take = min a_cap (max 0 (len - a_off)) in
+    let b_off = a_off + a_take in
+    let b_take = min b_cap (max 0 (len - b_off)) in
+    let a = if a_take > 0 then String.sub seed a_off a_take else "" in
+    let b = if b_take > 0 then String.sub seed b_off b_take else "" in
+    (a, b)
+
+let test_multi_var_roundtrip seed tail =
+  let seed = truncate seed in
+  let a_data, b_data = split_two seed in
+  let tail = abs tail mod 256 in
+  let original =
+    {
+      mv_a_len = String.length a_data;
+      mv_a_data = a_data;
+      mv_b_len = String.length b_data;
+      mv_b_data = b_data;
+      mv_tail = tail;
+    }
+  in
+  let total = 2 + String.length a_data + 2 + String.length b_data + 1 in
+  let buf = Bytes.create total in
+  Wire.Codec.encode multi_var_msg_codec original buf 0;
+  let ws = Wire.Codec.wire_size_at multi_var_msg_codec buf 0 in
+  if ws <> total then failf "multi-var wire_size_at: expected %d got %d" total ws;
+  let decoded =
+    match Wire.Codec.decode multi_var_msg_codec buf 0 with
+    | Ok v -> v
+    | Error e -> failf "multi-var decode: %a" Wire.pp_parse_error e
+  in
+  if decoded.mv_a_data <> a_data then
+    failf "multi-var a data mismatch: %S vs %S" a_data decoded.mv_a_data;
+  if decoded.mv_b_data <> b_data then
+    failf "multi-var b data mismatch: %S vs %S" b_data decoded.mv_b_data;
+  if decoded.mv_tail <> tail then
+    failf "multi-var tail mismatch: %d vs %d" tail decoded.mv_tail
+
 (** {1 Test Registration} *)
 
 let parse_tests =
@@ -914,6 +1011,7 @@ let depsize_tests =
       test_depsize_tagged_roundtrip;
     test_case "depsize tagged empty" [ int ] test_depsize_tagged_empty;
     test_case "depsize wire_size_at" [ bytes ] test_depsize_compute_wire_size;
+    test_case "multi-var roundtrip" [ bytes; int ] test_multi_var_roundtrip;
   ]
 
 (* Fuzz the IEEE 754 boundary: any 8-byte input must either decode to a
