@@ -57,7 +57,7 @@ end
     lengths, byte-slice sizes, field constraints, and similar dependent
     structure. *)
 
-type 'a expr
+type 'a expr = 'a Types.expr
 type bitfield = U8 | U16 | U16be | U32 | U32be
 
 type bit_order = Types.bit_order =
@@ -84,7 +84,7 @@ type endian = Types.endian =
   | Little
   | Big  (** Byte order for multi-byte integers. *)
 
-type 'a typ
+type 'a typ = 'a Types.typ
 
 type param
 (** Untyped formal parameter declaration. Create via {!val:Param.input} or
@@ -406,6 +406,21 @@ module Field : sig
   (** [ref f] returns the expression referencing this field's underlying integer
       value. Works on any field whose wire type is or wraps an integer,
       including [bool] fields created with {!bit}. *)
+
+  val name : 'a t -> string
+  (** Field name. *)
+
+  val typ : 'a t -> 'a typ
+  (** Wire type. *)
+
+  val pp : Format.formatter -> 'a t -> unit
+  (** Pretty-print the field's name. *)
+
+  val constraint_ : 'a t -> bool expr option
+  (** Field constraint, if any. *)
+
+  val decl_of_packed : packed -> Types.field
+  (** The {!Types.field} declaration of a packed field. *)
 end
 
 (** {1 Type Descriptions}
@@ -1198,6 +1213,8 @@ module Private : sig
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+  module Bitfield = Bitfield
+  module Uint_var = Uint_var
 
   val param_name : param -> string
   (** Name of a formal parameter. *)

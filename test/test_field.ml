@@ -1,5 +1,5 @@
-module Field = Wire__Field
-module Types = Wire__Types
+module Field = Wire.Field
+module Types = Wire.Private.Types
 
 let test_v_creates_named_field () =
   let f = Field.v "Version" Types.uint8 in

@@ -1,5 +1,5 @@
-module Bitfield = Wire__Bitfield
-module Types = Wire__Types
+module Bitfield = Wire.Private.Bitfield
+module Types = Wire.Private.Types
 
 let bf_u8 = Types.BF_U8
 let bf_u16_le = Types.BF_U16 Little

@@ -1,5 +1,5 @@
-module Uint_var = Wire__Uint_var
-module Types = Wire__Types
+module Uint_var = Wire.Private.Uint_var
+module Types = Wire.Private.Types
 
 let roundtrip ~endian ~size value () =
   let buf = Bytes.create size in
