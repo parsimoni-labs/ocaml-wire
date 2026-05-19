@@ -236,11 +236,10 @@ let test_optional_predicate_operator op_idx k flags =
   | Ok r ->
       let actual_present = r.ovr_body <> None in
       if actual_present <> expected_present then
-        fail
-          (Fmt.str "op=%d k=%d flags=0x%02x: expected present=%b got present=%b"
-             (abs op_idx mod 7)
-             k flags expected_present actual_present)
-  | Error e -> fail (Fmt.str "decode error: %a" Wire.pp_parse_error e)
+        failf "op=%d k=%d flags=0x%02x: expected present=%b got present=%b"
+          (abs op_idx mod 7)
+          k flags expected_present actual_present
+  | Error e -> failf "decode error: %a" Wire.pp_parse_error e
 
 (* Property: [Field.ref f] reads the same int the codec decoded for
    [f], for every typ shape that can host a ref. *)
@@ -262,7 +261,7 @@ let test_field_ref_matches_decode typ_idx v =
     in
     match Wire.Codec.decode c buf 0 with
     | Ok _ -> ()
-    | Error _ -> fail (Fmt.str "%s: decoded != ref for v=0x%02x" name v)
+    | Error _ -> failf "%s: decoded != ref for v=0x%02x" name v
   in
   match abs typ_idx mod 4 with
   | 0 -> check_int_pair "u8" (Wire.Field.v "F" Wire.uint8)
@@ -286,7 +285,7 @@ let test_field_ref_matches_decode typ_idx v =
       in
       match Wire.Codec.decode c buf 0 with
       | Ok _ -> ()
-      | Error _ -> fail (Fmt.str "opt: decoded != ref for v=0x%02x" v))
+      | Error _ -> failf "opt: decoded != ref for v=0x%02x" v)
 
 (** {1 Test Registration} *)
 
