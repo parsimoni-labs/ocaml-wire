@@ -50,6 +50,11 @@
   `codec_id`, `slots`, `bound`. Callers using `Param.bind` / `Param.get`
   are unaffected; code that pattern-matches the record or reads fields
   directly needs to update (#63, @samoht)
+- `Codec.raw_encode` and the `Codec` typ constructor's `codec_encode` now
+  return the offset after the written bytes (`int`) instead of `unit`.
+  `Codec.encode` is unaffected. Callers that bound `raw_encode` and
+  threaded its result need to discard the returned offset or use it as
+  the new running position (#65, @samoht)
 
 ### Documentation
 
