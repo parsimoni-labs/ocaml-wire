@@ -24,8 +24,27 @@ let struct_size s =
 
 let projection_structs = Demo_bench_cases.projection_structs
 
+(* Projection pair for a struct: a string per kind of field, naming the
+   extractor when the kind matches and a no-op constant otherwise. *)
+let projection_strings ~lower ~is_proj ~field_kinds =
+  if not is_proj then ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+  else
+    match field_kinds with
+    | [ (_, Wire.Everparse.Raw.Int64) ] ->
+        ("(fun _ _ -> 0)", Fmt.str "%s_projected_int64" lower)
+    | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ _ -> 0L)")
+    | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+
+(* [ffi_parse] uses [_parse_k] directly (the single C entry point) with a
+   no-op continuation. The OCaml-side record-returning [_parse] wrapper
+   adds an extra C-to-OCaml callback hop just to build a record we'd then
+   discard; the bench measures pure validation cost, so skip the wrapper. *)
+let noop_continuation ~n_args =
+  "(fun " ^ String.concat " " (List.init n_args (fun _ -> "_")) ^ " -> ())"
+
 let generate_stub_registry ppf structs projection_structs =
   let pr fmt = Fmt.pf ppf fmt in
+  let all_structs = structs @ projection_structs in
   pr "type stubs = {\n";
   pr "  check : bytes -> bool;\n";
   pr "  ffi_parse : bytes -> int -> unit;\n";
@@ -38,37 +57,21 @@ let generate_stub_registry ppf structs projection_structs =
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
       let lower = String.lowercase_ascii name in
-      let proj_int, proj_int64 =
-        let is_proj =
-          List.exists
-            (fun p -> Wire.Everparse.Raw.struct_name p = name)
-            projection_structs
-        in
-        if is_proj then
-          match Wire.Everparse.Raw.field_kinds s with
-          | [ (_, Wire.Everparse.Raw.Int64) ] ->
-              ("(fun _ _ -> 0)", Fmt.str "%s_projected_int64" lower)
-          | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ _ -> 0L)")
-          | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
-        else ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+      let is_proj =
+        List.exists
+          (fun p -> Wire.Everparse.Raw.struct_name p = name)
+          projection_structs
       in
-      (* [ffi_parse] uses [_parse_k] directly (the single C entry point)
-         with a no-op continuation. The OCaml-side record-returning
-         [_parse] wrapper adds an extra C-to-OCaml callback hop just to
-         build a record we'd then discard; the bench measures pure
-         validation cost, so skip the wrapper. *)
+      let field_kinds = Wire.Everparse.Raw.field_kinds s in
+      let proj_int, proj_int64 = projection_strings ~lower ~is_proj ~field_kinds in
       let n_args =
         List.length
           (Wire.Everparse.Raw.field_kinds
              (List.find
                 (fun p -> Wire.Everparse.Raw.struct_name p = name)
-                (structs @ projection_structs)))
+                all_structs))
       in
-      let cont =
-        "(fun "
-        ^ String.concat " " (List.init n_args (fun _ -> "_"))
-        ^ " -> ())"
-      in
+      let cont = noop_continuation ~n_args in
       pr
         "  | %S -> { check = %s_check; ffi_parse = (fun b off -> %s_parse_k %s \
          b off); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
