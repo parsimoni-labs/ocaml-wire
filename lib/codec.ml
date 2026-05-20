@@ -652,7 +652,7 @@ type ('f, 'r) record =
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
-      writers_rev : ('r -> bytes -> int -> int) list;
+      writers_rev : ('r -> bytes -> int -> int -> int) list;
       size_of_value_rev : ('r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -693,6 +693,9 @@ type 'r t = {
   field_actions : (string * compiled_action) list;
   decode : bytes -> int -> 'r;
   encode : 'r -> bytes -> int -> int;
+      (* Public encode entry. [encode v buf base] writes the record at
+         [base], threads each per-field writer's return as the next
+         writer's [write_off], and returns the final offset. *)
   wire_size : wire_size_info;
   struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
@@ -1081,13 +1084,16 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
    consumes it and produces the updated record state. *)
 type ('a, 'r) compiled_field = {
   raw_reader : bytes -> int -> 'a;
-  raw_writer : 'r -> bytes -> int -> int;
-      (* Returns the offset after the bytes this writer contributed.
-         Bitfield writers ignore the received offset (they use a
-         baked [base_off]) and return [base_off + base_size]. *)
-  extra_writers : ('r -> bytes -> int -> int) list;
+  raw_writer : 'r -> bytes -> int -> int -> int;
+      (* [raw_writer v buf base write_off] writes the field's bytes
+         starting at [write_off] in [buf] and returns the offset just
+         after them. [base] is the record's base offset, used by
+         buffer-driven helpers (size cross-checks, dynamic-gate cross
+         checks) -- the field's own write position comes from
+         [write_off]. *)
+  extra_writers : ('r -> bytes -> int -> int -> int) list;
       (* Writers that run strictly before [raw_writer] -- e.g. a bf_clear that
-         opens a new packed base word. Returns the input offset unchanged. *)
+         opens a new packed base word. Returns the input [write_off] unchanged. *)
   field_access : field_access;
   size_delta : int; (* added to [min_wire_size] *)
   next_off : next_off; (* new [next_off] *)
@@ -1186,23 +1192,15 @@ let inner_codec_accessors : type w.
               let fo = field_off_fn buf base in
               reader_at_0 buf (base + fo))
   in
+  (* Writer takes the absolute byte position to write at. The caller
+     gets this from the threaded [write_off]; no buffer-driven
+     [off_fn] lookup happens on the encode path. *)
   let writer : bytes -> int -> w -> int =
     match inner with
-    | Codec { codec_encode; _ } -> (
-        match field_off_static with
-        | Some fo -> fun buf off iv -> codec_encode iv buf (off + fo)
-        | None ->
-            fun buf off iv ->
-              let fo = field_off_fn buf off in
-              codec_encode iv buf (off + fo))
-    | _ -> (
+    | Codec { codec_encode; _ } -> fun buf off iv -> codec_encode iv buf off
+    | _ ->
         let enc = build_field_encoder inner in
-        match field_off_static with
-        | Some fo -> fun buf off iv -> enc buf (off + fo) iv
-        | None ->
-            fun buf off iv ->
-              let fo = field_off_fn buf off in
-              enc buf (off + fo) iv)
+        fun buf off iv -> enc buf off iv
   in
   (reader, writer)
 
@@ -1236,55 +1234,60 @@ let compile_bits : type r.
   let total = bf_base_total_bits base in
   let static_off = require_static_off ctx ~what:"bitfields" in
   let base_byte_size = bf_base_byte_size base in
-  let base_off, bits_used, size_delta, extra_writers =
+  let is_continuation =
     match ctx.bf with
-    | Some bf
-      when bf_base_equal bf.base base && bf.bit_order = bit_order
-           && bf.bits_used + width <= bf.total_bits ->
-        (bf.base_off, bf.bits_used, 0, [])
-    | _ ->
-        let clear = build_bf_clear base static_off in
-        ( static_off,
-          0,
-          base_byte_size,
-          [
-            (fun _v buf off ->
-              clear buf off;
-              off);
-          ] )
+    | Some bf ->
+        bf_base_equal bf.base base && bf.bit_order = bit_order
+        && bf.bits_used + width <= bf.total_bits
+    | None -> false
+  in
+  let base_off, bits_used, size_delta, extra_writers =
+    if is_continuation then
+      match ctx.bf with
+      | Some bf -> (bf.base_off, bf.bits_used, 0, [])
+      | None -> assert false
+    else
+      let clear_at = build_bf_clear base 0 in
+      ( static_off,
+        0,
+        base_byte_size,
+        [
+          (fun _v buf _base write_off ->
+            clear_at buf write_off;
+            write_off);
+        ] )
   in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used ~width in
   let raw_reader = build_bf_reader base base_off shift width in
-  let raw_writer_inner = build_bf_writer base base_off shift width in
+  let raw_writer_inner = build_bf_writer base 0 shift width in
   let get = fld.get in
-  let raw_writer v buf off =
-    raw_writer_inner buf off (get v);
-    off + base_off + base_byte_size
+  let back, advance =
+    if is_continuation then (base_byte_size, 0) else (0, base_byte_size)
   in
-  let field_access = Bitfield { base; byte_off = base_off; shift; width } in
-  let bf_after =
-    Some
-      {
-        base;
-        bit_order;
-        base_off;
-        bits_used = bits_used + width;
-        total_bits = total;
-      }
+  let raw_writer v buf _base write_off =
+    raw_writer_inner buf (write_off - back) (get v);
+    write_off + advance
   in
-  let populate = build_populate fld.typ ctx.n_fields raw_reader in
   {
     raw_reader;
     raw_writer;
     extra_writers;
-    field_access;
+    field_access = Bitfield { base; byte_off = base_off; shift; width };
     size_delta;
     next_off = Static (static_off + size_delta);
-    bf_after;
+    bf_after =
+      Some
+        {
+          base;
+          bit_order;
+          base_off;
+          bits_used = bits_used + width;
+          total_bits = total;
+        };
     int_reader = raw_reader;
     nested_readers = [];
     validator_off = static_off;
-    populate;
+    populate = build_populate fld.typ ctx.n_fields raw_reader;
   }
 
 let compile_codec_variable : type a r.
@@ -1315,7 +1318,7 @@ let compile_codec_variable : type a r.
   {
     raw_reader = (fun buf base -> codec_decode buf (base + off_fn buf base));
     raw_writer =
-      (fun v buf off -> codec_encode (get v) buf (off + off_fn buf off));
+      (fun v buf _base write_off -> codec_encode (get v) buf write_off);
     extra_writers = [];
     field_access;
     size_delta = 0;
@@ -1344,7 +1347,9 @@ let compile_codec : type a r.
   match codec_fixed_size with
   | Some fsize ->
       let raw_reader, inner_writer = inner_codec_accessors fld.typ ctx in
-      let raw_writer v buf off = inner_writer buf off (get v) in
+      let raw_writer v buf _base write_off =
+        inner_writer buf write_off (get v)
+      in
       {
         raw_reader;
         raw_writer;
@@ -1380,7 +1385,7 @@ let dynamic_optional_next_off ctx present_fn fsize =
 let optional_compiled : type a r.
     layout_ctx ->
     raw_reader:(bytes -> int -> a) ->
-    raw_writer:(r -> bytes -> int -> int) ->
+    raw_writer:(r -> bytes -> int -> int -> int) ->
     size_delta:int ->
     next_off:next_off ->
     populate:(int array -> bytes -> int -> unit) ->
@@ -1416,17 +1421,17 @@ let compile_optional : type a r.
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun buf base -> Some (inner_reader buf base))
-        ~raw_writer:(fun v buf off ->
+        ~raw_writer:(fun v buf _base write_off ->
           match get v with
-          | Some iv -> inner_writer buf off iv
-          | None -> off + fsize)
+          | Some iv -> inner_writer buf write_off iv
+          | None -> write_off + fsize)
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate:inner_populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> None)
-        ~raw_writer:(fun _v _buf off -> off)
+        ~raw_writer:(fun _v _buf _base write_off -> write_off)
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
@@ -1436,10 +1441,10 @@ let compile_optional : type a r.
       optional_compiled ctx
         ~raw_reader:(fun buf base ->
           if present_fn buf base then Some (inner_reader buf base) else None)
-        ~raw_writer:(fun v buf off ->
-          match (present_fn buf off, get v) with
-          | true, Some iv -> inner_writer buf off iv
-          | false, None -> off
+        ~raw_writer:(fun v buf base write_off ->
+          match (present_fn buf base, get v) with
+          | true, Some iv -> inner_writer buf write_off iv
+          | false, None -> write_off
           | true, None ->
               invalid_arg
                 "Codec.encode: optional field absent but presence predicate is \
@@ -1471,14 +1476,15 @@ let compile_optional_or : type a r.
       let get = fld.get in
       let populate = build_populate fld.typ ctx.n_fields inner_reader in
       optional_compiled ctx ~raw_reader:inner_reader
-        ~raw_writer:(fun v buf off -> inner_writer buf off (get v))
+        ~raw_writer:(fun v buf _base write_off ->
+          inner_writer buf write_off (get v))
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> default)
-        ~raw_writer:(fun _v _buf off -> off)
+        ~raw_writer:(fun _v _buf _base write_off -> write_off)
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
@@ -1495,7 +1501,9 @@ let compile_optional_or : type a r.
          choice; if the user sets the gate to [absent] while the value
          differs from [default], decoding loses the value and falls
          back to [default]. *)
-      let raw_writer v buf off = inner_writer buf off (get v) in
+      let raw_writer v buf _base write_off =
+        inner_writer buf write_off (get v)
+      in
       optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate
@@ -1596,9 +1604,9 @@ let compile_repeat : type elt seq r.
     | Some esz -> fun _buf _pos -> esz
     | None -> fun buf pos -> elem_size_of elem buf pos
   in
-  let raw_writer v buf off =
+  let raw_writer v buf _base write_off =
     let items = get v in
-    let pos = Stdlib.ref (off + off_fn buf off) in
+    let pos = Stdlib.ref write_off in
     seq.iter
       (fun item ->
         write_elem elem buf !pos item;
@@ -1648,16 +1656,15 @@ let var_bytes_writer : type a r.
     a typ ->
     (r -> a) ->
     (bytes -> int -> int) ->
-    (bytes -> int -> int) ->
     r ->
     bytes ->
     int ->
+    int ->
     int =
- fun typ get off_fn size_fn v buf off ->
-  let fo = off_fn buf off in
+ fun typ get size_fn v buf base write_off ->
   let value = get v in
   let check_len ~actual =
-    let expected = size_fn buf off in
+    let expected = size_fn buf base in
     if actual <> expected then
       Fmt.invalid_arg
         "Codec.encode: byte field length %d does not match expected %d \
@@ -1669,32 +1676,37 @@ let var_bytes_writer : type a r.
       let src = (value : Slice.t) in
       let len = Slice.length src in
       check_len ~actual:len;
-      Bytes.blit (Slice.bytes src) (Slice.first src) buf (off + fo) len;
-      off + fo + len
+      Bytes.blit (Slice.bytes src) (Slice.first src) buf write_off len;
+      write_off + len
   | Byte_array _ ->
       let s = (value : string) in
       let len = String.length s in
       check_len ~actual:len;
-      Bytes.blit_string s 0 buf (off + fo) len;
-      off + fo + len
+      Bytes.blit_string s 0 buf write_off len;
+      write_off + len
   | Byte_array_where _ ->
       let s = (value : string) in
       let len = String.length s in
       check_len ~actual:len;
-      Bytes.blit_string s 0 buf (off + fo) len;
-      off + fo + len
+      Bytes.blit_string s 0 buf write_off len;
+      write_off + len
   | All_bytes ->
       let s = (value : string) in
       let len = String.length s in
-      Bytes.blit_string s 0 buf (off + fo) len;
-      off + fo + len
+      Bytes.blit_string s 0 buf write_off len;
+      write_off + len
   | All_zeros ->
       let s = (value : string) in
       let len = String.length s in
-      Bytes.blit_string s 0 buf (off + fo) len;
-      off + fo + len
-  | Casetype _ -> build_field_encoder typ buf (off + fo) value
-  | Single_elem { elem; _ } -> build_field_encoder elem buf (off + fo) value
+      Bytes.blit_string s 0 buf write_off len;
+      write_off + len
+  | Casetype _ -> build_field_encoder typ buf write_off value
+  | Single_elem { elem; _ } ->
+      let n = size_fn buf base in
+      let inner_end = build_field_encoder elem buf write_off value in
+      if inner_end < write_off + n then
+        Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';
+      write_off + n
   | _ -> assert false
 
 let compile_var_size_fn : type a.
@@ -1753,18 +1765,17 @@ let compile_var_bytes : type a r.
           let sz = size_fn buf base in
           Uint_var.read endian buf (base + fo) sz
         in
-        let raw_writer : r -> bytes -> int -> int =
-         fun v buf off ->
-          let fo = off_fn buf off in
-          let sz = size_fn buf off in
-          Uint_var.write endian buf (off + fo) sz (get v);
-          off + fo + sz
+        let raw_writer : r -> bytes -> int -> int -> int =
+         fun v buf base write_off ->
+          let sz = size_fn buf base in
+          Uint_var.write endian buf write_off sz (get v);
+          write_off + sz
         in
         let int_reader : bytes -> int -> int = raw_reader in
         (raw_reader, raw_writer, int_reader)
     | _ ->
         let raw_reader = var_bytes_reader typ off_fn size_fn in
-        let raw_writer = var_bytes_writer typ fld.get off_fn size_fn in
+        let raw_writer = var_bytes_writer typ fld.get size_fn in
         let int_reader buf base =
           match int_of_typ_value typ (raw_reader buf base) with
           | Some v -> v
@@ -1811,13 +1822,8 @@ let compile_scalar_or_var : type a r.
       in
       let raw_encoder = build_field_encoder typ in
       let get = fld.get in
-      let raw_writer : r -> bytes -> int -> int =
-        match field_off_static with
-        | Some fo -> fun v buf off -> raw_encoder buf (off + fo) (get v)
-        | None ->
-            fun v buf off ->
-              let fo = field_off_fn buf off in
-              raw_encoder buf (off + fo) (get v)
+      let raw_writer : r -> bytes -> int -> int -> int =
+       fun v buf _base write_off -> raw_encoder buf write_off (get v)
       in
       let int_reader buf base =
         match int_of_typ_value typ (raw_reader buf base) with
@@ -2216,10 +2222,10 @@ let seal : type r. (r, r) record -> r t =
   {
     id = codec_id;
     name = r.name;
-    size_of_value = size_of_value;
-    field_access = field_access;
+    size_of_value;
+    field_access;
     field_readers = List.rev r.field_readers;
-    field_actions = field_actions;
+    field_actions;
     decode = build_checked_decode raw_decode wire_size_info min_size;
     encode =
       (fun v buf off ->
@@ -2228,11 +2234,11 @@ let seal : type r. (r, r) record -> r t =
           Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
             r.name need
             (Bytes.length buf - off);
-        let last = Stdlib.ref off in
+        let write_off = Stdlib.ref off in
         for i = 0 to n_writers - 1 do
-          last := writers.(i) v buf off
+          write_off := writers.(i) v buf off !write_off
         done;
-        !last);
+        !write_off);
     wire_size = wire_size_info;
     struct_fields;
     validate;
@@ -2594,12 +2600,7 @@ let encode ?env:e t v buf off =
   require_env t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
   let expected = t.size_of_value v in
-  let _ : int = t.encode v buf off in
-  let actual =
-    match t.wire_size with
-    | Fixed n -> n
-    | Variable { compute; _ } -> compute buf off - off
-  in
+  let actual = t.encode v buf off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
      of the value. Overrun is loud already. *)
@@ -2761,8 +2762,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         | Some (e : Param.env) ->
             if e.codec_id <> codec.id then
               Fmt.invalid_arg
-                "Codec.get: env was not created by Codec.env for %S"
-                codec.name;
+                "Codec.get: env was not created by Codec.env for %S" codec.name;
             let param_handles = codec.param_handles in
             let param_base = codec.param_base in
             ( (fun arr ->
