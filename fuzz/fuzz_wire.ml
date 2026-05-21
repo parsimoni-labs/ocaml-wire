@@ -300,8 +300,7 @@ let check_optional_encode_totality label codec ~roundtrip original =
   | () ->
       if not roundtrip then fail (label ^ " accepted an inconsistent value");
       let ws = Wire.Codec.wire_size_at codec buf 0 in
-      if ws <> len then
-        failf "%s wire size: expected %d got %d" label len ws;
+      if ws <> len then failf "%s wire size: expected %d got %d" label len ws;
       let decoded =
         match Wire.Codec.decode codec buf 0 with
         | Ok v -> v
@@ -563,6 +562,106 @@ let test_record_bool_roundtrip n =
             fail "bool record value mismatch"
       | Error _ -> fail "bool record roundtrip decode failed")
 
+type wrapped_bf_record = {
+  wb_raw : int;
+  wb_map : int;
+  wb_where : int;
+  wb_enum : int;
+  wb_flag : bool;
+  wb_pad : int;
+}
+
+let wrapped_bf_total_bits = function
+  | Wire.U8 -> 8
+  | Wire.U16 | Wire.U16be -> 16
+  | Wire.U32 | Wire.U32be -> 32
+
+let wrapped_bf_codec ?bit_order name base =
+  let bits ~width = Wire.bits ?bit_order ~width base in
+  let map_bf = Wire.map ~decode:Fun.id ~encode:Fun.id (bits ~width:1) in
+  let where_bf = Wire.where Wire.Expr.true_ (bits ~width:1) in
+  let enum_bf =
+    Wire.enum (name ^ "Enum")
+      [ ("A", 0); ("B", 1); ("C", 2); ("D", 3) ]
+      (bits ~width:2)
+  in
+  let pad_width = wrapped_bf_total_bits base - 6 in
+  Wire.Codec.v ("WrappedBf_" ^ name)
+    (fun raw map where enum flag pad ->
+      {
+        wb_raw = raw;
+        wb_map = map;
+        wb_where = where;
+        wb_enum = enum;
+        wb_flag = flag;
+        wb_pad = pad;
+      })
+    Wire.Codec.
+      [
+        (Wire.Field.v "Raw" (bits ~width:1) $ fun r -> r.wb_raw);
+        (Wire.Field.v "Map" map_bf $ fun r -> r.wb_map);
+        (Wire.Field.v "Where" where_bf $ fun r -> r.wb_where);
+        (Wire.Field.v "Enum" enum_bf $ fun r -> r.wb_enum);
+        (Wire.Field.v "Flag" (Wire.bit (bits ~width:1)) $ fun r -> r.wb_flag);
+        (Wire.Field.v "Pad" (bits ~width:pad_width) $ fun r -> r.wb_pad);
+      ]
+
+let wrapped_bf_cases =
+  [
+    ("U8_Msb", Wire.U8, Some Wire.Msb_first);
+    ("U8_Lsb", Wire.U8, Some Wire.Lsb_first);
+    ("U16_Msb", Wire.U16, Some Wire.Msb_first);
+    ("U16_Lsb", Wire.U16, Some Wire.Lsb_first);
+    ("U16be_Msb", Wire.U16be, Some Wire.Msb_first);
+    ("U16be_Lsb", Wire.U16be, Some Wire.Lsb_first);
+    ("U32_Msb", Wire.U32, Some Wire.Msb_first);
+    ("U32_Lsb", Wire.U32, Some Wire.Lsb_first);
+    ("U32be_Msb", Wire.U32be, Some Wire.Msb_first);
+    ("U32be_Lsb", Wire.U32be, Some Wire.Lsb_first);
+  ]
+
+let test_wrapped_bf_totality_case name base bit_order raw map where enum
+    flag_seed =
+  let codec =
+    match bit_order with
+    | None -> wrapped_bf_codec name base
+    | Some bit_order -> wrapped_bf_codec ~bit_order name base
+  in
+  let original =
+    {
+      wb_raw = raw land 1;
+      wb_map = map land 1;
+      wb_where = where land 1;
+      wb_enum = enum land 3;
+      wb_flag = flag_seed land 1 = 1;
+      wb_pad = 0;
+    }
+  in
+  let wire_size = Wire.Codec.wire_size codec in
+  let value_size = Wire.Codec.size_of_value codec original in
+  if value_size <> wire_size then
+    failf "%s wrapped bitfield size mismatch: wire_size=%d size_of_value=%d"
+      name wire_size value_size;
+  let buf = Bytes.create wire_size in
+  (try Wire.Codec.encode codec original buf 0
+   with Invalid_argument msg ->
+     failf "%s wrapped bitfield exact-buffer encode failed: %s" name msg);
+  match Wire.Codec.decode codec buf 0 with
+  | Ok decoded ->
+      if decoded <> original then
+        failf "%s wrapped bitfield roundtrip mismatch" name
+  | Error e ->
+      failf "%s wrapped bitfield decode failed: %a" name Wire.pp_parse_error e
+
+let wrapped_bf_record_tests =
+  List.map
+    (fun (name, base, bit_order) ->
+      test_case
+        ("wrapped bitfield size totality " ^ name)
+        [ int; int; int; int; int ]
+        (test_wrapped_bf_totality_case name base bit_order))
+    wrapped_bf_cases
+
 (** {1 Streaming: cross-slice boundary roundtrips} *)
 
 (* Parse from a chunked reader -- forces multi-byte values to straddle slices *)
@@ -683,8 +782,7 @@ let test_depsize_slice_empty () =
   let decoded =
     match Wire.Codec.decode slice_msg_codec buf 0 with
     | Ok v -> v
-    | Error e ->
-        failf "depsize slice empty decode: %a" Wire.pp_parse_error e
+    | Error e -> failf "depsize slice empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.sl_length <> 0 then fail "depsize slice empty length mismatch";
   if Slice.length decoded.sl_payload <> 0 then
@@ -731,8 +829,7 @@ let test_depsize_array_empty () =
   let decoded =
     match Wire.Codec.decode array_msg_codec buf 0 with
     | Ok v -> v
-    | Error e ->
-        failf "depsize array empty decode: %a" Wire.pp_parse_error e
+    | Error e -> failf "depsize array empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.ba_length <> 0 then fail "depsize array empty length mismatch";
   if decoded.ba_data <> "" then fail "depsize array empty data mismatch"
@@ -776,8 +873,7 @@ let test_depsize_tagged_roundtrip payload_str tag =
   let decoded =
     match Wire.Codec.decode tagged_msg_codec buf 0 with
     | Ok v -> v
-    | Error e ->
-        failf "depsize tagged decode: %a" Wire.pp_parse_error e
+    | Error e -> failf "depsize tagged decode: %a" Wire.pp_parse_error e
   in
   if decoded.tm_length <> len then fail "depsize tagged length mismatch";
   let dec_payload =
@@ -798,8 +894,7 @@ let test_depsize_tagged_empty tag =
   let decoded =
     match Wire.Codec.decode tagged_msg_codec buf 0 with
     | Ok v -> v
-    | Error e ->
-        failf "depsize tagged empty decode: %a" Wire.pp_parse_error e
+    | Error e -> failf "depsize tagged empty decode: %a" Wire.pp_parse_error e
   in
   if decoded.tm_length <> 0 then fail "depsize tagged empty length mismatch";
   if Slice.length decoded.tm_payload <> 0 then
@@ -820,8 +915,7 @@ let test_depsize_compute_wire_size payload_str =
   let buf = Bytes.create total in
   Wire.Codec.encode slice_msg_codec original buf 0;
   let ws = Wire.Codec.wire_size_at slice_msg_codec buf 0 in
-  if ws <> total then
-    failf "depsize wire_size_at: expected %d got %d" total ws
+  if ws <> total then failf "depsize wire_size_at: expected %d got %d" total ws
 
 (* -- multi-var sequential: [a_len:u16be][a_data:byte_array(a_len)]
                              [b_len:u16be][b_data:byte_array(b_len)]
@@ -907,7 +1001,8 @@ let test_multi_var_roundtrip seed tail =
   let buf = Bytes.create total in
   Wire.Codec.encode multi_var_msg_codec original buf 0;
   let ws = Wire.Codec.wire_size_at multi_var_msg_codec buf 0 in
-  if ws <> total then failf "multi-var wire_size_at: expected %d got %d" total ws;
+  if ws <> total then
+    failf "multi-var wire_size_at: expected %d got %d" total ws;
   let decoded =
     match Wire.Codec.decode multi_var_msg_codec buf 0 with
     | Ok v -> v
@@ -982,11 +1077,14 @@ let record_tests =
     test_case "record bool roundtrip" [ int ] test_record_bool_roundtrip;
     test_case "bf encode overflow" [ int; int; int; int ]
       test_bf_encode_overflow;
-    test_case "optional static true totality" [ int; int; int ]
-      test_optional_static_true_totality;
-    test_case "optional dynamic totality" [ int; int; int ]
-      test_optional_dynamic_totality;
   ]
+  @ wrapped_bf_record_tests
+  @ [
+      test_case "optional static true totality" [ int; int; int ]
+        test_optional_static_true_totality;
+      test_case "optional dynamic totality" [ int; int; int ]
+        test_optional_dynamic_totality;
+    ]
 
 let stream_tests =
   [

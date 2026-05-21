@@ -1948,11 +1948,13 @@ let apply_compiled : type a f r.
   in
   let field_typ = fld.typ in
   let field_get = fld.get in
-  (* Bitfields share a base byte; [cf.size_delta] is the correct
-     non-overlapping contribution. *)
+  (* Bitfields share a base word; [cf.size_delta] is the correct
+     non-overlapping contribution. Key this off the compiled access rather than
+     [field_typ]: wrapped bitfields such as [bit (bits ...)] arrive here as
+     [Map]/[Where]/[Enum] even though they still pack into the current word. *)
   let field_size_of_value =
-    match field_typ with
-    | Bits _ -> fun _ -> cf.size_delta
+    match cf.field_access with
+    | Bitfield _ -> fun _ -> cf.size_delta
     | _ -> fun v -> size_of_typ_value field_typ (field_get v)
   in
   Record
