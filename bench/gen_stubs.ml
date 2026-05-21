@@ -63,7 +63,9 @@ let generate_stub_registry ppf structs projection_structs =
           projection_structs
       in
       let field_kinds = Wire.Everparse.Raw.field_kinds s in
-      let proj_int, proj_int64 = projection_strings ~lower ~is_proj ~field_kinds in
+      let proj_int, proj_int64 =
+        projection_strings ~lower ~is_proj ~field_kinds
+      in
       let n_args =
         List.length
           (Wire.Everparse.Raw.field_kinds

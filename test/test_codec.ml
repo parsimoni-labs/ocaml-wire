@@ -476,6 +476,46 @@ let test_packed_bf_size () =
     "size_of_value matches wire_size" (Codec.wire_size codec)
     (Codec.size_of_value codec (0, 0))
 
+type packed_bool_header = {
+  pbh_magic : string;
+  pbh_version : int;
+  pbh_reserved : int;
+  pbh_flag : bool;
+}
+
+let packed_bool_header_codec =
+  Codec.v "PackedBoolHeader"
+    (fun magic version reserved flag ->
+      {
+        pbh_magic = magic;
+        pbh_version = version;
+        pbh_reserved = reserved;
+        pbh_flag = flag;
+      })
+    Codec.
+      [
+        (Field.v "Magic" (byte_array ~size:(int 4)) $ fun r -> r.pbh_magic);
+        (Field.v "Version" uint8 $ fun r -> r.pbh_version);
+        (Field.v "Reserved" (bits ~width:7 U8) $ fun r -> r.pbh_reserved);
+        (Field.v "Flag" (bit (bits ~width:1 U8)) $ fun r -> r.pbh_flag);
+      ]
+
+let test_packed_mapped_bf_size () =
+  let value =
+    { pbh_magic = "dtn!"; pbh_version = 4; pbh_reserved = 0; pbh_flag = true }
+  in
+  Alcotest.(check int)
+    "wire_size counts packed bool bitfield once" 6
+    (Codec.wire_size packed_bool_header_codec);
+  Alcotest.(check int)
+    "size_of_value matches wire_size" 6
+    (Codec.size_of_value packed_bool_header_codec value);
+  let buf = Bytes.create 6 in
+  Codec.encode packed_bool_header_codec value buf 0;
+  Alcotest.(check string)
+    "encoded contact header shape" "dtn!\x04\x01"
+    (Bytes.unsafe_to_string buf)
+
 let test_struct_of_codec_bitfield () =
   let s = Everparse.struct_of_codec bf32_codec in
   let m = module_ [ typedef s ] in
@@ -3803,6 +3843,8 @@ let suite =
         test_codec_bitfield_overflow_1bit;
       Alcotest.test_case "codec bitfield: size_of_value packed" `Quick
         test_packed_bf_size;
+      Alcotest.test_case "codec bitfield: size_of_value mapped bit" `Quick
+        test_packed_mapped_bf_size;
       Alcotest.test_case "encode: underrun raises" `Quick
         test_encode_underrun_raises;
       (* action semantics *)

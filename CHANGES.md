@@ -63,6 +63,13 @@
 
 ### Fixed
 
+- `Codec.size_of_value` no longer over-counts a packed bitfield reached
+  through a value wrapper such as `Wire.bit` or an enum/map over `bits`.
+  The per-field size was keyed off the field's logical type, so a wrapped
+  bit sharing a base byte (e.g. a 7-bit reserved field followed by a 1-bit
+  `bool` flag packed into one byte) reported an extra byte; `Codec.encode`
+  then raised a spurious `Invalid_argument` even though the writer emitted
+  the correct bytes (#72, @samoht)
 - `Codec.encode` now raises `Invalid_argument` when the writer emits fewer
   bytes than `Codec.size_of_value v` promised, so a buggy writer that
   leaves trailing bytes uninitialised fails loudly at the encode site
