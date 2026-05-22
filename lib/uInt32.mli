@@ -2,6 +2,9 @@
 
 type t = int
 
+val pp : Format.formatter -> t -> unit
+(** Pretty-printer for unsigned 32-bit values represented as OCaml integers. *)
+
 val le : bytes -> int -> t
 (** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
 

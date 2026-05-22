@@ -103,6 +103,8 @@ type t = {
   test_roundtrip : string -> result;
 }
 
+let pp ppf t = Fmt.pf ppf "%s(%d bytes)" t.name t.wire_size
+
 let harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
   let h = v ~name ~codec ~read ~write ~project ~equal ?ocaml_read () in
   let ws = wire_size h in

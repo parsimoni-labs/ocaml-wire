@@ -5,20 +5,20 @@ open Wire
 type inner = { tag : int; value : int }
 
 val f_inner_tag : int Field.t
-(** [f_inner_tag] is the field reference for [inner.tag]; reused by codecs that
-    depend on the parsed tag value. *)
+(** [f_inner_tag] is the field reference for the inner tag; reused by codecs
+    that depend on the parsed tag value. *)
 
 val f_inner_value : int Field.t
-(** [f_inner_value] is the field reference for [inner.value]. *)
+(** [f_inner_value] is the field reference for the inner value. *)
 
 val inner_codec : inner Codec.t
 (** [inner_codec] is the tag-prefixed inner record used as the building block
-    for [outer_codec], [repeat_codec], and many test cases. *)
+    for {!outer_codec}, {!repeat_codec}, and many test cases. *)
 
 type outer = { header : int; inner : inner; trailer : int }
 
 val outer_codec : outer Codec.t
-(** [outer_codec] embeds [inner_codec] between a header and trailer byte;
+(** [outer_codec] embeds {!inner_codec} between a header and trailer byte;
     exercises the [codec] field combinator. *)
 
 type l2 = { x : int }
@@ -29,11 +29,11 @@ val l2_codec : l2 Codec.t
 (** [l2_codec] is the innermost level of a 3-deep codec nesting. *)
 
 val l1_codec : l1 Codec.t
-(** [l1_codec] is the middle level, embedding [l2_codec]. *)
+(** [l1_codec] is the middle level, embedding {!l2_codec}. *)
 
 val l0_codec : l0 Codec.t
-(** [l0_codec] is the outermost level, embedding [l1_codec]; exercises two-level
-    nesting. *)
+(** [l0_codec] is the outermost level, embedding {!l1_codec}; exercises
+    two-level nesting. *)
 
 type opt_record = { hdr : int; payload : int option; trail : int }
 
@@ -50,11 +50,11 @@ val opt_codec_absent : opt_record Codec.t
 type container = { length : int; items : inner list }
 
 val f_cnt_length : int Field.t
-(** [f_cnt_length] is the field reference for [container.length], used to size
+(** [f_cnt_length] is the field reference for the container length, used to size
     the trailing [repeat] body. *)
 
 val repeat_codec : container Codec.t
-(** [repeat_codec] is a length-prefixed list of [inner] elements. *)
+(** [repeat_codec] is a length-prefixed list of {!type:inner} elements. *)
 
 type packet = { id : int; data : int }
 

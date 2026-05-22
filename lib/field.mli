@@ -10,6 +10,7 @@ type 'a t
 (** A named field carrying values of type ['a]. *)
 
 val pp : Format.formatter -> 'a t -> unit
+(** Pretty-print the field name. *)
 
 type 'a anon
 (** An anonymous (padding) field. Cannot be referenced. *)

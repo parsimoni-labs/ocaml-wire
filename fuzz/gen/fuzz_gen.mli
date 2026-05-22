@@ -226,7 +226,7 @@ val optional_dynamic : (int * int option) t
     depending on the gate byte. *)
 
 val optional_or_dynamic : (int * int) t
-(** [optional_or_dynamic] is the [optional_or] equivalent of
+(** [optional_or_dynamic] is the {!val-optional_or} equivalent of
     {!optional_dynamic}, using a fixed default value when absent. *)
 
 val finite_float64 : float t
@@ -246,9 +246,10 @@ val sizeof : (int * int) t
     references [Wire.sizeof_this] / [Wire.field_pos] / [Wire.sizeof]. *)
 
 val codec_where : (int * int) t
-(** [codec_where] generates for a two-[uint8] record whose [Codec.v] carries
-    [~where:(a < b)]. Positives satisfy the predicate, adversarials sit at the
-    equality boundary so the [where] check fires. *)
+(** [codec_where] generates for a two-{!val-uint8} record whose
+    {!module-Codec.val-v} carries [~where:(a < b)]. Positives satisfy the
+    predicate, adversarials sit at the equality boundary so the {!val-where}
+    check fires. *)
 
 (** {1 Casetype} *)
 
