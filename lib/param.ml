@@ -2,6 +2,8 @@ type input = Types.param_input
 type output = Types.param_output
 type ('a, 'k) t = ('a, 'k) Types.param_handle
 
+let pp ppf p = Fmt.string ppf p.Types.ph_name
+
 (* Per-typ converter from the OCaml representation to [int] and back. One
    match dispatches both directions; [to_int] and [of_int] just project
    the relevant field. Avoids drift between the parallel cases. *)

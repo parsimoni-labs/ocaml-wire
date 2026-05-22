@@ -20,6 +20,9 @@ type t = {
 }
 (** A type-erased diff test. *)
 
+val pp : Format.formatter -> t -> unit
+(** Pretty-print a diff test summary. *)
+
 val harness :
   name:string ->
   codec:'r Wire.Codec.t ->

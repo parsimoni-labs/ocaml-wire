@@ -58,6 +58,9 @@
 
 ### Documentation
 
+- Add odoc cross-reference links and the doc comments that were missing
+  across the public interfaces, and expose a `pp` printer on `UInt32`,
+  `UInt63`, `Param`, and `Wire.Diff` (#73, @samoht)
 - Type-check `README.md` and every public `.mli` under `mdx`
   (#39, @samoht)
 

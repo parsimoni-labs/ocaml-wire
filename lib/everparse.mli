@@ -63,6 +63,7 @@ type t = {
     schemas). *)
 
 val pp : Format.formatter -> t -> unit
+(** Pretty-print a schema summary. *)
 
 val filename : t -> string
 (** [filename s] is the [.3d] output filename for schema [s]. EverParse requires
@@ -89,7 +90,8 @@ type plug_field = {
 
 val plug_fields : t -> plug_field list
 (** [plug_fields s] enumerates the named fields of the source struct in
-    declaration order. Returns [[]] for schemas without a [source] struct. *)
+    declaration order. Returns [[]] for schemas without a {!field-source}
+    struct. *)
 
 val plug_setters : t -> (string * string) list
 (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
@@ -131,11 +133,12 @@ type field_action_form = No_action | On_act | On_success
 val field_action_forms :
   struct_ -> (string option * bool * field_action_form) list
 (** [field_action_forms st] enumerates the fields of [st] in declaration order.
-    Each tuple is [(name, is_bitfield, action_form)]: [name] is [None] for
-    anonymous fields; [is_bitfield] is [true] if the field's type is (or reduces
-    to) a bitfield; [action_form] is the currently attached action kind. Used by
-    tests to assert the [map_field_action] invariant: bitfields must carry
-    [On_act], scalars [On_success], anonymous fields [No_action]. *)
+    Each tuple is [(name, is_bitfield, action_form)]: {!field-name} is [None]
+    for anonymous fields; [is_bitfield] is [true] if the field's type is (or
+    reduces to) a bitfield; [action_form] is the currently attached action kind.
+    Used by tests to assert the [map_field_action] invariant: bitfields must
+    carry {!constructor-On_act}, scalars {!constructor-On_success}, anonymous
+    fields {!constructor-No_action}. *)
 
 val write_3d : outdir:string -> t list -> unit
 (** [write_3d ~outdir ts] writes one [.3d] file per schema in [outdir]. *)

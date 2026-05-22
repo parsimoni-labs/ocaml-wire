@@ -1,6 +1,8 @@
 (** Shared bitfield utilities. *)
 
 val byte_size : Types.bitfield_base -> int
+(** [byte_size base] is the number of bytes used by one packed bitfield base
+    word. *)
 
 val total_bits : Types.bitfield_base -> int
 (** Total bits in a bitfield base type (8, 16, or 32). *)

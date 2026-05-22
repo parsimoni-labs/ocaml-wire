@@ -146,6 +146,7 @@ module Param : sig
   (** Project to an untyped formal declaration (for 3D rendering). *)
 
   val name : ('a, 'k) t -> string
+  (** Parameter name. *)
 
   type env = Param.env
   (** Parameter environment. Create with {!Codec.env}, bind inputs with {!bind},
@@ -303,7 +304,7 @@ module Expr : sig
   (** Truncate to unsigned 32-bit range (mask [0xFFFFFFFF]). *)
 
   val to_uint64 : int expr -> int expr
-  (** 3D codegen cast. At runtime this is the identity -- OCaml [int] cannot
+  (** 3D codegen cast. At runtime this is the identity -- OCaml integers cannot
       represent the full unsigned 64-bit range. Use only for 3D output where
       EverParse needs an explicit [(UINT64)] cast annotation. *)
 end
@@ -405,7 +406,7 @@ module Field : sig
   val ref : 'a t -> int expr
   (** [ref f] returns the expression referencing this field's underlying integer
       value. Works on any field whose wire type is or wraps an integer,
-      including [bool] fields created with {!bit}. *)
+      including boolean fields created with {!bit}. *)
 
   val name : 'a t -> string
   (** Field name. *)
@@ -454,12 +455,12 @@ val uint63be : int typ
 (** Unsigned 63-bit big-endian integer carried on 8 bytes. *)
 
 val uint64 : int64 typ
-(** [uint64] is an unsigned 64-bit little-endian integer represented as [int64].
-*)
+(** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
+    64-bit integer. *)
 
 val uint64be : int64 typ
-(** [uint64be] is an unsigned 64-bit big-endian integer represented as [int64].
-*)
+(** [uint64be] is an unsigned 64-bit big-endian integer represented as an OCaml
+    64-bit integer. *)
 
 val int8 : int typ
 (** Signed 8-bit two's-complement integer. *)
@@ -471,11 +472,12 @@ val int16be : int typ
 (** Signed 16-bit big-endian integer. *)
 
 val int32 : int typ
-(** [int32] is a signed 32-bit little-endian integer, returned as OCaml [int]
-    (64-bit hosts only: on a 32-bit host, the top bit may not fit). *)
+(** [int32] is a signed 32-bit little-endian integer, returned as an OCaml
+    integer (64-bit hosts only: on a 32-bit host, the top bit may not fit). *)
 
 val int32be : int typ
-(** [int32be] is a signed 32-bit big-endian integer, returned as OCaml [int]. *)
+(** [int32be] is a signed 32-bit big-endian integer, returned as an OCaml
+    integer. *)
 
 val int64 : int64 typ
 (** Signed 64-bit little-endian integer. *)
@@ -500,8 +502,8 @@ val float64be : float typ
 val is_finite : float Field.t -> bool expr
 (** [is_finite f] is a constraint that holds iff [f]'s decoded IEEE 754 value is
     neither [NaN] nor [+/- infinity]. Compiles to a bit-mask check on the
-    field's exponent (against [0x7F80_0000] for [float32] and
-    [0x7FF0_0000_0000_0000] for [float64]); the same expression is emitted into
+    field's exponent (against [0x7F80_0000] for binary32 and
+    [0x7FF0_0000_0000_0000] for binary64); the same expression is emitted into
     the 3D output, so wire's OCaml decoder and EverParse's verified C decoder
     reject the same set of inputs. *)
 
@@ -620,9 +622,10 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** [enum name cases base] validates that the decoded integer is one of the
-    named values. The result is still [int] -- use {!variants} instead if you
-    want to decode to proper OCaml values. [enum] is mainly useful for 3D
-    projection where the name and cases appear in the generated [.3d] file. *)
+    named values. The result is still an OCaml integer -- use {!variants}
+    instead if you want to decode to proper OCaml values. [enum] is mainly
+    useful for 3D projection where the name and cases appear in the generated
+    [.3d] file. *)
 
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** [variants name cases base] maps integer values to OCaml values via a named
@@ -652,8 +655,8 @@ val default :
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. The discriminator typ
-    ['k] can be [int], [string], or any other typ with decidable equality; every
-    case must supply an explicit [~index]. *)
+    ['k] can be an integer, a string, or any other typ with decidable equality;
+    every case must supply an explicit [~index]. *)
 
 val size : 'a typ -> int option
 (** [size t] is the fixed wire size of a description, if known statically. *)
@@ -810,7 +813,7 @@ module Codec : sig
       {!wire_size}; for dynamic-size codecs, the result depends on [v]. *)
 
   val is_fixed : 'r t -> bool
-  (** [true] iff the codec has a statically known size. *)
+  (** Returns true iff the codec has a statically known size. *)
 
   val env : 'r t -> Param.env
   (** [env c] creates a fresh parameter environment for codec [c]. *)
@@ -841,7 +844,7 @@ module Codec : sig
   val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
   (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
       without constructing a record and without firing actions. [?env] supplies
-      bindings for any [Param.input] referenced in those clauses.
+      bindings for any {!val:Param.input} referenced in those clauses.
 
       Raises {!Validation_error} on failure. *)
 
@@ -1046,7 +1049,8 @@ module Everparse : sig
     struct_ -> (string option * bool * field_action_form) list
   (** [field_action_forms st] enumerates fields as [(name, is_bitfield, form)]
       tuples. Used by tests to assert the codegen invariant that bitfields carry
-      [On_act], scalars [On_success], anonymous fields [No_action]. *)
+      {!constructor:On_act}, scalars {!constructor:On_success}, anonymous fields
+      {!constructor:No_action}. *)
 
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
@@ -1220,7 +1224,7 @@ module Private : sig
   (** Name of a formal parameter. *)
 
   val param_is_mutable : param -> bool
-  (** [true] for output (mutable) parameters. *)
+  (** Returns true for output (mutable) parameters. *)
 
   val param_c_type : param -> string
   (** C type name of a parameter (e.g., ["uint16_t"]). *)

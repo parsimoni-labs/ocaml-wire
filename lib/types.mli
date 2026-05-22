@@ -389,11 +389,12 @@ val int16be : int typ
 (** 16-bit signed, big-endian. *)
 
 val int32 : int typ
-(** [int32] is a 32-bit signed little-endian integer, returned as OCaml [int]
-    (64-bit hosts only). *)
+(** [int32] is a 32-bit signed little-endian integer, returned as an OCaml
+    integer (64-bit hosts only). *)
 
 val int32be : int typ
-(** [int32be] is a 32-bit signed big-endian integer, returned as OCaml [int]. *)
+(** [int32be] is a 32-bit signed big-endian integer, returned as an OCaml
+    integer. *)
 
 val int64 : int64 typ
 (** 64-bit signed, little-endian. *)
@@ -434,7 +435,7 @@ val bf_uint32be : bitfield_base
 (** 32-bit bitfield base, big-endian. *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
-(** [bits ~width base] extracts [width] bits from a bitfield base. [bit_order]
+(** [bits ~width base] extracts [width] bits from a bitfield base. The bit order
     defaults to {!Msb_first}. *)
 
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
@@ -471,13 +472,13 @@ val byte_array_where :
   size:int expr -> per_byte:(int expr -> bool expr) -> string typ
 (** [byte_array_where ~size ~per_byte] is a byte span of [size] bytes where each
     byte must satisfy [per_byte]. The argument to [per_byte] is an expression
-    bound to the current byte's integer value. Decode raises [Parse_error] on
-    the first byte that violates the constraint; encode raises
-    [Invalid_argument]. *)
+    bound to the current byte's integer value. Decode raises
+    {!exception:Parse_error} on the first byte that violates the constraint;
+    encode raises [Invalid_argument]. *)
 
 val synth_name_of_elt_var : string -> string
 (** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
-    name derived from a [byte_array_where] element variable. Internal: used by
+    name derived from a {!byte_array_where} element variable. Internal: used by
     the EverParse projection. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
@@ -531,16 +532,16 @@ val default :
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. Every case must supply
-    an explicit [~index]; the discriminator type ['k] can be [int], [string], or
-    any other typ with decidable equality. *)
+    an explicit [~index]; the discriminator type ['k] can be an integer, a
+    string, or any other typ with decidable equality. *)
 
 val split_string_casetype_fields : struct_ -> struct_
-(** [split_string_casetype_fields s] rewrites each [Casetype] field of [s] whose
-    tag is not an int-shaped typ into two adjacent byte fields: the tag bytes
-    and a trailing [all_bytes] body. Used by the 3D projection so string-tagged
-    casetype dispatch becomes caller code instead of parser code, matching how
-    real protocol implementations like OpenSSH split the parse and dispatch
-    steps. *)
+(** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field
+    of [s] whose tag is not an int-shaped typ into two adjacent byte fields: the
+    tag bytes and a trailing {!all_bytes} body. Used by the 3D projection so
+    string-tagged casetype dispatch becomes caller code instead of parser code,
+    matching how real protocol implementations like OpenSSH split the parse and
+    dispatch steps. *)
 
 (** {1 Struct Constructors} *)
 
@@ -555,6 +556,7 @@ val struct_ : string -> field list -> struct_
 (** Construct a struct from fields. *)
 
 val struct_name : struct_ -> string
+(** Name of the struct declaration. *)
 
 val field_names : struct_ -> string list
 (** Named field names in declaration order. *)
@@ -736,4 +738,5 @@ val c_type_of : 'a typ -> string
 
 val ml_type_of : 'a typ -> string
 (** [ml_type_of typ] returns the OCaml type name for FFI stub generation:
-    ["int"] for integer types that fit in OCaml [int], ["int64"] for uint64. *)
+    ["int"] for integer types that fit in OCaml integers, ["int64"] for uint64.
+*)

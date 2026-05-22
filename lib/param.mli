@@ -7,6 +7,9 @@ type input = Types.param_input
 type output = Types.param_output
 type ('a, 'k) t = ('a, 'k) Types.param_handle
 
+val pp : Format.formatter -> ('a, 'k) t -> unit
+(** Pretty-print a parameter by name. *)
+
 val input : string -> 'a Types.typ -> ('a, input) t
 (** [input name typ] declares an input parameter. *)
 
@@ -17,6 +20,7 @@ val decl : ('a, 'k) t -> Types.param
 (** Project to an untyped formal declaration (for 3D rendering). *)
 
 val name : ('a, 'k) t -> string
+(** [name p] is the formal parameter name. *)
 
 val expr : ('a, 'k) t -> int Types.expr
 (** [expr p] returns the expression referencing this param. *)

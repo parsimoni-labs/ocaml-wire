@@ -45,6 +45,7 @@ val of_structs :
     need them directly. *)
 
 val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
+(** Generate C stubs that call the EverParse validators directly. *)
 
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
 (** Generate OCaml external declarations and record types for all structs. *)

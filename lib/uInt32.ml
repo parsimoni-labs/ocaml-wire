@@ -1,5 +1,7 @@
 type t = int
 
+let pp = Fmt.int
+
 let le buf off =
   Bytes.get_int32_le buf off |> Int32.to_int |> ( land ) 0xFFFF_FFFF
 
