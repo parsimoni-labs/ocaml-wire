@@ -70,11 +70,16 @@
 
 ### Fixed
 
+- `Codec.size_of_value` now counts a `Field.repeat`'s elements instead of
+  reporting zero for a dynamic byte budget. Like the casetype case in #78, a
+  buffer sized from `Codec.size_of_value` for a codec with a repeat field
+  under-allocated, so `Codec.encode` ran off the end with
+  `Invalid_argument "index out of bounds"` (#79, @samoht)
 - `Codec.size_of_value` now counts a `Wire.casetype` field's tag and
   matched-case body instead of reporting zero for it. Sizing a buffer with
   `Codec.size_of_value` for a codec containing a casetype field used to
   under-allocate, so `Codec.encode` then ran off the end with
-  `Invalid_argument "index out of bounds"` (#NN, @samoht)
+  `Invalid_argument "index out of bounds"` (#78, @samoht)
 - `Field.repeat` over a `Wire.casetype` element now encodes and decodes
   instead of raising `Failure "unsupported element type in repeat"`. The
   repeat element path had no case for a tag-dispatched union, which ruled

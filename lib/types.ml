@@ -1474,8 +1474,13 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
   | Single_elem { size = Int n; _ } -> n
   | Single_elem _ -> 0
-  | Repeat { size = Int n; _ } -> n
-  | Repeat _ -> 0
+  | Repeat { elem; seq = Seq_map s; _ } ->
+      (* Sum the actual element sizes from the value, like [Array]. The byte
+         budget ([size]) is only a literal when fixed; a dynamic budget left
+         this at 0, so [Codec.size_of_value] under-counted a repeat field. *)
+      let total = Stdlib.ref 0 in
+      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
+      !total
   | Array { elem; seq = Seq_map s; _ } ->
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
