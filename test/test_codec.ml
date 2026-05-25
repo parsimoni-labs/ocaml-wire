@@ -3001,6 +3001,22 @@ let test_repeat_primitive () =
   Alcotest.(check int) "n values" 3 (List.length r.ic_values);
   Alcotest.(check (list int)) "values" [ 0x1111; 0x2222; 0x3333 ] r.ic_values
 
+(* [Codec.size_of_value] must count a [Field.repeat]'s elements. With a
+   dynamic byte budget it used to report 0 for the repeat, so a buffer sized
+   from [size_of_value] under-allocated and [encode] ran off the end. *)
+let test_repeat_size_of_value () =
+  let v = { ic_count = 6; ic_values = [ 0x1111; 0x2222; 0x3333 ] } in
+  (* Count (1) + 3 * uint16be (6) = 7 *)
+  let n = Codec.size_of_value repeat_int_codec v in
+  Alcotest.(check int) "size_of_value" 7 n;
+  let buf = Bytes.create n in
+  Codec.encode repeat_int_codec v buf 0;
+  Alcotest.(check int)
+    "wire_size_at" 7
+    (Codec.wire_size_at repeat_int_codec buf 0);
+  let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
+  Alcotest.(check (list int)) "roundtrip" v.ic_values r.ic_values
+
 (* Repeat with trailer after *)
 
 type repeat_trailer = { rt_len : int; rt_items : inner list; rt_check : int }
@@ -4232,6 +4248,8 @@ let suite =
       Alcotest.test_case "repeat: encode" `Quick test_repeat_encode;
       Alcotest.test_case "repeat: roundtrip" `Quick test_repeat_roundtrip;
       Alcotest.test_case "repeat: primitive" `Quick test_repeat_primitive;
+      Alcotest.test_case "repeat: size_of_value" `Quick
+        test_repeat_size_of_value;
       Alcotest.test_case "casetype field: login" `Quick
         test_casetype_field_login;
       Alcotest.test_case "casetype field: logout" `Quick
