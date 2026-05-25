@@ -66,6 +66,12 @@
 
 ### Fixed
 
+- `Field.repeat` over a `Wire.casetype` element now encodes and decodes
+  instead of raising `Failure "unsupported element type in repeat"`. The
+  repeat element path had no case for a tag-dispatched union, which ruled
+  out a DHCP-style options TLV whose cases mix bare single-byte tags (PAD,
+  END) with length-prefixed bodies (#75, @samoht)
+
 - `Codec.size_of_value` no longer over-counts a packed bitfield reached
   through a value wrapper such as `Wire.bit` or an enum/map over `bits`.
   The per-field size was keyed off the field's logical type, so a wrapped

@@ -3786,6 +3786,79 @@ let test_bitorder_diff_start_newword () =
   Alcotest.(check int)
     "byte 1 = 0x05 (Lsb_first y)" 0x05 (Bytes.get_uint8 buf 1)
 
+(* -- [repeat] of a [casetype] with mixed-shape cases (DHCP-options TLV) --
+
+   Each option dispatches on a [u8] code. PAD (0) and END (255) are a bare tag
+   with no body ([unit]); every other code is a length-prefixed body
+   ([len:u8] + [data:byte_array(len)]). This exercises a casetype as a repeat
+   element with structurally different per-case lengths -- zero-length cases
+   beside variable-length ones. *)
+type dhcp_opt = Pad | End | Generic of string
+type opt_body = { data : string }
+
+let ob_len = Field.v "len" uint8
+let ob_data = Field.v "data" (byte_array ~size:(Field.ref ob_len))
+
+let opt_body_codec =
+  Codec.v "OptBody"
+    (fun _l d -> { data = d })
+    Codec.
+      [ (ob_len $ fun b -> String.length b.data); (ob_data $ fun b -> b.data) ]
+
+let dhcp_opt_typ : dhcp_opt typ =
+  casetype "DhcpOpt" uint8
+    [
+      case ~index:0 empty
+        ~inject:(fun () -> Pad)
+        ~project:(function Pad -> Some () | _ -> None);
+      case ~index:255 empty
+        ~inject:(fun () -> End)
+        ~project:(function End -> Some () | _ -> None);
+      case ~index:53 (codec opt_body_codec)
+        ~inject:(fun b -> Generic b.data)
+        ~project:(function Generic d -> Some { data = d } | _ -> None);
+    ]
+
+let dhcp_opt_size = function Pad | End -> 1 | Generic d -> 2 + String.length d
+
+(* Trailing options region sized by a leading byte budget. *)
+let dhcp_f_total = Field.v "total" uint8
+
+let dhcp_f_opts =
+  Field.repeat "opts" ~size:(Field.ref dhcp_f_total) dhcp_opt_typ
+
+let dhcp_codec =
+  Codec.v "DhcpOpts"
+    (fun _t xs -> xs)
+    Codec.
+      [
+        ( dhcp_f_total $ fun xs ->
+          List.fold_left (fun a o -> a + dhcp_opt_size o) 0 xs );
+        (dhcp_f_opts $ fun xs -> xs);
+      ]
+
+let test_repeat_casetype_decode () =
+  (* total=10: 35 03 'abc' | 00 | 35 01 'z' | ff *)
+  let buf = Bytes.of_string "\x0a\x35\x03abc\x00\x35\x01z\xff" in
+  let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
+  Alcotest.(check int) "count" 4 (List.length opts);
+  match opts with
+  | [ Generic "abc"; Pad; Generic "z"; End ] -> ()
+  | _ -> Alcotest.fail "unexpected options"
+
+let test_repeat_casetype_roundtrip () =
+  let v = [ Generic "abc"; Pad; Generic "z"; End ] in
+  let total = List.fold_left (fun a o -> a + dhcp_opt_size o) 0 v in
+  let buf = Bytes.create (1 + total) in
+  Codec.encode dhcp_codec v buf 0;
+  let decoded = decode_ok (Codec.decode dhcp_codec buf 0) in
+  Alcotest.(check bool) "roundtrip" true (decoded = v)
+
+let test_repeat_casetype_empty () =
+  let buf = Bytes.of_string "\x00" in
+  let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
+  Alcotest.(check int) "empty" 0 (List.length opts)
+
 (* -- Suite -- *)
 
 let suite =
@@ -4103,6 +4176,12 @@ let suite =
         test_casetype_field_roundtrip;
       Alcotest.test_case "casetype field: length-prefixed" `Quick
         test_length_prefixed_casetype;
+      Alcotest.test_case "repeat: casetype TLV decode" `Quick
+        test_repeat_casetype_decode;
+      Alcotest.test_case "repeat: casetype TLV roundtrip" `Quick
+        test_repeat_casetype_roundtrip;
+      Alcotest.test_case "repeat: casetype TLV empty" `Quick
+        test_repeat_casetype_empty;
       Alcotest.test_case "repeat: with trailer" `Quick test_repeat_with_trailer;
       Alcotest.test_case "repeat: variable size elements" `Quick
         test_repeat_variable_size_elements;
