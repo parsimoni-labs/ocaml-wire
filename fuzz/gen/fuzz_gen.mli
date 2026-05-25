@@ -157,6 +157,15 @@ val all_bytes : string t
 val all_zeros : string t
 (** [all_zeros] generates for {!Wire.all_zeros}. *)
 
+val zeroterm : string t
+(** [zeroterm] generates for {!Wire.zeroterm}. Positives are NUL-free strings;
+    the adversarial stream includes unterminated runs. *)
+
+val zeroterm_at_most : int -> string t
+(** [zeroterm_at_most n] generates for
+    [Wire.zeroterm_at_most ~size:(Wire.int n)]. Positives are NUL-free strings
+    capped at [n - 1] bytes so the terminator fits the region. *)
+
 (** {1 Wrappers} *)
 
 val nested : int -> 'a t -> 'a t
