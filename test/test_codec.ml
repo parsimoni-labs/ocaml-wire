@@ -3148,6 +3148,20 @@ let test_casetype_field_roundtrip () =
     "data roundtrip" true
     (original.ev_data = decoded.ev_data)
 
+(* [Codec.size_of_value] must count a casetype field's tag + matched-case
+   body. It used to drop the whole casetype to 0, so a buffer sized from it
+   was too short and [Codec.encode] ran off the end. *)
+let test_casetype_size_of_value () =
+  let original = { ev_ts = 123L; ev_data = `Login 0xabcd } in
+  (* ev_ts (8) + tag (1) + Login body uint16be (2) = 11 *)
+  let n = Codec.size_of_value casetype_field_codec original in
+  Alcotest.(check int) "size_of_value" 11 n;
+  let buf = Bytes.create n in
+  Codec.encode casetype_field_codec original buf 0;
+  let decoded = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Alcotest.(check int64) "ts" original.ev_ts decoded.ev_ts;
+  Alcotest.(check bool) "data" true (original.ev_data = decoded.ev_data)
+
 (* Length-prefixed casetype dispatch: [tag][length][body] where length
    bounds the inner casetype's tag + body. *)
 
@@ -4226,6 +4240,8 @@ let suite =
         test_casetype_field_default;
       Alcotest.test_case "casetype field: roundtrip" `Quick
         test_casetype_field_roundtrip;
+      Alcotest.test_case "casetype field: size_of_value" `Quick
+        test_casetype_size_of_value;
       Alcotest.test_case "casetype field: length-prefixed" `Quick
         test_length_prefixed_casetype;
       Alcotest.test_case "repeat: casetype TLV decode" `Quick

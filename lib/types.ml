@@ -1481,7 +1481,21 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
       !total
   | Apply { typ; _ } -> size_of_typ_value typ v
-  | Casetype _ -> 0
+  | Casetype { tag; cases; _ } ->
+      (* Tag bytes plus the matched case's body: find the branch whose
+         [project] accepts [v], then size its inner from the projected body.
+         Without this the value-driven size dropped the whole casetype to 0,
+         so [Codec.size_of_value] under-allocated and [encode] ran off the
+         buffer. *)
+      let tag_size = Option.value ~default:0 (inner_wire_size tag) in
+      let rec find = function
+        | [] -> tag_size
+        | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+            match cb_project v with
+            | Some body -> tag_size + size_of_typ_value cb_inner body
+            | None -> find rest)
+      in
+      find cases
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
