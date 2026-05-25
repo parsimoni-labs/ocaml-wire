@@ -37,6 +37,9 @@
 
 ### Changed
 
+- `memtrace` is now a regular dependency rather than test-only: the
+  benchmark libraries link it outside the test scope, so `opam install`
+  pulls it in (#76, @samoht)
 - Remove `Wire.optional` / `Wire.optional_or` / `Wire.repeat` /
   `Wire.repeat_seq` from the typ-level surface; use the matching
   `Field.*` combinators instead (#46, @samoht)

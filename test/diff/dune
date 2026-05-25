@@ -40,11 +40,12 @@
 ;
 ; Run with: BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/gen_c
 
+; The executable builds unconditionally (its deps are always available) so
+; gen_c.ml is covered by a live stanza; only the generation rule below, which
+; needs 3d.exe, stays gated on BUILD_EVERPARSE.
 (executable
  (name gen_c)
  (modules gen_c)
- (enabled_if
-  (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries wire wire.3d wire.stubs unix))
 
 (rule
