@@ -70,6 +70,11 @@
 
 ### Fixed
 
+- `Codec.size_of_value` now counts a `Wire.casetype` field's tag and
+  matched-case body instead of reporting zero for it. Sizing a buffer with
+  `Codec.size_of_value` for a codec containing a casetype field used to
+  under-allocate, so `Codec.encode` then ran off the end with
+  `Invalid_argument "index out of bounds"` (#NN, @samoht)
 - `Field.repeat` over a `Wire.casetype` element now encodes and decodes
   instead of raising `Failure "unsupported element type in repeat"`. The
   repeat element path had no case for a tag-dispatched union, which ruled
