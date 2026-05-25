@@ -145,6 +145,7 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       let enc = build_field_encoder inner in
       fun buf off v -> enc buf off (encode v)
   | Unit -> fun _buf off () -> off
+  | Codec { codec_encode; _ } -> fun buf off v -> codec_encode v buf off
   | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
   | Array { len = Int _; elem; seq = Seq_map s } ->
       let enc_elem = build_field_encoder elem in
@@ -1015,6 +1016,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
         | _ :: rest -> find rest
       in
       find cases
+  | Unit -> ()
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1046,6 +1048,11 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
   | Map { inner; encode; _ } -> write_elem inner buf off (encode v)
   | Where { inner; _ } -> write_elem inner buf off v
   | Enum { base; _ } -> write_elem base buf off v
+  | Unit -> ()
+  (* Casetype reuses the full field encoder (tag + dispatched body); the
+     repeat loop advances by [elem_size_of], so the returned offset is
+     discarded here. *)
+  | Casetype _ -> ignore (build_field_encoder typ buf off v : int)
   | _ -> failwith "write_elem: unsupported element type in repeat"
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat

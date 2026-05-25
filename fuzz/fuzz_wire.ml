@@ -1234,10 +1234,87 @@ let test_repeat_var_elem_roundtrip seed =
         failf "repeat-var name mismatch: %S vs %S" a.ext_name b.ext_name)
     v.exts decoded.exts
 
+(* [Field.repeat] over a [casetype] with mixed-shape cases: bare [unit] tags
+   (PAD/END) beside a length-prefixed sub-codec body. Exercises the codec's
+   repeat element path for casetypes, which must dispatch per element and mix
+   zero-length cases with variable-length ones. *)
+type fuzz_opt = OPad | OEnd | OGen of string
+
+let fuzz_opt_body_codec =
+  let f_len = Wire.Field.v "len" Wire.uint8 in
+  let f_data =
+    Wire.Field.v "data" (Wire.byte_array ~size:(Wire.Field.ref f_len))
+  in
+  Wire.Codec.v "FuzzOptBody"
+    (fun _l d -> d)
+    Wire.Codec.[ (f_len $ fun d -> String.length d); (f_data $ fun d -> d) ]
+
+let fuzz_opt_typ : fuzz_opt Wire.typ =
+  Wire.casetype "FuzzOpt" Wire.uint8
+    [
+      Wire.case ~index:0 Wire.empty
+        ~inject:(fun () -> OPad)
+        ~project:(function OPad -> Some () | _ -> None);
+      Wire.case ~index:255 Wire.empty
+        ~inject:(fun () -> OEnd)
+        ~project:(function OEnd -> Some () | _ -> None);
+      Wire.case ~index:53
+        (Wire.codec fuzz_opt_body_codec)
+        ~inject:(fun d -> OGen d)
+        ~project:(function OGen d -> Some d | _ -> None);
+    ]
+
+let fuzz_opt_size = function OPad | OEnd -> 1 | OGen d -> 2 + String.length d
+
+let fuzz_opts_codec =
+  let f_total = Wire.Field.v "total" Wire.uint16be in
+  let f_opts =
+    Wire.Field.repeat "opts" ~size:(Wire.Field.ref f_total) fuzz_opt_typ
+  in
+  Wire.Codec.v "FuzzOpts"
+    (fun _t xs -> xs)
+    Wire.Codec.
+      [
+        f_total $ List.fold_left (fun n o -> n + fuzz_opt_size o) 0;
+        (f_opts $ fun xs -> xs);
+      ]
+
+(* Cut [seed] into a list of options spanning all three case shapes: byte 0
+   yields PAD, 255 yields END, anything else yields a length-prefixed Generic
+   whose body is drawn from the following bytes. *)
+let extract_opts seed =
+  let len = String.length seed in
+  let rec loop i acc =
+    if i >= len then List.rev acc
+    else
+      let code = Char.code seed.[i] in
+      if code = 0 then loop (i + 1) (OPad :: acc)
+      else if code = 255 then loop (i + 1) (OEnd :: acc)
+      else
+        let take = min code (len - i - 1) in
+        let body = if take > 0 then String.sub seed (i + 1) take else "" in
+        loop (i + 1 + take) (OGen body :: acc)
+  in
+  loop 0 []
+
+let test_repeat_casetype_roundtrip seed =
+  let opts = extract_opts (truncate seed) in
+  let total = List.fold_left (fun n o -> n + fuzz_opt_size o) 0 opts in
+  let buf = Bytes.create (2 + total) in
+  Wire.Codec.encode fuzz_opts_codec opts buf 0;
+  let decoded =
+    match Wire.Codec.decode fuzz_opts_codec buf 0 with
+    | Ok x -> x
+    | Error e -> failf "repeat-casetype decode: %a" Wire.pp_parse_error e
+  in
+  if decoded <> opts then failf "repeat-casetype roundtrip mismatch"
+
 let repeat_tests =
   [
     test_case "repeat var-elem roundtrip" [ bytes ]
       test_repeat_var_elem_roundtrip;
+    test_case "repeat casetype-elem roundtrip" [ bytes ]
+      test_repeat_casetype_roundtrip;
   ]
 
 (* {1 Gen DSL tests}

@@ -274,8 +274,54 @@ let e2e_repeat_var_elem =
       Codec.( $ ) f_exts (fun xs -> xs);
     ]
 
+(* [Field.repeat] over a [casetype] with mixed-shape cases: bare [unit] tags
+   (PAD/END) beside a length-prefixed sub-codec body (DHCP-options TLV). The
+   3D projection emits the casetype dispatch decl plus [DhcpOpt opts[:byte-size
+   total]]; this is the one shape that earlier tripped the codec's repeat
+   element path. *)
+type dhcp_opt = Pad | End | Generic of string
+
+let dhcp_opt_body_codec =
+  let open Wire in
+  let f_len = Field.v "len" uint8 in
+  let f_data = Field.v "data" (byte_array ~size:(Field.ref f_len)) in
+  Codec.v "DhcpOptBody"
+    (fun _l d -> d)
+    [
+      Codec.( $ ) f_len (fun d -> String.length d);
+      Codec.( $ ) f_data (fun d -> d);
+    ]
+
+let e2e_repeat_casetype_codec =
+  let open Wire in
+  let opt : dhcp_opt typ =
+    casetype "DhcpOpt" uint8
+      [
+        case ~index:0 empty
+          ~inject:(fun () -> Pad)
+          ~project:(function Pad -> Some () | _ -> None);
+        case ~index:255 empty
+          ~inject:(fun () -> End)
+          ~project:(function End -> Some () | _ -> None);
+        case ~index:53
+          (codec dhcp_opt_body_codec)
+          ~inject:(fun d -> Generic d)
+          ~project:(function Generic d -> Some d | _ -> None);
+      ]
+  in
+  let size = function Pad | End -> 1 | Generic d -> 2 + String.length d in
+  let f_total = Field.v "total" uint8 in
+  let f_opts = Field.repeat "opts" ~size:(Field.ref f_total) opt in
+  Codec.v "DhcpOpts"
+    (fun _t xs -> xs)
+    [
+      Codec.( $ ) f_total (List.fold_left (fun a o -> a + size o) 0);
+      Codec.( $ ) f_opts (fun xs -> xs);
+    ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
+  compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
   compile_and_run ~name:"Ctt" e2e_casetype_codec;
