@@ -334,6 +334,68 @@ let all_zeros =
     env = None;
   }
 
+(* NUL-free string: a [zeroterm] value cannot contain its own terminator. *)
+let nul_free_gen =
+  Alcobar.map
+    Alcobar.[ Alcobar.bytes ]
+    (fun s -> String.concat "" (String.split_on_char '\x00' s))
+
+let zeroterm =
+  let typ = Wire.zeroterm in
+  let codec = codec_of_typ typ in
+  let positive =
+    Alcobar.map
+      Alcobar.[ nul_free_gen ]
+      (fun s ->
+        let sz = Wire.Codec.size_of_value codec s in
+        let buf = Bytes.create sz in
+        Wire.Codec.encode codec s buf 0;
+        (s, buf))
+  in
+  (* Adversarial: a run with no terminator -- decode must surface a clean
+     error, not raise. *)
+  let adversarial =
+    Alcobar.map Alcobar.[ Alcobar.range ~min:0 32 ] (fun n -> Bytes.make n 'x')
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_any;
+    adversarial;
+    equal = String.equal;
+    env = None;
+  }
+
+let zeroterm_at_most n =
+  let typ = Wire.zeroterm_at_most ~size:(Wire.int n) in
+  let codec = codec_of_typ typ in
+  (* The terminator must fit in the region, so cap the data at [n - 1]. *)
+  let value_gen =
+    Alcobar.map
+      Alcobar.[ nul_free_gen ]
+      (fun s ->
+        if String.length s > n - 1 then String.sub s 0 (max 0 (n - 1)) else s)
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ value_gen ]
+      (fun s ->
+        let sz = Wire.Codec.size_of_value codec s in
+        let buf = Bytes.create sz in
+        Wire.Codec.encode codec s buf 0;
+        (s, buf))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed n;
+    adversarial = bytes_fixed n;
+    equal = String.equal;
+    env = None;
+  }
+
 let byte_array_where n ~per_byte =
   let typ = Wire.byte_array_where ~size:(Wire.int n) ~per_byte in
   let codec = codec_of_typ typ in
@@ -1567,24 +1629,37 @@ end
 let positive_env g =
   match g.env with Some s -> Some (s.positive ()) | None -> None
 
+(* Round-trip one positive sample: decode the canonical bytes back to the
+   value, then re-encode into a buffer sized from [size_of_value] and require
+   the two to agree. Sizing from [size_of_value] (rather than from the
+   canonical bytes) drives the value-driven size for every combinator,
+   including ones whose [positive] bytes are hand-assembled (casetype,
+   nested_at_most) and so never otherwise exercise [encode] / [size_of_value].
+   A wrong [size_of_value] then shows up here as a mismatch -- or, if it
+   under-counts, as an [encode] overrun -- rather than silently. *)
+let check_positive label g (value, bs) =
+  let bs_str = string_of_bytes bs in
+  let env = positive_env g in
+  (match Wire.Codec.decode ?env g.codec bs 0 with
+  | Ok decoded ->
+      if not (g.equal decoded value) then
+        Alcobar.failf "%s positive decode mismatch" label
+  | Error _ -> Alcobar.failf "%s positive decode failed" label);
+  let sz = Wire.Codec.size_of_value g.codec value in
+  if sz <> Bytes.length bs then
+    Alcobar.failf "%s size_of_value = %d but canonical encoding is %d" label sz
+      (Bytes.length bs);
+  let out = Bytes.create sz in
+  (try Wire.Codec.encode ?env:(positive_env g) g.codec value out 0
+   with Invalid_argument _ -> Alcobar.failf "%s positive encode raised" label);
+  if string_of_bytes out <> bs_str then
+    Alcobar.failf "%s positive reencode mismatch" label
+
 let test_cases label g =
   let pos_case =
     Alcobar.test_case (label ^ " positive")
       Alcobar.[ g.positive ]
-      (fun (value, bs) ->
-        let bs_str = string_of_bytes bs in
-        let env = positive_env g in
-        (match Wire.Codec.decode ?env g.codec bs 0 with
-        | Ok decoded ->
-            if not (g.equal decoded value) then
-              Alcobar.failf "%s positive decode mismatch" label
-        | Error _ -> Alcobar.failf "%s positive decode failed" label);
-        let out = Bytes.create (Bytes.length bs) in
-        (try Wire.Codec.encode ?env:(positive_env g) g.codec value out 0
-         with Invalid_argument _ ->
-           Alcobar.failf "%s positive encode raised" label);
-        if string_of_bytes out <> bs_str then
-          Alcobar.failf "%s positive reencode mismatch" label)
+      (check_positive label g)
   in
   let safety_case kind stream =
     match g.env with

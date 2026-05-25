@@ -1418,6 +1418,8 @@ let bytes_gen_tests =
       (byte_array_where 4 ~per_byte:printable_byte)
   @ test_cases "all_bytes" all_bytes
   @ test_cases "all_zeros" all_zeros
+  @ test_cases "zeroterm" zeroterm
+  @ test_cases "zeroterm_at_most(8)" (zeroterm_at_most 8)
   @ test_cases "nested(4, uint16be)" (nested 4 uint16be)
   @ test_cases "nested_at_most(4, uint16be)" (nested_at_most 4 uint16be)
 
