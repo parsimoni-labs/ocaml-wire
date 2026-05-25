@@ -121,6 +121,9 @@ and _ typ =
   | Unit : unit typ  (** Zero-width. *)
   | All_bytes : string typ  (** Remaining bytes as string. *)
   | All_zeros : string typ  (** Remaining bytes, must be zero. *)
+  | Zeroterm : string typ  (** NUL-terminated string. *)
+  | Zeroterm_at_most : { size : int expr } -> string typ
+      (** NUL-terminated string within an [size]-byte region. *)
   | Where : { cond : bool expr; inner : 'a typ } -> 'a typ  (** Guarded. *)
   | Array : {
       len : int expr;
@@ -455,6 +458,22 @@ val all_bytes : string typ
 
 val all_zeros : string typ
 (** Consume remaining bytes, asserting all zero. *)
+
+val zeroterm : string typ
+(** [zeroterm] is a NUL-terminated string: bytes up to (but excluding) the first
+    [0x00], which is consumed. Projects to the 3D [field[:zeroterm]] form, which
+    desugars to the EverParse prelude [cstring]/[parse_string] combinator. This
+    3D feature has no [3d-lang.html] section; see [EverParse3d.Prelude.fsti].
+    Encoding a string that itself contains a [0x00] raises [Invalid_argument].
+*)
+
+val zeroterm_at_most : size:int expr -> string typ
+(** [zeroterm_at_most ~size] is a NUL-terminated string occupying a fixed
+    [size]-byte region: the terminator must appear within [size] bytes, and the
+    field always consumes exactly [size] bytes (trailing bytes after the
+    terminator are zero padding). Projects to the 3D
+    [field[:zeroterm-byte-size-at-most size]] form ([t_at_most] of [cstring]).
+    Undocumented in the manual; see [EverParse3d.Prelude.fsti]. *)
 
 val where : bool expr -> 'a typ -> 'a typ
 (** Guard a type with a boolean constraint. *)

@@ -155,6 +155,16 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
+(* Index of the first NUL in [first, limit); raises on an unterminated run. *)
+let nul_pos buf ~first ~limit =
+  let rec go i =
+    if i >= limit then
+      raise (Parse_exn (Constraint_failed "zeroterm: missing NUL terminator"))
+    else if Bytes.get_uint8 buf i = 0 then i
+    else go (i + 1)
+  in
+  go first
+
 let parse_codec_typ codec_decode fixed_size size_of buf off len =
   let sz = match fixed_size with Some n -> n | None -> size_of buf off in
   check_eof len (off + sz);
@@ -245,6 +255,14 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Unit -> ((), off)
   | All_bytes -> (Bytes.sub_string buf off (len - off), len)
   | All_zeros -> parse_all_zeros buf off len
+  | Zeroterm ->
+      let nul = nul_pos buf ~first:off ~limit:len in
+      (Bytes.sub_string buf off (nul - off), nul + 1)
+  | Zeroterm_at_most { size } ->
+      let n = Eval.expr Eval.empty size in
+      check_eof len (off + n);
+      let nul = nul_pos buf ~first:off ~limit:(off + n) in
+      (Bytes.sub_string buf off (nul - off), off + n)
   | Byte_array { size } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
@@ -560,6 +578,25 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Unit -> ()
   | All_bytes -> write_string enc v
   | All_zeros -> write_string enc v
+  | Zeroterm ->
+      if String.contains v '\000' then
+        invalid_arg "Wire.encode: zeroterm string contains a NUL byte";
+      write_string enc v;
+      write_byte enc 0
+  | Zeroterm_at_most { size } ->
+      if String.contains v '\000' then
+        invalid_arg "Wire.encode: zeroterm string contains a NUL byte";
+      let n = Eval.expr Eval.empty size in
+      let len = String.length v in
+      if len + 1 > n then
+        Fmt.invalid_arg
+          "Wire.encode: zeroterm string needs %d bytes but region is %d"
+          (len + 1) n;
+      write_string enc v;
+      (* Remaining bytes = NUL terminator plus any trailing padding. *)
+      for _ = len to n - 1 do
+        write_byte enc 0
+      done
   | Where { inner; _ } -> encode_into inner v enc
   | Array { elem; seq = Seq_map seq; _ } ->
       seq.iter (fun elem_v -> encode_into elem elem_v enc) v

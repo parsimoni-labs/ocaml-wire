@@ -38,9 +38,10 @@ let rec int_of : type a. a typ -> a -> int option =
   | Single_elem { elem; _ } -> int_of elem v
   | Apply { typ; _ } -> int_of typ v
   | Map { inner; encode; _ } -> int_of inner (encode v)
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_array_where _
-  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
-  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
       None
 
 let rec expr : type a. ctx -> a expr -> a =

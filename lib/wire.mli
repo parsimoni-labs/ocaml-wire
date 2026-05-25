@@ -559,6 +559,25 @@ val all_zeros : string typ
     This is mainly useful as the final field of a struct or record-shaped
     layout. *)
 
+val zeroterm : string typ
+(** [zeroterm] is a NUL-terminated string: the bytes up to (but excluding) the
+    first [0x00], which is consumed. Encoding a string that itself contains a
+    [0x00] raises [Invalid_argument].
+
+    Projects to the 3D [field[:zeroterm]] form, which desugars to the EverParse
+    prelude [cstring]/[parse_string] combinator. This 3D feature predates the
+    manual and has no [3d-lang.html] section; see [EverParse3d.Prelude.fsti]. *)
+
+val zeroterm_at_most : size:int expr -> string typ
+(** [zeroterm_at_most ~size] is a NUL-terminated string occupying a fixed
+    [size]-byte region: the terminator must appear within [size] bytes and the
+    field always consumes exactly [size] bytes (bytes after the terminator are
+    zero padding).
+
+    Projects to the 3D [field[:zeroterm-byte-size-at-most size]] form
+    ([t_at_most] of [cstring]). Like {!zeroterm}, undocumented in the manual;
+    see [EverParse3d.Prelude.fsti]. *)
+
 val where : bool expr -> 'a typ -> 'a typ
 (** Refine a description with a boolean constraint. *)
 

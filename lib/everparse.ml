@@ -24,6 +24,7 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
   | Types.Uint_var _ ->
       true
   | Types.All_bytes | Types.All_zeros -> true
+  | Types.Zeroterm | Types.Zeroterm_at_most _ -> true
   | Types.Optional { present = Types.Bool _; _ } -> false
   | Types.Optional _ -> true
   | Types.Optional_or { present = Types.Bool _; _ } -> false

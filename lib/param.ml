@@ -38,9 +38,10 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
       let c = int_cvt inner in
       { fwd = (fun v -> c.fwd (encode v)); bwd = (fun v -> decode (c.bwd v)) }
   | Apply { typ; _ } -> int_cvt typ
-  | Unit | All_bytes | All_zeros | Array _ | Byte_array _ | Byte_array_where _
-  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
-  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
       invalid_arg "Param: unsupported parameter type"
 
 let to_int typ v = (int_cvt typ).fwd v

@@ -319,9 +319,26 @@ let e2e_repeat_casetype_codec =
       Codec.( $ ) f_opts (fun xs -> xs);
     ]
 
+(* Zero-terminated strings: [name] runs to a NUL, [tag] is NUL-terminated
+   within a fixed region, then a trailing scalar. Projects to the 3D
+   [field[:zeroterm]] and [field[:zeroterm-byte-size-at-most n]] forms. *)
+let e2e_zeroterm_codec =
+  let open Wire in
+  let f_name = Field.v "name" zeroterm in
+  let f_tag = Field.v "tag" (zeroterm_at_most ~size:(int 8)) in
+  let f_n = Field.v "n" uint8 in
+  Codec.v "ZtRec"
+    (fun name tag n -> (name, tag, n))
+    [
+      Codec.( $ ) f_name (fun (s, _, _) -> s);
+      Codec.( $ ) f_tag (fun (_, t, _) -> t);
+      Codec.( $ ) f_n (fun (_, _, n) -> n);
+    ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
+  compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
   compile_and_run ~name:"Ctt" e2e_casetype_codec;
