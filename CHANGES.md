@@ -2,6 +2,10 @@
 
 ### Added
 
+- Add `Wire.zeroterm` and `Wire.zeroterm_at_most ~size` for
+  NUL-terminated strings: the bytes up to a terminator, or the same
+  within a fixed-size region. They project to the 3D `field[:zeroterm]`
+  and `field[:zeroterm-byte-size-at-most n]` forms (#77, @samoht)
 - `Wire.casetype` now accepts any tag typ (`'k typ`, not just `int`) and
   projects cleanly to 3D: int-tagged casetypes get an auto-emitted
   `casetype_decl` + wrapper typedef; byte-tagged casetypes (e.g.

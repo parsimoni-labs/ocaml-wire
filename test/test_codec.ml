@@ -3859,6 +3859,58 @@ let test_repeat_casetype_empty () =
   let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
   Alcotest.(check int) "empty" 0 (List.length opts)
 
+(* -- Zero-terminated strings ([zeroterm] / [zeroterm_at_most]) -- *)
+
+type zt_rec = { zt_name : string; zt_tag : string; zt_n : int }
+
+let zt_f_name = Field.v "name" zeroterm
+let zt_f_tag = Field.v "tag" (zeroterm_at_most ~size:(int 8))
+let zt_f_n = Field.v "n" uint8
+
+let zt_codec =
+  Codec.v "ZtRec"
+    (fun name tag n -> { zt_name = name; zt_tag = tag; zt_n = n })
+    Codec.
+      [
+        (zt_f_name $ fun r -> r.zt_name);
+        (zt_f_tag $ fun r -> r.zt_tag);
+        (zt_f_n $ fun r -> r.zt_n);
+      ]
+
+let test_zeroterm_roundtrip () =
+  let v = { zt_name = "hello"; zt_tag = "ab"; zt_n = 7 } in
+  (* name(5+1) + tag(8) + n(1) = 15 *)
+  let buf = Bytes.create 15 in
+  Codec.encode zt_codec v buf 0;
+  Alcotest.(check int) "NUL after name" 0 (Bytes.get_uint8 buf 5);
+  Alcotest.(check int) "NUL after tag" 0 (Bytes.get_uint8 buf 8);
+  let r = decode_ok (Codec.decode zt_codec buf 0) in
+  Alcotest.(check string) "name" "hello" r.zt_name;
+  Alcotest.(check string) "tag" "ab" r.zt_tag;
+  Alcotest.(check int) "n" 7 r.zt_n
+
+let test_zeroterm_empty () =
+  let v = { zt_name = ""; zt_tag = ""; zt_n = 0 } in
+  let buf = Bytes.create 15 in
+  Codec.encode zt_codec v buf 0;
+  let r = decode_ok (Codec.decode zt_codec buf 0) in
+  Alcotest.(check string) "name" "" r.zt_name;
+  Alcotest.(check string) "tag" "" r.zt_tag
+
+let test_zeroterm_embedded_nul_rejected () =
+  let v = { zt_name = "a\000b"; zt_tag = ""; zt_n = 0 } in
+  let buf = Bytes.create 15 in
+  match Codec.encode zt_codec v buf 0 with
+  | () -> Alcotest.fail "expected Invalid_argument for embedded NUL"
+  | exception Invalid_argument _ -> ()
+
+let test_zeroterm_missing_terminator () =
+  (* No NUL anywhere: decode must fail rather than read past the buffer. *)
+  let buf = Bytes.make 6 'x' in
+  match Codec.decode zt_codec buf 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "expected decode error on unterminated string"
+
 (* -- Suite -- *)
 
 let suite =
@@ -4182,6 +4234,13 @@ let suite =
         test_repeat_casetype_roundtrip;
       Alcotest.test_case "repeat: casetype TLV empty" `Quick
         test_repeat_casetype_empty;
+      (* zero-terminated strings *)
+      Alcotest.test_case "zeroterm: roundtrip" `Quick test_zeroterm_roundtrip;
+      Alcotest.test_case "zeroterm: empty" `Quick test_zeroterm_empty;
+      Alcotest.test_case "zeroterm: embedded NUL rejected" `Quick
+        test_zeroterm_embedded_nul_rejected;
+      Alcotest.test_case "zeroterm: missing terminator" `Quick
+        test_zeroterm_missing_terminator;
       Alcotest.test_case "repeat: with trailer" `Quick test_repeat_with_trailer;
       Alcotest.test_case "repeat: variable size elements" `Quick
         test_repeat_variable_size_elements;

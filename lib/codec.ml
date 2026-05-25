@@ -925,6 +925,7 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
       iter_param_refs f size;
       iter_param_refs f cond
   | Uint_var { size; _ } -> iter_param_refs f size
+  | Zeroterm_at_most { size } -> iter_param_refs f size
   | Single_elem { size; elem; _ } ->
       iter_param_refs f size;
       iter_param_refs_typ f elem
@@ -956,7 +957,7 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
         cases
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
   | Int64 _ | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros
-  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ ->
+  | Zeroterm | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ ->
       ()
 
 let iter_param_refs_fields f fields where =
@@ -1636,6 +1637,18 @@ let compile_repeat : type elt seq r.
     populate = no_populate;
   }
 
+(* Absolute index of the first NUL at or after [first], searching up to (but
+   not including) [limit]. Raises [Parse_error] when the region ends before a
+   terminator is found -- a truncated / unterminated zero-terminated string. *)
+let zeroterm_nul_pos buf ~first ~limit =
+  let rec go i =
+    if i >= limit then
+      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
+    else if Bytes.get_uint8 buf i = 0 then i
+    else go (i + 1)
+  in
+  go first
+
 let var_bytes_reader : type a.
     a typ -> (bytes -> int -> int) -> (bytes -> int -> int) -> bytes -> int -> a
     =
@@ -1647,6 +1660,12 @@ let var_bytes_reader : type a.
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
   | Byte_array_where _ -> Bytes.sub_string buf (base + fo) sz
   | All_bytes -> Bytes.sub_string buf (base + fo) sz
+  (* [sz] already counts the terminator (see [compile_var_size_fn]). *)
+  | Zeroterm -> Bytes.sub_string buf (base + fo) (sz - 1)
+  | Zeroterm_at_most _ ->
+      let first = base + fo in
+      let nul = zeroterm_nul_pos buf ~first ~limit:(first + sz) in
+      Bytes.sub_string buf first (nul - first)
   | All_zeros ->
       let s = Bytes.sub_string buf (base + fo) sz in
       String.iter
@@ -1707,6 +1726,28 @@ let var_bytes_writer : type a r.
       let len = String.length s in
       Bytes.blit_string s 0 buf write_off len;
       write_off + len
+  | Zeroterm ->
+      let s = (value : string) in
+      if String.contains s '\000' then
+        invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+      let len = String.length s in
+      Bytes.blit_string s 0 buf write_off len;
+      Bytes.set_uint8 buf (write_off + len) 0;
+      write_off + len + 1
+  | Zeroterm_at_most _ ->
+      let s = (value : string) in
+      if String.contains s '\000' then
+        invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+      let region = size_fn buf base in
+      let len = String.length s in
+      if len + 1 > region then
+        Fmt.invalid_arg
+          "Codec.encode: zeroterm string needs %d bytes but region is %d"
+          (len + 1) region;
+      Bytes.blit_string s 0 buf write_off len;
+      (* Single fill covers the NUL terminator and any trailing padding. *)
+      Bytes.fill buf (write_off + len) (region - len) '\x00';
+      write_off + region
   | Casetype _ -> build_field_encoder typ buf write_off value
   | Single_elem { elem; _ } ->
       let n = size_fn buf base in
@@ -1730,6 +1771,11 @@ let compile_var_size_fn : type a.
       (* Tag is decoded first; the case body's size is whatever the
          selected case's inner typ reports. *)
       fun buf base -> elem_size_of typ buf (base + off_fn buf base)
+  | Zeroterm ->
+      (* Consumed bytes = string length plus the one-byte NUL terminator. *)
+      fun buf base ->
+        let first = base + off_fn buf base in
+        zeroterm_nul_pos buf ~first ~limit:(Bytes.length buf) - first + 1
   | _ ->
       let size_expr =
         match typ with
@@ -1738,6 +1784,7 @@ let compile_var_size_fn : type a.
         | Byte_array_where { size; _ } -> size
         | Uint_var { size; _ } -> size
         | Single_elem { size; _ } -> size
+        | Zeroterm_at_most { size } -> size
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
       let sizeof_this : bytes -> int -> int =

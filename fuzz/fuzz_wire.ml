@@ -1317,6 +1317,56 @@ let repeat_tests =
       test_repeat_casetype_roundtrip;
   ]
 
+(* Zero-terminated strings: a NUL-terminated [name] followed by a
+   NUL-terminated [tag] bounded to 8 bytes, then a trailing scalar. *)
+type fuzz_zt = { z_name : string; z_tag : string; z_n : int }
+
+let fuzz_zt_codec =
+  let f_name = Wire.Field.v "name" Wire.zeroterm in
+  let f_tag = Wire.Field.v "tag" (Wire.zeroterm_at_most ~size:(Wire.int 8)) in
+  let f_n = Wire.Field.v "n" Wire.uint8 in
+  Wire.Codec.v "FuzzZt"
+    (fun name tag n -> { z_name = name; z_tag = tag; z_n = n })
+    Wire.Codec.
+      [
+        (f_name $ fun r -> r.z_name);
+        (f_tag $ fun r -> r.z_tag);
+        (f_n $ fun r -> r.z_n);
+      ]
+
+(* Strip NULs (a zeroterm value cannot contain its own terminator) and bound
+   the tag to 7 data bytes so it fits the 8-byte region with its terminator. *)
+let strip_nul s = String.concat "" (String.split_on_char '\000' s)
+
+let test_zeroterm_roundtrip seed =
+  let s = truncate seed in
+  let n = String.length s in
+  let cut = n / 2 in
+  let name = strip_nul (String.sub s 0 cut) in
+  let tag0 = strip_nul (String.sub s cut (n - cut)) in
+  let tag = if String.length tag0 > 7 then String.sub tag0 0 7 else tag0 in
+  let v =
+    { z_name = name; z_tag = tag; z_n = (if n > 0 then Char.code s.[0] else 0) }
+  in
+  let buf = Bytes.create (String.length name + 1 + 8 + 1) in
+  Wire.Codec.encode fuzz_zt_codec v buf 0;
+  match Wire.Codec.decode fuzz_zt_codec buf 0 with
+  | Ok r -> if r <> v then failf "zeroterm roundtrip mismatch"
+  | Error e -> failf "zeroterm decode: %a" Wire.pp_parse_error e
+
+(* Crash safety: decoding arbitrary bytes through a zeroterm field must never
+   raise -- an unterminated run is a clean parse error. *)
+let test_zeroterm_parse_crash buf =
+  let buf = truncate buf in
+  let _ = Wire.of_string Wire.zeroterm buf in
+  ()
+
+let zeroterm_tests =
+  [
+    test_case "zeroterm roundtrip" [ bytes ] test_zeroterm_roundtrip;
+    test_case "zeroterm parse crash-safety" [ bytes ] test_zeroterm_parse_crash;
+  ]
+
 (* {1 Gen DSL tests}
 
    Each leaf and the [Codec.v] composer drive three Alcobar generators
@@ -1450,4 +1500,5 @@ let alt_entry_tests =
 let suite =
   ( "wire",
     parse_tests @ roundtrip_tests @ record_tests @ stream_tests @ depsize_tests
-    @ float_tests @ repeat_tests @ gen_tests @ alt_entry_tests )
+    @ float_tests @ repeat_tests @ zeroterm_tests @ gen_tests @ alt_entry_tests
+  )

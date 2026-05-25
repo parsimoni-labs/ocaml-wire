@@ -89,6 +89,8 @@ and _ typ =
   | Unit : unit typ
   | All_bytes : string typ
   | All_zeros : string typ
+  | Zeroterm : string typ
+  | Zeroterm_at_most : { size : int expr } -> string typ
   | Where : { cond : bool expr; inner : 'a typ } -> 'a typ
   | Array : {
       len : int expr;
@@ -348,6 +350,8 @@ let cases variants inner =
 let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
+let zeroterm = Zeroterm
+let zeroterm_at_most ~size = Zeroterm_at_most { size }
 
 let where cond inner =
   reject_decoration ~combinator:"where" inner;
@@ -583,6 +587,7 @@ let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Byte_array _ -> String
   | Byte_array_where _ -> String
   | Byte_slice _ -> String (* approximate: slice becomes string in output *)
+  | Zeroterm | Zeroterm_at_most _ -> String
   | Unit | All_bytes | All_zeros -> Unit
   | _ -> Int (* fallback *)
 
@@ -971,6 +976,9 @@ and pp_typ : type a. a typ Fmt.t =
   | Unit -> Fmt.string ppf "unit"
   | All_bytes -> Fmt.string ppf "all_bytes"
   | All_zeros -> Fmt.string ppf "all_zeros"
+  | Zeroterm -> Fmt.string ppf "UINT8[:zeroterm]"
+  | Zeroterm_at_most { size } ->
+      Fmt.pf ppf "UINT8[:zeroterm-byte-size-at-most %a]" pp_expr size
   | Where { cond; inner } -> Fmt.pf ppf "%a { %a }" pp_typ inner pp_expr cond
   | Array { len; elem; _ } -> Fmt.pf ppf "%a[%a]" pp_typ elem pp_expr len
   | Byte_array { size } | Byte_slice { size } ->
@@ -1084,6 +1092,8 @@ type field_suffix =
   | Byte_array of int expr
   | Single_elem of { size : int expr; at_most : bool }
   | Array of int expr
+  | Zeroterm
+  | Zeroterm_at_most of int expr
 
 let rec inner_wire_size : type a. a typ -> int option = function
   | Uint8 -> Some 1
@@ -1110,6 +1120,7 @@ let rec inner_wire_size_expr : type a. a typ -> int expr option = function
   | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ } ->
       Some size
   | Single_elem { size; _ } -> Some size
+  | Zeroterm_at_most { size } -> Some size
   | Uint_var { size; _ } -> Some size
   | Array { len; elem; _ } -> (
       match inner_wire_size_expr elem with
@@ -1168,6 +1179,9 @@ let rec field_suffix : type a.
   | Repeat { size; elem; _ } ->
       (* Variable-length array with byte-size budget *)
       (Byte_array size, fun ppf -> pp_typ ppf elem)
+  | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
+  | Zeroterm_at_most { size } ->
+      (Zeroterm_at_most size, fun ppf -> Fmt.string ppf "UINT8")
   | _ -> (No_suffix, fun ppf -> pp_typ ppf typ)
 
 let anon_counter = Stdlib.ref 0
@@ -1209,6 +1223,9 @@ let pp_field ppf (Field f) =
       Fmt.pf ppf "[:byte-size-single-element-array %a]" pp_expr size
   | Single_elem { size; at_most = true } ->
       Fmt.pf ppf "[:byte-size-single-element-array-at-most %a]" pp_expr size
+  | Zeroterm -> Fmt.pf ppf "[:zeroterm]"
+  | Zeroterm_at_most size ->
+      Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
   | Array len -> Fmt.pf ppf "[%a]" pp_expr len);
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
@@ -1426,6 +1443,9 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Unit -> 0
   | All_bytes -> String.length v
   | All_zeros -> String.length v
+  | Zeroterm -> String.length v + 1
+  | Zeroterm_at_most { size = Int n } -> n
+  | Zeroterm_at_most _ -> 0
   | Byte_array _ -> String.length v
   | Byte_array_where _ -> String.length v
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
