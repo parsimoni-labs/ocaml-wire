@@ -44,6 +44,37 @@ let rec int_of : type a. a typ -> a -> int option =
   | Repeat _ ->
       None
 
+(* Hot-path variant of [int_of]: returns [int] directly, mapping the types
+   [int_of] reports as [None] (non-numeric, or uint64/int64 over 2^62) to 0.
+   This is exactly what the cross-field size/offset readers do with [int_of]'s
+   result, so collapsing it here avoids boxing a [Some] per field read. *)
+let rec int_of_default : type a. a typ -> a -> int =
+ fun typ v ->
+  match typ with
+  | Uint8 -> v
+  | Uint16 _ -> v
+  | Uint_var _ -> v
+  | Uint32 _ -> UInt32.to_int v
+  | Uint63 _ -> UInt63.to_int v
+  | Uint64 _ -> ( match Int64.unsigned_to_int v with Some n -> n | None -> 0)
+  | Int8 -> v
+  | Int16 _ -> v
+  | Int32 _ -> v
+  | Int64 _ -> ( match Int64.unsigned_to_int v with Some n -> n | None -> 0)
+  | Float32 _ -> 0
+  | Float64 _ -> 0
+  | Bits _ -> v
+  | Enum { base; _ } -> int_of_default base v
+  | Where { inner; _ } -> int_of_default inner v
+  | Single_elem { elem; _ } -> int_of_default elem v
+  | Apply { typ; _ } -> int_of_default typ v
+  | Map { inner; encode; _ } -> int_of_default inner (encode v)
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
+      0
+
 let rec expr : type a. ctx -> a expr -> a =
  fun ctx e ->
   match e with

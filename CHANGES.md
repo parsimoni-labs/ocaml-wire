@@ -41,6 +41,12 @@
 
 ### Changed
 
+- Decoding a struct with variable-size fields (`byte_slice`, `byte_array`
+  or `repeat` whose size is a cross-field expression) no longer allocates
+  on each field access: the size/offset evaluator now takes `buf` and
+  `base` as separate arguments instead of a per-call pair, and reads
+  integer fields without boxing an `int option`. Pure speedup, no API
+  change (#81, @samoht)
 - Remove `Wire.optional` / `Wire.optional_or` / `Wire.repeat` /
   `Wire.repeat_seq` from the typ-level surface; use the matching
   `Field.*` combinators instead (#46, @samoht)

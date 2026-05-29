@@ -221,7 +221,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
           fun _buf _base -> failwith "build_field_reader: unsupported type")
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
-let int_of_typ_value = Eval.int_of
+let int_of_typ_value = Eval.int_of_default
 
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot
@@ -376,20 +376,24 @@ type field_reader = string * (bytes -> int -> int)
 
 type packed_param = Pack_param : ('a, 'k) param_handle -> packed_param
 
-(* Leaves resolution strategy for a given access layer. *)
-type 'ctx leaves = {
-  ref_ : string -> 'ctx -> int;
-  param_ref : packed_param -> 'ctx -> int;
-  sizeof_typ : packed_typ -> 'ctx -> int;
-  sizeof_this : 'ctx -> int;
-  field_pos : 'ctx -> int;
+(* Leaves resolution strategy for a given access layer. The context is
+   threaded as two curried arguments rather than a single packed value: the
+   closure access layer passes [buf base] with no per-call tuple, and the
+   int-array layer passes [arr ()] with an immediate unit. *)
+type ('c1, 'c2) leaves = {
+  ref_ : string -> 'c1 -> 'c2 -> int;
+  param_ref : packed_param -> 'c1 -> 'c2 -> int;
+  sizeof_typ : packed_typ -> 'c1 -> 'c2 -> int;
+  sizeof_this : 'c1 -> 'c2 -> int;
+  field_pos : 'c1 -> 'c2 -> int;
 }
 
-let rec compile_int : type ctx. ctx leaves -> int expr -> ctx -> int =
+let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
+    =
  fun l e ->
   let rec_ = compile_int l in
   match e with
-  | Int n -> fun _ -> n
+  | Int n -> fun _ _ -> n
   | Ref name -> l.ref_ name
   | Param_ref p -> l.param_ref (Pack_param p)
   | Sizeof t -> l.sizeof_typ (Pack_typ t)
@@ -397,52 +401,53 @@ let rec compile_int : type ctx. ctx leaves -> int expr -> ctx -> int =
   | Field_pos -> l.field_pos
   | Add (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c + fb c
+      fun c d -> fa c d + fb c d
   | Sub (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c - fb c
+      fun c d -> fa c d - fb c d
   | Mul (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c * fb c
+      fun c d -> fa c d * fb c d
   | Div (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c / fb c
+      fun c d -> fa c d / fb c d
   | Mod (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c mod fb c
+      fun c d -> fa c d mod fb c d
   | Land (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c land fb c
+      fun c d -> fa c d land fb c d
   | Lor (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lor fb c
+      fun c d -> fa c d lor fb c d
   | Lxor (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lxor fb c
+      fun c d -> fa c d lxor fb c d
   | Lnot a ->
       let fa = rec_ a in
-      fun c -> lnot (fa c)
+      fun c d -> lnot (fa c d)
   | Lsl (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsl fb c
+      fun c d -> fa c d lsl fb c d
   | Lsr (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsr fb c
+      fun c d -> fa c d lsr fb c d
   | Cast (w, a) -> (
       let fa = rec_ a in
       match w with
-      | `U8 -> fun c -> fa c land 0xFF
-      | `U16 -> fun c -> fa c land 0xFFFF
-      | `U32 -> fun c -> fa c land 0xFFFF_FFFF
+      | `U8 -> fun c d -> fa c d land 0xFF
+      | `U16 -> fun c d -> fa c d land 0xFFFF
+      | `U32 -> fun c d -> fa c d land 0xFFFF_FFFF
       | `U64 -> fa)
   | If_then_else (c, t, e) ->
       let fc = compile_bool l c in
       let ft = rec_ t and fe = rec_ e in
-      fun c' -> if fc c' then ft c' else fe c'
+      fun c' d' -> if fc c' d' then ft c' d' else fe c' d'
 
 (* Typed-GADT projector: refines [a expr] to [int expr] / [bool expr]
    so [Eq] / [Ne] can dispatch to the right compiler at the right type. *)
-and try_int : type a ctx. ctx leaves -> a expr -> (ctx -> int) option =
+and try_int : type a c1 c2.
+    (c1, c2) leaves -> a expr -> (c1 -> c2 -> int) option =
  fun l e ->
   let go e = Some (compile_int l e) in
   match e with
@@ -467,7 +472,8 @@ and try_int : type a ctx. ctx leaves -> a expr -> (ctx -> int) option =
   | If_then_else _ as e -> go e
   | _ -> None
 
-and try_bool : type a ctx. ctx leaves -> a expr -> (ctx -> bool) option =
+and try_bool : type a c1 c2.
+    (c1, c2) leaves -> a expr -> (c1 -> c2 -> bool) option =
  fun l e ->
   let go e = Some (compile_bool l e) in
   match e with
@@ -483,76 +489,74 @@ and try_bool : type a ctx. ctx leaves -> a expr -> (ctx -> bool) option =
   | Not _ as e -> go e
   | _ -> None
 
-and compile_bool : type ctx. ctx leaves -> bool expr -> ctx -> bool =
+and compile_bool : type c1 c2. (c1, c2) leaves -> bool expr -> c1 -> c2 -> bool
+    =
  fun l e ->
   let int_rec = compile_int l in
   let bool_rec = compile_bool l in
   match e with
-  | Bool b -> fun _ -> b
+  | Bool b -> fun _ _ -> b
   | Eq (a, b) -> (
       match (try_int l a, try_int l b, try_bool l a, try_bool l b) with
-      | Some fa, Some fb, _, _ -> fun c -> fa c = fb c
-      | _, _, Some fa, Some fb -> fun c -> fa c = fb c
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d = fb c d
+      | _, _, Some fa, Some fb -> fun c d -> fa c d = fb c d
       | _ -> assert false)
   | Ne (a, b) -> (
       match (try_int l a, try_int l b, try_bool l a, try_bool l b) with
-      | Some fa, Some fb, _, _ -> fun c -> fa c <> fb c
-      | _, _, Some fa, Some fb -> fun c -> fa c <> fb c
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d <> fb c d
+      | _, _, Some fa, Some fb -> fun c d -> fa c d <> fb c d
       | _ -> assert false)
   | Lt (a, b) ->
       let fa = int_rec a and fb = int_rec b in
-      fun c -> fa c < fb c
+      fun c d -> fa c d < fb c d
   | Le (a, b) ->
       let fa = int_rec a and fb = int_rec b in
-      fun c -> fa c <= fb c
+      fun c d -> fa c d <= fb c d
   | Gt (a, b) ->
       let fa = int_rec a and fb = int_rec b in
-      fun c -> fa c > fb c
+      fun c d -> fa c d > fb c d
   | Ge (a, b) ->
       let fa = int_rec a and fb = int_rec b in
-      fun c -> fa c >= fb c
+      fun c d -> fa c d >= fb c d
   | And (a, b) ->
       let fa = bool_rec a and fb = bool_rec b in
-      fun c -> fa c && fb c
+      fun c d -> fa c d && fb c d
   | Or (a, b) ->
       let fa = bool_rec a and fb = bool_rec b in
-      fun c -> fa c || fb c
+      fun c d -> fa c d || fb c d
   | Not e ->
       let fe = bool_rec e in
-      fun c -> not (fe c)
+      fun c d -> not (fe c d)
 
-(* Closure-based access layer: [ctx = bytes * int]. The pair is
-   re-allocated per call site; profile if this becomes hot. *)
+(* Closure-based access layer: the context is [buf] and [base], passed as two
+   curried arguments. The compiled offset/size functions are [bytes -> int ->
+   int] directly, so evaluating a size expression allocates nothing per call. *)
 let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
-    (env : field_reader list) : (bytes * int) leaves =
+    (env : field_reader list) : (bytes, int) leaves =
   {
     ref_ =
       (fun name ->
         match List.assoc_opt name env with
-        | Some reader -> fun (buf, base) -> reader buf base
+        | Some reader -> reader
         | None ->
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
-    param_ref = (fun (Pack_param p) _ -> !(p.ph_cell));
+    param_ref = (fun (Pack_param p) _ _ -> !(p.ph_cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
         match field_wire_size t with
-        | Some n -> fun _ -> n
+        | Some n -> fun _ _ -> n
         | None -> invalid_arg "Codec: sizeof on variable-size type");
-    sizeof_this = (fun (buf, base) -> sizeof_this buf base);
+    sizeof_this;
     field_pos =
-      (fun _ -> invalid_arg "Codec: [field_pos] only valid inside an action");
+      (fun _ _ -> invalid_arg "Codec: [field_pos] only valid inside an action");
   }
 
 let compile_expr ?sizeof_this env e =
-  let l = bytes_leaves ?sizeof_this env in
-  let f = compile_int l e in
-  fun buf base -> f (buf, base)
+  compile_int (bytes_leaves ?sizeof_this env) e
 
 let compile_bool_expr ?sizeof_this env e =
-  let l = bytes_leaves ?sizeof_this env in
-  let f = compile_bool l e in
-  fun buf base -> f (buf, base)
+  compile_bool (bytes_leaves ?sizeof_this env) e
 
 (* Int-array access layer: zero-alloc per decode. Used by field
    constraints / where clauses where the validator has already populated
@@ -560,26 +564,35 @@ let compile_bool_expr ?sizeof_this env e =
 type idx = string -> int
 type compile_ctx = { idx : idx; sizeof_this : int; field_pos : int }
 
-let array_leaves (cc : compile_ctx) : int array leaves =
+let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
   {
     ref_ =
       (fun name ->
         let i = cc.idx name in
-        fun a -> a.(i));
+        fun a () -> a.(i));
     param_ref =
-      (fun (Pack_param p) a ->
+      (fun (Pack_param p) a () ->
+        (* [ph_slot] is assigned during sealing, after the leaves are built,
+           so it must be read per call rather than captured here. *)
         let i = p.ph_slot in
         if i >= 0 then a.(i) else !(p.ph_cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
-        fun _ -> n);
-    sizeof_this = (fun _ -> cc.sizeof_this);
-    field_pos = (fun _ -> cc.field_pos);
+        fun _ () -> n);
+    sizeof_this = (fun _ () -> cc.sizeof_this);
+    field_pos = (fun _ () -> cc.field_pos);
   }
 
-let compile_int_arr cc e = compile_int (array_leaves cc) e
-let compile_bool_arr cc e = compile_bool (array_leaves cc) e
+(* The int-array layer needs only the array, so the second context argument is
+   an immediate unit -- threaded here so callers keep the [arr -> _] shape. *)
+let compile_int_arr cc e =
+  let f = compile_int (array_leaves cc) e in
+  fun arr -> f arr ()
+
+let compile_bool_arr cc e =
+  let f = compile_bool (array_leaves cc) e in
+  fun arr -> f arr ()
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign writes to ph_cell (mutable param) and updates the array.
@@ -1822,11 +1835,7 @@ let compile_var_bytes : type a r.
     | _ ->
         let raw_reader = var_bytes_reader typ off_fn size_fn in
         let raw_writer = var_bytes_writer typ fld.get size_fn in
-        let int_reader buf base =
-          match int_of_typ_value typ (raw_reader buf base) with
-          | Some v -> v
-          | None -> 0
-        in
+        let int_reader buf base = int_of_typ_value typ (raw_reader buf base) in
         (raw_reader, raw_writer, int_reader)
   in
   let populate = build_populate typ ctx.n_fields raw_reader in
@@ -1871,11 +1880,7 @@ let compile_scalar_or_var : type a r.
       let raw_writer : r -> bytes -> int -> int -> int =
        fun v buf _base write_off -> raw_encoder buf write_off (get v)
       in
-      let int_reader buf base =
-        match int_of_typ_value typ (raw_reader buf base) with
-        | Some v -> v
-        | None -> 0
-      in
+      let int_reader buf base = int_of_typ_value typ (raw_reader buf base) in
       let populate = build_populate typ ctx.n_fields raw_reader in
       {
         raw_reader;
