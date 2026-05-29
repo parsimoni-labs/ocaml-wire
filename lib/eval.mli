@@ -24,6 +24,11 @@ val int_of : 'a Types.typ -> 'a -> int option
 (** [int_of typ v] converts a typed value to [int]. Returns [None] for types
     that don't fit in OCaml int (uint64 > 2^62, non-numeric). *)
 
+val int_of_default : 'a Types.typ -> 'a -> int
+(** [int_of_default typ v] is [int_of typ v] with the [None] cases (non-numeric,
+    or uint64/int64 over 2^62) mapped to 0. Allocation-free on the numeric path;
+    used by the cross-field size/offset readers, which want an [int] anyway. *)
+
 val expr : ctx -> 'a Types.expr -> 'a
 (** [expr ctx e] evaluates a top-level expression. Raises on [Ref] (cross-field
     references are only valid inside a struct). [Sizeof_this] and [Field_pos]
