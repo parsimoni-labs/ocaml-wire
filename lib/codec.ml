@@ -1697,6 +1697,11 @@ let var_bytes_writer : type a r.
          (parametric size, bind via ?env)"
         actual expected
   in
+  let write_str s =
+    let len = String.length s in
+    Bytes.blit_string s 0 buf write_off len;
+    write_off + len
+  in
   match typ with
   | Byte_slice _ ->
       let src = (value : Slice.t) in
@@ -1706,34 +1711,21 @@ let var_bytes_writer : type a r.
       write_off + len
   | Byte_array _ ->
       let s = (value : string) in
-      let len = String.length s in
-      check_len ~actual:len;
-      Bytes.blit_string s 0 buf write_off len;
-      write_off + len
+      check_len ~actual:(String.length s);
+      write_str s
   | Byte_array_where _ ->
       let s = (value : string) in
-      let len = String.length s in
-      check_len ~actual:len;
-      Bytes.blit_string s 0 buf write_off len;
-      write_off + len
-  | All_bytes ->
-      let s = (value : string) in
-      let len = String.length s in
-      Bytes.blit_string s 0 buf write_off len;
-      write_off + len
-  | All_zeros ->
-      let s = (value : string) in
-      let len = String.length s in
-      Bytes.blit_string s 0 buf write_off len;
-      write_off + len
+      check_len ~actual:(String.length s);
+      write_str s
+  | All_bytes -> write_str (value : string)
+  | All_zeros -> write_str (value : string)
   | Zeroterm ->
       let s = (value : string) in
       if String.contains s '\000' then
         invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
-      let len = String.length s in
-      Bytes.blit_string s 0 buf write_off len;
-      Bytes.set_uint8 buf (write_off + len) 0;
-      write_off + len + 1
+      let e = write_str s in
+      Bytes.set_uint8 buf e 0;
+      e + 1
   | Zeroterm_at_most _ ->
       let s = (value : string) in
       if String.contains s '\000' then
