@@ -40,11 +40,12 @@
 ;
 ; Run with: BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/gen_c
 
+; The executable is pure OCaml and always builds; only running it (the
+; [gen_c] rule below) needs EverParse, so the build gate lives on the rule.
+
 (executable
  (name gen_c)
  (modules gen_c)
- (enabled_if
-  (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries wire wire.3d wire.stubs unix))
 
 (rule
