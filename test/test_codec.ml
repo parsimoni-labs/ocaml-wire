@@ -1967,6 +1967,48 @@ let test_dep_codec_ref () =
     "ref data[4]" 0x14
     (Bytes.get_uint8 (Bs.bytes data) (Bs.first data + 4))
 
+(* A [byte_slice] sized by a 64-bit length field: an adversarial length that
+   does not fit a native int must fail the parse, not be silently read as a
+   0-length field. *)
+let u64_sized_codec =
+  let f_len = Field.v "Len" uint64be in
+  let f_data = Field.v "Data" (byte_slice ~size:(Field.ref f_len)) in
+  let cf_len = Codec.(f_len $ fun (l, _) -> l) in
+  let cf_data = Codec.(f_data $ fun (_, d) -> d) in
+  Codec.v "U64Size" (fun len data -> (len, data)) [ cf_len; cf_data ]
+
+let u64_len_buf v =
+  (* 8-byte BE length followed by a few payload bytes. *)
+  let b = Bytes.create 16 in
+  Bytes.set_int64_be b 0 v;
+  b
+
+let test_dep_size_in_range () =
+  let _len, data =
+    decode_ok (Codec.decode u64_sized_codec (u64_len_buf 4L) 0)
+  in
+  Alcotest.(check int)
+    "in-range length reads that many bytes" 4 (Bs.length data)
+
+let test_dep_size_out_of_range () =
+  let cases =
+    [
+      ("all-ones", 0xFFFF_FFFF_FFFF_FFFFL);
+      ("2^63", 0x8000_0000_0000_0000L);
+      ("max_int + 1", Int64.add (Int64.of_int max_int) 1L);
+      ("int64 -1 as length", -1L);
+    ]
+  in
+  List.iter
+    (fun (name, v) ->
+      match Codec.decode u64_sized_codec (u64_len_buf v) 0 with
+      | Ok _ -> Alcotest.failf "%s: expected Parse_error, decoded ok" name
+      | Error (Constraint_failed _) -> ()
+      | Error e ->
+          Alcotest.failf "%s: expected Constraint_failed, got %a" name
+            pp_parse_error e)
+    cases
+
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
   let f_sz = Field.v "Size" uint8 in
@@ -4145,6 +4187,9 @@ let suite =
       Alcotest.test_case "dep: wire_size_at" `Quick test_dep_compute_wire_size;
       (* Field.ref expressions *)
       Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
+      Alcotest.test_case "dep: u64 size in range" `Quick test_dep_size_in_range;
+      Alcotest.test_case "dep: u64 size out of range raises" `Quick
+        test_dep_size_out_of_range;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;
       (* struct_of_codec for variable-size codecs *)

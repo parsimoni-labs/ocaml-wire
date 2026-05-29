@@ -76,6 +76,11 @@
 
 ### Fixed
 
+- A cross-field size/offset/`present` expression that reads an integer field
+  whose value exceeds the native int range (a `uint64`/`int64` length beyond
+  `max_int`), or that references a non-integer field, now raises
+  `Parse_error` instead of silently evaluating to 0. An out-of-range length
+  was being read as an empty field, masking malformed input (#82, @samoht)
 - `Codec.size_of_value` now counts a `Field.repeat`'s elements instead of
   reporting zero for a dynamic byte budget. Like the casetype case in #78, a
   buffer sized from `Codec.size_of_value` for a codec with a repeat field

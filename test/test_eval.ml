@@ -19,6 +19,51 @@ let test_int_of () =
     (Eval.int_of Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
   Alcotest.(check (option int)) "unit" None (Eval.int_of Types.Unit ())
 
+(* [int_of_exn] returns the same value as [int_of] on the representable cases,
+   but where [int_of] returns [None] -- an out-of-range 64-bit value or a
+   non-integer type -- it raises [Parse_error (Constraint_failed _)] instead of
+   silently coercing to 0. *)
+let raises_constraint name f =
+  match f () with
+  | _ -> Alcotest.failf "%s: expected Parse_error, got a value" name
+  | exception Types.Parse_error (Types.Constraint_failed _) -> ()
+  | exception e ->
+      Alcotest.failf "%s: expected Parse_error, got %s" name
+        (Printexc.to_string e)
+
+let test_int_of_exn_ok () =
+  Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 7);
+  Alcotest.(check int) "uint16be" 300 (Eval.int_of_exn Types.uint16be 300);
+  Alcotest.(check int) "uint64 small" 42 (Eval.int_of_exn Types.uint64be 42L);
+  Alcotest.(check int)
+    "int64 small" 100
+    (Eval.int_of_exn Types.(Int64 Big) 100L);
+  (* [max_int] is the largest value [Int64.unsigned_to_int] accepts. *)
+  Alcotest.(check int)
+    "uint64 = max_int" max_int
+    (Eval.int_of_exn Types.uint64be (Int64.of_int max_int))
+
+let test_int_of_exn_overflow () =
+  (* Adversarial 64-bit lengths that do not fit a native int must fail the
+     parse rather than be read as 0. *)
+  raises_constraint "uint64 all-ones" (fun () ->
+      Eval.int_of_exn Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
+  raises_constraint "uint64 = 2^63" (fun () ->
+      Eval.int_of_exn Types.uint64be 0x8000_0000_0000_0000L);
+  raises_constraint "uint64 = max_int + 1" (fun () ->
+      Eval.int_of_exn Types.uint64be (Int64.add (Int64.of_int max_int) 1L));
+  (* A signed int64 with the top bit set is a huge unsigned value. *)
+  raises_constraint "int64 = -1" (fun () ->
+      Eval.int_of_exn Types.(Int64 Big) (-1L));
+  raises_constraint "int64 = min_int" (fun () ->
+      Eval.int_of_exn Types.(Int64 Big) Int64.min_int)
+
+let test_int_of_exn_non_integer () =
+  raises_constraint "unit" (fun () -> Eval.int_of_exn Types.Unit ());
+  raises_constraint "float64" (fun () -> Eval.int_of_exn Types.float64be 1.5);
+  raises_constraint "byte_array" (fun () ->
+      Eval.int_of_exn (Types.byte_array ~size:(Types.Int 4)) "abcd")
+
 let test_expr_const () =
   let ctx = Eval.empty in
   Alcotest.(check int) "int" 42 (Eval.expr ctx (Types.Int 42));
@@ -60,6 +105,11 @@ let suite =
   ( "eval",
     [
       Alcotest.test_case "int_of" `Quick test_int_of;
+      Alcotest.test_case "int_of_exn representable" `Quick test_int_of_exn_ok;
+      Alcotest.test_case "int_of_exn overflow raises" `Quick
+        test_int_of_exn_overflow;
+      Alcotest.test_case "int_of_exn non-integer raises" `Quick
+        test_int_of_exn_non_integer;
       Alcotest.test_case "expr constants" `Quick test_expr_const;
       Alcotest.test_case "expr Ref fails" `Quick test_expr_ref_fails;
       Alcotest.test_case "cast U8" `Quick test_cast_u8;

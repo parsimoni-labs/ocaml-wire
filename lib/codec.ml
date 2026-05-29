@@ -221,7 +221,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
           fun _buf _base -> failwith "build_field_reader: unsupported type")
   | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
 
-let int_of_typ_value = Eval.int_of_default
+let int_of_typ_value = Eval.int_of_exn
 
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot

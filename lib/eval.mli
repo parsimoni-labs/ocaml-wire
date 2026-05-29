@@ -24,10 +24,13 @@ val int_of : 'a Types.typ -> 'a -> int option
 (** [int_of typ v] converts a typed value to [int]. Returns [None] for types
     that don't fit in OCaml int (uint64 > 2^62, non-numeric). *)
 
-val int_of_default : 'a Types.typ -> 'a -> int
-(** [int_of_default typ v] is [int_of typ v] with the [None] cases (non-numeric,
-    or uint64/int64 over 2^62) mapped to 0. Allocation-free on the numeric path;
-    used by the cross-field size/offset readers, which want an [int] anyway. *)
+val int_of_exn : 'a Types.typ -> 'a -> int
+(** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
+    [int] directly (no boxing on the numeric path) and raises
+    {!Types.Parse_error} for the cases {!val-int_of} reports as [None] (a
+    [uint64]/[int64] value beyond the native int range, or a non-integer type).
+    Used by the cross-field size/offset/present readers, where an
+    unrepresentable value must fail the parse. *)
 
 val expr : ctx -> 'a Types.expr -> 'a
 (** [expr ctx e] evaluates a top-level expression. Raises on [Ref] (cross-field

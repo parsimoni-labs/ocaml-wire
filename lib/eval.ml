@@ -44,11 +44,23 @@ let rec int_of : type a. a typ -> a -> int option =
   | Repeat _ ->
       None
 
-(* Hot-path variant of [int_of]: returns [int] directly, mapping the types
-   [int_of] reports as [None] (non-numeric, or uint64/int64 over 2^62) to 0.
-   This is exactly what the cross-field size/offset readers do with [int_of]'s
-   result, so collapsing it here avoids boxing a [Some] per field read. *)
-let rec int_of_default : type a. a typ -> a -> int =
+(* Hot-path variant of [int_of] for the cross-field size/offset/present
+   readers, which need a plain [int]. Returns it directly (no [Some] box on the
+   numeric path) and raises [Parse_error] when the value is not a usable int: a
+   [uint64]/[int64] beyond the native int range (adversarial input), or a
+   non-integer field referenced where an integer is required (a schema error). *)
+let int_overflow () =
+  raise
+    (Parse_error
+       (Constraint_failed "integer field value exceeds the native int range"))
+
+let not_an_integer () =
+  raise
+    (Parse_error
+       (Constraint_failed
+          "non-integer field referenced where an integer is required"))
+
+let rec int_of_exn : type a. a typ -> a -> int =
  fun typ v ->
   match typ with
   | Uint8 -> v
@@ -56,24 +68,26 @@ let rec int_of_default : type a. a typ -> a -> int =
   | Uint_var _ -> v
   | Uint32 _ -> UInt32.to_int v
   | Uint63 _ -> UInt63.to_int v
-  | Uint64 _ -> ( match Int64.unsigned_to_int v with Some n -> n | None -> 0)
+  | Uint64 _ -> (
+      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow ())
   | Int8 -> v
   | Int16 _ -> v
   | Int32 _ -> v
-  | Int64 _ -> ( match Int64.unsigned_to_int v with Some n -> n | None -> 0)
-  | Float32 _ -> 0
-  | Float64 _ -> 0
+  | Int64 _ -> (
+      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow ())
+  | Float32 _ -> not_an_integer ()
+  | Float64 _ -> not_an_integer ()
   | Bits _ -> v
-  | Enum { base; _ } -> int_of_default base v
-  | Where { inner; _ } -> int_of_default inner v
-  | Single_elem { elem; _ } -> int_of_default elem v
-  | Apply { typ; _ } -> int_of_default typ v
-  | Map { inner; encode; _ } -> int_of_default inner (encode v)
+  | Enum { base; _ } -> int_of_exn base v
+  | Where { inner; _ } -> int_of_exn inner v
+  | Single_elem { elem; _ } -> int_of_exn elem v
+  | Apply { typ; _ } -> int_of_exn typ v
+  | Map { inner; encode; _ } -> int_of_exn inner (encode v)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
   | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
   | Repeat _ ->
-      0
+      not_an_integer ()
 
 let rec expr : type a. ctx -> a expr -> a =
  fun ctx e ->
