@@ -1,3 +1,3 @@
 (executable
  (name bench)
- (libraries demo space wire memtrace))
+ (libraries demo space wire bytesrw memtrace))

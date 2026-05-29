@@ -136,6 +136,124 @@ let repeat_data n =
       done;
       b)
 
+(* SSH_MSG_KEXINIT (RFC 4253 7.1): a 16-byte cookie followed by ten
+   length-prefixed name-lists, then a flag and a reserved word. Every
+   name-list is a [byte_slice] whose size is [ref length], so each one
+   compiles through [compile_expr] (codec.ml:550) and reads its length
+   field via [int_of_typ_value] (eval.ml). Because the offsets are
+   dynamic, decoding field k re-chains every prior [size_fn], making the
+   per-decode tuple/option allocation quadratic in the ten name-lists --
+   the exact shape that surfaces both hotspots in a trace. *)
+module Slice = Bytesrw.Bytes.Slice
+
+type kexinit = {
+  k_cookie : Slice.t;
+  k_kex : Slice.t;
+  k_host_key : Slice.t;
+  k_enc_c2s : Slice.t;
+  k_enc_s2c : Slice.t;
+  k_mac_c2s : Slice.t;
+  k_mac_s2c : Slice.t;
+  k_comp_c2s : Slice.t;
+  k_comp_s2c : Slice.t;
+  k_lang_c2s : Slice.t;
+  k_lang_s2c : Slice.t;
+  k_first_follows : int;
+  k_reserved : int;
+}
+
+let kex_len name = Wire.Field.v name Wire.uint32be
+let f_kex_len = kex_len "KexLen"
+let f_hk_len = kex_len "HostKeyLen"
+let f_ec_len = kex_len "EncC2SLen"
+let f_es_len = kex_len "EncS2CLen"
+let f_mc_len = kex_len "MacC2SLen"
+let f_ms_len = kex_len "MacS2CLen"
+let f_cc_len = kex_len "CompC2SLen"
+let f_cs_len = kex_len "CompS2CLen"
+let f_lc_len = kex_len "LangC2SLen"
+let f_ls_len = kex_len "LangS2CLen"
+
+let name_list name len_field =
+  Wire.Field.v name (Wire.byte_slice ~size:(Wire.Field.ref len_field))
+
+let kexinit_codec =
+  Wire.Codec.v "Kexinit"
+    (fun cookie _kl kex _hl hk _ecl ec _esl es _mcl mc _msl ms _ccl cc _csl cs
+         _lcl lc _lsl ls first reserved ->
+      {
+        k_cookie = cookie;
+        k_kex = kex;
+        k_host_key = hk;
+        k_enc_c2s = ec;
+        k_enc_s2c = es;
+        k_mac_c2s = mc;
+        k_mac_s2c = ms;
+        k_comp_c2s = cc;
+        k_comp_s2c = cs;
+        k_lang_c2s = lc;
+        k_lang_s2c = ls;
+        k_first_follows = first;
+        k_reserved = reserved;
+      })
+    Wire.Codec.
+      [
+        ( Wire.Field.v "Cookie" (Wire.byte_slice ~size:(Wire.int 16)) $ fun r ->
+          r.k_cookie );
+        (f_kex_len $ fun r -> Slice.length r.k_kex);
+        (name_list "Kex" f_kex_len $ fun r -> r.k_kex);
+        (f_hk_len $ fun r -> Slice.length r.k_host_key);
+        (name_list "HostKey" f_hk_len $ fun r -> r.k_host_key);
+        (f_ec_len $ fun r -> Slice.length r.k_enc_c2s);
+        (name_list "EncC2S" f_ec_len $ fun r -> r.k_enc_c2s);
+        (f_es_len $ fun r -> Slice.length r.k_enc_s2c);
+        (name_list "EncS2C" f_es_len $ fun r -> r.k_enc_s2c);
+        (f_mc_len $ fun r -> Slice.length r.k_mac_c2s);
+        (name_list "MacC2S" f_mc_len $ fun r -> r.k_mac_c2s);
+        (f_ms_len $ fun r -> Slice.length r.k_mac_s2c);
+        (name_list "MacS2C" f_ms_len $ fun r -> r.k_mac_s2c);
+        (f_cc_len $ fun r -> Slice.length r.k_comp_c2s);
+        (name_list "CompC2S" f_cc_len $ fun r -> r.k_comp_c2s);
+        (f_cs_len $ fun r -> Slice.length r.k_comp_s2c);
+        (name_list "CompS2C" f_cs_len $ fun r -> r.k_comp_s2c);
+        (f_lc_len $ fun r -> Slice.length r.k_lang_c2s);
+        (name_list "LangC2S" f_lc_len $ fun r -> r.k_lang_c2s);
+        (f_ls_len $ fun r -> Slice.length r.k_lang_s2c);
+        (name_list "LangS2C" f_ls_len $ fun r -> r.k_lang_s2c);
+        (Wire.Field.v "FirstFollows" Wire.uint8 $ fun r -> r.k_first_follows);
+        (Wire.Field.v "Reserved" Wire.uint32be $ fun r -> r.k_reserved);
+      ]
+
+let kexinit_lists =
+  [
+    "curve25519-sha256,ecdh-sha2-nistp256,diffie-hellman-group14-sha256";
+    "ssh-ed25519,rsa-sha2-512,rsa-sha2-256";
+    "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-ctr";
+    "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-ctr";
+    "hmac-sha2-256-etm@openssh.com,hmac-sha2-256";
+    "hmac-sha2-256-etm@openssh.com,hmac-sha2-256";
+    "none,zlib@openssh.com";
+    "none,zlib@openssh.com";
+    "";
+    "";
+  ]
+
+let kexinit_wire () =
+  let b = Buffer.create 512 in
+  Buffer.add_string b (String.make 16 '\x42');
+  List.iter
+    (fun s ->
+      let n = String.length s in
+      Buffer.add_char b (Char.chr ((n lsr 24) land 0xFF));
+      Buffer.add_char b (Char.chr ((n lsr 16) land 0xFF));
+      Buffer.add_char b (Char.chr ((n lsr 8) land 0xFF));
+      Buffer.add_char b (Char.chr (n land 0xFF));
+      Buffer.add_string b s)
+    kexinit_lists;
+  Buffer.add_char b '\x00';
+  Buffer.add_string b "\x00\x00\x00\x00";
+  Bytes.unsafe_of_string (Buffer.contents b)
+
 let all_schemas =
   [
     Any
@@ -248,6 +366,16 @@ let run_clcw_polling () =
     done
   done
 
+let run_kexinit () =
+  let buf = kexinit_wire () in
+  let decode = Wire.Codec.decode_exn kexinit_codec in
+  Fmt.pr "  KEXINIT decode (10 length-prefixed name-lists)...\n%!";
+  for _ = 1 to iterations do
+    for _ = 1 to n_values do
+      ignore (Sys.opaque_identity (decode buf 0))
+    done
+  done
+
 let () =
   Memtrace.trace_if_requested ~context:"wire-codecs" ();
   let filter = if Array.length Sys.argv > 1 then Some Sys.argv.(1) else None in
@@ -264,4 +392,5 @@ let () =
   Fmt.pr "\n";
   if filter_matches "clcw" then run_zero_copy ();
   if filter_matches "polling" || filter_matches "clcw" then run_clcw_polling ();
+  if filter_matches "kexinit" then run_kexinit ();
   Fmt.pr "\nDone.\n"
