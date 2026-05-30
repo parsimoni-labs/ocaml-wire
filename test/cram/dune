@@ -1,4 +1,4 @@
 (cram
  (deps
   (package wire)
-  ../fixtures/test_fixtures.ml))
+  ../helpers/test_helpers.ml))

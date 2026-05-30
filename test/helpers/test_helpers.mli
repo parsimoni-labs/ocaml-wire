@@ -67,3 +67,12 @@ type multi_record = { x : int; y : int }
 val multi_record_codec : multi_record Codec.t
 (** [multi_record_codec] is a two-[uint16be]-field record reused by ASCII
     rendering and codec encode/decode tests. *)
+
+(** {1 Decode assertions} *)
+
+val decode_ok : ('a, parse_error) result -> 'a
+(** [decode_ok r] returns the decoded value, failing the test on [Error]. *)
+
+val expect_constraint_fail : ('a, parse_error) result -> unit
+(** [expect_constraint_fail r] asserts [r] is [Error (Constraint_failed _)],
+    failing the test otherwise. *)

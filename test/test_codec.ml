@@ -2,13 +2,9 @@
 
 open Wire
 open Wire.Everparse.Raw
-open Test_fixtures
+open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
-
-let decode_ok = function
-  | Ok v -> v
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 (* Helper: encode record to string using Codec API *)
 let encode_record codec v =
@@ -221,7 +217,7 @@ let test_struct_of_codec_metadata () =
     (contains ~sub:"mutable" output)
 
 (* Record with multiple uint16be fields --
-   [multi_record] / [multi_record_codec] live in {!Test_fixtures}. *)
+   [multi_record] / [multi_record_codec] live in {!Test_helpers}. *)
 
 let test_record_with_multi () =
   let original = { x = 0x1234; y = 0x5678 } in
@@ -2171,7 +2167,7 @@ let test_bitfield_load_shared () =
   Alcotest.(check int) "b" 0xB b
 
 (* -- Nested: Codec typ: embed a sub-codec as a field --
-   [inner] / [outer] / [inner_codec] / [outer_codec] live in {!Test_fixtures}. *)
+   [inner] / [outer] / [inner_codec] / [outer_codec] live in {!Test_helpers}. *)
 
 let test_codec_embed_decode () =
   (* header(1) + tag(1) + value(2) + trailer(1) = 5 bytes *)
@@ -2252,7 +2248,7 @@ let test_codec_embed_bitfield () =
   Alcotest.(check int) "checksum" 0xFF r.checksum
 
 (* Two levels of nesting --
-   [l0] / [l1] / [l2] and their codecs live in {!Test_fixtures}. *)
+   [l0] / [l1] / [l2] and their codecs live in {!Test_helpers}. *)
 
 let test_codec_embed_nested () =
   (* l2(1) + l1_y(2) + z(1) = 4 bytes *)
@@ -2514,7 +2510,7 @@ let test_codec_crossref_field_bitfield () =
 
 (* -- Nested: Optional typ: conditional field presence --
    [opt_record], [opt_codec], [opt_codec_present], [opt_codec_absent] live
-   in {!Test_fixtures}. *)
+   in {!Test_helpers}. *)
 
 let test_optional_present_decode () =
   (* hdr(1) + payload(2) + trail(1) = 4 bytes *)
@@ -2935,7 +2931,7 @@ let test_uint64_ref_in_size () =
   Alcotest.(check string) "data" "ABC" data
 
 (* -- Nested: Repeat typ: parse elements until byte budget exhausted --
-   [container], [f_cnt_length], [repeat_codec] live in {!Test_fixtures}. *)
+   [container], [f_cnt_length], [repeat_codec] live in {!Test_helpers}. *)
 
 let test_repeat_decode_empty () =
   (* length=0 -> no items *)
@@ -3253,7 +3249,7 @@ let test_length_prefixed_casetype () =
 
 (* -- Nested: Composition: optional + repeat + codec --
    TM-frame-like structure: header + data zone (repeat of packets) + optional
-   OCF + optional FECF. [packet] / [packet_codec] live in {!Test_fixtures}. *)
+   OCF + optional FECF. [packet] / [packet_codec] live in {!Test_helpers}. *)
 
 type tm_like = {
   tm_hdr : int;

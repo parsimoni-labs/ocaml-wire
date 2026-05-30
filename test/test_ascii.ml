@@ -4,7 +4,7 @@
 
 open Wire
 open Wire.Everparse.Raw
-open Test_fixtures
+open Test_helpers
 
 let check name s expected =
   let output = Ascii.of_struct s in
@@ -112,7 +112,7 @@ let test_variable () =
     (Re.execp (Re.compile (Re.str "data")) output)
 
 (* -- Codec rendering --
-   [multi_record_codec] lives in {!Test_fixtures}. *)
+   [multi_record_codec] lives in {!Test_helpers}. *)
 
 let test_of_codec () =
   let output = Ascii.of_codec multi_record_codec in
