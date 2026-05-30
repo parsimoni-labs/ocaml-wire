@@ -553,13 +553,14 @@ let optional_or ?(present = true) ~default inner =
 
 let list_equal eq a b = List.length a = List.length b && List.for_all2 eq a b
 
-let repeat ~bytes:total_bytes inner =
+(* [repeat] and [repeat_seq] differ only in the codec name and the items
+   field constructor (list vs seq); the length-prefixed payload generation is
+   identical. *)
+let repeat_sized name make_items ~bytes:total_bytes inner =
   let f_total = Wire.Field.v "_total" Wire.uint16be in
-  let f_items =
-    Wire.Field.repeat "_items" ~size:(Wire.Field.ref f_total) inner.typ
-  in
+  let f_items = make_items ~size:(Wire.Field.ref f_total) inner.typ in
   let codec =
-    Wire.Codec.v "_rep"
+    Wire.Codec.v name
       (fun _ xs -> xs)
       Wire.Codec.[ (f_total $ fun _ -> total_bytes); (f_items $ fun xs -> xs) ]
   in
@@ -593,6 +594,11 @@ let repeat ~bytes:total_bytes inner =
     equal = list_equal inner.equal;
     env = None;
   }
+
+let repeat ~bytes inner =
+  repeat_sized "_rep"
+    (fun ~size typ -> Wire.Field.repeat "_items" ~size typ)
+    ~bytes inner
 
 let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
   let typ = Wire.codec c in
@@ -662,8 +668,9 @@ let concat_bytes_list bss =
   in
   out
 
-let array n inner =
-  let typ = Wire.array ~len:(Wire.int n) inner.typ in
+(* [array] and [array_seq] differ only in the typ constructor. *)
+let array_sized make_typ n inner =
+  let typ = make_typ ~len:(Wire.int n) inner.typ in
   let codec = codec_of_typ typ in
   let positive =
     Alcobar.map
@@ -679,6 +686,8 @@ let array n inner =
     equal = list_equal inner.equal;
     env = None;
   }
+
+let array n inner = array_sized Wire.array n inner
 
 let enum name cases =
   let typ = Wire.enum name cases Wire.uint8 in
@@ -868,63 +877,13 @@ let bit inner =
     env = None;
   }
 
-let array_seq n inner =
-  let typ = Wire.array_seq Wire.seq_list ~len:(Wire.int n) inner.typ in
-  let codec = codec_of_typ typ in
-  let positive =
-    Alcobar.map
-      Alcobar.[ sample_array_of_positives inner.positive n ]
-      (fun (vs, bss) -> (vs, concat_bytes_list bss))
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_any;
-    adversarial = bytes_any;
-    equal = list_equal inner.equal;
-    env = None;
-  }
+let array_seq n inner = array_sized (Wire.array_seq Wire.seq_list) n inner
 
-let repeat_seq ~bytes:total_bytes inner =
-  let f_total = Wire.Field.v "_total" Wire.uint16be in
-  let f_items =
-    Wire.Field.repeat_seq "_items" ~seq:Wire.seq_list
-      ~size:(Wire.Field.ref f_total) inner.typ
-  in
-  let codec =
-    Wire.Codec.v "_rep_seq"
-      (fun _ xs -> xs)
-      Wire.Codec.[ (f_total $ fun _ -> total_bytes); (f_items $ fun xs -> xs) ]
-  in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ inner.positive ]
-      (fun (v, bs) ->
-        let n = Bytes.length bs in
-        if n = 0 || n > total_bytes then ([], Bytes.empty)
-        else
-          let count = total_bytes / n in
-          let items = List.init count (fun _ -> v) in
-          let payload = Bytes.create (count * n) in
-          for i = 0 to count - 1 do
-            Bytes.blit bs 0 payload (i * n) n
-          done;
-          let buf = Bytes.create (2 + (count * n)) in
-          Bytes.set_uint16_be buf 0 (count * n);
-          Bytes.blit payload 0 buf 2 (count * n);
-          (items, buf))
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_any;
-    adversarial = bytes_any;
-    equal = list_equal inner.equal;
-    env = None;
-  }
+let repeat_seq ~bytes inner =
+  repeat_sized "_rep_seq"
+    (fun ~size typ ->
+      Wire.Field.repeat_seq "_items" ~seq:Wire.seq_list ~size typ)
+    ~bytes inner
 
 (* Two-uint8 record where the second field's [~constraint_] references
    the first via [Field.anon]. Exercises the anon constructor. *)
