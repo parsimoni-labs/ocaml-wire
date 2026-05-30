@@ -386,8 +386,13 @@ module Field : sig
     size:int expr ->
     'a typ ->
     'a list t
-  (** [repeat name ~size t] parses elements of type [t] until [size] bytes have
-      been consumed. *)
+  (** [repeat name ~size t] parses elements of type [t] until [size] bytes are
+      consumed. The bound is a byte budget, not an element count, which is what
+      lets the elements be variable-size (a tagged union, a length-prefixed
+      sub-codec). It projects to 3D as [t name[:byte-size size]]. There is no
+      count-driven form: "a count field, then that many variable-size elements"
+      is expressible neither here nor in 3D (3D arrays are byte-budgeted), so
+      that shape needs caller-side iteration over the element parser. *)
 
   val repeat_seq :
     string ->
@@ -398,7 +403,7 @@ module Field : sig
     size:int expr ->
     'a typ ->
     'seq t
-  (** Repeat with a custom sequence builder. *)
+  (** Like {!repeat} but accumulates into a custom sequence via [seq]. *)
 
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)
@@ -595,10 +600,15 @@ val seq_list : ('a, 'a list) seq_map
 (** Default builder: accumulate into a list. *)
 
 val array : len:int expr -> 'a typ -> 'a list typ
-(** Repetition of a description, with length computed from an expression. *)
+(** [array ~len t] parses exactly [len] elements of type [t], where [len] is an
+    element count, not a byte size. It projects to 3D only when [t] has a fixed
+    wire size: 3D arrays are byte-budgeted, so the count is lowered to
+    [len * sizeof t] bytes. For variable-size elements use {!Field.repeat},
+    which is bounded by a byte budget instead. *)
 
 val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
-(** Repetition with custom builder. *)
+(** Like {!array} but accumulates into a custom sequence via a {!type-seq_map}.
+*)
 
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string. *)
