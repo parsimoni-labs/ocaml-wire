@@ -6,6 +6,10 @@ open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
+(* Project a codec to its 3D rendering for substring assertions. *)
+let render_3d codec =
+  to_3d (module_ [ typedef (Everparse.struct_of_codec codec) ])
+
 (* Helper: encode record to string using Codec API *)
 let encode_record codec v =
   let ws = Codec.wire_size codec in
@@ -68,9 +72,7 @@ let test_record_roundtrip () =
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
 let test_struct_of_record () =
-  let s = Everparse.struct_of_codec simple_record_codec in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_3d simple_record_codec in
   Alcotest.(check bool) "contains UINT8" true (contains ~sub:"UINT8" output);
   Alcotest.(check bool) "contains UINT16" true (contains ~sub:"UINT16" output);
   Alcotest.(check bool) "contains UINT32" true (contains ~sub:"UINT32" output);
@@ -197,9 +199,7 @@ let test_validate_then_get () =
   Alcotest.(check int) "validate then get" 8 (get_x buf 0)
 
 let test_struct_of_codec_metadata () =
-  let s = Everparse.struct_of_codec projection_codec in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_3d projection_codec in
   (* The struct-level [where] referencing the field [x] is lowered onto the
      field as a [{ ... }] constraint -- 3D's [where] only sees params. *)
   Alcotest.(check bool)
@@ -513,9 +513,7 @@ let test_packed_mapped_bf_size () =
     (Bytes.unsafe_to_string buf)
 
 let test_struct_of_codec_bitfield () =
-  let s = Everparse.struct_of_codec bf32_codec in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_3d bf32_codec in
   Alcotest.(check bool)
     "contains UINT32BE" true
     (contains ~sub:"UINT32BE" output);
@@ -2024,9 +2022,7 @@ let test_dep_ref_size_eval () =
 
 let test_struct_of_dep () =
   (* struct_of_codec should produce a valid struct for variable-size codecs *)
-  let s = Everparse.struct_of_codec dep_slice_codec in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_3d dep_slice_codec in
   Alcotest.(check bool)
     "contains UINT16BE" true
     (contains ~sub:"UINT16BE" output);
@@ -2034,9 +2030,7 @@ let test_struct_of_dep () =
   Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output)
 
 let test_struct_of_dep_trailer () =
-  let s = Everparse.struct_of_codec trailer_codec in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_3d trailer_codec in
   Alcotest.(check bool) "contains Length" true (contains ~sub:"Length" output);
   Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output);
   Alcotest.(check bool)
@@ -2854,37 +2848,39 @@ let bg_codec ~present =
         (Field.optional "Body" ~present uint8 $ fun r -> r.bg_body);
       ]
 
+(* Decode a present-payload buffer (expect [Some 0x2A]) and an absent buffer
+   (expect [None]) through a [bg_codec] gated on [present]. *)
+let check_bit_gated ~present ~present_buf ~present_label ~absent_buf
+    ~absent_label =
+  let c = bg_codec ~present in
+  let r = decode_ok (Codec.decode c (Bytes.of_string present_buf) 0) in
+  Alcotest.(check (option int)) present_label (Some 0x2A) r.bg_body;
+  let r = decode_ok (Codec.decode c (Bytes.of_string absent_buf) 0) in
+  Alcotest.(check (option int)) absent_label None r.bg_body
+
 let test_optional_land_predicate () =
-  let c =
-    bg_codec ~present:Expr.(Field.ref f_bg_flags land int 0x80 <> int 0)
-  in
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x80\x2A") 0) in
-  Alcotest.(check (option int)) "high bit set" (Some 0x2A) r.bg_body;
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x00") 0) in
-  Alcotest.(check (option int)) "high bit clear" None r.bg_body
+  check_bit_gated
+    ~present:Expr.(Field.ref f_bg_flags land int 0x80 <> int 0)
+    ~present_buf:"\x80\x2A" ~present_label:"high bit set" ~absent_buf:"\x00"
+    ~absent_label:"high bit clear"
 
 let test_optional_lsr_predicate () =
-  let c = bg_codec ~present:Expr.(Field.ref f_bg_flags lsr int 4 <> int 0) in
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x10\x2A") 0) in
-  Alcotest.(check (option int)) "top nibble set" (Some 0x2A) r.bg_body;
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x0F") 0) in
-  Alcotest.(check (option int)) "top nibble clear" None r.bg_body
+  check_bit_gated
+    ~present:Expr.(Field.ref f_bg_flags lsr int 4 <> int 0)
+    ~present_buf:"\x10\x2A" ~present_label:"top nibble set" ~absent_buf:"\x0F"
+    ~absent_label:"top nibble clear"
 
 let test_optional_mod_predicate () =
-  let c = bg_codec ~present:Expr.(Field.ref f_bg_flags mod int 2 <> int 0) in
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x03\x2A") 0) in
-  Alcotest.(check (option int)) "odd" (Some 0x2A) r.bg_body;
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x02") 0) in
-  Alcotest.(check (option int)) "even" None r.bg_body
+  check_bit_gated
+    ~present:Expr.(Field.ref f_bg_flags mod int 2 <> int 0)
+    ~present_buf:"\x03\x2A" ~present_label:"odd" ~absent_buf:"\x02"
+    ~absent_label:"even"
 
 let test_optional_lor_predicate () =
-  let c =
-    bg_codec ~present:Expr.(Field.ref f_bg_flags lor int 0x01 = int 0x01)
-  in
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\x01\x2A") 0) in
-  Alcotest.(check (option int)) "lor matches" (Some 0x2A) r.bg_body;
-  let r = decode_ok (Codec.decode c (Bytes.of_string "\xFF") 0) in
-  Alcotest.(check (option int)) "lor no match" None r.bg_body
+  check_bit_gated
+    ~present:Expr.(Field.ref f_bg_flags lor int 0x01 = int 0x01)
+    ~present_buf:"\x01\x2A" ~present_label:"lor matches" ~absent_buf:"\xFF"
+    ~absent_label:"lor no match"
 
 (* [Field.ref] on an [optional] field must read the inner value, not 0.
    The codec engine used to skip populating the int_array slot for

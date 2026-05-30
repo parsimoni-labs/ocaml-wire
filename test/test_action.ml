@@ -203,14 +203,15 @@ let test_var_local () =
 
 (* -- If -- *)
 
-let test_if_true_branch () =
-  (* if (x > 0) { out = 1 } => out should be 1 when x=42 *)
+(* [if (x > threshold) { out = 1 }], out starting at 0: same codec, the
+   branch is taken or not depending on the input byte. *)
+let check_if_gate name ~threshold ~input ~expected =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
   let f_y = Field.v "y" uint8 in
   let codec =
     let open Codec in
-    v "IfTrue"
+    v name
       (fun x y -> { x; y })
       [
         ( Field.v "x"
@@ -219,7 +220,7 @@ let test_if_true_branch () =
                  [
                    Action.assign out (int 0);
                    Action.if_
-                     Expr.(Field.ref f_x > int 0)
+                     Expr.(Field.ref f_x > int threshold)
                      [ Action.assign out (int 1) ]
                      None;
                  ])
@@ -229,39 +230,14 @@ let test_if_true_branch () =
       ]
   in
   let env = Codec.env codec in
-  let buf = Bytes.of_string "\x2A\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 1 (Param.get env out)
+  ignore (decode_ok (Codec.decode ~env codec (Bytes.of_string input) 0));
+  Alcotest.(check int) "out" expected (Param.get env out)
+
+let test_if_true_branch () =
+  check_if_gate "IfTrue" ~threshold:0 ~input:"\x2A\x00" ~expected:1
 
 let test_if_false_branch () =
-  (* if (x > 100) { out = 1 } => out stays 0 when x=5 *)
-  let out = Param.output "out" uint8 in
-  let f_x = Field.v "x" uint8 in
-  let f_y = Field.v "y" uint8 in
-  let codec =
-    let open Codec in
-    v "IfFalse"
-      (fun x y -> { x; y })
-      [
-        ( Field.v "x"
-            ~action:
-              (Action.on_success
-                 [
-                   Action.assign out (int 0);
-                   Action.if_
-                     Expr.(Field.ref f_x > int 100)
-                     [ Action.assign out (int 1) ]
-                     None;
-                 ])
-            uint8
-        $ fun r -> r.x );
-        (f_y $ fun r -> r.y);
-      ]
-  in
-  let env = Codec.env codec in
-  let buf = Bytes.of_string "\x05\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 0 (Param.get env out)
+  check_if_gate "IfFalse" ~threshold:100 ~input:"\x05\x00" ~expected:0
 
 let test_if_else () =
   (* if (x = 0) { out = 10 } else { out = 20 } *)
