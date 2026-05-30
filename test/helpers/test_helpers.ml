@@ -104,3 +104,18 @@ let multi_record_codec =
         (Field.v "x" uint16be $ fun (r : multi_record) -> r.x);
         (Field.v "y" uint16be $ fun (r : multi_record) -> r.y);
       ]
+
+(* -- Decode assertions -- *)
+
+let decode_ok = function
+  | Ok v -> v
+  | Error e -> Alcotest.failf "unexpected parse error: %a" pp_parse_error e
+
+let expect_constraint_fail = function
+  | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
+  | Error (Constraint_failed _) -> ()
+  | Error e ->
+      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
+let roundtrip name typ testable v =
+  Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))

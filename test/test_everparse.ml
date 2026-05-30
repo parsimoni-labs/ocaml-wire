@@ -2,7 +2,7 @@
 
 open Wire
 open Wire.Everparse.Raw
-open Test_fixtures
+open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -86,7 +86,7 @@ let test_pretty_print () =
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
-   {!Test_fixtures}. *)
+   {!Test_helpers}. *)
 
 type tm_like = {
   hdr : int;
