@@ -116,3 +116,6 @@ let expect_constraint_fail = function
   | Error (Constraint_failed _) -> ()
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
+let roundtrip name typ testable v =
+  Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))

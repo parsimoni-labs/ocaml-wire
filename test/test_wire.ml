@@ -2,6 +2,7 @@
 
 open Wire
 open Wire.Everparse.Raw
+open Test_helpers
 
 (* Helper: parse from a string delivered in slices of [chunk_size] bytes.
    Forces multi-byte values to straddle slice boundaries. *)
@@ -88,20 +89,14 @@ let test_int32be_negative () =
   Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int32be buf)
 
 let test_int64le_roundtrip () =
-  let v = -0x0102_0304_0506_0708L in
-  let s = to_string int64 v in
-  Alcotest.(check int64) "roundtrip" v (of_string_exn int64 s)
+  roundtrip "roundtrip" int64 Alcotest.int64 (-0x0102_0304_0506_0708L)
 
 let test_float32be_roundtrip () =
-  let v = 1.5 in
-  let s = to_string float32be v in
-  Alcotest.(check (float 0.0)) "1.5" v (of_string_exn float32be s)
+  roundtrip "1.5" float32be Alcotest.(float 0.0) 1.5
 
 let test_float64le_roundtrip () =
   List.iter
-    (fun v ->
-      let s = to_string float64 v in
-      Alcotest.(check (float 0.0)) "roundtrip" v (of_string_exn float64 s))
+    (roundtrip "roundtrip" float64 Alcotest.(float 0.0))
     [ 0.0; -0.0; 3.14159; -1e300; Float.infinity; Float.neg_infinity ]
 
 let test_float64_nan_roundtrip () =
@@ -715,42 +710,24 @@ let test_bits_roundtrip_all_combos () =
 (* -- Roundtrip tests -- *)
 
 let test_roundtrip_uint8 () =
-  let original = 0x42 in
-  let encoded = to_string uint8 original in
-  match of_string uint8 encoded with
-  | Ok decoded -> Alcotest.(check int) "roundtrip uint8" original decoded
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  roundtrip "roundtrip uint8" uint8 Alcotest.int 0x42
 
 let test_roundtrip_uint16 () =
-  let original = 0x1234 in
-  let encoded = to_string uint16 original in
-  match of_string uint16 encoded with
-  | Ok decoded -> Alcotest.(check int) "roundtrip uint16" original decoded
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  roundtrip "roundtrip uint16" uint16 Alcotest.int 0x1234
 
 let test_roundtrip_uint32 () =
-  let original = 0x12345678 in
-  let encoded = to_string uint32 original in
-  match of_string uint32 encoded with
-  | Ok decoded -> Alcotest.(check int) "roundtrip uint32" original decoded
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  roundtrip "roundtrip uint32" uint32 Alcotest.int 0x12345678
 
 let test_roundtrip_array () =
-  let original = [ 1; 2; 3; 4; 5 ] in
-  let t = array ~len:(int 5) uint8 in
-  let encoded = to_string t original in
-  match of_string t encoded with
-  | Ok decoded -> Alcotest.(check (list int)) "roundtrip array" original decoded
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  roundtrip "roundtrip array"
+    (array ~len:(int 5) uint8)
+    Alcotest.(list int)
+    [ 1; 2; 3; 4; 5 ]
 
 let test_roundtrip_byte_array () =
-  let original = "hello" in
-  let t = byte_array ~size:(int 5) in
-  let encoded = to_string t original in
-  match of_string t encoded with
-  | Ok decoded ->
-      Alcotest.(check string) "roundtrip byte_array" original decoded
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  roundtrip "roundtrip byte_array"
+    (byte_array ~size:(int 5))
+    Alcotest.string "hello"
 
 (* -- Streaming: cross-slice boundary tests -- *)
 

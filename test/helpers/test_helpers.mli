@@ -76,3 +76,7 @@ val decode_ok : ('a, parse_error) result -> 'a
 val expect_constraint_fail : ('a, parse_error) result -> unit
 (** [expect_constraint_fail r] asserts [r] is [Error (Constraint_failed _)],
     failing the test otherwise. *)
+
+val roundtrip : string -> 'a typ -> 'a Alcotest.testable -> 'a -> unit
+(** [roundtrip name typ testable v] checks that decoding the encoding of [v]
+    yields [v] again, failing the test on a parse error. *)
