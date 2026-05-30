@@ -424,8 +424,10 @@ let byte_array_where n ~per_byte =
     env = None;
   }
 
-let nested n inner =
-  let typ = Wire.nested ~size:(Wire.int n) inner.typ in
+(* [nested] and [nested_at_most] differ only in the typ constructor; the
+   payload-into-fixed-buffer generation is identical. *)
+let nested_sized make_typ n inner =
+  let typ = make_typ ~size:(Wire.int n) inner.typ in
   let codec = codec_of_typ typ in
   let positive =
     Alcobar.map
@@ -452,6 +454,8 @@ let nested n inner =
     equal = inner.equal;
     env = None;
   }
+
+let nested n inner = nested_sized Wire.nested n inner
 
 let map ~decode ~encode inner =
   let typ = Wire.map ~decode ~encode inner.typ in
@@ -547,6 +551,8 @@ let optional_or ?(present = true) ~default inner =
     env = None;
   }
 
+let list_equal eq a b = List.length a = List.length b && List.for_all2 eq a b
+
 let repeat ~bytes:total_bytes inner =
   let f_total = Wire.Field.v "_total" Wire.uint16be in
   let f_items =
@@ -578,16 +584,13 @@ let repeat ~bytes:total_bytes inner =
           Bytes.blit payload 0 buf 2 (count * n);
           (items, buf))
   in
-  let list_equal a b =
-    List.length a = List.length b && List.for_all2 inner.equal a b
-  in
   {
     codec;
     typ;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
-    equal = list_equal;
+    equal = list_equal inner.equal;
     env = None;
   }
 
@@ -610,34 +613,7 @@ let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
     env = None;
   }
 
-let nested_at_most n inner =
-  let typ = Wire.nested_at_most ~size:(Wire.int n) inner.typ in
-  let codec = codec_of_typ typ in
-  let positive =
-    Alcobar.map
-      Alcobar.[ inner.positive ]
-      (fun (v, inner_bytes) ->
-        let buf = Bytes.create n in
-        Bytes.blit inner_bytes 0 buf 0 (min n (Bytes.length inner_bytes));
-        (v, buf))
-  in
-  let adversarial =
-    Alcobar.map
-      Alcobar.[ inner.adversarial ]
-      (fun b ->
-        let buf = Bytes.create n in
-        Bytes.blit b 0 buf 0 (min n (Bytes.length b));
-        buf)
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed n;
-    adversarial;
-    equal = inner.equal;
-    env = None;
-  }
+let nested_at_most n inner = nested_sized Wire.nested_at_most n inner
 
 let variants name cases =
   let typ = Wire.variants name cases Wire.uint8 in
@@ -694,16 +670,13 @@ let array n inner =
       Alcobar.[ sample_array_of_positives inner.positive n ]
       (fun (vs, bss) -> (vs, concat_bytes_list bss))
   in
-  let list_equal a b =
-    List.length a = List.length b && List.for_all2 inner.equal a b
-  in
   {
     codec;
     typ;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
-    equal = list_equal;
+    equal = list_equal inner.equal;
     env = None;
   }
 
@@ -903,16 +876,13 @@ let array_seq n inner =
       Alcobar.[ sample_array_of_positives inner.positive n ]
       (fun (vs, bss) -> (vs, concat_bytes_list bss))
   in
-  let list_equal a b =
-    List.length a = List.length b && List.for_all2 inner.equal a b
-  in
   {
     codec;
     typ;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
-    equal = list_equal;
+    equal = list_equal inner.equal;
     env = None;
   }
 
@@ -946,16 +916,13 @@ let repeat_seq ~bytes:total_bytes inner =
           Bytes.blit payload 0 buf 2 (count * n);
           (items, buf))
   in
-  let list_equal a b =
-    List.length a = List.length b && List.for_all2 inner.equal a b
-  in
   {
     codec;
     typ;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
-    equal = list_equal;
+    equal = list_equal inner.equal;
     env = None;
   }
 
