@@ -2,17 +2,16 @@
 
 open Wire.Private
 
-let test_roundtrip_le () =
+let check_roundtrip name ~set ~get v =
   let buf = Bytes.create 4 in
-  let v = 0xDEAD_BEEF in
-  UInt32.set_le buf 0 v;
-  Alcotest.(check int) "le roundtrip" (v land 0xFFFF_FFFF) (UInt32.le buf 0)
+  set buf 0 v;
+  Alcotest.(check int) name (v land 0xFFFF_FFFF) (get buf 0)
+
+let test_roundtrip_le () =
+  check_roundtrip "le roundtrip" ~set:UInt32.set_le ~get:UInt32.le 0xDEAD_BEEF
 
 let test_roundtrip_be () =
-  let buf = Bytes.create 4 in
-  let v = 0xCAFE_BABE in
-  UInt32.set_be buf 0 v;
-  Alcotest.(check int) "be roundtrip" (v land 0xFFFF_FFFF) (UInt32.be buf 0)
+  check_roundtrip "be roundtrip" ~set:UInt32.set_be ~get:UInt32.be 0xCAFE_BABE
 
 let test_of_int_masks () =
   Alcotest.(check int) "mask" 0xFF (UInt32.of_int 0xFF);

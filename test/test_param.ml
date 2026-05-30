@@ -7,31 +7,25 @@ open Test_helpers
 
 (* -- Param.input / Param.output / Param.decl -- *)
 
+let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
+
+(* Render a one-field struct carrying [p] to 3D for substring assertions. *)
+let render_param_3d p =
+  to_3d
+    (module_
+       [ typedef (param_struct "T" [ Param.decl p ] [ field "x" uint8 ]) ])
+
 let test_input_spec () =
-  let p = Param.input "limit" uint8 in
-  let spec = Param.decl p in
-  let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
+  let output = render_param_3d (Param.input "limit" uint8) in
   Alcotest.(check bool)
     "contains UINT8 limit" true
-    (Re.execp (Re.compile (Re.str "UINT8 limit")) output);
-  Alcotest.(check bool)
-    "not mutable" false
-    (Re.execp (Re.compile (Re.str "mutable")) output)
+    (contains ~sub:"UINT8 limit" output);
+  Alcotest.(check bool) "not mutable" false (contains ~sub:"mutable" output)
 
 let test_output_spec () =
-  let p = Param.output "out" uint16be in
-  let spec = Param.decl p in
-  let s = param_struct "T" [ spec ] [ field "x" uint8 ] in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
-  Alcotest.(check bool)
-    "contains mutable" true
-    (Re.execp (Re.compile (Re.str "mutable")) output);
-  Alcotest.(check bool)
-    "contains out" true
-    (Re.execp (Re.compile (Re.str "out")) output)
+  let output = render_param_3d (Param.output "out" uint16be) in
+  Alcotest.(check bool) "contains mutable" true (contains ~sub:"mutable" output);
+  Alcotest.(check bool) "contains out" true (contains ~sub:"out" output)
 
 (* -- Param.bind / Param.get / Param.env -- *)
 
