@@ -129,12 +129,11 @@ end
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
-exception Parse_exn of parse_error
 exception Validation_error = Parse_error
 
 let[@inline] check_eof len need =
   if need > len then
-    raise (Parse_exn (Unexpected_eof { expected = need; got = len }))
+    raise (Parse_error (Unexpected_eof { expected = need; got = len }))
 
 (* The single decoder kernel. Bytes-based, returns [(value, end_off)].
    All types handled here -- no fallback. Expressions are evaluated in
@@ -150,7 +149,7 @@ let parse_all_zeros buf off len =
   let rec check i =
     if i >= n then s
     else if s.[i] <> '\000' then
-      raise (Parse_exn (All_zeros_failed { offset = off + i }))
+      raise (Parse_error (All_zeros_failed { offset = off + i }))
     else check (i + 1)
   in
   (check 0, len)
@@ -159,7 +158,7 @@ let parse_all_zeros buf off len =
 let nul_pos buf ~first ~limit =
   let rec go i =
     if i >= limit then
-      raise (Parse_exn (Constraint_failed "zeroterm: missing NUL terminator"))
+      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
     else if Bytes.get_uint8 buf i = 0 then i
     else go (i + 1)
   in
@@ -174,10 +173,8 @@ let parse_struct_typ s buf off len =
   let v = Codec.validator_of_struct s in
   let sz = Codec.struct_size_of v buf off in
   check_eof len (off + sz);
-  try
-    Codec.validate_struct v buf off;
-    ((), off + sz)
-  with Parse_error e -> raise (Parse_exn e)
+  Codec.validate_struct v buf off;
+  ((), off + sz)
 
 let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
@@ -273,7 +270,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       for i = 0 to n - 1 do
         let v = Bytes.get_uint8 buf (off + i) in
         if not (Eval.expr (Eval.bind elt_var v Eval.empty) cond) then
-          raise (Parse_exn (Constraint_failed "byte_array_where: per-byte"))
+          raise (Parse_error (Constraint_failed "byte_array_where: per-byte"))
       done;
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
@@ -285,20 +282,15 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       check_eof len (off + n);
       let v, _ = parse_direct elem buf off (off + n) in
       (v, off + n)
-  | Map { inner; decode; _ } -> (
+  | Map { inner; decode; _ } ->
       let v, off' = parse_direct inner buf off len in
-      match decode v with
-      | r -> (r, off')
-      | exception Parse_error e -> raise (Parse_exn e))
-  | Where { cond; inner } ->
-      let v, off' = parse_direct inner buf off len in
-      if Eval.expr Eval.empty cond then (v, off')
-      else raise (Parse_exn (Constraint_failed "where clause"))
+      (decode v, off')
+  | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; _ } ->
       let v, off' = parse_direct base buf off len in
       let valid = List.map snd cases in
       if List.mem v valid then (v, off')
-      else raise (Parse_exn (Invalid_enum { value = v; valid }))
+      else raise (Parse_error (Invalid_enum { value = v; valid }))
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
       parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len
@@ -321,12 +313,18 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
   | Apply _ -> failwith "apply requires a type registry"
 
+and parse_where : type a. a typ -> bool expr -> bytes -> int -> int -> a * int =
+ fun inner cond buf off len ->
+  let v, off' = parse_direct inner buf off len in
+  if Eval.expr Eval.empty cond then (v, off')
+  else raise (Parse_error (Constraint_failed "where clause"))
+
 and parse_casetype : type a k.
     k typ -> (a, k) case_branch list -> bytes -> int -> int -> a * int =
  fun tag cases buf off len ->
   let tag_val, off' = parse_direct tag buf off len in
   let rec find_case = function
-    | [] -> raise (Parse_exn (Constraint_failed "casetype: no matching case"))
+    | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
           let body, off'' = parse_direct cb_inner buf off' len in
@@ -377,19 +375,14 @@ exception Parse_error = Parse_error
 
 let of_string_exn typ s =
   let buf = Bytes.unsafe_of_string s in
-  match parse_direct typ buf 0 (Bytes.length buf) with
-  | v, _ -> v
-  | exception Parse_exn e -> raise (Parse_error e)
+  fst (parse_direct typ buf 0 (Bytes.length buf))
 
 let of_string typ s =
   match of_string_exn typ s with
   | v -> Ok v
   | exception Parse_error e -> Error e
 
-let of_bytes_exn typ b =
-  match parse_direct typ b 0 (Bytes.length b) with
-  | v, _ -> v
-  | exception Parse_exn e -> raise (Parse_error e)
+let of_bytes_exn typ b = fst (parse_direct typ b 0 (Bytes.length b))
 
 let of_bytes typ b =
   match of_bytes_exn typ b with v -> Ok v | exception Parse_error e -> Error e
@@ -409,9 +402,7 @@ let drain_reader reader =
 
 let of_reader_exn typ reader =
   let bytes = drain_reader reader in
-  match parse_direct typ bytes 0 (Bytes.length bytes) with
-  | v, _ -> v
-  | exception Parse_exn e -> raise (Parse_error e)
+  fst (parse_direct typ bytes 0 (Bytes.length bytes))
 
 let of_reader typ reader =
   match of_reader_exn typ reader with
