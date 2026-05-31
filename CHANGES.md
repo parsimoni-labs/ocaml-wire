@@ -80,6 +80,11 @@
 
 ### Fixed
 
+- `Codec.encode` no longer requires an `?env` for a codec whose only
+  parameters are decode-side outputs (a field with an `Action.assign` into a
+  `Param.output`). Output params are never read when encoding, so demanding an
+  env raised `Invalid_argument` spuriously, and an output-param sub-codec
+  embedded as a field could not be encoded at all (#95, @samoht)
 - `Field.repeat` over a `zeroterm` element (a list of NUL-terminated strings
   within a byte budget) now encodes, decodes, and generates a verified
   EverParse validator. It previously raised `Failure` when decoding (#93, @samoht)

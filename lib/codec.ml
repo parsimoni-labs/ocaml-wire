@@ -2699,11 +2699,20 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
       else None)
     t.param_handles
 
+(* Input params (read from the env) drive field sizes/offsets, so encoding
+   without their values would resolve those to 0. Output params are written
+   by decode-side actions and never consulted on encode, so a codec whose only
+   params are outputs needs no env. *)
+let has_input_params (t : 'r t) =
+  List.exists
+    (fun (Param.Pack p) -> (not p.Types.ph_mutable) && p.ph_env_idx >= 0)
+    t.param_handles
+
 let require_env t = function
-  | None when t.n_params = 0 -> ()
+  | None when not (has_input_params t) -> ()
   | None ->
       Fmt.invalid_arg
-        "Codec.encode: codec %s has parameters; pass ?env (e.g. [Codec.env c \
+        "Codec.encode: codec %s has input params; pass ?env (e.g. [Codec.env c \
          |> Param.bind p N])."
         t.name
   | Some env -> (
