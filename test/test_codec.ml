@@ -376,6 +376,36 @@ let test_optional_self_delimiting_codec () =
   Alcotest.(check int) "absent size" 1 n;
   Alcotest.(check (option string)) "absent desc" None d.desc
 
+(* Wire.array over a fixed byte_array element: a fixed-count list of n-byte
+   chunks (e.g. an array of IPv4 addresses). Used to project a double
+   [:byte-size]; the element is now emitted as bare bytes under the budget. *)
+type arr_chunks = { atag : int; addrs : string list }
+
+let arr_chunks_codec =
+  let f_tag = Field.v "tag" uint8 in
+  let f_addrs =
+    Field.v "addrs" (array ~len:(int 3) (byte_array ~size:(int 4)))
+  in
+  Codec.v "ArrChunks"
+    (fun atag addrs -> { atag; addrs })
+    Codec.[ (f_tag $ fun r -> r.atag); (f_addrs $ fun r -> r.addrs) ]
+
+let test_array_byte_array_element () =
+  let v = { atag = 7; addrs = [ "aaaa"; "bbbb"; "cccc" ] } in
+  let sz = Codec.size_of_value arr_chunks_codec v in
+  Alcotest.(check int) "wire size" 13 sz;
+  let buf = Bytes.create sz in
+  Codec.encode arr_chunks_codec v buf 0;
+  match Codec.decode arr_chunks_codec buf 0 with
+  | Ok d -> Alcotest.(check (list string)) "addrs" v.addrs d.addrs
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+
+let test_array_byte_array_projection () =
+  let out = render_3d arr_chunks_codec in
+  Alcotest.(check bool)
+    "single byte-size on the array field" true
+    (contains ~sub:"UINT8 addrs[:byte-size (3 * 4)]" out)
+
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decoding used to raise Failure "unsupported element type in
    repeat" and the schema mis-projected as a double [:byte-size]. *)
@@ -4149,6 +4179,10 @@ let suite =
         test_repeat_byte_array_element;
       Alcotest.test_case "repeat: byte_array element projection" `Quick
         test_repeat_byte_array_projection;
+      Alcotest.test_case "array: byte_array element roundtrip" `Quick
+        test_array_byte_array_element;
+      Alcotest.test_case "array: byte_array element projection" `Quick
+        test_array_byte_array_projection;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;
