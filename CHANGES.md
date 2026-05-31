@@ -76,6 +76,9 @@
 
 ### Fixed
 
+- `Field.repeat` over a `zeroterm` element (a list of NUL-terminated strings
+  within a byte budget) now encodes, decodes, and generates a verified
+  EverParse validator. It previously raised `Failure` when decoding (#93, @samoht)
 - An embedded variable-size sub-codec (`Wire.codec`, e.g. a length-prefixed
   string) used as a field no longer makes EverParse reject the schema with
   `Parse_with_dep_action: tag not readable`; the field is handed to its

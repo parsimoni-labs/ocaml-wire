@@ -365,8 +365,18 @@ let e2e_embedded_var_codec =
       (f_lang $ fun (_, _, l) -> l);
     ]
 
+(* [Field.repeat] over a zeroterm element: a count-prefixed list of
+   NUL-terminated strings. Projects through a synthesised element struct. *)
+let e2e_repeat_zeroterm_codec =
+  let open Wire in
+  let f_n = Field.v "N" uint16be in
+  let f_names = Field.repeat "Names" ~size:(Field.ref f_n) zeroterm in
+  let open Codec in
+  v "ZtRep" (fun n names -> (n, names)) [ f_n $ fst; f_names $ snd ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
+  compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
   compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
   compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;

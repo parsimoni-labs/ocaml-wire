@@ -768,6 +768,15 @@ let casetype_pair : type a k.
   let wrapper = typedef (struct_ name [ tag_field; body_field ]) in
   (dispatch, wrapper)
 
+(* A variable-size, self-delimiting [repeat] element with no named 3D type
+   (e.g. a NUL-terminated string) is wrapped in a one-field element struct so
+   the byte-budget list references a bare name. Fixed-size byte elements use the
+   flat-base form instead; named elements (sub-codecs, casetypes) already render
+   as a name. Returns the wrapper struct name, or [None]. *)
+let repeat_elem_struct : type a. a typ -> string option = function
+  | Zeroterm -> Some "ZtElem"
+  | _ -> None
+
 let casetype_decls_of_struct (s : struct_) : decl list =
   let seen = Hashtbl.create 4 in
   let acc = Stdlib.ref [] in
@@ -798,7 +807,13 @@ let casetype_decls_of_struct (s : struct_) : decl list =
     | Optional { inner; _ } -> extract inner
     | Optional_or { inner; _ } -> extract inner
     | Apply { typ; _ } -> extract typ
-    | Repeat { elem; _ } -> extract elem
+    | Repeat { elem; _ } -> (
+        extract elem;
+        match repeat_elem_struct elem with
+        | Some name when not (Hashtbl.mem seen name) ->
+            Hashtbl.add seen name ();
+            acc := typedef (struct_ name [ field "v" elem ]) :: !acc
+        | _ -> ())
     | Array { elem; _ } -> extract elem
     | Single_elem { elem; _ } -> extract elem
     | _ -> ()
@@ -1177,8 +1192,14 @@ let rec field_suffix : type a.
       (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
   | Optional_or { present; inner; _ } -> optional_suffix present inner
   | Repeat { size; elem; _ } ->
-      (* Variable-length array with byte-size budget *)
-      (Byte_array size, fun ppf -> pp_typ ppf elem)
+      (* Variable-length list within a byte budget. A self-delimiting element
+         with no named type is referenced through its wrapper struct. *)
+      let pp_elem ppf =
+        match repeat_elem_struct elem with
+        | Some name -> Fmt.string ppf name
+        | None -> pp_typ ppf elem
+      in
+      (Byte_array size, pp_elem)
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
   | Zeroterm_at_most { size } ->
       (Zeroterm_at_most size, fun ppf -> Fmt.string ppf "UINT8")
