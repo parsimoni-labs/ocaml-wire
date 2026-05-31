@@ -91,6 +91,9 @@
 - `Field.repeat` over a fixed `byte_array` / `byte_slice` element (a list of
   n-byte chunks) now encodes, decodes, and generates a verified EverParse
   validator. It previously raised `Failure` when decoding (#89, @samoht)
+- `Wire.array` whose element is a fixed `byte_array` / `byte_slice` (e.g. an
+  array of fixed-size addresses) now generates a valid EverParse validator;
+  the generated 3D schema was previously malformed for such arrays (#92, @samoht)
 - An embedded variable-size sub-codec (`Wire.codec`, e.g. a length-prefixed
   string) used as a field no longer makes EverParse reject the schema with
   `Parse_with_dep_action: tag not readable`; the field is handed to its

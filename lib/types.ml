@@ -1250,7 +1250,11 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
          sized payloads, codec-with-fixed-size, and nested arrays. *)
       match (inner_wire_size elem, inner_wire_size_expr elem) with
       | Some 1, _ -> (Array len, fun ppf -> pp_typ ppf elem)
-      | _, Some s -> (Byte_array (Mul (len, s)), fun ppf -> pp_typ ppf elem)
+      | _, Some s ->
+          (* A wider element is emitted as its bare base under a byte budget of
+             [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
+             chunk) is dropped so it is not duplicated. *)
+          (Byte_array (Mul (len, s)), snd (field_suffix elem))
       | _ ->
           (* Unreachable: [array] rejects variable-size elem at construction. *)
           assert false)

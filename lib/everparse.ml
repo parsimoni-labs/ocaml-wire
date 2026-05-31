@@ -37,6 +37,10 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
   (* A repeat-into-list field has no single value 3D can read; expose its
      bytes via the [SetBytes] offset just like other variable-size fields. *)
   | Types.Repeat _ -> true
+  (* An array projects to a byte region (its elements laid out contiguously);
+     like a repeat, expose it through the [SetBytes] offset rather than passing
+     a C array by value. *)
+  | Types.Array _ -> true
   (* An embedded sub-codec projects to a struct value, which (like a casetype)
      is not "readable" in a 3D action: passing it by value to a [WireSet*]
      setter makes EverParse fail with "Parse_with_dep_action: tag not
