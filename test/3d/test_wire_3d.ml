@@ -408,6 +408,18 @@ let e2e_optional_var_codec =
       (f_body $ fun (_, _, _, b) -> b);
     ]
 
+(* [Wire.array] over a fixed byte_array element: a fixed-count list of n-byte
+   chunks (e.g. an array of IPv4 addresses). Projects the element as bare
+   [UINT8] under a [len * width] byte budget. *)
+let e2e_array_byte_chunks_codec =
+  let open Wire in
+  let f_tag = Field.v "Tag" uint8 in
+  let f_addrs =
+    Field.v "Addrs" (array ~len:(int 3) (byte_array ~size:(int 4)))
+  in
+  let open Codec in
+  v "ArrChunks" (fun tag addrs -> (tag, addrs)) [ f_tag $ fst; f_addrs $ snd ]
+
 (* [Field.repeat] over a fixed byte_array element: a count-prefixed list of
    n-byte chunks. Projects the element as bare [UINT8] under the byte budget. *)
 let e2e_repeat_byte_chunks_codec =
@@ -423,6 +435,7 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
   compile_and_run ~name:"RepChunks" e2e_repeat_byte_chunks_codec;
+  compile_and_run ~name:"ArrChunks" e2e_array_byte_chunks_codec;
   compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
   compile_and_run ~name:"OptVarRec" e2e_optional_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
