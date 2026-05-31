@@ -335,8 +335,39 @@ let e2e_zeroterm_codec =
       Codec.( $ ) f_n (fun (_, _, n) -> n);
     ]
 
+(* Embedded variable-size sub-codec via the WireSet* setter path, with a
+   field after it (SSH Disconnect shape: a length-prefixed [SshString] is not
+   "readable", so it must be handed to the setter by offset rather than by
+   value; otherwise EverParse fails with "Parse_with_dep_action: tag not
+   readable"). *)
+let e2e_embedded_var_codec =
+  let open Wire in
+  let f_len = Field.v "Length" uint32be in
+  let ssh_string =
+    Codec.v "SshString"
+      (fun len data -> (len, data))
+      [
+        Codec.( $ ) f_len (fun (l, _) -> l);
+        Codec.( $ )
+          (Field.v "Bytes" (byte_slice ~size:(Field.ref f_len)))
+          (fun (_, d) -> d);
+      ]
+  in
+  let f_reason = Field.v "ReasonCode" uint32be in
+  let f_desc = Field.v "Description" (codec ssh_string) in
+  let f_lang = Field.v "Language" (codec ssh_string) in
+  let open Codec in
+  v "Disconnect"
+    (fun r d l -> (r, d, l))
+    [
+      (f_reason $ fun (r, _, _) -> r);
+      (f_desc $ fun (_, d, _) -> d);
+      (f_lang $ fun (_, _, l) -> l);
+    ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
+  compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
   compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
