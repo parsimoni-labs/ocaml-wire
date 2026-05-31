@@ -280,6 +280,34 @@ let test_record_byte_array_padding () =
             (String.sub decoded.uuid 0 5)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+(* Field.repeat over a zeroterm element: a list of NUL-terminated strings
+   within a byte budget. Used to raise Failure at decode; now decodes and
+   projects through a synthesised element struct. *)
+type zt_rep = { zn : int; names : string list }
+
+let zt_rep_codec =
+  let f_n = Field.v "n" uint16be in
+  let f_names = Field.repeat "names" ~size:(Field.ref f_n) zeroterm in
+  Codec.v "ZtRep"
+    (fun zn names -> { zn; names })
+    Codec.[ (f_n $ fun r -> r.zn); (f_names $ fun r -> r.names) ]
+
+let test_repeat_zeroterm_element () =
+  let v = { zn = 12; names = [ "abc"; "de"; "fghi" ] } in
+  let sz = Codec.size_of_value zt_rep_codec v in
+  Alcotest.(check int) "wire size" 14 sz;
+  let buf = Bytes.create sz in
+  Codec.encode zt_rep_codec v buf 0;
+  match Codec.decode zt_rep_codec buf 0 with
+  | Ok d -> Alcotest.(check (list string)) "names" v.names d.names
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+
+let test_repeat_zeroterm_projection () =
+  let out = render_3d zt_rep_codec in
+  Alcotest.(check bool)
+    "zeroterm element wrapped in a struct" true
+    (contains ~sub:"ZtElem names[:byte-size n]" out)
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
@@ -4007,6 +4035,10 @@ let suite =
         test_record_byte_array_roundtrip;
       Alcotest.test_case "record: byte_array padding" `Quick
         test_record_byte_array_padding;
+      Alcotest.test_case "repeat: zeroterm element roundtrip" `Quick
+        test_repeat_zeroterm_element;
+      Alcotest.test_case "repeat: zeroterm element projection" `Quick
+        test_repeat_zeroterm_projection;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;

@@ -982,6 +982,15 @@ let iter_param_refs_fields f fields where =
     fields;
   Option.iter (iter_param_refs f) where
 
+let zeroterm_nul_pos buf ~first ~limit =
+  let rec go i =
+    if i >= limit then
+      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
+    else if Bytes.get_uint8 buf i = 0 then i
+    else go (i + 1)
+  in
+  go first
+
 (* Read one element of a typ at a given buffer position. Used by Repeat. *)
 let rec read_elem : type a. a typ -> bytes -> int -> a =
  fun typ buf off ->
@@ -1031,6 +1040,10 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       in
       find cases
   | Unit -> ()
+  (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
+  | Zeroterm ->
+      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      Bytes.sub_string buf off (nul - off)
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1067,6 +1080,11 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
      repeat loop advances by [elem_size_of], so the returned offset is
      discarded here. *)
   | Casetype _ -> ignore (build_field_encoder typ buf off v : int)
+  (* NUL-terminated string element: the bytes followed by a NUL terminator. *)
+  | Zeroterm ->
+      let n = String.length v in
+      Bytes.blit_string v 0 buf off n;
+      Bytes.set_uint8 buf (off + n) 0
   | _ -> failwith "write_elem: unsupported element type in repeat"
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
@@ -1093,6 +1111,10 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
       find cases
   | Map { inner; _ } -> elem_size_of inner buf off
   | Where { inner; _ } -> elem_size_of inner buf off
+  (* Bytes up to the NUL plus the one-byte terminator. *)
+  | Zeroterm ->
+      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      nul - off + 1
   | _ -> (
       match field_wire_size typ with
       | Some n -> n
@@ -1653,15 +1675,6 @@ let compile_repeat : type elt seq r.
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
    terminator is found -- a truncated / unterminated zero-terminated string. *)
-let zeroterm_nul_pos buf ~first ~limit =
-  let rec go i =
-    if i >= limit then
-      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
-    else if Bytes.get_uint8 buf i = 0 then i
-    else go (i + 1)
-  in
-  go first
-
 let var_bytes_reader : type a.
     a typ -> (bytes -> int -> int) -> (bytes -> int -> int) -> bytes -> int -> a
     =
