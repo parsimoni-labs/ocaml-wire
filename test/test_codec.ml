@@ -376,6 +376,40 @@ let test_optional_self_delimiting_codec () =
   Alcotest.(check int) "absent size" 1 n;
   Alcotest.(check (option string)) "absent desc" None d.desc
 
+(* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
+   a byte budget. Decoding used to raise Failure "unsupported element type in
+   repeat" and the schema mis-projected as a double [:byte-size]. *)
+type rep_chunks = { rn : int; chunks : string list }
+
+let rep_chunks_codec =
+  let f_n = Field.v "n" uint16be in
+  let f_chunks =
+    Field.repeat "chunks" ~size:(Field.ref f_n) (byte_array ~size:(int 4))
+  in
+  Codec.v "RepChunks"
+    (fun rn chunks -> { rn; chunks })
+    Codec.[ (f_n $ fun r -> r.rn); (f_chunks $ fun r -> r.chunks) ]
+
+let test_repeat_byte_array_element () =
+  let v = { rn = 8; chunks = [ "aaaa"; "bbbb" ] } in
+  let sz = Codec.size_of_value rep_chunks_codec v in
+  Alcotest.(check int) "wire size" 10 sz;
+  let buf = Bytes.create sz in
+  Codec.encode rep_chunks_codec v buf 0;
+  match Codec.decode rep_chunks_codec buf 0 with
+  | Ok d ->
+      Alcotest.(check int) "count" 8 d.rn;
+      Alcotest.(check (list string)) "chunks" [ "aaaa"; "bbbb" ] d.chunks
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+
+(* The schema projects the byte-span element as bare [UINT8] under the budget,
+   not a double [:byte-size]. *)
+let test_repeat_byte_array_projection () =
+  let out = render_3d rep_chunks_codec in
+  Alcotest.(check bool)
+    "single byte-size on the chunks field" true
+    (contains ~sub:"UINT8 chunks[:byte-size n]" out)
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
@@ -4111,6 +4145,10 @@ let suite =
         test_optional_var_byte_array;
       Alcotest.test_case "optional: self-delimiting codec inner roundtrip"
         `Quick test_optional_self_delimiting_codec;
+      Alcotest.test_case "repeat: byte_array element roundtrip" `Quick
+        test_repeat_byte_array_element;
+      Alcotest.test_case "repeat: byte_array element projection" `Quick
+        test_repeat_byte_array_projection;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;

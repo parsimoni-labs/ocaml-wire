@@ -1271,11 +1271,14 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       field_suffix inner
   | Repeat { size; elem; _ } ->
       (* Variable-length list within a byte budget. A self-delimiting element
-         with no named type is referenced through its wrapper struct. *)
+         with no named type goes through its wrapper struct; otherwise the
+         element is emitted as its bare base (its own [:byte-size] suffix
+         dropped) so the only suffix is the budget: a list of fixed n-byte
+         chunks is just bytes on the wire, like a repeat of [UINT8]. *)
       let pp_elem ppf =
         match repeat_elem_struct elem with
         | Some name -> Fmt.string ppf name
-        | None -> pp_typ ppf elem
+        | None -> (snd (field_suffix elem)) ppf
       in
       (Byte_array size, pp_elem)
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")

@@ -1044,6 +1044,10 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Zeroterm ->
       let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
       Bytes.sub_string buf off (nul - off)
+  (* Fixed-size byte spans as repeat / array elements: a list of n-byte
+     chunks. The size is the element's own constant width. *)
+  | Byte_array { size = Int n } -> Bytes.sub_string buf off n
+  | Byte_slice { size = Int n } -> Slice.make buf ~first:off ~length:n
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1085,6 +1089,12 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
       let n = String.length v in
       Bytes.blit_string v 0 buf off n;
       Bytes.set_uint8 buf (off + n) 0
+  (* Fixed-size byte spans: the field encoder blits / pads the constant width
+     and returns the advanced offset, which the repeat loop recomputes. *)
+  | Byte_array { size = Int _ } ->
+      ignore (build_field_encoder typ buf off v : int)
+  | Byte_slice { size = Int _ } ->
+      ignore (build_field_encoder typ buf off v : int)
   | _ -> failwith "write_elem: unsupported element type in repeat"
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
