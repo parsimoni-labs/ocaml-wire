@@ -308,6 +308,74 @@ let test_repeat_zeroterm_projection () =
     "zeroterm element wrapped in a struct" true
     (contains ~sub:"ZtElem names[:byte-size n]" out)
 
+(* Dynamic [Field.optional] over a variable-size inner. Group A: a byte array
+   sized by a prior field. The gate drives present/absent, and both round-trip
+   (absent consumes no bytes, present consumes the inner). *)
+type opt_var = { gate : int; len : int; body : string option }
+
+let opt_var_codec =
+  let f_gate = Field.v "gate" uint8 in
+  let f_len = Field.v "len" uint8 in
+  let f_body =
+    Field.optional "body"
+      ~present:Expr.(Field.ref f_gate <> int 0)
+      (byte_array ~size:(Field.ref f_len))
+  in
+  Codec.v "OptVar"
+    (fun gate len body -> { gate; len; body })
+    Codec.
+      [
+        (f_gate $ fun r -> r.gate);
+        (f_len $ fun r -> r.len);
+        (f_body $ fun r -> r.body);
+      ]
+
+let roundtrip codec v =
+  let n = Codec.size_of_value codec v in
+  let buf = Bytes.create n in
+  Codec.encode codec v buf 0;
+  (n, Codec.decode_exn codec buf 0)
+
+let test_optional_var_byte_array () =
+  let n, d = roundtrip opt_var_codec { gate = 1; len = 3; body = Some "abc" } in
+  Alcotest.(check int) "present size" 5 n;
+  Alcotest.(check (option string)) "present body" (Some "abc") d.body;
+  let n, d = roundtrip opt_var_codec { gate = 0; len = 0; body = None } in
+  Alcotest.(check int) "absent size" 2 n;
+  Alcotest.(check (option string)) "absent body" None d.body
+
+(* Group B: a self-delimiting sub-codec (its own length prefix) as the optional
+   inner. *)
+let sub_string_codec =
+  let f_slen = Field.v "slen" uint8 in
+  Codec.v "OptSub"
+    (fun _slen s -> s)
+    Codec.
+      [
+        f_slen $ String.length;
+        Field.v "sdata" (byte_array ~size:(Field.ref f_slen)) $ Fun.id;
+      ]
+
+type opt_sub = { g : int; desc : string option }
+
+let opt_sub_codec =
+  let f_g = Field.v "g" uint8 in
+  let f_desc =
+    Field.optional "desc"
+      ~present:Expr.(Field.ref f_g <> int 0)
+      (codec sub_string_codec)
+  in
+  Codec.v "OptSubRec"
+    (fun g desc -> { g; desc })
+    Codec.[ (f_g $ fun r -> r.g); (f_desc $ fun r -> r.desc) ]
+
+let test_optional_self_delimiting_codec () =
+  let _, d = roundtrip opt_sub_codec { g = 1; desc = Some "hi" } in
+  Alcotest.(check (option string)) "present desc" (Some "hi") d.desc;
+  let n, d = roundtrip opt_sub_codec { g = 0; desc = None } in
+  Alcotest.(check int) "absent size" 1 n;
+  Alcotest.(check (option string)) "absent desc" None d.desc
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
@@ -4039,6 +4107,10 @@ let suite =
         test_repeat_zeroterm_element;
       Alcotest.test_case "repeat: zeroterm element projection" `Quick
         test_repeat_zeroterm_projection;
+      Alcotest.test_case "optional: variable byte_array inner roundtrip" `Quick
+        test_optional_var_byte_array;
+      Alcotest.test_case "optional: self-delimiting codec inner roundtrip"
+        `Quick test_optional_self_delimiting_codec;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;

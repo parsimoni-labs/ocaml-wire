@@ -2,6 +2,10 @@
 
 ### Added
 
+- `Field.optional` and `Field.optional_or` now accept a variable-size inner,
+  so an optional field can be a length-prefixed string or a whole sub-message,
+  not just a fixed-width value. Building such a codec previously raised
+  `Invalid_argument` (#88, @samoht)
 - Add `Wire.zeroterm` and `Wire.zeroterm_at_most ~size` for
   NUL-terminated strings: the bytes up to a terminator, or the same
   within a fixed-size region. They project to the 3D `field[:zeroterm]`
@@ -79,6 +83,11 @@
 - `Field.repeat` over a `zeroterm` element (a list of NUL-terminated strings
   within a byte budget) now encodes, decodes, and generates a verified
   EverParse validator. It previously raised `Failure` when decoding (#93, @samoht)
+- A `Field.optional_or` with a dynamic gate now generates an EverParse C
+  validator that accepts the bytes `Codec.encode` produces. The two previously
+  disagreed about the field's layout when the gate was false, so a value
+  written by the OCaml encoder was rejected by the generated validator
+  (#88, @samoht)
 - An embedded variable-size sub-codec (`Wire.codec`, e.g. a length-prefixed
   string) used as a field no longer makes EverParse reject the schema with
   `Parse_with_dep_action: tag not readable`; the field is handed to its
