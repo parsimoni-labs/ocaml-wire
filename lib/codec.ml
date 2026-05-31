@@ -1425,6 +1425,11 @@ let dynamic_optional_next_off ctx present_fn fsize =
       in
       if present_fn buf base then off + fsize else off)
 
+(* Absolute byte position a [next_off] points at, given the record [base]. *)
+let next_off_pos : next_off -> bytes -> int -> int = function
+  | Static n -> fun _buf base -> base + n
+  | Dynamic f -> f
+
 let optional_compiled : type a r.
     layout_ctx ->
     raw_reader:(bytes -> int -> a) ->
@@ -1447,113 +1452,6 @@ let optional_compiled : type a r.
     validator_off = validator_off_of ctx;
     populate;
   }
-
-let compile_optional : type a r.
-    layout_ctx ->
-    (a option, r) field ->
-    bool expr ->
-    a typ ->
-    (a option, r) compiled_field =
- fun ctx fld present inner ->
-  let inner_size = field_wire_size inner in
-  let nfields = ctx.n_fields in
-  match (present, inner_size) with
-  | Bool true, Some fsize ->
-      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let inner_populate = build_populate inner nfields inner_reader in
-      let get = fld.get in
-      optional_compiled ctx
-        ~raw_reader:(fun buf base -> Some (inner_reader buf base))
-        ~raw_writer:(fun v buf _base write_off ->
-          match get v with
-          | Some iv -> inner_writer buf write_off iv
-          | None -> write_off + fsize)
-        ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate:inner_populate
-  | Bool false, _ ->
-      optional_compiled ctx
-        ~raw_reader:(fun _buf _base -> None)
-        ~raw_writer:(fun _v _buf _base write_off -> write_off)
-        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
-  | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
-      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let inner_populate = build_populate inner nfields inner_reader in
-      let get = fld.get in
-      optional_compiled ctx
-        ~raw_reader:(fun buf base ->
-          if present_fn buf base then Some (inner_reader buf base) else None)
-        ~raw_writer:(fun v buf base write_off ->
-          match (present_fn buf base, get v) with
-          | true, Some iv -> inner_writer buf write_off iv
-          | false, None -> write_off
-          | true, None ->
-              invalid_arg
-                "Codec.encode: optional field absent but presence predicate is \
-                 true"
-          | false, Some _ ->
-              invalid_arg
-                "Codec.encode: optional field present but presence predicate \
-                 is false")
-        ~size_delta:0
-        ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
-        ~populate:(fun arr buf base ->
-          if present_fn buf base then inner_populate arr buf base)
-  | _ ->
-      invalid_arg
-        "add_field: dynamic optional with variable-size inner not yet supported"
-
-let compile_optional_or : type a r.
-    layout_ctx ->
-    (a, r) field ->
-    bool expr ->
-    a typ ->
-    a ->
-    (a, r) compiled_field =
- fun ctx fld present inner default ->
-  let inner_size = field_wire_size inner in
-  match (present, inner_size) with
-  | Bool true, Some fsize ->
-      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let get = fld.get in
-      let populate = build_populate fld.typ ctx.n_fields inner_reader in
-      optional_compiled ctx ~raw_reader:inner_reader
-        ~raw_writer:(fun v buf _base write_off ->
-          inner_writer buf write_off (get v))
-        ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate
-  | Bool false, _ ->
-      optional_compiled ctx
-        ~raw_reader:(fun _buf _base -> default)
-        ~raw_writer:(fun _v _buf _base write_off -> write_off)
-        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
-  | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
-      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let get = fld.get in
-      let raw_reader buf base =
-        if present_fn buf base then inner_reader buf base else default
-      in
-      let populate = build_populate fld.typ ctx.n_fields raw_reader in
-      (* Encode is value-driven: the user always has a value, so always
-         write [fsize] bytes. The gate is the decode-side oracle that
-         chooses between the decoded inner and [default]. Round-trips
-         exactly when the gate is set consistently with the user's
-         choice; if the user sets the gate to [absent] while the value
-         differs from [default], decoding loses the value and falls
-         back to [default]. *)
-      let raw_writer v buf _base write_off =
-        inner_writer buf write_off (get v)
-      in
-      optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
-        ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate
-  | _ ->
-      invalid_arg
-        "add_field: dynamic optional_or with variable-size inner not yet \
-         supported"
 
 let repeat_raw_fixed : type elt seq.
     (elt, seq) seq_map ->
@@ -1955,6 +1853,191 @@ and compile_map : type a w r.
   in
   let cf = compile_field ctx inner_fld in
   { cf with raw_reader = (fun buf off -> decode (cf.raw_reader buf off)) }
+
+and compile_optional : type a r.
+    layout_ctx ->
+    (a option, r) field ->
+    bool expr ->
+    a typ ->
+    (a option, r) compiled_field =
+ fun ctx fld present inner ->
+  let inner_size = field_wire_size inner in
+  let nfields = ctx.n_fields in
+  match (present, inner_size) with
+  | Bool true, Some fsize ->
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let inner_populate = build_populate inner nfields inner_reader in
+      let get = fld.get in
+      optional_compiled ctx
+        ~raw_reader:(fun buf base -> Some (inner_reader buf base))
+        ~raw_writer:(fun v buf _base write_off ->
+          match get v with
+          | Some iv -> inner_writer buf write_off iv
+          | None -> write_off + fsize)
+        ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.next_off fsize)
+        ~populate:inner_populate
+  | Bool false, _ ->
+      optional_compiled ctx
+        ~raw_reader:(fun _buf _base -> None)
+        ~raw_writer:(fun _v _buf _base write_off -> write_off)
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
+  | _, Some fsize ->
+      let present_fn = compile_bool_expr ctx.field_readers present in
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let inner_populate = build_populate inner nfields inner_reader in
+      let get = fld.get in
+      optional_compiled ctx
+        ~raw_reader:(fun buf base ->
+          if present_fn buf base then Some (inner_reader buf base) else None)
+        ~raw_writer:(fun v buf base write_off ->
+          match (present_fn buf base, get v) with
+          | true, Some iv -> inner_writer buf write_off iv
+          | false, None -> write_off
+          | true, None ->
+              invalid_arg
+                "Codec.encode: optional field absent but presence predicate is \
+                 true"
+          | false, Some _ ->
+              invalid_arg
+                "Codec.encode: optional field present but presence predicate \
+                 is false")
+        ~size_delta:0
+        ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
+        ~populate:(fun arr buf base ->
+          if present_fn buf base then inner_populate arr buf base)
+  | _ -> compile_optional_variable ctx fld present inner
+
+(* Variable-size inner: compile it as its own field and gate that compiled plan
+   on [present]. This reuses every per-type path (outer-sized byte slices,
+   self-delimiting sub-codecs, casetypes), so the inner decodes and encodes
+   exactly as it would unwrapped; an absent gate advances no bytes. *)
+and compile_optional_variable : type a r.
+    layout_ctx ->
+    (a option, r) field ->
+    bool expr ->
+    a typ ->
+    (a option, r) compiled_field =
+ fun ctx fld present inner ->
+  let present_fn = compile_bool_expr ctx.field_readers present in
+  let get = fld.get in
+  let inner_fld =
+    {
+      name = fld.name;
+      typ = inner;
+      constraint_ = None;
+      action = None;
+      get =
+        (fun v ->
+          match get v with
+          | Some iv -> iv
+          | None ->
+              invalid_arg
+                "Codec.encode: optional field absent but presence predicate is \
+                 true");
+    }
+  in
+  let cf = compile_field ctx inner_fld in
+  let present_end = next_off_pos cf.next_off in
+  let absent_end = next_off_pos ctx.next_off in
+  optional_compiled ctx
+    ~raw_reader:(fun buf base ->
+      if present_fn buf base then Some (cf.raw_reader buf base) else None)
+    ~raw_writer:(fun v buf base write_off ->
+      match (present_fn buf base, get v) with
+      | true, Some _ -> cf.raw_writer v buf base write_off
+      | false, None -> write_off
+      | true, None ->
+          invalid_arg
+            "Codec.encode: optional field absent but presence predicate is true"
+      | false, Some _ ->
+          invalid_arg
+            "Codec.encode: optional field present but presence predicate is \
+             false")
+    ~size_delta:0
+    ~next_off:
+      (Dynamic
+         (fun buf base ->
+           if present_fn buf base then present_end buf base
+           else absent_end buf base))
+    ~populate:(fun arr buf base ->
+      if present_fn buf base then cf.populate arr buf base)
+
+and compile_optional_or : type a r.
+    layout_ctx ->
+    (a, r) field ->
+    bool expr ->
+    a typ ->
+    a ->
+    (a, r) compiled_field =
+ fun ctx fld present inner default ->
+  let inner_size = field_wire_size inner in
+  match (present, inner_size) with
+  | Bool true, Some fsize ->
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let get = fld.get in
+      let populate = build_populate fld.typ ctx.n_fields inner_reader in
+      optional_compiled ctx ~raw_reader:inner_reader
+        ~raw_writer:(fun v buf _base write_off ->
+          inner_writer buf write_off (get v))
+        ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.next_off fsize)
+        ~populate
+  | Bool false, _ ->
+      optional_compiled ctx
+        ~raw_reader:(fun _buf _base -> default)
+        ~raw_writer:(fun _v _buf _base write_off -> write_off)
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
+  | _, Some fsize ->
+      let present_fn = compile_bool_expr ctx.field_readers present in
+      let inner_reader, inner_writer = inner_codec_accessors inner ctx in
+      let get = fld.get in
+      let raw_reader buf base =
+        if present_fn buf base then inner_reader buf base else default
+      in
+      let populate = build_populate fld.typ ctx.n_fields raw_reader in
+      (* Encode is value-driven: the user always has a value, so always
+         write [fsize] bytes. The gate is the decode-side oracle that
+         chooses between the decoded inner and [default]. Round-trips
+         exactly when the gate is set consistently with the user's
+         choice; if the user sets the gate to [absent] while the value
+         differs from [default], decoding loses the value and falls
+         back to [default]. *)
+      let raw_writer v buf _base write_off =
+        inner_writer buf write_off (get v)
+      in
+      optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
+        ~next_off:(advance_next_off ctx.next_off fsize)
+        ~populate
+  | _ -> compile_optional_or_variable ctx fld present inner default
+
+(* Variable-size inner. As in the fixed case [optional_or] is value-driven and
+   always occupies the inner's bytes; the gate only chooses the decoded inner
+   vs [default] on the read side, so the layout always advances past it. *)
+and compile_optional_or_variable : type a r.
+    layout_ctx ->
+    (a, r) field ->
+    bool expr ->
+    a typ ->
+    a ->
+    (a, r) compiled_field =
+ fun ctx fld present inner default ->
+  let present_fn = compile_bool_expr ctx.field_readers present in
+  let inner_fld =
+    {
+      name = fld.name;
+      typ = inner;
+      constraint_ = None;
+      action = None;
+      get = fld.get;
+    }
+  in
+  let cf = compile_field ctx inner_fld in
+  optional_compiled ctx
+    ~raw_reader:(fun buf base ->
+      if present_fn buf base then cf.raw_reader buf base else default)
+    ~raw_writer:(fun v buf base write_off -> cf.raw_writer v buf base write_off)
+    ~size_delta:0 ~next_off:cf.next_off ~populate:cf.populate
 
 (* -- Apply a compiled plan to the record state -- *)
 

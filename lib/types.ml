@@ -397,6 +397,28 @@ let reject_variable_size ~combinator t =
        [byte-size] suffix that needs the element width."
       combinator combinator
 
+(* A self-delimiting inner carries its own length / structure, so it decodes a
+   known span without an external size. These project as a gate-dispatched
+   casetype (present case = the inner, absent case = a 0-byte field), unlike the
+   byte-size suffix used for [has_wire_size_expr] inners. *)
+let rec is_self_delimiting : type a. a typ -> bool = function
+  | Codec _ -> true
+  | Casetype _ -> true
+  | Map { inner; _ } -> is_self_delimiting inner
+  | Where { inner; _ } -> is_self_delimiting inner
+  | Apply { typ; _ } -> is_self_delimiting typ
+  | _ -> false
+
+(* [optional]/[optional_or] accept any inner that projects to 3D: either a
+   byte-sized inner (conditional [byte-size] region) or a self-delimiting one
+   (gate-dispatched casetype). Everything else has no clean projection. *)
+let reject_unprojectable_optional ~combinator t =
+  if not (has_wire_size_expr t || is_self_delimiting t) then
+    Fmt.invalid_arg
+      "Wire.%s: inner type does not project to 3D -- it is neither byte-sized \
+       nor self-delimiting."
+      combinator combinator
+
 let array ~len elem =
   reject_decoration ~combinator:"array" elem;
   reject_variable_size ~combinator:"array" elem;
@@ -431,11 +453,11 @@ let synth_name_of_elt_var ev =
 let byte_slice ~size = Byte_slice { size }
 
 let optional present inner =
-  reject_variable_size ~combinator:"optional" inner;
+  reject_unprojectable_optional ~combinator:"optional" inner;
   Optional { present; inner }
 
 let optional_or present ~default inner =
-  reject_variable_size ~combinator:"optional_or" inner;
+  reject_unprojectable_optional ~combinator:"optional_or" inner;
   Optional_or { present; inner; default }
 
 (* [repeat ~size elem] is more permissive than [array]: 3D's
@@ -777,6 +799,39 @@ let repeat_elem_struct : type a. a typ -> string option = function
   | Zeroterm -> Some "ZtElem"
   | _ -> None
 
+(* The synthesised gate-dispatch casetype name for an [optional] whose inner is
+   self-delimiting (no wire-size expression). Derived from the inner so two
+   optionals over the same inner share one declaration. *)
+let optional_casetype_name : type a. a typ -> string =
+ fun inner ->
+  let rec base : type a. a typ -> string = function
+    | Codec { codec_name; _ } -> codec_name
+    | Casetype { name; _ } -> name
+    | Map { inner; _ } -> base inner
+    | Where { inner; _ } -> base inner
+    | Apply { typ; _ } -> base typ
+    | _ -> "Inner"
+  in
+  "Opt_" ^ base inner
+
+(* Project a self-delimiting [optional] inner as a casetype dispatched on the
+   gate: [case 0] parses a 0-byte field (the gate arg is [present ? 1 : 0], so 0
+   means absent), the default case parses the inner. An empty case body is a 3D
+   syntax error, hence the 0-byte field. *)
+let optional_casetype_decl : type a. string -> a typ -> decl =
+ fun name inner ->
+  Casetype_decl
+    {
+      name;
+      params = [ param "present" Uint8 ];
+      tag = Pack_typ Uint8;
+      cases =
+        [
+          (Some (Pack_expr (Int 0)), Pack_typ (Byte_array { size = Int 0 }));
+          (None, Pack_typ inner);
+        ];
+    }
+
 let casetype_decls_of_struct (s : struct_) : decl list =
   let seen = Hashtbl.create 4 in
   let acc = Stdlib.ref [] in
@@ -804,6 +859,15 @@ let casetype_decls_of_struct (s : struct_) : decl list =
     | Codec _ -> ()
     | Map { inner; _ } -> extract inner
     | Where { inner; _ } -> extract inner
+    | Optional { inner; _ } when not (has_wire_size_expr inner) ->
+        (* Self-delimiting inner: declare its dependencies, then the
+           gate-dispatch casetype that references them. *)
+        extract inner;
+        let opt_name = optional_casetype_name inner in
+        if not (Hashtbl.mem seen opt_name) then begin
+          Hashtbl.add seen opt_name ();
+          acc := optional_casetype_decl opt_name inner :: !acc
+        end
     | Optional { inner; _ } -> extract inner
     | Optional_or { inner; _ } -> extract inner
     | Apply { typ; _ } -> extract typ
@@ -1144,20 +1208,29 @@ let rec inner_wire_size_expr : type a. a typ -> int expr option = function
   | Apply { typ; _ } -> inner_wire_size_expr typ
   | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
-let optional_suffix : type a.
+let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
   match inner_wire_size_expr inner with
   | Some s ->
-      ( Byte_array (If_then_else (present, s, Int 0)),
-        fun ppf -> pp_typ ppf inner )
+      (* Project the optional as a conditional byte region: [present ? s : 0]
+         bytes. The base printer comes from [field_suffix] so the inner's
+         element type (e.g. [UINT8] for a byte array) is emitted once, without
+         its own [byte-size] suffix duplicating the conditional one. *)
+      let _, pp_base = field_suffix inner in
+      (Byte_array (If_then_else (present, s, Int 0)), pp_base)
   | None ->
-      (* Unreachable: [optional]/[optional_or] reject variable-size inner
-         at construction (smart constructor uses [has_wire_size_expr]). *)
-      assert false
+      (* Self-delimiting inner with no wire-size expression (a variable-size
+         sub-codec, casetype, ...). Dispatch on the gate via the synthesised
+         casetype: [present ? 1 : 0] selects its absent (0-byte) or inner case. *)
+      let opt_name = optional_casetype_name inner in
+      let arg = If_then_else (present, Int 1, Int 0) in
+      ( No_suffix,
+        fun ppf ->
+          pp_typ ppf
+            (Apply { typ = Type_ref opt_name; args = [ Pack_expr arg ] }) )
 
-let rec field_suffix : type a.
-    a typ -> field_suffix * (Format.formatter -> unit) =
+and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
   match typ with
   | Bits { width; base; _ } ->
@@ -1190,7 +1263,12 @@ let rec field_suffix : type a.
   | Optional_or { present = Bool true; inner; _ } -> field_suffix inner
   | Optional_or { present = Bool false; _ } ->
       (Byte_array (Int 0), fun ppf -> Fmt.string ppf "UINT8")
-  | Optional_or { present; inner; _ } -> optional_suffix present inner
+  | Optional_or { inner; _ } ->
+      (* A dynamic [optional_or] is value-driven: the inner always occupies its
+         bytes in the wire (the gate only selects decoded vs default on read),
+         so it projects unconditionally, never as a [present ? size : 0]
+         region. *)
+      field_suffix inner
   | Repeat { size; elem; _ } ->
       (* Variable-length list within a byte budget. A self-delimiting element
          with no named type is referenced through its wrapper struct. *)
@@ -1221,6 +1299,23 @@ let combine_constraints a b =
   | None, x | x, None -> x
   | Some a, Some b -> Some (And (a, b))
 
+(* Render the [:byte-size ...] / bitwidth / array suffix that follows a field
+   name. Shared by [pp_field] and [pp_casetype_cases] so a casetype case body
+   gets the suffix after its name (a valid field declaration) rather than
+   inline on the type. *)
+let pp_field_suffix ppf = function
+  | No_suffix -> ()
+  | Bitwidth w -> Fmt.pf ppf " : %d" w
+  | Byte_array size -> Fmt.pf ppf "[:byte-size %a]" pp_expr size
+  | Single_elem { size; at_most = false } ->
+      Fmt.pf ppf "[:byte-size-single-element-array %a]" pp_expr size
+  | Single_elem { size; at_most = true } ->
+      Fmt.pf ppf "[:byte-size-single-element-array-at-most %a]" pp_expr size
+  | Zeroterm -> Fmt.pf ppf "[:zeroterm]"
+  | Zeroterm_at_most size ->
+      Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
+  | Array len -> Fmt.pf ppf "[%a]" pp_expr len
+
 let pp_field ppf (Field f) =
   let name =
     match f.field_name with
@@ -1235,19 +1330,7 @@ let pp_field ppf (Field f) =
   let where_cond, typ = extract_where_constraint f.field_typ in
   let constraint_ = combine_constraints f.constraint_ where_cond in
   let suffix, pp_base = field_suffix typ in
-  Fmt.pf ppf "@,%t %s" pp_base name;
-  (match suffix with
-  | No_suffix -> ()
-  | Bitwidth w -> Fmt.pf ppf " : %d" w
-  | Byte_array size -> Fmt.pf ppf "[:byte-size %a]" pp_expr size
-  | Single_elem { size; at_most = false } ->
-      Fmt.pf ppf "[:byte-size-single-element-array %a]" pp_expr size
-  | Single_elem { size; at_most = true } ->
-      Fmt.pf ppf "[:byte-size-single-element-array-at-most %a]" pp_expr size
-  | Zeroterm -> Fmt.pf ppf "[:zeroterm]"
-  | Zeroterm_at_most size ->
-      Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
-  | Array len -> Fmt.pf ppf "[%a]" pp_expr len);
+  Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
   Fmt.string ppf ";"
@@ -1356,10 +1439,13 @@ let pp_casetype_cases ppf cases =
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
+      let suffix, pp_base = field_suffix typ in
+      let pp_body ppf () =
+        Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix
+      in
       match tag_opt with
-      | Some e ->
-          Fmt.pf ppf "@,case %a: %a %s;" pp_packed_expr e pp_typ typ field_name
-      | None -> Fmt.pf ppf "@,default: %a %s;" pp_typ typ field_name)
+      | Some e -> Fmt.pf ppf "@,case %a: %a;" pp_packed_expr e pp_body ()
+      | None -> Fmt.pf ppf "@,default: %a;" pp_body ())
     cases
 
 let pp_decl ppf = function

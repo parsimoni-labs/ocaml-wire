@@ -374,10 +374,45 @@ let e2e_repeat_zeroterm_codec =
   let open Codec in
   v "ZtRep" (fun n names -> (n, names)) [ f_n $ fst; f_names $ snd ]
 
+(* A dynamic [Field.optional] over a variable-size inner: a self-delimiting
+   sub-codec (projects as a gate-dispatched casetype) and a byte array sized by
+   a prior field (projects as a conditional byte region). Both gated on the same
+   flag. *)
+let e2e_optional_var_codec =
+  let open Wire in
+  let f_len = Field.v "Length" uint32be in
+  let opt_str =
+    Codec.v "OptStr"
+      (fun len data -> (len, data))
+      [
+        Codec.( $ ) f_len (fun (l, _) -> l);
+        Codec.( $ )
+          (Field.v "Bytes" (byte_slice ~size:(Field.ref f_len)))
+          (fun (_, d) -> d);
+      ]
+  in
+  let f_gate = Field.v "Gate" uint8 in
+  let cond = Expr.(Field.ref f_gate <> int 0) in
+  let f_desc = Field.optional "Desc" ~present:cond (codec opt_str) in
+  let f_blen = Field.v "BodyLen" uint8 in
+  let f_body =
+    Field.optional "Body" ~present:cond (byte_array ~size:(Field.ref f_blen))
+  in
+  let open Codec in
+  v "OptVarRec"
+    (fun g d bl b -> (g, d, bl, b))
+    [
+      (f_gate $ fun (g, _, _, _) -> g);
+      (f_desc $ fun (_, d, _, _) -> d);
+      (f_blen $ fun (_, _, bl, _) -> bl);
+      (f_body $ fun (_, _, _, b) -> b);
+    ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
   compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
+  compile_and_run ~name:"OptVarRec" e2e_optional_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
   compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
