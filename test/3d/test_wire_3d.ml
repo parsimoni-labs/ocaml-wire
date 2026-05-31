@@ -408,9 +408,21 @@ let e2e_optional_var_codec =
       (f_body $ fun (_, _, _, b) -> b);
     ]
 
+(* [Field.repeat] over a fixed byte_array element: a count-prefixed list of
+   n-byte chunks. Projects the element as bare [UINT8] under the byte budget. *)
+let e2e_repeat_byte_chunks_codec =
+  let open Wire in
+  let f_n = Field.v "N" uint16be in
+  let f_chunks =
+    Field.repeat "Chunks" ~size:(Field.ref f_n) (byte_array ~size:(int 4))
+  in
+  let open Codec in
+  v "RepChunks" (fun n chunks -> (n, chunks)) [ f_n $ fst; f_chunks $ snd ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
   compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
+  compile_and_run ~name:"RepChunks" e2e_repeat_byte_chunks_codec;
   compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
   compile_and_run ~name:"OptVarRec" e2e_optional_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
