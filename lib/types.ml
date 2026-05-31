@@ -419,13 +419,33 @@ let reject_unprojectable_optional ~combinator t =
        nor self-delimiting."
       combinator combinator
 
+(* A bitfield is packed within an enclosing base word in a record; it has no
+   standalone wire form, so it cannot be an [array] / [repeat] element (there is
+   no byte boundary per element, and no 3D element type to project to). Reject
+   it at construction rather than crash at decode. *)
+let rec is_bitfield_element : type a. a typ -> bool = function
+  | Bits _ -> true
+  | Map { inner; _ } -> is_bitfield_element inner
+  | Where { inner; _ } -> is_bitfield_element inner
+  | Enum { base; _ } -> is_bitfield_element base
+  | _ -> false
+
+let reject_bitfield_element ~combinator t =
+  if is_bitfield_element t then
+    Fmt.invalid_arg
+      "Wire.%s: a bitfield has no standalone element form (bits are packed \
+       within an enclosing word); it cannot be an element of %s."
+      combinator combinator
+
 let array ~len elem =
   reject_decoration ~combinator:"array" elem;
+  reject_bitfield_element ~combinator:"array" elem;
   reject_variable_size ~combinator:"array" elem;
   Array { len; elem; seq = seq_list }
 
 let array_seq seq ~len elem =
   reject_decoration ~combinator:"array_seq" elem;
+  reject_bitfield_element ~combinator:"array_seq" elem;
   reject_variable_size ~combinator:"array_seq" elem;
   Array { len; elem; seq }
 
@@ -467,10 +487,12 @@ let optional_or present ~default inner =
    refuse is a field decoration nested inside [elem]. *)
 let repeat ~size elem =
   reject_decoration ~combinator:"repeat" elem;
+  reject_bitfield_element ~combinator:"repeat" elem;
   Repeat { size; elem; seq = seq_list }
 
 let repeat_seq seq ~size elem =
   reject_decoration ~combinator:"repeat_seq" elem;
+  reject_bitfield_element ~combinator:"repeat_seq" elem;
   Repeat { size; elem; seq }
 
 let nested ~size elem = Single_elem { size; elem; at_most = false }

@@ -94,6 +94,10 @@
 - `Wire.array` whose element is a fixed `byte_array` / `byte_slice` (e.g. an
   array of fixed-size addresses) now generates a valid EverParse validator;
   the generated 3D schema was previously malformed for such arrays (#92, @samoht)
+- `Field.repeat` / `Wire.array` over a bitfield element (`Wire.bits` or
+  `Wire.bit`) now raises `Invalid_argument` when the codec is built, instead of
+  crashing at decode. A bitfield only exists packed inside a record, so it
+  cannot be a repeat or array element (#90, @samoht)
 - An embedded variable-size sub-codec (`Wire.codec`, e.g. a length-prefixed
   string) used as a field no longer makes EverParse reject the schema with
   `Parse_with_dep_action: tag not readable`; the field is handed to its

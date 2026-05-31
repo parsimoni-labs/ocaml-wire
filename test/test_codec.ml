@@ -406,6 +406,27 @@ let test_array_byte_array_projection () =
     "single byte-size on the array field" true
     (contains ~sub:"UINT8 addrs[:byte-size (3 * 4)]" out)
 
+(* A bitfield has no standalone element form, so [array] / [Field.repeat] over
+   one is rejected at construction rather than crashing at decode. *)
+let raises_invalid f =
+  try
+    ignore (f ());
+    false
+  with Invalid_argument _ -> true
+
+let test_repeat_array_reject_bitfield () =
+  Alcotest.(check bool)
+    "array over bits rejected" true
+    (raises_invalid (fun () -> array ~len:(int 4) (bits ~width:3 U8)));
+  Alcotest.(check bool)
+    "repeat over bits rejected" true
+    (raises_invalid (fun () ->
+         Field.repeat "x" ~size:(int 4) (bits ~width:3 U8)));
+  Alcotest.(check bool)
+    "repeat over bit (bool over bits) rejected" true
+    (raises_invalid (fun () ->
+         Field.repeat "x" ~size:(int 4) (bit (bits ~width:1 U8))))
+
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decoding used to raise Failure "unsupported element type in
    repeat" and the schema mis-projected as a double [:byte-size]. *)
@@ -4183,6 +4204,8 @@ let suite =
         test_array_byte_array_element;
       Alcotest.test_case "array: byte_array element projection" `Quick
         test_array_byte_array_projection;
+      Alcotest.test_case "repeat/array reject bitfield element" `Quick
+        test_repeat_array_reject_bitfield;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;
