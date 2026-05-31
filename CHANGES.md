@@ -76,6 +76,10 @@
 
 ### Fixed
 
+- An embedded variable-size sub-codec (`Wire.codec`, e.g. a length-prefixed
+  string) used as a field no longer makes EverParse reject the schema with
+  `Parse_with_dep_action: tag not readable`; the field is handed to its
+  `WireSet*` callback by offset, like a byte slice or casetype (#87, @samoht)
 - A cross-field size/offset/`present` expression that reads an integer field
   whose value exceeds the native int range (a `uint64`/`int64` length beyond
   `max_int`), or that references a non-integer field, now raises
