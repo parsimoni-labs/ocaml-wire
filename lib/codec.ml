@@ -31,36 +31,19 @@ let setter_off_int32 n set buf off v =
   set buf off (Int32.of_int v);
   off + n
 
-let rec encode_case_match : type k w.
-    (bytes -> int -> k -> int) ->
-    k option ->
-    k option ->
-    w typ ->
-    w ->
-    bytes ->
-    int ->
-    int =
- fun tag_enc cb_tag cb_default_tag cb_inner body buf off ->
-  let t =
-    match (cb_tag, cb_default_tag) with
-    | Some t, _ | _, Some t -> t
-    | None, None -> failwith "build_field_encoder: case missing tag"
-  in
-  let off' = tag_enc buf off t in
-  build_field_encoder cb_inner buf off' body
-
-and build_casetype_encoder : type a k.
+let rec build_casetype_encoder : type a k.
     k typ -> (a, k) case_branch list -> bytes -> int -> a -> int =
  fun tag cases ->
   let tag_enc = build_field_encoder tag in
   let rec find buf off v = function
     | [] -> failwith "build_field_encoder: casetype: no matching case"
-    | Case_branch { cb_tag; cb_default_tag; cb_inner; cb_project; _ } :: rest
-      -> (
+    | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+        (* [cb_project] yields the tag to write (its fixed index for an explicit
+           case, or the value-carried tag for the default) and the body. *)
         match cb_project v with
-        | Some body ->
-            encode_case_match tag_enc cb_tag cb_default_tag cb_inner body buf
-              off
+        | Some (t, body) ->
+            let off' = tag_enc buf off t in
+            build_field_encoder cb_inner buf off' body
         | None -> find buf off v rest)
   in
   fun buf off v -> find buf off v cases
@@ -1038,9 +1021,9 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
             raise (Parse_error (Constraint_failed "casetype: no matching case"))
         | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
           when t = tag_val ->
-            cb_inject (read_elem cb_inner buf body_off)
+            cb_inject tag_val (read_elem cb_inner buf body_off)
         | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-            cb_inject (read_elem cb_inner buf body_off)
+            cb_inject tag_val (read_elem cb_inner buf body_off)
         | _ :: rest -> find rest
       in
       find cases

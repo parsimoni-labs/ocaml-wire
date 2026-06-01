@@ -1396,7 +1396,11 @@ let casetype_u8 name cases =
         | Some i, _ ->
             Wire.case ~index:i c.inner.typ ~inject:c.inject ~project:c.project
         | None, Some t ->
-            Wire.default ~tag:t c.inner.typ ~inject:c.inject ~project:c.project
+            (* The composer's default branch ignores the matched tag and always
+               re-encodes the fixed [t], so adapt to the tag-aware API. *)
+            Wire.default c.inner.typ
+              ~inject:(fun _tag w -> c.inject w)
+              ~project:(fun a -> Option.map (fun w -> (t, w)) (c.project a))
         | None, None ->
             invalid_arg "casetype_u8: case must supply ~index or ~tag")
       cases

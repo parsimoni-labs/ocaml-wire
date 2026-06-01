@@ -178,9 +178,9 @@ let e2e_casetype_codec =
         case ~index:1 uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
-        default ~tag:0xFF uint8
-          ~inject:(fun v -> `Default v)
-          ~project:(function `Default v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun _tag v -> `Default v)
+          ~project:(function `Default v -> Some (0xFF, v) | _ -> None);
       ]
   in
   let f = Field.v "msg" body in
@@ -201,9 +201,9 @@ let e2e_ssh_casetype_codec =
         case ~index:"publickey" uint8
           ~inject:(fun v -> `Publickey v)
           ~project:(function `Publickey v -> Some v | _ -> None);
-        default ~tag:"xxxxxxxxx" uint8
-          ~inject:(fun v -> `Other v)
-          ~project:(function `Other v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun _tag v -> `Other v)
+          ~project:(function `Other v -> Some ("xxxxxxxxx", v) | _ -> None);
       ]
   in
   let f = Field.v "method" body in

@@ -328,11 +328,11 @@ and parse_casetype : type a k.
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
           let body, off'' = parse_direct cb_inner buf off' len in
-          (cb_inject body, off'')
+          (cb_inject tag_val body, off'')
         else find_case rest
     | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
         let body, off'' = parse_direct cb_inner buf off' len in
-        (cb_inject body, off'')
+        (cb_inject tag_val body, off'')
   in
   find_case cases
 
@@ -635,15 +635,9 @@ and encode_casetype : type a k.
  fun tag cases v enc ->
   let rec find_case = function
     | [] -> failwith "casetype encoding: no matching case"
-    | Case_branch { cb_tag; cb_default_tag; cb_inner; cb_project; _ } :: rest
-      -> (
+    | Case_branch { cb_inner; cb_project; _ } :: rest -> (
         match cb_project v with
-        | Some body ->
-            let t =
-              match (cb_tag, cb_default_tag) with
-              | Some t, _ | _, Some t -> t
-              | None, None -> failwith "casetype encoding: case missing tag"
-            in
+        | Some (t, body) ->
             encode_into tag t enc;
             encode_into cb_inner body enc
         | None -> find_case rest)

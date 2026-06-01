@@ -38,6 +38,16 @@
 
 ### Changed
 
+- `Wire.default` (a casetype's default branch) no longer takes a fixed `~tag`;
+  instead it threads the matched discriminator through `inject` and `project`,
+  so an arbitrary unclaimed tag round-trips. `inject` is now `'k -> 'w -> 'a`
+  (it receives the matched tag along with the body) and `project` is now
+  `'a -> ('k * 'w) option` (it returns the tag to write back). The decoder used
+  to hand `inject` only the body and the encoder always wrote the one fixed
+  `~tag`, so a default branch could not recover or re-emit the actual tag it
+  caught (e.g. a DHCP or TCP option code). Migrate by taking the tag in
+  `inject` (`fun _tag body -> ...` to ignore it) and pairing it in `project`
+  (#100, @samoht)
 - Decoding a struct with variable-size fields (`byte_slice`, `byte_array`,
   or a `repeat` sized by a cross-field expression) no longer allocates on
   each field access. Pure speedup, no API change (#81, @samoht)

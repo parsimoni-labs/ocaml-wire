@@ -196,10 +196,9 @@ and _ typ =
 and ('a, 'k) case_branch =
   | Case_branch : {
       cb_tag : 'k option;
-      cb_default_tag : 'k option;
       cb_inner : 'w typ;
-      cb_inject : 'w -> 'a;
-      cb_project : 'a -> 'w option;
+      cb_inject : 'k -> 'w -> 'a;
+      cb_project : 'a -> ('k * 'w) option;
     }
       -> ('a, 'k) case_branch
 
@@ -539,15 +538,16 @@ val case :
 (** A branch matching a specific tag value. *)
 
 val default :
-  tag:'k ->
   'w typ ->
-  inject:('w -> 'a) ->
-  project:('a -> 'w option) ->
+  inject:('k -> 'w -> 'a) ->
+  project:('a -> ('k * 'w) option) ->
   ('a, 'k) case_def
-(** [default ~tag inner ~inject ~project] is the default branch of a casetype.
-    [~tag] is the discriminator value the encoder writes when projecting this
-    branch back to bytes; on decode the default branch still matches any tag the
-    explicit cases didn't claim. *)
+(** [default inner ~inject ~project] is the default branch of a casetype. On
+    decode it matches any tag the explicit cases didn't claim, and [inject]
+    receives that matched tag together with the decoded body, so the value can
+    record which unclaimed tag it caught. On encode, [project] yields the tag to
+    write back along with the body, so an arbitrary unclaimed tag round-trips
+    (there is no fixed encode tag). *)
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. Every case must supply

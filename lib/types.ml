@@ -160,12 +160,16 @@ and _ typ =
 and ('a, 'k) case_branch =
   | Case_branch : {
       cb_tag : 'k option;
-      cb_default_tag : 'k option;
-          (* Encode-time tag for the default branch ([cb_tag = None]).
-             [None] means encoding this branch is unsupported. *)
+          (* Decode-match tag: [Some t] for an explicit case, [None] for the
+             default branch (matches any unclaimed tag). *)
       cb_inner : 'w typ;
-      cb_inject : 'w -> 'a;
-      cb_project : 'a -> 'w option;
+      cb_inject : 'k -> 'w -> 'a;
+          (* Receives the matched tag (so a default branch can recover the
+             actual tag it caught) and the decoded body. *)
+      cb_project : 'a -> ('k * 'w) option;
+          (* Yields the tag to encode and the body. An explicit case pairs its
+             own fixed tag; the default branch yields the tag carried by the
+             value, so an arbitrary unclaimed tag round-trips. *)
     }
       -> ('a, 'k) case_branch
 
@@ -527,10 +531,9 @@ type ('a, 'k) case_def =
     }
       -> ('a, 'k) case_def
   | Default_def : {
-      dd_tag : 'k;
       dd_inner : 'w typ;
-      dd_inject : 'w -> 'a;
-      dd_project : 'a -> 'w option;
+      dd_inject : 'k -> 'w -> 'a;
+      dd_project : 'a -> ('k * 'w) option;
     }
       -> ('a, 'k) case_def
 
@@ -543,35 +546,36 @@ let case ?index inner ~inject ~project =
       cd_project = project;
     }
 
-let default ~tag inner ~inject ~project =
-  Default_def
-    { dd_tag = tag; dd_inner = inner; dd_inject = inject; dd_project = project }
+let default inner ~inject ~project =
+  Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
 
 let casetype name tag defs =
   let resolve = function
     | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
         reject_decoration ~combinator:"casetype" cd_inner;
-        let cb_tag =
+        let tag_val =
           match cd_index with
-          | Some _ as k -> k
+          | Some k -> k
           | None ->
               invalid_arg
                 "Wire.casetype: every case must supply an explicit [~index]"
         in
         Case_branch
           {
-            cb_tag;
-            cb_default_tag = None;
+            cb_tag = Some tag_val;
+            (* [case] knows its tag from [~index], so its [inject] takes only the
+               body and its [project] yields only the body; pair the fixed tag
+               back on for the unified tag-aware branch. *)
             cb_inner = cd_inner;
-            cb_inject = cd_inject;
-            cb_project = cd_project;
+            cb_inject = (fun _matched body -> cd_inject body);
+            cb_project =
+              (fun a -> Option.map (fun w -> (tag_val, w)) (cd_project a));
           }
-    | Default_def { dd_tag; dd_inner; dd_inject; dd_project } ->
+    | Default_def { dd_inner; dd_inject; dd_project } ->
         reject_decoration ~combinator:"casetype" dd_inner;
         Case_branch
           {
             cb_tag = None;
-            cb_default_tag = Some dd_tag;
             cb_inner = dd_inner;
             cb_inject = dd_inject;
             cb_project = dd_project;
@@ -1673,7 +1677,7 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
         | [] -> tag_size
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
-            | Some body -> tag_size + size_of_typ_value cb_inner body
+            | Some (_tag, body) -> tag_size + size_of_typ_value cb_inner body
             | None -> find rest)
       in
       find cases
