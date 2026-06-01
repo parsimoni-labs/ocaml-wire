@@ -456,6 +456,58 @@ let test_action_on_bitfield () =
   let out_val = Param.get env out in
   Alcotest.(check bool) "out <= 15" true (out_val <= 15)
 
+(* -- Encode -- *)
+
+let test_encode_output_no_env () =
+  (* A codec whose only param is a decode-side output encodes without an env:
+     encode never reads output params, so demanding one was spurious. Before
+     the fix [Codec.encode] raised Invalid_argument here. *)
+  let out = Param.output "out" uint8 in
+  let f_x = Field.v "x" uint8 in
+  let codec =
+    let open Codec in
+    v "EncOut"
+      (fun x -> x)
+      [
+        ( Field.v "x"
+            ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
+            uint8
+        $ fun x -> x );
+      ]
+  in
+  let buf = Bytes.create (Codec.size_of_value codec 7) in
+  Codec.encode codec 7 buf 0;
+  Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0);
+  let env = Codec.env codec in
+  Alcotest.(check int) "decoded" 7 (decode_ok (Codec.decode ~env codec buf 0));
+  Alcotest.(check int) "out" 7 (Param.get env out)
+
+(* An embedded output-param sub-codec encodes from the parent without an env,
+   too: the parent forwards no env and the sub-codec needs none. *)
+let test_encode_embedded_output_no_env () =
+  let out = Param.output "out" uint8 in
+  let f_x = Field.v "x" uint8 in
+  let inner =
+    let open Codec in
+    v "EncOutInner"
+      (fun x -> x)
+      [
+        ( Field.v "x"
+            ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
+            uint8
+        $ fun x -> x );
+      ]
+  in
+  let outer =
+    let open Codec in
+    v "EncOutOuter"
+      (fun i -> i)
+      [ (Field.v "inner" (codec inner) $ fun i -> i) ]
+  in
+  let buf = Bytes.create (Codec.size_of_value outer 7) in
+  Codec.encode outer 7 buf 0;
+  Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0)
+
 (* -- Suite -- *)
 
 let suite =
@@ -493,4 +545,9 @@ let suite =
       (* edge cases *)
       Alcotest.test_case "empty action" `Quick test_empty_action;
       Alcotest.test_case "action on bitfield" `Quick test_action_on_bitfield;
+      (* encode *)
+      Alcotest.test_case "encode output param without env" `Quick
+        test_encode_output_no_env;
+      Alcotest.test_case "encode embedded output param without env" `Quick
+        test_encode_embedded_output_no_env;
     ] )
