@@ -97,6 +97,21 @@
   on the embedded path (only the buffer-size and field readers ran), so a
   value the sub-codec would reject standalone was accepted when embedded
   (#108, @samoht)
+- `Wire.array` / `Wire.array_seq` now reject a non-fixed-width element (a
+  `Wire.nested` region, a `Wire.byte_array_where` refined span, or a nested
+  `Wire.array`) at construction with `Invalid_argument`, instead of building a
+  codec that failed schema generation or raised `Failure` at decode. An array
+  projects as a count of fixed-size elements, so the element must be a scalar,
+  a fixed byte span, or a fixed-size sub-codec, matching `Field.repeat`'s
+  element rule (#107, @samoht)
+- `Field.optional` / `Field.optional_or` over a bitfield (`Wire.bits` /
+  `Wire.bit`) now raise `Invalid_argument` at construction. A bitfield has no
+  standalone wire form, so it cannot be conditionally present, matching the
+  existing `array` / `repeat` / `nested` behaviour (#107, @samoht)
+- `Wire.casetype` now rejects a bare greedy case body (`all_bytes` /
+  `all_zeros`) at construction. A greedy field reads the rest of the buffer and
+  has no determinate type for a `switch` case; wrap it in a sub-codec, which is
+  the supported form (#107, @samoht)
 - A `Wire.casetype` whose case body is a NUL-terminated string (`zeroterm` or
   `zeroterm_at_most`) now encodes, decodes, and sizes correctly as a
   `Field.repeat` element. The element encoder had no `zeroterm` case (so encode

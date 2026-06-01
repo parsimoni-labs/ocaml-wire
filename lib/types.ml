@@ -401,11 +401,34 @@ let rec has_wire_size_expr : type a. a typ -> bool = function
   | Codec { codec_fixed_size; _ } -> codec_fixed_size <> None
   | _ -> false
 
-let reject_variable_size ~combinator t =
-  if not (has_wire_size_expr t) then
+(* An [array]/[array_seq] element must be fixed-width AND decodable one element
+   at a time by the array loop: a scalar, a fixed-size byte span, or a
+   fixed-size sub-codec. [Map]/[Where]/[Enum] are transparent wrappers, so look
+   through them. A [nested] region, a refined byte span ([byte_array_where]), a
+   nested [array], or a variable / self-delimiting inner has no array
+   projection (3D rejects it) and the decoder has no element reader, so they are
+   refused at construction. This is stricter than [has_wire_size_expr], which
+   admits sized-but-undecodable elements for the [optional] byte-size suffix. *)
+let rec is_array_element : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
+  | Float32 _ | Float64 _ -> true
+  | Unit -> true
+  | Uint_var { size = Int _; _ } -> true
+  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
+  | Codec { codec_fixed_size; _ } -> codec_fixed_size <> None
+  | Map { inner; _ } -> is_array_element inner
+  | Where { inner; _ } -> is_array_element inner
+  | Enum { base; _ } -> is_array_element base
+  | _ -> false
+
+let reject_non_array_element ~combinator t =
+  if not (is_array_element t) then
     Fmt.invalid_arg
-      "Wire.%s: inner type must expose a wire size -- 3D projects %s through a \
-       [byte-size] suffix that needs the element width."
+      "Wire.%s: element type is not a fixed-width array element -- 3D projects \
+       %s as a count of fixed-size elements (a scalar, a fixed byte span, or a \
+       fixed-size sub-codec); a nested region, refined span, or variable inner \
+       has no array projection."
       combinator combinator
 
 (* A self-delimiting inner carries its own length / structure, so it decodes a
@@ -448,16 +471,33 @@ let reject_bitfield_element ~combinator t =
        within an enclosing word); it cannot be an element of %s."
       combinator combinator
 
+(* A bare greedy field ([all_bytes] / [all_zeros]) reads "the rest of the
+   buffer". It has no 3D type of its own, so it only projects as the trailing
+   field of a struct or sub-codec, never as a casetype case body (the switch
+   case needs a determinate type) and never with a determinate element size. *)
+let rec is_greedy : type a. a typ -> bool = function
+  | All_bytes | All_zeros -> true
+  | Map { inner; _ } -> is_greedy inner
+  | Where { inner; _ } -> is_greedy inner
+  | Enum { base; _ } -> is_greedy base
+  | _ -> false
+
+let reject_greedy_case_body t =
+  if is_greedy t then
+    invalid_arg
+      "Wire.casetype: a case body cannot be a bare all_bytes / all_zeros \
+       greedy field; it has no determinate type. Wrap it in a sub-codec."
+
 let array ~len elem =
   reject_decoration ~combinator:"array" elem;
   reject_bitfield_element ~combinator:"array" elem;
-  reject_variable_size ~combinator:"array" elem;
+  reject_non_array_element ~combinator:"array" elem;
   Array { len; elem; seq = seq_list }
 
 let array_seq seq ~len elem =
   reject_decoration ~combinator:"array_seq" elem;
   reject_bitfield_element ~combinator:"array_seq" elem;
-  reject_variable_size ~combinator:"array_seq" elem;
+  reject_non_array_element ~combinator:"array_seq" elem;
   Array { len; elem; seq }
 
 let byte_array ~size = Byte_array { size }
@@ -484,10 +524,12 @@ let synth_name_of_elt_var ev =
 let byte_slice ~size = Byte_slice { size }
 
 let optional present inner =
+  reject_bitfield_element ~combinator:"optional" inner;
   reject_unprojectable_optional ~combinator:"optional" inner;
   Optional { present; inner }
 
 let optional_or present ~default inner =
+  reject_bitfield_element ~combinator:"optional_or" inner;
   reject_unprojectable_optional ~combinator:"optional_or" inner;
   Optional_or { present; inner; default }
 
@@ -566,6 +608,7 @@ let casetype name tag defs =
   let resolve = function
     | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
         reject_decoration ~combinator:"casetype" cd_inner;
+        reject_greedy_case_body cd_inner;
         let tag_val =
           match cd_index with
           | Some k -> k
@@ -586,6 +629,7 @@ let casetype name tag defs =
           }
     | Default_def { dd_inner; dd_inject; dd_project } ->
         reject_decoration ~combinator:"casetype" dd_inner;
+        reject_greedy_case_body dd_inner;
         Case_branch
           {
             cb_tag = None;

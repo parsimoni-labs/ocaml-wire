@@ -551,6 +551,55 @@ let test_optional_reject_unprojectable () =
     (raises_invalid (fun () ->
          Field.optional_or "x" ~present:Expr.true_ ~default:"" all_bytes))
 
+(* An [array] / [array_seq] element must be a fixed-width type the array loop
+   can read one element at a time. A [nested] region, a refined byte span, and
+   a nested array all carry a wire size but have no array projection and no
+   element reader, so they are refused at construction (unlike [repeat], whose
+   byte budget admits self-delimiting variable elements). *)
+let test_array_reject_nonprojectable_element () =
+  Alcotest.(check bool)
+    "array over nested rejected" true
+    (raises_invalid (fun () -> array ~len:(int 2) (nested ~size:(int 4) uint8)));
+  Alcotest.(check bool)
+    "array_seq over nested_at_most rejected" true
+    (raises_invalid (fun () ->
+         array_seq seq_list ~len:(int 2) (nested_at_most ~size:(int 4) uint8)));
+  Alcotest.(check bool)
+    "array over byte_array_where rejected" true
+    (raises_invalid (fun () ->
+         array ~len:(int 2)
+           (byte_array_where ~size:(int 2) ~per_byte:(fun _ -> Expr.true_))));
+  Alcotest.(check bool)
+    "array over array rejected" true
+    (raises_invalid (fun () -> array ~len:(int 2) (array ~len:(int 2) uint8)))
+
+(* A bitfield has no standalone wire form, so it cannot be an [optional] inner
+   any more than an [array] / [repeat] / [nested] element. *)
+let test_optional_reject_bitfield () =
+  Alcotest.(check bool)
+    "optional over bits rejected" true
+    (raises_invalid (fun () ->
+         Field.optional "x" ~present:Expr.true_ (bits ~width:3 U8)));
+  Alcotest.(check bool)
+    "optional_or over bits rejected" true
+    (raises_invalid (fun () ->
+         Field.optional_or "x" ~present:Expr.true_ ~default:0 (bits ~width:3 U8)))
+
+(* A bare greedy field ([all_bytes] / [all_zeros]) reads the rest of the buffer;
+   it has no determinate type, so it cannot be a casetype case body (a sub-codec
+   that ends in [all_bytes] is the supported form). *)
+let test_casetype_reject_greedy_case_body () =
+  let build inner =
+    casetype "Greedy" uint8
+      [ case ~index:1 inner ~inject:(fun s -> s) ~project:Option.some ]
+  in
+  Alcotest.(check bool)
+    "casetype with all_bytes case body rejected" true
+    (raises_invalid (fun () -> build all_bytes));
+  Alcotest.(check bool)
+    "casetype with all_zeros case body rejected" true
+    (raises_invalid (fun () -> build all_zeros))
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -4579,8 +4628,14 @@ let suite =
         test_array_record_projection;
       Alcotest.test_case "nested reject bitfield element" `Quick
         test_nested_reject_bitfield;
+      Alcotest.test_case "array rejects non-projectable element" `Quick
+        test_array_reject_nonprojectable_element;
       Alcotest.test_case "optional rejects unprojectable inner" `Quick
         test_optional_reject_unprojectable;
+      Alcotest.test_case "optional rejects bitfield inner" `Quick
+        test_optional_reject_bitfield;
+      Alcotest.test_case "casetype rejects greedy case body" `Quick
+        test_casetype_reject_greedy_case_body;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick
