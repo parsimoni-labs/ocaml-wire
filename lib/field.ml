@@ -31,6 +31,14 @@ let optional_or name ?constraint_ ?self_constraint ?action ~present ~default typ
   v name ?constraint_ ?self_constraint ?action
     (Types.optional_or present ~default typ)
 
+(* A sub-codec ending in a greedy field ([all_bytes] / [all_zeros]) reads "the
+   rest of the buffer" as its tail, so it cannot be iterated as a repeat element
+   (the first element would consume everything). *)
+let codec_ends_greedy (s : Types.struct_) =
+  match List.rev s.fields with
+  | Types.Field f :: _ -> Types.is_greedy f.field_typ
+  | [] -> false
+
 (* Types decodable as a casetype case body inside a repeat: exactly the set
    [Codec.read_elem] handles. Unlike a bare repeat element, a lone [bits] field
    and a bounded [zeroterm_at_most] are allowed here, because the enclosing
@@ -46,7 +54,7 @@ let rec is_repeat_case_body : type a. a Types.typ -> bool =
   | Uint_var { size = Int _; _ } -> true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
   | Zeroterm_at_most { size = Int _ } -> true
-  | Codec _ -> true
+  | Codec { codec_struct; _ } -> not (codec_ends_greedy codec_struct)
   | Casetype { cases; _ } ->
       List.for_all
         (fun (Case_branch { cb_inner; _ }) -> is_repeat_case_body cb_inner)
@@ -73,7 +81,7 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Unit | Zeroterm ->
       true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
-  | Codec _ -> true
+  | Codec { codec_struct; _ } -> not (codec_ends_greedy codec_struct)
   | Casetype { cases; _ } ->
       List.for_all
         (fun (Case_branch { cb_inner; _ }) -> is_repeat_case_body cb_inner)

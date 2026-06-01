@@ -98,6 +98,11 @@
 
 ### Fixed
 
+- `Field.repeat` / `Field.repeat_seq` / `Wire.array` now reject an element that
+  is a sub-codec ending in a greedy field (`all_bytes` / `all_zeros`). Such a
+  tail reads the rest of the buffer, so the first element would consume
+  everything; the codec built but decode returned a parse error. The codec is
+  still valid standalone (#111, @samoht)
 - `Codec.v` now rejects a greedy field (`all_bytes` / `all_zeros`) that is not
   the last field, with `Invalid_argument`. A greedy field reads the rest of the
   buffer, so an earlier one starved every field after it: the codec built but
