@@ -79,6 +79,10 @@
   that raised `Failure` deep in decode or emitted a schema EverParse could not
   verify. Supported elements are unchanged: fixed-width scalars and byte spans,
   `zeroterm`, sub-codecs, and casetypes (#97, @samoht)
+- `Wire.array` over a fixed-size sub-record (a `Wire.codec` element, e.g. an
+  array of `{ x; y }` points) now decodes instead of raising `Failure`. The
+  schema already projected and verified as a sub-struct under a `[:byte-size]`
+  budget; only the OCaml decoder was missing the case (#96, @samoht)
 - `Field.repeat` over a `zeroterm` element (a list of NUL-terminated strings
   within a byte budget) now encodes, decodes, and generates a verified
   EverParse validator. It previously raised `Failure` when decoding (#93, @samoht)

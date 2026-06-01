@@ -427,6 +427,54 @@ let test_repeat_array_reject_bitfield () =
     (raises_invalid (fun () ->
          Field.repeat "x" ~size:(int 4) (bit (bits ~width:1 U8))))
 
+(* Wire.array over a fixed sub-record (Codec element): a fixed-count list of
+   structs. Decoding raised Failure "build_field_reader: unsupported type"
+   because the array element reader had no Codec case. The schema projects the
+   element as the sub-struct under a [:byte-size] budget. *)
+type pt = { px : int; py : int }
+
+let pt_codec =
+  Codec.v "Pt"
+    (fun px py -> { px; py })
+    Codec.
+      [
+        (Field.v "px" uint8 $ fun r -> r.px);
+        (Field.v "py" uint16be $ fun r -> r.py);
+      ]
+
+type arr_recs = { rtag : int; pts : pt list }
+
+let arr_recs_codec =
+  Codec.v "ArrRecs"
+    (fun rtag pts -> { rtag; pts })
+    Codec.
+      [
+        (Field.v "rtag" uint8 $ fun r -> r.rtag);
+        (Field.v "pts" (array ~len:(int 2) (codec pt_codec)) $ fun r -> r.pts);
+      ]
+
+let test_array_record_element () =
+  let v =
+    { rtag = 9; pts = [ { px = 1; py = 0x0203 }; { px = 4; py = 0x0506 } ] }
+  in
+  let sz = Codec.size_of_value arr_recs_codec v in
+  Alcotest.(check int) "wire size" 7 sz;
+  let buf = Bytes.create sz in
+  Codec.encode arr_recs_codec v buf 0;
+  match Codec.decode arr_recs_codec buf 0 with
+  | Ok d ->
+      Alcotest.(check (list (pair int int)))
+        "pts"
+        (List.map (fun p -> (p.px, p.py)) v.pts)
+        (List.map (fun p -> (p.px, p.py)) d.pts)
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+
+let test_array_record_projection () =
+  let out = render_3d arr_recs_codec in
+  Alcotest.(check bool)
+    "sub-struct element under byte-size on the array field" true
+    (contains ~sub:"Pt pts[:byte-size (2 * 3)]" out)
+
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decoding used to raise Failure "unsupported element type in
    repeat" and the schema mis-projected as a double [:byte-size]. *)
@@ -4227,6 +4275,10 @@ let suite =
         test_array_byte_array_projection;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
+      Alcotest.test_case "array: record element roundtrip" `Quick
+        test_array_record_element;
+      Alcotest.test_case "array: record element projection" `Quick
+        test_array_record_projection;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;
