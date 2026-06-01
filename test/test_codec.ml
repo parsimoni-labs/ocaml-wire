@@ -1332,6 +1332,93 @@ let test_get_action_inputparam_noenv () =
   | _ -> Alcotest.fail "expected rejection without env"
   | exception Validation_error (Constraint_failed _) -> ()
 
+(* -- Param forwarding into embedded sub-codecs -- *)
+
+(* A sub-codec whose field is sized by an input param, embedded as a field of an
+   outer codec. The outer surfaces the sub's param; binding it on the outer env
+   drives the embedded field width on both encode and decode. *)
+let test_embed_param_sized () =
+  let elen = Param.input "elen" uint8 in
+  let sub =
+    Codec.v "EmbSub"
+      (fun d -> d)
+      Codec.[ Field.v "data" (byte_array ~size:(Param.expr elen)) $ Fun.id ]
+  in
+  let outer =
+    Codec.v "EmbOuter" (fun s -> s) Codec.[ Field.v "s" (codec sub) $ Fun.id ]
+  in
+  let env = Codec.env outer |> Param.bind elen 3 in
+  let n = Codec.size_of_value outer "abc" in
+  Alcotest.(check int) "wire size" 3 n;
+  let buf = Bytes.create n in
+  Codec.encode ~env outer "abc" buf 0;
+  Alcotest.(check string)
+    "roundtrip" "abc"
+    (decode_ok (Codec.decode ~env outer buf 0))
+
+(* The outer codec inherits the embedded sub-codec's input param, so encoding it
+   without an env is rejected. *)
+let test_embed_param_requires_env () =
+  let elen = Param.input "elen2" uint8 in
+  let sub =
+    Codec.v "EmbSub2"
+      (fun d -> d)
+      Codec.[ Field.v "data" (byte_array ~size:(Param.expr elen)) $ Fun.id ]
+  in
+  let outer =
+    Codec.v "EmbOuter2" (fun s -> s) Codec.[ Field.v "s" (codec sub) $ Fun.id ]
+  in
+  Alcotest.(check bool)
+    "encode without env rejected" true
+    (raises_invalid (fun () -> Codec.encode outer "ab" (Bytes.create 8) 0))
+
+(* A sub-codec's [where] is enforced when the sub is embedded, matching its
+   standalone behaviour (it used to be silently dropped). *)
+let test_embed_where_enforced () =
+  let f_v = Field.v "v" uint8 in
+  let sub =
+    Codec.v "WSub"
+      ~where:Expr.(Field.ref f_v <= int 10)
+      (fun v -> v)
+      Codec.[ f_v $ Fun.id ]
+  in
+  let outer =
+    Codec.v "WOuter" (fun s -> s) Codec.[ Field.v "s" (codec sub) $ Fun.id ]
+  in
+  Alcotest.(check bool)
+    "violating value rejected when embedded" true
+    (match Codec.decode outer (Bytes.make 1 '\xFF') 0 with
+    | Ok _ -> false
+    | _ -> true);
+  Alcotest.(check int)
+    "satisfying value accepted" 5
+    (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0))
+
+(* A list of param-constrained sub-records within a byte budget, the param
+   forwarded through the repeat (the shape that first exposed the gap). *)
+let test_embed_param_repeat () =
+  let rlim = Param.input "rlim" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub =
+    Codec.v "RSub"
+      ~where:Expr.(Field.ref f_v <= Param.expr rlim)
+      (fun v -> v)
+      Codec.[ f_v $ Fun.id ]
+  in
+  let f_n = Field.v "n" uint8 in
+  let f_items = Field.repeat "items" ~size:(Field.ref f_n) (codec sub) in
+  let outer =
+    Codec.v "RepOuter" (fun n xs -> (n, xs)) Codec.[ f_n $ fst; f_items $ snd ]
+  in
+  let v = (3, [ 1; 5; 9 ]) in
+  let env = Codec.env outer |> Param.bind rlim 100 in
+  let n = Codec.size_of_value outer v in
+  let buf = Bytes.create n in
+  Codec.encode ~env outer v buf 0;
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode ~env outer buf 0) = v)
+
 let test_get_action_output_only () =
   (* Action with only assign (no return_bool/abort) -- should never fail *)
   let out = Param.output "out_only" uint8 in
@@ -4549,6 +4636,14 @@ let suite =
         test_get_action_with_inputparam;
       Alcotest.test_case "action: input param no env" `Quick
         test_get_action_inputparam_noenv;
+      Alcotest.test_case "embed: param-sized sub-codec forwards param" `Quick
+        test_embed_param_sized;
+      Alcotest.test_case "embed: param sub-codec requires env" `Quick
+        test_embed_param_requires_env;
+      Alcotest.test_case "embed: sub-codec where enforced" `Quick
+        test_embed_where_enforced;
+      Alcotest.test_case "embed: param forwarded through repeat" `Quick
+        test_embed_param_repeat;
       Alcotest.test_case "action: output only" `Quick
         test_get_action_output_only;
       Alcotest.test_case "action: var then assign" `Quick

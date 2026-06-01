@@ -136,6 +136,16 @@ val raw_encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> int
     validation and returns the offset after the written bytes. Same env
     semantics as {!encode}. Internal use. *)
 
+val embed_encode : 'r t -> 'r -> bytes -> int -> int
+(** Encode a sub-codec embedded as a field/element. Assumes the enclosing codec
+    has already seeded any input param cells from its env, so it skips the env
+    check {!encode} performs. Internal use. *)
+
+val embed_decode : 'r t -> bytes -> int -> 'r
+(** Decode a sub-codec embedded as a field/element, enforcing its [where] and
+    field constraints against param values seeded by the enclosing codec.
+    Internal use. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 

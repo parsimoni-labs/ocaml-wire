@@ -45,8 +45,6 @@ type ('a, 'k) param_handle = {
   ph_packed_typ : packed_typ;
   ph_mutable : bool;
   ph_cell : int ref;
-  mutable ph_slot : int;
-  mutable ph_env_idx : int;
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ
@@ -240,6 +238,9 @@ and action_stmt =
 
 type param_env = {
   codec_id : int;
+  names : string array;
+      (** Parallel to [slots]: the param name at each slot, so a handle resolves
+          to its slot by name (per-env, hence per-codec). *)
   slots : int array;
   bound : bool array;
       (** Parallel to [slots]; set by [Param.bind] so consumers can detect
