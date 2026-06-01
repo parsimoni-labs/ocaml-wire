@@ -1430,13 +1430,16 @@ let next_off_pos : next_off -> bytes -> int -> int = function
 
 let optional_compiled : type a r.
     layout_ctx ->
+    ?int_reader:(bytes -> int -> int) ->
     raw_reader:(bytes -> int -> a) ->
     raw_writer:(r -> bytes -> int -> int -> int) ->
     size_delta:int ->
     next_off:next_off ->
     populate:(int array -> bytes -> int -> unit) ->
+    unit ->
     (a, r) compiled_field =
- fun ctx ~raw_reader ~raw_writer ~size_delta ~next_off ~populate ->
+ fun ctx ?(int_reader = null_int_reader) ~raw_reader ~raw_writer ~size_delta
+     ~next_off ~populate () ->
   {
     raw_reader;
     raw_writer;
@@ -1445,7 +1448,11 @@ let optional_compiled : type a r.
     size_delta;
     next_off;
     bf_after = None;
-    int_reader = null_int_reader;
+    (* [int_reader] is the entry cross-field size/offset expressions read this
+       field through. For an [optional_or] with an int inner it must read the
+       present-or-default value, not the [null_int_reader] const 0 that left a
+       byte_array sized by an optional_or field resolving to length 0. *)
+    int_reader;
     nested_readers = [];
     validator_off = validator_off_of ctx;
     populate;
@@ -1874,12 +1881,12 @@ and compile_optional : type a r.
           | None -> write_off + fsize)
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate:inner_populate
+        ~populate:inner_populate ()
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> None)
         ~raw_writer:(fun _v _buf _base write_off -> write_off)
-        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
@@ -1904,6 +1911,7 @@ and compile_optional : type a r.
         ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
         ~populate:(fun arr buf base ->
           if present_fn buf base then inner_populate arr buf base)
+        ()
   | _ -> compile_optional_variable ctx fld present inner
 
 (* Variable-size inner: compile it as its own field and gate that compiled plan
@@ -1936,8 +1944,6 @@ and compile_optional_variable : type a r.
     }
   in
   let cf = compile_field ctx inner_fld in
-  let present_end = next_off_pos cf.next_off in
-  let absent_end = next_off_pos ctx.next_off in
   optional_compiled ctx
     ~raw_reader:(fun buf base ->
       if present_fn buf base then Some (cf.raw_reader buf base) else None)
@@ -1956,10 +1962,11 @@ and compile_optional_variable : type a r.
     ~next_off:
       (Dynamic
          (fun buf base ->
-           if present_fn buf base then present_end buf base
-           else absent_end buf base))
+           if present_fn buf base then next_off_pos cf.next_off buf base
+           else next_off_pos ctx.next_off buf base))
     ~populate:(fun arr buf base ->
       if present_fn buf base then cf.populate arr buf base)
+    ()
 
 and compile_optional_or : type a r.
     layout_ctx ->
@@ -1976,16 +1983,19 @@ and compile_optional_or : type a r.
       let get = fld.get in
       let populate = build_populate fld.typ ctx.n_fields inner_reader in
       optional_compiled ctx ~raw_reader:inner_reader
+        ~int_reader:(fun buf base ->
+          int_of_typ_value inner (inner_reader buf base))
         ~raw_writer:(fun v buf _base write_off ->
           inner_writer buf write_off (get v))
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate
+        ~populate ()
   | Bool false, _ ->
       optional_compiled ctx
         ~raw_reader:(fun _buf _base -> default)
+        ~int_reader:(fun _buf _base -> int_of_typ_value inner default)
         ~raw_writer:(fun _v _buf _base write_off -> write_off)
-        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate
+        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
@@ -2004,9 +2014,12 @@ and compile_optional_or : type a r.
       let raw_writer v buf _base write_off =
         inner_writer buf write_off (get v)
       in
-      optional_compiled ctx ~raw_reader ~raw_writer ~size_delta:fsize
+      optional_compiled ctx ~raw_reader
+        ~int_reader:(fun buf base ->
+          int_of_typ_value inner (raw_reader buf base))
+        ~raw_writer ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
-        ~populate
+        ~populate ()
   | _ -> compile_optional_or_variable ctx fld present inner default
 
 (* Variable-size inner. As in the fixed case [optional_or] is value-driven and
@@ -2035,7 +2048,8 @@ and compile_optional_or_variable : type a r.
     ~raw_reader:(fun buf base ->
       if present_fn buf base then cf.raw_reader buf base else default)
     ~raw_writer:(fun v buf base write_off -> cf.raw_writer v buf base write_off)
-    ~size_delta:0 ~next_off:cf.next_off ~populate:cf.populate
+    ~int_reader:cf.int_reader ~size_delta:0 ~next_off:cf.next_off
+    ~populate:cf.populate ()
 
 (* -- Apply a compiled plan to the record state -- *)
 

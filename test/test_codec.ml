@@ -2810,6 +2810,41 @@ let test_optional_absent_roundtrip () =
   Alcotest.(check (option int)) "payload" original.payload decoded.payload;
   Alcotest.(check int) "trail" original.trail decoded.trail
 
+(* A byte_array whose ~size reads an optional_or field. The size expression
+   used to resolve to 0 (the optional_or's int_reader was a const 0), so encode
+   raised a length mismatch and decode silently truncated the span to empty.
+   It now reads the present-or-default value. *)
+let test_bytearray_sized_by_optional_or () =
+  let f_gate = Field.v "gate" uint8 in
+  let f_len =
+    Field.optional_or "len"
+      ~present:Expr.(Field.ref f_gate <> int 0)
+      ~default:3 uint8
+  in
+  let f_data = Field.v "data" (byte_array ~size:(Field.ref f_len)) in
+  let c =
+    Codec.v "OoSized"
+      (fun gate len data -> (gate, len, data))
+      Codec.
+        [
+          (f_gate $ fun (g, _, _) -> g);
+          (f_len $ fun (_, l, _) -> l);
+          (f_data $ fun (_, _, d) -> d);
+        ]
+  in
+  let rt v expected =
+    let buf = Bytes.create (Codec.size_of_value c v) in
+    Codec.encode c v buf 0;
+    Alcotest.(check string) "encoded bytes" expected (Bytes.to_string buf);
+    match Codec.decode c buf 0 with
+    | Ok d -> Alcotest.(check bool) "round-trip" true (d = v)
+    | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  in
+  (* gate set: len present (2), data is 2 bytes *)
+  rt (1, 2, "ab") "\x01\x02ab";
+  (* gate clear: len falls back to the default (3), data is 3 bytes *)
+  rt (0, 3, "xyz") "\x00\x03xyz"
+
 let test_optional_wire_size_present () =
   Alcotest.(check int) "wire_size present" 4 (Codec.wire_size opt_codec_present)
 
@@ -4546,6 +4581,8 @@ let suite =
         test_optional_wire_size_present;
       Alcotest.test_case "optional: wire_size absent" `Quick
         test_optional_wire_size_absent;
+      Alcotest.test_case "byte_array sized by optional_or field" `Quick
+        test_bytearray_sized_by_optional_or;
       Alcotest.test_case "optional: codec present" `Quick
         test_optional_codec_present;
       Alcotest.test_case "optional: codec absent" `Quick
