@@ -4248,6 +4248,47 @@ let test_repeat_casetype_empty () =
   let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
   Alcotest.(check int) "empty" 0 (List.length opts)
 
+(* A casetype case body that is a NUL-terminated string bounded to a fixed
+   region ([zeroterm_at_most]), used as a repeat element. read_elem,
+   build_field_encoder, and elem_size_of all lacked the zeroterm_at_most case,
+   so encode raised "unsupported type" and sizing raised "cannot determine
+   element size". *)
+type zt_opt = Str of string | Num of int
+
+let zt_opt_typ : zt_opt typ =
+  casetype "ZtOpt" uint8
+    [
+      case ~index:1
+        (zeroterm_at_most ~size:(int 6))
+        ~inject:(fun s -> Str s)
+        ~project:(function Str s -> Some s | _ -> None);
+      case ~index:2 uint8
+        ~inject:(fun n -> Num n)
+        ~project:(function Num n -> Some n | _ -> None);
+    ]
+
+let zt_opt_size = function Str _ -> 1 + 6 | Num _ -> 1 + 1
+let zt_f_total = Field.v "total" uint16be
+let zt_f_opts = Field.repeat "opts" ~size:(Field.ref zt_f_total) zt_opt_typ
+
+let zt_codec =
+  Codec.v "ZtOpts"
+    (fun _t xs -> xs)
+    Codec.
+      [
+        ( zt_f_total $ fun xs ->
+          List.fold_left (fun a o -> a + zt_opt_size o) 0 xs );
+        (zt_f_opts $ fun xs -> xs);
+      ]
+
+let test_repeat_casetype_zeroterm_at_most () =
+  let v = [ Str "hi"; Num 7; Str "" ] in
+  let buf = Bytes.create (Codec.size_of_value zt_codec v) in
+  Codec.encode zt_codec v buf 0;
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode zt_codec buf 0) = v)
+
 (* -- Zero-terminated strings ([zeroterm] / [zeroterm_at_most]) -- *)
 
 type zt_rec = { zt_name : string; zt_tag : string; zt_n : int }
@@ -4660,6 +4701,8 @@ let suite =
         test_repeat_casetype_roundtrip;
       Alcotest.test_case "repeat: casetype TLV empty" `Quick
         test_repeat_casetype_empty;
+      Alcotest.test_case "repeat: casetype with zeroterm_at_most case" `Quick
+        test_repeat_casetype_zeroterm_at_most;
       (* zero-terminated strings *)
       Alcotest.test_case "zeroterm: roundtrip" `Quick test_zeroterm_roundtrip;
       Alcotest.test_case "zeroterm: empty" `Quick test_zeroterm_empty;

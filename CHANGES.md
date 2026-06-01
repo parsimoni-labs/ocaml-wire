@@ -77,6 +77,13 @@
 
 ### Fixed
 
+- A `Wire.casetype` whose case body is a NUL-terminated string (`zeroterm` or
+  `zeroterm_at_most`) now encodes, decodes, and sizes correctly as a
+  `Field.repeat` element. The element encoder had no `zeroterm` case (so encode
+  raised `Failure "unsupported type"`), the element decoder no
+  `zeroterm_at_most` case, and the element sizer reported "cannot determine
+  element size", so a list of such tag-dispatched options could not round-trip
+  (#103, @samoht)
 - A `byte_array` / `byte_slice` (or any field) whose `~size` reads a
   `Field.optional_or` field no longer resolves that size to 0. The optional_or
   field exposed a const-0 reader to cross-field size/offset expressions, so the
