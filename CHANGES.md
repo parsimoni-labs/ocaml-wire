@@ -77,6 +77,11 @@
 
 ### Fixed
 
+- A `byte_array` / `byte_slice` (or any field) whose `~size` reads a
+  `Field.optional_or` field no longer resolves that size to 0. The optional_or
+  field exposed a const-0 reader to cross-field size/offset expressions, so the
+  span decoded as empty (silent truncation) and `Codec.encode` raised a length
+  mismatch. It now reads the present-or-default value (#101, @samoht)
 - A `Wire.nested` / `Wire.nested_at_most` field now projects to a schema
   EverParse accepts. It previously emitted an extern setter typed
   `UINT8[:byte-size-single-element-array N]`, which is not valid 3D, so any
