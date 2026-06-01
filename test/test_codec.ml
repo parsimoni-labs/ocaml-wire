@@ -461,6 +461,25 @@ let test_repeat_byte_array_projection () =
     "single byte-size on the chunks field" true
     (contains ~sub:"UINT8 chunks[:byte-size n]" out)
 
+(* An element with no clean per-element 3D projection is refused at
+   construction, rather than failing late with Failure at decode/encode or
+   emitting a schema EverParse cannot verify. *)
+let repeat_rejects elem =
+  match Field.repeat "items" ~size:(int 4) elem with
+  | _ -> false
+  | exception Invalid_argument _ -> true
+
+let test_repeat_rejects_unprojectable () =
+  Alcotest.(check bool) "bits element" true (repeat_rejects (bits ~width:3 U8));
+  Alcotest.(check bool) "all_zeros element" true (repeat_rejects all_zeros);
+  Alcotest.(check bool)
+    "zeroterm_at_most element" true
+    (repeat_rejects (zeroterm_at_most ~size:(int 6)));
+  Alcotest.(check bool)
+    "byte_array_where element" true
+    (repeat_rejects
+       (byte_array_where ~size:(int 2) ~per_byte:(fun _ -> Expr.true_)))
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
@@ -4200,6 +4219,8 @@ let suite =
         test_repeat_byte_array_element;
       Alcotest.test_case "repeat: byte_array element projection" `Quick
         test_repeat_byte_array_projection;
+      Alcotest.test_case "repeat: rejects unprojectable element" `Quick
+        test_repeat_rejects_unprojectable;
       Alcotest.test_case "array: byte_array element roundtrip" `Quick
         test_array_byte_array_element;
       Alcotest.test_case "array: byte_array element projection" `Quick

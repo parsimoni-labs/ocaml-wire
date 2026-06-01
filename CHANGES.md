@@ -72,6 +72,13 @@
   `Param.output`). Output params are never read when encoding, so demanding an
   env raised `Invalid_argument` spuriously, and an output-param sub-codec
   embedded as a field could not be encoded at all (#95, @samoht)
+- `Field.repeat` / `Field.repeat_seq` now reject an element type that has no
+  clean per-element 3D projection (a sub-byte `bits` field, a refined or
+  at-most byte span, `all_zeros`, or a nested `array` / `nested`) at
+  construction with a clear `Invalid_argument`, instead of building a codec
+  that raised `Failure` deep in decode or emitted a schema EverParse could not
+  verify. Supported elements are unchanged: fixed-width scalars and byte spans,
+  `zeroterm`, sub-codecs, and casetypes (#97, @samoht)
 - `Field.repeat` over a `zeroterm` element (a list of NUL-terminated strings
   within a byte budget) now encodes, decodes, and generates a verified
   EverParse validator. It previously raised `Failure` when decoding (#93, @samoht)
