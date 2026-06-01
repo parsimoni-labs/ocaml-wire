@@ -2,6 +2,12 @@
 
 ### Added
 
+- `Wire.nested` / `Wire.nested_at_most` now accept a composite inner (a
+  `Wire.array`, or another nested region): the fixed-size region projects to 3D
+  through a synthesised wrapper struct so the single-element-array element is a
+  named type, instead of crashing at decode or emitting malformed 3D. A
+  `Wire.casetype` field whose case body is such a region likewise decodes and
+  sizes correctly (#109, @samoht)
 - An embedded sub-codec (`Wire.codec c` used as a field or `Field.repeat` /
   `array` element) that takes `Param.input` parameters now works: the outer
   codec surfaces the sub-codec's input params as its own, so `Codec.env` /

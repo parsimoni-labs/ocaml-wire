@@ -413,6 +413,27 @@ let test_3d_param_embed () =
     "use site applies the formal" true
     (contains ~sub:"PSub(lim) s" s)
 
+(* A [nested] region over a composite inner (an array) projects through a
+   synthesised wrapper struct so the single-element-array element is a named
+   type, not a malformed inline array. *)
+let test_3d_nested_over_array () =
+  let codec =
+    Codec.v "NAEmbed"
+      (fun xs -> xs)
+      Codec.
+        [
+          Field.v "xs" (nested ~size:(int 16) (array ~len:(int 2) uint64be))
+          $ Fun.id;
+        ]
+  in
+  let s = Wire.Everparse.Raw.to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool)
+    "wrapper struct holds the array" true
+    (contains ~sub:"UINT64BE v[:byte-size" s);
+  Alcotest.(check bool)
+    "use site is a single-element-array of the named wrapper" true
+    (contains ~sub:"xs[:byte-size-single-element-array 16]" s)
+
 (* -- Reserved word escaping -- *)
 
 let test_reserved_word_escaping () =
@@ -515,6 +536,8 @@ let suite =
         test_3d_dep_size_roundtrip;
       Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
       Alcotest.test_case "3d: param embed" `Quick test_3d_param_embed;
+      Alcotest.test_case "3d: nested over array" `Quick
+        test_3d_nested_over_array;
       Alcotest.test_case "3d: reserved word escaping" `Quick
         test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
