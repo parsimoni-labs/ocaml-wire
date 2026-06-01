@@ -206,6 +206,11 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
       let read = build_field_reader inner field_off in
       fun buf base -> decode (read buf base)
   | Unit -> fun _buf _base -> ()
+  (* A fixed-size sub-record / sub-codec as an array or nested element: decode
+     it at the element offset. The element must be fixed-width (the Array case
+     already gates on [field_wire_size]), so the sub-codec is too. *)
+  | Codec { codec_decode; _ } ->
+      fun buf base -> codec_decode buf (base + field_off)
   | Array { len = Int n; elem; seq = Seq_map s } -> (
       match field_wire_size elem with
       | Some elem_sz ->
