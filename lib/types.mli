@@ -745,6 +745,11 @@ val pp_parse_error : Format.formatter -> parse_error -> unit
 val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)
 
+val is_greedy : 'a typ -> bool
+(** Whether a type reads "the rest of the buffer" (a greedy byte span, through
+    transparent wrappers). Such a field is only valid as the last field of a
+    struct or codec. *)
+
 val size_of_typ_value : 'a typ -> 'a -> int
 (** [size_of_typ_value typ v] is the encoded byte size of [v] under [typ],
     computed from the value rather than from a buffer. Falls back to [0] for

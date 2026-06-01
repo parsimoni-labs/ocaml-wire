@@ -2459,6 +2459,24 @@ let build_checked_decode raw_decode wire_size_info min_size =
         raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off));
   raw_decode buf off
 
+(* A greedy field ([all_bytes] / [all_zeros]) consumes the rest of the buffer,
+   so it is only meaningful as the last field: an earlier one starves every
+   field after it (and 3D's [:consume-all] must be last too). Reject it at
+   construction rather than silently truncating later fields at decode. *)
+let reject_greedy_not_last name fields =
+  let rec check = function
+    | [] | [ _ ] -> ()
+    | Types.Field f :: rest ->
+        if is_greedy f.field_typ then
+          Fmt.invalid_arg
+            "Codec.v %s: a greedy field (all_bytes / all_zeros) must be the \
+             last field, but %s is followed by more fields"
+            name
+            (Option.value ~default:"<anon>" f.field_name);
+        check rest
+  in
+  check fields
+
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
   let codec_id = Atomic.fetch_and_add id_counter 1 in
@@ -2476,6 +2494,7 @@ let seal : type r. (r, r) record -> r t =
   let param_base = r.n_array_slots in
   (* Collect and index params *)
   let struct_fields = List.rev r.fields_rev in
+  reject_greedy_not_last r.name struct_fields;
   let param_handles = collect_param_handles struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
