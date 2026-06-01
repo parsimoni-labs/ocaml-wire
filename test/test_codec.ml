@@ -667,6 +667,35 @@ let test_casetype_reject_greedy_case_body () =
     "casetype with all_zeros case body rejected" true
     (raises_invalid (fun () -> build all_zeros))
 
+(* A greedy field ([all_bytes] / [all_zeros]) reads the rest of the buffer, so
+   it is only valid as the last field; an earlier one is refused at
+   construction (it would starve every field after it at decode). *)
+let test_greedy_not_last_rejected () =
+  Alcotest.(check bool)
+    "all_zeros before another field rejected" true
+    (raises_invalid (fun () ->
+         Codec.v "GnlA"
+           (fun a b -> (a, b))
+           Codec.[ Field.v "z" all_zeros $ fst; Field.v "n" uint8 $ snd ]));
+  Alcotest.(check bool)
+    "all_bytes before another field rejected" true
+    (raises_invalid (fun () ->
+         Codec.v "GnlB"
+           (fun a b -> (a, b))
+           Codec.[ Field.v "b" all_bytes $ fst; Field.v "n" uint8 $ snd ]));
+  (* A greedy last field is fine and round-trips. *)
+  let c =
+    Codec.v "GnlOk"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
+  in
+  let v = (5, "tail") in
+  let buf = Bytes.create (Codec.size_of_value c v) in
+  Codec.encode c v buf 0;
+  Alcotest.(check bool)
+    "greedy last roundtrip" true
+    (decode_ok (Codec.decode c buf 0) = v)
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -4709,6 +4738,8 @@ let suite =
         test_optional_reject_bitfield;
       Alcotest.test_case "casetype rejects greedy case body" `Quick
         test_casetype_reject_greedy_case_body;
+      Alcotest.test_case "greedy field must be last" `Quick
+        test_greedy_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick

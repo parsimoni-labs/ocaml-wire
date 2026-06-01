@@ -98,6 +98,11 @@
 
 ### Fixed
 
+- `Codec.v` now rejects a greedy field (`all_bytes` / `all_zeros`) that is not
+  the last field, with `Invalid_argument`. A greedy field reads the rest of the
+  buffer, so an earlier one starved every field after it: the codec built but
+  decode returned a parse error and 3D would reject the `[:consume-all]`
+  similarly (#110, @samoht)
 - An embedded sub-codec's `where` clause and field constraints are now enforced
   when the codec is decoded as a field or element. They were silently dropped
   on the embedded path (only the buffer-size and field readers ran), so a
