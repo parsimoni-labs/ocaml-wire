@@ -890,16 +890,69 @@ let repeat_elem_struct : type a. a typ -> string option = function
    declaration ([enum]) cannot. Those go through a synthesised wrapper struct,
    named deterministically from the element so the field renderer and the
    typedef emitter agree without shared state. *)
-let single_elem_struct : type a. a typ -> string option =
-  let some fmt = Fmt.kstr (fun s -> Some s) fmt in
-  function
+(* A deterministic, collision-free identifier fragment for an inner type, used
+   to name its synthesised wrapper struct. Two structurally equal inners get the
+   same fragment (so their wrapper is shared); different shapes differ. *)
+let rec wrap_tag : type a. a typ -> string = function
+  | Uint8 -> "u8"
+  | Uint16 Little -> "u16l"
+  | Uint16 Big -> "u16b"
+  | Uint32 Little -> "u32l"
+  | Uint32 Big -> "u32b"
+  | Uint63 Little -> "u63l"
+  | Uint63 Big -> "u63b"
+  | Uint64 Little -> "u64l"
+  | Uint64 Big -> "u64b"
+  | Int8 -> "i8"
+  | Int16 Little -> "i16l"
+  | Int16 Big -> "i16b"
+  | Int32 Little -> "i32l"
+  | Int32 Big -> "i32b"
+  | Int64 Little -> "i64l"
+  | Int64 Big -> "i64b"
+  | Float32 _ -> "f32"
+  | Float64 _ -> "f64"
+  | Uint_var { size = Int n; _ } -> Fmt.str "uv%d" n
+  | Bits { width; _ } -> Fmt.str "bf%d" width
+  | Byte_array { size = Int n } -> Fmt.str "ba%d" n
+  | Byte_slice { size = Int n } -> Fmt.str "bs%d" n
+  | Byte_array_where { size = Int n; _ } -> Fmt.str "rb%d" n
+  | Zeroterm -> "zt"
+  | Zeroterm_at_most { size = Int n } -> Fmt.str "ztam%d" n
+  | Unit -> "unit"
+  | Enum { name; _ } -> "e" ^ name
+  | Map { inner; _ } -> wrap_tag inner
+  | Where { inner; _ } -> wrap_tag inner
+  | Array { len = Int n; elem; _ } -> Fmt.str "arr%d_%s" n (wrap_tag elem)
+  | Single_elem { size = Int n; elem; _ } -> Fmt.str "se%d_%s" n (wrap_tag elem)
+  | Optional { inner; _ } -> "opt_" ^ wrap_tag inner
+  | Optional_or { inner; _ } -> "optd_" ^ wrap_tag inner
+  | Repeat { elem; _ } -> "rep_" ^ wrap_tag elem
+  | Codec { codec_name; _ } -> codec_name
+  | Casetype { name; _ } -> name
+  | _ -> "x"
+
+(* The synthesised wrapper-struct name for a [nested] inner that has no valid
+   bare single-element-array token. A scalar, sub-codec, or casetype renders
+   inline ([None]); everything else (byte spans, arrays, optionals, nested
+   regions, ...) is lifted into a named [struct { v : inner }]. *)
+let some fmt = Fmt.kstr (fun s -> Some s) fmt
+
+let rec single_elem_struct : type a. a typ -> string option = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
+  | Int64 _ | Float32 _ | Float64 _ | Codec _ | Casetype _ ->
+      None
+  | Map { inner; _ } -> single_elem_struct inner
+  | Where { inner; _ } -> single_elem_struct inner
+  (* Keep the historical names for the byte-span family so existing schemas and
+     tests are unchanged; everything else gets a structural name. *)
   | Byte_array { size = Int n } -> some "SeBytes%d" n
   | Byte_slice { size = Int n } -> some "SeSlice%d" n
   | Byte_array_where { size = Int n; _ } -> some "SeRBytes%d" n
   | Uint_var { size = Int n; _ } -> some "SeUvar%d" n
   | Zeroterm_at_most { size = Int n } -> some "SeZtam%d" n
   | Enum { name; _ } -> Some ("Se_" ^ name)
-  | _ -> None
+  | other -> Some ("Se_" ^ wrap_tag other)
 
 (* The synthesised gate-dispatch casetype name for an [optional] whose inner is
    self-delimiting (no wire-size expression). Derived from the inner so two

@@ -31,6 +31,14 @@ let setter_off_int32 n set buf off v =
   set buf off (Int32.of_int v);
   off + n
 
+(* Encode a value into a fixed [n]-byte region: write it with [enc], then
+   zero-pad the remainder. Used for [nested] regions. *)
+let single_elem_pad n enc buf off v =
+  let inner_end = enc buf off v in
+  if inner_end < off + n then
+    Bytes.fill buf inner_end (off + n - inner_end) '\x00';
+  off + n
+
 (* Encode a lone bitfield occupying its base word: range-check, place the value
    at its bit offset, advance by the base width. *)
 let bits_field_encoder ~width ~base ~bit_order buf off v =
@@ -174,6 +182,10 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
      write the value at its bit offset into an otherwise-zero word. *)
   | Bits { width; base; bit_order } ->
       bits_field_encoder ~width ~base ~bit_order
+  (* A nested region (e.g. a casetype case body): encode the inner at the
+     region start, then zero-pad the rest of the fixed [n]-byte region. *)
+  | Single_elem { size = Int n; elem; _ } ->
+      single_elem_pad n (build_field_encoder elem)
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1103,6 +1115,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   (* Fixed-size byte spans as repeat / array elements: a list of n-byte
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
+  | Byte_array_where { size = Int n; _ } -> Bytes.sub_string buf off n
   | Byte_slice { size = Int n } -> Slice.make buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)
@@ -1110,6 +1123,20 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       let total = bf_base_total_bits base in
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
       build_bf_reader base 0 shift width buf off
+  (* A fixed-count array inside a [nested] region (or a casetype case body):
+     decode each element at its stride. *)
+  | Array { len = Int n; elem; seq = Seq_map s } -> (
+      match field_wire_size elem with
+      | None -> failwith "read_elem: variable-size array element"
+      | Some esz ->
+          let acc = Stdlib.ref s.empty in
+          for i = 0 to n - 1 do
+            acc := s.add !acc (read_elem elem buf (off + (i * esz)))
+          done;
+          s.finish !acc)
+  (* A nested region as an element: decode its inner at the region start; the
+     enclosing region size (padding) is accounted for by the caller. *)
+  | Single_elem { elem; _ } -> read_elem elem buf off
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1191,6 +1218,8 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
   | Zeroterm_at_most { size = Int n } -> n
   (* A lone bitfield occupies its base word. *)
   | Bits { base; _ } -> bf_base_byte_size base
+  (* A nested region spans its whole fixed size, regardless of the inner. *)
+  | Single_elem { size = Int n; _ } -> n
   | _ -> (
       match field_wire_size typ with
       | Some n -> n

@@ -485,6 +485,73 @@ let test_nested_reject_bitfield () =
     "nested_at_most over bits rejected" true
     (raises_invalid (fun () -> nested_at_most ~size:(int 1) (bits ~width:3 U8)))
 
+(* A [nested] / [nested_at_most] region over a composite inner (an array, or
+   another nested region) round-trips: the inner decodes at the region start
+   and the region is zero-padded to its fixed size. 3D projects it through a
+   synthesised wrapper struct (see test_everparse). *)
+let test_nested_over_array () =
+  let codec =
+    Codec.v "NestArr" Fun.id
+      Codec.
+        [
+          Field.v "xs" (nested ~size:(int 16) (array ~len:(int 2) uint64be))
+          $ Fun.id;
+        ]
+  in
+  let v = [ 1L; 2L ] in
+  let buf = Bytes.create (Codec.size_of_value codec v) in
+  Codec.encode codec v buf 0;
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode codec buf 0) = v)
+
+let test_nested_at_most_over_array () =
+  let codec =
+    Codec.v "NestAtmArr" Fun.id
+      Codec.
+        [
+          Field.v "xs"
+            (nested_at_most ~size:(int 16)
+               (array_seq seq_list ~len:(int 2) uint64be))
+          $ Fun.id;
+        ]
+  in
+  let v = [ 7L; 9L ] in
+  let buf = Bytes.create (Codec.size_of_value codec v) in
+  Codec.encode codec v buf 0;
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode codec buf 0) = v)
+
+(* A casetype whose case body is a [nested] region (a scalar in a fixed span):
+   the tag-dispatched case decodes and sizes through the region. *)
+type nest_case = Nc_n of int | Nc_u of int
+
+let nest_case_codec =
+  let ct =
+    casetype "NcT" uint8
+      [
+        case ~index:1
+          (nested ~size:(int 4) int32be)
+          ~inject:(fun v -> Nc_n v)
+          ~project:(function Nc_n v -> Some v | _ -> None);
+        case ~index:2 uint8
+          ~inject:(fun v -> Nc_u v)
+          ~project:(function Nc_u v -> Some v | _ -> None);
+      ]
+  in
+  Codec.v "Nc" Fun.id Codec.[ Field.v "b" ct $ Fun.id ]
+
+let test_casetype_nested_case_body () =
+  List.iter
+    (fun v ->
+      let buf = Bytes.create (Codec.size_of_value nest_case_codec v) in
+      Codec.encode nest_case_codec v buf 0;
+      Alcotest.(check bool)
+        "roundtrip" true
+        (decode_ok (Codec.decode nest_case_codec buf 0) = v))
+    [ Nc_n 12345; Nc_u 7 ]
+
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decoding used to raise Failure "unsupported element type in
    repeat" and the schema mis-projected as a double [:byte-size]. *)
@@ -4628,6 +4695,12 @@ let suite =
         test_array_record_projection;
       Alcotest.test_case "nested reject bitfield element" `Quick
         test_nested_reject_bitfield;
+      Alcotest.test_case "nested over array roundtrip" `Quick
+        test_nested_over_array;
+      Alcotest.test_case "nested_at_most over array roundtrip" `Quick
+        test_nested_at_most_over_array;
+      Alcotest.test_case "casetype nested case body roundtrip" `Quick
+        test_casetype_nested_case_body;
       Alcotest.test_case "array rejects non-projectable element" `Quick
         test_array_reject_nonprojectable_element;
       Alcotest.test_case "optional rejects unprojectable inner" `Quick
