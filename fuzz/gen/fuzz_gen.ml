@@ -1617,6 +1617,80 @@ let test_cases label g =
     safety_case "adversarial" g.adversarial;
   ]
 
+(* Cross-field sizes: a [byte_array] whose [~size] reads a preceding int field.
+   The size-source field is drawn from several int-valued field types -- in
+   particular [optional_or], whose value used to resolve to 0 in a size
+   expression, decoding the span as empty and raising on encode. Each source
+   builds a two-field [(len, data)] codec round-tripped through [test_cases],
+   which checks decode, [size_of_value], and re-encode against canonical bytes
+   assembled here (the length-field bytes followed by [len] data bytes). *)
+let u8_size_bytes n =
+  let b = Bytes.create 1 in
+  Bytes.set_uint8 b 0 n;
+  b
+
+let u16be_size_bytes n =
+  let b = Bytes.create 2 in
+  Bytes.set_uint16_be b 0 n;
+  b
+
+let sized_source name make_len bytes_of_len =
+  let len_field = make_len () in
+  let data_field =
+    Wire.Field.v "Data" (Wire.byte_array ~size:(Wire.Field.ref len_field))
+  in
+  let codec =
+    Wire.Codec.v ("Sized" ^ name)
+      (fun len data -> (len, data))
+      Wire.Codec.[ len_field $ fst; data_field $ snd ]
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 7 ]
+      (fun len ->
+        let data = String.make len 'a' in
+        ((len, data), Bytes.cat (bytes_of_len len) (bytes_of_string data)))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+  }
+
+let sized_cases group =
+  List.concat_map
+    (fun (slabel, src) -> test_cases (group ^ " " ^ slabel) src)
+    [
+      ( "u8",
+        sized_source "U8"
+          (fun () -> Wire.Field.v "Len" Wire.uint8)
+          u8_size_bytes );
+      ( "u16be",
+        sized_source "U16be"
+          (fun () -> Wire.Field.v "Len" Wire.uint16be)
+          u16be_size_bytes );
+      ( "map",
+        sized_source "Map"
+          (fun () ->
+            Wire.Field.v "Len"
+              (Wire.map ~decode:Fun.id ~encode:Fun.id Wire.uint8))
+          u8_size_bytes );
+      ( "optional_or",
+        sized_source "OptOr"
+          (fun () ->
+            Wire.Field.optional_or "Len" ~present:Wire.Expr.true_ ~default:0
+              Wire.uint8)
+          u8_size_bytes );
+      ( "where",
+        sized_source "Where"
+          (fun () -> Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
+          u8_size_bytes );
+    ]
+
 (* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
    API, distinct from [Codec.encode/decode]. Skipped for codecs that take a
    [Param.env] since the direct entry points don't thread one. *)

@@ -35,6 +35,14 @@ val validate_cases : string -> 'a t -> Alcobar.test_case list
     pass; random and adversarial inputs may pass or fail but must not crash.
     Threads the env via {!Wire.Codec.validate}'s [?env] when [g] needs one. *)
 
+val sized_cases : string -> Alcobar.test_case list
+(** [sized_cases group] round-trips a two-field length/data codec whose data
+    byte span is sized by a cross-field reference to the preceding length field,
+    for each of several int-valued length-source field types (a plain scalar, a
+    mapped scalar, a static optional-or field, and a refined field). Regression
+    coverage for cross-field size expressions that read an unusual size-source
+    field. *)
+
 (** {1 Scalar leaves} *)
 
 val uint8 : int t
