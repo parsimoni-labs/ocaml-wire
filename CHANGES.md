@@ -67,6 +67,14 @@
 
 ### Fixed
 
+- A `Wire.nested` / `Wire.nested_at_most` field now projects to a schema
+  EverParse accepts. It previously emitted an extern setter typed
+  `UINT8[:byte-size-single-element-array N]`, which is not valid 3D, so any
+  codec with a `nested` field failed schema generation regardless of the inner.
+  The fixed region is now handed to its `WireSet*` callback by offset like
+  other byte spans, and a byte-span or `enum` inner goes through a synthesised
+  wrapper struct so the single-element-array element is a single named type
+  (scalar, sub-record, and casetype inners render inline) (#99, @samoht)
 - `Codec.encode` no longer requires an `?env` for a codec whose only
   parameters are decode-side outputs (a field with an `Action.assign` into a
   `Param.output`). Output params are never read when encoding, so demanding an
