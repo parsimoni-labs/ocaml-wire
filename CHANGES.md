@@ -3,11 +3,10 @@
 ### Added
 
 - `Wire.nested` / `Wire.nested_at_most` now accept a composite inner (a
-  `Wire.array`, or another nested region): the fixed-size region projects to 3D
-  through a synthesised wrapper struct so the single-element-array element is a
-  named type, instead of crashing at decode or emitting malformed 3D. A
-  `Wire.casetype` field whose case body is such a region likewise decodes and
-  sizes correctly (#109, @samoht)
+  `Wire.array`, or another nested region), and a `Wire.casetype` field's case
+  body may be such a region. Both round-trip and generate a verified EverParse
+  validator; previously they crashed at decode or failed schema generation
+  (#109, @samoht)
 - An embedded sub-codec (`Wire.codec c` used as a field or `Field.repeat` /
   `array` element) that takes `Param.input` parameters now works: the outer
   codec surfaces the sub-codec's input params as its own, so `Codec.env` /
@@ -98,16 +97,12 @@
 
 ### Fixed
 
-- `Field.repeat` / `Field.repeat_seq` / `Wire.array` now reject an element that
-  is a sub-codec ending in a greedy field (`all_bytes` / `all_zeros`). Such a
-  tail reads the rest of the buffer, so the first element would consume
-  everything; the codec built but decode returned a parse error. The codec is
-  still valid standalone (#111, @samoht)
-- `Codec.v` now rejects a greedy field (`all_bytes` / `all_zeros`) that is not
-  the last field, with `Invalid_argument`. A greedy field reads the rest of the
-  buffer, so an earlier one starved every field after it: the codec built but
-  decode returned a parse error and 3D would reject the `[:consume-all]`
-  similarly (#110, @samoht)
+- A greedy field (`all_bytes` / `all_zeros`) reads the rest of the buffer, so it
+  is now rejected with `Invalid_argument` anywhere it is not the final field: a
+  non-last field of a codec, a `Field.repeat` / `Wire.array` element (or a
+  sub-codec ending in one), or a `Wire.casetype` case body. Such a codec
+  previously built but failed to decode. It remains valid as the last field,
+  the supported way to consume the rest (#107, #110, #111, @samoht)
 - An embedded sub-codec's `where` clause and field constraints are now enforced
   when the codec is decoded as a field or element. They were silently dropped
   on the embedded path (only the buffer-size and field readers ran), so a
@@ -120,14 +115,6 @@
   projects as a count of fixed-size elements, so the element must be a scalar,
   a fixed byte span, or a fixed-size sub-codec, matching `Field.repeat`'s
   element rule (#107, @samoht)
-- `Field.optional` / `Field.optional_or` over a bitfield (`Wire.bits` /
-  `Wire.bit`) now raise `Invalid_argument` at construction. A bitfield has no
-  standalone wire form, so it cannot be conditionally present, matching the
-  existing `array` / `repeat` / `nested` behaviour (#107, @samoht)
-- `Wire.casetype` now rejects a bare greedy case body (`all_bytes` /
-  `all_zeros`) at construction. A greedy field reads the rest of the buffer and
-  has no determinate type for a `switch` case; wrap it in a sub-codec, which is
-  the supported form (#107, @samoht)
 - A `Wire.casetype` whose case body is a NUL-terminated string (`zeroterm` or
   `zeroterm_at_most`) now encodes, decodes, and sizes correctly as a
   `Field.repeat` element. The element encoder had no `zeroterm` case (so encode
@@ -140,19 +127,9 @@
   field exposed a const-0 reader to cross-field size/offset expressions, so the
   span decoded as empty (silent truncation) and `Codec.encode` raised a length
   mismatch. It now reads the present-or-default value (#101, @samoht)
-- A `Wire.nested` / `Wire.nested_at_most` field now projects to a schema
-  EverParse accepts. It previously emitted an extern setter typed
-  `UINT8[:byte-size-single-element-array N]`, which is not valid 3D, so any
-  codec with a `nested` field failed schema generation regardless of the inner.
-  The fixed region is now handed to its `WireSet*` callback by offset like
-  other byte spans, and a byte-span or `enum` inner goes through a synthesised
-  wrapper struct so the single-element-array element is a single named type
-  (scalar, sub-record, and casetype inners render inline) (#99, @samoht)
-- `Wire.nested` / `Wire.nested_at_most` over a bitfield element (`Wire.bits` or
-  `Wire.bit`) now raises `Invalid_argument` when the codec is built, instead of
-  crashing at decode with `Failure`. A bitfield only exists packed inside a
-  record, so it cannot be a `nested` inner, matching the existing `array` /
-  `repeat` behaviour (#98, @samoht)
+- A `Wire.nested` / `Wire.nested_at_most` field now generates a verified
+  EverParse validator. Previously any codec with a `nested` field failed schema
+  generation, regardless of the inner type (#99, @samoht)
 - `Codec.encode` no longer requires an `?env` for a codec whose only
   parameters are decode-side outputs (a field with an `Action.assign` into a
   `Param.output`). Output params are never read when encoding, so demanding an
@@ -177,16 +154,16 @@
   disagreed about the field's layout when the gate was false, so a value
   written by the OCaml encoder was rejected by the generated validator
   (#88, @samoht)
-- `Field.repeat` over a fixed `byte_array` / `byte_slice` element (a list of
-  n-byte chunks) now encodes, decodes, and generates a verified EverParse
-  validator. It previously raised `Failure` when decoding (#89, @samoht)
-- `Wire.array` whose element is a fixed `byte_array` / `byte_slice` (e.g. an
-  array of fixed-size addresses) now generates a valid EverParse validator;
-  the generated 3D schema was previously malformed for such arrays (#92, @samoht)
-- `Field.repeat` / `Wire.array` over a bitfield element (`Wire.bits` or
-  `Wire.bit`) now raises `Invalid_argument` when the codec is built, instead of
-  crashing at decode. A bitfield only exists packed inside a record, so it
-  cannot be a repeat or array element (#90, @samoht)
+- `Field.repeat` and `Wire.array` over a fixed `byte_array` / `byte_slice`
+  element (a list of n-byte chunks, e.g. fixed-size addresses) now encode,
+  decode, and generate a verified EverParse validator. Decoding previously
+  raised `Failure` and the generated schema was malformed (#89, #92, @samoht)
+- A bitfield (`Wire.bits` / `Wire.bit`) is now rejected with `Invalid_argument`
+  at construction as an element of `Field.repeat` / `Wire.array` / `Wire.nested`
+  or as an `Field.optional` inner. A bitfield only exists packed inside a
+  record, with no standalone wire form, so it cannot be an element or a
+  conditionally-present field; previously such a codec built and crashed at
+  decode (#90, #98, #107, @samoht)
 - A codec that embeds a variable-size sub-codec (`Wire.codec`, e.g. a
   length-prefixed string) as a field is now accepted by EverParse; it
   previously failed schema generation (#87, @samoht)
@@ -194,36 +171,28 @@
   beyond the native int range (a `uint64`/`int64` length over `max_int`), or
   reads a non-integer field, now fails the parse instead of silently reading
   0. The old behaviour masked malformed input (#82, @samoht)
-- `Codec.size_of_value` under-counted a `Field.repeat` with a dynamic byte
-  budget, so `Codec.encode` overran the buffer. It now counts the elements
-  (#79, @samoht)
-- `Codec.size_of_value` under-counted a `Wire.casetype` field, so
-  `Codec.encode` overran the buffer. It now counts the tag and matched case
-  (#78, @samoht)
+- `Codec.size_of_value` now sizes a `Field.repeat` with a dynamic budget, a
+  `Wire.casetype` field, and a packed bitfield (wrapped by `Wire.bit` or an
+  enum / map) correctly. The first two were under-counted (so `Codec.encode`
+  overran the buffer) and the bitfield over-counted (so `encode` raised a
+  spurious `Invalid_argument`) (#72, #78, #79, @samoht)
 - `Field.repeat` over a `Wire.casetype` element now encodes and decodes
   instead of raising. This covers DHCP-style options whose cases mix bare
   single-byte tags with length-prefixed bodies (#75, @samoht)
-- `Codec.size_of_value` no longer over-counts a packed bitfield wrapped by
-  `Wire.bit` or an enum/map, which made `Codec.encode` raise a spurious
-  `Invalid_argument` (#72, @samoht)
 - `Codec.encode` now raises `Invalid_argument` when the writer emits fewer
   bytes than `size_of_value` promised, instead of shipping a value with
   uninitialised trailing bytes (#62, @samoht)
 - `Codec.encode` into a too-small buffer now fails with a precise byte count
   instead of writing past the end (#61, @samoht)
-- `Field.optional` with a dynamic gate no longer writes a phantom byte or
-  overruns the buffer when the gate and the value disagree; it raises
-  `Invalid_argument` (#58, @samoht)
-- `Field.optional_or` with a dynamic gate now encodes from the value; the
-  gate selects the decoded value or the default on decode (#58, @samoht)
+- `Field.optional` / `Field.optional_or` with a dynamic gate now encode from
+  the value (the gate selects the decoded value or the default on decode);
+  `optional` raises `Invalid_argument` rather than writing a phantom byte or
+  overrunning the buffer when the gate and value disagree (#58, @samoht)
 - Decoding an `all_zeros` field that contains a non-zero byte now returns a
   `Constraint_failed` error instead of raising (@samoht)
 - `Wire.to_string` on a `Wire.nested ~size:n` field now zero-pads to `n`
   bytes when the inner writes fewer, so it agrees with `Wire.of_string`
   (@samoht)
-- `Wire.default` now takes a required `~tag`: the discriminator written when
-  encoding the default branch. Encoding a default-branch value previously
-  crashed (@samoht)
 - `Wire.to_string` on a `codec` field whose inner ends in `all_bytes` /
   `rest_bytes` / `all_zeros` no longer appends a 4 KB scratch tail; the size
   is computed from the value (#54, @samoht)
