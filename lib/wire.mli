@@ -671,16 +671,18 @@ val case :
 (** Tagged branch of a casetype. *)
 
 val default :
-  tag:'k ->
   'w typ ->
-  inject:('w -> 'a) ->
-  project:('a -> 'w option) ->
+  inject:('k -> 'w -> 'a) ->
+  project:('a -> ('k * 'w) option) ->
   ('a, 'k) case_def
-(** [default ~tag inner ~inject ~project] is the default branch of a casetype.
+(** [default inner ~inject ~project] is the default branch of a casetype.
 
-    The decoder uses the default branch when no [~index]-tagged case matches.
-    The encoder writes [~tag] when projecting the default variant back to bytes.
-*)
+    The decoder uses it when no [~index]-tagged case matches, passing the
+    matched tag to [inject] (so the decoded value can recover which unclaimed
+    tag it caught) together with the decoded body. The encoder writes the tag
+    [project] returns, so an arbitrary unclaimed tag round-trips, e.g. for DHCP
+    options: [inject = (fun code body -> Other (code, body))] and
+    [project = (function Other (c, d) -> Some (c, d) | _ -> None)]. *)
 
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. The discriminator typ

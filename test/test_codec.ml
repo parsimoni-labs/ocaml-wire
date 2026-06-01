@@ -3395,9 +3395,9 @@ let casetype_field_event_typ : ev_payload Wire.typ =
       Wire.case ~index:2 Wire.uint32be
         ~inject:(fun v -> `Logout v)
         ~project:(function `Logout v -> Some v | _ -> None);
-      Wire.default ~tag:0xFF Wire.uint8
-        ~inject:(fun v -> `Other v)
-        ~project:(function `Other v -> Some v | _ -> None);
+      Wire.default Wire.uint8
+        ~inject:(fun _tag v -> `Other v)
+        ~project:(function `Other v -> Some (0xFF, v) | _ -> None);
     ]
 
 type ev_event = { ev_ts : int64; ev_data : ev_payload }
@@ -3435,6 +3435,38 @@ let test_casetype_field_default () =
   Bytes.set_uint8 buf 9 7;
   let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
   Alcotest.(check bool) "Other 7" true (r.ev_data = `Other 7)
+
+(* The default branch recovers the matched tag and re-encodes it, so an
+   arbitrary unclaimed tag round-trips (the DHCP / TCP-options shape). *)
+type tlv = Known of int | Unknown of (int * string)
+
+let tlv_typ : tlv Wire.typ =
+  Wire.casetype "Tlv" Wire.uint8
+    [
+      Wire.case ~index:1 Wire.uint16be
+        ~inject:(fun v -> Known v)
+        ~project:(function Known v -> Some v | _ -> None);
+      Wire.default
+        (Wire.byte_array ~size:(int 2))
+        ~inject:(fun tag body -> Unknown (tag, body))
+        ~project:(function Unknown (t, b) -> Some (t, b) | _ -> None);
+    ]
+
+let tlv_codec =
+  Codec.v "Tlv" (fun x -> x) Codec.[ (Field.v "v" tlv_typ $ fun x -> x) ]
+
+let test_casetype_default_recovers_tag () =
+  let v = Unknown (0x42, "ab") in
+  let buf = Bytes.create (Codec.size_of_value tlv_codec v) in
+  Codec.encode tlv_codec v buf 0;
+  Alcotest.(check int)
+    "encode writes the captured tag" 0x42 (Bytes.get_uint8 buf 0);
+  match Codec.decode tlv_codec buf 0 with
+  | Ok (Unknown (t, b)) ->
+      Alcotest.(check int) "decode recovers the tag" 0x42 t;
+      Alcotest.(check string) "decode body" "ab" b
+  | Ok _ -> Alcotest.fail "expected Unknown"
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
 
 let test_casetype_field_roundtrip () =
   let buf = Bytes.create 11 in
@@ -4565,6 +4597,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "casetype default recovers matched tag" `Quick
+        test_casetype_default_recovers_tag;
       Alcotest.test_case "casetype field: roundtrip" `Quick
         test_casetype_field_roundtrip;
       Alcotest.test_case "casetype field: size_of_value" `Quick

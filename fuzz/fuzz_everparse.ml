@@ -158,9 +158,9 @@ let test_casetype_inline () =
           ~inject:(fun v -> `U32 (Wire.Private.UInt32.to_int v))
           ~project:(function
             | `U32 v -> Some (Wire.Private.UInt32.of_int v) | _ -> None);
-        Wire.default ~tag:0xFF Wire.uint8
-          ~inject:(fun v -> `Default v)
-          ~project:(function `Default v -> Some v | _ -> None);
+        Wire.default Wire.uint8
+          ~inject:(fun _tag v -> `Default v)
+          ~project:(function `Default v -> Some (0xFF, v) | _ -> None);
       ]
   in
   let s =
