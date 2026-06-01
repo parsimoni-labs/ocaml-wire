@@ -538,6 +538,41 @@ let test_repeat_rejects_unprojectable () =
     (repeat_rejects
        (byte_array_where ~size:(int 2) ~per_byte:(fun _ -> Expr.true_)))
 
+(* [optional] / [optional_or] project either a conditional byte-size region (a
+   sized inner) or a gate-dispatched casetype (a self-delimiting inner). An
+   inner that is neither, such as [all_bytes], has no projection and is refused
+   at construction. *)
+let test_optional_reject_unprojectable () =
+  Alcotest.(check bool)
+    "optional over all_bytes rejected" true
+    (raises_invalid (fun () -> Field.optional "x" ~present:Expr.true_ all_bytes));
+  Alcotest.(check bool)
+    "optional_or over all_bytes rejected" true
+    (raises_invalid (fun () ->
+         Field.optional_or "x" ~present:Expr.true_ ~default:"" all_bytes))
+
+(* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
+   is refused at construction. *)
+let test_uint_size_bounds () =
+  Alcotest.(check bool)
+    "uint 0 rejected" true
+    (raises_invalid (fun () -> uint (int 0)));
+  Alcotest.(check bool)
+    "uint 8 rejected" true
+    (raises_invalid (fun () -> uint (int 8)));
+  Alcotest.(check bool)
+    "uint 4 accepted" false
+    (raises_invalid (fun () -> uint (int 4)))
+
+(* A [casetype] [case] carries an explicit discriminator; omitting [~index] is
+   refused at construction (only [default] is index-free). *)
+let test_casetype_case_requires_index () =
+  Alcotest.(check bool)
+    "case without ~index rejected" true
+    (raises_invalid (fun () ->
+         casetype "NoIndex" uint8
+           [ case uint8 ~inject:Fun.id ~project:Option.some ]))
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { bf_a : int; bf_b : int; bf_c : int; bf_d : int }
@@ -4399,6 +4434,12 @@ let suite =
         test_array_record_projection;
       Alcotest.test_case "nested reject bitfield element" `Quick
         test_nested_reject_bitfield;
+      Alcotest.test_case "optional rejects unprojectable inner" `Quick
+        test_optional_reject_unprojectable;
+      Alcotest.test_case "uint rejects out-of-range size" `Quick
+        test_uint_size_bounds;
+      Alcotest.test_case "casetype case requires ~index" `Quick
+        test_casetype_case_requires_index;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;
