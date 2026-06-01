@@ -46,6 +46,12 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
      setter makes EverParse fail with "Parse_with_dep_action: tag not
      readable". Expose its bytes via the [SetBytes] offset instead. *)
   | Types.Codec _ -> true
+  (* A [nested ~size] is a fixed-size byte region holding one inner value. 3D
+     parses it with a [:byte-size-single-element-array] suffix, which is not a
+     readable value in an action; expose the region through the [SetBytes]
+     offset like other byte spans, so the extern setter takes an offset rather
+     than the (unrepresentable) array-typed value. *)
+  | Types.Single_elem _ -> true
   | _ -> false
 
 type setter_info = { setter_name : string; setter_val_typ : Types.packed_typ }

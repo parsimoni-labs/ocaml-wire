@@ -811,6 +811,42 @@ let test_field_optional_byte_array () =
   Alcotest.(check bool)
     "byte-size suffix uses inner size" true (contains out "8")
 
+(* A [nested ~size] / [nested_at_most] field projects through EverParse. It used
+   to emit an extern setter param typed [UINT8[:byte-size-single-element-array]],
+   which is invalid 3D and made [3d.exe] reject the whole module. Byte-span and
+   enum inners go through a synthesised wrapper struct; scalar and sub-record
+   inners render inline. [generate_c] runs [3d.exe] and raises if the .3d is
+   rejected, so this is the regression guard. *)
+let test_nested_field_projects () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let inner =
+      Codec.v "NInner"
+        (fun a b -> (a, b))
+        Codec.[ Field.v "a" uint8 $ fst; Field.v "b" uint16be $ snd ]
+    in
+    let codec =
+      Codec.v "NestedProj"
+        (fun scalar bytes sub -> (scalar, bytes, sub))
+        Codec.
+          [
+            (Field.v "scalar" (nested ~size:(int 4) uint8) $ fun (s, _, _) -> s);
+            ( Field.v "bytes" (nested ~size:(int 4) (byte_array ~size:(int 3)))
+            $ fun (_, b, _) -> b );
+            ( Field.v "sub" (nested ~size:(int 8) (codec inner))
+            $ fun (_, _, s) -> s );
+          ]
+    in
+    let dir = Filename.temp_dir "wire_3d_nested" "" in
+    let s = Everparse.schema codec in
+    Wire_3d.generate_3d ~outdir:dir [ s ];
+    (* Runs 3d.exe; raises if EverParse rejects the generated .3d. *)
+    Wire_3d.generate_c ~outdir:dir [ s ];
+    Alcotest.(check bool)
+      "C generated for nested fields" true
+      (Sys.file_exists (Filename.concat dir "NestedProj.c"))
+  end
+
 let test_keyword_field_escaped () =
   let s =
     struct_ "Esc2"
@@ -856,6 +892,8 @@ let suite =
         test_array_rejects_unsized_elem;
       Alcotest.test_case "Field.optional: byte_array inner projects" `Quick
         test_field_optional_byte_array;
+      Alcotest.test_case "nested field projects through EverParse" `Slow
+        test_nested_field_projects;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
     ] )

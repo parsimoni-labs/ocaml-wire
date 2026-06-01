@@ -821,6 +821,25 @@ let repeat_elem_struct : type a. a typ -> string option = function
   | Zeroterm -> Some "ZtElem"
   | _ -> None
 
+(* A [nested ~size] projects to [<elem>[:byte-size-single-element-array n]],
+   whose element must be a single type token. A bare scalar or an already-named
+   struct ([codec] / [casetype]) works inline, but an element that renders with
+   its own array / refinement qualifier ([byte_array], [byte_slice],
+   [byte_array_where], [zeroterm_at_most], [uint_var]) or that needs its own
+   declaration ([enum]) cannot. Those go through a synthesised wrapper struct,
+   named deterministically from the element so the field renderer and the
+   typedef emitter agree without shared state. *)
+let single_elem_struct : type a. a typ -> string option =
+  let some fmt = Fmt.kstr (fun s -> Some s) fmt in
+  function
+  | Byte_array { size = Int n } -> some "SeBytes%d" n
+  | Byte_slice { size = Int n } -> some "SeSlice%d" n
+  | Byte_array_where { size = Int n; _ } -> some "SeRBytes%d" n
+  | Uint_var { size = Int n; _ } -> some "SeUvar%d" n
+  | Zeroterm_at_most { size = Int n } -> some "SeZtam%d" n
+  | Enum { name; _ } -> Some ("Se_" ^ name)
+  | _ -> None
+
 (* The synthesised gate-dispatch casetype name for an [optional] whose inner is
    self-delimiting (no wire-size expression). Derived from the inner so two
    optionals over the same inner share one declaration. *)
@@ -854,57 +873,71 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
         ];
     }
 
+let rec collect_casetype_decls : type a.
+    (string, unit) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
+ fun seen acc typ ->
+  let extract : type b. b typ -> unit =
+   fun t -> collect_casetype_decls seen acc t
+  in
+  (* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
+     struct when it has no usable bare token; emit it once, deduped by name. *)
+  let emit_wrapper name elem =
+    if not (Hashtbl.mem seen name) then begin
+      Hashtbl.add seen name ();
+      acc := typedef (struct_ name [ field "v" elem ]) :: !acc
+    end
+  in
+  match typ with
+  | Casetype { name; tag; cases }
+    when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
+      Hashtbl.add seen name ();
+      (* Visit case inners first so any sub-codecs / nested casetypes they
+         reference are declared before the dispatch that names them. *)
+      List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
+      let dispatch, wrapper = casetype_pair name tag cases in
+      acc := wrapper :: dispatch :: !acc
+  | Casetype { cases; _ } ->
+      (* String-tagged casetype: handled by [split_string_casetype_fields].
+         Still walk inner case typs for nested int-tagged casetypes. *)
+      List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
+  | Codec { codec_name; codec_struct; _ } when not (Hashtbl.mem seen codec_name)
+    ->
+      (* Embedded sub-codec: emit its struct alongside the parent so 3D
+         references to [codec_name] resolve. Recurse into the sub-codec's
+         own fields to catch nested casetype / sub-codec dependencies. *)
+      Hashtbl.add seen codec_name ();
+      acc := typedef codec_struct :: !acc;
+      List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields
+  | Codec _ -> ()
+  | Map { inner; _ } -> extract inner
+  | Where { inner; _ } -> extract inner
+  | Optional { inner; _ } when not (has_wire_size_expr inner) ->
+      (* Self-delimiting inner: declare its dependencies, then the
+         gate-dispatch casetype that references them. *)
+      extract inner;
+      let opt_name = optional_casetype_name inner in
+      if not (Hashtbl.mem seen opt_name) then begin
+        Hashtbl.add seen opt_name ();
+        acc := optional_casetype_decl opt_name inner :: !acc
+      end
+  | Optional { inner; _ } -> extract inner
+  | Optional_or { inner; _ } -> extract inner
+  | Apply { typ; _ } -> extract typ
+  | Repeat { elem; _ } ->
+      extract elem;
+      Option.iter (fun n -> emit_wrapper n elem) (repeat_elem_struct elem)
+  | Array { elem; _ } -> extract elem
+  | Single_elem { elem; _ } ->
+      extract elem;
+      Option.iter (fun n -> emit_wrapper n elem) (single_elem_struct elem)
+  | _ -> ()
+
 let casetype_decls_of_struct (s : struct_) : decl list =
   let seen = Hashtbl.create 4 in
   let acc = Stdlib.ref [] in
-  let rec extract : type a. a typ -> unit = function
-    | Casetype { name; tag; cases }
-      when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
-        Hashtbl.add seen name ();
-        (* Visit case inners first so any sub-codecs / nested casetypes they
-           reference are declared before the dispatch that names them. *)
-        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
-        let dispatch, wrapper = casetype_pair name tag cases in
-        acc := wrapper :: dispatch :: !acc
-    | Casetype { cases; _ } ->
-        (* String-tagged casetype: handled by [split_string_casetype_fields].
-           Still walk inner case typs for nested int-tagged casetypes. *)
-        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
-    | Codec { codec_name; codec_struct; _ }
-      when not (Hashtbl.mem seen codec_name) ->
-        (* Embedded sub-codec: emit its struct alongside the parent so 3D
-           references to [codec_name] resolve. Recurse into the sub-codec's
-           own fields to catch nested casetype / sub-codec dependencies. *)
-        Hashtbl.add seen codec_name ();
-        acc := typedef codec_struct :: !acc;
-        List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields
-    | Codec _ -> ()
-    | Map { inner; _ } -> extract inner
-    | Where { inner; _ } -> extract inner
-    | Optional { inner; _ } when not (has_wire_size_expr inner) ->
-        (* Self-delimiting inner: declare its dependencies, then the
-           gate-dispatch casetype that references them. *)
-        extract inner;
-        let opt_name = optional_casetype_name inner in
-        if not (Hashtbl.mem seen opt_name) then begin
-          Hashtbl.add seen opt_name ();
-          acc := optional_casetype_decl opt_name inner :: !acc
-        end
-    | Optional { inner; _ } -> extract inner
-    | Optional_or { inner; _ } -> extract inner
-    | Apply { typ; _ } -> extract typ
-    | Repeat { elem; _ } -> (
-        extract elem;
-        match repeat_elem_struct elem with
-        | Some name when not (Hashtbl.mem seen name) ->
-            Hashtbl.add seen name ();
-            acc := typedef (struct_ name [ field "v" elem ]) :: !acc
-        | _ -> ())
-    | Array { elem; _ } -> extract elem
-    | Single_elem { elem; _ } -> extract elem
-    | _ -> ()
-  in
-  List.iter (fun (Field f) -> extract f.field_typ) s.fields;
+  List.iter
+    (fun (Field f) -> collect_casetype_decls seen acc f.field_typ)
+    s.fields;
   List.rev !acc
 
 (* Two-step projection for string-tagged casetype: split the field into
@@ -1264,7 +1297,14 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
-      (Single_elem { size; at_most }, fun ppf -> pp_typ ppf elem)
+      (* A wrapper-needing element goes through its synthesised struct name; a
+         bare scalar or named struct renders inline. *)
+      let pp_elem ppf =
+        match single_elem_struct elem with
+        | Some name -> Fmt.string ppf name
+        | None -> pp_typ ppf elem
+      in
+      (Single_elem { size; at_most }, pp_elem)
   | Array { len; elem; _ } -> (
       (* 3D's [name[len]] suffix only accepts byte-sized elements; for wider
          elements the size in bytes must be made explicit via [:byte-size].
