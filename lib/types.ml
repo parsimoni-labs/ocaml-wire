@@ -22,8 +22,11 @@ type ('a, 'k) param_handle = {
   ph_packed_typ : packed_typ;
   ph_mutable : bool;
   ph_cell : int ref;
-  mutable ph_slot : int;
-  mutable ph_env_idx : int;
+      (* [ph_cell] is the per-handle backing read by encode/size expressions and
+         the value-forwarding vehicle for embedded sub-codecs. Slot resolution
+         (decode array index, env index) is NOT stored here: it is per-codec,
+         since one handle may be referenced both standalone and from an
+         embedding, which would clash on a single mutable field. *)
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ
@@ -210,6 +213,10 @@ and action_stmt =
 
 type param_env = {
   codec_id : int;
+  names : string array;
+      (* Parallel to [slots]: the param name at each slot. [Param.bind] / [get]
+         resolve a handle to its slot by name, so resolution is per-env (hence
+         per-codec) rather than via a mutable field on the shared handle. *)
   slots : int array;
   bound : bool array;
       (* Parallel to [slots]: one bit per slot, set by [Param.bind] so

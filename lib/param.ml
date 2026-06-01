@@ -70,8 +70,6 @@ let input name typ =
     ph_packed_typ = Types.Pack_typ typ;
     ph_mutable = false;
     ph_cell = ref 0;
-    ph_slot = -1;
-    ph_env_idx = -1;
   }
 
 let output name typ =
@@ -82,8 +80,6 @@ let output name typ =
     ph_packed_typ = Types.Pack_typ typ;
     ph_mutable = true;
     ph_cell = ref 0;
-    ph_slot = -1;
-    ph_env_idx = -1;
   }
 
 let decl (t : ('a, 'k) t) : Types.param =
@@ -100,19 +96,30 @@ let expr t : int Types.expr = Types.Param_ref t
 
 type env = Types.param_env
 
+(* Slot of a handle within an env, by name. [-1] when the env's codec does not
+   reference the param (e.g. binding a param the codec does not use). *)
+let env_idx (env : env) name =
+  let rec find i =
+    if i >= Array.length env.Types.names then -1
+    else if env.names.(i) = name then i
+    else find (i + 1)
+  in
+  find 0
+
 let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   let iv = to_int p.Types.ph_typ v in
   let slots = Array.copy env.slots in
   let bound = Array.copy env.bound in
-  if p.ph_env_idx >= 0 then begin
-    slots.(p.ph_env_idx) <- iv;
-    bound.(p.ph_env_idx) <- true
+  let i = env_idx env p.Types.ph_name in
+  if i >= 0 then begin
+    slots.(i) <- iv;
+    bound.(i) <- true
   end;
   p.ph_cell := iv;
-  { Types.codec_id = env.codec_id; slots; bound }
+  { env with Types.slots; bound }
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
-  if p.Types.ph_env_idx < 0 then of_int p.ph_typ !(p.ph_cell)
-  else of_int p.ph_typ env.slots.(p.ph_env_idx)
+  let i = env_idx env p.Types.ph_name in
+  if i < 0 then of_int p.ph_typ !(p.ph_cell) else of_int p.ph_typ env.slots.(i)
 
 type packed = Pack : ('a, 'k) t -> packed

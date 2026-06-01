@@ -588,7 +588,17 @@ let compile_bool_expr ?sizeof_this env e =
    constraints / where clauses where the validator has already populated
    the per-decode int_array. *)
 type idx = string -> int
-type compile_ctx = { idx : idx; sizeof_this : int; field_pos : int }
+
+type compile_ctx = {
+  idx : idx;
+  sizeof_this : int;
+  field_pos : int;
+  param_slots : (string, int) Hashtbl.t;
+      (* Per-codec map from param name to its slot in this codec's decode
+         array, filled at seal. Resolution lives here, not on the shared
+         handle, so one handle can serve a standalone codec and an embedding
+         with different slots. *)
+}
 
 let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
   {
@@ -598,10 +608,13 @@ let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
         fun a () -> a.(i));
     param_ref =
       (fun (Pack_param p) a () ->
-        (* [ph_slot] is assigned during sealing, after the leaves are built,
-           so it must be read per call rather than captured here. *)
-        let i = p.ph_slot in
-        if i >= 0 then a.(i) else !(p.ph_cell));
+        (* The per-codec slot map is filled at seal, after these leaves are
+           built, so it must be consulted per call. A param not in this
+           codec's map (e.g. one only reachable via [ph_cell] forwarding from
+           an embedding) falls back to the shared cell. *)
+        match Hashtbl.find_opt cc.param_slots p.Types.ph_name with
+        | Some i -> a.(i)
+        | None -> !(p.ph_cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
@@ -634,12 +647,13 @@ exception Return_true
 let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
     compiled_action =
   match s with
-  | Assign (p, e) ->
+  | Assign (p, e) -> (
       let fe = compile_int_arr cc e in
       fun arr ->
         let v = fe arr in
-        let slot = p.Types.ph_slot in
-        if slot >= 0 then arr.(slot) <- v else p.Types.ph_cell := v
+        match Hashtbl.find_opt cc.param_slots p.Types.ph_name with
+        | Some slot -> arr.(slot) <- v
+        | None -> p.Types.ph_cell := v)
   | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
   | Return e ->
       let fe = compile_bool_arr cc e in
@@ -715,6 +729,8 @@ type ('f, 'r) record =
       field_access_rev : (string * field_access) list;
       field_readers : field_reader list;
       where : bool expr option;
+      param_slots : (string, int) Hashtbl.t;
+          (* Per-codec param name to decode-array slot, filled at seal. *)
     }
       -> ('f, 'r) record
 
@@ -768,6 +784,7 @@ let record_start ?where name make =
       field_access_rev = [];
       field_readers = [];
       where;
+      param_slots = Hashtbl.create 4;
     }
 
 let bind (f : 'a Field.t) get =
@@ -2127,7 +2144,14 @@ let apply_compiled : type a f r.
     List.fold_left (fun acc vn -> (vn, dummy_reader) :: acc) base action_vanames
   in
   let idx = build_idx cc_readers in
-  let cc = { idx; sizeof_this = cf.validator_off; field_pos = field_idx } in
+  let cc =
+    {
+      idx;
+      sizeof_this = cf.validator_off;
+      field_pos = field_idx;
+      param_slots = r.param_slots;
+    }
+  in
   let check =
     match fld.constraint_ with
     | None -> None
@@ -2191,6 +2215,7 @@ let apply_compiled : type a f r.
       field_access_rev = (fld.name, cf.field_access) :: r.field_access_rev;
       field_readers = new_field_readers;
       where = r.where;
+      param_slots = r.param_slots;
     }
 
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
@@ -2308,13 +2333,13 @@ let lookup_reader_idx rev_readers name =
   in
   find 0 rev_readers
 
-let compile_where_clause field_readers where =
+let compile_where_clause param_slots field_readers where =
   match where with
   | None -> None
   | Some cond ->
       let rev_readers = List.rev field_readers in
       let idx name = lookup_reader_idx rev_readers name in
-      let cc = { idx; sizeof_this = 0; field_pos = 0 } in
+      let cc = { idx; sizeof_this = 0; field_pos = 0; param_slots } in
       Some (compile_bool_arr cc cond)
 
 let build_validators validators_rev checkers_rev compiled_where struct_fields
@@ -2411,13 +2436,15 @@ let seal : type r. (r, r) record -> r t =
   let struct_fields = List.rev r.fields_rev in
   let param_handles = collect_param_handles struct_fields r.where in
   let n_params = List.length param_handles in
+  Hashtbl.reset r.param_slots;
   List.iteri
     (fun i (Param.Pack p) ->
-      p.ph_slot <- param_base + i;
-      p.ph_env_idx <- i)
+      Hashtbl.replace r.param_slots p.Types.ph_name (param_base + i))
     param_handles;
   let n_total = param_base + n_params in
-  let compiled_where = compile_where_clause r.field_readers r.where in
+  let compiled_where =
+    compile_where_clause r.param_slots r.field_readers r.where
+  in
   let validate_arr, populate, validate =
     build_validators validators (List.rev r.checkers_rev) compiled_where
       struct_fields n_total
@@ -2488,9 +2515,10 @@ type validator_acc = {
   min_size : int;
   next_off : next_off;
   bf : bf_codec_state option;
+  param_slots : (string, int) Hashtbl.t;
 }
 
-let empty_validator_acc =
+let empty_validator_acc () =
   {
     validators_rev = [];
     checkers_rev = [];
@@ -2500,6 +2528,7 @@ let empty_validator_acc =
     min_size = 0;
     next_off = Static 0;
     bf = None;
+    param_slots = Hashtbl.create 4;
   }
 
 let layout_ctx_of_validator_acc acc =
@@ -2558,7 +2587,14 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
       base action_vanames
   in
   let idx = build_idx cc_readers in
-  let cc = { idx; sizeof_this = validator_off; field_pos = acc.n_fields } in
+  let cc =
+    {
+      idx;
+      sizeof_this = validator_off;
+      field_pos = acc.n_fields;
+      param_slots = acc.param_slots;
+    }
+  in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
   let raise_check_failed () =
@@ -2601,6 +2637,7 @@ let rec apply_struct_field acc inner_struct =
     min_size = acc.min_size + size_delta;
     next_off;
     bf = None;
+    param_slots = acc.param_slots;
   }
 
 and apply_field_to_validator_acc acc (Types.Field f) =
@@ -2636,11 +2673,13 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         min_size = acc.min_size + cf.size_delta;
         next_off = cf.next_off;
         bf = cf.bf_after;
+        param_slots = acc.param_slots;
       }
 
 and validator_of_struct (s : Types.struct_) : validator =
   let acc =
-    List.fold_left apply_field_to_validator_acc empty_validator_acc s.fields
+    List.fold_left apply_field_to_validator_acc (empty_validator_acc ())
+      s.fields
   in
   let wire_size_info =
     match acc.next_off with
@@ -2650,13 +2689,15 @@ and validator_of_struct (s : Types.struct_) : validator =
   let param_handles = collect_param_handles s.fields s.where in
   let n_params = List.length param_handles in
   let param_base = acc.n_array_slots in
+  Hashtbl.reset acc.param_slots;
   List.iteri
     (fun i (Param.Pack p) ->
-      p.ph_slot <- param_base + i;
-      p.ph_env_idx <- i)
+      Hashtbl.replace acc.param_slots p.Types.ph_name (param_base + i))
     param_handles;
   let n_total = param_base + n_params in
-  let compiled_where = compile_where_clause acc.field_readers s.where in
+  let compiled_where =
+    compile_where_clause acc.param_slots acc.field_readers s.where
+  in
   let validate_arr, _populate, _validate =
     build_validators
       (List.rev acc.validators_rev)
@@ -2734,9 +2775,10 @@ let raw_decode (t : _ t) buf off = t.decode buf off
    parametric field sizes. Mirror of the env -> array blit in
    [decode_exn]. *)
 let load_env_into_cells (t : 'r t) (env : Param.env) =
-  List.iter
-    (fun (Param.Pack p) ->
-      if p.ph_env_idx >= 0 then p.ph_cell := env.slots.(p.ph_env_idx))
+  (* The env slot of [param_handles.(i)] is [i] (the env is built in the same
+     order, see [env] below). *)
+  List.iteri
+    (fun i (Param.Pack p) -> p.ph_cell := env.slots.(i))
     t.param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
@@ -2745,23 +2787,19 @@ let load_env_into_cells (t : 'r t) (env : Param.env) =
    regions for byte_array / byte_slice / uint_var fields and writing the
    rest of the record at the wrong offsets. *)
 let unbound_params (t : 'r t) (env : Param.env) : string list =
-  List.filter_map
-    (fun (Param.Pack p) ->
-      if
-        (not p.Types.ph_mutable) && p.ph_env_idx >= 0
-        && not env.bound.(p.ph_env_idx)
-      then Some p.ph_name
+  List.mapi
+    (fun i (Param.Pack p) ->
+      if (not p.Types.ph_mutable) && not env.bound.(i) then Some p.ph_name
       else None)
     t.param_handles
+  |> List.filter_map Fun.id
 
 (* Input params (read from the env) drive field sizes/offsets, so encoding
    without their values would resolve those to 0. Output params are written
    by decode-side actions and never consulted on encode, so a codec whose only
    params are outputs needs no env. *)
 let has_input_params (t : 'r t) =
-  List.exists
-    (fun (Param.Pack p) -> (not p.Types.ph_mutable) && p.ph_env_idx >= 0)
-    t.param_handles
+  List.exists (fun (Param.Pack p) -> not p.Types.ph_mutable) t.param_handles
 
 let require_env t = function
   | None when not (has_input_params t) -> ()
@@ -2793,6 +2831,9 @@ let wire_size_info (t : _ t) =
 let env (t : _ t) : Param.env =
   {
     Types.codec_id = t.id;
+    names =
+      Array.of_list
+        (List.map (fun (Param.Pack p) -> p.Types.ph_name) t.param_handles);
     slots = Array.make t.n_params 0;
     bound = Array.make t.n_params false;
   }
@@ -2807,10 +2848,12 @@ let decode_exn ?env:e t buf off =
   t.validate_arr arr buf off;
   (match e with
   | Some (e : Param.env) ->
-      List.iter
-        (fun (Param.Pack p) ->
-          let v = arr.(p.ph_slot) in
-          e.slots.(p.ph_env_idx) <- v;
+      (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
+         [i]. Write decoded output params back into the env (and the cell). *)
+      List.iteri
+        (fun i (Param.Pack p) ->
+          let v = arr.(t.param_base + i) in
+          e.slots.(i) <- v;
           p.ph_cell := v)
         t.param_handles
   | None -> ());
@@ -2989,10 +3032,10 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
             let param_handles = codec.param_handles in
             let param_base = codec.param_base in
             ( (fun arr ->
-                List.iter
-                  (fun (Param.Pack p) ->
-                    let v = arr.(p.ph_slot) in
-                    e.slots.(p.ph_env_idx) <- v;
+                List.iteri
+                  (fun i (Param.Pack p) ->
+                    let v = arr.(param_base + i) in
+                    e.slots.(i) <- v;
                     p.ph_cell := v)
                   param_handles),
               fun arr ->
