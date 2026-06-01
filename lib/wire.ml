@@ -61,8 +61,8 @@ let is_nan (f : float Field.t) : bool Types.expr =
     && Land (r, Int mant_mask) <> Int 0)
 
 let codec (c : 'r Codec.t) : 'r typ =
-  let codec_decode = Codec.raw_decode c in
-  let codec_encode = Codec.raw_encode c in
+  let codec_decode = Codec.embed_decode c in
+  let codec_encode = Codec.embed_encode c in
   let codec_field_readers = Codec.field_readers c in
   let codec_struct = Codec.to_struct c in
   let codec_size_of_value = Codec.size_of_value c in

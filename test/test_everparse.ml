@@ -390,6 +390,29 @@ let test_3d_param_in_size () =
     (contains ~sub:"UINT16BE len" s);
   Alcotest.(check bool) "size uses len" true (contains ~sub:":byte-size len" s)
 
+(* A codec embedding a parametric sub-codec must surface the sub's param as its
+   own formal and apply it at the use site, else 3D rejects the reference. *)
+let test_3d_param_embed () =
+  let lim = Param.input "lim" uint8 in
+  let sub =
+    Codec.v "PSub"
+      ~where:Expr.(Field.ref (Field.v "v" uint8) <= Param.expr lim)
+      (fun v -> v)
+      Codec.[ Field.v "v" uint8 $ Fun.id ]
+  in
+  let outer =
+    Codec.v "PEmbed"
+      (fun s -> s)
+      Codec.[ Field.v "s" (Wire.codec sub) $ Fun.id ]
+  in
+  let s = Wire.Everparse.Raw.to_3d (Everparse.schema outer).module_ in
+  Alcotest.(check bool)
+    "sub typedef carries the formal" true
+    (contains ~sub:"_PSub(UINT8 lim)" s);
+  Alcotest.(check bool)
+    "use site applies the formal" true
+    (contains ~sub:"PSub(lim) s" s)
+
 (* -- Reserved word escaping -- *)
 
 let test_reserved_word_escaping () =
@@ -491,6 +514,7 @@ let suite =
       Alcotest.test_case "3d: dep-size roundtrip" `Quick
         test_3d_dep_size_roundtrip;
       Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
+      Alcotest.test_case "3d: param embed" `Quick test_3d_param_embed;
       Alcotest.test_case "3d: reserved word escaping" `Quick
         test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick

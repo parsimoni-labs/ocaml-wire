@@ -2,6 +2,13 @@
 
 ### Added
 
+- An embedded sub-codec (`Wire.codec c` used as a field or `Field.repeat` /
+  `array` element) that takes `Param.input` parameters now works: the outer
+  codec surfaces the sub-codec's input params as its own, so `Codec.env` /
+  `Param.bind` reach them and the values are threaded into the sub-codec on
+  encode, decode, and 3D projection. Previously the sub-codec's params were
+  invisible to the outer codec and binding them raised `Invalid_argument`
+  (#108, @samoht)
 - A `Wire.casetype` used as a `Field.repeat` element may now have a case body
   that is a bitfield, alongside the scalar, byte-span, NUL-terminated, and
   sub-codec bodies already allowed. Such a casetype previously failed at
@@ -85,6 +92,11 @@
 
 ### Fixed
 
+- An embedded sub-codec's `where` clause and field constraints are now enforced
+  when the codec is decoded as a field or element. They were silently dropped
+  on the embedded path (only the buffer-size and field readers ran), so a
+  value the sub-codec would reject standalone was accepted when embedded
+  (#108, @samoht)
 - A `Wire.casetype` whose case body is a NUL-terminated string (`zeroterm` or
   `zeroterm_at_most`) now encodes, decodes, and sizes correctly as a
   `Field.repeat` element. The element encoder had no `zeroterm` case (so encode
