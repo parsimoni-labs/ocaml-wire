@@ -15,6 +15,14 @@ val test_cases : string -> 'a t -> Alcobar.test_case list
 (** [test_cases label g] is three Alcobar cases: one round-trip on [g.positive]
     and one crash-safety check each on [g.random] and [g.adversarial]. *)
 
+val nested_cases : string -> int -> Alcobar.test_case list
+(** [nested_cases label depth] generates an arbitrary nested codec per sample
+    (combinators composed up to [depth] levels: optional / repeat / array /
+    nested / record / casetype / map / where over each other and the leaves) and
+    runs the same three checks as {!test_cases}. This exercises compositions no
+    curated list enumerates, surfacing offset / [size_of_value] drift that only
+    shows up when combinators nest. *)
+
 val reject_cases : string -> 'a t -> Alcobar.test_case list
 (** [reject_cases label g] is two Alcobar cases asserting that decode rejects
     every input on [g.random] and [g.adversarial]. Use for codecs that always

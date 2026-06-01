@@ -29,12 +29,14 @@ type 'a t = {
 }
 
 and env_strategy = {
-  positive : unit -> Wire.Param.env;
-      (* Builder used for the positive stream. Must bind every
-         [Param.input] consistently with the positive value generator. *)
-  fuzz : (unit -> Wire.Param.env) Alcobar.gen;
-      (* Builder gen used for the random and adversarial streams. Fuzz
-         [Param.input] values independently of the input bytes. *)
+  positive : Wire.Param.env -> Wire.Param.env;
+      (* Binder for the positive stream: binds every [Param.input] (by name) on
+         a fresh env built for the codec under test. Taking the env as an
+         argument (rather than building it from a fixed codec) lets a leaf's
+         param survive composition: when the leaf is nested in a bigger codec,
+         the param is rebound on that codec's own env. *)
+  fuzz : (Wire.Param.env -> Wire.Param.env) Alcobar.gen;
+      (* Binder gen for the random and adversarial streams. *)
 }
 
 let bytes_of_string s = Bytes.unsafe_of_string s
@@ -50,18 +52,22 @@ let codec_of_typ typ =
     (fun v -> v)
     Wire.Codec.[ (Wire.Field.v "v" typ $ fun v -> v) ]
 
+(* The canonical bytes for [v]: a buffer sized by [size_of_value] then
+   filled by [encode]. *)
+let encode_via_codec codec v =
+  let sz = Wire.Codec.size_of_value codec v in
+  let buf = Bytes.create sz in
+  Wire.Codec.encode codec v buf 0;
+  buf
+
 (* Build a leaf [t] from a typ and three Alcobar generators. *)
 let leaf ~equal ~typ ~value_gen ~random ~adversarial =
   let codec = codec_of_typ typ in
-  let encode v =
-    let sz = Wire.Codec.size_of_value codec v in
-    let buf = Bytes.create sz in
-    Wire.Codec.encode codec v buf 0;
-    buf
+  let positive =
+    Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode_via_codec codec v))
   in
-  let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
   let adversarial_bytes =
-    Alcobar.map Alcobar.[ adversarial ] (fun v -> encode v)
+    Alcobar.map Alcobar.[ adversarial ] (fun v -> encode_via_codec codec v)
   in
   {
     codec;
@@ -72,6 +78,17 @@ let leaf ~equal ~typ ~value_gen ~random ~adversarial =
     equal;
     env = None;
   }
+
+(* A leaf whose positives draw a value from [value_gen] and encode it through
+   the codec, with caller-chosen raw [random] / [adversarial] byte streams (so
+   the adversarial stream can carry invalid tags the encoder would never
+   produce). *)
+let enum_like ~typ ~value_gen ~random ~adversarial =
+  let codec = codec_of_typ typ in
+  let positive =
+    Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode_via_codec codec v))
+  in
+  { codec; typ; positive; random; adversarial; equal = ( = ); env = None }
 
 (* {1 Leaves} *)
 
@@ -429,11 +446,14 @@ let byte_array_where n ~per_byte =
 let nested_sized make_typ n inner =
   let typ = make_typ ~size:(Wire.int n) inner.typ in
   let codec = codec_of_typ typ in
+  (* Zero-fill the region: the codec pads a [nested] region with zeros, so the
+     bytes past the inner value must be zero, not the uninitialised contents of
+     [Bytes.create]. *)
   let positive =
     Alcobar.map
       Alcobar.[ inner.positive ]
       (fun (v, inner_bytes) ->
-        let buf = Bytes.create n in
+        let buf = Bytes.make n '\x00' in
         Bytes.blit inner_bytes 0 buf 0 (min n (Bytes.length inner_bytes));
         (v, buf))
   in
@@ -441,7 +461,7 @@ let nested_sized make_typ n inner =
     Alcobar.map
       Alcobar.[ inner.adversarial ]
       (fun b ->
-        let buf = Bytes.create n in
+        let buf = Bytes.make n '\x00' in
         Bytes.blit b 0 buf 0 (min n (Bytes.length b));
         buf)
   in
@@ -560,30 +580,38 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
   let f_total = Wire.Field.v "_total" Wire.uint16be in
   let f_items = make_items ~size:(Wire.Field.ref f_total) inner.typ in
   let codec =
+    (* The length prefix is the actual encoded items length, not the budget:
+       a budget that is not a multiple of the element size encodes fewer bytes
+       than the budget, and the prefix must match what is written. *)
+    let items_bytes xs =
+      List.fold_left
+        (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+        0 xs
+    in
     Wire.Codec.v name
       (fun _ xs -> xs)
-      Wire.Codec.[ (f_total $ fun _ -> total_bytes); (f_items $ fun xs -> xs) ]
+      Wire.Codec.[ f_total $ items_bytes; (f_items $ fun xs -> xs) ]
   in
   let typ = Wire.codec codec in
   let positive =
-    (* Generate a list of inner positives whose concatenated bytes have
-       length <= total_bytes. *)
+    (* Independently assemble the canonical bytes (a uint16be length prefix
+       then [count] copies of the element bytes), NOT via [Codec.encode] -- the
+       point of the positive case is to check the decoder/encoder against bytes
+       built outside the codec, so an encoder or size bug shows up rather than
+       round-tripping through itself. A zero-count list is still a 2-byte
+       prefix of 0, not empty. *)
     Alcobar.map
       Alcobar.[ inner.positive ]
       (fun (v, bs) ->
         let n = Bytes.length bs in
-        if n = 0 || n > total_bytes then ([], Bytes.empty)
-        else
-          let count = total_bytes / n in
-          let items = List.init count (fun _ -> v) in
-          let payload = Bytes.create (count * n) in
-          for i = 0 to count - 1 do
-            Bytes.blit bs 0 payload (i * n) n
-          done;
-          let buf = Bytes.create (2 + (count * n)) in
-          Bytes.set_uint16_be buf 0 (count * n);
-          Bytes.blit payload 0 buf 2 (count * n);
-          (items, buf))
+        let count = if n = 0 || n > total_bytes then 0 else total_bytes / n in
+        let payload = count * n in
+        let buf = Bytes.create (2 + payload) in
+        Bytes.set_uint16_be buf 0 payload;
+        for i = 0 to count - 1 do
+          Bytes.blit bs 0 buf (2 + (i * n)) n
+        done;
+        (List.init count (fun _ -> v), buf))
   in
   {
     codec;
@@ -622,30 +650,14 @@ let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
 let nested_at_most n inner = nested_sized Wire.nested_at_most n inner
 
 let variants name cases =
-  let typ = Wire.variants name cases Wire.uint8 in
-  let codec = codec_of_typ typ in
-  let n = List.length cases in
-  let value_gen =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:0 (max 1 n) ]
-      (fun i -> snd (List.nth cases (i mod max 1 n)))
-  in
-  let encode v =
-    let sz = Wire.Codec.size_of_value codec v in
-    let buf = Bytes.create sz in
-    Wire.Codec.encode codec v buf 0;
-    buf
-  in
-  let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 1;
-    adversarial = bytes_fixed 1;
-    equal = ( = );
-    env = None;
-  }
+  let n = max 1 (List.length cases) in
+  enum_like
+    ~typ:(Wire.variants name cases Wire.uint8)
+    ~value_gen:
+      (Alcobar.map
+         Alcobar.[ Alcobar.range ~min:0 n ]
+         (fun i -> snd (List.nth cases (i mod n))))
+    ~random:(bytes_fixed 1) ~adversarial:(bytes_fixed 1)
 
 let rec sample_array_of_positives positive k =
   if k = 0 then Alcobar.const ([], [])
@@ -806,30 +818,14 @@ let codec_where =
 (* {1 More leaves and wrappers} *)
 
 let lookup table inner =
-  let typ = Wire.lookup table inner.typ in
-  let codec = codec_of_typ typ in
   let n = max 1 (List.length table) in
-  let value_gen =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:0 n ]
-      (fun i -> List.nth table (i mod n))
-  in
-  let encode v =
-    let sz = Wire.Codec.size_of_value codec v in
-    let buf = Bytes.create sz in
-    Wire.Codec.encode codec v buf 0;
-    buf
-  in
-  let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
-  {
-    codec;
-    typ;
-    positive;
-    random = inner.random;
-    adversarial = inner.adversarial;
-    equal = ( = );
-    env = None;
-  }
+  enum_like
+    ~typ:(Wire.lookup table inner.typ)
+    ~value_gen:
+      (Alcobar.map
+         Alcobar.[ Alcobar.range ~min:0 n ]
+         (fun i -> List.nth table (i mod n)))
+    ~random:inner.random ~adversarial:inner.adversarial
 
 let where inner =
   let typ = Wire.where Wire.Expr.true_ inner.typ in
@@ -935,11 +931,11 @@ let param_input =
   let typ = Wire.codec codec in
   let strategy =
     {
-      positive = (fun () -> Wire.Codec.env codec |> Wire.Param.bind limit 100);
+      positive = (fun env -> Wire.Param.bind limit 100 env);
       fuzz =
         Alcobar.map
           Alcobar.[ Alcobar.uint8 ]
-          (fun lim () -> Wire.Codec.env codec |> Wire.Param.bind limit lim);
+          (fun lim env -> Wire.Param.bind limit lim env);
     }
   in
   let positive =
@@ -960,47 +956,45 @@ let param_input =
     env = Some strategy;
   }
 
+(* A 1-byte positive: a uint8 value written to a single-byte buffer. *)
+let u8_positive =
+  Alcobar.map
+    Alcobar.[ Alcobar.uint8 ]
+    (fun v ->
+      let buf = Bytes.create 1 in
+      Bytes.set_uint8 buf 0 v;
+      (v, buf))
+
+(* A single-uint8 codec whose field carries [action], with an env strategy
+   that rebuilds the (param-free) env on demand. *)
+let action_codec name action =
+  let f = Wire.Field.v "v" ~action Wire.uint8 in
+  let codec = Wire.Codec.v name (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ] in
+  (* Output params only: nothing to bind, so the binder is the identity. *)
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive = u8_positive;
+    random = bytes_fixed 1;
+    adversarial = bytes_fixed 1;
+    equal = Int.equal;
+    env = Some { positive = Fun.id; fuzz = Alcobar.const Fun.id };
+  }
+
 (* Codec with [Action.on_success [assign out (Field.ref f); abort?]]
    exercising Action.assign, return_bool, abort, if_, var, on_act. *)
 let action =
   let out = Wire.Param.output "out" Wire.uint8 in
   let f_v = Wire.Field.v "v" Wire.uint8 in
-  let action =
-    Wire.Action.on_success
-      [
-        Wire.Action.var "local" (Wire.Field.ref f_v);
-        Wire.Action.assign out (Wire.Field.ref f_v);
-        Wire.Action.if_ Wire.Expr.true_
-          [ Wire.Action.return_bool Wire.Expr.true_ ]
-          None;
-      ]
-  in
-  let f_with_action = Wire.Field.v "v" ~action Wire.uint8 in
-  let codec =
-    Wire.Codec.v "_action"
-      (fun v -> v)
-      Wire.Codec.[ (f_with_action $ fun v -> v) ]
-  in
-  let typ = Wire.codec codec in
-  let make_env () = Wire.Codec.env codec in
-  let strategy = { positive = make_env; fuzz = Alcobar.const make_env } in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.uint8 ]
-      (fun v ->
-        let buf = Bytes.create 1 in
-        Bytes.set_uint8 buf 0 v;
-        (v, buf))
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 1;
-    adversarial = bytes_fixed 1;
-    equal = Int.equal;
-    env = Some strategy;
-  }
+  action_codec "_action"
+    (Wire.Action.on_success
+       [
+         Wire.Action.var "local" (Wire.Field.ref f_v);
+         Wire.Action.assign out (Wire.Field.ref f_v);
+         Wire.Action.if_ Wire.Expr.true_
+           [ Wire.Action.return_bool Wire.Expr.true_ ]
+           None;
+       ])
 
 (* Codec whose field [~action] is [Action.abort]: every successful field
    parse triggers an unconditional failure. The driver uses
@@ -1015,19 +1009,11 @@ let action_abort =
     Wire.Codec.v "_abort" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
   in
   let typ = Wire.codec codec in
-  (* Positive is unused by [reject_cases]; kept for type-shape parity. *)
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.uint8 ]
-      (fun v ->
-        let buf = Bytes.create 1 in
-        Bytes.set_uint8 buf 0 v;
-        (v, buf))
-  in
   {
     codec;
     typ;
-    positive;
+    (* Positive is unused by [reject_cases]; kept for type-shape parity. *)
+    positive = u8_positive;
     random = bytes_fixed 1;
     adversarial = bytes_fixed 1;
     equal = Int.equal;
@@ -1039,39 +1025,12 @@ let action_abort =
 let action_on_act =
   let out = Wire.Param.output "out" Wire.uint8 in
   let f_v = Wire.Field.v "v" Wire.uint8 in
-  let action =
-    Wire.Action.on_act
-      [
-        Wire.Action.assign out (Wire.Field.ref f_v);
-        Wire.Action.return_bool Wire.Expr.true_;
-      ]
-  in
-  let f_with_action = Wire.Field.v "v" ~action Wire.uint8 in
-  let codec =
-    Wire.Codec.v "_action_on_act"
-      (fun v -> v)
-      Wire.Codec.[ (f_with_action $ fun v -> v) ]
-  in
-  let typ = Wire.codec codec in
-  let make_env () = Wire.Codec.env codec in
-  let strategy = { positive = make_env; fuzz = Alcobar.const make_env } in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.uint8 ]
-      (fun v ->
-        let buf = Bytes.create 1 in
-        Bytes.set_uint8 buf 0 v;
-        (v, buf))
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 1;
-    adversarial = bytes_fixed 1;
-    equal = Int.equal;
-    env = Some strategy;
-  }
+  action_codec "_action_on_act"
+    (Wire.Action.on_act
+       [
+         Wire.Action.assign out (Wire.Field.ref f_v);
+         Wire.Action.return_bool Wire.Expr.true_;
+       ])
 
 (* Single-float codec whose [~where] is [Wire.is_nan f]. Positives are
    NaN bit patterns; non-NaN bytes are rejected. *)
@@ -1228,12 +1187,11 @@ let rest_bytes =
   let tail_len = 5 in
   let strategy =
     {
-      positive =
-        (fun () -> Wire.Codec.env codec |> Wire.Param.bind total (1 + tail_len));
+      positive = (fun env -> Wire.Param.bind total (1 + tail_len) env);
       fuzz =
         Alcobar.map
           Alcobar.[ Alcobar.uint16 ]
-          (fun n () -> Wire.Codec.env codec |> Wire.Param.bind total n);
+          (fun n env -> Wire.Param.bind total n env);
     }
   in
   let positive =
@@ -1291,38 +1249,19 @@ let sizeof =
     env = None;
   }
 
-(* Dynamic-gate optional: a uint8 [gate] field controls whether a uint16be
-   payload is present via [Field.optional ~present:(Field.ref gate <> 0)]. *)
-let optional_dynamic =
+(* A uint8 [gate] field followed by a [mk_payload]-built payload field that
+   reads the gate (the shared shape behind the dynamic optional leaves). *)
+let gate_codec name mk_payload positive =
   let f_gate = Wire.Field.v "gate" Wire.uint8 in
-  let f_payload =
-    Wire.Field.optional "payload"
-      ~present:Wire.Expr.(Wire.Field.ref f_gate <> Wire.int 0)
-      Wire.uint16be
-  in
+  let f_payload = mk_payload f_gate in
   let codec =
-    Wire.Codec.v "_opt_dyn"
+    Wire.Codec.v name
       (fun gate payload -> (gate, payload))
       Wire.Codec.[ (f_gate $ fun (g, _) -> g); (f_payload $ fun (_, p) -> p) ]
   in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
-      (fun present v ->
-        if present then (
-          let buf = Bytes.create 3 in
-          Bytes.set_uint8 buf 0 1;
-          Bytes.set_uint16_be buf 1 v;
-          ((1, Some v), buf))
-        else
-          let buf = Bytes.create 1 in
-          Bytes.set_uint8 buf 0 0;
-          ((0, None), buf))
-  in
   {
     codec;
-    typ;
+    typ = Wire.codec codec;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
@@ -1330,45 +1269,47 @@ let optional_dynamic =
     env = None;
   }
 
+let gate_present f_gate = Wire.Expr.(Wire.Field.ref f_gate <> Wire.int 0)
+
+(* The present-branch bytes shared by both dynamic optional leaves: gate byte
+   set to 1, then the uint16be payload. *)
+let gate_on_bytes v =
+  let buf = Bytes.create 3 in
+  Bytes.set_uint8 buf 0 1;
+  Bytes.set_uint16_be buf 1 v;
+  buf
+
+(* Dynamic-gate optional: a uint8 [gate] field controls whether a uint16be
+   payload is present via [Field.optional ~present:(Field.ref gate <> 0)]. *)
+let optional_dynamic =
+  gate_codec "_opt_dyn"
+    (fun g ->
+      Wire.Field.optional "payload" ~present:(gate_present g) Wire.uint16be)
+    (Alcobar.map
+       Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
+       (fun present v ->
+         if present then ((1, Some v), gate_on_bytes v)
+         else
+           let buf = Bytes.create 1 in
+           Bytes.set_uint8 buf 0 0;
+           ((0, None), buf)))
+
 (* Dynamic-gate optional_or: same shape, with a default value used when
    absent. *)
 let optional_or_dynamic =
-  let f_gate = Wire.Field.v "gate" Wire.uint8 in
-  let f_payload =
-    Wire.Field.optional_or "payload"
-      ~present:Wire.Expr.(Wire.Field.ref f_gate <> Wire.int 0)
-      ~default:0xCAFE Wire.uint16be
-  in
-  let codec =
-    Wire.Codec.v "_opt_or_dyn"
-      (fun gate payload -> (gate, payload))
-      Wire.Codec.[ (f_gate $ fun (g, _) -> g); (f_payload $ fun (_, p) -> p) ]
-  in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
-      (fun present v ->
-        if present then (
-          let buf = Bytes.create 3 in
-          Bytes.set_uint8 buf 0 1;
-          Bytes.set_uint16_be buf 1 v;
-          ((1, v), buf))
-        else
-          let buf = Bytes.create 3 in
-          Bytes.set_uint8 buf 0 0;
-          Bytes.set_uint16_be buf 1 0xCAFE;
-          ((0, 0xCAFE), buf))
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_any;
-    adversarial = bytes_any;
-    equal = ( = );
-    env = None;
-  }
+  gate_codec "_opt_or_dyn"
+    (fun g ->
+      Wire.Field.optional_or "payload" ~present:(gate_present g) ~default:0xCAFE
+        Wire.uint16be)
+    (Alcobar.map
+       Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
+       (fun present v ->
+         if present then ((1, v), gate_on_bytes v)
+         else
+           let buf = Bytes.create 3 in
+           Bytes.set_uint8 buf 0 0;
+           Bytes.set_uint16_be buf 1 0xCAFE;
+           ((0, 0xCAFE), buf)))
 
 (* {1 Casetype} *)
 
@@ -1387,6 +1328,27 @@ let case ~index inner ~inject ~project =
 
 let default_case ~tag inner ~inject ~project =
   Case { index = None; default_tag = Some tag; inner; inject; project }
+
+(* Combine the env strategies of a composite's parts: bind every part's params
+   (by name) on the composite's own env. A record or casetype that contains a
+   param leaf can then bind it, now that the composite codec surfaces the leaf's
+   param ([Codec.v]'s param forwarding). The binders compose, so several param
+   parts all bind on one env. *)
+let combine_env_strategies (strategies : env_strategy option list) :
+    env_strategy option =
+  match List.filter_map Fun.id strategies with
+  | [] -> None
+  | ss ->
+      let positive env =
+        List.fold_left (fun e (s : env_strategy) -> s.positive e) env ss
+      in
+      let fuzz =
+        List.fold_left
+          (fun acc (s : env_strategy) ->
+            Alcobar.map Alcobar.[ acc; s.fuzz ] (fun f g env -> g (f env)))
+          (Alcobar.const Fun.id) ss
+      in
+      Some { positive; fuzz }
 
 let casetype_u8 name cases =
   let case_defs =
@@ -1426,14 +1388,26 @@ let casetype_u8 name cases =
             Bytes.blit inner_bytes 0 buf 1 n_inner;
             (c.inject w, buf)))
   in
+  (* Compare two casetype values through the case each projects to, using that
+     case's own [equal]. Structural [( = )] is wrong when a case body is a
+     [byte_slice], whose decoded value views a different buffer than the
+     original even when the bytes match. *)
+  let equal a b =
+    List.exists
+      (fun (Case c) ->
+        match (c.project a, c.project b) with
+        | Some wa, Some wb -> c.inner.equal wa wb
+        | _ -> false)
+      cases
+  in
   {
     codec;
     typ;
     positive;
     random = bytes_any;
     adversarial = bytes_any;
-    equal = ( = );
-    env = None;
+    equal;
+    env = combine_env_strategies (List.map (fun (Case c) -> c.inner.env) cases);
   }
 
 (* {1 Record composition} *)
@@ -1532,6 +1506,11 @@ module Codec = struct
     | [] -> 0
     | _ :: rest -> 1 + field_count rest
 
+  let rec field_envs : type f r. (f, r) fields -> env_strategy option list =
+    function
+    | [] -> []
+    | f :: rest -> f.gen.env :: field_envs rest
+
   let v : type f r.
       string -> ?equal:(r -> r -> bool) -> f -> (f, r) fields -> r t =
    fun name ?(equal = ( = )) builder fields ->
@@ -1539,7 +1518,24 @@ module Codec = struct
     let typ = Wire.codec codec in
     let positives = field_positives fields in
     let n_fields = field_count fields in
-    let positive = positives_of builder [] fields in
+    (* The canonical bytes for a record value are its encoding, not the
+       concatenation of each field's sample bytes: adjacent bitfields coalesce
+       into one base word, so concatenating their per-field bytes would place
+       the second field in the wrong byte. Build the value, then encode it.
+       Fall back to the concatenation when the record needs a param env that is
+       not threaded here (encode then raises). *)
+    let positive =
+      Alcobar.map
+        Alcobar.[ positives_of builder [] fields ]
+        (fun (v, concat) ->
+          match
+            let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
+            Wire.Codec.encode codec v buf 0;
+            buf
+          with
+          | buf -> (v, buf)
+          | exception Invalid_argument _ -> (v, concat))
+    in
     let random = random_of fields in
     let adversarial =
       let per_slot =
@@ -1549,15 +1545,272 @@ module Codec = struct
       if per_slot = [] then Alcobar.const Bytes.empty
       else Alcobar.choose per_slot
     in
-    { codec; typ; positive; random; adversarial; equal; env = None }
+    {
+      codec;
+      typ;
+      positive;
+      random;
+      adversarial;
+      equal;
+      env = combine_env_strategies (field_envs fields);
+    }
 end
+
+(* {1 Recursive nested composition}
+
+   [gen_any] generates an arbitrary nested codec by picking a combinator and
+   recursively filling its inners, so the fuzzer exercises compositions no
+   curated list enumerates (optional of a record of a repeat of a casetype,
+   ...). Each node carries its byte [size] ([Some n] when fixed, [None] when
+   variable) so the generator only builds compositions Wire actually accepts:
+   [array] and [nested] take a fixed inner, everything else takes any inner.
+   A trailing-consume leaf (all_bytes / all_zeros) is deliberately excluded
+   since it only composes as the last field of a record. *)
+
+type any = Any : { g : 'a t; size : int option; label : string } -> any
+
+let add_size a b =
+  match (a, b) with Some x, Some y -> Some (x + y) | _ -> None
+
+(* Fixed-width leaves: usable as [array] / [nested] elements. *)
+let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
+
+(* Fixed-size leaves usable as any nested element or field. The set is broad on
+   purpose: scalars of every width/endianness, packed bits, byte spans, an enum
+   / variants / lookup / bounded / refined-byte / float-predicate leaf, so a
+   composition can carry a constraint or mapping at the bottom. *)
+let fixed_leaves : any list =
+  [
+    Any { g = uint8; size = Some 1; label = "u8" };
+    Any { g = uint16be; size = Some 2; label = "u16" };
+    Any { g = uint32be; size = Some 4; label = "u32" };
+    Any { g = uint64be; size = Some 8; label = "u64" };
+    Any { g = int8; size = Some 1; label = "i8" };
+    Any { g = int16be; size = Some 2; label = "i16" };
+    Any { g = int32be; size = Some 4; label = "i32" };
+    Any { g = float32be; size = Some 4; label = "f32" };
+    Any { g = float64be; size = Some 8; label = "f64" };
+    Any { g = uint_var ~endian:Wire.Big 3; size = Some 3; label = "uv3" };
+    Any { g = empty; size = Some 0; label = "unit" };
+    Any { g = byte_array 3; size = Some 3; label = "ba3" };
+    Any { g = byte_slice 4; size = Some 4; label = "bs4" };
+    Any
+      {
+        g = byte_array_where 3 ~per_byte:printable_byte;
+        size = Some 3;
+        label = "baw3";
+      };
+    Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
+    Any { g = bit uint8; size = Some 1; label = "bit" };
+    Any
+      {
+        g = enum "E" [ ("A", 1); ("B", 2); ("C", 3) ];
+        size = Some 1;
+        label = "enum";
+      };
+    Any
+      {
+        g = variants "V" [ ("X", `X); ("Y", `Y); ("Z", `Z) ];
+        size = Some 1;
+        label = "var";
+      };
+    Any
+      { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
+    Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
+    Any { g = finite_float64; size = Some 8; label = "finf" };
+  ]
+
+(* Self-delimiting / trailing variable leaves. *)
+let var_leaves : any list =
+  [
+    Any { g = zeroterm; size = None; label = "zt" };
+    Any { g = zeroterm_at_most 6; size = None; label = "zt6" };
+    Any { g = all_zeros; size = None; label = "az" };
+  ]
+
+(* Param/env-bearing leaves: sub-codecs whose [~where] / [action] reads a
+   [Param.input]. Wrapping one carries its env up (see [with_env]); decoding
+   the wrapper threads the env down to the embedded sub-codec. Composing these
+   exposes any wrapper that drops the env on the way down. *)
+let env_leaves : any list =
+  [
+    Any { g = param_input; size = Some 1; label = "param" };
+    Any { g = action; size = Some 1; label = "act" };
+  ]
+
+let nested_of (Any a) =
+  match a.size with
+  | Some s ->
+      Some (Any { g = nested s a.g; size = Some s; label = "nest:" ^ a.label })
+  | None -> None
+
+(* Both array wrappers need a fixed-size element: [size] is [Some] iff the
+   inner is fixed, and the array's size is [k] copies of it. [mk] is wrapped in
+   a record to keep it polymorphic across the [Any] existential. *)
+type arr_mk = { mk : 'x. int -> 'x t -> 'x list t }
+
+let array_like prefix { mk } k (Any a) =
+  match a.size with
+  | Some s ->
+      Some
+        (Any
+           {
+             g = mk k a.g;
+             size = Some (k * s);
+             label = Fmt.str "%s%d:%s" prefix k a.label;
+           })
+  | None -> None
+
+let array_of = array_like "arr" { mk = array }
+let array_seq_of = array_like "arrs" { mk = array_seq }
+
+let optional_of (Any a) =
+  Any { g = optional a.g; size = None; label = "opt:" ^ a.label }
+
+let repeat_of (Any a) =
+  Any { g = repeat ~bytes:12 a.g; size = None; label = "rep:" ^ a.label }
+
+let repeat_seq_of (Any a) =
+  Any { g = repeat_seq ~bytes:12 a.g; size = None; label = "reps:" ^ a.label }
+
+let nested_at_most_of (Any a) =
+  match a.size with
+  | Some s ->
+      Some
+        (Any
+           {
+             g = nested_at_most (s + 2) a.g;
+             size = None;
+             label = "natm:" ^ a.label;
+           })
+  | None -> None
+
+let map_of (Any a) =
+  Any
+    {
+      g = map ~decode:Fun.id ~encode:Fun.id a.g;
+      size = a.size;
+      label = "map:" ^ a.label;
+    }
+
+let where_of (Any a) =
+  Any { g = where a.g; size = a.size; label = "wh:" ^ a.label }
+
+let pair_of (Any a) (Any b) =
+  let g =
+    Codec.v "R2"
+      ~equal:(fun (x1, y1) (x2, y2) -> a.g.equal x1 x2 && b.g.equal y1 y2)
+      (fun x y -> (x, y))
+      Codec.[ a.g $ fst; b.g $ snd ]
+  in
+  Any
+    {
+      g;
+      size = add_size a.size b.size;
+      label = "(" ^ a.label ^ "," ^ b.label ^ ")";
+    }
+
+let casetype_of (Any a) (Any b) =
+  let g =
+    casetype_u8 "CT2"
+      [
+        case ~index:1 a.g
+          ~inject:(fun v -> `A v)
+          ~project:(function `A v -> Some v | _ -> None);
+        default_case ~tag:2 b.g
+          ~inject:(fun v -> `B v)
+          ~project:(function `B v -> Some v | _ -> None);
+      ]
+  in
+  Any { g; size = None; label = "ct:" ^ a.label ^ "|" ^ b.label }
+
+(* A wrapped codec inherits a [Param.input]-binding env from the inner it
+   wraps, so a param-dependent leaf still decodes once nested (and exposes any
+   gap where the env is not threaded down to it). *)
+let env_of (Any a) = a.g.env
+
+let with_env e (Any r) =
+  match (r.g.env, e) with
+  | None, Some _ -> Any { r with g = { r.g with env = e } }
+  | _ -> Any r
+
+(* Wrapping a composition that wire refuses to build (a bitfield as an array /
+   nested / repeat element, an unprojectable repeat element, ...) raises
+   [Invalid_argument] at construction. That is wire's projection ceiling, not a
+   bug, so the composer falls back to the bare inner rather than crashing the
+   generator. Everything that does build is still round-tripped and
+   crash-tested. *)
+let bind1 inner_gen f =
+  Alcobar.dynamic_bind inner_gen (fun a ->
+      match with_env (env_of a) (f a) with
+      | x -> Alcobar.const x
+      | exception Invalid_argument _ -> Alcobar.const a)
+
+let bind1_opt inner_gen f =
+  Alcobar.dynamic_bind inner_gen (fun a ->
+      match f a with
+      | Some x -> Alcobar.const (with_env (env_of a) x)
+      | None -> Alcobar.const a
+      | exception Invalid_argument _ -> Alcobar.const a)
+
+let bind2 g1 g2 f =
+  Alcobar.dynamic_bind g1 (fun a ->
+      Alcobar.dynamic_bind g2 (fun b ->
+          let e = match env_of a with Some _ as e -> e | None -> env_of b in
+          match with_env e (f a b) with
+          | x -> Alcobar.const x
+          | exception Invalid_argument _ -> Alcobar.const a))
+
+(* [gen_fixed] yields fixed-size nodes (for [array] / [nested] inners, which
+   need a known element width); [gen_any] yields any node. Both compose the
+   full combinator set so the fuzzer reaches every nesting -- the point is to
+   surface compositions Wire mishandles, not to pre-filter them. *)
+let rec gen_fixed depth : any Alcobar.gen =
+  let leaves = List.map Alcobar.const fixed_leaves in
+  if depth <= 0 then Alcobar.choose leaves
+  else
+    Alcobar.choose
+      (leaves
+      @ [
+          bind1_opt (gen_fixed (depth - 1)) nested_of;
+          bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
+          bind1_opt (gen_fixed (depth - 1)) (array_of 2);
+          bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
+          bind1 (gen_fixed (depth - 1)) map_of;
+          bind1 (gen_fixed (depth - 1)) where_of;
+          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_of;
+        ])
+
+let rec gen_any depth : any Alcobar.gen =
+  let leaves =
+    List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
+  in
+  if depth <= 0 then Alcobar.choose leaves
+  else
+    Alcobar.choose
+      (leaves
+      @ [
+          bind1 (gen_any (depth - 1)) optional_of;
+          bind1 (gen_any (depth - 1)) repeat_of;
+          bind1 (gen_any (depth - 1)) repeat_seq_of;
+          bind1 (gen_any (depth - 1)) map_of;
+          bind1 (gen_any (depth - 1)) where_of;
+          bind1_opt (gen_fixed (depth - 1)) nested_of;
+          bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
+          bind1_opt (gen_fixed (depth - 1)) (array_of 2);
+          bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
+          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_of;
+          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
+        ])
 
 (* {1 Test driver} *)
 
 (* Wrap each of a gen's three streams in an Alcobar test_case. Positive
    asserts round-trip; the other two assert crash-safety. *)
 let positive_env g =
-  match g.env with Some s -> Some (s.positive ()) | None -> None
+  match g.env with
+  | Some s -> Some (s.positive (Wire.Codec.env g.codec))
+  | None -> None
 
 (* Round-trip one positive sample: decode the canonical bytes back to the
    value, then re-encode into a buffer sized from [size_of_value] and require
@@ -1606,7 +1859,7 @@ let test_cases label g =
           (label ^ " " ^ kind)
           Alcobar.[ stream; s.fuzz ]
           (fun bs build_env ->
-            let env = Some (build_env ()) in
+            let env = Some (build_env (Wire.Codec.env g.codec)) in
             try ignore (Wire.Codec.decode ?env g.codec bs 0)
             with Invalid_argument _ ->
               Alcobar.failf "%s %s crashed decoder" label kind)
@@ -1690,6 +1943,55 @@ let sized_cases group =
           (fun () -> Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
           u8_size_bytes );
     ]
+
+(* Drive a freshly generated nested composition per sample: the positive case
+   asserts round-trip (and so [size_of_value] / [encode] consistency across the
+   whole nesting), the other two assert the decoder never raises. Generated
+   codecs never reference [Param.input], so no env is threaded. *)
+type nested_sample = NS : 'a t * string * ('a * bytes) -> nested_sample
+
+type nested_bytes =
+  | NB :
+      'a t * string * bytes * (Wire.Param.env -> Wire.Param.env) option
+      -> nested_bytes
+
+let nested_cases label depth =
+  let positive =
+    Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
+        Alcobar.map Alcobar.[ a.g.positive ] (fun pos -> NS (a.g, a.label, pos)))
+  in
+  let with_bytes adversarial =
+    Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
+        let stream = if adversarial then a.g.adversarial else bytes_any in
+        match a.g.env with
+        | None ->
+            Alcobar.map
+              Alcobar.[ stream ]
+              (fun bs -> NB (a.g, a.label, bs, None))
+        | Some s ->
+            Alcobar.map
+              Alcobar.[ stream; s.fuzz ]
+              (fun bs mk -> NB (a.g, a.label, bs, Some mk)))
+  in
+  let safety kind stream =
+    Alcobar.test_case
+      (label ^ " " ^ kind)
+      Alcobar.[ stream ]
+      (fun (NB (g, comp, bs, mk)) ->
+        let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
+        try ignore (Wire.Codec.decode ?env g.codec bs 0)
+        with Invalid_argument _ ->
+          Alcobar.failf "%s %s [%s] crashed decoder" label kind comp)
+  in
+  [
+    Alcobar.test_case (label ^ " positive")
+      Alcobar.[ positive ]
+      (fun (NS (g, comp, pos)) ->
+        try check_positive (Fmt.str "%s [%s]" label comp) g pos
+        with Failure m -> Alcobar.failf "%s [%s] raised: %s" label comp m);
+    safety "random" (with_bytes false);
+    safety "adversarial" (with_bytes true);
+  ]
 
 (* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
    API, distinct from [Codec.encode/decode]. Skipped for codecs that take a
@@ -1788,7 +2090,7 @@ let validate_cases label g =
           (label ^ " validate " ^ kind)
           Alcobar.[ stream; s.fuzz ]
           (fun bs build_env ->
-            let env = Some (build_env ()) in
+            let env = Some (build_env (Wire.Codec.env g.codec)) in
             match validate_one ?env bs with
             | `Ok | `Reject -> ()
             | `Crash -> Alcobar.failf "%s validate %s crashed" label kind)
@@ -1800,12 +2102,10 @@ let validate_cases label g =
    returns [Error _] (not [Ok], not [Invalid_argument]). *)
 let reject_cases label g =
   let env_stream =
-    match g.env with
-    | Some s -> s.fuzz
-    | None -> Alcobar.const (fun () -> Wire.Codec.env g.codec)
+    match g.env with Some s -> s.fuzz | None -> Alcobar.const Fun.id
   in
   let check_reject bs build_env =
-    let env = Some (build_env ()) in
+    let env = Some (build_env (Wire.Codec.env g.codec)) in
     match Wire.Codec.decode ?env g.codec bs 0 with
     | Ok _ -> Alcobar.failf "%s decoder accepted input it should reject" label
     | Error _ -> ()
