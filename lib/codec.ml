@@ -31,6 +31,18 @@ let setter_off_int32 n set buf off v =
   set buf off (Int32.of_int v);
   off + n
 
+(* Encode a lone bitfield occupying its base word: range-check, place the value
+   at its bit offset, advance by the base width. *)
+let bits_field_encoder ~width ~base ~bit_order buf off v =
+  let total = Bitfield.total_bits base in
+  let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
+  let mask = (1 lsl width) - 1 in
+  if v land lnot mask <> 0 then
+    Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" v
+      width;
+  Bitfield.write_word base buf off ((v land mask) lsl shift);
+  off + Bitfield.byte_size base
+
 let rec build_casetype_encoder : type a k.
     k typ -> (a, k) case_branch list -> bytes -> int -> a -> int =
  fun tag cases ->
@@ -158,6 +170,10 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
         Bytes.blit_string v 0 buf off n;
         Bytes.fill buf (off + n) (region - n) '\x00';
         off + region
+  (* A lone bitfield (e.g. a casetype case body) occupies its whole base word;
+     write the value at its bit offset into an otherwise-zero word. *)
+  | Bits { width; base; bit_order } ->
+      bits_field_encoder ~width ~base ~bit_order
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1063,6 +1079,12 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
   | Byte_slice { size = Int n } -> Slice.make buf ~first:off ~length:n
+  (* A lone bitfield occupies its base word; extract the value at its bit
+     offset. *)
+  | Bits { width; base; bit_order } ->
+      let total = bf_base_total_bits base in
+      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
+      build_bf_reader base 0 shift width buf off
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1142,6 +1164,8 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
       nul - off + 1
   (* A bounded NUL-terminated string spans its whole fixed [n]-byte region. *)
   | Zeroterm_at_most { size = Int n } -> n
+  (* A lone bitfield occupies its base word. *)
+  | Bits { base; _ } -> bf_base_byte_size base
   | _ -> (
       match field_wire_size typ with
       | Some n -> n

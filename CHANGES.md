@@ -2,6 +2,10 @@
 
 ### Added
 
+- A `Wire.casetype` used as a `Field.repeat` element may now have a case body
+  that is a bitfield, alongside the scalar, byte-span, NUL-terminated, and
+  sub-codec bodies already allowed. Such a casetype previously failed at
+  decode (#105, @samoht)
 - `Field.optional` and `Field.optional_or` now accept a variable-size inner,
   so an optional field can be a length-prefixed string or a whole sub-message,
   not just a fixed-width value. Building such a codec previously raised
@@ -38,6 +42,10 @@
 
 ### Changed
 
+- `Field.repeat` and `Wire.array` over a `Wire.casetype` now raise
+  `Invalid_argument` at construction when a case body has no per-element
+  projection (a nested region, array, or optional), instead of building a
+  codec that fails later at decode (#105, @samoht)
 - `Wire.default` (a casetype's default branch) no longer takes a fixed `~tag`;
   instead it threads the matched discriminator through `inject` and `project`,
   so an arbitrary unclaimed tag round-trips. `inject` is now `'k -> 'w -> 'a`
