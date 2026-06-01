@@ -1483,8 +1483,11 @@ let casetype_gen_tests =
          ])
   @ test_cases "record(uint8, uint16be)" pair_gen
 
+let sized_gen_tests = Fuzz_gen.sized_cases "sized"
+
 let gen_tests =
   scalar_gen_tests @ bytes_gen_tests @ wrapper_gen_tests @ casetype_gen_tests
+  @ sized_gen_tests
 
 (* Alternate entry-point coverage: each driver is exercised on one
    representative gen so the full validate / of_string / of_reader paths
