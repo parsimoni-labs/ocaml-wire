@@ -136,6 +136,28 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
         let cur = Stdlib.ref start_off in
         s.iter (fun v -> cur := enc_elem buf !cur v) vs;
         !cur
+  (* NUL-terminated string element / casetype case body: the bytes then a NUL.
+     [zeroterm_at_most] pads the rest of its fixed [n]-byte region with zeros. *)
+  | Zeroterm ->
+      fun buf off v ->
+        let n = String.length v in
+        if String.contains v '\000' then
+          invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+        Bytes.blit_string v 0 buf off n;
+        Bytes.set_uint8 buf (off + n) 0;
+        off + n + 1
+  | Zeroterm_at_most { size = Int region } ->
+      fun buf off v ->
+        let n = String.length v in
+        if String.contains v '\000' then
+          invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+        if n + 1 > region then
+          Fmt.invalid_arg
+            "Codec.encode: zeroterm string needs %d bytes but region is %d"
+            (n + 1) region;
+        Bytes.blit_string v 0 buf off n;
+        Bytes.fill buf (off + n) (region - n) '\x00';
+        off + region
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1032,6 +1054,11 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Zeroterm ->
       let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
       Bytes.sub_string buf off (nul - off)
+  (* Same, bounded to a fixed [n]-byte region (the element spans the whole
+     region; the value is the bytes up to the NUL within it). *)
+  | Zeroterm_at_most { size = Int n } ->
+      let nul = zeroterm_nul_pos buf ~first:off ~limit:(off + n) in
+      Bytes.sub_string buf off (nul - off)
   (* Fixed-size byte spans as repeat / array elements: a list of n-byte
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
@@ -1113,6 +1140,8 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
   | Zeroterm ->
       let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
       nul - off + 1
+  (* A bounded NUL-terminated string spans its whole fixed [n]-byte region. *)
+  | Zeroterm_at_most { size = Int n } -> n
   | _ -> (
       match field_wire_size typ with
       | Some n -> n
