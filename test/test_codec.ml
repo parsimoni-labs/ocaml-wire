@@ -475,6 +475,16 @@ let test_array_record_projection () =
     "sub-struct element under byte-size on the array field" true
     (contains ~sub:"Pt pts[:byte-size (2 * 3)]" out)
 
+(* [nested] / [nested_at_most] over a bitfield is likewise rejected at
+   construction; it used to build a codec that raised Failure deep in decode. *)
+let test_nested_reject_bitfield () =
+  Alcotest.(check bool)
+    "nested over bits rejected" true
+    (raises_invalid (fun () -> nested ~size:(int 1) (bits ~width:3 U8)));
+  Alcotest.(check bool)
+    "nested_at_most over bits rejected" true
+    (raises_invalid (fun () -> nested_at_most ~size:(int 1) (bits ~width:3 U8)))
+
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decoding used to raise Failure "unsupported element type in
    repeat" and the schema mis-projected as a double [:byte-size]. *)
@@ -4279,6 +4289,8 @@ let suite =
         test_array_record_element;
       Alcotest.test_case "array: record element projection" `Quick
         test_array_record_projection;
+      Alcotest.test_case "nested reject bitfield element" `Quick
+        test_nested_reject_bitfield;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;

@@ -75,6 +75,11 @@
   other byte spans, and a byte-span or `enum` inner goes through a synthesised
   wrapper struct so the single-element-array element is a single named type
   (scalar, sub-record, and casetype inners render inline) (#99, @samoht)
+- `Wire.nested` / `Wire.nested_at_most` over a bitfield element (`Wire.bits` or
+  `Wire.bit`) now raises `Invalid_argument` when the codec is built, instead of
+  crashing at decode with `Failure`. A bitfield only exists packed inside a
+  record, so it cannot be a `nested` inner, matching the existing `array` /
+  `repeat` behaviour (#98, @samoht)
 - `Codec.encode` no longer requires an `?env` for a codec whose only
   parameters are decode-side outputs (a field with an `Action.assign` into a
   `Param.output`). Output params are never read when encoding, so demanding an
