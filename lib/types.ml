@@ -499,8 +499,14 @@ let repeat_seq seq ~size elem =
   reject_bitfield_element ~combinator:"repeat_seq" elem;
   Repeat { size; elem; seq }
 
-let nested ~size elem = Single_elem { size; elem; at_most = false }
-let nested_at_most ~size elem = Single_elem { size; elem; at_most = true }
+let nested ~size elem =
+  reject_bitfield_element ~combinator:"nested" elem;
+  Single_elem { size; elem; at_most = false }
+
+let nested_at_most ~size elem =
+  reject_bitfield_element ~combinator:"nested_at_most" elem;
+  Single_elem { size; elem; at_most = true }
+
 let enum name cases base = Enum { name; cases; base }
 
 let fail_parse_error fmt =
