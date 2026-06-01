@@ -31,13 +31,40 @@ let optional_or name ?constraint_ ?self_constraint ?action ~present ~default typ
   v name ?constraint_ ?self_constraint ?action
     (Types.optional_or present ~default typ)
 
+(* Types decodable as a casetype case body inside a repeat: exactly the set
+   [Codec.read_elem] handles. Unlike a bare repeat element, a lone [bits] field
+   and a bounded [zeroterm_at_most] are allowed here, because the enclosing
+   casetype packs them after the tag with a fixed footprint. A nested [array] /
+   [nested] region or an [optional] has no fixed footprint and is rejected. *)
+let rec is_repeat_case_body : type a. a Types.typ -> bool =
+ fun typ ->
+  let open Types in
+  match typ with
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
+  | Int64 _ | Float32 _ | Float64 _ | Unit | Zeroterm | Bits _ ->
+      true
+  | Uint_var { size = Int _; _ } -> true
+  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
+  | Zeroterm_at_most { size = Int _ } -> true
+  | Codec _ -> true
+  | Casetype { cases; _ } ->
+      List.for_all
+        (fun (Case_branch { cb_inner; _ }) -> is_repeat_case_body cb_inner)
+        cases
+  | Map { inner; _ } -> is_repeat_case_body inner
+  | Where { inner; _ } -> is_repeat_case_body inner
+  | Enum { base; _ } -> is_repeat_case_body base
+  | _ -> false
+
 (* An element [repeat]/[repeat_seq] can both project to 3D and decode one
    element at a time: a fixed-width scalar / byte span, a NUL-terminated
    string, or a self-bounded sub-codec / casetype. [Map] / [Where] / [Enum]
-   are transparent wrappers, so look through them. Everything else (a sub-byte
-   [bits] field, a refined or at-most byte span whose per-element validation
-   the byte-budget loop does not run, greedy [all_zeros], a nested [array] /
-   [nested]) has no clean per-element 3D projection. *)
+   are transparent wrappers, so look through them. A casetype is repeatable
+   only when every case body is itself decodable as a repeat element
+   ([is_repeat_case_body]). Everything else (a sub-byte [bits] field, a refined
+   or at-most byte span whose per-element validation the byte-budget loop does
+   not run, greedy [all_zeros], a nested [array] / [nested]) has no clean
+   per-element 3D projection. *)
 let rec is_repeat_element : type a. a Types.typ -> bool =
  fun typ ->
   let open Types in
@@ -46,7 +73,11 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Unit | Zeroterm ->
       true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
-  | Codec _ | Casetype _ -> true
+  | Codec _ -> true
+  | Casetype { cases; _ } ->
+      List.for_all
+        (fun (Case_branch { cb_inner; _ }) -> is_repeat_case_body cb_inner)
+        cases
   | Map { inner; _ } -> is_repeat_element inner
   | Where { inner; _ } -> is_repeat_element inner
   | Enum { base; _ } -> is_repeat_element base

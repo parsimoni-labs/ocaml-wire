@@ -4289,6 +4289,64 @@ let test_repeat_casetype_zeroterm_at_most () =
     "roundtrip" true
     (decode_ok (Codec.decode zt_codec buf 0) = v)
 
+(* A casetype case body that is a lone bitfield, as a repeat element.
+   read_elem / build_field_encoder / elem_size_of lacked the Bits case, so the
+   casetype could not encode/decode as a repeat element. A bitfield case body
+   projects to 3D inside a repeated casetype (the casetype packs it into its
+   base word); a list of bare bitfields, by contrast, has no projection and is
+   rejected. *)
+type bf_opt = Bf of int | Raw of int
+
+let bf_opt_typ : bf_opt typ =
+  casetype "BfOpt" uint8
+    [
+      case ~index:1 (bits ~width:3 U8)
+        ~inject:(fun b -> Bf b)
+        ~project:(function Bf b -> Some b | _ -> None);
+      case ~index:2 uint8
+        ~inject:(fun v -> Raw v)
+        ~project:(function Raw v -> Some v | _ -> None);
+    ]
+
+let bf_f_total = Field.v "total" uint16be
+let bf_f_opts = Field.repeat "opts" ~size:(Field.ref bf_f_total) bf_opt_typ
+
+(* each case is a 1-byte body after the 1-byte tag *)
+let bf_codec =
+  Codec.v "BfOpts"
+    (fun _t xs -> xs)
+    Codec.
+      [
+        (bf_f_total $ fun xs -> List.length xs * 2); (bf_f_opts $ fun xs -> xs);
+      ]
+
+let test_repeat_casetype_bits_case () =
+  let v = [ Bf 5; Raw 9; Bf 0 ] in
+  let buf = Bytes.create (Codec.size_of_value bf_codec v) in
+  Codec.encode bf_codec v buf 0;
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode bf_codec buf 0) = v)
+
+(* A casetype is repeatable only when every case body decodes one element at a
+   time. A nested region case body has no per-element 3D projection inside a
+   repeat (EverParse cannot extract a single-element-array nested in a repeated
+   casetype), so the casetype is rejected at construction rather than failing
+   at decode. *)
+let test_repeat_casetype_unprojectable_case_rejected () =
+  let nested_case =
+    casetype "NestCaseOpt" uint8
+      [
+        case ~index:1
+          (nested ~size:(int 1) int8)
+          ~inject:(fun v -> `N v)
+          ~project:(function `N v -> Some v);
+      ]
+  in
+  Alcotest.(check bool)
+    "repeat over casetype with nested case body rejected" true
+    (raises_invalid (fun () -> Field.repeat "opts" ~size:(int 4) nested_case))
+
 (* -- Zero-terminated strings ([zeroterm] / [zeroterm_at_most]) -- *)
 
 type zt_rec = { zt_name : string; zt_tag : string; zt_n : int }
@@ -4703,6 +4761,10 @@ let suite =
         test_repeat_casetype_empty;
       Alcotest.test_case "repeat: casetype with zeroterm_at_most case" `Quick
         test_repeat_casetype_zeroterm_at_most;
+      Alcotest.test_case "repeat: casetype with bitfield case" `Quick
+        test_repeat_casetype_bits_case;
+      Alcotest.test_case "repeat: casetype with unprojectable case rejected"
+        `Quick test_repeat_casetype_unprojectable_case_rejected;
       (* zero-terminated strings *)
       Alcotest.test_case "zeroterm: roundtrip" `Quick test_zeroterm_roundtrip;
       Alcotest.test_case "zeroterm: empty" `Quick test_zeroterm_empty;
