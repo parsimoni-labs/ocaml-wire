@@ -605,6 +605,25 @@ let test_repeat_rejects_unprojectable () =
     (repeat_rejects
        (byte_array_where ~size:(int 2) ~per_byte:(fun _ -> Expr.true_)))
 
+(* A sub-codec whose last field is greedy ([all_bytes] / [all_zeros]) reads the
+   rest of the buffer as its tail, so it cannot be a repeat element (the first
+   element would consume everything). It is fine standalone. *)
+let test_repeat_rejects_greedy_tail_codec () =
+  let greedy =
+    Codec.v "GreedyTail"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
+  in
+  Alcotest.(check bool)
+    "repeat over codec ending in all_bytes rejected" true
+    (repeat_rejects (codec greedy));
+  let plain =
+    Codec.v "Plain" (fun a -> a) Codec.[ Field.v "n" uint8 $ Fun.id ]
+  in
+  Alcotest.(check bool)
+    "repeat over a non-greedy codec allowed" false
+    (repeat_rejects (codec plain))
+
 (* [optional] / [optional_or] project either a conditional byte-size region (a
    sized inner) or a gate-dispatched casetype (a self-delimiting inner). An
    inner that is neither, such as [all_bytes], has no projection and is refused
@@ -4712,6 +4731,8 @@ let suite =
         test_repeat_byte_array_projection;
       Alcotest.test_case "repeat: rejects unprojectable element" `Quick
         test_repeat_rejects_unprojectable;
+      Alcotest.test_case "repeat: rejects greedy-tail sub-codec" `Quick
+        test_repeat_rejects_greedy_tail_codec;
       Alcotest.test_case "array: byte_array element roundtrip" `Quick
         test_array_byte_array_element;
       Alcotest.test_case "array: byte_array element projection" `Quick
