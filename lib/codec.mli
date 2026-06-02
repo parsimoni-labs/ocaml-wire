@@ -128,6 +128,11 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
     call {!validate} after a batch of writes to verify constraints still hold.
 *)
 
+val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
+(** [zeroterm_nul_pos buf ~first ~limit] is the index of the first NUL byte in
+    [\[first, limit)], raising [Parse_error] on an unterminated run. Internal
+    use (shared with the streaming decoders). *)
+
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)
 
