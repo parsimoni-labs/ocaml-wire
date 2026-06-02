@@ -21,9 +21,16 @@ let schema ~name ~struct_ ~module_ =
 let generate_3d_files = Wire_3d.generate_3d
 let run_everparse = Wire_3d.run_everparse
 
-let generate_c_stubs ~schema_dir ~outdir schemas =
-  let oc = open_out (Filename.concat outdir "stubs.c") in
+(* Open [outdir/name], hand the body a formatter, then flush and close. *)
+let with_out_file ~outdir name f =
+  let oc = open_out (Filename.concat outdir name) in
   let ppf = Format.formatter_of_out_channel oc in
+  f ppf;
+  Format.pp_print_flush ppf ();
+  close_out oc
+
+let generate_c_stubs ~schema_dir ~outdir schemas =
+  with_out_file ~outdir "stubs.c" @@ fun ppf ->
   let pr fmt = Fmt.pf ppf fmt in
   pr "#include <caml/mlvalues.h>\n";
   pr "#include <caml/memory.h>\n";
@@ -56,25 +63,19 @@ let generate_c_stubs ~schema_dir ~outdir schemas =
         ep ep;
       pr "  CAMLreturn(Val_bool(EverParseIsSuccess(result)));\n";
       pr "}\n\n")
-    schemas;
-  Format.pp_print_flush ppf ();
-  close_out oc
+    schemas
 
 let generate_ml_stubs ~outdir schemas =
-  let oc = open_out (Filename.concat outdir "stubs.ml") in
-  let ppf = Format.formatter_of_out_channel oc in
+  with_out_file ~outdir "stubs.ml" @@ fun ppf ->
   let pr fmt = Fmt.pf ppf fmt in
   List.iter
     (fun s ->
       let lower = String.lowercase_ascii s.name in
       pr "external %s_check : bytes -> bool = \"caml_%s_check\"\n" lower lower)
-    schemas;
-  Format.pp_print_flush ppf ();
-  close_out oc
+    schemas
 
 let generate_test_runner ~outdir ?(num_values = 1000) schemas =
-  let oc = open_out (Filename.concat outdir "diff_test.ml") in
-  let ppf = Format.formatter_of_out_channel oc in
+  with_out_file ~outdir "diff_test.ml" @@ fun ppf ->
   let pr fmt = Fmt.pf ppf fmt in
   pr "(* Auto-generated differential test runner *)\n\n";
   pr "let num_values = %d\n\n" num_values;
@@ -117,9 +118,7 @@ let generate_test_runner ~outdir ?(num_values = 1000) schemas =
   pr
     "  Printf.printf \"Tested %%d values across %%d schemas\\n\" !total_tests \
      (List.length schemas);\n";
-  pr "  Printf.printf \"All %%d tests passed\\n\" !passed\n";
-  Format.pp_print_flush ppf ();
-  close_out oc
+  pr "  Printf.printf \"All %%d tests passed\\n\" !passed\n"
 
 (** {1 Full Pipeline} *)
 

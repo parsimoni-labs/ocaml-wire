@@ -154,16 +154,6 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
-(* Index of the first NUL in [first, limit); raises on an unterminated run. *)
-let nul_pos buf ~first ~limit =
-  let rec go i =
-    if i >= limit then
-      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
-    else if Bytes.get_uint8 buf i = 0 then i
-    else go (i + 1)
-  in
-  go first
-
 let parse_codec_typ codec_decode fixed_size size_of buf off len =
   let sz = match fixed_size with Some n -> n | None -> size_of buf off in
   check_eof len (off + sz);
@@ -253,12 +243,12 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | All_bytes -> (Bytes.sub_string buf off (len - off), len)
   | All_zeros -> parse_all_zeros buf off len
   | Zeroterm ->
-      let nul = nul_pos buf ~first:off ~limit:len in
+      let nul = Codec.zeroterm_nul_pos buf ~first:off ~limit:len in
       (Bytes.sub_string buf off (nul - off), nul + 1)
   | Zeroterm_at_most { size } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      let nul = nul_pos buf ~first:off ~limit:(off + n) in
+      let nul = Codec.zeroterm_nul_pos buf ~first:off ~limit:(off + n) in
       (Bytes.sub_string buf off (nul - off), off + n)
   | Byte_array { size } ->
       let n = Eval.expr Eval.empty size in
