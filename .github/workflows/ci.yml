@@ -100,3 +100,61 @@ jobs:
         with:
           name: afl-findings
           path: afl-findings.tar.gz
+
+  # Differential fuzzer (fuzz/diff/, the wire_diff library): AFL feeds bytes to
+  # both the OCaml codec and the EverParse-generated C parser and crashes on any
+  # divergence. This is a separate job because it needs the EverParse toolchain
+  # (to generate and compile the C parsers), which the wire / wire_3d fuzzers do
+  # not, so installing it here keeps that job fast and its signal independent.
+  fuzz-afl-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+          dune-version: '3.21'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install afl-fuzz
+        run: sudo apt-get update && sudo apt-get install -y afl++
+
+      - name: Install EverParse
+        run: |
+          mkdir -p "$HOME/.local"
+          url=https://github.com/project-everest/everparse/releases/download/v2026.02.25/everparse_v2026.02.25_Linux_x86_64.tar.gz
+          curl -sL "$url" | tar xz -C "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+
+      - name: Fuzz diff (OCaml codec vs EverParse C)
+        run: |
+          sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
+          export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
+          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl @fuzz/diff/fuzz
+
+      - name: Fail on crashes
+        run: |
+          out=_build/default/fuzz/diff/_fuzz
+          crashes=$(find "$out" -path '*/crashes/id:*' 2>/dev/null || true)
+          if [ -n "$crashes" ]; then
+            echo "::error::afl-fuzz found a differential divergence"
+            for f in $crashes; do
+              echo "--- replaying $f ---"
+              _build/default/fuzz/diff/fuzz.exe "$f" || true
+            done
+            exit 1
+          fi
+          echo "No crashes found."
+
+      - name: Package findings
+        if: failure()
+        run: tar czf afl-diff-findings.tar.gz -C _build/default/fuzz/diff _fuzz || true
+
+      - name: Upload findings on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-diff-findings
+          path: afl-diff-findings.tar.gz

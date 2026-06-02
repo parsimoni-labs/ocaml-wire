@@ -1,0 +1,9 @@
+(library
+ (name diff_codecs)
+ (modules diff_codecs)
+ (libraries wire))
+
+(executable
+ (name gen_diff)
+ (modules gen_diff)
+ (libraries diff_codecs wire wire.3d wire.stubs unix))
