@@ -771,6 +771,59 @@ let bounded_u8 ~min ~max =
     env = None;
   }
 
+(* [bounded_u8] generalised to any unsigned integer [inner_typ] of [size] bytes
+   with a range [self_constraint]. [set] writes a boundary value as raw bytes and
+   [max_val] is the type's maximum (so out-of-type boundary samples are dropped).
+   Covers the constraint path on wider and big-endian scalars, not just uint8. *)
+let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max =
+  let f =
+    Wire.Field.v "v" inner_typ ~self_constraint:(fun r ->
+        Wire.Expr.(r >= Wire.int min && r <= Wire.int max))
+  in
+  let codec =
+    Wire.Codec.v "_bounded_int" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
+  in
+  let value_gen =
+    Alcobar.map Alcobar.[ Alcobar.range ~min (max - min + 1) ] Fun.id
+  in
+  let encode v =
+    let buf = Bytes.create size in
+    Wire.Codec.encode codec v buf 0;
+    buf
+  in
+  let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
+  let boundary_bytes =
+    let bs =
+      List.filter
+        (fun n -> n >= 0 && n <= max_val)
+        [ min - 1; min; min + 1; max - 1; max; max + 1 ]
+    in
+    Alcobar.map
+      Alcobar.[ Alcobar.choose (List.map Alcobar.const bs) ]
+      (fun n ->
+        let buf = Bytes.create size in
+        set buf 0 n;
+        buf)
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_fixed size;
+    adversarial = boundary_bytes;
+    equal = Int.equal;
+    env = None;
+  }
+
+let bounded_u16be =
+  bounded_int ~inner_typ:Wire.uint16be ~size:2 ~set:Bytes.set_uint16_be
+    ~max_val:0xFFFF ~min:1000 ~max:60000
+
+let bounded_u32be =
+  bounded_int ~inner_typ:Wire.uint32be ~size:4
+    ~set:(fun b o n -> Bytes.set_int32_be b o (Int32.of_int n))
+    ~max_val:0x7FFF_FFFF ~min:1000 ~max:1_000_000
+
 (* Two-uint8 record with [Codec.v ~where:(a < b)]. Positives keep a < b;
    adversarials sit at the boundary (a = b, a = b+1) so the where clause
    fires exactly when crossing the comparison. *)
@@ -2221,6 +2274,8 @@ let wrapper_gens =
     ("variants", Pack (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ]));
     ("enum", Pack (enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]));
     ("bounded_u8", Pack (bounded_u8 ~min:10 ~max:100));
+    ("bounded_u16be", Pack bounded_u16be);
+    ("bounded_u32be", Pack bounded_u32be);
     ("where(uint8)", Pack (where uint8));
     ("lookup", Pack (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8));
     ("optional(uint8)", Pack (optional uint8));
@@ -2238,6 +2293,7 @@ let composite_gens =
     ("array(3,uint16be)", Pack (array 3 uint16be));
     ("array_seq(3,uint16be)", Pack (array_seq 3 uint16be));
     ("array(2,record)", Pack (array 2 registry_record));
+    ("array(3,bounded_u8)", Pack (array 3 (bounded_u8 ~min:10 ~max:100)));
     ("repeat(8,uint8)", Pack (repeat ~bytes:8 uint8));
     ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
     ("record", Pack registry_record);
@@ -2258,9 +2314,42 @@ let param_action_gens =
     ("nan_float64", Pack nan_float64);
   ]
 
+(* A registry label rendered as a unique EverParse CamelCase struct name:
+   maximal alphanumeric runs are capitalized and concatenated, e.g.
+   ["uint_var(3,big)"] becomes ["UintVar3Big"]. *)
+let camel_of_label label =
+  let buf = Buffer.create (String.length label) in
+  let at_word_start = ref true in
+  String.iter
+    (fun c ->
+      let alnum =
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+      in
+      if alnum then begin
+        Buffer.add_char buf
+          (if !at_word_start then Char.uppercase_ascii c else c);
+        at_word_start := false
+      end
+      else at_word_start := true)
+    label;
+  let s = Buffer.contents buf in
+  if s = "" then "Case" else s
+
+(* Give each registry case a unique 3D struct name derived from its label, so
+   every case projects to a distinct schema and the per-codec validators link
+   without entrypoint-name collisions. The name is metadata only
+   ({!Wire.Codec.rename}): it changes neither the wire encoding nor the
+   generators, so the positive / random / adversarial streams are untouched. *)
+let rename_case label (Pack g) =
+  Pack { g with codec = Wire.Codec.rename (camel_of_label label) g.codec }
+
 let registry : (string * packed) list =
-  scalar_gens @ byte_gens @ bits_gens @ wrapper_gens @ composite_gens
-  @ param_action_gens
+  List.map
+    (fun (label, p) -> (label, rename_case label p))
+    (scalar_gens @ byte_gens @ bits_gens @ wrapper_gens @ composite_gens
+   @ param_action_gens)
 
 (* Project a gen's codec to a 3D schema and pretty-print it: covers the whole
    projection + code-generation path without invoking 3d.exe. A projection that
