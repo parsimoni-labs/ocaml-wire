@@ -2,6 +2,10 @@
 
 ### Added
 
+- `Wire.Codec.rename` returns a codec with a new name, leaving its wire
+  encoding and field constraints unchanged. The name only determines the
+  generated 3D struct name, so it lets a generically built codec be given a
+  unique, meaningful name before projection or code generation (@samoht)
 - `Wire.nested` / `Wire.nested_at_most` now accept a composite inner (a
   `Wire.array`, or another nested region), and a `Wire.casetype` field's case
   body may be such a region. Both round-trip and generate a verified EverParse

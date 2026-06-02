@@ -4828,11 +4828,55 @@ let test_zeroterm_missing_terminator () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected decode error on unterminated string"
 
+(* -- Codec.rename -- *)
+
+type rename_rec = { ra : int; rb : int }
+
+let rename_codec =
+  Codec.v "OrigName"
+    (fun ra rb -> { ra; rb })
+    Codec.
+      [
+        (Field.v "ra" uint8 $ fun r -> r.ra);
+        (Field.v "rb" uint16be $ fun r -> r.rb);
+      ]
+
+let test_rename_projection () =
+  let renamed = Codec.rename "NewName" rename_codec in
+  let r2 = render_3d renamed in
+  Alcotest.(check bool)
+    "new name in projection" true
+    (contains ~sub:"NewName" r2);
+  Alcotest.(check bool) "old name absent" false (contains ~sub:"OrigName" r2);
+  (* Renaming only substitutes the struct name: putting it back recovers the
+     original projection byte for byte, so fields, layout, and any field
+     constraints are untouched. *)
+  let back =
+    Re.replace_string (Re.compile (Re.str "NewName")) ~by:"OrigName" r2
+  in
+  Alcotest.(check string)
+    "rename is a pure name substitution" (render_3d rename_codec) back
+
+let test_rename_roundtrip () =
+  let renamed = Codec.rename "NewName" rename_codec in
+  let v = { ra = 7; rb = 1000 } in
+  match (encode_record rename_codec v, encode_record renamed v) with
+  | Ok b1, Ok b2 -> (
+      Alcotest.(check string) "encode unchanged by rename" b1 b2;
+      match decode_record renamed b2 with
+      | Ok d -> Alcotest.(check bool) "decode unchanged by rename" true (d = v)
+      | Error _ -> Alcotest.fail "decode failed after rename")
+  | _ -> Alcotest.fail "encode failed"
+
 (* -- Suite -- *)
 
 let suite =
   ( "codec",
     [
+      (* Codec.rename *)
+      Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
+      Alcotest.test_case "rename: roundtrip unchanged" `Quick
+        test_rename_roundtrip;
       (* record *)
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
