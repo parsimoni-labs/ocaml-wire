@@ -1,6 +1,6 @@
 (executable
  (name fuzz)
- (libraries wire alcobar fuzz_gen))
+ (libraries wire wire.3d unix alcobar fuzz_gen))
 
 (rule
  (alias runtest)

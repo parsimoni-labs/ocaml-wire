@@ -315,7 +315,7 @@ let run_everparse ?(quiet = true) ~outdir schemas =
     schemas;
   copy_everparse_endianness ~outdir
 
-let parse_3d ~outdir file =
+let parse_3d ?(batch = false) ~outdir file =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
@@ -323,7 +323,10 @@ let parse_3d ~outdir file =
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
-  let cmd = Fmt.str "cd %s && %s %s > %s 2>&1" outdir exe file log_path in
+  let flag = if batch then "--batch " else "" in
+  let cmd =
+    Fmt.str "cd %s && %s %s%s > %s 2>&1" outdir exe flag file log_path
+  in
   let ret = Sys.command cmd in
   let captured =
     try In_channel.with_open_text log_path In_channel.input_all

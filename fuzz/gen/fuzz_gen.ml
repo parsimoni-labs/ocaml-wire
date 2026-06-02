@@ -1421,12 +1421,19 @@ module Codec = struct
 
   let ( $ ) gen getter = { name = "_"; gen; getter }
 
-  let rec wire_codec_fields : type f r.
-      (f, r) fields -> (f, r) Wire.Codec.fields = function
-    | [] -> Wire.Codec.[]
-    | f :: rest ->
-        Wire.Codec.( $ ) (Wire.Field.v f.name f.gen.typ) f.getter
-        :: wire_codec_fields rest
+  (* Assign each field a unique name by position: the [$] above leaves every
+     field [_], which round-trips fine (getters, not names) but projects to
+     clashing anonymous declarations in 3D. *)
+  let wire_codec_fields fields =
+    let rec go : type f r. int -> (f, r) fields -> (f, r) Wire.Codec.fields =
+     fun i -> function
+       | [] -> Wire.Codec.[]
+       | f :: rest ->
+           let name = if f.name = "_" then Fmt.str "f%d" i else f.name in
+           Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter
+           :: go (i + 1) rest
+    in
+    go 0 fields
 
   (* Walk the field list applying each field's positive sample to the
      partial builder and accumulating the bytes. Mirrors [Wire.Codec.v]'s
@@ -2129,4 +2136,121 @@ let reject_cases label g =
     Alcobar.test_case (label ^ " adversarial")
       Alcobar.[ g.adversarial; env_stream ]
       check_reject;
+  ]
+
+(* {1 Canonical registry and EverParse drivers}
+
+   Every fuzz suite drives off [registry] rather than its own hand-written
+   list, so a generated codec is exercised on the OCaml round-trip path
+   ([test_cases]) and the 3D projection path ([everparse_cases] /
+   [everparse_3d_cases]) from one source. *)
+
+type packed = Pack : 'a t -> packed
+
+let codec g = g.codec
+
+let registry_record =
+  Codec.v "RegRecord" (fun a b -> (a, b)) Codec.[ uint8 $ fst; uint16be $ snd ]
+
+let registry_casetype =
+  casetype_u8 "RegPayload"
+    [
+      case ~index:1 uint16be
+        ~inject:(fun v -> `A v)
+        ~project:(function `A v -> Some v | _ -> None);
+      case ~index:2 uint32be
+        ~inject:(fun v -> `B v)
+        ~project:(function `B v -> Some v | _ -> None);
+      default_case ~tag:0xFF uint8
+        ~inject:(fun v -> `Other v)
+        ~project:(function `Other v -> Some v | _ -> None);
+    ]
+
+let registry : (string * packed) list =
+  [
+    ("uint8", Pack uint8);
+    ("uint16", Pack uint16);
+    ("uint16be", Pack uint16be);
+    ("uint32be", Pack uint32be);
+    ("uint63be", Pack uint63be);
+    ("uint64be", Pack uint64be);
+    ("int8", Pack int8);
+    ("int32be", Pack int32be);
+    ("int64be", Pack int64be);
+    ("float32be", Pack float32be);
+    ("float64be", Pack float64be);
+    ("empty", Pack empty);
+    ("byte_array(5)", Pack (byte_array 5));
+    ("byte_slice(3)", Pack (byte_slice 3));
+    ( "byte_array_where(4)",
+      Pack
+        (byte_array_where 4 ~per_byte:(fun b ->
+             Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e))) );
+    ("uint_var(3,big)", Pack (uint_var ~endian:Wire.Big 3));
+    ("zeroterm", Pack zeroterm);
+    ("zeroterm_at_most(8)", Pack (zeroterm_at_most 8));
+    ("bits(3,U8)", Pack (bits ~width:3 Wire.U8));
+    ("bits(10,U16be)", Pack (bits ~width:10 Wire.U16be));
+    ( "map(uint8)",
+      Pack (map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) uint8) );
+    ("variants", Pack (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ]));
+    ("enum", Pack (enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]));
+    ("bounded_u8", Pack (bounded_u8 ~min:10 ~max:100));
+    ("where(uint8)", Pack (where uint8));
+    ("lookup", Pack (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8));
+    ("optional(uint8)", Pack (optional uint8));
+    ("optional_or(uint8)", Pack (optional_or ~default:0 uint8));
+    ("nested(4,uint16be)", Pack (nested 4 uint16be));
+    ("nested_at_most(4,uint16be)", Pack (nested_at_most 4 uint16be));
+    ("array(3,uint16be)", Pack (array 3 uint16be));
+    ("array_seq(3,uint16be)", Pack (array_seq 3 uint16be));
+    ("repeat(8,uint8)", Pack (repeat ~bytes:8 uint8));
+    ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
+    ("array(2,record)", Pack (array 2 registry_record));
+    ("record", Pack registry_record);
+    ("casetype_u8", Pack registry_casetype);
+    ("action", Pack action);
+    ("expr_ops", Pack expr_ops);
+    ("sizeof", Pack sizeof);
+    ("codec_where", Pack codec_where);
+    ("rest_bytes", Pack rest_bytes);
+    ("param_input", Pack param_input);
+  ]
+
+(* Project a gen's codec to a 3D schema and pretty-print it: covers the whole
+   projection + code-generation path without invoking 3d.exe. A projection that
+   raises is a bug (every codec that builds must project). *)
+let everparse_cases label g =
+  [
+    Alcobar.test_case
+      (label ^ " projects+prints")
+      Alcobar.[ Alcobar.const () ]
+      (fun () ->
+        match Wire.Everparse.schema g.codec with
+        | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+        | exception e ->
+            Alcobar.failf "%s: 3D projection raised %s" label
+              (Printexc.to_string e));
+  ]
+
+(* Same, over a freshly generated nested composition per sample: arbitrary
+   nestings must all project and print. *)
+let everparse_nested_cases label depth =
+  let draw =
+    Alcobar.map
+      Alcobar.[ gen_any depth ]
+      (fun (Any a) ->
+        let comp = a.label and codec = a.g.codec in
+        fun () ->
+          match Wire.Everparse.schema codec with
+          | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+          | exception e ->
+              Alcobar.failf "%s [%s]: 3D projection raised %s" label comp
+                (Printexc.to_string e))
+  in
+  [
+    Alcobar.test_case
+      (label ^ " projects+prints")
+      Alcobar.[ draw ]
+      (fun run -> run ());
   ]
