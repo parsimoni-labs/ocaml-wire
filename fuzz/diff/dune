@@ -1,0 +1,53 @@
+; Differential AFL fuzzer: OCaml wire codec vs EverParse C parser.
+;
+; The EverParse C parsers and FFI stubs are generated, so the fuzzer only
+; builds when EverParse is available (BUILD_EVERPARSE=1, with 3d.exe in PATH).
+; The generator (gen/) is pure OCaml and always builds; only this rule, which
+; runs it, needs EverParse.
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (targets
+  (dir schemas)
+  wire_ffi.c
+  stubs.ml)
+ (deps gen/gen_diff.exe)
+ (action
+  (run %{dep:gen/gen_diff.exe} schemas)))
+
+(executable
+ (name fuzz)
+ (modules fuzz stubs)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries wire wire.diff diff_codecs alcobar)
+ (foreign_stubs
+  (language c)
+  (names wire_ffi)
+  (flags :standard -I schemas)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   (<> %{profile} afl)))
+ (deps fuzz.exe)
+ (action
+  (run %{exe:fuzz.exe})))
+
+; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
+; cwd is this dir in the build tree, where fuzz.exe is built).
+
+(rule
+ (alias fuzz)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   (= %{profile} afl)))
+ (deps fuzz.exe)
+ (action
+  (progn
+   (run %{exe:fuzz.exe} --gen-corpus corpus)
+   (run afl-fuzz -V 60 -i corpus -o _fuzz -- ./fuzz.exe @@))))
