@@ -1489,7 +1489,9 @@ let sized_gen_tests = Fuzz_gen.sized_cases "sized"
    nestings no curated list enumerates. *)
 let nested_tests =
   let open Fuzz_gen in
-  nested_cases "nested(d2)" 2 @ nested_cases "nested(d3)" 3
+  nested_cases "nested(d2)" 2
+  @ nested_cases "nested(d3)" 3
+  @ nested_cases "nested(d4)" 4
 
 let gen_tests =
   scalar_gen_tests @ bytes_gen_tests @ wrapper_gen_tests @ casetype_gen_tests
