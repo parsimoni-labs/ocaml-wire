@@ -659,6 +659,39 @@ let test_array_reject_nonprojectable_element () =
     "array over array rejected" true
     (raises_invalid (fun () -> array ~len:(int 2) (array ~len:(int 2) uint8)))
 
+(* EverParse projects [array] / [repeat] of a sub-codec as a byte-budget list of
+   the codec's named struct, and its [T_nlist] requires the element parser to
+   consume a positive minimum of bytes. A sub-codec made only of byte-span
+   fields has a possibly-empty parser, so the list does not extract -- such an
+   element is refused at construction. One fixed-size field is enough to anchor
+   it. *)
+let lone_byte_codec =
+  Codec.v "LoneBytes" Fun.id
+    Codec.[ Field.v "blob" (byte_array ~size:(int 4)) $ Fun.id ]
+
+let scalar_bearing_codec =
+  Codec.v "Anchored"
+    (fun a b -> (a, b))
+    Codec.
+      [
+        Field.v "tag" uint8 $ fst;
+        Field.v "blob" (byte_array ~size:(int 3)) $ snd;
+      ]
+
+let test_array_repeat_reject_non_nz_codec () =
+  Alcotest.(check bool)
+    "array over byte-span-only codec rejected" true
+    (raises_invalid (fun () -> array ~len:(int 2) (codec lone_byte_codec)));
+  Alcotest.(check bool)
+    "repeat over byte-span-only codec rejected" true
+    (repeat_rejects (codec lone_byte_codec));
+  Alcotest.(check bool)
+    "array over a codec with a fixed-size field allowed" false
+    (raises_invalid (fun () -> array ~len:(int 2) (codec scalar_bearing_codec)));
+  Alcotest.(check bool)
+    "repeat over a codec with a fixed-size field allowed" false
+    (repeat_rejects (codec scalar_bearing_codec))
+
 (* A bitfield has no standalone wire form, so it cannot be an [optional] inner
    any more than an [array] / [repeat] / [nested] element. *)
 let test_optional_reject_bitfield () =
@@ -4753,6 +4786,8 @@ let suite =
         test_casetype_nested_case_body;
       Alcotest.test_case "array rejects non-projectable element" `Quick
         test_array_reject_nonprojectable_element;
+      Alcotest.test_case "array/repeat reject byte-span-only sub-codec" `Quick
+        test_array_repeat_reject_non_nz_codec;
       Alcotest.test_case "optional rejects unprojectable inner" `Quick
         test_optional_reject_unprojectable;
       Alcotest.test_case "optional rejects bitfield inner" `Quick

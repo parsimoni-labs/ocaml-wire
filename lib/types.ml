@@ -401,14 +401,56 @@ let rec has_wire_size_expr : type a. a typ -> bool = function
   | Codec { codec_fixed_size; _ } -> codec_fixed_size <> None
   | _ -> false
 
+(* EverParse's byte-budget array ([T_nlist], the [array]/[repeat] lowering)
+   requires its element parser to consume a positive minimum number of bytes:
+   the [nz] index of [parser_kind nz wk]. A byte-budget array, a [nested] region
+   ([T_exact]), and the all-bytes / all-zeros tails all have kind
+   [parser_kind false _] -- their parser may consume zero bytes -- regardless of
+   a positive constant budget, so none of them is [nz]. A struct/codec is [nz]
+   iff some field is (sizes add, so one positive-minimum field anchors the rest);
+   a casetype is [nz] iff its tag is or every case body is (it parses [tag] then
+   a switch, and the tag alone anchors it). [map]/[where]/[enum] are transparent.
+   This is what makes a named composite usable as an element: a [T_nlist] over a
+   non-[nz] element fails EverParse extraction. *)
+let rec nz : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
+  | Float32 _ | Float64 _ -> true
+  | Bits _ -> true
+  | Zeroterm -> true
+  | Uint_var _ -> false (* lowers to a UINT8 byte-budget array *)
+  | Zeroterm_at_most _ -> false (* T_at_most kind: parser_kind false _ *)
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ -> false
+  | Unit -> false
+  | All_bytes | All_zeros -> false
+  | Array _ | Repeat _ -> false (* nlist kind *)
+  | Single_elem _ -> false (* T_exact kind *)
+  | Optional _ | Optional_or _ -> false
+  | Where { inner; _ } -> nz inner
+  | Map { inner; _ } -> nz inner
+  | Enum { base; _ } -> nz base
+  | Apply { typ; _ } -> nz typ
+  | Codec { codec_struct; _ } -> struct_nz codec_struct
+  | Struct s -> struct_nz s
+  | Casetype { tag; cases; _ } ->
+      nz tag
+      || List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
+  | Type_ref _ | Qualified_ref _ -> false (* opaque ref: be conservative *)
+
+and struct_nz (s : struct_) =
+  List.exists (fun (Field f) -> nz f.field_typ) s.fields
+
 (* An [array]/[array_seq] element must be fixed-width AND decodable one element
    at a time by the array loop: a scalar, a fixed-size byte span, or a
    fixed-size sub-codec. [Map]/[Where]/[Enum] are transparent wrappers, so look
    through them. A [nested] region, a refined byte span ([byte_array_where]), a
    nested [array], or a variable / self-delimiting inner has no array
    projection (3D rejects it) and the decoder has no element reader, so they are
-   refused at construction. This is stricter than [has_wire_size_expr], which
-   admits sized-but-undecodable elements for the [optional] byte-size suffix. *)
+   refused at construction. A fixed-size sub-codec must additionally be [nz]:
+   EverParse projects the array as a byte-budget list of the codec's named
+   struct, and a list over a possibly-empty element does not extract. This is
+   stricter than [has_wire_size_expr], which admits sized-but-undecodable
+   elements for the [optional] byte-size suffix. *)
 let rec is_array_element : type a. a typ -> bool = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
@@ -416,7 +458,8 @@ let rec is_array_element : type a. a typ -> bool = function
   | Unit -> true
   | Uint_var { size = Int _; _ } -> true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
-  | Codec { codec_fixed_size; _ } -> codec_fixed_size <> None
+  | Codec { codec_fixed_size; codec_struct; _ } ->
+      codec_fixed_size <> None && struct_nz codec_struct
   | Map { inner; _ } -> is_array_element inner
   | Where { inner; _ } -> is_array_element inner
   | Enum { base; _ } -> is_array_element base
@@ -427,8 +470,9 @@ let reject_non_array_element ~combinator t =
     Fmt.invalid_arg
       "Wire.%s: element type is not a fixed-width array element -- 3D projects \
        %s as a count of fixed-size elements (a scalar, a fixed byte span, or a \
-       fixed-size sub-codec); a nested region, refined span, or variable inner \
-       has no array projection."
+       fixed-size sub-codec with at least one fixed-size field); a nested \
+       region, refined span, variable inner, or a sub-codec made only of \
+       byte-span fields has no array projection."
       combinator combinator
 
 (* A self-delimiting inner carries its own length / structure, so it decodes a
@@ -1387,6 +1431,44 @@ let rec inner_wire_size_expr : type a. a typ -> int expr option = function
   | Apply { typ; _ } -> inner_wire_size_expr typ
   | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
+(* Strip transparent wrappers to see whether a byte-budget list element renders
+   as a named composite (sub-codec / casetype). Those are the only list elements
+   whose [nz]-ness matters: a flat scalar / byte / varint element renders as
+   [UINT8] / [UINTnn], itself [nz], so the emitted list is always well-kinded. *)
+let rec renders_as_named_composite : type a. a typ -> bool = function
+  | Codec _ | Casetype _ -> true
+  | Map { inner; _ } -> renders_as_named_composite inner
+  | Where { inner; _ } -> renders_as_named_composite inner
+  | _ -> false
+
+(* 3d-model boundary for a byte-budget list ([T_nlist]) element's base type
+   printer. [Nlist_elem.t] is abstract, so the only way to obtain one is
+   [Nlist_elem.make], which refuses a named-composite element that is not [nz] --
+   EverParse rejects a list whose element parser may consume zero bytes. Routing
+   both list emit sites ([array] / [repeat]) through here means the projection
+   cannot hand {!pp_field} a base for an ill-kinded list. [is_array_element] /
+   [is_repeat_element] reject such elements at construction, so for user-built
+   codecs the proof always succeeds; this is the backstop one layer in. *)
+module Nlist_elem : sig
+  type t
+
+  val make : 'a typ -> (Format.formatter -> unit) -> t
+  val pp : t -> Format.formatter -> unit
+end = struct
+  type t = Format.formatter -> unit
+
+  let make : type a. a typ -> (Format.formatter -> unit) -> t =
+   fun elem pp ->
+    if (not (renders_as_named_composite elem)) || nz elem then pp
+    else
+      Fmt.invalid_arg
+        "Everparse: byte-budget list over %a, whose parser may consume zero \
+         bytes; EverParse rejects a non-[nz] list element"
+        pp_typ elem
+
+  let pp t = t
+end
+
 let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
@@ -1439,8 +1521,10 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       | _, Some s ->
           (* A wider element is emitted as its bare base under a byte budget of
              [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
-             chunk) is dropped so it is not duplicated. *)
-          (Byte_array (Mul (len, s)), snd (field_suffix elem))
+             chunk) is dropped so it is not duplicated. A named-composite base
+             must be [nz] (see {!nlist_base}). *)
+          ( Byte_array (Mul (len, s)),
+            Nlist_elem.pp (Nlist_elem.make elem (snd (field_suffix elem))) )
       | _ ->
           (* Unreachable: [array] rejects variable-size elem at construction. *)
           assert false)
@@ -1468,7 +1552,8 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       let pp_elem ppf =
         match repeat_elem_struct elem with
         | Some name -> Fmt.string ppf name
-        | None -> (snd (field_suffix elem)) ppf
+        | None ->
+            Nlist_elem.pp (Nlist_elem.make elem (snd (field_suffix elem))) ppf
       in
       (Byte_array size, pp_elem)
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
