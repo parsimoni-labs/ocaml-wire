@@ -1618,6 +1618,12 @@ let fixed_leaves : any list =
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
     Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
     Any { g = finite_float64; size = Some 8; label = "finf" };
+    Any { g = nan_float64; size = Some 8; label = "nanf" };
+    (* Sub-codec leaves with a [~where] / [~self_constraint] over expressions,
+       so composing them exercises an embedded constrained sub-codec. *)
+    Any { g = expr_ops; size = Some 2; label = "expr" };
+    Any { g = sizeof; size = Some 2; label = "sizeof" };
+    Any { g = codec_where; size = Some 2; label = "cwhere" };
   ]
 
 (* Self-delimiting / trailing variable leaves. *)
@@ -1626,6 +1632,10 @@ let var_leaves : any list =
     Any { g = zeroterm; size = None; label = "zt" };
     Any { g = zeroterm_at_most 6; size = None; label = "zt6" };
     Any { g = all_zeros; size = None; label = "az" };
+    (* Dynamic-gate optionals: a gate byte then a present/absent (optional) or
+       value-driven (optional_or) payload. *)
+    Any { g = optional_dynamic; size = None; label = "optdyn" };
+    Any { g = optional_or_dynamic; size = None; label = "optordyn" };
   ]
 
 (* Param/env-bearing leaves: sub-codecs whose [~where] / [action] reads a
@@ -1636,6 +1646,7 @@ let env_leaves : any list =
   [
     Any { g = param_input; size = Some 1; label = "param" };
     Any { g = action; size = Some 1; label = "act" };
+    Any { g = action_on_act; size = Some 1; label = "onact" };
   ]
 
 let nested_of (Any a) =
