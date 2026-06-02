@@ -1576,8 +1576,15 @@ let repeat_raw_fixed : type elt seq.
     seq =
  fun (Seq_map seq) elem esz ~off_fn ~size_fn buf base ->
   let budget = size_fn buf base in
-  let n = if esz > 0 then budget / esz else 0 in
   let start = base + off_fn buf base in
+  (* The budget comes from a length field, i.e. untrusted input. Bound it to the
+     buffer before reading so an oversized length fails cleanly instead of
+     crashing [read_elem] with an out-of-range [Bytes.sub]. *)
+  if budget < 0 || start + budget > Bytes.length buf then
+    raise
+      (Parse_error
+         (Unexpected_eof { expected = start + budget; got = Bytes.length buf }));
+  let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
     else loop (seq.add acc (read_elem elem buf (start + (i * esz)))) (i + 1)
@@ -1594,6 +1601,12 @@ let repeat_raw_variable : type elt seq.
     seq =
  fun (Seq_map seq) elem ~off_fn ~size_fn buf base ->
   let budget = size_fn buf base in
+  let start = base + off_fn buf base in
+  (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
+  if budget < 0 || start + budget > Bytes.length buf then
+    raise
+      (Parse_error
+         (Unexpected_eof { expected = start + budget; got = Bytes.length buf }));
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
@@ -1601,7 +1614,7 @@ let repeat_raw_variable : type elt seq.
       let esz = elem_size_of elem buf pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
-  loop seq.empty (base + off_fn buf base) budget
+  loop seq.empty start budget
 
 let repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
@@ -1691,6 +1704,18 @@ let var_bytes_reader : type a.
  fun typ off_fn size_fn buf base ->
   let fo = off_fn buf base in
   let sz = size_fn buf base in
+  let first = base + fo in
+  (* [fo] and [sz] derive from length fields, i.e. untrusted input. A field
+     sized past the buffer (or a negative size from an overrun offset) would
+     crash [Bytes.sub]; fail cleanly instead. [Byte_slice] is handled by
+     [make_or_eod]. *)
+  (match typ with
+  | Byte_slice _ -> ()
+  | _ ->
+      if sz < 0 || first < 0 || first + sz > Bytes.length buf then
+        raise
+          (Parse_error
+             (Unexpected_eof { expected = first + sz; got = Bytes.length buf })));
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz

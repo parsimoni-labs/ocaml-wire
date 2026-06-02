@@ -97,6 +97,10 @@
 
 ### Fixed
 
+- Decoding no longer crashes with `Invalid_argument` on adversarial input where
+  a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
+  the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails
+  with a clean `Parse_error` (#117, @samoht)
 - `Wire.rest_bytes` now generates a verified EverParse validator. Its
   `total - sizeof(this)` byte-size failed EverParse verification ("cannot verify
   u32 subtraction"), so any codec with a `rest_bytes` field failed schema

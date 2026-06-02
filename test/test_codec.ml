@@ -430,6 +430,48 @@ let test_rest_bytes_projection_guard () =
     "preceding field guards the subtraction" true
     (contains ~sub:"msglen >= sizeof (this)" out)
 
+(* A [Field.repeat] byte-budget comes from a length field, i.e. untrusted input.
+   A length larger than the buffer (or an offset overrun past it from a
+   preceding variable field) must fail with a clean [Parse_error], not crash the
+   decoder with an out-of-range [Bytes.sub]. *)
+let f_rep_len = Field.v "len" uint16be
+
+(* An embedded sub-codec whose length field overruns the buffer leaves the
+   following field at an offset past the end; the trailing [all_zeros] then read
+   a negative-length span. This is the [(rep, all_zeros)] shape the composer
+   found. *)
+let rep_subcodec =
+  Codec.v "Rep"
+    (fun n xs -> (n, xs))
+    Codec.
+      [
+        (f_rep_len $ fun (n, _) -> n);
+        ( Field.repeat "items" ~size:(Field.ref f_rep_len)
+            (byte_array ~size:(int 3))
+        $ fun (_, xs) -> xs );
+      ]
+
+let oversized_repeat_codec =
+  Codec.v "OverRep"
+    (fun r z -> (r, z))
+    Codec.
+      [
+        (Field.v "rep" (codec rep_subcodec) $ fun (r, _) -> r);
+        (Field.v "az" all_zeros $ fun (_, z) -> z);
+      ]
+
+let test_repeat_oversized_length_rejected () =
+  let decodes bs =
+    match Codec.decode oversized_repeat_codec (Bytes.of_string bs) 0 with
+    | Ok _ | Error _ -> true
+    | exception Invalid_argument _ -> false
+  in
+  Alcotest.(check bool)
+    "oversized embedded length fails cleanly, no crash" true
+    (decodes "\xff\xff");
+  Alcotest.(check bool)
+    "length past buffer fails cleanly" true (decodes "\x00\x10abc")
+
 (* A bitfield has no standalone element form, so [array] / [Field.repeat] over
    one is rejected at construction rather than crashing at decode. *)
 let raises_invalid f =
@@ -4840,6 +4882,8 @@ let suite =
         test_array_byte_array_projection;
       Alcotest.test_case "rest_bytes projection guard" `Quick
         test_rest_bytes_projection_guard;
+      Alcotest.test_case "repeat oversized length rejected" `Quick
+        test_repeat_oversized_length_rejected;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array: record element roundtrip" `Quick
