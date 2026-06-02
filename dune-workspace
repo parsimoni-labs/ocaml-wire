@@ -1,0 +1,11 @@
+(lang dune 3.21)
+
+(context default)
+
+; The [afl] profile instruments native code with AFL coverage so afl-fuzz gets
+; feedback, without needing a +afl opam switch. Native only: ocamlc rejects
+; -afl-instrument.
+(env
+ (afl
+  (ocamlopt_flags
+   (:standard -afl-instrument))))
