@@ -1704,10 +1704,43 @@ let lower_where_to_field_constraint where fields =
         in
         (None, attach_where_to_target w target fields)
 
+(* EverParse cannot prove that a byte span sized [a - sizeof(this)] (as produced
+   by [rest_bytes]) does not underflow the u32 subtraction. Emit the guard
+   [a >= sizeof(this)] as a refinement on the immediately preceding field;
+   EverParse uses it to discharge the subtraction (a non-scalar field cannot be
+   refined, so this relies on the span following a scalar field, the usual
+   header). This is a 3D-projection concern only: the OCaml decoder already
+   knows [a]. *)
+let guard_subtraction_sizes fields =
+  let guard_of : type a. a typ -> bool expr option = function
+    | Byte_array { size = Sub (a, Sizeof_this) } -> Some (Ge (a, Sizeof_this))
+    | _ -> None
+  in
+  let add_guard g (Field f) =
+    Field
+      {
+        f with
+        constraint_ =
+          (match f.constraint_ with
+          | None -> Some g
+          | Some c -> Some (And (c, g)));
+      }
+  in
+  let rec go = function
+    | f :: (Field nf :: _ as rest) ->
+        let f =
+          match guard_of nf.field_typ with Some g -> add_guard g f | None -> f
+        in
+        f :: go rest
+    | fs -> fs
+  in
+  go fields
+
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
   let name = escape_3d s.name in
   let where, fields = lower_where_to_field_constraint s.where s.fields in
+  let fields = guard_subtraction_sizes fields in
   Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";

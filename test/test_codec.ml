@@ -406,6 +406,30 @@ let test_array_byte_array_projection () =
     "single byte-size on the array field" true
     (contains ~sub:"UINT8 addrs[:byte-size (3 * 4)]" out)
 
+(* A [rest_bytes] tail projects to [byte-size (total - sizeof(this))]. EverParse
+   cannot prove that subtraction non-underflowing on its own, so the projection
+   emits the guard [total >= sizeof(this)] as a refinement on the preceding
+   scalar field, which discharges it. Without the guard the schema fails
+   EverParse verification ("cannot verify u32 subtraction"). *)
+let rest_bytes_codec =
+  let total = Param.input "msglen" uint16be in
+  Codec.v "RestProj"
+    (fun h t -> (h, t))
+    Codec.
+      [
+        (Field.v "hdr" uint8 $ fun (h, _) -> h);
+        (Field.v "rest" (rest_bytes total) $ fun (_, t) -> t);
+      ]
+
+let test_rest_bytes_projection_guard () =
+  let out = render_3d rest_bytes_codec in
+  Alcotest.(check bool)
+    "rest field is sized by the subtraction" true
+    (contains ~sub:"rest[:byte-size (msglen - sizeof (this))]" out);
+  Alcotest.(check bool)
+    "preceding field guards the subtraction" true
+    (contains ~sub:"msglen >= sizeof (this)" out)
+
 (* A bitfield has no standalone element form, so [array] / [Field.repeat] over
    one is rejected at construction rather than crashing at decode. *)
 let raises_invalid f =
@@ -4814,6 +4838,8 @@ let suite =
         test_array_byte_array_element;
       Alcotest.test_case "array: byte_array element projection" `Quick
         test_array_byte_array_projection;
+      Alcotest.test_case "rest_bytes projection guard" `Quick
+        test_rest_bytes_projection_guard;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array: record element roundtrip" `Quick

@@ -97,6 +97,12 @@
 
 ### Fixed
 
+- `Wire.rest_bytes` now generates a verified EverParse validator. Its
+  `total - sizeof(this)` byte-size failed EverParse verification ("cannot verify
+  u32 subtraction"), so any codec with a `rest_bytes` field failed schema
+  generation regardless of width. The projection now emits a `total >=
+  sizeof(this)` guard on the preceding field, which discharges the subtraction
+  (#117, @samoht)
 - `Wire.array` / `Wire.array_seq` / `Field.repeat` / `Field.repeat_seq` over a
   sub-codec built only from byte-span fields (`byte_array`, `byte_slice`, a
   varint) now raise `Invalid_argument` at construction. EverParse projects such

@@ -39,10 +39,7 @@ let extract_names =
     "optional(uint8)";
     "optional_or(uint8)";
     "record";
-    (* [rest_bytes] sized by a [Param.input] minus a sizeof projects to a u32
-       subtraction EverParse cannot prove non-underflowing (Error 19). That is a
-       separate projection-soundness finding, not exercised here; it stays in the
-       pp pass above. *)
+    "rest_bytes";
   ]
 
 (* EverParse derives the module name from the .3d filename and requires it to
