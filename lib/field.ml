@@ -69,10 +69,13 @@ let rec is_repeat_case_body : type a. a Types.typ -> bool =
    string, or a self-bounded sub-codec / casetype. [Map] / [Where] / [Enum]
    are transparent wrappers, so look through them. A casetype is repeatable
    only when every case body is itself decodable as a repeat element
-   ([is_repeat_case_body]). Everything else (a sub-byte [bits] field, a refined
-   or at-most byte span whose per-element validation the byte-budget loop does
-   not run, greedy [all_zeros], a nested [array] / [nested]) has no clean
-   per-element 3D projection. *)
+   ([is_repeat_case_body]). A sub-codec must also be [nz] (have a fixed-size
+   field): EverParse projects [repeat] as a byte-budget list of the codec's
+   named struct, and a list over a possibly-empty element does not extract.
+   Everything else (a sub-byte [bits] field, a refined or at-most byte span
+   whose per-element validation the byte-budget loop does not run, greedy
+   [all_zeros], a nested [array] / [nested]) has no clean per-element 3D
+   projection. *)
 let rec is_repeat_element : type a. a Types.typ -> bool =
  fun typ ->
   let open Types in
@@ -81,7 +84,8 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Unit | Zeroterm ->
       true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
-  | Codec { codec_struct; _ } -> not (codec_ends_greedy codec_struct)
+  | Codec { codec_struct; _ } ->
+      (not (codec_ends_greedy codec_struct)) && Types.struct_nz codec_struct
   | Casetype { cases; _ } ->
       List.for_all
         (fun (Case_branch { cb_inner; _ }) -> is_repeat_case_body cb_inner)

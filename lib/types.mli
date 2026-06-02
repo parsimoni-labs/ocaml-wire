@@ -750,6 +750,20 @@ val is_greedy : 'a typ -> bool
     transparent wrappers). Such a field is only valid as the last field of a
     struct or codec. *)
 
+val nz : 'a typ -> bool
+(** Whether the type's parser always consumes a positive minimum number of bytes
+    (EverParse's [nz] parser-kind index). [false] for a byte span, a
+    {!val-nested} region, an optional, or an all-bytes / all-zeros tail: their
+    parser may consume zero bytes regardless of any positive constant size. A
+    struct/codec is [nz] iff one of its fields is; a casetype iff its tag or
+    every case body is. EverParse's byte-budget array ([T_nlist]) rejects a
+    non-[nz] element, so a sub-codec must be [nz] to be an {!val-array} /
+    {!val-repeat} element. *)
+
+val struct_nz : struct_ -> bool
+(** [struct_nz s] is [true] iff some field of [s] is {!nz}, i.e. the struct's
+    parser has a positive minimum size. *)
+
 val size_of_typ_value : 'a typ -> 'a -> int
 (** [size_of_typ_value typ v] is the encoded byte size of [v] under [typ],
     computed from the value rather than from a buffer. Falls back to [0] for
