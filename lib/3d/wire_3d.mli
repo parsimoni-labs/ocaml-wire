@@ -61,12 +61,18 @@ val run_everparse :
 
     Requires [3d.exe] in PATH. *)
 
-val parse_3d : outdir:string -> string -> (unit, string) result
-(** [parse_3d ~outdir file] runs [3d.exe] (without [--batch]) on a single [.3d]
-    file in [outdir]. Returns [Ok ()] when 3D accepts the file, or
-    [Error stderr] with the captured error message otherwise. Faster than
-    {!run_everparse} -- it stops after the 3D type-checker, before F* and
-    KaRaMeL. Intended for projection coverage tests.
+val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
+(** [parse_3d ~outdir file] runs [3d.exe] on a single [.3d] file in [outdir].
+    Returns [Ok ()] when 3D accepts the file, or [Error stderr] with the
+    captured error message otherwise.
+
+    With [~batch:false] (the default) it stops after the 3D type-checker, before
+    F* and KaRaMeL: fast, but it does not catch kind errors that only fail F*
+    verification (e.g. a list over a possibly-empty element). With [~batch:true]
+    it runs the full [--batch] verification (F* and C extraction), catching
+    those, and discarding the generated C. Unlike {!run_everparse} it does no
+    endianness-header copy, so it works on a bare output directory. Intended for
+    projection coverage tests.
 
     Requires [3d.exe] in PATH. *)
 

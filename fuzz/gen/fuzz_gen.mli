@@ -43,6 +43,29 @@ val validate_cases : string -> 'a t -> Alcobar.test_case list
     pass; random and adversarial inputs may pass or fail but must not crash.
     Threads the env via {!Wire.Codec.validate}'s [?env] when [g] needs one. *)
 
+type packed =
+  | Pack : 'a t -> packed
+      (** A gen with its value type hidden, for uniform iteration over
+          {!registry}. *)
+
+val codec : 'a t -> 'a Wire.Codec.t
+(** [codec g] is the codec [g] generates for. *)
+
+val registry : (string * packed) list
+(** The canonical curated gens, one per combinator family. Every suite drives
+    off this list so a generated codec is exercised on both the OCaml round-trip
+    path ({!test_cases}) and the 3D projection path ({!everparse_cases}) from
+    one source. *)
+
+val everparse_cases : string -> 'a t -> Alcobar.test_case list
+(** [everparse_cases label g] projects [g]'s codec to a 3D schema and
+    pretty-prints it, asserting neither raises. Covers the projection and
+    code-generation path without invoking [3d.exe]. *)
+
+val everparse_nested_cases : string -> int -> Alcobar.test_case list
+(** [everparse_nested_cases label depth] is {!everparse_cases} over a freshly
+    generated nested composition per sample (cf. {!nested_cases}). *)
+
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
     byte span is sized by a cross-field reference to the preceding length field,
