@@ -104,6 +104,11 @@
   validator rejects, so the codec previously built but failed schema
   generation. A sub-codec with at least one fixed-size field is accepted as
   before (#115, @samoht)
+- `Wire.array` / `Wire.array_seq` over a float, a signed integer, a `uint63`, or
+  a `Wire.where` / `Wire.map` wrapping a fixed byte span no longer crashes 3D
+  projection with an assertion failure. Such an array built and round-tripped
+  but the projector could not size its element, so generating a schema raised.
+  All fixed-width scalars and wrapped byte spans now project (#116, @samoht)
 - A greedy field (`all_bytes` / `all_zeros`) reads the rest of the buffer, so it
   is now rejected with `Invalid_argument` anywhere it is not the final field: a
   non-last field of a codec, a `Field.repeat` / `Wire.array` element (or a

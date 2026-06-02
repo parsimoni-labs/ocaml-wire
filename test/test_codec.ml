@@ -692,6 +692,50 @@ let test_array_repeat_reject_non_nz_codec () =
     "repeat over a codec with a fixed-size field allowed" false
     (repeat_rejects (codec scalar_bearing_codec))
 
+let projects c = match render_3d c with _ -> true | exception _ -> false
+let arr_field elem = Codec.v "Arr" Fun.id Codec.[ Field.v "x" elem $ Fun.id ]
+
+(* An [array] over a float, signed integer, or [uint63] element used to build
+   and round-trip but crash 3D projection with [assert false]: [inner_wire_size]
+   sized only the unsigned [uint8/16/32/64] and bitfields, so the projector
+   could not size the element. All fixed-width scalars now project. *)
+let test_array_scalar_element_projects () =
+  let yes name c =
+    Alcotest.(check bool) (name ^ " array projects") true (projects c)
+  in
+  yes "float64be" (arr_field (array ~len:(int 2) float64be));
+  yes "float32be" (arr_field (array ~len:(int 2) float32be));
+  yes "int8" (arr_field (array ~len:(int 2) int8));
+  yes "int16be" (arr_field (array ~len:(int 2) int16be));
+  yes "int32be" (arr_field (array ~len:(int 2) int32be));
+  yes "int64be" (arr_field (array ~len:(int 2) int64be));
+  yes "uint63be" (arr_field (array ~len:(int 2) uint63be));
+  (* and it still round-trips *)
+  let c = arr_field (array ~len:(int 2) float64be) in
+  let v = [ 1.5; -2.25 ] in
+  let buf = Bytes.create (Codec.size_of_value c v) in
+  Codec.encode c v buf 0;
+  match Codec.decode c buf 0 with
+  | Ok d -> Alcotest.(check (list (float 0.0))) "float array" v d
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+
+(* An [array] over a [where] / [map] wrapping a byte span used to crash 3D
+   projection with [assert false]: [is_array_element] looks through the
+   transparent wrapper to accept it, but [inner_wire_size_expr] did not recurse
+   through the wrapper to find the span's size. *)
+let test_array_wrapped_byte_span_projects () =
+  Alcotest.(check bool)
+    "array over where(byte_slice) projects" true
+    (projects
+       (arr_field
+          (array ~len:(int 2) (where Expr.true_ (byte_slice ~size:(int 4))))));
+  Alcotest.(check bool)
+    "array over map(byte_array) projects" true
+    (projects
+       (arr_field
+          (array ~len:(int 2)
+             (map ~decode:Fun.id ~encode:Fun.id (byte_array ~size:(int 4))))))
+
 (* A bitfield has no standalone wire form, so it cannot be an [optional] inner
    any more than an [array] / [repeat] / [nested] element. *)
 let test_optional_reject_bitfield () =
@@ -4788,6 +4832,10 @@ let suite =
         test_array_reject_nonprojectable_element;
       Alcotest.test_case "array/repeat reject byte-span-only sub-codec" `Quick
         test_array_repeat_reject_non_nz_codec;
+      Alcotest.test_case "array over scalar element projects" `Quick
+        test_array_scalar_element_projects;
+      Alcotest.test_case "array over wrapped byte span projects" `Quick
+        test_array_wrapped_byte_span_projects;
       Alcotest.test_case "optional rejects unprojectable inner" `Quick
         test_optional_reject_unprojectable;
       Alcotest.test_case "optional rejects bitfield inner" `Quick

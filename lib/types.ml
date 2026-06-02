@@ -1398,10 +1398,10 @@ type field_suffix =
   | Zeroterm_at_most of int expr
 
 let rec inner_wire_size : type a. a typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | Uint32 _ -> Some 4
-  | Uint64 _ -> Some 8
+  | Uint8 | Int8 -> Some 1
+  | Uint16 _ | Int16 _ -> Some 2
+  | Uint32 _ | Int32 _ | Float32 _ -> Some 4
+  | Uint63 _ | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | Bits { base = BF_U8; _ } -> Some 1
   | Bits { base = BF_U16 _; _ } -> Some 2
   | Bits { base = BF_U32 _; _ } -> Some 4
@@ -1429,6 +1429,14 @@ let rec inner_wire_size_expr : type a. a typ -> int expr option = function
       | Some s -> Some (Mul (len, s))
       | None -> None)
   | Apply { typ; _ } -> inner_wire_size_expr typ
+  (* Transparent wrappers carry the inner's wire size, including the byte-span
+     family that [inner_wire_size] does not size. Without this an [array] over a
+     [where] / [map] / [enum] of a byte span builds (the element passes
+     [is_array_element], which looks through wrappers) but has no projectable
+     size. *)
+  | Where { inner; _ } -> inner_wire_size_expr inner
+  | Map { inner; _ } -> inner_wire_size_expr inner
+  | Enum { base; _ } -> inner_wire_size_expr base
   | t -> ( match inner_wire_size t with Some n -> Some (Int n) | None -> None)
 
 (* Strip transparent wrappers to see whether a byte-budget list element renders
