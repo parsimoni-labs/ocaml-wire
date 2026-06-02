@@ -43,3 +43,60 @@ jobs:
       - run: opam install ocamlformat.0.29.0
       - run: opam exec -- dune fmt 2>/dev/null || true
       - run: git diff --exit-code
+
+  # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
+  # validation) and fuzz/3d/ fuzzes [wire_3d] (the EverParse / 3D projection),
+  # mirroring the lib/ layout. The [afl] profile (dune-workspace) instruments
+  # native code with AFL coverage, and each dir's [fuzz] alias seeds its corpus
+  # and runs afl-fuzz for a fixed wall-clock budget. The job then fails if
+  # afl-fuzz found any crashing input in either fuzzer.
+  fuzz-afl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+          dune-version: '3.21'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install afl-fuzz
+        run: sudo apt-get update && sudo apt-get install -y afl++
+
+      - name: Fuzz (seed corpus then afl-fuzz, via the fuzz aliases)
+        run: |
+          sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
+          export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
+          opam exec -- dune build --profile afl @fuzz/fuzz
+
+      - name: Fail on crashes
+        run: |
+          fail=0
+          for d in fuzz fuzz/3d; do
+            out=_build/default/$d/_fuzz
+            crashes=$(find "$out" -path '*/crashes/id:*' 2>/dev/null || true)
+            if [ -n "$crashes" ]; then
+              echo "::error::afl-fuzz found crashing inputs in $d/"
+              for f in $crashes; do
+                echo "--- replaying $f ---"
+                _build/default/$d/fuzz.exe "$f" || true
+              done
+              fail=1
+            fi
+          done
+          if [ "$fail" = 0 ]; then echo "No crashes found."; else exit 1; fi
+
+      # afl's output filenames contain ':' (e.g. id:000000,...), which
+      # upload-artifact rejects, so tar the findings first.
+      - name: Package findings
+        if: failure()
+        run: tar czf afl-findings.tar.gz -C _build/default fuzz/_fuzz fuzz/3d/_fuzz || true
+
+      - name: Upload findings on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-findings
+          path: afl-findings.tar.gz
