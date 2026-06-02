@@ -157,6 +157,13 @@ val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int 
 val name : 'r t -> string
 (** [name c] returns the codec's name. *)
 
+val rename : string -> 'r t -> 'r t
+(** [rename n c] is [c] with its name set to [n]. The name is metadata: it only
+    determines the generated 3D struct name (via {!Everparse.struct_of_codec}),
+    not the wire encoding, so renaming leaves encode/decode and all field
+    constraints unchanged. Use it to give a generically built codec a unique,
+    meaningful name for projection or code generation. *)
+
 val field_readers : 'r t -> (string * (bytes -> int -> int)) list
 (** [field_readers c] returns the int-valued field readers of [c], indexed by
     field name. Used for cross-codec name resolution when [c] is embedded as a

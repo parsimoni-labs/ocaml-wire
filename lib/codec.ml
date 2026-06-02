@@ -3150,6 +3150,7 @@ let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
   Staged.stage (build_staged_writer f.typ access)
 
 let name (t : _ t) = t.name
+let rename new_name (t : _ t) = { t with name = new_name }
 let field_readers (t : _ t) = t.field_readers
 let pp ppf (t : _ t) = Fmt.string ppf t.name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name

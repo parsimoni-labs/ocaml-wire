@@ -827,6 +827,13 @@ module Codec : sig
             [ (f_version $ fun p -> p.version); (f_length $ fun p -> p.length) ]
       ]} *)
 
+  val rename : string -> 'r t -> 'r t
+  (** [rename n c] is [c] with its name set to [n]. The name only determines the
+      generated 3D struct name, not the wire encoding, so renaming leaves
+      encode/decode and all field constraints unchanged. Use it to give a
+      generically built codec a unique, meaningful name for projection or code
+      generation. *)
+
   val wire_size : 'r t -> int
   (** Fixed wire size of the codec.
 
