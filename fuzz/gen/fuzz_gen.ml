@@ -1350,24 +1350,21 @@ let combine_env_strategies (strategies : env_strategy option list) :
       in
       Some { positive; fuzz }
 
+(* Convert one composer case to a Wire casetype branch. The composer's default
+   branch ignores the matched tag and always re-encodes the fixed [t], so adapt
+   to the tag-aware API. *)
+let casetype_case_def (Case c) =
+  match (c.index, c.default_tag) with
+  | Some i, _ ->
+      Wire.case ~index:i c.inner.typ ~inject:c.inject ~project:c.project
+  | None, Some t ->
+      Wire.default c.inner.typ
+        ~inject:(fun _tag w -> c.inject w)
+        ~project:(fun a -> Option.map (fun w -> (t, w)) (c.project a))
+  | None, None -> invalid_arg "casetype_u8: case must supply ~index or ~tag"
+
 let casetype_u8 name cases =
-  let case_defs =
-    List.map
-      (fun (Case c) ->
-        match (c.index, c.default_tag) with
-        | Some i, _ ->
-            Wire.case ~index:i c.inner.typ ~inject:c.inject ~project:c.project
-        | None, Some t ->
-            (* The composer's default branch ignores the matched tag and always
-               re-encodes the fixed [t], so adapt to the tag-aware API. *)
-            Wire.default c.inner.typ
-              ~inject:(fun _tag w -> c.inject w)
-              ~project:(fun a -> Option.map (fun w -> (t, w)) (c.project a))
-        | None, None ->
-            invalid_arg "casetype_u8: case must supply ~index or ~tag")
-      cases
-  in
-  let typ = Wire.casetype name Wire.uint8 case_defs in
+  let typ = Wire.casetype name Wire.uint8 (List.map casetype_case_def cases) in
   let codec = codec_of_typ typ in
   let n = max 1 (List.length cases) in
   let positive =
@@ -2166,31 +2163,59 @@ let registry_casetype =
         ~project:(function `Other v -> Some v | _ -> None);
     ]
 
-let registry : (string * packed) list =
+let scalar_gens =
   [
     ("uint8", Pack uint8);
     ("uint16", Pack uint16);
     ("uint16be", Pack uint16be);
+    ("uint32", Pack uint32);
     ("uint32be", Pack uint32be);
+    ("uint63", Pack uint63);
     ("uint63be", Pack uint63be);
+    ("uint64", Pack uint64);
     ("uint64be", Pack uint64be);
     ("int8", Pack int8);
+    ("int16", Pack int16);
+    ("int16be", Pack int16be);
+    ("int32", Pack int32);
     ("int32be", Pack int32be);
+    ("int64", Pack int64);
     ("int64be", Pack int64be);
+    ("float32", Pack float32);
     ("float32be", Pack float32be);
+    ("float64", Pack float64);
     ("float64be", Pack float64be);
     ("empty", Pack empty);
+    ("uint_var(3,big)", Pack (uint_var ~endian:Wire.Big 3));
+    ("uint_var(7,big)", Pack (uint_var ~endian:Wire.Big 7));
+    ("bit(uint8)", Pack (bit uint8));
+    ("bit(uint16)", Pack (bit uint16));
+  ]
+
+let byte_gens =
+  [
     ("byte_array(5)", Pack (byte_array 5));
     ("byte_slice(3)", Pack (byte_slice 3));
     ( "byte_array_where(4)",
       Pack
         (byte_array_where 4 ~per_byte:(fun b ->
              Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e))) );
-    ("uint_var(3,big)", Pack (uint_var ~endian:Wire.Big 3));
+    ("all_bytes", Pack all_bytes);
+    ("all_zeros", Pack all_zeros);
     ("zeroterm", Pack zeroterm);
     ("zeroterm_at_most(8)", Pack (zeroterm_at_most 8));
+  ]
+
+let bits_gens =
+  [
     ("bits(3,U8)", Pack (bits ~width:3 Wire.U8));
     ("bits(10,U16be)", Pack (bits ~width:10 Wire.U16be));
+    ("bits(4,U16be)", Pack (bits ~width:4 Wire.U16be));
+    ("bits(4,U32,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U32));
+  ]
+
+let wrapper_gens =
+  [
     ( "map(uint8)",
       Pack (map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) uint8) );
     ("variants", Pack (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ]));
@@ -2199,23 +2224,43 @@ let registry : (string * packed) list =
     ("where(uint8)", Pack (where uint8));
     ("lookup", Pack (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8));
     ("optional(uint8)", Pack (optional uint8));
+    ("optional(false)", Pack (optional ~present:false uint8));
     ("optional_or(uint8)", Pack (optional_or ~default:0 uint8));
+    ("optional_or(false)", Pack (optional_or ~present:false ~default:42 uint8));
+    ("optional_dynamic", Pack optional_dynamic);
+    ("optional_or_dynamic", Pack optional_or_dynamic);
     ("nested(4,uint16be)", Pack (nested 4 uint16be));
     ("nested_at_most(4,uint16be)", Pack (nested_at_most 4 uint16be));
+  ]
+
+let composite_gens =
+  [
     ("array(3,uint16be)", Pack (array 3 uint16be));
     ("array_seq(3,uint16be)", Pack (array_seq 3 uint16be));
+    ("array(2,record)", Pack (array 2 registry_record));
     ("repeat(8,uint8)", Pack (repeat ~bytes:8 uint8));
     ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
-    ("array(2,record)", Pack (array 2 registry_record));
     ("record", Pack registry_record);
     ("casetype_u8", Pack registry_casetype);
+    ("field_anon", Pack field_anon);
+  ]
+
+let param_action_gens =
+  [
     ("action", Pack action);
+    ("action_on_act", Pack action_on_act);
     ("expr_ops", Pack expr_ops);
     ("sizeof", Pack sizeof);
     ("codec_where", Pack codec_where);
     ("rest_bytes", Pack rest_bytes);
     ("param_input", Pack param_input);
+    ("finite_float64", Pack finite_float64);
+    ("nan_float64", Pack nan_float64);
   ]
+
+let registry : (string * packed) list =
+  scalar_gens @ byte_gens @ bits_gens @ wrapper_gens @ composite_gens
+  @ param_action_gens
 
 (* Project a gen's codec to a 3D schema and pretty-print it: covers the whole
    projection + code-generation path without invoking 3d.exe. A projection that
@@ -2252,5 +2297,79 @@ let everparse_nested_cases label depth =
     Alcobar.test_case
       (label ^ " projects+prints")
       Alcobar.[ draw ]
+      (fun run -> run ());
+  ]
+
+(* Per sample, pick a random registry gen and round-trip it through the
+   alternate entry points, so they cover the whole registry over many samples
+   rather than a pinned subset. [of_string] / [of_reader] skip codecs that bind
+   a [Param.env], which those entry points cannot thread. *)
+let registry_pick =
+  Alcobar.choose (List.map (fun (_, p) -> Alcobar.const p) registry)
+
+let ep_direct label =
+  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+      Alcobar.map
+        Alcobar.[ g.positive ]
+        (fun (value, bs) () ->
+          if Option.is_none g.env then begin
+            let s = string_of_bytes bs in
+            (match Wire.of_string g.typ s with
+            | Ok d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_string decode mismatch" label
+            | Error _ -> Alcobar.failf "%s of_string decode failed" label);
+            if Wire.to_string g.typ value <> s then
+              Alcobar.failf "%s of_string reencode mismatch" label
+          end))
+
+let ep_streaming label =
+  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+      Alcobar.map
+        Alcobar.[ g.positive ]
+        (fun (value, bs) () ->
+          if Option.is_none g.env then begin
+            let reader = Bytesrw.Bytes.Reader.of_bytes bs in
+            (match Wire.of_reader g.typ reader with
+            | Ok d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_reader decode mismatch" label
+            | Error _ -> Alcobar.failf "%s of_reader decode failed" label);
+            let buf = Buffer.create (Bytes.length bs) in
+            let w = Bytesrw.Bytes.Writer.of_buffer buf in
+            Wire.to_writer g.typ value w;
+            Bytesrw.Bytes.Writer.write_eod w;
+            if Buffer.contents buf <> string_of_bytes bs then
+              Alcobar.failf "%s of_reader reencode mismatch" label
+          end))
+
+let ep_validate label =
+  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+      Alcobar.map
+        Alcobar.[ g.positive ]
+        (fun (_value, bs) () ->
+          let env = positive_env g in
+          match
+            try
+              Wire.Codec.validate ?env g.codec bs 0;
+              `Ok
+            with
+            | Wire.Validation_error _ | Wire.Parse_error _ -> `Reject
+            | Invalid_argument _ -> `Crash
+          with
+          | `Ok -> ()
+          | `Reject -> Alcobar.failf "%s validate rejected a positive" label
+          | `Crash -> Alcobar.failf "%s validate crashed on a positive" label))
+
+let entry_point_cases label =
+  [
+    Alcobar.test_case (label ^ " of_string")
+      Alcobar.[ ep_direct label ]
+      (fun run -> run ());
+    Alcobar.test_case (label ^ " of_reader")
+      Alcobar.[ ep_streaming label ]
+      (fun run -> run ());
+    Alcobar.test_case (label ^ " validate")
+      Alcobar.[ ep_validate label ]
       (fun run -> run ());
   ]

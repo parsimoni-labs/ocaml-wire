@@ -66,6 +66,13 @@ val everparse_nested_cases : string -> int -> Alcobar.test_case list
 (** [everparse_nested_cases label depth] is {!everparse_cases} over a freshly
     generated nested composition per sample (cf. {!nested_cases}). *)
 
+val entry_point_cases : string -> Alcobar.test_case list
+(** [entry_point_cases label] round-trips the alternate entry points
+    ([of_string] / [of_reader] / [validate]) over a {!registry} gen picked at
+    random each sample, so they cover the whole registry instead of a pinned
+    subset. The [of_string] / [of_reader] checks skip codecs that bind a
+    [Param.env]. *)
+
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
     byte span is sized by a cross-field reference to the preceding length field,
