@@ -101,6 +101,12 @@
 
 ### Fixed
 
+- A `Wire.enum` field now projects its membership to 3D, so the
+  EverParse-generated C validator rejects values outside the named cases,
+  exactly as `Codec.decode` does (raising `Invalid_enum`). The field previously
+  projected to its bare base integer with no refinement, so the verified C
+  accepted out-of-range values the OCaml decoder rejects, including for an enum
+  nested inside a sub-codec or record (#131, @samoht)
 - A `Wire.lookup` field now projects its index bound to 3D, so the
   EverParse-generated C validator rejects out-of-range indices exactly as the
   OCaml decoder does. Previously the projection emitted the underlying integer

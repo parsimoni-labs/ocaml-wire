@@ -157,6 +157,35 @@ let test_3d_array_enum_element_decl () =
     "array element references the enum" true
     (contains ~sub:"Color v[" output)
 
+let test_3d_enum_membership () =
+  (* An enum field must enforce membership in the verified C, on a scalar field
+     and inside a sub-codec, or the validator accepts values that Codec.decode
+     rejects with Invalid_enum. *)
+  let e = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ] uint8 in
+  let scalar =
+    Codec.v "ES" (fun v -> v) Codec.[ (Field.v "v" e $ fun v -> v) ]
+  in
+  Alcotest.(check bool)
+    "scalar enum bounds its value" true
+    (contains ~sub:"(v == 1)" (to_3d (Everparse.schema scalar).module_));
+  let rec_ =
+    Codec.v "Rec"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "e" e $ fun (a, _) -> a);
+          (Field.v "u" uint64be $ fun (_, b) -> b);
+        ]
+  in
+  let arr =
+    Codec.v "ArrRec"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (array ~len:(int 4) (codec rec_)) $ fun v -> v) ]
+  in
+  Alcotest.(check bool)
+    "enum nested in a sub-codec bounds its value" true
+    (contains ~sub:"(e == 1)" (to_3d (Everparse.schema arr).module_))
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -666,4 +695,6 @@ let suite =
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
+      Alcotest.test_case "3d: enum membership refinement" `Quick
+        test_3d_enum_membership;
     ] )
