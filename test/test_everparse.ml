@@ -186,6 +186,23 @@ let test_3d_enum_membership () =
     "enum nested in a sub-codec bounds its value" true
     (contains ~sub:"(e == 1)" (to_3d (Everparse.schema arr).module_))
 
+let test_3d_nested_byte_array_where () =
+  (* A byte_array_where inside a nested region needs its synthesised refined-byte
+     typedef emitted, before the wrapper that references it, or the schema names
+     an undeclared type and EverParse rejects it. *)
+  let inner =
+    byte_array_where ~size:(int 4) ~per_byte:(fun b -> Expr.(b < int 10))
+  in
+  let c =
+    Codec.v "NBW"
+      (fun v -> v)
+      Codec.[ (Field.v "n" (nested ~size:(int 4) inner) $ fun v -> v) ]
+  in
+  let output = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "refined-byte typedef is defined, not just referenced" true
+    (contains ~sub:"} _RefByte_" output)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -697,4 +714,6 @@ let suite =
         test_3d_array_enum_element_decl;
       Alcotest.test_case "3d: enum membership refinement" `Quick
         test_3d_enum_membership;
+      Alcotest.test_case "3d: nested byte_array_where refined typedef" `Quick
+        test_3d_nested_byte_array_where;
     ] )

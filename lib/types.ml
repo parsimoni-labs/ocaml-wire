@@ -1050,6 +1050,17 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
         ];
     }
 
+(* The refined-byte element a wrapper struct holds, if any, seen through the
+   transparent [map] / [where] wrappers. Its synthesised [_RefByte_*] typedef
+   must be emitted before the wrapper that references it, or the wrapper names an
+   undeclared type (a [byte_array_where] inside a [nested] region). *)
+let rec wrapper_refined_byte : type a. a typ -> (string * bool expr) option =
+  function
+  | Byte_array_where { elt_var; cond; _ } -> Some (elt_var, cond)
+  | Map { inner; _ } -> wrapper_refined_byte inner
+  | Where { inner; _ } -> wrapper_refined_byte inner
+  | _ -> None
+
 let rec collect_casetype_decls : type a.
     (string, unit) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
  fun seen acc typ ->
@@ -1057,10 +1068,21 @@ let rec collect_casetype_decls : type a.
    fun t -> collect_casetype_decls seen acc t
   in
   (* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
-     struct when it has no usable bare token; emit it once, deduped by name. *)
+     struct when it has no usable bare token; emit it once, deduped by name. A
+     refined-byte element inside the wrapper needs its own typedef emitted first. *)
   let emit_wrapper name elem =
     if not (Hashtbl.mem seen name) then begin
       Hashtbl.add seen name ();
+      (match wrapper_refined_byte elem with
+      | Some (elt_var, cond) ->
+          let synth = synth_name_of_elt_var elt_var in
+          if not (Hashtbl.mem seen synth) then begin
+            Hashtbl.add seen synth ();
+            acc :=
+              typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ])
+              :: !acc
+          end
+      | None -> ());
       acc := typedef (struct_ name [ field "v" elem ]) :: !acc
     end
   in

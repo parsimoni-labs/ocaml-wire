@@ -107,6 +107,12 @@
   projected to its bare base integer with no refinement, so the verified C
   accepted out-of-range values the OCaml decoder rejects, including for an enum
   nested inside a sub-codec or record (#131, @samoht)
+- A `Wire.byte_array_where` inside a `Wire.nested` / `nested_at_most` region now
+  generates a verified EverParse validator. Its synthesised refined-byte typedef
+  was emitted only for a top-level field, so the nested region referenced an
+  undeclared type and EverParse rejected the schema. The typedef is now emitted
+  (before the wrapper that references it) wherever the refinement is nested
+  (#132, @samoht)
 - A `Wire.lookup` field now projects its index bound to 3D, so the
   EverParse-generated C validator rejects out-of-range indices exactly as the
   OCaml decoder does. Previously the projection emitted the underlying integer
