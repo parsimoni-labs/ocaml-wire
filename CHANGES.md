@@ -126,6 +126,11 @@
   enumeration declaration was only emitted for scalar fields, so the schema
   referenced an undeclared type and EverParse rejected it, leaving the codec
   with no verified C parser at all (#128, @samoht)
+- Decoding a `Wire.enum` through the `Codec` API now rejects a value that is not
+  one of the named cases (raising `Invalid_enum`), on a scalar field and on
+  every array or repeat element, matching the EverParse-generated validator and
+  the `Wire.of_string` path. The `Codec` decoder previously stripped the enum to
+  its base integer and accepted any value (#129, @samoht)
 - Decoding no longer crashes with `Invalid_argument` on adversarial input where
   a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
   the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails
