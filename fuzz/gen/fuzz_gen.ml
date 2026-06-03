@@ -1778,6 +1778,51 @@ let pair_of (Any a) (Any b) =
       label = "(" ^ a.label ^ "," ^ b.label ^ ")";
     }
 
+(* Flat records of arity 3 and 4: like [pair_of] but for more fields, so the
+   Boltzmann sampler can emit single-typedef records wider than a pair. Each
+   unpacks its [Any] elements and seals a flat [Codec.v] (no nesting, so the 3D
+   projection stays a single typedef). *)
+let rec3_of (Any a) (Any b) (Any c) =
+  let g =
+    Codec.v "R3"
+      ~equal:(fun (x1, y1, z1) (x2, y2, z2) ->
+        a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2)
+      (fun x y z -> (x, y, z))
+      Codec.
+        [
+          (a.g $ fun (x, _, _) -> x);
+          (b.g $ fun (_, y, _) -> y);
+          (c.g $ fun (_, _, z) -> z);
+        ]
+  in
+  Any
+    {
+      g;
+      size = add_size a.size (add_size b.size c.size);
+      label = Fmt.str "(%s,%s,%s)" a.label b.label c.label;
+    }
+
+let rec4_of (Any a) (Any b) (Any c) (Any d) =
+  let g =
+    Codec.v "R4"
+      ~equal:(fun (x1, y1, z1, w1) (x2, y2, z2, w2) ->
+        a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2 && d.g.equal w1 w2)
+      (fun x y z w -> (x, y, z, w))
+      Codec.
+        [
+          (a.g $ fun (x, _, _, _) -> x);
+          (b.g $ fun (_, y, _, _) -> y);
+          (c.g $ fun (_, _, z, _) -> z);
+          (d.g $ fun (_, _, _, w) -> w);
+        ]
+  in
+  Any
+    {
+      g;
+      size = add_size a.size (add_size b.size (add_size c.size d.size));
+      label = Fmt.str "(%s,%s,%s,%s)" a.label b.label c.label d.label;
+    }
+
 let casetype_of (Any a) (Any b) =
   let g =
     casetype_u8 "CT2"
@@ -2198,6 +2243,7 @@ let reject_cases label g =
 type packed = Pack : 'a t -> packed
 
 let codec g = g.codec
+let binds_env (Pack g) = Option.is_some g.env
 
 let registry_record =
   Codec.v "RegRecord" (fun a b -> (a, b)) Codec.[ uint8 $ fst; uint16be $ snd ]
@@ -2314,12 +2360,15 @@ let param_action_gens =
     ("nan_float64", Pack nan_float64);
   ]
 
-(* A registry label rendered as a unique EverParse CamelCase struct name:
-   maximal alphanumeric runs are capitalized and concatenated, e.g.
-   ["uint_var(3,big)"] becomes ["UintVar3Big"]. *)
+(* A registry label rendered as a unique EverParse struct name: the
+   alphanumeric characters with the first capitalized and the rest lowercased,
+   e.g. ["uint_var(3,big)"] becomes ["Uintvar3big"]. EverParse lowercases all
+   but the first character of a module name when it generates C, so keeping no
+   internal capitals makes the generated validator symbol match what the FFI
+   stubs reference. *)
 let camel_of_label label =
   let buf = Buffer.create (String.length label) in
-  let at_word_start = ref true in
+  let first = ref true in
   String.iter
     (fun c ->
       let alnum =
@@ -2329,10 +2378,9 @@ let camel_of_label label =
       in
       if alnum then begin
         Buffer.add_char buf
-          (if !at_word_start then Char.uppercase_ascii c else c);
-        at_word_start := false
-      end
-      else at_word_start := true)
+          (if !first then Char.uppercase_ascii c else Char.lowercase_ascii c);
+        first := false
+      end)
     label;
   let s = Buffer.contents buf in
   if s = "" then "Case" else s
@@ -2350,6 +2398,82 @@ let registry : (string * packed) list =
     (fun (label, p) -> (label, rename_case label p))
     (scalar_gens @ byte_gens @ bits_gens @ wrapper_gens @ composite_gens
    @ param_action_gens)
+
+(* {1 Boltzmann sampler over the projectable grammar}
+
+   A well-distributed random codec sampler. Rather than enumerate a handpicked
+   set, [sample] draws codecs whose shape follows a Boltzmann law: the arity of
+   a record is geometric (the Boltzmann distribution for a sequence, tuned to a
+   small expected size via [continue]), and each field is drawn uniformly from a
+   fixed leaf vocabulary. It stays in the single-typedef, fixed-size fragment
+   (flat records and homogeneous arrays of leaves) so the differential fuzzer
+   can compile every sample to a standalone C validator. Driven by a
+   [Random.State.t], so a [seed] reproduces the exact set: the differential's
+   generator and its runner both call [sample] with the same seed and agree on
+   the shapes. *)
+
+(* Single-typedef, fixed-size leaf vocabulary: each projects to one EverParse
+   field, so a flat record of them stays a single typedef. *)
+let sampler_leaves : any list =
+  [
+    Any { g = uint8; size = Some 1; label = "u8" };
+    Any { g = uint16; size = Some 2; label = "u16" };
+    Any { g = uint16be; size = Some 2; label = "u16be" };
+    Any { g = uint32; size = Some 4; label = "u32" };
+    Any { g = uint32be; size = Some 4; label = "u32be" };
+    Any { g = uint64be; size = Some 8; label = "u64be" };
+    Any { g = int8; size = Some 1; label = "i8" };
+    Any { g = int16be; size = Some 2; label = "i16be" };
+    Any { g = int32be; size = Some 4; label = "i32be" };
+    Any { g = float32be; size = Some 4; label = "f32be" };
+    Any { g = float64be; size = Some 8; label = "f64be" };
+    Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
+    Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
+    Any
+      {
+        g = enum "E" [ ("A", 1); ("B", 2); ("C", 3) ];
+        size = Some 1;
+        label = "enum";
+      };
+    Any
+      { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
+  ]
+
+(* Geometric arity in [1, max_arity]: keep adding a field with probability
+   [continue]. This is the Boltzmann law for a sequence, truncated. *)
+let sample_arity rng ~continue ~max_arity =
+  let rec go k =
+    if k >= max_arity || Random.State.float rng 1.0 >= continue then k
+    else go (k + 1)
+  in
+  go 1
+
+(* One Boltzmann-distributed projectable codec. A composition Wire refuses to
+   build (e.g. a bitfield array element) raises [Invalid_argument]; fall back to
+   a bare leaf so the sampler never crashes. *)
+let boltzmann_any rng : any =
+  let leaves = Array.of_list sampler_leaves in
+  let leaf () = leaves.(Random.State.int rng (Array.length leaves)) in
+  let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
+  try
+    if k = 1 then leaf ()
+    else if Random.State.bool rng then
+      match array_of (1 + Random.State.int rng 6) (leaf ()) with
+      | Some a -> a
+      | None -> leaf ()
+    else
+      match k with
+      | 2 -> pair_of (leaf ()) (leaf ())
+      | 3 -> rec3_of (leaf ()) (leaf ()) (leaf ())
+      | _ -> rec4_of (leaf ()) (leaf ()) (leaf ()) (leaf ())
+  with Invalid_argument _ -> leaf ()
+
+let sample ~seed ~count : (string * packed) list =
+  let rng = Random.State.make [| seed |] in
+  List.init count (fun i ->
+      let (Any a) = boltzmann_any rng in
+      let label = Fmt.str "smp%d_%s" i a.label in
+      (label, rename_case label (Pack a.g)))
 
 (* Project a gen's codec to a 3D schema and pretty-print it: covers the whole
    projection + code-generation path without invoking 3d.exe. A projection that
