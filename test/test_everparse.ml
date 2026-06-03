@@ -203,6 +203,30 @@ let test_3d_nested_byte_array_where () =
     "refined-byte typedef is defined, not just referenced" true
     (contains ~sub:"} _RefByte_" output)
 
+let test_3d_static_optional_transparent () =
+  (* A statically-present optional projects as its inner: a byte-span or
+     composite inner keeps its offset setter (passing the field value made
+     EverParse reject the schema), and a byte_array_where inner still emits its
+     refined typedef. *)
+  let opt inner =
+    Codec.v "Opt"
+      (fun v -> v)
+      Codec.[ (Field.optional "o" ~present:Expr.true_ inner $ fun v -> v) ]
+  in
+  let out_ba =
+    to_3d (Everparse.schema (opt (byte_array ~size:(int 4)))).module_
+  in
+  Alcotest.(check bool)
+    "byte-span optional uses an offset setter" true
+    (contains ~sub:"(UINT32) 0, (UINT32) 0" out_ba);
+  let baw =
+    byte_array_where ~size:(int 4) ~per_byte:(fun b -> Expr.(b < int 10))
+  in
+  let out_baw = to_3d (Everparse.schema (opt baw)).module_ in
+  Alcotest.(check bool)
+    "byte_array_where optional emits its refined typedef" true
+    (contains ~sub:"} _RefByte_" out_baw)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -716,4 +740,6 @@ let suite =
         test_3d_enum_membership;
       Alcotest.test_case "3d: nested byte_array_where refined typedef" `Quick
         test_3d_nested_byte_array_where;
+      Alcotest.test_case "3d: static optional transparent projection" `Quick
+        test_3d_static_optional_transparent;
     ] )

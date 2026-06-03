@@ -25,9 +25,15 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
       true
   | Types.All_bytes | Types.All_zeros -> true
   | Types.Zeroterm | Types.Zeroterm_at_most _ -> true
-  | Types.Optional { present = Types.Bool _; _ } -> false
+  (* A statically-present optional is transparent: it projects as its inner
+     (see [field_suffix]), so a byte-span / composite inner keeps its offset
+     callback. A statically-absent one is a zero-byte region. *)
+  | Types.Optional { present = Types.Bool true; inner } -> is_byte_field inner
+  | Types.Optional { present = Types.Bool false; _ } -> false
   | Types.Optional _ -> true
-  | Types.Optional_or { present = Types.Bool _; _ } -> false
+  | Types.Optional_or { present = Types.Bool true; inner; _ } ->
+      is_byte_field inner
+  | Types.Optional_or { present = Types.Bool false; _ } -> false
   | Types.Optional_or _ -> true
   | Types.Map { inner; _ } -> is_byte_field inner
   (* Casetype projects to a struct value, which is not "readable" in 3D
@@ -338,14 +344,22 @@ let collect_extern_setters schema_name ctx_struct u32 fields =
 let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
   (* The refined-byte element a field needs synthesised, if any: an explicit
      [byte_array_where], or an [array] / [repeat] whose 1-byte element carries a
-     lookup index bound (which projects the same way). *)
-  let synth_of (Types.Field f) =
-    match f.field_typ with
+     lookup index bound (which projects the same way). Look through the
+     transparent wrappers a field can put it under (a statically-present
+     [optional], [map] / [where]) so the typedef is still emitted. *)
+  let rec synth_of_typ : type a.
+      a Types.typ -> (string * bool Types.expr) option = function
     | Types.Byte_array_where { elt_var; cond; _ } -> Some (elt_var, cond)
     | Types.Array { elem; _ } -> Types.index_bound_elt elem
     | Types.Repeat { elem; _ } -> Types.index_bound_elt elem
+    | Types.Optional { present = Types.Bool true; inner } -> synth_of_typ inner
+    | Types.Optional_or { present = Types.Bool true; inner; _ } ->
+        synth_of_typ inner
+    | Types.Map { inner; _ } -> synth_of_typ inner
+    | Types.Where { inner; _ } -> synth_of_typ inner
     | _ -> None
   in
+  let synth_of (Types.Field f) = synth_of_typ f.field_typ in
   (* Equal index bounds share one synthesised typedef, so emit each name once. *)
   let seen = Hashtbl.create 8 in
   List.filter_map

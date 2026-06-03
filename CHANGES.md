@@ -24,8 +24,11 @@
   decode (#105, @samoht)
 - `Field.optional` and `Field.optional_or` now accept a variable-size inner,
   so an optional field can be a length-prefixed string or a whole sub-message,
-  not just a fixed-width value. Building such a codec previously raised
-  `Invalid_argument` (#88, @samoht)
+  not just a fixed-width value, and generate a verified EverParse validator.
+  Building such a codec previously raised `Invalid_argument`; afterwards a
+  statically-present optional over a byte-span, refined (`byte_array_where`), or
+  composite inner still projected to C that EverParse rejected, because the
+  optional was not treated as transparent in the projection (#88, #133, @samoht)
 - `Wire.zeroterm` and `Wire.zeroterm_at_most ~size` for NUL-terminated
   strings: the bytes up to a terminator, optionally bounded to a
   fixed-size region (#77, @samoht)
