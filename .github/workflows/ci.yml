@@ -158,3 +158,31 @@ jobs:
         with:
           name: afl-diff-findings
           path: afl-diff-findings.tar.gz
+
+  # Run the test suite with the EverParse toolchain installed so the 3d.exe
+  # projection checks actually execute: test/3d compiles and runs the generated
+  # C end to end, and fuzz/3d runs every covered schema through 3d.exe. Without
+  # 3d.exe both are skipped, so a shape that builds but does not project to a
+  # validator EverParse verifies (a composite-over-composite gap) would slip
+  # past the plain build job, which only string-checks the projection.
+  everparse-3d:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+          dune-version: '3.21'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install EverParse
+        run: |
+          mkdir -p "$HOME/.local"
+          url=https://github.com/project-everest/everparse/releases/download/v2026.02.25/everparse_v2026.02.25_Linux_x86_64.tar.gz
+          curl -sL "$url" | tar xz -C "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+
+      - name: Run tests with 3d.exe projection checks
+        run: opam exec -- dune runtest
