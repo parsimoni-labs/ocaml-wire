@@ -83,6 +83,30 @@ let test_pretty_print () =
     "contains UINT16BE" true
     (contains ~sub:"UINT16BE" output)
 
+let test_3d_uint63_projects_to_uint64 () =
+  (* 3D has no 63-bit type. uint63/uint63be must project to the 8-byte UINT64,
+     not an invalid UINT63 that EverParse rejects (leaving the codec with no
+     verified validator at all). *)
+  let c =
+    Codec.v "U63"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "a" uint63 $ fun (a, _) -> a);
+          (Field.v "b" uint63be $ fun (_, b) -> b);
+        ]
+  in
+  let output = to_3d (module_ [ typedef (Everparse.struct_of_codec c) ]) in
+  Alcotest.(check bool)
+    "no invalid UINT63" false
+    (contains ~sub:"UINT63" output);
+  Alcotest.(check bool)
+    "uint63 projects to UINT64" true
+    (contains ~sub:"UINT64 a" output);
+  Alcotest.(check bool)
+    "uint63be projects to UINT64BE" true
+    (contains ~sub:"UINT64BE b" output)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -586,4 +610,6 @@ let suite =
         test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
         test_3d_byte_array_where;
+      Alcotest.test_case "3d: uint63 projects to UINT64" `Quick
+        test_3d_uint63_projects_to_uint64;
     ] )
