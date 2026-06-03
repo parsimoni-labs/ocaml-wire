@@ -28,6 +28,11 @@ let nested_pp_cases =
    scalars project trivially, so they are left to the pp pass. *)
 let extract_names =
   [
+    (* uint63 is the one scalar that does not project trivially: it has no
+       native 3D type and must go through UINT64, so it gets a real EverParse
+       check rather than the pp pass. *)
+    "uint63";
+    "uint63be";
     "array(3,uint16be)";
     "array_seq(3,uint16be)";
     "array(2,record)";

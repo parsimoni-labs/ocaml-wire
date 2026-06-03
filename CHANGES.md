@@ -110,6 +110,11 @@
   its index bound to every element, not just to a scalar field. Previously the
   verified C validator accepted out-of-range indices in array or repeat elements
   that the OCaml decoder rejects (#126, @samoht)
+- A codec with a `Wire.uint63` or `Wire.uint63be` field now generates a
+  verified EverParse validator. It projected to an invalid `UINT63` type that
+  EverParse has no notion of, so schema generation failed and the codec silently
+  had no verified C parser at all. It now projects to the 8-byte `UINT64`, which
+  both decoders accept identically (#125, @samoht)
 - Decoding no longer crashes with `Invalid_argument` on adversarial input where
   a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
   the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails

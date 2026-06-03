@@ -1261,7 +1261,10 @@ and pp_typ : type a. a typ Fmt.t =
   | Uint8 -> Fmt.string ppf "UINT8"
   | Uint16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
   | Uint32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
-  | Uint63 e -> Fmt.pf ppf "UINT63%a" pp_endian e
+  (* 3D has no 63-bit type. Project to the 8-byte UINT64: both decoders then
+     accept every 8-byte input (the OCaml reader keeps the low 63 bits), so the
+     C validator never accepts more than the OCaml one. *)
+  | Uint63 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   | Uint64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   (* 3D has no native signed types: project to the same-width UINT*. The
      two's-complement reinterpretation lives in the OCaml decoder. *)
