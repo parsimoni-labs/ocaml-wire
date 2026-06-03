@@ -107,6 +107,37 @@ let test_3d_uint63_projects_to_uint64 () =
     "uint63be projects to UINT64BE" true
     (contains ~sub:"UINT64BE b" output)
 
+let test_3d_signed_float_setters () =
+  (* Signed-int and float fields must each route to a width-typed setter. They
+     used to fall through to the generic SetBytes, whose single value type could
+     not hold two scalar fields of different widths, so EverParse rejected any
+     record mixing widths (e.g. float32 then float64) and the codec got no
+     verified validator. *)
+  let c =
+    Codec.v "Mix"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (Field.v "a" float32be $ fun (a, _, _, _) -> a);
+          (Field.v "b" float64be $ fun (_, b, _, _) -> b);
+          (Field.v "c" int8 $ fun (_, _, c, _) -> c);
+          (Field.v "d" int32be $ fun (_, _, _, d) -> d);
+        ]
+  in
+  let output = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "float32be routes to SetU32BE" true
+    (contains ~sub:"SetU32BE" output);
+  Alcotest.(check bool)
+    "float64be routes to SetU64BE" true
+    (contains ~sub:"SetU64BE" output);
+  Alcotest.(check bool)
+    "int8 routes to SetU8" true
+    (contains ~sub:"SetU8" output);
+  Alcotest.(check bool)
+    "no scalar falls through to SetBytes" false
+    (contains ~sub:"SetBytes" output)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -612,4 +643,6 @@ let suite =
         test_3d_byte_array_where;
       Alcotest.test_case "3d: uint63 projects to UINT64" `Quick
         test_3d_uint63_projects_to_uint64;
+      Alcotest.test_case "3d: signed and float setters" `Quick
+        test_3d_signed_float_setters;
     ] )

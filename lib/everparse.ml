@@ -67,6 +67,21 @@ let rec type_suffix : type a. a Types.typ -> string = function
   | Types.Uint63 Types.Big -> "U63BE"
   | Types.Uint64 Types.Little -> "U64"
   | Types.Uint64 Types.Big -> "U64BE"
+  (* Signed integers and floats project to the same-width [UINT*] (the
+     reinterpretation lives in the OCaml decoder), so they route to the matching
+     width setter rather than the generic [SetBytes], whose single value type
+     cannot hold two scalar fields of different widths. *)
+  | Types.Int8 -> "U8"
+  | Types.Int16 Types.Little -> "U16"
+  | Types.Int16 Types.Big -> "U16BE"
+  | Types.Int32 Types.Little -> "U32"
+  | Types.Int32 Types.Big -> "U32BE"
+  | Types.Int64 Types.Little -> "U64"
+  | Types.Int64 Types.Big -> "U64BE"
+  | Types.Float32 Types.Little -> "U32"
+  | Types.Float32 Types.Big -> "U32BE"
+  | Types.Float64 Types.Little -> "U64"
+  | Types.Float64 Types.Big -> "U64BE"
   | Types.Bits { base = Types.BF_U8; _ } -> "U8"
   | Types.Bits { base = Types.BF_U16 Types.Little; _ } -> "U16"
   | Types.Bits { base = Types.BF_U16 Types.Big; _ } -> "U16BE"
