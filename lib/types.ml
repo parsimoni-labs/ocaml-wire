@@ -1511,6 +1511,18 @@ let rec index_bound_of : type a. a typ -> int option = function
   | Apply { typ; _ } -> index_bound_of typ
   | _ -> None
 
+(* The case values an [enum] field admits, seen through the transparent
+   [Map] / [Where] / [Apply] wrappers. The projection emits membership as a
+   field refinement so the generated C validator rejects values outside the
+   named cases, exactly as the OCaml decoder does (a bare base value otherwise
+   slips through C while [Codec.decode] raises [Invalid_enum]). *)
+let rec enum_cases_of : type a. a typ -> int list option = function
+  | Enum { cases; _ } -> Some (List.map snd cases)
+  | Map { inner; _ } -> enum_cases_of inner
+  | Where { inner; _ } -> enum_cases_of inner
+  | Apply { typ; _ } -> enum_cases_of typ
+  | _ -> None
+
 (* A 1-byte array / repeat element that carries an index bound (a lookup index
    into an [n]-entry table) projects like a [byte_array_where]: every byte is
    refined to [< n] through a synthesised element struct. Returns the element
@@ -1683,10 +1695,24 @@ let pp_field ppf (Field f) =
     | Some len -> Some (Lt (Ref raw_name, Int len))
     | None -> None
   in
+  (* An [enum] field is valid only for one of its named values; emit that
+     membership as a refinement (the OCaml decoder enforces it on decode). *)
+  let enum_cond =
+    match enum_cases_of f.field_typ with
+    | Some (v0 :: rest) ->
+        Some
+          (List.fold_left
+             (fun acc v -> Or (acc, Eq (Ref raw_name, Int v)))
+             (Eq (Ref raw_name, Int v0))
+             rest)
+    | Some [] | None -> None
+  in
   let constraint_ =
     combine_constraints
-      (combine_constraints f.constraint_ where_cond)
-      bound_cond
+      (combine_constraints
+         (combine_constraints f.constraint_ where_cond)
+         bound_cond)
+      enum_cond
   in
   let suffix, pp_base = field_suffix typ in
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
