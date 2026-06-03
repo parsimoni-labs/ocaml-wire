@@ -851,6 +851,14 @@ let enum_decls (s : struct_) : decl list =
             decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
         | Map { inner; _ } -> extract inner
         | Where { inner; _ } -> extract inner
+        (* An enum can sit inside a container (an array or repeat element, an
+           optional, a sized region); its declaration is still needed, or the
+           schema references an undeclared type. *)
+        | Array { elem; _ } -> extract elem
+        | Repeat { elem; _ } -> extract elem
+        | Optional { inner; _ } -> extract inner
+        | Optional_or { inner; _ } -> extract inner
+        | Single_elem { elem; _ } -> extract elem
         | _ -> ()
       in
       extract f.field_typ)
