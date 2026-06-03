@@ -115,3 +115,8 @@ val has_3d_exe : unit -> bool
 
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)
+
+val strict_cc_flags : string
+(** The strict-C11 [cc] flags the generated dune rule compiles the EverParse C
+    with (and the e2e test mirrors), so the generated validators are checked
+    under the same standard a downstream caller would use. *)

@@ -101,6 +101,12 @@
 
 ### Fixed
 
+- The generated dune rule now compiles the EverParse C under strict C11
+  (`-std=c11 -D_DEFAULT_SOURCE`, without `-Wextra`) instead of `-std=c99`, so
+  the verified validators build on Linux glibc: the BSD endian helpers
+  (`be16toh`, ...) the C uses need `_DEFAULT_SOURCE` declared, and `-Wextra`'s
+  `-Wtype-limits` rejected the always-true bound check EverParse emits for an
+  optional's absent zero-byte case (@samoht)
 - A `Wire.enum` field now projects its membership to 3D, so the
   EverParse-generated C validator rejects values outside the named cases,
   exactly as `Codec.decode` does (raising `Invalid_enum`). The field previously
