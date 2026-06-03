@@ -158,8 +158,16 @@ and _ typ =
   | Type_ref : string -> 'a typ  (** Forward reference by name. *)
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
       (** Qualified reference. *)
-  | Map : { inner : 'w typ; decode : 'w -> 'a; encode : 'a -> 'w } -> 'a typ
-      (** Mapped type. *)
+  | Map : {
+      inner : 'w typ;
+      decode : 'w -> 'a;
+      encode : 'a -> 'w;
+      index_bound : int option;
+          (** When [Some n] the raw [inner] value is a valid index only when
+              [< n] (set by {!cases}). [decode] enforces it on the OCaml side;
+              the 3D projection emits it as a field refinement. *)
+    }
+      -> 'a typ  (** Mapped type. *)
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
       (** Parameterised type application. *)
   | Codec : {

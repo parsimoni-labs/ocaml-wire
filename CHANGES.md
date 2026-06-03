@@ -101,6 +101,11 @@
 
 ### Fixed
 
+- A `Wire.lookup` field now projects its index bound to 3D, so the
+  EverParse-generated C validator rejects out-of-range indices exactly as the
+  OCaml decoder does. Previously the projection emitted the underlying integer
+  with no bound, so the verified C accepted indices the OCaml decoder rejects
+  (@samoht)
 - Decoding no longer crashes with `Invalid_argument` on adversarial input where
   a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
   the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails

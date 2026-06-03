@@ -125,7 +125,17 @@ and _ typ =
   | Struct : struct_ -> unit typ
   | Type_ref : string -> 'a typ
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
-  | Map : { inner : 'w typ; decode : 'w -> 'a; encode : 'a -> 'w } -> 'a typ
+  | Map : {
+      inner : 'w typ;
+      decode : 'w -> 'a;
+      encode : 'a -> 'w;
+      index_bound : int option;
+          (* When [Some n] the raw [inner] value is a valid index only when
+             [< n] (set by {!cases} / lookup). [decode] enforces this on the
+             OCaml side; the 3D projection emits it as a field refinement so the
+             generated C validator rejects the same out-of-range inputs. *)
+    }
+      -> 'a typ
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
   | Codec : {
       codec_name : string;
@@ -322,9 +332,10 @@ let reject_decoration ~combinator t =
 
 let map decode encode inner =
   reject_decoration ~combinator:"map" inner;
-  Map { inner; decode; encode }
+  Map { inner; decode; encode; index_bound = None }
 
-let bool inner = Map { inner; decode = is_set; encode = bit }
+let bool inner =
+  Map { inner; decode = is_set; encode = bit; index_bound = None }
 
 (* Parse errors -- moved here so combinators like [cases] can raise them
    directly rather than through intermediate exceptions. *)
@@ -356,7 +367,7 @@ let cases variants inner =
     let i = variants_lookup arr v 0 in
     if i < 0 then invalid_arg "Wire.lookup: unknown variant" else i
   in
-  Map { inner; decode; encode }
+  Map { inner; decode; encode; index_bound = Some len }
 
 let unit = Unit
 let all_bytes = All_bytes
@@ -724,7 +735,7 @@ let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
   | Float32 _ -> Float32
   | Float64 _ -> Float64
   | Bits _ -> Int
-  | Map { inner = Bits _; decode = _; encode = _ } ->
+  | Map { inner = Bits _; decode = _; encode = _; _ } ->
       (* bool (bits ~width:1 ...) maps to bool; other maps stay int *)
       (* We can't distinguish bool from other maps here without checking
          the decode function. Use Int as safe default -- the EverParse
@@ -1602,19 +1613,43 @@ let pp_field_suffix ppf = function
       Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
   | Array len -> Fmt.pf ppf "[%a]" pp_expr len
 
+(* The index bound a [cases] / lookup typ carries, seen through the transparent
+   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
+   valid index only when [< n]; the projection emits that as a field refinement
+   so the generated C validator rejects the same out-of-range inputs the OCaml
+   decoder does. *)
+let rec index_bound_of : type a. a typ -> int option = function
+  | Map { index_bound = Some _ as b; _ } -> b
+  | Map { inner; index_bound = None; _ } -> index_bound_of inner
+  | Where { inner; _ } -> index_bound_of inner
+  | Apply { typ; _ } -> index_bound_of typ
+  | _ -> None
+
 let pp_field ppf (Field f) =
-  let name =
+  let raw_name, name =
     match f.field_name with
-    | Some name -> escape_3d name
+    | Some name -> (name, escape_3d name)
     | None ->
         let n = !anon_counter in
         incr anon_counter;
-        Fmt.str "_anon_%d" n
+        let s = Fmt.str "_anon_%d" n in
+        (s, s)
   in
   (* Extract Where constraints from the type so they appear as field
      constraints in the 3D output, not inline in the type. *)
   let where_cond, typ = extract_where_constraint f.field_typ in
-  let constraint_ = combine_constraints f.constraint_ where_cond in
+  (* A lookup / cases field is valid only for in-range indices; emit that bound
+     as a refinement (the OCaml decoder enforces it via the [Map] decode). *)
+  let bound_cond =
+    match index_bound_of f.field_typ with
+    | Some len -> Some (Lt (Ref raw_name, Int len))
+    | None -> None
+  in
+  let constraint_ =
+    combine_constraints
+      (combine_constraints f.constraint_ where_cond)
+      bound_cond
+  in
   let suffix, pp_base = field_suffix typ in
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
