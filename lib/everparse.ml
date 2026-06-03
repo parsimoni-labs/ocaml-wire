@@ -321,14 +321,30 @@ let collect_extern_setters schema_name ctx_struct u32 fields =
    [Types.synth_name_of_elt_var] keeps the field rendering and the typedef
    name in sync without threading state. *)
 let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
+  (* The refined-byte element a field needs synthesised, if any: an explicit
+     [byte_array_where], or an [array] / [repeat] whose 1-byte element carries a
+     lookup index bound (which projects the same way). *)
+  let synth_of (Types.Field f) =
+    match f.field_typ with
+    | Types.Byte_array_where { elt_var; cond; _ } -> Some (elt_var, cond)
+    | Types.Array { elem; _ } -> Types.index_bound_elt elem
+    | Types.Repeat { elem; _ } -> Types.index_bound_elt elem
+    | _ -> None
+  in
+  (* Equal index bounds share one synthesised typedef, so emit each name once. *)
+  let seen = Hashtbl.create 8 in
   List.filter_map
-    (fun (Types.Field f) ->
-      match f.field_typ with
-      | Types.Byte_array_where { elt_var; cond; _ } ->
+    (fun field ->
+      match synth_of field with
+      | Some (elt_var, cond) ->
           let synth = Types.synth_name_of_elt_var elt_var in
-          let elt_field = Types.field elt_var ~constraint_:cond Types.uint8 in
-          Some (Types.typedef (Types.struct_ synth [ elt_field ]))
-      | _ -> None)
+          if Hashtbl.mem seen synth then None
+          else begin
+            Hashtbl.add seen synth ();
+            let elt_field = Types.field elt_var ~constraint_:cond Types.uint8 in
+            Some (Types.typedef (Types.struct_ synth [ elt_field ]))
+          end
+      | None -> None)
     s.fields
 
 let with_output (s : Types.struct_) : Types.decl list =

@@ -106,6 +106,10 @@
   OCaml decoder does. Previously the projection emitted the underlying integer
   with no bound, so the verified C accepted indices the OCaml decoder rejects
   (@samoht)
+- A `Wire.lookup` used as a `Wire.array` or `Field.repeat` element now projects
+  its index bound to every element, not just to a scalar field. Previously the
+  verified C validator accepted out-of-range indices in array or repeat elements
+  that the OCaml decoder rejects (#126, @samoht)
 - Decoding no longer crashes with `Invalid_argument` on adversarial input where
   a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
   the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails

@@ -1488,6 +1488,31 @@ end = struct
   let pp t = t
 end
 
+(* The index bound a [cases] / lookup typ carries, seen through the transparent
+   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
+   valid index only when [< n], which the projection emits as a refinement so
+   the generated C validator rejects the same out-of-range inputs the OCaml
+   decoder does. *)
+let rec index_bound_of : type a. a typ -> int option = function
+  | Map { index_bound = Some _ as b; _ } -> b
+  | Map { inner; index_bound = None; _ } -> index_bound_of inner
+  | Where { inner; _ } -> index_bound_of inner
+  | Apply { typ; _ } -> index_bound_of typ
+  | _ -> None
+
+(* A 1-byte array / repeat element that carries an index bound (a lookup index
+   into an [n]-entry table) projects like a [byte_array_where]: every byte is
+   refined to [< n] through a synthesised element struct. Returns the element
+   variable and its constraint, keyed on the bound so equal bounds share a
+   single synthesised typedef. *)
+let index_bound_elt : type a. a typ -> (string * bool expr) option =
+ fun elem ->
+  match (inner_wire_size elem, index_bound_of elem) with
+  | Some 1, Some bound ->
+      let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
+      Some (elt_var, Lt (Ref elt_var, Int bound))
+  | _ -> None
+
 let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
@@ -1536,7 +1561,16 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
          [inner_wire_size_expr] handles fixed scalars, [byte_array]-style
          sized payloads, codec-with-fixed-size, and nested arrays. *)
       match (inner_wire_size elem, inner_wire_size_expr elem) with
-      | Some 1, _ -> (Array len, fun ppf -> pp_typ ppf elem)
+      | Some 1, _ -> (
+          match index_bound_elt elem with
+          | Some (elt_var, _) ->
+              (* A bounded byte element (a lookup index) projects like a
+                 [byte_array_where]: a byte-budget array of the synthesised
+                 refined-byte struct, so every element carries the [< n] bound
+                 the OCaml decoder enforces. *)
+              ( Byte_array len,
+                fun ppf -> Fmt.string ppf (synth_name_of_elt_var elt_var) )
+          | None -> (Array len, fun ppf -> pp_typ ppf elem))
       | _, Some s ->
           (* A wider element is emitted as its bare base under a byte budget of
              [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
@@ -1569,10 +1603,15 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
          dropped) so the only suffix is the budget: a list of fixed n-byte
          chunks is just bytes on the wire, like a repeat of [UINT8]. *)
       let pp_elem ppf =
-        match repeat_elem_struct elem with
-        | Some name -> Fmt.string ppf name
-        | None ->
-            Nlist_elem.pp (Nlist_elem.make elem (snd (field_suffix elem))) ppf
+        match index_bound_elt elem with
+        | Some (elt_var, _) -> Fmt.string ppf (synth_name_of_elt_var elt_var)
+        | None -> (
+            match repeat_elem_struct elem with
+            | Some name -> Fmt.string ppf name
+            | None ->
+                Nlist_elem.pp
+                  (Nlist_elem.make elem (snd (field_suffix elem)))
+                  ppf)
       in
       (Byte_array size, pp_elem)
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
@@ -1612,18 +1651,6 @@ let pp_field_suffix ppf = function
   | Zeroterm_at_most size ->
       Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
   | Array len -> Fmt.pf ppf "[%a]" pp_expr len
-
-(* The index bound a [cases] / lookup typ carries, seen through the transparent
-   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
-   valid index only when [< n]; the projection emits that as a field refinement
-   so the generated C validator rejects the same out-of-range inputs the OCaml
-   decoder does. *)
-let rec index_bound_of : type a. a typ -> int option = function
-  | Map { index_bound = Some _ as b; _ } -> b
-  | Map { inner; index_bound = None; _ } -> index_bound_of inner
-  | Where { inner; _ } -> index_bound_of inner
-  | Apply { typ; _ } -> index_bound_of typ
-  | _ -> None
 
 let pp_field ppf (Field f) =
   let raw_name, name =
