@@ -503,8 +503,15 @@ let run ?(quiet = true) ~outdir schemas =
   generate_3d ~outdir schemas;
   generate_c ~quiet ~outdir schemas
 
+(* Strict C11 with warnings-as-errors. [_DEFAULT_SOURCE] declares the BSD endian
+   helpers (be16toh, ...) the generated C uses from <endian.h> on Linux glibc.
+   [-Wextra] is deliberately omitted: its [-Wtype-limits] flags the always-true
+   [0U <= unsigned] bound check EverParse emits for an optional's absent 0-byte
+   case (an empty case is a 3D syntax error, so the zero-byte field is forced),
+   which is not a strict-C11 violation. The generated validators compile clean
+   under this set. *)
 let strict_cc_flags =
-  "-std=c99 -Wall -Wextra -Werror -Wpedantic -Wstrict-prototypes \
+  "-std=c11 -D_DEFAULT_SOURCE -Wall -Werror -Wpedantic -Wstrict-prototypes \
    -Wmissing-prototypes -Wshadow -Wcast-qual"
 
 let emit_gen_rules ppf three_d_files c_files ctx_files =

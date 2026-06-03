@@ -98,11 +98,12 @@ let compile_and_run ~name codec =
     Wire_3d.generate_c ~outdir:tmpdir [ schema ];
     let base = String.capitalize_ascii schema.Everparse.name in
     let cmd =
+      (* Compile with the exact strict-C11 flags the generated dune emits, so
+         the e2e checks the validators under the same standard a downstream
+         caller would. *)
       Fmt.str
-        "cd %s && cc -std=c99 -Wall -Wextra -Werror -Wpedantic \
-         -Wstrict-prototypes -Wmissing-prototypes -Wshadow -Wcast-qual -o \
-         test_bin test.c %s.c %s_Fields.c 2>&1 && ./test_bin"
-        tmpdir base base
+        "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1 && ./test_bin"
+        tmpdir Wire_3d.strict_cc_flags base base
     in
     let ic = Unix.open_process_in cmd in
     let output = In_channel.input_all ic in
