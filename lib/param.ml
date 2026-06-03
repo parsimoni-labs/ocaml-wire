@@ -34,7 +34,7 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
   | Enum { base; _ } -> int_cvt base
   | Where { inner; _ } -> int_cvt inner
   | Single_elem { elem; _ } -> int_cvt elem
-  | Map { inner; encode; decode } ->
+  | Map { inner; encode; decode; _ } ->
       let c = int_cvt inner in
       { fwd = (fun v -> c.fwd (encode v)); bwd = (fun v -> decode (c.bwd v)) }
   | Apply { typ; _ } -> int_cvt typ

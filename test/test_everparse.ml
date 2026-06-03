@@ -508,9 +508,26 @@ let test_3d_byte_array_where () =
   in
   Alcotest.(check bool) "Data references synth not raw UINT8" true synth_ref
 
+(* A lookup / cases field decodes only in-range indices (OCaml raises
+   [Invalid_tag] otherwise); the 3D projection must emit the matching [< len]
+   refinement so the generated C validator rejects the same out-of-range inputs.
+   Without it the verified C is more permissive than the OCaml decoder. *)
+let test_lookup_index_bound () =
+  let codec =
+    Codec.v "Lk"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8) $ fun v -> v) ]
+  in
+  let output = to_3d (module_ [ typedef (Everparse.struct_of_codec codec) ]) in
+  Alcotest.(check bool)
+    "lookup field bounds its index" true
+    (contains ~sub:"(v < 4)" output)
+
 let suite =
   ( "everparse",
     [
+      Alcotest.test_case "generation: lookup index bound" `Quick
+        test_lookup_index_bound;
       Alcotest.test_case "generation: bitfields" `Quick test_bitfields;
       Alcotest.test_case "generation: enumerations" `Quick test_enumerations;
       Alcotest.test_case "generation: field dependence" `Quick

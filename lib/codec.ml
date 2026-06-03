@@ -1949,7 +1949,7 @@ let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   match fld.typ with
-  | Map { inner; decode; encode } -> compile_map ctx fld inner decode encode
+  | Map { inner; decode; encode; _ } -> compile_map ctx fld inner decode encode
   | Enum { base; _ } -> compile_field ctx { fld with typ = base }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
