@@ -4868,6 +4868,31 @@ let test_rename_roundtrip () =
       | Error _ -> Alcotest.fail "decode failed after rename")
   | _ -> Alcotest.fail "encode failed"
 
+let test_enum_codec_validates () =
+  (* The Codec decode path used to strip an enum to its base integer and accept
+     any value; it must reject values that are not one of the named cases, on a
+     scalar field and on every array element, matching the EverParse validator. *)
+  let e = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ] uint8 in
+  let cs =
+    Codec.v "EColor" (fun v -> v) Codec.[ (Field.v "v" e $ fun v -> v) ]
+  in
+  let ca =
+    Codec.v "EArr"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (array ~len:(int 4) e) $ fun v -> v) ]
+  in
+  let ok c s =
+    match Codec.decode c (Bytes.of_string s) 0 with
+    | Ok _ -> true
+    | Error _ -> false
+  in
+  Alcotest.(check bool) "scalar known value accepted" true (ok cs "\002");
+  Alcotest.(check bool) "scalar unknown value rejected" false (ok cs "\238");
+  Alcotest.(check bool)
+    "array known values accepted" true (ok ca "\001\002\003\001");
+  Alcotest.(check bool)
+    "array unknown element rejected" false (ok ca "\238\220\220\187")
+
 (* -- Suite -- *)
 
 let suite =
@@ -5319,4 +5344,6 @@ let suite =
       Alcotest.test_case "uint: 1-byte like uint8" `Quick test_uint_1byte;
       Alcotest.test_case "uint: 5-byte LE roundtrip" `Quick test_uint_5byte_le;
       Alcotest.test_case "uint: dynamic size" `Quick test_uint_dynamic;
+      Alcotest.test_case "enum: codec rejects unknown values" `Quick
+        test_enum_codec_validates;
     ] )
