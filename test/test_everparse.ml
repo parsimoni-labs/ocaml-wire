@@ -138,6 +138,25 @@ let test_3d_signed_float_setters () =
     "no scalar falls through to SetBytes" false
     (contains ~sub:"SetBytes" output)
 
+let test_3d_array_enum_element_decl () =
+  (* An enum used as an array element still needs its declaration emitted. The
+     decl collection only looked through Map/Where wrappers, so an enum inside an
+     array left the schema referencing an undeclared type, which EverParse
+     rejects. *)
+  let e = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ] uint8 in
+  let c =
+    Codec.v "ArrE"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (array ~len:(int 4) e) $ fun v -> v) ]
+  in
+  let output = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "enum declaration emitted" true
+    (contains ~sub:"enum Color" output);
+  Alcotest.(check bool)
+    "array element references the enum" true
+    (contains ~sub:"Color v[" output)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -645,4 +664,6 @@ let suite =
         test_3d_uint63_projects_to_uint64;
       Alcotest.test_case "3d: signed and float setters" `Quick
         test_3d_signed_float_setters;
+      Alcotest.test_case "3d: array enum element decl" `Quick
+        test_3d_array_enum_element_decl;
     ] )

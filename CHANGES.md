@@ -121,6 +121,11 @@
   value type was fixed to the first field's width, so EverParse rejected the
   schema on the width mismatch and the codec had no verified C parser at all.
   Each field width now routes to its own callback (#127, @samoht)
+- A `Wire.enum` used as a `Wire.array` or `Field.repeat` element (or inside an
+  optional or sized region) now generates a verified EverParse validator. Its
+  enumeration declaration was only emitted for scalar fields, so the schema
+  referenced an undeclared type and EverParse rejected it, leaving the codec
+  with no verified C parser at all (#128, @samoht)
 - Decoding no longer crashes with `Invalid_argument` on adversarial input where
   a `Field.repeat` byte budget, or a variable field's cross-field size, exceeds
   the buffer (an out-of-range `Bytes.sub`). Such an oversized length now fails
