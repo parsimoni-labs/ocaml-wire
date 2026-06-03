@@ -508,6 +508,13 @@ val synth_name_of_elt_var : string -> string
     name derived from a {!byte_array_where} element variable. Internal: used by
     the EverParse projection. *)
 
+val index_bound_elt : 'a typ -> (string * bool expr) option
+(** [index_bound_elt elem] is [Some (elt_var, cond)] when [elem] is a 1-byte
+    array / repeat element carrying a lookup index bound: it then projects like
+    a {!byte_array_where} whose synthesised element struct is named
+    [synth_name_of_elt_var elt_var] and refines its byte with [cond]. Internal:
+    used by the EverParse projection. *)
+
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Zero-copy byte span. *)
 

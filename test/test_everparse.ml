@@ -523,11 +523,38 @@ let test_lookup_index_bound () =
     "lookup field bounds its index" true
     (contains ~sub:"(v < 4)" output)
 
+let test_array_lookup_element_bound () =
+  (* A lookup as an array element must bound every element, not just a scalar
+     field, or the verified C validator accepts out-of-range indices the OCaml
+     decoder rejects. The element projects through a synthesised refined-byte
+     struct, as a byte_array_where does. *)
+  let codec =
+    Codec.v "ArrLk"
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "a"
+              (array ~len:(int 3) (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8))
+          $ fun v -> v );
+        ]
+  in
+  (* The synthesised element struct is emitted by the full schema projection,
+     not [struct_of_codec] alone, so render the whole module. *)
+  let output = to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool)
+    "array element bounds its index" true
+    (contains ~sub:"(__elt_lk4 < 4)" output);
+  Alcotest.(check bool)
+    "element refined via synth struct" true
+    (contains ~sub:"_RefByte_lk4 a" output)
+
 let suite =
   ( "everparse",
     [
       Alcotest.test_case "generation: lookup index bound" `Quick
         test_lookup_index_bound;
+      Alcotest.test_case "generation: array lookup element bound" `Quick
+        test_array_lookup_element_bound;
       Alcotest.test_case "generation: bitfields" `Quick test_bitfields;
       Alcotest.test_case "generation: enumerations" `Quick test_enumerations;
       Alcotest.test_case "generation: field dependence" `Quick
