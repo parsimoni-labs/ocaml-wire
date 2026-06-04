@@ -51,6 +51,20 @@ type packed =
 val codec : 'a t -> 'a Wire.Codec.t
 (** [codec g] is the codec [g] generates for. *)
 
+val sample : seed:int -> count:int -> (string * packed) list
+(** [sample ~seed ~count] is a deterministic, well-distributed Boltzmann sample
+    of [count] codecs in the single-typedef, fixed-size fragment (flat records
+    and homogeneous arrays of leaves), each renamed to a unique struct name.
+    Record arity follows a geometric (Boltzmann-for-sequence) law and leaves are
+    drawn uniformly from a fixed vocabulary. The same [seed] yields the same
+    set, so a code generator and its consumer can agree on the shapes. *)
+
+val binds_env : packed -> bool
+(** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
+    [Param.output] and so needs a [Param.env] threaded into
+    {!Wire.Codec.validate}. Consumers that cannot supply an env (e.g. a C
+    validator called with no parameters) use this to skip such codecs. *)
+
 val registry : (string * packed) list
 (** The canonical curated gens, one per combinator family. Every suite drives
     off this list so a generated codec is exercised on both the OCaml round-trip

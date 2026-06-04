@@ -1,42 +1,26 @@
-(** Codecs shared by the differential generator and fuzzer.
+(** The registry subset the differential fuzzer compares against the
+    EverParse-generated C validator. See {!included}. *)
 
-    Each is a small record of fixed-width scalars or bitfields: shapes that
-    project to an EverParse default-plug validator, so the same definition feeds
-    both the OCaml {!Wire.Codec} decode path and the generated C parser the
-    fuzzer compares it against. No field carries a constraint, so for any input
-    of sufficient length both sides must accept and decode identical values. *)
+(** Why a candidate is out of the differential's scope. *)
+type exclusion =
+  | Variable_size  (** no fixed wire size, so no standalone validator *)
+  | Zero_size  (** unit codec, hits a setter arity mismatch *)
+  | Parameterised  (** binds [Param.env], so has no standalone entrypoint *)
+  | Casetype  (** projects an embedded sub-validator, not a standalone one *)
+  | Name_clash of string list
+      (** would redefine the named shared types of an already-included codec *)
 
-type u8 = { u8 : int }
+val string_of_exclusion : exclusion -> string
+(** A short human-readable reason, for logs. *)
 
-val c_u8 : u8 Wire.Codec.t
-(** A single unsigned 8-bit field. *)
+val included : (string * Fuzz_gen.packed) list
+(** Registry codecs the differential fuzzer covers: fixed-size, parameter-free
+    projections of a single uniquely-named validator, in registry order. *)
 
-type u16 = { u16 : int }
+val excluded : (string * Fuzz_gen.packed * exclusion) list
+(** Registry codecs skipped, each with the reason it is out of scope, so
+    coverage stays explicit. *)
 
-val c_u16 : u16 Wire.Codec.t
-(** A single unsigned 16-bit big-endian field. *)
-
-type u32 = { u32 : int }
-
-val c_u32 : u32 Wire.Codec.t
-(** A single unsigned 32-bit big-endian field. *)
-
-type u64 = { u64 : int64 }
-
-val c_u64 : u64 Wire.Codec.t
-(** A single unsigned 64-bit big-endian field. *)
-
-type bits2 = { hi : int; lo : int }
-
-val c_bits : bits2 Wire.Codec.t
-(** Two 4-bit bitfields packed into one byte. *)
-
-type triple = { a : int; b : int; c : int }
-
-val c_triple : triple Wire.Codec.t
-(** A multi-field record (u8, u16be, u32be) exercising offsets and endianness.
-*)
-
-val schemas : Wire.Everparse.t list
-(** The codecs projected to 3D schemas, in the order the generator emits them.
-*)
+val summary : string
+(** One-line tally: total candidates, included count, and excluded count broken
+    down by reason. *)

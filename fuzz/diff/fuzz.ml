@@ -1,79 +1,39 @@
-(** Differential AFL fuzzer for the wire_diff library.
+(** Differential AFL fuzzer: OCaml wire codec vs EverParse C validator, driven
+    by the registry.
 
-    For each codec in {!Diff_codecs}, feed the AFL input to both the OCaml
-    {!Wire.Codec} decoder and the EverParse-generated C parser, then compare via
-    {!Wire_diff.harness}. The codecs are unconstrained, so the only sound
-    outcomes are [Match] (both decode equal values) and [Both_failed] (both
-    reject a too-short input). [Value_mismatch] / [Only_c_ok] / [Only_ocaml_ok]
-    mean the OCaml and verified-C decoders disagree, i.e. a projection bug. *)
+    For each codec EverParse could generate a validator for
+    ({!Diff_index.covered}, looked up in {!Fuzz_gen.registry} by label), feed
+    the AFL input to both the OCaml {!Wire.Codec.validate} and the generated C
+    validator and flag any accept/reject divergence: both decoders must agree on
+    which inputs are valid. Codecs the candidate filter dropped (variable-size,
+    parameterised, casetype, or a shared-name duplicate of an already-included
+    codec) are reported via {!Diff_codecs.excluded}. *)
 
-let c_read parse_k cont buf =
-  try Some (parse_k cont (Bytes.of_string buf) 0) with Failure _ -> None
+(* The EverParse validator accepts iff the bytes parse (enough input, valid
+   structure) and every refinement holds. [Codec.decode_exn] is exactly that:
+   it decodes (length + structure) and validates (refinements), raising
+   [Parse_error] / [Validation_error] on a clean rejection. (Plain [Codec.decode]
+   returns a [result], so its rejection is easy to drop by mistake.) Any other
+   exception surfaces as a crash, which is itself a divergence to report. *)
+let ocaml_accepts (Fuzz_gen.Pack g) b =
+  match ignore (Wire.Codec.decode_exn (Fuzz_gen.codec g) b 0) with
+  | () -> true
+  | exception (Wire.Validation_error _ | Wire.Parse_error _) -> false
 
-let check name = function
-  | Wire_diff.Match | Wire_diff.Both_failed -> ()
-  | Wire_diff.Value_mismatch m -> Alcobar.failf "%s: value mismatch (%s)" name m
-  | Wire_diff.Only_c_ok m ->
-      Alcobar.failf "%s: C accepted, OCaml rejected (%s)" name m
-  | Wire_diff.Only_ocaml_ok m ->
-      Alcobar.failf "%s: OCaml accepted, C rejected (%s)" name m
-
-let h_u8 =
-  Wire_diff.harness ~name:"DiffU8" ~codec:Diff_codecs.c_u8
-    ~read:(c_read Stubs.diffu8_parse_k Fun.id)
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.u8) -> r.u8)
-    ~equal:Int.equal ()
-
-let h_u16 =
-  Wire_diff.harness ~name:"DiffU16" ~codec:Diff_codecs.c_u16
-    ~read:(c_read Stubs.diffu16_parse_k Fun.id)
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.u16) -> r.u16)
-    ~equal:Int.equal ()
-
-let h_u32 =
-  Wire_diff.harness ~name:"DiffU32" ~codec:Diff_codecs.c_u32
-    ~read:(c_read Stubs.diffu32_parse_k Fun.id)
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.u32) -> r.u32)
-    ~equal:Int.equal ()
-
-let h_u64 =
-  Wire_diff.harness ~name:"DiffU64" ~codec:Diff_codecs.c_u64
-    ~read:(c_read Stubs.diffu64_parse_k Fun.id)
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.u64) -> r.u64)
-    ~equal:Int64.equal ()
-
-let h_bits =
-  Wire_diff.harness ~name:"DiffBits" ~codec:Diff_codecs.c_bits
-    ~read:(c_read Stubs.diffbits_parse_k (fun hi lo -> (hi, lo)))
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.bits2) -> (r.hi, r.lo))
-    ~equal:( = ) ()
-
-let h_triple =
-  Wire_diff.harness ~name:"DiffTriple" ~codec:Diff_codecs.c_triple
-    ~read:(c_read Stubs.difftriple_parse_k (fun a b c -> (a, b, c)))
-    ~write:(fun _ -> None)
-    ~project:(fun (r : Diff_codecs.triple) -> (r.a, r.b, r.c))
-    ~equal:( = ) ()
-
-let case h =
-  Alcobar.test_case h.Wire_diff.name [ Alcobar.bytes ] (fun buf ->
-      check h.Wire_diff.name (h.Wire_diff.test_read buf))
+let case (label, c_check) =
+  let p = List.assoc label Diff_codecs.included in
+  Alcobar.test_case label [ Alcobar.bytes ] (fun buf ->
+      let b = Bytes.of_string buf in
+      let o = ocaml_accepts p b and c = c_check b in
+      if o <> c then
+        Alcobar.failf "%s: OCaml accepts=%b but EverParse C accepts=%b" label o
+          c)
 
 let () =
+  List.iter
+    (fun (label, _, reason) ->
+      Printf.eprintf "diff: skipping %s (%s)\n" label
+        (Diff_codecs.string_of_exclusion reason))
+    Diff_codecs.excluded;
   Alcobar.run "diff"
-    [
-      ( "diff",
-        [
-          case h_u8;
-          case h_u16;
-          case h_u32;
-          case h_u64;
-          case h_bits;
-          case h_triple;
-        ] );
-    ]
+    [ ("diff", Array.to_list Diff_index.covered |> List.map case) ]
