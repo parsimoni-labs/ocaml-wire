@@ -2,4 +2,4 @@
  (name test)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries wire wire.3d wire.stubs alcotest re unix))
+ (libraries wire wire.3d wire.stubs net alcotest re unix))

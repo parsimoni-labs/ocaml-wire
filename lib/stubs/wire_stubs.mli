@@ -47,6 +47,15 @@ val of_structs :
 val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
 (** Generate C stubs that call the EverParse validators directly. *)
 
+val build_codec_archive : schema_dir:string -> archive:string -> unit
+(** [build_codec_archive ~schema_dir ~archive] compiles each generated validator
+    and [_Fields] plug in [schema_dir] as its own translation unit and archives
+    them into [archive] (pass [lib<name>.a] to consume it from a dune
+    [(foreign_archives <name>)]). The [wire_ffi.c] from {!to_c_stubs} includes
+    only the headers and calls the validators across this link, so per-codec
+    shared types stay translation-unit-local and any set of codecs links.
+    [test.c] and [<Name>Wrapper.c] are skipped. Requires [cc] and [ar]. *)
+
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
 (** Generate OCaml external declarations and record types for all structs. *)
 

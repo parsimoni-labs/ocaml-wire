@@ -93,20 +93,63 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "#include <stdint.h>@\n";
   Fmt.pf ppf "#include <string.h>@\n";
   Fmt.pf ppf "@\n";
+  (* Headers only. Each codec's validator ([<Name>.c]) and [<Name>_Fields.c]
+     plug is compiled as its own translation unit and linked in (see
+     [build_codec_archive]), so the per-codec shared types (an [enum], a
+     synthesised [_RefByte_*] or [Se_*] element struct) stay confined to that
+     unit and any set of codecs links without colliding on a duplicate
+     definition. *)
   Fmt.pf ppf "/* EverParse headers + default <Name>_Fields plug */@\n";
   List.iteri
     (fun i (s : Wire.Everparse.Raw.struct_) ->
       let name = Wire.Everparse.Raw.struct_name s in
       if i = 0 then Fmt.pf ppf "#include \"EverParse.h\"@\n";
       Fmt.pf ppf "#include \"%s_Fields.h\"@\n" name;
-      Fmt.pf ppf "#include \"%s.h\"@\n" name;
-      Fmt.pf ppf "#include \"%s.c\"@\n" name;
-      Fmt.pf ppf "#include \"%s_Fields.c\"@\n" name)
+      Fmt.pf ppf "#include \"%s.h\"@\n" name)
     structs;
   Fmt.pf ppf "@\n/* Stubs */@\n";
   List.iter (fun s -> pp_c_stub ppf s) structs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
+
+(* Compile each generated validator and [_Fields] plug in [schema_dir] as its
+   own translation unit and archive them into [archive] (a [lib<name>.a], so a
+   dune [(foreign_archives <name>)] links it). [wire_ffi.c] (see [to_c_stubs])
+   includes only the headers and calls the validators across this link, so the
+   per-codec shared types stay translation-unit-local and any set of codecs
+   links. This runs at generation time, alongside the EverParse invocation that
+   produced the [.c]; the [cc]/[ar] calls mirror how [Wire_3d.run_everparse]
+   shells out to [3d.exe], keeping the build rule free of inline shell.
+   [test.c] (it has a [main]) and [<Name>Wrapper.c] (it needs a user-supplied
+   [<Name>EverParseError] the FFI path never provides) are skipped. *)
+let build_codec_archive ~schema_dir ~archive =
+  let is_codec_unit f =
+    Filename.check_suffix f ".c"
+    && f <> "test.c"
+    && not (Filename.check_suffix f "Wrapper.c")
+  in
+  let units =
+    Sys.readdir schema_dir |> Array.to_list |> List.filter is_codec_unit
+    |> List.sort compare
+  in
+  let object_of c =
+    let obj = Filename.remove_extension c ^ ".codec.o" in
+    let cmd =
+      Fmt.str "cc -c -D_DEFAULT_SOURCE -I %s %s -o %s"
+        (Filename.quote schema_dir)
+        (Filename.quote (Filename.concat schema_dir c))
+        (Filename.quote obj)
+    in
+    if Sys.command cmd <> 0 then Fmt.failwith "wire_stubs: cc failed on %s" c;
+    obj
+  in
+  let objects = List.map object_of units in
+  let cmd =
+    Fmt.str "ar rcs %s %s" (Filename.quote archive)
+      (String.concat " " (List.map Filename.quote objects))
+  in
+  if Sys.command cmd <> 0 then failwith "wire_stubs: ar failed";
+  List.iter (fun o -> try Sys.remove o with Sys_error _ -> ()) objects
 
 let ml_field_name name =
   let lower = String.lowercase_ascii name in

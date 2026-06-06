@@ -184,6 +184,10 @@ let () =
     generate_c oc;
     close_out oc;
 
+    (* 4. Archive the per-codec validators so c_stubs.c (headers only) and the
+       per-bench app C link against them as separate translation units. *)
+    Wire_stubs.build_codec_archive ~schema_dir ~archive:"libbenchcodecs.a";
+
     Fmt.pr "Generated %d schemas in %s/@." (List.length structs) schema_dir;
-    Fmt.pr "Generated c_stubs.c@."
+    Fmt.pr "Generated c_stubs.c and libbenchcodecs.a@."
   end

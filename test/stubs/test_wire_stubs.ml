@@ -288,11 +288,16 @@ let e2e ~name ~structs ~module_ ~test_ml =
     (* 2. Generate C and ML stubs *)
     Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir structs;
     write_file (Filename.concat dir "main.ml") test_ml;
-    (* 3. Compile *)
+    (* 3. Compile. [wire_ffi.c] includes only the headers; the EverParse
+       validators ([<Name>.c]) and [_Fields] plugs are compiled as their own
+       translation units and linked, so shared types stay
+       translation-unit-local. The [<Name>Wrapper.c] convenience entry is left
+       out: it calls a user-supplied [<Name>EverParseError] the FFI path never
+       provides (the stubs call the validator directly). *)
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
-         '-I %s' wire_ffi.c stubs.ml main.ml -o test_e2e 2>&1"
+         '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o test_e2e 2>&1"
         dir dir
     in
     run cmd;
@@ -620,16 +625,104 @@ let test_e2e_output_parse () =
   assert (r.Stubs.tag = 42);
   Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.Stubs.id r.Stubs.length r.Stubs.tag
 |};
-    (* 7. Compile everything *)
+    (* 7. Compile everything. [wire_ffi.c] is headers-only; the validator and
+       [_Fields] plug compile as separate translation units and link (the
+       [<Name>Wrapper.c] convenience entry, which needs a user-supplied
+       [<Name>EverParseError], is left out). *)
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
-         '-I %s' wire_ffi.c stubs.ml main.ml -o test_output 2>&1"
+         '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o test_output \
+         2>&1"
         dir dir
     in
     run cmd;
     (* 8. Run *)
     run (Filename.concat dir "test_output")
+  end
+
+(* Full-stack composition: generate the Ethernet, IPv4 and TCP per-codec
+   parsers, then link all three (each its own translation unit) into ONE C
+   binary that parses a frame through the stack. Demonstrates that
+   independently released per-codec parsers compose at link time under strict
+   C11: distinct codec-named validators, and shared sub-types kept
+   translation-unit-local. *)
+let test_e2e_full_stack () =
+  if not has_3d then ()
+  else begin
+    let dir = Filename.temp_dir "wire_e2e_stack" "" in
+    let schemas =
+      [
+        Wire.Everparse.schema Net.ethernet_codec;
+        Wire.Everparse.schema Net.ipv4_codec;
+        Wire.Everparse.schema Net.tcp_codec;
+      ]
+    in
+    List.iter
+      (fun schema ->
+        Wire_3d.generate_3d ~outdir:dir [ schema ];
+        Wire_3d.run_everparse ~outdir:dir [ schema ];
+        Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
+        Wire_3d.write_fields ~outdir:dir [ schema ])
+      schemas;
+    let validator name =
+      let n = Wire_3d.everparse_name name in
+      n ^ "Validate" ^ n
+    in
+    let fields name = Wire_3d.everparse_name name ^ "Fields" in
+    let ip_off = Net.ethernet_size - Net.ethernet_payload_size in
+    let tcp_off = ip_off + (Net.ipv4_size - Net.ipv4_payload_size) in
+    (* A zero frame validates: the net codecs carry no refinements, only
+       fixed-width fields. The IPv4 header sits in the Ethernet payload, the TCP
+       header in the IPv4 payload, so each validator runs at its offset into the
+       one shared buffer. *)
+    let driver =
+      Fmt.str
+        {c|#include "Ethernet.h"
+#include "Ethernet_Fields.h"
+#include "IPv4.h"
+#include "IPv4_Fields.h"
+#include "TCP.h"
+#include "TCP_Fields.h"
+#include <string.h>
+#include <stdio.h>
+
+static void eh(EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,
+               uint64_t c, uint8_t *ct, uint8_t *in, uint64_t p) {
+  (void)t; (void)f; (void)r; (void)c; (void)ct; (void)in; (void)p;
+}
+
+int main(void) {
+  uint8_t frame[%d] = {0};
+  %s ef; memset(&ef, 0, sizeof ef);
+  %s i4; memset(&i4, 0, sizeof i4);
+  %s tf; memset(&tf, 0, sizeof tf);
+  if (!EverParseIsSuccess(%s((WIRECTX *) &ef, NULL, eh, frame, sizeof frame, 0)))
+    { fprintf(stderr, "ethernet failed\n"); return 1; }
+  if (!EverParseIsSuccess(%s((WIRECTX *) &i4, NULL, eh, frame, sizeof frame, %d)))
+    { fprintf(stderr, "ipv4 failed\n"); return 1; }
+  if (!EverParseIsSuccess(%s((WIRECTX *) &tf, NULL, eh, frame, sizeof frame, %d)))
+    { fprintf(stderr, "tcp failed\n"); return 1; }
+  printf("OK: ethernet+ipv4+tcp parsed by three linked per-codec parsers\n");
+  return 0;
+}
+|c}
+        Net.ethernet_size (fields "Ethernet") (fields "IPv4") (fields "TCP")
+        (validator "Ethernet") (validator "IPv4") ip_off (validator "TCP")
+        tcp_off
+    in
+    write_file (Filename.concat dir "stack.c") driver;
+    (* Each codec [.c] and [_Fields.c] is its own translation unit (no
+       [#include] concatenation); [Wrapper.c] is left out (it needs a
+       user-supplied [<Name>EverParseError]). Strict flags prove the combined
+       link is clean. *)
+    let cmd =
+      Fmt.str
+        "cd %s && cc %s -I . $(ls *.c | grep -v Wrapper) -o stack_test 2>&1" dir
+        Wire_3d.strict_cc_flags
+    in
+    run cmd;
+    run (Filename.concat dir "stack_test")
   end
 
 (* -- Suite -- *)
@@ -675,6 +768,8 @@ let suite =
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
+      Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
+        test_e2e_full_stack;
       (* output pattern invariants *)
       Alcotest.test_case "action forms: scalars" `Quick
         test_action_forms_scalars;
