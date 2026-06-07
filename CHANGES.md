@@ -104,6 +104,12 @@
 
 ### Fixed
 
+- An `Action.on_success` ending in a conditional `Action.return_bool` (an
+  `Action.if_` with a `return` branch) now generates a verified EverParse
+  validator. 3D allows a `return` only as the terminal statement or in the
+  branches of a terminal `if`/`else` that both return; the projection now moves
+  the field setter ahead of the `if`, keeps the `if` terminal, and synthesises
+  an `else { return true }` when none was given (@samoht)
 - An `Action.on_act` whose body ends in `Action.return_bool` now generates a
   verified EverParse validator. It projected to an `:act` block (which is unit
   in 3D) ending in a Bool `return`, with the auto field setter emitted after the

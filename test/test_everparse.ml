@@ -264,6 +264,32 @@ let test_3d_on_act_drops_bool_return () =
     "the :act block has no bool return" false
     (contains ~sub:"return" out3d)
 
+let test_3d_on_success_conditional_return () =
+  (* An [on_success] ending in a conditional [return] (a bare [if]) projects to
+     a terminal [if]/[else] both returning Bool (3D rejects a bare [if] with a
+     Bool return, and forbids statements after it). The setter is moved before
+     the [if] and an [else { return true }] is synthesised. *)
+  let out = Param.output "out" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let f =
+    Field.v "v" uint8
+      ~action:
+        (Action.on_success
+           [
+             Action.assign out (Field.ref f_v);
+             Action.if_ Expr.true_ [ Action.return_bool Expr.true_ ] None;
+           ])
+  in
+  let codec = Codec.v "ActIf" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
+  let out3d = to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool) "if is present" true (contains ~sub:"if (" out3d);
+  Alcotest.(check bool)
+    "an else branch is synthesised" true
+    (contains ~sub:"else {" out3d);
+  Alcotest.(check bool)
+    "the field setter runs before the if" true
+    (contains ~sub:"ActIfSetU8" out3d)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -783,4 +809,6 @@ let suite =
         test_3d_absent_optional_projects_to_unit;
       Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
         test_3d_on_act_drops_bool_return;
+      Alcotest.test_case "3d: on_success conditional return to if/else" `Quick
+        test_3d_on_success_conditional_return;
     ] )
