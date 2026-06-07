@@ -140,6 +140,18 @@ let setter_call : type a.
   in
   Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
 
+(* Build the statements of an [:act] block from a user action plus the auto
+   setter call. An [:act] block is unit, so a trailing [return] is dropped: in
+   OCaml [on_act] and [on_success] evaluate identically and a trailing
+   [return true] is a no-op success, while the setter (also unit) runs last. *)
+let act_stmts stmts call =
+  let stmts =
+    match List.rev stmts with
+    | Types.Return _ :: rest -> List.rev rest
+    | _ -> stmts
+  in
+  stmts @ [ call ]
+
 let map_field_action schema_name idx byte_off (Types.Field f) =
   let field_size = Types.field_wire_size f.field_typ in
   let next_off =
@@ -161,9 +173,9 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
             match f.action with
             | None -> Some (Types.On_act [ call ])
             | Some (Types.On_act stmts) ->
-                Some (Types.On_act (stmts @ [ call ]))
+                Some (Types.On_act (act_stmts stmts call))
             | Some (Types.On_success stmts) ->
-                Some (Types.On_act (stmts @ [ call ]))
+                Some (Types.On_act (act_stmts stmts call))
           else
             (* Scalars and byte-size fields: :on-success *)
             match f.action with
@@ -172,7 +184,7 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
                 Some
                   (Types.On_success (stmts @ [ call; Types.Return Types.true_ ]))
             | Some (Types.On_act stmts) ->
-                Some (Types.On_act (stmts @ [ call ]))
+                Some (Types.On_act (act_stmts stmts call))
         in
         Types.Field
           {
