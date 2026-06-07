@@ -32,10 +32,6 @@ let nested_pp_cases =
    honest: every gap is either closed or explicitly tracked, never silent. *)
 let known_gaps =
   [
-    (* A statically-absent optional projects to [T[:byte-size 0]], a zero-length
-       nlist EverParse will not name ("Expected a named type, got Parse_nlist"). *)
-    "optional(false)";
-    "optional_or(false)";
     (* The auto [WireSet*] setter is emitted after the user action's terminal
        [return true]; in 3D the return must be last, so F* rejects it. *)
     "action_on_act";

@@ -104,6 +104,11 @@
 
 ### Fixed
 
+- A statically-absent `Field.optional` / `Field.optional_or` (`~present:false`)
+  now generates a verified EverParse validator. It projected to a zero-length
+  byte-size list EverParse refused to name ("Expected a named type, got
+  Parse_nlist"), leaving the codec with no validator; it now projects as a
+  zero-byte `unit` field, the same form `Wire.empty` uses (@samoht)
 - The generated dune rule now compiles the EverParse C under strict C11
   (`-std=c11 -D_DEFAULT_SOURCE`, without `-Wextra`) instead of `-std=c99`, so
   the verified validators build on Linux glibc: the BSD endian helpers
