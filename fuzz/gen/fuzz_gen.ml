@@ -1676,10 +1676,12 @@ let fixed_leaves : any list =
     Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
     Any { g = finite_float64; size = Some 8; label = "finf" };
     Any { g = nan_float64; size = Some 8; label = "nanf" };
-    (* Sub-codec leaves with a [~where] / [~self_constraint] over expressions,
-       so composing them exercises an embedded constrained sub-codec. *)
-    Any { g = expr_ops; size = Some 2; label = "expr" };
-    Any { g = sizeof; size = Some 2; label = "sizeof" };
+    (* A sub-codec leaf with a [~where] over a projectable expression, so
+       composing it exercises an embedded constrained sub-codec. ([expr_ops] and
+       [sizeof] are deliberately not nested here: they use a negative literal /
+       [field_pos], which have no 3D projection, so a composition embedding them
+       would not project. They are still exercised standalone via the registry,
+       where they are asserted to be rejected at projection.) *)
     Any { g = codec_where; size = Some 2; label = "cwhere" };
   ]
 

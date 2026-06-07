@@ -1251,7 +1251,14 @@ let pp_cast_type ppf = function
 let rec pp_expr : type a. a expr Fmt.t =
  fun ppf expr ->
   match expr with
-  | Int n when n < 0 -> Fmt.pf ppf "(%d)" n
+  | Int n when n < 0 ->
+      (* 3D has no negative integer literals in any syntax, so an expression with
+         one (e.g. comparing an unsigned field to [-1]) has no projection and is
+         rejected with a clear error. *)
+      Fmt.invalid_arg
+        "Wire: negative integer literal %d has no 3D projection (EverParse has \
+         no negative literals)"
+        n
   | Int n -> Fmt.int ppf n
   | Int64 n -> Fmt.pf ppf "%LduL" n
   | Bool true -> Fmt.string ppf "true"
@@ -1260,7 +1267,11 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Param_ref p -> Fmt.string ppf (escape_3d p.ph_name)
   | Sizeof t -> Fmt.pf ppf "sizeof (%a)" pp_typ t
   | Sizeof_this -> Fmt.string ppf "sizeof (this)"
-  | Field_pos -> Fmt.string ppf "field_pos"
+  | Field_pos ->
+      (* EverParse has no [field_pos] keyword: the field position is not
+         available as a 3D expression, so it has no projection and is rejected
+         with a clear error. *)
+      invalid_arg "Wire: field_pos has no 3D projection"
   | Add (a, b) -> Fmt.pf ppf "(%a + %a)" pp_expr a pp_expr b
   | Sub (a, b) -> Fmt.pf ppf "(%a - %a)" pp_expr a pp_expr b
   | Mul (a, b) -> Fmt.pf ppf "(%a * %a)" pp_expr a pp_expr b

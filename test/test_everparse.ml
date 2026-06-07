@@ -229,8 +229,8 @@ let test_3d_static_optional_transparent () =
 
 let test_3d_absent_optional_projects_to_unit () =
   (* A statically-absent optional contributes no bytes, so it projects as a
-     [unit] field, not as [<inner>[:byte-size 0]] (a zero-length list EverParse
-     refuses to name). *)
+     [unit] field and the schema carries no zero-length byte-size suffix (which
+     EverParse would refuse to name). *)
   let c inner =
     Codec.v "AbsentOpt"
       (fun v -> v)
@@ -289,6 +289,38 @@ let test_3d_on_success_conditional_return () =
   Alcotest.(check bool)
     "the field setter runs before the if" true
     (contains ~sub:"ActIfSetU8" out3d)
+
+let projects_or_raises codec =
+  match to_3d (Everparse.schema codec).module_ with
+  | (_ : string) -> false
+  | exception Invalid_argument _ -> true
+
+let test_3d_negative_literal_rejected () =
+  (* 3D has no negative integer literals, so a projected expression containing
+     one is rejected at projection with a clear error, not emitted as C
+     EverParse cannot parse. *)
+  let f = Field.v "a" uint8 in
+  let codec =
+    Codec.v "NegLit"
+      ~where:Expr.(Field.ref f <> int (-1))
+      (fun a -> a)
+      Codec.[ (f $ fun a -> a) ]
+  in
+  Alcotest.(check bool)
+    "negative literal rejected by projection" true (projects_or_raises codec)
+
+let test_3d_field_pos_rejected () =
+  (* EverParse has no [field_pos] keyword, so a projected expression using it is
+     rejected at projection, not emitted as an undefined identifier. *)
+  let f = Field.v "a" uint8 in
+  let codec =
+    Codec.v "FieldPos"
+      ~where:Expr.(field_pos = int 0)
+      (fun a -> a)
+      Codec.[ (f $ fun a -> a) ]
+  in
+  Alcotest.(check bool)
+    "field_pos rejected by projection" true (projects_or_raises codec)
 
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
@@ -811,4 +843,8 @@ let suite =
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick
         test_3d_on_success_conditional_return;
+      Alcotest.test_case "3d: negative literal rejected by projection" `Quick
+        test_3d_negative_literal_rejected;
+      Alcotest.test_case "3d: field_pos rejected by projection" `Quick
+        test_3d_field_pos_rejected;
     ] )

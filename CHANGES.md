@@ -104,6 +104,12 @@
 
 ### Fixed
 
+- Projecting an expression (a `~where` / field constraint / `~self_constraint`)
+  that uses a construct with no 3D form now raises a clear `Invalid_argument`
+  instead of emitting C that EverParse rejects with a cryptic error. The two
+  such constructs are a negative integer literal (3D has no negative literals)
+  and `field_pos` (no 3D keyword); every other operator (shifts, bitwise, casts,
+  mod, div, comparisons, `sizeof`, `sizeof_this`) projects (@samoht)
 - An `Action.on_success` ending in a conditional `Action.return_bool` (an
   `Action.if_` with a `return` branch) now generates a verified EverParse
   validator. 3D allows a `return` only as the terminal statement or in the
