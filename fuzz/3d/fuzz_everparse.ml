@@ -5,38 +5,57 @@
     exercised on the same compositions the OCaml round-trip suite uses, plus
     arbitrary nested ones. When [3d.exe] is available, the {e whole} registry is
     additionally run through EverParse ([3d.exe --batch]): every codec that
-    builds must also project to a schema EverParse verifies, or be listed in
-    {!known_gaps}. That extraction pass is the only check that catches errors
+    builds must also project to a schema EverParse verifies, except the few in
+    {!no_3d_projection} that wire rejects at projection (asserted to reject
+    instead). That extraction pass is the only check that catches errors
     surfacing during F* verification rather than pretty-printing (a kind error
     on a possibly-empty list, an invalid action or expression). It is skipped
     where [3d.exe] is absent (the plain CI build, AFL). *)
 
 open Alcobar
 
-(* Projection + pretty-print coverage: cheap, no subprocess, always runs. *)
+(* Shapes wire rejects at projection: they use a construct with no 3D form, so
+   [to_3d] raises a clear [Invalid_argument]. [expr_ops] uses a negative integer
+   literal (3D has no negative literals); [sizeof] uses [field_pos] (no 3D
+   keyword). Every other operator they exercise (shifts, bitwise, casts, mod,
+   div, comparisons, logic, [sizeof(this)], [sizeof(<type>)]) does project and is
+   covered by the rest of the registry. These are the "reject with a clear
+   error" half of closing the gaps: asserted to reject (below), not swept through
+   [3d.exe]. *)
+let no_3d_projection = [ "expr_ops"; "sizeof" ]
+
+let to_3d_of g =
+  Wire.Everparse.Raw.to_3d (Wire.Everparse.schema (Fuzz_gen.codec g)).module_
+
+(* For a shape with no 3D projection: [to_3d] must raise [Invalid_argument] with
+   a clear message, not produce 3D EverParse would reject. *)
+let rejection_case name g =
+  [
+    Alcobar.test_case
+      ("rejects projection " ^ name)
+      [ const () ]
+      (fun () ->
+        match to_3d_of g with
+        | _ ->
+            Alcobar.failf
+              "%s: expected projection to be rejected, but it succeeded" name
+        | exception Invalid_argument _ -> ());
+  ]
+
+(* Projection + pretty-print coverage: cheap, no subprocess, always runs. A
+   shape with no 3D projection is asserted to reject; every other shape must
+   project and pretty-print. *)
 let pp_cases =
   List.concat_map
-    (fun (name, Fuzz_gen.Pack g) -> Fuzz_gen.everparse_cases name g)
+    (fun (name, Fuzz_gen.Pack g) ->
+      if List.mem name no_3d_projection then rejection_case name g
+      else Fuzz_gen.everparse_cases name g)
     Fuzz_gen.registry
 
 let nested_pp_cases =
   Fuzz_gen.everparse_nested_cases "nested(d2)" 2
   @ Fuzz_gen.everparse_nested_cases "nested(d3)" 3
   @ Fuzz_gen.everparse_nested_cases "nested(d4)" 4
-
-(* Known projection gaps: shapes that build in OCaml and project to 3D text but
-   that [3d.exe] still rejects. The whole registry is run through EverParse
-   (below); a shape NOT listed here that [3d.exe] rejects fails the gate (a new
-   build-but-fail-3d hole), and a listed shape that now passes also fails (it is
-   fixed, remove it). This keeps the projection half of "close all the gaps"
-   honest: every gap is either closed or explicitly tracked, never silent. *)
-let known_gaps =
-  [
-    (* [~where] / [~self_constraint] expressions use operators 3D's grammar
-       rejects: shifts, bitwise not, casts, [sizeof(this)], [field_pos]. *)
-    "expr_ops";
-    "sizeof";
-  ]
 
 (* EverParse derives the module name from the .3d filename and requires it to
    start with a capital letter; the composer names its codecs [_leaf] / [_opt] /
@@ -86,28 +105,25 @@ let normal_mode () =
   (not (Array.exists (String.equal "--gen-corpus") argv))
   && not (n > 1 && Sys.file_exists argv.(n - 1))
 
+(* Every shape that projects must verify: the whole registry except the shapes
+   wire rejects at projection (those are asserted to reject in [pp_cases]) is
+   run through [3d.exe], and any failure is a build-but-fail-3d hole. *)
 let extract_results =
   if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
   else
-    List.map
-      (fun (name, Fuzz_gen.Pack g) -> (name, extract_one g))
-      Fuzz_gen.registry
+    Fuzz_gen.registry
+    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
+    |> List.map (fun (name, Fuzz_gen.Pack g) -> (name, extract_one g))
 
 let extract_cases =
   List.map
     (fun (name, res) ->
-      let known = List.mem name known_gaps in
       Alcobar.test_case ("3d.exe " ^ name)
         [ const () ]
         (fun () ->
-          match (res, known) with
-          | Ok (), false -> ()
-          | Error _, true -> () (* a tracked gap, still open *)
-          | Ok (), true ->
-              Alcobar.failf
-                "%s: now projects through 3d.exe; remove it from [known_gaps]"
-                name
-          | Error m, false ->
+          match res with
+          | Ok () -> ()
+          | Error m ->
               Alcobar.failf "%s: EverParse rejected a schema that built: %s"
                 name m))
     extract_results
