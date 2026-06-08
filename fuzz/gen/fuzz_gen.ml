@@ -1985,11 +1985,11 @@ let test_cases label g =
 
 (* Cross-field sizes: a [byte_array] whose [~size] reads a preceding int field.
    The size-source field is drawn from several int-valued field types -- in
-   particular [optional_or], whose value used to resolve to 0 in a size
-   expression, decoding the span as empty and raising on encode. Each source
-   builds a two-field [(len, data)] codec round-tripped through [test_cases],
-   which checks decode, [size_of_value], and re-encode against canonical bytes
-   assembled here (the length-field bytes followed by [len] data bytes). *)
+   particular [optional_or], whose present-or-default value the size expression
+   reads. Each source builds a two-field [(len, data)] codec round-tripped
+   through [test_cases], which checks decode, [size_of_value], and re-encode
+   against canonical bytes assembled here (the length-field bytes followed by
+   [len] data bytes). *)
 let u8_size_bytes n =
   let b = Bytes.create 1 in
   Bytes.set_uint8 b 0 n;

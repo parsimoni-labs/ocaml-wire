@@ -705,12 +705,10 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
   | Var (name, e) ->
       (* [Action.var name e] writes [e]'s value to the int_array slot for
          [name]. The slot is auto-registered by [action_vars] before the
-         index is built, so [cc.idx name] always resolves; the
-         out-of-bounds and [Failure] catches that used to live here were
-         dead defensive code, and matched the silent-default shape that
-         hid the predicate / [Field.ref] bugs in the parallel compilers.
-         Drop the catches -- if [cc.idx name] ever raises here we want it
-         to surface, not write to nowhere. *)
+         index is built, so [cc.idx name] always resolves; it is left
+         uncaught on purpose -- a raise here would mean a missing slot
+         registration (a real bug), and we want it to surface rather than
+         silently write to nowhere. *)
       let i = cc.idx name in
       let fe = compile_int_arr cc e in
       fun arr -> arr.(i) <- fe arr
@@ -1655,8 +1653,8 @@ let compile_repeat : type elt seq r.
     (seq, r) compiled_field =
  fun ctx fld size_expr elem (Seq_map seq) ->
   (* Same dynamic-offset dispatch as [compile_var_bytes] / [compile_codec]:
-     when a [Repeat] sits after a variable-size field, the running offset
-     is [Dynamic], which previously tripped [require_static_off]. *)
+     when a [Repeat] sits after a variable-size field, the running offset is
+     [Dynamic] and is resolved at runtime rather than from a static offset. *)
   let off_fn, (field_access : field_access), validator_off =
     let sizeof_this : bytes -> int -> int =
       match ctx.next_off with

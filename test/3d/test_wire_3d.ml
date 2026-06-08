@@ -812,12 +812,12 @@ let test_field_optional_byte_array () =
   Alcotest.(check bool)
     "byte-size suffix uses inner size" true (contains out "8")
 
-(* A [nested ~size] / [nested_at_most] field projects through EverParse. It used
-   to emit an extern setter param typed [UINT8[:byte-size-single-element-array]],
-   which is invalid 3D and made [3d.exe] reject the whole module. Byte-span and
-   enum inners go through a synthesised wrapper struct; scalar and sub-record
-   inners render inline. [generate_c] runs [3d.exe] and raises if the .3d is
-   rejected, so this is the regression guard. *)
+(* A [nested ~size] / [nested_at_most] field projects through EverParse:
+   byte-span and enum inners go through a synthesised wrapper struct, and scalar
+   and sub-record inners render inline (rather than as an extern setter param
+   typed [UINT8[:byte-size-single-element-array]], which is invalid 3D).
+   [generate_c] runs [3d.exe] and raises if the .3d is rejected, so this is the
+   regression guard. *)
 let test_nested_field_projects () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else begin
