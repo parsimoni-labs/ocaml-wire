@@ -7,8 +7,6 @@ type exclusion =
   | Zero_size  (** unit codec, hits a setter arity mismatch *)
   | Parameterised  (** binds [Param.env], so has no standalone entrypoint *)
   | Casetype  (** projects an embedded sub-validator, not a standalone one *)
-  | Name_clash of string list
-      (** would redefine the named shared types of an already-included codec *)
 
 val string_of_exclusion : exclusion -> string
 (** A short human-readable reason, for logs. *)

@@ -47,12 +47,19 @@
 
 ; Generate .3d files, run EverParse, produce C code -- gated
 
+; [gen_stubs.exe] also archives the per-codec validators into [libbenchcodecs.a]
+; (via [Wire_stubs.build_codec_archive]) so [c_stubs.c] and the per-bench app C,
+; which include only the headers, link against them as separate translation
+; units. Compiling each codec separately, rather than [#include]-ing the [.c]
+; into one unit, keeps the per-codec shared types translation-unit-local.
+
 (rule
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (targets
   (dir schemas)
-  c_stubs.c)
+  c_stubs.c
+  libbenchcodecs.a)
  (deps gen_stubs.exe)
  (action
   (run ./gen_stubs.exe schemas)))
@@ -70,10 +77,10 @@
  (modules)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
+ (foreign_archives benchcodecs)
  (foreign_stubs
   (language c)
   (names c_stubs)
   (extra_deps
-   (glob_files schemas/*.c)
    (glob_files schemas/*.h))
   (flags :standard -I schemas -I ../lib/stubs)))
