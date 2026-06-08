@@ -32,9 +32,6 @@ let nested_pp_cases =
    honest: every gap is either closed or explicitly tracked, never silent. *)
 let known_gaps =
   [
-    (* A conditional action ([if (...) {...}] inside [:on-success]) is not valid
-       3D action syntax. *)
-    "action";
     (* [~where] / [~self_constraint] expressions use operators 3D's grammar
        rejects: shifts, bitwise not, casts, [sizeof(this)], [field_pos]. *)
     "expr_ops";

@@ -152,6 +152,28 @@ let act_stmts stmts call =
   in
   stmts @ [ call ]
 
+let ends_in_return stmts =
+  match List.rev stmts with Types.Return _ :: _ -> true | _ -> false
+
+(* Build the statements of an [:on-success] block (which returns a Bool) from a
+   user action plus the auto setter call. 3D is stricter than wire's action
+   model: a [return] may only appear as the terminal statement or in the
+   branches of a terminal [if/else] whose branches both return Bool. So the
+   setter (which must always fire on success) is moved to the front, and:
+   - a user action ending in a conditional [return] keeps that [if] terminal,
+     with an [else { return true }] synthesised when the user gave none;
+   - one ending in a plain [return] keeps it terminal;
+   - otherwise the setter and a [return true] are appended as before. *)
+let on_success_stmts stmts call =
+  match List.rev stmts with
+  | Types.If (cond, then_, else_opt) :: before when ends_in_return then_ ->
+      let else_ =
+        match else_opt with Some e -> e | None -> [ Types.Return Types.true_ ]
+      in
+      (call :: List.rev before) @ [ Types.If (cond, then_, Some else_) ]
+  | Types.Return _ :: _ -> call :: stmts
+  | _ -> stmts @ [ call; Types.Return Types.true_ ]
+
 let map_field_action schema_name idx byte_off (Types.Field f) =
   let field_size = Types.field_wire_size f.field_typ in
   let next_off =
@@ -181,8 +203,7 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
             match f.action with
             | None -> Some (Types.On_success [ call; Types.Return Types.true_ ])
             | Some (Types.On_success stmts) ->
-                Some
-                  (Types.On_success (stmts @ [ call; Types.Return Types.true_ ]))
+                Some (Types.On_success (on_success_stmts stmts call))
             | Some (Types.On_act stmts) ->
                 Some (Types.On_act (act_stmts stmts call))
         in
