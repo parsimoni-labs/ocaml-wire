@@ -227,6 +227,23 @@ let test_3d_static_optional_transparent () =
     "byte_array_where optional emits its refined typedef" true
     (contains ~sub:"} _RefByte_" out_baw)
 
+let test_3d_absent_optional_projects_to_unit () =
+  (* A statically-absent optional contributes no bytes, so it projects as a
+     [unit] field, not as [<inner>[:byte-size 0]] (a zero-length list EverParse
+     refuses to name). *)
+  let c inner =
+    Codec.v "AbsentOpt"
+      (fun v -> v)
+      Codec.[ (Field.optional "o" ~present:Expr.false_ inner $ fun v -> v) ]
+  in
+  let out = to_3d (Everparse.schema (c uint8)).module_ in
+  Alcotest.(check bool)
+    "absent optional projects as unit" true
+    (contains ~sub:"unit o" out);
+  Alcotest.(check bool)
+    "absent optional has no zero-length byte-size suffix" false
+    (contains ~sub:"[:byte-size 0]" out)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -742,4 +759,6 @@ let suite =
         test_3d_nested_byte_array_where;
       Alcotest.test_case "3d: static optional transparent projection" `Quick
         test_3d_static_optional_transparent;
+      Alcotest.test_case "3d: absent optional projects to unit" `Quick
+        test_3d_absent_optional_projects_to_unit;
     ] )

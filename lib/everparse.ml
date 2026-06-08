@@ -376,7 +376,21 @@ let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
       | None -> None)
     s.fields
 
+(* A statically-absent optional ([~present:false]) contributes no bytes: its
+   inner is never parsed. Project it as a [unit] field (the same 0-byte form
+   [Wire.empty] uses), not as [<inner>[:byte-size 0]] -- the latter is a
+   zero-length list EverParse refuses to name ("Expected a named type, got
+   Parse_nlist"). A statically-present optional is handled transparently
+   elsewhere; only the absent case needs this rewrite. *)
+let rewrite_absent_optional (Types.Field f) =
+  match f.field_typ with
+  | Types.Optional { present = Types.Bool false; _ }
+  | Types.Optional_or { present = Types.Bool false; _ } ->
+      Types.Field { f with field_typ = Types.Unit; constraint_ = None }
+  | _ -> Types.Field f
+
 let with_output (s : Types.struct_) : Types.decl list =
+  let s = { s with fields = List.map rewrite_absent_optional s.fields } in
   (* Extern declarations for the callback mechanism *)
   let ctx_struct = Types.struct_ "WireCtx" [] in
   let ctx_decl = Types.typedef ~extern_:true ctx_struct in
