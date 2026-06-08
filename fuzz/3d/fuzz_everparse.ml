@@ -3,12 +3,13 @@
     Every generated codec is projected to a 3D schema and pretty-printed
     ({!Fuzz_gen.everparse_cases}), so the projection and code-generation path is
     exercised on the same compositions the OCaml round-trip suite uses, plus
-    arbitrary nested ones. When [3d.exe] is available, a bounded set of the
-    composite schemas is additionally run through EverParse ([3d.exe --batch]):
-    every codec that builds must also project to a schema EverParse verifies.
-    That extraction pass is the only check that catches kind errors (a list over
-    a possibly-empty element), which surface during F* verification, not during
-    pretty-printing. It is skipped where [3d.exe] is absent (CI, AFL). *)
+    arbitrary nested ones. When [3d.exe] is available, the {e whole} registry is
+    additionally run through EverParse ([3d.exe --batch]): every codec that
+    builds must also project to a schema EverParse verifies, or be listed in
+    {!known_gaps}. That extraction pass is the only check that catches errors
+    surfacing during F* verification rather than pretty-printing (a kind error
+    on a possibly-empty list, an invalid action or expression). It is skipped
+    where [3d.exe] is absent (the plain CI build, AFL). *)
 
 open Alcobar
 
@@ -23,28 +24,28 @@ let nested_pp_cases =
   @ Fuzz_gen.everparse_nested_cases "nested(d3)" 3
   @ Fuzz_gen.everparse_nested_cases "nested(d4)" 4
 
-(* The bounded set run through real EverParse: the composite / structural
-   families, where a projection that builds but does not verify can hide. Plain
-   scalars project trivially, so they are left to the pp pass. *)
-let extract_names =
+(* Known projection gaps: shapes that build in OCaml and project to 3D text but
+   that [3d.exe] still rejects. The whole registry is run through EverParse
+   (below); a shape NOT listed here that [3d.exe] rejects fails the gate (a new
+   build-but-fail-3d hole), and a listed shape that now passes also fails (it is
+   fixed, remove it). This keeps the projection half of "close all the gaps"
+   honest: every gap is either closed or explicitly tracked, never silent. *)
+let known_gaps =
   [
-    (* uint63 is the one scalar that does not project trivially: it has no
-       native 3D type and must go through UINT64, so it gets a real EverParse
-       check rather than the pp pass. *)
-    "uint63";
-    "uint63be";
-    "array(3,uint16be)";
-    "array_seq(3,uint16be)";
-    "array(2,record)";
-    "repeat(8,uint8)";
-    "repeat_seq(8,uint8)";
-    "casetype_u8";
-    "nested(4,uint16be)";
-    "nested_at_most(4,uint16be)";
-    "optional(uint8)";
-    "optional_or(uint8)";
-    "record";
-    "rest_bytes";
+    (* A statically-absent optional projects to [T[:byte-size 0]], a zero-length
+       nlist EverParse will not name ("Expected a named type, got Parse_nlist"). *)
+    "optional(false)";
+    "optional_or(false)";
+    (* The auto [WireSet*] setter is emitted after the user action's terminal
+       [return true]; in 3D the return must be last, so F* rejects it. *)
+    "action_on_act";
+    (* A conditional action ([if (...) {...}] inside [:on-success]) is not valid
+       3D action syntax. *)
+    "action";
+    (* [~where] / [~self_constraint] expressions use operators 3D's grammar
+       rejects: shifts, bitwise not, casts, [sizeof(this)], [field_pos]. *)
+    "expr_ops";
+    "sizeof";
   ]
 
 (* EverParse derives the module name from the .3d filename and requires it to
@@ -98,20 +99,25 @@ let normal_mode () =
 let extract_results =
   if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
   else
-    List.filter_map
-      (fun (name, Fuzz_gen.Pack g) ->
-        if List.mem name extract_names then Some (name, extract_one g) else None)
+    List.map
+      (fun (name, Fuzz_gen.Pack g) -> (name, extract_one g))
       Fuzz_gen.registry
 
 let extract_cases =
   List.map
     (fun (name, res) ->
+      let known = List.mem name known_gaps in
       Alcobar.test_case ("3d.exe " ^ name)
         [ const () ]
         (fun () ->
-          match res with
-          | Ok () -> ()
-          | Error m ->
+          match (res, known) with
+          | Ok (), false -> ()
+          | Error _, true -> () (* a tracked gap, still open *)
+          | Ok (), true ->
+              Alcobar.failf
+                "%s: now projects through 3d.exe; remove it from [known_gaps]"
+                name
+          | Error m, false ->
               Alcobar.failf "%s: EverParse rejected a schema that built: %s"
                 name m))
     extract_results
