@@ -542,7 +542,7 @@ let test_array_record_projection () =
     (contains ~sub:"Pt pts[:byte-size (2 * 3)]" out)
 
 (* [nested] / [nested_at_most] over a bitfield is likewise rejected at
-   construction; it used to build a codec that raised Failure deep in decode. *)
+   construction with a clear error, not at decode. *)
 let test_nested_reject_bitfield () =
   Alcotest.(check bool)
     "nested over bits rejected" true
@@ -619,8 +619,8 @@ let test_casetype_nested_case_body () =
     [ Nc_n 12345; Nc_u 7 ]
 
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
-   a byte budget. Decoding used to raise Failure "unsupported element type in
-   repeat" and the schema mis-projected as a double [:byte-size]. *)
+   a byte budget. Decodes the list and projects to a single [:byte-size]
+   schema. *)
 type rep_chunks = { rn : int; chunks : string list }
 
 let rep_chunks_codec =
@@ -761,10 +761,10 @@ let test_array_repeat_reject_non_nz_codec () =
 let projects c = match render_3d c with _ -> true | exception _ -> false
 let arr_field elem = Codec.v "Arr" Fun.id Codec.[ Field.v "x" elem $ Fun.id ]
 
-(* An [array] over a float, signed integer, or [uint63] element used to build
-   and round-trip but crash 3D projection with [assert false]: [inner_wire_size]
-   sized only the unsigned [uint8/16/32/64] and bitfields, so the projector
-   could not size the element. All fixed-width scalars now project. *)
+(* An [array] over a float, signed integer, or [uint63] element builds,
+   round-trips, and projects to a verified 3D schema: [inner_wire_size] sizes
+   every fixed-width scalar element (unsigned and signed ints, floats, [uint63],
+   and bitfields), so the projector can size it. *)
 let test_array_scalar_element_projects () =
   let yes name c =
     Alcotest.(check bool) (name ^ " array projects") true (projects c)
@@ -785,10 +785,10 @@ let test_array_scalar_element_projects () =
   | Ok d -> Alcotest.(check (list (float 0.0))) "float array" v d
   | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
 
-(* An [array] over a [where] / [map] wrapping a byte span used to crash 3D
-   projection with [assert false]: [is_array_element] looks through the
-   transparent wrapper to accept it, but [inner_wire_size_expr] did not recurse
-   through the wrapper to find the span's size. *)
+(* An [array] over a [where] / [map] wrapping a byte span projects to a verified
+   3D schema: [is_array_element] looks through the transparent wrapper to accept
+   it, and [inner_wire_size_expr] recurses through the wrapper to find the span's
+   size. *)
 let test_array_wrapped_byte_span_projects () =
   Alcotest.(check bool)
     "array over where(byte_slice) projects" true
@@ -1680,7 +1680,7 @@ let test_embed_param_requires_env () =
     (raises_invalid (fun () -> Codec.encode outer "ab" (Bytes.create 8) 0))
 
 (* A sub-codec's [where] is enforced when the sub is embedded, matching its
-   standalone behaviour (it used to be silently dropped). *)
+   standalone behaviour. *)
 let test_embed_where_enforced () =
   let f_v = Field.v "v" uint8 in
   let sub =
@@ -3250,9 +3250,8 @@ let test_optional_absent_roundtrip () =
   Alcotest.(check int) "trail" original.trail decoded.trail
 
 (* A byte_array whose ~size reads an optional_or field. The size expression
-   used to resolve to 0 (the optional_or's int_reader was a const 0), so encode
-   raised a length mismatch and decode silently truncated the span to empty.
-   It now reads the present-or-default value. *)
+   reads the optional_or's present-or-default value, so encode and decode agree
+   on the span length. *)
 let test_bytearray_sized_by_optional_or () =
   let f_gate = Field.v "gate" uint8 in
   let f_len =
@@ -3604,10 +3603,9 @@ let test_optional_lor_predicate () =
     ~present_buf:"\x01\x2A" ~present_label:"lor matches" ~absent_buf:"\xFF"
     ~absent_label:"lor no match"
 
-(* [Field.ref] on an [optional] field must read the inner value, not 0.
-   The codec engine used to skip populating the int_array slot for
-   [Optional] fields, so any constraint or size expression referring to
-   the optional silently saw 0. *)
+(* [Field.ref] on an [optional] field reads the inner value, not 0: the
+   int_array slot is populated for [Optional] fields, so a constraint or size
+   expression referring to the optional sees the real value. *)
 
 type ref_opt = { ro_x : int option; ro_check : int }
 
@@ -3757,9 +3755,9 @@ let test_repeat_primitive () =
   Alcotest.(check int) "n values" 3 (List.length r.ic_values);
   Alcotest.(check (list int)) "values" [ 0x1111; 0x2222; 0x3333 ] r.ic_values
 
-(* [Codec.size_of_value] must count a [Field.repeat]'s elements. With a
-   dynamic byte budget it used to report 0 for the repeat, so a buffer sized
-   from [size_of_value] under-allocated and [encode] ran off the end. *)
+(* [Codec.size_of_value] counts a [Field.repeat]'s elements, including under a
+   dynamic byte budget, so a buffer sized from [size_of_value] holds the whole
+   encoding. *)
 let test_repeat_size_of_value () =
   let v = { ic_count = 6; ic_values = [ 0x1111; 0x2222; 0x3333 ] } in
   (* Count (1) + 3 * uint16be (6) = 7 *)
@@ -3952,9 +3950,8 @@ let test_casetype_field_roundtrip () =
     "data roundtrip" true
     (original.ev_data = decoded.ev_data)
 
-(* [Codec.size_of_value] must count a casetype field's tag + matched-case
-   body. It used to drop the whole casetype to 0, so a buffer sized from it
-   was too short and [Codec.encode] ran off the end. *)
+(* [Codec.size_of_value] counts a casetype field's tag plus its matched-case
+   body, so a buffer sized from it holds the whole encoding. *)
 let test_casetype_size_of_value () =
   let original = { ev_ts = 123L; ev_data = `Login 0xabcd } in
   (* ev_ts (8) + tag (1) + Login body uint16be (2) = 11 *)
@@ -4108,7 +4105,7 @@ let test_tm_like_roundtrip () =
 
    CCSDS CFDP (727.0-B-5) has three consecutive variable-size byte_array
    fields in its PDU header, each sized by expressions over earlier fixed
-   fields. This layout was previously rejected by [require_static_off]. *)
+   fields. This layout projects, resolving each field's offset at runtime. *)
 
 type cfdp_hdr = {
   cfdp_eid_len : int;
@@ -4237,9 +4234,9 @@ let test_multi_var_fixed_after () =
   Alcotest.(check int) "trail" 0xBEEF trail
 
 (* -- Multiple variable-size sub-codecs back-to-back (SSH disconnect /
-      debug shape). [compile_codec] used to bail with [require_static_off]
-      when a [Wire.codec]-embedded variable-size sub-codec sat after
-      another variable-size field. -- *)
+      debug shape). [compile_codec] resolves a dynamic offset for a
+      [Wire.codec]-embedded variable-size sub-codec that sits after another
+      variable-size field. -- *)
 
 module Slice = Bytesrw.Bytes.Slice
 
@@ -4290,8 +4287,8 @@ let test_ssh_two_var_slices () =
   Alcotest.(check string) "lang" "en-US" (Slice.to_string l)
 
 let test_two_var_codecs_embedded () =
-  (* Two consecutive [Wire.codec ssh_string_codec] embedded fields.
-     This is the case that previously tripped [require_static_off]. *)
+  (* Two consecutive [Wire.codec ssh_string_codec] embedded fields, each
+     resolved via a dynamic offset. *)
   let f_a = Field.v "a" (codec ssh_string_codec) in
   let f_b = Field.v "b" (codec ssh_string_codec) in
   let pair_codec =
@@ -4411,8 +4408,8 @@ let test_codec_then_array () =
   Alcotest.(check string) "array" "tail" array
 
 let test_repeat_after_var_slice () =
-  (* [Repeat] after a variable-size field used to trip [require_static_off]
-     in [compile_repeat]. The fix mirrors [compile_codec]'s. *)
+  (* [Repeat] after a variable-size field resolves a dynamic offset in
+     [compile_repeat], like [compile_codec]. *)
   let f_prefix_len = Field.v "prefix_len" uint8 in
   let f_prefix = Field.v "prefix" (byte_slice ~size:(Field.ref f_prefix_len)) in
   let f_count = Field.v "count" uint8 in
@@ -4869,9 +4866,9 @@ let test_rename_roundtrip () =
   | _ -> Alcotest.fail "encode failed"
 
 let test_enum_codec_validates () =
-  (* The Codec decode path used to strip an enum to its base integer and accept
-     any value; it must reject values that are not one of the named cases, on a
-     scalar field and on every array element, matching the EverParse validator. *)
+  (* The Codec decode path rejects an enum value that is not one of the named
+     cases, on a scalar field and on every array element, matching the EverParse
+     validator. *)
   let e = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ] uint8 in
   let cs =
     Codec.v "EColor" (fun v -> v) Codec.[ (Field.v "v" e $ fun v -> v) ]

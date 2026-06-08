@@ -166,13 +166,11 @@ let test_all_bytes_in_codec () =
       Alcotest.(check string) "data" "Hello" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
-(* Regression: encoding a codec-as-typ-field whose inner codec ends in
-   [all_bytes] used to size the scratch via a 4096-byte buffer, then ask
-   the buffer-driven size_of for the encoded size -- which for an
-   all_bytes tail returns "remaining buffer" (4096), so the encoder
-   shipped 4096 bytes including uninitialised scratch. Now the size is
-   computed from the value. Cover payloads spanning < 4096, = 4096 and
-   > 4096 to catch the scratch ceiling as well. *)
+(* Encoding a codec-as-typ-field whose inner codec ends in [all_bytes] sizes the
+   output from the value, not from a scratch buffer: a buffer-driven size_of
+   returns "remaining buffer" for an all_bytes tail (e.g. 4096), which would ship
+   uninitialised scratch. Cover payloads spanning < 4096, = 4096 and > 4096 to
+   catch the scratch ceiling as well. *)
 let test_codec_all_bytes_tail () =
   let f_h = Field.v "Header" uint8 in
   let f_d = Field.v "Data" all_bytes in

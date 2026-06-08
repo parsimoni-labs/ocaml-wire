@@ -108,11 +108,10 @@ let test_3d_uint63_projects_to_uint64 () =
     (contains ~sub:"UINT64BE b" output)
 
 let test_3d_signed_float_setters () =
-  (* Signed-int and float fields must each route to a width-typed setter. They
-     used to fall through to the generic SetBytes, whose single value type could
-     not hold two scalar fields of different widths, so EverParse rejected any
-     record mixing widths (e.g. float32 then float64) and the codec got no
-     verified validator. *)
+  (* Signed-int and float fields each route to a width-typed setter, not the
+     generic SetBytes (whose single value type cannot hold two scalar fields of
+     different widths), so a record mixing widths (e.g. float32 then float64)
+     projects to a verified EverParse validator. *)
   let c =
     Codec.v "Mix"
       (fun a b c d -> (a, b, c, d))
