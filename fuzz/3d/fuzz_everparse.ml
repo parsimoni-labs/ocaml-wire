@@ -32,9 +32,6 @@ let nested_pp_cases =
    honest: every gap is either closed or explicitly tracked, never silent. *)
 let known_gaps =
   [
-    (* The auto [WireSet*] setter is emitted after the user action's terminal
-       [return true]; in 3D the return must be last, so F* rejects it. *)
-    "action_on_act";
     (* A conditional action ([if (...) {...}] inside [:on-success]) is not valid
        3D action syntax. *)
     "action";

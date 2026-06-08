@@ -244,6 +244,26 @@ let test_3d_absent_optional_projects_to_unit () =
     "absent optional has no zero-length byte-size suffix" false
     (contains ~sub:"[:byte-size 0]" out)
 
+let test_3d_on_act_drops_bool_return () =
+  (* An [on_act] body that ends in [return_bool] projects to an [:act] block,
+     which is unit in 3D: the trailing return is dropped (a no-op success in
+     OCaml) and the auto setter runs last, so EverParse does not see a
+     Bool-returning :act. *)
+  let out = Param.output "out" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let f =
+    Field.v "v" uint8
+      ~action:
+        (Action.on_act
+           [ Action.assign out (Field.ref f_v); Action.return_bool Expr.true_ ])
+  in
+  let codec = Codec.v "ActOnAct" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
+  let out3d = to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool) "emits an :act block" true (contains ~sub:":act" out3d);
+  Alcotest.(check bool)
+    "the :act block has no bool return" false
+    (contains ~sub:"return" out3d)
+
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
    [container]/[repeat_codec], [packet]/[packet_codec]) live in
@@ -761,4 +781,6 @@ let suite =
         test_3d_static_optional_transparent;
       Alcotest.test_case "3d: absent optional projects to unit" `Quick
         test_3d_absent_optional_projects_to_unit;
+      Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
+        test_3d_on_act_drops_bool_return;
     ] )

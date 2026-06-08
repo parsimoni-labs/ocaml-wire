@@ -114,6 +114,11 @@
 
 ### Fixed
 
+- An `Action.on_act` whose body ends in `Action.return_bool` now generates a
+  verified EverParse validator. It projected to an `:act` block (which is unit
+  in 3D) ending in a Bool `return`, with the auto field setter emitted after the
+  return, so EverParse rejected it; the trailing return is now dropped (a no-op
+  success, matching how OCaml evaluates it) and the setter runs last (@samoht)
 - A statically-absent `Field.optional` / `Field.optional_or` (`~present:false`)
   now generates a verified EverParse validator. It projected to a zero-length
   byte-size list EverParse refused to name ("Expected a named type, got
