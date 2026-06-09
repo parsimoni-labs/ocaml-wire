@@ -80,19 +80,40 @@ let read_validate_name ~outdir s =
   let path = Filename.concat outdir (file_base s ^ ".h") in
   let ic = open_in path in
   let found = ref None in
+  let needle = "Validate" in
+  let nlen = String.length needle in
+  let is_ident c =
+    (c >= 'A' && c <= 'Z')
+    || (c >= 'a' && c <= 'z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  (* EverParse declares the validator as [<Name>Validate<Name>(...)]. Find the
+     [Validate] keyword and return the C identifier immediately before it -- the
+     base [<Name>]. Scanning every position (not just the first 'V') lets the
+     name itself contain a 'V' (e.g. "VeritySuperblock"); anchoring on the
+     identifier before [Validate] also drops a leading return type should
+     EverParse ever emit it on the same line. *)
+  let base_before_validate line =
+    let len = String.length line in
+    let rec scan i =
+      if i + nlen > len then None
+      else if i > 0 && is_ident line.[i - 1] && String.sub line i nlen = needle
+      then begin
+        let j = ref i in
+        while !j > 0 && is_ident line.[!j - 1] do
+          decr j
+        done;
+        Some (String.sub line !j (i - !j))
+      end
+      else scan (i + 1)
+    in
+    scan 0
+  in
   (try
      while !found = None do
-       let line = input_line ic in
-       let line = String.trim line in
-       let needle = "Validate" in
-       match String.index_opt line 'V' with
-       | Some i
-         when i > 0
-              && String.length line >= i + String.length needle
-              && String.sub line i (String.length needle) = needle ->
-           (* the prefix before "Validate" is the base name *)
-           found := Some (String.sub line 0 i)
-       | _ -> ()
+       let line = String.trim (input_line ic) in
+       found := base_before_validate line
      done
    with End_of_file -> ());
   close_in ic;

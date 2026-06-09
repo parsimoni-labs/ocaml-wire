@@ -432,8 +432,20 @@ let e2e_repeat_byte_chunks_codec =
   let open Codec in
   v "RepChunks" (fun n chunks -> (n, chunks)) [ f_n $ fst; f_chunks $ snd ]
 
+(* A codec whose name carries a capital [V] before the [Validate] keyword
+   (e.g. [VeritySuperblockValidateVeritySuperblock] in the generated [.h]).
+   [read_validate_name] must find [Validate] past that leading [V] rather than
+   stopping at the first [V] it sees, or C generation fails outright. *)
+let e2e_vname_codec =
+  let open Wire in
+  let f_sig = Field.v "signature" (byte_array ~size:(int 8)) in
+  let f_version = Field.v "version" uint32 in
+  let open Codec in
+  v "VeritySuperblock" (fun s v -> (s, v)) [ f_sig $ fst; f_version $ snd ]
+
 let test_e2e_compile_run () =
   compile_and_run ~name:"Demo" e2e_simple_codec;
+  compile_and_run ~name:"VeritySuperblock" e2e_vname_codec;
   compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
   compile_and_run ~name:"RepChunks" e2e_repeat_byte_chunks_codec;
   compile_and_run ~name:"ArrChunks" e2e_array_byte_chunks_codec;

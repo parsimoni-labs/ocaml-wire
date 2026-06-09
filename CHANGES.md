@@ -100,6 +100,10 @@
 
 ### Fixed
 
+- A codec whose name contains a capital `V` (e.g. `VeritySuperblock`) now
+  generates its C parser. EverParse names the validator `<Name>Validate<Name>`,
+  and the name reader stopped at the first `V`, so C generation failed for any
+  such name (#143, @samoht)
 - A `Wire.enum` field now enforces its membership in the EverParse-generated C
   validator, rejecting values outside the named cases exactly as `Codec.decode`
   does (raising `Invalid_enum`), including for an enum nested inside a sub-codec
