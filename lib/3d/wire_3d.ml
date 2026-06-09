@@ -80,19 +80,26 @@ let read_validate_name ~outdir s =
   let path = Filename.concat outdir (file_base s ^ ".h") in
   let ic = open_in path in
   let found = ref None in
+  let needle = "Validate" in
+  let nlen = String.length needle in
+  (* Find "Validate" anywhere in [line] at an index > 0 and return the prefix
+     before it (the base name). Scan every position, not just the first 'V':
+     the base name itself may contain a 'V' (e.g. "VeritySuperblock"), in which
+     case the leading 'V' is not the start of "Validate". *)
+  let prefix_before_validate line =
+    let len = String.length line in
+    let rec scan i =
+      if i + nlen > len then None
+      else if i > 0 && String.sub line i nlen = needle then
+        Some (String.sub line 0 i)
+      else scan (i + 1)
+    in
+    scan 0
+  in
   (try
      while !found = None do
-       let line = input_line ic in
-       let line = String.trim line in
-       let needle = "Validate" in
-       match String.index_opt line 'V' with
-       | Some i
-         when i > 0
-              && String.length line >= i + String.length needle
-              && String.sub line i (String.length needle) = needle ->
-           (* the prefix before "Validate" is the base name *)
-           found := Some (String.sub line 0 i)
-       | _ -> ()
+       let line = String.trim (input_line ic) in
+       found := prefix_before_validate line
      done
    with End_of_file -> ());
   close_in ic;
