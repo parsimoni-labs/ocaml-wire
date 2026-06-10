@@ -101,7 +101,9 @@ let check ~n_words =
 
 let main () =
   Memtrace.trace_if_requested ~context:"clcw" ();
-  let n_words = 1_000_000 in
+  let n_words =
+    if Array.length Sys.argv > 1 then int_of_string Sys.argv.(1) else 1_000_000
+  in
   let t, st = benchmark ~n_words in
   Fmt.pr "CLCW polling loop (%d words, %dB each, contiguous buffer)\n\n" n_words
     word_size;
