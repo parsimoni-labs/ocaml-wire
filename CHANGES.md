@@ -53,6 +53,9 @@
 
 ### Changed
 
+- The `Wire.Everparse.plug_field` record fields lose their `pf_` prefix
+  (`pf_name` is now `name`, `pf_idx` is `idx`, and so on). Update custom
+  plug generators accordingly (@samoht)
 - Codecs that share a synthesised type (an `enum`, or a refined-byte or
   element-wrapper struct) can now be linked into one binary, so full protocol
   stacks built from per-codec parsers (Ethernet, IPv4, TCP, ...) link cleanly.
