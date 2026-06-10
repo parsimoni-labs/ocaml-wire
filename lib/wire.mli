@@ -739,8 +739,10 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
     For the zero-copy codec path, prefer {!Codec.decode} which takes an explicit
     {!Param.env}.
 
-    Decoding is prefix-based: success does not imply that the reader is
-    exhausted afterwards. *)
+    Decoding consumes only the bytes of the decoded value; anything past it
+    stays on the reader, so successive values can be decoded back-to-back from
+    the same reader. Types that extend to the end of input ({!all_bytes},
+    {!all_zeros}, and anything containing them) consume the whole stream. *)
 
 val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 (** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)

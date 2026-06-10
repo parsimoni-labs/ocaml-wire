@@ -10,6 +10,11 @@ let parse_chunked ~chunk_size typ s =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:chunk_size s in
   Wire.of_reader typ reader
 
+let reader_decode_ok typ reader =
+  match Wire.of_reader typ reader with
+  | Ok v -> v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
 (* Helper: encode to string via streaming writer with [chunk_size] buffer *)
 let encode_chunked ~chunk_size typ v =
   let buf = Buffer.create 64 in
@@ -780,6 +785,29 @@ let test_stream_uint64_chunk5 () =
   | Ok v -> Alcotest.(check int64) "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL v
   | Error e -> Alcotest.failf "uint64 chunk=5: %a" pp_parse_error e
 
+let test_stream_reader_sequential_fixed () =
+  let reader =
+    Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\x01\x02\x03\x04\x05"
+  in
+  Alcotest.(check int) "first" 0x01 (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "second" 0x0203 (reader_decode_ok uint16be reader);
+  Alcotest.(check int) "third" 0x0405 (reader_decode_ok uint16be reader);
+  Alcotest.(check bool)
+    "reader exhausted" true
+    (Bytesrw.Bytes.Slice.is_eod (Bytesrw.Bytes.Reader.read reader))
+
+let test_stream_reader_sequential_cross_slice () =
+  let reader =
+    Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03\x04"
+  in
+  Alcotest.(check int) "first" 0x0102 (reader_decode_ok uint16be reader);
+  Alcotest.(check int) "second" 0x0304 (reader_decode_ok uint16be reader)
+
+let test_stream_reader_sequential_zeroterm () =
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:2 "abc\000\x7f" in
+  Alcotest.(check string) "text" "abc" (reader_decode_ok zeroterm reader);
+  Alcotest.(check int) "tail" 0x7f (reader_decode_ok uint8 reader)
+
 let test_stream_bitfield_chunk1 () =
   (* Bitfield: 6+10+16 bits packed in a uint32 *)
   let bf = bits ~width:6 U32 in
@@ -930,6 +958,12 @@ let suite =
         test_stream_uint64_chunk3;
       Alcotest.test_case "stream: uint64 chunk=5" `Quick
         test_stream_uint64_chunk5;
+      Alcotest.test_case "stream: sequential fixed values" `Quick
+        test_stream_reader_sequential_fixed;
+      Alcotest.test_case "stream: sequential cross-slice values" `Quick
+        test_stream_reader_sequential_cross_slice;
+      Alcotest.test_case "stream: sequential zeroterm value" `Quick
+        test_stream_reader_sequential_zeroterm;
       Alcotest.test_case "stream: bitfield chunk=1" `Quick
         test_stream_bitfield_chunk1;
       Alcotest.test_case "stream: encode chunk=1" `Quick

@@ -390,9 +390,96 @@ let drain_reader reader =
   in
   loop ()
 
+let rec typ_consumes_rest : type a. a typ -> bool = function
+  | All_bytes | All_zeros -> true
+  | Map { inner; _ } -> typ_consumes_rest inner
+  | Where { inner; _ } -> typ_consumes_rest inner
+  | Enum { base; _ } -> typ_consumes_rest base
+  | Optional { inner; _ } -> typ_consumes_rest inner
+  | Optional_or { inner; _ } -> typ_consumes_rest inner
+  | Array { elem; _ } -> typ_consumes_rest elem
+  | Repeat { elem; _ } -> typ_consumes_rest elem
+  | Codec { codec_struct; _ } | Struct codec_struct ->
+      struct_consumes_rest codec_struct
+  | Casetype { tag; cases; _ } ->
+      typ_consumes_rest tag
+      || List.exists
+           (fun (Case_branch { cb_inner; _ }) -> typ_consumes_rest cb_inner)
+           cases
+  | Apply { typ; _ } -> typ_consumes_rest typ
+  | Single_elem _ -> false
+  | _ -> false
+
+and struct_consumes_rest (s : struct_) =
+  List.exists (fun (Field f) -> typ_consumes_rest f.field_typ) s.fields
+
+let push_back_bytes reader bytes first length =
+  if length > 0 then Reader.push_back reader (Slice.make bytes ~first ~length)
+
+let read_exact reader n =
+  let buf = Bytes.create n in
+  let rec loop off =
+    if off >= n then buf
+    else
+      let slice = Reader.read reader in
+      if Slice.is_eod slice then
+        raise (Parse_error (Unexpected_eof { expected = n; got = off }))
+      else
+        let slice_len = Slice.length slice in
+        let need = n - off in
+        let take = Int.min need slice_len in
+        Bytes.blit (Slice.bytes slice) (Slice.first slice) buf off take;
+        (if slice_len > take then
+           match Slice.drop take slice with
+           | None -> assert false
+           | Some rest -> Reader.push_back reader rest);
+        loop (off + take)
+  in
+  loop 0
+
+let missing_more_input = function
+  | Unexpected_eof _ -> true
+  (* must match the message raised by [Codec.zeroterm_nul_pos] *)
+  | Constraint_failed "zeroterm: missing NUL terminator" -> true
+  | _ -> false
+
+let of_reader_incremental typ reader =
+  let buf = Buffer.create 256 in
+  let rec loop () =
+    let bytes = Buffer.to_bytes buf in
+    let len = Bytes.length bytes in
+    let read_more on_eod =
+      let slice = Reader.read reader in
+      if Slice.is_eod slice then on_eod ()
+      else begin
+        Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
+          (Slice.length slice);
+        loop ()
+      end
+    in
+    match parse_direct typ bytes 0 len with
+    | v, off ->
+        push_back_bytes reader bytes off (len - off);
+        v
+    | exception Parse_error e when missing_more_input e ->
+        read_more (fun () -> raise (Parse_error e))
+    | exception Invalid_argument _ ->
+        read_more (fun () ->
+            raise
+              (Parse_error (Unexpected_eof { expected = len + 1; got = len })))
+  in
+  loop ()
+
 let of_reader_exn typ reader =
-  let bytes = drain_reader reader in
-  fst (parse_direct typ bytes 0 (Bytes.length bytes))
+  if typ_consumes_rest typ then
+    let bytes = drain_reader reader in
+    fst (parse_direct typ bytes 0 (Bytes.length bytes))
+  else
+    match Types.field_wire_size typ with
+    | Some n ->
+        let bytes = read_exact reader n in
+        fst (parse_direct typ bytes 0 n)
+    | None -> of_reader_incremental typ reader
 
 let of_reader typ reader =
   match of_reader_exn typ reader with
