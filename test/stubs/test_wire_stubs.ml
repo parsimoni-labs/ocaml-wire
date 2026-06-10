@@ -425,7 +425,7 @@ let check_action_forms codec =
     (Wire.Everparse.field_action_forms ep)
 
 let plug_field_names s =
-  List.map (fun f -> f.Wire.Everparse.pf_name) (Wire.Everparse.plug_fields s)
+  List.map (fun f -> f.Wire.Everparse.name) (Wire.Everparse.plug_fields s)
 
 (* Invariant 2: [plug_fields] enumerates exactly the named fields of the
    source struct in declaration order, with consecutive indices starting at
@@ -439,9 +439,7 @@ let check_plug_completeness codec =
   Alcotest.(check (list string))
     "plug_fields matches named source fields" expected got;
   let idxs =
-    List.map
-      (fun f -> f.Wire.Everparse.pf_idx)
-      (Wire.Everparse.plug_fields schema)
+    List.map (fun f -> f.Wire.Everparse.idx) (Wire.Everparse.plug_fields schema)
   in
   let expected_idxs = List.init (List.length idxs) Fun.id in
   Alcotest.(check (list int)) "indices consecutive from 0" expected_idxs idxs
@@ -465,7 +463,7 @@ let check_setter_scoping codec_a codec_b =
         Alcotest.failf "setter %s missing schema prefix %s" n sa.name)
     na
 
-(* Invariant 4: every pf_setter appears in plug_setters, and every setter in
+(* Invariant 4: every setter appears in plug_setters, and every setter in
    plug_setters is actually declared in the module as an extern_fn. Catches
    drift between what plug_fields claims and what the 3D module declares. *)
 let check_setter_declarations codec =
@@ -479,10 +477,10 @@ let check_setter_declarations codec =
     (Wire.Everparse.plug_setters schema);
   List.iter
     (fun f ->
-      let setter = f.Wire.Everparse.pf_setter in
+      let setter = f.Wire.Everparse.setter in
       if not (List.mem_assoc setter (Wire.Everparse.plug_setters schema)) then
         Alcotest.failf "field %s references setter %s not in plug_setters"
-          f.Wire.Everparse.pf_name setter)
+          f.Wire.Everparse.name setter)
     (Wire.Everparse.plug_fields schema)
 
 (* Test fixtures. Each codec exercises a specific combination so invariants

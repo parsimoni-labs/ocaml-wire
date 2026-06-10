@@ -60,7 +60,7 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
   | Types.Single_elem _ -> true
   | _ -> false
 
-type setter_info = { setter_name : string; setter_val_typ : Types.packed_typ }
+type setter_info = { name : string; val_typ : Types.packed_typ }
 
 (* 3D type suffix for unique extern function names *)
 let rec type_suffix : type a. a Types.typ -> string = function
@@ -108,8 +108,8 @@ let rec setter_of : type a. string -> a Types.typ -> setter_info =
   | Types.Byte_array _ | Types.Byte_array_where _ | Types.Byte_slice _
   | Types.Uint_var _ ->
       {
-        setter_name = schema_name ^ "SetBytes";
-        setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
+        name = schema_name ^ "SetBytes";
+        val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
       }
   | Types.Optional { inner; _ } -> setter_of schema_name inner
   | Types.Optional_or { inner; _ } -> setter_of schema_name inner
@@ -118,10 +118,7 @@ let rec setter_of : type a. string -> a Types.typ -> setter_info =
   | Types.Where { inner; _ } -> setter_of schema_name inner
   | _ ->
       let suffix = type_suffix t in
-      {
-        setter_name = schema_name ^ "Set" ^ suffix;
-        setter_val_typ = Types.Pack_typ t;
-      }
+      { name = schema_name ^ "Set" ^ suffix; val_typ = Types.Pack_typ t }
 
 let setter_call : type a.
     string -> a Types.typ -> string -> int -> int option -> Types.action_stmt =
@@ -135,7 +132,7 @@ let setter_call : type a.
       in
       (schema_name ^ "SetBytes", off)
     else
-      let { setter_name; _ } = setter_of schema_name typ in
+      let { name = setter_name; _ } = setter_of schema_name typ in
       (setter_name, Types.escape_3d name)
   in
   Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
@@ -335,10 +332,10 @@ let reorder_bit_groups_for_3d fields =
   in
   go [] fields
 
-let bytes_setter schema_name =
+let bytes_setter schema_name : setter_info =
   {
-    setter_name = schema_name ^ "SetBytes";
-    setter_val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
+    name = schema_name ^ "SetBytes";
+    val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
   }
 
 let collect_extern_setters schema_name ctx_struct u32 fields =
@@ -352,12 +349,12 @@ let collect_extern_setters schema_name ctx_struct u32 fields =
             if is_byte_field f.field_typ then bytes_setter schema_name
             else setter_of schema_name f.field_typ
           in
-          if Hashtbl.mem seen si.setter_name then None
+          if Hashtbl.mem seen si.name then None
           else begin
-            Hashtbl.add seen si.setter_name ();
-            let (Types.Pack_typ val_typ) = si.setter_val_typ in
+            Hashtbl.add seen si.name ();
+            let (Types.Pack_typ val_typ) = si.val_typ in
             Some
-              (Types.extern_fn si.setter_name
+              (Types.extern_fn si.name
                  [
                    Types.mutable_param "ctx" (Types.struct_typ ctx_struct);
                    Types.param "idx" u32;
@@ -501,7 +498,7 @@ let schema_of_struct (s : Types.struct_) : t =
 let schema (type r) (codec : r Codec.t) : t =
   schema_of_struct (Codec.to_struct codec)
 
-let filename s = String.capitalize_ascii s.name ^ ".3d"
+let filename (s : t) = String.capitalize_ascii s.name ^ ".3d"
 
 let uses_wire_ctx s =
   List.exists
@@ -513,14 +510,14 @@ let uses_wire_ctx s =
     s.module_.decls
 
 type plug_field = {
-  pf_name : string;
-  pf_idx : int;
-  pf_c_type : string;
-  pf_setter : string;
-  pf_val_c_type : string;
+  name : string;
+  idx : int;
+  c_type : string;
+  setter : string;
+  val_c_type : string;
 }
 
-let plug_field s idx (Types.Field f) =
+let plug_field (s : t) idx (Types.Field f) =
   match f.field_name with
   | None -> None
   | Some name ->
@@ -530,14 +527,14 @@ let plug_field s idx (Types.Field f) =
         if is_byte_field f.field_typ then bytes_setter s.name
         else setter_of s.name f.field_typ
       in
-      let (Types.Pack_typ val_typ) = setter.setter_val_typ in
+      let (Types.Pack_typ val_typ) = setter.val_typ in
       Some
         {
-          pf_name = name;
-          pf_idx = i;
-          pf_c_type = Types.c_type_of f.field_typ;
-          pf_setter = setter.setter_name;
-          pf_val_c_type = Types.c_type_of val_typ;
+          name;
+          idx = i;
+          c_type = Types.c_type_of f.field_typ;
+          setter = setter.name;
+          val_c_type = Types.c_type_of val_typ;
         }
 
 let plug_fields s =
@@ -551,10 +548,10 @@ let plug_setters s =
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun f ->
-      if Hashtbl.mem seen f.pf_setter then None
+      if Hashtbl.mem seen f.setter then None
       else begin
-        Hashtbl.add seen f.pf_setter ();
-        Some (f.pf_setter, f.pf_val_c_type)
+        Hashtbl.add seen f.setter ();
+        Some (f.setter, f.val_c_type)
       end)
     (plug_fields s)
 

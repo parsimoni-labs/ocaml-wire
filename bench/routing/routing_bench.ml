@@ -131,7 +131,9 @@ let check ~n_pkts =
 
 let main () =
   Memtrace.trace_if_requested ~context:"routing" ();
-  let n_pkts = 10_000_000 in
+  let n_pkts =
+    if Array.length Sys.argv > 1 then int_of_string Sys.argv.(1) else 10_000_000
+  in
   let t, payload_bytes, st, buf = benchmark ~n_pkts in
   Fmt.pr "APID demux (%d packets, %d MB stream, %d MB payload)\n\n" n_pkts
     (Bytes.length buf / 1_000_000)

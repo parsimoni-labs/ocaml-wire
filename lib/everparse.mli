@@ -78,11 +78,11 @@ val uses_wire_ctx : t -> bool
 *)
 
 type plug_field = {
-  pf_name : string;  (** Field name as declared in the codec. *)
-  pf_idx : int;  (** Index passed to the [WireSet*] callback. *)
-  pf_c_type : string;  (** C type for the generated struct member. *)
-  pf_setter : string;  (** [WireSet*] name that extracts this field. *)
-  pf_val_c_type : string;  (** C type of the value argument to the setter. *)
+  name : string;  (** Field name as declared in the codec. *)
+  idx : int;  (** Index passed to the [WireSet*] callback. *)
+  c_type : string;  (** C type for the generated struct member. *)
+  setter : string;  (** [WireSet*] name that extracts this field. *)
+  val_c_type : string;  (** C type of the value argument to the setter. *)
 }
 (** Plug info: the data needed by a concrete [WIRECTX] implementation (e.g.
     {!Wire_3d}'s [<Name>_Fields] default plug) to materialise a typed struct
@@ -95,8 +95,8 @@ val plug_fields : t -> plug_field list
 
 val plug_setters : t -> (string * string) list
 (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
-    [(setter_name, val_c_type)] pairs. Each one needs an implementation in the
-    plug. *)
+    [(setter, val_c_type)] pairs. Each one needs an implementation in the plug.
+*)
 
 val extern_fn_names : t -> string list
 (** [extern_fn_names s] lists the names of every extern function declared in the

@@ -53,6 +53,14 @@
 
 ### Changed
 
+- `Wire.of_reader` now consumes only the bytes of the decoded value and
+  leaves the rest on the reader, so several values can be decoded
+  back-to-back from the same reader. Previously the first call drained the
+  whole reader. Types that extend to the end of input (`all_bytes`,
+  `all_zeros`) still consume the whole stream (#144, @samoht)
+- The `Wire.Everparse.plug_field` record fields lose their `pf_` prefix
+  (`pf_name` is now `name`, `pf_idx` is `idx`, and so on). Update custom
+  plug generators accordingly (#144, @samoht)
 - Codecs that share a synthesised type (an `enum`, or a refined-byte or
   element-wrapper struct) can now be linked into one binary, so full protocol
   stacks built from per-codec parsers (Ethernet, IPv4, TCP, ...) link cleanly.

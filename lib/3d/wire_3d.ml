@@ -35,8 +35,8 @@ let everparse_name name =
    and CamelCases segments ([rpmsg_endpoint_info] -> [RpmsgEndpointInfo]).
    Keep the two concerns separate: [file_base] for filenames, [c_ident] for
    C identifiers. *)
-let file_base s = String.capitalize_ascii s.name
-let c_ident s = everparse_name s.name
+let file_base (s : t) = String.capitalize_ascii s.name
+let c_ident (s : t) = everparse_name s.name
 
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
@@ -212,17 +212,15 @@ let write_fields_header ~outdir s =
   List.iter
     (fun f ->
       pr "#define %s_IDX_%s %d@\n" prefix
-        (String.uppercase_ascii f.Wire.Everparse.pf_name)
-        f.pf_idx)
+        (String.uppercase_ascii f.Wire.Everparse.name)
+        f.idx)
     fields;
   if fields <> [] then pr "@\n";
   pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
     ident;
   pr "typedef struct %sFields {@\n" ident;
-  List.iter
-    (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.pf_c_type f.pf_name)
-    fields;
+  List.iter (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.c_type f.name) fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
   pr "#endif@\n";
@@ -234,16 +232,16 @@ let write_fields_header ~outdir s =
    underlying [UINT32] / [UINT64] but the plug struct stores the typed
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
-  if String.equal f.Wire.Everparse.pf_setter logical then
-    match f.pf_c_type with
+  if String.equal f.Wire.Everparse.setter logical then
+    match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
           "    case %d: { %s _x; memcpy(&_x, &v, sizeof _x); f->%s = _x; \
            break; }@\n"
-          f.pf_idx f.pf_c_type f.pf_name
+          f.idx f.c_type f.name
     | _ ->
-        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.pf_idx f.pf_name
-          f.pf_c_type
+        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx f.name
+          f.c_type
 
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in

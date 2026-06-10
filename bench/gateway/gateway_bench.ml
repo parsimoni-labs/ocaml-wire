@@ -156,7 +156,9 @@ let check ~n_frames =
 
 let main () =
   Memtrace.trace_if_requested ~context:"gateway" ();
-  let n_frames = 1_000_000 in
+  let n_frames =
+    if Array.length Sys.argv > 1 then int_of_string Sys.argv.(1) else 1_000_000
+  in
   let t, st = benchmark ~n_frames in
   Fmt.pr
     "TM frame reassembly (%d frames, %d-byte CADUs, %d embedded packets)\n\n"
