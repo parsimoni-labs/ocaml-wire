@@ -742,7 +742,15 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
     Decoding consumes only the bytes of the decoded value; anything past it
     stays on the reader, so successive values can be decoded back-to-back from
     the same reader. Types that extend to the end of input ({!all_bytes},
-    {!all_zeros}, and anything containing them) consume the whole stream. *)
+    {!all_zeros}, and anything containing them) consume the whole stream.
+
+    On [Error] the reader is rewound: every byte consumed by the failed decode
+    is pushed back, restoring the reader to its position before the call, so the
+    caller can retry with another description or after more input arrives. The
+    guarantee covers parse errors only; an exception escaping a user {!map}
+    function does not rewind, and output parameters written by actions during
+    the failed decode are not rolled back. Push back makes
+    [Bytesrw.Bytes.Reader.pos] non-monotonic across a failed decode. *)
 
 val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 (** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)

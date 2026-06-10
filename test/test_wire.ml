@@ -808,6 +808,46 @@ let test_stream_reader_sequential_zeroterm () =
   Alcotest.(check string) "text" "abc" (reader_decode_ok zeroterm reader);
   Alcotest.(check int) "tail" 0x7f (reader_decode_ok uint8 reader)
 
+(* Rewind on error: a failed decode pushes back everything it consumed, so
+   the same bytes decode under another description (one test per of_reader
+   path: fixed-size, partial fixed-size at eof, incremental, consumes-rest). *)
+
+let test_stream_rewind_fixed () =
+  let bad = enum "Tag" [ ("A", 1); ("B", 2) ] uint8 in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\xff\x01\x02" in
+  (match Wire.of_reader bad reader with
+  | Error (Invalid_enum _) -> ()
+  | Ok v -> Alcotest.failf "expected enum failure, got %d" v
+  | Error e -> Alcotest.failf "expected Invalid_enum: %a" pp_parse_error e);
+  Alcotest.(check int) "rewound first" 0xff (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "rest intact" 0x0102 (reader_decode_ok uint16be reader)
+
+let test_stream_rewind_partial_fixed () =
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03" in
+  (match Wire.of_reader uint32be reader with
+  | Error (Unexpected_eof _) -> ()
+  | Ok v -> Alcotest.failf "expected eof, got %d" v
+  | Error e -> Alcotest.failf "expected Unexpected_eof: %a" pp_parse_error e);
+  Alcotest.(check int) "rewound" 0x0102 (reader_decode_ok uint16be reader);
+  Alcotest.(check int) "rest intact" 0x03 (reader_decode_ok uint8 reader)
+
+let test_stream_rewind_incremental () =
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "abc" in
+  (match Wire.of_reader zeroterm reader with
+  | Error (Constraint_failed _) -> ()
+  | Ok s -> Alcotest.failf "expected missing NUL, got %S" s
+  | Error e -> Alcotest.failf "expected Constraint_failed: %a" pp_parse_error e);
+  Alcotest.(check int) "rewound" 0x61 (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "rest intact" 0x6263 (reader_decode_ok uint16be reader)
+
+let test_stream_rewind_consumes_rest () =
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "ab" in
+  (match Wire.of_reader all_zeros reader with
+  | Error (All_zeros_failed _) -> ()
+  | Ok s -> Alcotest.failf "expected all_zeros failure, got %S" s
+  | Error e -> Alcotest.failf "expected All_zeros_failed: %a" pp_parse_error e);
+  Alcotest.(check int) "rewound" 0x6162 (reader_decode_ok uint16be reader)
+
 let test_stream_bitfield_chunk1 () =
   (* Bitfield: 6+10+16 bits packed in a uint32 *)
   let bf = bits ~width:6 U32 in
@@ -964,6 +1004,14 @@ let suite =
         test_stream_reader_sequential_cross_slice;
       Alcotest.test_case "stream: sequential zeroterm value" `Quick
         test_stream_reader_sequential_zeroterm;
+      Alcotest.test_case "stream: rewind on fixed-size error" `Quick
+        test_stream_rewind_fixed;
+      Alcotest.test_case "stream: rewind on partial fixed-size eof" `Quick
+        test_stream_rewind_partial_fixed;
+      Alcotest.test_case "stream: rewind on incremental error" `Quick
+        test_stream_rewind_incremental;
+      Alcotest.test_case "stream: rewind on consumes-rest error" `Quick
+        test_stream_rewind_consumes_rest;
       Alcotest.test_case "stream: bitfield chunk=1" `Quick
         test_stream_bitfield_chunk1;
       Alcotest.test_case "stream: encode chunk=1" `Quick
