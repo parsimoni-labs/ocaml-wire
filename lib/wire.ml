@@ -422,8 +422,10 @@ let read_exact reader n =
     if off >= n then buf
     else
       let slice = Reader.read reader in
-      if Slice.is_eod slice then
+      if Slice.is_eod slice then begin
+        push_back_bytes reader buf 0 off;
         raise (Parse_error (Unexpected_eof { expected = n; got = off }))
+      end
       else
         let slice_len = Slice.length slice in
         let need = n - off in
@@ -436,6 +438,18 @@ let read_exact reader n =
         loop (off + take)
   in
   loop 0
+
+(* Parse [bytes] and keep the reader transactional: on success push back the
+   bytes past the decoded value, on parse error push back everything so the
+   reader is restored to its position before the failed decode. *)
+let parse_or_rewind typ reader bytes len =
+  match parse_direct typ bytes 0 len with
+  | v, off ->
+      push_back_bytes reader bytes off (len - off);
+      v
+  | exception Parse_error e ->
+      push_back_bytes reader bytes 0 len;
+      raise (Parse_error e)
 
 let missing_more_input = function
   | Unexpected_eof _ -> true
@@ -462,9 +476,15 @@ let of_reader_incremental typ reader =
         push_back_bytes reader bytes off (len - off);
         v
     | exception Parse_error e when missing_more_input e ->
-        read_more (fun () -> raise (Parse_error e))
+        read_more (fun () ->
+            push_back_bytes reader bytes 0 len;
+            raise (Parse_error e))
+    | exception Parse_error e ->
+        push_back_bytes reader bytes 0 len;
+        raise (Parse_error e)
     | exception Invalid_argument _ ->
         read_more (fun () ->
+            push_back_bytes reader bytes 0 len;
             raise
               (Parse_error (Unexpected_eof { expected = len + 1; got = len })))
   in
@@ -473,12 +493,12 @@ let of_reader_incremental typ reader =
 let of_reader_exn typ reader =
   if typ_consumes_rest typ then
     let bytes = drain_reader reader in
-    fst (parse_direct typ bytes 0 (Bytes.length bytes))
+    parse_or_rewind typ reader bytes (Bytes.length bytes)
   else
     match Types.field_wire_size typ with
     | Some n ->
         let bytes = read_exact reader n in
-        fst (parse_direct typ bytes 0 n)
+        parse_or_rewind typ reader bytes n
     | None -> of_reader_incremental typ reader
 
 let of_reader typ reader =

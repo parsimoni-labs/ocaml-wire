@@ -53,6 +53,10 @@
 
 ### Changed
 
+- `Wire.of_reader` now rewinds on failure: every byte consumed by a failed
+  decode is pushed back, restoring the reader to its position before the
+  call, so the caller can retry with another description or after more
+  input arrives (#145, @samoht)
 - `Wire.of_reader` now consumes only the bytes of the decoded value and
   leaves the rest on the reader, so several values can be decoded
   back-to-back from the same reader. Previously the first call drained the
