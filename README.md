@@ -4,8 +4,17 @@ Binary wire format DSL with EverParse 3D output.
 
 ## Overview
 
-Wire is a GADT-based OCaml DSL for describing binary wire formats.
-Define your format once, then:
+Hand-written binary parsers in C are a recurring source of memory-safety
+bugs, which is why [EverParse](https://project-everest.github.io/everparse/)
+is attractive for security-critical systems: it generates C parsers with
+machine-checked proofs of memory safety and correctness. Its `.3d` schemas
+are written by hand, though, and a `.3d` file gives you a validator, not a
+serialiser or a codec for the language the application is written in.
+
+Wire describes a binary format once, as an OCaml value, and derives from that
+single description both a zero-copy OCaml codec, for parsing and serialising,
+and the EverParse `.3d` schema that compiles to a verified C parser. Define
+the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
 - **Read and write fields in-place** via `Codec.get` / `Codec.set` -- zero-copy,
@@ -23,7 +32,7 @@ Define your format once, then:
 opam install wire
 ```
 
-API reference: [odoc on ocaml.org](https://ocaml.org/p/wire/latest/doc/Wire/index.html).
+API reference: [wire on ocaml.org](https://ocaml.org/p/wire/latest).
 
 ## Quick start
 
@@ -89,10 +98,10 @@ let schema = Everparse.schema codec
 let _write () = Everparse.write_3d ~outdir:"schemas" [ schema ]
 ```
 
-The generated 3D uses the EverParse output-types pattern: the generated C
-validates AND extracts every field via schema-prefixed extern callbacks
-(`<Name>SetU8`, `<Name>SetU16be`, ...). See [Consuming from C](#consuming-from-c)
-for what that means at the C level.
+The 3D output uses the EverParse output-types pattern: the generated C
+validates and, in the same pass, extracts every field via schema-prefixed
+extern callbacks (`<Name>SetU8`, `<Name>SetU16BE`, ...). See
+[Consuming from C](#consuming-from-c) for what that means at the C level.
 
 To turn those schemas into EverParse-generated C:
 
@@ -132,7 +141,7 @@ if (EverParseIsSuccess(SpacePacketValidateSpacePacket(
 }
 ```
 
-### Custom plug (hot-path optimization)
+### Custom plug (hot-path optimisation)
 
 If profiling says the field stores are hot, copy the shipped `<Name>_Fields.c`
 to your own `my_plug.c`, delete the `case`s for fields you don't need, and
@@ -148,7 +157,7 @@ few unused bytes.
 #include "SpacePacket_ExternalTypedefs.h"
 #include "SpacePacket_ExternalAPI.h"
 
-void SpacePacketSetU16be(WIRECTX *ctx, uint32_t idx, uint16_t v) {
+void SpacePacketSetU16BE(WIRECTX *ctx, uint32_t idx, uint16_t v) {
   SpacePacketFields *f = (SpacePacketFields *)ctx;
   switch (idx) {
     case SPACEPACKET_IDX_APID: f->APID = v; break;
@@ -166,19 +175,16 @@ short one-liners.
 
 No weak symbols, no linker magic: whichever plug `.c` you link gets used.
 
-### ASCII diagrams
-
-```ocaml
-let () = print_string (Ascii.of_codec codec)
-```
-
 ## Features
+
+Wire covers the binary-format constructs that project cleanly to 3D. Each row
+is one construct, the OCaml that describes it, and the 3D it generates:
 
 | Feature | OCaml | [EverParse 3D][3d-ref] |
 |---------|-------|------------------------|
 | Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, ... |
 | Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
-| Bool | `bool (bits ~width:1 U8)` | -- |
+| Bool | `bit (bits ~width:1 U8)` | -- |
 | Byte slices | `byte_slice ~size:e` (zero-copy) | `UINT8 [: e]` |
 | Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
 | Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
@@ -189,16 +195,20 @@ let () = print_string (Ascii.of_codec codec)
 | Arrays | `array ~len:e`, `nested ~size:e` | `t [: e]` |
 | Dependent sizes | `Field.ref f_len` | field references |
 | Custom mappings | `map ~decode ~encode` | -- |
-| ASCII diagrams | `Ascii.of_codec` | -- |
 
 [3d-ref]: https://project-everest.github.io/everparse/3d-lang.html
-[3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#enums
+[3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations
 [3d-where]: https://project-everest.github.io/everparse/3d-lang.html#constraints
 [3d-act]: https://project-everest.github.io/everparse/3d-lang.html#actions
-[3d-param]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-types
-[3d-case]: https://project-everest.github.io/everparse/3d-lang.html#tagged-unions
+[3d-param]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types
+[3d-case]: https://project-everest.github.io/everparse/3d-lang.html#tagged-unions-or-casetype
 
 ## Real-world examples
+
+The [`examples/`](https://github.com/parsimoni-labs/ocaml-wire/tree/main/examples)
+directory has complete definitions for CCSDS space packets and TCP/IP headers.
+The fragments below give the flavour; `Ascii.of_codec` renders the diagrams
+shown alongside them.
 
 ### IPv4 header
 
@@ -260,76 +270,21 @@ let _ = Codec.decode ~env codec buf 0
 let len = Param.get env out_len
 ```
 
-## Architecture
-
-```
-              +-----------------------------+
-              | Field.v + Codec.v / ($)     |
-              | describe record formats     |
-              +--------------+--------------+
-                             |
-         +-------------------+-------------------+
-         |                   |                   |
-         v                   v                   v
-  +---------------+   +---------------+   +---------------+
-  | Codec         |   | Everparse     |   | Ascii         |
-  | decode/encode |   | schema        |   | of_codec      |
-  | get/set       |   | write_3d      |   |               |
-  +-------+-------+   +-------+-------+   +---------------+
-          |                   |
-          |                   v
-          |     +---------------+       +---------------+
-          |     | Wire_3d       | ----> | Wire_stubs    |
-          |     | EverParse/C   |       | OCaml FFI     |
-          |     +-------+-------+       +-------+-------+
-          |             |                       |
-          |             +-----------+-----------+
-          |                         |
-          +------------+------------+
-                       |
-                       v
-                 +---------------+
-                 | Wire_diff     |
-                 | OCaml vs C    |
-                 +---------------+
-```
-
 ## Development
 
 ```
-make build          # dune build
-make test           # dune runtest
-make bench          # all benchmarks (needs 3d.exe)
-make bench-demo     # field-level codec: EverParse C vs FFI vs OCaml
-make bench-clcw     # CLCW polling loop: Wire OCaml vs EverParse C
-make bench-routing  # APID demux throughput: Wire OCaml vs EverParse C
-make bench-gateway  # TM frame reassembly: Wire OCaml vs EverParse C
-make clean          # dune clean
+dune build
+dune runtest
 ```
 
-## Project structure
-
-| Directory | Description |
-|-----------|-------------|
-| `lib/` | Core `wire` library: DSL types, Codec, Eval, Param, Action, Ascii, Everparse |
-| `lib/3d/` | `wire.3d` sublibrary: EverParse tooling (write `.3d`, run `3d.exe`, generate C artifacts) |
-| `lib/stubs/` | `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators |
-| `lib/diff/` | `wire.diff` sublibrary: differential testing harness (OCaml codec vs C stubs) |
-| `lib/diff-gen/` | `wire.diff-gen`: generate differential test schemas and runners |
-| `test/stubs/` | Wire\_stubs test suite (compile + EverParse e2e tests) |
-| `examples/space/` | CCSDS space protocols (SpacePacket, CLCW, TMFrame) |
-| `examples/net/` | TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy demo |
-| `bench/demo/` | Field-level codec benchmark: EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set` |
-| `bench/clcw/` | CLCW polling loop: Wire OCaml vs EverParse C |
-| `bench/routing/` | APID demux throughput: Wire OCaml vs EverParse C |
-| `bench/gateway/` | TM frame reassembly: Wire OCaml vs EverParse C |
-| `fuzz/` | Fuzz tests: crash safety and roundtrip correctness (OCaml-only, no C dependency) |
-| `test/` | Alcotest unit tests |
-| `test/diff/` | Differential fuzz tests: random schemas, OCaml vs EverParse C (needs `3d.exe`) |
-| `.github/workflows/` | CI workflow |
+The benchmarks compare the OCaml codec against the EverParse-generated C and
+the FFI bridge, so they need `3d.exe` on the `PATH`. The `Makefile` has the
+individual `make bench-*` targets.
 
 ## References
 
+- [Describing Binary Formats in OCaml](https://gazagnaire.org/blog/2026-03-31-ocaml-wire.html)
+  -- the design rationale behind wire, with benchmarks
 - [EverParse](https://project-everest.github.io/everparse/) -- verified parser
   generator from Project Everest
 - [3D Language Reference](https://project-everest.github.io/everparse/3d-lang.html)
