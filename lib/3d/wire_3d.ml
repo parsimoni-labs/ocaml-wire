@@ -536,14 +536,14 @@ let strict_cc_flags =
 let emit_gen_rules ppf three_d_files c_files ctx_files =
   Fmt.pf ppf
     "(rule\n\
-    \ (alias gen)\n\
+    \ (alias 3d)\n\
     \ (mode promote)\n\
     \ (targets %s)\n\
     \ (deps gen.exe)\n\
     \ (action\n\
     \  (run ./gen.exe 3d)))\n\n\
      (rule\n\
-    \ (alias gen)\n\
+    \ (alias 3d)\n\
     \ (mode fallback)\n\
     \ (targets EverParse.h EverParseEndianness.h %s test.c)\n\
     \ (deps gen.exe %s)\n\

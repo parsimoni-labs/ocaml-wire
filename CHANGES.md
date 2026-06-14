@@ -53,6 +53,10 @@
 
 ### Changed
 
+- The build rules `wire.3d` generates (the `dune.inc` and the wrapper in its
+  setup example) now use a `3d` alias instead of the generic `gen`, so
+  `dune build @3d` regenerates the `.3d` files and EverParse C parsers.
+  Update any `dune build @gen` invocation accordingly (#146, @samoht)
 - `Wire.of_reader` now rewinds on failure: every byte consumed by a failed
   decode is pushed back, restoring the reader to its position before the
   call, so the caller can retry with another description or after more
