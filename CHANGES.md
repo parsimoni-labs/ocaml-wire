@@ -53,6 +53,10 @@
 
 ### Changed
 
+- Decoding a `Field.repeat` over a `Wire.casetype` (the DHCP / TCP
+  option-list shape) no longer allocates a closure and a boxed length per
+  element, so decode allocation no longer grows with the number of elements.
+  Pure speedup, no API change (#148, @samoht)
 - The build rules `wire.3d` generates (the `dune.inc` and the wrapper in its
   setup example) now use a `3d` alias instead of the generic `gen`, so
   `dune build @3d` regenerates the `.3d` files and EverParse C parsers.
