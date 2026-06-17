@@ -1068,6 +1068,18 @@ let zeroterm_nul_pos buf ~first ~limit =
   in
   go first
 
+(* Byte size of a casetype tag. The tag is always a fixed-size scalar int, so
+   the common widths answer directly: [field_wire_size] would box a [Some n]
+   per call, and a casetype element reads its tag size on every iteration. *)
+let tag_byte_size : type a. a typ -> int =
+ fun typ ->
+  match typ with
+  | Uint8 | Int8 -> 1
+  | Uint16 _ | Int16 _ -> 2
+  | Uint32 _ | Int32 _ -> 4
+  | Uint63 _ | Uint64 _ | Int64 _ -> 8
+  | _ -> ( match field_wire_size typ with Some n -> n | None -> assert false)
+
 (* Read one element of a typ at a given buffer position. Used by Repeat. *)
 let rec read_elem : type a. a typ -> bytes -> int -> a =
  fun typ buf off ->
@@ -1098,24 +1110,8 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Where { inner; _ } -> read_elem inner buf off
   | Enum { base; cases; _ } -> enum_checker cases (read_elem base buf off)
   | Casetype { tag; cases; _ } ->
-      let tag_size =
-        match field_wire_size tag with
-        | Some n -> n
-        | None -> assert false (* casetype tag is always fixed-size int *)
-      in
       let tag_val = read_elem tag buf off in
-      let body_off = off + tag_size in
-      let rec find = function
-        | [] ->
-            raise (Parse_error (Constraint_failed "casetype: no matching case"))
-        | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
-          when t = tag_val ->
-            cb_inject tag_val (read_elem cb_inner buf body_off)
-        | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-            cb_inject tag_val (read_elem cb_inner buf body_off)
-        | _ :: rest -> find rest
-      in
-      find cases
+      read_case_body cases tag_val buf (off + tag_byte_size tag)
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
@@ -1152,6 +1148,21 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
      enclosing region size (padding) is accounted for by the caller. *)
   | Single_elem { elem; _ } -> read_elem elem buf off
   | _ -> failwith "read_elem: unsupported element type in repeat"
+
+(* Dispatch a casetype's matched case body. A top-level recursion rather than a
+   [let rec find] inside [read_elem]: the inner form would allocate a fresh
+   closure on every casetype element decoded. *)
+and read_case_body : type a k. (a, k) case_branch list -> k -> bytes -> int -> a
+    =
+ fun cases tag_val buf body_off ->
+  match cases with
+  | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
+  | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
+    when t = tag_val ->
+      cb_inject tag_val (read_elem cb_inner buf body_off)
+  | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
+      cb_inject tag_val (read_elem cb_inner buf body_off)
+  | _ :: rest -> read_case_body rest tag_val buf body_off
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
 let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
@@ -1207,21 +1218,9 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
   match typ with
   | Codec { codec_size_of; _ } -> codec_size_of buf off
   | Casetype { tag; cases; _ } ->
-      let tag_size =
-        match field_wire_size tag with Some n -> n | None -> assert false
-      in
+      let tag_size = tag_byte_size tag in
       let tag_val = read_elem tag buf off in
-      let body_off = off + tag_size in
-      let rec find = function
-        | [] ->
-            raise (Parse_error (Constraint_failed "casetype: no matching case"))
-        | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
-            tag_size + elem_size_of cb_inner buf body_off
-        | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
-            tag_size + elem_size_of cb_inner buf body_off
-        | _ :: rest -> find rest
-      in
-      find cases
+      tag_size + size_case_body cases tag_val buf (off + tag_size)
   | Map { inner; _ } -> elem_size_of inner buf off
   | Where { inner; _ } -> elem_size_of inner buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
@@ -1238,6 +1237,20 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
       match field_wire_size typ with
       | Some n -> n
       | None -> failwith "elem_size_of: cannot determine element size")
+
+(* Wire size of a casetype's matched case body. Top-level for the same reason
+   as [read_case_body]: a per-call [let rec find] would allocate a closure on
+   every element. *)
+and size_case_body : type a k.
+    (a, k) case_branch list -> k -> bytes -> int -> int =
+ fun cases tag_val buf body_off ->
+  match cases with
+  | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
+  | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
+      elem_size_of cb_inner buf body_off
+  | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
+      elem_size_of cb_inner buf body_off
+  | _ :: rest -> size_case_body rest tag_val buf body_off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
