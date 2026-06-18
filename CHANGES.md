@@ -53,6 +53,11 @@
 
 ### Changed
 
+- Reading or writing a `uint32` or `uint63` field now stays in the native
+  `int` instead of round-tripping through a boxed `Int32` or `Int64`. The
+  boxing surfaced as per-field allocation in tight decode and encode loops;
+  field access is now allocation-free regardless of how the compiler optimises
+  the surrounding code. Pure speedup, no API change (#150, @samoht)
 - `Wire.Codec.decode` no longer allocates a fresh validation buffer on every
   call: each codec reuses a single buffer across decodes, so decoding the same
   codec in a loop allocates a constant amount instead of growing with the
