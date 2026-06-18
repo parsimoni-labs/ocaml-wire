@@ -787,6 +787,11 @@ type 'r t = {
   validate_arr : int array -> bytes -> int -> unit;
   populate : int array -> bytes -> int -> unit;
   n_array_slots : int;
+  decode_scratch : int array;
+      (* Validation scratch, allocated once at [seal] and zeroed per decode
+         (see [decode_exn]), mirroring the [validate] closure, the struct
+         validator, and [Codec.get]'s staged reader. Same shared-buffer
+         contract: not safe for concurrent decode of one codec value. *)
   param_base : int;
   n_params : int;
   param_handles : Param.packed list;
@@ -2608,6 +2613,7 @@ let seal : type r. (r, r) record -> r t =
     validate_arr;
     populate;
     n_array_slots = n_total;
+    decode_scratch = Array.make n_total 0;
     param_base;
     n_params;
     param_handles;
@@ -2973,7 +2979,8 @@ let env (t : _ t) : Param.env =
 
 let decode_exn ?env:e t buf off =
   let v = t.decode buf off in
-  let arr = Array.make t.n_array_slots 0 in
+  let arr = t.decode_scratch in
+  Array.fill arr 0 t.n_array_slots 0;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
       Array.blit e.slots 0 arr t.param_base t.n_params
