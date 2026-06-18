@@ -53,6 +53,10 @@
 
 ### Changed
 
+- `Wire.Codec.decode` no longer allocates a fresh validation buffer on every
+  call: each codec reuses a single buffer across decodes, so decoding the same
+  codec in a loop allocates a constant amount instead of growing with the
+  number of decodes. Pure speedup, no API change (#149, @samoht)
 - Decoding a `Field.repeat` over a `Wire.casetype` (the DHCP / TCP
   option-list shape) no longer allocates a closure and a boxed length per
   element, so decode allocation no longer grows with the number of elements.
