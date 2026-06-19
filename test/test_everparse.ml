@@ -185,6 +185,59 @@ let test_3d_enum_membership () =
     "enum nested in a sub-codec bounds its value" true
     (contains ~sub:"(e == 1)" (to_3d (Everparse.schema arr).module_))
 
+let test_doc_drops_ffi_scaffolding () =
+  (* The doc projection keeps the structure but not the FFI callbacks the
+     codegen schema carries. *)
+  let c =
+    Codec.v "Pkt" (fun v -> v) Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
+  in
+  let schema = to_3d (Everparse.schema c).module_ in
+  let doc = to_3d ~enum_as_type:true (Everparse.doc c).module_ in
+  Alcotest.(check bool)
+    "schema has WireCtx" true
+    (contains ~sub:"WireCtx" schema);
+  Alcotest.(check bool) "doc has no WireCtx" false (contains ~sub:"WireCtx" doc);
+  Alcotest.(check bool) "doc has no WireSet" false (contains ~sub:"WireSet" doc);
+  Alcotest.(check bool) "doc keeps the field" true (contains ~sub:"UINT8 v" doc)
+
+let test_doc_enum_as_type () =
+  (* An enum field renders as its named 3D enum type, so EverParse enforces
+     membership through the type rather than an explicit refinement. *)
+  let e = enum "Color" [ ("Red", 0); ("Green", 1); ("Blue", 2) ] uint8 in
+  let c = Codec.v "Pix" (fun v -> v) Codec.[ (Field.v "Hue" e $ fun v -> v) ] in
+  let doc = to_3d ~enum_as_type:true (Everparse.doc c).module_ in
+  Alcotest.(check bool)
+    "declares the enum" true
+    (contains ~sub:"enum Color" doc);
+  Alcotest.(check bool)
+    "types the field as the enum" true
+    (contains ~sub:"Color Hue" doc);
+  Alcotest.(check bool)
+    "drops the membership refinement" false (contains ~sub:"== 0" doc);
+  Alcotest.(check bool)
+    "codegen schema keeps membership" true
+    (contains ~sub:"== 0" (to_3d (Everparse.schema c).module_))
+
+let test_doc_merge_dedup () =
+  (* write_doc unions a family into one module, emitting a shared type once. *)
+  let e = enum "Shared" [ ("A", 0); ("B", 1) ] uint8 in
+  let c1 = Codec.v "One" (fun v -> v) Codec.[ (Field.v "x" e $ fun v -> v) ] in
+  let c2 = Codec.v "Two" (fun v -> v) Codec.[ (Field.v "y" e $ fun v -> v) ] in
+  let dir = Filename.get_temp_dir_name () in
+  let name = "wire_doc_merge_test" in
+  Everparse.write_doc ~outdir:dir ~name [ Everparse.doc c1; Everparse.doc c2 ];
+  let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+  let content = In_channel.with_open_text path In_channel.input_all in
+  Sys.remove path;
+  let count sub = List.length (Re.all (Re.compile (Re.str sub)) content) in
+  Alcotest.(check int) "shared enum declared once" 1 (count "enum Shared");
+  Alcotest.(check bool)
+    "first struct present" true
+    (contains ~sub:"One" content);
+  Alcotest.(check bool)
+    "second struct present" true
+    (contains ~sub:"Two" content)
+
 let test_3d_nested_byte_array_where () =
   (* A byte_array_where inside a nested region needs its synthesised refined-byte
      typedef emitted, before the wrapper that references it, or the schema names
@@ -832,6 +885,12 @@ let suite =
         test_3d_array_enum_element_decl;
       Alcotest.test_case "3d: enum membership refinement" `Quick
         test_3d_enum_membership;
+      Alcotest.test_case "doc: drops FFI scaffolding" `Quick
+        test_doc_drops_ffi_scaffolding;
+      Alcotest.test_case "doc: enum renders as named type" `Quick
+        test_doc_enum_as_type;
+      Alcotest.test_case "doc: merge dedups shared types" `Quick
+        test_doc_merge_dedup;
       Alcotest.test_case "3d: nested byte_array_where refined typedef" `Quick
         test_3d_nested_byte_array_where;
       Alcotest.test_case "3d: static optional transparent projection" `Quick

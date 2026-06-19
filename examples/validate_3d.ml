@@ -11,8 +11,11 @@ module Raw = Wire.Everparse.Raw
 type case =
   | Raw of string * Raw.module_
   | Codec : string * 'a Wire.Codec.t -> case
+  | Doc of string * Wire.Everparse.t list
+      (** A whole protocol family projected with {!Wire.Everparse.doc} and
+          merged into one [<Name>.3d] by {!Wire.Everparse.write_doc}. *)
 
-let case_name = function Raw (n, _) | Codec (n, _) -> n
+let case_name = function Raw (n, _) | Codec (n, _) | Doc (n, _) -> n
 
 let raw_struct ?(entrypoint = true) (s : Raw.struct_) =
   let module_ = Raw.module_ [ Raw.typedef ~entrypoint s ] in
@@ -58,6 +61,21 @@ let cases =
     Codec ("TMWithOCF", Space.tm_with_ocf_codec);
     Codec ("InnerCmd", Space.inner_cmd_codec);
     Codec ("OuterHdr", Space.outer_hdr_codec);
+    Doc
+      ( "Net",
+        Wire.Everparse.
+          [
+            doc Net.ethernet_codec;
+            doc Net.ipv4_codec;
+            doc Net.tcp_codec;
+            doc Net.udp_codec;
+          ] );
+    Doc
+      ("Space", Wire.Everparse.[ doc Space.clcw_codec; doc Space.packet_codec ]);
+    Doc
+      ( "Demo",
+        Wire.Everparse.[ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]
+      );
   ]
 
 let emit ~outdir = function
@@ -69,6 +87,9 @@ let emit ~outdir = function
       let s = Wire.Everparse.schema codec in
       Wire_3d.generate_3d ~outdir [ s ];
       Wire.Everparse.filename s
+  | Doc (name, ts) ->
+      Wire.Everparse.write_doc ~outdir ~name ts;
+      String.capitalize_ascii name ^ ".3d"
 
 let validate_one case =
   let outdir = Filename.temp_dir "wire_validate_3d" "" in

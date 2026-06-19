@@ -42,7 +42,10 @@
   Ethernet.3d
   IPv4.3d
   TCP.3d
-  UDP.3d)
+  UDP.3d
+  Net.3d
+  Space.3d
+  Demo.3d)
  (deps gen_3d.exe)
  (action
   (run ./gen_3d.exe)))
@@ -82,4 +85,7 @@
   Ethernet.3d
   IPv4.3d
   TCP.3d
-  UDP.3d))
+  UDP.3d
+  Net.3d
+  Space.3d
+  Demo.3d))
