@@ -1103,6 +1103,20 @@ module Everparse : sig
   val write_3d : outdir:string -> t list -> unit
   (** Writes one [.3d] file per schema into [outdir]. *)
 
+  val doc : 'r Codec.t -> t
+  (** [doc codec] projects [codec] to a clean schema for documentation and
+      pure-C parser generation: the same structural 3D as {!schema} (struct,
+      bitfields, [where] clause, enums, casetypes, refined-byte typedefs) but
+      without the FFI scaffolding (no [WireCtx] extern, no [WireSet*]
+      callbacks). It reads as a protocol specification, and 3d.exe compiles it
+      to a validator-only C parser with no FFI. *)
+
+  val write_doc : outdir:string -> name:string -> t list -> unit
+  (** [write_doc ~outdir ~name ts] merges the (doc) schemas [ts] into one module
+      -- a type shared across codecs is emitted once -- and writes a single
+      [<Name>.3d] into [outdir], so a whole protocol family reads as one
+      document. *)
+
   module Raw : sig
     (** Escape hatch for manual 3D authoring.
 
@@ -1151,11 +1165,14 @@ module Everparse : sig
     val module_ : ?doc:string -> decl list -> module_
     (** Builds a 3D module from declarations. *)
 
-    val to_3d : module_ -> string
-    (** Renders a 3D module to text. *)
+    val to_3d : ?enum_as_type:bool -> module_ -> string
+    (** Renders a 3D module to text. With [~enum_as_type:true] an enum field
+        renders as its named 3D enum type rather than the base type plus a
+        membership refinement. *)
 
-    val to_3d_file : string -> module_ -> unit
-    (** Writes a rendered 3D module to a file. *)
+    val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
+    (** Writes a rendered 3D module to a file. See {!to_3d} for [enum_as_type].
+    *)
 
     val field :
       string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field

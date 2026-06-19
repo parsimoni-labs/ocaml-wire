@@ -50,4 +50,20 @@ let () =
       ("Message.3d", Demo.casetype_module);
       ("ExternDemo.3d", Demo.extern_module);
       ("Outer.3d", Demo.type_ref_module);
-    ]
+    ];
+  (* Documentation specs: a whole protocol family in one readable [.3d],
+     projected without the FFI scaffolding (see [Wire.Everparse.doc]). *)
+  List.iter
+    (fun (name, ts) -> Wire.Everparse.write_doc ~outdir:"." ~name ts)
+    Wire.Everparse.
+      [
+        ( "net",
+          [
+            doc Net.ethernet_codec;
+            doc Net.ipv4_codec;
+            doc Net.tcp_codec;
+            doc Net.udp_codec;
+          ] );
+        ("space", [ doc Space.clcw_codec; doc Space.packet_codec ]);
+        ("demo", [ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]);
+      ]

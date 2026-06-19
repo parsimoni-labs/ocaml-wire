@@ -2,6 +2,12 @@
 
 ### Added
 
+- `Wire.Everparse.doc` and `Wire.Everparse.write_doc` project a codec, or a
+  whole family of codecs, to a clean `.3d` with no FFI scaffolding: enums
+  render as named 3D enum types, types shared across codecs are emitted once,
+  and a protocol family lands in one readable `<Name>.3d`. The result doubles
+  as a protocol specification and as input to EverParse, which compiles it to a
+  standalone C validator with no FFI (#151, @samoht)
 - `Wire.Codec.rename` returns a codec with a new name, leaving its wire
   encoding and field constraints unchanged, so a generically built codec can
   be given a unique, meaningful name before code generation (@samoht)

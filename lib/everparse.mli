@@ -143,6 +143,20 @@ val field_action_forms :
 val write_3d : outdir:string -> t list -> unit
 (** [write_3d ~outdir ts] writes one [.3d] file per schema in [outdir]. *)
 
+val doc : 'r Codec.t -> t
+(** [doc codec] projects [codec] to a clean schema for documentation and pure-C
+    parser generation. It carries the same structural 3D as {!schema} (struct,
+    bitfields, [where] clause, enums, casetypes, refined-byte typedefs) but
+    drops the FFI scaffolding: no [WireCtx] extern, no [WireSet*] extraction
+    callbacks. The result reads as a protocol specification, and 3d.exe compiles
+    it to a validator-only C parser with no FFI. *)
+
+val write_doc : outdir:string -> name:string -> t list -> unit
+(** [write_doc ~outdir ~name ts] merges the (doc) schemas [ts] into a single
+    module -- a type shared across several codecs is emitted once -- and writes
+    one [<Name>.3d] in [outdir], so a whole protocol family reads as one
+    document. Build each element with {!doc}. *)
+
 module Raw : sig
   type nonrec struct_ = struct_
   type field = Field.packed
@@ -186,11 +200,13 @@ module Raw : sig
   val module_ : ?doc:string -> decl list -> module_
   (** Build a 3D module from declarations. *)
 
-  val to_3d : module_ -> string
-  (** Render a 3D module to text. *)
+  val to_3d : ?enum_as_type:bool -> module_ -> string
+  (** Render a 3D module to text. With [~enum_as_type:true] an enum field
+      renders as its named 3D enum type rather than the base type plus a
+      membership refinement. *)
 
-  val to_3d_file : string -> module_ -> unit
-  (** Write a rendered 3D module to a file. *)
+  val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
+  (** Write a rendered 3D module to a file. See {!to_3d} for [enum_as_type]. *)
 
   val field :
     string ->

@@ -1677,6 +1677,25 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
 
 let anon_counter = Stdlib.ref 0
 
+(* The documentation projection renders an enum field as its named 3D enum type
+   (e.g. [Status StatusCode;]), which makes EverParse enforce membership through
+   the type. The codegen projection keeps the base type plus an explicit
+   membership refinement, because its FFI plug reads the field as the base type.
+   Toggled around rendering by [to_3d]/[to_3d_file], mirroring [anon_counter]. *)
+let render_enum_as_type = Stdlib.ref false
+
+(* The named 3D enum type a field should render as under [render_enum_as_type],
+   seen through the transparent [Map] / [Where] / [Apply] wrappers. Only an enum
+   over a scalar base qualifies: an enum over a bitfield base maps to a plain
+   bitfield with no enum declaration to reference. *)
+let rec enum_type_name : type a. a typ -> string option = function
+  | Enum { base = Bits _; _ } -> None
+  | Enum { name; _ } -> Some name
+  | Map { inner; _ } -> enum_type_name inner
+  | Where { inner; _ } -> enum_type_name inner
+  | Apply { typ; _ } -> enum_type_name typ
+  | _ -> None
+
 let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
  fun typ ->
   match typ with
@@ -1728,17 +1747,22 @@ let pp_field ppf (Field f) =
     | Some len -> Some (Lt (Ref raw_name, Int len))
     | None -> None
   in
-  (* An [enum] field is valid only for one of its named values; emit that
-     membership as a refinement (the OCaml decoder enforces it on decode). *)
+  (* The documentation projection types the field as its named enum, so
+     EverParse enforces membership through the type. The codegen projection
+     instead emits membership as a refinement on the base type, which the OCaml
+     decoder mirrors on decode. *)
+  let doc_enum =
+    if !render_enum_as_type then enum_type_name f.field_typ else None
+  in
   let enum_cond =
-    match enum_cases_of f.field_typ with
-    | Some (v0 :: rest) ->
+    match (doc_enum, enum_cases_of f.field_typ) with
+    | None, Some (v0 :: rest) ->
         Some
           (List.fold_left
              (fun acc v -> Or (acc, Eq (Ref raw_name, Int v)))
              (Eq (Ref raw_name, Int v0))
              rest)
-    | Some [] | None -> None
+    | _ -> None
   in
   let constraint_ =
     combine_constraints
@@ -1748,6 +1772,11 @@ let pp_field ppf (Field f) =
       enum_cond
   in
   let suffix, pp_base = field_suffix typ in
+  let pp_base =
+    match doc_enum with
+    | Some n -> fun ppf -> Fmt.string ppf n
+    | None -> pp_base
+  in
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
@@ -1947,13 +1976,17 @@ let pp_module ppf m =
   Option.iter (Fmt.pf ppf "/*++ %s --*/@,@,") m.doc;
   List.iter (pp_decl ppf) m.decls
 
-let to_3d m = Fmt.str "@[<v>%a@]" pp_module m
+let to_3d ?(enum_as_type = false) m =
+  render_enum_as_type := enum_as_type;
+  Fun.protect
+    ~finally:(fun () -> render_enum_as_type := false)
+    (fun () -> Fmt.str "@[<v>%a@]" pp_module m)
 
-let to_3d_file path m =
+let to_3d_file ?(enum_as_type = false) path m =
   let oc = open_out path in
-  let ppf = Format.formatter_of_out_channel oc in
-  Fmt.pf ppf "@[<v>%a@]@." pp_module m;
-  close_out oc
+  Fun.protect
+    ~finally:(fun () -> close_out oc)
+    (fun () -> output_string oc (to_3d ~enum_as_type m ^ "\n"))
 
 let raise_eof ~expected ~got =
   raise (Parse_error (Unexpected_eof { expected; got }))

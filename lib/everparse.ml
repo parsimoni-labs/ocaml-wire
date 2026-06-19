@@ -448,6 +448,21 @@ let with_output (s : Types.struct_) : Types.decl list =
   let refined_decls = refined_byte_typedefs s in
   [ ctx_decl ] @ extern_decls @ refined_decls @ [ parse_decl ]
 
+(* Documentation / pure-validator projection: the same structural 3D as
+   [with_output] but without the FFI scaffolding. No [WireCtx] extern, no
+   [WireSet*] setters, no extraction action injected on each field. Keeps the
+   struct, bitfields, [where] clause, refined-byte typedefs, enums, and
+   casetypes -- everything that describes the wire format. Reads as a protocol
+   spec, and 3d.exe still compiles it to a real (validator-only) C parser with
+   no FFI. *)
+let doc_decls (s : Types.struct_) : Types.decl list =
+  let s = { s with fields = List.map rewrite_absent_optional s.fields } in
+  let parse_fields = reorder_bit_groups_for_3d s.fields in
+  let parse_struct =
+    Types.param_struct s.name s.params ?where:s.where parse_fields
+  in
+  refined_byte_typedefs s @ [ Types.typedef ~entrypoint:true parse_struct ]
+
 (* Byte size of a struct after bitfield coalescing, mirroring Codec.compile_bits'
    logic: consecutive same-base, same-bit_order bitfields pack into one base
    word if their widths sum within the word; they roll over to a new base word
@@ -498,6 +513,13 @@ let schema_of_struct (s : Types.struct_) : t =
 let schema (type r) (codec : r Codec.t) : t =
   schema_of_struct (Codec.to_struct codec)
 
+let doc_of_struct (s : Types.struct_) : t =
+  let s = Types.split_string_casetype_fields s in
+  let name = Types.struct_name s in
+  let wire_size = coalesced_wire_size s.fields in
+  { name; module_ = Types.module_ (doc_decls s); wire_size; source = Some s }
+
+let doc (type r) (codec : r Codec.t) : t = doc_of_struct (Codec.to_struct codec)
 let filename (s : t) = String.capitalize_ascii s.name ^ ".3d"
 
 let uses_wire_ctx s =
@@ -586,6 +608,43 @@ let write_3d ~outdir schemas =
   List.iter
     (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
     schemas
+
+(* Merge several clean (doc) schemas into one module: union their decls, keeping
+   the first definition of each named typedef / enum / casetype so a type shared
+   across codecs (a common enum, a refined-byte element) is emitted once.
+   Dependency order survives because each input module already lists a type
+   before the typedef that uses it, and the shared type keeps its first slot. *)
+let merge ~name (ts : t list) : t =
+  let decl_name = function
+    | Types.Typedef { struct_ = { name; _ }; _ } -> Some name
+    | Types.Enum_decl { name; _ } | Types.Casetype_decl { name; _ } -> Some name
+    | Types.Define { name; _ } | Types.Extern_fn { name; _ } -> Some name
+    | _ -> None
+  in
+  let seen = Hashtbl.create 16 in
+  let keep d =
+    match decl_name d with
+    | None -> true
+    | Some n when Hashtbl.mem seen n -> false
+    | Some n ->
+        Hashtbl.add seen n ();
+        true
+  in
+  let decls =
+    List.fold_left
+      (fun acc t ->
+        List.fold_left
+          (fun acc d -> if keep d then d :: acc else acc)
+          acc t.module_.decls)
+      [] ts
+    |> List.rev
+  in
+  { name; module_ = Types.module_ decls; wire_size = None; source = None }
+
+let write_doc ~outdir ~name (ts : t list) =
+  Types.to_3d_file ~enum_as_type:true
+    (Filename.concat outdir (String.capitalize_ascii name ^ ".3d"))
+    (merge ~name ts).module_
 
 (* Public C-facing types *)
 
