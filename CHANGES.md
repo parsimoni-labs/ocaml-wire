@@ -6,7 +6,7 @@
   a free-text note, such as an RFC section, that the documentation projection
   renders as a `/* ... */` comment above the field in the generated 3D. A
   protocol spec can now cite the standard each individual field comes from, not
-  just the struct as a whole, and EverParse accepts the comment (#TODO, @samoht)
+  just the struct as a whole, and EverParse accepts the comment (#157, @samoht)
 - `Wire.Codec.v` takes an optional `?doc` (read back with `Wire.Codec.doc`):
   a free-text note, such as an RFC citation, that the documentation projection
   renders as a `/*++ ... --*/` comment on the codec's 3D typedef. The generated
