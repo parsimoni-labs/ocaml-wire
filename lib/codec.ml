@@ -595,7 +595,7 @@ let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
         | None ->
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
-    param_ref = (fun (Pack_param p) _ _ -> !(p.ph_cell));
+    param_ref = (fun (Pack_param p) _ _ -> !(p.cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
         match field_wire_size t with
@@ -641,11 +641,11 @@ let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
       (fun (Pack_param p) a () ->
         (* The per-codec slot map is filled at seal, after these leaves are
            built, so it must be consulted per call. A param not in this
-           codec's map (e.g. one only reachable via [ph_cell] forwarding from
+           codec's map (e.g. one only reachable via [cell] forwarding from
            an embedding) falls back to the shared cell. *)
-        match Hashtbl.find_opt cc.param_slots p.Types.ph_name with
+        match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some i -> a.(i)
-        | None -> !(p.ph_cell));
+        | None -> !(p.cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
@@ -665,9 +665,9 @@ let compile_bool_arr cc e =
   fun arr -> f arr ()
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
-   Assign writes to ph_cell (mutable param) and updates the array.
+   Assign writes to cell (mutable param) and updates the array.
    Var binds a local by extending the index -- but since we can't grow the
-   array, local vars in actions use ph_cell-style mutation or are inlined.
+   array, local vars in actions use cell-style mutation or are inlined.
 
    Return true short-circuits remaining statements (the action succeeds).
    Return false and Abort raise Parse_error to abort the parse. *)
@@ -682,9 +682,9 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
       let fe = compile_int_arr cc e in
       fun arr ->
         let v = fe arr in
-        match Hashtbl.find_opt cc.param_slots p.Types.ph_name with
+        match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some slot -> arr.(slot) <- v
-        | None -> p.Types.ph_cell := v)
+        | None -> p.Types.cell := v)
   | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
   | Return e ->
       let fe = compile_bool_arr cc e in
@@ -726,7 +726,7 @@ let compile_action (cc : compile_ctx) (act : action option) :
     compiled_action option =
   match act with
   | None -> None
-  | Some (On_success stmts | On_act stmts) ->
+  | Some (Success stmts | Act stmts) ->
       let f = compile_stmts cc stmts in
       Some (fun arr -> try f arr with Return_true -> ())
 
@@ -845,17 +845,17 @@ let bf_write_base = Bitfield.write_word
 let build_bf_reader base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
-  | BF_U8 ->
+  | U8 ->
       fun buf off -> (Bytes.get_uint8 buf (off + byte_off) lsr shift) land mask
-  | BF_U16 Little ->
+  | U16 Little ->
       fun buf off ->
         (Bytes.get_uint16_le buf (off + byte_off) lsr shift) land mask
-  | BF_U16 Big ->
+  | U16 Big ->
       fun buf off ->
         (Bytes.get_uint16_be buf (off + byte_off) lsr shift) land mask
-  | BF_U32 Little ->
+  | U32 Little ->
       fun buf off -> (UInt32.le buf (off + byte_off) lsr shift) land mask
-  | BF_U32 Big ->
+  | U32 Big ->
       fun buf off -> (UInt32.be buf (off + byte_off) lsr shift) land mask
 
 let err_bf_overflow width value =
@@ -868,31 +868,31 @@ let[@inline] check_bf_overflow width value =
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
-  | BF_U8 ->
+  | U8 ->
       fun buf off value ->
         check_bf_overflow width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
-  | BF_U16 Little ->
+  | U16 Little ->
       fun buf off value ->
         check_bf_overflow width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
-  | BF_U16 Big ->
+  | U16 Big ->
       fun buf off value ->
         check_bf_overflow width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
-  | BF_U32 Little ->
+  | U32 Little ->
       fun buf off value ->
         check_bf_overflow width value;
         let cur = UInt32.le buf (off + byte_off) in
         UInt32.set_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
-  | BF_U32 Big ->
+  | U32 Big ->
       fun buf off value ->
         check_bf_overflow width value;
         let cur = UInt32.be buf (off + byte_off) in
@@ -903,27 +903,27 @@ let build_bf_accessor_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   let clear_mask = lnot (mask lsl shift) in
   match base with
-  | BF_U8 ->
+  | U8 ->
       fun buf off value ->
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
-  | BF_U16 Little ->
+  | U16 Little ->
       fun buf off value ->
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
-  | BF_U16 Big ->
+  | U16 Big ->
       fun buf off value ->
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
-  | BF_U32 Little ->
+  | U32 Little ->
       fun buf off value ->
         let cur = UInt32.le buf (off + byte_off) in
         UInt32.set_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
-  | BF_U32 Big ->
+  | U32 Big ->
       fun buf off value ->
         let cur = UInt32.be buf (off + byte_off) in
         UInt32.set_be buf (off + byte_off)
@@ -1004,7 +1004,7 @@ let rec iter_param_refs_stmt f = function
   | Types.Var (_, e) -> iter_param_refs f e
 
 let iter_param_refs_action f = function
-  | Types.On_success stmts | Types.On_act stmts ->
+  | Types.Success stmts | Types.Act stmts ->
       List.iter (iter_param_refs_stmt f) stmts
 
 let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
@@ -2240,7 +2240,7 @@ let apply_compiled : type a f r.
   let action_vanames =
     match fld.action with
     | None -> []
-    | Some (Types.On_success stmts | Types.On_act stmts) ->
+    | Some (Types.Success stmts | Types.Act stmts) ->
         List.fold_left action_vars [] stmts
   in
   let n_extra_vars = List.length action_vanames in
@@ -2494,8 +2494,8 @@ let collect_param_handles struct_fields where =
   let seen = Hashtbl.create 4 in
   let handles = Stdlib.ref ([] : Param.packed list) in
   let visit (Param.Pack p as packed) =
-    if not (Hashtbl.mem seen p.ph_name) then begin
-      Hashtbl.add seen p.ph_name ();
+    if not (Hashtbl.mem seen p.name) then begin
+      Hashtbl.add seen p.name ();
       handles := packed :: !handles
     end
   in
@@ -2507,8 +2507,7 @@ let collect_param_handles struct_fields where =
 let fill_param_slots tbl param_base handles =
   Hashtbl.reset tbl;
   List.iteri
-    (fun i (Param.Pack p) ->
-      Hashtbl.replace tbl p.Types.ph_name (param_base + i))
+    (fun i (Param.Pack p) -> Hashtbl.replace tbl p.Types.name (param_base + i))
     handles
 
 let build_checked_decode raw_decode wire_size_info min_size =
@@ -2704,7 +2703,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   let action_vanames =
     match action with
     | None -> []
-    | Some (Types.On_success stmts | Types.On_act stmts) ->
+    | Some (Types.Success stmts | Types.Act stmts) ->
         List.fold_left action_vars [] stmts
   in
   let dummy_reader _buf _base = 0 in
@@ -2889,28 +2888,25 @@ let is_fixed (t : _ t) =
 
 let raw_decode (t : _ t) buf off = t.decode buf off
 
-(* Copy each input param's env value into its [ph_cell]. The encode
-   closures read [Param_ref p] via [!(p.ph_cell)] (see [bytes_leaves]
+(* Copy each input param's env value into its [cell]. The encode
+   closures read [Param_ref p] via [!(p.cell)] (see [bytes_leaves]
    in [compile_expr]), so the cells are the runtime backing for
    parametric field sizes. Mirror of the env -> array blit in
    [decode_exn]. *)
 let load_env_into_cells (t : 'r t) (env : Param.env) =
   (* The env slot of [param_handles.(i)] is [i] (the env is built in the same
      order, see [env] below). *)
-  List.iteri
-    (fun i (Param.Pack p) -> p.ph_cell := env.slots.(i))
-    t.param_handles
+  List.iteri (fun i (Param.Pack p) -> p.cell := env.slots.(i)) t.param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
-   parametric sizes to 0 (the ph_cell init value), producing zero-byte
+   parametric sizes to 0 (the cell init value), producing zero-byte
    regions for byte_array / byte_slice / uint_var fields and writing the
    rest of the record at the wrong offsets. *)
 let unbound_params (t : 'r t) (env : Param.env) : string list =
   List.mapi
     (fun i (Param.Pack p) ->
-      if (not p.Types.ph_mutable) && not env.bound.(i) then Some p.ph_name
-      else None)
+      if (not p.Types.mutable_) && not env.bound.(i) then Some p.name else None)
     t.param_handles
   |> List.filter_map Fun.id
 
@@ -2919,7 +2915,7 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
    by decode-side actions and never consulted on encode, so a codec whose only
    params are outputs needs no env. *)
 let has_input_params (t : 'r t) =
-  List.exists (fun (Param.Pack p) -> not p.Types.ph_mutable) t.param_handles
+  List.exists (fun (Param.Pack p) -> not p.Types.mutable_) t.param_handles
 
 let require_env t = function
   | None when not (has_input_params t) -> ()
@@ -2944,20 +2940,20 @@ let raw_encode ?env:e t v buf off =
   t.encode v buf off
 
 (* Encode a sub-codec embedded as a field/element. The enclosing codec has
-   already seeded every input param's [ph_cell] from its own env (its
+   already seeded every input param's [cell] from its own env (its
    [param_handles] include the sub's, see [iter_param_refs_typ]), so the sub
    must not re-run [require_env] (it has no env of its own here). *)
 let embed_encode (t : 'r t) v buf off = t.encode v buf off
 
 (* Decode a sub-codec embedded as a field/element, enforcing its [where] and
    field constraints (the plain field-reader decode skips them). Param values
-   come from the [ph_cell]s the enclosing codec seeded; copy them into the
+   come from the [cell]s the enclosing codec seeded; copy them into the
    sub's per-decode slots so its constraints resolve correctly. *)
 let embed_decode (t : 'r t) buf off =
   let v = t.decode buf off in
   let env_slots =
     Array.of_list
-      (List.map (fun (Param.Pack p) -> !(p.Types.ph_cell)) t.param_handles)
+      (List.map (fun (Param.Pack p) -> !(p.Types.cell)) t.param_handles)
   in
   t.validate ~env_slots buf off;
   v
@@ -2972,7 +2968,7 @@ let env (t : _ t) : Param.env =
     Types.codec_id = t.id;
     names =
       Array.of_list
-        (List.map (fun (Param.Pack p) -> p.Types.ph_name) t.param_handles);
+        (List.map (fun (Param.Pack p) -> p.Types.name) t.param_handles);
     slots = Array.make t.n_params 0;
     bound = Array.make t.n_params false;
   }
@@ -2994,7 +2990,7 @@ let decode_exn ?env:e t buf off =
         (fun i (Param.Pack p) ->
           let v = arr.(t.param_base + i) in
           e.slots.(i) <- v;
-          p.ph_cell := v)
+          p.cell := v)
         t.param_handles
   | None -> ());
   v
@@ -3019,11 +3015,7 @@ let encode ?env:e t v buf off =
 let collect_params (fields : Types.field list) where =
   collect_param_handles fields where
   |> List.map (fun (Param.Pack p) ->
-      {
-        param_name = p.ph_name;
-        param_typ = p.ph_packed_typ;
-        mutable_ = p.ph_mutable;
-      })
+      { param_name = p.name; param_typ = p.packed_typ; mutable_ = p.mutable_ })
 
 let to_struct t =
   let formals = collect_params t.struct_fields t.where in
@@ -3179,7 +3171,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                   (fun i (Param.Pack p) ->
                     let v = arr.(param_base + i) in
                     e.slots.(i) <- v;
-                    p.ph_cell := v)
+                    p.cell := v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
@@ -3264,11 +3256,11 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
          [Bitfield.read_word base] would create. *)
       let word_reader =
         match base with
-        | BF_U8 -> fun buf off -> Bytes.get_uint8 buf (off + byte_off)
-        | BF_U16 Little -> fun buf off -> Bitfield.u16_le buf (off + byte_off)
-        | BF_U16 Big -> fun buf off -> Bitfield.u16_be buf (off + byte_off)
-        | BF_U32 Little -> fun buf off -> Bitfield.u32_le buf (off + byte_off)
-        | BF_U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
+        | U8 -> fun buf off -> Bytes.get_uint8 buf (off + byte_off)
+        | U16 Little -> fun buf off -> Bitfield.u16_le buf (off + byte_off)
+        | U16 Big -> fun buf off -> Bitfield.u16_be buf (off + byte_off)
+        | U32 Little -> fun buf off -> Bitfield.u32_le buf (off + byte_off)
+        | U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
       in
       let mask = (1 lsl width) - 1 in
       { word_reader; packed = shift lor (mask lsl 8) }

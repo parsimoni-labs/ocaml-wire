@@ -17,12 +17,12 @@ type param_input
 type param_output
 
 type ('a, 'k) param_handle = {
-  ph_name : string;
-  ph_typ : 'a typ;
-  ph_packed_typ : packed_typ;
-  ph_mutable : bool;
-  ph_cell : int ref;
-      (* [ph_cell] is the per-handle backing read by encode/size expressions and
+  name : string;
+  typ : 'a typ;
+  packed_typ : packed_typ;
+  mutable_ : bool;
+  cell : int ref;
+      (* [cell] is the per-handle backing read by encode/size expressions and
          the value-forwarding vehicle for embedded sub-codecs. Slot resolution
          (decode array index, env index) is NOT stored here: it is per-codec,
          since one handle may be referenced both standalone and from an
@@ -65,7 +65,7 @@ and _ expr =
   | If_then_else : bool expr * int expr * int expr -> int expr
 
 (* Bitfield base types - standalone, not mutually recursive *)
-and bitfield_base = BF_U8 | BF_U16 of endian | BF_U32 of endian
+and bitfield_base = U8 | U16 of endian | U32 of endian
 
 (* Types *)
 and _ typ =
@@ -208,7 +208,7 @@ and field =
 and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
 
 (* Actions *)
-and action = On_success of action_stmt list | On_act of action_stmt list
+and action = Success of action_stmt list | Act of action_stmt list
 
 and action_stmt =
   | Assign : ('a, param_output) param_handle * int expr -> action_stmt
@@ -300,11 +300,11 @@ let uint ?(endian = Big) size =
   Uint_var { size; endian }
 
 (* Bitfield bases *)
-let bf_uint8 = BF_U8
-let bf_uint16 = BF_U16 Little
-let bf_uint16be = BF_U16 Big
-let bf_uint32 = BF_U32 Little
-let bf_uint32be = BF_U32 Big
+let bf_uint8 = U8
+let bf_uint16 = U16 Little
+let bf_uint16be = U16 Big
+let bf_uint32 = U32 Little
+let bf_uint32be = U32 Big
 let bits ?(bit_order = Msb_first) ~width base = Bits { width; base; bit_order }
 let bit b = Bool.to_int b
 let is_set n = n <> 0
@@ -705,7 +705,7 @@ let anon_field typ =
 
 (* Struct constructors *)
 let struct_ name fields = { name; params = []; where = None; fields }
-let struct_name s = s.name
+let struct_name (s : struct_) = s.name
 let struct_typ s = Struct s
 let field_names s = List.filter_map (fun (Field f) -> f.field_name) s.fields
 
@@ -777,8 +777,8 @@ let type_ref name = Type_ref name
 let qualified_ref module_ name = Qualified_ref { module_; name }
 
 (* Actions *)
-let on_success stmts = On_success stmts
-let on_act stmts = On_act stmts
+let on_success stmts = Success stmts
+let on_act stmts = Act stmts
 let assign (p : ('a, param_output) param_handle) e = Assign (p, e)
 let return_bool e = Return e
 let abort = Abort
@@ -1238,9 +1238,9 @@ let escape_3d name =
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
 
 let pp_bitfield_base ppf = function
-  | BF_U8 -> Fmt.string ppf "UINT8"
-  | BF_U16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
-  | BF_U32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
+  | U8 -> Fmt.string ppf "UINT8"
+  | U16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
+  | U32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
 
 let pp_cast_type ppf = function
   | `U8 -> Fmt.string ppf "UINT8"
@@ -1264,7 +1264,7 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Bool true -> Fmt.string ppf "true"
   | Bool false -> Fmt.string ppf "false"
   | Ref name -> Fmt.string ppf (escape_3d name)
-  | Param_ref p -> Fmt.string ppf (escape_3d p.ph_name)
+  | Param_ref p -> Fmt.string ppf (escape_3d p.name)
   | Sizeof t -> Fmt.pf ppf "sizeof (%a)" pp_typ t
   | Sizeof_this -> Fmt.string ppf "sizeof (this)"
   | Field_pos ->
@@ -1410,7 +1410,7 @@ let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
 let pp_stmt env ppf stmt =
   let e a = subst_expr env a in
   match stmt with
-  | Assign (p, x) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.ph_name) pp_expr (e x)
+  | Assign (p, x) -> Fmt.pf ppf "*%s = %a;" (escape_3d p.name) pp_expr (e x)
   | Field_assign (ptr, field_name, x) ->
       Fmt.pf ppf "%s->%s = %a;" ptr field_name pp_expr (e x)
   | Extern_call (fn, args) -> Fmt.pf ppf "%s(%s);" fn (String.concat ", " args)
@@ -1438,9 +1438,8 @@ let rec pp_stmts env ppf = function
       pp_stmts env ppf rest
 
 let pp_action ppf = function
-  | On_success stmts ->
-      Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
-  | On_act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
+  | Success stmts -> Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
+  | Act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =
@@ -1457,9 +1456,9 @@ let rec inner_wire_size : type a. a typ -> int option = function
   | Uint16 _ | Int16 _ -> Some 2
   | Uint32 _ | Int32 _ | Float32 _ -> Some 4
   | Uint63 _ | Uint64 _ | Int64 _ | Float64 _ -> Some 8
-  | Bits { base = BF_U8; _ } -> Some 1
-  | Bits { base = BF_U16 _; _ } -> Some 2
-  | Bits { base = BF_U32 _; _ } -> Some 4
+  | Bits { base = U8; _ } -> Some 1
+  | Bits { base = U16 _; _ } -> Some 2
+  | Bits { base = U32 _; _ } -> Some 4
   | Unit -> Some 0
   | Map { inner; _ } -> inner_wire_size inner
   | Enum { base; _ } -> inner_wire_size base
@@ -1506,7 +1505,7 @@ let rec renders_as_named_composite : type a. a typ -> bool = function
 
 (* 3d-model boundary for a byte-budget list ([T_nlist]) element's base type
    printer. [Nlist_elem.t] is abstract, so the only way to obtain one is
-   [Nlist_elem.make], which refuses a named-composite element that is not [nz] --
+   [Nlist_elem.v], which refuses a named-composite element that is not [nz] --
    EverParse rejects a list whose element parser may consume zero bytes. Routing
    both list emit sites ([array] / [repeat]) through here means the projection
    cannot hand {!pp_field} a base for an ill-kinded list. [is_array_element] /
@@ -1515,12 +1514,12 @@ let rec renders_as_named_composite : type a. a typ -> bool = function
 module Nlist_elem : sig
   type t
 
-  val make : 'a typ -> (Format.formatter -> unit) -> t
+  val v : 'a typ -> (Format.formatter -> unit) -> t
   val pp : t -> Format.formatter -> unit
 end = struct
   type t = Format.formatter -> unit
 
-  let make : type a. a typ -> (Format.formatter -> unit) -> t =
+  let v : type a. a typ -> (Format.formatter -> unit) -> t =
    fun elem pp ->
     if (not (renders_as_named_composite elem)) || nz elem then pp
     else
@@ -1633,7 +1632,7 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
              chunk) is dropped so it is not duplicated. A named-composite base
              must be [nz] (see {!nlist_base}). *)
           ( Byte_array (Mul (len, s)),
-            Nlist_elem.pp (Nlist_elem.make elem (snd (field_suffix elem))) )
+            Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))) )
       | _ ->
           (* Unreachable: [array] rejects variable-size elem at construction. *)
           assert false)
@@ -1665,9 +1664,7 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
             match repeat_elem_struct elem with
             | Some name -> Fmt.string ppf name
             | None ->
-                Nlist_elem.pp
-                  (Nlist_elem.make elem (snd (field_suffix elem)))
-                  ppf)
+                Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))) ppf)
       in
       (Byte_array size, pp_elem)
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
@@ -2028,9 +2025,9 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Int64 _ -> 8
   | Float32 _ -> 4
   | Float64 _ -> 8
-  | Bits { base = BF_U8; _ } -> 1
-  | Bits { base = BF_U16 _; _ } -> 2
-  | Bits { base = BF_U32 _; _ } -> 4
+  | Bits { base = U8; _ } -> 1
+  | Bits { base = U16 _; _ } -> 2
+  | Bits { base = U32 _; _ } -> 4
   | Unit -> 0
   | All_bytes -> String.length v
   | All_zeros -> String.length v
@@ -2111,10 +2108,7 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Uint_var { size = Int n; _ } -> Some n
   | Uint_var _ -> None
   | Bits { base; _ } -> (
-      match base with
-      | BF_U8 -> Some 1
-      | BF_U16 _ -> Some 2
-      | BF_U32 _ -> Some 4)
+      match base with U8 -> Some 1 | U16 _ -> Some 2 | U32 _ -> Some 4)
   | Unit -> Some 0
   | Byte_array { size = Int n }
   | Byte_array_where { size = Int n; _ }
@@ -2136,9 +2130,9 @@ let rec field_wire_size : type a. a typ -> int option = function
   | _ -> None
 
 let c_type_of : type a. a typ -> string = function
-  | Uint8 | Bits { base = BF_U8; _ } -> "uint8_t"
-  | Uint16 _ | Bits { base = BF_U16 _; _ } -> "uint16_t"
-  | Uint32 _ | Uint63 _ | Bits { base = BF_U32 _; _ } -> "uint32_t"
+  | Uint8 | Bits { base = U8; _ } -> "uint8_t"
+  | Uint16 _ | Bits { base = U16 _; _ } -> "uint16_t"
+  | Uint32 _ | Uint63 _ | Bits { base = U32 _; _ } -> "uint32_t"
   | Uint64 _ -> "uint64_t"
   (* Signed types project to UINT* in 3D so EverParse only sees unsigned
      widths; the same width drives the C field type. *)

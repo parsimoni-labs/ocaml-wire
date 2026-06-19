@@ -2,7 +2,7 @@ type input = Types.param_input
 type output = Types.param_output
 type ('a, 'k) t = ('a, 'k) Types.param_handle
 
-let pp ppf p = Fmt.string ppf p.Types.ph_name
+let pp ppf (p : (_, _) t) = Fmt.string ppf p.Types.name
 
 (* Per-typ converter from the OCaml representation to [int] and back. One
    match dispatches both directions; [to_int] and [of_int] just project
@@ -65,31 +65,27 @@ let check_typ name typ =
 let input name typ =
   check_typ "input" typ;
   {
-    Types.ph_name = name;
-    ph_typ = typ;
-    ph_packed_typ = Types.Pack_typ typ;
-    ph_mutable = false;
-    ph_cell = ref 0;
+    Types.name;
+    typ;
+    packed_typ = Types.Pack_typ typ;
+    mutable_ = false;
+    cell = ref 0;
   }
 
 let output name typ =
   check_typ "output" typ;
   {
-    Types.ph_name = name;
-    ph_typ = typ;
-    ph_packed_typ = Types.Pack_typ typ;
-    ph_mutable = true;
-    ph_cell = ref 0;
+    Types.name;
+    typ;
+    packed_typ = Types.Pack_typ typ;
+    mutable_ = true;
+    cell = ref 0;
   }
 
 let decl (t : ('a, 'k) t) : Types.param =
-  {
-    param_name = t.ph_name;
-    param_typ = t.ph_packed_typ;
-    mutable_ = t.ph_mutable;
-  }
+  { param_name = t.name; param_typ = t.packed_typ; mutable_ = t.mutable_ }
 
-let name t = t.Types.ph_name
+let name (t : (_, _) t) = t.Types.name
 let expr t : int Types.expr = Types.Param_ref t
 
 (* -- Param.env -- *)
@@ -107,19 +103,19 @@ let env_idx (env : env) name =
   find 0
 
 let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
-  let iv = to_int p.Types.ph_typ v in
+  let iv = to_int p.Types.typ v in
   let slots = Array.copy env.slots in
   let bound = Array.copy env.bound in
-  let i = env_idx env p.Types.ph_name in
+  let i = env_idx env p.Types.name in
   if i >= 0 then begin
     slots.(i) <- iv;
     bound.(i) <- true
   end;
-  p.ph_cell := iv;
+  p.cell := iv;
   { env with Types.slots; bound }
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
-  let i = env_idx env p.Types.ph_name in
-  if i < 0 then of_int p.ph_typ !(p.ph_cell) else of_int p.ph_typ env.slots.(i)
+  let i = env_idx env p.Types.name in
+  if i < 0 then of_int p.typ !(p.cell) else of_int p.typ env.slots.(i)
 
 type packed = Pack : ('a, 'k) t -> packed

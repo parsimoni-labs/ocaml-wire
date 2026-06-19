@@ -1106,8 +1106,8 @@ module Everparse : sig
   val doc : 'r Codec.t -> t
   (** [doc codec] projects [codec] to a clean schema for documentation and
       pure-C parser generation: the same structural 3D as {!schema} (struct,
-      bitfields, [where] clause, enums, casetypes, refined-byte typedefs) but
-      without the FFI scaffolding (no [WireCtx] extern, no [WireSet*]
+      bitfields, {!val-where} clause, enums, casetypes, refined-byte typedefs)
+      but without the FFI scaffolding (no [WireCtx] extern, no [WireSet*]
       callbacks). It reads as a protocol specification, and 3d.exe compiles it
       to a validator-only C parser with no FFI. *)
 

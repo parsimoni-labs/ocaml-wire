@@ -1,11 +1,11 @@
 module Bitfield = Wire.Private.Bitfield
 module Types = Wire.Private.Types
 
-let bf_u8 = Types.BF_U8
-let bf_u16_le = Types.BF_U16 Little
-let bf_u16_be = Types.BF_U16 Big
-let bf_u32_le = Types.BF_U32 Little
-let bf_u32_be = Types.BF_U32 Big
+let bf_u8 = Types.U8
+let bf_u16_le = Types.U16 Little
+let bf_u16_be = Types.U16 Big
+let bf_u32_le = Types.U32 Little
+let bf_u32_be = Types.U32 Big
 
 let test_byte_size () =
   Alcotest.(check int) "BF_U8" 1 (Bitfield.byte_size bf_u8);

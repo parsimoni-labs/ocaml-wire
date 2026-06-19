@@ -88,11 +88,11 @@ let rec type_suffix : type a. a Types.typ -> string = function
   | Types.Float32 Types.Big -> "U32BE"
   | Types.Float64 Types.Little -> "U64"
   | Types.Float64 Types.Big -> "U64BE"
-  | Types.Bits { base = Types.BF_U8; _ } -> "U8"
-  | Types.Bits { base = Types.BF_U16 Types.Little; _ } -> "U16"
-  | Types.Bits { base = Types.BF_U16 Types.Big; _ } -> "U16BE"
-  | Types.Bits { base = Types.BF_U32 Types.Little; _ } -> "U32"
-  | Types.Bits { base = Types.BF_U32 Types.Big; _ } -> "U32BE"
+  | Types.Bits { base = Types.U8; _ } -> "U8"
+  | Types.Bits { base = Types.U16 Types.Little; _ } -> "U16"
+  | Types.Bits { base = Types.U16 Types.Big; _ } -> "U16BE"
+  | Types.Bits { base = Types.U32 Types.Little; _ } -> "U32"
+  | Types.Bits { base = Types.U32 Types.Big; _ } -> "U32BE"
   | Types.Map { inner; _ } -> type_suffix inner
   | Types.Enum { base; _ } -> type_suffix base
   | Types.Where { inner; _ } -> type_suffix inner
@@ -190,19 +190,17 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
           if is_bitfield f.field_typ then
             (* Bitfields: :act fires per sub-field during coalesced parsing *)
             match f.action with
-            | None -> Some (Types.On_act [ call ])
-            | Some (Types.On_act stmts) ->
-                Some (Types.On_act (act_stmts stmts call))
-            | Some (Types.On_success stmts) ->
-                Some (Types.On_act (act_stmts stmts call))
+            | None -> Some (Types.Act [ call ])
+            | Some (Types.Act stmts) -> Some (Types.Act (act_stmts stmts call))
+            | Some (Types.Success stmts) ->
+                Some (Types.Act (act_stmts stmts call))
           else
             (* Scalars and byte-size fields: :on-success *)
             match f.action with
-            | None -> Some (Types.On_success [ call; Types.Return Types.true_ ])
-            | Some (Types.On_success stmts) ->
-                Some (Types.On_success (on_success_stmts stmts call))
-            | Some (Types.On_act stmts) ->
-                Some (Types.On_act (act_stmts stmts call))
+            | None -> Some (Types.Success [ call; Types.Return Types.true_ ])
+            | Some (Types.Success stmts) ->
+                Some (Types.Success (on_success_stmts stmts call))
+            | Some (Types.Act stmts) -> Some (Types.Act (act_stmts stmts call))
         in
         Types.Field
           {
@@ -598,8 +596,8 @@ let field_action_forms (st : Types.struct_) =
       let form =
         match f.action with
         | None -> No_action
-        | Some (Types.On_act _) -> On_act
-        | Some (Types.On_success _) -> On_success
+        | Some (Types.Act _) -> On_act
+        | Some (Types.Success _) -> On_success
       in
       (f.field_name, is_bitfield f.field_typ, form))
     st.fields

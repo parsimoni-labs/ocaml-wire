@@ -102,7 +102,7 @@ let rec expr : type a. ctx -> a expr -> a =
           failwith
             ("Eval.expr: unbound field " ^ name
            ^ " (cross-field references are only valid inside a struct)"))
-  | Param_ref p -> !(p.ph_cell)
+  | Param_ref p -> !(p.cell)
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> 0
   | Field_pos -> 0
