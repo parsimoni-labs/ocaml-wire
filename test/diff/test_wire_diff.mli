@@ -1,2 +1,4 @@
+(** Tests for the [wire_diff] module. *)
+
 val suite : string * unit Alcotest.test_case list
 (** [suite] is the test suite for Wire_diff. *)

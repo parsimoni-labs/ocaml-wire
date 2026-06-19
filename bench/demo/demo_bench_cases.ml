@@ -34,8 +34,8 @@ type id =
   | Constrained_data
 
 type _ c_field_decode =
-  | Of_int : (int -> 'a) -> 'a c_field_decode
-  | Of_int64 : (int64 -> 'a) -> 'a c_field_decode
+  | Int : (int -> 'a) -> 'a c_field_decode
+  | Int64 : (int64 -> 'a) -> 'a c_field_decode
 
 type 'a read_case =
   | Read_case : {
@@ -59,10 +59,10 @@ type 'a read_case =
 type packed_case = C : _ read_case -> packed_case
 type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
-let of_int f = Of_int f
-let id_int = Of_int Fun.id
-let id_int64 = Of_int64 Fun.id
-let bool_of_int = Of_int (fun v -> v <> 0)
+let of_int f = Int f
+let id_int = Int Fun.id
+let id_int64 = Int64 Fun.id
+let bool_of_int = Int (fun v -> v <> 0)
 
 let priority_decode =
   of_int (function

@@ -272,18 +272,18 @@ let test_no_params () =
 
 (* -- Param-driven size -- *)
 
-type param_size_record = { ps_data : string; ps_tag : int }
+type param_size_record = { data : string; tag : int }
 
 let ps_size_param = Param.input "data_size" uint8
 
 let param_size_codec =
   Codec.v "ParamSize"
-    (fun data tag -> { ps_data = data; ps_tag = tag })
+    (fun data tag -> { data; tag })
     Codec.
       [
         ( Field.v "Data" (byte_array ~size:(Param.expr ps_size_param)) $ fun r ->
-          r.ps_data );
-        (Field.v "Tag" uint8 $ fun r -> r.ps_tag);
+          r.data );
+        (Field.v "Tag" uint8 $ fun r -> r.tag);
       ]
 
 let test_param_size_decode () =
@@ -292,8 +292,8 @@ let test_param_size_decode () =
   Bytes.blit_string "ABCD" 0 buf 0 4;
   Bytes.set_uint8 buf 4 0xFF;
   let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
-  Alcotest.(check string) "data" "ABCD" r.ps_data;
-  Alcotest.(check int) "tag" 0xFF r.ps_tag
+  Alcotest.(check string) "data" "ABCD" r.data;
+  Alcotest.(check int) "tag" 0xFF r.tag
 
 let test_param_size_different_sizes () =
   (* Same codec, different param values *)
@@ -302,23 +302,23 @@ let test_param_size_different_sizes () =
   Bytes.blit_string "XY" 0 buf2 0 2;
   Bytes.set_uint8 buf2 2 0xAA;
   let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 0) in
-  Alcotest.(check string) "data 2" "XY" r2.ps_data;
-  Alcotest.(check int) "tag 2" 0xAA r2.ps_tag;
+  Alcotest.(check string) "data 2" "XY" r2.data;
+  Alcotest.(check int) "tag 2" 0xAA r2.tag;
   let env8 = Codec.env param_size_codec |> Param.bind ps_size_param 8 in
   let buf8 = Bytes.create 9 in
   Bytes.blit_string "12345678" 0 buf8 0 8;
   Bytes.set_uint8 buf8 8 0xBB;
   let r8 = decode_ok (Codec.decode ~env:env8 param_size_codec buf8 0) in
-  Alcotest.(check string) "data 8" "12345678" r8.ps_data;
-  Alcotest.(check int) "tag 8" 0xBB r8.ps_tag
+  Alcotest.(check string) "data 8" "12345678" r8.data;
+  Alcotest.(check int) "tag 8" 0xBB r8.tag
 
 let test_param_size_zero () =
   let env = Codec.env param_size_codec |> Param.bind ps_size_param 0 in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xFF;
   let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
-  Alcotest.(check string) "data" "" r.ps_data;
-  Alcotest.(check int) "tag" 0xFF r.ps_tag
+  Alcotest.(check string) "data" "" r.data;
+  Alcotest.(check int) "tag" 0xFF r.tag
 
 (* -- Suite -- *)
 

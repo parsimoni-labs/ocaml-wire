@@ -34,35 +34,27 @@ let minimal_data n =
 (* -- 2. AllInts: all integer widths = 1+2+2+4+4+8 = 21 bytes -- *)
 
 type all_ints = {
-  ai_u8 : int;
-  ai_u16 : int;
-  ai_u16be : int;
-  ai_u32 : int;
-  ai_u32be : int;
-  ai_u64be : int64;
+  u8 : int;
+  u16 : int;
+  u16be : int;
+  u32 : int;
+  u32be : int;
+  u64be : int64;
 }
 
 let f_ints_u64be = Field.v "U64BE" uint64be
-let bf_ints_u64be = Codec.(f_ints_u64be $ fun a -> a.ai_u64be)
+let bf_ints_u64be = Codec.(f_ints_u64be $ fun a -> a.u64be)
 
 let all_ints_codec =
   Codec.v "AllInts"
-    (fun u8 u16 u16be u32 u32be u64be ->
-      {
-        ai_u8 = u8;
-        ai_u16 = u16;
-        ai_u16be = u16be;
-        ai_u32 = u32;
-        ai_u32be = u32be;
-        ai_u64be = u64be;
-      })
+    (fun u8 u16 u16be u32 u32be u64be -> { u8; u16; u16be; u32; u32be; u64be })
     Codec.
       [
-        (Field.v "U8" uint8 $ fun a -> a.ai_u8);
-        (Field.v "U16" uint16 $ fun a -> a.ai_u16);
-        (Field.v "U16BE" uint16be $ fun a -> a.ai_u16be);
-        (Field.v "U32" uint32 $ fun a -> a.ai_u32);
-        (Field.v "U32BE" uint32be $ fun a -> a.ai_u32be);
+        (Field.v "U8" uint8 $ fun a -> a.u8);
+        (Field.v "U16" uint16 $ fun a -> a.u16);
+        (Field.v "U16BE" uint16be $ fun a -> a.u16be);
+        (Field.v "U32" uint32 $ fun a -> a.u32);
+        (Field.v "U32BE" uint32be $ fun a -> a.u32be);
         bf_ints_u64be;
       ]
 
@@ -71,12 +63,12 @@ let all_ints_size = Codec.wire_size all_ints_codec
 
 let all_ints_default =
   {
-    ai_u8 = 0xFF;
-    ai_u16 = 0x1234;
-    ai_u16be = 0x5678;
-    ai_u32 = 0xDEADBEEF;
-    ai_u32be = 0xCAFEBABE;
-    ai_u64be = 0x0102030405060708L;
+    u8 = 0xFF;
+    u16 = 0x1234;
+    u16be = 0x5678;
+    u32 = 0xDEADBEEF;
+    u32be = 0xCAFEBABE;
+    u64be = 0x0102030405060708L;
   }
 
 let all_ints_data n =
@@ -92,20 +84,19 @@ let all_ints_data n =
 
 (* -- 3. Bitfield8: 3+5 bits in U8 = 1 byte -- *)
 
-type bf8 = { bf8_tag : int; bf8_value : int }
+type bf8 = { tag : int; value : int }
 
 let f_bf8_value = Field.v "Value" (bits ~width:5 U8)
-let bf_bf8_value = Codec.(f_bf8_value $ fun b -> b.bf8_value)
+let bf_bf8_value = Codec.(f_bf8_value $ fun b -> b.value)
 
 let bf8_codec =
   Codec.v "Bitfield8"
-    (fun tag value -> { bf8_tag = tag; bf8_value = value })
-    Codec.
-      [ (Field.v "Tag" (bits ~width:3 U8) $ fun b -> b.bf8_tag); bf_bf8_value ]
+    (fun tag value -> { tag; value })
+    Codec.[ (Field.v "Tag" (bits ~width:3 U8) $ fun b -> b.tag); bf_bf8_value ]
 
 let bf8_struct = Everparse.struct_of_codec bf8_codec
 let bf8_size = Codec.wire_size bf8_codec
-let bf8_default = { bf8_tag = 5; bf8_value = 19 }
+let bf8_default = { tag = 5; value = 19 }
 
 let bf8_data n =
   Array.init n (fun i ->
@@ -116,24 +107,24 @@ let bf8_data n =
 
 (* -- 4. Bitfield16: 1+4+11 bits in U16be = 2 bytes -- *)
 
-type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
+type bf16 = { flag : int; type_ : int; id : int }
 
 let f_bf16_id = Field.v "Id" (bits ~width:11 U16be)
-let bf_bf16_id = Codec.(f_bf16_id $ fun b -> b.bf16_id)
+let bf_bf16_id = Codec.(f_bf16_id $ fun b -> b.id)
 
 let bf16_codec =
   Codec.v "Bitfield16"
-    (fun flag type_ id -> { bf16_flag = flag; bf16_type = type_; bf16_id = id })
+    (fun flag type_ id -> { flag; type_; id })
     Codec.
       [
-        (Field.v "Flag" (bits ~width:1 U16be) $ fun b -> b.bf16_flag);
-        (Field.v "Type" (bits ~width:4 U16be) $ fun b -> b.bf16_type);
+        (Field.v "Flag" (bits ~width:1 U16be) $ fun b -> b.flag);
+        (Field.v "Type" (bits ~width:4 U16be) $ fun b -> b.type_);
         bf_bf16_id;
       ]
 
 let bf16_struct = Everparse.struct_of_codec bf16_codec
 let bf16_size = Codec.wire_size bf16_codec
-let bf16_default = { bf16_flag = 1; bf16_type = 9; bf16_id = 1023 }
+let bf16_default = { flag = 1; type_ = 9; id = 1023 }
 
 let bf16_data n =
   Array.init n (fun i ->
@@ -144,33 +135,25 @@ let bf16_data n =
 
 (* -- 5. Bitfield32: 4+6+14+8 bits in U32be = 4 bytes -- *)
 
-type bf32 = {
-  bf32_flags : int;
-  bf32_chan : int;
-  bf32_seq : int;
-  bf32_pri : int;
-}
+type bf32 = { flags : int; chan : int; seq : int; pri : int }
 
 let f_bf32_pri = Field.v "Priority" (bits ~width:8 U32be)
-let bf_bf32_pri = Codec.(f_bf32_pri $ fun b -> b.bf32_pri)
+let bf_bf32_pri = Codec.(f_bf32_pri $ fun b -> b.pri)
 
 let bf32_codec =
   Codec.v "Bitfield32"
-    (fun flags chan seq pri ->
-      { bf32_flags = flags; bf32_chan = chan; bf32_seq = seq; bf32_pri = pri })
+    (fun flags chan seq pri -> { flags; chan; seq; pri })
     Codec.
       [
-        (Field.v "Flags" (bits ~width:4 U32be) $ fun b -> b.bf32_flags);
-        (Field.v "Channel" (bits ~width:6 U32be) $ fun b -> b.bf32_chan);
-        (Field.v "Seq" (bits ~width:14 U32be) $ fun b -> b.bf32_seq);
+        (Field.v "Flags" (bits ~width:4 U32be) $ fun b -> b.flags);
+        (Field.v "Channel" (bits ~width:6 U32be) $ fun b -> b.chan);
+        (Field.v "Seq" (bits ~width:14 U32be) $ fun b -> b.seq);
         bf_bf32_pri;
       ]
 
 let bf32_struct = Everparse.struct_of_codec bf32_codec
 let bf32_size = Codec.wire_size bf32_codec
-
-let bf32_default =
-  { bf32_flags = 5; bf32_chan = 26; bf32_seq = 4660; bf32_pri = 171 }
+let bf32_default = { flags = 5; chan = 26; seq = 4660; pri = 171 }
 
 let bf32_data n =
   Array.init n (fun i ->
@@ -186,33 +169,27 @@ let bf32_data n =
 
 (* -- 6. BoolFields: bool(1bit)+bool(1bit)+6bits+uint8 = 2 bytes -- *)
 
-type bool_fields = {
-  bl_active : bool;
-  bl_valid : bool;
-  bl_mode : int;
-  bl_code : int;
-}
+type bool_fields = { active : bool; valid : bool; mode : int; code : int }
 
 let f_bool_active = Field.v "Active" (bit (bits ~width:1 U8))
-let bf_bool_active = Codec.(f_bool_active $ fun b -> b.bl_active)
+let bf_bool_active = Codec.(f_bool_active $ fun b -> b.active)
 
 let bool_fields_codec =
   Codec.v "BoolFields"
-    (fun active valid mode code ->
-      { bl_active = active; bl_valid = valid; bl_mode = mode; bl_code = code })
+    (fun active valid mode code -> { active; valid; mode; code })
     Codec.
       [
         bf_bool_active;
-        (Field.v "Valid" (bit (bits ~width:1 U8)) $ fun b -> b.bl_valid);
-        (Field.v "Mode" (bits ~width:6 U8) $ fun b -> b.bl_mode);
-        (Field.v "Code" uint8 $ fun b -> b.bl_code);
+        (Field.v "Valid" (bit (bits ~width:1 U8)) $ fun b -> b.valid);
+        (Field.v "Mode" (bits ~width:6 U8) $ fun b -> b.mode);
+        (Field.v "Code" uint8 $ fun b -> b.code);
       ]
 
 let bool_fields_struct = Everparse.struct_of_codec bool_fields_codec
 let bool_fields_size = Codec.wire_size bool_fields_codec
 
 let bool_fields_default =
-  { bl_active = true; bl_valid = false; bl_mode = 7; bl_code = 0xAB }
+  { active = true; valid = false; mode = 7; code = 0xAB }
 
 let bool_fields_data n =
   Array.init n (fun i ->
@@ -225,47 +202,47 @@ let bool_fields_data n =
 (* -- 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes -- *)
 
 type large_mixed = {
-  lg_sync : int;
-  lg_version : int;
-  lg_type : int;
-  lg_spacecraft : int;
-  lg_vcid : int;
-  lg_count : int;
-  lg_offset : int;
-  lg_length : int;
-  lg_crc : int;
-  lg_timestamp : int64;
+  sync : int;
+  version : int;
+  type_ : int;
+  spacecraft : int;
+  vcid : int;
+  count : int;
+  offset : int;
+  length : int;
+  crc : int;
+  timestamp : int64;
 }
 
 let f_mixed_timestamp = Field.v "Timestamp" uint64be
-let bf_mixed_timestamp = Codec.(f_mixed_timestamp $ fun l -> l.lg_timestamp)
+let bf_mixed_timestamp = Codec.(f_mixed_timestamp $ fun l -> l.timestamp)
 
 let large_mixed_codec =
   Codec.v "LargeMixed"
     (fun sync version type_ spacecraft vcid count offset length crc timestamp ->
       {
-        lg_sync = sync;
-        lg_version = version;
-        lg_type = type_;
-        lg_spacecraft = spacecraft;
-        lg_vcid = vcid;
-        lg_count = count;
-        lg_offset = offset;
-        lg_length = length;
-        lg_crc = crc;
-        lg_timestamp = timestamp;
+        sync;
+        version;
+        type_;
+        spacecraft;
+        vcid;
+        count;
+        offset;
+        length;
+        crc;
+        timestamp;
       })
     Codec.
       [
-        (Field.v "SyncMarker" uint32be $ fun l -> l.lg_sync);
-        (Field.v "Version" uint8 $ fun l -> l.lg_version);
-        (Field.v "Type" uint8 $ fun l -> l.lg_type);
-        (Field.v "SpacecraftId" uint16be $ fun l -> l.lg_spacecraft);
-        (Field.v "VCID" uint8 $ fun l -> l.lg_vcid);
-        (Field.v "FrameCount" uint8 $ fun l -> l.lg_count);
-        (Field.v "DataOffset" uint16be $ fun l -> l.lg_offset);
-        (Field.v "DataLength" uint16be $ fun l -> l.lg_length);
-        (Field.v "CRC" uint32be $ fun l -> l.lg_crc);
+        (Field.v "SyncMarker" uint32be $ fun l -> l.sync);
+        (Field.v "Version" uint8 $ fun l -> l.version);
+        (Field.v "Type" uint8 $ fun l -> l.type_);
+        (Field.v "SpacecraftId" uint16be $ fun l -> l.spacecraft);
+        (Field.v "VCID" uint8 $ fun l -> l.vcid);
+        (Field.v "FrameCount" uint8 $ fun l -> l.count);
+        (Field.v "DataOffset" uint16be $ fun l -> l.offset);
+        (Field.v "DataLength" uint16be $ fun l -> l.length);
+        (Field.v "CRC" uint32be $ fun l -> l.crc);
         bf_mixed_timestamp;
       ]
 
@@ -274,16 +251,16 @@ let large_mixed_size = Codec.wire_size large_mixed_codec
 
 let large_mixed_default =
   {
-    lg_sync = 0x1ACFFC1D;
-    lg_version = 2;
-    lg_type = 0;
-    lg_spacecraft = 0x01FF;
-    lg_vcid = 3;
-    lg_count = 66;
-    lg_offset = 16;
-    lg_length = 1024;
-    lg_crc = 0xDEADBEEF;
-    lg_timestamp = 0x0102030405060708L;
+    sync = 0x1ACFFC1D;
+    version = 2;
+    type_ = 0;
+    spacecraft = 0x01FF;
+    vcid = 3;
+    count = 66;
+    offset = 16;
+    length = 1024;
+    crc = 0xDEADBEEF;
+    timestamp = 0x0102030405060708L;
   }
 
 let large_mixed_data n =
@@ -320,28 +297,28 @@ let int_of_priority = function
   | High -> 2
   | Critical -> 3
 
-type mapped = { mp_priority : priority; mp_value : int }
+type mapped = { priority : priority; value : int }
 
 let f_mp_priority =
   Field.v "Priority" (map ~decode:priority_of_int ~encode:int_of_priority uint8)
 
 let f_mp_value = Field.v "Value" uint8
-let bf_mp_priority = Codec.(f_mp_priority $ fun m -> m.mp_priority)
+let bf_mp_priority = Codec.(f_mp_priority $ fun m -> m.priority)
 
 let mapped_codec =
   Codec.v "Mapped"
-    (fun pri value -> { mp_priority = pri; mp_value = value })
-    Codec.[ bf_mp_priority; (f_mp_value $ fun m -> m.mp_value) ]
+    (fun pri value -> { priority = pri; value })
+    Codec.[ bf_mp_priority; (f_mp_value $ fun m -> m.value) ]
 
 let mapped_struct = Everparse.struct_of_codec mapped_codec
 let mapped_size = Codec.wire_size mapped_codec
-let mapped_default = { mp_priority = High; mp_value = 42 }
+let mapped_default = { priority = High; value = 42 }
 
 let mapped_data n =
   let buf = Bytes.create (n * mapped_size) in
   for i = 0 to n - 1 do
     Codec.encode mapped_codec
-      { mp_priority = priority_of_int (i mod 4); mp_value = i mod 256 }
+      { priority = priority_of_int (i mod 4); value = i mod 256 }
       buf (i * mapped_size)
   done;
   buf
@@ -352,7 +329,7 @@ let mapped_data n =
    bitfield -- the variant mapping is OCaml-only. *)
 
 type ptype = Telemetry | Telecommand
-type cases_demo = { cd_type : ptype; cd_id : int }
+type cases_demo = { type_ : ptype; id : int }
 
 let f_cd_type =
   Field.v "PacketType"
@@ -361,24 +338,24 @@ let f_cd_type =
        (bits ~width:1 U8))
 
 let f_cd_id = Field.v "Id" (bits ~width:7 U8)
-let bf_cd_type = Codec.(f_cd_type $ fun c -> c.cd_type)
+let bf_cd_type = Codec.(f_cd_type $ fun c -> c.type_)
 
 let cases_demo_codec =
   Codec.v "CasesDemo"
-    (fun ptype id -> { cd_type = ptype; cd_id = id })
-    Codec.[ bf_cd_type; (f_cd_id $ fun c -> c.cd_id) ]
+    (fun ptype id -> { type_ = ptype; id })
+    Codec.[ bf_cd_type; (f_cd_id $ fun c -> c.id) ]
 
 let cases_demo_struct = Everparse.struct_of_codec cases_demo_codec
 let cases_demo_size = Codec.wire_size cases_demo_codec
-let cases_demo_default = { cd_type = Telemetry; cd_id = 42 }
+let cases_demo_default = { type_ = Telemetry; id = 42 }
 
 let cases_demo_data n =
   let buf = Bytes.create (n * cases_demo_size) in
   for i = 0 to n - 1 do
     Codec.encode cases_demo_codec
       {
-        cd_type = (if i mod 2 = 0 then Telemetry else Telecommand);
-        cd_id = i mod 128;
+        type_ = (if i mod 2 = 0 then Telemetry else Telecommand);
+        id = i mod 128;
       }
       buf (i * cases_demo_size)
   done;
@@ -390,7 +367,7 @@ let cases_demo_data n =
    Codec.get calls the map decode on every read. *)
 
 type status = [ `Ok | `Warn | `Err | `Crit ]
-type enum_demo = { en_status : status; en_code : int }
+type enum_demo = { status : status; code : int }
 
 let f_en_status =
   Field.v "StatusCode"
@@ -399,23 +376,23 @@ let f_en_status =
        uint8)
 
 let f_en_code = Field.v "Code" uint8
-let bf_en_status = Codec.(f_en_status $ fun e -> e.en_status)
+let bf_en_status = Codec.(f_en_status $ fun e -> e.status)
 
 let enum_demo_codec =
   Codec.v "EnumDemo"
-    (fun status code -> { en_status = status; en_code = code })
-    Codec.[ bf_en_status; (f_en_code $ fun e -> e.en_code) ]
+    (fun status code -> { status; code })
+    Codec.[ bf_en_status; (f_en_code $ fun e -> e.code) ]
 
 let enum_demo_struct = Everparse.struct_of_codec enum_demo_codec
 let enum_demo_size = Codec.wire_size enum_demo_codec
-let enum_demo_default = { en_status = `Ok; en_code = 42 }
+let enum_demo_default = { status = `Ok; code = 42 }
 
 let enum_demo_data n =
   let buf = Bytes.create (n * enum_demo_size) in
   let statuses = [| `Ok; `Warn; `Err; `Crit |] in
   for i = 0 to n - 1 do
     Codec.encode enum_demo_codec
-      { en_status = statuses.(i mod 4); en_code = i mod 256 }
+      { status = statuses.(i mod 4); code = i mod 256 }
       buf (i * enum_demo_size)
   done;
   buf
@@ -425,7 +402,7 @@ let enum_demo_data n =
    (Version must be 0) but Codec.get strips the constraint entirely.
    This measures C constraint-checking overhead vs OCaml unchecked read. *)
 
-type constrained = { co_version : int; co_data : int }
+type constrained = { version : int; data : int }
 
 let f_co_version_c = field "Version" uint8
 
@@ -433,83 +410,82 @@ let f_co_version =
   Field.v "Version" (where Expr.(field_ref f_co_version_c = int 0) uint8)
 
 let f_co_data = Field.v "Data" uint8
-let bf_co_data = Codec.(f_co_data $ fun c -> c.co_data)
+let bf_co_data = Codec.(f_co_data $ fun c -> c.data)
 
 let constrained_codec =
   Codec.v "Constrained"
-    (fun version data -> { co_version = version; co_data = data })
-    Codec.[ (f_co_version $ fun c -> c.co_version); bf_co_data ]
+    (fun version data -> { version; data })
+    Codec.[ (f_co_version $ fun c -> c.version); bf_co_data ]
 
 let constrained_struct = Everparse.struct_of_codec constrained_codec
 let constrained_size = Codec.wire_size constrained_codec
-let constrained_default = { co_version = 0; co_data = 42 }
+let constrained_default = { version = 0; data = 42 }
 
 let constrained_data n =
   let buf = Bytes.create (n * constrained_size) in
   for i = 0 to n - 1 do
     Codec.encode constrained_codec
-      { co_version = 0; co_data = i mod 256 }
+      { version = 0; data = i mod 256 }
       buf (i * constrained_size)
   done;
   buf
 
 (* -- 12. Lowercase name: exercises filename capitalization -- *)
 
-type lowercase_record = { lc_x : int; lc_y : int }
+type lowercase_record = { x : int; y : int }
 
 let lowercase_codec =
   Codec.v "lowercase_record"
-    (fun x y -> { lc_x = x; lc_y = y })
+    (fun x y -> { x; y })
     Codec.
       [
-        (Field.v "x" uint8 $ fun r -> r.lc_x);
-        (Field.v "y" uint16be $ fun r -> r.lc_y);
+        (Field.v "x" uint8 $ fun r -> r.x); (Field.v "y" uint16be $ fun r -> r.y);
       ]
 
 (* -- 13. Reserved-word field names -- *)
 
-type reserved_fields = { rf_type : int; rf_case : int; rf_value : int }
+type reserved_fields = { type_ : int; case : int; value : int }
 
 let reserved_fields_codec =
   let f_type = Field.v "type" uint8 in
   Codec.v "ReservedFields"
-    (fun t c v -> { rf_type = t; rf_case = c; rf_value = v })
+    (fun t c v -> { type_ = t; case = c; value = v })
     Codec.
       [
-        (f_type $ fun r -> r.rf_type);
+        (f_type $ fun r -> r.type_);
         ( Field.v "case" ~constraint_:Expr.(Field.ref f_type <= int 10) uint8
-        $ fun r -> r.rf_case );
-        (Field.v "value" uint16be $ fun r -> r.rf_value);
+        $ fun r -> r.case );
+        (Field.v "value" uint16be $ fun r -> r.value);
       ]
 
 (* -- 14. Bitfield reorder: MSB-first on U8 (non-native) -- *)
 
-type bf_reorder = { bfr_a : int; bfr_b : int }
+type bf_reorder = { a : int; b : int }
 
 let bf_reorder_codec =
   Codec.v "BfReorder"
-    (fun a b -> { bfr_a = a; bfr_b = b })
+    (fun a b -> { a; b })
     Codec.
       [
-        (Field.v "a" (bits ~width:3 U8) $ fun r -> r.bfr_a);
-        (Field.v "b" (bits ~width:5 U8) $ fun r -> r.bfr_b);
+        (Field.v "a" (bits ~width:3 U8) $ fun r -> r.a);
+        (Field.v "b" (bits ~width:5 U8) $ fun r -> r.b);
       ]
 
 (* -- 15. Constrained bitfield -- *)
 
-type bf_constrained = { bfc_version : int; bfc_flags : int }
+type bf_constrained = { version : int; flags : int }
 
 let bf_constrained_codec =
   let f_version = Field.v "Version" (bits ~width:4 U8) in
   Codec.v "BfConstrained"
-    (fun version flags -> { bfc_version = version; bfc_flags = flags })
+    (fun version flags -> { version; flags })
     Codec.
       [
-        (f_version $ fun r -> r.bfc_version);
+        (f_version $ fun r -> r.version);
         ( Field.v "Flags"
             ~constraint_:Expr.(Field.ref f_version <= int 5)
             (bits ~width:4 U8)
-        $ fun r -> r.bfc_flags );
+        $ fun r -> r.flags );
       ]
 
 (* ==========================================================================

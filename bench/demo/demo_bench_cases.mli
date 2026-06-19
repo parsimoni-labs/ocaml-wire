@@ -22,8 +22,8 @@ type id =
   | Constrained_data
 
 type _ c_field_decode =
-  | Of_int : (int -> 'a) -> 'a c_field_decode
-  | Of_int64 : (int64 -> 'a) -> 'a c_field_decode
+  | Int : (int -> 'a) -> 'a c_field_decode
+  | Int64 : (int64 -> 'a) -> 'a c_field_decode
 
 type 'a read_case =
   | Read_case : {
