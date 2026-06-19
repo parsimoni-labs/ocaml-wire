@@ -59,6 +59,14 @@
 
 ### Changed
 
+- `Wire_3d.main` now takes packed codecs (`Wire_3d.pack codec`) and a
+  mandatory `~mode:[`Ffi | `Doc]`, so every `gen.ml` states what it emits.
+  `` `Ffi `` keeps the per-codec FFI parsers; `` `Doc `` emits one FFI-free
+  `<Package>.3d` specification and a single validator-only `<Package>.c` for
+  the whole package, through the new `Wire_3d.generate_doc` and
+  `Wire_3d.generate_dune_doc`. Migrate a `gen.ml` by replacing
+  `[schema c; ...]` with `~mode:`Ffi [pack c; ...]`, or `~mode:`Doc` for the
+  single-file output (#152, @samoht)
 - Reading or writing a `uint32` or `uint63` field now stays in the native
   `int` instead of round-tripping through a boxed `Int32` or `Int64`. The
   boxing surfaced as per-field allocation in tight decode and encode loops;

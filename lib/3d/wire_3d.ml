@@ -318,21 +318,23 @@ let fields_c_files schemas =
       else None)
     schemas
 
-let run_everparse ?(quiet = true) ~outdir schemas =
+let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
     | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
   in
   List.iter
-    (fun s ->
-      let f = Wire.Everparse.filename s in
+    (fun f ->
       let redirect = if quiet then " > /dev/null 2>&1" else "" in
       let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
       let ret = Sys.command cmd in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret)
-    schemas;
+    files;
   copy_everparse_endianness ~outdir
+
+let run_everparse ?(quiet = true) ~outdir schemas =
+  run_everparse_files ~quiet ~outdir (List.map Wire.Everparse.filename schemas)
 
 let parse_3d ?(batch = false) ~outdir file =
   let exe =
@@ -594,9 +596,108 @@ let generate_dune ~outdir ~package schemas =
   Format.pp_print_flush ppf ();
   close_out oc
 
-let main ~package schemas =
-  match Array.to_list Sys.argv with
-  | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
-  | [ _; "c" ] -> generate_c ~outdir:"." schemas
-  | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
-  | _ -> run ~outdir:"." schemas
+(* A codec awaiting projection. [main] and the doc helpers take these rather
+   than already-projected [Wire.Everparse.t] so the caller never has to choose
+   between [doc] and [schema]: the projection is picked here from the mode, not
+   at the call site, which removes the [~mode:`Doc] + [schema ...] mismatch. *)
+type packed = Pack : 'a Wire.Codec.t -> packed
+
+let pack c = Pack c
+
+(* -- Documentation / single-file pipeline. [main ~mode:`Doc] drives these:
+   project each codec with [Wire.Everparse.doc] (FFI-free), merge the family
+   into one [<Package>.3d] with [write_doc], and compile that single spec to a
+   validator-only [<Package>.c] -- no per-codec files, no [_Fields] plug, no FFI
+   stubs. The package name becomes the 3D module name, so turn it into a valid
+   EverParse identifier (CamelCase, no hyphens): "my-pkg" -> "MyPkg". -- *)
+let doc_module_name package =
+  let alnum c =
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+  in
+  package
+  |> String.map (fun c -> if alnum c then c else '_')
+  |> String.split_on_char '_'
+  |> List.filter (fun s -> s <> "")
+  |> List.map String.capitalize_ascii
+  |> String.concat ""
+
+let generate_3d_doc ~outdir ~package codecs =
+  ensure_dir outdir;
+  write_doc ~outdir ~name:(doc_module_name package)
+    (List.map (fun (Pack c) -> doc c) codecs)
+
+let generate_c_doc ?(quiet = true) ~outdir ~package _codecs =
+  ensure_dir outdir;
+  if has_3d_exe () then
+    run_everparse_files ~quiet ~outdir [ doc_module_name package ^ ".3d" ]
+  else
+    failwith
+      "3d.exe not found in PATH. Install EverParse to regenerate C files."
+
+let generate_doc ?(quiet = true) ~outdir ~package codecs =
+  generate_3d_doc ~outdir ~package codecs;
+  generate_c_doc ~quiet ~outdir ~package codecs
+
+let generate_dune_doc ~outdir ~package _codecs =
+  let base = doc_module_name package in
+  let three_d = base ^ ".3d" in
+  let c_files =
+    [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
+  in
+  let oc = open_out (Filename.concat outdir "dune.inc") in
+  let ppf = Format.formatter_of_out_channel oc in
+  let pr fmt = Fmt.pf ppf fmt in
+  pr
+    "(rule\n\
+    \ (alias 3d)\n\
+    \ (mode promote)\n\
+    \ (targets %s)\n\
+    \ (deps gen.exe)\n\
+    \ (action\n\
+    \  (run ./gen.exe 3d)))\n\n"
+    three_d;
+  pr
+    "(rule\n\
+    \ (alias 3d)\n\
+    \ (mode fallback)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s)\n\
+    \ (deps gen.exe %s)\n\
+    \ (action\n\
+    \  (run ./gen.exe c)))\n\n"
+    (String.concat " " c_files)
+    three_d;
+  (* Compile the generated validator (no link: the wrapper's error callback is
+     the consumer's to define), so a downstream build fails loudly if the spec
+     stops projecting to compilable C. *)
+  pr
+    "(rule\n\
+    \ (alias runtest)\n\
+    \ (deps EverParse.h EverParseEndianness.h %s)\n\
+    \ (action\n\
+    \  (system\n\
+    \   \"cc %s -c %s.c %sWrapper.c\")))\n\n"
+    (String.concat " " c_files)
+    strict_cc_flags base base;
+  pr "(install\n (package %s)\n (section lib)\n (files\n" package;
+  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) (three_d :: c_files);
+  pr "  (EverParse.h as c/EverParse.h)\n";
+  pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n";
+  Format.pp_print_flush ppf ();
+  close_out oc
+
+let main ~mode ~package codecs =
+  let argv = Array.to_list Sys.argv in
+  match mode with
+  | `Ffi -> (
+      let schemas = List.map (fun (Pack c) -> schema c) codecs in
+      match argv with
+      | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
+      | [ _; "c" ] -> generate_c ~outdir:"." schemas
+      | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
+      | _ -> run ~outdir:"." schemas)
+  | `Doc -> (
+      match argv with
+      | [ _; "3d" ] -> generate_3d_doc ~outdir:"." ~package codecs
+      | [ _; "c" ] -> generate_c_doc ~outdir:"." ~package codecs
+      | [ _; "dune" ] -> generate_dune_doc ~outdir:"." ~package codecs
+      | _ -> generate_doc ~outdir:"." ~package codecs)
