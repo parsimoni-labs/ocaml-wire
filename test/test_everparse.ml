@@ -253,6 +253,52 @@ let test_doc_merge_dedup () =
     "second struct present" true
     (contains ~sub:"Two" content)
 
+let test_doc_field_citation () =
+  (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
+     3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
+     the plain comment form. *)
+  let f = Field.v "Length" ~doc:"RFC 9999 section 4.2" uint16be in
+  Alcotest.(check (option string))
+    "field exposes its doc" (Some "RFC 9999 section 4.2") (Field.doc f);
+  let c = Codec.v "Pkt" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
+  let out = to_3d ~enum_as_type:true (Everparse.doc c).module_ in
+  Alcotest.(check bool)
+    "field carries the citation comment" true
+    (contains ~sub:"/* RFC 9999 section 4.2 */" out)
+
+let test_doc_bit_order_matches_schema () =
+  (* Doc-mode emits a validator with no FFI, so its bitfield layout is never
+     run through the differential C tests that check the schema (FFI)
+     projection's bit order against [Codec.get]. Both projections must apply
+     the same bit reordering; assert their bitfield sequence is identical so
+     doc-mode's order stays pinned to the order those tests already cover.
+     A,B,C share one [U8] word whose native order is [Lsb_first], so the
+     default [Msb_first] declaration is reversed in the 3D -- a doc path that
+     skipped the reorder would diverge here. *)
+  let c =
+    Codec.v "BitOrd"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (Field.v "A" (bits ~width:3 U8) $ fun (a, _, _, _) -> a);
+          (Field.v "B" (bits ~width:1 U8) $ fun (_, b, _, _) -> b);
+          (Field.v "C" (bits ~width:4 U8) $ fun (_, _, c, _) -> c);
+          (Field.v "D" uint8 $ fun (_, _, _, d) -> d);
+        ]
+  in
+  let bit_order_of schema =
+    match Everparse.entrypoint_struct schema with
+    | None -> Alcotest.fail "schema has no entrypoint struct"
+    | Some s ->
+        List.map
+          (fun (name, is_bitfield, _) -> (name, is_bitfield))
+          (Everparse.field_action_forms s)
+  in
+  Alcotest.(check (list (pair (option string) bool)))
+    "doc reorders bitfields exactly as the schema projection does"
+    (bit_order_of (Everparse.schema c))
+    (bit_order_of (Everparse.doc c))
+
 let test_3d_nested_byte_array_where () =
   (* A byte_array_where inside a nested region needs its synthesised refined-byte
      typedef emitted, before the wrapper that references it, or the schema names
@@ -908,6 +954,10 @@ let suite =
         test_doc_enum_as_type;
       Alcotest.test_case "doc: merge dedups shared types" `Quick
         test_doc_merge_dedup;
+      Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
+        test_doc_field_citation;
+      Alcotest.test_case "doc: bit order matches schema projection" `Quick
+        test_doc_bit_order_matches_schema;
       Alcotest.test_case "3d: nested byte_array_where refined typedef" `Quick
         test_3d_nested_byte_array_where;
       Alcotest.test_case "3d: static optional transparent projection" `Quick

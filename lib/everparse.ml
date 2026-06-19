@@ -208,6 +208,7 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
             field_typ = f.field_typ;
             constraint_ = f.constraint_;
             action = new_action;
+            field_doc = f.field_doc;
           }
     | None -> Types.Field f
   in
@@ -299,6 +300,7 @@ let pad_reversed_group total used base native reversed =
         field_typ = pad_typ;
         constraint_ = None;
         action = None;
+        field_doc = None;
       }
     :: reversed
   else reversed

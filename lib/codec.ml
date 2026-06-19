@@ -369,6 +369,7 @@ type ('a, 'r) field = {
   typ : 'a typ;
   constraint_ : bool expr option;
   action : action option;
+  doc : string option;
   get : 'r -> 'a;
 }
 
@@ -385,8 +386,10 @@ let struct_field : type a r. (a, r) field -> Types.field =
   | Where { cond; inner } ->
       field fld.name
         ?constraint_:(combine_constraint fld.constraint_ (Some cond))
-        ?action:fld.action inner
-  | _ -> field fld.name ?constraint_:fld.constraint_ ?action:fld.action fld.typ
+        ?action:fld.action ?doc:fld.doc inner
+  | _ ->
+      field fld.name ?constraint_:fld.constraint_ ?action:fld.action
+        ?doc:fld.doc fld.typ
 
 let struct' = struct_
 
@@ -832,6 +835,7 @@ let bind (f : 'a Field.t) get =
     typ = Field.typ f;
     constraint_ = Field.constraint_ f;
     action = Field.action f;
+    doc = Field.doc f;
     get;
   }
 
@@ -2035,6 +2039,7 @@ and compile_map : type a w r.
       typ = inner;
       constraint_ = fld.constraint_;
       action = fld.action;
+      doc = fld.doc;
       get = (fun v -> encode (outer_get v));
     }
   in
@@ -2115,6 +2120,7 @@ and compile_optional_variable : type a r.
       typ = inner;
       constraint_ = None;
       action = None;
+      doc = fld.doc;
       get =
         (fun v ->
           match get v with
@@ -2222,6 +2228,7 @@ and compile_optional_or_variable : type a r.
       typ = inner;
       constraint_ = None;
       action = None;
+      doc = fld.doc;
       get = fld.get;
     }
   in
@@ -2781,6 +2788,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
           typ = f.field_typ;
           constraint_ = f.constraint_;
           action = f.action;
+          doc = f.field_doc;
           get = (fun () -> assert false);
         }
       in

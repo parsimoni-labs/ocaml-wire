@@ -225,6 +225,7 @@ and field =
       field_typ : 'a typ;
       constraint_ : bool expr option;
       action : action option;
+      field_doc : string option;
     }
       -> field  (** A single struct field. *)
 
@@ -581,8 +582,14 @@ val split_string_casetype_fields : struct_ -> struct_
 (** {1 Struct Constructors} *)
 
 val field :
-  string -> ?constraint_:bool expr -> ?action:action -> 'a typ -> field
-(** Declare a named field. *)
+  string ->
+  ?constraint_:bool expr ->
+  ?action:action ->
+  ?doc:string ->
+  'a typ ->
+  field
+(** Declare a named field. [?doc] is rendered as a [/* ... */] comment above the
+    field in the 3D projection. *)
 
 val anon_field : 'a typ -> field
 (** Declare an anonymous (padding) field. *)
