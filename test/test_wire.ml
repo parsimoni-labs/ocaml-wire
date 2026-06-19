@@ -23,6 +23,23 @@ let encode_chunked ~chunk_size typ v =
   Bytesrw.Bytes.Writer.write_eod writer;
   Buffer.contents buf
 
+let test_expr_equality_operators () =
+  let module T = Wire.Private.Types in
+  let x = int 1 in
+  let y = int 2 in
+  let check_eq = function
+    | T.Eq (T.Int 1, T.Int 2) -> ()
+    | T.Bool b -> Alcotest.failf "Expr.(=) fell back to OCaml equality: %b" b
+    | _ -> Alcotest.fail "Expr.(=) did not build Eq"
+  in
+  let check_ne = function
+    | T.Ne (T.Int 1, T.Int 2) -> ()
+    | T.Bool b -> Alcotest.failf "Expr.(<>) fell back to OCaml inequality: %b" b
+    | _ -> Alcotest.fail "Expr.(<>) did not build Ne"
+  in
+  check_eq Expr.(x = y);
+  check_ne Expr.(x <> y)
+
 (* -- Parsing tests -- *)
 
 let test_parse_uint8 () =
@@ -878,6 +895,8 @@ let test_stream_encode_chunk3 () =
 let suite =
   ( "wire",
     [
+      Alcotest.test_case "expr: equality operators" `Quick
+        test_expr_equality_operators;
       (* parsing *)
       Alcotest.test_case "parse: uint8" `Quick test_parse_uint8;
       Alcotest.test_case "parse: uint16 le" `Quick test_parse_uint16_le;

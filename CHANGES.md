@@ -158,6 +158,10 @@
 
 ### Fixed
 
+- `Wire.Expr.( = )` and `Wire.Expr.( <> )` are explicitly re-exported from the
+  expression language, so equality in a local `Expr.(...)` open builds `Eq` /
+  `Ne` constraints rather than depending on the surrounding equality binding
+  (@samoht)
 - A codec whose name contains a capital `V` (e.g. `VeritySuperblock`) now
   generates its C parser. EverParse names the validator `<Name>Validate<Name>`,
   and the name reader stopped at the first `V`, so C generation failed for any

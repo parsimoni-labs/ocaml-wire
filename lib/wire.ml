@@ -119,7 +119,7 @@ let bits ?(bit_order = Types.Msb_first) ~width bf =
   Types.bits ~bit_order ~width base
 
 module Expr = struct
-  include Expr
+  include Types.Expr
 
   let true_ = Types.true_
   let false_ = Types.false_
