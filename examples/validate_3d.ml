@@ -23,6 +23,26 @@ let raw_struct ?(entrypoint = true) (s : Raw.struct_) =
 
 let raw_module name module_ = Raw (name, module_)
 
+(* Whole protocol families projected with the documentation pipeline. *)
+let doc_cases =
+  [
+    Doc
+      ( "Net",
+        Wire.Everparse.
+          [
+            doc Net.ethernet_codec;
+            doc Net.ipv4_codec;
+            doc Net.tcp_codec;
+            doc Net.udp_codec;
+          ] );
+    Doc
+      ("Space", Wire.Everparse.[ doc Space.clcw_codec; doc Space.packet_codec ]);
+    Doc
+      ( "Demo",
+        Wire.Everparse.[ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]
+      );
+  ]
+
 let cases =
   [
     raw_struct Demo.minimal_struct;
@@ -61,22 +81,8 @@ let cases =
     Codec ("TMWithOCF", Space.tm_with_ocf_codec);
     Codec ("InnerCmd", Space.inner_cmd_codec);
     Codec ("OuterHdr", Space.outer_hdr_codec);
-    Doc
-      ( "Net",
-        Wire.Everparse.
-          [
-            doc Net.ethernet_codec;
-            doc Net.ipv4_codec;
-            doc Net.tcp_codec;
-            doc Net.udp_codec;
-          ] );
-    Doc
-      ("Space", Wire.Everparse.[ doc Space.clcw_codec; doc Space.packet_codec ]);
-    Doc
-      ( "Demo",
-        Wire.Everparse.[ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]
-      );
   ]
+  @ doc_cases
 
 let emit ~outdir = function
   | Raw (name, module_) ->

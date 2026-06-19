@@ -15,10 +15,10 @@ module Slice = Bytesrw.Bytes.Slice
 let ethernet_payload_size = 40
 
 type ethernet = {
-  eth_dst : Slice.t;
-  eth_src : Slice.t;
-  eth_ethertype : int;
-  eth_payload : Slice.t;
+  dst : Slice.t;
+  src : Slice.t;
+  ethertype : int;
+  payload : Slice.t;
 }
 
 let f_eth_ethertype = Field.v "EtherType" uint16be
@@ -26,22 +26,16 @@ let f_eth_ethertype = Field.v "EtherType" uint16be
 let f_eth_payload =
   Field.v "Payload" (byte_slice ~size:(int ethernet_payload_size))
 
-let bf_eth_ethertype = Codec.(f_eth_ethertype $ fun e -> e.eth_ethertype)
-let bf_eth_payload = Codec.(f_eth_payload $ fun e -> e.eth_payload)
+let bf_eth_ethertype = Codec.(f_eth_ethertype $ fun e -> e.ethertype)
+let bf_eth_payload = Codec.(f_eth_payload $ fun e -> e.payload)
 
 let ethernet_codec =
   Codec.v "Ethernet" ~doc:"Ethernet II (DIX) frame header; IEEE 802.3"
-    (fun dst src etype payload ->
-      {
-        eth_dst = dst;
-        eth_src = src;
-        eth_ethertype = etype;
-        eth_payload = payload;
-      })
+    (fun dst src etype payload -> { dst; src; ethertype = etype; payload })
     Codec.
       [
-        (Field.v "DstMAC" (byte_slice ~size:(int 6)) $ fun e -> e.eth_dst);
-        (Field.v "SrcMAC" (byte_slice ~size:(int 6)) $ fun e -> e.eth_src);
+        (Field.v "DstMAC" (byte_slice ~size:(int 6)) $ fun e -> e.dst);
+        (Field.v "SrcMAC" (byte_slice ~size:(int 6)) $ fun e -> e.src);
         bf_eth_ethertype;
         bf_eth_payload;
       ]
@@ -54,65 +48,65 @@ let ethernet_size = Codec.wire_size ethernet_codec
 let ipv4_payload_size = 20
 
 type ipv4 = {
-  ip_version : int;
-  ip_ihl : int;
-  ip_dscp : int;
-  ip_ecn : int;
-  ip_total_length : int;
-  ip_identification : int;
-  ip_flags : int;
-  ip_fragment_offset : int;
-  ip_ttl : int;
-  ip_protocol : int;
-  ip_checksum : int;
-  ip_src : int;
-  ip_dst : int;
-  ip_payload : Slice.t;
+  version : int;
+  ihl : int;
+  dscp : int;
+  ecn : int;
+  total_length : int;
+  identification : int;
+  flags : int;
+  fragment_offset : int;
+  ttl : int;
+  protocol : int;
+  checksum : int;
+  src : int;
+  dst : int;
+  payload : Slice.t;
 }
 
 let f_ip_protocol = Field.v "Protocol" uint8
 let f_ip_src = Field.v "SrcAddr" uint32be
 let f_ip_dst = Field.v "DstAddr" uint32be
 let f_ip_payload = Field.v "Payload" (byte_slice ~size:(int ipv4_payload_size))
-let bf_ip_protocol = Codec.(f_ip_protocol $ fun p -> p.ip_protocol)
-let bf_ip_src = Codec.(f_ip_src $ fun p -> p.ip_src)
-let bf_ip_dst = Codec.(f_ip_dst $ fun p -> p.ip_dst)
-let bf_ip_payload = Codec.(f_ip_payload $ fun p -> p.ip_payload)
+let bf_ip_protocol = Codec.(f_ip_protocol $ fun p -> p.protocol)
+let bf_ip_src = Codec.(f_ip_src $ fun p -> p.src)
+let bf_ip_dst = Codec.(f_ip_dst $ fun p -> p.dst)
+let bf_ip_payload = Codec.(f_ip_payload $ fun p -> p.payload)
 
 let ipv4_codec =
   Codec.v "IPv4" ~doc:"IPv4 header, RFC 791 section 3.1"
     (fun version ihl dscp ecn total_length identification flags fragment_offset
          ttl protocol checksum src dst payload ->
       {
-        ip_version = version;
-        ip_ihl = ihl;
-        ip_dscp = dscp;
-        ip_ecn = ecn;
-        ip_total_length = total_length;
-        ip_identification = identification;
-        ip_flags = flags;
-        ip_fragment_offset = fragment_offset;
-        ip_ttl = ttl;
-        ip_protocol = protocol;
-        ip_checksum = checksum;
-        ip_src = src;
-        ip_dst = dst;
-        ip_payload = payload;
+        version;
+        ihl;
+        dscp;
+        ecn;
+        total_length;
+        identification;
+        flags;
+        fragment_offset;
+        ttl;
+        protocol;
+        checksum;
+        src;
+        dst;
+        payload;
       })
     Codec.
       [
-        (Field.v "Version" (bits ~width:4 U8) $ fun p -> p.ip_version);
-        (Field.v "IHL" (bits ~width:4 U8) $ fun p -> p.ip_ihl);
-        (Field.v "DSCP" (bits ~width:6 U8) $ fun p -> p.ip_dscp);
-        (Field.v "ECN" (bits ~width:2 U8) $ fun p -> p.ip_ecn);
-        (Field.v "TotalLength" uint16be $ fun p -> p.ip_total_length);
-        (Field.v "Identification" uint16be $ fun p -> p.ip_identification);
-        (Field.v "Flags" (bits ~width:3 U16be) $ fun p -> p.ip_flags);
+        (Field.v "Version" (bits ~width:4 U8) $ fun p -> p.version);
+        (Field.v "IHL" (bits ~width:4 U8) $ fun p -> p.ihl);
+        (Field.v "DSCP" (bits ~width:6 U8) $ fun p -> p.dscp);
+        (Field.v "ECN" (bits ~width:2 U8) $ fun p -> p.ecn);
+        (Field.v "TotalLength" uint16be $ fun p -> p.total_length);
+        (Field.v "Identification" uint16be $ fun p -> p.identification);
+        (Field.v "Flags" (bits ~width:3 U16be) $ fun p -> p.flags);
         ( Field.v "FragmentOffset" (bits ~width:13 U16be) $ fun p ->
-          p.ip_fragment_offset );
-        (Field.v "TTL" uint8 $ fun p -> p.ip_ttl);
+          p.fragment_offset );
+        (Field.v "TTL" uint8 $ fun p -> p.ttl);
         bf_ip_protocol;
-        (Field.v "HeaderChecksum" uint16be $ fun p -> p.ip_checksum);
+        (Field.v "HeaderChecksum" uint16be $ fun p -> p.checksum);
         bf_ip_src;
         bf_ip_dst;
         bf_ip_payload;
@@ -124,24 +118,24 @@ let ipv4_size = Codec.wire_size ipv4_codec
 (* -- TCP header: 20 bytes fixed (no options) -- *)
 
 type tcp = {
-  tcp_src_port : int;
-  tcp_dst_port : int;
-  tcp_seq : int;
-  tcp_ack_num : int;
-  tcp_data_offset : int;
-  tcp_reserved : int;
-  tcp_ns : bool;
-  tcp_cwr : bool;
-  tcp_ece : bool;
-  tcp_urg : bool;
-  tcp_ack : bool;
-  tcp_psh : bool;
-  tcp_rst : bool;
-  tcp_syn : bool;
-  tcp_fin : bool;
-  tcp_window : int;
-  tcp_checksum : int;
-  tcp_urgent_ptr : int;
+  src_port : int;
+  dst_port : int;
+  seq : int;
+  ack_num : int;
+  data_offset : int;
+  reserved : int;
+  ns : bool;
+  cwr : bool;
+  ece : bool;
+  urg : bool;
+  ack : bool;
+  psh : bool;
+  rst : bool;
+  syn : bool;
+  fin : bool;
+  window : int;
+  checksum : int;
+  urgent_ptr : int;
 }
 
 let f_tcp_src_port = Field.v "SrcPort" uint16be
@@ -152,30 +146,30 @@ let f_tcp_ack = Field.v "ACK" (bit (bits ~width:1 U16be))
 let tcp_of_fields src_port dst_port seq ack_num data_offset reserved ns cwr ece
     urg ack psh rst syn fin window checksum urgent_ptr =
   {
-    tcp_src_port = src_port;
-    tcp_dst_port = dst_port;
-    tcp_seq = seq;
-    tcp_ack_num = ack_num;
-    tcp_data_offset = data_offset;
-    tcp_reserved = reserved;
-    tcp_ns = ns;
-    tcp_cwr = cwr;
-    tcp_ece = ece;
-    tcp_urg = urg;
-    tcp_ack = ack;
-    tcp_psh = psh;
-    tcp_rst = rst;
-    tcp_syn = syn;
-    tcp_fin = fin;
-    tcp_window = window;
-    tcp_checksum = checksum;
-    tcp_urgent_ptr = urgent_ptr;
+    src_port;
+    dst_port;
+    seq;
+    ack_num;
+    data_offset;
+    reserved;
+    ns;
+    cwr;
+    ece;
+    urg;
+    ack;
+    psh;
+    rst;
+    syn;
+    fin;
+    window;
+    checksum;
+    urgent_ptr;
   }
 
-let bf_tcp_src_port = Codec.(f_tcp_src_port $ fun t -> t.tcp_src_port)
-let bf_tcp_dst_port = Codec.(f_tcp_dst_port $ fun t -> t.tcp_dst_port)
-let bf_tcp_syn = Codec.(f_tcp_syn $ fun t -> t.tcp_syn)
-let bf_tcp_ack = Codec.(f_tcp_ack $ fun t -> t.tcp_ack)
+let bf_tcp_src_port = Codec.(f_tcp_src_port $ fun t -> t.src_port)
+let bf_tcp_dst_port = Codec.(f_tcp_dst_port $ fun t -> t.dst_port)
+let bf_tcp_syn = Codec.(f_tcp_syn $ fun t -> t.syn)
+let bf_tcp_ack = Codec.(f_tcp_ack $ fun t -> t.ack)
 
 let tcp_codec =
   Codec.v "TCP" ~doc:"TCP header, RFC 9293 section 3.1" tcp_of_fields
@@ -183,22 +177,22 @@ let tcp_codec =
       [
         bf_tcp_src_port;
         bf_tcp_dst_port;
-        (Field.v "SeqNum" uint32be $ fun t -> t.tcp_seq);
-        (Field.v "AckNum" uint32be $ fun t -> t.tcp_ack_num);
-        (Field.v "DataOffset" (bits ~width:4 U16be) $ fun t -> t.tcp_data_offset);
-        (Field.v "Reserved" (bits ~width:3 U16be) $ fun t -> t.tcp_reserved);
-        (Field.v "NS" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_ns);
-        (Field.v "CWR" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_cwr);
-        (Field.v "ECE" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_ece);
-        (Field.v "URG" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_urg);
+        (Field.v "SeqNum" uint32be $ fun t -> t.seq);
+        (Field.v "AckNum" uint32be $ fun t -> t.ack_num);
+        (Field.v "DataOffset" (bits ~width:4 U16be) $ fun t -> t.data_offset);
+        (Field.v "Reserved" (bits ~width:3 U16be) $ fun t -> t.reserved);
+        (Field.v "NS" (bit (bits ~width:1 U16be)) $ fun t -> t.ns);
+        (Field.v "CWR" (bit (bits ~width:1 U16be)) $ fun t -> t.cwr);
+        (Field.v "ECE" (bit (bits ~width:1 U16be)) $ fun t -> t.ece);
+        (Field.v "URG" (bit (bits ~width:1 U16be)) $ fun t -> t.urg);
         bf_tcp_ack;
-        (Field.v "PSH" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_psh);
-        (Field.v "RST" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_rst);
+        (Field.v "PSH" (bit (bits ~width:1 U16be)) $ fun t -> t.psh);
+        (Field.v "RST" (bit (bits ~width:1 U16be)) $ fun t -> t.rst);
         bf_tcp_syn;
-        (Field.v "FIN" (bit (bits ~width:1 U16be)) $ fun t -> t.tcp_fin);
-        (Field.v "Window" uint16be $ fun t -> t.tcp_window);
-        (Field.v "Checksum" uint16be $ fun t -> t.tcp_checksum);
-        (Field.v "UrgentPtr" uint16be $ fun t -> t.tcp_urgent_ptr);
+        (Field.v "FIN" (bit (bits ~width:1 U16be)) $ fun t -> t.fin);
+        (Field.v "Window" uint16be $ fun t -> t.window);
+        (Field.v "Checksum" uint16be $ fun t -> t.checksum);
+        (Field.v "UrgentPtr" uint16be $ fun t -> t.urgent_ptr);
       ]
 
 let tcp_struct = Everparse.struct_of_codec tcp_codec
@@ -206,12 +200,7 @@ let tcp_size = Codec.wire_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
 
-type udp = {
-  udp_src_port : int;
-  udp_dst_port : int;
-  udp_length : int;
-  udp_checksum : int;
-}
+type udp = { src_port : int; dst_port : int; length : int; checksum : int }
 
 let f_udp_src_port = Field.v "SrcPort" uint16be
 let f_udp_dst_port = Field.v "DstPort" uint16be
@@ -221,18 +210,13 @@ let f_udp_checksum = Field.v "Checksum" uint16be
 let udp_codec =
   Codec.v "UDP" ~doc:"UDP header, RFC 768"
     (fun src_port dst_port length checksum ->
-      {
-        udp_src_port = src_port;
-        udp_dst_port = dst_port;
-        udp_length = length;
-        udp_checksum = checksum;
-      })
+      { src_port; dst_port; length; checksum })
     Codec.
       [
-        (f_udp_src_port $ fun u -> u.udp_src_port);
-        (f_udp_dst_port $ fun u -> u.udp_dst_port);
-        (f_udp_length $ fun u -> u.udp_length);
-        (f_udp_checksum $ fun u -> u.udp_checksum);
+        (f_udp_src_port $ fun u -> u.src_port);
+        (f_udp_dst_port $ fun u -> u.dst_port);
+        (f_udp_length $ fun u -> u.length);
+        (f_udp_checksum $ fun u -> u.checksum);
       ]
 
 let udp_struct = Everparse.struct_of_codec udp_codec

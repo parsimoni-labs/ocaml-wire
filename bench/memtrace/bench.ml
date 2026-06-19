@@ -33,32 +33,30 @@ let schema name codec size default make_data =
 (* -- Nested codec schemas for allocation tracking -- *)
 
 (* Codec embed: outer record containing an inner sub-codec *)
-type inner_rec = { i_tag : int; i_value : int }
-type outer_rec = { o_hdr : int; o_inner : inner_rec; o_trail : int }
+type inner_rec = { tag : int; value : int }
+type outer_rec = { hdr : int; inner : inner_rec; trail : int }
 
 let inner_codec =
   Wire.Codec.v "Inner"
-    (fun tag value -> { i_tag = tag; i_value = value })
+    (fun tag value -> { tag; value })
     Wire.Codec.
       [
-        (Wire.Field.v "Tag" Wire.uint8 $ fun r -> r.i_tag);
-        (Wire.Field.v "Value" Wire.uint16be $ fun r -> r.i_value);
+        (Wire.Field.v "Tag" Wire.uint8 $ fun r -> r.tag);
+        (Wire.Field.v "Value" Wire.uint16be $ fun r -> r.value);
       ]
 
 let outer_codec =
   Wire.Codec.v "Outer"
-    (fun hdr inner trail -> { o_hdr = hdr; o_inner = inner; o_trail = trail })
+    (fun hdr inner trail -> { hdr; inner; trail })
     Wire.Codec.
       [
-        (Wire.Field.v "Hdr" Wire.uint8 $ fun r -> r.o_hdr);
-        (Wire.Field.v "Inner" (Wire.codec inner_codec) $ fun r -> r.o_inner);
-        (Wire.Field.v "Trail" Wire.uint8 $ fun r -> r.o_trail);
+        (Wire.Field.v "Hdr" Wire.uint8 $ fun r -> r.hdr);
+        (Wire.Field.v "Inner" (Wire.codec inner_codec) $ fun r -> r.inner);
+        (Wire.Field.v "Trail" Wire.uint8 $ fun r -> r.trail);
       ]
 
 let outer_size = 5
-
-let outer_default =
-  { o_hdr = 0; o_inner = { i_tag = 0; i_value = 0 }; o_trail = 0 }
+let outer_default = { hdr = 0; inner = { tag = 0; value = 0 }; trail = 0 }
 
 let outer_data n =
   Array.init n (fun i ->
@@ -70,21 +68,21 @@ let outer_data n =
       b)
 
 (* Optional: record with optional trailing field *)
-type opt_rec = { opt_hdr : int; opt_data : int; opt_fecf : int option }
+type opt_rec = { hdr : int; data : int; fecf : int option }
 
 let opt_codec_present =
   Wire.Codec.v "OptPresent"
-    (fun hdr data fecf -> { opt_hdr = hdr; opt_data = data; opt_fecf = fecf })
+    (fun hdr data fecf -> { hdr; data; fecf })
     Wire.Codec.
       [
-        (Wire.Field.v "Hdr" Wire.uint16be $ fun r -> r.opt_hdr);
-        (Wire.Field.v "Data" Wire.uint16be $ fun r -> r.opt_data);
+        (Wire.Field.v "Hdr" Wire.uint16be $ fun r -> r.hdr);
+        (Wire.Field.v "Data" Wire.uint16be $ fun r -> r.data);
         ( Wire.Field.optional "FECF" ~present:(Wire.bool true) Wire.uint16be
-        $ fun r -> r.opt_fecf );
+        $ fun r -> r.fecf );
       ]
 
 let opt_present_size = 6
-let opt_present_default = { opt_hdr = 0; opt_data = 0; opt_fecf = Some 0 }
+let opt_present_default = { hdr = 0; data = 0; fecf = Some 0 }
 
 let opt_present_data n =
   Array.init n (fun i ->
@@ -95,32 +93,28 @@ let opt_present_data n =
       b)
 
 (* Repeat: container with repeated sub-codec elements *)
-type repeat_rec = { r_len : int; r_items : inner_rec list }
+type repeat_rec = { len : int; items : inner_rec list }
 
 let f_r_len = Wire.Field.v "Len" Wire.uint8
 
 let repeat_codec =
   Wire.Codec.v "Repeat"
-    (fun len items -> { r_len = len; r_items = items })
+    (fun len items -> { len; items })
     Wire.Codec.
       [
-        (f_r_len $ fun r -> r.r_len);
+        (f_r_len $ fun r -> r.len);
         ( Wire.Field.repeat "Items" ~size:(Wire.Field.ref f_r_len)
             (Wire.codec inner_codec)
-        $ fun r -> r.r_items );
+        $ fun r -> r.items );
       ]
 
 let repeat_size = 10 (* 1 + 3*3 = 10 bytes for 3 inner items *)
 
 let repeat_default =
   {
-    r_len = 9;
-    r_items =
-      [
-        { i_tag = 0; i_value = 0 };
-        { i_tag = 0; i_value = 0 };
-        { i_tag = 0; i_value = 0 };
-      ];
+    len = 9;
+    items =
+      [ { tag = 0; value = 0 }; { tag = 0; value = 0 }; { tag = 0; value = 0 } ];
   }
 
 let repeat_data n =
@@ -147,19 +141,19 @@ let repeat_data n =
 module Slice = Bytesrw.Bytes.Slice
 
 type kexinit = {
-  k_cookie : Slice.t;
-  k_kex : Slice.t;
-  k_host_key : Slice.t;
-  k_enc_c2s : Slice.t;
-  k_enc_s2c : Slice.t;
-  k_mac_c2s : Slice.t;
-  k_mac_s2c : Slice.t;
-  k_comp_c2s : Slice.t;
-  k_comp_s2c : Slice.t;
-  k_lang_c2s : Slice.t;
-  k_lang_s2c : Slice.t;
-  k_first_follows : int;
-  k_reserved : int;
+  cookie : Slice.t;
+  kex : Slice.t;
+  host_key : Slice.t;
+  enc_c2s : Slice.t;
+  enc_s2c : Slice.t;
+  mac_c2s : Slice.t;
+  mac_s2c : Slice.t;
+  comp_c2s : Slice.t;
+  comp_s2c : Slice.t;
+  lang_c2s : Slice.t;
+  lang_s2c : Slice.t;
+  first_follows : int;
+  reserved : int;
 }
 
 let kex_len name = Wire.Field.v name Wire.uint32be
@@ -182,46 +176,46 @@ let kexinit_codec =
     (fun cookie _kl kex _hl hk _ecl ec _esl es _mcl mc _msl ms _ccl cc _csl cs
          _lcl lc _lsl ls first reserved ->
       {
-        k_cookie = cookie;
-        k_kex = kex;
-        k_host_key = hk;
-        k_enc_c2s = ec;
-        k_enc_s2c = es;
-        k_mac_c2s = mc;
-        k_mac_s2c = ms;
-        k_comp_c2s = cc;
-        k_comp_s2c = cs;
-        k_lang_c2s = lc;
-        k_lang_s2c = ls;
-        k_first_follows = first;
-        k_reserved = reserved;
+        cookie;
+        kex;
+        host_key = hk;
+        enc_c2s = ec;
+        enc_s2c = es;
+        mac_c2s = mc;
+        mac_s2c = ms;
+        comp_c2s = cc;
+        comp_s2c = cs;
+        lang_c2s = lc;
+        lang_s2c = ls;
+        first_follows = first;
+        reserved;
       })
     Wire.Codec.
       [
         ( Wire.Field.v "Cookie" (Wire.byte_slice ~size:(Wire.int 16)) $ fun r ->
-          r.k_cookie );
-        (f_kex_len $ fun r -> Slice.length r.k_kex);
-        (name_list "Kex" f_kex_len $ fun r -> r.k_kex);
-        (f_hk_len $ fun r -> Slice.length r.k_host_key);
-        (name_list "HostKey" f_hk_len $ fun r -> r.k_host_key);
-        (f_ec_len $ fun r -> Slice.length r.k_enc_c2s);
-        (name_list "EncC2S" f_ec_len $ fun r -> r.k_enc_c2s);
-        (f_es_len $ fun r -> Slice.length r.k_enc_s2c);
-        (name_list "EncS2C" f_es_len $ fun r -> r.k_enc_s2c);
-        (f_mc_len $ fun r -> Slice.length r.k_mac_c2s);
-        (name_list "MacC2S" f_mc_len $ fun r -> r.k_mac_c2s);
-        (f_ms_len $ fun r -> Slice.length r.k_mac_s2c);
-        (name_list "MacS2C" f_ms_len $ fun r -> r.k_mac_s2c);
-        (f_cc_len $ fun r -> Slice.length r.k_comp_c2s);
-        (name_list "CompC2S" f_cc_len $ fun r -> r.k_comp_c2s);
-        (f_cs_len $ fun r -> Slice.length r.k_comp_s2c);
-        (name_list "CompS2C" f_cs_len $ fun r -> r.k_comp_s2c);
-        (f_lc_len $ fun r -> Slice.length r.k_lang_c2s);
-        (name_list "LangC2S" f_lc_len $ fun r -> r.k_lang_c2s);
-        (f_ls_len $ fun r -> Slice.length r.k_lang_s2c);
-        (name_list "LangS2C" f_ls_len $ fun r -> r.k_lang_s2c);
-        (Wire.Field.v "FirstFollows" Wire.uint8 $ fun r -> r.k_first_follows);
-        (Wire.Field.v "Reserved" Wire.uint32be $ fun r -> r.k_reserved);
+          r.cookie );
+        (f_kex_len $ fun r -> Slice.length r.kex);
+        (name_list "Kex" f_kex_len $ fun r -> r.kex);
+        (f_hk_len $ fun r -> Slice.length r.host_key);
+        (name_list "HostKey" f_hk_len $ fun r -> r.host_key);
+        (f_ec_len $ fun r -> Slice.length r.enc_c2s);
+        (name_list "EncC2S" f_ec_len $ fun r -> r.enc_c2s);
+        (f_es_len $ fun r -> Slice.length r.enc_s2c);
+        (name_list "EncS2C" f_es_len $ fun r -> r.enc_s2c);
+        (f_mc_len $ fun r -> Slice.length r.mac_c2s);
+        (name_list "MacC2S" f_mc_len $ fun r -> r.mac_c2s);
+        (f_ms_len $ fun r -> Slice.length r.mac_s2c);
+        (name_list "MacS2C" f_ms_len $ fun r -> r.mac_s2c);
+        (f_cc_len $ fun r -> Slice.length r.comp_c2s);
+        (name_list "CompC2S" f_cc_len $ fun r -> r.comp_c2s);
+        (f_cs_len $ fun r -> Slice.length r.comp_s2c);
+        (name_list "CompS2C" f_cs_len $ fun r -> r.comp_s2c);
+        (f_lc_len $ fun r -> Slice.length r.lang_c2s);
+        (name_list "LangC2S" f_lc_len $ fun r -> r.lang_c2s);
+        (f_ls_len $ fun r -> Slice.length r.lang_s2c);
+        (name_list "LangS2C" f_ls_len $ fun r -> r.lang_s2c);
+        (Wire.Field.v "FirstFollows" Wire.uint8 $ fun r -> r.first_follows);
+        (Wire.Field.v "Reserved" Wire.uint32be $ fun r -> r.reserved);
       ]
 
 let kexinit_lists =

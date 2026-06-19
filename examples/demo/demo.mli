@@ -28,12 +28,12 @@ val minimal_data : int -> bytes array
 (** {1 AllInts (21 bytes)} *)
 
 type all_ints = {
-  ai_u8 : int;
-  ai_u16 : int;
-  ai_u16be : int;
-  ai_u32 : int;
-  ai_u32be : int;
-  ai_u64be : int64;
+  u8 : int;
+  u16 : int;
+  u16be : int;
+  u32 : int;
+  u32be : int;
+  u64be : int64;
 }
 
 val all_ints_codec : all_ints Wire.Codec.t
@@ -59,7 +59,7 @@ val all_ints_data : int -> bytes array
 
 (** {1 Bitfield8 (1 byte)} *)
 
-type bf8 = { bf8_tag : int; bf8_value : int }
+type bf8 = { tag : int; value : int }
 
 val bf8_codec : bf8 Wire.Codec.t
 (** Codec with two bitfields packed into a single uint8. *)
@@ -84,7 +84,7 @@ val bf8_data : int -> bytes array
 
 (** {1 Bitfield16 (2 bytes)} *)
 
-type bf16 = { bf16_flag : int; bf16_type : int; bf16_id : int }
+type bf16 = { flag : int; type_ : int; id : int }
 
 val bf16_codec : bf16 Wire.Codec.t
 (** Codec with three bitfields packed into a uint16be. *)
@@ -109,12 +109,7 @@ val bf16_data : int -> bytes array
 
 (** {1 Bitfield32 (4 bytes)} *)
 
-type bf32 = {
-  bf32_flags : int;
-  bf32_chan : int;
-  bf32_seq : int;
-  bf32_pri : int;
-}
+type bf32 = { flags : int; chan : int; seq : int; pri : int }
 
 val bf32_codec : bf32 Wire.Codec.t
 (** Codec with four bitfields packed into a uint32be. *)
@@ -140,12 +135,7 @@ val bf32_data : int -> bytes array
 
 (** {1 BoolFields (2 bytes)} *)
 
-type bool_fields = {
-  bl_active : bool;
-  bl_valid : bool;
-  bl_mode : int;
-  bl_code : int;
-}
+type bool_fields = { active : bool; valid : bool; mode : int; code : int }
 
 val bool_fields_codec : bool_fields Wire.Codec.t
 (** Codec with boolean and integer bitfields in a uint16be. *)
@@ -172,16 +162,16 @@ val bool_fields_data : int -> bytes array
 (** {1 LargeMixed (26 bytes)} *)
 
 type large_mixed = {
-  lg_sync : int;
-  lg_version : int;
-  lg_type : int;
-  lg_spacecraft : int;
-  lg_vcid : int;
-  lg_count : int;
-  lg_offset : int;
-  lg_length : int;
-  lg_crc : int;
-  lg_timestamp : int64;
+  sync : int;
+  version : int;
+  type_ : int;
+  spacecraft : int;
+  vcid : int;
+  count : int;
+  offset : int;
+  length : int;
+  crc : int;
+  timestamp : int64;
 }
 
 val large_mixed_codec : large_mixed Wire.Codec.t
@@ -209,7 +199,7 @@ val large_mixed_data : int -> bytes array
 (** {1 Mapped (2 bytes)} *)
 
 type priority = Low | Medium | High | Critical
-type mapped = { mp_priority : priority; mp_value : int }
+type mapped = { priority : priority; value : int }
 
 val mapped_codec : mapped Wire.Codec.t
 (** Mapped-priority codec. *)
@@ -238,7 +228,7 @@ val mapped_data : int -> bytes
 (** {1 CasesDemo (1 byte)} *)
 
 type ptype = Telemetry | Telecommand
-type cases_demo = { cd_type : ptype; cd_id : int }
+type cases_demo = { type_ : ptype; id : int }
 
 val cases_demo_codec : cases_demo Wire.Codec.t
 (** Cases-demo codec. *)
@@ -267,7 +257,7 @@ val cases_demo_data : int -> bytes
 (** {1 EnumDemo (2 bytes)} *)
 
 type status = [ `Ok | `Warn | `Err | `Crit ]
-type enum_demo = { en_status : status; en_code : int }
+type enum_demo = { status : status; code : int }
 
 val enum_demo_codec : enum_demo Wire.Codec.t
 (** Enum-demo codec. *)
@@ -295,7 +285,7 @@ val enum_demo_data : int -> bytes
 
 (** {1 Constrained (2 bytes)} *)
 
-type constrained = { co_version : int; co_data : int }
+type constrained = { version : int; data : int }
 
 val constrained_codec : constrained Wire.Codec.t
 (** Constrained codec. *)

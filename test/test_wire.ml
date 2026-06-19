@@ -395,7 +395,7 @@ let test_parse_struct_action_abort () =
   | Error (Constraint_failed "field action") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-type bounded_payload = { bp_length : int; bp_data : string }
+type bounded_payload = { length : int; data : string }
 
 let test_parse_param_with_params () =
   let max_len = Param.input "max_len" uint16be in
@@ -410,12 +410,12 @@ let test_parse_param_with_params () =
   let c =
     Codec.v "BoundedPayload"
       ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
-      (fun length data -> { bp_length = length; bp_data = data })
+      (fun length data -> { length; data })
       Codec.
         [
-          (f_length $ fun r -> r.bp_length);
+          (f_length $ fun r -> r.length);
           ( Field.v "Data" (byte_array ~size:(Field.ref f_length)) $ fun r ->
-            r.bp_data );
+            r.data );
         ]
   in
   let env = Codec.env c |> Param.bind max_len 3 in
@@ -506,12 +506,12 @@ let test_parse_param_where_fail () =
   let c =
     Codec.v "BoundedPayload"
       ~where:Expr.(field_ref f_length_c <= Param.expr max_len)
-      (fun length data -> { bp_length = length; bp_data = data })
+      (fun length data -> { length; data })
       Codec.
         [
-          (f_length $ fun r -> r.bp_length);
+          (f_length $ fun r -> r.length);
           ( Field.v "Data" (byte_array ~size:(Field.ref f_length)) $ fun r ->
-            r.bp_data );
+            r.data );
         ]
   in
   let env = Codec.env c |> Param.bind max_len 2 in
@@ -599,22 +599,22 @@ let test_field_pos_fail () =
   | Error (Constraint_failed _) -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-type sizeof_action_record = { sa_a : int; sa_b : int; sa_c : int }
+type sizeof_action_record = { a : int; b : int; c : int }
 
 let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
   let out = Param.output "out" uint8 in
   let c =
     Codec.v "SizeofThisAction"
-      (fun a b c -> { sa_a = a; sa_b = b; sa_c = c })
+      (fun a b c -> { a; b; c })
       Codec.
         [
-          (Field.v "a" uint8 $ fun r -> r.sa_a);
-          (Field.v "b" uint16be $ fun r -> r.sa_b);
+          (Field.v "a" uint8 $ fun r -> r.a);
+          (Field.v "b" uint16be $ fun r -> r.b);
           ( Field.v "c"
               ~action:(Action.on_success [ Action.assign out sizeof_this ])
               uint8
-          $ fun r -> r.sa_c );
+          $ fun r -> r.c );
         ]
   in
   let env = Codec.env c in

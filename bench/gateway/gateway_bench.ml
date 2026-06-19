@@ -13,8 +13,8 @@ external c_tm_reassemble_checksum : bytes -> int -> int64
   = "c_tm_reassemble_checksum"
 
 let cadu_size = 1115
-let tm_hdr = Wire.Codec.wire_size Space.tm_frame_codec
-let data_field_size = cadu_size - tm_hdr
+let hdr = Wire.Codec.wire_size Space.tm_frame_codec
+let data_field_size = cadu_size - hdr
 let sp_hdr = Wire.Codec.wire_size Space.packet_codec
 let cf_tf_vcid = Space.bf_tf_vcid
 let cf_tf_first_hdr = Space.bf_tf_first_hdr
@@ -49,7 +49,7 @@ let generate_frames n =
     Wire.Codec.encode Space.tm_frame_codec Space.tm_frame_default buf base;
     set_vcid buf base (frame mod 8);
     set_fhp buf base !carry;
-    let data_off = ref (base + tm_hdr + !carry) in
+    let data_off = ref (base + hdr + !carry) in
     while !data_off + pkt_size <= base + cadu_size do
       let o = !data_off in
       set_apid buf o (!total_pkts mod 2048);
@@ -58,7 +58,7 @@ let generate_frames n =
       data_off := o + pkt_size;
       incr total_pkts
     done;
-    let used = !data_off - (base + tm_hdr) in
+    let used = !data_off - (base + hdr) in
     let trailing = data_field_size - used in
     carry := if trailing = 0 then 0 else pkt_size - trailing
   done;
@@ -92,7 +92,7 @@ let state n_frames =
     let fhp = get_fhp buf base in
     ignore (Sys.opaque_identity vcid);
     ignore (Sys.opaque_identity fhp);
-    let data_start = base + tm_hdr in
+    let data_start = base + hdr in
     let off = ref (data_start + fhp) in
     while !off + pkt_size <= data_start + data_field_size do
       let apid = get_apid buf !off in
