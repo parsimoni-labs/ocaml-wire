@@ -2,6 +2,11 @@
 
 ### Added
 
+- `Wire_3d`'s documentation helpers (`generate_doc`, `generate_dune_doc`, and
+  `main ~mode:`Doc`) take an optional `?name` that sets the generated
+  `<Name>.3d` / `<Name>.c` file base independently of the opam `~package`, so a
+  package like `ocaml-tcp` can emit a `Tcp.3d` spec while still installing under
+  its own name (#154, @samoht)
 - `Wire.Everparse.doc` and `Wire.Everparse.write_doc` project a codec, or a
   whole family of codecs, to a clean `.3d` with no FFI scaffolding: enums
   render as named 3D enum types, types shared across codecs are emitted once,

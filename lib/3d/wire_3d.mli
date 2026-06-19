@@ -116,22 +116,30 @@ val pack : 'a Wire.Codec.t -> packed
 (** [pack codec] erases [codec]'s type for a {!packed} list. *)
 
 val generate_doc :
-  ?quiet:bool -> outdir:string -> package:string -> packed list -> unit
-(** [generate_doc ?quiet ~outdir ~package codecs] runs the documentation
+  ?quiet:bool ->
+  ?name:string ->
+  outdir:string ->
+  package:string ->
+  packed list ->
+  unit
+(** [generate_doc ?quiet ?name ~outdir ~package codecs] runs the documentation
     pipeline: project each codec with {!Wire.Everparse.doc}, merge them into one
-    [<Package>.3d], and (when [3d.exe] is available) compile it to a single
-    validator-only [<Package>.c] (no [_Fields] plug, no FFI). The package name
-    becomes the 3D module name, normalised to a CamelCase identifier (["my-pkg"]
-    becomes [MyPkg]). *)
+    [<Name>.3d], and (when [3d.exe] is available) compile it to a single
+    validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base is
+    [name] when given, else [package], normalised to a CamelCase identifier
+    (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. *)
 
-val generate_dune_doc : outdir:string -> package:string -> packed list -> unit
-(** [generate_dune_doc ~outdir ~package codecs] writes a [dune.inc] for the
-    single-file documentation build: rules that emit [<Package>.3d] and compile
-    it to [<Package>.c], a [runtest] rule that compiles the generated validator,
-    and an install stanza for that one spec and parser. *)
+val generate_dune_doc :
+  ?name:string -> outdir:string -> package:string -> packed list -> unit
+(** [generate_dune_doc ?name ~outdir ~package codecs] writes a [dune.inc] for
+    the single-file documentation build: rules that emit [<Name>.3d] and compile
+    it to [<Name>.c], a [runtest] rule that compiles the generated validator,
+    and an install stanza (under opam [package]) for that one spec and parser.
+    [name] defaults to [package]; see {!generate_doc}. *)
 
-val main : mode:[ `Ffi | `Doc ] -> package:string -> packed list -> unit
-(** [main ~mode ~package codecs] dispatches based on [Sys.argv]:
+val main :
+  ?name:string -> mode:[ `Ffi | `Doc ] -> package:string -> packed list -> unit
+(** [main ?name ~mode ~package codecs] dispatches based on [Sys.argv]:
     - [3d] writes the [.3d] file(s)
     - [c] produces the C parser(s)
     - [dune] generates [dune.inc] with build rules, test, and install stanzas
@@ -141,8 +149,11 @@ val main : mode:[ `Ffi | `Doc ] -> package:string -> packed list -> unit
     [~mode:`Ffi] it projects each codec with {!Wire.Everparse.schema} and drives
     the multi-file FFI pipeline, one set per codec. With [~mode:`Doc] it
     projects with {!Wire.Everparse.doc} and drives the single-file documentation
-    pipeline, one [<Package>.3d] and [<Package>.c] for the whole family. The
-    codecs are the same either way; only the mode changes. *)
+    pipeline, one [<Name>.3d] and [<Name>.c] for the whole family. The codecs
+    are the same either way; only the mode changes.
+
+    [name] overrides the doc file base (see {!generate_doc}); it has no effect
+    in [`Ffi] mode, whose file names come from the individual codecs. *)
 
 val has_3d_exe : unit -> bool
 (** [has_3d_exe ()] returns [true] if [3d.exe] is available in PATH or
