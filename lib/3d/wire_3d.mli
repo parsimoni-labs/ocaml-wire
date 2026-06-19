@@ -133,9 +133,30 @@ val generate_dune_doc :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
 (** [generate_dune_doc ?name ~outdir ~package codecs] writes a [dune.inc] for
     the single-file documentation build: rules that emit [<Name>.3d] and compile
-    it to [<Name>.c], a [runtest] rule that compiles the generated validator,
-    and an install stanza (under opam [package]) for that one spec and parser.
-    [name] defaults to [package]; see {!generate_doc}. *)
+    it to [<Name>.c], a rule that builds the validator into an installed
+    [lib<name>.a] archive, a [runtest] rule that runs the differential
+    self-check (see {!generate_corpus} / {!generate_agree}), and an install
+    stanza (under opam [package]) for the spec, parser, and archive. [name]
+    defaults to [package]; see {!generate_doc}. *)
+
+val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
+(** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
+    inputs as [<codec> <hex> <verdict>] lines, where [verdict] is [1] when the
+    OCaml codec accepts the bytes (decodes and validates) and [0] otherwise, and
+    [<hex>] is [-] for the empty input. Lengths are biased around each codec's
+    minimum size so the corpus straddles the accept/reject boundary. This is the
+    oracle half of the doc pipeline's differential self-check; {!main}'s
+    [corpus] subcommand calls it on stdout. *)
+
+val generate_agree :
+  ?name:string -> outdir:string -> package:string -> packed list -> unit
+(** [generate_agree ?name ~outdir ~package codecs] writes [agree.c] into
+    [outdir]: a C program that replays a {!generate_corpus} corpus through the
+    EverParse-generated validators and exits nonzero on any input where the
+    validator's accept/reject decision differs from the recorded verdict. It
+    reads the [<Name>Check<Codec>] helper names from the generated
+    [<Name>Wrapper.h], so {!generate_c_doc} (or [3d.exe]) must have run first.
+*)
 
 val main :
   ?name:string -> mode:[ `Ffi | `Doc ] -> package:string -> packed list -> unit

@@ -105,6 +105,10 @@ let test_generate_dune_doc () =
   Alcotest.(check bool) "wrapper target" true (has "MyPkgWrapper.c");
   Alcotest.(check bool)
     "installs under the package" true (has "(package my-pkg)");
+  Alcotest.(check bool) "builds a validator archive" true (has "libmypkg.a");
+  Alcotest.(check bool)
+    "runtest runs the differential check" true (has "./agree corpus");
+  Alcotest.(check bool) "corpus oracle" true (has "./gen.exe corpus");
   Alcotest.(check bool) "no FFI plug" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
@@ -136,6 +140,74 @@ let test_generate_doc () =
       "validator is FFI-free" false
       (Re.execp (Re.compile (Re.str "WireSet")) c_src);
     ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir)
+  end
+
+(* Differential self-check for the doc pipeline: the FFI-free validator must
+   accept exactly the inputs the OCaml codec accepts. These codecs each carry a
+   constraint so a fuzzed corpus straddles accept and reject -- an enum
+   membership, a scalar range, and a bitfield range whose byte also exercises
+   the Msb-first reordering [U8] needs. Skipped without 3d.exe and a C
+   compiler. *)
+let diff_enum_codec =
+  let open Wire in
+  let color = enum "Color" [ ("Red", 0); ("Green", 1); ("Blue", 2) ] uint8 in
+  let f = Field.v "hue" color in
+  Codec.v "HueMsg" (fun v -> v) [ Codec.( $ ) f (fun v -> v) ]
+
+let diff_range_codec =
+  let open Wire in
+  let fn =
+    Field.v "n" uint8 ~self_constraint:(fun self -> Expr.(self < int 100))
+  in
+  let fm = Field.v "m" uint8 in
+  Codec.v "RangeMsg"
+    (fun n m -> (n, m))
+    [ Codec.( $ ) fn fst; Codec.( $ ) fm snd ]
+
+let diff_bits_codec =
+  let open Wire in
+  let fa =
+    Field.v "a" (bits ~width:3 U8) ~self_constraint:(fun self ->
+        Expr.(self < int 5))
+  in
+  let fb = Field.v "b" (bits ~width:5 U8) in
+  Codec.v "BitMsg"
+    (fun a b -> (a, b))
+    [ Codec.( $ ) fa fst; Codec.( $ ) fb snd ]
+
+let test_doc_differential () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let tmpdir = Filename.temp_dir "wire_3d_doc_diff" "" in
+    let codecs =
+      [
+        Wire_3d.pack diff_enum_codec;
+        Wire_3d.pack diff_range_codec;
+        Wire_3d.pack diff_bits_codec;
+      ]
+    in
+    Wire_3d.generate_doc ~outdir:tmpdir ~name:"protospec" ~package:"demo-doc"
+      codecs;
+    let oc = open_out (Filename.concat tmpdir "corpus") in
+    let ppf = Format.formatter_of_out_channel oc in
+    Wire_3d.generate_corpus ~count:400 ppf codecs;
+    close_out oc;
+    let cmd =
+      Fmt.str
+        "cd %s && cc %s -c Protospec.c ProtospecWrapper.c && ar rcs \
+         libprotospec.a Protospec.o ProtospecWrapper.o && cc %s agree.c \
+         libprotospec.a -o agree && ./agree corpus 2>&1"
+        tmpdir Wire_3d.strict_cc_flags Wire_3d.strict_cc_flags
+    in
+    let ic = Unix.open_process_in cmd in
+    let output = In_channel.input_all ic in
+    let status = Unix.close_process_in ic in
+    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+    match status with
+    | Unix.WEXITED 0 -> ()
+    | Unix.WEXITED n ->
+        Alcotest.failf "doc differential failed with exit %d:\n%s" n output
+    | _ -> Alcotest.failf "doc differential terminated abnormally:\n%s" output
   end
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
@@ -947,6 +1019,8 @@ let suite =
       Alcotest.test_case "generate_dune_doc name override" `Quick
         test_generate_dune_doc_name_override;
       Alcotest.test_case "generate_doc (needs 3d.exe)" `Quick test_generate_doc;
+      Alcotest.test_case "doc differential (needs 3d.exe)" `Quick
+        test_doc_differential;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;

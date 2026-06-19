@@ -7,6 +7,15 @@
   renders as a `/* ... */` comment above the field in the generated 3D. A
   protocol spec can now cite the standard each individual field comes from, not
   just the struct as a whole, and EverParse accepts the comment (#157, @samoht)
+- The documentation pipeline (`Wire_3d.main ~mode:`Doc`) now auto-generates a
+  differential self-check: `dune runtest` fuzzes inputs, records whether the
+  OCaml codec accepts each, and replays them through the EverParse-generated C
+  validator, failing on any input the two decide differently. This catches a
+  doc projection that drifts from the codec (a wrong bit order, a constraint
+  that means something else over the wire type), which nothing checked before
+  since the doc validator carries no FFI. The build also produces an installed
+  `lib<name>.a` archive of the validator. New `Wire_3d.generate_corpus` and
+  `Wire_3d.generate_agree` expose the two halves (@samoht)
 - `Wire.Codec.v` takes an optional `?doc` (read back with `Wire.Codec.doc`):
   a free-text note, such as an RFC citation, that the documentation projection
   renders as a `/*++ ... --*/` comment on the codec's 3D typedef. The generated
