@@ -621,25 +621,32 @@ let doc_module_name package =
   |> List.map String.capitalize_ascii
   |> String.concat ""
 
-let generate_3d_doc ~outdir ~package codecs =
+(* The 3D module / file base for the doc pipeline: [?name] when given, else the
+   opam [~package]. Lets the emitted [<Base>.3d] / [.c] be named independently of
+   the install package (whose name [~package] keeps for the install stanza). *)
+let doc_base ?name ~package () =
+  doc_module_name (match name with Some n -> n | None -> package)
+
+let generate_3d_doc ?name ~outdir ~package codecs =
   ensure_dir outdir;
-  write_doc ~outdir ~name:(doc_module_name package)
+  write_doc ~outdir
+    ~name:(doc_base ?name ~package ())
     (List.map (fun (Pack c) -> doc c) codecs)
 
-let generate_c_doc ?(quiet = true) ~outdir ~package _codecs =
+let generate_c_doc ?(quiet = true) ?name ~outdir ~package _codecs =
   ensure_dir outdir;
   if has_3d_exe () then
-    run_everparse_files ~quiet ~outdir [ doc_module_name package ^ ".3d" ]
+    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ]
   else
     failwith
       "3d.exe not found in PATH. Install EverParse to regenerate C files."
 
-let generate_doc ?(quiet = true) ~outdir ~package codecs =
-  generate_3d_doc ~outdir ~package codecs;
-  generate_c_doc ~quiet ~outdir ~package codecs
+let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
+  generate_3d_doc ?name ~outdir ~package codecs;
+  generate_c_doc ~quiet ?name ~outdir ~package codecs
 
-let generate_dune_doc ~outdir ~package _codecs =
-  let base = doc_module_name package in
+let generate_dune_doc ?name ~outdir ~package _codecs =
+  let base = doc_base ?name ~package () in
   let three_d = base ^ ".3d" in
   let c_files =
     [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
@@ -685,7 +692,7 @@ let generate_dune_doc ~outdir ~package _codecs =
   Format.pp_print_flush ppf ();
   close_out oc
 
-let main ~mode ~package codecs =
+let main ?name ~mode ~package codecs =
   let argv = Array.to_list Sys.argv in
   match mode with
   | `Ffi -> (
@@ -697,7 +704,7 @@ let main ~mode ~package codecs =
       | _ -> run ~outdir:"." schemas)
   | `Doc -> (
       match argv with
-      | [ _; "3d" ] -> generate_3d_doc ~outdir:"." ~package codecs
-      | [ _; "c" ] -> generate_c_doc ~outdir:"." ~package codecs
-      | [ _; "dune" ] -> generate_dune_doc ~outdir:"." ~package codecs
-      | _ -> generate_doc ~outdir:"." ~package codecs)
+      | [ _; "3d" ] -> generate_3d_doc ?name ~outdir:"." ~package codecs
+      | [ _; "c" ] -> generate_c_doc ?name ~outdir:"." ~package codecs
+      | [ _; "dune" ] -> generate_dune_doc ?name ~outdir:"." ~package codecs
+      | _ -> generate_doc ?name ~outdir:"." ~package codecs)

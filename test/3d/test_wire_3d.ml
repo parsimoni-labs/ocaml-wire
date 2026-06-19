@@ -108,6 +108,20 @@ let test_generate_dune_doc () =
   Alcotest.(check bool) "no FFI plug" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
+let test_generate_dune_doc_name_override () =
+  (* [~name] sets the file base independently of the opam [~package]. *)
+  let tmpdir = Filename.temp_dir "wire_3d_dune_name" "" in
+  Wire_3d.generate_dune_doc ~name:"proto-spec" ~outdir:tmpdir ~package:"my-pkg"
+    [ Wire_3d.pack (doc_codec "Pkt") ];
+  let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+  let has sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
+  Alcotest.(check bool) "file base from name" true (has "ProtoSpec.3d");
+  Alcotest.(check bool) "file base from name (c)" true (has "ProtoSpec.c");
+  Alcotest.(check bool) "package not used as file base" false (has "MyPkg.3d");
+  Alcotest.(check bool)
+    "install still uses the opam package" true (has "(package my-pkg)")
+
 let test_generate_doc () =
   (* generate_doc needs 3d.exe; skip when not available. *)
   if Wire_3d.has_3d_exe () then begin
@@ -530,7 +544,11 @@ let test_main_exists () =
      verify that the value exists and has the right type. *)
   let _ =
     (Wire_3d.main
-      : mode:[ `Ffi | `Doc ] -> package:string -> Wire_3d.packed list -> unit)
+      : ?name:string ->
+        mode:[ `Ffi | `Doc ] ->
+        package:string ->
+        Wire_3d.packed list ->
+        unit)
   in
   ()
 
@@ -926,6 +944,8 @@ let suite =
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
       Alcotest.test_case "generate_dune_doc" `Quick test_generate_dune_doc;
+      Alcotest.test_case "generate_dune_doc name override" `Quick
+        test_generate_dune_doc_name_override;
       Alcotest.test_case "generate_doc (needs 3d.exe)" `Quick test_generate_doc;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
