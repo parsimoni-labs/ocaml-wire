@@ -202,6 +202,7 @@ and field =
       field_typ : 'a typ;
       constraint_ : bool expr option;
       action : action option;
+      field_doc : string option;
     }
       -> field
 
@@ -696,12 +697,25 @@ let casetype name tag defs =
   Casetype { name; tag; cases = List.map resolve defs }
 
 (* Struct fields *)
-let field name ?constraint_ ?action typ =
-  Field { field_name = Some name; field_typ = typ; constraint_; action }
+let field name ?constraint_ ?action ?doc typ =
+  Field
+    {
+      field_name = Some name;
+      field_typ = typ;
+      constraint_;
+      action;
+      field_doc = doc;
+    }
 
 let anon_field typ =
   Field
-    { field_name = None; field_typ = typ; constraint_ = None; action = None }
+    {
+      field_name = None;
+      field_typ = typ;
+      constraint_ = None;
+      action = None;
+      field_doc = None;
+    }
 
 (* Struct constructors *)
 let struct_ name fields = { name; params = []; where = None; fields }
@@ -1774,6 +1788,7 @@ let pp_field ppf (Field f) =
     | Some n -> fun ppf -> Fmt.string ppf n
     | None -> pp_base
   in
+  Option.iter (fun d -> Fmt.pf ppf "@,/* %s */" d) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;

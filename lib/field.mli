@@ -20,9 +20,12 @@ val v :
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
+  ?doc:string ->
   'a Types.typ ->
   'a t
-(** [v name typ] creates a named field.
+(** [v name typ] creates a named field. [?doc] attaches a free-text note (e.g.
+    an RFC section) that the documentation projection renders as a [/* ... */]
+    comment on the field in the generated 3D.
 
     [?self_constraint] receives a reference to the field being declared and
     returns a constraint over it; the typical use is to prove a later
@@ -109,6 +112,9 @@ val constraint_ : 'a t -> bool Types.expr option
 
 val action : 'a t -> Types.action option
 (** Field action, if any. *)
+
+val doc : 'a t -> string option
+(** Field note attached via {!v}'s [?doc], if any. *)
 
 type packed =
   | Named : 'a t -> packed

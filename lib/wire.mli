@@ -344,9 +344,12 @@ module Field : sig
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
     ?action:Action.t ->
+    ?doc:string ->
     'a typ ->
     'a t
-  (** [v name typ] creates a named field. [?self_constraint] receives the
+  (** [v name typ] creates a named field. [?doc] attaches a free-text note (e.g.
+      an RFC section) that the documentation projection renders as a [/* ... */]
+      comment on the field in the generated 3D. [?self_constraint] receives the
       field's own ref and returns a constraint over it; useful for proving a
       later size-expression safe (e.g. [self >= int 7] when a later field uses
       [byte_slice ~size:(ref len - int 7)]).
@@ -424,6 +427,9 @@ module Field : sig
 
   val constraint_ : 'a t -> bool expr option
   (** Field constraint, if any. *)
+
+  val doc : 'a t -> string option
+  (** Field note attached via {!v}'s [?doc], if any. *)
 
   val decl_of_packed : packed -> Types.field
   (** The {!Types.field} declaration of a packed field. *)

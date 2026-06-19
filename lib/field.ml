@@ -3,20 +3,21 @@ type 'a t = {
   typ : 'a Types.typ;
   constraint_ : bool Types.expr option;
   action : Types.action option;
+  doc : string option;
 }
 
 type 'a anon = { anon_typ : 'a Types.typ }
 
 let pp ppf f = Fmt.pf ppf "%s" f.name
 
-let v name ?constraint_ ?self_constraint ?action typ =
+let v name ?constraint_ ?self_constraint ?action ?doc typ =
   let constraint_ =
     match (constraint_, self_constraint) with
     | c, None -> c
     | None, Some f -> Some (f (Types.Ref name))
     | Some c, Some f -> Some (Types.And (c, f (Types.Ref name)))
   in
-  { name; typ; constraint_; action }
+  { name; typ; constraint_; action; doc }
 
 (* Field decorations: produce a field directly from a typ + optional/
    repeat metadata. Exposing these only at the field level keeps
@@ -117,10 +118,12 @@ let name f = f.name
 let typ f = f.typ
 let constraint_ f = f.constraint_
 let action f = f.action
+let doc f = f.doc
 
 type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
 let decl_of_packed = function
   | Named f ->
-      Types.field f.name ?constraint_:f.constraint_ ?action:f.action f.typ
+      Types.field f.name ?constraint_:f.constraint_ ?action:f.action ?doc:f.doc
+        f.typ
   | Anon a -> Types.anon_field a.anon_typ
