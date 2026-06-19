@@ -2,6 +2,11 @@
 
 ### Added
 
+- `Wire.Codec.v` takes an optional `?doc` (read back with `Wire.Codec.doc`):
+  a free-text note, such as an RFC citation, that the documentation projection
+  renders as a `/*++ ... --*/` comment on the codec's 3D typedef. The generated
+  spec then documents which standard each protocol struct comes from, and
+  EverParse accepts the comment (#155, @samoht)
 - `Wire_3d`'s documentation helpers (`generate_doc`, `generate_dune_doc`, and
   `main ~mode:`Doc`) take an optional `?name` that sets the generated
   `<Name>.3d` / `<Name>.c` file base independently of the opam `~package`, so a

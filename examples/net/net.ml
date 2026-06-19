@@ -30,7 +30,7 @@ let bf_eth_ethertype = Codec.(f_eth_ethertype $ fun e -> e.eth_ethertype)
 let bf_eth_payload = Codec.(f_eth_payload $ fun e -> e.eth_payload)
 
 let ethernet_codec =
-  Codec.v "Ethernet"
+  Codec.v "Ethernet" ~doc:"Ethernet II (DIX) frame header; IEEE 802.3"
     (fun dst src etype payload ->
       {
         eth_dst = dst;
@@ -80,7 +80,7 @@ let bf_ip_dst = Codec.(f_ip_dst $ fun p -> p.ip_dst)
 let bf_ip_payload = Codec.(f_ip_payload $ fun p -> p.ip_payload)
 
 let ipv4_codec =
-  Codec.v "IPv4"
+  Codec.v "IPv4" ~doc:"IPv4 header, RFC 791 section 3.1"
     (fun version ihl dscp ecn total_length identification flags fragment_offset
          ttl protocol checksum src dst payload ->
       {
@@ -178,7 +178,7 @@ let bf_tcp_syn = Codec.(f_tcp_syn $ fun t -> t.tcp_syn)
 let bf_tcp_ack = Codec.(f_tcp_ack $ fun t -> t.tcp_ack)
 
 let tcp_codec =
-  Codec.v "TCP" tcp_of_fields
+  Codec.v "TCP" ~doc:"TCP header, RFC 9293 section 3.1" tcp_of_fields
     Codec.
       [
         bf_tcp_src_port;
@@ -219,7 +219,7 @@ let f_udp_length = Field.v "Length" uint16be
 let f_udp_checksum = Field.v "Checksum" uint16be
 
 let udp_codec =
-  Codec.v "UDP"
+  Codec.v "UDP" ~doc:"UDP header, RFC 768"
     (fun src_port dst_port length checksum ->
       {
         udp_src_port = src_port;

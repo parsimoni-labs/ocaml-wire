@@ -218,6 +218,21 @@ let test_doc_enum_as_type () =
     "codegen schema keeps membership" true
     (contains ~sub:"== 0" (to_3d (Everparse.schema c).module_))
 
+let test_doc_codec_citation () =
+  (* [Codec.v ~doc] renders as a [/*++ ... --*/] comment on the typedef, so a
+     spec can cite the RFC (or other source) it comes from. *)
+  let c =
+    Codec.v "Pkt" ~doc:"RFC 9999 section 1"
+      (fun v -> v)
+      Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
+  in
+  Alcotest.(check (option string))
+    "codec exposes its doc" (Some "RFC 9999 section 1") (Codec.doc c);
+  let out = to_3d ~enum_as_type:true (Everparse.doc c).module_ in
+  Alcotest.(check bool)
+    "typedef carries the citation comment" true
+    (contains ~sub:"/*++ RFC 9999 section 1 --*/" out)
+
 let test_doc_merge_dedup () =
   (* write_doc unions a family into one module, emitting a shared type once. *)
   let e = enum "Shared" [ ("A", 0); ("B", 1) ] uint8 in
@@ -887,6 +902,8 @@ let suite =
         test_3d_enum_membership;
       Alcotest.test_case "doc: drops FFI scaffolding" `Quick
         test_doc_drops_ffi_scaffolding;
+      Alcotest.test_case "doc: codec ~doc renders as citation comment" `Quick
+        test_doc_codec_citation;
       Alcotest.test_case "doc: enum renders as named type" `Quick
         test_doc_enum_as_type;
       Alcotest.test_case "doc: merge dedups shared types" `Quick
