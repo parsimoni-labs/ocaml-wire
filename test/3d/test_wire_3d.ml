@@ -80,6 +80,50 @@ let test_generate_c () =
       "ExternalTypedefs.h generated" true (Sys.file_exists ext_path)
   end
 
+let read_file path =
+  let ic = open_in path in
+  let n = in_channel_length ic in
+  let buf = Bytes.create n in
+  really_input ic buf 0 n;
+  close_in ic;
+  Bytes.unsafe_to_string buf
+
+let doc_codec name =
+  Codec.v name (fun v -> v) Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
+
+let test_generate_dune_doc () =
+  (* The doc pipeline emits a single-file [dune.inc]: the package name becomes a
+     CamelCase module name and there is no FFI plug or test harness. *)
+  let tmpdir = Filename.temp_dir "wire_3d_dune_doc" "" in
+  Wire_3d.generate_dune_doc ~outdir:tmpdir ~package:"my-pkg"
+    [ Wire_3d.pack (doc_codec "Pkt") ];
+  let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+  let has sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
+  Alcotest.(check bool) "single .3d target" true (has "MyPkg.3d");
+  Alcotest.(check bool) "single .c target" true (has "MyPkg.c");
+  Alcotest.(check bool) "wrapper target" true (has "MyPkgWrapper.c");
+  Alcotest.(check bool)
+    "installs under the package" true (has "(package my-pkg)");
+  Alcotest.(check bool) "no FFI plug" false (has "_Fields");
+  Alcotest.(check bool) "no FFI test harness" false (has "test.c")
+
+let test_generate_doc () =
+  (* generate_doc needs 3d.exe; skip when not available. *)
+  if Wire_3d.has_3d_exe () then begin
+    let tmpdir = Filename.temp_dir "wire_3d_gen_doc" "" in
+    Wire_3d.generate_doc ~outdir:tmpdir ~package:"my-pkg"
+      [ Wire_3d.pack (doc_codec "Pkt"); Wire_3d.pack (doc_codec "Pkt2") ];
+    let exists f = Sys.file_exists (Filename.concat tmpdir f) in
+    Alcotest.(check bool) "single merged .3d" true (exists "MyPkg.3d");
+    Alcotest.(check bool) "single validator .c" true (exists "MyPkg.c");
+    let c_src = read_file (Filename.concat tmpdir "MyPkg.c") in
+    Alcotest.(check bool)
+      "validator is FFI-free" false
+      (Re.execp (Re.compile (Re.str "WireSet")) c_src);
+    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir)
+  end
+
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
    the one test that catches every kind of name mismatch between what
@@ -484,7 +528,10 @@ let test_has_3d_exe () =
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
      verify that the value exists and has the right type. *)
-  let _ = (Wire_3d.main : package:string -> Wire.Everparse.t list -> unit) in
+  let _ =
+    (Wire_3d.main
+      : mode:[ `Ffi | `Doc ] -> package:string -> Wire_3d.packed list -> unit)
+  in
   ()
 
 (* Adversarial: [schema.wire_size] must agree with [Codec.wire_size] AND with
@@ -878,6 +925,8 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "generate_dune_doc" `Quick test_generate_dune_doc;
+      Alcotest.test_case "generate_doc (needs 3d.exe)" `Quick test_generate_doc;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
