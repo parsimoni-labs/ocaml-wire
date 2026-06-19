@@ -19,6 +19,7 @@ val v :
   string ->
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?self_int64:(int64 Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   ?doc:string ->
   'a Types.typ ->
@@ -40,9 +41,11 @@ val v :
     ]}
 
     projects to [UINT16BE Length {{ Length >= 7 }}], which EverParse's SMT can
-    then use to discharge [byte-size (Length - 7)] on a later field. If both
-    [?constraint_] and [?self_constraint] are given, the two are combined with
-    [And].
+    then use to discharge [byte-size (Length - 7)] on a later field.
+    [?self_int64] is the same convenience for full-width 64-bit field
+    constraints, using {!Expr.int64} literals and {!int64} references. If
+    [?constraint_] and a self constraint are both given, the constraints are
+    combined with [And].
 
     For optional / repeating payloads use {!optional} / {!optional_or} /
     {!repeat} -- those decorations only have a 3D projection at the top of a
@@ -52,6 +55,7 @@ val optional :
   string ->
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?self_int64:(int64 Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   present:bool Types.expr ->
   'a Types.typ ->
@@ -63,6 +67,7 @@ val optional_or :
   string ->
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?self_int64:(int64 Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   present:bool Types.expr ->
   default:'a ->
@@ -75,6 +80,7 @@ val repeat :
   string ->
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?self_int64:(int64 Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   size:int Types.expr ->
   'a Types.typ ->
@@ -86,6 +92,7 @@ val repeat_seq :
   string ->
   ?constraint_:bool Types.expr ->
   ?self_constraint:(int Types.expr -> bool Types.expr) ->
+  ?self_int64:(int64 Types.expr -> bool Types.expr) ->
   ?action:Types.action ->
   seq:('a, 'seq) Types.seq_map ->
   size:int Types.expr ->
@@ -100,6 +107,13 @@ val ref : 'a t -> int Types.expr
 (** [ref f] returns the expression referencing this field's underlying integer
     value. Works on any field whose wire type is or wraps an integer, including
     [bool] fields created with {!Wire.bit}. *)
+
+val int : 'a t -> int Types.expr
+(** [int f] returns this field as a native-integer expression. *)
+
+val int64 : int64 t -> int64 Types.expr
+(** [int64 f] returns the expression referencing this field's full 64-bit value,
+    without truncating to OCaml's native integer range. *)
 
 val name : 'a t -> string
 (** Field name. *)

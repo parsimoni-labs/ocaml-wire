@@ -32,11 +32,13 @@ type ('a, 'k) param_handle = {
 and packed_typ = Pack_typ : 'a typ -> packed_typ
 
 (* Expressions *)
+and _ ref_kind = I : int ref_kind | I64 : int64 ref_kind
+
 and _ expr =
   | Int : int -> int expr
   | Int64 : int64 -> int64 expr
   | Bool : bool -> bool expr
-  | Ref : string -> int expr
+  | Ref : 'a ref_kind * string -> 'a expr
   | Param_ref : ('a, 'k) param_handle -> int expr
   | Sizeof : 'a typ -> int expr
   | Sizeof_this : int expr
@@ -54,10 +56,10 @@ and _ expr =
   | Lsr : int expr * int expr -> int expr
   | Eq : 'a expr * 'a expr -> bool expr
   | Ne : 'a expr * 'a expr -> bool expr
-  | Lt : int expr * int expr -> bool expr
-  | Le : int expr * int expr -> bool expr
-  | Gt : int expr * int expr -> bool expr
-  | Ge : int expr * int expr -> bool expr
+  | Lt : 'a expr * 'a expr -> bool expr
+  | Le : 'a expr * 'a expr -> bool expr
+  | Gt : 'a expr * 'a expr -> bool expr
+  | Ge : 'a expr * 'a expr -> bool expr
   | And : bool expr * bool expr -> bool expr
   | Or : bool expr * bool expr -> bool expr
   | Not : bool expr -> bool expr
@@ -239,12 +241,13 @@ type param_env = {
 let int n = Int n
 let true_ = Bool true
 let false_ = Bool false
-let ref name = Ref name
+let ref name = Ref (I, name)
 let sizeof t = Sizeof t
 let sizeof_this = Sizeof_this
 let field_pos = Field_pos
 
 module Expr = struct
+  let int64 n = Int64 n
   let ( + ) a b = Add (a, b)
   let ( - ) a b = Sub (a, b)
   let ( * ) a b = Mul (a, b)
@@ -564,7 +567,7 @@ let byte_array_where ~size ~per_byte =
   let n = !byte_array_where_counter in
   Stdlib.incr byte_array_where_counter;
   let elt_var = elt_var_prefix ^ string_of_int n in
-  let cond = per_byte (Ref elt_var) in
+  let cond = per_byte (Ref (I, elt_var)) in
   Byte_array_where { size; elt_var; cond }
 
 (* The 3D synthesized typedef name derived from an elt_var. The element
@@ -945,7 +948,7 @@ let casetype_pair : type a k.
   let tag_field = field "tag" tag in
   let body_field =
     field "body"
-      (Apply { typ = Type_ref body_name; args = [ Pack_expr (Ref "tag") ] })
+      (Apply { typ = Type_ref body_name; args = [ Pack_expr (Ref (I, "tag")) ] })
   in
   let wrapper = typedef (struct_ name [ tag_field; body_field ]) in
   (dispatch, wrapper)
@@ -1262,6 +1265,16 @@ let pp_cast_type ppf = function
   | `U32 -> Fmt.string ppf "UINT32"
   | `U64 -> Fmt.string ppf "UINT64"
 
+let string_of_uint64 n =
+  let ten = 10L in
+  let rec loop n acc =
+    let q = Int64.unsigned_div n ten in
+    let r = Int64.unsigned_rem n ten |> Int64.to_int in
+    let acc = Char.chr (Char.code '0' + r) :: acc in
+    if q = 0L then acc else loop q acc
+  in
+  String.of_seq (List.to_seq (loop n []))
+
 let rec pp_expr : type a. a expr Fmt.t =
  fun ppf expr ->
   match expr with
@@ -1274,10 +1287,10 @@ let rec pp_expr : type a. a expr Fmt.t =
          no negative literals)"
         n
   | Int n -> Fmt.int ppf n
-  | Int64 n -> Fmt.pf ppf "%LduL" n
+  | Int64 n -> Fmt.pf ppf "%suL" (string_of_uint64 n)
   | Bool true -> Fmt.string ppf "true"
   | Bool false -> Fmt.string ppf "false"
-  | Ref name -> Fmt.string ppf (escape_3d name)
+  | Ref (_, name) -> Fmt.string ppf (escape_3d name)
   | Param_ref p -> Fmt.string ppf (escape_3d p.name)
   | Sizeof t -> Fmt.pf ppf "sizeof (%a)" pp_typ t
   | Sizeof_this -> Fmt.string ppf "sizeof (this)"
@@ -1397,7 +1410,8 @@ let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
   | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
     ->
       e
-  | Ref name -> ( try List.assoc name env with Not_found -> e)
+  | Ref (I, name) -> ( try List.assoc name env with Not_found -> e)
+  | Ref (I64, _) -> e
   | Add (a, b) -> Add (r a, r b)
   | Sub (a, b) -> Sub (r a, r b)
   | Mul (a, b) -> Mul (r a, r b)
@@ -1579,7 +1593,7 @@ let index_bound_elt : type a. a typ -> (string * bool expr) option =
   match (inner_wire_size elem, index_bound_of elem) with
   | Some 1, Some bound ->
       let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
-      Some (elt_var, Lt (Ref elt_var, Int bound))
+      Some (elt_var, Lt (Ref (I, elt_var), Int bound))
   | _ -> None
 
 let rec optional_suffix : type a.
@@ -1755,7 +1769,7 @@ let pp_field ppf (Field f) =
      as a refinement (the OCaml decoder enforces it via the [Map] decode). *)
   let bound_cond =
     match index_bound_of f.field_typ with
-    | Some len -> Some (Lt (Ref raw_name, Int len))
+    | Some len -> Some (Lt (Ref (I, raw_name), Int len))
     | None -> None
   in
   (* The documentation projection types the field as its named enum, so
@@ -1770,8 +1784,8 @@ let pp_field ppf (Field f) =
     | None, Some (v0 :: rest) ->
         Some
           (List.fold_left
-             (fun acc v -> Or (acc, Eq (Ref raw_name, Int v)))
-             (Eq (Ref raw_name, Int v0))
+             (fun acc v -> Or (acc, Eq (Ref (I, raw_name), Int v)))
+             (Eq (Ref (I, raw_name), Int v0))
              rest)
     | _ -> None
   in
@@ -1811,7 +1825,7 @@ let rec collect_refs : type a. a expr -> string list = function
   | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
     ->
       []
-  | Ref name -> [ name ]
+  | Ref (_, name) -> [ name ]
   | Add (a, b)
   | Sub (a, b)
   | Mul (a, b)
@@ -1824,8 +1838,10 @@ let rec collect_refs : type a. a expr -> string list = function
   | Lsr (a, b) ->
       collect_refs a @ collect_refs b
   | Lnot a -> collect_refs a
-  | Lt (a, b) | Le (a, b) | Gt (a, b) | Ge (a, b) ->
-      collect_refs a @ collect_refs b
+  | Lt (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Le (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Gt (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Ge (a, b) -> collect_refs_packed a @ collect_refs_packed b
   | And (a, b) | Or (a, b) -> collect_refs a @ collect_refs b
   | Not a -> collect_refs a
   | Cast (_, a) -> collect_refs a

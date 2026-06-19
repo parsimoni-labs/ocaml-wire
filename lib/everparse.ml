@@ -688,7 +688,7 @@ module Raw = struct
   let anon_field typ = Field.Anon (Field.anon typ)
 
   let field_ref = function
-    | Field.Named f -> Types.Ref (Field.name f)
+    | Field.Named f -> Types.ref (Field.name f)
     | Field.Anon _ -> invalid_arg "Everparse.Raw.field_ref: anonymous field"
 
   let unpack_fields fields = List.map Field.decl_of_packed fields

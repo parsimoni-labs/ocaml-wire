@@ -19,7 +19,7 @@ let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
   | Int n -> Buffer.add_string buf (string_of_int n)
   | Int64 n -> Buffer.add_string buf (Int64.to_string n)
   | Bool b -> Buffer.add_string buf (string_of_bool b)
-  | Ref name -> Buffer.add_string buf name
+  | Ref (_, name) -> Buffer.add_string buf name
   | Add (a, b) ->
       pp_expr buf a;
       Buffer.add_string buf " + ";

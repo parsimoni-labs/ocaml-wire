@@ -2677,6 +2677,56 @@ let test_dep_ref_size_eval () =
   Bytes.set_uint8 buf 0 0;
   Alcotest.(check int) "compute size 0" 1 (Codec.wire_size_at codec buf 0)
 
+let signed_magnitude_seek_codec =
+  let f_seek =
+    Field.v "Seek" uint64be ~self_int64:(fun self ->
+        Expr.(self <= int64 Int64.max_int || self > int64 Int64.min_int))
+  in
+  Codec.v "SignedMagnitudeSeek" Fun.id Codec.[ f_seek $ Fun.id ]
+
+let seek_buf v =
+  let b = Bytes.create 8 in
+  Bytes.set_int64_be b 0 v;
+  b
+
+let test_int64_field_constraint_accepts_signed_magnitude_domain () =
+  List.iter
+    (fun v ->
+      let decoded =
+        decode_ok (Codec.decode signed_magnitude_seek_codec (seek_buf v) 0)
+      in
+      Alcotest.(check int64) "seek" v decoded)
+    [ 0L; Int64.max_int; Int64.succ Int64.min_int; -1L ]
+
+let test_int64_field_constraint_rejects_negative_zero () =
+  match Codec.decode signed_magnitude_seek_codec (seek_buf Int64.min_int) 0 with
+  | Ok _ -> Alcotest.fail "expected signed-magnitude negative zero to fail"
+  | Error (Constraint_failed _) -> ()
+  | Error e ->
+      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
+(* A plain int-kind [self_constraint] on a uint64 field must still read the
+   field value, not an unpopulated zero slot: an out-of-range value has to be
+   rejected, or the bound is silently vacuous. *)
+let test_uint64_int_ref_constraint_enforced () =
+  let f =
+    Field.v "Len" uint64be ~self_constraint:(fun self -> Expr.(self <= int 10))
+  in
+  let codec = Codec.v "U64IntRef" Fun.id Codec.[ f $ Fun.id ] in
+  let buf v =
+    let b = Bytes.create 8 in
+    Bytes.set_int64_be b 0 v;
+    b
+  in
+  Alcotest.(check int64)
+    "in-range accepts" 3L
+    (decode_ok (Codec.decode codec (buf 3L) 0));
+  match Codec.decode codec (buf 20L) 0 with
+  | Ok _ -> Alcotest.fail "20 exceeds the bound and must be rejected"
+  | Error (Constraint_failed _) -> ()
+  | Error e ->
+      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
 (* -- struct_of_codec for variable-size codecs -- *)
 
 let test_struct_of_dep () =
@@ -3577,7 +3627,7 @@ let test_field_ref_through_optional () =
   Alcotest.(check (option int)) "x" (Some 0x80) r.x;
   Alcotest.(check int) "check" 0x7F r.check
 
-let test_uint64_ref_in_size () =
+let test_uint64_in_size_expr () =
   let f_len = Field.v "Len" uint64be in
   let codec =
     let open Codec in
@@ -5191,8 +5241,13 @@ let suite =
         test_optional_lor_predicate;
       Alcotest.test_case "optional: Field.ref reads inner value" `Quick
         test_field_ref_through_optional;
-      Alcotest.test_case "ref: uint64 in size expr" `Quick
-        test_uint64_ref_in_size;
+      Alcotest.test_case "uint64 in size expr" `Quick test_uint64_in_size_expr;
+      Alcotest.test_case "constraint: int64 signed-magnitude domain" `Quick
+        test_int64_field_constraint_accepts_signed_magnitude_domain;
+      Alcotest.test_case "constraint: int64 rejects negative zero" `Quick
+        test_int64_field_constraint_rejects_negative_zero;
+      Alcotest.test_case "constraint: int-ref bound on uint64 enforced" `Quick
+        test_uint64_int_ref_constraint_enforced;
       (* repeat *)
       Alcotest.test_case "repeat: decode empty" `Quick test_repeat_decode_empty;
       Alcotest.test_case "repeat: decode one" `Quick test_repeat_decode_one;

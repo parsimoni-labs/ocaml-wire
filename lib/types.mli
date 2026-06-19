@@ -54,11 +54,13 @@ and packed_typ = Pack_typ : 'a typ -> packed_typ
     Typed expression language used in constraints, actions and size
     computations. Arithmetic and bitwise operators mirror OCaml conventions. *)
 
+and _ ref_kind = I : int ref_kind | I64 : int64 ref_kind
+
 and _ expr =
   | Int : int -> int expr
   | Int64 : int64 -> int64 expr
   | Bool : bool -> bool expr
-  | Ref : string -> int expr
+  | Ref : 'a ref_kind * string -> 'a expr
   | Param_ref : ('a, 'k) param_handle -> int expr
   | Sizeof : 'a typ -> int expr
   | Sizeof_this : int expr
@@ -76,10 +78,10 @@ and _ expr =
   | Lsr : int expr * int expr -> int expr
   | Eq : 'a expr * 'a expr -> bool expr
   | Ne : 'a expr * 'a expr -> bool expr
-  | Lt : int expr * int expr -> bool expr
-  | Le : int expr * int expr -> bool expr
-  | Gt : int expr * int expr -> bool expr
-  | Ge : int expr * int expr -> bool expr
+  | Lt : 'a expr * 'a expr -> bool expr
+  | Le : 'a expr * 'a expr -> bool expr
+  | Gt : 'a expr * 'a expr -> bool expr
+  | Ge : 'a expr * 'a expr -> bool expr
   | And : bool expr * bool expr -> bool expr
   | Or : bool expr * bool expr -> bool expr
   | Not : bool expr -> bool expr
@@ -283,6 +285,9 @@ val field_pos : int expr
 module Expr : sig
   (** {2 Arithmetic and bitwise operators} *)
 
+  val int64 : int64 -> int64 expr
+  (** 64-bit integer literal. *)
+
   val ( + ) : int expr -> int expr -> int expr
   (** Addition. *)
 
@@ -324,17 +329,17 @@ module Expr : sig
   val ( <> ) : 'a expr -> 'a expr -> bool expr
   (** Inequality. *)
 
-  val ( < ) : int expr -> int expr -> bool expr
-  (** Strictly less than. *)
+  val ( < ) : 'a expr -> 'a expr -> bool expr
+  (** Strictly less than, on native-integer or 64-bit expressions. *)
 
-  val ( <= ) : int expr -> int expr -> bool expr
-  (** Less than or equal. *)
+  val ( <= ) : 'a expr -> 'a expr -> bool expr
+  (** Less than or equal, on native-integer or 64-bit expressions. *)
 
-  val ( > ) : int expr -> int expr -> bool expr
-  (** Strictly greater than. *)
+  val ( > ) : 'a expr -> 'a expr -> bool expr
+  (** Strictly greater than, on native-integer or 64-bit expressions. *)
 
-  val ( >= ) : int expr -> int expr -> bool expr
-  (** Greater than or equal. *)
+  val ( >= ) : 'a expr -> 'a expr -> bool expr
+  (** Greater than or equal, on native-integer or 64-bit expressions. *)
 
   (** {2 Boolean operators} *)
 

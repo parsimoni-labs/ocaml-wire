@@ -10,12 +10,36 @@ type 'a anon = { anon_typ : 'a Types.typ }
 
 let pp ppf f = Fmt.pf ppf "%s" f.name
 
-let v name ?constraint_ ?self_constraint ?action ?doc typ =
+let combine a b =
+  match (a, b) with
+  | None, c | c, None -> c
+  | Some a, Some b -> Some (Types.And (a, b))
+
+let rec has_int64_slot : type a. a Types.typ -> bool =
+ fun typ ->
+  let open Types in
+  match typ with
+  | Uint64 _ | Int64 _ -> true
+  | Where { inner; _ } -> has_int64_slot inner
+  | Optional { inner; _ } -> has_int64_slot inner
+  | Optional_or { inner; _ } -> has_int64_slot inner
+  | _ -> false
+
+let reject_no_int64_slot ~combinator name typ =
+  if not (has_int64_slot typ) then
+    Fmt.invalid_arg
+      "Wire.Field.%s: field %S does not have a full-width int64 validation slot"
+      combinator name
+
+let v name ?constraint_ ?self_constraint ?self_int64 ?action ?doc typ =
+  if Option.is_some self_int64 then
+    reject_no_int64_slot ~combinator:"v ?self_int64" name typ;
   let constraint_ =
-    match (constraint_, self_constraint) with
-    | c, None -> c
-    | None, Some f -> Some (f (Types.Ref name))
-    | Some c, Some f -> Some (Types.And (c, f (Types.Ref name)))
+    constraint_
+    |> combine
+         (Option.map (fun f -> f (Types.Ref (Types.I, name))) self_constraint)
+    |> combine
+         (Option.map (fun f -> f (Types.Ref (Types.I64, name))) self_int64)
   in
   { name; typ; constraint_; action; doc }
 
@@ -24,12 +48,14 @@ let v name ?constraint_ ?self_constraint ?action ?doc typ =
    [Wire.optional]/[Wire.repeat] off the typ-level surface so the
    resulting decoration cannot be nested inside [array]/[where]/etc.
    where 3D has no projection for it. *)
-let optional name ?constraint_ ?self_constraint ?action ~present typ =
-  v name ?constraint_ ?self_constraint ?action (Types.optional present typ)
-
-let optional_or name ?constraint_ ?self_constraint ?action ~present ~default typ
+let optional name ?constraint_ ?self_constraint ?self_int64 ?action ~present typ
     =
-  v name ?constraint_ ?self_constraint ?action
+  v name ?constraint_ ?self_constraint ?self_int64 ?action
+    (Types.optional present typ)
+
+let optional_or name ?constraint_ ?self_constraint ?self_int64 ?action ~present
+    ~default typ =
+  v name ?constraint_ ?self_constraint ?self_int64 ?action
     (Types.optional_or present ~default typ)
 
 (* A sub-codec ending in a greedy field ([all_bytes] / [all_zeros]) reads "the
@@ -104,16 +130,25 @@ let reject_unprojectable_repeat ~combinator typ =
        NUL-terminated strings, sub-codecs, and casetypes."
       combinator
 
-let repeat name ?constraint_ ?self_constraint ?action ~size typ =
+let repeat name ?constraint_ ?self_constraint ?self_int64 ?action ~size typ =
   reject_unprojectable_repeat ~combinator:"repeat" typ;
-  v name ?constraint_ ?self_constraint ?action (Types.repeat ~size typ)
+  v name ?constraint_ ?self_constraint ?self_int64 ?action
+    (Types.repeat ~size typ)
 
-let repeat_seq name ?constraint_ ?self_constraint ?action ~seq ~size typ =
+let repeat_seq name ?constraint_ ?self_constraint ?self_int64 ?action ~seq ~size
+    typ =
   reject_unprojectable_repeat ~combinator:"repeat_seq" typ;
-  v name ?constraint_ ?self_constraint ?action (Types.repeat_seq seq ~size typ)
+  v name ?constraint_ ?self_constraint ?self_int64 ?action
+    (Types.repeat_seq seq ~size typ)
 
 let anon typ = { anon_typ = typ }
-let ref f = Types.Ref f.name
+let ref f = Types.Ref (Types.I, f.name)
+let int f = Types.Ref (Types.I, f.name)
+
+let int64 f =
+  reject_no_int64_slot ~combinator:"int64" f.name f.typ;
+  Types.Ref (Types.I64, f.name)
+
 let name f = f.name
 let typ f = f.typ
 let constraint_ f = f.constraint_

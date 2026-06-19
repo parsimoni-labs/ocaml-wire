@@ -16,7 +16,7 @@ let test_anon () =
 let test_ref_returns_ref_expr () =
   let f = Field.v "Tag" Types.uint8 in
   match Field.ref f with
-  | Types.Ref name -> Alcotest.(check string) "ref name" "Tag" name
+  | Types.Ref (Types.I, name) -> Alcotest.(check string) "ref name" "Tag" name
   | _ -> Alcotest.fail "expected Ref expression"
 
 let test_pp_prints_name () =
@@ -57,12 +57,13 @@ let test_no_constraint () =
   | Some _ -> Alcotest.fail "expected no constraint"
 
 (* ref on non-int fields: bool, mapped, uint64. The expression is always
-   Ref name -- the type system no longer restricts the field's OCaml type. *)
+   Ref (I, name) -- the type system no longer restricts the field's OCaml
+   type. *)
 
 let test_ref_bool_field () =
   let f = Field.v "Flag" (Types.bool Types.uint8) in
   match Field.ref f with
-  | Types.Ref name -> Alcotest.(check string) "ref name" "Flag" name
+  | Types.Ref (Types.I, name) -> Alcotest.(check string) "ref name" "Flag" name
   | _ -> Alcotest.fail "expected Ref"
 
 let test_ref_mapped_field () =
@@ -74,14 +75,39 @@ let test_ref_mapped_field () =
          Types.uint8)
   in
   match Field.ref f with
-  | Types.Ref name -> Alcotest.(check string) "ref name" "Code" name
+  | Types.Ref (Types.I, name) -> Alcotest.(check string) "ref name" "Code" name
   | _ -> Alcotest.fail "expected Ref"
 
 let test_ref_uint64_field () =
   let f = Field.v "Timestamp" (Types.Uint64 Types.Big) in
   match Field.ref f with
-  | Types.Ref name -> Alcotest.(check string) "ref name" "Timestamp" name
+  | Types.Ref (Types.I, name) ->
+      Alcotest.(check string) "ref name" "Timestamp" name
   | _ -> Alcotest.fail "expected Ref"
+
+let test_int64_uint64_field () =
+  let f = Field.v "Timestamp" (Types.Uint64 Types.Big) in
+  match Field.int64 f with
+  | Types.Ref (Types.I64, name) ->
+      Alcotest.(check string) "ref name" "Timestamp" name
+  | _ -> Alcotest.fail "expected int64 Ref"
+
+let test_int64_rejects_field_without_int64_slot () =
+  let check_invalid label f =
+    match f () with
+    | () -> Alcotest.failf "%s: expected Invalid_argument" label
+    | exception Invalid_argument _ -> ()
+  in
+  let mapped =
+    Field.v "Mapped" (Types.map Int64.of_int Int64.to_int Types.uint8)
+  in
+  check_invalid "mapped field" (fun () ->
+      ignore (Field.int64 mapped : int64 Types.expr));
+  check_invalid "self_int64 on uint8" (fun () ->
+      ignore
+        (Field.v "Tiny" Types.uint8 ~self_int64:(fun self ->
+             Types.Expr.(self = int64 0L))
+          : int Field.t))
 
 let suite =
   ( "field",
@@ -94,6 +120,9 @@ let suite =
       Alcotest.test_case "ref on bool field" `Quick test_ref_bool_field;
       Alcotest.test_case "ref on mapped field" `Quick test_ref_mapped_field;
       Alcotest.test_case "ref on uint64 field" `Quick test_ref_uint64_field;
+      Alcotest.test_case "int64 on uint64 field" `Quick test_int64_uint64_field;
+      Alcotest.test_case "int64 rejects missing slot" `Quick
+        test_int64_rejects_field_without_int64_slot;
       Alcotest.test_case "pp prints name" `Quick test_pp_prints_name;
       Alcotest.test_case "to_decl named" `Quick test_to_decl_named;
       Alcotest.test_case "to_decl anon" `Quick test_to_decl_anon;

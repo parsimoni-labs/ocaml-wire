@@ -95,13 +95,17 @@ let rec expr : type a. ctx -> a expr -> a =
   | Int n -> n
   | Int64 n -> n
   | Bool b -> b
-  | Ref name -> (
+  | Ref (I, name) -> (
       match List.assoc_opt name ctx with
       | Some v -> v
       | None ->
           failwith
             ("Eval.expr: unbound field " ^ name
            ^ " (cross-field references are only valid inside a struct)"))
+  | Ref (I64, name) ->
+      failwith
+        ("Eval.expr: unbound int64 field " ^ name
+       ^ " (cross-field references are only valid inside a struct)")
   | Param_ref p -> !(p.cell)
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> 0
@@ -119,10 +123,10 @@ let rec expr : type a. ctx -> a expr -> a =
   | Lsr (a, b) -> expr ctx a lsr expr ctx b
   | Eq (a, b) -> expr ctx a = expr ctx b
   | Ne (a, b) -> expr ctx a <> expr ctx b
-  | Lt (a, b) -> expr ctx a < expr ctx b
-  | Le (a, b) -> expr ctx a <= expr ctx b
-  | Gt (a, b) -> expr ctx a > expr ctx b
-  | Ge (a, b) -> expr ctx a >= expr ctx b
+  | Lt (a, b) -> compare_expr ctx a b < 0
+  | Le (a, b) -> compare_expr ctx a b <= 0
+  | Gt (a, b) -> compare_expr ctx a b > 0
+  | Ge (a, b) -> compare_expr ctx a b >= 0
   | And (a, b) -> expr ctx a && expr ctx b
   | Or (a, b) -> expr ctx a || expr ctx b
   | Not a -> not (expr ctx a)
@@ -134,3 +138,13 @@ let rec expr : type a. ctx -> a expr -> a =
       | `U32 -> v land 0xFFFF_FFFF
       | `U64 -> v)
   | If_then_else (c, t, e) -> if expr ctx c then expr ctx t else expr ctx e
+
+and compare_expr : type a. ctx -> a expr -> a expr -> int =
+ fun ctx a b ->
+  match a with
+  | Int64 _ -> compare_int64_expr ctx a b
+  | Ref (I64, _) -> compare_int64_expr ctx a b
+  | _ -> Stdlib.compare (expr ctx a) (expr ctx b)
+
+and compare_int64_expr ctx (a : int64 expr) (b : int64 expr) =
+  Int64.unsigned_compare (expr ctx a) (expr ctx b)

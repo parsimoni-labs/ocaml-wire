@@ -275,44 +275,67 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
 
 let int_of_typ_value = Eval.int_of_exn
 
+type slots = { ints : int array; int64s : int64 array }
+
+let alloc_slots n = { ints = Array.make n 0; int64s = Array.make n 0L }
+
+let clear_slots s n =
+  Array.fill s.ints 0 n 0;
+  Array.fill s.int64s 0 n 0L
+
+let set_int_slot s idx v = s.ints.(idx) <- v
+let set_int64_slot s idx v = s.int64s.(idx) <- v
+
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot
    path is a direct arr.(idx) <- reader buf base. *)
 let rec build_populate : type a.
-    a typ -> int -> (bytes -> int -> a) -> int array -> bytes -> int -> unit =
+    a typ -> int -> (bytes -> int -> a) -> slots -> bytes -> int -> unit =
  fun typ idx reader ->
   match typ with
-  | Uint8 -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Uint16 _ -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Uint_var _ -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Uint32 _ -> fun arr buf base -> arr.(idx) <- UInt32.to_int (reader buf base)
-  | Uint63 _ -> fun arr buf base -> arr.(idx) <- UInt63.to_int (reader buf base)
-  | Int8 -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Int16 _ -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Int32 _ -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Bits _ -> fun arr buf base -> arr.(idx) <- reader buf base
-  | Uint64 _ -> (
-      fun arr buf base ->
-        match Int64.unsigned_to_int (reader buf base) with
-        | Some v -> arr.(idx) <- v
-        | None -> ())
-  | Int64 _ -> fun arr buf base -> arr.(idx) <- Int64.to_int (reader buf base)
-  (* Floats store their IEEE 754 bit pattern in [int_array] so [Ref name]
-     in a constraint sees the same value the 3D-side sees. The user-facing
-     reader still returns the [float], reinterpreted via [Int*.float_of_bits]
-     elsewhere. *)
+  | Uint8 -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Uint16 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Uint_var _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Uint32 _ ->
+      fun slots buf base ->
+        set_int_slot slots idx (UInt32.to_int (reader buf base))
+  | Uint63 _ ->
+      fun slots buf base ->
+        set_int_slot slots idx (UInt63.to_int (reader buf base))
+  | Int8 -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Int16 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Int32 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  | Bits _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
+  (* [Uint64] / [Int64] populate both slots: the full value in [int64s] for
+     full-width [Field.int64] refs, and the truncated value in [ints] so legacy
+     int-kind [Field.ref] / [Field.int] constraints keep their pre-int64
+     behavior instead of silently reading an unpopulated zero. ([has_int64_slot]
+     gates the int64 ref API to exactly these types.) *)
+  | Uint64 _ ->
+      fun slots buf base ->
+        let v = reader buf base in
+        set_int64_slot slots idx v;
+        Option.iter (set_int_slot slots idx) (Int64.unsigned_to_int v)
+  | Int64 _ ->
+      fun slots buf base ->
+        let v = reader buf base in
+        set_int64_slot slots idx v;
+        set_int_slot slots idx (Int64.to_int v)
+  (* Floats store their IEEE 754 bit pattern in the int slot so [Ref name] in a
+     constraint sees the value the 3D side sees. The user-facing reader still
+     returns the [float], reinterpreted via [Int*.float_of_bits] elsewhere. *)
   | Float32 Little ->
-      fun arr buf base ->
-        arr.(idx) <- Bytes.get_int32_le buf base |> Int32.to_int
+      fun slots buf base ->
+        set_int_slot slots idx (Bytes.get_int32_le buf base |> Int32.to_int)
   | Float32 Big ->
-      fun arr buf base ->
-        arr.(idx) <- Bytes.get_int32_be buf base |> Int32.to_int
+      fun slots buf base ->
+        set_int_slot slots idx (Bytes.get_int32_be buf base |> Int32.to_int)
   | Float64 Little ->
-      fun arr buf base ->
-        arr.(idx) <- Bytes.get_int64_le buf base |> Int64.to_int
+      fun slots buf base ->
+        set_int_slot slots idx (Bytes.get_int64_le buf base |> Int64.to_int)
   | Float64 Big ->
-      fun arr buf base ->
-        arr.(idx) <- Bytes.get_int64_be buf base |> Int64.to_int
+      fun slots buf base ->
+        set_int_slot slots idx (Bytes.get_int64_be buf base |> Int64.to_int)
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; cases; _ } ->
       let check = enum_checker cases in
@@ -330,9 +353,9 @@ let rec build_populate : type a.
         build_populate inner idx (fun buf base ->
             match reader buf base with Some v -> v | None -> assert false)
       in
-      fun arr buf base ->
+      fun slots buf base ->
         match reader buf base with
-        | Some _ -> inner_populate arr buf base
+        | Some _ -> inner_populate slots buf base
         | None -> ())
   | _ ->
       (* Aggregate / string-valued types have no scalar int projection.
@@ -439,11 +462,23 @@ type packed_param = Pack_param : ('a, 'k) param_handle -> packed_param
    int-array layer passes [arr ()] with an immediate unit. *)
 type ('c1, 'c2) leaves = {
   ref_ : string -> 'c1 -> 'c2 -> int;
+  i64 : string -> 'c1 -> 'c2 -> int64;
   param_ref : packed_param -> 'c1 -> 'c2 -> int;
   sizeof_typ : packed_typ -> 'c1 -> 'c2 -> int;
   sizeof_this : 'c1 -> 'c2 -> int;
   field_pos : 'c1 -> 'c2 -> int;
 }
+
+let compile_int64 : type c1 c2.
+    (c1, c2) leaves -> int64 expr -> c1 -> c2 -> int64 =
+ fun l e ->
+  match e with Int64 n -> fun _ _ -> n | Ref (I64, name) -> l.i64 name
+
+let try_int64 : type a c1 c2.
+    (c1, c2) leaves -> a expr -> (c1 -> c2 -> int64) option =
+ fun l e ->
+  let go e = Some (compile_int64 l e) in
+  match e with Int64 _ as e -> go e | Ref (I64, _) as e -> go e | _ -> None
 
 let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
     =
@@ -451,7 +486,7 @@ let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
   let rec_ = compile_int l in
   match e with
   | Int n -> fun _ _ -> n
-  | Ref name -> l.ref_ name
+  | Ref (I, name) -> l.ref_ name
   | Param_ref p -> l.param_ref (Pack_param p)
   | Sizeof t -> l.sizeof_typ (Pack_typ t)
   | Sizeof_this -> l.sizeof_this
@@ -509,7 +544,7 @@ and try_int : type a c1 c2.
   let go e = Some (compile_int l e) in
   match e with
   | Int _ as e -> go e
-  | Ref _ as e -> go e
+  | Ref (I, _) as e -> go e
   | Param_ref _ as e -> go e
   | Sizeof _ as e -> go e
   | Sizeof_this as e -> go e
@@ -549,32 +584,59 @@ and try_bool : type a c1 c2.
 and compile_bool : type c1 c2. (c1, c2) leaves -> bool expr -> c1 -> c2 -> bool
     =
  fun l e ->
-  let int_rec = compile_int l in
   let bool_rec = compile_bool l in
   match e with
   | Bool b -> fun _ _ -> b
   | Eq (a, b) -> (
-      match (try_int l a, try_int l b, try_bool l a, try_bool l b) with
-      | Some fa, Some fb, _, _ -> fun c d -> fa c d = fb c d
-      | _, _, Some fa, Some fb -> fun c d -> fa c d = fb c d
+      match
+        ( try_int l a,
+          try_int l b,
+          try_int64 l a,
+          try_int64 l b,
+          try_bool l a,
+          try_bool l b )
+      with
+      | Some fa, Some fb, _, _, _, _ -> fun c d -> fa c d = fb c d
+      | _, _, Some fa, Some fb, _, _ -> fun c d -> fa c d = fb c d
+      | _, _, _, _, Some fa, Some fb -> fun c d -> fa c d = fb c d
       | _ -> assert false)
   | Ne (a, b) -> (
-      match (try_int l a, try_int l b, try_bool l a, try_bool l b) with
-      | Some fa, Some fb, _, _ -> fun c d -> fa c d <> fb c d
-      | _, _, Some fa, Some fb -> fun c d -> fa c d <> fb c d
+      match
+        ( try_int l a,
+          try_int l b,
+          try_int64 l a,
+          try_int64 l b,
+          try_bool l a,
+          try_bool l b )
+      with
+      | Some fa, Some fb, _, _, _, _ -> fun c d -> fa c d <> fb c d
+      | _, _, Some fa, Some fb, _, _ -> fun c d -> fa c d <> fb c d
+      | _, _, _, _, Some fa, Some fb -> fun c d -> fa c d <> fb c d
       | _ -> assert false)
-  | Lt (a, b) ->
-      let fa = int_rec a and fb = int_rec b in
-      fun c d -> fa c d < fb c d
-  | Le (a, b) ->
-      let fa = int_rec a and fb = int_rec b in
-      fun c d -> fa c d <= fb c d
-  | Gt (a, b) ->
-      let fa = int_rec a and fb = int_rec b in
-      fun c d -> fa c d > fb c d
-  | Ge (a, b) ->
-      let fa = int_rec a and fb = int_rec b in
-      fun c d -> fa c d >= fb c d
+  | Lt (a, b) -> (
+      match (try_int l a, try_int l b, try_int64 l a, try_int64 l b) with
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d < fb c d
+      | _, _, Some fa, Some fb ->
+          fun c d -> Int64.unsigned_compare (fa c d) (fb c d) < 0
+      | _ -> assert false)
+  | Le (a, b) -> (
+      match (try_int l a, try_int l b, try_int64 l a, try_int64 l b) with
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d <= fb c d
+      | _, _, Some fa, Some fb ->
+          fun c d -> Int64.unsigned_compare (fa c d) (fb c d) <= 0
+      | _ -> assert false)
+  | Gt (a, b) -> (
+      match (try_int l a, try_int l b, try_int64 l a, try_int64 l b) with
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d > fb c d
+      | _, _, Some fa, Some fb ->
+          fun c d -> Int64.unsigned_compare (fa c d) (fb c d) > 0
+      | _ -> assert false)
+  | Ge (a, b) -> (
+      match (try_int l a, try_int l b, try_int64 l a, try_int64 l b) with
+      | Some fa, Some fb, _, _ -> fun c d -> fa c d >= fb c d
+      | _, _, Some fa, Some fb ->
+          fun c d -> Int64.unsigned_compare (fa c d) (fb c d) >= 0
+      | _ -> assert false)
   | And (a, b) ->
       let fa = bool_rec a and fb = bool_rec b in
       fun c d -> fa c d && fb c d
@@ -584,6 +646,7 @@ and compile_bool : type c1 c2. (c1, c2) leaves -> bool expr -> c1 -> c2 -> bool
   | Not e ->
       let fe = bool_rec e in
       fun c d -> not (fe c d)
+  | Ref _ -> .
 
 (* Closure-based access layer: the context is [buf] and [base], passed as two
    curried arguments. The compiled offset/size functions are [bytes -> int ->
@@ -598,6 +661,12 @@ let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
         | None ->
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
+    i64 =
+      (fun name _ _ ->
+        Fmt.invalid_arg
+          "Codec: full-width field ref %S is only available in field \
+           constraints"
+          name);
     param_ref = (fun (Pack_param p) _ _ -> !(p.cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
@@ -634,12 +703,16 @@ type compile_ctx = {
 let mk_ctx ?(sizeof_this = 0) ?(field_pos = 0) ~param_slots idx =
   { idx; sizeof_this; field_pos; param_slots }
 
-let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
+let array_leaves (cc : compile_ctx) : (slots, unit) leaves =
   {
     ref_ =
       (fun name ->
         let i = cc.idx name in
-        fun a () -> a.(i));
+        fun a () -> a.ints.(i));
+    i64 =
+      (fun name ->
+        let i = cc.idx name in
+        fun a () -> a.int64s.(i));
     param_ref =
       (fun (Pack_param p) a () ->
         (* The per-codec slot map is filled at seal, after these leaves are
@@ -647,7 +720,7 @@ let array_leaves (cc : compile_ctx) : (int array, unit) leaves =
            codec's map (e.g. one only reachable via [cell] forwarding from
            an embedding) falls back to the shared cell. *)
         match Hashtbl.find_opt cc.param_slots p.Types.name with
-        | Some i -> a.(i)
+        | Some i -> a.ints.(i)
         | None -> !(p.cell));
     sizeof_typ =
       (fun (Pack_typ t) ->
@@ -674,7 +747,7 @@ let compile_bool_arr cc e =
 
    Return true short-circuits remaining statements (the action succeeds).
    Return false and Abort raise Parse_error to abort the parse. *)
-type compiled_action = int array -> unit
+type compiled_action = slots -> unit
 
 exception Return_true
 
@@ -686,7 +759,7 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
       fun arr ->
         let v = fe arr in
         match Hashtbl.find_opt cc.param_slots p.Types.name with
-        | Some slot -> arr.(slot) <- v
+        | Some slot -> set_int_slot arr slot v
         | None -> p.Types.cell := v)
   | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
   | Return e ->
@@ -714,7 +787,7 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
          silently write to nowhere. *)
       let i = cc.idx name in
       let fe = compile_int_arr cc e in
-      fun arr -> arr.(i) <- fe arr
+      fun arr -> set_int_slot arr i (fe arr)
 
 and compile_stmts (cc : compile_ctx) (stmts : Types.action_stmt list) :
     compiled_action =
@@ -750,9 +823,9 @@ type ('f, 'r) record =
       next_off : next_off; (* where the next field starts *)
       fields_rev : Types.field list;
       validators_rev :
-        (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
+        (int (* byte offset *) * (slots -> bytes -> int -> unit)) list;
       checkers_rev :
-        (int (* byte offset *) * (int array -> bytes -> int -> unit)) list;
+        (int (* byte offset *) * (slots -> bytes -> int -> unit)) list;
       field_actions_rev : (string * compiled_action) list;
       n_fields : int; (* count of named fields (for field indexing) *)
       n_array_slots : int;
@@ -788,10 +861,10 @@ type 'r t = {
   wire_size : wire_size_info;
   struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
-  validate_arr : int array -> bytes -> int -> unit;
-  populate : int array -> bytes -> int -> unit;
+  validate_arr : slots -> bytes -> int -> unit;
+  populate : slots -> bytes -> int -> unit;
   n_array_slots : int;
-  decode_scratch : int array;
+  decode_scratch : slots;
       (* Validation scratch, allocated once at [seal] and zeroed per decode
          (see [decode_exn]), mirroring the [validate] closure, the struct
          validator, and [Codec.get]'s staged reader. Same shared-buffer
@@ -973,10 +1046,18 @@ let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
   | Lor (a, b)
   | Lxor (a, b)
   | Lsl (a, b)
-  | Lsr (a, b)
-  | Lt (a, b)
-  | Le (a, b)
-  | Gt (a, b)
+  | Lsr (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
+  | Lt (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
+  | Le (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
+  | Gt (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
   | Ge (a, b) ->
       iter_param_refs f a;
       iter_param_refs f b
@@ -1293,7 +1374,7 @@ type ('a, 'r) compiled_field = {
   nested_readers : field_reader list;
       (* Embedded sub-codec field readers, shifted into the parent frame. *)
   validator_off : int; (* [-1] when the byte offset is dynamic *)
-  populate : int array -> bytes -> int -> unit;
+  populate : slots -> bytes -> int -> unit;
       (* Pre-built populate function for the int-array validator path; the
          slot index (n_fields at the time the field is compiled) is baked
          in. Composite types use a no-op. *)
@@ -1353,7 +1434,7 @@ let advance_next_off (no : next_off) (n : int) : next_off =
   | Dynamic f -> Dynamic (fun buf base -> f buf base + n)
 
 let null_int_reader : bytes -> int -> int = fun _buf _base -> 0
-let no_populate : int array -> bytes -> int -> unit = fun _arr _buf _base -> ()
+let no_populate : slots -> bytes -> int -> unit = fun _arr _buf _base -> ()
 
 (* Reader+writer pair for a Codec-or-scalar inner type placed at the current
    frame offset. Extracted so [compile_optional] and [compile_optional_or]
@@ -1583,7 +1664,7 @@ let optional_compiled : type a r.
     raw_writer:(r -> bytes -> int -> int -> int) ->
     size_delta:int ->
     next_off:next_off ->
-    populate:(int array -> bytes -> int -> unit) ->
+    populate:(slots -> bytes -> int -> unit) ->
     unit ->
     (a, r) compiled_field =
  fun ctx ?(int_reader = null_int_reader) ~raw_reader ~raw_writer ~size_delta
@@ -2484,15 +2565,15 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   let validate =
     if has_checks then (
-      let arr = Array.make n_total 0 in
+      let arr = alloc_slots n_total in
       fun ?env_slots buf off ->
-        Array.fill arr 0 n_total 0;
+        clear_slots arr n_total;
         (match env_slots with
         | Some slots ->
             (* Seed param slots from the supplied env so [where] clauses
                that reference [Param.input] evaluate correctly. *)
             let n = Array.length slots in
-            Array.blit slots 0 arr (n_total - n) n
+            Array.blit slots 0 arr.ints (n_total - n) n
         | None -> ());
         populate arr buf off;
         match compiled_where with
@@ -2625,7 +2706,7 @@ let seal : type r. (r, r) record -> r t =
     validate_arr;
     populate;
     n_array_slots = n_total;
-    decode_scratch = Array.make n_total 0;
+    decode_scratch = alloc_slots n_total;
     param_base;
     n_params;
     param_handles;
@@ -2648,8 +2729,8 @@ type validator = {
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
 type validator_acc = {
-  validators_rev : (int * (int array -> bytes -> int -> unit)) list;
-  checkers_rev : (int * (int array -> bytes -> int -> unit)) list;
+  validators_rev : (int * (slots -> bytes -> int -> unit)) list;
+  checkers_rev : (int * (slots -> bytes -> int -> unit)) list;
   field_readers : field_reader list;
   n_fields : int;
   n_array_slots : int;
@@ -2841,10 +2922,10 @@ and validator_of_struct (s : Types.struct_) : validator =
   (* Full validation: fire field actions and check the where clause.
      [build_validators]'s third return [validate] is checkers-only (no
      actions). [validate_arr] runs full validators -- pre-allocate one
-     scratch [int array], zero it on entry. *)
-  let arr = Array.make n_total 0 in
+     scratch slots, zeroed on entry. *)
+  let arr = alloc_slots n_total in
   let validate buf off =
-    if n_total > 0 then Array.fill arr 0 n_total 0;
+    if n_total > 0 then clear_slots arr n_total;
     validate_arr arr buf off
   in
   { min_size = acc.min_size; wire_size = wire_size_info; validate }
@@ -2992,10 +3073,10 @@ let env (t : _ t) : Param.env =
 let decode_exn ?env:e t buf off =
   let v = t.decode buf off in
   let arr = t.decode_scratch in
-  Array.fill arr 0 t.n_array_slots 0;
+  clear_slots arr t.n_array_slots;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
-      Array.blit e.slots 0 arr t.param_base t.n_params
+      Array.blit e.slots 0 arr.ints t.param_base t.n_params
   | _ -> ());
   t.validate_arr arr buf off;
   (match e with
@@ -3004,7 +3085,7 @@ let decode_exn ?env:e t buf off =
          [i]. Write decoded output params back into the env (and the cell). *)
       List.iteri
         (fun i (Param.Pack p) ->
-          let v = arr.(t.param_base + i) in
+          let v = arr.ints.(t.param_base + i) in
           e.slots.(i) <- v;
           p.cell := v)
         t.param_handles
@@ -3169,8 +3250,8 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   match List.assoc_opt f.name codec.field_actions with
   | None -> Staged.stage read
   | Some act ->
-      let arr = Array.make codec.n_array_slots 0 in
-      let n = Array.length arr in
+      let arr = alloc_slots codec.n_array_slots in
+      let n = codec.n_array_slots in
       let populate = codec.populate in
       let n_params = codec.n_params in
       let sync, blit_input =
@@ -3185,17 +3266,17 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
             ( (fun arr ->
                 List.iteri
                   (fun i (Param.Pack p) ->
-                    let v = arr.(param_base + i) in
+                    let v = arr.ints.(param_base + i) in
                     e.slots.(i) <- v;
                     p.cell := v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
-                  Array.blit e.slots 0 arr param_base n_params )
+                  Array.blit e.slots 0 arr.ints param_base n_params )
       in
       Staged.stage (fun buf off ->
           let v = read buf off in
-          Array.fill arr 0 n 0;
+          clear_slots arr n;
           blit_input arr;
           populate arr buf off;
           act arr;
@@ -3212,7 +3293,7 @@ let rename new_name (t : _ t) = { t with name = new_name }
 let doc (t : _ t) = t.doc
 let field_readers (t : _ t) = t.field_readers
 let pp ppf (t : _ t) = Fmt.string ppf t.name
-let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name
+let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
 
 (* -- Slice navigation: zero-copy access to the offset/length of a
       [Byte_slice] field. Used to descend into a nested codec without
