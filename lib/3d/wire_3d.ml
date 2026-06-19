@@ -627,16 +627,189 @@ let doc_module_name package =
 let doc_base ?name ~package () =
   doc_module_name (match name with Some n -> n | None -> package)
 
+(* -- Differential self-check for the doc pipeline. The doc projection emits a
+   validator-only C parser with no FFI, so nothing otherwise confirms that the
+   generated validator accepts exactly the inputs the OCaml codec accepts: a
+   bug in the projection (wrong bit order, a constraint that means something
+   different over the wire type) would pass unnoticed. [generate_corpus] prints
+   fuzzed inputs tagged with the OCaml verdict, and [generate_agree] emits a C
+   program that runs the validator on each and fails on any disagreement. -- *)
+
+let hex_of_bytes b =
+  let buf = Buffer.create (Bytes.length b * 2) in
+  let ppf = Fmt.with_buffer buf in
+  Bytes.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) b;
+  Format.pp_print_flush ppf ();
+  Buffer.contents buf
+
+(* The accept/reject decision the validator must reproduce: the OCaml codec
+   both decodes (structure plus constraints) and validates (constraints and
+   where-clauses) the bytes. *)
+let codec_accepts c buf =
+  match Wire.Codec.decode c buf 0 with
+  | Ok _ -> (
+      try
+        Wire.Codec.validate c buf 0;
+        true
+      with Wire.Validation_error _ -> false)
+  | Error _ -> false
+
+(* Structurally-biased lengths: cluster around the codec's minimum size so the
+   corpus straddles the accept/reject boundary. The exact size and a little
+   over exercise the constraint path; under-size exercises truncation; a few
+   far-out lengths add breadth. *)
+let fuzz_length rng center =
+  match Random.State.int rng 10 with
+  | 0 -> 0
+  | 1 | 2 -> Random.State.int rng (max 1 (center + 1))
+  | 3 -> (2 * center) + Random.State.int rng 4
+  | 4 -> center + 1
+  | _ -> center
+
+let generate_corpus ?(count = 256) ppf codecs =
+  let rng = Random.State.make [| 0x5eed51 |] in
+  List.iter
+    (fun (Pack c) ->
+      let name = (doc c).name in
+      let center = Wire.Codec.min_wire_size c in
+      for _ = 1 to count do
+        let len = fuzz_length rng center in
+        let b = Bytes.init len (fun _ -> Char.chr (Random.State.int rng 256)) in
+        let hex = if len = 0 then "-" else hex_of_bytes b in
+        Fmt.pf ppf "%s %s %d@\n" name hex (if codec_accepts c b then 1 else 0)
+      done)
+    codecs;
+  Format.pp_print_flush ppf ()
+
+(* The wrapper EverParse generates exposes one [<Base>Check<Codec>(base, len)]
+   helper per entrypoint, returning [BOOLEAN] (accept/reject). Read their names
+   from the generated [<Base>Wrapper.h] -- in declaration order, which follows
+   the codec order -- rather than re-deriving EverParse's name normalization. *)
+let read_check_names ~outdir base =
+  let path = Filename.concat outdir (base ^ "Wrapper.h") in
+  let prefix = "BOOLEAN " in
+  let plen = String.length prefix in
+  let ic = open_in path in
+  let names = ref [] in
+  (try
+     while true do
+       let line = String.trim (input_line ic) in
+       match String.index_opt line '(' with
+       | Some lp
+         when String.length line >= plen
+              && String.sub line 0 plen = prefix
+              && lp > plen ->
+           names := String.sub line plen (lp - plen) :: !names
+       | _ -> ()
+     done
+   with End_of_file -> ());
+  close_in ic;
+  List.rev !names
+
+let emit_agree_dispatch ppf base pairs =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "/* Differential check: the EverParse validator must accept exactly the";
+  pr "   inputs the OCaml codec accepts. Reads `<codec> <hex> <verdict>` lines";
+  pr "   from gen.exe's corpus and exits nonzero on any disagreement. */";
+  pr "#include <stdio.h>";
+  pr "#include <stdlib.h>";
+  pr "#include <string.h>";
+  pr "#include <stdint.h>";
+  pr "#include \"%s.h\"" base;
+  pr "#include \"%sWrapper.h\"" base;
+  pr "";
+  (* The wrapper declares this error sink only in its .c, so declare it here too
+     to satisfy -Wmissing-prototypes before defining it as a no-op. *)
+  pr "void %sEverParseError(const char *s, const char *f, const char *r);" base;
+  pr "void %sEverParseError(const char *s, const char *f, const char *r)" base;
+  pr "{ (void) s; (void) f; (void) r; }";
+  pr "";
+  pr "static int run(const char *name, uint8_t *base, uint32_t len) {";
+  List.iter
+    (fun (cname, check) ->
+      pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;" cname
+        check)
+    pairs;
+  pr "  fprintf(stderr, \"agree: unknown codec '%%s'\\n\", name);";
+  pr "  exit(3);";
+  pr "}"
+
+let emit_agree_main ppf =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "";
+  pr "int main(int argc, char **argv) {";
+  pr
+    "  if (argc < 2) { fprintf(stderr, \"usage: %%s <corpus>\\n\", argv[0]); \
+     return 2; }";
+  pr "  FILE *fp = fopen(argv[1], \"r\");";
+  pr "  if (!fp) { perror(\"fopen\"); return 2; }";
+  pr "  char name[256];";
+  pr "  char hex[16384];";
+  pr "  uint8_t buf[8192];";
+  pr "  long verdict, total = 0, mismatch = 0;";
+  pr
+    "  while (fscanf(fp, \"%%255s %%16383s %%ld\", name, hex, &verdict) == 3) {";
+  pr "    uint32_t len = 0;";
+  pr "    if (strcmp(hex, \"-\") != 0) {";
+  pr "      size_t hl = strlen(hex);";
+  pr "      len = (uint32_t) (hl / 2);";
+  pr
+    "      if (len > sizeof(buf)) { fprintf(stderr, \"input too long\\n\"); \
+     fclose(fp); return 2; }";
+  pr "      for (uint32_t i = 0; i < len; i++) {";
+  pr "        unsigned b;";
+  pr
+    "        if (sscanf(hex + 2 * i, \"%%2x\", &b) != 1) { fprintf(stderr, \
+     \"bad hex\\n\"); fclose(fp); return 2; }";
+  pr "        buf[i] = (uint8_t) b;";
+  pr "      }";
+  pr "    }";
+  pr "    int accept = run(name, buf, len);";
+  pr "    total++;";
+  pr "    if (accept != (int) verdict) {";
+  pr "      mismatch++;";
+  pr "      if (mismatch <= 20)";
+  pr
+    "        fprintf(stderr, \"MISMATCH codec=%%s len=%%u validator=%%d \
+     oracle=%%ld\\n\", name, len, accept, verdict);";
+  pr "    }";
+  pr "  }";
+  pr "  fclose(fp);";
+  pr
+    "  fprintf(stdout, \"agree: %%ld inputs, %%ld mismatches\\n\", total, \
+     mismatch);";
+  pr "  return mismatch == 0 ? 0 : 1;";
+  pr "}"
+
+let generate_agree ?name ~outdir ~package codecs =
+  let base = doc_base ?name ~package () in
+  let checks = read_check_names ~outdir base in
+  let names = List.map (fun (Pack c) -> (doc c).name) codecs in
+  let pairs =
+    if List.length names <> List.length checks then
+      Fmt.failwith "agree.c: %d codecs but %d Check helpers in %sWrapper.h"
+        (List.length names) (List.length checks) base
+    else List.combine names checks
+  in
+  let oc = open_out (Filename.concat outdir "agree.c") in
+  let ppf = Format.formatter_of_out_channel oc in
+  emit_agree_dispatch ppf base pairs;
+  emit_agree_main ppf;
+  Format.pp_print_flush ppf ();
+  close_out oc
+
 let generate_3d_doc ?name ~outdir ~package codecs =
   ensure_dir outdir;
   write_doc ~outdir
     ~name:(doc_base ?name ~package ())
     (List.map (fun (Pack c) -> doc c) codecs)
 
-let generate_c_doc ?(quiet = true) ?name ~outdir ~package _codecs =
+let generate_c_doc ?(quiet = true) ?name ~outdir ~package codecs =
   ensure_dir outdir;
-  if has_3d_exe () then
-    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ]
+  if has_3d_exe () then begin
+    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ];
+    generate_agree ?name ~outdir ~package codecs
+  end
   else
     failwith
       "3d.exe not found in PATH. Install EverParse to regenerate C files."
@@ -645,50 +818,80 @@ let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
   generate_3d_doc ?name ~outdir ~package codecs;
   generate_c_doc ~quiet ?name ~outdir ~package codecs
 
-let generate_dune_doc ?name ~outdir ~package _codecs =
-  let base = doc_base ?name ~package () in
-  let three_d = base ^ ".3d" in
-  let c_files =
-    [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
-  in
-  let oc = open_out (Filename.concat outdir "dune.inc") in
-  let ppf = Format.formatter_of_out_channel oc in
-  let pr fmt = Fmt.pf ppf fmt in
-  pr
+(* The [.3d] regenerates on demand ([gen.exe 3d] is pure OCaml, so it is
+   [promote]), but the C is [fallback]: it is committed and only regenerated
+   when absent, so an ordinary [dune build] never invokes [3d.exe]. A codec
+   change therefore refreshes the [.3d] while the committed C goes stale -- the
+   runtest differential below is what catches that, since it regenerates the
+   corpus from the current codec and runs it against the committed validator. *)
+let emit_doc_gen_rules ppf ~three_d ~c_files =
+  Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
     \ (mode promote)\n\
     \ (targets %s)\n\
     \ (deps gen.exe)\n\
     \ (action\n\
-    \  (run ./gen.exe 3d)))\n\n"
-    three_d;
-  pr
-    "(rule\n\
+    \  (run ./gen.exe 3d)))\n\n\
+     (rule\n\
     \ (alias 3d)\n\
     \ (mode fallback)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s agree.c)\n\
     \ (deps gen.exe %s)\n\
     \ (action\n\
     \  (run ./gen.exe c)))\n\n"
+    three_d
     (String.concat " " c_files)
-    three_d;
-  (* Compile the generated validator (no link: the wrapper's error callback is
-     the consumer's to define), so a downstream build fails loudly if the spec
-     stops projecting to compilable C. *)
-  pr
+    three_d
+
+let emit_doc_build_rules ppf ~base ~archive ~c_files =
+  (* Build the validator into an archive, installed with the package, so
+     consumers get a ready-to-link library and a downstream build fails loudly
+     if the spec stops projecting to compilable C. *)
+  Fmt.pf ppf
     "(rule\n\
-    \ (alias runtest)\n\
+    \ (targets %s)\n\
     \ (deps EverParse.h EverParseEndianness.h %s)\n\
     \ (action\n\
     \  (system\n\
-    \   \"cc %s -c %s.c %sWrapper.c\")))\n\n"
+    \   \"cc %s -c %s.c %sWrapper.c && ar rcs %s %s.o %sWrapper.o\")))\n\n"
+    archive
     (String.concat " " c_files)
-    strict_cc_flags base base;
+    strict_cc_flags base base archive base base;
+  (* Differential self-check: the OCaml codec's accept/reject verdict over a
+     fuzzed corpus must match the committed C validator's, or the doc projection
+     is unsound (or the committed C is stale). Uses only gen.exe and cc, so it
+     runs without 3d.exe. *)
+  Fmt.pf ppf
+    "(rule\n\
+    \ (alias runtest)\n\
+    \ (deps gen.exe agree.c %s EverParse.h EverParseEndianness.h %s.h \
+     %sWrapper.h)\n\
+    \ (action\n\
+    \  (system\n\
+    \   \"./gen.exe corpus > corpus && cc %s agree.c %s -o agree && ./agree \
+     corpus\")))\n\n"
+    archive base base strict_cc_flags archive
+
+let emit_doc_install ppf ~package ~three_d ~archive ~c_files =
+  let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
-  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) (three_d :: c_files);
+  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) (three_d :: archive :: c_files);
   pr "  (EverParse.h as c/EverParse.h)\n";
-  pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n";
+  pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
+
+let generate_dune_doc ?name ~outdir ~package _codecs =
+  let base = doc_base ?name ~package () in
+  let three_d = base ^ ".3d" in
+  let c_files =
+    [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
+  in
+  let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
+  let oc = open_out (Filename.concat outdir "dune.inc") in
+  let ppf = Format.formatter_of_out_channel oc in
+  emit_doc_gen_rules ppf ~three_d ~c_files;
+  emit_doc_build_rules ppf ~base ~archive ~c_files;
+  emit_doc_install ppf ~package ~three_d ~archive ~c_files;
   Format.pp_print_flush ppf ();
   close_out oc
 
@@ -707,4 +910,5 @@ let main ?name ~mode ~package codecs =
       | [ _; "3d" ] -> generate_3d_doc ?name ~outdir:"." ~package codecs
       | [ _; "c" ] -> generate_c_doc ?name ~outdir:"." ~package codecs
       | [ _; "dune" ] -> generate_dune_doc ?name ~outdir:"." ~package codecs
+      | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_doc ?name ~outdir:"." ~package codecs)
