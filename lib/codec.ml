@@ -756,8 +756,9 @@ type ('f, 'r) record =
           (* fields + action-local vars (for array allocation) *)
       r_bf : bf_codec_state option;
       field_access_rev : (string * field_access) list;
-      field_readers : field_reader list;
       where : bool expr option;
+      doc : string option;
+      field_readers : field_reader list;
       param_slots : (string, int) Hashtbl.t;
           (* Per-codec param name to decode-array slot, filled at seal. *)
     }
@@ -796,13 +797,17 @@ type 'r t = {
   n_params : int;
   param_handles : Param.packed list;
   where : bool expr option;
+  doc : string option;
+      (** Free-text note (e.g. an RFC citation) projected as a [/*++ ... --*/]
+          comment on the codec's 3D typedef. *)
 }
 
-let record_start ?where name make =
+let record_start ?where ?doc name make =
   Record
     {
       name;
       make;
+      doc;
       readers = Nil;
       writers_rev = [];
       size_of_value_rev = [];
@@ -2318,6 +2323,7 @@ let apply_compiled : type a f r.
       field_access_rev = (fld.name, cf.field_access) :: r.field_access_rev;
       field_readers = new_field_readers;
       where = r.where;
+      doc = r.doc;
       param_slots = r.param_slots;
     }
 
@@ -2617,6 +2623,7 @@ let seal : type r. (r, r) record -> r t =
     n_params;
     param_handles;
     where = r.where;
+    doc = r.doc;
   }
 
 (* -- Validator-only path: build a struct validator from [Types.struct_]
@@ -2855,13 +2862,14 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
-let view : type f r. string -> ?where:bool expr -> f -> (f, r) fields -> r t =
- fun name ?where constructor flds ->
+let view : type f r.
+    string -> ?where:bool expr -> ?doc:string -> f -> (f, r) fields -> r t =
+ fun name ?where ?doc constructor flds ->
   let rec add : type g. (g, r) record -> (g, r) fields -> r t =
    fun r flds ->
     match flds with [] -> seal r | f :: rest -> add (add_field r f) rest
   in
-  add (record_start ?where name constructor) flds
+  add (record_start ?where ?doc name constructor) flds
 
 let v = view
 
@@ -3193,6 +3201,7 @@ let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
 
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
+let doc (t : _ t) = t.doc
 let field_readers (t : _ t) = t.field_readers
 let pp ppf (t : _ t) = Fmt.string ppf t.name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref f.name

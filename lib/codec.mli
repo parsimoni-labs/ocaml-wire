@@ -30,8 +30,17 @@ type ('f, 'r) fields =
 val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
 (** [f $ proj] binds a field to a record projection. *)
 
-val v : string -> ?where:bool Types.expr -> 'f -> ('f, 'r) fields -> 'r t
-(** [v name constructor fields] seals a codec from a field list. *)
+val v :
+  string ->
+  ?where:bool Types.expr ->
+  ?doc:string ->
+  'f ->
+  ('f, 'r) fields ->
+  'r t
+(** [v name constructor fields] seals a codec from a field list. [?doc] attaches
+    a free-text note (e.g. an RFC citation) that the documentation projection
+    renders as a [/*++ ... --*/] comment on the codec's 3D typedef; see {!doc}.
+*)
 
 val wire_size : 'r t -> int
 (** Fixed wire size in bytes. Raises if variable-length. *)
@@ -163,6 +172,9 @@ val rename : string -> 'r t -> 'r t
     not the wire encoding, so renaming leaves encode/decode and all field
     constraints unchanged. Use it to give a generically built codec a unique,
     meaningful name for projection or code generation. *)
+
+val doc : 'r t -> string option
+(** [doc c] is the note attached via {!v}'s [?doc], if any. *)
 
 val field_readers : 'r t -> (string * (bytes -> int -> int)) list
 (** [field_readers c] returns the int-valued field readers of [c], indexed by

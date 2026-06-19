@@ -453,13 +453,13 @@ let with_output (s : Types.struct_) : Types.decl list =
    casetypes -- everything that describes the wire format. Reads as a protocol
    spec, and 3d.exe still compiles it to a real (validator-only) C parser with
    no FFI. *)
-let doc_decls (s : Types.struct_) : Types.decl list =
+let doc_decls ?doc (s : Types.struct_) : Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
   let parse_fields = reorder_bit_groups_for_3d s.fields in
   let parse_struct =
     Types.param_struct s.name s.params ?where:s.where parse_fields
   in
-  refined_byte_typedefs s @ [ Types.typedef ~entrypoint:true parse_struct ]
+  refined_byte_typedefs s @ [ Types.typedef ?doc ~entrypoint:true parse_struct ]
 
 (* Byte size of a struct after bitfield coalescing, mirroring Codec.compile_bits'
    logic: consecutive same-base, same-bit_order bitfields pack into one base
@@ -511,13 +511,20 @@ let schema_of_struct (s : Types.struct_) : t =
 let schema (type r) (codec : r Codec.t) : t =
   schema_of_struct (Codec.to_struct codec)
 
-let doc_of_struct (s : Types.struct_) : t =
+let doc_of_struct ?doc (s : Types.struct_) : t =
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
-  { name; module_ = Types.module_ (doc_decls s); wire_size; source = Some s }
+  {
+    name;
+    module_ = Types.module_ (doc_decls ?doc s);
+    wire_size;
+    source = Some s;
+  }
 
-let doc (type r) (codec : r Codec.t) : t = doc_of_struct (Codec.to_struct codec)
+let doc (type r) (codec : r Codec.t) : t =
+  doc_of_struct ?doc:(Codec.doc codec) (Codec.to_struct codec)
+
 let filename (s : t) = String.capitalize_ascii s.name ^ ".3d"
 
 let uses_wire_ctx s =
