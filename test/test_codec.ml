@@ -1456,7 +1456,7 @@ let test_action_unfired_by_validate () =
   (* validate does NOT fire actions *)
   Alcotest.(check int)
     "action not fired by validate" 0
-    !(action_out2.Wire.Private.Types.ph_cell)
+    !(action_out2.Wire.Private.Types.cell)
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.

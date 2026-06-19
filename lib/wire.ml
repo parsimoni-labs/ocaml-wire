@@ -413,10 +413,10 @@ let rec typ_consumes_rest : type a. a typ -> bool = function
 and struct_consumes_rest (s : struct_) =
   List.exists (fun (Field f) -> typ_consumes_rest f.field_typ) s.fields
 
-let push_back_bytes reader bytes first length =
+let push_back_bytes reader bytes first (length : int) =
   if length > 0 then Reader.push_back reader (Slice.make bytes ~first ~length)
 
-let read_exact reader n =
+let read_exact reader (n : int) =
   let buf = Bytes.create n in
   let rec loop off =
     if off >= n then buf
@@ -658,11 +658,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
       let masked = (v land mask) lsl shift in
       match base with
-      | BF_U8 -> write_byte enc masked
-      | BF_U16 Little -> write_uint16_le enc masked
-      | BF_U16 Big -> write_uint16_be enc masked
-      | BF_U32 Little -> write_int32_le enc (Int32.of_int masked)
-      | BF_U32 Big -> write_int32_be enc (Int32.of_int masked))
+      | U8 -> write_byte enc masked
+      | U16 Little -> write_uint16_le enc masked
+      | U16 Big -> write_uint16_be enc masked
+      | U32 Little -> write_int32_le enc (Int32.of_int masked)
+      | U32 Big -> write_int32_be enc (Int32.of_int masked))
   | Unit -> ()
   | All_bytes -> write_string enc v
   | All_zeros -> write_string enc v
@@ -756,19 +756,19 @@ let encode_bits buf off v width base bit_order =
   let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
   let masked = (v land mask) lsl shift in
   match base with
-  | BF_U8 ->
+  | U8 ->
       Bytes.set_uint8 buf off masked;
       off + 1
-  | BF_U16 Little ->
+  | U16 Little ->
       Bytes.set_uint16_le buf off masked;
       off + 2
-  | BF_U16 Big ->
+  | U16 Big ->
       Bytes.set_uint16_be buf off masked;
       off + 2
-  | BF_U32 Little ->
+  | U32 Little ->
       Bytes.set_int32_le buf off (Int32.of_int masked);
       off + 4
-  | BF_U32 Big ->
+  | U32 Big ->
       Bytes.set_int32_be buf off (Int32.of_int masked);
       off + 4
 

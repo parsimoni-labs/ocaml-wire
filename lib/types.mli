@@ -40,11 +40,11 @@ type param_input
 type param_output
 
 type ('a, 'k) param_handle = {
-  ph_name : string;
-  ph_typ : 'a typ;
-  ph_packed_typ : packed_typ;
-  ph_mutable : bool;
-  ph_cell : int ref;
+  name : string;
+  typ : 'a typ;
+  packed_typ : packed_typ;
+  mutable_ : bool;
+  cell : int ref;
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ
@@ -90,9 +90,9 @@ and _ expr =
 (** {1 Types} *)
 
 and bitfield_base =
-  | BF_U8
-  | BF_U16 of endian
-  | BF_U32 of endian  (** Base storage for bitfield extractions. *)
+  | U8
+  | U16 of endian
+  | U32 of endian  (** Base storage for bitfield extractions. *)
 
 and _ typ =
   | Uint8 : int typ  (** 8-bit unsigned. *)
@@ -232,8 +232,8 @@ and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
 (** Formal parameter. *)
 
 and action =
-  | On_success of action_stmt list
-  | On_act of action_stmt list  (** Action attached to a field. *)
+  | Success of action_stmt list
+  | Act of action_stmt list  (** Action attached to a field. *)
 
 and action_stmt =
   | Assign : ('a, param_output) param_handle * int expr -> action_stmt
