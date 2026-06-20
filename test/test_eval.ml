@@ -79,7 +79,7 @@ let test_expr_ref_fails () =
     (Failure
        "Eval.expr: unbound field x (cross-field references are only valid \
         inside a struct)") (fun () ->
-      ignore (Eval.expr Eval.empty (Types.Ref "x")))
+      ignore (Eval.expr Eval.empty (Types.ref "x")))
 
 let test_cast_u8 () =
   let v = Eval.expr Eval.empty (Types.Cast (`U8, Types.Int 0x1234)) in

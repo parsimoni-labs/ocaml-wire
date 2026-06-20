@@ -2,6 +2,10 @@
 
 ### Added
 
+- `Wire.Field.v` takes an optional `?self_int64`, and `Wire.Field.int64` /
+  `Wire.Expr.int64` build full-width 64-bit field constraints. This lets
+  schemas constrain domains such as signed-magnitude `uint64` values without
+  truncating the field through OCaml's native `int` (@samoht)
 - `Wire.Field.v` takes an optional `?doc` (read back with `Wire.Field.doc`):
   a free-text note, such as an RFC section, that the documentation projection
   renders as a `/* ... */` comment above the field in the generated 3D. A

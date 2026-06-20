@@ -225,6 +225,9 @@ module Expr : sig
       Open this module locally to build constraint and size expressions:
       [Expr.(Field.ref f + int 1)]. *)
 
+  val int64 : int64 -> int64 expr
+  (** Constant 64-bit integer expression. *)
+
   val ( + ) : int expr -> int expr -> int expr
   (** Addition. *)
 
@@ -264,17 +267,17 @@ module Expr : sig
   val ( <> ) : 'a expr -> 'a expr -> bool expr
   (** Inequality. *)
 
-  val ( < ) : int expr -> int expr -> bool expr
-  (** Less than. *)
+  val ( < ) : 'a expr -> 'a expr -> bool expr
+  (** Less than, on native-integer or 64-bit expressions. *)
 
-  val ( <= ) : int expr -> int expr -> bool expr
-  (** Less than or equal. *)
+  val ( <= ) : 'a expr -> 'a expr -> bool expr
+  (** Less than or equal, on native-integer or 64-bit expressions. *)
 
-  val ( > ) : int expr -> int expr -> bool expr
-  (** Greater than. *)
+  val ( > ) : 'a expr -> 'a expr -> bool expr
+  (** Greater than, on native-integer or 64-bit expressions. *)
 
-  val ( >= ) : int expr -> int expr -> bool expr
-  (** Greater than or equal. *)
+  val ( >= ) : 'a expr -> 'a expr -> bool expr
+  (** Greater than or equal, on native-integer or 64-bit expressions. *)
 
   val ( && ) : bool expr -> bool expr -> bool expr
   (** Boolean conjunction. *)
@@ -343,6 +346,7 @@ module Field : sig
     string ->
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
+    ?self_int64:(int64 expr -> bool expr) ->
     ?action:Action.t ->
     ?doc:string ->
     'a typ ->
@@ -352,7 +356,9 @@ module Field : sig
       comment on the field in the generated 3D. [?self_constraint] receives the
       field's own ref and returns a constraint over it; useful for proving a
       later size-expression safe (e.g. [self >= int 7] when a later field uses
-      [byte_slice ~size:(ref len - int 7)]).
+      [byte_slice ~size:(ref len - int 7)]). [?self_int64] is the same
+      convenience for full-width 64-bit constraints using {!Expr.int64} literals
+      and {!int64} field references.
 
       Use {!optional} / {!optional_or} / {!repeat} for optional and repeating
       payloads -- they only project to 3D as the top of a struct field, never as
@@ -362,6 +368,7 @@ module Field : sig
     string ->
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
+    ?self_int64:(int64 expr -> bool expr) ->
     ?action:Action.t ->
     present:bool expr ->
     'a typ ->
@@ -373,6 +380,7 @@ module Field : sig
     string ->
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
+    ?self_int64:(int64 expr -> bool expr) ->
     ?action:Action.t ->
     present:bool expr ->
     default:'a ->
@@ -385,6 +393,7 @@ module Field : sig
     string ->
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
+    ?self_int64:(int64 expr -> bool expr) ->
     ?action:Action.t ->
     size:int expr ->
     'a typ ->
@@ -401,6 +410,7 @@ module Field : sig
     string ->
     ?constraint_:bool expr ->
     ?self_constraint:(int expr -> bool expr) ->
+    ?self_int64:(int64 expr -> bool expr) ->
     ?action:Action.t ->
     seq:('a, 'seq) Types.seq_map ->
     size:int expr ->
@@ -415,6 +425,13 @@ module Field : sig
   (** [ref f] returns the expression referencing this field's underlying integer
       value. Works on any field whose wire type is or wraps an integer,
       including boolean fields created with {!bit}. *)
+
+  val int : 'a t -> int expr
+  (** [int f] returns this field as a native-integer expression. *)
+
+  val int64 : int64 t -> int64 expr
+  (** [int64 f] returns the expression referencing this field's full 64-bit
+      value, without truncating to OCaml's native integer range. *)
 
   val name : 'a t -> string
   (** Field name. *)

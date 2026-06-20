@@ -422,6 +422,17 @@ let test_3d_negative_literal_rejected () =
   Alcotest.(check bool)
     "negative literal rejected by projection" true (projects_or_raises codec)
 
+let test_3d_int64_literal_uses_unsigned_decimal () =
+  let f =
+    Field.v "a" uint64be ~self_int64:(fun self ->
+        Expr.(self > int64 Int64.min_int))
+  in
+  let codec = Codec.v "I64Lit" Fun.id Codec.[ f $ Fun.id ] in
+  let out3d = to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool)
+    "high-bit int64 literal prints unsigned" true
+    (contains ~sub:"9223372036854775808uL" out3d)
+
 let test_3d_field_pos_rejected () =
   (* EverParse has no [field_pos] keyword, so a projected expression using it is
      rejected at projection, not emitted as an undefined identifier. *)
@@ -970,6 +981,8 @@ let suite =
         test_3d_on_success_conditional_return;
       Alcotest.test_case "3d: negative literal rejected by projection" `Quick
         test_3d_negative_literal_rejected;
+      Alcotest.test_case "3d: int64 literal unsigned decimal" `Quick
+        test_3d_int64_literal_uses_unsigned_decimal;
       Alcotest.test_case "3d: field_pos rejected by projection" `Quick
         test_3d_field_pos_rejected;
     ] )
