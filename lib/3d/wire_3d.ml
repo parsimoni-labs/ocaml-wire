@@ -801,11 +801,13 @@ let emit_agree_main ppf =
   pr "  if (!fp) { perror(\"fopen\"); return 2; }";
   pr "  char name[256];";
   pr "  char params[4096];";
-  pr "  char hex[16384];";
-  pr "  uint8_t buf[8192];";
+  (* [hex] needs two chars per [buf] byte plus the NUL; one char short truncates
+     the corpus line and misparses the verdict as a false mismatch. *)
+  pr "  uint8_t buf[65536];";
+  pr "  char hex[2 * sizeof(buf) + 1];";
   pr "  long verdict, total = 0, mismatch = 0;";
   pr
-    "  while (fscanf(fp, \"%%255s %%4095s %%16383s %%ld\", name, params, hex, \
+    "  while (fscanf(fp, \"%%255s %%4095s %%131072s %%ld\", name, params, hex, \
      &verdict) == 4) {";
   pr "    uint32_t len = 0;";
   pr "    if (strcmp(hex, \"-\") != 0) {";

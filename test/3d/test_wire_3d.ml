@@ -238,6 +238,21 @@ let test_doc_differential_no_params () =
     differential_ok ~name:"plainspec" ~package:"plain-doc" ~count:100
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
+(* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
+   reader's hex buffer must hold the line, or it truncates and the verdict
+   misparses into a false mismatch. *)
+let diff_large_payload_codec =
+  let open Wire in
+  Codec.v "SharedMem"
+    (fun d -> d)
+    [ Codec.( $ ) (Field.v "data" (byte_array ~size:(int 8192))) (fun d -> d) ]
+
+let test_doc_differential_large_payload () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"sharedspec" ~package:"shared-doc" ~count:40
+      [ Wire_3d.pack diff_large_payload_codec ]
+
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
    the one test that catches every kind of name mismatch between what
@@ -1057,6 +1072,8 @@ let suite =
         test_doc_differential;
       Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick
         test_doc_differential_no_params;
+      Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
+        test_doc_differential_large_payload;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
