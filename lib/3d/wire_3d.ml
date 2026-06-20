@@ -723,49 +723,6 @@ let generate_corpus ?(count = 256) ppf codecs =
     codecs;
   Format.pp_print_flush ppf ()
 
-(* The wrapper EverParse generates exposes one
-   [<Base>Check<Codec>(params..., base, len)] helper per entrypoint, returning
-   [BOOLEAN] (accept/reject). Read each helper's name and its parameter C types
-   from the generated [<Base>Wrapper.h] -- in declaration order, which follows
-   the codec order -- rather than re-deriving EverParse's name normalization.
-   Returns [(check_name, param_c_types)] per codec, [param_c_types] being the
-   leading args before the trailing [uint8_t *base] and [uint32_t len]. *)
-let read_checks ~outdir base =
-  let path = Filename.concat outdir (base ^ "Wrapper.h") in
-  let prefix = "BOOLEAN " in
-  let plen = String.length prefix in
-  let ic = open_in path in
-  let acc = ref [] in
-  let arg_type a =
-    (* "UINT16BE max_len" -> "UINT16BE": the type is everything before the name. *)
-    match String.rindex_opt a ' ' with
-    | Some i -> String.trim (String.sub a 0 i)
-    | None -> a
-  in
-  (try
-     while true do
-       let line = String.trim (input_line ic) in
-       if String.length line >= plen && String.sub line 0 plen = prefix then
-         match (String.index_opt line '(', String.rindex_opt line ')') with
-         | Some lp, Some rp when rp > lp + 1 ->
-             let cname = String.sub line plen (lp - plen) in
-             let args =
-               String.sub line (lp + 1) (rp - lp - 1)
-               |> String.split_on_char ',' |> List.map String.trim
-             in
-             (* Drop the trailing [uint8_t *base] and [uint32_t len]. *)
-             let params =
-               match List.rev args with
-               | _len :: _base :: rest -> List.rev rest
-               | _ -> []
-             in
-             acc := (cname, List.map arg_type params) :: !acc
-         | _ -> ()
-     done
-   with End_of_file -> ());
-  close_in ic;
-  List.rev !acc
-
 let emit_agree_preamble ppf base ~has_params =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
   pr "/* Differential check: the EverParse validator must accept exactly the";
@@ -880,15 +837,25 @@ let emit_agree_main ppf =
   pr "  return mismatch == 0 ? 0 : 1;";
   pr "}"
 
+(* EverParse names each entrypoint wrapper [<Base>Check<Codec>] and gives it the
+   input parameters before the trailing [base, len], so both the helper name and
+   its parameter C types follow from the codec alone. Deriving them here keeps
+   [agree.c] pure OCaml (no reading of the generated [<Base>Wrapper.h]); a wrong
+   name would surface as a link error when the differential test compiles
+   [agree.c] against the real wrapper. *)
 let generate_agree ?name ~outdir ~package codecs =
   let base = doc_base ?name ~package () in
-  let checks = read_checks ~outdir base in
-  let names = List.map (fun (Pack c) -> (doc c).name) codecs in
   let triples =
-    if List.length names <> List.length checks then
-      Fmt.failwith "agree.c: %d codecs but %d Check helpers in %sWrapper.h"
-        (List.length names) (List.length checks) base
-    else List.map2 (fun n (check, ptypes) -> (n, check, ptypes)) names checks
+    List.map
+      (fun (Pack c) ->
+        let s = doc c in
+        let ptypes =
+          match s.source with
+          | Some st -> Raw.input_param_c_types st
+          | None -> []
+        in
+        (s.name, base ^ "Check" ^ s.name, ptypes))
+      codecs
   in
   let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
   let oc = open_out (Filename.concat outdir "agree.c") in
@@ -905,26 +872,26 @@ let generate_3d_doc ?name ~outdir ~package codecs =
     ~name:(doc_base ?name ~package ())
     (List.map (fun (Pack c) -> doc c) codecs)
 
-let generate_c_doc ?(quiet = true) ?name ~outdir ~package codecs =
+let generate_c_doc ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
-  if has_3d_exe () then begin
-    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ];
-    generate_agree ?name ~outdir ~package codecs
-  end
+  if has_3d_exe () then
+    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ]
   else
     failwith
       "3d.exe not found in PATH. Install EverParse to regenerate C files."
 
 let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
   generate_3d_doc ?name ~outdir ~package codecs;
-  generate_c_doc ~quiet ?name ~outdir ~package codecs
+  generate_c_doc ~quiet ?name ~outdir ~package ();
+  generate_agree ?name ~outdir ~package codecs
 
-(* The [.3d] regenerates on demand ([gen.exe 3d] is pure OCaml, so it is
-   [promote]), but the C is [fallback]: it is committed and only regenerated
-   when absent, so an ordinary [dune build] never invokes [3d.exe]. A codec
-   change therefore refreshes the [.3d] while the committed C goes stale -- the
-   runtest differential below is what catches that, since it regenerates the
-   corpus from the current codec and runs it against the committed validator. *)
+(* The [.3d] and [agree.c] are pure OCaml ([gen.exe 3d] / [gen.exe agree]), so
+   they regenerate on demand and never go stale. The C is [fallback]: it is
+   committed and only regenerated when absent, so an ordinary [dune build] never
+   invokes [3d.exe]. A codec change refreshes the [.3d] and [agree.c] while the
+   committed C goes stale -- the runtest differential below is what catches that,
+   since it regenerates the corpus and [agree.c] from the current codec and runs
+   them against the committed validator. *)
 let emit_doc_gen_rules ppf ~three_d ~c_files =
   Fmt.pf ppf
     "(rule\n\
@@ -935,9 +902,14 @@ let emit_doc_gen_rules ppf ~three_d ~c_files =
     \ (action\n\
     \  (run ./gen.exe 3d)))\n\n\
      (rule\n\
+    \ (targets agree.c)\n\
+    \ (deps gen.exe)\n\
+    \ (action\n\
+    \  (run ./gen.exe agree)))\n\n\
+     (rule\n\
     \ (alias 3d)\n\
     \ (mode fallback)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s agree.c)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s)\n\
     \ (deps gen.exe %s)\n\
     \ (action\n\
     \  (run ./gen.exe c)))\n\n"
@@ -1009,7 +981,8 @@ let main ?name ~mode ~package codecs =
   | `Doc -> (
       match argv with
       | [ _; "3d" ] -> generate_3d_doc ?name ~outdir:"." ~package codecs
-      | [ _; "c" ] -> generate_c_doc ?name ~outdir:"." ~package codecs
+      | [ _; "c" ] -> generate_c_doc ?name ~outdir:"." ~package ()
+      | [ _; "agree" ] -> generate_agree ?name ~outdir:"." ~package codecs
       | [ _; "dune" ] -> generate_dune_doc ?name ~outdir:"." ~package codecs
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_doc ?name ~outdir:"." ~package codecs)

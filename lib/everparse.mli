@@ -255,6 +255,12 @@ module Raw : sig
   (** Names of the input (non-mutable) parameters, in declaration order, which
       is the order the generated validator and its wrapper take them. *)
 
+  val input_param_c_types : struct_ -> string list
+  (** C type of each input (non-mutable) parameter, in declaration order, e.g.
+      [["uint8_t"; "uint16_t"]]. Matches the widths the generated validator
+      wrapper takes, so a caller can build the wrapper call without reading the
+      generated header. *)
+
   val struct_typ : struct_ -> unit Types.typ
   (** View a 3D struct as a wire type. *)
 

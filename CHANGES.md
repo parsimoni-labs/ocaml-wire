@@ -2,6 +2,14 @@
 
 ### Added
 
+- The doc pipeline's differential `agree.c` is now derived from the codecs
+  alone: it computes each validator's name and parameter types from the Wire
+  definitions instead of reading the EverParse-generated `<Name>Wrapper.h`. The
+  self-check therefore regenerates as pure OCaml, with no EverParse needed and
+  no chance of drifting from the codec, and its build rule is split out from the
+  committed C. `Wire.Everparse.Raw.input_param_c_types` exposes the per-parameter
+  C types this relies on (#167, @samoht)
+
 - `Wire.Expr.if_then_else cond t e` builds a conditional value expression (the
   3D `? :` ternary), so a size or constraint can depend on another field, e.g. a
   16-bit length where 0 means 65536: `if_then_else Expr.(len = int 0) (int
