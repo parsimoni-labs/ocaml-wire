@@ -1927,7 +1927,19 @@ let pp_enum_cases ppf cases =
       Fmt.pf ppf "@,%s = %d" cname value)
     cases
 
-let pp_casetype_cases ppf cases =
+let pp_casetype_cases : type k.
+    Format.formatter -> k typ -> decl_case list -> unit =
+ fun ppf tag cases ->
+  (* When the switch tag is an enum, EverParse requires each case label to be the
+     enum constant name, not the raw integer it stands for. *)
+  let enum_label k =
+    match tag with
+    | Enum { cases = ecases; _ } ->
+        List.find_map
+          (fun (n, v) -> if Int.equal v k then Some n else None)
+          ecases
+    | _ -> None
+  in
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
@@ -1936,8 +1948,14 @@ let pp_casetype_cases ppf cases =
         Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix
       in
       match tag_opt with
-      | Some e -> Fmt.pf ppf "@,case %a: %a;" pp_packed_expr e pp_body ()
-      | None -> Fmt.pf ppf "@,default: %a;" pp_body ())
+      | None -> Fmt.pf ppf "@,default: %a;" pp_body ()
+      | Some e -> (
+          let label =
+            match e with Pack_expr (Int k) -> enum_label k | _ -> None
+          in
+          match label with
+          | Some name -> Fmt.pf ppf "@,case %s: %a;" (escape_3d name) pp_body ()
+          | None -> Fmt.pf ppf "@,case %a: %a;" pp_packed_expr e pp_body ()))
     cases
 
 let pp_decl ppf = function
@@ -1968,7 +1986,7 @@ let pp_decl ppf = function
       Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
       pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
-  | Casetype_decl { name; params; tag = Pack_typ _; cases } ->
+  | Casetype_decl { name; params; tag = Pack_typ tag; cases } ->
       (* First param is the switch discriminant *)
       let disc_name =
         match params with p :: _ -> p.param_name | [] -> "tag"
@@ -1981,7 +1999,7 @@ let pp_decl ppf = function
       in
       Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name pp_params
         params disc_name;
-      pp_casetype_cases ppf cases;
+      pp_casetype_cases ppf tag cases;
       Fmt.pf ppf "@,}@]@,} %s;@,@," public_name
 
 let pp_module ppf m =

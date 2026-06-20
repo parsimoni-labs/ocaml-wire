@@ -167,6 +167,10 @@
 
 ### Fixed
 
+- A `Wire.casetype` that switches on a `Wire.enum` tag now projects to a 3D
+  schema EverParse accepts: each case label is emitted as the enum constant name
+  (`case InteriorIndex:`) instead of the raw integer (`case 2:`), which EverParse
+  rejected as not a member of the enumerated type (#TODO, @samoht)
 - `Wire.Expr.( = )` and `Wire.Expr.( <> )` are explicitly re-exported from the
   expression language, so equality in a local `Expr.(...)` open builds `Eq` /
   `Ne` constraints rather than depending on the surrounding equality binding
