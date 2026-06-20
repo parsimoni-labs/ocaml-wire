@@ -1,0 +1,82 @@
+/*++ Ethernet II (DIX) frame header; IEEE 802.3 --*/
+entrypoint
+typedef struct _Ethernet
+{
+   UINT8 DstMAC[:byte-size 6];
+   UINT8 SrcMAC[:byte-size 6];
+   UINT16BE EtherType;
+   UINT8 Payload[:byte-size 40];
+} Ethernet;
+
+/*++ IPv4 header, RFC 791 section 3.1 --*/
+entrypoint
+typedef struct _IPv4
+{
+   /* RFC 791 3.1: header length in 32-bit words */
+   UINT8 IHL : 4;
+   /* RFC 791 3.1: version, 4 for IPv4 */
+   UINT8 Version : 4;
+   /* RFC 3168: explicit congestion notification */
+   UINT8 ECN : 2;
+   /* RFC 2474: differentiated services codepoint */
+   UINT8 DSCP : 6;
+   /* RFC 791 3.1: total length in octets */
+   UINT16BE TotalLength;
+   /* RFC 791 3.1: fragment reassembly identifier */
+   UINT16BE Identification;
+   /* RFC 791 3.1: control flags (DF, MF) */
+   UINT16BE Flags : 3;
+   /* RFC 791 3.1: fragment offset in 8-octet units */
+   UINT16BE FragmentOffset : 13;
+   /* RFC 791 3.1: time to live */
+   UINT8 TTL;
+   /* RFC 791 3.1: next-level protocol (6 TCP, 17 UDP) */
+   UINT8 Protocol;
+   /* RFC 791 3.1: header checksum */
+   UINT16BE HeaderChecksum;
+   /* RFC 791 3.1: source address */
+   UINT32BE SrcAddr;
+   /* RFC 791 3.1: destination address */
+   UINT32BE DstAddr;
+   UINT8 Payload[:byte-size 20];
+} IPv4;
+
+/*++ TCP header, RFC 9293 section 3.1 --*/
+entrypoint
+typedef struct _TCP
+{
+   UINT16BE SrcPort;
+   UINT16BE DstPort;
+   UINT32BE SeqNum;
+   UINT32BE AckNum;
+   UINT16BE DataOffset : 4;
+   UINT16BE Reserved : 3;
+   UINT16BE NS : 1;
+   UINT16BE CWR : 1;
+   UINT16BE ECE : 1;
+   UINT16BE URG : 1;
+   UINT16BE ACK : 1;
+   UINT16BE PSH : 1;
+   UINT16BE RST : 1;
+   UINT16BE SYN : 1;
+   UINT16BE FIN : 1;
+   UINT16BE Window;
+   UINT16BE Checksum;
+   UINT16BE UrgentPtr;
+} TCP;
+
+/*++ UDP header, RFC 768 --*/
+entrypoint
+typedef struct _UDP
+{
+   /* RFC 768: source port */
+   UINT16BE SrcPort;
+   /* RFC 768: destination port */
+   UINT16BE DstPort;
+   /* RFC 768: octet length of header and data */
+   UINT16BE Length;
+   /* RFC 768: checksum over pseudo-header, header, and data */
+   UINT16BE Checksum;
+} UDP;
+
+
