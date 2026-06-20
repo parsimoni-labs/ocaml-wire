@@ -689,6 +689,14 @@ val enum : string -> (string * int) list -> int typ -> int typ
     useful for 3D projection where the name and cases appear in the generated
     [.3d] file. *)
 
+val enum_open : string -> (string * int) list -> int typ -> int typ
+(** [enum_open name cases base] is like {!enum} but for an open value set: the
+    named cases document the known values, but any value is accepted. Decode
+    does not reject unlisted values, and the field projects as its base scalar
+    with no membership refinement, so a protocol field that may carry unknown or
+    future codes is not wrongly rejected. The known codes are still emitted as a
+    3D enum declaration, so they remain documented in the generated [.3d]. *)
+
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** [variants name cases base] maps integer values to OCaml values via a named
     enumeration. Unlike {!enum}, this converts to proper OCaml values. *)

@@ -206,6 +206,27 @@ let test_3d_enum_membership () =
     "enum nested in a sub-codec bounds its value" true
     (contains ~sub:"(e == 1)" (to_3d (Everparse.schema arr).module_))
 
+let test_enum_open_accepts_and_no_refinement () =
+  (* An open enum names known values but accepts any: decode does not reject an
+     unlisted value, and the projection emits no membership refinement (the
+     field is its base scalar) yet still declares the named codes, so an open
+     value set is documented without being wrongly rejected. *)
+  let e = enum_open "Kind" [ ("A", 0); ("B", 2) ] uint8 in
+  let c = Codec.v "OpenK" (fun v -> v) Codec.[ (Field.v "k" e $ fun v -> v) ] in
+  let buf = Bytes.make 1 '\x05' in
+  (match Codec.decode c buf 0 with
+  | Ok v -> Alcotest.(check int) "open accepts unlisted value" 5 v
+  | Error _ -> Alcotest.fail "open enum wrongly rejected an unlisted value");
+  let out = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "no membership refinement" false (contains ~sub:"== 0" out);
+  Alcotest.(check bool)
+    "projects as base scalar" true
+    (contains ~sub:"UINT8 k" out);
+  Alcotest.(check bool)
+    "names survive as a 3D enum declaration" true
+    (contains ~sub:"enum Kind" out)
+
 let test_doc_drops_ffi_scaffolding () =
   (* The doc projection keeps the structure but not the FFI callbacks the
      codegen schema carries. *)
@@ -1001,6 +1022,8 @@ let suite =
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
+      Alcotest.test_case "generation: open enum accepts and has no refinement"
+        `Quick test_enum_open_accepts_and_no_refinement;
       Alcotest.test_case "3d: enum membership refinement" `Quick
         test_3d_enum_membership;
       Alcotest.test_case "doc: drops FFI scaffolding" `Quick

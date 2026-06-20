@@ -148,6 +148,9 @@ and _ typ =
       name : string;
       cases : (string * int) list;
       base : int typ;
+      closed : bool;
+          (** [true]: only the listed values are valid. [false]: open set, the
+              names document known values but any value is accepted. *)
     }
       -> int typ  (** Named enumeration. *)
   | Casetype : {
@@ -549,6 +552,11 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** Named enumeration over an integer base. *)
+
+val enum_open : string -> (string * int) list -> int typ -> int typ
+(** Open enumeration: the named codes are declared in the 3D projection for
+    documentation, but any value is accepted (no membership refinement, no
+    decode rejection). *)
 
 val variants : string -> (string * 'a) list -> int typ -> 'a typ
 (** Named variant mapping over an integer base. *)
