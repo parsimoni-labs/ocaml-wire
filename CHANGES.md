@@ -2,6 +2,15 @@
 
 ### Added
 
+- `Wire.enum_open name cases base` is an open enumeration: it names the known
+  values for documentation but accepts any value. Unlike `Wire.enum` /
+  `Wire.variants`, it does not reject an unlisted value (no decode
+  `Invalid_enum`, and the field projects as its base scalar with no membership
+  refinement), which is what an open value set (a protocol field that may carry
+  unknown or future codes) needs. The known codes are still emitted as a 3D
+  enum declaration, so they stay documented in the generated `.3d` (#166,
+  @samoht)
+
 - The doc pipeline's differential `agree.c` is now derived from the codecs
   alone: it computes each validator's name and parameter types from the Wire
   definitions instead of reading the EverParse-generated `<Name>Wrapper.h`. The

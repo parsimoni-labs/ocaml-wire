@@ -201,6 +201,10 @@ let enum_checker cases =
     if List.mem v valid then v
     else raise (Parse_error (Invalid_enum { value = v; valid }))
 
+(* An open enum ([closed = false]) accepts any base value: the names only
+   document known members, so decode does not reject the rest. *)
+let enum_check cases closed = if closed then enum_checker cases else fun v -> v
+
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
 let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
@@ -245,9 +249,9 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Byte_slice { size = Int n } ->
       fun buf base -> Slice.make buf ~first:(base + field_off) ~length:n
   | Where { inner; _ } -> build_field_reader inner field_off
-  | Enum { base; cases; _ } ->
+  | Enum { base; cases; closed; _ } ->
       let read = build_field_reader base field_off in
-      let check = enum_checker cases in
+      let check = enum_check cases closed in
       fun buf base -> check (read buf base)
   | Map { inner; decode; _ } ->
       let read = build_field_reader inner field_off in
@@ -337,8 +341,8 @@ let rec build_populate : type a.
       fun slots buf base ->
         set_int_slot slots idx (Bytes.get_int64_be buf base |> Int64.to_int)
   | Where { inner; _ } -> build_populate inner idx reader
-  | Enum { base; cases; _ } ->
-      let check = enum_checker cases in
+  | Enum { base; cases; closed; _ } ->
+      let check = enum_check cases closed in
       build_populate base idx (fun buf b -> check (reader buf b))
   | Map { inner; encode; _ } ->
       build_populate inner idx (fun buf base -> encode (reader buf base))
@@ -1203,7 +1207,8 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Codec { codec_decode; _ } -> codec_decode buf off
   | Map { inner; decode; _ } -> decode (read_elem inner buf off)
   | Where { inner; _ } -> read_elem inner buf off
-  | Enum { base; cases; _ } -> enum_checker cases (read_elem base buf off)
+  | Enum { base; cases; closed; _ } ->
+      enum_check cases closed (read_elem base buf off)
   | Casetype { tag; cases; _ } ->
       let tag_val = read_elem tag buf off in
       read_case_body cases tag_val buf (off + tag_byte_size tag)
@@ -2072,12 +2077,12 @@ let rec compile_field : type a r.
  fun ctx fld ->
   match fld.typ with
   | Map { inner; decode; encode; _ } -> compile_map ctx fld inner decode encode
-  | Enum { base; cases; _ } ->
+  | Enum { base; cases; closed; _ } ->
       (* Compile as the base integer, then validate the decoded value is one of
          the named cases. [compile_field] would otherwise strip the cases and
          accept any base value, unlike the EverParse validator. *)
       let cf = compile_field ctx { fld with typ = base } in
-      let check = enum_checker cases in
+      let check = enum_check cases closed in
       {
         cf with
         raw_reader = (fun buf off -> check (cf.raw_reader buf off));
@@ -3168,9 +3173,9 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
         let sz = size_fn buf base in
         Bytes.sub_string buf (base + fo) sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
-  | Enum { base; cases; _ }, _ ->
+  | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
-      let check = enum_checker cases in
+      let check = enum_check cases closed in
       fun buf base -> check (read buf base)
   | Map { inner; decode; _ }, _ ->
       let read = build_staged_reader inner access in

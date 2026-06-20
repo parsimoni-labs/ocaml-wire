@@ -116,6 +116,10 @@ and _ typ =
       name : string;
       cases : (string * int) list;
       base : int typ;
+      closed : bool;
+          (* [true]: only the listed values are valid (decode rejects others, the
+             3D projection emits a membership refinement). [false]: an open set,
+             the names document known values but any value is accepted. *)
     }
       -> int typ
   | Casetype : {
@@ -616,7 +620,8 @@ let nested_at_most ~size elem =
   reject_bitfield_element ~combinator:"nested_at_most" elem;
   Single_elem { size; elem; at_most = true }
 
-let enum name cases base = Enum { name; cases; base }
+let enum name cases base = Enum { name; cases; base; closed = true }
+let enum_open name cases base = Enum { name; cases; base; closed = false }
 
 let fail_parse_error fmt =
   Fmt.kstr (fun s -> raise (Parse_error (Constraint_failed s))) fmt
@@ -863,8 +868,13 @@ let enum_decls (s : struct_) : decl list =
   List.iter
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
-        | Enum { name; cases; base }
+        | Enum { name; cases; base; _ }
           when (not (Hashtbl.mem seen name)) && not (is_bits base) ->
+            (* Both open and closed enums declare a 3D enum type so the named
+               codes survive in the generated .3d. A closed enum additionally
+               constrains its field with a membership refinement; an open enum
+               leaves the field as its base scalar (any value accepted) while
+               still documenting the known codes through the declaration. *)
             Hashtbl.add seen name ();
             decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
         | Map { inner; _ } -> extract inner
@@ -1578,7 +1588,10 @@ let rec index_bound_of : type a. a typ -> int option = function
    named cases, exactly as the OCaml decoder does (a bare base value otherwise
    slips through C while [Codec.decode] raises [Invalid_enum]). *)
 let rec enum_cases_of : type a. a typ -> int list option = function
-  | Enum { cases; _ } -> Some (List.map snd cases)
+  (* Only a closed enum bounds its value set; an open enum accepts any value, so
+     it emits no membership refinement. *)
+  | Enum { cases; closed = true; _ } -> Some (List.map snd cases)
+  | Enum { closed = false; _ } -> None
   | Map { inner; _ } -> enum_cases_of inner
   | Where { inner; _ } -> enum_cases_of inner
   | Apply { typ; _ } -> enum_cases_of typ
@@ -1716,6 +1729,9 @@ let render_enum_as_type = Stdlib.ref false
    bitfield with no enum declaration to reference. *)
 let rec enum_type_name : type a. a typ -> string option = function
   | Enum { base = Bits _; _ } -> None
+  (* An open enum has no 3D enum type to name (it projects as its base), so the
+     doc projection types the field as the base scalar, not the enum. *)
+  | Enum { closed = false; _ } -> None
   | Enum { name; _ } -> Some name
   | Map { inner; _ } -> enum_type_name inner
   | Where { inner; _ } -> enum_type_name inner
