@@ -11,7 +11,7 @@ homepage: "https://github.com/parsimoni-labs/ocaml-wire"
 bug-reports: "https://github.com/parsimoni-labs/ocaml-wire/issues"
 depends: [
   "dune" {>= "3.21"}
-  "ocaml" {>= "5.1"}
+  "ocaml" {>= "5.2"}
   "bytesrw" {>= "0.1"}
   "eio" {>= "1.0"}
   "fmt" {>= "0.9"}
