@@ -716,6 +716,15 @@ module Raw = struct
       (fun (p : Types.param) -> if p.mutable_ then None else Some p.param_name)
       s.params
 
+  let input_param_c_types (s : Types.struct_) =
+    List.filter_map
+      (fun (p : Types.param) ->
+        if p.mutable_ then None
+        else
+          let (Types.Pack_typ t) = p.param_typ in
+          Some (Types.c_type_of t))
+      s.params
+
   let struct_typ = Types.struct_typ
   let param = Types.param
   let mutable_param = Types.mutable_param
