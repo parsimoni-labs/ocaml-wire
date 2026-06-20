@@ -2,6 +2,12 @@
 
 ### Added
 
+- `Wire.Expr.if_then_else cond t e` builds a conditional value expression (the
+  3D `? :` ternary), so a size or constraint can depend on another field, e.g. a
+  16-bit length where 0 means 65536: `if_then_else Expr.(len = int 0) (int
+  65536) len`. The underlying constructor was previously reachable only through
+  the wrapped internal module (#164, @samoht)
+
 - The doc pipeline's differential harness now covers parameterized codecs: the
   corpus oracle binds each codec's `Param.input` values and the generated
   `agree.c` passes the same values to the EverParse validator, so a
