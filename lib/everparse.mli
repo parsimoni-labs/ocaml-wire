@@ -251,6 +251,10 @@ module Raw : sig
   val struct_params : struct_ -> Types.param list
   (** Formal parameters of a struct. *)
 
+  val input_param_names : struct_ -> string list
+  (** Names of the input (non-mutable) parameters, in declaration order, which
+      is the order the generated validator and its wrapper take them. *)
+
   val struct_typ : struct_ -> unit Types.typ
   (** View a 3D struct as a wire type. *)
 

@@ -175,6 +175,19 @@ let diff_bits_codec =
     (fun a b -> (a, b))
     [ Codec.( $ ) fa fst; Codec.( $ ) fb snd ]
 
+(* A parameterized codec: the harness must bind the input param in the OCaml
+   oracle and pass the same value to the EverParse validator, or a length-bound
+   frame can never be checked (the blocker for CCSDS TC/AOS/TM/USLP). *)
+let diff_param_codec =
+  let open Wire in
+  let max_len = Param.input "max_len" uint8 in
+  let f_length = Field.v "Length" uint8 in
+  let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_length)) in
+  Codec.v "Bounded"
+    ~where:Expr.(Field.ref f_length <= Param.expr max_len)
+    (fun len data -> (len, data))
+    [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
+
 let test_doc_differential () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else begin
@@ -184,6 +197,7 @@ let test_doc_differential () =
         Wire_3d.pack diff_enum_codec;
         Wire_3d.pack diff_range_codec;
         Wire_3d.pack diff_bits_codec;
+        Wire_3d.pack diff_param_codec;
       ]
     in
     Wire_3d.generate_doc ~outdir:tmpdir ~name:"protospec" ~package:"demo-doc"
@@ -194,10 +208,11 @@ let test_doc_differential () =
     close_out oc;
     let cmd =
       Fmt.str
-        "cd %s && cc %s -c Protospec.c ProtospecWrapper.c && ar rcs \
-         libprotospec.a Protospec.o ProtospecWrapper.o && cc %s agree.c \
+        "cd %s && cc %s %s -c Protospec.c ProtospecWrapper.c && ar rcs \
+         libprotospec.a Protospec.o ProtospecWrapper.o && cc %s %s agree.c \
          libprotospec.a -o agree && ./agree corpus 2>&1"
-        tmpdir Wire_3d.strict_cc_flags Wire_3d.strict_cc_flags
+        tmpdir Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+        Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
     in
     let ic = Unix.open_process_in cmd in
     let output = In_channel.input_all ic in

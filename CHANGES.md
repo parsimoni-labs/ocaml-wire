@@ -2,6 +2,13 @@
 
 ### Added
 
+- The doc pipeline's differential harness now covers parameterized codecs: the
+  corpus oracle binds each codec's `Param.input` values and the generated
+  `agree.c` passes the same values to the EverParse validator, so a
+  length-bound or otherwise parameter-dependent frame (e.g. a CCSDS TC / AOS /
+  TM / USLP layout) is checked end to end rather than skipped. `Wire.Param`
+  gains `bind_by_name`, which binds an input parameter by name without its typed
+  handle (#163, @samoht)
 - `Wire.Field.v` takes an optional `?self_int64`, and `Wire.Field.int64` /
   `Wire.Expr.int64` build full-width 64-bit field constraints. This lets
   schemas constrain domains such as signed-magnitude `uint64` values without

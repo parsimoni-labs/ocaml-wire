@@ -187,3 +187,9 @@ val strict_cc_flags : string
 (** The strict-C11 [cc] flags the generated dune rule compiles the EverParse C
     with (and the e2e test mirrors), so the generated validators are checked
     under the same standard a downstream caller would use. *)
+
+val everparse_type_defines : string
+(** [everparse_type_defines] are the preprocessor [-D] flags mapping each 3D
+    integer type ([UINT16BE], ...) to its host-order C type, needed to compile
+    the wrapper of a parameterized validator (whose parameters EverParse types
+    with the 3D names). Harmless for non-parameterized wrappers. *)

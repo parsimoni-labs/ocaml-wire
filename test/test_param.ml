@@ -145,6 +145,37 @@ let test_where_clause_fail () =
   | Error (Constraint_failed "where clause") -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
+let test_bind_by_name () =
+  (* [bind_by_name] binds an input param by name, without the typed handle, and
+     drives the where clause exactly as the typed [bind] does. Used by the
+     differential harness, which has the codec but not the param handles. *)
+  let max_val = Param.input "max_val" uint16be in
+  let f_value = Field.v "value" uint16be in
+  let cf_value = Field.v "value" uint16be in
+  let c =
+    Codec.v "Bounded"
+      ~where:Expr.(Field.ref f_value <= Param.expr max_val)
+      (fun value -> { bv_value = value })
+      Codec.[ (cf_value $ fun r -> r.bv_value) ]
+  in
+  let buf = Bytes.of_string "\x00\x32" in
+  (* max_val=100 (>= 50): accepts *)
+  let env = Codec.env c |> Param.bind_by_name "max_val" 100 in
+  Alcotest.(check int)
+    "value" 50 (decode_ok (Codec.decode ~env c buf 0)).bv_value;
+  (* max_val=10 (< 50): the where clause fails *)
+  let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
+  (match Codec.decode ~env c buf 0 with
+  | Ok _ -> Alcotest.fail "expected where failure"
+  | Error (Constraint_failed "where clause") -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e);
+  (* an unreferenced name is a no-op, not an error *)
+  let env =
+    Codec.env c |> Param.bind_by_name "nope" 7 |> Param.bind max_val 100
+  in
+  Alcotest.(check int)
+    "ignores unknown name" 50 (decode_ok (Codec.decode ~env c buf 0)).bv_value
+
 (* -- Mixed input + output params (via Codec) -- *)
 
 type mixed_record = { a : int; b : int }
@@ -341,6 +372,7 @@ let suite =
       (* where clause *)
       Alcotest.test_case "where clause pass" `Quick test_where_clause_pass;
       Alcotest.test_case "where clause fail" `Quick test_where_clause_fail;
+      Alcotest.test_case "bind_by_name" `Quick test_bind_by_name;
       (* mixed *)
       Alcotest.test_case "mixed input + output" `Quick test_mixed_params;
       (* codec *)

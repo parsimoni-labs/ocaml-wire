@@ -710,6 +710,12 @@ module Raw = struct
 
   let field_kinds = Types.field_kinds
   let struct_params (s : Types.struct_) = s.params
+
+  let input_param_names (s : Types.struct_) =
+    List.filter_map
+      (fun (p : Types.param) -> if p.mutable_ then None else Some p.param_name)
+      s.params
+
   let struct_typ = Types.struct_typ
   let param = Types.param
   let mutable_param = Types.mutable_param

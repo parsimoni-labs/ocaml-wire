@@ -34,6 +34,12 @@ type env = Types.param_env
 val bind : ('a, input) t -> 'a -> env -> env
 (** [bind p v env] returns an environment with input [p] set to [v]. *)
 
+val bind_by_name : string -> int -> env -> env
+(** [bind_by_name name v env] binds the input parameter called [name] to the
+    integer value [v] without needing its typed handle, for tooling that has the
+    codec but not the {!t} handles (e.g. the differential harness binding params
+    generically). A no-op if the codec does not reference [name]. *)
+
 val get : env -> ('a, 'k) t -> 'a
 (** [get env p] reads the current value of param [p] from [env]. For output
     params, call after {!Codec.decode}. *)
