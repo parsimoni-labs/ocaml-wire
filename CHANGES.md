@@ -218,6 +218,13 @@
   `.3d` did not compile while OCaml decode silently ignored the constraint. A
   `where` is supported as a top-level field refinement; move the constraint onto
   the field itself or a codec `~where` (#173, @samoht)
+- The doc pipeline's differential self-check (`agree.c`) now links for a codec
+  whose name has interior consecutive capitals. EverParse normalizes such a name
+  in the validator symbol (`SpaceOSFrame -> SpaceOsframe`), but the harness built
+  the symbol from the raw name, so the generated check called an undeclared
+  function. The name now goes through the same normalization, which also collapses
+  a consecutive-capital run anywhere in a name, not only at the start (#171,
+  @samoht)
 - The doc pipeline's differential self-check (`agree.c`) no longer false-reports
   a mismatch for a codec with a large payload. The generated reader held each
   corpus line in a buffer one char short of two hex digits per input byte, so an

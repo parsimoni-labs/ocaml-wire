@@ -5,19 +5,33 @@ open Wire.Everparse
 let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
 
 (* Apply EverParse's normalization to a single identifier segment (no
-   underscores): if the segment begins with two or more uppercase letters,
-   lowercase the whole segment and capitalize the first letter ([SSID ->
-   Ssid], [TMFrame -> Tmframe]); otherwise leave it alone. *)
+   underscores): every run of two or more consecutive uppercase letters keeps
+   its first letter and lowercases the rest, wherever it occurs in the segment
+   ([SSID -> Ssid], [TMFrame -> Tmframe], [SpaceOSFrame -> SpaceOsframe]); a lone
+   uppercase letter (a camelCase word boundary) is left alone. *)
 let normalize_segment seg =
   let len = String.length seg in
-  let rec count_upper i =
-    if i < len && is_upper seg.[i] then count_upper (i + 1) else i
-  in
-  if len > 0 && count_upper 0 >= 2 then
-    String.init len (fun i ->
-        let c = Char.lowercase_ascii seg.[i] in
-        if i = 0 then Char.uppercase_ascii c else c)
-  else seg
+  let b = Buffer.create len in
+  let i = ref 0 in
+  while !i < len do
+    if is_upper seg.[!i] then begin
+      let j = ref !i in
+      while !j < len && is_upper seg.[!j] do
+        incr j
+      done;
+      Buffer.add_char b seg.[!i];
+      if !j - !i >= 2 then
+        for k = !i + 1 to !j - 1 do
+          Buffer.add_char b (Char.lowercase_ascii seg.[k])
+        done;
+      i := !j
+    end
+    else begin
+      Buffer.add_char b seg.[!i];
+      incr i
+    end
+  done;
+  Buffer.contents b
 
 (* EverParse strips underscores when generating C identifiers and
    CamelCases each segment. [EP_Header -> EpHeader],
@@ -858,7 +872,11 @@ let generate_agree ?name ~outdir ~package codecs =
           | Some st -> Raw.input_param_c_types st
           | None -> []
         in
-        (s.name, base ^ "Check" ^ s.name, ptypes))
+        (* EverParse normalizes the codec name in the wrapper symbol (a run of
+           consecutive caps keeps only its first letter: [SpaceOSFrame ->
+           SpaceOsframe]), so run it through [everparse_name] or the call links to
+           an undeclared function. *)
+        (s.name, base ^ "Check" ^ everparse_name s.name, ptypes))
       codecs
   in
   let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
