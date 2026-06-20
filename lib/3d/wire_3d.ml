@@ -555,7 +555,9 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
     \  (run ./gen.exe 3d)))\n\n\
      (rule\n\
     \ (alias 3d)\n\
-    \ (mode fallback)\n\
+    \ (enabled_if\n\
+    \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
+    \ (mode promote)\n\
     \ (targets EverParse.h EverParseEndianness.h %s test.c)\n\
     \ (deps gen.exe %s)\n\
     \ (action\n\
@@ -886,12 +888,14 @@ let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
   generate_agree ?name ~outdir ~package codecs
 
 (* The [.3d] and [agree.c] are pure OCaml ([gen.exe 3d] / [gen.exe agree]), so
-   they regenerate on demand and never go stale. The C is [fallback]: it is
-   committed and only regenerated when absent, so an ordinary [dune build] never
-   invokes [3d.exe]. A codec change refreshes the [.3d] and [agree.c] while the
-   committed C goes stale -- the runtest differential below is what catches that,
-   since it regenerates the corpus and [agree.c] from the current codec and runs
-   them against the committed validator. *)
+   they regenerate on demand and never go stale. The C needs [3d.exe], so its
+   rule exists only under [BUILD_EVERPARSE=1] ([mode promote] writes it back into
+   the tree); a plain [dune build] uses the committed C and never invokes
+   [3d.exe], and fails loudly if the C was never committed rather than silently
+   shelling out. A codec change refreshes the [.3d] and [agree.c] while the
+   committed C goes stale -- the runtest differential below catches that, since
+   it regenerates the corpus and [agree.c] from the current codec and runs them
+   against the committed validator. *)
 let emit_doc_gen_rules ppf ~three_d ~c_files =
   Fmt.pf ppf
     "(rule\n\
@@ -908,7 +912,9 @@ let emit_doc_gen_rules ppf ~three_d ~c_files =
     \  (run ./gen.exe agree)))\n\n\
      (rule\n\
     \ (alias 3d)\n\
-    \ (mode fallback)\n\
+    \ (enabled_if\n\
+    \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
+    \ (mode promote)\n\
     \ (targets EverParse.h EverParseEndianness.h %s)\n\
     \ (deps gen.exe %s)\n\
     \ (action\n\

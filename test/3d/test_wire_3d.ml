@@ -109,6 +109,11 @@ let test_generate_dune_doc () =
   Alcotest.(check bool)
     "runtest runs the differential check" true (has "./agree corpus");
   Alcotest.(check bool) "corpus oracle" true (has "./gen.exe corpus");
+  Alcotest.(check bool)
+    "C rule gated behind BUILD_EVERPARSE, not fallback" true
+    (has "%{env:BUILD_EVERPARSE=}");
+  Alcotest.(check bool)
+    "C rule never auto-regenerates" false (has "mode fallback");
   Alcotest.(check bool) "no FFI plug" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
@@ -792,7 +797,13 @@ let test_projection_filenames () =
     (contains_exact "Rpmsg_endpoint_info_Fields.c");
   Alcotest.(check bool)
     "raw schema name not used as filename" false
-    (contains_exact "rpmsg_endpoint_info.h")
+    (contains_exact "rpmsg_endpoint_info.h");
+  Alcotest.(check bool)
+    "C rule gated behind BUILD_EVERPARSE, not fallback" true
+    (contains_exact "%{env:BUILD_EVERPARSE=}");
+  Alcotest.(check bool)
+    "C rule never auto-regenerates" false
+    (contains_exact "mode fallback")
 
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 
