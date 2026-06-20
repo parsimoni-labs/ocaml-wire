@@ -535,6 +535,15 @@ let strict_cc_flags =
   "-std=c11 -D_DEFAULT_SOURCE -Wall -Werror -Wpedantic -Wstrict-prototypes \
    -Wmissing-prototypes -Wshadow -Wcast-qual"
 
+(* EverParse's generated wrapper types a parameterized validator's parameters
+   with the 3D type name (e.g. [UINT16BE max_len]) but defines none of those
+   names (the validator itself uses [uint16_t]). Map each 3D integer type to its
+   host-order C type so the wrapper compiles. Harmless for non-parameterized
+   wrappers, which never reference them. *)
+let everparse_type_defines =
+  "-DUINT8=uint8_t -DUINT16=uint16_t -DUINT16BE=uint16_t -DUINT32=uint32_t \
+   -DUINT32BE=uint32_t -DUINT64=uint64_t -DUINT64BE=uint64_t"
+
 let emit_gen_rules ppf three_d_files c_files ctx_files =
   Fmt.pf ppf
     "(rule\n\
@@ -645,14 +654,25 @@ let hex_of_bytes b =
 (* The accept/reject decision the validator must reproduce: the OCaml codec
    both decodes (structure plus constraints) and validates (constraints and
    where-clauses) the bytes. *)
-let codec_accepts c buf =
-  match Wire.Codec.decode c buf 0 with
+let codec_accepts ?env c buf =
+  match Wire.Codec.decode ?env c buf 0 with
   | Ok _ -> (
       try
-        Wire.Codec.validate c buf 0;
+        Wire.Codec.validate ?env c buf 0;
         true
       with Wire.Validation_error _ -> false)
   | Error _ -> false
+
+(* A small param value, biased around the codec's footprint so a parameter that
+   bounds a field size (e.g. a max length) straddles the accept/reject boundary
+   rather than always accepting or always rejecting. *)
+let fuzz_param_value rng center =
+  match Random.State.int rng 6 with
+  | 0 -> 0
+  | 1 -> center
+  | 2 -> center + 1
+  | 3 -> Random.State.int rng (max 1 ((2 * center) + 4))
+  | _ -> Random.State.int rng (max 1 (center + 1))
 
 (* Structurally-biased lengths: cluster around the codec's minimum size so the
    corpus straddles the accept/reject boundary. The exact size and a little
@@ -670,47 +690,88 @@ let generate_corpus ?(count = 256) ppf codecs =
   let rng = Random.State.make [| 0x5eed51 |] in
   List.iter
     (fun (Pack c) ->
-      let name = (doc c).name in
+      let s = doc c in
+      let name = s.name in
+      let pnames =
+        match s.source with Some st -> Raw.input_param_names st | None -> []
+      in
       let center = Wire.Codec.min_wire_size c in
       for _ = 1 to count do
         let len = fuzz_length rng center in
         let b = Bytes.init len (fun _ -> Char.chr (Random.State.int rng 256)) in
+        let pvals = List.map (fun _ -> fuzz_param_value rng center) pnames in
+        (* Seed the validator env with the same param values the C wrapper will
+           be given, so the two agree on what they validated against. *)
+        let env =
+          match pnames with
+          | [] -> None
+          | _ ->
+              Some
+                (List.fold_left2
+                   (fun e n v -> Wire.Param.bind_by_name n v e)
+                   (Wire.Codec.env c) pnames pvals)
+        in
+        let pfield =
+          match pvals with
+          | [] -> "-"
+          | _ -> String.concat "," (List.map string_of_int pvals)
+        in
         let hex = if len = 0 then "-" else hex_of_bytes b in
-        Fmt.pf ppf "%s %s %d@\n" name hex (if codec_accepts c b then 1 else 0)
+        Fmt.pf ppf "%s %s %s %d@\n" name pfield hex
+          (if codec_accepts ?env c b then 1 else 0)
       done)
     codecs;
   Format.pp_print_flush ppf ()
 
-(* The wrapper EverParse generates exposes one [<Base>Check<Codec>(base, len)]
-   helper per entrypoint, returning [BOOLEAN] (accept/reject). Read their names
+(* The wrapper EverParse generates exposes one
+   [<Base>Check<Codec>(params..., base, len)] helper per entrypoint, returning
+   [BOOLEAN] (accept/reject). Read each helper's name and its parameter C types
    from the generated [<Base>Wrapper.h] -- in declaration order, which follows
-   the codec order -- rather than re-deriving EverParse's name normalization. *)
-let read_check_names ~outdir base =
+   the codec order -- rather than re-deriving EverParse's name normalization.
+   Returns [(check_name, param_c_types)] per codec, [param_c_types] being the
+   leading args before the trailing [uint8_t *base] and [uint32_t len]. *)
+let read_checks ~outdir base =
   let path = Filename.concat outdir (base ^ "Wrapper.h") in
   let prefix = "BOOLEAN " in
   let plen = String.length prefix in
   let ic = open_in path in
-  let names = ref [] in
+  let acc = ref [] in
+  let arg_type a =
+    (* "UINT16BE max_len" -> "UINT16BE": the type is everything before the name. *)
+    match String.rindex_opt a ' ' with
+    | Some i -> String.trim (String.sub a 0 i)
+    | None -> a
+  in
   (try
      while true do
        let line = String.trim (input_line ic) in
-       match String.index_opt line '(' with
-       | Some lp
-         when String.length line >= plen
-              && String.sub line 0 plen = prefix
-              && lp > plen ->
-           names := String.sub line plen (lp - plen) :: !names
-       | _ -> ()
+       if String.length line >= plen && String.sub line 0 plen = prefix then
+         match (String.index_opt line '(', String.rindex_opt line ')') with
+         | Some lp, Some rp when rp > lp + 1 ->
+             let cname = String.sub line plen (lp - plen) in
+             let args =
+               String.sub line (lp + 1) (rp - lp - 1)
+               |> String.split_on_char ',' |> List.map String.trim
+             in
+             (* Drop the trailing [uint8_t *base] and [uint32_t len]. *)
+             let params =
+               match List.rev args with
+               | _len :: _base :: rest -> List.rev rest
+               | _ -> []
+             in
+             acc := (cname, List.map arg_type params) :: !acc
+         | _ -> ()
      done
    with End_of_file -> ());
   close_in ic;
-  List.rev !names
+  List.rev !acc
 
-let emit_agree_dispatch ppf base pairs =
+let emit_agree_preamble ppf base =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
   pr "/* Differential check: the EverParse validator must accept exactly the";
-  pr "   inputs the OCaml codec accepts. Reads `<codec> <hex> <verdict>` lines";
-  pr "   from gen.exe's corpus and exits nonzero on any disagreement. */";
+  pr "   inputs the OCaml codec accepts. Reads `<codec> <params> <hex>";
+  pr "   <verdict>` lines from gen.exe's corpus, passing each codec's";
+  pr "   parameters to its validator, and exits nonzero on any disagreement. */";
   pr "#include <stdio.h>";
   pr "#include <stdlib.h>";
   pr "#include <string.h>";
@@ -724,12 +785,43 @@ let emit_agree_dispatch ppf base pairs =
   pr "void %sEverParseError(const char *s, const char *f, const char *r)" base;
   pr "{ (void) s; (void) f; (void) r; }";
   pr "";
-  pr "static int run(const char *name, uint8_t *base, uint32_t len) {";
+  (* Parse the corpus's comma-separated parameter values (or [-] for none). *)
+  pr "static void parse_params(const char *s, unsigned long *out, int n) {";
+  pr "  const char *p = s;";
+  pr "  for (int i = 0; i < n; i++) {";
+  pr "    out[i] = strtoul(p, NULL, 10);";
+  pr "    const char *c = strchr(p, ',');";
+  pr "    if (c == NULL) break;";
+  pr "    p = c + 1;";
+  pr "  }";
+  pr "}"
+
+let emit_agree_run ppf triples =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "";
+  pr
+    "static int run(const char *name, const char *params, uint8_t *base, \
+     uint32_t len) {";
+  pr "  (void) params;";
   List.iter
-    (fun (cname, check) ->
-      pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;" cname
-        check)
-    pairs;
+    (fun (cname, check, ptypes) ->
+      let n = List.length ptypes in
+      if n = 0 then
+        pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;"
+          cname check
+      else begin
+        let args =
+          ptypes
+          |> List.mapi (fun i t -> Fmt.str "(%s) p[%d]" t i)
+          |> String.concat ", "
+        in
+        pr "  if (strcmp(name, \"%s\") == 0) {" cname;
+        pr "    unsigned long p[%d];" n;
+        pr "    parse_params(params, p, %d);" n;
+        pr "    return %s(%s, base, len) ? 1 : 0;" check args;
+        pr "  }"
+      end)
+    triples;
   pr "  fprintf(stderr, \"agree: unknown codec '%%s'\\n\", name);";
   pr "  exit(3);";
   pr "}"
@@ -744,11 +836,13 @@ let emit_agree_main ppf =
   pr "  FILE *fp = fopen(argv[1], \"r\");";
   pr "  if (!fp) { perror(\"fopen\"); return 2; }";
   pr "  char name[256];";
+  pr "  char params[4096];";
   pr "  char hex[16384];";
   pr "  uint8_t buf[8192];";
   pr "  long verdict, total = 0, mismatch = 0;";
   pr
-    "  while (fscanf(fp, \"%%255s %%16383s %%ld\", name, hex, &verdict) == 3) {";
+    "  while (fscanf(fp, \"%%255s %%4095s %%16383s %%ld\", name, params, hex, \
+     &verdict) == 4) {";
   pr "    uint32_t len = 0;";
   pr "    if (strcmp(hex, \"-\") != 0) {";
   pr "      size_t hl = strlen(hex);";
@@ -764,7 +858,7 @@ let emit_agree_main ppf =
   pr "        buf[i] = (uint8_t) b;";
   pr "      }";
   pr "    }";
-  pr "    int accept = run(name, buf, len);";
+  pr "    int accept = run(name, params, buf, len);";
   pr "    total++;";
   pr "    if (accept != (int) verdict) {";
   pr "      mismatch++;";
@@ -783,17 +877,18 @@ let emit_agree_main ppf =
 
 let generate_agree ?name ~outdir ~package codecs =
   let base = doc_base ?name ~package () in
-  let checks = read_check_names ~outdir base in
+  let checks = read_checks ~outdir base in
   let names = List.map (fun (Pack c) -> (doc c).name) codecs in
-  let pairs =
+  let triples =
     if List.length names <> List.length checks then
       Fmt.failwith "agree.c: %d codecs but %d Check helpers in %sWrapper.h"
         (List.length names) (List.length checks) base
-    else List.combine names checks
+    else List.map2 (fun n (check, ptypes) -> (n, check, ptypes)) names checks
   in
   let oc = open_out (Filename.concat outdir "agree.c") in
   let ppf = Format.formatter_of_out_channel oc in
-  emit_agree_dispatch ppf base pairs;
+  emit_agree_preamble ppf base;
+  emit_agree_run ppf triples;
   emit_agree_main ppf;
   Format.pp_print_flush ppf ();
   close_out oc
@@ -854,10 +949,10 @@ let emit_doc_build_rules ppf ~base ~archive ~c_files =
     \ (deps EverParse.h EverParseEndianness.h %s)\n\
     \ (action\n\
     \  (system\n\
-    \   \"cc %s -c %s.c %sWrapper.c && ar rcs %s %s.o %sWrapper.o\")))\n\n"
+    \   \"cc %s %s -c %s.c %sWrapper.c && ar rcs %s %s.o %sWrapper.o\")))\n\n"
     archive
     (String.concat " " c_files)
-    strict_cc_flags base base archive base base;
+    strict_cc_flags everparse_type_defines base base archive base base;
   (* Differential self-check: the OCaml codec's accept/reject verdict over a
      fuzzed corpus must match the committed C validator's, or the doc projection
      is unsound (or the committed C is stale). Uses only gen.exe and cc, so it
@@ -869,9 +964,9 @@ let emit_doc_build_rules ppf ~base ~archive ~c_files =
      %sWrapper.h)\n\
     \ (action\n\
     \  (system\n\
-    \   \"./gen.exe corpus > corpus && cc %s agree.c %s -o agree && ./agree \
+    \   \"./gen.exe corpus > corpus && cc %s %s agree.c %s -o agree && ./agree \
      corpus\")))\n\n"
-    archive base base strict_cc_flags archive
+    archive base base strict_cc_flags everparse_type_defines archive
 
 let emit_doc_install ppf ~package ~three_d ~archive ~c_files =
   let pr fmt = Fmt.pf ppf fmt in

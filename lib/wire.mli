@@ -155,6 +155,11 @@ module Param : sig
   val bind : ('a, input) t -> 'a -> env -> env
   (** [bind p v env] returns an environment with input [p] set to [v]. *)
 
+  val bind_by_name : string -> int -> env -> env
+  (** [bind_by_name name v env] binds the input parameter called [name] to the
+      integer value [v] without its typed handle (for tooling that has the codec
+      but not the {!t} handles). A no-op if [name] is not referenced. *)
+
   val get : env -> ('a, 'k) t -> 'a
   (** [get env p] reads param [p]. For outputs, call after decode. *)
 
@@ -1244,6 +1249,10 @@ module Everparse : sig
 
     val struct_params : struct_ -> param list
     (** Formal parameters of a struct (empty for non-parameterised structs). *)
+
+    val input_param_names : struct_ -> string list
+    (** Names of the input (non-mutable) parameters, in declaration order, which
+        is the order the generated validator and its wrapper take them. *)
 
     val struct_typ : struct_ -> unit typ
     (** View a 3D struct as a wire description. *)

@@ -114,6 +114,17 @@ let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   p.cell := iv;
   { env with Types.slots; bound }
 
+let bind_by_name name (iv : int) (env : env) : env =
+  let i = env_idx env name in
+  if i < 0 then env
+  else begin
+    let slots = Array.copy env.Types.slots in
+    let bound = Array.copy env.bound in
+    slots.(i) <- iv;
+    bound.(i) <- true;
+    { env with Types.slots; bound }
+  end
+
 let get (env : env) (p : ('a, 'k) t) : 'a =
   let i = env_idx env p.Types.name in
   if i < 0 then of_int p.typ !(p.cell) else of_int p.typ env.slots.(i)
