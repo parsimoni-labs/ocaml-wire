@@ -71,6 +71,27 @@ let test_casetype () =
     (contains ~sub:"switch (key)" output);
   Alcotest.(check bool) "public name is D" true (contains ~sub:"} D;" output)
 
+let test_casetype_enum_tag_labels () =
+  (* Switching on an enum tag, EverParse requires each case label to be the enum
+     constant name, not the raw integer: [case InteriorIndex:], not [case 2:]. *)
+  let kind = enum "PageKind" [ ("LeafIndex", 0); ("InteriorIndex", 2) ] uint8 in
+  let d =
+    casetype_decl "_PageBody"
+      [ param "tag" kind ]
+      kind
+      [ decl_case 0 uint32; decl_case 2 uint16 ]
+  in
+  let output = to_3d (module_ [ d ]) in
+  Alcotest.(check bool)
+    "low case uses the enum constant name" true
+    (contains ~sub:"case LeafIndex:" output);
+  Alcotest.(check bool)
+    "high case uses the enum constant name" true
+    (contains ~sub:"case InteriorIndex:" output);
+  Alcotest.(check bool)
+    "no raw-integer case label" false
+    (contains ~sub:"case 2:" output)
+
 let test_pretty_print () =
   let simple =
     struct_ "Simple" [ field "a" uint8; field "b" uint16be; field "c" uint32 ]
@@ -923,6 +944,8 @@ let suite =
       Alcotest.test_case "generation: field dependence" `Quick
         test_field_dependence;
       Alcotest.test_case "generation: casetype" `Quick test_casetype;
+      Alcotest.test_case "generation: casetype enum-tag labels" `Quick
+        test_casetype_enum_tag_labels;
       Alcotest.test_case "generation: pretty print" `Quick test_pretty_print;
       Alcotest.test_case "3d: codec embed" `Quick test_3d_codec_embed;
       Alcotest.test_case "3d: codec nested" `Quick test_3d_codec_nested;
