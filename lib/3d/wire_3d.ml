@@ -766,7 +766,7 @@ let read_checks ~outdir base =
   close_in ic;
   List.rev !acc
 
-let emit_agree_preamble ppf base =
+let emit_agree_preamble ppf base ~has_params =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
   pr "/* Differential check: the EverParse validator must accept exactly the";
   pr "   inputs the OCaml codec accepts. Reads `<codec> <params> <hex>";
@@ -784,17 +784,22 @@ let emit_agree_preamble ppf base =
   pr "void %sEverParseError(const char *s, const char *f, const char *r);" base;
   pr "void %sEverParseError(const char *s, const char *f, const char *r)" base;
   pr "{ (void) s; (void) f; (void) r; }";
-  pr "";
-  (* Parse the corpus's comma-separated parameter values (or [-] for none). *)
-  pr "static void parse_params(const char *s, unsigned long *out, int n) {";
-  pr "  const char *p = s;";
-  pr "  for (int i = 0; i < n; i++) {";
-  pr "    out[i] = strtoul(p, NULL, 10);";
-  pr "    const char *c = strchr(p, ',');";
-  pr "    if (c == NULL) break;";
-  pr "    p = c + 1;";
-  pr "  }";
-  pr "}"
+  (* Only emit the parameter parser when a codec actually has parameters: a
+     package of plain (non-parameterized) codecs never calls it, and an unused
+     static function is a -Werror under the strict flags. *)
+  if has_params then begin
+    pr "";
+    pr "/* Parse the corpus's comma-separated parameter values. */";
+    pr "static void parse_params(const char *s, unsigned long *out, int n) {";
+    pr "  const char *p = s;";
+    pr "  for (int i = 0; i < n; i++) {";
+    pr "    out[i] = strtoul(p, NULL, 10);";
+    pr "    const char *c = strchr(p, ',');";
+    pr "    if (c == NULL) break;";
+    pr "    p = c + 1;";
+    pr "  }";
+    pr "}"
+  end
 
 let emit_agree_run ppf triples =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
@@ -885,9 +890,10 @@ let generate_agree ?name ~outdir ~package codecs =
         (List.length names) (List.length checks) base
     else List.map2 (fun n (check, ptypes) -> (n, check, ptypes)) names checks
   in
+  let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
   let oc = open_out (Filename.concat outdir "agree.c") in
   let ppf = Format.formatter_of_out_channel oc in
-  emit_agree_preamble ppf base;
+  emit_agree_preamble ppf base ~has_params;
   emit_agree_run ppf triples;
   emit_agree_main ppf;
   Format.pp_print_flush ppf ();

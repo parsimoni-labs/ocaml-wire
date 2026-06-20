@@ -188,42 +188,50 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
+let differential_ok ~name ~package ~count codecs =
+  let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
+  Wire_3d.generate_doc ~outdir:tmpdir ~name ~package codecs;
+  let oc = open_out (Filename.concat tmpdir "corpus") in
+  let ppf = Format.formatter_of_out_channel oc in
+  Wire_3d.generate_corpus ~count ppf codecs;
+  close_out oc;
+  let base = String.capitalize_ascii name in
+  let cmd =
+    Fmt.str
+      "cd %s && cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o \
+       && cc %s %s agree.c lib.a -o agree && ./agree corpus 2>&1"
+      tmpdir Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base
+      base base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+  in
+  let ic = Unix.open_process_in cmd in
+  let output = In_channel.input_all ic in
+  let status = Unix.close_process_in ic in
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+  match status with
+  | Unix.WEXITED 0 -> ()
+  | Unix.WEXITED n ->
+      Alcotest.failf "differential %s failed with exit %d:\n%s" name n output
+  | _ -> Alcotest.failf "differential %s terminated abnormally:\n%s" name output
+
 let test_doc_differential () =
   if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
-    let tmpdir = Filename.temp_dir "wire_3d_doc_diff" "" in
-    let codecs =
+  else
+    differential_ok ~name:"protospec" ~package:"demo-doc" ~count:400
       [
         Wire_3d.pack diff_enum_codec;
         Wire_3d.pack diff_range_codec;
         Wire_3d.pack diff_bits_codec;
         Wire_3d.pack diff_param_codec;
       ]
-    in
-    Wire_3d.generate_doc ~outdir:tmpdir ~name:"protospec" ~package:"demo-doc"
-      codecs;
-    let oc = open_out (Filename.concat tmpdir "corpus") in
-    let ppf = Format.formatter_of_out_channel oc in
-    Wire_3d.generate_corpus ~count:400 ppf codecs;
-    close_out oc;
-    let cmd =
-      Fmt.str
-        "cd %s && cc %s %s -c Protospec.c ProtospecWrapper.c && ar rcs \
-         libprotospec.a Protospec.o ProtospecWrapper.o && cc %s %s agree.c \
-         libprotospec.a -o agree && ./agree corpus 2>&1"
-        tmpdir Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
-        Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
-    in
-    let ic = Unix.open_process_in cmd in
-    let output = In_channel.input_all ic in
-    let status = Unix.close_process_in ic in
-    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
-    match status with
-    | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED n ->
-        Alcotest.failf "doc differential failed with exit %d:\n%s" n output
-    | _ -> Alcotest.failf "doc differential terminated abnormally:\n%s" output
-  end
+
+let test_doc_differential_no_params () =
+  (* Regression: an all-non-parameterized package must still compile. The agree
+     harness must not emit an unused [parse_params] helper (a -Werror under the
+     strict flags) when no codec takes parameters. *)
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"plainspec" ~package:"plain-doc" ~count:100
+      [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
@@ -1036,6 +1044,8 @@ let suite =
       Alcotest.test_case "generate_doc (needs 3d.exe)" `Quick test_generate_doc;
       Alcotest.test_case "doc differential (needs 3d.exe)" `Quick
         test_doc_differential;
+      Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick
+        test_doc_differential_no_params;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
