@@ -64,9 +64,70 @@ type ipv4 = {
   payload : Slice.t;
 }
 
-let f_ip_protocol = Field.v "Protocol" uint8
-let f_ip_src = Field.v "SrcAddr" uint32be
-let f_ip_dst = Field.v "DstAddr" uint32be
+let bf_ip_version =
+  Codec.(
+    Field.v "Version" ~doc:"RFC 791 3.1: version, 4 for IPv4" (bits ~width:4 U8)
+    $ fun p -> p.version)
+
+let bf_ip_ihl =
+  Codec.(
+    Field.v "IHL" ~doc:"RFC 791 3.1: header length in 32-bit words"
+      (bits ~width:4 U8)
+    $ fun p -> p.ihl)
+
+let bf_ip_dscp =
+  Codec.(
+    Field.v "DSCP" ~doc:"RFC 2474: differentiated services codepoint"
+      (bits ~width:6 U8)
+    $ fun p -> p.dscp)
+
+let bf_ip_ecn =
+  Codec.(
+    Field.v "ECN" ~doc:"RFC 3168: explicit congestion notification"
+      (bits ~width:2 U8)
+    $ fun p -> p.ecn)
+
+let bf_ip_total_length =
+  Codec.(
+    Field.v "TotalLength" ~doc:"RFC 791 3.1: total length in octets" uint16be
+    $ fun p -> p.total_length)
+
+let bf_ip_identification =
+  Codec.(
+    Field.v "Identification" ~doc:"RFC 791 3.1: fragment reassembly identifier"
+      uint16be
+    $ fun p -> p.identification)
+
+let bf_ip_flags =
+  Codec.(
+    Field.v "Flags" ~doc:"RFC 791 3.1: control flags (DF, MF)"
+      (bits ~width:3 U16be)
+    $ fun p -> p.flags)
+
+let bf_ip_fragment_offset =
+  Codec.(
+    Field.v "FragmentOffset"
+      ~doc:"RFC 791 3.1: fragment offset in 8-octet units"
+      (bits ~width:13 U16be)
+    $ fun p -> p.fragment_offset)
+
+let bf_ip_ttl =
+  Codec.(Field.v "TTL" ~doc:"RFC 791 3.1: time to live" uint8 $ fun p -> p.ttl)
+
+let bf_ip_checksum =
+  Codec.(
+    Field.v "HeaderChecksum" ~doc:"RFC 791 3.1: header checksum" uint16be
+    $ fun p -> p.checksum)
+
+let f_ip_protocol =
+  Field.v "Protocol" ~doc:"RFC 791 3.1: next-level protocol (6 TCP, 17 UDP)"
+    uint8
+
+let f_ip_src = Field.v "SrcAddr" ~doc:"RFC 791 3.1: source address" uint32be
+
+let f_ip_dst =
+  Field.v "DstAddr" ~doc:"RFC 791 3.1: destination address" uint32be
+
 let f_ip_payload = Field.v "Payload" (byte_slice ~size:(int ipv4_payload_size))
 let bf_ip_protocol = Codec.(f_ip_protocol $ fun p -> p.protocol)
 let bf_ip_src = Codec.(f_ip_src $ fun p -> p.src)
@@ -95,18 +156,17 @@ let ipv4_codec =
       })
     Codec.
       [
-        (Field.v "Version" (bits ~width:4 U8) $ fun p -> p.version);
-        (Field.v "IHL" (bits ~width:4 U8) $ fun p -> p.ihl);
-        (Field.v "DSCP" (bits ~width:6 U8) $ fun p -> p.dscp);
-        (Field.v "ECN" (bits ~width:2 U8) $ fun p -> p.ecn);
-        (Field.v "TotalLength" uint16be $ fun p -> p.total_length);
-        (Field.v "Identification" uint16be $ fun p -> p.identification);
-        (Field.v "Flags" (bits ~width:3 U16be) $ fun p -> p.flags);
-        ( Field.v "FragmentOffset" (bits ~width:13 U16be) $ fun p ->
-          p.fragment_offset );
-        (Field.v "TTL" uint8 $ fun p -> p.ttl);
+        bf_ip_version;
+        bf_ip_ihl;
+        bf_ip_dscp;
+        bf_ip_ecn;
+        bf_ip_total_length;
+        bf_ip_identification;
+        bf_ip_flags;
+        bf_ip_fragment_offset;
+        bf_ip_ttl;
         bf_ip_protocol;
-        (Field.v "HeaderChecksum" uint16be $ fun p -> p.checksum);
+        bf_ip_checksum;
         bf_ip_src;
         bf_ip_dst;
         bf_ip_payload;
@@ -202,10 +262,15 @@ let tcp_size = Codec.wire_size tcp_codec
 
 type udp = { src_port : int; dst_port : int; length : int; checksum : int }
 
-let f_udp_src_port = Field.v "SrcPort" uint16be
-let f_udp_dst_port = Field.v "DstPort" uint16be
-let f_udp_length = Field.v "Length" uint16be
-let f_udp_checksum = Field.v "Checksum" uint16be
+let f_udp_src_port = Field.v "SrcPort" ~doc:"RFC 768: source port" uint16be
+let f_udp_dst_port = Field.v "DstPort" ~doc:"RFC 768: destination port" uint16be
+
+let f_udp_length =
+  Field.v "Length" ~doc:"RFC 768: octet length of header and data" uint16be
+
+let f_udp_checksum =
+  Field.v "Checksum"
+    ~doc:"RFC 768: checksum over pseudo-header, header, and data" uint16be
 
 let udp_codec =
   Codec.v "UDP" ~doc:"UDP header, RFC 768"

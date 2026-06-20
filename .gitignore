@@ -13,6 +13,9 @@ c_stubs.ml
 prof.txt
 prof.trace/
 *.3d
+# Except the committed RFC-documented protocol spec (kept in sync by a runtest
+# diff against examples/net/gen_spec).
+!examples/net/Net.3d
 schemas/
 AGENTS.md
 .agents/

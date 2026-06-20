@@ -8,3 +8,25 @@
  (name example)
  (modules example)
  (libraries net wire))
+
+; The committed Net.3d is the RFC-documented projection of the net codecs.
+; gen_spec renders it; the runtest diff fails if it drifts from net.ml, and
+; [dune promote] refreshes it. No 3d.exe needed (the .3d is pure projection).
+
+(executable
+ (name gen_spec)
+ (modules gen_spec)
+ (libraries net wire))
+
+(rule
+ (target net.actual.3d)
+ (deps gen_spec.exe)
+ (action
+  (with-stdout-to
+   net.actual.3d
+   (run ./gen_spec.exe))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff Net.3d net.actual.3d)))
