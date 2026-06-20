@@ -268,6 +268,7 @@ module Expr = struct
   let ( && ) a b = And (a, b)
   let ( || ) a b = Or (a, b)
   let not a = Not a
+  let if_then_else c t e = If_then_else (c, t, e)
   let to_uint8 e = Cast (`U8, e)
   let to_uint16 e = Cast (`U16, e)
   let to_uint32 e = Cast (`U32, e)

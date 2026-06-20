@@ -293,6 +293,11 @@ module Expr : sig
   val not : bool expr -> bool expr
   (** Boolean negation. *)
 
+  val if_then_else : bool expr -> int expr -> int expr -> int expr
+  (** [if_then_else c t e] is [t] when [c] holds, else [e]. Use it for a value
+      that depends on another field, e.g. a size where [0] means a maximum:
+      [if_then_else Expr.(field = int 0) (int 65536) field]. *)
+
   val true_ : bool expr
   (** Constant [true]. *)
 

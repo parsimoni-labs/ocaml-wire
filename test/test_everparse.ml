@@ -443,6 +443,27 @@ let test_3d_negative_literal_rejected () =
   Alcotest.(check bool)
     "negative literal rejected by projection" true (projects_or_raises codec)
 
+let test_if_then_else_projects () =
+  (* Expr.if_then_else projects to a 3D conditional, e.g. a size where a 0 field
+     means a maximum: [byte-size (... ? 65536 : N)]. *)
+  let f_n = Field.v "N" uint16be in
+  let size =
+    Expr.if_then_else Expr.(Field.ref f_n = int 0) (int 65536) (Field.ref f_n)
+  in
+  let c =
+    Codec.v "Pg"
+      (fun n d -> (n, d))
+      Codec.
+        [
+          (f_n $ fun (n, _) -> n);
+          (Field.v "Data" (byte_array ~size) $ fun (_, d) -> d);
+        ]
+  in
+  let out = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "renders the conditional" true
+    (contains ~sub:"? 65536 : N" out)
+
 let test_3d_int64_literal_uses_unsigned_decimal () =
   let f =
     Field.v "a" uint64be ~self_int64:(fun self ->
@@ -946,6 +967,8 @@ let suite =
       Alcotest.test_case "generation: casetype" `Quick test_casetype;
       Alcotest.test_case "generation: casetype enum-tag labels" `Quick
         test_casetype_enum_tag_labels;
+      Alcotest.test_case "generation: if_then_else projects" `Quick
+        test_if_then_else_projects;
       Alcotest.test_case "generation: pretty print" `Quick test_pretty_print;
       Alcotest.test_case "3d: codec embed" `Quick test_3d_codec_embed;
       Alcotest.test_case "3d: codec nested" `Quick test_3d_codec_nested;
