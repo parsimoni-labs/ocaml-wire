@@ -198,6 +198,55 @@ let test_validate_then_get () =
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
   Alcotest.(check int) "validate then get" 8 (get_x buf 0)
 
+(* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
+   enforced by both decode and validate, not only projected to 3D. The cond
+   reaches the EverParse refinement, so leaving it unchecked on the OCaml side
+   would accept inputs the verified C validator rejects. *)
+let typ_where_codec =
+  let open Codec in
+  let f_len = Field.v "len" uint8 in
+  let f_d = Field.v "d" (where Expr.(Field.ref f_len < int 2) uint8) in
+  v "TypWhere" (fun len d -> (len, d)) [ f_len $ fst; f_d $ snd ]
+
+let test_decode_enforces_typ_where () =
+  (match Codec.decode typ_where_codec (Bytes.of_string "\006\000") 0 with
+  | Error (Constraint_failed _) -> ()
+  | Ok _ -> Alcotest.fail "decode accepted a Wire.where violation"
+  | Error _ -> Alcotest.fail "decode failed with the wrong error");
+  match Codec.decode typ_where_codec (Bytes.of_string "\001\000") 0 with
+  | Ok _ -> ()
+  | Error _ -> Alcotest.fail "decode rejected a valid input"
+
+let test_validate_enforces_typ_where () =
+  (match Codec.validate typ_where_codec (Bytes.of_string "\006\000") 0 with
+  | () -> Alcotest.fail "validate accepted a Wire.where violation"
+  | exception Validation_error (Constraint_failed _) -> ());
+  Codec.validate typ_where_codec (Bytes.of_string "\001\000") 0
+
+(* decode runs field actions; validate must run the same ones, or the two paths
+   disagree on a codec whose action can fail (here [return_bool (x < 128)]). *)
+let action_validate_codec =
+  let open Codec in
+  let f_x = Field.v "x" uint8 in
+  let f_y =
+    Field.v "y" uint8
+      ~action:
+        (Action.on_success
+           [ Action.return_bool Expr.(Field.ref f_x < int 128) ])
+  in
+  v "ActValidate" (fun x y -> (x, y)) [ f_x $ fst; f_y $ snd ]
+
+let test_validate_runs_field_action () =
+  (match Codec.decode action_validate_codec (Bytes.of_string "\200\000") 0 with
+  | Error (Constraint_failed _) -> ()
+  | _ -> Alcotest.fail "decode did not reject the action violation");
+  (match
+     Codec.validate action_validate_codec (Bytes.of_string "\200\000") 0
+   with
+  | () -> Alcotest.fail "validate skipped the field action decode enforces"
+  | exception Validation_error (Constraint_failed _) -> ());
+  Codec.validate action_validate_codec (Bytes.of_string "\100\000") 0
+
 let test_struct_of_codec_metadata () =
   let output = render_3d projection_codec in
   (* The struct-level [where] referencing the field [x] is lowered onto the
@@ -4900,6 +4949,12 @@ let suite =
       Alcotest.test_case "validate: rejects bad constraint" `Quick
         test_validate_rejects_bad_constraint;
       Alcotest.test_case "validate: then get" `Quick test_validate_then_get;
+      Alcotest.test_case "decode: enforces typ-level where" `Quick
+        test_decode_enforces_typ_where;
+      Alcotest.test_case "validate: enforces typ-level where" `Quick
+        test_validate_enforces_typ_where;
+      Alcotest.test_case "validate: runs field action" `Quick
+        test_validate_runs_field_action;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
       Alcotest.test_case "record: byte_array roundtrip" `Quick
         test_record_byte_array_roundtrip;

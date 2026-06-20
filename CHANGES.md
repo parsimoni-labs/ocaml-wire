@@ -211,6 +211,13 @@
 
 ### Fixed
 
+- `Wire.Codec.decode` and `Wire.Codec.validate` now enforce a constraint written
+  as `Wire.where cond t` on a field, and any field `~action`. Such a `where` was
+  projected into the generated `.3d` (so the EverParse C validator rejected
+  violating input) but was silently dropped on the OCaml side, so OCaml accepted
+  what the verified C rejects; and `Codec.validate` skipped field actions that
+  `decode` ran, so the two disagreed. Decode and validate now share a single
+  validation path and enforce identical semantics (#169, @samoht)
 - A `Wire.casetype` that switches on a `Wire.enum` tag now projects to a 3D
   schema EverParse accepts: each case label is emitted as the enum constant name
   (`case InteriorIndex:`) instead of the raw integer (`case 2:`), which EverParse

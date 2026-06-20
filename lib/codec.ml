@@ -2328,6 +2328,18 @@ and compile_optional_or_variable : type a r.
 
 (* -- Apply a compiled plan to the record state -- *)
 
+(* A [Wire.where] constraint lives inside the field's [typ] ([Where {cond; _}]),
+   which the field reader passes through transparently. Left there it reaches the
+   3D refinement (via [struct_field]) but never the OCaml validators. Collect the
+   conds so [apply_compiled] can fold them into the field's check, the same path
+   a [~constraint_] takes -- so decode and validate enforce exactly what the 3D
+   projection does. *)
+let rec typ_where_conds : type a. a Types.typ -> bool Types.expr list = function
+  | Types.Where { cond; inner } -> cond :: typ_where_conds inner
+  | Types.Map { inner; _ } -> typ_where_conds inner
+  | Types.Enum { base; _ } -> typ_where_conds base
+  | _ -> []
+
 (* The single place that mutates the record accumulator: assemble constraint
    and action checkers, then fold the [compiled_field] into a new record
    state. *)
@@ -2354,26 +2366,34 @@ let apply_compiled : type a f r.
       ~param_slots:r.param_slots idx
   in
   let check =
-    match fld.constraint_ with
-    | None -> None
-    | Some c -> Some (compile_bool_arr cc c)
+    (* Fold the field's [~constraint_] together with any [Wire.where] cond
+       carried in its typ, so a [where] is enforced on decode/validate and not
+       only in the 3D projection. *)
+    let conds =
+      (match fld.constraint_ with Some c -> [ c ] | None -> [])
+      @ typ_where_conds fld.typ
+    in
+    match conds with
+    | [] -> None
+    | first :: rest ->
+        Some
+          (compile_bool_arr cc
+             (List.fold_left (fun a c -> And (a, c)) first rest))
   in
   let act = compile_action cc fld.action in
   let populate = cf.populate in
-  let full arr buf base =
-    populate arr buf base;
-    (match check with
-    | Some f when not (f arr) ->
-        raise (Parse_error (Constraint_failed "field constraint"))
-    | _ -> ());
-    match act with Some f -> f arr | None -> ()
-  in
   let check_only arr buf base =
     populate arr buf base;
     match check with
     | Some f when not (f arr) ->
         raise (Parse_error (Constraint_failed "field constraint"))
     | _ -> ()
+  in
+  (* The full validator is the read-and-check plus the field action. Decode and
+     [Codec.validate] both run it, so an action never fires on one path only. *)
+  let full arr buf base =
+    check_only arr buf base;
+    match act with Some f -> f arr | None -> ()
   in
   let faction =
     match act with None -> None | Some act_fn -> Some (fld.name, act_fn)
@@ -2566,7 +2586,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   let has_checks =
     compiled_where <> None
-    || List.exists (fun (Types.Field f) -> f.constraint_ <> None) struct_fields
+    || List.exists
+         (fun (Types.Field f) -> f.constraint_ <> None || f.action <> None)
+         struct_fields
   in
   let validate =
     if has_checks then (
@@ -2580,11 +2602,10 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
             let n = Array.length slots in
             Array.blit slots 0 arr.ints (n_total - n) n
         | None -> ());
-        populate arr buf off;
-        match compiled_where with
-        | Some f when not (f arr) ->
-            raise (Parse_error (Constraint_failed "where clause"))
-        | _ -> ())
+        (* Validate through the same kernel decode uses ([validate_arr]), so
+           [Codec.validate] and [decode] never disagree on field constraints,
+           actions, or the [where] clause. *)
+        validate_arr arr buf off)
     else fun ?env_slots:_ _buf _off -> ()
   in
   (validate_arr, populate, validate)
