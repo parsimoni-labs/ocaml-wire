@@ -868,6 +868,52 @@ let codec_where =
     env = None;
   }
 
+(* A field whose typ carries a [Wire.where] cond ([d : where (len < 2) uint8]).
+   The cond reaches the 3D refinement, so the EverParse validator rejects
+   [len >= 2]; the OCaml side must reject it too. Unlike [codec_where] (a
+   codec-level [~where]) this exercises the typ-level [Wire.where] path, which
+   was projected but not enforced before. Adversarials sit at and above the
+   boundary so the differential catches a cond that reaches 3D but not OCaml. *)
+let typ_where =
+  let f_len = Wire.Field.v "len" Wire.uint8 in
+  let f_d =
+    Wire.Field.v "d"
+      (Wire.where Wire.Expr.(Wire.Field.ref f_len < Wire.int 2) Wire.uint8)
+  in
+  let codec =
+    Wire.Codec.v "_typ_where"
+      (fun len d -> (len, d))
+      Wire.Codec.[ (f_len $ fun (l, _) -> l); (f_d $ fun (_, d) -> d) ]
+  in
+  let typ = Wire.codec codec in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 2; Alcobar.range ~min:0 0x100 ]
+      (fun len d ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 len;
+        Bytes.set_uint8 buf 1 d;
+        ((len, d), buf))
+  in
+  let adversarial =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:2 0x100; Alcobar.range ~min:0 0x100 ]
+      (fun len d ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 len;
+        Bytes.set_uint8 buf 1 d;
+        buf)
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 2;
+    adversarial;
+    equal = ( = );
+    env = None;
+  }
+
 (* {1 More leaves and wrappers} *)
 
 let lookup table inner =
@@ -1683,6 +1729,7 @@ let fixed_leaves : any list =
        would not project. They are still exercised standalone via the registry,
        where they are asserted to be rejected at projection.) *)
     Any { g = codec_where; size = Some 2; label = "cwhere" };
+    Any { g = typ_where; size = Some 2; label = "twhere" };
   ]
 
 (* Self-delimiting / trailing variable leaves. *)
@@ -2356,6 +2403,7 @@ let param_action_gens =
     ("expr_ops", Pack expr_ops);
     ("sizeof", Pack sizeof);
     ("codec_where", Pack codec_where);
+    ("typ_where", Pack typ_where);
     ("rest_bytes", Pack rest_bytes);
     ("param_input", Pack param_input);
     ("finite_float64", Pack finite_float64);
