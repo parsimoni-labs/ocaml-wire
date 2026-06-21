@@ -211,6 +211,11 @@
 
 ### Fixed
 
+- `Wire.Codec.decode` now rejects a parametric codec whose env is missing or
+  leaves an input param unbound, raising `Invalid_argument` (naming the param)
+  the way `Codec.encode` already does. Decoding without binding a parameter used
+  to resolve a parameter-driven field size to 0 and silently truncate the field;
+  the binding precondition is now enforced up front on both sides (#176, @samoht)
 - `Wire.Param.bind_by_name` now drives a parameter-dependent field size on
   decode, not only `where` clauses and constraints. A field whose size comes from
   a parameter (a `byte_array`, `byte_slice`, or `uint_var` sized by

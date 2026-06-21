@@ -363,6 +363,28 @@ let test_param_size_bind_by_name () =
   Alcotest.(check string) "data 2" "XY" r2.data;
   Alcotest.(check int) "tag 2" 0xAA r2.tag
 
+let test_decode_rejects_unbound_param () =
+  (* An input param that drives a field size must be bound before decode, the
+     same precondition encode enforces. Decoding without an env, or with an env
+     that left the param unbound, would resolve the size to 0 and silently
+     truncate the field, so decode raises [Invalid_argument] up front. *)
+  let buf = Bytes.create 5 in
+  Bytes.blit_string "ABCD" 0 buf 0 4;
+  Bytes.set_uint8 buf 4 0xFF;
+  (* no env at all *)
+  Alcotest.check_raises "decode without env"
+    (Invalid_argument
+       "Codec.decode: codec ParamSize has input params; pass ?env (e.g. \
+        [Codec.env c |> Param.bind p N]).") (fun () ->
+      ignore (Codec.decode param_size_codec buf 0));
+  (* env present but the param left unbound *)
+  let env = Codec.env param_size_codec in
+  Alcotest.check_raises "decode with unbound param"
+    (Invalid_argument
+       "Codec.decode: codec ParamSize has unbound input params [data_size]; \
+        bind every one before use.") (fun () ->
+      ignore (Codec.decode ~env param_size_codec buf 0))
+
 let test_param_size_zero () =
   let env = Codec.env param_size_codec |> Param.bind ps_size_param 0 in
   let buf = Bytes.create 1 in
@@ -407,6 +429,8 @@ let suite =
       Alcotest.test_case "param: size decode" `Quick test_param_size_decode;
       Alcotest.test_case "param: size bind_by_name" `Quick
         test_param_size_bind_by_name;
+      Alcotest.test_case "param: decode rejects unbound" `Quick
+        test_decode_rejects_unbound_param;
       Alcotest.test_case "param: different sizes" `Quick
         test_param_size_different_sizes;
       Alcotest.test_case "param: size zero" `Quick test_param_size_zero;

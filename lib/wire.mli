@@ -917,7 +917,12 @@ module Codec : sig
     ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
   (** [decode ?env c buf off] decodes one record value at the given base offset.
       If [?env] is supplied, input params are read from it and output params are
-      written back to it on success. *)
+      written back to it on success.
+
+      Raises [Invalid_argument] when the codec has input params and the env is
+      missing or leaves one unbound, the same precondition {!encode} enforces:
+      an unbound input param would resolve a parametric field size to 0 and
+      silently truncate the field. *)
 
   val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
