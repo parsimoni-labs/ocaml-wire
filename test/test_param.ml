@@ -343,6 +343,26 @@ let test_param_size_different_sizes () =
   Alcotest.(check string) "data 8" "12345678" r8.data;
   Alcotest.(check int) "tag 8" 0xBB r8.tag
 
+let test_param_size_bind_by_name () =
+  (* A param-driven size resolves through the field reader (the cell), not the
+     [where]/constraint path. [bind_by_name] must drive it exactly as the typed
+     [bind] does, otherwise the size reads as 0 and the field is truncated. *)
+  let env = Codec.env param_size_codec |> Param.bind_by_name "data_size" 4 in
+  let buf = Bytes.create 5 in
+  Bytes.blit_string "ABCD" 0 buf 0 4;
+  Bytes.set_uint8 buf 4 0xFF;
+  let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
+  Alcotest.(check string) "data" "ABCD" r.data;
+  Alcotest.(check int) "tag" 0xFF r.tag;
+  (* same codec, a different bound size *)
+  let env2 = Codec.env param_size_codec |> Param.bind_by_name "data_size" 2 in
+  let buf2 = Bytes.create 3 in
+  Bytes.blit_string "XY" 0 buf2 0 2;
+  Bytes.set_uint8 buf2 2 0xAA;
+  let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 0) in
+  Alcotest.(check string) "data 2" "XY" r2.data;
+  Alcotest.(check int) "tag 2" 0xAA r2.tag
+
 let test_param_size_zero () =
   let env = Codec.env param_size_codec |> Param.bind ps_size_param 0 in
   let buf = Bytes.create 1 in
@@ -385,6 +405,8 @@ let suite =
       Alcotest.test_case "no params" `Quick test_no_params;
       (* param-driven size *)
       Alcotest.test_case "param: size decode" `Quick test_param_size_decode;
+      Alcotest.test_case "param: size bind_by_name" `Quick
+        test_param_size_bind_by_name;
       Alcotest.test_case "param: different sizes" `Quick
         test_param_size_different_sizes;
       Alcotest.test_case "param: size zero" `Quick test_param_size_zero;
