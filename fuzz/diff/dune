@@ -62,4 +62,6 @@
  (action
   (progn
    (run %{exe:fuzz.exe} --gen-corpus corpus)
-   (run afl-fuzz -V 60 -i corpus -o _fuzz -- ./fuzz.exe @@))))
+   ; One exec runs the whole property suite, which is well over afl's default
+   ; 1s per-exec timeout, so raise it; [-V] still caps total fuzzing time.
+   (run afl-fuzz -V 60 -t 8000 -i corpus -o _fuzz -- ./fuzz.exe @@))))

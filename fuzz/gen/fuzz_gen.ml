@@ -42,6 +42,21 @@ and env_strategy = {
 let bytes_of_string s = Bytes.unsafe_of_string s
 let string_of_bytes b = Bytes.unsafe_to_string b
 
+let slice_of_string s =
+  let b = Bytes.of_string s in
+  Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
+
+let string_of_slice s =
+  Bytes.sub_string
+    (Bytesrw.Bytes.Slice.bytes s)
+    (Bytesrw.Bytes.Slice.first s)
+    (Bytesrw.Bytes.Slice.length s)
+
+let bytes_of_octets xs =
+  let b = Bytes.create (List.length xs) in
+  List.iteri (fun i x -> Bytes.set_uint8 b i (x land 0xFF)) xs;
+  b
+
 let bytes_fixed n =
   Alcobar.map Alcobar.[ Alcobar.bytes_fixed n ] bytes_of_string
 
@@ -263,7 +278,7 @@ let byte_slice n =
   in
   let slice_of_string s =
     let b = Bytes.of_string s in
-    Bytesrw.Bytes.Slice.make b ~first:0 ~length:(Bytes.length b)
+    Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
   in
   let value_gen = Alcobar.bytes_fixed n in
   let positive =
@@ -520,6 +535,174 @@ let uint_var ~endian size =
     env = None;
   }
 
+let exact_cases ~typ ~equal cases =
+  let codec = codec_of_typ typ in
+  let size =
+    match cases with
+    | (_, bs) :: _ -> Bytes.length bs
+    | [] -> invalid_arg "exact_cases: empty"
+  in
+  {
+    codec;
+    typ;
+    positive = Alcobar.choose (List.map Alcobar.const cases);
+    random = bytes_fixed size;
+    adversarial =
+      Alcobar.choose (List.map (fun (_, bs) -> Alcobar.const bs) cases);
+    equal;
+    env = None;
+  }
+
+let exact_int typ cases = exact_cases ~typ ~equal:Int.equal cases
+let exact_int64 typ cases = exact_cases ~typ ~equal:Int64.equal cases
+
+let uint16_endian_edges =
+  exact_int Wire.uint16
+    [
+      (0x0001, bytes_of_octets [ 0x01; 0x00 ]);
+      (0x1234, bytes_of_octets [ 0x34; 0x12 ]);
+      (0x8000, bytes_of_octets [ 0x00; 0x80 ]);
+      (0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
+    ]
+
+let uint16be_endian_edges =
+  exact_int Wire.uint16be
+    [
+      (0x0001, bytes_of_octets [ 0x00; 0x01 ]);
+      (0x1234, bytes_of_octets [ 0x12; 0x34 ]);
+      (0x8000, bytes_of_octets [ 0x80; 0x00 ]);
+      (0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
+    ]
+
+let uint32_endian_edges =
+  exact_int Wire.uint32
+    [
+      (0x01234567, bytes_of_octets [ 0x67; 0x45; 0x23; 0x01 ]);
+      (0x80000000, bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ]);
+      (0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let uint32be_endian_edges =
+  exact_int Wire.uint32be
+    [
+      (0x01234567, bytes_of_octets [ 0x01; 0x23; 0x45; 0x67 ]);
+      (0x80000000, bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ]);
+      (0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let uint64_endian_edges =
+  exact_int64 Wire.uint64
+    [
+      ( 0x0123456789ABCDEFL,
+        bytes_of_octets [ 0xEF; 0xCD; 0xAB; 0x89; 0x67; 0x45; 0x23; 0x01 ] );
+      (-2L, bytes_of_octets [ 0xFE; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let uint64be_endian_edges =
+  exact_int64 Wire.uint64be
+    [
+      ( 0x0123456789ABCDEFL,
+        bytes_of_octets [ 0x01; 0x23; 0x45; 0x67; 0x89; 0xAB; 0xCD; 0xEF ] );
+      (-2L, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFE ]);
+    ]
+
+let int16_endian_edges =
+  exact_int Wire.int16
+    [
+      (-0x8000, bytes_of_octets [ 0x00; 0x80 ]);
+      (-2, bytes_of_octets [ 0xFE; 0xFF ]);
+      (0x1234, bytes_of_octets [ 0x34; 0x12 ]);
+      (0x7FFF, bytes_of_octets [ 0xFF; 0x7F ]);
+    ]
+
+let int16be_endian_edges =
+  exact_int Wire.int16be
+    [
+      (-0x8000, bytes_of_octets [ 0x80; 0x00 ]);
+      (-2, bytes_of_octets [ 0xFF; 0xFE ]);
+      (0x1234, bytes_of_octets [ 0x12; 0x34 ]);
+      (0x7FFF, bytes_of_octets [ 0x7F; 0xFF ]);
+    ]
+
+let int32_endian_edges =
+  exact_int Wire.int32
+    [
+      (Int32.to_int Int32.min_int, bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ]);
+      (-2, bytes_of_octets [ 0xFE; 0xFF; 0xFF; 0xFF ]);
+      (0x01234567, bytes_of_octets [ 0x67; 0x45; 0x23; 0x01 ]);
+      (Int32.to_int Int32.max_int, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0x7F ]);
+    ]
+
+let int32be_endian_edges =
+  exact_int Wire.int32be
+    [
+      (Int32.to_int Int32.min_int, bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ]);
+      (-2, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFE ]);
+      (0x01234567, bytes_of_octets [ 0x01; 0x23; 0x45; 0x67 ]);
+      (Int32.to_int Int32.max_int, bytes_of_octets [ 0x7F; 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let int64_endian_edges =
+  exact_int64 Wire.int64
+    [
+      ( Int64.min_int,
+        bytes_of_octets [ 0x00; 0x00; 0x00; 0x00; 0x00; 0x00; 0x00; 0x80 ] );
+      (-2L, bytes_of_octets [ 0xFE; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ]);
+      ( 0x0123456789ABCDEFL,
+        bytes_of_octets [ 0xEF; 0xCD; 0xAB; 0x89; 0x67; 0x45; 0x23; 0x01 ] );
+      ( Int64.max_int,
+        bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0x7F ] );
+    ]
+
+let int64be_endian_edges =
+  exact_int64 Wire.int64be
+    [
+      ( Int64.min_int,
+        bytes_of_octets [ 0x80; 0x00; 0x00; 0x00; 0x00; 0x00; 0x00; 0x00 ] );
+      (-2L, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFE ]);
+      ( 0x0123456789ABCDEFL,
+        bytes_of_octets [ 0x01; 0x23; 0x45; 0x67; 0x89; 0xAB; 0xCD; 0xEF ] );
+      ( Int64.max_int,
+        bytes_of_octets [ 0x7F; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ] );
+    ]
+
+let uint_var_endian_edges ~endian size cases =
+  exact_int (Wire.uint ~endian (Wire.int size)) cases
+
+let uint_var3_little_edges =
+  uint_var_endian_edges ~endian:Wire.Little 3
+    [
+      (0x000001, bytes_of_octets [ 0x01; 0x00; 0x00 ]);
+      (0x123456, bytes_of_octets [ 0x56; 0x34; 0x12 ]);
+      (0xFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let uint_var3_big_edges =
+  uint_var_endian_edges ~endian:Wire.Big 3
+    [
+      (0x000001, bytes_of_octets [ 0x00; 0x00; 0x01 ]);
+      (0x123456, bytes_of_octets [ 0x12; 0x34; 0x56 ]);
+      (0xFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
+    ]
+
+let uint_var7_little_edges =
+  uint_var_endian_edges ~endian:Wire.Little 7
+    [
+      ( 0x0123456789ABCD,
+        bytes_of_octets [ 0xCD; 0xAB; 0x89; 0x67; 0x45; 0x23; 0x01 ] );
+      ( 0x7FFFFFFFFFFFFF,
+        bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0x7F ] );
+    ]
+
+let uint_var7_big_edges =
+  uint_var_endian_edges ~endian:Wire.Big 7
+    [
+      ( 0x0123456789ABCD,
+        bytes_of_octets [ 0x01; 0x23; 0x45; 0x67; 0x89; 0xAB; 0xCD ] );
+      ( 0x7FFFFFFFFFFFFF,
+        bytes_of_octets [ 0x7F; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ] );
+    ]
+
 let optional ?(present = true) inner =
   let f =
     Wire.Field.optional
@@ -727,6 +910,109 @@ let enum name cases =
     env = None;
   }
 
+(* [Wire.enum_open]: names known codes for documentation but accepts any value,
+   with no membership refinement (unlike [enum], which rejects unlisted codes).
+   Every byte is a valid positive, including unlisted codes, so a regression
+   that started rejecting them would fail the positive round-trip here. *)
+let enum_open =
+  let typ = Wire.enum_open "Code" [ ("A", 1); ("B", 2); ("C", 3) ] Wire.uint8 in
+  let codec = codec_of_typ typ in
+  let encode v =
+    let buf = Bytes.create 1 in
+    Wire.Codec.encode codec v buf 0;
+    buf
+  in
+  let positive =
+    Alcobar.map Alcobar.[ Alcobar.uint8 ] (fun v -> (v, encode v))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 1;
+    adversarial = bytes_fixed 1;
+    equal = Int.equal;
+    env = None;
+  }
+
+let enum_base ~typ ~size name cases =
+  let codec = codec_of_typ (Wire.enum name cases typ) in
+  let valid_values = List.map snd cases in
+  let value_gen =
+    let n = max 1 (List.length valid_values) in
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 n ]
+      (fun i -> List.nth valid_values (i mod n))
+  in
+  let positive =
+    Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode_via_codec codec v))
+  in
+  {
+    codec;
+    typ = Wire.enum name cases typ;
+    positive;
+    random = bytes_fixed size;
+    adversarial = bytes_fixed size;
+    equal = Int.equal;
+    env = None;
+  }
+
+let enum_open_base ~typ ~size name cases =
+  let typ = Wire.enum_open name cases typ in
+  let codec = codec_of_typ typ in
+  let max_value =
+    if size >= Sys.int_size / 8 then max_int else (1 lsl (size * 8)) - 1
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.int ]
+      (fun n ->
+        let v = n land max_value in
+        (v, encode_via_codec codec v))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed size;
+    adversarial = bytes_fixed size;
+    equal = Int.equal;
+    env = None;
+  }
+
+let enum_u16be =
+  enum_base ~typ:Wire.uint16be ~size:2 "WideCode"
+    [ ("Zero", 0); ("One", 1); ("High", 0xBEEF) ]
+
+let enum_open_u16be =
+  enum_open_base ~typ:Wire.uint16be ~size:2 "OpenWideCode"
+    [ ("Zero", 0); ("One", 1); ("High", 0xBEEF) ]
+
+let variants_u16be =
+  let typ =
+    Wire.variants "WideFlag"
+      [ ("Zero", `Zero); ("One", `One); ("High", `High) ]
+      Wire.uint16be
+  in
+  let codec = codec_of_typ typ in
+  let values = [ `Zero; `One; `High ] in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 (List.length values) ]
+      (fun i ->
+        let v = List.nth values (i mod List.length values) in
+        (v, encode_via_codec codec v))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 2;
+    adversarial = bytes_fixed 2;
+    equal = ( = );
+    env = None;
+  }
+
 (* Single-field record holding a [Wire.uint8] constrained via the field's
    [~self_constraint]. Positives are in-range values; adversarials are
    boundary samples on both sides of the range. *)
@@ -914,6 +1200,132 @@ let typ_where =
     env = None;
   }
 
+(* [Field.v ~constraint_] is distinct from [~self_constraint] and codec-level
+   [~where]: it is attached to one field but may reference earlier fields. *)
+let field_constraint =
+  let f_a = Wire.Field.v "a" Wire.uint8 in
+  let f_b =
+    Wire.Field.v "b" Wire.uint8
+      ~constraint_:Wire.Expr.(Wire.Field.ref f_a < Wire.int 4)
+  in
+  let codec =
+    Wire.Codec.v "_field_constraint"
+      (fun a b -> (a, b))
+      Wire.Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let typ = Wire.codec codec in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 4; Alcobar.uint8 ]
+      (fun a b ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 a;
+        Bytes.set_uint8 buf 1 b;
+        ((a, b), buf))
+  in
+  let adversarial =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:4 0xFC; Alcobar.uint8 ]
+      (fun a b ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 a;
+        Bytes.set_uint8 buf 1 b;
+        buf)
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 2;
+    adversarial;
+    equal = ( = );
+    env = None;
+  }
+
+(* [Field.int] is a second public way to reference an integer-valued field in
+   expressions. Keep it separate from the [Field.ref]-heavy cases. *)
+let field_int =
+  let f_a = Wire.Field.v "a" Wire.uint8 in
+  let f_b =
+    (* Read [a] via [Field.int] in [b]'s refinement. A comparison (not [a + b])
+       keeps the projected 3D refinement free of UINT8 arithmetic overflow, which
+       EverParse refuses to verify; narrow-arithmetic widening is a separate
+       lib TODO. *)
+    Wire.Field.v "b" Wire.uint8 ~self_constraint:(fun _b ->
+        Wire.Expr.(Wire.Field.int f_a <= Wire.int 200))
+  in
+  let codec =
+    Wire.Codec.v "_field_int"
+      (fun a b -> (a, b))
+      Wire.Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let typ = Wire.codec codec in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 5; Alcobar.range ~min:0 5 ]
+      (fun a b ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 a;
+        Bytes.set_uint8 buf 1 b;
+        ((a, b), buf))
+  in
+  let adversarial =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:10 0xF6; Alcobar.uint8 ]
+      (fun a b ->
+        let buf = Bytes.create 2 in
+        Bytes.set_uint8 buf 0 a;
+        Bytes.set_uint8 buf 1 b;
+        buf)
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 2;
+    adversarial;
+    equal = ( = );
+    env = None;
+  }
+
+(* Full-width int64 self constraints use [Field.v ~self_int64] and
+   [Field.int64], separate from native-int [~self_constraint]. *)
+let self_int64 =
+  let f =
+    Wire.Field.v "v" Wire.uint64be ~self_int64:(fun v ->
+        Wire.Expr.(v >= int64 0L && v <= int64 1000L))
+  in
+  let codec =
+    Wire.Codec.v "_self_int64" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
+  in
+  let typ = Wire.codec codec in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min:0 1001 ]
+      (fun n ->
+        let v = Int64.of_int n in
+        let buf = Bytes.create 8 in
+        Bytes.set_int64_be buf 0 v;
+        (v, buf))
+  in
+  let adversarial =
+    Alcobar.map
+      Alcobar.[ Alcobar.choose [ Alcobar.const 1001L; Alcobar.const (-1L) ] ]
+      (fun v ->
+        let buf = Bytes.create 8 in
+        Bytes.set_int64_be buf 0 v;
+        buf)
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_fixed 8;
+    adversarial;
+    equal = Int64.equal;
+    env = None;
+  }
+
 (* {1 More leaves and wrappers} *)
 
 let lookup table inner =
@@ -949,6 +1361,168 @@ let bits ?bit_order ~width base =
   let value_gen = Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask) in
   let boundaries = [ 0; 1; mask; mask - 1; mask lsr 1 ] in
   scalar_int typ base_size value_gen boundaries
+
+let bitfield_total = function
+  | Wire.U8 -> 8
+  | U16 | U16be -> 16
+  | U32 | U32be -> 32
+
+let word_bytes base word =
+  match base with
+  | Wire.U8 -> bytes_of_octets [ word ]
+  | U16 -> bytes_of_octets [ word; word lsr 8 ]
+  | U16be -> bytes_of_octets [ word lsr 8; word ]
+  | U32 -> bytes_of_octets [ word; word lsr 8; word lsr 16; word lsr 24 ]
+  | U32be -> bytes_of_octets [ word lsr 24; word lsr 16; word lsr 8; word ]
+
+let bit_mask width = (1 lsl width) - 1
+
+let pack_bits ~bit_order ~total fields =
+  let _, word =
+    List.fold_left
+      (fun (used, acc) (width, value) ->
+        let shift =
+          match bit_order with
+          | Wire.Lsb_first -> used
+          | Msb_first -> total - used - width
+        in
+        (used + width, acc lor ((value land bit_mask width) lsl shift)))
+      (0, 0) fields
+  in
+  word
+
+let bit_value width =
+  Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land bit_mask width)
+
+let bitpack3 name ~base ~bit_order (w_a, w_b, w_c) =
+  let f_a = Wire.Field.v "a" (Wire.bits ~bit_order ~width:w_a base) in
+  let f_b = Wire.Field.v "b" (Wire.bits ~bit_order ~width:w_b base) in
+  let f_c = Wire.Field.v "c" (Wire.bits ~bit_order ~width:w_c base) in
+  let codec =
+    Wire.Codec.v name
+      (fun a b c -> (a, b, c))
+      Wire.Codec.
+        [
+          (f_a $ fun (a, _, _) -> a);
+          (f_b $ fun (_, b, _) -> b);
+          (f_c $ fun (_, _, c) -> c);
+        ]
+  in
+  let total = bitfield_total base in
+  let positive =
+    Alcobar.map
+      Alcobar.[ bit_value w_a; bit_value w_b; bit_value w_c ]
+      (fun a b c ->
+        let word =
+          pack_bits ~bit_order ~total [ (w_a, a); (w_b, b); (w_c, c) ]
+        in
+        ((a, b, c), word_bytes base word))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_fixed (total / 8);
+    adversarial = bytes_fixed (total / 8);
+    equal = ( = );
+    env = None;
+  }
+
+let bitpack2_spill name ~base ~bit_order (w_a, w_b) =
+  let f_a = Wire.Field.v "a" (Wire.bits ~bit_order ~width:w_a base) in
+  let f_b = Wire.Field.v "b" (Wire.bits ~bit_order ~width:w_b base) in
+  let codec =
+    Wire.Codec.v name (fun a b -> (a, b)) Wire.Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let total = bitfield_total base in
+  let one width value =
+    word_bytes base (pack_bits ~bit_order ~total [ (width, value) ])
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ bit_value w_a; bit_value w_b ]
+      (fun a b -> ((a, b), Bytes.cat (one w_a a) (one w_b b)))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_fixed (2 * (total / 8));
+    adversarial = bytes_fixed (2 * (total / 8));
+    equal = ( = );
+    env = None;
+  }
+
+let bitpack_split_orders =
+  let f_x =
+    Wire.Field.v "x" (Wire.bits ~bit_order:Wire.Msb_first ~width:4 Wire.U8)
+  in
+  let f_y =
+    Wire.Field.v "y" (Wire.bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U8)
+  in
+  let codec =
+    Wire.Codec.v "_bitpack_split_orders"
+      (fun x y -> (x, y))
+      Wire.Codec.[ f_x $ fst; f_y $ snd ]
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ bit_value 4; bit_value 4 ]
+      (fun x y -> ((x, y), bytes_of_octets [ x lsl 4; y ]))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_fixed 2;
+    adversarial = bytes_fixed 2;
+    equal = ( = );
+    env = None;
+  }
+
+let bitpack_u8_msb =
+  bitpack3 "_bitpack_u8_msb" ~base:Wire.U8 ~bit_order:Wire.Msb_first (1, 2, 5)
+
+let bitpack_u8_lsb =
+  bitpack3 "_bitpack_u8_lsb" ~base:Wire.U8 ~bit_order:Wire.Lsb_first (1, 2, 5)
+
+let bitpack_u8_spill =
+  bitpack2_spill "_bitpack_u8_spill" ~base:Wire.U8 ~bit_order:Wire.Msb_first
+    (5, 5)
+
+let bitpack_u16_msb =
+  bitpack3 "_bitpack_u16_msb" ~base:Wire.U16 ~bit_order:Wire.Msb_first (3, 2, 11)
+
+let bitpack_u16_lsb =
+  bitpack3 "_bitpack_u16_lsb" ~base:Wire.U16 ~bit_order:Wire.Lsb_first (3, 2, 11)
+
+let bitpack_u16be_msb =
+  bitpack3 "_bitpack_u16be_msb" ~base:Wire.U16be ~bit_order:Wire.Msb_first
+    (3, 2, 11)
+
+let bitpack_u16be_lsb =
+  bitpack3 "_bitpack_u16be_lsb" ~base:Wire.U16be ~bit_order:Wire.Lsb_first
+    (3, 2, 11)
+
+let bitpack_u16be_spill =
+  bitpack2_spill "_bitpack_u16be_spill" ~base:Wire.U16be
+    ~bit_order:Wire.Lsb_first (9, 9)
+
+let bitpack_u32_msb =
+  bitpack3 "_bitpack_u32_msb" ~base:Wire.U32 ~bit_order:Wire.Msb_first
+    (6, 10, 16)
+
+let bitpack_u32_lsb =
+  bitpack3 "_bitpack_u32_lsb" ~base:Wire.U32 ~bit_order:Wire.Lsb_first
+    (6, 10, 16)
+
+let bitpack_u32be_msb =
+  bitpack3 "_bitpack_u32be_msb" ~base:Wire.U32be ~bit_order:Wire.Msb_first
+    (6, 10, 16)
+
+let bitpack_u32be_lsb =
+  bitpack3 "_bitpack_u32be_lsb" ~base:Wire.U32be ~bit_order:Wire.Lsb_first
+    (6, 10, 16)
 
 let bit inner =
   let typ = Wire.bit inner.typ in
@@ -1312,6 +1886,84 @@ let rest_bytes =
     env = Some strategy;
   }
 
+(* A [byte_array] whose [~size] is a bound [Param.input], bound through
+   [bind_by_name] (the by-name binder the differential harness uses) rather than
+   the typed [Param.bind] every other param gen uses. A binder that does not
+   reach the param's runtime cell resolves the size to 0 and truncates the field,
+   so it shows up here as a positive decode mismatch. *)
+let param_size =
+  let n = Wire.Param.input "n" Wire.uint8 in
+  let f = Wire.Field.v "data" (Wire.byte_array ~size:(Wire.Param.expr n)) in
+  let codec =
+    Wire.Codec.v "_param_size" (fun d -> d) Wire.Codec.[ (f $ fun d -> d) ]
+  in
+  let typ = Wire.codec codec in
+  let data_len = 4 in
+  let strategy =
+    {
+      positive = (fun env -> Wire.Param.bind_by_name "n" data_len env);
+      fuzz =
+        Alcobar.map
+          Alcobar.[ Alcobar.uint8 ]
+          (fun k env -> Wire.Param.bind_by_name "n" k env);
+    }
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.bytes_fixed data_len ]
+      (fun b -> (b, bytes_of_string b))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = String.equal;
+    env = Some strategy;
+  }
+
+(* [Wire.Expr.if_then_else] driving a field size: the [len] byte selects the
+   payload width, with 0 meaning a fixed fallback (the documented "0 means N"
+   shape). Exercises the ternary on the decode size path. *)
+let if_then_else =
+  let f_len = Wire.Field.v "len" Wire.uint8 in
+  let f_data =
+    Wire.Field.v "data"
+      (Wire.byte_array
+         ~size:
+           Wire.Expr.(
+             if_then_else
+               (Wire.Field.ref f_len = Wire.int 0)
+               (Wire.int 3) (Wire.Field.ref f_len)))
+  in
+  let codec =
+    Wire.Codec.v "_ite"
+      (fun len data -> (len, data))
+      Wire.Codec.[ f_len $ fst; f_data $ snd ]
+  in
+  let typ = Wire.codec codec in
+  let positive =
+    Alcobar.dynamic_bind (Alcobar.range ~min:0 6) (fun len ->
+        let sz = if len = 0 then 3 else len in
+        Alcobar.map
+          Alcobar.[ Alcobar.bytes_fixed sz ]
+          (fun b ->
+            let buf = Bytes.create (1 + sz) in
+            Bytes.set_uint8 buf 0 len;
+            Bytes.blit_string b 0 buf 1 sz;
+            ((len, b), buf)))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+  }
+
 (* Two-field codec whose second field's [~self_constraint] references
    [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. *)
 let sizeof =
@@ -1466,23 +2118,24 @@ let casetype_u8 name cases =
   let typ = Wire.casetype name Wire.uint8 (List.map casetype_case_def cases) in
   let codec = codec_of_typ typ in
   let n = max 1 (List.length cases) in
+  let env_strategy =
+    combine_env_strategies (List.map (fun (Case c) -> c.inner.env) cases)
+  in
   let positive =
     Alcobar.dynamic_bind (Alcobar.range ~min:0 n) (fun i ->
         let (Case c) = List.nth cases (i mod n) in
         Alcobar.map
           Alcobar.[ c.inner.positive ]
-          (fun (w, inner_bytes) ->
-            let tag =
-              match (c.index, c.default_tag) with
-              | Some i, _ -> i
-              | None, Some t -> t
-              | None, None -> 0
+          (fun (w, _inner_bytes) ->
+            let v = c.inject w in
+            let env =
+              Option.map
+                (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
+                env_strategy
             in
-            let n_inner = Bytes.length inner_bytes in
-            let buf = Bytes.create (1 + n_inner) in
-            Bytes.set_uint8 buf 0 tag;
-            Bytes.blit inner_bytes 0 buf 1 n_inner;
-            (c.inject w, buf)))
+            let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
+            Wire.Codec.encode ?env codec v buf 0;
+            (v, buf)))
   in
   (* Compare two casetype values through the case each projects to, using that
      case's own [equal]. Structural [( = )] is wrong when a case body is a
@@ -1503,7 +2156,53 @@ let casetype_u8 name cases =
     random = bytes_any;
     adversarial = bytes_any;
     equal;
-    env = combine_env_strategies (List.map (fun (Case c) -> c.inner.env) cases);
+    env = env_strategy;
+  }
+
+(* A direct [Wire.casetype] over a wider discriminator, with a default branch
+   that preserves the actual unclaimed tag. This mirrors [Wire.default]'s API
+   more closely than [casetype_u8]'s fixed re-encode tag helper. *)
+let casetype_u16be_default =
+  let typ =
+    Wire.casetype "WideTagged" Wire.uint16be
+      [
+        Wire.case ~index:0x0102 Wire.uint8
+          ~inject:(fun v -> `A v)
+          ~project:(function `A v -> Some v | _ -> None);
+        Wire.default Wire.uint16be
+          ~inject:(fun tag v -> `Other (tag, v))
+          ~project:(function `Other (tag, v) -> Some (tag, v) | _ -> None);
+      ]
+  in
+  let codec = codec_of_typ typ in
+  let positive =
+    Alcobar.dynamic_bind Alcobar.bool (function
+      | true ->
+          Alcobar.map
+            Alcobar.[ Alcobar.uint8 ]
+            (fun v ->
+              let buf = Bytes.create 3 in
+              Bytes.set_uint16_be buf 0 0x0102;
+              Bytes.set_uint8 buf 2 v;
+              (`A v, buf))
+      | false ->
+          Alcobar.map
+            Alcobar.[ Alcobar.uint16; Alcobar.uint16 ]
+            (fun tag v ->
+              let tag = if tag = 0x0102 then 0x0103 else tag in
+              let buf = Bytes.create 4 in
+              Bytes.set_uint16_be buf 0 tag;
+              Bytes.set_uint16_be buf 2 v;
+              (`Other (tag, v), buf)))
+  in
+  {
+    codec;
+    typ;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
   }
 
 (* {1 Record composition} *)
@@ -1625,19 +2324,25 @@ module Codec = struct
        concatenation of each field's sample bytes: adjacent bitfields coalesce
        into one base word, so concatenating their per-field bytes would place
        the second field in the wrong byte. Build the value, then encode it.
-       Fall back to the concatenation when the record needs a param env that is
-       not threaded here (encode then raises). *)
+       A record carrying a param field ([param_size] / [rest_bytes]) needs the
+       env threaded into [encode], else it raises and the concat fallback would
+       ship the unpacked bytes; bind the field params first. Fall back to the
+       test runner if no env makes encode succeed: that is either a library bug
+       or a fuzzer-model bug, and hiding it would make later positives
+       misleading. *)
+    let env_strategy = combine_env_strategies (field_envs fields) in
     let positive =
       Alcobar.map
         Alcobar.[ positives_of builder [] fields ]
-        (fun (v, concat) ->
-          match
-            let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
-            Wire.Codec.encode codec v buf 0;
-            buf
-          with
-          | buf -> (v, buf)
-          | exception Invalid_argument _ -> (v, concat))
+        (fun (v, _concat) ->
+          let env =
+            Option.map
+              (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
+              env_strategy
+          in
+          let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
+          Wire.Codec.encode ?env codec v buf 0;
+          (v, buf))
     in
     let random = random_of fields in
     let adversarial =
@@ -1682,21 +2387,35 @@ let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
    purpose: scalars of every width/endianness, packed bits, byte spans, an enum
    / variants / lookup / bounded / refined-byte / float-predicate leaf, so a
    composition can carry a constraint or mapping at the bottom. *)
-let fixed_leaves : any list =
+let fixed_scalar_leaves : any list =
   [
     Any { g = uint8; size = Some 1; label = "u8" };
+    Any { g = uint16; size = Some 2; label = "u16le" };
     Any { g = uint16be; size = Some 2; label = "u16" };
+    Any { g = uint32; size = Some 4; label = "u32le" };
     Any { g = uint32be; size = Some 4; label = "u32" };
+    Any { g = uint64; size = Some 8; label = "u64le" };
     Any { g = uint64be; size = Some 8; label = "u64" };
     Any { g = int8; size = Some 1; label = "i8" };
+    Any { g = int16; size = Some 2; label = "i16le" };
     Any { g = int16be; size = Some 2; label = "i16" };
+    Any { g = int32; size = Some 4; label = "i32le" };
     Any { g = int32be; size = Some 4; label = "i32" };
+    Any { g = int64; size = Some 8; label = "i64le" };
+    Any { g = int64be; size = Some 8; label = "i64" };
     Any { g = float32be; size = Some 4; label = "f32" };
     Any { g = float64be; size = Some 8; label = "f64" };
+    Any { g = uint_var ~endian:Wire.Little 3; size = Some 3; label = "uv3le" };
     Any { g = uint_var ~endian:Wire.Big 3; size = Some 3; label = "uv3" };
     Any { g = empty; size = Some 0; label = "unit" };
+  ]
+
+let fixed_bytes_leaves : any list =
+  [
     Any { g = byte_array 3; size = Some 3; label = "ba3" };
     Any { g = byte_slice 4; size = Some 4; label = "bs4" };
+    Any { g = byte_array 0; size = Some 0; label = "ba0" };
+    Any { g = byte_slice 0; size = Some 0; label = "bs0" };
     Any
       {
         g = byte_array_where 3 ~per_byte:printable_byte;
@@ -1704,22 +2423,55 @@ let fixed_leaves : any list =
         label = "baw3";
       };
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
+    Any
+      {
+        g = bits ~bit_order:Wire.Lsb_first ~width:3 Wire.U8;
+        size = Some 1;
+        label = "bits3lsb";
+      };
     Any { g = bit uint8; size = Some 1; label = "bit" };
+  ]
+
+let fixed_bitpack_leaves : any list =
+  [
+    Any { g = bitpack_u8_msb; size = Some 1; label = "bp8m" };
+    Any { g = bitpack_u8_lsb; size = Some 1; label = "bp8l" };
+    Any { g = bitpack_u8_spill; size = Some 2; label = "bp8spill" };
+    Any { g = bitpack_u16_lsb; size = Some 2; label = "bp16l" };
+    Any { g = bitpack_u16be_msb; size = Some 2; label = "bp16bem" };
+    Any { g = bitpack_u16be_lsb; size = Some 2; label = "bp16bel" };
+    Any { g = bitpack_u32_msb; size = Some 4; label = "bp32m" };
+    Any { g = bitpack_u32be_lsb; size = Some 4; label = "bp32bel" };
+  ]
+
+let fixed_enum_leaves : any list =
+  [
     Any
       {
         g = enum "E" [ ("A", 1); ("B", 2); ("C", 3) ];
         size = Some 1;
         label = "enum";
       };
+    Any { g = enum_open; size = Some 1; label = "enum_open" };
+    Any { g = enum_u16be; size = Some 2; label = "enum16" };
+    Any { g = enum_open_u16be; size = Some 2; label = "enumopen16" };
     Any
       {
         g = variants "V" [ ("X", `X); ("Y", `Y); ("Z", `Z) ];
         size = Some 1;
         label = "var";
       };
+    Any { g = variants_u16be; size = Some 2; label = "var16" };
     Any
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
+  ]
+
+let fixed_constraint_leaves : any list =
+  [
     Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
+    Any { g = field_constraint; size = Some 2; label = "fconstraint" };
+    Any { g = field_int; size = Some 2; label = "fint" };
+    Any { g = self_int64; size = Some 8; label = "self64" };
     Any { g = finite_float64; size = Some 8; label = "finf" };
     Any { g = nan_float64; size = Some 8; label = "nanf" };
     (* A sub-codec leaf with a [~where] over a projectable expression, so
@@ -1732,16 +2484,22 @@ let fixed_leaves : any list =
     Any { g = typ_where; size = Some 2; label = "twhere" };
   ]
 
+let fixed_leaves : any list =
+  fixed_scalar_leaves @ fixed_bytes_leaves @ fixed_enum_leaves
+  @ fixed_bitpack_leaves @ fixed_constraint_leaves
+
 (* Self-delimiting / trailing variable leaves. *)
 let var_leaves : any list =
   [
     Any { g = zeroterm; size = None; label = "zt" };
+    Any { g = zeroterm_at_most 1; size = None; label = "zt1" };
     Any { g = zeroterm_at_most 6; size = None; label = "zt6" };
     Any { g = all_zeros; size = None; label = "az" };
     (* Dynamic-gate optionals: a gate byte then a present/absent (optional) or
        value-driven (optional_or) payload. *)
     Any { g = optional_dynamic; size = None; label = "optdyn" };
     Any { g = optional_or_dynamic; size = None; label = "optordyn" };
+    Any { g = if_then_else; size = None; label = "ite" };
   ]
 
 (* Param/env-bearing leaves: sub-codecs whose [~where] / [action] reads a
@@ -1751,6 +2509,8 @@ let var_leaves : any list =
 let env_leaves : any list =
   [
     Any { g = param_input; size = Some 1; label = "param" };
+    Any { g = param_size; size = None; label = "param_size" };
+    Any { g = rest_bytes; size = None; label = "rest" };
     Any { g = action; size = Some 1; label = "act" };
     Any { g = action_on_act; size = Some 1; label = "onact" };
   ]
@@ -1923,6 +2683,40 @@ let bind2 g1 g2 f =
           | x -> Alcobar.const x
           | exception Invalid_argument _ -> Alcobar.const a))
 
+let bind3 g1 g2 g3 f =
+  Alcobar.dynamic_bind g1 (fun a ->
+      Alcobar.dynamic_bind g2 (fun b ->
+          Alcobar.dynamic_bind g3 (fun c ->
+              let e =
+                match env_of a with
+                | Some _ as e -> e
+                | None -> (
+                    match env_of b with Some _ as e -> e | None -> env_of c)
+              in
+              match with_env e (f a b c) with
+              | x -> Alcobar.const x
+              | exception Invalid_argument _ -> Alcobar.const a)))
+
+let bind4 g1 g2 g3 g4 f =
+  Alcobar.dynamic_bind g1 (fun a ->
+      Alcobar.dynamic_bind g2 (fun b ->
+          Alcobar.dynamic_bind g3 (fun c ->
+              Alcobar.dynamic_bind g4 (fun d ->
+                  let e =
+                    match env_of a with
+                    | Some _ as e -> e
+                    | None -> (
+                        match env_of b with
+                        | Some _ as e -> e
+                        | None -> (
+                            match env_of c with
+                            | Some _ as e -> e
+                            | None -> env_of d))
+                  in
+                  match with_env e (f a b c d) with
+                  | x -> Alcobar.const x
+                  | exception Invalid_argument _ -> Alcobar.const a))))
+
 (* [gen_fixed] yields fixed-size nodes (for [array] / [nested] inners, which
    need a known element width); [gen_any] yields any node. Both compose the
    full combinator set so the fuzzer reaches every nesting -- the point is to
@@ -1941,6 +2735,17 @@ let rec gen_fixed depth : any Alcobar.gen =
           bind1 (gen_fixed (depth - 1)) map_of;
           bind1 (gen_fixed (depth - 1)) where_of;
           bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_of;
+          bind3
+            (gen_fixed (depth - 1))
+            (gen_fixed (depth - 1))
+            (gen_fixed (depth - 1))
+            rec3_of;
+          bind4
+            (gen_fixed (depth - 1))
+            (gen_fixed (depth - 1))
+            (gen_fixed (depth - 1))
+            (gen_fixed (depth - 1))
+            rec4_of;
         ])
 
 let rec gen_any depth : any Alcobar.gen =
@@ -1962,6 +2767,17 @@ let rec gen_any depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) (array_of 2);
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
           bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_of;
+          bind3
+            (gen_any (depth - 1))
+            (gen_any (depth - 1))
+            (gen_any (depth - 1))
+            rec3_of;
+          bind4
+            (gen_any (depth - 1))
+            (gen_any (depth - 1))
+            (gen_any (depth - 1))
+            (gen_any (depth - 1))
+            rec4_of;
           bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
         ])
 
@@ -1982,55 +2798,120 @@ let positive_env g =
    nested_at_most) and so never otherwise exercise [encode] / [size_of_value].
    A wrong [size_of_value] then shows up here as a mismatch -- or, if it
    under-counts, as an [encode] overrun -- rather than silently. *)
-let check_positive label g (value, bs) =
-  let bs_str = string_of_bytes bs in
-  let env = positive_env g in
+let check_positive_decode label g value bs env =
   (match Wire.Codec.decode ?env g.codec bs 0 with
   | Ok decoded ->
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode mismatch" label
   | Error _ -> Alcobar.failf "%s positive decode failed" label);
+  match Wire.Codec.decode_exn ?env g.codec bs 0 with
+  | decoded ->
+      if not (g.equal decoded value) then
+        Alcobar.failf "%s positive decode_exn mismatch" label
+  | exception Wire.Parse_error e ->
+      Alcobar.failf "%s positive decode_exn failed: %a" label
+        Wire.pp_parse_error e
+
+let check_positive_size label g value bs =
   let sz = Wire.Codec.size_of_value g.codec value in
   if sz <> Bytes.length bs then
     Alcobar.failf "%s size_of_value = %d but canonical encoding is %d" label sz
       (Bytes.length bs);
+  sz
+
+let check_positive_size_metadata label g bs =
+  if Option.is_none g.env then begin
+    let min_sz = Wire.Codec.min_wire_size g.codec in
+    if min_sz > Bytes.length bs then
+      Alcobar.failf "%s min_wire_size = %d but canonical encoding is %d" label
+        min_sz (Bytes.length bs);
+    (match Wire.Codec.wire_size_at g.codec bs 0 with
+    | actual ->
+        if actual <> Bytes.length bs then
+          Alcobar.failf "%s wire_size_at = %d but canonical encoding is %d"
+            label actual (Bytes.length bs)
+    | exception Invalid_argument _ ->
+        Alcobar.failf "%s wire_size_at raised on a positive" label);
+    if Wire.Codec.is_fixed g.codec then
+      match Wire.Codec.wire_size g.codec with
+      | fixed ->
+          if fixed <> Bytes.length bs then
+            Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label
+              fixed (Bytes.length bs)
+      | exception Invalid_argument _ ->
+          Alcobar.failf "%s fixed codec raised in wire_size" label
+  end
+
+let check_positive_encode label g value bs env sz =
+  let bs_str = string_of_bytes bs in
   let out = Bytes.create sz in
-  (try Wire.Codec.encode ?env:(positive_env g) g.codec value out 0
+  (try Wire.Codec.encode ?env g.codec value out 0
    with Invalid_argument _ -> Alcobar.failf "%s positive encode raised" label);
   if string_of_bytes out <> bs_str then
     Alcobar.failf "%s positive reencode mismatch" label
 
-let test_cases label g =
-  let pos_case =
-    Alcobar.test_case (label ^ " positive")
-      Alcobar.[ g.positive ]
-      (check_positive label g)
+let check_positive label g (value, bs) =
+  let env = positive_env g in
+  check_positive_decode label g value bs env;
+  let sz = check_positive_size label g value bs in
+  check_positive_size_metadata label g bs;
+  check_positive_encode label g value bs env sz
+
+let validate_one ?env g bs =
+  try
+    Wire.Codec.validate ?env g.codec bs 0;
+    `Ok
+  with
+  | Wire.Validation_error _ -> `Reject
+  | Invalid_argument _ -> `Crash
+  | Wire.Parse_error _ -> `Reject
+
+let check_validate_positive label g bs =
+  let env = positive_env g in
+  match validate_one ?env g bs with
+  | `Ok -> ()
+  | `Reject -> Alcobar.failf "%s validate rejected a positive" label
+  | `Crash -> Alcobar.failf "%s validate crashed on a positive" label
+
+let check_validate_safety label kind ?env g bs =
+  match validate_one ?env g bs with
+  | `Ok | `Reject -> ()
+  | `Crash -> Alcobar.failf "%s validate %s crashed" label kind
+
+let check_decode_safety label kind ?env g bs =
+  try ignore (Wire.Codec.decode ?env g.codec bs 0)
+  with Invalid_argument _ -> Alcobar.failf "%s %s crashed decoder" label kind
+
+let test_cases ?(validate = true) label g =
+  let check_positive_stream ((_, bs) as sample) =
+    check_positive label g sample;
+    if validate then check_validate_positive label g bs
   in
-  let safety_case kind stream =
-    match g.env with
-    | None ->
-        Alcobar.test_case
-          (label ^ " " ^ kind)
-          Alcobar.[ stream ]
-          (fun bs ->
-            try ignore (Wire.Codec.decode g.codec bs 0)
-            with Invalid_argument _ ->
-              Alcobar.failf "%s %s crashed decoder" label kind)
-    | Some s ->
-        Alcobar.test_case
-          (label ^ " " ^ kind)
-          Alcobar.[ stream; s.fuzz ]
-          (fun bs build_env ->
-            let env = Some (build_env (Wire.Codec.env g.codec)) in
-            try ignore (Wire.Codec.decode ?env g.codec bs 0)
-            with Invalid_argument _ ->
-              Alcobar.failf "%s %s crashed decoder" label kind)
+  let check_safety_stream kind ?env bs =
+    check_decode_safety label kind ?env g bs;
+    if validate then check_validate_safety label kind ?env g bs
   in
-  [
-    pos_case;
-    safety_case "random" g.random;
-    safety_case "adversarial" g.adversarial;
-  ]
+  match g.env with
+  | None ->
+      [
+        Alcobar.test_case (label ^ " all")
+          Alcobar.[ g.positive; g.random; g.adversarial ]
+          (fun positive random adversarial ->
+            check_positive_stream positive;
+            check_safety_stream "random" random;
+            check_safety_stream "adversarial" adversarial);
+      ]
+  | Some s ->
+      [
+        Alcobar.test_case (label ^ " all")
+          Alcobar.[ g.positive; g.random; g.adversarial; s.fuzz; s.fuzz ]
+          (fun positive random adversarial random_env adversarial_env ->
+            check_positive_stream positive;
+            let env = Some (random_env (Wire.Codec.env g.codec)) in
+            check_safety_stream "random" ?env random;
+            let env = Some (adversarial_env (Wire.Codec.env g.codec)) in
+            check_safety_stream "adversarial" ?env adversarial);
+      ]
 
 (* Cross-field sizes: a [byte_array] whose [~size] reads a preceding int field.
    The size-source field is drawn from several int-valued field types -- in
@@ -2135,24 +3016,24 @@ let nested_cases label depth =
               Alcobar.[ stream; s.fuzz ]
               (fun bs mk -> NB (a.g, a.label, bs, Some mk)))
   in
-  let safety kind stream =
-    Alcobar.test_case
-      (label ^ " " ^ kind)
-      Alcobar.[ stream ]
-      (fun (NB (g, comp, bs, mk)) ->
-        let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
-        try ignore (Wire.Codec.decode ?env g.codec bs 0)
-        with Invalid_argument _ ->
-          Alcobar.failf "%s %s [%s] crashed decoder" label kind comp)
-  in
   [
-    Alcobar.test_case (label ^ " positive")
-      Alcobar.[ positive ]
-      (fun (NS (g, comp, pos)) ->
-        try check_positive (Fmt.str "%s [%s]" label comp) g pos
-        with Failure m -> Alcobar.failf "%s [%s] raised: %s" label comp m);
-    safety "random" (with_bytes false);
-    safety "adversarial" (with_bytes true);
+    Alcobar.test_case (label ^ " all")
+      Alcobar.[ positive; with_bytes false; with_bytes true ]
+      (fun (NS (g, comp, ((value, bs) as pos))) random adversarial ->
+        let nested_label = Fmt.str "%s [%s]" label comp in
+        (try
+           check_positive nested_label g pos;
+           check_validate_positive nested_label g bs;
+           ignore value
+         with Failure m -> Alcobar.failf "%s raised: %s" nested_label m);
+        let check kind (NB (g, comp, bs, mk)) =
+          let nested_label = Fmt.str "%s [%s]" label comp in
+          let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
+          check_decode_safety nested_label kind ?env g bs;
+          check_validate_safety nested_label kind ?env g bs
+        in
+        check "random" random;
+        check "adversarial" adversarial);
   ]
 
 (* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
@@ -2217,22 +3098,13 @@ let streaming_cases label g =
    When the codec references [Param.input], positives pull the env from
    [g.env.positive] and the safety streams fuzz the env. *)
 let validate_cases label g =
-  let validate_one ?env bs =
-    try
-      Wire.Codec.validate ?env g.codec bs 0;
-      `Ok
-    with
-    | Wire.Validation_error _ -> `Reject
-    | Invalid_argument _ -> `Crash
-    | Wire.Parse_error _ -> `Reject
-  in
   let pos_case =
     Alcobar.test_case
       (label ^ " validate positive")
       Alcobar.[ g.positive ]
       (fun (_value, bs) ->
         let env = positive_env g in
-        match validate_one ?env bs with
+        match validate_one ?env g bs with
         | `Ok -> ()
         | `Reject -> Alcobar.failf "%s validate rejected a positive" label
         | `Crash -> Alcobar.failf "%s validate crashed on a positive" label)
@@ -2244,7 +3116,7 @@ let validate_cases label g =
           (label ^ " validate " ^ kind)
           Alcobar.[ stream ]
           (fun bs ->
-            match validate_one bs with
+            match validate_one g bs with
             | `Ok | `Reject -> ()
             | `Crash -> Alcobar.failf "%s validate %s crashed" label kind)
     | Some s ->
@@ -2253,7 +3125,7 @@ let validate_cases label g =
           Alcobar.[ stream; s.fuzz ]
           (fun bs build_env ->
             let env = Some (build_env (Wire.Codec.env g.codec)) in
-            match validate_one ?env bs with
+            match validate_one ?env g bs with
             | `Ok | `Reject -> ()
             | `Crash -> Alcobar.failf "%s validate %s crashed" label kind)
   in
@@ -2274,12 +3146,11 @@ let reject_cases label g =
     | exception Invalid_argument _ -> Alcobar.failf "%s decoder crashed" label
   in
   [
-    Alcobar.test_case (label ^ " random")
-      Alcobar.[ g.random; env_stream ]
-      check_reject;
-    Alcobar.test_case (label ^ " adversarial")
-      Alcobar.[ g.adversarial; env_stream ]
-      check_reject;
+    Alcobar.test_case (label ^ " all")
+      Alcobar.[ g.random; g.adversarial; env_stream; env_stream ]
+      (fun random adversarial random_env adversarial_env ->
+        check_reject random random_env;
+        check_reject adversarial adversarial_env);
   ]
 
 (* {1 Canonical registry and EverParse drivers}
@@ -2311,38 +3182,82 @@ let registry_casetype =
         ~project:(function `Other v -> Some v | _ -> None);
     ]
 
-let scalar_gens =
+let unsigned_scalar_gens =
   [
     ("uint8", Pack uint8);
     ("uint16", Pack uint16);
     ("uint16be", Pack uint16be);
+    ("uint16(endian_edges)", Pack uint16_endian_edges);
+    ("uint16be(endian_edges)", Pack uint16be_endian_edges);
     ("uint32", Pack uint32);
     ("uint32be", Pack uint32be);
+    ("uint32(endian_edges)", Pack uint32_endian_edges);
+    ("uint32be(endian_edges)", Pack uint32be_endian_edges);
     ("uint63", Pack uint63);
     ("uint63be", Pack uint63be);
     ("uint64", Pack uint64);
     ("uint64be", Pack uint64be);
+    ("uint64(endian_edges)", Pack uint64_endian_edges);
+    ("uint64be(endian_edges)", Pack uint64be_endian_edges);
+  ]
+
+let signed_scalar_gens =
+  [
     ("int8", Pack int8);
     ("int16", Pack int16);
     ("int16be", Pack int16be);
+    ("int16(endian_edges)", Pack int16_endian_edges);
+    ("int16be(endian_edges)", Pack int16be_endian_edges);
     ("int32", Pack int32);
     ("int32be", Pack int32be);
+    ("int32(endian_edges)", Pack int32_endian_edges);
+    ("int32be(endian_edges)", Pack int32be_endian_edges);
     ("int64", Pack int64);
     ("int64be", Pack int64be);
+    ("int64(endian_edges)", Pack int64_endian_edges);
+    ("int64be(endian_edges)", Pack int64be_endian_edges);
+  ]
+
+let float_and_empty_gens =
+  [
     ("float32", Pack float32);
     ("float32be", Pack float32be);
     ("float64", Pack float64);
     ("float64be", Pack float64be);
     ("empty", Pack empty);
+  ]
+
+let variable_width_scalar_gens =
+  [
+    ("uint_var(1,little)", Pack (uint_var ~endian:Wire.Little 1));
+    ("uint_var(2,little)", Pack (uint_var ~endian:Wire.Little 2));
+    ("uint_var(3,little)", Pack (uint_var ~endian:Wire.Little 3));
     ("uint_var(3,big)", Pack (uint_var ~endian:Wire.Big 3));
+    ("uint_var(5,little)", Pack (uint_var ~endian:Wire.Little 5));
+    ("uint_var(5,big)", Pack (uint_var ~endian:Wire.Big 5));
+    ("uint_var(7,little)", Pack (uint_var ~endian:Wire.Little 7));
     ("uint_var(7,big)", Pack (uint_var ~endian:Wire.Big 7));
+    ("uint_var(3,little_edges)", Pack uint_var3_little_edges);
+    ("uint_var(3,big_edges)", Pack uint_var3_big_edges);
+    ("uint_var(7,little_edges)", Pack uint_var7_little_edges);
+    ("uint_var(7,big_edges)", Pack uint_var7_big_edges);
     ("bit(uint8)", Pack (bit uint8));
     ("bit(uint16)", Pack (bit uint16));
+    ("bit(uint16be)", Pack (bit uint16be));
+    ("bit(int8)", Pack (bit int8));
+    ("bit(int16)", Pack (bit int16));
+    ("bit(int16be)", Pack (bit int16be));
   ]
+
+let scalar_gens =
+  unsigned_scalar_gens @ signed_scalar_gens @ float_and_empty_gens
+  @ variable_width_scalar_gens
 
 let byte_gens =
   [
+    ("byte_array(0)", Pack (byte_array 0));
     ("byte_array(5)", Pack (byte_array 5));
+    ("byte_slice(0)", Pack (byte_slice 0));
     ("byte_slice(3)", Pack (byte_slice 3));
     ( "byte_array_where(4)",
       Pack
@@ -2351,15 +3266,64 @@ let byte_gens =
     ("all_bytes", Pack all_bytes);
     ("all_zeros", Pack all_zeros);
     ("zeroterm", Pack zeroterm);
+    ("zeroterm_at_most(1)", Pack (zeroterm_at_most 1));
     ("zeroterm_at_most(8)", Pack (zeroterm_at_most 8));
   ]
 
 let bits_gens =
   [
+    ("bits(1,U8)", Pack (bits ~width:1 Wire.U8));
+    ("bits(1,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:1 Wire.U8));
     ("bits(3,U8)", Pack (bits ~width:3 Wire.U8));
+    ("bits(3,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:3 Wire.U8));
+    ("bits(7,U8)", Pack (bits ~width:7 Wire.U8));
+    ("bits(7,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:7 Wire.U8));
+    ("bits(8,U8)", Pack (bits ~width:8 Wire.U8));
+    ("bits(8,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:8 Wire.U8));
+    ("bits(1,U16)", Pack (bits ~width:1 Wire.U16));
+    ("bits(15,U16)", Pack (bits ~width:15 Wire.U16));
+    ("bits(16,U16)", Pack (bits ~width:16 Wire.U16));
+    ( "bits(16,U16,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16) );
+    ("bits(1,U16be)", Pack (bits ~width:1 Wire.U16be));
     ("bits(10,U16be)", Pack (bits ~width:10 Wire.U16be));
     ("bits(4,U16be)", Pack (bits ~width:4 Wire.U16be));
+    ( "bits(15,U16be,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:15 Wire.U16be) );
+    ("bits(16,U16be)", Pack (bits ~width:16 Wire.U16be));
+    ( "bits(16,U16be,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16be) );
+    ("bits(1,U32)", Pack (bits ~width:1 Wire.U32));
+    ("bits(17,U32)", Pack (bits ~width:17 Wire.U32));
+    ( "bits(17,U32,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:17 Wire.U32) );
+    ( "bits(32,U32,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32) );
+    ("bits(1,U32be)", Pack (bits ~width:1 Wire.U32be));
+    ("bits(31,U32be)", Pack (bits ~width:31 Wire.U32be));
+    ( "bits(31,U32be,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:31 Wire.U32be) );
+    ("bits(32,U32be)", Pack (bits ~width:32 Wire.U32be));
+    ( "bits(32,U32be,Lsb)",
+      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32be) );
     ("bits(4,U32,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U32));
+  ]
+
+let bitpack_gens =
+  [
+    ("bitpack_u8_msb(1,2,5)", Pack bitpack_u8_msb);
+    ("bitpack_u8_lsb(1,2,5)", Pack bitpack_u8_lsb);
+    ("bitpack_u8_spill(5,5)", Pack bitpack_u8_spill);
+    ("bitpack_split_orders", Pack bitpack_split_orders);
+    ("bitpack_u16_msb(3,2,11)", Pack bitpack_u16_msb);
+    ("bitpack_u16_lsb(3,2,11)", Pack bitpack_u16_lsb);
+    ("bitpack_u16be_msb(3,2,11)", Pack bitpack_u16be_msb);
+    ("bitpack_u16be_lsb(3,2,11)", Pack bitpack_u16be_lsb);
+    ("bitpack_u16be_spill(9,9)", Pack bitpack_u16be_spill);
+    ("bitpack_u32_msb(6,10,16)", Pack bitpack_u32_msb);
+    ("bitpack_u32_lsb(6,10,16)", Pack bitpack_u32_lsb);
+    ("bitpack_u32be_msb(6,10,16)", Pack bitpack_u32be_msb);
+    ("bitpack_u32be_lsb(6,10,16)", Pack bitpack_u32be_lsb);
   ]
 
 let wrapper_gens =
@@ -2367,7 +3331,11 @@ let wrapper_gens =
     ( "map(uint8)",
       Pack (map ~decode:(fun n -> n * 2) ~encode:(fun n -> n / 2) uint8) );
     ("variants", Pack (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ]));
+    ("variants_u16be", Pack variants_u16be);
     ("enum", Pack (enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]));
+    ("enum_u16be", Pack enum_u16be);
+    ("enum_open", Pack enum_open);
+    ("enum_open_u16be", Pack enum_open_u16be);
     ("bounded_u8", Pack (bounded_u8 ~min:10 ~max:100));
     ("bounded_u16be", Pack bounded_u16be);
     ("bounded_u32be", Pack bounded_u32be);
@@ -2379,20 +3347,30 @@ let wrapper_gens =
     ("optional_or(false)", Pack (optional_or ~present:false ~default:42 uint8));
     ("optional_dynamic", Pack optional_dynamic);
     ("optional_or_dynamic", Pack optional_or_dynamic);
+    ("nested(0,empty)", Pack (nested 0 empty));
+    ("nested(2,uint16be)", Pack (nested 2 uint16be));
     ("nested(4,uint16be)", Pack (nested 4 uint16be));
+    ("nested_at_most(0,empty)", Pack (nested_at_most 0 empty));
+    ("nested_at_most(2,uint16be)", Pack (nested_at_most 2 uint16be));
     ("nested_at_most(4,uint16be)", Pack (nested_at_most 4 uint16be));
   ]
 
 let composite_gens =
   [
+    ("array(0,uint8)", Pack (array 0 uint8));
     ("array(3,uint16be)", Pack (array 3 uint16be));
     ("array_seq(3,uint16be)", Pack (array_seq 3 uint16be));
+    ("array_seq(0,uint8)", Pack (array_seq 0 uint8));
     ("array(2,record)", Pack (array 2 registry_record));
     ("array(3,bounded_u8)", Pack (array 3 (bounded_u8 ~min:10 ~max:100)));
+    ("repeat(0,uint8)", Pack (repeat ~bytes:0 uint8));
     ("repeat(8,uint8)", Pack (repeat ~bytes:8 uint8));
+    ("repeat(7,uint16be)", Pack (repeat ~bytes:7 uint16be));
     ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
+    ("repeat_seq(7,uint16be)", Pack (repeat_seq ~bytes:7 uint16be));
     ("record", Pack registry_record);
     ("casetype_u8", Pack registry_casetype);
+    ("casetype_u16be_default", Pack casetype_u16be_default);
     ("field_anon", Pack field_anon);
   ]
 
@@ -2404,8 +3382,13 @@ let param_action_gens =
     ("sizeof", Pack sizeof);
     ("codec_where", Pack codec_where);
     ("typ_where", Pack typ_where);
+    ("field_constraint", Pack field_constraint);
+    ("field_int", Pack field_int);
+    ("self_int64", Pack self_int64);
     ("rest_bytes", Pack rest_bytes);
     ("param_input", Pack param_input);
+    ("param_size", Pack param_size);
+    ("if_then_else", Pack if_then_else);
     ("finite_float64", Pack finite_float64);
     ("nan_float64", Pack nan_float64);
   ]
@@ -2446,8 +3429,8 @@ let rename_case label (Pack g) =
 let registry : (string * packed) list =
   List.map
     (fun (label, p) -> (label, rename_case label p))
-    (scalar_gens @ byte_gens @ bits_gens @ wrapper_gens @ composite_gens
-   @ param_action_gens)
+    (scalar_gens @ byte_gens @ bits_gens @ bitpack_gens @ wrapper_gens
+   @ composite_gens @ param_action_gens)
 
 (* {1 Boltzmann sampler over the projectable grammar}
 
@@ -2471,13 +3454,35 @@ let sampler_leaves : any list =
     Any { g = uint16be; size = Some 2; label = "u16be" };
     Any { g = uint32; size = Some 4; label = "u32" };
     Any { g = uint32be; size = Some 4; label = "u32be" };
+    Any { g = uint64; size = Some 8; label = "u64" };
     Any { g = uint64be; size = Some 8; label = "u64be" };
     Any { g = int8; size = Some 1; label = "i8" };
+    Any { g = int16; size = Some 2; label = "i16" };
     Any { g = int16be; size = Some 2; label = "i16be" };
+    Any { g = int32; size = Some 4; label = "i32" };
     Any { g = int32be; size = Some 4; label = "i32be" };
+    Any { g = int64; size = Some 8; label = "i64" };
+    Any { g = int64be; size = Some 8; label = "i64be" };
     Any { g = float32be; size = Some 4; label = "f32be" };
     Any { g = float64be; size = Some 8; label = "f64be" };
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
+    Any
+      {
+        g = bits ~bit_order:Wire.Lsb_first ~width:3 Wire.U8;
+        size = Some 1;
+        label = "bits3lsb";
+      };
+    Any { g = bits ~width:15 Wire.U16; size = Some 2; label = "bits15u16" };
+    Any
+      {
+        g = bits ~bit_order:Wire.Lsb_first ~width:15 Wire.U16be;
+        size = Some 2;
+        label = "bits15u16belsb";
+      };
+    Any { g = bitpack_u8_msb; size = Some 1; label = "bp8m" };
+    Any { g = bitpack_u8_lsb; size = Some 1; label = "bp8l" };
+    Any { g = bitpack_u16be_lsb; size = Some 2; label = "bp16bel" };
+    Any { g = enum_open; size = Some 1; label = "enum_open" };
     Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
     Any
       {
@@ -2524,6 +3529,735 @@ let sample ~seed ~count : (string * packed) list =
       let (Any a) = boltzmann_any rng in
       let label = Fmt.str "smp%d_%s" i a.label in
       (label, rename_case label (Pack a.g)))
+
+let any_labels xs = List.map (fun (Any a) -> a.label) xs
+
+let duplicate_labels labels =
+  let sorted = List.sort String.compare labels in
+  let rec go acc = function
+    | a :: (b :: _ as rest) when String.equal a b -> go (a :: acc) rest
+    | _ :: rest -> go acc rest
+    | [] -> List.rev acc
+  in
+  go [] sorted
+
+let assert_no_duplicates group labels =
+  match duplicate_labels labels with
+  | [] -> ()
+  | dups ->
+      Alcobar.failf "%s duplicate labels: %s" group (String.concat ", " dups)
+
+let assert_contains group labels expected =
+  List.iter
+    (fun label ->
+      if not (List.mem label labels) then
+        Alcobar.failf "%s missing %s" group label)
+    expected
+
+let expected_registry_labels =
+  [
+    "uint8";
+    "uint16";
+    "uint16be";
+    "uint16(endian_edges)";
+    "uint16be(endian_edges)";
+    "uint32";
+    "uint32be";
+    "uint32(endian_edges)";
+    "uint32be(endian_edges)";
+    "uint63";
+    "uint63be";
+    "uint64";
+    "uint64be";
+    "uint64(endian_edges)";
+    "uint64be(endian_edges)";
+    "int8";
+    "int16";
+    "int16be";
+    "int16(endian_edges)";
+    "int16be(endian_edges)";
+    "int32";
+    "int32be";
+    "int32(endian_edges)";
+    "int32be(endian_edges)";
+    "int64";
+    "int64be";
+    "int64(endian_edges)";
+    "int64be(endian_edges)";
+    "float32";
+    "float32be";
+    "float64";
+    "float64be";
+    "empty";
+    "uint_var(1,little)";
+    "uint_var(2,little)";
+    "uint_var(3,little)";
+    "uint_var(3,big)";
+    "uint_var(5,little)";
+    "uint_var(5,big)";
+    "uint_var(7,little)";
+    "uint_var(7,big)";
+    "uint_var(3,little_edges)";
+    "uint_var(3,big_edges)";
+    "uint_var(7,little_edges)";
+    "uint_var(7,big_edges)";
+    "bit(uint8)";
+    "bit(uint16)";
+    "bit(uint16be)";
+    "bit(int8)";
+    "bit(int16)";
+    "bit(int16be)";
+    "byte_array(0)";
+    "byte_array(5)";
+    "byte_slice(0)";
+    "byte_slice(3)";
+    "byte_array_where(4)";
+    "all_bytes";
+    "all_zeros";
+    "zeroterm";
+    "zeroterm_at_most(1)";
+    "zeroterm_at_most(8)";
+    "bits(1,U8)";
+    "bits(1,U8,Lsb)";
+    "bits(3,U8)";
+    "bits(3,U8,Lsb)";
+    "bits(7,U8)";
+    "bits(7,U8,Lsb)";
+    "bits(8,U8)";
+    "bits(8,U8,Lsb)";
+    "bits(1,U16)";
+    "bits(15,U16)";
+    "bits(16,U16)";
+    "bits(16,U16,Lsb)";
+    "bits(1,U16be)";
+    "bits(10,U16be)";
+    "bits(4,U16be)";
+    "bits(15,U16be,Lsb)";
+    "bits(16,U16be)";
+    "bits(16,U16be,Lsb)";
+    "bits(1,U32)";
+    "bits(17,U32)";
+    "bits(17,U32,Lsb)";
+    "bits(32,U32,Lsb)";
+    "bits(1,U32be)";
+    "bits(31,U32be)";
+    "bits(31,U32be,Lsb)";
+    "bits(32,U32be)";
+    "bits(32,U32be,Lsb)";
+    "bits(4,U32,Lsb)";
+    "bitpack_u8_msb(1,2,5)";
+    "bitpack_u8_lsb(1,2,5)";
+    "bitpack_u8_spill(5,5)";
+    "bitpack_split_orders";
+    "bitpack_u16_msb(3,2,11)";
+    "bitpack_u16_lsb(3,2,11)";
+    "bitpack_u16be_msb(3,2,11)";
+    "bitpack_u16be_lsb(3,2,11)";
+    "bitpack_u16be_spill(9,9)";
+    "bitpack_u32_msb(6,10,16)";
+    "bitpack_u32_lsb(6,10,16)";
+    "bitpack_u32be_msb(6,10,16)";
+    "bitpack_u32be_lsb(6,10,16)";
+    "map(uint8)";
+    "variants";
+    "variants_u16be";
+    "enum";
+    "enum_u16be";
+    "enum_open";
+    "enum_open_u16be";
+    "bounded_u8";
+    "bounded_u16be";
+    "bounded_u32be";
+    "where(uint8)";
+    "lookup";
+    "optional(uint8)";
+    "optional(false)";
+    "optional_or(uint8)";
+    "optional_or(false)";
+    "optional_dynamic";
+    "optional_or_dynamic";
+    "nested(0,empty)";
+    "nested(2,uint16be)";
+    "nested(4,uint16be)";
+    "nested_at_most(0,empty)";
+    "nested_at_most(2,uint16be)";
+    "nested_at_most(4,uint16be)";
+    "array(0,uint8)";
+    "array(3,uint16be)";
+    "array_seq(3,uint16be)";
+    "array_seq(0,uint8)";
+    "repeat(0,uint8)";
+    "repeat(8,uint8)";
+    "repeat(7,uint16be)";
+    "repeat_seq(8,uint8)";
+    "repeat_seq(7,uint16be)";
+    "record";
+    "casetype_u8";
+    "casetype_u16be_default";
+    "field_anon";
+    "action";
+    "action_on_act";
+    "expr_ops";
+    "sizeof";
+    "codec_where";
+    "typ_where";
+    "field_constraint";
+    "field_int";
+    "self_int64";
+    "rest_bytes";
+    "param_input";
+    "param_size";
+    "if_then_else";
+    "finite_float64";
+    "nan_float64";
+  ]
+
+let expected_fixed_labels =
+  [
+    "u8";
+    "u16le";
+    "u16";
+    "u32le";
+    "u32";
+    "u64le";
+    "u64";
+    "i16le";
+    "i16";
+    "i32le";
+    "i32";
+    "i64le";
+    "i64";
+    "uv3le";
+    "ba0";
+    "bs0";
+    "ba3";
+    "bs4";
+    "bits3lsb";
+    "bp8m";
+    "bp8l";
+    "bp8spill";
+    "bp16l";
+    "bp16bem";
+    "bp16bel";
+    "bp32m";
+    "bp32bel";
+    "enum";
+    "enum_open";
+    "enum16";
+    "enumopen16";
+    "var";
+    "var16";
+    "fconstraint";
+    "fint";
+    "self64";
+  ]
+
+let expected_var_labels =
+  [ "zt"; "zt1"; "zt6"; "az"; "optdyn"; "optordyn"; "ite" ]
+
+let expected_env_labels = [ "param"; "param_size"; "rest"; "act"; "onact" ]
+
+let expected_sampler_labels =
+  [
+    "u8";
+    "u16";
+    "u16be";
+    "u32";
+    "u32be";
+    "i16";
+    "i16be";
+    "i32";
+    "i32be";
+    "i64";
+    "i64be";
+    "bits3lsb";
+    "bits15u16";
+    "bits15u16belsb";
+    "bp8m";
+    "bp8l";
+    "bp16bel";
+    "enum";
+    "enum_open";
+    "lkp";
+  ]
+
+let check_registry_invariants () =
+  let labels = List.map fst registry in
+  assert_no_duplicates "registry" labels;
+  assert_contains "registry" labels expected_registry_labels
+
+let check_vocabulary_group (group, labels) =
+  if labels = [] then Alcobar.failf "%s is empty" group;
+  assert_no_duplicates group labels
+
+let check_composition_vocabulary () =
+  let fixed = any_labels fixed_leaves
+  and var = any_labels var_leaves
+  and env = any_labels env_leaves
+  and sampled = any_labels sampler_leaves in
+  List.iter check_vocabulary_group
+    [
+      ("fixed_leaves", fixed);
+      ("var_leaves", var);
+      ("env_leaves", env);
+      ("sampler_leaves", sampled);
+    ];
+  assert_contains "fixed_leaves" fixed expected_fixed_labels;
+  assert_contains "var_leaves" var expected_var_labels;
+  assert_contains "env_leaves" env expected_env_labels;
+  assert_contains "sampler_leaves" sampled expected_sampler_labels
+
+let check_sampler_invariants () =
+  let labels = List.map fst (sample ~seed:1 ~count:64) in
+  if List.length labels <> 64 then
+    Alcobar.failf "sample returned %d labels, expected 64" (List.length labels);
+  assert_no_duplicates "sample" labels;
+  List.iteri
+    (fun i label ->
+      let prefix = Fmt.str "smp%d_" i in
+      if not (String.starts_with ~prefix label) then
+        Alcobar.failf "sample label %S does not start with %S" label prefix)
+    labels
+
+let const_case name check =
+  Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
+
+let invariant_cases label =
+  [
+    const_case (label ^ " registry") check_registry_invariants;
+    const_case (label ^ " composition vocabulary") check_composition_vocabulary;
+    const_case (label ^ " sampler") check_sampler_invariants;
+  ]
+
+type api_access = {
+  a : int;
+  hi : int;
+  lo : int;
+  payload : Bytesrw.Bytes.Slice.t;
+}
+
+let api_access_codec () =
+  let f_a = Wire.Field.v "A" Wire.uint8 in
+  let f_hi = Wire.Field.v "Hi" (Wire.bits ~width:3 Wire.U8) in
+  let f_lo = Wire.Field.v "Lo" (Wire.bits ~width:5 Wire.U8) in
+  let f_payload = Wire.Field.v "Payload" (Wire.byte_slice ~size:(Wire.int 3)) in
+  let bf_a = Wire.Codec.(f_a $ fun r -> r.a) in
+  let bf_hi = Wire.Codec.(f_hi $ fun r -> r.hi) in
+  let bf_lo = Wire.Codec.(f_lo $ fun r -> r.lo) in
+  let bf_payload = Wire.Codec.(f_payload $ fun r -> r.payload) in
+  let codec =
+    Wire.Codec.v "ApiAccess"
+      (fun a hi lo payload -> { a; hi; lo; payload })
+      Wire.Codec.[ bf_a; bf_hi; bf_lo; bf_payload ]
+  in
+  (codec, bf_a, bf_hi, bf_lo, bf_payload)
+
+let check_int label expected actual =
+  if actual <> expected then
+    Alcobar.failf "%s: expected %d, got %d" label expected actual
+
+let check_string label expected actual =
+  if not (String.equal expected actual) then
+    Alcobar.failf "%s: expected %S, got %S" label expected actual
+
+let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
+    payload_s =
+  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
+  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
+  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
+  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  check_int "Codec.get scalar" a (get_a buf base);
+  check_int "Codec.get bitfield hi" hi (get_hi buf base);
+  check_int "Codec.get bitfield lo" lo (get_lo buf base);
+  check_string "Codec.get slice" payload_s
+    (string_of_slice (get_payload buf base));
+  let slice_offset =
+    Wire.Codec.slice_offset codec bf_payload |> Wire.Staged.unstage
+  in
+  let slice_length =
+    Wire.Codec.slice_length codec bf_payload |> Wire.Staged.unstage
+  in
+  check_int "Codec.slice_offset" (base + 2) (slice_offset buf base);
+  check_int "Codec.slice_length" 3 (slice_length buf base)
+
+let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
+  let bit_hi = Wire.Codec.bitfield codec bf_hi in
+  let bit_lo = Wire.Codec.bitfield codec bf_lo in
+  let load = Wire.Codec.load_word bit_hi |> Wire.Staged.unstage in
+  let word = load buf base in
+  check_int "Codec.extract hi" hi (Wire.Codec.extract bit_hi word);
+  check_int "Codec.extract lo" lo (Wire.Codec.extract bit_lo word)
+
+let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
+    next_lo next_payload_s =
+  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
+  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
+  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
+  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let set_a = Wire.Codec.set codec bf_a |> Wire.Staged.unstage in
+  let set_hi = Wire.Codec.set codec bf_hi |> Wire.Staged.unstage in
+  let set_lo = Wire.Codec.set codec bf_lo |> Wire.Staged.unstage in
+  let set_payload = Wire.Codec.set codec bf_payload |> Wire.Staged.unstage in
+  set_a buf base next_a;
+  set_hi buf base next_hi;
+  set_lo buf base next_lo;
+  set_payload buf base (slice_of_string next_payload_s);
+  check_int "Codec.set scalar" next_a (get_a buf base);
+  check_int "Codec.set bitfield hi" next_hi (get_hi buf base);
+  check_int "Codec.set bitfield lo" next_lo (get_lo buf base);
+  check_string "Codec.set slice" next_payload_s
+    (string_of_slice (get_payload buf base))
+
+let check_api_decode_after_set codec buf base next_a next_hi next_lo
+    next_payload_s =
+  match Wire.Codec.decode codec buf base with
+  | Ok decoded ->
+      check_int "Codec.decode after set scalar" next_a decoded.a;
+      check_int "Codec.decode after set hi" next_hi decoded.hi;
+      check_int "Codec.decode after set lo" next_lo decoded.lo;
+      check_string "Codec.decode after set slice" next_payload_s
+        (string_of_slice decoded.payload)
+  | Error e ->
+      Alcobar.failf "Codec.decode after set failed: %a" Wire.pp_parse_error e
+
+let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
+    =
+  let hi = hi land 0x7 and lo = lo land 0x1F in
+  let next_hi = next_hi land 0x7 and next_lo = next_lo land 0x1F in
+  let codec, bf_a, bf_hi, bf_lo, bf_payload = api_access_codec () in
+  let payload = slice_of_string payload_s in
+  let value = { a; hi; lo; payload } in
+  let base = 1 in
+  let sz = Wire.Codec.wire_size codec in
+  let buf = Bytes.make (sz + 2) '\xCC' in
+  Wire.Codec.encode codec value buf base;
+  check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo payload_s;
+  check_api_bitfields codec bf_hi bf_lo buf base hi lo;
+  check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
+    next_lo next_payload_s;
+  check_api_decode_after_set codec buf base next_a next_hi next_lo
+    next_payload_s
+
+let custom_array_seq =
+  Wire.Seq_map
+    {
+      empty = [];
+      add = (fun acc v -> v :: acc);
+      finish = (fun acc -> Array.of_list (List.rev acc));
+      iter = (fun f arr -> Array.iter f arr);
+    }
+
+let check_custom_seq a b c d =
+  let values = [| a; b; c; d |] in
+  let typ = Wire.array_seq custom_array_seq ~len:(Wire.int 4) Wire.uint8 in
+  let encoded = Wire.to_bytes typ values in
+  (match Wire.of_bytes typ encoded with
+  | Ok decoded ->
+      if decoded <> values then Alcobar.failf "array_seq custom seq mismatch"
+  | Error e ->
+      Alcobar.failf "array_seq custom seq decode failed: %a" Wire.pp_parse_error
+        e);
+  let f_len = Wire.Field.v "Len" Wire.uint8 in
+  let f_items =
+    Wire.Field.repeat_seq "Items" ~seq:custom_array_seq
+      ~size:(Wire.Field.ref f_len) Wire.uint8
+  in
+  let codec =
+    Wire.Codec.v "ApiRepeatSeq"
+      (fun _ items -> items)
+      Wire.Codec.[ f_len $ Array.length; (f_items $ fun xs -> xs) ]
+  in
+  let buf = Bytes.create 5 in
+  Wire.Codec.encode codec values buf 0;
+  match Wire.Codec.decode codec buf 0 with
+  | Ok decoded ->
+      if decoded <> values then Alcobar.failf "repeat_seq custom seq mismatch"
+  | Error e ->
+      Alcobar.failf "repeat_seq custom seq decode failed: %a"
+        Wire.pp_parse_error e
+
+let raw_len_field = Wire.Private.Types.field "Len" Wire.uint8
+let raw_data_field = Wire.Private.Types.field "Data" Wire.all_bytes
+
+let raw_struct =
+  Wire.Private.Types.struct_ "ApiRaw"
+    [ raw_len_field; Wire.Private.Types.anon_field Wire.uint8; raw_data_field ]
+
+let fst5 (a, _, _, _, _) = a
+
+let check_struct_validator len data_s =
+  let len = len land 0xFF in
+  let bytes = Bytes.create (2 + String.length data_s) in
+  Bytes.set_uint8 bytes 0 len;
+  Bytes.set_uint8 bytes 1 0;
+  Bytes.blit_string data_s 0 bytes 2 (String.length data_s);
+  let validator = Wire.Codec.validator_of_struct raw_struct in
+  check_int "Codec.struct_min_size" 2 (Wire.Codec.struct_min_size validator);
+  check_int "Codec.struct_size_of" (Bytes.length bytes)
+    (Wire.Codec.struct_size_of validator bytes 0);
+  (match Wire.Codec.wire_size_info_of_validator validator with
+  | `Fixed _ -> Alcobar.failf "raw all_bytes struct unexpectedly fixed"
+  | `Variable size_of ->
+      check_int "Codec.wire_size_info_of_validator" (Bytes.length bytes)
+        (size_of bytes 0));
+  (try Wire.Codec.validate_struct validator bytes 0 with
+  | Wire.Validation_error e | Wire.Parse_error e ->
+      Alcobar.failf "validate_struct rejected positive: %a" Wire.pp_parse_error
+        e
+  | Invalid_argument e -> Alcobar.failf "validate_struct crashed: %s" e);
+  match Wire.of_bytes (Wire.Private.Types.struct_typ raw_struct) bytes with
+  | Ok () -> ()
+  | Error e ->
+      Alcobar.failf "Raw.struct_typ direct decode failed: %a"
+        Wire.pp_parse_error e
+
+let check_metadata_helpers () =
+  let open Wire in
+  let f_meta =
+    Field.v "Meta" ~doc:"metadata"
+      ~constraint_:Expr.(bool true && not (bool false))
+      uint8
+  in
+  check_string "Field.name" "Meta" (Field.name f_meta);
+  check_int "Field.typ" 1 (Option.get (size (Field.typ f_meta)));
+  (match Field.constraint_ f_meta with
+  | Some _ -> ()
+  | None -> Alcobar.failf "Field.constraint_ missing");
+  (match Field.doc f_meta with
+  | Some doc -> check_string "Field.doc" "metadata" doc
+  | None -> Alcobar.failf "Field.doc missing");
+  check_string "Field.pp" "Meta" (Fmt.str "%a" Field.pp f_meta);
+  let _ = Field.decl_of_packed (Field.Named f_meta) in
+  let _ = Field.decl_of_packed (Field.Anon (Field.anon uint8)) in
+  let p_in = Param.input "Limit" uint8 in
+  let p_out = Param.output "Out" uint8 in
+  check_string "Param.name" "Limit" (Param.name p_in);
+  check_string "Private.param_name" "Limit"
+    (Private.param_name (Param.decl p_in));
+  check_string "Private.param_c_type" "uint8_t"
+    (Private.param_c_type (Param.decl p_in));
+  check_string "Private.ml_type_of" "int" (Private.ml_type_of uint8);
+  check_string "Private.c_type_of" "uint8_t" (Private.c_type_of uint8);
+  if Private.param_is_mutable (Param.decl p_in) then
+    Alcobar.failf "Param.input reported mutable";
+  if not (Private.param_is_mutable (Param.decl p_out)) then
+    Alcobar.failf "Param.output reported immutable";
+  let f_src = Field.v "Src" uint8 in
+  let f_copy =
+    Field.v "Copy"
+      ~action:(Action.on_success [ Action.assign p_out (Field.ref f_src) ])
+      uint8
+  in
+  let codec =
+    Wire.Codec.v "ApiParam"
+      ~where:Expr.(Field.ref f_src <= Param.expr p_in)
+      (fun src copy -> (src, copy))
+      Wire.Codec.[ f_src $ fst; f_copy $ snd ]
+  in
+  let env = Wire.Codec.env codec |> Param.bind p_in 9 in
+  check_int "Param.get input" 9 (Param.get env p_in);
+  let env_by_name = Wire.Codec.env codec |> Param.bind_by_name "Limit" 8 in
+  check_int "Param.bind_by_name" 8 (Param.get env_by_name p_in);
+  let buf = bytes_of_octets [ 7; 1 ] in
+  (match Wire.Codec.decode ~env codec buf 0 with
+  | Ok _ -> check_int "Param.get output" 7 (Param.get env p_out)
+  | Error e -> Alcobar.failf "param/action decode failed: %a" pp_parse_error e);
+  check_string "Codec schema name" "ApiParam"
+    (Wire.Everparse.schema codec).Wire.Everparse.name;
+  let renamed = Wire.Codec.rename "ApiParamRenamed" codec in
+  check_string "Codec.rename" "ApiParamRenamed"
+    (Wire.Everparse.schema renamed).Wire.Everparse.name;
+  if Wire.Codec.doc codec <> None then
+    Alcobar.failf "Codec.doc unexpectedly set";
+  let pp_value = Fmt.str "%a" (pp_value codec) (7, 1) in
+  if not (String.contains pp_value 'S') then
+    Alcobar.failf "pp_value did not include field output: %S" pp_value;
+  let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in
+  check_int "Wire.size fixed" 1 (Option.get (size uint8));
+  match size all_bytes with
+  | None -> ()
+  | Some n -> Alcobar.failf "Wire.size all_bytes = Some %d" n
+
+let public_raw_struct () =
+  let len_field =
+    Wire.Everparse.Raw.field "Len" ~constraint_:Wire.Expr.true_
+      ~action:
+        (Wire.Action.on_success [ Wire.Action.return_bool Wire.Expr.true_ ])
+      Wire.uint8
+  in
+  let data_field = Wire.Everparse.Raw.field "Data" Wire.all_bytes in
+  let raw_struct =
+    Wire.Everparse.Raw.struct_ "ApiRaw"
+      [ len_field; Wire.Everparse.Raw.anon_field Wire.uint8; data_field ]
+  in
+  (len_field, raw_struct)
+
+let check_everparse_schema raw_struct =
+  let schema = Wire.Everparse.schema_of_struct raw_struct in
+  check_string "Everparse.filename" "ApiRaw.3d" (Wire.Everparse.filename schema);
+  if not (Wire.Everparse.uses_wire_ctx schema) then
+    Alcobar.failf "schema_of_struct did not use WireCtx";
+  (match Wire.Everparse.entrypoint_struct schema with
+  | Some _ -> ()
+  | None -> Alcobar.failf "schema_of_struct has no entrypoint");
+  let plug_fields = Wire.Everparse.plug_fields schema in
+  assert_contains "Everparse.plug_fields"
+    (List.map (fun f -> f.Wire.Everparse.name) plug_fields)
+    [ "Len"; "Data" ];
+  if Wire.Everparse.plug_setters schema = [] then
+    Alcobar.failf "Everparse.plug_setters empty";
+  if Wire.Everparse.extern_fn_names schema = [] then
+    Alcobar.failf "Everparse.extern_fn_names empty"
+
+let check_raw_struct_metadata raw_struct len_field =
+  let forms = Wire.Everparse.field_action_forms raw_struct in
+  if List.length forms <> 3 then
+    Alcobar.failf "field_action_forms returned %d fields" (List.length forms);
+  check_string "Raw.struct_name" "ApiRaw"
+    (Wire.Everparse.Raw.struct_name raw_struct);
+  assert_contains "Raw.field_names"
+    (Wire.Everparse.Raw.field_names raw_struct)
+    [ "Len"; "Data" ];
+  let projected =
+    Wire.Everparse.Raw.struct_project raw_struct ~name:"ApiProjected"
+      ~keep:[ len_field ]
+  in
+  let _ = Wire.Everparse.Raw.field_ref len_field in
+  let _ = Wire.Everparse.Raw.struct_typ raw_struct in
+  (match Wire.Everparse.Raw.struct_size raw_struct with
+  | None -> ()
+  | Some n -> Alcobar.failf "Raw.struct_size all_bytes = Some %d" n);
+  assert_contains "Raw.struct_project"
+    (Wire.Everparse.Raw.field_names projected)
+    [ "Len" ]
+
+let public_param_struct () =
+  let p = Wire.Everparse.Raw.param "Limit" Wire.uint8 in
+  let p_out = Wire.Everparse.Raw.mutable_param "Out" Wire.uint16be in
+  let param_struct =
+    Wire.Everparse.Raw.param_struct "ApiParamRaw" [ p; p_out ]
+      [ Wire.Everparse.Raw.field "Value" Wire.uint8 ]
+  in
+  (p, param_struct)
+
+let check_raw_param_metadata param_struct raw_struct =
+  if List.length (Wire.Everparse.Raw.struct_params param_struct) <> 2 then
+    Alcobar.failf "Raw.struct_params length mismatch";
+  assert_contains "Raw.input_param_names"
+    (Wire.Everparse.Raw.input_param_names param_struct)
+    [ "Limit" ];
+  if Wire.Everparse.Raw.input_param_c_types param_struct = [] then
+    Alcobar.failf "Raw.input_param_c_types empty";
+  if Wire.Everparse.Raw.field_kinds raw_struct = [] then
+    Alcobar.failf "Raw.field_kinds empty";
+  let app =
+    Wire.Everparse.Raw.apply
+      (Wire.Everparse.Raw.type_ref "ApiParamRaw")
+      [ Wire.int 3 ]
+  in
+  let _ = Fmt.str "%a" Wire.Everparse.Raw.pp_typ app in
+  let _ =
+    Fmt.str "%a" Wire.Everparse.Raw.pp_typ
+      (Wire.Everparse.Raw.qualified_ref "Api" "Other")
+  in
+  ()
+
+let check_raw_module_helpers raw_struct p param_struct =
+  let module_ =
+    Wire.Everparse.Raw.module_ ~doc:"api raw module"
+      [
+        Wire.Everparse.Raw.define "ApiLimit" 255;
+        Wire.Everparse.Raw.extern_probe ~init:true "ApiProbe";
+        Wire.Everparse.Raw.extern_probe "ApiProbeNoInit";
+        Wire.Everparse.Raw.extern_fn "ApiExtern" [ p ] Wire.uint8;
+        Wire.Everparse.Raw.enum_decl "ApiEnum"
+          [ ("Zero", 0); ("One", 1) ]
+          Wire.uint8;
+        Wire.Everparse.Raw.casetype_decl "ApiCase" [] Wire.uint8
+          [
+            Wire.Everparse.Raw.decl_case 1 Wire.uint8;
+            Wire.Everparse.Raw.decl_default Wire.uint16be;
+          ];
+        Wire.Everparse.Raw.typedef ~entrypoint:true ~export:true ~output:true
+          ~doc:"raw entry" raw_struct;
+        Wire.Everparse.Raw.typedef param_struct;
+      ]
+  in
+  let rendered = Wire.Everparse.Raw.to_3d module_ in
+  if String.length rendered = 0 then Alcobar.failf "Raw.to_3d empty";
+  let rendered_enum = Wire.Everparse.Raw.to_3d ~enum_as_type:true module_ in
+  if String.length rendered_enum = 0 then
+    Alcobar.failf "Raw.to_3d ~enum_as_type empty";
+  let _ = Fmt.str "%a" Wire.Everparse.Raw.pp_module module_ in
+  let module_schema =
+    Wire.Everparse.Raw.of_module ~name:"ApiModule" ~module_ ~wire_size:1
+  in
+  check_string "Raw.of_module" "ApiModule" module_schema.Wire.Everparse.name;
+  let codec = fst5 (api_access_codec ()) in
+  let st = Wire.Everparse.struct_of_codec codec in
+  let _ = Wire.Everparse.doc codec in
+  let _ = Fmt.str "%a" Wire.Ascii.pp_struct st in
+  let _ = Fmt.str "%a" Wire.Ascii.pp_codec codec in
+  ()
+
+let check_everparse_helpers () =
+  let len_field, raw_struct = public_raw_struct () in
+  check_everparse_schema raw_struct;
+  check_raw_struct_metadata raw_struct len_field;
+  let p, param_struct = public_param_struct () in
+  check_raw_param_metadata param_struct raw_struct;
+  check_raw_module_helpers raw_struct p param_struct
+
+let once_case name check =
+  let ran = ref false in
+  Alcobar.test_case name
+    Alcobar.[ Alcobar.const () ]
+    (fun () ->
+      if not !ran then begin
+        ran := true;
+        check ()
+      end)
+
+let check_write_helpers_once () =
+  let codec = fst5 (api_access_codec ()) in
+  let schema = Wire.Everparse.schema codec in
+  let doc_schema = Wire.Everparse.doc codec in
+  let outdir =
+    Filename.concat (Filename.get_temp_dir_name ()) "wire_fuzz_api"
+  in
+  (try Sys.mkdir outdir 0o700 with Sys_error _ -> ());
+  Wire.Everparse.write_3d ~outdir [ schema ];
+  Wire.Everparse.write_doc ~outdir ~name:"ApiDoc" [ doc_schema ];
+  Wire.Everparse.Raw.to_3d_file ~enum_as_type:true
+    (Filename.concat outdir "ApiRawDirect.3d")
+    schema.module_
+
+let api_cases label =
+  [
+    Alcobar.test_case (label ^ " accessors")
+      Alcobar.
+        [
+          uint8;
+          range ~min:0 8;
+          range ~min:0 32;
+          bytes_fixed 3;
+          uint8;
+          range ~min:0 8;
+          range ~min:0 32;
+          bytes_fixed 3;
+        ]
+      check_api_accessors;
+    Alcobar.test_case (label ^ " custom seq")
+      Alcobar.[ uint8; uint8; uint8; uint8 ]
+      check_custom_seq;
+    Alcobar.test_case
+      (label ^ " struct validator")
+      Alcobar.[ uint8; bytes ]
+      check_struct_validator;
+    const_case (label ^ " metadata") check_metadata_helpers;
+    const_case (label ^ " everparse metadata") check_everparse_helpers;
+    once_case (label ^ " write once") check_write_helpers_once;
+  ]
 
 (* Project a gen's codec to a 3D schema and pretty-print it: covers the whole
    projection + code-generation path without invoking 3d.exe. A projection that
@@ -2582,9 +4316,41 @@ let ep_direct label =
                 if not (g.equal d value) then
                   Alcobar.failf "%s of_string decode mismatch" label
             | Error _ -> Alcobar.failf "%s of_string decode failed" label);
+            (match Wire.of_string_exn g.typ s with
+            | d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_string_exn decode mismatch" label
+            | exception Wire.Parse_error _ ->
+                Alcobar.failf "%s of_string_exn decode failed" label);
+            (match Wire.of_bytes g.typ bs with
+            | Ok d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_bytes decode mismatch" label
+            | Error _ -> Alcobar.failf "%s of_bytes decode failed" label);
+            (match Wire.of_bytes_exn g.typ bs with
+            | d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_bytes_exn decode mismatch" label
+            | exception Wire.Parse_error _ ->
+                Alcobar.failf "%s of_bytes_exn decode failed" label);
             if Wire.to_string g.typ value <> s then
-              Alcobar.failf "%s of_string reencode mismatch" label
+              Alcobar.failf "%s of_string reencode mismatch" label;
+            if string_of_bytes (Wire.to_bytes g.typ value) <> s then
+              Alcobar.failf "%s to_bytes reencode mismatch" label
           end))
+
+let ep_direct_safety label kind adversarial =
+  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+      let stream = if adversarial then g.adversarial else g.random in
+      Alcobar.map
+        Alcobar.[ stream ]
+        (fun bs () ->
+          if Option.is_none g.env then
+            try
+              ignore (Wire.of_string g.typ (string_of_bytes bs));
+              ignore (Wire.of_bytes g.typ bs)
+            with Invalid_argument _ ->
+              Alcobar.failf "%s direct %s crashed decoder" label kind))
 
 let ep_streaming label =
   Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
@@ -2598,6 +4364,13 @@ let ep_streaming label =
                 if not (g.equal d value) then
                   Alcobar.failf "%s of_reader decode mismatch" label
             | Error _ -> Alcobar.failf "%s of_reader decode failed" label);
+            let reader = Bytesrw.Bytes.Reader.of_bytes bs in
+            (match Wire.of_reader_exn g.typ reader with
+            | d ->
+                if not (g.equal d value) then
+                  Alcobar.failf "%s of_reader_exn decode mismatch" label
+            | exception Wire.Parse_error _ ->
+                Alcobar.failf "%s of_reader_exn decode failed" label);
             let buf = Buffer.create (Bytes.length bs) in
             let w = Bytesrw.Bytes.Writer.of_buffer buf in
             Wire.to_writer g.typ value w;
@@ -2628,6 +4401,13 @@ let entry_point_cases label =
   [
     Alcobar.test_case (label ^ " of_string")
       Alcobar.[ ep_direct label ]
+      (fun run -> run ());
+    Alcobar.test_case (label ^ " direct random")
+      Alcobar.[ ep_direct_safety label "random" false ]
+      (fun run -> run ());
+    Alcobar.test_case
+      (label ^ " direct adversarial")
+      Alcobar.[ ep_direct_safety label "adversarial" true ]
       (fun run -> run ());
     Alcobar.test_case (label ^ " of_reader")
       Alcobar.[ ep_streaming label ]
