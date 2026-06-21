@@ -211,6 +211,13 @@
 
 ### Fixed
 
+- `Wire.Param.bind_by_name` now drives a parameter-dependent field size on
+  decode, not only `where` clauses and constraints. A field whose size comes from
+  a parameter (a `byte_array`, `byte_slice`, or `uint_var` sized by
+  `Param.expr`) read as zero bytes when its parameter was bound by name, silently
+  truncating the field and misaligning everything after it; only the typed
+  `Param.bind` worked. Both binders now resolve parametric sizes identically
+  (#175, @samoht)
 - A `Wire.where` placed on a container element (an array or repeat element, or an
   optional inner) is now rejected at codec construction with a clear error.
   EverParse cannot express a refinement on an array or optional element that

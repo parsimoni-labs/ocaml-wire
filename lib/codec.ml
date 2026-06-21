@@ -3149,6 +3149,13 @@ let env (t : _ t) : Param.env =
   }
 
 let decode_exn ?env:e t buf off =
+  (* Seed the input cells from the env before reading fields: the field
+     readers resolve [Param_ref p] via [!(p.cell)], so a parametric size
+     (byte_array / byte_slice / uint_var) must see the env's value. Mirror of
+     the seeding [encode] does. [Param.bind] also writes the cell directly, but
+     [Param.bind_by_name] only has the name and writes [env.slots]; without
+     this it would read as 0 and silently truncate the field. *)
+  (match e with Some env -> load_env_into_cells t env | None -> ());
   let v = t.decode buf off in
   let arr = t.decode_scratch in
   clear_slots arr t.n_array_slots;
