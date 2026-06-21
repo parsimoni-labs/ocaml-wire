@@ -41,6 +41,33 @@ let test_enumerations () =
   Alcotest.(check bool) "contains enum" true (contains ~sub:"enum" output);
   Alcotest.(check bool) "contains Enum8_1" true (contains ~sub:"Enum8_1" output)
 
+(* An enum over a big-endian base has no valid 3D enum type (EverParse types the
+   constants as the native width and rejects the declaration), so it projects as
+   the base scalar with a membership refinement instead of an enum decl. A native
+   uint8 enum still projects as a named enum type. *)
+let test_enum_big_endian_projection () =
+  let be =
+    enum "WideCode" [ ("Zero", 0); ("One", 1); ("High", 0xBEEF) ] uint16be
+  in
+  let out =
+    to_3d ~enum_as_type:true
+      (module_ [ typedef (struct_ "BeEnum" [ field "v" be ]) ])
+  in
+  Alcotest.(check bool)
+    "no enum decl for BE base" false
+    (contains ~sub:"enum WideCode" out);
+  Alcotest.(check bool)
+    "BE enum field carries membership refinement" true
+    (contains ~sub:"48879" out);
+  let le = enum "Color" [ ("Red", 1); ("Green", 2) ] uint8 in
+  let out_le =
+    to_3d ~enum_as_type:true
+      (module_ [ typedef (struct_ "LeEnum" [ field "v" le ]) ])
+  in
+  Alcotest.(check bool)
+    "uint8 enum keeps enum decl" true
+    (contains ~sub:"enum Color" out_le)
+
 let test_field_dependence () =
   let t_struct = param_struct "t" [ param "a" uint32 ] [ field "x" uint32 ] in
   let f_a = field "a" uint32 in
@@ -1010,6 +1037,8 @@ let suite =
         test_array_lookup_element_bound;
       Alcotest.test_case "generation: bitfields" `Quick test_bitfields;
       Alcotest.test_case "generation: enumerations" `Quick test_enumerations;
+      Alcotest.test_case "generation: big-endian enum projection" `Quick
+        test_enum_big_endian_projection;
       Alcotest.test_case "generation: field dependence" `Quick
         test_field_dependence;
       Alcotest.test_case "generation: casetype" `Quick test_casetype;
