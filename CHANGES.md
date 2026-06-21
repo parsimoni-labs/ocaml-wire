@@ -211,6 +211,11 @@
 
 ### Fixed
 
+- The doc pipeline's differential self-check (`agree.c`) no longer false-reports
+  a mismatch for a codec with a large payload. The generated reader held each
+  corpus line in a buffer one char short of two hex digits per input byte, so an
+  8 KB payload (16384 hex chars) truncated the line and misparsed the verdict.
+  The buffer is now sized to the input width (#172, @samoht)
 - `Wire.Codec.decode` and `Wire.Codec.validate` now enforce a constraint written
   as `Wire.where cond t` on a field, and any field `~action`. Such a `where` was
   projected into the generated `.3d` (so the EverParse C validator rejected
