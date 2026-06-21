@@ -211,6 +211,11 @@
 
 ### Fixed
 
+- `Wire.of_string` (and the other typ-level entry points) now accept an unlisted
+  code in a `Wire.enum_open` field, matching `Wire.Codec.decode`. The typ-level
+  decoder kept the closed-enum membership check regardless of the `enum_open`
+  flag, so it raised `Invalid_enum` on a value the codec accepts, an open enum
+  that behaved as closed on that path (#177, @samoht)
 - `Wire.Codec.decode` now rejects a parametric codec whose env is missing or
   leaves an input param unbound, raising `Invalid_argument` (naming the param)
   the way `Codec.encode` already does. Decoding without binding a parameter used
