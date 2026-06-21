@@ -14,6 +14,11 @@ let test_everparse_name () =
   Alcotest.(check string)
     "TMFrame -> Tmframe" "Tmframe"
     (Wire_3d.everparse_name "TMFrame");
+  (* A consecutive-capital run is collapsed wherever it occurs, not only at the
+     start: the [OSF] run in the middle lowercases to [osf]. *)
+  Alcotest.(check string)
+    "SpaceOSFrame -> SpaceOsframe" "SpaceOsframe"
+    (Wire_3d.everparse_name "SpaceOSFrame");
   (* Standard camelCase is preserved *)
   Alcotest.(check string) "Foo -> Foo" "Foo" (Wire_3d.everparse_name "Foo");
   Alcotest.(check string)
@@ -252,6 +257,21 @@ let test_doc_differential_large_payload () =
   else
     differential_ok ~name:"sharedspec" ~package:"shared-doc" ~count:40
       [ Wire_3d.pack diff_large_payload_codec ]
+
+(* Interior consecutive caps: EverParse normalizes the validator symbol to
+   [SpacewireCheckSpaceOsframe], so agree.c must build the same name through
+   [everparse_name] or its call links to an undeclared function. *)
+let diff_caps_name_codec =
+  let open Wire in
+  Codec.v "SpaceOSFrame"
+    (fun v -> v)
+    [ Codec.( $ ) (Field.v "v" uint8) (fun v -> v) ]
+
+let test_doc_differential_caps_name () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"spacewire" ~package:"space-wire" ~count:40
+      [ Wire_3d.pack diff_caps_name_codec ]
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
@@ -1074,6 +1094,8 @@ let suite =
         test_doc_differential_no_params;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
         test_doc_differential_large_payload;
+      Alcotest.test_case "doc differential caps name (needs 3d.exe)" `Quick
+        test_doc_differential_caps_name;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
