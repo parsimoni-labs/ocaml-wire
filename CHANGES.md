@@ -211,6 +211,13 @@
 
 ### Fixed
 
+- `Wire.Param.bind_by_name` now drives a parameter-dependent field size on
+  decode, not only `where` clauses and constraints. A field whose size comes from
+  a parameter (a `byte_array`, `byte_slice`, or `uint_var` sized by
+  `Param.expr`) read as zero bytes when its parameter was bound by name, silently
+  truncating the field and misaligning everything after it; only the typed
+  `Param.bind` worked. Both binders now resolve parametric sizes identically
+  (#175, @samoht)
 - A signed integer field's ordering constraint (e.g. `int8 x` with `x < 100`) now
   projects soundly. A signed field becomes an unsigned `UINT*` in 3D, so the
   refinement was emitted as an unsigned comparison and the verified C validator
