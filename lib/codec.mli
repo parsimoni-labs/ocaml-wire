@@ -70,7 +70,13 @@ val decode :
 (** [decode ?env c buf off] decodes a record from [buf] at offset [off].
 
     If [?env] is supplied, input params are read from it and output params are
-    written back to it after decoding. *)
+    written back to it after decoding.
+
+    Raises [Invalid_argument] when the codec has input params and no env is
+    supplied, or the env left any input param unbound (the error names the
+    offending param). An unbound input param would resolve a parametric field
+    size to 0 and silently truncate the field, so it is rejected up front the
+    same way {!encode} does. *)
 
 val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
 (** [decode_exn ?env c buf off] is like {!decode} but raises
