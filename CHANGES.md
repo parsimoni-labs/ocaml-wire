@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- `Wire.Codec.validate` on a buffer too short to hold the fields a check reads
+  now fails cleanly instead of raising `Invalid_argument`. A `where` or field
+  constraint may read a field whose offset depends on a length read from the
+  buffer; `decode` bounds-checks the buffer first, but `validate` ran the check
+  kernel directly, so a short buffer read out of bounds and crashed (#181,
+  @samoht)
 - A zero-length `Wire.byte_slice` now decodes to an empty slice instead of
   raising `Invalid_argument`. The slice constructor rejects a zero length, so a
   `byte_slice` whose size resolved to 0 crashed the decoder rather than yielding

@@ -967,11 +967,29 @@ let test_of_string_truncated_variable_codec () =
             (String.length s))
     [ ""; "\x05"; "\xff\x00" ]
 
+(* [Codec.validate] on a buffer too short to hold the fields a check reads must
+   fail cleanly, not crash. A check (here a [where]) reads a field at an offset
+   that depends on a length; [decode] bounds-checks before validating, but
+   [Codec.validate] runs the check kernel directly. *)
+let test_validate_short_buffer_no_crash () =
+  let len = Field.v "Len" (where Expr.true_ uint8) in
+  let data = Field.v "Data" (byte_array ~size:(Field.ref len)) in
+  let c =
+    Codec.v "VShort" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ]
+  in
+  match Codec.validate c (Bytes.create 0) 0 with
+  | () -> Alcotest.fail "validate accepted an empty buffer"
+  | exception Wire.Validation_error _ -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "validate crashed on a short buffer: %s" m
+
 (* -- Suite -- *)
 
 let suite =
   ( "wire",
     [
+      Alcotest.test_case "validate: short buffer does not crash" `Quick
+        test_validate_short_buffer_no_crash;
       Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
         test_enum_open_of_string_accepts_unlisted;
       Alcotest.test_case "of_string: truncated variable codec rejects" `Quick
