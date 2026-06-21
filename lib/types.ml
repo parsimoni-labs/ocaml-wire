@@ -854,11 +854,23 @@ let casetype_decl name params tag cases =
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
 
+(* An enum over a big-endian multi-byte base cannot be a 3D [enum] type:
+   EverParse types the integer constants as the native (little-endian) width and
+   rejects the declaration ("Expected UINT16BE, got UINT16"). Such an enum is
+   projected as its base scalar with a membership refinement (closed) or bare
+   base (open) instead, the same shape used outside the doc projection. *)
+let enum_base_is_be : type a. a typ -> bool = function
+  | Uint16 Big | Uint32 Big | Uint63 Big | Uint64 Big -> true
+  | Int16 Big | Int32 Big | Int64 Big -> true
+  | Uint_var { endian = Big; _ } -> true
+  | _ -> false
+
 (* Extract enum declarations needed by struct fields. Scans field types for
    Enum constructors (including under Map/Where wrappers) and returns the
    corresponding enum_decl entries, deduplicated by name. Enums over bitfield
    bases are skipped: they map to plain bitfields in 3D (the enum/variant
-   mapping is OCaml-only). *)
+   mapping is OCaml-only). An enum over a big-endian base is skipped too (no 3D
+   enum type for it; the field carries a membership refinement instead). *)
 let enum_decls (s : struct_) : decl list =
   let seen = Hashtbl.create 4 in
   let decls = Stdlib.ref [] in
@@ -870,7 +882,9 @@ let enum_decls (s : struct_) : decl list =
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
         | Enum { name; cases; base; _ }
-          when (not (Hashtbl.mem seen name)) && not (is_bits base) ->
+          when (not (Hashtbl.mem seen name))
+               && (not (is_bits base))
+               && not (enum_base_is_be base) ->
             (* Both open and closed enums declare a 3D enum type so the named
                codes survive in the generated .3d. A closed enum additionally
                constrains its field with a membership refinement; an open enum
@@ -1733,6 +1747,9 @@ let rec enum_type_name : type a. a typ -> string option = function
   (* An open enum has no 3D enum type to name (it projects as its base), so the
      doc projection types the field as the base scalar, not the enum. *)
   | Enum { closed = false; _ } -> None
+  (* A big-endian base has no valid 3D enum type either; project as base plus a
+     membership refinement. *)
+  | Enum { base; _ } when enum_base_is_be base -> None
   | Enum { name; _ } -> Some name
   | Map { inner; _ } -> enum_type_name inner
   | Where { inner; _ } -> enum_type_name inner

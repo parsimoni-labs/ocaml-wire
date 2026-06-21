@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- An `enum` / `variants` over a big-endian base (e.g. `enum ... uint16be`) now
+  projects to a `.3d` EverParse accepts. It was emitted as a `UINT16BE enum`
+  declaration, which EverParse rejects (it types the integer constants as the
+  native width: "Expected UINT16BE, got UINT16"). A big-endian-based enum now
+  projects as its base scalar with a membership refinement (closed) or bare base
+  (open), with no enum declaration (#185, @samoht)
 - `Wire.array` / `Wire.array_seq` now reject a zero-width element (`empty` /
   unit) at construction. Such an array carries no bytes and projected to a
   zero-size 3D array EverParse rejects; it is a degenerate shape and is refused
