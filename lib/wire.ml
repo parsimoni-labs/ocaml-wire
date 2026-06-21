@@ -159,6 +159,16 @@ let parse_codec_typ codec_decode fixed_size size_of buf off len =
   check_eof len (off + sz);
   (codec_decode buf off, off + sz)
 
+(* Only a closed enum enforces membership; an open enum names known codes but
+   accepts any value. [Codec.decode] gates on [closed] the same way, so the two
+   decode paths agree on an unlisted code. *)
+let check_enum_membership ~closed cases v =
+  if closed then begin
+    let valid = List.map snd cases in
+    if not (List.mem v valid) then
+      raise (Parse_error (Invalid_enum { value = v; valid }))
+  end
+
 let parse_struct_typ s buf off len =
   let v = Codec.validator_of_struct s in
   let sz = Codec.struct_size_of v buf off in
@@ -276,11 +286,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let v, off' = parse_direct inner buf off len in
       (decode v, off')
   | Where { cond; inner } -> parse_where inner cond buf off len
-  | Enum { base; cases; _ } ->
+  | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
-      let valid = List.map snd cases in
-      if List.mem v valid then (v, off')
-      else raise (Parse_error (Invalid_enum { value = v; valid }))
+      check_enum_membership ~closed cases v;
+      (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
       parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len

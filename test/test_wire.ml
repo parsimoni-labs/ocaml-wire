@@ -890,11 +890,30 @@ let test_stream_encode_chunk3 () =
   | Ok decoded -> Alcotest.(check int) "encode chunk=3" v decoded
   | Error e -> Alcotest.failf "encode chunk=3: %a" pp_parse_error e
 
+(* An open enum accepts any value, named or not. The typ-level [of_string] path
+   must agree with [Codec.decode] on an unlisted code; it used to keep the closed
+   enum's membership check and reject what the codec accepted. *)
+let test_enum_open_of_string_accepts_unlisted () =
+  let typ = enum_open "Code" [ ("A", 1); ("B", 2); ("C", 3) ] uint8 in
+  let c = Codec.v "EO" (fun v -> v) Codec.[ (Field.v "v" typ $ fun v -> v) ] in
+  let unlisted =
+    "\x32"
+    (* 50, not a named code *)
+  in
+  (match Codec.decode c (Bytes.of_string unlisted) 0 with
+  | Ok v -> Alcotest.(check int) "codec decode accepts unlisted" 50 v
+  | Error e -> Alcotest.failf "codec rejected unlisted: %a" pp_parse_error e);
+  match of_string typ unlisted with
+  | Ok v -> Alcotest.(check int) "of_string accepts unlisted" 50 v
+  | Error e -> Alcotest.failf "of_string rejected unlisted: %a" pp_parse_error e
+
 (* -- Suite -- *)
 
 let suite =
   ( "wire",
     [
+      Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
+        test_enum_open_of_string_accepts_unlisted;
       Alcotest.test_case "expr: equality operators" `Quick
         test_expr_equality_operators;
       (* parsing *)
