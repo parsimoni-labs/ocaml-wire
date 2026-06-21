@@ -2670,9 +2670,10 @@ let build_checked_decode raw_decode wire_size_info min_size =
   raw_decode buf off
 
 (* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
-   [all_zeros]), or an embedded sub-codec whose own last field does. A greedy
-   tail has no boundary once another field follows it, so an embedded codec
-   ending in one is just as unbounded as a bare greedy field. *)
+   [all_zeros]), an embedded sub-codec whose own last field does, or a casetype
+   any of whose case bodies does (if that case is selected its greedy tail has no
+   boundary). A greedy tail has no boundary once another field follows it, so
+   each of these is just as unbounded as a bare greedy field. *)
 let rec field_consumes_rest : type a. a Types.typ -> bool =
  fun t ->
   is_greedy t
@@ -2682,6 +2683,11 @@ let rec field_consumes_rest : type a. a Types.typ -> bool =
       match List.rev codec_struct.fields with
       | Types.Field f :: _ -> field_consumes_rest f.field_typ
       | [] -> false)
+  | Types.Casetype { cases; _ } ->
+      List.exists
+        (fun (Types.Case_branch { cb_inner; _ }) ->
+          field_consumes_rest cb_inner)
+        cases
   | Types.Map { inner; _ } -> field_consumes_rest inner
   | Types.Where { inner; _ } -> field_consumes_rest inner
   | Types.Enum { base; _ } -> field_consumes_rest base
