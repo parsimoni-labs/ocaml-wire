@@ -211,6 +211,10 @@
 
 ### Fixed
 
+- `Wire.array` / `Wire.array_seq` now reject a zero-width element (`empty` /
+  unit) at construction. Such an array carries no bytes and projected to a
+  zero-size 3D array EverParse rejects; it is a degenerate shape and is refused
+  up front (#184, @samoht)
 - `Wire.Codec.v` now rejects, at construction, a non-last field that is a
   `Wire.casetype` with a case body ending in a greedy field (`all_bytes` /
   `all_zeros`). If that case is selected the greedy tail consumes the rest of the

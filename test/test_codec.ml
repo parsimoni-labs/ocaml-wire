@@ -582,6 +582,17 @@ let test_repeat_array_reject_bitfield () =
     (raises_invalid (fun () ->
          Field.repeat "x" ~size:(int 4) (bit (bits ~width:1 U8))))
 
+(* A zero-width element ([empty] / unit) carries no bytes, so an array of it is
+   degenerate and projects to a zero-size 3D array EverParse rejects. It is
+   refused at construction. *)
+let test_array_reject_zero_width_element () =
+  Alcotest.(check bool)
+    "array over empty rejected" true
+    (raises_invalid (fun () -> array ~len:(int 3) empty));
+  Alcotest.(check bool)
+    "array_seq over empty rejected" true
+    (raises_invalid (fun () -> array_seq seq_list ~len:(int 3) empty))
+
 (* Wire.array over a fixed sub-record (Codec element): a fixed-count list of
    structs. Decoding raised Failure "build_field_reader: unsupported type"
    because the array element reader had no Codec case. The schema projects the
@@ -5058,6 +5069,8 @@ let suite =
         test_repeat_oversized_length_rejected;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
+      Alcotest.test_case "array rejects zero-width element" `Quick
+        test_array_reject_zero_width_element;
       Alcotest.test_case "array: record element roundtrip" `Quick
         test_array_record_element;
       Alcotest.test_case "array: record element projection" `Quick

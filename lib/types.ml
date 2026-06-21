@@ -475,7 +475,8 @@ let rec is_array_element : type a. a typ -> bool = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
   | Float32 _ | Float64 _ -> true
-  | Unit -> true
+  (* [Unit] is 0-width: an array of it carries no bytes and projects to a
+     zero-size 3D array EverParse rejects, so it is not a valid element. *)
   | Uint_var { size = Int _; _ } -> true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
   | Codec { codec_fixed_size; codec_struct; _ } ->
@@ -1824,19 +1825,20 @@ let rec mentions_field : type a. string -> a expr -> bool =
    outside the signed range folds to a literal, and anything that is not a plain
    comparison of the field with an integer literal is rejected (it cannot be
    projected faithfully). *)
+let rebuild_ordering op (l : int expr) (r : int expr) : bool expr =
+  match op with
+  | `Lt -> Lt (l, r)
+  | `Le -> Le (l, r)
+  | `Gt -> Gt (l, r)
+  | `Ge -> Ge (l, r)
+
 let translate_signed_ordering ~name ~width (cond : bool expr) : bool expr =
   let signbit = 1 lsl (width - 1) in
   let mask = (1 lsl width) - 1 in
   let smax = signbit - 1 and smin = -signbit in
   let flip_const k : int expr = Int (k land mask lxor signbit) in
   let flip_self : int expr = Lxor (Ref (I, name), Int signbit) in
-  let rebuild op l r : bool expr =
-    match op with
-    | `Lt -> Lt (l, r)
-    | `Le -> Le (l, r)
-    | `Gt -> Gt (l, r)
-    | `Ge -> Ge (l, r)
-  in
+  let rebuild = rebuild_ordering in
   let self_op_const op k : bool expr =
     if k > smax then match op with `Lt | `Le -> Bool true | _ -> Bool false
     else if k < smin then
