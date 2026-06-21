@@ -926,6 +926,11 @@ let bf_base_total_bits = Bitfield.total_bits
 let bf_base_equal = Bitfield.equal
 let bf_write_base = Bitfield.write_word
 
+let equal_bit_order (a : Types.bit_order) (b : Types.bit_order) =
+  match (a, b) with
+  | Msb_first, Msb_first | Lsb_first, Lsb_first -> true
+  | Msb_first, Lsb_first | Lsb_first, Msb_first -> false
+
 (* Build-time dispatch: pattern match on base happens once at codec
    construction, not on every read/write call. *)
 let build_bf_reader base byte_off shift width =
@@ -1512,7 +1517,8 @@ let compile_bits : type r.
   let is_continuation =
     match ctx.bf with
     | Some bf ->
-        bf_base_equal bf.base base && bf.bit_order = bit_order
+        bf_base_equal bf.base base
+        && equal_bit_order bf.bit_order bit_order
         && bf.bits_used + width <= bf.total_bits
     | None -> false
   in
@@ -2650,17 +2656,38 @@ let build_checked_decode raw_decode wire_size_info min_size =
         raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off));
   raw_decode buf off
 
-(* A greedy field ([all_bytes] / [all_zeros]) consumes the rest of the buffer,
-   so it is only meaningful as the last field: an earlier one starves every
-   field after it (and 3D's [:consume-all] must be last too). Reject it at
-   construction rather than silently truncating later fields at decode. *)
+(* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
+   [all_zeros]), or an embedded sub-codec whose own last field does. A greedy
+   tail has no boundary once another field follows it, so an embedded codec
+   ending in one is just as unbounded as a bare greedy field. *)
+let rec field_consumes_rest : type a. a Types.typ -> bool =
+ fun t ->
+  is_greedy t
+  ||
+  match t with
+  | Types.Codec { codec_struct; _ } -> (
+      match List.rev codec_struct.fields with
+      | Types.Field f :: _ -> field_consumes_rest f.field_typ
+      | [] -> false)
+  | Types.Map { inner; _ } -> field_consumes_rest inner
+  | Types.Where { inner; _ } -> field_consumes_rest inner
+  | Types.Enum { base; _ } -> field_consumes_rest base
+  | _ -> false
+
+(* A greedy field consumes the rest of the buffer, so it is only meaningful as
+   the last field: an earlier one starves every field after it (and 3D's
+   [:consume-all] must be last too). This also covers an embedded sub-codec
+   ending in a greedy field, whose tail would otherwise swallow the following
+   field's bytes. Reject it at construction rather than silently truncating
+   later fields at decode. *)
 let reject_greedy_not_last name fields =
   let rec check = function
     | [] | [ _ ] -> ()
     | Types.Field f :: rest ->
-        if is_greedy f.field_typ then
+        if field_consumes_rest f.field_typ then
           Fmt.invalid_arg
-            "Codec.v %s: a greedy field (all_bytes / all_zeros) must be the \
+            "Codec.v %s: a field that consumes the rest of the buffer \
+             (all_bytes / all_zeros, or a sub-codec ending in one) must be the \
              last field, but %s is followed by more fields"
             name
             (Option.value ~default:"<anon>" f.field_name);

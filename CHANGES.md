@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- `Wire.Codec.v` now rejects, at construction, a non-last field whose type is an
+  embedded sub-codec ending in a greedy field (`all_bytes` / `all_zeros`). Such a
+  tail consumes the rest of the buffer with no boundary, so it silently swallowed
+  the following field's bytes and the record failed to decode. The greedy-must-be-
+  last check already rejected a bare greedy field that is not last; it now looks
+  through an embedded sub-codec too (#179, @samoht)
 - `Wire.of_string` (and the other typ-level entry points) now return a clean
   `Error` on a truncated input to a variable-size codec, instead of raising
   `Invalid_argument`. Computing the codec's span reads its length and gate fields

@@ -238,6 +238,27 @@ let test_all_zeros_in_codec () =
   | Ok (Ok _) -> Alcotest.fail "all_zeros must reject non-zero pad byte"
   | _ -> ()
 
+(* An embedded sub-codec ending in a greedy field has no boundary once another
+   field follows it, so its tail would swallow the next field's bytes. The lib
+   rejects this at construction the same way it rejects a bare greedy field that
+   is not last. *)
+let test_reject_greedy_embedded_not_last () =
+  let inner =
+    Codec.v "Inner"
+      (fun f z -> (f, z))
+      Codec.[ Field.v "f" float64be $ fst; Field.v "z" all_zeros $ snd ]
+  in
+  Alcotest.check_raises "greedy embedded sub-codec not last"
+    (Invalid_argument
+       "Codec.v Outer: a field that consumes the rest of the buffer (all_bytes \
+        / all_zeros, or a sub-codec ending in one) must be the last field, but \
+        n is followed by more fields") (fun () ->
+      ignore
+        (Codec.v "Outer"
+           (fun n b -> (n, b))
+           Codec.
+             [ Field.v "n" (codec inner) $ fst; Field.v "b" (bit uint8) $ snd ]))
+
 let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
 
 let test_bawhere_accepts () =
@@ -968,6 +989,8 @@ let suite =
         test_codec_all_bytes_tail;
       Alcotest.test_case "codec: all_zeros as field" `Quick
         test_all_zeros_in_codec;
+      Alcotest.test_case "codec: reject greedy embedded sub-codec not last"
+        `Quick test_reject_greedy_embedded_not_last;
       Alcotest.test_case "parse: byte_array_where accepts" `Quick
         test_bawhere_accepts;
       Alcotest.test_case "parse: byte_array_where rejects" `Quick
