@@ -3085,32 +3085,33 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
     t.param_handles
   |> List.filter_map Fun.id
 
-(* Input params (read from the env) drive field sizes/offsets, so encoding
-   without their values would resolve those to 0. Output params are written
-   by decode-side actions and never consulted on encode, so a codec whose only
-   params are outputs needs no env. *)
+(* Input params (read from the env) drive field sizes/offsets, so encoding or
+   decoding without their values would resolve those to 0. Output params are
+   written by decode-side actions and never read on encode, and on decode an
+   absent env just means the caller does not want them back, so a codec whose
+   only params are outputs needs no env. *)
 let has_input_params (t : 'r t) =
   List.exists (fun (Param.Pack p) -> not p.Types.mutable_) t.param_handles
 
-let require_env t = function
+let require_env ~op t = function
   | None when not (has_input_params t) -> ()
   | None ->
       Fmt.invalid_arg
-        "Codec.encode: codec %s has input params; pass ?env (e.g. [Codec.env c \
-         |> Param.bind p N])."
-        t.name
+        "Codec.%s: codec %s has input params; pass ?env (e.g. [Codec.env c |> \
+         Param.bind p N])."
+        op t.name
   | Some env -> (
       match unbound_params t env with
       | [] -> ()
       | missing ->
           Fmt.invalid_arg
-            "Codec.encode: codec %s has unbound input params [%s]; bind every \
-             one before encoding."
-            t.name
+            "Codec.%s: codec %s has unbound input params [%s]; bind every one \
+             before use."
+            op t.name
             (String.concat ", " missing))
 
 let raw_encode ?env:e t v buf off =
-  require_env t e;
+  require_env ~op:"encode" t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
   t.encode v buf off
 
@@ -3149,13 +3150,20 @@ let env (t : _ t) : Param.env =
   }
 
 let decode_exn ?env:e t buf off =
+  (* Require an env that binds every input param, as encode does: an unbound
+     input param resolves a parametric size to 0, silently truncating the field
+     and misaligning the rest of the record. This is a usage error, not malformed
+     input, so it raises [Invalid_argument] rather than returning a parse error. *)
+  require_env ~op:"decode" t e;
   (* Seed the input cells from the env before reading fields: the field
      readers resolve [Param_ref p] via [!(p.cell)], so a parametric size
      (byte_array / byte_slice / uint_var) must see the env's value. Mirror of
      the seeding [encode] does. [Param.bind] also writes the cell directly, but
      [Param.bind_by_name] only has the name and writes [env.slots]; without
      this it would read as 0 and silently truncate the field. *)
-  (match e with Some env -> load_env_into_cells t env | None -> ());
+  (match e with
+  | Some env -> load_env_into_cells t env
+  | None -> ());
   let v = t.decode buf off in
   let arr = t.decode_scratch in
   clear_slots arr t.n_array_slots;
@@ -3181,7 +3189,7 @@ let decode ?env t buf off =
   try Ok (decode_exn ?env t buf off) with Types.Parse_error e -> Error e
 
 let encode ?env:e t v buf off =
-  require_env t e;
+  require_env ~op:"encode" t e;
   (match e with Some env -> load_env_into_cells t env | None -> ());
   let expected = t.size_of_value v in
   let actual = t.encode v buf off - off in
