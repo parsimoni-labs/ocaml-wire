@@ -211,6 +211,13 @@
 
 ### Fixed
 
+- A `Wire.where` placed on a container element (an array or repeat element, or an
+  optional inner) is now rejected at codec construction with a clear error.
+  EverParse cannot express a refinement on an array or optional element that
+  references an outer field, so such a `where` produced a codec whose generated
+  `.3d` did not compile while OCaml decode silently ignored the constraint. A
+  `where` is supported as a top-level field refinement; move the constraint onto
+  the field itself or a codec `~where` (#173, @samoht)
 - The doc pipeline's differential self-check (`agree.c`) no longer false-reports
   a mismatch for a codec with a large payload. The generated reader held each
   corpus line in a buffer one char short of two hex digits per input byte, so an
