@@ -947,6 +947,36 @@ let test_greedy_not_last_rejected () =
     "greedy last roundtrip" true
     (decode_ok (Codec.decode c buf 0) = v)
 
+(* A casetype whose case body is a sub-codec ending in a greedy field consumes
+   the rest of the buffer when that case is selected; placed before another
+   field it would starve it, so it is refused at construction. As the last field
+   it is fine. *)
+let test_casetype_greedy_case_not_last_rejected () =
+  let greedy =
+    Codec.v "G" (fun z -> z) Codec.[ Field.v "z" all_zeros $ Fun.id ]
+  in
+  let ct =
+    casetype "CtG" uint8
+      [
+        case ~index:1 uint8
+          ~inject:(fun v -> `U v)
+          ~project:(function `U v -> Some v | _ -> None);
+        case ~index:2 (codec greedy)
+          ~inject:(fun v -> `G v)
+          ~project:(function `G v -> Some v | _ -> None);
+      ]
+  in
+  Alcotest.(check bool)
+    "casetype with greedy case body before another field rejected" true
+    (raises_invalid (fun () ->
+         Codec.v "Outer"
+           (fun c t -> (c, t))
+           Codec.[ Field.v "ct" ct $ fst; Field.v "tail" uint8 $ snd ]));
+  Alcotest.(check bool)
+    "casetype with greedy case body as last field accepted" false
+    (raises_invalid (fun () ->
+         Codec.v "OuterOk" Fun.id Codec.[ Field.v "ct" ct $ Fun.id ]))
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -5056,6 +5086,8 @@ let suite =
         test_casetype_reject_greedy_case_body;
       Alcotest.test_case "greedy field must be last" `Quick
         test_greedy_not_last_rejected;
+      Alcotest.test_case "casetype greedy case body must be last" `Quick
+        test_casetype_greedy_case_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick

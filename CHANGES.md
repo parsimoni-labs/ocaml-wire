@@ -211,6 +211,13 @@
 
 ### Fixed
 
+- `Wire.Codec.v` now rejects, at construction, a non-last field that is a
+  `Wire.casetype` with a case body ending in a greedy field (`all_bytes` /
+  `all_zeros`). If that case is selected the greedy tail consumes the rest of the
+  buffer, starving the following field, so the record failed to round-trip while
+  construction silently accepted it. The greedy-must-be-last check now looks
+  through casetype case bodies, as it already does through an embedded sub-codec
+  (#183, @samoht)
 - `Wire.Codec.validate` on a buffer too short to hold the fields a check reads
   now fails cleanly instead of raising `Invalid_argument`. A `where` or field
   constraint may read a field whose offset depends on a length read from the
