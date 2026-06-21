@@ -320,6 +320,13 @@ val codec_where : (int * int) t
     predicate, adversarials sit at the equality boundary so the {!val-where}
     check fires. *)
 
+val typ_where : (int * int) t
+(** [typ_where] generates for a two-{!val-uint8} record whose second field's typ
+    is [Wire.where (len < 2) uint8]. This exercises the typ-level {!val-where}
+    (a refinement carried in the field type), distinct from {!codec_where}'s
+    codec-level [~where]. Positives keep [len < 2]; adversarials use [len >= 2]
+    so the differential catches a cond that reaches the 3D but not OCaml. *)
+
 (** {1 Casetype} *)
 
 type 'a case
