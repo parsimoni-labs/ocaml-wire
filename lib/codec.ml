@@ -2340,6 +2340,22 @@ let rec typ_where_conds : type a. a Types.typ -> bool Types.expr list = function
   | Types.Enum { base; _ } -> typ_where_conds base
   | _ -> []
 
+(* A field's runtime check: its [~constraint_] together with every top-level
+   [Wire.where] cond carried in its typ, compiled against [cc]. Folding both
+   keeps a [where] enforced on decode and validate, not only in the 3D
+   projection. *)
+let compile_field_check cc fld =
+  let conds =
+    (match fld.constraint_ with Some c -> [ c ] | None -> [])
+    @ typ_where_conds fld.typ
+  in
+  match conds with
+  | [] -> None
+  | first :: rest ->
+      Some
+        (compile_bool_arr cc
+           (List.fold_left (fun a c -> And (a, c)) first rest))
+
 (* The single place that mutates the record accumulator: assemble constraint
    and action checkers, then fold the [compiled_field] into a new record
    state. *)
@@ -2365,21 +2381,7 @@ let apply_compiled : type a f r.
     mk_ctx ~sizeof_this:cf.validator_off ~field_pos:field_idx
       ~param_slots:r.param_slots idx
   in
-  let check =
-    (* Fold the field's [~constraint_] together with any [Wire.where] cond
-       carried in its typ, so a [where] is enforced on decode/validate and not
-       only in the 3D projection. *)
-    let conds =
-      (match fld.constraint_ with Some c -> [ c ] | None -> [])
-      @ typ_where_conds fld.typ
-    in
-    match conds with
-    | [] -> None
-    | first :: rest ->
-        Some
-          (compile_bool_arr cc
-             (List.fold_left (fun a c -> And (a, c)) first rest))
-  in
+  let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let populate = cf.populate in
   let check_only arr buf base =
@@ -2666,6 +2668,55 @@ let reject_greedy_not_last name fields =
   in
   check fields
 
+(* A [Wire.where] is expressible in 3D only as a top-level field refinement
+   ([UINT8 g { cond }], which projects and is enforced). Inside a container the
+   projection emits invalid 3D that 3d.exe rejects ([UINT8 { cond } vals[N]] for
+   an array element, [UINT8 { cond } opt[:byte-size ...]] for an optional inner):
+   an element refinement cannot reference the outer field it needs. Such a where
+   would ship a codec whose [.3d] does not compile while OCaml decode silently
+   drops the constraint, so reject it at construction. *)
+let reject_nested_where name fields =
+  (* A [where true] is elided by the projection (no refinement is emitted), so it
+     is a harmless no-op wrapper even inside a container. Only a non-trivial cond
+     emits a refined element, which is what EverParse rejects. *)
+  let rec any_real_where : type a. a Types.typ -> bool = function
+    | Types.Where { cond = Types.Bool true; inner } -> any_real_where inner
+    | Types.Where _ -> true
+    | Types.Map { inner; _ } -> any_real_where inner
+    | Types.Enum { base; _ } -> any_real_where base
+    | Types.Array { elem; _ } -> any_real_where elem
+    | Types.Repeat { elem; _ } -> any_real_where elem
+    | Types.Optional { inner; _ } -> any_real_where inner
+    | Types.Optional_or { inner; _ } -> any_real_where inner
+    | Types.Single_elem { elem; _ } -> any_real_where elem
+    | _ -> false
+  in
+  let fail fname =
+    Fmt.invalid_arg
+      "Codec.v %s: field %s puts a Wire.where inside a container element; a \
+       where projects to 3D only as a top-level field refinement, so this \
+       shape has no verified validator. Move the constraint to the field \
+       itself or a codec ~where."
+      name fname
+  in
+  let rec check_typ : type a. string -> a Types.typ -> unit =
+   fun fname t ->
+    match t with
+    | Types.Where { inner; _ } -> check_typ fname inner
+    | Types.Map { inner; _ } -> check_typ fname inner
+    | Types.Enum { base; _ } -> check_typ fname base
+    | Types.Array { elem; _ } -> if any_real_where elem then fail fname
+    | Types.Repeat { elem; _ } -> if any_real_where elem then fail fname
+    | Types.Single_elem { elem; _ } -> if any_real_where elem then fail fname
+    | Types.Optional { inner; _ } -> if any_real_where inner then fail fname
+    | Types.Optional_or { inner; _ } -> if any_real_where inner then fail fname
+    | _ -> ()
+  in
+  List.iter
+    (fun (Types.Field f) ->
+      check_typ (Option.value ~default:"<anon>" f.field_name) f.field_typ)
+    fields
+
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
   let codec_id = Atomic.fetch_and_add id_counter 1 in
@@ -2684,6 +2735,7 @@ let seal : type r. (r, r) record -> r t =
   (* Collect and index params *)
   let struct_fields = List.rev r.fields_rev in
   reject_greedy_not_last r.name struct_fields;
+  reject_nested_where r.name struct_fields;
   let param_handles = collect_param_handles struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;

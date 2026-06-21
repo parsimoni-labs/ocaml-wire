@@ -247,6 +247,46 @@ let test_validate_runs_field_action () =
   | exception Validation_error (Constraint_failed _) -> ());
   Codec.validate action_validate_codec (Bytes.of_string "\100\000") 0
 
+(* A [Wire.where] inside a container element has no 3D projection (EverParse
+   rejects the emitted refined element), so it is rejected at construction rather
+   than shipping a codec whose [.3d] does not compile and whose OCaml decode
+   silently ignores the constraint. A top-level field [where] stays valid. *)
+let test_reject_nested_where () =
+  let reject what make =
+    match make () with
+    | _ ->
+        Alcotest.failf "%s: expected construction to reject a nested where" what
+    | exception Invalid_argument _ -> ()
+  in
+  reject "array element" (fun () ->
+      let limit = Field.v "limit" uint8 in
+      Codec.v "ArrW"
+        (fun l v -> (l, v))
+        [
+          Codec.(limit $ fst);
+          Codec.(
+            Field.v "v"
+              (array ~len:(int 2) (where Expr.(Field.ref limit = int 1) uint8))
+            $ snd);
+        ]);
+  reject "optional inner" (fun () ->
+      let limit = Field.v "limit" uint8 in
+      Codec.v "OptW"
+        (fun l v -> (l, v))
+        [
+          Codec.(limit $ fst);
+          Codec.(
+            Field.optional "o"
+              ~present:Expr.(Field.ref limit <> int 0)
+              (where Expr.(Field.ref limit < int 9) uint8)
+            $ snd);
+        ]);
+  (* A top-level field where is still accepted (it projects and is enforced). *)
+  ignore
+    (Codec.v "TopW"
+       (fun g -> g)
+       [ Codec.(Field.v "g" (where Expr.(int 1 = int 1) uint8) $ fun g -> g) ])
+
 let test_struct_of_codec_metadata () =
   let output = render_3d projection_codec in
   (* The struct-level [where] referencing the field [x] is lowered onto the
@@ -4955,6 +4995,8 @@ let suite =
         test_validate_enforces_typ_where;
       Alcotest.test_case "validate: runs field action" `Quick
         test_validate_runs_field_action;
+      Alcotest.test_case "where: nested in container rejected" `Quick
+        test_reject_nested_where;
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
       Alcotest.test_case "record: byte_array roundtrip" `Quick
         test_record_byte_array_roundtrip;
