@@ -2572,6 +2572,19 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
+(* Run a validation pass, turning an out-of-bounds read into a clean eof. A
+   check may read a field whose offset depends on a length read from the buffer;
+   on a buffer too short to hold it that read is out of bounds. [decode] runs
+   [t.decode] first (which bounds-checks), but [Codec.validate] runs the check
+   kernel directly, so this keeps a short buffer a clean failure, not a crash. *)
+let validate_or_eof buf f =
+  try f ()
+  with Invalid_argument _ ->
+    raise
+      (Parse_error
+         (Unexpected_eof
+            { expected = Bytes.length buf + 1; got = Bytes.length buf }))
+
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
@@ -2613,7 +2626,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
         (* Validate through the same kernel decode uses ([validate_arr]), so
            [Codec.validate] and [decode] never disagree on field constraints,
            actions, or the [where] clause. *)
-        validate_arr arr buf off)
+        validate_or_eof buf (fun () -> validate_arr arr buf off))
     else fun ?env_slots:_ _buf _off -> ()
   in
   (validate_arr, populate, validate)
