@@ -1769,6 +1769,154 @@ let pp_field_suffix ppf = function
       Fmt.pf ppf "[:zeroterm-byte-size-at-most %a]" pp_expr size
   | Array len -> Fmt.pf ppf "[%a]" pp_expr len
 
+(* The scalar a field's refinement compares against, seen through transparent
+   [Map] / [Enum] / [Where] wrappers. 3D has only unsigned integer types, so a
+   signed or float field's ordering refinement needs special projection. *)
+let rec scalar_kind : type a. a typ -> [ `Signed of int | `Float | `Other ] =
+  function
+  | Int8 -> `Signed 8
+  | Int16 _ -> `Signed 16
+  | Int32 _ -> `Signed 32
+  | Int64 _ -> `Signed 64
+  | Float32 _ | Float64 _ -> `Float
+  | Map { inner; _ } -> scalar_kind inner
+  | Enum { base; _ } -> scalar_kind base
+  | Where { inner; _ } -> scalar_kind inner
+  | _ -> `Other
+
+let rec mentions_field : type a. string -> a expr -> bool =
+ fun name e ->
+  match e with
+  | Ref (_, n) -> String.equal n name
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      mentions_field name a || mentions_field name b
+  | Lnot a -> mentions_field name a
+  | Cast (_, a) -> mentions_field name a
+  | Eq (a, b) -> mentions_field name a || mentions_field name b
+  | Ne (a, b) -> mentions_field name a || mentions_field name b
+  | Lt (a, b) -> mentions_field name a || mentions_field name b
+  | Le (a, b) -> mentions_field name a || mentions_field name b
+  | Gt (a, b) -> mentions_field name a || mentions_field name b
+  | Ge (a, b) -> mentions_field name a || mentions_field name b
+  | And (a, b) -> mentions_field name a || mentions_field name b
+  | Or (a, b) -> mentions_field name a || mentions_field name b
+  | Not a -> mentions_field name a
+  | If_then_else (c, t, el) ->
+      mentions_field name c || mentions_field name t || mentions_field name el
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      false
+
+(* Two's-complement: a signed n-bit value compared with an ordering operator
+   equals the unsigned value compared after flipping the sign bit of both
+   operands ([a <_s b] iff [(a ^ 2^(n-1)) <_u (b ^ 2^(n-1))]). The field projects
+   to an unsigned type, so a [width]-bit signed field's ordering refinement
+   ([self OP constant]) is rewritten this way; a comparison with a constant
+   outside the signed range folds to a literal, and anything that is not a plain
+   comparison of the field with an integer literal is rejected (it cannot be
+   projected faithfully). *)
+let translate_signed_ordering ~name ~width (cond : bool expr) : bool expr =
+  let signbit = 1 lsl (width - 1) in
+  let mask = (1 lsl width) - 1 in
+  let smax = signbit - 1 and smin = -signbit in
+  let flip_const k : int expr = Int (k land mask lxor signbit) in
+  let flip_self : int expr = Lxor (Ref (I, name), Int signbit) in
+  let rebuild op l r : bool expr =
+    match op with
+    | `Lt -> Lt (l, r)
+    | `Le -> Le (l, r)
+    | `Gt -> Gt (l, r)
+    | `Ge -> Ge (l, r)
+  in
+  let self_op_const op k : bool expr =
+    if k > smax then match op with `Lt | `Le -> Bool true | _ -> Bool false
+    else if k < smin then
+      match op with `Lt | `Le -> Bool false | _ -> Bool true
+    else rebuild op flip_self (flip_const k)
+  in
+  let const_op_self op k : bool expr =
+    if k > smax then match op with `Lt | `Le -> Bool false | _ -> Bool true
+    else if k < smin then
+      match op with `Lt | `Le -> Bool true | _ -> Bool false
+    else rebuild op (flip_const k) flip_self
+  in
+  let rewrite : type x.
+      [ `Lt | `Le | `Gt | `Ge ] -> x expr -> x expr -> bool expr -> bool expr =
+   fun op a b orig ->
+    match (a, b) with
+    | Ref (I, n), Int k when String.equal n name -> self_op_const op k
+    | Int k, Ref (I, n) when String.equal n name -> const_op_self op k
+    | _ ->
+        if mentions_field name a || mentions_field name b then
+          Fmt.invalid_arg
+            "Wire: signed field %S has an ordering constraint that is not a \
+             plain comparison with an integer literal, so it cannot be \
+             projected to 3D faithfully; compare the field directly to a \
+             constant"
+            name
+        else orig
+  in
+  let rec xform (e : bool expr) : bool expr =
+    match e with
+    | And (a, b) -> And (xform a, xform b)
+    | Or (a, b) -> Or (xform a, xform b)
+    | Not a -> Not (xform a)
+    | Lt (a, b) -> rewrite `Lt a b e
+    | Le (a, b) -> rewrite `Le a b e
+    | Gt (a, b) -> rewrite `Gt a b e
+    | Ge (a, b) -> rewrite `Ge a b e
+    | _ -> e
+  in
+  xform cond
+
+(* A float ordering refinement has no faithful unsigned projection (IEEE bit
+   patterns do not order as unsigned), so it is rejected; a signed field's
+   ordering refinement is rewritten to two's-complement form. *)
+let project_refinement ~name ~kind (cond : bool expr) : bool expr =
+  (* Reject any ordering comparison that mentions this field, with [msg]. Each
+     comparison constructor is matched in its own arm so its existential operand
+     type stays local. *)
+  let reject_orderings msg =
+    let bad : type x. x expr -> x expr -> unit =
+     fun a b ->
+      if mentions_field name a || mentions_field name b then
+        invalid_arg (msg ^ "; field " ^ name)
+    in
+    let rec walk : bool expr -> unit = function
+      | And (a, b) | Or (a, b) ->
+          walk a;
+          walk b
+      | Not a -> walk a
+      | Lt (a, b) -> bad a b
+      | Le (a, b) -> bad a b
+      | Gt (a, b) -> bad a b
+      | Ge (a, b) -> bad a b
+      | _ -> ()
+    in
+    walk cond;
+    cond
+  in
+  match kind with
+  | `Other -> cond
+  | `Float ->
+      reject_orderings
+        "Wire: a float field ordering constraint has no 3D projection (IEEE \
+         bit patterns compare as unsigned)"
+  | `Signed 64 ->
+      reject_orderings
+        "Wire: a signed 64-bit field ordering constraint cannot be projected \
+         to 3D"
+  | `Signed width -> translate_signed_ordering ~name ~width cond
+
 let pp_field ppf (Field f) =
   let raw_name, name =
     match f.field_name with
@@ -1812,6 +1960,14 @@ let pp_field ppf (Field f) =
          (combine_constraints f.constraint_ where_cond)
          bound_cond)
       enum_cond
+  in
+  (* Rewrite a signed field's ordering refinement to its two's-complement
+     unsigned form (the field projects to an unsigned type), and reject a float
+     ordering refinement, which has no faithful unsigned projection. *)
+  let constraint_ =
+    Option.map
+      (project_refinement ~name:raw_name ~kind:(scalar_kind typ))
+      constraint_
   in
   let suffix, pp_base = field_suffix typ in
   let pp_base =

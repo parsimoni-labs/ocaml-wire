@@ -464,6 +464,33 @@ let test_3d_negative_literal_rejected () =
   Alcotest.(check bool)
     "negative literal rejected by projection" true (projects_or_raises codec)
 
+let test_signed_constraint_twos_complement () =
+  (* A signed field projects to an unsigned UINT, so an ordering constraint must
+     be rewritten to its two's-complement form ([x < 100] over [int8] becomes
+     [(x ^ 128) < 228]) or the C validator compares the raw byte and diverges
+     from the OCaml decoder (byte 200 = signed -56). *)
+  let f =
+    Field.v "x" int8 ~self_constraint:(fun self -> Expr.(self < int 100))
+  in
+  let codec = Codec.v "Signed" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
+  let out = to_3d (Everparse.schema codec).module_ in
+  Alcotest.(check bool)
+    "two's-complement refinement emitted" true
+    (contains ~sub:"(x ^ 128) < 228" out);
+  Alcotest.(check bool)
+    "raw unsigned comparison not emitted" false
+    (contains ~sub:"(x < 100)" out)
+
+let test_float_ordering_rejected () =
+  (* IEEE bit patterns do not order as unsigned, so a float field ordering
+     constraint has no faithful 3D projection and is rejected at projection. *)
+  let f =
+    Field.v "f" float32 ~self_constraint:(fun self -> Expr.(self < int 100))
+  in
+  let codec = Codec.v "Flt" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
+  Alcotest.(check bool)
+    "float ordering rejected by projection" true (projects_or_raises codec)
+
 let test_if_then_else_projects () =
   (* Expr.if_then_else projects to a 3D conditional, e.g. a size where a 0 field
      means a maximum: [byte-size (... ? 65536 : N)]. *)
@@ -1050,6 +1077,10 @@ let suite =
         test_3d_on_success_conditional_return;
       Alcotest.test_case "3d: negative literal rejected by projection" `Quick
         test_3d_negative_literal_rejected;
+      Alcotest.test_case "3d: signed constraint two's-complement" `Quick
+        test_signed_constraint_twos_complement;
+      Alcotest.test_case "3d: float ordering rejected" `Quick
+        test_float_ordering_rejected;
       Alcotest.test_case "3d: int64 literal unsigned decimal" `Quick
         test_3d_int64_literal_uses_unsigned_decimal;
       Alcotest.test_case "3d: field_pos rejected by projection" `Quick
