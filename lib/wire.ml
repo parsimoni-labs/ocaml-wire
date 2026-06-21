@@ -155,7 +155,20 @@ let parse_all_zeros buf off len =
   (check 0, len)
 
 let parse_codec_typ codec_decode fixed_size size_of buf off len =
-  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+  let sz =
+    match fixed_size with
+    | Some n -> n
+    | None -> (
+        (* A variable-size codec computes its span by reading length / gate
+           fields from the buffer; on a buffer too short to hold them, that read
+           is out of bounds. Convert the [Invalid_argument] into a clean eof, the
+           same guard [Codec.decode]'s checked path applies, so [of_string] on a
+           truncated input returns [Error _] instead of crashing. *)
+        try size_of buf off
+        with Invalid_argument _ ->
+          raise (Parse_error (Unexpected_eof { expected = len + 1; got = len }))
+        )
+  in
   check_eof len (off + sz);
   (codec_decode buf off, off + sz)
 

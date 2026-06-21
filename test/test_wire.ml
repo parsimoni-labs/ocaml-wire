@@ -907,6 +907,25 @@ let test_enum_open_of_string_accepts_unlisted () =
   | Ok v -> Alcotest.(check int) "of_string accepts unlisted" 50 v
   | Error e -> Alcotest.failf "of_string rejected unlisted: %a" pp_parse_error e
 
+(* A variable-size codec computes its span by reading length fields; on a
+   truncated buffer that read runs off the end. [of_string] must return a clean
+   [Error] (eof), not raise [Invalid_argument], the same way [Codec.decode]
+   already rejects truncated input. *)
+let test_of_string_truncated_variable_codec () =
+  let len = Field.v "len" uint8 in
+  let data = Field.v "data" (byte_array ~size:(Field.ref len)) in
+  let c = Codec.v "Sized" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ] in
+  let typ = codec c in
+  List.iter
+    (fun s ->
+      match of_string typ s with
+      | Ok _ | Error _ -> ()
+      | exception Invalid_argument m ->
+          Alcotest.failf
+            "of_string raised Invalid_argument %S on a %d-byte input" m
+            (String.length s))
+    [ ""; "\x05"; "\xff\x00" ]
+
 (* -- Suite -- *)
 
 let suite =
@@ -914,6 +933,8 @@ let suite =
     [
       Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
         test_enum_open_of_string_accepts_unlisted;
+      Alcotest.test_case "of_string: truncated variable codec rejects" `Quick
+        test_of_string_truncated_variable_codec;
       Alcotest.test_case "expr: equality operators" `Quick
         test_expr_equality_operators;
       (* parsing *)

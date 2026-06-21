@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- `Wire.of_string` (and the other typ-level entry points) now return a clean
+  `Error` on a truncated input to a variable-size codec, instead of raising
+  `Invalid_argument`. Computing the codec's span reads its length and gate fields
+  up front; on a buffer too short to hold them, that read ran off the end and
+  escaped as an out-of-bounds exception rather than a parse error. `Codec.decode`
+  already guarded this; the typ-level path now does too (#178, @samoht)
 - `Wire.of_string` (and the other typ-level entry points) now accept an unlisted
   code in a `Wire.enum_open` field, matching `Wire.Codec.decode`. The typ-level
   decoder kept the closed-enum membership check regardless of the `enum_open`
