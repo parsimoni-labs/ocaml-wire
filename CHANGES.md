@@ -211,6 +211,10 @@
 
 ### Fixed
 
+- A zero-length `Wire.byte_slice` now decodes to an empty slice instead of
+  raising `Invalid_argument`. The slice constructor rejects a zero length, so a
+  `byte_slice` whose size resolved to 0 crashed the decoder rather than yielding
+  the empty slice (#180, @samoht)
 - `Wire.Codec.v` now rejects, at construction, a non-last field whose type is an
   embedded sub-codec ending in a greedy field (`all_bytes` / `all_zeros`). Such a
   tail consumes the rest of the buffer with no boundary, so it silently swallowed

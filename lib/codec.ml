@@ -247,7 +247,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Byte_array_where { size = Int n; _ } ->
       fun buf base -> Bytes.sub_string buf (base + field_off) n
   | Byte_slice { size = Int n } ->
-      fun buf base -> Slice.make buf ~first:(base + field_off) ~length:n
+      fun buf base -> Slice.make_or_eod buf ~first:(base + field_off) ~length:n
   | Where { inner; _ } -> build_field_reader inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader base field_off in
@@ -1231,7 +1231,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
   | Byte_array_where { size = Int n; _ } -> Bytes.sub_string buf off n
-  | Byte_slice { size = Int n } -> Slice.make buf ~first:off ~length:n
+  | Byte_slice { size = Int n } -> Slice.make_or_eod buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)
   | Bits { width; base; bit_order } ->
