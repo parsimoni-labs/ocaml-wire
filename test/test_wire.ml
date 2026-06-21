@@ -92,6 +92,26 @@ let test_parse_byte_array () =
   | Ok v -> Alcotest.(check string) "byte_array value" "hello" v
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+(* A zero-length byte_slice decodes to an empty slice. The slice constructor
+   rejects a zero length, so the decoder used to raise [Invalid_argument]
+   ("invalid slice") instead of yielding the empty slice. *)
+let test_byte_slice_zero () =
+  let t = byte_slice ~size:(int 0) in
+  (match of_string t "" with
+  | Ok s ->
+      Alcotest.(check int)
+        "of_string zero slice length" 0
+        (Bytesrw.Bytes.Slice.length s)
+  | Error e ->
+      Alcotest.failf "of_string rejected zero slice: %a" pp_parse_error e);
+  let c = Codec.v "BS0" (fun s -> s) Codec.[ (Field.v "s" t $ fun s -> s) ] in
+  match Codec.decode c (Bytes.create 0) 0 with
+  | Ok s ->
+      Alcotest.(check int)
+        "codec zero slice length" 0
+        (Bytesrw.Bytes.Slice.length s)
+  | Error e -> Alcotest.failf "codec rejected zero slice: %a" pp_parse_error e
+
 let test_int8_negative () =
   let buf = Bytes.of_string "\xFE" in
   Alcotest.(check int) "-2" (-2) (of_bytes_exn int8 buf)
@@ -967,6 +987,7 @@ let suite =
       Alcotest.test_case "parse: uint64 le" `Quick test_parse_uint64_le;
       Alcotest.test_case "parse: array" `Quick test_parse_array;
       Alcotest.test_case "parse: byte_array" `Quick test_parse_byte_array;
+      Alcotest.test_case "parse: byte_slice size 0" `Quick test_byte_slice_zero;
       Alcotest.test_case "parse: int8 negative" `Quick test_int8_negative;
       Alcotest.test_case "parse: int8 full range" `Quick test_int8_full_range;
       Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;

@@ -289,7 +289,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      (Slice.make buf ~first:off ~length:n, off + n)
+      (Slice.make_or_eod buf ~first:off ~length:n, off + n)
   | Single_elem { size; elem; at_most = _ } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
