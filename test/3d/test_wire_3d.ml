@@ -243,6 +243,23 @@ let test_doc_differential_no_params () =
     differential_ok ~name:"plainspec" ~package:"plain-doc" ~count:100
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
+(* A signed field with an ordering constraint: it projects to an unsigned UINT,
+   so the refinement must be the two's-complement form or the C validator and the
+   OCaml decoder disagree on bytes whose top bit is set (200 = signed -56). The
+   corpus straddles the whole byte range. *)
+let diff_signed_codec =
+  let open Wire in
+  let f =
+    Field.v "x" int8 ~self_constraint:(fun self -> Expr.(self < int 100))
+  in
+  Codec.v "SignedMsg" (fun v -> v) [ Codec.( $ ) f (fun v -> v) ]
+
+let test_doc_differential_signed () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"signedspec" ~package:"signed-doc" ~count:256
+      [ Wire_3d.pack diff_signed_codec ]
+
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
    reader's hex buffer must hold the line, or it truncates and the verdict
    misparses into a false mismatch. *)
@@ -1092,6 +1109,8 @@ let suite =
         test_doc_differential;
       Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick
         test_doc_differential_no_params;
+      Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
+        test_doc_differential_signed;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
         test_doc_differential_large_payload;
       Alcotest.test_case "doc differential caps name (needs 3d.exe)" `Quick

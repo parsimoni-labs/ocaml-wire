@@ -211,6 +211,14 @@
 
 ### Fixed
 
+- A signed integer field's ordering constraint (e.g. `int8 x` with `x < 100`) now
+  projects soundly. A signed field becomes an unsigned `UINT*` in 3D, so the
+  refinement was emitted as an unsigned comparison and the verified C validator
+  disagreed with the OCaml decoder on bytes whose sign bit is set (byte 200 is
+  the signed value -56: accepted by OCaml, rejected by C). The ordering is now
+  rewritten to its two's-complement unsigned form. A float field ordering
+  constraint, which has no faithful unsigned projection (IEEE bit patterns do not
+  order as unsigned), is rejected when the codec is projected (#174, @samoht)
 - A `Wire.where` placed on a container element (an array or repeat element, or an
   optional inner) is now rejected at codec construction with a clear error.
   EverParse cannot express a refinement on an array or optional element that
