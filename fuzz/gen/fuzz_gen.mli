@@ -53,8 +53,9 @@ val reject_cases : string -> 'a t -> Alcobar.test_case list
 val invariant_cases : string -> Alcobar.test_case list
 (** [invariant_cases label] is a cheap audit over the shared fuzzer DSL: it
     asserts registry labels are unique, the registry still mirrors the Wire API
-    families, recursive composition leaves include the expected edge terms, and
-    the deterministic differential sampler remains reproducible and unique. *)
+    families, recursive composition leaves include the expected weird /
+    adversarial terms, and the deterministic differential sampler remains
+    reproducible and unique. *)
 
 val api_cases : string -> Alcobar.test_case list
 (** [api_cases label] exercises Wire API surfaces that are not naturally covered
