@@ -11,6 +11,14 @@
 type 'a t
 (** A fuzz generator paired with the codec it tests. *)
 
+val corpus_generation_mode : unit -> bool
+(** [corpus_generation_mode ()] is [true] when Alcobar is generating an AFL seed
+    corpus. *)
+
+val file_input_mode : unit -> bool
+(** [file_input_mode ()] is [true] when the executable is processing one
+    AFL-provided file input. *)
+
 val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 (** [test_cases label g] batches [g.positive], [g.random], and [g.adversarial]
     into one Alcobar case: positives check codec round-trip plus validation, and
@@ -24,6 +32,10 @@ val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
     crash-safety against the AFL-provided bytes, truncating large inputs so one
     AFL exec stays cheap. Full positive round-trip and nested-composition
     coverage remains in {!test_cases} / {!nested_cases}. *)
+
+val afl_env_cases : ?max_len:int -> string -> Alcobar.test_case list
+(** [afl_env_cases label] is the file-input AFL smoke suite restricted to
+    registry codecs that bind a {!Wire.Param.env}. *)
 
 val nested_cases : string -> int -> Alcobar.test_case list
 (** [nested_cases label depth] generates an arbitrary nested codec per sample

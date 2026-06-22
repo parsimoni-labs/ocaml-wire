@@ -14,16 +14,6 @@
 
 open Alcobar
 
-let file_input_mode () =
-  let argv = Sys.argv in
-  let n = Array.length argv in
-  n > 1
-  && (not (Array.exists (String.equal "--gen-corpus") argv))
-  &&
-  let path = argv.(n - 1) in
-  Sys.file_exists path
-  && try not (Sys.is_directory path) with Sys_error _ -> false
-
 (* Shapes wire rejects at projection: they use a construct with no 3D form, so
    [to_3d] raises a clear [Invalid_argument]. [expr_ops] uses a negative integer
    literal (3D has no negative literals); [sizeof] uses [field_pos] (no 3D
@@ -110,10 +100,8 @@ let extract_one g =
    let the test cases report the cached verdict instantly. Skipped without
    [3d.exe] (CI) and in corpus / AFL modes, where the long startup is unwanted. *)
 let normal_mode () =
-  let argv = Sys.argv in
-  let n = Array.length argv in
-  (not (Array.exists (String.equal "--gen-corpus") argv))
-  && not (n > 1 && Sys.file_exists argv.(n - 1))
+  (not (Fuzz_gen.corpus_generation_mode ()))
+  && not (Fuzz_gen.file_input_mode ())
 
 (* Every shape that projects must verify: the whole registry except the shapes
    wire rejects at projection (those are asserted to reject in [pp_cases]) is
@@ -139,6 +127,6 @@ let extract_cases () =
     (extract_results ())
 
 let suite =
-  if file_input_mode () then
+  if Fuzz_gen.file_input_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
   else ("everparse", pp_cases () @ nested_pp_cases () @ extract_cases ())
