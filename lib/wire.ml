@@ -155,9 +155,32 @@ let parse_all_zeros buf off len =
   (check 0, len)
 
 let parse_codec_typ codec_decode fixed_size size_of buf off len =
-  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+  let sz =
+    match fixed_size with
+    | Some n -> n
+    | None -> (
+        (* A variable-size codec computes its span by reading length / gate
+           fields from the buffer; on a buffer too short to hold them, that read
+           is out of bounds. Convert the [Invalid_argument] into a clean eof, the
+           same guard [Codec.decode]'s checked path applies, so [of_string] on a
+           truncated input returns [Error _] instead of crashing. *)
+        try size_of buf off
+        with Invalid_argument _ ->
+          raise (Parse_error (Unexpected_eof { expected = len + 1; got = len }))
+        )
+  in
   check_eof len (off + sz);
   (codec_decode buf off, off + sz)
+
+(* Only a closed enum enforces membership; an open enum names known codes but
+   accepts any value. [Codec.decode] gates on [closed] the same way, so the two
+   decode paths agree on an unlisted code. *)
+let check_enum_membership ~closed cases v =
+  if closed then begin
+    let valid = List.map snd cases in
+    if not (List.mem v valid) then
+      raise (Parse_error (Invalid_enum { value = v; valid }))
+  end
 
 let parse_struct_typ s buf off len =
   let v = Codec.validator_of_struct s in
@@ -266,7 +289,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      (Slice.make buf ~first:off ~length:n, off + n)
+      (Slice.make_or_eod buf ~first:off ~length:n, off + n)
   | Single_elem { size; elem; at_most = _ } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
@@ -276,11 +299,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let v, off' = parse_direct inner buf off len in
       (decode v, off')
   | Where { cond; inner } -> parse_where inner cond buf off len
-  | Enum { base; cases; _ } ->
+  | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
-      let valid = List.map snd cases in
-      if List.mem v valid then (v, off')
-      else raise (Parse_error (Invalid_enum { value = v; valid }))
+      check_enum_membership ~closed cases v;
+      (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
       parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len

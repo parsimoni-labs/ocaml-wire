@@ -247,7 +247,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Byte_array_where { size = Int n; _ } ->
       fun buf base -> Bytes.sub_string buf (base + field_off) n
   | Byte_slice { size = Int n } ->
-      fun buf base -> Slice.make buf ~first:(base + field_off) ~length:n
+      fun buf base -> Slice.make_or_eod buf ~first:(base + field_off) ~length:n
   | Where { inner; _ } -> build_field_reader inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader base field_off in
@@ -926,6 +926,11 @@ let bf_base_total_bits = Bitfield.total_bits
 let bf_base_equal = Bitfield.equal
 let bf_write_base = Bitfield.write_word
 
+let equal_bit_order (a : Types.bit_order) (b : Types.bit_order) =
+  match (a, b) with
+  | Msb_first, Msb_first | Lsb_first, Lsb_first -> true
+  | Msb_first, Lsb_first | Lsb_first, Msb_first -> false
+
 (* Build-time dispatch: pattern match on base happens once at codec
    construction, not on every read/write call. *)
 let build_bf_reader base byte_off shift width =
@@ -1226,7 +1231,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
   | Byte_array_where { size = Int n; _ } -> Bytes.sub_string buf off n
-  | Byte_slice { size = Int n } -> Slice.make buf ~first:off ~length:n
+  | Byte_slice { size = Int n } -> Slice.make_or_eod buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)
   | Bits { width; base; bit_order } ->
@@ -1512,7 +1517,8 @@ let compile_bits : type r.
   let is_continuation =
     match ctx.bf with
     | Some bf ->
-        bf_base_equal bf.base base && bf.bit_order = bit_order
+        bf_base_equal bf.base base
+        && equal_bit_order bf.bit_order bit_order
         && bf.bits_used + width <= bf.total_bits
     | None -> false
   in
@@ -2566,6 +2572,19 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
+(* Run a validation pass, turning an out-of-bounds read into a clean eof. A
+   check may read a field whose offset depends on a length read from the buffer;
+   on a buffer too short to hold it that read is out of bounds. [decode] runs
+   [t.decode] first (which bounds-checks), but [Codec.validate] runs the check
+   kernel directly, so this keeps a short buffer a clean failure, not a crash. *)
+let validate_or_eof buf f =
+  try f ()
+  with Invalid_argument _ ->
+    raise
+      (Parse_error
+         (Unexpected_eof
+            { expected = Bytes.length buf + 1; got = Bytes.length buf }))
+
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
@@ -2607,7 +2626,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
         (* Validate through the same kernel decode uses ([validate_arr]), so
            [Codec.validate] and [decode] never disagree on field constraints,
            actions, or the [where] clause. *)
-        validate_arr arr buf off)
+        validate_or_eof buf (fun () -> validate_arr arr buf off))
     else fun ?env_slots:_ _buf _off -> ()
   in
   (validate_arr, populate, validate)
@@ -2650,17 +2669,44 @@ let build_checked_decode raw_decode wire_size_info min_size =
         raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off));
   raw_decode buf off
 
-(* A greedy field ([all_bytes] / [all_zeros]) consumes the rest of the buffer,
-   so it is only meaningful as the last field: an earlier one starves every
-   field after it (and 3D's [:consume-all] must be last too). Reject it at
-   construction rather than silently truncating later fields at decode. *)
+(* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
+   [all_zeros]), an embedded sub-codec whose own last field does, or a casetype
+   any of whose case bodies does (if that case is selected its greedy tail has no
+   boundary). A greedy tail has no boundary once another field follows it, so
+   each of these is just as unbounded as a bare greedy field. *)
+let rec field_consumes_rest : type a. a Types.typ -> bool =
+ fun t ->
+  is_greedy t
+  ||
+  match t with
+  | Types.Codec { codec_struct; _ } -> (
+      match List.rev codec_struct.fields with
+      | Types.Field f :: _ -> field_consumes_rest f.field_typ
+      | [] -> false)
+  | Types.Casetype { cases; _ } ->
+      List.exists
+        (fun (Types.Case_branch { cb_inner; _ }) ->
+          field_consumes_rest cb_inner)
+        cases
+  | Types.Map { inner; _ } -> field_consumes_rest inner
+  | Types.Where { inner; _ } -> field_consumes_rest inner
+  | Types.Enum { base; _ } -> field_consumes_rest base
+  | _ -> false
+
+(* A greedy field consumes the rest of the buffer, so it is only meaningful as
+   the last field: an earlier one starves every field after it (and 3D's
+   [:consume-all] must be last too). This also covers an embedded sub-codec
+   ending in a greedy field, whose tail would otherwise swallow the following
+   field's bytes. Reject it at construction rather than silently truncating
+   later fields at decode. *)
 let reject_greedy_not_last name fields =
   let rec check = function
     | [] | [ _ ] -> ()
     | Types.Field f :: rest ->
-        if is_greedy f.field_typ then
+        if field_consumes_rest f.field_typ then
           Fmt.invalid_arg
-            "Codec.v %s: a greedy field (all_bytes / all_zeros) must be the \
+            "Codec.v %s: a field that consumes the rest of the buffer \
+             (all_bytes / all_zeros, or a sub-codec ending in one) must be the \
              last field, but %s is followed by more fields"
             name
             (Option.value ~default:"<anon>" f.field_name);
