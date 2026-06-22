@@ -165,6 +165,9 @@ module Param : sig
 
   val expr : ('a, 'k) t -> int expr
   (** [expr p] returns the expression referencing this param. *)
+
+  val pp : Format.formatter -> ('a, 'k) t -> unit
+  (** Pretty-print the parameter's name. *)
 end
 
 module Action : sig
@@ -202,6 +205,9 @@ module Action : sig
 
   val var : string -> int expr -> stmt
   (** Local variable binding inside an action block. *)
+
+  val pp : Format.formatter -> t -> unit
+  (** Pretty-print an action block. *)
 end
 
 val int : int -> int expr
@@ -454,6 +460,9 @@ module Field : sig
 
   val constraint_ : 'a t -> bool expr option
   (** Field constraint, if any. *)
+
+  val action : 'a t -> Types.action option
+  (** Field action attached via {!v}'s [?action], if any. *)
 
   val doc : 'a t -> string option
   (** Field note attached via {!v}'s [?doc], if any. *)

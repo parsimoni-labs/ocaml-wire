@@ -3539,36 +3539,69 @@ let sample_arity rng ~continue ~max_arity =
   in
   go 1
 
-(* One Boltzmann-distributed projectable codec. A composition Wire refuses to
-   build (e.g. a bitfield array element) raises [Invalid_argument]; fall back to
-   a bare leaf so the sampler never crashes. *)
-let boltzmann_any rng : any =
+(* The shape of one sampled codec, paired with the leaf-vocabulary labels it
+   draws (in draw order). The sampler stays in the single-typedef, fixed-size
+   fragment, so a composition is only a flat record of leaves or an array of one
+   leaf -- "depth" here is record arity and array presence, not arbitrary
+   nesting. Exposed alongside each sample so coverage metrics read the structure
+   directly rather than parsing the debug label. *)
+type sample_shape = Leaf | Array | Record of int
+type sample_meta = { shape : sample_shape; leaves : string list }
+
+(* One Boltzmann-distributed projectable codec, with the structural metadata
+   needed for coverage metrics. A composition Wire refuses to build (e.g. a
+   bitfield array element) raises [Invalid_argument]; fall back to a bare leaf so
+   the sampler never crashes. The leaves drawn are recorded as a side effect, so
+   the RNG draw sequence is byte-identical to a plain sampler and a given seed
+   reproduces the exact same set. *)
+let boltzmann_any rng : any * sample_meta =
   let regular = Array.of_list sampler_regular_leaves in
   let adversarial = Array.of_list sampler_adversarial_leaves in
   let pick xs = xs.(Random.State.int rng (Array.length xs)) in
+  let drawn = ref [] in
   let leaf () =
-    if Random.State.int rng 4 = 0 then pick regular else pick adversarial
+    let a =
+      if Random.State.int rng 4 = 0 then pick regular else pick adversarial
+    in
+    let (Any l) = a in
+    drawn := l.label :: !drawn;
+    a
   in
   let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
-  try
-    if k = 1 then leaf ()
-    else if Random.State.bool rng then
-      match array_of (1 + Random.State.int rng 6) (leaf ()) with
-      | Some a -> a
-      | None -> leaf ()
-    else
-      match k with
-      | 2 -> pair_of (leaf ()) (leaf ())
-      | 3 -> rec3_of (leaf ()) (leaf ()) (leaf ())
-      | _ -> rec4_of (leaf ()) (leaf ()) (leaf ()) (leaf ())
-  with Invalid_argument _ -> leaf ()
+  let shape = ref Leaf in
+  let result =
+    try
+      if k = 1 then leaf ()
+      else if Random.State.bool rng then
+        match array_of (1 + Random.State.int rng 6) (leaf ()) with
+        | Some a ->
+            shape := Array;
+            a
+        | None -> leaf ()
+      else
+        match k with
+        | 2 ->
+            shape := Record 2;
+            pair_of (leaf ()) (leaf ())
+        | 3 ->
+            shape := Record 3;
+            rec3_of (leaf ()) (leaf ()) (leaf ())
+        | _ ->
+            shape := Record 4;
+            rec4_of (leaf ()) (leaf ()) (leaf ()) (leaf ())
+    with Invalid_argument _ -> leaf ()
+  in
+  (result, { shape = !shape; leaves = List.rev !drawn })
 
-let sample ~seed ~count : (string * packed) list =
+let sampled ~seed ~count : (string * packed * sample_meta) list =
   let rng = Random.State.make [| seed |] in
   List.init count (fun i ->
-      let (Any a) = boltzmann_any rng in
+      let Any a, meta = boltzmann_any rng in
       let label = Fmt.str "smp%d_%s" i a.label in
-      (label, rename_case label (Pack a.g)))
+      (label, rename_case label (Pack a.g), meta))
+
+let sample ~seed ~count : (string * packed) list =
+  List.map (fun (label, p, _) -> (label, p)) (sampled ~seed ~count)
 
 let any_labels xs = List.map (fun (Any a) -> a.label) xs
 
@@ -3901,6 +3934,52 @@ let check_sampler_adversarial_bias () =
       "adversarial-biased sampler produced %d/256 weird/adversarial shapes"
       adversarial_hits
 
+let shape_is_leaf = function Leaf -> true | _ -> false
+let shape_is_array = function Array -> true | _ -> false
+let shape_is_record_arity n = function Record k -> k = n | _ -> false
+
+(* Beyond the gross 3:1 adversarial-bias ratio ([check_sampler_adversarial_bias]),
+   enforce that one deterministic sample actually spreads across the grammar:
+   every shape (leaf, array, record of each arity), both endians and both bit
+   orders, signed ints, floats, and a spread of bitpack sizes all appear. Reads
+   the structured [sample_meta] each codec carries, not its debug label. The
+   margins on a 256-codec sample are large, so this guards real distribution
+   regressions, not RNG noise. *)
+let check_sampler_distribution () =
+  let metas = List.map (fun (_, _, m) -> m) (sampled ~seed:7 ~count:256) in
+  let all_leaves = List.concat_map (fun m -> m.leaves) metas in
+  let has l = List.mem l all_leaves in
+  let has_any = List.exists has in
+  let has_shape p = List.exists (fun m -> p m.shape) metas in
+  let checks =
+    [
+      ("no bare leaves", has_shape shape_is_leaf);
+      ("no arrays", has_shape shape_is_array);
+      ("no record of arity 2", has_shape (shape_is_record_arity 2));
+      ("no record of arity 3", has_shape (shape_is_record_arity 3));
+      ("no record of arity 4", has_shape (shape_is_record_arity 4));
+      ( "no little-endian multibyte int",
+        has_any [ "u16"; "u32"; "u64"; "i16"; "i32"; "i64" ] );
+      ( "no big-endian multibyte int",
+        has_any [ "u16be"; "u32be"; "u64be"; "i16be"; "i32be"; "i64be" ] );
+      ( "no signed int",
+        has_any [ "i8"; "i16"; "i16be"; "i32"; "i32be"; "i64"; "i64be" ] );
+      ("no float", has_any [ "f32be"; "f64be" ]);
+      ("no enum", has_any [ "enum"; "enum_open" ]);
+      ("no lookup", has "lkp");
+      ("no bounded", has "bnd");
+      ("no msb-first bit field", has_any [ "bits3"; "bits15u16"; "bp8m" ]);
+      ( "no lsb-first bit field",
+        has_any [ "bits3lsb"; "bits15u16belsb"; "bp8l"; "bp16bel" ] );
+      ("no 8-bit bitpack", has_any [ "bp8m"; "bp8l" ]);
+      ("no 16-bit bitpack", has "bp16bel");
+    ]
+  in
+  List.iter
+    (fun (what, ok) ->
+      if not ok then Alcobar.failf "sampler distribution: %s" what)
+    checks
+
 let const_case name check =
   Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
 
@@ -3912,6 +3991,7 @@ let invariant_cases label =
     const_case
       (label ^ " sampler adversarial bias")
       check_sampler_adversarial_bias;
+    const_case (label ^ " sampler distribution") check_sampler_distribution;
   ]
 
 type api_access = {
@@ -4096,6 +4176,39 @@ let check_struct_validator len data_s =
       Alcobar.failf "Raw.struct_typ direct decode failed: %a"
         Wire.pp_parse_error e
 
+(* [Field.action] reports the action attached via [Field.v]'s [?action] (none on
+   a plain field, [Some] on an annotated one), and [Action.pp] renders the
+   block. *)
+let check_field_action_pp f_plain f_acting action =
+  (match Wire.Field.action f_plain with
+  | None -> ()
+  | Some _ -> Alcobar.failf "Field.action reported an action on a plain field");
+  (match Wire.Field.action f_acting with
+  | Some _ -> ()
+  | None -> Alcobar.failf "Field.action missing on an annotated field");
+  if Fmt.str "%a" Wire.Action.pp action = "" then
+    Alcobar.failf "Action.pp produced empty output"
+
+(* Build the input/output params and check their name / pp / [Private]
+   projections; returns the pair for the codec [check_metadata_helpers] seals. *)
+let check_param_metadata () =
+  let open Wire in
+  let p_in = Param.input "Limit" uint8 in
+  let p_out = Param.output "Out" uint8 in
+  check_string "Param.name" "Limit" (Param.name p_in);
+  check_string "Param.pp" "Limit" (Fmt.str "%a" Param.pp p_in);
+  check_string "Private.param_name" "Limit"
+    (Private.param_name (Param.decl p_in));
+  check_string "Private.param_c_type" "uint8_t"
+    (Private.param_c_type (Param.decl p_in));
+  check_string "Private.ml_type_of" "int" (Private.ml_type_of uint8);
+  check_string "Private.c_type_of" "uint8_t" (Private.c_type_of uint8);
+  if Private.param_is_mutable (Param.decl p_in) then
+    Alcobar.failf "Param.input reported mutable";
+  if not (Private.param_is_mutable (Param.decl p_out)) then
+    Alcobar.failf "Param.output reported immutable";
+  (p_in, p_out)
+
 let check_metadata_helpers () =
   let open Wire in
   let f_meta =
@@ -4114,25 +4227,13 @@ let check_metadata_helpers () =
   check_string "Field.pp" "Meta" (Fmt.str "%a" Field.pp f_meta);
   let _ = Field.decl_of_packed (Field.Named f_meta) in
   let _ = Field.decl_of_packed (Field.Anon (Field.anon uint8)) in
-  let p_in = Param.input "Limit" uint8 in
-  let p_out = Param.output "Out" uint8 in
-  check_string "Param.name" "Limit" (Param.name p_in);
-  check_string "Private.param_name" "Limit"
-    (Private.param_name (Param.decl p_in));
-  check_string "Private.param_c_type" "uint8_t"
-    (Private.param_c_type (Param.decl p_in));
-  check_string "Private.ml_type_of" "int" (Private.ml_type_of uint8);
-  check_string "Private.c_type_of" "uint8_t" (Private.c_type_of uint8);
-  if Private.param_is_mutable (Param.decl p_in) then
-    Alcobar.failf "Param.input reported mutable";
-  if not (Private.param_is_mutable (Param.decl p_out)) then
-    Alcobar.failf "Param.output reported immutable";
+  let p_in, p_out = check_param_metadata () in
   let f_src = Field.v "Src" uint8 in
-  let f_copy =
-    Field.v "Copy"
-      ~action:(Action.on_success [ Action.assign p_out (Field.ref f_src) ])
-      uint8
+  let copy_action =
+    Action.on_success [ Action.assign p_out (Field.ref f_src) ]
   in
+  let f_copy = Field.v "Copy" ~action:copy_action uint8 in
+  check_field_action_pp f_meta f_copy copy_action;
   let codec =
     Wire.Codec.v "ApiParam"
       ~where:Expr.(Field.ref f_src <= Param.expr p_in)
@@ -4317,6 +4418,17 @@ let check_write_helpers_once () =
     (Filename.concat outdir "ApiRawDirect.3d")
     schema.module_
 
+(* Direct checks for a representative slice of the public [Wire] API -- field /
+   bitfield / slice accessors and setters, custom sequences, struct validation,
+   metadata accessors, the EverParse projection helpers, and the write helpers --
+   complementing the round-trip and projection coverage the registry gives. This
+   is not a complete mirror of every public symbol: it targets the surfaces with
+   non-trivial behaviour worth asserting directly, while the simple scalar
+   round-trips stay in the registry suite. The internal codec helpers
+   ([raw_decode]/[raw_encode], [embed_encode]/[embed_decode], [field_readers],
+   [wire_size_info], the padded blit helpers) are not part of the public facade
+   and are not counted as API coverage; they are only exercised transitively by
+   the round-trip suite. *)
 let api_cases label =
   [
     Alcobar.test_case (label ^ " accessors")
