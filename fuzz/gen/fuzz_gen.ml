@@ -3433,20 +3433,25 @@ let pick_by_first_byte xs bs =
       List.nth xs i
 
 let afl_cases_for ?(max_len = 256) cases label =
-  [
-    Alcobar.test_case
-      (label ^ " afl decode+validate")
-      Alcobar.[ bytes_any ]
-      (fun bs ->
-        let bs = truncate_bytes ~max_len bs in
-        List.iter
-          (fun (name, Pack g) ->
+  match cases with
+  | [] -> []
+  | _ ->
+      [
+        Alcobar.test_case
+          (label ^ " afl decode+validate")
+          Alcobar.[ bytes_any ]
+          (fun bs ->
+            let bs = truncate_bytes ~max_len bs in
+            (* Pick one codec per input (by the first byte) so each AFL exec is a
+               single decode+validate rather than one per registry entry;
+               coverage of the whole registry accumulates across inputs. Mirrors
+               [afl_everparse_cases]. *)
+            let name, Pack g = pick_by_first_byte cases bs in
             let case = label ^ " " ^ name in
             let env = positive_env g in
             check_decode_safety case "afl" ?env g bs;
-            check_validate_safety case "afl" ?env g bs)
-          cases);
-  ]
+            check_validate_safety case "afl" ?env g bs);
+      ]
 
 let afl_cases ?max_len label = afl_cases_for ?max_len afl_registry label
 
