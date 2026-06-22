@@ -42,6 +42,19 @@ and env_strategy = {
 let bytes_of_string s = Bytes.unsafe_of_string s
 let string_of_bytes b = Bytes.unsafe_to_string b
 
+let corpus_generation_mode () =
+  Array.exists (String.equal "--gen-corpus") Sys.argv
+
+let file_input_mode () =
+  let argv = Sys.argv in
+  let n = Array.length argv in
+  n > 1
+  && (not (corpus_generation_mode ()))
+  &&
+  let path = argv.(n - 1) in
+  Sys.file_exists path
+  && try not (Sys.is_directory path) with Sys_error _ -> false
+
 let slice_of_string s =
   let b = Bytes.of_string s in
   Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
@@ -1154,6 +1167,31 @@ let codec_where =
     env = None;
   }
 
+let u8_pair_bytes a b =
+  let buf = Bytes.create 2 in
+  Bytes.set_uint8 buf 0 a;
+  Bytes.set_uint8 buf 1 b;
+  buf
+
+let u8_pair_positive gen =
+  Alcobar.map gen (fun a b -> ((a, b), u8_pair_bytes a b))
+
+let u8_pair_adversarial gen = Alcobar.map gen (fun a b -> u8_pair_bytes a b)
+
+let u8_pair_record name f_a f_b ~positive ~adversarial =
+  let codec =
+    Wire.Codec.v name (fun a b -> (a, b)) Wire.Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive = u8_pair_positive positive;
+    random = bytes_fixed 2;
+    adversarial = u8_pair_adversarial adversarial;
+    equal = ( = );
+    env = None;
+  }
+
 (* A field whose typ carries a [Wire.where] cond ([d : where (len < 2) uint8]).
    The cond reaches the 3D refinement, so the EverParse validator rejects
    [len >= 2]; the OCaml side must reject it too. Unlike [codec_where] (a
@@ -1166,39 +1204,10 @@ let typ_where =
     Wire.Field.v "d"
       (Wire.where Wire.Expr.(Wire.Field.ref f_len < Wire.int 2) Wire.uint8)
   in
-  let codec =
-    Wire.Codec.v "_typ_where"
-      (fun len d -> (len, d))
-      Wire.Codec.[ (f_len $ fun (l, _) -> l); (f_d $ fun (_, d) -> d) ]
-  in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:0 2; Alcobar.range ~min:0 0x100 ]
-      (fun len d ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 len;
-        Bytes.set_uint8 buf 1 d;
-        ((len, d), buf))
-  in
-  let adversarial =
-    Alcobar.map
+  u8_pair_record "_typ_where" f_len f_d
+    ~positive:Alcobar.[ Alcobar.range ~min:0 2; Alcobar.range ~min:0 0x100 ]
+    ~adversarial:
       Alcobar.[ Alcobar.range ~min:2 0x100; Alcobar.range ~min:0 0x100 ]
-      (fun len d ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 len;
-        Bytes.set_uint8 buf 1 d;
-        buf)
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 2;
-    adversarial;
-    equal = ( = );
-    env = None;
-  }
 
 (* [Field.v ~constraint_] is distinct from [~self_constraint] and codec-level
    [~where]: it is attached to one field but may reference earlier fields. *)
@@ -1208,39 +1217,9 @@ let field_constraint =
     Wire.Field.v "b" Wire.uint8
       ~constraint_:Wire.Expr.(Wire.Field.ref f_a < Wire.int 4)
   in
-  let codec =
-    Wire.Codec.v "_field_constraint"
-      (fun a b -> (a, b))
-      Wire.Codec.[ f_a $ fst; f_b $ snd ]
-  in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:0 4; Alcobar.uint8 ]
-      (fun a b ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 a;
-        Bytes.set_uint8 buf 1 b;
-        ((a, b), buf))
-  in
-  let adversarial =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:4 0xFC; Alcobar.uint8 ]
-      (fun a b ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 a;
-        Bytes.set_uint8 buf 1 b;
-        buf)
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 2;
-    adversarial;
-    equal = ( = );
-    env = None;
-  }
+  u8_pair_record "_field_constraint" f_a f_b
+    ~positive:Alcobar.[ Alcobar.range ~min:0 4; Alcobar.uint8 ]
+    ~adversarial:Alcobar.[ Alcobar.range ~min:4 0xFC; Alcobar.uint8 ]
 
 (* [Field.int] is a second public way to reference an integer-valued field in
    expressions. Keep it separate from the [Field.ref]-heavy cases. *)
@@ -1250,39 +1229,9 @@ let field_int =
     Wire.Field.v "b" Wire.uint8 ~self_constraint:(fun b ->
         Wire.Expr.(Wire.Field.int f_a + b < Wire.int 10))
   in
-  let codec =
-    Wire.Codec.v "_field_int"
-      (fun a b -> (a, b))
-      Wire.Codec.[ f_a $ fst; f_b $ snd ]
-  in
-  let typ = Wire.codec codec in
-  let positive =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:0 5; Alcobar.range ~min:0 5 ]
-      (fun a b ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 a;
-        Bytes.set_uint8 buf 1 b;
-        ((a, b), buf))
-  in
-  let adversarial =
-    Alcobar.map
-      Alcobar.[ Alcobar.range ~min:10 0xF6; Alcobar.uint8 ]
-      (fun a b ->
-        let buf = Bytes.create 2 in
-        Bytes.set_uint8 buf 0 a;
-        Bytes.set_uint8 buf 1 b;
-        buf)
-  in
-  {
-    codec;
-    typ;
-    positive;
-    random = bytes_fixed 2;
-    adversarial;
-    equal = ( = );
-    env = None;
-  }
+  u8_pair_record "_field_int" f_a f_b
+    ~positive:Alcobar.[ Alcobar.range ~min:0 5; Alcobar.range ~min:0 5 ]
+    ~adversarial:Alcobar.[ Alcobar.range ~min:10 0xF6; Alcobar.uint8 ]
 
 (* Full-width int64 self constraints use [Field.v ~self_int64] and
    [Field.int64], separate from native-int [~self_constraint]. *)
@@ -2026,20 +1975,21 @@ let gate_on_bytes v =
   Bytes.set_uint16_be buf 1 v;
   buf
 
+let gate_positive ~present_value ~absent =
+  Alcobar.map
+    Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
+    (fun present v ->
+      if present then (present_value v, gate_on_bytes v) else absent ())
+
 (* Dynamic-gate optional: a uint8 [gate] field controls whether a uint16be
    payload is present via [Field.optional ~present:(Field.ref gate <> 0)]. *)
 let optional_dynamic =
   gate_codec "_opt_dyn"
     (fun g ->
       Wire.Field.optional "payload" ~present:(gate_present g) Wire.uint16be)
-    (Alcobar.map
-       Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
-       (fun present v ->
-         if present then ((1, Some v), gate_on_bytes v)
-         else
-           let buf = Bytes.create 1 in
-           Bytes.set_uint8 buf 0 0;
-           ((0, None), buf)))
+    (gate_positive
+       ~present_value:(fun v -> (1, Some v))
+       ~absent:(fun () -> ((0, None), bytes_of_octets [ 0 ])))
 
 (* Dynamic-gate optional_or: same shape, with a default value used when
    absent. *)
@@ -2048,15 +1998,13 @@ let optional_or_dynamic =
     (fun g ->
       Wire.Field.optional_or "payload" ~present:(gate_present g) ~default:0xCAFE
         Wire.uint16be)
-    (Alcobar.map
-       Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
-       (fun present v ->
-         if present then ((1, v), gate_on_bytes v)
-         else
-           let buf = Bytes.create 3 in
-           Bytes.set_uint8 buf 0 0;
-           Bytes.set_uint16_be buf 1 0xCAFE;
-           ((0, 0xCAFE), buf)))
+    (gate_positive
+       ~present_value:(fun v -> (1, v))
+       ~absent:(fun () ->
+         let buf = Bytes.create 3 in
+         Bytes.set_uint8 buf 0 0;
+         Bytes.set_uint16_be buf 1 0xCAFE;
+         ((0, 0xCAFE), buf)))
 
 (* {1 Casetype} *)
 
@@ -3485,7 +3433,7 @@ let pick_by_first_byte xs bs =
       let i = if Bytes.length bs = 0 then 0 else Bytes.get_uint8 bs 0 mod n in
       List.nth xs i
 
-let afl_cases ?(max_len = 256) label =
+let afl_cases_for ?(max_len = 256) cases label =
   [
     Alcobar.test_case
       (label ^ " afl decode+validate")
@@ -3498,8 +3446,14 @@ let afl_cases ?(max_len = 256) label =
             let env = positive_env g in
             check_decode_safety case "afl" ?env g bs;
             check_validate_safety case "afl" ?env g bs)
-          afl_registry);
+          cases);
   ]
+
+let afl_cases ?max_len label = afl_cases_for ?max_len afl_registry label
+
+let afl_env_cases ?max_len label =
+  let env_cases = List.filter (fun (_, p) -> binds_env p) afl_registry in
+  afl_cases_for ?max_len env_cases label
 
 (* {1 Boltzmann sampler over the projectable grammar}
 
@@ -3516,7 +3470,7 @@ let afl_cases ?(max_len = 256) label =
 
 (* Single-typedef, fixed-size leaf vocabulary: each projects to one EverParse
    field, so a flat record of them stays a single typedef. *)
-let sampler_leaves : any list =
+let sampler_regular_leaves : any list =
   [
     Any { g = uint8; size = Some 1; label = "u8" };
     Any { g = uint16; size = Some 2; label = "u16" };
@@ -3534,6 +3488,10 @@ let sampler_leaves : any list =
     Any { g = int64be; size = Some 8; label = "i64be" };
     Any { g = float32be; size = Some 4; label = "f32be" };
     Any { g = float64be; size = Some 8; label = "f64be" };
+  ]
+
+let sampler_edge_leaves : any list =
+  [
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
     Any
       {
@@ -3563,6 +3521,8 @@ let sampler_leaves : any list =
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
   ]
 
+let sampler_leaves = sampler_regular_leaves @ sampler_edge_leaves
+
 (* Geometric arity in [1, max_arity]: keep adding a field with probability
    [continue]. This is the Boltzmann law for a sequence, truncated. *)
 let sample_arity rng ~continue ~max_arity =
@@ -3576,8 +3536,12 @@ let sample_arity rng ~continue ~max_arity =
    build (e.g. a bitfield array element) raises [Invalid_argument]; fall back to
    a bare leaf so the sampler never crashes. *)
 let boltzmann_any rng : any =
-  let leaves = Array.of_list sampler_leaves in
-  let leaf () = leaves.(Random.State.int rng (Array.length leaves)) in
+  let regular = Array.of_list sampler_regular_leaves in
+  let edge = Array.of_list sampler_edge_leaves in
+  let pick xs = xs.(Random.State.int rng (Array.length xs)) in
+  let leaf () =
+    if Random.State.int rng 4 = 0 then pick regular else pick edge
+  in
   let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
   try
     if k = 1 then leaf ()
@@ -3622,6 +3586,16 @@ let assert_contains group labels expected =
       if not (List.mem label labels) then
         Alcobar.failf "%s missing %s" group label)
     expected
+
+let string_contains_sub s sub =
+  let len = String.length s and sub_len = String.length sub in
+  if sub_len = 0 then true
+  else if sub_len > len then false
+  else
+    let rec loop i =
+      i + sub_len <= len && (String.sub s i sub_len = sub || loop (i + 1))
+    in
+    loop 0
 
 let expected_registry_labels =
   [
@@ -3864,18 +3838,34 @@ let check_composition_vocabulary () =
   let fixed = any_labels fixed_leaves
   and var = any_labels var_leaves
   and env = any_labels env_leaves
-  and sampled = any_labels sampler_leaves in
+  and sampled = any_labels sampler_leaves
+  and sampled_regular = any_labels sampler_regular_leaves
+  and sampled_edge = any_labels sampler_edge_leaves in
   List.iter check_vocabulary_group
     [
       ("fixed_leaves", fixed);
       ("var_leaves", var);
       ("env_leaves", env);
       ("sampler_leaves", sampled);
+      ("sampler_regular_leaves", sampled_regular);
+      ("sampler_edge_leaves", sampled_edge);
     ];
   assert_contains "fixed_leaves" fixed expected_fixed_labels;
   assert_contains "var_leaves" var expected_var_labels;
   assert_contains "env_leaves" env expected_env_labels;
-  assert_contains "sampler_leaves" sampled expected_sampler_labels
+  assert_contains "sampler_leaves" sampled expected_sampler_labels;
+  assert_contains "sampler_edge_leaves" sampled_edge
+    [
+      "bits3lsb";
+      "bits15u16";
+      "bits15u16belsb";
+      "bp8m";
+      "bp8l";
+      "bp16bel";
+      "enum";
+      "enum_open";
+      "lkp";
+    ]
 
 let check_sampler_invariants () =
   let labels = List.map fst (sample ~seed:1 ~count:64) in
@@ -3889,6 +3879,20 @@ let check_sampler_invariants () =
         Alcobar.failf "sample label %S does not start with %S" label prefix)
     labels
 
+let check_sampler_edge_bias () =
+  let edge_labels = any_labels sampler_edge_leaves in
+  let labels = List.map fst (sample ~seed:7 ~count:256) in
+  let edge_hits =
+    List.fold_left
+      (fun count label ->
+        if List.exists (string_contains_sub label) edge_labels then count + 1
+        else count)
+      0 labels
+  in
+  if edge_hits < 160 then
+    Alcobar.failf "edge-biased sampler produced %d/256 edge-heavy shapes"
+      edge_hits
+
 let const_case name check =
   Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
 
@@ -3897,6 +3901,7 @@ let invariant_cases label =
     const_case (label ^ " registry") check_registry_invariants;
     const_case (label ^ " composition vocabulary") check_composition_vocabulary;
     const_case (label ^ " sampler") check_sampler_invariants;
+    const_case (label ^ " sampler edge bias") check_sampler_edge_bias;
   ]
 
 type api_access = {

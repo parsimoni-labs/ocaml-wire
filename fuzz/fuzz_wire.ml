@@ -12,16 +12,6 @@
 
 open Fuzz_gen
 
-let file_input_mode () =
-  let argv = Sys.argv in
-  let n = Array.length argv in
-  n > 1
-  && (not (Array.exists (String.equal "--gen-corpus") argv))
-  &&
-  let path = argv.(n - 1) in
-  Sys.file_exists path
-  && try not (Sys.is_directory path) with Sys_error _ -> false
-
 (* Positive round-trip plus random / adversarial crash-safety for every
    combinator in the registry. *)
 let registry_tests () =
