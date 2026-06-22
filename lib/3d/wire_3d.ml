@@ -522,6 +522,36 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
+(* Validate many schemas in a single [3d.exe --batch] invocation, the way
+   EverParse's own test suite checks its corpus (one schema per file, all
+   validated at once). EverParse pays a fixed F* / KaRaMeL startup cost per
+   invocation, so batching hundreds of schemas into one call is far faster than
+   one call each. [Ok ()] iff EverParse accepts every schema; otherwise [Error]
+   with the captured diagnostics, which name the offending file(s). The caller
+   provides schemas with distinct names (each becomes its own .3d module). *)
+let batch_check ~outdir schemas =
+  match locate_3d_exe () with
+  | None -> Error "3d.exe not found in PATH or ~/.local/everparse/bin/"
+  | Some exe ->
+      generate_3d ~outdir schemas;
+      let files =
+        String.concat " " (List.map Wire.Everparse.filename schemas)
+      in
+      let cmd =
+        Fmt.str "cd %s && %s --batch --no_copy_everparse_h %s > _batch.log 2>&1"
+          outdir exe files
+      in
+      let ret = Sys.command cmd in
+      let captured =
+        try
+          In_channel.with_open_text
+            (Filename.concat outdir "_batch.log")
+            In_channel.input_all
+        with Sys_error _ -> ""
+      in
+      if ret = 0 then Ok ()
+      else Error (if captured = "" then Fmt.str "exit %d" ret else captured)
+
 let generate_c ?(quiet = true) ~outdir schemas =
   ensure_dir outdir;
   if has_3d_exe () then begin

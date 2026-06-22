@@ -57,97 +57,72 @@ let nested_pp_cases () =
   @ Fuzz_gen.everparse_nested_cases "nested(d3)" 3
   @ Fuzz_gen.everparse_nested_cases "nested(d4)" 4
 
-(* EverParse derives the module name from the .3d filename and requires it to
-   start with a capital letter; the composer names its codecs [_leaf] / [_opt] /
-   etc. Sanitise to a valid module name for the file (the internal struct names
-   are unaffected and need no change). *)
-let valid_module_name n =
-  match String.concat "" (String.split_on_char '_' n) with
-  | "" -> "Schema"
-  | s -> String.capitalize_ascii s
-
-(* Run one schema through [3d.exe --batch] in its own temp directory and return
-   the verdict. The generated C is incidental and discarded: only EverParse's
-   acceptance matters. [parse_3d ~batch:true] verifies without [run_everparse]'s
-   endianness-header copy, so it works on a bare directory. *)
-let rm_quietly f = try Sys.remove f with Sys_error _ -> ()
-let err fmt = Fmt.kstr (fun s -> Error s) fmt
-
-let extract_one g =
-  match Wire.Everparse.schema (Fuzz_gen.codec g) with
-  | exception e -> err "3D projection raised %s" (Printexc.to_string e)
-  | schema0 ->
-      let schema = { schema0 with name = valid_module_name schema0.name } in
-      let outdir = Filename.temp_dir "wire_fuzz3d_" ("_" ^ schema.name) in
-      Fun.protect
-        ~finally:(fun () ->
-          (try
-             Array.iter
-               (fun f -> rm_quietly (Filename.concat outdir f))
-               (Sys.readdir outdir)
-           with Sys_error _ -> ());
-          try Unix.rmdir outdir with Unix.Unix_error _ -> ())
-        (fun () ->
-          try
-            Wire_3d.generate_3d ~outdir [ schema ];
-            Wire_3d.parse_3d ~batch:true ~outdir
-              (Wire.Everparse.filename schema)
-          with (Failure _ | Sys_error _ | Unix.Unix_error _) as e ->
-            Error (Printexc.to_string e))
-
-(* [3d.exe --batch] takes seconds per schema, so each test case caches its
-   verdict. Skipped without [3d.exe] (CI) and in corpus / AFL modes, where the
-   long startup is unwanted. *)
 let normal_mode () =
   (not (Fuzz_gen.corpus_generation_mode ()))
   && not (Fuzz_gen.file_input_mode ())
 
-let extract_case name res =
-  Alcobar.test_case ("3d.exe " ^ name)
-    [ const () ]
-    (fun () ->
-      match Lazy.force res with
-      | Ok () -> ()
-      | Error m ->
-          Alcobar.failf "%s: EverParse rejected a schema that built: %s" name m)
+(* Adversarially test the generated 3d files: every shape in the registry that
+   wire claims projects (all but the {!no_3d_projection} ones, asserted to reject
+   in [pp_cases]) must verify, or it is a build-but-fail-3d hole. Running one
+   [3d.exe --batch] per schema is far too slow for the expanded, adversarially
+   biased registry (hundreds of schemas, each paying EverParse's F* / KaRaMeL
+   startup), and doing it lazily inside the test cases also trips alcobar's
+   per-test timeout. Instead, the whole set is validated in a single
+   [3d.exe --batch] over all the generated files (EverParse's own corpus-test
+   strategy), run once at module load.
 
-let adversarial_extract_names = [ "enum_u16be" ]
+   This still takes ~90s, which is too heavy for a plain [dune test], so it is
+   off by default and opt-in via [WIRE_3D_BATCH=1] (set in the everparse-3d CI
+   job). It is also skipped without [3d.exe] and in corpus / AFL modes. *)
+let batch_requested () = Sys.getenv_opt "WIRE_3D_BATCH" = Some "1"
 
-let registry_case name =
-  match List.assoc_opt name Fuzz_gen.registry with
-  | Some p -> Some p
-  | None -> None
+(* A distinct, valid 3d module name per schema (one [.3d] file each), keeping the
+   registry label in it so a batch failure points back to the codec. *)
+let batch_module_name i label =
+  let b = Buffer.create (String.length label + 8) in
+  Buffer.add_string b ("S" ^ string_of_int i ^ "_");
+  String.iter
+    (fun c ->
+      if
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+      then Buffer.add_char b c)
+    label;
+  Buffer.contents b
 
-let adversarial_extract_cases () =
-  if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
-  else
-    List.filter_map
-      (fun name ->
-        Option.map
-          (fun (Fuzz_gen.Pack g) ->
-            extract_case ("adversarial " ^ name) (lazy (extract_one g)))
-          (registry_case name))
-      adversarial_extract_names
-
-(* Every shape that projects must verify: the whole registry except the shapes
-   wire rejects at projection (those are asserted to reject in [pp_cases]) is
-   run through [3d.exe], and any failure is a build-but-fail-3d hole. *)
-let projectable_registry () =
-  if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
+let batch_schemas =
+  if not (Wire_3d.has_3d_exe () && normal_mode () && batch_requested ()) then []
   else
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
+    |> List.mapi (fun i (label, Fuzz_gen.Pack g) ->
+        let s = Wire.Everparse.schema (Fuzz_gen.codec g) in
+        { s with Wire.Everparse.name = batch_module_name i label })
 
-let extract_cases () =
-  List.map
-    (fun (name, Fuzz_gen.Pack g) -> extract_case name (lazy (extract_one g)))
-    (projectable_registry ())
+let batch_result =
+  match batch_schemas with
+  | [] -> None
+  | schemas ->
+      let outdir = Filename.temp_dir "wire_fuzz3d_batch" "" in
+      Some (Wire_3d.batch_check ~outdir schemas)
+
+let extract_cases =
+  match batch_result with
+  | None -> []
+  | Some res ->
+      [
+        Alcobar.test_case
+          (Fmt.str "3d.exe batch (%d schemas)" (List.length batch_schemas))
+          [ const () ]
+          (fun () ->
+            match res with
+            | Ok () -> ()
+            | Error m ->
+                Alcobar.failf "EverParse rejected a generated schema:\n%s" m);
+      ]
 
 let suite =
   if Fuzz_gen.file_input_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
-  else
-    ( "everparse",
-      pp_cases () @ nested_pp_cases ()
-      @ adversarial_extract_cases ()
-      @ extract_cases () )
+  else ("everparse", pp_cases () @ nested_pp_cases () @ extract_cases)

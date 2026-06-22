@@ -80,6 +80,17 @@ val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 
     Requires [3d.exe] in PATH. *)
 
+val batch_check :
+  outdir:string -> Wire.Everparse.t list -> (unit, string) result
+(** [batch_check ~outdir schemas] generates one [.3d] per schema in [outdir] and
+    validates them all in a single [3d.exe --batch] invocation (full F* and C
+    extraction), the way EverParse's own corpus is tested. Because the F* /
+    KaRaMeL startup cost is paid once per invocation, this is far faster than a
+    {!parse_3d} call per schema for a large set. Returns [Ok ()] iff EverParse
+    accepts every schema, else [Error] with the captured diagnostics naming the
+    offending file(s). Schemas must have distinct names (one [.3d] module each).
+    Requires [3d.exe] in PATH. *)
+
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
     [<Name>_ExternalTypedefs.h] for each schema that uses the WireCtx contract,
