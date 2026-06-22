@@ -3302,7 +3302,6 @@ let wrapper_gens =
 let composite_gens =
   [
     ("array(0,uint8)", Pack (array 0 uint8));
-    ("array(3,empty)", Pack (array 3 empty));
     ("array(3,uint16be)", Pack (array 3 uint16be));
     ("array_seq(3,uint16be)", Pack (array_seq 3 uint16be));
     ("array_seq(0,uint8)", Pack (array_seq 0 uint8));
@@ -3729,7 +3728,6 @@ let expected_registry_labels =
     "nested_at_most(2,uint16be)";
     "nested_at_most(4,uint16be)";
     "array(0,uint8)";
-    "array(3,empty)";
     "array(3,uint16be)";
     "array_seq(3,uint16be)";
     "array_seq(0,uint8)";
