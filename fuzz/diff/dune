@@ -62,4 +62,4 @@
  (action
   (progn
    (run %{exe:fuzz.exe} --gen-corpus corpus)
-   (run afl-fuzz -V 60 -i corpus -o _fuzz -- ./fuzz.exe @@))))
+   (run afl-fuzz -V 60 -t 8000 -i corpus -o _fuzz -- ./fuzz.exe @@))))
