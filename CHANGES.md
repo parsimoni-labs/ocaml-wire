@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- A field constraint that adds narrow unsigned fields (such as `a + b <= 10`
+  over two `uint8` fields) now projects to a `.3d` EverParse verifies. The sum
+  was emitted at the field's own width, which EverParse refuses to verify because
+  it can overflow, while `Wire.Codec.decode` computes the same sum in OCaml's
+  wide native int. The addition's operands are now widened to 64-bit so the
+  generated C validator and the decoder agree (#188, @samoht)
 - An `array` of an open `enum` (`Wire.enum_open`) now validates identically in
   the OCaml decoder and the EverParse-generated C validator: both accept any
   element value. The C validator used to reject element values outside the named

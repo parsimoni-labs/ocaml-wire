@@ -185,6 +185,25 @@ let test_3d_signed_float_setters () =
     "no scalar falls through to SetBytes" false
     (contains ~sub:"SetBytes" output)
 
+let test_3d_arith_constraint_widens () =
+  (* A constraint adding two narrow unsigned fields overflows the field width in
+     3D, which EverParse refuses to verify, while the OCaml decoder computes the
+     sum in its wide native int. The projection widens each [Add] operand to
+     UINT64 so the 3D sum cannot overflow and matches the decoder. *)
+  let f_a = Field.v "a" uint8 in
+  let f_b =
+    Field.v "b" uint8 ~self_constraint:(fun b ->
+        Expr.(Field.int f_a + b <= int 10))
+  in
+  let c = Codec.v "Arith" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ] in
+  let output = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "both Add operands widened to UINT64" true
+    (contains ~sub:"((UINT64) a) + ((UINT64) b)" output);
+  Alcotest.(check bool)
+    "no un-widened narrow sum" false
+    (contains ~sub:"(a + b)" output)
+
 let test_3d_array_enum_element_decl () =
   (* An enum used as an array element still needs its declaration emitted. The
      decl collection only looked through Map/Where wrappers, so an enum inside an
@@ -1097,6 +1116,8 @@ let suite =
         test_3d_uint63_projects_to_uint64;
       Alcotest.test_case "3d: signed and float setters" `Quick
         test_3d_signed_float_setters;
+      Alcotest.test_case "3d: arithmetic constraint widens operands" `Quick
+        test_3d_arith_constraint_widens;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
       Alcotest.test_case "3d: array open enum element renders base" `Quick

@@ -1957,7 +1957,60 @@ let project_refinement ~name ~kind (cond : bool expr) : bool expr =
          to 3D"
   | `Signed width -> translate_signed_ordering ~name ~width cond
 
-let pp_field ppf (Field f) =
+(* A field whose value is an unsigned scalar at most 32 bits wide, seen through
+   the transparent [Map] / [Enum] / [Where] wrappers. The sum of two such fields
+   fits in both OCaml's native int and a 64-bit unsigned, so an [Add] over them
+   can be projected without overflow by widening the operands. *)
+let rec widenable_unsigned : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint32 _ -> true
+  | Map { inner; _ } -> widenable_unsigned inner
+  | Enum { base; _ } -> widenable_unsigned base
+  | Where { inner; _ } -> widenable_unsigned inner
+  | _ -> false
+
+(* EverParse computes a refinement at the field's own (narrow) width, so a plain
+   [a + b] over [UINT8] fields can overflow and F* refuses to verify it, while
+   the OCaml decoder computes the same sum in its wide native int. Widen each
+   [Add] operand that names a <=32-bit unsigned field to [UINT64] so the 3D sum
+   matches the decoder's. Only [Add] is rewritten: [Sub] can underflow (an
+   unsigned wrap the decoder does not do), and a wider or signed operand has no
+   sound widening, so those are left untouched and keep their current behaviour. *)
+let rec widen_add : type a. string list -> a expr -> a expr =
+ fun ws e ->
+  let r e = widen_add ws e in
+  let operand e =
+    match r e with
+    | Ref (I, n) as e when List.mem n ws -> Cast (`U64, e)
+    | e -> e
+  in
+  match e with
+  | Add (a, b) -> Add (operand a, operand b)
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+  | Ref _ ->
+      e
+  | Sub (a, b) -> Sub (r a, r b)
+  | Mul (a, b) -> Mul (r a, r b)
+  | Div (a, b) -> Div (r a, r b)
+  | Mod (a, b) -> Mod (r a, r b)
+  | Land (a, b) -> Land (r a, r b)
+  | Lor (a, b) -> Lor (r a, r b)
+  | Lxor (a, b) -> Lxor (r a, r b)
+  | Lnot a -> Lnot (r a)
+  | Lsl (a, b) -> Lsl (r a, r b)
+  | Lsr (a, b) -> Lsr (r a, r b)
+  | Eq (a, b) -> Eq (r a, r b)
+  | Ne (a, b) -> Ne (r a, r b)
+  | Lt (a, b) -> Lt (r a, r b)
+  | Le (a, b) -> Le (r a, r b)
+  | Gt (a, b) -> Gt (r a, r b)
+  | Ge (a, b) -> Ge (r a, r b)
+  | And (a, b) -> And (r a, r b)
+  | Or (a, b) -> Or (r a, r b)
+  | Not a -> Not (r a)
+  | Cast (w, x) -> Cast (w, r x)
+  | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
+
+let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
@@ -2009,6 +2062,9 @@ let pp_field ppf (Field f) =
       (project_refinement ~name:raw_name ~kind:(scalar_kind typ))
       constraint_
   in
+  (* Widen [a + b] over narrow unsigned fields so the 3D sum does not overflow
+     the field width, matching the OCaml decoder's wide-int computation. *)
+  let constraint_ = Option.map (widen_add widenable) constraint_ in
   let suffix, pp_base = field_suffix typ in
   let pp_base =
     match doc_enum with
@@ -2143,10 +2199,18 @@ let pp_struct ppf (s : struct_) =
   let name = escape_3d s.name in
   let where, fields = lower_where_to_field_constraint s.where s.fields in
   let fields = guard_subtraction_sizes fields in
+  let widenable =
+    List.filter_map
+      (fun (Field f) ->
+        match f.field_name with
+        | Some n when widenable_unsigned f.field_typ -> Some n
+        | _ -> None)
+      fields
+  in
   Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field ppf) fields;
+  List.iter (pp_field widenable ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
 let pp_enum_cases ppf cases =
