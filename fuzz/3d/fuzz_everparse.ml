@@ -3,14 +3,17 @@
     Every generated codec is projected to a 3D schema and pretty-printed
     ({!Fuzz_gen.everparse_cases}), so the projection and code-generation path is
     exercised on the same compositions the OCaml round-trip suite uses, plus
-    arbitrary nested ones. When [3d.exe] is available, the {e whole} registry is
-    additionally run through EverParse ([3d.exe --batch]): every codec that
-    builds must also project to a schema EverParse verifies, except the few in
+    arbitrary nested ones. When [3d.exe] is available {e and} [WIRE_3D_BATCH=1]
+    is set, the {e whole} registry is additionally run through EverParse (one
+    [3d.exe --batch] over all the generated files): every codec that builds must
+    also project to a schema EverParse verifies, except the few in
     {!no_3d_projection} that wire rejects at projection (asserted to reject
     instead). That extraction pass is the only check that catches errors
     surfacing during F* verification rather than pretty-printing (a kind error
-    on a possibly-empty list, an invalid action or expression). It is skipped
-    where [3d.exe] is absent (the plain CI build, AFL). *)
+    on a possibly-empty list, an invalid action or expression). It is opt-in
+    because it takes ~90s (too heavy for a plain [dune test]); the everparse-3d
+    CI job sets [WIRE_3D_BATCH=1]. It is skipped where [3d.exe] is absent (the
+    plain CI build, AFL) or the variable is unset. *)
 
 open Alcobar
 
