@@ -211,6 +211,12 @@
 
 ### Fixed
 
+- An `array` of an open `enum` (`Wire.enum_open`) now validates identically in
+  the OCaml decoder and the EverParse-generated C validator: both accept any
+  element value. The C validator used to reject element values outside the named
+  codes (it constrained each element to the enum's named set), while
+  `Wire.Codec.decode` accepted them, so the two disagreed on which buffers are
+  valid (#187, @samoht)
 - An `enum` / `variants` over a big-endian base (e.g. `enum ... uint16be`) now
   projects to a `.3d` EverParse accepts. It was emitted as a `UINT16BE enum`
   declaration, which EverParse rejects (it types the integer constants as the

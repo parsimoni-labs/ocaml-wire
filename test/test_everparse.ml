@@ -204,6 +204,27 @@ let test_3d_array_enum_element_decl () =
     "array element references the enum" true
     (contains ~sub:"Color v[" output)
 
+let test_3d_array_open_enum_element () =
+  (* An open enum admits any value, so as an array element it must project as its
+     bare base, not the named enum type. Rendering it as the enum type makes the
+     generated C validator reject codes outside the named set, while the OCaml
+     decoder (an open enum checks no membership) accepts them: a soundness
+     divergence the differential fuzzer flagged. *)
+  let e = enum_open "Code" [ ("A", 1); ("B", 2); ("C", 3) ] uint8 in
+  let c =
+    Codec.v "ArrOpenE"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (array ~len:(int 4) e) $ fun v -> v) ]
+  in
+  let output = to_3d (Everparse.schema c).module_ in
+  Alcotest.(check bool)
+    "open-enum array element renders as its base scalar" true
+    (contains ~sub:"UINT8 v[" output);
+  Alcotest.(check bool)
+    "open-enum array element does not enforce membership via the enum type"
+    false
+    (contains ~sub:"Code v[" output)
+
 let test_3d_enum_membership () =
   (* An enum field must enforce membership in the verified C, on a scalar field
      and inside a sub-codec, or the validator accepts values that Codec.decode
@@ -1078,6 +1099,8 @@ let suite =
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
+      Alcotest.test_case "3d: array open enum element renders base" `Quick
+        test_3d_array_open_enum_element;
       Alcotest.test_case "generation: open enum accepts and has no refinement"
         `Quick test_enum_open_accepts_and_no_refinement;
       Alcotest.test_case "3d: enum membership refinement" `Quick

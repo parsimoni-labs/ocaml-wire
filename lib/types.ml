@@ -1625,6 +1625,21 @@ let index_bound_elt : type a. a typ -> (string * bool expr) option =
       Some (elt_var, Lt (Ref (I, elt_var), Int bound))
   | _ -> None
 
+(* The bare base an open enum renders as when it is a fixed-size array element.
+   A closed enum admits only its named codes, so it projects to a 3D enum type
+   that EverParse enforces per element, mirroring the OCaml decoder. An open enum
+   admits any value and carries no membership, so it must render as its base
+   scalar, not the enum type, or the generated C validator would reject codes the
+   OCaml decoder accepts. Returns [None] for a closed enum or a non-enum, which
+   keep their existing rendering. *)
+let rec open_enum_elem_base : type a. a typ -> (Format.formatter -> unit) option
+    = function
+  | Enum { closed = false; base; _ } -> Some (fun ppf -> pp_typ ppf base)
+  | Map { inner; _ } -> open_enum_elem_base inner
+  | Where { inner; _ } -> open_enum_elem_base inner
+  | Apply { typ; _ } -> open_enum_elem_base typ
+  | _ -> None
+
 let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
@@ -1682,7 +1697,13 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
                  the OCaml decoder enforces. *)
               ( Byte_array len,
                 fun ppf -> Fmt.string ppf (synth_name_of_elt_var elt_var) )
-          | None -> (Array len, fun ppf -> pp_typ ppf elem))
+          | None ->
+              let pp_elem ppf =
+                match open_enum_elem_base elem with
+                | Some pp -> pp ppf
+                | None -> pp_typ ppf elem
+              in
+              (Array len, pp_elem))
       | _, Some s ->
           (* A wider element is emitted as its bare base under a byte budget of
              [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
