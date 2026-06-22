@@ -170,7 +170,10 @@ let generate_c_stubs ~schema_dir outdir schemas =
         List.filter (fun p -> not (param_is_mutable p)) params
       in
       let output_params = List.filter (fun p -> param_is_mutable p) params in
-      pr "BOOLEAN %sCheck%s(uint8_t *base, uint32_t len) {\n" name name;
+      (* Distinct from EverParse's generated [<Name>Check<Name>], which for an
+         output-parameter codec takes an extra out-pointer and would otherwise
+         collide with this hand-rolled accept/reject wrapper. *)
+      pr "BOOLEAN %s_diff_check(uint8_t *base, uint32_t len) {\n" name;
       (* Declare locals for mutable params *)
       List.iter
         (fun p -> pr "  %s %s_val = 0;\n" (param_c_type p) (param_name p))
@@ -197,7 +200,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
       pr "  CAMLparam1(v_bytes);\n";
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_bytes);\n";
       pr "  uint32_t len = caml_string_length(v_bytes);\n";
-      pr "  BOOLEAN result = %sCheck%s(data, len);\n" name name;
+      pr "  BOOLEAN result = %s_diff_check(data, len);\n" name;
       pr "  CAMLreturn(Val_bool(result));\n";
       pr "}\n\n")
     schemas;
