@@ -108,6 +108,20 @@ val registry : (string * packed) list
     path ({!test_cases}) and the 3D projection path ({!everparse_cases}) from
     one source. *)
 
+val bytes_any : bytes Alcobar.gen
+(** Alcobar generator for an arbitrary byte string, used to read one AFL file
+    input. *)
+
+val truncate_bytes : max_len:int -> bytes -> bytes
+(** [truncate_bytes ~max_len bs] caps [bs] at [max_len] bytes so one AFL exec
+    stays cheap on a large input. *)
+
+val pick_by_first_byte : 'a list -> bytes -> 'a
+(** [pick_by_first_byte xs bs] selects one element of [xs] from the first byte
+    of [bs] (modulo the list length), so each AFL exec drives a single item and
+    coverage of the whole list accumulates across inputs. Raises
+    [Invalid_argument] on an empty list. *)
+
 val everparse_cases : string -> 'a t -> Alcobar.test_case list
 (** [everparse_cases label g] projects [g]'s codec to a 3D schema and
     pretty-prints it, asserting neither raises. Covers the projection and

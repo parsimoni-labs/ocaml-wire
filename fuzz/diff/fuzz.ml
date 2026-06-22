@@ -9,25 +9,52 @@
     parameterised, casetype, or a shared-name duplicate of an already-included
     codec) are reported via {!Diff_codecs.excluded}. *)
 
+open Fuzz_gen
+
 (* The EverParse validator accepts iff the bytes parse (enough input, valid
    structure) and every refinement holds. [Codec.decode_exn] is exactly that:
    it decodes (length + structure) and validates (refinements), raising
    [Parse_error] / [Validation_error] on a clean rejection. (Plain [Codec.decode]
    returns a [result], so its rejection is easy to drop by mistake.) Any other
    exception surfaces as a crash, which is itself a divergence to report. *)
-let ocaml_accepts (Fuzz_gen.Pack g) b =
-  match ignore (Wire.Codec.decode_exn (Fuzz_gen.codec g) b 0) with
+let ocaml_accepts (Pack g) b =
+  match ignore (Wire.Codec.decode_exn (codec g) b 0) with
   | () -> true
   | exception (Wire.Validation_error _ | Wire.Parse_error _) -> false
 
-let case (label, c_check) =
-  let p = List.assoc label Diff_codecs.included in
+(* Compare both decoders on one codec and flag any accept/reject divergence. *)
+let diff_check label p c_check b =
+  let o = ocaml_accepts p b and c = c_check b in
+  if o <> c then
+    Alcobar.failf "%s: OCaml accepts=%b but EverParse C accepts=%b" label o c
+
+(* Each covered codec paired with both its decoders: the OCaml side ([Pack g],
+   from {!Diff_codecs.included}) and the generated C validator ([c_check], from
+   {!Diff_index.covered}). *)
+let covered_cases =
+  Array.to_list Diff_index.covered
+  |> List.map (fun (label, c_check) ->
+      (label, List.assoc label Diff_codecs.included, c_check))
+
+(* Normal [dune test]: one case per covered codec, each on its own random bytes,
+   so a single run touches every codec. *)
+let registry_case (label, p, c_check) =
   Alcobar.test_case label [ Alcobar.bytes ] (fun buf ->
-      let b = Bytes.of_string buf in
-      let o = ocaml_accepts p b and c = c_check b in
-      if o <> c then
-        Alcobar.failf "%s: OCaml accepts=%b but EverParse C accepts=%b" label o
-          c)
+      diff_check label p c_check (Bytes.of_string buf))
+
+(* AFL file-input mode: pick one codec per input (by the first byte) so each
+   exec runs a single differential check rather than one per covered codec, with
+   coverage of the whole set accumulating across inputs. Mirrors the shared
+   {!Fuzz_gen.afl_cases} path the other fuzzers use. *)
+let afl_case ?(max_len = 256) () =
+  Alcobar.test_case "diff afl" [ bytes_any ] (fun bs ->
+      let bs = truncate_bytes ~max_len bs in
+      let label, p, c_check = pick_by_first_byte covered_cases bs in
+      diff_check label p c_check bs)
+
+let cases =
+  if file_input_mode () then [ afl_case () ]
+  else List.map registry_case covered_cases
 
 let () =
   List.iter
@@ -35,5 +62,4 @@ let () =
       Printf.eprintf "diff: skipping %s (%s)\n" label
         (Diff_codecs.string_of_exclusion reason))
     Diff_codecs.excluded;
-  Alcobar.run "diff"
-    [ ("diff", Array.to_list Diff_index.covered |> List.map case) ]
+  Alcobar.run "diff" [ ("diff", cases) ]
