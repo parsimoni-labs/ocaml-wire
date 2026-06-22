@@ -988,6 +988,40 @@ let test_casetype_greedy_case_not_last_rejected () =
     (raises_invalid (fun () ->
          Codec.v "OuterOk" Fun.id Codec.[ Field.v "ct" ct $ Fun.id ]))
 
+(* The greedy case body may itself carry a leading field before the greedy tail
+   (here [n] then [all_zeros]); the casetype still consumes the rest whenever the
+   greedy case is selected, so it can be the last field but is rejected before
+   another field. A richer variant of the case above. *)
+let test_casetype_wrapped_greedy_not_last_rejected () =
+  let body =
+    Codec.v "GreedyCaseBody"
+      (fun n z -> (n, z))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "z" all_zeros $ snd ]
+  in
+  let payload =
+    casetype "GreedyCase" uint8
+      [
+        case ~index:1 (codec body)
+          ~inject:(fun v -> `Greedy v)
+          ~project:(function `Greedy v -> Some v | _ -> None);
+        case ~index:2 uint8
+          ~inject:(fun v -> `Byte v)
+          ~project:(function `Byte v -> Some v | _ -> None);
+      ]
+  in
+  Alcotest.(check bool)
+    "casetype with wrapped greedy case can be last" false
+    (raises_invalid (fun () ->
+         Codec.v "WrappedGreedyLast"
+           (fun n p -> (n, p))
+           Codec.[ Field.v "n" uint8 $ fst; Field.v "p" payload $ snd ]));
+  Alcotest.(check bool)
+    "casetype with wrapped greedy case before another field rejected" true
+    (raises_invalid (fun () ->
+         Codec.v "WrappedGreedyNotLast"
+           (fun p tail -> (p, tail))
+           Codec.[ Field.v "p" payload $ fst; Field.v "tail" uint8 $ snd ]))
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -5101,6 +5135,8 @@ let suite =
         test_greedy_not_last_rejected;
       Alcotest.test_case "casetype greedy case body must be last" `Quick
         test_casetype_greedy_case_not_last_rejected;
+      Alcotest.test_case "casetype wrapped greedy case body must be last" `Quick
+        test_casetype_wrapped_greedy_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick
