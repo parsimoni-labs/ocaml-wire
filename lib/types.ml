@@ -2010,6 +2010,46 @@ let rec widen_add : type a. string list -> a expr -> a expr =
   | Cast (w, x) -> Cast (w, r x)
   | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
 
+(* The generated .3d doubles as protocol documentation, so a [?doc] note (often
+   an RFC citation) should not run past ~80 columns as one long comment. Wrap the
+   body greedily on word boundaries, opening with [open_] and closing with
+   [close] ([/* .. */] for a field, [/*++ .. --*/] for a codec or module).
+   Continuation lines align under the opener so the comment reads as a block. *)
+let pp_wrapped_comment ppf ~open_ ~close text =
+  let width = 72 in
+  let words =
+    String.split_on_char ' '
+      (String.map (fun c -> if c = '\n' || c = '\t' then ' ' else c) text)
+    |> List.filter (fun w -> w <> "")
+  in
+  let lines =
+    let rec go acc cur = function
+      | [] -> List.rev (if cur = "" then acc else cur :: acc)
+      | w :: rest ->
+          if cur = "" then go acc w rest
+          else if String.length cur + 1 + String.length w <= width then
+            go acc (cur ^ " " ^ w) rest
+          else go (cur :: acc) w rest
+    in
+    go [] "" words
+  in
+  match lines with
+  | [] -> Fmt.pf ppf "%s %s" open_ close
+  | [ one ] -> Fmt.pf ppf "%s %s %s" open_ one close
+  | first :: rest ->
+      let indent = String.make (String.length open_ + 1) ' ' in
+      let last = List.length rest - 1 in
+      Fmt.pf ppf "%s %s" open_ first;
+      List.iteri
+        (fun i line ->
+          if i = last then Fmt.pf ppf "@,%s%s %s" indent line close
+          else Fmt.pf ppf "@,%s%s" indent line)
+        rest
+
+let pp_field_doc ppf d =
+  Fmt.pf ppf "@,%t" (fun ppf ->
+      pp_wrapped_comment ppf ~open_:"/*" ~close:"*/" d)
+
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
@@ -2071,7 +2111,7 @@ let pp_field widenable ppf (Field f) =
     | Some n -> fun ppf -> Fmt.string ppf n
     | None -> pp_base
   in
-  Option.iter (fun d -> Fmt.pf ppf "@,/* %s */" d) f.field_doc;
+  Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
   Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_;
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
@@ -2253,7 +2293,11 @@ let pp_casetype_cases : type k.
 
 let pp_decl ppf = function
   | Typedef { entrypoint; export; output; extern_; doc; struct_ = st } ->
-      Option.iter (Fmt.pf ppf "/*++ %s --*/@,") doc;
+      Option.iter
+        (fun d ->
+          pp_wrapped_comment ppf ~open_:"/*++" ~close:"--*/" d;
+          Fmt.pf ppf "@,")
+        doc;
       if extern_ then
         (* extern typedef struct _Name Name *)
         let n = escape_3d st.name in
@@ -2296,7 +2340,11 @@ let pp_decl ppf = function
       Fmt.pf ppf "@,}@]@,} %s;@,@," public_name
 
 let pp_module ppf m =
-  Option.iter (Fmt.pf ppf "/*++ %s --*/@,@,") m.doc;
+  Option.iter
+    (fun d ->
+      pp_wrapped_comment ppf ~open_:"/*++" ~close:"--*/" d;
+      Fmt.pf ppf "@,@,")
+    m.doc;
   List.iter (pp_decl ppf) m.decls
 
 let to_3d ?(enum_as_type = false) m =
