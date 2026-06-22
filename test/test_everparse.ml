@@ -342,6 +342,32 @@ let test_doc_codec_citation () =
     "typedef carries the citation comment" true
     (contains ~sub:"/*++ RFC 9999 section 1 --*/" out)
 
+let test_doc_comment_wraps_at_80 () =
+  (* A long [?doc] note must not render as one comment line past 80 columns: the
+     generated .3d doubles as readable protocol documentation. The body is
+     word-wrapped across several comment lines. *)
+  let long =
+    "RFC 9999 section 4.2.1 the version field carries the protocol revision \
+     and must equal the value negotiated during the handshake or the peer \
+     rejects the frame as malformed and resets the connection immediately"
+  in
+  let c =
+    Codec.v "Wrapped"
+      (fun v -> v)
+      Codec.[ (Field.v "v" uint8 ~doc:long $ fun v -> v) ]
+  in
+  let out = to_3d (Everparse.schema c).module_ in
+  let longest =
+    String.split_on_char '\n' out
+    |> List.fold_left (fun m l -> max m (String.length l)) 0
+  in
+  Alcotest.(check bool)
+    (Fmt.str "no generated line exceeds 80 columns (longest=%d)" longest)
+    true (longest <= 80);
+  Alcotest.(check bool)
+    "the long doc is still a comment" true
+    (contains ~sub:"/* RFC 9999 section 4.2.1" out)
+
 let test_doc_merge_dedup () =
   (* write_doc unions a family into one module, emitting a shared type once. *)
   let e = enum "Shared" [ ("A", 0); ("B", 1) ] uint8 in
@@ -1130,6 +1156,8 @@ let suite =
         test_doc_drops_ffi_scaffolding;
       Alcotest.test_case "doc: codec ~doc renders as citation comment" `Quick
         test_doc_codec_citation;
+      Alcotest.test_case "doc: long doc comment wraps at 80 columns" `Quick
+        test_doc_comment_wraps_at_80;
       Alcotest.test_case "doc: enum renders as named type" `Quick
         test_doc_enum_as_type;
       Alcotest.test_case "doc: merge dedups shared types" `Quick
