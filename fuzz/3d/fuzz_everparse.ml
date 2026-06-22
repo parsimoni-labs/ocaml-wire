@@ -113,7 +113,7 @@ let extract_case name res =
 
 let adversarial_extract_names = [ "enum_u16be" ]
 
-let find_registry name =
+let registry_case name =
   match List.assoc_opt name Fuzz_gen.registry with
   | Some p -> Some p
   | None -> None
@@ -126,7 +126,7 @@ let adversarial_extract_cases () =
         Option.map
           (fun (Fuzz_gen.Pack g) ->
             extract_case ("adversarial " ^ name) (lazy (extract_one g)))
-          (find_registry name))
+          (registry_case name))
       adversarial_extract_names
 
 (* Every shape that projects must verify: the whole registry except the shapes
