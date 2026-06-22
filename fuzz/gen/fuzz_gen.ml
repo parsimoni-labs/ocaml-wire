@@ -3460,16 +3460,19 @@ let afl_env_cases ?max_len label =
    A well-distributed random codec sampler. Rather than enumerate a handpicked
    set, [sample] draws codecs whose shape follows a Boltzmann law: the arity of
    a record is geometric (the Boltzmann distribution for a sequence, tuned to a
-   small expected size via [continue]), and each field is drawn uniformly from a
-   fixed leaf vocabulary. It stays in the single-typedef, fixed-size fragment
-   (flat records and homogeneous arrays of leaves) so the differential fuzzer
-   can compile every sample to a standalone C validator. Driven by a
+   small expected size via [continue]), and each field is drawn from a fixed
+   leaf vocabulary that deliberately over-samples weird / adversarial shapes.
+   It stays in the single-typedef, fixed-size fragment (flat records and
+   homogeneous arrays of leaves) so the differential fuzzer can compile every
+   sample to a standalone C validator. Driven by a
    [Random.State.t], so a [seed] reproduces the exact set: the differential's
    generator and its runner both call [sample] with the same seed and agree on
    the shapes. *)
 
 (* Single-typedef, fixed-size leaf vocabulary: each projects to one EverParse
-   field, so a flat record of them stays a single typedef. *)
+   field, so a flat record of them stays a single typedef. The sampler chooses
+   from [sampler_adversarial_leaves] three times more often than from
+   [sampler_regular_leaves]; bugs have clustered around these odd shapes. *)
 let sampler_regular_leaves : any list =
   [
     Any { g = uint8; size = Some 1; label = "u8" };
@@ -3490,7 +3493,7 @@ let sampler_regular_leaves : any list =
     Any { g = float64be; size = Some 8; label = "f64be" };
   ]
 
-let sampler_edge_leaves : any list =
+let sampler_adversarial_leaves : any list =
   [
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
     Any
@@ -3521,7 +3524,7 @@ let sampler_edge_leaves : any list =
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
   ]
 
-let sampler_leaves = sampler_regular_leaves @ sampler_edge_leaves
+let sampler_leaves = sampler_regular_leaves @ sampler_adversarial_leaves
 
 (* Geometric arity in [1, max_arity]: keep adding a field with probability
    [continue]. This is the Boltzmann law for a sequence, truncated. *)
@@ -3537,10 +3540,10 @@ let sample_arity rng ~continue ~max_arity =
    a bare leaf so the sampler never crashes. *)
 let boltzmann_any rng : any =
   let regular = Array.of_list sampler_regular_leaves in
-  let edge = Array.of_list sampler_edge_leaves in
+  let adversarial = Array.of_list sampler_adversarial_leaves in
   let pick xs = xs.(Random.State.int rng (Array.length xs)) in
   let leaf () =
-    if Random.State.int rng 4 = 0 then pick regular else pick edge
+    if Random.State.int rng 4 = 0 then pick regular else pick adversarial
   in
   let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
   try
@@ -3840,7 +3843,7 @@ let check_composition_vocabulary () =
   and env = any_labels env_leaves
   and sampled = any_labels sampler_leaves
   and sampled_regular = any_labels sampler_regular_leaves
-  and sampled_edge = any_labels sampler_edge_leaves in
+  and sampled_adversarial = any_labels sampler_adversarial_leaves in
   List.iter check_vocabulary_group
     [
       ("fixed_leaves", fixed);
@@ -3848,13 +3851,13 @@ let check_composition_vocabulary () =
       ("env_leaves", env);
       ("sampler_leaves", sampled);
       ("sampler_regular_leaves", sampled_regular);
-      ("sampler_edge_leaves", sampled_edge);
+      ("sampler_adversarial_leaves", sampled_adversarial);
     ];
   assert_contains "fixed_leaves" fixed expected_fixed_labels;
   assert_contains "var_leaves" var expected_var_labels;
   assert_contains "env_leaves" env expected_env_labels;
   assert_contains "sampler_leaves" sampled expected_sampler_labels;
-  assert_contains "sampler_edge_leaves" sampled_edge
+  assert_contains "sampler_adversarial_leaves" sampled_adversarial
     [
       "bits3lsb";
       "bits15u16";
@@ -3879,19 +3882,21 @@ let check_sampler_invariants () =
         Alcobar.failf "sample label %S does not start with %S" label prefix)
     labels
 
-let check_sampler_edge_bias () =
-  let edge_labels = any_labels sampler_edge_leaves in
+let check_sampler_adversarial_bias () =
+  let adversarial_labels = any_labels sampler_adversarial_leaves in
   let labels = List.map fst (sample ~seed:7 ~count:256) in
-  let edge_hits =
+  let adversarial_hits =
     List.fold_left
       (fun count label ->
-        if List.exists (string_contains_sub label) edge_labels then count + 1
+        if List.exists (string_contains_sub label) adversarial_labels then
+          count + 1
         else count)
       0 labels
   in
-  if edge_hits < 160 then
-    Alcobar.failf "edge-biased sampler produced %d/256 edge-heavy shapes"
-      edge_hits
+  if adversarial_hits < 160 then
+    Alcobar.failf
+      "adversarial-biased sampler produced %d/256 weird/adversarial shapes"
+      adversarial_hits
 
 let const_case name check =
   Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
@@ -3901,7 +3906,9 @@ let invariant_cases label =
     const_case (label ^ " registry") check_registry_invariants;
     const_case (label ^ " composition vocabulary") check_composition_vocabulary;
     const_case (label ^ " sampler") check_sampler_invariants;
-    const_case (label ^ " sampler edge bias") check_sampler_edge_bias;
+    const_case
+      (label ^ " sampler adversarial bias")
+      check_sampler_adversarial_bias;
   ]
 
 type api_access = {

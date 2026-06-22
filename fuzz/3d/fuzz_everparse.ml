@@ -95,38 +95,59 @@ let extract_one g =
           with (Failure _ | Sys_error _ | Unix.Unix_error _) as e ->
             Error (Printexc.to_string e))
 
-(* [3d.exe --batch] takes seconds per schema, so it cannot run inside Alcobar's
-   repeat/timeout loop. Run each check once, eagerly, when this module loads, and
-   let the test cases report the cached verdict instantly. Skipped without
-   [3d.exe] (CI) and in corpus / AFL modes, where the long startup is unwanted. *)
+(* [3d.exe --batch] takes seconds per schema, so each test case caches its
+   verdict. Skipped without [3d.exe] (CI) and in corpus / AFL modes, where the
+   long startup is unwanted. *)
 let normal_mode () =
   (not (Fuzz_gen.corpus_generation_mode ()))
   && not (Fuzz_gen.file_input_mode ())
 
+let extract_case name res =
+  Alcobar.test_case ("3d.exe " ^ name)
+    [ const () ]
+    (fun () ->
+      match Lazy.force res with
+      | Ok () -> ()
+      | Error m ->
+          Alcobar.failf "%s: EverParse rejected a schema that built: %s" name m)
+
+let adversarial_extract_names = [ "enum_u16be" ]
+
+let find_registry name =
+  match List.assoc_opt name Fuzz_gen.registry with
+  | Some p -> Some p
+  | None -> None
+
+let adversarial_extract_cases () =
+  if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
+  else
+    List.filter_map
+      (fun name ->
+        Option.map
+          (fun (Fuzz_gen.Pack g) ->
+            extract_case ("adversarial " ^ name) (lazy (extract_one g)))
+          (find_registry name))
+      adversarial_extract_names
+
 (* Every shape that projects must verify: the whole registry except the shapes
    wire rejects at projection (those are asserted to reject in [pp_cases]) is
    run through [3d.exe], and any failure is a build-but-fail-3d hole. *)
-let extract_results () =
+let projectable_registry () =
   if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
   else
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
-    |> List.map (fun (name, Fuzz_gen.Pack g) -> (name, extract_one g))
 
 let extract_cases () =
   List.map
-    (fun (name, res) ->
-      Alcobar.test_case ("3d.exe " ^ name)
-        [ const () ]
-        (fun () ->
-          match res with
-          | Ok () -> ()
-          | Error m ->
-              Alcobar.failf "%s: EverParse rejected a schema that built: %s"
-                name m))
-    (extract_results ())
+    (fun (name, Fuzz_gen.Pack g) -> extract_case name (lazy (extract_one g)))
+    (projectable_registry ())
 
 let suite =
   if Fuzz_gen.file_input_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
-  else ("everparse", pp_cases () @ nested_pp_cases () @ extract_cases ())
+  else
+    ( "everparse",
+      pp_cases () @ nested_pp_cases ()
+      @ adversarial_extract_cases ()
+      @ extract_cases () )
