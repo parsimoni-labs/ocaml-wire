@@ -14,6 +14,16 @@
 
 open Alcobar
 
+let file_input_mode () =
+  let argv = Sys.argv in
+  let n = Array.length argv in
+  n > 1
+  && (not (Array.exists (String.equal "--gen-corpus") argv))
+  &&
+  let path = argv.(n - 1) in
+  Sys.file_exists path
+  && try not (Sys.is_directory path) with Sys_error _ -> false
+
 (* Shapes wire rejects at projection: they use a construct with no 3D form, so
    [to_3d] raises a clear [Invalid_argument]. [expr_ops] uses a negative integer
    literal (3D has no negative literals); [sizeof] uses [field_pos] (no 3D
@@ -45,14 +55,14 @@ let rejection_case name g =
 (* Projection + pretty-print coverage: cheap, no subprocess, always runs. A
    shape with no 3D projection is asserted to reject; every other shape must
    project and pretty-print. *)
-let pp_cases =
+let pp_cases () =
   List.concat_map
     (fun (name, Fuzz_gen.Pack g) ->
       if List.mem name no_3d_projection then rejection_case name g
       else Fuzz_gen.everparse_cases name g)
     Fuzz_gen.registry
 
-let nested_pp_cases =
+let nested_pp_cases () =
   Fuzz_gen.everparse_nested_cases "nested(d2)" 2
   @ Fuzz_gen.everparse_nested_cases "nested(d3)" 3
   @ Fuzz_gen.everparse_nested_cases "nested(d4)" 4
@@ -108,14 +118,14 @@ let normal_mode () =
 (* Every shape that projects must verify: the whole registry except the shapes
    wire rejects at projection (those are asserted to reject in [pp_cases]) is
    run through [3d.exe], and any failure is a build-but-fail-3d hole. *)
-let extract_results =
+let extract_results () =
   if not (Wire_3d.has_3d_exe () && normal_mode ()) then []
   else
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
     |> List.map (fun (name, Fuzz_gen.Pack g) -> (name, extract_one g))
 
-let extract_cases =
+let extract_cases () =
   List.map
     (fun (name, res) ->
       Alcobar.test_case ("3d.exe " ^ name)
@@ -126,6 +136,9 @@ let extract_cases =
           | Error m ->
               Alcobar.failf "%s: EverParse rejected a schema that built: %s"
                 name m))
-    extract_results
+    (extract_results ())
 
-let suite = ("everparse", pp_cases @ nested_pp_cases @ extract_cases)
+let suite =
+  if file_input_mode () then
+    ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
+  else ("everparse", pp_cases () @ nested_pp_cases () @ extract_cases ())
