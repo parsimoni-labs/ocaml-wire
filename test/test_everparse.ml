@@ -609,6 +609,53 @@ let test_3d_negative_literal_rejected () =
   Alcotest.(check bool)
     "negative literal rejected by projection" true (projects_or_raises codec)
 
+let test_3d_field_sub_mul_rejected () =
+  (* A [Sub] / [Mul] over a field in a constraint has no sound narrow-width 3D
+     projection (3d.exe refuses to verify the under/overflow), so it is rejected
+     at projection. A constant [Sub] / [Mul] folds and an additive field
+     constraint still projects. *)
+  let f = Field.v "a" uint8 in
+  let mul =
+    Codec.v "MulC"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          f $ fst;
+          Field.v "b" uint8 ~self_constraint:(fun b ->
+              Expr.(Field.int f * b = int 0))
+          $ snd;
+        ]
+  in
+  let sub =
+    Codec.v "SubC"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          f $ fst;
+          Field.v "b" uint8 ~self_constraint:(fun b ->
+              Expr.(Field.int f - b >= int 5))
+          $ snd;
+        ]
+  in
+  Alcotest.(check bool)
+    "field multiplication rejected" true (projects_or_raises mul);
+  Alcotest.(check bool)
+    "field subtraction rejected" true (projects_or_raises sub);
+  (* A constant arithmetic bound still projects. *)
+  let constc =
+    Codec.v "ConstC"
+      (fun a -> a)
+      Codec.
+        [
+          Field.v "a" uint8 ~self_constraint:(fun a ->
+              Expr.(a < int 10 * int 5))
+          $ Fun.id;
+        ]
+  in
+  Alcotest.(check bool)
+    "constant arithmetic still projects" false
+    (projects_or_raises constc)
+
 let test_signed_constraint_twos_complement () =
   (* A signed field projects to an unsigned UINT, so an ordering constraint must
      be rewritten to its two's-complement form ([x < 100] over [int8] becomes
@@ -1225,6 +1272,8 @@ let suite =
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: arithmetic constraint widens operands" `Quick
         test_3d_arith_constraint_widens;
+      Alcotest.test_case "3d: field sub/mul constraint rejected" `Quick
+        test_3d_field_sub_mul_rejected;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
       Alcotest.test_case "3d: array open enum element renders base" `Quick

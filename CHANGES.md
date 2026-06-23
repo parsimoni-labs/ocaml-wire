@@ -220,6 +220,14 @@
 
 ### Fixed
 
+- A field constraint that subtracts or multiplies a field (such as
+  `Expr.(a * b = int 0)` or `Expr.(a - b >= int 5)`) is now rejected at
+  projection. Such an expression under- or overflows the field's narrow width,
+  which EverParse refuses to verify, leaving the codec with no validator; unlike
+  addition (widened to avoid overflow), neither has a sound projection. A
+  constant `Sub` / `Mul` and additive field arithmetic are unaffected
+  (#206, @samoht)
+
 - `Codec.validate` now enforces an `all_zeros` padding field, rejecting a
   non-zero byte exactly as `Codec.decode` does. The zero check lived only in the
   decode reader, so validating a frame with tampered padding succeeded and a

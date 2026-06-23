@@ -2182,6 +2182,39 @@ let rec widenable_unsigned : type a. a typ -> bool = function
    matches the decoder's. Only [Add] is rewritten: [Sub] can underflow (an
    unsigned wrap the decoder does not do), and a wider or signed operand has no
    sound widening, so those are left untouched and keep their current behaviour. *)
+(* The field-reference names an expression mentions. [collect_refs_packed] is the
+   same walk through a comparison's existentially-typed operands. *)
+let rec collect_refs : type a. a expr -> string list = function
+  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
+    ->
+      []
+  | Ref (_, name) -> [ name ]
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      collect_refs a @ collect_refs b
+  | Lnot a -> collect_refs a
+  | Lt (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Le (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Gt (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Ge (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | And (a, b) | Or (a, b) -> collect_refs a @ collect_refs b
+  | Not a -> collect_refs a
+  | Cast (_, a) -> collect_refs a
+  | If_then_else (c, a, b) -> collect_refs c @ collect_refs a @ collect_refs b
+  | Eq (a, b) -> collect_refs_packed a @ collect_refs_packed b
+  | Ne (a, b) -> collect_refs_packed a @ collect_refs_packed b
+
+and collect_refs_packed : type a. a expr -> string list =
+ fun e -> collect_refs e
+
 let rec widen_add : type a. string list -> a expr -> a expr =
  fun ws e ->
   let r e = widen_add ws e in
@@ -2216,6 +2249,62 @@ let rec widen_add : type a. string list -> a expr -> a expr =
   | Not a -> Not (r a)
   | Cast (w, x) -> Cast (w, r x)
   | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
+
+(* EverParse computes a constraint at the field's own narrow width, so a [Sub] or
+   [Mul] naming a field underflows or overflows there: 3d.exe refuses to verify
+   it ("cannot verify u8 subtraction / multiplication"), leaving the codec with
+   no validator. Unlike [Add], neither has a sound widening: a widened [Sub]
+   wraps on underflow where the OCaml decoder goes negative, and a widened [Mul]
+   of wide operands overflows the decoder's own native int. Reject such a
+   constraint at construction; a [Sub] / [Mul] of constants (which folds) is
+   fine, as is additive field arithmetic. *)
+let rec reject_field_sub_mul : type a. string -> a expr -> unit =
+ fun name e ->
+  let both : type x. x expr -> x expr -> unit =
+   fun a b ->
+    reject_field_sub_mul name a;
+    reject_field_sub_mul name b
+  in
+  match e with
+  | (Sub _ | Mul _) when collect_refs e <> [] ->
+      let op = match e with Sub _ -> "subtraction" | _ -> "multiplication" in
+      Fmt.invalid_arg
+        "Wire: field %S has a constraint whose %s over a field has no 3D \
+         projection (it under/overflows the field's narrow width); keep field \
+         arithmetic in a constraint additive, or move it out of the constraint"
+        name op
+  | Sub (a, b) | Mul (a, b) -> both a b
+  | Add (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      both a b
+  | Eq (a, b) -> both a b
+  | Ne (a, b) -> both a b
+  | Lt (a, b) -> both a b
+  | Le (a, b) -> both a b
+  | Gt (a, b) -> both a b
+  | Ge (a, b) -> both a b
+  | And (a, b) | Or (a, b) -> both a b
+  | Lnot a -> reject_field_sub_mul name a
+  | Not a -> reject_field_sub_mul name a
+  | Cast (_, a) -> reject_field_sub_mul name a
+  | If_then_else (c, a, b) ->
+      reject_field_sub_mul name c;
+      both a b
+  | Int _ | Int64 _ | Bool _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this
+  | Field_pos ->
+      ()
+
+(* The narrow-width arithmetic a projected field constraint needs: reject a field
+   [Sub] / [Mul] (no sound projection), then widen each [Add] operand. *)
+let project_field_arith name widenable cond =
+  reject_field_sub_mul name cond;
+  widen_add widenable cond
 
 (* The generated .3d doubles as protocol documentation, so a [?doc] note (often
    an RFC citation) should not run past ~80 columns as one long comment. Wrap the
@@ -2309,9 +2398,9 @@ let pp_field widenable ppf (Field f) =
       (project_refinement ~name:raw_name ~kind:(scalar_kind typ))
       constraint_
   in
-  (* Widen [a + b] over narrow unsigned fields so the 3D sum does not overflow
-     the field width, matching the OCaml decoder's wide-int computation. *)
-  let constraint_ = Option.map (widen_add widenable) constraint_ in
+  let constraint_ =
+    Option.map (project_field_arith raw_name widenable) constraint_
+  in
   let suffix, pp_base = field_suffix typ in
   let pp_base =
     match doc_enum with
@@ -2337,37 +2426,6 @@ let pp_params ppf params =
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar
    does not allow (the [where] there sees only parameters). *)
-let rec collect_refs : type a. a expr -> string list = function
-  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
-    ->
-      []
-  | Ref (_, name) -> [ name ]
-  | Add (a, b)
-  | Sub (a, b)
-  | Mul (a, b)
-  | Div (a, b)
-  | Mod (a, b)
-  | Land (a, b)
-  | Lor (a, b)
-  | Lxor (a, b)
-  | Lsl (a, b)
-  | Lsr (a, b) ->
-      collect_refs a @ collect_refs b
-  | Lnot a -> collect_refs a
-  | Lt (a, b) -> collect_refs_packed a @ collect_refs_packed b
-  | Le (a, b) -> collect_refs_packed a @ collect_refs_packed b
-  | Gt (a, b) -> collect_refs_packed a @ collect_refs_packed b
-  | Ge (a, b) -> collect_refs_packed a @ collect_refs_packed b
-  | And (a, b) | Or (a, b) -> collect_refs a @ collect_refs b
-  | Not a -> collect_refs a
-  | Cast (_, a) -> collect_refs a
-  | If_then_else (c, a, b) -> collect_refs c @ collect_refs a @ collect_refs b
-  | Eq (a, b) -> collect_refs_packed a @ collect_refs_packed b
-  | Ne (a, b) -> collect_refs_packed a @ collect_refs_packed b
-
-and collect_refs_packed : type a. a expr -> string list =
- fun e -> collect_refs e
-
 (* If a struct-level [where] references fields (rather than only params),
    attach it as the [constraint_] of the last referenced field instead --
    3D's [where] clause only sees parameters. *)
