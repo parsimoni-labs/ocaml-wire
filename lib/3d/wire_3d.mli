@@ -88,6 +88,11 @@ val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
     must use a private working directory, as concurrent runs race on EverParse's
     shared intermediate files. *)
 
+val rm_rf : string -> unit
+(** [rm_rf dir] removes [dir] and its files (a flat output directory), ignoring
+    errors. A cleanup helper for the private per-run directories used with
+    {!fork_pool}. *)
+
 val batch_check :
   ?max_jobs:int ->
   outdir:string ->
