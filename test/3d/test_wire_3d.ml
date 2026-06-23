@@ -50,6 +50,26 @@ let test_everparse_name () =
   (* Empty string *)
   Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "")
 
+(* [pascal_case] mirrors EverParse's wrapper-symbol mangling. EverParse builds a
+   wrapper as [pascal_case (module ^ "_check_" ^ codec)]; these expectations were
+   read straight off EverParse's generated [<Module>Wrapper.h]. The digit cases
+   are the ones [everparse_name] gets wrong (it keeps the post-digit capital). *)
+let test_pascal_case () =
+  let check input expected =
+    Alcotest.(check string)
+      (input ^ " -> " ^ expected)
+      expected
+      (Wire_3d.pascal_case input)
+  in
+  check "tpm_check_TPM2B" "TpmCheckTpm2b";
+  check "virtio_check_Virtq_desc" "VirtioCheckVirtqDesc";
+  check "virtio_check_Virtq_used_elem" "VirtioCheckVirtqUsedElem";
+  check "probe_check_Foo2Bar" "ProbeCheckFoo2bar";
+  check "probe_check_AB2CD" "ProbeCheckAb2cd";
+  check "probe_check_SpaceOSFrame" "ProbeCheckSpaceOsframe";
+  (* No underscore: only the first letter is capitalized. *)
+  check "Foo" "Foo"
+
 let test_generate_3d_files () =
   let tmpdir = Filename.temp_dir "wire_3d_test" "" in
   let s =
@@ -1110,6 +1130,7 @@ let suite =
   ( "wire_3d",
     [
       Alcotest.test_case "everparse_name" `Quick test_everparse_name;
+      Alcotest.test_case "pascal_case" `Quick test_pascal_case;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;

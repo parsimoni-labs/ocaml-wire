@@ -48,6 +48,16 @@ val everparse_name : string -> string
     [Grpc_message] becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW]
     becomes [Clcw], and [TMFrame] becomes [Tmframe]. *)
 
+val pascal_case : string -> string
+(** [pascal_case s] is EverParse's own identifier mangling, transcribed from
+    [pascal_case] in EverParse's [src/3d/Target.fst]. It drops underscores and
+    CamelCases, lowercasing every character that follows an uppercase letter or
+    a digit until the next lower-case one. EverParse names a validator wrapper
+    [pascal_case (module ^ "_check_" ^ codec)], so use this (not
+    {!everparse_name}) to predict a wrapper symbol exactly: e.g.
+    [pascal_case "tpm_check_TPM2B"] is ["TpmCheckTpm2b"] and
+    [pascal_case "virtio_check_Virtq_desc"] is ["VirtioCheckVirtqDesc"]. *)
+
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules. *)
 

@@ -46,6 +46,36 @@ let everparse_name name =
   |> List.map (fun seg -> String.capitalize_ascii (normalize_segment seg))
   |> String.concat ""
 
+(* EverParse's own identifier mangling, transcribed from [pascal_case] in
+   [src/3d/Target.fst]. It drops underscores and CamelCases, but unlike
+   {!everparse_name} it lowercases every character that follows an uppercase
+   letter *or a digit* until the next lower-case letter (a digit counts as
+   uppercase, since [uppercase '2' = '2']). So [TPM2B -> Tpm2b] and
+   [Foo2Bar -> Foo2bar], not [Tpm2B] / [Foo2Bar]. EverParse builds the wrapper
+   symbol as [pascal_case (module ^ "_check_" ^ codec)], so this must match it
+   exactly or the differential [agree.c] links against a symbol that does not
+   exist. *)
+let pascal_case name =
+  if not (String.contains name '_') then String.capitalize_ascii name
+  else begin
+    let keep = 0 and up = 1 and low = 2 in
+    let what_next = ref up in
+    let b = Buffer.create (String.length name) in
+    String.iter
+      (fun c ->
+        if c = '_' then what_next := up
+        else begin
+          if !what_next = keep then Buffer.add_char b c
+          else if !what_next = up then
+            Buffer.add_char b (Char.uppercase_ascii c)
+          else Buffer.add_char b (Char.lowercase_ascii c);
+          if Char.uppercase_ascii c = c then what_next := low
+          else if Char.lowercase_ascii c = c then what_next := keep
+        end)
+      name;
+    Buffer.contents b
+  end
+
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
    All filenames wire.3d emits or references must go through the same
@@ -987,11 +1017,11 @@ let generate_agree ?name ~outdir ~package codecs =
           | Some st -> Raw.input_param_c_types st
           | None -> []
         in
-        (* EverParse normalizes the codec name in the wrapper symbol (a run of
-           consecutive caps keeps only its first letter: [SpaceOSFrame ->
-           SpaceOsframe]), so run it through [everparse_name] or the call links to
-           an undeclared function. *)
-        (s.name, base ^ "Check" ^ everparse_name s.name, ptypes))
+        (* EverParse builds the wrapper symbol as
+           [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
+           rather than gluing pre-normalized parts: only the whole-string
+           [pascal_case] gets the casing right for names like [TPM2B -> Tpm2b]. *)
+        (s.name, pascal_case (base ^ "_check_" ^ s.name), ptypes))
       codecs
   in
   let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
