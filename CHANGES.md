@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- `Wire.bits ~width` is now validated against its base word: a width above the
+  base size (e.g. `bits ~width:9 U8`) or below 1 is rejected at construction.
+  Such a field had no faithful wire meaning, and the OCaml shift and the
+  EverParse-generated validator read different values from the same bytes
+  (#199, @samoht)
+
 - `Field.repeat` over a zero-width element (`Wire.empty`) is now rejected at
   construction, like `Wire.array` already was. A byte-budget list of a 0-width
   element does not extract through EverParse, so the codec had no verified C

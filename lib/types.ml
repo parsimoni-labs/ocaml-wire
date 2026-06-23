@@ -314,7 +314,23 @@ let bf_uint16 = U16 Little
 let bf_uint16be = U16 Big
 let bf_uint32 = U32 Little
 let bf_uint32be = U32 Big
-let bits ?(bit_order = Msb_first) ~width base = Bits { width; base; bit_order }
+
+let bitfield_base_bits : bitfield_base -> int = function
+  | U8 -> 8
+  | U16 _ -> 16
+  | U32 _ -> 32
+
+let bits ?(bit_order = Msb_first) ~width base =
+  (* A bitfield must fit its base word: a [width] above the base size, or below
+     1, has no faithful wire meaning and the OCaml shift and the 3D [base F :
+     width] field would read different values. Reject it at construction. *)
+  let total = bitfield_base_bits base in
+  if width < 1 || width > total then
+    Fmt.invalid_arg
+      "Wire.bits: width %d does not fit a %d-bit base (must be 1..%d)" width
+      total total;
+  Bits { width; base; bit_order }
+
 let bit b = Bool.to_int b
 let is_set n = n <> 0
 
