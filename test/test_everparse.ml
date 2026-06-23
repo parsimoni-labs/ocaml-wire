@@ -656,6 +656,37 @@ let test_3d_field_sub_mul_rejected () =
     "constant arithmetic still projects" false
     (projects_or_raises constc)
 
+let test_schema_authoritative () =
+  (* [Everparse.schema] is the projectability gate: a non-projectable constraint
+     raises when the codec is projected, not only later when it is rendered, so
+     a consumer of [schema] gets an honest answer. *)
+  let f = Field.v "a" uint8 in
+  let bad =
+    Codec.v "SchemaSub"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          f $ fst;
+          Field.v "b" uint8 ~self_constraint:(fun b ->
+              Expr.(Field.int f - b >= int 5))
+          $ snd;
+        ]
+  in
+  Alcotest.(check bool)
+    "schema rejects a non-projectable codec" true
+    (try
+       ignore (Everparse.schema bad : Everparse.t);
+       false
+     with Invalid_argument _ -> true);
+  (* A projectable codec still produces a schema. *)
+  let ok = Codec.v "SchemaOk" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
+  Alcotest.(check bool)
+    "schema accepts a projectable codec" false
+    (try
+       ignore (Everparse.schema ok : Everparse.t);
+       false
+     with Invalid_argument _ -> true)
+
 let test_signed_constraint_twos_complement () =
   (* A signed field projects to an unsigned UINT, so an ordering constraint must
      be rewritten to its two's-complement form ([x < 100] over [int8] becomes
@@ -1274,6 +1305,8 @@ let suite =
         test_3d_arith_constraint_widens;
       Alcotest.test_case "3d: field sub/mul constraint rejected" `Quick
         test_3d_field_sub_mul_rejected;
+      Alcotest.test_case "3d: schema is the projectability gate" `Quick
+        test_schema_authoritative;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
       Alcotest.test_case "3d: array open enum element renders base" `Quick

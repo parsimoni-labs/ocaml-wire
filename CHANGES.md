@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- `Wire.Everparse.schema` (and `doc`) now reject a codec that cannot project to
+  3D when the schema is built, not later when it is rendered. A constraint with
+  no 3D projection (a `field_pos`, or a subtraction or multiplication over a
+  field) used to build a schema that only raised once passed to `to_3d`, so
+  `schema` was not a reliable projectability check (#209, @samoht)
+
 - `Codec.validate` now enforces every check `Codec.decode` does, for any codec.
   It used to skip a field's own decode-side checks (enum and variant membership,
   a lookup index bound, a refined or NUL-terminated span, an embedded codec or
