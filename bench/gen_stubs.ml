@@ -168,7 +168,9 @@ let generate_c oc =
 let () =
   if ml_only then generate_ml stdout
   else begin
-    let schemas = List.map Wire.Everparse.schema_of_struct structs in
+    let schemas =
+      List.map (Wire.Everparse.Raw.project_struct ~mode:`Ffi) structs
+    in
 
     (* 1. Generate .3d *)
     Wire_3d.generate_3d ~outdir:schema_dir schemas;

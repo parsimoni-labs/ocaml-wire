@@ -1,7 +1,7 @@
 (** EverParse 3D export derived from wire descriptions.
 
-    The main path is {!struct_of_codec}, {!schema}, and {!write_3d}. For unusual
-    3D constructs that have no codec equivalent yet, use {!Raw}.
+    The main path is {!project} and {!write}. For unusual 3D constructs that
+    have no codec equivalent yet, use {!Raw}.
 
     {2 3D projection rules}
 
@@ -55,9 +55,9 @@ type t = {
   module_ : Types.module_;
   wire_size : int option;
   source : Types.struct_ option;
-      (** Pre-[with_output] source struct, [Some] for codec-derived schemas and
+      (** Pre-[ffi_decls] source struct, [Some] for codec-derived schemas and
           [None] for raw-module schemas. Used by downstream codegen to walk
-          named fields without parsing back the post-[with_output] output. *)
+          named fields without parsing back the post-[ffi_decls] output. *)
 }
 (** A named 3D schema with its module and wire size ([None] for variable-size
     schemas). *)
@@ -72,8 +72,8 @@ val filename : t -> string
 val uses_wire_ctx : t -> bool
 (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
     typedef, meaning its generated C header [#include]s
-    [<Name>_ExternalTypedefs.h]. Schemas built via {!schema} /
-    {!schema_of_struct} always satisfy this; raw modules assembled via
+    [<Name>_ExternalTypedefs.h]. Schemas built via {!project} /
+    {!Raw.project_struct} always satisfy this; raw modules assembled via
     {!Raw.of_module} do so only if they explicitly declare the extern typedef.
 *)
 
@@ -107,22 +107,17 @@ type decl = Types.decl
 type decl_case = Types.decl_case
 type module_ = Types.module_
 
-val struct_of_codec : 'r Codec.t -> struct_
-(** Project a codec to a 3D struct. *)
+type mode = [ `Ffi | `Standalone ]
+(** How a codec projects to 3D. [`Standalone] (the default) emits a clean [.3d]
+    that EverParse compiles to a standalone verified C parser, which also reads
+    as a protocol specification. [`Ffi] emits the [WireCtx] extern and per-field
+    setter callbacks ([WireSet*]), so the C validator is callable from OCaml and
+    extracts every field through the plug (used by benchmarks and differential
+    testing). *)
 
-val schema_of_struct : struct_ -> t
-(** [schema_of_struct s] builds a one-struct schema from a raw struct
-    description.
-
-    This uses the same EverParse output-types pattern as {!schema}: named fields
-    get [WireSet*] extraction callbacks, while anonymous fields remain
-    validation-only. *)
-
-val schema : 'r Codec.t -> t
-(** [schema codec] builds a one-struct schema from a codec. The resulting module
-    contains a single entrypoint typedef with the EverParse output-types
-    pattern: extern callbacks ([WireSet*]) that extract all field values during
-    validation. *)
+val project : ?mode:mode -> 'r Codec.t -> t
+(** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
+    [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
 
 val entrypoint_struct : t -> struct_ option
 (** [entrypoint_struct s] returns the entrypoint typedef struct in the schema's
@@ -140,22 +135,13 @@ val field_action_forms :
     carry {!constructor-On_act}, scalars {!constructor-On_success}, anonymous
     fields {!constructor-No_action}. *)
 
-val write_3d : outdir:string -> t list -> unit
-(** [write_3d ~outdir ts] writes one [.3d] file per schema in [outdir]. *)
-
-val doc : 'r Codec.t -> t
-(** [doc codec] projects [codec] to a clean schema for documentation and pure-C
-    parser generation. It carries the same structural 3D as {!schema} (struct,
-    bitfields, [where] clause, enums, casetypes, refined-byte typedefs) but
-    drops the FFI scaffolding: no [WireCtx] extern, no [WireSet*] extraction
-    callbacks. The result reads as a protocol specification, and 3d.exe compiles
-    it to a validator-only C parser with no FFI. *)
-
-val write_doc : outdir:string -> name:string -> t list -> unit
-(** [write_doc ~outdir ~name ts] merges the (doc) schemas [ts] into a single
-    module -- a type shared across several codecs is emitted once -- and writes
-    one [<Name>.3d] in [outdir], so a whole protocol family reads as one
-    document. Build each element with {!doc}. *)
+val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
+(** [write ?mode ~outdir ?name ts] writes the projected schemas to [outdir].
+    With [`Ffi], one [.3d] per schema (its file name taken from the schema) and
+    [~name] is ignored. With [`Standalone] (the default), the schemas are merged
+    into a single [<name>.3d] -- a type shared across several codecs is emitted
+    once -- so a whole protocol family reads as one spec, and [~name] is
+    required. *)
 
 module Raw : sig
   type nonrec struct_ = struct_
@@ -207,6 +193,13 @@ module Raw : sig
 
   val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
   (** Write a rendered 3D module to a file. See {!to_3d} for [enum_as_type]. *)
+
+  val struct_of_codec : 'r Codec.t -> struct_
+  (** Lower a codec to its 3D struct, the intermediate the stubs and benchmark
+      codegen operate on. *)
+
+  val project_struct : ?mode:mode -> struct_ -> t
+  (** [project_struct ?mode s] is {!project} on an already-lowered struct. *)
 
   val field :
     string ->

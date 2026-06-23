@@ -40,7 +40,7 @@ let ethernet_codec =
         bf_eth_payload;
       ]
 
-let ethernet_struct = Everparse.struct_of_codec ethernet_codec
+let ethernet_struct = Everparse.Raw.struct_of_codec ethernet_codec
 let ethernet_size = Codec.wire_size ethernet_codec
 
 (* -- IPv4 header: 20 bytes fixed (no options) + payload -- *)
@@ -172,7 +172,7 @@ let ipv4_codec =
         bf_ip_payload;
       ]
 
-let ipv4_struct = Everparse.struct_of_codec ipv4_codec
+let ipv4_struct = Everparse.Raw.struct_of_codec ipv4_codec
 let ipv4_size = Codec.wire_size ipv4_codec
 
 (* -- TCP header: 20 bytes fixed (no options) -- *)
@@ -255,7 +255,7 @@ let tcp_codec =
         (Field.v "UrgentPtr" uint16be $ fun t -> t.urgent_ptr);
       ]
 
-let tcp_struct = Everparse.struct_of_codec tcp_codec
+let tcp_struct = Everparse.Raw.struct_of_codec tcp_codec
 let tcp_size = Codec.wire_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
@@ -284,7 +284,7 @@ let udp_codec =
         (f_udp_checksum $ fun u -> u.checksum);
       ]
 
-let udp_struct = Everparse.struct_of_codec udp_codec
+let udp_struct = Everparse.Raw.struct_of_codec udp_codec
 let udp_size = Codec.wire_size udp_codec
 
 (* -- Utilities -- *)

@@ -25,9 +25,9 @@
     let main () = Wire_3d.main ~mode:`Ffi ~package:"hdr" [ Wire_3d.pack codec ]
     ]}
 
-    [mode] is mandatory: [`Ffi] emits the per-codec FFI artifacts above, [`Doc]
-    a single FFI-free [<Package>.3d] spec and validator for the whole package.
-    The codecs are the same either way.
+    [mode] is mandatory: [`Ffi] emits the per-codec FFI artifacts above,
+    [`Standalone] a single FFI-free [<Package>.3d] spec and validator for the
+    whole package. The codecs are the same either way.
 
     With a minimal [dune] that includes the generated rules:
     {v
@@ -148,36 +148,36 @@ val run : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 
 type packed
 (** A codec with its type erased, so codecs of different record types share one
-    list. Build with {!pack}. {!main} and the doc helpers take these rather than
-    already-projected {!Wire.Everparse.t}, so the [doc]-vs-[schema] projection
-    is chosen from the mode, not at the call site. *)
+    list. Build with {!pack}. {!main} and the standalone helpers take these
+    rather than an already-projected {!Wire.Everparse.t}, so the [`Ffi]-vs-
+    [`Standalone] projection mode is chosen by {!main}, not at the call site. *)
 
 val pack : 'a Wire.Codec.t -> packed
 (** [pack codec] erases [codec]'s type for a {!packed} list. *)
 
-val generate_doc :
+val generate_standalone :
   ?quiet:bool ->
   ?name:string ->
   outdir:string ->
   package:string ->
   packed list ->
   unit
-(** [generate_doc ?quiet ?name ~outdir ~package codecs] runs the documentation
-    pipeline: project each codec with {!Wire.Everparse.doc}, merge them into one
-    [<Name>.3d], and (when [3d.exe] is available) compile it to a single
-    validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base is
-    [name] when given, else [package], normalised to a CamelCase identifier
+(** [generate_standalone ?quiet ?name ~outdir ~package codecs] runs the
+    documentation pipeline: project each codec with {!Wire.Everparse.doc}, merge
+    them into one [<Name>.3d], and (when [3d.exe] is available) compile it to a
+    single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
+    is [name] when given, else [package], normalised to a CamelCase identifier
     (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. *)
 
-val generate_dune_doc :
+val generate_dune_standalone :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
-(** [generate_dune_doc ?name ~outdir ~package codecs] writes a [dune.inc] for
-    the single-file documentation build: rules that emit [<Name>.3d] and compile
-    it to [<Name>.c], a rule that builds the validator into an installed
+(** [generate_dune_standalone ?name ~outdir ~package codecs] writes a [dune.inc]
+    for the single-file documentation build: rules that emit [<Name>.3d] and
+    compile it to [<Name>.c], a rule that builds the validator into an installed
     [lib<name>.a] archive, a [runtest] rule that runs the differential
     self-check (see {!generate_corpus} / {!generate_agree}), and an install
     stanza (under opam [package]) for the spec, parser, and archive. [name]
-    defaults to [package]; see {!generate_doc}. *)
+    defaults to [package]; see {!generate_standalone}. *)
 
 val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
 (** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
@@ -195,11 +195,15 @@ val generate_agree :
     EverParse-generated validators and exits nonzero on any input where the
     validator's accept/reject decision differs from the recorded verdict. It
     reads the [<Name>Check<Codec>] helper names from the generated
-    [<Name>Wrapper.h], so {!generate_c_doc} (or [3d.exe]) must have run first.
-*)
+    [<Name>Wrapper.h], so {!generate_c_standalone} (or [3d.exe]) must have run
+    first. *)
 
 val main :
-  ?name:string -> mode:[ `Ffi | `Doc ] -> package:string -> packed list -> unit
+  ?name:string ->
+  mode:[ `Ffi | `Standalone ] ->
+  package:string ->
+  packed list ->
+  unit
 (** [main ?name ~mode ~package codecs] dispatches based on [Sys.argv]:
     - [3d] writes the [.3d] file(s)
     - [c] produces the C parser(s)
@@ -207,14 +211,15 @@ val main :
     - otherwise runs the full pipeline.
 
     [mode] is mandatory, so every [gen.ml] states what it emits. With
-    [~mode:`Ffi] it projects each codec with {!Wire.Everparse.schema} and drives
-    the multi-file FFI pipeline, one set per codec. With [~mode:`Doc] it
-    projects with {!Wire.Everparse.doc} and drives the single-file documentation
-    pipeline, one [<Name>.3d] and [<Name>.c] for the whole family. The codecs
-    are the same either way; only the mode changes.
+    [~mode:`Ffi] it projects each codec with {!Wire.Everparse.project} in [`Ffi]
+    mode and drives the multi-file FFI pipeline, one set per codec. With
+    [~mode:`Standalone] it projects in [`Standalone] mode and drives the
+    single-file pipeline, one [<Name>.3d] and [<Name>.c] standalone parser for
+    the whole family. The codecs are the same either way; only the mode changes.
 
-    [name] overrides the doc file base (see {!generate_doc}); it has no effect
-    in [`Ffi] mode, whose file names come from the individual codecs. *)
+    [name] overrides the standalone file base (see {!generate_standalone}); it
+    has no effect in [`Ffi] mode, whose file names come from the individual
+    codecs. *)
 
 val has_3d_exe : unit -> bool
 (** [has_3d_exe ()] returns [true] if [3d.exe] is available in PATH or

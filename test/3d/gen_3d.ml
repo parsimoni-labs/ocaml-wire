@@ -131,19 +131,28 @@ let () =
   assert (List.length Net.all_schemas = List.length Net.all_structs);
 
   (* Documentation specs: a protocol family in one FFI-free [.3d] (see
-     [Wire.Everparse.doc]). The [3d] alias batch-compiles these to pure C, so
+     [Wire.Everparse.project]). The [3d] alias batch-compiles these to pure C, so
      the validator-only projection is verified end to end. *)
   List.iter
-    (fun (name, ts) -> Wire.Everparse.write_doc ~outdir:"." ~name ts)
+    (fun (name, ts) ->
+      Wire.Everparse.write ~mode:`Standalone ~outdir:"." ~name ts)
     Wire.Everparse.
       [
         ( "net",
           [
-            doc Net.ethernet_codec;
-            doc Net.ipv4_codec;
-            doc Net.tcp_codec;
-            doc Net.udp_codec;
+            project ~mode:`Standalone Net.ethernet_codec;
+            project ~mode:`Standalone Net.ipv4_codec;
+            project ~mode:`Standalone Net.tcp_codec;
+            project ~mode:`Standalone Net.udp_codec;
           ] );
-        ("space", [ doc Space.clcw_codec; doc Space.packet_codec ]);
-        ("demo", [ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]);
+        ( "space",
+          [
+            project ~mode:`Standalone Space.clcw_codec;
+            project ~mode:`Standalone Space.packet_codec;
+          ] );
+        ( "demo",
+          [
+            project ~mode:`Standalone Demo.enum_demo_codec;
+            project ~mode:`Standalone Demo.cases_demo_codec;
+          ] );
       ]

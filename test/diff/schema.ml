@@ -20,7 +20,7 @@ let simple_header_codec =
       ]
 
 (* Generate 3D schema *)
-let simple_header_struct = Everparse.struct_of_codec simple_header_codec
+let simple_header_struct = Everparse.Raw.struct_of_codec simple_header_codec
 
 let simple_header_module =
   module_ ~doc:"Simple header for differential testing"
@@ -44,5 +44,5 @@ let constrained_packet_module =
   module_ ~doc:"Constrained packet for differential testing"
     [
       typedef ~entrypoint:true
-        (Everparse.struct_of_codec constrained_packet_codec);
+        (Everparse.Raw.struct_of_codec constrained_packet_codec);
     ]

@@ -8,7 +8,7 @@ let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
 (* Project a codec to its 3D rendering for substring assertions. *)
 let render_3d codec =
-  to_3d (module_ [ typedef (Everparse.struct_of_codec codec) ])
+  to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])
 
 (* Helper: encode record to string using Codec API *)
 let encode_record codec v =

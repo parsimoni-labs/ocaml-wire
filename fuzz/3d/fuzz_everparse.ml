@@ -28,7 +28,8 @@ open Alcobar
 let no_3d_projection = [ "expr_ops"; "sizeof" ]
 
 let to_3d_of g =
-  Wire.Everparse.Raw.to_3d (Wire.Everparse.schema (Fuzz_gen.codec g)).module_
+  Wire.Everparse.Raw.to_3d
+    (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)).module_
 
 (* For a shape with no 3D projection: [to_3d] must raise [Invalid_argument] with
    a clear message, not produce 3D EverParse would reject. *)
@@ -100,7 +101,7 @@ let batch_schemas =
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
     |> List.mapi (fun i (label, Fuzz_gen.Pack g) ->
-        let s = Wire.Everparse.schema (Fuzz_gen.codec g) in
+        let s = Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g) in
         { s with Wire.Everparse.name = batch_module_name i label })
 
 let batch_result =

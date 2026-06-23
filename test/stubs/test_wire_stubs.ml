@@ -314,8 +314,8 @@ let test_e2e_no_params () =
       (fun version length -> (version, length))
       [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
   in
-  let schema = Wire.Everparse.schema codec in
-  let s = Wire.Everparse.struct_of_codec codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let s = Wire.Everparse.Raw.struct_of_codec codec in
   e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|let () =
@@ -336,8 +336,8 @@ let test_e2e_with_constraint () =
     let open Wire.Codec in
     v "Constrained" (fun x -> x) [ (f_x $ fun x -> x) ]
   in
-  let schema = Wire.Everparse.schema codec in
-  let s = Wire.Everparse.struct_of_codec codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let s = Wire.Everparse.Raw.struct_of_codec codec in
   e2e ~name:"Constrained" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|let () =
@@ -371,8 +371,8 @@ let test_e2e_bitfields () =
         (f_length $ fun (_, _, l) -> l);
       ]
   in
-  let schema = Wire.Everparse.schema codec in
-  let s = Wire.Everparse.struct_of_codec codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let s = Wire.Everparse.Raw.struct_of_codec codec in
   e2e ~name:"BfHeader" ~structs:[ s ] ~module_:schema.module_
     ~test_ml:
       {|let () =
@@ -388,7 +388,7 @@ let test_e2e_bitfields () =
 
 (* -- Output pattern invariants --
 
-   Structural tests over the post-[with_output] module. Every assertion
+   Structural tests over the post-[ffi_decls] module. Every assertion
    inspects typed AST data returned by the public [Wire.Everparse] API so
    cosmetic output format changes don't break the tests and real regressions
    are caught precisely. *)
@@ -407,7 +407,7 @@ let expected_action_form ~named ~is_bitfield =
    whose form matches the field's kind (bitfield -> :act, otherwise
    :on-success). Anonymous fields carry no action. *)
 let check_action_forms codec =
-  let schema = Wire.Everparse.schema codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let ep =
     match Wire.Everparse.entrypoint_struct schema with
     | Some st -> st
@@ -432,7 +432,7 @@ let plug_field_names s =
    0. Catches indexing drift between the schema pipeline and the plug
    generator. *)
 let check_plug_completeness codec =
-  let schema = Wire.Everparse.schema codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let source = Option.get schema.source in
   let expected = Wire.Everparse.Raw.field_names source in
   let got = plug_field_names schema in
@@ -447,8 +447,8 @@ let check_plug_completeness codec =
 (* Invariant 3: setter names are namespaced per schema; two schemas' setter
    sets never collide. *)
 let check_setter_scoping codec_a codec_b =
-  let sa = Wire.Everparse.schema codec_a in
-  let sb = Wire.Everparse.schema codec_b in
+  let sa = Wire.Everparse.project ~mode:`Ffi codec_a in
+  let sb = Wire.Everparse.project ~mode:`Ffi codec_b in
   let names s = List.map fst (Wire.Everparse.plug_setters s) in
   let na = names sa in
   let nb = names sb in
@@ -467,7 +467,7 @@ let check_setter_scoping codec_a codec_b =
    plug_setters is actually declared in the module as an extern_fn. Catches
    drift between what plug_fields claims and what the 3D module declares. *)
 let check_setter_declarations codec =
-  let schema = Wire.Everparse.schema codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let declared_externs = Wire.Everparse.extern_fn_names schema in
   List.iter
     (fun (setter, _) ->
@@ -593,11 +593,11 @@ let test_e2e_output_parse () =
           (f_tag $ fun (_, _, t) -> t);
         ]
     in
-    let s = Wire.Everparse.struct_of_codec codec in
+    let s = Wire.Everparse.Raw.struct_of_codec codec in
     let name = Wire.Everparse.Raw.struct_name s in
     (* 2. Generate 3D with output pattern and run EverParse *)
-    let schema = Wire.Everparse.schema codec in
-    Wire.Everparse.write_3d ~outdir:dir [ schema ];
+    let schema = Wire.Everparse.project ~mode:`Ffi codec in
+    Wire.Everparse.write ~mode:`Ffi ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
     (* 3. Emit default ExternalTypedefs + _Fields plug (Fields plug is what
        wire.stubs now stack-allocates against in wire_ffi.c). *)
@@ -651,9 +651,9 @@ let test_e2e_full_stack () =
     let dir = Filename.temp_dir "wire_e2e_stack" "" in
     let schemas =
       [
-        Wire.Everparse.schema Net.ethernet_codec;
-        Wire.Everparse.schema Net.ipv4_codec;
-        Wire.Everparse.schema Net.tcp_codec;
+        Wire.Everparse.project ~mode:`Ffi Net.ethernet_codec;
+        Wire.Everparse.project ~mode:`Ffi Net.ipv4_codec;
+        Wire.Everparse.project ~mode:`Ffi Net.tcp_codec;
       ]
     in
     List.iter

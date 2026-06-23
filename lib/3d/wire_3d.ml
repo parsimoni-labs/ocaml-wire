@@ -171,7 +171,7 @@ let read_validate_name ~outdir s =
   | Some n -> n
   | None -> Fmt.failwith "could not find Validate function name in %s" path
 
-let write_3d = Wire.Everparse.write_3d
+let write_3d ~outdir schemas = Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
 let copy_file ~src ~dst =
   let ic = open_in_bin src in
@@ -766,17 +766,17 @@ let generate_dune ~outdir ~package schemas =
   Format.pp_print_flush ppf ();
   close_out oc
 
-(* A codec awaiting projection. [main] and the doc helpers take these rather
-   than already-projected [Wire.Everparse.t] so the caller never has to choose
-   between [doc] and [schema]: the projection is picked here from the mode, not
-   at the call site, which removes the [~mode:`Doc] + [schema ...] mismatch. *)
+(* A codec awaiting projection. [main] and the standalone helpers take these
+   rather than an already-projected [Wire.Everparse.t] so the caller never has
+   to choose the projection mode: it is picked here from [main]'s [~mode], not at
+   the call site, which removes any [~mode] + projection-mode mismatch. *)
 type packed = Pack : 'a Wire.Codec.t -> packed
 
 let pack c = Pack c
 
-(* -- Documentation / single-file pipeline. [main ~mode:`Doc] drives these:
-   project each codec with [Wire.Everparse.doc] (FFI-free), merge the family
-   into one [<Package>.3d] with [write_doc], and compile that single spec to a
+(* -- Documentation / single-file pipeline. [main ~mode:`Standalone] drives these:
+   project each codec with [Wire.Everparse.project] (FFI-free), merge the family
+   into one [<Package>.3d] with [write], and compile that single spec to a
    validator-only [<Package>.c] -- no per-codec files, no [_Fields] plug, no FFI
    stubs. The package name becomes the 3D module name, so turn it into a valid
    EverParse identifier (CamelCase, no hyphens): "my-pkg" -> "MyPkg". -- *)
@@ -794,7 +794,7 @@ let doc_module_name package =
 (* The 3D module / file base for the doc pipeline: [?name] when given, else the
    opam [~package]. Lets the emitted [<Base>.3d] / [.c] be named independently of
    the install package (whose name [~package] keeps for the install stanza). *)
-let doc_base ?name ~package () =
+let standalone_base ?name ~package () =
   doc_module_name (match name with Some n -> n | None -> package)
 
 (* -- Differential self-check for the doc pipeline. The doc projection emits a
@@ -851,7 +851,7 @@ let generate_corpus ?(count = 256) ppf codecs =
   let rng = Random.State.make [| 0x5eed51 |] in
   List.iter
     (fun (Pack c) ->
-      let s = doc c in
+      let s = project ~mode:`Standalone c in
       let name = s.name in
       let pnames =
         match s.source with Some st -> Raw.input_param_names st | None -> []
@@ -1007,11 +1007,11 @@ let emit_agree_main ppf =
    name would surface as a link error when the differential test compiles
    [agree.c] against the real wrapper. *)
 let generate_agree ?name ~outdir ~package codecs =
-  let base = doc_base ?name ~package () in
+  let base = standalone_base ?name ~package () in
   let triples =
     List.map
       (fun (Pack c) ->
-        let s = doc c in
+        let s = project ~mode:`Standalone c in
         let ptypes =
           match s.source with
           | Some st -> Raw.input_param_c_types st
@@ -1033,23 +1033,24 @@ let generate_agree ?name ~outdir ~package codecs =
   Format.pp_print_flush ppf ();
   close_out oc
 
-let generate_3d_doc ?name ~outdir ~package codecs =
+let generate_3d_standalone ?name ~outdir ~package codecs =
   ensure_dir outdir;
-  write_doc ~outdir
-    ~name:(doc_base ?name ~package ())
-    (List.map (fun (Pack c) -> doc c) codecs)
+  write ~mode:`Standalone ~outdir
+    ~name:(standalone_base ?name ~package ())
+    (List.map (fun (Pack c) -> project ~mode:`Standalone c) codecs)
 
-let generate_c_doc ?(quiet = true) ?name ~outdir ~package () =
+let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
   if has_3d_exe () then
-    run_everparse_files ~quiet ~outdir [ doc_base ?name ~package () ^ ".3d" ]
+    run_everparse_files ~quiet ~outdir
+      [ standalone_base ?name ~package () ^ ".3d" ]
   else
     failwith
       "3d.exe not found in PATH. Install EverParse to regenerate C files."
 
-let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
-  generate_3d_doc ?name ~outdir ~package codecs;
-  generate_c_doc ~quiet ?name ~outdir ~package ();
+let generate_standalone ?(quiet = true) ?name ~outdir ~package codecs =
+  generate_3d_standalone ?name ~outdir ~package codecs;
+  generate_c_standalone ~quiet ?name ~outdir ~package ();
   generate_agree ?name ~outdir ~package codecs
 
 (* The [.3d] and [agree.c] are pure OCaml ([gen.exe 3d] / [gen.exe agree]), so
@@ -1061,7 +1062,7 @@ let generate_doc ?(quiet = true) ?name ~outdir ~package codecs =
    committed C goes stale -- the runtest differential below catches that, since
    it regenerates the corpus and [agree.c] from the current codec and runs them
    against the committed validator. *)
-let emit_doc_gen_rules ppf ~three_d ~c_files =
+let emit_standalone_gen_rules ppf ~three_d ~c_files =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
@@ -1086,7 +1087,7 @@ let emit_doc_gen_rules ppf ~three_d ~c_files =
     (String.concat " " c_files)
     three_d
 
-let emit_doc_build_rules ppf ~base ~archive ~c_files =
+let emit_standalone_build_rules ppf ~base ~archive ~c_files =
   (* Build the validator into an archive, installed with the package, so
      consumers get a ready-to-link library and a downstream build fails loudly
      if the spec stops projecting to compilable C. *)
@@ -1126,15 +1127,15 @@ let emit_doc_build_rules ppf ~base ~archive ~c_files =
     \  (run %%{dep:agree} corpus)))\n\n"
     archive base base strict_cc_flags everparse_type_defines archive
 
-let emit_doc_install ppf ~package ~three_d ~archive ~c_files =
+let emit_standalone_install ppf ~package ~three_d ~archive ~c_files =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) (three_d :: archive :: c_files);
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune_doc ?name ~outdir ~package _codecs =
-  let base = doc_base ?name ~package () in
+let generate_dune_standalone ?name ~outdir ~package _codecs =
+  let base = standalone_base ?name ~package () in
   let three_d = base ^ ".3d" in
   let c_files =
     [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
@@ -1142,9 +1143,9 @@ let generate_dune_doc ?name ~outdir ~package _codecs =
   let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
   let oc = open_out (Filename.concat outdir "dune.inc") in
   let ppf = Format.formatter_of_out_channel oc in
-  emit_doc_gen_rules ppf ~three_d ~c_files;
-  emit_doc_build_rules ppf ~base ~archive ~c_files;
-  emit_doc_install ppf ~package ~three_d ~archive ~c_files;
+  emit_standalone_gen_rules ppf ~three_d ~c_files;
+  emit_standalone_build_rules ppf ~base ~archive ~c_files;
+  emit_standalone_install ppf ~package ~three_d ~archive ~c_files;
   Format.pp_print_flush ppf ();
   close_out oc
 
@@ -1152,17 +1153,18 @@ let main ?name ~mode ~package codecs =
   let argv = Array.to_list Sys.argv in
   match mode with
   | `Ffi -> (
-      let schemas = List.map (fun (Pack c) -> schema c) codecs in
+      let schemas = List.map (fun (Pack c) -> project ~mode:`Ffi c) codecs in
       match argv with
       | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
       | [ _; "c" ] -> generate_c ~outdir:"." schemas
       | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
       | _ -> run ~outdir:"." schemas)
-  | `Doc -> (
+  | `Standalone -> (
       match argv with
-      | [ _; "3d" ] -> generate_3d_doc ?name ~outdir:"." ~package codecs
-      | [ _; "c" ] -> generate_c_doc ?name ~outdir:"." ~package ()
+      | [ _; "3d" ] -> generate_3d_standalone ?name ~outdir:"." ~package codecs
+      | [ _; "c" ] -> generate_c_standalone ?name ~outdir:"." ~package ()
       | [ _; "agree" ] -> generate_agree ?name ~outdir:"." ~package codecs
-      | [ _; "dune" ] -> generate_dune_doc ?name ~outdir:"." ~package codecs
+      | [ _; "dune" ] ->
+          generate_dune_standalone ?name ~outdir:"." ~package codecs
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
-      | _ -> generate_doc ?name ~outdir:"." ~package codecs)
+      | _ -> generate_standalone ?name ~outdir:"." ~package codecs)

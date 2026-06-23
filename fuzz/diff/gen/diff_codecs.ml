@@ -23,7 +23,8 @@ let starts_with s p =
 let lines_of (Fuzz_gen.Pack g) =
   String.split_on_char '\n'
     (Wire.Everparse.Raw.to_3d
-       (Wire.Everparse.schema (Fuzz_gen.codec g)).Wire.Everparse.module_)
+       (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g))
+         .Wire.Everparse.module_)
 
 type exclusion = Variable_size | Zero_size | Parameterised | Casetype
 
@@ -38,7 +39,7 @@ let string_of_exclusion = function
    fixed-size validator; a parameterised one needs an env the harness does not
    set up. *)
 let scope_exclusion (Fuzz_gen.Pack g as p) =
-  let s = Wire.Everparse.schema (Fuzz_gen.codec g) in
+  let s = Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g) in
   match s.Wire.Everparse.wire_size with
   | None -> Some Variable_size
   | Some 0 -> Some Zero_size
