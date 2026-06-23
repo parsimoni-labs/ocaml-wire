@@ -216,6 +216,26 @@ let test_validate_bounds_constraint_free () =
   (* A full buffer still validates. *)
   Codec.validate c (Bytes.make 8 '\000') 0
 
+(* [all_zeros] padding must read as all-zero. Decode enforces it; [Codec.validate]
+   must too, or validate-then-get silently accepts tampered padding bytes. *)
+let test_validate_all_zeros () =
+  let c =
+    Codec.v "Pad"
+      (fun tag pad -> (tag, pad))
+      Codec.[ Field.v "tag" uint8 $ fst; Field.v "pad" all_zeros $ snd ]
+  in
+  Codec.validate c (Bytes.of_string "\x01\x00\x00\x00") 0;
+  let tampered = Bytes.of_string "\x01\x00\x05\x00" in
+  (match Codec.decode c tampered 0 with
+  | Error (Constraint_failed _) -> ()
+  | Ok _ -> Alcotest.fail "decode accepted non-zero all_zeros padding"
+  | Error _ -> Alcotest.fail "decode failed with the wrong error");
+  match Codec.validate c tampered 0 with
+  | exception Validation_error (Constraint_failed _) -> ()
+  | () -> Alcotest.fail "validate accepted non-zero all_zeros padding"
+  | exception Validation_error _ ->
+      Alcotest.fail "validate failed with the wrong error"
+
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
    reaches the EverParse refinement, so leaving it unchecked on the OCaml side
@@ -5175,6 +5195,8 @@ let suite =
       Alcotest.test_case "validate: then get" `Quick test_validate_then_get;
       Alcotest.test_case "validate: bounds-checks a constraint-free codec"
         `Quick test_validate_bounds_constraint_free;
+      Alcotest.test_case "validate: enforces all_zeros padding" `Quick
+        test_validate_all_zeros;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
         test_decode_enforces_typ_where;
       Alcotest.test_case "validate: enforces typ-level where" `Quick

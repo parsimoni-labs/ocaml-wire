@@ -220,6 +220,11 @@
 
 ### Fixed
 
+- `Codec.validate` now enforces an `all_zeros` padding field, rejecting a
+  non-zero byte exactly as `Codec.decode` does. The zero check lived only in the
+  decode reader, so validating a frame with tampered padding succeeded and a
+  following zero-copy read accepted it (#205, @samoht)
+
 - `Codec.validate` now runs decode's structural bounds check for every codec,
   including one with no field constraints or `where`. It used to be a no-op for
   a constraint-free codec, so validating a truncated buffer succeeded and a
