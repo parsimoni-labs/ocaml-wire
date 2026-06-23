@@ -361,6 +361,11 @@ let rec build_populate : type a.
         match reader buf base with
         | Some _ -> inner_populate slots buf base
         | None -> ())
+  | All_zeros ->
+      (* No int projection, but the reader checks every byte is zero. Run it for
+         that effect so [Codec.validate] enforces the all-zeros contract decode
+         does, instead of silently accepting tampered padding. *)
+      fun _slots buf base -> ignore (reader buf base)
   | _ ->
       (* Aggregate / string-valued types have no scalar int projection.
          [Field.ref] over them reads 0; treat as deliberate (no slot
@@ -2594,6 +2599,18 @@ let validate_or_eof buf f =
          (Unexpected_eof
             { expected = Bytes.length buf + 1; got = Bytes.length buf }))
 
+(* An [all_zeros] field carries no constraint or action, but its populate checks
+   every byte is zero, so a struct holding one (through the transparent wrappers)
+   needs the validator pass to run even when nothing else does, or [Codec.validate]
+   would skip the all-zeros contract that decode enforces. *)
+let rec typ_checks_bytes : type a. a Types.typ -> bool = function
+  | Types.All_zeros -> true
+  | Types.Where { inner; _ } -> typ_checks_bytes inner
+  | Types.Map { inner; _ } -> typ_checks_bytes inner
+  | Types.Optional { inner; _ } -> typ_checks_bytes inner
+  | Types.Optional_or { inner; _ } -> typ_checks_bytes inner
+  | _ -> false
+
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
@@ -2617,7 +2634,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   let has_checks =
     compiled_where <> None
     || List.exists
-         (fun (Types.Field f) -> f.constraint_ <> None || f.action <> None)
+         (fun (Types.Field f) ->
+           f.constraint_ <> None || f.action <> None
+           || typ_checks_bytes f.field_typ)
          struct_fields
   in
   let validate =
