@@ -1843,7 +1843,16 @@ let var_bytes_reader : type a.
      crash [Bytes.sub]; fail cleanly instead. [Byte_slice] is handled by
      [make_or_eod]. *)
   (match typ with
-  | Byte_slice _ -> ()
+  | Byte_slice _ ->
+      (* A byte_slice reading at or past the end yields an eod slice (an oversize
+         length is caught by the top-level bounds check), but a negative size or
+         offset, from a [Sub] or an overrun length field, would crash
+         [make_or_eod] with a raw [Invalid_argument] that escapes the decode
+         result. Fail cleanly instead. *)
+      if sz < 0 || first < 0 then
+        raise
+          (Parse_error
+             (Unexpected_eof { expected = first + sz; got = Bytes.length buf }))
   | _ ->
       if sz < 0 || first < 0 || first + sz > Bytes.length buf then
         raise
