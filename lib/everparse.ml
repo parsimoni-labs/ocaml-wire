@@ -508,6 +508,13 @@ let schema_of_struct (s : Types.struct_) : t =
   let wire_size = coalesced_wire_size s.fields in
   let decls = with_output s in
   let m = Types.module_ decls in
+  (* [schema] is the authoritative projectability gate: a constraint with no 3D
+     projection (a [field_pos], a subtraction or multiplication over a field) is
+     rejected here, when the codec is projected, rather than slipping through to
+     an unguarded [to_3d] later. The rejection lives in the renderer, so validate
+     by rendering once; [pp_struct] resets its counters, so this does not affect
+     a subsequent render. *)
+  ignore (Types.to_3d m : string);
   { name; module_ = m; wire_size; source = Some s }
 
 let schema (type r) (codec : r Codec.t) : t =
@@ -517,12 +524,11 @@ let doc_of_struct ?doc (s : Types.struct_) : t =
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
-  {
-    name;
-    module_ = Types.module_ (doc_decls ?doc s);
-    wire_size;
-    source = Some s;
-  }
+  let m = Types.module_ (doc_decls ?doc s) in
+  (* Authoritative projectability gate, as in [schema_of_struct]; the doc
+     projection renders enums as named types. *)
+  ignore (Types.to_3d ~enum_as_type:true m : string);
+  { name; module_ = m; wire_size; source = Some s }
 
 let doc (type r) (codec : r Codec.t) : t =
   doc_of_struct ?doc:(Codec.doc codec) (Codec.to_struct codec)
