@@ -31,9 +31,9 @@
 
     With a minimal [dune] that includes the generated rules:
     {v
-      (executable (name gen) (modules gen) (libraries clcw wire.3d))
+      (executable (name gen) (libraries clcw wire.3d))
       (rule (mode promote) (alias 3d)
-       (targets dune.inc) (deps gen.exe) (action (run ./gen.exe dune)))
+       (targets dune.inc) (action (run %{exe:gen.exe} dune)))
       (include dune.inc)
     v}
 

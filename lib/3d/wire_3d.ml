@@ -675,18 +675,17 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
     \ (alias 3d)\n\
     \ (mode promote)\n\
     \ (targets %s)\n\
-    \ (deps gen.exe)\n\
     \ (action\n\
-    \  (run ./gen.exe 3d)))\n\n\
+    \  (run %%{exe:gen.exe} 3d)))\n\n\
      (rule\n\
     \ (alias 3d)\n\
     \ (enabled_if\n\
     \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
     \ (mode promote)\n\
     \ (targets EverParse.h EverParseEndianness.h %s test.c)\n\
-    \ (deps gen.exe %s)\n\
+    \ (deps %s)\n\
     \ (action\n\
-    \  (run ./gen.exe c)))\n\n"
+    \  (run %%{exe:gen.exe} c)))\n\n"
     (String.concat " " three_d_files)
     (String.concat " " (c_files @ ctx_files))
     (String.concat " " three_d_files)
@@ -694,13 +693,18 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
 let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
   Fmt.pf ppf
     "(rule\n\
+    \ (targets %s)\n\
+    \ (deps %s)\n\
+    \ (action\n\
+    \  (run cc %s -o %s test.c %s)))\n\n\
+     (rule\n\
     \ (alias runtest)\n\
     \ (deps %s)\n\
     \ (action\n\
-    \  (system\n\
-    \   \"cc %s -o %s test.c %s && ./%s\")))\n\n"
+    \  (run %%{dep:%s})))\n\n"
+    test_bin
     (String.concat " " all_deps)
-    strict_cc_flags test_bin (String.concat " " c_srcs) test_bin
+    strict_cc_flags test_bin (String.concat " " c_srcs) test_bin test_bin
 
 let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files =
   let pr fmt = Fmt.pf ppf fmt in
@@ -1033,23 +1037,21 @@ let emit_doc_gen_rules ppf ~three_d ~c_files =
     \ (alias 3d)\n\
     \ (mode promote)\n\
     \ (targets %s)\n\
-    \ (deps gen.exe)\n\
     \ (action\n\
-    \  (run ./gen.exe 3d)))\n\n\
+    \  (run %%{exe:gen.exe} 3d)))\n\n\
      (rule\n\
     \ (targets agree.c)\n\
-    \ (deps gen.exe)\n\
     \ (action\n\
-    \  (run ./gen.exe agree)))\n\n\
+    \  (run %%{exe:gen.exe} agree)))\n\n\
      (rule\n\
     \ (alias 3d)\n\
     \ (enabled_if\n\
     \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
     \ (mode promote)\n\
     \ (targets EverParse.h EverParseEndianness.h %s)\n\
-    \ (deps gen.exe %s)\n\
+    \ (deps %s)\n\
     \ (action\n\
-    \  (run ./gen.exe c)))\n\n"
+    \  (run %%{exe:gen.exe} c)))\n\n"
     three_d
     (String.concat " " c_files)
     three_d
@@ -1063,24 +1065,35 @@ let emit_doc_build_rules ppf ~base ~archive ~c_files =
     \ (targets %s)\n\
     \ (deps EverParse.h EverParseEndianness.h %s)\n\
     \ (action\n\
-    \  (system\n\
-    \   \"cc %s %s -c %s.c %sWrapper.c && ar rcs %s %s.o %sWrapper.o\")))\n\n"
+    \  (progn\n\
+    \   (run cc %s %s -c %s.c %sWrapper.c)\n\
+    \   (run ar rcs %s %s.o %sWrapper.o))))\n\n"
     archive
     (String.concat " " c_files)
     strict_cc_flags everparse_type_defines base base archive base base;
   (* Differential self-check: the OCaml codec's accept/reject verdict over a
      fuzzed corpus must match the committed C validator's, or the doc projection
-     is unsound (or the committed C is stale). Uses only gen.exe and cc, so it
-     runs without 3d.exe. *)
+     is unsound (or the committed C is stale). The corpus and the [agree] driver
+     are built as targets and run directly, so no shell is involved: the
+     generator is referenced through [%{exe:gen.exe}], which records the
+     dependency and resolves the sandbox path (a bare [./gen.exe] is not
+     reliably present in the action's cwd). Uses only gen.exe and cc, no
+     3d.exe. *)
   Fmt.pf ppf
     "(rule\n\
-    \ (alias runtest)\n\
-    \ (deps gen.exe agree.c %s EverParse.h EverParseEndianness.h %s.h \
-     %sWrapper.h)\n\
+    \ (targets corpus)\n\
     \ (action\n\
-    \  (system\n\
-    \   \"./gen.exe corpus > corpus && cc %s %s agree.c %s -o agree && ./agree \
-     corpus\")))\n\n"
+    \  (with-stdout-to corpus (run %%{exe:gen.exe} corpus))))\n\n\
+     (rule\n\
+    \ (targets agree)\n\
+    \ (deps agree.c %s EverParse.h EverParseEndianness.h %s.h %sWrapper.h)\n\
+    \ (action\n\
+    \  (run cc %s %s agree.c %s -o agree)))\n\n\
+     (rule\n\
+    \ (alias runtest)\n\
+    \ (deps corpus agree)\n\
+    \ (action\n\
+    \  (run %%{dep:agree} corpus)))\n\n"
     archive base base strict_cc_flags everparse_type_defines archive
 
 let emit_doc_install ppf ~package ~three_d ~archive ~c_files =

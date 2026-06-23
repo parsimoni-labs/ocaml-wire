@@ -121,8 +121,12 @@ let test_generate_dune_doc () =
     "installs under the package" true (has "(package my-pkg)");
   Alcotest.(check bool) "builds a validator archive" true (has "libmypkg.a");
   Alcotest.(check bool)
-    "runtest runs the differential check" true (has "./agree corpus");
-  Alcotest.(check bool) "corpus oracle" true (has "./gen.exe corpus");
+    "runtest runs the differential check" true
+    (has "%{dep:agree} corpus");
+  Alcotest.(check bool) "corpus oracle" true (has "%{exe:gen.exe} corpus");
+  Alcotest.(check bool)
+    "generator invoked via exe macro, not ./gen.exe" false (has "./gen.exe");
+  Alcotest.(check bool) "no shell action in the runtest" false (has "(system");
   Alcotest.(check bool)
     "C rule gated behind BUILD_EVERPARSE, not fallback" true
     (has "%{env:BUILD_EVERPARSE=}");
