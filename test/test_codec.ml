@@ -577,6 +577,38 @@ let test_repeat_oversized_length_rejected () =
   Alcotest.(check bool)
     "length past buffer fails cleanly" true (decodes "\x00\x10abc")
 
+(* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
+   length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
+   [Invalid_argument] that escapes the decode result. A large variable field
+   ahead of it keeps the framing past the top-level bounds check, so the negative
+   size reaches the slice read. *)
+let test_byte_slice_negative_size () =
+  let f_l = Field.v "l" uint8 in
+  let f_n = Field.v "n" uint8 in
+  let c =
+    Codec.v "SliceNeg"
+      (fun l pre n sl -> (l, pre, n, sl))
+      Codec.
+        [
+          (f_l $ fun (l, _, _, _) -> l);
+          ( Field.v "pre" (byte_array ~size:(Field.ref f_l))
+          $ fun (_, p, _, _) -> p );
+          (f_n $ fun (_, _, n, _) -> n);
+          ( Field.v "sl" (byte_slice ~size:Expr.(Field.ref f_n - int 100))
+          $ fun (_, _, _, s) -> s );
+        ]
+  in
+  let buf = Bytes.make 202 '\000' in
+  Bytes.set_uint8 buf 0 200;
+  Bytes.set_uint8 buf 201 1;
+  match Codec.decode c buf 0 with
+  | Error _ -> ()
+  | Ok _ ->
+      Alcotest.fail "expected a parse error for a negative byte_slice size"
+  | exception Invalid_argument _ ->
+      Alcotest.fail
+        "negative byte_slice size crashed instead of failing cleanly"
+
 (* A bitfield has no standalone element form, so [array] / [Field.repeat] over
    one is rejected at construction rather than crashing at decode. *)
 let raises_invalid f =
@@ -5160,6 +5192,8 @@ let suite =
         test_rest_bytes_projection_guard;
       Alcotest.test_case "repeat oversized length rejected" `Quick
         test_repeat_oversized_length_rejected;
+      Alcotest.test_case "byte_slice negative size fails cleanly" `Quick
+        test_byte_slice_negative_size;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick

@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- A `byte_slice` whose resolved size is negative, for example a `Sub` on a
+  length field that underflows on crafted input, now fails with a `Codec` parse
+  error instead of escaping `Codec.decode` with a raw `Invalid_argument`. The
+  slice read skipped the bounds check the other byte spans run and crashed
+  (#202, @samoht)
+
 - A `Wire.casetype` whose tag is a `uint ~size` value, or an enum over a
   big-endian base, is now rejected at construction. Neither projects to a 3D
   type the dispatch can name, so the codec built without a verified validator.
