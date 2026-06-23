@@ -1040,6 +1040,23 @@ let test_uint_size_bounds () =
     "uint 4 accepted" false
     (raises_invalid (fun () -> uint (int 4)))
 
+(* A bitfield wider than its base word, or narrower than one bit, has no faithful
+   wire meaning (the OCaml shift and the 3D field would read different values), so
+   it is refused at construction. *)
+let test_bits_width_bounds () =
+  Alcotest.(check bool)
+    "9-bit field over U8 rejected" true
+    (raises_invalid (fun () -> bits ~width:9 U8));
+  Alcotest.(check bool)
+    "0-bit field rejected" true
+    (raises_invalid (fun () -> bits ~width:0 U8));
+  Alcotest.(check bool)
+    "17-bit field over U16 rejected" true
+    (raises_invalid (fun () -> bits ~width:17 U16));
+  Alcotest.(check bool)
+    "8-bit field over U8 accepted" false
+    (raises_invalid (fun () -> bits ~width:8 U8))
+
 (* A [casetype] [case] carries an explicit discriminator; omitting [~index] is
    refused at construction (only [default] is index-free). *)
 let test_casetype_case_requires_index () =
@@ -5144,6 +5161,8 @@ let suite =
         test_casetype_wrapped_greedy_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
+      Alcotest.test_case "bits rejects out-of-range width" `Quick
+        test_bits_width_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick
         test_casetype_case_requires_index;
       (* codec bitfields *)
