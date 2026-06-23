@@ -2826,6 +2826,29 @@ let check_decode_safety label kind ?env g bs =
   try ignore (Wire.Codec.decode ?env g.codec bs 0)
   with Invalid_argument _ -> Alcobar.failf "%s %s crashed decoder" label kind
 
+let decode_accepts ?env g bs =
+  try
+    match Wire.Codec.decode ?env g.codec bs 0 with
+    | Ok _ -> `Accept
+    | Error _ -> `Reject
+  with Invalid_argument _ -> `Crash
+
+let validate_accepts ?env g bs =
+  match validate_one ?env g bs with
+  | `Ok -> `Accept
+  | `Reject -> `Reject
+  | `Crash -> `Crash
+
+let check_decode_validate_agree label kind ?env g bs =
+  match (decode_accepts ?env g bs, validate_accepts ?env g bs) with
+  | `Crash, _ -> Alcobar.failf "%s %s crashed decoder" label kind
+  | _, `Crash -> Alcobar.failf "%s %s crashed validator" label kind
+  | `Accept, `Accept | `Reject, `Reject -> ()
+  | `Accept, `Reject ->
+      Alcobar.failf "%s %s decode accepted but validate rejected" label kind
+  | `Reject, `Accept ->
+      Alcobar.failf "%s %s validate accepted but decode rejected" label kind
+
 let test_cases ?(validate = true) label g =
   let check_positive_stream ((_, bs) as sample) =
     check_positive label g sample;
@@ -2833,7 +2856,10 @@ let test_cases ?(validate = true) label g =
   in
   let check_safety_stream kind ?env bs =
     check_decode_safety label kind ?env g bs;
-    if validate then check_validate_safety label kind ?env g bs
+    if validate then begin
+      check_validate_safety label kind ?env g bs;
+      check_decode_validate_agree label kind ?env g bs
+    end
   in
   match g.env with
   | None ->
@@ -3376,48 +3402,60 @@ let registry : (string * packed) list =
     (scalar_gens @ byte_gens @ bits_gens @ bitpack_gens @ wrapper_gens
    @ composite_gens @ param_action_gens)
 
-let registry_subset labels =
-  List.map
-    (fun label ->
-      match List.assoc_opt label registry with
-      | Some p -> (label, p)
-      | None -> invalid_arg ("unknown fuzz registry label: " ^ label))
-    labels
-
 let truncate_bytes ~max_len bs =
   if Bytes.length bs <= max_len then bs else Bytes.sub bs 0 max_len
 
-let pick_by_first_byte xs bs =
-  match xs with
-  | [] -> invalid_arg "empty AFL registry"
-  | _ ->
-      let n = List.length xs in
-      let i = if Bytes.length bs = 0 then 0 else Bytes.get_uint8 bs 0 mod n in
-      List.nth xs i
+type afl_input = { selector : int; mode : int; payload : bytes }
 
-let afl_cases_for ?(max_len = 256) cases label =
+let afl_payload bs =
+  let len = Bytes.length bs in
+  if len <= 2 then Bytes.empty else Bytes.sub bs 2 (len - 2)
+
+let parse_afl_input ?(max_len = 256) bs =
+  {
+    selector = (if Bytes.length bs = 0 then 0 else Bytes.get_uint8 bs 0);
+    mode = (if Bytes.length bs <= 1 then 0 else Bytes.get_uint8 bs 1);
+    payload = truncate_bytes ~max_len (afl_payload bs);
+  }
+
+let afl_input_gen =
+  Alcobar.map
+    Alcobar.[ Alcobar.uint8; Alcobar.uint8; bytes_any ]
+    (fun selector mode payload ->
+      let framed = Bytes.create (2 + Bytes.length payload) in
+      Bytes.set_uint8 framed 0 selector;
+      Bytes.set_uint8 framed 1 mode;
+      Bytes.blit payload 0 framed 2 (Bytes.length payload);
+      framed)
+
+let afl_contract_cases ?(max_len = 256) label cases ~check =
   match cases with
   | [] -> []
   | _ ->
       [
-        Alcobar.test_case
-          (label ^ " afl decode+validate")
-          Alcobar.[ bytes_any ]
+        Alcobar.test_case (label ^ " afl")
+          Alcobar.[ afl_input_gen ]
           (fun bs ->
-            let bs = truncate_bytes ~max_len bs in
-            (* Pick one codec per input (by the first byte) so each AFL exec is a
-               single decode+validate rather than one per registry entry;
-               coverage of the whole registry accumulates across inputs. Mirrors
-               [afl_everparse_cases]. *)
-            let name, Pack g = pick_by_first_byte cases bs in
-            let case = label ^ " " ^ name in
-            let env = positive_env g in
-            check_decode_safety case "afl" ?env g bs;
-            check_validate_safety case "afl" ?env g bs);
+            let input = parse_afl_input ~max_len bs in
+            let name, item =
+              List.nth cases (input.selector mod List.length cases)
+            in
+            check (label ^ " " ^ name) item input);
       ]
 
-(* AFL fuzzes the whole registry, not a curated subset: [pick_by_first_byte]
-   selects one codec per input, so covering every combinator costs nothing
+let afl_cases_for ?max_len cases label =
+  afl_contract_cases ?max_len label cases ~check:(fun case (Pack g) input ->
+      let env = positive_env g in
+      match input.mode mod 4 with
+      | 0 ->
+          check_decode_safety case "afl" ?env g input.payload;
+          check_validate_safety case "afl" ?env g input.payload
+      | 1 -> check_decode_safety case "afl" ?env g input.payload
+      | 2 -> check_validate_safety case "afl" ?env g input.payload
+      | _ -> check_decode_validate_agree case "afl" ?env g input.payload)
+
+(* AFL fuzzes the whole registry, not a curated subset: the [selector] byte
+   picks one codec per input, so covering every combinator costs nothing
    per-exec and only spreads mutation across more shapes over a run. *)
 let afl_cases ?max_len label = afl_cases_for ?max_len registry label
 
@@ -3954,6 +3992,115 @@ let invariant_cases label =
     const_case (label ^ " sampler distribution") check_sampler_distribution;
   ]
 
+let expect_invalid label f =
+  match f () with
+  | _ -> Alcobar.failf "%s: expected Invalid_argument" label
+  | exception Invalid_argument _ -> ()
+
+let construction_guard_cases label =
+  [
+    const_case (label ^ " bits width 0") (fun () ->
+        expect_invalid "bits width 0" (fun () -> Wire.bits ~width:0 Wire.U8));
+    const_case (label ^ " bits width > U8") (fun () ->
+        expect_invalid "bits width > U8" (fun () -> Wire.bits ~width:9 Wire.U8));
+    const_case (label ^ " bits width > U16") (fun () ->
+        expect_invalid "bits width > U16" (fun () ->
+            Wire.bits ~width:17 Wire.U16be));
+    const_case (label ^ " bits width > U32") (fun () ->
+        expect_invalid "bits width > U32" (fun () ->
+            Wire.bits ~width:33 Wire.U32be));
+    const_case (label ^ " casetype dynamic tag") (fun () ->
+        expect_invalid "casetype dynamic tag" (fun () ->
+            Wire.casetype "BadDynTag"
+              (Wire.uint ~endian:Wire.Big (Wire.int 2))
+              [
+                Wire.case ~index:0 Wire.uint8 ~inject:Fun.id ~project:(fun v ->
+                    Some v);
+              ]));
+    const_case (label ^ " casetype enum tag") (fun () ->
+        expect_invalid "casetype enum tag" (fun () ->
+            Wire.casetype "BadEnumTag"
+              (Wire.enum "BadTag" [ ("A", 0) ] Wire.uint16be)
+              [
+                Wire.case ~index:0 Wire.uint8 ~inject:Fun.id ~project:(fun v ->
+                    Some v);
+              ]));
+    const_case (label ^ " repeat empty") (fun () ->
+        expect_invalid "repeat empty" (fun () ->
+            Wire.Field.repeat "Empty" ~size:(Wire.int 1) Wire.empty));
+    const_case (label ^ " repeat_seq empty") (fun () ->
+        expect_invalid "repeat_seq empty" (fun () ->
+            Wire.Field.repeat_seq "Empty" ~seq:Wire.seq_list ~size:(Wire.int 1)
+              Wire.empty));
+  ]
+
+let check_all_zeros_semantic label () =
+  let pad = Wire.Field.v "Pad" Wire.all_zeros in
+  let g =
+    {
+      codec = Wire.Codec.v "FuzzZeros" Fun.id Wire.Codec.[ pad $ Fun.id ];
+      typ =
+        Wire.codec
+          (Wire.Codec.v "FuzzZerosTyp" Fun.id Wire.Codec.[ pad $ Fun.id ]);
+      positive = Alcobar.const ("", Bytes.empty);
+      random = bytes_any;
+      adversarial = bytes_any;
+      equal = String.equal;
+      env = None;
+    }
+  in
+  check_decode_validate_agree label "all_zeros" g
+    (Bytes.of_string "\000\001\000")
+
+let signed_slice_semantic_codec () =
+  let len = Wire.Field.v "Len" Wire.int8 in
+  let data = Wire.Field.v "Data" (Wire.byte_slice ~size:(Wire.Field.ref len)) in
+  let cf_data = Wire.Codec.(data $ snd) in
+  let codec =
+    Wire.Codec.v "FuzzSignedSlice"
+      (fun l d -> (l, d))
+      Wire.Codec.[ len $ fst; cf_data ]
+  in
+  let g =
+    {
+      codec;
+      typ = Wire.codec codec;
+      positive = Alcobar.const ((0, slice_of_string ""), Bytes.of_string "\000");
+      random = bytes_any;
+      adversarial = bytes_any;
+      equal =
+        (fun (l1, s1) (l2, s2) ->
+          Int.equal l1 l2
+          && String.equal (string_of_slice s1) (string_of_slice s2));
+      env = None;
+    }
+  in
+  (g, codec, cf_data)
+
+let check_negative_byte_slice_semantic label () =
+  let g, codec, cf_data = signed_slice_semantic_codec () in
+  let bad = Bytes.of_string "\255" in
+  check_decode_validate_agree label "negative byte_slice" g bad;
+  match validate_one g bad with
+  | `Reject | `Crash -> ()
+  | `Ok -> (
+      match (Wire.Staged.unstage (Wire.Codec.get codec cf_data)) bad 0 with
+      | s ->
+          if Bytesrw.Bytes.Slice.length s < 0 then
+            Alcobar.failf "%s validate-then-get produced negative slice" label
+      | exception Invalid_argument m ->
+          Alcobar.failf "%s validate-then-get crashed: %s" label m)
+
+let semantic_invariant_cases label =
+  [
+    const_case
+      (label ^ " decode/validate all_zeros")
+      (check_all_zeros_semantic label);
+    const_case
+      (label ^ " decode/validate negative byte_slice")
+      (check_negative_byte_slice_semantic label);
+  ]
+
 type api_access = {
   a : int;
   hi : int;
@@ -4454,36 +4601,37 @@ let everparse_nested_cases label depth =
       (fun run -> run ());
   ]
 
-let afl_everparse_registry =
-  registry_subset
-    [
-      "uint8";
-      "int16be(endian_edges)";
-      "uint_var(3,big_edges)";
-      "bits(31,U32be,Lsb)";
-      "bitpack_u16be_spill(9,9)";
-      "byte_slice(3)";
-      "enum_open_u16be";
-      "optional_dynamic";
-      "record";
-      "casetype_u16be_default";
-      "param_size";
-    ]
+let everparse_projectable (_, Pack g) =
+  (* A construction-rejected shape ([Invalid_argument]) raises during the full
+     projection, and that rejection can fire in [to_3d] (rendering a [field_pos]
+     or a non-projectable arithmetic constraint), not just in [schema]. Run both
+     so such a codec is excluded from the sweep rather than crashing it. *)
+  try
+    let s = Wire.Everparse.schema g.codec in
+    ignore (Wire.Everparse.Raw.to_3d s.module_ : string);
+    true
+  with Invalid_argument _ -> false
 
-let afl_everparse_cases ?(max_len = 256) label =
-  [
-    Alcobar.test_case
-      (label ^ " afl projects+prints")
-      Alcobar.[ bytes_any ]
-      (fun bs ->
-        let bs = truncate_bytes ~max_len bs in
-        let name, Pack g = pick_by_first_byte afl_everparse_registry bs in
-        match Wire.Everparse.schema g.codec with
-        | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
-        | exception e ->
-            Alcobar.failf "%s %s: 3D projection raised %s" label name
-              (Printexc.to_string e));
-  ]
+(* A codec whose projection is rejected at construction ([Invalid_argument]) is
+   deliberately not in the EverParse sweep; [afl_everparse_excluded] names them
+   so the drop is visible (a future genuinely-unprojectable shape does not vanish
+   silently), mirroring [Diff_codecs.excluded]. *)
+let afl_everparse_registry, afl_everparse_excluded_pairs =
+  List.partition everparse_projectable registry
+
+let afl_everparse_excluded = List.map fst afl_everparse_excluded_pairs
+
+let afl_everparse_cases ?max_len label =
+  afl_contract_cases ?max_len label afl_everparse_registry
+    ~check:(fun case (Pack g) _input ->
+      match
+        let s = Wire.Everparse.schema g.codec in
+        ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+      with
+      | () -> ()
+      | exception e ->
+          Alcobar.failf "%s: 3D projection raised %s" case
+            (Printexc.to_string e))
 
 (* Per sample, pick a random registry gen and round-trip it through the
    alternate entry points, so they cover the whole registry over many samples

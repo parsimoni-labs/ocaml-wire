@@ -45,7 +45,7 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    (<> %{profile} afl)))
- (deps fuzz.exe)
+ (deps fuzz.exe ../afl.dict)
  (action
   (run %{exe:fuzz.exe})))
 
@@ -58,8 +58,22 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    (= %{profile} afl)))
- (deps fuzz.exe)
+ (deps fuzz.exe ../afl.dict)
  (action
   (progn
    (run %{exe:fuzz.exe} --gen-corpus corpus)
-   (run afl-fuzz -V 60 -t 8000 -i corpus -o _fuzz -- ./fuzz.exe @@))))
+   (run
+    afl-fuzz
+    -V
+    60
+    -t
+    8000
+    -x
+    ../afl.dict
+    -i
+    corpus
+    -o
+    _fuzz
+    --
+    ./fuzz.exe
+    @@))))

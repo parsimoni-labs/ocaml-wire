@@ -57,6 +57,16 @@ val invariant_cases : string -> Alcobar.test_case list
     adversarial terms, and the deterministic differential sampler remains
     reproducible and unique. *)
 
+val semantic_invariant_cases : string -> Alcobar.test_case list
+(** [semantic_invariant_cases label] checks high-level API invariants over exact
+    adversarial examples: decode/validate acceptance must agree, and
+    validate-then-get must not allow an out-of-bounds accessor path. *)
+
+val construction_guard_cases : string -> Alcobar.test_case list
+(** [construction_guard_cases label] asserts invalid DSL constructions are
+    rejected at construction time. These are shapes a byte-only fuzzer over a
+    valid registry cannot discover. *)
+
 val api_cases : string -> Alcobar.test_case list
 (** [api_cases label] exercises Wire API surfaces that are not naturally covered
     by value round-trips over one typ: staged [Codec.get] / [set] accessors,
@@ -119,11 +129,30 @@ val truncate_bytes : max_len:int -> bytes -> bytes
 (** [truncate_bytes ~max_len bs] caps [bs] at [max_len] bytes so one AFL exec
     stays cheap on a large input. *)
 
-val pick_by_first_byte : 'a list -> bytes -> 'a
-(** [pick_by_first_byte xs bs] selects one element of [xs] from the first byte
-    of [bs] (modulo the list length), so each AFL exec drives a single item and
-    coverage of the whole list accumulates across inputs. Raises
-    [Invalid_argument] on an empty list. *)
+type afl_input = { selector : int; mode : int; payload : bytes }
+(** Parsed AFL file input. {!field-selector} chooses the schema/target,
+    {!field-mode} chooses a target-specific contract branch, and
+    {!field-payload} is the protocol data passed to the codec or projection
+    check. *)
+
+val afl_payload : bytes -> bytes
+(** [afl_payload bs] strips the two-byte AFL control header and returns the
+    bytes that should be passed to the codec under test. *)
+
+val parse_afl_input : ?max_len:int -> bytes -> afl_input
+(** [parse_afl_input bs] parses the common two-byte AFL control header and
+    truncates the protocol payload to [max_len] bytes. *)
+
+val afl_contract_cases :
+  ?max_len:int ->
+  string ->
+  (string * 'a) list ->
+  check:(string -> 'a -> afl_input -> unit) ->
+  Alcobar.test_case list
+(** [afl_contract_cases label items ~check] is the shared file-input AFL
+    persistent-loop case. It selects one item per input via {!field-selector},
+    strips the control header, and delegates only the high-level property to
+    [check]. *)
 
 val everparse_cases : string -> 'a t -> Alcobar.test_case list
 (** [everparse_cases label g] projects [g]'s codec to a 3D schema and
@@ -140,6 +169,11 @@ val afl_everparse_cases : ?max_len:int -> string -> Alcobar.test_case list
     AFL bytes and asserts schema projection plus pretty-printing does not raise.
     Full registry and nested projection coverage remains in {!everparse_cases} /
     {!everparse_nested_cases}. *)
+
+val afl_everparse_excluded : string list
+(** Registry codecs left out of the EverParse sweep because their projection is
+    rejected at construction. Surfaced so the exclusion is visible rather than
+    silent. *)
 
 val entry_point_cases : string -> Alcobar.test_case list
 (** [entry_point_cases label] round-trips the alternate entry points
