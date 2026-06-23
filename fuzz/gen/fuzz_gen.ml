@@ -3384,43 +3384,6 @@ let registry_subset labels =
       | None -> invalid_arg ("unknown fuzz registry label: " ^ label))
     labels
 
-let afl_registry =
-  registry_subset
-    [
-      "uint8";
-      "uint16be";
-      "uint_var(3,little_edges)";
-      "uint_var(7,big_edges)";
-      "int8";
-      "int16be(endian_edges)";
-      "int64";
-      "bits(1,U8,Lsb)";
-      "bits(31,U32be,Lsb)";
-      "bitpack_u8_spill(5,5)";
-      "bitpack_u16be_spill(9,9)";
-      "bitpack_u32be_lsb(6,10,16)";
-      "byte_array(0)";
-      "byte_slice(3)";
-      "all_bytes";
-      "all_zeros";
-      "zeroterm_at_most(8)";
-      "enum_open_u16be";
-      "bounded_u16be";
-      "optional_dynamic";
-      "nested_at_most(4,uint16be)";
-      "array(2,record)";
-      "repeat(7,uint16be)";
-      "record";
-      "casetype_u8";
-      "casetype_u16be_default";
-      "field_constraint";
-      "self_int64";
-      "rest_bytes";
-      "param_size";
-      "finite_float64";
-      "nan_float64";
-    ]
-
 let truncate_bytes ~max_len bs =
   if Bytes.length bs <= max_len then bs else Bytes.sub bs 0 max_len
 
@@ -3453,10 +3416,13 @@ let afl_cases_for ?(max_len = 256) cases label =
             check_validate_safety case "afl" ?env g bs);
       ]
 
-let afl_cases ?max_len label = afl_cases_for ?max_len afl_registry label
+(* AFL fuzzes the whole registry, not a curated subset: [pick_by_first_byte]
+   selects one codec per input, so covering every combinator costs nothing
+   per-exec and only spreads mutation across more shapes over a run. *)
+let afl_cases ?max_len label = afl_cases_for ?max_len registry label
 
 let afl_env_cases ?max_len label =
-  let env_cases = List.filter (fun (_, p) -> binds_env p) afl_registry in
+  let env_cases = List.filter (fun (_, p) -> binds_env p) registry in
   afl_cases_for ?max_len env_cases label
 
 (* {1 Boltzmann sampler over the projectable grammar}
@@ -3516,6 +3482,8 @@ let sampler_adversarial_leaves : any list =
     Any { g = bitpack_u8_msb; size = Some 1; label = "bp8m" };
     Any { g = bitpack_u8_lsb; size = Some 1; label = "bp8l" };
     Any { g = bitpack_u16be_lsb; size = Some 2; label = "bp16bel" };
+    Any { g = bitpack_u32_msb; size = Some 4; label = "bp32m" };
+    Any { g = bitpack_u32be_lsb; size = Some 4; label = "bp32bel" };
     Any { g = enum_open; size = Some 1; label = "enum_open" };
     Any { g = bounded_u8 ~min:10 ~max:100; size = Some 1; label = "bnd" };
     Any
@@ -3626,16 +3594,6 @@ let assert_contains group labels expected =
       if not (List.mem label labels) then
         Alcobar.failf "%s missing %s" group label)
     expected
-
-let string_contains_sub s sub =
-  let len = String.length s and sub_len = String.length sub in
-  if sub_len = 0 then true
-  else if sub_len > len then false
-  else
-    let rec loop i =
-      i + sub_len <= len && (String.sub s i sub_len = sub || loop (i + 1))
-    in
-    loop 0
 
 let expected_registry_labels =
   [
@@ -3901,6 +3859,8 @@ let check_composition_vocabulary () =
       "bp8m";
       "bp8l";
       "bp16bel";
+      "bp32m";
+      "bp32bel";
       "enum";
       "enum_open";
       "lkp";
@@ -3919,15 +3879,14 @@ let check_sampler_invariants () =
     labels
 
 let check_sampler_adversarial_bias () =
-  let adversarial_labels = any_labels sampler_adversarial_leaves in
-  let labels = List.map fst (sample ~seed:7 ~count:256) in
+  let adversarial = any_labels sampler_adversarial_leaves in
+  let is_adversarial l = List.mem l adversarial in
+  let metas = List.map (fun (_, _, m) -> m) (sampled ~seed:7 ~count:256) in
   let adversarial_hits =
     List.fold_left
-      (fun count label ->
-        if List.exists (string_contains_sub label) adversarial_labels then
-          count + 1
-        else count)
-      0 labels
+      (fun count m ->
+        if List.exists is_adversarial m.leaves then count + 1 else count)
+      0 metas
   in
   if adversarial_hits < 160 then
     Alcobar.failf
@@ -3973,6 +3932,7 @@ let check_sampler_distribution () =
         has_any [ "bits3lsb"; "bits15u16belsb"; "bp8l"; "bp16bel" ] );
       ("no 8-bit bitpack", has_any [ "bp8m"; "bp8l" ]);
       ("no 16-bit bitpack", has "bp16bel");
+      ("no 32-bit bitpack", has_any [ "bp32m"; "bp32bel" ]);
     ]
   in
   List.iter
