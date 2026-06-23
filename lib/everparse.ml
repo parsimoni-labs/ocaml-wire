@@ -417,7 +417,7 @@ let rewrite_absent_optional (Types.Field f) =
       Types.Field { f with field_typ = Types.Unit; constraint_ = None }
   | _ -> Types.Field f
 
-let with_output (s : Types.struct_) : Types.decl list =
+let ffi_decls (s : Types.struct_) : Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
   (* Extern declarations for the callback mechanism *)
   let ctx_struct = Types.struct_ "WireCtx" [] in
@@ -449,13 +449,13 @@ let with_output (s : Types.struct_) : Types.decl list =
   [ ctx_decl ] @ extern_decls @ refined_decls @ [ parse_decl ]
 
 (* Documentation / pure-validator projection: the same structural 3D as
-   [with_output] but without the FFI scaffolding. No [WireCtx] extern, no
+   [ffi_decls] but without the FFI scaffolding. No [WireCtx] extern, no
    [WireSet*] setters, no extraction action injected on each field. Keeps the
    struct, bitfields, [where] clause, refined-byte typedefs, enums, and
    casetypes -- everything that describes the wire format. Reads as a protocol
    spec, and 3d.exe still compiles it to a real (validator-only) C parser with
    no FFI. *)
-let doc_decls ?doc (s : Types.struct_) : Types.decl list =
+let standalone_decls ?doc (s : Types.struct_) : Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
   let parse_fields = reorder_bit_groups_for_3d s.fields in
   let parse_struct =
@@ -498,15 +498,15 @@ let coalesced_wire_size fields =
     Some (close_bit_group total open_base)
   with Bail -> None
 
-let schema_of_struct (s : Types.struct_) : t =
+let ffi_of_struct (s : Types.struct_) : t =
   (* Split string-tagged casetype fields up-front so [source] and
-     [with_output] see the same field list. Downstream codegen
+     [ffi_decls] see the same field list. Downstream codegen
      (plug fields, stubs) walks [source] to expose every named field --
      it must include the synthesised body field of each casetype. *)
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
-  let decls = with_output s in
+  let decls = ffi_decls s in
   let m = Types.module_ decls in
   (* [schema] is the authoritative projectability gate: a constraint with no 3D
      projection (a [field_pos], a subtraction or multiplication over a field) is
@@ -517,21 +517,29 @@ let schema_of_struct (s : Types.struct_) : t =
   ignore (Types.to_3d m : string);
   { name; module_ = m; wire_size; source = Some s }
 
-let schema (type r) (codec : r Codec.t) : t =
-  schema_of_struct (Codec.to_struct codec)
-
-let doc_of_struct ?doc (s : Types.struct_) : t =
+let standalone_of_struct ?doc (s : Types.struct_) : t =
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
-  let m = Types.module_ (doc_decls ?doc s) in
-  (* Authoritative projectability gate, as in [schema_of_struct]; the doc
+  let m = Types.module_ (standalone_decls ?doc s) in
+  (* Authoritative projectability gate, as in [ffi_of_struct]; the doc
      projection renders enums as named types. *)
   ignore (Types.to_3d ~enum_as_type:true m : string);
   { name; module_ = m; wire_size; source = Some s }
 
-let doc (type r) (codec : r Codec.t) : t =
-  doc_of_struct ?doc:(Codec.doc codec) (Codec.to_struct codec)
+type mode = [ `Ffi | `Standalone ]
+
+(* [`Ffi] emits the [WireCtx] extern plus a per-field setter callback, so the
+   generated C validator is callable from OCaml and extracts fields through the
+   plug (the bridge used by benchmarks and differential testing). [`Standalone]
+   emits a clean [.3d] with no FFI scaffolding, which EverParse compiles to a
+   standalone verified C parser; it also reads as a protocol specification. *)
+let project : type r. ?mode:mode -> r Codec.t -> t =
+ fun ?(mode = `Standalone) codec ->
+  match mode with
+  | `Ffi -> ffi_of_struct (Codec.to_struct codec)
+  | `Standalone ->
+      standalone_of_struct ?doc:(Codec.doc codec) (Codec.to_struct codec)
 
 let filename (s : t) = String.capitalize_ascii s.name ^ ".3d"
 
@@ -617,7 +625,7 @@ let field_action_forms (st : Types.struct_) =
       (f.field_name, is_bitfield f.field_typ, form))
     st.fields
 
-let write_3d ~outdir schemas =
+let write_ffi ~outdir schemas =
   List.iter
     (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
     schemas
@@ -654,10 +662,20 @@ let merge ~name (ts : t list) : t =
   in
   { name; module_ = Types.module_ decls; wire_size = None; source = None }
 
-let write_doc ~outdir ~name (ts : t list) =
+let write_standalone ~outdir ~name (ts : t list) =
   Types.to_3d_file ~enum_as_type:true
     (Filename.concat outdir (String.capitalize_ascii name ^ ".3d"))
     (merge ~name ts).module_
+
+(* [`Ffi] writes one [.3d] per schema (file name from each schema). [`Standalone]
+   merges the schemas into one [<name>.3d] so a protocol family reads as a single
+   spec, and so requires [~name]. *)
+let write ?(mode = `Standalone) ~outdir ?name (ts : t list) =
+  match (mode, name) with
+  | `Ffi, _ -> write_ffi ~outdir ts
+  | `Standalone, Some name -> write_standalone ~outdir ~name ts
+  | `Standalone, None ->
+      invalid_arg "Everparse.write: ~mode:`Standalone requires ~name"
 
 (* Public C-facing types *)
 
@@ -687,6 +705,12 @@ module Raw = struct
   let module_ = Types.module_
   let to_3d = Types.to_3d
   let to_3d_file = Types.to_3d_file
+  let struct_of_codec = struct_of_codec
+
+  let project_struct ?(mode = `Standalone) s =
+    match mode with
+    | `Ffi -> ffi_of_struct s
+    | `Standalone -> standalone_of_struct s
 
   let field name ?constraint_ ?action typ =
     Field.Named (Field.v name ?constraint_ ?action typ)

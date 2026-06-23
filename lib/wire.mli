@@ -336,7 +336,7 @@ end
     Define each field once with {!Field.v}, then reuse it everywhere: bind it
     into a {!Codec} for zero-copy access and full-record round-trips, reference
     it from dependent expressions with {!Field.ref}, or project it to EverParse
-    3D via {!Everparse.schema}.
+    3D via {!Everparse.project}.
 
     {[
     open Wire
@@ -859,7 +859,7 @@ val to_string : 'a typ -> 'a -> string
       then {!Codec.extract} retrieves each sub-field with pure shift+mask.
 
     All three modes derive from the same definition, so the layout is always
-    consistent. {!Everparse.schema} projects the same codec to a verified C
+    consistent. {!Everparse.project} projects the same codec to a verified C
     parser -- no separate description to maintain. *)
 
 module Codec : sig
@@ -880,7 +880,8 @@ module Codec : sig
     string -> ?where:bool expr -> ?doc:string -> 'f -> ('f, 'r) fields -> 'r t
   (** [v name constructor fields] seals a codec. [?doc] attaches a free-text
       note (e.g. an RFC citation) that the documentation projection renders as a
-      [/*++ ... --*/] comment on the codec's 3D typedef; see {!doc}.
+      [/*++ ... --*/] comment on the codec's 3D typedef; see
+      {!Everparse.project}.
 
       {[
       let codec =
@@ -1074,8 +1075,8 @@ val codec : 'r Codec.t -> 'r typ
     {!Everparse} is the pure export layer. The normal workflow is:
 
     - build a record-shaped description with {!Field} and {!Codec};
-    - project it with {!Everparse.schema};
-    - emit one [.3d] file per schema with {!Everparse.write_3d};
+    - project it with {!Everparse.project};
+    - emit one [.3d] file per schema with {!Everparse.write};
     - run EverParse/C tooling with [Wire_3d];
     - optionally generate OCaml FFI stubs with [Wire_stubs].
 
@@ -1100,24 +1101,23 @@ module Everparse : sig
     module_ : module_;
     wire_size : int option;
     source : struct_ option;
-        (** Pre-[with_output] source struct, [Some] for codec-derived schemas
-            and [None] for raw-module schemas. *)
+        (** Pre-[ffi_decls] source struct, [Some] for codec-derived schemas and
+            [None] for raw-module schemas. *)
   }
   (** A named 3D schema with its module and wire size ([None] for variable-size
       schemas). *)
 
-  val struct_of_codec : 'r Codec.t -> struct_
-  (** Projects a record codec to a 3D struct. *)
+  type mode = [ `Ffi | `Standalone ]
+  (** How a codec projects to 3D. [`Standalone] (the default) emits a clean
+      [.3d] that EverParse compiles to a standalone verified C parser, which
+      also reads as a protocol specification. [`Ffi] emits the [WireCtx] extern
+      and per-field setter callbacks ([<Name>Set*]), so the C validator is
+      callable from OCaml and extracts every field through the plug (used by
+      benchmarks and differential testing). *)
 
-  val schema_of_struct : struct_ -> t
-  (** [schema_of_struct s] builds a schema from a raw 3D struct while using the
-      same EverParse output-types pattern as {!schema}. Named fields extract via
-      [WireSet*] callbacks; anonymous fields remain validation-only. *)
-
-  val schema : 'r Codec.t -> t
-  (** [schema codec] builds a schema from a codec. The resulting module uses the
-      EverParse output-types pattern: the generated C validates AND extracts all
-      field values via schema-prefixed extern callbacks ([<Name>Set*]). *)
+  val project : ?mode:mode -> 'r Codec.t -> t
+  (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
+      [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
 
   val filename : t -> string
   (** [filename s] is the [.3d] output filename for schema [s]. *)
@@ -1126,7 +1126,7 @@ module Everparse : sig
   (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
       typedef. The generated C header then [#include]s
       [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
-      Schemas built via {!schema} always satisfy this. *)
+      Schemas built via {!project} always satisfy this. *)
 
   type plug_field = {
     name : string;
@@ -1161,29 +1161,20 @@ module Everparse : sig
       {!constructor:On_act}, scalars {!constructor:On_success}, anonymous fields
       {!constructor:No_action}. *)
 
-  val write_3d : outdir:string -> t list -> unit
-  (** Writes one [.3d] file per schema into [outdir]. *)
-
-  val doc : 'r Codec.t -> t
-  (** [doc codec] projects [codec] to a clean schema for documentation and
-      pure-C parser generation: the same structural 3D as {!schema} (struct,
-      bitfields, {!val-where} clause, enums, casetypes, refined-byte typedefs)
-      but without the FFI scaffolding (no [WireCtx] extern, no [WireSet*]
-      callbacks). It reads as a protocol specification, and 3d.exe compiles it
-      to a validator-only C parser with no FFI. *)
-
-  val write_doc : outdir:string -> name:string -> t list -> unit
-  (** [write_doc ~outdir ~name ts] merges the (doc) schemas [ts] into one module
-      -- a type shared across codecs is emitted once -- and writes a single
-      [<Name>.3d] into [outdir], so a whole protocol family reads as one
-      document. *)
+  val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
+  (** [write ?mode ~outdir ?name ts] writes the projected schemas to [outdir].
+      With [`Ffi], one [.3d] per schema (its file name taken from the schema)
+      and [~name] is ignored. With [`Standalone] (the default), the schemas are
+      merged into a single [<name>.3d] -- a type shared across several codecs is
+      emitted once -- so a whole protocol family reads as one spec, and [~name]
+      is required. *)
 
   module Raw : sig
     (** Escape hatch for manual 3D authoring.
 
         These constructors exist for EverParse features that currently have no
-        codec-level equivalent. Most users should stay on the {!Field}/{!Codec}
-        path and use {!struct_of_codec} or {!schema}. *)
+        codec-level equivalent, plus the struct-level projection knobs. Most
+        users should stay on the {!Field}/{!Codec} path and use {!project}. *)
 
     type nonrec struct_ = struct_
     type field = Field.packed
@@ -1234,6 +1225,13 @@ module Everparse : sig
     val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
     (** Writes a rendered 3D module to a file. See {!to_3d} for [enum_as_type].
     *)
+
+    val struct_of_codec : 'r Codec.t -> struct_
+    (** Lower a codec to its 3D struct, the intermediate the stubs and benchmark
+        codegen operate on. *)
+
+    val project_struct : ?mode:mode -> struct_ -> t
+    (** [project_struct ?mode s] is {!project} on an already-lowered struct. *)
 
     val field :
       string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field

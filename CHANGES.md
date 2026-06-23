@@ -46,8 +46,9 @@
   renders as a `/* ... */` comment above the field in the generated 3D. A
   protocol spec can now cite the standard each individual field comes from, not
   just the struct as a whole, and EverParse accepts the comment (#157, @samoht)
-- The documentation pipeline (`Wire_3d.main ~mode:`Doc`) now auto-generates a
-  differential self-check: `dune runtest` fuzzes inputs, records whether the
+- The standalone projection pipeline (`Wire_3d.main ~mode:`Standalone`) now
+  auto-generates a differential self-check: `dune runtest` fuzzes inputs,
+  records whether the
   OCaml codec accepts each, and replays them through the EverParse-generated C
   validator, failing on any input the two decide differently. This catches a
   doc projection that drifts from the codec (a wrong bit order, a constraint
@@ -61,16 +62,16 @@
   spec then documents which standard each protocol struct comes from, and
   EverParse accepts the comment (#155, @samoht)
 - `Wire_3d`'s documentation helpers (`generate_doc`, `generate_dune_doc`, and
-  `main ~mode:`Doc`) take an optional `?name` that sets the generated
+  `main ~mode:`Standalone`) take an optional `?name` that sets the generated
   `<Name>.3d` / `<Name>.c` file base independently of the opam `~package`, so a
   package like `ocaml-tcp` can emit a `Tcp.3d` spec while still installing under
   its own name (#154, @samoht)
-- `Wire.Everparse.doc` and `Wire.Everparse.write_doc` project a codec, or a
-  whole family of codecs, to a clean `.3d` with no FFI scaffolding: enums
-  render as named 3D enum types, types shared across codecs are emitted once,
-  and a protocol family lands in one readable `<Name>.3d`. The result doubles
-  as a protocol specification and as input to EverParse, which compiles it to a
-  standalone C validator with no FFI (#151, @samoht)
+- `Wire.Everparse.project ~mode:`Standalone` and `Wire.Everparse.write` project
+  a codec, or a whole family of codecs, to a clean `.3d` with no FFI
+  scaffolding: enums render as named 3D enum types, types shared across codecs
+  are emitted once, and a protocol family lands in one readable `<Name>.3d`. The
+  result doubles as a protocol specification and as input to EverParse, which
+  compiles it to a standalone verified C parser with no FFI (#151, @samoht)
 - `Wire.Codec.rename` returns a codec with a new name, leaving its wire
   encoding and field constraints unchanged, so a generically built codec can
   be given a unique, meaningful name before code generation (@samoht)
@@ -122,6 +123,18 @@
 
 ### Changed
 
+- The EverParse projection API is consolidated to two entry points. The two
+  projections, previously `Wire.Everparse.schema` and `Wire.Everparse.doc`, are
+  now `Wire.Everparse.project ?mode`, where `` `Standalone `` (the default)
+  emits a clean `.3d` that EverParse compiles to a standalone verified C parser
+  (the production output, which also reads as a spec) and `` `Ffi `` emits the
+  OCaml-callable bridge with `WireCtx` extern callbacks. Writing is likewise one
+  `Wire.Everparse.write ?mode` (replacing `write_3d` and `write_doc`). The
+  struct-level entry points `struct_of_codec` and `schema_of_struct` move under
+  `Wire.Everparse.Raw` (as `struct_of_codec` and `project_struct`), and
+  `Wire_3d.main`'s mode is now `` `Standalone `` rather than `` `Doc `` (#210,
+  @samoht)
+
 - A long `?doc` note on a field or codec (an RFC citation, say) now wraps across
   several comment lines in the generated `.3d` instead of rendering as one line
   past 80 columns, so the generated spec stays readable (#191, @samoht)
@@ -137,13 +150,13 @@
   demand (#168, @samoht)
 
 - `Wire_3d.main` now takes packed codecs (`Wire_3d.pack codec`) and a
-  mandatory `~mode:[`Ffi | `Doc]`, so every `gen.ml` states what it emits.
-  `` `Ffi `` keeps the per-codec FFI parsers; `` `Doc `` emits one FFI-free
-  `<Package>.3d` specification and a single validator-only `<Package>.c` for
-  the whole package, through the new `Wire_3d.generate_doc` and
+  mandatory `~mode:[`Ffi | `Standalone]`, so every `gen.ml` states what it
+  emits. `` `Ffi `` keeps the per-codec FFI parsers; `` `Standalone `` emits one
+  FFI-free `<Package>.3d` specification and a single standalone `<Package>.c`
+  parser for the whole package, through the new `Wire_3d.generate_doc` and
   `Wire_3d.generate_dune_doc`. Migrate a `gen.ml` by replacing
-  `[schema c; ...]` with `~mode:`Ffi [pack c; ...]`, or `~mode:`Doc` for the
-  single-file output (#152, @samoht)
+  `[schema c; ...]` with `~mode:`Ffi [pack c; ...]`, or `~mode:`Standalone` for
+  the single-file output (#152, @samoht)
 - Reading or writing a `uint32` or `uint63` field now stays in the native
   `int` instead of round-tripping through a boxed `Int32` or `Int64`. The
   boxing surfaced as per-field allocation in tight decode and encode loops;
@@ -220,11 +233,11 @@
 
 ### Fixed
 
-- `Wire.Everparse.schema` (and `doc`) now reject a codec that cannot project to
-  3D when the schema is built, not later when it is rendered. A constraint with
-  no 3D projection (a `field_pos`, or a subtraction or multiplication over a
-  field) used to build a schema that only raised once passed to `to_3d`, so
-  `schema` was not a reliable projectability check (#209, @samoht)
+- `Wire.Everparse.project` now rejects a codec that cannot project to 3D when
+  the schema is built, not later when it is rendered. A constraint with no 3D
+  projection (a `field_pos`, or a subtraction or multiplication over a field)
+  used to build a schema that only raised once passed to `to_3d`, so the
+  projection was not a reliable projectability check (#209, @samoht)
 
 - `Codec.validate` now enforces every check `Codec.decode` does, for any codec.
   It used to skip a field's own decode-side checks (enum and variant membership,

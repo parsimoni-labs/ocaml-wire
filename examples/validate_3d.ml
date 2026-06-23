@@ -5,7 +5,7 @@ module Raw = Wire.Everparse.Raw
 
 (* Two emission paths matter and both should produce parseable 3D:
    - [Raw]: a hand-built struct or module written via [to_3d_file].
-   - [Codec]: a Wire codec projected via [Wire.Everparse.schema] and
+   - [Codec]: a Wire codec projected via [Wire.Everparse.project ~mode:`Ffi] and
      [Wire_3d.generate_3d]. This path adds entrypoint params, output
      types, and the [<Name>Set*] callbacks that the C validator uses. *)
 type case =
@@ -13,7 +13,7 @@ type case =
   | Codec : string * 'a Wire.Codec.t -> case
   | Doc of string * Wire.Everparse.t list
       (** A whole protocol family projected with {!Wire.Everparse.doc} and
-          merged into one [<Name>.3d] by {!Wire.Everparse.write_doc}. *)
+          merged into one [<Name>.3d] by {!Wire.Everparse.write}. *)
 
 let case_name = function Raw (n, _) | Codec (n, _) | Doc (n, _) -> n
 
@@ -30,17 +30,25 @@ let doc_cases =
       ( "Net",
         Wire.Everparse.
           [
-            doc Net.ethernet_codec;
-            doc Net.ipv4_codec;
-            doc Net.tcp_codec;
-            doc Net.udp_codec;
+            project ~mode:`Standalone Net.ethernet_codec;
+            project ~mode:`Standalone Net.ipv4_codec;
+            project ~mode:`Standalone Net.tcp_codec;
+            project ~mode:`Standalone Net.udp_codec;
           ] );
     Doc
-      ("Space", Wire.Everparse.[ doc Space.clcw_codec; doc Space.packet_codec ]);
+      ( "Space",
+        Wire.Everparse.
+          [
+            project ~mode:`Standalone Space.clcw_codec;
+            project ~mode:`Standalone Space.packet_codec;
+          ] );
     Doc
       ( "Demo",
-        Wire.Everparse.[ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]
-      );
+        Wire.Everparse.
+          [
+            project ~mode:`Standalone Demo.enum_demo_codec;
+            project ~mode:`Standalone Demo.cases_demo_codec;
+          ] );
   ]
 
 let cases =
@@ -90,11 +98,11 @@ let emit ~outdir = function
       Raw.to_3d_file path module_;
       name ^ ".3d"
   | Codec (_, codec) ->
-      let s = Wire.Everparse.schema codec in
+      let s = Wire.Everparse.project ~mode:`Ffi codec in
       Wire_3d.generate_3d ~outdir [ s ];
       Wire.Everparse.filename s
   | Doc (name, ts) ->
-      Wire.Everparse.write_doc ~outdir ~name ts;
+      Wire.Everparse.write ~mode:`Standalone ~outdir ~name ts;
       String.capitalize_ascii name ^ ".3d"
 
 let validate_one case =

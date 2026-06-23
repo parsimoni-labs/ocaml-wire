@@ -20,7 +20,7 @@ the format, then:
 - **Read and write fields in-place** via `Codec.get` / `Codec.set` -- zero-copy,
   zero-allocation for immediate types (int, bool)
 - **Decode and encode records** via `Codec.decode` / `Codec.encode`
-- **Export EverParse `.3d` schemas** via `Everparse.schema` / `Everparse.write_3d`
+- **Export EverParse `.3d` schemas** via `Everparse.project` / `Everparse.write`
 - **Generate verified C artifacts** via `Wire_3d.run`
 - **Generate OCaml FFI stubs** via `Wire_stubs` when OCaml should call the C
 - **Render RFC-style ASCII diagrams** via `Ascii.of_codec`
@@ -93,9 +93,9 @@ let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len))
 The same codec produces `.3d` files:
 
 ```ocaml
-let schema = Everparse.schema codec
+let schema = Everparse.project ~mode:`Ffi codec
 
-let _write () = Everparse.write_3d ~outdir:"schemas" [ schema ]
+let _write () = Everparse.write ~mode:`Ffi ~outdir:"schemas" [ schema ]
 ```
 
 The 3D output uses the EverParse output-types pattern: the generated C

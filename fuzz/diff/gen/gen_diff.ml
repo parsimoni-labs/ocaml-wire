@@ -20,7 +20,7 @@ let lower_name g =
     (Wire.Everparse.Raw.struct_name
        (Option.get
           (Wire.Everparse.entrypoint_struct
-             (Wire.Everparse.schema (Fuzz_gen.codec g)))))
+             (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)))))
 
 let copy_file ~src ~dst =
   In_channel.with_open_bin src (fun ic ->
@@ -73,7 +73,8 @@ let job_count () =
       match int_of_string_opt s with Some k when k >= 1 -> k | _ -> 4)
   | None -> max 1 (min 4 (Domain.recommended_domain_count ()))
 
-let schema_of (_, Fuzz_gen.Pack g) = Wire.Everparse.schema (Fuzz_gen.codec g)
+let schema_of (_, Fuzz_gen.Pack g) =
+  Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)
 
 let base_of item =
   Filename.remove_extension (Wire.Everparse.filename (schema_of item))

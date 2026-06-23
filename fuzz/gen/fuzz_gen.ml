@@ -4356,10 +4356,10 @@ let check_metadata_helpers () =
   | Ok _ -> check_int "Param.get output" 7 (Param.get env p_out)
   | Error e -> Alcobar.failf "param/action decode failed: %a" pp_parse_error e);
   check_string "Codec schema name" "ApiParam"
-    (Wire.Everparse.schema codec).Wire.Everparse.name;
+    (Wire.Everparse.project ~mode:`Ffi codec).Wire.Everparse.name;
   let renamed = Wire.Codec.rename "ApiParamRenamed" codec in
   check_string "Codec.rename" "ApiParamRenamed"
-    (Wire.Everparse.schema renamed).Wire.Everparse.name;
+    (Wire.Everparse.project ~mode:`Ffi renamed).Wire.Everparse.name;
   if Wire.Codec.doc codec <> None then
     Alcobar.failf "Codec.doc unexpectedly set";
   let pp_value = Fmt.str "%a" (pp_value codec) (7, 1) in
@@ -4386,7 +4386,7 @@ let public_raw_struct () =
   (len_field, raw_struct)
 
 let check_everparse_schema raw_struct =
-  let schema = Wire.Everparse.schema_of_struct raw_struct in
+  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi raw_struct in
   check_string "Everparse.filename" "ApiRaw.3d" (Wire.Everparse.filename schema);
   if not (Wire.Everparse.uses_wire_ctx schema) then
     Alcobar.failf "schema_of_struct did not use WireCtx";
@@ -4487,8 +4487,8 @@ let check_raw_module_helpers raw_struct p param_struct =
   in
   check_string "Raw.of_module" "ApiModule" module_schema.Wire.Everparse.name;
   let codec = fst5 (api_access_codec ()) in
-  let st = Wire.Everparse.struct_of_codec codec in
-  let _ = Wire.Everparse.doc codec in
+  let st = Wire.Everparse.Raw.struct_of_codec codec in
+  let _ = Wire.Everparse.project ~mode:`Standalone codec in
   let _ = Fmt.str "%a" Wire.Ascii.pp_struct st in
   let _ = Fmt.str "%a" Wire.Ascii.pp_codec codec in
   ()
@@ -4513,14 +4513,14 @@ let once_case name check =
 
 let check_write_helpers_once () =
   let codec = fst5 (api_access_codec ()) in
-  let schema = Wire.Everparse.schema codec in
-  let doc_schema = Wire.Everparse.doc codec in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let doc_schema = Wire.Everparse.project ~mode:`Standalone codec in
   let outdir =
     Filename.concat (Filename.get_temp_dir_name ()) "wire_fuzz_api"
   in
   (try Sys.mkdir outdir 0o700 with Sys_error _ -> ());
-  Wire.Everparse.write_3d ~outdir [ schema ];
-  Wire.Everparse.write_doc ~outdir ~name:"ApiDoc" [ doc_schema ];
+  Wire.Everparse.write ~mode:`Ffi ~outdir [ schema ];
+  Wire.Everparse.write ~mode:`Standalone ~outdir ~name:"ApiDoc" [ doc_schema ];
   Wire.Everparse.Raw.to_3d_file ~enum_as_type:true
     (Filename.concat outdir "ApiRawDirect.3d")
     schema.module_
@@ -4572,7 +4572,7 @@ let everparse_cases label g =
       (label ^ " projects+prints")
       Alcobar.[ Alcobar.const () ]
       (fun () ->
-        match Wire.Everparse.schema g.codec with
+        match Wire.Everparse.project ~mode:`Ffi g.codec with
         | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
         | exception e ->
             Alcobar.failf "%s: 3D projection raised %s" label
@@ -4588,7 +4588,7 @@ let everparse_nested_cases label depth =
       (fun (Any a) ->
         let comp = a.label and codec = a.g.codec in
         fun () ->
-          match Wire.Everparse.schema codec with
+          match Wire.Everparse.project ~mode:`Ffi codec with
           | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
           | exception e ->
               Alcobar.failf "%s [%s]: 3D projection raised %s" label comp
@@ -4607,7 +4607,7 @@ let everparse_projectable (_, Pack g) =
      or a non-projectable arithmetic constraint), not just in [schema]. Run both
      so such a codec is excluded from the sweep rather than crashing it. *)
   try
-    let s = Wire.Everparse.schema g.codec in
+    let s = Wire.Everparse.project ~mode:`Ffi g.codec in
     ignore (Wire.Everparse.Raw.to_3d s.module_ : string);
     true
   with Invalid_argument _ -> false
@@ -4625,7 +4625,7 @@ let afl_everparse_cases ?max_len label =
   afl_contract_cases ?max_len label afl_everparse_registry
     ~check:(fun case (Pack g) _input ->
       match
-        let s = Wire.Everparse.schema g.codec in
+        let s = Wire.Everparse.project ~mode:`Ffi g.codec in
         ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
       with
       | () -> ()

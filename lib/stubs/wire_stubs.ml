@@ -272,7 +272,9 @@ let write_file path content =
 type packed_codec = C : _ Wire.Codec.t -> packed_codec
 
 let of_structs ~schema_dir ~outdir structs =
-  let schemas = List.map Wire.Everparse.schema_of_struct structs in
+  let schemas =
+    List.map (Wire.Everparse.Raw.project_struct ~mode:`Ffi) structs
+  in
   Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
   Wire_3d.write_fields ~outdir:schema_dir schemas;
   write_file (Filename.concat outdir "wire_ffi.c") (to_c_stubs structs);
@@ -280,6 +282,6 @@ let of_structs ~schema_dir ~outdir structs =
 
 let generate ~schema_dir ~outdir codecs =
   let structs =
-    List.map (fun (C c) -> Wire.Everparse.struct_of_codec c) codecs
+    List.map (fun (C c) -> Wire.Everparse.Raw.struct_of_codec c) codecs
   in
   of_structs ~schema_dir ~outdir structs

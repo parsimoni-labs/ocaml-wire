@@ -8,7 +8,7 @@ let n_data = 1024
    This derives the projection from the codec's own field list, avoiding
    hand-copied field layouts that can drift from the codec definition. *)
 let project (type r) (codec : r Codec.t) ~name ~keep =
-  Everparse.Raw.struct_project (Everparse.struct_of_codec codec) ~name ~keep
+  Everparse.Raw.struct_project (Everparse.Raw.struct_of_codec codec) ~name ~keep
 
 let project_one (type r a) (codec : r Codec.t) ~name ~keep:(f : a Field.t) =
   project codec ~name ~keep:[ Field.Named f ]

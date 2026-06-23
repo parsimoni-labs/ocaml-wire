@@ -34,11 +34,11 @@ let () =
       Demo.param_payload_struct;
       Space.clcw_struct;
       Space.packet_struct;
-      Wire.Everparse.struct_of_codec Space.full_packet_codec;
+      Wire.Everparse.Raw.struct_of_codec Space.full_packet_codec;
       Space.tm_frame_struct;
-      Wire.Everparse.struct_of_codec Space.tm_with_ocf_codec;
-      Wire.Everparse.struct_of_codec Space.inner_cmd_codec;
-      Wire.Everparse.struct_of_codec Space.outer_hdr_codec;
+      Wire.Everparse.Raw.struct_of_codec Space.tm_with_ocf_codec;
+      Wire.Everparse.Raw.struct_of_codec Space.inner_cmd_codec;
+      Wire.Everparse.Raw.struct_of_codec Space.outer_hdr_codec;
       Net.ethernet_struct;
       Net.ipv4_struct;
       Net.tcp_struct;
@@ -52,18 +52,27 @@ let () =
       ("Outer.3d", Demo.type_ref_module);
     ];
   (* Documentation specs: a whole protocol family in one readable [.3d],
-     projected without the FFI scaffolding (see [Wire.Everparse.doc]). *)
+     projected without the FFI scaffolding (see [Wire.Everparse.project]). *)
   List.iter
-    (fun (name, ts) -> Wire.Everparse.write_doc ~outdir:"." ~name ts)
+    (fun (name, ts) ->
+      Wire.Everparse.write ~mode:`Standalone ~outdir:"." ~name ts)
     Wire.Everparse.
       [
         ( "net",
           [
-            doc Net.ethernet_codec;
-            doc Net.ipv4_codec;
-            doc Net.tcp_codec;
-            doc Net.udp_codec;
+            project ~mode:`Standalone Net.ethernet_codec;
+            project ~mode:`Standalone Net.ipv4_codec;
+            project ~mode:`Standalone Net.tcp_codec;
+            project ~mode:`Standalone Net.udp_codec;
           ] );
-        ("space", [ doc Space.clcw_codec; doc Space.packet_codec ]);
-        ("demo", [ doc Demo.enum_demo_codec; doc Demo.cases_demo_codec ]);
+        ( "space",
+          [
+            project ~mode:`Standalone Space.clcw_codec;
+            project ~mode:`Standalone Space.packet_codec;
+          ] );
+        ( "demo",
+          [
+            project ~mode:`Standalone Demo.enum_demo_codec;
+            project ~mode:`Standalone Demo.cases_demo_codec;
+          ] );
       ]

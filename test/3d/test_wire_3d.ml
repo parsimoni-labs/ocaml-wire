@@ -83,7 +83,7 @@ let test_generate_3d_files () =
   Unix.rmdir tmpdir
 
 let test_schema_of_struct () =
-  let s = Wire.Everparse.schema_of_struct simple_struct in
+  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
   let tmpdir = Filename.temp_dir "wire_3d_test2" "" in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
@@ -104,7 +104,7 @@ let test_generate_c () =
   (* generate_c requires 3d.exe; skip when not available *)
   if Wire_3d.has_3d_exe () then begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_c" "" in
-    let s = Wire.Everparse.schema_of_struct simple_struct in
+    let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
     Wire_3d.generate_c ~outdir:tmpdir [ s ];
     let c_path = Filename.concat tmpdir "TestSimple.c" in
@@ -125,11 +125,11 @@ let read_file path =
 let doc_codec name =
   Codec.v name (fun v -> v) Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
 
-let test_generate_dune_doc () =
+let test_generate_dune_standalone () =
   (* The doc pipeline emits a single-file [dune.inc]: the package name becomes a
      CamelCase module name and there is no FFI plug or test harness. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_doc" "" in
-  Wire_3d.generate_dune_doc ~outdir:tmpdir ~package:"my-pkg"
+  Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
@@ -155,10 +155,11 @@ let test_generate_dune_doc () =
   Alcotest.(check bool) "no FFI plug" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
-let test_generate_dune_doc_name_override () =
+let test_generate_dune_standalone_name_override () =
   (* [~name] sets the file base independently of the opam [~package]. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_name" "" in
-  Wire_3d.generate_dune_doc ~name:"proto-spec" ~outdir:tmpdir ~package:"my-pkg"
+  Wire_3d.generate_dune_standalone ~name:"proto-spec" ~outdir:tmpdir
+    ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
@@ -169,11 +170,11 @@ let test_generate_dune_doc_name_override () =
   Alcotest.(check bool)
     "install still uses the opam package" true (has "(package my-pkg)")
 
-let test_generate_doc () =
-  (* generate_doc needs 3d.exe; skip when not available. *)
+let test_generate_standalone () =
+  (* generate_standalone needs 3d.exe; skip when not available. *)
   if Wire_3d.has_3d_exe () then begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_doc" "" in
-    Wire_3d.generate_doc ~outdir:tmpdir ~package:"my-pkg"
+    Wire_3d.generate_standalone ~outdir:tmpdir ~package:"my-pkg"
       [ Wire_3d.pack (doc_codec "Pkt"); Wire_3d.pack (doc_codec "Pkt2") ];
     let exists f = Sys.file_exists (Filename.concat tmpdir f) in
     Alcotest.(check bool) "single merged .3d" true (exists "MyPkg.3d");
@@ -233,7 +234,7 @@ let diff_param_codec =
 
 let differential_ok ~name ~package ~count codecs =
   let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
-  Wire_3d.generate_doc ~outdir:tmpdir ~name ~package codecs;
+  Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
   let oc = open_out (Filename.concat tmpdir "corpus") in
   let ppf = Format.formatter_of_out_channel oc in
   Wire_3d.generate_corpus ~count ppf codecs;
@@ -336,7 +337,7 @@ let compile_and_run ~name codec =
   if not (Wire_3d.has_3d_exe ()) then ()
   else begin
     let tmpdir = Filename.temp_dir ("wire_3d_e2e_" ^ name) "" in
-    let schema = Everparse.schema codec in
+    let schema = Everparse.project ~mode:`Ffi codec in
     Wire_3d.generate_3d ~outdir:tmpdir [ schema ];
     Wire_3d.generate_c ~outdir:tmpdir [ schema ];
     let base = String.capitalize_ascii schema.Everparse.name in
@@ -707,7 +708,7 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
 
 let test_uses_wire_ctx () =
-  let s = Wire.Everparse.schema_of_struct simple_struct in
+  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   Alcotest.(check bool)
     "schema_of_struct uses WireCtx" true
     (Wire.Everparse.uses_wire_ctx s);
@@ -730,7 +731,7 @@ let test_main_exists () =
   let _ =
     (Wire_3d.main
       : ?name:string ->
-        mode:[ `Ffi | `Doc ] ->
+        mode:[ `Ffi | `Standalone ] ->
         package:string ->
         Wire_3d.packed list ->
         unit)
@@ -743,7 +744,7 @@ let test_main_exists () =
    wrong amount of data; if the expected value is itself wrong, hand-computed
    constants catch that too. *)
 let check_size ~name ~expected codec =
-  let schema = Everparse.schema codec in
+  let schema = Everparse.project ~mode:`Ffi codec in
   let codec_size = Codec.wire_size codec in
   Alcotest.(check int)
     (Fmt.str "%s: Codec.wire_size = %d" name expected)
@@ -855,7 +856,7 @@ let test_projection_filenames () =
     Everparse.Raw.struct_ "rpmsg_endpoint_info"
       [ Everparse.Raw.field "v" uint8; Everparse.Raw.field "id" uint16be ]
   in
-  let schema = Everparse.schema_of_struct s in
+  let schema = Everparse.Raw.project_struct ~mode:`Ffi s in
   let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
   Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
   let dune_inc =
@@ -1075,7 +1076,7 @@ let test_field_optional_byte_array () =
           Field.optional "Body" ~present:cond (byte_array ~size:(int 8)) $ snd;
         ]
   in
-  let s = Everparse.struct_of_codec codec in
+  let s = Everparse.Raw.struct_of_codec codec in
   let out = to_3d_string s in
   Alcotest.(check bool)
     "byte-size suffix uses inner size" true (contains out "8")
@@ -1107,7 +1108,7 @@ let test_nested_field_projects () =
           ]
     in
     let dir = Filename.temp_dir "wire_3d_nested" "" in
-    let s = Everparse.schema codec in
+    let s = Everparse.project ~mode:`Ffi codec in
     Wire_3d.generate_3d ~outdir:dir [ s ];
     (* Runs 3d.exe; raises if EverParse rejects the generated .3d. *)
     Wire_3d.generate_c ~outdir:dir [ s ];
@@ -1135,10 +1136,12 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
-      Alcotest.test_case "generate_dune_doc" `Quick test_generate_dune_doc;
-      Alcotest.test_case "generate_dune_doc name override" `Quick
-        test_generate_dune_doc_name_override;
-      Alcotest.test_case "generate_doc (needs 3d.exe)" `Quick test_generate_doc;
+      Alcotest.test_case "generate_dune_standalone" `Quick
+        test_generate_dune_standalone;
+      Alcotest.test_case "generate_dune_standalone name override" `Quick
+        test_generate_dune_standalone_name_override;
+      Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
+        test_generate_standalone;
       Alcotest.test_case "doc differential (needs 3d.exe)" `Quick
         test_doc_differential;
       Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick
