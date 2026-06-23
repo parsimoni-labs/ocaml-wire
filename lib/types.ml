@@ -2024,57 +2024,110 @@ let rebuild_ordering op (l : int expr) (r : int expr) : bool expr =
   | `Gt -> Gt (l, r)
   | `Ge -> Ge (l, r)
 
-let translate_signed_ordering ~name ~width (cond : bool expr) : bool expr =
-  let signbit = 1 lsl (width - 1) in
-  let mask = (1 lsl width) - 1 in
-  let smax = signbit - 1 and smin = -signbit in
+(* Rewrite a signed field's equality refinement. Unlike ordering, equality needs
+   no order-preserving flip: the byte that decodes to signed [k] is just its
+   two's-complement [k land mask]. A constant outside the signed range can never
+   be equal, so it folds to a constant. *)
+let rewrite_signed_eq : type x.
+    name:string ->
+    mask:int ->
+    smin:int ->
+    smax:int ->
+    ne:bool ->
+    x expr ->
+    x expr ->
+    bool expr ->
+    bool expr =
+ fun ~name ~mask ~smin ~smax ~ne a b orig ->
+  let fold k : bool expr =
+    match (ne, k >= smin && k <= smax) with
+    | false, true -> Eq (Ref (I, name), Int (k land mask))
+    | false, false -> Bool false
+    | true, true -> Ne (Ref (I, name), Int (k land mask))
+    | true, false -> Bool true
+  in
+  match (a, b) with
+  | Ref (I, n), Int k when String.equal n name -> fold k
+  | Int k, Ref (I, n) when String.equal n name -> fold k
+  | _ ->
+      if mentions_field name a || mentions_field name b then
+        Fmt.invalid_arg
+          "Wire: signed field %S has an equality constraint that is not a \
+           plain comparison with an integer literal, so it cannot be projected \
+           to 3D faithfully; compare the field directly to a constant"
+          name
+      else orig
+
+(* Rewrite a signed field's ordering refinement to the two's-complement form the
+   unsigned projected field reads ([x < 100] over [int8] becomes [(x ^ 128) <
+   228]). A constant outside the signed range folds to a constant. *)
+let rewrite_signed_ordering : type x.
+    name:string ->
+    signbit:int ->
+    mask:int ->
+    smin:int ->
+    smax:int ->
+    [ `Lt | `Le | `Gt | `Ge ] ->
+    x expr ->
+    x expr ->
+    bool expr ->
+    bool expr =
+ fun ~name ~signbit ~mask ~smin ~smax op a b orig ->
   let flip_const k : int expr = Int (k land mask lxor signbit) in
   let flip_self : int expr = Lxor (Ref (I, name), Int signbit) in
-  let rebuild = rebuild_ordering in
-  let self_op_const op k : bool expr =
+  let self_op_const k : bool expr =
     if k > smax then match op with `Lt | `Le -> Bool true | _ -> Bool false
     else if k < smin then
       match op with `Lt | `Le -> Bool false | _ -> Bool true
-    else rebuild op flip_self (flip_const k)
+    else rebuild_ordering op flip_self (flip_const k)
   in
-  let const_op_self op k : bool expr =
+  let const_op_self k : bool expr =
     if k > smax then match op with `Lt | `Le -> Bool false | _ -> Bool true
     else if k < smin then
       match op with `Lt | `Le -> Bool true | _ -> Bool false
-    else rebuild op (flip_const k) flip_self
+    else rebuild_ordering op (flip_const k) flip_self
   in
-  let rewrite : type x.
-      [ `Lt | `Le | `Gt | `Ge ] -> x expr -> x expr -> bool expr -> bool expr =
-   fun op a b orig ->
-    match (a, b) with
-    | Ref (I, n), Int k when String.equal n name -> self_op_const op k
-    | Int k, Ref (I, n) when String.equal n name -> const_op_self op k
-    | _ ->
-        if mentions_field name a || mentions_field name b then
-          Fmt.invalid_arg
-            "Wire: signed field %S has an ordering constraint that is not a \
-             plain comparison with an integer literal, so it cannot be \
-             projected to 3D faithfully; compare the field directly to a \
-             constant"
-            name
-        else orig
+  match (a, b) with
+  | Ref (I, n), Int k when String.equal n name -> self_op_const k
+  | Int k, Ref (I, n) when String.equal n name -> const_op_self k
+  | _ ->
+      if mentions_field name a || mentions_field name b then
+        Fmt.invalid_arg
+          "Wire: signed field %S has an ordering constraint that is not a \
+           plain comparison with an integer literal, so it cannot be projected \
+           to 3D faithfully; compare the field directly to a constant"
+          name
+      else orig
+
+let translate_signed_refinement ~name ~width (cond : bool expr) : bool expr =
+  let signbit = 1 lsl (width - 1) in
+  let mask = (1 lsl width) - 1 in
+  let smax = signbit - 1 and smin = -signbit in
+  (* The helpers are called fully applied at each arm: a partial application
+     would weaken the polymorphic operand type and let the comparison's
+     existential escape. *)
+  let ord op a b e =
+    rewrite_signed_ordering ~name ~signbit ~mask ~smin ~smax op a b e
   in
   let rec xform (e : bool expr) : bool expr =
     match e with
     | And (a, b) -> And (xform a, xform b)
     | Or (a, b) -> Or (xform a, xform b)
     | Not a -> Not (xform a)
-    | Lt (a, b) -> rewrite `Lt a b e
-    | Le (a, b) -> rewrite `Le a b e
-    | Gt (a, b) -> rewrite `Gt a b e
-    | Ge (a, b) -> rewrite `Ge a b e
+    | Lt (a, b) -> ord `Lt a b e
+    | Le (a, b) -> ord `Le a b e
+    | Gt (a, b) -> ord `Gt a b e
+    | Ge (a, b) -> ord `Ge a b e
+    | Eq (a, b) -> rewrite_signed_eq ~name ~mask ~smin ~smax ~ne:false a b e
+    | Ne (a, b) -> rewrite_signed_eq ~name ~mask ~smin ~smax ~ne:true a b e
     | _ -> e
   in
   xform cond
 
 (* A float ordering refinement has no faithful unsigned projection (IEEE bit
    patterns do not order as unsigned), so it is rejected; a signed field's
-   ordering refinement is rewritten to two's-complement form. *)
+   ordering or equality refinement is rewritten to the two's-complement form the
+   unsigned projected field reads. *)
 let project_refinement ~name ~kind (cond : bool expr) : bool expr =
   (* Reject any ordering comparison that mentions this field, with [msg]. Each
      comparison constructor is matched in its own arm so its existential operand
@@ -2109,7 +2162,7 @@ let project_refinement ~name ~kind (cond : bool expr) : bool expr =
       reject_orderings
         "Wire: a signed 64-bit field ordering constraint cannot be projected \
          to 3D"
-  | `Signed width -> translate_signed_ordering ~name ~width cond
+  | `Signed width -> translate_signed_refinement ~name ~width cond
 
 (* A field whose value is an unsigned scalar at most 32 bits wide, seen through
    the transparent [Map] / [Enum] / [Where] wrappers. The sum of two such fields

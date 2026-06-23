@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- A signed field equality constraint (an `int8` field whose `~self_constraint`
+  is `Expr.(s = int k)`) now projects to the two's-complement byte the unsigned
+  validator reads, and folds to a constant when the target is outside the signed
+  range. The raw constant was compared against the unsigned projection, so the
+  generated C and `Codec.decode` disagreed on the same byte (#203, @samoht)
+
 - A `byte_slice` whose resolved size is negative, for example a `Sub` on a
   length field that underflows on crafted input, now fails with a `Codec` parse
   error instead of escaping `Codec.decode` with a raw `Invalid_argument`. The
