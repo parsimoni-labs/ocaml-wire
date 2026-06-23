@@ -273,6 +273,58 @@ let test_3d_enum_membership () =
     "enum nested in a sub-codec bounds its value" true
     (contains ~sub:"(e == 1)" (to_3d (Everparse.schema arr).module_))
 
+(* A closed enum used as a list element or optional inner must enforce membership
+   in the verified C too. As a wide / big-endian array element, a repeat element
+   of any width, or an optional inner it used to render as the bare base, so the
+   generated C accepted codes Codec.decode rejects with Invalid_enum. Each now
+   projects through a synthesised refined-element struct [_EnumElt_<Name>] that
+   carries the membership refinement. *)
+let test_3d_enum_membership_list_elements () =
+  let e16 = enum "Wide" [ ("Lo", 1); ("Hi", 0xBEEF) ] uint16 in
+  let arr =
+    Codec.v "ArrWideEnum"
+      (fun v -> v)
+      Codec.[ (Field.v "v" (array ~len:(int 3) e16) $ fun v -> v) ]
+  in
+  let out_arr = to_3d (Everparse.schema arr).module_ in
+  Alcotest.(check bool)
+    "wide-enum array element goes through a refined struct" true
+    (contains ~sub:"_EnumElt_Wide" out_arr);
+  Alcotest.(check bool)
+    "wide-enum array element carries membership" true
+    (contains ~sub:"48879" out_arr);
+  (* A repeat element loses the 1-byte enum-type rendering at every width, so even
+     a uint8 enum repeat must carry membership through the refined struct. *)
+  let e8 = enum "Small" [ ("A", 1); ("B", 2) ] uint8 in
+  let rep =
+    Codec.v "RepEnum"
+      (fun v -> v)
+      Codec.[ (Field.repeat "v" ~size:(int 3) e8 $ fun v -> v) ]
+  in
+  let out_rep = to_3d (Everparse.schema rep).module_ in
+  Alcotest.(check bool)
+    "repeat enum element goes through a refined struct" true
+    (contains ~sub:"_EnumElt_Small" out_rep);
+  Alcotest.(check bool)
+    "repeat enum membership refinement present" true
+    (contains ~sub:"(v == 1)" out_rep);
+  (* An optional closed-enum inner must enforce the present value's membership. *)
+  let f_g = Field.v "g" uint8 in
+  let opt =
+    Codec.v "OptEnum"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (f_g $ fun (a, _) -> a);
+          ( Field.optional "v" ~present:Expr.(Field.ref f_g = int 1) e16
+          $ fun (_, b) -> b );
+        ]
+  in
+  let out_opt = to_3d (Everparse.schema opt).module_ in
+  Alcotest.(check bool)
+    "optional enum inner goes through a refined struct" true
+    (contains ~sub:"_EnumElt_Wide" out_opt)
+
 let test_enum_open_accepts_and_no_refinement () =
   (* An open enum names known values but accepts any: decode does not reject an
      unlisted value, and the projection emits no membership refinement (the
@@ -1152,6 +1204,8 @@ let suite =
         `Quick test_enum_open_accepts_and_no_refinement;
       Alcotest.test_case "3d: enum membership refinement" `Quick
         test_3d_enum_membership;
+      Alcotest.test_case "3d: enum membership on list elements" `Quick
+        test_3d_enum_membership_list_elements;
       Alcotest.test_case "doc: drops FFI scaffolding" `Quick
         test_doc_drops_ffi_scaffolding;
       Alcotest.test_case "doc: codec ~doc renders as citation comment" `Quick

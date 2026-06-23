@@ -908,6 +908,91 @@ let enum_decls (s : struct_) : decl list =
     s.fields;
   List.rev !decls
 
+(* A closed enum carries a bounded value set the OCaml decoder enforces on every
+   decoded value. As a byte-budget list element (an [array] / [repeat] element)
+   or an [optional] inner it would otherwise render as the bare base, dropping
+   the membership the generated C validator must also enforce -- so [Codec.decode]
+   would reject an out-of-set code that the generated C accepts. Such an element
+   is projected through a synthesised single-field struct whose field carries the
+   membership refinement. [closed_enum_elem] returns the enum name, its base, and
+   its case values, seen through the transparent [Map] / [Where] / [Apply]
+   wrappers; [None] for an open enum or a non-enum, which keep their rendering. *)
+let rec closed_enum_elem : type a.
+    a typ -> (string * packed_typ * int list) option = function
+  | Enum { name; base; cases; closed = true } ->
+      Some (name, Pack_typ base, List.map snd cases)
+  | Map { inner; _ } -> closed_enum_elem inner
+  | Where { inner; _ } -> closed_enum_elem inner
+  | Apply { typ; _ } -> closed_enum_elem typ
+  | _ -> None
+
+(* A closed-enum array element renders as a named 1-byte enum type only when its
+   base is a single byte; a wider or big-endian base loses that rendering under a
+   byte budget and goes through the refined-element struct instead. (A [repeat]
+   element loses it at every width, so the [repeat] path does not gate on this.) *)
+let closed_enum_elem_wide : type a. a typ -> bool =
+ fun elem ->
+  match closed_enum_elem elem with
+  | Some (_, Pack_typ Uint8, _) | Some (_, Pack_typ Int8, _) -> false
+  | Some _ -> true
+  | None -> false
+
+let enum_elem_struct_name name = "_EnumElt_" ^ name
+
+(* The membership refinement [v == c0 || v == c1 || ...] over an element
+   variable. [None] for an empty case set (a degenerate enum admitting no
+   value), which carries no refinement. *)
+let enum_membership_cond var = function
+  | [] -> None
+  | v0 :: rest ->
+      Some
+        (List.fold_left
+           (fun acc v -> Or (acc, Eq (Ref (I, var), Int v)))
+           (Eq (Ref (I, var), Int v0))
+           rest)
+
+(* The synthesised refined-element struct typedef for a closed enum used as a
+   list element / optional inner, or [None] when there is no membership to
+   enforce. The field is typed as the enum's base scalar (not the named enum
+   type) and carries the membership refinement, so it projects without the 3D
+   enum declaration and works for wide and big-endian bases alike. *)
+let enum_elem_struct_decl name (Pack_typ base) cases =
+  match enum_membership_cond "v" cases with
+  | None -> None
+  | Some cond ->
+      Some
+        (typedef
+           (struct_
+              (enum_elem_struct_name name)
+              [ field "v" ~constraint_:cond base ]))
+
+(* Emit the synthesised refined-element struct for a closed-enum list element /
+   optional inner, deduped by name, mirroring where [field_suffix] /
+   [optional_suffix] reference it. *)
+let emit_enum_elem_struct seen acc elem =
+  match closed_enum_elem elem with
+  | Some (name, base, (_ :: _ as cases)) ->
+      let sname = enum_elem_struct_name name in
+      if not (Hashtbl.mem seen sname) then begin
+        Hashtbl.add seen sname ();
+        Option.iter
+          (fun d -> acc := d :: !acc)
+          (enum_elem_struct_decl name base cases)
+      end
+  | _ -> ()
+
+(* The base printer for a byte-budget list element ([array] / [repeat]): a closed
+   enum routes through its synthesised refined-element struct, so membership is
+   enforced per element as the OCaml decoder does; anything else uses [fallback]
+   (its bare base / wrapper rendering). *)
+let list_elem_pp : type a.
+    a typ -> fallback:(Format.formatter -> unit) -> Format.formatter -> unit =
+ fun elem ~fallback ->
+  match closed_enum_elem elem with
+  | Some (name, _, _ :: _) ->
+      fun ppf -> Fmt.string ppf (enum_elem_struct_name name)
+  | _ -> fallback
+
 (* True for tag types that the 3D side can dispatch on natively: integer-
    shaped scalars plus enums. String/byte tags use the two-step shape
    (split into adjacent fields, dispatch in caller code) instead. *)
@@ -1162,13 +1247,21 @@ let rec collect_casetype_decls : type a.
         Hashtbl.add seen opt_name ();
         acc := optional_casetype_decl opt_name inner :: !acc
       end
-  | Optional { inner; _ } -> extract inner
+  | Optional { inner; _ } ->
+      extract inner;
+      emit_enum_elem_struct seen acc inner
   | Optional_or { inner; _ } -> extract inner
   | Apply { typ; _ } -> extract typ
   | Repeat { elem; _ } ->
       extract elem;
+      emit_enum_elem_struct seen acc elem;
       Option.iter (fun n -> emit_wrapper n elem) (repeat_elem_struct elem)
-  | Array { elem; _ } -> extract elem
+  | Array { elem; _ } ->
+      extract elem;
+      (* A 1-byte little-endian closed-enum array element renders as the named
+         enum type (declared by [enum_decls]); a wider or big-endian one renders
+         through the synthesised refined-element struct, declared here. *)
+      if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
   | Single_elem { elem; _ } ->
       extract elem;
       Option.iter (fun n -> emit_wrapper n elem) (single_elem_struct elem)
@@ -1648,8 +1741,15 @@ let rec optional_suffix : type a.
       (* Project the optional as a conditional byte region: [present ? s : 0]
          bytes. The base printer comes from [field_suffix] so the inner's
          element type (e.g. [UINT8] for a byte array) is emitted once, without
-         its own [byte-size] suffix duplicating the conditional one. *)
-      let _, pp_base = field_suffix inner in
+         its own [byte-size] suffix duplicating the conditional one. A closed
+         enum inner routes through its refined-element struct so the present
+         value's membership is enforced, as the OCaml decoder does. *)
+      let pp_base =
+        match closed_enum_elem inner with
+        | Some (name, _, _ :: _) ->
+            fun ppf -> Fmt.string ppf (enum_elem_struct_name name)
+        | _ -> snd (field_suffix inner)
+      in
       (Byte_array (If_then_else (present, s, Int 0)), pp_base)
   | None ->
       (* Self-delimiting inner with no wire-size expression (a variable-size
@@ -1682,38 +1782,7 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
         | None -> pp_typ ppf elem
       in
       (Single_elem { size; at_most }, pp_elem)
-  | Array { len; elem; _ } -> (
-      (* 3D's [name[len]] suffix only accepts byte-sized elements; for wider
-         elements the size in bytes must be made explicit via [:byte-size].
-         [inner_wire_size_expr] handles fixed scalars, [byte_array]-style
-         sized payloads, codec-with-fixed-size, and nested arrays. *)
-      match (inner_wire_size elem, inner_wire_size_expr elem) with
-      | Some 1, _ -> (
-          match index_bound_elt elem with
-          | Some (elt_var, _) ->
-              (* A bounded byte element (a lookup index) projects like a
-                 [byte_array_where]: a byte-budget array of the synthesised
-                 refined-byte struct, so every element carries the [< n] bound
-                 the OCaml decoder enforces. *)
-              ( Byte_array len,
-                fun ppf -> Fmt.string ppf (synth_name_of_elt_var elt_var) )
-          | None ->
-              let pp_elem ppf =
-                match open_enum_elem_base elem with
-                | Some pp -> pp ppf
-                | None -> pp_typ ppf elem
-              in
-              (Array len, pp_elem))
-      | _, Some s ->
-          (* A wider element is emitted as its bare base under a byte budget of
-             [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
-             chunk) is dropped so it is not duplicated. A named-composite base
-             must be [nz] (see {!nlist_base}). *)
-          ( Byte_array (Mul (len, s)),
-            Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))) )
-      | _ ->
-          (* Unreachable: [array] rejects variable-size elem at construction. *)
-          assert false)
+  | Array { len; elem; _ } -> array_suffix len elem
   | Map { inner; _ } -> field_suffix inner
   | Enum { base; _ } -> field_suffix base
   | Optional { present = Bool true; inner } -> field_suffix inner
@@ -1729,26 +1798,76 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
          so it projects unconditionally, never as a [present ? size : 0]
          region. *)
       field_suffix inner
-  | Repeat { size; elem; _ } ->
-      (* Variable-length list within a byte budget. A self-delimiting element
-         with no named type goes through its wrapper struct; otherwise the
-         element is emitted as its bare base (its own [:byte-size] suffix
-         dropped) so the only suffix is the budget: a list of fixed n-byte
-         chunks is just bytes on the wire, like a repeat of [UINT8]. *)
-      let pp_elem ppf =
-        match index_bound_elt elem with
-        | Some (elt_var, _) -> Fmt.string ppf (synth_name_of_elt_var elt_var)
-        | None -> (
-            match repeat_elem_struct elem with
-            | Some name -> Fmt.string ppf name
-            | None ->
-                Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))) ppf)
-      in
-      (Byte_array size, pp_elem)
+  | Repeat { size; elem; _ } -> repeat_suffix size elem
   | Zeroterm -> (Zeroterm, fun ppf -> Fmt.string ppf "UINT8")
   | Zeroterm_at_most { size } ->
       (Zeroterm_at_most size, fun ppf -> Fmt.string ppf "UINT8")
   | _ -> (No_suffix, fun ppf -> pp_typ ppf typ)
+
+(* 3D's [name[len]] suffix only accepts byte-sized elements; for wider elements
+   the size in bytes must be made explicit via [:byte-size]. [inner_wire_size_expr]
+   handles fixed scalars, [byte_array]-style sized payloads, codec-with-fixed-size,
+   and nested arrays. *)
+and array_suffix : type a.
+    int expr -> a typ -> field_suffix * (Format.formatter -> unit) =
+ fun len elem ->
+  match (inner_wire_size elem, inner_wire_size_expr elem) with
+  | Some 1, _ -> (
+      match index_bound_elt elem with
+      | Some (elt_var, _) ->
+          (* A bounded byte element (a lookup index) projects like a
+             [byte_array_where]: a byte-budget array of the synthesised
+             refined-byte struct, so every element carries the [< n] bound the
+             OCaml decoder enforces. *)
+          ( Byte_array len,
+            fun ppf -> Fmt.string ppf (synth_name_of_elt_var elt_var) )
+      | None ->
+          let pp_elem ppf =
+            match open_enum_elem_base elem with
+            | Some pp -> pp ppf
+            | None -> pp_typ ppf elem
+          in
+          (Array len, pp_elem))
+  | _, Some s ->
+      (* A wider element is emitted as its bare base under a byte budget of
+         [len * width]; its own [:byte-size] suffix (e.g. for a [byte_array]
+         chunk) is dropped so it is not duplicated. A named-composite base must
+         be [nz] (see {!nlist_base}). A wider or big-endian closed enum cannot
+         carry a 1-byte enum type, so [list_elem_pp] routes it through its
+         refined-element struct. *)
+      let pp_elem =
+        list_elem_pp elem
+          ~fallback:
+            (Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))))
+      in
+      (Byte_array (Mul (len, s)), pp_elem)
+  | _ ->
+      (* Unreachable: [array] rejects variable-size elem at construction. *)
+      assert false
+
+(* Variable-length list within a byte budget. A self-delimiting element with no
+   named type goes through its wrapper struct; otherwise the element is emitted
+   as its bare base (its own [:byte-size] suffix dropped) so the only suffix is
+   the budget: a list of fixed n-byte chunks is just bytes on the wire, like a
+   repeat of [UINT8]. A closed enum loses its 1-byte enum-type rendering at every
+   width in a byte budget, so [list_elem_pp] routes it through the refined-element
+   struct to keep per-element membership. *)
+and repeat_suffix : type a.
+    int expr -> a typ -> field_suffix * (Format.formatter -> unit) =
+ fun size elem ->
+  let pp_elem ppf =
+    match index_bound_elt elem with
+    | Some (elt_var, _) -> Fmt.string ppf (synth_name_of_elt_var elt_var)
+    | None ->
+        list_elem_pp elem
+          ~fallback:(fun ppf ->
+            match repeat_elem_struct elem with
+            | Some name -> Fmt.string ppf name
+            | None ->
+                Nlist_elem.pp (Nlist_elem.v elem (snd (field_suffix elem))) ppf)
+          ppf
+  in
+  (Byte_array size, pp_elem)
 
 let anon_counter = Stdlib.ref 0
 
