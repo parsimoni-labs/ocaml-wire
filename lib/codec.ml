@@ -361,10 +361,16 @@ let rec build_populate : type a.
         match reader buf base with
         | Some _ -> inner_populate slots buf base
         | None -> ())
+  | Byte_array _ | Byte_slice _ | All_bytes | Unit ->
+      (* A plain byte span (or unit) carries no constrained data, so its reader
+         only re-slices the buffer. Running it for effect would allocate a string
+         or slice per validate with nothing to check; skip it so validating a
+         span-only codec stays allocation-free on a hot read path. *)
+      fun _slots _buf _base -> ()
   | _ ->
-      (* No int slot to populate, but run the reader for its effect: it performs
-         the same decode-side checks (all-zeros span, NUL terminator, refined
-         span, embedded codec / array element constraints), so [Codec.validate]
+      (* No int slot to populate, but the reader performs a real decode-side
+         check (all-zeros span, NUL terminator, refined span, embedded codec /
+         array element constraints), so run it for effect: [Codec.validate] then
          rejects exactly what [decode] does. The value is discarded. *)
       fun _slots buf base -> ignore (reader buf base)
 
@@ -2605,7 +2611,32 @@ let validate_or_eof buf f =
          (Unexpected_eof
             { expected = Bytes.length buf + 1; got = Bytes.length buf }))
 
-let build_validators validators_rev checkers_rev compiled_where n_total =
+(* Whether reading a field of this type performs a decode-side check beyond
+   storing a scalar slot: enum membership, a lookup index bound, an all-zeros /
+   NUL-terminated / refined span, or a nested element's constraints. The
+   provably check-free leaves (scalars, bitfields, plain byte spans, unit, an
+   open enum, a bare bit/bool map) return [false]; everything else is treated as
+   a check ([| _ -> true]), so a new or uncertain type is never wrongly skipped.
+   A field's own [constraint_] / [action] / a [where] clause are accounted for
+   separately, so this is only about the type's intrinsic read-time validation. *)
+let rec field_reader_validates : type a. a Types.typ -> bool = function
+  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint63 _
+  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
+  | Types.Float32 _ | Types.Float64 _ | Types.Uint_var _ | Types.Bits _
+  | Types.Byte_array _ | Types.Byte_slice _ | Types.All_bytes | Types.Unit ->
+      false
+  | Types.Enum { closed; _ } -> closed
+  | Types.Map { inner; index_bound; _ } ->
+      index_bound <> None || field_reader_validates inner
+  | Types.Optional { inner; _ } -> field_reader_validates inner
+  | Types.Optional_or { inner; _ } -> field_reader_validates inner
+  | Types.Single_elem { elem; _ } -> field_reader_validates elem
+  | Types.Array { elem; _ } -> field_reader_validates elem
+  | Types.Repeat { elem; _ } -> field_reader_validates elem
+  | _ -> true
+
+let build_validators validators_rev checkers_rev compiled_where struct_fields
+    n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
   let n_validators = Array.length validator_fns in
   let validate_arr arr buf off =
@@ -2624,23 +2655,33 @@ let build_validators validators_rev checkers_rev compiled_where n_total =
       checker_fns.(i) arr buf off
     done
   in
+  (* Run the validator pass only when the struct actually has something to
+     check; the structural bounds check runs unconditionally one layer up in
+     [validate_with_bounds]. A codec of plain scalars and byte spans then
+     validates with no allocation, so validating it on a hot read path (a
+     [Codec.get] preceded by [validate]) stays cheap. *)
+  let has_checks =
+    compiled_where <> None
+    || List.exists
+         (fun (Types.Field f) ->
+           f.constraint_ <> None || f.action <> None
+           || field_reader_validates f.field_typ)
+         struct_fields
+  in
   let validate =
-    (* Always run [validate_arr], never gate on whether the struct has a user
-       constraint: a field's own decode-side checks (enum membership, lookup
-       bound, all-zeros / NUL / refined span, embedded element constraints) run
-       here too, and gating them out let [Codec.validate] accept inputs [decode]
-       rejects. *)
-    let arr = alloc_slots n_total in
-    fun ?env_slots buf off ->
-      clear_slots arr n_total;
-      (match env_slots with
-      | Some slots ->
-          (* Seed param slots so [where] clauses referencing [Param.input]
-             evaluate correctly. *)
-          let n = Array.length slots in
-          Array.blit slots 0 arr.ints (n_total - n) n
-      | None -> ());
-      validate_or_eof buf (fun () -> validate_arr arr buf off)
+    if not has_checks then fun ?env_slots:_ _buf _off -> ()
+    else
+      let arr = alloc_slots n_total in
+      fun ?env_slots buf off ->
+        clear_slots arr n_total;
+        (match env_slots with
+        | Some slots ->
+            (* Seed param slots so [where] clauses referencing [Param.input]
+               evaluate correctly. *)
+            let n = Array.length slots in
+            Array.blit slots 0 arr.ints (n_total - n) n
+        | None -> ());
+        validate_or_eof buf (fun () -> validate_arr arr buf off)
   in
   (validate_arr, populate, validate)
 
@@ -2827,7 +2868,8 @@ let seal : type r. (r, r) record -> r t =
     compile_where_clause r.param_slots r.field_readers r.where
   in
   let validate_arr, populate, validate_checks =
-    build_validators validators (List.rev r.checkers_rev) compiled_where n_total
+    build_validators validators (List.rev r.checkers_rev) compiled_where
+      struct_fields n_total
   in
   (* Per-field action runners *)
   let field_actions = List.rev r.field_actions_rev in
@@ -3077,7 +3119,7 @@ and validator_of_struct (s : Types.struct_) : validator =
     build_validators
       (List.rev acc.validators_rev)
       (List.rev acc.checkers_rev)
-      compiled_where n_total
+      compiled_where s.fields n_total
   in
   (* Full validation: fire field actions and check the where clause.
      [build_validators]'s third return [validate] is checkers-only (no
