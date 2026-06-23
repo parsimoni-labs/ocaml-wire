@@ -220,6 +220,14 @@
 
 ### Fixed
 
+- A closed `enum` (or `variants`) used as an `array` element, a `repeat`
+  element, or an `optional` inner now enforces its value set in the
+  EverParse-generated C validator, matching `Codec.decode`. Previously only a
+  byte-wide enum array element carried the membership check; a wider or
+  big-endian array element, a repeat element of any width, and an optional inner
+  accepted codes outside the named set that the OCaml decoder rejects with
+  `Invalid_enum`, so the two disagreed on the same input (#197, @samoht)
+
 - The documentation pipeline's differential `agree.c` now predicts each
   EverParse validator-wrapper symbol with `Wire_3d.pascal_case`, a transcription
   of EverParse's own `pascal_case` mangling, computed as
