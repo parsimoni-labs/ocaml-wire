@@ -686,7 +686,37 @@ let case ?index inner ~inject ~project =
 let default inner ~inject ~project =
   Default_def { dd_inner = inner; dd_inject = inject; dd_project = project }
 
+(* An enum over a big-endian multi-byte base cannot be a 3D [enum] type:
+   EverParse types the integer constants as the native (little-endian) width and
+   rejects the declaration ("Expected UINT16BE, got UINT16"). Such an enum is
+   projected as its base scalar with a membership refinement (closed) or bare
+   base (open) instead, the same shape used outside the doc projection. *)
+let enum_base_is_be : type a. a typ -> bool = function
+  | Uint16 Big | Uint32 Big | Uint63 Big | Uint64 Big -> true
+  | Int16 Big | Int32 Big | Int64 Big -> true
+  | Uint_var { endian = Big; _ } -> true
+  | _ -> false
+
+(* A casetype tag must project to a 3D type the generated [switch] dispatches on.
+   A [uint ~size] (Uint_var) tag renders as [UINTBE(n)], which is not a 3D type;
+   an enum over a big-endian base has no 3D enum type to name in the case labels.
+   Neither projects, so reject it at construction (seen through the transparent
+   [Map] / [Where] wrappers a [variants] tag carries). *)
+let rec reject_unprojectable_casetype_tag : type k. k typ -> unit = function
+  | Uint_var _ ->
+      invalid_arg
+        "Wire.casetype: a [uint ~size] tag has no 3D projection; use a \
+         fixed-width integer, bitfield, or enum tag."
+  | Enum { base; _ } when enum_base_is_be base ->
+      invalid_arg
+        "Wire.casetype: an enum over a big-endian base has no 3D casetype-tag \
+         projection; use a little-endian or 1-byte enum base."
+  | Map { inner; _ } -> reject_unprojectable_casetype_tag inner
+  | Where { inner; _ } -> reject_unprojectable_casetype_tag inner
+  | _ -> ()
+
 let casetype name tag defs =
+  reject_unprojectable_casetype_tag tag;
   let resolve = function
     | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
         reject_decoration ~combinator:"casetype" cd_inner;
@@ -869,17 +899,6 @@ let casetype_decl name params tag cases =
 
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
-
-(* An enum over a big-endian multi-byte base cannot be a 3D [enum] type:
-   EverParse types the integer constants as the native (little-endian) width and
-   rejects the declaration ("Expected UINT16BE, got UINT16"). Such an enum is
-   projected as its base scalar with a membership refinement (closed) or bare
-   base (open) instead, the same shape used outside the doc projection. *)
-let enum_base_is_be : type a. a typ -> bool = function
-  | Uint16 Big | Uint32 Big | Uint63 Big | Uint64 Big -> true
-  | Int16 Big | Int32 Big | Int64 Big -> true
-  | Uint_var { endian = Big; _ } -> true
-  | _ -> false
 
 (* Extract enum declarations needed by struct fields. Scans field types for
    Enum constructors (including under Map/Where wrappers) and returns the

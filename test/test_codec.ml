@@ -1082,6 +1082,27 @@ let test_casetype_case_requires_index () =
          casetype "NoIndex" uint8
            [ case uint8 ~inject:Fun.id ~project:Option.some ]))
 
+(* A casetype tag must project to a 3D type the [switch] dispatches on. A
+   [uint ~size] tag renders as a non-3D [UINTBE(n)], and an enum over a
+   big-endian base has no 3D enum type for its case labels, so both are refused
+   at construction; a little-endian / 1-byte enum tag is fine. *)
+let test_casetype_reject_unprojectable_tag () =
+  let one_case tag =
+    casetype "CtTag" tag
+      [ case ~index:1 uint8 ~inject:(fun s -> s) ~project:Option.some ]
+  in
+  Alcotest.(check bool)
+    "uint ~size tag rejected" true
+    (raises_invalid (fun () -> one_case (uint (int 2))));
+  Alcotest.(check bool)
+    "big-endian enum tag rejected" true
+    (raises_invalid (fun () ->
+         one_case (enum "TagBe" [ ("A", 0); ("B", 1) ] uint16be)));
+  Alcotest.(check bool)
+    "little-endian enum tag accepted" false
+    (raises_invalid (fun () ->
+         one_case (enum "TagLe" [ ("A", 0); ("B", 1) ] uint8)))
+
 (* -- Codec bitfield tests -- *)
 
 type bf32_record = { a : int; b : int; c : int; d : int }
@@ -5181,6 +5202,8 @@ let suite =
         test_bits_width_bounds;
       Alcotest.test_case "casetype case requires ~index" `Quick
         test_casetype_case_requires_index;
+      Alcotest.test_case "casetype rejects unprojectable tag" `Quick
+        test_casetype_reject_unprojectable_tag;
       (* codec bitfields *)
       Alcotest.test_case "codec bitfield: wire_size" `Quick
         test_codec_bitfield_wire_size;

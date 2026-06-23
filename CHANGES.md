@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- A `Wire.casetype` whose tag is a `uint ~size` value, or an enum over a
+  big-endian base, is now rejected at construction. Neither projects to a 3D
+  type the dispatch can name, so the codec built without a verified validator.
+  A fixed-width integer, bitfield, or little-endian / 1-byte enum tag is
+  unaffected (#201, @samoht)
+
 - A non-trivial `Wire.where` used as a `Wire.casetype` case body is now rejected
   at construction. Such a refinement projects to `case k: T { cond } v;`, which
   is not valid 3D (a case body takes no refinement), unlike a top-level field
