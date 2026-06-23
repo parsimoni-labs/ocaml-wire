@@ -274,6 +274,35 @@ let test_validate_matches_decode_rejections () =
   in
   rejects "array element constraint" arr_c "\x01\x63"
 
+(* A codec with no checks (plain scalars and byte spans) must validate without
+   allocating: a hot read path validates a header then reads fields zero-copy,
+   so a per-validate allocation here turns an O(log N) seek into O(N log N)
+   garbage. Validate runs the structural bounds check but no validator pass. *)
+let test_validate_check_free_no_alloc () =
+  let c =
+    Codec.v "Page"
+      (fun a b k -> (a, b, k))
+      Codec.
+        [
+          (Field.v "a" uint8 $ fun (a, _, _) -> a);
+          (Field.v "b" uint32be $ fun (_, b, _) -> b);
+          (Field.v "k" (byte_slice ~size:(int 8)) $ fun (_, _, k) -> k);
+        ]
+  in
+  let buf = Bytes.make 32 '\007' in
+  Codec.validate c buf 0;
+  (* warm up any one-time setup *)
+  let n = 100_000 in
+  let before = Gc.minor_words () in
+  for _ = 1 to n do
+    Codec.validate c buf 0
+  done;
+  let per_call = (Gc.minor_words () -. before) /. float_of_int n in
+  Alcotest.(check bool)
+    (Fmt.str "validate of a check-free codec allocates ~0 words (got %.2f)"
+       per_call)
+    true (per_call < 1.0)
+
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
    reaches the EverParse refinement, so leaving it unchecked on the OCaml side
@@ -5235,6 +5264,8 @@ let suite =
         `Quick test_validate_bounds_constraint_free;
       Alcotest.test_case "validate: enforces all_zeros padding" `Quick
         test_validate_all_zeros;
+      Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
+        test_validate_check_free_no_alloc;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
