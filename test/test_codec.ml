@@ -236,6 +236,44 @@ let test_validate_all_zeros () =
   | exception Validation_error _ ->
       Alcotest.fail "validate failed with the wrong error"
 
+(* A field's own decode-side check (enum membership, lookup bound, a bounded
+   embedded element) lives in its reader, not in a user constraint, so
+   [Codec.validate] must run the validator pass for every codec or it would
+   accept inputs [decode] rejects. Each case feeds bytes both reject. *)
+let test_validate_matches_decode_rejections () =
+  let rejects what c bytes =
+    let buf = Bytes.of_string bytes in
+    (match Codec.decode c buf 0 with
+    | Error _ -> ()
+    | Ok _ -> Alcotest.failf "%s: decode accepted a bad input" what);
+    match Codec.validate c buf 0 with
+    | exception Validation_error _ -> ()
+    | () -> Alcotest.failf "%s: validate accepted what decode rejects" what
+  in
+  let enum_c =
+    Codec.v "E" Fun.id
+      Codec.[ Field.v "v" (enum "C" [ ("A", 1); ("B", 2) ] uint8) $ Fun.id ]
+  in
+  rejects "unknown enum" enum_c "\xee";
+  let lookup_c =
+    Codec.v "L" Fun.id
+      Codec.[ Field.v "v" (lookup [ "a"; "b"; "c" ] uint8) $ Fun.id ]
+  in
+  rejects "out-of-range lookup index" lookup_c "\x07";
+  let elem =
+    Codec.v "Bnd" Fun.id
+      Codec.
+        [
+          Field.v "v" uint8 ~self_constraint:(fun r -> Expr.(r <= int 10))
+          $ Fun.id;
+        ]
+  in
+  let arr_c =
+    Codec.v "Arr" Fun.id
+      Codec.[ Field.v "vs" (array ~len:(int 2) (codec elem)) $ Fun.id ]
+  in
+  rejects "array element constraint" arr_c "\x01\x63"
+
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
    reaches the EverParse refinement, so leaving it unchecked on the OCaml side
@@ -5197,6 +5235,8 @@ let suite =
         `Quick test_validate_bounds_constraint_free;
       Alcotest.test_case "validate: enforces all_zeros padding" `Quick
         test_validate_all_zeros;
+      Alcotest.test_case "validate: matches decode rejections" `Quick
+        test_validate_matches_decode_rejections;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
         test_decode_enforces_typ_where;
       Alcotest.test_case "validate: enforces typ-level where" `Quick
