@@ -983,6 +983,71 @@ let test_validate_short_buffer_no_crash () =
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on a short buffer: %s" m
 
+let test_validate_rejects_all_zeros_failure () =
+  let pad = Field.v "Pad" all_zeros in
+  let c = Codec.v "Zeros" Fun.id Codec.[ pad $ Fun.id ] in
+  let bad = Bytes.of_string "\x00\x01\x00" in
+  (match Codec.decode c bad 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "decode accepted a non-zero all_zeros byte"
+  | exception Invalid_argument m ->
+      Alcotest.failf "decode crashed on non-zero all_zeros: %s" m);
+  match Codec.validate c bad 0 with
+  | () -> Alcotest.fail "validate accepted a non-zero all_zeros byte"
+  | exception Wire.Validation_error _ -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "validate crashed on non-zero all_zeros: %s" m
+
+let test_validate_rejects_negative_byte_slice () =
+  let len = Field.v "Len" int8 in
+  let data = Field.v "Data" (byte_slice ~size:(Field.ref len)) in
+  let c =
+    Codec.v "SignedSlice" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ]
+  in
+  let bad = Bytes.of_string "\xff" in
+  (match Codec.decode c bad 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "decode accepted a negative byte_slice size"
+  | exception Invalid_argument m ->
+      Alcotest.failf "decode crashed on a negative byte_slice size: %s" m);
+  match Codec.validate c bad 0 with
+  | () -> Alcotest.fail "validate accepted a negative byte_slice size"
+  | exception Wire.Validation_error _ -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "validate crashed on a negative byte_slice size: %s" m
+
+let check_decode_and_validate_reject label c bad =
+  (match Codec.decode c bad 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.failf "decode accepted %s" label
+  | exception Invalid_argument m ->
+      Alcotest.failf "decode crashed on %s: %s" label m);
+  match Codec.validate c bad 0 with
+  | () -> Alcotest.failf "validate accepted %s" label
+  | exception (Wire.Validation_error _ | Wire.Parse_error _) -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "validate crashed on %s: %s" label m
+
+let test_validate_rejects_short_byte_array () =
+  let data = Field.v "Data" (byte_array ~size:(int 5)) in
+  let c = Codec.v "FixedBytes" Fun.id Codec.[ data $ Fun.id ] in
+  check_decode_and_validate_reject "short byte_array" c (Bytes.of_string "abcd")
+
+let test_validate_rejects_short_byte_slice () =
+  let data = Field.v "Data" (byte_slice ~size:(int 3)) in
+  let c = Codec.v "FixedSlice" Fun.id Codec.[ data $ Fun.id ] in
+  check_decode_and_validate_reject "short byte_slice" c (Bytes.of_string "ab")
+
+let test_validate_rejects_unknown_enum () =
+  let code = Field.v "Code" (enum "Code" [ ("A", 1); ("B", 2) ] uint8) in
+  let c = Codec.v "EnumCode" Fun.id Codec.[ code $ Fun.id ] in
+  check_decode_and_validate_reject "unknown enum" c (Bytes.of_string "\xee")
+
+let test_validate_rejects_unknown_variant () =
+  let flag = Field.v "Flag" (variants "Flag" [ ("A", `A); ("B", `B) ] uint8) in
+  let c = Codec.v "VariantCode" Fun.id Codec.[ flag $ Fun.id ] in
+  check_decode_and_validate_reject "unknown variant" c (Bytes.of_string "\xee")
+
 (* -- Suite -- *)
 
 let suite =
@@ -990,6 +1055,18 @@ let suite =
     [
       Alcotest.test_case "validate: short buffer does not crash" `Quick
         test_validate_short_buffer_no_crash;
+      Alcotest.test_case "validate: rejects all_zeros failure" `Quick
+        test_validate_rejects_all_zeros_failure;
+      Alcotest.test_case "validate: rejects negative byte_slice" `Quick
+        test_validate_rejects_negative_byte_slice;
+      Alcotest.test_case "validate: rejects short byte_array" `Quick
+        test_validate_rejects_short_byte_array;
+      Alcotest.test_case "validate: rejects short byte_slice" `Quick
+        test_validate_rejects_short_byte_slice;
+      Alcotest.test_case "validate: rejects unknown enum" `Quick
+        test_validate_rejects_unknown_enum;
+      Alcotest.test_case "validate: rejects unknown variant" `Quick
+        test_validate_rejects_unknown_variant;
       Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
         test_enum_open_of_string_accepts_unlisted;
       Alcotest.test_case "of_string: truncated variable codec rejects" `Quick

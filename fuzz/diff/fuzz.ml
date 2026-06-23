@@ -34,26 +34,23 @@ let diff_check label p c_check b =
 let covered_cases =
   Array.to_list Diff_index.covered
   |> List.map (fun (label, c_check) ->
-      (label, List.assoc label Diff_codecs.included, c_check))
+      (label, (List.assoc label Diff_codecs.included, c_check)))
 
 (* Normal [dune test]: one case per covered codec, each on its own random bytes,
    so a single run touches every codec. *)
-let registry_case (label, p, c_check) =
+let registry_case (label, (p, c_check)) =
   Alcobar.test_case label [ Alcobar.bytes ] (fun buf ->
       diff_check label p c_check (Bytes.of_string buf))
 
-(* AFL file-input mode: pick one codec per input (by the first byte) so each
-   exec runs a single differential check rather than one per covered codec, with
-   coverage of the whole set accumulating across inputs. Mirrors the shared
-   {!Fuzz_gen.afl_cases} path the other fuzzers use. *)
+(* AFL file-input mode: the shared framed input picks one codec per input and
+   strips the selector/mode header before the bytes reach the decoders. *)
 let afl_case ?(max_len = 256) () =
-  Alcobar.test_case "diff afl" [ bytes_any ] (fun bs ->
-      let bs = truncate_bytes ~max_len bs in
-      let label, p, c_check = pick_by_first_byte covered_cases bs in
-      diff_check label p c_check bs)
+  afl_contract_cases ~max_len "diff" covered_cases
+    ~check:(fun label (p, c_check) input ->
+      diff_check label p c_check input.payload)
 
 let cases =
-  if file_input_mode () then [ afl_case () ]
+  if file_input_mode () then afl_case ()
   else List.map registry_case covered_cases
 
 let () =

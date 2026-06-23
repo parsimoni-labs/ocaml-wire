@@ -33,4 +33,6 @@ let suite =
       @ reject_cases "action_abort" action_abort
       @ sized_cases "sized" @ nested_tests () @ entry_point_tests ()
       @ api_tests ()
+      @ semantic_invariant_cases "semantic"
+      @ construction_guard_cases "construction"
       @ invariant_cases "invariants" )
