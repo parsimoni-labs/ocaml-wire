@@ -27,19 +27,18 @@ let copy_file ~src ~dst =
       Out_channel.with_open_bin dst (fun oc ->
           Out_channel.output_string oc (In_channel.input_all ic)))
 
-(* Publish an isolated run's artifacts into the shared [schema_dir], leaving its
-   private [EverParse.h] / [EverParseEndianness.h] behind: a single shared copy
-   comes from the serial seed run, so concurrent runs never race to rewrite
-   them. Every other file is uniquely named per codec, so concurrent copies into
-   the same directory never collide. *)
-let publish_outputs ~src ~dst =
+(* Publish an isolated run's per-codec artifacts into the shared [schema_dir].
+   Only files whose name starts with this codec's module [base] are copied: the
+   shared ones a run also emits ([EverParse.h], [EverParseEndianness.h],
+   [test.c], [dune.inc]) come once from the serial seed run, so concurrent runs
+   neither race to rewrite them nor leave nondeterministic copies behind. Each
+   run holds only its own module's files, so the prefix is unambiguous and the
+   per-codec names never collide across runs. *)
+let publish_outputs ~base ~src ~dst =
   Array.iter
     (fun f ->
-      if
-        not
-          (String.equal f "EverParse.h"
-          || String.equal f "EverParseEndianness.h")
-      then copy_file ~src:(Filename.concat src f) ~dst:(Filename.concat dst f))
+      if String.starts_with ~prefix:base f then
+        copy_file ~src:(Filename.concat src f) ~dst:(Filename.concat dst f))
     (Sys.readdir src)
 
 let rm_rf dir =
@@ -48,54 +47,29 @@ let rm_rf dir =
       try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
   try Sys.rmdir dir with Sys_error _ -> ()
 
-(* Run one schema's EverParse codegen in a private directory so concurrent runs
-   cannot race on EverParse's shared intermediate files, then publish it. *)
-let gen_isolated ~schema_dir schema =
+let redirect_to file =
+  let fd =
+    Unix.openfile file [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
+  in
+  Unix.dup2 fd Unix.stdout;
+  Unix.dup2 fd Unix.stderr;
+  Unix.close fd
+
+(* Run one codec's EverParse codegen in a private directory so concurrent runs
+   cannot race on EverParse's shared intermediate files, then publish its
+   per-codec artifacts. Runs inside a fork-pool child: stdout/stderr are
+   captured to a per-codec [<base>.faillog] so a failure's F* diagnostics are
+   attributable rather than interleaved; the log is dropped on success. *)
+let gen_isolated ~schema_dir ~base schema =
+  redirect_to (Filename.concat schema_dir (base ^ ".faillog"));
   let tmp = Filename.temp_dir "wire_diffgen" "" in
   Fun.protect
     ~finally:(fun () -> rm_rf tmp)
     (fun () ->
-      Wire_3d.run ~outdir:tmp [ schema ];
-      publish_outputs ~src:tmp ~dst:schema_dir)
-
-let exited_ok = function Unix.WEXITED 0 -> true | _ -> false
-
-(* A bounded fork pool: each job runs in its own process, so the ~9s-per-module
-   F* verification overlaps across cores ([Sys.command] inside [Wire_3d.run] is
-   blocking) with full isolation. Returns per-job success in input order. *)
-let run_jobs ~max_jobs jobs =
-  let n = Array.length jobs in
-  let ok = Array.make n false in
-  let pid_idx = Hashtbl.create 64 in
-  let next = ref 0 and running = ref 0 in
-  let reap () =
-    let pid, status = Unix.wait () in
-    match Hashtbl.find_opt pid_idx pid with
-    | Some i ->
-        Hashtbl.remove pid_idx pid;
-        decr running;
-        ok.(i) <- exited_ok status
-    | None -> ()
-  in
-  while !next < n || !running > 0 do
-    if !next < n && !running < max_jobs then begin
-      let i = !next in
-      incr next;
-      match Unix.fork () with
-      | 0 -> (
-          try
-            jobs.(i) ();
-            Unix._exit 0
-          with e ->
-            Printf.eprintf "diff-gen: %s\n%!" (Printexc.to_string e);
-            Unix._exit 1)
-      | pid ->
-          Hashtbl.add pid_idx pid i;
-          incr running
-    end
-    else reap ()
-  done;
-  ok
+      Wire_3d.run ~quiet:false ~outdir:tmp [ schema ];
+      publish_outputs ~base ~src:tmp ~dst:schema_dir);
+  try Sys.remove (Filename.concat schema_dir (base ^ ".faillog"))
+  with Sys_error _ -> ()
 
 (* Conservative default: F* peaks near 1GB per module, so cap concurrency to
    keep memory in check on CI; override with WIRE_DIFF_JOBS. *)
@@ -106,6 +80,13 @@ let job_count () =
   | None -> max 1 (min 4 (Domain.recommended_domain_count ()))
 
 let schema_of (_, Fuzz_gen.Pack g) = Wire.Everparse.schema (Fuzz_gen.codec g)
+
+let base_of item =
+  Filename.remove_extension (Wire.Everparse.filename (schema_of item))
+
+let read_log path =
+  try In_channel.with_open_text path In_channel.input_all
+  with Sys_error _ -> ""
 
 (* Generate every included codec's EverParse C. The first runs serially into
    [schema_dir] to seed the shared headers; the rest run in the fork pool, each
@@ -125,15 +106,19 @@ let generate_all schema_dir included =
     in
     let jobs =
       Array.init (n - 1) (fun k ->
-          let schema = schema_of included.(k + 1) in
-          fun () -> gen_isolated ~schema_dir schema)
+          let item = included.(k + 1) in
+          let schema = schema_of item and base = base_of item in
+          fun () -> gen_isolated ~schema_dir ~base schema)
     in
     let rest_fail =
-      run_jobs ~max_jobs jobs |> Array.to_list
+      Wire_3d.fork_pool ~max_jobs jobs
+      |> Array.to_list
       |> List.mapi (fun k ok ->
           if ok then None
           else
-            Some (fst included.(k + 1), "EverParse codegen failed (see above)"))
+            let item = included.(k + 1) in
+            let log = Filename.concat schema_dir (base_of item ^ ".faillog") in
+            Some (fst item, read_log log))
       |> List.filter_map Fun.id
     in
     seed_fail @ rest_fail
