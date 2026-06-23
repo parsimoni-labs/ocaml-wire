@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- `Codec.validate` now runs decode's structural bounds check for every codec,
+  including one with no field constraints or `where`. It used to be a no-op for
+  a constraint-free codec, so validating a truncated buffer succeeded and a
+  following zero-copy `Codec.get` read out of bounds; the documented safety gate
+  now rejects a short buffer (#204, @samoht)
+
 - A signed field equality constraint (an `int8` field whose `~self_constraint`
   is `Expr.(s = int k)`) now projects to the two's-complement byte the unsigned
   validator reads, and folds to a constant when the target is outside the signed

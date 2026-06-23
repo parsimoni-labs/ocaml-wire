@@ -198,6 +198,24 @@ let test_validate_then_get () =
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
   Alcotest.(check int) "validate then get" 8 (get_x buf 0)
 
+(* [Codec.validate] is the safety gate before a zero-copy [get] on untrusted
+   input, so it must run decode's structural bounds check even for a codec with
+   no constraints (whose constraint validator is a no-op). A short buffer must be
+   rejected, not silently accepted. *)
+let test_validate_bounds_constraint_free () =
+  let c =
+    Codec.v "NoConstr"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "a" uint32be $ fst; Field.v "b" uint32be $ snd ]
+  in
+  (match Codec.validate c (Bytes.make 2 '\000') 0 with
+  | exception Validation_error (Unexpected_eof _) -> ()
+  | exception Validation_error _ ->
+      Alcotest.fail "validate failed with the wrong error on a short buffer"
+  | () -> Alcotest.fail "validate accepted a buffer too short for the codec");
+  (* A full buffer still validates. *)
+  Codec.validate c (Bytes.make 8 '\000') 0
+
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
    reaches the EverParse refinement, so leaving it unchecked on the OCaml side
@@ -5155,6 +5173,8 @@ let suite =
       Alcotest.test_case "validate: rejects bad constraint" `Quick
         test_validate_rejects_bad_constraint;
       Alcotest.test_case "validate: then get" `Quick test_validate_then_get;
+      Alcotest.test_case "validate: bounds-checks a constraint-free codec"
+        `Quick test_validate_bounds_constraint_free;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
         test_decode_enforces_typ_where;
       Alcotest.test_case "validate: enforces typ-level where" `Quick
