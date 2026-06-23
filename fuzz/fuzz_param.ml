@@ -1,15 +1,17 @@
-(** Fuzz tests for parameterised descriptions and constraint validation, driven
-    entirely by {!Fuzz_gen}.
+(** Focused fuzz tests for parameterised-description validation.
 
-    Every codec in the canonical {!Fuzz_gen.registry} is run through
-    {!Fuzz_gen.validate_cases}: a positive must pass {!Wire.Codec.validate}
-    (threading any [Param.env] the codec binds), and random / adversarial inputs
-    may pass or fail but must not crash. This exercises the param-binding,
-    [where]-clause, and field-constraint paths across every combinator. There
-    are no hand-written cases: the registry is the single source. *)
+    Broad validation is folded into {!Fuzz_gen.test_cases}; this suite keeps the
+    historical parameter-focused entry point meaningful by validating only
+    registry codecs that need an env. *)
 
 open Fuzz_gen
 
+let env_registry () = List.filter (fun (_, p) -> binds_env p) registry
+
 let suite =
-  ( "param",
-    List.concat_map (fun (name, Pack g) -> validate_cases name g) registry )
+  if file_input_mode () then ("param", afl_env_cases "param")
+  else
+    ( "param",
+      List.concat_map
+        (fun (name, Pack g) -> validate_cases name g)
+        (env_registry ()) )

@@ -186,3 +186,5 @@ jobs:
 
       - name: Run tests with 3d.exe projection checks
         run: opam exec -- dune runtest
+        env:
+          WIRE_3D_BATCH: 1

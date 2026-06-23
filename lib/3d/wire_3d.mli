@@ -80,6 +80,30 @@ val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 
     Requires [3d.exe] in PATH. *)
 
+val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
+(** [fork_pool ~max_jobs jobs] runs each job in its own process, at most
+    [max_jobs] at a time, returning each job's success (exit 0 with no
+    exception) in input order. Used to overlap the per-module EverParse runs,
+    whose cost is dominated by F* verification. Each job that invokes [3d.exe]
+    must use a private working directory, as concurrent runs race on EverParse's
+    shared intermediate files. *)
+
+val batch_check :
+  ?max_jobs:int ->
+  outdir:string ->
+  Wire.Everparse.t list ->
+  (unit, string) result
+(** [batch_check ~outdir schemas] verifies every schema through EverParse (one
+    [.3d] module each, accepted iff F* verifies it), the way EverParse's own
+    corpus is tested. The cost is dominated by per-module F* verification
+    (CPU-bound, several seconds each) with negligible startup, so the schemas
+    are verified concurrently in a {!fork_pool} (at most [max_jobs] at once,
+    default a small multiple of the cores) rather than serially in one
+    [3d.exe --batch]. Each run uses a private directory. Returns [Ok ()] iff
+    EverParse accepts every schema, else [Error] naming the offending schema(s)
+    with their captured diagnostics. Schemas must have distinct names (one [.3d]
+    module each). Requires [3d.exe] in PATH. *)
+
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
     [<Name>_ExternalTypedefs.h] for each schema that uses the WireCtx contract,

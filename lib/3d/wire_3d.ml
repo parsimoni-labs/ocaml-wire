@@ -522,6 +522,111 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
+let rm_rf dir =
+  (try Sys.readdir dir with Sys_error _ -> [||])
+  |> Array.iter (fun f ->
+      try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
+  try Sys.rmdir dir with Sys_error _ -> ()
+
+let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
+
+(* A bounded fork pool: each job runs in its own process, so blocking EverParse
+   runs ([Sys.command]) overlap across cores with full isolation. Returns each
+   job's success (exit 0 and no exception) in input order. EverParse runs must
+   be isolated because they race on shared intermediate files in a shared
+   directory, so jobs that invoke [3d.exe] should each use a private cwd. *)
+let fork_pool ~max_jobs jobs =
+  let n = Array.length jobs in
+  let ok = Array.make n false in
+  let pid_idx = Hashtbl.create 64 in
+  let next = ref 0 and running = ref 0 in
+  let reap () =
+    let pid, status = Unix.wait () in
+    match Hashtbl.find_opt pid_idx pid with
+    | Some i ->
+        Hashtbl.remove pid_idx pid;
+        decr running;
+        ok.(i) <- (match status with Unix.WEXITED 0 -> true | _ -> false)
+    | None -> ()
+  in
+  (* Drain any buffered output before forking, so a child does not inherit and
+     re-flush the parent's pending bytes. *)
+  Format.pp_print_flush Fmt.stderr ();
+  Format.pp_print_flush Fmt.stdout ();
+  while !next < n || !running > 0 do
+    if !next < n && !running < max_jobs then begin
+      let i = !next in
+      incr next;
+      match Unix.fork () with
+      | 0 -> (
+          try
+            jobs.(i) ();
+            Unix._exit 0
+          with e ->
+            Fmt.epr "%s\n%!" (Printexc.to_string e);
+            Unix._exit 1)
+      | pid ->
+          Hashtbl.add pid_idx pid i;
+          incr running
+    end
+    else reap ()
+  done;
+  ok
+
+(* Verify every schema through EverParse, the way its own corpus is tested (one
+   schema per .3d module, each accepted iff F* verifies it). The cost is
+   dominated by per-module F* verification (CPU-bound, several seconds each);
+   per-invocation startup is negligible, so a single [3d.exe --batch] over
+   everything just verifies serially on one core. The schemas are instead
+   verified concurrently in a {!fork_pool} (at most [max_jobs] at once), each
+   [3d.exe] run in its own directory (concurrent runs race on EverParse's shared
+   intermediate files). The pool overlaps the per-module work across cores and
+   load-balances as runs finish, the only lever for this cost. [Ok ()] iff
+   EverParse accepts every schema, else [Error] naming the offending schema(s)
+   with their captured diagnostics. The caller provides schemas with distinct
+   names (each becomes its own .3d module). *)
+let batch_check ?max_jobs ~outdir schemas =
+  match (locate_3d_exe (), schemas) with
+  | None, _ -> Error "3d.exe not found in PATH or ~/.local/everparse/bin/"
+  | Some _, [] -> Ok ()
+  | Some exe, _ -> (
+      ensure_dir outdir;
+      let arr : t array = Array.of_list schemas in
+      let log_of i = Filename.concat outdir (arr.(i).name ^ ".batchlog") in
+      let jobs =
+        Array.mapi
+          (fun i schema () ->
+            let work = Filename.temp_dir "wire_batchchk" "" in
+            Fun.protect
+              ~finally:(fun () -> rm_rf work)
+              (fun () ->
+                generate_3d ~outdir:work [ schema ];
+                let cmd =
+                  Fmt.str
+                    "cd %s && %s --batch --no_copy_everparse_h %s > %s 2>&1"
+                    work exe
+                    (Wire.Everparse.filename schema)
+                    (Filename.quote (log_of i))
+                in
+                if Sys.command cmd <> 0 then failwith "EverParse rejected"))
+          arr
+      in
+      let max_jobs = Option.value max_jobs ~default:(default_job_count ()) in
+      let ok = fork_pool ~max_jobs jobs in
+      let errors =
+        Array.to_list ok
+        |> List.mapi (fun i passed ->
+            if passed then None
+            else
+              let msg =
+                try In_channel.with_open_text (log_of i) In_channel.input_all
+                with Sys_error _ -> ""
+              in
+              Fmt.kstr (fun s -> Some s) "%s:\n%s" arr.(i).name msg)
+        |> List.filter_map Fun.id
+      in
+      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+
 let generate_c ?(quiet = true) ~outdir schemas =
   ensure_dir outdir;
   if has_3d_exe () then begin

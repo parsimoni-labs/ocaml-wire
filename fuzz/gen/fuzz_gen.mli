@@ -11,9 +11,31 @@
 type 'a t
 (** A fuzz generator paired with the codec it tests. *)
 
-val test_cases : string -> 'a t -> Alcobar.test_case list
-(** [test_cases label g] is three Alcobar cases: one round-trip on [g.positive]
-    and one crash-safety check each on [g.random] and [g.adversarial]. *)
+val corpus_generation_mode : unit -> bool
+(** [corpus_generation_mode ()] is [true] when Alcobar is generating an AFL seed
+    corpus. *)
+
+val file_input_mode : unit -> bool
+(** [file_input_mode ()] is [true] when the executable is processing one
+    AFL-provided file input. *)
+
+val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
+(** [test_cases label g] batches [g.positive], [g.random], and [g.adversarial]
+    into one Alcobar case: positives check codec round-trip plus validation, and
+    random/adversarial streams check codec/validator crash-safety. [validate]
+    defaults to [true]. Direct typ-level entry points are covered by
+    {!entry_point_cases} so this hot path stays cheap. *)
+
+val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
+(** [afl_cases label] is the fast file-input AFL smoke suite. It reuses a
+    representative subset of {!registry} and checks decode / validate
+    crash-safety against the AFL-provided bytes, truncating large inputs so one
+    AFL exec stays cheap. Full positive round-trip and nested-composition
+    coverage remains in {!test_cases} / {!nested_cases}. *)
+
+val afl_env_cases : ?max_len:int -> string -> Alcobar.test_case list
+(** [afl_env_cases label] is the file-input AFL smoke suite restricted to
+    registry codecs that bind a {!Wire.Param.env}. *)
 
 val nested_cases : string -> int -> Alcobar.test_case list
 (** [nested_cases label depth] generates an arbitrary nested codec per sample
@@ -24,9 +46,24 @@ val nested_cases : string -> int -> Alcobar.test_case list
     shows up when combinators nest. *)
 
 val reject_cases : string -> 'a t -> Alcobar.test_case list
-(** [reject_cases label g] is two Alcobar cases asserting that decode rejects
-    every input on [g.random] and [g.adversarial]. Use for codecs that always
-    fail (e.g. {!Wire.Action.abort}). *)
+(** [reject_cases label g] is a batched Alcobar case asserting that decode
+    rejects every input on [g.random] and [g.adversarial]. Use for codecs that
+    always fail (e.g. {!Wire.Action.abort}). *)
+
+val invariant_cases : string -> Alcobar.test_case list
+(** [invariant_cases label] is a cheap audit over the shared fuzzer DSL: it
+    asserts registry labels are unique, the registry still mirrors the Wire API
+    families, recursive composition leaves include the expected weird /
+    adversarial terms, and the deterministic differential sampler remains
+    reproducible and unique. *)
+
+val api_cases : string -> Alcobar.test_case list
+(** [api_cases label] exercises Wire API surfaces that are not naturally covered
+    by value round-trips over one typ: staged [Codec.get] / [set] accessors,
+    slice navigation, batch bitfield extraction, custom sequence maps, direct
+    struct validators, metadata helpers, [Wire.size], [pp_value], and cheap
+    Everparse / Raw projection helpers. File-writing projection helpers are
+    guarded to run once per process so repeated fuzz loops stay fast. *)
 
 val direct_cases : string -> 'a t -> Alcobar.test_case list
 (** [direct_cases label g] round-trips a gen through {!Wire.of_string} and
@@ -55,9 +92,12 @@ val sample : seed:int -> count:int -> (string * packed) list
 (** [sample ~seed ~count] is a deterministic, well-distributed Boltzmann sample
     of [count] codecs in the single-typedef, fixed-size fragment (flat records
     and homogeneous arrays of leaves), each renamed to a unique struct name.
-    Record arity follows a geometric (Boltzmann-for-sequence) law and leaves are
-    drawn uniformly from a fixed vocabulary. The same [seed] yields the same
-    set, so a code generator and its consumer can agree on the shapes. *)
+    Record arity follows a geometric (Boltzmann-for-sequence) law and each leaf
+    is drawn from a fixed vocabulary that deliberately oversamples the weird /
+    adversarial shapes (3:1 over the regular leaves), since bugs cluster there;
+    {!val-invariant_cases} asserts the resulting spread across the grammar. The
+    same [seed] yields the same set, so a code generator and its consumer can
+    agree on the shapes. *)
 
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
@@ -71,6 +111,20 @@ val registry : (string * packed) list
     path ({!test_cases}) and the 3D projection path ({!everparse_cases}) from
     one source. *)
 
+val bytes_any : bytes Alcobar.gen
+(** Alcobar generator for an arbitrary byte string, used to read one AFL file
+    input. *)
+
+val truncate_bytes : max_len:int -> bytes -> bytes
+(** [truncate_bytes ~max_len bs] caps [bs] at [max_len] bytes so one AFL exec
+    stays cheap on a large input. *)
+
+val pick_by_first_byte : 'a list -> bytes -> 'a
+(** [pick_by_first_byte xs bs] selects one element of [xs] from the first byte
+    of [bs] (modulo the list length), so each AFL exec drives a single item and
+    coverage of the whole list accumulates across inputs. Raises
+    [Invalid_argument] on an empty list. *)
+
 val everparse_cases : string -> 'a t -> Alcobar.test_case list
 (** [everparse_cases label g] projects [g]'s codec to a 3D schema and
     pretty-prints it, asserting neither raises. Covers the projection and
@@ -80,12 +134,20 @@ val everparse_nested_cases : string -> int -> Alcobar.test_case list
 (** [everparse_nested_cases label depth] is {!everparse_cases} over a freshly
     generated nested composition per sample (cf. {!nested_cases}). *)
 
+val afl_everparse_cases : ?max_len:int -> string -> Alcobar.test_case list
+(** [afl_everparse_cases label] is the fast file-input AFL smoke suite for 3D
+    projection. It picks one representative projectable registry codec from the
+    AFL bytes and asserts schema projection plus pretty-printing does not raise.
+    Full registry and nested projection coverage remains in {!everparse_cases} /
+    {!everparse_nested_cases}. *)
+
 val entry_point_cases : string -> Alcobar.test_case list
 (** [entry_point_cases label] round-trips the alternate entry points
-    ([of_string] / [of_reader] / [validate]) over a {!registry} gen picked at
+    ([of_string] / [of_bytes] / [of_reader] / [to_string] / [to_bytes] /
+    [to_writer] / [_exn] variants / [validate]) over a {!registry} gen picked at
     random each sample, so they cover the whole registry instead of a pinned
-    subset. The [of_string] / [of_reader] checks skip codecs that bind a
-    [Param.env]. *)
+    subset. Direct decode crash-safety is sampled on random/adversarial streams.
+    Direct checks skip codecs that bind a [Param.env]. *)
 
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
@@ -247,6 +309,19 @@ val array : int -> 'a t -> 'a list t
 val enum : string -> (string * int) list -> int t
 (** [enum name cases] generates for [Wire.enum name cases Wire.uint8]. *)
 
+val enum_u16be : int t
+(** [enum_u16be] generates for [Wire.enum ... Wire.uint16be]. *)
+
+val enum_open : int t
+(** [enum_open] generates for [Wire.enum_open ... Wire.uint8], accepting
+    unlisted values as positives. *)
+
+val enum_open_u16be : int t
+(** [enum_open_u16be] generates for [Wire.enum_open ... Wire.uint16be]. *)
+
+val variants_u16be : [ `High | `One | `Zero ] t
+(** [variants_u16be] generates for [Wire.variants ... Wire.uint16be]. *)
+
 val bounded_u8 : min:int -> max:int -> int t
 (** [bounded_u8 ~min ~max] generates for a single-field record whose
     [Wire.uint8] field carries a [~self_constraint] [min <= v <= max].
@@ -268,6 +343,16 @@ val repeat_seq : bytes:int -> 'a t -> 'a list t
 
 val field_anon : (int * int) t
 (** [field_anon] exercises [Wire.Field.anon]. *)
+
+val field_constraint : (int * int) t
+(** [field_constraint] exercises [Wire.Field.v ~constraint_] with a constraint
+    referencing a previous field. *)
+
+val field_int : (int * int) t
+(** [field_int] exercises {!Wire.Field.int} in a field self constraint. *)
+
+val self_int64 : int64 t
+(** [self_int64] exercises [Wire.Field.v ~self_int64] over a 64-bit field. *)
 
 val param_input : int t
 (** [param_input] is a codec referencing [Wire.Param.input] in its [~where];
@@ -346,6 +431,10 @@ val casetype_u8 : string -> 'a case list -> 'a t
 (** [casetype_u8 name cases] generates for
     [Wire.casetype name Wire.uint8 cases]. Positives pick a case uniformly, emit
     its tag byte, and append the inner case's positive bytes. *)
+
+val casetype_u16be_default : [ `A of int | `Other of int * int ] t
+(** [casetype_u16be_default] generates for [Wire.casetype] over a uint16be
+    discriminator and a [Wire.default] branch that preserves the matched tag. *)
 
 (** {1 Record composition} *)
 
