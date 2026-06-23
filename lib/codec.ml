@@ -361,17 +361,12 @@ let rec build_populate : type a.
         match reader buf base with
         | Some _ -> inner_populate slots buf base
         | None -> ())
-  | All_zeros ->
-      (* No int projection, but the reader checks every byte is zero. Run it for
-         that effect so [Codec.validate] enforces the all-zeros contract decode
-         does, instead of silently accepting tampered padding. *)
-      fun _slots buf base -> ignore (reader buf base)
   | _ ->
-      (* Aggregate / string-valued types have no scalar int projection.
-         [Field.ref] over them reads 0; treat as deliberate (no slot
-         write) rather than an error since [ref] currently accepts any
-         field type. *)
-      fun _arr _buf _base -> ()
+      (* No int slot to populate, but run the reader for its effect: it performs
+         the same decode-side checks (all-zeros span, NUL terminator, refined
+         span, embedded codec / array element constraints), so [Codec.validate]
+         rejects exactly what [decode] does. The value is discarded. *)
+      fun _slots buf base -> ignore (reader buf base)
 
 (* Bitfield extraction descriptor: word reader + packed shift/mask.
    Packing shift and mask into a single int lets [extract] be a direct
@@ -2150,7 +2145,18 @@ and compile_map : type a w r.
     }
   in
   let cf = compile_field ctx inner_fld in
-  { cf with raw_reader = (fun buf off -> decode (cf.raw_reader buf off)) }
+  let checked_reader buf off = decode (cf.raw_reader buf off) in
+  {
+    cf with
+    raw_reader = checked_reader;
+    (* [decode] is where a lookup checks its index is in range; run it in
+       populate too so [Codec.validate] enforces the bound decode does. The inner
+       populate still fills the int slot from the raw value. *)
+    populate =
+      (fun arr buf base ->
+        cf.populate arr buf base;
+        ignore (checked_reader buf base));
+  }
 
 and compile_optional : type a r.
     layout_ctx ->
@@ -2599,20 +2605,7 @@ let validate_or_eof buf f =
          (Unexpected_eof
             { expected = Bytes.length buf + 1; got = Bytes.length buf }))
 
-(* An [all_zeros] field carries no constraint or action, but its populate checks
-   every byte is zero, so a struct holding one (through the transparent wrappers)
-   needs the validator pass to run even when nothing else does, or [Codec.validate]
-   would skip the all-zeros contract that decode enforces. *)
-let rec typ_checks_bytes : type a. a Types.typ -> bool = function
-  | Types.All_zeros -> true
-  | Types.Where { inner; _ } -> typ_checks_bytes inner
-  | Types.Map { inner; _ } -> typ_checks_bytes inner
-  | Types.Optional { inner; _ } -> typ_checks_bytes inner
-  | Types.Optional_or { inner; _ } -> typ_checks_bytes inner
-  | _ -> false
-
-let build_validators validators_rev checkers_rev compiled_where struct_fields
-    n_total =
+let build_validators validators_rev checkers_rev compiled_where n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
   let n_validators = Array.length validator_fns in
   let validate_arr arr buf off =
@@ -2631,31 +2624,23 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
       checker_fns.(i) arr buf off
     done
   in
-  let has_checks =
-    compiled_where <> None
-    || List.exists
-         (fun (Types.Field f) ->
-           f.constraint_ <> None || f.action <> None
-           || typ_checks_bytes f.field_typ)
-         struct_fields
-  in
   let validate =
-    if has_checks then (
-      let arr = alloc_slots n_total in
-      fun ?env_slots buf off ->
-        clear_slots arr n_total;
-        (match env_slots with
-        | Some slots ->
-            (* Seed param slots from the supplied env so [where] clauses
-               that reference [Param.input] evaluate correctly. *)
-            let n = Array.length slots in
-            Array.blit slots 0 arr.ints (n_total - n) n
-        | None -> ());
-        (* Validate through the same kernel decode uses ([validate_arr]), so
-           [Codec.validate] and [decode] never disagree on field constraints,
-           actions, or the [where] clause. *)
-        validate_or_eof buf (fun () -> validate_arr arr buf off))
-    else fun ?env_slots:_ _buf _off -> ()
+    (* Always run [validate_arr], never gate on whether the struct has a user
+       constraint: a field's own decode-side checks (enum membership, lookup
+       bound, all-zeros / NUL / refined span, embedded element constraints) run
+       here too, and gating them out let [Codec.validate] accept inputs [decode]
+       rejects. *)
+    let arr = alloc_slots n_total in
+    fun ?env_slots buf off ->
+      clear_slots arr n_total;
+      (match env_slots with
+      | Some slots ->
+          (* Seed param slots so [where] clauses referencing [Param.input]
+             evaluate correctly. *)
+          let n = Array.length slots in
+          Array.blit slots 0 arr.ints (n_total - n) n
+      | None -> ());
+      validate_or_eof buf (fun () -> validate_arr arr buf off)
   in
   (validate_arr, populate, validate)
 
@@ -2842,8 +2827,7 @@ let seal : type r. (r, r) record -> r t =
     compile_where_clause r.param_slots r.field_readers r.where
   in
   let validate_arr, populate, validate_checks =
-    build_validators validators (List.rev r.checkers_rev) compiled_where
-      struct_fields n_total
+    build_validators validators (List.rev r.checkers_rev) compiled_where n_total
   in
   (* Per-field action runners *)
   let field_actions = List.rev r.field_actions_rev in
@@ -3093,7 +3077,7 @@ and validator_of_struct (s : Types.struct_) : validator =
     build_validators
       (List.rev acc.validators_rev)
       (List.rev acc.checkers_rev)
-      compiled_where s.fields n_total
+      compiled_where n_total
   in
   (* Full validation: fire field actions and check the where clause.
      [build_validators]'s third return [validate] is checkers-only (no

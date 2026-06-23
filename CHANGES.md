@@ -220,6 +220,13 @@
 
 ### Fixed
 
+- `Codec.validate` now enforces every check `Codec.decode` does, for any codec.
+  It used to skip a field's own decode-side checks (enum and variant membership,
+  a lookup index bound, a refined or NUL-terminated span, an embedded codec or
+  array element's constraints) whenever the struct had no top-level constraint
+  or `where`, so validating untrusted input accepted values decode rejects and a
+  following zero-copy `Codec.get` trusted them (#207, @samoht)
+
 - A field constraint that subtracts or multiplies a field (such as
   `Expr.(a * b = int 0)` or `Expr.(a - b >= int 5)`) is now rejected at
   projection. Such an expression under- or overflows the field's narrow width,
