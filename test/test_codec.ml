@@ -585,13 +585,18 @@ let test_repeat_array_reject_bitfield () =
 (* A zero-width element ([empty] / unit) carries no bytes, so an array of it is
    degenerate and projects to a zero-size 3D array EverParse rejects. It is
    refused at construction. *)
-let test_array_reject_zero_width_element () =
+let test_reject_zero_width_element () =
   Alcotest.(check bool)
     "array over empty rejected" true
     (raises_invalid (fun () -> array ~len:(int 3) empty));
   Alcotest.(check bool)
     "array_seq over empty rejected" true
-    (raises_invalid (fun () -> array_seq seq_list ~len:(int 3) empty))
+    (raises_invalid (fun () -> array_seq seq_list ~len:(int 3) empty));
+  (* A byte-budget list of a 0-width element does not extract either, so
+     [Field.repeat] over [empty] is rejected like [array], not silently built. *)
+  Alcotest.(check bool)
+    "repeat over empty rejected" true
+    (raises_invalid (fun () -> Field.repeat "r" ~size:(int 3) empty))
 
 (* Wire.array over a fixed sub-record (Codec element): a fixed-count list of
    structs. Decoding raised Failure "build_field_reader: unsupported type"
@@ -5103,8 +5108,8 @@ let suite =
         test_repeat_oversized_length_rejected;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
-      Alcotest.test_case "array rejects zero-width element" `Quick
-        test_array_reject_zero_width_element;
+      Alcotest.test_case "array/repeat reject zero-width element" `Quick
+        test_reject_zero_width_element;
       Alcotest.test_case "array: record element roundtrip" `Quick
         test_array_record_element;
       Alcotest.test_case "array: record element projection" `Quick

@@ -220,6 +220,12 @@
 
 ### Fixed
 
+- `Field.repeat` over a zero-width element (`Wire.empty`) is now rejected at
+  construction, like `Wire.array` already was. A byte-budget list of a 0-width
+  element does not extract through EverParse, so the codec had no verified C
+  validator; the error now fires when the schema is built rather than producing
+  an unverifiable spec (#198, @samoht)
+
 - A closed `enum` (or `variants`) used as an `array` element, a `repeat`
   element, or an `optional` inner now enforces its value set in the
   EverParse-generated C validator, matching `Codec.decode`. Previously only a
