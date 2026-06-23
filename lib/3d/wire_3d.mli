@@ -80,16 +80,29 @@ val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 
     Requires [3d.exe] in PATH. *)
 
+val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
+(** [fork_pool ~max_jobs jobs] runs each job in its own process, at most
+    [max_jobs] at a time, returning each job's success (exit 0 with no
+    exception) in input order. Used to overlap the per-module EverParse runs,
+    whose cost is dominated by F* verification. Each job that invokes [3d.exe]
+    must use a private working directory, as concurrent runs race on EverParse's
+    shared intermediate files. *)
+
 val batch_check :
-  outdir:string -> Wire.Everparse.t list -> (unit, string) result
-(** [batch_check ~outdir schemas] generates one [.3d] per schema in [outdir] and
-    validates them all in a single [3d.exe --batch] invocation (full F* and C
-    extraction), the way EverParse's own corpus is tested. Because the F* /
-    KaRaMeL startup cost is paid once per invocation, this is far faster than a
-    {!parse_3d} call per schema for a large set. Returns [Ok ()] iff EverParse
-    accepts every schema, else [Error] with the captured diagnostics naming the
-    offending file(s). Schemas must have distinct names (one [.3d] module each).
-    Requires [3d.exe] in PATH. *)
+  ?max_jobs:int ->
+  outdir:string ->
+  Wire.Everparse.t list ->
+  (unit, string) result
+(** [batch_check ~outdir schemas] verifies every schema through EverParse (one
+    [.3d] module each, accepted iff F* verifies it), the way EverParse's own
+    corpus is tested. The cost is dominated by per-module F* verification
+    (CPU-bound, several seconds each) with negligible startup, so the schemas
+    are verified concurrently in a {!fork_pool} (at most [max_jobs] at once,
+    default a small multiple of the cores) rather than serially in one
+    [3d.exe --batch]. Each run uses a private directory. Returns [Ok ()] iff
+    EverParse accepts every schema, else [Error] naming the offending schema(s)
+    with their captured diagnostics. Schemas must have distinct names (one [.3d]
+    module each). Requires [3d.exe] in PATH. *)
 
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
