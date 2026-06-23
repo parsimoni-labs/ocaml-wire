@@ -2756,6 +2756,14 @@ let reject_nested_where name fields =
     | Types.Single_elem { elem; _ } -> if any_real_where elem then fail fname
     | Types.Optional { inner; _ } -> if any_real_where inner then fail fname
     | Types.Optional_or { inner; _ } -> if any_real_where inner then fail fname
+    | Types.Casetype { cases; _ } ->
+        (* A [where] as a casetype case body projects to [case k: T { cond } v;],
+           which is not valid 3D (a refinement is not allowed on a case body),
+           unlike a top-level field refinement. Reject a non-trivial one. *)
+        List.iter
+          (fun (Types.Case_branch { cb_inner; _ }) ->
+            if any_real_where cb_inner then fail fname)
+          cases
     | _ -> ()
   in
   List.iter

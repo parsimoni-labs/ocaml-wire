@@ -281,6 +281,22 @@ let test_reject_nested_where () =
               (where Expr.(Field.ref limit < int 9) uint8)
             $ snd);
         ]);
+  reject "casetype case body" (fun () ->
+      Codec.v "CtW"
+        (fun t v -> (t, v))
+        [
+          Codec.(Field.v "tag" uint8 $ fst);
+          Codec.(
+            Field.v "body"
+              (casetype "BodyW" uint8
+                 [
+                   case ~index:1
+                     (where Expr.(int 1 = int 1) uint8)
+                     ~inject:(fun s -> s)
+                     ~project:Option.some;
+                 ])
+            $ snd);
+        ]);
   (* A top-level field where is still accepted (it projects and is enforced). *)
   ignore
     (Codec.v "TopW"
