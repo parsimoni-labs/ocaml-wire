@@ -92,9 +92,12 @@ val sample : seed:int -> count:int -> (string * packed) list
 (** [sample ~seed ~count] is a deterministic, well-distributed Boltzmann sample
     of [count] codecs in the single-typedef, fixed-size fragment (flat records
     and homogeneous arrays of leaves), each renamed to a unique struct name.
-    Record arity follows a geometric (Boltzmann-for-sequence) law and leaves are
-    drawn uniformly from a fixed vocabulary. The same [seed] yields the same
-    set, so a code generator and its consumer can agree on the shapes. *)
+    Record arity follows a geometric (Boltzmann-for-sequence) law and each leaf
+    is drawn from a fixed vocabulary that deliberately oversamples the weird /
+    adversarial shapes (3:1 over the regular leaves), since bugs cluster there;
+    {!val-invariant_cases} asserts the resulting spread across the grammar. The
+    same [seed] yields the same set, so a code generator and its consumer can
+    agree on the shapes. *)
 
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
