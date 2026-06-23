@@ -41,11 +41,12 @@
     the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
-(** [everparse_name name] returns the EverParse-normalized identifier for a
-    struct name. EverParse 3D normalizes names that start with two or more
-    consecutive uppercase letters by lowercasing the whole name and capitalizing
-    only the first letter (e.g., [CLCW] becomes [Clcw], [TMFrame] becomes
-    [Tmframe]). Names with standard camelCase are preserved. *)
+(** [everparse_name name] returns the C identifier EverParse derives from a
+    struct name: underscores are stripped and the [_]-separated segments are
+    joined in CamelCase. Each segment is capitalized and any internal run of two
+    or more consecutive uppercase letters collapses to a single one. E.g.
+    [Grpc_message] becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW]
+    becomes [Clcw], and [TMFrame] becomes [Tmframe]. *)
 
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules. *)

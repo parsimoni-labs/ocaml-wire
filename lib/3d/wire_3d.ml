@@ -33,12 +33,18 @@ let normalize_segment seg =
   done;
   Buffer.contents b
 
-(* EverParse strips underscores when generating C identifiers and
-   CamelCases each segment. [EP_Header -> EpHeader],
-   [MC_Status_Reply -> McStatusReply], [SSID -> Ssid]. *)
+(* EverParse strips underscores when generating a C identifier from a name and
+   joins the [_]-separated segments into CamelCase: each segment is capitalized
+   and any internal run of two or more uppercase letters collapses to one.
+   [Grpc_message -> GrpcMessage], [EP_Header -> EpHeader],
+   [MC_Status_Reply -> McStatusReply], [SSID -> Ssid]. wire writes the .3d file
+   and type with a capitalized name, so the leading segment is normally already
+   capitalized; capitalizing it here keeps the identifier matching EverParse even
+   for an otherwise lower-case name. *)
 let everparse_name name =
   String.split_on_char '_' name
-  |> List.map normalize_segment |> String.concat ""
+  |> List.map (fun seg -> String.capitalize_ascii (normalize_segment seg))
+  |> String.concat ""
 
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].

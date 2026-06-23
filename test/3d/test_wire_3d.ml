@@ -19,10 +19,11 @@ let test_everparse_name () =
   Alcotest.(check string)
     "SpaceOSFrame -> SpaceOsframe" "SpaceOsframe"
     (Wire_3d.everparse_name "SpaceOSFrame");
-  (* Standard camelCase is preserved *)
+  (* Each segment is capitalized: wire writes the .3d type with a capitalized
+     name, so [myField] reaches EverParse as [MyField]. *)
   Alcotest.(check string) "Foo -> Foo" "Foo" (Wire_3d.everparse_name "Foo");
   Alcotest.(check string)
-    "myField -> myField" "myField"
+    "myField -> MyField" "MyField"
     (Wire_3d.everparse_name "myField");
   (* Single uppercase letter at start is not >=2 consecutive uppercase *)
   Alcotest.(check string)
@@ -38,6 +39,14 @@ let test_everparse_name () =
   Alcotest.(check string)
     "Foo_Bar -> FooBar" "FooBar"
     (Wire_3d.everparse_name "Foo_Bar");
+  (* A lowercase segment after an underscore is capitalized, so the identifier
+     matches the [GrpcMessage] EverParse generates for a [Grpc_message] type. *)
+  Alcotest.(check string)
+    "Grpc_message -> GrpcMessage" "GrpcMessage"
+    (Wire_3d.everparse_name "Grpc_message");
+  Alcotest.(check string)
+    "rpmsg_endpoint_info -> RpmsgEndpointInfo" "RpmsgEndpointInfo"
+    (Wire_3d.everparse_name "rpmsg_endpoint_info");
   (* Empty string *)
   Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "")
 

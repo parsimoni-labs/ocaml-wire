@@ -220,6 +220,14 @@
 
 ### Fixed
 
+- A codec whose name has a lower-case segment after an underscore (such as
+  `Grpc_message`) now generates C identifiers that match the ones EverParse
+  emits. `Wire_3d.everparse_name` capitalized only the first segment, yielding
+  `Grpcmessage` where EverParse produces `GrpcMessage`, so the generated FFI
+  stubs and the documentation differential harness referenced a name that did
+  not exist and failed to link. Every underscore-separated segment is now
+  capitalized (@samoht)
+
 - A field constraint that adds narrow unsigned fields (such as `a + b <= 10`
   over two `uint8` fields) now projects to a `.3d` EverParse verifies. The sum
   was emitted at the field's own width, which EverParse refuses to verify because
