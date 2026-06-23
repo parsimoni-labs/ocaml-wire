@@ -626,6 +626,35 @@ let test_signed_constraint_twos_complement () =
     "raw unsigned comparison not emitted" false
     (contains ~sub:"(x < 100)" out)
 
+let test_signed_equality_twos_complement () =
+  (* A signed field's equality refinement must compare against the
+     two's-complement byte the unsigned projected field reads, and fold to a
+     constant when the target is outside the signed range, or the C validator
+     compares the raw byte and diverges from the OCaml decoder. *)
+  let proj name k =
+    to_3d
+      (Everparse.schema
+         (Codec.v name
+            (fun v -> v)
+            Codec.[ (Field.v "v" int8 ~self_constraint:k $ fun v -> v) ]))
+        .module_
+  in
+  let eq_oor = proj "EqOOR" (fun s -> Expr.(s = int 200)) in
+  Alcotest.(check bool)
+    "out-of-range equality folds to false" true
+    (contains ~sub:"v { false }" eq_oor);
+  Alcotest.(check bool)
+    "out-of-range equality drops the raw constant" false
+    (contains ~sub:"200" eq_oor);
+  let eq_inr = proj "EqInR" (fun s -> Expr.(s = int (-1))) in
+  Alcotest.(check bool)
+    "in-range equality uses the two's-complement byte" true
+    (contains ~sub:"(v == 255)" eq_inr);
+  let ne_oor = proj "NeOOR" (fun s -> Expr.(s <> int 200)) in
+  Alcotest.(check bool)
+    "out-of-range inequality folds to true" true
+    (contains ~sub:"v { true }" ne_oor)
+
 let test_float_ordering_rejected () =
   (* IEEE bit patterns do not order as unsigned, so a float field ordering
      constraint has no faithful 3D projection and is rejected at projection. *)
@@ -1234,6 +1263,8 @@ let suite =
         test_3d_negative_literal_rejected;
       Alcotest.test_case "3d: signed constraint two's-complement" `Quick
         test_signed_constraint_twos_complement;
+      Alcotest.test_case "3d: signed equality two's-complement" `Quick
+        test_signed_equality_twos_complement;
       Alcotest.test_case "3d: float ordering rejected" `Quick
         test_float_ordering_rejected;
       Alcotest.test_case "3d: int64 literal unsigned decimal" `Quick
