@@ -220,6 +220,11 @@
 
 ### Fixed
 
+- A non-trivial `Wire.where` used as a `Wire.casetype` case body is now rejected
+  at construction. Such a refinement projects to `case k: T { cond } v;`, which
+  is not valid 3D (a case body takes no refinement), unlike a top-level field
+  `where`, so the codec had no verified validator (#200, @samoht)
+
 - `Wire.bits ~width` is now validated against its base word: a width above the
   base size (e.g. `bits ~width:9 U8`) or below 1 is rejected at construction.
   Such a field had no faithful wire meaning, and the OCaml shift and the
