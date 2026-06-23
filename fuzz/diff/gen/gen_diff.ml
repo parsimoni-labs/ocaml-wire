@@ -41,12 +41,6 @@ let publish_outputs ~base ~src ~dst =
         copy_file ~src:(Filename.concat src f) ~dst:(Filename.concat dst f))
     (Sys.readdir src)
 
-let rm_rf dir =
-  (try Sys.readdir dir with Sys_error _ -> [||])
-  |> Array.iter (fun f ->
-      try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
-  try Sys.rmdir dir with Sys_error _ -> ()
-
 let redirect_to file =
   let fd =
     Unix.openfile file [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
@@ -64,7 +58,7 @@ let gen_isolated ~schema_dir ~base schema =
   redirect_to (Filename.concat schema_dir (base ^ ".faillog"));
   let tmp = Filename.temp_dir "wire_diffgen" "" in
   Fun.protect
-    ~finally:(fun () -> rm_rf tmp)
+    ~finally:(fun () -> Wire_3d.rm_rf tmp)
     (fun () ->
       Wire_3d.run ~quiet:false ~outdir:tmp [ schema ];
       publish_outputs ~base ~src:tmp ~dst:schema_dir);
