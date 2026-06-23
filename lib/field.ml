@@ -108,8 +108,10 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   let open Types in
   match typ with
   | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Unit | Zeroterm ->
+  | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Zeroterm ->
       true
+  (* [Unit] is 0-width: a byte-budget list of it carries no bytes and projects to
+     a zero-size element EverParse refuses to extract, like the [array] case. *)
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
   | Codec { codec_struct; _ } ->
       (not (codec_ends_greedy codec_struct)) && Types.struct_nz codec_struct
