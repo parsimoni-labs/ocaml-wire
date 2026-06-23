@@ -2660,11 +2660,14 @@ let fill_param_slots tbl param_base handles =
     (fun i (Param.Pack p) -> Hashtbl.replace tbl p.Types.name (param_base + i))
     handles
 
-let build_checked_decode raw_decode wire_size_info min_size =
- fun buf off ->
+(* The structural bounds check decode runs before reading any field: the buffer
+   must hold at least [min_size] bytes, and the codec's resolved wire size must
+   fit. Shared with [validate] so a constraint-free codec is still bounds-checked
+   before a zero-copy [get] reads its fields. *)
+let check_decode_bounds wire_size_info min_size buf off =
   if off + min_size > Bytes.length buf then
     raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
-  (match wire_size_info with
+  match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
       let end_off =
@@ -2675,8 +2678,21 @@ let build_checked_decode raw_decode wire_size_info min_size =
       if end_off < off + min_size then
         raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
       if end_off > Bytes.length buf then
-        raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off));
+        raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off)
+
+let build_checked_decode raw_decode wire_size_info min_size =
+ fun buf off ->
+  check_decode_bounds wire_size_info min_size buf off;
   raw_decode buf off
+
+(* [Codec.validate] is the safety gate before a batch of zero-copy [get] calls on
+   untrusted input, so it must run decode's structural bounds check even for a
+   constraint-free codec (whose constraint validator [validate_checks] is a
+   no-op), or a [get] on a truncated buffer would read out of bounds. *)
+let validate_with_bounds wire_size_info min_size validate_checks =
+ fun ?env_slots buf off ->
+  check_decode_bounds wire_size_info min_size buf off;
+  validate_checks ?env_slots buf off
 
 (* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
    [all_zeros]), an embedded sub-codec whose own last field does, or a casetype
@@ -2806,7 +2822,7 @@ let seal : type r. (r, r) record -> r t =
   let compiled_where =
     compile_where_clause r.param_slots r.field_readers r.where
   in
-  let validate_arr, populate, validate =
+  let validate_arr, populate, validate_checks =
     build_validators validators (List.rev r.checkers_rev) compiled_where
       struct_fields n_total
   in
@@ -2843,7 +2859,7 @@ let seal : type r. (r, r) record -> r t =
         !write_off);
     wire_size = wire_size_info;
     struct_fields;
-    validate;
+    validate = validate_with_bounds wire_size_info min_size validate_checks;
     validate_arr;
     populate;
     n_array_slots = n_total;
