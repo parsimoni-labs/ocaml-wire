@@ -2483,8 +2483,12 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 
 (* Forward reader list: cons-list dual of [readers] snoc-list.
    Built once at seal time by [to_fwd]; applied at decode time by
-   [apply_fwd] which unrolls 8 fields per step (1 partial application
-   per 8 fields, e.g. 16 fields = 8 + merge + 8 = 1 partial). *)
+   [apply_fwd], which saturates the constructor in a single call for up to
+   16 fields and otherwise unrolls 16 per step (1 partial application per
+   extra 16 fields). A saturated call returns the record with no
+   intermediate closure; a partial application allocates a [caml_curry]
+   closure per decode (visible only under flambda-off), so the threshold is
+   set above a typical protocol header (CLCW 13, CFDP 14 fields). *)
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
@@ -2507,44 +2511,54 @@ let to_fwd : type full result.
   in
   go readers FNil
 
-(* Apply a forward reader list to [make]. Unrolled up to 6 fields per step;
-   beyond that, one partial application per 8 fields. *)
+(* Apply a forward reader list to [make], saturating the constructor in a
+   single call for up to 16 fields, so no intermediate closure is allocated
+   per decode. Beyond 16 fields one partial application is made per extra 16
+   (a [caml_curry] chain under flambda-off); the threshold clears a typical
+   protocol header (CLCW 13, CFDP 14 fields) in one saturated call.
+
+   The cases are a saturation table, one row per arity. The formatter is
+   disabled here because it would otherwise staircase the deep [FCons]
+   patterns across ~240 lines; the flat table is both shorter and easier to
+   read. *)
 let rec apply_fwd : type mid result.
     mid -> (mid, result) readers_fwd -> bytes -> int -> result =
  fun f fwd buf off ->
   match fwd with
   | FNil -> f
-  | FCons (r1, FNil) -> f (r1 buf off)
-  | FCons (r1, FCons (r2, FNil)) -> f (r1 buf off) (r2 buf off)
+  | FCons (r1, FNil) ->
+      f (r1 buf off)
+  | FCons (r1, FCons (r2, FNil)) ->
+      f (r1 buf off) (r2 buf off)
   | FCons (r1, FCons (r2, FCons (r3, FNil))) ->
       f (r1 buf off) (r2 buf off) (r3 buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FNil)))) ->
       f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FNil))))) ->
       f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off)
-  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FNil))))))
-    ->
-      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off)
-        (r6 buf off)
-  | FCons
-      ( r1,
-        FCons
-          (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FNil))))))
-      ) ->
-      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off)
-        (r6 buf off) (r7 buf off)
-  | FCons
-      ( r1,
-        FCons
-          ( r2,
-            FCons
-              ( r3,
-                FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, rest)))))
-              ) ) ) ->
-      apply_fwd
-        (f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off)
-           (r6 buf off) (r7 buf off) (r8 buf off))
-        rest buf off
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FNil)))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FNil))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FNil)))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FNil))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FNil)))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FNil))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FNil)))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FNil))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FNil)))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FNil))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, rest)))))))))))))))) ->
+      apply_fwd (f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off)) rest buf off
+[@@ocamlformat "disable"]
 
 let build_decode : type full r. full -> (full, r) readers -> bytes -> int -> r =
  fun make readers ->
