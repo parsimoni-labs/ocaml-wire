@@ -123,6 +123,13 @@
 
 ### Changed
 
+- Decoding a record codec with more than 8 fields no longer allocates a
+  short-lived closure on each decode: the constructor is now applied in one
+  saturated call for codecs of up to 16 fields. On a flambda-off switch this
+  partial application was the dominant cost of decoding a wide header (CLCW at
+  13 fields, CFDP at 14), which now allocates only the record it returns (#212,
+  @samoht)
+
 - The EverParse projection API is consolidated to two entry points. The two
   projections, previously `Wire.Everparse.schema` and `Wire.Everparse.doc`, are
   now `Wire.Everparse.project ?mode`, where `` `Standalone `` (the default)

@@ -5229,6 +5229,183 @@ let test_enum_codec_validates () =
   Alcotest.(check bool)
     "array unknown element rejected" false (ok ca "\238\220\220\187")
 
+(* >8-field codecs must not allocate a partial-application closure per decode.
+   [apply_fwd] saturates the record constructor in one call for up to 16
+   fields; a regression to a narrower unroll reintroduces one [caml_curry]
+   closure per decode, visible under flambda-off. The 8-vs-16 field decode
+   must grow only by the 8 extra record slots -- no closure. *)
+type alloc_r8 = {
+  a1 : int;
+  a2 : int;
+  a3 : int;
+  a4 : int;
+  a5 : int;
+  a6 : int;
+  a7 : int;
+  a8 : int;
+}
+
+type alloc_r16 = {
+  b1 : int;
+  b2 : int;
+  b3 : int;
+  b4 : int;
+  b5 : int;
+  b6 : int;
+  b7 : int;
+  b8 : int;
+  b9 : int;
+  b10 : int;
+  b11 : int;
+  b12 : int;
+  b13 : int;
+  b14 : int;
+  b15 : int;
+  b16 : int;
+}
+
+type alloc_r17 = {
+  c1 : int;
+  c2 : int;
+  c3 : int;
+  c4 : int;
+  c5 : int;
+  c6 : int;
+  c7 : int;
+  c8 : int;
+  c9 : int;
+  c10 : int;
+  c11 : int;
+  c12 : int;
+  c13 : int;
+  c14 : int;
+  c15 : int;
+  c16 : int;
+  c17 : int;
+}
+
+let alloc_codec8 =
+  Codec.v "Alloc8"
+    (fun a1 a2 a3 a4 a5 a6 a7 a8 ->
+      ({ a1; a2; a3; a4; a5; a6; a7; a8 } : alloc_r8))
+    Codec.
+      [
+        (Field.v "a1" uint8 $ fun (r : alloc_r8) -> r.a1);
+        (Field.v "a2" uint8 $ fun (r : alloc_r8) -> r.a2);
+        (Field.v "a3" uint8 $ fun (r : alloc_r8) -> r.a3);
+        (Field.v "a4" uint8 $ fun (r : alloc_r8) -> r.a4);
+        (Field.v "a5" uint8 $ fun (r : alloc_r8) -> r.a5);
+        (Field.v "a6" uint8 $ fun (r : alloc_r8) -> r.a6);
+        (Field.v "a7" uint8 $ fun (r : alloc_r8) -> r.a7);
+        (Field.v "a8" uint8 $ fun (r : alloc_r8) -> r.a8);
+      ]
+
+let alloc_codec16 =
+  Codec.v "Alloc16"
+    (fun b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 ->
+      ({ b1; b2; b3; b4; b5; b6; b7; b8; b9; b10; b11; b12; b13; b14; b15; b16 }
+        : alloc_r16))
+    Codec.
+      [
+        (Field.v "b1" uint8 $ fun (r : alloc_r16) -> r.b1);
+        (Field.v "b2" uint8 $ fun (r : alloc_r16) -> r.b2);
+        (Field.v "b3" uint8 $ fun (r : alloc_r16) -> r.b3);
+        (Field.v "b4" uint8 $ fun (r : alloc_r16) -> r.b4);
+        (Field.v "b5" uint8 $ fun (r : alloc_r16) -> r.b5);
+        (Field.v "b6" uint8 $ fun (r : alloc_r16) -> r.b6);
+        (Field.v "b7" uint8 $ fun (r : alloc_r16) -> r.b7);
+        (Field.v "b8" uint8 $ fun (r : alloc_r16) -> r.b8);
+        (Field.v "b9" uint8 $ fun (r : alloc_r16) -> r.b9);
+        (Field.v "b10" uint8 $ fun (r : alloc_r16) -> r.b10);
+        (Field.v "b11" uint8 $ fun (r : alloc_r16) -> r.b11);
+        (Field.v "b12" uint8 $ fun (r : alloc_r16) -> r.b12);
+        (Field.v "b13" uint8 $ fun (r : alloc_r16) -> r.b13);
+        (Field.v "b14" uint8 $ fun (r : alloc_r16) -> r.b14);
+        (Field.v "b15" uint8 $ fun (r : alloc_r16) -> r.b15);
+        (Field.v "b16" uint8 $ fun (r : alloc_r16) -> r.b16);
+      ]
+
+let alloc_codec17 =
+  Codec.v "Alloc17"
+    (fun c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 c16 c17 ->
+      ({
+         c1;
+         c2;
+         c3;
+         c4;
+         c5;
+         c6;
+         c7;
+         c8;
+         c9;
+         c10;
+         c11;
+         c12;
+         c13;
+         c14;
+         c15;
+         c16;
+         c17;
+       }
+        : alloc_r17))
+    Codec.
+      [
+        (Field.v "c1" uint8 $ fun (r : alloc_r17) -> r.c1);
+        (Field.v "c2" uint8 $ fun (r : alloc_r17) -> r.c2);
+        (Field.v "c3" uint8 $ fun (r : alloc_r17) -> r.c3);
+        (Field.v "c4" uint8 $ fun (r : alloc_r17) -> r.c4);
+        (Field.v "c5" uint8 $ fun (r : alloc_r17) -> r.c5);
+        (Field.v "c6" uint8 $ fun (r : alloc_r17) -> r.c6);
+        (Field.v "c7" uint8 $ fun (r : alloc_r17) -> r.c7);
+        (Field.v "c8" uint8 $ fun (r : alloc_r17) -> r.c8);
+        (Field.v "c9" uint8 $ fun (r : alloc_r17) -> r.c9);
+        (Field.v "c10" uint8 $ fun (r : alloc_r17) -> r.c10);
+        (Field.v "c11" uint8 $ fun (r : alloc_r17) -> r.c11);
+        (Field.v "c12" uint8 $ fun (r : alloc_r17) -> r.c12);
+        (Field.v "c13" uint8 $ fun (r : alloc_r17) -> r.c13);
+        (Field.v "c14" uint8 $ fun (r : alloc_r17) -> r.c14);
+        (Field.v "c15" uint8 $ fun (r : alloc_r17) -> r.c15);
+        (Field.v "c16" uint8 $ fun (r : alloc_r17) -> r.c16);
+        (Field.v "c17" uint8 $ fun (r : alloc_r17) -> r.c17);
+      ]
+
+let per_decode_words codec nfields =
+  let buf = Bytes.make nfields '\042' in
+  ignore (Sys.opaque_identity (Codec.decode_exn codec buf 0));
+  let iters = 200_000 in
+  Gc.full_major ();
+  let before = Gc.minor_words () in
+  for _ = 1 to iters do
+    ignore (Sys.opaque_identity (Codec.decode_exn codec buf 0))
+  done;
+  let after = Gc.minor_words () in
+  (after -. before) /. float_of_int iters
+
+let test_decode_no_partial_closure () =
+  let w8 = per_decode_words alloc_codec8 8 in
+  let w16 = per_decode_words alloc_codec16 16 in
+  (* Each [int] record field is one word and the header is one more, so a
+     closure-free decode grows by exactly the 8 added fields. A partial-app
+     closure would add several more words on top. *)
+  let growth = int_of_float (Float.round (w16 -. w8)) in
+  Alcotest.(check int)
+    "16-vs-8-field decode grows by 8 record slots only (no closure)" 8 growth
+
+let test_decode_high_arity_roundtrip () =
+  (* Exercise the saturated 16-field case and the recursive >16 unroll. *)
+  let buf16 = Bytes.init 16 (fun i -> Char.chr (i + 1)) in
+  let v16 = Codec.decode_exn alloc_codec16 buf16 0 in
+  Alcotest.(check int) "b1" 1 v16.b1;
+  Alcotest.(check int) "b16" 16 v16.b16;
+  let buf17 = Bytes.init 17 (fun i -> Char.chr (i + 1)) in
+  let v17 = Codec.decode_exn alloc_codec17 buf17 0 in
+  Alcotest.(check int) "c1" 1 v17.c1;
+  Alcotest.(check int) "c16" 16 v17.c16;
+  Alcotest.(check int) "c17" 17 v17.c17;
+  let out = Bytes.create 17 in
+  Codec.encode alloc_codec17 v17 out 0;
+  Alcotest.(check bytes) "17-field roundtrip" buf17 out
+
 (* -- Suite -- *)
 
 let suite =
@@ -5715,4 +5892,9 @@ let suite =
       Alcotest.test_case "uint: dynamic size" `Quick test_uint_dynamic;
       Alcotest.test_case "enum: codec rejects unknown values" `Quick
         test_enum_codec_validates;
+      (* decode allocation *)
+      Alcotest.test_case "decode: >8 fields allocate no partial closure" `Quick
+        test_decode_no_partial_closure;
+      Alcotest.test_case "decode: high-arity roundtrip" `Quick
+        test_decode_high_arity_roundtrip;
     ] )
