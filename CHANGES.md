@@ -123,6 +123,12 @@
 
 ### Changed
 
+- Encoding a variable-length byte field (`byte_slice`, `byte_array`,
+  `zeroterm`, `all_bytes`, ...) no longer allocates: on a flambda-off switch
+  the writer rebuilt two short-lived closures per field on every encode.
+  Encoding a record made of scalars and var-bytes fields is now
+  allocation-free (#213, @samoht)
+
 - Decoding a record codec with more than 8 fields no longer allocates a
   short-lived closure on each decode: the constructor is now applied in one
   saturated call for codecs of up to 16 fields. On a flambda-off switch this
