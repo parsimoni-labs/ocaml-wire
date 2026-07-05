@@ -5406,6 +5406,47 @@ let test_decode_high_arity_roundtrip () =
   Codec.encode alloc_codec17 v17 out 0;
   Alcotest.(check bytes) "17-field roundtrip" buf17 out
 
+(* Encoding a var-bytes field must not allocate. [var_bytes_writer]'s length
+   check and string blit are top-level functions; were they local to the
+   writer, each would be a heap-allocated closure per var-bytes field on
+   every encode under flambda-off. *)
+type alloc_vb = { vb_a : string; vb_b : string; vb_z : string }
+
+let alloc_vb_alen = Field.v "ALen" uint16be
+let alloc_vb_blen = Field.v "BLen" uint16be
+
+let alloc_vb_codec =
+  Codec.v "AllocVb"
+    (fun _alen vb_a _blen vb_b vb_z -> { vb_a; vb_b; vb_z })
+    Codec.
+      [
+        (alloc_vb_alen $ fun r -> String.length r.vb_a);
+        ( Field.v "A" (byte_array ~size:(Field.ref alloc_vb_alen)) $ fun r ->
+          r.vb_a );
+        (alloc_vb_blen $ fun r -> String.length r.vb_b);
+        ( Field.v "B" (byte_array ~size:(Field.ref alloc_vb_blen)) $ fun r ->
+          r.vb_b );
+        (Field.v "Z" zeroterm $ fun r -> r.vb_z);
+      ]
+
+let test_encode_var_bytes_no_closure () =
+  let v =
+    { vb_a = String.make 32 'x'; vb_b = String.make 16 'y'; vb_z = "hi" }
+  in
+  let buf = Bytes.create (2 + 32 + 2 + 16 + 2 + 1) in
+  Codec.encode alloc_vb_codec v buf 0;
+  let iters = 200_000 in
+  Gc.full_major ();
+  let before = Gc.minor_words () in
+  for _ = 1 to iters do
+    Codec.encode alloc_vb_codec v buf 0
+  done;
+  let after = Gc.minor_words () in
+  let words =
+    int_of_float (Float.round ((after -. before) /. float_of_int iters))
+  in
+  Alcotest.(check int) "var-bytes encode allocates nothing" 0 words
+
 (* -- Suite -- *)
 
 let suite =
@@ -5897,4 +5938,7 @@ let suite =
         test_decode_no_partial_closure;
       Alcotest.test_case "decode: high-arity roundtrip" `Quick
         test_decode_high_arity_roundtrip;
+      (* encode allocation *)
+      Alcotest.test_case "encode: var-bytes fields allocate nothing" `Quick
+        test_encode_var_bytes_no_closure;
     ] )

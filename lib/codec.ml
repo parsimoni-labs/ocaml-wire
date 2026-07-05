@@ -1887,6 +1887,21 @@ let var_bytes_reader : type a.
   | Single_elem { elem; _ } -> read_elem elem buf (base + fo)
   | _ -> assert false
 
+(* Kept at top level: as local closures they would be heap-allocated on
+   every call (two allocations per variable-bytes field on each encode). *)
+let var_bytes_check_len size_fn buf base ~actual =
+  let expected = size_fn buf base in
+  if actual <> expected then
+    Fmt.invalid_arg
+      "Codec.encode: byte field length %d does not match expected %d \
+       (parametric size, bind via ?env)"
+      actual expected
+
+let var_bytes_write_str buf write_off s =
+  let len = String.length s in
+  Bytes.blit_string s 0 buf write_off len;
+  write_off + len
+
 let var_bytes_writer : type a r.
     a typ ->
     (r -> a) ->
@@ -1898,41 +1913,28 @@ let var_bytes_writer : type a r.
     int =
  fun typ get size_fn v buf base write_off ->
   let value = get v in
-  let check_len ~actual =
-    let expected = size_fn buf base in
-    if actual <> expected then
-      Fmt.invalid_arg
-        "Codec.encode: byte field length %d does not match expected %d \
-         (parametric size, bind via ?env)"
-        actual expected
-  in
-  let write_str s =
-    let len = String.length s in
-    Bytes.blit_string s 0 buf write_off len;
-    write_off + len
-  in
   match typ with
   | Byte_slice _ ->
       let src = (value : Slice.t) in
       let len = Slice.length src in
-      check_len ~actual:len;
+      var_bytes_check_len size_fn buf base ~actual:len;
       Bytes.blit (Slice.bytes src) (Slice.first src) buf write_off len;
       write_off + len
   | Byte_array _ ->
       let s = (value : string) in
-      check_len ~actual:(String.length s);
-      write_str s
+      var_bytes_check_len size_fn buf base ~actual:(String.length s);
+      var_bytes_write_str buf write_off s
   | Byte_array_where _ ->
       let s = (value : string) in
-      check_len ~actual:(String.length s);
-      write_str s
-  | All_bytes -> write_str (value : string)
-  | All_zeros -> write_str (value : string)
+      var_bytes_check_len size_fn buf base ~actual:(String.length s);
+      var_bytes_write_str buf write_off s
+  | All_bytes -> var_bytes_write_str buf write_off (value : string)
+  | All_zeros -> var_bytes_write_str buf write_off (value : string)
   | Zeroterm ->
       let s = (value : string) in
       if String.contains s '\000' then
         invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
-      let e = write_str s in
+      let e = var_bytes_write_str buf write_off s in
       Bytes.set_uint8 buf e 0;
       e + 1
   | Zeroterm_at_most _ ->
