@@ -5369,6 +5369,232 @@ let alloc_codec17 =
         (Field.v "c17" uint8 $ fun (r : alloc_r17) -> r.c17);
       ]
 
+(* 32 fields is the saturated-table ceiling: it decodes in one saturated
+   [make] call, no closure. 33 fields is the first arity past the table, so it
+   makes one partial application and exercises the recursive unroll. *)
+type alloc_r32 = {
+  d1 : int;
+  d2 : int;
+  d3 : int;
+  d4 : int;
+  d5 : int;
+  d6 : int;
+  d7 : int;
+  d8 : int;
+  d9 : int;
+  d10 : int;
+  d11 : int;
+  d12 : int;
+  d13 : int;
+  d14 : int;
+  d15 : int;
+  d16 : int;
+  d17 : int;
+  d18 : int;
+  d19 : int;
+  d20 : int;
+  d21 : int;
+  d22 : int;
+  d23 : int;
+  d24 : int;
+  d25 : int;
+  d26 : int;
+  d27 : int;
+  d28 : int;
+  d29 : int;
+  d30 : int;
+  d31 : int;
+  d32 : int;
+}
+
+type alloc_r33 = {
+  e1 : int;
+  e2 : int;
+  e3 : int;
+  e4 : int;
+  e5 : int;
+  e6 : int;
+  e7 : int;
+  e8 : int;
+  e9 : int;
+  e10 : int;
+  e11 : int;
+  e12 : int;
+  e13 : int;
+  e14 : int;
+  e15 : int;
+  e16 : int;
+  e17 : int;
+  e18 : int;
+  e19 : int;
+  e20 : int;
+  e21 : int;
+  e22 : int;
+  e23 : int;
+  e24 : int;
+  e25 : int;
+  e26 : int;
+  e27 : int;
+  e28 : int;
+  e29 : int;
+  e30 : int;
+  e31 : int;
+  e32 : int;
+  e33 : int;
+}
+
+let alloc_codec32 =
+  Codec.v "Alloc32"
+    (fun d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 d11 d12 d13 d14 d15 d16 d17 d18 d19 d20
+         d21 d22 d23 d24 d25 d26 d27 d28 d29 d30 d31 d32 ->
+      ({
+         d1;
+         d2;
+         d3;
+         d4;
+         d5;
+         d6;
+         d7;
+         d8;
+         d9;
+         d10;
+         d11;
+         d12;
+         d13;
+         d14;
+         d15;
+         d16;
+         d17;
+         d18;
+         d19;
+         d20;
+         d21;
+         d22;
+         d23;
+         d24;
+         d25;
+         d26;
+         d27;
+         d28;
+         d29;
+         d30;
+         d31;
+         d32;
+       }
+        : alloc_r32))
+    Codec.
+      [
+        (Field.v "d1" uint8 $ fun (r : alloc_r32) -> r.d1);
+        (Field.v "d2" uint8 $ fun (r : alloc_r32) -> r.d2);
+        (Field.v "d3" uint8 $ fun (r : alloc_r32) -> r.d3);
+        (Field.v "d4" uint8 $ fun (r : alloc_r32) -> r.d4);
+        (Field.v "d5" uint8 $ fun (r : alloc_r32) -> r.d5);
+        (Field.v "d6" uint8 $ fun (r : alloc_r32) -> r.d6);
+        (Field.v "d7" uint8 $ fun (r : alloc_r32) -> r.d7);
+        (Field.v "d8" uint8 $ fun (r : alloc_r32) -> r.d8);
+        (Field.v "d9" uint8 $ fun (r : alloc_r32) -> r.d9);
+        (Field.v "d10" uint8 $ fun (r : alloc_r32) -> r.d10);
+        (Field.v "d11" uint8 $ fun (r : alloc_r32) -> r.d11);
+        (Field.v "d12" uint8 $ fun (r : alloc_r32) -> r.d12);
+        (Field.v "d13" uint8 $ fun (r : alloc_r32) -> r.d13);
+        (Field.v "d14" uint8 $ fun (r : alloc_r32) -> r.d14);
+        (Field.v "d15" uint8 $ fun (r : alloc_r32) -> r.d15);
+        (Field.v "d16" uint8 $ fun (r : alloc_r32) -> r.d16);
+        (Field.v "d17" uint8 $ fun (r : alloc_r32) -> r.d17);
+        (Field.v "d18" uint8 $ fun (r : alloc_r32) -> r.d18);
+        (Field.v "d19" uint8 $ fun (r : alloc_r32) -> r.d19);
+        (Field.v "d20" uint8 $ fun (r : alloc_r32) -> r.d20);
+        (Field.v "d21" uint8 $ fun (r : alloc_r32) -> r.d21);
+        (Field.v "d22" uint8 $ fun (r : alloc_r32) -> r.d22);
+        (Field.v "d23" uint8 $ fun (r : alloc_r32) -> r.d23);
+        (Field.v "d24" uint8 $ fun (r : alloc_r32) -> r.d24);
+        (Field.v "d25" uint8 $ fun (r : alloc_r32) -> r.d25);
+        (Field.v "d26" uint8 $ fun (r : alloc_r32) -> r.d26);
+        (Field.v "d27" uint8 $ fun (r : alloc_r32) -> r.d27);
+        (Field.v "d28" uint8 $ fun (r : alloc_r32) -> r.d28);
+        (Field.v "d29" uint8 $ fun (r : alloc_r32) -> r.d29);
+        (Field.v "d30" uint8 $ fun (r : alloc_r32) -> r.d30);
+        (Field.v "d31" uint8 $ fun (r : alloc_r32) -> r.d31);
+        (Field.v "d32" uint8 $ fun (r : alloc_r32) -> r.d32);
+      ]
+
+let alloc_codec33 =
+  Codec.v "Alloc33"
+    (fun e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 e15 e16 e17 e18 e19 e20
+         e21 e22 e23 e24 e25 e26 e27 e28 e29 e30 e31 e32 e33 ->
+      ({
+         e1;
+         e2;
+         e3;
+         e4;
+         e5;
+         e6;
+         e7;
+         e8;
+         e9;
+         e10;
+         e11;
+         e12;
+         e13;
+         e14;
+         e15;
+         e16;
+         e17;
+         e18;
+         e19;
+         e20;
+         e21;
+         e22;
+         e23;
+         e24;
+         e25;
+         e26;
+         e27;
+         e28;
+         e29;
+         e30;
+         e31;
+         e32;
+         e33;
+       }
+        : alloc_r33))
+    Codec.
+      [
+        (Field.v "e1" uint8 $ fun (r : alloc_r33) -> r.e1);
+        (Field.v "e2" uint8 $ fun (r : alloc_r33) -> r.e2);
+        (Field.v "e3" uint8 $ fun (r : alloc_r33) -> r.e3);
+        (Field.v "e4" uint8 $ fun (r : alloc_r33) -> r.e4);
+        (Field.v "e5" uint8 $ fun (r : alloc_r33) -> r.e5);
+        (Field.v "e6" uint8 $ fun (r : alloc_r33) -> r.e6);
+        (Field.v "e7" uint8 $ fun (r : alloc_r33) -> r.e7);
+        (Field.v "e8" uint8 $ fun (r : alloc_r33) -> r.e8);
+        (Field.v "e9" uint8 $ fun (r : alloc_r33) -> r.e9);
+        (Field.v "e10" uint8 $ fun (r : alloc_r33) -> r.e10);
+        (Field.v "e11" uint8 $ fun (r : alloc_r33) -> r.e11);
+        (Field.v "e12" uint8 $ fun (r : alloc_r33) -> r.e12);
+        (Field.v "e13" uint8 $ fun (r : alloc_r33) -> r.e13);
+        (Field.v "e14" uint8 $ fun (r : alloc_r33) -> r.e14);
+        (Field.v "e15" uint8 $ fun (r : alloc_r33) -> r.e15);
+        (Field.v "e16" uint8 $ fun (r : alloc_r33) -> r.e16);
+        (Field.v "e17" uint8 $ fun (r : alloc_r33) -> r.e17);
+        (Field.v "e18" uint8 $ fun (r : alloc_r33) -> r.e18);
+        (Field.v "e19" uint8 $ fun (r : alloc_r33) -> r.e19);
+        (Field.v "e20" uint8 $ fun (r : alloc_r33) -> r.e20);
+        (Field.v "e21" uint8 $ fun (r : alloc_r33) -> r.e21);
+        (Field.v "e22" uint8 $ fun (r : alloc_r33) -> r.e22);
+        (Field.v "e23" uint8 $ fun (r : alloc_r33) -> r.e23);
+        (Field.v "e24" uint8 $ fun (r : alloc_r33) -> r.e24);
+        (Field.v "e25" uint8 $ fun (r : alloc_r33) -> r.e25);
+        (Field.v "e26" uint8 $ fun (r : alloc_r33) -> r.e26);
+        (Field.v "e27" uint8 $ fun (r : alloc_r33) -> r.e27);
+        (Field.v "e28" uint8 $ fun (r : alloc_r33) -> r.e28);
+        (Field.v "e29" uint8 $ fun (r : alloc_r33) -> r.e29);
+        (Field.v "e30" uint8 $ fun (r : alloc_r33) -> r.e30);
+        (Field.v "e31" uint8 $ fun (r : alloc_r33) -> r.e31);
+        (Field.v "e32" uint8 $ fun (r : alloc_r33) -> r.e32);
+        (Field.v "e33" uint8 $ fun (r : alloc_r33) -> r.e33);
+      ]
+
 let per_decode_words codec nfields =
   let buf = Bytes.make nfields '\042' in
   ignore (Sys.opaque_identity (Codec.decode_exn codec buf 0));
@@ -5384,19 +5610,29 @@ let per_decode_words codec nfields =
 let test_decode_no_partial_closure () =
   let w8 = per_decode_words alloc_codec8 8 in
   let w16 = per_decode_words alloc_codec16 16 in
+  let w32 = per_decode_words alloc_codec32 32 in
   (* Each [int] record field is one word and the header is one more, so a
-     closure-free decode grows by exactly the 8 added fields. A partial-app
+     closure-free decode grows by exactly the added fields. A partial-app
      closure would add several more words on top. *)
-  let growth = int_of_float (Float.round (w16 -. w8)) in
+  let growth_16_8 = int_of_float (Float.round (w16 -. w8)) in
   Alcotest.(check int)
-    "16-vs-8-field decode grows by 8 record slots only (no closure)" 8 growth
+    "16-vs-8-field decode grows by 8 record slots only (no closure)" 8
+    growth_16_8;
+  (* A record wider than 16 fields used to trip [apply_fwd]'s recursive arm and
+     allocate one [caml_curry] closure per decode. With the saturation table
+     raised to 32, the 32-field decode grows by exactly its 16 extra slots. *)
+  let growth_32_16 = int_of_float (Float.round (w32 -. w16)) in
+  Alcotest.(check int)
+    "32-vs-16-field decode grows by 16 record slots only (no closure)" 16
+    growth_32_16
 
 let test_decode_high_arity_roundtrip () =
-  (* Exercise the saturated 16-field case and the recursive >16 unroll. *)
+  (* Exercise the saturated 16-field case. *)
   let buf16 = Bytes.init 16 (fun i -> Char.chr (i + 1)) in
   let v16 = Codec.decode_exn alloc_codec16 buf16 0 in
   Alcotest.(check int) "b1" 1 v16.b1;
   Alcotest.(check int) "b16" 16 v16.b16;
+  (* 17 fields: still saturated after the table was widened to 32. *)
   let buf17 = Bytes.init 17 (fun i -> Char.chr (i + 1)) in
   let v17 = Codec.decode_exn alloc_codec17 buf17 0 in
   Alcotest.(check int) "c1" 1 v17.c1;
@@ -5404,7 +5640,24 @@ let test_decode_high_arity_roundtrip () =
   Alcotest.(check int) "c17" 17 v17.c17;
   let out = Bytes.create 17 in
   Codec.encode alloc_codec17 v17 out 0;
-  Alcotest.(check bytes) "17-field roundtrip" buf17 out
+  Alcotest.(check bytes) "17-field roundtrip" buf17 out;
+  (* 32 fields: the saturated-table ceiling. *)
+  let buf32 = Bytes.init 32 (fun i -> Char.chr (i + 1)) in
+  let v32 = Codec.decode_exn alloc_codec32 buf32 0 in
+  Alcotest.(check int) "d1" 1 v32.d1;
+  Alcotest.(check int) "d32" 32 v32.d32;
+  let out32 = Bytes.create 32 in
+  Codec.encode alloc_codec32 v32 out32 0;
+  Alcotest.(check bytes) "32-field roundtrip" buf32 out32;
+  (* 33 fields: the first arity past the table, exercising the recursive arm. *)
+  let buf33 = Bytes.init 33 (fun i -> Char.chr (i + 1)) in
+  let v33 = Codec.decode_exn alloc_codec33 buf33 0 in
+  Alcotest.(check int) "e1" 1 v33.e1;
+  Alcotest.(check int) "e32" 32 v33.e32;
+  Alcotest.(check int) "e33" 33 v33.e33;
+  let out33 = Bytes.create 33 in
+  Codec.encode alloc_codec33 v33 out33 0;
+  Alcotest.(check bytes) "33-field roundtrip" buf33 out33
 
 (* Encoding a var-bytes field must not allocate. [var_bytes_writer]'s length
    check and string blit are top-level functions; were they local to the
