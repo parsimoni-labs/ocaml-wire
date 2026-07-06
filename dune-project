@@ -29,6 +29,6 @@
   (memtrace :with-test)
   (alcotest :with-test)
   (alcobar :with-test)
-  (re :with-test)
+  (re (>= 1.11))
   (mdx :with-test)
   (odoc :with-doc)))

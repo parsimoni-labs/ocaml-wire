@@ -136,6 +136,12 @@ val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
     files to produce C parsers and generates [test.c].
 
+    The EverParse-emitted [<Name>Check<Codec>] wrapper is hardened after
+    generation: it returns [FALSE] unless the validator consumed the whole
+    buffer, so a valid record followed by trailing bytes is rejected. The raw
+    [<Name>Validate<Codec>] function keeps EverParse's prefix semantics and
+    returns the consumed position.
+
     If [quiet] is [true] (the default), EverParse output is suppressed. If
     [quiet] is [false], EverParse stdout/stderr are left visible.
 
@@ -167,7 +173,9 @@ val generate_standalone :
     them into one [<Name>.3d], and (when [3d.exe] is available) compile it to a
     single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
     is [name] when given, else [package], normalised to a CamelCase identifier
-    (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. *)
+    (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
+    generated [<Name>Check<Codec>] wrappers validate the whole buffer, rejecting
+    trailing bytes (see {!generate_c}). *)
 
 val generate_dune_standalone :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
@@ -182,11 +190,13 @@ val generate_dune_standalone :
 val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
 (** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
     inputs as [<codec> <hex> <verdict>] lines, where [verdict] is [1] when the
-    OCaml codec accepts the bytes (decodes and validates) and [0] otherwise, and
-    [<hex>] is [-] for the empty input. Lengths are biased around each codec's
-    minimum size so the corpus straddles the accept/reject boundary. This is the
-    oracle half of the doc pipeline's differential self-check; {!main}'s
-    [corpus] subcommand calls it on stdout. *)
+    OCaml codec accepts the bytes (decodes, validates, and the record spans the
+    whole input -- matching the hardened [Check] wrapper's whole-buffer
+    contract) and [0] otherwise, and [<hex>] is [-] for the empty input. Lengths
+    are biased around each codec's minimum size so the corpus straddles the
+    accept/reject boundary. This is the oracle half of the doc pipeline's
+    differential self-check; {!main}'s [corpus] subcommand calls it on stdout.
+*)
 
 val generate_agree :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
