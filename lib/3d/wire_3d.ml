@@ -368,6 +368,47 @@ let fields_c_files schemas =
       else None)
     schemas
 
+(* EverParse's [<Base>Check<Codec>] wrapper returns TRUE on any successful
+   validator result, but a success result is the consumed position: a valid
+   record followed by trailing bytes still returns TRUE, making the wrapper a
+   prefix recognizer rather than a validator. Wire's contract is whole-buffer
+   validation, so rewrite each success tail to also require full consumption.
+   Textual on EverParse's wrapper shape (the tail is identical for
+   parameterized and plain entrypoints, [print_c_entry] in the upstream
+   [src/3d/Target.fst]): if a future EverParse emits neither the known tail
+   nor its own consumption check, fail loudly rather than silently shipping a
+   prefix recognizer. The behavioural backstop is the differential runtest,
+   whose corpus includes over-length inputs the oracle rejects. *)
+let wrapper_success_tail = "\t\treturn FALSE;\n\t}\n\treturn TRUE;\n}"
+let wrapper_consumption_check = "result != (uint64_t) len"
+
+let wrapper_hardened_tail =
+  "\t\treturn FALSE;\n\
+   \t}\n\
+   \tif (result != (uint64_t) len)\n\
+   \t{\n\
+   \t\treturn FALSE;\n\
+   \t}\n\
+   \treturn TRUE;\n\
+   }"
+
+let harden_wrapper ~outdir base =
+  let path = Filename.concat outdir (base ^ "Wrapper.c") in
+  if Sys.file_exists path then begin
+    let src = In_channel.with_open_text path In_channel.input_all in
+    let tail = Re.compile (Re.str wrapper_success_tail) in
+    if Re.execp tail src then
+      Out_channel.with_open_text path (fun oc ->
+          Out_channel.output_string oc
+            (Re.replace_string tail ~by:wrapper_hardened_tail src))
+    else if not (Re.execp (Re.compile (Re.str wrapper_consumption_check)) src)
+    then
+      Fmt.failwith
+        "%s: unrecognized EverParse wrapper shape; cannot insert the \
+         full-consumption check"
+        path
+  end
+
 let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
@@ -379,7 +420,8 @@ let run_everparse_files ?(quiet = true) ~outdir files =
       let redirect = if quiet then " > /dev/null 2>&1" else "" in
       let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
       let ret = Sys.command cmd in
-      if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret)
+      if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
+      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f)))
     files;
   copy_everparse_endianness ~outdir
 
@@ -813,14 +855,16 @@ let hex_of_bytes b =
   Buffer.contents buf
 
 (* The accept/reject decision the validator must reproduce: the OCaml codec
-   both decodes (structure plus constraints) and validates (constraints and
-   where-clauses) the bytes. *)
+   decodes (structure plus constraints), validates (constraints and
+   where-clauses), and the record spans the whole buffer -- the hardened
+   [<Base>Check<Codec>] wrapper rejects trailing bytes (see [harden_wrapper]),
+   so the oracle must too. *)
 let codec_accepts ?env c buf =
   match Wire.Codec.decode ?env c buf 0 with
   | Ok _ -> (
       try
         Wire.Codec.validate ?env c buf 0;
-        true
+        Wire.Codec.wire_size_at c buf 0 = Bytes.length buf
       with Wire.Validation_error _ -> false)
   | Error _ -> false
 

@@ -232,12 +232,15 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
-let differential_ok ~name ~package ~count codecs =
+let differential_ok ~name ~package ~corpus codecs =
   let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
   Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
   let oc = open_out (Filename.concat tmpdir "corpus") in
-  let ppf = Format.formatter_of_out_channel oc in
-  Wire_3d.generate_corpus ~count ppf codecs;
+  (match corpus with
+  | `Fuzz count ->
+      let ppf = Format.formatter_of_out_channel oc in
+      Wire_3d.generate_corpus ~count ppf codecs
+  | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
   close_out oc;
   let base = String.capitalize_ascii name in
   let cmd =
@@ -260,7 +263,7 @@ let differential_ok ~name ~package ~count codecs =
 let test_doc_differential () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else
-    differential_ok ~name:"protospec" ~package:"demo-doc" ~count:400
+    differential_ok ~name:"protospec" ~package:"demo-doc" ~corpus:(`Fuzz 400)
       [
         Wire_3d.pack diff_enum_codec;
         Wire_3d.pack diff_range_codec;
@@ -274,7 +277,7 @@ let test_doc_differential_no_params () =
      strict flags) when no codec takes parameters. *)
   if not (Wire_3d.has_3d_exe ()) then ()
   else
-    differential_ok ~name:"plainspec" ~package:"plain-doc" ~count:100
+    differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 (* A signed field with an ordering constraint: it projects to an unsigned UINT,
@@ -291,7 +294,7 @@ let diff_signed_codec =
 let test_doc_differential_signed () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else
-    differential_ok ~name:"signedspec" ~package:"signed-doc" ~count:256
+    differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
       [ Wire_3d.pack diff_signed_codec ]
 
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
@@ -306,7 +309,7 @@ let diff_large_payload_codec =
 let test_doc_differential_large_payload () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else
-    differential_ok ~name:"sharedspec" ~package:"shared-doc" ~count:40
+    differential_ok ~name:"sharedspec" ~package:"shared-doc" ~corpus:(`Fuzz 40)
       [ Wire_3d.pack diff_large_payload_codec ]
 
 (* Interior consecutive caps: EverParse normalizes the validator symbol to
@@ -321,8 +324,23 @@ let diff_caps_name_codec =
 let test_doc_differential_caps_name () =
   if not (Wire_3d.has_3d_exe ()) then ()
   else
-    differential_ok ~name:"spacewire" ~package:"space-wire" ~count:40
+    differential_ok ~name:"spacewire" ~package:"space-wire" ~corpus:(`Fuzz 40)
       [ Wire_3d.pack diff_caps_name_codec ]
+
+(* A valid record followed by trailing bytes must be rejected. EverParse's
+   stock [Check] wrapper returns TRUE on any successful validation -- success
+   is the consumed position, so a valid prefix passes -- and the pipeline
+   hardens it to require full consumption. The handwritten corpus pins the
+   exact boundary: the 2-byte RangeMsg accepts exactly-sized input and rejects
+   both one byte over and one byte short. *)
+let test_doc_differential_trailing_bytes () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"trailspec" ~package:"trail-doc"
+      ~corpus:
+        (`Lines
+           [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
+      [ Wire_3d.pack diff_range_codec ]
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
@@ -1152,6 +1170,8 @@ let suite =
         test_doc_differential_large_payload;
       Alcotest.test_case "doc differential caps name (needs 3d.exe)" `Quick
         test_doc_differential_caps_name;
+      Alcotest.test_case "doc differential trailing bytes (needs 3d.exe)" `Quick
+        test_doc_differential_trailing_bytes;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;

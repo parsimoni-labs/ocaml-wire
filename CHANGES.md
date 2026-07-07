@@ -246,6 +246,15 @@
 
 ### Fixed
 
+- The generated C `<Name>Check<Codec>` wrapper now validates the whole buffer:
+  it returns `FALSE` unless the validator consumed every input byte, so a valid
+  record followed by trailing bytes is rejected instead of accepted as a valid
+  prefix. The differential corpus oracle applies the same whole-buffer rule, so
+  the OCaml and C verdicts still agree. The raw `<Name>Validate<Codec>` entry
+  point keeps its prefix semantics and returns the consumed position. `wire`
+  now depends on `re` at runtime, previously a test-only dependency (#215,
+  @samoht)
+
 - `Wire.Everparse.project` now rejects a codec that cannot project to 3D when
   the schema is built, not later when it is rendered. A constraint with no 3D
   projection (a `field_pos`, or a subtraction or multiplication over a field)
