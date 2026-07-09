@@ -1725,6 +1725,36 @@ let rec index_bound_of : type a. a typ -> int option = function
   | Apply { typ; _ } -> index_bound_of typ
   | _ -> None
 
+(* Bit width of a typ's wire representation, seen through the same transparent
+   wrappers as [index_bound_of] -- used only to decide whether a lookup's
+   index bound is exhaustive (see [lookup_is_exhaustive], used by [pp_field]).
+   [Bits] carries an explicit width; the other scalar bases contribute their
+   fixed wire width. [None] for shapes with no fixed bit width (composites,
+   byte arrays, ...), which conservatively keeps any bound they carry. *)
+let rec bit_width_of : type a. a typ -> int option = function
+  | Bits { width; _ } -> Some width
+  | Uint8 | Int8 -> Some 8
+  | Uint16 _ | Int16 _ -> Some 16
+  | Uint32 _ | Int32 _ -> Some 32
+  | Uint63 _ -> Some 63
+  | Uint64 _ | Int64 _ -> Some 64
+  | Map { inner; _ } -> bit_width_of inner
+  | Where { inner; _ } -> bit_width_of inner
+  | Apply { typ; _ } -> bit_width_of typ
+  | Enum { base; _ } -> bit_width_of base
+  | _ -> None
+
+(* [nvariants] indices exhaust a field of [width] bits when every representable
+   value is a valid index, i.e. [nvariants = 2 ^ width]: the [< nvariants]
+   refinement [pp_field] would otherwise emit always holds, a dead check
+   EverParse would still compile into the generated C. [width] is capped well
+   below the native [int] width ([Sys.int_size] is 63 on a 64-bit host) before
+   shifting: [1 lsl 62] already overflows into the sign bit, and no realistic
+   variant list is exhaustive over a field that wide anyway, so fields at or
+   above that width are simply treated as never exhaustive. *)
+let lookup_is_exhaustive ~nvariants ~width =
+  width >= 1 && width < 62 && nvariants = 1 lsl width
+
 (* The case values an [enum] field admits, seen through the transparent
    [Map] / [Where] / [Apply] wrappers. The projection emits membership as a
    field refinement so the generated C validator rejects values outside the
@@ -2346,6 +2376,20 @@ let pp_field_doc ppf d =
   Fmt.pf ppf "@,%t" (fun ppf ->
       pp_wrapped_comment ppf ~open_:"/*" ~close:"*/" d)
 
+(* A lookup / cases field is valid only for in-range indices; the caller emits
+   that bound as a refinement (the OCaml decoder enforces it via the [Map]
+   decode) -- unless the lookup is exhaustive over the field's bit width, in
+   which case every representable value is already a valid index and the
+   bound is a dead check (see [lookup_is_exhaustive]). *)
+let lookup_bound_cond raw_name field_typ =
+  match index_bound_of field_typ with
+  | Some len
+    when lookup_is_exhaustive ~nvariants:len
+           ~width:(Option.value ~default:(-1) (bit_width_of field_typ)) ->
+      None
+  | Some len -> Some (Lt (Ref (I, raw_name), Int len))
+  | None -> None
+
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
@@ -2359,13 +2403,7 @@ let pp_field widenable ppf (Field f) =
   (* Extract Where constraints from the type so they appear as field
      constraints in the 3D output, not inline in the type. *)
   let where_cond, typ = extract_where_constraint f.field_typ in
-  (* A lookup / cases field is valid only for in-range indices; emit that bound
-     as a refinement (the OCaml decoder enforces it via the [Map] decode). *)
-  let bound_cond =
-    match index_bound_of f.field_typ with
-    | Some len -> Some (Lt (Ref (I, raw_name), Int len))
-    | None -> None
-  in
+  let bound_cond = lookup_bound_cond raw_name f.field_typ in
   (* The documentation projection types the field as its named enum, so
      EverParse enforces membership through the type. The codegen projection
      instead emits membership as a refinement on the base type, which the OCaml
