@@ -1274,11 +1274,56 @@ let test_array_lookup_element_bound () =
     "element refined via synth struct" true
     (contains ~sub:"_RefByte_lk4 a" output)
 
+(* A lookup is exhaustive when its variant count fills the field's bit width
+   exactly ([nvariants = 2 ^ width]): every representable value is then a
+   valid index, so the [< nvariants] refinement [test_lookup_index_bound]
+   checks for above would always hold -- a dead check EverParse would still
+   compile into the generated C. This is the exact shape of ocaml-uslp's
+   [src_or_dest] field (a 2-variant lookup over a 1-bit UINT32BE), which
+   motivated suppressing the bound (see [lookup_is_exhaustive] in
+   lib/types.ml). One variant short of the same field width (3 variants over
+   2 bits, i.e. [3 < 4]) must still emit its bound: exhaustiveness, not
+   merely "small nvariants", drives the suppression. *)
+let test_lookup_index_bound_exhaustive () =
+  let exhaustive =
+    Codec.v "LkExhaustive"
+      (fun v -> v)
+      Codec.
+        [
+          (Field.v "v" (lookup [ 'a'; 'b' ] (bits ~width:1 U32be)) $ fun v -> v);
+        ]
+  in
+  let out =
+    to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec exhaustive) ])
+  in
+  Alcotest.(check bool)
+    "exhaustive lookup still emits the bitwidth suffix" true
+    (contains ~sub:"UINT32BE v : 1" out);
+  Alcotest.(check bool)
+    "exhaustive lookup emits no range bound" false (contains ~sub:"< 2" out);
+  let non_exhaustive =
+    Codec.v "LkNonExhaustive"
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "v" (lookup [ 'a'; 'b'; 'c' ] (bits ~width:2 U32be))
+          $ fun v -> v );
+        ]
+  in
+  let out2 =
+    to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec non_exhaustive) ])
+  in
+  Alcotest.(check bool)
+    "one variant short of exhaustive still bounds its index" true
+    (contains ~sub:"(v < 3)" out2)
+
 let suite =
   ( "everparse",
     [
       Alcotest.test_case "generation: lookup index bound" `Quick
         test_lookup_index_bound;
+      Alcotest.test_case "generation: lookup index bound, exhaustive" `Quick
+        test_lookup_index_bound_exhaustive;
       Alcotest.test_case "generation: array lookup element bound" `Quick
         test_array_lookup_element_bound;
       Alcotest.test_case "generation: bitfields" `Quick test_bitfields;
