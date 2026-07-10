@@ -303,6 +303,21 @@ let test_field_path_nested () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "decode accepted a violating nested field"
 
+(* The public [parse_error] / [eof] constructors build the record with the
+   documented defaults, for a caller synthesizing an error outside a codec run. *)
+let test_error_constructors () =
+  let e = parse_error (Invalid_tag 7) in
+  Alcotest.(check int) "parse_error default at" 0 e.at;
+  Alcotest.(check (list string)) "parse_error default field" [] e.field;
+  (match e.kind with
+  | Invalid_tag 7 -> ()
+  | _ -> Alcotest.fail "parse_error kind");
+  let f = eof ~at:3 ~expected:4 ~got:2 () in
+  Alcotest.(check int) "eof at" 3 f.at;
+  match f.kind with
+  | Unexpected_eof { expected = 4; got = 2 } -> ()
+  | _ -> Alcotest.fail "eof kind"
+
 (* A field's own decode-side check (enum membership, lookup bound, a bounded
    embedded element) lives in its reader, not in a user constraint, so
    [Codec.validate] must run the validator pass for every codec or it would
@@ -5825,6 +5840,8 @@ let suite =
         test_all_zeros_offset_on_struct_path;
       Alcotest.test_case "error: nested field path" `Quick
         test_field_path_nested;
+      Alcotest.test_case "error: parse_error / eof constructors" `Quick
+        test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
         test_validate_check_free_no_alloc;
       Alcotest.test_case "validate: matches decode rejections" `Quick

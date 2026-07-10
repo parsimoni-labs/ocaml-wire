@@ -26,6 +26,22 @@ type parse_error = { at : int; field : string list; kind : error_kind }
     parse error records the path of field names leading to that field (root to
     leaf, empty at a top-level or anonymous position) and the failure kind. *)
 
+val parse_error : ?at:int -> ?field:string list -> error_kind -> parse_error
+(** [parse_error kind] builds a decode error carrying [kind]. The byte offset
+    defaults to 0 and the field path to [[]] (a top-level or whole-buffer
+    failure), so a caller synthesizing an error outside a codec run, such as a
+    length pre-check or a mapping decoder, need only give the kind. *)
+
+val eof :
+  ?at:int ->
+  ?field:string list ->
+  expected:int ->
+  got:int ->
+  unit ->
+  parse_error
+(** [eof ~expected ~got ()] is [parse_error (Unexpected_eof { expected; got })]:
+    the input ended with [got] bytes where [expected] were needed. *)
+
 type bit_order =
   | Msb_first
   | Lsb_first

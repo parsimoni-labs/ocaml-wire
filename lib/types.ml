@@ -43,7 +43,12 @@ type parse_error = { at : int; field : string list; kind : error_kind }
 
 exception Parse_error of parse_error
 
-let err ~at kind = { at; field = []; kind }
+let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
+
+let eof ?(at = 0) ?(field = []) ~expected ~got () =
+  { at; field; kind = Unexpected_eof { expected; got } }
+
+let err ~at kind = parse_error ~at kind
 let raise_error ~at kind = raise (Parse_error (err ~at kind))
 
 let raise_eof ~at ~expected ~got =
