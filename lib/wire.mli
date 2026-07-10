@@ -749,22 +749,41 @@ val size : 'a typ -> int option
     a constraint violation, from semantic failure such as an invalid enum or
     tag. *)
 
-type parse_error =
+(** Which predicate a {!Constraint_failed} came from. *)
+type predicate = Where | Field | Action | Per_byte
+
+type error_kind =
   | Unexpected_eof of { expected : int; got : int }
-  | Constraint_failed of string
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
-  | All_zeros_failed of { offset : int }
+  | Missing_terminator
+  | Non_zero_padding
+  | Value_out_of_range of { value : int64 }
+  | Constraint_failed of { which : predicate; value : int64 option }
+      (** [value] is the offending field's value for a single-field
+          self-constraint, [None] for a cross-field or where predicate. *)
+
+type parse_error = { at : int; field : string list; kind : error_kind }
+(** [at] is the absolute byte offset of the failing field. Alongside it the
+    parse error records the path of field names leading to that field (root to
+    leaf, empty at a top-level or anonymous position) and the failure kind. *)
 
 exception Parse_error of parse_error
 (** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
-    {!of_reader_exn}) and by {!Codec.decode_exn} on parse failure. *)
-
-exception Validation_error of parse_error
-(** Raised by {!Codec.validate} on constraint or where-clause failure. *)
+    {!of_reader_exn}), by {!Codec.decode_exn}, and by {!Codec.validate} on parse
+    or constraint failure. *)
 
 val pp_parse_error : Format.formatter -> parse_error -> unit
-(** Pretty-printer for decode errors. *)
+(** Pretty-printer for decode errors, including the offset and field path. *)
+
+val pp_error_kind : Format.formatter -> error_kind -> unit
+(** Pretty-print an error kind without its location. *)
+
+val equal_parse_error : parse_error -> parse_error -> bool
+(** Structural equality on parse errors. *)
+
+val compare_parse_error : parse_error -> parse_error -> int
+(** Total order on parse errors. *)
 
 (** {1 Direct Decoding and Encoding}
 

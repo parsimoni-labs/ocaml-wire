@@ -16,6 +16,53 @@ type ('elt, 'seq) seq_map =
 type param_input
 type param_output
 
+(* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
+   constructors win type-directed disambiguation everywhere below; the
+   [predicate] constructors are reached only through a [predicate]-typed
+   context (a [~which] argument or an annotated match). *)
+
+(* Which predicate a [Constraint_failed] came from: a field [~self_constraint]
+   or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
+   [~action] ([Action]), or a [byte_array_where] per-byte refinement
+   ([Per_byte]). *)
+type predicate = Where | Field | Action | Per_byte
+
+type error_kind =
+  | Unexpected_eof of { expected : int; got : int }
+  | Invalid_enum of { value : int; valid : int list }
+  | Invalid_tag of int
+  | Missing_terminator
+  | Non_zero_padding
+  | Value_out_of_range of { value : int64 }
+  | Constraint_failed of { which : predicate; value : int64 option }
+
+(* [at] is the absolute byte offset of the failing field in the input; [field]
+   is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
+   empty at a top-level or anonymous position. *)
+type parse_error = { at : int; field : string list; kind : error_kind }
+
+exception Parse_error of parse_error
+
+let err ~at kind = { at; field = []; kind }
+let raise_error ~at kind = raise (Parse_error (err ~at kind))
+
+let raise_eof ~at ~expected ~got =
+  raise_error ~at (Unexpected_eof { expected; got })
+
+let raise_invalid_tag ~at tag = raise_error ~at (Invalid_tag tag)
+
+let raise_invalid_enum ~at ~value ~valid =
+  raise_error ~at (Invalid_enum { value; valid })
+
+let raise_missing_terminator ~at = raise_error ~at Missing_terminator
+let raise_non_zero_padding ~at = raise_error ~at Non_zero_padding
+
+let raise_out_of_range ~at value =
+  raise_error ~at (Value_out_of_range { value })
+
+let raise_constraint ~at ~which ?value () =
+  raise_error ~at (Constraint_failed { which; value })
+
 type ('a, 'k) param_handle = {
   name : string;
   typ : 'a typ;
@@ -362,18 +409,6 @@ let map decode encode inner =
 let bool inner =
   Map { inner; decode = is_set; encode = bit; index_bound = None }
 
-(* Parse errors -- moved here so combinators like [cases] can raise them
-   directly rather than through intermediate exceptions. *)
-
-type parse_error =
-  | Unexpected_eof of { expected : int; got : int }
-  | Constraint_failed of string
-  | Invalid_enum of { value : int; valid : int list }
-  | Invalid_tag of int
-  | All_zeros_failed of { offset : int }
-
-exception Parse_error of parse_error
-
 (* Top-level so [variants_lookup] does not allocate a closure per call.
    Returns -1 if [v] is not in [arr] (used as a non-allocating sentinel
    instead of [int option]). Shared with [variants] below. *)
@@ -386,7 +421,9 @@ let cases variants inner =
   let arr = Array.of_list variants in
   let len = Array.length arr in
   let decode n =
-    if n >= 0 && n < len then arr.(n) else raise (Parse_error (Invalid_tag n))
+    (* [lookup] reads a bare index with no field context, so the failing index
+       is reported without a byte offset (at = 0). *)
+    if n >= 0 && n < len then arr.(n) else raise_invalid_tag ~at:0 n
   in
   let encode v =
     let i = variants_lookup arr v 0 in
@@ -640,16 +677,15 @@ let nested_at_most ~size elem =
 let enum name cases base = Enum { name; cases; base; closed = true }
 let enum_open name cases base = Enum { name; cases; base; closed = false }
 
-let fail_parse_error fmt =
-  Fmt.kstr (fun s -> raise (Parse_error (Constraint_failed s))) fmt
-
 let variants name cases base =
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
   let arr = Array.of_list (List.map snd cases) in
   let len = Array.length arr in
+  (* [enum name enum_cases base] is closed, so [enum_check] rejects any value
+     outside [0, len) before [decode] runs; the [else] is a defensive fallback. *)
   let decode n =
     if n >= 0 && n < len then arr.(n)
-    else fail_parse_error "Wire.variants %s: unknown value %d" name n
+    else raise_invalid_enum ~at:0 ~value:n ~valid:(List.init len Fun.id)
   in
   let encode v =
     let i = variants_lookup arr v 0 in
@@ -2662,20 +2698,75 @@ let to_3d_file ?(enum_as_type = false) path m =
     ~finally:(fun () -> close_out oc)
     (fun () -> output_string oc (to_3d ~enum_as_type m ^ "\n"))
 
-let raise_eof ~expected ~got =
-  raise (Parse_error (Unexpected_eof { expected; got }))
+let pp_predicate ppf (p : predicate) =
+  match p with
+  | Where -> Fmt.string ppf "where clause"
+  | Field -> Fmt.string ppf "field constraint"
+  | Action -> Fmt.string ppf "field action"
+  | Per_byte -> Fmt.string ppf "per-byte refinement"
 
-let pp_parse_error ppf = function
+let pp_error_kind ppf = function
   | Unexpected_eof { expected; got } ->
       Fmt.pf ppf "unexpected EOF: expected %d bytes, got %d" expected got
-  | Constraint_failed msg -> Fmt.pf ppf "constraint failed: %s" msg
   | Invalid_enum { value; valid } ->
       Fmt.pf ppf "invalid enum value %d, valid: [%a]" value
         Fmt.(list ~sep:comma int)
         valid
   | Invalid_tag tag -> Fmt.pf ppf "invalid tag: %d" tag
-  | All_zeros_failed { offset } ->
-      Fmt.pf ppf "non-zero byte at offset %d" offset
+  | Missing_terminator -> Fmt.string ppf "missing NUL terminator"
+  | Non_zero_padding -> Fmt.string ppf "non-zero padding byte"
+  | Value_out_of_range { value } -> Fmt.pf ppf "value out of range: %Ld" value
+  | Constraint_failed { which; value } -> (
+      match value with
+      | Some v -> Fmt.pf ppf "%a violated (value %Ld)" pp_predicate which v
+      | None -> Fmt.pf ppf "%a violated" pp_predicate which)
+
+let pp_parse_error ppf { at; field; kind } =
+  (match field with
+  | [] -> ()
+  | _ -> Fmt.(list ~sep:(any ".") string) ppf field);
+  Fmt.pf ppf "@%d: %a" at pp_error_kind kind
+
+let predicate_rank (p : predicate) =
+  match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3
+
+let compare_predicate a b = Int.compare (predicate_rank a) (predicate_rank b)
+
+let kind_rank = function
+  | Unexpected_eof _ -> 0
+  | Invalid_enum _ -> 1
+  | Invalid_tag _ -> 2
+  | Missing_terminator -> 3
+  | Non_zero_padding -> 4
+  | Value_out_of_range _ -> 5
+  | Constraint_failed _ -> 6
+
+let compare_error_kind a b =
+  match (a, b) with
+  | Unexpected_eof a, Unexpected_eof b ->
+      let c = Int.compare a.expected b.expected in
+      if c <> 0 then c else Int.compare a.got b.got
+  | Invalid_enum a, Invalid_enum b ->
+      let c = Int.compare a.value b.value in
+      if c <> 0 then c else List.compare Int.compare a.valid b.valid
+  | Invalid_tag a, Invalid_tag b -> Int.compare a b
+  | Value_out_of_range a, Value_out_of_range b -> Int64.compare a.value b.value
+  | Constraint_failed a, Constraint_failed b ->
+      let c = compare_predicate a.which b.which in
+      if c <> 0 then c else Option.compare Int64.compare a.value b.value
+  | Missing_terminator, Missing_terminator | Non_zero_padding, Non_zero_padding
+    ->
+      0
+  | _ -> Int.compare (kind_rank a) (kind_rank b)
+
+let compare_parse_error a b =
+  let c = compare_error_kind a.kind b.kind in
+  if c <> 0 then c
+  else
+    let c = Int.compare a.at b.at in
+    if c <> 0 then c else List.compare String.compare a.field b.field
+
+let equal_parse_error a b = compare_parse_error a b = 0
 
 (* Encoded byte size of [v] under [typ], computed from the value rather
    than from a buffer. Mirrors [field_wire_size] for fixed cases and

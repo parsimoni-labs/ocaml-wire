@@ -46,13 +46,11 @@ let rec int_of : type a. a typ -> a -> int option =
 
 (* Hot-path variant of [int_of] for the cross-field size/offset/present
    readers, which need a plain [int]. Returns it directly (no [Some] box on the
-   numeric path) and raises [Parse_error] when the value is not a usable int: a
-   [uint64]/[int64] beyond the native int range (adversarial input), or a
-   non-integer field referenced where an integer is required (a schema error). *)
-let int_overflow () =
-  raise
-    (Parse_error
-       (Constraint_failed "integer field value exceeds the native int range"))
+   numeric path). A [uint64]/[int64] beyond the native int range is adversarial
+   input and raises [Parse_error] ([Value_out_of_range]); a non-integer field
+   referenced where an integer is required is a schema error and raises
+   [Invalid_argument]. *)
+let int_overflow v = raise_out_of_range ~at:0 v
 
 let not_an_integer () =
   invalid_arg "Wire: non-integer field referenced where an integer is required"
@@ -66,12 +64,12 @@ let rec int_of_exn : type a. a typ -> a -> int =
   | Uint32 _ -> UInt32.to_int v
   | Uint63 _ -> UInt63.to_int v
   | Uint64 _ -> (
-      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow ())
+      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Int8 -> v
   | Int16 _ -> v
   | Int32 _ -> v
   | Int64 _ -> (
-      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow ())
+      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Float32 _ -> not_an_integer ()
   | Float64 _ -> not_an_integer ()
   | Bits _ -> v

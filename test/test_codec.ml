@@ -21,7 +21,12 @@ let encode_record codec v =
 let decode_record codec s =
   let ws = Codec.wire_size codec in
   if String.length s < ws then
-    Error (Unexpected_eof { expected = ws; got = String.length s })
+    Error
+      {
+        at = 0;
+        field = [];
+        kind = Unexpected_eof { expected = ws; got = String.length s };
+      }
   else Codec.decode codec (Bytes.of_string s) 0
 
 (* -- Record codec tests -- *)
@@ -109,14 +114,14 @@ let test_codec_metadata_decode_ok () =
 let test_metadata_constraint_fail () =
   let buf = Bytes.of_string "\x0B" in
   match Codec.decode meta_codec buf 0 with
-  | Error (Constraint_failed "field constraint") -> ()
+  | Error { kind = Constraint_failed { which = Field; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 let test_metadata_action_fail () =
   let buf = Bytes.of_string "\x09" in
   match Codec.decode meta_codec buf 0 with
-  | Error (Constraint_failed "field action") -> ()
+  | Error { kind = Constraint_failed { which = Action; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
@@ -151,7 +156,7 @@ let test_metadata_where_fail () =
   let env = Codec.env projection_codec |> Param.bind projection_limit 7 in
   let buf = Bytes.of_string "\x08" in
   match Codec.decode ~env projection_codec buf 0 with
-  | Error (Constraint_failed "where clause") -> ()
+  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
@@ -180,7 +185,7 @@ let test_validate_rejects_bad_where () =
   (* validate catches the violation *)
   match Codec.validate validate_codec buf 0 with
   | () -> Alcotest.fail "expected validate to reject where violation"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_validate_rejects_bad_constraint () =
   (* constraint requires x <= 10, set x = 11 *)
@@ -189,7 +194,7 @@ let test_validate_rejects_bad_constraint () =
   Alcotest.(check int) "get bypasses constraint" 11 (get_x buf 0);
   match Codec.validate validate_codec buf 0 with
   | () -> Alcotest.fail "expected validate to reject constraint violation"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_validate_then_get () =
   (* x = 8 satisfies both where (= 8) and constraint (<= 10) *)
@@ -209,8 +214,8 @@ let test_validate_bounds_constraint_free () =
       Codec.[ Field.v "a" uint32be $ fst; Field.v "b" uint32be $ snd ]
   in
   (match Codec.validate c (Bytes.make 2 '\000') 0 with
-  | exception Validation_error (Unexpected_eof _) -> ()
-  | exception Validation_error _ ->
+  | exception Parse_error { kind = Unexpected_eof _; _ } -> ()
+  | exception Parse_error _ ->
       Alcotest.fail "validate failed with the wrong error on a short buffer"
   | () -> Alcotest.fail "validate accepted a buffer too short for the codec");
   (* A full buffer still validates. *)
@@ -226,20 +231,77 @@ let test_validate_all_zeros () =
   in
   Codec.validate c (Bytes.of_string "\x01\x00\x00\x00") 0;
   let tampered = Bytes.of_string "\x01\x00\x05\x00" in
-  (* The 0x05 sits at absolute offset 2; decoding through a struct field now
-     reports the same typed [All_zeros_failed] with that offset as the direct
-     [of_string] path, instead of a stringly constraint failure. *)
   (match Codec.decode c tampered 0 with
-  | Error (All_zeros_failed { offset }) ->
-      Alcotest.(check int) "decode non-zero offset" 2 offset
+  | Error { kind = Non_zero_padding; _ } -> ()
   | Ok _ -> Alcotest.fail "decode accepted non-zero all_zeros padding"
   | Error _ -> Alcotest.fail "decode failed with the wrong error");
   match Codec.validate c tampered 0 with
-  | exception Validation_error (All_zeros_failed { offset }) ->
-      Alcotest.(check int) "validate non-zero offset" 2 offset
+  | exception Parse_error { kind = Non_zero_padding; _ } -> ()
   | () -> Alcotest.fail "validate accepted non-zero all_zeros padding"
-  | exception Validation_error _ ->
+  | exception Parse_error _ ->
       Alcotest.fail "validate failed with the wrong error"
+
+(* A field [~self_constraint] violation reports which predicate failed and the
+   offending field value, so a demux can route on it (e.g. a version field that
+   failed [self = 2] hands back [value = Some 1L]). *)
+let test_self_constraint_reports_value () =
+  let c =
+    Codec.v "Ver"
+      (fun v rest -> (v, rest))
+      Codec.
+        [
+          Field.v "version" uint8 ~self_constraint:(fun s -> Expr.(s = int 2))
+          $ fst;
+          Field.v "rest" uint8 $ snd;
+        ]
+  in
+  match Codec.decode c (Bytes.of_string "\x01\x00") 0 with
+  | Error
+      { kind = Constraint_failed { which = Field; value = Some 1L }; field; _ }
+    ->
+      Alcotest.(check (list string)) "field path" [ "version" ] field
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "decode accepted a version violating its constraint"
+
+(* Regression: the non-zero [all_zeros] byte's offset is carried on the struct
+   field path, not only the direct [of_string] path. The struct path used to
+   discard it into a stringly [Constraint_failed]. *)
+let test_all_zeros_offset_on_struct_path () =
+  let c =
+    Codec.v "Pad"
+      (fun tag pad -> (tag, pad))
+      Codec.[ Field.v "tag" uint8 $ fst; Field.v "pad" all_zeros $ snd ]
+  in
+  match Codec.decode c (Bytes.of_string "\x01\x00\x05\x00") 0 with
+  | Error { kind = Non_zero_padding; at; field } ->
+      Alcotest.(check int) "non-zero byte offset" 2 at;
+      Alcotest.(check (list string)) "field path" [ "pad" ] field
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "decode accepted non-zero padding"
+
+(* A failure inside a nested sub-codec accumulates the root-to-leaf field path
+   as the error unwinds. *)
+let test_field_path_nested () =
+  let inner =
+    Codec.v "Inner" Fun.id
+      Codec.
+        [
+          Field.v "leaf" uint8 ~self_constraint:(fun s -> Expr.(s = int 2))
+          $ Fun.id;
+        ]
+  in
+  let outer =
+    Codec.v "Outer"
+      (fun tag data -> (tag, data))
+      Codec.[ Field.v "tag" uint8 $ fst; Field.v "inner" (codec inner) $ snd ]
+  in
+  (* tag = 1, then inner.leaf = 9 violates [leaf = 2] *)
+  match Codec.decode outer (Bytes.of_string "\x01\x09") 0 with
+  | Error { kind = Constraint_failed { which = Field; _ }; field; _ } ->
+      Alcotest.(check (list string))
+        "nested field path" [ "inner"; "leaf" ] field
+  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "decode accepted a violating nested field"
 
 (* A field's own decode-side check (enum membership, lookup bound, a bounded
    embedded element) lives in its reader, not in a user constraint, so
@@ -252,7 +314,7 @@ let test_validate_matches_decode_rejections () =
     | Error _ -> ()
     | Ok _ -> Alcotest.failf "%s: decode accepted a bad input" what);
     match Codec.validate c buf 0 with
-    | exception Validation_error _ -> ()
+    | exception Parse_error _ -> ()
     | () -> Alcotest.failf "%s: validate accepted what decode rejects" what
   in
   let enum_c =
@@ -320,7 +382,7 @@ let typ_where_codec =
 
 let test_decode_enforces_typ_where () =
   (match Codec.decode typ_where_codec (Bytes.of_string "\006\000") 0 with
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Ok _ -> Alcotest.fail "decode accepted a Wire.where violation"
   | Error _ -> Alcotest.fail "decode failed with the wrong error");
   match Codec.decode typ_where_codec (Bytes.of_string "\001\000") 0 with
@@ -330,7 +392,7 @@ let test_decode_enforces_typ_where () =
 let test_validate_enforces_typ_where () =
   (match Codec.validate typ_where_codec (Bytes.of_string "\006\000") 0 with
   | () -> Alcotest.fail "validate accepted a Wire.where violation"
-  | exception Validation_error (Constraint_failed _) -> ());
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ());
   Codec.validate typ_where_codec (Bytes.of_string "\001\000") 0
 
 (* decode runs field actions; validate must run the same ones, or the two paths
@@ -348,13 +410,13 @@ let action_validate_codec =
 
 let test_validate_runs_field_action () =
   (match Codec.decode action_validate_codec (Bytes.of_string "\200\000") 0 with
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | _ -> Alcotest.fail "decode did not reject the action violation");
   (match
      Codec.validate action_validate_codec (Bytes.of_string "\200\000") 0
    with
   | () -> Alcotest.fail "validate skipped the field action decode enforces"
-  | exception Validation_error (Constraint_failed _) -> ());
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ());
   Codec.validate action_validate_codec (Bytes.of_string "\100\000") 0
 
 (* A [Wire.where] inside a container element has no 3D projection (EverParse
@@ -1596,7 +1658,7 @@ let test_view_bounds_check () =
   in
   let buf = Bytes.create 2 in
   match Codec.decode codec buf 0 with
-  | Error (Unexpected_eof _) -> ()
+  | Error { kind = Unexpected_eof _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
@@ -1776,7 +1838,7 @@ let test_action_fires_on_get () =
   (* Odd value: action rejects *)
   match get_v (Bytes.of_string "\x43") 0 with
   | _ -> Alcotest.fail "expected action to reject odd value"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_action_unfired_by_validate () =
   (* validate checks constraints + where, but does NOT fire actions. *)
@@ -1894,7 +1956,7 @@ let test_get_action_abort_field () =
   let get_v = Staged.unstage (Codec.get codec cf_v) in
   match get_v (Bytes.of_string "\x42") 0 with
   | _ -> Alcotest.fail "expected abort"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_get_noaction_ignores_env () =
   (* Passing ~env to get on a field without action is harmless *)
@@ -1954,7 +2016,7 @@ let test_get_action_with_inputparam () =
   (* 0x40 = 64 > 50: action rejects *)
   match get_v buf_bad 0 with
   | _ -> Alcotest.fail "expected rejection from input param check"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_get_action_inputparam_noenv () =
   (* Action references an input param but no env passed -- param reads as 0 *)
@@ -1977,7 +2039,7 @@ let test_get_action_inputparam_noenv () =
   (* 1 > 0: fails *)
   match get_v (Bytes.of_string "\x01") 0 with
   | _ -> Alcotest.fail "expected rejection without env"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 (* -- Param forwarding into embedded sub-codecs -- *)
 
@@ -2144,7 +2206,7 @@ let test_validate_constraint_only () =
   Codec.validate codec good 0;
   match Codec.validate codec bad 0 with
   | () -> Alcotest.fail "expected constraint failure"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_validate_where_only () =
   (* Codec with where clause but no field constraints *)
@@ -2161,7 +2223,7 @@ let test_validate_where_only () =
   Codec.validate codec good 0;
   match Codec.validate codec bad 0 with
   | () -> Alcotest.fail "expected where failure"
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_get_twostaged_same_field () =
   (* Two staged getters from the same codec+field with different envs *)
@@ -2296,7 +2358,7 @@ let test_decode_short_buffer () =
   let buf = Bytes.of_string "\x42" in
   match Codec.decode codec buf 0 with
   | Ok _ -> Alcotest.fail "expected EOF error"
-  | Error (Unexpected_eof _) -> ()
+  | Error { kind = Unexpected_eof _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_encode_short_buffer () =
@@ -3021,9 +3083,9 @@ let test_dep_size_out_of_range () =
     (fun (name, v) ->
       match Codec.decode u64_sized_codec (u64_len_buf v) 0 with
       | Ok _ -> Alcotest.failf "%s: expected Parse_error, decoded ok" name
-      | Error (Constraint_failed _) -> ()
+      | Error { kind = Value_out_of_range _; _ } -> ()
       | Error e ->
-          Alcotest.failf "%s: expected Constraint_failed, got %a" name
+          Alcotest.failf "%s: expected Value_out_of_range, got %a" name
             pp_parse_error e)
     cases
 
@@ -3066,7 +3128,7 @@ let test_int64_field_constraint_accepts_signed_magnitude_domain () =
 let test_int64_field_constraint_rejects_negative_zero () =
   match Codec.decode signed_magnitude_seek_codec (seek_buf Int64.min_int) 0 with
   | Ok _ -> Alcotest.fail "expected signed-magnitude negative zero to fail"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
 
@@ -3088,7 +3150,7 @@ let test_uint64_int_ref_constraint_enforced () =
     (decode_ok (Codec.decode codec (buf 3L) 0));
   match Codec.decode codec (buf 20L) 0 with
   | Ok _ -> Alcotest.fail "20 exceeds the bound and must be rejected"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
 
@@ -3414,7 +3476,7 @@ let test_codec_crossref_field_oversized () =
   Bytes.set_uint8 buf 4 0xCC;
   match Codec.decode tc_frame_codec buf 0 with
   | Ok _ -> Alcotest.fail "expected EOF on oversized data field"
-  | Error (Unexpected_eof _) -> ()
+  | Error { kind = Unexpected_eof _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 (* Attacker sets frame_len=2 -> data size = 2-3 = -1. Must error, not crash. *)
@@ -4287,7 +4349,8 @@ let test_casetype_no_match_invalid_tag () =
   in
   let c = Codec.v "ClosedCt" Fun.id Codec.[ Field.v "d" typ $ Fun.id ] in
   match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
-  | Error (Invalid_tag n) -> Alcotest.(check int) "unmatched tag" 99 n
+  | Error { kind = Invalid_tag n; _ } ->
+      Alcotest.(check int) "unmatched tag" 99 n
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
   | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
 
@@ -5756,6 +5819,12 @@ let suite =
         `Quick test_validate_bounds_constraint_free;
       Alcotest.test_case "validate: enforces all_zeros padding" `Quick
         test_validate_all_zeros;
+      Alcotest.test_case "error: self_constraint reports the offending value"
+        `Quick test_self_constraint_reports_value;
+      Alcotest.test_case "error: all_zeros offset on the struct path" `Quick
+        test_all_zeros_offset_on_struct_path;
+      Alcotest.test_case "error: nested field path" `Quick
+        test_field_path_nested;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
         test_validate_check_free_no_alloc;
       Alcotest.test_case "validate: matches decode rejections" `Quick

@@ -865,7 +865,7 @@ let codec_accepts ?env c buf =
       try
         Wire.Codec.validate ?env c buf 0;
         Wire.Codec.wire_size_at c buf 0 = Bytes.length buf
-      with Wire.Validation_error _ -> false)
+      with Wire.Parse_error _ -> false)
   | Error _ -> false
 
 (* A small param value, biased around the codec's footprint so a parameter that
