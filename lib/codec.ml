@@ -2486,11 +2486,12 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 (* Forward reader list: cons-list dual of [readers] snoc-list.
    Built once at seal time by [to_fwd]; applied at decode time by
    [apply_fwd], which saturates the constructor in a single call for up to
-   16 fields and otherwise unrolls 16 per step (1 partial application per
-   extra 16 fields). A saturated call returns the record with no
+   32 fields and otherwise unrolls 32 per step (1 partial application per
+   extra 32 fields). A saturated call returns the record with no
    intermediate closure; a partial application allocates a [caml_curry]
    closure per decode (visible only under flambda-off), so the threshold is
-   set above a typical protocol header (CLCW 13, CFDP 14 fields). *)
+   set above the widest real protocol header (IPv4 and USLP reach ~28
+   fields; a wide TCP header with its 8 flag bits split out is 18). *)
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
@@ -2514,14 +2515,15 @@ let to_fwd : type full result.
   go readers FNil
 
 (* Apply a forward reader list to [make], saturating the constructor in a
-   single call for up to 16 fields, so no intermediate closure is allocated
-   per decode. Beyond 16 fields one partial application is made per extra 16
-   (a [caml_curry] chain under flambda-off); the threshold clears a typical
-   protocol header (CLCW 13, CFDP 14 fields) in one saturated call.
+   single call for up to 32 fields, so no intermediate closure is allocated
+   per decode. Beyond 32 fields one partial application is made per extra 32
+   (a [caml_curry] chain under flambda-off); the threshold clears every real
+   protocol header (the widest, IPv4 and USLP, reach ~28 fields) in one
+   saturated call.
 
    The cases are a saturation table, one row per arity. The formatter is
    disabled here because it would otherwise staircase the deep [FCons]
-   patterns across ~240 lines; the flat table is both shorter and easier to
+   patterns across ~500 lines; the flat table is both shorter and easier to
    read. *)
 let rec apply_fwd : type mid result.
     mid -> (mid, result) readers_fwd -> bytes -> int -> result =
@@ -2558,8 +2560,40 @@ let rec apply_fwd : type mid result.
       f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FNil))))))))))))))) ->
       f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off)
-  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, rest)))))))))))))))) ->
-      apply_fwd (f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off)) rest buf off
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FNil)))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FNil))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FNil)))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FNil))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FNil)))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FNil))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FNil)))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FNil))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FNil)))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FNil))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FNil)))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FNil))))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FNil)))))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FNil))))))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off) (r29 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FNil)))))))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off) (r29 buf off) (r30 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FNil))))))))))))))))))))))))))))))) ->
+      f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off) (r29 buf off) (r30 buf off) (r31 buf off)
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FCons (r32, rest)))))))))))))))))))))))))))))))) ->
+      apply_fwd (f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off) (r29 buf off) (r30 buf off) (r31 buf off) (r32 buf off)) rest buf off
 [@@ocamlformat "disable"]
 
 let build_decode : type full r. full -> (full, r) readers -> bytes -> int -> r =

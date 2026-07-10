@@ -1,3 +1,15 @@
+## 1.0.1
+
+### Changed
+
+- Decoding a record codec with 17 to 32 fields no longer allocates a
+  short-lived closure on each decode: the closure-free decode ceiling that
+  1.0.0 raised to 16 fields now extends to 32. Real protocol headers cross the
+  old limit routinely, such as an 18-field TCP header with its flag bits broken
+  out, or telemetry and IPv4 headers in the high twenties, which now allocate
+  only the record they return. A codec wider than 32 fields keeps the recursive
+  fallback (#214, @samoht)
+
 ## 1.0.0
 
 ### Added
