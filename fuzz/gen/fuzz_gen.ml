@@ -363,7 +363,7 @@ let all_zeros =
         (s, buf))
   in
   (* Adversarial: bytes with at least one non-zero -- decoder must
-     surface [Constraint_failed], not raise. *)
+     surface [Non_zero_padding], not raise. *)
   let adversarial =
     Alcobar.map
       Alcobar.[ Alcobar.range ~min:1 16; Alcobar.range ~min:1 256 ]
@@ -2806,9 +2806,27 @@ let validate_one ?env g bs =
     Wire.Codec.validate ?env g.codec bs 0;
     `Ok
   with
-  | Wire.Validation_error _ -> `Reject
   | Invalid_argument _ -> `Crash
-  | Wire.Parse_error _ -> `Reject
+  | Wire.Parse_error e ->
+      (* A parse error's offset is never negative. Most kinds point inside the
+         input, but [Unexpected_eof] and [Missing_terminator] report where a
+         read (or a field that does not fit) ran past the end, so their offset
+         may exceed the buffer length. *)
+      let len = Bytes.length bs in
+      let bounded =
+        e.at >= 0
+        &&
+        match e.kind with
+        | Wire.Unexpected_eof _ | Wire.Missing_terminator -> true
+        | _ -> e.at <= len
+      in
+      if not bounded then
+        Alcobar.failf "parse error offset %d invalid for a %d-byte buffer" e.at
+          len;
+      (* Every field-path segment is a real (non-empty) field name. *)
+      if List.exists (fun s -> String.length s = 0) e.field then
+        Alcobar.failf "parse error field path has an empty segment";
+      `Reject
 
 let check_validate_positive label g bs =
   let env = positive_env g in
@@ -4273,7 +4291,7 @@ let check_struct_validator len data_s =
       check_int "Codec.wire_size_info_of_validator" (Bytes.length bytes)
         (size_of bytes 0));
   (try Wire.Codec.validate_struct validator bytes 0 with
-  | Wire.Validation_error e | Wire.Parse_error e ->
+  | Wire.Parse_error e ->
       Alcobar.failf "validate_struct rejected positive: %a" Wire.pp_parse_error
         e
   | Invalid_argument e -> Alcobar.failf "validate_struct crashed: %s" e);
@@ -4726,7 +4744,7 @@ let ep_validate label =
               Wire.Codec.validate ?env g.codec bs 0;
               `Ok
             with
-            | Wire.Validation_error _ | Wire.Parse_error _ -> `Reject
+            | Wire.Parse_error _ -> `Reject
             | Invalid_argument _ -> `Crash
           with
           | `Ok -> ()

@@ -197,13 +197,13 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
    computed once so the returned check allocates nothing per decode. *)
 let enum_checker cases =
   let valid = List.map snd cases in
-  fun v ->
-    if List.mem v valid then v
-    else raise (Parse_error (Invalid_enum { value = v; valid }))
+  fun ~at v ->
+    if List.mem v valid then v else raise_invalid_enum ~at ~value:v ~valid
 
 (* An open enum ([closed = false]) accepts any base value: the names only
    document known members, so decode does not reject the rest. *)
-let enum_check cases closed = if closed then enum_checker cases else fun v -> v
+let enum_check cases closed =
+  if closed then enum_checker cases else fun ~at:_ v -> v
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
@@ -252,7 +252,7 @@ let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader base field_off in
       let check = enum_check cases closed in
-      fun buf base -> check (read buf base)
+      fun buf base -> check ~at:(base + field_off) (read buf base)
   | Map { inner; decode; _ } ->
       let read = build_field_reader inner field_off in
       fun buf base -> decode (read buf base)
@@ -289,6 +289,17 @@ let clear_slots s n =
 
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
+
+(* Raise a field-constraint failure, reporting the offending field's value so a
+   demux can route on it (e.g. a version field that failed [self = N]).
+   [field_idx] is the field's int slot; [at] is the record's byte offset. *)
+let raise_field_constraint ~field_idx ~at arr =
+  let value =
+    if field_idx >= 0 && field_idx < Array.length arr.ints then
+      Some (Int64.of_int arr.ints.(field_idx))
+    else None
+  in
+  raise_constraint ~at ~which:Field ?value ()
 
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot
@@ -343,7 +354,7 @@ let rec build_populate : type a.
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; cases; closed; _ } ->
       let check = enum_check cases closed in
-      build_populate base idx (fun buf b -> check (reader buf b))
+      build_populate base idx (fun buf b -> check ~at:b (reader buf b))
   | Map { inner; encode; _ } ->
       build_populate inner idx (fun buf base -> encode (reader buf base))
   | Optional_or { inner; _ } ->
@@ -776,9 +787,8 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
       let fe = compile_bool_arr cc e in
       fun arr ->
         if fe arr then raise_notrace Return_true
-        else raise (Parse_error (Constraint_failed "field action"))
-  | Types.Abort ->
-      fun _ -> raise (Parse_error (Constraint_failed "field action"))
+        else raise_constraint ~at:0 ~which:Action ()
+  | Types.Abort -> fun _ -> raise_constraint ~at:0 ~which:Action ()
   | If (cond, then_, else_) ->
       let fc = compile_bool_arr cc cond in
       let ft = compile_stmts cc then_ in
@@ -1171,8 +1181,7 @@ and iter_param_refs_fields f fields where =
 
 let zeroterm_nul_pos buf ~first ~limit =
   let rec go i =
-    if i >= limit then
-      raise (Parse_error (Constraint_failed "zeroterm: missing NUL terminator"))
+    if i >= limit then raise_missing_terminator ~at:first
     else if Bytes.get_uint8 buf i = 0 then i
     else go (i + 1)
   in
@@ -1219,10 +1228,10 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Map { inner; decode; _ } -> decode (read_elem inner buf off)
   | Where { inner; _ } -> read_elem inner buf off
   | Enum { base; cases; closed; _ } ->
-      enum_check cases closed (read_elem base buf off)
+      enum_check cases closed ~at:off (read_elem base buf off)
   | Casetype { tag; cases; _ } ->
       let tag_val = read_elem tag buf off in
-      read_case_body ~tag cases tag_val buf (off + tag_byte_size tag)
+      read_case_body ~at:off ~tag cases tag_val buf (off + tag_byte_size tag)
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
@@ -1264,21 +1273,20 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
    [let rec find] inside [read_elem]: the inner form would allocate a fresh
    closure on every casetype element decoded. *)
 and read_case_body : type a k.
-    tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> a =
- fun ~tag cases tag_val buf body_off ->
+    at:int -> tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> a =
+ fun ~at ~tag cases tag_val buf body_off ->
   match cases with
   | [] ->
       (* No branch matched the discriminant. [tag] is integer-typed in the
          common case (a version/type field); a non-integer (string) tag has no
          [int] form and reports index 0. *)
-      let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
-      raise (Parse_error (Invalid_tag n))
+      raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
     when t = tag_val ->
       cb_inject tag_val (read_elem cb_inner buf body_off)
   | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
       cb_inject tag_val (read_elem cb_inner buf body_off)
-  | _ :: rest -> read_case_body ~tag rest tag_val buf body_off
+  | _ :: rest -> read_case_body ~at ~tag rest tag_val buf body_off
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
 let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
@@ -1336,7 +1344,7 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
   | Casetype { tag; cases; _ } ->
       let tag_size = tag_byte_size tag in
       let tag_val = read_elem tag buf off in
-      tag_size + size_case_body ~tag cases tag_val buf (off + tag_size)
+      tag_size + size_case_body ~at:off ~tag cases tag_val buf (off + tag_size)
   | Map { inner; _ } -> elem_size_of inner buf off
   | Where { inner; _ } -> elem_size_of inner buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
@@ -1358,17 +1366,16 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
    as [read_case_body]: a per-call [let rec find] would allocate a closure on
    every element. *)
 and size_case_body : type a k.
-    tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> int =
- fun ~tag cases tag_val buf body_off ->
+    at:int -> tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> int =
+ fun ~at ~tag cases tag_val buf body_off ->
   match cases with
   | [] ->
-      let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
-      raise (Parse_error (Invalid_tag n))
+      raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
       elem_size_of cb_inner buf body_off
   | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
       elem_size_of cb_inner buf body_off
-  | _ :: rest -> size_case_body ~tag rest tag_val buf body_off
+  | _ :: rest -> size_case_body ~at ~tag rest tag_val buf body_off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
@@ -1727,9 +1734,7 @@ let repeat_raw_fixed : type elt seq.
      buffer before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise
-      (Parse_error
-         (Unexpected_eof { expected = start + budget; got = Bytes.length buf }));
+    raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
@@ -1750,9 +1755,7 @@ let repeat_raw_variable : type elt seq.
   let start = base + off_fn buf base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise
-      (Parse_error
-         (Unexpected_eof { expected = start + budget; got = Bytes.length buf }));
+    raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
@@ -1863,14 +1866,10 @@ let var_bytes_reader : type a.
          [make_or_eod] with a raw [Invalid_argument] that escapes the decode
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
-        raise
-          (Parse_error
-             (Unexpected_eof { expected = first + sz; got = Bytes.length buf }))
+        raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf)
   | _ ->
       if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-        raise
-          (Parse_error
-             (Unexpected_eof { expected = first + sz; got = Bytes.length buf })));
+        raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf));
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
@@ -1886,8 +1885,7 @@ let var_bytes_reader : type a.
       let s = Bytes.sub_string buf (base + fo) sz in
       String.iteri
         (fun i c ->
-          if c <> '\000' then
-            raise (Parse_error (All_zeros_failed { offset = base + fo + i })))
+          if c <> '\000' then raise_non_zero_padding ~at:(base + fo + i))
         s;
       s
   | Casetype _ -> read_elem typ buf (base + fo)
@@ -2115,11 +2113,11 @@ let rec compile_field : type a r.
       let check = enum_check cases closed in
       {
         cf with
-        raw_reader = (fun buf off -> check (cf.raw_reader buf off));
+        raw_reader = (fun buf off -> check ~at:off (cf.raw_reader buf off));
         populate =
           (fun arr buf base ->
             cf.populate arr buf base;
-            ignore (check (cf.int_reader buf base)));
+            ignore (check ~at:base (cf.int_reader buf base)));
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
@@ -2400,6 +2398,56 @@ let compile_field_check cc fld =
 (* The single place that mutates the record accumulator: assemble constraint
    and action checkers, then fold the [compiled_field] into a new record
    state. *)
+(* Whether reading a field of this type performs a decode-side check beyond
+   storing a scalar slot: enum membership, a lookup index bound, an all-zeros /
+   NUL-terminated / refined span, or a nested element's constraints. The
+   provably check-free leaves (scalars, bitfields, plain byte spans, unit, an
+   open enum, a bare bit/bool map) return [false]; everything else is treated as
+   a check ([| _ -> true]), so a new or uncertain type is never wrongly skipped.
+   A field's own [constraint_] / [action] / a [where] clause are accounted for
+   separately, so this is only about the type's intrinsic read-time validation. *)
+let rec field_reader_validates : type a. a Types.typ -> bool = function
+  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint63 _
+  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
+  | Types.Float32 _ | Types.Float64 _ | Types.Uint_var _ | Types.Bits _
+  | Types.Byte_array _ | Types.Byte_slice _ | Types.All_bytes | Types.Unit ->
+      false
+  | Types.Enum { closed; _ } -> closed
+  | Types.Map { inner; index_bound; _ } ->
+      index_bound <> None || field_reader_validates inner
+  | Types.Optional { inner; _ } -> field_reader_validates inner
+  | Types.Optional_or { inner; _ } -> field_reader_validates inner
+  | Types.Single_elem { elem; _ } -> field_reader_validates elem
+  | Types.Array { elem; _ } -> field_reader_validates elem
+  | Types.Repeat { elem; _ } -> field_reader_validates elem
+  | _ -> true
+
+(* Prepend [name] to the field path of a parse error escaping [f], so a failure
+   deep in a nested decode accumulates its root-to-leaf path as the exception
+   unwinds. Only fields that can raise an attributable error are wrapped; a plain
+   scalar read raises only [Unexpected_eof] from the record's bounds check, which
+   is recorded without a path. *)
+let prepend_field name f buf base =
+  try f buf base
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+let prepend_field_check name f arr buf base =
+  try f arr buf base
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+(* Tag a field's reader and its two validators with [name] so a parse error
+   escaping any of them carries the field in its path; [attributable = false] (a
+   plain scalar) leaves them untouched, keeping the hot read path free of an
+   exception frame. *)
+let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
+  if Option.is_some check || Option.is_some act || validates then
+    ( prepend_field name raw_reader,
+      prepend_field_check name full,
+      prepend_field_check name check_only )
+  else (raw_reader, full, check_only)
+
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
     =
@@ -2424,12 +2472,10 @@ let apply_compiled : type a f r.
   in
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
-  let populate = cf.populate in
   let check_only arr buf base =
-    populate arr buf base;
+    cf.populate arr buf base;
     match check with
-    | Some f when not (f arr) ->
-        raise (Parse_error (Constraint_failed "field constraint"))
+    | Some f when not (f arr) -> raise_field_constraint ~field_idx ~at:base arr
     | _ -> ()
   in
   (* The full validator is the read-and-check plus the field action. Decode and
@@ -2457,11 +2503,16 @@ let apply_compiled : type a f r.
     | Bitfield _ -> fun _ -> cf.size_delta
     | _ -> fun v -> size_of_typ_value field_typ (field_get v)
   in
+  let raw_reader, full, check_only =
+    wrap_field_errors
+      ~validates:(field_reader_validates fld.typ)
+      ~check ~act fld.name cf.raw_reader full check_only
+  in
   Record
     {
       name = r.name;
       make = r.make;
-      readers = Snoc (r.readers, cf.raw_reader);
+      readers = Snoc (r.readers, raw_reader);
       writers_rev = new_writers_rev;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size = r.min_wire_size + cf.size_delta;
@@ -2663,34 +2714,8 @@ let compile_where_clause param_slots field_readers where =
 let validate_or_eof buf f =
   try f ()
   with Invalid_argument _ ->
-    raise
-      (Parse_error
-         (Unexpected_eof
-            { expected = Bytes.length buf + 1; got = Bytes.length buf }))
-
-(* Whether reading a field of this type performs a decode-side check beyond
-   storing a scalar slot: enum membership, a lookup index bound, an all-zeros /
-   NUL-terminated / refined span, or a nested element's constraints. The
-   provably check-free leaves (scalars, bitfields, plain byte spans, unit, an
-   open enum, a bare bit/bool map) return [false]; everything else is treated as
-   a check ([| _ -> true]), so a new or uncertain type is never wrongly skipped.
-   A field's own [constraint_] / [action] / a [where] clause are accounted for
-   separately, so this is only about the type's intrinsic read-time validation. *)
-let rec field_reader_validates : type a. a Types.typ -> bool = function
-  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint63 _
-  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
-  | Types.Float32 _ | Types.Float64 _ | Types.Uint_var _ | Types.Bits _
-  | Types.Byte_array _ | Types.Byte_slice _ | Types.All_bytes | Types.Unit ->
-      false
-  | Types.Enum { closed; _ } -> closed
-  | Types.Map { inner; index_bound; _ } ->
-      index_bound <> None || field_reader_validates inner
-  | Types.Optional { inner; _ } -> field_reader_validates inner
-  | Types.Optional_or { inner; _ } -> field_reader_validates inner
-  | Types.Single_elem { elem; _ } -> field_reader_validates elem
-  | Types.Array { elem; _ } -> field_reader_validates elem
-  | Types.Repeat { elem; _ } -> field_reader_validates elem
-  | _ -> true
+    let len = Bytes.length buf in
+    raise_eof ~at:len ~expected:(len + 1) ~got:len
 
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     n_total =
@@ -2701,8 +2726,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
       validator_fns.(i) arr buf off
     done;
     match compiled_where with
-    | Some f when not (f arr) ->
-        raise (Parse_error (Constraint_failed "where clause"))
+    | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
     | _ -> ()
   in
   let checker_fns = Array.of_list (List.map snd checkers_rev) in
@@ -2768,19 +2792,19 @@ let fill_param_slots tbl param_base handles =
    before a zero-copy [get] reads its fields. *)
 let check_decode_bounds wire_size_info min_size buf off =
   if off + min_size > Bytes.length buf then
-    raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
+    raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
       let end_off =
         try compute buf off
         with Invalid_argument _ ->
-          raise_eof ~expected:min_size ~got:(Bytes.length buf - off)
+          raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off)
       in
       if end_off < off + min_size then
-        raise_eof ~expected:min_size ~got:(Bytes.length buf - off);
+        raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
       if end_off > Bytes.length buf then
-        raise_eof ~expected:(end_off - off) ~got:(Bytes.length buf - off)
+        raise_eof ~at:off ~expected:(end_off - off) ~got:(Bytes.length buf - off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun buf off ->
@@ -3074,20 +3098,20 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
-  let raise_check_failed () =
-    raise (Parse_error (Constraint_failed "field constraint"))
+  let raise_check_failed arr base =
+    raise_field_constraint ~field_idx:acc.n_fields ~at:base arr
   in
   let full arr buf base =
     populate arr buf base;
     (match check with
-    | Some f when not (f arr) -> raise_check_failed ()
+    | Some f when not (f arr) -> raise_check_failed arr base
     | _ -> ());
     Option.iter (fun f -> f arr) act
   in
   let check_only arr buf base =
     populate arr buf base;
     match check with
-    | Some f when not (f arr) -> raise_check_failed ()
+    | Some f when not (f arr) -> raise_check_failed arr base
     | _ -> ()
   in
   (full, check_only, List.length action_vanames)
@@ -3445,7 +3469,7 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
       let check = enum_check cases closed in
-      fun buf base -> check (read buf base)
+      fun buf base -> check ~at:base (read buf base)
   | Map { inner; decode; _ }, _ ->
       let read = build_staged_reader inner access in
       fun buf base -> decode (read buf base)

@@ -2,6 +2,30 @@
 
 type endian = Little | Big  (** Byte order. *)
 
+(* The parse-error types are declared here, before {!typ}, so that {!typ}'s own
+   [Where] / [Field] constructors win type-directed disambiguation throughout;
+   the {!predicate} constructors are reached only through a [predicate]-typed
+   context. See {!section:parse-errors} for the exception and helpers. *)
+
+(** Which predicate a {!Constraint_failed} came from. *)
+type predicate = Where | Field | Action | Per_byte
+
+type error_kind =
+  | Unexpected_eof of { expected : int; got : int }
+  | Invalid_enum of { value : int; valid : int list }
+  | Invalid_tag of int
+  | Missing_terminator
+  | Non_zero_padding
+  | Value_out_of_range of { value : int64 }
+  | Constraint_failed of { which : predicate; value : int64 option }
+      (** [value] is the offending field's value for a single-field
+          self-constraint, [None] for a cross-field or where predicate. *)
+
+type parse_error = { at : int; field : string list; kind : error_kind }
+(** [at] is the absolute byte offset of the failing field. Alongside it the
+    parse error records the path of field names leading to that field (root to
+    leaf, empty at a top-level or anonymous position) and the failure kind. *)
+
 type bit_order =
   | Msb_first
   | Lsb_first
@@ -768,22 +792,49 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
 val escape_3d : string -> string
 (** [escape_3d name] appends [_] if [name] is a 3D or C reserved word. *)
 
-(** {1 Parse Errors} *)
+(** {1:parse-errors Parse Errors}
 
-type parse_error =
-  | Unexpected_eof of { expected : int; got : int }
-  | Constraint_failed of string
-  | Invalid_enum of { value : int; valid : int list }
-  | Invalid_tag of int
-  | All_zeros_failed of { offset : int }  (** Structured parse error. *)
+    The {!predicate}, {!error_kind}, and {!parse_error} types are declared near
+    the top of this interface. *)
 
 exception Parse_error of parse_error
 
-val raise_eof : expected:int -> got:int -> 'a
+val raise_error : at:int -> error_kind -> 'a
+(** Raise {!Parse_error} with an empty field path. *)
+
+val raise_eof : at:int -> expected:int -> got:int -> 'a
 (** Raise {!Parse_error} for unexpected end-of-input. *)
+
+val raise_invalid_tag : at:int -> int -> 'a
+(** Raise {!Parse_error} for a tag or lookup index with no matching case. *)
+
+val raise_invalid_enum : at:int -> value:int -> valid:int list -> 'a
+(** Raise {!Parse_error} for an enum value outside its named set. *)
+
+val raise_missing_terminator : at:int -> 'a
+(** Raise {!Parse_error} for a NUL-terminated string with no terminator. *)
+
+val raise_non_zero_padding : at:int -> 'a
+(** Raise {!Parse_error} for a non-zero byte where zero padding is required. *)
+
+val raise_out_of_range : at:int -> int64 -> 'a
+(** Raise {!Parse_error} for an integer beyond the native integer range. *)
+
+val raise_constraint : at:int -> which:predicate -> ?value:int64 -> unit -> 'a
+(** Raise {!Parse_error} for a violated predicate [which], optionally carrying
+    the offending field's [value]. *)
 
 val pp_parse_error : Format.formatter -> parse_error -> unit
 (** Pretty-print a parse error. *)
+
+val pp_error_kind : Format.formatter -> error_kind -> unit
+(** Pretty-print a parse error kind, without location. *)
+
+val equal_parse_error : parse_error -> parse_error -> bool
+(** Structural equality on parse errors. *)
+
+val compare_parse_error : parse_error -> parse_error -> int
+(** Total order on parse errors. *)
 
 val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)

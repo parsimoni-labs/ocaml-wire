@@ -158,7 +158,7 @@ let test_finite_rejects_nan () =
   let buf = Bytes.create 8 in
   Bytes.set_int64_be buf 0 0x7FF8_0000_0000_0001L;
   match Codec.decode (finite_codec ()) buf 0 with
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Ok _ -> Alcotest.fail "is_finite should have rejected NaN"
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
@@ -173,7 +173,7 @@ let test_finite_rejects_inf () =
   let buf = Bytes.create 8 in
   Bytes.set_int64_be buf 0 (Int64.bits_of_float Float.infinity);
   match Codec.decode (finite_codec ()) buf 0 with
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | _ -> Alcotest.fail "is_finite should have rejected +inf"
 
 let test_rest_of_buffer_codec () =
@@ -291,7 +291,7 @@ let test_bawhere_rejects () =
   let t = byte_array_where ~size:(int 4) ~per_byte:printable_byte in
   match of_string t "ab\x01c" with
   | Ok _ -> Alcotest.fail "expected per-byte refinement to reject"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
 
@@ -313,7 +313,7 @@ let test_parse_variants_invalid () =
   let t = variants "Test" [ ("A", `A); ("B", `B); ("C", `C) ] uint8 in
   match of_string t input with
   | Ok _ -> Alcotest.fail "expected error for invalid enum"
-  | Error (Invalid_enum { value; _ }) ->
+  | Error { kind = Invalid_enum { value; _ }; _ } ->
       Alcotest.(check int) "invalid enum value" 255 value
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
@@ -333,7 +333,7 @@ let test_parse_all_zeros_invalid () =
   let input = "\x00\x01\x00" in
   match of_string all_zeros input with
   | Ok _ -> Alcotest.fail "expected error for non-zero byte"
-  | Error (All_zeros_failed { offset }) ->
+  | Error { kind = Non_zero_padding; at = offset; _ } ->
       Alcotest.(check int) "non-zero offset" 1 offset
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
@@ -348,7 +348,7 @@ let test_parse_eof () =
   let input = "\x01" in
   match of_string uint16 input with
   | Ok _ -> Alcotest.fail "expected EOF error"
-  | Error (Unexpected_eof { expected; got }) ->
+  | Error { kind = Unexpected_eof { expected; got }; _ } ->
       Alcotest.(check int) "expected bytes" 2 expected;
       Alcotest.(check int) "got bytes" 1 got
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
@@ -383,7 +383,7 @@ let test_parse_struct_constraint_fail () =
   let t = struct_typ s in
   match of_string t input with
   | Ok _ -> Alcotest.fail "expected constraint failure"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_parse_action_return_true () =
@@ -418,7 +418,7 @@ let test_parse_action_return_false () =
   in
   match of_string (struct_typ s) input with
   | Ok () -> Alcotest.fail "expected action failure"
-  | Error (Constraint_failed "field action") -> ()
+  | Error { kind = Constraint_failed { which = Action; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_parse_struct_action_var () =
@@ -450,7 +450,7 @@ let test_parse_struct_action_abort () =
   in
   match of_string (struct_typ s) input with
   | Ok () -> Alcotest.fail "expected abort"
-  | Error (Constraint_failed "field action") -> ()
+  | Error { kind = Constraint_failed { which = Action; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 type bounded_payload = { length : int; data : string }
@@ -576,7 +576,7 @@ let test_parse_param_where_fail () =
   let buf = Bytes.of_string "\x00\x03abc" in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error (Constraint_failed "where clause") -> ()
+  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 (* -- sizeof / sizeof_this / field_pos -- *)
@@ -595,7 +595,7 @@ let test_sizeof () =
   (* x=3 => sizeof(uint32be) = 4, constraint fails *)
   match of_string (struct_typ s) "\x03" with
   | Ok _ -> Alcotest.fail "expected sizeof constraint failure"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_sizeof_this () =
@@ -625,7 +625,7 @@ let test_sizeof_this_fail () =
   (* sizeof_this=1 at b, constraint says =2: fails *)
   match of_string (struct_typ s) "\x01\x02" with
   | Ok _ -> Alcotest.fail "expected sizeof_this constraint failure"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_field_pos () =
@@ -654,7 +654,7 @@ let test_field_pos_fail () =
   in
   match of_string (struct_typ s) "\x01\x02" with
   | Ok _ -> Alcotest.fail "expected field_pos constraint failure"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 type sizeof_action_record = { a : int; b : int; c : int }
@@ -874,7 +874,7 @@ let test_stream_rewind_fixed () =
   let bad = enum "Tag" [ ("A", 1); ("B", 2) ] uint8 in
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\xff\x01\x02" in
   (match Wire.of_reader bad reader with
-  | Error (Invalid_enum _) -> ()
+  | Error { kind = Invalid_enum _; _ } -> ()
   | Ok v -> Alcotest.failf "expected enum failure, got %d" v
   | Error e -> Alcotest.failf "expected Invalid_enum: %a" pp_parse_error e);
   Alcotest.(check int) "rewound first" 0xff (reader_decode_ok uint8 reader);
@@ -883,7 +883,7 @@ let test_stream_rewind_fixed () =
 let test_stream_rewind_partial_fixed () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03" in
   (match Wire.of_reader uint32be reader with
-  | Error (Unexpected_eof _) -> ()
+  | Error { kind = Unexpected_eof _; _ } -> ()
   | Ok v -> Alcotest.failf "expected eof, got %d" v
   | Error e -> Alcotest.failf "expected Unexpected_eof: %a" pp_parse_error e);
   Alcotest.(check int) "rewound" 0x0102 (reader_decode_ok uint16be reader);
@@ -892,18 +892,18 @@ let test_stream_rewind_partial_fixed () =
 let test_stream_rewind_incremental () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "abc" in
   (match Wire.of_reader zeroterm reader with
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Missing_terminator; _ } -> ()
   | Ok s -> Alcotest.failf "expected missing NUL, got %S" s
-  | Error e -> Alcotest.failf "expected Constraint_failed: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "expected Missing_terminator: %a" pp_parse_error e);
   Alcotest.(check int) "rewound" 0x61 (reader_decode_ok uint8 reader);
   Alcotest.(check int) "rest intact" 0x6263 (reader_decode_ok uint16be reader)
 
 let test_stream_rewind_consumes_rest () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "ab" in
   (match Wire.of_reader all_zeros reader with
-  | Error (All_zeros_failed _) -> ()
+  | Error { kind = Non_zero_padding; _ } -> ()
   | Ok s -> Alcotest.failf "expected all_zeros failure, got %S" s
-  | Error e -> Alcotest.failf "expected All_zeros_failed: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "expected Non_zero_padding: %a" pp_parse_error e);
   Alcotest.(check int) "rewound" 0x6162 (reader_decode_ok uint16be reader)
 
 let test_stream_bitfield_chunk1 () =
@@ -979,7 +979,7 @@ let test_validate_short_buffer_no_crash () =
   in
   match Codec.validate c (Bytes.create 0) 0 with
   | () -> Alcotest.fail "validate accepted an empty buffer"
-  | exception Wire.Validation_error _ -> ()
+  | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on a short buffer: %s" m
 
@@ -994,7 +994,7 @@ let test_validate_rejects_all_zeros_failure () =
       Alcotest.failf "decode crashed on non-zero all_zeros: %s" m);
   match Codec.validate c bad 0 with
   | () -> Alcotest.fail "validate accepted a non-zero all_zeros byte"
-  | exception Wire.Validation_error _ -> ()
+  | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on non-zero all_zeros: %s" m
 
@@ -1012,7 +1012,7 @@ let test_validate_rejects_negative_byte_slice () =
       Alcotest.failf "decode crashed on a negative byte_slice size: %s" m);
   match Codec.validate c bad 0 with
   | () -> Alcotest.fail "validate accepted a negative byte_slice size"
-  | exception Wire.Validation_error _ -> ()
+  | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on a negative byte_slice size: %s" m
 
@@ -1024,7 +1024,7 @@ let check_decode_and_validate_reject label c bad =
       Alcotest.failf "decode crashed on %s: %s" label m);
   match Codec.validate c bad 0 with
   | () -> Alcotest.failf "validate accepted %s" label
-  | exception (Wire.Validation_error _ | Wire.Parse_error _) -> ()
+  | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on %s: %s" label m
 

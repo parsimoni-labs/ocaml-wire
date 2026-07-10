@@ -19,14 +19,16 @@ let test_int_of () =
     (Eval.int_of Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
   Alcotest.(check (option int)) "unit" None (Eval.int_of Types.Unit ())
 
-(* [int_of_exn] returns the same value as [int_of] on the representable cases.
-   Where [int_of] returns [None] it does not silently coerce to 0: an
-   out-of-range 64-bit value is adversarial input and raises [Parse_error],
-   while a non-integer type is a schema mistake and raises [Invalid_argument]. *)
-let raises_constraint name f =
+(* [int_of_exn] returns the same value as [int_of] on the representable cases,
+   but where [int_of] returns [None] it fails instead of silently coercing to 0:
+   an out-of-range 64-bit value raises [Parse_error (Value_out_of_range _)], and
+   a non-integer type is a schema error that raises [Invalid_argument]. *)
+let raises_out_of_range name f =
   match f () with
   | _ -> Alcotest.failf "%s: expected Parse_error, got a value" name
-  | exception Types.Parse_error (Types.Constraint_failed _) -> ()
+  | exception Types.Parse_error { Types.kind = Types.Value_out_of_range _; _ }
+    ->
+      ()
   | exception e ->
       Alcotest.failf "%s: expected Parse_error, got %s" name
         (Printexc.to_string e)
@@ -54,16 +56,16 @@ let test_int_of_exn_ok () =
 let test_int_of_exn_overflow () =
   (* Adversarial 64-bit lengths that do not fit a native int must fail the
      parse rather than be read as 0. *)
-  raises_constraint "uint64 all-ones" (fun () ->
+  raises_out_of_range "uint64 all-ones" (fun () ->
       Eval.int_of_exn Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
-  raises_constraint "uint64 = 2^63" (fun () ->
+  raises_out_of_range "uint64 = 2^63" (fun () ->
       Eval.int_of_exn Types.uint64be 0x8000_0000_0000_0000L);
-  raises_constraint "uint64 = max_int + 1" (fun () ->
+  raises_out_of_range "uint64 = max_int + 1" (fun () ->
       Eval.int_of_exn Types.uint64be (Int64.add (Int64.of_int max_int) 1L));
   (* A signed int64 with the top bit set is a huge unsigned value. *)
-  raises_constraint "int64 = -1" (fun () ->
+  raises_out_of_range "int64 = -1" (fun () ->
       Eval.int_of_exn Types.(Int64 Big) (-1L));
-  raises_constraint "int64 = min_int" (fun () ->
+  raises_out_of_range "int64 = min_int" (fun () ->
       Eval.int_of_exn Types.(Int64 Big) Int64.min_int)
 
 let test_int_of_exn_non_integer () =

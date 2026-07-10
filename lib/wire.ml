@@ -129,11 +129,8 @@ end
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
-exception Validation_error = Parse_error
-
 let[@inline] check_eof len need =
-  if need > len then
-    raise (Parse_error (Unexpected_eof { expected = need; got = len }))
+  if need > len then raise_eof ~at:len ~expected:need ~got:len
 
 (* The single decoder kernel. Bytes-based, returns [(value, end_off)].
    All types handled here -- no fallback. Expressions are evaluated in
@@ -148,8 +145,7 @@ let parse_all_zeros buf off len =
   let s = Bytes.sub_string buf off n in
   let rec check i =
     if i >= n then s
-    else if s.[i] <> '\000' then
-      raise (Parse_error (All_zeros_failed { offset = off + i }))
+    else if s.[i] <> '\000' then raise_non_zero_padding ~at:(off + i)
     else check (i + 1)
   in
   (check 0, len)
@@ -166,8 +162,7 @@ let parse_codec_typ codec_decode fixed_size size_of buf off len =
            truncated input returns [Error _] instead of crashing. *)
         try size_of buf off
         with Invalid_argument _ ->
-          raise (Parse_error (Unexpected_eof { expected = len + 1; got = len }))
-        )
+          raise_eof ~at:off ~expected:(len + 1) ~got:len)
   in
   check_eof len (off + sz);
   (codec_decode buf off, off + sz)
@@ -175,11 +170,10 @@ let parse_codec_typ codec_decode fixed_size size_of buf off len =
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
    decode paths agree on an unlisted code. *)
-let check_enum_membership ~closed cases v =
+let check_enum_membership ~at ~closed cases v =
   if closed then begin
     let valid = List.map snd cases in
-    if not (List.mem v valid) then
-      raise (Parse_error (Invalid_enum { value = v; valid }))
+    if not (List.mem v valid) then raise_invalid_enum ~at ~value:v ~valid
   end
 
 let parse_struct_typ s buf off len =
@@ -283,7 +277,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       for i = 0 to n - 1 do
         let v = Bytes.get_uint8 buf (off + i) in
         if not (Eval.expr (Eval.bind elt_var v Eval.empty) cond) then
-          raise (Parse_error (Constraint_failed "byte_array_where: per-byte"))
+          raise_constraint ~at:(off + i) ~which:Per_byte ()
       done;
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
@@ -301,7 +295,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
-      check_enum_membership ~closed cases v;
+      check_enum_membership ~at:off ~closed cases v;
       (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
       parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
@@ -329,7 +323,7 @@ and parse_where : type a. a typ -> bool expr -> bytes -> int -> int -> a * int =
  fun inner cond buf off len ->
   let v, off' = parse_direct inner buf off len in
   if Eval.expr Eval.empty cond then (v, off')
-  else raise (Parse_error (Constraint_failed "where clause"))
+  else raise_constraint ~at:off ~which:Where ()
 
 and parse_casetype : type a k.
     k typ -> (a, k) case_branch list -> bytes -> int -> int -> a * int =
@@ -337,8 +331,8 @@ and parse_casetype : type a k.
   let tag_val, off' = parse_direct tag buf off len in
   let rec find_case = function
     | [] ->
-        let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
-        raise (Parse_error (Invalid_tag n))
+        raise_invalid_tag ~at:off
+          (Option.value ~default:0 (Eval.int_of tag tag_val))
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
           let body, off'' = parse_direct cb_inner buf off' len in
@@ -448,7 +442,7 @@ let read_exact reader (n : int) =
       let slice = Reader.read reader in
       if Slice.is_eod slice then begin
         push_back_bytes reader buf 0 off;
-        raise (Parse_error (Unexpected_eof { expected = n; got = off }))
+        raise_eof ~at:off ~expected:n ~got:off
       end
       else
         let slice_len = Slice.length slice in
@@ -475,10 +469,12 @@ let parse_or_rewind typ reader bytes len =
       push_back_bytes reader bytes 0 len;
       raise (Parse_error e)
 
-let missing_more_input = function
-  | Unexpected_eof _ -> true
-  (* must match the message raised by [Codec.zeroterm_nul_pos] *)
-  | Constraint_failed "zeroterm: missing NUL terminator" -> true
+let missing_more_input e =
+  (* A truncated zeroterm reports [Missing_terminator] (from
+     [Codec.zeroterm_nul_pos]); both it and an [Unexpected_eof] mean the reader
+     should fetch more input before giving up. *)
+  match e.kind with
+  | Unexpected_eof _ | Missing_terminator -> true
   | _ -> false
 
 let of_reader_incremental typ reader =
@@ -509,8 +505,7 @@ let of_reader_incremental typ reader =
     | exception Invalid_argument _ ->
         read_more (fun () ->
             push_back_bytes reader bytes 0 len;
-            raise
-              (Parse_error (Unexpected_eof { expected = len + 1; got = len })))
+            raise_eof ~at:len ~expected:(len + 1) ~got:len)
   in
   loop ()
 

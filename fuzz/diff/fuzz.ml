@@ -14,13 +14,13 @@ open Fuzz_gen
 (* The EverParse validator accepts iff the bytes parse (enough input, valid
    structure) and every refinement holds. [Codec.decode_exn] is exactly that:
    it decodes (length + structure) and validates (refinements), raising
-   [Parse_error] / [Validation_error] on a clean rejection. (Plain [Codec.decode]
+   [Parse_error] on a clean rejection. (Plain [Codec.decode]
    returns a [result], so its rejection is easy to drop by mistake.) Any other
    exception surfaces as a crash, which is itself a divergence to report. *)
 let ocaml_accepts (Pack g) b =
   match ignore (Wire.Codec.decode_exn (codec g) b 0) with
   | () -> true
-  | exception (Wire.Validation_error _ | Wire.Parse_error _) -> false
+  | exception Wire.Parse_error _ -> false
 
 (* Compare both decoders on one codec and flag any accept/reject divergence. *)
 let diff_check label p c_check b =

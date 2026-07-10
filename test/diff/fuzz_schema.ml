@@ -20,7 +20,12 @@ let encode_record codec v =
 let decode_record codec s =
   let ws = Codec.wire_size codec in
   if String.length s < ws then
-    Error (Unexpected_eof { expected = ws; got = String.length s })
+    Error
+      {
+        at = 0;
+        field = [];
+        kind = Unexpected_eof { expected = ws; got = String.length s };
+      }
   else Codec.decode codec (Bytes.of_string s) 0
 
 (** Test SimpleHeader roundtrip *)

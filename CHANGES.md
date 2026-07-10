@@ -2,6 +2,33 @@
 
 ### Changed
 
+- Parse errors are now a `{ at; field; kind }` record instead of a flat variant.
+  `at` is the byte offset of the failing field and `field` is the path of field
+  names leading to it, so a failure deep in a nested struct is attributable
+  instead of surfacing as a bare kind with no location. The failure kinds are a
+  closed `error_kind` (`Unexpected_eof`, `Invalid_enum`, `Invalid_tag`,
+  `Missing_terminator`, `Non_zero_padding`, `Value_out_of_range`,
+  `Constraint_failed`); match on `e.kind` and read `e.at`. Consumers with their
+  own domain errors wrap `Wire.parse_error` in a variant of their own (#219,
+  @samoht)
+
+- `Constraint_failed of string` becomes `Constraint_failed { which; value }`:
+  `which` names the predicate that failed (a field constraint, a `where` clause,
+  a field action, or a per-byte refinement) and `value` carries the offending
+  field's value for a single-field self-constraint. A field that fails its
+  `~self_constraint` now reports which field and its value rather than an
+  unmatchable English string (#219, @samoht)
+
+- The `Validation_error` exception is removed; `Codec.validate` and the `_exn`
+  decoders both raise the single `Parse_error`. They were already the same
+  exception at runtime, so replace `Validation_error` with `Parse_error` (#219,
+  @samoht)
+
+- Add `equal_parse_error` / `compare_parse_error` and `pp_error_kind`, so a
+  consumer no longer hand-rolls equality for a parse error in its tests. The
+  `Value_out_of_range` kind now carries an integer-length overflow that the flat
+  type reported as a constraint failure (#219, @samoht)
+
 - Decoding a record codec with 17 to 32 fields no longer allocates a
   short-lived closure on each decode: the closure-free decode ceiling that
   1.0.0 raised to 16 fields now extends to 32. Real protocol headers cross the

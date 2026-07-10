@@ -142,7 +142,7 @@ let test_where_clause_fail () =
   let env = Codec.env c |> Param.bind max_val 10 in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error (Constraint_failed "where clause") -> ()
+  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_bind_by_name () =
@@ -167,7 +167,7 @@ let test_bind_by_name () =
   let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
   (match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error (Constraint_failed "where clause") -> ()
+  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e);
   (* an unreferenced name is a no-op, not an error *)
   let env =
@@ -254,7 +254,7 @@ let test_codec_param_where_fail () =
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit 3 in
   match Codec.decode ~env c buf 0 with
-  | Error (Constraint_failed "where clause") -> ()
+  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "expected decode failure"
 

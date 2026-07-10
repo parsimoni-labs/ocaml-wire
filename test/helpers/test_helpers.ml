@@ -113,9 +113,15 @@ let decode_ok = function
 
 let expect_constraint_fail = function
   | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
-  | Error (Constraint_failed _) -> ()
+  | Error { kind = Constraint_failed _; _ } -> ()
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+
+(* Assert a decode failed with a [kind] satisfying [pred]. *)
+let expect_kind pred = function
+  | Ok _ -> Alcotest.fail "expected a parse error"
+  | Error { kind; _ } when pred kind -> ()
+  | Error e -> Alcotest.failf "unexpected parse error: %a" pp_parse_error e
 
 let roundtrip name typ testable v =
   Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))
