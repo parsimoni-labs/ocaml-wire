@@ -226,12 +226,17 @@ let test_validate_all_zeros () =
   in
   Codec.validate c (Bytes.of_string "\x01\x00\x00\x00") 0;
   let tampered = Bytes.of_string "\x01\x00\x05\x00" in
+  (* The 0x05 sits at absolute offset 2; decoding through a struct field now
+     reports the same typed [All_zeros_failed] with that offset as the direct
+     [of_string] path, instead of a stringly constraint failure. *)
   (match Codec.decode c tampered 0 with
-  | Error (Constraint_failed _) -> ()
+  | Error (All_zeros_failed { offset }) ->
+      Alcotest.(check int) "decode non-zero offset" 2 offset
   | Ok _ -> Alcotest.fail "decode accepted non-zero all_zeros padding"
   | Error _ -> Alcotest.fail "decode failed with the wrong error");
   match Codec.validate c tampered 0 with
-  | exception Validation_error (Constraint_failed _) -> ()
+  | exception Validation_error (All_zeros_failed { offset }) ->
+      Alcotest.(check int) "validate non-zero offset" 2 offset
   | () -> Alcotest.fail "validate accepted non-zero all_zeros padding"
   | exception Validation_error _ ->
       Alcotest.fail "validate failed with the wrong error"
@@ -4266,6 +4271,26 @@ let test_casetype_field_default () =
   let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
   Alcotest.(check bool) "Other 7" true (r.data = `Other 7)
 
+(* A casetype whose discriminant matches no case fails with a typed
+   [Invalid_tag] carrying the tag value, not a stringly constraint failure. *)
+let test_casetype_no_match_invalid_tag () =
+  let typ =
+    Wire.casetype "Closed" Wire.uint8
+      [
+        Wire.case ~index:1 Wire.uint8
+          ~inject:(fun v -> `A v)
+          ~project:(function `A v -> Some v | _ -> None);
+        Wire.case ~index:2 Wire.uint8
+          ~inject:(fun v -> `B v)
+          ~project:(function `B v -> Some v | _ -> None);
+      ]
+  in
+  let c = Codec.v "ClosedCt" Fun.id Codec.[ Field.v "d" typ $ Fun.id ] in
+  match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
+  | Error (Invalid_tag n) -> Alcotest.(check int) "unmatched tag" 99 n
+  | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
+  | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
+
 (* The default branch recovers the matched tag and re-encodes it, so an
    arbitrary unclaimed tag round-trips (the DHCP / TCP-options shape). *)
 type tlv = Known of int | Unknown of (int * string)
@@ -6119,6 +6144,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "casetype field: no match is Invalid_tag" `Quick
+        test_casetype_no_match_invalid_tag;
       Alcotest.test_case "casetype default recovers matched tag" `Quick
         test_casetype_default_recovers_tag;
       Alcotest.test_case "casetype field: roundtrip" `Quick

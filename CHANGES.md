@@ -1,4 +1,4 @@
-## 1.0.1
+## unreleased
 
 ### Changed
 
@@ -9,6 +9,24 @@
   out, or telemetry and IPv4 headers in the high twenties, which now allocate
   only the record they return. A codec wider than 32 fields keeps the recursive
   fallback (#214, @samoht)
+
+### Fixed
+
+- A non-zero byte in an `all_zeros` padding field now reports the same error
+  whether the field is decoded through a struct (`Codec.decode` /
+  `Codec.validate`) or directly (`Wire.of_string`). The struct path used to
+  report a stringly `Constraint_failed` that dropped the byte offset while the
+  direct path reported the typed `All_zeros_failed` with the offset; both now
+  report `All_zeros_failed` carrying the offset (#220, @samoht)
+
+- A `casetype` whose discriminant matches no case now fails with the typed
+  `Invalid_tag` carrying the tag value, the same class as an out-of-range lookup
+  index, instead of a stringly `Constraint_failed` (#220, @samoht)
+
+- A non-integer field referenced where an integer is required (a schema mistake,
+  such as a float used as a length) now raises `Invalid_argument` rather than a
+  parse error, keeping schema errors distinct from malformed input (#220,
+  @samoht)
 
 ## 1.0.0
 

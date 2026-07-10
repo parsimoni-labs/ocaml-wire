@@ -55,10 +55,7 @@ let int_overflow () =
        (Constraint_failed "integer field value exceeds the native int range"))
 
 let not_an_integer () =
-  raise
-    (Parse_error
-       (Constraint_failed
-          "non-integer field referenced where an integer is required"))
+  invalid_arg "Wire: non-integer field referenced where an integer is required"
 
 let rec int_of_exn : type a. a typ -> a -> int =
  fun typ v ->

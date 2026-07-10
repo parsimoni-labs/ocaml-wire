@@ -336,7 +336,9 @@ and parse_casetype : type a k.
  fun tag cases buf off len ->
   let tag_val, off' = parse_direct tag buf off len in
   let rec find_case = function
-    | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
+    | [] ->
+        let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
+        raise (Parse_error (Invalid_tag n))
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
           let body, off'' = parse_direct cb_inner buf off' len in
