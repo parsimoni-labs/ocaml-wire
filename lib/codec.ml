@@ -1222,7 +1222,7 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       enum_check cases closed (read_elem base buf off)
   | Casetype { tag; cases; _ } ->
       let tag_val = read_elem tag buf off in
-      read_case_body cases tag_val buf (off + tag_byte_size tag)
+      read_case_body ~tag cases tag_val buf (off + tag_byte_size tag)
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
@@ -1263,17 +1263,22 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
 (* Dispatch a casetype's matched case body. A top-level recursion rather than a
    [let rec find] inside [read_elem]: the inner form would allocate a fresh
    closure on every casetype element decoded. *)
-and read_case_body : type a k. (a, k) case_branch list -> k -> bytes -> int -> a
-    =
- fun cases tag_val buf body_off ->
+and read_case_body : type a k.
+    tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> a =
+ fun ~tag cases tag_val buf body_off ->
   match cases with
-  | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
+  | [] ->
+      (* No branch matched the discriminant. [tag] is integer-typed in the
+         common case (a version/type field); a non-integer (string) tag has no
+         [int] form and reports index 0. *)
+      let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
+      raise (Parse_error (Invalid_tag n))
   | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
     when t = tag_val ->
       cb_inject tag_val (read_elem cb_inner buf body_off)
   | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
       cb_inject tag_val (read_elem cb_inner buf body_off)
-  | _ :: rest -> read_case_body rest tag_val buf body_off
+  | _ :: rest -> read_case_body ~tag rest tag_val buf body_off
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
 let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
@@ -1331,7 +1336,7 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
   | Casetype { tag; cases; _ } ->
       let tag_size = tag_byte_size tag in
       let tag_val = read_elem tag buf off in
-      tag_size + size_case_body cases tag_val buf (off + tag_size)
+      tag_size + size_case_body ~tag cases tag_val buf (off + tag_size)
   | Map { inner; _ } -> elem_size_of inner buf off
   | Where { inner; _ } -> elem_size_of inner buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
@@ -1353,15 +1358,17 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
    as [read_case_body]: a per-call [let rec find] would allocate a closure on
    every element. *)
 and size_case_body : type a k.
-    (a, k) case_branch list -> k -> bytes -> int -> int =
- fun cases tag_val buf body_off ->
+    tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> int =
+ fun ~tag cases tag_val buf body_off ->
   match cases with
-  | [] -> raise (Parse_error (Constraint_failed "casetype: no matching case"))
+  | [] ->
+      let n = Option.value ~default:0 (Eval.int_of tag tag_val) in
+      raise (Parse_error (Invalid_tag n))
   | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
       elem_size_of cb_inner buf body_off
   | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
       elem_size_of cb_inner buf body_off
-  | _ :: rest -> size_case_body rest tag_val buf body_off
+  | _ :: rest -> size_case_body ~tag rest tag_val buf body_off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
@@ -1877,10 +1884,10 @@ let var_bytes_reader : type a.
       Bytes.sub_string buf first (nul - first)
   | All_zeros ->
       let s = Bytes.sub_string buf (base + fo) sz in
-      String.iter
-        (fun c ->
+      String.iteri
+        (fun i c ->
           if c <> '\000' then
-            raise (Parse_error (Constraint_failed "all_zeros: non-zero byte")))
+            raise (Parse_error (All_zeros_failed { offset = base + fo + i })))
         s;
       s
   | Casetype _ -> read_elem typ buf (base + fo)

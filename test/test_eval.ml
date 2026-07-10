@@ -19,16 +19,24 @@ let test_int_of () =
     (Eval.int_of Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
   Alcotest.(check (option int)) "unit" None (Eval.int_of Types.Unit ())
 
-(* [int_of_exn] returns the same value as [int_of] on the representable cases,
-   but where [int_of] returns [None] -- an out-of-range 64-bit value or a
-   non-integer type -- it raises [Parse_error (Constraint_failed _)] instead of
-   silently coercing to 0. *)
+(* [int_of_exn] returns the same value as [int_of] on the representable cases.
+   Where [int_of] returns [None] it does not silently coerce to 0: an
+   out-of-range 64-bit value is adversarial input and raises [Parse_error],
+   while a non-integer type is a schema mistake and raises [Invalid_argument]. *)
 let raises_constraint name f =
   match f () with
   | _ -> Alcotest.failf "%s: expected Parse_error, got a value" name
   | exception Types.Parse_error (Types.Constraint_failed _) -> ()
   | exception e ->
       Alcotest.failf "%s: expected Parse_error, got %s" name
+        (Printexc.to_string e)
+
+let raises_invalid_arg name f =
+  match f () with
+  | _ -> Alcotest.failf "%s: expected Invalid_argument, got a value" name
+  | exception Invalid_argument _ -> ()
+  | exception e ->
+      Alcotest.failf "%s: expected Invalid_argument, got %s" name
         (Printexc.to_string e)
 
 let test_int_of_exn_ok () =
@@ -59,9 +67,9 @@ let test_int_of_exn_overflow () =
       Eval.int_of_exn Types.(Int64 Big) Int64.min_int)
 
 let test_int_of_exn_non_integer () =
-  raises_constraint "unit" (fun () -> Eval.int_of_exn Types.Unit ());
-  raises_constraint "float64" (fun () -> Eval.int_of_exn Types.float64be 1.5);
-  raises_constraint "byte_array" (fun () ->
+  raises_invalid_arg "unit" (fun () -> Eval.int_of_exn Types.Unit ());
+  raises_invalid_arg "float64" (fun () -> Eval.int_of_exn Types.float64be 1.5);
+  raises_invalid_arg "byte_array" (fun () ->
       Eval.int_of_exn (Types.byte_array ~size:(Types.Int 4)) "abcd")
 
 let test_expr_const () =
