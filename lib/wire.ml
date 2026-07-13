@@ -176,8 +176,29 @@ let check_enum_membership ~at ~closed cases v =
     if not (List.mem v valid) then raise_invalid_enum ~at ~value:v ~valid
   end
 
+(* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
+   is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key
+   that is never reclaimed. Compiling a fresh validator per decode would leak a
+   key per call, so cache the validator per struct. The cache is itself
+   domain-local, which keeps it lock-free (each domain compiles its structs
+   once) and avoids sharing a validator, hence its scratch, across domains.
+   Keyed by physical identity, so the usual case of a codec built once and
+   decoded in a loop hits the cache. *)
+let struct_validators =
+  Domain.DLS.new_key (fun () ->
+      (Stdlib.ref [] : (Types.struct_ * Codec.validator) list Stdlib.ref))
+
+let validator_for_struct s =
+  let cache = Domain.DLS.get struct_validators in
+  match List.find_opt (fun (k, _) -> k == s) !cache with
+  | Some (_, v) -> v
+  | None ->
+      let v = Codec.validator_of_struct s in
+      cache := (s, v) :: !cache;
+      v
+
 let parse_struct_typ s buf off len =
-  let v = Codec.validator_of_struct s in
+  let v = validator_for_struct s in
   let sz = Codec.struct_size_of v buf off in
   check_eof len (off + sz);
   Codec.validate_struct v buf off;
