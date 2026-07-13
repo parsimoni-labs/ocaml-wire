@@ -27,6 +27,10 @@
 
 ### Fixed
 
+- Decoding or validating one codec value concurrently from multiple domains is
+  now safe: validation scratch is per-domain, so concurrent decodes no longer
+  corrupt each other's fields and reject valid input (#223, @samoht)
+
 - A generated FFI parser (`parse buf off`) now raises `Invalid_argument` when
   `off` is negative or past the end of `buf`, instead of reading out of bounds.
   The C stub computed its length as `Bytes.length buf - off` in unsigned

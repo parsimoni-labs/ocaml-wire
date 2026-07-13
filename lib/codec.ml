@@ -287,6 +287,19 @@ let clear_slots s n =
   Array.fill s.ints 0 n 0;
   Array.fill s.int64s 0 n 0L
 
+(* A per-domain [slots] scratch. The validators and decoders below reuse one
+   scratch across calls to stay allocation-free, but a codec value is shared
+   across domains, so a single shared scratch lets two domains decoding at once
+   overwrite each other's fields. A misparsed segment is then dropped, which in
+   a TCP stack pinned one flow per core stalls that flow. Domain-local storage
+   gives each domain its own scratch, still reused within the domain: a decode
+   performs no effects, so cooperative fibers never interleave mid-decode.
+   Preemptive systhreads sharing a domain must still not decode one codec at
+   once. *)
+let domain_local_slots n =
+  let key = Domain.DLS.new_key (fun () -> alloc_slots n) in
+  fun () -> Domain.DLS.get key
+
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
 
@@ -884,11 +897,12 @@ type 'r t = {
   validate_arr : slots -> bytes -> int -> unit;
   populate : slots -> bytes -> int -> unit;
   n_array_slots : int;
-  decode_scratch : slots;
-      (* Validation scratch, allocated once at [seal] and zeroed per decode
-         (see [decode_exn]), mirroring the [validate] closure, the struct
-         validator, and [Codec.get]'s staged reader. Same shared-buffer
-         contract: not safe for concurrent decode of one codec value. *)
+  decode_scratch : unit -> slots;
+      (* Validation scratch, one per domain (see [domain_local_slots]) and
+         zeroed per decode (see [decode_exn]), mirroring the [validate]
+         closure, the struct validator, and [Codec.get]'s staged reader.
+         Domain-local so concurrent decode of one codec value on separate
+         domains does not share the scratch. *)
   param_base : int;
   n_params : int;
   param_handles : Param.packed list;
@@ -2752,8 +2766,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   let validate =
     if not has_checks then fun ?env_slots:_ _buf _off -> ()
     else
-      let arr = alloc_slots n_total in
+      let get_arr = domain_local_slots n_total in
       fun ?env_slots buf off ->
+        let arr = get_arr () in
         clear_slots arr n_total;
         (match env_slots with
         | Some slots ->
@@ -2989,7 +3004,7 @@ let seal : type r. (r, r) record -> r t =
     validate_arr;
     populate;
     n_array_slots = n_total;
-    decode_scratch = alloc_slots n_total;
+    decode_scratch = domain_local_slots n_total;
     param_base;
     n_params;
     param_handles;
@@ -3204,10 +3219,11 @@ and validator_of_struct (s : Types.struct_) : validator =
   in
   (* Full validation: fire field actions and check the where clause.
      [build_validators]'s third return [validate] is checkers-only (no
-     actions). [validate_arr] runs full validators -- pre-allocate one
-     scratch slots, zeroed on entry. *)
-  let arr = alloc_slots n_total in
+     actions). [validate_arr] runs full validators against a per-domain
+     scratch, zeroed on entry. *)
+  let get_arr = domain_local_slots n_total in
   let validate buf off =
+    let arr = get_arr () in
     if n_total > 0 then clear_slots arr n_total;
     validate_arr arr buf off
   in
@@ -3370,7 +3386,7 @@ let decode_exn ?env:e t buf off =
   | Some env -> load_env_into_cells t env
   | None -> ());
   let v = t.decode buf off in
-  let arr = t.decode_scratch in
+  let arr = t.decode_scratch () in
   clear_slots arr t.n_array_slots;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
@@ -3548,7 +3564,12 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   match List.assoc_opt f.name codec.field_actions with
   | None -> Staged.stage read
   | Some act ->
-      let arr = alloc_slots codec.n_array_slots in
+      (* Reuse the codec's own domain-local scratch rather than minting another
+         [Domain.DLS] key here: [get] returns a staged reader, but a caller that
+         re-stages instead of reusing would leak a key per call. [decode_scratch]
+         is sized [n_array_slots] and only ever touched by one operation at a
+         time on a given domain, so sharing it with decode is safe. *)
+      let get_arr = codec.decode_scratch in
       let n = codec.n_array_slots in
       let populate = codec.populate in
       let n_params = codec.n_params in
@@ -3574,6 +3595,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
       in
       Staged.stage (fun buf off ->
           let v = read buf off in
+          let arr = get_arr () in
           clear_slots arr n;
           blit_input arr;
           populate arr buf off;
