@@ -73,12 +73,15 @@ type ('a, 'k) param_handle = {
   typ : 'a typ;
   packed_typ : packed_typ;
   mutable_ : bool;
-  cell : int ref;
+  cell : unit -> int ref;
       (* [cell] is the per-handle backing read by encode/size expressions and
-         the value-forwarding vehicle for embedded sub-codecs. Slot resolution
-         (decode array index, env index) is NOT stored here: it is per-codec,
-         since one handle may be referenced both standalone and from an
-         embedding, which would clash on a single mutable field. *)
+         the value-forwarding vehicle for embedded sub-codecs. Domain-local: a
+         handle lives inside a codec shared across domains, so a single [int ref]
+         would race across domains the way the validator scratch did; [cell ()]
+         returns this domain's ref. Slot resolution (decode array index, env
+         index) is NOT stored here: it is per-codec, since one handle may be
+         referenced both standalone and from an embedding, which would clash on
+         a single mutable field. *)
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ
