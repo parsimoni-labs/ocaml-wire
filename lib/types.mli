@@ -84,7 +84,7 @@ type ('a, 'k) param_handle = {
   typ : 'a typ;
   packed_typ : packed_typ;
   mutable_ : bool;
-  cell : int ref;
+  cell : unit -> int ref;
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ

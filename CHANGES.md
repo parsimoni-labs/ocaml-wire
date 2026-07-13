@@ -27,9 +27,9 @@
 
 ### Fixed
 
-- Decoding or validating one codec value concurrently from multiple domains is
-  now safe: validation scratch is per-domain, so concurrent decodes no longer
-  corrupt each other's fields and reject valid input (#223, @samoht)
+- Codec values are now safe to share across domains: their validation scratch
+  and parameter backing are per-domain, so encoding, decoding, or validating one
+  codec concurrently no longer corrupts the result (#223, #224, @samoht)
 
 - A generated FFI parser (`parse buf off`) now raises `Invalid_argument` when
   `off` is negative or past the end of `buf`, instead of reading out of bounds.

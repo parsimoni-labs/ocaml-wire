@@ -701,7 +701,7 @@ let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
           "Codec: full-width field ref %S is only available in field \
            constraints"
           name);
-    param_ref = (fun (Pack_param p) _ _ -> !(p.cell));
+    param_ref = (fun (Pack_param p) _ _ -> !(p.cell ()));
     sizeof_typ =
       (fun (Pack_typ t) ->
         match field_wire_size t with
@@ -755,7 +755,7 @@ let array_leaves (cc : compile_ctx) : (slots, unit) leaves =
            an embedding) falls back to the shared cell. *)
         match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some i -> a.ints.(i)
-        | None -> !(p.cell));
+        | None -> !(p.cell ()));
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
@@ -794,7 +794,7 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
         let v = fe arr in
         match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some slot -> set_int_slot arr slot v
-        | None -> p.Types.cell := v)
+        | None -> p.Types.cell () := v)
   | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
   | Return e ->
       let fe = compile_bool_arr cc e in
@@ -3285,14 +3285,16 @@ let is_fixed (t : _ t) =
 let raw_decode (t : _ t) buf off = t.decode buf off
 
 (* Copy each input param's env value into its [cell]. The encode
-   closures read [Param_ref p] via [!(p.cell)] (see [bytes_leaves]
+   closures read [Param_ref p] via [!(p.cell ())] (see [bytes_leaves]
    in [compile_expr]), so the cells are the runtime backing for
    parametric field sizes. Mirror of the env -> array blit in
    [decode_exn]. *)
 let load_env_into_cells (t : 'r t) (env : Param.env) =
   (* The env slot of [param_handles.(i)] is [i] (the env is built in the same
      order, see [env] below). *)
-  List.iteri (fun i (Param.Pack p) -> p.cell := env.slots.(i)) t.param_handles
+  List.iteri
+    (fun i (Param.Pack p) -> p.cell () := env.slots.(i))
+    t.param_handles
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
@@ -3350,7 +3352,7 @@ let embed_decode (t : 'r t) buf off =
   let v = t.decode buf off in
   let env_slots =
     Array.of_list
-      (List.map (fun (Param.Pack p) -> !(p.Types.cell)) t.param_handles)
+      (List.map (fun (Param.Pack p) -> !(p.Types.cell ())) t.param_handles)
   in
   t.validate ~env_slots buf off;
   v
@@ -3377,7 +3379,7 @@ let decode_exn ?env:e t buf off =
      input, so it raises [Invalid_argument] rather than returning a parse error. *)
   require_env ~op:"decode" t e;
   (* Seed the input cells from the env before reading fields: the field
-     readers resolve [Param_ref p] via [!(p.cell)], so a parametric size
+     readers resolve [Param_ref p] via [!(p.cell ())], so a parametric size
      (byte_array / byte_slice / uint_var) must see the env's value. Mirror of
      the seeding [encode] does. [Param.bind] also writes the cell directly, but
      [Param.bind_by_name] only has the name and writes [env.slots]; without
@@ -3401,7 +3403,7 @@ let decode_exn ?env:e t buf off =
         (fun i (Param.Pack p) ->
           let v = arr.ints.(t.param_base + i) in
           e.slots.(i) <- v;
-          p.cell := v)
+          p.cell () := v)
         t.param_handles
   | None -> ());
   v
@@ -3587,7 +3589,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                   (fun i (Param.Pack p) ->
                     let v = arr.ints.(param_base + i) in
                     e.slots.(i) <- v;
-                    p.cell := v)
+                    p.cell () := v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
