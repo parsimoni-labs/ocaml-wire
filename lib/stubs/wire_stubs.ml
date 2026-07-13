@@ -22,6 +22,18 @@ let c_stub_validate ppf ~lower ~ep =
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
     lower
 
+(* [off] is caller-supplied and may carry attacker-controlled data (a length or
+   offset parsed from the input). Outside [0, buf_len] it would underflow [len]
+   into a huge span and push [data] past the buffer, so the validator would read
+   out of bounds; reject it with [Invalid_argument] before touching memory. *)
+let pp_c_stub_bounds ppf ~lower =
+  Fmt.pf ppf "  intnat off = Int_val(v_off);@\n";
+  Fmt.pf ppf "  mlsize_t buf_len = caml_string_length(v_buf);@\n";
+  Fmt.pf ppf "  if (off < 0 || (mlsize_t) off > buf_len)@\n";
+  Fmt.pf ppf "    caml_invalid_argument(\"%s: offset out of bounds\");@\n" lower;
+  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + off;@\n";
+  Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - (mlsize_t) off);@\n"
+
 let pp_field_value ppf (fname, kind) =
   match kind with
   | Wire.Everparse.Raw.Int64 ->
@@ -48,9 +60,7 @@ let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
       lower;
     Fmt.pf ppf "  CAMLparam3(v_k, v_buf, v_off);@\n";
     Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
-    Fmt.pf ppf
-      "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
-    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
+    pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep;
     Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
@@ -65,9 +75,7 @@ let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf
       "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n" lower;
     Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
-    Fmt.pf ppf
-      "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + Int_val(v_off);@\n";
-    Fmt.pf ppf "  uint32_t len = caml_string_length(v_buf) - Int_val(v_off);@\n";
+    pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep;
     Fmt.pf ppf "  CAMLreturn(Val_unit);@\n";
     Fmt.pf ppf "}@\n@\n"
