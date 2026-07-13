@@ -237,6 +237,21 @@ let test_c_stubs_many_params () =
     (contains ~sub:"caml_wire_manyparams_parse" c);
   Alcotest.(check bool) "has WIRECTX" true (contains ~sub:"WIRECTX" c)
 
+let test_c_stubs_bounds_check () =
+  let s =
+    struct_ "SimpleHeader" [ field "version" uint8; field "length" uint16 ]
+  in
+  let c = Wire_stubs.to_c_stubs [ s ] in
+  Alcotest.(check bool)
+    "rejects an out-of-range offset" true
+    (contains ~sub:"caml_invalid_argument" c);
+  Alcotest.(check bool)
+    "guards both the sign and the upper bound of off" true
+    (contains ~sub:"off < 0 || (mlsize_t) off > buf_len" c);
+  Alcotest.(check bool)
+    "no unchecked length subtraction remains" false
+    (contains ~sub:"caml_string_length(v_buf) - Int_val(v_off)" c)
+
 (* -- to_ml_stub_name -- *)
 
 let test_name_camel () =
@@ -325,6 +340,37 @@ let test_e2e_no_params () =
   let r = Stubs.testheader_parse buf 0 in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
+|}
+
+let test_e2e_offset_bounds () =
+  let f_version = Wire.Field.v "version" uint8 in
+  let f_length = Wire.Field.v "length" uint16be in
+  let codec =
+    let open Wire.Codec in
+    v "OffsetHeader"
+      (fun version length -> (version, length))
+      [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
+  in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let s = Wire.Everparse.Raw.struct_of_codec codec in
+  e2e ~name:"OffsetHeader" ~structs:[ s ] ~module_:schema.module_
+    ~test_ml:
+      {|let () =
+  let buf = Bytes.create 3 in
+  Bytes.set_uint8 buf 0 1;
+  Bytes.set_uint16_be buf 1 42;
+  (* in-range parse still works *)
+  let r = Stubs.offsetheader_parse buf 0 in
+  assert (r.Stubs.version = 1);
+  assert (r.Stubs.length = 42);
+  (* off past the end must be rejected, not underflow into an OOB read *)
+  (match Stubs.offsetheader_parse buf 4 with
+   | _ -> assert false
+   | exception Invalid_argument _ -> ());
+  (* a negative off must be rejected too *)
+  (match Stubs.offsetheader_parse buf (-1) with
+   | _ -> assert false
+   | exception Invalid_argument _ -> ())
 |}
 
 let test_e2e_with_constraint () =
@@ -757,12 +803,15 @@ let suite =
       Alcotest.test_case "c stubs: many params" `Quick test_c_stubs_many_params;
       Alcotest.test_case "c stubs: <Name>Fields uses EverParse-normalised name"
         `Quick test_normalised_fields_name;
+      Alcotest.test_case "c stubs: offset bounds check" `Quick
+        test_c_stubs_bounds_check;
       (* stub name *)
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;
       Alcotest.test_case "name: single word" `Quick test_name_single;
       (* end-to-end: generate -> EverParse -> compile -> call *)
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
+      Alcotest.test_case "e2e: offset bounds" `Slow test_e2e_offset_bounds;
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;

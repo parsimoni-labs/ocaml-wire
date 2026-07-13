@@ -27,6 +27,14 @@
 
 ### Fixed
 
+- A generated FFI parser (`parse buf off`) now raises `Invalid_argument` when
+  `off` is negative or past the end of `buf`, instead of reading out of bounds.
+  The C stub computed its length as `Bytes.length buf - off` in unsigned
+  arithmetic, so an out-of-range `off` (which can carry a length or offset field
+  parsed from untrusted input) underflowed the length into a huge span and
+  pushed the read pointer past the buffer before the validator ran. An in-range
+  `off` is unaffected (#222, @samoht)
+
 - A non-zero byte in an `all_zeros` padding field now reports the same error
   whether the field is decoded through a struct (`Codec.decode` /
   `Codec.validate`) or directly (`Wire.of_string`). The struct path used to
