@@ -27,6 +27,11 @@
 
 ### Fixed
 
+- Wire now fails at load on a platform whose native `int` is narrower than 63
+  bits (32-bit native, js_of_ocaml, wasm_of_ocaml) instead of silently
+  truncating: a uint32 with bit 31 set, such as a TCP sequence number, decoded
+  with the high bit dropped there (#225, @samoht)
+
 - Codec values are now safe to share across domains: their validation scratch
   and parameter backing are per-domain, so encoding, decoding, or validating one
   codec concurrently no longer corrupts the result (#223, #224, @samoht)

@@ -1,3 +1,19 @@
+(* Wire decodes integers by composing shifts in the native [int]: [UInt32] and
+   [UInt63] fold 16-bit reads, [Bitfield] folds bytes, and the [`U32] cast masks
+   with [0xFFFF_FFFF]. All of it assumes a 63-bit [int]. On a narrower one
+   (32-bit native, js_of_ocaml, wasm_of_ocaml) [hi lsl 16] overflows and drops
+   bit 31, so a uint32 with the top bit set, such as the TCP sequence number
+   0xa695853b, decodes as 0x2695853b; the mask literal is worse, wrapping to -1
+   so [land] becomes the identity. Refuse to load rather than hand back silently
+   corrupted wire data. *)
+let () =
+  if Sys.int_size < 63 then
+    Fmt.failwith
+      "wire: requires a 63-bit OCaml int, but Sys.int_size = %d. Integer \
+       decoding silently truncates on this platform, so 32-bit native, \
+       js_of_ocaml and wasm_of_ocaml targets are unsupported."
+      Sys.int_size
+
 type endian = Little | Big
 type bit_order = Msb_first | Lsb_first
 
