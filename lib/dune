@@ -1,7 +1,7 @@
 (library
  (name wire)
  (public_name wire)
- (libraries bytesrw fmt))
+ (libraries bytesrw fmt optint))
 
 (mdx
  (files codec.mli field.mli wire.mli)

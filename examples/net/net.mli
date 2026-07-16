@@ -51,10 +51,10 @@ val ipv4_payload_size : int
 val f_ip_protocol : int Wire.Field.t
 (** Zero-copy field accessor for the IPv4 Protocol field. *)
 
-val f_ip_src : int Wire.Field.t
+val f_ip_src : Optint.t Wire.Field.t
 (** Zero-copy field accessor for the IPv4 source address field. *)
 
-val f_ip_dst : int Wire.Field.t
+val f_ip_dst : Optint.t Wire.Field.t
 (** Zero-copy field accessor for the IPv4 destination address field. *)
 
 val f_ip_payload : Bytesrw.Bytes.Slice.t Wire.Field.t
@@ -63,10 +63,10 @@ val f_ip_payload : Bytesrw.Bytes.Slice.t Wire.Field.t
 val bf_ip_protocol : (int, ipv4) Wire.Codec.field
 (** Bound field handle for the IPv4 Protocol field. *)
 
-val bf_ip_src : (int, ipv4) Wire.Codec.field
+val bf_ip_src : (Optint.t, ipv4) Wire.Codec.field
 (** Bound field handle for the IPv4 source address field. *)
 
-val bf_ip_dst : (int, ipv4) Wire.Codec.field
+val bf_ip_dst : (Optint.t, ipv4) Wire.Codec.field
 (** Bound field handle for the IPv4 destination address field. *)
 
 val bf_ip_payload : (Bytesrw.Bytes.Slice.t, ipv4) Wire.Codec.field

@@ -4,8 +4,8 @@ open Wire.Private
 
 let check_roundtrip name ~set ~get v =
   let buf = Bytes.create 8 in
-  set buf 0 v;
-  Alcotest.(check int) name v (get buf 0)
+  set buf 0 (UInt63.of_int v);
+  Alcotest.(check int) name v (UInt63.to_int (get buf 0))
 
 let test_roundtrip_le () =
   check_roundtrip "le roundtrip" ~set:UInt63.set_le ~get:UInt63.le
@@ -22,13 +22,17 @@ let test_of_int_identity () =
    cannot drift. *)
 let test_byte_layout () =
   let buf = Bytes.of_string "\x01\x02\x03\x04\x05\x06\x07\x08" in
-  Alcotest.(check int) "le read" 0x0807_0605_0403_0201 (UInt63.le buf 0);
-  Alcotest.(check int) "be read" 0x0102_0304_0506_0708 (UInt63.be buf 0);
+  Alcotest.(check int)
+    "le read" 0x0807_0605_0403_0201
+    (UInt63.to_int (UInt63.le buf 0));
+  Alcotest.(check int)
+    "be read" 0x0102_0304_0506_0708
+    (UInt63.to_int (UInt63.be buf 0));
   let out = Bytes.create 8 in
-  UInt63.set_le out 0 0x0807_0605_0403_0201;
+  UInt63.set_le out 0 (UInt63.of_int 0x0807_0605_0403_0201);
   Alcotest.(check string)
     "le write" "\x01\x02\x03\x04\x05\x06\x07\x08" (Bytes.to_string out);
-  UInt63.set_be out 0 0x0102_0304_0506_0708;
+  UInt63.set_be out 0 (UInt63.of_int 0x0102_0304_0506_0708);
   Alcotest.(check string)
     "be write" "\x01\x02\x03\x04\x05\x06\x07\x08" (Bytes.to_string out)
 

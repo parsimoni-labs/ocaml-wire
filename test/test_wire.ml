@@ -63,13 +63,13 @@ let test_parse_uint16_be () =
 let test_parse_uint32_le () =
   let input = "\x01\x02\x03\x04" in
   match of_string uint32 input with
-  | Ok v -> Alcotest.(check int) "uint32 le value" 0x04030201 v
+  | Ok v -> Alcotest.(check int) "uint32 le value" 0x04030201 (Optint.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint32_be () =
   let input = "\x01\x02\x03\x04" in
   match of_string uint32be input with
-  | Ok v -> Alcotest.(check int) "uint32 be value" 0x01020304 v
+  | Ok v -> Alcotest.(check int) "uint32 be value" 0x01020304 (Optint.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint64_le () =
@@ -179,7 +179,7 @@ let test_finite_rejects_inf () =
 let test_rest_of_buffer_codec () =
   (* "Header then rest-of-buffer payload" idiom -- both formulations
      should work in a Codec field and round-trip OCaml decode/encode. *)
-  let total = Param.input "total" uint32be in
+  let total = Param.input "total" int32be in
   let f_h = Field.v "Header" uint8 in
   let f_d = Field.v "Data" (rest_bytes total) in
   let codec =
@@ -696,11 +696,11 @@ let test_encode_uint16_be () =
   Alcotest.(check string) "uint16 be encoding" "\x01\x02" encoded
 
 let test_encode_uint32_le () =
-  let encoded = to_string uint32 0x04030201 in
+  let encoded = to_string uint32 (Optint.of_int 0x04030201) in
   Alcotest.(check string) "uint32 le encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_uint32_be () =
-  let encoded = to_string uint32be 0x01020304 in
+  let encoded = to_string uint32be (Optint.of_int 0x01020304) in
   Alcotest.(check string) "uint32 be encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_array () =
@@ -777,7 +777,9 @@ let test_roundtrip_uint16 () =
   roundtrip "roundtrip uint16" uint16 Alcotest.int 0x1234
 
 let test_roundtrip_uint32 () =
-  roundtrip "roundtrip uint32" uint32 Alcotest.int 0x12345678
+  roundtrip "roundtrip uint32" uint32
+    (Alcotest.testable Optint.pp Optint.equal)
+    (Optint.of_int 0x12345678)
 
 let test_roundtrip_array () =
   roundtrip "roundtrip array"
@@ -813,16 +815,16 @@ let test_stream_uint16_chunk3 () =
   | Error e -> Alcotest.failf "uint16be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint32_chunk1 () =
-  let encoded = to_string uint32 0xDEADBEEF in
+  let encoded = to_string uint32 (Optint.of_int 0xDEADBEEF) in
   match parse_chunked ~chunk_size:1 uint32 encoded with
-  | Ok v -> Alcotest.(check int) "uint32 chunk=1" 0xDEADBEEF v
+  | Ok v -> Alcotest.(check int) "uint32 chunk=1" 0xDEADBEEF (Optint.to_int v)
   | Error e -> Alcotest.failf "uint32 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint32_chunk3 () =
   (* chunk=3: 4-byte value straddles at byte 3 *)
-  let encoded = to_string uint32be 0x12345678 in
+  let encoded = to_string uint32be (Optint.of_int 0x12345678) in
   match parse_chunked ~chunk_size:3 uint32be encoded with
-  | Ok v -> Alcotest.(check int) "uint32be chunk=3" 0x12345678 v
+  | Ok v -> Alcotest.(check int) "uint32be chunk=3" 0x12345678 (Optint.to_int v)
   | Error e -> Alcotest.failf "uint32be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk1 () =
@@ -884,7 +886,7 @@ let test_stream_rewind_partial_fixed () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03" in
   (match Wire.of_reader uint32be reader with
   | Error { kind = Unexpected_eof _; _ } -> ()
-  | Ok v -> Alcotest.failf "expected eof, got %d" v
+  | Ok v -> Alcotest.failf "expected eof, got %d" (Optint.to_int v)
   | Error e -> Alcotest.failf "expected Unexpected_eof: %a" pp_parse_error e);
   Alcotest.(check int) "rewound" 0x0102 (reader_decode_ok uint16be reader);
   Alcotest.(check int) "rest intact" 0x03 (reader_decode_ok uint8 reader)
@@ -919,16 +921,18 @@ let test_stream_bitfield_chunk1 () =
 (* Encode roundtrip through chunked writer *)
 let test_stream_encode_chunk1 () =
   let v = 0xDEADBEEF in
-  let encoded = encode_chunked ~chunk_size:1 uint32be v in
+  let encoded = encode_chunked ~chunk_size:1 uint32be (Optint.of_int v) in
   match of_string uint32be encoded with
-  | Ok decoded -> Alcotest.(check int) "encode chunk=1" v decoded
+  | Ok decoded ->
+      Alcotest.(check int) "encode chunk=1" v (Optint.to_int decoded)
   | Error e -> Alcotest.failf "encode chunk=1: %a" pp_parse_error e
 
 let test_stream_encode_chunk3 () =
   let v = 0x12345678 in
-  let encoded = encode_chunked ~chunk_size:3 uint32be v in
+  let encoded = encode_chunked ~chunk_size:3 uint32be (Optint.of_int v) in
   match of_string uint32be encoded with
-  | Ok decoded -> Alcotest.(check int) "encode chunk=3" v decoded
+  | Ok decoded ->
+      Alcotest.(check int) "encode chunk=3" v (Optint.to_int decoded)
   | Error e -> Alcotest.failf "encode chunk=3: %a" pp_parse_error e
 
 (* An open enum accepts any value, named or not. The typ-level [of_string] path

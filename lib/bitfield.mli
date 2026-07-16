@@ -25,6 +25,12 @@ val u32_le : bytes -> int -> int
 val u32_be : bytes -> int -> int
 (** Inline big-endian 32-bit word read. *)
 
+val set_u32_le : bytes -> int -> int -> unit
+(** Inline little-endian 32-bit word write of a native-[int] bitfield word. *)
+
+val set_u32_be : bytes -> int -> int -> unit
+(** Inline big-endian 32-bit word write of a native-[int] bitfield word. *)
+
 val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
 (** Write the base word to bytes at offset. *)
 

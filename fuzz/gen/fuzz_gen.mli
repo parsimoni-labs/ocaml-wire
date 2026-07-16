@@ -202,16 +202,16 @@ val uint16 : int t
 val uint16be : int t
 (** [uint16be] generates for {!Wire.uint16be}. *)
 
-val uint32 : int t
+val uint32 : Optint.t t
 (** [uint32] generates for {!Wire.uint32}. *)
 
-val uint32be : int t
+val uint32be : Optint.t t
 (** [uint32be] generates for {!Wire.uint32be}. *)
 
-val uint63 : int t
+val uint63 : Optint.Int63.t t
 (** [uint63] generates for {!Wire.uint63}. *)
 
-val uint63be : int t
+val uint63be : Optint.Int63.t t
 (** [uint63be] generates for {!Wire.uint63be}. *)
 
 val uint64 : int64 t
