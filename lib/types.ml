@@ -1090,8 +1090,8 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   match tag_typ with
   | Uint8 -> Pack_expr (Int k)
   | Uint16 _ -> Pack_expr (Int k)
-  | Uint32 _ -> Pack_expr (Int k)
-  | Uint63 _ -> Pack_expr (Int k)
+  | Uint32 _ -> Pack_expr (Int (UInt32.to_int k))
+  | Uint63 _ -> Pack_expr (Int (UInt63.to_int k))
   | Uint_var _ -> Pack_expr (Int k)
   | Int8 -> Pack_expr (Int k)
   | Int16 _ -> Pack_expr (Int k)

@@ -489,17 +489,20 @@ val uint16 : int typ
 val uint16be : int typ
 (** Unsigned 16-bit big-endian integer. *)
 
-val uint32 : int typ
-(** Unsigned 32-bit little-endian integer. *)
+val uint32 : Optint.t typ
+(** Unsigned 32-bit little-endian integer. Decodes to an {!Optint.t} so a value
+    with bit 31 set survives on a narrow-[int] target (js/wasm). *)
 
-val uint32be : int typ
-(** Unsigned 32-bit big-endian integer. *)
+val uint32be : Optint.t typ
+(** Unsigned 32-bit big-endian integer. Decodes to an {!Optint.t}. *)
 
-val uint63 : int typ
-(** Unsigned 63-bit little-endian integer carried on 8 bytes. *)
+val uint63 : Optint.Int63.t typ
+(** Unsigned 63-bit little-endian integer carried on 8 bytes. Decodes to an
+    {!Optint.Int63.t}. *)
 
-val uint63be : int typ
-(** Unsigned 63-bit big-endian integer carried on 8 bytes. *)
+val uint63be : Optint.Int63.t typ
+(** Unsigned 63-bit big-endian integer carried on 8 bytes. Decodes to an
+    {!Optint.Int63.t}. *)
 
 val uint64 : int64 typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml

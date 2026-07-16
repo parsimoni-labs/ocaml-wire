@@ -314,7 +314,7 @@ type tm_with_ocf = {
   mc_count : int;
   vc_count : int;
   first_hdr : int;
-  ocf : int option;
+  ocf : Optint.t option;
 }
 
 let f_tmo_ocf_flag = Field.v "OCFFlag" (bit (bits ~width:1 U16be))

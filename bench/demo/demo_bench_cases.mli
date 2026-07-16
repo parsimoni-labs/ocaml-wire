@@ -74,7 +74,7 @@ val clcw_case : int read_case
 val packet_case : int read_case
 (** CCSDS Space Packet APID (11-bit bitfield). *)
 
-val ipv4_case : int read_case
+val ipv4_case : Optint.t read_case
 (** IPv4 source address (uint32be). *)
 
 val tcp_case : int read_case

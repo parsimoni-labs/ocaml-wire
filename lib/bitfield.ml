@@ -34,6 +34,18 @@ let[@inline always] u32_be buf off =
   lor (Char.code (Bytes.unsafe_get buf (off + 2)) lsl 8)
   lor Char.code (Bytes.unsafe_get buf (off + 3))
 
+(* A bitfield word is a bag of bits manipulated in the native [int], never a
+   uint32 field value, so these stay [int]-based rather than going through
+   [UInt32]/[Optint]. On a host whose native [int] is narrower than 32 bits a
+   U32-base bitfield does not fit the word and is unsupported regardless. *)
+let[@inline always] set_u32_le buf off v =
+  Bytes.set_uint16_le buf off (v land 0xFFFF);
+  Bytes.set_uint16_le buf (off + 2) ((v lsr 16) land 0xFFFF)
+
+let[@inline always] set_u32_be buf off v =
+  Bytes.set_uint16_be buf off ((v lsr 16) land 0xFFFF);
+  Bytes.set_uint16_be buf (off + 2) (v land 0xFFFF)
+
 let read_word base buf off =
   match base with
   | U8 -> Bytes.get_uint8 buf off
@@ -47,8 +59,8 @@ let write_word base buf off v =
   | U8 -> Bytes.set_uint8 buf off v
   | U16 Little -> Bytes.set_uint16_le buf off v
   | U16 Big -> Bytes.set_uint16_be buf off v
-  | U32 Little -> UInt32.set_le buf off v
-  | U32 Big -> UInt32.set_be buf off v
+  | U32 Little -> set_u32_le buf off v
+  | U32 Big -> set_u32_be buf off v
 
 (** EverParse's native bit order for a base: LE bases default to LSB-first (MSVC
     C bit-field packing), BE bases to MSB-first (network byte order). *)

@@ -31,8 +31,8 @@ type all_ints = {
   u8 : int;
   u16 : int;
   u16be : int;
-  u32 : int;
-  u32be : int;
+  u32 : Optint.t;
+  u32be : Optint.t;
   u64be : int64;
 }
 
@@ -162,7 +162,7 @@ val bool_fields_data : int -> bytes array
 (** {1 LargeMixed (26 bytes)} *)
 
 type large_mixed = {
-  sync : int;
+  sync : Optint.t;
   version : int;
   type_ : int;
   spacecraft : int;
@@ -170,7 +170,7 @@ type large_mixed = {
   count : int;
   offset : int;
   length : int;
-  crc : int;
+  crc : Optint.t;
   timestamp : int64;
 }
 

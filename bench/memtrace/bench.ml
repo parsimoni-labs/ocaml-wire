@@ -153,7 +153,7 @@ type kexinit = {
   lang_c2s : Slice.t;
   lang_s2c : Slice.t;
   first_follows : int;
-  reserved : int;
+  reserved : Optint.t;
 }
 
 let kex_len name = Wire.Field.v name Wire.uint32be
@@ -194,25 +194,25 @@ let kexinit_codec =
       [
         ( Wire.Field.v "Cookie" (Wire.byte_slice ~size:(Wire.int 16)) $ fun r ->
           r.cookie );
-        (f_kex_len $ fun r -> Slice.length r.kex);
+        (f_kex_len $ fun r -> Optint.of_int (Slice.length r.kex));
         (name_list "Kex" f_kex_len $ fun r -> r.kex);
-        (f_hk_len $ fun r -> Slice.length r.host_key);
+        (f_hk_len $ fun r -> Optint.of_int (Slice.length r.host_key));
         (name_list "HostKey" f_hk_len $ fun r -> r.host_key);
-        (f_ec_len $ fun r -> Slice.length r.enc_c2s);
+        (f_ec_len $ fun r -> Optint.of_int (Slice.length r.enc_c2s));
         (name_list "EncC2S" f_ec_len $ fun r -> r.enc_c2s);
-        (f_es_len $ fun r -> Slice.length r.enc_s2c);
+        (f_es_len $ fun r -> Optint.of_int (Slice.length r.enc_s2c));
         (name_list "EncS2C" f_es_len $ fun r -> r.enc_s2c);
-        (f_mc_len $ fun r -> Slice.length r.mac_c2s);
+        (f_mc_len $ fun r -> Optint.of_int (Slice.length r.mac_c2s));
         (name_list "MacC2S" f_mc_len $ fun r -> r.mac_c2s);
-        (f_ms_len $ fun r -> Slice.length r.mac_s2c);
+        (f_ms_len $ fun r -> Optint.of_int (Slice.length r.mac_s2c));
         (name_list "MacS2C" f_ms_len $ fun r -> r.mac_s2c);
-        (f_cc_len $ fun r -> Slice.length r.comp_c2s);
+        (f_cc_len $ fun r -> Optint.of_int (Slice.length r.comp_c2s));
         (name_list "CompC2S" f_cc_len $ fun r -> r.comp_c2s);
-        (f_cs_len $ fun r -> Slice.length r.comp_s2c);
+        (f_cs_len $ fun r -> Optint.of_int (Slice.length r.comp_s2c));
         (name_list "CompS2C" f_cs_len $ fun r -> r.comp_s2c);
-        (f_lc_len $ fun r -> Slice.length r.lang_c2s);
+        (f_lc_len $ fun r -> Optint.of_int (Slice.length r.lang_c2s));
         (name_list "LangC2S" f_lc_len $ fun r -> r.lang_c2s);
-        (f_ls_len $ fun r -> Slice.length r.lang_s2c);
+        (f_ls_len $ fun r -> Optint.of_int (Slice.length r.lang_s2c));
         (name_list "LangS2C" f_ls_len $ fun r -> r.lang_s2c);
         (Wire.Field.v "FirstFollows" Wire.uint8 $ fun r -> r.first_follows);
         (Wire.Field.v "Reserved" Wire.uint32be $ fun r -> r.reserved);

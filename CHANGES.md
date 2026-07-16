@@ -2,6 +2,13 @@
 
 ### Changed
 
+- `uint32`/`uint32be` now decode to `Optint.t` and `uint63`/`uint63be` to
+  `Optint.Int63.t` rather than a native `int`, so a value with bit 31 (or the
+  high half) set is no longer silently truncated on a target whose `int` is
+  narrower than 63 bits (js_of_ocaml, wasm_of_ocaml); a TCP sequence number now
+  round-trips there. Read such a field with `Optint.to_int` / `Optint.to_int32`;
+  a `uint32` used as a size parameter must become `int32be` (#226, @samoht)
+
 - Decode errors are redesigned. `parse_error` is now a `{ at; field; kind }`
   record instead of a flat variant: `at` is the failing field's byte offset,
   `field` the root-to-leaf path of field names to it, and `kind` a closed

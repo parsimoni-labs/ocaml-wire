@@ -37,8 +37,8 @@ type all_ints = {
   u8 : int;
   u16 : int;
   u16be : int;
-  u32 : int;
-  u32be : int;
+  u32 : Optint.t;
+  u32be : Optint.t;
   u64be : int64;
 }
 
@@ -66,8 +66,8 @@ let all_ints_default =
     u8 = 0xFF;
     u16 = 0x1234;
     u16be = 0x5678;
-    u32 = 0xDEADBEEF;
-    u32be = 0xCAFEBABE;
+    u32 = Optint.of_int 0xDEADBEEF;
+    u32be = Optint.of_int 0xCAFEBABE;
     u64be = 0x0102030405060708L;
   }
 
@@ -202,7 +202,7 @@ let bool_fields_data n =
 (* -- 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes -- *)
 
 type large_mixed = {
-  sync : int;
+  sync : Optint.t;
   version : int;
   type_ : int;
   spacecraft : int;
@@ -210,7 +210,7 @@ type large_mixed = {
   count : int;
   offset : int;
   length : int;
-  crc : int;
+  crc : Optint.t;
   timestamp : int64;
 }
 
@@ -251,7 +251,7 @@ let large_mixed_size = Codec.wire_size large_mixed_codec
 
 let large_mixed_default =
   {
-    sync = 0x1ACFFC1D;
+    sync = Optint.of_int 0x1ACFFC1D;
     version = 2;
     type_ = 0;
     spacecraft = 0x01FF;
@@ -259,7 +259,7 @@ let large_mixed_default =
     count = 66;
     offset = 16;
     length = 1024;
-    crc = 0xDEADBEEF;
+    crc = Optint.of_int 0xDEADBEEF;
     timestamp = 0x0102030405060708L;
   }
 
@@ -524,13 +524,13 @@ let byte_array_struct =
    [UINT8[:byte-size (total_ - sizeof(this))]] -- [total] is an F*
    keyword and gets escaped automatically. *)
 let all_bytes_struct =
-  let total = Wire.Param.input "total" Wire.uint32be in
+  let total = Wire.Param.input "total" Wire.int32be in
   param_struct "TrailingData"
     [ Wire.Param.decl total ]
     [ field "Header" uint32be; field "Rest" (Wire.rest_bytes total) ]
 
 let all_zeros_struct =
-  let total = Wire.Param.input "total" Wire.uint32be in
+  let total = Wire.Param.input "total" Wire.int32be in
   param_struct "PaddedMsg"
     [ Wire.Param.decl total ]
     [ field "Value" uint16be; field "Padding" (Wire.rest_bytes total) ]

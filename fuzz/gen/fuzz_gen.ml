@@ -128,13 +128,23 @@ let scalar_int64 typ size value_gen boundaries =
   leaf ~equal:Int64.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
+let scalar_optint typ size value_gen boundaries =
+  leaf ~equal:Optint.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
+let scalar_optint63 typ size value_gen boundaries =
+  leaf ~equal:Optint.Int63.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
 let u8_boundaries = [ 0; 1; 0x7F; 0x80; 0xFE; 0xFF ]
 let u16_boundaries = [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
 
 let u32_boundaries =
-  [ 0; 1; 0xFFFF; 0x7FFF_FFFF; 0x8000_0000; 0xFFFF_FFFE; 0xFFFF_FFFF ]
+  List.map Optint.of_int
+    [ 0; 1; 0xFFFF; 0x7FFF_FFFF; 0x8000_0000; 0xFFFF_FFFE; 0xFFFF_FFFF ]
 
-let u63_boundaries = [ 0; 1; 0xFFFF_FFFF; max_int - 1; max_int ]
+let u63_boundaries =
+  List.map Optint.Int63.of_int [ 0; 1; 0xFFFF_FFFF; max_int - 1; max_int ]
 
 let u64_boundaries_i64 =
   Int64.[ zero; one; of_int 0xFFFF_FFFF; max_int; min_int; -1L; sub max_int 1L ]
@@ -148,13 +158,19 @@ let uint16 = scalar_int Wire.uint16 2 Alcobar.uint16 u16_boundaries
 let uint16be = scalar_int Wire.uint16be 2 Alcobar.uint16 u16_boundaries
 
 let masked_u32 =
-  Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land 0xFFFF_FFFF)
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Optint.of_int (n land 0xFFFF_FFFF))
 
-let masked_u63 = Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land max_int)
-let uint32 = scalar_int Wire.uint32 4 masked_u32 u32_boundaries
-let uint32be = scalar_int Wire.uint32be 4 masked_u32 u32_boundaries
-let uint63 = scalar_int Wire.uint63 8 masked_u63 u63_boundaries
-let uint63be = scalar_int Wire.uint63be 8 masked_u63 u63_boundaries
+let masked_u63 =
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Optint.Int63.of_int (n land max_int))
+
+let uint32 = scalar_optint Wire.uint32 4 masked_u32 u32_boundaries
+let uint32be = scalar_optint Wire.uint32be 4 masked_u32 u32_boundaries
+let uint63 = scalar_optint63 Wire.uint63 8 masked_u63 u63_boundaries
+let uint63be = scalar_optint63 Wire.uint63be 8 masked_u63 u63_boundaries
 let uint64 = scalar_int64 Wire.uint64 8 Alcobar.int64 u64_boundaries_i64
 let uint64be = scalar_int64 Wire.uint64be 8 Alcobar.int64 u64_boundaries_i64
 let int8 = scalar_int Wire.int8 1 Alcobar.int8 s8_boundaries
@@ -568,6 +584,7 @@ let exact_cases ~typ ~equal cases =
 
 let exact_int typ cases = exact_cases ~typ ~equal:Int.equal cases
 let exact_int64 typ cases = exact_cases ~typ ~equal:Int64.equal cases
+let exact_optint typ cases = exact_cases ~typ ~equal:Optint.equal cases
 
 let uint16_endian_edges =
   exact_int Wire.uint16
@@ -588,19 +605,19 @@ let uint16be_endian_edges =
     ]
 
 let uint32_endian_edges =
-  exact_int Wire.uint32
+  exact_optint Wire.uint32
     [
-      (0x01234567, bytes_of_octets [ 0x67; 0x45; 0x23; 0x01 ]);
-      (0x80000000, bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ]);
-      (0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+      (Optint.of_int 0x01234567, bytes_of_octets [ 0x67; 0x45; 0x23; 0x01 ]);
+      (Optint.of_int 0x80000000, bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ]);
+      (Optint.of_int 0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
     ]
 
 let uint32be_endian_edges =
-  exact_int Wire.uint32be
+  exact_optint Wire.uint32be
     [
-      (0x01234567, bytes_of_octets [ 0x01; 0x23; 0x45; 0x67 ]);
-      (0x80000000, bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ]);
-      (0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+      (Optint.of_int 0x01234567, bytes_of_octets [ 0x01; 0x23; 0x45; 0x67 ]);
+      (Optint.of_int 0x80000000, bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ]);
+      (Optint.of_int 0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
     ]
 
 let uint64_endian_edges =
@@ -1074,7 +1091,7 @@ let bounded_u8 ~min ~max =
    with a range [self_constraint]. [set] writes a boundary value as raw bytes and
    [max_val] is the type's maximum (so out-of-type boundary samples are dropped).
    Covers the constraint path on wider and big-endian scalars, not just uint8. *)
-let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max =
+let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
   let f =
     Wire.Field.v "v" inner_typ ~self_constraint:(fun r ->
         Wire.Expr.(r >= Wire.int min && r <= Wire.int max))
@@ -1083,7 +1100,7 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max =
     Wire.Codec.v "_bounded_int" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
   in
   let value_gen =
-    Alcobar.map Alcobar.[ Alcobar.range ~min (max - min + 1) ] Fun.id
+    Alcobar.map Alcobar.[ Alcobar.range ~min (max - min + 1) ] of_int
   in
   let encode v =
     let buf = Bytes.create size in
@@ -1110,18 +1127,19 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max =
     positive;
     random = bytes_fixed size;
     adversarial = boundary_bytes;
-    equal = Int.equal;
+    equal;
     env = None;
   }
 
 let bounded_u16be =
   bounded_int ~inner_typ:Wire.uint16be ~size:2 ~set:Bytes.set_uint16_be
-    ~max_val:0xFFFF ~min:1000 ~max:60000
+    ~max_val:0xFFFF ~min:1000 ~max:60000 ~of_int:Fun.id ~equal:Int.equal
 
 let bounded_u32be =
   bounded_int ~inner_typ:Wire.uint32be ~size:4
     ~set:(fun b o n -> Bytes.set_int32_be b o (Int32.of_int n))
-    ~max_val:0x7FFF_FFFF ~min:1000 ~max:1_000_000
+    ~max_val:0x7FFF_FFFF ~min:1000 ~max:1_000_000 ~of_int:Optint.of_int
+    ~equal:Optint.equal
 
 (* Two-uint8 record with [Codec.v ~where:(a < b)]. Positives keep a < b;
    adversarials sit at the boundary (a = b, a = b+1) so the where clause

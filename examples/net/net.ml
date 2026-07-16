@@ -59,8 +59,8 @@ type ipv4 = {
   ttl : int;
   protocol : int;
   checksum : int;
-  src : int;
-  dst : int;
+  src : Optint.t;
+  dst : Optint.t;
   payload : Slice.t;
 }
 
@@ -180,8 +180,8 @@ let ipv4_size = Codec.wire_size ipv4_codec
 type tcp = {
   src_port : int;
   dst_port : int;
-  seq : int;
-  ack_num : int;
+  seq : Optint.t;
+  ack_num : Optint.t;
   data_offset : int;
   reserved : int;
   ns : bool;

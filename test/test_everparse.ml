@@ -812,7 +812,7 @@ type tm_like = {
   hdr : int;
   data_len : int;
   packets : packet list;
-  ocf : int option;
+  ocf : Optint.t option;
   fecf : int option;
 }
 
