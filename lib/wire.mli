@@ -257,6 +257,11 @@ module Expr : sig
   val ( land ) : int expr -> int expr -> int expr
   (** Bitwise AND. *)
 
+  val land64 : int64 expr -> int64 expr -> int64 expr
+  (** Bitwise AND on full-width 64-bit operands, for masking a 64-bit field such
+      as a sign-magnitude offset before a comparison. The plain machine-word AND
+      truncates the field, so it cannot be used here. Projects to 3D as [&]. *)
+
   val ( lor ) : int expr -> int expr -> int expr
   (** Bitwise OR. *)
 

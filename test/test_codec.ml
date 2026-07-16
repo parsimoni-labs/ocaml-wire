@@ -3153,6 +3153,36 @@ let test_int64_field_constraint_rejects_negative_zero () =
   | Error e ->
       Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
 
+(* The bsdiff seek: a sign-magnitude uint64 decoded through a map, whose
+   magnitude must fit a native int. Exercises an int64 mask ([land64]) over a
+   map'd field: the constraint reads the raw pre-map word. *)
+let mask_seek_codec =
+  let f_seek =
+    Field.v "Seek" (map ~decode:Fun.id ~encode:Fun.id uint64be)
+      ~self_int64:(fun self ->
+        Expr.(
+          land64 self (int64 0x7FFF_FFFF_FFFF_FFFFL)
+          <= int64 (Int64.of_int max_int)))
+  in
+  Codec.v "MaskSeek" Fun.id Codec.[ f_seek $ Fun.id ]
+
+let test_int64_mask_constraint_over_map () =
+  let accept v =
+    Alcotest.(check int64)
+      "accept" v
+      (decode_ok (Codec.decode mask_seek_codec (seek_buf v) 0))
+  in
+  let reject v =
+    match Codec.decode mask_seek_codec (seek_buf v) 0 with
+    | Ok _ -> Alcotest.failf "expected 0x%Lx rejected" v
+    | Error { kind = Constraint_failed _; _ } -> ()
+    | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  in
+  (* magnitude fits: small values and sign-bit-only (negative zero magnitude) *)
+  List.iter accept [ 0L; 5L; Int64.min_int ];
+  (* magnitude too big: bit 62 set, and all-ones *)
+  List.iter reject [ 0x4000_0000_0000_0000L; Int64.max_int ]
+
 (* A plain int-kind [self_constraint] on a uint64 field must still read the
    field value, not an unpopulated zero slot: an out-of-range value has to be
    rejected, or the bound is silently vacuous. *)
@@ -6238,6 +6268,8 @@ let suite =
         test_int64_field_constraint_accepts_signed_magnitude_domain;
       Alcotest.test_case "constraint: int64 rejects negative zero" `Quick
         test_int64_field_constraint_rejects_negative_zero;
+      Alcotest.test_case "constraint: int64 mask over map'd field" `Quick
+        test_int64_mask_constraint_over_map;
       Alcotest.test_case "constraint: int-ref bound on uint64 enforced" `Quick
         test_uint64_int_ref_constraint_enforced;
       (* repeat *)

@@ -503,16 +503,25 @@ type ('c1, 'c2) leaves = {
   field_pos : 'c1 -> 'c2 -> int;
 }
 
-let compile_int64 : type c1 c2.
+let rec compile_int64 : type c1 c2.
     (c1, c2) leaves -> int64 expr -> c1 -> c2 -> int64 =
  fun l e ->
-  match e with Int64 n -> fun _ _ -> n | Ref (I64, name) -> l.i64 name
+  match e with
+  | Int64 n -> fun _ _ -> n
+  | Ref (I64, name) -> l.i64 name
+  | Land64 (a, b) ->
+      let fa = compile_int64 l a and fb = compile_int64 l b in
+      fun c1 c2 -> Int64.logand (fa c1 c2) (fb c1 c2)
 
 let try_int64 : type a c1 c2.
     (c1, c2) leaves -> a expr -> (c1 -> c2 -> int64) option =
  fun l e ->
   let go e = Some (compile_int64 l e) in
-  match e with Int64 _ as e -> go e | Ref (I64, _) as e -> go e | _ -> None
+  match e with
+  | Int64 _ as e -> go e
+  | Ref (I64, _) as e -> go e
+  | Land64 _ as e -> go e
+  | _ -> None
 
 let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
     =
@@ -1086,6 +1095,9 @@ let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
   | Lxor (a, b)
   | Lsl (a, b)
   | Lsr (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
+  | Land64 (a, b) ->
       iter_param_refs f a;
       iter_param_refs f b
   | Lt (a, b) ->

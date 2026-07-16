@@ -1,5 +1,13 @@
 ## unreleased
 
+### Added
+
+- `Wire.Expr.land64` is an int64 bitwise AND for masking a full-width `uint64`
+  field inside a constraint, and `~self_int64` / `Field.int64` now accept a
+  `map`-decoded uint64 field. A sign-magnitude offset bound such as a bsdiff
+  seek (`land64 self mask <= max`) is now expressible and projects to a 3D
+  refinement EverParse verifies (#227, @samoht)
+
 ### Changed
 
 - `uint32`/`uint32be` now decode to `Optint.t` and `uint63`/`uint63be` to

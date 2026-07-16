@@ -109,6 +109,17 @@ let test_int64_rejects_field_without_int64_slot () =
              Types.Expr.(self = int64 0L))
           : int Field.t))
 
+let test_int64_accepts_map_over_uint64 () =
+  (* A map over uint64 keeps its int64 slot: [build_populate] fills it with the
+     raw pre-map wire value, so an int64 self-constraint over the raw word is
+     well defined and is accepted (unlike a map over uint8). *)
+  let mapped = Types.map Int64.neg Int64.neg Types.uint64be in
+  ignore
+    (Field.v "Seek" mapped ~self_int64:(fun self ->
+         Types.Expr.(self <= int64 0L))
+      : int64 Field.t);
+  ignore (Field.int64 (Field.v "Seek2" mapped) : int64 Types.expr)
+
 let suite =
   ( "field",
     [
@@ -123,6 +134,8 @@ let suite =
       Alcotest.test_case "int64 on uint64 field" `Quick test_int64_uint64_field;
       Alcotest.test_case "int64 rejects missing slot" `Quick
         test_int64_rejects_field_without_int64_slot;
+      Alcotest.test_case "int64 accepts map over uint64" `Quick
+        test_int64_accepts_map_over_uint64;
       Alcotest.test_case "pp prints name" `Quick test_pp_prints_name;
       Alcotest.test_case "to_decl named" `Quick test_to_decl_named;
       Alcotest.test_case "to_decl anon" `Quick test_to_decl_anon;
