@@ -790,6 +790,23 @@ let test_3d_int64_literal_uses_unsigned_decimal () =
     "high-bit int64 literal prints unsigned" true
     (contains ~sub:"9223372036854775808uL" out3d)
 
+let test_3d_int64_mask_projects () =
+  (* The sign-magnitude seek bound (raw & 0x7fff... <= max_int), over a map'd
+     uint64, needs an int64 bitwise AND; it projects as an [&] refinement, in
+     doc mode too, in the form 3d.exe verifies. *)
+  let f =
+    Field.v "Seek" (map ~decode:Fun.id ~encode:Fun.id uint64be)
+      ~self_int64:(fun self ->
+        Expr.(
+          land64 self (int64 0x7FFF_FFFF_FFFF_FFFFL)
+          <= int64 (Int64.of_int max_int)))
+  in
+  let codec = Codec.v "MaskSeek" Fun.id Codec.[ f $ Fun.id ] in
+  let out = to_3d (Everparse.project ~mode:`Standalone codec).module_ in
+  Alcotest.(check bool)
+    "int64 mask renders as &" true
+    (contains ~sub:"(Seek & 9223372036854775807uL)" out)
+
 let test_3d_field_pos_rejected () =
   (* EverParse has no [field_pos] keyword, so a projected expression using it is
      rejected at projection, not emitted as an undefined identifier. *)
@@ -1417,6 +1434,8 @@ let suite =
         test_float_ordering_rejected;
       Alcotest.test_case "3d: int64 literal unsigned decimal" `Quick
         test_3d_int64_literal_uses_unsigned_decimal;
+      Alcotest.test_case "3d: int64 mask projects to refinement" `Quick
+        test_3d_int64_mask_projects;
       Alcotest.test_case "3d: field_pos rejected by projection" `Quick
         test_3d_field_pos_rejected;
     ] )

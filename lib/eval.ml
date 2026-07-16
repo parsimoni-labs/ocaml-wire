@@ -111,6 +111,7 @@ let rec expr : type a. ctx -> a expr -> a =
   | Div (a, b) -> expr ctx a / expr ctx b
   | Mod (a, b) -> expr ctx a mod expr ctx b
   | Land (a, b) -> expr ctx a land expr ctx b
+  | Land64 (a, b) -> Int64.logand (expr ctx a) (expr ctx b)
   | Lor (a, b) -> expr ctx a lor expr ctx b
   | Lxor (a, b) -> expr ctx a lxor expr ctx b
   | Lnot a -> lnot (expr ctx a)

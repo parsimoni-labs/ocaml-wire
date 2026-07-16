@@ -109,6 +109,10 @@ and _ expr =
   | Lnot : int expr -> int expr
   | Lsl : int expr * int expr -> int expr
   | Lsr : int expr * int expr -> int expr
+  | Land64 : int64 expr * int64 expr -> int64 expr
+      (** Bitwise AND on full-width [int64] operands, for masking a [uint64]
+          field before a comparison (the native-[int] [Land] cannot, since it
+          truncates the field). Projects to 3D as [&]. *)
   | Eq : 'a expr * 'a expr -> bool expr
   | Ne : 'a expr * 'a expr -> bool expr
   | Lt : 'a expr * 'a expr -> bool expr
@@ -313,6 +317,7 @@ module Expr = struct
   let ( / ) a b = Div (a, b)
   let ( mod ) a b = Mod (a, b)
   let ( land ) a b = Land (a, b)
+  let land64 a b = Land64 (a, b)
   let ( lor ) a b = Lor (a, b)
   let ( lxor ) a b = Lxor (a, b)
   let lnot a = Lnot a
@@ -1503,6 +1508,7 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Div (a, b) -> Fmt.pf ppf "(%a / %a)" pp_expr a pp_expr b
   | Mod (a, b) -> Fmt.pf ppf "(%a %% %a)" pp_expr a pp_expr b
   | Land (a, b) -> Fmt.pf ppf "(%a & %a)" pp_expr a pp_expr b
+  | Land64 (a, b) -> Fmt.pf ppf "(%a & %a)" pp_expr a pp_expr b
   | Lor (a, b) -> Fmt.pf ppf "(%a | %a)" pp_expr a pp_expr b
   | Lxor (a, b) -> Fmt.pf ppf "(%a ^ %a)" pp_expr a pp_expr b
   | Lnot a -> Fmt.pf ppf "(~%a)" pp_expr a
@@ -1616,6 +1622,7 @@ let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
   | Div (a, b) -> Div (r a, r b)
   | Mod (a, b) -> Mod (r a, r b)
   | Land (a, b) -> Land (r a, r b)
+  | Land64 (a, b) -> Land64 (r a, r b)
   | Lor (a, b) -> Lor (r a, r b)
   | Lxor (a, b) -> Lxor (r a, r b)
   | Lnot a -> Lnot (r a)
@@ -2066,6 +2073,7 @@ let rec mentions_field : type a. string -> a expr -> bool =
   | Lsl (a, b)
   | Lsr (a, b) ->
       mentions_field name a || mentions_field name b
+  | Land64 (a, b) -> mentions_field name a || mentions_field name b
   | Lnot a -> mentions_field name a
   | Cast (_, a) -> mentions_field name a
   | Eq (a, b) -> mentions_field name a || mentions_field name b
@@ -2274,6 +2282,7 @@ let rec collect_refs : type a. a expr -> string list = function
   | Lsl (a, b)
   | Lsr (a, b) ->
       collect_refs a @ collect_refs b
+  | Land64 (a, b) -> collect_refs a @ collect_refs b
   | Lnot a -> collect_refs a
   | Lt (a, b) -> collect_refs_packed a @ collect_refs_packed b
   | Le (a, b) -> collect_refs_packed a @ collect_refs_packed b
@@ -2307,6 +2316,7 @@ let rec widen_add : type a. string list -> a expr -> a expr =
   | Div (a, b) -> Div (r a, r b)
   | Mod (a, b) -> Mod (r a, r b)
   | Land (a, b) -> Land (r a, r b)
+  | Land64 (a, b) -> Land64 (r a, r b)
   | Lor (a, b) -> Lor (r a, r b)
   | Lxor (a, b) -> Lxor (r a, r b)
   | Lnot a -> Lnot (r a)
@@ -2357,6 +2367,7 @@ let rec reject_field_sub_mul : type a. string -> a expr -> unit =
   | Lsl (a, b)
   | Lsr (a, b) ->
       both a b
+  | Land64 (a, b) -> both a b
   | Eq (a, b) -> both a b
   | Ne (a, b) -> both a b
   | Lt (a, b) -> both a b

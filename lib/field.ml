@@ -23,6 +23,11 @@ let rec has_int64_slot : type a. a Types.typ -> bool =
   | Where { inner; _ } -> has_int64_slot inner
   | Optional { inner; _ } -> has_int64_slot inner
   | Optional_or { inner; _ } -> has_int64_slot inner
+  (* [build_populate] fills the int64 slot with the raw pre-map wire value
+     (via [encode]) and recurses [Enum] through its base, so a constraint over
+     the raw uint64 of a [map]-decoded or enum field is well defined. *)
+  | Map { inner; _ } -> has_int64_slot inner
+  | Enum { base; _ } -> has_int64_slot base
   | _ -> false
 
 let reject_no_int64_slot ~combinator name typ =
