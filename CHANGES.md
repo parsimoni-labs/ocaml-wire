@@ -42,6 +42,14 @@
 
 ### Fixed
 
+- A standalone `Wire_3d` schema installs only its checked wrapper header
+  (`<Base>Wrapper.h`), not the raw `<Base>.h`. The raw `<Base>Validate*`
+  entrypoints skip a `StartPosition <= InputLength` bound check, so a direct C
+  caller passing `StartPosition > InputLength` underflowed the read span and
+  went out of bounds; the wrapper validates from position 0 and is the safe
+  public API. The validators stay in the installed archive, just not as a header
+  (#228, @samoht)
+
 - Codec values are now safe to share across domains: their validation scratch
   and parameter backing are per-domain, so encoding, decoding, or validating one
   codec concurrently no longer corrupts the result (#223, #224, @samoht)

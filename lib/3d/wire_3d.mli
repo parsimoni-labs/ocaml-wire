@@ -175,7 +175,10 @@ val generate_standalone :
     is [name] when given, else [package], normalised to a CamelCase identifier
     (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
     generated [<Name>Check<Codec>] wrappers validate the whole buffer, rejecting
-    trailing bytes (see {!generate_c}). *)
+    trailing bytes (see {!generate_c}). Only the checked wrapper header
+    [<Name>Wrapper.h] is installed as the public C API; the raw
+    [<Name>Validate*] entrypoints (which take an unguarded [StartPosition]) stay
+    build-internal, linked into the archive but not shipped as a header. *)
 
 val generate_dune_standalone :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
