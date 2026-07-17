@@ -1171,10 +1171,21 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files =
     \  (run %%{dep:agree} corpus)))\n\n"
     archive base base strict_cc_flags everparse_type_defines archive
 
-let emit_standalone_install ppf ~package ~three_d ~archive ~c_files =
+(* Install only the checked wrapper header, not the raw validator header. The
+   [<Base>Validate*] entrypoints in [<Base>.h] take a [StartPosition] and their
+   EverParse-emitted preamble bounds a read as [N <= InputLength - StartPosition]
+   with no prior [StartPosition <= InputLength] check, so a direct C caller
+   passing [StartPosition > InputLength] underflows the span (unsigned) and reads
+   out of bounds. The generated wrapper [<Base>Check<Codec>(base, len)] always
+   validates from position 0 and is the safe public C API; the raw validators
+   stay build-internal, linked into the archive but not shipped as a header.
+   [<Base>Wrapper.h] does not include [<Base>.h], so this compiles standalone. *)
+let emit_standalone_install ppf ~package ~three_d ~archive ~public_header =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
-  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) (three_d :: archive :: c_files);
+  List.iter
+    (fun f -> pr "  (%s as c/%s)\n" f f)
+    [ three_d; archive; public_header ];
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
@@ -1189,7 +1200,8 @@ let generate_dune_standalone ?name ~outdir ~package _codecs =
   let ppf = Format.formatter_of_out_channel oc in
   emit_standalone_gen_rules ppf ~three_d ~c_files;
   emit_standalone_build_rules ppf ~base ~archive ~c_files;
-  emit_standalone_install ppf ~package ~three_d ~archive ~c_files;
+  emit_standalone_install ppf ~package ~three_d ~archive
+    ~public_header:(base ^ "Wrapper.h");
   Format.pp_print_flush ppf ();
   close_out oc
 
