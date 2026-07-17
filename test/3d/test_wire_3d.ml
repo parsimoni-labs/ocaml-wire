@@ -280,6 +280,64 @@ let test_doc_differential_no_params () =
     differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
+(* The installed standalone archive must export only the checked
+   [<Base>Check<Codec>] wrappers, not the raw [<Base>Validate*] entry points
+   whose EverParse-emitted preamble underflows on [StartPosition > InputLength].
+   Build the archive exactly as the generated dune rule does for this platform
+   (via {!Wire_3d.archive_link_steps}) and assert [nm] shows no global [Validate]
+   symbol. This runs the platform's real link step on CI (macOS and Linux). Needs
+   3d.exe for the C. *)
+let test_archive_hides_raw_validators () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let name = "symspec" and package = "sym-doc" in
+    let codec =
+      Codec.v "Sample"
+        (fun v -> v)
+        [ Codec.( $ ) (Field.v "X" uint32be) (fun v -> v) ]
+    in
+    let codecs = [ Wire_3d.pack codec ] in
+    let tmpdir = Filename.temp_dir "wire_3d_sym_" "" in
+    Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
+    let base = String.capitalize_ascii name in
+    let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
+    let wrappers = Wire_3d.wrapper_symbols base codecs in
+    let macos =
+      let ic = Unix.open_process_in "uname -s" in
+      let s = try input_line ic with End_of_file -> "" in
+      ignore (Unix.close_process_in ic);
+      String.equal s "Darwin"
+    in
+    let compile =
+      Fmt.str "cc %s %s -c %s.c %sWrapper.c" Wire_3d.strict_cc_flags
+        Wire_3d.everparse_type_defines base base
+    in
+    let steps =
+      compile :: Wire_3d.archive_link_steps ~macos ~archive ~base ~wrappers
+    in
+    let run cmd =
+      let ic = Unix.open_process_in (Fmt.str "cd %s && %s 2>&1" tmpdir cmd) in
+      let out = In_channel.input_all ic in
+      (out, Unix.close_process_in ic)
+    in
+    let build_out, build_status = run (String.concat " && " steps) in
+    let nm_out, _ = run (Fmt.str "nm %s" archive) in
+    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+    (match build_status with
+    | Unix.WEXITED 0 -> ()
+    | _ -> Alcotest.failf "localized archive build failed:\n%s" build_out);
+    (* Global text symbols are the uppercase-[T] [nm] lines. *)
+    let globals =
+      String.split_on_char '\n' nm_out
+      |> List.filter (fun l -> Re.execp (Re.compile (Re.str " T ")) l)
+    in
+    let any sub =
+      List.exists (fun l -> Re.execp (Re.compile (Re.str sub)) l) globals
+    in
+    Alcotest.(check bool) "raw Validate not exported" false (any "Validate");
+    Alcotest.(check bool) "Check wrapper exported" true (any "Check")
+  end
+
 (* A signed field with an ordering constraint: it projects to an unsigned UINT,
    so the refinement must be the two's-complement form or the C validator and the
    OCaml decoder disagree on bytes whose top bit is set (200 = signed -56). The
@@ -1160,6 +1218,8 @@ let suite =
         test_generate_dune_standalone_name_override;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
+      Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick
+        test_archive_hides_raw_validators;
       Alcotest.test_case "doc differential (needs 3d.exe)" `Quick
         test_doc_differential;
       Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick

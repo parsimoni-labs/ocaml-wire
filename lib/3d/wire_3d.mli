@@ -190,6 +190,25 @@ val generate_dune_standalone :
     stanza (under opam [package]) for the spec, parser, and archive. [name]
     defaults to [package]; see {!generate_standalone}. *)
 
+val wrapper_symbols : string -> packed list -> string list
+(** [wrapper_symbols base codecs] is the [<Base>Check<Codec>] wrapper C symbol
+    for each codec, computed exactly as EverParse names them. These are the only
+    symbols a standalone archive exports; the raw [<Base>Validate*] validators
+    are localized (see {!archive_link_steps}). *)
+
+val archive_link_steps :
+  macos:bool ->
+  archive:string ->
+  base:string ->
+  wrappers:string list ->
+  string list
+(** [archive_link_steps ~macos ~archive ~base ~wrappers] is the post-compile
+    shell commands that fold [<base>.o] and [<base>Wrapper.o] into [archive]
+    exporting only [wrappers] and localizing the raw validators. Platform
+    specific ([macos] localizes during the partial link; elsewhere [objcopy]
+    does it after). Shared by the emitted dune rule and the symbol-hiding test.
+*)
+
 val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
 (** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
     inputs as [<codec> <hex> <verdict>] lines, where [verdict] is [1] when the
