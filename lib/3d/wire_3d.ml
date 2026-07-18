@@ -1131,29 +1131,50 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files =
     (String.concat " " c_files)
     three_d
 
-let emit_standalone_build_rules ppf ~base ~archive ~c_files =
-  (* Build the validator into an archive, installed with the package, so
-     consumers get a ready-to-link library and a downstream build fails loudly
-     if the spec stops projecting to compilable C. *)
-  Fmt.pf ppf
-    "(rule\n\
-    \ (targets %s)\n\
-    \ (deps EverParse.h EverParseEndianness.h %s)\n\
-    \ (action\n\
-    \  (progn\n\
-    \   (run cc %s %s -c %s.c %sWrapper.c)\n\
-    \   (run ar rcs %s %s.o %sWrapper.o))))\n\n"
-    archive
-    (String.concat " " c_files)
-    strict_cc_flags everparse_type_defines base base archive base base;
-  (* Differential self-check: the OCaml codec's accept/reject verdict over a
-     fuzzed corpus must match the committed C validator's, or the doc projection
-     is unsound (or the committed C is stale). The corpus and the [agree] driver
-     are built as targets and run directly, so no shell is involved: the
-     generator is referenced through [%{exe:gen.exe}], which records the
-     dependency and resolves the sandbox path (a bare [./gen.exe] is not
-     reliably present in the action's cwd). Uses only gen.exe and cc, no
-     3d.exe. *)
+(* The C symbols a standalone archive exports: the [<Base>Check<Codec>] wrapper
+   for each codec, named exactly as EverParse names it (and as [agree.c] links
+   it, see [generate_agree]), so the export allowlist matches the real symbol. *)
+let wrapper_symbols base codecs =
+  List.map
+    (fun (Pack c) ->
+      pascal_case (base ^ "_check_" ^ (project ~mode:`Standalone c).name))
+    codecs
+
+(* Post-compile steps that fold the compiled objects into one archive member
+   exporting only [wrappers], localizing the raw [<Base>Validate*] entry points
+   so their unguarded [StartPosition] (see [emit_standalone_install]) is not
+   reachable through the installed archive. macOS localizes during the partial
+   link ([ld -r -exported_symbol]); GNU [ld] cannot, so [objcopy] does it after.
+   Shared by the emitted dune rule and the symbol-hiding test so they cannot
+   drift. *)
+let archive_link_steps ~macos ~archive ~base ~wrappers =
+  let libo = base ^ "_lib.o" in
+  let objs = Fmt.str "%s.o %sWrapper.o" base base in
+  if macos then
+    [
+      Fmt.str "ld -r -o %s %s%s" libo objs
+        (List.fold_left (fun a w -> a ^ " -exported_symbol _" ^ w) "" wrappers);
+      Fmt.str "ar rcs %s %s" archive libo;
+    ]
+  else
+    [
+      Fmt.str "ld -r -o %s %s" libo objs;
+      Fmt.str "objcopy%s %s"
+        (List.fold_left
+           (fun a w -> a ^ " --keep-global-symbol " ^ w)
+           "" wrappers)
+        libo;
+      Fmt.str "ar rcs %s %s" archive libo;
+    ]
+
+(* Differential self-check: the OCaml codec's accept/reject verdict over a
+   fuzzed corpus must match the committed C validator's, or the doc projection
+   is unsound (or the committed C is stale). The corpus and the [agree] driver
+   are built as targets and run directly, so no shell is involved: the generator
+   is referenced through [%{exe:gen.exe}], which records the dependency and
+   resolves the sandbox path (a bare [./gen.exe] is not reliably present in the
+   action's cwd). Uses only gen.exe and cc, no 3d.exe. *)
+let emit_standalone_check_rules ppf ~base ~archive =
   Fmt.pf ppf
     "(rule\n\
     \ (targets corpus)\n\
@@ -1170,6 +1191,35 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files =
     \ (action\n\
     \  (run %%{dep:agree} corpus)))\n\n"
     archive base base strict_cc_flags everparse_type_defines archive
+
+let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
+  (* Build the validator into an archive, installed with the package, so
+     consumers get a ready-to-link library and a downstream build fails loudly
+     if the spec stops projecting to compilable C. The archive exports only the
+     checked [<Base>Check<Codec>] wrappers and localizes the raw validators; the
+     localizing step is platform-specific, so there is one rule per
+     [ocaml-config:system]. *)
+  let compile =
+    Fmt.str "cc %s %s -c %s.c %sWrapper.c" strict_cc_flags
+      everparse_type_defines base base
+  in
+  let emit_rule ~cond ~macos =
+    let steps = compile :: archive_link_steps ~macos ~archive ~base ~wrappers in
+    Fmt.pf ppf
+      "(rule\n\
+      \ (targets %s)\n\
+      \ (enabled_if %s)\n\
+      \ (deps EverParse.h EverParseEndianness.h %s)\n\
+      \ (action\n\
+      \  (progn\n"
+      archive cond
+      (String.concat " " c_files);
+    List.iter (fun s -> Fmt.pf ppf "   (run %s)\n" s) steps;
+    Fmt.pf ppf "   )))\n\n"
+  in
+  emit_rule ~cond:"(= %{ocaml-config:system} macosx)" ~macos:true;
+  emit_rule ~cond:"(<> %{ocaml-config:system} macosx)" ~macos:false;
+  emit_standalone_check_rules ppf ~base ~archive
 
 (* Install only the checked wrapper header, not the raw validator header. The
    [<Base>Validate*] entrypoints in [<Base>.h] take a [StartPosition] and their
@@ -1189,17 +1239,18 @@ let emit_standalone_install ppf ~package ~three_d ~archive ~public_header =
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune_standalone ?name ~outdir ~package _codecs =
+let generate_dune_standalone ?name ~outdir ~package codecs =
   let base = standalone_base ?name ~package () in
   let three_d = base ^ ".3d" in
   let c_files =
     [ base ^ ".c"; base ^ ".h"; base ^ "Wrapper.c"; base ^ "Wrapper.h" ]
   in
   let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
+  let wrappers = wrapper_symbols base codecs in
   let oc = open_out (Filename.concat outdir "dune.inc") in
   let ppf = Format.formatter_of_out_channel oc in
   emit_standalone_gen_rules ppf ~three_d ~c_files;
-  emit_standalone_build_rules ppf ~base ~archive ~c_files;
+  emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers;
   emit_standalone_install ppf ~package ~three_d ~archive
     ~public_header:(base ^ "Wrapper.h");
   Format.pp_print_flush ppf ();
