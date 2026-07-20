@@ -170,6 +170,76 @@ let test_generate_dune_standalone_name_override () =
   Alcotest.(check bool)
     "install still uses the opam package" true (has "(package my-pkg)")
 
+(* Split [s] into its top-level parenthesized stanzas. *)
+let top_level_stanzas s =
+  let stanzas = ref [] and buf = Buffer.create 256 in
+  let depth = ref 0 and in_string = ref false in
+  String.iter
+    (fun c ->
+      if !depth > 0 then Buffer.add_char buf c;
+      if !in_string then (if c = '"' then in_string := false)
+      else
+        match c with
+        | '"' -> in_string := true
+        | '(' ->
+            incr depth;
+            if !depth = 1 then Buffer.add_char buf c
+        | ')' ->
+            decr depth;
+            if !depth = 0 then begin
+              stanzas := Buffer.contents buf :: !stanzas;
+              Buffer.clear buf
+            end
+        | _ -> ())
+    s;
+  List.rev !stanzas
+
+let test_generate_dune_standalone_context_policy () =
+  (* The archive is a per-target artefact: a consumer links it into a program
+     for the target it was built for. So its build and install run in every
+     context through that context's own toolchain -- neither is gated on
+     [%{context_name}], and there is no placeholder. Only the host-side steps
+     are gated: regenerating the committed C from [3d.exe] and the [agree]
+     differential test, which runs a built validator on the build machine. *)
+  let tmpdir = Filename.temp_dir "wire_3d_dune_ctx" "" in
+  Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
+    [ Wire_3d.pack (doc_codec "Pkt") ];
+  let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+  let has sub s = Re.execp (Re.compile (Re.str sub)) s in
+  let stanzas = top_level_stanzas dune_inc in
+  Alcotest.(check bool) "dune.inc has stanzas" true (stanzas <> []);
+  (* The two archive build rules -- one per [%{ocaml-config:system}] branch --
+     run in all contexts, so a cross build produces a target archive. *)
+  let archive_rules = List.filter (has "%{ocaml-config:system}") stanzas in
+  Alcotest.(check int) "two archive build rules" 2 (List.length archive_rules);
+  List.iter
+    (fun rule ->
+      Alcotest.(check bool)
+        "archive build is not host-gated" false
+        (has "%{context_name}" rule);
+      Alcotest.(check bool)
+        "archive build uses the context compiler" true
+        (has "%{ocaml-config:c_compiler}" rule))
+    archive_rules;
+  (* One install stanza, ungated: the archive installs into whichever toolchain
+     the build targeted. *)
+  let installs = List.filter (has "(install") stanzas in
+  Alcotest.(check int) "one install stanza" 1 (List.length installs);
+  Alcotest.(check bool)
+    "install runs in all contexts" false
+    (has "%{context_name}" (List.hd installs));
+  (* No empty placeholder: the real archive builds in every context now. *)
+  Alcotest.(check bool)
+    "no placeholder archive" false
+    (has "(write-file libmypkg.a" dune_inc);
+  (* The host-only steps -- C regeneration and the differential test -- stay
+     gated on the host context. *)
+  let host_gated = List.filter (has "(= %{context_name} default)") stanzas in
+  Alcotest.(check bool)
+    "host-side steps stay host-gated" true
+    (List.length host_gated >= 1)
+
 let test_generate_standalone () =
   (* generate_standalone needs 3d.exe; skip when not available. *)
   if Wire_3d.has_3d_exe () then begin
@@ -313,7 +383,9 @@ let test_archive_hides_raw_validators () =
         Wire_3d.everparse_type_defines base base
     in
     let steps =
-      compile :: Wire_3d.archive_link_steps ~macos ~archive ~base ~wrappers
+      compile
+      :: Wire_3d.archive_link_steps ~macos ~pack_linker:"ld -r -o"
+           ~objcopy:"objcopy" ~ar:"ar" ~archive ~base ~wrappers
     in
     let run cmd =
       let ic = Unix.open_process_in (Fmt.str "cd %s && %s 2>&1" tmpdir cmd) in
@@ -1216,6 +1288,8 @@ let suite =
         test_generate_dune_standalone;
       Alcotest.test_case "generate_dune_standalone name override" `Quick
         test_generate_dune_standalone_name_override;
+      Alcotest.test_case "generate_dune_standalone context policy" `Quick
+        test_generate_dune_standalone_context_policy;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
       Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick

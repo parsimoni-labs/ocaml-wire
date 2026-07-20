@@ -173,16 +173,6 @@ let read_validate_name ~outdir s =
 
 let write_3d ~outdir schemas = Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
-let copy_file ~src ~dst =
-  let ic = open_in_bin src in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  let oc = open_out_bin dst in
-  output_bytes oc buf;
-  close_out oc
-
 let locate_3d_exe () =
   let ic = Unix.open_process_in "command -v 3d.exe 2>/dev/null" in
   let path = try Some (input_line ic) with End_of_file -> None in
@@ -200,13 +190,71 @@ let everparse_dir () =
   | Some exe -> Filename.dirname exe |> Filename.dirname
   | None -> failwith "3d.exe not found"
 
+(* A freestanding endianness branch for EverParseEndianness.h. The shipped
+   header keys byte order off an OS (<endian.h> on Linux, OSSwap on macOS, ...)
+   and [#error]s when none matches, so it does not compile for a no-OS target
+   like a unikernel (which defines neither [__linux__] nor [__APPLE__]). Any GCC
+   or Clang exposes byte order as [__BYTE_ORDER__] and byte-swaps with
+   [__builtin_bswap*] without an OS, so this branch, spliced in before the
+   [#error], makes the header portable to a cross target. *)
+let endianness_freestanding_branch =
+  {|#elif (defined(__GNUC__) || defined(__clang__)) && defined(__BYTE_ORDER__)
+/* Freestanding target with no OS <endian.h> (e.g. a unikernel): take byte
+   order from the compiler and byte-swap with its builtins. */
+#  if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#    define htobe16(x) __builtin_bswap16(x)
+#    define htole16(x) (x)
+#    define be16toh(x) __builtin_bswap16(x)
+#    define le16toh(x) (x)
+#    define htobe32(x) __builtin_bswap32(x)
+#    define htole32(x) (x)
+#    define be32toh(x) __builtin_bswap32(x)
+#    define le32toh(x) (x)
+#    define htobe64(x) __builtin_bswap64(x)
+#    define htole64(x) (x)
+#    define be64toh(x) __builtin_bswap64(x)
+#    define le64toh(x) (x)
+#  else
+#    define htobe16(x) (x)
+#    define htole16(x) __builtin_bswap16(x)
+#    define be16toh(x) (x)
+#    define le16toh(x) __builtin_bswap16(x)
+#    define htobe32(x) (x)
+#    define htole32(x) __builtin_bswap32(x)
+#    define be32toh(x) (x)
+#    define le32toh(x) __builtin_bswap32(x)
+#    define htobe64(x) (x)
+#    define htole64(x) __builtin_bswap64(x)
+#    define be64toh(x) (x)
+#    define le64toh(x) __builtin_bswap64(x)
+#  endif
+
+|}
+
+(* The EverParse anchor the freestanding branch is spliced before: the fallthrough
+   that rejects an unrecognized platform. *)
+let endianness_unsupported_anchor = "#else\n\n#error \"Unsupported platform\""
+
+let with_freestanding_endianness content =
+  let anchor = Re.compile (Re.str endianness_unsupported_anchor) in
+  Re.replace_string ~all:false anchor
+    ~by:(endianness_freestanding_branch ^ endianness_unsupported_anchor)
+    content
+
 let copy_everparse_endianness ~outdir =
   let dst = Filename.concat outdir "EverParseEndianness.h" in
   if not (Sys.file_exists dst) then begin
     let ep_dir = everparse_dir () in
     let src = Filename.concat ep_dir "src/3d/EverParseEndianness.h" in
-    if Sys.file_exists src then copy_file ~src ~dst
-    else Fmt.failwith "Cannot find EverParseEndianness.h at %s" src
+    if not (Sys.file_exists src) then
+      Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
+    let ic = open_in_bin src in
+    let n = in_channel_length ic in
+    let buf = really_input_string ic n in
+    close_in ic;
+    let oc = open_out_bin dst in
+    output_string oc (with_freestanding_endianness buf);
+    close_out oc
   end
 
 let has_3d_exe () = locate_3d_exe () <> None
@@ -1097,6 +1145,26 @@ let generate_standalone ?(quiet = true) ?name ~outdir ~package codecs =
   generate_c_standalone ~quiet ?name ~outdir ~package ();
   generate_agree ?name ~outdir ~package codecs
 
+(* The standalone [c/] archive is a per-target artefact: a consumer links it
+   into a program for the target it was built for, so a cross build must produce
+   a target archive and install it into the cross toolchain, exactly as it does
+   the host archive for the host toolchain. [emit_standalone_build_rules] gets
+   this by building through the context's own toolchain -- [%{cc}], the
+   [ocaml-config] partial linker, and the binutils that compiler resolves -- so
+   the tools follow the build context rather than a fixed host.
+
+   Two things stay host-only, gated on [%{context_name}] (a cross context is
+   named [<host-context>.<target>], so the host is the one still called
+   [default]): regenerating the committed [.3d]/C from [3d.exe] (a host
+   developer action; the committed C is what a cross build compiles), and the
+   [agree] differential test (it runs the built validator, which a cross build
+   produces for the target, not the host). *)
+let host_context = "(= %{context_name} default)"
+
+(* [(and)] of the host-context gate and [cond], laid out as [dune fmt] prints
+   it (the one-line form runs past the margin). *)
+let host_context_and cond = Fmt.str "(and\n   %s\n   %s)" host_context cond
+
 (* The [.3d] and [agree.c] are pure OCaml ([gen.exe 3d] / [gen.exe agree]), so
    they regenerate on demand and never go stale. The C needs [3d.exe], so its
    rule exists only under [BUILD_EVERPARSE=1] ([mode promote] writes it back into
@@ -1110,24 +1178,29 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
+    \ (enabled_if\n\
+    \  %s)\n\
     \ (mode promote)\n\
     \ (targets %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} 3d)))\n\n\
      (rule\n\
+    \ (enabled_if\n\
+    \  %s)\n\
     \ (targets agree.c)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} agree)))\n\n\
      (rule\n\
     \ (alias 3d)\n\
     \ (enabled_if\n\
-    \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
+    \  %s)\n\
     \ (mode promote)\n\
     \ (targets EverParse.h EverParseEndianness.h %s)\n\
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
-    three_d
+    host_context three_d host_context
+    (host_context_and "(= %{env:BUILD_EVERPARSE=} \"1\")")
     (String.concat " " c_files)
     three_d
 
@@ -1147,24 +1220,25 @@ let wrapper_symbols base codecs =
    link ([ld -r -exported_symbol]); GNU [ld] cannot, so [objcopy] does it after.
    Shared by the emitted dune rule and the symbol-hiding test so they cannot
    drift. *)
-let archive_link_steps ~macos ~archive ~base ~wrappers =
+let archive_link_steps ~macos ~pack_linker ~objcopy ~ar ~archive ~base ~wrappers
+    =
   let libo = base ^ "_lib.o" in
   let objs = Fmt.str "%s.o %sWrapper.o" base base in
   if macos then
     [
-      Fmt.str "ld -r -o %s %s%s" libo objs
+      Fmt.str "%s %s %s%s" pack_linker libo objs
         (List.fold_left (fun a w -> a ^ " -exported_symbol _" ^ w) "" wrappers);
-      Fmt.str "ar rcs %s %s" archive libo;
+      Fmt.str "%s rcs %s %s" ar archive libo;
     ]
   else
     [
-      Fmt.str "ld -r -o %s %s" libo objs;
-      Fmt.str "objcopy%s %s"
+      Fmt.str "%s %s %s" pack_linker libo objs;
+      Fmt.str "%s%s %s" objcopy
         (List.fold_left
            (fun a w -> a ^ " --keep-global-symbol " ^ w)
            "" wrappers)
         libo;
-      Fmt.str "ar rcs %s %s" archive libo;
+      Fmt.str "%s rcs %s %s" ar archive libo;
     ]
 
 (* Differential self-check: the OCaml codec's accept/reject verdict over a
@@ -1177,45 +1251,75 @@ let archive_link_steps ~macos ~archive ~base ~wrappers =
 let emit_standalone_check_rules ppf ~base ~archive =
   Fmt.pf ppf
     "(rule\n\
+    \ (enabled_if\n\
+    \  %s)\n\
     \ (targets corpus)\n\
     \ (action\n\
     \  (with-stdout-to corpus (run %%{exe:gen.exe} corpus))))\n\n\
      (rule\n\
+    \ (enabled_if\n\
+    \  %s)\n\
     \ (targets agree)\n\
     \ (deps agree.c %s EverParse.h EverParseEndianness.h %s.h %sWrapper.h)\n\
     \ (action\n\
     \  (run cc %s %s agree.c %s -o agree)))\n\n\
      (rule\n\
     \ (alias runtest)\n\
+    \ (enabled_if\n\
+    \  %s)\n\
     \ (deps corpus agree)\n\
     \ (action\n\
     \  (run %%{dep:agree} corpus)))\n\n"
-    archive base base strict_cc_flags everparse_type_defines archive
+    host_context host_context archive base base strict_cc_flags
+    everparse_type_defines archive host_context
 
+(* Build the validator into an archive, installed with the package, so consumers
+   get a ready-to-link library and a downstream build fails loudly if the spec
+   stops projecting to compilable C. The archive exports only the checked
+   [<Base>Check<Codec>] wrappers and localizes the raw validators.
+
+   The build runs in every context through that context's own toolchain, so a
+   cross build produces a target archive: [CC] is the context C compiler
+   ([ocaml-config:c_compiler]), the partial link is the [ocaml-config] pack
+   linker, and the symbol-hiding [objcopy]/[ar] are the ones that compiler
+   resolves ([-print-prog-name]) -- a cross [cc] finds the target's binutils. A
+   shell runs the whole thing so that command substitution can resolve the
+   binutils; there is no dune variable for [objcopy] or [ar]. The localizing step
+   is still platform-specific ([macos] localizes during the partial link,
+   elsewhere [objcopy] does it after), keyed on [ocaml-config:system]: for the
+   host context it names the host, for a cross context the target, which is what
+   selects the right localize path either way. *)
 let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
-  (* Build the validator into an archive, installed with the package, so
-     consumers get a ready-to-link library and a downstream build fails loudly
-     if the spec stops projecting to compilable C. The archive exports only the
-     checked [<Base>Check<Codec>] wrappers and localizes the raw validators; the
-     localizing step is platform-specific, so there is one rule per
-     [ocaml-config:system]. *)
-  let compile =
-    Fmt.str "cc %s %s -c %s.c %sWrapper.c" strict_cc_flags
+  let compile cc =
+    Fmt.str "%s %s %s -c %s.c %sWrapper.c" cc strict_cc_flags
       everparse_type_defines base base
   in
   let emit_rule ~cond ~macos =
-    let steps = compile :: archive_link_steps ~macos ~archive ~base ~wrappers in
+    let steps =
+      compile "\"$CC\""
+      :: archive_link_steps ~macos
+           ~pack_linker:"%{ocaml-config:native_pack_linker}"
+           ~objcopy:"\"$(\"$CC\" -print-prog-name=objcopy)\""
+           ~ar:"\"$(\"$CC\" -print-prog-name=ar)\"" ~archive ~base ~wrappers
+    in
+    let script =
+      "set -e; CC=%{ocaml-config:c_compiler}; " ^ String.concat "; " steps
+    in
+    (* The script is one dune-quoted string argument to [sh -c]; its own double
+       quotes (around [$CC] and the [$(...)] tool lookups) are escaped so they
+       do not close the dune string. *)
+    let quoted = String.concat "\\\"" (String.split_on_char '"' script) in
     Fmt.pf ppf
       "(rule\n\
       \ (targets %s)\n\
-      \ (enabled_if %s)\n\
+      \ (enabled_if\n\
+      \  %s)\n\
       \ (deps EverParse.h EverParseEndianness.h %s)\n\
       \ (action\n\
-      \  (progn\n"
+      \  (run sh -c \"%s\")))\n\n"
       archive cond
-      (String.concat " " c_files);
-    List.iter (fun s -> Fmt.pf ppf "   (run %s)\n" s) steps;
-    Fmt.pf ppf "   )))\n\n"
+      (String.concat " " c_files)
+      quoted
   in
   emit_rule ~cond:"(= %{ocaml-config:system} macosx)" ~macos:true;
   emit_rule ~cond:"(<> %{ocaml-config:system} macosx)" ~macos:false;

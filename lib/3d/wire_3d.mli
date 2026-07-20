@@ -188,7 +188,15 @@ val generate_dune_standalone :
     [lib<name>.a] archive, a [runtest] rule that runs the differential
     self-check (see {!generate_corpus} / {!generate_agree}), and an install
     stanza (under opam [package]) for the spec, parser, and archive. [name]
-    defaults to [package]; see {!generate_standalone}. *)
+    defaults to [package]; see {!generate_standalone}.
+
+    The [c/] archive builds and installs in every dune context through that
+    context's own toolchain ([%{ocaml-config:c_compiler}], the [ocaml-config]
+    partial linker, and the binutils that compiler resolves), so a cross build
+    produces and installs a target-native archive rather than the host's. Only
+    the host-side steps are gated on [(= %{context_name} default)]: regenerating
+    the committed [.3d]/C from [3d.exe], and the [agree] differential test,
+    which runs a built validator on the build machine. *)
 
 val wrapper_symbols : string -> packed list -> string list
 (** [wrapper_symbols base codecs] is the [<Base>Check<Codec>] wrapper C symbol
@@ -198,16 +206,22 @@ val wrapper_symbols : string -> packed list -> string list
 
 val archive_link_steps :
   macos:bool ->
+  pack_linker:string ->
+  objcopy:string ->
+  ar:string ->
   archive:string ->
   base:string ->
   wrappers:string list ->
   string list
-(** [archive_link_steps ~macos ~archive ~base ~wrappers] is the post-compile
-    shell commands that fold [<base>.o] and [<base>Wrapper.o] into [archive]
-    exporting only [wrappers] and localizing the raw validators. Platform
-    specific ([macos] localizes during the partial link; elsewhere [objcopy]
-    does it after). Shared by the emitted dune rule and the symbol-hiding test.
-*)
+(** [archive_link_steps ~macos ~pack_linker ~objcopy ~ar ~archive ~base
+     ~wrappers] is the post-compile shell commands that fold [<base>.o] and
+    [<base>Wrapper.o] into [archive] exporting only [wrappers] and localizing
+    the raw validators. Platform specific ([macos] localizes during the partial
+    link with [pack_linker], elsewhere [objcopy] does it after). The tool
+    commands are parameters so the emitted dune rule can pass the build
+    context's toolchain (cross tools in a cross context) while the symbol-hiding
+    test passes the host's; both share this one definition of the localize
+    logic. *)
 
 val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
 (** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
