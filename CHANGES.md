@@ -10,6 +10,16 @@
 
 ### Changed
 
+- The standalone `c/` archive (`3d` mode) now builds and installs in every dune
+  context through that context's own toolchain, so a cross build produces and
+  installs a target-native verified parser instead of skipping the C. The build
+  uses `%{ocaml-config:c_compiler}`, the `ocaml-config` partial linker, and the
+  binutils that compiler resolves (`-print-prog-name`), so a cross `cc` finds
+  the target's `objcopy`/`ar`. `EverParseEndianness.h` gains a freestanding
+  `__BYTE_ORDER__`/`__builtin_bswap*` branch so it compiles for an OS-less
+  target (a unikernel defines neither `__linux__` nor `__APPLE__`). Only C
+  regeneration and the `agree` differential test stay host-gated (#231, @samoht)
+
 - `uint32`/`uint32be` now decode to `Optint.t` and `uint63`/`uint63be` to
   `Optint.Int63.t` rather than a native `int`, so a value with bit 31 (or the
   high half) set is no longer silently truncated on a target whose `int` is
