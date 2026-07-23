@@ -28,12 +28,8 @@ let () =
   let protocol =
     (Staged.unstage (Codec.get ipv4_codec bf_ip_protocol)) buf ip_off
   in
-  let src =
-    Optint.to_int ((Staged.unstage (Codec.get ipv4_codec bf_ip_src)) buf ip_off)
-  in
-  let dst =
-    Optint.to_int ((Staged.unstage (Codec.get ipv4_codec bf_ip_dst)) buf ip_off)
-  in
+  let src = (Staged.unstage (Codec.get ipv4_codec bf_ip_src)) buf ip_off in
+  let dst = (Staged.unstage (Codec.get ipv4_codec bf_ip_dst)) buf ip_off in
   let tcp_off =
     Slice.first
       ((Staged.unstage (Codec.get ipv4_codec bf_ip_payload)) buf ip_off)
