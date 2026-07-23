@@ -24,7 +24,6 @@
  (depends
   (ocaml (>= 5.2))
   (bytesrw (>= 0.1))
-  (eio (>= 1.0))
   (fmt (>= 0.9))
   (optint (>= 0.3))
   (memtrace :with-test)

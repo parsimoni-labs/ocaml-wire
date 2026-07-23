@@ -15,6 +15,7 @@
   clcw_bench_c
   gateway_bench
   gateway_bench_c
+  c_stubs_c
   alcotest
   unix))
 
