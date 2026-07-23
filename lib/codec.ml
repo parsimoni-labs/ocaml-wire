@@ -572,7 +572,7 @@ let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
       match w with
       | `U8 -> fun c d -> fa c d land 0xFF
       | `U16 -> fun c d -> fa c d land 0xFFFF
-      | `U32 -> fun c d -> fa c d land 0xFFFF_FFFF
+      | `U32 -> fun c d -> fa c d land UInt32.mask32
       | `U64 -> fa)
   | If_then_else (c, t, e) ->
       let fc = compile_bool l c in

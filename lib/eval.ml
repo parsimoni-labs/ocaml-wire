@@ -131,7 +131,7 @@ let rec expr : type a. ctx -> a expr -> a =
       match width with
       | `U8 -> v land 0xFF
       | `U16 -> v land 0xFFFF
-      | `U32 -> v land 0xFFFF_FFFF
+      | `U32 -> v land UInt32.mask32
       | `U64 -> v)
   | If_then_else (c, t, e) -> if expr ctx c then expr ctx t else expr ctx e
 

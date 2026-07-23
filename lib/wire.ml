@@ -45,7 +45,13 @@ let float_layout_of (typ : float Types.typ) =
   match typ with
   | Float32 _ -> { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
   | Float64 _ ->
-      { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
+      (* The 52-bit mantissa mask does not fit a narrow int; computed at run
+         time so no out-of-range constant reaches the bytecode. *)
+      {
+        exp_shift = 52;
+        exp_max = 0x7FF;
+        mant_mask = Int64.to_int 0x000F_FFFF_FFFF_FFFFL;
+      }
   | _ -> invalid_arg "Wire: not a float field"
 
 let is_finite (f : float Field.t) : bool Types.expr =
