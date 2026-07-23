@@ -5,6 +5,7 @@
 ```
 make build              # dune build
 make test               # dune runtest
+make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
 make 3d                 # validate all schemas with 3d.exe (needs 3d.exe)
 make bench              # EverParse C vs OCaml (needs 3d.exe)
 make bench-routing      # APID demux throughput

@@ -1,0 +1,20 @@
+; The wasm stanza only exists when the toolchain is present: the dedicated CI
+; wasm job installs wasm_of_ocaml-compiler and node, the plain build matrix
+; skips it. The native twin always builds and runs, pinning the same checks
+; on a 64-bit int so the two targets cannot drift apart silently.
+
+(test
+ (name test)
+ (modules test)
+ (modes wasm)
+ (libraries wire net fmt optint)
+ (enabled_if
+  (and %{bin-available:wasm_of_ocaml} %{bin-available:node})))
+
+(rule
+ (copy test.ml test_native.ml))
+
+(test
+ (name test_native)
+ (modules test_native)
+ (libraries wire net fmt optint))

@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Added
+
+- The OCaml codecs are now built with wasm_of_ocaml and exercised under node
+  in CI on every change: unsigned 32-bit values with the high bit set,
+  zero-copy field reads and decode/encode roundtrips are checked on a
+  narrow-int target, and the build fails if a new integer literal would be
+  truncated there (#232, @samoht)
+
 ### Removed
 
 - The wire package no longer depends on eio: nothing in the library used it,
