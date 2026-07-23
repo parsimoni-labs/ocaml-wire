@@ -37,7 +37,11 @@ let[@inline always] u32_be buf off =
 (* A bitfield word is a bag of bits manipulated in the native [int], never a
    uint32 field value, so these stay [int]-based rather than going through
    [UInt32]/[Optint]. On a host whose native [int] is narrower than 32 bits a
-   U32-base bitfield does not fit the word and is unsupported regardless. *)
+   U32 word does not fit the int: the halves-based field accessors below keep
+   every intermediate under 31 bits, and the [bits] constructor caps a field's
+   width at [Sys.int_size - 1] there, so no extracted value overflows. *)
+let int_holds_u32 = Sys.int_size > 32
+
 let[@inline always] set_u32_le buf off v =
   Bytes.set_uint16_le buf off (v land 0xFFFF);
   Bytes.set_uint16_le buf (off + 2) ((v lsr 16) land 0xFFFF)
@@ -45,6 +49,62 @@ let[@inline always] set_u32_le buf off v =
 let[@inline always] set_u32_be buf off v =
   Bytes.set_uint16_be buf off ((v lsr 16) land 0xFFFF);
   Bytes.set_uint16_be buf (off + 2) (v land 0xFFFF)
+
+(* Field access over a u32 word split into 16-bit halves ([hi] is word bits
+   16..31): every intermediate stays under 31 significant bits, so these are
+   exact on a narrow-int host. [hi_part]/[lo_part] are the two halves of
+   [v lsl shift] for a [v] that fits its field width. *)
+
+let[@inline] halves_get hi lo shift mask =
+  if shift >= 16 then (hi lsr (shift - 16)) land mask
+  else (hi lsl (16 - shift)) lor (lo lsr shift) land mask
+
+let[@inline] hi_part v shift =
+  if shift >= 16 then (v lsl (shift - 16)) land 0xFFFF
+  else (v lsr (16 - shift)) land 0xFFFF
+
+let[@inline] lo_part v shift =
+  if shift >= 16 then 0 else (v lsl shift) land 0xFFFF
+
+let u32_field_le buf off shift mask =
+  halves_get (u16_le buf (off + 2)) (u16_le buf off) shift mask
+
+let u32_field_be buf off shift mask =
+  halves_get (u16_be buf off) (u16_be buf (off + 2)) shift mask
+
+(* Write a lone field as a full word (other bits zero). *)
+let u32_field_word_le buf off shift v =
+  Bytes.set_uint16_le buf off (lo_part v shift);
+  Bytes.set_uint16_le buf (off + 2) (hi_part v shift)
+
+let u32_field_word_be buf off shift v =
+  Bytes.set_uint16_be buf off (hi_part v shift);
+  Bytes.set_uint16_be buf (off + 2) (lo_part v shift)
+
+(* OR a field into the current word. *)
+let u32_field_or_le buf off shift v =
+  Bytes.set_uint16_le buf off (u16_le buf off lor lo_part v shift);
+  Bytes.set_uint16_le buf (off + 2) (u16_le buf (off + 2) lor hi_part v shift)
+
+let u32_field_or_be buf off shift v =
+  Bytes.set_uint16_be buf off (u16_be buf off lor hi_part v shift);
+  Bytes.set_uint16_be buf (off + 2) (u16_be buf (off + 2) lor lo_part v shift)
+
+(* Replace a field, clearing its bits first. *)
+let[@inline] half_set cur mask_part v_part =
+  cur land lnot mask_part lor v_part land 0xFFFF
+
+let u32_field_set_le buf off shift mask v =
+  Bytes.set_uint16_le buf off
+    (half_set (u16_le buf off) (lo_part mask shift) (lo_part v shift));
+  Bytes.set_uint16_le buf (off + 2)
+    (half_set (u16_le buf (off + 2)) (hi_part mask shift) (hi_part v shift))
+
+let u32_field_set_be buf off shift mask v =
+  Bytes.set_uint16_be buf off
+    (half_set (u16_be buf off) (hi_part mask shift) (hi_part v shift));
+  Bytes.set_uint16_be buf (off + 2)
+    (half_set (u16_be buf (off + 2)) (lo_part mask shift) (lo_part v shift))
 
 let read_word base buf off =
   match base with

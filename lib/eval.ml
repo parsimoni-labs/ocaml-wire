@@ -22,9 +22,12 @@ let rec int_of : type a. a typ -> a -> int option =
   match typ with
   | Uint8 -> Some v
   | Uint16 _ -> Some v
-  | Uint_var _ -> Some v
-  | Uint32 _ -> Some (UInt32.to_int v)
-  | Uint63 _ -> Some (UInt63.to_int v)
+  | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
+  (* On a narrow-int platform a u32/u63 value may not fit either; the
+     unsigned conversions return [None] exactly then and are identity-exact
+     on a 64-bit host. *)
+  | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
+  | Uint63 _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
   | Uint64 _ -> Int64.unsigned_to_int v
   | Int8 -> Some v
   | Int16 _ -> Some v
@@ -60,9 +63,29 @@ let rec int_of_exn : type a. a typ -> a -> int =
   match typ with
   | Uint8 -> v
   | Uint16 _ -> v
-  | Uint_var _ -> v
-  | Uint32 _ -> UInt32.to_int v
-  | Uint63 _ -> UInt63.to_int v
+  | Uint_var _ -> (
+      if Sys.int_size > 56 then UInt63.to_int v
+      else
+        match Int64.unsigned_to_int (Optint.Int63.to_int64 v) with
+        | Some n -> n
+        | None -> int_overflow (Optint.Int63.to_int64 v))
+  (* The narrow-int branches raise the typed overflow error instead of
+     letting [Optint.to_int]'s [Failure] escape; a 64-bit host keeps the
+     direct allocation-free conversion. *)
+  | Uint32 _ -> (
+      if Sys.int_size > 32 then UInt32.to_int v
+      else
+        match Int32.unsigned_to_int (UInt32.to_int32 v) with
+        | Some n -> n
+        | None ->
+            int_overflow
+              (Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL))
+  | Uint63 _ -> (
+      if Sys.int_size >= 63 then UInt63.to_int v
+      else
+        match Int64.unsigned_to_int (Optint.Int63.to_int64 v) with
+        | Some n -> n
+        | None -> int_overflow (Optint.Int63.to_int64 v))
   | Uint64 _ -> (
       match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Int8 -> v
@@ -112,6 +135,7 @@ let rec expr : type a. ctx -> a expr -> a =
   | Mod (a, b) -> expr ctx a mod expr ctx b
   | Land (a, b) -> expr ctx a land expr ctx b
   | Land64 (a, b) -> Int64.logand (expr ctx a) (expr ctx b)
+  | Lsr64 (a, b) -> Int64.shift_right_logical (expr ctx a) (expr ctx b)
   | Lor (a, b) -> expr ctx a lor expr ctx b
   | Lxor (a, b) -> expr ctx a lxor expr ctx b
   | Lnot a -> lnot (expr ctx a)

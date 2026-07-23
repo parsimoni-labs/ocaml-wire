@@ -100,8 +100,12 @@ let test_cast_u16 () =
   Alcotest.(check int) "cast U16" 0x5678 v
 
 let test_cast_u32 () =
-  let v = Eval.expr Eval.empty (Types.Cast (`U32, Types.Int 0x123456789)) in
-  Alcotest.(check int) "cast U32" 0x23456789 v
+  (* The operand does not fit a narrow int, so it is built at run time, and
+     the expectation derives from the same mask the cast applies: the low 32
+     bits on a wide int, the documented no-op where the int is narrower. *)
+  let big = Int64.to_int 0x1_2345_6789L in
+  let v = Eval.expr Eval.empty (Types.Cast (`U32, Types.Int big)) in
+  Alcotest.(check int) "cast U32" (big land Wire.Private.UInt32.mask32) v
 
 let test_cast_u64 () =
   let v = Eval.expr Eval.empty (Types.Cast (`U64, Types.Int 42)) in
