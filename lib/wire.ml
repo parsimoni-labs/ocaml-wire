@@ -32,33 +32,38 @@ let size = Types.field_wire_size
 let lookup = Types.cases
 
 (* IEEE 754 predicates compile to bit-mask checks over the float's bit
-   pattern (which [build_populate] stores into [int_array] for float fields).
-   We use shift-based forms instead of the natural [v & 0x7FF0_..._0000]
-   because that mask exceeds OCaml's 62-bit signed [int] range and renders
-   as a negative literal that 3D rejects. Shifting the exponent down to the
-   low bits and comparing against a small constant keeps every literal
-   fitting in 31 bits and produces identical [(v >> N) & M] / [== M] checks
-   on both wire's OCaml decoder and EverParse's verified C decoder. *)
-type float_layout = { exp_shift : int; exp_max : int; mant_mask : int }
+   pattern, which [build_populate] stores for float fields: a float32's in
+   the int slot (its 31 low bits carry the whole exponent and mantissa on any
+   platform), a float64's in the int64 slot, where the exponent bits 52-62
+   stay exact even on a narrow-int platform. Both produce the same
+   [(v >> N) & M] / [== M] checks on wire's OCaml decoder and EverParse's
+   verified C decoder. *)
 
-let float_layout_of (typ : float Types.typ) =
-  match typ with
-  | Float32 _ -> { exp_shift = 23; exp_max = 0xFF; mant_mask = 0x007F_FFFF }
-  | Float64 _ ->
-      { exp_shift = 52; exp_max = 0x7FF; mant_mask = 0x000F_FFFF_FFFF_FFFF }
+let is_float64 f =
+  match Field.typ f with
+  | Types.Float32 _ -> false
+  | Types.Float64 _ -> true
   | _ -> invalid_arg "Wire: not a float field"
 
 let is_finite (f : float Field.t) : bool Types.expr =
-  let r = Field.ref f in
-  let { exp_shift; exp_max; _ } = float_layout_of (Field.typ f) in
-  Expr.(Land (Lsr (r, Int exp_shift), Int exp_max) <> Int exp_max)
+  if is_float64 f then
+    let r = Types.Ref (Types.I64, Field.name f) in
+    Ne (Land64 (Lsr64 (r, Int 52), Int64 0x7FFL), Int64 0x7FFL)
+  else
+    let r = Field.ref f in
+    Expr.(Land (Lsr (r, Int 23), Int 0xFF) <> Int 0xFF)
 
 let is_nan (f : float Field.t) : bool Types.expr =
-  let r = Field.ref f in
-  let { exp_shift; exp_max; mant_mask } = float_layout_of (Field.typ f) in
-  Expr.(
-    Land (Lsr (r, Int exp_shift), Int exp_max) = Int exp_max
-    && Land (r, Int mant_mask) <> Int 0)
+  if is_float64 f then
+    let r = Types.Ref (Types.I64, Field.name f) in
+    And
+      ( Eq (Land64 (Lsr64 (r, Int 52), Int64 0x7FFL), Int64 0x7FFL),
+        Ne (Land64 (r, Int64 0xF_FFFF_FFFF_FFFFL), Int64 0L) )
+  else
+    let r = Field.ref f in
+    Expr.(
+      Land (Lsr (r, Int 23), Int 0xFF) = Int 0xFF
+      && Land (r, Int 0x007F_FFFF) <> Int 0)
 
 let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.embed_decode c in
@@ -275,8 +280,17 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let sz = Bitfield.byte_size base in
       check_eof len (off + sz);
       let total = Bitfield.total_bits base in
-      let word = Bitfield.read_word base buf off in
-      (Bitfield.extract ~bit_order ~total ~bits_used:0 ~width word, off + sz)
+      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
+      let mask = (1 lsl width) - 1 in
+      let v =
+        match base with
+        | U32 Little when not Bitfield.int_holds_u32 ->
+            Bitfield.u32_field_le buf off shift mask
+        | U32 Big when not Bitfield.int_holds_u32 ->
+            Bitfield.u32_field_be buf off shift mask
+        | _ -> (Bitfield.read_word base buf off lsr shift) land mask
+      in
+      (v, off + sz)
   | Unit -> ((), off)
   | All_bytes -> (Bytes.sub_string buf off (len - off), len)
   | All_zeros -> parse_all_zeros buf off len
@@ -701,8 +715,14 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       | U8 -> write_byte enc masked
       | U16 Little -> write_uint16_le enc masked
       | U16 Big -> write_uint16_be enc masked
-      | U32 Little -> write_int32_le enc (Int32.of_int masked)
-      | U32 Big -> write_int32_be enc (Int32.of_int masked))
+      (* Shift in [Int32]: a native-int shift would drop bit 31 of the word
+         on a narrow-int platform. *)
+      | U32 Little ->
+          write_int32_le enc
+            (Int32.shift_left (Int32.of_int (v land mask)) shift)
+      | U32 Big ->
+          write_int32_be enc
+            (Int32.shift_left (Int32.of_int (v land mask)) shift))
   | Unit -> ()
   | All_bytes -> write_string enc v
   | All_zeros -> write_string enc v
@@ -805,11 +825,15 @@ let encode_bits buf off v width base bit_order =
   | U16 Big ->
       Bytes.set_uint16_be buf off masked;
       off + 2
+  (* Shift in [Int32]: a native-int shift would drop bit 31 of the word on a
+     narrow-int platform. *)
   | U32 Little ->
-      Bytes.set_int32_le buf off (Int32.of_int masked);
+      Bytes.set_int32_le buf off
+        (Int32.shift_left (Int32.of_int (v land mask)) shift);
       off + 4
   | U32 Big ->
-      Bytes.set_int32_be buf off (Int32.of_int masked);
+      Bytes.set_int32_be buf off
+        (Int32.shift_left (Int32.of_int (v land mask)) shift);
       off + 4
 
 (* Variable-size fallback: encode via the writer kernel into a Buffer,

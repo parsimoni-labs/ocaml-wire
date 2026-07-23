@@ -113,6 +113,10 @@ and _ expr =
       (** Bitwise AND on full-width [int64] operands, for masking a [uint64]
           field before a comparison (the native-[int] [Land] cannot, since it
           truncates the field). Projects to 3D as [&]. *)
+  | Lsr64 : int64 expr * int expr -> int64 expr
+      (** Logical shift right on a full-width [int64] operand, for isolating
+          high bits (a float64 exponent) that a native-[int] shift would lose on
+          a narrow-int platform. Projects to 3D as [>>]. *)
   | Eq : 'a expr * 'a expr -> bool expr
   | Ne : 'a expr * 'a expr -> bool expr
   | Lt : 'a expr * 'a expr -> bool expr
@@ -143,7 +147,7 @@ and _ typ =
       endian
       -> float typ (* IEEE 754 binary32, widened to OCaml float *)
   | Float64 : endian -> float typ (* IEEE 754 binary64 *)
-  | Uint_var : { size : int expr; endian : endian } -> int typ
+  | Uint_var : { size : int expr; endian : endian } -> UInt63.t typ
   | Bits : {
       width : int;
       base : bitfield_base;
@@ -318,6 +322,7 @@ module Expr = struct
   let ( mod ) a b = Mod (a, b)
   let ( land ) a b = Land (a, b)
   let land64 a b = Land64 (a, b)
+  let lsr64 a b = Lsr64 (a, b)
   let ( lor ) a b = Lor (a, b)
   let ( lxor ) a b = Lxor (a, b)
   let lnot a = Lnot a
@@ -389,6 +394,13 @@ let bits ?(bit_order = Msb_first) ~width base =
     Fmt.invalid_arg
       "Wire.bits: width %d does not fit a %d-bit base (must be 1..%d)" width
       total total;
+  (* The extracted value must fit the native positive int: only reachable on
+     a narrow-int platform (wasm_of_ocaml, js_of_ocaml), where a 31- or
+     32-bit field of a U32 base has nowhere to live. *)
+  if width > Sys.int_size - 1 then
+    Fmt.invalid_arg
+      "Wire.bits: width %d does not fit this platform's %d-bit int" width
+      Sys.int_size;
   Bits { width; base; bit_order }
 
 let bit b = Bool.to_int b
@@ -1097,7 +1109,7 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Uint16 _ -> Pack_expr (Int k)
   | Uint32 _ -> Pack_expr (Int (UInt32.to_int k))
   | Uint63 _ -> Pack_expr (Int (UInt63.to_int k))
-  | Uint_var _ -> Pack_expr (Int k)
+  | Uint_var _ -> Pack_expr (Int (UInt63.to_int k))
   | Int8 -> Pack_expr (Int k)
   | Int16 _ -> Pack_expr (Int k)
   | Int32 _ -> Pack_expr (Int k)
@@ -1509,6 +1521,7 @@ let rec pp_expr : type a. a expr Fmt.t =
   | Mod (a, b) -> Fmt.pf ppf "(%a %% %a)" pp_expr a pp_expr b
   | Land (a, b) -> Fmt.pf ppf "(%a & %a)" pp_expr a pp_expr b
   | Land64 (a, b) -> Fmt.pf ppf "(%a & %a)" pp_expr a pp_expr b
+  | Lsr64 (a, b) -> Fmt.pf ppf "(%a >> %a)" pp_expr a pp_expr b
   | Lor (a, b) -> Fmt.pf ppf "(%a | %a)" pp_expr a pp_expr b
   | Lxor (a, b) -> Fmt.pf ppf "(%a ^ %a)" pp_expr a pp_expr b
   | Lnot a -> Fmt.pf ppf "(~%a)" pp_expr a
@@ -1623,6 +1636,7 @@ let rec subst_expr : type a. (string * int expr) list -> a expr -> a expr =
   | Mod (a, b) -> Mod (r a, r b)
   | Land (a, b) -> Land (r a, r b)
   | Land64 (a, b) -> Land64 (r a, r b)
+  | Lsr64 (a, b) -> Lsr64 (r a, r b)
   | Lor (a, b) -> Lor (r a, r b)
   | Lxor (a, b) -> Lxor (r a, r b)
   | Lnot a -> Lnot (r a)
@@ -2074,6 +2088,7 @@ let rec mentions_field : type a. string -> a expr -> bool =
   | Lsr (a, b) ->
       mentions_field name a || mentions_field name b
   | Land64 (a, b) -> mentions_field name a || mentions_field name b
+  | Lsr64 (a, b) -> mentions_field name a || mentions_field name b
   | Lnot a -> mentions_field name a
   | Cast (_, a) -> mentions_field name a
   | Eq (a, b) -> mentions_field name a || mentions_field name b
@@ -2283,6 +2298,7 @@ let rec collect_refs : type a. a expr -> string list = function
   | Lsr (a, b) ->
       collect_refs a @ collect_refs b
   | Land64 (a, b) -> collect_refs a @ collect_refs b
+  | Lsr64 (a, b) -> collect_refs a @ collect_refs b
   | Lnot a -> collect_refs a
   | Lt (a, b) -> collect_refs_packed a @ collect_refs_packed b
   | Le (a, b) -> collect_refs_packed a @ collect_refs_packed b
@@ -2317,6 +2333,7 @@ let rec widen_add : type a. string list -> a expr -> a expr =
   | Mod (a, b) -> Mod (r a, r b)
   | Land (a, b) -> Land (r a, r b)
   | Land64 (a, b) -> Land64 (r a, r b)
+  | Lsr64 (a, b) -> Lsr64 (r a, r b)
   | Lor (a, b) -> Lor (r a, r b)
   | Lxor (a, b) -> Lxor (r a, r b)
   | Lnot a -> Lnot (r a)
@@ -2368,6 +2385,9 @@ let rec reject_field_sub_mul : type a. string -> a expr -> unit =
   | Lsr (a, b) ->
       both a b
   | Land64 (a, b) -> both a b
+  | Lsr64 (a, b) ->
+      reject_field_sub_mul name a;
+      reject_field_sub_mul name b
   | Eq (a, b) -> both a b
   | Ne (a, b) -> both a b
   | Lt (a, b) -> both a b

@@ -1,5 +1,45 @@
 ## Unreleased
 
+### Added
+
+- The full test suite now also runs under wasm_of_ocaml (31-bit int) and
+  js_of_ocaml (32-bit int) on node in CI, so every codec keeps working on a
+  narrow-int target, and the build fails if a new integer literal would be
+  truncated there (#232, @samoht)
+
+- `Wire.Expr.lsr64` is an int64 logical shift right with a constant amount,
+  for isolating high bits of a full-width field inside a constraint; it
+  projects to a 3D refinement EverParse verifies (#232, @samoht)
+
+### Changed
+
+- `uint` now decodes to `Optint.Int63.t` rather than a native `int`, like
+  `uint63` before it: a 7-byte value needs 56 bits, which does not fit an
+  int on a narrow-int target (js_of_ocaml, wasm_of_ocaml) and used to
+  silently truncate there. Read the value with `Optint.Int63.to_int` /
+  `to_int64` (#232, @samoht)
+
+- `Codec.load_word` reads the bitfield base word as an `Optint.t` (was a
+  native `int`) and `Codec.extract` takes it, so the word-at-a-time batch
+  API is exact for 32-bit bases on every platform; on a 64-bit host the
+  word stays an unboxed int (#232, @samoht)
+
+### Fixed
+
+- 32-bit bitfields are now exact on a narrow-int target: a field touching
+  bit 31 of its base word used to decode and encode with that bit silently
+  dropped there (#232, @samoht)
+
+- `is_finite` / `is_nan` on a float64 field now evaluate the full 64-bit
+  pattern, so a NaN can no longer pass validation on a narrow-int target;
+  the emitted 3D refinement is unchanged (#232, @samoht)
+
+- Reading a `uint32` / `uint63` field whose value exceeds the native int no
+  longer leaks a bare `Failure` out of decode on a narrow-int target:
+  constraint evaluation raises the typed `Value_out_of_range`, and the
+  validation slots mirror only values the int can hold, as `uint64` already
+  did (#232, @samoht)
+
 ### Removed
 
 - The wire package no longer depends on eio: nothing in the library used it,

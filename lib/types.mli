@@ -117,6 +117,7 @@ and _ expr =
   | Lsl : int expr * int expr -> int expr
   | Lsr : int expr * int expr -> int expr
   | Land64 : int64 expr * int64 expr -> int64 expr
+  | Lsr64 : int64 expr * int expr -> int64 expr
   | Eq : 'a expr * 'a expr -> bool expr
   | Ne : 'a expr * 'a expr -> bool expr
   | Lt : 'a expr * 'a expr -> bool expr
@@ -151,7 +152,7 @@ and _ typ =
   | Float32 : endian -> float typ
       (** IEEE 754 binary32, widened to OCaml [float]. *)
   | Float64 : endian -> float typ  (** IEEE 754 binary64. *)
-  | Uint_var : { size : int expr; endian : endian } -> int typ
+  | Uint_var : { size : int expr; endian : endian } -> UInt63.t typ
       (** Variable-width unsigned integer (1-7 bytes). *)
   | Bits : {
       width : int;
@@ -354,6 +355,10 @@ module Expr : sig
   (** Bitwise AND on full-width 64-bit operands, for masking a 64-bit field
       before a comparison. Projects to 3D as [&]. *)
 
+  val lsr64 : int64 expr -> int expr -> int64 expr
+  (** Logical shift right on a full-width 64-bit operand; the shift amount must
+      be a constant. Projects to 3D as [>>]. *)
+
   val ( lor ) : int expr -> int expr -> int expr
   (** Bitwise OR. *)
 
@@ -485,7 +490,7 @@ val float64 : float typ
 val float64be : float typ
 (** [float64be] is an IEEE 754 binary64 big-endian. *)
 
-val uint : ?endian:endian -> int expr -> int typ
+val uint : ?endian:endian -> int expr -> UInt63.t typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
     {!Big}. The size may be a dynamic expression for parameter-driven widths. *)
 

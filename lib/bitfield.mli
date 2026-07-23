@@ -31,6 +31,41 @@ val set_u32_le : bytes -> int -> int -> unit
 val set_u32_be : bytes -> int -> int -> unit
 (** Inline big-endian 32-bit word write of a native-[int] bitfield word. *)
 
+val int_holds_u32 : bool
+(** Whether the native [int] holds a full 32-bit word. False under wasm_of_ocaml
+    (31-bit int) and js_of_ocaml (32-bit): the whole-word accessors above
+    truncate there, so word-at-a-time callers must switch to the halves-based
+    field accessors below. *)
+
+val u32_field_le : bytes -> int -> int -> int -> int
+(** [u32_field_le buf off shift mask] extracts [(word lsr shift) land mask] from
+    the little-endian 32-bit word at [off] without materializing the word: exact
+    on any int width for a field value below bit 31. *)
+
+val u32_field_be : bytes -> int -> int -> int -> int
+(** Big-endian {!u32_field_le}. *)
+
+val u32_field_word_le : bytes -> int -> int -> int -> unit
+(** [u32_field_word_le buf off shift v] writes a lone field as a full
+    little-endian word (other bits zero). *)
+
+val u32_field_word_be : bytes -> int -> int -> int -> unit
+(** Big-endian {!u32_field_word_le}. *)
+
+val u32_field_or_le : bytes -> int -> int -> int -> unit
+(** [u32_field_or_le buf off shift v] ORs a field into the little-endian word at
+    [off]. *)
+
+val u32_field_or_be : bytes -> int -> int -> int -> unit
+(** Big-endian {!u32_field_or_le}. *)
+
+val u32_field_set_le : bytes -> int -> int -> int -> int -> unit
+(** [u32_field_set_le buf off shift mask v] replaces the field, clearing its
+    bits first. *)
+
+val u32_field_set_be : bytes -> int -> int -> int -> int -> unit
+(** Big-endian {!u32_field_set_le}. *)
+
 val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
 (** Write the base word to bytes at offset. *)
 

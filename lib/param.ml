@@ -15,7 +15,7 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
   match typ with
   | Uint8 -> id
   | Uint16 _ -> id
-  | Uint_var _ -> id
+  | Uint_var _ -> { fwd = UInt63.to_int; bwd = UInt63.of_int }
   | Uint32 _ -> { fwd = UInt32.to_int; bwd = UInt32.of_int }
   | Uint63 _ -> { fwd = UInt63.to_int; bwd = UInt63.of_int }
   | Uint64 _ ->

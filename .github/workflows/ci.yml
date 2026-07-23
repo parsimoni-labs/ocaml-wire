@@ -159,6 +159,41 @@ jobs:
           name: afl-diff-findings
           path: afl-diff-findings.tar.gz
 
+  # Build the pure-OCaml core with wasm_of_ocaml and run test/wasm under
+  # node (31-bit ints, boxed-int32 optint path). make test-wasm also fails
+  # if wasm_of_ocaml truncates an out-of-range integer literal from wire's
+  # code, which is how a 64-bit-only constant first surfaces downstream.
+  # Meaningful only on a cold build, which CI always is.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+          dune-version: '3.21'
+
+      - run: opam install . --deps-only --with-test
+
+      # wasm_of_ocaml shells out to binaryen (wasm-merge, wasm-opt) and needs
+      # version 119 or newer; the Ubuntu package is too old.
+      - name: Install binaryen
+        run: |
+          mkdir -p "$HOME/.local"
+          url=https://github.com/WebAssembly/binaryen/releases/download/version_131/binaryen-version_131-x86_64-linux.tar.gz
+          curl -sL "$url" | tar xz -C "$HOME/.local"
+          echo "$HOME/.local/binaryen-version_131/bin" >> "$GITHUB_PATH"
+
+      - run: opam install wasm_of_ocaml-compiler
+
+      - name: Run the wasm tests under node
+        run: opam exec -- make test-wasm
+
   # Run the test suite with the EverParse toolchain installed so the 3d.exe
   # projection checks actually execute: test/3d compiles and runs the generated
   # C end to end, and fuzz/3d runs every covered schema through 3d.exe. Without

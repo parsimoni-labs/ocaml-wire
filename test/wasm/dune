@@ -1,0 +1,30 @@
+; The main test suite, compiled with wasm_of_ocaml (31-bit int) and
+; js_of_ocaml (32-bit int) and run under node. The stanzas only exist when
+; the toolchain is present: the CI wasm job installs wasm_of_ocaml-compiler,
+; binaryen and node, the plain build matrix skips them.
+
+(copy_files#
+ (files ../*.ml))
+
+(copy_files#
+ (files ../*.mli))
+
+; Verbose keeps alcotest away from its per-test output capture, whose
+; primitives (alcotest_before_test) exist only for native and js_of_ocaml;
+; ALCOTEST_COLUMNS short-circuits the terminal-dimensions one.
+
+(env
+ (_
+  (env-vars
+   (ALCOTEST_VERBOSE 1)
+   (ALCOTEST_COLUMNS 80))))
+
+(test
+ (name test)
+ (modes js wasm)
+ (libraries wire wire.3d test_helpers alcotest re)
+ (enabled_if
+  (and
+   %{bin-available:wasm_of_ocaml}
+   %{bin-available:js_of_ocaml}
+   %{bin-available:node})))

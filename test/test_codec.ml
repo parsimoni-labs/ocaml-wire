@@ -44,7 +44,7 @@ let simple_record_codec =
     ]
 
 let test_record_encode () =
-  let v = { a = 0x42; b = 0x1234; c = Optint.of_int 0x56789ABC } in
+  let v = { a = 0x42; b = 0x1234; c = Optint.of_int32 0x56789ABCl } in
   match encode_record simple_record_codec v with
   | Error e -> Alcotest.failf "%a" pp_parse_error e
   | Ok encoded ->
@@ -61,7 +61,7 @@ let test_record_decode () =
   | Ok v ->
       Alcotest.(check int) "a" 0x42 v.a;
       Alcotest.(check int) "b" 0x1234 v.b;
-      Alcotest.(check int) "c" 0x56789ABC (Optint.to_int v.c)
+      Alcotest.(check int32) "c" 0x56789ABCl (Optint.to_int32 v.c)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_record_roundtrip () =
@@ -357,11 +357,20 @@ let test_validate_matches_decode_rejections () =
   in
   rejects "array element constraint" arr_c "\x01\x63"
 
+(* The allocation tests read [Gc.minor_words], which only counts under the
+   native and bytecode runtimes; under wasm_of_ocaml or js_of_ocaml the
+   counters stay at zero and the assertions would pass vacuously. *)
+let skip_unless_gc_counters () =
+  match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ()
+
 (* A codec with no checks (plain scalars and byte spans) must validate without
    allocating: a hot read path validates a header then reads fields zero-copy,
    so a per-validate allocation here turns an O(log N) seek into O(N log N)
    garbage. Validate runs the structural bounds check but no validator pass. *)
 let test_validate_check_free_no_alloc () =
+  skip_unless_gc_counters ();
   let c =
     Codec.v "Page"
       (fun a b k -> (a, b, k))
@@ -1318,7 +1327,16 @@ let test_casetype_reject_unprojectable_tag () =
   in
   Alcotest.(check bool)
     "uint ~size tag rejected" true
-    (raises_invalid (fun () -> one_case (uint (int 2))));
+    (raises_invalid (fun () ->
+         casetype "CtTag"
+           (uint (int 2))
+           [
+             case
+               ~index:(Wire.Private.UInt63.of_int 1)
+               uint8
+               ~inject:(fun s -> s)
+               ~project:Option.some;
+           ]));
   Alcotest.(check bool)
     "big-endian enum tag rejected" true
     (raises_invalid (fun () ->
@@ -2752,10 +2770,10 @@ let test_raw_with_offset () =
   let codec = Codec.v "RawOff" (fun v -> v) [ cf_v ] in
   let buf = Bytes.create 20 in
   Bytes.fill buf 0 20 '\x00';
-  (Staged.unstage (Codec.set codec cf_v)) buf 10 (Optint.of_int 0xDEADBEEF);
-  Alcotest.(check int)
-    "get at offset 10" 0xDEADBEEF
-    (Optint.to_int ((Staged.unstage (Codec.get codec cf_v)) buf 10))
+  (Staged.unstage (Codec.set codec cf_v)) buf 10 (Optint.of_int32 0xDEADBEEFl);
+  Alcotest.(check int32)
+    "get at offset 10" 0xDEADBEEFl
+    (Optint.to_int32 ((Staged.unstage (Codec.get codec cf_v)) buf 10))
 
 (* -- Dependent-size byte_slice tests -- *)
 
@@ -3338,7 +3356,7 @@ let test_bitfield_load_shared () =
   let wa = load_a buf 0 in
   let wb = load_b buf 0 in
   (* Same base word, same value *)
-  Alcotest.(check int) "same word" wa wb;
+  Alcotest.check (Alcotest.testable Optint.pp Optint.equal) "same word" wa wb;
   let a = Codec.extract a wa in
   let b = Codec.extract b wa in
   (* a = top 4 bits of 0xABCDEF01 = 0xA, b = next 4 bits = 0xB *)
@@ -4022,9 +4040,9 @@ let test_dyn_opt_anyref_present () =
   let r = decode_ok (Codec.decode tm_opt_codec buf 0) in
   Alcotest.(check bool) "ocf_flag" true r.ocf_flag;
   Alcotest.(check int) "data" 0x1234 r.data;
-  Alcotest.(check (option int))
-    "ocf" (Some 0xDEADBEEF)
-    (Option.map Optint.to_int r.ocf);
+  Alcotest.(check (option int32))
+    "ocf" (Some 0xDEADBEEFl)
+    (Option.map Optint.to_int32 r.ocf);
   Alcotest.(check int) "trail" 0xFF r.trail
 
 let test_dyn_opt_anyref_absent () =
@@ -4387,7 +4405,7 @@ let test_casetype_field_logout () =
   let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
   Alcotest.(check bool)
     "Logout" true
-    (r.data = `Logout (Optint.of_int 0x55667788))
+    (r.data = `Logout (Optint.of_int32 0x55667788l))
 
 let test_casetype_field_default () =
   let buf = Bytes.create 10 in
@@ -4586,7 +4604,7 @@ let test_tm_like_roundtrip () =
           ({ id = 0x0B; data = 0x000B } : packet);
           ({ id = 0x0C; data = 0x000C } : packet);
         ];
-      ocf = Some (Optint.of_int 0xDEADBEEF);
+      ocf = Some (Optint.of_int32 0xDEADBEEFl);
       fecf = Some 0xCAFE;
     }
   in
@@ -4600,10 +4618,10 @@ let test_tm_like_roundtrip () =
       Alcotest.(check int) "pkt.id" o.id d.id;
       Alcotest.(check int) "pkt.data" o.data d.data)
     original.packets decoded.packets;
-  Alcotest.(check (option int))
+  Alcotest.(check (option int32))
     "ocf"
-    (Option.map Optint.to_int original.ocf)
-    (Option.map Optint.to_int decoded.ocf);
+    (Option.map Optint.to_int32 original.ocf)
+    (Option.map Optint.to_int32 decoded.ocf);
   Alcotest.(check (option int)) "fecf" original.fecf decoded.fecf
 
 (* -- Multiple consecutive variable-size fields (CFDP-style) --
@@ -4932,7 +4950,11 @@ let test_repeat_after_var_slice () =
 
 (* -- uint: variable-width unsigned integer -- *)
 
-type uint_rec = { tag : int; value : int }
+module UInt63 = Wire.Private.UInt63
+
+let u63 = Alcotest.testable UInt63.pp ( = )
+
+type uint_rec = { tag : int; value : UInt63.t }
 
 let test_uint_3byte_be () =
   let codec =
@@ -4944,7 +4966,7 @@ let test_uint_3byte_be () =
         (Field.v "Value" (uint (Wire.int 3)) $ fun r -> r.value);
       ]
   in
-  let original = { tag = 0x42; value = 0x1A2B3C } in
+  let original = { tag = 0x42; value = UInt63.of_int 0x1A2B3C } in
   let buf = Bytes.create 4 in
   Codec.encode codec original buf 0;
   Alcotest.(check int) "tag byte" 0x42 (Bytes.get_uint8 buf 0);
@@ -4953,7 +4975,7 @@ let test_uint_3byte_be () =
   Alcotest.(check int) "be byte 2" 0x3C (Bytes.get_uint8 buf 3);
   let decoded = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "tag" original.tag decoded.tag;
-  Alcotest.(check int) "value" original.value decoded.value
+  Alcotest.check u63 "value" original.value decoded.value
 
 let test_uint_1byte () =
   let codec =
@@ -4961,10 +4983,10 @@ let test_uint_1byte () =
     v "U1" (fun v -> v) [ (Field.v "V" (uint (Wire.int 1)) $ fun v -> v) ]
   in
   let buf = Bytes.create 1 in
-  Codec.encode codec 0xAB buf 0;
+  Codec.encode codec (UInt63.of_int 0xAB) buf 0;
   Alcotest.(check int) "byte" 0xAB (Bytes.get_uint8 buf 0);
   let decoded = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "roundtrip" 0xAB decoded
+  Alcotest.check u63 "roundtrip" (UInt63.of_int 0xAB) decoded
 
 let test_uint_5byte_le () =
   let codec =
@@ -4973,7 +4995,9 @@ let test_uint_5byte_le () =
       (fun v -> v)
       [ (Field.v "V" (uint ~endian:Wire.Little (Wire.int 5)) $ fun v -> v) ]
   in
-  let value = 0x01_02_03_04_05 in
+  (* 40 bits: holds on every platform because the value lives in a
+     [UInt63.t], not a native int. *)
+  let value = Optint.Int63.of_int64 0x01_02_03_04_05L in
   let buf = Bytes.create 5 in
   Codec.encode codec value buf 0;
   Alcotest.(check int) "le byte 0" 0x05 (Bytes.get_uint8 buf 0);
@@ -4982,7 +5006,7 @@ let test_uint_5byte_le () =
   Alcotest.(check int) "le byte 3" 0x02 (Bytes.get_uint8 buf 3);
   Alcotest.(check int) "le byte 4" 0x01 (Bytes.get_uint8 buf 4);
   let decoded = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "roundtrip" value decoded
+  Alcotest.check u63 "roundtrip" value decoded
 
 let test_uint_dynamic () =
   let f_n = Field.v "N" uint8 in
@@ -5002,7 +5026,7 @@ let test_uint_dynamic () =
   Bytes.set_uint8 buf 2 0x34;
   let n, value = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "n" 2 n;
-  Alcotest.(check int) "value" 0x1234 value
+  Alcotest.check u63 "value" (UInt63.of_int 0x1234) value
 
 (* -- Adversarial bit-order tests --
 
@@ -5767,6 +5791,7 @@ let per_decode_words codec nfields =
   (after -. before) /. float_of_int iters
 
 let test_decode_no_partial_closure () =
+  skip_unless_gc_counters ();
   let w8 = per_decode_words alloc_codec8 8 in
   let w16 = per_decode_words alloc_codec16 16 in
   let w32 = per_decode_words alloc_codec32 32 in
@@ -5840,6 +5865,7 @@ let alloc_vb_codec =
       ]
 
 let test_encode_var_bytes_no_closure () =
+  skip_unless_gc_counters ();
   let v = { a = String.make 32 'x'; b = String.make 16 'y'; z = "hi" } in
   let buf = Bytes.create (2 + 32 + 2 + 16 + 2 + 1) in
   Codec.encode alloc_vb_codec v buf 0;

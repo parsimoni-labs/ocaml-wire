@@ -136,12 +136,15 @@ val f_udp_checksum : int Wire.Field.t
 
 (** {2 Utilities} *)
 
-val pp_ipv4_addr : Format.formatter -> int -> unit
+val pp_ipv4_addr : Format.formatter -> Optint.t -> unit
 (** Pretty-printer for a packed 32-bit IPv4 address in dotted-decimal notation.
 *)
 
-val ipv4_addr : int -> int -> int -> int -> int
-(** [ipv4_addr a b c d] packs four octets into a single 32-bit IPv4 address. *)
+val ipv4_addr : int -> int -> int -> int -> Optint.t
+(** [ipv4_addr a b c d] packs four octets into a single 32-bit IPv4 address, in
+    the same representation as the {!f_ip_src}/{!f_ip_dst} fields (an address at
+    or above 128.0.0.0 sets bit 31, which does not fit an [int] on a narrow-int
+    platform). *)
 
 (** {2 Data generators} *)
 

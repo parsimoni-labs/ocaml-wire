@@ -48,7 +48,12 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   if v land lnot mask <> 0 then
     Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" v
       width;
-  Bitfield.write_word base buf off ((v land mask) lsl shift);
+  (match base with
+  | U32 Little when not Bitfield.int_holds_u32 ->
+      Bitfield.u32_field_word_le buf off shift v
+  | U32 Big when not Bitfield.int_holds_u32 ->
+      Bitfield.u32_field_word_be buf off shift v
+  | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
 let rec build_casetype_encoder : type a k.
@@ -317,19 +322,32 @@ let raise_field_constraint ~field_idx ~at arr =
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot
    path is a direct arr.(idx) <- reader buf base. *)
+(* Like [Uint64] in [build_populate], on a narrow-int platform the int slot
+   only mirrors values the int can hold; a 64-bit host keeps the direct
+   store. *)
+let populate_uint32 idx reader =
+  if Sys.int_size > 32 then fun slots buf base ->
+    set_int_slot slots idx (UInt32.to_int (reader buf base))
+  else fun slots buf base ->
+    Option.iter (set_int_slot slots idx)
+      (Int32.unsigned_to_int (UInt32.to_int32 (reader buf base)))
+
+let populate_uint63 idx reader =
+  if Sys.int_size >= 63 then fun slots buf base ->
+    set_int_slot slots idx (UInt63.to_int (reader buf base))
+  else fun slots buf base ->
+    Option.iter (set_int_slot slots idx)
+      (Int64.unsigned_to_int (Optint.Int63.to_int64 (reader buf base)))
+
 let rec build_populate : type a.
     a typ -> int -> (bytes -> int -> a) -> slots -> bytes -> int -> unit =
  fun typ idx reader ->
   match typ with
   | Uint8 -> fun slots buf base -> set_int_slot slots idx (reader buf base)
   | Uint16 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
-  | Uint_var _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
-  | Uint32 _ ->
-      fun slots buf base ->
-        set_int_slot slots idx (UInt32.to_int (reader buf base))
-  | Uint63 _ ->
-      fun slots buf base ->
-        set_int_slot slots idx (UInt63.to_int (reader buf base))
+  | Uint_var _ -> populate_uint63 idx reader
+  | Uint32 _ -> populate_uint32 idx reader
+  | Uint63 _ -> populate_uint63 idx reader
   | Int8 -> fun slots buf base -> set_int_slot slots idx (reader buf base)
   | Int16 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
   | Int32 _ -> fun slots buf base -> set_int_slot slots idx (reader buf base)
@@ -350,8 +368,11 @@ let rec build_populate : type a.
         set_int64_slot slots idx v;
         set_int_slot slots idx (Int64.to_int v)
   (* Floats store their IEEE 754 bit pattern in the int slot so [Ref name] in a
-     constraint sees the value the 3D side sees. The user-facing reader still
-     returns the [float], reinterpreted via [Int*.float_of_bits] elsewhere. *)
+     constraint sees the value the 3D side sees; a float64 also fills the
+     int64 slot with the full pattern, which its predicates read (the int slot
+     cannot hold bits 52-62 on a narrow-int platform). The user-facing reader
+     still returns the [float], reinterpreted via [Int*.float_of_bits]
+     elsewhere. *)
   | Float32 Little ->
       fun slots buf base ->
         set_int_slot slots idx (Bytes.get_int32_le buf base |> Int32.to_int)
@@ -360,10 +381,14 @@ let rec build_populate : type a.
         set_int_slot slots idx (Bytes.get_int32_be buf base |> Int32.to_int)
   | Float64 Little ->
       fun slots buf base ->
-        set_int_slot slots idx (Bytes.get_int64_le buf base |> Int64.to_int)
+        let bits = Bytes.get_int64_le buf base in
+        set_int64_slot slots idx bits;
+        set_int_slot slots idx (Int64.to_int bits)
   | Float64 Big ->
       fun slots buf base ->
-        set_int_slot slots idx (Bytes.get_int64_be buf base |> Int64.to_int)
+        let bits = Bytes.get_int64_be buf base in
+        set_int64_slot slots idx bits;
+        set_int_slot slots idx (Int64.to_int bits)
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; cases; closed; _ } ->
       let check = enum_check cases closed in
@@ -401,9 +426,13 @@ let rec build_populate : type a.
 (* Bitfield extraction descriptor: word reader + packed shift/mask.
    Packing shift and mask into a single int lets [extract] be a direct
    [@inline always] function instead of an indirect closure call. *)
+(* The word travels as [Optint.t] so a 32-bit base word survives a narrow-int
+   platform: an unboxed native [int] on a 64-bit host, a boxed [int32] where
+   the int cannot hold the word. *)
 type bf_info = {
-  word_reader : bytes -> int -> int;
-  packed : int; (* shift in bits 0-7, mask in bits 8+ *)
+  word_reader : bytes -> int -> Optint.t;
+  bf_shift : int;
+  bf_mask : Optint.t;
 }
 
 type field_access =
@@ -503,6 +532,12 @@ type ('c1, 'c2) leaves = {
   field_pos : 'c1 -> 'c2 -> int;
 }
 
+(* The shift amount of [Lsr64] is an [int expr]; only constants make sense
+   there and project, so compile just that shape. *)
+let lsr64_shift_amount : int expr -> int = function
+  | Int n -> n
+  | _ -> invalid_arg "Wire: Lsr64 shift amount must be a constant"
+
 let rec compile_int64 : type c1 c2.
     (c1, c2) leaves -> int64 expr -> c1 -> c2 -> int64 =
  fun l e ->
@@ -512,6 +547,9 @@ let rec compile_int64 : type c1 c2.
   | Land64 (a, b) ->
       let fa = compile_int64 l a and fb = compile_int64 l b in
       fun c1 c2 -> Int64.logand (fa c1 c2) (fb c1 c2)
+  | Lsr64 (a, b) ->
+      let fa = compile_int64 l a and n = lsr64_shift_amount b in
+      fun c1 c2 -> Int64.shift_right_logical (fa c1 c2) n
 
 let try_int64 : type a c1 c2.
     (c1, c2) leaves -> a expr -> (c1 -> c2 -> int64) option =
@@ -521,6 +559,7 @@ let try_int64 : type a c1 c2.
   | Int64 _ as e -> go e
   | Ref (I64, _) as e -> go e
   | Land64 _ as e -> go e
+  | Lsr64 _ as e -> go e
   | _ -> None
 
 let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
@@ -572,7 +611,7 @@ let rec compile_int : type c1 c2. (c1, c2) leaves -> int expr -> c1 -> c2 -> int
       match w with
       | `U8 -> fun c d -> fa c d land 0xFF
       | `U16 -> fun c d -> fa c d land 0xFFFF
-      | `U32 -> fun c d -> fa c d land 0xFFFF_FFFF
+      | `U32 -> fun c d -> fa c d land UInt32.mask32
       | `U64 -> fa)
   | If_then_else (c, t, e) ->
       let fc = compile_bool l c in
@@ -983,6 +1022,10 @@ let build_bf_reader base byte_off shift width =
   | U16 Big ->
       fun buf off ->
         (Bytes.get_uint16_be buf (off + byte_off) lsr shift) land mask
+  | U32 Little when not Bitfield.int_holds_u32 ->
+      fun buf off -> Bitfield.u32_field_le buf (off + byte_off) shift mask
+  | U32 Big when not Bitfield.int_holds_u32 ->
+      fun buf off -> Bitfield.u32_field_be buf (off + byte_off) shift mask
   | U32 Little ->
       fun buf off -> (Bitfield.u32_le buf (off + byte_off) lsr shift) land mask
   | U32 Big ->
@@ -1016,6 +1059,14 @@ let build_bf_writer base byte_off shift width =
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
+  | U32 Little when not Bitfield.int_holds_u32 ->
+      fun buf off value ->
+        check_bf_overflow width value;
+        Bitfield.u32_field_or_le buf (off + byte_off) shift (value land mask)
+  | U32 Big when not Bitfield.int_holds_u32 ->
+      fun buf off value ->
+        check_bf_overflow width value;
+        Bitfield.u32_field_or_be buf (off + byte_off) shift (value land mask)
   | U32 Little ->
       fun buf off value ->
         check_bf_overflow width value;
@@ -1048,6 +1099,14 @@ let build_bf_accessor_writer base byte_off shift width =
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
+  | U32 Little when not Bitfield.int_holds_u32 ->
+      fun buf off value ->
+        Bitfield.u32_field_set_le buf (off + byte_off) shift mask
+          (value land mask)
+  | U32 Big when not Bitfield.int_holds_u32 ->
+      fun buf off value ->
+        Bitfield.u32_field_set_be buf (off + byte_off) shift mask
+          (value land mask)
   | U32 Little ->
       fun buf off value ->
         let cur = Bitfield.u32_le buf (off + byte_off) in
@@ -1098,6 +1157,9 @@ let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
       iter_param_refs f a;
       iter_param_refs f b
   | Land64 (a, b) ->
+      iter_param_refs f a;
+      iter_param_refs f b
+  | Lsr64 (a, b) ->
       iter_param_refs f a;
       iter_param_refs f b
   | Lt (a, b) ->
@@ -2059,7 +2121,7 @@ let compile_var_bytes : type a r.
           Uint_var.write endian buf write_off sz (get v);
           write_off + sz
         in
-        let int_reader : bytes -> int -> int = raw_reader in
+        let int_reader buf base = int_of_typ_value typ (raw_reader buf base) in
         (raw_reader, raw_writer, int_reader)
     | _ ->
         let raw_reader = var_bytes_reader typ off_fn size_fn in
@@ -3688,21 +3750,32 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
          [Bitfield.read_word base] would create. *)
       let word_reader =
         match base with
-        | U8 -> fun buf off -> Bytes.get_uint8 buf (off + byte_off)
-        | U16 Little -> fun buf off -> Bitfield.u16_le buf (off + byte_off)
-        | U16 Big -> fun buf off -> Bitfield.u16_be buf (off + byte_off)
-        | U32 Little -> fun buf off -> Bitfield.u32_le buf (off + byte_off)
-        | U32 Big -> fun buf off -> Bitfield.u32_be buf (off + byte_off)
+        | U8 ->
+            fun buf off -> Optint.of_int (Bytes.get_uint8 buf (off + byte_off))
+        | U16 Little ->
+            fun buf off -> Optint.of_int (Bitfield.u16_le buf (off + byte_off))
+        | U16 Big ->
+            fun buf off -> Optint.of_int (Bitfield.u16_be buf (off + byte_off))
+        | U32 Little ->
+            if Bitfield.int_holds_u32 then fun buf off ->
+              Optint.of_int (Bitfield.u32_le buf (off + byte_off))
+            else fun buf off ->
+              Optint.of_int32 (Bytes.get_int32_le buf (off + byte_off))
+        | U32 Big ->
+            if Bitfield.int_holds_u32 then fun buf off ->
+              Optint.of_int (Bitfield.u32_be buf (off + byte_off))
+            else fun buf off ->
+              Optint.of_int32 (Bytes.get_int32_be buf (off + byte_off))
       in
       let mask = (1 lsl width) - 1 in
-      { word_reader; packed = shift lor (mask lsl 8) }
+      { word_reader; bf_shift = shift; bf_mask = Optint.of_int mask }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
-let load_word (bf : bitfield) : (bytes -> int -> int) Staged.t =
+let load_word (bf : bitfield) : (bytes -> int -> Optint.t) Staged.t =
   Staged.stage bf.word_reader
 
 let[@inline always] extract (bf : bitfield) word =
-  let p = bf.packed in
-  (word lsr (p land 0xFF)) land (p lsr 8)
+  Optint.to_int
+    (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
 
 (* -- Snapshot: batch bitfield access -- *)

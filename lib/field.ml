@@ -20,6 +20,10 @@ let rec has_int64_slot : type a. a Types.typ -> bool =
   let open Types in
   match typ with
   | Uint64 _ | Int64 _ -> true
+  (* A float64's IEEE bit pattern is 64 bits wide; its predicates (is_finite,
+     is_nan) read it from the int64 slot so they stay exact on a narrow-int
+     platform. *)
+  | Float64 _ -> true
   | Where { inner; _ } -> has_int64_slot inner
   | Optional { inner; _ } -> has_int64_slot inner
   | Optional_or { inner; _ } -> has_int64_slot inner

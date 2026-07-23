@@ -262,6 +262,12 @@ module Expr : sig
       as a sign-magnitude offset before a comparison. The plain machine-word AND
       truncates the field, so it cannot be used here. Projects to 3D as [&]. *)
 
+  val lsr64 : int64 expr -> int expr -> int64 expr
+  (** Logical shift right on a full-width 64-bit operand, for isolating high
+      bits (a float64 exponent) that the plain machine-word shift would lose on
+      a narrow-int platform. The shift amount must be a constant. Projects to 3D
+      as [>>]. *)
+
   val ( lor ) : int expr -> int expr -> int expr
   (** Bitwise OR. *)
 
@@ -496,7 +502,7 @@ val uint16be : int typ
 
 val uint32 : Optint.t typ
 (** Unsigned 32-bit little-endian integer. Decodes to an {!Optint.t} so a value
-    with bit 31 set survives on a narrow-[int] target (js/wasm). *)
+    with bit 31 set survives on a narrow-int target (js/wasm). *)
 
 val uint32be : Optint.t typ
 (** Unsigned 32-bit big-endian integer. Decodes to an {!Optint.t}. *)
@@ -566,10 +572,11 @@ val is_nan : float Field.t -> bool expr
 (** [is_nan f] holds iff [f] decodes to a NaN bit pattern (exponent all-ones AND
     mantissa non-zero). *)
 
-val uint : ?endian:endian -> int expr -> int typ
+val uint : ?endian:endian -> int expr -> UInt63.t typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
     order (default {!Big}). The size may be a dynamic expression for
-    parameter-driven widths. *)
+    parameter-driven widths. Decodes to a {!UInt63.t}: a 7-byte value needs 56
+    bits, which does not fit an int on a narrow-int target (js/wasm). *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
 (** [bits ~width base] declares a bitfield of [width] bits inside [base].
@@ -1053,12 +1060,14 @@ module Codec : sig
   val bitfield : 'r t -> (int, 'r) field -> bitfield
   (** [bitfield codec field] returns a bitfield accessor. *)
 
-  val load_word : bitfield -> (bytes -> int -> int) Staged.t
+  val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
   (** Staged word reader. Force once, reuse for every read. Fields in the same
       base word share the same underlying reader -- call once and use {!extract}
-      on the result for each field. *)
+      on the result for each field. The word is an [Optint.t] so a 32-bit base
+      survives a platform whose int is narrower: an unboxed native int on a
+      64-bit host. *)
 
-  val extract : bitfield -> int -> int
+  val extract : bitfield -> Optint.t -> int
   (** [extract bf word] extracts the field from a pre-loaded word. Pure
       shift+mask, no memory access. *)
 

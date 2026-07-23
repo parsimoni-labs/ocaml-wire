@@ -32,6 +32,10 @@ let set_be buf off v =
   Bytes.set_uint16_be buf (off + 2) (low16 v)
 
 let to_int = Optint.to_int
-let of_int v = Optint.of_int (v land 0xFFFF_FFFF)
+
+(* Computed at run time: an 0xFFFF_FFFF int literal lands in the bytecode as
+   an out-of-range constant on a narrow-int target (wasm_of_ocaml warns). *)
+let mask32 = Int64.to_int 0xFFFF_FFFFL
+let of_int v = Optint.of_int (v land mask32)
 let to_int32 = Optint.to_int32
 let of_int32 = Optint.of_int32

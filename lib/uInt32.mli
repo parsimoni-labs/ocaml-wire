@@ -23,6 +23,11 @@ val set_le : bytes -> int -> t -> unit
 val set_be : bytes -> int -> t -> unit
 (** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off]. *)
 
+val mask32 : int
+(** The low-32-bit mask, [0xFFFF_FFFF] where the native [int] is wide and the
+    all-ones no-op mask where it is narrower. Computed at run time so the
+    out-of-range constant never reaches a narrow-int bytecode target. *)
+
 val to_int : t -> int
 (** [to_int t] is the value as a native [int]. Exact on a 64-bit host; on a
     narrower one a value with bit 31 set does not fit and is truncated, so

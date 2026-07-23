@@ -289,14 +289,21 @@ let udp_size = Codec.wire_size udp_codec
 
 (* -- Utilities -- *)
 
+(* Addresses stay in [Optint.t] like the [f_ip_src]/[f_ip_dst] fields: an
+   address at or above 128.0.0.0 sets bit 31, which a narrow-int platform
+   (wasm_of_ocaml, js_of_ocaml) cannot hold in an int. *)
 let pp_ipv4_addr ppf addr =
-  Fmt.pf ppf "%d.%d.%d.%d"
-    ((addr lsr 24) land 0xFF)
-    ((addr lsr 16) land 0xFF)
-    ((addr lsr 8) land 0xFF)
-    (addr land 0xFF)
+  let v = Optint.to_int32 addr in
+  let octet shift =
+    Int32.to_int (Int32.logand (Int32.shift_right_logical v shift) 0xFFl)
+  in
+  Fmt.pf ppf "%d.%d.%d.%d" (octet 24) (octet 16) (octet 8) (octet 0)
 
-let ipv4_addr a b c d = (a lsl 24) lor (b lsl 16) lor (c lsl 8) lor d
+let ipv4_addr a b c d =
+  Optint.of_int32
+    (Int32.logor
+       (Int32.shift_left (Int32.of_int a) 24)
+       (Int32.of_int ((b lsl 16) lor (c lsl 8) lor d)))
 
 (* -- Data generators -- *)
 
@@ -329,8 +336,8 @@ let tcp_frame_data n =
       Bytes.set_uint8 b (ip + 8) 64;
       Bytes.set_uint8 b (ip + 9) 6;
       Bytes.set_uint16_be b (ip + 10) 0;
-      Bytes.set_int32_be b (ip + 12) (Int32.of_int (ipv4_addr 192 168 1 100));
-      Bytes.set_int32_be b (ip + 16) (Int32.of_int (ipv4_addr 10 0 0 1));
+      Bytes.set_int32_be b (ip + 12) (Optint.to_int32 (ipv4_addr 192 168 1 100));
+      Bytes.set_int32_be b (ip + 16) (Optint.to_int32 (ipv4_addr 10 0 0 1));
       (* TCP at offset 34 *)
       let tcp = 34 in
       Bytes.set_uint16_be b tcp (12345 + (i mod 1000));
@@ -368,8 +375,8 @@ let udp_frame_data n =
       Bytes.set_uint8 b (ip + 8) 64;
       Bytes.set_uint8 b (ip + 9) 17;
       Bytes.set_uint16_be b (ip + 10) 0;
-      Bytes.set_int32_be b (ip + 12) (Int32.of_int (ipv4_addr 192 168 1 100));
-      Bytes.set_int32_be b (ip + 16) (Int32.of_int (ipv4_addr 10 0 0 1));
+      Bytes.set_int32_be b (ip + 12) (Optint.to_int32 (ipv4_addr 192 168 1 100));
+      Bytes.set_int32_be b (ip + 16) (Optint.to_int32 (ipv4_addr 10 0 0 1));
       let udp = 34 in
       Bytes.set_uint16_be b udp (5353 + (i mod 100));
       Bytes.set_uint16_be b (udp + 2) 53;
