@@ -1,3 +1,10 @@
+## Unreleased
+
+### Removed
+
+- The wire package no longer depends on eio: nothing in the library used it,
+  it was only ever linked, unused, into `wire.diff` (#233, @samoht)
+
 ## 1.1.0
 
 ### Added

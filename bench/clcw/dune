@@ -1,7 +1,7 @@
 (library
  (name clcw_bench)
  (modules clcw_bench)
- (libraries space wire bench_lib c_tier c_stubs memtrace unix fmt))
+ (libraries space wire bench_lib memtrace unix fmt))
 
 (library
  (name clcw_bench_c)

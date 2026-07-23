@@ -1,7 +1,7 @@
 (library
  (name routing_bench)
  (modules routing_bench)
- (libraries space wire bench_lib c_tier c_stubs memtrace unix fmt))
+ (libraries space wire bench_lib memtrace unix fmt))
 
 (library
  (name routing_bench_c)
