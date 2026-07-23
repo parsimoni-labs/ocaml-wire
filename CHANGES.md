@@ -2,9 +2,8 @@
 
 ### Added
 
-- The OCaml codecs are now built with wasm_of_ocaml and exercised under node
-  in CI on every change: unsigned 32-bit values with the high bit set,
-  zero-copy field reads and decode/encode roundtrips are checked on a
+- The full test suite now also runs under wasm_of_ocaml (31-bit int) and
+  js_of_ocaml (32-bit int) on node in CI, so every codec keeps working on a
   narrow-int target, and the build fails if a new integer literal would be
   truncated there (#232, @samoht)
 
