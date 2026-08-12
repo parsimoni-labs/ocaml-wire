@@ -172,17 +172,70 @@ let read_validate_name ~outdir s =
 
 let write_3d ~outdir schemas = Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
+let absolute_path path =
+  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
+  else path
+
+let executable path =
+  try
+    Unix.access path [ Unix.X_OK ];
+    not (Sys.is_directory path)
+  with Unix.Unix_error _ | Sys_error _ -> false
+
 let locate_3d_exe () =
-  let ic = Unix.open_process_in "command -v 3d.exe 2>/dev/null" in
-  let path = try Some (input_line ic) with End_of_file -> None in
-  ignore (Unix.close_process_in ic);
+  let path =
+    Sys.getenv_opt "PATH" |> Option.to_list
+    |> List.concat_map (String.split_on_char ':')
+    |> List.find_map (fun dir ->
+        let dir = if dir = "" then "." else dir in
+        let candidate = absolute_path (Filename.concat dir "3d.exe") in
+        if executable candidate then Some candidate else None)
+  in
   match path with
   | Some p -> Some p
   | None ->
       let local =
         Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe"
       in
-      if Sys.file_exists local then Some local else None
+      if executable local then Some local else None
+
+type process_output = Inherit | Dev_null | File of string
+
+let process_status_code = function
+  | Unix.WEXITED n -> n
+  | Unix.WSIGNALED n -> 128 + n
+  | Unix.WSTOPPED n -> 128 + n
+
+(* Run [exe] without a shell. Redirection is opened in the parent, then the
+   child changes directory and receives each argument literally through
+   [execv]. This keeps a process-local cwd: changing it in the parent would race
+   with other domains and fibers. *)
+let run_process ?(output = Inherit) ~cwd exe args =
+  let output_fd =
+    match output with
+    | Inherit -> None
+    | Dev_null -> Some (Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o600)
+    | File path ->
+        Some
+          (Unix.openfile path
+             [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ]
+             0o600)
+  in
+  match Unix.fork () with
+  | 0 -> (
+      try
+        Unix.chdir cwd;
+        Option.iter
+          (fun fd ->
+            Unix.dup2 fd Unix.stdout;
+            Unix.dup2 fd Unix.stderr;
+            Unix.close fd)
+          output_fd;
+        Unix.execv exe (Array.of_list (exe :: args))
+      with _ -> Unix._exit 127)
+  | pid ->
+      Option.iter Unix.close output_fd;
+      snd (Unix.waitpid [] pid)
 
 let everparse_version exe =
   let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
@@ -523,9 +576,11 @@ let run_everparse_files ?(quiet = true) ~outdir files =
   let version = everparse_version exe in
   List.iter
     (fun f ->
-      let redirect = if quiet then " > /dev/null 2>&1" else "" in
-      let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
-      let ret = Sys.command cmd in
+      let output = if quiet then Dev_null else Inherit in
+      let ret =
+        run_process ~output ~cwd:outdir exe [ "--batch"; f ]
+        |> process_status_code
+      in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
       harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
       write_provenance ~outdir ~version f)
@@ -543,11 +598,11 @@ let parse_3d ?(batch = false) ~outdir file =
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
-  let flag = if batch then "--batch " else "" in
-  let cmd =
-    Fmt.str "cd %s && %s %s%s > %s 2>&1" outdir exe flag file log_path
+  let args = if batch then [ "--batch"; file ] else [ file ] in
+  let ret =
+    run_process ~output:(File log_path) ~cwd:outdir exe args
+    |> process_status_code
   in
-  let ret = Sys.command cmd in
   let captured =
     try In_channel.with_open_text log_path In_channel.input_all
     with Sys_error _ -> ""
@@ -735,7 +790,7 @@ let generate_3d_check ~outdir schemas =
 let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
 
 (* A bounded fork pool: each job runs in its own process, so blocking EverParse
-   runs ([Sys.command]) overlap across cores with full isolation. Returns each
+   runs overlap across cores with full isolation. Returns each
    job's success (exit 0 and no exception) in input order. EverParse runs must
    be isolated because they race on shared intermediate files in a shared
    directory, so jobs that invoke [3d.exe] should each use a private cwd. *)
@@ -805,14 +860,18 @@ let batch_check ?max_jobs ~outdir schemas =
               ~finally:(fun () -> rm_rf work)
               (fun () ->
                 generate_3d ~outdir:work [ schema ];
-                let cmd =
-                  Fmt.str
-                    "cd %s && %s --batch --no_copy_everparse_h %s > %s 2>&1"
-                    work exe
-                    (Wire.Everparse.filename schema)
-                    (Filename.quote (log_of i))
+                let status =
+                  run_process
+                    ~output:(File (log_of i))
+                    ~cwd:work exe
+                    [
+                      "--batch";
+                      "--no_copy_everparse_h";
+                      Wire.Everparse.filename schema;
+                    ]
                 in
-                if Sys.command cmd <> 0 then failwith "EverParse rejected"))
+                if process_status_code status <> 0 then
+                  failwith "EverParse rejected"))
           arr
       in
       let max_jobs = Option.value max_jobs ~default:(default_job_count ()) in

@@ -34,6 +34,11 @@
 
 ### Fixed
 
+- EverParse is now launched with a literal argument vector and a child-local
+  working directory. Output paths, executable paths, and schema filenames may
+  contain spaces or shell metacharacters without failing or being interpreted
+  as commands.
+
 - `Codec.size_of_value` now reports the declared width of fixed-size
   `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
   from it now exactly fit the bytes written when short values are zero-padded or
