@@ -708,6 +708,9 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string.
 
+    Encoding zero-pads a string shorter than [size] and truncates one longer
+    than [size].
+
     When [size] contains the simple product of a field and a literal, and that
     field has a simple [field <= bound] constraint, {!Codec.v} rejects the codec
     if [bound * literal] can reach [2^32]. EverParse represents byte sizes as
@@ -721,12 +724,14 @@ val byte_array_where :
     expression bound to the current byte's integer value.
 
     Decode raises {!exception:Parse_error} on the first byte that violates the
-    constraint; encode raises [Invalid_argument]. The motivating shape is SSH
-    name-list payloads (RFC 4251 sec 5), where every byte must be printable
-    US-ASCII. *)
+    constraint; encode raises [Invalid_argument]. Encoding otherwise follows
+    {!byte_array}: short strings are zero-padded and long strings are truncated.
+    The motivating shape is SSH name-list payloads (RFC 4251 sec 5), where every
+    byte must be printable US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding zero-pads a
+    slice shorter than [size] and truncates one longer than [size]. *)
 
 val rest_bytes : (int, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded

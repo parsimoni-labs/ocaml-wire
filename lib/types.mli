@@ -574,7 +574,8 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 (** Fixed-count array with custom builder. *)
 
 val byte_array : size:int expr -> string typ
-(** Byte span as a string. *)
+(** Byte span as a string. A fixed-size span zero-pads short values and
+    truncates long values on encode. *)
 
 val byte_array_where :
   size:int expr -> per_byte:(int expr -> bool expr) -> string typ
@@ -582,7 +583,8 @@ val byte_array_where :
     byte must satisfy [per_byte]. The argument to [per_byte] is an expression
     bound to the current byte's integer value. Decode raises
     {!exception:Parse_error} on the first byte that violates the constraint;
-    encode raises [Invalid_argument]. *)
+    encode raises [Invalid_argument]. A fixed-size span otherwise zero-pads
+    short values and truncates long values on encode. *)
 
 val synth_name_of_elt_var : string -> string
 (** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
@@ -597,7 +599,8 @@ val index_bound_elt : 'a typ -> (string * bool expr) option
     used by the EverParse projection. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Zero-copy byte span. *)
+(** Zero-copy byte span. A fixed-size span zero-pads short values and truncates
+    long values on encode. *)
 
 val optional : bool expr -> 'a typ -> 'a option typ
 (** Conditionally present field. *)

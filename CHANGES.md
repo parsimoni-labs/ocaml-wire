@@ -39,6 +39,11 @@
 
 ### Fixed
 
+- `Codec.size_of_value` now reports the declared width of fixed-size
+  `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
+  from it now exactly fit the bytes written when short values are zero-padded or
+  long values are truncated.
+
 - `nested` now requires its inner value to consume exactly the declared region
   on decode and encode. Use `nested_at_most` when trailing region padding is
   intentional; it remains permissive and zero-pads on encode.
