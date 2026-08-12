@@ -697,7 +697,13 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 *)
 
 val byte_array : size:int expr -> string typ
-(** Fixed-size byte sequence copied as a string. *)
+(** Fixed-size byte sequence copied as a string.
+
+    When [size] contains the simple product of a field and a literal, and that
+    field has a simple [field <= bound] constraint, {!Codec.v} rejects the codec
+    if [bound * literal] can reach [2^32]. EverParse represents byte sizes as
+    [u32] and cannot verify such a schema; tighten the field bound. More complex
+    bounds are left to EverParse. *)
 
 val byte_array_where :
   size:int expr -> per_byte:(int expr -> bool expr) -> string typ
