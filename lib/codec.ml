@@ -155,11 +155,12 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
   | Unit -> fun _buf off () -> off
   | Codec { codec_encode; _ } -> fun buf off v -> codec_encode v buf off
   | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
-  | Array { len = Int _; elem; seq = Seq_map s } ->
+  | Array { len = Int expected; elem; seq } ->
       let enc_elem = build_field_encoder elem in
       fun buf start_off vs ->
         let cur = Stdlib.ref start_off in
-        s.iter (fun v -> cur := enc_elem buf !cur v) vs;
+        Types.exact_array_elements seq ~expected vs
+        |> List.iter (fun v -> cur := enc_elem buf !cur v);
         !cur
   (* NUL-terminated string element / casetype case body: the bytes then a NUL.
      [zeroterm_at_most] pads the rest of its fixed [n]-byte region with zeros. *)

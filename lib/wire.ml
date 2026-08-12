@@ -746,8 +746,10 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         write_byte enc 0
       done
   | Where { inner; _ } -> encode_into inner v enc
-  | Array { elem; seq = Seq_map seq; _ } ->
-      seq.iter (fun elem_v -> encode_into elem elem_v enc) v
+  | Array { len; elem; seq } ->
+      let expected = Eval.expr Eval.empty len in
+      Types.exact_array_elements seq ~expected v
+      |> List.iter (fun elem_v -> encode_into elem elem_v enc)
   | Byte_array _ -> write_string enc v
   | Byte_array_where { elt_var; cond; _ } ->
       String.iteri

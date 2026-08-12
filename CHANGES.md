@@ -34,6 +34,10 @@
 
 ### Fixed
 
+- `array` and `array_seq` encoders now require exactly the declared number of
+  elements. Short values no longer leave zero-filled phantom elements, and long
+  values are rejected before any bytes are written.
+
 - Codec operations now reject a `Param.env` created for another codec before
   reading its positional slots. This applies consistently to encode, decode,
   validation, and staged getters, including codecs whose parameter counts
