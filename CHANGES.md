@@ -39,6 +39,11 @@
 
 ### Fixed
 
+- `Codec.v` now reports a clear construction error when a byte-size product
+  `field * constant` has a simple `field <= bound` constraint whose maximum can
+  reach EverParse's `2^32` limit. Products without this conclusive shape remain
+  deferred to EverParse, avoiding speculative rejections.
+
 - `dune runtest` now diffs a package's committed `.3d` specs and `dune.inc`
   against freshly generated ones, so editing a codec without refreshing them
   fails with a promotable report instead of leaving a stale spec committed
