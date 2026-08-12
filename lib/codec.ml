@@ -3489,6 +3489,11 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
 let has_input_params (t : 'r t) =
   List.exists (fun (Param.Pack p) -> not p.Types.mutable_) t.param_handles
 
+let check_env_owner ~op t (env : Param.env) =
+  if env.codec_id <> t.id then
+    Fmt.invalid_arg "Codec.%s: env was not created by Codec.env for %S" op
+      t.name
+
 let require_env ~op t = function
   | None when not (has_input_params t) -> ()
   | None ->
@@ -3497,6 +3502,7 @@ let require_env ~op t = function
          Param.bind p N])."
         op t.name
   | Some env -> (
+      check_env_owner ~op t env;
       match unbound_params t env with
       | [] -> ()
       | missing ->
@@ -3609,8 +3615,9 @@ let to_struct t =
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
-let validate ?env (t : _ t) buf off =
-  let env_slots = Option.map (fun (e : Param.env) -> e.slots) env in
+let validate ?env:e (t : _ t) buf off =
+  require_env ~op:"validate" t e;
+  let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
   t.validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
@@ -3734,6 +3741,7 @@ let field_access (codec : _ t) name =
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
+  Option.iter (check_env_owner ~op:"get" codec) env;
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
   match List.assoc_opt f.name codec.field_actions with
@@ -3752,9 +3760,6 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            if e.codec_id <> codec.id then
-              Fmt.invalid_arg
-                "Codec.get: env was not created by Codec.env for %S" codec.name;
             let param_handles = codec.param_handles in
             let param_base = codec.param_base in
             ( (fun arr ->

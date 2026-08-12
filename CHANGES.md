@@ -39,6 +39,11 @@
 
 ### Fixed
 
+- Codec operations now reject a `Param.env` created for another codec before
+  reading its positional slots. This applies consistently to encode, decode,
+  validation, and staged getters, including codecs whose parameter counts
+  happen to match.
+
 - Casetype projection and `Param.bind` now translate unfittable `uint32`,
   `uint63`, and `uint` values into contextual `Invalid_argument` exceptions
   naming the case index or parameter, instead of leaking an Optint `Failure` on
