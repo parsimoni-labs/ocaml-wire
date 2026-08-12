@@ -2418,6 +2418,55 @@ let test_bitfield_on_non_bitfield () =
   | _ -> Alcotest.fail "expected error for non-bitfield"
   | exception Invalid_argument _ -> ()
 
+let expect_foreign_env ~op ~codec f =
+  match f () with
+  | _ -> Alcotest.failf "expected Invalid_argument from %s" op
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool) "names the operation" true (contains ~sub:op msg);
+      Alcotest.(check bool) "names the codec" true (contains ~sub:codec msg)
+
+let test_foreign_env_codec_operations () =
+  let p_a = Param.input "limit_a" uint8 in
+  let f_a = Field.v "v" uint8 in
+  let codec_a =
+    Codec.v "EnvA"
+      ~where:Expr.(Field.ref f_a <= Param.expr p_a)
+      Fun.id
+      Codec.[ f_a $ Fun.id ]
+  in
+  let p_b = Param.input "limit_b" uint8 in
+  let f_b = Field.v "v" uint8 in
+  let codec_b =
+    Codec.v "EnvB"
+      ~where:Expr.(Field.ref f_b <= Param.expr p_b)
+      Fun.id
+      Codec.[ f_b $ Fun.id ]
+  in
+  let env_b = Codec.env codec_b |> Param.bind p_b 0xff in
+  let buf = Bytes.of_string "\x01" in
+  expect_foreign_env ~op:"Codec.encode" ~codec:"EnvA" (fun () ->
+      Codec.encode ~env:env_b codec_a 1 buf 0);
+  expect_foreign_env ~op:"Codec.decode" ~codec:"EnvA" (fun () ->
+      Codec.decode ~env:env_b codec_a buf 0);
+  expect_foreign_env ~op:"Codec.validate" ~codec:"EnvA" (fun () ->
+      Codec.validate ~env:env_b codec_a buf 0);
+  let p_c = Param.input "limit_c" uint8 in
+  let p_d = Param.input "floor_d" uint8 in
+  let f_c = Field.v "v" uint8 in
+  let codec_c =
+    Codec.v "EnvC"
+      ~where:
+        Expr.(
+          Field.ref f_c <= Param.expr p_c && Field.ref f_c >= Param.expr p_d)
+      Fun.id
+      Codec.[ f_c $ Fun.id ]
+  in
+  let env_a = Codec.env codec_a |> Param.bind p_a 0xff in
+  expect_foreign_env ~op:"Codec.encode" ~codec:"EnvC" (fun () ->
+      Codec.encode ~env:env_a codec_c 1 buf 0);
+  expect_foreign_env ~op:"Codec.decode" ~codec:"EnvC" (fun () ->
+      Codec.decode ~env:env_a codec_c buf 0)
+
 let test_env_from_wrong_codec () =
   (* Using env from codec1 with get ~env on codec2 *)
   let out1 = Param.output "out_wrong" uint8 in
@@ -2433,12 +2482,8 @@ let test_env_from_wrong_codec () =
   let cf_v2 = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec2 = Codec.v "Wrong2" (fun v -> v) [ cf_v2 ] in
   let env1 = Codec.env codec1 in
-  (* Use env1 (from codec1) with codec2's get -- should not crash *)
-  let get_v2 = Staged.unstage (Codec.get ~env:env1 codec2 cf_v2) in
-  (* No action on cf_v2, so env is ignored -- should work fine *)
-  Alcotest.(check int)
-    "wrong env ignored" 0x42
-    (get_v2 (Bytes.of_string "\x42") 0)
+  expect_foreign_env ~op:"Codec.get" ~codec:"Wrong2" (fun () ->
+      Codec.get ~env:env1 codec2 cf_v2)
 
 let test_env_wrongcodec_with_action () =
   (* Using env from a different codec with an action field.
@@ -6167,6 +6212,8 @@ let suite =
         test_set_field_notin_codec;
       Alcotest.test_case "misuse: bitfield on non-bitfield" `Quick
         test_bitfield_on_non_bitfield;
+      Alcotest.test_case "misuse: foreign env codec operations" `Quick
+        test_foreign_env_codec_operations;
       Alcotest.test_case "misuse: env from wrong codec" `Quick
         test_env_from_wrong_codec;
       Alcotest.test_case "misuse: wrong env with action" `Quick

@@ -150,7 +150,8 @@ module Param : sig
 
   type env = Param.env
   (** Parameter environment. Create with {!Codec.env}, bind inputs with {!bind},
-      read outputs with {!get}. *)
+      read outputs with {!get}. An environment belongs to that codec and cannot
+      be used with another one. *)
 
   val bind : ('a, input) t -> 'a -> env -> env
   (** [bind p v env] returns an environment with input [p] set to [v].
@@ -1019,10 +1020,11 @@ module Codec : sig
       If [?env] is supplied, input params are read from it and output params are
       written back to it on success.
 
-      Raises [Invalid_argument] when the codec has input params and the env is
-      missing or leaves one unbound, the same precondition {!encode} enforces:
-      an unbound input param would resolve a parametric field size to 0 and
-      silently truncate the field. *)
+      Raises [Invalid_argument] when [?env] was created for a different codec,
+      or when the codec has input params and the env is missing or leaves one
+      unbound, the same precondition {!encode} enforces: an unbound input param
+      would resolve a parametric field size to 0 and silently truncate the
+      field. *)
 
   val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
@@ -1036,23 +1038,26 @@ module Codec : sig
       [?env] (built with [Codec.env c |> Param.bind p N]). The bound widths must
       match the field values in [r]; the encoder cross-checks them.
 
-      Raises [Invalid_argument] when the codec has parameters and no env is
-      supplied, when the env left any input param unbound (the error names it),
-      when the destination buffer is too short, or when a parametric byte
-      field's value length does not match its env-bound size. *)
+      Raises [Invalid_argument] when [?env] was created for a different codec,
+      when the codec has parameters and no env is supplied, when the env left
+      any input param unbound (the error names it), when the destination buffer
+      is too short, or when a parametric byte field's value length does not
+      match its env-bound size. *)
 
   val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
   (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
       without constructing a record and without firing actions. [?env] supplies
       bindings for any {!val:Param.input} referenced in those clauses.
 
-      Raises {!Validation_error} on failure. *)
+      Raises [Invalid_argument] when [?env] belongs to another codec or leaves
+      an input parameter unbound, and {!Validation_error} on failure. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
   (** Staged field reader. If the field has an [~action], the action fires on
-      every read. Pass [~env] to sync output parameters after each action.
-      Fields without actions have zero overhead regardless of [~env].
+      every read. Pass [~env] to sync output parameters after each action. An
+      environment created for another codec raises [Invalid_argument]. Fields
+      without actions have zero per-read overhead regardless of [~env].
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
