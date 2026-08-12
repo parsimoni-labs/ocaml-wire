@@ -119,6 +119,28 @@ let test_casetype_enum_tag_labels () =
     "no raw-integer case label" false
     (contains ~sub:"case 2:" output)
 
+let test_casetype_wide_index_error () =
+  let high = Wire.Private.UInt32.be (Bytes.of_string "\x80\x00\x00\x00") 0 in
+  let body =
+    casetype "WideIndex" uint32
+      [ case ~index:high empty ~inject:Fun.id ~project:Option.some ]
+  in
+  let render () =
+    to_3d
+      (module_ [ typedef (struct_ "WideIndexRecord" [ field "body" body ]) ])
+  in
+  if Sys.int_size > 32 then
+    Alcotest.(check bool)
+      "wide case index rendered" true
+      (contains ~sub:"2147483648" (render ()))
+  else
+    match render () with
+    | _ -> Alcotest.fail "expected an unfittable case-index error"
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          "names the case index" true
+          (contains ~sub:"case index" msg)
+
 let test_pretty_print () =
   let simple =
     struct_ "Simple" [ field "a" uint8; field "b" uint16be; field "c" uint32 ]
@@ -1393,6 +1415,8 @@ let suite =
       Alcotest.test_case "generation: casetype" `Quick test_casetype;
       Alcotest.test_case "generation: casetype enum-tag labels" `Quick
         test_casetype_enum_tag_labels;
+      Alcotest.test_case "generation: wide casetype index error" `Quick
+        test_casetype_wide_index_error;
       Alcotest.test_case "generation: if_then_else projects" `Quick
         test_if_then_else_projects;
       Alcotest.test_case "generation: pretty print" `Quick test_pretty_print;

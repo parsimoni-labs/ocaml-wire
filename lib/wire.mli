@@ -153,7 +153,10 @@ module Param : sig
       read outputs with {!get}. *)
 
   val bind : ('a, input) t -> 'a -> env -> env
-  (** [bind p v env] returns an environment with input [p] set to [v]. *)
+  (** [bind p v env] returns an environment with input [p] set to [v].
+
+      Raises [Invalid_argument] naming [p] if [v] cannot fit the platform's
+      native integer representation used by parameter environments. *)
 
   val bind_by_name : string -> int -> env -> env
   (** [bind_by_name name v env] binds the input parameter called [name] to the
@@ -787,7 +790,9 @@ val default :
 val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. The discriminator typ
     ['k] can be an integer, a string, or any other typ with decidable equality;
-    every case must supply an explicit [~index]. *)
+    every case must supply an explicit [~index]. Projecting an integer-tagged
+    casetype raises [Invalid_argument] naming the case index when it cannot fit
+    the platform's native integer representation. *)
 
 val size : 'a typ -> int option
 (** [size t] is the fixed wire size of a description, if known statically. *)
