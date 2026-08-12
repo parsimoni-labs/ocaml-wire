@@ -2860,14 +2860,18 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   (validate_arr, populate, validate)
 
-let collect_param_handles struct_fields where =
+let collect_param_handles codec_name struct_fields where =
   let seen = Hashtbl.create 4 in
   let handles = Stdlib.ref ([] : Param.packed list) in
   let visit (Param.Pack p as packed) =
-    if not (Hashtbl.mem seen p.name) then begin
-      Hashtbl.add seen p.name ();
-      handles := packed :: !handles
-    end
+    match Hashtbl.find_opt seen p.name with
+    | None ->
+        Hashtbl.add seen p.name packed;
+        handles := packed :: !handles
+    | Some (Param.Pack existing) ->
+        if not (Obj.repr p == Obj.repr existing) then
+          Fmt.invalid_arg "Codec.v %S: duplicate parameter name %S" codec_name
+            p.name
   in
   iter_param_refs_fields visit struct_fields where;
   List.rev !handles
@@ -3111,7 +3115,19 @@ let reject_certain_byte_size_mul name fields =
         f.field_typ)
     fields
 
+let reject_duplicate_field_names name fields =
+  let seen = Hashtbl.create (List.length fields) in
+  List.iter
+    (fun (Types.Field f) ->
+      match f.field_name with
+      | None -> ()
+      | Some field when Hashtbl.mem seen field ->
+          Fmt.invalid_arg "Codec.v %S: duplicate field name %S" name field
+      | Some field -> Hashtbl.add seen field ())
+    fields
+
 let reject_invalid_codec_shape name fields =
+  reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_nested_where name fields;
   reject_certain_byte_size_mul name fields
@@ -3134,7 +3150,7 @@ let seal : type r. (r, r) record -> r t =
   (* Collect and index params *)
   let struct_fields = List.rev r.fields_rev in
   reject_invalid_codec_shape r.name struct_fields;
-  let param_handles = collect_param_handles struct_fields r.where in
+  let param_handles = collect_param_handles r.name struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
@@ -3381,7 +3397,7 @@ and validator_of_struct (s : Types.struct_) : validator =
     | Static n -> Fixed n
     | Dynamic f -> Variable { min_size = acc.min_size; compute = f }
   in
-  let param_handles = collect_param_handles s.fields s.where in
+  let param_handles = collect_param_handles s.name s.fields s.where in
   let n_params = List.length param_handles in
   let param_base = acc.n_array_slots in
   fill_param_slots acc.param_slots param_base param_handles;
@@ -3609,13 +3625,13 @@ let encode ?env:e t v buf off =
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
 
-let collect_params (fields : Types.field list) where =
-  collect_param_handles fields where
+let collect_params name (fields : Types.field list) where =
+  collect_param_handles name fields where
   |> List.map (fun (Param.Pack p) ->
       { param_name = p.name; param_typ = p.packed_typ; mutable_ = p.mutable_ })
 
 let to_struct t =
-  let formals = collect_params t.struct_fields t.where in
+  let formals = collect_params t.name t.struct_fields t.where in
   match (formals, t.where) with
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
