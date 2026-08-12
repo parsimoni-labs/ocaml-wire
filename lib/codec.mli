@@ -59,7 +59,8 @@ val size_of_value : 'r t -> 'r -> int
     write. Computed from [v], not from a buffer: works for variable-size codecs
     whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
     buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
-    "remaining buffer space". *)
+    "remaining buffer space". Fixed-size byte arrays and slices contribute their
+    declared region size, including any zero-padding or truncation. *)
 
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)

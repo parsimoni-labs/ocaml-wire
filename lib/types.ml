@@ -2894,8 +2894,11 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Zeroterm -> String.length v + 1
   | Zeroterm_at_most { size = Int n } -> n
   | Zeroterm_at_most _ -> 0
+  | Byte_array { size = Int n } -> n
   | Byte_array _ -> String.length v
+  | Byte_array_where { size = Int n; _ } -> n
   | Byte_array_where _ -> String.length v
+  | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
   | Uint_var _ -> 0

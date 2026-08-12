@@ -1662,23 +1662,47 @@ let test_codec_bitfield_overflow_1bit () =
   Codec.encode codec 0 buf 0;
   Codec.encode codec 1 buf 0
 
-let test_encode_underrun_raises () =
-  (* byte_array ~size:n truncates a value longer than n at write time,
-     while size_of_value reports String.length v. Passing a 5-byte value
-     to a 3-byte field is the simplest underrun: the assertion must fire. *)
-  let codec =
-    Codec.v "Mismatch" Fun.id
-      Codec.[ Field.v "data" (byte_array ~size:(Wire.int 3)) $ Fun.id ]
+let test_fixed_byte_region_size_of_value () =
+  let check_string label typ cases =
+    let codec = Codec.v label Fun.id Codec.[ Field.v "data" typ $ Fun.id ] in
+    List.iter
+      (fun (case, value, expected) ->
+        Alcotest.(check int)
+          (case ^ " size") 3
+          (Codec.size_of_value codec value);
+        let buf = Bytes.create 3 in
+        Codec.encode codec value buf 0;
+        Alcotest.(check bytes) case (Bytes.of_string expected) buf)
+      cases
   in
-  let buf = Bytes.create 5 in
-  match Codec.encode codec "AAAAA" buf 0 with
-  | exception Invalid_argument m
-    when String.length m > 0
-         && contains ~sub:"writer wrote fewer bytes than promised" m ->
-      ()
-  | exception Invalid_argument m ->
-      Alcotest.failf "wrong Invalid_argument message: %s" m
-  | () -> Alcotest.fail "expected underrun assertion to fire"
+  let cases =
+    [
+      ("short", "A", "A\x00\x00");
+      ("exact", "ABC", "ABC");
+      ("long", "ABCDE", "ABC");
+    ]
+  in
+  check_string "FixedBytes" (byte_array ~size:(int 3)) cases;
+  check_string "FixedBytesWhere"
+    (byte_array_where ~size:(int 3) ~per_byte:(fun _ -> Expr.true_))
+    cases;
+  let codec =
+    Codec.v "FixedSlice" Fun.id
+      Codec.[ Field.v "data" (byte_slice ~size:(int 3)) $ Fun.id ]
+  in
+  List.iter
+    (fun (case, value, expected) ->
+      let bytes = Bytes.of_string value in
+      let slice =
+        Bytesrw.Bytes.Slice.make bytes ~first:0 ~length:(Bytes.length bytes)
+      in
+      Alcotest.(check int)
+        (case ^ " slice size") 3
+        (Codec.size_of_value codec slice);
+      let buf = Bytes.create 3 in
+      Codec.encode codec slice buf 0;
+      Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
+    cases
 
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
@@ -6298,8 +6322,8 @@ let suite =
         test_packed_bf_size;
       Alcotest.test_case "codec bitfield: size_of_value mapped bit" `Quick
         test_packed_mapped_bf_size;
-      Alcotest.test_case "encode: underrun raises" `Quick
-        test_encode_underrun_raises;
+      Alcotest.test_case "fixed byte regions: size_of_value" `Quick
+        test_fixed_byte_region_size_of_value;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;
