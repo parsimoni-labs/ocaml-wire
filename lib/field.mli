@@ -85,8 +85,9 @@ val repeat :
   size:int Types.expr ->
   'a Types.typ ->
   'a list t
-(** [repeat name ~size t] parses elements of type [t] until [size] bytes have
-    been consumed. *)
+(** [repeat name ~size t] parses elements of type [t] until exactly [size] bytes
+    have been consumed. Encoding rejects values whose encoded size differs from
+    the budget. *)
 
 val repeat_seq :
   string ->
@@ -98,7 +99,7 @@ val repeat_seq :
   size:int Types.expr ->
   'a Types.typ ->
   'seq t
-(** Repeat with a custom sequence builder. *)
+(** Repeat with a custom sequence builder and the same exact byte budget. *)
 
 val anon : 'a Types.typ -> 'a anon
 (** [anon typ] creates an anonymous (padding) field. *)

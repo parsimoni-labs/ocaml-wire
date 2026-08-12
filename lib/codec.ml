@@ -1824,6 +1824,9 @@ let repeat_raw_fixed : type elt seq.
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
     raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
+  let remainder = if esz > 0 then budget mod esz else budget in
+  if remainder <> 0 then
+    raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
@@ -1848,8 +1851,10 @@ let repeat_raw_variable : type elt seq.
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
-      let v = read_elem elem buf pos in
       let esz = elem_size_of elem buf pos in
+      if esz <= 0 || esz > remaining then
+        raise_eof ~at:pos ~expected:esz ~got:remaining;
+      let v = read_elem elem buf pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
   loop seq.empty start budget
@@ -1875,7 +1880,7 @@ let compile_repeat : type elt seq r.
     elt typ ->
     (elt, seq) seq_map ->
     (seq, r) compiled_field =
- fun ctx fld size_expr elem (Seq_map seq) ->
+ fun ctx fld size_expr elem seq ->
   (* Same dynamic-offset dispatch as [compile_var_bytes] / [compile_codec]:
      when a [Repeat] sits after a variable-size field, the running offset is
      [Dynamic] and is resolved at runtime rather than from a static offset. *)
@@ -1899,23 +1904,22 @@ let compile_repeat : type elt seq r.
     | _ -> assert false
   in
   let elem_size = field_wire_size elem in
-  let raw_reader =
-    repeat_raw_reader (Seq_map seq) elem ~elem_size ~off_fn ~size_fn
-  in
+  let raw_reader = repeat_raw_reader seq elem ~elem_size ~off_fn ~size_fn in
   let get = fld.get in
-  let step =
-    match elem_size with
-    | Some esz -> fun _buf _pos -> esz
-    | None -> fun buf pos -> elem_size_of elem buf pos
-  in
-  let raw_writer v buf _base write_off =
+  let raw_writer v buf base write_off =
     let items = get v in
+    let expected = size_fn buf base in
+    let sized_items =
+      Types.exact_repeat_elements seq ~expected
+        ~size_of:(Types.size_of_typ_value elem)
+        items
+    in
     let pos = Stdlib.ref write_off in
-    seq.iter
-      (fun item ->
+    List.iter
+      (fun (item, size) ->
         write_elem elem buf !pos item;
-        pos := !pos + step buf !pos)
-      items;
+        pos := !pos + size)
+      sized_items;
     !pos
   in
   {

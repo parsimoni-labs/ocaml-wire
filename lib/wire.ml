@@ -406,10 +406,13 @@ and parse_repeat_loop : type elt seq.
     seq * int =
  fun ~elem ~seq:(Seq_map s) buf off len ~budget ->
   let start = off in
+  if budget < 0 then raise_eof ~at:off ~expected:0 ~got:budget;
+  check_eof len (start + budget);
+  let region_end = start + budget in
   let rec loop acc off' =
-    if off' - start >= budget then (s.finish acc, off')
+    if off' = region_end then (s.finish acc, off')
     else
-      let v, off'' = parse_direct elem buf off' len in
+      let v, off'' = parse_direct elem buf off' region_end in
       loop (s.add acc v) off''
   in
   loop s.empty off
@@ -781,8 +784,12 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
   | Optional_or { present; inner; _ } ->
       if Eval.expr Eval.empty present then encode_into inner v enc
-  | Repeat { elem; seq = Seq_map seq; _ } ->
-      seq.iter (fun elem_v -> encode_into elem elem_v enc) v
+  | Repeat { size; elem; seq } ->
+      let expected = Eval.expr Eval.empty size in
+      Types.exact_repeat_elements seq ~expected
+        ~size_of:(Types.size_of_typ_value elem)
+        v
+      |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
   | Struct _ -> failwith "struct encoding: use Codec.encode"
   | Type_ref _ -> failwith "type_ref requires a type registry"

@@ -78,6 +78,15 @@ val exact_array_elements : ('a, 'seq) seq_map -> expected:int -> 'seq -> 'a list
 (** Materialise an array value after checking its declared element count.
     Internal helper shared by direct and compiled encoders. *)
 
+val exact_repeat_elements :
+  ('a, 'seq) seq_map ->
+  expected:int ->
+  size_of:('a -> int) ->
+  'seq ->
+  ('a * int) list
+(** Materialise and size a repeat value after checking its byte budget. Internal
+    helper shared by direct and compiled encoders. *)
+
 (** {1 Param handles} *)
 
 type param_input

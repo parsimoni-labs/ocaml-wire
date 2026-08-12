@@ -740,6 +740,29 @@ let test_encode_array_cardinality () =
   expect_direct_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
     3 4
 
+let expect_direct_repeat_encode_error label typ value =
+  match to_string typ value with
+  | _ -> Alcotest.failf "%s: expected a repeat byte-budget error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names repeat") true
+        (contains ~sub:"repeat" msg)
+
+let test_repeat_exact_budget_direct () =
+  let fixed = Field.typ (Field.repeat "items" ~size:(int 2) uint16be) in
+  expect_direct_repeat_encode_error "fixed underrun" fixed [];
+  expect_direct_repeat_encode_error "fixed overshoot" fixed [ 1; 2 ];
+  let fixed_remainder =
+    Field.typ (Field.repeat "items" ~size:(int 1) uint16be)
+  in
+  (match of_string fixed_remainder "\x01" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
+  let variable = Field.typ (Field.repeat "items" ~size:(int 1) zeroterm) in
+  match of_string variable "A\x00" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
+
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
   let encoded = to_string t "hello" in
@@ -1203,6 +1226,8 @@ let suite =
       Alcotest.test_case "encode: array" `Quick test_encode_array;
       Alcotest.test_case "encode: array cardinality" `Quick
         test_encode_array_cardinality;
+      Alcotest.test_case "repeat: exact byte budget" `Quick
+        test_repeat_exact_budget_direct;
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;

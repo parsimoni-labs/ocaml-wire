@@ -4377,6 +4377,45 @@ let test_repeat_encode () =
   Alcotest.(check int) "item1.tag" 0x02 (Bytes.get_uint8 buf 4);
   Alcotest.(check int) "item1.value" 0x0002 (Bytes.get_uint16_be buf 5)
 
+let expect_repeat_encode_error label codec value =
+  let buf = Bytes.make 8 '\x7f' in
+  match Codec.encode codec value buf 0 with
+  | () -> Alcotest.failf "%s: expected a repeat byte-budget error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names repeat") true
+        (contains ~sub:"repeat" msg)
+
+let test_repeat_exact_budget () =
+  let f_size = Field.v "size" uint8 in
+  let fixed =
+    Codec.v "RepeatFixedBudget"
+      (fun size items -> (size, items))
+      Codec.
+        [
+          f_size $ fst;
+          Field.repeat "items" ~size:(Field.ref f_size) uint16be $ snd;
+        ]
+  in
+  (match Codec.decode fixed (Bytes.of_string "\x01\xaa") 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
+  expect_repeat_encode_error "fixed underrun" fixed (6, [ 1 ]);
+  expect_repeat_encode_error "fixed overshoot" fixed (2, [ 1; 2 ]);
+  let f_var_size = Field.v "size" uint8 in
+  let variable =
+    Codec.v "RepeatVariableBudget"
+      (fun size items -> (size, items))
+      Codec.
+        [
+          f_var_size $ fst;
+          Field.repeat "items" ~size:(Field.ref f_var_size) zeroterm $ snd;
+        ]
+  in
+  match Codec.decode variable (Bytes.of_string "\x01A\x00") 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
+
 let test_repeat_roundtrip () =
   let items =
     [
@@ -6474,6 +6513,8 @@ let suite =
       Alcotest.test_case "repeat: decode multiple" `Quick
         test_repeat_decode_multiple;
       Alcotest.test_case "repeat: encode" `Quick test_repeat_encode;
+      Alcotest.test_case "repeat: exact byte budget" `Quick
+        test_repeat_exact_budget;
       Alcotest.test_case "repeat: roundtrip" `Quick test_repeat_roundtrip;
       Alcotest.test_case "repeat: primitive" `Quick test_repeat_primitive;
       Alcotest.test_case "repeat: size_of_value" `Quick

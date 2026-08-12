@@ -475,18 +475,28 @@ let seq_list : ('a, 'a list) seq_map =
       iter = List.iter;
     }
 
-let exact_array_elements (type a seq) (Seq_map s : (a, seq) seq_map) ~expected
-    (values : seq) =
-  let actual = Stdlib.ref 0 in
+let sequence_elements (type a seq) (Seq_map s : (a, seq) seq_map) (values : seq)
+    =
   let elements = Stdlib.ref [] in
-  s.iter
-    (fun value ->
-      incr actual;
-      elements := value :: !elements)
-    values;
-  if !actual <> expected then
-    Fmt.invalid_arg "Wire.array: expected %d elements, got %d" expected !actual;
+  s.iter (fun value -> elements := value :: !elements) values;
   List.rev !elements
+
+let exact_array_elements seq ~expected values =
+  let elements = sequence_elements seq values in
+  let actual = List.length elements in
+  if actual <> expected then
+    Fmt.invalid_arg "Wire.array: expected %d elements, got %d" expected actual;
+  elements
+
+let exact_repeat_elements seq ~expected ~size_of values =
+  let sized =
+    sequence_elements seq values
+    |> List.map (fun value -> (value, size_of value))
+  in
+  let actual = List.fold_left (fun total (_, size) -> total + size) 0 sized in
+  if actual <> expected then
+    Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
+  sized
 
 (* The 3D projection of [array]/[optional]/[optional_or]/[repeat] turns
    their length / predicate / byte budget into a [byte-size] suffix.
@@ -2904,6 +2914,9 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
   | Single_elem { size = Int n; _ } -> n
   | Single_elem _ -> 0
+  | Repeat { size = Int expected; elem; seq } ->
+      exact_repeat_elements seq ~expected ~size_of:(size_of_typ_value elem) v
+      |> List.fold_left (fun total (_, size) -> total + size) 0
   | Repeat { elem; seq = Seq_map s; _ } ->
       (* Sum the actual element sizes from the value, like [Array]. The byte
          budget ([size]) is only a literal when fixed; a dynamic budget left

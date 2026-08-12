@@ -39,6 +39,10 @@
 
 ### Fixed
 
+- `Field.repeat` now consumes and emits exactly its declared byte budget.
+  Fixed-width remainders, variable-width elements that cross the boundary, and
+  encode under/overshoots are rejected instead of being silently accepted.
+
 - `array` and `array_seq` encoders now require exactly the declared number of
   elements. Short values no longer leave zero-filled phantom elements, and long
   values are rejected before any bytes are written.
