@@ -1360,6 +1360,27 @@ let test_optional_length_prefixed_group_projects () =
       (Sys.file_exists (Filename.concat dir "ProjectedTransferSegment.c"))
   end
 
+(* A bare UINT64 field was once reported as failing EverParse extraction.
+   [generate_c] runs the whole pipeline (F* verification, then C extraction)
+   and raises if EverParse rejects the module, so this pins the shape rather
+   than only its rendering. *)
+let test_bare_uint64_projects () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let codec =
+      Codec.v "BareUint64"
+        (fun value -> value)
+        Codec.[ Field.v "value" uint64 $ Fun.id ]
+    in
+    let dir = Filename.temp_dir "wire_3d_bare_uint64" "" in
+    let schema = Everparse.project ~mode:`Ffi codec in
+    Wire_3d.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.generate_c ~outdir:dir [ schema ];
+    Alcotest.(check bool)
+      "C generated for bare uint64" true
+      (Sys.file_exists (Filename.concat dir "BareUint64.c"))
+  end
+
 (* A [nested ~size] / [nested_at_most] field projects through EverParse:
    byte-span and enum inners go through a synthesised wrapper struct, and scalar
    and sub-record inners render inline (rather than as an extern setter param
@@ -1467,6 +1488,7 @@ let suite =
         test_field_optional_byte_array;
       Alcotest.test_case "optional length-prefixed group projects" `Slow
         test_optional_length_prefixed_group_projects;
+      Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
