@@ -26,6 +26,11 @@
 
 ### Fixed
 
+- `dune runtest` now diffs a package's committed `.3d` specs and `dune.inc`
+  against freshly generated ones, so editing a codec without refreshing them
+  fails with a promotable report instead of leaving a stale spec committed
+  (#235, @samoht)
+
 - 32-bit bitfields are now exact on a narrow-int target: a field touching
   bit 31 of its base word used to decode and encode with that bit silently
   dropped there (#232, @samoht)

@@ -145,6 +145,18 @@ let test_generate_dune_standalone () =
     (has "%{dep:agree} corpus");
   Alcotest.(check bool) "corpus oracle" true (has "%{exe:gen.exe} corpus");
   Alcotest.(check bool)
+    "runtest regenerates the spec" true
+    (has "targets MyPkg.3d.gen");
+  Alcotest.(check bool)
+    "runtest diffs the committed spec" true
+    (has "(diff MyPkg.3d MyPkg.3d.gen)");
+  Alcotest.(check bool)
+    "runtest regenerates dune.inc" true
+    (has "targets dune.inc.gen");
+  Alcotest.(check bool)
+    "runtest diffs the committed dune.inc" true
+    (has "(diff dune.inc dune.inc.gen)");
+  Alcotest.(check bool)
     "generator invoked via exe macro, not ./gen.exe" false (has "./gen.exe");
   Alcotest.(check bool) "no shell action in the runtest" false (has "(system");
   Alcotest.(check bool)
@@ -1037,7 +1049,19 @@ let test_projection_filenames () =
     (contains_exact "%{env:BUILD_EVERPARSE=}");
   Alcotest.(check bool)
     "C rule never auto-regenerates" false
-    (contains_exact "mode fallback")
+    (contains_exact "mode fallback");
+  Alcotest.(check bool)
+    "runtest regenerates every .3d" true
+    (contains_exact "targets Rpmsg_endpoint_info.3d.gen");
+  Alcotest.(check bool)
+    "runtest diffs every committed .3d" true
+    (contains_exact "(diff Rpmsg_endpoint_info.3d Rpmsg_endpoint_info.3d.gen)");
+  Alcotest.(check bool)
+    "runtest regenerates dune.inc" true
+    (contains_exact "targets dune.inc.gen");
+  Alcotest.(check bool)
+    "runtest diffs the committed dune.inc" true
+    (contains_exact "(diff dune.inc dune.inc.gen)")
 
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 

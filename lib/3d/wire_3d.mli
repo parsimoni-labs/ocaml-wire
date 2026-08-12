@@ -64,7 +64,10 @@ val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 val generate_dune :
   outdir:string -> package:string -> Wire.Everparse.t list -> unit
 (** [generate_dune ~outdir ~package schemas] writes [dune.inc] listing the
-    build, runtest, and install rules for the generated C artifacts. *)
+    build, runtest, and install rules for the generated C artifacts. The
+    [runtest] rules regenerate every committed [.3d] file and [dune.inc] into
+    [.gen] targets and diff them, so source changes cannot leave those hermetic
+    artifacts stale. *)
 
 val run_everparse :
   ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
@@ -187,8 +190,10 @@ val generate_dune_standalone :
     compile it to [<Name>.c], a rule that builds the validator into an installed
     [lib<name>.a] archive, a [runtest] rule that runs the differential
     self-check (see {!generate_corpus} / {!generate_agree}), and an install
-    stanza (under opam [package]) for the spec, parser, and archive. [name]
-    defaults to [package]; see {!generate_standalone}.
+    stanza (under opam [package]) for the spec, parser, and archive. The
+    [runtest] rules also regenerate the committed [.3d] and [dune.inc] into
+    [.gen] targets and diff them. [name] defaults to [package]; see
+    {!generate_standalone}.
 
     The [c/] archive builds and installs in every dune context through that
     context's own toolchain ([%{ocaml-config:c_compiler}], the [ocaml-config]
@@ -254,6 +259,7 @@ val main :
     - [3d] writes the [.3d] file(s)
     - [c] produces the C parser(s)
     - [dune] generates [dune.inc] with build rules, test, and install stanzas
+    - [3d-gen] / [dune-gen] write the corresponding [.gen] drift-check targets
     - otherwise runs the full pipeline.
 
     [mode] is mandatory, so every [gen.ml] states what it emits. With

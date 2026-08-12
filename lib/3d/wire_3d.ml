@@ -648,11 +648,34 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
+let copy_file ~src ~dst =
+  let contents = In_channel.with_open_bin src In_channel.input_all in
+  Out_channel.with_open_bin dst (fun oc ->
+      Out_channel.output_string oc contents)
+
 let rm_rf dir =
   (try Sys.readdir dir with Sys_error _ -> [||])
   |> Array.iter (fun f ->
       try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
   try Sys.rmdir dir with Sys_error _ -> ()
+
+(* Regenerate into a scratch directory through the same writer the committed
+   [.3d] came from, so the drift check compares against the real generator
+   rather than against a second copy of it that could itself drift. *)
+let generate_3d_check ~outdir schemas =
+  ensure_dir outdir;
+  let tmpdir = Filename.temp_dir "wire_3d_check" "" in
+  Fun.protect
+    ~finally:(fun () -> rm_rf tmpdir)
+    (fun () ->
+      write_3d ~outdir:tmpdir schemas;
+      List.iter
+        (fun s ->
+          let file = Wire.Everparse.filename s in
+          copy_file
+            ~src:(Filename.concat tmpdir file)
+            ~dst:(Filename.concat outdir (file ^ ".gen")))
+        schemas)
 
 let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
 
@@ -810,6 +833,28 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
     (String.concat " " (c_files @ ctx_files))
     (String.concat " " three_d_files)
 
+(* One [runtest] rule per file rather than one [progn] over all of them: a
+   [progn] stops at the first mismatch, so a single pass would report and offer
+   to promote only the first drifted spec. *)
+let emit_drift_check_rules ppf three_d_files =
+  let generated = List.map (fun f -> f ^ ".gen") three_d_files in
+  let pr fmt = Fmt.pf ppf fmt in
+  pr "(rule\n (targets %s)\n (action\n  (run %%{exe:gen.exe} 3d-gen)))\n\n"
+    (String.concat " " generated);
+  List.iter
+    (fun f ->
+      pr "(rule\n (alias runtest)\n (action\n  (diff %s %s.gen)))\n\n" f f)
+    three_d_files;
+  pr
+    "(rule\n\
+    \ (targets dune.inc.gen)\n\
+    \ (action\n\
+    \  (run %%{exe:gen.exe} dune-gen)))\n\n\
+     (rule\n\
+    \ (alias runtest)\n\
+    \ (action\n\
+    \  (diff dune.inc dune.inc.gen)))\n\n"
+
 let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
   Fmt.pf ppf
     "(rule\n\
@@ -835,8 +880,8 @@ let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files =
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune ~outdir ~package schemas =
-  let oc = open_out (Filename.concat outdir "dune.inc") in
+let generate_dune_file ~filename ~outdir ~package schemas =
+  let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
   let names = List.map file_base schemas in
   let c_files = List.concat_map (fun n -> [ n ^ ".h"; n ^ ".c" ]) names in
@@ -851,10 +896,14 @@ let generate_dune ~outdir ~package schemas =
   in
   let c_srcs = List.map (fun n -> n ^ ".c") names @ fields_srcs in
   emit_gen_rules ppf three_d_files c_files ctx_files;
+  emit_drift_check_rules ppf three_d_files;
   emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs;
   emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files;
   Format.pp_print_flush ppf ();
   close_out oc
+
+let generate_dune ~outdir ~package schemas =
+  generate_dune_file ~filename:"dune.inc" ~outdir ~package schemas
 
 (* A codec awaiting projection. [main] and the standalone helpers take these
    rather than an already-projected [Wire.Everparse.t] so the caller never has
@@ -1131,6 +1180,17 @@ let generate_3d_standalone ?name ~outdir ~package codecs =
     ~name:(standalone_base ?name ~package ())
     (List.map (fun (Pack c) -> project ~mode:`Standalone c) codecs)
 
+let generate_3d_standalone_check ?name ~outdir ~package codecs =
+  let tmpdir = Filename.temp_dir "wire_3d_check" "" in
+  Fun.protect
+    ~finally:(fun () -> rm_rf tmpdir)
+    (fun () ->
+      generate_3d_standalone ?name ~outdir:tmpdir ~package codecs;
+      let file = standalone_base ?name ~package () ^ ".3d" in
+      copy_file
+        ~src:(Filename.concat tmpdir file)
+        ~dst:(Filename.concat outdir (file ^ ".gen")))
+
 let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
   if has_3d_exe () then
@@ -1343,7 +1403,7 @@ let emit_standalone_install ppf ~package ~three_d ~archive ~public_header =
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune_standalone ?name ~outdir ~package codecs =
+let generate_dune_standalone_file ~filename ?name ~outdir ~package codecs =
   let base = standalone_base ?name ~package () in
   let three_d = base ^ ".3d" in
   let c_files =
@@ -1351,14 +1411,19 @@ let generate_dune_standalone ?name ~outdir ~package codecs =
   in
   let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
   let wrappers = wrapper_symbols base codecs in
-  let oc = open_out (Filename.concat outdir "dune.inc") in
+  let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
   emit_standalone_gen_rules ppf ~three_d ~c_files;
+  emit_drift_check_rules ppf [ three_d ];
   emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers;
   emit_standalone_install ppf ~package ~three_d ~archive
     ~public_header:(base ^ "Wrapper.h");
   Format.pp_print_flush ppf ();
   close_out oc
+
+let generate_dune_standalone ?name ~outdir ~package codecs =
+  generate_dune_standalone_file ~filename:"dune.inc" ?name ~outdir ~package
+    codecs
 
 let main ?name ~mode ~package codecs =
   let argv = Array.to_list Sys.argv in
@@ -1367,15 +1432,24 @@ let main ?name ~mode ~package codecs =
       let schemas = List.map (fun (Pack c) -> project ~mode:`Ffi c) codecs in
       match argv with
       | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
+      | [ _; "3d-gen" ] -> generate_3d_check ~outdir:"." schemas
       | [ _; "c" ] -> generate_c ~outdir:"." schemas
       | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
+      | [ _; "dune-gen" ] ->
+          generate_dune_file ~filename:"dune.inc.gen" ~outdir:"." ~package
+            schemas
       | _ -> run ~outdir:"." schemas)
   | `Standalone -> (
       match argv with
       | [ _; "3d" ] -> generate_3d_standalone ?name ~outdir:"." ~package codecs
+      | [ _; "3d-gen" ] ->
+          generate_3d_standalone_check ?name ~outdir:"." ~package codecs
       | [ _; "c" ] -> generate_c_standalone ?name ~outdir:"." ~package ()
       | [ _; "agree" ] -> generate_agree ?name ~outdir:"." ~package codecs
       | [ _; "dune" ] ->
           generate_dune_standalone ?name ~outdir:"." ~package codecs
+      | [ _; "dune-gen" ] ->
+          generate_dune_standalone_file ~filename:"dune.inc.gen" ?name
+            ~outdir:"." ~package codecs
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)
