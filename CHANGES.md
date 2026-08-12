@@ -2,6 +2,10 @@
 
 ### Added
 
+- A bare `uint64` field now has end-to-end coverage through EverParse C
+  generation, so a regression in that projection fails the test suite
+  (#236, @samoht)
+
 - `Field.optional` over a sub-codec now documents how to make a whole field
   group conditional, keeping the group's byte-length prefix and dependent
   `Field.repeat` local to the group while later fields stay in the parent
