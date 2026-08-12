@@ -1,6 +1,6 @@
 /*++ Ethernet II (DIX) frame header; IEEE 802.3 --*/
 entrypoint
-typedef struct _Ethernet
+typedef struct WireEthernet
 {
    UINT8 DstMAC[:byte-size 6];
    UINT8 SrcMAC[:byte-size 6];
@@ -10,7 +10,7 @@ typedef struct _Ethernet
 
 /*++ IPv4 header, RFC 791 section 3.1 --*/
 entrypoint
-typedef struct _IPv4
+typedef struct WireIPv4
 {
    /* RFC 791 3.1: header length in 32-bit words */
    UINT8 IHL : 4;
@@ -43,7 +43,7 @@ typedef struct _IPv4
 
 /*++ TCP header, RFC 9293 section 3.1 --*/
 entrypoint
-typedef struct _TCP
+typedef struct WireTCP
 {
    UINT16BE SrcPort;
    UINT16BE DstPort;
@@ -67,7 +67,7 @@ typedef struct _TCP
 
 /*++ UDP header, RFC 768 --*/
 entrypoint
-typedef struct _UDP
+typedef struct WireUDP
 {
    /* RFC 768: source port */
    UINT16BE SrcPort;

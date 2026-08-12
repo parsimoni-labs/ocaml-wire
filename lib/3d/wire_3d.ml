@@ -121,11 +121,9 @@ let read_extern_names ~outdir s =
   close_in ic;
   List.rev !names
 
-(* EverParse's top-level validator function follows its own normalization
-   rule (different from extern callbacks: it preserves underscores when the
-   name doesn't start with 2+ uppercase, strips them when it does). Rather
-   than duplicate EverParse's logic, extract the actual name from the
-   generated [<Name>.h]: [uint64_t <Name>Validate<Name>(...)]. *)
+(* EverParse's top-level validator function follows its own normalization rule
+   and includes the 3D struct tag after [Validate]. Rather than duplicate that
+   logic, extract the complete function name from the generated [<Name>.h]. *)
 let read_validate_name ~outdir s =
   let path = Filename.concat outdir (file_base s ^ ".h") in
   let ic = open_in path in
@@ -138,13 +136,10 @@ let read_validate_name ~outdir s =
     || (c >= '0' && c <= '9')
     || c = '_'
   in
-  (* EverParse declares the validator as [<Name>Validate<Name>(...)]. Find the
-     [Validate] keyword and return the C identifier immediately before it -- the
-     base [<Name>]. Scanning every position (not just the first 'V') lets the
-     name itself contain a 'V' (e.g. "VeritySuperblock"); anchoring on the
-     identifier before [Validate] also drops a leading return type should
-     EverParse ever emit it on the same line. *)
-  let base_before_validate line =
+  (* Find [Validate] inside the declaration and return its complete surrounding
+     C identifier. Scanning every position lets the module name itself contain a
+     [V]; the identifier boundaries also discard the return type and arguments. *)
+  let identifier_containing_validate line =
     let len = String.length line in
     let rec scan i =
       if i + nlen > len then None
@@ -154,7 +149,11 @@ let read_validate_name ~outdir s =
         while !j > 0 && is_ident line.[!j - 1] do
           decr j
         done;
-        Some (String.sub line !j (i - !j))
+        let k = ref (i + nlen) in
+        while !k < len && is_ident line.[!k] do
+          incr k
+        done;
+        Some (String.sub line !j (!k - !j))
       end
       else scan (i + 1)
     in
@@ -163,7 +162,7 @@ let read_validate_name ~outdir s =
   (try
      while !found = None do
        let line = String.trim (input_line ic) in
-       found := base_before_validate line
+       found := identifier_containing_validate line
      done
    with End_of_file -> ());
   close_in ic;
@@ -474,7 +473,7 @@ let fields_c_files schemas =
       else None)
     schemas
 
-(* EverParse's [<Base>Check<Codec>] wrapper returns TRUE on any successful
+(* EverParse's [<Base>CheckWire<Codec>] wrapper returns TRUE on any successful
    validator result, but a success result is the consumed position: a valid
    record followed by trailing bytes still returns TRUE, making the wrapper a
    prefix recognizer rather than a validator. Wire's contract is whole-buffer
@@ -566,14 +565,14 @@ let parse_3d ?(batch = false) ~outdir file =
     in
     Error (if msg = "" then Fmt.str "exit %d" ret else msg)
 
-let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
+let emit_sanity_check ppf ~name ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   (* Sanity: the OCaml codec's wire_size must match what the EverParse
      validator consumes. A mismatch means the .3d projection of the codec
      packs to a different size than the codec declares -- almost always a
      bug in the codec's bitfield declarations. Later checks are meaningless
      if this fails, so abort the whole test binary with a clear message. *)
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
     ctx_arg wire_size;
   pr "    if (!EverParseIsSuccess(r) || r != %d) {\n" wire_size;
   pr "      fprintf(stderr,\n";
@@ -585,9 +584,9 @@ let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
   pr "      return 2;\n";
   pr "    }\n"
 
-let emit_truncation_checks ppf ~ep ~ctx_arg wire_size =
+let emit_truncation_checks ppf ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
     ctx_arg (wire_size * 2);
   pr "    CHECK(\"larger buffer validates\", EverParseIsSuccess(r));\n";
   pr "    CHECK(\"position is %d not %d\", r == %d);\n" wire_size
@@ -595,38 +594,34 @@ let emit_truncation_checks ppf ~ep ~ctx_arg wire_size =
   pr "\n";
   pr "    for (uint64_t len = 0; len < %d; len++) {\n" wire_size;
   pr "      error_count = 0;\n";
-  pr "      r = %sValidate%s(%sNULL, counting_error_handler, buf, len, 0);\n" ep
-    ep ctx_arg;
+  pr "      r = %s(%sNULL, counting_error_handler, buf, len, 0);\n" validator
+    ctx_arg;
   pr "      CHECK(\"truncated to len fails\", EverParseIsError(r));\n";
   pr "    }\n";
   pr "\n";
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, 0, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, 0, 0);\n" validator
     ctx_arg;
   pr "    CHECK(\"empty input fails\", EverParseIsError(r));\n"
 
-let emit_random_checks ppf ~ep ~ctx_arg wire_size =
+let emit_random_checks ppf ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   pr "    srand(42);\n";
   pr "    for (int i = 0; i < 1000; i++) {\n";
   pr "      for (int j = 0; j < %d; j++)\n" wire_size;
   pr "        buf[j] = (uint8_t)(rand() & 0xff);\n";
-  pr "      r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep
-    ep ctx_arg wire_size;
+  pr "      r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
+    ctx_arg wire_size;
   pr "      CHECK(\"random buffer validates\", EverParseIsSuccess(r));\n";
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n"
 
-let emit_schema_test ?outdir ppf s wire_size =
+let emit_schema_test ~outdir ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   (* Read the validator name straight out of EverParse's generated [.h]
      -- the one authoritative source. EverParse applies its own naming
      rules (different for the top-level Validate function vs. the extern
      callbacks); any attempt to re-implement them here has drifted before. *)
-  let ep =
-    match outdir with
-    | Some dir -> read_validate_name ~outdir:dir s
-    | None -> file_base s
-  in
+  let validator = read_validate_name ~outdir s in
   let lower = String.lowercase_ascii s.name in
   let uses_ctx = Wire.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
@@ -638,13 +633,13 @@ let emit_schema_test ?outdir ppf s wire_size =
   if uses_ctx then pr "    %sFields ctx = {0};\n" (c_ident s);
   pr "\n";
   pr "    memset(buf, 0, %d);\n" wire_size;
-  emit_sanity_check ppf ~name:s.name ~ep ~ctx_arg wire_size;
+  emit_sanity_check ppf ~name:s.name ~validator ~ctx_arg wire_size;
   pr "    CHECK(\"zero buffer validates\", EverParseIsSuccess(r));\n";
   pr "    CHECK(\"position advanced to %d\", r == %d);\n" wire_size wire_size;
   pr "\n";
-  emit_truncation_checks ppf ~ep ~ctx_arg wire_size;
+  emit_truncation_checks ppf ~validator ~ctx_arg wire_size;
   pr "\n";
-  emit_random_checks ppf ~ep ~ctx_arg wire_size;
+  emit_random_checks ppf ~validator ~ctx_arg wire_size;
   pr "\n";
   if uses_ctx then pr "    (void) ctx;\n";
   pr "    printf(\"%s: %%d passed, %%d failed\\n\", pass, fail);\n" lower;
@@ -1031,7 +1026,7 @@ let hex_of_bytes b =
 (* The accept/reject decision the validator must reproduce: the OCaml codec
    decodes (structure plus constraints), validates (constraints and
    where-clauses), and the record spans the whole buffer -- the hardened
-   [<Base>Check<Codec>] wrapper rejects trailing bytes (see [harden_wrapper]),
+   [<Base>CheckWire<Codec>] wrapper rejects trailing bytes (see [harden_wrapper]),
    so the oracle must too. *)
 let codec_accepts ?env c buf =
   match Wire.Codec.decode ?env c buf 0 with
@@ -1218,9 +1213,19 @@ let emit_agree_main ppf =
   pr "  return mismatch == 0 ? 0 : 1;";
   pr "}"
 
-(* EverParse names each entrypoint wrapper [<Base>Check<Codec>] and gives it the
-   input parameters before the trailing [base, len], so both the helper name and
-   its parameter C types follow from the codec alone. Deriving them here keeps
+(* The 3D struct tag [pp_struct] emits, which is what EverParse mangles into the
+   entrypoint name. A raw-module schema has no source struct to read it from, so
+   say so rather than guess a symbol that would only fail at link time. *)
+let schema_entrypoint_name s =
+  match s.source with
+  | Some source -> "Wire" ^ Raw.struct_name source
+  | None ->
+      Fmt.failwith "%s: raw-module schema has no entrypoint struct tag" s.name
+
+(* EverParse names each entrypoint wrapper [<Base>CheckWire<Codec>] and gives
+   it the input parameters before the trailing [base, len], so both the helper
+   name and its parameter C types follow from the codec alone. Deriving them
+   here keeps
    [agree.c] pure OCaml (no reading of the generated [<Base>Wrapper.h]); a wrong
    name would surface as a link error when the differential test compiles
    [agree.c] against the real wrapper. *)
@@ -1239,7 +1244,9 @@ let generate_agree ?name ~outdir ~package codecs =
            [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
            rather than gluing pre-normalized parts: only the whole-string
            [pascal_case] gets the casing right for names like [TPM2B -> Tpm2b]. *)
-        (s.name, pascal_case (base ^ "_check_" ^ s.name), ptypes))
+        ( s.name,
+          pascal_case (base ^ "_check_" ^ schema_entrypoint_name s),
+          ptypes ))
       codecs
   in
   let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
@@ -1341,13 +1348,15 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
     (String.concat " " c_files)
     provenance three_d
 
-(* The C symbols a standalone archive exports: the [<Base>Check<Codec>] wrapper
-   for each codec, named exactly as EverParse names it (and as [agree.c] links
-   it, see [generate_agree]), so the export allowlist matches the real symbol. *)
+(* The C symbols a standalone archive exports: the [<Base>CheckWire<Codec>]
+   wrapper for each codec, named exactly as EverParse names it (and as
+   [agree.c] links it, see [generate_agree]), so the export allowlist matches
+   the real symbol. *)
 let wrapper_symbols base codecs =
   List.map
     (fun (Pack c) ->
-      pascal_case (base ^ "_check_" ^ (project ~mode:`Standalone c).name))
+      let s = project ~mode:`Standalone c in
+      pascal_case (base ^ "_check_" ^ schema_entrypoint_name s))
     codecs
 
 (* Post-compile steps that fold the compiled objects into one archive member
@@ -1413,7 +1422,7 @@ let emit_standalone_check_rules ppf ~base ~archive =
 (* Build the validator into an archive, installed with the package, so consumers
    get a ready-to-link library and a downstream build fails loudly if the spec
    stops projecting to compilable C. The archive exports only the checked
-   [<Base>Check<Codec>] wrappers and localizes the raw validators.
+   [<Base>CheckWire<Codec>] wrappers and localizes the raw validators.
 
    The build runs in every context through that context's own toolchain, so a
    cross build produces a target archive: [CC] is the context C compiler
@@ -1467,10 +1476,11 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
    EverParse-emitted preamble bounds a read as [N <= InputLength - StartPosition]
    with no prior [StartPosition <= InputLength] check, so a direct C caller
    passing [StartPosition > InputLength] underflows the span (unsigned) and reads
-   out of bounds. The generated wrapper [<Base>Check<Codec>(base, len)] always
-   validates from position 0 and is the safe public C API; the raw validators
-   stay build-internal, linked into the archive but not shipped as a header.
-   [<Base>Wrapper.h] does not include [<Base>.h], so this compiles standalone. *)
+   out of bounds. The generated wrapper [<Base>CheckWire<Codec>(base, len)]
+   always validates from position 0 and is the safe public C API; the raw
+   validators stay build-internal, linked into the archive but not shipped as a
+   header. [<Base>Wrapper.h] does not include [<Base>.h], so this compiles
+   standalone. *)
 let emit_standalone_install ppf ~package ~three_d ~archive ~public_header
     ~provenance =
   let pr fmt = Fmt.pf ppf fmt in

@@ -152,10 +152,10 @@ val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
     files to produce C parsers and generates [test.c].
 
-    The EverParse-emitted [<Name>Check<Codec>] wrapper is hardened after
+    The EverParse-emitted [<Name>CheckWire<Codec>] wrapper is hardened after
     generation: it returns [FALSE] unless the validator consumed the whole
     buffer, so a valid record followed by trailing bytes is rejected. The raw
-    [<Name>Validate<Codec>] function keeps EverParse's prefix semantics and
+    [<Name>ValidateWire<Codec>] function keeps EverParse's prefix semantics and
     returns the consumed position.
 
     If [quiet] is [true] (the default), EverParse output is suppressed. If
@@ -190,9 +190,9 @@ val generate_standalone :
     single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
     is [name] when given, else [package], normalised to a CamelCase identifier
     (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
-    generated [<Name>Check<Codec>] wrappers validate the whole buffer, rejecting
-    trailing bytes (see {!generate_c}). Only the checked wrapper header
-    [<Name>Wrapper.h] is installed as the public C API; the raw
+    generated [<Name>CheckWire<Codec>] wrappers validate the whole buffer,
+    rejecting trailing bytes (see {!generate_c}). Only the checked wrapper
+    header [<Name>Wrapper.h] is installed as the public C API; the raw
     [<Name>Validate*] entrypoints (which take an unguarded [StartPosition]) stay
     build-internal, linked into the archive but not shipped as a header. *)
 
@@ -217,10 +217,10 @@ val generate_dune_standalone :
     which runs a built validator on the build machine. *)
 
 val wrapper_symbols : string -> packed list -> string list
-(** [wrapper_symbols base codecs] is the [<Base>Check<Codec>] wrapper C symbol
-    for each codec, computed exactly as EverParse names them. These are the only
-    symbols a standalone archive exports; the raw [<Base>Validate*] validators
-    are localized (see {!archive_link_steps}). *)
+(** [wrapper_symbols base codecs] is the [<Base>CheckWire<Codec>] wrapper C
+    symbol for each codec, computed exactly as EverParse names them. These are
+    the only symbols a standalone archive exports; the raw [<Base>Validate*]
+    validators are localized (see {!archive_link_steps}). *)
 
 val archive_link_steps :
   macos:bool ->
@@ -258,7 +258,7 @@ val generate_agree :
     [outdir]: a C program that replays a {!generate_corpus} corpus through the
     EverParse-generated validators and exits nonzero on any input where the
     validator's accept/reject decision differs from the recorded verdict. It
-    reads the [<Name>Check<Codec>] helper names from the generated
+    reads the [<Name>CheckWire<Codec>] helper names from the generated
     [<Name>Wrapper.h], so {!generate_c_standalone} (or [3d.exe]) must have run
     first. *)
 
