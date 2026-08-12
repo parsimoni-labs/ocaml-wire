@@ -69,33 +69,13 @@ let check_typ name typ =
     Fmt.invalid_arg "Param.%s: only integer-representable types are supported"
       name
 
-(* A per-domain backing ref for a handle's [cell]. The handle is created once
-   and shared across domains, so a plain [ref 0] would let concurrent
-   encode/decode of the same parametric codec overwrite each other's value;
-   [Domain.DLS] gives each domain its own ref, still reused within the domain. *)
-let domain_local_cell () =
-  let key = Domain.DLS.new_key (fun () -> ref 0) in
-  fun () -> Domain.DLS.get key
-
 let input name typ =
   check_typ "input" typ;
-  {
-    Types.name;
-    typ;
-    packed_typ = Types.Pack_typ typ;
-    mutable_ = false;
-    cell = domain_local_cell ();
-  }
+  { Types.name; typ; packed_typ = Types.Pack_typ typ; mutable_ = false }
 
 let output name typ =
   check_typ "output" typ;
-  {
-    Types.name;
-    typ;
-    packed_typ = Types.Pack_typ typ;
-    mutable_ = true;
-    cell = domain_local_cell ();
-  }
+  { Types.name; typ; packed_typ = Types.Pack_typ typ; mutable_ = true }
 
 let decl (t : ('a, 'k) t) : Types.param =
   { param_name = t.name; param_typ = t.packed_typ; mutable_ = t.mutable_ }
@@ -133,7 +113,6 @@ let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
     slots.(i) <- iv;
     bound.(i) <- true
   end;
-  p.cell () := iv;
   { env with Types.slots; bound }
 
 let bind_by_name name (iv : int) (env : env) : env =
@@ -149,6 +128,9 @@ let bind_by_name name (iv : int) (env : env) : env =
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
   let i = env_idx env p.Types.name in
-  if i < 0 then of_int p.typ !(p.cell ()) else of_int p.typ env.slots.(i)
+  if i < 0 then
+    Fmt.invalid_arg
+      "Param.get: parameter %S does not belong to this environment" p.Types.name
+  else of_int p.typ env.slots.(i)
 
 type packed = Pack : ('a, 'k) t -> packed
