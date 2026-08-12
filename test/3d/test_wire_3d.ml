@@ -185,6 +185,9 @@ let test_generate_dune_standalone () =
     "installs under the package" true (has "(package my-pkg)");
   Alcotest.(check bool) "builds a validator archive" true (has "libmypkg.a");
   Alcotest.(check bool)
+    "exports the wrapper derived from the struct tag" true
+    (has "MyPkgCheckWirePkt");
+  Alcotest.(check bool)
     "runtest runs the differential check" true
     (has "%{dep:agree} corpus");
   Alcotest.(check bool) "corpus oracle" true (has "%{exe:gen.exe} corpus");
@@ -415,7 +418,7 @@ let test_doc_differential_no_params () =
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 (* The installed standalone archive must export only the checked
-   [<Base>Check<Codec>] wrappers, not the raw [<Base>Validate*] entry points
+   [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
    whose EverParse-emitted preamble underflows on [StartPosition > InputLength].
    Build the archive exactly as the generated dune rule does for this platform
    (via {!Wire_3d.archive_link_steps}) and assert [nm] shows no global [Validate]

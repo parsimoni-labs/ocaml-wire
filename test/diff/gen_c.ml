@@ -170,7 +170,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
         List.filter (fun p -> not (param_is_mutable p)) params
       in
       let output_params = List.filter (fun p -> param_is_mutable p) params in
-      (* Distinct from EverParse's generated [<Name>Check<Name>], which for an
+      (* Distinct from EverParse's generated [<Name>CheckWire<Name>], which for an
          output-parameter codec takes an extra out-pointer and would otherwise
          collide with this hand-rolled accept/reject wrapper. *)
       pr "BOOLEAN %s_diff_check(uint8_t *base, uint32_t len) {\n" name;

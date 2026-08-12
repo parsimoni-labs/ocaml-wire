@@ -13,6 +13,10 @@
 
 ### Changed
 
+- Generated `.3d` C struct tags are now named `Wire<Name>` rather than
+  `_<Name>`. Public typedef names are unchanged, and standalone entrypoints
+  follow as `<Base>CheckWire<Name>` (#235, @samoht)
+
 - `uint` now decodes to `Optint.Int63.t` rather than a native `int`, like
   `uint63` before it: a 7-byte value needs 56 bits, which does not fit an
   int on a narrow-int target (js_of_ocaml, wasm_of_ocaml) and used to

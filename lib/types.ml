@@ -1467,6 +1467,7 @@ let reserved_3d =
 let escape_3d name =
   if Reserved_3d.mem name reserved_3d then name ^ "_" else name
 
+let struct_tag_name (s : struct_) = "Wire" ^ escape_3d s.name
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
 
 let pp_bitfield_base ppf = function
@@ -2615,6 +2616,7 @@ let guard_subtraction_sizes fields =
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
   let name = escape_3d s.name in
+  let tag = struct_tag_name s in
   let where, fields = lower_where_to_field_constraint s.where s.fields in
   let fields = guard_subtraction_sizes fields in
   let widenable =
@@ -2625,7 +2627,7 @@ let pp_struct ppf (s : struct_) =
         | _ -> None)
       fields
   in
-  Fmt.pf ppf "typedef struct _%s%a" name pp_params s.params;
+  Fmt.pf ppf "typedef struct %s%a" tag pp_params s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
   List.iter (pp_field widenable ppf) fields;
@@ -2677,9 +2679,10 @@ let pp_decl ppf = function
           Fmt.pf ppf "@,")
         doc;
       if extern_ then
-        (* extern typedef struct _Name Name *)
+        (* The tag occupies C's distinct tag namespace; a readable [Wire]
+           prefix keeps it separate from the public typedef name. *)
         let n = escape_3d st.name in
-        Fmt.pf ppf "extern typedef struct _%s %s@,@," n n
+        Fmt.pf ppf "extern typedef struct %s %s@,@," (struct_tag_name st) n
       else begin
         if output then Fmt.pf ppf "output@,";
         if export then Fmt.pf ppf "export@,";
