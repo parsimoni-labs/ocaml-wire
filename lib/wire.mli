@@ -459,12 +459,15 @@ module Field : sig
     'a typ ->
     'a list t
   (** [repeat name ~size t] parses elements of type [t] until [size] bytes are
-      consumed. The bound is a byte budget, not an element count, which is what
-      lets the elements be variable-size (a tagged union, a length-prefixed
-      sub-codec). It projects to 3D as [t name[:byte-size size]]. There is no
-      count-driven form: "a count field, then that many variable-size elements"
-      is expressible neither here nor in 3D (3D arrays are byte-budgeted), so
-      that shape needs caller-side iteration over the element parser. *)
+      consumed exactly. The bound is a byte budget, not an element count, which
+      is what lets the elements be variable-size (a tagged union, a
+      length-prefixed sub-codec). An element cannot cross the region boundary;
+      encoding raises [Invalid_argument] when the supplied values span fewer or
+      more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
+      There is no count-driven form: "a count field, then that many
+      variable-size elements" is expressible neither here nor in 3D (3D arrays
+      are byte-budgeted), so that shape needs caller-side iteration over the
+      element parser. *)
 
   val repeat_seq :
     string ->
@@ -476,7 +479,8 @@ module Field : sig
     size:int expr ->
     'a typ ->
     'seq t
-  (** Like {!repeat} but accumulates into a custom sequence via [seq]. *)
+  (** Like {!repeat} but accumulates into a custom sequence via [seq], with the
+      same exact byte-budget requirement. *)
 
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)
