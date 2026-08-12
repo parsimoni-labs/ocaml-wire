@@ -9,15 +9,22 @@ let pp ppf (p : (_, _) t) = Fmt.string ppf p.Types.name
    the relevant field. Avoids drift between the parallel cases. *)
 type 'a int_cvt = { fwd : 'a -> int; bwd : int -> 'a }
 
+exception Unfittable_native_int
+
+let optint_to_int to_int value =
+  match to_int value with
+  | value -> value
+  | exception (Failure _ | Invalid_argument _) -> raise Unfittable_native_int
+
 let rec int_cvt : type a. a Types.typ -> a int_cvt =
  fun typ ->
   let id : 'a int_cvt = { fwd = (fun v -> v); bwd = (fun v -> v) } in
   match typ with
   | Uint8 -> id
   | Uint16 _ -> id
-  | Uint_var _ -> { fwd = UInt63.to_int; bwd = UInt63.of_int }
-  | Uint32 _ -> { fwd = UInt32.to_int; bwd = UInt32.of_int }
-  | Uint63 _ -> { fwd = UInt63.to_int; bwd = UInt63.of_int }
+  | Uint_var _ -> { fwd = optint_to_int UInt63.to_int; bwd = UInt63.of_int }
+  | Uint32 _ -> { fwd = optint_to_int UInt32.to_int; bwd = UInt32.of_int }
+  | Uint63 _ -> { fwd = optint_to_int UInt63.to_int; bwd = UInt63.of_int }
   | Uint64 _ ->
       {
         fwd =
@@ -111,7 +118,14 @@ let env_idx (env : env) name =
   find 0
 
 let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
-  let iv = to_int p.Types.typ v in
+  let iv =
+    match to_int p.Types.typ v with
+    | value -> value
+    | exception Unfittable_native_int ->
+        Fmt.invalid_arg
+          "Param.bind %S: value does not fit this platform's native int"
+          p.Types.name
+  in
   let slots = Array.copy env.slots in
   let bound = Array.copy env.bound in
   let i = env_idx env p.Types.name in

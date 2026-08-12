@@ -39,6 +39,11 @@
 
 ### Fixed
 
+- Casetype projection and `Param.bind` now translate unfittable `uint32`,
+  `uint63`, and `uint` values into contextual `Invalid_argument` exceptions
+  naming the case index or parameter, instead of leaking an Optint `Failure` on
+  narrow-int targets.
+
 - `Codec.v` now reports a clear construction error when a byte-size product
   `field * constant` has a simple `field <= bound` constraint whose maximum can
   reach EverParse's `2^32` limit. Products without this conclusive shape remain

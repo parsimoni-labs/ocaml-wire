@@ -1098,6 +1098,25 @@ let is_int_dispatch_typ : type a. a typ -> bool = function
       true
   | _ -> false
 
+let uint32_case_index k =
+  match UInt32.to_int k with
+  | index -> index
+  | exception (Failure _ | Invalid_argument _) ->
+      let index =
+        UInt32.to_int32 k |> Int64.of_int32 |> Int64.logand 0xFFFF_FFFFL
+      in
+      Fmt.invalid_arg
+        "Wire.casetype: case index %Ld does not fit this platform's native int"
+        index
+
+let uint63_case_index k =
+  match UInt63.to_int k with
+  | index -> index
+  | exception (Failure _ | Invalid_argument _) ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %a does not fit this platform's native int"
+        UInt63.pp k
+
 (* Project a case-branch discriminator value of type ['k] to a 3D constant
    expression. Only called for int-shaped tags; non-int tags don't reach
    here because their casetype field is rewritten away before
@@ -1107,9 +1126,9 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   match tag_typ with
   | Uint8 -> Pack_expr (Int k)
   | Uint16 _ -> Pack_expr (Int k)
-  | Uint32 _ -> Pack_expr (Int (UInt32.to_int k))
-  | Uint63 _ -> Pack_expr (Int (UInt63.to_int k))
-  | Uint_var _ -> Pack_expr (Int (UInt63.to_int k))
+  | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
+  | Uint63 _ -> Pack_expr (Int (uint63_case_index k))
+  | Uint_var _ -> Pack_expr (Int (uint63_case_index k))
   | Int8 -> Pack_expr (Int k)
   | Int16 _ -> Pack_expr (Int k)
   | Int32 _ -> Pack_expr (Int k)
