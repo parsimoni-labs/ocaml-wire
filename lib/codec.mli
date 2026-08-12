@@ -40,7 +40,10 @@ val v :
 (** [v name constructor fields] seals a codec from a field list. [?doc] attaches
     a free-text note (e.g. an RFC citation) that the documentation projection
     renders as a [/*++ ... --*/] comment on the codec's 3D typedef; see
-    {!Everparse.project}. *)
+    {!Everparse.project}.
+
+    Raises [Invalid_argument] if two fields have the same name, or if distinct
+    parameter handles referenced by the codec have the same name. *)
 
 val wire_size : 'r t -> int
 (** Fixed wire size in bytes. Raises if variable-length. *)

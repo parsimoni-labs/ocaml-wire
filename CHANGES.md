@@ -39,6 +39,10 @@
 
 ### Fixed
 
+- `Codec.v` now rejects duplicate field names and distinct parameter handles
+  with the same name. Name-based field access and parameter environments can no
+  longer silently alias the first declaration.
+
 - `Field.repeat` now consumes and emits exactly its declared byte budget.
   Fixed-width remainders, variable-width elements that cross the boundary, and
   encode under/overshoots are rejected instead of being silently accepted.

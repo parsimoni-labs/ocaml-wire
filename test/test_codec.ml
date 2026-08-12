@@ -77,6 +77,32 @@ let test_record_roundtrip () =
             "c roundtrip" (Optint.to_int original.c) (Optint.to_int decoded.c)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+let test_duplicate_names_rejected () =
+  let check_invalid ~kind ~name f =
+    match f () with
+    | () -> Alcotest.failf "duplicate %s name was accepted" kind
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool) "codec named" true (contains ~sub:"DupNames" msg);
+        Alcotest.(check bool) "kind named" true (contains ~sub:kind msg);
+        Alcotest.(check bool) "duplicate named" true (contains ~sub:name msg)
+  in
+  check_invalid ~kind:"field" ~name:"dup" (fun () ->
+      ignore
+        (Codec.v "DupNames"
+           (fun a b -> (a, b))
+           Codec.[ Field.v "dup" uint8 $ fst; Field.v "dup" uint8 $ snd ]));
+  let first = Param.input "count" uint8 in
+  let second = Param.input "count" uint8 in
+  check_invalid ~kind:"parameter" ~name:"count" (fun () ->
+      ignore
+        (Codec.v "DupNames"
+           (fun a b -> (a, b))
+           Codec.
+             [
+               Field.v "a" (byte_array ~size:(Param.expr first)) $ fst;
+               Field.v "b" (byte_array ~size:(Param.expr second)) $ snd;
+             ]))
+
 let test_struct_of_record () =
   let output = render_3d simple_record_codec in
   Alcotest.(check bool) "contains UINT8" true (contains ~sub:"UINT8" output);
@@ -6097,6 +6123,8 @@ let suite =
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
+      Alcotest.test_case "record: duplicate names rejected" `Quick
+        test_duplicate_names_rejected;
       Alcotest.test_case "record: struct_of_codec" `Quick test_struct_of_record;
       Alcotest.test_case "record: metadata decode ok" `Quick
         test_codec_metadata_decode_ok;
