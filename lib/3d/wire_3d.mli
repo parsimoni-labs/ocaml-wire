@@ -84,6 +84,9 @@ val run_everparse :
     staleness is detected without running EverParse. The failure is deliberately
     not promotable: only regenerating the C may refresh the stamp.
 
+    The executable, output directory, and schema filenames are passed directly
+    to EverParse without shell interpretation.
+
     Requires [3d.exe] in PATH. *)
 
 val check_provenance : outdir:string -> string list -> unit
@@ -103,7 +106,8 @@ val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
     it runs the full [--batch] verification (F* and C extraction), catching
     those, and discarding the generated C. Unlike {!run_everparse} it does no
     endianness-header copy, so it works on a bare output directory. Intended for
-    projection coverage tests.
+    projection coverage tests. The output directory and filename are passed
+    without shell interpretation.
 
     Requires [3d.exe] in PATH. *)
 
@@ -134,7 +138,8 @@ val batch_check :
     [3d.exe --batch]. Each run uses a private directory. Returns [Ok ()] iff
     EverParse accepts every schema, else [Error] naming the offending schema(s)
     with their captured diagnostics. Schemas must have distinct names (one [.3d]
-    module each). Requires [3d.exe] in PATH. *)
+    module each). Paths and filenames are passed without shell interpretation.
+    Requires [3d.exe] in PATH. *)
 
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
