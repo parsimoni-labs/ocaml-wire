@@ -520,6 +520,73 @@ let test_param_through_typ_wrappers () =
   Codec.encode ~env outer (Some 45) buf 0;
   Alcotest.(check bytes) "encoded wrapped codec" (Bytes.of_string "\x2d") buf
 
+(* -- Concurrent decode -- *)
+
+type barrier = {
+  parties : int;
+  arrived : int Atomic.t;
+  generation : int Atomic.t;
+}
+
+let barrier parties =
+  { parties; arrived = Atomic.make 0; generation = Atomic.make 0 }
+
+let await barrier =
+  let generation = Atomic.get barrier.generation in
+  if Atomic.fetch_and_add barrier.arrived 1 = barrier.parties - 1 then begin
+    Atomic.set barrier.arrived 0;
+    Atomic.incr barrier.generation
+  end
+  else
+    while Atomic.get barrier.generation = generation do
+      Domain.cpu_relax ()
+    done
+
+let test_multi_domain_decode () =
+  (* The mapped fields rendezvous during validation, after their values have
+     been read but before they are written into the codec's scratch slots. If
+     two domains share that scratch, one domain must either fail [b = a] or
+     copy the other domain's output parameter. Independent scratch and eval
+     contexts let both decodes complete with their own values. *)
+  let validation_barrier = barrier 2 in
+  let synchronized_uint8 =
+    map uint8 ~decode:Fun.id ~encode:(fun value ->
+        await validation_barrier;
+        value)
+  in
+  let limit = Param.input "domain_limit" uint8 in
+  let observed = Param.output "domain_observed" uint8 in
+  let f_a = Field.v "a" synchronized_uint8 in
+  let f_b = Field.v "b" synchronized_uint8 in
+  let checked_b =
+    Field.v "b" synchronized_uint8
+      ~constraint_:Expr.(Field.ref f_b = Field.ref f_a)
+      ~action:(Action.on_success [ Action.assign observed (Field.ref f_b) ])
+  in
+  let codec =
+    Codec.v "ConcurrentParams"
+      ~where:Expr.(Field.ref f_b <= Param.expr limit)
+      (fun a b -> (a, b))
+      Codec.[ f_a $ fst; checked_b $ snd ]
+  in
+  let worker value =
+    let env = Codec.env codec |> Param.bind limit value in
+    let buf = Bytes.make 2 (Char.chr value) in
+    let ok = ref true in
+    for _ = 1 to 1_000 do
+      match Codec.decode ~env codec buf 0 with
+      | Ok decoded ->
+          if decoded <> (value, value) || Param.get env observed <> value then
+            ok := false
+      | Error _ -> ok := false
+    done;
+    !ok
+  in
+  let first = Domain.spawn (fun () -> worker 0x11) in
+  let second = Domain.spawn (fun () -> worker 0x22) in
+  Alcotest.(check bool) "first domain" true (Domain.join first);
+  Alcotest.(check bool) "second domain" true (Domain.join second)
+
 (* -- Suite -- *)
 
 let suite =
@@ -569,4 +636,6 @@ let suite =
         test_param_size_in_casetype;
       Alcotest.test_case "param: context through typ wrappers" `Quick
         test_param_through_typ_wrappers;
+      Alcotest.test_case "param: multi-domain decode" `Quick
+        test_multi_domain_decode;
     ] )
