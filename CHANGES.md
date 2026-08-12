@@ -31,6 +31,11 @@
   fails with a promotable report instead of leaving a stale spec committed
   (#235, @samoht)
 
+- EverParse C generation now installs a `<Name>.provenance` stamp recording the
+  SHA-256 of the `.3d` it was built from, and `dune runtest` rechecks it without
+  EverParse, so a changed spec can no longer keep stale committed C
+  (#235, @samoht)
+
 - 32-bit bitfields are now exact on a narrow-int target: a field touching
   bit 31 of its base word used to decode and encode with that bit silently
   dropped there (#232, @samoht)

@@ -185,6 +185,64 @@ let locate_3d_exe () =
       in
       if Sys.file_exists local then Some local else None
 
+let everparse_version exe =
+  let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
+  let output = In_channel.input_all ic in
+  match Unix.close_process_in ic with
+  | Unix.WEXITED 0 -> (
+      match String.split_on_char '\n' output with
+      | version :: _ when version <> "" -> version
+      | _ -> Fmt.failwith "%s --version returned no version" exe)
+  | Unix.WEXITED n -> Fmt.failwith "%s --version exited with code %d" exe n
+  | Unix.WSIGNALED n ->
+      Fmt.failwith "%s --version was killed by signal %d" exe n
+  | Unix.WSTOPPED n ->
+      Fmt.failwith "%s --version was stopped by signal %d" exe n
+
+let provenance_file three_d =
+  Filename.remove_extension (Filename.basename three_d) ^ ".provenance"
+
+let schema_digest ~outdir three_d =
+  Sha256.(to_hex (file (Filename.concat outdir three_d)))
+
+let write_provenance ~outdir ~version three_d =
+  let digest = schema_digest ~outdir three_d in
+  let path = Filename.concat outdir (provenance_file three_d) in
+  Out_channel.with_open_bin path (fun oc ->
+      Fmt.pf
+        (Format.formatter_of_out_channel oc)
+        "schema-sha256: %s\neverparse: %s\n%!" digest version)
+
+let recorded_digest path =
+  let prefix = "schema-sha256: " in
+  In_channel.with_open_bin path In_channel.input_lines
+  |> List.find_map (fun line ->
+      if String.starts_with ~prefix line then
+        Some
+          (String.sub line (String.length prefix)
+             (String.length line - String.length prefix))
+      else None)
+  |> function
+  | Some digest -> digest
+  | None -> Fmt.failwith "%s: missing schema-sha256" path
+
+(* A stamp is only ever written beside the C that EverParse produced from that
+   exact [.3d], so a recorded hash that no longer matches means the committed C
+   is stale. Fail instead of emitting a promotable diff: promoting a recomputed
+   stamp would relabel the stale C as current and hide the drift for good. *)
+let check_provenance ~outdir three_d_files =
+  List.iter
+    (fun three_d ->
+      let stamp = Filename.concat outdir (provenance_file three_d) in
+      let recorded = recorded_digest stamp in
+      let actual = schema_digest ~outdir three_d in
+      if recorded <> actual then
+        Fmt.failwith
+          "stale generated C: %s records schema-sha256 %s but %s hashes to %s; \
+           regenerate with BUILD_EVERPARSE=1 dune build @3d"
+          stamp recorded three_d actual)
+    three_d_files
+
 let everparse_dir () =
   match locate_3d_exe () with
   | Some exe -> Filename.dirname exe |> Filename.dirname
@@ -463,13 +521,15 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     | Some e -> e
     | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
   in
+  let version = everparse_version exe in
   List.iter
     (fun f ->
       let redirect = if quiet then " > /dev/null 2>&1" else "" in
       let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
       let ret = Sys.command cmd in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
-      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f)))
+      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
+      write_provenance ~outdir ~version f)
     files;
   copy_everparse_endianness ~outdir
 
@@ -812,7 +872,7 @@ let everparse_type_defines =
   "-DUINT8=uint8_t -DUINT16=uint16_t -DUINT16BE=uint16_t -DUINT32=uint32_t \
    -DUINT32BE=uint32_t -DUINT64=uint64_t -DUINT64BE=uint64_t"
 
-let emit_gen_rules ppf three_d_files c_files ctx_files =
+let emit_gen_rules ppf three_d_files c_files ctx_files provenance_files =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
@@ -825,12 +885,13 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
     \ (enabled_if\n\
     \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
     \ (mode promote)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s test.c)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s test.c %s)\n\
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
     (String.concat " " three_d_files)
     (String.concat " " (c_files @ ctx_files))
+    (String.concat " " provenance_files)
     (String.concat " " three_d_files)
 
 (* One [runtest] rule per file rather than one [progn] over all of them: a
@@ -855,6 +916,17 @@ let emit_drift_check_rules ppf three_d_files =
     \ (action\n\
     \  (diff dune.inc dune.inc.gen)))\n\n"
 
+let emit_provenance_check_rules ppf three_d_files =
+  let stamps = List.map provenance_file three_d_files in
+  Fmt.pf ppf
+    "(rule\n\
+    \ (alias runtest)\n\
+    \ (deps %s %s)\n\
+    \ (action\n\
+    \  (run %%{exe:gen.exe} provenance-check)))\n\n"
+    (String.concat " " three_d_files)
+    (String.concat " " stamps)
+
 let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
   Fmt.pf ppf
     "(rule\n\
@@ -871,12 +943,14 @@ let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
     (String.concat " " all_deps)
     strict_cc_flags test_bin (String.concat " " c_srcs) test_bin test_bin
 
-let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files =
+let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
+    ~provenance_files =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) three_d_files;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) c_files;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) ctx_files;
+  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) provenance_files;
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
@@ -888,6 +962,7 @@ let generate_dune_file ~filename ~outdir ~package schemas =
   let ctx_files = wire_ctx_files schemas in
   let fields_srcs = fields_c_files schemas in
   let three_d_files = List.map (fun n -> n ^ ".3d") names in
+  let provenance_files = List.map provenance_file three_d_files in
   let test_bin =
     "test_" ^ String.map (fun c -> if c = '-' then '_' else c) package
   in
@@ -895,10 +970,12 @@ let generate_dune_file ~filename ~outdir ~package schemas =
     [ "test.c"; "EverParse.h"; "EverParseEndianness.h" ] @ c_files @ ctx_files
   in
   let c_srcs = List.map (fun n -> n ^ ".c") names @ fields_srcs in
-  emit_gen_rules ppf three_d_files c_files ctx_files;
+  emit_gen_rules ppf three_d_files c_files ctx_files provenance_files;
   emit_drift_check_rules ppf three_d_files;
+  emit_provenance_check_rules ppf three_d_files;
   emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs;
-  emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files;
+  emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
+    ~provenance_files;
   Format.pp_print_flush ppf ();
   close_out oc
 
@@ -1234,7 +1311,7 @@ let host_context_and cond = Fmt.str "(and\n   %s\n   %s)" host_context cond
    committed C goes stale -- the runtest differential below catches that, since
    it regenerates the corpus and [agree.c] from the current codec and runs them
    against the committed validator. *)
-let emit_standalone_gen_rules ppf ~three_d ~c_files =
+let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
@@ -1255,14 +1332,14 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files =
     \ (enabled_if\n\
     \  %s)\n\
     \ (mode promote)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s %s)\n\
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
     host_context three_d host_context
     (host_context_and "(= %{env:BUILD_EVERPARSE=} \"1\")")
     (String.concat " " c_files)
-    three_d
+    provenance three_d
 
 (* The C symbols a standalone archive exports: the [<Base>Check<Codec>] wrapper
    for each codec, named exactly as EverParse names it (and as [agree.c] links
@@ -1394,12 +1471,13 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
    validates from position 0 and is the safe public C API; the raw validators
    stay build-internal, linked into the archive but not shipped as a header.
    [<Base>Wrapper.h] does not include [<Base>.h], so this compiles standalone. *)
-let emit_standalone_install ppf ~package ~three_d ~archive ~public_header =
+let emit_standalone_install ppf ~package ~three_d ~archive ~public_header
+    ~provenance =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter
     (fun f -> pr "  (%s as c/%s)\n" f f)
-    [ three_d; archive; public_header ];
+    [ three_d; archive; public_header; provenance ];
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
@@ -1411,13 +1489,15 @@ let generate_dune_standalone_file ~filename ?name ~outdir ~package codecs =
   in
   let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
   let wrappers = wrapper_symbols base codecs in
+  let provenance = provenance_file three_d in
   let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
-  emit_standalone_gen_rules ppf ~three_d ~c_files;
+  emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance;
   emit_drift_check_rules ppf [ three_d ];
+  emit_provenance_check_rules ppf [ three_d ];
   emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers;
   emit_standalone_install ppf ~package ~three_d ~archive
-    ~public_header:(base ^ "Wrapper.h");
+    ~public_header:(base ^ "Wrapper.h") ~provenance;
   Format.pp_print_flush ppf ();
   close_out oc
 
@@ -1438,6 +1518,9 @@ let main ?name ~mode ~package codecs =
       | [ _; "dune-gen" ] ->
           generate_dune_file ~filename:"dune.inc.gen" ~outdir:"." ~package
             schemas
+      | [ _; "provenance-check" ] ->
+          check_provenance ~outdir:"."
+            (List.map Wire.Everparse.filename schemas)
       | _ -> run ~outdir:"." schemas)
   | `Standalone -> (
       match argv with
@@ -1451,5 +1534,8 @@ let main ?name ~mode ~package codecs =
       | [ _; "dune-gen" ] ->
           generate_dune_standalone_file ~filename:"dune.inc.gen" ?name
             ~outdir:"." ~package codecs
+      | [ _; "provenance-check" ] ->
+          check_provenance ~outdir:"."
+            [ standalone_base ?name ~package () ^ ".3d" ]
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)

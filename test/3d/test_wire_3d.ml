@@ -100,6 +100,14 @@ let test_ensure_dir () =
   Alcotest.(check bool) "dir created" true (Sys.file_exists tmpdir);
   Unix.rmdir tmpdir
 
+let read_file path =
+  let ic = open_in path in
+  let n = in_channel_length ic in
+  let buf = Bytes.create n in
+  really_input ic buf 0 n;
+  close_in ic;
+  Bytes.unsafe_to_string buf
+
 let test_generate_c () =
   (* generate_c requires 3d.exe; skip when not available *)
   if Wire_3d.has_3d_exe () then begin
@@ -111,16 +119,52 @@ let test_generate_c () =
     Alcotest.(check bool) "C file generated" true (Sys.file_exists c_path);
     let ext_path = Filename.concat tmpdir "TestSimple_ExternalTypedefs.h" in
     Alcotest.(check bool)
-      "ExternalTypedefs.h generated" true (Sys.file_exists ext_path)
+      "ExternalTypedefs.h generated" true (Sys.file_exists ext_path);
+    let provenance = Filename.concat tmpdir "TestSimple.provenance" in
+    Alcotest.(check bool)
+      "provenance generated" true
+      (Sys.file_exists provenance);
+    let contents = read_file provenance in
+    Alcotest.(check bool)
+      "provenance records schema SHA-256" true
+      (Re.execp
+         (Re.compile
+            (Re.Perl.re "schema-sha256: [0-9a-f]{64}\\neverparse: EverParse/3d "))
+         contents)
   end
 
-let read_file path =
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+let raises_failure f =
+  match f () with () -> false | exception Failure _ -> true
+
+(* The stamp is what stops a committed validator outliving the spec it was
+   generated from, so cover both verdicts here rather than only the rule text.
+   No 3d.exe needed: the check is deliberately hermetic. *)
+let test_check_provenance () =
+  let tmpdir = Filename.temp_dir "wire_3d_provenance" "" in
+  let three_d = "Foo.3d" in
+  let schema = Filename.concat tmpdir three_d in
+  let stamp = Filename.concat tmpdir "Foo.provenance" in
+  let write path contents =
+    Out_channel.with_open_bin path (fun oc ->
+        Out_channel.output_string oc contents)
+  in
+  write schema "entrypoint\ntypedef struct WireFoo\n{\n   UINT8 A;\n} Foo;\n";
+  let stamp_of digest =
+    Fmt.str "schema-sha256: %s\neverparse: EverParse/3d vtest\n" digest
+  in
+  write stamp (stamp_of Sha256.(to_hex (file schema)));
+  Wire_3d.check_provenance ~outdir:tmpdir [ three_d ];
+  write schema "entrypoint\ntypedef struct WireFoo\n{\n   UINT16 A;\n} Foo;\n";
+  Alcotest.(check bool)
+    "spec edited after generation is rejected" true
+    (raises_failure (fun () ->
+         Wire_3d.check_provenance ~outdir:tmpdir [ three_d ]));
+  write stamp "everparse: EverParse/3d vtest\n";
+  Alcotest.(check bool)
+    "stamp without a recorded hash is rejected" true
+    (raises_failure (fun () ->
+         Wire_3d.check_provenance ~outdir:tmpdir [ three_d ]));
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir)
 
 let doc_codec name =
   Codec.v name (fun v -> v) Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
@@ -156,6 +200,14 @@ let test_generate_dune_standalone () =
   Alcotest.(check bool)
     "runtest diffs the committed dune.inc" true
     (has "(diff dune.inc dune.inc.gen)");
+  Alcotest.(check bool)
+    "C regeneration writes provenance" true (has "MyPkg.provenance");
+  Alcotest.(check bool)
+    "runtest checks provenance" true
+    (has "%{exe:gen.exe} provenance-check");
+  Alcotest.(check bool)
+    "stale provenance is not promotable" false
+    (has "MyPkg.provenance.gen");
   Alcotest.(check bool)
     "generator invoked via exe macro, not ./gen.exe" false (has "./gen.exe");
   Alcotest.(check bool) "no shell action in the runtest" false (has "(system");
@@ -1061,7 +1113,16 @@ let test_projection_filenames () =
     (contains_exact "targets dune.inc.gen");
   Alcotest.(check bool)
     "runtest diffs the committed dune.inc" true
-    (contains_exact "(diff dune.inc dune.inc.gen)")
+    (contains_exact "(diff dune.inc dune.inc.gen)");
+  Alcotest.(check bool)
+    "C regeneration writes provenance" true
+    (contains_exact "Rpmsg_endpoint_info.provenance");
+  Alcotest.(check bool)
+    "runtest checks provenance" true
+    (contains_exact "%{exe:gen.exe} provenance-check");
+  Alcotest.(check bool)
+    "stale provenance is not promotable" false
+    (contains_exact "Rpmsg_endpoint_info.provenance.gen")
 
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 
@@ -1308,6 +1369,7 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "check_provenance" `Quick test_check_provenance;
       Alcotest.test_case "generate_dune_standalone" `Quick
         test_generate_dune_standalone;
       Alcotest.test_case "generate_dune_standalone name override" `Quick
