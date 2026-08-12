@@ -3364,7 +3364,7 @@ let wrapper_gens =
     ("optional_or_dynamic", Pack optional_or_dynamic);
     ("nested(0,empty)", Pack (nested 0 empty));
     ("nested(2,uint16be)", Pack (nested 2 uint16be));
-    ("nested(4,uint16be)", Pack (nested 4 uint16be));
+    ("nested(4,byte_array4)", Pack (nested 4 (byte_array 4)));
     ("nested_at_most(0,empty)", Pack (nested_at_most 0 empty));
     ("nested_at_most(2,uint16be)", Pack (nested_at_most 2 uint16be));
     ("nested_at_most(4,uint16be)", Pack (nested_at_most 4 uint16be));
@@ -3802,7 +3802,7 @@ let expected_registry_labels =
     "optional_or_dynamic";
     "nested(0,empty)";
     "nested(2,uint16be)";
-    "nested(4,uint16be)";
+    "nested(4,byte_array4)";
     "nested_at_most(0,empty)";
     "nested_at_most(2,uint16be)";
     "nested_at_most(4,uint16be)";

@@ -87,6 +87,10 @@ val exact_repeat_elements :
 (** Materialise and size a repeat value after checking its byte budget. Internal
     helper shared by direct and compiled encoders. *)
 
+val check_nested_size : at_most:bool -> expected:int -> actual:int -> unit
+(** Check an inner value against an exact or at-most nested region. Internal
+    helper shared by sizing and encoders. *)
+
 (** {1 Param handles} *)
 
 type param_input

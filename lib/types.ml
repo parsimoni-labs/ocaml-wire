@@ -498,6 +498,14 @@ let exact_repeat_elements seq ~expected ~size_of values =
     Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
   sized
 
+let check_nested_size ~at_most ~expected ~actual =
+  if actual > expected then
+    Fmt.invalid_arg "Wire.nested%s: region is %d bytes, value needs %d"
+      (if at_most then "_at_most" else "")
+      expected actual;
+  if (not at_most) && actual <> expected then
+    Fmt.invalid_arg "Wire.nested: expected %d bytes, got %d" expected actual
+
 (* The 3D projection of [array]/[optional]/[optional_or]/[repeat] turns
    their length / predicate / byte budget into a [byte-size] suffix.
    That works as long as the wrapped element exposes a wire size we can
@@ -2912,7 +2920,10 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
          the runtime gate would have said at decode. *)
       size_of_typ_value inner v
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
-  | Single_elem { size = Int n; _ } -> n
+  | Single_elem { size = Int n; elem; at_most } ->
+      let actual = size_of_typ_value elem v in
+      check_nested_size ~at_most ~expected:n ~actual;
+      n
   | Single_elem _ -> 0
   | Repeat { size = Int expected; elem; seq } ->
       exact_repeat_elements seq ~expected ~size_of:(size_of_typ_value elem) v
