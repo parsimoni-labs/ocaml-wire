@@ -475,6 +475,19 @@ let seq_list : ('a, 'a list) seq_map =
       iter = List.iter;
     }
 
+let exact_array_elements (type a seq) (Seq_map s : (a, seq) seq_map) ~expected
+    (values : seq) =
+  let actual = Stdlib.ref 0 in
+  let elements = Stdlib.ref [] in
+  s.iter
+    (fun value ->
+      incr actual;
+      elements := value :: !elements)
+    values;
+  if !actual <> expected then
+    Fmt.invalid_arg "Wire.array: expected %d elements, got %d" expected !actual;
+  List.rev !elements
+
 (* The 3D projection of [array]/[optional]/[optional_or]/[repeat] turns
    their length / predicate / byte budget into a [byte-size] suffix.
    That works as long as the wrapped element exposes a wire size we can
@@ -2898,6 +2911,11 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
       !total
+  | Array { len = Int expected; elem; seq } ->
+      exact_array_elements seq ~expected v
+      |> List.fold_left
+           (fun total value -> total + size_of_typ_value elem value)
+           0
   | Array { elem; seq = Seq_map s; _ } ->
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;

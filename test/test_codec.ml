@@ -587,6 +587,50 @@ let test_record_byte_array_padding () =
             (String.sub decoded.uuid 0 5)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+let codec_seq_array : ('a, 'a array) seq_map =
+  Seq_map
+    {
+      empty = [];
+      add = (fun acc value -> value :: acc);
+      finish = (fun values -> Array.of_list (List.rev values));
+      iter = Array.iter;
+    }
+
+let expect_codec_array_cardinality label codec value expected actual =
+  let buf = Bytes.make 8 '\x7f' in
+  match Codec.encode codec value buf 0 with
+  | () -> Alcotest.failf "%s: expected an array cardinality error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": expected count")
+        true
+        (contains ~sub:(Fmt.str "expected %d" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": actual count") true
+        (contains ~sub:(Fmt.str "got %d" actual) msg);
+      Alcotest.(check string)
+        (label ^ ": buffer unchanged")
+        (String.make 8 '\x7f') (Bytes.to_string buf)
+
+let test_codec_array_cardinality () =
+  let list =
+    Codec.v "ArrayList" Fun.id
+      Codec.[ Field.v "values" (array ~len:(int 3) uint8) $ Fun.id ]
+  in
+  expect_codec_array_cardinality "short list" list [ 1; 2 ] 3 2;
+  expect_codec_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  let custom =
+    Codec.v "ArrayCustom" Fun.id
+      Codec.
+        [
+          Field.v "values" (array_seq codec_seq_array ~len:(int 3) uint8)
+          $ Fun.id;
+        ]
+  in
+  expect_codec_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
+  expect_codec_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+    3 4
+
 (* Field.repeat over a zeroterm element: a list of NUL-terminated strings
    within a byte budget. Used to raise Failure at decode; now decodes and
    projects through a synthesised element struct. *)
@@ -6061,6 +6105,8 @@ let suite =
         test_record_byte_array_roundtrip;
       Alcotest.test_case "record: byte_array padding" `Quick
         test_record_byte_array_padding;
+      Alcotest.test_case "array: encode cardinality" `Quick
+        test_codec_array_cardinality;
       Alcotest.test_case "repeat: zeroterm element roundtrip" `Quick
         test_repeat_zeroterm_element;
       Alcotest.test_case "repeat: zeroterm element projection" `Quick

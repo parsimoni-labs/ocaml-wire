@@ -4,6 +4,8 @@ open Wire
 open Wire.Everparse.Raw
 open Test_helpers
 
+let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
+
 (* Helper: parse from a string delivered in slices of [chunk_size] bytes.
    Forces multi-byte values to straddle slice boundaries. *)
 let parse_chunked ~chunk_size typ s =
@@ -708,6 +710,36 @@ let test_encode_array () =
   let encoded = to_string t [ 1; 2; 3 ] in
   Alcotest.(check string) "array encoding" "\x01\x02\x03" encoded
 
+let seq_array : ('a, 'a array) seq_map =
+  Seq_map
+    {
+      empty = [];
+      add = (fun acc value -> value :: acc);
+      finish = (fun values -> Array.of_list (List.rev values));
+      iter = Array.iter;
+    }
+
+let expect_direct_array_cardinality label typ value expected actual =
+  match to_string typ value with
+  | _ -> Alcotest.failf "%s: expected an array cardinality error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": expected count")
+        true
+        (contains ~sub:(Fmt.str "expected %d" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": actual count") true
+        (contains ~sub:(Fmt.str "got %d" actual) msg)
+
+let test_encode_array_cardinality () =
+  let list = array ~len:(int 3) uint8 in
+  expect_direct_array_cardinality "short list" list [ 1; 2 ] 3 2;
+  expect_direct_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  let custom = array_seq seq_array ~len:(int 3) uint8 in
+  expect_direct_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
+  expect_direct_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+    3 4
+
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
   let encoded = to_string t "hello" in
@@ -1169,6 +1201,8 @@ let suite =
       Alcotest.test_case "encode: uint32 le" `Quick test_encode_uint32_le;
       Alcotest.test_case "encode: uint32 be" `Quick test_encode_uint32_be;
       Alcotest.test_case "encode: array" `Quick test_encode_array;
+      Alcotest.test_case "encode: array cardinality" `Quick
+        test_encode_array_cardinality;
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;

@@ -694,11 +694,12 @@ val array : len:int expr -> 'a typ -> 'a list typ
     element count, not a byte size. It projects to 3D only when [t] has a fixed
     wire size: 3D arrays are byte-budgeted, so the count is lowered to
     [len * sizeof t] bytes. For variable-size elements use {!Field.repeat},
-    which is bounded by a byte budget instead. *)
+    which is bounded by a byte budget instead. Encoding a list whose cardinality
+    differs from [len] raises [Invalid_argument] before writing. *)
 
 val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 (** Like {!array} but accumulates into a custom sequence via a {!type-seq_map}.
-*)
+    Encoding enforces the same exact cardinality. *)
 
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string.

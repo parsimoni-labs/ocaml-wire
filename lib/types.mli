@@ -74,6 +74,10 @@ type ('elt, 'seq) seq_map =
 val seq_list : ('a, 'a list) seq_map
 (** Default builder: accumulate into a list. *)
 
+val exact_array_elements : ('a, 'seq) seq_map -> expected:int -> 'seq -> 'a list
+(** Materialise an array value after checking its declared element count.
+    Internal helper shared by direct and compiled encoders. *)
+
 (** {1 Param handles} *)
 
 type param_input
