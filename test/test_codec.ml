@@ -1089,6 +1089,30 @@ let test_nested_at_most_over_array () =
     "roundtrip" true
     (decode_ok (Codec.decode codec buf 0) = v)
 
+let test_nested_exact_region () =
+  let make name typ =
+    Codec.v name Fun.id Codec.[ Field.v "value" typ $ Fun.id ]
+  in
+  let exact = make "NestedExact" (nested ~size:(int 4) zeroterm) in
+  let at_most = make "NestedAtMost" (nested_at_most ~size:(int 4) zeroterm) in
+  let padded = Bytes.of_string "A\x00\x00\x00" in
+  (match Codec.decode exact padded 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "compiled exact nested accepted trailing padding");
+  Alcotest.(check string)
+    "compiled at-most accepts padding" "A"
+    (decode_ok (Codec.decode at_most padded 0));
+  Alcotest.(check string)
+    "compiled exact accepts full consumption" "ABC"
+    (decode_ok (Codec.decode exact (Bytes.of_string "ABC\x00") 0));
+  (match Codec.size_of_value exact "A" with
+  | _ -> Alcotest.fail "compiled exact nested encode accepted padding"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool) "nested error" true (contains ~sub:"nested" msg));
+  let buf = Bytes.create 4 in
+  Codec.encode at_most "A" buf 0;
+  Alcotest.(check bytes) "compiled at-most pads" padded buf
+
 (* A casetype whose case body is a [nested] region (a scalar in a fixed span):
    the tag-dispatched case decodes and sizes through the region. *)
 type nest_case = N of int | U of int
@@ -6216,6 +6240,7 @@ let suite =
         test_nested_over_array;
       Alcotest.test_case "nested_at_most over array roundtrip" `Quick
         test_nested_at_most_over_array;
+      Alcotest.test_case "nested exact region" `Quick test_nested_exact_region;
       Alcotest.test_case "casetype nested case body roundtrip" `Quick
         test_casetype_nested_case_body;
       Alcotest.test_case "array rejects non-projectable element" `Quick
