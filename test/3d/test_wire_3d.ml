@@ -82,6 +82,33 @@ let test_generate_3d_files () =
   Sys.remove path;
   Unix.rmdir tmpdir
 
+let test_parse_3d_uses_argv_and_cwd () =
+  let outdir = Filename.temp_dir "wire 3d;out " "" in
+  let bindir = Filename.temp_dir "wire 3d;bin " "" in
+  let exe = Filename.concat bindir "3d.exe" in
+  let observed = Filename.concat outdir "observed" in
+  let file = "schema name;literal.3d" in
+  let old_path = Sys.getenv_opt "PATH" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" (Option.value ~default:"" old_path);
+      Wire_3d.rm_rf outdir;
+      Wire_3d.rm_rf bindir)
+    (fun () ->
+      Out_channel.with_open_text exe (fun oc ->
+          output_string oc
+            "#!/bin/sh\n\
+             { pwd; for arg do printf '%s\\n' \"$arg\"; done; } > observed\n");
+      Unix.chmod exe 0o755;
+      Unix.putenv "PATH" bindir;
+      (match Wire_3d.parse_3d ~batch:true ~outdir file with
+      | Ok () -> ()
+      | Error e -> Alcotest.failf "fake EverParse failed: %s" e);
+      Alcotest.(check (list string))
+        "cwd and literal argv"
+        [ Unix.realpath outdir; "--batch"; file ]
+        (In_channel.with_open_text observed In_channel.input_lines))
+
 let test_schema_of_struct () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
@@ -1460,6 +1487,8 @@ let suite =
       Alcotest.test_case "everparse_name" `Quick test_everparse_name;
       Alcotest.test_case "pascal_case" `Quick test_pascal_case;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
+      Alcotest.test_case "parse_3d uses argv and cwd" `Quick
+        test_parse_3d_uses_argv_and_cwd;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
