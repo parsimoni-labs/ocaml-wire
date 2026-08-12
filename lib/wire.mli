@@ -741,14 +741,17 @@ val nested : size:int expr -> 'a typ -> 'a typ
 
     This is for layouts where a length expression denotes the size of a region,
     but that region is known to contain exactly one value, such as a single
-    nested message. *)
+    nested message. Decoding rejects an inner value that consumes fewer bytes;
+    encoding raises [Invalid_argument] unless the value's encoded size is
+    exactly [size]. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
     bound rather than an exact size.
 
     This is for length-prefixed regions where the one logical element may
-    consume fewer bytes than the available space. *)
+    consume fewer bytes than the available space. Encoding zero-pads the unused
+    region; a value larger than [size] raises [Invalid_argument]. *)
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** [enum name cases base] validates that the decoded integer is one of the

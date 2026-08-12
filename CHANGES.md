@@ -34,6 +34,10 @@
 
 ### Fixed
 
+- `nested` now requires its inner value to consume exactly the declared region
+  on decode and encode. Use `nested_at_most` when trailing region padding is
+  intentional; it remains permissive and zero-pads on encode.
+
 - `Codec.v` now rejects duplicate field names and distinct parameter handles
   with the same name. Name-based field access and parameter environments can no
   longer silently alias the first declaration.

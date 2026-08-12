@@ -763,6 +763,26 @@ let test_repeat_exact_budget_direct () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
 
+let test_nested_exact_region_direct () =
+  let exact = nested ~size:(int 4) zeroterm in
+  let at_most = nested_at_most ~size:(int 4) zeroterm in
+  let expect_parse_error label = function
+    | Error _ -> ()
+    | Ok _ -> Alcotest.failf "%s: accepted an under-consumed exact region" label
+  in
+  expect_parse_error "exact decode" (of_string exact "A\x00\x00\x00");
+  Alcotest.(check (result string reject))
+    "at-most decode" (Ok "A")
+    (of_string at_most "A\x00\x00\x00");
+  Alcotest.(check (result string reject))
+    "exact decode fully consumed" (Ok "ABC")
+    (of_string exact "ABC\x00");
+  Alcotest.check_raises "exact encode rejects padding"
+    (Invalid_argument "Wire.nested: expected 4 bytes, got 2") (fun () ->
+      ignore (to_string exact "A"));
+  Alcotest.(check string)
+    "at-most encode pads" "A\x00\x00\x00" (to_string at_most "A")
+
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
   let encoded = to_string t "hello" in
@@ -1228,6 +1248,8 @@ let suite =
         test_encode_array_cardinality;
       Alcotest.test_case "repeat: exact byte budget" `Quick
         test_repeat_exact_budget_direct;
+      Alcotest.test_case "nested: exact region" `Quick
+        test_nested_exact_region_direct;
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;

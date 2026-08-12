@@ -33,7 +33,9 @@ let setter_off_int32 n set buf off v =
 
 (* Encode a value into a fixed [n]-byte region: write it with [enc], then
    zero-pad the remainder. Used for [nested] regions. *)
-let single_elem_pad n enc buf off v =
+let single_elem_region ~at_most n typ enc buf off v =
+  let actual = Types.size_of_typ_value typ v in
+  Types.check_nested_size ~at_most ~expected:n ~actual;
   let inner_end = enc buf off v in
   if inner_end < off + n then
     Bytes.fill buf inner_end (off + n - inner_end) '\x00';
@@ -190,8 +192,8 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       bits_field_encoder ~width ~base ~bit_order
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
-  | Single_elem { size = Int n; elem; _ } ->
-      single_elem_pad n (build_field_encoder elem)
+  | Single_elem { size = Int n; elem; at_most } ->
+      single_elem_region ~at_most n elem (build_field_encoder elem)
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1982,7 +1984,12 @@ let var_bytes_reader : type a.
         s;
       s
   | Casetype _ -> read_elem typ buf (base + fo)
-  | Single_elem { elem; _ } -> read_elem elem buf (base + fo)
+  | Single_elem { elem; at_most; _ } ->
+      let first = base + fo in
+      let consumed = elem_size_of elem buf first in
+      if consumed > sz || ((not at_most) && consumed <> sz) then
+        raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+      read_elem elem buf first
   | _ -> assert false
 
 (* Kept at top level: as local closures they would be heap-allocated on
@@ -2050,8 +2057,10 @@ let var_bytes_writer : type a r.
       Bytes.fill buf (write_off + len) (region - len) '\x00';
       write_off + region
   | Casetype _ -> build_field_encoder typ buf write_off value
-  | Single_elem { elem; _ } ->
+  | Single_elem { elem; at_most; _ } ->
       let n = size_fn buf base in
+      let actual = Types.size_of_typ_value elem value in
+      Types.check_nested_size ~at_most ~expected:n ~actual;
       let inner_end = build_field_encoder elem buf write_off value in
       if inner_end < write_off + n then
         Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';

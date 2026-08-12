@@ -319,10 +319,13 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
       (Slice.make_or_eod buf ~first:off ~length:n, off + n)
-  | Single_elem { size; elem; at_most = _ } ->
+  | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      let v, _ = parse_direct elem buf off (off + n) in
+      let v, inner_end = parse_direct elem buf off (off + n) in
+      let consumed = inner_end - off in
+      if (not at_most) && consumed <> n then
+        raise_eof ~at:inner_end ~expected:n ~got:consumed;
       (v, off + n)
   | Map { inner; decode; _ } ->
       let v, off' = parse_direct inner buf off len in
@@ -768,10 +771,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let off = Slice.first v in
       let len = Slice.length v in
       write_string enc (Bytes.sub_string src off len)
-  | Single_elem { size; elem; _ } ->
+  | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
-      encode_into elem v enc;
       let inner_sz = Types.size_of_typ_value elem v in
+      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
+      encode_into elem v enc;
       for _ = inner_sz to n - 1 do
         write_byte enc 0
       done
@@ -905,7 +909,9 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       off + n
   | Byte_array { size = Int n } -> Codec.blit_string_padded n buf off v
   | Byte_slice { size = Int n } -> Codec.blit_slice_padded n buf off v
-  | Single_elem { size = Int n; elem; at_most = _ } ->
+  | Single_elem { size = Int n; elem; at_most } ->
+      let inner_sz = Types.size_of_typ_value elem v in
+      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
       let off' = encode_direct elem buf off v in
       if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
       off + n
