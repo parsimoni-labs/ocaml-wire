@@ -2085,12 +2085,13 @@ let test_action_unfired_by_validate () =
       $ fun v -> v)
   in
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
+  let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  Codec.validate codec buf 0;
+  Codec.validate ~env codec buf 0;
   (* validate does NOT fire actions *)
   Alcotest.(check int)
     "action not fired by validate" 0
-    !(action_out2.Wire.Private.Types.cell ())
+    (Param.get env action_out2)
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.
@@ -2334,6 +2335,27 @@ let test_embed_where_enforced () =
   Alcotest.(check int)
     "satisfying value accepted" 5
     (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0))
+
+let test_embed_output_param () =
+  let out = Param.output "embedded_out" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub_field =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_v) ])
+        uint8
+      $ Fun.id)
+  in
+  let sub = Codec.v "EmbeddedOutputSub" Fun.id Codec.[ sub_field ] in
+  let outer =
+    Codec.v "EmbeddedOutputOuter" Fun.id
+      Codec.[ Field.v "sub" (codec sub) $ Fun.id ]
+  in
+  let env = Codec.env outer in
+  Alcotest.(check int)
+    "decoded value" 42
+    (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0));
+  Alcotest.(check int) "forwarded output" 42 (Param.get env out)
 
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
@@ -6352,6 +6374,8 @@ let suite =
         test_embed_param_requires_env;
       Alcotest.test_case "embed: sub-codec where enforced" `Quick
         test_embed_where_enforced;
+      Alcotest.test_case "embed: output parameter forwarded" `Quick
+        test_embed_output_param;
       Alcotest.test_case "embed: param forwarded through repeat" `Quick
         test_embed_param_repeat;
       Alcotest.test_case "action: output only" `Quick

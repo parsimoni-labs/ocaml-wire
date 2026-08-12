@@ -66,12 +66,12 @@ let is_nan (f : float Field.t) : bool Types.expr =
       && Land (r, Int 0x007F_FFFF) <> Int 0)
 
 let codec (c : 'r Codec.t) : 'r typ =
-  let codec_decode = Codec.embed_decode c in
-  let codec_encode = Codec.embed_encode c in
-  let codec_field_readers = Codec.field_readers c in
+  let codec_decode = Codec.embed_decode_ctx c in
+  let codec_encode = Codec.embed_encode_ctx c in
+  let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
   let codec_size_of_value = Codec.size_of_value c in
-  match Codec.wire_size_info c with
+  match Codec.wire_size_info_ctx c with
   | `Fixed n ->
       Codec
         {
@@ -336,7 +336,12 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       check_enum_membership ~at:off ~closed cases v;
       (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
-      parse_codec_typ codec_decode codec_fixed_size codec_size_of buf off len
+      let runtime = Types.empty_eval_ctx buf in
+      parse_codec_typ
+        (fun _buf off -> codec_decode runtime off)
+        codec_fixed_size
+        (fun _buf off -> codec_size_of runtime off)
+        buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
   | Optional { present; inner } ->
@@ -782,8 +787,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Enum { base; _ } -> encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
-      encode_codec ~encode:codec_encode ~fixed_size:codec_fixed_size
-        ~size_of_value:codec_size_of_value v enc
+      encode_codec
+        ~encode:(fun v buf off -> codec_encode v (Types.empty_eval_ctx buf) off)
+        ~fixed_size:codec_fixed_size ~size_of_value:codec_size_of_value v enc
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
   | Optional_or { present; inner; _ } ->
@@ -918,7 +924,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
   | Where { inner; _ } -> encode_direct inner buf off v
   | Enum { base; _ } -> encode_direct base buf off v
-  | Codec { codec_encode; _ } -> codec_encode v buf off
+  | Codec { codec_encode; _ } -> codec_encode v (Types.empty_eval_ctx buf) off
   | _ -> encode_via_writer typ buf off v
 
 let to_bytes typ v =
