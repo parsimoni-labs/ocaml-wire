@@ -683,6 +683,81 @@ let test_optional_self_delimiting_codec () =
   Alcotest.(check int) "absent size" 1 n;
   Alcotest.(check (option string)) "absent desc" None d.desc
 
+(* A conditional group can carry its own length prefix and dependent list.
+   Keeping those fields in a sub-codec lets their expressions stay local to
+   the group, while a following payload remains in the parent codec. This is
+   the shape of an optional secondary header that declares its own length. *)
+type transfer_extensions = { items_len : int; items : int list }
+
+let transfer_extensions_codec =
+  let f_len = Field.v "ext_items_len" uint8 in
+  let f_items = Field.repeat "ext_items" ~size:(Field.ref f_len) uint8 in
+  Codec.v "TransferExtensions"
+    (fun items_len items -> { items_len; items })
+    Codec.[ (f_len $ fun r -> r.items_len); (f_items $ fun r -> r.items) ]
+
+type transfer_segment = {
+  start : int;
+  extensions : transfer_extensions option;
+  data_len : int;
+  data : string;
+}
+
+let transfer_segment_codec =
+  let f_start = Field.v "start" uint8 in
+  let f_extensions =
+    Field.optional "extensions"
+      ~present:Expr.(Field.ref f_start <> int 0)
+      (codec transfer_extensions_codec)
+  in
+  let f_data_len = Field.v "data_len" uint8 in
+  let f_data = Field.v "data" (byte_array ~size:(Field.ref f_data_len)) in
+  Codec.v "TransferSegment"
+    (fun start extensions data_len data ->
+      { start; extensions; data_len; data })
+    Codec.
+      [
+        (f_start $ fun r -> r.start);
+        (f_extensions $ fun r -> r.extensions);
+        (f_data_len $ fun r -> r.data_len);
+        (f_data $ fun r -> r.data);
+      ]
+
+let test_optional_length_prefixed_group () =
+  let present =
+    {
+      start = 1;
+      extensions = Some { items_len = 2; items = [ 0xA1; 0xB2 ] };
+      data_len = 3;
+      data = "xyz";
+    }
+  in
+  let n, decoded = roundtrip transfer_segment_codec present in
+  Alcotest.(check int) "present size" 8 n;
+  Alcotest.(check (list int))
+    "extension items" [ 0xA1; 0xB2 ] (Option.get decoded.extensions).items;
+  Alcotest.(check string) "following data" "xyz" decoded.data;
+  let absent = { start = 0; extensions = None; data_len = 2; data = "ok" } in
+  let n, decoded = roundtrip transfer_segment_codec absent in
+  Alcotest.(check int) "absent size" 4 n;
+  Alcotest.(check bool)
+    "extensions absent" true
+    (Option.is_none decoded.extensions);
+  Alcotest.(check string) "following data" "ok" decoded.data;
+  let out = render_3d transfer_segment_codec in
+  Alcotest.(check bool)
+    "group is its own struct" true
+    (contains ~sub:"typedef struct WireTransferExtensions" out);
+  Alcotest.(check bool)
+    "group-local dependent repeat" true
+    (contains ~sub:"UINT8 ext_items[:byte-size ext_items_len]" out);
+  Alcotest.(check bool)
+    "group is gate-selected" true
+    (contains ~sub:"Opt_TransferExtensions(" out);
+  Alcotest.(check bool)
+    "later fields stay in the parent" true
+    (contains ~sub:"UINT8 data[:byte-size data_len]" out)
+
 (* Wire.array over a fixed byte_array element: a fixed-count list of n-byte
    chunks (e.g. an array of IPv4 addresses). Used to project a double
    [:byte-size]; the element is now emitted as bare bytes under the budget. *)
@@ -5949,6 +6024,8 @@ let suite =
         test_optional_var_byte_array;
       Alcotest.test_case "optional: self-delimiting codec inner roundtrip"
         `Quick test_optional_self_delimiting_codec;
+      Alcotest.test_case "optional: length-prefixed group roundtrip" `Quick
+        test_optional_length_prefixed_group;
       Alcotest.test_case "repeat: byte_array element roundtrip" `Quick
         test_repeat_byte_array_element;
       Alcotest.test_case "repeat: byte_array element projection" `Quick

@@ -1317,6 +1317,49 @@ let test_field_optional_byte_array () =
   Alcotest.(check bool)
     "byte-size suffix uses inner size" true (contains out "8")
 
+(* A gate-selected sub-codec may contain a group-local length followed by a
+   repeat and still leave later fields in the parent. Run the full EverParse
+   extraction here: rendering alone would not catch an invalid casetype or
+   dependent repeat in the generated F*. *)
+let test_optional_length_prefixed_group_projects () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let f_ext_len = Field.v "ext_items_len" uint8 in
+    let extensions =
+      Codec.v "ProjectedTransferExtensions"
+        (fun len items -> (len, items))
+        Codec.
+          [
+            f_ext_len $ fst;
+            Field.repeat "ext_items" ~size:(Field.ref f_ext_len) uint8 $ snd;
+          ]
+    in
+    let f_start = Field.v "start" uint8 in
+    let f_data_len = Field.v "data_len" uint8 in
+    let codec =
+      Codec.v "ProjectedTransferSegment"
+        (fun start ext data_len data -> (start, ext, data_len, data))
+        Codec.
+          [
+            (f_start $ fun (start, _, _, _) -> start);
+            ( Field.optional "extensions"
+                ~present:Expr.(Field.ref f_start <> int 0)
+                (codec extensions)
+            $ fun (_, ext, _, _) -> ext );
+            (f_data_len $ fun (_, _, data_len, _) -> data_len);
+            ( Field.v "data" (byte_array ~size:(Field.ref f_data_len))
+            $ fun (_, _, _, data) -> data );
+          ]
+    in
+    let dir = Filename.temp_dir "wire_3d_optional_group" "" in
+    let schema = Everparse.project ~mode:`Ffi codec in
+    Wire_3d.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.generate_c ~outdir:dir [ schema ];
+    Alcotest.(check bool)
+      "C generated for conditional group" true
+      (Sys.file_exists (Filename.concat dir "ProjectedTransferSegment.c"))
+  end
+
 (* A [nested ~size] / [nested_at_most] field projects through EverParse:
    byte-span and enum inners go through a synthesised wrapper struct, and scalar
    and sub-record inners render inline (rather than as an extern setter param
@@ -1422,6 +1465,8 @@ let suite =
         test_array_rejects_unsized_elem;
       Alcotest.test_case "Field.optional: byte_array inner projects" `Quick
         test_field_optional_byte_array;
+      Alcotest.test_case "optional length-prefixed group projects" `Slow
+        test_optional_length_prefixed_group_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
