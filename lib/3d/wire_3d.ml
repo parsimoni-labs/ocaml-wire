@@ -535,8 +535,10 @@ let fields_c_files schemas =
    parameterized and plain entrypoints, [print_c_entry] in the upstream
    [src/3d/Target.fst]): if a future EverParse emits neither the known tail
    nor its own consumption check, fail loudly rather than silently shipping a
-   prefix recognizer. The behavioural backstop is the differential runtest,
-   whose corpus includes over-length inputs the oracle rejects. *)
+   prefix recognizer. Tracked upstream as
+   https://github.com/project-everest/everparse/issues/312. The behavioural
+   backstop is the differential runtest, whose corpus includes over-length
+   inputs the oracle rejects. *)
 let wrapper_success_tail = "\t\treturn FALSE;\n\t}\n\treturn TRUE;\n}"
 let wrapper_consumption_check = "result != (uint64_t) len"
 
