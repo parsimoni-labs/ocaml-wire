@@ -1446,6 +1446,38 @@ let test_casetype_wrapped_greedy_not_last_rejected () =
            (fun p tail -> (p, tail))
            Codec.[ Field.v "p" payload $ fst; Field.v "tail" uint8 $ snd ]))
 
+let test_optional_greedy_not_last_rejected () =
+  let greedy =
+    Codec.v "GreedyOptionalBody"
+      (fun n z -> (n, z))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "z" all_zeros $ snd ]
+  in
+  let check_rejected label field =
+    Alcotest.(check bool)
+      label true
+      (raises_invalid (fun () ->
+           Codec.v "OptionalGreedyNotLast"
+             (fun body tail -> (body, tail))
+             Codec.[ field $ fst; Field.v "tail" uint8 $ snd ]))
+  in
+  check_rejected "present optional greedy body before tail rejected"
+    (Field.optional "body" ~present:Expr.true_ (codec greedy));
+  check_rejected "dynamic optional greedy body before tail rejected"
+    (Field.optional "body" ~present:Expr.(int 1 = int 1) (codec greedy));
+  check_rejected "optional_or greedy body before tail rejected"
+    (Field.optional_or "body" ~present:Expr.true_ ~default:(0, "")
+       (codec greedy));
+  Alcotest.(check bool)
+    "statically absent optional greedy body before tail accepted" false
+    (raises_invalid (fun () ->
+         Codec.v "AbsentOptionalGreedy"
+           (fun body tail -> (body, tail))
+           Codec.
+             [
+               Field.optional "body" ~present:Expr.false_ (codec greedy) $ fst;
+               Field.v "tail" uint8 $ snd;
+             ]))
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -6380,6 +6412,8 @@ let suite =
         test_casetype_greedy_case_not_last_rejected;
       Alcotest.test_case "casetype wrapped greedy case body must be last" `Quick
         test_casetype_wrapped_greedy_not_last_rejected;
+      Alcotest.test_case "optional greedy body must be last" `Quick
+        test_optional_greedy_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "bits rejects out-of-range width" `Quick
