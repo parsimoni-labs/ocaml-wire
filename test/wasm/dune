@@ -22,7 +22,7 @@
 (test
  (name test)
  (modes js wasm)
- (libraries wire wire.3d test_helpers alcotest re)
+ (libraries wire test_helpers alcotest re bytesrw fmt optint)
  (enabled_if
   (and
    %{bin-available:wasm_of_ocaml}

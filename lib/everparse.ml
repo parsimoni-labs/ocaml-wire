@@ -272,7 +272,8 @@ let rec unwrap_bits : type a.
 
 let is_same_bit_group base bit_order (Types.Field f) =
   match unwrap_bits f.field_typ with
-  | Some (b2, bo2, _) -> b2 = base && bo2 = bit_order
+  | Some (b2, bo2, _) ->
+      Bitfield.equal b2 base && Types.equal_bit_order bo2 bit_order
   | None -> false
 
 let bit_width (Types.Field f) =
@@ -310,7 +311,7 @@ let reorder_bit_group base bit_order f0 rest =
   let native = Bitfield.native_bit_order base in
   let used, group, rest' = collect_bit_group base bit_order total f0 rest in
   let emitted =
-    if bit_order = native then group
+    if Types.equal_bit_order bit_order native then group
     else
       (* Backward references in reversed order would break: fields now
          come before the values their constraints read. Collapse all
@@ -482,7 +483,9 @@ let coalesced_wire_size fields =
           | Some (base, order, width) -> (
               match open_base with
               | Some b
-                when b = base && bit_order = Some order
+                when Bitfield.equal b base
+                     && Option.equal Types.equal_bit_order bit_order
+                          (Some order)
                      && bits_used + width <= Bitfield.total_bits base ->
                   (total, open_base, bits_used + width, bit_order)
               | _ ->

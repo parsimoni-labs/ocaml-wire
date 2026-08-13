@@ -24,16 +24,7 @@
 (executable
  (name gen_stubs)
  (modules gen_stubs)
- (libraries
-  demo_bench_cases
-  demo
-  space
-  net
-  wire
-  wire.3d
-  wire.stubs
-  bench_lib
-  unix))
+ (libraries demo_bench_cases demo space wire wire.3d wire.stubs fmt unix))
 
 ; Generate c_stubs.ml (OCaml external declarations) -- always
 

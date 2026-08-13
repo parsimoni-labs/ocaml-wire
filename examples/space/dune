@@ -1,4 +1,4 @@
 (library
  (name space)
  (wrapped false)
- (libraries wire))
+ (libraries wire bytesrw optint))
