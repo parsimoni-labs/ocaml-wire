@@ -1,0 +1,7 @@
+#!/bin/sh
+
+set -eu
+
+repo=$(git rev-parse --show-toplevel)
+git config core.hooksPath scripts
+echo "Git hooks now use $repo/scripts"
