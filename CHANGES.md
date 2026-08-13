@@ -39,6 +39,10 @@
 
 ### Fixed
 
+- Optional fields that can expose a consume-rest payload are now rejected when
+  followed by another field, rather than allowing that payload to swallow the
+  remainder of the enclosing codec.
+
 - Parameter values are now carried by an explicit encode/decode context rather
   than ambient domain-local cells. Re-entrant or fiber-interleaved operations
   on the same parametric codec can therefore use different environments
