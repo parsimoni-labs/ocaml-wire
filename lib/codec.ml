@@ -3087,6 +3087,11 @@ let rec field_consumes_rest : type a. a Types.typ -> bool =
   | Types.Map { inner; _ } -> field_consumes_rest inner
   | Types.Where { inner; _ } -> field_consumes_rest inner
   | Types.Enum { base; _ } -> field_consumes_rest base
+  | Types.Optional { present = Types.Bool false; _ }
+  | Types.Optional_or { present = Types.Bool false; _ } ->
+      false
+  | Types.Optional { inner; _ } -> field_consumes_rest inner
+  | Types.Optional_or { inner; _ } -> field_consumes_rest inner
   | _ -> false
 
 (* A greedy field consumes the rest of the buffer, so it is only meaningful as

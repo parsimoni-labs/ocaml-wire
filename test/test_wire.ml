@@ -783,6 +783,84 @@ let test_nested_exact_region_direct () =
   Alcotest.(check string)
     "at-most encode pads" "A\x00\x00\x00" (to_string at_most "A")
 
+type invariant_encoding = Rejected | Encoded of string
+
+let direct_encoding typ value =
+  try Encoded (to_string typ value) with Invalid_argument _ -> Rejected
+
+let compiled_encoding codec value =
+  try
+    let buf = Bytes.create (Codec.size_of_value codec value) in
+    Codec.encode codec value buf 0;
+    Encoded (Bytes.unsafe_to_string buf)
+  with Invalid_argument _ -> Rejected
+
+let check_invariant_encoding label typ codec value =
+  let direct = direct_encoding typ value in
+  let compiled = compiled_encoding codec value in
+  Alcotest.(check bool)
+    (label ^ ": direct and compiled acceptance")
+    true (direct = compiled);
+  match direct with
+  | Rejected ->
+      Alcotest.(check bool)
+        (label ^ ": sizing rejects too")
+        true
+        (match Wire.Private.Types.size_of_typ_value typ value with
+        | _ -> false
+        | exception Invalid_argument _ -> true)
+  | Encoded bytes ->
+      Alcotest.(check int)
+        (label ^ ": direct sizing")
+        (String.length bytes)
+        (Wire.Private.Types.size_of_typ_value typ value);
+      Alcotest.(check int)
+        (label ^ ": compiled sizing")
+        (String.length bytes)
+        (Codec.size_of_value codec value);
+      Alcotest.(check bool)
+        (label ^ ": direct round-trip")
+        true
+        (of_string typ bytes = Ok value);
+      Alcotest.(check bool)
+        (label ^ ": compiled round-trip")
+        true
+        (Codec.decode codec (Bytes.of_string bytes) 0 = Ok value)
+
+let test_region_cardinality_contract () =
+  let array_typ = array ~len:(int 3) uint8 in
+  let array_codec =
+    Codec.v "InvariantArray" Fun.id Codec.[ Field.v "items" array_typ $ Fun.id ]
+  in
+  for n = 0 to 5 do
+    let values = List.init n Fun.id in
+    check_invariant_encoding
+      (Fmt.str "array count %d" n)
+      array_typ array_codec values
+  done;
+  let repeat_typ = Field.typ (Field.repeat "items" ~size:(int 4) uint16be) in
+  let repeat_codec =
+    Codec.v "InvariantRepeat" Fun.id
+      Codec.[ Field.v "items" repeat_typ $ Fun.id ]
+  in
+  for n = 0 to 4 do
+    let values = List.init n Fun.id in
+    check_invariant_encoding
+      (Fmt.str "repeat count %d" n)
+      repeat_typ repeat_codec values
+  done;
+  let nested_typ = nested ~size:(int 4) zeroterm in
+  let nested_codec =
+    Codec.v "InvariantNested" Fun.id
+      Codec.[ Field.v "item" nested_typ $ Fun.id ]
+  in
+  List.iter
+    (fun value ->
+      check_invariant_encoding
+        (Fmt.str "nested value length %d" (String.length value))
+        nested_typ nested_codec value)
+    [ ""; "A"; "AB"; "ABC"; "ABCD" ]
+
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
   let encoded = to_string t "hello" in
@@ -1250,6 +1328,8 @@ let suite =
         test_repeat_exact_budget_direct;
       Alcotest.test_case "nested: exact region" `Quick
         test_nested_exact_region_direct;
+      Alcotest.test_case "region/cardinality interpreter contract" `Quick
+        test_region_cardinality_contract;
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;

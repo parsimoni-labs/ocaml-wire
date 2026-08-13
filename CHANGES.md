@@ -34,21 +34,25 @@
 
 ### Fixed
 
-- Staged `Codec.get` readers now resolve their field-type dispatch once rather
-  than rebuilding a reader closure on every scalar access. Parameter-free
-  immediate getters and setters, including signed 32-bit setters, now allocate
-  zero words per call on a non-Flambda release build.
+- Parameter-free fixed-offset `Codec.get` and `Codec.set` accessors no longer
+  add per-call allocation: direct scalars represented as immediate OCaml
+  values, bitfields, enums, and maps whose callbacks return immediate values
+  measure zero words on a non-Flambda release build. Boxed results such as
+  `int64`, and allocations performed by a map callback itself, remain visible
+  to callers. The same accessors are also faster than before (#239, @samoht)
 
-- Parameter values are now carried by an explicit encode/decode context rather
-  than ambient domain-local cells. Re-entrant or fiber-interleaved operations
-  on the same parametric codec can therefore use different environments
-  without corrupting each other's field sizes, including embedded codecs,
-  casetype bodies, fixed-size type wrappers, and repeated elements.
+- Optional fields that can expose a consume-rest payload are now rejected when
+  followed by another field, rather than allowing that payload to swallow the
+  remainder of the enclosing codec (#239, @samoht)
 
-- EverParse is now launched with a literal argument vector and a child-local
-  working directory. Output paths, executable paths, and schema filenames may
-  contain spaces or shell metacharacters without failing or being interpreted
-  as commands.
+- Operations on the same parametric codec are now safe to re-enter or
+  interleave across fibers with different `Param.env` values. Embedded codecs,
+  casetype bodies, fixed-size wrappers, and repeated elements no longer read
+  another operation's field sizes (#239, @samoht)
+
+- EverParse generation now accepts output paths, executable paths, and schema
+  filenames containing spaces or shell metacharacters without interpreting
+  them as commands (#239, @samoht)
 
 - `Codec.size_of_value` now reports the declared width of fixed-size
   `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
