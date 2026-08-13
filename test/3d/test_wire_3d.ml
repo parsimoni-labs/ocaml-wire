@@ -541,12 +541,15 @@ let test_archive_hides_raw_validators () =
            ~objcopy:"objcopy" ~ar:"ar" ~archive ~base ~wrappers
     in
     let run cmd =
-      let ic = Unix.open_process_in (Fmt.str "cd %s && %s 2>&1" tmpdir cmd) in
-      let out = In_channel.input_all ic in
-      (out, Unix.close_process_in ic)
+      Fmt.kstr
+        (fun command ->
+          let ic = Unix.open_process_in command in
+          let out = In_channel.input_all ic in
+          (out, Unix.close_process_in ic))
+        "cd %s && %s 2>&1" tmpdir cmd
     in
     let build_out, build_status = run (String.concat " && " steps) in
-    let nm_out, _ = run (Fmt.str "nm %s" archive) in
+    let nm_out, _ = Fmt.kstr run "nm %s" archive in
     ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
     (match build_status with
     | Unix.WEXITED 0 -> ()

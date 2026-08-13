@@ -190,8 +190,8 @@ val generate_standalone :
   packed list ->
   unit
 (** [generate_standalone ?quiet ?name ~outdir ~package codecs] runs the
-    documentation pipeline: project each codec with {!Wire.Everparse.doc}, merge
-    them into one [<Name>.3d], and (when [3d.exe] is available) compile it to a
+    documentation pipeline: project each codec in documentation mode, merge them
+    into one [<Name>.3d], and (when [3d.exe] is available) compile it to a
     single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
     is [name] when given, else [package], normalised to a CamelCase identifier
     (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
@@ -264,7 +264,7 @@ val generate_agree :
     EverParse-generated validators and exits nonzero on any input where the
     validator's accept/reject decision differs from the recorded verdict. It
     reads the [<Name>CheckWire<Codec>] helper names from the generated
-    [<Name>Wrapper.h], so {!generate_c_standalone} (or [3d.exe]) must have run
+    [<Name>Wrapper.h], so {!generate_standalone} (or [3d.exe]) must have run
     first. *)
 
 val main :

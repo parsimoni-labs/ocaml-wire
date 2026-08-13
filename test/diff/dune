@@ -26,7 +26,7 @@
 (executable
  (name gen_schemas)
  (modules gen_schemas)
- (libraries schema))
+ (libraries schema wire))
 
 (rule
  (alias gen_schemas)
@@ -46,7 +46,7 @@
 (executable
  (name gen_c)
  (modules gen_c)
- (libraries wire wire.3d wire.stubs unix))
+ (libraries wire wire.3d unix fmt))
 
 (rule
  (alias gen_c)
@@ -94,7 +94,7 @@
 (executable
  (name fuzz_schema)
  (modules fuzz_schema)
- (libraries schema alcobar))
+ (libraries schema alcobar wire))
 
 (rule
  (alias fuzz)

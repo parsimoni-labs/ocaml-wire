@@ -6,7 +6,7 @@
 (test
  (name test)
  (modules test test_wire_3d)
- (libraries wire wire.3d alcotest re sha unix))
+ (libraries wire wire.3d alcotest re sha unix fmt))
 
 (rule
  (targets

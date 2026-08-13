@@ -232,7 +232,7 @@ let run_process ?(output = Inherit) ~cwd exe args =
             Unix.close fd)
           output_fd;
         Unix.execv exe (Array.of_list (exe :: args))
-      with _ -> Unix._exit 127)
+      with Unix.Unix_error _ -> Unix._exit 127)
   | pid ->
       Option.iter Unix.close output_fd;
       snd (Unix.waitpid [] pid)

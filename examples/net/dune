@@ -2,12 +2,12 @@
  (name net)
  (modules net)
  (wrapped false)
- (libraries wire))
+ (libraries wire bytesrw optint fmt))
 
 (executable
  (name example)
  (modules example)
- (libraries net wire))
+ (libraries net wire bytesrw fmt))
 
 ; The committed Net.3d is the RFC-documented projection of the net codecs.
 ; gen_spec renders it; the runtest diff fails if it drifts from net.ml, and
