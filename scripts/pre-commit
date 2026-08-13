@@ -1,0 +1,25 @@
+#!/bin/sh
+
+set -eu
+
+if git diff --cached --quiet -- '*.ml' '*.mli' '*.mll' '*.mly'; then
+  exit 0
+fi
+
+# Keep this file-local: a repo-wide [dune fmt] discovers symlinked workspace
+# subtrees and can hit https://github.com/ocaml/dune/issues/10635.
+if ! git diff --cached --name-only --diff-filter=ACM -z -- \
+  '*.ml' '*.mli' '*.mll' '*.mly' \
+  | xargs -0 opam exec -- ocamlformat --check --
+then
+  echo "Staged OCaml files are not formatted; run opam exec -- dune fmt." >&2
+  exit 1
+fi
+
+git diff --cached --name-only --diff-filter=ACM -z -- \
+  '*.ml' '*.mli' '*.mll' '*.mly' \
+  | xargs -0 merlint --no-build >/tmp/git-merlint-hook.log 2>&1 \
+  || {
+    echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
+    exit 1
+  }
