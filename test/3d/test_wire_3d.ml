@@ -393,6 +393,16 @@ let diff_nested_at_most_codec =
   Codec.v "NestedAtMost" Fun.id
     Codec.[ Field.v "value" (nested_at_most ~size:(int 4) zeroterm) $ Fun.id ]
 
+let diff_array_exact_codec =
+  let open Wire in
+  Codec.v "ArrayExact" Fun.id
+    Codec.[ Field.v "items" (array ~len:(int 3) uint8) $ Fun.id ]
+
+let diff_repeat_exact_codec =
+  let open Wire in
+  Codec.v "RepeatExact" Fun.id
+    Codec.[ Field.repeat "items" ~size:(int 4) uint16be $ Fun.id ]
+
 (* A parameterized codec: the harness must bind the input param in the OCaml
    oracle and pass the same value to the EverParse validator, or a length-bound
    frame can never be checked (the blocker for CCSDS TC/AOS/TM/USLP). *)
@@ -469,6 +479,28 @@ let test_doc_differential_nested_regions () =
       [
         Wire_3d.pack diff_nested_exact_codec;
         Wire_3d.pack diff_nested_at_most_codec;
+      ]
+
+let test_doc_differential_region_cardinality () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"invariantspec" ~package:"invariant-doc"
+      ~corpus:
+        (`Lines
+           [
+             "ArrayExact - 010203 1";
+             "ArrayExact - 0102 0";
+             "ArrayExact - 01020304 0";
+             "RepeatExact - 00010002 1";
+             "RepeatExact - 0001 0";
+             "RepeatExact - 000100020003 0";
+             "NestedExact - 41424300 1";
+             "NestedExact - 41000000 0";
+           ])
+      [
+        Wire_3d.pack diff_array_exact_codec;
+        Wire_3d.pack diff_repeat_exact_codec;
+        Wire_3d.pack diff_nested_exact_codec;
       ]
 
 (* The installed standalone archive must export only the checked
@@ -1509,6 +1541,8 @@ let suite =
         test_doc_differential_no_params;
       Alcotest.test_case "doc differential nested regions (needs 3d.exe)" `Quick
         test_doc_differential_nested_regions;
+      Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
+        `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
