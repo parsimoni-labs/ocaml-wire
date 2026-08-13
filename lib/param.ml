@@ -11,6 +11,8 @@ type 'a int_cvt = { fwd : 'a -> int; bwd : int -> 'a }
 
 exception Unfittable_native_int
 
+let id_counter = Atomic.make 0
+
 let optint_to_int to_int value =
   match to_int value with
   | value -> value
@@ -71,11 +73,13 @@ let check_typ name typ =
 
 let input name typ =
   check_typ "input" typ;
-  { Types.name; typ; packed_typ = Types.Pack_typ typ; mutable_ = false }
+  let id = Atomic.fetch_and_add id_counter 1 in
+  { Types.id; name; typ; packed_typ = Types.Pack_typ typ; mutable_ = false }
 
 let output name typ =
   check_typ "output" typ;
-  { Types.name; typ; packed_typ = Types.Pack_typ typ; mutable_ = true }
+  let id = Atomic.fetch_and_add id_counter 1 in
+  { Types.id; name; typ; packed_typ = Types.Pack_typ typ; mutable_ = true }
 
 let decl (t : ('a, 'k) t) : Types.param =
   { param_name = t.name; param_typ = t.packed_typ; mutable_ = t.mutable_ }

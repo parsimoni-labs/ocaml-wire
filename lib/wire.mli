@@ -1,8 +1,8 @@
 (** Binary wire format descriptions.
 
-    A wire format is a sequence of typed {!Field}s -- integers, bitfields,
-    enumerations, byte arrays -- laid out at fixed bit offsets in a buffer. A
-    {!Codec} binds those fields to an OCaml record, giving you:
+    A wire format is a sequence of typed {!module-Field} values -- integers,
+    bitfields, enumerations, byte arrays -- laid out at fixed bit offsets in a
+    buffer. A {!Codec} binds those fields to an OCaml record, giving you:
 
     - Zero-copy field access via staged getters and setters.
     - Full-record [decode] / [encode] between bytes and OCaml values.
@@ -60,29 +60,25 @@ end
 type 'a expr = 'a Types.expr
 type bitfield = U8 | U16 | U16be | U32 | U32be
 
-type bit_order = Types.bit_order =
-  | Msb_first
-  | Lsb_first
-      (** Which end of a packed base word the first declared bitfield occupies.
+(** Which end of a packed base word the first declared bitfield occupies.
 
-          - [Msb_first] (default): the first declared field lands at the most
-            significant bit of the base word, matching how RFC, CCSDS, and IETF
-            specs draw their bit diagrams. Copy-pasting a spec into field
-            declarations just works.
+    - {!constructor-Msb_first} (default): the first declared field lands at the
+      most significant bit of the base word, matching how RFC, CCSDS, and IETF
+      specs draw their bit diagrams. Copy-pasting a spec into field declarations
+      just works.
 
-          - [Lsb_first]: the first declared field lands at bit 0 of the base
-            word, matching MSVC's C bit-field packing. Useful when mirroring a C
-            struct.
+    - {!constructor-Lsb_first}: the first declared field lands at bit 0 of the
+      base word, matching MSVC's C bit-field packing. Useful when mirroring a C
+      struct.
 
-          Bit order is independent of byte order: any combination of base word
-          and bit order is a valid wire description, and the EverParse 3D
-          projection reverses declaration order within a bit group when
-          necessary so that every pairing emits a valid 3D schema with identical
-          byte layout. *)
+    Bit order is independent of byte order: any combination of base word and bit
+    order is a valid wire description, and the EverParse 3D projection reverses
+    declaration order within a bit group when necessary so that every pairing
+    emits a valid 3D schema with identical byte layout. *)
+type bit_order = Types.bit_order = Msb_first | Lsb_first
 
-type endian = Types.endian =
-  | Little
-  | Big  (** Byte order for multi-byte integers. *)
+(** Byte order for multi-byte integers. *)
+type endian = Types.endian = Little | Big
 
 type 'a typ = 'a Types.typ
 
@@ -516,7 +512,7 @@ module Field : sig
   (** Field note attached via {!v}'s [?doc], if any. *)
 
   val decl_of_packed : packed -> Types.field
-  (** The {!Types.field} declaration of a packed field. *)
+  (** The underlying field declaration of a packed field. *)
 end
 
 (** {1 Type Descriptions}
@@ -538,19 +534,19 @@ val uint16be : int typ
 (** Unsigned 16-bit big-endian integer. *)
 
 val uint32 : Optint.t typ
-(** Unsigned 32-bit little-endian integer. Decodes to an {!Optint.t} so a value
+(** Unsigned 32-bit little-endian integer. Decodes to an [Optint.t] so a value
     with bit 31 set survives on a narrow-int target (js/wasm). *)
 
 val uint32be : Optint.t typ
-(** Unsigned 32-bit big-endian integer. Decodes to an {!Optint.t}. *)
+(** Unsigned 32-bit big-endian integer. Decodes to an [Optint.t]. *)
 
 val uint63 : Optint.Int63.t typ
 (** Unsigned 63-bit little-endian integer carried on 8 bytes. Decodes to an
-    {!Optint.Int63.t}. *)
+    [Optint.Int63.t]. *)
 
 val uint63be : Optint.Int63.t typ
 (** Unsigned 63-bit big-endian integer carried on 8 bytes. Decodes to an
-    {!Optint.Int63.t}. *)
+    [Optint.Int63.t]. *)
 
 val uint64 : int64 typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
@@ -612,7 +608,7 @@ val is_nan : float Field.t -> bool expr
 val uint : ?endian:endian -> int expr -> UInt63.t typ
 (** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
     order (default {!Big}). The size may be a dynamic expression for
-    parameter-driven widths. Decodes to a {!UInt63.t}: a 7-byte value needs 56
+    parameter-driven widths. Decodes to a [UInt63.t]: a 7-byte value needs 56
     bits, which does not fit an int on a narrow-int target (js/wasm). *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
@@ -680,6 +676,7 @@ val zeroterm_at_most : size:int expr -> string typ
 val where : bool expr -> 'a typ -> 'a typ
 (** Refine a description with a boolean constraint. *)
 
+(** Builder for sequence accumulation (Jsont-style). *)
 type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
   | Seq_map : {
       empty : 'b;
@@ -688,7 +685,6 @@ type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
       iter : ('elt -> unit) -> 'seq -> unit;
     }
       -> ('elt, 'seq) seq_map
-      (** Builder for sequence accumulation (Jsont-style). *)
 
 val seq_list : ('a, 'a list) seq_map
 (** Default builder: accumulate into a list. *)
@@ -813,14 +809,17 @@ val size : 'a typ -> int option
 
 (** {1 Parsing Errors}
 
-    Direct decoding reports failures as values of type {!parse_error}. The cases
-    distinguish structural failure on input, such as unexpected end of input or
-    a constraint violation, from semantic failure such as an invalid enum or
-    tag. *)
+    Direct decoding reports failures as values of type {!type-parse_error}. The
+    cases distinguish structural failure on input, such as unexpected end of
+    input or a constraint violation, from semantic failure such as an invalid
+    enum or tag. *)
 
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
+(** Parse failure categories. For {!constructor-Constraint_failed}, [value] is
+    the offending field's value for a single-field self-constraint and [None]
+    for a cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Invalid_enum of { value : int; valid : int list }
@@ -829,8 +828,6 @@ type error_kind =
   | Non_zero_padding
   | Value_out_of_range of { value : int64 }
   | Constraint_failed of { which : predicate; value : int64 option }
-      (** [value] is the offending field's value for a single-field
-          self-constraint, [None] for a cross-field or where predicate. *)
 
 type parse_error = { at : int; field : string list; kind : error_kind }
 (** [at] is the absolute byte offset of the failing field. Alongside it the
@@ -876,7 +873,7 @@ val eof :
     values with bytes.
 
     Use them when you want a value now: one-shot decoding, streaming code built
-    around {!Bytesrw}, tests, small tools, and formats that are naturally
+    around [Bytesrw], tests, small tools, and formats that are naturally
     consumed as values.
 
     Use {!Codec} instead when the format is record-shaped and the main goal is
@@ -937,7 +934,7 @@ val of_bytes_exn : 'a typ -> bytes -> 'a
     data-dependent and should not be silently ignored. *)
 
 val to_writer : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
-(** Encodes one value to a {!Bytesrw.Bytes.Writer.t}.
+(** Encodes one value to a [Bytesrw.Bytes.Writer.t].
 
     This function is exception-based. Unsupported description forms, such as
     unresolved type references, raise an exception rather than returning an
@@ -951,8 +948,8 @@ val to_string : 'a typ -> 'a -> string
 
 (** {1 Codecs}
 
-    A codec is the primary way to work with a wire format. It binds {!Field}s to
-    an OCaml record type and provides:
+    A codec is the primary way to work with a wire format. It binds
+    {!module-Field} values to an OCaml record type and provides:
 
     - {b Zero-copy field access}: {!Codec.get} and {!Codec.set} read and write
       individual fields directly in a buffer -- no intermediate record
@@ -1063,7 +1060,7 @@ module Codec : sig
       bindings for any {!val:Param.input} referenced in those clauses.
 
       Raises [Invalid_argument] when [?env] belongs to another codec or leaves
-      an input parameter unbound, and {!Validation_error} on failure. *)
+      an input parameter unbound, and {!exception-Parse_error} on failure. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
@@ -1086,7 +1083,7 @@ module Codec : sig
 
       Zero-copy access to the offset/length of a [byte_slice] field. The naive
       nesting [Slice.first (Codec.get c f buf base)] forces [Codec.get] to
-      allocate a fresh {!Bytesrw.Bytes.Slice.t} -- 4 words -- only for
+      allocate a fresh [Bytesrw.Bytes.Slice.t] -- 4 words -- only for
       [Slice.first] to extract one int and discard the rest. {!slice_offset}
       skips the make and returns the int directly. *)
 
@@ -1142,7 +1139,7 @@ module Codec : sig
   (** [validator_of_struct s] compiles [s] into a validator. *)
 
   val validate_struct : validator -> bytes -> int -> unit
-  (** Run the validator. Raises {!Validation_error} on failure. *)
+  (** Run the validator. Raises {!exception-Parse_error} on failure. *)
 
   val struct_size_of : validator -> bytes -> int -> int
   (** Byte size of the struct starting at [off]. *)
@@ -1184,7 +1181,8 @@ val codec : 'r Codec.t -> 'r typ
 
     {!Everparse} is the pure export layer. The normal workflow is:
 
-    - build a record-shaped description with {!Field} and {!Codec};
+    - build a record-shaped description with {!module-Field} and
+      {!module-Codec};
     - project it with {!Everparse.project};
     - emit one [.3d] file per schema with {!Everparse.write};
     - run EverParse/C tooling with [Wire_3d];
@@ -1284,7 +1282,8 @@ module Everparse : sig
 
         These constructors exist for EverParse features that currently have no
         codec-level equivalent, plus the struct-level projection knobs. Most
-        users should stay on the {!Field}/{!Codec} path and use {!project}. *)
+        users should stay on the {!module-Field}/{!module-Codec} path and use
+        {!project}. *)
 
     type nonrec struct_ = struct_
     type field = Field.packed
@@ -1363,16 +1362,8 @@ module Everparse : sig
     val field_names : struct_ -> string list
     (** Named field names in declaration order. *)
 
-    type ocaml_kind =
-      | Int
-      | Int64
-      | Float32
-      | Float64
-      | Bool
-      | String
-      | Unit
-          (** The OCaml representation kind of a field (for FFI stub
-              generation). *)
+    (** The OCaml representation kind of a field (for FFI stub generation). *)
+    type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
 
     val field_kinds : struct_ -> (string * ocaml_kind) list
     (** Named field names with their OCaml type kind. *)

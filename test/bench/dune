@@ -1,7 +1,7 @@
 (test
  (name test)
  (modules test test_bench_lib test_demo_bench_cases)
- (libraries bench_lib demo_bench_cases alcotest unix))
+ (libraries bench_lib demo_bench_cases alcotest unix fmt))
 
 (executable
  (name bench)

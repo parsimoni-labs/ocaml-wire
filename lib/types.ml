@@ -99,6 +99,7 @@ let raise_constraint ~at ~which ?value () =
   raise_error ~at (Constraint_failed { which; value })
 
 type ('a, 'k) param_handle = {
+  id : int;
   name : string;
   typ : 'a typ;
   packed_typ : packed_typ;

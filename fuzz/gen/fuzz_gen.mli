@@ -90,10 +90,8 @@ val validate_cases : string -> 'a t -> Alcobar.test_case list
     pass; random and adversarial inputs may pass or fail but must not crash.
     Threads the env via {!Wire.Codec.validate}'s [?env] when [g] needs one. *)
 
-type packed =
-  | Pack : 'a t -> packed
-      (** A gen with its value type hidden, for uniform iteration over
-          {!registry}. *)
+(** A gen with its value type hidden, for uniform iteration over {!registry}. *)
+type packed = Pack : 'a t -> packed
 
 val codec : 'a t -> 'a Wire.Codec.t
 (** [codec g] is the codec [g] generates for. *)
