@@ -1544,6 +1544,10 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
    standalone. *)
 let emit_standalone_install ppf ~package ~three_d ~archive ~public_header
     ~provenance =
+  (* Dune currently adds files from a disabled install stanza to the directory's
+     [all] alias. Keep the stanza unconditional until
+     https://github.com/ocaml/dune/issues/15825 is fixed; the archive itself is
+     intentionally built for every context above. *)
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter
