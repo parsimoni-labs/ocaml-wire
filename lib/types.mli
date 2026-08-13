@@ -1,6 +1,10 @@
 (** Core type definitions for the Wire DSL. *)
 
-type endian = Little | Big  (** Byte order. *)
+(** Byte order. *)
+type endian = Little | Big
+
+val equal_endian : endian -> endian -> bool
+(** [equal_endian a b] is [true] when [a] and [b] are the same byte order. *)
 
 type eval_ctx
 (** Explicit runtime context for buffer and parameter expression evaluation.
@@ -31,6 +35,9 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
+(** Parse failure categories. For {!constructor-Constraint_failed}, [value] is
+    the offending field's value for a single-field self-constraint and [None]
+    for a cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Invalid_enum of { value : int; valid : int list }
@@ -39,8 +46,6 @@ type error_kind =
   | Non_zero_padding
   | Value_out_of_range of { value : int64 }
   | Constraint_failed of { which : predicate; value : int64 option }
-      (** [value] is the offending field's value for a single-field
-          self-constraint, [None] for a cross-field or where predicate. *)
 
 type parse_error = { at : int; field : string list; kind : error_kind }
 (** [at] is the absolute byte offset of the failing field. Alongside it the
@@ -63,24 +68,26 @@ val eof :
 (** [eof ~expected ~got ()] is [parse_error (Unexpected_eof { expected; got })]:
     the input ended with [got] bytes where [expected] were needed. *)
 
-type bit_order =
-  | Msb_first
-  | Lsb_first
-      (** Which end of a packed base word the first declared bitfield occupies.
+(** Which end of a packed base word the first declared bitfield occupies.
 
-          [Msb_first] places the first declared field at the most significant
-          bit, matching how RFC, CCSDS, and IETF specs draw their bit diagrams.
-          [Lsb_first] places it at bit 0, matching MSVC C bit-field packing.
+    {!constructor-Msb_first} places the first declared field at the most
+    significant bit, matching how RFC, CCSDS, and IETF specs draw their bit
+    diagrams. {!constructor-Lsb_first} places it at bit 0, matching MSVC C
+    bit-field packing.
 
-          Bit order is independent of byte order. Every combination of base word
-          and bit order is a valid wire description. When projecting to
-          EverParse 3D, the export layer reverses field declaration order within
-          a bit group if the user's bit order differs from EverParse's native
-          choice for the base; this preserves byte layout in memory and is
-          invisible to the user. *)
+    Bit order is independent of byte order. Every combination of base word and
+    bit order is a valid wire description. When projecting to EverParse 3D, the
+    export layer reverses field declaration order within a bit group if the
+    user's bit order differs from EverParse's native choice for the base; this
+    preserves byte layout in memory and is invisible to the user. *)
+type bit_order = Msb_first | Lsb_first
+
+val equal_bit_order : bit_order -> bit_order -> bool
+(** [equal_bit_order a b] is [true] when [a] and [b] are the same bit order. *)
 
 (** {1 Sequence builders} *)
 
+(** Builder for sequence accumulation. Existentially hides the builder type. *)
 type ('elt, 'seq) seq_map =
   | Seq_map : {
       empty : 'b;
@@ -89,8 +96,6 @@ type ('elt, 'seq) seq_map =
       iter : ('elt -> unit) -> 'seq -> unit;
     }
       -> ('elt, 'seq) seq_map
-      (** Builder for sequence accumulation. Existentially hides the builder
-          type. *)
 
 val seq_list : ('a, 'a list) seq_map
 (** Default builder: accumulate into a list. *)
@@ -118,6 +123,7 @@ type param_input
 type param_output
 
 type ('a, 'k) param_handle = {
+  id : int;
   name : string;
   typ : 'a typ;
   packed_typ : packed_typ;
@@ -133,6 +139,7 @@ and packed_typ = Pack_typ : 'a typ -> packed_typ
 
 and _ ref_kind = I : int ref_kind | I64 : int64 ref_kind
 
+(** Typed expressions used in constraints, actions, and sizes. *)
 and _ expr =
   | Int : int -> int expr
   | Int64 : int64 -> int64 expr
@@ -166,14 +173,11 @@ and _ expr =
   | Not : bool expr -> bool expr
   | Cast : [ `U8 | `U16 | `U32 | `U64 ] * int expr -> int expr
   | If_then_else : bool expr * int expr * int expr -> int expr
-      (** Ternary [(cond ? then_ : else_)] for conditional byte-size. *)
 
 (** {1 Types} *)
 
-and bitfield_base =
-  | U8
-  | U16 of endian
-  | U32 of endian  (** Base storage for bitfield extractions. *)
+(** Base storage for bitfield extractions. *)
+and bitfield_base = U8 | U16 of endian | U32 of endian
 
 and _ typ =
   | Uint8 : int typ  (** 8-bit unsigned. *)
@@ -292,8 +296,8 @@ and ('a, 'k) case_branch =
     }
       -> ('a, 'k) case_branch
 
-and packed_expr =
-  | Pack_expr : 'a expr -> packed_expr  (** Existentially packed expression. *)
+(** Existentially packed expression. *)
+and packed_expr = Pack_expr : 'a expr -> packed_expr
 
 and struct_ = {
   name : string;
@@ -303,6 +307,7 @@ and struct_ = {
 }
 (** Struct declaration. *)
 
+(** A single struct field. *)
 and field =
   | Field : {
       field_name : string option;
@@ -311,15 +316,15 @@ and field =
       action : action option;
       field_doc : string option;
     }
-      -> field  (** A single struct field. *)
+      -> field
 
 and param = { param_name : string; param_typ : packed_typ; mutable_ : bool }
 (** Formal parameter. *)
 
-and action =
-  | Success of action_stmt list
-  | Act of action_stmt list  (** Action attached to a field. *)
+(** Action attached to a field. *)
+and action = Success of action_stmt list | Act of action_stmt list
 
+(** Statements available in field actions. *)
 and action_stmt =
   | Assign : ('a, param_output) param_handle * int expr -> action_stmt
   | Field_assign of string * string * int expr
@@ -327,17 +332,17 @@ and action_stmt =
   | Return of bool expr
   | Abort
   | If of bool expr * action_stmt list * action_stmt list option
-  | Var of string * int expr  (** Action statement. *)
+  | Var of string * int expr
 
 type param_env = {
   codec_id : int;
   names : string array;
-      (** Parallel to [slots]: the param name at each slot, so a handle resolves
-          to its slot by name (per-env, hence per-codec). *)
+      (** Parallel to {!field-slots}: the param name at each slot, so a handle
+          resolves to its slot by name (per-env, hence per-codec). *)
   slots : int array;
   bound : bool array;
-      (** Parallel to [slots]; set by [Param.bind] so consumers can detect
-          unbound input params. *)
+      (** Parallel to {!field-slots}; set by [Param.bind] so consumers can
+          detect unbound input params. *)
 }
 
 (** {1 Expression Constructors} *)

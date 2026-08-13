@@ -6,4 +6,4 @@
 (executable
  (name gen_diff)
  (modules gen_diff)
- (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix))
+ (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix fmt))
