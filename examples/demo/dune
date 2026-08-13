@@ -1,4 +1,4 @@
 (library
  (name demo)
  (wrapped false)
- (libraries wire))
+ (libraries wire optint))

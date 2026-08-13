@@ -209,69 +209,40 @@ let parse_struct_typ s buf off len =
   Codec.validate_struct v buf off;
   ((), off + sz)
 
+let parse_fixed size get buf off len =
+  check_eof len (off + size);
+  (get buf off, off + size)
+
+let int32_le buf off = Int32.to_int (Bytes.get_int32_le buf off)
+let int32_be buf off = Int32.to_int (Bytes.get_int32_be buf off)
+let float32_le buf off = Int32.float_of_bits (Bytes.get_int32_le buf off)
+let float32_be buf off = Int32.float_of_bits (Bytes.get_int32_be buf off)
+let float64_le buf off = Int64.float_of_bits (Bytes.get_int64_le buf off)
+let float64_be buf off = Int64.float_of_bits (Bytes.get_int64_be buf off)
+
 let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
   match typ with
-  | Uint8 ->
-      check_eof len (off + 1);
-      (Bytes.get_uint8 buf off, off + 1)
-  | Uint16 Little ->
-      check_eof len (off + 2);
-      (Bytes.get_uint16_le buf off, off + 2)
-  | Uint16 Big ->
-      check_eof len (off + 2);
-      (Bytes.get_uint16_be buf off, off + 2)
-  | Uint32 Little ->
-      check_eof len (off + 4);
-      (UInt32.le buf off, off + 4)
-  | Uint32 Big ->
-      check_eof len (off + 4);
-      (UInt32.be buf off, off + 4)
-  | Uint63 Little ->
-      check_eof len (off + 8);
-      (UInt63.le buf off, off + 8)
-  | Uint63 Big ->
-      check_eof len (off + 8);
-      (UInt63.be buf off, off + 8)
-  | Uint64 Little ->
-      check_eof len (off + 8);
-      (Bytes.get_int64_le buf off, off + 8)
-  | Uint64 Big ->
-      check_eof len (off + 8);
-      (Bytes.get_int64_be buf off, off + 8)
-  | Int8 ->
-      check_eof len (off + 1);
-      (Bytes.get_int8 buf off, off + 1)
-  | Int16 Little ->
-      check_eof len (off + 2);
-      (Bytes.get_int16_le buf off, off + 2)
-  | Int16 Big ->
-      check_eof len (off + 2);
-      (Bytes.get_int16_be buf off, off + 2)
-  | Int32 Little ->
-      check_eof len (off + 4);
-      (Int32.to_int (Bytes.get_int32_le buf off), off + 4)
-  | Int32 Big ->
-      check_eof len (off + 4);
-      (Int32.to_int (Bytes.get_int32_be buf off), off + 4)
-  | Int64 Little ->
-      check_eof len (off + 8);
-      (Bytes.get_int64_le buf off, off + 8)
-  | Int64 Big ->
-      check_eof len (off + 8);
-      (Bytes.get_int64_be buf off, off + 8)
-  | Float32 Little ->
-      check_eof len (off + 4);
-      (Int32.float_of_bits (Bytes.get_int32_le buf off), off + 4)
-  | Float32 Big ->
-      check_eof len (off + 4);
-      (Int32.float_of_bits (Bytes.get_int32_be buf off), off + 4)
-  | Float64 Little ->
-      check_eof len (off + 8);
-      (Int64.float_of_bits (Bytes.get_int64_le buf off), off + 8)
-  | Float64 Big ->
-      check_eof len (off + 8);
-      (Int64.float_of_bits (Bytes.get_int64_be buf off), off + 8)
+  | Uint8 -> parse_fixed 1 Bytes.get_uint8 buf off len
+  | Uint16 Little -> parse_fixed 2 Bytes.get_uint16_le buf off len
+  | Uint16 Big -> parse_fixed 2 Bytes.get_uint16_be buf off len
+  | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
+  | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
+  | Uint63 Little -> parse_fixed 8 UInt63.le buf off len
+  | Uint63 Big -> parse_fixed 8 UInt63.be buf off len
+  | Uint64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
+  | Uint64 Big -> parse_fixed 8 Bytes.get_int64_be buf off len
+  | Int8 -> parse_fixed 1 Bytes.get_int8 buf off len
+  | Int16 Little -> parse_fixed 2 Bytes.get_int16_le buf off len
+  | Int16 Big -> parse_fixed 2 Bytes.get_int16_be buf off len
+  | Int32 Little -> parse_fixed 4 int32_le buf off len
+  | Int32 Big -> parse_fixed 4 int32_be buf off len
+  | Int64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
+  | Int64 Big -> parse_fixed 8 Bytes.get_int64_be buf off len
+  | Float32 Little -> parse_fixed 4 float32_le buf off len
+  | Float32 Big -> parse_fixed 4 float32_be buf off len
+  | Float64 Little -> parse_fixed 8 float64_le buf off len
+  | Float64 Big -> parse_fixed 8 float64_be buf off len
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);

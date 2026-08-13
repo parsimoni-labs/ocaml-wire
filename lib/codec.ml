@@ -54,6 +54,14 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
+let float32_field_encoder setter buf off v =
+  setter buf off (Int32.bits_of_float v);
+  off + 4
+
+let float64_field_encoder setter buf off v =
+  setter buf off (Int64.bits_of_float v);
+  off + 8
+
 let rec build_casetype_encoder_ctx : type a k.
     k typ ->
     (a, k) case_branch list ->
@@ -133,22 +141,10 @@ and build_field_encoder_ctx : type a.
         off + 4
   | Int64 Little -> setter_off 8 Bytes.set_int64_le
   | Int64 Big -> setter_off 8 Bytes.set_int64_be
-  | Float32 Little ->
-      fun buf off v ->
-        Bytes.set_int32_le buf off (Int32.bits_of_float v);
-        off + 4
-  | Float32 Big ->
-      fun buf off v ->
-        Bytes.set_int32_be buf off (Int32.bits_of_float v);
-        off + 4
-  | Float64 Little ->
-      fun buf off v ->
-        Bytes.set_int64_le buf off (Int64.bits_of_float v);
-        off + 8
-  | Float64 Big ->
-      fun buf off v ->
-        Bytes.set_int64_be buf off (Int64.bits_of_float v);
-        off + 8
+  | Float32 Little -> float32_field_encoder Bytes.set_int32_le
+  | Float32 Big -> float32_field_encoder Bytes.set_int32_be
+  | Float64 Little -> float64_field_encoder Bytes.set_int64_le
+  | Float64 Big -> float64_field_encoder Bytes.set_int64_be
   | Uint_var { size = Int n; endian } ->
       fun buf off v ->
         Uint_var.write endian buf off n v;
@@ -2934,6 +2930,32 @@ let validate_or_eof buf f =
     let len = Bytes.length buf in
     raise_eof ~at:len ~expected:(len + 1) ~got:len
 
+let has_validation_checks compiled_where struct_fields =
+  compiled_where <> None
+  || List.exists
+       (fun (Types.Field f) ->
+         f.constraint_ <> None || f.action <> None
+         || field_reader_validates f.field_typ)
+       struct_fields
+
+let seed_param_slots arr n_total = function
+  | None -> ()
+  | Some slots ->
+      let n = Array.length slots in
+      Array.blit slots 0 arr.ints (n_total - n) n
+
+let validation_runtime param_slots arr buf =
+  Types.eval_ctx
+    ~set_param:(fun name value ->
+      match Hashtbl.find_opt param_slots name with
+      | Some idx -> arr.ints.(idx) <- value
+      | None -> ())
+    buf
+    (fun name ->
+      match Hashtbl.find_opt param_slots name with
+      | Some idx -> arr.ints.(idx)
+      | None -> 0)
+
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     param_slots n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
@@ -2958,14 +2980,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
      [validate_with_bounds]. A codec of plain scalars and byte spans then
      validates with no allocation, so validating it on a hot read path (a
      [Codec.get] preceded by [validate]) stays cheap. *)
-  let has_checks =
-    compiled_where <> None
-    || List.exists
-         (fun (Types.Field f) ->
-           f.constraint_ <> None || f.action <> None
-           || field_reader_validates f.field_typ)
-         struct_fields
-  in
+  let has_checks = has_validation_checks compiled_where struct_fields in
   let validate =
     if not has_checks then fun ?env_slots:_ _buf _off -> ()
     else
@@ -2973,25 +2988,10 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
       fun ?env_slots buf off ->
         let arr = get_arr () in
         clear_slots arr n_total;
-        (match env_slots with
-        | Some slots ->
-            (* Seed param slots so [where] clauses referencing [Param.input]
-               evaluate correctly. *)
-            let n = Array.length slots in
-            Array.blit slots 0 arr.ints (n_total - n) n
-        | None -> ());
-        let runtime =
-          Types.eval_ctx
-            ~set_param:(fun name value ->
-              match Hashtbl.find_opt param_slots name with
-              | Some idx -> arr.ints.(idx) <- value
-              | None -> ())
-            buf
-            (fun name ->
-              match Hashtbl.find_opt param_slots name with
-              | Some idx -> arr.ints.(idx)
-              | None -> 0)
-        in
+        (* Seed param slots so [where] clauses referencing [Param.input]
+           evaluate correctly. *)
+        seed_param_slots arr n_total env_slots;
+        let runtime = validation_runtime param_slots arr buf in
         validate_or_eof buf (fun () -> validate_arr arr runtime off)
   in
   (validate_arr, populate, validate)
@@ -3005,7 +3005,7 @@ let collect_param_handles codec_name struct_fields where =
         Hashtbl.add seen p.name packed;
         handles := packed :: !handles
     | Some (Param.Pack existing) ->
-        if not (Obj.repr p == Obj.repr existing) then
+        if p.Types.id <> existing.Types.id then
           Fmt.invalid_arg "Codec.v %S: duplicate parameter name %S" codec_name
             p.name
   in
@@ -3284,6 +3284,30 @@ let reject_invalid_codec_shape name fields =
   reject_nested_where name fields;
   reject_certain_byte_size_mul name fields
 
+let build_size_of_value size_funcs =
+  let n = Array.length size_funcs in
+  fun value ->
+    let total = Stdlib.ref 0 in
+    for i = 0 to n - 1 do
+      total := !total + size_funcs.(i) value
+    done;
+    !total
+
+let build_record_encoder name writers size_of_value =
+  let n = Array.length writers in
+  fun value runtime off ->
+    let buf = Types.eval_bytes runtime in
+    let need = size_of_value value in
+    if off + need > Bytes.length buf then
+      Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name
+        need
+        (Bytes.length buf - off);
+    let write_off = Stdlib.ref off in
+    for i = 0 to n - 1 do
+      write_off := writers.(i) value runtime off !write_off
+    done;
+    !write_off
+
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
   let codec_id = Atomic.fetch_and_add id_counter 1 in
@@ -3295,7 +3319,6 @@ let seal : type r. (r, r) record -> r t =
   in
   let min_size = r.min_wire_size in
   let writers = Array.of_list (List.rev r.writers_rev) in
-  let n_writers = Array.length writers in
   let raw_decode = build_decode r.make r.readers in
   let validators = List.rev r.validators_rev in
   let param_base = r.n_array_slots in
@@ -3316,14 +3339,7 @@ let seal : type r. (r, r) record -> r t =
   (* Per-field action runners *)
   let field_actions = List.rev r.field_actions_rev in
   let size_funcs = Array.of_list (List.rev r.size_of_value_rev) in
-  let n_size_funcs = Array.length size_funcs in
-  let size_of_value v =
-    let total = Stdlib.ref 0 in
-    for i = 0 to n_size_funcs - 1 do
-      total := !total + size_funcs.(i) v
-    done;
-    !total
-  in
+  let size_of_value = build_size_of_value size_funcs in
   {
     id = codec_id;
     name = r.name;
@@ -3332,19 +3348,7 @@ let seal : type r. (r, r) record -> r t =
     field_readers = List.rev r.field_readers;
     field_actions;
     decode = build_checked_decode raw_decode wire_size_info min_size;
-    encode =
-      (fun v runtime off ->
-        let buf = Types.eval_bytes runtime in
-        let need = size_of_value v in
-        if off + need > Bytes.length buf then
-          Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
-            r.name need
-            (Bytes.length buf - off);
-        let write_off = Stdlib.ref off in
-        for i = 0 to n_writers - 1 do
-          write_off := writers.(i) v runtime off !write_off
-        done;
-        !write_off);
+    encode = build_record_encoder r.name writers size_of_value;
     wire_size = wire_size_info;
     struct_fields;
     validate =

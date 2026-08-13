@@ -1,4 +1,5 @@
 (lang dune 3.21)
+(implicit_transitive_deps false)
 (using directory-targets 0.1)
 (using mdx 0.4)
 (cram enable)

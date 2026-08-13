@@ -22,6 +22,10 @@
 
 ### Changed
 
+- Dune now enforces explicit transitive dependencies. Each library, executable,
+  benchmark, fuzz target, and test declares the packages it imports directly,
+  preventing accidental dependency leakage through `wire`.
+
 - Generated `.3d` C struct tags are now named `Wire<Name>` rather than
   `_<Name>`. Public typedef names are unchanged, and standalone entrypoints
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
