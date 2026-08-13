@@ -13,6 +13,7 @@ test:
 # modules truncate to the bit patterns they intend on a 31-bit target, and
 # the runtime checks prove the values survive. Warnings only surface for
 # freshly compiled units, so the grep is meaningful on a cold build (CI).
+# Remove the filter once https://github.com/mirage/optint/pull/31 is released.
 test-wasm:
 	@command -v wasm_of_ocaml >/dev/null || \
 	  { echo "wasm_of_ocaml not found: opam install wasm_of_ocaml-compiler"; exit 1; }
