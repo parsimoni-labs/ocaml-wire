@@ -11,7 +11,8 @@
 
 ; Verbose keeps alcotest away from its per-test output capture, whose
 ; primitives (alcotest_before_test) exist only for native and js_of_ocaml;
-; ALCOTEST_COLUMNS short-circuits the terminal-dimensions one.
+; ALCOTEST_COLUMNS short-circuits the terminal-dimensions one. Remove this
+; override once https://github.com/mirage/alcotest/pull/436 is released.
 
 (env
  (_
