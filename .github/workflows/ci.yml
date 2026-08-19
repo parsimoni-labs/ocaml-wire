@@ -24,7 +24,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
       - run: opam exec -- dune build @install
@@ -44,7 +43,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: 'ocaml-variants.5.4.1+options,ocaml-option-tsan'
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
 
@@ -61,10 +59,9 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.3'
-          dune-version: '3.21'
 
       - run: opam install ocamlformat.0.29.0
-      - run: opam exec -- dune fmt 2>/dev/null || true
+      - run: opam exec -- dune fmt
       - run: git diff --exit-code
 
   # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
@@ -81,7 +78,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.3'
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
 
@@ -137,7 +133,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.3'
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
 
@@ -199,7 +194,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.3'
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
 
@@ -231,7 +225,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: '5.3'
-          dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
 
