@@ -24,8 +24,8 @@
  (name test)
  (modes js wasm)
  (libraries wire test_helpers alcotest re bytesrw fmt optint)
- (enabled_if
-  (and
-   %{bin-available:wasm_of_ocaml}
-   %{bin-available:js_of_ocaml}
-   %{bin-available:node})))
+ (enabled_if %{bin-available:node})
+ (js_of_ocaml
+  (enabled_if %{bin-available:js_of_ocaml}))
+ (wasm_of_ocaml
+  (enabled_if %{bin-available:wasm_of_ocaml})))
