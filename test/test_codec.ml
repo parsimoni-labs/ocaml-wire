@@ -2085,12 +2085,13 @@ let test_action_unfired_by_validate () =
       $ fun v -> v)
   in
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
+  let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  Codec.validate codec buf 0;
+  Codec.validate ~env codec buf 0;
   (* validate does NOT fire actions *)
   Alcotest.(check int)
     "action not fired by validate" 0
-    !(action_out2.Wire.Private.Types.cell ())
+    (Param.get env action_out2)
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.
@@ -2334,6 +2335,27 @@ let test_embed_where_enforced () =
   Alcotest.(check int)
     "satisfying value accepted" 5
     (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0))
+
+let test_embed_output_param () =
+  let out = Param.output "embedded_out" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub_field =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_v) ])
+        uint8
+      $ Fun.id)
+  in
+  let sub = Codec.v "EmbeddedOutputSub" Fun.id Codec.[ sub_field ] in
+  let outer =
+    Codec.v "EmbeddedOutputOuter" Fun.id
+      Codec.[ Field.v "sub" (codec sub) $ Fun.id ]
+  in
+  let env = Codec.env outer in
+  Alcotest.(check int)
+    "decoded value" 42
+    (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0));
+  Alcotest.(check int) "forwarded output" 42 (Param.get env out)
 
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
@@ -6158,6 +6180,77 @@ let test_encode_var_bytes_no_closure () =
   in
   Alcotest.(check int) "var-bytes encode allocates nothing" 0 words
 
+(* [Codec.get] and [Codec.set] resolve a field's type and offset when the
+   accessor is staged. Pin the per-call contract separately from functional
+   correctness: rebuilding a reader closure returns the right value but still
+   puts pressure on a hot-path minor heap. *)
+type alloc_accessor = {
+  alloc_hi : int;
+  alloc_lo : int;
+  alloc_u8 : int;
+  alloc_u16 : int;
+  alloc_i32 : int;
+}
+
+let alloc_hi = Field.v "Hi" (bits ~width:4 U8)
+let alloc_lo = Field.v "Lo" (bits ~width:4 U8)
+let alloc_u8 = Field.v "U8" uint8
+let alloc_u16 = Field.v "U16" uint16be
+let alloc_i32 = Field.v "I32" int32be
+let alloc_bf_hi = Codec.(alloc_hi $ fun r -> r.alloc_hi)
+let alloc_bf_lo = Codec.(alloc_lo $ fun r -> r.alloc_lo)
+let alloc_bf_u8 = Codec.(alloc_u8 $ fun r -> r.alloc_u8)
+let alloc_bf_u16 = Codec.(alloc_u16 $ fun r -> r.alloc_u16)
+let alloc_bf_i32 = Codec.(alloc_i32 $ fun r -> r.alloc_i32)
+
+let alloc_accessor_codec =
+  Codec.v "AllocAccessor"
+    (fun alloc_hi alloc_lo alloc_u8 alloc_u16 alloc_i32 ->
+      { alloc_hi; alloc_lo; alloc_u8; alloc_u16; alloc_i32 })
+    Codec.[ alloc_bf_hi; alloc_bf_lo; alloc_bf_u8; alloc_bf_u16; alloc_bf_i32 ]
+
+let per_call_words f =
+  ignore (Sys.opaque_identity (f ()));
+  let iters = 200_000 in
+  Gc.full_major ();
+  let before = Gc.minor_words () in
+  for _ = 1 to iters do
+    ignore (Sys.opaque_identity (f ()))
+  done;
+  let after = Gc.minor_words () in
+  int_of_float (Float.round ((after -. before) /. float_of_int iters))
+
+let check_no_per_call_allocation name f =
+  Alcotest.(check int)
+    (Fmt.str "%s allocates nothing" name)
+    0 (per_call_words f)
+
+let test_get_no_allocation () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let get f = Staged.unstage (Codec.get alloc_accessor_codec f) in
+  let get_hi = get alloc_bf_hi
+  and get_u8 = get alloc_bf_u8
+  and get_u16 = get alloc_bf_u16
+  and get_i32 = get alloc_bf_i32 in
+  check_no_per_call_allocation "get bits" (fun () -> get_hi buf 0);
+  check_no_per_call_allocation "get uint8" (fun () -> get_u8 buf 0);
+  check_no_per_call_allocation "get uint16be" (fun () -> get_u16 buf 0);
+  check_no_per_call_allocation "get int32be" (fun () -> get_i32 buf 0)
+
+let test_set_no_allocation () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let set f = Staged.unstage (Codec.set alloc_accessor_codec f) in
+  let set_hi = set alloc_bf_hi
+  and set_u8 = set alloc_bf_u8
+  and set_u16 = set alloc_bf_u16
+  and set_i32 = set alloc_bf_i32 in
+  check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
+  check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 7);
+  check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 513);
+  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000)
+
 (* -- Suite -- *)
 
 let suite =
@@ -6352,6 +6445,8 @@ let suite =
         test_embed_param_requires_env;
       Alcotest.test_case "embed: sub-codec where enforced" `Quick
         test_embed_where_enforced;
+      Alcotest.test_case "embed: output parameter forwarded" `Quick
+        test_embed_output_param;
       Alcotest.test_case "embed: param forwarded through repeat" `Quick
         test_embed_param_repeat;
       Alcotest.test_case "action: output only" `Quick
@@ -6675,4 +6770,8 @@ let suite =
       (* encode allocation *)
       Alcotest.test_case "encode: var-bytes fields allocate nothing" `Quick
         test_encode_var_bytes_no_closure;
+      Alcotest.test_case "get: immediate fields allocate nothing" `Quick
+        test_get_no_allocation;
+      Alcotest.test_case "set: immediate fields allocate nothing" `Quick
+        test_set_no_allocation;
     ] )
