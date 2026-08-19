@@ -141,10 +141,10 @@ val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
 (** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
     [f] has an action, it fires on every read. [env] syncs output parameters
-    after each action; fields without actions have zero overhead regardless of
-    [env]. An environment created for another codec raises [Invalid_argument].
-    Does not check record-level where-clauses or other fields' constraints --
-    call {!validate} first on untrusted input. *)
+    after each action and supplies parameters for dependent field layouts; omit
+    it for parameter-free accessors. An environment created for another codec
+    raises [Invalid_argument]. Does not check record-level where-clauses or
+    other fields' constraints -- call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
 (** Staged zero-copy field setter. Does not check constraints or fire actions --
@@ -165,17 +165,26 @@ val raw_encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> int
     semantics as {!encode}. Internal use. *)
 
 val embed_encode : 'r t -> 'r -> bytes -> int -> int
-(** Encode a sub-codec embedded as a field/element. Assumes the enclosing codec
-    has already seeded any input param cells from its env, so it skips the env
-    check {!encode} performs. Internal use. *)
+(** Encode a parameter-free sub-codec embedded as a field/element, skipping the
+    env check {!encode} performs. Internal use. *)
+
+val embed_encode_ctx : 'r t -> 'r -> Types.eval_ctx -> int -> int
+(** Context-threaded embedded encode. Internal use. *)
 
 val embed_decode : 'r t -> bytes -> int -> 'r
 (** Decode a sub-codec embedded as a field/element, enforcing its [where] and
     field constraints against param values seeded by the enclosing codec.
     Internal use. *)
 
+val embed_decode_ctx : 'r t -> Types.eval_ctx -> int -> 'r
+(** Context-threaded embedded decode. Internal use. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
+
+val wire_size_info_ctx :
+  'r t -> [ `Fixed of int | `Variable of Types.eval_ctx -> int -> int ]
+(** Context-threaded wire size information for embedding. Internal use. *)
 
 val name : 'r t -> string
 (** [name c] returns the codec's name. *)
@@ -195,6 +204,9 @@ val field_readers : 'r t -> (string * (bytes -> int -> int)) list
 (** [field_readers c] returns the int-valued field readers of [c], indexed by
     field name. Used for cross-codec name resolution when [c] is embedded as a
     sub-codec via {!Wire.codec}. *)
+
+val field_readers_ctx : 'r t -> (string * (Types.eval_ctx -> int -> int)) list
+(** Context-threaded field readers for embedding. Internal use. *)
 
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)

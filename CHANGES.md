@@ -39,6 +39,17 @@
 
 ### Fixed
 
+- Staged `Codec.get` readers now resolve their field-type dispatch once rather
+  than rebuilding a reader closure on every scalar access. Parameter-free
+  immediate getters and setters, including signed 32-bit setters, now allocate
+  zero words per call on a non-Flambda release build.
+
+- Parameter values are now carried by an explicit encode/decode context rather
+  than ambient domain-local cells. Re-entrant or fiber-interleaved operations
+  on the same parametric codec can therefore use different environments
+  without corrupting each other's field sizes, including embedded codecs,
+  casetype bodies, fixed-size type wrappers, and repeated elements.
+
 - EverParse is now launched with a literal argument vector and a child-local
   working directory. Output paths, executable paths, and schema filenames may
   contain spaces or shell metacharacters without failing or being interpreted

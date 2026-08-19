@@ -16,6 +16,36 @@ type ('elt, 'seq) seq_map =
 type param_input
 type param_output
 
+type bound_eval_ctx = {
+  bytes : bytes;
+  param : string -> int;
+  set_param : string -> int -> unit;
+}
+
+type eval_ctx = Obj.t
+
+(* A parameter-free operation is the common hot path. Represent its context by
+   the bytes block itself (whose runtime tag is [String_tag]) so introducing an
+   explicit context does not add an allocation to every encode/decode. A bound
+   context is a normal record and therefore has tag 0. The type stays abstract
+   outside this module, containing the representation distinction here. *)
+let empty_eval_ctx bytes : eval_ctx = Obj.repr bytes
+
+let eval_ctx ?(set_param = fun _ _ -> ()) bytes param : eval_ctx =
+  Obj.repr { bytes; param; set_param }
+
+let eval_bytes (ctx : eval_ctx) : bytes =
+  if Obj.tag ctx = Obj.string_tag then Obj.obj ctx
+  else (Obj.obj ctx : bound_eval_ctx).bytes
+
+let eval_param (ctx : eval_ctx) name =
+  if Obj.tag ctx = Obj.string_tag then 0
+  else (Obj.obj ctx : bound_eval_ctx).param name
+
+let eval_set_param (ctx : eval_ctx) name value =
+  if Obj.tag ctx <> Obj.string_tag then
+    (Obj.obj ctx : bound_eval_ctx).set_param name value
+
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the
    [predicate] constructors are reached only through a [predicate]-typed
@@ -73,15 +103,6 @@ type ('a, 'k) param_handle = {
   typ : 'a typ;
   packed_typ : packed_typ;
   mutable_ : bool;
-  cell : unit -> int ref;
-      (* [cell] is the per-handle backing read by encode/size expressions and
-         the value-forwarding vehicle for embedded sub-codecs. Domain-local: a
-         handle lives inside a codec shared across domains, so a single [int ref]
-         would race across domains the way the validator scratch did; [cell ()]
-         returns this domain's ref. Slot resolution (decode array index, env
-         index) is NOT stored here: it is per-codec, since one handle may be
-         referenced both standalone and from an embedding, which would clash on
-         a single mutable field. *)
 }
 
 and packed_typ = Pack_typ : 'a typ -> packed_typ
@@ -208,18 +229,18 @@ and _ typ =
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
   | Codec : {
       codec_name : string;
-      codec_decode : bytes -> int -> 'r;
-      codec_encode : 'r -> bytes -> int -> int;
+      codec_decode : eval_ctx -> int -> 'r;
+      codec_encode : 'r -> eval_ctx -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;
-      codec_size_of : bytes -> int -> int;
+      codec_size_of : eval_ctx -> int -> int;
       codec_size_of_value : 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
              than by re-reading the buffer. The buffer-driven [codec_size_of]
              is wrong for variable-size codecs ending in [all_bytes] /
              [rest_bytes] / [all_zeros]: it reads "remaining buffer space",
              not the value's actual tail length. *)
-      codec_field_readers : (string * (bytes -> int -> int)) list;
+      codec_field_readers : (string * (eval_ctx -> int -> int)) list;
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)

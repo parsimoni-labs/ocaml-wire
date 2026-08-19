@@ -27,10 +27,6 @@ let setter_off n set buf off v =
   set buf off v;
   off + n
 
-let setter_off_int32 n set buf off v =
-  set buf off (Int32.of_int v);
-  off + n
-
 (* Encode a value into a fixed [n]-byte region: write it with [enc], then
    zero-pad the remainder. Used for [nested] regions. *)
 let single_elem_region ~at_most n typ enc buf off v =
@@ -58,10 +54,16 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
-let rec build_casetype_encoder : type a k.
-    k typ -> (a, k) case_branch list -> bytes -> int -> a -> int =
- fun tag cases ->
-  let tag_enc = build_field_encoder tag in
+let rec build_casetype_encoder_ctx : type a k.
+    k typ ->
+    (a, k) case_branch list ->
+    Types.eval_ctx ->
+    bytes ->
+    int ->
+    a ->
+    int =
+ fun tag cases runtime ->
+  let tag_enc = build_field_encoder_ctx tag runtime in
   let rec find buf off v = function
     | [] -> failwith "build_field_encoder: casetype: no matching case"
     | Case_branch { cb_inner; cb_project; _ } :: rest -> (
@@ -70,13 +72,14 @@ let rec build_casetype_encoder : type a k.
         match cb_project v with
         | Some (t, body) ->
             let off' = tag_enc buf off t in
-            build_field_encoder cb_inner buf off' body
+            build_field_encoder_ctx cb_inner runtime buf off' body
         | None -> find buf off v rest)
   in
   fun buf off v -> find buf off v cases
 
-and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
- fun typ ->
+and build_field_encoder_ctx : type a.
+    a typ -> Types.eval_ctx -> bytes -> int -> a -> int =
+ fun typ runtime ->
   match typ with
   | Uint8 ->
       fun buf off v ->
@@ -117,8 +120,17 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
   | Int8 -> setter_off 1 Bytes.set_int8
   | Int16 Little -> setter_off 2 Bytes.set_int16_le
   | Int16 Big -> setter_off 2 Bytes.set_int16_be
-  | Int32 Little -> setter_off_int32 4 Bytes.set_int32_le
-  | Int32 Big -> setter_off_int32 4 Bytes.set_int32_be
+  (* Keep the conversion and primitive call visible together. Passing the
+     setter through [setter_off_int32] boxes the temporary [int32] on every
+     staged write when Flambda is disabled. *)
+  | Int32 Little ->
+      fun buf off v ->
+        Bytes.set_int32_le buf off (Int32.of_int v);
+        off + 4
+  | Int32 Big ->
+      fun buf off v ->
+        Bytes.set_int32_be buf off (Int32.of_int v);
+        off + 4
   | Int64 Little -> setter_off 8 Bytes.set_int64_le
   | Int64 Big -> setter_off 8 Bytes.set_int64_be
   | Float32 Little ->
@@ -149,16 +161,16 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
         Bytes.blit (Slice.bytes v) (Slice.first v) buf off len;
         if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
         off + n
-  | Where { inner; _ } -> build_field_encoder inner
-  | Enum { base; _ } -> build_field_encoder base
+  | Where { inner; _ } -> build_field_encoder_ctx inner runtime
+  | Enum { base; _ } -> build_field_encoder_ctx base runtime
   | Map { inner; encode; _ } ->
-      let enc = build_field_encoder inner in
+      let enc = build_field_encoder_ctx inner runtime in
       fun buf off v -> enc buf off (encode v)
   | Unit -> fun _buf off () -> off
-  | Codec { codec_encode; _ } -> fun buf off v -> codec_encode v buf off
-  | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
+  | Codec { codec_encode; _ } -> fun _buf off v -> codec_encode v runtime off
+  | Casetype { tag; cases; _ } -> build_casetype_encoder_ctx tag cases runtime
   | Array { len = Int expected; elem; seq } ->
-      let enc_elem = build_field_encoder elem in
+      let enc_elem = build_field_encoder_ctx elem runtime in
       fun buf start_off vs ->
         let cur = Stdlib.ref start_off in
         Types.exact_array_elements seq ~expected vs
@@ -193,10 +205,13 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
   | Single_elem { size = Int n; elem; at_most } ->
-      single_elem_region ~at_most n elem (build_field_encoder elem)
+      single_elem_region ~at_most n elem (build_field_encoder_ctx elem runtime)
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
+
+let build_field_encoder typ buf off v =
+  build_field_encoder_ctx typ (Types.empty_eval_ctx buf) buf off v
 
 (* An [enum] decodes through its base integer type; validate that the value is
    one of the named cases, raising [Invalid_enum] otherwise, so the decoder
@@ -215,79 +230,125 @@ let enum_check cases closed =
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
-let rec build_field_reader : type a. a typ -> int -> bytes -> int -> a =
+let rec build_field_reader_ctx : type a.
+    a typ -> int -> Types.eval_ctx -> int -> a =
  fun typ field_off ->
   match typ with
-  | Uint8 -> fun buf base -> Bytes.get_uint8 buf (base + field_off)
-  | Uint16 Little -> fun buf base -> Bytes.get_uint16_le buf (base + field_off)
-  | Uint16 Big -> fun buf base -> Bytes.get_uint16_be buf (base + field_off)
-  | Uint32 Little -> fun buf base -> UInt32.le buf (base + field_off)
-  | Uint32 Big -> fun buf base -> UInt32.be buf (base + field_off)
-  | Uint63 Little -> fun buf base -> UInt63.le buf (base + field_off)
-  | Uint63 Big -> fun buf base -> UInt63.be buf (base + field_off)
-  | Uint64 Little -> fun buf base -> Bytes.get_int64_le buf (base + field_off)
-  | Uint64 Big -> fun buf base -> Bytes.get_int64_be buf (base + field_off)
-  | Int8 -> fun buf base -> Bytes.get_int8 buf (base + field_off)
-  | Int16 Little -> fun buf base -> Bytes.get_int16_le buf (base + field_off)
-  | Int16 Big -> fun buf base -> Bytes.get_int16_be buf (base + field_off)
+  | Uint8 ->
+      fun runtime base ->
+        Bytes.get_uint8 (Types.eval_bytes runtime) (base + field_off)
+  | Uint16 Little ->
+      fun runtime base ->
+        Bytes.get_uint16_le (Types.eval_bytes runtime) (base + field_off)
+  | Uint16 Big ->
+      fun runtime base ->
+        Bytes.get_uint16_be (Types.eval_bytes runtime) (base + field_off)
+  | Uint32 Little ->
+      fun runtime base -> UInt32.le (Types.eval_bytes runtime) (base + field_off)
+  | Uint32 Big ->
+      fun runtime base -> UInt32.be (Types.eval_bytes runtime) (base + field_off)
+  | Uint63 Little ->
+      fun runtime base -> UInt63.le (Types.eval_bytes runtime) (base + field_off)
+  | Uint63 Big ->
+      fun runtime base -> UInt63.be (Types.eval_bytes runtime) (base + field_off)
+  | Uint64 Little ->
+      fun runtime base ->
+        Bytes.get_int64_le (Types.eval_bytes runtime) (base + field_off)
+  | Uint64 Big ->
+      fun runtime base ->
+        Bytes.get_int64_be (Types.eval_bytes runtime) (base + field_off)
+  | Int8 ->
+      fun runtime base ->
+        Bytes.get_int8 (Types.eval_bytes runtime) (base + field_off)
+  | Int16 Little ->
+      fun runtime base ->
+        Bytes.get_int16_le (Types.eval_bytes runtime) (base + field_off)
+  | Int16 Big ->
+      fun runtime base ->
+        Bytes.get_int16_be (Types.eval_bytes runtime) (base + field_off)
   | Int32 Little ->
-      fun buf base -> Int32.to_int (Bytes.get_int32_le buf (base + field_off))
+      fun runtime base ->
+        Int32.to_int
+          (Bytes.get_int32_le (Types.eval_bytes runtime) (base + field_off))
   | Int32 Big ->
-      fun buf base -> Int32.to_int (Bytes.get_int32_be buf (base + field_off))
-  | Int64 Little -> fun buf base -> Bytes.get_int64_le buf (base + field_off)
-  | Int64 Big -> fun buf base -> Bytes.get_int64_be buf (base + field_off)
+      fun runtime base ->
+        Int32.to_int
+          (Bytes.get_int32_be (Types.eval_bytes runtime) (base + field_off))
+  | Int64 Little ->
+      fun runtime base ->
+        Bytes.get_int64_le (Types.eval_bytes runtime) (base + field_off)
+  | Int64 Big ->
+      fun runtime base ->
+        Bytes.get_int64_be (Types.eval_bytes runtime) (base + field_off)
   | Float32 Little ->
-      fun buf base ->
-        Int32.float_of_bits (Bytes.get_int32_le buf (base + field_off))
+      fun runtime base ->
+        Int32.float_of_bits
+          (Bytes.get_int32_le (Types.eval_bytes runtime) (base + field_off))
   | Float32 Big ->
-      fun buf base ->
-        Int32.float_of_bits (Bytes.get_int32_be buf (base + field_off))
+      fun runtime base ->
+        Int32.float_of_bits
+          (Bytes.get_int32_be (Types.eval_bytes runtime) (base + field_off))
   | Float64 Little ->
-      fun buf base ->
-        Int64.float_of_bits (Bytes.get_int64_le buf (base + field_off))
+      fun runtime base ->
+        Int64.float_of_bits
+          (Bytes.get_int64_le (Types.eval_bytes runtime) (base + field_off))
   | Float64 Big ->
-      fun buf base ->
-        Int64.float_of_bits (Bytes.get_int64_be buf (base + field_off))
+      fun runtime base ->
+        Int64.float_of_bits
+          (Bytes.get_int64_be (Types.eval_bytes runtime) (base + field_off))
   | Uint_var { size = Int n; endian } ->
-      fun buf base -> Uint_var.read endian buf (base + field_off) n
+      fun runtime base ->
+        Uint_var.read endian (Types.eval_bytes runtime) (base + field_off) n
   | Byte_array { size = Int n } ->
-      fun buf base -> Bytes.sub_string buf (base + field_off) n
+      fun runtime base ->
+        Bytes.sub_string (Types.eval_bytes runtime) (base + field_off) n
   | Byte_array_where { size = Int n; _ } ->
-      fun buf base -> Bytes.sub_string buf (base + field_off) n
+      fun runtime base ->
+        Bytes.sub_string (Types.eval_bytes runtime) (base + field_off) n
   | Byte_slice { size = Int n } ->
-      fun buf base -> Slice.make_or_eod buf ~first:(base + field_off) ~length:n
-  | Where { inner; _ } -> build_field_reader inner field_off
+      fun runtime base ->
+        Slice.make_or_eod (Types.eval_bytes runtime) ~first:(base + field_off)
+          ~length:n
+  | Where { inner; _ } -> build_field_reader_ctx inner field_off
   | Enum { base; cases; closed; _ } ->
-      let read = build_field_reader base field_off in
+      let read = build_field_reader_ctx base field_off in
       let check = enum_check cases closed in
-      fun buf base -> check ~at:(base + field_off) (read buf base)
+      fun runtime base -> check ~at:(base + field_off) (read runtime base)
   | Map { inner; decode; _ } ->
-      let read = build_field_reader inner field_off in
-      fun buf base -> decode (read buf base)
-  | Unit -> fun _buf _base -> ()
+      let read = build_field_reader_ctx inner field_off in
+      fun runtime base -> decode (read runtime base)
+  | Unit -> fun _runtime _base -> ()
   (* A fixed-size sub-record / sub-codec as an array or nested element: decode
      it at the element offset. The element must be fixed-width (the Array case
      already gates on [field_wire_size]), so the sub-codec is too. *)
   | Codec { codec_decode; _ } ->
-      fun buf base -> codec_decode buf (base + field_off)
+      fun runtime base -> codec_decode runtime (base + field_off)
   | Array { len = Int n; elem; seq = Seq_map s } -> (
       match field_wire_size elem with
       | Some elem_sz ->
-          let read_elem = build_field_reader elem 0 in
-          fun buf base ->
+          let read_elem = build_field_reader_ctx elem 0 in
+          fun runtime base ->
             let acc = Stdlib.ref s.empty in
             for i = 0 to n - 1 do
-              let v = read_elem buf (base + field_off + (i * elem_sz)) in
+              let v = read_elem runtime (base + field_off + (i * elem_sz)) in
               acc := s.add !acc v
             done;
             s.finish !acc
       | None ->
-          fun _buf _base -> failwith "build_field_reader: unsupported type")
-  | _ -> fun _buf _base -> failwith "build_field_reader: unsupported type"
+          fun _runtime _base -> failwith "build_field_reader: unsupported type")
+  | _ -> fun _runtime _base -> failwith "build_field_reader: unsupported type"
+
+let build_field_reader typ field_off =
+  (* Resolve the type dispatch while staging the accessor. If this call stayed
+     inside the returned function, [build_field_reader_ctx] would construct a
+     fresh reader closure for every scalar read. *)
+  let read = build_field_reader_ctx typ field_off in
+  fun buf base -> read (Types.empty_eval_ctx buf) base
 
 let int_of_typ_value = Eval.int_of_exn
 
 type slots = { ints : int array; int64s : int64 array }
+type runtime = Types.eval_ctx
 
 let alloc_slots n = { ints = Array.make n 0; int64s = Array.make n 0L }
 
@@ -343,7 +404,7 @@ let populate_uint63 idx reader =
       (Int64.unsigned_to_int (Optint.Int63.to_int64 (reader buf base)))
 
 let rec build_populate : type a.
-    a typ -> int -> (bytes -> int -> a) -> slots -> bytes -> int -> unit =
+    a typ -> int -> (runtime -> int -> a) -> slots -> runtime -> int -> unit =
  fun typ idx reader ->
   match typ with
   | Uint8 -> fun slots buf base -> set_int_slot slots idx (reader buf base)
@@ -377,19 +438,21 @@ let rec build_populate : type a.
      still returns the [float], reinterpreted via [Int*.float_of_bits]
      elsewhere. *)
   | Float32 Little ->
-      fun slots buf base ->
-        set_int_slot slots idx (Bytes.get_int32_le buf base |> Int32.to_int)
+      fun slots runtime base ->
+        set_int_slot slots idx
+          (Bytes.get_int32_le (Types.eval_bytes runtime) base |> Int32.to_int)
   | Float32 Big ->
-      fun slots buf base ->
-        set_int_slot slots idx (Bytes.get_int32_be buf base |> Int32.to_int)
+      fun slots runtime base ->
+        set_int_slot slots idx
+          (Bytes.get_int32_be (Types.eval_bytes runtime) base |> Int32.to_int)
   | Float64 Little ->
-      fun slots buf base ->
-        let bits = Bytes.get_int64_le buf base in
+      fun slots runtime base ->
+        let bits = Bytes.get_int64_le (Types.eval_bytes runtime) base in
         set_int64_slot slots idx bits;
         set_int_slot slots idx (Int64.to_int bits)
   | Float64 Big ->
-      fun slots buf base ->
-        let bits = Bytes.get_int64_be buf base in
+      fun slots runtime base ->
+        let bits = Bytes.get_int64_be (Types.eval_bytes runtime) base in
         set_int64_slot slots idx bits;
         set_int_slot slots idx (Int64.to_int bits)
   | Where { inner; _ } -> build_populate inner idx reader
@@ -438,6 +501,26 @@ type bf_info = {
   bf_mask : Optint.t;
 }
 
+let no_runtime = Types.empty_eval_ctx
+
+let runtime ?env bytes =
+  match env with
+  | None -> Types.empty_eval_ctx bytes
+  | Some env ->
+      let rec find name i =
+        if i >= Array.length env.Types.names then -1
+        else if env.names.(i) = name then i
+        else find name (i + 1)
+      in
+      Types.eval_ctx
+        ~set_param:(fun name value ->
+          let i = find name 0 in
+          if i >= 0 then env.slots.(i) <- value)
+        bytes
+        (fun name ->
+          let i = find name 0 in
+          if i < 0 then 0 else env.slots.(i))
+
 type field_access =
   | Fixed of int
   | Bitfield of {
@@ -446,11 +529,11 @@ type field_access =
       shift : int;
       width : int;
     }
-  | Dynamic of (bytes -> int -> int)
-  | Variable of { off : int; size_fn : bytes -> int -> int }
+  | Dynamic of (runtime -> int -> int)
+  | Variable of { off : int; size_fn : runtime -> int -> int }
   | Variable_dynamic of {
-      off_fn : bytes -> int -> int;
-      size_fn : bytes -> int -> int;
+      off_fn : runtime -> int -> int;
+      size_fn : runtime -> int -> int;
     }
 
 type ('a, 'r) field = {
@@ -493,7 +576,7 @@ let struct' = struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers * (bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers * (runtime -> int -> 'a)
       -> ('full, 'rest) readers
 
 (* Bitfield group state: tracks the current base word being packed. *)
@@ -507,12 +590,12 @@ type bf_codec_state = {
 
 (* Track the byte offset for the next field: static (constant) until we hit
    a variable-size field, then dynamic (computed from the buffer). *)
-type next_off = Static of int | Dynamic of (bytes -> int -> int)
-(* [compute buf base] returns the absolute byte offset where the next
-         field starts. [base] is the record's base offset in [buf]. *)
+type next_off = Static of int | Dynamic of (runtime -> int -> int)
+(* [compute runtime base] returns the absolute byte offset where the next field
+   starts. [base] is the record's base offset in [runtime.buf]. *)
 
-type field_reader = string * (bytes -> int -> int)
-(* Name + buffer-and-base reader for a previously-declared int field. *)
+type field_reader = string * (runtime -> int -> int)
+(* Name + runtime-and-base reader for a previously-declared int field. *)
 
 (* Single GADT walker for [a expr] used by both call surfaces (closure
    over bytes for variable-size sizing; int_array lookup for constraint
@@ -733,11 +816,10 @@ and compile_bool : type c1 c2. (c1, c2) leaves -> bool expr -> c1 -> c2 -> bool
       fun c d -> not (fe c d)
   | Ref _ -> .
 
-(* Closure-based access layer: the context is [buf] and [base], passed as two
-   curried arguments. The compiled offset/size functions are [bytes -> int ->
-   int] directly, so evaluating a size expression allocates nothing per call. *)
-let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
-    (env : field_reader list) : (bytes, int) leaves =
+(* Runtime access layer: the context carries both the buffer and the immutable
+   parameter environment for this operation. *)
+let bytes_leaves ?(sizeof_this : runtime -> int -> int = fun _ _ -> 0)
+    (env : field_reader list) : (runtime, int) leaves =
   {
     ref_ =
       (fun name ->
@@ -752,7 +834,7 @@ let bytes_leaves ?(sizeof_this : bytes -> int -> int = fun _ _ -> 0)
           "Codec: full-width field ref %S is only available in field \
            constraints"
           name);
-    param_ref = (fun (Pack_param p) _ _ -> !(p.cell ()));
+    param_ref = (fun (Pack_param p) rt _ -> Types.eval_param rt p.name);
     sizeof_typ =
       (fun (Pack_typ t) ->
         match field_wire_size t with
@@ -801,12 +883,10 @@ let array_leaves (cc : compile_ctx) : (slots, unit) leaves =
     param_ref =
       (fun (Pack_param p) a () ->
         (* The per-codec slot map is filled at seal, after these leaves are
-           built, so it must be consulted per call. A param not in this
-           codec's map (e.g. one only reachable via [cell] forwarding from
-           an embedding) falls back to the shared cell. *)
+           built, so it must be consulted per call. *)
         match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some i -> a.ints.(i)
-        | None -> !(p.cell ()));
+        | None -> Fmt.invalid_arg "Codec: unbound parameter %S" p.Types.name);
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
@@ -826,7 +906,7 @@ let compile_bool_arr cc e =
   fun arr -> f arr ()
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
-   Assign writes to cell (mutable param) and updates the array.
+   Assign updates the mutable parameter's array slot.
    Var binds a local by extending the index -- but since we can't grow the
    array, local vars in actions use cell-style mutation or are inlined.
 
@@ -845,7 +925,7 @@ let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
         let v = fe arr in
         match Hashtbl.find_opt cc.param_slots p.Types.name with
         | Some slot -> set_int_slot arr slot v
-        | None -> p.Types.cell () := v)
+        | None -> Fmt.invalid_arg "Codec: unbound parameter %S" p.Types.name)
   | Field_assign (_, _, _) | Extern_call (_, _) -> fun _ -> ()
   | Return e ->
       let fe = compile_bool_arr cc e in
@@ -895,7 +975,7 @@ type ('f, 'r) record =
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
-      writers_rev : ('r -> bytes -> int -> int -> int) list;
+      writers_rev : ('r -> runtime -> int -> int -> int) list;
       size_of_value_rev : ('r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -907,9 +987,9 @@ type ('f, 'r) record =
       next_off : next_off; (* where the next field starts *)
       fields_rev : Types.field list;
       validators_rev :
-        (int (* byte offset *) * (slots -> bytes -> int -> unit)) list;
+        (int (* byte offset *) * (slots -> runtime -> int -> unit)) list;
       checkers_rev :
-        (int (* byte offset *) * (slots -> bytes -> int -> unit)) list;
+        (int (* byte offset *) * (slots -> runtime -> int -> unit)) list;
       field_actions_rev : (string * compiled_action) list;
       n_fields : int; (* count of named fields (for field indexing) *)
       n_array_slots : int;
@@ -926,7 +1006,7 @@ type ('f, 'r) record =
 
 type wire_size_info =
   | Fixed of int
-  | Variable of { min_size : int; compute : bytes -> int -> int }
+  | Variable of { min_size : int; compute : runtime -> int -> int }
 
 let id_counter = Atomic.make 0
 
@@ -937,16 +1017,16 @@ type 'r t = {
   field_access : (string * field_access) list;
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
-  decode : bytes -> int -> 'r;
-  encode : 'r -> bytes -> int -> int;
-      (* Public encode entry. [encode v buf base] writes the record at
+  decode : runtime -> int -> 'r;
+  encode : 'r -> runtime -> int -> int;
+      (* Public encode entry. [encode v runtime base] writes the record at
          [base], threads each per-field writer's return as the next
          writer's [write_off], and returns the final offset. *)
   wire_size : wire_size_info;
   struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
-  validate_arr : slots -> bytes -> int -> unit;
-  populate : slots -> bytes -> int -> unit;
+  validate_arr : slots -> runtime -> int -> unit;
+  populate : slots -> runtime -> int -> unit;
   n_array_slots : int;
   decode_scratch : unit -> slots;
       (* Validation scratch, one per domain (see [domain_local_slots]) and
@@ -1291,8 +1371,9 @@ let tag_byte_size : type a. a typ -> int =
   | _ -> ( match field_wire_size typ with Some n -> n | None -> assert false)
 
 (* Read one element of a typ at a given buffer position. Used by Repeat. *)
-let rec read_elem : type a. a typ -> bytes -> int -> a =
- fun typ buf off ->
+let rec read_elem : type a. a typ -> runtime -> int -> a =
+ fun typ runtime off ->
+  let buf = Types.eval_bytes runtime in
   match typ with
   | Uint8 -> Bytes.get_uint8 buf off
   | Uint16 Little -> Bytes.get_uint16_le buf off
@@ -1315,14 +1396,14 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
   | Float64 Little -> Int64.float_of_bits (Bytes.get_int64_le buf off)
   | Float64 Big -> Int64.float_of_bits (Bytes.get_int64_be buf off)
   | Uint_var { size = Int n; endian } -> Uint_var.read endian buf off n
-  | Codec { codec_decode; _ } -> codec_decode buf off
-  | Map { inner; decode; _ } -> decode (read_elem inner buf off)
-  | Where { inner; _ } -> read_elem inner buf off
+  | Codec { codec_decode; _ } -> codec_decode runtime off
+  | Map { inner; decode; _ } -> decode (read_elem inner runtime off)
+  | Where { inner; _ } -> read_elem inner runtime off
   | Enum { base; cases; closed; _ } ->
-      enum_check cases closed ~at:off (read_elem base buf off)
+      enum_check cases closed ~at:off (read_elem base runtime off)
   | Casetype { tag; cases; _ } ->
-      let tag_val = read_elem tag buf off in
-      read_case_body ~at:off ~tag cases tag_val buf (off + tag_byte_size tag)
+      let tag_val = read_elem tag runtime off in
+      read_case_body ~at:off ~tag cases tag_val runtime (off + tag_byte_size tag)
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
@@ -1352,20 +1433,20 @@ let rec read_elem : type a. a typ -> bytes -> int -> a =
       | Some esz ->
           let acc = Stdlib.ref s.empty in
           for i = 0 to n - 1 do
-            acc := s.add !acc (read_elem elem buf (off + (i * esz)))
+            acc := s.add !acc (read_elem elem runtime (off + (i * esz)))
           done;
           s.finish !acc)
   (* A nested region as an element: decode its inner at the region start; the
      enclosing region size (padding) is accounted for by the caller. *)
-  | Single_elem { elem; _ } -> read_elem elem buf off
+  | Single_elem { elem; _ } -> read_elem elem runtime off
   | _ -> failwith "read_elem: unsupported element type in repeat"
 
 (* Dispatch a casetype's matched case body. A top-level recursion rather than a
    [let rec find] inside [read_elem]: the inner form would allocate a fresh
    closure on every casetype element decoded. *)
 and read_case_body : type a k.
-    at:int -> tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> a =
- fun ~at ~tag cases tag_val buf body_off ->
+    at:int -> tag:k typ -> (a, k) case_branch list -> k -> runtime -> int -> a =
+ fun ~at ~tag cases tag_val runtime body_off ->
   match cases with
   | [] ->
       (* No branch matched the discriminant. [tag] is integer-typed in the
@@ -1374,14 +1455,15 @@ and read_case_body : type a k.
       raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
     when t = tag_val ->
-      cb_inject tag_val (read_elem cb_inner buf body_off)
+      cb_inject tag_val (read_elem cb_inner runtime body_off)
   | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-      cb_inject tag_val (read_elem cb_inner buf body_off)
-  | _ :: rest -> read_case_body ~at ~tag rest tag_val buf body_off
+      cb_inject tag_val (read_elem cb_inner runtime body_off)
+  | _ :: rest -> read_case_body ~at ~tag rest tag_val runtime body_off
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
-let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
- fun typ buf off v ->
+let rec write_elem : type a. a typ -> runtime -> int -> a -> unit =
+ fun typ runtime off v ->
+  let buf = Types.eval_bytes runtime in
   match typ with
   | Uint8 -> Bytes.set_uint8 buf off v
   | Uint16 Little -> Bytes.set_uint16_le buf off v
@@ -1404,15 +1486,15 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
   | Float64 Little -> Bytes.set_int64_le buf off (Int64.bits_of_float v)
   | Float64 Big -> Bytes.set_int64_be buf off (Int64.bits_of_float v)
   | Uint_var { size = Int n; endian } -> Uint_var.write endian buf off n v
-  | Codec { codec_encode; _ } -> ignore (codec_encode v buf off : int)
-  | Map { inner; encode; _ } -> write_elem inner buf off (encode v)
-  | Where { inner; _ } -> write_elem inner buf off v
-  | Enum { base; _ } -> write_elem base buf off v
+  | Codec { codec_encode; _ } -> ignore (codec_encode v runtime off : int)
+  | Map { inner; encode; _ } -> write_elem inner runtime off (encode v)
+  | Where { inner; _ } -> write_elem inner runtime off v
+  | Enum { base; _ } -> write_elem base runtime off v
   | Unit -> ()
   (* Casetype reuses the full field encoder (tag + dispatched body); the
      repeat loop advances by [elem_size_of], so the returned offset is
      discarded here. *)
-  | Casetype _ -> ignore (build_field_encoder typ buf off v : int)
+  | Casetype _ -> ignore (build_field_encoder_ctx typ runtime buf off v : int)
   (* NUL-terminated string element: the bytes followed by a NUL terminator. *)
   | Zeroterm ->
       let n = String.length v in
@@ -1428,16 +1510,18 @@ let rec write_elem : type a. a typ -> bytes -> int -> a -> unit =
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
    for variable-size elements. *)
-let rec elem_size_of : type a. a typ -> bytes -> int -> int =
- fun typ buf off ->
+let rec elem_size_of : type a. a typ -> runtime -> int -> int =
+ fun typ runtime off ->
+  let buf = Types.eval_bytes runtime in
   match typ with
-  | Codec { codec_size_of; _ } -> codec_size_of buf off
+  | Codec { codec_size_of; _ } -> codec_size_of runtime off
   | Casetype { tag; cases; _ } ->
       let tag_size = tag_byte_size tag in
-      let tag_val = read_elem tag buf off in
-      tag_size + size_case_body ~at:off ~tag cases tag_val buf (off + tag_size)
-  | Map { inner; _ } -> elem_size_of inner buf off
-  | Where { inner; _ } -> elem_size_of inner buf off
+      let tag_val = read_elem tag runtime off in
+      tag_size
+      + size_case_body ~at:off ~tag cases tag_val runtime (off + tag_size)
+  | Map { inner; _ } -> elem_size_of inner runtime off
+  | Where { inner; _ } -> elem_size_of inner runtime off
   (* Bytes up to the NUL plus the one-byte terminator. *)
   | Zeroterm ->
       let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
@@ -1457,16 +1541,17 @@ let rec elem_size_of : type a. a typ -> bytes -> int -> int =
    as [read_case_body]: a per-call [let rec find] would allocate a closure on
    every element. *)
 and size_case_body : type a k.
-    at:int -> tag:k typ -> (a, k) case_branch list -> k -> bytes -> int -> int =
- fun ~at ~tag cases tag_val buf body_off ->
+    at:int -> tag:k typ -> (a, k) case_branch list -> k -> runtime -> int -> int
+    =
+ fun ~at ~tag cases tag_val runtime body_off ->
   match cases with
   | [] ->
       raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
-      elem_size_of cb_inner buf body_off
+      elem_size_of cb_inner runtime body_off
   | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
-      elem_size_of cb_inner buf body_off
-  | _ :: rest -> size_case_body ~at ~tag rest tag_val buf body_off
+      elem_size_of cb_inner runtime body_off
+  | _ :: rest -> size_case_body ~at ~tag rest tag_val runtime body_off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
@@ -1474,28 +1559,28 @@ and size_case_body : type a k.
    record state. The per-type [compile_*] helpers build one; [apply_compiled]
    consumes it and produces the updated record state. *)
 type ('a, 'r) compiled_field = {
-  raw_reader : bytes -> int -> 'a;
-  raw_writer : 'r -> bytes -> int -> int -> int;
-      (* [raw_writer v buf base write_off] writes the field's bytes
-         starting at [write_off] in [buf] and returns the offset just
+  raw_reader : runtime -> int -> 'a;
+  raw_writer : 'r -> runtime -> int -> int -> int;
+      (* [raw_writer v runtime base write_off] writes the field's bytes
+         starting at [write_off] in [runtime.buf] and returns the offset just
          after them. [base] is the record's base offset, used by
          buffer-driven helpers (size cross-checks, dynamic-gate cross
          checks) -- the field's own write position comes from
          [write_off]. *)
-  extra_writers : ('r -> bytes -> int -> int -> int) list;
+  extra_writers : ('r -> runtime -> int -> int -> int) list;
       (* Writers that run strictly before [raw_writer] -- e.g. a bf_clear that
          opens a new packed base word. Returns the input [write_off] unchanged. *)
   field_access : field_access;
   size_delta : int; (* added to [min_wire_size] *)
   next_off : next_off; (* new [next_off] *)
   bf_after : bf_codec_state option;
-  int_reader : bytes -> int -> int;
+  int_reader : runtime -> int -> int;
       (* Entry stored in [field_readers] under the field name; const 0 for
          composite types that have no int-array slot of their own. *)
   nested_readers : field_reader list;
       (* Embedded sub-codec field readers, shifted into the parent frame. *)
   validator_off : int; (* [-1] when the byte offset is dynamic *)
-  populate : slots -> bytes -> int -> unit;
+  populate : slots -> runtime -> int -> unit;
       (* Pre-built populate function for the int-array validator path; the
          slot index (n_fields at the time the field is compiled) is baked
          in. Composite types use a no-op. *)
@@ -1525,10 +1610,10 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
 let static_off_of (ctx : layout_ctx) : int option =
   match ctx.next_off with Static n -> Some n | Dynamic _ -> None
 
-let off_fn_of (ctx : layout_ctx) : bytes -> int -> int =
+let off_fn_of (ctx : layout_ctx) : runtime -> int -> int =
   match ctx.next_off with
-  | Static n -> fun _buf _base -> n
-  | Dynamic f -> fun buf base -> f buf base - base
+  | Static n -> fun _runtime _base -> n
+  | Dynamic f -> fun runtime base -> f runtime base - base
 
 (* Byte offset used as [sizeof_this] when compiling constraints/actions: a
    real static offset when known, the [-1] sentinel otherwise. *)
@@ -1554,44 +1639,51 @@ let advance_next_off (no : next_off) (n : int) : next_off =
   | Static k -> Static (k + n)
   | Dynamic f -> Dynamic (fun buf base -> f buf base + n)
 
-let null_int_reader : bytes -> int -> int = fun _buf _base -> 0
-let no_populate : slots -> bytes -> int -> unit = fun _arr _buf _base -> ()
+let null_int_reader : runtime -> int -> int = fun _runtime _base -> 0
+
+let no_populate : slots -> runtime -> int -> unit =
+ fun _arr _runtime _base -> ()
 
 (* Reader+writer pair for a Codec-or-scalar inner type placed at the current
    frame offset. Extracted so [compile_optional] and [compile_optional_or]
    share it. *)
 let inner_codec_accessors : type w.
-    w typ -> layout_ctx -> (bytes -> int -> w) * (bytes -> int -> w -> int) =
+    w typ -> layout_ctx -> (runtime -> int -> w) * (runtime -> int -> w -> int)
+    =
  fun inner ctx ->
   let field_off_static = static_off_of ctx in
   let field_off_fn = off_fn_of ctx in
-  let reader : bytes -> int -> w =
+  let reader : runtime -> int -> w =
     match inner with
     | Codec { codec_decode; _ } -> (
         match field_off_static with
-        | Some fo -> fun buf base -> codec_decode buf (base + fo)
+        | Some fo -> fun runtime base -> codec_decode runtime (base + fo)
         | None ->
-            fun buf base ->
-              let fo = field_off_fn buf base in
-              codec_decode buf (base + fo))
+            fun runtime base ->
+              let fo = field_off_fn runtime base in
+              codec_decode runtime (base + fo))
     | _ -> (
         match field_off_static with
-        | Some fo -> build_field_reader inner fo
+        | Some fo ->
+            let reader = build_field_reader_ctx inner fo in
+            fun runtime base -> reader runtime base
         | None ->
-            let reader_at_0 = build_field_reader inner 0 in
-            fun buf base ->
-              let fo = field_off_fn buf base in
-              reader_at_0 buf (base + fo))
+            let reader_at_0 = build_field_reader_ctx inner 0 in
+            fun runtime base ->
+              let fo = field_off_fn runtime base in
+              reader_at_0 runtime (base + fo))
   in
   (* Writer takes the absolute byte position to write at. The caller
      gets this from the threaded [write_off]; no buffer-driven
      [off_fn] lookup happens on the encode path. *)
-  let writer : bytes -> int -> w -> int =
+  let writer : runtime -> int -> w -> int =
     match inner with
-    | Codec { codec_encode; _ } -> fun buf off iv -> codec_encode iv buf off
+    | Codec { codec_encode; _ } ->
+        fun runtime off iv -> codec_encode iv runtime off
     | _ ->
-        let enc = build_field_encoder inner in
-        fun buf off iv -> enc buf off iv
+        fun runtime off iv ->
+          build_field_encoder_ctx inner runtime (Types.eval_bytes runtime) off
+            iv
   in
   (reader, writer)
 
@@ -1599,13 +1691,13 @@ let build_nested_readers ctx readers =
   match static_off_of ctx with
   | Some fo ->
       List.map
-        (fun (n, reader) -> (n, fun buf base -> reader buf (base + fo)))
+        (fun (n, reader) -> (n, fun runtime base -> reader runtime (base + fo)))
         readers
   | None ->
       let off_fn = off_fn_of ctx in
       List.map
         (fun (n, reader) ->
-          (n, fun buf base -> reader buf (base + off_fn buf base)))
+          (n, fun runtime base -> reader runtime (base + off_fn runtime base)))
         readers
 
 (* -- Per-type [compile_field] helpers -- *)
@@ -1644,20 +1736,21 @@ let compile_bits : type r.
         0,
         base_byte_size,
         [
-          (fun _v buf _base write_off ->
-            clear_at buf write_off;
+          (fun _v runtime _base write_off ->
+            clear_at (Types.eval_bytes runtime) write_off;
             write_off);
         ] )
   in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used ~width in
-  let raw_reader = build_bf_reader base base_off shift width in
+  let read = build_bf_reader base base_off shift width in
+  let raw_reader runtime base = read (Types.eval_bytes runtime) base in
   let raw_writer_inner = build_bf_writer base 0 shift width in
   let get = fld.get in
   let back, advance =
     if is_continuation then (base_byte_size, 0) else (0, base_byte_size)
   in
-  let raw_writer v buf _base write_off =
-    raw_writer_inner buf (write_off - back) (get v);
+  let raw_writer v runtime _base write_off =
+    raw_writer_inner (Types.eval_bytes runtime) (write_off - back) (get v);
     write_off + advance
   in
   {
@@ -1685,9 +1778,9 @@ let compile_bits : type r.
 let compile_codec_variable : type a r.
     layout_ctx ->
     get:(r -> a) ->
-    codec_decode:(bytes -> int -> a) ->
-    codec_encode:(a -> bytes -> int -> int) ->
-    codec_size_of:(bytes -> int -> int) ->
+    codec_decode:(runtime -> int -> a) ->
+    codec_encode:(a -> runtime -> int -> int) ->
+    codec_size_of:(runtime -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
  fun ctx ~get ~codec_decode ~codec_encode ~codec_size_of ~nested_readers ->
@@ -1726,10 +1819,10 @@ let compile_codec_variable : type a r.
 let compile_codec : type a r.
     layout_ctx ->
     (a, r) field ->
-    codec_decode:(bytes -> int -> a) ->
-    codec_encode:(a -> bytes -> int -> int) ->
+    codec_decode:(runtime -> int -> a) ->
+    codec_encode:(a -> runtime -> int -> int) ->
     codec_fixed_size:int option ->
-    codec_size_of:(bytes -> int -> int) ->
+    codec_size_of:(runtime -> int -> int) ->
     codec_field_readers:field_reader list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_encode ~codec_fixed_size ~codec_size_of
@@ -1775,18 +1868,18 @@ let dynamic_optional_next_off ctx present_fn fsize =
       if present_fn buf base then off + fsize else off)
 
 (* Absolute byte position a [next_off] points at, given the record [base]. *)
-let next_off_pos : next_off -> bytes -> int -> int = function
-  | Static n -> fun _buf base -> base + n
+let next_off_pos : next_off -> runtime -> int -> int = function
+  | Static n -> fun _runtime base -> base + n
   | Dynamic f -> f
 
 let optional_compiled : type a r.
     layout_ctx ->
-    ?int_reader:(bytes -> int -> int) ->
-    raw_reader:(bytes -> int -> a) ->
-    raw_writer:(r -> bytes -> int -> int -> int) ->
+    ?int_reader:(runtime -> int -> int) ->
+    raw_reader:(runtime -> int -> a) ->
+    raw_writer:(r -> runtime -> int -> int -> int) ->
     size_delta:int ->
     next_off:next_off ->
-    populate:(slots -> bytes -> int -> unit) ->
+    populate:(slots -> runtime -> int -> unit) ->
     unit ->
     (a, r) compiled_field =
  fun ctx ?(int_reader = null_int_reader) ~raw_reader ~raw_writer ~size_delta
@@ -1813,14 +1906,15 @@ let repeat_raw_fixed : type elt seq.
     (elt, seq) seq_map ->
     elt typ ->
     int ->
-    off_fn:(bytes -> int -> int) ->
-    size_fn:(bytes -> int -> int) ->
-    bytes ->
+    off_fn:(runtime -> int -> int) ->
+    size_fn:(runtime -> int -> int) ->
+    runtime ->
     int ->
     seq =
- fun (Seq_map seq) elem esz ~off_fn ~size_fn buf base ->
-  let budget = size_fn buf base in
-  let start = base + off_fn buf base in
+ fun (Seq_map seq) elem esz ~off_fn ~size_fn runtime base ->
+  let buf = Types.eval_bytes runtime in
+  let budget = size_fn runtime base in
+  let start = base + off_fn runtime base in
   (* The budget comes from a length field, i.e. untrusted input. Bound it to the
      buffer before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
@@ -1832,31 +1926,32 @@ let repeat_raw_fixed : type elt seq.
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
-    else loop (seq.add acc (read_elem elem buf (start + (i * esz)))) (i + 1)
+    else loop (seq.add acc (read_elem elem runtime (start + (i * esz)))) (i + 1)
   in
   loop seq.empty 0
 
 let repeat_raw_variable : type elt seq.
     (elt, seq) seq_map ->
     elt typ ->
-    off_fn:(bytes -> int -> int) ->
-    size_fn:(bytes -> int -> int) ->
-    bytes ->
+    off_fn:(runtime -> int -> int) ->
+    size_fn:(runtime -> int -> int) ->
+    runtime ->
     int ->
     seq =
- fun (Seq_map seq) elem ~off_fn ~size_fn buf base ->
-  let budget = size_fn buf base in
-  let start = base + off_fn buf base in
+ fun (Seq_map seq) elem ~off_fn ~size_fn runtime base ->
+  let buf = Types.eval_bytes runtime in
+  let budget = size_fn runtime base in
+  let start = base + off_fn runtime base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
   if budget < 0 || start + budget > Bytes.length buf then
     raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
-      let esz = elem_size_of elem buf pos in
+      let esz = elem_size_of elem runtime pos in
       if esz <= 0 || esz > remaining then
         raise_eof ~at:pos ~expected:esz ~got:remaining;
-      let v = read_elem elem buf pos in
+      let v = read_elem elem runtime pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
   loop seq.empty start budget
@@ -1865,9 +1960,9 @@ let repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
     elt typ ->
     elem_size:int option ->
-    off_fn:(bytes -> int -> int) ->
-    size_fn:(bytes -> int -> int) ->
-    bytes ->
+    off_fn:(runtime -> int -> int) ->
+    size_fn:(runtime -> int -> int) ->
+    runtime ->
     int ->
     seq =
  fun seq elem ~elem_size ~off_fn ~size_fn ->
@@ -1887,7 +1982,7 @@ let compile_repeat : type elt seq r.
      when a [Repeat] sits after a variable-size field, the running offset is
      [Dynamic] and is resolved at runtime rather than from a static offset. *)
   let off_fn, (field_access : field_access), validator_off =
-    let sizeof_this : bytes -> int -> int =
+    let sizeof_this : runtime -> int -> int =
       match ctx.next_off with
       | Static n -> fun _buf _base -> n
       | Dynamic prev_end -> fun buf base -> prev_end buf base - base
@@ -1908,9 +2003,9 @@ let compile_repeat : type elt seq r.
   let elem_size = field_wire_size elem in
   let raw_reader = repeat_raw_reader seq elem ~elem_size ~off_fn ~size_fn in
   let get = fld.get in
-  let raw_writer v buf base write_off =
+  let raw_writer v runtime base write_off =
     let items = get v in
-    let expected = size_fn buf base in
+    let expected = size_fn runtime base in
     let sized_items =
       Types.exact_repeat_elements seq ~expected
         ~size_of:(Types.size_of_typ_value elem)
@@ -1919,7 +2014,7 @@ let compile_repeat : type elt seq r.
     let pos = Stdlib.ref write_off in
     List.iter
       (fun (item, size) ->
-        write_elem elem buf !pos item;
+        write_elem elem runtime !pos item;
         pos := !pos + size)
       sized_items;
     !pos
@@ -1943,11 +2038,16 @@ let compile_repeat : type elt seq r.
    not including) [limit]. Raises [Parse_error] when the region ends before a
    terminator is found -- a truncated / unterminated zero-terminated string. *)
 let var_bytes_reader : type a.
-    a typ -> (bytes -> int -> int) -> (bytes -> int -> int) -> bytes -> int -> a
-    =
- fun typ off_fn size_fn buf base ->
-  let fo = off_fn buf base in
-  let sz = size_fn buf base in
+    a typ ->
+    (runtime -> int -> int) ->
+    (runtime -> int -> int) ->
+    runtime ->
+    int ->
+    a =
+ fun typ off_fn size_fn runtime base ->
+  let buf = Types.eval_bytes runtime in
+  let fo = off_fn runtime base in
+  let sz = size_fn runtime base in
   let first = base + fo in
   (* [fo] and [sz] derive from length fields, i.e. untrusted input. A field
      sized past the buffer (or a negative size from an overrun offset) would
@@ -1983,19 +2083,19 @@ let var_bytes_reader : type a.
           if c <> '\000' then raise_non_zero_padding ~at:(base + fo + i))
         s;
       s
-  | Casetype _ -> read_elem typ buf (base + fo)
+  | Casetype _ -> read_elem typ runtime (base + fo)
   | Single_elem { elem; at_most; _ } ->
       let first = base + fo in
-      let consumed = elem_size_of elem buf first in
+      let consumed = elem_size_of elem runtime first in
       if consumed > sz || ((not at_most) && consumed <> sz) then
         raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-      read_elem elem buf first
+      read_elem elem runtime first
   | _ -> assert false
 
 (* Kept at top level: as local closures they would be heap-allocated on
    every call (two allocations per variable-bytes field on each encode). *)
-let var_bytes_check_len size_fn buf base ~actual =
-  let expected = size_fn buf base in
+let var_bytes_check_len size_fn runtime base ~actual =
+  let expected = size_fn runtime base in
   if actual <> expected then
     Fmt.invalid_arg
       "Codec.encode: byte field length %d does not match expected %d \
@@ -2010,28 +2110,29 @@ let var_bytes_write_str buf write_off s =
 let var_bytes_writer : type a r.
     a typ ->
     (r -> a) ->
-    (bytes -> int -> int) ->
+    (runtime -> int -> int) ->
     r ->
-    bytes ->
+    runtime ->
     int ->
     int ->
     int =
- fun typ get size_fn v buf base write_off ->
+ fun typ get size_fn v runtime base write_off ->
+  let buf = Types.eval_bytes runtime in
   let value = get v in
   match typ with
   | Byte_slice _ ->
       let src = (value : Slice.t) in
       let len = Slice.length src in
-      var_bytes_check_len size_fn buf base ~actual:len;
+      var_bytes_check_len size_fn runtime base ~actual:len;
       Bytes.blit (Slice.bytes src) (Slice.first src) buf write_off len;
       write_off + len
   | Byte_array _ ->
       let s = (value : string) in
-      var_bytes_check_len size_fn buf base ~actual:(String.length s);
+      var_bytes_check_len size_fn runtime base ~actual:(String.length s);
       var_bytes_write_str buf write_off s
   | Byte_array_where _ ->
       let s = (value : string) in
-      var_bytes_check_len size_fn buf base ~actual:(String.length s);
+      var_bytes_check_len size_fn runtime base ~actual:(String.length s);
       var_bytes_write_str buf write_off s
   | All_bytes -> var_bytes_write_str buf write_off (value : string)
   | All_zeros -> var_bytes_write_str buf write_off (value : string)
@@ -2046,7 +2147,7 @@ let var_bytes_writer : type a r.
       let s = (value : string) in
       if String.contains s '\000' then
         invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
-      let region = size_fn buf base in
+      let region = size_fn runtime base in
       let len = String.length s in
       if len + 1 > region then
         Fmt.invalid_arg
@@ -2056,19 +2157,26 @@ let var_bytes_writer : type a r.
       (* Single fill covers the NUL terminator and any trailing padding. *)
       Bytes.fill buf (write_off + len) (region - len) '\x00';
       write_off + region
-  | Casetype _ -> build_field_encoder typ buf write_off value
+  | Casetype _ -> build_field_encoder_ctx typ runtime buf write_off value
   | Single_elem { elem; at_most; _ } ->
-      let n = size_fn buf base in
+      let n = size_fn runtime base in
       let actual = Types.size_of_typ_value elem value in
       Types.check_nested_size ~at_most ~expected:n ~actual;
-      let inner_end = build_field_encoder elem buf write_off value in
+      let inner_end =
+        build_field_encoder_ctx elem runtime buf write_off value
+      in
       if inner_end < write_off + n then
         Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';
       write_off + n
   | _ -> assert false
 
 let compile_var_size_fn : type a.
-    layout_ctx -> a typ -> off_fn:(bytes -> int -> int) -> bytes -> int -> int =
+    layout_ctx ->
+    a typ ->
+    off_fn:(runtime -> int -> int) ->
+    runtime ->
+    int ->
+    int =
  fun ctx typ ~off_fn ->
   match typ with
   | All_bytes | All_zeros ->
@@ -2076,16 +2184,19 @@ let compile_var_size_fn : type a.
          current offset. The OCaml decoder gets the buffer length via
          [Bytes.length buf]; the 3D projection emits [all_bytes], which
          3D handles natively. *)
-      fun buf base -> Bytes.length buf - (base + off_fn buf base)
+      fun runtime base ->
+        Bytes.length (Types.eval_bytes runtime) - (base + off_fn runtime base)
   | Casetype _ ->
       (* Tag is decoded first; the case body's size is whatever the
          selected case's inner typ reports. *)
-      fun buf base -> elem_size_of typ buf (base + off_fn buf base)
+      fun runtime base -> elem_size_of typ runtime (base + off_fn runtime base)
   | Zeroterm ->
       (* Consumed bytes = string length plus the one-byte NUL terminator. *)
-      fun buf base ->
-        let first = base + off_fn buf base in
-        zeroterm_nul_pos buf ~first ~limit:(Bytes.length buf) - first + 1
+      fun runtime base ->
+        let first = base + off_fn runtime base in
+        zeroterm_nul_pos (Types.eval_bytes runtime) ~first
+          ~limit:(Bytes.length (Types.eval_bytes runtime))
+        - first + 1
   | _ ->
       let size_expr =
         match typ with
@@ -2097,7 +2208,7 @@ let compile_var_size_fn : type a.
         | Zeroterm_at_most { size } -> size
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
-      let sizeof_this : bytes -> int -> int =
+      let sizeof_this : runtime -> int -> int =
         match ctx.next_off with
         | Static n -> fun _buf _base -> n
         | Dynamic prev_end -> fun buf base -> prev_end buf base - base
@@ -2110,7 +2221,7 @@ let compile_var_bytes : type a r.
   let typ = fld.typ in
   let off_fn, validator_off =
     match ctx.next_off with
-    | Static n -> ((fun (_buf : bytes) (_base : int) -> n), n)
+    | Static n -> ((fun (_runtime : runtime) (_base : int) -> n), n)
     | Dynamic prev_end -> ((fun buf base -> prev_end buf base - base), -1)
   in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
@@ -2123,16 +2234,16 @@ let compile_var_bytes : type a r.
     match typ with
     | Uint_var { endian; _ } ->
         let get = fld.get in
-        let raw_reader : bytes -> int -> a =
-         fun buf base ->
-          let fo = off_fn buf base in
-          let sz = size_fn buf base in
-          Uint_var.read endian buf (base + fo) sz
+        let raw_reader : runtime -> int -> a =
+         fun runtime base ->
+          let fo = off_fn runtime base in
+          let sz = size_fn runtime base in
+          Uint_var.read endian (Types.eval_bytes runtime) (base + fo) sz
         in
-        let raw_writer : r -> bytes -> int -> int -> int =
-         fun v buf base write_off ->
-          let sz = size_fn buf base in
-          Uint_var.write endian buf write_off sz (get v);
+        let raw_writer : r -> runtime -> int -> int -> int =
+         fun v runtime base write_off ->
+          let sz = size_fn runtime base in
+          Uint_var.write endian (Types.eval_bytes runtime) write_off sz (get v);
           write_off + sz
         in
         let int_reader buf base = int_of_typ_value typ (raw_reader buf base) in
@@ -2173,17 +2284,20 @@ let compile_scalar_or_var : type a r.
       let field_off = match field_off_static with Some n -> n | None -> -1 in
       let raw_reader =
         match field_off_static with
-        | Some _ -> build_field_reader typ field_off
+        | Some _ ->
+            let reader = build_field_reader_ctx typ field_off in
+            fun runtime base -> reader runtime base
         | None ->
-            let reader_at_0 = build_field_reader typ 0 in
-            fun buf base ->
-              let off = field_off_fn buf base in
-              reader_at_0 buf (base + off)
+            let reader_at_0 = build_field_reader_ctx typ 0 in
+            fun runtime base ->
+              let off = field_off_fn runtime base in
+              reader_at_0 runtime (base + off)
       in
-      let raw_encoder = build_field_encoder typ in
       let get = fld.get in
-      let raw_writer : r -> bytes -> int -> int -> int =
-       fun v buf _base write_off -> raw_encoder buf write_off (get v)
+      let raw_writer : r -> runtime -> int -> int -> int =
+       fun v runtime _base write_off ->
+        build_field_encoder_ctx typ runtime (Types.eval_bytes runtime) write_off
+          (get v)
       in
       let int_reader buf base = int_of_typ_value typ (raw_reader buf base) in
       let populate = build_populate typ ctx.n_fields raw_reader in
@@ -2655,7 +2769,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
-      (bytes -> int -> 'a) * ('rest, 'result) readers_fwd
+      (runtime -> int -> 'a) * ('rest, 'result) readers_fwd
       -> ('a -> 'rest, 'result) readers_fwd
 
 (* Convert a [readers] snoc-list to a [readers_fwd] cons-list. O(n), runs
@@ -2686,7 +2800,7 @@ let to_fwd : type full result.
    patterns across ~500 lines; the flat table is both shorter and easier to
    read. *)
 let rec apply_fwd : type mid result.
-    mid -> (mid, result) readers_fwd -> bytes -> int -> result =
+    mid -> (mid, result) readers_fwd -> runtime -> int -> result =
  fun f fwd buf off ->
   match fwd with
   | FNil -> f
@@ -2756,7 +2870,8 @@ let rec apply_fwd : type mid result.
       apply_fwd (f (r1 buf off) (r2 buf off) (r3 buf off) (r4 buf off) (r5 buf off) (r6 buf off) (r7 buf off) (r8 buf off) (r9 buf off) (r10 buf off) (r11 buf off) (r12 buf off) (r13 buf off) (r14 buf off) (r15 buf off) (r16 buf off) (r17 buf off) (r18 buf off) (r19 buf off) (r20 buf off) (r21 buf off) (r22 buf off) (r23 buf off) (r24 buf off) (r25 buf off) (r26 buf off) (r27 buf off) (r28 buf off) (r29 buf off) (r30 buf off) (r31 buf off) (r32 buf off)) rest buf off
 [@@ocamlformat "disable"]
 
-let build_decode : type full r. full -> (full, r) readers -> bytes -> int -> r =
+let build_decode : type full r. full -> (full, r) readers -> runtime -> int -> r
+    =
  fun make readers ->
   match readers with
   | Nil -> fun _buf _off -> make
@@ -2820,12 +2935,12 @@ let validate_or_eof buf f =
     raise_eof ~at:len ~expected:(len + 1) ~got:len
 
 let build_validators validators_rev checkers_rev compiled_where struct_fields
-    n_total =
+    param_slots n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
   let n_validators = Array.length validator_fns in
-  let validate_arr arr buf off =
+  let validate_arr arr runtime off =
     for i = 0 to n_validators - 1 do
-      validator_fns.(i) arr buf off
+      validator_fns.(i) arr runtime off
     done;
     match compiled_where with
     | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
@@ -2833,9 +2948,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   let checker_fns = Array.of_list (List.map snd checkers_rev) in
   let n_checkers = Array.length checker_fns in
-  let populate arr buf off =
+  let populate arr runtime off =
     for i = 0 to n_checkers - 1 do
-      checker_fns.(i) arr buf off
+      checker_fns.(i) arr runtime off
     done
   in
   (* Run the validator pass only when the struct actually has something to
@@ -2865,7 +2980,19 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
             let n = Array.length slots in
             Array.blit slots 0 arr.ints (n_total - n) n
         | None -> ());
-        validate_or_eof buf (fun () -> validate_arr arr buf off)
+        let runtime =
+          Types.eval_ctx
+            ~set_param:(fun name value ->
+              match Hashtbl.find_opt param_slots name with
+              | Some idx -> arr.ints.(idx) <- value
+              | None -> ())
+            buf
+            (fun name ->
+              match Hashtbl.find_opt param_slots name with
+              | Some idx -> arr.ints.(idx)
+              | None -> 0)
+        in
+        validate_or_eof buf (fun () -> validate_arr arr runtime off)
   in
   (validate_arr, populate, validate)
 
@@ -2897,14 +3024,15 @@ let fill_param_slots tbl param_base handles =
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
    before a zero-copy [get] reads its fields. *)
-let check_decode_bounds wire_size_info min_size buf off =
+let check_decode_bounds wire_size_info min_size runtime off =
+  let buf = Types.eval_bytes runtime in
   if off + min_size > Bytes.length buf then
     raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
       let end_off =
-        try compute buf off
+        try compute runtime off
         with Invalid_argument _ ->
           raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off)
       in
@@ -2914,17 +3042,27 @@ let check_decode_bounds wire_size_info min_size buf off =
         raise_eof ~at:off ~expected:(end_off - off) ~got:(Bytes.length buf - off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
- fun buf off ->
-  check_decode_bounds wire_size_info min_size buf off;
-  raw_decode buf off
+ fun runtime off ->
+  check_decode_bounds wire_size_info min_size runtime off;
+  raw_decode runtime off
 
 (* [Codec.validate] is the safety gate before a batch of zero-copy [get] calls on
    untrusted input, so it must run decode's structural bounds check even for a
    constraint-free codec (whose constraint validator [validate_checks] is a
    no-op), or a [get] on a truncated buffer would read out of bounds. *)
-let validate_with_bounds wire_size_info min_size validate_checks =
+let validate_with_bounds wire_size_info min_size param_slots param_base
+    validate_checks =
  fun ?env_slots buf off ->
-  check_decode_bounds wire_size_info min_size buf off;
+  let runtime =
+    match env_slots with
+    | None -> no_runtime buf
+    | Some slots ->
+        Types.eval_ctx buf (fun name ->
+            match Hashtbl.find_opt param_slots name with
+            | Some idx -> slots.(idx - param_base)
+            | None -> 0)
+  in
+  check_decode_bounds wire_size_info min_size runtime off;
   validate_checks ?env_slots buf off
 
 (* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
@@ -3168,7 +3306,7 @@ let seal : type r. (r, r) record -> r t =
   in
   let validate_arr, populate, validate_checks =
     build_validators validators (List.rev r.checkers_rev) compiled_where
-      struct_fields n_total
+      struct_fields r.param_slots n_total
   in
   (* Per-field action runners *)
   let field_actions = List.rev r.field_actions_rev in
@@ -3190,7 +3328,8 @@ let seal : type r. (r, r) record -> r t =
     field_actions;
     decode = build_checked_decode raw_decode wire_size_info min_size;
     encode =
-      (fun v buf off ->
+      (fun v runtime off ->
+        let buf = Types.eval_bytes runtime in
         let need = size_of_value v in
         if off + need > Bytes.length buf then
           Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)"
@@ -3198,12 +3337,14 @@ let seal : type r. (r, r) record -> r t =
             (Bytes.length buf - off);
         let write_off = Stdlib.ref off in
         for i = 0 to n_writers - 1 do
-          write_off := writers.(i) v buf off !write_off
+          write_off := writers.(i) v runtime off !write_off
         done;
         !write_off);
     wire_size = wire_size_info;
     struct_fields;
-    validate = validate_with_bounds wire_size_info min_size validate_checks;
+    validate =
+      validate_with_bounds wire_size_info min_size r.param_slots param_base
+        validate_checks;
     validate_arr;
     populate;
     n_array_slots = n_total;
@@ -3226,12 +3367,13 @@ type validator = {
   min_size : int;
   wire_size : wire_size_info;
   validate : bytes -> int -> unit;
+  validate_ctx : runtime -> int -> unit;
 }
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
 type validator_acc = {
-  validators_rev : (int * (slots -> bytes -> int -> unit)) list;
-  checkers_rev : (int * (slots -> bytes -> int -> unit)) list;
+  validators_rev : (int * (slots -> runtime -> int -> unit)) list;
+  checkers_rev : (int * (slots -> runtime -> int -> unit)) list;
   field_readers : field_reader list;
   n_fields : int;
   n_array_slots : int;
@@ -3276,12 +3418,12 @@ let layout_ctx_of_validator_acc acc =
 (* Common access patterns over [next_off]: a fresh-buffer offset
    function and a "previous end" helper that hides the static/dynamic
    split. *)
-let acc_off_fn (acc : validator_acc) : bytes -> int -> int =
+let acc_off_fn (acc : validator_acc) : runtime -> int -> int =
   match acc.next_off with
   | Static n -> fun _buf _base -> n
   | Dynamic f -> fun buf base -> f buf base - base
 
-let acc_prev_end (acc : validator_acc) : bytes -> int -> int =
+let acc_prev_end (acc : validator_acc) : runtime -> int -> int =
   match acc.next_off with
   | Static n -> fun _buf base -> base + n
   | Dynamic f -> f
@@ -3338,7 +3480,9 @@ let rec apply_struct_field acc inner_struct =
   let inner_v = validator_of_struct inner_struct in
   let static_off = match acc.next_off with Static n -> n | Dynamic _ -> -1 in
   let off_fn = acc_off_fn acc in
-  let validator _arr buf base = inner_v.validate buf (base + off_fn buf base) in
+  let validator _arr runtime base =
+    inner_v.validate_ctx runtime (base + off_fn runtime base)
+  in
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
     match (acc.next_off, inner_v.wire_size) with
@@ -3418,33 +3562,44 @@ and validator_of_struct (s : Types.struct_) : validator =
     build_validators
       (List.rev acc.validators_rev)
       (List.rev acc.checkers_rev)
-      compiled_where s.fields n_total
+      compiled_where s.fields acc.param_slots n_total
   in
   (* Full validation: fire field actions and check the where clause.
      [build_validators]'s third return [validate] is checkers-only (no
      actions). [validate_arr] runs full validators against a per-domain
      scratch, zeroed on entry. *)
   let get_arr = domain_local_slots n_total in
-  let validate buf off =
+  let validate_ctx runtime off =
     let arr = get_arr () in
     if n_total > 0 then clear_slots arr n_total;
-    validate_arr arr buf off
+    List.iteri
+      (fun i (Param.Pack p) ->
+        arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name)
+      param_handles;
+    validate_arr arr runtime off
   in
-  { min_size = acc.min_size; wire_size = wire_size_info; validate }
+  let validate buf off = validate_ctx (no_runtime buf) off in
+  {
+    min_size = acc.min_size;
+    wire_size = wire_size_info;
+    validate;
+    validate_ctx;
+  }
 
 let validate_struct (v : validator) buf off = v.validate buf off
 
 let struct_size_of (v : validator) buf off =
   match v.wire_size with
   | Fixed n -> n
-  | Variable { compute; _ } -> compute buf off - off
+  | Variable { compute; _ } -> compute (no_runtime buf) off - off
 
 let struct_min_size (v : validator) = v.min_size
 
 let wire_size_info_of_validator (v : validator) =
   match v.wire_size with
   | Fixed n -> `Fixed n
-  | Variable { compute; _ } -> `Variable compute
+  | Variable { compute; _ } ->
+      `Variable (fun buf off -> compute (no_runtime buf) off)
 
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
@@ -3478,26 +3633,14 @@ let min_wire_size (t : _ t) =
 let wire_size_at (t : _ t) buf off =
   match t.wire_size with
   | Fixed n -> n
-  | Variable { compute; _ } -> compute buf off - off
+  | Variable { compute; _ } -> compute (no_runtime buf) off - off
 
 let size_of_value (t : _ t) v = t.size_of_value v
 
 let is_fixed (t : _ t) =
   match t.wire_size with Fixed _ -> true | Variable _ -> false
 
-let raw_decode (t : _ t) buf off = t.decode buf off
-
-(* Copy each input param's env value into its [cell]. The encode
-   closures read [Param_ref p] via [!(p.cell ())] (see [bytes_leaves]
-   in [compile_expr]), so the cells are the runtime backing for
-   parametric field sizes. Mirror of the env -> array blit in
-   [decode_exn]. *)
-let load_env_into_cells (t : 'r t) (env : Param.env) =
-  (* The env slot of [param_handles.(i)] is [i] (the env is built in the same
-     order, see [env] below). *)
-  List.iteri
-    (fun i (Param.Pack p) -> p.cell () := env.slots.(i))
-    t.param_handles
+let raw_decode (t : _ t) buf off = t.decode (no_runtime buf) off
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
@@ -3544,32 +3687,45 @@ let require_env ~op t = function
 
 let raw_encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
-  (match e with Some env -> load_env_into_cells t env | None -> ());
-  t.encode v buf off
+  t.encode v (runtime ?env:e buf) off
 
-(* Encode a sub-codec embedded as a field/element. The enclosing codec has
-   already seeded every input param's [cell] from its own env (its
-   [param_handles] include the sub's, see [iter_param_refs_typ]), so the sub
-   must not re-run [require_env] (it has no env of its own here). *)
-let embed_encode (t : 'r t) v buf off = t.encode v buf off
+let embed_encode_ctx (t : 'r t) v runtime off = t.encode v runtime off
 
-(* Decode a sub-codec embedded as a field/element, enforcing its [where] and
-   field constraints (the plain field-reader decode skips them). Param values
-   come from the [cell]s the enclosing codec seeded; copy them into the
-   sub's per-decode slots so its constraints resolve correctly. *)
-let embed_decode (t : 'r t) buf off =
-  let v = t.decode buf off in
-  let env_slots =
-    Array.of_list
-      (List.map (fun (Param.Pack p) -> !(p.Types.cell ())) t.param_handles)
-  in
-  t.validate ~env_slots buf off;
+let embed_encode (t : 'r t) v buf off =
+  embed_encode_ctx t v (no_runtime buf) off
+
+let validate_runtime t runtime off =
+  let arr = t.decode_scratch () in
+  clear_slots arr t.n_array_slots;
+  List.iteri
+    (fun i (Param.Pack p) ->
+      arr.ints.(t.param_base + i) <- Types.eval_param runtime p.Types.name)
+    t.param_handles;
+  t.validate_arr arr runtime off;
+  List.iteri
+    (fun i (Param.Pack p) ->
+      if p.Types.mutable_ then
+        Types.eval_set_param runtime p.name arr.ints.(t.param_base + i))
+    t.param_handles
+
+let embed_decode_ctx (t : 'r t) runtime off =
+  let v = t.decode runtime off in
+  validate_runtime t runtime off;
   v
+
+let embed_decode (t : 'r t) buf off = embed_decode_ctx t (no_runtime buf) off
+
+let wire_size_info_ctx (t : _ t) =
+  match t.wire_size with
+  | Fixed n -> `Fixed n
+  | Variable { compute; _ } ->
+      `Variable (fun runtime off -> compute runtime off - off)
 
 let wire_size_info (t : _ t) =
   match t.wire_size with
   | Fixed n -> `Fixed n
-  | Variable { compute; _ } -> `Variable (fun buf off -> compute buf off - off)
+  | Variable { compute; _ } ->
+      `Variable (fun buf off -> compute (no_runtime buf) off - off)
 
 let env (t : _ t) : Param.env =
   {
@@ -3587,32 +3743,23 @@ let decode_exn ?env:e t buf off =
      and misaligning the rest of the record. This is a usage error, not malformed
      input, so it raises [Invalid_argument] rather than returning a parse error. *)
   require_env ~op:"decode" t e;
-  (* Seed the input cells from the env before reading fields: the field
-     readers resolve [Param_ref p] via [!(p.cell ())], so a parametric size
-     (byte_array / byte_slice / uint_var) must see the env's value. Mirror of
-     the seeding [encode] does. [Param.bind] also writes the cell directly, but
-     [Param.bind_by_name] only has the name and writes [env.slots]; without
-     this it would read as 0 and silently truncate the field. *)
-  (match e with
-  | Some env -> load_env_into_cells t env
-  | None -> ());
-  let v = t.decode buf off in
+  let runtime = runtime ?env:e buf in
+  let v = t.decode runtime off in
   let arr = t.decode_scratch () in
   clear_slots arr t.n_array_slots;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
       Array.blit e.slots 0 arr.ints t.param_base t.n_params
   | _ -> ());
-  t.validate_arr arr buf off;
+  t.validate_arr arr runtime off;
   (match e with
   | Some (e : Param.env) ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
-         [i]. Write decoded output params back into the env (and the cell). *)
+         [i]. Write decoded output params back into the environment. *)
       List.iteri
-        (fun i (Param.Pack p) ->
+        (fun i (Param.Pack _p) ->
           let v = arr.ints.(t.param_base + i) in
-          e.slots.(i) <- v;
-          p.cell () := v)
+          e.slots.(i) <- v)
         t.param_handles
   | None -> ());
   v
@@ -3622,9 +3769,8 @@ let decode ?env t buf off =
 
 let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
-  (match e with Some env -> load_env_into_cells t env | None -> ());
   let expected = t.size_of_value v in
-  let actual = t.encode v buf off - off in
+  let actual = t.encode v (runtime ?env:e buf) off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
      of the value. Overrun is loud already. *)
@@ -3654,45 +3800,50 @@ let validate ?env:e (t : _ t) buf off =
    For Fixed: use build_field_reader which handles Where/Enum/Map.
    For Bitfield: the GADT ensures 'a = int via Bits constructor.
    For Dynamic: compute offset at read time. *)
-let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
-    =
+let rec build_staged_reader : type a.
+    a typ -> field_access -> runtime -> int -> a =
  fun typ access ->
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
-      build_bf_reader base byte_off shift width
-  | _, Fixed off -> build_field_reader typ off
+      let read = build_bf_reader base byte_off shift width in
+      fun runtime base -> read (Types.eval_bytes runtime) base
+  | _, Fixed off ->
+      let read = build_field_reader typ off in
+      fun runtime base -> read (Types.eval_bytes runtime) base
   | _, Dynamic fn ->
       let reader_at_0 = build_field_reader typ 0 in
-      fun buf base ->
-        let off = fn buf base in
-        reader_at_0 buf (base + off)
+      fun runtime base ->
+        let off = fn runtime base in
+        reader_at_0 (Types.eval_bytes runtime) (base + off)
   | Byte_slice _, Variable { off; size_fn } ->
-      fun buf base ->
-        let sz = size_fn buf base in
-        Slice.make_or_eod buf ~first:(base + off) ~length:sz
+      fun runtime base ->
+        let sz = size_fn runtime base in
+        Slice.make_or_eod (Types.eval_bytes runtime) ~first:(base + off)
+          ~length:sz
   | Byte_array _, Variable { off; size_fn } ->
-      fun buf base ->
-        let sz = size_fn buf base in
-        Bytes.sub_string buf (base + off) sz
+      fun runtime base ->
+        let sz = size_fn runtime base in
+        Bytes.sub_string (Types.eval_bytes runtime) (base + off) sz
   | Byte_array_where _, Variable { off; size_fn } ->
-      fun buf base ->
-        let sz = size_fn buf base in
-        Bytes.sub_string buf (base + off) sz
+      fun runtime base ->
+        let sz = size_fn runtime base in
+        Bytes.sub_string (Types.eval_bytes runtime) (base + off) sz
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
-      fun buf base ->
-        let fo = off_fn buf base in
-        let sz = size_fn buf base in
-        Slice.make_or_eod buf ~first:(base + fo) ~length:sz
+      fun runtime base ->
+        let fo = off_fn runtime base in
+        let sz = size_fn runtime base in
+        Slice.make_or_eod (Types.eval_bytes runtime) ~first:(base + fo)
+          ~length:sz
   | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
-      fun buf base ->
-        let fo = off_fn buf base in
-        let sz = size_fn buf base in
-        Bytes.sub_string buf (base + fo) sz
+      fun runtime base ->
+        let fo = off_fn runtime base in
+        let sz = size_fn runtime base in
+        Bytes.sub_string (Types.eval_bytes runtime) (base + fo) sz
   | Byte_array_where _, Variable_dynamic { off_fn; size_fn } ->
-      fun buf base ->
-        let fo = off_fn buf base in
-        let sz = size_fn buf base in
-        Bytes.sub_string buf (base + fo) sz
+      fun runtime base ->
+        let fo = off_fn runtime base in
+        let sz = size_fn runtime base in
+        Bytes.sub_string (Types.eval_bytes runtime) (base + fo) sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
@@ -3708,49 +3859,60 @@ let rec build_staged_reader : type a. a typ -> field_access -> bytes -> int -> a
 
 (* Build a staged writer from field type and access info. *)
 let rec build_staged_writer : type a.
-    a typ -> field_access -> bytes -> int -> a -> unit =
+    a typ -> field_access -> runtime -> int -> a -> unit =
  fun typ access ->
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
-      build_bf_accessor_writer base byte_off shift width
+      let write = build_bf_accessor_writer base byte_off shift width in
+      fun runtime base value -> write (Types.eval_bytes runtime) base value
   | _, Fixed off ->
-      let enc = build_field_encoder typ in
-      fun buf base value ->
-        let _ = enc buf (base + off) value in
+      fun runtime base value ->
+        let _ =
+          build_field_encoder_ctx typ runtime (Types.eval_bytes runtime)
+            (base + off) value
+        in
         ()
   | _, Dynamic fn ->
-      let enc = build_field_encoder typ in
-      fun buf base value ->
-        let off = fn buf base in
-        let _ = enc buf (base + off) value in
+      fun runtime base value ->
+        let off = fn runtime base in
+        let _ =
+          build_field_encoder_ctx typ runtime (Types.eval_bytes runtime)
+            (base + off) value
+        in
         ()
   | Byte_slice _, Variable { off; _ } ->
-      fun buf base value ->
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
         let src = (value : Slice.t) in
         let len = Slice.length src in
         Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + off) len
   | Byte_array _, Variable { off; _ } ->
-      fun buf base value ->
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + off) (String.length s)
   | Byte_array_where _, Variable { off; _ } ->
-      fun buf base value ->
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + off) (String.length s)
   | Byte_slice _, Variable_dynamic { off_fn; _ } ->
-      fun buf base value ->
-        let fo = off_fn buf base in
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
+        let fo = off_fn runtime base in
         let src = (value : Slice.t) in
         let len = Slice.length src in
         Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + fo) len
   | Byte_array _, Variable_dynamic { off_fn; _ } ->
-      fun buf base value ->
-        let fo = off_fn buf base in
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
+        let fo = off_fn runtime base in
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + fo) (String.length s)
   | Byte_array_where _, Variable_dynamic { off_fn; _ } ->
-      fun buf base value ->
-        let fo = off_fn buf base in
+      fun runtime base value ->
+        let buf = Types.eval_bytes runtime in
+        let fo = off_fn runtime base in
         let s = (value : string) in
         Bytes.blit_string s 0 buf (base + fo) (String.length s)
   | Where { inner; _ }, _ -> build_staged_writer inner access
@@ -3775,7 +3937,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
   match List.assoc_opt f.name codec.field_actions with
-  | None -> Staged.stage read
+  | None -> Staged.stage (fun buf off -> read (runtime ?env buf) off)
   | Some act ->
       (* Reuse the codec's own domain-local scratch rather than minting another
          [Domain.DLS] key here: [get] returns a staged reader, but a caller that
@@ -3794,21 +3956,21 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
             let param_base = codec.param_base in
             ( (fun arr ->
                 List.iteri
-                  (fun i (Param.Pack p) ->
+                  (fun i (Param.Pack _p) ->
                     let v = arr.ints.(param_base + i) in
-                    e.slots.(i) <- v;
-                    p.cell () := v)
+                    e.slots.(i) <- v)
                   param_handles),
               fun arr ->
                 if n_params > 0 then
                   Array.blit e.slots 0 arr.ints param_base n_params )
       in
       Staged.stage (fun buf off ->
-          let v = read buf off in
+          let runtime = runtime ?env buf in
+          let v = read runtime off in
           let arr = get_arr () in
           clear_slots arr n;
           blit_input arr;
-          populate arr buf off;
+          populate arr runtime off;
           act arr;
           sync arr;
           v)
@@ -3816,12 +3978,19 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
 let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
   let access = field_access codec f.name in
-  Staged.stage (build_staged_writer f.typ access)
+  let write = build_staged_writer f.typ access in
+  Staged.stage (fun buf off value -> write (no_runtime buf) off value)
 
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
 let doc (t : _ t) = t.doc
-let field_readers (t : _ t) = t.field_readers
+let field_readers_ctx (t : _ t) = t.field_readers
+
+let field_readers (t : _ t) =
+  List.map
+    (fun (name, read) -> (name, fun buf off -> read (no_runtime buf) off))
+    t.field_readers
+
 let pp ppf (t : _ t) = Fmt.string ppf t.name
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
 
@@ -3843,10 +4012,10 @@ let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
   match field_access codec f.name with
   | Fixed off -> Staged.stage (fun _buf base -> base + off)
-  | Dynamic fn -> Staged.stage (fun buf base -> base + fn buf base)
+  | Dynamic fn -> Staged.stage (fun buf base -> base + fn (no_runtime buf) base)
   | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
   | Variable_dynamic { off_fn; _ } ->
-      Staged.stage (fun buf base -> base + off_fn buf base)
+      Staged.stage (fun buf base -> base + off_fn (no_runtime buf) base)
   | Bitfield _ ->
       Fmt.invalid_arg
         "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
@@ -3864,7 +4033,7 @@ let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
              -- internal inconsistency"
             f.name)
   | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
-      Staged.stage size_fn
+      Staged.stage (fun buf base -> size_fn (no_runtime buf) base)
   | _, (Fixed _ | Dynamic _) ->
       Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
   | _, Bitfield _ ->

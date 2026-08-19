@@ -124,7 +124,9 @@ let rec expr : type a. ctx -> a expr -> a =
       failwith
         ("Eval.expr: unbound int64 field " ^ name
        ^ " (cross-field references are only valid inside a struct)")
-  | Param_ref p -> !(p.cell ())
+  | Param_ref p ->
+      Fmt.invalid_arg
+        "Eval.expr: parameter %S requires a codec evaluation context" p.name
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> 0
   | Field_pos -> 0
