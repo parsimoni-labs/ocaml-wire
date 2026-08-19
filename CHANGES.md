@@ -4,12 +4,12 @@
 
 - A bare `uint64` field now has end-to-end coverage through EverParse C
   generation, so a regression in that projection fails the test suite
-  (#NNN, @samoht)
+  (#236, @samoht)
 
 - `Field.optional` over a sub-codec now documents how to make a whole field
   group conditional, keeping the group's byte-length prefix and dependent
   `Field.repeat` local to the group while later fields stay in the parent
-  codec (#NNN, @samoht)
+  codec (#236, @samoht)
 
 - The full test suite now also runs under wasm_of_ocaml (31-bit int) and
   js_of_ocaml (32-bit int) on node in CI, so every codec keeps working on a
