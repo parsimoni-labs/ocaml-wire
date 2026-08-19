@@ -15,8 +15,8 @@ let pp_c_stub_error_handler ppf lower =
 let c_stub_validate ppf ~lower ~ep =
   Fmt.pf ppf "  %sFields fields = {0};@\n" ep;
   Fmt.pf ppf
-    "  uint64_t r = %sValidate%s((WIRECTX *) &fields, NULL, %s_err, data, len, \
-     0);@\n"
+    "  uint64_t r = %sValidateWire%s((WIRECTX *) &fields, NULL, %s_err, data, \
+     len, 0);@\n"
     ep ep lower;
   Fmt.pf ppf
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"

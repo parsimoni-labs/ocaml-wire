@@ -193,6 +193,9 @@ let test_c_stubs_no_params () =
   Alcotest.(check bool)
     "has error handler" true
     (contains ~sub:"simpleheader_err" c);
+  Alcotest.(check bool)
+    "uses generated Wire-prefixed validator" true
+    (contains ~sub:"ValidateWire" c);
   Alcotest.(check bool) "has EverParse.h" true (contains ~sub:"EverParse.h" c)
 
 let test_c_stubs_with_params () =
