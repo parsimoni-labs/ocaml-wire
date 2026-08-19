@@ -16,8 +16,7 @@ then
   exit 1
 fi
 
-merlint="$HOME/git/blacksun/mono/_build/default/merlint/bin/main.exe"
-if [ -x "$merlint" ]; then
+if merlint=$(command -v merlint 2>/dev/null); then
   git diff --cached --name-only --diff-filter=ACM -z -- \
     '*.ml' '*.mli' '*.mll' '*.mly' \
     | xargs -0 "$merlint" --no-build >/tmp/git-merlint-hook.log 2>&1 \
