@@ -1066,8 +1066,9 @@ module Codec : sig
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
   (** Staged field reader. If the field has an [~action], the action fires on
       every read. Pass [~env] to sync output parameters after each action. An
-      environment created for another codec raises [Invalid_argument]. Fields
-      without actions have zero per-read overhead regardless of [~env].
+      environment created for another codec raises [Invalid_argument]. Omit
+      [~env] for parameter-free accessors; dependent layouts use it to resolve
+      their parameters.
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)

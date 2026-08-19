@@ -27,10 +27,6 @@ let setter_off n set buf off v =
   set buf off v;
   off + n
 
-let setter_off_int32 n set buf off v =
-  set buf off (Int32.of_int v);
-  off + n
-
 (* Encode a value into a fixed [n]-byte region: write it with [enc], then
    zero-pad the remainder. Used for [nested] regions. *)
 let single_elem_region ~at_most n typ enc buf off v =
@@ -132,8 +128,17 @@ and build_field_encoder_ctx : type a.
   | Int8 -> setter_off 1 Bytes.set_int8
   | Int16 Little -> setter_off 2 Bytes.set_int16_le
   | Int16 Big -> setter_off 2 Bytes.set_int16_be
-  | Int32 Little -> setter_off_int32 4 Bytes.set_int32_le
-  | Int32 Big -> setter_off_int32 4 Bytes.set_int32_be
+  (* Keep the conversion and primitive call visible together. Passing the
+     setter through [setter_off_int32] boxes the temporary [int32] on every
+     staged write when Flambda is disabled. *)
+  | Int32 Little ->
+      fun buf off v ->
+        Bytes.set_int32_le buf off (Int32.of_int v);
+        off + 4
+  | Int32 Big ->
+      fun buf off v ->
+        Bytes.set_int32_be buf off (Int32.of_int v);
+        off + 4
   | Int64 Little -> setter_off 8 Bytes.set_int64_le
   | Int64 Big -> setter_off 8 Bytes.set_int64_be
   | Float32 Little -> float32_field_encoder Bytes.set_int32_le
@@ -329,8 +334,12 @@ let rec build_field_reader_ctx : type a.
           fun _runtime _base -> failwith "build_field_reader: unsupported type")
   | _ -> fun _runtime _base -> failwith "build_field_reader: unsupported type"
 
-let build_field_reader typ field_off buf base =
-  build_field_reader_ctx typ field_off (Types.empty_eval_ctx buf) base
+let build_field_reader typ field_off =
+  (* Resolve the type dispatch while staging the accessor. If this call stayed
+     inside the returned function, [build_field_reader_ctx] would construct a
+     fresh reader closure for every scalar read. *)
+  let read = build_field_reader_ctx typ field_off in
+  fun buf base -> read (Types.empty_eval_ctx buf) base
 
 let int_of_typ_value = Eval.int_of_exn
 

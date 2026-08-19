@@ -141,10 +141,10 @@ val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
 (** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
     [f] has an action, it fires on every read. [env] syncs output parameters
-    after each action; fields without actions have zero overhead regardless of
-    [env]. An environment created for another codec raises [Invalid_argument].
-    Does not check record-level where-clauses or other fields' constraints --
-    call {!validate} first on untrusted input. *)
+    after each action and supplies parameters for dependent field layouts; omit
+    it for parameter-free accessors. An environment created for another codec
+    raises [Invalid_argument]. Does not check record-level where-clauses or
+    other fields' constraints -- call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
 (** Staged zero-copy field setter. Does not check constraints or fire actions --

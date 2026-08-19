@@ -43,6 +43,11 @@
 
 ### Fixed
 
+- Staged `Codec.get` readers now resolve their field-type dispatch once rather
+  than rebuilding a reader closure on every scalar access. Parameter-free
+  immediate getters and setters, including signed 32-bit setters, now allocate
+  zero words per call on a non-Flambda release build.
+
 - Optional fields that can expose a consume-rest payload are now rejected when
   followed by another field, rather than allowing that payload to swallow the
   remainder of the enclosing codec.
