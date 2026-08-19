@@ -17,8 +17,9 @@ and the EverParse `.3d` schema that compiles to a verified C parser. Define
 the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
-- **Read and write fields in-place** via `Codec.get` / `Codec.set` -- zero-copy,
-  zero-allocation for immediate types (int, bool)
+- **Read and write fields in-place** via staged `Codec.get` / `Codec.set` --
+  zero-copy, with zero per-call allocation for parameter-free immediate types
+  (int, bool)
 - **Decode and encode records** via `Codec.decode` / `Codec.encode`
 - **Export EverParse `.3d` schemas** via `Everparse.project` / `Everparse.write`
 - **Generate verified C artifacts** via `Wire_3d.run`
