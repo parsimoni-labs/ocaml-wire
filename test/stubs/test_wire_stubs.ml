@@ -193,6 +193,9 @@ let test_c_stubs_no_params () =
   Alcotest.(check bool)
     "has error handler" true
     (contains ~sub:"simpleheader_err" c);
+  Alcotest.(check bool)
+    "uses generated Wire-prefixed validator" true
+    (contains ~sub:"ValidateWire" c);
   Alcotest.(check bool) "has EverParse.h" true (contains ~sub:"EverParse.h" c)
 
 let test_c_stubs_with_params () =
@@ -268,6 +271,11 @@ let test_name_single () =
   Alcotest.(check string)
     "single" "foo"
     (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
+
+let test_validator_name () =
+  Alcotest.(check string)
+    "Wire-prefixed validator" "ClcwValidateWireClcw"
+    (Wire_stubs.validator_name "CLCW")
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
@@ -709,10 +717,7 @@ let test_e2e_full_stack () =
         Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
         Wire_3d.write_fields ~outdir:dir [ schema ])
       schemas;
-    let validator name =
-      let n = Wire_3d.everparse_name name in
-      n ^ "Validate" ^ n
-    in
+    let validator = Wire_stubs.validator_name in
     let fields name = Wire_3d.everparse_name name ^ "Fields" in
     let ip_off = Net.ethernet_size - Net.ethernet_payload_size in
     let tcp_off = ip_off + (Net.ipv4_size - Net.ipv4_payload_size) in
@@ -809,6 +814,8 @@ let suite =
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;
       Alcotest.test_case "name: single word" `Quick test_name_single;
+      Alcotest.test_case "name: validator entry point" `Quick
+        test_validator_name;
       (* end-to-end: generate -> EverParse -> compile -> call *)
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: offset bounds" `Slow test_e2e_offset_bounds;

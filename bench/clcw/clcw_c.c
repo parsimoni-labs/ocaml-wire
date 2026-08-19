@@ -1,6 +1,6 @@
 /* CLCW polling loop -- application logic with EverParse field extraction.
 
-   Uses EverParse-generated CLCWValidateCLCW to extract bitfields into a typed
+   Uses EverParse-generated ClcwValidateWireClcw to extract bitfields into a typed
    ClcwFields struct via the default plug. Application logic (anomaly
    detection) reads named members of the struct. No hand-written bitfield
    manipulation, no index arithmetic. */
@@ -25,7 +25,7 @@ static int count_anomalies(uint8_t *buf, int n_words, int n_iters) {
 
   for (int i = 0; i < n_iters; i++) {
     uint8_t *p = buf + (i % n_words) * WORD_SIZE;
-    ClcwValidateClcw((WIRECTX *)&fields, NULL, bench_err, p, WORD_SIZE, 0);
+    ClcwValidateWireClcw((WIRECTX *)&fields, NULL, bench_err, p, WORD_SIZE, 0);
 
     int expected_report = expected_seq & 0xFF;
     if (fields.Lockout || fields.Wait || fields.Retransmit

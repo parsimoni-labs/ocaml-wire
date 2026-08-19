@@ -124,6 +124,7 @@ let generate_c oc =
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
       let ep = Wire_3d.everparse_name name in
+      let validator = Wire_stubs.validator_name name in
       let lower = String.lowercase_ascii name in
       let n_fields = List.length (Wire.Everparse.Raw.field_names s) in
       ignore n_fields;
@@ -132,10 +133,8 @@ let generate_c oc =
       pr "  uint8_t *data = (uint8_t *)Bytes_val(v_buf);\n";
       pr "  uint32_t len = caml_string_length(v_buf);\n";
       pr "  %sFields ctx = {0};\n" ep;
-      pr
-        "  uint64_t r = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, data, \
-         len, 0);\n"
-        ep ep;
+      pr "  uint64_t r = %s((WIRECTX *) &ctx, NULL, bench_err, data, len, 0);\n"
+        validator;
       pr "  CAMLreturn(Val_bool(EverParseIsSuccess(r)));\n";
       pr "}\n\n";
       let item_size = struct_size s in
@@ -154,9 +153,8 @@ let generate_c oc =
       pr "  for (int i = 0; i < count; i++) {\n";
       pr "    uint8_t *item = buf + ((uint32_t)i %% n_items) * item_size;\n";
       pr
-        "    result = %sValidate%s((WIRECTX *) &ctx, NULL, bench_err, item, \
-         item_size, 0);\n"
-        ep ep;
+        "    result = %s((WIRECTX *) &ctx, NULL, bench_err, item, item_size, 0);\n"
+        validator;
       pr "  }\n";
       pr "  (void)result;\n";
       pr "  int64_t t1 = now_ns();\n";
