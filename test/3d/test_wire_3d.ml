@@ -153,10 +153,11 @@ let test_generate_c () =
       (Sys.file_exists provenance);
     let contents = read_file provenance in
     Alcotest.(check bool)
-      "provenance records schema SHA-256" true
+      "provenance records schema BLAKE2b-256" true
       (Re.execp
          (Re.compile
-            (Re.Perl.re "schema-sha256: [0-9a-f]{64}\\neverparse: EverParse/3d "))
+            (Re.Perl.re
+               "schema-blake2b-256: [0-9a-f]{64}\\neverparse: EverParse/3d "))
          contents)
   end
 
@@ -177,9 +178,9 @@ let test_check_provenance () =
   in
   write schema "entrypoint\ntypedef struct WireFoo\n{\n   UINT8 A;\n} Foo;\n";
   let stamp_of digest =
-    Fmt.str "schema-sha256: %s\neverparse: EverParse/3d vtest\n" digest
+    Fmt.str "schema-blake2b-256: %s\neverparse: EverParse/3d vtest\n" digest
   in
-  write stamp (stamp_of Sha256.(to_hex (file schema)));
+  write stamp (stamp_of Digest.BLAKE256.(to_hex (file schema)));
   Wire_3d.check_provenance ~outdir:tmpdir [ three_d ];
   write schema "entrypoint\ntypedef struct WireFoo\n{\n   UINT16 A;\n} Foo;\n";
   Alcotest.(check bool)

@@ -255,7 +255,7 @@ let provenance_file three_d =
   Filename.remove_extension (Filename.basename three_d) ^ ".provenance"
 
 let schema_digest ~outdir three_d =
-  Sha256.(to_hex (file (Filename.concat outdir three_d)))
+  Digest.BLAKE256.(to_hex (file (Filename.concat outdir three_d)))
 
 let write_provenance ~outdir ~version three_d =
   let digest = schema_digest ~outdir three_d in
@@ -263,10 +263,10 @@ let write_provenance ~outdir ~version three_d =
   Out_channel.with_open_bin path (fun oc ->
       Fmt.pf
         (Format.formatter_of_out_channel oc)
-        "schema-sha256: %s\neverparse: %s\n%!" digest version)
+        "schema-blake2b-256: %s\neverparse: %s\n%!" digest version)
 
 let recorded_digest path =
-  let prefix = "schema-sha256: " in
+  let prefix = "schema-blake2b-256: " in
   In_channel.with_open_bin path In_channel.input_lines
   |> List.find_map (fun line ->
       if String.starts_with ~prefix line then
@@ -276,7 +276,7 @@ let recorded_digest path =
       else None)
   |> function
   | Some digest -> digest
-  | None -> Fmt.failwith "%s: missing schema-sha256" path
+  | None -> Fmt.failwith "%s: missing schema-blake2b-256" path
 
 (* A stamp is only ever written beside the C that EverParse produced from that
    exact [.3d], so a recorded hash that no longer matches means the committed C
@@ -290,8 +290,8 @@ let check_provenance ~outdir three_d_files =
       let actual = schema_digest ~outdir three_d in
       if recorded <> actual then
         Fmt.failwith
-          "stale generated C: %s records schema-sha256 %s but %s hashes to %s; \
-           regenerate with BUILD_EVERPARSE=1 dune build @3d"
+          "stale generated C: %s records schema-blake2b-256 %s but %s hashes \
+           to %s; regenerate with BUILD_EVERPARSE=1 dune build @3d"
           stamp recorded three_d actual)
     three_d_files
 

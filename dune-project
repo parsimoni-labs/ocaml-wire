@@ -25,7 +25,6 @@
   (ocaml (>= 5.2))
   (bytesrw (>= 0.1))
   (fmt (>= 0.9))
-  (sha (>= 1.15.4))
   (optint (>= 0.3))
   (memtrace :with-test)
   (alcotest :with-test)

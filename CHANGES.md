@@ -105,8 +105,8 @@
   (#235, @samoht)
 
 - EverParse C generation now installs a `<Name>.provenance` stamp recording the
-  SHA-256 of the `.3d` it was built from, and `dune runtest` rechecks it without
-  EverParse, so a changed spec can no longer keep stale committed C
+  stdlib BLAKE2b-256 digest of the `.3d` it was built from, and `dune runtest`
+  rechecks it without EverParse, so a changed spec can no longer keep stale C
   (#235, @samoht)
 
 - 32-bit bitfields are now exact on a narrow-int target: a field touching

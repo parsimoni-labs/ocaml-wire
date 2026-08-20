@@ -78,11 +78,11 @@ val run_everparse :
     If [quiet] is [true] (the default), EverParse output is suppressed. If
     [quiet] is [false], EverParse stdout/stderr are left visible.
 
-    A [<Name>.provenance] file records the SHA-256 of [<Name>.3d] and the
-    EverParse version that generated the C. Generated [dune.inc] rules recompute
-    that hash during [runtest] and fail on a mismatch, so C staleness is
-    detected without running EverParse. The failure is deliberately not
-    promotable: only regenerating the C may refresh the stamp.
+    A [<Name>.provenance] file records the BLAKE2b-256 digest of [<Name>.3d] and
+    the EverParse version that generated the C. Generated [dune.inc] rules
+    recompute that digest during [runtest] and fail on a mismatch, so C
+    staleness is detected without running EverParse. The failure is deliberately
+    not promotable: only regenerating the C may refresh the stamp.
 
     The executable, output directory, and schema filenames are passed directly
     to EverParse without shell interpretation.
@@ -90,10 +90,10 @@ val run_everparse :
     Requires [3d.exe] in PATH. *)
 
 val check_provenance : outdir:string -> string list -> unit
-(** [check_provenance ~outdir three_d_files] recomputes the SHA-256 of each
-    [.3d] in [outdir] and raises [Failure] if it differs from the hash recorded
-    in the matching [<Name>.provenance] stamp, which means the committed C came
-    from a different spec. Needs no [3d.exe]. *)
+(** [check_provenance ~outdir three_d_files] recomputes the BLAKE2b-256 digest
+    of each [.3d] in [outdir] and raises [Failure] if it differs from the digest
+    recorded in the matching [<Name>.provenance] stamp, which means the
+    committed C came from a different spec. Needs no [3d.exe]. *)
 
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 (** [parse_3d ~outdir file] runs [3d.exe] on a single [.3d] file in [outdir].
