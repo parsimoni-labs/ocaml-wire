@@ -72,11 +72,11 @@ val decode :
     If [?env] is supplied, input params are read from it and output params are
     written back to it after decoding.
 
-    Raises [Invalid_argument] when the codec has input params and no env is
-    supplied, or the env left any input param unbound (the error names the
-    offending param). An unbound input param would resolve a parametric field
-    size to 0 and silently truncate the field, so it is rejected up front the
-    same way {!encode} does. *)
+    Raises [Invalid_argument] when [?env] was created for a different codec,
+    when the codec has input params and no env is supplied, or when the env left
+    any input param unbound (the error names the offending param). An unbound
+    input param would resolve a parametric field size to 0 and silently truncate
+    the field, so it is rejected up front the same way {!encode} does. *)
 
 val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
 (** [decode_exn ?env c buf off] is like {!decode} but raises
@@ -115,10 +115,11 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     {!decode} when reading the bytes back, but [encode] does not need a prior
     decode to obtain it.
 
-    Raises [Invalid_argument] when the codec has parameters and no env is
-    supplied, when the env left any input param unbound (the error names the
-    offending param), when the destination buffer is too short, or when a
-    parametric byte field's value length does not match its env-bound size. *)
+    Raises [Invalid_argument] when [?env] was created for a different codec,
+    when the codec has parameters and no env is supplied, when the env left any
+    input param unbound (the error names the offending param), when the
+    destination buffer is too short, or when a parametric byte field's value
+    length does not match its env-bound size. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
@@ -128,15 +129,18 @@ val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
     without constructing a record and without firing actions. [?env] supplies
     bindings for any [Param.input] referenced in those clauses.
 
-    Raises {!Types.Parse_error} on constraint/where-clause failure. *)
+    Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
+    input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
+    failure. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
 (** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
     [f] has an action, it fires on every read. [env] syncs output parameters
     after each action; fields without actions have zero overhead regardless of
-    [env]. Does not check record-level where-clauses or other fields'
-    constraints -- call {!validate} first on untrusted input. *)
+    [env]. An environment created for another codec raises [Invalid_argument].
+    Does not check record-level where-clauses or other fields' constraints --
+    call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
 (** Staged zero-copy field setter. Does not check constraints or fire actions --

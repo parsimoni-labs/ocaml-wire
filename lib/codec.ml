@@ -3011,6 +3011,106 @@ let reject_nested_where name fields =
       check_typ (Option.value ~default:"<anon>" f.field_name) f.field_typ)
     fields
 
+(* EverParse represents byte sizes as [u32]. Its verifier rejects a product
+   [count * width] when the declared upper bound permits 2^32 or more, but the
+   resulting F* diagnostic points into generated code. Recognise only the
+   deliberately narrow, certain case: a literal coefficient multiplied by a
+   field with a simple [field <= K] constraint. Everything else stays with
+   EverParse so this diagnostic cannot create false positives. *)
+let min_known_bound a b =
+  match (a, b) with
+  | None, x | x, None -> x
+  | Some a, Some b -> Some (Int.min a b)
+
+let rec simple_upper_bound field : bool expr -> int option = function
+  | Le (Ref (I, candidate), Int bound) when String.equal field candidate ->
+      Some bound
+  | And (a, b) ->
+      min_known_bound (simple_upper_bound field a) (simple_upper_bound field b)
+  | _ -> None
+
+let byte_size_bound_for fields field =
+  List.fold_left
+    (fun bound (Types.Field f) ->
+      match (f.field_name, f.constraint_) with
+      | Some candidate, Some constraint_ when String.equal field candidate ->
+          min_known_bound bound (simple_upper_bound field constraint_)
+      | _ -> bound)
+    None fields
+
+let reject_byte_size_product name fields sized_field field coefficient =
+  match byte_size_bound_for fields field with
+  | Some bound when bound >= 0 && coefficient > 0 ->
+      let limit = 0x1_0000_0000L in
+      let coefficient64 = Int64.of_int coefficient in
+      let first_overflowing_bound =
+        let quotient = Int64.div limit coefficient64 in
+        if Int64.rem limit coefficient64 = 0L then quotient
+        else Int64.succ quotient
+      in
+      if Int64.compare (Int64.of_int bound) first_overflowing_bound >= 0 then
+        Fmt.invalid_arg
+          "Codec.v %S: byte-size for field %S multiplies %S (bounded by <= %d) \
+           by %d, which permits at least 2^32 bytes; tighten the field bound \
+           for EverParse's u32 byte-size limit"
+          name sized_field field bound coefficient
+  | _ -> ()
+
+let rec check_byte_size_expr name fields sized_field : int expr -> unit =
+  function
+  | Mul (Ref (I, field), Int coefficient) | Mul (Int coefficient, Ref (I, field))
+    ->
+      reject_byte_size_product name fields sized_field field coefficient
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      check_byte_size_expr name fields sized_field a;
+      check_byte_size_expr name fields sized_field b
+  | Lnot a | Cast (_, a) -> check_byte_size_expr name fields sized_field a
+  | If_then_else (_, a, b) ->
+      check_byte_size_expr name fields sized_field a;
+      check_byte_size_expr name fields sized_field b
+  | Int _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> ()
+
+let rec check_byte_size_typ : type a.
+    string -> Types.field list -> string -> a Types.typ -> unit =
+ fun name fields sized_field -> function
+  | Uint_var { size; _ }
+  | Byte_array { size }
+  | Byte_array_where { size; _ }
+  | Byte_slice { size }
+  | Single_elem { size; _ }
+  | Zeroterm_at_most { size }
+  | Repeat { size; _ } ->
+      check_byte_size_expr name fields sized_field size
+  | Map { inner; _ } -> check_byte_size_typ name fields sized_field inner
+  | Where { inner; _ } -> check_byte_size_typ name fields sized_field inner
+  | Apply { typ; _ } -> check_byte_size_typ name fields sized_field typ
+  | Optional { inner; _ } -> check_byte_size_typ name fields sized_field inner
+  | Optional_or { inner; _ } ->
+      check_byte_size_typ name fields sized_field inner
+  | _ -> ()
+
+let reject_certain_byte_size_mul name fields =
+  List.iter
+    (fun (Types.Field f) ->
+      check_byte_size_typ name fields
+        (Option.value ~default:"<anon>" f.field_name)
+        f.field_typ)
+    fields
+
+let reject_invalid_codec_shape name fields =
+  reject_greedy_not_last name fields;
+  reject_nested_where name fields;
+  reject_certain_byte_size_mul name fields
+
 let seal : type r. (r, r) record -> r t =
  fun (Record r) ->
   let codec_id = Atomic.fetch_and_add id_counter 1 in
@@ -3028,8 +3128,7 @@ let seal : type r. (r, r) record -> r t =
   let param_base = r.n_array_slots in
   (* Collect and index params *)
   let struct_fields = List.rev r.fields_rev in
-  reject_greedy_not_last r.name struct_fields;
-  reject_nested_where r.name struct_fields;
+  reject_invalid_codec_shape r.name struct_fields;
   let param_handles = collect_param_handles struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
@@ -3390,6 +3489,11 @@ let unbound_params (t : 'r t) (env : Param.env) : string list =
 let has_input_params (t : 'r t) =
   List.exists (fun (Param.Pack p) -> not p.Types.mutable_) t.param_handles
 
+let check_env_owner ~op t (env : Param.env) =
+  if env.codec_id <> t.id then
+    Fmt.invalid_arg "Codec.%s: env was not created by Codec.env for %S" op
+      t.name
+
 let require_env ~op t = function
   | None when not (has_input_params t) -> ()
   | None ->
@@ -3398,6 +3502,7 @@ let require_env ~op t = function
          Param.bind p N])."
         op t.name
   | Some env -> (
+      check_env_owner ~op t env;
       match unbound_params t env with
       | [] -> ()
       | missing ->
@@ -3510,8 +3615,9 @@ let to_struct t =
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
-let validate ?env (t : _ t) buf off =
-  let env_slots = Option.map (fun (e : Param.env) -> e.slots) env in
+let validate ?env:e (t : _ t) buf off =
+  require_env ~op:"validate" t e;
+  let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
   t.validate ?env_slots buf off
 
 (* Build a staged reader from field type and access info.
@@ -3635,6 +3741,7 @@ let field_access (codec : _ t) name =
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
+  Option.iter (check_env_owner ~op:"get" codec) env;
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
   match List.assoc_opt f.name codec.field_actions with
@@ -3653,9 +3760,6 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            if e.codec_id <> codec.id then
-              Fmt.invalid_arg
-                "Codec.get: env was not created by Codec.env for %S" codec.name;
             let param_handles = codec.param_handles in
             let param_base = codec.param_base in
             ( (fun arr ->

@@ -39,6 +39,30 @@ let test_input_binding () =
   let env = Codec.env c |> Param.bind p 42 in
   Alcotest.(check int) "value" 42 (Param.get env p)
 
+let test_wide_input_binding_error () =
+  let p = Param.input "wide_limit" uint32 in
+  let f_x = Field.v "x" uint8 in
+  let c =
+    Codec.v "WideInputBinding"
+      ~where:Expr.(Field.ref f_x <= Param.expr p)
+      (fun x -> x)
+      Codec.[ f_x $ Fun.id ]
+  in
+  let high = Wire.Private.UInt32.be (Bytes.of_string "\x80\x00\x00\x00") 0 in
+  if Sys.int_size > 32 then begin
+    let env = Codec.env c |> Param.bind p high in
+    Alcotest.(check int32)
+      "wide value" Int32.min_int
+      (Wire.Private.UInt32.to_int32 (Param.get env p))
+  end
+  else
+    match Param.bind p high (Codec.env c) with
+    | _ -> Alcotest.fail "expected an unfittable parameter error"
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          "names the parameter" true
+          (contains ~sub:"wide_limit" msg)
+
 let test_output_binding () =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
@@ -403,6 +427,8 @@ let suite =
       Alcotest.test_case "output spec" `Quick test_output_spec;
       (* bindings *)
       Alcotest.test_case "input binding" `Quick test_input_binding;
+      Alcotest.test_case "wide input binding error" `Quick
+        test_wide_input_binding_error;
       Alcotest.test_case "output binding" `Quick test_output_binding;
       (* runtime: input params *)
       Alcotest.test_case "input param constraint" `Quick

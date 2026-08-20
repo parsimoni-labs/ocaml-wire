@@ -39,6 +39,21 @@
 
 ### Fixed
 
+- Codec operations now reject a `Param.env` created for another codec before
+  reading its positional slots. This applies consistently to encode, decode,
+  validation, and staged getters, including codecs whose parameter counts
+  happen to match.
+
+- Casetype projection and `Param.bind` now translate unfittable `uint32`,
+  `uint63`, and `uint` values into contextual `Invalid_argument` exceptions
+  naming the case index or parameter, instead of leaking an Optint `Failure` on
+  narrow-int targets.
+
+- `Codec.v` now reports a clear construction error when a byte-size product
+  `field * constant` has a simple `field <= bound` constraint whose maximum can
+  reach EverParse's `2^32` limit. Products without this conclusive shape remain
+  deferred to EverParse, avoiding speculative rejections.
+
 - `dune runtest` now diffs a package's committed `.3d` specs and `dune.inc`
   against freshly generated ones, so editing a codec without refreshing them
   fails with a promotable report instead of leaving a stale spec committed

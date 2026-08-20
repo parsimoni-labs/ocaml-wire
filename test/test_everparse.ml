@@ -119,6 +119,28 @@ let test_casetype_enum_tag_labels () =
     "no raw-integer case label" false
     (contains ~sub:"case 2:" output)
 
+let test_casetype_wide_index_error () =
+  let high = Wire.Private.UInt32.be (Bytes.of_string "\x80\x00\x00\x00") 0 in
+  let body =
+    casetype "WideIndex" uint32
+      [ case ~index:high empty ~inject:Fun.id ~project:Option.some ]
+  in
+  let render () =
+    to_3d
+      (module_ [ typedef (struct_ "WideIndexRecord" [ field "body" body ]) ])
+  in
+  if Sys.int_size > 32 then
+    Alcotest.(check bool)
+      "wide case index rendered" true
+      (contains ~sub:"2147483648" (render ()))
+  else
+    match render () with
+    | _ -> Alcotest.fail "expected an unfittable case-index error"
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          "names the case index" true
+          (contains ~sub:"case index" msg)
+
 let test_pretty_print () =
   let simple =
     struct_ "Simple" [ field "a" uint8; field "b" uint16be; field "c" uint32 ]
@@ -670,6 +692,47 @@ let test_3d_field_sub_mul_rejected () =
   Alcotest.(check bool)
     "constant arithmetic still projects" false
     (projects_or_raises constc)
+
+let test_3d_byte_size_mul_bound_rejected () =
+  let construct ~bound ~coeff =
+    let f_count =
+      Field.v "count" uint32 ~self_constraint:(fun count ->
+          Expr.(count <= int bound))
+    in
+    Codec.v "SizedProduct"
+      (fun count data -> (count, data))
+      Codec.
+        [
+          f_count $ fst;
+          Field.v "data" (byte_array ~size:Expr.(Field.ref f_count * int coeff))
+          $ snd;
+        ]
+  in
+  let rejected =
+    match construct ~bound:536_870_912 ~coeff:8 with
+    | _ -> false
+    | exception Invalid_argument msg ->
+        contains ~sub:"byte-size" msg && contains ~sub:"2^32" msg
+  in
+  Alcotest.(check bool) "2^32 maximum rejected clearly" true rejected;
+  Alcotest.(check bool)
+    "maximum below 2^32 remains projectable" false
+    (projects_or_raises (construct ~bound:536_870_911 ~coeff:8));
+  let f_count = Field.v "count" uint32 in
+  let unbounded =
+    Codec.v "UnboundedProduct"
+      (fun count data -> (count, data))
+      Codec.
+        [
+          f_count $ fst;
+          Field.v "data"
+            (byte_array ~size:Expr.(int max_int * Field.ref f_count))
+          $ snd;
+        ]
+  in
+  Alcotest.(check bool)
+    "unbounded products remain EverParse's decision" false
+    (projects_or_raises unbounded)
 
 let test_schema_authoritative () =
   (* [Everparse.project] is the projectability gate: a non-projectable constraint
@@ -1352,6 +1415,8 @@ let suite =
       Alcotest.test_case "generation: casetype" `Quick test_casetype;
       Alcotest.test_case "generation: casetype enum-tag labels" `Quick
         test_casetype_enum_tag_labels;
+      Alcotest.test_case "generation: wide casetype index error" `Quick
+        test_casetype_wide_index_error;
       Alcotest.test_case "generation: if_then_else projects" `Quick
         test_if_then_else_projects;
       Alcotest.test_case "generation: pretty print" `Quick test_pretty_print;
@@ -1388,6 +1453,8 @@ let suite =
         test_3d_arith_constraint_widens;
       Alcotest.test_case "3d: field sub/mul constraint rejected" `Quick
         test_3d_field_sub_mul_rejected;
+      Alcotest.test_case "3d: certain byte-size multiplication overflow" `Quick
+        test_3d_byte_size_mul_bound_rejected;
       Alcotest.test_case "3d: schema is the projectability gate" `Quick
         test_schema_authoritative;
       Alcotest.test_case "3d: array enum element decl" `Quick

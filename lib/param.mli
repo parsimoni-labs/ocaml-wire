@@ -29,10 +29,14 @@ val expr : ('a, 'k) t -> int Types.expr
 
 type env = Types.param_env
 (** Immutable parameter environment backed by a flat [int array]. Create one
-    with {!Codec.env}, bind inputs with {!bind}, read outputs with {!get}. *)
+    with {!Codec.env}, bind inputs with {!bind}, read outputs with {!get}. An
+    environment belongs to that codec and cannot be used with another one. *)
 
 val bind : ('a, input) t -> 'a -> env -> env
-(** [bind p v env] returns an environment with input [p] set to [v]. *)
+(** [bind p v env] returns an environment with input [p] set to [v].
+
+    Raises [Invalid_argument] naming [p] if [v] cannot fit the platform's native
+    integer representation used by parameter environments. *)
 
 val bind_by_name : string -> int -> env -> env
 (** [bind_by_name name v env] binds the input parameter called [name] to the
