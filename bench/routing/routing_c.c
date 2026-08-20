@@ -1,6 +1,6 @@
 /* APID routing -- application logic with EverParse field extraction.
 
-   Uses EverParse-generated SpacePacketValidateSpacePacket to extract fields
+   Uses EverParse-generated SpacePacketValidateWireSpacePacket to extract fields
    into a typed SpacePacketFields struct via the default plug. Application
    logic (routing dispatch) reads named members. No hand-written bitfield
    manipulation. */
@@ -35,7 +35,7 @@ static void route_counts(uint8_t *buf, int total_bytes, int n, int counts[4]) {
 
   for (int i = 0; i < n; i++) {
     if (off + hdr > total_bytes) off = 0;
-    SpacePacketValidateSpacePacket((WIRECTX *)&fields, NULL, bench_err,
+    SpacePacketValidateWireSpacePacket((WIRECTX *)&fields, NULL, bench_err,
         buf + off, hdr, 0);
     counts[routing_table[fields.APID]]++;
     off += hdr + (int)fields.DataLength + 1;

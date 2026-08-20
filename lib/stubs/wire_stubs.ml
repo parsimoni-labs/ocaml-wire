@@ -3,6 +3,10 @@
 let ml_type_of = Wire.Private.ml_type_of
 let everparse_name = Wire_3d.everparse_name
 
+let validator_name name =
+  let ep = everparse_name name in
+  Fmt.str "%sValidateWire%s" ep ep
+
 let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
     "static void %s_err(const char *t, const char *f, const char *r,@\n" lower;
@@ -12,12 +16,11 @@ let pp_c_stub_error_handler ppf lower =
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n"
 
-let c_stub_validate ppf ~lower ~ep =
+let c_stub_validate ppf ~lower ~ep ~validator =
   Fmt.pf ppf "  %sFields fields = {0};@\n" ep;
   Fmt.pf ppf
-    "  uint64_t r = %sValidate%s((WIRECTX *) &fields, NULL, %s_err, data, len, \
-     0);@\n"
-    ep ep lower;
+    "  uint64_t r = %s((WIRECTX *) &fields, NULL, %s_err, data, len, 0);@\n"
+    validator lower;
   Fmt.pf ppf
     "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
     lower
@@ -45,7 +48,8 @@ let pp_field_value ppf (fname, kind) =
       Fmt.pf ppf "caml_copy_double((double) fields.%s)" fname
   | _ -> Fmt.pf ppf "Val_long(fields.%s)" fname
 
-let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
+let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
+    =
   let kinds = Wire.Everparse.Raw.field_kinds s in
   let n_fields = List.length kinds in
   (* Single C entry point per schema: [caml_wire_<name>_parse_k] takes a
@@ -61,7 +65,7 @@ let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
     Fmt.pf ppf "  CAMLparam3(v_k, v_buf, v_off);@\n";
     Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
     pp_c_stub_bounds ppf ~lower;
-    c_stub_validate ppf ~lower ~ep;
+    c_stub_validate ppf ~lower ~ep ~validator;
     Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
       (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i pp_field_value kind)
@@ -76,7 +80,7 @@ let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
       "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n" lower;
     Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
     pp_c_stub_bounds ppf ~lower;
-    c_stub_validate ppf ~lower ~ep;
+    c_stub_validate ppf ~lower ~ep ~validator;
     Fmt.pf ppf "  CAMLreturn(Val_unit);@\n";
     Fmt.pf ppf "}@\n@\n"
   end
@@ -84,9 +88,10 @@ let pp_c_stub_output ppf ~lower ~ep (s : Wire.Everparse.Raw.struct_) =
 let pp_c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
+  let validator = validator_name name in
   let lower = String.lowercase_ascii name in
   pp_c_stub_error_handler ppf lower;
-  pp_c_stub_output ppf ~lower ~ep s
+  pp_c_stub_output ppf ~lower ~ep ~validator s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 4096 in

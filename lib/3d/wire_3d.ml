@@ -121,11 +121,9 @@ let read_extern_names ~outdir s =
   close_in ic;
   List.rev !names
 
-(* EverParse's top-level validator function follows its own normalization
-   rule (different from extern callbacks: it preserves underscores when the
-   name doesn't start with 2+ uppercase, strips them when it does). Rather
-   than duplicate EverParse's logic, extract the actual name from the
-   generated [<Name>.h]: [uint64_t <Name>Validate<Name>(...)]. *)
+(* EverParse's top-level validator function follows its own normalization rule
+   and includes the 3D struct tag after [Validate]. Rather than duplicate that
+   logic, extract the complete function name from the generated [<Name>.h]. *)
 let read_validate_name ~outdir s =
   let path = Filename.concat outdir (file_base s ^ ".h") in
   let ic = open_in path in
@@ -138,13 +136,10 @@ let read_validate_name ~outdir s =
     || (c >= '0' && c <= '9')
     || c = '_'
   in
-  (* EverParse declares the validator as [<Name>Validate<Name>(...)]. Find the
-     [Validate] keyword and return the C identifier immediately before it -- the
-     base [<Name>]. Scanning every position (not just the first 'V') lets the
-     name itself contain a 'V' (e.g. "VeritySuperblock"); anchoring on the
-     identifier before [Validate] also drops a leading return type should
-     EverParse ever emit it on the same line. *)
-  let base_before_validate line =
+  (* Find [Validate] inside the declaration and return its complete surrounding
+     C identifier. Scanning every position lets the module name itself contain a
+     [V]; the identifier boundaries also discard the return type and arguments. *)
+  let identifier_containing_validate line =
     let len = String.length line in
     let rec scan i =
       if i + nlen > len then None
@@ -154,7 +149,11 @@ let read_validate_name ~outdir s =
         while !j > 0 && is_ident line.[!j - 1] do
           decr j
         done;
-        Some (String.sub line !j (i - !j))
+        let k = ref (i + nlen) in
+        while !k < len && is_ident line.[!k] do
+          incr k
+        done;
+        Some (String.sub line !j (!k - !j))
       end
       else scan (i + 1)
     in
@@ -163,7 +162,7 @@ let read_validate_name ~outdir s =
   (try
      while !found = None do
        let line = String.trim (input_line ic) in
-       found := base_before_validate line
+       found := identifier_containing_validate line
      done
    with End_of_file -> ());
   close_in ic;
@@ -184,6 +183,64 @@ let locate_3d_exe () =
         Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe"
       in
       if Sys.file_exists local then Some local else None
+
+let everparse_version exe =
+  let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
+  let output = In_channel.input_all ic in
+  match Unix.close_process_in ic with
+  | Unix.WEXITED 0 -> (
+      match String.split_on_char '\n' output with
+      | version :: _ when version <> "" -> version
+      | _ -> Fmt.failwith "%s --version returned no version" exe)
+  | Unix.WEXITED n -> Fmt.failwith "%s --version exited with code %d" exe n
+  | Unix.WSIGNALED n ->
+      Fmt.failwith "%s --version was killed by signal %d" exe n
+  | Unix.WSTOPPED n ->
+      Fmt.failwith "%s --version was stopped by signal %d" exe n
+
+let provenance_file three_d =
+  Filename.remove_extension (Filename.basename three_d) ^ ".provenance"
+
+let schema_digest ~outdir three_d =
+  Digest.BLAKE256.(to_hex (file (Filename.concat outdir three_d)))
+
+let write_provenance ~outdir ~version three_d =
+  let digest = schema_digest ~outdir three_d in
+  let path = Filename.concat outdir (provenance_file three_d) in
+  Out_channel.with_open_bin path (fun oc ->
+      Fmt.pf
+        (Format.formatter_of_out_channel oc)
+        "schema-blake2b-256: %s\neverparse: %s\n%!" digest version)
+
+let recorded_digest path =
+  let prefix = "schema-blake2b-256: " in
+  In_channel.with_open_bin path In_channel.input_lines
+  |> List.find_map (fun line ->
+      if String.starts_with ~prefix line then
+        Some
+          (String.sub line (String.length prefix)
+             (String.length line - String.length prefix))
+      else None)
+  |> function
+  | Some digest -> digest
+  | None -> Fmt.failwith "%s: missing schema-blake2b-256" path
+
+(* A stamp is only ever written beside the C that EverParse produced from that
+   exact [.3d], so a recorded hash that no longer matches means the committed C
+   is stale. Fail instead of emitting a promotable diff: promoting a recomputed
+   stamp would relabel the stale C as current and hide the drift for good. *)
+let check_provenance ~outdir three_d_files =
+  List.iter
+    (fun three_d ->
+      let stamp = Filename.concat outdir (provenance_file three_d) in
+      let recorded = recorded_digest stamp in
+      let actual = schema_digest ~outdir three_d in
+      if recorded <> actual then
+        Fmt.failwith
+          "stale generated C: %s records schema-blake2b-256 %s but %s hashes \
+           to %s; regenerate with BUILD_EVERPARSE=1 dune build @3d"
+          stamp recorded three_d actual)
+    three_d_files
 
 let everparse_dir () =
   match locate_3d_exe () with
@@ -416,7 +473,7 @@ let fields_c_files schemas =
       else None)
     schemas
 
-(* EverParse's [<Base>Check<Codec>] wrapper returns TRUE on any successful
+(* EverParse's [<Base>CheckWire<Codec>] wrapper returns TRUE on any successful
    validator result, but a success result is the consumed position: a valid
    record followed by trailing bytes still returns TRUE, making the wrapper a
    prefix recognizer rather than a validator. Wire's contract is whole-buffer
@@ -463,13 +520,15 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     | Some e -> e
     | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
   in
+  let version = everparse_version exe in
   List.iter
     (fun f ->
       let redirect = if quiet then " > /dev/null 2>&1" else "" in
       let cmd = Fmt.str "cd %s && %s --batch %s%s" outdir exe f redirect in
       let ret = Sys.command cmd in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
-      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f)))
+      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
+      write_provenance ~outdir ~version f)
     files;
   copy_everparse_endianness ~outdir
 
@@ -506,14 +565,14 @@ let parse_3d ?(batch = false) ~outdir file =
     in
     Error (if msg = "" then Fmt.str "exit %d" ret else msg)
 
-let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
+let emit_sanity_check ppf ~name ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   (* Sanity: the OCaml codec's wire_size must match what the EverParse
      validator consumes. A mismatch means the .3d projection of the codec
      packs to a different size than the codec declares -- almost always a
      bug in the codec's bitfield declarations. Later checks are meaningless
      if this fails, so abort the whole test binary with a clear message. *)
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
     ctx_arg wire_size;
   pr "    if (!EverParseIsSuccess(r) || r != %d) {\n" wire_size;
   pr "      fprintf(stderr,\n";
@@ -525,9 +584,9 @@ let emit_sanity_check ppf ~name ~ep ~ctx_arg wire_size =
   pr "      return 2;\n";
   pr "    }\n"
 
-let emit_truncation_checks ppf ~ep ~ctx_arg wire_size =
+let emit_truncation_checks ppf ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
     ctx_arg (wire_size * 2);
   pr "    CHECK(\"larger buffer validates\", EverParseIsSuccess(r));\n";
   pr "    CHECK(\"position is %d not %d\", r == %d);\n" wire_size
@@ -535,38 +594,34 @@ let emit_truncation_checks ppf ~ep ~ctx_arg wire_size =
   pr "\n";
   pr "    for (uint64_t len = 0; len < %d; len++) {\n" wire_size;
   pr "      error_count = 0;\n";
-  pr "      r = %sValidate%s(%sNULL, counting_error_handler, buf, len, 0);\n" ep
-    ep ctx_arg;
+  pr "      r = %s(%sNULL, counting_error_handler, buf, len, 0);\n" validator
+    ctx_arg;
   pr "      CHECK(\"truncated to len fails\", EverParseIsError(r));\n";
   pr "    }\n";
   pr "\n";
-  pr "    r = %sValidate%s(%sNULL, counting_error_handler, buf, 0, 0);\n" ep ep
+  pr "    r = %s(%sNULL, counting_error_handler, buf, 0, 0);\n" validator
     ctx_arg;
   pr "    CHECK(\"empty input fails\", EverParseIsError(r));\n"
 
-let emit_random_checks ppf ~ep ~ctx_arg wire_size =
+let emit_random_checks ppf ~validator ~ctx_arg wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   pr "    srand(42);\n";
   pr "    for (int i = 0; i < 1000; i++) {\n";
   pr "      for (int j = 0; j < %d; j++)\n" wire_size;
   pr "        buf[j] = (uint8_t)(rand() & 0xff);\n";
-  pr "      r = %sValidate%s(%sNULL, counting_error_handler, buf, %d, 0);\n" ep
-    ep ctx_arg wire_size;
+  pr "      r = %s(%sNULL, counting_error_handler, buf, %d, 0);\n" validator
+    ctx_arg wire_size;
   pr "      CHECK(\"random buffer validates\", EverParseIsSuccess(r));\n";
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n"
 
-let emit_schema_test ?outdir ppf s wire_size =
+let emit_schema_test ~outdir ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   (* Read the validator name straight out of EverParse's generated [.h]
      -- the one authoritative source. EverParse applies its own naming
      rules (different for the top-level Validate function vs. the extern
      callbacks); any attempt to re-implement them here has drifted before. *)
-  let ep =
-    match outdir with
-    | Some dir -> read_validate_name ~outdir:dir s
-    | None -> file_base s
-  in
+  let validator = read_validate_name ~outdir s in
   let lower = String.lowercase_ascii s.name in
   let uses_ctx = Wire.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
@@ -578,13 +633,13 @@ let emit_schema_test ?outdir ppf s wire_size =
   if uses_ctx then pr "    %sFields ctx = {0};\n" (c_ident s);
   pr "\n";
   pr "    memset(buf, 0, %d);\n" wire_size;
-  emit_sanity_check ppf ~name:s.name ~ep ~ctx_arg wire_size;
+  emit_sanity_check ppf ~name:s.name ~validator ~ctx_arg wire_size;
   pr "    CHECK(\"zero buffer validates\", EverParseIsSuccess(r));\n";
   pr "    CHECK(\"position advanced to %d\", r == %d);\n" wire_size wire_size;
   pr "\n";
-  emit_truncation_checks ppf ~ep ~ctx_arg wire_size;
+  emit_truncation_checks ppf ~validator ~ctx_arg wire_size;
   pr "\n";
-  emit_random_checks ppf ~ep ~ctx_arg wire_size;
+  emit_random_checks ppf ~validator ~ctx_arg wire_size;
   pr "\n";
   if uses_ctx then pr "    (void) ctx;\n";
   pr "    printf(\"%s: %%d passed, %%d failed\\n\", pass, fail);\n" lower;
@@ -648,11 +703,34 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
+let copy_file ~src ~dst =
+  let contents = In_channel.with_open_bin src In_channel.input_all in
+  Out_channel.with_open_bin dst (fun oc ->
+      Out_channel.output_string oc contents)
+
 let rm_rf dir =
   (try Sys.readdir dir with Sys_error _ -> [||])
   |> Array.iter (fun f ->
       try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
   try Sys.rmdir dir with Sys_error _ -> ()
+
+(* Regenerate into a scratch directory through the same writer the committed
+   [.3d] came from, so the drift check compares against the real generator
+   rather than against a second copy of it that could itself drift. *)
+let generate_3d_check ~outdir schemas =
+  ensure_dir outdir;
+  let tmpdir = Filename.temp_dir "wire_3d_check" "" in
+  Fun.protect
+    ~finally:(fun () -> rm_rf tmpdir)
+    (fun () ->
+      write_3d ~outdir:tmpdir schemas;
+      List.iter
+        (fun s ->
+          let file = Wire.Everparse.filename s in
+          copy_file
+            ~src:(Filename.concat tmpdir file)
+            ~dst:(Filename.concat outdir (file ^ ".gen")))
+        schemas)
 
 let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
 
@@ -789,7 +867,7 @@ let everparse_type_defines =
   "-DUINT8=uint8_t -DUINT16=uint16_t -DUINT16BE=uint16_t -DUINT32=uint32_t \
    -DUINT32BE=uint32_t -DUINT64=uint64_t -DUINT64BE=uint64_t"
 
-let emit_gen_rules ppf three_d_files c_files ctx_files =
+let emit_gen_rules ppf three_d_files c_files ctx_files provenance_files =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
@@ -802,13 +880,47 @@ let emit_gen_rules ppf three_d_files c_files ctx_files =
     \ (enabled_if\n\
     \  (= %%{env:BUILD_EVERPARSE=} \"1\"))\n\
     \ (mode promote)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s test.c)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s test.c %s)\n\
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
     (String.concat " " three_d_files)
     (String.concat " " (c_files @ ctx_files))
+    (String.concat " " provenance_files)
     (String.concat " " three_d_files)
+
+(* One [runtest] rule per file rather than one [progn] over all of them: a
+   [progn] stops at the first mismatch, so a single pass would report and offer
+   to promote only the first drifted spec. *)
+let emit_drift_check_rules ppf three_d_files =
+  let generated = List.map (fun f -> f ^ ".gen") three_d_files in
+  let pr fmt = Fmt.pf ppf fmt in
+  pr "(rule\n (targets %s)\n (action\n  (run %%{exe:gen.exe} 3d-gen)))\n\n"
+    (String.concat " " generated);
+  List.iter
+    (fun f ->
+      pr "(rule\n (alias runtest)\n (action\n  (diff %s %s.gen)))\n\n" f f)
+    three_d_files;
+  pr
+    "(rule\n\
+    \ (targets dune.inc.gen)\n\
+    \ (action\n\
+    \  (run %%{exe:gen.exe} dune-gen)))\n\n\
+     (rule\n\
+    \ (alias runtest)\n\
+    \ (action\n\
+    \  (diff dune.inc dune.inc.gen)))\n\n"
+
+let emit_provenance_check_rules ppf three_d_files =
+  let stamps = List.map provenance_file three_d_files in
+  Fmt.pf ppf
+    "(rule\n\
+    \ (alias runtest)\n\
+    \ (deps %s %s)\n\
+    \ (action\n\
+    \  (run %%{exe:gen.exe} provenance-check)))\n\n"
+    (String.concat " " three_d_files)
+    (String.concat " " stamps)
 
 let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
   Fmt.pf ppf
@@ -826,23 +938,26 @@ let emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs =
     (String.concat " " all_deps)
     strict_cc_flags test_bin (String.concat " " c_srcs) test_bin test_bin
 
-let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files =
+let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
+    ~provenance_files =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) three_d_files;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) c_files;
   List.iter (fun f -> pr "  (%s as c/%s)\n" f f) ctx_files;
+  List.iter (fun f -> pr "  (%s as c/%s)\n" f f) provenance_files;
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune ~outdir ~package schemas =
-  let oc = open_out (Filename.concat outdir "dune.inc") in
+let generate_dune_file ~filename ~outdir ~package schemas =
+  let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
   let names = List.map file_base schemas in
   let c_files = List.concat_map (fun n -> [ n ^ ".h"; n ^ ".c" ]) names in
   let ctx_files = wire_ctx_files schemas in
   let fields_srcs = fields_c_files schemas in
   let three_d_files = List.map (fun n -> n ^ ".3d") names in
+  let provenance_files = List.map provenance_file three_d_files in
   let test_bin =
     "test_" ^ String.map (fun c -> if c = '-' then '_' else c) package
   in
@@ -850,11 +965,17 @@ let generate_dune ~outdir ~package schemas =
     [ "test.c"; "EverParse.h"; "EverParseEndianness.h" ] @ c_files @ ctx_files
   in
   let c_srcs = List.map (fun n -> n ^ ".c") names @ fields_srcs in
-  emit_gen_rules ppf three_d_files c_files ctx_files;
+  emit_gen_rules ppf three_d_files c_files ctx_files provenance_files;
+  emit_drift_check_rules ppf three_d_files;
+  emit_provenance_check_rules ppf three_d_files;
   emit_runtest_rule ppf ~test_bin ~all_deps ~c_srcs;
-  emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files;
+  emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
+    ~provenance_files;
   Format.pp_print_flush ppf ();
   close_out oc
+
+let generate_dune ~outdir ~package schemas =
+  generate_dune_file ~filename:"dune.inc" ~outdir ~package schemas
 
 (* A codec awaiting projection. [main] and the standalone helpers take these
    rather than an already-projected [Wire.Everparse.t] so the caller never has
@@ -905,7 +1026,7 @@ let hex_of_bytes b =
 (* The accept/reject decision the validator must reproduce: the OCaml codec
    decodes (structure plus constraints), validates (constraints and
    where-clauses), and the record spans the whole buffer -- the hardened
-   [<Base>Check<Codec>] wrapper rejects trailing bytes (see [harden_wrapper]),
+   [<Base>CheckWire<Codec>] wrapper rejects trailing bytes (see [harden_wrapper]),
    so the oracle must too. *)
 let codec_accepts ?env c buf =
   match Wire.Codec.decode ?env c buf 0 with
@@ -1092,9 +1213,19 @@ let emit_agree_main ppf =
   pr "  return mismatch == 0 ? 0 : 1;";
   pr "}"
 
-(* EverParse names each entrypoint wrapper [<Base>Check<Codec>] and gives it the
-   input parameters before the trailing [base, len], so both the helper name and
-   its parameter C types follow from the codec alone. Deriving them here keeps
+(* The 3D struct tag [pp_struct] emits, which is what EverParse mangles into the
+   entrypoint name. A raw-module schema has no source struct to read it from, so
+   say so rather than guess a symbol that would only fail at link time. *)
+let schema_entrypoint_name s =
+  match s.source with
+  | Some source -> "Wire" ^ Raw.struct_name source
+  | None ->
+      Fmt.failwith "%s: raw-module schema has no entrypoint struct tag" s.name
+
+(* EverParse names each entrypoint wrapper [<Base>CheckWire<Codec>] and gives
+   it the input parameters before the trailing [base, len], so both the helper
+   name and its parameter C types follow from the codec alone. Deriving them
+   here keeps
    [agree.c] pure OCaml (no reading of the generated [<Base>Wrapper.h]); a wrong
    name would surface as a link error when the differential test compiles
    [agree.c] against the real wrapper. *)
@@ -1113,7 +1244,9 @@ let generate_agree ?name ~outdir ~package codecs =
            [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
            rather than gluing pre-normalized parts: only the whole-string
            [pascal_case] gets the casing right for names like [TPM2B -> Tpm2b]. *)
-        (s.name, pascal_case (base ^ "_check_" ^ s.name), ptypes))
+        ( s.name,
+          pascal_case (base ^ "_check_" ^ schema_entrypoint_name s),
+          ptypes ))
       codecs
   in
   let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
@@ -1130,6 +1263,17 @@ let generate_3d_standalone ?name ~outdir ~package codecs =
   write ~mode:`Standalone ~outdir
     ~name:(standalone_base ?name ~package ())
     (List.map (fun (Pack c) -> project ~mode:`Standalone c) codecs)
+
+let generate_3d_standalone_check ?name ~outdir ~package codecs =
+  let tmpdir = Filename.temp_dir "wire_3d_check" "" in
+  Fun.protect
+    ~finally:(fun () -> rm_rf tmpdir)
+    (fun () ->
+      generate_3d_standalone ?name ~outdir:tmpdir ~package codecs;
+      let file = standalone_base ?name ~package () ^ ".3d" in
+      copy_file
+        ~src:(Filename.concat tmpdir file)
+        ~dst:(Filename.concat outdir (file ^ ".gen")))
 
 let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
@@ -1174,7 +1318,7 @@ let host_context_and cond = Fmt.str "(and\n   %s\n   %s)" host_context cond
    committed C goes stale -- the runtest differential below catches that, since
    it regenerates the corpus and [agree.c] from the current codec and runs them
    against the committed validator. *)
-let emit_standalone_gen_rules ppf ~three_d ~c_files =
+let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
   Fmt.pf ppf
     "(rule\n\
     \ (alias 3d)\n\
@@ -1195,22 +1339,24 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files =
     \ (enabled_if\n\
     \  %s)\n\
     \ (mode promote)\n\
-    \ (targets EverParse.h EverParseEndianness.h %s)\n\
+    \ (targets EverParse.h EverParseEndianness.h %s %s)\n\
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
     host_context three_d host_context
     (host_context_and "(= %{env:BUILD_EVERPARSE=} \"1\")")
     (String.concat " " c_files)
-    three_d
+    provenance three_d
 
-(* The C symbols a standalone archive exports: the [<Base>Check<Codec>] wrapper
-   for each codec, named exactly as EverParse names it (and as [agree.c] links
-   it, see [generate_agree]), so the export allowlist matches the real symbol. *)
+(* The C symbols a standalone archive exports: the [<Base>CheckWire<Codec>]
+   wrapper for each codec, named exactly as EverParse names it (and as
+   [agree.c] links it, see [generate_agree]), so the export allowlist matches
+   the real symbol. *)
 let wrapper_symbols base codecs =
   List.map
     (fun (Pack c) ->
-      pascal_case (base ^ "_check_" ^ (project ~mode:`Standalone c).name))
+      let s = project ~mode:`Standalone c in
+      pascal_case (base ^ "_check_" ^ schema_entrypoint_name s))
     codecs
 
 (* Post-compile steps that fold the compiled objects into one archive member
@@ -1276,7 +1422,7 @@ let emit_standalone_check_rules ppf ~base ~archive =
 (* Build the validator into an archive, installed with the package, so consumers
    get a ready-to-link library and a downstream build fails loudly if the spec
    stops projecting to compilable C. The archive exports only the checked
-   [<Base>Check<Codec>] wrappers and localizes the raw validators.
+   [<Base>CheckWire<Codec>] wrappers and localizes the raw validators.
 
    The build runs in every context through that context's own toolchain, so a
    cross build produces a target archive: [CC] is the context C compiler
@@ -1330,20 +1476,22 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
    EverParse-emitted preamble bounds a read as [N <= InputLength - StartPosition]
    with no prior [StartPosition <= InputLength] check, so a direct C caller
    passing [StartPosition > InputLength] underflows the span (unsigned) and reads
-   out of bounds. The generated wrapper [<Base>Check<Codec>(base, len)] always
-   validates from position 0 and is the safe public C API; the raw validators
-   stay build-internal, linked into the archive but not shipped as a header.
-   [<Base>Wrapper.h] does not include [<Base>.h], so this compiles standalone. *)
-let emit_standalone_install ppf ~package ~three_d ~archive ~public_header =
+   out of bounds. The generated wrapper [<Base>CheckWire<Codec>(base, len)]
+   always validates from position 0 and is the safe public C API; the raw
+   validators stay build-internal, linked into the archive but not shipped as a
+   header. [<Base>Wrapper.h] does not include [<Base>.h], so this compiles
+   standalone. *)
+let emit_standalone_install ppf ~package ~three_d ~archive ~public_header
+    ~provenance =
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter
     (fun f -> pr "  (%s as c/%s)\n" f f)
-    [ three_d; archive; public_header ];
+    [ three_d; archive; public_header; provenance ];
   pr "  (EverParse.h as c/EverParse.h)\n";
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
-let generate_dune_standalone ?name ~outdir ~package codecs =
+let generate_dune_standalone_file ~filename ?name ~outdir ~package codecs =
   let base = standalone_base ?name ~package () in
   let three_d = base ^ ".3d" in
   let c_files =
@@ -1351,14 +1499,21 @@ let generate_dune_standalone ?name ~outdir ~package codecs =
   in
   let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
   let wrappers = wrapper_symbols base codecs in
-  let oc = open_out (Filename.concat outdir "dune.inc") in
+  let provenance = provenance_file three_d in
+  let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
-  emit_standalone_gen_rules ppf ~three_d ~c_files;
+  emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance;
+  emit_drift_check_rules ppf [ three_d ];
+  emit_provenance_check_rules ppf [ three_d ];
   emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers;
   emit_standalone_install ppf ~package ~three_d ~archive
-    ~public_header:(base ^ "Wrapper.h");
+    ~public_header:(base ^ "Wrapper.h") ~provenance;
   Format.pp_print_flush ppf ();
   close_out oc
+
+let generate_dune_standalone ?name ~outdir ~package codecs =
+  generate_dune_standalone_file ~filename:"dune.inc" ?name ~outdir ~package
+    codecs
 
 let main ?name ~mode ~package codecs =
   let argv = Array.to_list Sys.argv in
@@ -1367,15 +1522,30 @@ let main ?name ~mode ~package codecs =
       let schemas = List.map (fun (Pack c) -> project ~mode:`Ffi c) codecs in
       match argv with
       | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
+      | [ _; "3d-gen" ] -> generate_3d_check ~outdir:"." schemas
       | [ _; "c" ] -> generate_c ~outdir:"." schemas
       | [ _; "dune" ] -> generate_dune ~outdir:"." ~package schemas
+      | [ _; "dune-gen" ] ->
+          generate_dune_file ~filename:"dune.inc.gen" ~outdir:"." ~package
+            schemas
+      | [ _; "provenance-check" ] ->
+          check_provenance ~outdir:"."
+            (List.map Wire.Everparse.filename schemas)
       | _ -> run ~outdir:"." schemas)
   | `Standalone -> (
       match argv with
       | [ _; "3d" ] -> generate_3d_standalone ?name ~outdir:"." ~package codecs
+      | [ _; "3d-gen" ] ->
+          generate_3d_standalone_check ?name ~outdir:"." ~package codecs
       | [ _; "c" ] -> generate_c_standalone ?name ~outdir:"." ~package ()
       | [ _; "agree" ] -> generate_agree ?name ~outdir:"." ~package codecs
       | [ _; "dune" ] ->
           generate_dune_standalone ?name ~outdir:"." ~package codecs
+      | [ _; "dune-gen" ] ->
+          generate_dune_standalone_file ~filename:"dune.inc.gen" ?name
+            ~outdir:"." ~package codecs
+      | [ _; "provenance-check" ] ->
+          check_provenance ~outdir:"."
+            [ standalone_base ?name ~package () ^ ".3d" ]
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)

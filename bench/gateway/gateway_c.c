@@ -1,7 +1,7 @@
 /* TM frame reassembly -- application logic with EverParse field extraction.
 
-   Uses EverParse-generated TmframeValidateTmframe and
-   SpacePacketValidateSpacePacket to extract fields into typed struct plugs.
+   Uses EverParse-generated TmframeValidateWireTmframe and
+   SpacePacketValidateWireSpacePacket to extract fields into typed struct plugs.
    Application logic (checksum computation) reads named struct members.
    No hand-written bitfield manipulation. */
 
@@ -34,7 +34,7 @@ static inline uint64_t hash_int(uint64_t state, int value) {
 static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
                         int data_field_size, uint64_t *checksum) {
   TmframeFields tf = {0};
-  TmframeValidateTmframe((WIRECTX *)&tf, NULL, bench_err, frame, tm_hdr, 0);
+  TmframeValidateWireTmframe((WIRECTX *)&tf, NULL, bench_err, frame, tm_hdr, 0);
 
   int vcid = (int)tf.VCID;
   int fhp = (int)tf.FirstHdrPtr;
@@ -49,7 +49,7 @@ static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
   int sp_hdr = 6;
   int off = tm_hdr + fhp;
   while (off + pkt_size <= tm_hdr + data_field_size) {
-    SpacePacketValidateSpacePacket((WIRECTX *)&sp, NULL, bench_err,
+    SpacePacketValidateWireSpacePacket((WIRECTX *)&sp, NULL, bench_err,
         frame + off, sp_hdr, 0);
     int apid = (int)sp.APID;
     int seq = (int)sp.SeqCount;

@@ -13,6 +13,10 @@
 
 ### Changed
 
+- Generated `.3d` C struct tags are now named `Wire<Name>` rather than
+  `_<Name>`. Public typedef names are unchanged, and standalone entrypoints
+  follow as `<Base>CheckWire<Name>` (#235, @samoht)
+
 - `uint` now decodes to `Optint.Int63.t` rather than a native `int`, like
   `uint63` before it: a 7-byte value needs 56 bits, which does not fit an
   int on a narrow-int target (js_of_ocaml, wasm_of_ocaml) and used to
@@ -25,6 +29,16 @@
   word stays an unboxed int (#232, @samoht)
 
 ### Fixed
+
+- `dune runtest` now diffs a package's committed `.3d` specs and `dune.inc`
+  against freshly generated ones, so editing a codec without refreshing them
+  fails with a promotable report instead of leaving a stale spec committed
+  (#235, @samoht)
+
+- EverParse C generation now installs a `<Name>.provenance` stamp recording the
+  stdlib BLAKE2b-256 digest of the `.3d` it was built from, and `dune runtest`
+  rechecks it without EverParse, so a changed spec can no longer keep stale C
+  (#235, @samoht)
 
 - 32-bit bitfields are now exact on a narrow-int target: a field touching
   bit 31 of its base word used to decode and encode with that bit silently

@@ -863,7 +863,7 @@ let test_3d_codec_embed () =
   (* Inner struct must be defined *)
   Alcotest.(check bool)
     "inner struct defined" true
-    (contains ~sub:"typedef struct _Inner" output);
+    (contains ~sub:"typedef struct WireInner" output);
   (* Outer struct references Inner by name *)
   Alcotest.(check bool)
     "outer references Inner" true
@@ -944,7 +944,7 @@ let test_3d_tm_like () =
   (* Sub-codec should be referenced by name *)
   Alcotest.(check bool)
     "contains Packet typedef" true
-    (contains ~sub:"typedef struct _Packet" output);
+    (contains ~sub:"typedef struct WirePacket" output);
   (* Packet should be referenced in the TmLike struct *)
   Alcotest.(check bool)
     "Packet type referenced" true
@@ -1147,7 +1147,7 @@ let test_3d_param_embed () =
   in
   Alcotest.(check bool)
     "sub typedef carries the formal" true
-    (contains ~sub:"_PSub(UINT8 lim)" s);
+    (contains ~sub:"WirePSub(UINT8 lim)" s);
   Alcotest.(check bool)
     "use site applies the formal" true
     (contains ~sub:"PSub(lim) s" s)
@@ -1233,7 +1233,7 @@ let test_3d_byte_array_where () =
   let s = Wire.Everparse.Raw.to_3d schema.module_ in
   Alcotest.(check bool)
     "synth typedef present" true
-    (contains ~sub:"struct __RefByte_" s);
+    (contains ~sub:"struct Wire_RefByte_" s);
   Alcotest.(check bool)
     "field references synth" true
     (contains ~sub:"_RefByte_" s);

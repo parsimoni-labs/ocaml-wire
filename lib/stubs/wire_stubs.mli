@@ -68,5 +68,9 @@ val to_ml_stub_name : Wire.Everparse.Raw.struct_ -> string
 val everparse_name : string -> string
 (** Convert a Wire struct name to the EverParse CamelCase convention. *)
 
+val validator_name : string -> string
+(** [validator_name name] is the generated C validator entry point for the Wire
+    struct [name]. *)
+
 val ml_type_of : 'a Wire.typ -> string
 (** Return the OCaml type name corresponding to a Wire type. *)

@@ -5,7 +5,8 @@
     generates C parser artifacts around the result.
 
     The output directory contains a self-contained C library: [EverParse.h],
-    [<Name>.h], [<Name>.c], and a [test.c] that exercises the validators.
+    [<Name>.h], [<Name>.c], a [<Name>.provenance] stamp, and a [test.c] that
+    exercises the validators.
 
     {b Typical usage} ([gen.ml]):
     {[
@@ -64,7 +65,10 @@ val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 val generate_dune :
   outdir:string -> package:string -> Wire.Everparse.t list -> unit
 (** [generate_dune ~outdir ~package schemas] writes [dune.inc] listing the
-    build, runtest, and install rules for the generated C artifacts. *)
+    build, runtest, and install rules for the generated C artifacts. The
+    [runtest] rules regenerate every committed [.3d] file and [dune.inc] into
+    [.gen] targets and diff them, so source changes cannot leave those hermetic
+    artifacts stale. *)
 
 val run_everparse :
   ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
@@ -74,7 +78,19 @@ val run_everparse :
     If [quiet] is [true] (the default), EverParse output is suppressed. If
     [quiet] is [false], EverParse stdout/stderr are left visible.
 
+    A [<Name>.provenance] file records the BLAKE2b-256 digest of [<Name>.3d] and
+    the EverParse version that generated the C. Generated [dune.inc] rules
+    recompute that digest during [runtest] and fail on a mismatch, so C
+    staleness is detected without running EverParse. The failure is deliberately
+    not promotable: only regenerating the C may refresh the stamp.
+
     Requires [3d.exe] in PATH. *)
+
+val check_provenance : outdir:string -> string list -> unit
+(** [check_provenance ~outdir three_d_files] recomputes the BLAKE2b-256 digest
+    of each [.3d] in [outdir] and raises [Failure] if it differs from the digest
+    recorded in the matching [<Name>.provenance] stamp, which means the
+    committed C came from a different spec. Needs no [3d.exe]. *)
 
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 (** [parse_3d ~outdir file] runs [3d.exe] on a single [.3d] file in [outdir].
@@ -136,10 +152,10 @@ val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
     files to produce C parsers and generates [test.c].
 
-    The EverParse-emitted [<Name>Check<Codec>] wrapper is hardened after
+    The EverParse-emitted [<Name>CheckWire<Codec>] wrapper is hardened after
     generation: it returns [FALSE] unless the validator consumed the whole
     buffer, so a valid record followed by trailing bytes is rejected. The raw
-    [<Name>Validate<Codec>] function keeps EverParse's prefix semantics and
+    [<Name>ValidateWire<Codec>] function keeps EverParse's prefix semantics and
     returns the consumed position.
 
     If [quiet] is [true] (the default), EverParse output is suppressed. If
@@ -174,9 +190,9 @@ val generate_standalone :
     single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
     is [name] when given, else [package], normalised to a CamelCase identifier
     (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
-    generated [<Name>Check<Codec>] wrappers validate the whole buffer, rejecting
-    trailing bytes (see {!generate_c}). Only the checked wrapper header
-    [<Name>Wrapper.h] is installed as the public C API; the raw
+    generated [<Name>CheckWire<Codec>] wrappers validate the whole buffer,
+    rejecting trailing bytes (see {!generate_c}). Only the checked wrapper
+    header [<Name>Wrapper.h] is installed as the public C API; the raw
     [<Name>Validate*] entrypoints (which take an unguarded [StartPosition]) stay
     build-internal, linked into the archive but not shipped as a header. *)
 
@@ -187,8 +203,10 @@ val generate_dune_standalone :
     compile it to [<Name>.c], a rule that builds the validator into an installed
     [lib<name>.a] archive, a [runtest] rule that runs the differential
     self-check (see {!generate_corpus} / {!generate_agree}), and an install
-    stanza (under opam [package]) for the spec, parser, and archive. [name]
-    defaults to [package]; see {!generate_standalone}.
+    stanza (under opam [package]) for the spec, parser, and archive. The
+    [runtest] rules also regenerate the committed [.3d] and [dune.inc] into
+    [.gen] targets and diff them. [name] defaults to [package]; see
+    {!generate_standalone}.
 
     The [c/] archive builds and installs in every dune context through that
     context's own toolchain ([%{ocaml-config:c_compiler}], the [ocaml-config]
@@ -199,10 +217,10 @@ val generate_dune_standalone :
     which runs a built validator on the build machine. *)
 
 val wrapper_symbols : string -> packed list -> string list
-(** [wrapper_symbols base codecs] is the [<Base>Check<Codec>] wrapper C symbol
-    for each codec, computed exactly as EverParse names them. These are the only
-    symbols a standalone archive exports; the raw [<Base>Validate*] validators
-    are localized (see {!archive_link_steps}). *)
+(** [wrapper_symbols base codecs] is the [<Base>CheckWire<Codec>] wrapper C
+    symbol for each codec, computed exactly as EverParse names them. These are
+    the only symbols a standalone archive exports; the raw [<Base>Validate*]
+    validators are localized (see {!archive_link_steps}). *)
 
 val archive_link_steps :
   macos:bool ->
@@ -240,7 +258,7 @@ val generate_agree :
     [outdir]: a C program that replays a {!generate_corpus} corpus through the
     EverParse-generated validators and exits nonzero on any input where the
     validator's accept/reject decision differs from the recorded verdict. It
-    reads the [<Name>Check<Codec>] helper names from the generated
+    reads the [<Name>CheckWire<Codec>] helper names from the generated
     [<Name>Wrapper.h], so {!generate_c_standalone} (or [3d.exe]) must have run
     first. *)
 
@@ -254,6 +272,8 @@ val main :
     - [3d] writes the [.3d] file(s)
     - [c] produces the C parser(s)
     - [dune] generates [dune.inc] with build rules, test, and install stanzas
+    - [3d-gen] / [dune-gen] write the corresponding [.gen] drift-check targets
+    - [provenance-check] verifies the committed provenance stamps, no EverParse
     - otherwise runs the full pipeline.
 
     [mode] is mandatory, so every [gen.ml] states what it emits. With
