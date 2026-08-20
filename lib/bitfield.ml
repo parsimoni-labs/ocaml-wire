@@ -8,8 +8,8 @@ let total_bits = function U8 -> 8 | U16 _ -> 16 | U32 _ -> 32
 let equal a b =
   match (a, b) with
   | U8, U8 -> true
-  | U16 e1, U16 e2 -> e1 = e2
-  | U32 e1, U32 e2 -> e1 = e2
+  | U16 e1, U16 e2 -> Types.equal_endian e1 e2
+  | U32 e1, U32 e2 -> Types.equal_endian e1 e2
   | _ -> false
 
 (* Fast word reads -- avoid Bytes.get_int32_be which goes through Int32

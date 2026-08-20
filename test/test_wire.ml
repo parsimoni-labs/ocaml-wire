@@ -785,6 +785,12 @@ let test_nested_exact_region_direct () =
 
 type invariant_encoding = Rejected | Encoded of string
 
+let equal_invariant_encoding a b =
+  match (a, b) with
+  | Rejected, Rejected -> true
+  | Encoded a, Encoded b -> String.equal a b
+  | Rejected, Encoded _ | Encoded _, Rejected -> false
+
 let direct_encoding typ value =
   try Encoded (to_string typ value) with Invalid_argument _ -> Rejected
 
@@ -795,12 +801,13 @@ let compiled_encoding codec value =
     Encoded (Bytes.unsafe_to_string buf)
   with Invalid_argument _ -> Rejected
 
-let check_invariant_encoding label typ codec value =
+let check_invariant_encoding ~equal label typ codec value =
   let direct = direct_encoding typ value in
   let compiled = compiled_encoding codec value in
   Alcotest.(check bool)
     (label ^ ": direct and compiled acceptance")
-    true (direct = compiled);
+    true
+    (equal_invariant_encoding direct compiled);
   match direct with
   | Rejected ->
       Alcotest.(check bool)
@@ -821,11 +828,15 @@ let check_invariant_encoding label typ codec value =
       Alcotest.(check bool)
         (label ^ ": direct round-trip")
         true
-        (of_string typ bytes = Ok value);
+        (match of_string typ bytes with
+        | Ok decoded -> equal decoded value
+        | Error _ -> false);
       Alcotest.(check bool)
         (label ^ ": compiled round-trip")
         true
-        (Codec.decode codec (Bytes.of_string bytes) 0 = Ok value)
+        (match Codec.decode codec (Bytes.of_string bytes) 0 with
+        | Ok decoded -> equal decoded value
+        | Error _ -> false)
 
 let test_region_cardinality_contract () =
   let array_typ = array ~len:(int 3) uint8 in
@@ -834,7 +845,7 @@ let test_region_cardinality_contract () =
   in
   for n = 0 to 5 do
     let values = List.init n Fun.id in
-    check_invariant_encoding
+    check_invariant_encoding ~equal:(List.equal Int.equal)
       (Fmt.str "array count %d" n)
       array_typ array_codec values
   done;
@@ -845,7 +856,7 @@ let test_region_cardinality_contract () =
   in
   for n = 0 to 4 do
     let values = List.init n Fun.id in
-    check_invariant_encoding
+    check_invariant_encoding ~equal:(List.equal Int.equal)
       (Fmt.str "repeat count %d" n)
       repeat_typ repeat_codec values
   done;
@@ -856,7 +867,7 @@ let test_region_cardinality_contract () =
   in
   List.iter
     (fun value ->
-      check_invariant_encoding
+      check_invariant_encoding ~equal:String.equal
         (Fmt.str "nested value length %d" (String.length value))
         nested_typ nested_codec value)
     [ ""; "A"; "AB"; "ABC"; "ABCD" ]

@@ -131,10 +131,8 @@ val action : 'a t -> Types.action option
 val doc : 'a t -> string option
 (** Field note attached via {!v}'s [?doc], if any. *)
 
-type packed =
-  | Named : 'a t -> packed
-  | Anon : 'a anon -> packed
-      (** Existentially packed field for heterogeneous lists. *)
+(** Existentially packed field for heterogeneous lists. *)
+type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
 val decl_of_packed : packed -> Types.field
 (** [decl_of_packed p] is the {!Types.field} declaration of [p]. *)

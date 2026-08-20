@@ -1,6 +1,16 @@
 type endian = Little | Big
 type bit_order = Msb_first | Lsb_first
 
+let equal_endian a b =
+  match (a, b) with
+  | Little, Little | Big, Big -> true
+  | Little, Big | Big, Little -> false
+
+let equal_bit_order a b =
+  match (a, b) with
+  | Msb_first, Msb_first | Lsb_first, Lsb_first -> true
+  | Msb_first, Lsb_first | Lsb_first, Msb_first -> false
+
 (* Sequence builder for Array/Repeat -- Jsont-style accumulator pattern.
    Existentially hides the builder type so callers control the output container. *)
 type ('elt, 'seq) seq_map =
@@ -99,6 +109,7 @@ let raise_constraint ~at ~which ?value () =
   raise_error ~at (Constraint_failed { which; value })
 
 type ('a, 'k) param_handle = {
+  id : int;
   name : string;
   typ : 'a typ;
   packed_typ : packed_typ;

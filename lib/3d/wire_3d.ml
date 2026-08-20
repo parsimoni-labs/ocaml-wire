@@ -232,7 +232,7 @@ let run_process ?(output = Inherit) ~cwd exe args =
             Unix.close fd)
           output_fd;
         Unix.execv exe (Array.of_list (exe :: args))
-      with _ -> Unix._exit 127)
+      with Unix.Unix_error _ -> Unix._exit 127)
   | pid ->
       Option.iter Unix.close output_fd;
       snd (Unix.waitpid [] pid)
@@ -535,8 +535,10 @@ let fields_c_files schemas =
    parameterized and plain entrypoints, [print_c_entry] in the upstream
    [src/3d/Target.fst]): if a future EverParse emits neither the known tail
    nor its own consumption check, fail loudly rather than silently shipping a
-   prefix recognizer. The behavioural backstop is the differential runtest,
-   whose corpus includes over-length inputs the oracle rejects. *)
+   prefix recognizer. Tracked upstream as
+   https://github.com/project-everest/everparse/issues/312. The behavioural
+   backstop is the differential runtest, whose corpus includes over-length
+   inputs the oracle rejects. *)
 let wrapper_success_tail = "\t\treturn FALSE;\n\t}\n\treturn TRUE;\n}"
 let wrapper_consumption_check = "result != (uint64_t) len"
 
@@ -1542,6 +1544,10 @@ let emit_standalone_build_rules ppf ~base ~archive ~c_files ~wrappers =
    standalone. *)
 let emit_standalone_install ppf ~package ~three_d ~archive ~public_header
     ~provenance =
+  (* Dune currently adds files from a disabled install stanza to the directory's
+     [all] alias. Keep the stanza unconditional until
+     https://github.com/ocaml/dune/issues/15825 is fixed; the archive itself is
+     intentionally built for every context above. *)
   let pr fmt = Fmt.pf ppf fmt in
   pr "(install\n (package %s)\n (section lib)\n (files\n" package;
   List.iter

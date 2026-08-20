@@ -67,6 +67,21 @@ jobs:
       - run: opam exec -- dune fmt 2>/dev/null || true
       - run: git diff --exit-code
 
+  merlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+          dune-version: '3.21'
+
+      - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
+      - run: opam install . --deps-only --with-test
+      - run: opam install merlint
+      - run: opam exec -- merlint --build
+
   # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
   # validation) and fuzz/3d/ fuzzes [wire_3d] (the EverParse / 3D projection),
   # mirroring the lib/ layout. The [afl] profile (dune-workspace) instruments

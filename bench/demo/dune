@@ -3,7 +3,7 @@
 (library
  (name demo_bench_cases)
  (modules demo_bench_cases)
- (libraries demo space net wire bench_lib bytesrw fmt))
+ (libraries demo space net wire bench_lib bytesrw fmt optint))
 
 (library
  (name demo_bench_diff)
@@ -28,6 +28,7 @@
   wire.stubs
   c_tier
   bench_lib
+  fmt
   wire
   memtrace
   unix))
