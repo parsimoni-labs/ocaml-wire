@@ -475,6 +475,37 @@ let seq_list : ('a, 'a list) seq_map =
       iter = List.iter;
     }
 
+let sequence_elements (type a seq) (Seq_map s : (a, seq) seq_map) (values : seq)
+    =
+  let elements = Stdlib.ref [] in
+  s.iter (fun value -> elements := value :: !elements) values;
+  List.rev !elements
+
+let exact_array_elements seq ~expected values =
+  let elements = sequence_elements seq values in
+  let actual = List.length elements in
+  if actual <> expected then
+    Fmt.invalid_arg "Wire.array: expected %d elements, got %d" expected actual;
+  elements
+
+let exact_repeat_elements seq ~expected ~size_of values =
+  let sized =
+    sequence_elements seq values
+    |> List.map (fun value -> (value, size_of value))
+  in
+  let actual = List.fold_left (fun total (_, size) -> total + size) 0 sized in
+  if actual <> expected then
+    Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
+  sized
+
+let check_nested_size ~at_most ~expected ~actual =
+  if actual > expected then
+    Fmt.invalid_arg "Wire.nested%s: region is %d bytes, value needs %d"
+      (if at_most then "_at_most" else "")
+      expected actual;
+  if (not at_most) && actual <> expected then
+    Fmt.invalid_arg "Wire.nested: expected %d bytes, got %d" expected actual
+
 (* The 3D projection of [array]/[optional]/[optional_or]/[repeat] turns
    their length / predicate / byte budget into a [byte-size] suffix.
    That works as long as the wrapped element exposes a wire size we can
@@ -2863,8 +2894,11 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Zeroterm -> String.length v + 1
   | Zeroterm_at_most { size = Int n } -> n
   | Zeroterm_at_most _ -> 0
+  | Byte_array { size = Int n } -> n
   | Byte_array _ -> String.length v
+  | Byte_array_where { size = Int n; _ } -> n
   | Byte_array_where _ -> String.length v
+  | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
   | Uint_var _ -> 0
@@ -2889,8 +2923,14 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
          the runtime gate would have said at decode. *)
       size_of_typ_value inner v
   | Codec { codec_size_of_value; _ } -> codec_size_of_value v
-  | Single_elem { size = Int n; _ } -> n
+  | Single_elem { size = Int n; elem; at_most } ->
+      let actual = size_of_typ_value elem v in
+      check_nested_size ~at_most ~expected:n ~actual;
+      n
   | Single_elem _ -> 0
+  | Repeat { size = Int expected; elem; seq } ->
+      exact_repeat_elements seq ~expected ~size_of:(size_of_typ_value elem) v
+      |> List.fold_left (fun total (_, size) -> total + size) 0
   | Repeat { elem; seq = Seq_map s; _ } ->
       (* Sum the actual element sizes from the value, like [Array]. The byte
          budget ([size]) is only a literal when fixed; a dynamic budget left
@@ -2898,6 +2938,11 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
       !total
+  | Array { len = Int expected; elem; seq } ->
+      exact_array_elements seq ~expected v
+      |> List.fold_left
+           (fun total value -> total + size_of_typ_value elem value)
+           0
   | Array { elem; seq = Seq_map s; _ } ->
       let total = Stdlib.ref 0 in
       s.iter (fun e -> total := !total + size_of_typ_value elem e) v;

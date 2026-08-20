@@ -34,6 +34,28 @@
 
 ### Fixed
 
+- `Codec.size_of_value` now reports the declared width of fixed-size
+  `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
+  from it now exactly fit the bytes written when short values are zero-padded or
+  long values are truncated (#238, @samoht)
+
+- `nested` now requires its inner value to consume exactly the declared region
+  on decode and encode. Use `nested_at_most` when trailing region padding is
+  intentional; it remains permissive and zero-pads on encode (#238, @samoht)
+
+- `Codec.v` now rejects duplicate field names and distinct parameter handles
+  with the same name. Name-based field access and parameter environments can no
+  longer silently alias the first declaration (#238, @samoht)
+
+- `Field.repeat` now consumes and emits exactly its declared byte budget.
+  Fixed-width remainders, variable-width elements that cross the boundary, and
+  encode under/overshoots are rejected instead of being silently accepted
+  (#238, @samoht)
+
+- `array` and `array_seq` encoders now require exactly the declared number of
+  elements. Short values no longer leave zero-filled phantom elements, and long
+  values are rejected before any bytes are written (#238, @samoht)
+
 - Codec operations now reject a `Param.env` created for another codec before
   reading its positional slots. This applies consistently to encode, decode,
   validation, and staged getters, including codecs whose parameter counts

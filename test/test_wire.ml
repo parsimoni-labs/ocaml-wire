@@ -4,6 +4,8 @@ open Wire
 open Wire.Everparse.Raw
 open Test_helpers
 
+let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
+
 (* Helper: parse from a string delivered in slices of [chunk_size] bytes.
    Forces multi-byte values to straddle slice boundaries. *)
 let parse_chunked ~chunk_size typ s =
@@ -708,6 +710,79 @@ let test_encode_array () =
   let encoded = to_string t [ 1; 2; 3 ] in
   Alcotest.(check string) "array encoding" "\x01\x02\x03" encoded
 
+let seq_array : ('a, 'a array) seq_map =
+  Seq_map
+    {
+      empty = [];
+      add = (fun acc value -> value :: acc);
+      finish = (fun values -> Array.of_list (List.rev values));
+      iter = Array.iter;
+    }
+
+let expect_direct_array_cardinality label typ value expected actual =
+  match to_string typ value with
+  | _ -> Alcotest.failf "%s: expected an array cardinality error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": expected count")
+        true
+        (contains ~sub:(Fmt.str "expected %d" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": actual count") true
+        (contains ~sub:(Fmt.str "got %d" actual) msg)
+
+let test_encode_array_cardinality () =
+  let list = array ~len:(int 3) uint8 in
+  expect_direct_array_cardinality "short list" list [ 1; 2 ] 3 2;
+  expect_direct_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  let custom = array_seq seq_array ~len:(int 3) uint8 in
+  expect_direct_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
+  expect_direct_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+    3 4
+
+let expect_direct_repeat_encode_error label typ value =
+  match to_string typ value with
+  | _ -> Alcotest.failf "%s: expected a repeat byte-budget error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names repeat") true
+        (contains ~sub:"repeat" msg)
+
+let test_repeat_exact_budget_direct () =
+  let fixed = Field.typ (Field.repeat "items" ~size:(int 2) uint16be) in
+  expect_direct_repeat_encode_error "fixed underrun" fixed [];
+  expect_direct_repeat_encode_error "fixed overshoot" fixed [ 1; 2 ];
+  let fixed_remainder =
+    Field.typ (Field.repeat "items" ~size:(int 1) uint16be)
+  in
+  (match of_string fixed_remainder "\x01" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
+  let variable = Field.typ (Field.repeat "items" ~size:(int 1) zeroterm) in
+  match of_string variable "A\x00" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
+
+let test_nested_exact_region_direct () =
+  let exact = nested ~size:(int 4) zeroterm in
+  let at_most = nested_at_most ~size:(int 4) zeroterm in
+  let expect_parse_error label = function
+    | Error _ -> ()
+    | Ok _ -> Alcotest.failf "%s: accepted an under-consumed exact region" label
+  in
+  expect_parse_error "exact decode" (of_string exact "A\x00\x00\x00");
+  Alcotest.(check (result string reject))
+    "at-most decode" (Ok "A")
+    (of_string at_most "A\x00\x00\x00");
+  Alcotest.(check (result string reject))
+    "exact decode fully consumed" (Ok "ABC")
+    (of_string exact "ABC\x00");
+  Alcotest.check_raises "exact encode rejects padding"
+    (Invalid_argument "Wire.nested: expected 4 bytes, got 2") (fun () ->
+      ignore (to_string exact "A"));
+  Alcotest.(check string)
+    "at-most encode pads" "A\x00\x00\x00" (to_string at_most "A")
+
 let test_encode_byte_array () =
   let t = byte_array ~size:(int 5) in
   let encoded = to_string t "hello" in
@@ -1169,6 +1244,12 @@ let suite =
       Alcotest.test_case "encode: uint32 le" `Quick test_encode_uint32_le;
       Alcotest.test_case "encode: uint32 be" `Quick test_encode_uint32_be;
       Alcotest.test_case "encode: array" `Quick test_encode_array;
+      Alcotest.test_case "encode: array cardinality" `Quick
+        test_encode_array_cardinality;
+      Alcotest.test_case "repeat: exact byte budget" `Quick
+        test_repeat_exact_budget_direct;
+      Alcotest.test_case "nested: exact region" `Quick
+        test_nested_exact_region_direct;
       Alcotest.test_case "encode: byte_array" `Quick test_encode_byte_array;
       Alcotest.test_case "encode: variants" `Quick test_encode_variants;
       Alcotest.test_case "encode: bitfield" `Quick test_encode_bitfield;

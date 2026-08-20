@@ -357,6 +357,16 @@ let diff_bits_codec =
     (fun a b -> (a, b))
     [ Codec.( $ ) fa fst; Codec.( $ ) fb snd ]
 
+let diff_nested_exact_codec =
+  let open Wire in
+  Codec.v "NestedExact" Fun.id
+    Codec.[ Field.v "value" (nested ~size:(int 4) zeroterm) $ Fun.id ]
+
+let diff_nested_at_most_codec =
+  let open Wire in
+  Codec.v "NestedAtMost" Fun.id
+    Codec.[ Field.v "value" (nested_at_most ~size:(int 4) zeroterm) $ Fun.id ]
+
 (* A parameterized codec: the harness must bind the input param in the OCaml
    oracle and pass the same value to the EverParse validator, or a length-bound
    frame can never be checked (the blocker for CCSDS TC/AOS/TM/USLP). *)
@@ -417,6 +427,23 @@ let test_doc_differential_no_params () =
   else
     differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
       [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
+
+let test_doc_differential_nested_regions () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"nestedspec" ~package:"nested-doc"
+      ~corpus:
+        (`Lines
+           [
+             "NestedExact - 41000000 0";
+             "NestedExact - 41424300 1";
+             "NestedAtMost - 41000000 1";
+             "NestedAtMost - 41424300 1";
+           ])
+      [
+        Wire_3d.pack diff_nested_exact_codec;
+        Wire_3d.pack diff_nested_at_most_codec;
+      ]
 
 (* The installed standalone archive must export only the checked
    [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
@@ -1452,6 +1479,8 @@ let suite =
         test_doc_differential;
       Alcotest.test_case "doc differential no params (needs 3d.exe)" `Quick
         test_doc_differential_no_params;
+      Alcotest.test_case "doc differential nested regions (needs 3d.exe)" `Quick
+        test_doc_differential_nested_regions;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick

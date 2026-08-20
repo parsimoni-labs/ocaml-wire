@@ -319,10 +319,13 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
       (Slice.make_or_eod buf ~first:off ~length:n, off + n)
-  | Single_elem { size; elem; at_most = _ } ->
+  | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
       check_eof len (off + n);
-      let v, _ = parse_direct elem buf off (off + n) in
+      let v, inner_end = parse_direct elem buf off (off + n) in
+      let consumed = inner_end - off in
+      if (not at_most) && consumed <> n then
+        raise_eof ~at:inner_end ~expected:n ~got:consumed;
       (v, off + n)
   | Map { inner; decode; _ } ->
       let v, off' = parse_direct inner buf off len in
@@ -406,10 +409,13 @@ and parse_repeat_loop : type elt seq.
     seq * int =
  fun ~elem ~seq:(Seq_map s) buf off len ~budget ->
   let start = off in
+  if budget < 0 then raise_eof ~at:off ~expected:0 ~got:budget;
+  check_eof len (start + budget);
+  let region_end = start + budget in
   let rec loop acc off' =
-    if off' - start >= budget then (s.finish acc, off')
+    if off' = region_end then (s.finish acc, off')
     else
-      let v, off'' = parse_direct elem buf off' len in
+      let v, off'' = parse_direct elem buf off' region_end in
       loop (s.add acc v) off''
   in
   loop s.empty off
@@ -746,8 +752,10 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         write_byte enc 0
       done
   | Where { inner; _ } -> encode_into inner v enc
-  | Array { elem; seq = Seq_map seq; _ } ->
-      seq.iter (fun elem_v -> encode_into elem elem_v enc) v
+  | Array { len; elem; seq } ->
+      let expected = Eval.expr Eval.empty len in
+      Types.exact_array_elements seq ~expected v
+      |> List.iter (fun elem_v -> encode_into elem elem_v enc)
   | Byte_array _ -> write_string enc v
   | Byte_array_where { elt_var; cond; _ } ->
       String.iteri
@@ -763,10 +771,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let off = Slice.first v in
       let len = Slice.length v in
       write_string enc (Bytes.sub_string src off len)
-  | Single_elem { size; elem; _ } ->
+  | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
-      encode_into elem v enc;
       let inner_sz = Types.size_of_typ_value elem v in
+      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
+      encode_into elem v enc;
       for _ = inner_sz to n - 1 do
         write_byte enc 0
       done
@@ -779,8 +788,12 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
   | Optional_or { present; inner; _ } ->
       if Eval.expr Eval.empty present then encode_into inner v enc
-  | Repeat { elem; seq = Seq_map seq; _ } ->
-      seq.iter (fun elem_v -> encode_into elem elem_v enc) v
+  | Repeat { size; elem; seq } ->
+      let expected = Eval.expr Eval.empty size in
+      Types.exact_repeat_elements seq ~expected
+        ~size_of:(Types.size_of_typ_value elem)
+        v
+      |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
   | Struct _ -> failwith "struct encoding: use Codec.encode"
   | Type_ref _ -> failwith "type_ref requires a type registry"
@@ -896,7 +909,9 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       off + n
   | Byte_array { size = Int n } -> Codec.blit_string_padded n buf off v
   | Byte_slice { size = Int n } -> Codec.blit_slice_padded n buf off v
-  | Single_elem { size = Int n; elem; at_most = _ } ->
+  | Single_elem { size = Int n; elem; at_most } ->
+      let inner_sz = Types.size_of_typ_value elem v in
+      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
       let off' = encode_direct elem buf off v in
       if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
       off + n

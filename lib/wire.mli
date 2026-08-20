@@ -459,12 +459,15 @@ module Field : sig
     'a typ ->
     'a list t
   (** [repeat name ~size t] parses elements of type [t] until [size] bytes are
-      consumed. The bound is a byte budget, not an element count, which is what
-      lets the elements be variable-size (a tagged union, a length-prefixed
-      sub-codec). It projects to 3D as [t name[:byte-size size]]. There is no
-      count-driven form: "a count field, then that many variable-size elements"
-      is expressible neither here nor in 3D (3D arrays are byte-budgeted), so
-      that shape needs caller-side iteration over the element parser. *)
+      consumed exactly. The bound is a byte budget, not an element count, which
+      is what lets the elements be variable-size (a tagged union, a
+      length-prefixed sub-codec). An element cannot cross the region boundary;
+      encoding raises [Invalid_argument] when the supplied values span fewer or
+      more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
+      There is no count-driven form: "a count field, then that many
+      variable-size elements" is expressible neither here nor in 3D (3D arrays
+      are byte-budgeted), so that shape needs caller-side iteration over the
+      element parser. *)
 
   val repeat_seq :
     string ->
@@ -476,7 +479,8 @@ module Field : sig
     size:int expr ->
     'a typ ->
     'seq t
-  (** Like {!repeat} but accumulates into a custom sequence via [seq]. *)
+  (** Like {!repeat} but accumulates into a custom sequence via [seq], with the
+      same exact byte-budget requirement. *)
 
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)
@@ -694,14 +698,18 @@ val array : len:int expr -> 'a typ -> 'a list typ
     element count, not a byte size. It projects to 3D only when [t] has a fixed
     wire size: 3D arrays are byte-budgeted, so the count is lowered to
     [len * sizeof t] bytes. For variable-size elements use {!Field.repeat},
-    which is bounded by a byte budget instead. *)
+    which is bounded by a byte budget instead. Encoding a list whose cardinality
+    differs from [len] raises [Invalid_argument] before writing. *)
 
 val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 (** Like {!array} but accumulates into a custom sequence via a {!type-seq_map}.
-*)
+    Encoding enforces the same exact cardinality. *)
 
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string.
+
+    Encoding zero-pads a string shorter than [size] and truncates one longer
+    than [size].
 
     When [size] contains the simple product of a field and a literal, and that
     field has a simple [field <= bound] constraint, {!Codec.v} rejects the codec
@@ -716,12 +724,14 @@ val byte_array_where :
     expression bound to the current byte's integer value.
 
     Decode raises {!exception:Parse_error} on the first byte that violates the
-    constraint; encode raises [Invalid_argument]. The motivating shape is SSH
-    name-list payloads (RFC 4251 sec 5), where every byte must be printable
-    US-ASCII. *)
+    constraint; encode raises [Invalid_argument]. Encoding otherwise follows
+    {!byte_array}: short strings are zero-padded and long strings are truncated.
+    The motivating shape is SSH name-list payloads (RFC 4251 sec 5), where every
+    byte must be printable US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding zero-pads a
+    slice shorter than [size] and truncates one longer than [size]. *)
 
 val rest_bytes : (int, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
@@ -736,14 +746,17 @@ val nested : size:int expr -> 'a typ -> 'a typ
 
     This is for layouts where a length expression denotes the size of a region,
     but that region is known to contain exactly one value, such as a single
-    nested message. *)
+    nested message. Decoding rejects an inner value that consumes fewer bytes;
+    encoding raises [Invalid_argument] unless the value's encoded size is
+    exactly [size]. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
     bound rather than an exact size.
 
     This is for length-prefixed regions where the one logical element may
-    consume fewer bytes than the available space. *)
+    consume fewer bytes than the available space. Encoding zero-pads the unused
+    region; a value larger than [size] raises [Invalid_argument]. *)
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** [enum name cases base] validates that the decoded integer is one of the

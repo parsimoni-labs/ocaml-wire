@@ -77,6 +77,32 @@ let test_record_roundtrip () =
             "c roundtrip" (Optint.to_int original.c) (Optint.to_int decoded.c)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+let test_duplicate_names_rejected () =
+  let check_invalid ~kind ~name f =
+    match f () with
+    | () -> Alcotest.failf "duplicate %s name was accepted" kind
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool) "codec named" true (contains ~sub:"DupNames" msg);
+        Alcotest.(check bool) "kind named" true (contains ~sub:kind msg);
+        Alcotest.(check bool) "duplicate named" true (contains ~sub:name msg)
+  in
+  check_invalid ~kind:"field" ~name:"dup" (fun () ->
+      ignore
+        (Codec.v "DupNames"
+           (fun a b -> (a, b))
+           Codec.[ Field.v "dup" uint8 $ fst; Field.v "dup" uint8 $ snd ]));
+  let first = Param.input "count" uint8 in
+  let second = Param.input "count" uint8 in
+  check_invalid ~kind:"parameter" ~name:"count" (fun () ->
+      ignore
+        (Codec.v "DupNames"
+           (fun a b -> (a, b))
+           Codec.
+             [
+               Field.v "a" (byte_array ~size:(Param.expr first)) $ fst;
+               Field.v "b" (byte_array ~size:(Param.expr second)) $ snd;
+             ]))
+
 let test_struct_of_record () =
   let output = render_3d simple_record_codec in
   Alcotest.(check bool) "contains UINT8" true (contains ~sub:"UINT8" output);
@@ -587,6 +613,50 @@ let test_record_byte_array_padding () =
             (String.sub decoded.uuid 0 5)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
+let codec_seq_array : ('a, 'a array) seq_map =
+  Seq_map
+    {
+      empty = [];
+      add = (fun acc value -> value :: acc);
+      finish = (fun values -> Array.of_list (List.rev values));
+      iter = Array.iter;
+    }
+
+let expect_codec_array_cardinality label codec value expected actual =
+  let buf = Bytes.make 8 '\x7f' in
+  match Codec.encode codec value buf 0 with
+  | () -> Alcotest.failf "%s: expected an array cardinality error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": expected count")
+        true
+        (contains ~sub:(Fmt.str "expected %d" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": actual count") true
+        (contains ~sub:(Fmt.str "got %d" actual) msg);
+      Alcotest.(check string)
+        (label ^ ": buffer unchanged")
+        (String.make 8 '\x7f') (Bytes.to_string buf)
+
+let test_codec_array_cardinality () =
+  let list =
+    Codec.v "ArrayList" Fun.id
+      Codec.[ Field.v "values" (array ~len:(int 3) uint8) $ Fun.id ]
+  in
+  expect_codec_array_cardinality "short list" list [ 1; 2 ] 3 2;
+  expect_codec_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  let custom =
+    Codec.v "ArrayCustom" Fun.id
+      Codec.
+        [
+          Field.v "values" (array_seq codec_seq_array ~len:(int 3) uint8)
+          $ Fun.id;
+        ]
+  in
+  expect_codec_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
+  expect_codec_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+    3 4
+
 (* Field.repeat over a zeroterm element: a list of NUL-terminated strings
    within a byte budget. Used to raise Failure at decode; now decodes and
    projects through a synthesised element struct. *)
@@ -1018,6 +1088,30 @@ let test_nested_at_most_over_array () =
   Alcotest.(check bool)
     "roundtrip" true
     (decode_ok (Codec.decode codec buf 0) = v)
+
+let test_nested_exact_region () =
+  let make name typ =
+    Codec.v name Fun.id Codec.[ Field.v "value" typ $ Fun.id ]
+  in
+  let exact = make "NestedExact" (nested ~size:(int 4) zeroterm) in
+  let at_most = make "NestedAtMost" (nested_at_most ~size:(int 4) zeroterm) in
+  let padded = Bytes.of_string "A\x00\x00\x00" in
+  (match Codec.decode exact padded 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "compiled exact nested accepted trailing padding");
+  Alcotest.(check string)
+    "compiled at-most accepts padding" "A"
+    (decode_ok (Codec.decode at_most padded 0));
+  Alcotest.(check string)
+    "compiled exact accepts full consumption" "ABC"
+    (decode_ok (Codec.decode exact (Bytes.of_string "ABC\x00") 0));
+  (match Codec.size_of_value exact "A" with
+  | _ -> Alcotest.fail "compiled exact nested encode accepted padding"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool) "nested error" true (contains ~sub:"nested" msg));
+  let buf = Bytes.create 4 in
+  Codec.encode at_most "A" buf 0;
+  Alcotest.(check bytes) "compiled at-most pads" padded buf
 
 (* A casetype whose case body is a [nested] region (a scalar in a fixed span):
    the tag-dispatched case decodes and sizes through the region. *)
@@ -1568,23 +1662,47 @@ let test_codec_bitfield_overflow_1bit () =
   Codec.encode codec 0 buf 0;
   Codec.encode codec 1 buf 0
 
-let test_encode_underrun_raises () =
-  (* byte_array ~size:n truncates a value longer than n at write time,
-     while size_of_value reports String.length v. Passing a 5-byte value
-     to a 3-byte field is the simplest underrun: the assertion must fire. *)
-  let codec =
-    Codec.v "Mismatch" Fun.id
-      Codec.[ Field.v "data" (byte_array ~size:(Wire.int 3)) $ Fun.id ]
+let test_fixed_byte_region_size_of_value () =
+  let check_string label typ cases =
+    let codec = Codec.v label Fun.id Codec.[ Field.v "data" typ $ Fun.id ] in
+    List.iter
+      (fun (case, value, expected) ->
+        Alcotest.(check int)
+          (case ^ " size") 3
+          (Codec.size_of_value codec value);
+        let buf = Bytes.create 3 in
+        Codec.encode codec value buf 0;
+        Alcotest.(check bytes) case (Bytes.of_string expected) buf)
+      cases
   in
-  let buf = Bytes.create 5 in
-  match Codec.encode codec "AAAAA" buf 0 with
-  | exception Invalid_argument m
-    when String.length m > 0
-         && contains ~sub:"writer wrote fewer bytes than promised" m ->
-      ()
-  | exception Invalid_argument m ->
-      Alcotest.failf "wrong Invalid_argument message: %s" m
-  | () -> Alcotest.fail "expected underrun assertion to fire"
+  let cases =
+    [
+      ("short", "A", "A\x00\x00");
+      ("exact", "ABC", "ABC");
+      ("long", "ABCDE", "ABC");
+    ]
+  in
+  check_string "FixedBytes" (byte_array ~size:(int 3)) cases;
+  check_string "FixedBytesWhere"
+    (byte_array_where ~size:(int 3) ~per_byte:(fun _ -> Expr.true_))
+    cases;
+  let codec =
+    Codec.v "FixedSlice" Fun.id
+      Codec.[ Field.v "data" (byte_slice ~size:(int 3)) $ Fun.id ]
+  in
+  List.iter
+    (fun (case, value, expected) ->
+      let bytes = Bytes.of_string value in
+      let slice =
+        Bytesrw.Bytes.Slice.make bytes ~first:0 ~length:(Bytes.length bytes)
+      in
+      Alcotest.(check int)
+        (case ^ " slice size") 3
+        (Codec.size_of_value codec slice);
+      let buf = Bytes.create 3 in
+      Codec.encode codec slice buf 0;
+      Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
+    cases
 
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
@@ -4333,6 +4451,45 @@ let test_repeat_encode () =
   Alcotest.(check int) "item1.tag" 0x02 (Bytes.get_uint8 buf 4);
   Alcotest.(check int) "item1.value" 0x0002 (Bytes.get_uint16_be buf 5)
 
+let expect_repeat_encode_error label codec value =
+  let buf = Bytes.make 8 '\x7f' in
+  match Codec.encode codec value buf 0 with
+  | () -> Alcotest.failf "%s: expected a repeat byte-budget error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names repeat") true
+        (contains ~sub:"repeat" msg)
+
+let test_repeat_exact_budget () =
+  let f_size = Field.v "size" uint8 in
+  let fixed =
+    Codec.v "RepeatFixedBudget"
+      (fun size items -> (size, items))
+      Codec.
+        [
+          f_size $ fst;
+          Field.repeat "items" ~size:(Field.ref f_size) uint16be $ snd;
+        ]
+  in
+  (match Codec.decode fixed (Bytes.of_string "\x01\xaa") 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
+  expect_repeat_encode_error "fixed underrun" fixed (6, [ 1 ]);
+  expect_repeat_encode_error "fixed overshoot" fixed (2, [ 1; 2 ]);
+  let f_var_size = Field.v "size" uint8 in
+  let variable =
+    Codec.v "RepeatVariableBudget"
+      (fun size items -> (size, items))
+      Codec.
+        [
+          f_var_size $ fst;
+          Field.repeat "items" ~size:(Field.ref f_var_size) zeroterm $ snd;
+        ]
+  in
+  match Codec.decode variable (Bytes.of_string "\x01A\x00") 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
+
 let test_repeat_roundtrip () =
   let items =
     [
@@ -6014,6 +6171,8 @@ let suite =
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
+      Alcotest.test_case "record: duplicate names rejected" `Quick
+        test_duplicate_names_rejected;
       Alcotest.test_case "record: struct_of_codec" `Quick test_struct_of_record;
       Alcotest.test_case "record: metadata decode ok" `Quick
         test_codec_metadata_decode_ok;
@@ -6061,6 +6220,8 @@ let suite =
         test_record_byte_array_roundtrip;
       Alcotest.test_case "record: byte_array padding" `Quick
         test_record_byte_array_padding;
+      Alcotest.test_case "array: encode cardinality" `Quick
+        test_codec_array_cardinality;
       Alcotest.test_case "repeat: zeroterm element roundtrip" `Quick
         test_repeat_zeroterm_element;
       Alcotest.test_case "repeat: zeroterm element projection" `Quick
@@ -6103,6 +6264,7 @@ let suite =
         test_nested_over_array;
       Alcotest.test_case "nested_at_most over array roundtrip" `Quick
         test_nested_at_most_over_array;
+      Alcotest.test_case "nested exact region" `Quick test_nested_exact_region;
       Alcotest.test_case "casetype nested case body roundtrip" `Quick
         test_casetype_nested_case_body;
       Alcotest.test_case "array rejects non-projectable element" `Quick
@@ -6160,8 +6322,8 @@ let suite =
         test_packed_bf_size;
       Alcotest.test_case "codec bitfield: size_of_value mapped bit" `Quick
         test_packed_mapped_bf_size;
-      Alcotest.test_case "encode: underrun raises" `Quick
-        test_encode_underrun_raises;
+      Alcotest.test_case "fixed byte regions: size_of_value" `Quick
+        test_fixed_byte_region_size_of_value;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;
@@ -6428,6 +6590,8 @@ let suite =
       Alcotest.test_case "repeat: decode multiple" `Quick
         test_repeat_decode_multiple;
       Alcotest.test_case "repeat: encode" `Quick test_repeat_encode;
+      Alcotest.test_case "repeat: exact byte budget" `Quick
+        test_repeat_exact_budget;
       Alcotest.test_case "repeat: roundtrip" `Quick test_repeat_roundtrip;
       Alcotest.test_case "repeat: primitive" `Quick test_repeat_primitive;
       Alcotest.test_case "repeat: size_of_value" `Quick

@@ -33,7 +33,9 @@ let setter_off_int32 n set buf off v =
 
 (* Encode a value into a fixed [n]-byte region: write it with [enc], then
    zero-pad the remainder. Used for [nested] regions. *)
-let single_elem_pad n enc buf off v =
+let single_elem_region ~at_most n typ enc buf off v =
+  let actual = Types.size_of_typ_value typ v in
+  Types.check_nested_size ~at_most ~expected:n ~actual;
   let inner_end = enc buf off v in
   if inner_end < off + n then
     Bytes.fill buf inner_end (off + n - inner_end) '\x00';
@@ -155,11 +157,12 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
   | Unit -> fun _buf off () -> off
   | Codec { codec_encode; _ } -> fun buf off v -> codec_encode v buf off
   | Casetype { tag; cases; _ } -> build_casetype_encoder tag cases
-  | Array { len = Int _; elem; seq = Seq_map s } ->
+  | Array { len = Int expected; elem; seq } ->
       let enc_elem = build_field_encoder elem in
       fun buf start_off vs ->
         let cur = Stdlib.ref start_off in
-        s.iter (fun v -> cur := enc_elem buf !cur v) vs;
+        Types.exact_array_elements seq ~expected vs
+        |> List.iter (fun v -> cur := enc_elem buf !cur v);
         !cur
   (* NUL-terminated string element / casetype case body: the bytes then a NUL.
      [zeroterm_at_most] pads the rest of its fixed [n]-byte region with zeros. *)
@@ -189,8 +192,8 @@ and build_field_encoder : type a. a typ -> bytes -> int -> a -> int =
       bits_field_encoder ~width ~base ~bit_order
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
-  | Single_elem { size = Int n; elem; _ } ->
-      single_elem_pad n (build_field_encoder elem)
+  | Single_elem { size = Int n; elem; at_most } ->
+      single_elem_region ~at_most n elem (build_field_encoder elem)
   | _ ->
       (* Fallback for complex types - not specialized *)
       fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
@@ -1823,6 +1826,9 @@ let repeat_raw_fixed : type elt seq.
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
     raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
+  let remainder = if esz > 0 then budget mod esz else budget in
+  if remainder <> 0 then
+    raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
@@ -1847,8 +1853,10 @@ let repeat_raw_variable : type elt seq.
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
-      let v = read_elem elem buf pos in
       let esz = elem_size_of elem buf pos in
+      if esz <= 0 || esz > remaining then
+        raise_eof ~at:pos ~expected:esz ~got:remaining;
+      let v = read_elem elem buf pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
   loop seq.empty start budget
@@ -1874,7 +1882,7 @@ let compile_repeat : type elt seq r.
     elt typ ->
     (elt, seq) seq_map ->
     (seq, r) compiled_field =
- fun ctx fld size_expr elem (Seq_map seq) ->
+ fun ctx fld size_expr elem seq ->
   (* Same dynamic-offset dispatch as [compile_var_bytes] / [compile_codec]:
      when a [Repeat] sits after a variable-size field, the running offset is
      [Dynamic] and is resolved at runtime rather than from a static offset. *)
@@ -1898,23 +1906,22 @@ let compile_repeat : type elt seq r.
     | _ -> assert false
   in
   let elem_size = field_wire_size elem in
-  let raw_reader =
-    repeat_raw_reader (Seq_map seq) elem ~elem_size ~off_fn ~size_fn
-  in
+  let raw_reader = repeat_raw_reader seq elem ~elem_size ~off_fn ~size_fn in
   let get = fld.get in
-  let step =
-    match elem_size with
-    | Some esz -> fun _buf _pos -> esz
-    | None -> fun buf pos -> elem_size_of elem buf pos
-  in
-  let raw_writer v buf _base write_off =
+  let raw_writer v buf base write_off =
     let items = get v in
+    let expected = size_fn buf base in
+    let sized_items =
+      Types.exact_repeat_elements seq ~expected
+        ~size_of:(Types.size_of_typ_value elem)
+        items
+    in
     let pos = Stdlib.ref write_off in
-    seq.iter
-      (fun item ->
+    List.iter
+      (fun (item, size) ->
         write_elem elem buf !pos item;
-        pos := !pos + step buf !pos)
-      items;
+        pos := !pos + size)
+      sized_items;
     !pos
   in
   {
@@ -1977,7 +1984,12 @@ let var_bytes_reader : type a.
         s;
       s
   | Casetype _ -> read_elem typ buf (base + fo)
-  | Single_elem { elem; _ } -> read_elem elem buf (base + fo)
+  | Single_elem { elem; at_most; _ } ->
+      let first = base + fo in
+      let consumed = elem_size_of elem buf first in
+      if consumed > sz || ((not at_most) && consumed <> sz) then
+        raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+      read_elem elem buf first
   | _ -> assert false
 
 (* Kept at top level: as local closures they would be heap-allocated on
@@ -2045,8 +2057,10 @@ let var_bytes_writer : type a r.
       Bytes.fill buf (write_off + len) (region - len) '\x00';
       write_off + region
   | Casetype _ -> build_field_encoder typ buf write_off value
-  | Single_elem { elem; _ } ->
+  | Single_elem { elem; at_most; _ } ->
       let n = size_fn buf base in
+      let actual = Types.size_of_typ_value elem value in
+      Types.check_nested_size ~at_most ~expected:n ~actual;
       let inner_end = build_field_encoder elem buf write_off value in
       if inner_end < write_off + n then
         Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';
@@ -2855,14 +2869,18 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   (validate_arr, populate, validate)
 
-let collect_param_handles struct_fields where =
+let collect_param_handles codec_name struct_fields where =
   let seen = Hashtbl.create 4 in
   let handles = Stdlib.ref ([] : Param.packed list) in
   let visit (Param.Pack p as packed) =
-    if not (Hashtbl.mem seen p.name) then begin
-      Hashtbl.add seen p.name ();
-      handles := packed :: !handles
-    end
+    match Hashtbl.find_opt seen p.name with
+    | None ->
+        Hashtbl.add seen p.name packed;
+        handles := packed :: !handles
+    | Some (Param.Pack existing) ->
+        if not (Obj.repr p == Obj.repr existing) then
+          Fmt.invalid_arg "Codec.v %S: duplicate parameter name %S" codec_name
+            p.name
   in
   iter_param_refs_fields visit struct_fields where;
   List.rev !handles
@@ -3106,7 +3124,19 @@ let reject_certain_byte_size_mul name fields =
         f.field_typ)
     fields
 
+let reject_duplicate_field_names name fields =
+  let seen = Hashtbl.create (List.length fields) in
+  List.iter
+    (fun (Types.Field f) ->
+      match f.field_name with
+      | None -> ()
+      | Some field when Hashtbl.mem seen field ->
+          Fmt.invalid_arg "Codec.v %S: duplicate field name %S" name field
+      | Some field -> Hashtbl.add seen field ())
+    fields
+
 let reject_invalid_codec_shape name fields =
+  reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_nested_where name fields;
   reject_certain_byte_size_mul name fields
@@ -3129,7 +3159,7 @@ let seal : type r. (r, r) record -> r t =
   (* Collect and index params *)
   let struct_fields = List.rev r.fields_rev in
   reject_invalid_codec_shape r.name struct_fields;
-  let param_handles = collect_param_handles struct_fields r.where in
+  let param_handles = collect_param_handles r.name struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
@@ -3376,7 +3406,7 @@ and validator_of_struct (s : Types.struct_) : validator =
     | Static n -> Fixed n
     | Dynamic f -> Variable { min_size = acc.min_size; compute = f }
   in
-  let param_handles = collect_param_handles s.fields s.where in
+  let param_handles = collect_param_handles s.name s.fields s.where in
   let n_params = List.length param_handles in
   let param_base = acc.n_array_slots in
   fill_param_slots acc.param_slots param_base param_handles;
@@ -3604,13 +3634,13 @@ let encode ?env:e t v buf off =
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
 
-let collect_params (fields : Types.field list) where =
-  collect_param_handles fields where
+let collect_params name (fields : Types.field list) where =
+  collect_param_handles name fields where
   |> List.map (fun (Param.Pack p) ->
       { param_name = p.name; param_typ = p.packed_typ; mutable_ = p.mutable_ })
 
 let to_struct t =
-  let formals = collect_params t.struct_fields t.where in
+  let formals = collect_params t.name t.struct_fields t.where in
   match (formals, t.where) with
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
