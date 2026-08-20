@@ -54,6 +54,18 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
+let float32_field_encoder setter buf off v =
+  setter buf off (Int32.bits_of_float v);
+  off + 4
+
+let float64_field_encoder setter buf off v =
+  setter buf off (Int64.bits_of_float v);
+  off + 8
+
+let uint_var_field_encoder endian n buf off v =
+  Uint_var.write endian buf off n v;
+  off + n
+
 let rec build_casetype_encoder_ctx : type a k.
     k typ ->
     (a, k) case_branch list ->
@@ -62,124 +74,126 @@ let rec build_casetype_encoder_ctx : type a k.
     int ->
     a ->
     int =
- fun tag cases runtime ->
-  let tag_enc = build_field_encoder_ctx tag runtime in
-  let rec find buf off v = function
-    | [] -> failwith "build_field_encoder: casetype: no matching case"
-    | Case_branch { cb_inner; cb_project; _ } :: rest -> (
-        (* [cb_project] yields the tag to write (its fixed index for an explicit
+ fun tag cases ->
+  let tag_enc = build_field_encoder_ctx tag in
+  fun runtime ->
+    let rec find buf off v = function
+      | [] -> failwith "build_field_encoder: casetype: no matching case"
+      | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+          (* [cb_project] yields the tag to write (its fixed index for an explicit
            case, or the value-carried tag for the default) and the body. *)
-        match cb_project v with
-        | Some (t, body) ->
-            let off' = tag_enc buf off t in
-            build_field_encoder_ctx cb_inner runtime buf off' body
-        | None -> find buf off v rest)
-  in
-  fun buf off v -> find buf off v cases
+          match cb_project v with
+          | Some (t, body) ->
+              let off' = tag_enc runtime buf off t in
+              build_field_encoder_ctx cb_inner runtime buf off' body
+          | None -> find buf off v rest)
+    in
+    fun buf off v -> find buf off v cases
 
 and build_field_encoder_ctx : type a.
     a typ -> Types.eval_ctx -> bytes -> int -> a -> int =
- fun typ runtime ->
+ fun typ ->
   match typ with
   | Uint8 ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_uint8 buf off v;
         off + 1
   | Uint16 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_uint16_le buf off v;
         off + 2
   | Uint16 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_uint16_be buf off v;
         off + 2
   | Uint32 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         UInt32.set_le buf off v;
         off + 4
   | Uint32 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         UInt32.set_be buf off v;
         off + 4
   | Uint63 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         UInt63.set_le buf off v;
         off + 8
   | Uint63 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         UInt63.set_be buf off v;
         off + 8
   | Uint64 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int64_le buf off v;
         off + 8
   | Uint64 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int64_be buf off v;
         off + 8
-  | Int8 -> setter_off 1 Bytes.set_int8
-  | Int16 Little -> setter_off 2 Bytes.set_int16_le
-  | Int16 Big -> setter_off 2 Bytes.set_int16_be
+  | Int8 -> fun _runtime -> setter_off 1 Bytes.set_int8
+  | Int16 Little -> fun _runtime -> setter_off 2 Bytes.set_int16_le
+  | Int16 Big -> fun _runtime -> setter_off 2 Bytes.set_int16_be
   (* Keep the conversion and primitive call visible together. Passing the
      setter through [setter_off_int32] boxes the temporary [int32] on every
      staged write when Flambda is disabled. *)
   | Int32 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int32_le buf off (Int32.of_int v);
         off + 4
   | Int32 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int32_be buf off (Int32.of_int v);
         off + 4
-  | Int64 Little -> setter_off 8 Bytes.set_int64_le
-  | Int64 Big -> setter_off 8 Bytes.set_int64_be
+  | Int64 Little -> fun _runtime -> setter_off 8 Bytes.set_int64_le
+  | Int64 Big -> fun _runtime -> setter_off 8 Bytes.set_int64_be
   | Float32 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int32_le buf off (Int32.bits_of_float v);
         off + 4
   | Float32 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int32_be buf off (Int32.bits_of_float v);
         off + 4
   | Float64 Little ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int64_le buf off (Int64.bits_of_float v);
         off + 8
   | Float64 Big ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Bytes.set_int64_be buf off (Int64.bits_of_float v);
         off + 8
   | Uint_var { size = Int n; endian } ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         Uint_var.write endian buf off n v;
         off + n
-  | Byte_array { size = Int n } -> blit_string_padded n
-  | Byte_array_where { size = Int n; _ } -> blit_string_padded n
+  | Byte_array { size = Int n } -> fun _runtime -> blit_string_padded n
+  | Byte_array_where { size = Int n; _ } -> fun _runtime -> blit_string_padded n
   | Byte_slice { size = Int n } ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         let len = min n (Slice.length v) in
         Bytes.blit (Slice.bytes v) (Slice.first v) buf off len;
         if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
         off + n
-  | Where { inner; _ } -> build_field_encoder_ctx inner runtime
-  | Enum { base; _ } -> build_field_encoder_ctx base runtime
+  | Where { inner; _ } -> build_field_encoder_ctx inner
+  | Enum { base; _ } -> build_field_encoder_ctx base
   | Map { inner; encode; _ } ->
-      let enc = build_field_encoder_ctx inner runtime in
-      fun buf off v -> enc buf off (encode v)
-  | Unit -> fun _buf off () -> off
-  | Codec { codec_encode; _ } -> fun _buf off v -> codec_encode v runtime off
-  | Casetype { tag; cases; _ } -> build_casetype_encoder_ctx tag cases runtime
+      let enc = build_field_encoder_ctx inner in
+      fun runtime buf off v -> enc runtime buf off (encode v)
+  | Unit -> fun _runtime _buf off () -> off
+  | Codec { codec_encode; _ } ->
+      fun runtime _buf off v -> codec_encode v runtime off
+  | Casetype { tag; cases; _ } -> build_casetype_encoder_ctx tag cases
   | Array { len = Int expected; elem; seq } ->
-      let enc_elem = build_field_encoder_ctx elem runtime in
-      fun buf start_off vs ->
+      let enc_elem = build_field_encoder_ctx elem in
+      fun runtime buf start_off vs ->
         let cur = Stdlib.ref start_off in
         Types.exact_array_elements seq ~expected vs
-        |> List.iter (fun v -> cur := enc_elem buf !cur v);
+        |> List.iter (fun v -> cur := enc_elem runtime buf !cur v);
         !cur
   (* NUL-terminated string element / casetype case body: the bytes then a NUL.
      [zeroterm_at_most] pads the rest of its fixed [n]-byte region with zeros. *)
   | Zeroterm ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         let n = String.length v in
         if String.contains v '\000' then
           invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
@@ -187,7 +201,7 @@ and build_field_encoder_ctx : type a.
         Bytes.set_uint8 buf (off + n) 0;
         off + n + 1
   | Zeroterm_at_most { size = Int region } ->
-      fun buf off v ->
+      fun _runtime buf off v ->
         let n = String.length v in
         if String.contains v '\000' then
           invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
@@ -201,17 +215,20 @@ and build_field_encoder_ctx : type a.
   (* A lone bitfield (e.g. a casetype case body) occupies its whole base word;
      write the value at its bit offset into an otherwise-zero word. *)
   | Bits { width; base; bit_order } ->
-      bits_field_encoder ~width ~base ~bit_order
+      fun _runtime -> bits_field_encoder ~width ~base ~bit_order
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
   | Single_elem { size = Int n; elem; at_most } ->
-      single_elem_region ~at_most n elem (build_field_encoder_ctx elem runtime)
+      let enc = build_field_encoder_ctx elem in
+      fun runtime -> single_elem_region ~at_most n elem (enc runtime)
   | _ ->
       (* Fallback for complex types - not specialized *)
-      fun _buf _off _v -> failwith "build_field_encoder: unsupported type"
+      fun _runtime _buf _off _v ->
+        failwith "build_field_encoder: unsupported type"
 
-let build_field_encoder typ buf off v =
-  build_field_encoder_ctx typ (Types.empty_eval_ctx buf) buf off v
+let build_field_encoder typ =
+  let encode = build_field_encoder_ctx typ in
+  fun buf off v -> encode (Types.empty_eval_ctx buf) buf off v
 
 (* An [enum] decodes through its base integer type; validate that the value is
    one of the named cases, raising [Invalid_enum] otherwise, so the decoder
@@ -338,12 +355,107 @@ let rec build_field_reader_ctx : type a.
           fun _runtime _base -> failwith "build_field_reader: unsupported type")
   | _ -> fun _runtime _base -> failwith "build_field_reader: unsupported type"
 
-let build_field_reader typ field_off =
-  (* Resolve the type dispatch while staging the accessor. If this call stayed
-     inside the returned function, [build_field_reader_ctx] would construct a
-     fresh reader closure for every scalar read. *)
-  let read = build_field_reader_ctx typ field_off in
-  fun buf base -> read (Types.empty_eval_ctx buf) base
+(* [eval_ctx] is necessary for parameter-dependent layouts, but routing every
+   fixed scalar access through it costs a tag test and an indirect buffer load.
+   Keep a direct bytes-only reader for the types whose layout cannot consult an
+   environment. The option is resolved once, while [Codec.get] is staged. *)
+let rec build_immediate_reader : type a.
+    a typ -> int -> (bytes -> int -> a) option =
+ fun typ field_off ->
+  let at base = base + field_off in
+  match typ with
+  | Uint8 -> Some (fun buf base -> Bytes.get_uint8 buf (at base))
+  | Uint16 Little -> Some (fun buf base -> Bytes.get_uint16_le buf (at base))
+  | Uint16 Big -> Some (fun buf base -> Bytes.get_uint16_be buf (at base))
+  | Uint32 Little -> Some (fun buf base -> UInt32.le buf (at base))
+  | Uint32 Big -> Some (fun buf base -> UInt32.be buf (at base))
+  | Uint63 Little -> Some (fun buf base -> UInt63.le buf (at base))
+  | Uint63 Big -> Some (fun buf base -> UInt63.be buf (at base))
+  | Uint64 Little -> Some (fun buf base -> Bytes.get_int64_le buf (at base))
+  | Uint64 Big -> Some (fun buf base -> Bytes.get_int64_be buf (at base))
+  | Int8 -> Some (fun buf base -> Bytes.get_int8 buf (at base))
+  | Int16 Little -> Some (fun buf base -> Bytes.get_int16_le buf (at base))
+  | Int16 Big -> Some (fun buf base -> Bytes.get_int16_be buf (at base))
+  | Int32 Little ->
+      Some (fun buf base -> Int32.to_int (Bytes.get_int32_le buf (at base)))
+  | Int32 Big ->
+      Some (fun buf base -> Int32.to_int (Bytes.get_int32_be buf (at base)))
+  | Int64 Little -> Some (fun buf base -> Bytes.get_int64_le buf (at base))
+  | Int64 Big -> Some (fun buf base -> Bytes.get_int64_be buf (at base))
+  | Float32 Little ->
+      Some
+        (fun buf base -> Int32.float_of_bits (Bytes.get_int32_le buf (at base)))
+  | Float32 Big ->
+      Some
+        (fun buf base -> Int32.float_of_bits (Bytes.get_int32_be buf (at base)))
+  | Float64 Little ->
+      Some
+        (fun buf base -> Int64.float_of_bits (Bytes.get_int64_le buf (at base)))
+  | Float64 Big ->
+      Some
+        (fun buf base -> Int64.float_of_bits (Bytes.get_int64_be buf (at base)))
+  | Uint_var { size = Int n; endian } ->
+      Some (fun buf base -> Uint_var.read endian buf (at base) n)
+  | Where { inner; _ } -> build_immediate_reader inner field_off
+  | Enum { base; cases; closed; _ } -> (
+      match build_immediate_reader base field_off with
+      | None -> None
+      | Some read ->
+          let check = enum_check cases closed in
+          Some (fun buf base -> check ~at:(at base) (read buf base)))
+  | Map { inner; decode; _ } -> (
+      match build_immediate_reader inner field_off with
+      | None -> None
+      | Some read -> Some (fun buf base -> decode (read buf base)))
+  | Unit -> Some (fun _buf _base -> ())
+  | _ -> None
+
+(* Symmetric bytes-only writer for parameter-independent scalar fields. *)
+let rec build_immediate_encoder : type a.
+    a typ -> (bytes -> int -> a -> int) option = function
+  | Uint8 ->
+      Some
+        (fun buf off v ->
+          Bytes.set_uint8 buf off v;
+          off + 1)
+  | Uint16 Little -> Some (setter_off 2 Bytes.set_uint16_le)
+  | Uint16 Big -> Some (setter_off 2 Bytes.set_uint16_be)
+  | Uint32 Little -> Some (setter_off 4 UInt32.set_le)
+  | Uint32 Big -> Some (setter_off 4 UInt32.set_be)
+  | Uint63 Little -> Some (setter_off 8 UInt63.set_le)
+  | Uint63 Big -> Some (setter_off 8 UInt63.set_be)
+  | Uint64 Little -> Some (setter_off 8 Bytes.set_int64_le)
+  | Uint64 Big -> Some (setter_off 8 Bytes.set_int64_be)
+  | Int8 -> Some (setter_off 1 Bytes.set_int8)
+  | Int16 Little -> Some (setter_off 2 Bytes.set_int16_le)
+  | Int16 Big -> Some (setter_off 2 Bytes.set_int16_be)
+  | Int32 Little ->
+      Some
+        (fun buf off v ->
+          Bytes.set_int32_le buf off (Int32.of_int v);
+          off + 4)
+  | Int32 Big ->
+      Some
+        (fun buf off v ->
+          Bytes.set_int32_be buf off (Int32.of_int v);
+          off + 4)
+  | Int64 Little -> Some (setter_off 8 Bytes.set_int64_le)
+  | Int64 Big -> Some (setter_off 8 Bytes.set_int64_be)
+  | Float32 Little -> Some (float32_field_encoder Bytes.set_int32_le)
+  | Float32 Big -> Some (float32_field_encoder Bytes.set_int32_be)
+  | Float64 Little -> Some (float64_field_encoder Bytes.set_int64_le)
+  | Float64 Big -> Some (float64_field_encoder Bytes.set_int64_be)
+  | Uint_var { size = Int n; endian } -> Some (uint_var_field_encoder endian n)
+  | Where { inner; _ } -> build_immediate_encoder inner
+  | Enum { base; _ } -> build_immediate_encoder base
+  | Map { inner; encode; _ } -> (
+      match build_immediate_encoder inner with
+      | None -> None
+      | Some write -> Some (fun buf off v -> write buf off (encode v)))
+  | Unit -> Some (fun _buf off () -> off)
+  | Bits { width; base; bit_order } ->
+      Some (bits_field_encoder ~width ~base ~bit_order)
+  | _ -> None
 
 let int_of_typ_value = Eval.int_of_exn
 
@@ -3813,13 +3925,13 @@ let rec build_staged_reader : type a.
       let read = build_bf_reader base byte_off shift width in
       fun runtime base -> read (Types.eval_bytes runtime) base
   | _, Fixed off ->
-      let read = build_field_reader typ off in
-      fun runtime base -> read (Types.eval_bytes runtime) base
+      let read = build_field_reader_ctx typ off in
+      fun runtime base -> read runtime base
   | _, Dynamic fn ->
-      let reader_at_0 = build_field_reader typ 0 in
+      let reader_at_0 = build_field_reader_ctx typ 0 in
       fun runtime base ->
         let off = fn runtime base in
-        reader_at_0 (Types.eval_bytes runtime) (base + off)
+        reader_at_0 runtime (base + off)
   | Byte_slice _, Variable { off; size_fn } ->
       fun runtime base ->
         let sz = size_fn runtime base in
@@ -3871,19 +3983,15 @@ let rec build_staged_writer : type a.
       let write = build_bf_accessor_writer base byte_off shift width in
       fun runtime base value -> write (Types.eval_bytes runtime) base value
   | _, Fixed off ->
+      let encode = build_field_encoder_ctx typ in
       fun runtime base value ->
-        let _ =
-          build_field_encoder_ctx typ runtime (Types.eval_bytes runtime)
-            (base + off) value
-        in
+        let _ = encode runtime (Types.eval_bytes runtime) (base + off) value in
         ()
   | _, Dynamic fn ->
+      let encode = build_field_encoder_ctx typ in
       fun runtime base value ->
         let off = fn runtime base in
-        let _ =
-          build_field_encoder_ctx typ runtime (Types.eval_bytes runtime)
-            (base + off) value
-        in
+        let _ = encode runtime (Types.eval_bytes runtime) (base + off) value in
         ()
   | Byte_slice _, Variable { off; _ } ->
       fun runtime base value ->
@@ -3930,6 +4038,50 @@ let rec build_staged_writer : type a.
   | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.set: unsupported variable-size field type"
 
+(* Fast accessor variants never construct or inspect an evaluation context.
+   Returning [None] keeps parameter-dependent and compound layouts on the
+   context-threaded path above. *)
+let rec build_immediate_staged_reader : type a.
+    a typ -> field_access -> (bytes -> int -> a) option =
+ fun typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      Some (build_bf_reader base byte_off shift width)
+  | _, Fixed off -> build_immediate_reader typ off
+  | Where { inner; _ }, _ -> build_immediate_staged_reader inner access
+  | Enum { base; cases; closed; _ }, _ -> (
+      match build_immediate_staged_reader base access with
+      | None -> None
+      | Some read ->
+          let check = enum_check cases closed in
+          Some (fun buf base -> check ~at:base (read buf base)))
+  | Map { inner; decode; _ }, _ -> (
+      match build_immediate_staged_reader inner access with
+      | None -> None
+      | Some read -> Some (fun buf base -> decode (read buf base)))
+  | _ -> None
+
+let rec build_immediate_staged_writer : type a.
+    a typ -> field_access -> (bytes -> int -> a -> unit) option =
+ fun typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      Some (build_bf_accessor_writer base byte_off shift width)
+  | _, Fixed off -> (
+      match build_immediate_encoder typ with
+      | None -> None
+      | Some write ->
+          Some
+            (fun buf base value -> ignore (write buf (base + off) value : int)))
+  | Where { inner; _ }, _ -> build_immediate_staged_writer inner access
+  | Enum { base; _ }, _ -> build_immediate_staged_writer base access
+  | Map { inner; encode; _ }, _ -> (
+      match build_immediate_staged_writer inner access with
+      | None -> None
+      | Some write -> Some (fun buf base value -> write buf base (encode value))
+      )
+  | _ -> None
+
 let field_access (codec : _ t) name =
   match List.assoc_opt name codec.field_access with
   | Some a -> a
@@ -3942,7 +4094,10 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
   match List.assoc_opt f.name codec.field_actions with
-  | None -> Staged.stage (fun buf off -> read (runtime ?env buf) off)
+  | None -> (
+      match build_immediate_staged_reader f.typ access with
+      | Some read -> Staged.stage read
+      | None -> Staged.stage (fun buf off -> read (runtime ?env buf) off))
   | Some act ->
       (* Reuse the codec's own domain-local scratch rather than minting another
          [Domain.DLS] key here: [get] returns a staged reader, but a caller that
@@ -3984,7 +4139,9 @@ let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
   let access = field_access codec f.name in
   let write = build_staged_writer f.typ access in
-  Staged.stage (fun buf off value -> write (no_runtime buf) off value)
+  match build_immediate_staged_writer f.typ access with
+  | Some write -> Staged.stage write
+  | None -> Staged.stage (fun buf off value -> write (no_runtime buf) off value)
 
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }

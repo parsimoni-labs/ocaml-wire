@@ -2330,6 +2330,27 @@ let test_embed_param_sized () =
     "roundtrip" "abc"
     (decode_ok (Codec.decode ~env outer buf 0))
 
+(* A fixed-width embedded codec can still depend on an input parameter through
+   its validation. A staged getter must preserve the outer environment when it
+   enters that codec, even though neither the field offset nor its size varies. *)
+let test_get_embed_param_fixed () =
+  let limit = Param.input "get_embed_limit" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub =
+    Codec.v "GetEmbedSub"
+      ~where:Expr.(Field.ref f_v <= Param.expr limit)
+      Fun.id
+      Codec.[ f_v $ Fun.id ]
+  in
+  let f_sub = Field.v "sub" (codec sub) in
+  let cf_sub = Codec.(f_sub $ Fun.id) in
+  let outer = Codec.v "GetEmbedOuter" Fun.id Codec.[ cf_sub ] in
+  let env = Codec.env outer |> Param.bind limit 10 in
+  let get_sub = Staged.unstage (Codec.get ~env outer cf_sub) in
+  Alcotest.(check int)
+    "embedded validation sees env" 5
+    (get_sub (Bytes.of_string "\x05") 0)
+
 (* The outer codec inherits the embedded sub-codec's input param, so encoding it
    without an env is rejected. *)
 let test_embed_param_requires_env () =
@@ -6216,12 +6237,15 @@ let test_encode_var_bytes_no_closure () =
    accessor is staged. Pin the per-call contract separately from functional
    correctness: rebuilding a reader closure returns the right value but still
    puts pressure on a hot-path minor heap. *)
+type alloc_priority = Low | High
+
 type alloc_accessor = {
-  alloc_hi : int;
-  alloc_lo : int;
-  alloc_u8 : int;
-  alloc_u16 : int;
-  alloc_i32 : int;
+  hi : int;
+  lo : int;
+  u8 : int;
+  u16 : int;
+  i32 : int;
+  priority : alloc_priority;
 }
 
 let alloc_hi = Field.v "Hi" (bits ~width:4 U8)
@@ -6229,17 +6253,33 @@ let alloc_lo = Field.v "Lo" (bits ~width:4 U8)
 let alloc_u8 = Field.v "U8" uint8
 let alloc_u16 = Field.v "U16" uint16be
 let alloc_i32 = Field.v "I32" int32be
-let alloc_bf_hi = Codec.(alloc_hi $ fun r -> r.alloc_hi)
-let alloc_bf_lo = Codec.(alloc_lo $ fun r -> r.alloc_lo)
-let alloc_bf_u8 = Codec.(alloc_u8 $ fun r -> r.alloc_u8)
-let alloc_bf_u16 = Codec.(alloc_u16 $ fun r -> r.alloc_u16)
-let alloc_bf_i32 = Codec.(alloc_i32 $ fun r -> r.alloc_i32)
+
+let alloc_priority =
+  Field.v "Priority"
+    (map
+       ~decode:(function 0 -> Low | _ -> High)
+       ~encode:(function Low -> 0 | High -> 1)
+       uint8)
+
+let alloc_bf_hi = Codec.(alloc_hi $ fun r -> r.hi)
+let alloc_bf_lo = Codec.(alloc_lo $ fun r -> r.lo)
+let alloc_bf_u8 = Codec.(alloc_u8 $ fun r -> r.u8)
+let alloc_bf_u16 = Codec.(alloc_u16 $ fun r -> r.u16)
+let alloc_bf_i32 = Codec.(alloc_i32 $ fun r -> r.i32)
+let alloc_bf_priority = Codec.(alloc_priority $ fun r -> r.priority)
 
 let alloc_accessor_codec =
   Codec.v "AllocAccessor"
-    (fun alloc_hi alloc_lo alloc_u8 alloc_u16 alloc_i32 ->
-      { alloc_hi; alloc_lo; alloc_u8; alloc_u16; alloc_i32 })
-    Codec.[ alloc_bf_hi; alloc_bf_lo; alloc_bf_u8; alloc_bf_u16; alloc_bf_i32 ]
+    (fun hi lo u8 u16 i32 priority -> { hi; lo; u8; u16; i32; priority })
+    Codec.
+      [
+        alloc_bf_hi;
+        alloc_bf_lo;
+        alloc_bf_u8;
+        alloc_bf_u16;
+        alloc_bf_i32;
+        alloc_bf_priority;
+      ]
 
 let per_call_words f =
   ignore (Sys.opaque_identity (f ()));
@@ -6264,11 +6304,13 @@ let test_get_no_allocation () =
   let get_hi = get alloc_bf_hi
   and get_u8 = get alloc_bf_u8
   and get_u16 = get alloc_bf_u16
-  and get_i32 = get alloc_bf_i32 in
+  and get_i32 = get alloc_bf_i32
+  and get_priority = get alloc_bf_priority in
   check_no_per_call_allocation "get bits" (fun () -> get_hi buf 0);
   check_no_per_call_allocation "get uint8" (fun () -> get_u8 buf 0);
   check_no_per_call_allocation "get uint16be" (fun () -> get_u16 buf 0);
-  check_no_per_call_allocation "get int32be" (fun () -> get_i32 buf 0)
+  check_no_per_call_allocation "get int32be" (fun () -> get_i32 buf 0);
+  check_no_per_call_allocation "get map" (fun () -> get_priority buf 0)
 
 let test_set_no_allocation () =
   skip_unless_gc_counters ();
@@ -6277,11 +6319,13 @@ let test_set_no_allocation () =
   let set_hi = set alloc_bf_hi
   and set_u8 = set alloc_bf_u8
   and set_u16 = set alloc_bf_u16
-  and set_i32 = set alloc_bf_i32 in
+  and set_i32 = set alloc_bf_i32
+  and set_priority = set alloc_bf_priority in
   check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
   check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 7);
   check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 513);
-  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000)
+  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
+  check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
 
 (* -- Suite -- *)
 
@@ -6475,6 +6519,8 @@ let suite =
         test_get_action_inputparam_noenv;
       Alcotest.test_case "embed: param-sized sub-codec forwards param" `Quick
         test_embed_param_sized;
+      Alcotest.test_case "get: fixed embedded codec preserves param env" `Quick
+        test_get_embed_param_fixed;
       Alcotest.test_case "embed: param sub-codec requires env" `Quick
         test_embed_param_requires_env;
       Alcotest.test_case "embed: sub-codec where enforced" `Quick

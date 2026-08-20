@@ -30,6 +30,29 @@ jobs:
       - run: opam exec -- dune build @install
       - run: opam exec -- dune runtest
 
+  # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
+  # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
+  # suite includes a synchronized multi-domain decode of one shared codec.
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ThreadSanitizer link dependencies
+        run: sudo apt-get update && sudo apt-get install -y libunwind-dev
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 'ocaml-variants.5.4.1+options,ocaml-option-tsan'
+          dune-version: '3.21'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Run core tests under ThreadSanitizer
+        run: opam exec -- dune exec test/test.exe
+        env:
+          TSAN_OPTIONS: 'halt_on_error=1 history_size=7'
+
   fmt:
     runs-on: ubuntu-latest
     steps:
