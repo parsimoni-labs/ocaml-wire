@@ -2348,8 +2348,9 @@ end
 
 type any = Any : { g : 'a t; size : int option; label : string } -> any
 
-let add_size a b =
-  match (a, b) with Some x, Some y -> Some (x + y) | _ -> None
+let fixed_size g =
+  if Wire.Codec.is_fixed g.codec then Some (Wire.Codec.wire_size g.codec)
+  else None
 
 (* Fixed-width leaves: usable as [array] / [nested] elements. *)
 let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
@@ -2554,7 +2555,9 @@ let pair_of (Any a) (Any b) =
   Any
     {
       g;
-      size = add_size a.size b.size;
+      (* Ask the compiled codec: adjacent bitfields can coalesce, so summing
+         their standalone widths overstates the record's actual wire size. *)
+      size = fixed_size g;
       label = "(" ^ a.label ^ "," ^ b.label ^ ")";
     }
 
@@ -2578,7 +2581,7 @@ let rec3_of (Any a) (Any b) (Any c) =
   Any
     {
       g;
-      size = add_size a.size (add_size b.size c.size);
+      size = fixed_size g;
       label = Fmt.str "(%s,%s,%s)" a.label b.label c.label;
     }
 
@@ -2599,7 +2602,7 @@ let rec4_of (Any a) (Any b) (Any c) (Any d) =
   Any
     {
       g;
-      size = add_size a.size (add_size b.size (add_size c.size d.size));
+      size = fixed_size g;
       label = Fmt.str "(%s,%s,%s,%s)" a.label b.label c.label d.label;
     }
 
@@ -2774,7 +2777,9 @@ let check_positive_decode label g value bs env =
   | Ok decoded ->
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode mismatch" label
-  | Error _ -> Alcobar.failf "%s positive decode failed" label);
+  | Error error ->
+      Alcobar.failf "%s positive decode failed: %a" label Wire.pp_parse_error
+        error);
   match Wire.Codec.decode_exn ?env g.codec bs 0 with
   | decoded ->
       if not (g.equal decoded value) then

@@ -8,6 +8,11 @@ open Test_helpers
 (* -- Param.input / Param.output / Param.decl -- *)
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
+let err_parse fmt = Fmt.kstr (fun message -> Error message) fmt
+
+let string_error = function
+  | Ok value -> Ok value
+  | Error error -> err_parse "%a" pp_parse_error error
 
 (* Render a one-field struct carrying [p] to 3D for substring assertions. *)
 let render_param_3d p =
@@ -417,6 +422,171 @@ let test_param_size_zero () =
   Alcotest.(check string) "data" "" r.data;
   Alcotest.(check int) "tag" 0xFF r.tag
 
+let test_param_size_reentrant_codec () =
+  let size = Param.input "reentrant_size" uint8 in
+  let codec_ref = ref None in
+  let inner_env_ref = ref None in
+  let inside = ref false in
+  let reenter f =
+    if not !inside then begin
+      inside := true;
+      Fun.protect
+        ~finally:(fun () -> inside := false)
+        (fun () -> f (Option.get !codec_ref) (Option.get !inner_env_ref))
+    end
+  in
+  let trigger =
+    map uint8
+      ~encode:(fun v ->
+        reenter (fun codec env ->
+            let buf = Bytes.create 2 in
+            Codec.encode ~env codec (7, "Z") buf 0);
+        v)
+      ~decode:(fun v ->
+        reenter (fun codec env ->
+            ignore
+              (decode_ok (Codec.decode ~env codec (Bytes.of_string "\x07Z") 0)));
+        v)
+  in
+  let codec =
+    Codec.v "ReentrantParam"
+      (fun tag data -> (tag, data))
+      Codec.
+        [
+          Field.v "Tag" trigger $ fst;
+          Field.v "Data" (byte_array ~size:(Param.expr size)) $ snd;
+        ]
+  in
+  codec_ref := Some codec;
+  let inner_env = Codec.env codec |> Param.bind size 1 in
+  inner_env_ref := Some inner_env;
+  let outer_env = Codec.env codec |> Param.bind size 2 in
+  let buf = Bytes.create 3 in
+  Codec.encode ~env:outer_env codec (9, "AB") buf 0;
+  Alcotest.(check bytes)
+    "outer encode keeps its size" (Bytes.of_string "\x09AB") buf;
+  Alcotest.(check (pair int string))
+    "outer decode keeps its size" (9, "AB")
+    (decode_ok (Codec.decode ~env:outer_env codec buf 0))
+
+let test_param_size_in_casetype () =
+  (* Casetype dispatch must preserve the outer encode context when its selected
+     body is an embedded codec. Otherwise the inner parameter lookup falls back
+     to the unbound sentinel and a param-sized byte field rejects its value. *)
+  let size = Param.input "case_size" uint8 in
+  let inner =
+    Codec.v "ParamCaseBody" Fun.id
+      Codec.[ Field.v "data" (byte_array ~size:(Param.expr size)) $ Fun.id ]
+  in
+  let typ =
+    casetype "ParamCase" uint8
+      [
+        case ~index:1 (codec inner)
+          ~inject:(fun value -> `Body value)
+          ~project:(function `Body value -> Some value);
+      ]
+  in
+  let outer =
+    Codec.v "ParamCaseOuter" Fun.id Codec.[ Field.v "case" typ $ Fun.id ]
+  in
+  let env = Codec.env outer |> Param.bind size 2 in
+  let buf = Bytes.create 3 in
+  Codec.encode ~env outer (`Body "AB") buf 0;
+  Alcotest.(check bytes) "encoded casetype" (Bytes.of_string "\x01AB") buf;
+  Alcotest.(check (result string string))
+    "decoded casetype" (Ok "AB")
+    (match Codec.decode ~env outer buf 0 with
+    | Ok (`Body value) -> Ok value
+    | Error error -> err_parse "%a" pp_parse_error error)
+
+let test_param_through_typ_wrappers () =
+  (* Fixed-size typ wrappers use the scalar fast path. That path must carry the
+     outer context through to an embedded codec's parameterized constraint. *)
+  let limit = Param.input "wrapped_limit" uint8 in
+  let value = Field.v "value" uint8 in
+  let inner =
+    Codec.v "ParamWrappedBody" Fun.id
+      ~where:Expr.(Field.ref value <= Param.expr limit)
+      Codec.[ value $ Fun.id ]
+  in
+  let wrapped = where Expr.true_ (codec inner) in
+  let field = Field.optional "body" ~present:Expr.true_ wrapped in
+  let outer = Codec.v "ParamWrappedOuter" Fun.id Codec.[ field $ Fun.id ] in
+  let env = Codec.env outer |> Param.bind limit 100 in
+  let buf = Bytes.of_string "\x2d" in
+  Alcotest.(check (result (option int) string))
+    "decoded wrapped codec" (Ok (Some 45))
+    (string_error (Codec.decode ~env outer buf 0));
+  Codec.encode ~env outer (Some 45) buf 0;
+  Alcotest.(check bytes) "encoded wrapped codec" (Bytes.of_string "\x2d") buf
+
+(* -- Concurrent decode -- *)
+
+type barrier = {
+  parties : int;
+  arrived : int Atomic.t;
+  generation : int Atomic.t;
+}
+
+let barrier parties =
+  { parties; arrived = Atomic.make 0; generation = Atomic.make 0 }
+
+let await barrier =
+  let generation = Atomic.get barrier.generation in
+  if Atomic.fetch_and_add barrier.arrived 1 = barrier.parties - 1 then begin
+    Atomic.set barrier.arrived 0;
+    Atomic.incr barrier.generation
+  end
+  else
+    while Atomic.get barrier.generation = generation do
+      Domain.cpu_relax ()
+    done
+
+let test_multi_domain_decode () =
+  (* The mapped fields rendezvous during validation, after their values have
+     been read but before they are written into the codec's scratch slots. If
+     two domains share that scratch, one domain must either fail [b = a] or
+     copy the other domain's output parameter. Independent scratch and eval
+     contexts let both decodes complete with their own values. *)
+  let validation_barrier = barrier 2 in
+  let synchronized_uint8 =
+    map uint8 ~decode:Fun.id ~encode:(fun value ->
+        await validation_barrier;
+        value)
+  in
+  let limit = Param.input "domain_limit" uint8 in
+  let observed = Param.output "domain_observed" uint8 in
+  let f_a = Field.v "a" synchronized_uint8 in
+  let f_b = Field.v "b" synchronized_uint8 in
+  let checked_b =
+    Field.v "b" synchronized_uint8
+      ~constraint_:Expr.(Field.ref f_b = Field.ref f_a)
+      ~action:(Action.on_success [ Action.assign observed (Field.ref f_b) ])
+  in
+  let codec =
+    Codec.v "ConcurrentParams"
+      ~where:Expr.(Field.ref f_b <= Param.expr limit)
+      (fun a b -> (a, b))
+      Codec.[ f_a $ fst; checked_b $ snd ]
+  in
+  let worker value =
+    let env = Codec.env codec |> Param.bind limit value in
+    let buf = Bytes.make 2 (Char.chr value) in
+    let ok = ref true in
+    for _ = 1 to 1_000 do
+      match Codec.decode ~env codec buf 0 with
+      | Ok decoded ->
+          if decoded <> (value, value) || Param.get env observed <> value then
+            ok := false
+      | Error _ -> ok := false
+    done;
+    !ok
+  in
+  let first = Domain.spawn (fun () -> worker 0x11) in
+  let second = Domain.spawn (fun () -> worker 0x22) in
+  Alcotest.(check bool) "first domain" true (Domain.join first);
+  Alcotest.(check bool) "second domain" true (Domain.join second)
+
 (* -- Suite -- *)
 
 let suite =
@@ -460,4 +630,12 @@ let suite =
       Alcotest.test_case "param: different sizes" `Quick
         test_param_size_different_sizes;
       Alcotest.test_case "param: size zero" `Quick test_param_size_zero;
+      Alcotest.test_case "param: re-entrant codec" `Quick
+        test_param_size_reentrant_codec;
+      Alcotest.test_case "param: size inside casetype" `Quick
+        test_param_size_in_casetype;
+      Alcotest.test_case "param: context through typ wrappers" `Quick
+        test_param_through_typ_wrappers;
+      Alcotest.test_case "param: multi-domain decode" `Quick
+        test_multi_domain_decode;
     ] )

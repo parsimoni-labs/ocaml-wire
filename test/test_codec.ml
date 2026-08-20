@@ -1446,6 +1446,38 @@ let test_casetype_wrapped_greedy_not_last_rejected () =
            (fun p tail -> (p, tail))
            Codec.[ Field.v "p" payload $ fst; Field.v "tail" uint8 $ snd ]))
 
+let test_optional_greedy_not_last_rejected () =
+  let greedy =
+    Codec.v "GreedyOptionalBody"
+      (fun n z -> (n, z))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "z" all_zeros $ snd ]
+  in
+  let check_rejected label field =
+    Alcotest.(check bool)
+      label true
+      (raises_invalid (fun () ->
+           Codec.v "OptionalGreedyNotLast"
+             (fun body tail -> (body, tail))
+             Codec.[ field $ fst; Field.v "tail" uint8 $ snd ]))
+  in
+  check_rejected "present optional greedy body before tail rejected"
+    (Field.optional "body" ~present:Expr.true_ (codec greedy));
+  check_rejected "dynamic optional greedy body before tail rejected"
+    (Field.optional "body" ~present:Expr.(int 1 = int 1) (codec greedy));
+  check_rejected "optional_or greedy body before tail rejected"
+    (Field.optional_or "body" ~present:Expr.true_ ~default:(0, "")
+       (codec greedy));
+  Alcotest.(check bool)
+    "statically absent optional greedy body before tail accepted" false
+    (raises_invalid (fun () ->
+         Codec.v "AbsentOptionalGreedy"
+           (fun body tail -> (body, tail))
+           Codec.
+             [
+               Field.optional "body" ~present:Expr.false_ (codec greedy) $ fst;
+               Field.v "tail" uint8 $ snd;
+             ]))
+
 (* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
    is refused at construction. *)
 let test_uint_size_bounds () =
@@ -2085,12 +2117,13 @@ let test_action_unfired_by_validate () =
       $ fun v -> v)
   in
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
+  let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  Codec.validate codec buf 0;
+  Codec.validate ~env codec buf 0;
   (* validate does NOT fire actions *)
   Alcotest.(check int)
     "action not fired by validate" 0
-    !(action_out2.Wire.Private.Types.cell ())
+    (Param.get env action_out2)
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.
@@ -2297,6 +2330,27 @@ let test_embed_param_sized () =
     "roundtrip" "abc"
     (decode_ok (Codec.decode ~env outer buf 0))
 
+(* A fixed-width embedded codec can still depend on an input parameter through
+   its validation. A staged getter must preserve the outer environment when it
+   enters that codec, even though neither the field offset nor its size varies. *)
+let test_get_embed_param_fixed () =
+  let limit = Param.input "get_embed_limit" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub =
+    Codec.v "GetEmbedSub"
+      ~where:Expr.(Field.ref f_v <= Param.expr limit)
+      Fun.id
+      Codec.[ f_v $ Fun.id ]
+  in
+  let f_sub = Field.v "sub" (codec sub) in
+  let cf_sub = Codec.(f_sub $ Fun.id) in
+  let outer = Codec.v "GetEmbedOuter" Fun.id Codec.[ cf_sub ] in
+  let env = Codec.env outer |> Param.bind limit 10 in
+  let get_sub = Staged.unstage (Codec.get ~env outer cf_sub) in
+  Alcotest.(check int)
+    "embedded validation sees env" 5
+    (get_sub (Bytes.of_string "\x05") 0)
+
 (* The outer codec inherits the embedded sub-codec's input param, so encoding it
    without an env is rejected. *)
 let test_embed_param_requires_env () =
@@ -2334,6 +2388,27 @@ let test_embed_where_enforced () =
   Alcotest.(check int)
     "satisfying value accepted" 5
     (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0))
+
+let test_embed_output_param () =
+  let out = Param.output "embedded_out" uint8 in
+  let f_v = Field.v "v" uint8 in
+  let sub_field =
+    Codec.(
+      Field.v "v"
+        ~action:(Action.on_success [ Action.assign out (Field.ref f_v) ])
+        uint8
+      $ Fun.id)
+  in
+  let sub = Codec.v "EmbeddedOutputSub" Fun.id Codec.[ sub_field ] in
+  let outer =
+    Codec.v "EmbeddedOutputOuter" Fun.id
+      Codec.[ Field.v "sub" (codec sub) $ Fun.id ]
+  in
+  let env = Codec.env outer in
+  Alcotest.(check int)
+    "decoded value" 42
+    (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0));
+  Alcotest.(check int) "forwarded output" 42 (Param.get env out)
 
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
@@ -6158,6 +6233,100 @@ let test_encode_var_bytes_no_closure () =
   in
   Alcotest.(check int) "var-bytes encode allocates nothing" 0 words
 
+(* [Codec.get] and [Codec.set] resolve a field's type and offset when the
+   accessor is staged. Pin the per-call contract separately from functional
+   correctness: rebuilding a reader closure returns the right value but still
+   puts pressure on a hot-path minor heap. *)
+type alloc_priority = Low | High
+
+type alloc_accessor = {
+  hi : int;
+  lo : int;
+  u8 : int;
+  u16 : int;
+  i32 : int;
+  priority : alloc_priority;
+}
+
+let alloc_hi = Field.v "Hi" (bits ~width:4 U8)
+let alloc_lo = Field.v "Lo" (bits ~width:4 U8)
+let alloc_u8 = Field.v "U8" uint8
+let alloc_u16 = Field.v "U16" uint16be
+let alloc_i32 = Field.v "I32" int32be
+
+let alloc_priority =
+  Field.v "Priority"
+    (map
+       ~decode:(function 0 -> Low | _ -> High)
+       ~encode:(function Low -> 0 | High -> 1)
+       uint8)
+
+let alloc_bf_hi = Codec.(alloc_hi $ fun r -> r.hi)
+let alloc_bf_lo = Codec.(alloc_lo $ fun r -> r.lo)
+let alloc_bf_u8 = Codec.(alloc_u8 $ fun r -> r.u8)
+let alloc_bf_u16 = Codec.(alloc_u16 $ fun r -> r.u16)
+let alloc_bf_i32 = Codec.(alloc_i32 $ fun r -> r.i32)
+let alloc_bf_priority = Codec.(alloc_priority $ fun r -> r.priority)
+
+let alloc_accessor_codec =
+  Codec.v "AllocAccessor"
+    (fun hi lo u8 u16 i32 priority -> { hi; lo; u8; u16; i32; priority })
+    Codec.
+      [
+        alloc_bf_hi;
+        alloc_bf_lo;
+        alloc_bf_u8;
+        alloc_bf_u16;
+        alloc_bf_i32;
+        alloc_bf_priority;
+      ]
+
+let per_call_words f =
+  ignore (Sys.opaque_identity (f ()));
+  let iters = 200_000 in
+  Gc.full_major ();
+  let before = Gc.minor_words () in
+  for _ = 1 to iters do
+    ignore (Sys.opaque_identity (f ()))
+  done;
+  let after = Gc.minor_words () in
+  int_of_float (Float.round ((after -. before) /. float_of_int iters))
+
+let check_no_per_call_allocation name f =
+  Alcotest.(check int)
+    (Fmt.str "%s allocates nothing" name)
+    0 (per_call_words f)
+
+let test_get_no_allocation () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let get f = Staged.unstage (Codec.get alloc_accessor_codec f) in
+  let get_hi = get alloc_bf_hi
+  and get_u8 = get alloc_bf_u8
+  and get_u16 = get alloc_bf_u16
+  and get_i32 = get alloc_bf_i32
+  and get_priority = get alloc_bf_priority in
+  check_no_per_call_allocation "get bits" (fun () -> get_hi buf 0);
+  check_no_per_call_allocation "get uint8" (fun () -> get_u8 buf 0);
+  check_no_per_call_allocation "get uint16be" (fun () -> get_u16 buf 0);
+  check_no_per_call_allocation "get int32be" (fun () -> get_i32 buf 0);
+  check_no_per_call_allocation "get map" (fun () -> get_priority buf 0)
+
+let test_set_no_allocation () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let set f = Staged.unstage (Codec.set alloc_accessor_codec f) in
+  let set_hi = set alloc_bf_hi
+  and set_u8 = set alloc_bf_u8
+  and set_u16 = set alloc_bf_u16
+  and set_i32 = set alloc_bf_i32
+  and set_priority = set alloc_bf_priority in
+  check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
+  check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 7);
+  check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 513);
+  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
+  check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
+
 (* -- Suite -- *)
 
 let suite =
@@ -6287,6 +6456,8 @@ let suite =
         test_casetype_greedy_case_not_last_rejected;
       Alcotest.test_case "casetype wrapped greedy case body must be last" `Quick
         test_casetype_wrapped_greedy_not_last_rejected;
+      Alcotest.test_case "optional greedy body must be last" `Quick
+        test_optional_greedy_not_last_rejected;
       Alcotest.test_case "uint rejects out-of-range size" `Quick
         test_uint_size_bounds;
       Alcotest.test_case "bits rejects out-of-range width" `Quick
@@ -6348,10 +6519,14 @@ let suite =
         test_get_action_inputparam_noenv;
       Alcotest.test_case "embed: param-sized sub-codec forwards param" `Quick
         test_embed_param_sized;
+      Alcotest.test_case "get: fixed embedded codec preserves param env" `Quick
+        test_get_embed_param_fixed;
       Alcotest.test_case "embed: param sub-codec requires env" `Quick
         test_embed_param_requires_env;
       Alcotest.test_case "embed: sub-codec where enforced" `Quick
         test_embed_where_enforced;
+      Alcotest.test_case "embed: output parameter forwarded" `Quick
+        test_embed_output_param;
       Alcotest.test_case "embed: param forwarded through repeat" `Quick
         test_embed_param_repeat;
       Alcotest.test_case "action: output only" `Quick
@@ -6675,4 +6850,8 @@ let suite =
       (* encode allocation *)
       Alcotest.test_case "encode: var-bytes fields allocate nothing" `Quick
         test_encode_var_bytes_no_closure;
+      Alcotest.test_case "get: immediate fields allocate nothing" `Quick
+        test_get_no_allocation;
+      Alcotest.test_case "set: immediate fields allocate nothing" `Quick
+        test_set_no_allocation;
     ] )

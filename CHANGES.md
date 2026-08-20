@@ -34,6 +34,26 @@
 
 ### Fixed
 
+- Parameter-free fixed-offset `Codec.get` and `Codec.set` accessors no longer
+  add per-call allocation: direct scalars represented as immediate OCaml
+  values, bitfields, enums, and maps whose callbacks return immediate values
+  measure zero words on a non-Flambda release build. Boxed results such as
+  `int64`, and allocations performed by a map callback itself, remain visible
+  to callers. The same accessors are also faster than before (#239, @samoht)
+
+- Optional fields that can expose a consume-rest payload are now rejected when
+  followed by another field, rather than allowing that payload to swallow the
+  remainder of the enclosing codec (#239, @samoht)
+
+- Operations on the same parametric codec are now safe to re-enter or
+  interleave across fibers with different `Param.env` values. Embedded codecs,
+  casetype bodies, fixed-size wrappers, and repeated elements no longer read
+  another operation's field sizes (#239, @samoht)
+
+- EverParse generation now accepts output paths, executable paths, and schema
+  filenames containing spaces or shell metacharacters without interpreting
+  them as commands (#239, @samoht)
+
 - `Codec.size_of_value` now reports the declared width of fixed-size
   `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
   from it now exactly fit the bytes written when short values are zero-padded or

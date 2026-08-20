@@ -82,6 +82,33 @@ let test_generate_3d_files () =
   Sys.remove path;
   Unix.rmdir tmpdir
 
+let test_parse_3d_uses_argv_and_cwd () =
+  let outdir = Filename.temp_dir "wire 3d;out " "" in
+  let bindir = Filename.temp_dir "wire 3d;bin " "" in
+  let exe = Filename.concat bindir "3d.exe" in
+  let observed = Filename.concat outdir "observed" in
+  let file = "schema name;literal.3d" in
+  let old_path = Sys.getenv_opt "PATH" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" (Option.value ~default:"" old_path);
+      Wire_3d.rm_rf outdir;
+      Wire_3d.rm_rf bindir)
+    (fun () ->
+      Out_channel.with_open_text exe (fun oc ->
+          output_string oc
+            "#!/bin/sh\n\
+             { pwd; for arg do printf '%s\\n' \"$arg\"; done; } > observed\n");
+      Unix.chmod exe 0o755;
+      Unix.putenv "PATH" bindir;
+      (match Wire_3d.parse_3d ~batch:true ~outdir file with
+      | Ok () -> ()
+      | Error e -> Alcotest.failf "fake EverParse failed: %s" e);
+      Alcotest.(check (list string))
+        "cwd and literal argv"
+        [ Unix.realpath outdir; "--batch"; file ]
+        (In_channel.with_open_text observed In_channel.input_lines))
+
 let test_schema_of_struct () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
@@ -367,6 +394,16 @@ let diff_nested_at_most_codec =
   Codec.v "NestedAtMost" Fun.id
     Codec.[ Field.v "value" (nested_at_most ~size:(int 4) zeroterm) $ Fun.id ]
 
+let diff_array_exact_codec =
+  let open Wire in
+  Codec.v "ArrayExact" Fun.id
+    Codec.[ Field.v "items" (array ~len:(int 3) uint8) $ Fun.id ]
+
+let diff_repeat_exact_codec =
+  let open Wire in
+  Codec.v "RepeatExact" Fun.id
+    Codec.[ Field.repeat "items" ~size:(int 4) uint16be $ Fun.id ]
+
 (* A parameterized codec: the harness must bind the input param in the OCaml
    oracle and pass the same value to the EverParse validator, or a length-bound
    frame can never be checked (the blocker for CCSDS TC/AOS/TM/USLP). *)
@@ -443,6 +480,28 @@ let test_doc_differential_nested_regions () =
       [
         Wire_3d.pack diff_nested_exact_codec;
         Wire_3d.pack diff_nested_at_most_codec;
+      ]
+
+let test_doc_differential_region_cardinality () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else
+    differential_ok ~name:"invariantspec" ~package:"invariant-doc"
+      ~corpus:
+        (`Lines
+           [
+             "ArrayExact - 010203 1";
+             "ArrayExact - 0102 0";
+             "ArrayExact - 01020304 0";
+             "RepeatExact - 00010002 1";
+             "RepeatExact - 0001 0";
+             "RepeatExact - 000100020003 0";
+             "NestedExact - 41424300 1";
+             "NestedExact - 41000000 0";
+           ])
+      [
+        Wire_3d.pack diff_array_exact_codec;
+        Wire_3d.pack diff_repeat_exact_codec;
+        Wire_3d.pack diff_nested_exact_codec;
       ]
 
 (* The installed standalone archive must export only the checked
@@ -1461,6 +1520,8 @@ let suite =
       Alcotest.test_case "everparse_name" `Quick test_everparse_name;
       Alcotest.test_case "pascal_case" `Quick test_pascal_case;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
+      Alcotest.test_case "parse_3d uses argv and cwd" `Quick
+        test_parse_3d_uses_argv_and_cwd;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
@@ -1481,6 +1542,8 @@ let suite =
         test_doc_differential_no_params;
       Alcotest.test_case "doc differential nested regions (needs 3d.exe)" `Quick
         test_doc_differential_nested_regions;
+      Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
+        `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
