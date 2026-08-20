@@ -5,7 +5,8 @@
     generates C parser artifacts around the result.
 
     The output directory contains a self-contained C library: [EverParse.h],
-    [<Name>.h], [<Name>.c], and a [test.c] that exercises the validators.
+    [<Name>.h], [<Name>.c], a [<Name>.provenance] stamp, and a [test.c] that
+    exercises the validators.
 
     {b Typical usage} ([gen.ml]):
     {[
@@ -77,7 +78,19 @@ val run_everparse :
     If [quiet] is [true] (the default), EverParse output is suppressed. If
     [quiet] is [false], EverParse stdout/stderr are left visible.
 
+    A [<Name>.provenance] file records the BLAKE2b-256 digest of [<Name>.3d] and
+    the EverParse version that generated the C. Generated [dune.inc] rules
+    recompute that digest during [runtest] and fail on a mismatch, so C
+    staleness is detected without running EverParse. The failure is deliberately
+    not promotable: only regenerating the C may refresh the stamp.
+
     Requires [3d.exe] in PATH. *)
+
+val check_provenance : outdir:string -> string list -> unit
+(** [check_provenance ~outdir three_d_files] recomputes the BLAKE2b-256 digest
+    of each [.3d] in [outdir] and raises [Failure] if it differs from the digest
+    recorded in the matching [<Name>.provenance] stamp, which means the
+    committed C came from a different spec. Needs no [3d.exe]. *)
 
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
 (** [parse_3d ~outdir file] runs [3d.exe] on a single [.3d] file in [outdir].
@@ -260,6 +273,7 @@ val main :
     - [c] produces the C parser(s)
     - [dune] generates [dune.inc] with build rules, test, and install stanzas
     - [3d-gen] / [dune-gen] write the corresponding [.gen] drift-check targets
+    - [provenance-check] verifies the committed provenance stamps, no EverParse
     - otherwise runs the full pipeline.
 
     [mode] is mandatory, so every [gen.ml] states what it emits. With
