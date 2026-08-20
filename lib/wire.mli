@@ -401,7 +401,36 @@ module Field : sig
     'a typ ->
     'a option t
   (** [optional name ~present t] is a field present iff [present] evaluates to
-      [true]. Absent fields decode as [None] and consume zero bytes. *)
+      [true]. Absent fields decode as [None] and consume zero bytes.
+
+      To make a whole field group conditional, define the group as a sub-codec
+      and pass [codec group] as [t]. Expressions inside the group can refer to
+      its earlier fields, so the group may start with a byte-length prefix
+      followed by {!repeat}; fields after the optional group remain in the
+      parent codec. This shape projects to 3D as a gate-selected sub-codec.
+
+      {[
+      type ext = { len : int; items : int list }
+
+      let f_ext_len = Field.v "ExtLen" uint8
+
+      let ext_codec =
+        Codec.v "Ext"
+          (fun len items -> { len; items })
+          Codec.
+            [
+              (f_ext_len $ fun e -> e.len);
+              ( Field.repeat "ExtItems" ~size:(Field.ref f_ext_len) uint8
+              $ fun e -> e.items );
+            ]
+
+      let f_gate = Field.v "Gate" uint8
+
+      let f_ext =
+        Field.optional "Ext"
+          ~present:Expr.(Field.ref f_gate <> int 0)
+          (codec ext_codec)
+      ]} *)
 
   val optional_or :
     string ->
