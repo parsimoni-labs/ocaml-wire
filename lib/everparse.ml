@@ -633,11 +633,26 @@ let write_ffi ~outdir schemas =
     (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
     schemas
 
+(* Identity of a declaration for merge purposes: the 3D it renders to on its
+   own. [Types.decl] holds closures (codec and map encode/decode pairs), so
+   polymorphic equality raises on it, and the rendered text is exactly what the
+   merged file would say about the type. Rendering is deterministic: its only
+   render-time global, the anonymous-field counter, is reset per struct.
+   A declaration with no 3D projection raises the same message every time, so
+   two identical ones still compare equal and the projection error surfaces at
+   emit time as before, not as a spurious collision. *)
+let decl_identity d =
+  match Types.to_3d ~enum_as_type:true (Types.module_ [ d ]) with
+  | text -> Ok text
+  | exception e -> Error (Printexc.to_string e)
+
 (* Merge several clean (doc) schemas into one module: union their decls, keeping
    the first definition of each named typedef / enum / casetype so a type shared
    across codecs (a common enum, a refined-byte element) is emitted once.
    Dependency order survives because each input module already lists a type
-   before the typedef that uses it, and the shared type keeps its first slot. *)
+   before the typedef that uses it, and the shared type keeps its first slot.
+   Two schemas declaring different types under one name cannot both be honoured
+   by a single merged spec, so that is rejected rather than resolved silently. *)
 let merge ~name (ts : t list) : t =
   let decl_name = function
     | Types.Typedef { struct_ = { name; _ }; _ } -> Some name
@@ -646,19 +661,28 @@ let merge ~name (ts : t list) : t =
     | _ -> None
   in
   let seen = Hashtbl.create 16 in
-  let keep d =
+  let keep owner d =
     match decl_name d with
     | None -> true
-    | Some n when Hashtbl.mem seen n -> false
-    | Some n ->
-        Hashtbl.add seen n ();
-        true
+    | Some n -> (
+        let identity = decl_identity d in
+        match Hashtbl.find_opt seen n with
+        | None ->
+            Hashtbl.add seen n (owner, identity);
+            true
+        | Some (first_owner, first_identity) ->
+            if first_identity = identity then false
+            else
+              Fmt.invalid_arg
+                "Everparse.write: schemas %S and %S both declare %S with \
+                 different definitions; rename one of them"
+                first_owner owner n)
   in
   let decls =
     List.fold_left
-      (fun acc t ->
+      (fun acc (t : t) ->
         List.fold_left
-          (fun acc d -> if keep d then d :: acc else acc)
+          (fun acc d -> if keep t.name d then d :: acc else acc)
           acc t.module_.decls)
       [] ts
     |> List.rev

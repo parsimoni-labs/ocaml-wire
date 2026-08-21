@@ -141,7 +141,8 @@ val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
     [~name] is ignored. With [`Standalone] (the default), the schemas are merged
     into a single [<name>.3d] -- a type shared across several codecs is emitted
     once -- so a whole protocol family reads as one spec, and [~name] is
-    required. *)
+    required. Raises [Invalid_argument] if two schemas declare different types
+    under the same name, since one merged spec cannot honour both. *)
 
 module Raw : sig
   type nonrec struct_ = struct_

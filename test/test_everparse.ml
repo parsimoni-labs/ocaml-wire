@@ -474,6 +474,46 @@ let test_doc_merge_dedup () =
     "second struct present" true
     (contains ~sub:"Two" content)
 
+let test_doc_merge_name_collision () =
+  (* Two codecs declaring different types under one name cannot both be honoured
+     by a single merged spec. Emitting the first and dropping the second would
+     hand codec [Two] a C validator enforcing codec [One]'s enum, the exact
+     inverse of what [Two] accepts in OCaml, so the merge is rejected. *)
+  let one = enum "Shared" [ ("A", 0); ("B", 1) ] uint8 in
+  let two = enum "Shared" [ ("X", 7); ("Y", 9) ] uint8 in
+  let codec name e =
+    Codec.v name (fun v -> v) Codec.[ (Field.v "x" e $ fun v -> v) ]
+  in
+  let dir = Filename.get_temp_dir_name () in
+  let write name cs =
+    Everparse.write ~mode:`Standalone ~outdir:dir ~name
+      (List.map (Everparse.project ~mode:`Standalone) cs)
+  in
+  let msg =
+    match
+      write "wire_doc_merge_collision" [ codec "One" one; codec "Two" two ]
+    with
+    | () -> Alcotest.fail "expected a name-collision error"
+    | exception Invalid_argument msg -> msg
+  in
+  Alcotest.(check bool)
+    "names both schemas" true
+    (contains ~sub:{|"One"|} msg && contains ~sub:{|"Two"|} msg);
+  Alcotest.(check bool)
+    "names the colliding declaration" true
+    (contains ~sub:{|"Shared"|} msg);
+  (* Two codecs building their own copy of the same declaration is the normal
+     case for a protocol family and still collapses to one emitted type. *)
+  let copy = enum "Shared" [ ("A", 0); ("B", 1) ] uint8 in
+  let name = "wire_doc_merge_equal_copies" in
+  write name [ codec "One" one; codec "Two" copy ];
+  let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+  let content = In_channel.with_open_text path In_channel.input_all in
+  Sys.remove path;
+  Alcotest.(check int)
+    "equal copies declared once" 1
+    (List.length (Re.all (Re.compile (Re.str "enum Shared")) content))
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -1477,6 +1517,8 @@ let suite =
         test_doc_enum_as_type;
       Alcotest.test_case "doc: merge dedups shared types" `Quick
         test_doc_merge_dedup;
+      Alcotest.test_case "doc: merge rejects conflicting redeclaration" `Quick
+        test_doc_merge_name_collision;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
         test_doc_field_citation;
       Alcotest.test_case "doc: bit order matches schema projection" `Quick
