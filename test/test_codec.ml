@@ -995,6 +995,56 @@ let test_reject_zero_width_element () =
     "repeat over empty rejected" true
     (raises_invalid (fun () -> Field.repeat "r" ~size:(int 3) empty))
 
+(* A byte span of literal size zero is 0-width too: EverParse refuses to extract
+   a zero-size element, so an [array] over one has no projection even though the
+   fixed count keeps the decode loop terminating. Refused at construction like
+   [empty], matching the [Field.repeat] guard. *)
+let array_rejects elem =
+  match array ~len:(int 2) elem with
+  | _ -> false
+  | exception Invalid_argument _ -> true
+
+let test_array_rejects_zero_width_span () =
+  Alcotest.(check bool)
+    "byte_array of size 0" true
+    (array_rejects (byte_array ~size:(int 0)));
+  Alcotest.(check bool)
+    "byte_slice of size 0" true
+    (array_rejects (byte_slice ~size:(int 0)));
+  Alcotest.(check bool)
+    "byte_array of negative size" true
+    (array_rejects (byte_array ~size:(int (-1))));
+  Alcotest.(check bool)
+    "byte_array of size 0 under a map" true
+    (array_rejects
+       (map ~decode:String.length
+          ~encode:(fun _ -> "")
+          (byte_array ~size:(int 0))));
+  Alcotest.(check bool)
+    "byte_array of a folded zero size" true
+    (array_rejects (byte_array ~size:Expr.(int 1 - int 1)));
+  Alcotest.(check bool)
+    "array_seq over byte_array of size 0" true
+    (match array_seq seq_list ~len:(int 2) (byte_array ~size:(int 0)) with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  (* A varint sized by [sizeof] stays symbolic (constant folding leaves [Sizeof]
+     alone), so it never reaches the literal-size case and [array] already
+     refuses it. *)
+  Alcotest.(check bool)
+    "uint sized by sizeof empty" true
+    (array_rejects (uint (sizeof empty)))
+
+(* The guard must still admit a legitimate fixed-size byte element: a positive
+   literal span projects to a count of fixed-size elements. *)
+let test_array_accepts_fixed_byte_span () =
+  Alcotest.(check bool)
+    "byte_array of size 4 allowed" false
+    (array_rejects (byte_array ~size:(int 4)));
+  Alcotest.(check bool)
+    "byte_slice of size 1 allowed" false
+    (array_rejects (byte_slice ~size:(int 1)))
+
 (* Wire.array over a fixed sub-record (Codec element): a fixed-count list of
    structs. Decoding raised Failure "build_field_reader: unsupported type"
    because the array element reader had no Codec case. The schema projects the
@@ -6831,6 +6881,10 @@ let suite =
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick
         test_reject_zero_width_element;
+      Alcotest.test_case "array: rejects zero-width byte span" `Quick
+        test_array_rejects_zero_width_span;
+      Alcotest.test_case "array: accepts fixed-size byte span" `Quick
+        test_array_accepts_fixed_byte_span;
       Alcotest.test_case "array: record element roundtrip" `Quick
         test_array_record_element;
       Alcotest.test_case "array: record element projection" `Quick
