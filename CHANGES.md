@@ -34,6 +34,11 @@
 
 ### Fixed
 
+- `Wire.Ascii` diagrams now render every expression a size or constraint can
+  contain. Bitmasks, shifts, division, casts, conditionals, `sizeof` and
+  parameter references used to print as a bare `?`, so a trailing payload
+  sized by `Wire.rest_bytes` showed up as `(? - ? bytes)` (#257, @samoht)
+
 - `Field.repeat` and `Field.repeat_seq` now reject a `byte_array` or
   `byte_slice` element declared with a size of zero, and `Wire.of_string` /
   `Wire.of_bytes` report an end-of-input error instead of looping forever when
