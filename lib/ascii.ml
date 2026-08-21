@@ -13,61 +13,78 @@ type segment =
   | Fixed of { name : string; bits : int }
   | Variable of { label : string }
 
-(* Render an expression as a short annotation. *)
+(* Render an expression as a short annotation.
+
+   This never raises: a diagram is documentation, so constructs that have no 3D
+   projection ([Field_pos], negative literals) still get a rendering here even
+   though {!Types.pp_expr} rejects them. The match is exhaustive on purpose, so
+   a new expression constructor is a compile error rather than a silent
+   placeholder in the output. *)
 let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
- fun buf -> function
+ fun buf expr ->
+  let infix : type b c. b Types.expr -> string -> c Types.expr -> unit =
+   fun a op b ->
+    pp_expr buf a;
+    Buffer.add_string buf op;
+    pp_expr buf b
+  in
+  match expr with
   | Int n -> Buffer.add_string buf (string_of_int n)
   | Int64 n -> Buffer.add_string buf (Int64.to_string n)
   | Bool b -> Buffer.add_string buf (string_of_bool b)
   | Ref (_, name) -> Buffer.add_string buf name
-  | Add (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " + ";
-      pp_expr buf b
-  | Sub (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " - ";
-      pp_expr buf b
-  | Mul (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " * ";
-      pp_expr buf b
-  | Eq (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " == ";
-      pp_expr buf b
-  | Le (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " <= ";
-      pp_expr buf b
-  | Lt (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " < ";
-      pp_expr buf b
-  | Ge (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " >= ";
-      pp_expr buf b
-  | Gt (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " > ";
-      pp_expr buf b
-  | Ne (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " != ";
-      pp_expr buf b
-  | And (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " && ";
-      pp_expr buf b
-  | Or (a, b) ->
-      pp_expr buf a;
-      Buffer.add_string buf " || ";
-      pp_expr buf b
+  | Param_ref p -> Buffer.add_string buf p.name
+  (* A [sizeof] over a fixed-size description is a constant, and the byte count
+     is what the diagram wants to show. *)
+  | Sizeof t -> (
+      match Types.field_wire_size t with
+      | Some n -> Buffer.add_string buf (string_of_int n)
+      | None -> Buffer.add_string buf "sizeof")
+  | Sizeof_this -> Buffer.add_string buf "sizeof(this)"
+  | Field_pos -> Buffer.add_string buf "field_pos"
+  | Add (a, b) -> infix a " + " b
+  | Sub (a, b) -> infix a " - " b
+  | Mul (a, b) -> infix a " * " b
+  | Div (a, b) -> infix a " / " b
+  | Mod (a, b) -> infix a " % " b
+  | Land (a, b) -> infix a " & " b
+  | Land64 (a, b) -> infix a " & " b
+  | Lor (a, b) -> infix a " | " b
+  | Lxor (a, b) -> infix a " ^ " b
+  | Lnot a ->
+      Buffer.add_string buf "~";
+      pp_expr buf a
+  | Lsl (a, b) -> infix a " << " b
+  | Lsr (a, b) -> infix a " >> " b
+  | Lsr64 (a, b) -> infix a " >> " b
+  | Eq (a, b) -> infix a " == " b
+  | Ne (a, b) -> infix a " != " b
+  | Lt (a, b) -> infix a " < " b
+  | Le (a, b) -> infix a " <= " b
+  | Gt (a, b) -> infix a " > " b
+  | Ge (a, b) -> infix a " >= " b
+  | And (a, b) -> infix a " && " b
+  | Or (a, b) -> infix a " || " b
   | Not a ->
       Buffer.add_string buf "!";
       pp_expr buf a
-  | _ -> Buffer.add_string buf "?"
+  | Cast (t, e) ->
+      Buffer.add_string buf
+        (match t with
+        | `U8 -> "(u8) "
+        | `U16 -> "(u16) "
+        | `U32 -> "(u32) "
+        | `U64 -> "(u64) ");
+      pp_expr buf e
+  (* Spelled out rather than as a C ternary: "?" is the one character a reader
+     must be able to trust is never a rendering failure. *)
+  | If_then_else (c, t, e) ->
+      Buffer.add_string buf "if ";
+      pp_expr buf c;
+      Buffer.add_string buf " then ";
+      pp_expr buf t;
+      Buffer.add_string buf " else ";
+      pp_expr buf e
 
 let string_of_expr (type a) (e : a Types.expr) =
   let buf = Buffer.create 32 in
