@@ -79,7 +79,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_decode;
           codec_encode;
           codec_fixed_size = Some n;
-          codec_size_of = (fun _buf _off -> n);
+          codec_size_of = (fun _ctx _buf _off -> n);
           codec_size_of_value;
           codec_field_readers;
           codec_struct;
@@ -307,11 +307,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       check_enum_membership ~at:off ~closed cases v;
       (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
-      let runtime = Types.empty_eval_ctx buf in
       parse_codec_typ
-        (fun _buf off -> codec_decode runtime off)
+        (codec_decode Types.unbound_eval_ctx)
         codec_fixed_size
-        (fun _buf off -> codec_size_of runtime off)
+        (codec_size_of Types.unbound_eval_ctx)
         buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
@@ -766,7 +765,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
       encode_codec
-        ~encode:(fun v buf off -> codec_encode v (Types.empty_eval_ctx buf) off)
+        ~encode:(fun v buf off -> codec_encode v Types.unbound_eval_ctx buf off)
         ~fixed_size:codec_fixed_size ~size_of_value:codec_size_of_value v enc
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
@@ -902,7 +901,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
   | Where { inner; _ } -> encode_direct inner buf off v
   | Enum { base; _ } -> encode_direct base buf off v
-  | Codec { codec_encode; _ } -> codec_encode v (Types.empty_eval_ctx buf) off
+  | Codec { codec_encode; _ } -> codec_encode v Types.unbound_eval_ctx buf off
   | _ -> encode_via_writer typ buf off v
 
 let to_bytes typ v =

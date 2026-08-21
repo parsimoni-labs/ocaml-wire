@@ -168,7 +168,7 @@ val embed_encode : 'r t -> 'r -> bytes -> int -> int
 (** Encode a parameter-free sub-codec embedded as a field/element, skipping the
     env check {!encode} performs. Internal use. *)
 
-val embed_encode_ctx : 'r t -> 'r -> Types.eval_ctx -> int -> int
+val embed_encode_ctx : 'r t -> 'r -> Types.eval_ctx -> bytes -> int -> int
 (** Context-threaded embedded encode. Internal use. *)
 
 val embed_decode : 'r t -> bytes -> int -> 'r
@@ -176,14 +176,14 @@ val embed_decode : 'r t -> bytes -> int -> 'r
     field constraints against param values seeded by the enclosing codec.
     Internal use. *)
 
-val embed_decode_ctx : 'r t -> Types.eval_ctx -> int -> 'r
+val embed_decode_ctx : 'r t -> Types.eval_ctx -> bytes -> int -> 'r
 (** Context-threaded embedded decode. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 
 val wire_size_info_ctx :
-  'r t -> [ `Fixed of int | `Variable of Types.eval_ctx -> int -> int ]
+  'r t -> [ `Fixed of int | `Variable of Types.eval_ctx -> bytes -> int -> int ]
 (** Context-threaded wire size information for embedding. Internal use. *)
 
 val name : 'r t -> string
@@ -205,7 +205,8 @@ val field_readers : 'r t -> (string * (bytes -> int -> int)) list
     field name. Used for cross-codec name resolution when [c] is embedded as a
     sub-codec via {!Wire.codec}. *)
 
-val field_readers_ctx : 'r t -> (string * (Types.eval_ctx -> int -> int)) list
+val field_readers_ctx :
+  'r t -> (string * (Types.eval_ctx -> bytes -> int -> int)) list
 (** Context-threaded field readers for embedding. Internal use. *)
 
 val pp : Format.formatter -> 'r t -> unit
