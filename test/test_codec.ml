@@ -1850,6 +1850,128 @@ let test_exact_byte_field_expression_size () =
   Codec.encode exact_vb_codec (4, "abcd") buf 0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
+(* [Codec.set] writes in place, so a byte field whose size is only known at
+   run time still owns exactly that many bytes: an oversized value that fits in
+   the buffer would otherwise land on the fields that follow, with nothing to
+   signal it. Each case checks the buffer as well as the exception, since a
+   check that ran after the blit would raise on an already corrupted buffer. *)
+
+(* Every field before [data] is fixed-size, so [data] has a static offset and a
+   run-time size. *)
+let set_var_codec typ =
+  let open Codec in
+  let f_len = Field.v "len" uint8 in
+  let cf_data = Field.v "data" (typ (Field.ref f_len)) $ fun (_, d, _) -> d in
+  let codec =
+    v "SetVarBytes"
+      (fun len data trailer -> (len, data, trailer))
+      [
+        (f_len $ fun (n, _, _) -> n);
+        cf_data;
+        (Field.v "trailer" uint8 $ fun (_, _, t) -> t);
+      ]
+  in
+  (codec, cf_data)
+
+(* [pre] is itself variable-size, so [data] has a run-time offset as well as a
+   run-time size. *)
+let set_dyn_codec typ =
+  let open Codec in
+  let f_plen = Field.v "plen" uint8 in
+  let f_len = Field.v "len" uint8 in
+  let cf_data =
+    Field.v "data" (typ (Field.ref f_len)) $ fun (_, _, _, d, _) -> d
+  in
+  let codec =
+    v "SetDynBytes"
+      (fun plen pre len data trailer -> (plen, pre, len, data, trailer))
+      [
+        (f_plen $ fun (n, _, _, _, _) -> n);
+        ( Field.v "pre" (byte_array ~size:(Field.ref f_plen))
+        $ fun (_, p, _, _, _) -> p );
+        (f_len $ fun (_, _, n, _, _) -> n);
+        cf_data;
+        (Field.v "trailer" uint8 $ fun (_, _, _, _, t) -> t);
+      ]
+  in
+  (codec, cf_data)
+
+(* len = 2, data = "ab" at offset 1, trailer = 0xff, then spare bytes so that a
+   4-byte write past the field still lands inside the buffer. *)
+let set_var_before = "\x02ab\xff\xee\xee\xee"
+let set_var_after = "\x02XY\xff\xee\xee\xee"
+let set_dyn_before = "\x01p\x02ab\xff\xee\xee\xee"
+let set_dyn_after = "\x01p\x02XY\xff\xee\xee\xee"
+let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
+
+let check_set_exact label ~before ~after ~oversized ~exact set =
+  let buf = Bytes.of_string before in
+  expect_exact_byte_error label ~expected:2 ~actual:4 (fun () ->
+      set buf 0 oversized);
+  Alcotest.(check string)
+    (label ^ ": rejected set left the buffer alone")
+    before (Bytes.to_string buf);
+  set buf 0 exact;
+  Alcotest.(check string)
+    (label ^ ": exact set wrote only its own bytes")
+    after (Bytes.to_string buf)
+
+let test_set_exact_var_byte_array () =
+  let codec, cf = set_var_codec (fun size -> byte_array ~size) in
+  check_set_exact "byte_array at a static offset" ~before:set_var_before
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
+    (Staged.unstage (Codec.set codec cf))
+
+let test_set_exact_var_byte_array_where () =
+  let codec, cf =
+    set_var_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
+  in
+  check_set_exact "byte_array_where at a static offset" ~before:set_var_before
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
+    (Staged.unstage (Codec.set codec cf))
+
+let test_set_exact_var_byte_slice () =
+  let codec, cf = set_var_codec (fun size -> byte_slice ~size) in
+  check_set_exact "byte_slice at a static offset" ~before:set_var_before
+    ~after:set_var_after ~oversized:(slice_of_string "ABCD")
+    ~exact:(slice_of_string "XY")
+    (Staged.unstage (Codec.set codec cf))
+
+let test_set_exact_dyn_byte_array () =
+  let codec, cf = set_dyn_codec (fun size -> byte_array ~size) in
+  check_set_exact "byte_array at a run-time offset" ~before:set_dyn_before
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
+    (Staged.unstage (Codec.set codec cf))
+
+let test_set_exact_dyn_byte_array_where () =
+  let codec, cf =
+    set_dyn_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
+  in
+  check_set_exact "byte_array_where at a run-time offset" ~before:set_dyn_before
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
+    (Staged.unstage (Codec.set codec cf))
+
+let test_set_exact_dyn_byte_slice () =
+  let codec, cf = set_dyn_codec (fun size -> byte_slice ~size) in
+  check_set_exact "byte_slice at a run-time offset" ~before:set_dyn_before
+    ~after:set_dyn_after ~oversized:(slice_of_string "ABCD")
+    ~exact:(slice_of_string "XY")
+    (Staged.unstage (Codec.set codec cf))
+
+(* A byte field with a literal size takes the fixed-offset writer, which shares
+   the encoder's exact-size blit. *)
+let test_set_exact_fixed_byte_array () =
+  let cf = Codec.(Field.v "B" (byte_array ~size:(int 2)) $ fst) in
+  let codec =
+    Codec.(
+      v "SetFixedBytes"
+        (fun b t -> (b, t))
+        [ cf; Field.v "trailer" uint8 $ snd ])
+  in
+  check_set_exact "byte_array at a literal size" ~before:"ab\xff\xee\xee"
+    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY"
+    (Staged.unstage (Codec.set codec cf))
+
 (* A reference-free constant size expression normalises to the literal form at
    construction, so every [Int n] fast path and range guard in the library sees
    it. Sizes that must stay symbolic, and arithmetic the fold cannot do
@@ -6679,6 +6801,20 @@ let suite =
         test_exact_byte_field_expression_size;
       Alcotest.test_case "constant size expression folds" `Quick
         test_constant_size_expression_folds;
+      Alcotest.test_case "exact byte field: set var byte_array" `Quick
+        test_set_exact_var_byte_array;
+      Alcotest.test_case "exact byte field: set var byte_array_where" `Quick
+        test_set_exact_var_byte_array_where;
+      Alcotest.test_case "exact byte field: set var byte_slice" `Quick
+        test_set_exact_var_byte_slice;
+      Alcotest.test_case "exact byte field: set dyn byte_array" `Quick
+        test_set_exact_dyn_byte_array;
+      Alcotest.test_case "exact byte field: set dyn byte_array_where" `Quick
+        test_set_exact_dyn_byte_array_where;
+      Alcotest.test_case "exact byte field: set dyn byte_slice" `Quick
+        test_set_exact_dyn_byte_slice;
+      Alcotest.test_case "exact byte field: set fixed byte_array" `Quick
+        test_set_exact_fixed_byte_array;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;
