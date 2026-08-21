@@ -1850,6 +1850,68 @@ let test_exact_byte_field_expression_size () =
   Codec.encode exact_vb_codec (4, "abcd") buf 0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
+(* A reference-free constant size expression normalises to the literal form at
+   construction, so every [Int n] fast path and range guard in the library sees
+   it. Sizes that must stay symbolic, and arithmetic the fold cannot do
+   faithfully, are left as expressions. *)
+let byte_array_size label t =
+  let module T = Wire.Private.Types in
+  match t with
+  | T.Byte_array { size } -> size
+  | _ -> Alcotest.failf "%s: expected a byte_array" label
+
+let test_constant_size_expression_folds () =
+  let module T = Wire.Private.Types in
+  (match byte_array_size "constant" (byte_array ~size:Expr.(int 2 + int 2)) with
+  | T.Int 4 -> ()
+  | e -> Alcotest.failf "constant size did not fold: %a" T.pp_expr e);
+  (* A reference-bearing size stays symbolic: the 3D projection needs the
+     expression, not a baked-in width. *)
+  (match
+     byte_array_size "reference"
+       (byte_array ~size:Expr.(Field.ref exact_vb_len + int 1))
+   with
+  | T.Add (T.Ref _, T.Int 1) -> ()
+  | e -> Alcotest.failf "reference-bearing size was folded: %a" T.pp_expr e);
+  (* Overflowing arithmetic is left alone rather than folded to a wrong
+     value. *)
+  (match
+     byte_array_size "overflow" (byte_array ~size:Expr.(int max_int + int 1))
+   with
+  | T.Add (T.Int _, T.Int 1) -> ()
+  | e -> Alcotest.failf "overflowing size was folded: %a" T.pp_expr e);
+  (* 1. the encode contract *)
+  let codec name typ = Codec.v name Fun.id Codec.[ Field.v "B" typ $ Fun.id ] in
+  let lit = codec "FoldLiteral" (byte_array ~size:(int 4)) in
+  let folded = codec "FoldConstant" (byte_array ~size:Expr.(int 2 + int 2)) in
+  let buf = Bytes.create 4 in
+  expect_exact_byte_error "literal long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode lit "abcdef" buf 0);
+  expect_exact_byte_error "constant long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode folded "abcdef" buf 0);
+  expect_exact_byte_error "constant short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode folded "ab" buf 0);
+  Codec.encode folded "abcd" buf 0;
+  Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
+  (* 2. is_fixed / wire_size *)
+  Alcotest.(check bool) "literal is_fixed" true (Codec.is_fixed lit);
+  Alcotest.(check bool) "constant is_fixed" true (Codec.is_fixed folded);
+  Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
+  Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
+  (* 3. the uint 1-7 range guard *)
+  let uint_rejects label size =
+    match uint size with
+    | _ -> Alcotest.failf "%s: expected uint to reject the size" label
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          (label ^ ": names the bound")
+          true
+          (contains ~sub:"size must be 1-7" msg)
+  in
+  uint_rejects "literal 0" (int 0);
+  uint_rejects "constant 0" Expr.(int 1 - int 1);
+  uint_rejects "constant 8" Expr.(int 4 + int 4)
+
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
   let f_b = Field.v "b" (bits ~width:7 U8) in
@@ -6615,6 +6677,8 @@ let suite =
         test_exact_byte_field_literal_size;
       Alcotest.test_case "exact byte field: expression size" `Quick
         test_exact_byte_field_expression_size;
+      Alcotest.test_case "constant size expression folds" `Quick
+        test_constant_size_expression_folds;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;

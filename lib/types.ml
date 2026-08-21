@@ -362,6 +362,86 @@ module Expr = struct
   let to_uint64 e = Cast (`U64, e)
 end
 
+(* Constant size and length expressions are normalised to [Int n] at the
+   construction boundary below. The rest of the library keys its fast paths and
+   its range guards on a literal [Int n] size, so [Expr.(int 2 + int 2)] has to
+   arrive as the same node as [int 4] or it silently falls off every one of
+   them.
+
+   Only reference-free arithmetic folds. A [Ref], [Param_ref], [Sizeof_this] or
+   [Field_pos] resolves against a buffer at decode time, and [Sizeof] must stay
+   symbolic so the 3D projection keeps emitting [sizeof(T)] rather than a
+   baked-in width. *)
+
+(* Native-int arithmetic that reports overflow instead of wrapping: a constant
+   folded to a value its expression does not denote would be worse than leaving
+   the expression symbolic. *)
+let const_add a b =
+  let s = a + b in
+  if a lxor s land (b lxor s) < 0 then None else Some s
+
+let const_sub a b =
+  let d = a - b in
+  if a lxor b land (a lxor d) < 0 then None else Some d
+
+let const_mul a b =
+  if a = 0 then Some 0
+  else if a = -1 && b = min_int then None
+  else
+    let p = a * b in
+    if p / a = b then Some p else None
+
+(* [min_int / -1] is the one division whose true result is not representable;
+   OCaml returns [min_int] for it rather than trapping. *)
+let const_div a b =
+  if b = 0 || (a = min_int && b = -1) then None else Some (a / b)
+
+let const_rem a b =
+  if b = 0 || (a = min_int && b = -1) then None else Some (a mod b)
+
+let const_shift_left a b =
+  if b >= 0 && b < Sys.int_size && (a lsl b) asr b = a then Some (a lsl b)
+  else None
+
+let const_shift_right a b =
+  if b >= 0 && b < Sys.int_size then Some (a lsr b) else None
+
+let const_cast width v =
+  match width with
+  | `U8 -> v land 0xFF
+  | `U16 -> v land 0xFFFF
+  | `U32 -> v land UInt32.mask32
+  | `U64 -> v
+
+let rec const_int_expr : int expr -> int option = function
+  | Int n -> Some n
+  | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> None
+  | Add (a, b) -> const_binop const_add a b
+  | Sub (a, b) -> const_binop const_sub a b
+  | Mul (a, b) -> const_binop const_mul a b
+  | Div (a, b) -> const_binop const_div a b
+  | Mod (a, b) -> const_binop const_rem a b
+  | Land (a, b) -> const_binop (fun a b -> Some (a land b)) a b
+  | Lor (a, b) -> const_binop (fun a b -> Some (a lor b)) a b
+  | Lxor (a, b) -> const_binop (fun a b -> Some (a lxor b)) a b
+  | Lnot a -> Option.map lnot (const_int_expr a)
+  | Lsl (a, b) -> const_binop const_shift_left a b
+  | Lsr (a, b) -> const_binop const_shift_right a b
+  | Cast (width, e) -> Option.map (const_cast width) (const_int_expr e)
+  (* A constant condition would need the same pass over [bool expr]; leave the
+     whole node symbolic. *)
+  | If_then_else _ -> None
+
+and const_binop f a b =
+  match (const_int_expr a, const_int_expr b) with
+  | Some a, Some b -> f a b
+  | None, _ | _, None -> None
+
+(* [fold_size e] is [e] with a reference-free constant folded to its literal.
+   Every smart constructor taking a size or length expression runs its argument
+   through it. *)
+let fold_size e = match const_int_expr e with Some n -> Int n | None -> e
+
 (* Type constructors *)
 let uint8 = Uint8
 let uint16 = Uint16 Little
@@ -385,6 +465,7 @@ let float64 = Float64 Little
 let float64be = Float64 Big
 
 let uint ?(endian = Big) size =
+  let size = fold_size size in
   (match size with
   | Int n when n < 1 || n > 7 ->
       Fmt.invalid_arg "uint: size must be 1-7, got %d" n
@@ -478,7 +559,7 @@ let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
 let zeroterm = Zeroterm
-let zeroterm_at_most ~size = Zeroterm_at_most { size }
+let zeroterm_at_most ~size = Zeroterm_at_most { size = fold_size size }
 
 let where cond inner =
   reject_decoration ~combinator:"where" inner;
@@ -694,15 +775,15 @@ let array ~len elem =
   reject_decoration ~combinator:"array" elem;
   reject_bitfield_element ~combinator:"array" elem;
   reject_non_array_element ~combinator:"array" elem;
-  Array { len; elem; seq = seq_list }
+  Array { len = fold_size len; elem; seq = seq_list }
 
 let array_seq seq ~len elem =
   reject_decoration ~combinator:"array_seq" elem;
   reject_bitfield_element ~combinator:"array_seq" elem;
   reject_non_array_element ~combinator:"array_seq" elem;
-  Array { len; elem; seq }
+  Array { len = fold_size len; elem; seq }
 
-let byte_array ~size = Byte_array { size }
+let byte_array ~size = Byte_array { size = fold_size size }
 let byte_array_where_counter = Stdlib.ref 0
 let elt_var_prefix = "__elt_"
 
@@ -711,7 +792,7 @@ let byte_array_where ~size ~per_byte =
   Stdlib.incr byte_array_where_counter;
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
-  Byte_array_where { size; elt_var; cond }
+  Byte_array_where { size = fold_size size; elt_var; cond }
 
 (* The 3D synthesized typedef name derived from an elt_var. The element
    field inside the synthesized struct keeps the elt_var as its name so the
@@ -723,7 +804,7 @@ let synth_name_of_elt_var ev =
     "_RefByte_" ^ String.sub ev plen (String.length ev - plen)
   else "_RefByte_" ^ ev
 
-let byte_slice ~size = Byte_slice { size }
+let byte_slice ~size = Byte_slice { size = fold_size size }
 
 let optional present inner =
   reject_bitfield_element ~combinator:"optional" inner;
@@ -743,20 +824,20 @@ let optional_or present ~default inner =
 let repeat ~size elem =
   reject_decoration ~combinator:"repeat" elem;
   reject_bitfield_element ~combinator:"repeat" elem;
-  Repeat { size; elem; seq = seq_list }
+  Repeat { size = fold_size size; elem; seq = seq_list }
 
 let repeat_seq seq ~size elem =
   reject_decoration ~combinator:"repeat_seq" elem;
   reject_bitfield_element ~combinator:"repeat_seq" elem;
-  Repeat { size; elem; seq }
+  Repeat { size = fold_size size; elem; seq }
 
 let nested ~size elem =
   reject_bitfield_element ~combinator:"nested" elem;
-  Single_elem { size; elem; at_most = false }
+  Single_elem { size = fold_size size; elem; at_most = false }
 
 let nested_at_most ~size elem =
   reject_bitfield_element ~combinator:"nested_at_most" elem;
-  Single_elem { size; elem; at_most = true }
+  Single_elem { size = fold_size size; elem; at_most = true }
 
 let enum name cases base = Enum { name; cases; base; closed = true }
 let enum_open name cases base = Enum { name; cases; base; closed = false }
