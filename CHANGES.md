@@ -34,6 +34,11 @@
 
 ### Fixed
 
+- `Field.repeat` and `Field.repeat_seq` now reject a `byte_array` or
+  `byte_slice` element declared with a size of zero, and `Wire.of_string` /
+  `Wire.of_bytes` report an end-of-input error instead of looping forever when
+  a repeat element turns out to consume no bytes (#256, @samoht)
+
 - `Wire.Everparse.write ~mode:`Standalone` now fails with a clear error when
   two codecs of a family declare different types under the same name, instead
   of silently emitting the first and generating verified C that enforces the

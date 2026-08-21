@@ -763,6 +763,26 @@ let test_repeat_exact_budget_direct () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
 
+(* A [uint ~size] whose size expression evaluates to zero consumes no bytes, so
+   the byte-budget loop would never reach the end of its region. The direct
+   decoder reports the same eof the compiled [Codec.decode] repeat reports.
+
+   The size must stay unfoldable, hence [sizeof empty] rather than arithmetic
+   such as [int 1 - int 1]: constant folding would reduce that to a literal
+   zero, which [uint] refuses at construction, and the decoder's guard would
+   never be reached. Do not "simplify" this back to arithmetic. *)
+let test_repeat_zero_width_element_direct () =
+  let zero_width =
+    Field.typ (Field.repeat "items" ~size:(int 4) (uint (sizeof empty)))
+  in
+  match of_string zero_width "abcd" with
+  | Ok _ -> Alcotest.fail "zero-width repeat element accepted"
+  | Error e ->
+      Alcotest.(check string)
+        "reports a zero-byte element"
+        "@0: unexpected EOF: expected 0 bytes, got 4"
+        (Fmt.str "%a" pp_parse_error e)
+
 let test_nested_exact_region_direct () =
   let exact = nested ~size:(int 4) zeroterm in
   let at_most = nested_at_most ~size:(int 4) zeroterm in
@@ -1337,6 +1357,8 @@ let suite =
         test_encode_array_cardinality;
       Alcotest.test_case "repeat: exact byte budget" `Quick
         test_repeat_exact_budget_direct;
+      Alcotest.test_case "repeat: zero-width element" `Quick
+        test_repeat_zero_width_element_direct;
       Alcotest.test_case "nested: exact region" `Quick
         test_nested_exact_region_direct;
       Alcotest.test_case "region/cardinality interpreter contract" `Quick

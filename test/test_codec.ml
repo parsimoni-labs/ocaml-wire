@@ -1195,6 +1195,37 @@ let test_repeat_rejects_unprojectable () =
     (repeat_rejects
        (byte_array_where ~size:(int 2) ~per_byte:(fun _ -> Expr.true_)))
 
+(* A byte span of literal size zero carries no bytes, so a byte-budget list of
+   it has nothing for EverParse to extract and the decoder's loop would never
+   reach the end of its region. Refused at construction like [empty]. *)
+let test_repeat_rejects_zero_width_span () =
+  Alcotest.(check bool)
+    "byte_array of size 0" true
+    (repeat_rejects (byte_array ~size:(int 0)));
+  Alcotest.(check bool)
+    "byte_slice of size 0" true
+    (repeat_rejects (byte_slice ~size:(int 0)));
+  Alcotest.(check bool)
+    "byte_array of negative size" true
+    (repeat_rejects (byte_array ~size:(int (-1))));
+  Alcotest.(check bool)
+    "byte_array of size 0 under a map" true
+    (repeat_rejects
+       (map ~decode:String.length
+          ~encode:(fun _ -> "")
+          (byte_array ~size:(int 0))));
+  Alcotest.(check bool)
+    "repeat_seq over byte_array of size 0" true
+    (match
+       Field.repeat_seq "items" ~seq:seq_list ~size:(int 4)
+         (byte_array ~size:(int 0))
+     with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  Alcotest.(check bool)
+    "byte_array of size 1 allowed" false
+    (repeat_rejects (byte_array ~size:(int 1)))
+
 (* A sub-codec whose last field is greedy ([all_bytes] / [all_zeros]) reads the
    rest of the buffer as its tail, so it cannot be a repeat element (the first
    element would consume everything). It is fine standalone. *)
@@ -6407,6 +6438,8 @@ let suite =
         test_repeat_byte_array_projection;
       Alcotest.test_case "repeat: rejects unprojectable element" `Quick
         test_repeat_rejects_unprojectable;
+      Alcotest.test_case "repeat: rejects zero-width byte span" `Quick
+        test_repeat_rejects_zero_width_span;
       Alcotest.test_case "repeat: rejects greedy-tail sub-codec" `Quick
         test_repeat_rejects_greedy_tail_codec;
       Alcotest.test_case "array: byte_array element roundtrip" `Quick
