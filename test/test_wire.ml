@@ -976,6 +976,44 @@ let test_roundtrip_byte_array () =
     (byte_array ~size:(int 5))
     Alcotest.string "hello"
 
+(* The streaming writer enforces the same exact-size contract as the record
+   and direct encoders: it used to write the value's own length, whatever the
+   declared size. *)
+let expect_exact_byte_error label ~expected ~actual f =
+  match f () with
+  | (_ : string) -> Alcotest.failf "%s: expected an exact-size error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names the declared size")
+        true
+        (contains ~sub:(Fmt.str "expected %d bytes" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": names the value length")
+        true
+        (contains ~sub:(Fmt.str "got %d" actual) msg)
+
+let test_exact_byte_field_writer () =
+  let ba = byte_array ~size:(int 4) in
+  let bs = byte_slice ~size:(int 4) in
+  let slice s =
+    let b = Bytes.of_string s in
+    Bytesrw.Bytes.Slice.make b ~first:0 ~length:(Bytes.length b)
+  in
+  expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
+      encode_chunked ~chunk_size:1 ba "abcdef");
+  expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
+      encode_chunked ~chunk_size:1 ba "ab");
+  expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
+      encode_chunked ~chunk_size:1 bs (slice "abcdef"));
+  expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
+      encode_chunked ~chunk_size:1 bs (slice "ab"));
+  Alcotest.(check string)
+    "exact string" "abcd"
+    (encode_chunked ~chunk_size:1 ba "abcd");
+  Alcotest.(check string)
+    "exact slice" "wxyz"
+    (encode_chunked ~chunk_size:1 bs (slice "wxyz"))
+
 (* -- Streaming: cross-slice boundary tests -- *)
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
@@ -1379,6 +1417,8 @@ let suite =
       Alcotest.test_case "roundtrip: array" `Quick test_roundtrip_array;
       Alcotest.test_case "roundtrip: byte_array" `Quick
         test_roundtrip_byte_array;
+      Alcotest.test_case "exact byte field: streaming writer" `Quick
+        test_exact_byte_field_writer;
       (* streaming: cross-slice boundary *)
       Alcotest.test_case "stream: uint8 chunk=1" `Quick test_stream_uint8;
       Alcotest.test_case "stream: uint16 chunk=1" `Quick

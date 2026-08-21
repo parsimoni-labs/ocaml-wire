@@ -590,14 +590,16 @@ let test_record_byte_array_roundtrip () =
           Alcotest.(check int) "tag" original.tag decoded.tag
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
-let test_record_byte_array_padding () =
-  (* Short string should be zero-padded *)
-  let original = { id = Optint.of_int 1; uuid = "short"; tag = 2 } in
+let test_record_byte_array_trailing_zeros () =
+  (* A caller wanting "short" in a 16-byte span supplies the zeros itself. *)
+  let original =
+    { id = Optint.of_int 1; uuid = "short" ^ String.make 11 '\x00'; tag = 2 }
+  in
   match encode_record ba_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       Alcotest.(check int) "wire size" 22 (String.length encoded);
-      (* Verify zero padding: bytes 9..19 should be zero *)
+      (* Verify the trailing zeros survive: bytes 9..19 should be zero *)
       for i = 9 to 19 do
         Alcotest.(check int)
           (Fmt.str "padding byte %d" i)
@@ -606,7 +608,7 @@ let test_record_byte_array_padding () =
       done;
       match decode_record ba_record_codec encoded with
       | Ok decoded ->
-          (* Decoded uuid includes the zero padding *)
+          (* Decoded uuid includes the trailing zeros *)
           Alcotest.(check int) "uuid length" 16 (String.length decoded.uuid);
           Alcotest.(check string)
             "uuid prefix" "short"
@@ -1738,11 +1740,13 @@ let test_fixed_byte_region_size_of_value () =
         Alcotest.(check bytes) case (Bytes.of_string expected) buf)
       cases
   in
+  (* Every value is exactly the declared region width: a fixed byte field
+     neither pads nor truncates. *)
   let cases =
     [
-      ("short", "A", "A\x00\x00");
+      ("zeros", "A\x00\x00", "A\x00\x00");
       ("exact", "ABC", "ABC");
-      ("long", "ABCDE", "ABC");
+      ("high", "\xff\xfe\xfd", "\xff\xfe\xfd");
     ]
   in
   check_string "FixedBytes" (byte_array ~size:(int 3)) cases;
@@ -1766,6 +1770,147 @@ let test_fixed_byte_region_size_of_value () =
       Codec.encode codec slice buf 0;
       Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
     cases
+
+(* A fixed-size byte field is exact: a value whose length differs from the
+   declared size is a caller error, not something to truncate or zero-pad. *)
+let expect_exact_byte_error label ~expected ~actual f =
+  match f () with
+  | () -> Alcotest.failf "%s: expected an exact-size error" label
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (label ^ ": names the declared size")
+        true
+        (contains ~sub:(Fmt.str "expected %d bytes" expected) msg);
+      Alcotest.(check bool)
+        (label ^ ": names the value length")
+        true
+        (contains ~sub:(Fmt.str "got %d" actual) msg)
+
+let slice_of_string s =
+  let b = Bytes.of_string s in
+  Bytesrw.Bytes.Slice.make b ~first:0 ~length:(Bytes.length b)
+
+let exact_ba_codec =
+  Codec.v "ExactBa" Fun.id
+    Codec.[ Field.v "B" (byte_array ~size:(int 4)) $ Fun.id ]
+
+let exact_bs_codec =
+  Codec.v "ExactBs" Fun.id
+    Codec.[ Field.v "S" (byte_slice ~size:(int 4)) $ Fun.id ]
+
+let test_exact_byte_field_literal_size () =
+  let buf = Bytes.create 4 in
+  expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode exact_ba_codec "abcdef" buf 0);
+  expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode exact_ba_codec "ab" buf 0);
+  expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode exact_bs_codec (slice_of_string "abcdef") buf 0);
+  expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode exact_bs_codec (slice_of_string "ab") buf 0);
+  Codec.encode exact_ba_codec "abcd" buf 0;
+  Alcotest.(check string) "exact string" "abcd" (Bytes.to_string buf);
+  Codec.encode exact_bs_codec (slice_of_string "wxyz") buf 0;
+  Alcotest.(check string) "exact slice" "wxyz" (Bytes.to_string buf)
+
+(* The same contract on the variable-size encoder, where the declared size is a
+   cross-field reference rather than a literal. *)
+let exact_vb_len = Field.v "N" uint8
+
+let exact_vb_codec =
+  Codec.v "ExactVb"
+    (fun n b -> (n, b))
+    Codec.
+      [
+        exact_vb_len $ fst;
+        Field.v "B" (byte_array ~size:(Field.ref exact_vb_len)) $ snd;
+      ]
+
+let exact_vs_len = Field.v "N" uint8
+
+let exact_vs_codec =
+  Codec.v "ExactVs"
+    (fun n s -> (n, s))
+    Codec.
+      [
+        exact_vs_len $ fst;
+        Field.v "S" (byte_slice ~size:(Field.ref exact_vs_len)) $ snd;
+      ]
+
+let test_exact_byte_field_expression_size () =
+  let buf = Bytes.create 16 in
+  expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode exact_vb_codec (4, "abcdef") buf 0);
+  expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode exact_vb_codec (4, "ab") buf 0);
+  expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode exact_vs_codec (4, slice_of_string "abcdef") buf 0);
+  expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode exact_vs_codec (4, slice_of_string "ab") buf 0);
+  Codec.encode exact_vb_codec (4, "abcd") buf 0;
+  Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
+
+(* A reference-free constant size expression normalises to the literal form at
+   construction, so every [Int n] fast path and range guard in the library sees
+   it. Sizes that must stay symbolic, and arithmetic the fold cannot do
+   faithfully, are left as expressions. *)
+let byte_array_size label t =
+  let module T = Wire.Private.Types in
+  match t with
+  | T.Byte_array { size } -> size
+  | _ -> Alcotest.failf "%s: expected a byte_array" label
+
+let test_constant_size_expression_folds () =
+  let module T = Wire.Private.Types in
+  (match byte_array_size "constant" (byte_array ~size:Expr.(int 2 + int 2)) with
+  | T.Int 4 -> ()
+  | e -> Alcotest.failf "constant size did not fold: %a" T.pp_expr e);
+  (* A reference-bearing size stays symbolic: the 3D projection needs the
+     expression, not a baked-in width. *)
+  (match
+     byte_array_size "reference"
+       (byte_array ~size:Expr.(Field.ref exact_vb_len + int 1))
+   with
+  | T.Add (T.Ref _, T.Int 1) -> ()
+  | e -> Alcotest.failf "reference-bearing size was folded: %a" T.pp_expr e);
+  (* Overflowing arithmetic is left alone rather than folded to a wrong
+     value. *)
+  (match
+     byte_array_size "overflow" (byte_array ~size:Expr.(int max_int + int 1))
+   with
+  | T.Add (T.Int _, T.Int 1) -> ()
+  | e -> Alcotest.failf "overflowing size was folded: %a" T.pp_expr e);
+  (* 1. the encode contract *)
+  let codec name typ = Codec.v name Fun.id Codec.[ Field.v "B" typ $ Fun.id ] in
+  let lit = codec "FoldLiteral" (byte_array ~size:(int 4)) in
+  let folded = codec "FoldConstant" (byte_array ~size:Expr.(int 2 + int 2)) in
+  let buf = Bytes.create 4 in
+  expect_exact_byte_error "literal long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode lit "abcdef" buf 0);
+  expect_exact_byte_error "constant long" ~expected:4 ~actual:6 (fun () ->
+      Codec.encode folded "abcdef" buf 0);
+  expect_exact_byte_error "constant short" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode folded "ab" buf 0);
+  Codec.encode folded "abcd" buf 0;
+  Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
+  (* 2. is_fixed / wire_size *)
+  Alcotest.(check bool) "literal is_fixed" true (Codec.is_fixed lit);
+  Alcotest.(check bool) "constant is_fixed" true (Codec.is_fixed folded);
+  Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
+  Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
+  (* 3. the uint 1-7 range guard *)
+  let uint_rejects label size =
+    match uint size with
+    | _ -> Alcotest.failf "%s: expected uint to reject the size" label
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          (label ^ ": names the bound")
+          true
+          (contains ~sub:"size must be 1-7" msg)
+  in
+  uint_rejects "literal 0" (int 0);
+  uint_rejects "constant 0" Expr.(int 1 - int 1);
+  uint_rejects "constant 8" Expr.(int 4 + int 4)
 
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
@@ -6418,8 +6563,8 @@ let suite =
       Alcotest.test_case "record: with_multi" `Quick test_record_with_multi;
       Alcotest.test_case "record: byte_array roundtrip" `Quick
         test_record_byte_array_roundtrip;
-      Alcotest.test_case "record: byte_array padding" `Quick
-        test_record_byte_array_padding;
+      Alcotest.test_case "record: byte_array trailing zeros" `Quick
+        test_record_byte_array_trailing_zeros;
       Alcotest.test_case "array: encode cardinality" `Quick
         test_codec_array_cardinality;
       Alcotest.test_case "repeat: zeroterm element roundtrip" `Quick
@@ -6528,6 +6673,12 @@ let suite =
         test_packed_mapped_bf_size;
       Alcotest.test_case "fixed byte regions: size_of_value" `Quick
         test_fixed_byte_region_size_of_value;
+      Alcotest.test_case "exact byte field: literal size" `Quick
+        test_exact_byte_field_literal_size;
+      Alcotest.test_case "exact byte field: expression size" `Quick
+        test_exact_byte_field_expression_size;
+      Alcotest.test_case "constant size expression folds" `Quick
+        test_constant_size_expression_folds;
       (* action semantics *)
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;

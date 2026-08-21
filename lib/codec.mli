@@ -60,7 +60,8 @@ val size_of_value : 'r t -> 'r -> int
     whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
     buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
     "remaining buffer space". Fixed-size byte arrays and slices contribute their
-    declared region size, including any zero-padding or truncation. *)
+    declared region size, which {!encode} requires the value to match exactly.
+*)
 
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
@@ -280,12 +281,13 @@ val extract : bitfield -> Optint.t -> int
 (** [extract bf word] extracts the field from a pre-loaded word value. Pure
     shift+mask, no memory access. *)
 
-val blit_string_padded : int -> bytes -> int -> string -> int
-(** [blit_string_padded n buf off s] writes [s] into [buf] at [off], zero-pads
-    the trailing bytes if [String.length s < n], and returns [off + n]. Shared
-    helper for both record and top-level encoders. *)
+val blit_string_exact : int -> bytes -> int -> string -> int
+(** [blit_string_exact n buf off s] writes [s] into [buf] at [off] and returns
+    [off + n]. Raises [Invalid_argument] unless [String.length s = n]: a
+    fixed-size byte field is exact. Shared helper for both record and top-level
+    encoders. *)
 
-val blit_slice_padded : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
-(** [blit_slice_padded n buf off src] is like {!blit_string_padded} but copies
+val blit_slice_exact : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
+(** [blit_slice_exact n buf off src] is like {!blit_string_exact} but copies
     from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
     [byte_slice] fields. *)

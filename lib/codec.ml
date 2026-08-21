@@ -2,23 +2,15 @@ open Types
 module Slice = Bytesrw.Bytes.Slice
 module Param = Param
 
-(** Generic blit-with-padding into a fixed [n]-byte window. The caller supplies
-    the source length and a copy callback that writes exactly [len] bytes
-    starting at the given destination offset; this helper handles bounding by
-    [n] and zeroing the tail. *)
-let blit_padded n buf off ~src_len ~blit =
-  let len = min n src_len in
-  blit ~dst_off:off ~len;
-  if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
+let blit_string_exact n buf off v =
+  check_byte_field_size ~expected:n ~actual:(String.length v);
+  Bytes.blit_string v 0 buf off n;
   off + n
 
-let blit_string_padded n buf off v =
-  blit_padded n buf off ~src_len:(String.length v) ~blit:(fun ~dst_off ~len ->
-      Bytes.blit_string v 0 buf dst_off len)
-
-let blit_slice_padded n buf off src =
-  blit_padded n buf off ~src_len:(Slice.length src) ~blit:(fun ~dst_off ~len ->
-      Bytes.blit (Slice.bytes src) (Slice.first src) buf dst_off len)
+let blit_slice_exact n buf off src =
+  check_byte_field_size ~expected:n ~actual:(Slice.length src);
+  Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
+  off + n
 
 (* Pack a fixed-width integer setter into a [bytes -> int -> int -> int]
    field encoder that returns the offset advance. Used by the scalar cases
@@ -152,14 +144,9 @@ and build_field_encoder_ctx : type a.
   | Float64 Big -> fun _runtime -> float64_field_encoder Bytes.set_int64_be
   | Uint_var { size = Int n; endian } ->
       fun _runtime -> uint_var_field_encoder endian n
-  | Byte_array { size = Int n } -> fun _runtime -> blit_string_padded n
-  | Byte_array_where { size = Int n; _ } -> fun _runtime -> blit_string_padded n
-  | Byte_slice { size = Int n } ->
-      fun _runtime buf off v ->
-        let len = min n (Slice.length v) in
-        Bytes.blit (Slice.bytes v) (Slice.first v) buf off len;
-        if len < n then Bytes.fill buf (off + len) (n - len) '\x00';
-        off + n
+  | Byte_array { size = Int n } -> fun _runtime -> blit_string_exact n
+  | Byte_array_where { size = Int n; _ } -> fun _runtime -> blit_string_exact n
+  | Byte_slice { size = Int n } -> fun _runtime -> blit_slice_exact n
   | Where { inner; _ } -> build_field_encoder_ctx inner
   | Enum { base; _ } -> build_field_encoder_ctx base
   | Map { inner; encode; _ } ->
@@ -1601,8 +1588,8 @@ let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
       let n = String.length v in
       Bytes.blit_string v 0 buf off n;
       Bytes.set_uint8 buf (off + n) 0
-  (* Fixed-size byte spans: the field encoder blits / pads the constant width
-     and returns the advanced offset, which the repeat loop recomputes. *)
+  (* Fixed-size byte spans: the field encoder blits the constant width and
+     returns the advanced offset, which the repeat loop recomputes. *)
   | Byte_array { size = Int _ } ->
       ignore (build_field_encoder typ buf off v : int)
   | Byte_slice { size = Int _ } ->
@@ -2220,12 +2207,7 @@ let var_bytes_reader : type a.
 (* Kept at top level: as local closures they would be heap-allocated on
    every call (two allocations per variable-bytes field on each encode). *)
 let var_bytes_check_len size_fn runtime buf base ~actual =
-  let expected = size_fn runtime buf base in
-  if actual <> expected then
-    Fmt.invalid_arg
-      "Codec.encode: byte field length %d does not match expected %d \
-       (parametric size, bind via ?env)"
-      actual expected
+  check_byte_field_size ~expected:(size_fn runtime buf base) ~actual
 
 let var_bytes_write_str buf write_off s =
   let len = String.length s in
