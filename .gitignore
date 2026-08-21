@@ -12,10 +12,10 @@ c_stubs.ml
 .DS_Store
 prof.txt
 prof.trace/
-*.3d
-# Except the committed RFC-documented protocol spec (kept in sync by a runtest
-# diff against examples/net/gen_spec).
-!examples/net/Net.3d
+# Generated schemas land in _build (dune rules) or in the repo root (a
+# generator run by hand from there). Anchoring keeps a committed schema
+# elsewhere in the tree visible, such as examples/net/Net.3d.
+/*.3d
 schemas/
 AGENTS.md
 .agents/
