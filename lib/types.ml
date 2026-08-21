@@ -516,6 +516,16 @@ let exact_repeat_elements seq ~expected ~size_of values =
     Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
   sized
 
+(* A fixed-size byte field is exact. Truncating a long value or zero-padding a
+   short one would make the bytes on the wire differ from the value the caller
+   signed, hashed or length-prefixed, with nothing to signal it. *)
+let check_byte_field_size ~expected ~actual =
+  if actual <> expected then
+    Fmt.invalid_arg
+      "Wire.encode: byte field expected %d bytes, got %d (a fixed-size byte \
+       field is exact; use zeroterm_at_most for a shorter value)"
+      expected actual
+
 let check_nested_size ~at_most ~expected ~actual =
   if actual > expected then
     Fmt.invalid_arg "Wire.nested%s: region is %d bytes, value needs %d"

@@ -17,6 +17,15 @@
 
 ### Changed
 
+- **Breaking:** encoding a `byte_array`, `byte_array_where` or `byte_slice`
+  whose length differs from its declared `~size` now raises
+  `Invalid_argument`. It used to silently truncate a longer value, zero-pad a
+  shorter one, or (through the streaming writer) write the value's own length
+  and desynchronise every following field, so the bytes on the wire could
+  differ from the value a caller had signed, hashed or length-prefixed. For a
+  short value in a fixed-size region use `zeroterm_at_most`, which is
+  NUL-terminated and round-trips (@samoht)
+
 - Generated `.3d` C struct tags are now named `Wire<Name>` rather than
   `_<Name>`. Public typedef names are unchanged, and standalone entrypoints
   follow as `<Base>CheckWire<Name>` (#235, @samoht)

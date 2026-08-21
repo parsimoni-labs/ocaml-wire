@@ -663,6 +663,9 @@ let encode_codec ~encode ~fixed_size ~size_of_value v enc =
   let _ : int = encode v tmp 0 in
   write_string enc (Bytes.unsafe_to_string tmp)
 
+let check_byte_field_size size ~actual =
+  Types.check_byte_field_size ~expected:(Eval.expr Eval.empty size) ~actual
+
 (* The single encoder kernel. Writes [v] to [enc]. Top-level expressions
    are evaluated in [Eval.empty]; [Struct] is rejected (encode goes
    through [Codec.encode] for records). *)
@@ -738,8 +741,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       let expected = Eval.expr Eval.empty len in
       Types.exact_array_elements seq ~expected v
       |> List.iter (fun elem_v -> encode_into elem elem_v enc)
-  | Byte_array _ -> write_string enc v
-  | Byte_array_where { elt_var; cond; _ } ->
+  | Byte_array { size } ->
+      check_byte_field_size size ~actual:(String.length v);
+      write_string enc v
+  | Byte_array_where { size; elt_var; cond } ->
+      check_byte_field_size size ~actual:(String.length v);
       String.iteri
         (fun i c ->
           let n = Char.code c in
@@ -748,10 +754,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
               "byte_array_where: byte %d=0x%02x violates constraint" i n)
         v;
       write_string enc v
-  | Byte_slice _ ->
+  | Byte_slice { size } ->
       let src = Slice.bytes v in
       let off = Slice.first v in
       let len = Slice.length v in
+      check_byte_field_size size ~actual:len;
       write_string enc (Bytes.sub_string src off len)
   | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
@@ -890,8 +897,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       let n = String.length v in
       Bytes.blit_string v 0 buf off n;
       off + n
-  | Byte_array { size = Int n } -> Codec.blit_string_padded n buf off v
-  | Byte_slice { size = Int n } -> Codec.blit_slice_padded n buf off v
+  | Byte_array { size = Int n } -> Codec.blit_string_exact n buf off v
+  | Byte_slice { size = Int n } -> Codec.blit_slice_exact n buf off v
   | Single_elem { size = Int n; elem; at_most } ->
       let inner_sz = Types.size_of_typ_value elem v in
       Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;

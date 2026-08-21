@@ -704,8 +704,11 @@ val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string.
 
-    Encoding zero-pads a string shorter than [size] and truncates one longer
-    than [size].
+    Encoding raises [Invalid_argument] unless the string is exactly [size]
+    bytes: the field is an exact byte span, so a shorter or longer value is a
+    caller error rather than something to pad or clip. For a short value in a
+    fixed-size region use {!zeroterm_at_most}, which is NUL-terminated and
+    round-trips.
 
     When [size] contains the simple product of a field and a literal, and that
     field has a simple [field <= bound] constraint, {!Codec.v} rejects the codec
@@ -721,13 +724,14 @@ val byte_array_where :
 
     Decode raises {!exception:Parse_error} on the first byte that violates the
     constraint; encode raises [Invalid_argument]. Encoding otherwise follows
-    {!byte_array}: short strings are zero-padded and long strings are truncated.
-    The motivating shape is SSH name-list payloads (RFC 4251 sec 5), where every
-    byte must be printable US-ASCII. *)
+    {!byte_array}: the string must be exactly [size] bytes. The motivating shape
+    is SSH name-list payloads (RFC 4251 sec 5), where every byte must be
+    printable US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding zero-pads a
-    slice shorter than [size] and truncates one longer than [size]. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding raises
+    [Invalid_argument] unless the slice is exactly [size] bytes, as for
+    {!byte_array}. *)
 
 val rest_bytes : (int, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
