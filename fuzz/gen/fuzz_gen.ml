@@ -4412,7 +4412,16 @@ let check_metadata_helpers () =
     (Wire.Everparse.project ~mode:`Ffi renamed).Wire.Everparse.name;
   if Wire.Codec.doc codec <> None then
     Alcobar.failf "Codec.doc unexpectedly set";
-  let pp_value = Fmt.str "%a" (pp_value codec) (7, 1) in
+  (* [pp_value] encodes the value to read its fields back, and encode refuses a
+     record that fails its own where clause. It threads no [Param.env], so the
+     param-gated [codec] above cannot satisfy its cond here; print through the
+     same fields with no param in the clause. *)
+  let pp_codec =
+    Wire.Codec.v "ApiPp"
+      (fun src copy -> (src, copy))
+      Wire.Codec.[ f_src $ fst; f_copy $ snd ]
+  in
+  let pp_value = Fmt.str "%a" (pp_value pp_codec) (7, 1) in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
   let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in

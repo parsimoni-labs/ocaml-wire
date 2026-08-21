@@ -17,6 +17,14 @@
 
 ### Changed
 
+- **Breaking:** `Codec.encode` and `Wire.to_string` now raise
+  `Invalid_argument` on a value their own decoder rejects, instead of writing
+  bytes that fail to read back. This covers a closed `enum` given an unlisted
+  value, an `all_zeros` padding field given a non-zero byte, a
+  `byte_array_where` byte that fails its `~per_byte` refinement, and a record
+  whose `where` clause or field `~constraint_` does not hold for the values
+  supplied. Encoding a well-formed value is unchanged (@samoht)
+
 - **Breaking:** encoding a `byte_array`, `byte_array_where` or `byte_slice`
   whose length differs from its declared `~size` now raises
   `Invalid_argument`. It used to silently truncate a longer value, zero-pad a

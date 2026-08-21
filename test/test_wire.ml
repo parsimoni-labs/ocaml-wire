@@ -1014,6 +1014,59 @@ let test_exact_byte_field_writer () =
     "exact slice" "wxyz"
     (encode_chunked ~chunk_size:1 bs (slice "wxyz"))
 
+(* The typ-level encoders ([to_string], and the streaming writer behind it) must
+   refuse a value [of_string] rejects: emitting bytes this library cannot read
+   back is the divergence the EverParse-generated validator would also flag.
+   Each case pins the accepted bytes as well as the rejection. *)
+let expect_typ_encode_rejects label ~names f =
+  match f () with
+  | (_ : string) ->
+      Alcotest.failf "%s: encode accepted a value decode rejects" label
+  | exception Invalid_argument msg ->
+      List.iter
+        (fun sub ->
+          Alcotest.(check bool)
+            (Fmt.str "%s: message names %S" label sub)
+            true (contains ~sub msg))
+        names
+
+let expect_typ_decode_rejects label typ s =
+  match of_string typ s with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.failf "%s: decode accepted %S" label s
+
+let test_encode_rejects_unlisted_enum () =
+  let closed = enum "Code" [ ("A", 1); ("B", 2) ] uint8 in
+  let open_ = enum_open "Code" [ ("A", 1); ("B", 2) ] uint8 in
+  expect_typ_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
+      to_string closed 99);
+  expect_typ_decode_rejects "closed enum" closed "\099";
+  Alcotest.(check string) "listed value" "\002" (to_string closed 2);
+  (* An open enum names known codes without restricting them. *)
+  Alcotest.(check string) "open enum" "\099" (to_string open_ 99);
+  (* The streaming writer shares the kernel, so it rejects the same value. *)
+  expect_typ_encode_rejects "closed enum streamed" ~names:[ "got 99" ]
+    (fun () -> encode_chunked ~chunk_size:1 closed 99)
+
+let test_encode_rejects_non_zero_padding () =
+  expect_typ_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ]
+    (fun () -> to_string all_zeros "abc");
+  expect_typ_decode_rejects "all_zeros" all_zeros "abc";
+  Alcotest.(check string)
+    "zero padding" "\000\000"
+    (to_string all_zeros "\000\000");
+  expect_typ_encode_rejects "all_zeros streamed" ~names:[ "0x61" ] (fun () ->
+      encode_chunked ~chunk_size:1 all_zeros "abc")
+
+let test_encode_rejects_where_violation () =
+  let t = where Expr.(int 3 = int 7) uint8 in
+  expect_typ_encode_rejects "where" ~names:[ "where constraint" ] (fun () ->
+      to_string t 3);
+  expect_typ_decode_rejects "where" t "\003";
+  Alcotest.(check string)
+    "satisfied cond" "\003"
+    (to_string (where Expr.(int 7 = int 7) uint8) 3)
+
 (* -- Streaming: cross-slice boundary tests -- *)
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
@@ -1419,6 +1472,12 @@ let suite =
         test_roundtrip_byte_array;
       Alcotest.test_case "exact byte field: streaming writer" `Quick
         test_exact_byte_field_writer;
+      Alcotest.test_case "encode rejects: unlisted enum value" `Quick
+        test_encode_rejects_unlisted_enum;
+      Alcotest.test_case "encode rejects: non-zero all_zeros" `Quick
+        test_encode_rejects_non_zero_padding;
+      Alcotest.test_case "encode rejects: where violation" `Quick
+        test_encode_rejects_where_violation;
       (* streaming: cross-slice boundary *)
       Alcotest.test_case "stream: uint8 chunk=1" `Quick test_stream_uint8;
       Alcotest.test_case "stream: uint16 chunk=1" `Quick

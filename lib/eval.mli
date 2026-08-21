@@ -36,3 +36,10 @@ val expr : ctx -> 'a Types.expr -> 'a
 (** [expr ctx e] evaluates a top-level expression. Raises on [Ref] (cross-field
     references are only valid inside a struct). [Sizeof_this] and [Field_pos]
     return 0. *)
+
+val check_byte_refinement :
+  elt_var:string -> cond:bool Types.expr -> string -> unit
+(** [check_byte_refinement ~elt_var ~cond s] raises [Invalid_argument] on the
+    first byte of [s] that fails [cond], the per-byte refinement of a
+    [byte_array_where]. Encode-side counterpart of the decode check, so both
+    halves reject the same spans. *)

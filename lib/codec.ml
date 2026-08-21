@@ -12,6 +12,26 @@ let blit_slice_exact n buf off src =
   Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
   off + n
 
+(* A refinement decode enforces has to gate encode too, or the encoder emits
+   bytes its own decoder (and the EverParse validator built from the same
+   schema) rejects. One helper per refined type, so the encoder dispatch below
+   stays a flat table. *)
+let refined_bytes_encoder n ~elt_var ~cond buf off v =
+  Eval.check_byte_refinement ~elt_var ~cond v;
+  blit_string_exact n buf off v
+
+let where_field_encoder cond enc runtime buf off v =
+  Types.check_where_encode cond (Eval.expr Eval.empty cond);
+  enc runtime buf off v
+
+let enum_field_encoder ~name ~cases ~closed enc =
+  if not closed then enc
+  else
+    let valid = Types.enum_values cases in
+    fun runtime buf off v ->
+      Types.check_enum_encode ~name ~valid v;
+      enc runtime buf off v
+
 (* Pack a fixed-width integer setter into a [bytes -> int -> int -> int]
    field encoder that returns the offset advance. Used by the scalar cases
    in [build_field_encoder] / [build_field_reader]. *)
@@ -145,10 +165,13 @@ and build_field_encoder_ctx : type a.
   | Uint_var { size = Int n; endian } ->
       fun _runtime -> uint_var_field_encoder endian n
   | Byte_array { size = Int n } -> fun _runtime -> blit_string_exact n
-  | Byte_array_where { size = Int n; _ } -> fun _runtime -> blit_string_exact n
+  | Byte_array_where { size = Int n; elt_var; cond } ->
+      fun _runtime -> refined_bytes_encoder n ~elt_var ~cond
   | Byte_slice { size = Int n } -> fun _runtime -> blit_slice_exact n
-  | Where { inner; _ } -> build_field_encoder_ctx inner
-  | Enum { base; _ } -> build_field_encoder_ctx base
+  | Where { cond; inner } ->
+      where_field_encoder cond (build_field_encoder_ctx inner)
+  | Enum { name; base; cases; closed } ->
+      enum_field_encoder ~name ~cases ~closed (build_field_encoder_ctx base)
   | Map { inner; encode; _ } ->
       let enc = build_field_encoder_ctx inner in
       fun runtime buf off v -> enc runtime buf off (encode v)
@@ -217,6 +240,15 @@ let enum_checker cases =
    document known members, so decode does not reject the rest. *)
 let enum_check cases closed =
   if closed then enum_checker cases else fun ~at:_ v -> v
+
+(* Encode-side twin of [enum_check], gated on [closed] by the same rule so the
+   two halves admit exactly the same values. Encoding an unlisted value raises
+   [Invalid_argument]: it is a caller error, not malformed input. *)
+let enum_encode_check ~name ~cases ~closed =
+  if not closed then fun (_ : int) -> ()
+  else
+    let valid = Types.enum_values cases in
+    fun v -> Types.check_enum_encode ~name ~valid v
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
@@ -2237,12 +2269,16 @@ let var_bytes_writer : type a r.
       let s = (value : string) in
       var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
       var_bytes_write_str buf write_off s
-  | Byte_array_where _ ->
+  | Byte_array_where { elt_var; cond; _ } ->
       let s = (value : string) in
       var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
+      Eval.check_byte_refinement ~elt_var ~cond s;
       var_bytes_write_str buf write_off s
   | All_bytes -> var_bytes_write_str buf write_off (value : string)
-  | All_zeros -> var_bytes_write_str buf write_off (value : string)
+  | All_zeros ->
+      let s = (value : string) in
+      Types.check_all_zeros_encode s;
+      var_bytes_write_str buf write_off s
   | Zeroterm ->
       let s = (value : string) in
       if String.contains s '\000' then
@@ -2446,16 +2482,22 @@ let rec compile_field : type a r.
  fun ctx fld ->
   match fld.typ with
   | Map { inner; decode; encode; _ } -> compile_map ctx fld inner decode encode
-  | Enum { base; cases; closed; _ } ->
+  | Enum { name; base; cases; closed } ->
       (* Compile as the base integer, then validate the decoded value is one of
          the named cases. [compile_field] would otherwise strip the cases and
          accept any base value, unlike the EverParse validator. *)
       let cf = compile_field ctx { fld with typ = base } in
       let check = enum_check cases closed in
+      let get = fld.get in
+      let encode_check = enum_encode_check ~name ~cases ~closed in
       {
         cf with
         raw_reader =
           (fun runtime buf off -> check ~at:off (cf.raw_reader runtime buf off));
+        raw_writer =
+          (fun v runtime buf base write_off ->
+            encode_check (get v);
+            cf.raw_writer v runtime buf base write_off);
         populate =
           (fun arr runtime buf base ->
             cf.populate arr runtime buf base;
@@ -3421,7 +3463,41 @@ let build_size_of_value size_funcs =
     done;
     !total
 
-let build_record_encoder name writers size_of_value =
+(* Whether encode has to re-read the record it just wrote. A [Wire.where] cond
+   or a field [~constraint_] reads sibling fields, so neither can be judged from
+   one field's value in isolation -- only against the assembled bytes.
+   [struct_field] folds a typ-level [where] into the field's [constraint_], so
+   both arrive here as one predicate. A cond that is constantly true restricts
+   nothing and does not arm the pass. *)
+let is_real_cond : bool Types.expr -> bool = function
+  | Types.Bool true -> false
+  | _ -> true
+
+let has_encode_checks struct_fields where =
+  Option.fold ~none:false ~some:is_real_cond where
+  || List.exists
+       (fun (Types.Field f) ->
+         Option.fold ~none:false ~some:is_real_cond f.constraint_)
+       struct_fields
+
+(* Replay the decode-side check pass over the record encode just assembled, so a
+   cond that reads sibling fields is enforced on both halves. Field actions are
+   deliberately excluded: [populate] runs the check-only validators, so encoding
+   never fires an [~action]'s side effects. *)
+let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
+    ~compiled_where runtime buf off =
+  let arr = scratch () in
+  clear_slots arr n_total;
+  List.iteri
+    (fun i (Param.Pack p) ->
+      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name)
+    param_handles;
+  populate arr runtime buf off;
+  match compiled_where with
+  | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
+  | _ -> ()
+
+let build_record_encoder name writers size_of_value ~check =
   let n = Array.length writers in
   fun value runtime buf off ->
     let need = size_of_value value in
@@ -3433,6 +3509,15 @@ let build_record_encoder name writers size_of_value =
     for i = 0 to n - 1 do
       write_off := writers.(i) value runtime buf off !write_off
     done;
+    (match check with
+    | None -> ()
+    | Some f -> (
+        try f runtime buf off
+        with Types.Parse_error e ->
+          Fmt.invalid_arg
+            "Codec.encode %s: the encoded record is rejected by its own \
+             constraints (%a)"
+            name Types.pp_parse_error e));
     !write_off
 
 let seal : type r. (r, r) record -> r t =
@@ -3463,6 +3548,14 @@ let seal : type r. (r, r) record -> r t =
     build_validators validators (List.rev r.checkers_rev) compiled_where
       struct_fields r.param_slots n_total
   in
+  let scratch = domain_local_slots n_total in
+  let encode_check =
+    if not (has_encode_checks struct_fields r.where) then None
+    else
+      Some
+        (encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
+           ~compiled_where)
+  in
   (* Per-field action runners *)
   let field_actions = List.rev r.field_actions_rev in
   let size_funcs = Array.of_list (List.rev r.size_of_value_rev) in
@@ -3475,7 +3568,8 @@ let seal : type r. (r, r) record -> r t =
     field_readers = List.rev r.field_readers;
     field_actions;
     decode = build_checked_decode raw_decode wire_size_info min_size;
-    encode = build_record_encoder r.name writers size_of_value;
+    encode =
+      build_record_encoder r.name writers size_of_value ~check:encode_check;
     wire_size = wire_size_info;
     struct_fields;
     validate =
@@ -3484,7 +3578,7 @@ let seal : type r. (r, r) record -> r t =
     validate_arr;
     populate;
     n_array_slots = n_total;
-    decode_scratch = domain_local_slots n_total;
+    decode_scratch = scratch;
     param_base;
     n_params;
     param_handles;

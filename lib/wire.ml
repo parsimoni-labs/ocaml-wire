@@ -716,7 +716,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
             (Int32.shift_left (Int32.of_int (v land mask)) shift))
   | Unit -> ()
   | All_bytes -> write_string enc v
-  | All_zeros -> write_string enc v
+  | All_zeros ->
+      Types.check_all_zeros_encode v;
+      write_string enc v
   | Zeroterm ->
       if String.contains v '\000' then
         invalid_arg "Wire.encode: zeroterm string contains a NUL byte";
@@ -736,7 +738,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       for _ = len to n - 1 do
         write_byte enc 0
       done
-  | Where { inner; _ } -> encode_into inner v enc
+  | Where { cond; inner } ->
+      Types.check_where_encode cond (Eval.expr Eval.empty cond);
+      encode_into inner v enc
   | Array { len; elem; seq } ->
       let expected = Eval.expr Eval.empty len in
       Types.exact_array_elements seq ~expected v
@@ -746,13 +750,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       write_string enc v
   | Byte_array_where { size; elt_var; cond } ->
       check_byte_field_size size ~actual:(String.length v);
-      String.iteri
-        (fun i c ->
-          let n = Char.code c in
-          if not (Eval.expr (Eval.bind elt_var n Eval.empty) cond) then
-            Fmt.invalid_arg
-              "byte_array_where: byte %d=0x%02x violates constraint" i n)
-        v;
+      Eval.check_byte_refinement ~elt_var ~cond v;
       write_string enc v
   | Byte_slice { size } ->
       let src = Slice.bytes v in
@@ -768,7 +766,10 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       for _ = inner_sz to n - 1 do
         write_byte enc 0
       done
-  | Enum { base; _ } -> encode_into base v enc
+  | Enum { name; base; cases; closed } ->
+      if closed then
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+      encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
       encode_codec
@@ -894,6 +895,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       Bytes.blit_string v 0 buf off n;
       off + n
   | All_zeros ->
+      Types.check_all_zeros_encode v;
       let n = String.length v in
       Bytes.blit_string v 0 buf off n;
       off + n
@@ -906,8 +908,13 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
       off + n
   | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
-  | Where { inner; _ } -> encode_direct inner buf off v
-  | Enum { base; _ } -> encode_direct base buf off v
+  | Where { cond; inner } ->
+      Types.check_where_encode cond (Eval.expr Eval.empty cond);
+      encode_direct inner buf off v
+  | Enum { name; base; cases; closed } ->
+      if closed then
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+      encode_direct base buf off v
   | Codec { codec_encode; _ } -> codec_encode v Types.unbound_eval_ctx buf off
   | _ -> encode_via_writer typ buf off v
 
