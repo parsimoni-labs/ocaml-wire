@@ -120,8 +120,10 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Zeroterm ->
       true
   (* [Unit] is 0-width: a byte-budget list of it carries no bytes and projects to
-     a zero-size element EverParse refuses to extract, like the [array] case. *)
-  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
+     a zero-size element EverParse refuses to extract, like the [array] case. A
+     byte span whose declared size is a literal zero (or less) is 0-width for
+     the same reason, so admit only a positive one. *)
+  | Byte_array { size = Int n } | Byte_slice { size = Int n } -> n > 0
   | Codec { codec_struct; _ } ->
       (not (codec_ends_greedy codec_struct)) && Types.struct_nz codec_struct
   | Casetype { cases; _ } ->
@@ -137,8 +139,8 @@ let reject_unprojectable_repeat ~combinator typ =
   if not (is_repeat_element typ) then
     Fmt.invalid_arg
       "Wire.%s: element type does not project to 3D as a repeat element -- the \
-       byte-budget loop only supports fixed-width scalars and byte spans, \
-       NUL-terminated strings, sub-codecs, and casetypes."
+       byte-budget loop only supports fixed-width scalars, byte spans of at \
+       least one byte, NUL-terminated strings, sub-codecs, and casetypes."
       combinator
 
 let repeat name ?constraint_ ?self_constraint ?self_int64 ?action ~size typ =

@@ -392,6 +392,13 @@ and parse_repeat_loop : type elt seq.
     if off' = region_end then (s.finish acc, off')
     else
       let v, off'' = parse_direct elem buf off' region_end in
+      (* An element that consumes nothing never moves the cursor to
+         [region_end], so the byte-budget loop would spin. A literal zero-size
+         span is refused by [Field.repeat], but a [uint ~size] whose size
+         expression evaluates to zero is only detectable here, so report the
+         same eof [Codec.decode]'s compiled repeat reports for it. *)
+      if off'' <= off' then
+        raise_eof ~at:off' ~expected:(off'' - off') ~got:(region_end - off');
       loop (s.add acc v) off''
   in
   loop s.empty off
