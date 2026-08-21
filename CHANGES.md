@@ -34,6 +34,12 @@
 
 ### Fixed
 
+- `Wire.Everparse.write ~mode:`Standalone` now fails with a clear error when
+  two codecs of a family declare different types under the same name, instead
+  of silently emitting the first and generating verified C that enforces the
+  wrong specification for every other codec. Types declared identically by
+  several codecs still collapse to a single emitted declaration (#255, @samoht)
+
 - Parameter-free fixed-offset `Codec.get` and `Codec.set` accessors no longer
   add per-call allocation: direct scalars represented as immediate OCaml
   values, bitfields, enums, and maps whose callbacks return immediate values
