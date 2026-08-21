@@ -2,6 +2,12 @@
 
 ### Added
 
+- The fuzz suite now feeds hostile values to `Codec.encode`, not only hostile
+  bytes to `Codec.decode`. Every generated value must either be refused with
+  `Invalid_argument` or encode to bytes that decode back unchanged, so an
+  encoder that emits a frame its own decoder rejects fails the suite (#263,
+  @samoht)
+
 - `Field.optional` over a sub-codec now documents how to make a whole field
   group conditional, keeping the group's byte-length prefix and dependent
   `Field.repeat` local to the group while later fields stay in the parent
@@ -23,7 +29,7 @@
   value, an `all_zeros` padding field given a non-zero byte, a
   `byte_array_where` byte that fails its `~per_byte` refinement, and a record
   whose `where` clause or field `~constraint_` does not hold for the values
-  supplied. Encoding a well-formed value is unchanged (@samoht)
+  supplied. Encoding a well-formed value is unchanged (#263, @samoht)
 
 - **Breaking:** encoding a `byte_array`, `byte_array_where` or `byte_slice`
   whose length differs from its declared `~size` now raises
