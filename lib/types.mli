@@ -7,18 +7,16 @@ val equal_endian : endian -> endian -> bool
 (** [equal_endian a b] is [true] when [a] and [b] are the same byte order. *)
 
 type eval_ctx
-(** Explicit runtime context for buffer and parameter expression evaluation.
-    Internal to the direct and compiled interpreters. *)
+(** Parameter bindings for expression evaluation. Internal to the direct and
+    compiled interpreters. The buffer is not part of the context: it travels as
+    its own argument so that {!unbound_eval_ctx} is a constant, and a
+    parameter-free encode or decode allocates no context. *)
 
-val empty_eval_ctx : bytes -> eval_ctx
-(** A runtime context with no parameter bindings. *)
+val unbound_eval_ctx : eval_ctx
+(** The context with no parameter bindings. Internal use. *)
 
-val eval_ctx :
-  ?set_param:(string -> int -> unit) -> bytes -> (string -> int) -> eval_ctx
-(** A runtime context with explicit parameter lookup. Internal use. *)
-
-val eval_bytes : eval_ctx -> bytes
-(** The context's input/output buffer. Internal use. *)
+val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
+(** A context with explicit parameter lookup. Internal use. *)
 
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
@@ -260,14 +258,14 @@ and _ typ =
       (** Parameterised type application. *)
   | Codec : {
       codec_name : string;
-      codec_decode : eval_ctx -> int -> 'r;
-      codec_encode : 'r -> eval_ctx -> int -> int;
+      codec_decode : eval_ctx -> bytes -> int -> 'r;
+      codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
-      codec_size_of : eval_ctx -> int -> int;
+      codec_size_of : eval_ctx -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
               than by re-reading the buffer. *)
-      codec_field_readers : (string * (eval_ctx -> int -> int)) list;
+      codec_field_readers : (string * (eval_ctx -> bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
     }

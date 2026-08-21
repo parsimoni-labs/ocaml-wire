@@ -2,10 +2,3 @@
 [[rules]]
 files = "examples/net/net.ml"
 exclude = ["E350"]
-
-# A parameter-free evaluation context is represented directly by its bytes
-# block so the explicit context does not regress allocation-free codec paths.
-# The unsafe representation is confined to this module and hidden by its mli.
-[[rules]]
-files = "lib/types.ml"
-exclude = ["E100"]
