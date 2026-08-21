@@ -787,12 +787,11 @@ let array_seq seq ~len elem =
   Array { len = fold_size len; elem; seq }
 
 let byte_array ~size = Byte_array { size = fold_size size }
-let byte_array_where_counter = Stdlib.ref 0
+let byte_array_where_counter = Atomic.make 0
 let elt_var_prefix = "__elt_"
 
 let byte_array_where ~size ~per_byte =
-  let n = !byte_array_where_counter in
-  Stdlib.incr byte_array_where_counter;
+  let n = Atomic.fetch_and_add byte_array_where_counter 1 in
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
   Byte_array_where { size = fold_size size; elt_var; cond }
