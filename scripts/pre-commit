@@ -16,10 +16,14 @@ then
   exit 1
 fi
 
-git diff --cached --name-only --diff-filter=ACM -z -- \
-  '*.ml' '*.mli' '*.mll' '*.mly' \
-  | xargs -0 merlint --no-build >/tmp/git-merlint-hook.log 2>&1 \
-  || {
-    echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
-    exit 1
-  }
+# merlint is optional tooling: skip the lint rather than block the commit when
+# it is not installed.
+if command -v merlint >/dev/null 2>&1; then
+  git diff --cached --name-only --diff-filter=ACM -z -- \
+    '*.ml' '*.mli' '*.mll' '*.mly' \
+    | xargs -0 merlint >/tmp/git-merlint-hook.log 2>&1 \
+    || {
+      echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
+      exit 1
+    }
+fi
