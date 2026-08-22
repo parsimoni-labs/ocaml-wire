@@ -1011,8 +1011,7 @@ let test_validate_overrun_field_offset () =
    wrapper around validate, which reports a garbage location; the offset is
    what shows a real per-field guard ran, at the field that overran. *)
 let check_located_eof name ~at ~expected ~got = function
-  | Ok () ->
-      Alcotest.failf "%s: accepted a record whose field runs off the end" name
+  | Ok () -> Alcotest.failf "%s: accepted a buffer its own decoder rejects" name
   | Error (e : parse_error) -> (
       Alcotest.(check int) (name ^ ": offset of the failing field") at e.at;
       match e.kind with
@@ -1158,6 +1157,78 @@ let test_validate_uint_var_past_end () =
   check_located_eof "validate" ~at:1 ~expected:8 ~got:3
     (validating "validate" (fun () ->
          Codec.validate validate_uint_var_codec buf 0))
+
+(* A [Field.repeat] consumes its byte budget exactly, so an 11-byte budget over
+   a 2-byte element is illegal however long the buffer is (here 64 bytes): the
+   budget does not split into whole elements. EverParse rejects the same frame
+   from the same schema, with a dedicated "list size not multiple" error, and so
+   does [Codec.decode]. [Codec.validate] used to accept it: it reaches a field
+   only through that field's populate, and the repeat had none. Bytes are the
+   fuzz sample verbatim ([fuzz.exe -s 32582623701 -r 7500]). *)
+let repeat_odd_budget =
+  "\x00\x0b\x1a\x15\x11\x9d\x47\x90\x0d\xcf\xbd\xa9\x80\xf5\x21\x27\x44\xad\x4d\xa6\xc1\xde\xd7\xf6\x1a\x42\x1a\x51\x9d\x9d\x57\x5c\x2c\x8c\x75\xa1\xba\xfb\xaf\xe3\xd7\xaa\x2b\x1d\x90\xfb\xce\x47\xf9\xa4\x4e\x46\xbe\x2a\xa1\xbb\x18\xfc\x72\xe2\x8e\x47\xf9\x41"
+
+let repeat_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        (Field.repeat "items" ~size:(Field.ref f_total) uint16be $ fun xs -> xs);
+      ]
+
+(* [repeat_seq] builds the same [Repeat] node with a different sequence builder,
+   so it shares the populate and the budget check; pinned here so a future split
+   of the two paths cannot fix one and leave the other. *)
+let repeat_seq_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepSeqBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        ( Field.repeat_seq "items" ~seq:seq_list ~size:(Field.ref f_total)
+            uint16be
+        $ fun xs -> xs );
+      ]
+
+let test_validate_repeat_partial_element () =
+  let buf = Bytes.of_string repeat_odd_budget in
+  let rejects name codec =
+    (* The budget runs from offset 2 to 13 and leaves one byte at 12, where a
+       2-byte element needs two. Both sides must report that same spot: a fix
+       that made them agree on accepting would pass a bare "they agree" check. *)
+    check_located_eof (name ^ " validate") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " validate") (fun () -> Codec.validate codec buf 0));
+    check_located_eof (name ^ " decode") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " decode") (fun () ->
+           match Codec.decode codec buf 0 with
+           | Ok _ -> ()
+           | Error e -> raise (Wire.Parse_error e)))
+  in
+  rejects "repeat" repeat_budget_codec;
+  rejects "repeat_seq" repeat_seq_budget_codec;
+  (* A budget that does split stays accepted on both sides: what is rejected is
+     the partial element, not every repeat. *)
+  let whole =
+    Bytes.of_string ("\x00\x0a" ^ String.sub repeat_odd_budget 2 10)
+  in
+  let accepts name codec =
+    (match Codec.validate codec whole 0 with
+    | () -> ()
+    | exception Wire.Parse_error e ->
+        Alcotest.failf "%s: validate rejected a whole budget: %a" name
+          Wire.pp_parse_error e);
+    match Codec.decode codec whole 0 with
+    | Ok xs ->
+        Alcotest.(check int) (name ^ ": elements decoded") 5 (List.length xs)
+    | Error e ->
+        Alcotest.failf "%s: decode rejected a whole budget: %a" name
+          Wire.pp_parse_error e
+  in
+  accepts "repeat" repeat_budget_codec;
+  accepts "repeat_seq" repeat_seq_budget_codec
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -7723,6 +7794,8 @@ let suite =
         `Quick test_validate_present_optional_or_past_end;
       Alcotest.test_case "validate: runtime-width uint past end fails cleanly"
         `Quick test_validate_uint_var_past_end;
+      Alcotest.test_case "validate: repeat budget with a partial element" `Quick
+        test_validate_repeat_partial_element;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick

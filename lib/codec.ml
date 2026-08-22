@@ -2205,7 +2205,10 @@ let compile_repeat : type elt seq r.
     int_reader = null_int_reader;
     nested_readers = [];
     validator_off;
-    populate = no_populate;
+    (* [Codec.validate] reaches a repeat only through its populate, and the
+       budget checks live in [repeat_raw_reader]. Run the reader for effect,
+       as [build_populate] already does for an [array]. *)
+    populate = build_populate fld.typ ctx.n_fields raw_reader;
   }
 
 (* The span [first, first + sz) must lie inside [buf]. Both ends derive from
@@ -2830,7 +2833,11 @@ let rec field_reader_validates : type a. a Types.typ -> bool = function
   | Types.Optional_or { inner; _ } -> field_reader_validates inner
   | Types.Single_elem { elem; _ } -> field_reader_validates elem
   | Types.Array { elem; _ } -> field_reader_validates elem
-  | Types.Repeat { elem; _ } -> field_reader_validates elem
+  (* A [repeat] checks its own byte budget whatever the element does: the
+     budget must fit the buffer and split into whole elements. The record's
+     bounds check covers the span but not the split, so this cannot recurse
+     into [elem]. *)
+  | Types.Repeat _ -> true
   | _ -> true
 
 (* Prepend [name] to the field path of a parse error escaping [f], so a failure
