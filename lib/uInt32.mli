@@ -16,12 +16,18 @@ val le : bytes -> int -> t
 val be : bytes -> int -> t
 (** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
 
+val check_encode : t -> unit
+(** [check_encode v] raises [Invalid_argument] when [v] is not an unsigned
+    32-bit value. Only reachable where the native [int] is wider than the field,
+    which is the only place a {!type-t} can hold a number 32 bits cannot. *)
+
 val set_le : bytes -> int -> t -> unit
 (** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
-*)
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
 
 val set_be : bytes -> int -> t -> unit
-(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off]. *)
+(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off].
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
 
 val mask32 : int
 (** The low-32-bit mask, [0xFFFF_FFFF] where the native [int] is wide and the
@@ -41,4 +47,7 @@ val to_int32 : t -> int32
     platform). *)
 
 val of_int32 : int32 -> t
-(** [of_int32 n] is the [int32] bit pattern as a 32-bit value. *)
+(** [of_int32 n] is the [int32] bit pattern as a 32-bit value: the same value
+    {!le} and {!be} decode those four bytes to, on every platform. Prefer it to
+    [Optint.of_int32], which keeps the signed view and so yields a negative
+    number for a word with bit 31 set where [Optint.t] is a wide native int. *)

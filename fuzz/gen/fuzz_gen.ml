@@ -111,6 +111,48 @@ let unlisted_enum_gen ~mask valid =
   in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> step (n land mask) 0)
 
+(* A value with bits set above [width], for any unsigned [width]-bit field:
+   [uint8], [uint16] and [bits ~width] alike. Only the low [width] bits reach
+   the wire, and the masked remainder is itself a legal field value, so encode
+   has to refuse rather than truncate. *)
+let above_bit_width width =
+  let mask = (1 lsl width) - 1 in
+  Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
+
+(* The signed counterpart, drawn from both ends: a signed [width]-bit field
+   holds [-2^(width-1) .. 2^(width-1) - 1], so 200 into an [int8] is as
+   unrepresentable as -200 even though its low byte is a legal one. *)
+let outside_signed_width width =
+  let limit = 1 lsl (width - 1) in
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n ->
+      let over = (n land (limit - 1)) + limit in
+      if n < 0 then -over - 1 else over)
+
+(* The [uint ~size] counterpart: a value needing more than [size] bytes. *)
+let above_byte_width size =
+  let max_v = (1 lsl (size * 8)) - 1 in
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Wire.Private.UInt63.of_int (n land max_v lor (max_v + 1)))
+
+(* [uint32] is carried in an [Optint.t], which on a wide-int host holds numbers
+   32 bits cannot. *)
+let above_uint32 =
+  let mask = Wire.Private.UInt32.mask32 in
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Optint.of_int (n land mask lor (mask + 1)))
+
+(* [uint63] fills its carrier, so the only unrepresentable value left is a
+   negative one: [chunk] would drop its sign bit and leave a legal positive
+   number on the wire. *)
+let below_zero_uint63 =
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Optint.Int63.of_int (-(n land max_int) - 1))
+
 (* A byte string of one of the lengths around [n], for a byte span whose
    declared size is [n]: only the exact length may encode. *)
 let byte_lengths_around n =
@@ -161,21 +203,33 @@ let enum_like ~typ ~value_gen ~random ~adversarial =
 
 (* {1 Leaves} *)
 
-let scalar_int typ size value_gen boundaries =
-  leaf ~equal:Int.equal ~typ ~value_gen ~random:(bytes_fixed size)
-    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+let scalar_int ?hostile typ size value_gen boundaries =
+  let g =
+    leaf ~equal:Int.equal ~typ ~value_gen ~random:(bytes_fixed size)
+      ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+  in
+  { g with adversarial_value = hostile }
 
+(* [uint64] and [int64] are carried in an [int64], which is exactly the eight
+   bytes written: every value of it is in range, so there is no hostile value to
+   draw and no guard for one to exercise. *)
 let scalar_int64 typ size value_gen boundaries =
   leaf ~equal:Int64.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
-let scalar_optint typ size value_gen boundaries =
-  leaf ~equal:Optint.equal ~typ ~value_gen ~random:(bytes_fixed size)
-    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+let scalar_optint ~hostile typ size value_gen boundaries =
+  let g =
+    leaf ~equal:Optint.equal ~typ ~value_gen ~random:(bytes_fixed size)
+      ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+  in
+  { g with adversarial_value = Some hostile }
 
-let scalar_optint63 typ size value_gen boundaries =
-  leaf ~equal:Optint.Int63.equal ~typ ~value_gen ~random:(bytes_fixed size)
-    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+let scalar_optint63 ~hostile typ size value_gen boundaries =
+  let g =
+    leaf ~equal:Optint.Int63.equal ~typ ~value_gen ~random:(bytes_fixed size)
+      ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+  in
+  { g with adversarial_value = Some hostile }
 
 let u8_boundaries = [ 0; 1; 0x7F; 0x80; 0xFE; 0xFF ]
 let u16_boundaries = [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
@@ -192,11 +246,23 @@ let u64_boundaries_i64 =
 
 let s8_boundaries = [ -128; -1; 0; 1; 127 ]
 let s16_boundaries = [ -0x8000; -1; 0; 1; 0x7FFF ]
-let s32_boundaries = [ Int.min_int; -1; 0; 1; Int.max_int ]
+
+let s32_boundaries =
+  [ Int32.to_int Int32.min_int; -1; 0; 1; Int32.to_int Int32.max_int ]
+
 let s64_boundaries_i64 = Int64.[ min_int; -1L; zero; one; max_int ]
-let uint8 = scalar_int Wire.uint8 1 Alcobar.uint8 u8_boundaries
-let uint16 = scalar_int Wire.uint16 2 Alcobar.uint16 u16_boundaries
-let uint16be = scalar_int Wire.uint16be 2 Alcobar.uint16 u16_boundaries
+
+let uint8 =
+  scalar_int ~hostile:(above_bit_width 8) Wire.uint8 1 Alcobar.uint8
+    u8_boundaries
+
+let uint16 =
+  scalar_int ~hostile:(above_bit_width 16) Wire.uint16 2 Alcobar.uint16
+    u16_boundaries
+
+let uint16be =
+  scalar_int ~hostile:(above_bit_width 16) Wire.uint16be 2 Alcobar.uint16
+    u16_boundaries
 
 let masked_u32 =
   Alcobar.map
@@ -208,24 +274,43 @@ let masked_u63 =
     Alcobar.[ Alcobar.int ]
     (fun n -> Optint.Int63.of_int (n land max_int))
 
-let uint32 = scalar_optint Wire.uint32 4 masked_u32 u32_boundaries
-let uint32be = scalar_optint Wire.uint32be 4 masked_u32 u32_boundaries
-let uint63 = scalar_optint63 Wire.uint63 8 masked_u63 u63_boundaries
-let uint63be = scalar_optint63 Wire.uint63be 8 masked_u63 u63_boundaries
+let uint32 =
+  scalar_optint ~hostile:above_uint32 Wire.uint32 4 masked_u32 u32_boundaries
+
+let uint32be =
+  scalar_optint ~hostile:above_uint32 Wire.uint32be 4 masked_u32 u32_boundaries
+
+let uint63 =
+  scalar_optint63 ~hostile:below_zero_uint63 Wire.uint63 8 masked_u63
+    u63_boundaries
+
+let uint63be =
+  scalar_optint63 ~hostile:below_zero_uint63 Wire.uint63be 8 masked_u63
+    u63_boundaries
+
 let uint64 = scalar_int64 Wire.uint64 8 Alcobar.int64 u64_boundaries_i64
 let uint64be = scalar_int64 Wire.uint64be 8 Alcobar.int64 u64_boundaries_i64
-let int8 = scalar_int Wire.int8 1 Alcobar.int8 s8_boundaries
-let int16 = scalar_int Wire.int16 2 Alcobar.int16 s16_boundaries
-let int16be = scalar_int Wire.int16be 2 Alcobar.int16 s16_boundaries
+
+let int8 =
+  scalar_int ~hostile:(outside_signed_width 8) Wire.int8 1 Alcobar.int8
+    s8_boundaries
+
+let int16 =
+  scalar_int ~hostile:(outside_signed_width 16) Wire.int16 2 Alcobar.int16
+    s16_boundaries
+
+let int16be =
+  scalar_int ~hostile:(outside_signed_width 16) Wire.int16be 2 Alcobar.int16
+    s16_boundaries
+
+let int32_value_gen = Alcobar.map Alcobar.[ Alcobar.int32 ] Int32.to_int
 
 let int32 =
-  scalar_int Wire.int32 4
-    (Alcobar.map Alcobar.[ Alcobar.int32 ] Int32.to_int)
+  scalar_int ~hostile:(outside_signed_width 32) Wire.int32 4 int32_value_gen
     s32_boundaries
 
 let int32be =
-  scalar_int Wire.int32be 4
-    (Alcobar.map Alcobar.[ Alcobar.int32 ] Int32.to_int)
+  scalar_int ~hostile:(outside_signed_width 32) Wire.int32be 4 int32_value_gen
     s32_boundaries
 
 let int64 = scalar_int64 Wire.int64 8 Alcobar.int64 s64_boundaries_i64
@@ -590,7 +675,12 @@ let map ~decode ~encode inner =
     adversarial = inner.adversarial;
     equal = (fun a b -> inner.equal (encode a) (encode b));
     env = None;
-    adversarial_value = None;
+    (* [map] adds no encode path of its own, it hands the mapped value to the
+       inner typ, so a value the inner typ refuses must still be refused here. *)
+    adversarial_value =
+      Option.map
+        (fun g -> Alcobar.map Alcobar.[ g ] decode)
+        inner.adversarial_value;
   }
 
 let uint_var ~endian size =
@@ -622,7 +712,7 @@ let uint_var ~endian size =
     adversarial;
     equal = ( = );
     env = None;
-    adversarial_value = None;
+    adversarial_value = Some (above_byte_width size);
   }
 
 let exact_cases ~typ ~equal cases =
@@ -1421,7 +1511,9 @@ let where inner =
     adversarial = inner.adversarial;
     equal = inner.equal;
     env = None;
-    adversarial_value = None;
+    (* The cond is [true_], so [where] narrows nothing: whatever the inner typ
+       refuses it must still refuse through the wrapper. *)
+    adversarial_value = inner.adversarial_value;
   }
 
 let bits ?bit_order ~width base =
@@ -1432,7 +1524,7 @@ let bits ?bit_order ~width base =
   let mask = (1 lsl width) - 1 in
   let value_gen = Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask) in
   let boundaries = [ 0; 1; mask; mask - 1; mask lsr 1 ] in
-  scalar_int typ base_size value_gen boundaries
+  scalar_int ~hostile:(above_bit_width width) typ base_size value_gen boundaries
 
 let bitfield_total = function
   | Wire.U8 -> 8

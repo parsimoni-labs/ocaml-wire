@@ -9,9 +9,10 @@
       allocates the record value.
 
     - {!get} / {!set} provide zero-copy field access. {!get} fires the field's
-      [~action] (if any), so output parameters are updated. It does {b not}
-      check record-level [~where] clauses or other fields' [~constraint_]
-      checks. Fields without actions have zero overhead.
+      [~action] (if any), so output parameters are updated. Neither checks
+      record-level [~where] clauses or other fields' [~constraint_] checks;
+      {!set} does refuse a value its own field cannot represent. Fields without
+      actions have zero overhead.
 
     - {!validate} checks all field [~constraint_] checks and [~where] clauses
       without constructing a record and without firing actions. Use it before a
@@ -155,9 +156,20 @@ val get :
     other fields' constraints -- call {!validate} first on untrusted input. *)
 
 val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter. Does not check constraints or fire actions --
-    call {!validate} after a batch of writes to verify constraints still hold.
-*)
+(** Staged zero-copy field setter.
+
+    Raises [Invalid_argument], leaving the buffer untouched, on a value the
+    field cannot represent: a byte string whose length differs from the declared
+    size, an integer outside the range of its width (fixed or [bits ~width] or
+    [uint ~size] alike), or a byte a [byte_array_where] refinement rejects. Each
+    of those would otherwise put different bytes on the wire than the caller
+    asked for, and a masked integer is indistinguishable from a value meant that
+    way.
+
+    Does not check what the surrounding record permits -- record-level [~where]
+    clauses, other fields' [~constraint_] checks, [enum] membership -- and does
+    not fire actions. Call {!validate} after a batch of writes to verify those
+    still hold. *)
 
 val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 (** [zeroterm_nul_pos buf ~first ~limit] is the index of the first NUL byte in

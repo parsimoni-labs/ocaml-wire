@@ -1827,6 +1827,75 @@ let check_zeroterm_region ~region ~len =
       "Wire.encode: zeroterm string needs %d bytes but region is %d" (len + 1)
       region
 
+(* A field of [bits] bits owns exactly those bits, whether it was declared as a
+   fixed-width scalar or as a [bits ~width] slice of one: both are carried in an
+   OCaml [int], which holds far more than the field does. Masking a wider value
+   is the one truncation nothing downstream can catch, because the masked result
+   is itself a legal field value that decode, [validate] and the EverParse
+   validator all accept, and the number the caller meant is gone without trace.
+   So each width accepts exactly what its decoder produces -- [0, 2^bits - 1]
+   unsigned, [-2^(bits-1), 2^(bits-1) - 1] signed -- and encode stays inverse to
+   decode.
+
+   Where the native [int] is no wider than the field (a 32-bit field under
+   js_of_ocaml, anything from 31 bits up under wasm_of_ocaml) no [int] is out of
+   range, so the guard narrows to what is still checkable there rather than
+   rejecting a value the target can represent.
+
+   The wider carriers guard themselves, next to the representation that decides
+   what fits: {!UInt32.check_encode} and {!UInt63.check_encode}. [uint64] and
+   [int64] have no guard, because an [int64] is exactly the eight bytes written
+   and no value of it is out of range. *)
+let check_unsigned_encode ~bits v =
+  let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
+  if out_of_range then
+    Fmt.invalid_arg
+      "Wire.encode: value %d does not fit an unsigned %d-bit field" v bits
+
+let check_signed_encode ~bits v =
+  if bits < Sys.int_size then begin
+    let limit = 1 lsl (bits - 1) in
+    if v < -limit || v >= limit then
+      Fmt.invalid_arg "Wire.encode: value %d does not fit a signed %d-bit field"
+        v bits
+  end
+
+(* The range-checking counterparts of [Bytes.set_*]: every wire encode path
+   writes a fixed-width scalar through one of these, because the [Bytes]
+   primitives mask instead ([Bytes.set_uint8 b 0 0x1FF] writes 0xFF). *)
+
+let set_uint8 buf off v =
+  check_unsigned_encode ~bits:8 v;
+  Bytes.set_uint8 buf off v
+
+let set_uint16_le buf off v =
+  check_unsigned_encode ~bits:16 v;
+  Bytes.set_uint16_le buf off v
+
+let set_uint16_be buf off v =
+  check_unsigned_encode ~bits:16 v;
+  Bytes.set_uint16_be buf off v
+
+let set_int8 buf off v =
+  check_signed_encode ~bits:8 v;
+  Bytes.set_int8 buf off v
+
+let set_int16_le buf off v =
+  check_signed_encode ~bits:16 v;
+  Bytes.set_int16_le buf off v
+
+let set_int16_be buf off v =
+  check_signed_encode ~bits:16 v;
+  Bytes.set_int16_be buf off v
+
+let set_int32_le buf off v =
+  check_signed_encode ~bits:32 v;
+  Bytes.set_int32_le buf off (Int32.of_int v)
+
+let set_int32_be buf off v =
+  check_signed_encode ~bits:32 v;
+  Bytes.set_int32_be buf off (Int32.of_int v)
+
 (* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
    field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
    binds a name to a pure expression, so we lower it by substituting

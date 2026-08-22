@@ -84,9 +84,7 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   let total = Bitfield.total_bits base in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
   let mask = (1 lsl width) - 1 in
-  if v land lnot mask <> 0 then
-    Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" v
-      width;
+  Types.check_unsigned_encode ~bits:width v;
   (match base with
   | U32 Little when not Bitfield.int_holds_u32 ->
       Bitfield.u32_field_word_le buf off shift v
@@ -137,15 +135,15 @@ and build_field_encoder_ctx : type a.
   match typ with
   | Uint8 ->
       fun _runtime buf off v ->
-        Bytes.set_uint8 buf off v;
+        Types.set_uint8 buf off v;
         off + 1
   | Uint16 Little ->
       fun _runtime buf off v ->
-        Bytes.set_uint16_le buf off v;
+        Types.set_uint16_le buf off v;
         off + 2
   | Uint16 Big ->
       fun _runtime buf off v ->
-        Bytes.set_uint16_be buf off v;
+        Types.set_uint16_be buf off v;
         off + 2
   | Uint32 Little ->
       fun _runtime buf off v ->
@@ -171,20 +169,11 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v ->
         Bytes.set_int64_be buf off v;
         off + 8
-  | Int8 -> fun _runtime -> setter_off 1 Bytes.set_int8
-  | Int16 Little -> fun _runtime -> setter_off 2 Bytes.set_int16_le
-  | Int16 Big -> fun _runtime -> setter_off 2 Bytes.set_int16_be
-  (* Keep the conversion and primitive call visible together. Passing the
-     setter through [setter_off_int32] boxes the temporary [int32] on every
-     staged write when Flambda is disabled. *)
-  | Int32 Little ->
-      fun _runtime buf off v ->
-        Bytes.set_int32_le buf off (Int32.of_int v);
-        off + 4
-  | Int32 Big ->
-      fun _runtime buf off v ->
-        Bytes.set_int32_be buf off (Int32.of_int v);
-        off + 4
+  | Int8 -> fun _runtime -> setter_off 1 Types.set_int8
+  | Int16 Little -> fun _runtime -> setter_off 2 Types.set_int16_le
+  | Int16 Big -> fun _runtime -> setter_off 2 Types.set_int16_be
+  | Int32 Little -> fun _runtime -> setter_off 4 Types.set_int32_le
+  | Int32 Big -> fun _runtime -> setter_off 4 Types.set_int32_be
   | Int64 Little -> fun _runtime -> setter_off 8 Bytes.set_int64_le
   | Int64 Big -> fun _runtime -> setter_off 8 Bytes.set_int64_be
   | Float32 Little -> fun _runtime -> float32_field_encoder Bytes.set_int32_le
@@ -427,29 +416,21 @@ let rec build_immediate_encoder : type a.
   | Uint8 ->
       Some
         (fun buf off v ->
-          Bytes.set_uint8 buf off v;
+          Types.set_uint8 buf off v;
           off + 1)
-  | Uint16 Little -> Some (setter_off 2 Bytes.set_uint16_le)
-  | Uint16 Big -> Some (setter_off 2 Bytes.set_uint16_be)
+  | Uint16 Little -> Some (setter_off 2 Types.set_uint16_le)
+  | Uint16 Big -> Some (setter_off 2 Types.set_uint16_be)
   | Uint32 Little -> Some (setter_off 4 UInt32.set_le)
   | Uint32 Big -> Some (setter_off 4 UInt32.set_be)
   | Uint63 Little -> Some (setter_off 8 UInt63.set_le)
   | Uint63 Big -> Some (setter_off 8 UInt63.set_be)
   | Uint64 Little -> Some (setter_off 8 Bytes.set_int64_le)
   | Uint64 Big -> Some (setter_off 8 Bytes.set_int64_be)
-  | Int8 -> Some (setter_off 1 Bytes.set_int8)
-  | Int16 Little -> Some (setter_off 2 Bytes.set_int16_le)
-  | Int16 Big -> Some (setter_off 2 Bytes.set_int16_be)
-  | Int32 Little ->
-      Some
-        (fun buf off v ->
-          Bytes.set_int32_le buf off (Int32.of_int v);
-          off + 4)
-  | Int32 Big ->
-      Some
-        (fun buf off v ->
-          Bytes.set_int32_be buf off (Int32.of_int v);
-          off + 4)
+  | Int8 -> Some (setter_off 1 Types.set_int8)
+  | Int16 Little -> Some (setter_off 2 Types.set_int16_le)
+  | Int16 Big -> Some (setter_off 2 Types.set_int16_be)
+  | Int32 Little -> Some (setter_off 4 Types.set_int32_le)
+  | Int32 Big -> Some (setter_off 4 Types.set_int32_be)
   | Int64 Little -> Some (setter_off 8 Bytes.set_int64_le)
   | Int64 Big -> Some (setter_off 8 Bytes.set_int64_be)
   | Float32 Little -> Some (float32_field_encoder Bytes.set_int32_le)
@@ -1255,89 +1236,92 @@ let build_bf_reader base byte_off shift width =
   | U32 Big ->
       fun buf off -> (Bitfield.u32_be buf (off + byte_off) lsr shift) land mask
 
-let err_bf_overflow width value =
-  Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" value
-    width
-
-let[@inline] check_bf_overflow width value =
-  if value lsr width <> 0 then err_bf_overflow width value
-
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
   | U8 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U16 Little ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U16 Big ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U32 Little when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         Bitfield.u32_field_or_le buf (off + byte_off) shift (value land mask)
   | U32 Big when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         Bitfield.u32_field_or_be buf (off + byte_off) shift (value land mask)
   | U32 Little ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bitfield.u32_le buf (off + byte_off) in
         Bitfield.set_u32_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U32 Big ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bitfield.u32_be buf (off + byte_off) in
         Bitfield.set_u32_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
+(* The [Codec.set] writer. It range-checks like {!build_bf_writer}: masking here
+   is the one silent truncation no later check can catch, because the masked
+   result is a legal field value that [Codec.get] and [validate] both accept. *)
 let build_bf_accessor_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   let clear_mask = lnot (mask lsl shift) in
   match base with
   | U8 ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U16 Little ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U16 Big ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U32 Little when not Bitfield.int_holds_u32 ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         Bitfield.u32_field_set_le buf (off + byte_off) shift mask
           (value land mask)
   | U32 Big when not Bitfield.int_holds_u32 ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         Bitfield.u32_field_set_be buf (off + byte_off) shift mask
           (value land mask)
   | U32 Little ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bitfield.u32_le buf (off + byte_off) in
         Bitfield.set_u32_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U32 Big ->
       fun buf off value ->
+        Types.check_unsigned_encode ~bits:width value;
         let cur = Bitfield.u32_be buf (off + byte_off) in
         Bitfield.set_u32_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
@@ -1613,20 +1597,20 @@ and read_case_body : type a k.
 let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
  fun typ runtime buf off v ->
   match typ with
-  | Uint8 -> Bytes.set_uint8 buf off v
-  | Uint16 Little -> Bytes.set_uint16_le buf off v
-  | Uint16 Big -> Bytes.set_uint16_be buf off v
+  | Uint8 -> Types.set_uint8 buf off v
+  | Uint16 Little -> Types.set_uint16_le buf off v
+  | Uint16 Big -> Types.set_uint16_be buf off v
   | Uint32 Little -> UInt32.set_le buf off v
   | Uint32 Big -> UInt32.set_be buf off v
   | Uint63 Little -> UInt63.set_le buf off v
   | Uint63 Big -> UInt63.set_be buf off v
   | Uint64 Little -> Bytes.set_int64_le buf off v
   | Uint64 Big -> Bytes.set_int64_be buf off v
-  | Int8 -> Bytes.set_int8 buf off v
-  | Int16 Little -> Bytes.set_int16_le buf off v
-  | Int16 Big -> Bytes.set_int16_be buf off v
-  | Int32 Little -> Bytes.set_int32_le buf off (Int32.of_int v)
-  | Int32 Big -> Bytes.set_int32_be buf off (Int32.of_int v)
+  | Int8 -> Types.set_int8 buf off v
+  | Int16 Little -> Types.set_int16_le buf off v
+  | Int16 Big -> Types.set_int16_be buf off v
+  | Int32 Little -> Types.set_int32_le buf off v
+  | Int32 Big -> Types.set_int32_be buf off v
   | Int64 Little -> Bytes.set_int64_le buf off v
   | Int64 Big -> Bytes.set_int64_be buf off v
   | Float32 Little -> Bytes.set_int32_le buf off (Int32.bits_of_float v)
