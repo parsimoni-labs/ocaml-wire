@@ -281,11 +281,8 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Byte_array_where { size; elt_var; cond } ->
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
-      for i = 0 to n - 1 do
-        let v = Bytes.get_uint8 buf (off + i) in
-        if not (Eval.expr (Eval.bind elt_var v Eval.empty) cond) then
-          raise_constraint ~at:(off + i) ~which:Per_byte ()
-      done;
+      let bad = Eval.bad_byte ~elt_var ~cond buf ~first:off ~len:n in
+      if bad >= 0 then raise_constraint ~at:(off + bad) ~which:Per_byte ();
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in

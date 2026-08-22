@@ -1956,15 +1956,24 @@ let test_encode_rejects_non_zero_padding () =
   Alcotest.(check string)
     "zero padding" "\001\000\000\000" (Bytes.to_string buf)
 
-let per_byte_codec =
-  Codec.v "Printable" Fun.id
-    Codec.
-      [
-        Field.v "B"
-          (byte_array_where ~size:(int 3) ~per_byte:(fun b ->
-               Expr.(b >= int 0x20 && b <= int 0x7e)))
-        $ Fun.id;
-      ]
+let per_byte_typ =
+  byte_array_where ~size:(int 3) ~per_byte:(fun b ->
+      Expr.(b >= int 0x20 && b <= int 0x7e))
+
+let per_byte_cf = Codec.(Field.v "B" per_byte_typ $ Fun.id)
+let per_byte_codec = Codec.v "Printable" Fun.id [ per_byte_cf ]
+
+(* Same refinement over a length-prefixed span, which takes the variable-size
+   reader rather than the constant-offset one. *)
+let per_byte_var_codec =
+  let open Codec in
+  let f_len = Field.v "Len" uint8 in
+  let f_b =
+    Field.v "B"
+      (byte_array_where ~size:(Field.ref f_len) ~per_byte:(fun b ->
+           Expr.(b >= int 0x20 && b <= int 0x7e)))
+  in
+  v "PrintableVar" (fun len b -> (len, b)) [ f_len $ fst; f_b $ snd ]
 
 let test_encode_rejects_refined_byte () =
   let buf = Bytes.create 3 in
@@ -1972,6 +1981,92 @@ let test_encode_rejects_refined_byte () =
     (fun () -> Codec.encode per_byte_codec "a\xffb" buf 0);
   Codec.encode per_byte_codec "abc" buf 0;
   Alcotest.(check string) "printable span" "abc" (Bytes.to_string buf)
+
+let decode_accepts codec s =
+  Result.is_ok (Codec.decode codec (Bytes.of_string s) 0)
+
+let validate_result codec s =
+  match Codec.validate codec (Bytes.of_string s) 0 with
+  | () -> Ok ()
+  | exception Parse_error e -> Error e
+
+let expect_per_byte label ~at = function
+  | Error { kind = Constraint_failed { which = Per_byte; _ }; at = off; _ } ->
+      Alcotest.(check int) (label ^ ": offset") at off
+  | Error e ->
+      Alcotest.failf "%s: expected a per-byte refusal, got %a" label
+        pp_parse_error e
+  | Ok () -> Alcotest.failf "%s: accepted a byte violating the refinement" label
+
+(* The refinement belongs to the span itself, so the compiled reader has to
+   apply it: a [Codec.decode] more permissive than [Wire.of_string] is also more
+   permissive than the EverParse validator built from the same schema, and
+   [Codec.validate] is the gate a caller runs before reading untrusted bytes
+   zero-copy. *)
+let test_decode_rejects_refined_byte () =
+  expect_per_byte "decode" ~at:1
+    (Result.map ignore
+       (Codec.decode per_byte_codec (Bytes.of_string "a\xffb") 0));
+  expect_per_byte "validate" ~at:1 (validate_result per_byte_codec "a\xffb");
+  expect_per_byte "decode var" ~at:2
+    (Result.map ignore
+       (Codec.decode per_byte_var_codec (Bytes.of_string "\002a\xff") 0));
+  expect_per_byte "validate var" ~at:2
+    (validate_result per_byte_var_codec "\002a\xff");
+  (* [get] is documented as unchecked for other fields' constraints, but the
+     span's own refinement travels with the reader, as a closed enum's does. *)
+  let get = Staged.unstage (Codec.get per_byte_codec per_byte_cf) in
+  (match get (Bytes.of_string "a\xffb") 0 with
+  | s -> Alcotest.failf "get returned %S past the refinement" s
+  | exception
+      Parse_error { kind = Constraint_failed { which = Per_byte; _ }; _ } ->
+      ());
+  (* The direct parser has always rejected this; it must keep doing so. *)
+  match of_string per_byte_typ "a\xffb" with
+  | Error { kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
+      Alcotest.(check int) "of_string offset" 1 at
+  | Error e -> Alcotest.failf "of_string: wrong error %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "of_string accepted a byte violating the refinement"
+
+let test_decode_accepts_conforming_refined_byte () =
+  Alcotest.(check (result string string))
+    "of_string" (Ok "abc")
+    (Result.map_error
+       (Fmt.str "%a" pp_parse_error)
+       (of_string per_byte_typ "abc"));
+  Alcotest.(check bool) "decode" true (decode_accepts per_byte_codec "abc");
+  Alcotest.(check (result unit string))
+    "validate" (Ok ())
+    (Result.map_error
+       (Fmt.str "%a" pp_parse_error)
+       (validate_result per_byte_codec "abc"));
+  Alcotest.(check string)
+    "get" "abc"
+    ((Staged.unstage (Codec.get per_byte_codec per_byte_cf))
+       (Bytes.of_string "abc") 0)
+
+(* The fuzz harness holds [decode] and [validate] to the same verdict; pin that
+   here against the verdict the refinement calls for, so a later change can
+   neither drop the check nor move one path without the other. *)
+let test_refined_byte_decode_validate_agree () =
+  List.iter
+    (fun (s, accept) ->
+      Alcotest.(check bool)
+        (Fmt.str "decode of %S" s) accept
+        (decode_accepts per_byte_codec s);
+      Alcotest.(check bool)
+        (Fmt.str "validate of %S" s)
+        accept
+        (Result.is_ok (validate_result per_byte_codec s)))
+    [
+      ("abc", true);
+      (" ~!", true);
+      ("a\xffb", false);
+      ("\000bc", false);
+      ("ab\x7f", false);
+      ("ab\x80", false);
+      ("\x1fbc", false);
+    ]
 
 (* The cond of a [Wire.where] reads sibling fields, so it can only be decided
    against the assembled record; encode replays the decode-side check pass over
@@ -7057,6 +7152,12 @@ let suite =
         test_encode_rejects_non_zero_padding;
       Alcotest.test_case "encode rejects: refined byte span" `Quick
         test_encode_rejects_refined_byte;
+      Alcotest.test_case "decode rejects: refined byte span" `Quick
+        test_decode_rejects_refined_byte;
+      Alcotest.test_case "decode accepts: conforming refined byte span" `Quick
+        test_decode_accepts_conforming_refined_byte;
+      Alcotest.test_case "refined byte span: decode and validate agree" `Quick
+        test_refined_byte_decode_validate_agree;
       Alcotest.test_case "encode rejects: where violation" `Quick
         test_encode_rejects_where_violation;
       Alcotest.test_case "constant size expression folds" `Quick

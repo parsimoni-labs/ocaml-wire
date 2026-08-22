@@ -32,6 +32,15 @@ let const_span_reader ~field_off n read =
   else fun _runtime _buf base ->
     raise_out_of_range ~at:(base + field_off) (Int64.of_int n)
 
+(* The refinement of a [byte_array_where] lives in its reader: every compiled
+   path that yields the span runs it, so [Codec.decode] and [Codec.validate]
+   reject the same bytes as [Wire.of_string] and as the EverParse validator
+   built from the same schema. *)
+let refined_span_reader ~elt_var ~cond buf ~first ~len =
+  let bad = Eval.bad_byte ~elt_var ~cond buf ~first ~len in
+  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ();
+  Bytes.sub_string buf first len
+
 (* A refinement decode enforces has to gate encode too, or the encoder emits
    bytes its own decoder (and the EverParse validator built from the same
    schema) rejects. One helper per refined type, so the encoder dispatch below
@@ -321,9 +330,10 @@ let rec build_field_reader_ctx : type a.
   | Byte_array { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime buf base ->
           Bytes.sub_string buf (base + field_off) n)
-  | Byte_array_where { size = Int n; _ } ->
+  | Byte_array_where { size = Int n; elt_var; cond } ->
       const_span_reader ~field_off n (fun _runtime buf base ->
-          Bytes.sub_string buf (base + field_off) n)
+          refined_span_reader ~elt_var ~cond buf ~first:(base + field_off)
+            ~len:n)
   | Byte_slice { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime buf base ->
           Slice.make_or_eod buf ~first:(base + field_off) ~length:n)
@@ -1553,7 +1563,8 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   (* Fixed-size byte spans as repeat / array elements: a list of n-byte
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
-  | Byte_array_where { size = Int n; _ } -> Bytes.sub_string buf off n
+  | Byte_array_where { size = Int n; elt_var; cond } ->
+      refined_span_reader ~elt_var ~cond buf ~first:off ~len:n
   | Byte_slice { size = Int n } -> Slice.make_or_eod buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)
@@ -2237,7 +2248,8 @@ let var_bytes_reader : type a.
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
-  | Byte_array_where _ -> Bytes.sub_string buf (base + fo) sz
+  | Byte_array_where { elt_var; cond; _ } ->
+      refined_span_reader ~elt_var ~cond buf ~first:(base + fo) ~len:sz
   | All_bytes -> Bytes.sub_string buf (base + fo) sz
   (* [sz] already counts the terminator (see [compile_var_size_fn]). *)
   | Zeroterm -> Bytes.sub_string buf (base + fo) (sz - 1)
@@ -4104,10 +4116,10 @@ let rec build_staged_reader : type a.
       fun runtime buf base ->
         let sz = size_fn runtime buf base in
         Bytes.sub_string buf (base + off) sz
-  | Byte_array_where _, Variable { off; size_fn } ->
+  | Byte_array_where { elt_var; cond; _ }, Variable { off; size_fn } ->
       fun runtime buf base ->
         let sz = size_fn runtime buf base in
-        Bytes.sub_string buf (base + off) sz
+        refined_span_reader ~elt_var ~cond buf ~first:(base + off) ~len:sz
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base ->
         let fo = off_fn runtime buf base in
@@ -4118,11 +4130,12 @@ let rec build_staged_reader : type a.
         let fo = off_fn runtime buf base in
         let sz = size_fn runtime buf base in
         Bytes.sub_string buf (base + fo) sz
-  | Byte_array_where _, Variable_dynamic { off_fn; size_fn } ->
+  | Byte_array_where { elt_var; cond; _ }, Variable_dynamic { off_fn; size_fn }
+    ->
       fun runtime buf base ->
         let fo = off_fn runtime buf base in
         let sz = size_fn runtime buf base in
-        Bytes.sub_string buf (base + fo) sz
+        refined_span_reader ~elt_var ~cond buf ~first:(base + fo) ~len:sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
