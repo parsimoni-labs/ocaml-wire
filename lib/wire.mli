@@ -1475,8 +1475,55 @@ module Private : sig
   module UInt32 = UInt32
   module UInt63 = UInt63
   module Types = Types
-  module Eval = Eval
-  module Bitfield = Bitfield
+
+  (** Top-level expression evaluation, in a context with no field bindings. *)
+  module Eval : sig
+    type ctx
+    (** Evaluation context. *)
+
+    val empty : ctx
+    (** Context with no bindings. *)
+
+    val expr : ctx -> 'a Types.expr -> 'a
+    (** Evaluate a top-level expression. *)
+
+    val int_of : 'a Types.typ -> 'a -> int option
+    (** Convert a typed value to [int], [None] when it does not fit. *)
+
+    val int_of_exn : 'a Types.typ -> 'a -> int
+    (** {!val-int_of} without the option; raises {!Types.Parse_error}. *)
+  end
+
+  (** Packed bitfield base words. *)
+  module Bitfield : sig
+    val byte_size : Types.bitfield_base -> int
+    (** Bytes in one packed base word. *)
+
+    val total_bits : Types.bitfield_base -> int
+    (** Bits in one packed base word. *)
+
+    val equal : Types.bitfield_base -> Types.bitfield_base -> bool
+    (** Same base type and endianness. *)
+
+    val read_word : Types.bitfield_base -> bytes -> int -> int
+    (** Read a base word at a byte offset. *)
+
+    val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
+    (** Write a base word at a byte offset. *)
+
+    val native_bit_order : Types.bitfield_base -> Types.bit_order
+    (** The bit order matching EverParse 3D's native packing for a base. *)
+
+    val extract :
+      bit_order:Types.bit_order ->
+      total:int ->
+      bits_used:int ->
+      width:int ->
+      int ->
+      int
+    (** Extract a field's bits from a base word. *)
+  end
+
   module Uint_var = Uint_var
 
   val param_name : param -> string
