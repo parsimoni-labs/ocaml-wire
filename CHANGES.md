@@ -43,6 +43,15 @@
 
 ### Fixed
 
+- `Codec.set` on a `byte_array`, `byte_array_where` or `byte_slice` whose
+  `~size` is only known at decode time now raises `Invalid_argument` unless the
+  value is exactly that many bytes, the same contract encoding already has. It
+  used to write the value's own length rather than the field's declared size,
+  so an oversized value that still fitted the buffer ran past the field and
+  silently overwrote the fields after it. The blit was always bounds-checked
+  against the buffer, so what this corrupted was neighbouring protocol fields,
+  with no error to signal it (#262, @samoht)
+
 - A constant size or length expression such as `Expr.(int 2 + int 2)` now
   behaves exactly like the literal `int 4`. It used to slip past every check
   and fast path that looks for a literal size, so such a field encoded
