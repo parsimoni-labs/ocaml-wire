@@ -1005,6 +1005,160 @@ let test_validate_overrun_field_offset () =
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed instead of failing cleanly: %s" m
 
+(* Assert a *located* end-of-input: the failure kind, the extent the field was
+   missing, and the offset it was missing it at. Checking only the exception
+   class would also pass for a blanket [Invalid_argument -> Parse_error]
+   wrapper around validate, which reports a garbage location; the offset is
+   what shows a real per-field guard ran, at the field that overran. *)
+let check_located_eof name ~at ~expected ~got = function
+  | Ok () ->
+      Alcotest.failf "%s: accepted a record whose field runs off the end" name
+  | Error (e : parse_error) -> (
+      Alcotest.(check int) (name ^ ": offset of the failing field") at e.at;
+      match e.kind with
+      | Unexpected_eof { expected = ex; got = g } ->
+          Alcotest.(check int) (name ^ ": bytes the field needed") expected ex;
+          Alcotest.(check int) (name ^ ": bytes the buffer had there") got g
+      | k -> Alcotest.failf "%s: expected an eof, got %a" name pp_error_kind k)
+
+(* Run a validate-style call and shape its outcome for [check_located_eof]. A
+   raw [Invalid_argument] is the crash under test, so it fails here rather than
+   being folded into a parse error. *)
+let validating name f =
+  match f () with
+  | () -> Ok ()
+  | exception Wire.Parse_error e -> Error e
+  | exception Invalid_argument m ->
+      Alcotest.failf "%s: crashed instead of failing cleanly: %s" name m
+
+(* [Codec.validate_struct] runs the same populate-driven field pass as
+   [Codec.validate] and needs the same per-field bounds check. [Data] is sized
+   by [Len], so a [Len] of 200 in a 5-byte buffer puts [V] at offset 201: the
+   first byte read off the end. The trailing greedy [Z] keeps the struct's span
+   resolvable, so nothing rejects the record before [V]'s read. *)
+let validate_struct_overrun () =
+  let module T = Wire.Private.Types in
+  T.struct_ "Overrun"
+    [
+      T.field "Len" uint8;
+      T.field "Data" (byte_array ~size:(T.ref "Len"));
+      T.field "V" uint16be;
+      T.field "Z" all_zeros;
+    ]
+
+let validate_struct_overrun_input = "\xc8\x00\x00\x00\x00"
+
+let test_validate_struct_field_past_end () =
+  let module T = Wire.Private.Types in
+  let s = validate_struct_overrun () in
+  let v = Codec.validator_of_struct s in
+  let buf = Bytes.of_string validate_struct_overrun_input in
+  (* [V] wants 2 bytes at 201; the 5-byte buffer has none of them. *)
+  check_located_eof "validate_struct" ~at:201 ~expected:2 ~got:0
+    (validating "validate_struct" (fun () -> Codec.validate_struct v buf 0));
+  check_located_eof "of_string" ~at:201 ~expected:2 ~got:0
+    (validating "of_string" (fun () ->
+         match of_string (T.struct_typ s) validate_struct_overrun_input with
+         | Ok () -> ()
+         | Error e -> raise (Wire.Parse_error e)))
+
+(* Unlike [Codec.validate], [Codec.validate_struct] has no whole-record bounds
+   check in front of the field pass, so even a statically placed field can be
+   read off the end: [B] sits at offset 1 in a 1-byte buffer. The constraint is
+   what makes the validator populate [B] at all. *)
+let validate_struct_short () =
+  let module T = Wire.Private.Types in
+  T.struct_ "Short"
+    [
+      T.field "A" uint8;
+      T.field "B" uint16be ~constraint_:Expr.(T.ref "B" < int 1000);
+    ]
+
+let test_validate_struct_fixed_field_past_end () =
+  let v = Codec.validator_of_struct (validate_struct_short ()) in
+  (* [B] wants 2 bytes at 1; the 1-byte buffer has none of them. *)
+  check_located_eof "validate_struct" ~at:1 ~expected:2 ~got:0
+    (validating "validate_struct" (fun () ->
+         Codec.validate_struct v (Bytes.of_string "\x01") 0))
+
+(* An optional whose presence is a runtime expression has no wire size of its
+   own: an absent one occupies nothing. A present one occupies exactly the
+   inner's width, so its read needs the bounds check every other field's gets.
+   [data] is sized by [len], so a [len] of 200 in a 5-byte buffer puts [opt] at
+   offset 202, and [flag = 1] says it is there. The greedy [z] keeps the
+   record's span resolvable so the read is reached. *)
+let validate_optional_codec =
+  let f_flag = Field.v "flag" uint8 in
+  let f_len = Field.v "len" uint8 in
+  Codec.v "OptOverrun"
+    (fun flag len data opt z -> (flag, len, data, opt, z))
+    Codec.
+      [
+        (f_flag $ fun (flag, _, _, _, _) -> flag);
+        (f_len $ fun (_, len, _, _, _) -> len);
+        ( Field.v "data" (byte_array ~size:(Field.ref f_len))
+        $ fun (_, _, data, _, _) -> data );
+        ( Field.optional "opt" ~present:Expr.(Field.ref f_flag = int 1) uint16be
+        $ fun (_, _, _, opt, _) -> opt );
+        (Field.v "z" all_zeros $ fun (_, _, _, _, z) -> z);
+      ]
+
+let test_validate_present_optional_past_end () =
+  let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
+  (* [opt] wants 2 bytes at 202; the 5-byte buffer has none of them. *)
+  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+    (validating "validate" (fun () ->
+         Codec.validate validate_optional_codec buf 0))
+
+(* [optional_or] gates its read on the same kind of runtime expression and has
+   the same hole. Same shape and same bytes as [validate_optional_codec]. *)
+let validate_optional_or_codec =
+  let f_flag = Field.v "flag" uint8 in
+  let f_len = Field.v "len" uint8 in
+  Codec.v "OptOrOverrun"
+    (fun flag len data opt z -> (flag, len, data, opt, z))
+    Codec.
+      [
+        (f_flag $ fun (flag, _, _, _, _) -> flag);
+        (f_len $ fun (_, len, _, _, _) -> len);
+        ( Field.v "data" (byte_array ~size:(Field.ref f_len))
+        $ fun (_, _, data, _, _) -> data );
+        ( Field.optional_or "opt"
+            ~present:Expr.(Field.ref f_flag = int 1)
+            ~default:0 uint16be
+        $ fun (_, _, _, opt, _) -> opt );
+        (Field.v "z" all_zeros $ fun (_, _, _, _, z) -> z);
+      ]
+
+let test_validate_present_optional_or_past_end () =
+  let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
+  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+    (validating "validate" (fun () ->
+         Codec.validate validate_optional_or_codec buf 0))
+
+(* A [uint] of runtime width reads its bytes directly instead of through the
+   span reader every other variable-width field uses, so it needs that
+   reader's span check of its own. [len] is 7, so [v] claims bytes 1..8 of a
+   3-byte buffer. *)
+let validate_uint_var_codec =
+  let f_len = Field.v "len" uint8 in
+  Codec.v "UintOverrun"
+    (fun len v z -> (len, v, z))
+    Codec.
+      [
+        (f_len $ fun (len, _, _) -> len);
+        (Field.v "v" (uint (Field.int f_len)) $ fun (_, v, _) -> v);
+        (Field.v "z" all_zeros $ fun (_, _, z) -> z);
+      ]
+
+let test_validate_uint_var_past_end () =
+  let buf = Bytes.of_string "\x07\x00\x00" in
+  (* The span check reports the offset the buffer would have had to reach (8)
+     against the length it has (3), the way a truncated byte span does. *)
+  check_located_eof "validate" ~at:1 ~expected:8 ~got:3
+    (validating "validate" (fun () ->
+         Codec.validate validate_uint_var_codec buf 0))
+
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
    [Invalid_argument] that escapes the decode result. A large variable field
@@ -7559,6 +7713,16 @@ let suite =
         test_byte_slice_negative_size;
       Alcotest.test_case "validate: field past end fails cleanly" `Quick
         test_validate_overrun_field_offset;
+      Alcotest.test_case "validate_struct: field past end fails cleanly" `Quick
+        test_validate_struct_field_past_end;
+      Alcotest.test_case "validate_struct: fixed field past a short buffer"
+        `Quick test_validate_struct_fixed_field_past_end;
+      Alcotest.test_case "validate: present optional past end fails cleanly"
+        `Quick test_validate_present_optional_past_end;
+      Alcotest.test_case "validate: present optional_or past end fails cleanly"
+        `Quick test_validate_present_optional_or_past_end;
+      Alcotest.test_case "validate: runtime-width uint past end fails cleanly"
+        `Quick test_validate_uint_var_past_end;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick

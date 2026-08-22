@@ -2025,6 +2025,21 @@ let next_off_pos : next_off -> runtime -> bytes -> int -> int = function
   | Static n -> fun _runtime _buf base -> base + n
   | Dynamic f -> f
 
+(* [present_fn] plus the bounds check the field's read needs when the gate is
+   set. [read_guard] cannot install that check: it takes the extent from
+   [field_wire_size], which is [None] for a conditional optional precisely
+   because an absent one occupies nothing. A present one occupies exactly
+   [fsize] bytes, so gate the extent check on the same condition as the read:
+   an optional pushed past the end by an overlong predecessor then reports
+   end-of-input at its own span instead of crashing. *)
+let present_in_bounds ctx present_fn fsize =
+  let pos = next_off_pos ctx.next_off in
+  fun runtime buf base ->
+    let present = present_fn runtime buf base in
+    if present then
+      check_read_bounds buf ~at:(pos runtime buf base) ~width:fsize;
+    present
+
 let optional_compiled : type a r.
     layout_ctx ->
     ?int_reader:(runtime -> bytes -> int -> int) ->
@@ -2193,6 +2208,15 @@ let compile_repeat : type elt seq r.
     populate = no_populate;
   }
 
+(* The span [first, first + sz) must lie inside [buf]. Both ends derive from
+   length fields, i.e. untrusted input: a span sized past the buffer, or a
+   negative size from an overrun offset, would crash the read with a raw
+   [Invalid_argument] that escapes the decode result. Report the missing bytes
+   as end-of-input instead. *)
+let[@inline] check_span_bounds buf ~first ~sz =
+  if sz < 0 || first < 0 || first + sz > Bytes.length buf then
+    raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf)
+
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
    terminator is found -- a truncated / unterminated zero-terminated string. *)
@@ -2208,10 +2232,6 @@ let var_bytes_reader : type a.
   let fo = off_fn runtime buf base in
   let sz = size_fn runtime buf base in
   let first = base + fo in
-  (* [fo] and [sz] derive from length fields, i.e. untrusted input. A field
-     sized past the buffer (or a negative size from an overrun offset) would
-     crash [Bytes.sub]; fail cleanly instead. [Byte_slice] is handled by
-     [make_or_eod]. *)
   (match typ with
   | Byte_slice _ ->
       (* A byte_slice reading at or past the end yields an eod slice (an oversize
@@ -2221,9 +2241,7 @@ let var_bytes_reader : type a.
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
         raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf)
-  | _ ->
-      if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-        raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf));
+  | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
@@ -2394,7 +2412,12 @@ let compile_var_bytes : type a r.
          fun runtime buf base ->
           let fo = off_fn runtime buf base in
           let sz = size_fn runtime buf base in
-          Uint_var.read endian buf (base + fo) sz
+          let first = base + fo in
+          (* This branch bypasses [var_bytes_reader]; run the same span check it
+             would have run, so a [uint] sized past the end reports truncation
+             the way a [byte_array] does instead of crashing. *)
+          check_span_bounds buf ~first ~sz;
+          Uint_var.read endian buf first sz
         in
         let raw_writer : r -> runtime -> bytes -> int -> int -> int =
          fun v runtime buf base write_off ->
@@ -2597,13 +2620,13 @@ and compile_optional : type a r.
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
+      let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let inner_populate = build_populate inner nfields inner_reader in
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun runtime buf base ->
-          if present_fn runtime buf base then
-            Some (inner_reader runtime buf base)
+          if readable runtime buf base then Some (inner_reader runtime buf base)
           else None)
         ~raw_writer:(fun v runtime buf base write_off ->
           match (present_fn runtime buf base, get v) with
@@ -2613,8 +2636,7 @@ and compile_optional : type a r.
         ~size_delta:0
         ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
         ~populate:(fun arr runtime buf base ->
-          if present_fn runtime buf base then
-            inner_populate arr runtime buf base)
+          if readable runtime buf base then inner_populate arr runtime buf base)
         ()
   | _ -> compile_optional_variable ctx fld present inner
 
@@ -2696,10 +2718,11 @@ and compile_optional_or : type a r.
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
+      let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
       let raw_reader runtime buf base =
-        if present_fn runtime buf base then inner_reader runtime buf base
+        if readable runtime buf base then inner_reader runtime buf base
         else default
       in
       let populate = build_populate fld.typ ctx.n_fields raw_reader in
@@ -2843,9 +2866,11 @@ let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
    reports truncation as end-of-input at the span that was missing.
 
    Only accesses with a known extent get a guard. A variable-width field reads
-   through [var_bytes_reader], which bounds-checks itself, and a field whose
-   footprint differs from its wire size (an optional, a bitfield continuation)
-   is left alone: it may legitimately occupy no bytes. *)
+   through a span check of its own ([var_bytes_reader], or [check_span_bounds]
+   directly for a [uint] of computed width). A conditional optional has no
+   extent here -- [field_wire_size] is [None] for it, since an absent one
+   occupies nothing -- so it carries its own presence-gated check instead, in
+   [present_in_bounds]. *)
 let read_guard : type a r.
     (a, r) compiled_field -> a typ -> (runtime -> bytes -> int -> unit) option =
  fun cf typ ->
@@ -3761,21 +3786,8 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
-  let raise_check_failed arr base =
-    raise_field_constraint ~field_idx:acc.n_fields ~at:base arr
-  in
-  let full arr runtime buf base =
-    populate arr runtime buf base;
-    (match check with
-    | Some f when not (f arr) -> raise_check_failed arr base
-    | _ -> ());
-    Option.iter (fun f -> f arr) act
-  in
-  let check_only arr runtime buf base =
-    populate arr runtime buf base;
-    match check with
-    | Some f when not (f arr) -> raise_check_failed arr base
-    | _ -> ()
+  let check_only, full =
+    field_validators ~field_idx:acc.n_fields ~populate ~check ~act
   in
   (full, check_only, List.length action_vanames)
 
@@ -3828,7 +3840,8 @@ and apply_field_to_validator_acc acc (Types.Field f) =
       let layout = layout_ctx_of_validator_acc acc in
       let cf = compile_field layout codec_field in
       let full, check_only, n_extra_vars =
-        build_field_checks acc ~populate:cf.populate
+        build_field_checks acc
+          ~populate:(guarded_populate cf f.field_typ)
           ~validator_off:cf.validator_off ~name ~action:f.action
           ~constraint_:f.constraint_
       in

@@ -2241,6 +2241,64 @@ let optional_or_dynamic =
          Bytes.set_uint16_be buf 1 0xCAFE;
          ((0, 0xCAFE), buf)))
 
+(* Dynamic-gate optional at a *runtime* offset. [optional_dynamic] keeps its
+   gate and payload adjacent at static offsets, where the payload can never
+   land past the end of the buffer. Here a length-prefixed span sits between
+   them, so the payload's offset comes from the [len] byte, and the greedy
+   tail lets the record's span resolve to the whole buffer -- the record-level
+   bounds check passes and the optional's own read is the first thing that can
+   leave the buffer. That is the shape whose read has no [field_wire_size] to
+   bound-check it. *)
+let optional_dyn_after_span =
+  let f_gate = Wire.Field.v "gate" Wire.uint8 in
+  let f_len = Wire.Field.v "len" Wire.uint8 in
+  let codec =
+    Wire.Codec.v "_opt_dyn_span"
+      (fun gate _len span payload tail -> (gate, span, payload, tail))
+      Wire.Codec.
+        [
+          (f_gate $ fun (g, _, _, _) -> g);
+          (f_len $ fun (_, span, _, _) -> String.length span);
+          ( Wire.Field.v "span" (Wire.byte_array ~size:(Wire.Field.ref f_len))
+          $ fun (_, span, _, _) -> span );
+          ( Wire.Field.optional "payload" ~present:(gate_present f_gate)
+              Wire.uint16be
+          $ fun (_, _, payload, _) -> payload );
+          (Wire.Field.v "tail" Wire.all_zeros $ fun (_, _, _, tail) -> tail);
+        ]
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.
+        [
+          Alcobar.bool;
+          Alcobar.uint16;
+          Alcobar.range ~min:0 8;
+          Alcobar.range ~min:0 4;
+        ]
+      (fun present v span_len tail_len ->
+        let value =
+          ( (if present then 1 else 0),
+            String.make span_len 'x',
+            (if present then Some v else None),
+            String.make tail_len '\x00' )
+        in
+        let sz = Wire.Codec.size_of_value codec value in
+        let buf = Bytes.create sz in
+        Wire.Codec.encode codec value buf 0;
+        (value, buf))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+    adversarial_value = None;
+  }
+
 (* {1 Casetype} *)
 
 type 'a case =
@@ -2715,6 +2773,7 @@ let var_leaves : any list =
        value-driven (optional_or) payload. *)
     Any { g = optional_dynamic; size = None; label = "optdyn" };
     Any { g = optional_or_dynamic; size = None; label = "optordyn" };
+    Any { g = optional_dyn_after_span; size = None; label = "optdynspan" };
     Any { g = if_then_else; size = None; label = "ite" };
   ]
 
@@ -3758,6 +3817,7 @@ let wrapper_gens =
     ("optional_or(false)", Pack (optional_or ~present:false ~default:42 uint8));
     ("optional_dynamic", Pack optional_dynamic);
     ("optional_or_dynamic", Pack optional_or_dynamic);
+    ("optional_dyn_after_span", Pack optional_dyn_after_span);
     ("nested(0,empty)", Pack (nested 0 empty));
     ("nested(2,uint16be)", Pack (nested 2 uint16be));
     ("nested(4,byte_array4)", Pack (nested 4 (byte_array 4)));
