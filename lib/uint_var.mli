@@ -7,4 +7,7 @@ val read : Types.endian -> bytes -> int -> int -> UInt63.t
 (** [read endian buf off size] reads [size] bytes as an unsigned value. *)
 
 val write : Types.endian -> bytes -> int -> int -> UInt63.t -> unit
-(** [write endian buf off size v] writes [v] as [size] bytes. *)
+(** [write endian buf off size v] writes [v] as [size] bytes. Raises
+    [Invalid_argument] when [v] needs more than [size] bytes: truncating it
+    would leave a legal [size]-byte number on the wire that nothing downstream
+    can tell from the one the caller meant. *)

@@ -148,6 +148,53 @@ val check_zeroterm_region : region:int -> len:int -> unit
     terminator inside a [region]-byte span. Internal helper shared by every
     encoder path. *)
 
+val check_unsigned_encode : bits:int -> int -> unit
+(** Check an integer fits an unsigned [bits]-wide field before encoding it. The
+    accepted range is [[0, 2^bits - 1]], exactly what the decoder produces, so
+    encode stays inverse to decode; anything else raises [Invalid_argument],
+    because masking it would put a different, equally legal, number on the wire
+    that no later check can tell from the one the caller meant. Shared by
+    {!val-uint8}, {!val-uint16} and [bits ~width], one rule at three widths.
+    Where the native [int] is no wider than the field the guard narrows to what
+    is still checkable, so it never rejects a value the target can represent. *)
+
+val check_signed_encode : bits:int -> int -> unit
+(** Check an integer fits a signed [bits]-wide field before encoding it. The
+    accepted range is [[-2^(bits-1), 2^(bits-1) - 1]]: the decoder produces
+    exactly that, so [200] into an {!val-int8} is refused rather than
+    round-tripping back as [-56]. Same narrow-target narrowing as
+    {!check_unsigned_encode}. *)
+
+(** {2 Checked scalar writers}
+
+    The range-checking counterparts of [Bytes.set_*]. Every wire encode path
+    writes a fixed-width scalar through one of these, because the [Bytes]
+    primitives mask silently. *)
+
+val set_uint8 : bytes -> int -> int -> unit
+(** [set_uint8 buf off v] writes [v] as one unsigned byte. *)
+
+val set_uint16_le : bytes -> int -> int -> unit
+(** [set_uint16_le buf off v] writes [v] as two unsigned little-endian bytes. *)
+
+val set_uint16_be : bytes -> int -> int -> unit
+(** [set_uint16_be buf off v] writes [v] as two unsigned big-endian bytes. *)
+
+val set_int8 : bytes -> int -> int -> unit
+(** [set_int8 buf off v] writes [v] as one signed byte. *)
+
+val set_int16_le : bytes -> int -> int -> unit
+(** [set_int16_le buf off v] writes [v] as two signed little-endian bytes. *)
+
+val set_int16_be : bytes -> int -> int -> unit
+(** [set_int16_be buf off v] writes [v] as two signed big-endian bytes. *)
+
+val set_int32_le : bytes -> int -> int -> unit
+(** [set_int32_le buf off v] writes [v] as four signed little-endian bytes. *)
+
+val set_int32_be : bytes -> int -> int -> unit
+(** [set_int32_be buf off v] writes [v] as four signed big-endian bytes. *)
+
 (** {1 Param handles} *)
 
 type param_input

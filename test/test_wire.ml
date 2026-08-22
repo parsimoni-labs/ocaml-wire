@@ -1090,7 +1090,7 @@ let test_stream_uint16_chunk3 () =
   | Error e -> Alcotest.failf "uint16be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint32_chunk1 () =
-  let encoded = to_string uint32 (Optint.of_int32 0xDEADBEEFl) in
+  let encoded = to_string uint32 (Wire.Private.UInt32.of_int32 0xDEADBEEFl) in
   match parse_chunked ~chunk_size:1 uint32 encoded with
   | Ok v ->
       Alcotest.(check int32) "uint32 chunk=1" 0xDEADBEEFl (Optint.to_int32 v)
@@ -1197,7 +1197,9 @@ let test_stream_bitfield_chunk1 () =
 (* Encode roundtrip through chunked writer *)
 let test_stream_encode_chunk1 () =
   let v = 0xDEADBEEFl in
-  let encoded = encode_chunked ~chunk_size:1 uint32be (Optint.of_int32 v) in
+  let encoded =
+    encode_chunked ~chunk_size:1 uint32be (Wire.Private.UInt32.of_int32 v)
+  in
   match of_string uint32be encoded with
   | Ok decoded ->
       Alcotest.(check int32) "encode chunk=1" v (Optint.to_int32 decoded)

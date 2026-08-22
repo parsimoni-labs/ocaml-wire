@@ -682,20 +682,36 @@ let check_byte_field_size size ~actual =
 let rec encode_into : type a. a typ -> a -> encoder -> unit =
  fun typ v enc ->
   match typ with
-  | Uint8 -> write_byte enc v
-  | Uint16 Little -> write_uint16_le enc v
-  | Uint16 Big -> write_uint16_be enc v
+  | Uint8 ->
+      Types.check_unsigned_encode ~bits:8 v;
+      write_byte enc v
+  | Uint16 Little ->
+      Types.check_unsigned_encode ~bits:16 v;
+      write_uint16_le enc v
+  | Uint16 Big ->
+      Types.check_unsigned_encode ~bits:16 v;
+      write_uint16_be enc v
   | Uint32 Little -> write_uint32_le enc v
   | Uint32 Big -> write_uint32_be enc v
   | Uint63 Little -> write_uint63_le enc v
   | Uint63 Big -> write_uint63_be enc v
   | Uint64 Little -> write_int64_le enc v
   | Uint64 Big -> write_int64_be enc v
-  | Int8 -> write_int8 enc v
-  | Int16 Little -> write_int16_le enc v
-  | Int16 Big -> write_int16_be enc v
-  | Int32 Little -> write_int32_le enc (Int32.of_int v)
-  | Int32 Big -> write_int32_be enc (Int32.of_int v)
+  | Int8 ->
+      Types.check_signed_encode ~bits:8 v;
+      write_int8 enc v
+  | Int16 Little ->
+      Types.check_signed_encode ~bits:16 v;
+      write_int16_le enc v
+  | Int16 Big ->
+      Types.check_signed_encode ~bits:16 v;
+      write_int16_be enc v
+  | Int32 Little ->
+      Types.check_signed_encode ~bits:32 v;
+      write_int32_le enc (Int32.of_int v)
+  | Int32 Big ->
+      Types.check_signed_encode ~bits:32 v;
+      write_int32_be enc (Int32.of_int v)
   | Int64 Little -> write_int64_le enc v
   | Int64 Big -> write_int64_be enc v
   | Float32 Little -> write_int32_le enc (Int32.bits_of_float v)
@@ -708,6 +724,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       Uint_var.write endian enc.o enc.o_next n v;
       enc.o_next <- enc.o_next + n
   | Bits { width; base; bit_order } -> (
+      Types.check_unsigned_encode ~bits:width v;
       let mask = (1 lsl width) - 1 in
       let total = Bitfield.total_bits base in
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
@@ -820,6 +837,7 @@ let to_writer typ v writer =
 (* Helpers extracted from [encode_direct] to keep the dispatch readable. *)
 
 let encode_bits buf off v width base bit_order =
+  Types.check_unsigned_encode ~bits:width v;
   let mask = (1 lsl width) - 1 in
   let total = Bitfield.total_bits base in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
@@ -862,13 +880,13 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
  fun typ buf off v ->
   match typ with
   | Uint8 ->
-      Bytes.set_uint8 buf off v;
+      Types.set_uint8 buf off v;
       off + 1
   | Uint16 Little ->
-      Bytes.set_uint16_le buf off v;
+      Types.set_uint16_le buf off v;
       off + 2
   | Uint16 Big ->
-      Bytes.set_uint16_be buf off v;
+      Types.set_uint16_be buf off v;
       off + 2
   | Uint32 Little ->
       UInt32.set_le buf off v;
