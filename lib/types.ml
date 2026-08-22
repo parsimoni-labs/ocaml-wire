@@ -694,9 +694,12 @@ let rec is_array_element : type a. a typ -> bool = function
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
   | Float32 _ | Float64 _ -> true
   (* [Unit] is 0-width: an array of it carries no bytes and projects to a
-     zero-size 3D array EverParse rejects, so it is not a valid element. *)
+     zero-size 3D array EverParse rejects, so it is not a valid element. A byte
+     span whose declared size is a literal zero (or less) is 0-width for the
+     same reason, so admit only a positive one. [uint] already refuses a
+     non-positive literal size, and a symbolic one is not [Int _]. *)
   | Uint_var { size = Int _; _ } -> true
-  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
+  | Byte_array { size = Int n } | Byte_slice { size = Int n } -> n > 0
   | Codec { codec_fixed_size; codec_struct; _ } ->
       codec_fixed_size <> None && struct_nz codec_struct
   | Map { inner; _ } -> is_array_element inner
@@ -708,10 +711,10 @@ let reject_non_array_element ~combinator t =
   if not (is_array_element t) then
     Fmt.invalid_arg
       "Wire.%s: element type is not a fixed-width array element -- 3D projects \
-       %s as a count of fixed-size elements (a scalar, a fixed byte span, or a \
-       fixed-size sub-codec with at least one fixed-size field); a nested \
-       region, refined span, variable inner, or a sub-codec made only of \
-       byte-span fields has no array projection."
+       %s as a count of fixed-size elements (a scalar, a byte span of at least \
+       one byte, or a fixed-size sub-codec with at least one fixed-size \
+       field); a nested region, refined span, zero-width span, variable inner, \
+       or a sub-codec made only of byte-span fields has no array projection."
       combinator combinator
 
 (* A self-delimiting inner carries its own length / structure, so it decodes a
@@ -784,12 +787,11 @@ let array_seq seq ~len elem =
   Array { len = fold_size len; elem; seq }
 
 let byte_array ~size = Byte_array { size = fold_size size }
-let byte_array_where_counter = Stdlib.ref 0
+let byte_array_where_counter = Atomic.make 0
 let elt_var_prefix = "__elt_"
 
 let byte_array_where ~size ~per_byte =
-  let n = !byte_array_where_counter in
-  Stdlib.incr byte_array_where_counter;
+  let n = Atomic.fetch_and_add byte_array_where_counter 1 in
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
   Byte_array_where { size = fold_size size; elt_var; cond }
