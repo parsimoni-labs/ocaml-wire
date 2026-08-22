@@ -219,21 +219,16 @@ and build_field_encoder_ctx : type a.
      [zeroterm_at_most] pads the rest of its fixed [n]-byte region with zeros. *)
   | Zeroterm ->
       fun _runtime buf off v ->
+        Types.check_zeroterm_encode v;
         let n = String.length v in
-        if String.contains v '\000' then
-          invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
         Bytes.blit_string v 0 buf off n;
         Bytes.set_uint8 buf (off + n) 0;
         off + n + 1
   | Zeroterm_at_most { size = Int region } ->
       fun _runtime buf off v ->
+        Types.check_zeroterm_encode v;
         let n = String.length v in
-        if String.contains v '\000' then
-          invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
-        if n + 1 > region then
-          Fmt.invalid_arg
-            "Codec.encode: zeroterm string needs %d bytes but region is %d"
-            (n + 1) region;
+        Types.check_zeroterm_region ~region ~len:n;
         Bytes.blit_string v 0 buf off n;
         Bytes.fill buf (off + n) (region - n) '\x00';
         off + region
@@ -2318,21 +2313,16 @@ let var_bytes_writer : type a r.
       var_bytes_write_str buf write_off s
   | Zeroterm ->
       let s = (value : string) in
-      if String.contains s '\000' then
-        invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+      Types.check_zeroterm_encode s;
       let e = var_bytes_write_str buf write_off s in
       Bytes.set_uint8 buf e 0;
       e + 1
   | Zeroterm_at_most _ ->
       let s = (value : string) in
-      if String.contains s '\000' then
-        invalid_arg "Codec.encode: zeroterm string contains a NUL byte";
+      Types.check_zeroterm_encode s;
       let region = size_fn runtime buf base in
       let len = String.length s in
-      if len + 1 > region then
-        Fmt.invalid_arg
-          "Codec.encode: zeroterm string needs %d bytes but region is %d"
-          (len + 1) region;
+      Types.check_zeroterm_region ~region ~len;
       Bytes.blit_string s 0 buf write_off len;
       (* Single fill covers the NUL terminator and any trailing padding. *)
       Bytes.fill buf (write_off + len) (region - len) '\x00';

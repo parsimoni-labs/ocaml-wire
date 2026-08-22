@@ -714,19 +714,14 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       Types.check_all_zeros_encode v;
       write_string enc v
   | Zeroterm ->
-      if String.contains v '\000' then
-        invalid_arg "Wire.encode: zeroterm string contains a NUL byte";
+      Types.check_zeroterm_encode v;
       write_string enc v;
       write_byte enc 0
   | Zeroterm_at_most { size } ->
-      if String.contains v '\000' then
-        invalid_arg "Wire.encode: zeroterm string contains a NUL byte";
+      Types.check_zeroterm_encode v;
       let n = Eval.expr Eval.empty size in
       let len = String.length v in
-      if len + 1 > n then
-        Fmt.invalid_arg
-          "Wire.encode: zeroterm string needs %d bytes but region is %d"
-          (len + 1) n;
+      Types.check_zeroterm_region ~region:n ~len;
       write_string enc v;
       (* Remaining bytes = NUL terminator plus any trailing padding. *)
       for _ = len to n - 1 do

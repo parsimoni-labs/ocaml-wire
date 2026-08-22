@@ -137,6 +137,17 @@ val check_all_zeros_encode : string -> unit
 (** Check an {!val-all_zeros} padding value is all zero bytes before encoding
     it. A non-zero byte raises [Invalid_argument]. *)
 
+val check_zeroterm_encode : string -> unit
+(** Check a {!val-zeroterm} value carries no NUL before encoding it. An embedded
+    NUL raises [Invalid_argument]: it terminates the string on the wire, so the
+    bytes would decode back short. Internal helper shared by every encoder path.
+*)
+
+val check_zeroterm_region : region:int -> len:int -> unit
+(** Check a {!val-zeroterm_at_most} value of [len] bytes leaves room for its NUL
+    terminator inside a [region]-byte span. Internal helper shared by every
+    encoder path. *)
+
 (** {1 Param handles} *)
 
 type param_input
