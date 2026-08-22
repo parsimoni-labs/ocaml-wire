@@ -64,9 +64,18 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
       lower;
     Fmt.pf ppf "  CAMLparam3(v_k, v_buf, v_off);@\n";
     Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
+    (* [args] collects boxed values ([caml_copy_int64], [caml_copy_double]).
+       Each of those allocations can trigger a minor collection that moves or
+       reclaims the boxes already stored, and a bare [value args[N]] is
+       invisible to the GC, so the earlier slots go stale and the continuation
+       receives garbage field values. [CAMLlocalN] registers the array as a
+       root block and pre-fills it with [Val_unit], so every slot is a valid
+       root from the declaration on. It comes after the [CAMLparam3] /
+       [CAMLlocal1] declarations and before the first allocation, and the
+       single [CAMLreturn] unwinds all three root blocks. *)
+    Fmt.pf ppf "  CAMLlocalN(args, %d);@\n" n_fields;
     pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep ~validator;
-    Fmt.pf ppf "  value args[%d];@\n" n_fields;
     List.iteri
       (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i pp_field_value kind)
       kinds;

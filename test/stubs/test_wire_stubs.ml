@@ -255,6 +255,34 @@ let test_c_stubs_bounds_check () =
     "no unchecked length subtraction remains" false
     (contains ~sub:"caml_string_length(v_buf) - Int_val(v_off)" c)
 
+(* The values handed to [caml_callbackN] are freshly boxed
+   ([caml_copy_int64] / [caml_copy_double]) and every box can trigger a minor
+   collection, so the array holding them has to be a registered root block. A
+   bare [value args[N]] leaves the boxes already stored unrooted: the
+   continuation then sees moved-away or reclaimed values, silently, with no
+   crash. See the GC stress e2e below for the dynamic witness. *)
+let test_c_stubs_callback_args_rooted () =
+  let s =
+    struct_ "Quad"
+      [
+        field "a" uint64be;
+        field "b" uint64be;
+        field "c" uint64be;
+        field "d" uint64be;
+      ]
+  in
+  let c = Wire_stubs.to_c_stubs [ s ] in
+  Alcotest.(check bool)
+    "callback arguments live in a CAMLlocalN root block" true
+    (contains ~sub:"CAMLlocalN(args, 4)" c);
+  Alcotest.(check bool)
+    "no unrooted value array" false
+    (contains ~sub:"value args[" c);
+  let index sub = Re.Group.start (Re.exec (Re.compile (Re.str sub)) c) 0 in
+  Alcotest.(check bool)
+    "roots registered before the first allocation" true
+    (index "CAMLlocalN(args, 4)" < index "caml_copy_int64")
+
 (* -- to_ml_stub_name -- *)
 
 let test_name_camel () =
@@ -294,10 +322,31 @@ let write_file path contents =
   output_string oc contents;
   close_out oc
 
+let capture cmd =
+  let ic = Unix.open_process_in (cmd ^ " 2>/dev/null") in
+  let output = In_channel.input_all ic in
+  match Unix.close_process_in ic with
+  | Unix.WEXITED 0 -> Some (String.trim output)
+  | _ -> None
+
+(* The GC stress e2e links the debug runtime: it poisons the minor arena it
+   has just collected, which is what turns an unrooted argument into an
+   observably wrong value instead of a stale-but-usually-intact one. The
+   debug runtime ships with a standard OCaml install; on a switch built
+   without it the test has nothing to say, so it steps aside rather than
+   failing. *)
+let has_debug_runtime =
+  match capture "ocamlopt -config-var standard_library" with
+  | Some dir -> Sys.file_exists (Filename.concat dir "libasmrund.a")
+  | None -> false
+
 (** End-to-end: .3d -> EverParse -> C stubs -> ML stubs -> compile -> call.
     [test_ml] is the OCaml source that calls the generated stubs and exits 0 on
-    success, non-zero on failure. *)
-let e2e ~name ~structs ~module_ ~test_ml =
+    success, non-zero on failure. [ocamlopt_flags] are appended to the link
+    command and [run_env] prefixes the run of the resulting binary, so a test
+    can select a runtime variant and its parameters. *)
+let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
+    () =
   if not has_3d then ()
   else begin
     let dir = Filename.temp_dir ("wire_e2e_" ^ name) "" in
@@ -319,13 +368,14 @@ let e2e ~name ~structs ~module_ ~test_ml =
        provides (the stubs call the validator directly). *)
     let cmd =
       Fmt.str
-        "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
-         '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o test_e2e 2>&1"
-        dir dir
+        "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg %s \
+         -ccopt '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o \
+         test_e2e 2>&1"
+        dir ocamlopt_flags dir
     in
     run cmd;
     (* 4. Run *)
-    run (Filename.concat dir "test_e2e")
+    Fmt.kstr run "%s %s" run_env (Filename.concat dir "test_e2e")
   end
 
 let test_e2e_no_params () =
@@ -349,6 +399,7 @@ let test_e2e_no_params () =
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
+    ()
 
 let test_e2e_offset_bounds () =
   let f_version = Wire.Field.v "version" uint8 in
@@ -380,6 +431,7 @@ let test_e2e_offset_bounds () =
    | _ -> assert false
    | exception Invalid_argument _ -> ())
 |}
+    ()
 
 let test_e2e_with_constraint () =
   let f_x_ref = Wire.Field.v "x" uint8 in
@@ -405,6 +457,7 @@ let test_e2e_with_constraint () =
   (try ignore (Stubs.constrained_parse buf 0); assert false
    with Failure _ -> ())
 |}
+    ()
 
 let test_e2e_bitfields () =
   (* Adversarial: drive the EverParse-generated C parser on a real IPv4-style
@@ -439,6 +492,58 @@ let test_e2e_bitfields () =
   assert (r.Stubs.flags = 5);
   assert (r.Stubs.length = 100)
 |}
+    ()
+
+(* GC stress: four [uint64be] fields, so the whole argument array is boxed
+   ([caml_copy_int64]) and full of young pointers by the time the last box is
+   allocated. A tiny minor heap under the debug runtime puts a minor
+   collection between two of those boxes on a large fraction of iterations,
+   and the debug runtime poisons what it collected, so an unrooted slot reads
+   back as garbage. With the argument array unrooted this reported over a
+   thousand corrupted parses out of the 200000; every field value must
+   survive. *)
+let test_e2e_gc_stress () =
+  if not has_debug_runtime then ()
+  else begin
+    let f n = Wire.Field.v n Wire.uint64be in
+    let codec =
+      let open Wire.Codec in
+      v "GcQuad"
+        (fun a b c d -> (a, b, c, d))
+        [
+          (f "a" $ fun (a, _, _, _) -> a);
+          (f "b" $ fun (_, b, _, _) -> b);
+          (f "c" $ fun (_, _, c, _) -> c);
+          (f "d" $ fun (_, _, _, d) -> d);
+        ]
+    in
+    let schema = Wire.Everparse.project ~mode:`Ffi codec in
+    let s = Wire.Everparse.Raw.struct_of_codec codec in
+    e2e ~ocamlopt_flags:"-runtime-variant d" ~run_env:"OCAMLRUNPARAM=s=1k,v=0"
+      ~name:"GcQuad" ~structs:[ s ] ~module_:schema.module_
+      ~test_ml:
+        {|let () =
+  let buf = Bytes.create 32 in
+  Bytes.set_int64_be buf 0 0x1122334455667788L;
+  Bytes.set_int64_be buf 8 0x2233445566778899L;
+  Bytes.set_int64_be buf 16 0x33445566778899aaL;
+  Bytes.set_int64_be buf 24 0x445566778899aabbL;
+  let bad = ref 0 in
+  for _ = 1 to 200_000 do
+    let r = Stubs.gcquad_parse buf 0 in
+    if r.Stubs.a <> 0x1122334455667788L
+       || r.Stubs.b <> 0x2233445566778899L
+       || r.Stubs.c <> 0x33445566778899aaL
+       || r.Stubs.d <> 0x445566778899aabbL
+    then incr bad
+  done;
+  if !bad <> 0 then begin
+    Printf.eprintf "%d corrupted parses out of 200000\n" !bad;
+    exit 1
+  end
+|}
+      ()
+  end
 
 (* -- Output pattern invariants --
 
@@ -810,6 +915,8 @@ let suite =
         `Quick test_normalised_fields_name;
       Alcotest.test_case "c stubs: offset bounds check" `Quick
         test_c_stubs_bounds_check;
+      Alcotest.test_case "c stubs: callback args are GC roots" `Quick
+        test_c_stubs_callback_args_rooted;
       (* stub name *)
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;
@@ -824,6 +931,8 @@ let suite =
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
         test_e2e_full_stack;
+      Alcotest.test_case "e2e: GC stress under the debug runtime" `Slow
+        test_e2e_gc_stress;
       (* output pattern invariants *)
       Alcotest.test_case "action forms: scalars" `Quick
         test_action_forms_scalars;
