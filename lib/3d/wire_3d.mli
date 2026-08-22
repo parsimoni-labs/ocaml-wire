@@ -60,7 +60,15 @@ val pascal_case : string -> string
     [pascal_case "virtio_check_Virtq_desc"] is ["VirtioCheckVirtqDesc"]. *)
 
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
-(** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules. *)
+(** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules.
+
+    Raises [Invalid_argument] if two schemas would generate the same [.3d] file
+    or the same C identifier, naming both codecs: the second write would
+    otherwise silently replace the first, leaving that codec's FFI stubs running
+    against another spec's verified C. Names collide after capitalization
+    ([header] and [Header]) and after EverParse's identifier mangling ([TMFrame]
+    and [Tmframe]). The same check guards {!generate_c}, {!generate_dune},
+    {!write_external_typedefs} and {!write_fields}. *)
 
 val generate_dune :
   outdir:string -> package:string -> Wire.Everparse.t list -> unit
@@ -138,8 +146,8 @@ val batch_check :
     [3d.exe --batch]. Each run uses a private directory. Returns [Ok ()] iff
     EverParse accepts every schema, else [Error] naming the offending schema(s)
     with their captured diagnostics. Schemas must have distinct names (one [.3d]
-    module each). Paths and filenames are passed without shell interpretation.
-    Requires [3d.exe] in PATH. *)
+    module each; {!generate_3d} rejects a collision). Paths and filenames are
+    passed without shell interpretation. Requires [3d.exe] in PATH. *)
 
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default

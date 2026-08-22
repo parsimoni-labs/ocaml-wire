@@ -161,6 +161,51 @@ let test_generate_c () =
          contents)
   end
 
+(* Both the [.3d] file name and the C identifier are many-to-one mangles of
+   the codec name, so a collision has one codec's artifacts overwrite
+   another's with no diagnostic: the verified C then enforces the surviving
+   spec while the OCaml side still parses with both. *)
+let schema_named name =
+  Wire.Everparse.Raw.project_struct ~mode:`Ffi
+    (struct_ name [ field "x" uint8 ])
+
+let test_name_collision () =
+  let tmpdir = Filename.temp_dir "wire_3d_collision" "" in
+  let rejects what generate names substrings =
+    match generate (List.map schema_named names) with
+    | () -> Alcotest.failf "%s: collision accepted" what
+    | exception Invalid_argument msg ->
+        List.iter
+          (fun sub ->
+            if not (Re.execp (Re.compile (Re.str sub)) msg) then
+              Alcotest.failf "%s: error %S does not mention %S" what msg sub)
+          substrings
+  in
+  let generate_3d schemas = Wire_3d.generate_3d ~outdir:tmpdir schemas in
+  let generate_dune schemas =
+    Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" schemas
+  in
+  (* [header] and [Header] both write [Header.3d]. *)
+  rejects "same .3d file" generate_3d [ "header"; "Header" ]
+    [ "\"header\""; "\"Header\""; "Header.3d" ];
+  rejects "same .3d file (dune)" generate_dune [ "header"; "Header" ]
+    [ "Header.3d" ];
+  (* [TMFrame] and [Tmframe] write two files that share the [TmframeFields]
+     plug struct tag and the [TMFRAME_FIELDS_H] include guard, so a
+     translation unit including both takes one plug layout for the other. *)
+  rejects "same C identifier" generate_3d [ "TMFrame"; "Tmframe" ]
+    [ "\"TMFrame\""; "\"Tmframe\""; "Tmframe" ];
+  rejects "same C identifier (plug)"
+    (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
+    [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
+  (* Distinct names still generate. *)
+  generate_3d [ schema_named "Alpha"; schema_named "Beta" ];
+  Alcotest.(check bool)
+    "distinct names generate" true
+    (Sys.file_exists (Filename.concat tmpdir "Alpha.3d")
+    && Sys.file_exists (Filename.concat tmpdir "Beta.3d"));
+  Wire_3d.rm_rf tmpdir
+
 let raises_failure f =
   match f () with () -> false | exception Failure _ -> true
 
@@ -1528,6 +1573,7 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "generated-name collision" `Quick test_name_collision;
       Alcotest.test_case "check_provenance" `Quick test_check_provenance;
       Alcotest.test_case "generate_dune_standalone" `Quick
         test_generate_dune_standalone;

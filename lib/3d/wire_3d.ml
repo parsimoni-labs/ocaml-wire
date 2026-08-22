@@ -88,6 +88,42 @@ let pascal_case name =
 let file_base (s : t) = String.capitalize_ascii s.name
 let c_ident (s : t) = everparse_name s.name
 
+(* Both mangles are many-to-one, so two codecs with different names can land
+   on one generated artifact and overwrite each other in silence. [file_base]
+   collides whenever the names differ only in the leading capital ([header]
+   and [Header] both write [Header.3d], and the second write wins: the
+   verified C, the plug and the provenance stamp then describe one codec while
+   the OCaml side still parses with both, so the shadowed codec's FFI stubs
+   validate against the other codec's spec). [c_ident] collides more widely,
+   since [everparse_name] also strips underscores and collapses uppercase runs
+   ([TMFrame] and [Tmframe] write two [_Fields.h] files that share the
+   [TMFRAME_FIELDS_H] include guard and the [TmframeFields] struct tag, so a
+   translation unit including both takes one schema's plug layout for the
+   other's). The standalone pipeline already rejects a name collision in
+   [Wire.Everparse.merge]; do the same for the per-schema pipeline, up front
+   and naming both codecs. Its remaining collapse, two codecs sharing one
+   [pascal_case] wrapper symbol ([TPM2B] and [Tpm2b]), is left to the C
+   compiler: the merged module puts both definitions in one translation unit,
+   so it fails loudly at build time rather than substituting one for the
+   other. *)
+let check_name_collisions schemas =
+  let check what key =
+    let seen = Hashtbl.create 16 in
+    List.iter
+      (fun (s : t) ->
+        let k = key s in
+        match Hashtbl.find_opt seen k with
+        | Some first ->
+            Fmt.invalid_arg
+              "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
+               them"
+              first s.name what k
+        | None -> Hashtbl.add seen k s.name)
+      schemas
+  in
+  check "the file" (fun s -> file_base s ^ ".3d");
+  check "the C identifier" c_ident
+
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
    uppercase runs get lowercased, ...). Rather than re-implement EverParse's
@@ -170,7 +206,9 @@ let read_validate_name ~outdir s =
   | Some n -> n
   | None -> Fmt.failwith "could not find Validate function name in %s" path
 
-let write_3d ~outdir schemas = Wire.Everparse.write ~mode:`Ffi ~outdir schemas
+let write_3d ~outdir schemas =
+  check_name_collisions schemas;
+  Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
@@ -376,6 +414,7 @@ let has_3d_exe () = locate_3d_exe () <> None
    a different WIRECTX definition; they must then also omit the default
    [<Name>_Fields.c] from their link. *)
 let write_external_typedefs ~outdir schemas =
+  check_name_collisions schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -490,6 +529,7 @@ let write_fields_impl ~outdir s =
   close_out oc
 
 let write_fields ~outdir schemas =
+  check_name_collisions schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -893,6 +933,7 @@ let batch_check ?max_jobs ~outdir schemas =
       match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
 
 let generate_c ?(quiet = true) ~outdir schemas =
+  check_name_collisions schemas;
   ensure_dir outdir;
   if has_3d_exe () then begin
     run_everparse ~quiet ~outdir schemas;
@@ -1011,6 +1052,7 @@ let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
 let generate_dune_file ~filename ~outdir ~package schemas =
+  check_name_collisions schemas;
   let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
   let names = List.map file_base schemas in
