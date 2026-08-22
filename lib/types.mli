@@ -148,6 +148,18 @@ val check_zeroterm_region : region:int -> len:int -> unit
     terminator inside a [region]-byte span. Internal helper shared by every
     encoder path. *)
 
+val check_bits_encode : width:int -> int -> unit
+(** Check an integer fits a [bits ~width] field before encoding it. A value with
+    bits above [width] raises [Invalid_argument]: masking it would put a
+    different, equally legal, number on the wire, which no later check can tell
+    from the one the caller meant. Internal helper shared by every encoder path.
+*)
+
+val check_uint_var_encode : size:int -> UInt63.t -> unit
+(** Check a value fits a [uint ~size] field before encoding it. A value needing
+    more than [size] bytes raises [Invalid_argument], for the same reason as
+    {!check_bits_encode}. Internal helper shared by every encoder path. *)
+
 (** {1 Param handles} *)
 
 type param_input

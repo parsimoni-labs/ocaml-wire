@@ -84,9 +84,7 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   let total = Bitfield.total_bits base in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
   let mask = (1 lsl width) - 1 in
-  if v land lnot mask <> 0 then
-    Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" v
-      width;
+  Types.check_bits_encode ~width v;
   (match base with
   | U32 Little when not Bitfield.int_holds_u32 ->
       Bitfield.u32_field_word_le buf off shift v
@@ -1255,89 +1253,92 @@ let build_bf_reader base byte_off shift width =
   | U32 Big ->
       fun buf off -> (Bitfield.u32_be buf (off + byte_off) lsr shift) land mask
 
-let err_bf_overflow width value =
-  Fmt.invalid_arg "Codec.encode: value 0x%X exceeds %d-bit field width" value
-    width
-
-let[@inline] check_bf_overflow width value =
-  if value lsr width <> 0 then err_bf_overflow width value
-
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
   | U8 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U16 Little ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U16 Big ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U32 Little when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         Bitfield.u32_field_or_le buf (off + byte_off) shift (value land mask)
   | U32 Big when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         Bitfield.u32_field_or_be buf (off + byte_off) shift (value land mask)
   | U32 Little ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         let cur = Bitfield.u32_le buf (off + byte_off) in
         Bitfield.set_u32_le buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
   | U32 Big ->
       fun buf off value ->
-        check_bf_overflow width value;
+        Types.check_bits_encode ~width value;
         let cur = Bitfield.u32_be buf (off + byte_off) in
         Bitfield.set_u32_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
+(* The [Codec.set] writer. It range-checks like {!build_bf_writer}: masking here
+   is the one silent truncation no later check can catch, because the masked
+   result is a legal field value that [Codec.get] and [validate] both accept. *)
 let build_bf_accessor_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   let clear_mask = lnot (mask lsl shift) in
   match base with
   | U8 ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint8 buf (off + byte_off) in
         Bytes.set_uint8 buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U16 Little ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint16_le buf (off + byte_off) in
         Bytes.set_uint16_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U16 Big ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         let cur = Bytes.get_uint16_be buf (off + byte_off) in
         Bytes.set_uint16_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U32 Little when not Bitfield.int_holds_u32 ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         Bitfield.u32_field_set_le buf (off + byte_off) shift mask
           (value land mask)
   | U32 Big when not Bitfield.int_holds_u32 ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         Bitfield.u32_field_set_be buf (off + byte_off) shift mask
           (value land mask)
   | U32 Little ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         let cur = Bitfield.u32_le buf (off + byte_off) in
         Bitfield.set_u32_le buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
   | U32 Big ->
       fun buf off value ->
+        Types.check_bits_encode ~width value;
         let cur = Bitfield.u32_be buf (off + byte_off) in
         Bitfield.set_u32_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))

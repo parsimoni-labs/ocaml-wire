@@ -708,6 +708,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       Uint_var.write endian enc.o enc.o_next n v;
       enc.o_next <- enc.o_next + n
   | Bits { width; base; bit_order } -> (
+      Types.check_bits_encode ~width v;
       let mask = (1 lsl width) - 1 in
       let total = Bitfield.total_bits base in
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
@@ -820,6 +821,7 @@ let to_writer typ v writer =
 (* Helpers extracted from [encode_direct] to keep the dispatch readable. *)
 
 let encode_bits buf off v width base bit_order =
+  Types.check_bits_encode ~width v;
   let mask = (1 lsl width) - 1 in
   let total = Bitfield.total_bits base in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in

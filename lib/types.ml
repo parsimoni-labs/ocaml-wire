@@ -1827,6 +1827,30 @@ let check_zeroterm_region ~region ~len =
       "Wire.encode: zeroterm string needs %d bytes but region is %d" (len + 1)
       region
 
+(* A [bits ~width] field owns exactly [width] bits. Masking a wider value is the
+   one truncation nothing downstream can catch: the masked result is itself a
+   legal field value, so decode, [validate] and the EverParse validator all
+   accept it and the number the caller meant is gone without trace. *)
+let check_bits_encode ~width v =
+  if v lsr width <> 0 then
+    Fmt.invalid_arg "Wire.encode: value 0x%X exceeds %d-bit field width" v width
+
+(* A [uint ~size] field owns exactly [size] bytes. Dropping the high bytes of a
+   wider value leaves a legal [size]-byte number on the wire, so the same
+   argument as [check_bits_encode] applies. Eight bytes and up hold every
+   [UInt63.t], so only the narrower widths need the test. *)
+let check_uint_var_encode ~size v =
+  if size < 8 then begin
+    let bits = 8 * max size 0 in
+    let limit = Optint.Int63.shift_left Optint.Int63.one bits in
+    if
+      Optint.Int63.compare v Optint.Int63.zero < 0
+      || Optint.Int63.compare v limit >= 0
+    then
+      Fmt.invalid_arg "Wire.encode: value 0x%Lx exceeds %d-byte uint field"
+        (Optint.Int63.to_int64 v) size
+  end
+
 (* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
    field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
    binds a name to a pure expression, so we lower it by substituting

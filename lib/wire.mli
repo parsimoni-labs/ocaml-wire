@@ -611,7 +611,10 @@ val uint : ?endian:endian -> int expr -> Optint.Int63.t typ
     order (default {!Big}). The size may be a dynamic expression for
     parameter-driven widths. Decodes to an [Optint.Int63.t]: a 7-byte value
     needs 56 bits, which does not fit an int on a narrow-int target (js/wasm).
-*)
+
+    Encoding a value that needs more than [size] bytes raises [Invalid_argument]
+    rather than dropping its high bytes: the truncated result is itself a legal
+    [size]-byte number, so nothing downstream could tell the two apart. *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
 (** [bits ~width base] declares a bitfield of [width] bits inside [base].
@@ -619,7 +622,10 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
     [~bit_order] selects which end of the base word the first declared bitfield
     occupies. It defaults to {!Msb_first}, which makes the DSL match how
     protocol specifications draw their bit diagrams. Pass [~bit_order:Lsb_first]
-    when mirroring MSVC-style C bit-fields. *)
+    when mirroring MSVC-style C bit-fields.
+
+    Encoding a value with bits above [width] raises [Invalid_argument] rather
+    than masking it, for the same reason as {!uint}. *)
 
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions. *)
