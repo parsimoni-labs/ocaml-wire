@@ -2920,6 +2920,82 @@ let positive_env g =
   | Some s -> Some (s.positive (Wire.Codec.env g.codec))
   | None -> None
 
+(* Typ-level vs codec-level agreement. [Wire.of_string] (typ level) and
+   [Codec.decode] (codec level) are two independent reader constructions over
+   the same schema, so they can drift apart: a refinement enforced by one and
+   dropped by the other accepts input the other -- and the EverParse C built
+   from the same schema -- rejects. The two may legitimately report different
+   errors (offsets and kinds are not part of the contract), so only the
+   accept/reject verdict is compared, plus the decoded value where both
+   accept. *)
+
+let direct_decodes g bs =
+  match Wire.of_string g.typ (string_of_bytes bs) with
+  | Ok v -> `Accept v
+  | Error _ -> `Reject
+  | exception Invalid_argument _ -> `Crash
+
+let codec_decodes g bs =
+  match Wire.Codec.decode g.codec bs 0 with
+  | Ok v -> `Accept v
+  | Error _ -> `Reject
+  | exception Invalid_argument _ -> `Crash
+
+(* Decode the same bytes both ways and require the same verdict. Codecs that
+   bind a [Param.env] are skipped: the typ-level entry points cannot thread
+   one. *)
+let check_direct_codec_agree label kind g bs =
+  if Option.is_none g.env then
+    match (direct_decodes g bs, codec_decodes g bs) with
+    | `Crash, _ -> Alcobar.failf "%s %s of_string crashed" label kind
+    | _, `Crash -> Alcobar.failf "%s %s Codec.decode crashed" label kind
+    | `Reject, `Reject -> ()
+    | `Accept direct, `Accept codec ->
+        if not (g.equal direct codec) then
+          Alcobar.failf "%s %s of_string and Codec.decode decoded differently"
+            label kind
+    | `Accept _, `Reject ->
+        Alcobar.failf "%s %s of_string accepted but Codec.decode rejected" label
+          kind
+    | `Reject, `Accept _ ->
+        Alcobar.failf "%s %s Codec.decode accepted but of_string rejected" label
+          kind
+
+(* The encode-side twin. [Wire.to_bytes] (typ level) and [Codec.encode] (codec
+   level) are, like the two decoders, separate constructions over one schema:
+   they must refuse the same values and, when they accept, write the same bytes.
+   A value one path writes and the other refuses is a frame the library produces
+   through one entry point and rejects through the other. *)
+
+let direct_encodes g value =
+  match Wire.to_bytes g.typ value with
+  | bs -> `Wrote (string_of_bytes bs)
+  | exception Invalid_argument _ -> `Refused
+
+let codec_encodes g value =
+  match Wire.Codec.size_of_value g.codec value with
+  | exception Invalid_argument _ -> `Refused
+  | sz -> (
+      let buf = Bytes.create sz in
+      match Wire.Codec.encode g.codec value buf 0 with
+      | () -> `Wrote (string_of_bytes buf)
+      | exception Invalid_argument _ -> `Refused)
+
+let check_direct_codec_encode_agree label kind g value =
+  if Option.is_none g.env then
+    match (direct_encodes g value, codec_encodes g value) with
+    | `Refused, `Refused -> ()
+    | `Wrote direct, `Wrote codec ->
+        if not (String.equal direct codec) then
+          Alcobar.failf "%s %s to_bytes and Codec.encode wrote different bytes"
+            label kind
+    | `Wrote _, `Refused ->
+        Alcobar.failf "%s %s to_bytes wrote a value Codec.encode refuses" label
+          kind
+    | `Refused, `Wrote _ ->
+        Alcobar.failf "%s %s Codec.encode wrote a value to_bytes refuses" label
+          kind
+
 (* Round-trip one positive sample: decode the canonical bytes back to the
    value, then re-encode into a buffer sized from [size_of_value] and require
    the two to agree. Sizing from [size_of_value] (rather than from the
@@ -2985,6 +3061,7 @@ let check_positive_encode label g value bs env sz =
 let check_positive label g (value, bs) =
   let env = positive_env g in
   check_positive_decode label g value bs env;
+  check_direct_codec_encode_agree label "positive" g value;
   let sz = check_positive_size label g value bs in
   check_positive_size_metadata label g bs;
   check_positive_encode label g value bs env sz
@@ -3110,6 +3187,7 @@ let test_cases ?(validate = true) label g =
   in
   let check_safety_stream kind ?env bs =
     check_decode_safety label kind ?env g bs;
+    check_direct_codec_agree label kind g bs;
     if validate then begin
       check_validate_safety label kind ?env g bs;
       check_decode_validate_agree label kind ?env g bs
@@ -3117,7 +3195,9 @@ let test_cases ?(validate = true) label g =
   in
   let check_hostile_stream ?env = function
     | None -> ()
-    | Some value -> check_encode_safety label ?env g value
+    | Some value ->
+        check_direct_codec_encode_agree label "hostile" g value;
+        check_encode_safety label ?env g value
   in
   match g.env with
   | None ->
@@ -3273,7 +3353,8 @@ let nested_cases label depth =
           let nested_label = Fmt.str "%s [%s]" label comp in
           let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
           check_decode_safety nested_label kind ?env g bs;
-          check_validate_safety nested_label kind ?env g bs
+          check_validate_safety nested_label kind ?env g bs;
+          check_direct_codec_agree nested_label kind g bs
         in
         check "random" random;
         check "adversarial" adversarial);
@@ -4924,6 +5005,11 @@ let afl_everparse_cases ?max_len label =
 let registry_pick =
   Alcobar.choose (List.map (fun (_, p) -> Alcobar.const p) registry)
 
+(* Same pick, keeping the entry name so a failure says which registry codec
+   diverged (and so the agreement quarantine can be looked up by name). *)
+let registry_pick_named =
+  Alcobar.choose (List.map (fun (name, p) -> Alcobar.const (name, p)) registry)
+
 let ep_direct label =
   Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
       Alcobar.map
@@ -4960,17 +5046,17 @@ let ep_direct label =
           end))
 
 let ep_direct_safety label kind adversarial =
-  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+  Alcobar.dynamic_bind registry_pick_named (fun (name, Pack g) ->
       let stream = if adversarial then g.adversarial else g.random in
       Alcobar.map
         Alcobar.[ stream ]
         (fun bs () ->
-          if Option.is_none g.env then
-            try
-              ignore (Wire.of_string g.typ (string_of_bytes bs));
-              ignore (Wire.of_bytes g.typ bs)
-            with Invalid_argument _ ->
-              Alcobar.failf "%s direct %s crashed decoder" label kind))
+          if Option.is_none g.env then begin
+            (try ignore (Wire.of_bytes g.typ bs)
+             with Invalid_argument _ ->
+               Alcobar.failf "%s %s direct %s crashed decoder" label name kind);
+            check_direct_codec_agree name ("direct " ^ kind) g bs
+          end))
 
 let ep_streaming label =
   Alcobar.dynamic_bind registry_pick (fun (Pack g) ->

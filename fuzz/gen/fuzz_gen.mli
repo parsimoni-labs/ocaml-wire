@@ -28,8 +28,13 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     Encode safety is the mirror of decode crash-safety: a hostile value must
     either be refused with [Invalid_argument] or encode to bytes that decode
     back to an equal value, never to bytes the codec's own decoder rejects.
-    [validate] defaults to [true]. Direct typ-level entry points are covered by
-    {!entry_point_cases} so this hot path stays cheap. *)
+    Every stream also cross-checks the typ-level entry points against the codec
+    ones: {!Wire.of_string} and {!Wire.Codec.decode} must reach the same
+    accept/reject verdict on the same bytes (and the same value where both
+    accept), and {!Wire.to_bytes} and {!Wire.Codec.encode} must refuse the same
+    values and write the same bytes. A refinement one path enforces and the
+    other drops shows up here rather than in the generated C. [validate]
+    defaults to [true]. *)
 
 val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
 (** [afl_cases label] is the fast file-input AFL smoke suite. It reuses a
@@ -183,8 +188,9 @@ val entry_point_cases : string -> Alcobar.test_case list
     ([of_string] / [of_bytes] / [of_reader] / [to_string] / [to_bytes] /
     [to_writer] / [_exn] variants / [validate]) over a {!registry} gen picked at
     random each sample, so they cover the whole registry instead of a pinned
-    subset. Direct decode crash-safety is sampled on random/adversarial streams.
-    Direct checks skip codecs that bind a [Param.env]. *)
+    subset. Random and adversarial streams check that the direct decoder does
+    not crash and reaches the same verdict as {!Wire.Codec.decode}. Direct
+    checks skip codecs that bind a [Param.env]. *)
 
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
