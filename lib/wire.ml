@@ -189,16 +189,32 @@ let check_enum_membership ~at ~closed cases v =
    domain-local, which keeps it lock-free (each domain compiles its structs
    once) and avoids sharing a validator, hence its scratch, across domains.
    Keyed by physical identity, so the usual case of a codec built once and
-   decoded in a loop hits the cache. *)
+   decoded in a loop hits the cache.
+
+   Entries are never evicted. The [Domain.DLS] key outlives the validator that
+   allocated it, so dropping an entry does not give the key back: the next
+   decode of that struct compiles again and burns a second key. Physical
+   identity is also unhashable here, since two structs built from one schema are
+   indistinguishable to any hash, so no table turns the lookup sublinear either.
+   What the cache costs is therefore one entry per distinct struct the domain
+   has decoded, which is what compiling those structs already cost. *)
 let struct_validators =
   Domain.DLS.new_key (fun () ->
       (Stdlib.ref [] : (Types.struct_ * Codec.validator) list Stdlib.ref))
 
+exception Uncached
+
+(* Raises rather than returning an option: a hit is on the decode path, and the
+   option would allocate on every decode of a struct type. *)
+let rec cached_validator s = function
+  | [] -> raise_notrace Uncached
+  | (k, v) :: rest -> if k == s then v else cached_validator s rest
+
 let validator_for_struct s =
   let cache = Domain.DLS.get struct_validators in
-  match List.find_opt (fun (k, _) -> k == s) !cache with
-  | Some (_, v) -> v
-  | None ->
+  match cached_validator s !cache with
+  | v -> v
+  | exception Uncached ->
       let v = Codec.validator_of_struct s in
       cache := (s, v) :: !cache;
       v
