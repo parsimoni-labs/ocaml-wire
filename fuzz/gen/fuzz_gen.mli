@@ -274,7 +274,7 @@ val bits : ?bit_order:Wire.bit_order -> width:int -> Wire.bitfield -> int t
 val bit : int t -> bool t
 (** [bit inner] generates for [Wire.bit inner.typ]. *)
 
-val uint_var : endian:Wire.endian -> int -> Wire.Private.UInt63.t t
+val uint_var : endian:Wire.endian -> int -> Optint.Int63.t t
 (** [uint_var ~endian size] generates for [Wire.uint ~endian (Wire.int size)].
 *)
 
