@@ -2714,9 +2714,8 @@ let pair_of (Any a) (Any b) =
     }
 
 (* Flat records of arity 3 and 4: like [pair_of] but for more fields, so the
-   Boltzmann sampler can emit single-typedef records wider than a pair. Each
-   unpacks its [Any] elements and seals a flat [Codec.v] (no nesting, so the 3D
-   projection stays a single typedef). *)
+   Boltzmann sampler can emit records wider than a pair. Each unpacks its [Any]
+   elements and seals a flat [Codec.v]. *)
 let rec3_of (Any a) (Any b) (Any c) =
   let g =
     Codec.v "R3"
@@ -2916,6 +2915,82 @@ let positive_env g =
   | Some s -> Some (s.positive (Wire.Codec.env g.codec))
   | None -> None
 
+(* Typ-level vs codec-level agreement. [Wire.of_string] (typ level) and
+   [Codec.decode] (codec level) are two independent reader constructions over
+   the same schema, so they can drift apart: a refinement enforced by one and
+   dropped by the other accepts input the other -- and the EverParse C built
+   from the same schema -- rejects. The two may legitimately report different
+   errors (offsets and kinds are not part of the contract), so only the
+   accept/reject verdict is compared, plus the decoded value where both
+   accept. *)
+
+let direct_decodes g bs =
+  match Wire.of_string g.typ (string_of_bytes bs) with
+  | Ok v -> `Accept v
+  | Error _ -> `Reject
+  | exception Invalid_argument _ -> `Crash
+
+let codec_decodes g bs =
+  match Wire.Codec.decode g.codec bs 0 with
+  | Ok v -> `Accept v
+  | Error _ -> `Reject
+  | exception Invalid_argument _ -> `Crash
+
+(* Decode the same bytes both ways and require the same verdict. Codecs that
+   bind a [Param.env] are skipped: the typ-level entry points cannot thread
+   one. *)
+let check_direct_codec_agree label kind g bs =
+  if Option.is_none g.env then
+    match (direct_decodes g bs, codec_decodes g bs) with
+    | `Crash, _ -> Alcobar.failf "%s %s of_string crashed" label kind
+    | _, `Crash -> Alcobar.failf "%s %s Codec.decode crashed" label kind
+    | `Reject, `Reject -> ()
+    | `Accept direct, `Accept codec ->
+        if not (g.equal direct codec) then
+          Alcobar.failf "%s %s of_string and Codec.decode decoded differently"
+            label kind
+    | `Accept _, `Reject ->
+        Alcobar.failf "%s %s of_string accepted but Codec.decode rejected" label
+          kind
+    | `Reject, `Accept _ ->
+        Alcobar.failf "%s %s Codec.decode accepted but of_string rejected" label
+          kind
+
+(* The encode-side twin. [Wire.to_bytes] (typ level) and [Codec.encode] (codec
+   level) are, like the two decoders, separate constructions over one schema:
+   they must refuse the same values and, when they accept, write the same bytes.
+   A value one path writes and the other refuses is a frame the library produces
+   through one entry point and rejects through the other. *)
+
+let direct_encodes g value =
+  match Wire.to_bytes g.typ value with
+  | bs -> `Wrote (string_of_bytes bs)
+  | exception Invalid_argument _ -> `Refused
+
+let codec_encodes g value =
+  match Wire.Codec.size_of_value g.codec value with
+  | exception Invalid_argument _ -> `Refused
+  | sz -> (
+      let buf = Bytes.create sz in
+      match Wire.Codec.encode g.codec value buf 0 with
+      | () -> `Wrote (string_of_bytes buf)
+      | exception Invalid_argument _ -> `Refused)
+
+let check_direct_codec_encode_agree label kind g value =
+  if Option.is_none g.env then
+    match (direct_encodes g value, codec_encodes g value) with
+    | `Refused, `Refused -> ()
+    | `Wrote direct, `Wrote codec ->
+        if not (String.equal direct codec) then
+          Alcobar.failf "%s %s to_bytes and Codec.encode wrote different bytes"
+            label kind
+    | `Wrote _, `Refused ->
+        Alcobar.failf "%s %s to_bytes wrote a value Codec.encode refuses" label
+          kind
+    | `Refused, `Wrote _ ->
+        Alcobar.failf "%s %s Codec.encode wrote a value to_bytes refuses" label
+          kind
+
 (* Round-trip one positive sample: decode the canonical bytes back to the
    value, then re-encode into a buffer sized from [size_of_value] and require
    the two to agree. Sizing from [size_of_value] (rather than from the
@@ -2981,6 +3056,7 @@ let check_positive_encode label g value bs env sz =
 let check_positive label g (value, bs) =
   let env = positive_env g in
   check_positive_decode label g value bs env;
+  check_direct_codec_encode_agree label "positive" g value;
   let sz = check_positive_size label g value bs in
   check_positive_size_metadata label g bs;
   check_positive_encode label g value bs env sz
@@ -3106,6 +3182,7 @@ let test_cases ?(validate = true) label g =
   in
   let check_safety_stream kind ?env bs =
     check_decode_safety label kind ?env g bs;
+    check_direct_codec_agree label kind g bs;
     if validate then begin
       check_validate_safety label kind ?env g bs;
       check_decode_validate_agree label kind ?env g bs
@@ -3113,7 +3190,9 @@ let test_cases ?(validate = true) label g =
   in
   let check_hostile_stream ?env = function
     | None -> ()
-    | Some value -> check_encode_safety label ?env g value
+    | Some value ->
+        check_direct_codec_encode_agree label "hostile" g value;
+        check_encode_safety label ?env g value
   in
   match g.env with
   | None ->
@@ -3269,7 +3348,8 @@ let nested_cases label depth =
           let nested_label = Fmt.str "%s [%s]" label comp in
           let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
           check_decode_safety nested_label kind ?env g bs;
-          check_validate_safety nested_label kind ?env g bs
+          check_validate_safety nested_label kind ?env g bs;
+          check_direct_codec_agree nested_label kind g bs
         in
         check "random" random;
         check "adversarial" adversarial);
@@ -3739,15 +3819,14 @@ let afl_env_cases ?max_len label =
    a record is geometric (the Boltzmann distribution for a sequence, tuned to a
    small expected size via [continue]), and each field is drawn from a fixed
    leaf vocabulary that deliberately over-samples weird / adversarial shapes.
-   It stays in the single-typedef, fixed-size fragment (flat records and
-   homogeneous arrays of leaves) so the differential fuzzer can compile every
-   sample to a standalone C validator. Driven by a
-   [Random.State.t], so a [seed] reproduces the exact set: the differential's
-   generator and its runner both call [sample] with the same seed and agree on
-   the shapes. *)
+   It stays in the fixed-size fragment (flat records and homogeneous arrays of
+   leaves) so the differential fuzzer can compile every sample to a standalone C
+   validator. Driven by a [Random.State.t], so a [seed] reproduces the exact
+   set: the differential's generator and its runner both call [sample] with the
+   same seed and agree on the shapes. *)
 
-(* Single-typedef, fixed-size leaf vocabulary: each projects to one EverParse
-   field, so a flat record of them stays a single typedef. The sampler chooses
+(* Fixed-size leaf vocabulary: every leaf has a standalone validator, so a flat
+   record or array of them compiles to one C entrypoint. The sampler chooses
    from [sampler_adversarial_leaves] three times more often than from
    [sampler_regular_leaves]; bugs have clustered around these odd shapes. *)
 let sampler_regular_leaves : any list =
@@ -3770,7 +3849,7 @@ let sampler_regular_leaves : any list =
     Any { g = float64be; size = Some 8; label = "f64be" };
   ]
 
-let sampler_adversarial_leaves : any list =
+let sampler_weird_leaves : any list =
   [
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
     Any
@@ -3803,6 +3882,30 @@ let sampler_adversarial_leaves : any list =
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
   ]
 
+(* Refined and byte-span shapes. Every one is fixed-size and parameter-free, so
+   the differential's scope filter takes them unchanged -- and they are where
+   the refinements live: a per-byte span predicate, a range bound, a cross-field
+   constraint, a variable-width integer. A decoder that drops one of those
+   accepts bytes the generated C rejects, which is exactly what the differential
+   is for. *)
+let sampler_refined_leaves : any list =
+  [
+    Any { g = byte_array 3; size = Some 3; label = "ba3" };
+    Any
+      {
+        g = byte_array_where 3 ~per_byte:printable_byte;
+        size = Some 3;
+        label = "baw3";
+      };
+    Any { g = uint_var ~endian:Wire.Big 3; size = Some 3; label = "uv3" };
+    Any { g = uint_var ~endian:Wire.Little 3; size = Some 3; label = "uv3le" };
+    Any { g = bounded_u16be; size = Some 2; label = "bnd16" };
+    Any { g = bounded_u32be; size = Some 4; label = "bnd32" };
+    Any { g = typ_where; size = Some 2; label = "twhere" };
+    Any { g = field_constraint; size = Some 2; label = "fconstraint" };
+  ]
+
+let sampler_adversarial_leaves = sampler_weird_leaves @ sampler_refined_leaves
 let sampler_leaves = sampler_regular_leaves @ sampler_adversarial_leaves
 
 (* Geometric arity in [1, max_arity]: keep adding a field with probability
@@ -3815,11 +3918,11 @@ let sample_arity rng ~continue ~max_arity =
   go 1
 
 (* The shape of one sampled codec, paired with the leaf-vocabulary labels it
-   draws (in draw order). The sampler stays in the single-typedef, fixed-size
-   fragment, so a composition is only a flat record of leaves or an array of one
-   leaf -- "depth" here is record arity and array presence, not arbitrary
-   nesting. Exposed alongside each sample so coverage metrics read the structure
-   directly rather than parsing the debug label. *)
+   draws (in draw order). The sampler stays in the fixed-size fragment, so a
+   composition is only a flat record of leaves or an array of one leaf --
+   "depth" here is record arity and array presence, not arbitrary nesting.
+   Exposed alongside each sample so coverage metrics read the structure directly
+   rather than parsing the debug label. *)
 type sample_shape = Leaf | Array | Record of int
 type sample_meta = { shape : sample_shape; leaves : string list }
 
@@ -4127,6 +4230,14 @@ let expected_sampler_labels =
     "enum";
     "enum_open";
     "lkp";
+    "ba3";
+    "baw3";
+    "uv3";
+    "uv3le";
+    "bnd16";
+    "bnd32";
+    "twhere";
+    "fconstraint";
   ]
 
 let check_registry_invariants () =
@@ -4240,6 +4351,11 @@ let check_sampler_distribution () =
       ("no 8-bit bitpack", has_any [ "bp8m"; "bp8l" ]);
       ("no 16-bit bitpack", has "bp16bel");
       ("no 32-bit bitpack", has_any [ "bp32m"; "bp32bel" ]);
+      ("no byte span", has "ba3");
+      ("no refined byte span", has "baw3");
+      ("no variable-width uint", has_any [ "uv3"; "uv3le" ]);
+      ("no wide bounded int", has_any [ "bnd16"; "bnd32" ]);
+      ("no refined sub-codec", has_any [ "twhere"; "fconstraint" ]);
     ]
   in
   List.iter
@@ -4920,6 +5036,11 @@ let afl_everparse_cases ?max_len label =
 let registry_pick =
   Alcobar.choose (List.map (fun (_, p) -> Alcobar.const p) registry)
 
+(* Same pick, keeping the entry name so a failure says which registry codec
+   diverged (and so the agreement quarantine can be looked up by name). *)
+let registry_pick_named =
+  Alcobar.choose (List.map (fun (name, p) -> Alcobar.const (name, p)) registry)
+
 let ep_direct label =
   Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
       Alcobar.map
@@ -4956,17 +5077,17 @@ let ep_direct label =
           end))
 
 let ep_direct_safety label kind adversarial =
-  Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
+  Alcobar.dynamic_bind registry_pick_named (fun (name, Pack g) ->
       let stream = if adversarial then g.adversarial else g.random in
       Alcobar.map
         Alcobar.[ stream ]
         (fun bs () ->
-          if Option.is_none g.env then
-            try
-              ignore (Wire.of_string g.typ (string_of_bytes bs));
-              ignore (Wire.of_bytes g.typ bs)
-            with Invalid_argument _ ->
-              Alcobar.failf "%s direct %s crashed decoder" label kind))
+          if Option.is_none g.env then begin
+            (try ignore (Wire.of_bytes g.typ bs)
+             with Invalid_argument _ ->
+               Alcobar.failf "%s %s direct %s crashed decoder" label name kind);
+            check_direct_codec_agree name ("direct " ^ kind) g bs
+          end))
 
 let ep_streaming label =
   Alcobar.dynamic_bind registry_pick (fun (Pack g) ->
