@@ -88,6 +88,42 @@ let pascal_case name =
 let file_base (s : t) = String.capitalize_ascii s.name
 let c_ident (s : t) = everparse_name s.name
 
+(* Both mangles are many-to-one, so two codecs with different names can land
+   on one generated artifact and overwrite each other in silence. [file_base]
+   collides whenever the names differ only in the leading capital ([header]
+   and [Header] both write [Header.3d], and the second write wins: the
+   verified C, the plug and the provenance stamp then describe one codec while
+   the OCaml side still parses with both, so the shadowed codec's FFI stubs
+   validate against the other codec's spec). [c_ident] collides more widely,
+   since [everparse_name] also strips underscores and collapses uppercase runs
+   ([TMFrame] and [Tmframe] write two [_Fields.h] files that share the
+   [TMFRAME_FIELDS_H] include guard and the [TmframeFields] struct tag, so a
+   translation unit including both takes one schema's plug layout for the
+   other's). The standalone pipeline already rejects a name collision in
+   [Wire.Everparse.merge]; do the same for the per-schema pipeline, up front
+   and naming both codecs. Its remaining collapse, two codecs sharing one
+   [pascal_case] wrapper symbol ([TPM2B] and [Tpm2b]), is left to the C
+   compiler: the merged module puts both definitions in one translation unit,
+   so it fails loudly at build time rather than substituting one for the
+   other. *)
+let check_name_collisions schemas =
+  let check what key =
+    let seen = Hashtbl.create 16 in
+    List.iter
+      (fun (s : t) ->
+        let k = key s in
+        match Hashtbl.find_opt seen k with
+        | Some first ->
+            Fmt.invalid_arg
+              "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
+               them"
+              first s.name what k
+        | None -> Hashtbl.add seen k s.name)
+      schemas
+  in
+  check "the file" (fun s -> file_base s ^ ".3d");
+  check "the C identifier" c_ident
+
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
    uppercase runs get lowercased, ...). Rather than re-implement EverParse's
@@ -170,7 +206,9 @@ let read_validate_name ~outdir s =
   | Some n -> n
   | None -> Fmt.failwith "could not find Validate function name in %s" path
 
-let write_3d ~outdir schemas = Wire.Everparse.write ~mode:`Ffi ~outdir schemas
+let write_3d ~outdir schemas =
+  check_name_collisions schemas;
+  Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
@@ -341,31 +379,60 @@ let endianness_freestanding_branch =
 
 |}
 
-(* The EverParse anchor the freestanding branch is spliced before: the fallthrough
-   that rejects an unrecognized platform. *)
-let endianness_unsupported_anchor = "#else\n\n#error \"Unsupported platform\""
+(* The EverParse anchor the freestanding branch is spliced before: the
+   fallthrough that rejects an unrecognized platform. EverParse ships this
+   header with CRLF line endings, so the blank line between the two directives
+   is matched as a run of newline characters rather than pinned to [\n]. *)
+let endianness_unsupported_anchor =
+  Re.compile
+    (Re.seq
+       [
+         Re.str "#else";
+         Re.rep1 (Re.set "\r\n");
+         Re.str "#error \"Unsupported platform\"";
+       ])
+
+(* Says the freestanding branch is already spliced in, so a second pass over
+   the same file does not add it twice. *)
+let endianness_freestanding_marker =
+  Re.compile (Re.str "defined(__BYTE_ORDER__)")
 
 let with_freestanding_endianness content =
-  let anchor = Re.compile (Re.str endianness_unsupported_anchor) in
-  Re.replace_string ~all:false anchor
-    ~by:(endianness_freestanding_branch ^ endianness_unsupported_anchor)
-    content
+  if Re.execp endianness_freestanding_marker content then content
+  else if not (Re.execp endianness_unsupported_anchor content) then
+    failwith
+      "EverParseEndianness.h: no \"Unsupported platform\" fallthrough to \
+       splice the freestanding byte-order branch before; EverParse's header \
+       layout changed"
+  else
+    Re.replace ~all:false endianness_unsupported_anchor
+      ~f:(fun g -> endianness_freestanding_branch ^ Re.Group.get g 0)
+      content
 
-let copy_everparse_endianness ~outdir =
+(* Patch the [EverParseEndianness.h] in [outdir] so it also compiles for a
+   target with no OS <endian.h>. 3d.exe writes its own copy of this header on
+   every run, overwriting whatever is there, so the branch has to be spliced
+   into that copy after 3d.exe has run: patching a file that is not there yet,
+   or skipping the patch because the file already exists, both leave the
+   shipped header [#error]ing on the cross target the standalone C archive is
+   meant to serve. Falls back to EverParse's source copy when there is nothing
+   in [outdir] to patch. *)
+let patch_everparse_endianness ~outdir =
   let dst = Filename.concat outdir "EverParseEndianness.h" in
-  if not (Sys.file_exists dst) then begin
-    let ep_dir = everparse_dir () in
-    let src = Filename.concat ep_dir "src/3d/EverParseEndianness.h" in
-    if not (Sys.file_exists src) then
-      Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
-    let ic = open_in_bin src in
-    let n = in_channel_length ic in
-    let buf = really_input_string ic n in
-    close_in ic;
-    let oc = open_out_bin dst in
-    output_string oc (with_freestanding_endianness buf);
-    close_out oc
-  end
+  let src =
+    if Sys.file_exists dst then dst
+    else begin
+      let src =
+        Filename.concat (everparse_dir ()) "src/3d/EverParseEndianness.h"
+      in
+      if not (Sys.file_exists src) then
+        Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
+      src
+    end
+  in
+  let content = In_channel.with_open_bin src In_channel.input_all in
+  let patched = with_freestanding_endianness content in
+  Out_channel.with_open_bin dst (fun oc -> Out_channel.output_string oc patched)
 
 let has_3d_exe () = locate_3d_exe () <> None
 
@@ -376,6 +443,7 @@ let has_3d_exe () = locate_3d_exe () <> None
    a different WIRECTX definition; they must then also omit the default
    [<Name>_Fields.c] from their link. *)
 let write_external_typedefs ~outdir schemas =
+  check_name_collisions schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -490,6 +558,7 @@ let write_fields_impl ~outdir s =
   close_out oc
 
 let write_fields ~outdir schemas =
+  check_name_collisions schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -587,7 +656,8 @@ let run_everparse_files ?(quiet = true) ~outdir files =
       harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
       write_provenance ~outdir ~version f)
     files;
-  copy_everparse_endianness ~outdir
+  (* Last, because every 3d.exe run above rewrites this header. *)
+  patch_everparse_endianness ~outdir
 
 let run_everparse ?(quiet = true) ~outdir schemas =
   run_everparse_files ~quiet ~outdir (List.map Wire.Everparse.filename schemas)
@@ -893,6 +963,7 @@ let batch_check ?max_jobs ~outdir schemas =
       match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
 
 let generate_c ?(quiet = true) ~outdir schemas =
+  check_name_collisions schemas;
   ensure_dir outdir;
   if has_3d_exe () then begin
     run_everparse ~quiet ~outdir schemas;
@@ -1011,6 +1082,7 @@ let emit_install_stanza ppf ~package ~three_d_files ~c_files ~ctx_files
   pr "  (EverParseEndianness.h as c/EverParseEndianness.h)))\n"
 
 let generate_dune_file ~filename ~outdir ~package schemas =
+  check_name_collisions schemas;
   let oc = open_out (Filename.concat outdir filename) in
   let ppf = Format.formatter_of_out_channel oc in
   let names = List.map file_base schemas in
