@@ -2348,7 +2348,7 @@ let test_encode_exact_uint_width () =
           let typ = uint ~endian (int n) in
           let codec, _ = uint_width_codec ~endian n in
           let label = Fmt.str "uint(%d,%s) <- 0x%X" n ename over in
-          let sub = Fmt.str "exceeds %d-byte uint field" n in
+          let sub = Fmt.str "does not fit an unsigned %d-byte field" n in
           let value = Wire.Private.UInt63.of_int over in
           expect_exact_width_error (label ^ " to_string") ~sub (fun () ->
               Wire.to_string typ value);
@@ -2378,7 +2378,7 @@ let test_set_exact_uint_width () =
           let buf = Bytes.make 8 '\x00' in
           let label = Fmt.str "set uint(%d,%s) <- 0x%X" n ename over in
           expect_exact_width_error label
-            ~sub:(Fmt.str "exceeds %d-byte uint field" n) (fun () ->
+            ~sub:(Fmt.str "does not fit an unsigned %d-byte field" n) (fun () ->
               set buf 0 (Wire.Private.UInt63.of_int over);
               Bytes.sub_string buf 0 n);
           Alcotest.(check string)
@@ -2430,7 +2430,7 @@ let test_encode_exact_bits_width () =
       let codec, _ = bits_width_codec ~bit_order ~width base in
       let over = 1 lsl width in
       let label = Fmt.str "bits(%d,%s,%s) <- 0x%X" width bname oname over in
-      let sub = Fmt.str "exceeds %d-bit field width" width in
+      let sub = Fmt.str "does not fit an unsigned %d-bit field" width in
       expect_exact_width_error (label ^ " to_bytes") ~sub (fun () ->
           Bytes.to_string (Wire.to_bytes typ over));
       expect_exact_width_error (label ^ " Codec.encode") ~sub (fun () ->
@@ -2458,7 +2458,7 @@ let test_set_exact_bits_width () =
       let buf = Bytes.make size '\x00' in
       let label = Fmt.str "set bits(%d,%s,%s) <- 0x%X" width bname oname over in
       expect_exact_width_error label
-        ~sub:(Fmt.str "exceeds %d-bit field width" width) (fun () ->
+        ~sub:(Fmt.str "does not fit an unsigned %d-bit field" width) (fun () ->
           set buf 0 over;
           Bytes.to_string buf);
       Alcotest.(check string)
@@ -2491,17 +2491,162 @@ let test_map_inherits_exact_width () =
   let codec = Codec.v "MapBits3" Fun.id Codec.[ cf ] in
   let set = Staged.unstage (Codec.set codec cf) in
   expect_exact_width_error "map(bits(3,U8)) to_string"
-    ~sub:"exceeds 3-bit field width" (fun () -> Wire.to_string typ 0xFF);
+    ~sub:"does not fit an unsigned 3-bit field" (fun () ->
+      Wire.to_string typ 0xFF);
   expect_exact_width_error "map(bits(3,U8)) Codec.encode"
-    ~sub:"exceeds 3-bit field width" (fun () ->
+    ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       let buf = Bytes.make 1 '\x00' in
       Codec.encode codec 0xFF buf 0;
       Bytes.to_string buf);
   expect_exact_width_error "map(bits(3,U8)) Codec.set"
-    ~sub:"exceeds 3-bit field width" (fun () ->
+    ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       let buf = Bytes.make 1 '\x00' in
       set buf 0 0xFF;
       Bytes.to_string buf)
+
+(* The fixed-width scalars are the same rule at a fixed width. OCaml carries the
+   narrow ones in a plain [int], which holds far more than the field does, so
+   nothing but a runtime check stands between a caller's 0x1FF and an 0xFF on
+   the wire that reads back as a perfectly legal 255. The signed ones accept
+   exactly what their decoder produces, [-2^(n-1) .. 2^(n-1) - 1]: 200 into an
+   [int8] is refused rather than round-tripped back as -56. *)
+let scalar_range_codec name typ =
+  let cf = Codec.(Field.v "v" typ $ Fun.id) in
+  (Codec.v name Fun.id Codec.[ cf ], cf)
+
+(* Sweep one scalar typ. Every [outside] value must be refused by all three
+   entry points and leave the buffer untouched; every [inside] one must write
+   the same bytes through both encoders and read back through [Codec.get]. *)
+let check_scalar_range ~name ~typ ~sub ~equal ~pp ~inside ~outside =
+  let codec, cf = scalar_range_codec name typ in
+  let size = Codec.wire_size codec in
+  let set = Staged.unstage (Codec.set codec cf) in
+  let get = Staged.unstage (Codec.get codec cf) in
+  List.iter
+    (fun v ->
+      let label = Fmt.str "%s <- %a" name pp v in
+      expect_exact_width_error (label ^ " to_string") ~sub (fun () ->
+          Wire.to_string typ v);
+      expect_exact_width_error (label ^ " Codec.encode") ~sub (fun () ->
+          let buf = Bytes.make size '\x00' in
+          Codec.encode codec v buf 0;
+          Bytes.to_string buf);
+      let buf = Bytes.make size '\x00' in
+      expect_exact_width_error (label ^ " Codec.set") ~sub (fun () ->
+          set buf 0 v;
+          Bytes.to_string buf);
+      Alcotest.(check string)
+        (label ^ ": rejected set left the buffer alone")
+        (String.make size '\x00') (Bytes.to_string buf))
+    outside;
+  List.iter
+    (fun v ->
+      let label = Fmt.str "%s <- %a" name pp v in
+      let buf = Bytes.make size '\x00' in
+      Codec.encode codec v buf 0;
+      Alcotest.(check string)
+        (label ^ ": widest legal value agrees across entry points")
+        (Wire.to_string typ v) (Bytes.to_string buf);
+      Bytes.fill buf 0 size '\x00';
+      set buf 0 v;
+      Alcotest.(check bool)
+        (label ^ ": widest legal value reads back")
+        true
+        (equal (get buf 0) v))
+    inside
+
+let test_encode_exact_unsigned_scalar () =
+  List.iter
+    (fun (name, bits, typ) ->
+      let widest = (1 lsl bits) - 1 in
+      check_scalar_range ~name ~typ
+        ~sub:(Fmt.str "does not fit an unsigned %d-bit field" bits)
+        ~equal:Int.equal ~pp:Fmt.int ~inside:[ 0; widest ]
+        ~outside:[ widest + 1; -1 ])
+    [ ("uint8", 8, uint8); ("uint16", 16, uint16); ("uint16be", 16, uint16be) ]
+
+let test_encode_exact_signed_scalar () =
+  List.iter
+    (fun (name, bits, typ) ->
+      if width_is_testable bits then
+        let limit = 1 lsl (bits - 1) in
+        check_scalar_range ~name ~typ
+          ~sub:(Fmt.str "does not fit a signed %d-bit field" bits)
+          ~equal:Int.equal ~pp:Fmt.int
+          ~inside:[ -limit; limit - 1 ]
+          ~outside:[ limit; -limit - 1 ])
+    [
+      ("int8", 8, int8);
+      ("int16", 16, int16);
+      ("int16be", 16, int16be);
+      ("int32", 32, int32);
+      ("int32be", 32, int32be);
+    ]
+
+(* [uint32] rides an [Optint.t], which is a plain [int] where that is wide
+   enough to hold more than 32 bits and a boxed [int32] where it is not. Only
+   the first can carry an out-of-range value, so the case exists only there. *)
+let test_encode_exact_uint32 () =
+  if width_is_testable 32 then
+    let mask = Wire.Private.UInt32.mask32 in
+    List.iter
+      (fun (name, typ) ->
+        check_scalar_range ~name ~typ
+          ~sub:"does not fit an unsigned 32-bit field" ~equal:Optint.equal
+          ~pp:Optint.pp
+          ~inside:[ Optint.zero; Optint.of_int mask ]
+          ~outside:[ Optint.of_int (mask + 1); Optint.of_int (-1) ])
+      [ ("uint32", uint32); ("uint32be", uint32be) ]
+
+(* [uint63] fills its carrier, so the only unrepresentable value left is a
+   negative one, and that one is unrepresentable on every target. *)
+let test_encode_exact_uint63 () =
+  List.iter
+    (fun (name, typ) ->
+      check_scalar_range ~name ~typ ~sub:"does not fit an unsigned 8-byte field"
+        ~equal:Optint.Int63.equal ~pp:Optint.Int63.pp
+        ~inside:[ Optint.Int63.zero; Optint.Int63.max_int ]
+        ~outside:[ Optint.Int63.of_int (-1); Optint.Int63.min_int ])
+    [ ("uint63", uint63); ("uint63be", uint63be) ]
+
+(* [array] and [repeat] elements are written by an encoder of their own, so a
+   value no element can hold has to be refused on that path too. *)
+let test_element_exact_width () =
+  let acf = Codec.(Field.v "vs" (array ~len:(int 3) uint8) $ Fun.id) in
+  let acodec = Codec.v "ArrayU8" Fun.id Codec.[ acf ] in
+  expect_exact_width_error "array(3,uint8) <- [0; 0x1FF; 0]"
+    ~sub:"does not fit an unsigned 8-bit field" (fun () ->
+      let buf = Bytes.make 3 '\x00' in
+      Codec.encode acodec [ 0; 0x1FF; 0 ] buf 0;
+      Bytes.to_string buf);
+  let rcf = Codec.(Field.repeat "vs" ~size:(int 3) uint8 $ Fun.id) in
+  let rcodec = Codec.v "RepeatU8" Fun.id Codec.[ rcf ] in
+  expect_exact_width_error "repeat(3,uint8) <- [0; 0x1FF; 0]"
+    ~sub:"does not fit an unsigned 8-bit field" (fun () ->
+      let buf = Bytes.make 3 '\x00' in
+      Codec.encode rcodec [ 0; 0x1FF; 0 ] buf 0;
+      Bytes.to_string buf)
+
+(* The other end of the rule: an [int64] is exactly the eight bytes written, so
+   no value of it is out of range and none may be refused. A guard here would be
+   dead code that only ever rejected a legal frame. *)
+let test_encode_int64_carrier_has_no_range () =
+  List.iter
+    (fun (name, typ) ->
+      List.iter
+        (fun v ->
+          let s = Wire.to_string typ v in
+          Alcotest.(check int) (name ^ ": eight bytes") 8 (String.length s);
+          Alcotest.(check int64)
+            (Fmt.str "%s <- %Ld round-trips" name v)
+            v (Wire.of_string_exn typ s))
+        Int64.[ min_int; -1L; zero; max_int ])
+    [
+      ("uint64", uint64);
+      ("uint64be", uint64be);
+      ("int64", int64);
+      ("int64be", int64be);
+    ]
 
 (* A reference-free constant size expression normalises to the literal form at
    construction, so every [Int n] fast path and range guard in the library sees
@@ -3912,7 +4057,9 @@ let test_raw_with_offset () =
   let codec = Codec.v "RawOff" (fun v -> v) [ cf_v ] in
   let buf = Bytes.create 20 in
   Bytes.fill buf 0 20 '\x00';
-  (Staged.unstage (Codec.set codec cf_v)) buf 10 (Optint.of_int32 0xDEADBEEFl);
+  (Staged.unstage (Codec.set codec cf_v))
+    buf 10
+    (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
   Alcotest.(check int32)
     "get at offset 10" 0xDEADBEEFl
     (Optint.to_int32 ((Staged.unstage (Codec.get codec cf_v)) buf 10))
@@ -5785,7 +5932,7 @@ let test_tm_like_roundtrip () =
           ({ id = 0x0B; data = 0x000B } : packet);
           ({ id = 0x0C; data = 0x000C } : packet);
         ];
-      ocf = Some (Optint.of_int32 0xDEADBEEFl);
+      ocf = Some (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
       fecf = Some 0xCAFE;
     }
   in
@@ -7504,6 +7651,16 @@ let suite =
         test_set_bits_no_silent_truncation;
       Alcotest.test_case "exact width: map reaches the inner typ" `Quick
         test_map_inherits_exact_width;
+      Alcotest.test_case "exact width: unsigned scalars" `Quick
+        test_encode_exact_unsigned_scalar;
+      Alcotest.test_case "exact width: signed scalars" `Quick
+        test_encode_exact_signed_scalar;
+      Alcotest.test_case "exact width: uint32" `Quick test_encode_exact_uint32;
+      Alcotest.test_case "exact width: uint63" `Quick test_encode_exact_uint63;
+      Alcotest.test_case "exact width: int64 carrier has no range" `Quick
+        test_encode_int64_carrier_has_no_range;
+      Alcotest.test_case "exact width: array and repeat elements" `Quick
+        test_element_exact_width;
       Alcotest.test_case "exact byte field: literal size" `Quick
         test_exact_byte_field_literal_size;
       Alcotest.test_case "exact byte field: expression size" `Quick

@@ -50,7 +50,7 @@ let byte_at v i =
 (* Every encoder path -- typ-level, compiled field, [Codec.set] -- writes a
    [uint ~size] through here, so the width check belongs here too. *)
 let write endian buf off size v =
-  Types.check_uint_var_encode ~size v;
+  UInt63.check_encode ~size v;
   let v = Optint.Int63.to_int64 v in
   match (endian : Types.endian) with
   | Big ->

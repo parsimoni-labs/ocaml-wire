@@ -15,12 +15,20 @@ val le : bytes -> int -> t
 val be : bytes -> int -> t
 (** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
 
+val check_encode : size:int -> t -> unit
+(** [check_encode ~size v] raises [Invalid_argument] when [v] is negative or
+    needs more than [size] bytes. Truncating it would leave a legal [size]-byte
+    number on the wire that nothing downstream can tell from the one the caller
+    meant. Shared by every [size]-byte unsigned field: the eight-byte {!set_le}
+    and {!set_be} below, and the narrower [uint ~size]. *)
+
 val set_le : bytes -> int -> t -> unit
 (** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
-*)
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
 
 val set_be : bytes -> int -> t -> unit
-(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off]. *)
+(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off].
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
 
 val to_int : t -> int
 (** [to_int t] is the value as a native [int]. Exact on a 64-bit host. *)

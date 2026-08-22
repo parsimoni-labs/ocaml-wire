@@ -523,27 +523,46 @@ end
 
     In ordinary use, one starts from primitive integer or byte descriptions and
     combines them with {!bits}, {!array}, {!byte_slice}, {!where}, {!enum}, and
-    related combinators. *)
+    related combinators.
+
+    Every fixed-width integer accepts exactly the range its decoder produces:
+    [0] to [2^n - 1] for an unsigned width, [-2^(n-1)] to [2^(n-1) - 1] for a
+    signed one. Encoding anything else raises [Invalid_argument] rather than
+    dropping the bits that do not fit, on every entry point ({!to_string},
+    {!Codec.encode} and {!Codec.set} alike). OCaml carries the narrow widths in
+    a plain [int], which holds far more than the field does, so [uint8] given
+    [0x1FF] would otherwise put an [0xFF] on the wire that reads back as a
+    perfectly legal [255], with nothing left to say the caller meant something
+    else. *)
 
 val uint8 : int typ
-(** Unsigned 8-bit integer. *)
+(** Unsigned 8-bit integer. Encodes [0] to [255]. *)
 
 val uint16 : int typ
-(** Unsigned 16-bit little-endian integer. *)
+(** Unsigned 16-bit little-endian integer. Encodes [0] to [65535]. *)
 
 val uint16be : int typ
-(** Unsigned 16-bit big-endian integer. *)
+(** Unsigned 16-bit big-endian integer. Encodes [0] to [65535]. *)
 
 val uint32 : Optint.t typ
 (** Unsigned 32-bit little-endian integer. Decodes to an [Optint.t] so a value
-    with bit 31 set survives on a narrow-int target (js/wasm). *)
+    with bit 31 set survives on a narrow-int target (js/wasm).
+
+    On a 64-bit host that [Optint.t] is a native [int] wide enough to hold more
+    than 32 bits, so encoding checks the range and refuses a negative value
+    rather than reading it as its two's complement. Build a word with bit 31 set
+    from its bit pattern with [Wire.Private.UInt32.of_int32], not with
+    [Optint.of_int32], which keeps the signed view. *)
 
 val uint32be : Optint.t typ
 (** Unsigned 32-bit big-endian integer. Decodes to an [Optint.t]. *)
 
 val uint63 : Optint.Int63.t typ
 (** Unsigned 63-bit little-endian integer carried on 8 bytes. Decodes to an
-    [Optint.Int63.t]. *)
+    [Optint.Int63.t], whose range starts at zero, so encoding refuses a negative
+    value. The eight wire bytes hold more than the carrier does: the decoder
+    keeps the low bits, so the widest value that round-trips is
+    [Optint.Int63.max_int]. *)
 
 val uint63be : Optint.Int63.t typ
 (** Unsigned 63-bit big-endian integer carried on 8 bytes. Decodes to an
@@ -551,31 +570,36 @@ val uint63be : Optint.Int63.t typ
 
 val uint64 : int64 typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
-    64-bit integer. *)
+    64-bit integer. The representation is exactly the eight bytes written, so
+    every [int64] encodes and none is out of range. *)
 
 val uint64be : int64 typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as an OCaml
     64-bit integer. *)
 
 val int8 : int typ
-(** Signed 8-bit two's-complement integer. *)
+(** Signed 8-bit two's-complement integer. Encodes [-128] to [127]: [200] is not
+    an [int8], even though its low byte is a legal one, and would come back from
+    the decoder as [-56]. *)
 
 val int16 : int typ
-(** Signed 16-bit little-endian integer. *)
+(** Signed 16-bit little-endian integer. Encodes [-32768] to [32767]. *)
 
 val int16be : int typ
-(** Signed 16-bit big-endian integer. *)
+(** Signed 16-bit big-endian integer. Encodes [-32768] to [32767]. *)
 
 val int32 : int typ
 (** [int32] is a signed 32-bit little-endian integer, returned as an OCaml
-    integer (64-bit hosts only: on a 32-bit host, the top bit may not fit). *)
+    integer (64-bit hosts only: on a 32-bit host, the top bit may not fit).
+    Encodes [-2^31] to [2^31 - 1]. *)
 
 val int32be : int typ
 (** [int32be] is a signed 32-bit big-endian integer, returned as an OCaml
     integer. *)
 
 val int64 : int64 typ
-(** Signed 64-bit little-endian integer. *)
+(** Signed 64-bit little-endian integer. Like {!uint64}, the representation is
+    exactly the eight bytes written, so no value is out of range. *)
 
 val int64be : int64 typ
 (** Signed 64-bit big-endian integer. *)
