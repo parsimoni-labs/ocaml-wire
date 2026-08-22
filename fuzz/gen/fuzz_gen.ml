@@ -2718,9 +2718,8 @@ let pair_of (Any a) (Any b) =
     }
 
 (* Flat records of arity 3 and 4: like [pair_of] but for more fields, so the
-   Boltzmann sampler can emit single-typedef records wider than a pair. Each
-   unpacks its [Any] elements and seals a flat [Codec.v] (no nesting, so the 3D
-   projection stays a single typedef). *)
+   Boltzmann sampler can emit records wider than a pair. Each unpacks its [Any]
+   elements and seals a flat [Codec.v]. *)
 let rec3_of (Any a) (Any b) (Any c) =
   let g =
     Codec.v "R3"
@@ -3824,15 +3823,14 @@ let afl_env_cases ?max_len label =
    a record is geometric (the Boltzmann distribution for a sequence, tuned to a
    small expected size via [continue]), and each field is drawn from a fixed
    leaf vocabulary that deliberately over-samples weird / adversarial shapes.
-   It stays in the single-typedef, fixed-size fragment (flat records and
-   homogeneous arrays of leaves) so the differential fuzzer can compile every
-   sample to a standalone C validator. Driven by a
-   [Random.State.t], so a [seed] reproduces the exact set: the differential's
-   generator and its runner both call [sample] with the same seed and agree on
-   the shapes. *)
+   It stays in the fixed-size fragment (flat records and homogeneous arrays of
+   leaves) so the differential fuzzer can compile every sample to a standalone C
+   validator. Driven by a [Random.State.t], so a [seed] reproduces the exact
+   set: the differential's generator and its runner both call [sample] with the
+   same seed and agree on the shapes. *)
 
-(* Single-typedef, fixed-size leaf vocabulary: each projects to one EverParse
-   field, so a flat record of them stays a single typedef. The sampler chooses
+(* Fixed-size leaf vocabulary: every leaf has a standalone validator, so a flat
+   record or array of them compiles to one C entrypoint. The sampler chooses
    from [sampler_adversarial_leaves] three times more often than from
    [sampler_regular_leaves]; bugs have clustered around these odd shapes. *)
 let sampler_regular_leaves : any list =
@@ -3855,7 +3853,7 @@ let sampler_regular_leaves : any list =
     Any { g = float64be; size = Some 8; label = "f64be" };
   ]
 
-let sampler_adversarial_leaves : any list =
+let sampler_weird_leaves : any list =
   [
     Any { g = bits ~width:3 Wire.U8; size = Some 1; label = "bits3" };
     Any
@@ -3888,6 +3886,30 @@ let sampler_adversarial_leaves : any list =
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
   ]
 
+(* Refined and byte-span shapes. Every one is fixed-size and parameter-free, so
+   the differential's scope filter takes them unchanged -- and they are where
+   the refinements live: a per-byte span predicate, a range bound, a cross-field
+   constraint, a variable-width integer. A decoder that drops one of those
+   accepts bytes the generated C rejects, which is exactly what the differential
+   is for. *)
+let sampler_refined_leaves : any list =
+  [
+    Any { g = byte_array 3; size = Some 3; label = "ba3" };
+    Any
+      {
+        g = byte_array_where 3 ~per_byte:printable_byte;
+        size = Some 3;
+        label = "baw3";
+      };
+    Any { g = uint_var ~endian:Wire.Big 3; size = Some 3; label = "uv3" };
+    Any { g = uint_var ~endian:Wire.Little 3; size = Some 3; label = "uv3le" };
+    Any { g = bounded_u16be; size = Some 2; label = "bnd16" };
+    Any { g = bounded_u32be; size = Some 4; label = "bnd32" };
+    Any { g = typ_where; size = Some 2; label = "twhere" };
+    Any { g = field_constraint; size = Some 2; label = "fconstraint" };
+  ]
+
+let sampler_adversarial_leaves = sampler_weird_leaves @ sampler_refined_leaves
 let sampler_leaves = sampler_regular_leaves @ sampler_adversarial_leaves
 
 (* Geometric arity in [1, max_arity]: keep adding a field with probability
@@ -3900,11 +3922,11 @@ let sample_arity rng ~continue ~max_arity =
   go 1
 
 (* The shape of one sampled codec, paired with the leaf-vocabulary labels it
-   draws (in draw order). The sampler stays in the single-typedef, fixed-size
-   fragment, so a composition is only a flat record of leaves or an array of one
-   leaf -- "depth" here is record arity and array presence, not arbitrary
-   nesting. Exposed alongside each sample so coverage metrics read the structure
-   directly rather than parsing the debug label. *)
+   draws (in draw order). The sampler stays in the fixed-size fragment, so a
+   composition is only a flat record of leaves or an array of one leaf --
+   "depth" here is record arity and array presence, not arbitrary nesting.
+   Exposed alongside each sample so coverage metrics read the structure directly
+   rather than parsing the debug label. *)
 type sample_shape = Leaf | Array | Record of int
 type sample_meta = { shape : sample_shape; leaves : string list }
 
@@ -4212,6 +4234,14 @@ let expected_sampler_labels =
     "enum";
     "enum_open";
     "lkp";
+    "ba3";
+    "baw3";
+    "uv3";
+    "uv3le";
+    "bnd16";
+    "bnd32";
+    "twhere";
+    "fconstraint";
   ]
 
 let check_registry_invariants () =
@@ -4325,6 +4355,11 @@ let check_sampler_distribution () =
       ("no 8-bit bitpack", has_any [ "bp8m"; "bp8l" ]);
       ("no 16-bit bitpack", has "bp16bel");
       ("no 32-bit bitpack", has_any [ "bp32m"; "bp32bel" ]);
+      ("no byte span", has "ba3");
+      ("no refined byte span", has "baw3");
+      ("no variable-width uint", has_any [ "uv3"; "uv3le" ]);
+      ("no wide bounded int", has_any [ "bnd16"; "bnd32" ]);
+      ("no refined sub-codec", has_any [ "twhere"; "fconstraint" ]);
     ]
   in
   List.iter

@@ -1,13 +1,14 @@
-(** Differential AFL fuzzer: OCaml wire codec vs EverParse C validator, driven
-    by the registry.
+(** Differential AFL fuzzer: OCaml wire codec vs EverParse C validator.
 
-    For each codec EverParse could generate a validator for
-    ({!Diff_index.covered}, looked up in {!Fuzz_gen.registry} by label), feed
-    the AFL input to both the OCaml {!Wire.Codec.validate} and the generated C
-    validator and flag any accept/reject divergence: both decoders must agree on
-    which inputs are valid. Codecs the candidate filter dropped (variable-size,
-    parameterised, casetype, or a shared-name duplicate of an already-included
-    codec) are reported via {!Diff_codecs.excluded}. *)
+    The codecs come from {!Diff_codecs.included}, the in-scope part of the
+    Boltzmann {!Fuzz_gen.sample} -- not from {!Fuzz_gen.registry}, which the
+    OCaml-only suites drive off. For each codec EverParse could generate a
+    validator for ({!Diff_index.covered}, looked up in {!Diff_codecs.included}
+    by label), feed the AFL input to both the OCaml {!Wire.Codec.validate} and
+    the generated C validator and flag any accept/reject divergence: both
+    decoders must agree on which inputs are valid. Codecs the candidate filter
+    dropped (variable-size, zero-size, parameterised or casetype) are reported
+    via {!Diff_codecs.excluded}. *)
 
 open Fuzz_gen
 
@@ -38,7 +39,7 @@ let covered_cases =
 
 (* Normal [dune test]: one case per covered codec, each on its own random bytes,
    so a single run touches every codec. *)
-let registry_case (label, (p, c_check)) =
+let sample_case (label, (p, c_check)) =
   Alcobar.test_case label [ Alcobar.bytes ] (fun buf ->
       diff_check label p c_check (Bytes.of_string buf))
 
@@ -50,13 +51,12 @@ let afl_case ?(max_len = 256) () =
       diff_check label p c_check input.payload)
 
 let cases =
-  if file_input_mode () then afl_case ()
-  else List.map registry_case covered_cases
+  if file_input_mode () then afl_case () else List.map sample_case covered_cases
 
 let () =
   List.iter
     (fun (label, _, reason) ->
-      Printf.eprintf "diff: skipping %s (%s)\n" label
+      Fmt.epr "diff: skipping %s (%s)@." label
         (Diff_codecs.string_of_exclusion reason))
     Diff_codecs.excluded;
   Alcobar.run "diff" [ ("diff", cases) ]

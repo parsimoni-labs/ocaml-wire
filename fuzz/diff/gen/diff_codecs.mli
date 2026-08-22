@@ -1,5 +1,6 @@
-(** The registry subset the differential fuzzer compares against the
-    EverParse-generated C validator. See {!included}. *)
+(** The codecs the differential fuzzer compares against the EverParse-generated
+    C validator: the in-scope part of the Boltzmann {!Fuzz_gen.sample}, not of
+    {!Fuzz_gen.registry}. See {!included}. *)
 
 (** Why a candidate is out of the differential's scope. *)
 type exclusion =
@@ -12,12 +13,12 @@ val string_of_exclusion : exclusion -> string
 (** A short human-readable reason, for logs. *)
 
 val included : (string * Fuzz_gen.packed) list
-(** Registry codecs the differential fuzzer covers: fixed-size, parameter-free
-    projections of a single uniquely-named validator, in registry order. *)
+(** Sampled codecs the differential fuzzer covers: fixed-size, parameter-free
+    projections of a single uniquely-named validator, in sample order. *)
 
 val excluded : (string * Fuzz_gen.packed * exclusion) list
-(** Registry codecs skipped, each with the reason it is out of scope, so
-    coverage stays explicit. *)
+(** Sampled codecs skipped, each with the reason it is out of scope, so coverage
+    stays explicit. *)
 
 val summary : string
 (** One-line tally: total candidates, included count, and excluded count broken

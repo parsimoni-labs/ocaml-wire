@@ -1,7 +1,11 @@
 (** The codecs the differential fuzzer compares against the EverParse-generated
     C validator: a deterministic, well-distributed Boltzmann {!Fuzz_gen.sample}
-    of the shape space (not a handpicked list), filtered to the ones with a
-    standalone fixed-size validator.
+    of the shape space (not a handpicked list, and not {!Fuzz_gen.registry},
+    which the OCaml-only suites drive off), filtered to the ones with a
+    standalone fixed-size validator. The sampled vocabulary spans scalars of
+    every width and endianness, bitfields, enums and lookups, and the fixed-size
+    refined shapes -- byte spans with and without a per-byte predicate, range
+    bounds, cross-field constraints, variable-width integers.
 
     A codec is includable iff it has a positive fixed wire size (variable-size
     codecs have no standalone validator; zero-size unit codecs hit a setter
