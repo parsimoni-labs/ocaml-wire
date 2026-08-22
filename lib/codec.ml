@@ -12,6 +12,26 @@ let blit_slice_exact n buf off src =
   Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
   off + n
 
+(* A read of [width] bytes at [at] that must stay inside [buf]. Reads whose
+   position was itself computed from the buffer can land past the end on
+   truncated input; reporting the span here keeps the failure a precise
+   end-of-input instead of a raw out-of-bounds [Invalid_argument], which a
+   caller cannot tell apart from a misuse or from a user [map] callback. *)
+let[@inline] check_read_bounds buf ~at ~width =
+  if at < 0 || at + width > Bytes.length buf then
+    raise_eof ~at ~expected:width ~got:(max 0 (Bytes.length buf - at))
+
+(* Reader for a byte span of constant width. A negative width comes from a size
+   expression that underflows or names a negative literal, so it is data rather
+   than a span the codec can read: report it at the field instead of crashing
+   [Bytes.sub] with an [Invalid_argument] that escapes the decode result. The
+   width is resolved once, while the reader is staged, so the read itself keeps
+   no test. *)
+let const_span_reader ~field_off n read =
+  if n >= 0 then read
+  else fun _runtime _buf base ->
+    raise_out_of_range ~at:(base + field_off) (Int64.of_int n)
+
 (* A refinement decode enforces has to gate encode too, or the encoder emits
    bytes its own decoder (and the EverParse validator built from the same
    schema) rejects. One helper per refined type, so the encoder dispatch below
@@ -299,12 +319,14 @@ let rec build_field_reader_ctx : type a.
   | Uint_var { size = Int n; endian } ->
       fun _runtime buf base -> Uint_var.read endian buf (base + field_off) n
   | Byte_array { size = Int n } ->
-      fun _runtime buf base -> Bytes.sub_string buf (base + field_off) n
+      const_span_reader ~field_off n (fun _runtime buf base ->
+          Bytes.sub_string buf (base + field_off) n)
   | Byte_array_where { size = Int n; _ } ->
-      fun _runtime buf base -> Bytes.sub_string buf (base + field_off) n
+      const_span_reader ~field_off n (fun _runtime buf base ->
+          Bytes.sub_string buf (base + field_off) n)
   | Byte_slice { size = Int n } ->
-      fun _runtime buf base ->
-        Slice.make_or_eod buf ~first:(base + field_off) ~length:n
+      const_span_reader ~field_off n (fun _runtime buf base ->
+          Slice.make_or_eod buf ~first:(base + field_off) ~length:n)
   | Where { inner; _ } -> build_field_reader_ctx inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader_ctx base field_off in
@@ -1636,6 +1658,9 @@ let rec elem_size_of : type a. a typ -> runtime -> bytes -> int -> int =
   | Codec { codec_size_of; _ } -> codec_size_of runtime buf off
   | Casetype { tag; cases; _ } ->
       let tag_size = tag_byte_size tag in
+      (* The position comes from a preceding length field, so a truncated
+         buffer can put the tag past the end. *)
+      check_read_bounds buf ~at:off ~width:tag_size;
       let tag_val = read_elem tag runtime buf off in
       tag_size
       + size_case_body ~at:off ~tag cases tag_val runtime buf (off + tag_size)
@@ -2825,6 +2850,41 @@ let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
       prepend_field_check name check_only )
   else (raw_reader, full, check_only)
 
+(* Size, offset, presence and [where] expressions read earlier fields through
+   these readers. Unlike a plain decode, such a read can be asked for a field
+   the buffer does not reach: an earlier variable-size field pushes it past the
+   end, or the enclosing record is short. Check the field's byte extent first
+   so truncation is reported as end-of-input at the span that was missing.
+
+   Only accesses with a known extent are wrapped. A variable-width field reads
+   through [var_bytes_reader], which bounds-checks itself, and a field whose
+   footprint differs from its wire size (an optional, a bitfield continuation)
+   is left alone: it may legitimately occupy no bytes. *)
+let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
+ fun cf typ ->
+  let reader = cf.int_reader in
+  match cf.field_access with
+  | Bitfield { base = word; byte_off; _ } ->
+      let width = Bitfield.byte_size word in
+      fun runtime buf base ->
+        check_read_bounds buf ~at:(base + byte_off) ~width;
+        reader runtime buf base
+  | Fixed off -> (
+      match field_wire_size typ with
+      | Some width when width = cf.size_delta ->
+          fun runtime buf base ->
+            check_read_bounds buf ~at:(base + off) ~width;
+            reader runtime buf base
+      | _ -> reader)
+  | Dynamic off_fn -> (
+      match field_wire_size typ with
+      | Some width when width = cf.size_delta ->
+          fun runtime buf base ->
+            check_read_bounds buf ~at:(base + off_fn runtime buf base) ~width;
+            reader runtime buf base
+      | _ -> reader)
+  | Variable _ | Variable_dynamic _ -> reader
+
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
     =
@@ -2867,7 +2927,7 @@ let apply_compiled : type a f r.
   let byte_off = cf.validator_off in
   let new_writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev in
   let new_field_readers =
-    cf.nested_readers @ ((fld.name, cf.int_reader) :: r.field_readers)
+    cf.nested_readers @ ((fld.name, expr_reader cf fld.typ) :: r.field_readers)
   in
   let field_typ = fld.typ in
   let field_get = fld.get in
@@ -3091,17 +3151,6 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
-(* Run a validation pass, turning an out-of-bounds read into a clean eof. A
-   check may read a field whose offset depends on a length read from the buffer;
-   on a buffer too short to hold it that read is out of bounds. [decode] runs
-   [t.decode] first (which bounds-checks), but [Codec.validate] runs the check
-   kernel directly, so this keeps a short buffer a clean failure, not a crash. *)
-let validate_or_eof buf f =
-  try f ()
-  with Invalid_argument _ ->
-    let len = Bytes.length buf in
-    raise_eof ~at:len ~expected:(len + 1) ~got:len
-
 let has_validation_checks compiled_where struct_fields =
   compiled_where <> None
   || List.exists
@@ -3163,7 +3212,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
            evaluate correctly. *)
         seed_param_slots arr n_total env_slots;
         let runtime = validation_runtime param_slots arr in
-        validate_or_eof buf (fun () -> validate_arr arr runtime buf off)
+        validate_arr arr runtime buf off
   in
   (validate_arr, populate, validate)
 
@@ -3201,11 +3250,11 @@ let check_decode_bounds wire_size_info min_size runtime buf off =
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
-      let end_off =
-        try compute runtime buf off
-        with Invalid_argument _ ->
-          raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off)
-      in
+      (* [compute] reads the length fields the codec's span depends on. Those
+         reads bound-check themselves ([expr_reader]), so a buffer too short to
+         hold them already surfaces as end-of-input here; anything else they
+         raise is a real error and propagates. *)
+      let end_off = compute runtime buf off in
       if end_off < off + min_size then
         raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
       if end_off > Bytes.length buf then

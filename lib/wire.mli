@@ -228,7 +228,8 @@ val field_pos : int expr
     description.
 
     Like {!sizeof_this}, this is context-dependent and is mainly used inside
-    dependent field constraints and projections. *)
+    dependent field constraints and projections. It has no meaning in a size
+    expression, where decoding it raises [Invalid_argument]. *)
 
 module Expr : sig
   (** Arithmetic, bitwise, and comparison operators on expressions.
@@ -888,7 +889,13 @@ val eof :
 
     Use {!Codec} instead when the format is record-shaped and the main goal is
     repeated access to individual fields in an existing buffer, without
-    allocating an OCaml record for each read. *)
+    allocating an OCaml record for each read.
+
+    The [parse_error] result covers failures of the input: truncation,
+    constraint violations, a byte span the data sizes out of range. A
+    description that cannot be decoded whatever the input, such as {!field_pos}
+    in a size expression, is a programmer error and raises [Invalid_argument],
+    the same way encoding does. *)
 
 val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 (** Decodes one value from the current reader position.

@@ -137,6 +137,14 @@ module Slice = Bytesrw.Bytes.Slice
 let[@inline] check_eof len need =
   if need > len then raise_eof ~at:len ~expected:need ~got:len
 
+(* A span of [n] bytes starting at [off]. [n] comes from a size expression, so
+   an underflowing subtraction or a negative literal reaches here as data: a
+   bare [check_eof] would wave it through and [Bytes.sub] would then raise an
+   [Invalid_argument] that escapes [of_string]'s result. *)
+let[@inline] check_span len ~off ~n =
+  if n < 0 then raise_out_of_range ~at:off (Int64.of_int n);
+  check_eof len (off + n)
+
 (* The single decoder kernel. Bytes-based, returns [(value, end_off)].
    All types handled here -- no fallback. Expressions are evaluated in
    [Eval.empty] (no field bindings); types using [Ref]/[Sizeof_this]/
@@ -156,20 +164,13 @@ let parse_all_zeros buf off len =
   (check 0, len)
 
 let parse_codec_typ codec_decode fixed_size size_of buf off len =
-  let sz =
-    match fixed_size with
-    | Some n -> n
-    | None -> (
-        (* A variable-size codec computes its span by reading length / gate
-           fields from the buffer; on a buffer too short to hold them, that read
-           is out of bounds. Convert the [Invalid_argument] into a clean eof, the
-           same guard [Codec.decode]'s checked path applies, so [of_string] on a
-           truncated input returns [Error _] instead of crashing. *)
-        try size_of buf off
-        with Invalid_argument _ ->
-          raise_eof ~at:off ~expected:(len + 1) ~got:len)
-  in
-  check_eof len (off + sz);
+  (* A variable-size codec computes its span by reading length / gate fields
+     from the buffer. Those reads bound-check themselves, so a buffer too short
+     to hold them already fails as end-of-input at the field that was missing;
+     a misuse in the size expression, or an exception from a user [map]
+     callback, reaches the caller unchanged. *)
+  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+  check_span len ~off ~n:sz;
   (codec_decode buf off, off + sz)
 
 (* Only a closed enum enforces membership; an open enum names known codes but
@@ -205,7 +206,7 @@ let validator_for_struct s =
 let parse_struct_typ s buf off len =
   let v = validator_for_struct s in
   let sz = Codec.struct_size_of v buf off in
-  check_eof len (off + sz);
+  check_span len ~off ~n:sz;
   Codec.validate_struct v buf off;
   ((), off + sz)
 
@@ -245,7 +246,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Float64 Big -> parse_fixed 8 float64_be buf off len
   | Uint_var { size; endian } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       (Uint_var.read endian buf off n, off + n)
   | Bits { width; base; bit_order } ->
       let sz = Bitfield.byte_size base in
@@ -270,16 +271,16 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       (Bytes.sub_string buf off (nul - off), nul + 1)
   | Zeroterm_at_most { size } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       let nul = Codec.zeroterm_nul_pos buf ~first:off ~limit:(off + n) in
       (Bytes.sub_string buf off (nul - off), off + n)
   | Byte_array { size } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       (Bytes.sub_string buf off n, off + n)
   | Byte_array_where { size; elt_var; cond } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       for i = 0 to n - 1 do
         let v = Bytes.get_uint8 buf (off + i) in
         if not (Eval.expr (Eval.bind elt_var v Eval.empty) cond) then
@@ -288,11 +289,11 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       (Slice.make_or_eod buf ~first:off ~length:n, off + n)
   | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
-      check_eof len (off + n);
+      check_span len ~off ~n;
       let v, inner_end = parse_direct elem buf off (off + n) in
       let consumed = inner_end - off in
       if (not at_most) && consumed <> n then
@@ -525,10 +526,6 @@ let of_reader_incremental typ reader =
     | exception Parse_error e ->
         push_back_bytes reader bytes 0 len;
         raise (Parse_error e)
-    | exception Invalid_argument _ ->
-        read_more (fun () ->
-            push_back_bytes reader bytes 0 len;
-            raise_eof ~at:len ~expected:(len + 1) ~got:len)
   in
   loop ()
 

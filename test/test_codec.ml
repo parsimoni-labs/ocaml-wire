@@ -6783,6 +6783,96 @@ let test_set_no_allocation () =
   check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
   check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
 
+(* Decode diagnostics: end of input is reported only for a read that actually
+   ran off the end of the buffer. A misuse in a size expression keeps its own
+   error, and a byte span the data sizes below zero stays inside the result
+   type. *)
+
+let f_diag_len = Field.v "len" uint8
+
+let field_pos_size_codec =
+  Codec.v "FieldPosSize"
+    (fun _len body -> body)
+    Codec.
+      [
+        f_diag_len $ String.length;
+        Field.v "body"
+          (byte_array ~size:Expr.(Field.ref f_diag_len + field_pos))
+        $ Fun.id;
+      ]
+
+let test_size_misuse_reports_itself () =
+  let check name decode =
+    match decode () with
+    | Ok _ -> Alcotest.failf "%s: decoded a value" name
+    | Error e ->
+        Alcotest.failf "%s: misreported as a parse error: %a" name
+          pp_parse_error e
+    | exception Invalid_argument msg ->
+        if not (contains ~sub:"[field_pos] only valid inside an action" msg)
+        then Alcotest.failf "%s: unexpected message %S" name msg
+  in
+  check "Codec.decode" (fun () ->
+      Codec.decode field_pos_size_codec (Bytes.of_string "\001ab") 0);
+  check "of_string" (fun () -> of_string (codec field_pos_size_codec) "\001ab")
+
+let dep_size_codec =
+  Codec.v "DepSizeTrunc"
+    (fun _len body -> body)
+    Codec.
+      [
+        f_diag_len $ String.length;
+        Field.v "body" (byte_array ~size:(Field.ref f_diag_len)) $ Fun.id;
+      ]
+
+(* The length field of the second span sits past the first span, so a short
+   buffer cannot even reach it: computing the record's size is the read that
+   runs off the end. *)
+let two_span_codec =
+  let f_n = Field.v "n" uint8 in
+  Codec.v "TwoSpanTrunc"
+    (fun _len a n b -> (a, n, b))
+    Codec.
+      [
+        (f_diag_len $ fun (a, _, _) -> String.length a);
+        ( Field.v "a" (byte_array ~size:(Field.ref f_diag_len))
+        $ fun (a, _, _) -> a );
+        (f_n $ fun (_, n, _) -> n);
+        (Field.v "b" (byte_array ~size:(Field.ref f_n)) $ fun (_, _, b) -> b);
+      ]
+
+let expect_eof name = function
+  | Ok _ -> Alcotest.failf "%s: decoded a truncated buffer" name
+  | Error { kind = Unexpected_eof _; _ } -> ()
+  | Error e ->
+      Alcotest.failf "%s: expected an eof, got %a" name pp_parse_error e
+
+let test_truncated_still_reports_eof () =
+  expect_eof "Codec.decode"
+    (Codec.decode dep_size_codec (Bytes.of_string "\010ab") 0);
+  expect_eof "of_string" (of_string (codec dep_size_codec) "\010ab");
+  expect_eof "Codec.decode two-span"
+    (Codec.decode two_span_codec (Bytes.of_string "\010X") 0);
+  expect_eof "of_string two-span" (of_string (codec two_span_codec) "\010X")
+
+let test_negative_span_is_parse_error () =
+  let neg_codec =
+    Codec.v "NegSpan" Fun.id
+      Codec.[ Field.v "b" (byte_array ~size:(int (-1))) $ Fun.id ]
+  in
+  let expect name = function
+    | Ok _ -> Alcotest.failf "%s: accepted a negative span" name
+    | Error { kind = Value_out_of_range _; _ } -> ()
+    | Error e ->
+        Alcotest.failf "%s: expected Value_out_of_range, got %a" name
+          pp_parse_error e
+  in
+  expect "Codec.decode" (Codec.decode neg_codec (Bytes.of_string "abc") 0);
+  expect "of_string codec" (of_string (codec neg_codec) "abc");
+  expect "of_string typ" (of_string (byte_array ~size:(int (-1))) "abc");
+  expect "of_bytes typ"
+    (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
+
 (* -- Suite -- *)
 
 let suite =
@@ -7344,4 +7434,11 @@ let suite =
         test_get_no_allocation;
       Alcotest.test_case "set: immediate fields allocate nothing" `Quick
         test_set_no_allocation;
+      (* decode diagnostics *)
+      Alcotest.test_case "diag: field_pos in a size expression reports itself"
+        `Quick test_size_misuse_reports_itself;
+      Alcotest.test_case "diag: truncated buffer still reports eof" `Quick
+        test_truncated_still_reports_eof;
+      Alcotest.test_case "diag: negative span is a parse error" `Quick
+        test_negative_span_is_parse_error;
     ] )
