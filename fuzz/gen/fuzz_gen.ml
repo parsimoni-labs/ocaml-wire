@@ -111,6 +111,20 @@ let unlisted_enum_gen ~mask valid =
   in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> step (n land mask) 0)
 
+(* A value with bits set above [width], for a [bits ~width] field. Only the low
+   [width] bits reach the wire, and the masked remainder is itself a legal field
+   value, so encode has to refuse rather than truncate. *)
+let above_bit_width width =
+  let mask = (1 lsl width) - 1 in
+  Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
+
+(* The [uint ~size] counterpart: a value needing more than [size] bytes. *)
+let above_byte_width size =
+  let max_v = (1 lsl (size * 8)) - 1 in
+  Alcobar.map
+    Alcobar.[ Alcobar.int ]
+    (fun n -> Wire.Private.UInt63.of_int (n land max_v lor (max_v + 1)))
+
 (* A byte string of one of the lengths around [n], for a byte span whose
    declared size is [n]: only the exact length may encode. *)
 let byte_lengths_around n =
@@ -622,7 +636,7 @@ let uint_var ~endian size =
     adversarial;
     equal = ( = );
     env = None;
-    adversarial_value = None;
+    adversarial_value = Some (above_byte_width size);
   }
 
 let exact_cases ~typ ~equal cases =
@@ -1432,7 +1446,8 @@ let bits ?bit_order ~width base =
   let mask = (1 lsl width) - 1 in
   let value_gen = Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask) in
   let boundaries = [ 0; 1; mask; mask - 1; mask lsr 1 ] in
-  scalar_int typ base_size value_gen boundaries
+  let g = scalar_int typ base_size value_gen boundaries in
+  { g with adversarial_value = Some (above_bit_width width) }
 
 let bitfield_total = function
   | Wire.U8 -> 8
