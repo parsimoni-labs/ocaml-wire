@@ -15,33 +15,35 @@ type segment =
 
 (* Render an expression as a short annotation.
 
-   This never raises: a diagram is documentation, so constructs that have no 3D
-   projection ([Field_pos], negative literals) still get a rendering here even
-   though {!Types.pp_expr} rejects them. The match is exhaustive on purpose, so
-   a new expression constructor is a compile error rather than a silent
-   placeholder in the output. *)
-let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
- fun buf expr ->
+   Deliberately not shared with {!Types.pp_expr}, which prints the same GADT as
+   3D source. That printer parenthesises every operator and raises
+   [Invalid_argument] on the constructs 3D cannot express ([Field_pos], negative
+   literals); neither behaviour is wanted here. An annotation is dropped when it
+   outgrows its 32-bit-wide row, so the parentheses would cost the reader the
+   whole annotation, and a diagram is documentation, so no input may raise. The
+   match is exhaustive on purpose, so a new expression constructor is a compile
+   error rather than a silent placeholder in the output, and every branch below
+   is visibly total. *)
+let rec pp_expr : type a. a Types.expr Fmt.t =
+ fun ppf expr ->
   let infix : type b c. b Types.expr -> string -> c Types.expr -> unit =
-   fun a op b ->
-    pp_expr buf a;
-    Buffer.add_string buf op;
-    pp_expr buf b
+   fun a op b -> Fmt.pf ppf "%a%s%a" pp_expr a op pp_expr b
   in
   match expr with
-  | Int n -> Buffer.add_string buf (string_of_int n)
-  | Int64 n -> Buffer.add_string buf (Int64.to_string n)
-  | Bool b -> Buffer.add_string buf (string_of_bool b)
-  | Ref (_, name) -> Buffer.add_string buf name
-  | Param_ref p -> Buffer.add_string buf p.name
+  | Int n -> Fmt.int ppf n
+  | Int64 n -> Fmt.int64 ppf n
+  | Bool b -> Fmt.bool ppf b
+  | Ref (_, name) -> Fmt.string ppf name
+  | Param_ref p -> Fmt.string ppf p.name
   (* A [sizeof] over a fixed-size description is a constant, and the byte count
-     is what the diagram wants to show. *)
+     is what the diagram wants to show. Deferring to {!Types.pp_typ} would reach
+     {!Types.pp_expr} again, which can raise. *)
   | Sizeof t -> (
       match Types.field_wire_size t with
-      | Some n -> Buffer.add_string buf (string_of_int n)
-      | None -> Buffer.add_string buf "sizeof")
-  | Sizeof_this -> Buffer.add_string buf "sizeof(this)"
-  | Field_pos -> Buffer.add_string buf "field_pos"
+      | Some n -> Fmt.int ppf n
+      | None -> Fmt.string ppf "sizeof")
+  | Sizeof_this -> Fmt.string ppf "sizeof(this)"
+  | Field_pos -> Fmt.string ppf "field_pos"
   | Add (a, b) -> infix a " + " b
   | Sub (a, b) -> infix a " - " b
   | Mul (a, b) -> infix a " * " b
@@ -51,9 +53,7 @@ let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
   | Land64 (a, b) -> infix a " & " b
   | Lor (a, b) -> infix a " | " b
   | Lxor (a, b) -> infix a " ^ " b
-  | Lnot a ->
-      Buffer.add_string buf "~";
-      pp_expr buf a
+  | Lnot a -> Fmt.pf ppf "~%a" pp_expr a
   | Lsl (a, b) -> infix a " << " b
   | Lsr (a, b) -> infix a " >> " b
   | Lsr64 (a, b) -> infix a " >> " b
@@ -65,31 +65,20 @@ let rec pp_expr : type a. Buffer.t -> a Types.expr -> unit =
   | Ge (a, b) -> infix a " >= " b
   | And (a, b) -> infix a " && " b
   | Or (a, b) -> infix a " || " b
-  | Not a ->
-      Buffer.add_string buf "!";
-      pp_expr buf a
+  | Not a -> Fmt.pf ppf "!%a" pp_expr a
   | Cast (t, e) ->
-      Buffer.add_string buf
-        (match t with
-        | `U8 -> "(u8) "
-        | `U16 -> "(u16) "
-        | `U32 -> "(u32) "
-        | `U64 -> "(u64) ");
-      pp_expr buf e
+      let width =
+        match t with
+        | `U8 -> "u8"
+        | `U16 -> "u16"
+        | `U32 -> "u32"
+        | `U64 -> "u64"
+      in
+      Fmt.pf ppf "(%s) %a" width pp_expr e
   (* Spelled out rather than as a C ternary: "?" is the one character a reader
      must be able to trust is never a rendering failure. *)
   | If_then_else (c, t, e) ->
-      Buffer.add_string buf "if ";
-      pp_expr buf c;
-      Buffer.add_string buf " then ";
-      pp_expr buf t;
-      Buffer.add_string buf " else ";
-      pp_expr buf e
-
-let string_of_expr (type a) (e : a Types.expr) =
-  let buf = Buffer.create 32 in
-  pp_expr buf e;
-  Buffer.contents buf
+      Fmt.pf ppf "if %a then %a else %a" pp_expr c pp_expr t pp_expr e
 
 (* Annotate a fixed-field label with constraint and enum info. *)
 let annotate_fixed name typ constraint_ bits =
@@ -114,7 +103,7 @@ let annotate_fixed name typ constraint_ bits =
   in
   match constraint_ with
   | Some cond ->
-      let ann = Fmt.str "%s [%s]" base (string_of_expr cond) in
+      let ann = Fmt.str "%s [%a]" base pp_expr cond in
       if String.length ann <= (bits * bit_chars) - 1 then ann else base
   | None -> base
 
@@ -122,26 +111,24 @@ let annotate_fixed name typ constraint_ bits =
 let variable_annotation : type a. string -> a Types.typ -> string =
  fun name typ ->
   match typ with
-  | Types.Byte_array { size } ->
-      Fmt.str "%s (%s bytes)" name (string_of_expr size)
-  | Types.Byte_slice { size } ->
-      Fmt.str "%s (%s bytes)" name (string_of_expr size)
+  | Types.Byte_array { size } -> Fmt.str "%s (%a bytes)" name pp_expr size
+  | Types.Byte_slice { size } -> Fmt.str "%s (%a bytes)" name pp_expr size
   | Byte_array_where { size; _ } ->
-      Fmt.str "%s (%s bytes, refined)" name (string_of_expr size)
+      Fmt.str "%s (%a bytes, refined)" name pp_expr size
   | Array { len; elem; _ } ->
       let elem_info =
         match Types.field_wire_size elem with
         | Some n -> Fmt.str "%d-byte elems" n
         | None -> "var elems"
       in
-      Fmt.str "%s (%s x %s)" name (string_of_expr len) elem_info
+      Fmt.str "%s (%a x %s)" name pp_expr len elem_info
   | Where { inner; cond } ->
       let inner_label =
         match Types.field_wire_size inner with
         | Some n -> Fmt.str "%s (%d)" name (n * 8)
         | None -> name
       in
-      Fmt.str "%s [%s]" inner_label (string_of_expr cond)
+      Fmt.str "%s [%a]" inner_label pp_expr cond
   | _ -> if name = "" then "(variable)" else Fmt.str "%s (variable)" name
 
 let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
@@ -163,7 +150,7 @@ let field_segment (Types.Field { field_name; field_typ; constraint_; _ }) =
           let label =
             match constraint_ with
             | None -> annotation
-            | Some cond -> Fmt.str "%s [%s]" annotation (string_of_expr cond)
+            | Some cond -> Fmt.str "%s [%a]" annotation pp_expr cond
           in
           Variable { label })
 
