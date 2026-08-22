@@ -1812,6 +1812,21 @@ let check_where_encode cond ok =
     Fmt.invalid_arg "Wire.encode: value violates its where constraint %a"
       pp_expr cond
 
+(* A [zeroterm] string ends at its first NUL, so a value carrying one decodes
+   back truncated. Every encoder funnels through here, so the caller sees one
+   message whatever path produced the bytes. *)
+let check_zeroterm_encode s =
+  if String.contains s '\000' then
+    invalid_arg "Wire.encode: zeroterm string contains a NUL byte"
+
+(* [zeroterm_at_most] writes the string, its NUL and zero padding into a fixed
+   region, so the value has to leave room for the terminator. *)
+let check_zeroterm_region ~region ~len =
+  if len + 1 > region then
+    Fmt.invalid_arg
+      "Wire.encode: zeroterm string needs %d bytes but region is %d" (len + 1)
+      region
+
 (* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
    field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
    binds a name to a pure expression, so we lower it by substituting
