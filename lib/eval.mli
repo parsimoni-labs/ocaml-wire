@@ -37,6 +37,16 @@ val expr : ctx -> 'a Types.expr -> 'a
     references are only valid inside a struct). [Sizeof_this] and [Field_pos]
     return 0. *)
 
+val bad_byte :
+  elt_var:string -> cond:bool Types.expr -> bytes -> first:int -> len:int -> int
+(** [bad_byte ~elt_var ~cond buf ~first ~len] is the index within
+    [buf.[first .. first + len - 1]] of the first byte that fails [cond], the
+    per-byte refinement of a [byte_array_where], or [-1] when every byte
+    satisfies it. Single source of truth for the refinement: the direct parser,
+    the compiled codec and both encoders all decide it here, so they admit
+    exactly the same spans as the EverParse validator built from the same
+    schema. *)
+
 val check_byte_refinement :
   elt_var:string -> cond:bool Types.expr -> string -> unit
 (** [check_byte_refinement ~elt_var ~cond s] raises [Invalid_argument] on the

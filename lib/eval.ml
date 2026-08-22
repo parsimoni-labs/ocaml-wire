@@ -10,10 +10,21 @@
 
 open Types
 
-type ctx = (string * int) list
+(* The binding is mutable so a per-byte refinement can be decided in place: a
+   fresh association per byte would make scanning a [byte_array_where] allocate
+   in proportion to the span it is protecting. *)
+type binding = { name : string; mutable value : int }
+type ctx = binding list
 
 let empty : ctx = []
-let bind name v ctx = (name, v) :: ctx
+let bind name value ctx = { name; value } :: ctx
+
+let rec lookup name = function
+  | [] ->
+      failwith
+        ("Eval.expr: unbound field " ^ name
+       ^ " (cross-field references are only valid inside a struct)")
+  | b :: tl -> if String.equal b.name name then b.value else lookup name tl
 
 (* Convert a typed value to [int]. Returns [None] for types that don't
    fit in OCaml int (uint64 over 2^63, non-numeric). *)
@@ -113,13 +124,7 @@ let rec expr : type a. ctx -> a expr -> a =
   | Int n -> n
   | Int64 n -> n
   | Bool b -> b
-  | Ref (I, name) -> (
-      match List.assoc_opt name ctx with
-      | Some v -> v
-      | None ->
-          failwith
-            ("Eval.expr: unbound field " ^ name
-           ^ " (cross-field references are only valid inside a struct)"))
+  | Ref (I, name) -> lookup name ctx
   | Ref (I64, name) ->
       failwith
         ("Eval.expr: unbound int64 field " ^ name
@@ -171,17 +176,30 @@ and compare_expr : type a. ctx -> a expr -> a expr -> int =
 and compare_int64_expr ctx (a : int64 expr) (b : int64 expr) =
   Int64.unsigned_compare (expr ctx a) (expr ctx b)
 
-(* [byte_array_where] refines every byte of the span. Decode rejects the first
-   offending byte, so encode must refuse the same value rather than emit a span
-   its own decoder (and the EverParse validator built from the same schema)
-   rejects. *)
+(* [byte_array_where] refines every byte of the span, and every path that reads
+   or writes one decides it here: the compiled codec, the direct parser, both
+   encoders and the EverParse validator built from the same schema all admit
+   exactly the same bytes. The loop stays at top level rather than closing over
+   the span, so a scan allocates only its single binding. *)
+let rec scan_bytes ctx elt cond buf ~first ~len i =
+  if i >= len then -1
+  else begin
+    elt.value <- Bytes.get_uint8 buf (first + i);
+    if expr ctx cond then scan_bytes ctx elt cond buf ~first ~len (i + 1) else i
+  end
+
+let bad_byte ~elt_var ~cond buf ~first ~len =
+  let elt = { name = elt_var; value = 0 } in
+  scan_bytes [ elt ] elt cond buf ~first ~len 0
+
 let check_byte_refinement ~elt_var ~cond s =
-  String.iteri
-    (fun i c ->
-      let n = Char.code c in
-      if not (expr (bind elt_var n empty) cond) then
-        Fmt.invalid_arg
-          "Wire.encode: byte_array_where byte %d = 0x%02x violates its \
-           per-byte constraint %a"
-          i n Types.pp_expr cond)
-    s
+  let len = String.length s in
+  (* [bad_byte] only reads, so the aliased bytes never escape as mutable. *)
+  let i = bad_byte ~elt_var ~cond (Bytes.unsafe_of_string s) ~first:0 ~len in
+  if i >= 0 then
+    Fmt.invalid_arg
+      "Wire.encode: byte_array_where byte %d = 0x%02x violates its per-byte \
+       constraint %a"
+      i
+      (Char.code s.[i])
+      Types.pp_expr cond
