@@ -1850,6 +1850,114 @@ let test_exact_byte_field_expression_size () =
   Codec.encode exact_vb_codec (4, "abcd") buf 0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
+(* Encode must not emit a value its own decoder rejects: a refinement the
+   decoder enforces (enum membership, all-zero padding, a per-byte span
+   predicate, a where cond) has to gate encode too, or the record ships bytes
+   that fail to read back. Each case pins the bytes on the accepted value and
+   the [Invalid_argument] on the rejected one, and confirms decode agrees. *)
+let expect_encode_rejects label ~names f =
+  match f () with
+  | () -> Alcotest.failf "%s: encode accepted a value decode rejects" label
+  | exception Invalid_argument msg ->
+      List.iter
+        (fun sub ->
+          Alcotest.(check bool)
+            (Fmt.str "%s: message names %S" label sub)
+            true (contains ~sub msg))
+        names
+
+let expect_decode_rejects label codec s =
+  match Codec.decode codec (Bytes.of_string s) 0 with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.failf "%s: decode accepted %S" label s
+
+let closed_enum_codec =
+  Codec.v "ClosedEnum" Fun.id
+    Codec.[ Field.v "E" (enum "Code" [ ("A", 1); ("B", 2) ] uint8) $ Fun.id ]
+
+let open_enum_codec =
+  Codec.v "OpenEnum" Fun.id
+    Codec.
+      [ Field.v "E" (enum_open "Code" [ ("A", 1); ("B", 2) ] uint8) $ Fun.id ]
+
+let test_encode_rejects_unlisted_enum () =
+  let buf = Bytes.create 1 in
+  expect_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
+      Codec.encode closed_enum_codec 99 buf 0);
+  expect_decode_rejects "closed enum" closed_enum_codec "\099";
+  Codec.encode closed_enum_codec 2 buf 0;
+  Alcotest.(check string) "listed value" "\002" (Bytes.to_string buf);
+  (* An open enum documents its codes without restricting them, so encode
+     stays permissive exactly where decode does. *)
+  Codec.encode open_enum_codec 99 buf 0;
+  Alcotest.(check string) "open enum" "\099" (Bytes.to_string buf)
+
+let zeros_codec =
+  Codec.v "Padded"
+    (fun tag pad -> (tag, pad))
+    Codec.[ Field.v "Tag" uint8 $ fst; Field.v "Pad" all_zeros $ snd ]
+
+let test_encode_rejects_non_zero_padding () =
+  let buf = Bytes.create 4 in
+  expect_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ] (fun () ->
+      Codec.encode zeros_codec (1, "abc") buf 0);
+  expect_decode_rejects "all_zeros" zeros_codec "\001abc";
+  Codec.encode zeros_codec (1, "\000\000\000") buf 0;
+  Alcotest.(check string)
+    "zero padding" "\001\000\000\000" (Bytes.to_string buf)
+
+let per_byte_codec =
+  Codec.v "Printable" Fun.id
+    Codec.
+      [
+        Field.v "B"
+          (byte_array_where ~size:(int 3) ~per_byte:(fun b ->
+               Expr.(b >= int 0x20 && b <= int 0x7e)))
+        $ Fun.id;
+      ]
+
+let test_encode_rejects_refined_byte () =
+  let buf = Bytes.create 3 in
+  expect_encode_rejects "byte_array_where" ~names:[ "byte 1"; "0xff" ]
+    (fun () -> Codec.encode per_byte_codec "a\xffb" buf 0);
+  Codec.encode per_byte_codec "abc" buf 0;
+  Alcotest.(check string) "printable span" "abc" (Bytes.to_string buf)
+
+(* The cond of a [Wire.where] reads sibling fields, so it can only be decided
+   against the assembled record; encode replays the decode-side check pass over
+   the bytes it just wrote. *)
+let where_len = Field.v "Len" uint8
+
+let where_codec =
+  Codec.v "TypWhereEncode"
+    (fun len d -> (len, d))
+    Codec.
+      [
+        where_len $ fst;
+        Field.v "D" (where Expr.(Field.ref where_len < int 2) uint8) $ snd;
+      ]
+
+let codec_where_codec =
+  Codec.v "CodecWhereEncode"
+    ~where:Expr.(Field.ref where_len < int 2)
+    (fun len d -> (len, d))
+    Codec.[ where_len $ fst; Field.v "D" uint8 $ snd ]
+
+let test_encode_rejects_where_violation () =
+  let buf = Bytes.create 2 in
+  expect_encode_rejects "typ where" ~names:[ "TypWhereEncode"; "constraint" ]
+    (fun () -> Codec.encode where_codec (6, 0) buf 0);
+  expect_decode_rejects "typ where" where_codec "\006\000";
+  Codec.encode where_codec (1, 0) buf 0;
+  Alcotest.(check string) "satisfied cond" "\001\000" (Bytes.to_string buf);
+  expect_encode_rejects "codec where"
+    ~names:[ "CodecWhereEncode"; "constraint" ] (fun () ->
+      Codec.encode codec_where_codec (6, 0) buf 0);
+  expect_decode_rejects "codec where" codec_where_codec "\006\000";
+  Codec.encode codec_where_codec (1, 0) buf 0;
+  Alcotest.(check string)
+    "satisfied codec where" "\001\000" (Bytes.to_string buf)
+
 (* [Codec.set] writes in place, so a byte field whose size is only known at
    run time still owns exactly that many bytes: an oversized value that fits in
    the buffer would otherwise land on the fields that follow, with nothing to
@@ -6799,6 +6907,14 @@ let suite =
         test_exact_byte_field_literal_size;
       Alcotest.test_case "exact byte field: expression size" `Quick
         test_exact_byte_field_expression_size;
+      Alcotest.test_case "encode rejects: unlisted enum value" `Quick
+        test_encode_rejects_unlisted_enum;
+      Alcotest.test_case "encode rejects: non-zero all_zeros" `Quick
+        test_encode_rejects_non_zero_padding;
+      Alcotest.test_case "encode rejects: refined byte span" `Quick
+        test_encode_rejects_refined_byte;
+      Alcotest.test_case "encode rejects: where violation" `Quick
+        test_encode_rejects_where_violation;
       Alcotest.test_case "constant size expression folds" `Quick
         test_constant_size_expression_folds;
       Alcotest.test_case "exact byte field: set var byte_array" `Quick

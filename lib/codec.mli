@@ -124,7 +124,14 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     when the codec has parameters and no env is supplied, when the env left any
     input param unbound (the error names the offending param), when the
     destination buffer is too short, or when a parametric byte field's value
-    length does not match its env-bound size. *)
+    length does not match its env-bound size.
+
+    Also raises [Invalid_argument] on a record {!decode} would reject: a closed
+    enum field carrying an unlisted value, an [all_zeros] field carrying a
+    non-zero byte, a [byte_array_where] byte failing its refinement, or a
+    [where] clause or field [~constraint_] that does not hold for the values
+    given. Encode never emits bytes its own decoder refuses. Field [~action]s
+    are not run by encode. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)

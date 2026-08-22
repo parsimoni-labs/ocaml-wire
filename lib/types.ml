@@ -1776,6 +1776,40 @@ and pp_typ : type a. a typ Fmt.t =
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
+(* Encode-side guards. Decode rejects each of these values, so emitting one
+   would put bytes on the wire that this library's own decoder, and the
+   EverParse validator generated from the same schema, refuse. Each raises
+   [Invalid_argument]: an unencodable value is a caller error, not malformed
+   input. *)
+
+(* Membership in a closed [enum]: the single rule both halves use, so decode and
+   encode agree on which values a closed enum admits. An open enum names known
+   codes without restricting the set, so it has no encode guard at all. *)
+let enum_values cases = List.map snd cases
+let enum_member valid v = List.exists (Int.equal v) valid
+
+let check_enum_encode ~name ~valid v =
+  if not (enum_member valid v) then
+    Fmt.invalid_arg "Wire.encode: enum %s expected one of [%a], got %d" name
+      Fmt.(list ~sep:comma int)
+      valid v
+
+(* [all_zeros] decodes only zero bytes, so a padding value carrying anything
+   else round-trips to [Non_zero_padding]. *)
+let check_all_zeros_encode s =
+  String.iteri
+    (fun i c ->
+      if c <> '\000' then
+        Fmt.invalid_arg
+          "Wire.encode: all_zeros expected a zero byte at offset %d, got 0x%02x"
+          i (Char.code c))
+    s
+
+let check_where_encode cond ok =
+  if not ok then
+    Fmt.invalid_arg "Wire.encode: value violates its where constraint %a"
+      pp_expr cond
+
 (* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
    field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]
    binds a name to a pure expression, so we lower it by substituting

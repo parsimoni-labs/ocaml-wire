@@ -26,6 +26,13 @@ type 'a t = {
       (* When the codec references [Param.input], the test driver pulls
          a fresh env from [positive] for the round-trip case and from
          the [fuzz] gen for random and adversarial streams. *)
+  adversarial_value : 'a Alcobar.gen option;
+      (* Hostile VALUES, the counterpart of the hostile BYTES in [random] /
+         [adversarial]. Each is a well-typed value of the codec's own OCaml
+         type that violates something decode enforces: enum membership,
+         all-zero padding, a per-byte span predicate, a declared byte length,
+         a where cond or a field constraint. [None] where the shape has no
+         refinement left to violate (a plain scalar, an open enum). *)
 }
 
 and env_strategy = {
@@ -65,6 +72,8 @@ let string_of_slice s =
     (Bytesrw.Bytes.Slice.first s)
     (Bytesrw.Bytes.Slice.length s)
 
+let slice_equal a b = String.equal (string_of_slice a) (string_of_slice b)
+
 let bytes_of_octets xs =
   let b = Bytes.create (List.length xs) in
   List.iteri (fun i x -> Bytes.set_uint8 b i (x land 0xFF)) xs;
@@ -88,6 +97,28 @@ let encode_via_codec codec v =
   Wire.Codec.encode codec v buf 0;
   buf
 
+(* Hostile-value streams. [check_encode_safety] requires encode to refuse each
+   of these outright or to write bytes that decode back unchanged, so each
+   stream must yield values that violate a refinement decode enforces. *)
+
+(* A value a closed enum does not list. Steps up from the drawn number until it
+   lands outside the case set, so the stream is hostile by construction rather
+   than by luck. *)
+let unlisted_enum_gen ~mask valid =
+  let rec step n tries =
+    if tries > mask || not (List.mem n valid) then n
+    else step ((n + 1) land mask) (tries + 1)
+  in
+  Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> step (n land mask) 0)
+
+(* A byte string of one of the lengths around [n], for a byte span whose
+   declared size is [n]: only the exact length may encode. *)
+let byte_lengths_around n =
+  Alcobar.choose
+    (List.map
+       (fun k -> Alcobar.bytes_fixed k)
+       (List.sort_uniq Int.compare [ 0; max 0 (n - 1); n; n + 1; n * 2 ]))
+
 (* Build a leaf [t] from a typ and three Alcobar generators. *)
 let leaf ~equal ~typ ~value_gen ~random ~adversarial =
   let codec = codec_of_typ typ in
@@ -105,6 +136,7 @@ let leaf ~equal ~typ ~value_gen ~random ~adversarial =
     adversarial = adversarial_bytes;
     equal;
     env = None;
+    adversarial_value = None;
   }
 
 (* A leaf whose positives draw a value from [value_gen] and encode it through
@@ -116,7 +148,16 @@ let enum_like ~typ ~value_gen ~random ~adversarial =
   let positive =
     Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode_via_codec codec v))
   in
-  { codec; typ; positive; random; adversarial; equal = ( = ); env = None }
+  {
+    codec;
+    typ;
+    positive;
+    random;
+    adversarial;
+    equal = ( = );
+    env = None;
+    adversarial_value = None;
+  }
 
 (* {1 Leaves} *)
 
@@ -281,6 +322,8 @@ let byte_array n =
     adversarial;
     equal = String.equal;
     env = None;
+    (* A fixed-size byte span is exact: any other length must be refused. *)
+    adversarial_value = Some (byte_lengths_around n);
   }
 
 let byte_slice n =
@@ -305,10 +348,6 @@ let byte_slice n =
       (min n (Bytesrw.Bytes.Slice.length s));
     buf
   in
-  let slice_of_string s =
-    let b = Bytes.of_string s in
-    Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
-  in
   let value_gen = Alcobar.bytes_fixed n in
   let positive =
     Alcobar.map
@@ -317,26 +356,18 @@ let byte_slice n =
         let slice = slice_of_string s in
         (slice, encode slice))
   in
-  let slice_equal a b =
-    let la = Bytesrw.Bytes.Slice.length a
-    and lb = Bytesrw.Bytes.Slice.length b in
-    la = lb
-    &&
-    let sa =
-      Bytes.sub_string
-        (Bytesrw.Bytes.Slice.bytes a)
-        (Bytesrw.Bytes.Slice.first a)
-        la
-    in
-    let sb =
-      Bytes.sub_string
-        (Bytesrw.Bytes.Slice.bytes b)
-        (Bytesrw.Bytes.Slice.first b)
-        lb
-    in
-    String.equal sa sb
-  in
-  { codec; typ; positive; random; adversarial; equal = slice_equal; env = None }
+  {
+    codec;
+    typ;
+    positive;
+    random;
+    adversarial;
+    equal = slice_equal;
+    env = None;
+    (* Same exact-span rule as [byte_array], through the zero-copy slice. *)
+    adversarial_value =
+      Some (Alcobar.map Alcobar.[ byte_lengths_around n ] slice_of_string);
+  }
 
 let all_bytes =
   let typ = Wire.all_bytes in
@@ -359,6 +390,7 @@ let all_bytes =
     adversarial = bytes_any;
     equal = String.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let all_zeros =
@@ -393,6 +425,12 @@ let all_zeros =
     adversarial;
     equal = String.equal;
     env = None;
+    (* Padding decode only accepts as zeros: a non-zero byte must be refused. *)
+    adversarial_value =
+      Some
+        (Alcobar.map
+           Alcobar.[ Alcobar.range ~min:1 16; Alcobar.range ~min:1 255 ]
+           (fun n byte -> String.make n (Char.chr byte)));
   }
 
 (* NUL-free string: a [zeroterm] value cannot contain its own terminator. *)
@@ -426,6 +464,9 @@ let zeroterm =
     adversarial;
     equal = String.equal;
     env = None;
+    (* A value carrying its own terminator cannot round-trip. *)
+    adversarial_value =
+      Some (Alcobar.map Alcobar.[ Alcobar.bytes ] (fun s -> s ^ "\000x"));
   }
 
 let zeroterm_at_most n =
@@ -455,6 +496,16 @@ let zeroterm_at_most n =
     adversarial = bytes_fixed n;
     equal = String.equal;
     env = None;
+    (* Too long for the region once the terminator is counted, or carrying its
+       own terminator. *)
+    adversarial_value =
+      Some
+        (Alcobar.choose
+           [
+             Alcobar.bytes_fixed n;
+             Alcobar.bytes_fixed (n + 1);
+             Alcobar.map Alcobar.[ Alcobar.bytes_fixed n ] (fun s -> s ^ "\000");
+           ]);
   }
 
 let byte_array_where n ~per_byte =
@@ -483,6 +534,9 @@ let byte_array_where n ~per_byte =
     adversarial;
     equal = String.equal;
     env = None;
+    (* Arbitrary bytes at the declared length and around it: most violate the
+       refinement, the rest exercise the exact-length rule. *)
+    adversarial_value = Some (byte_lengths_around n);
   }
 
 (* [nested] and [nested_at_most] differ only in the typ constructor; the
@@ -517,6 +571,7 @@ let nested_sized make_typ n inner =
     adversarial;
     equal = inner.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let nested n inner = nested_sized Wire.nested n inner
@@ -535,6 +590,7 @@ let map ~decode ~encode inner =
     adversarial = inner.adversarial;
     equal = (fun a b -> inner.equal (encode a) (encode b));
     env = None;
+    adversarial_value = None;
   }
 
 let uint_var ~endian size =
@@ -568,6 +624,7 @@ let uint_var ~endian size =
     adversarial;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let exact_cases ~typ ~equal cases =
@@ -586,6 +643,7 @@ let exact_cases ~typ ~equal cases =
       Alcobar.choose (List.map (fun (_, bs) -> Alcobar.const bs) cases);
     equal;
     env = None;
+    adversarial_value = None;
   }
 
 let exact_int typ cases = exact_cases ~typ ~equal:Int.equal cases
@@ -766,6 +824,7 @@ let optional ?(present = true) inner =
     adversarial = inner.adversarial;
     equal = Option.equal inner.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let optional_or ?(present = true) ~default inner =
@@ -791,6 +850,7 @@ let optional_or ?(present = true) ~default inner =
     adversarial = inner.adversarial;
     equal = inner.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let list_equal eq a b = List.length a = List.length b && List.for_all2 eq a b
@@ -843,6 +903,7 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     adversarial = bytes_any;
     equal = list_equal inner.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let repeat ~bytes inner =
@@ -867,6 +928,7 @@ let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
     adversarial = bytes_any;
     equal;
     env = None;
+    adversarial_value = None;
   }
 
 let nested_at_most n inner = nested_sized Wire.nested_at_most n inner
@@ -911,6 +973,13 @@ let array_sized make_typ n inner =
       Alcobar.[ sample_array_of_positives inner.positive n ]
       (fun (vs, bss) -> (vs, concat_bytes_list bss))
   in
+  (* An [array ~len:n] is an exact cardinality, so a shorter or longer list must
+     be refused rather than silently clipped or padded. *)
+  let wrong_cardinality k =
+    Alcobar.map
+      Alcobar.[ sample_array_of_positives inner.positive k ]
+      (fun (vs, _) -> vs)
+  in
   {
     codec;
     typ;
@@ -919,6 +988,11 @@ let array_sized make_typ n inner =
     adversarial = bytes_any;
     equal = list_equal inner.equal;
     env = None;
+    adversarial_value =
+      Some
+        (Alcobar.choose
+           (List.map wrong_cardinality
+              (List.sort_uniq Int.compare [ 0; max 0 (n - 1); n + 1 ])));
   }
 
 let array n inner = array_sized Wire.array n inner
@@ -947,6 +1021,7 @@ let enum name cases =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    adversarial_value = Some (unlisted_enum_gen ~mask:0xFF valid_values);
   }
 
 (* [Wire.enum_open]: names known codes for documentation but accepts any value,
@@ -972,6 +1047,7 @@ let enum_open =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let enum_base ~typ ~size name cases =
@@ -994,6 +1070,8 @@ let enum_base ~typ ~size name cases =
     adversarial = bytes_fixed size;
     equal = Int.equal;
     env = None;
+    adversarial_value =
+      Some (unlisted_enum_gen ~mask:((1 lsl (size * 8)) - 1) valid_values);
   }
 
 let enum_open_base ~typ ~size name cases =
@@ -1017,6 +1095,7 @@ let enum_open_base ~typ ~size name cases =
     adversarial = bytes_fixed size;
     equal = Int.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let enum_u16be =
@@ -1050,6 +1129,7 @@ let variants_u16be =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* Single-field record holding a [Wire.uint8] constrained via the field's
@@ -1094,6 +1174,14 @@ let bounded_u8 ~min ~max =
     adversarial = boundary_bytes;
     equal = Int.equal;
     env = None;
+    (* Out-of-range on both sides of the field's [~self_constraint]. *)
+    adversarial_value =
+      Some
+        (Alcobar.choose
+           (List.map Alcobar.const
+              (List.filter
+                 (fun n -> n >= 0 && n <= 0xFF && (n < min || n > max))
+                 [ min - 1; max + 1; 0; 0xFF ])));
   }
 
 (* [bounded_u8] generalised to any unsigned integer [inner_typ] of [size] bytes
@@ -1138,6 +1226,7 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
     adversarial = boundary_bytes;
     equal;
     env = None;
+    adversarial_value = None;
   }
 
 let bounded_u16be =
@@ -1192,6 +1281,10 @@ let codec_where =
     adversarial = boundary;
     equal = ( = );
     env = None;
+    (* [a = b] fails the codec-level [~where] [a < b]. *)
+    adversarial_value =
+      Some
+        (Alcobar.map Alcobar.[ Alcobar.range ~min:0 0x100 ] (fun a -> (a, a)));
   }
 
 let u8_pair_bytes a b =
@@ -1205,18 +1298,27 @@ let u8_pair_positive gen =
 
 let u8_pair_adversarial gen = Alcobar.map gen (fun a b -> u8_pair_bytes a b)
 
+(* The same out-of-contract pair the decoder is handed, read back as a value so
+   encode is put through it too. *)
+let u8_pair_hostile bytes_gen =
+  Alcobar.map
+    Alcobar.[ bytes_gen ]
+    (fun b -> (Bytes.get_uint8 b 0, Bytes.get_uint8 b 1))
+
 let u8_pair_record name f_a f_b ~positive ~adversarial =
   let codec =
     Wire.Codec.v name (fun a b -> (a, b)) Wire.Codec.[ f_a $ fst; f_b $ snd ]
   in
+  let adversarial_bytes = u8_pair_adversarial adversarial in
   {
     codec;
     typ = Wire.codec codec;
     positive = u8_pair_positive positive;
     random = bytes_fixed 2;
-    adversarial = u8_pair_adversarial adversarial;
+    adversarial = adversarial_bytes;
     equal = ( = );
     env = None;
+    adversarial_value = Some (u8_pair_hostile adversarial_bytes);
   }
 
 (* A field whose typ carries a [Wire.where] cond ([d : where (len < 2) uint8]).
@@ -1296,6 +1398,7 @@ let self_int64 =
     adversarial;
     equal = Int64.equal;
     env = None;
+    adversarial_value = None;
   }
 
 (* {1 More leaves and wrappers} *)
@@ -1322,6 +1425,7 @@ let where inner =
     adversarial = inner.adversarial;
     equal = inner.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let bits ?bit_order ~width base =
@@ -1398,6 +1502,7 @@ let bitpack3 name ~base ~bit_order (w_a, w_b, w_c) =
     adversarial = bytes_fixed (total / 8);
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let bitpack2_spill name ~base ~bit_order (w_a, w_b) =
@@ -1423,6 +1528,7 @@ let bitpack2_spill name ~base ~bit_order (w_a, w_b) =
     adversarial = bytes_fixed (2 * (total / 8));
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let bitpack_split_orders =
@@ -1450,6 +1556,7 @@ let bitpack_split_orders =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let bitpack_u8_msb =
@@ -1516,6 +1623,7 @@ let bit inner =
     adversarial = inner.adversarial;
     equal = Bool.equal;
     env = None;
+    adversarial_value = None;
   }
 
 let array_seq n inner = array_sized (Wire.array_seq Wire.seq_list) n inner
@@ -1559,6 +1667,7 @@ let field_anon =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* Codec referencing [Param.input] in its [~where]. Each test run binds
@@ -1599,6 +1708,7 @@ let param_input =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = Some strategy;
+    adversarial_value = None;
   }
 
 (* A 1-byte positive: a uint8 value written to a single-byte buffer. *)
@@ -1624,6 +1734,7 @@ let action_codec name action =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = Some { positive = Fun.id; fuzz = Alcobar.const Fun.id };
+    adversarial_value = None;
   }
 
 (* Codec with [Action.on_success [assign out (Field.ref f); abort?]]
@@ -1663,6 +1774,7 @@ let action_abort =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    adversarial_value = None;
   }
 
 (* Same as [action] but using [Action.on_act] in place of
@@ -1720,6 +1832,7 @@ let nan_float64 =
     adversarial;
     equal = float64_bits_equal;
     env = None;
+    adversarial_value = None;
   }
 
 (* Single-field float codec with [~self_constraint:is_finite]. Adversarial
@@ -1762,6 +1875,7 @@ let finite_float64 =
     adversarial;
     equal = float64_bits_equal;
     env = None;
+    adversarial_value = None;
   }
 
 (* Codec whose constraint exercises every integer Expr operator
@@ -1815,6 +1929,7 @@ let expr_ops =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* Codec ending in [rest_bytes] whose tail length is computed from a
@@ -1856,6 +1971,7 @@ let rest_bytes =
     adversarial = bytes_fixed (1 + tail_len);
     equal = ( = );
     env = Some strategy;
+    adversarial_value = None;
   }
 
 (* A [byte_array] whose [~size] is a bound [Param.input], bound through
@@ -1893,6 +2009,7 @@ let param_size =
     adversarial = bytes_any;
     equal = String.equal;
     env = Some strategy;
+    adversarial_value = None;
   }
 
 (* [Wire.Expr.if_then_else] driving a field size: the [len] byte selects the
@@ -1934,6 +2051,7 @@ let if_then_else =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* Two-field codec whose second field's [~self_constraint] references
@@ -1970,6 +2088,7 @@ let sizeof =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* A uint8 [gate] field followed by a [mk_payload]-built payload field that
@@ -1990,6 +2109,7 @@ let gate_codec name mk_payload positive =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let gate_present f_gate = Wire.Expr.(Wire.Field.ref f_gate <> Wire.int 0)
@@ -2128,6 +2248,7 @@ let casetype_u8 name cases =
     adversarial = bytes_any;
     equal;
     env = env_strategy;
+    adversarial_value = None;
   }
 
 (* A direct [Wire.casetype] over a wider discriminator, with a default branch
@@ -2174,6 +2295,7 @@ let casetype_u16be_default =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 (* {1 Record composition} *)
@@ -2284,6 +2406,31 @@ module Codec = struct
     | [] -> []
     | f :: rest -> f.gen.env :: field_envs rest
 
+  (* Hostile values compose the same "one bad slot" way the hostile bytes do:
+     slot [i] draws from its own [adversarial_value], every other slot draws a
+     positive value, so the record is well-formed apart from the one field
+     under test. *)
+  let rec hostile_value_at : type f r.
+      int -> f -> (f, r) fields -> r Alcobar.gen =
+   fun slot partial fields ->
+    match fields with
+    | [] -> Alcobar.const partial
+    | f :: rest ->
+        let gen =
+          match f.gen.adversarial_value with
+          | Some g when slot = 0 -> g
+          | _ -> Alcobar.map Alcobar.[ f.gen.positive ] fst
+        in
+        Alcobar.dynamic_bind gen (fun v ->
+            hostile_value_at (slot - 1) (partial v) rest)
+
+  let rec hostile_slots : type f r. int -> (f, r) fields -> int list =
+   fun i -> function
+    | [] -> []
+    | f :: rest ->
+        let tail = hostile_slots (i + 1) rest in
+        if Option.is_some f.gen.adversarial_value then i :: tail else tail
+
   let v : type f r.
       string -> ?equal:(r -> r -> bool) -> f -> (f, r) fields -> r t =
    fun name ?(equal = ( = )) builder fields ->
@@ -2324,6 +2471,14 @@ module Codec = struct
       if per_slot = [] then Alcobar.const Bytes.empty
       else Alcobar.choose per_slot
     in
+    let adversarial_value =
+      match hostile_slots 0 fields with
+      | [] -> None
+      | slots ->
+          Some
+            (Alcobar.choose
+               (List.map (fun i -> hostile_value_at i builder fields) slots))
+    in
     {
       codec;
       typ;
@@ -2332,6 +2487,7 @@ module Codec = struct
       adversarial;
       equal;
       env = combine_env_strategies (field_envs fields);
+      adversarial_value;
     }
 end
 
@@ -2876,6 +3032,46 @@ let check_decode_safety label kind ?env g bs =
   try ignore (Wire.Codec.decode ?env g.codec bs 0)
   with Invalid_argument _ -> Alcobar.failf "%s %s crashed decoder" label kind
 
+(* The bytes a hostile value encodes to, or [None] when encode refused it, which
+   is one of the two outcomes [check_encode_safety] allows. *)
+let hostile_encoding label ?env g value =
+  match Wire.Codec.size_of_value g.codec value with
+  | exception Invalid_argument _ -> None
+  | sz -> (
+      match Bytes.create sz with
+      | exception Invalid_argument _ ->
+          Alcobar.failf "%s encode safety: size_of_value returned %d" label sz
+      | buf -> (
+          match Wire.Codec.encode ?env g.codec value buf 0 with
+          | exception Invalid_argument _ -> None
+          | () -> Some buf))
+
+(* The encode-side twin of [check_decode_safety]. Decode is handed hostile bytes
+   and must not crash; encode is handed a hostile value and must not put a frame
+   on the wire that its own decoder throws out. Exactly two outcomes are
+   allowed: encode refuses the value with [Invalid_argument], or the bytes it
+   writes decode back to an equal value. Anything else means the OCaml encoder
+   and the EverParse validator built from the same schema disagree on a frame
+   this library produced itself. *)
+let check_encode_safety label ?env g value =
+  match hostile_encoding label ?env g value with
+  | None -> ()
+  | Some buf -> (
+      match Wire.Codec.decode ?env g.codec buf 0 with
+      | Ok back ->
+          if not (g.equal back value) then
+            Alcobar.failf
+              "%s encode safety: encode wrote bytes that decode to a different \
+               value"
+              label
+      | Error e ->
+          Alcobar.failf
+            "%s encode safety: encode wrote bytes its own decoder rejects (%a)"
+            label Wire.pp_parse_error e
+      | exception Invalid_argument _ ->
+          Alcobar.failf
+            "%s encode safety: encode wrote bytes that crash the decoder" label)
+
 let decode_accepts ?env g bs =
   try
     match Wire.Codec.decode ?env g.codec bs 0 with
@@ -2899,6 +3095,14 @@ let check_decode_validate_agree label kind ?env g bs =
   | `Reject, `Accept ->
       Alcobar.failf "%s %s validate accepted but decode rejected" label kind
 
+(* One sample of the hostile-value stream, or [None] for a shape with no
+   refinement to violate. Kept as an [option] stream so every gen presents the
+   same test-case arity whether or not it has hostile values. *)
+let hostile_value_stream g =
+  match g.adversarial_value with
+  | None -> Alcobar.const None
+  | Some gen -> Alcobar.map Alcobar.[ gen ] (fun v -> Some v)
+
 let test_cases ?(validate = true) label g =
   let check_positive_stream ((_, bs) as sample) =
     check_positive label g sample;
@@ -2911,26 +3115,44 @@ let test_cases ?(validate = true) label g =
       check_decode_validate_agree label kind ?env g bs
     end
   in
+  let check_hostile_stream ?env = function
+    | None -> ()
+    | Some value -> check_encode_safety label ?env g value
+  in
   match g.env with
   | None ->
       [
         Alcobar.test_case (label ^ " all")
-          Alcobar.[ g.positive; g.random; g.adversarial ]
-          (fun positive random adversarial ->
+          Alcobar.
+            [ g.positive; g.random; g.adversarial; hostile_value_stream g ]
+          (fun positive random adversarial hostile ->
             check_positive_stream positive;
             check_safety_stream "random" random;
-            check_safety_stream "adversarial" adversarial);
+            check_safety_stream "adversarial" adversarial;
+            check_hostile_stream hostile);
       ]
   | Some s ->
       [
         Alcobar.test_case (label ^ " all")
-          Alcobar.[ g.positive; g.random; g.adversarial; s.fuzz; s.fuzz ]
-          (fun positive random adversarial random_env adversarial_env ->
+          Alcobar.
+            [
+              g.positive;
+              g.random;
+              g.adversarial;
+              s.fuzz;
+              s.fuzz;
+              hostile_value_stream g;
+            ]
+          (fun positive random adversarial random_env adversarial_env hostile ->
             check_positive_stream positive;
             let env = Some (random_env (Wire.Codec.env g.codec)) in
             check_safety_stream "random" ?env random;
             let env = Some (adversarial_env (Wire.Codec.env g.codec)) in
-            check_safety_stream "adversarial" ?env adversarial);
+            check_safety_stream "adversarial" ?env adversarial;
+            (* The hostile value is the thing under test, so bind the params the
+               way a positive would: a random env would make encode fail for an
+               unrelated reason. *)
+            check_hostile_stream ?env:(positive_env g) hostile);
       ]
 
 (* Cross-field sizes: a [byte_array] whose [~size] reads a preceding int field.
@@ -2975,6 +3197,7 @@ let sized_source name make_len bytes_of_len =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    adversarial_value = None;
   }
 
 let sized_cases group =
@@ -4097,6 +4320,7 @@ let check_all_zeros_semantic label () =
       adversarial = bytes_any;
       equal = String.equal;
       env = None;
+      adversarial_value = None;
     }
   in
   check_decode_validate_agree label "all_zeros" g
@@ -4123,6 +4347,7 @@ let signed_slice_semantic_codec () =
           Int.equal l1 l2
           && String.equal (string_of_slice s1) (string_of_slice s2));
       env = None;
+      adversarial_value = None;
     }
   in
   (g, codec, cf_data)
@@ -4412,7 +4637,16 @@ let check_metadata_helpers () =
     (Wire.Everparse.project ~mode:`Ffi renamed).Wire.Everparse.name;
   if Wire.Codec.doc codec <> None then
     Alcobar.failf "Codec.doc unexpectedly set";
-  let pp_value = Fmt.str "%a" (pp_value codec) (7, 1) in
+  (* [pp_value] encodes the value to read its fields back, and encode refuses a
+     record that fails its own where clause. It threads no [Param.env], so the
+     param-gated [codec] above cannot satisfy its cond here; print through the
+     same fields with no param in the clause. *)
+  let pp_codec =
+    Wire.Codec.v "ApiPp"
+      (fun src copy -> (src, copy))
+      Wire.Codec.[ f_src $ fst; f_copy $ snd ]
+  in
+  let pp_value = Fmt.str "%a" (pp_value pp_codec) (7, 1) in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
   let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in

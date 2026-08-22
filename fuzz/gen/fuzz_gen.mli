@@ -1,12 +1,14 @@
 (** Fuzz generators that mirror Wire's surface.
 
-    Each [t] bundles a codec with three Alcobar generators: [positive] produces
-    a value together with bytes that decode to it, [random] produces arbitrary
-    bytes the decoder must handle without raising, and [adversarial] produces
-    bytes at the boundary of every constraint the codec checks (lengths, gate
-    flips, bit-pattern extremes). {!Codec.v} composes leaves into record gens
-    with the same shape as {!Wire.Codec.v} composes typs into record codecs -- a
-    record gen is itself a [t], so composition is recursive. *)
+    Each [t] bundles a codec with four Alcobar generators: [positive] produces a
+    value together with bytes that decode to it, [random] produces arbitrary
+    bytes the decoder must handle without raising, [adversarial] produces bytes
+    at the boundary of every constraint the codec checks (lengths, gate flips,
+    bit-pattern extremes), and a hostile-value stream produces well-typed values
+    that violate one of those constraints, which encode must refuse rather than
+    write out. {!Codec.v} composes leaves into record gens with the same shape
+    as {!Wire.Codec.v} composes typs into record codecs -- a record gen is
+    itself a [t], so composition is recursive. *)
 
 type 'a t
 (** A fuzz generator paired with the codec it tests. *)
@@ -20,10 +22,13 @@ val file_input_mode : unit -> bool
     AFL-provided file input. *)
 
 val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
-(** [test_cases label g] batches [g.positive], [g.random], and [g.adversarial]
-    into one Alcobar case: positives check codec round-trip plus validation, and
-    random/adversarial streams check codec/validator crash-safety. [validate]
-    defaults to [true]. Direct typ-level entry points are covered by
+(** [test_cases label g] batches [g]'s four streams into one Alcobar case:
+    positives check codec round-trip plus validation, random/adversarial bytes
+    check codec/validator crash-safety, and hostile values check encode safety.
+    Encode safety is the mirror of decode crash-safety: a hostile value must
+    either be refused with [Invalid_argument] or encode to bytes that decode
+    back to an equal value, never to bytes the codec's own decoder rejects.
+    [validate] defaults to [true]. Direct typ-level entry points are covered by
     {!entry_point_cases} so this hot path stays cheap. *)
 
 val afl_cases : ?max_len:int -> string -> Alcobar.test_case list

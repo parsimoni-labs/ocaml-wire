@@ -170,3 +170,18 @@ and compare_expr : type a. ctx -> a expr -> a expr -> int =
 
 and compare_int64_expr ctx (a : int64 expr) (b : int64 expr) =
   Int64.unsigned_compare (expr ctx a) (expr ctx b)
+
+(* [byte_array_where] refines every byte of the span. Decode rejects the first
+   offending byte, so encode must refuse the same value rather than emit a span
+   its own decoder (and the EverParse validator built from the same schema)
+   rejects. *)
+let check_byte_refinement ~elt_var ~cond s =
+  String.iteri
+    (fun i c ->
+      let n = Char.code c in
+      if not (expr (bind elt_var n empty) cond) then
+        Fmt.invalid_arg
+          "Wire.encode: byte_array_where byte %d = 0x%02x violates its \
+           per-byte constraint %a"
+          i n Types.pp_expr cond)
+    s

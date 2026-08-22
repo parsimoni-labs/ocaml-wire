@@ -120,6 +120,23 @@ val check_nested_size : at_most:bool -> expected:int -> actual:int -> unit
 (** Check an inner value against an exact or at-most nested region. Internal
     helper shared by sizing and encoders. *)
 
+val enum_values : (string * int) list -> int list
+(** The value set of an enum's named cases. *)
+
+val enum_member : int list -> int -> bool
+(** [enum_member valid v] is [true] when [v] is one of [valid]. The single
+    membership rule decode and encode share, so the two halves agree on what a
+    closed enum admits. *)
+
+val check_enum_encode : name:string -> valid:int list -> int -> unit
+(** Check a value against a closed enum's case set before encoding it. An
+    unlisted value raises [Invalid_argument]: decode rejects it, so emitting it
+    would produce bytes this library cannot read back. *)
+
+val check_all_zeros_encode : string -> unit
+(** Check an {!val-all_zeros} padding value is all zero bytes before encoding
+    it. A non-zero byte raises [Invalid_argument]. *)
+
 (** {1 Param handles} *)
 
 type param_input
@@ -847,6 +864,11 @@ val pp_expr : Format.formatter -> 'a expr -> unit
 
 val pp_typ : Format.formatter -> 'a typ -> unit
 (** Pretty-print a type. *)
+
+val check_where_encode : bool expr -> bool -> unit
+(** [check_where_encode cond ok] raises [Invalid_argument] when [ok] is [false],
+    naming [cond] in the message. Used by the encoders to refuse a value its own
+    [where] refinement rejects. *)
 
 val pp_action : Format.formatter -> action -> unit
 (** Pretty-print an action block. *)

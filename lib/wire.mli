@@ -652,7 +652,9 @@ val all_zeros : string typ
     of them to be zero.
 
     This is mainly useful as the final field of a struct or record-shaped
-    layout. *)
+    layout. Encoding a value with a non-zero byte raises [Invalid_argument]:
+    decode reports it as {!constructor-Non_zero_padding}, so writing it would
+    produce bytes that fail to read back. *)
 
 val zeroterm : string typ
 (** [zeroterm] is a NUL-terminated string: the bytes up to (but excluding) the
@@ -674,7 +676,10 @@ val zeroterm_at_most : size:int expr -> string typ
     see [EverParse3d.Prelude.fsti]. *)
 
 val where : bool expr -> 'a typ -> 'a typ
-(** Refine a description with a boolean constraint. *)
+(** Refine a description with a boolean constraint.
+
+    Encoding a value the constraint rejects raises [Invalid_argument] rather
+    than emitting bytes decode would refuse. *)
 
 (** Builder for sequence accumulation (Jsont-style). *)
 type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
@@ -760,10 +765,11 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
 
 val enum : string -> (string * int) list -> int typ -> int typ
 (** [enum name cases base] validates that the decoded integer is one of the
-    named values. The result is still an OCaml integer -- use {!variants}
-    instead if you want to decode to proper OCaml values. [enum] is mainly
-    useful for 3D projection where the name and cases appear in the generated
-    [.3d] file. *)
+    named values, on encode as well as on decode: encoding an unlisted value
+    raises [Invalid_argument]. The result is still an OCaml integer -- use
+    {!variants} instead if you want to decode to proper OCaml values. [enum] is
+    mainly useful for 3D projection where the name and cases appear in the
+    generated [.3d] file. *)
 
 val enum_open : string -> (string * int) list -> int typ -> int typ
 (** [enum_open name cases base] is like {!enum} but for an open value set: the
@@ -1164,7 +1170,12 @@ type 'r codec = 'r Codec.t
 val pp_value : 'r codec -> 'r Fmt.t
 (** [pp_value c] is a formatter that prints a record field-by-field through
     codec [c]. Integer-valued fields show as [name = value]; non-integer fields
-    are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v]. *)
+    are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v].
+
+    It encodes the value to read the fields back and threads no {!Param.env}, so
+    on a codec whose sizes or constraints reference a {!Param.input} it raises
+    [Invalid_argument]: with no binding those params read as zero, and the
+    record that comes out is not one the codec accepts. *)
 
 (** {1 Nested Codec Combinators}
 
