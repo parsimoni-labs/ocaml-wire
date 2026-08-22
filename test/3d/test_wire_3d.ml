@@ -8,6 +8,12 @@ let simple_struct =
 
 let simple_module = module_ [ typedef ~entrypoint:true simple_struct ]
 
+(* Everything below that shells out to EverParse needs [3d.exe]. Reporting those
+   cases as [OK] when the binary is absent would print a green tick for an
+   assertion that never ran, so they skip instead: the four default [dune
+   runtest] lanes have no EverParse and must say so. *)
+let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
+
 let test_everparse_name () =
   (* All-caps names get lowercased with first letter capitalized *)
   Alcotest.(check string) "CLCW -> Clcw" "Clcw" (Wire_3d.everparse_name "CLCW");
@@ -136,8 +142,8 @@ let read_file path =
   Bytes.unsafe_to_string buf
 
 let test_generate_c () =
-  (* generate_c requires 3d.exe; skip when not available *)
-  if Wire_3d.has_3d_exe () then begin
+  needs_3d_exe ();
+  begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_c" "" in
     let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
@@ -336,8 +342,8 @@ let test_generate_dune_standalone_context_policy () =
     (List.length host_gated >= 1)
 
 let test_generate_standalone () =
-  (* generate_standalone needs 3d.exe; skip when not available. *)
-  if Wire_3d.has_3d_exe () then begin
+  needs_3d_exe ();
+  begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_doc" "" in
     Wire_3d.generate_standalone ~outdir:tmpdir ~package:"my-pkg"
       [ Wire_3d.pack (doc_codec "Pkt"); Wire_3d.pack (doc_codec "Pkt2") ];
@@ -446,63 +452,59 @@ let differential_ok ~name ~package ~corpus codecs =
   | _ -> Alcotest.failf "differential %s terminated abnormally:\n%s" name output
 
 let test_doc_differential () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"protospec" ~package:"demo-doc" ~corpus:(`Fuzz 400)
-      [
-        Wire_3d.pack diff_enum_codec;
-        Wire_3d.pack diff_range_codec;
-        Wire_3d.pack diff_bits_codec;
-        Wire_3d.pack diff_param_codec;
-      ]
+  needs_3d_exe ();
+  differential_ok ~name:"protospec" ~package:"demo-doc" ~corpus:(`Fuzz 400)
+    [
+      Wire_3d.pack diff_enum_codec;
+      Wire_3d.pack diff_range_codec;
+      Wire_3d.pack diff_bits_codec;
+      Wire_3d.pack diff_param_codec;
+    ]
 
 let test_doc_differential_no_params () =
   (* Regression: an all-non-parameterized package must still compile. The agree
      harness must not emit an unused [parse_params] helper (a -Werror under the
      strict flags) when no codec takes parameters. *)
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
-      [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
+  needs_3d_exe ();
+  differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
+    [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 let test_doc_differential_nested_regions () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"nestedspec" ~package:"nested-doc"
-      ~corpus:
-        (`Lines
-           [
-             "NestedExact - 41000000 0";
-             "NestedExact - 41424300 1";
-             "NestedAtMost - 41000000 1";
-             "NestedAtMost - 41424300 1";
-           ])
-      [
-        Wire_3d.pack diff_nested_exact_codec;
-        Wire_3d.pack diff_nested_at_most_codec;
-      ]
+  needs_3d_exe ();
+  differential_ok ~name:"nestedspec" ~package:"nested-doc"
+    ~corpus:
+      (`Lines
+         [
+           "NestedExact - 41000000 0";
+           "NestedExact - 41424300 1";
+           "NestedAtMost - 41000000 1";
+           "NestedAtMost - 41424300 1";
+         ])
+    [
+      Wire_3d.pack diff_nested_exact_codec;
+      Wire_3d.pack diff_nested_at_most_codec;
+    ]
 
 let test_doc_differential_region_cardinality () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"invariantspec" ~package:"invariant-doc"
-      ~corpus:
-        (`Lines
-           [
-             "ArrayExact - 010203 1";
-             "ArrayExact - 0102 0";
-             "ArrayExact - 01020304 0";
-             "RepeatExact - 00010002 1";
-             "RepeatExact - 0001 0";
-             "RepeatExact - 000100020003 0";
-             "NestedExact - 41424300 1";
-             "NestedExact - 41000000 0";
-           ])
-      [
-        Wire_3d.pack diff_array_exact_codec;
-        Wire_3d.pack diff_repeat_exact_codec;
-        Wire_3d.pack diff_nested_exact_codec;
-      ]
+  needs_3d_exe ();
+  differential_ok ~name:"invariantspec" ~package:"invariant-doc"
+    ~corpus:
+      (`Lines
+         [
+           "ArrayExact - 010203 1";
+           "ArrayExact - 0102 0";
+           "ArrayExact - 01020304 0";
+           "RepeatExact - 00010002 1";
+           "RepeatExact - 0001 0";
+           "RepeatExact - 000100020003 0";
+           "NestedExact - 41424300 1";
+           "NestedExact - 41000000 0";
+         ])
+    [
+      Wire_3d.pack diff_array_exact_codec;
+      Wire_3d.pack diff_repeat_exact_codec;
+      Wire_3d.pack diff_nested_exact_codec;
+    ]
 
 (* The installed standalone archive must export only the checked
    [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
@@ -512,8 +514,8 @@ let test_doc_differential_region_cardinality () =
    symbol. This runs the platform's real link step on CI (macOS and Linux). Needs
    3d.exe for the C. *)
 let test_archive_hides_raw_validators () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
+  needs_3d_exe ();
+  begin
     let name = "symspec" and package = "sym-doc" in
     let codec =
       Codec.v "Sample"
@@ -579,10 +581,9 @@ let diff_signed_codec =
   Codec.v "SignedMsg" (fun v -> v) [ Codec.( $ ) f (fun v -> v) ]
 
 let test_doc_differential_signed () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
-      [ Wire_3d.pack diff_signed_codec ]
+  needs_3d_exe ();
+  differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
+    [ Wire_3d.pack diff_signed_codec ]
 
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
    reader's hex buffer must hold the line, or it truncates and the verdict
@@ -594,10 +595,9 @@ let diff_large_payload_codec =
     [ Codec.( $ ) (Field.v "data" (byte_array ~size:(int 8192))) (fun d -> d) ]
 
 let test_doc_differential_large_payload () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"sharedspec" ~package:"shared-doc" ~corpus:(`Fuzz 40)
-      [ Wire_3d.pack diff_large_payload_codec ]
+  needs_3d_exe ();
+  differential_ok ~name:"sharedspec" ~package:"shared-doc" ~corpus:(`Fuzz 40)
+    [ Wire_3d.pack diff_large_payload_codec ]
 
 (* Interior consecutive caps: EverParse normalizes the validator symbol to
    [SpacewireCheckSpaceOsframe], so agree.c must build the same name through
@@ -609,10 +609,9 @@ let diff_caps_name_codec =
     [ Codec.( $ ) (Field.v "v" uint8) (fun v -> v) ]
 
 let test_doc_differential_caps_name () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"spacewire" ~package:"space-wire" ~corpus:(`Fuzz 40)
-      [ Wire_3d.pack diff_caps_name_codec ]
+  needs_3d_exe ();
+  differential_ok ~name:"spacewire" ~package:"space-wire" ~corpus:(`Fuzz 40)
+    [ Wire_3d.pack diff_caps_name_codec ]
 
 (* A valid record followed by trailing bytes must be rejected. EverParse's
    stock [Check] wrapper returns TRUE on any successful validation -- success
@@ -621,13 +620,11 @@ let test_doc_differential_caps_name () =
    exact boundary: the 2-byte RangeMsg accepts exactly-sized input and rejects
    both one byte over and one byte short. *)
 let test_doc_differential_trailing_bytes () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else
-    differential_ok ~name:"trailspec" ~package:"trail-doc"
-      ~corpus:
-        (`Lines
-           [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
-      [ Wire_3d.pack diff_range_codec ]
+  needs_3d_exe ();
+  differential_ok ~name:"trailspec" ~package:"trail-doc"
+    ~corpus:
+      (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
+    [ Wire_3d.pack diff_range_codec ]
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
@@ -639,8 +636,8 @@ let test_doc_differential_trailing_bytes () =
    Parameterised over the schema so tricky names (underscores, all-
    caps prefixes, mixed case) each exercise the pipeline end-to-end. *)
 let compile_and_run ~name codec =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
+  needs_3d_exe ();
+  begin
     let tmpdir = Filename.temp_dir ("wire_3d_e2e_" ^ name) "" in
     let schema = Everparse.project ~mode:`Ffi codec in
     Wire_3d.generate_3d ~outdir:tmpdir [ schema ];
@@ -1025,10 +1022,19 @@ let test_uses_wire_ctx () =
     "raw module without extern WireCtx" false
     (Wire.Everparse.uses_wire_ctx raw)
 
+(* [has_3d_exe] is the gate every EverParse-dependent case reads, so it is
+   checked against the search it documents -- PATH, then the
+   [~/.local/everparse/bin] fallback -- resolved here independently of
+   [Wire_3d]'s own lookup. *)
 let test_has_3d_exe () =
-  (* Just check the function is callable and returns a bool *)
-  let result = Wire_3d.has_3d_exe () in
-  Alcotest.(check bool) "has_3d_exe returns bool" result result
+  let on_path = Sys.command "command -v 3d.exe > /dev/null 2>&1" = 0 in
+  let fallback =
+    Sys.file_exists
+      (Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe")
+  in
+  Alcotest.(check bool)
+    "has_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
+    (on_path || fallback) (Wire_3d.has_3d_exe ())
 
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
@@ -1412,8 +1418,8 @@ let test_field_optional_byte_array () =
    extraction here: rendering alone would not catch an invalid casetype or
    dependent repeat in the generated F*. *)
 let test_optional_length_prefixed_group_projects () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
+  needs_3d_exe ();
+  begin
     let f_ext_len = Field.v "ext_items_len" uint8 in
     let extensions =
       Codec.v "ProjectedTransferExtensions"
@@ -1455,8 +1461,8 @@ let test_optional_length_prefixed_group_projects () =
    and raises if EverParse rejects the module, so this pins the shape rather
    than only its rendering. *)
 let test_bare_uint64_projects () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
+  needs_3d_exe ();
+  begin
     let codec =
       Codec.v "BareUint64"
         (fun value -> value)
@@ -1478,8 +1484,8 @@ let test_bare_uint64_projects () =
    [generate_c] runs [3d.exe] and raises if the .3d is rejected, so this is the
    regression guard. *)
 let test_nested_field_projects () =
-  if not (Wire_3d.has_3d_exe ()) then ()
-  else begin
+  needs_3d_exe ();
+  begin
     let inner =
       Codec.v "NInner"
         (fun a b -> (a, b))
