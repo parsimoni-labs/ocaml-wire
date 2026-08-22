@@ -600,7 +600,7 @@ let uint_var ~endian size =
   let value_gen =
     Alcobar.map
       Alcobar.[ Alcobar.int ]
-      (fun n -> Wire.Private.UInt63.of_int (n land max_v))
+      (fun n -> Optint.Int63.of_int (n land max_v))
   in
   let encode v =
     let buf = Bytes.create size in
@@ -608,9 +608,7 @@ let uint_var ~endian size =
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
-  let boundaries =
-    List.map Wire.Private.UInt63.of_int [ 0; 1; max_v; max_v - 1 ]
-  in
+  let boundaries = List.map Optint.Int63.of_int [ 0; 1; max_v; max_v - 1 ] in
   let adversarial =
     Alcobar.map
       Alcobar.[ Alcobar.choose (List.map Alcobar.const boundaries) ]
@@ -761,9 +759,7 @@ let int64be_endian_edges =
     ]
 
 let uint_var_endian_edges ~endian size cases =
-  let cases =
-    List.map (fun (v, bs) -> (Wire.Private.UInt63.of_int v, bs)) cases
-  in
+  let cases = List.map (fun (v, bs) -> (Optint.Int63.of_int v, bs)) cases in
   exact_cases ~typ:(Wire.uint ~endian (Wire.int size)) ~equal:( = ) cases
 
 let uint_var3_little_edges =
@@ -4287,8 +4283,8 @@ let construction_guard_cases label =
             Wire.casetype "BadDynTag"
               (Wire.uint ~endian:Wire.Big (Wire.int 2))
               [
-                Wire.case ~index:(Wire.Private.UInt63.of_int 0)
-                  Wire.uint8 ~inject:Fun.id ~project:(fun v -> Some v);
+                Wire.case ~index:(Optint.Int63.of_int 0) Wire.uint8
+                  ~inject:Fun.id ~project:(fun v -> Some v);
               ]));
     const_case (label ^ " casetype enum tag") (fun () ->
         expect_invalid "casetype enum tag" (fun () ->

@@ -1615,9 +1615,7 @@ let test_casetype_reject_unprojectable_tag () =
          casetype "CtTag"
            (uint (int 2))
            [
-             case
-               ~index:(Wire.Private.UInt63.of_int 1)
-               uint8
+             case ~index:(Optint.Int63.of_int 1) uint8
                ~inject:(fun s -> s)
                ~project:Option.some;
            ]));
@@ -5853,7 +5851,9 @@ let test_repeat_after_var_slice () =
 
 (* -- uint: variable-width unsigned integer -- *)
 
-module UInt63 = Wire.Private.UInt63
+(* [uint] decodes to an [Optint.Int63.t]. Aliasing [Optint.Int63] rather than
+   [Wire.Private.UInt63] keeps these tests within the public API. *)
+module UInt63 = Optint.Int63
 
 let u63 = Alcotest.testable UInt63.pp ( = )
 
@@ -5899,7 +5899,7 @@ let test_uint_5byte_le () =
       [ (Field.v "V" (uint ~endian:Wire.Little (Wire.int 5)) $ fun v -> v) ]
   in
   (* 40 bits: holds on every platform because the value lives in a
-     [UInt63.t], not a native int. *)
+     [Optint.Int63.t], not a native int. *)
   let value = Optint.Int63.of_int64 0x01_02_03_04_05L in
   let buf = Bytes.create 5 in
   Codec.encode codec value buf 0;
