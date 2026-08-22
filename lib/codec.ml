@@ -2852,40 +2852,85 @@ let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
       prepend_field_check name check_only )
   else (raw_reader, full, check_only)
 
-(* Size, offset, presence and [where] expressions read earlier fields through
-   these readers. Unlike a plain decode, such a read can be asked for a field
-   the buffer does not reach: an earlier variable-size field pushes it past the
-   end, or the enclosing record is short. Check the field's byte extent first
-   so truncation is reported as end-of-input at the span that was missing.
+(* The bounds check a field's read needs before it touches the buffer, or
+   [None] when the read guards itself. Such a read can be asked for a field the
+   buffer does not reach: an earlier variable-size field pushes it past the end,
+   or the enclosing record is short. Checking the field's byte extent first
+   reports truncation as end-of-input at the span that was missing.
 
-   Only accesses with a known extent are wrapped. A variable-width field reads
+   Only accesses with a known extent get a guard. A variable-width field reads
    through [var_bytes_reader], which bounds-checks itself, and a field whose
    footprint differs from its wire size (an optional, a bitfield continuation)
    is left alone: it may legitimately occupy no bytes. *)
-let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
+let read_guard : type a r.
+    (a, r) compiled_field -> a typ -> (runtime -> bytes -> int -> unit) option =
  fun cf typ ->
-  let reader = cf.int_reader in
   match cf.field_access with
   | Bitfield { base = word; byte_off; _ } ->
       let width = Bitfield.byte_size word in
-      fun runtime buf base ->
-        check_read_bounds buf ~at:(base + byte_off) ~width;
-        reader runtime buf base
+      Some
+        (fun _runtime buf base ->
+          check_read_bounds buf ~at:(base + byte_off) ~width)
   | Fixed off -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
-          fun runtime buf base ->
-            check_read_bounds buf ~at:(base + off) ~width;
-            reader runtime buf base
-      | _ -> reader)
+          Some
+            (fun _runtime buf base ->
+              check_read_bounds buf ~at:(base + off) ~width)
+      | _ -> None)
   | Dynamic off_fn -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
-          fun runtime buf base ->
-            check_read_bounds buf ~at:(base + off_fn runtime buf base) ~width;
-            reader runtime buf base
-      | _ -> reader)
-  | Variable _ | Variable_dynamic _ -> reader
+          Some
+            (fun runtime buf base ->
+              check_read_bounds buf ~at:(base + off_fn runtime buf base) ~width)
+      | _ -> None)
+  | Variable _ | Variable_dynamic _ -> None
+
+(* Size, offset, presence and [where] expressions read earlier fields through
+   these readers. *)
+let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
+ fun cf typ ->
+  let reader = cf.int_reader in
+  match read_guard cf typ with
+  | None -> reader
+  | Some guard ->
+      fun runtime buf base ->
+        guard runtime buf base;
+        reader runtime buf base
+
+(* [Codec.validate] reaches a field's bytes only through its populate: unlike
+   decode, it never walks the record field by field, so a field pushed past the
+   end by an overlong variable-size predecessor is read at its computed offset
+   with nothing in between to notice. Guard it with the same extent check the
+   expression readers use, so validating truncated input ends in a located
+   end-of-input rather than a raw out-of-bounds [Invalid_argument]. *)
+let guarded_populate : type a r.
+    (a, r) compiled_field -> a typ -> slots -> runtime -> bytes -> int -> unit =
+ fun cf typ ->
+  let populate = cf.populate in
+  match read_guard cf typ with
+  | None -> populate
+  | Some guard ->
+      fun arr runtime buf base ->
+        guard runtime buf base;
+        populate arr runtime buf base
+
+(* A field's two validators. [check_only] fills the field's int slot and tests
+   its constraint; [full] adds the field action. Decode and [Codec.validate]
+   both run [full], so an action never fires on one path only. *)
+let field_validators ~field_idx ~populate ~check ~act =
+  let check_only arr runtime buf base =
+    populate arr runtime buf base;
+    match check with
+    | Some f when not (f arr) -> raise_field_constraint ~field_idx ~at:base arr
+    | _ -> ()
+  in
+  let full arr runtime buf base =
+    check_only arr runtime buf base;
+    match act with Some f -> f arr | None -> ()
+  in
+  (check_only, full)
 
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
@@ -2911,17 +2956,10 @@ let apply_compiled : type a f r.
   in
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
-  let check_only arr runtime buf base =
-    cf.populate arr runtime buf base;
-    match check with
-    | Some f when not (f arr) -> raise_field_constraint ~field_idx ~at:base arr
-    | _ -> ()
-  in
-  (* The full validator is the read-and-check plus the field action. Decode and
-     [Codec.validate] both run it, so an action never fires on one path only. *)
-  let full arr runtime buf base =
-    check_only arr runtime buf base;
-    match act with Some f -> f arr | None -> ()
+  let check_only, full =
+    field_validators ~field_idx
+      ~populate:(guarded_populate cf fld.typ)
+      ~check ~act
   in
   let faction =
     match act with None -> None | Some act_fn -> Some (fld.name, act_fn)

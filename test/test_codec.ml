@@ -926,6 +926,85 @@ let test_repeat_oversized_length_rejected () =
   Alcotest.(check bool)
     "length past buffer fails cleanly" true (decodes "\x00\x10abc")
 
+(* [Codec.validate] never walks a record field by field the way decode does: it
+   reaches each field's bytes through that field's populate, at the offset the
+   layout computes. An overlong [Field.repeat] budget pushes every following
+   field past the end of the buffer, and the populate used to read there
+   unguarded. The trailing [all_zeros] keeps the record greedy, so the top-level
+   bounds check resolves the record's span to the whole buffer and lets it
+   through; the constrained fields make [validate] run the populate pass at all.
+   Shape and bytes come from the composer's [(rep:fint,i8,uv3le,(bnd,i16,az))]
+   sample. *)
+let validate_overrun_codec =
+  let f_a = Field.v "a" uint8 in
+  let f_b =
+    Field.v "b" uint8 ~self_constraint:(fun b ->
+        Expr.(Field.int f_a + b < int 10))
+  in
+  let pair =
+    Codec.v "Pair" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let f_total = Field.v "total" uint16be in
+  let rep =
+    Codec.v "Rep"
+      (fun _ xs -> xs)
+      Codec.
+        [
+          (f_total $ fun _ -> 0);
+          ( Field.repeat "items" ~size:(Field.ref f_total) (codec pair)
+          $ fun xs -> xs );
+        ]
+  in
+  let bounded =
+    Codec.v "Bounded"
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "v" uint8 ~self_constraint:(fun r ->
+                Expr.(r >= int 10 && r <= int 100))
+          $ fun v -> v );
+        ]
+  in
+  let tail =
+    Codec.v "Tail"
+      (fun x y z -> (x, y, z))
+      Codec.
+        [
+          (Field.v "bnd" (codec bounded) $ fun (x, _, _) -> x);
+          (Field.v "i16" int16be $ fun (_, y, _) -> y);
+          (Field.v "az" all_zeros $ fun (_, _, z) -> z);
+        ]
+  in
+  Codec.v "Overrun"
+    (fun w x y z -> (w, x, y, z))
+    Codec.
+      [
+        (Field.v "rep" (codec rep) $ fun (w, _, _, _) -> w);
+        (Field.v "i8" int8 $ fun (_, x, _, _) -> x);
+        ( Field.v "uv" (uint ~endian:Wire.Little (Wire.int 3))
+        $ fun (_, _, y, _) -> y );
+        (Field.v "tail" (codec tail) $ fun (_, _, _, z) -> z);
+      ]
+
+(* The composer's sample: a 0xAA0F byte budget on a 64-byte buffer. *)
+let validate_overrun_input =
+  "\xaa\x0f\x9bFZ\x12\xef\x99\x05\xc5<\xac\xcfx\xd4Q\xfai\xf1RE\xb7S\xe6\xb0\xb8\xdfLjO\xbc\xc9\xfb\xf1\xf1\xc6\xa2\xcaS\xba\x0f\xda\x8e=/\xceC?\x8d\x0cG\x92%\xa1\xbc\xaf\xf6\x18\x9d\x90\x82:\xbd\xac"
+
+let test_validate_overrun_field_offset () =
+  let buf = Bytes.of_string validate_overrun_input in
+  (match Codec.validate validate_overrun_codec buf 0 with
+  | () ->
+      Alcotest.fail "validate accepted a record whose fields run off the end"
+  | exception Wire.Parse_error _ -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "validate crashed instead of failing cleanly: %s" m);
+  match Codec.decode validate_overrun_codec buf 0 with
+  | Ok _ ->
+      Alcotest.fail "decode accepted a record whose fields run off the end"
+  | Error _ -> ()
+  | exception Invalid_argument m ->
+      Alcotest.failf "decode crashed instead of failing cleanly: %s" m
+
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
    [Invalid_argument] that escapes the decode result. A large variable field
@@ -7130,6 +7209,8 @@ let suite =
         test_repeat_oversized_length_rejected;
       Alcotest.test_case "byte_slice negative size fails cleanly" `Quick
         test_byte_slice_negative_size;
+      Alcotest.test_case "validate: field past end fails cleanly" `Quick
+        test_validate_overrun_field_offset;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick
