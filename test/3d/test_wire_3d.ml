@@ -161,6 +161,54 @@ let test_generate_c () =
          contents)
   end
 
+(* 3d.exe writes its own [EverParseEndianness.h] on every run, so the
+   freestanding byte-order branch is only useful if it is spliced into that
+   copy afterwards. Without it the shipped header stops at [#error
+   "Unsupported platform"] for any target that is neither Linux/glibc nor
+   Apple, which is the OS-less cross target the standalone C archive exists to
+   serve. *)
+let test_endianness_freestanding () =
+  if not (Wire_3d.has_3d_exe ()) then ()
+  else begin
+    let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
+    let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+    Wire_3d.generate_3d ~outdir:tmpdir [ s ];
+    Wire_3d.generate_c ~outdir:tmpdir [ s ];
+    let header = read_file (Filename.concat tmpdir "EverParseEndianness.h") in
+    let has sub = Re.execp (Re.compile (Re.str sub)) header in
+    Alcotest.(check bool)
+      "byte order comes from the compiler" true (has "__BYTE_ORDER__");
+    Alcotest.(check bool)
+      "byte swapping uses compiler builtins" true (has "__builtin_bswap32");
+    (* The [#error] fallthrough stays as the last resort for a compiler that
+       exposes neither an OS nor [__BYTE_ORDER__]; what matters is that a
+       freestanding GCC or Clang target no longer reaches it. Compile one to
+       prove it, undefining the two OS macros the header keys on. Skip the
+       compile where the host's own system headers do not survive those
+       undefines: the text assertions above still stand. *)
+    let write path contents =
+      Out_channel.with_open_bin path (fun oc ->
+          Out_channel.output_string oc contents)
+    in
+    write (Filename.concat tmpdir "probe.c") "#include <stdint.h>\n";
+    write
+      (Filename.concat tmpdir "freestanding.c")
+      "#include \"EverParseEndianness.h\"\n\
+       uint32_t swap(uint32_t x);\n\
+       uint32_t swap(uint32_t x) { return be32toh(x); }\n";
+    let compile file =
+      Fmt.kstr Sys.command
+        "cd %s && cc -std=c11 -U__APPLE__ -U__linux__ -I . -c %s -o /dev/null \
+         > /dev/null 2>&1"
+        (Filename.quote tmpdir) file
+    in
+    let freestanding_host = compile "probe.c" = 0 in
+    let status = if freestanding_host then compile "freestanding.c" else 0 in
+    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+    if freestanding_host then
+      Alcotest.(check int) "compiles for a target with no OS endian.h" 0 status
+  end
+
 (* Both the [.3d] file name and the C identifier are many-to-one mangles of
    the codec name, so a collision has one codec's artifacts overwrite
    another's with no diagnostic: the verified C then enforces the surviving
@@ -1573,6 +1621,8 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "freestanding endianness header (needs 3d.exe)" `Quick
+        test_endianness_freestanding;
       Alcotest.test_case "generated-name collision" `Quick test_name_collision;
       Alcotest.test_case "check_provenance" `Quick test_check_provenance;
       Alcotest.test_case "generate_dune_standalone" `Quick

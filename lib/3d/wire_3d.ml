@@ -379,31 +379,60 @@ let endianness_freestanding_branch =
 
 |}
 
-(* The EverParse anchor the freestanding branch is spliced before: the fallthrough
-   that rejects an unrecognized platform. *)
-let endianness_unsupported_anchor = "#else\n\n#error \"Unsupported platform\""
+(* The EverParse anchor the freestanding branch is spliced before: the
+   fallthrough that rejects an unrecognized platform. EverParse ships this
+   header with CRLF line endings, so the blank line between the two directives
+   is matched as a run of newline characters rather than pinned to [\n]. *)
+let endianness_unsupported_anchor =
+  Re.compile
+    (Re.seq
+       [
+         Re.str "#else";
+         Re.rep1 (Re.set "\r\n");
+         Re.str "#error \"Unsupported platform\"";
+       ])
+
+(* Says the freestanding branch is already spliced in, so a second pass over
+   the same file does not add it twice. *)
+let endianness_freestanding_marker =
+  Re.compile (Re.str "defined(__BYTE_ORDER__)")
 
 let with_freestanding_endianness content =
-  let anchor = Re.compile (Re.str endianness_unsupported_anchor) in
-  Re.replace_string ~all:false anchor
-    ~by:(endianness_freestanding_branch ^ endianness_unsupported_anchor)
-    content
+  if Re.execp endianness_freestanding_marker content then content
+  else if not (Re.execp endianness_unsupported_anchor content) then
+    failwith
+      "EverParseEndianness.h: no \"Unsupported platform\" fallthrough to \
+       splice the freestanding byte-order branch before; EverParse's header \
+       layout changed"
+  else
+    Re.replace ~all:false endianness_unsupported_anchor
+      ~f:(fun g -> endianness_freestanding_branch ^ Re.Group.get g 0)
+      content
 
-let copy_everparse_endianness ~outdir =
+(* Patch the [EverParseEndianness.h] in [outdir] so it also compiles for a
+   target with no OS <endian.h>. 3d.exe writes its own copy of this header on
+   every run, overwriting whatever is there, so the branch has to be spliced
+   into that copy after 3d.exe has run: patching a file that is not there yet,
+   or skipping the patch because the file already exists, both leave the
+   shipped header [#error]ing on the cross target the standalone C archive is
+   meant to serve. Falls back to EverParse's source copy when there is nothing
+   in [outdir] to patch. *)
+let patch_everparse_endianness ~outdir =
   let dst = Filename.concat outdir "EverParseEndianness.h" in
-  if not (Sys.file_exists dst) then begin
-    let ep_dir = everparse_dir () in
-    let src = Filename.concat ep_dir "src/3d/EverParseEndianness.h" in
-    if not (Sys.file_exists src) then
-      Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
-    let ic = open_in_bin src in
-    let n = in_channel_length ic in
-    let buf = really_input_string ic n in
-    close_in ic;
-    let oc = open_out_bin dst in
-    output_string oc (with_freestanding_endianness buf);
-    close_out oc
-  end
+  let src =
+    if Sys.file_exists dst then dst
+    else begin
+      let src =
+        Filename.concat (everparse_dir ()) "src/3d/EverParseEndianness.h"
+      in
+      if not (Sys.file_exists src) then
+        Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
+      src
+    end
+  in
+  let content = In_channel.with_open_bin src In_channel.input_all in
+  let patched = with_freestanding_endianness content in
+  Out_channel.with_open_bin dst (fun oc -> Out_channel.output_string oc patched)
 
 let has_3d_exe () = locate_3d_exe () <> None
 
@@ -627,7 +656,8 @@ let run_everparse_files ?(quiet = true) ~outdir files =
       harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
       write_provenance ~outdir ~version f)
     files;
-  copy_everparse_endianness ~outdir
+  (* Last, because every 3d.exe run above rewrites this header. *)
+  patch_everparse_endianness ~outdir
 
 let run_everparse ?(quiet = true) ~outdir schemas =
   run_everparse_files ~quiet ~outdir (List.map Wire.Everparse.filename schemas)
