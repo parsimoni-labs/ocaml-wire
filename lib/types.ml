@@ -788,6 +788,37 @@ let reject_greedy_case_body t =
       "Wire.casetype: a case body cannot be a bare all_bytes / all_zeros \
        greedy field; it has no determinate type. Wrap it in a sub-codec."
 
+(* Whether a decoder for [t] runs to the end of the buffer: a greedy leaf, a
+   sub-codec whose own last field does, a casetype with such a case body (if
+   that case is selected its greedy tail has no boundary), or a gated optional
+   wrapping one. Each is as unbounded as a bare greedy field, so it is only
+   meaningful as the last thing in the buffer: nothing after it, and nothing
+   that iterates it. *)
+let rec ends_greedy : type a. a typ -> bool =
+ fun t ->
+  is_greedy t
+  ||
+  match t with
+  | Codec { codec_struct; _ } -> struct_ends_greedy codec_struct
+  | Casetype { cases; _ } ->
+      List.exists
+        (fun (Case_branch { cb_inner; _ }) -> ends_greedy cb_inner)
+        cases
+  | Map { inner; _ } -> ends_greedy inner
+  | Where { inner; _ } -> ends_greedy inner
+  | Enum { base; _ } -> ends_greedy base
+  | Optional { present = Bool false; _ }
+  | Optional_or { present = Bool false; _ } ->
+      false
+  | Optional { inner; _ } -> ends_greedy inner
+  | Optional_or { inner; _ } -> ends_greedy inner
+  | _ -> false
+
+and struct_ends_greedy (s : struct_) =
+  match List.rev s.fields with
+  | Field f :: _ -> ends_greedy f.field_typ
+  | [] -> false
+
 let array ~len elem =
   reject_decoration ~combinator:"array" elem;
   reject_bitfield_element ~combinator:"array" elem;

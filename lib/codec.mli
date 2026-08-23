@@ -132,7 +132,12 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     non-zero byte, a [byte_array_where] byte failing its refinement, or a
     [where] clause or field [~constraint_] that does not hold for the values
     given. Encode never emits bytes its own decoder refuses. Field [~action]s
-    are not run by encode. *)
+    are not run by encode.
+
+    Encode is not all-or-nothing: it writes the record field by field and checks
+    the result, so after any of those raises the bytes from [off] on hold a
+    partial record and must be treated as scrap. Only the single-field {!set}
+    rolls its write back. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
@@ -161,10 +166,12 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared
     size, an integer outside the range of its width (fixed or [bits ~width] or
-    [uint ~size] alike), or a byte a [byte_array_where] refinement rejects. Each
+    [uint ~size] alike), a byte a [byte_array_where] refinement rejects, or a
+    sub-codec value its own [where] clause or field [~constraint_] rejects. Each
     of those would otherwise put different bytes on the wire than the caller
     asked for, and a masked integer is indistinguishable from a value meant that
-    way.
+    way. The buffer is restored even for a compound field the writer had to
+    part-write before the failure showed up.
 
     Does not check what the surrounding record permits -- record-level [~where]
     clauses, other fields' [~constraint_] checks, [enum] membership -- and does

@@ -1011,8 +1011,7 @@ let test_validate_overrun_field_offset () =
    wrapper around validate, which reports a garbage location; the offset is
    what shows a real per-field guard ran, at the field that overran. *)
 let check_located_eof name ~at ~expected ~got = function
-  | Ok () ->
-      Alcotest.failf "%s: accepted a record whose field runs off the end" name
+  | Ok () -> Alcotest.failf "%s: accepted a buffer its own decoder rejects" name
   | Error (e : parse_error) -> (
       Alcotest.(check int) (name ^ ": offset of the failing field") at e.at;
       match e.kind with
@@ -1169,6 +1168,78 @@ let test_eof_counts_are_base_invariant () =
   check_located_eof "validate at base 8" ~at:(pad + 1) ~expected:7 ~got:2
     (validating "validate at base 8" (fun () ->
          Codec.validate validate_uint_var_codec buf pad))
+
+(* A [Field.repeat] consumes its byte budget exactly, so an 11-byte budget over
+   a 2-byte element is illegal however long the buffer is (here 64 bytes): the
+   budget does not split into whole elements. EverParse rejects the same frame
+   from the same schema, with a dedicated "list size not multiple" error, and so
+   does [Codec.decode]. [Codec.validate] used to accept it: it reaches a field
+   only through that field's populate, and the repeat had none. Bytes are the
+   fuzz sample verbatim ([fuzz.exe -s 32582623701 -r 7500]). *)
+let repeat_odd_budget =
+  "\x00\x0b\x1a\x15\x11\x9d\x47\x90\x0d\xcf\xbd\xa9\x80\xf5\x21\x27\x44\xad\x4d\xa6\xc1\xde\xd7\xf6\x1a\x42\x1a\x51\x9d\x9d\x57\x5c\x2c\x8c\x75\xa1\xba\xfb\xaf\xe3\xd7\xaa\x2b\x1d\x90\xfb\xce\x47\xf9\xa4\x4e\x46\xbe\x2a\xa1\xbb\x18\xfc\x72\xe2\x8e\x47\xf9\x41"
+
+let repeat_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        (Field.repeat "items" ~size:(Field.ref f_total) uint16be $ fun xs -> xs);
+      ]
+
+(* [repeat_seq] builds the same [Repeat] node with a different sequence builder,
+   so it shares the populate and the budget check; pinned here so a future split
+   of the two paths cannot fix one and leave the other. *)
+let repeat_seq_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepSeqBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        ( Field.repeat_seq "items" ~seq:seq_list ~size:(Field.ref f_total)
+            uint16be
+        $ fun xs -> xs );
+      ]
+
+let test_validate_repeat_partial_element () =
+  let buf = Bytes.of_string repeat_odd_budget in
+  let rejects name codec =
+    (* The budget runs from offset 2 to 13 and leaves one byte at 12, where a
+       2-byte element needs two. Both sides must report that same spot: a fix
+       that made them agree on accepting would pass a bare "they agree" check. *)
+    check_located_eof (name ^ " validate") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " validate") (fun () -> Codec.validate codec buf 0));
+    check_located_eof (name ^ " decode") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " decode") (fun () ->
+           match Codec.decode codec buf 0 with
+           | Ok _ -> ()
+           | Error e -> raise (Wire.Parse_error e)))
+  in
+  rejects "repeat" repeat_budget_codec;
+  rejects "repeat_seq" repeat_seq_budget_codec;
+  (* A budget that does split stays accepted on both sides: what is rejected is
+     the partial element, not every repeat. *)
+  let whole =
+    Bytes.of_string ("\x00\x0a" ^ String.sub repeat_odd_budget 2 10)
+  in
+  let accepts name codec =
+    (match Codec.validate codec whole 0 with
+    | () -> ()
+    | exception Wire.Parse_error e ->
+        Alcotest.failf "%s: validate rejected a whole budget: %a" name
+          Wire.pp_parse_error e);
+    match Codec.decode codec whole 0 with
+    | Ok xs ->
+        Alcotest.(check int) (name ^ ": elements decoded") 5 (List.length xs)
+    | Error e ->
+        Alcotest.failf "%s: decode rejected a whole budget: %a" name
+          Wire.pp_parse_error e
+  in
+  accepts "repeat" repeat_budget_codec;
+  accepts "repeat_seq" repeat_seq_budget_codec
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -7773,6 +7844,143 @@ let test_negative_span_is_parse_error () =
   expect "of_bytes typ"
     (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
 
+(* -- Accessor and container contracts -- *)
+
+(* [Codec.set] documents [Invalid_argument] "leaving the buffer untouched". A
+   sub-codec field writes the whole sub-record and validates it afterwards, so
+   the refusal used to arrive with the rejected byte already on the wire. *)
+let test_set_refusal_leaves_buffer_untouched () =
+  let inner_f =
+    Field.v "v" uint8 ~self_constraint:(fun r ->
+        Expr.(r >= int 10 && r <= int 100))
+  in
+  let inner = Codec.v "SetRollbackInner" Fun.id Codec.[ inner_f $ Fun.id ] in
+  let outer_f = Codec.(Field.v "v" (codec inner) $ Fun.id) in
+  let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
+  let set = Staged.unstage (Codec.set outer outer_f) in
+  let buf = Bytes.make 1 '\xee' in
+  (match set buf 0 200 with
+  | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
+  | exception Invalid_argument _ -> ());
+  Alcotest.(check string)
+    "buffer untouched after a refused set" "\xee" (Bytes.to_string buf);
+  set buf 0 42;
+  Alcotest.(check string)
+    "an accepted set still writes" "\x2a" (Bytes.to_string buf)
+
+(* [Codec.get] had no reader for a statically gated optional and fell through
+   to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
+   both flavours and both gates against what decode returns. *)
+let test_get_static_optional_agrees_with_decode () =
+  let f_len = Field.optional_or "Len" ~present:Expr.true_ ~default:0 uint8 in
+  let f_on = Field.optional "On" ~present:Expr.true_ uint8 in
+  let f_off = Field.optional "Off" ~present:Expr.false_ uint8 in
+  let f_or_off =
+    Field.optional_or "OrOff" ~present:Expr.false_ ~default:7 uint8
+  in
+  let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len)) in
+  let cf_len = Codec.(f_len $ fun (l, _, _, _, _) -> l) in
+  let cf_on = Codec.(f_on $ fun (_, o, _, _, _) -> o) in
+  let cf_off = Codec.(f_off $ fun (_, _, o, _, _) -> o) in
+  let cf_or_off = Codec.(f_or_off $ fun (_, _, _, o, _) -> o) in
+  let cf_data = Codec.(f_data $ fun (_, _, _, _, d) -> d) in
+  let c =
+    Codec.v "StaticGates"
+      (fun len on off or_off data -> (len, on, off, or_off, data))
+      [ cf_len; cf_on; cf_off; cf_or_off; cf_data ]
+  in
+  let buf = Bytes.of_string "\003\009abc" in
+  let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
+  let read f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check int) "optional_or, gate on" len (read cf_len);
+  Alcotest.(check (option int)) "optional, gate on" on (read cf_on);
+  Alcotest.(check (option int)) "optional, gate off" off (read cf_off);
+  Alcotest.(check int)
+    "optional_or, gate off is the default" or_off (read cf_or_off);
+  Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
+  (* And the matching setter, so a field [get] can read is one [set] can
+     write. The absent gates own no bytes, so writing them moves nothing. *)
+  Staged.unstage (Codec.set c cf_on) buf 0 (Some 5);
+  Staged.unstage (Codec.set c cf_off) buf 0 None;
+  Staged.unstage (Codec.set c cf_or_off) buf 0 7;
+  Alcotest.(check (option int)) "set then get, gate on" (Some 5) (read cf_on);
+  Alcotest.(check string)
+    "the absent gates wrote no bytes" "\003\005abc" (Bytes.to_string buf)
+
+(* A runtime gate is decided by an expression over sibling fields, which only
+   the compiled record plan evaluates. The accessor cannot read it, and has to
+   say so with the exception the interface documents. *)
+let test_get_dynamic_optional_refuses_cleanly () =
+  let f_gate = Field.v "gate" uint8 in
+  let f_pay =
+    Field.optional "pay" ~present:Expr.(Field.ref f_gate <> int 0) uint16be
+  in
+  let cf_pay = Codec.(f_pay $ snd) in
+  let c =
+    Codec.v "DynGate"
+      (fun gate pay -> (gate, pay))
+      [ Codec.(f_gate $ fst); cf_pay ]
+  in
+  Alcotest.(check bool)
+    "Codec.get refuses a runtime-gated optional with Invalid_argument" true
+    (raises_invalid (fun () -> Codec.get c cf_pay))
+
+(* A [repeat] element whose decoder runs to the end of the buffer cannot be
+   iterated: the first element takes the whole budget, so anything the encoder
+   writes past it is bytes the decoder (and the EverParse validator built from
+   the same schema) refuses. The greedy tail counts whether it is the element's
+   own last field or sits at the end of a sub-codec the element ends with. *)
+let test_repeat_rejects_nested_greedy_element () =
+  let pad =
+    Codec.v "PadTail"
+      (fun n tail -> (n, tail))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "tail" all_zeros $ snd ]
+  in
+  let greedy_elem =
+    Codec.v "GreedyElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec pad) $ snd ]
+  in
+  Alcotest.(check bool)
+    "repeat over a codec whose own tail is greedy rejected" true
+    (raises_invalid (fun () -> Field.repeat "items" ~size:(int 12) (codec pad)));
+  Alcotest.(check bool)
+    "repeat over a codec ending in a greedy sub-codec rejected" true
+    (raises_invalid (fun () ->
+         Field.repeat "items" ~size:(int 12) (codec greedy_elem)))
+
+(* The control for the rejection above: give the same element a bounded tail
+   and it is self-delimiting again, so the repeat builds and more than one
+   element survives the round trip. *)
+let test_repeat_bounded_element_roundtrips () =
+  let bounded =
+    Codec.v "PadFixed"
+      (fun n tail -> (n, tail))
+      Codec.
+        [
+          Field.v "n" uint8 $ fst;
+          Field.v "tail" (byte_array ~size:(int 2)) $ snd;
+        ]
+  in
+  let elem =
+    Codec.v "BoundedElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec bounded) $ snd ]
+  in
+  let f_total = Field.v "total" uint8 in
+  let f_items = Field.repeat "items" ~size:(Field.ref f_total) (codec elem) in
+  let outer =
+    Codec.v "BoundedRep"
+      (fun _ xs -> xs)
+      Codec.
+        [ (f_total $ fun xs -> 4 * List.length xs); (f_items $ fun xs -> xs) ]
+  in
+  let xs = [ (1, (2, "\000\000")); (3, (4, "\000\000")) ] in
+  let buf = Bytes.create (Codec.size_of_value outer xs) in
+  Codec.encode outer xs buf 0;
+  let ys = decode_ok (Codec.decode outer buf 0) in
+  Alcotest.(check bool) "two bounded elements round-trip" true (ys = xs)
+
 (* -- Suite -- *)
 
 let suite =
@@ -7879,6 +8087,8 @@ let suite =
         `Quick test_validate_present_optional_or_past_end;
       Alcotest.test_case "validate: runtime-width uint past end fails cleanly"
         `Quick test_validate_uint_var_past_end;
+      Alcotest.test_case "validate: repeat budget with a partial element" `Quick
+        test_validate_repeat_partial_element;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick
@@ -8393,4 +8603,16 @@ let suite =
         test_eof_counts_are_base_invariant;
       Alcotest.test_case "diag: negative span width agrees with decode" `Quick
         test_negative_span_width_agrees;
+      (* accessor and container contracts *)
+      Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
+        test_set_refusal_leaves_buffer_untouched;
+      Alcotest.test_case "get: statically gated optionals agree with decode"
+        `Quick test_get_static_optional_agrees_with_decode;
+      Alcotest.test_case
+        "get: runtime-gated optional refused with Invalid_argument" `Quick
+        test_get_dynamic_optional_refuses_cleanly;
+      Alcotest.test_case "repeat: element ending in a greedy sub-codec rejected"
+        `Quick test_repeat_rejects_nested_greedy_element;
+      Alcotest.test_case "repeat: bounded element round-trips" `Quick
+        test_repeat_bounded_element_roundtrips;
     ] )

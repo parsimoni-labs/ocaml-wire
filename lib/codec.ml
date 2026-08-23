@@ -134,6 +134,15 @@ let uint_var_field_encoder endian n buf off v =
   Uint_var.write endian buf off n v;
   off + n
 
+(* Name the field type for an "unsupported shape" refusal. [Types.pp_typ]
+   renders 3D syntax and asserts on a field decoration, which is the one shape
+   that actually reaches those refusals, so say what it is in prose instead. *)
+let field_shape : type a. a typ -> string = function
+  | Optional _ -> "an optional field behind a runtime gate"
+  | Optional_or _ -> "an optional_or field behind a runtime gate"
+  | Repeat _ -> "a repeat field"
+  | t -> Fmt.str "%a" pp_typ t
+
 let rec build_casetype_encoder_ctx : type a k.
     k typ ->
     (a, k) case_branch list ->
@@ -259,10 +268,21 @@ and build_field_encoder_ctx : type a.
   | Single_elem { size = Int n; elem; at_most } ->
       let enc = build_field_encoder_ctx elem in
       fun runtime -> single_elem_region ~at_most n elem (enc runtime)
-  | _ ->
-      (* Fallback for complex types - not specialized *)
-      fun _runtime _buf _off _v ->
-        failwith "build_field_encoder: unsupported type"
+  (* Mirror of the reader's statically gated optionals, so [Codec.set] can
+     write the field [Codec.get] can read. Presence is fixed at construction:
+     present writes the inner in place, absent writes nothing. An [optional]
+     handed [None] while its gate says present writes nothing either, which is
+     what the record encoder does with the same value. *)
+  | Optional { present = Bool true; inner } -> (
+      let enc = build_field_encoder_ctx inner in
+      let width = Option.value ~default:0 (field_wire_size inner) in
+      fun runtime buf off v ->
+        match v with Some iv -> enc runtime buf off iv | None -> off + width)
+  | Optional { present = Bool false; _ } -> fun _runtime _buf off _v -> off
+  | Optional_or { present = Bool true; inner; _ } ->
+      build_field_encoder_ctx inner
+  | Optional_or { present = Bool false; _ } -> fun _runtime _buf off _v -> off
+  | _ -> Fmt.invalid_arg "Codec.encode: no writer for %s" (field_shape typ)
 
 let build_field_encoder typ =
   let encode = build_field_encoder_ctx typ in
@@ -291,6 +311,14 @@ let enum_encode_check ~name ~cases ~closed =
   else
     let valid = Types.enum_values cases in
     fun v -> Types.check_enum_encode ~name ~valid v
+
+(* No reader exists for this shape. [Codec.get] is the only caller that can
+   reach it, since every field the record decoder reads has a case in the table
+   below, and [get] documents [Invalid_argument]. Refuse while the accessor is
+   being staged rather than let a [Failure] escape from inside it on every
+   read. *)
+let no_field_reader : type a b. a typ -> b =
+ fun typ -> Fmt.invalid_arg "Codec.get: no reader for %s" (field_shape typ)
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
@@ -380,11 +408,22 @@ let rec build_field_reader_ctx : type a.
               acc := s.add !acc v
             done;
             s.finish !acc
-      | None ->
-          fun _runtime _buf _base ->
-            failwith "build_field_reader: unsupported type")
-  | _ ->
-      fun _runtime _buf _base -> failwith "build_field_reader: unsupported type"
+      | None -> no_field_reader typ)
+  (* A statically gated optional is transparent: present is the inner at the
+     same offset, absent is no bytes at all and the value is fixed. That is
+     what [compile_optional] / [compile_optional_or] read on the decode path,
+     so an accessor over the same field agrees with {!decode}. A runtime gate
+     is not readable here: deciding presence means evaluating an expression
+     over sibling fields, which only the compiled record plan holds. *)
+  | Optional { present = Bool true; inner } ->
+      let read = build_field_reader_ctx inner field_off in
+      fun runtime buf base -> Some (read runtime buf base)
+  | Optional { present = Bool false; _ } -> fun _runtime _buf _base -> None
+  | Optional_or { present = Bool true; inner; _ } ->
+      build_field_reader_ctx inner field_off
+  | Optional_or { present = Bool false; default; _ } ->
+      fun _runtime _buf _base -> default
+  | _ -> no_field_reader typ
 
 (* [eval_ctx] is necessary for parameter-dependent layouts, but routing every
    fixed scalar access through it costs an extra argument and a match per read.
@@ -2270,7 +2309,10 @@ let compile_repeat : type elt seq r.
     int_reader = null_int_reader;
     nested_readers = [];
     validator_off;
-    populate = no_populate;
+    (* [Codec.validate] reaches a repeat only through its populate, and the
+       budget checks live in [repeat_raw_reader]. Run the reader for effect,
+       as [build_populate] already does for an [array]. *)
+    populate = build_populate fld.typ ctx.n_fields raw_reader;
   }
 
 (* The span [first, first + sz) must lie inside [buf]. Both ends derive from
@@ -2963,7 +3005,11 @@ let rec field_reader_validates : type a. a Types.typ -> bool = function
   | Types.Optional_or { inner; _ } -> field_reader_validates inner
   | Types.Single_elem { elem; _ } -> field_reader_validates elem
   | Types.Array { elem; _ } -> field_reader_validates elem
-  | Types.Repeat { elem; _ } -> field_reader_validates elem
+  (* A [repeat] checks its own byte budget whatever the element does: the
+     budget must fit the buffer and split into whole elements. The record's
+     bounds check covers the span but not the split, so this cannot recurse
+     into [elem]. *)
+  | Types.Repeat _ -> true
   | _ -> true
 
 (* Prepend [name] to the field path of a parse error escaping [f], so a failure
@@ -3467,35 +3513,6 @@ let validate_with_bounds wire_size_info min_size param_slots param_base
   check_decode_bounds wire_size_info min_size runtime buf off;
   validate_checks ?env_slots buf off
 
-(* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
-   [all_zeros]), an embedded sub-codec whose own last field does, or a casetype
-   any of whose case bodies does (if that case is selected its greedy tail has no
-   boundary). A greedy tail has no boundary once another field follows it, so
-   each of these is just as unbounded as a bare greedy field. *)
-let rec field_consumes_rest : type a. a Types.typ -> bool =
- fun t ->
-  is_greedy t
-  ||
-  match t with
-  | Types.Codec { codec_struct; _ } -> (
-      match List.rev codec_struct.fields with
-      | Types.Field f :: _ -> field_consumes_rest f.field_typ
-      | [] -> false)
-  | Types.Casetype { cases; _ } ->
-      List.exists
-        (fun (Types.Case_branch { cb_inner; _ }) ->
-          field_consumes_rest cb_inner)
-        cases
-  | Types.Map { inner; _ } -> field_consumes_rest inner
-  | Types.Where { inner; _ } -> field_consumes_rest inner
-  | Types.Enum { base; _ } -> field_consumes_rest base
-  | Types.Optional { present = Types.Bool false; _ }
-  | Types.Optional_or { present = Types.Bool false; _ } ->
-      false
-  | Types.Optional { inner; _ } -> field_consumes_rest inner
-  | Types.Optional_or { inner; _ } -> field_consumes_rest inner
-  | _ -> false
-
 (* A greedy field consumes the rest of the buffer, so it is only meaningful as
    the last field: an earlier one starves every field after it (and 3D's
    [:consume-all] must be last too). This also covers an embedded sub-codec
@@ -3506,7 +3523,7 @@ let reject_greedy_not_last name fields =
   let rec check = function
     | [] | [ _ ] -> ()
     | Types.Field f :: rest ->
-        if field_consumes_rest f.field_typ then
+        if Types.ends_greedy f.field_typ then
           Fmt.invalid_arg
             "Codec.v %s: a field that consumes the rest of the buffer \
              (all_bytes / all_zeros, or a sub-codec ending in one) must be the \
@@ -4317,6 +4334,47 @@ let rec build_staged_reader : type a.
   | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.get: unsupported variable-size field type"
 
+(* Every leaf encoder checks the value before it writes a byte, so it puts
+   down the whole field or nothing. A composite one writes part by part: a
+   sub-codec validates the record it has just laid down, a casetype writes its
+   tag ahead of its body, an array walks its elements one at a time. Any of
+   those can raise with bytes already in the buffer. *)
+let rec encoder_writes_before_checking : type a. a typ -> bool = function
+  | Codec _ | Casetype _ | Array _ | Repeat _ -> true
+  | Single_elem { elem; _ } -> encoder_writes_before_checking elem
+  | Map { inner; _ } -> encoder_writes_before_checking inner
+  | Where { inner; _ } -> encoder_writes_before_checking inner
+  | Enum { base; _ } -> encoder_writes_before_checking base
+  | Optional { inner; _ } -> encoder_writes_before_checking inner
+  | Optional_or { inner; _ } -> encoder_writes_before_checking inner
+  | Apply { typ; _ } -> encoder_writes_before_checking typ
+  | _ -> false
+
+(* [Codec.set] promises the buffer is untouched when it raises, so a writer
+   that can raise mid-field keeps a copy of the bytes it is about to replace
+   and puts them back. The width is the value-driven size the record encoder
+   budgets the same field with, clipped to what the buffer holds so a short
+   buffer still fails through the encoder's own message. *)
+let field_writer : type a. a typ -> Types.eval_ctx -> bytes -> int -> a -> unit
+    =
+ fun typ ->
+  let encode = build_field_encoder_ctx typ in
+  if not (encoder_writes_before_checking typ) then fun runtime buf off value ->
+    ignore (encode runtime buf off value : int)
+  else fun runtime buf off value ->
+    let room = Bytes.length buf - off in
+    let saved =
+      if off >= 0 && room > 0 then
+        Bytes.sub buf off (min (Types.size_of_typ_value typ value) room)
+      else Bytes.empty
+    in
+    match encode runtime buf off value with
+    | _ -> ()
+    | exception e ->
+        let n = Bytes.length saved in
+        if n > 0 then Bytes.blit saved 0 buf off n;
+        raise e
+
 (* Build a staged writer from field type and access info. *)
 let rec build_staged_writer : type a.
     a typ -> field_access -> runtime -> bytes -> int -> a -> unit =
@@ -4326,16 +4384,13 @@ let rec build_staged_writer : type a.
       let write = build_bf_accessor_writer base byte_off shift width in
       fun _runtime buf base value -> write buf base value
   | _, Fixed off ->
-      let encode = build_field_encoder_ctx typ in
-      fun runtime buf base value ->
-        let _ = encode runtime buf (base + off) value in
-        ()
+      let encode = field_writer typ in
+      fun runtime buf base value -> encode runtime buf (base + off) value
   | _, Dynamic fn ->
-      let encode = build_field_encoder_ctx typ in
+      let encode = field_writer typ in
       fun runtime buf base value ->
         let off = fn runtime buf base in
-        let _ = encode runtime buf (base + off) value in
-        ()
+        encode runtime buf (base + off) value
   (* A field whose size is only known at run time still owns exactly that many
      bytes: writing the value's length instead would overwrite the fields that
      follow. Check before blitting, with the same error [Codec.encode] gives. *)
