@@ -3482,16 +3482,23 @@ let seed_param_slots arr n_total = function
       let n = Array.length slots in
       Array.blit slots 0 arr.ints (n_total - n) n
 
+(* A codec with no parameters gets the constant context: with an empty slot
+   table the two lookups below can only answer 0 and drop the write, which is
+   what an unbound context already does, and an unbound context is an immediate
+   rather than two closures, a record and a block. The saving is per
+   [Codec.validate] call, and a validate is what a server runs per packet. *)
 let validation_runtime param_slots arr =
-  Types.eval_ctx
-    ~set_param:(fun name value ->
-      match Hashtbl.find_opt param_slots name with
-      | Some idx -> arr.ints.(idx) <- value
-      | None -> ())
-    (fun name ->
-      match Hashtbl.find_opt param_slots name with
-      | Some idx -> arr.ints.(idx)
-      | None -> 0)
+  if Hashtbl.length param_slots = 0 then no_runtime
+  else
+    Types.eval_ctx
+      ~set_param:(fun name value ->
+        match Hashtbl.find_opt param_slots name with
+        | Some idx -> arr.ints.(idx) <- value
+        | None -> ())
+      (fun name ->
+        match Hashtbl.find_opt param_slots name with
+        | Some idx -> arr.ints.(idx)
+        | None -> 0)
 
 let build_validators validators_rev checkers_rev compiled_where struct_fields
     param_slots n_total =

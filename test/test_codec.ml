@@ -7964,6 +7964,47 @@ let test_enum_element_validate_allocation_is_bounded () =
   in
   report_span_failures "validate allocation scales with a closed enum" failures
 
+(* A check-free codec skips the validator pass, so it never builds an
+   evaluation context. One with a constraint or a where clause does run the
+   pass, and a parameter-free codec has nothing to put in the context it used to
+   build on the way in. [Codec.validate] is the entry point a server runs per
+   packet, so what it costs must not depend on whether the codec checks
+   anything. *)
+let checked_no_param_codecs =
+  let f_a = Field.v "a" uint8 in
+  let f_bounded =
+    Field.v "b" ~self_constraint:(fun self -> Expr.(self < int 200)) uint8
+  in
+  [
+    ( "field constraint",
+      Codec.v "Constrained"
+        (fun a b -> (a, b))
+        Codec.[ (f_a $ fun (a, _) -> a); (f_bounded $ fun (_, b) -> b) ] );
+    ( "where clause",
+      Codec.v "Whered"
+        ~where:Expr.(Field.ref f_a < int 200)
+        (fun a b -> (a, b))
+        Codec.[ (f_a $ fun (a, _) -> a); (Field.v "b" uint8 $ fun (_, b) -> b) ]
+    );
+  ]
+
+let test_validate_checked_no_param_no_alloc () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make 8 '\001' in
+  let failures =
+    List.fold_left
+      (fun acc (name, c) ->
+        let words =
+          words_per_call ~iters:5000 (fun () -> Codec.validate c buf 0)
+        in
+        if words <> 0 then
+          Fmt.str "a codec with a %s costs %d words a validate" name words
+          :: acc
+        else acc)
+      [] checked_no_param_codecs
+  in
+  report_span_failures "a parameter-free validate allocates" failures
+
 (* [Codec.decode] hands the span back, so one copy of it is the price of the
    answer. A second copy is work the caller never sees and the sender sizes.
    The bound is against the payload the returned value carries, not against
@@ -8950,6 +8991,9 @@ let suite =
       Alcotest.test_case
         "validate: allocation does not scale with an enum's cases" `Quick
         test_enum_element_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: a checked param-free codec allocates nothing" `Quick
+        test_validate_checked_no_param_no_alloc;
       Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
         test_decode_allocates_one_copy;
       (* decode diagnostics *)
