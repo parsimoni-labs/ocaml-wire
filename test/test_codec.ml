@@ -7865,10 +7865,11 @@ let test_validate_allocation_is_bounded () =
    length field: the sender picks how many times the element loop runs.
    [Codec.validate] wants those elements checked and does not want the
    sequence, so building one and dropping it handed an attacker a heap
-   multiplier per packet. Elements whose own reader allocates nothing pin the
-   sequence itself: any growth here is the list, not the element. A boxed
-   element value (a float, a byte span, a sub-codec record) is the element's own
-   reader allocating and is a separate question, so those stay out. *)
+   multiplier per packet. The byte spans are here for the same reason one step
+   in: their reader's only product is the value, so on a walk that keeps nothing
+   they have nothing to do. What an element's reader has to do to check it (a
+   sub-codec's constraints, a casetype's tag dispatch) is a separate question,
+   so those stay out. *)
 let f_repeat_len = Field.v "len" uint16be
 
 let repeat_budget_codec elem =
@@ -7885,13 +7886,23 @@ let repeat_budget_buf n =
   Bytes.set_uint16_be b 0 n;
   b
 
+(* A NUL every fourth byte, so a repeat of NUL-terminated elements splits any
+   multiple-of-four budget into four-byte elements. *)
+let repeat_zeroterm_buf n =
+  let b = Bytes.make (2 + n) 'a' in
+  Bytes.set_uint16_be b 0 n;
+  for i = 0 to n - 1 do
+    if i mod 4 = 3 then Bytes.set b (2 + i) '\000'
+  done;
+  b
+
 (* A [name, validate this budget] pair, so elements of different value types
    measure through one fold. *)
-let repeat_budget_case name elem =
+let repeat_budget_case ?(buf = repeat_budget_buf) name elem =
   let c = repeat_budget_codec elem in
   ( name,
     fun n ->
-      let buf = repeat_budget_buf n in
+      let buf = buf n in
       fun () -> Codec.validate c buf 0 )
 
 let test_repeat_validate_allocation_is_bounded () =
@@ -7917,6 +7928,9 @@ let test_repeat_validate_allocation_is_bounded () =
         repeat_budget_case "int8" int8;
         repeat_budget_case "int16be" int16be;
         repeat_budget_case "uint63be" uint63be;
+        repeat_budget_case "byte_array" (byte_array ~size:(int 4));
+        repeat_budget_case "byte_slice" (byte_slice ~size:(int 4));
+        repeat_budget_case ~buf:repeat_zeroterm_buf "zeroterm" zeroterm;
       ]
   in
   report_span_failures "validate allocation scales with a repeat's budget"

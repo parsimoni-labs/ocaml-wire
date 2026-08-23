@@ -1604,13 +1604,15 @@ and iter_param_refs_fields f fields where =
     fields;
   Option.iter (iter_param_refs f) where
 
-let zeroterm_nul_pos buf ~first ~limit =
-  let rec go i =
-    if i >= limit then raise_missing_terminator ~at:first
-    else if Bytes.get_uint8 buf i = 0 then i
-    else go (i + 1)
-  in
-  go first
+(* Kept at top level: as a local closure the scan would be heap-allocated on
+   every terminator search, and a repeat of NUL-terminated elements searches
+   once per element on a count the sender picks through the byte budget. *)
+let rec nul_scan buf ~at ~limit i =
+  if i >= limit then raise_missing_terminator ~at
+  else if Bytes.get_uint8 buf i = 0 then i
+  else nul_scan buf ~at ~limit (i + 1)
+
+let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
 
 (* Byte size of a casetype tag. The tag is always a fixed-size scalar int, so
    the common widths answer directly: [field_wire_size] would box a [Some n]
@@ -2213,7 +2215,7 @@ let optional_compiled : type a r.
 
 let repeat_raw_fixed : type elt seq.
     (elt, seq) seq_map ->
-    elt typ ->
+    read:(runtime -> bytes -> int -> elt) ->
     int ->
     off_fn:(runtime -> bytes -> int -> int) ->
     size_fn:(runtime -> bytes -> int -> int) ->
@@ -2221,7 +2223,7 @@ let repeat_raw_fixed : type elt seq.
     bytes ->
     int ->
     seq =
- fun (Seq_map seq) elem esz ~off_fn ~size_fn runtime buf base ->
+ fun (Seq_map seq) ~read esz ~off_fn ~size_fn runtime buf base ->
   let budget = size_fn runtime buf base in
   let start = base + off_fn runtime buf base in
   (* The budget comes from a length field, i.e. untrusted input. Bound it to the
@@ -2235,21 +2237,21 @@ let repeat_raw_fixed : type elt seq.
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
-    else
-      loop (seq.add acc (read_elem elem runtime buf (start + (i * esz)))) (i + 1)
+    else loop (seq.add acc (read runtime buf (start + (i * esz)))) (i + 1)
   in
   loop seq.empty 0
 
 let repeat_raw_variable : type elt seq.
     (elt, seq) seq_map ->
-    elt typ ->
+    read:(runtime -> bytes -> int -> elt) ->
+    size_of_elem:(runtime -> bytes -> int -> int) ->
     off_fn:(runtime -> bytes -> int -> int) ->
     size_fn:(runtime -> bytes -> int -> int) ->
     runtime ->
     bytes ->
     int ->
     seq =
- fun (Seq_map seq) elem ~off_fn ~size_fn runtime buf base ->
+ fun (Seq_map seq) ~read ~size_of_elem ~off_fn ~size_fn runtime buf base ->
   let budget = size_fn runtime buf base in
   let start = base + off_fn runtime buf base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
@@ -2258,10 +2260,10 @@ let repeat_raw_variable : type elt seq.
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
-      let esz = elem_size_of elem runtime buf pos in
+      let esz = size_of_elem runtime buf pos in
       if esz <= 0 || esz > remaining then
         raise_eof ~at:pos ~expected:esz ~got:remaining;
-      let v = read_elem elem runtime buf pos in
+      let v = read runtime buf pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
   loop seq.empty start budget
@@ -2283,7 +2285,8 @@ let seq_discard : type elt. (elt, unit) seq_map =
 
 let repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
-    elt typ ->
+    read:(runtime -> bytes -> int -> elt) ->
+    size_of_elem:(runtime -> bytes -> int -> int) ->
     elem_size:int option ->
     off_fn:(runtime -> bytes -> int -> int) ->
     size_fn:(runtime -> bytes -> int -> int) ->
@@ -2291,10 +2294,59 @@ let repeat_raw_reader : type elt seq.
     bytes ->
     int ->
     seq =
- fun seq elem ~elem_size ~off_fn ~size_fn ->
+ fun seq ~read ~size_of_elem ~elem_size ~off_fn ~size_fn ->
   match elem_size with
-  | Some esz -> repeat_raw_fixed seq elem esz ~off_fn ~size_fn
-  | None -> repeat_raw_variable seq elem ~off_fn ~size_fn
+  | Some esz -> repeat_raw_fixed seq ~read esz ~off_fn ~size_fn
+  | None -> repeat_raw_variable seq ~read ~size_of_elem ~off_fn ~size_fn
+
+(* An element whose reader's only product is the value it hands back. A
+   fixed-width byte span re-slices or copies bytes the budget prologue has
+   already bounded to the buffer, and a NUL-terminated one's terminator search
+   has run in [size_of_elem] before the reader is called, so on the check walk
+   there is nothing left for the reader to do. Every other element's reader does
+   something [Codec.validate] needs (an enum's membership, a sub-codec's
+   constraints, a casetype's tag dispatch), so it runs. *)
+let elem_reader_is_value_only : type a. a typ -> bool = function
+  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm -> true
+  | _ -> false
+
+(* The element read the check walk runs. Skipping a value-only reader keeps the
+   span out of the heap: the element count comes from the byte budget, which
+   comes from a length field, so a copy per element is a multiplier the sender
+   sizes on the path a server runs once per packet. *)
+let elem_check : type a. a typ -> runtime -> bytes -> int -> unit =
+ fun typ ->
+  if elem_reader_is_value_only typ then fun _runtime _buf _off -> ()
+  else fun runtime buf off -> ignore (read_elem typ runtime buf off : a)
+
+(* Write a repeat's elements at their own strides. Kept out of
+   [compile_repeat] so the writer is staged once, with the sequence, the element
+   type and the field's projection already fixed. *)
+let repeat_raw_writer : type elt seq r.
+    (elt, seq) seq_map ->
+    elt typ ->
+    (r -> seq) ->
+    size_fn:(runtime -> bytes -> int -> int) ->
+    r ->
+    runtime ->
+    bytes ->
+    int ->
+    int ->
+    int =
+ fun seq elem get ~size_fn v runtime buf base write_off ->
+  let expected = size_fn runtime buf base in
+  let sized_items =
+    Types.exact_repeat_elements seq ~expected
+      ~size_of:(Types.size_of_typ_value elem)
+      (get v)
+  in
+  let pos = Stdlib.ref write_off in
+  List.iter
+    (fun (item, size) ->
+      write_elem elem runtime buf !pos item;
+      pos := !pos + size)
+    sized_items;
+  !pos
 
 let compile_repeat : type elt seq r.
     layout_ctx ->
@@ -2329,27 +2381,14 @@ let compile_repeat : type elt seq r.
     | _ -> assert false
   in
   let elem_size = field_wire_size elem in
-  let raw_reader = repeat_raw_reader seq elem ~elem_size ~off_fn ~size_fn in
-  let get = fld.get in
-  let raw_writer v runtime buf base write_off =
-    let items = get v in
-    let expected = size_fn runtime buf base in
-    let sized_items =
-      Types.exact_repeat_elements seq ~expected
-        ~size_of:(Types.size_of_typ_value elem)
-        items
-    in
-    let pos = Stdlib.ref write_off in
-    List.iter
-      (fun (item, size) ->
-        write_elem elem runtime buf !pos item;
-        pos := !pos + size)
-      sized_items;
-    !pos
+  let size_of_elem = elem_size_of elem in
+  let raw_reader =
+    repeat_raw_reader seq ~read:(read_elem elem) ~size_of_elem ~elem_size
+      ~off_fn ~size_fn
   in
   {
     raw_reader;
-    raw_writer;
+    raw_writer = repeat_raw_writer seq elem fld.get ~size_fn;
     extra_writers = [];
     field_access;
     size_delta = 0;
@@ -2366,7 +2405,8 @@ let compile_repeat : type elt seq r.
        {!seq_discard}, which checks every element and keeps none. *)
     populate =
       (let check =
-         repeat_raw_reader seq_discard elem ~elem_size ~off_fn ~size_fn
+         repeat_raw_reader seq_discard ~read:(elem_check elem) ~size_of_elem
+           ~elem_size ~off_fn ~size_fn
        in
        fun _arr runtime buf base -> check runtime buf base);
   }
