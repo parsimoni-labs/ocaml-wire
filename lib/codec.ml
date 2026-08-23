@@ -155,7 +155,7 @@ let rec build_casetype_encoder_ctx : type a k.
   let tag_enc = build_field_encoder_ctx tag in
   fun runtime ->
     let rec find buf off v = function
-      | [] -> failwith "build_field_encoder: casetype: no matching case"
+      | [] -> invalid_arg "Wire.casetype: encoding a value no case matches"
       | Case_branch { cb_inner; cb_project; _ } :: rest -> (
           (* [cb_project] yields the tag to write (its fixed index for an explicit
            case, or the value-carried tag for the default) and the body. *)
@@ -1460,7 +1460,9 @@ let build_idx readers =
   let rev_readers = List.rev readers in
   fun name ->
     let rec find i = function
-      | [] -> failwith ("unbound field: " ^ name)
+      | [] ->
+          Fmt.invalid_arg
+            "Codec: unbound field ref %S in a field constraint or action" name
       | (n, _) :: _ when n = name -> i
       | _ :: rest -> find (i + 1) rest
     in
@@ -1684,7 +1686,9 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
      decode each element at its stride. *)
   | Array { len = Int n; elem; seq = Seq_map s } -> (
       match field_wire_size elem with
-      | None -> failwith "read_elem: variable-size array element"
+      | None ->
+          Fmt.invalid_arg "Wire.array: element %s has no stride to read at"
+            (field_shape elem)
       | Some esz ->
           let acc = Stdlib.ref s.empty in
           for i = 0 to n - 1 do
@@ -1694,7 +1698,8 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   (* A nested region as an element: decode its inner at the region start; the
      enclosing region size (padding) is accounted for by the caller. *)
   | Single_elem { elem; _ } -> read_elem elem runtime buf off
-  | _ -> failwith "read_elem: unsupported element type in repeat"
+  | _ ->
+      Fmt.invalid_arg "Wire.repeat: no element reader for %s" (field_shape typ)
 
 (* Dispatch a casetype's matched case body. A top-level recursion rather than a
    [let rec find] inside [read_elem]: the inner form would allocate a fresh
@@ -1767,7 +1772,8 @@ let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
       ignore (build_field_encoder typ buf off v : int)
   | Byte_slice { size = Int _ } ->
       ignore (build_field_encoder typ buf off v : int)
-  | _ -> failwith "write_elem: unsupported element type in repeat"
+  | _ ->
+      Fmt.invalid_arg "Wire.repeat: no element writer for %s" (field_shape typ)
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
    for variable-size elements. *)
@@ -1798,7 +1804,9 @@ let rec elem_size_of : type a. a typ -> runtime -> bytes -> int -> int =
   | _ -> (
       match field_wire_size typ with
       | Some n -> n
-      | None -> failwith "elem_size_of: cannot determine element size")
+      | None ->
+          Fmt.invalid_arg "Wire.repeat: element %s has no determinable size"
+            (field_shape typ))
 
 (* Wire size of a casetype's matched case body. Top-level for the same reason
    as [read_case_body]: a per-call [let rec find] would allocate a closure on
@@ -3441,7 +3449,7 @@ let build_decode : type full r.
 
 let lookup_reader_idx rev_readers name =
   let rec find i = function
-    | [] -> failwith ("unbound field: " ^ name)
+    | [] -> Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
     | (n, _) :: _ when n = name -> i
     | _ :: rest -> find (i + 1) rest
   in

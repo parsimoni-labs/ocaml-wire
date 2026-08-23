@@ -84,9 +84,11 @@ let test_expr_const () =
     "lt" true
     (Eval.expr ctx (Types.Lt (Types.Int 1, Types.Int 2)))
 
+(* A cross-field reference with no record to read it from is a programmer
+   error, which the entry points document as [Invalid_argument]. *)
 let test_expr_ref_fails () =
   Alcotest.check_raises "Ref at top level should fail"
-    (Failure
+    (Invalid_argument
        "Eval.expr: unbound field x (cross-field references are only valid \
         inside a struct)") (fun () ->
       ignore (Eval.expr Eval.empty (Types.ref "x")))

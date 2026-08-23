@@ -21,9 +21,14 @@ let bind name value ctx = { name; value } :: ctx
 
 let rec lookup name = function
   | [] ->
-      failwith
-        ("Eval.expr: unbound field " ^ name
-       ^ " (cross-field references are only valid inside a struct)")
+      (* A description referencing another field, evaluated where there is no
+         record to read it from, cannot be decoded whatever the input: the
+         entry points document that as [Invalid_argument], and the [Param_ref]
+         arm below already raises it. *)
+      Fmt.invalid_arg
+        "Eval.expr: unbound field %s (cross-field references are only valid \
+         inside a struct)"
+        name
   | b :: tl -> if String.equal b.name name then b.value else lookup name tl
 
 (* Convert a typed value to [int]. Returns [None] for types that don't
@@ -126,9 +131,10 @@ let rec expr : type a. ctx -> a expr -> a =
   | Bool b -> b
   | Ref (I, name) -> lookup name ctx
   | Ref (I64, name) ->
-      failwith
-        ("Eval.expr: unbound int64 field " ^ name
-       ^ " (cross-field references are only valid inside a struct)")
+      Fmt.invalid_arg
+        "Eval.expr: unbound int64 field %s (cross-field references are only \
+         valid inside a struct)"
+        name
   | Param_ref p ->
       Fmt.invalid_arg
         "Eval.expr: parameter %S requires a codec evaluation context" p.name

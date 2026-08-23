@@ -3788,6 +3788,102 @@ let test_encode_shared_bitfield () =
 
 (* -- API misuse / safety tests -- *)
 
+(* A description that cannot be decoded or encoded whatever the input is a
+   programmer error, and [wire.mli] says so: it "raises [Invalid_argument], the
+   same way encoding does". Eighteen sites raised [Failure] instead, thirteen of
+   them reachable from a public entry point, which no documented caller has any
+   reason to catch and which a [Codec.encode] caller cannot tell apart from a
+   bug in the library. The evidence that the code was wrong rather than the doc
+   is next door: an unbound field ref in a size expression already raised
+   [Invalid_argument] while the same ref in a where clause raised [Failure].
+   Every reachable site gets a case, so one that regresses names itself. *)
+
+type misuse_v = A of int | B of int | Other of int
+
+let misuse_casetype =
+  casetype "MisuseCT" uint8
+    [
+      case ~index:1 uint8
+        ~inject:(fun x -> A x)
+        ~project:(function A x -> Some x | _ -> None);
+      case ~index:2 uint8
+        ~inject:(fun x -> B x)
+        ~project:(function B x -> Some x | _ -> None);
+    ]
+
+let misuse_casetype_codec =
+  Codec.v "MisuseCTRec" Fun.id Codec.[ Field.v "u" misuse_casetype $ Fun.id ]
+
+let f_absent = Field.v "absent" uint8
+let f_absent64 = Field.v "absent64" uint64be
+
+let test_undecodable_description_is_invalid_argument () =
+  let expect (name, f) =
+    match f () with
+    | () -> Alcotest.failf "%s: raised nothing" name
+    | exception Invalid_argument _ -> ()
+    | exception Failure m ->
+        Alcotest.failf "%s: raised Failure %S, which the contract forbids" name
+          m
+  in
+  List.iter expect
+    [
+      (* Direct decode and encode of a form with no reader or writer. *)
+      ("of_string type_ref", fun () -> ignore (of_string (type_ref "T") "abcd"));
+      ( "of_string qualified_ref",
+        fun () -> ignore (of_string (qualified_ref "M" "T") "abcd") );
+      ( "of_string apply",
+        fun () -> ignore (of_string (apply uint8 [ int 1 ]) "abcd") );
+      ("to_string type_ref", fun () -> ignore (to_string (type_ref "T") 0));
+      ( "to_string qualified_ref",
+        fun () -> ignore (to_string (qualified_ref "M" "T") 0) );
+      ("to_string apply", fun () -> ignore (to_string (apply uint8 [ int 1 ]) 0));
+      ( "to_string struct_typ",
+        fun () ->
+          ignore
+            (to_string (struct_typ (struct_ "MisuseS" [ field "a" uint8 ])) ())
+      );
+      (* A cross-field reference evaluated where there is no record. *)
+      ( "of_string size ref outside a struct",
+        fun () ->
+          ignore (of_string (byte_array ~size:(Field.ref f_absent)) "\003abc")
+      );
+      ( "to_string size ref outside a struct",
+        fun () ->
+          ignore (to_string (byte_array ~size:(Field.ref f_absent)) "abc") );
+      ( "of_string int64 ref outside a struct",
+        fun () ->
+          ignore
+            (of_string
+               (where Expr.(Field.int64 f_absent64 = int64 0L) uint8)
+               "\003") );
+      (* A casetype value no case projects. *)
+      ( "to_string casetype no case matches",
+        fun () -> ignore (to_string misuse_casetype (Other 5)) );
+      ( "Codec.encode casetype no case matches",
+        fun () ->
+          Codec.encode misuse_casetype_codec (Other 5) (Bytes.make 8 '\000') 0
+      );
+      (* A codec sealed against a field it never got. *)
+      ( "Codec.v where ref to a field not in the codec",
+        fun () ->
+          ignore
+            (Codec.v "MisuseWhere"
+               ~where:Expr.(Field.ref f_absent = int 0)
+               Fun.id
+               Codec.[ Field.v "a" uint8 $ Fun.id ]) );
+      ( "Codec.v constraint ref to a field not in the codec",
+        fun () ->
+          ignore
+            (Codec.v "MisuseConstraint" Fun.id
+               Codec.
+                 [
+                   Field.v "a" uint8
+                     ~constraint_:Expr.(Field.ref f_absent = int 0)
+                   $ Fun.id;
+                 ]) );
+    ]
+
 let test_get_field_notin_codec () =
   (* get with a field that was never added to this codec raises Not_found
      at staging time *)
@@ -8825,6 +8921,9 @@ let suite =
       (* accessor and container contracts *)
       Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
         test_set_refusal_leaves_buffer_untouched;
+      Alcotest.test_case
+        "misuse: an undecodable description raises Invalid_argument" `Quick
+        test_undecodable_description_is_invalid_argument;
       Alcotest.test_case "get: a bitfield word past the buffer raises" `Quick
         test_get_bitfield_word_past_buffer_raises;
       Alcotest.test_case "set: a bitfield word past the buffer writes nothing"

@@ -346,9 +346,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Repeat { size; elem; seq } ->
       let budget = Eval.expr Eval.empty size in
       parse_repeat_loop ~elem ~seq buf off len ~budget
-  | Type_ref _ -> failwith "type_ref requires a type registry"
-  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
-  | Apply _ -> failwith "apply requires a type registry"
+  | Type_ref _ -> invalid_arg "Wire.type_ref: decoding needs a type registry"
+  | Qualified_ref _ ->
+      invalid_arg "Wire.qualified_ref: decoding needs a type registry"
+  | Apply _ -> invalid_arg "Wire.apply: decoding needs a type registry"
 
 and parse_where : type a. a typ -> bool expr -> bytes -> int -> int -> a * int =
  fun inner cond buf off len ->
@@ -810,16 +811,17 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         v
       |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
-  | Struct _ -> failwith "struct encoding: use Codec.encode"
-  | Type_ref _ -> failwith "type_ref requires a type registry"
-  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
-  | Apply _ -> failwith "apply requires a type registry"
+  | Struct _ -> invalid_arg "Wire.struct_: encoding a struct goes through Codec"
+  | Type_ref _ -> invalid_arg "Wire.type_ref: encoding needs a type registry"
+  | Qualified_ref _ ->
+      invalid_arg "Wire.qualified_ref: encoding needs a type registry"
+  | Apply _ -> invalid_arg "Wire.apply: encoding needs a type registry"
 
 and encode_casetype : type a k.
     k typ -> (a, k) case_branch list -> a -> encoder -> unit =
  fun tag cases v enc ->
   let rec find_case = function
-    | [] -> failwith "casetype encoding: no matching case"
+    | [] -> invalid_arg "Wire.casetype: encoding a value no case matches"
     | Case_branch { cb_inner; cb_project; _ } :: rest -> (
         match cb_project v with
         | Some (t, body) ->
@@ -911,7 +913,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Uint_var { size = Int n; endian } ->
       Uint_var.write endian buf off n v;
       off + n
-  | Uint_var _ -> failwith "encode_direct: Uint_var with dynamic size"
+  | Uint_var _ ->
+      invalid_arg "Wire.uint: encoding a field-dependent size needs Codec"
   | Bits { width; base; bit_order } ->
       encode_bits buf off v width base bit_order
   | Unit -> off
