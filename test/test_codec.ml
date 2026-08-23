@@ -7527,6 +7527,118 @@ let test_set_no_allocation () =
   check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
   check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
 
+(* {2 Resource bounds}
+
+   Allocation is the deterministic half of cost: the same work turns over the
+   same number of words on any machine, where wall-clock does not. The two
+   tests below are not performance targets. They assert a shape -- how much
+   memory a read path churns must not be a function of a length the sender
+   picked -- on the entry points [codec.mli] tells a caller to run per packet
+   on untrusted input.
+
+   [Gc.minor_words] cannot measure it: it does not count blocks over
+   [Max_young_wosize] (256 words), so a version written with it silently
+   measures nothing once the payload passes 2 KiB. *)
+let words_per_call ~iters f =
+  ignore (Sys.opaque_identity (f ()));
+  Gc.full_major ();
+  let before = Gc.allocated_bytes () in
+  for _ = 1 to iters do
+    ignore (Sys.opaque_identity (f ()))
+  done;
+  let after = Gc.allocated_bytes () in
+  int_of_float (Float.round ((after -. before) /. float_of_int iters /. 8.))
+
+(* Length-parameterised span codecs, each with a buffer it accepts. All five
+   hand the caller one string of about [n] bytes, so they are comparable to
+   each other and to the payload; [byte_array] and [all_bytes] are the
+   unrefined twins of the three that check something as they go. *)
+let span_family name typ =
+  Codec.v name Fun.id Codec.[ Field.v "d" typ $ Fun.id ]
+
+let span_families =
+  [
+    ( "byte_array",
+      (fun n -> span_family "SpanArray" (byte_array ~size:(int n))),
+      fun n -> Bytes.make n 'a' );
+    ( "byte_array_where",
+      (fun n ->
+        span_family "SpanWhere"
+          (byte_array_where ~size:(int n) ~per_byte:printable_byte)),
+      fun n -> Bytes.make n 'a' );
+    ( "zeroterm_at_most",
+      (fun n -> span_family "SpanZeroterm" (zeroterm_at_most ~size:(int n))),
+      fun n ->
+        let b = Bytes.make n 'a' in
+        Bytes.set b (n - 1) '\000';
+        b );
+    ( "all_bytes",
+      (fun _ -> span_family "SpanAll" all_bytes),
+      fun n -> Bytes.make n 'a' );
+    ( "all_zeros",
+      (fun _ -> span_family "SpanZeros" all_zeros),
+      fun n -> Bytes.make n '\000' );
+  ]
+
+let report_span_failures what failures =
+  if failures <> [] then
+    Alcotest.failf "%s: %s" what (String.concat "; " (List.rev failures))
+
+(* [Codec.validate] returns unit, so everything it allocates it drops on the
+   floor. What it turns over must therefore not depend on how long the sender
+   made the frame. The two runs compared differ in nothing but a number the
+   sender chose, which is what makes the growth between them attributable. A
+   validator that copies the span it is scanning gives an attacker a heap
+   multiplier on a path a server runs once per packet. *)
+let test_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let failures =
+    List.fold_left
+      (fun acc (name, mk, mkbuf) ->
+        let words n =
+          let c = mk n and buf = mkbuf n in
+          words_per_call ~iters:2000 (fun () -> Codec.validate c buf 0)
+        in
+        let at_small = words small and at_large = words large in
+        if at_large - at_small > 32 then
+          Fmt.str
+            "%s grows %d words between a %d-byte and a %d-byte frame (%d then \
+             %d)"
+            name (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      [] span_families
+  in
+  report_span_failures "validate allocation scales with the frame length"
+    failures
+
+(* [Codec.decode] hands the span back, so one copy of it is the price of the
+   answer. A second copy is work the caller never sees and the sender sizes.
+   The bound is against the payload the returned value carries, not against
+   another run of the same decoder: a decoder measured against itself would
+   agree with any amount of copying. *)
+let test_decode_allocates_one_copy () =
+  skip_unless_gc_counters ();
+  let n = 4096 in
+  let payload = n / 8 in
+  let failures =
+    List.fold_left
+      (fun acc (name, mk, mkbuf) ->
+        let c = mk n and buf = mkbuf n in
+        let words =
+          words_per_call ~iters:2000 (fun () -> Codec.decode c buf 0)
+        in
+        if words > payload + 32 then
+          Fmt.str "%s allocates %d words for a %d-word payload" name words
+            payload
+          :: acc
+        else acc)
+      [] span_families
+  in
+  report_span_failures "decode allocates more than the value it returns"
+    failures
+
 (* Decode diagnostics: end of input is reported only for a read that actually
    ran off the end of the buffer. A misuse in a size expression keeps its own
    error, and a byte span the data sizes below zero stays inside the result
@@ -8222,6 +8334,10 @@ let suite =
         test_get_no_allocation;
       Alcotest.test_case "set: immediate fields allocate nothing" `Quick
         test_set_no_allocation;
+      Alcotest.test_case "validate: allocation does not scale with the frame"
+        `Quick test_validate_allocation_is_bounded;
+      Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
+        test_decode_allocates_one_copy;
       (* decode diagnostics *)
       Alcotest.test_case "diag: field_pos in a size expression reports itself"
         `Quick test_size_misuse_reports_itself;
