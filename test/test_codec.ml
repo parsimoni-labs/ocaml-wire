@@ -1153,11 +1153,22 @@ let validate_uint_var_codec =
 
 let test_validate_uint_var_past_end () =
   let buf = Bytes.of_string "\x07\x00\x00" in
-  (* The span check reports the offset the buffer would have had to reach (8)
-     against the length it has (3), the way a truncated byte span does. *)
-  check_located_eof "validate" ~at:1 ~expected:8 ~got:3
+  (* The span check reports the 7 bytes the field asked for against the 2 the
+     buffer still had at offset 1, the way a truncated byte span does. *)
+  check_located_eof "validate" ~at:1 ~expected:7 ~got:2
     (validating "validate" (fun () ->
          Codec.validate validate_uint_var_codec buf 0))
+
+(* The same truncation read at a nonzero base. [expected] and [got] are byte
+   counts, so they say the same thing wherever the frame sits; only [at] moves.
+   Reporting buffer positions instead made both of them grow with the base, and
+   made [got] equal [expected] on a failure that says the input ran out. *)
+let test_eof_counts_are_base_invariant () =
+  let pad = 8 in
+  let buf = Bytes.of_string (String.make pad '\xee' ^ "\x07\x00\x00") in
+  check_located_eof "validate at base 8" ~at:(pad + 1) ~expected:7 ~got:2
+    (validating "validate at base 8" (fun () ->
+         Codec.validate validate_uint_var_codec buf pad))
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -8345,4 +8356,6 @@ let suite =
         test_truncated_still_reports_eof;
       Alcotest.test_case "diag: negative span is a parse error" `Quick
         test_negative_span_is_parse_error;
+      Alcotest.test_case "diag: eof counts do not move with the base" `Quick
+        test_eof_counts_are_base_invariant;
     ] )
