@@ -1317,7 +1317,10 @@ let equal_bit_order (a : Types.bit_order) (b : Types.bit_order) =
   | Msb_first, Lsb_first | Lsb_first, Msb_first -> false
 
 (* Build-time dispatch: pattern match on base happens once at codec
-   construction, not on every read/write call. *)
+   construction, not on every read/write call. The word reads are unchecked
+   past the [U8]/[U16] primitives' own bounds check, so the caller has to know
+   the word is in the buffer: the decoders have checked their frame's extent,
+   and the field accessors go through {!build_bf_accessor_reader}. *)
 let build_bf_reader base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
@@ -1337,6 +1340,18 @@ let build_bf_reader base byte_off shift width =
       fun buf off -> (Bitfield.u32_le buf (off + byte_off) lsr shift) land mask
   | U32 Big ->
       fun buf off -> (Bitfield.u32_be buf (off + byte_off) lsr shift) land mask
+
+(* A field accessor's offset is the application's, so its base word has still
+   to be shown to be in the buffer. A u32 word is assembled from unchecked byte
+   reads, so [Codec.get] on a frame shorter than the word used to answer with
+   whatever followed it: the same bytes read one value where the frame lay and
+   another once it moved along the buffer, and neither was in the frame. *)
+let build_bf_accessor_reader base byte_off shift width =
+  let read = build_bf_reader base byte_off shift width in
+  let word = bf_base_byte_size base in
+  fun buf off ->
+    Bitfield.check_word buf (off + byte_off) word;
+    read buf off
 
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
@@ -1382,8 +1397,11 @@ let build_bf_writer base byte_off shift width =
 
 (* The [Codec.set] writer. It range-checks like {!build_bf_writer}: masking here
    is the one silent truncation no later check can catch, because the masked
-   result is a legal field value that [Codec.get] and [validate] both accept. *)
-let build_bf_accessor_writer base byte_off shift width =
+   result is a legal field value that [Codec.get] and [validate] both accept.
+   [set] promises the buffer is untouched when it raises, so the word's span is
+   checked before any of it is written: a u32 goes down as two halves, and a
+   short buffer used to take the first before the second raised. *)
+let build_bf_accessor_writer_raw base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   let clear_mask = lnot (mask lsl shift) in
   match base with
@@ -1427,6 +1445,13 @@ let build_bf_accessor_writer base byte_off shift width =
         let cur = Bitfield.u32_be buf (off + byte_off) in
         Bitfield.set_u32_be buf (off + byte_off)
           (cur land clear_mask lor ((value land mask) lsl shift))
+
+let build_bf_accessor_writer base byte_off shift width =
+  let write = build_bf_accessor_writer_raw base byte_off shift width in
+  let word = bf_base_byte_size base in
+  fun buf off value ->
+    Bitfield.check_word buf (off + byte_off) word;
+    write buf off value
 
 let build_bf_clear base byte_off =
  fun buf off -> bf_write_base base buf (off + byte_off) 0
@@ -4275,7 +4300,7 @@ let rec build_staged_reader : type a.
  fun typ access ->
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
-      let read = build_bf_reader base byte_off shift width in
+      let read = build_bf_accessor_reader base byte_off shift width in
       fun _runtime buf base -> read buf base
   | _, Fixed off ->
       let read = build_field_reader_ctx typ off in
@@ -4451,7 +4476,7 @@ let rec build_immediate_staged_reader : type a.
  fun typ access ->
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
-      Some (build_bf_reader base byte_off shift width)
+      Some (build_bf_accessor_reader base byte_off shift width)
   | _, Fixed off -> build_immediate_reader typ off
   | Where { inner; _ }, _ -> build_immediate_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ -> (
@@ -4624,7 +4649,7 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
          is a direct read of the right width with [byte_off] baked in.
          Avoids the partial-application + runtime [match] that
          [Bitfield.read_word base] would create. *)
-      let word_reader =
+      let read_word =
         match base with
         | U8 ->
             fun buf off -> Optint.of_int (Bytes.get_uint8 buf (off + byte_off))
@@ -4642,6 +4667,12 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
               Optint.of_int (Bitfield.u32_be buf (off + byte_off))
             else fun buf off ->
               Optint.of_int32 (Bytes.get_int32_be buf (off + byte_off))
+      in
+      (* Same caller-supplied offset as {!get}, so the same span check. *)
+      let word = bf_base_byte_size base in
+      let word_reader buf off =
+        Bitfield.check_word buf (off + byte_off) word;
+        read_word buf off
       in
       let mask = (1 lsl width) - 1 in
       { word_reader; bf_shift = shift; bf_mask = Optint.of_int mask }

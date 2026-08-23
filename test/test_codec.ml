@@ -7868,6 +7868,91 @@ let test_set_refusal_leaves_buffer_untouched () =
   Alcotest.(check string)
     "an accepted set still writes" "\x2a" (Bytes.to_string buf)
 
+(* A bitfield accessor takes its offset from the caller, so it has to check
+   that its base word is in the buffer. The U32 word helpers reached the bytes
+   unchecked, so [Codec.get] on a frame shorter than the word answered with
+   whatever followed the buffer -- the same bytes read one value at base 0 and
+   another once the frame moved along the buffer, and neither was in the frame
+   -- while [Codec.set] laid down the low half of the word before the high half
+   raised. Walked over every base and every offset that puts part of the word
+   past the end: only the U32 bases were unchecked, and the half-written word
+   only shows on a field the low half carries. *)
+let bounds_bitpack base bit_order (w_a, w_b, w_c) =
+  let f_a = Field.v "a" (bits ~bit_order ~width:w_a base) in
+  let f_b = Field.v "b" (bits ~bit_order ~width:w_b base) in
+  let f_c = Field.v "c" (bits ~bit_order ~width:w_c base) in
+  let proj_a (a, _, _) = a and proj_b (_, b, _) = b and proj_c (_, _, c) = c in
+  let codec =
+    Codec.v "BfBounds"
+      (fun a b c -> (a, b, c))
+      Codec.[ f_a $ proj_a; f_b $ proj_b; f_c $ proj_c ]
+  in
+  ( codec,
+    [
+      ("a", Codec.( $ ) f_a proj_a);
+      ("b", Codec.( $ ) f_b proj_b);
+      ("c", Codec.( $ ) f_c proj_c);
+    ] )
+
+let bitpack_bases =
+  [
+    ("U16", U16, Msb_first, (3, 2, 11));
+    ("U16be", U16be, Lsb_first, (3, 2, 11));
+    ("U32", U32, Msb_first, (6, 10, 16));
+    ("U32be", U32be, Lsb_first, (6, 10, 16));
+  ]
+
+(* Every (base, field) pair with the word size the base needs. *)
+let iter_bitpacks f =
+  List.iter
+    (fun (name, base, bit_order, widths) ->
+      let codec, fields = bounds_bitpack base bit_order widths in
+      let word = Codec.wire_size codec in
+      List.iter (fun (fname, field) -> f name word fname field codec) fields)
+    bitpack_bases
+
+let test_get_bitfield_word_past_buffer_raises () =
+  iter_bitpacks (fun name word fname field codec ->
+      let get = Staged.unstage (Codec.get codec field) in
+      let load =
+        Staged.unstage (Codec.load_word (Codec.bitfield codec field))
+      in
+      let expect_refusal reader len off =
+        match reader (Bytes.make len '\xff') off with
+        | v ->
+            Alcotest.failf
+              "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
+              v off len
+        | exception Invalid_argument _ -> ()
+      in
+      List.iter
+        (fun reader ->
+          (* No room for the word at all, and room for it but not where the
+             frame starts. *)
+          for len = 0 to word - 1 do
+            expect_refusal reader len 0
+          done;
+          for off = 1 to word do
+            expect_refusal reader word off
+          done)
+        [ get; (fun buf off -> Optint.to_int (load buf off)) ])
+
+let test_set_bitfield_word_past_buffer_writes_nothing () =
+  iter_bitpacks (fun name word fname field codec ->
+      let set = Staged.unstage (Codec.set codec field) in
+      for len = 0 to word - 1 do
+        let buf = Bytes.make len '\x00' in
+        (match set buf 0 1 with
+        | () ->
+            Alcotest.failf
+              "%s field %s: Codec.set wrote a word into a %d-byte buffer" name
+              fname len
+        | exception Invalid_argument _ -> ());
+        Alcotest.(check string)
+          (Fmt.str "%s field %s: %d-byte buffer untouched" name fname len)
+          (String.make len '\x00') (Bytes.to_string buf)
+      done)
+
 (* [Codec.get] had no reader for a statically gated optional and fell through
    to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
    both flavours and both gates against what decode returns. *)
@@ -8606,6 +8691,10 @@ let suite =
       (* accessor and container contracts *)
       Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
         test_set_refusal_leaves_buffer_untouched;
+      Alcotest.test_case "get: a bitfield word past the buffer raises" `Quick
+        test_get_bitfield_word_past_buffer_raises;
+      Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
+        `Quick test_set_bitfield_word_past_buffer_writes_nothing;
       Alcotest.test_case "get: statically gated optionals agree with decode"
         `Quick test_get_static_optional_agrees_with_decode;
       Alcotest.test_case

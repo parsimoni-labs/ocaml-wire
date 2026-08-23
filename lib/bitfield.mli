@@ -10,20 +10,27 @@ val total_bits : Types.bitfield_base -> int
 val equal : Types.bitfield_base -> Types.bitfield_base -> bool
 (** Check if two bitfield bases are the same type and endianness. *)
 
+val check_word : bytes -> int -> int -> unit
+(** [check_word buf off n] raises [Invalid_argument] unless the [n] bytes at
+    [off] are inside [buf]. The word readers and writers below reach their bytes
+    unchecked, so a caller whose offset came from outside the library -- the
+    field accessors, whose offset is the application's -- checks the span with
+    this before it reads a byte it does not own or writes half a word. *)
+
 val read_word : Types.bitfield_base -> bytes -> int -> int
-(** Read the base word from bytes at offset. *)
+(** Read the base word from bytes at offset. Unchecked: see {!check_word}. *)
 
 val u16_le : bytes -> int -> int
-(** Inline little-endian 16-bit word read. *)
+(** Inline little-endian 16-bit word read. Unchecked: see {!check_word}. *)
 
 val u16_be : bytes -> int -> int
-(** Inline big-endian 16-bit word read. *)
+(** Inline big-endian 16-bit word read. Unchecked: see {!check_word}. *)
 
 val u32_le : bytes -> int -> int
-(** Inline little-endian 32-bit word read. *)
+(** Inline little-endian 32-bit word read. Unchecked: see {!check_word}. *)
 
 val u32_be : bytes -> int -> int
-(** Inline big-endian 32-bit word read. *)
+(** Inline big-endian 32-bit word read. Unchecked: see {!check_word}. *)
 
 val set_u32_le : bytes -> int -> int -> unit
 (** Inline little-endian 32-bit word write of a native-[int] bitfield word. *)
