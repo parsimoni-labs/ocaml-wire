@@ -181,10 +181,7 @@ let parse_codec_typ codec_decode fixed_size size_of buf off len =
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
    decode paths agree on an unlisted code. *)
 let check_enum_membership ~at ~closed cases v =
-  if closed then begin
-    let valid = List.map snd cases in
-    if not (List.mem v valid) then raise_invalid_enum ~at ~value:v ~valid
-  end
+  if closed then Types.check_enum_decode ~at ~cases v
 
 (* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
    is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key

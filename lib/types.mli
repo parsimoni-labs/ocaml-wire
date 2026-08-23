@@ -131,6 +131,12 @@ val enum_member : int list -> int -> bool
     membership rule decode and encode share, so the two halves agree on what a
     closed enum admits. *)
 
+val check_enum_decode : at:int -> cases:(string * int) list -> int -> unit
+(** Check a decoded value against a closed enum's named cases. An unlisted value
+    raises {!constructor-Invalid_enum} carrying the case set. Scans the cases in
+    place, so a value that is a member costs no allocation however many cases
+    there are. *)
+
 val check_enum_encode : name:string -> valid:int list -> int -> unit
 (** Check a value against a closed enum's case set before encoding it. An
     unlisted value raises [Invalid_argument]: decode rejects it, so emitting it

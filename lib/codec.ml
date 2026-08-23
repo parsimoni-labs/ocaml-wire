@@ -291,12 +291,12 @@ let build_field_encoder typ =
 (* An [enum] decodes through its base integer type; validate that the value is
    one of the named cases, raising [Invalid_enum] otherwise, so the decoder
    rejects exactly the inputs the EverParse-generated validator (and the
-   [parse_direct] path) does, instead of accepting any base value. [valid] is
-   computed once so the returned check allocates nothing per decode. *)
-let enum_checker cases =
-  let valid = List.map snd cases in
-  fun ~at v ->
-    if List.mem v valid then v else raise_invalid_enum ~at ~value:v ~valid
+   [parse_direct] path) does, instead of accepting any base value. The scan
+   reads the cases where they lie, so an accepted value costs nothing however
+   many cases the enum names. *)
+let enum_checker cases ~at v =
+  Types.check_enum_decode ~at ~cases v;
+  v
 
 (* An open enum ([closed = false]) accepts any base value: the names only
    document known members, so decode does not reject the rest. *)
@@ -1655,7 +1655,11 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
         (read_elem inner runtime buf off)
   | Where { inner; _ } -> read_elem inner runtime buf off
   | Enum { base; cases; closed; _ } ->
-      enum_check cases closed ~at:off (read_elem base runtime buf off)
+      (* Applied whole rather than through [enum_check]: an element's check runs
+         per element, and staging one here would allocate the closure per
+         element too, on a count the sender picks through the byte budget. *)
+      let v = read_elem base runtime buf off in
+      if closed then enum_checker cases ~at:off v else v
   | Casetype { tag; cases; _ } ->
       let tag_val = read_elem tag runtime buf off in
       read_case_body ~at:off ~tag cases tag_val runtime buf

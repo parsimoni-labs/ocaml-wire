@@ -7922,6 +7922,48 @@ let test_repeat_validate_allocation_is_bounded () =
   report_span_failures "validate allocation scales with a repeat's budget"
     failures
 
+(* A closed [enum] checks membership once per decoded element, and both sides of
+   that cost are the sender's: the element count comes from the byte budget, and
+   a protocol enum names as many codes as it likes. Validating a repeat of them
+   must turn over the same words whatever the budget and whatever the case
+   count, or naming 128 codes multiplies the heap a packet churns by the number
+   of elements it carries. *)
+let enum_of_case_count n =
+  enum "Codes" (List.init n (fun i -> (Fmt.str "C%d" i, i))) uint8
+
+let enum_budget_words ~cases ~budget =
+  let c = repeat_budget_codec (enum_of_case_count cases) in
+  let buf = repeat_budget_buf budget in
+  words_per_call ~iters:500 (fun () -> Codec.validate c buf 0)
+
+let test_enum_element_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let failures =
+    List.fold_left
+      (fun acc cases ->
+        let at_small = enum_budget_words ~cases ~budget:small in
+        let at_large = enum_budget_words ~cases ~budget:large in
+        if at_large <> at_small then
+          Fmt.str
+            "a %d-case enum grows %d words between a %d-byte and a %d-byte \
+             budget (%d then %d)"
+            cases (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      [] [ 2; 128 ]
+  in
+  let few = enum_budget_words ~cases:2 ~budget:large in
+  let many = enum_budget_words ~cases:128 ~budget:large in
+  let failures =
+    if many <> few then
+      Fmt.str "a 128-case enum costs %d words where a 2-case one costs %d" many
+        few
+      :: failures
+    else failures
+  in
+  report_span_failures "validate allocation scales with a closed enum" failures
+
 (* [Codec.decode] hands the span back, so one copy of it is the price of the
    answer. A second copy is work the caller never sees and the sender sizes.
    The bound is against the payload the returned value carries, not against
@@ -8905,6 +8947,9 @@ let suite =
       Alcotest.test_case
         "validate: allocation does not scale with a repeat's budget" `Quick
         test_repeat_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: allocation does not scale with an enum's cases" `Quick
+        test_enum_element_validate_allocation_is_bounded;
       Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
         test_decode_allocates_one_copy;
       (* decode diagnostics *)

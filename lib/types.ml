@@ -1833,7 +1833,23 @@ and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
    encode agree on which values a closed enum admits. An open enum names known
    codes without restricting the set, so it has no encode guard at all. *)
 let enum_values cases = List.map snd cases
-let enum_member valid v = List.exists (Int.equal v) valid
+
+let rec enum_member valid (v : int) =
+  match valid with [] -> false | x :: rest -> x = v || enum_member rest v
+
+(* Decode-side membership scans the case list itself. The [valid] list an
+   [Invalid_enum] carries is built on the failure path only: the scan runs once
+   per decoded value, and a repeat's element count is the sender's choice
+   through its byte budget, so building a list to succeed hands the sender a
+   heap multiplier per element. *)
+let rec enum_case_member cases (v : int) =
+  match cases with
+  | [] -> false
+  | (_, x) :: rest -> x = v || enum_case_member rest v
+
+let check_enum_decode ~at ~cases v =
+  if not (enum_case_member cases v) then
+    raise_invalid_enum ~at ~value:v ~valid:(enum_values cases)
 
 let check_enum_encode ~name ~valid v =
   if not (enum_member valid v) then
