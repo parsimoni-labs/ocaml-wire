@@ -4181,6 +4181,47 @@ let rec build_staged_reader : type a.
   | _, Variable _ | _, Variable_dynamic _ ->
       invalid_arg "Codec.get: unsupported variable-size field type"
 
+(* Every leaf encoder checks the value before it writes a byte, so it puts
+   down the whole field or nothing. A composite one writes part by part: a
+   sub-codec validates the record it has just laid down, a casetype writes its
+   tag ahead of its body, an array walks its elements one at a time. Any of
+   those can raise with bytes already in the buffer. *)
+let rec encoder_writes_before_checking : type a. a typ -> bool = function
+  | Codec _ | Casetype _ | Array _ | Repeat _ -> true
+  | Single_elem { elem; _ } -> encoder_writes_before_checking elem
+  | Map { inner; _ } -> encoder_writes_before_checking inner
+  | Where { inner; _ } -> encoder_writes_before_checking inner
+  | Enum { base; _ } -> encoder_writes_before_checking base
+  | Optional { inner; _ } -> encoder_writes_before_checking inner
+  | Optional_or { inner; _ } -> encoder_writes_before_checking inner
+  | Apply { typ; _ } -> encoder_writes_before_checking typ
+  | _ -> false
+
+(* [Codec.set] promises the buffer is untouched when it raises, so a writer
+   that can raise mid-field keeps a copy of the bytes it is about to replace
+   and puts them back. The width is the value-driven size the record encoder
+   budgets the same field with, clipped to what the buffer holds so a short
+   buffer still fails through the encoder's own message. *)
+let field_writer : type a. a typ -> Types.eval_ctx -> bytes -> int -> a -> unit
+    =
+ fun typ ->
+  let encode = build_field_encoder_ctx typ in
+  if not (encoder_writes_before_checking typ) then fun runtime buf off value ->
+    ignore (encode runtime buf off value : int)
+  else fun runtime buf off value ->
+    let room = Bytes.length buf - off in
+    let saved =
+      if off >= 0 && room > 0 then
+        Bytes.sub buf off (min (Types.size_of_typ_value typ value) room)
+      else Bytes.empty
+    in
+    match encode runtime buf off value with
+    | _ -> ()
+    | exception e ->
+        let n = Bytes.length saved in
+        if n > 0 then Bytes.blit saved 0 buf off n;
+        raise e
+
 (* Build a staged writer from field type and access info. *)
 let rec build_staged_writer : type a.
     a typ -> field_access -> runtime -> bytes -> int -> a -> unit =
@@ -4190,16 +4231,13 @@ let rec build_staged_writer : type a.
       let write = build_bf_accessor_writer base byte_off shift width in
       fun _runtime buf base value -> write buf base value
   | _, Fixed off ->
-      let encode = build_field_encoder_ctx typ in
-      fun runtime buf base value ->
-        let _ = encode runtime buf (base + off) value in
-        ()
+      let encode = field_writer typ in
+      fun runtime buf base value -> encode runtime buf (base + off) value
   | _, Dynamic fn ->
-      let encode = build_field_encoder_ctx typ in
+      let encode = field_writer typ in
       fun runtime buf base value ->
         let off = fn runtime buf base in
-        let _ = encode runtime buf (base + off) value in
-        ()
+        encode runtime buf (base + off) value
   (* A field whose size is only known at run time still owns exactly that many
      bytes: writing the value's length instead would overwrite the fields that
      follow. Check before blitting, with the same error [Codec.encode] gives. *)

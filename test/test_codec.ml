@@ -7688,6 +7688,30 @@ let test_negative_span_is_parse_error () =
   expect "of_bytes typ"
     (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
 
+(* -- Accessor and container contracts -- *)
+
+(* [Codec.set] documents [Invalid_argument] "leaving the buffer untouched". A
+   sub-codec field writes the whole sub-record and validates it afterwards, so
+   the refusal used to arrive with the rejected byte already on the wire. *)
+let test_set_refusal_leaves_buffer_untouched () =
+  let inner_f =
+    Field.v "v" uint8 ~self_constraint:(fun r ->
+        Expr.(r >= int 10 && r <= int 100))
+  in
+  let inner = Codec.v "SetRollbackInner" Fun.id Codec.[ inner_f $ Fun.id ] in
+  let outer_f = Codec.(Field.v "v" (codec inner) $ Fun.id) in
+  let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
+  let set = Staged.unstage (Codec.set outer outer_f) in
+  let buf = Bytes.make 1 '\xee' in
+  (match set buf 0 200 with
+  | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
+  | exception Invalid_argument _ -> ());
+  Alcotest.(check string)
+    "buffer untouched after a refused set" "\xee" (Bytes.to_string buf);
+  set buf 0 42;
+  Alcotest.(check string)
+    "an accepted set still writes" "\x2a" (Bytes.to_string buf)
+
 (* -- Suite -- *)
 
 let suite =
@@ -8302,4 +8326,7 @@ let suite =
         test_truncated_still_reports_eof;
       Alcotest.test_case "diag: negative span is a parse error" `Quick
         test_negative_span_is_parse_error;
+      (* accessor and container contracts *)
+      Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
+        test_set_refusal_leaves_buffer_untouched;
     ] )
