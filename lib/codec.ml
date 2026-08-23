@@ -2689,6 +2689,22 @@ let compile_scalar_or_var : type a r.
       }
   | None -> compile_var_bytes ctx fld
 
+(* The scan a fixed-width span inner needs in place of its reader. A gate lays
+   out its inner itself rather than going through the plain field path, so
+   without this a validator put back the copy {!span_populate} took out and grew
+   with a length the sender chose. [None] for an inner with nothing to scan; the
+   caller keeps its reader-driven populate then. *)
+let inner_span_scan ctx inner fsize =
+  if fsize < 0 then None
+  else
+    span_populate inner ~off_fn:(off_fn_of ctx)
+      ~size_fn:(fun _runtime _buf _base -> fsize)
+
+(* An absent field is not there to be checked, so its populate runs only when
+   the gate says the bytes are. *)
+let gated_populate gate populate arr runtime buf base =
+  if gate runtime buf base then populate arr runtime buf base
+
 (* An [optional] field whose value disagrees with its presence predicate cannot
    be encoded: reject it rather than write a record decode cannot read back. *)
 let optional_presence_mismatch : type a. bool -> a =
@@ -2801,7 +2817,11 @@ and compile_optional : type a r.
   match (present, inner_size) with
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let inner_populate = build_populate inner nfields inner_reader in
+      let inner_populate =
+        match inner_span_scan ctx inner fsize with
+        | Some scan -> scan
+        | None -> build_populate inner nfields inner_reader
+      in
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun runtime buf base ->
@@ -2822,7 +2842,11 @@ and compile_optional : type a r.
       let present_fn = compile_bool_expr ctx.field_readers present in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
-      let inner_populate = build_populate inner nfields inner_reader in
+      let inner_populate =
+        match inner_span_scan ctx inner fsize with
+        | Some scan -> scan
+        | None -> build_populate inner nfields inner_reader
+      in
       let get = fld.get in
       optional_compiled ctx
         ~raw_reader:(fun runtime buf base ->
@@ -2835,8 +2859,7 @@ and compile_optional : type a r.
           | present, _ -> optional_presence_mismatch present)
         ~size_delta:0
         ~next_off:(dynamic_optional_next_off ctx present_fn fsize)
-        ~populate:(fun arr runtime buf base ->
-          if readable runtime buf base then inner_populate arr runtime buf base)
+        ~populate:(gated_populate readable inner_populate)
         ()
   | _ -> compile_optional_variable ctx fld present inner
 
@@ -2884,8 +2907,7 @@ and compile_optional_variable : type a r.
            if present_fn runtime buf base then
              next_off_pos cf.next_off runtime buf base
            else next_off_pos ctx.next_off runtime buf base))
-    ~populate:(fun arr runtime buf base ->
-      if present_fn runtime buf base then cf.populate arr runtime buf base)
+    ~populate:(gated_populate present_fn cf.populate)
     ()
 
 and compile_optional_or : type a r.
@@ -2901,7 +2923,11 @@ and compile_optional_or : type a r.
   | Bool true, Some fsize ->
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
-      let populate = build_populate fld.typ ctx.n_fields inner_reader in
+      let populate =
+        match inner_span_scan ctx inner fsize with
+        | Some scan -> scan
+        | None -> build_populate fld.typ ctx.n_fields inner_reader
+      in
       optional_compiled ctx ~raw_reader:inner_reader
         ~int_reader:(fun runtime buf base ->
           int_of_typ_value inner (inner_reader runtime buf base))
@@ -2925,7 +2951,13 @@ and compile_optional_or : type a r.
         if readable runtime buf base then inner_reader runtime buf base
         else default
       in
-      let populate = build_populate fld.typ ctx.n_fields raw_reader in
+      let populate =
+        match inner_span_scan ctx inner fsize with
+        (* The reader the generic populate would run answers [default] for an
+           absent gate, so a scan standing in for it takes the same gate. *)
+        | Some scan -> gated_populate readable scan
+        | None -> build_populate fld.typ ctx.n_fields raw_reader
+      in
       (* Encode is value-driven: the user always has a value, so always
          write [fsize] bytes. The gate is the decode-side oracle that
          chooses between the decoded inner and [default]. Round-trips

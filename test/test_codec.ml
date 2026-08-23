@@ -7631,36 +7631,101 @@ let words_per_call ~iters f =
   let after = Gc.allocated_bytes () in
   int_of_float (Float.round ((after -. before) /. float_of_int iters /. 8.))
 
-(* Length-parameterised span codecs, each with a buffer it accepts. All five
+(* Length-parameterised span types, each with a payload it accepts. All five
    hand the caller one string of about [n] bytes, so they are comparable to
    each other and to the payload; [byte_array] and [all_bytes] are the
    unrefined twins of the three that check something as they go. *)
+(* The two a presence gate can hold: [optional] and [optional_or] refuse an
+   inner that is neither byte-sized nor self-delimiting, since 3D has no way to
+   bound one inside a gate, which rules out the terminator search and both
+   greedy spans. *)
+let gateable_span_typs =
+  [
+    ( "byte_array",
+      (fun n -> byte_array ~size:(int n)),
+      fun n -> Bytes.make n 'a' );
+    ( "byte_array_where",
+      (fun n -> byte_array_where ~size:(int n) ~per_byte:printable_byte),
+      fun n -> Bytes.make n 'a' );
+  ]
+
+let span_typs =
+  gateable_span_typs
+  @ [
+      ( "zeroterm_at_most",
+        (fun n -> zeroterm_at_most ~size:(int n)),
+        fun n ->
+          let b = Bytes.make n 'a' in
+          Bytes.set b (n - 1) '\000';
+          b );
+      ("all_bytes", (fun _ -> all_bytes), fun n -> Bytes.make n 'a');
+      ("all_zeros", (fun _ -> all_zeros), fun n -> Bytes.make n '\000');
+    ]
+
 let span_family name typ =
   Codec.v name Fun.id Codec.[ Field.v "d" typ $ Fun.id ]
 
 let span_families =
-  [
-    ( "byte_array",
-      (fun n -> span_family "SpanArray" (byte_array ~size:(int n))),
-      fun n -> Bytes.make n 'a' );
-    ( "byte_array_where",
-      (fun n ->
-        span_family "SpanWhere"
-          (byte_array_where ~size:(int n) ~per_byte:printable_byte)),
-      fun n -> Bytes.make n 'a' );
-    ( "zeroterm_at_most",
-      (fun n -> span_family "SpanZeroterm" (zeroterm_at_most ~size:(int n))),
-      fun n ->
-        let b = Bytes.make n 'a' in
-        Bytes.set b (n - 1) '\000';
-        b );
-    ( "all_bytes",
-      (fun _ -> span_family "SpanAll" all_bytes),
-      fun n -> Bytes.make n 'a' );
-    ( "all_zeros",
-      (fun _ -> span_family "SpanZeros" all_zeros),
-      fun n -> Bytes.make n '\000' );
-  ]
+  List.map
+    (fun (name, typ, payload) ->
+      (name, (fun n -> span_family ("Span" ^ name) (typ n)), payload))
+    span_typs
+
+(* The same spans behind a presence gate. [optional] and [optional_or] lay out
+   their inner themselves instead of going through the plain field path, and
+   each has a branch for a gate the schema fixes and one for a gate the frame
+   carries, so a scan wired into one of the four says nothing about the other
+   three. A leading gate byte puts the span at offset 1. *)
+let f_span_gate = Field.v "gate" uint8
+let gate_is_set = Expr.(Field.ref f_span_gate = int 1)
+
+let gated_payload payload n =
+  let src = payload n in
+  let b = Bytes.make (Bytes.length src + 1) '\001' in
+  Bytes.blit src 0 b 1 (Bytes.length src);
+  b
+
+let optional_family name ~present typ =
+  Codec.v name
+    (fun _ d -> d)
+    Codec.
+      [ (f_span_gate $ fun _ -> 1); Field.optional "d" ~present typ $ Fun.id ]
+
+let optional_or_family name ~present typ =
+  Codec.v name
+    (fun _ d -> d)
+    Codec.
+      [
+        (f_span_gate $ fun _ -> 1);
+        Field.optional_or "d" ~present ~default:"" typ $ Fun.id;
+      ]
+
+(* A [name, validate this size] pair, so gates whose codecs have different
+   record types measure through one fold. *)
+let validate_case name mk payload n =
+  let c = mk n and buf = gated_payload payload n in
+  (name, fun () -> Codec.validate c buf 0)
+
+let gated_span_cases n =
+  List.concat_map
+    (fun (name, typ, payload) ->
+      [
+        validate_case ("optional(true)/" ^ name)
+          (fun n -> optional_family "OptT" ~present:Expr.true_ (typ n))
+          payload n;
+        validate_case ("optional(gate)/" ^ name)
+          (fun n -> optional_family "OptG" ~present:gate_is_set (typ n))
+          payload n;
+        validate_case
+          ("optional_or(true)/" ^ name)
+          (fun n -> optional_or_family "OptOrT" ~present:Expr.true_ (typ n))
+          payload n;
+        validate_case
+          ("optional_or(gate)/" ^ name)
+          (fun n -> optional_or_family "OptOrG" ~present:gate_is_set (typ n))
+          payload n;
+      ])
+    gateable_span_typs
 
 let report_span_failures what failures =
   if failures <> [] then
@@ -7675,14 +7740,19 @@ let report_span_failures what failures =
 let test_validate_allocation_is_bounded () =
   skip_unless_gc_counters ();
   let small = 512 and large = 4096 in
+  let cases n =
+    List.map
+      (fun (name, mk, mkbuf) ->
+        let c = mk n and buf = mkbuf n in
+        (name, fun () -> Codec.validate c buf 0))
+      span_families
+    @ gated_span_cases n
+  in
   let failures =
-    List.fold_left
-      (fun acc (name, mk, mkbuf) ->
-        let words n =
-          let c = mk n and buf = mkbuf n in
-          words_per_call ~iters:2000 (fun () -> Codec.validate c buf 0)
-        in
-        let at_small = words small and at_large = words large in
+    List.fold_left2
+      (fun acc (name, at_small) (_, at_large) ->
+        let at_small = words_per_call ~iters:2000 at_small in
+        let at_large = words_per_call ~iters:2000 at_large in
         if at_large - at_small > 32 then
           Fmt.str
             "%s grows %d words between a %d-byte and a %d-byte frame (%d then \
@@ -7690,7 +7760,7 @@ let test_validate_allocation_is_bounded () =
             name (at_large - at_small) small large at_small at_large
           :: acc
         else acc)
-      [] span_families
+      [] (cases small) (cases large)
   in
   report_span_failures "validate allocation scales with the frame length"
     failures
