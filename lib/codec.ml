@@ -42,9 +42,32 @@ let const_span_reader ~field_off n read =
    path that yields the span runs it, so [Codec.decode] and [Codec.validate]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
    built from the same schema. *)
-let refined_span_reader ~elt_var ~cond buf ~first ~len =
+let refined_span_check ~elt_var ~cond buf ~first ~len =
   let bad = Eval.bad_byte ~elt_var ~cond buf ~first ~len in
-  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ();
+  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ()
+
+let refined_span_reader ~elt_var ~cond buf ~first ~len =
+  refined_span_check ~elt_var ~cond buf ~first ~len;
+  Bytes.sub_string buf first len
+
+(* Index of the first byte of [buf.[first .. first + len - 1]] that is not NUL,
+   or [-1] when the span is all zeros. Scans the buffer where it lies, so the
+   check costs nothing beyond the walk it has to do anyway. *)
+let all_zeros_bad_byte buf ~first ~len =
+  let limit = first + len in
+  let rec go i =
+    if i >= limit then -1
+    else if Bytes.get_uint8 buf i <> 0 then i
+    else go (i + 1)
+  in
+  go first
+
+let all_zeros_check buf ~first ~len =
+  let bad = all_zeros_bad_byte buf ~first ~len in
+  if bad >= 0 then raise_non_zero_padding ~at:bad
+
+let all_zeros_reader buf ~first ~len =
+  all_zeros_check buf ~first ~len;
   Bytes.sub_string buf first len
 
 (* A refinement decode enforces has to gate encode too, or the encoder emits
@@ -652,9 +675,12 @@ let rec build_populate : type a.
       fun _slots _runtime _buf _base -> ()
   | _ ->
       (* No int slot to populate, but the reader performs a real decode-side
-         check (all-zeros span, NUL terminator, refined span, embedded codec /
-         array element constraints), so run it for effect: [Codec.validate] then
-         rejects exactly what [decode] does. The value is discarded. *)
+         check (an embedded codec, an array or repeat element's constraints), so
+         run it for effect: [Codec.validate] then rejects exactly what [decode]
+         does. The value is discarded. Span types whose reader scans the payload
+         do not reach here: [span_populate] gives them the scan without the
+         copy, since what a validator drops on the floor must not be sized by
+         the sender. *)
       fun _slots runtime buf base -> ignore (reader runtime buf base)
 
 (* Bitfield extraction descriptor: word reader + packed shift/mask.
@@ -2335,13 +2361,7 @@ let var_bytes_reader : type a.
       let first = base + fo in
       let nul = zeroterm_nul_pos buf ~first ~limit:(first + sz) in
       Bytes.sub_string buf first (nul - first)
-  | All_zeros ->
-      let s = Bytes.sub_string buf (base + fo) sz in
-      String.iteri
-        (fun i c ->
-          if c <> '\000' then raise_non_zero_padding ~at:(base + fo + i))
-        s;
-      s
+  | All_zeros -> all_zeros_reader buf ~first:(base + fo) ~len:sz
   | Casetype _ -> read_elem typ runtime buf (base + fo)
   | Single_elem { elem; at_most; _ } ->
       let first = base + fo in
@@ -2350,6 +2370,53 @@ let var_bytes_reader : type a.
         raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
       read_elem elem runtime buf first
   | _ -> assert false
+
+(* The scan a span type's reader performs, without the string it hands back.
+   [Codec.validate] returns unit, so running the reader for its checks alone
+   turns over a copy of the span and drops it: allocation that scales with a
+   length the sender chose, on the path a server runs once per packet.
+   [None] for the spans whose reader only re-slices the buffer and has nothing
+   to scan. *)
+let span_check : type a. a typ -> (bytes -> first:int -> len:int -> unit) option
+    = function
+  | Byte_array_where { elt_var; cond; _ } ->
+      Some
+        (fun buf ~first ~len ->
+          check_span_bounds buf ~first ~sz:len;
+          refined_span_check ~elt_var ~cond buf ~first ~len)
+  | All_zeros ->
+      Some
+        (fun buf ~first ~len ->
+          check_span_bounds buf ~first ~sz:len;
+          all_zeros_check buf ~first ~len)
+  | Zeroterm_at_most _ ->
+      Some
+        (fun buf ~first ~len ->
+          check_span_bounds buf ~first ~sz:len;
+          ignore (zeroterm_nul_pos buf ~first ~limit:(first + len) : int))
+  | Zeroterm ->
+      (* The terminator search is the size computation, so [len] could not have
+         been reached without it. Only the span itself is left to check. *)
+      Some (fun buf ~first ~len -> check_span_bounds buf ~first ~sz:len)
+  | _ -> None
+
+(* Populate for a span field: the reader's checks, none of its copying, and no
+   slot to fill (a span has no int slot). [None] leaves the field to the
+   generic [build_populate]. *)
+let span_populate : type a.
+    a typ ->
+    off_fn:(runtime -> bytes -> int -> int) ->
+    size_fn:(runtime -> bytes -> int -> int) ->
+    (slots -> runtime -> bytes -> int -> unit) option =
+ fun typ ~off_fn ~size_fn ->
+  match span_check typ with
+  | None -> None
+  | Some check ->
+      Some
+        (fun _slots runtime buf base ->
+          check buf
+            ~first:(base + off_fn runtime buf base)
+            ~len:(size_fn runtime buf base))
 
 (* Kept at top level: as local closures they would be heap-allocated on
    every call (two allocations per variable-bytes field on each encode). *)
@@ -2518,7 +2585,11 @@ let compile_var_bytes : type a r.
         in
         (raw_reader, raw_writer, int_reader)
   in
-  let populate = build_populate typ ctx.n_fields raw_reader in
+  let populate =
+    match span_populate typ ~off_fn ~size_fn with
+    | Some p -> p
+    | None -> build_populate typ ctx.n_fields raw_reader
+  in
   {
     raw_reader;
     raw_writer;
@@ -2565,7 +2636,19 @@ let compile_scalar_or_var : type a r.
       let int_reader runtime buf base =
         int_of_typ_value typ (raw_reader runtime buf base)
       in
-      let populate = build_populate typ ctx.n_fields raw_reader in
+      let populate =
+        (* A negative literal width never reaches a scan: the reader refuses it
+           on sight ([const_span_reader]) and allocates nothing doing so, and
+           validate has to refuse it the same way decode does. *)
+        match
+          if fsize < 0 then None
+          else
+            span_populate typ ~off_fn:field_off_fn
+              ~size_fn:(fun _runtime _buf _base -> fsize)
+        with
+        | Some p -> p
+        | None -> build_populate typ ctx.n_fields raw_reader
+      in
       {
         raw_reader;
         raw_writer;

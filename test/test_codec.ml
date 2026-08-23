@@ -7681,6 +7681,39 @@ let test_truncated_still_reports_eof () =
     (Codec.decode two_span_codec (Bytes.of_string "\010X") 0);
   expect_eof "of_string two-span" (of_string (codec two_span_codec) "\010X")
 
+(* [Codec.validate] scans a refined span where it lies rather than copying it,
+   so the scan has to refuse everything the reader refuses. A literal width
+   below zero is refused before any scan, and by the reader, so both entry
+   points have to name the same fault: a validate that reported end-of-input
+   here while decode reported the negative width would be a validator that
+   rejects for a different reason than the decoder it stands in for. *)
+let test_negative_span_width_agrees () =
+  let c =
+    Codec.v "NegWidth" Fun.id
+      Codec.
+        [
+          Field.v "d"
+            (byte_array_where ~size:(int (-1)) ~per_byte:printable_byte)
+          $ Fun.id;
+        ]
+  in
+  let buf = Bytes.make 8 'a' in
+  let kind f =
+    match f () with
+    | () -> Alcotest.failf "accepted a span of width -1"
+    | exception Wire.Parse_error e -> Fmt.str "%a" pp_error_kind e.kind
+  in
+  let validated = kind (fun () -> Codec.validate c buf 0) in
+  let decoded =
+    kind (fun () ->
+        match Codec.decode c buf 0 with
+        | Ok _ -> ()
+        | Error e -> raise (Wire.Parse_error e))
+  in
+  Alcotest.(check string)
+    "validate rejects a negative span width for decode's reason" decoded
+    validated
+
 let test_negative_span_is_parse_error () =
   let neg_codec =
     Codec.v "NegSpan" Fun.id
@@ -8452,6 +8485,8 @@ let suite =
         test_negative_span_is_parse_error;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
         test_eof_counts_are_base_invariant;
+      Alcotest.test_case "diag: negative span width agrees with decode" `Quick
+        test_negative_span_width_agrees;
       (* accessor and container contracts *)
       Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
         test_set_refusal_leaves_buffer_untouched;
