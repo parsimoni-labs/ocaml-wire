@@ -7769,6 +7769,62 @@ let test_get_dynamic_optional_refuses_cleanly () =
     "Codec.get refuses a runtime-gated optional with Invalid_argument" true
     (raises_invalid (fun () -> Codec.get c cf_pay))
 
+(* A [repeat] element whose decoder runs to the end of the buffer cannot be
+   iterated: the first element takes the whole budget, so anything the encoder
+   writes past it is bytes the decoder (and the EverParse validator built from
+   the same schema) refuses. The greedy tail counts whether it is the element's
+   own last field or sits at the end of a sub-codec the element ends with. *)
+let test_repeat_rejects_nested_greedy_element () =
+  let pad =
+    Codec.v "PadTail"
+      (fun n tail -> (n, tail))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "tail" all_zeros $ snd ]
+  in
+  let greedy_elem =
+    Codec.v "GreedyElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec pad) $ snd ]
+  in
+  Alcotest.(check bool)
+    "repeat over a codec whose own tail is greedy rejected" true
+    (raises_invalid (fun () -> Field.repeat "items" ~size:(int 12) (codec pad)));
+  Alcotest.(check bool)
+    "repeat over a codec ending in a greedy sub-codec rejected" true
+    (raises_invalid (fun () ->
+         Field.repeat "items" ~size:(int 12) (codec greedy_elem)))
+
+(* The control for the rejection above: give the same element a bounded tail
+   and it is self-delimiting again, so the repeat builds and more than one
+   element survives the round trip. *)
+let test_repeat_bounded_element_roundtrips () =
+  let bounded =
+    Codec.v "PadFixed"
+      (fun n tail -> (n, tail))
+      Codec.
+        [
+          Field.v "n" uint8 $ fst;
+          Field.v "tail" (byte_array ~size:(int 2)) $ snd;
+        ]
+  in
+  let elem =
+    Codec.v "BoundedElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec bounded) $ snd ]
+  in
+  let f_total = Field.v "total" uint8 in
+  let f_items = Field.repeat "items" ~size:(Field.ref f_total) (codec elem) in
+  let outer =
+    Codec.v "BoundedRep"
+      (fun _ xs -> xs)
+      Codec.
+        [ (f_total $ fun xs -> 4 * List.length xs); (f_items $ fun xs -> xs) ]
+  in
+  let xs = [ (1, (2, "\000\000")); (3, (4, "\000\000")) ] in
+  let buf = Bytes.create (Codec.size_of_value outer xs) in
+  Codec.encode outer xs buf 0;
+  let ys = decode_ok (Codec.decode outer buf 0) in
+  Alcotest.(check bool) "two bounded elements round-trip" true (ys = xs)
+
 (* -- Suite -- *)
 
 let suite =
@@ -8391,4 +8447,8 @@ let suite =
       Alcotest.test_case
         "get: runtime-gated optional refused with Invalid_argument" `Quick
         test_get_dynamic_optional_refuses_cleanly;
+      Alcotest.test_case "repeat: element ending in a greedy sub-codec rejected"
+        `Quick test_repeat_rejects_nested_greedy_element;
+      Alcotest.test_case "repeat: bounded element round-trips" `Quick
+        test_repeat_bounded_element_roundtrips;
     ] )

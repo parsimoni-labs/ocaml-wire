@@ -3379,35 +3379,6 @@ let validate_with_bounds wire_size_info min_size param_slots param_base
   check_decode_bounds wire_size_info min_size runtime buf off;
   validate_checks ?env_slots buf off
 
-(* Whether a field consumes the rest of the buffer: a greedy leaf ([all_bytes] /
-   [all_zeros]), an embedded sub-codec whose own last field does, or a casetype
-   any of whose case bodies does (if that case is selected its greedy tail has no
-   boundary). A greedy tail has no boundary once another field follows it, so
-   each of these is just as unbounded as a bare greedy field. *)
-let rec field_consumes_rest : type a. a Types.typ -> bool =
- fun t ->
-  is_greedy t
-  ||
-  match t with
-  | Types.Codec { codec_struct; _ } -> (
-      match List.rev codec_struct.fields with
-      | Types.Field f :: _ -> field_consumes_rest f.field_typ
-      | [] -> false)
-  | Types.Casetype { cases; _ } ->
-      List.exists
-        (fun (Types.Case_branch { cb_inner; _ }) ->
-          field_consumes_rest cb_inner)
-        cases
-  | Types.Map { inner; _ } -> field_consumes_rest inner
-  | Types.Where { inner; _ } -> field_consumes_rest inner
-  | Types.Enum { base; _ } -> field_consumes_rest base
-  | Types.Optional { present = Types.Bool false; _ }
-  | Types.Optional_or { present = Types.Bool false; _ } ->
-      false
-  | Types.Optional { inner; _ } -> field_consumes_rest inner
-  | Types.Optional_or { inner; _ } -> field_consumes_rest inner
-  | _ -> false
-
 (* A greedy field consumes the rest of the buffer, so it is only meaningful as
    the last field: an earlier one starves every field after it (and 3D's
    [:consume-all] must be last too). This also covers an embedded sub-codec
@@ -3418,7 +3389,7 @@ let reject_greedy_not_last name fields =
   let rec check = function
     | [] | [ _ ] -> ()
     | Types.Field f :: rest ->
-        if field_consumes_rest f.field_typ then
+        if Types.ends_greedy f.field_typ then
           Fmt.invalid_arg
             "Codec.v %s: a field that consumes the rest of the buffer \
              (all_bytes / all_zeros, or a sub-codec ending in one) must be the \
