@@ -7712,6 +7712,63 @@ let test_set_refusal_leaves_buffer_untouched () =
   Alcotest.(check string)
     "an accepted set still writes" "\x2a" (Bytes.to_string buf)
 
+(* [Codec.get] had no reader for a statically gated optional and fell through
+   to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
+   both flavours and both gates against what decode returns. *)
+let test_get_static_optional_agrees_with_decode () =
+  let f_len = Field.optional_or "Len" ~present:Expr.true_ ~default:0 uint8 in
+  let f_on = Field.optional "On" ~present:Expr.true_ uint8 in
+  let f_off = Field.optional "Off" ~present:Expr.false_ uint8 in
+  let f_or_off =
+    Field.optional_or "OrOff" ~present:Expr.false_ ~default:7 uint8
+  in
+  let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len)) in
+  let cf_len = Codec.(f_len $ fun (l, _, _, _, _) -> l) in
+  let cf_on = Codec.(f_on $ fun (_, o, _, _, _) -> o) in
+  let cf_off = Codec.(f_off $ fun (_, _, o, _, _) -> o) in
+  let cf_or_off = Codec.(f_or_off $ fun (_, _, _, o, _) -> o) in
+  let cf_data = Codec.(f_data $ fun (_, _, _, _, d) -> d) in
+  let c =
+    Codec.v "StaticGates"
+      (fun len on off or_off data -> (len, on, off, or_off, data))
+      [ cf_len; cf_on; cf_off; cf_or_off; cf_data ]
+  in
+  let buf = Bytes.of_string "\003\009abc" in
+  let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
+  let read f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check int) "optional_or, gate on" len (read cf_len);
+  Alcotest.(check (option int)) "optional, gate on" on (read cf_on);
+  Alcotest.(check (option int)) "optional, gate off" off (read cf_off);
+  Alcotest.(check int)
+    "optional_or, gate off is the default" or_off (read cf_or_off);
+  Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
+  (* And the matching setter, so a field [get] can read is one [set] can
+     write. The absent gates own no bytes, so writing them moves nothing. *)
+  Staged.unstage (Codec.set c cf_on) buf 0 (Some 5);
+  Staged.unstage (Codec.set c cf_off) buf 0 None;
+  Staged.unstage (Codec.set c cf_or_off) buf 0 7;
+  Alcotest.(check (option int)) "set then get, gate on" (Some 5) (read cf_on);
+  Alcotest.(check string)
+    "the absent gates wrote no bytes" "\003\005abc" (Bytes.to_string buf)
+
+(* A runtime gate is decided by an expression over sibling fields, which only
+   the compiled record plan evaluates. The accessor cannot read it, and has to
+   say so with the exception the interface documents. *)
+let test_get_dynamic_optional_refuses_cleanly () =
+  let f_gate = Field.v "gate" uint8 in
+  let f_pay =
+    Field.optional "pay" ~present:Expr.(Field.ref f_gate <> int 0) uint16be
+  in
+  let cf_pay = Codec.(f_pay $ snd) in
+  let c =
+    Codec.v "DynGate"
+      (fun gate pay -> (gate, pay))
+      [ Codec.(f_gate $ fst); cf_pay ]
+  in
+  Alcotest.(check bool)
+    "Codec.get refuses a runtime-gated optional with Invalid_argument" true
+    (raises_invalid (fun () -> Codec.get c cf_pay))
+
 (* -- Suite -- *)
 
 let suite =
@@ -8329,4 +8386,9 @@ let suite =
       (* accessor and container contracts *)
       Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
         test_set_refusal_leaves_buffer_untouched;
+      Alcotest.test_case "get: statically gated optionals agree with decode"
+        `Quick test_get_static_optional_agrees_with_decode;
+      Alcotest.test_case
+        "get: runtime-gated optional refused with Invalid_argument" `Quick
+        test_get_dynamic_optional_refuses_cleanly;
     ] )
