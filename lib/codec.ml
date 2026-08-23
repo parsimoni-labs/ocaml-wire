@@ -105,6 +105,15 @@ let uint_var_field_encoder endian n buf off v =
   Uint_var.write endian buf off n v;
   off + n
 
+(* Name the field type for an "unsupported shape" refusal. [Types.pp_typ]
+   renders 3D syntax and asserts on a field decoration, which is the one shape
+   that actually reaches those refusals, so say what it is in prose instead. *)
+let field_shape : type a. a typ -> string = function
+  | Optional _ -> "an optional field behind a runtime gate"
+  | Optional_or _ -> "an optional_or field behind a runtime gate"
+  | Repeat _ -> "a repeat field"
+  | t -> Fmt.str "%a" pp_typ t
+
 let rec build_casetype_encoder_ctx : type a k.
     k typ ->
     (a, k) case_branch list ->
@@ -230,10 +239,21 @@ and build_field_encoder_ctx : type a.
   | Single_elem { size = Int n; elem; at_most } ->
       let enc = build_field_encoder_ctx elem in
       fun runtime -> single_elem_region ~at_most n elem (enc runtime)
-  | _ ->
-      (* Fallback for complex types - not specialized *)
-      fun _runtime _buf _off _v ->
-        failwith "build_field_encoder: unsupported type"
+  (* Mirror of the reader's statically gated optionals, so [Codec.set] can
+     write the field [Codec.get] can read. Presence is fixed at construction:
+     present writes the inner in place, absent writes nothing. An [optional]
+     handed [None] while its gate says present writes nothing either, which is
+     what the record encoder does with the same value. *)
+  | Optional { present = Bool true; inner } -> (
+      let enc = build_field_encoder_ctx inner in
+      let width = Option.value ~default:0 (field_wire_size inner) in
+      fun runtime buf off v ->
+        match v with Some iv -> enc runtime buf off iv | None -> off + width)
+  | Optional { present = Bool false; _ } -> fun _runtime _buf off _v -> off
+  | Optional_or { present = Bool true; inner; _ } ->
+      build_field_encoder_ctx inner
+  | Optional_or { present = Bool false; _ } -> fun _runtime _buf off _v -> off
+  | _ -> Fmt.invalid_arg "Codec.encode: no writer for %s" (field_shape typ)
 
 let build_field_encoder typ =
   let encode = build_field_encoder_ctx typ in
@@ -262,6 +282,14 @@ let enum_encode_check ~name ~cases ~closed =
   else
     let valid = Types.enum_values cases in
     fun v -> Types.check_enum_encode ~name ~valid v
+
+(* No reader exists for this shape. [Codec.get] is the only caller that can
+   reach it, since every field the record decoder reads has a case in the table
+   below, and [get] documents [Invalid_argument]. Refuse while the accessor is
+   being staged rather than let a [Failure] escape from inside it on every
+   read. *)
+let no_field_reader : type a b. a typ -> b =
+ fun typ -> Fmt.invalid_arg "Codec.get: no reader for %s" (field_shape typ)
 
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
@@ -349,11 +377,22 @@ let rec build_field_reader_ctx : type a.
               acc := s.add !acc v
             done;
             s.finish !acc
-      | None ->
-          fun _runtime _buf _base ->
-            failwith "build_field_reader: unsupported type")
-  | _ ->
-      fun _runtime _buf _base -> failwith "build_field_reader: unsupported type"
+      | None -> no_field_reader typ)
+  (* A statically gated optional is transparent: present is the inner at the
+     same offset, absent is no bytes at all and the value is fixed. That is
+     what [compile_optional] / [compile_optional_or] read on the decode path,
+     so an accessor over the same field agrees with {!decode}. A runtime gate
+     is not readable here: deciding presence means evaluating an expression
+     over sibling fields, which only the compiled record plan holds. *)
+  | Optional { present = Bool true; inner } ->
+      let read = build_field_reader_ctx inner field_off in
+      fun runtime buf base -> Some (read runtime buf base)
+  | Optional { present = Bool false; _ } -> fun _runtime _buf _base -> None
+  | Optional_or { present = Bool true; inner; _ } ->
+      build_field_reader_ctx inner field_off
+  | Optional_or { present = Bool false; default; _ } ->
+      fun _runtime _buf _base -> default
+  | _ -> no_field_reader typ
 
 (* [eval_ctx] is necessary for parameter-dependent layouts, but routing every
    fixed scalar access through it costs an extra argument and a match per read.
