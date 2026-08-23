@@ -33,9 +33,12 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
-(** Parse failure categories. For {!constructor-Constraint_failed}, [value] is
-    the offending field's value for a single-field self-constraint and [None]
-    for a cross-field or where predicate. *)
+(** Parse failure categories. {!constructor-Unexpected_eof} counts bytes, not
+    buffer positions: [expected] is how many the value needed and [got] how many
+    were left where it starts, so both are the same whatever offset the frame is
+    read at. For {!constructor-Constraint_failed}, [value] is the offending
+    field's value for a single-field self-constraint and [None] for a
+    cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Invalid_enum of { value : int; valid : int list }

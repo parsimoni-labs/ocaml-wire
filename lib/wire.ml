@@ -134,8 +134,12 @@ end
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
-let[@inline] check_eof len need =
-  if need > len then raise_eof ~at:len ~expected:need ~got:len
+(* [n] bytes starting at [off] must fit inside the region ending at [limit].
+   {!Types.Unexpected_eof} counts bytes, not positions: the value needed [n] of
+   them and the region had only [limit - off] left. *)
+let[@inline] check_eof limit ~off ~n =
+  if off + n > limit then
+    raise_eof ~at:limit ~expected:n ~got:(max 0 (limit - off))
 
 (* A span of [n] bytes starting at [off]. [n] comes from a size expression, so
    an underflowing subtraction or a negative literal reaches here as data: a
@@ -143,7 +147,7 @@ let[@inline] check_eof len need =
    [Invalid_argument] that escapes [of_string]'s result. *)
 let[@inline] check_span len ~off ~n =
   if n < 0 then raise_out_of_range ~at:off (Int64.of_int n);
-  check_eof len (off + n)
+  check_eof len ~off ~n
 
 (* The single decoder kernel. Bytes-based, returns [(value, end_off)].
    All types handled here -- no fallback. Expressions are evaluated in
@@ -227,7 +231,7 @@ let parse_struct_typ s buf off len =
   ((), off + sz)
 
 let parse_fixed size get buf off len =
-  check_eof len (off + size);
+  check_eof len ~off ~n:size;
   (get buf off, off + size)
 
 let int32_le buf off = Int32.to_int (Bytes.get_int32_le buf off)
@@ -266,7 +270,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       (Uint_var.read endian buf off n, off + n)
   | Bits { width; base; bit_order } ->
       let sz = Bitfield.byte_size base in
-      check_eof len (off + sz);
+      check_eof len ~off ~n:sz;
       let total = Bitfield.total_bits base in
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
       let mask = (1 lsl width) - 1 in
@@ -398,8 +402,8 @@ and parse_repeat_loop : type elt seq.
     seq * int =
  fun ~elem ~seq:(Seq_map s) buf off len ~budget ->
   let start = off in
-  if budget < 0 then raise_eof ~at:off ~expected:0 ~got:budget;
-  check_eof len (start + budget);
+  if budget < 0 then raise_eof ~at:off ~expected:budget ~got:(max 0 (len - off));
+  check_eof len ~off:start ~n:budget;
   let region_end = start + budget in
   let rec loop acc off' =
     if off' = region_end then (s.finish acc, off')

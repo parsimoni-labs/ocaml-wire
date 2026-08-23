@@ -12,6 +12,12 @@ let blit_slice_exact n buf off src =
   Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
   off + n
 
+(* Bytes of [buf] a read starting at [off] can have, which is what
+   {!Types.Unexpected_eof}'s [got] counts. A start before the buffer or past
+   its end has none of them; the count is never negative. *)
+let[@inline] bytes_from buf off =
+  if off < 0 || off > Bytes.length buf then 0 else Bytes.length buf - off
+
 (* A read of [width] bytes at [at] that must stay inside [buf]. Reads whose
    position was itself computed from the buffer can land past the end on
    truncated input; reporting the span here keeps the failure a precise
@@ -19,7 +25,7 @@ let blit_slice_exact n buf off src =
    caller cannot tell apart from a misuse or from a user [map] callback. *)
 let[@inline] check_read_bounds buf ~at ~width =
   if at < 0 || at + width > Bytes.length buf then
-    raise_eof ~at ~expected:width ~got:(max 0 (Bytes.length buf - at))
+    raise_eof ~at ~expected:width ~got:(bytes_from buf at)
 
 (* Reader for a byte span of constant width. A negative width comes from a size
    expression that underflows or names a negative literal, so it is data rather
@@ -2159,7 +2165,7 @@ let repeat_raw_fixed : type elt seq.
      buffer before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
   let remainder = if esz > 0 then budget mod esz else budget in
   if remainder <> 0 then
     raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
@@ -2185,7 +2191,7 @@ let repeat_raw_variable : type elt seq.
   let start = base + off_fn runtime buf base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:(start + budget) ~got:(Bytes.length buf);
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
@@ -2290,7 +2296,7 @@ let compile_repeat : type elt seq r.
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-    raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf)
+    raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
 
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
@@ -2315,7 +2321,7 @@ let var_bytes_reader : type a.
          [make_or_eod] with a raw [Invalid_argument] that escapes the decode
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
-        raise_eof ~at:first ~expected:(first + sz) ~got:(Bytes.length buf)
+        raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
@@ -3386,7 +3392,7 @@ let fill_param_slots tbl param_base handles =
    before a zero-copy [get] reads its fields. *)
 let check_decode_bounds wire_size_info min_size runtime buf off =
   if off + min_size > Bytes.length buf then
-    raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
+    raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -3396,9 +3402,9 @@ let check_decode_bounds wire_size_info min_size runtime buf off =
          raise is a real error and propagates. *)
       let end_off = compute runtime buf off in
       if end_off < off + min_size then
-        raise_eof ~at:off ~expected:min_size ~got:(Bytes.length buf - off);
+        raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
       if end_off > Bytes.length buf then
-        raise_eof ~at:off ~expected:(end_off - off) ~got:(Bytes.length buf - off)
+        raise_eof ~at:off ~expected:(end_off - off) ~got:(bytes_from buf off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime buf off ->
