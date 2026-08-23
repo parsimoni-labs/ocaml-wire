@@ -82,6 +82,20 @@ let raise_eof ~at ~expected ~got =
 
 let raise_invalid_tag ~at tag = raise_error ~at (Invalid_tag tag)
 
+(* A [Map]'s [decode] is handed a value and nothing else, so a lookup that
+   rejects an out-of-range index has no offset to name and reports 0. Every
+   reader knows where the value it just read sits, and [at] is documented as
+   the failing field's absolute offset, so relocate the failure there: a caller
+   that seeks to [at] otherwise lands on the start of the buffer whatever the
+   frame's base. [index_bound] marks exactly the maps whose [decode] rejects
+   anything, so every other map keeps the bare call. *)
+let map_decode ~index_bound decode =
+  match index_bound with
+  | None -> fun ~at:_ v -> decode v
+  | Some _ -> (
+      fun ~at v ->
+        try decode v with Parse_error e -> raise (Parse_error { e with at }))
+
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })
 
@@ -545,8 +559,8 @@ let cases variants inner =
   let arr = Array.of_list variants in
   let len = Array.length arr in
   let decode n =
-    (* [lookup] reads a bare index with no field context, so the failing index
-       is reported without a byte offset (at = 0). *)
+    (* Offset 0 is relative to the value handed in; [map_decode] moves the
+       failure to where the reader found that value. *)
     if n >= 0 && n < len then arr.(n) else raise_invalid_tag ~at:0 n
   in
   let encode v =
