@@ -355,9 +355,11 @@ let rec build_field_reader_ctx : type a.
       let check = enum_check cases closed in
       fun runtime buf base ->
         check ~at:(base + field_off) (read runtime buf base)
-  | Map { inner; decode; _ } ->
+  | Map { inner; decode; index_bound; _ } ->
       let read = build_field_reader_ctx inner field_off in
-      fun runtime buf base -> decode (read runtime buf base)
+      let decode = Types.map_decode ~index_bound decode in
+      fun runtime buf base ->
+        decode ~at:(base + field_off) (read runtime buf base)
   | Unit -> fun _runtime _buf _base -> ()
   (* A fixed-size sub-record / sub-codec as an array or nested element: decode
      it at the element offset. The element must be fixed-width (the Array case
@@ -442,10 +444,12 @@ let rec build_immediate_reader : type a.
       | Some read ->
           let check = enum_check cases closed in
           Some (fun buf base -> check ~at:(at base) (read buf base)))
-  | Map { inner; decode; _ } -> (
+  | Map { inner; decode; index_bound; _ } -> (
       match build_immediate_reader inner field_off with
       | None -> None
-      | Some read -> Some (fun buf base -> decode (read buf base)))
+      | Some read ->
+          let decode = Types.map_decode ~index_bound decode in
+          Some (fun buf base -> decode ~at:(at base) (read buf base)))
   | Unit -> Some (fun _buf _base -> ())
   | _ -> None
 
@@ -515,9 +519,17 @@ let domain_local_slots n =
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
 
+(* The absolute offset of a field that failed: the record's [base] plus the
+   field's own offset inside it, or [base] alone when the layout makes that
+   offset dynamic ([-1]) and there is nothing better to say. [Types.parse_error]
+   promises [at] is "the absolute byte offset of the failing field", so a caller
+   that locates the field from [at] reads or rewrites the wrong bytes for every
+   field but the first if the record's base is reported instead. *)
+let at_of base field_off = if field_off >= 0 then base + field_off else base
+
 (* Raise a field-constraint failure, reporting the offending field's value so a
    demux can route on it (e.g. a version field that failed [self = N]).
-   [field_idx] is the field's int slot; [at] is the record's byte offset. *)
+   [field_idx] is the field's int slot; [at] is the field's byte offset. *)
 let raise_field_constraint ~field_idx ~at arr =
   let value =
     if field_idx >= 0 && field_idx < Array.length arr.ints then
@@ -684,6 +696,25 @@ type field_access =
       off_fn : runtime -> bytes -> int -> int;
       size_fn : runtime -> bytes -> int -> int;
     }
+
+(* Absolute offset of the bytes a field occupies, from the record's base. A
+   staged reader that rejects the value it read reports it here, so that [at]
+   names the field and not the record; a bitfield names the base word it is
+   packed into, the smallest span its value can be located in. *)
+let access_at : field_access -> runtime -> bytes -> int -> int = function
+  | Fixed off | Variable { off; _ } -> fun _runtime _buf base -> base + off
+  | Bitfield { byte_off; _ } -> fun _runtime _buf base -> base + byte_off
+  | Dynamic off_fn | Variable_dynamic { off_fn; _ } ->
+      fun runtime buf base -> base + off_fn runtime buf base
+
+(* [access_at] for the environment-free readers, which never see an offset that
+   depends on the buffer: [build_immediate_staged_reader] hands back [None] for
+   a variable or dynamic access rather than a reader, so only the two static
+   shapes reach a caller of this. *)
+let immediate_access_off = function
+  | Fixed off | Variable { off; _ } -> off
+  | Bitfield { byte_off; _ } -> byte_off
+  | Dynamic _ | Variable_dynamic _ -> 0
 
 type ('a, 'r) field = {
   name : string;
@@ -1560,7 +1591,9 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   | Float64 Big -> Int64.float_of_bits (Bytes.get_int64_be buf off)
   | Uint_var { size = Int n; endian } -> Uint_var.read endian buf off n
   | Codec { codec_decode; _ } -> codec_decode runtime buf off
-  | Map { inner; decode; _ } -> decode (read_elem inner runtime buf off)
+  | Map { inner; decode; index_bound; _ } ->
+      Types.map_decode ~index_bound decode ~at:off
+        (read_elem inner runtime buf off)
   | Where { inner; _ } -> read_elem inner runtime buf off
   | Enum { base; cases; closed; _ } ->
       enum_check cases closed ~at:off (read_elem base runtime buf off)
@@ -2557,7 +2590,8 @@ let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   match fld.typ with
-  | Map { inner; decode; encode; _ } -> compile_map ctx fld inner decode encode
+  | Map { inner; decode; encode; index_bound } ->
+      compile_map ctx fld inner decode encode ~index_bound
   | Enum { name; base; cases; closed } ->
       (* Compile as the base integer, then validate the decoded value is one of
          the named cases. [compile_field] would otherwise strip the cases and
@@ -2569,7 +2603,10 @@ let rec compile_field : type a r.
       {
         cf with
         raw_reader =
-          (fun runtime buf off -> check ~at:off (cf.raw_reader runtime buf off));
+          (fun runtime buf off ->
+            check
+              ~at:(at_of off cf.validator_off)
+              (cf.raw_reader runtime buf off));
         raw_writer =
           (fun v runtime buf base write_off ->
             encode_check (get v);
@@ -2577,7 +2614,10 @@ let rec compile_field : type a r.
         populate =
           (fun arr runtime buf base ->
             cf.populate arr runtime buf base;
-            ignore (check ~at:base (cf.int_reader runtime buf base)));
+            ignore
+              (check
+                 ~at:(at_of base cf.validator_off)
+                 (cf.int_reader runtime buf base)));
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
@@ -2604,8 +2644,9 @@ and compile_map : type a w r.
     w typ ->
     (w -> a) ->
     (a -> w) ->
+    index_bound:int option ->
     (a, r) compiled_field =
- fun ctx fld inner decode encode ->
+ fun ctx fld inner decode encode ~index_bound ->
   let outer_get = fld.get in
   let inner_fld =
     {
@@ -2618,7 +2659,10 @@ and compile_map : type a w r.
     }
   in
   let cf = compile_field ctx inner_fld in
-  let checked_reader runtime buf off = decode (cf.raw_reader runtime buf off) in
+  let decode = Types.map_decode ~index_bound decode in
+  let checked_reader runtime buf off =
+    decode ~at:(at_of off cf.validator_off) (cf.raw_reader runtime buf off)
+  in
   {
     cf with
     raw_reader = checked_reader;
@@ -2974,11 +3018,12 @@ let guarded_populate : type a r.
 (* A field's two validators. [check_only] fills the field's int slot and tests
    its constraint; [full] adds the field action. Decode and [Codec.validate]
    both run [full], so an action never fires on one path only. *)
-let field_validators ~field_idx ~populate ~check ~act =
+let field_validators ~field_idx ~validator_off ~populate ~check ~act =
   let check_only arr runtime buf base =
     populate arr runtime buf base;
     match check with
-    | Some f when not (f arr) -> raise_field_constraint ~field_idx ~at:base arr
+    | Some f when not (f arr) ->
+        raise_field_constraint ~field_idx ~at:(at_of base validator_off) arr
     | _ -> ()
   in
   let full arr runtime buf base =
@@ -3012,7 +3057,7 @@ let apply_compiled : type a f r.
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let check_only, full =
-    field_validators ~field_idx
+    field_validators ~field_idx ~validator_off:cf.validator_off
       ~populate:(guarded_populate cf fld.typ)
       ~check ~act
   in
@@ -3804,7 +3849,8 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
   let check_only, full =
-    field_validators ~field_idx:acc.n_fields ~populate ~check ~act
+    field_validators ~field_idx:acc.n_fields ~validator_off ~populate ~check
+      ~act
   in
   (full, check_only, List.length action_vanames)
 
@@ -4182,10 +4228,18 @@ let rec build_staged_reader : type a.
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
       let check = enum_check cases closed in
-      fun runtime buf base -> check ~at:base (read runtime buf base)
-  | Map { inner; decode; _ }, _ ->
+      let at = access_at access in
+      fun runtime buf base ->
+        check ~at:(at runtime buf base) (read runtime buf base)
+  | Map { inner; decode; index_bound; _ }, _ -> (
       let read = build_staged_reader inner access in
-      fun runtime buf base -> decode (read runtime buf base)
+      match index_bound with
+      | None -> fun runtime buf base -> decode (read runtime buf base)
+      | Some _ ->
+          let decode = Types.map_decode ~index_bound decode in
+          let at = access_at access in
+          fun runtime buf base ->
+            decode ~at:(at runtime buf base) (read runtime buf base))
   | _, Bitfield _ ->
       invalid_arg "Codec.get: non-bitfield type with bitfield access"
   | _, Variable _ | _, Variable_dynamic _ ->
@@ -4316,11 +4370,15 @@ let rec build_immediate_staged_reader : type a.
       | None -> None
       | Some read ->
           let check = enum_check cases closed in
-          Some (fun buf base -> check ~at:base (read buf base)))
-  | Map { inner; decode; _ }, _ -> (
+          let off = immediate_access_off access in
+          Some (fun buf base -> check ~at:(base + off) (read buf base)))
+  | Map { inner; decode; index_bound; _ }, _ -> (
       match build_immediate_staged_reader inner access with
       | None -> None
-      | Some read -> Some (fun buf base -> decode (read buf base)))
+      | Some read ->
+          let decode = Types.map_decode ~index_bound decode in
+          let off = immediate_access_off access in
+          Some (fun buf base -> decode ~at:(base + off) (read buf base)))
   | _ -> None
 
 let rec build_immediate_staged_writer : type a.

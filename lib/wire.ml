@@ -312,9 +312,9 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       if (not at_most) && consumed <> n then
         raise_eof ~at:inner_end ~expected:n ~got:consumed;
       (v, off + n)
-  | Map { inner; decode; _ } ->
+  | Map { inner; decode; index_bound; _ } ->
       let v, off' = parse_direct inner buf off len in
-      (decode v, off')
+      (Types.map_decode ~index_bound decode ~at:off v, off')
   | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in

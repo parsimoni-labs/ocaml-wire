@@ -962,6 +962,14 @@ val raise_eof : at:int -> expected:int -> got:int -> 'a
 val raise_invalid_tag : at:int -> int -> 'a
 (** Raise {!Parse_error} for a tag or lookup index with no matching case. *)
 
+val map_decode : index_bound:int option -> ('w -> 'a) -> at:int -> 'w -> 'a
+(** [map_decode ~index_bound decode ~at v] is [decode v], with any
+    {!Parse_error} it raises moved to [at]. A {!constructor-Map}'s [decode] sees
+    only the value, so the bound a {!cases} map enforces can only be reported at
+    offset 0; [at] is the absolute offset the reader took [v] from, which is
+    what {!parse_error} promises. Maps with no [index_bound] reject nothing and
+    are called directly. *)
+
 val raise_invalid_enum : at:int -> value:int -> valid:int list -> 'a
 (** Raise {!Parse_error} for an enum value outside its named set. *)
 
