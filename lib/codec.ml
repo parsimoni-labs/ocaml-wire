@@ -2301,13 +2301,16 @@ let repeat_raw_reader : type elt seq.
 
 (* An element whose reader's only product is the value it hands back. A
    fixed-width byte span re-slices or copies bytes the budget prologue has
-   already bounded to the buffer, and a NUL-terminated one's terminator search
-   has run in [size_of_elem] before the reader is called, so on the check walk
-   there is nothing left for the reader to do. Every other element's reader does
-   something [Codec.validate] needs (an enum's membership, a sub-codec's
-   constraints, a casetype's tag dispatch), so it runs. *)
+   already bounded to the buffer, a NUL-terminated one's terminator search has
+   run in [size_of_elem] before the reader is called, and a 64-bit or
+   floating-point scalar is one unchecked read of a word inside the same
+   bounded budget, so on the check walk there is nothing left for the reader to
+   do. Every other element's reader does something [Codec.validate] needs (an
+   enum's membership, a sub-codec's constraints, a casetype's tag dispatch), so
+   it runs. *)
 let elem_reader_is_value_only : type a. a typ -> bool = function
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm -> true
+  | Uint64 _ | Int64 _ | Float32 _ | Float64 _ -> true
   | _ -> false
 
 (* The element read the check walk runs. Skipping a value-only reader keeps the
