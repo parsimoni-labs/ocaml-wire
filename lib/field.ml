@@ -69,11 +69,10 @@ let optional_or name ?constraint_ ?self_constraint ?self_int64 ?action ~present
 
 (* A sub-codec ending in a greedy field ([all_bytes] / [all_zeros]) reads "the
    rest of the buffer" as its tail, so it cannot be iterated as a repeat element
-   (the first element would consume everything). *)
-let codec_ends_greedy (s : Types.struct_) =
-  match List.rev s.fields with
-  | Types.Field f :: _ -> Types.is_greedy f.field_typ
-  | [] -> false
+   (the first element would consume everything). A tail counts at any depth: a
+   sub-codec that ends with a sub-codec that ends greedy is just as unbounded
+   as one holding the greedy field itself. *)
+let codec_ends_greedy = Types.struct_ends_greedy
 
 (* Types decodable as a casetype case body inside a repeat: exactly the set
    [Codec.read_elem] handles. Unlike a bare repeat element, a lone [bits] field
@@ -140,7 +139,10 @@ let reject_unprojectable_repeat ~combinator typ =
     Fmt.invalid_arg
       "Wire.%s: element type does not project to 3D as a repeat element -- the \
        byte-budget loop only supports fixed-width scalars, byte spans of at \
-       least one byte, NUL-terminated strings, sub-codecs, and casetypes."
+       least one byte, NUL-terminated strings, and self-bounded sub-codecs and \
+       casetypes. A sub-codec is not self-bounded when its tail is an \
+       all_bytes / all_zeros field, its own or one it embeds: the first \
+       element would take the whole budget."
       combinator
 
 let repeat name ?constraint_ ?self_constraint ?self_int64 ?action ~size typ =

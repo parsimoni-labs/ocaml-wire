@@ -998,6 +998,15 @@ val is_greedy : 'a typ -> bool
     transparent wrappers). Such a field is only valid as the last field of a
     struct or codec. *)
 
+val ends_greedy : 'a typ -> bool
+(** Like {!is_greedy} but through composition: a sub-codec or casetype case
+    whose own tail is greedy reads to the end of the buffer just the same. Such
+    a type can only be the last thing in the buffer, so nothing may follow it
+    and no container may iterate it. *)
+
+val struct_ends_greedy : struct_ -> bool
+(** [struct_ends_greedy s] is {!ends_greedy} of [s]'s last field. *)
+
 val nz : 'a typ -> bool
 (** Whether the type's parser always consumes a positive minimum number of bytes
     (EverParse's [nz] parser-kind index). [false] for a byte span, a
