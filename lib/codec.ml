@@ -2254,6 +2254,21 @@ let repeat_raw_variable : type elt seq.
   in
   loop seq.empty start budget
 
+(* Accumulates nothing. [Codec.validate] wants a repeat's elements read for
+   their checks and does not want the sequence, so the walk it runs drops each
+   element as it goes: a list built and thrown away is allocation the sender
+   sizes through the byte budget, on the path a server runs once per packet.
+   Feeding the reader's own walk keeps the budget and split checks identical to
+   what decode makes. *)
+let seq_discard : type elt. (elt, unit) seq_map =
+  Seq_map
+    {
+      empty = ();
+      add = (fun () _elt -> ());
+      finish = (fun () -> ());
+      iter = (fun _f () -> ());
+    }
+
 let repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
     elt typ ->
@@ -2335,9 +2350,13 @@ let compile_repeat : type elt seq r.
     nested_readers = [];
     validator_off;
     (* [Codec.validate] reaches a repeat only through its populate, and the
-       budget checks live in [repeat_raw_reader]. Run the reader for effect,
-       as [build_populate] already does for an [array]. *)
-    populate = build_populate fld.typ ctx.n_fields raw_reader;
+       budget checks live in [repeat_raw_reader]. Run the same walk over
+       {!seq_discard}, which checks every element and keeps none. *)
+    populate =
+      (let check =
+         repeat_raw_reader seq_discard elem ~elem_size ~off_fn ~size_fn
+       in
+       fun _arr runtime buf base -> check runtime buf base);
   }
 
 (* The span [first, first + sz) must lie inside [buf]. Both ends derive from

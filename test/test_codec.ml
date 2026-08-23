@@ -7765,6 +7765,67 @@ let test_validate_allocation_is_bounded () =
   report_span_failures "validate allocation scales with the frame length"
     failures
 
+(* A [repeat]'s element count comes from its byte budget, which comes from a
+   length field: the sender picks how many times the element loop runs.
+   [Codec.validate] wants those elements checked and does not want the
+   sequence, so building one and dropping it handed an attacker a heap
+   multiplier per packet. Elements whose own reader allocates nothing pin the
+   sequence itself: any growth here is the list, not the element. A boxed
+   element value (a float, a byte span, a sub-codec record) is the element's own
+   reader allocating and is a separate question, so those stay out. *)
+let f_repeat_len = Field.v "len" uint16be
+
+let repeat_budget_codec elem =
+  Codec.v "RepeatBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        f_repeat_len $ List.length;
+        Field.repeat "xs" ~size:(Field.ref f_repeat_len) elem $ Fun.id;
+      ]
+
+let repeat_budget_buf n =
+  let b = Bytes.make (2 + n) '\001' in
+  Bytes.set_uint16_be b 0 n;
+  b
+
+(* A [name, validate this budget] pair, so elements of different value types
+   measure through one fold. *)
+let repeat_budget_case name elem =
+  let c = repeat_budget_codec elem in
+  ( name,
+    fun n ->
+      let buf = repeat_budget_buf n in
+      fun () -> Codec.validate c buf 0 )
+
+let test_repeat_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let failures =
+    List.fold_left
+      (fun acc (name, at) ->
+        let words n = words_per_call ~iters:500 (at n) in
+        let at_small = words small and at_large = words large in
+        if at_large <> at_small then
+          Fmt.str
+            "%s grows %d words between a %d-byte and a %d-byte budget (%d then \
+             %d)"
+            name (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      []
+      [
+        repeat_budget_case "uint8" uint8;
+        repeat_budget_case "uint16be" uint16be;
+        repeat_budget_case "uint32be" uint32be;
+        repeat_budget_case "int8" int8;
+        repeat_budget_case "int16be" int16be;
+        repeat_budget_case "uint63be" uint63be;
+      ]
+  in
+  report_span_failures "validate allocation scales with a repeat's budget"
+    failures
+
 (* [Codec.decode] hands the span back, so one copy of it is the price of the
    answer. A second copy is work the caller never sees and the sender sizes.
    The bound is against the payload the returned value carries, not against
@@ -8745,6 +8806,9 @@ let suite =
         test_set_no_allocation;
       Alcotest.test_case "validate: allocation does not scale with the frame"
         `Quick test_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: allocation does not scale with a repeat's budget" `Quick
+        test_repeat_validate_allocation_is_bounded;
       Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
         test_decode_allocates_one_copy;
       (* decode diagnostics *)
