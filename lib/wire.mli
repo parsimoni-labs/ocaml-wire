@@ -893,6 +893,9 @@ val pp_error_kind : Format.formatter -> error_kind -> unit
 val equal_parse_error : parse_error -> parse_error -> bool
 (** Structural equality on parse errors. *)
 
+val equal_error_kind : error_kind -> error_kind -> bool
+(** Structural equality on error kinds, ignoring location. *)
+
 val compare_parse_error : parse_error -> parse_error -> int
 (** Total order on parse errors. *)
 

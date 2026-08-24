@@ -3888,7 +3888,7 @@ let check_shifted label what ~k ~same base0 basek =
         Alcobar.failf "%s: %s at base %d read a different value than at base 0"
           label what k
   | Rejected a, Rejected b ->
-      if a.Wire.kind <> b.Wire.kind then
+      if not (Wire.equal_error_kind a.Wire.kind b.Wire.kind) then
         Alcobar.failf
           "%s: %s rejected for a different reason at base %d (%a at base 0, %a \
            at base %d)"
@@ -4120,7 +4120,10 @@ let check_repeated label what ~same first second =
           "%s: %s answered differently once another frame had been read" label
           what
   | Rejected a, Rejected b ->
-      if a.Wire.kind <> b.Wire.kind || a.Wire.at <> b.Wire.at then
+      if
+        (not (Wire.equal_error_kind a.Wire.kind b.Wire.kind))
+        || a.Wire.at <> b.Wire.at
+      then
         Alcobar.failf
           "%s: %s reported a different failure once another frame had been \
            read (%a, then %a)"

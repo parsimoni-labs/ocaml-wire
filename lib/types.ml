@@ -3148,6 +3148,8 @@ let compare_error_kind a b =
       0
   | _ -> Int.compare (kind_rank a) (kind_rank b)
 
+let equal_error_kind a b = compare_error_kind a b = 0
+
 let compare_parse_error a b =
   let c = compare_error_kind a.kind b.kind in
   if c <> 0 then c
