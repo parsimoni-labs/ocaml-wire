@@ -3884,6 +3884,39 @@ let test_undecodable_description_is_invalid_argument () =
                  ]) );
     ]
 
+(* [Codec.size_of_value] answers how many bytes [Codec.encode] will write, and a
+   caller sizes its buffer from that answer. For a casetype value no case
+   projects there are no such bytes: encode refuses it. Answering with the tag
+   width instead sent the caller off to allocate for a write that cannot happen
+   and meet the refusal one line later, so the two must refuse the same value in
+   the same words. *)
+let invalid_argument_message f =
+  match f () with () -> None | exception Invalid_argument m -> Some m
+
+let test_size_of_value_refuses_unmatched_case () =
+  let buf = Bytes.make 8 '\000' in
+  let sized =
+    invalid_argument_message (fun () ->
+        ignore (Codec.size_of_value misuse_casetype_codec (Other 5) : int))
+  in
+  (match sized with
+  | None ->
+      Alcotest.fail
+        "Codec.size_of_value answered with a size for a value no case projects"
+  | Some _ -> ());
+  let encoded =
+    invalid_argument_message (fun () ->
+        Codec.encode misuse_casetype_codec (Other 5) buf 0)
+  in
+  Alcotest.(check (option string))
+    "size_of_value refuses in encode's own words" encoded sized;
+  (* The control: a value a case does project still sizes what encode writes. *)
+  let n = Codec.size_of_value misuse_casetype_codec (B 9) in
+  Codec.encode misuse_casetype_codec (B 9) buf 0;
+  Alcotest.(check int) "a projected value sizes its tag and its body" 2 n;
+  Alcotest.(check string)
+    "and encode wrote exactly those bytes" "\002\009" (Bytes.sub_string buf 0 n)
+
 let test_get_field_notin_codec () =
   (* get with a field that was never added to this codec raises Not_found
      at staging time *)
@@ -9032,6 +9065,9 @@ let suite =
       Alcotest.test_case
         "misuse: an undecodable description raises Invalid_argument" `Quick
         test_undecodable_description_is_invalid_argument;
+      Alcotest.test_case
+        "size_of_value: a casetype value no case projects raises" `Quick
+        test_size_of_value_refuses_unmatched_case;
       Alcotest.test_case "get: a bitfield word past the buffer raises" `Quick
         test_get_bitfield_word_past_buffer_raises;
       Alcotest.test_case "set: a bitfield word past the buffer writes nothing"

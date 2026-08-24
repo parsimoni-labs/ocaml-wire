@@ -818,7 +818,7 @@ and encode_casetype : type a k.
     k typ -> (a, k) case_branch list -> a -> encoder -> unit =
  fun tag cases v enc ->
   let rec find_case = function
-    | [] -> invalid_arg "Wire.casetype: encoding a value no case matches"
+    | [] -> Types.raise_no_matching_case ()
     | Case_branch { cb_inner; cb_project; _ } :: rest -> (
         match cb_project v with
         | Some (t, body) ->

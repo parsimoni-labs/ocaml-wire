@@ -62,7 +62,10 @@ val size_of_value : 'r t -> 'r -> int
     buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
     "remaining buffer space". Fixed-size byte arrays and slices contribute their
     declared region size, which {!encode} requires the value to match exactly.
-*)
+
+    Raises [Invalid_argument] for a value {!encode} would refuse, such as a
+    casetype value no case projects: there is no size to report for bytes that
+    cannot be written. *)
 
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)

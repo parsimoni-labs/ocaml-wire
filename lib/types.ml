@@ -1829,6 +1829,13 @@ and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
    [Invalid_argument]: an unencodable value is a caller error, not malformed
    input. *)
 
+(* A casetype value no branch projects has no encoding at all, so it has no size
+   either. One raiser for the size path and both encode paths, so a caller
+   sizing a buffer for such a value is told the same thing, in the same words,
+   as one trying to write it. *)
+let raise_no_matching_case () =
+  invalid_arg "Wire.casetype: encoding a value no case matches"
+
 (* Membership in a closed [enum]: the single rule both halves use, so decode and
    encode agree on which values a closed enum admits. An open enum names known
    codes without restricting the set, so it has no encode guard at all. *)
@@ -3243,10 +3250,12 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
          [project] accepts [v], then size its inner from the projected body.
          Without this the value-driven size dropped the whole casetype to 0,
          so [Codec.size_of_value] under-allocated and [encode] ran off the
-         buffer. *)
+         buffer. A value no branch projects has no size for the same reason it
+         has no bytes, and says so rather than answering with the tag width a
+         caller would then allocate for. *)
       let tag_size = Option.value ~default:0 (inner_wire_size tag) in
       let rec find = function
-        | [] -> tag_size
+        | [] -> raise_no_matching_case ()
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
             | Some (_tag, body) -> tag_size + size_of_typ_value cb_inner body

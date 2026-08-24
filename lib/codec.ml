@@ -155,7 +155,7 @@ let rec build_casetype_encoder_ctx : type a k.
   let tag_enc = build_field_encoder_ctx tag in
   fun runtime ->
     let rec find buf off v = function
-      | [] -> invalid_arg "Wire.casetype: encoding a value no case matches"
+      | [] -> Types.raise_no_matching_case ()
       | Case_branch { cb_inner; cb_project; _ } :: rest -> (
           (* [cb_project] yields the tag to write (its fixed index for an explicit
            case, or the value-carried tag for the default) and the body. *)

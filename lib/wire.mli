@@ -1067,7 +1067,9 @@ module Codec : sig
   val size_of_value : 'r t -> 'r -> int
   (** [size_of_value c v] returns the number of bytes that [encode c v] will
       write for value [v]. For fixed-size codecs, this is the same as
-      {!wire_size}; for dynamic-size codecs, the result depends on [v]. *)
+      {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises
+      [Invalid_argument] for a value {!encode} would refuse, such as a casetype
+      value no case projects. *)
 
   val is_fixed : 'r t -> bool
   (** Returns true iff the codec has a statically known size. *)

@@ -123,6 +123,11 @@ val check_nested_size : at_most:bool -> expected:int -> actual:int -> unit
 (** Check an inner value against an exact or at-most nested region. Internal
     helper shared by sizing and encoders. *)
 
+val raise_no_matching_case : unit -> 'a
+(** Raise [Invalid_argument] for a casetype value no case projects. Such a value
+    has no encoding, so it has no size either: the size path and both encode
+    paths raise through here so all three say the same thing. *)
+
 val enum_values : (string * int) list -> int list
 (** The value set of an enum's named cases. *)
 
@@ -1043,7 +1048,8 @@ val size_of_typ_value : 'a typ -> 'a -> int
     computed from the value rather than from a buffer. Falls back to [0] for
     typs whose size depends on an out-of-band parameter or sibling field --
     those only appear inside a codec, where {!Codec.size_of_value} sums per-
-    field projections instead. *)
+    field projections instead. Raises [Invalid_argument] for a casetype value no
+    case projects, which encoding refuses for the same reason. *)
 
 val c_type_of : 'a typ -> string
 (** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).
