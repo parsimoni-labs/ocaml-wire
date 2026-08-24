@@ -486,10 +486,8 @@ let read_exact reader (n : int) =
         let need = n - off in
         let take = Int.min need slice_len in
         Bytes.blit (Slice.bytes slice) (Slice.first slice) buf off take;
-        (if slice_len > take then
-           match Slice.drop take slice with
-           | None -> assert false
-           | Some rest -> Reader.push_back reader rest);
+        if slice_len > take then
+          Reader.push_back reader (Slice.drop_first_or_eod take slice);
         loop (off + take)
   in
   loop 0
