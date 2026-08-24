@@ -1,9 +1,3 @@
 (library
  (name diff_codecs)
- (modules diff_codecs)
  (libraries fmt wire fuzz_gen))
-
-(executable
- (name gen_diff)
- (modules gen_diff)
- (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix fmt))

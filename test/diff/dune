@@ -61,6 +61,14 @@
  (action
   (run ./gen_c.exe schemas 100)))
 
+; Generate the differential fuzzer's EverParse C and FFI stubs
+; Run by the code generation rule in fuzz/diff/
+
+(executable
+ (name gen_diff)
+ (modules gen_diff)
+ (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix fmt))
+
 ; Differential test: compile C stubs (includes EverParse generated C)
 ; NOTE: Only builds with BUILD_EVERPARSE=1 after running @gen_c first
 
