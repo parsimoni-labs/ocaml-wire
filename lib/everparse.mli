@@ -125,6 +125,9 @@ val entrypoint_struct : t -> struct_ option
 
 type field_action_form = No_action | On_act | On_success
 
+val equal_field_action_form : field_action_form -> field_action_form -> bool
+(** Structural equality on field action forms. *)
+
 val field_action_forms :
   struct_ -> (string option * bool * field_action_form) list
 (** [field_action_forms st] enumerates the fields of [st] in declaration order.

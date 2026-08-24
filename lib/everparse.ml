@@ -616,6 +616,11 @@ let extern_fn_names s =
 
 type field_action_form = No_action | On_act | On_success
 
+let equal_field_action_form a b =
+  match (a, b) with
+  | No_action, No_action | On_act, On_act | On_success, On_success -> true
+  | (No_action | On_act | On_success), _ -> false
+
 let field_action_forms (st : Types.struct_) =
   List.map
     (fun (Types.Field f) ->
