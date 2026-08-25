@@ -22,6 +22,14 @@ let nested_tests () =
   @ nested_cases "nested(d3)" 3
   @ nested_cases "nested(d4)" 4
 
+(* [Codec.validate] and [Codec.decode] must agree on which bytes are valid. A
+   check that reaches one and not the other leaves a caller reading fields it
+   never validated, and the differential lane cannot see it: its OCaml side is
+   [Codec.decode_exn], so it never runs the gate. *)
+let validate_agrees_tests () =
+  validate_agrees_cases "validate_agrees(d2)" 2
+  @ validate_agrees_cases "validate_agrees(d3)" 3
+
 let entry_point_tests () = entry_point_cases "entry"
 let api_tests () = api_cases "api"
 
@@ -31,8 +39,8 @@ let suite =
     ( "wire",
       registry_tests ()
       @ reject_cases "action_abort" action_abort
-      @ sized_cases "sized" @ nested_tests () @ entry_point_tests ()
-      @ api_tests ()
+      @ sized_cases "sized" @ nested_tests () @ validate_agrees_tests ()
+      @ entry_point_tests () @ api_tests ()
       @ semantic_invariant_cases "semantic"
       @ construction_guard_cases "construction"
       @ invariant_cases "invariants" )

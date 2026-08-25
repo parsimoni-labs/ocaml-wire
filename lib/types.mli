@@ -353,6 +353,10 @@ and _ typ =
   | Codec : {
       codec_name : string;
       codec_decode : eval_ctx -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> bytes -> int -> unit;
+          (** Everything [codec_decode] checks, none of what it builds. Run at
+              every use site of the sub-codec, as the generated C runs the
+              nested struct's validator. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_size_of : eval_ctx -> bytes -> int -> int;

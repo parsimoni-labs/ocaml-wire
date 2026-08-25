@@ -2,177 +2,320 @@
 
 ### Added
 
-- The fuzz suite now feeds hostile values to `Codec.encode`, not only hostile
-  bytes to `Codec.decode`. Every generated value must either be refused with
-  `Invalid_argument` or encode to bytes that decode back unchanged, so an
-  encoder that emits a frame its own decoder rejects fails the suite (#263,
-  @samoht)
+- Add `Wire.equal_error_kind`, structural equality on error kinds ignoring
+  location (#299, @samoht)
 
-- `Field.optional` over a sub-codec now documents how to make a whole field
-  group conditional, keeping the group's byte-length prefix and dependent
-  `Field.repeat` local to the group while later fields stay in the parent
-  codec (#236, @samoht)
+- Add `Wire.Everparse.equal_field_action_form` (#302, @samoht)
 
-- Codecs now run on wasm_of_ocaml (31-bit int) and js_of_ocaml (32-bit int)
-  without silently truncating values that exceed the target's native integer
-  range (#232, @samoht)
+- Add `Wire.Expr.lsr64`, an int64 logical shift right by a constant amount, for
+  isolating the high bits of a full-width field inside a constraint. It projects
+  to a 3D refinement EverParse verifies (#232, @samoht)
 
-- `Wire.Expr.lsr64` is an int64 logical shift right with a constant amount,
-  for isolating high bits of a full-width field inside a constraint; it
-  projects to a 3D refinement EverParse verifies (#232, @samoht)
+- Support wasm_of_ocaml (31-bit int) and js_of_ocaml (32-bit int). Codecs no
+  longer silently truncate values that exceed the target's native integer range
+  (#232, @samoht)
+
+- Document how to make a whole field group conditional with `Field.optional`
+  over a sub-codec, keeping the group's byte-length prefix and dependent
+  `Field.repeat` local to the group while later fields stay in the parent codec
+  (#236, @samoht)
+
+- Extend the fuzz suite to hostile values given to `Codec.encode`, not only
+  hostile bytes given to `Codec.decode`: a generated value must either be
+  refused with `Invalid_argument` or encode to bytes that decode back unchanged
+  (#263, @samoht)
 
 ### Changed
 
-- **Breaking:** `Codec.encode` and `Wire.to_string` now raise
-  `Invalid_argument` on a value their own decoder rejects, instead of writing
-  bytes that fail to read back. This covers a closed `enum` given an unlisted
-  value, an `all_zeros` padding field given a non-zero byte, a
-  `byte_array_where` byte that fails its `~per_byte` refinement, and a record
-  whose `where` clause or field `~constraint_` does not hold for the values
-  supplied. Encoding a well-formed value is unchanged (#263, @samoht)
+- **Breaking:** `Codec.encode` and `Wire.to_string` raise `Invalid_argument` on
+  a value their own decoder rejects, rather than writing bytes that fail to read
+  back: an unlisted value in a closed `enum`, a non-zero byte in an `all_zeros`
+  padding field, a `byte_array_where` byte that fails its `~per_byte`
+  refinement, and a record whose `where` clause or field `~constraint_` does not
+  hold for the values supplied. Encoding a well-formed value is unchanged
+  (#263, @samoht)
 
-- **Breaking:** encoding a `byte_array`, `byte_array_where` or `byte_slice`
-  whose length differs from its declared `~size` now raises
-  `Invalid_argument`. It used to silently truncate a longer value, zero-pad a
-  shorter one, or (through the streaming writer) write the value's own length
-  and desynchronise every following field, so the bytes on the wire could
-  differ from the value a caller had signed, hashed or length-prefixed. For a
-  short value in a fixed-size region use `zeroterm_at_most`, which is
-  NUL-terminated and round-trips (#259, @samoht)
+- **Breaking:** Encoding an integer a field cannot hold now raises
+  `Invalid_argument` instead of dropping the bits that do not fit. A fixed width
+  accepts exactly what its decoder produces, `0` to `2^n - 1` unsigned and
+  `-2^(n-1)` to `2^(n-1) - 1` signed, so `int8` refuses `200` rather than
+  writing it back as `-56`, and `bits ~width` and `uint ~size` accept exactly
+  their declared width. Applies to `Wire.to_string`, `Codec.encode` and
+  `Codec.set` alike. A masked value is itself legal at that width, so nothing
+  downstream could tell it from a value meant that way (#275, @samoht)
 
-- Generated `.3d` C struct tags are now named `Wire<Name>` rather than
+- **Breaking:** Encoding a `byte_array`, `byte_array_where` or `byte_slice`
+  whose length differs from its declared `~size` raises `Invalid_argument`. It
+  used to truncate a longer value, zero-pad a shorter one, or, through the
+  streaming writer, write the value's own length and desynchronise every
+  following field, so the bytes on the wire could differ from the value a caller
+  had signed, hashed or length-prefixed. For a short value in a fixed-size
+  region use `zeroterm_at_most`, which is NUL-terminated and round-trips
+  (#259, @samoht)
+
+- Require `bytesrw` >= 0.4.0, for `Bytes.Slice.drop_first_or_eod`
+  (#297, @samoht)
+
+- `Wire.uint` decodes to `Optint.Int63.t` rather than a native `int`, like
+  `uint63` before it: a 7-byte value needs 56 bits, which does not fit an int on
+  a narrow-int target and used to truncate there. Read the value with
+  `Optint.Int63.to_int` / `to_int64` (#232, @samoht)
+
+- Spell `Wire.uint`'s result type as `Optint.Int63.t` rather than the `UInt63.t`
+  alias, reachable only through the unstable `Wire.Private`. Same type, same
+  63-bit carrier (#270, @samoht)
+
+- `Codec.load_word` reads the bitfield base word as an `Optint.t` (was a native
+  `int`) and `Codec.extract` takes it, so the word-at-a-time batch API is exact
+  for 32-bit bases on every platform; on a 64-bit host the word stays an unboxed
+  int (#232, @samoht)
+
+- Change the exception raised for a description no decoder or encoder can
+  handle, such as a casetype value no case projects or an unresolved type
+  reference, from `Failure` to the `Invalid_argument` documented in `wire.mli`.
+  The buffer is untouched on those paths, so only the exception type changes
+  (#291, @samoht)
+
+- Change the `zeroterm` and `zeroterm_at_most` encode errors to report as
+  `Wire.encode` on every path. `Codec.encode` reported the same two faults, a
+  NUL in the value and a value too long for its region, under its own name
+  (#269, @samoht)
+
+- Change the generated `.3d` C struct tags to `Wire<Name>` rather than
   `_<Name>`. Public typedef names are unchanged, and standalone entrypoints
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
-- `uint` now decodes to `Optint.Int63.t` rather than a native `int`, like
-  `uint63` before it: a 7-byte value needs 56 bits, which does not fit an
-  int on a narrow-int target (js_of_ocaml, wasm_of_ocaml) and used to
-  silently truncate there. Read the value with `Optint.Int63.to_int` /
-  `to_int64` (#232, @samoht)
-
-- `Codec.load_word` reads the bitfield base word as an `Optint.t` (was a
-  native `int`) and `Codec.extract` takes it, so the word-at-a-time batch
-  API is exact for 32-bit bases on every platform; on a 64-bit host the
-  word stays an unboxed int (#232, @samoht)
-
 ### Fixed
 
-- `Codec.set` on a `byte_array`, `byte_array_where` or `byte_slice` whose
-  `~size` is only known at decode time now raises `Invalid_argument` unless the
-  value is exactly that many bytes, the same contract encoding already has. It
-  used to write the value's own length rather than the field's declared size,
-  so an oversized value that still fitted the buffer ran past the field and
-  silently overwrote the fields after it. The blit was always bounds-checked
-  against the buffer, so what this corrupted was neighbouring protocol fields,
-  with no error to signal it (#262, @samoht)
+- Fix `Codec.validate` skipping a sub-codec field's constraints, `where`,
+  closed-enum membership, `per_byte` refinements and actions, which now reject
+  the same bytes as decoding and generated EverParse validators (#311, @samoht)
 
-- A constant size or length expression such as `Expr.(int 2 + int 2)` now
-  behaves exactly like the literal `int 4`. It used to slip past every check
-  and fast path that looks for a literal size, so such a field encoded
-  without its exact-length check, reported its codec as variable-size, and
-  bypassed the `uint` 1-7 size guard (#259, @samoht)
+- Fix `Codec.{get,set}` on a bitfield whose base word is not entirely inside the
+  buffer. A `u32` word is assembled from unchecked byte reads, so a short frame
+  read at an application-chosen offset answered with the bytes that followed it,
+  and `set` wrote over them and left half a word behind when it raised. An
+  attacker sending a truncated frame could read and corrupt whatever sits after
+  it in the buffer. The word's span is now checked before it is touched
+  (#288, @samoht)
 
-- `Wire.Ascii` diagrams now render every expression a size or constraint can
-  contain. Bitmasks, shifts, division, casts, conditionals, `sizeof` and
-  parameter references used to print as a bare `?`, so a trailing payload
-  sized by `Wire.rest_bytes` showed up as `(? - ? bytes)` (#257, @samoht)
+- Fix `Codec.set` on a `byte_array`, `byte_array_where` or `byte_slice` whose
+  `~size` is only known at decode time. It wrote the value's own length rather
+  than the field's declared size, so an oversized value that still fitted the
+  buffer ran past the field and overwrote the fields after it with no error to
+  signal it. It now raises `Invalid_argument` unless the value is exactly that
+  many bytes, the contract encoding already had (#262, @samoht)
 
-- `Field.repeat` and `Field.repeat_seq` now reject a `byte_array` or
-  `byte_slice` element declared with a size of zero, and `Wire.of_string` /
-  `Wire.of_bytes` report an end-of-input error instead of looping forever when
-  a repeat element turns out to consume no bytes (#256, @samoht)
+- Fix `Codec.set` on a sub-codec, casetype or array field. The writer laid the
+  value down and only then checked it, so a refused value reached the buffer
+  against the documented promise to leave it untouched; those writers now
+  restore the bytes they replaced. `Codec.encode` is not transactional and now
+  says so: after a failed encode the destination holds a partial record
+  (#280, @samoht)
 
-- `Wire.Everparse.write ~mode:`Standalone` now fails with a clear error when
-  two codecs of a family declare different types under the same name, instead
-  of silently emitting the first and generating verified C that enforces the
-  wrong specification for every other codec. Types declared identically by
-  several codecs still collapse to a single emitted declaration (#255, @samoht)
+- Fix `Codec.{get,set}` on an `optional` or `optional_or` field whose gate is
+  fixed at construction. `get` raised
+  `Failure "build_field_reader: unsupported type"` on a shape `Codec.decode`
+  reads without trouble; both accessors now handle it. A runtime gate stays
+  unsupported and refuses with `Invalid_argument` naming the shape
+  (#280, @samoht)
 
-- Parameter-free fixed-offset `Codec.get` and `Codec.set` accessors no longer
-  add per-call allocation: direct scalars represented as immediate OCaml
-  values, bitfields, enums, and maps whose callbacks return immediate values
-  measure zero words on a non-Flambda release build. Boxed results such as
-  `int64`, and allocations performed by a map callback itself, remain visible
-  to callers. The same accessors are also faster than before (#239, @samoht)
+- Fix `Codec.size_of_value` on a casetype value no case projects. It answered
+  with the tag width for a value `Codec.encode` refuses, so a caller sized a
+  buffer for a write that could never happen. It now raises `Invalid_argument`
+  like encode, and `Codec.set` refuses before writing (#296, @samoht)
 
-- Optional fields that can expose a consume-rest payload are now rejected when
-  followed by another field, rather than allowing that payload to swallow the
-  remainder of the enclosing codec (#239, @samoht)
+- Fix `Codec.size_of_value` on fixed-size `byte_array`, `byte_array_where` and
+  `byte_slice` fields, which now reports their declared width, so a buffer
+  allocated from it exactly fits the bytes written (#238, @samoht)
 
-- Operations on the same parametric codec are now safe to re-enter or
-  interleave across fibers with different `Param.env` values. Embedded codecs,
-  casetype bodies, fixed-size wrappers, and repeated elements no longer read
-  another operation's field sizes (#239, @samoht)
+- Fix `Codec.validate` raising `Invalid_argument` where a parse error was due.
+  It reaches a field at whatever offset the layout computes and those reads were
+  unguarded, so an overlong variable-size field pushing its successors past the
+  end of the buffer crashed the documented gate for untrusted input. Same for
+  `Wire.of_bytes` and `Wire.of_string` on a struct, an `optional` gated on a
+  runtime expression, and a `uint` of runtime width. All now report end of input
+  at the field's own offset (#271, #276, @samoht)
 
-- EverParse generation now accepts output paths, executable paths, and schema
-  filenames containing spaces or shell metacharacters without interpreting
-  them as commands (#239, @samoht)
+- Fix `Codec.decode` and `Codec.validate` on a `byte_array_where`. The
+  `~per_byte` refinement ran on the direct parser alone, so both accepted spans
+  that `Wire.of_string` and the EverParse validator built from the same schema
+  reject, and validate is the documented gate before reading untrusted bytes
+  zero-copy (#268, @samoht)
 
-- `Codec.size_of_value` now reports the declared width of fixed-size
-  `byte_array`, `byte_array_where`, and `byte_slice` fields. Buffers allocated
-  from it now exactly fit the bytes written when short values are zero-padded or
-  long values are truncated (#238, @samoht)
+- Fix `Codec.validate` accepting a `Field.repeat` whose byte budget does not
+  split into whole elements. `Codec.decode` and the EverParse validator built
+  from the same schema both reject it (#305, @samoht)
 
-- `nested` now requires its inner value to consume exactly the declared region
-  on decode and encode. Use `nested_at_most` when trailing region padding is
-  intentional; it remains permissive and zero-pads on encode (#238, @samoht)
+- Fix `Codec.validate` allocating in proportion to lengths the sender chooses.
+  It ran the field readers for their checks and dropped what they built, so a
+  refined span, a `zeroterm_at_most` and an `all_zeros` each cost a copy of the
+  payload, a `repeat` cost its whole element sequence plus a box per wide scalar
+  or span element, and a closed `enum` cost three words per named case on every
+  element read. The checks now run over the buffer where it lies, gated spans
+  included, so what validate allocates is constant in the frame size, the
+  element count and the case count, and a codec with no parameters allocates
+  nothing at all. `Codec.decode` no longer pays for a second copy of a span it
+  returns (#286, #289, #290, #292, #293, #294, #295, @samoht)
 
-- `Codec.v` now rejects duplicate field names and distinct parameter handles
-  with the same name. Name-based field access and parameter environments can no
-  longer silently alias the first declaration (#238, @samoht)
+- Fix `Wire.of_string` and `Wire.of_bytes` allocating a closure and an option on
+  every decode of a struct type, from the validator cache lookup (#269, @samoht)
 
-- `Field.repeat` now consumes and emits exactly its declared byte budget.
-  Fixed-width remainders, variable-width elements that cross the boundary, and
-  encode under/overshoots are rejected instead of being silently accepted
+- Fix the per-call allocation of a parameter-free fixed-offset `Codec.get` or
+  `Codec.set`: direct scalars represented as immediate OCaml values, bitfields,
+  enums, and maps whose callbacks return immediate values measure zero words on
+  a non-Flambda release build. Boxed results such as `int64`, and allocations
+  performed by a map callback itself, remain visible to callers. The same
+  accessors are also faster than before (#239, @samoht)
+
+- Fix the byte offset a parse error reports. A failing field `~constraint_`, an
+  `enum` membership failure and a staged read through a bitfield reported the
+  enclosing record's base, and a `lookup` tag out of range reported byte 0
+  whatever offset the frame was read at, so a caller locating the field from
+  `at` read or rewrote the wrong bytes. Each now names the field's own offset; a
+  dynamic layout still reports the record base (#306, @samoht)
+
+- Fix `Unexpected_eof`'s `expected` and `got`. Six sites passed absolute buffer
+  positions where the fields are documented as byte counts, so the pair shifted
+  with the offset the frame was read at and could come out equal to each other.
+  They now report the bytes the value asked for against the bytes that were
+  there (#285, @samoht)
+
+- Fix the error reported for a failure under a size or offset expression. A
+  validation error or an exception from a `map` callback came out as an end of
+  input on a buffer that was long enough, and a byte span whose size expression
+  went negative escaped as `Invalid_argument "String.sub"`. Truncation is now
+  raised by the reads themselves, naming the missing span, the other two keep
+  their own message and a value out of range (#267, @samoht)
+
+- Fix `Field.repeat` consuming and emitting more or less than its declared byte
+  budget. Fixed-width remainders, variable-width elements that cross the
+  boundary, and encode under- and overshoots are now rejected instead of being
+  accepted (#238, @samoht)
+
+- Fix the `array` and `array_seq` encoders accepting a value with the wrong
+  element count: a short value left zero-filled phantom elements. They now
+  require exactly the declared number, and reject a long value before any bytes
+  are written (#238, @samoht)
+
+- Fix `nested`, which now requires its inner value to consume exactly the
+  declared region on decode and encode. Use `nested_at_most` when trailing
+  region padding is intentional; it remains permissive and zero-pads on encode
   (#238, @samoht)
 
-- `array` and `array_seq` encoders now require exactly the declared number of
-  elements. Short values no longer leave zero-filled phantom elements, and long
-  values are rejected before any bytes are written (#238, @samoht)
+- Fix a constant size or length expression such as `Expr.(int 2 + int 2)`, which
+  now behaves exactly like the literal `int 4`. It used to slip past every check
+  and fast path that looks for a literal size, so such a field encoded without
+  its exact-length check, reported its codec as variable-size, and bypassed the
+  `uint` 1-7 size guard (#259, @samoht)
 
-- Codec operations now reject a `Param.env` created for another codec before
-  reading its positional slots. This applies consistently to encode, decode,
-  validation, and staged getters, including codecs whose parameter counts
-  happen to match (#237, @samoht)
+- Fix `Codec.v` accepting duplicate field names, and distinct parameter handles
+  with the same name. Name-based field access and parameter environments
+  silently aliased the first declaration (#238, @samoht)
 
-- Casetype projection and `Param.bind` now translate unfittable `uint32`,
-  `uint63`, and `uint` values into contextual `Invalid_argument` exceptions
-  naming the case index or parameter, instead of leaking an Optint `Failure` on
-  narrow-int targets (#237, @samoht)
+- Fix operations on the same parametric codec being unsafe to re-enter or
+  interleave across fibers with different `Param.env` values. Embedded codecs,
+  casetype bodies, fixed-size wrappers and repeated elements no longer read
+  another operation's field sizes (#239, @samoht)
 
-- `Codec.v` now reports a clear construction error when a byte-size product
-  `field * constant` has a simple `field <= bound` constraint whose maximum can
-  reach EverParse's `2^32` limit. Products without this conclusive shape remain
+- Fix codec operations reading the positional slots of a `Param.env` created for
+  another codec, which is now rejected first. This applies to encode, decode,
+  validation and staged getters, including codecs whose parameter counts happen
+  to match (#237, @samoht)
+
+- Fix casetype projection and `Param.bind` leaking an Optint `Failure` on a
+  narrow-int target for an unfittable `uint32`, `uint63` or `uint` value. They
+  now raise a contextual `Invalid_argument` naming the case index or parameter
+  (#237, @samoht)
+
+- Fix 32-bit bitfields on a narrow-int target: a field touching bit 31 of its
+  base word used to decode and encode with that bit dropped there
+  (#232, @samoht)
+
+- Fix `is_finite` / `is_nan` on a float64 field, which now evaluate the full
+  64-bit pattern, so a NaN can no longer pass validation on a narrow-int target.
+  The emitted 3D refinement is unchanged (#232, @samoht)
+
+- Fix reading a `uint32` / `uint63` field whose value exceeds the native int
+  leaking a bare `Failure` out of decode on a narrow-int target: constraint
+  evaluation raises the typed `Value_out_of_range`, and the validation slots
+  mirror only values the int can hold, as `uint64` already did (#232, @samoht)
+
+- Reject a `Field.repeat` element whose greedy tail sits inside a sub-codec.
+  Such a tail runs to the end of the repeat's byte budget and swallows every
+  element after it, so the shape has no valid multi-element encoding; `repeat`
+  only looked at the element's own last field (#280, @samoht)
+
+- Reject a byte span of literal size zero as an `array` element. It built on the
+  OCaml side but has no 3D projection, EverParse refusing a list whose element
+  consumes no bytes; `Field.repeat` already refused it (#266, @samoht)
+
+- Reject a `byte_array` or `byte_slice` element of size zero in `Field.repeat`
+  and `Field.repeat_seq`, and report an end-of-input error from `Wire.of_string`
+  / `Wire.of_bytes` instead of looping forever when a repeat element turns out
+  to consume no bytes (#256, @samoht)
+
+- Reject an optional field that can expose a consume-rest payload and is
+  followed by another field, rather than letting that payload swallow the
+  remainder of the enclosing codec (#239, @samoht)
+
+- Reject at construction, with a clear error, a byte-size product
+  `field * constant` whose `field <= bound` constraint lets the maximum reach
+  EverParse's `2^32` limit. Products without this conclusive shape remain
   deferred to EverParse, avoiding speculative rejections (#237, @samoht)
 
-- `dune runtest` now diffs a package's committed `.3d` specs and `dune.inc`
-  against freshly generated ones, so editing a codec without refreshing them
-  fails with a promotable report instead of leaving a stale spec committed
+- Fix `Wire.Ascii` diagrams, which now render every expression a size or
+  constraint can contain. Bitmasks, shifts, division, casts, conditionals,
+  `sizeof` and parameter references used to print as a bare `?`, so a trailing
+  payload sized by `Wire.rest_bytes` showed up as `(? - ? bytes)`
+  (#257, @samoht)
+
+- Fix the counter naming the synthesised element type of a `byte_array_where`.
+  Two domains building descriptions at once could mint the same name, whose 3D
+  typedef was then emitted twice (#266, @samoht)
+
+- Reject two codecs whose generated artifacts collide, names differing only in
+  the leading capital (one `.3d` file) or in an uppercase run (two `_Fields.h`
+  sharing an include guard and a plug struct tag). The second write used to win,
+  leaving the shadowed codec's stubs validating against another codec's spec
+  (#272, @samoht)
+
+- Fix standalone `Wire.Everparse.write` emitting only the first of two codecs of
+  a family that declare different types under the same name, generating verified
+  C that enforces the wrong specification for every other codec. It now fails
+  with a clear error. Types declared identically by several codecs still
+  collapse to a single emitted declaration (#255, @samoht)
+
+- Fix the generated FFI stubs losing field values. The parse callback collected
+  the boxed arguments in a bare `value` array, which is not a GC root, so a
+  minor collection triggered by a later box could move or reclaim an earlier one
+  and the continuation silently received garbage. `CAMLlocalN` now roots them
+  (#272, @samoht)
+
+- Fix the emitted `EverParseEndianness.h` on a target that is neither
+  Linux/glibc nor Apple. The `__BYTE_ORDER__` branch was spliced only when the
+  header was absent, which it never is, so the header a cross-compiled
+  standalone archive gets stopped at `#error "Unsupported platform"`
+  (#272, @samoht)
+
+- Fix EverParse generation interpreting output paths, executable paths and
+  schema filenames that contain spaces or shell metacharacters as commands
+  (#239, @samoht)
+
+- Add a `dune runtest` check that diffs a package's committed `.3d` specs and
+  `dune.inc` against freshly generated ones, so editing a codec without
+  refreshing them fails with a promotable report instead of leaving a stale spec
+  committed (#235, @samoht)
+
+- Install a `<Name>.provenance` stamp with the EverParse C, recording the stdlib
+  BLAKE2b-256 digest of the `.3d` it was built from. `dune runtest` rechecks it
+  without EverParse, so a changed spec can no longer keep stale C
   (#235, @samoht)
-
-- EverParse C generation now installs a `<Name>.provenance` stamp recording the
-  stdlib BLAKE2b-256 digest of the `.3d` it was built from, and `dune runtest`
-  rechecks it without EverParse, so a changed spec can no longer keep stale C
-  (#235, @samoht)
-
-- 32-bit bitfields are now exact on a narrow-int target: a field touching
-  bit 31 of its base word used to decode and encode with that bit silently
-  dropped there (#232, @samoht)
-
-- `is_finite` / `is_nan` on a float64 field now evaluate the full 64-bit
-  pattern, so a NaN can no longer pass validation on a narrow-int target;
-  the emitted 3D refinement is unchanged (#232, @samoht)
-
-- Reading a `uint32` / `uint63` field whose value exceeds the native int no
-  longer leaks a bare `Failure` out of decode on a narrow-int target:
-  constraint evaluation raises the typed `Value_out_of_range`, and the
-  validation slots mirror only values the int can hold, as `uint64` already
-  did (#232, @samoht)
 
 ### Removed
 
-- The wire package no longer depends on eio: nothing in the library used it,
-  it was only ever linked, unused, into `wire.diff` (#233, @samoht)
+- Delete the dependency on `eio`. Nothing in the library used it, it was only
+  ever linked, unused, into `wire.diff` (#233, @samoht)
 
 ## 1.1.0
 

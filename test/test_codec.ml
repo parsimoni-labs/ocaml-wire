@@ -383,6 +383,111 @@ let test_validate_matches_decode_rejections () =
   in
   rejects "array element constraint" arr_c "\x01\x63"
 
+(* [Codec.validate] is the gate [codec.mli] tells a caller to run on untrusted
+   input before reading fields zero-copy, so a sub-codec used as a field has to
+   be checked where it sits. EverParse compiles that field to a call to the
+   nested struct's validator, which enforces everything the struct declares, so
+   a use site that skipped those checks would accept bytes the verified C
+   rejects. Each case puts the sub-codec behind a header byte, so a use site
+   that validated at the wrong offset fails too. *)
+type sub_codec_case =
+  | Sub_codec_case : string * 'a Codec.t * string -> sub_codec_case
+
+let sub_codec_check_cases =
+  let outer name inner =
+    Codec.v name
+      (fun h s -> (h, s))
+      Codec.[ Field.v "h" uint8 $ fst; Field.v "s" (codec inner) $ snd ]
+  in
+  let constraint_inner =
+    Codec.v "SubConstraint" Fun.id
+      Codec.
+        [
+          Field.v "v" uint8 ~self_constraint:(fun v -> Expr.(v >= int 10))
+          $ Fun.id;
+        ]
+  in
+  let where_inner =
+    let f_a = Field.v "a" uint8 and f_b = Field.v "b" uint8 in
+    Codec.v "SubWhere"
+      ~where:Expr.(Field.ref f_a < Field.ref f_b)
+      (fun a b -> (a, b))
+      Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let enum_inner =
+    Codec.v "SubEnum" Fun.id
+      Codec.[ Field.v "e" (enum "Code" [ ("A", 1); ("B", 2) ] uint8) $ Fun.id ]
+  in
+  let action_inner =
+    let f_x = Field.v "x" uint8 in
+    let f_y =
+      Field.v "y" uint8
+        ~action:
+          (Action.on_success
+             [ Action.return_bool Expr.(Field.ref f_x < int 128) ])
+    in
+    Codec.v "SubAction" (fun x y -> (x, y)) Codec.[ f_x $ fst; f_y $ snd ]
+  in
+  let per_byte_inner =
+    Codec.v "SubPerByte" Fun.id
+      Codec.
+        [
+          Field.v "s"
+            (byte_array_where ~size:(int 2) ~per_byte:(fun b ->
+                 Expr.(b >= int 0x41)))
+          $ Fun.id;
+        ]
+  in
+  let variable_inner =
+    let f_len =
+      Field.v "len" uint8 ~self_constraint:(fun v -> Expr.(v <= int 2))
+    in
+    let f_data = Field.v "data" (byte_array ~size:(Field.ref f_len)) in
+    Codec.v "SubVariable"
+      (fun len data -> (len, data))
+      Codec.[ f_len $ fst; f_data $ snd ]
+  in
+  let codec_in_codec =
+    Codec.v "SubOfSub" Fun.id
+      Codec.[ Field.v "i" (codec constraint_inner) $ Fun.id ]
+  in
+  [
+    Sub_codec_case
+      ("field constraint", outer "OuterConstraint" constraint_inner, "\000\001");
+    Sub_codec_case
+      ("codec where", outer "OuterWhere" where_inner, "\000\002\001");
+    Sub_codec_case ("enum membership", outer "OuterEnum" enum_inner, "\000\009");
+    Sub_codec_case
+      ("field action", outer "OuterAction" action_inner, "\000\200\000");
+    Sub_codec_case
+      ("per-byte span", outer "OuterPerByte" per_byte_inner, "\000\000\000");
+    Sub_codec_case
+      ( "variable inner",
+        outer "OuterVariable" variable_inner,
+        "\000\009aaaaaaaaa" );
+    Sub_codec_case
+      ("codec in codec", outer "OuterOfSub" codec_in_codec, "\000\001");
+  ]
+
+let test_validate_runs_sub_codec_checks () =
+  List.iter
+    (fun (Sub_codec_case (what, c, bytes)) ->
+      let buf = Bytes.of_string bytes in
+      let decoded =
+        match Codec.decode c buf 0 with
+        | Ok _ -> Alcotest.failf "%s: decode accepted a bad sub-codec" what
+        | Error e -> e
+      in
+      match Codec.validate c buf 0 with
+      | () ->
+          Alcotest.failf "%s: validate accepted what decode rejects (%a)" what
+            pp_parse_error decoded
+      | exception Parse_error e ->
+          if not (equal_error_kind e.kind decoded.kind) then
+            Alcotest.failf "%s: validate rejected for another reason (%a vs %a)"
+              what pp_parse_error e pp_parse_error decoded)
+    sub_codec_check_cases
+
 (* The allocation tests read [Gc.minor_words], which only counts under the
    native and bytecode runtimes; under wasm_of_ocaml or js_of_ocaml the
    counters stay at zero and the assertions would pass vacuously. *)
@@ -7901,9 +8006,13 @@ let test_validate_allocation_is_bounded () =
    multiplier per packet. The byte spans and the 64-bit and floating-point
    scalars are here for the same reason one step in: their reader's only product
    is the value, boxed for the wide scalars and copied for the spans, so on a
-   walk that keeps nothing they have nothing to do. What an element's reader has to do to check it (a
-   sub-codec's constraints, a casetype's tag dispatch) is a separate question,
-   so those stay out. *)
+   walk that keeps nothing they have nothing to do. A sub-codec element is here
+   because it carries its own validator: the C loop EverParse generates calls
+   that validator and keeps one position, so validating a repeat of them must
+   keep no more, where building a record per element would hand the sender the
+   multiplier again. What an element's reader has to do to check it (a
+   casetype's tag dispatch, a [map]'s conversion) is a separate question, so
+   those stay out. *)
 let f_repeat_len = Field.v "len" uint16be
 
 let repeat_budget_codec elem =
@@ -7939,6 +8048,20 @@ let repeat_budget_case ?(buf = repeat_budget_buf) name elem =
       let buf = buf n in
       fun () -> Codec.validate c buf 0 )
 
+(* Four bytes wide, so a 512- and a 4096-byte budget both divide into whole
+   elements, and constrained, so the element has something to check. *)
+let repeat_elem_codec =
+  Codec.v "RepeatElem"
+    (fun a b c d -> (a, b, c, d))
+    Codec.
+      [
+        ( Field.v "a" uint8 ~self_constraint:(fun r -> Expr.(r <> int 0))
+        $ fun (a, _, _, _) -> a );
+        (Field.v "b" uint8 $ fun (_, b, _, _) -> b);
+        (Field.v "c" uint8 $ fun (_, _, c, _) -> c);
+        (Field.v "d" uint8 $ fun (_, _, _, d) -> d);
+      ]
+
 let test_repeat_validate_allocation_is_bounded () =
   skip_unless_gc_counters ();
   let small = 512 and large = 4096 in
@@ -7969,6 +8092,7 @@ let test_repeat_validate_allocation_is_bounded () =
         repeat_budget_case "byte_array" (byte_array ~size:(int 4));
         repeat_budget_case "byte_slice" (byte_slice ~size:(int 4));
         repeat_budget_case ~buf:repeat_zeroterm_buf "zeroterm" zeroterm;
+        repeat_budget_case "codec" (codec repeat_elem_codec);
       ]
   in
   report_span_failures "validate allocation scales with a repeat's budget"
@@ -8477,6 +8601,8 @@ let suite =
         test_validate_check_free_no_alloc;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
+      Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
+        test_validate_runs_sub_codec_checks;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
         test_decode_enforces_typ_where;
       Alcotest.test_case "validate: enforces typ-level where" `Quick

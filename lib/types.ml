@@ -241,6 +241,12 @@ and _ typ =
   | Codec : {
       codec_name : string;
       codec_decode : eval_ctx -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> bytes -> int -> unit;
+          (* Everything [codec_decode] checks, none of what it builds. The
+             OCaml counterpart of the call to a nested struct's validator that
+             EverParse generates for a sub-struct field: a use site runs the
+             sub-codec's constraints, [where], enum membership, span refinements
+             and actions without materialising the record. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;

@@ -67,6 +67,7 @@ let is_nan (f : float Field.t) : bool Types.expr =
 
 let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.embed_decode_ctx c in
+  let codec_validate = Codec.embed_validate_ctx c in
   let codec_encode = Codec.embed_encode_ctx c in
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
@@ -77,6 +78,7 @@ let codec (c : 'r Codec.t) : 'r typ =
         {
           codec_name = Codec.name c;
           codec_decode;
+          codec_validate;
           codec_encode;
           codec_fixed_size = Some n;
           codec_size_of = (fun _ctx _buf _off -> n);
@@ -89,6 +91,7 @@ let codec (c : 'r Codec.t) : 'r typ =
         {
           codec_name = Codec.name c;
           codec_decode;
+          codec_validate;
           codec_encode;
           codec_fixed_size = None;
           codec_size_of = size_of;
