@@ -1434,6 +1434,24 @@ module Everparse : sig
     val field_kinds : struct_ -> (string * ocaml_kind) list
     (** Named field names with their OCaml type kind. *)
 
+    type int_slot = { width : int; endian : endian }
+    (** Byte width and order of a whole-byte integer field on the wire. *)
+
+    type field_seed = { field : string; slot : int_slot; values : int64 list }
+    (** A field whose own declaration singles out particular wire values. *)
+
+    val field_seeds : struct_ -> field_seed list
+    (** [field_seeds s] is, for each named whole-byte integer field of [s] whose
+        declaration singles out values, the byte slot it occupies and those
+        values: the constant an equality or inequality refinement names, the
+        values either side of an ordering refinement's boundary, and the members
+        of a closed enumeration. Bitfields are omitted because their base word
+        is shared, so a byte offset alone cannot seed one.
+
+        The list over-approximates: it names candidates worth trying, not values
+        the description is guaranteed to admit, so a consumer must run each
+        through the codec to learn the verdict. *)
+
     val struct_project :
       struct_ -> name:string -> keep:Field.packed list -> struct_
     (** [struct_project s ~name ~keep] returns a copy of [s] renamed to [name]

@@ -3337,3 +3337,111 @@ let ml_type_of : type a. a typ -> string = function
   | Int64 _ -> "int64"
   | Float32 _ | Float64 _ -> "float"
   | _ -> "int"
+
+(* -- Seed values: what a field's own declaration says its wire bytes may be.
+
+   A differential test over uniformly drawn bytes is only as good as the odds
+   of drawing something the parser accepts. A field pinned to a constant --
+   [magic == 0x53504F53] -- leaves one accepting value in 2^32, so the whole
+   corpus is rejects and both implementations agree on garbage. The values are
+   already in the description, so expose them rather than making every corpus
+   generator interpret refinements independently. -- *)
+
+type int_slot = { width : int; endian : endian }
+type field_seed = { field : string; slot : int_slot; values : int64 list }
+
+(* Look through decorations that do not change the wire encoding. Bitfields are
+   omitted deliberately: their base word is shared with neighbouring fields,
+   so a byte offset alone is not enough to seed one correctly. *)
+let rec int_slot_of_typ : type a. a typ -> int_slot option = function
+  | Uint8 | Int8 -> Some { width = 1; endian = Big }
+  | Uint16 e | Int16 e -> Some { width = 2; endian = e }
+  | Uint32 e | Int32 e -> Some { width = 4; endian = e }
+  | Uint63 e | Uint64 e | Int64 e -> Some { width = 8; endian = e }
+  | Uint_var { size = Int width; endian } -> Some { width; endian }
+  | Enum { base; _ } -> int_slot_of_typ base
+  | Where { inner; _ } -> int_slot_of_typ inner
+  | Map { inner; _ } -> int_slot_of_typ inner
+  | Optional { inner; _ } -> int_slot_of_typ inner
+  | Optional_or { inner; _ } -> int_slot_of_typ inner
+  | _ -> None
+
+let neighbours k =
+  let before = if Int64.equal k Int64.min_int then [] else [ Int64.pred k ] in
+  let after = if Int64.equal k Int64.max_int then [] else [ Int64.succ k ] in
+  before @ (k :: after)
+
+(* An equality names the value itself; an ordering names the values either side
+   of its boundary. Conjunction and disjunction both contribute their operands'
+   values. This is intentionally an over-approximation: consumers must ask the
+   codec for the verdict, so an inadmissible candidate costs one retry rather
+   than producing a wrong oracle. *)
+let constraint_values name (e : bool expr) =
+  let is_self : type a. a expr -> bool = function
+    | Ref (_, n) -> String.equal n name
+    | _ -> false
+  in
+  let literal : type a. a expr -> int64 option = function
+    | Int k -> Some (Int64.of_int k)
+    | Int64 k -> Some k
+    | _ -> None
+  in
+  let against : type a. a expr -> a expr -> int64 option =
+   fun x y ->
+    if is_self x then literal y else if is_self y then literal x else None
+  in
+  let rec go : bool expr -> int64 list = function
+    | And (a, b) | Or (a, b) -> go a @ go b
+    | Not a -> go a
+    | Eq (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
+    | Ne (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
+    | Lt (a, b) -> (
+        match against a b with Some k -> neighbours k | None -> [])
+    | Le (a, b) -> (
+        match against a b with Some k -> neighbours k | None -> [])
+    | Gt (a, b) -> (
+        match against a b with Some k -> neighbours k | None -> [])
+    | Ge (a, b) -> (
+        match against a b with Some k -> neighbours k | None -> [])
+    | _ -> []
+  in
+  go e
+
+(* A closed enumeration lists every value the field may take. *)
+let rec enum_seed_values : type a. a typ -> int64 list = function
+  | Enum { cases; closed = true; _ } ->
+      List.map (fun (_, value) -> Int64.of_int value) cases
+  | Where { inner; _ } -> enum_seed_values inner
+  | Map { inner; _ } -> enum_seed_values inner
+  | Optional { inner; _ } -> enum_seed_values inner
+  | Optional_or { inner; _ } -> enum_seed_values inner
+  | _ -> []
+
+let rec typ_constraints : type a. string -> a typ -> int64 list =
+ fun name -> function
+  | Where { cond; inner } ->
+      constraint_values name cond @ typ_constraints name inner
+  | Map { inner; _ } -> typ_constraints name inner
+  | Optional { inner; _ } -> typ_constraints name inner
+  | Optional_or { inner; _ } -> typ_constraints name inner
+  | _ -> []
+
+let field_seeds s =
+  let of_field (Field f) =
+    match (f.field_name, int_slot_of_typ f.field_typ) with
+    | Some name, Some slot ->
+        let from_field =
+          match f.constraint_ with
+          | Some constraint_ -> constraint_values name constraint_
+          | None -> []
+        in
+        let values =
+          from_field
+          @ typ_constraints name f.field_typ
+          @ enum_seed_values f.field_typ
+          |> List.sort_uniq Int64.compare
+        in
+        if values = [] then None else Some { field = name; slot; values }
+    | _ -> None
+  in
+  List.filter_map of_field s.fields

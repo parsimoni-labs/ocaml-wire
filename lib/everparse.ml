@@ -771,6 +771,16 @@ module Raw = struct
     | Unit
 
   let field_kinds = Types.field_kinds
+
+  type int_slot = Types.int_slot = { width : int; endian : Types.endian }
+
+  type field_seed = Types.field_seed = {
+    field : string;
+    slot : int_slot;
+    values : int64 list;
+  }
+
+  let field_seeds = Types.field_seeds
   let struct_params (s : Types.struct_) = s.params
 
   let input_param_names (s : Types.struct_) =
