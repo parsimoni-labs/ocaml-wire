@@ -1,7 +1,10 @@
 ; Differential AFL fuzzer: OCaml wire codec vs EverParse C validator, driven by
 ; the registry. The EverParse C validators and FFI stubs are generated, so the
 ; fuzzer only builds when EverParse is available (BUILD_EVERPARSE=1, 3d.exe in
-; PATH). The generator (test/diff/gen_diff.ml) is pure OCaml and always builds.
+; PATH), which the generation rule and the executable below enforce; the [fuzz]
+; alias gates on the profile alone, so naming it without EverParse fails rather
+; than doing nothing. The generator (test/diff/gen_diff.ml) is pure OCaml and
+; always builds.
 
 (rule
  (enabled_if
@@ -55,9 +58,7 @@
 (rule
  (alias fuzz)
  (enabled_if
-  (and
-   (= %{env:BUILD_EVERPARSE=} "1")
-   (= %{profile} afl)))
+  (= %{profile} afl))
  (deps fuzz.exe ../afl.dict)
  (action
   (progn

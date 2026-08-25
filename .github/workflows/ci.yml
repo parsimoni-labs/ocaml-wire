@@ -90,9 +90,10 @@ jobs:
   # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
   # validation) and fuzz/3d/ fuzzes [wire_3d] (the EverParse / 3D projection),
   # mirroring the lib/ layout. The [afl] profile (dune-workspace) instruments
-  # native code with AFL coverage, and each dir's [fuzz] alias seeds its corpus
-  # and runs afl-fuzz for a fixed wall-clock budget. The job then fails if
-  # afl-fuzz found any crashing input in either fuzzer.
+  # native code with AFL coverage, and a dir's [fuzz] alias seeds its corpus and
+  # runs afl-fuzz for a fixed wall-clock budget. The job names those two aliases
+  # non-recursively, as fuzz/diff/ belongs to fuzz-afl-diff below. The job then
+  # fails if afl-fuzz found any crashing input in either fuzzer.
   fuzz-afl:
     runs-on: ubuntu-latest
     steps:
@@ -111,7 +112,7 @@ jobs:
         run: |
           sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
           export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
-          opam exec -- dune build --profile afl @fuzz/fuzz
+          opam exec -- dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
 
       - name: Fail on crashes
         run: |
