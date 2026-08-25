@@ -2733,6 +2733,33 @@ let test_set_exact_uint_width () =
         uint_endians)
     uint_width_cases
 
+(* The decode half of the same rule, at every width [uint ~size] accepts. A
+   full-width frame must come back as the number those bytes spell and go out
+   again byte for byte: a carrier too narrow for the field would mask the top
+   bits and hand back a legal smaller number instead. Widths are compared
+   through [Int64] because a 7-byte maximum overflows the native [int] where it
+   is 31 bits wide. *)
+let test_uint_width_decodes_exactly () =
+  List.iter
+    (fun size ->
+      List.iter
+        (fun (endian, ename) ->
+          let codec, _ = uint_width_codec ~endian size in
+          let label = Fmt.str "uint(%d,%s)" size ename in
+          let wire = String.make size '\xff' in
+          let widest = Int64.sub (Int64.shift_left 1L (8 * size)) 1L in
+          let v = Codec.decode_exn codec (Bytes.of_string wire) 0 in
+          Alcotest.(check int64)
+            (label ^ ": full-width frame decodes to the number it spells")
+            widest (Optint.Int63.to_int64 v);
+          let out = Bytes.make size '\x00' in
+          Codec.encode codec v out 0;
+          Alcotest.(check string)
+            (label ^ ": full-width frame re-encodes unchanged")
+            wire (Bytes.to_string out))
+        uint_endians)
+    [ 1; 2; 3; 4; 5; 6; 7 ]
+
 let bits_width_bases =
   [
     (U8, "U8", 8);
@@ -2949,6 +2976,30 @@ let test_encode_exact_uint63 () =
         ~inside:[ Optint.Int63.zero; Optint.Int63.max_int ]
         ~outside:[ Optint.Int63.of_int (-1); Optint.Int63.min_int ])
     [ ("uint63", uint63); ("uint63be", uint63be) ]
+
+(* An 8-byte field spans 2^64 wire patterns and the generated C validator hands
+   every one of them on unchanged, so the OCaml side must too. A carrier that
+   held fewer would mask the top bits and hand back a legal smaller number, one
+   nothing downstream can tell from the value the sender meant. Refusing the
+   frame would be sound; altering it is not. *)
+let check_eight_byte_unsigned name typ =
+  let wire = String.make 8 '\xff' in
+  let cf = Codec.(Field.v "v" typ $ Fun.id) in
+  let codec = Codec.v "EightByteUnsigned" Fun.id Codec.[ cf ] in
+  match Codec.decode codec (Bytes.of_string wire) 0 with
+  | Error _ -> ()
+  | Ok v ->
+      let out = Bytes.make 8 '\x00' in
+      Codec.encode codec v out 0;
+      Alcotest.(check string)
+        (name ^ ": all-ones frame re-encodes unchanged")
+        wire (Bytes.to_string out)
+
+let test_eight_byte_unsigned_preserves_wire () =
+  check_eight_byte_unsigned "uint63" uint63;
+  check_eight_byte_unsigned "uint63be" uint63be;
+  check_eight_byte_unsigned "uint64" uint64;
+  check_eight_byte_unsigned "uint64be" uint64be
 
 (* [array] and [repeat] elements are written by an encoder of their own, so a
    value no element can hold has to be refused on that path too. *)
@@ -8746,6 +8797,8 @@ let suite =
         test_encode_exact_uint_width;
       Alcotest.test_case "exact width: uint set" `Quick
         test_set_exact_uint_width;
+      Alcotest.test_case "exact width: uint decodes exactly" `Quick
+        test_uint_width_decodes_exactly;
       Alcotest.test_case "exact width: bits encode" `Quick
         test_encode_exact_bits_width;
       Alcotest.test_case "exact width: bits set" `Quick
@@ -8762,6 +8815,8 @@ let suite =
       Alcotest.test_case "exact width: uint63" `Quick test_encode_exact_uint63;
       Alcotest.test_case "exact width: int64 carrier has no range" `Quick
         test_encode_int64_carrier_has_no_range;
+      Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick
+        test_eight_byte_unsigned_preserves_wire;
       Alcotest.test_case "exact width: array and repeat elements" `Quick
         test_element_exact_width;
       Alcotest.test_case "exact byte field: literal size" `Quick
