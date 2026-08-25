@@ -16,9 +16,18 @@ then
   exit 1
 fi
 
+# merlint's typedtree rules read each file's .cmt, and the edit being
+# committed leaves that .cmt stale, so build before scanning or those rules
+# do not run. [merlint --build] would build too, but reports only the exit
+# code, so build here to keep a compiler error on a line of its own.
+if ! opam exec -- dune build @check >/tmp/git-merlint-hook.log 2>&1; then
+  echo "dune build @check failed; see /tmp/git-merlint-hook.log" >&2
+  exit 1
+fi
+
 git diff --cached --name-only --diff-filter=ACM -z -- \
   '*.ml' '*.mli' '*.mll' '*.mly' \
-  | xargs -0 merlint --no-build >/tmp/git-merlint-hook.log 2>&1 \
+  | xargs -0 merlint >/tmp/git-merlint-hook.log 2>&1 \
   || {
     echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
     exit 1
