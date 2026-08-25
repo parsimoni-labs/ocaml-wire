@@ -82,6 +82,20 @@ let raise_eof ~at ~expected ~got =
 
 let raise_invalid_tag ~at tag = raise_error ~at (Invalid_tag tag)
 
+(* A [Map]'s [decode] is handed a value and nothing else, so a lookup that
+   rejects an out-of-range index has no offset to name and reports 0. Every
+   reader knows where the value it just read sits, and [at] is documented as
+   the failing field's absolute offset, so relocate the failure there: a caller
+   that seeks to [at] otherwise lands on the start of the buffer whatever the
+   frame's base. [index_bound] marks exactly the maps whose [decode] rejects
+   anything, so every other map keeps the bare call. *)
+let map_decode ~index_bound decode =
+  match index_bound with
+  | None -> fun ~at:_ v -> decode v
+  | Some _ -> (
+      fun ~at v ->
+        try decode v with Parse_error e -> raise (Parse_error { e with at }))
+
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })
 
@@ -545,8 +559,8 @@ let cases variants inner =
   let arr = Array.of_list variants in
   let len = Array.length arr in
   let decode n =
-    (* [lookup] reads a bare index with no field context, so the failing index
-       is reported without a byte offset (at = 0). *)
+    (* Offset 0 is relative to the value handed in; [map_decode] moves the
+       failure to where the reader found that value. *)
     if n >= 0 && n < len then arr.(n) else raise_invalid_tag ~at:0 n
   in
   let encode v =
@@ -773,6 +787,37 @@ let reject_greedy_case_body t =
     invalid_arg
       "Wire.casetype: a case body cannot be a bare all_bytes / all_zeros \
        greedy field; it has no determinate type. Wrap it in a sub-codec."
+
+(* Whether a decoder for [t] runs to the end of the buffer: a greedy leaf, a
+   sub-codec whose own last field does, a casetype with such a case body (if
+   that case is selected its greedy tail has no boundary), or a gated optional
+   wrapping one. Each is as unbounded as a bare greedy field, so it is only
+   meaningful as the last thing in the buffer: nothing after it, and nothing
+   that iterates it. *)
+let rec ends_greedy : type a. a typ -> bool =
+ fun t ->
+  is_greedy t
+  ||
+  match t with
+  | Codec { codec_struct; _ } -> struct_ends_greedy codec_struct
+  | Casetype { cases; _ } ->
+      List.exists
+        (fun (Case_branch { cb_inner; _ }) -> ends_greedy cb_inner)
+        cases
+  | Map { inner; _ } -> ends_greedy inner
+  | Where { inner; _ } -> ends_greedy inner
+  | Enum { base; _ } -> ends_greedy base
+  | Optional { present = Bool false; _ }
+  | Optional_or { present = Bool false; _ } ->
+      false
+  | Optional { inner; _ } -> ends_greedy inner
+  | Optional_or { inner; _ } -> ends_greedy inner
+  | _ -> false
+
+and struct_ends_greedy (s : struct_) =
+  match List.rev s.fields with
+  | Field f :: _ -> ends_greedy f.field_typ
+  | [] -> false
 
 let array ~len elem =
   reject_decoration ~combinator:"array" elem;
@@ -1784,11 +1829,34 @@ and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
    [Invalid_argument]: an unencodable value is a caller error, not malformed
    input. *)
 
+(* A casetype value no branch projects has no encoding at all, so it has no size
+   either. One raiser for the size path and both encode paths, so a caller
+   sizing a buffer for such a value is told the same thing, in the same words,
+   as one trying to write it. *)
+let raise_no_matching_case () =
+  invalid_arg "Wire.casetype: encoding a value no case matches"
+
 (* Membership in a closed [enum]: the single rule both halves use, so decode and
    encode agree on which values a closed enum admits. An open enum names known
    codes without restricting the set, so it has no encode guard at all. *)
 let enum_values cases = List.map snd cases
-let enum_member valid v = List.exists (Int.equal v) valid
+
+let rec enum_member valid (v : int) =
+  match valid with [] -> false | x :: rest -> x = v || enum_member rest v
+
+(* Decode-side membership scans the case list itself. The [valid] list an
+   [Invalid_enum] carries is built on the failure path only: the scan runs once
+   per decoded value, and a repeat's element count is the sender's choice
+   through its byte budget, so building a list to succeed hands the sender a
+   heap multiplier per element. *)
+let rec enum_case_member cases (v : int) =
+  match cases with
+  | [] -> false
+  | (_, x) :: rest -> x = v || enum_case_member rest v
+
+let check_enum_decode ~at ~cases v =
+  if not (enum_case_member cases v) then
+    raise_invalid_enum ~at ~value:v ~valid:(enum_values cases)
 
 let check_enum_encode ~name ~valid v =
   if not (enum_member valid v) then
@@ -3080,6 +3148,8 @@ let compare_error_kind a b =
       0
   | _ -> Int.compare (kind_rank a) (kind_rank b)
 
+let equal_error_kind a b = compare_error_kind a b = 0
+
 let compare_parse_error a b =
   let c = compare_error_kind a.kind b.kind in
   if c <> 0 then c
@@ -3182,10 +3252,12 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
          [project] accepts [v], then size its inner from the projected body.
          Without this the value-driven size dropped the whole casetype to 0,
          so [Codec.size_of_value] under-allocated and [encode] ran off the
-         buffer. *)
+         buffer. A value no branch projects has no size for the same reason it
+         has no bytes, and says so rather than answering with the tag width a
+         caller would then allocate for. *)
       let tag_size = Option.value ~default:0 (inner_wire_size tag) in
       let rec find = function
-        | [] -> tag_size
+        | [] -> raise_no_matching_case ()
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
             | Some (_tag, body) -> tag_size + size_of_typ_value cb_inner body

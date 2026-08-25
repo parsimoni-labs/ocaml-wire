@@ -33,8 +33,34 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     accept/reject verdict on the same bytes (and the same value where both
     accept), and {!Wire.to_bytes} and {!Wire.Codec.encode} must refuse the same
     values and write the same bytes. A refinement one path enforces and the
-    other drops shows up here rather than in the generated C. [validate]
-    defaults to [true]. *)
+    other drops shows up here rather than in the generated C.
+
+    Every stream is also read and written one field at a time through
+    {!Wire.Codec.get} and {!Wire.Codec.set}, which are built from separate
+    constructions to the record decoder and encoder. Per field: [get] must read
+    back what the encoder wrote and what [decode] made of the same bytes; [set]
+    must either refuse a value outright, leaving the buffer untouched, or write
+    one [get] reads back unchanged; writing back a value [get] just returned
+    must not move a byte; writing every field into a zeroed buffer must
+    reproduce what [encode] writes; a value [set] refuses must be one [encode]
+    refuses too; and, in a fixed-size record, setting one field must not change
+    what any other field reads.
+
+    On top of that each stream is transformed in ways the answer must not depend
+    on. Prepending [k] arbitrary bytes and reading the frame at offset [k] must
+    give decode, validate, [wire_size_at] and every [get] the answer they gave
+    at offset 0, must report a rejection for the same reason with every offset
+    shifted by exactly [k], and must let [encode] write the same bytes without
+    touching one outside the frame. An accepted frame must decode the same after
+    the buffer is cut to the [wire_size_at] it declares, and appending bytes may
+    change what it reads only if its declared size grew to cover them, which is
+    how a greedy {!Wire.all_bytes} / {!Wire.all_zeros} / {!Wire.rest_bytes} tail
+    is allowed its end-of-buffer semantics without the rest of the registry
+    being excused with it. Nothing shorter than [min_wire_size] may decode.
+    Finally, every read path must leave the buffer byte-identical, and running
+    one frame through all of them must not change the answer a later read of a
+    different frame gives, which is what the shared per-domain decode scratch
+    makes possible. [validate] defaults to [true]. *)
 
 val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
 (** [afl_cases label] is the fast file-input AFL smoke suite. It reuses a
@@ -51,9 +77,11 @@ val nested_cases : string -> int -> Alcobar.test_case list
 (** [nested_cases label depth] generates an arbitrary nested codec per sample
     (combinators composed up to [depth] levels: optional / repeat / array /
     nested / record / casetype / map / where over each other and the leaves) and
-    runs the same three checks as {!test_cases}. This exercises compositions no
-    curated list enumerates, surfacing offset / [size_of_value] drift that only
-    shows up when combinators nest. *)
+    runs the same checks as {!test_cases}, including the per-field accessor
+    properties, which reach the generated records' own fields, and the offset,
+    framing and read-purity properties. This exercises compositions no curated
+    list enumerates, surfacing offset / [size_of_value] drift that only shows up
+    when combinators nest. *)
 
 val reject_cases : string -> 'a t -> Alcobar.test_case list
 (** [reject_cases label g] is a batched Alcobar case asserting that decode
@@ -64,8 +92,9 @@ val invariant_cases : string -> Alcobar.test_case list
 (** [invariant_cases label] is a cheap audit over the shared fuzzer DSL: it
     asserts registry labels are unique, the registry still mirrors the Wire API
     families, recursive composition leaves include the expected weird /
-    adversarial terms, and the deterministic differential sampler remains
-    reproducible and unique. *)
+    adversarial terms, the deterministic differential sampler remains
+    reproducible and unique, and the per-field accessor properties still reach
+    most of the registry rather than skipping it. *)
 
 val semantic_invariant_cases : string -> Alcobar.test_case list
 (** [semantic_invariant_cases label] checks high-level API invariants over exact

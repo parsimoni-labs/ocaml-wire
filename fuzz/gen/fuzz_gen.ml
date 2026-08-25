@@ -33,7 +33,29 @@ type 'a t = {
          all-zero padding, a per-byte span predicate, a declared byte length,
          a where cond or a field constraint. [None] where the shape has no
          refinement left to violate (a plain scalar, an open enum). *)
+  fields : 'a field_check list;
+      (* The record's own field list, kept so a property can address one field
+         at a time. [Codec.v] holds each field's Wire field and projection while
+         it builds the codec and would otherwise drop both once the codec is
+         sealed, which is why the registry has [Codec.get] / [Codec.set]
+         coverage only through hand-built codecs. [] where a shape has no
+         addressable fields; [addressed] then falls back to the one-field
+         wrapper [codec_of_typ] builds over the gen's typ. *)
 }
+
+(* One addressable field of a record gen. The field type ['a] differs from
+   entry to entry, so a list of them only exists once ['a] is packed away
+   behind the three things a per-field property needs: the Wire field that
+   names the slot to [Codec.get] / [Codec.set], the projection out of the
+   record, and the equality to compare two reads with. *)
+and 'r field_check =
+  | Field_check : {
+      name : string;
+      field : ('a, 'r) Wire.Codec.field;
+      proj : 'r -> 'a;
+      equal : 'a -> 'a -> bool;
+    }
+      -> 'r field_check
 
 and env_strategy = {
   positive : Wire.Param.env -> Wire.Param.env;
@@ -84,10 +106,35 @@ let bytes_fixed n =
 
 let bytes_any = Alcobar.map Alcobar.[ Alcobar.bytes ] bytes_of_string
 
+(* Every leaf gen wraps its typ in this one-field record, so the name and the
+   single field are defined once: [addressed] rebuilds the same pair to reach
+   the slot through [Codec.get] / [Codec.set]. *)
+let leaf_codec_name = "_leaf"
+let leaf_slot_name = "v"
+let leaf_field typ = Wire.Codec.(Wire.Field.v leaf_slot_name typ $ fun v -> v)
+
 let codec_of_typ typ =
-  Wire.Codec.v "_leaf"
-    (fun v -> v)
-    Wire.Codec.[ (Wire.Field.v "v" typ $ fun v -> v) ]
+  Wire.Codec.v leaf_codec_name (fun v -> v) Wire.Codec.[ leaf_field typ ]
+
+(* Checkers for a hand-built record that projects with [fst] / [snd] (or the
+   three-way equivalent). These gens seal their own codec instead of going
+   through [Codec.v], so without a field list written down here their slots are
+   invisible to the per-field properties and the record is only ever addressed
+   as a whole -- which loses exactly the shapes worth addressing one field at a
+   time: bitfields sharing a base word, and a span whose size a preceding field
+   supplies. The names are for failure messages; the accessors resolve the slot
+   from the Wire field. *)
+let slot name f proj =
+  Field_check { name; field = Wire.Codec.( $ ) f proj; proj; equal = ( = ) }
+
+let pair_fields (name_a, f_a) (name_b, f_b) =
+  [ slot name_a f_a fst; slot name_b f_b snd ]
+
+let triple_fields (name_a, f_a) (name_b, f_b) (name_c, f_c) =
+  let proj_a (a, _, _) = a in
+  let proj_b (_, b, _) = b in
+  let proj_c (_, _, c) = c in
+  [ slot name_a f_a proj_a; slot name_b f_b proj_b; slot name_c f_c proj_c ]
 
 (* The canonical bytes for [v]: a buffer sized by [size_of_value] then
    filled by [encode]. *)
@@ -178,6 +225,7 @@ let leaf ~equal ~typ ~value_gen ~random ~adversarial =
     adversarial = adversarial_bytes;
     equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -198,6 +246,7 @@ let enum_like ~typ ~value_gen ~random ~adversarial =
     adversarial;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -408,6 +457,7 @@ let byte_array n =
     equal = String.equal;
     env = None;
     (* A fixed-size byte span is exact: any other length must be refused. *)
+    fields = [];
     adversarial_value = Some (byte_lengths_around n);
   }
 
@@ -450,6 +500,7 @@ let byte_slice n =
     equal = slice_equal;
     env = None;
     (* Same exact-span rule as [byte_array], through the zero-copy slice. *)
+    fields = [];
     adversarial_value =
       Some (Alcobar.map Alcobar.[ byte_lengths_around n ] slice_of_string);
   }
@@ -475,6 +526,7 @@ let all_bytes =
     adversarial = bytes_any;
     equal = String.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -511,6 +563,7 @@ let all_zeros =
     equal = String.equal;
     env = None;
     (* Padding decode only accepts as zeros: a non-zero byte must be refused. *)
+    fields = [];
     adversarial_value =
       Some
         (Alcobar.map
@@ -550,6 +603,7 @@ let zeroterm =
     equal = String.equal;
     env = None;
     (* A value carrying its own terminator cannot round-trip. *)
+    fields = [];
     adversarial_value =
       Some (Alcobar.map Alcobar.[ Alcobar.bytes ] (fun s -> s ^ "\000x"));
   }
@@ -583,6 +637,7 @@ let zeroterm_at_most n =
     env = None;
     (* Too long for the region once the terminator is counted, or carrying its
        own terminator. *)
+    fields = [];
     adversarial_value =
       Some
         (Alcobar.choose
@@ -621,6 +676,7 @@ let byte_array_where n ~per_byte =
     env = None;
     (* Arbitrary bytes at the declared length and around it: most violate the
        refinement, the rest exercise the exact-length rule. *)
+    fields = [];
     adversarial_value = Some (byte_lengths_around n);
   }
 
@@ -656,6 +712,7 @@ let nested_sized make_typ n inner =
     adversarial;
     equal = inner.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -677,6 +734,7 @@ let map ~decode ~encode inner =
     env = None;
     (* [map] adds no encode path of its own, it hands the mapped value to the
        inner typ, so a value the inner typ refuses must still be refused here. *)
+    fields = [];
     adversarial_value =
       Option.map
         (fun g -> Alcobar.map Alcobar.[ g ] decode)
@@ -712,6 +770,7 @@ let uint_var ~endian size =
     adversarial;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = Some (above_byte_width size);
   }
 
@@ -731,6 +790,7 @@ let exact_cases ~typ ~equal cases =
       Alcobar.choose (List.map (fun (_, bs) -> Alcobar.const bs) cases);
     equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -910,6 +970,7 @@ let optional ?(present = true) inner =
     adversarial = inner.adversarial;
     equal = Option.equal inner.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -936,6 +997,7 @@ let optional_or ?(present = true) ~default inner =
     adversarial = inner.adversarial;
     equal = inner.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -989,6 +1051,7 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     adversarial = bytes_any;
     equal = list_equal inner.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1014,6 +1077,7 @@ let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
     adversarial = bytes_any;
     equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1074,6 +1138,7 @@ let array_sized make_typ n inner =
     adversarial = bytes_any;
     equal = list_equal inner.equal;
     env = None;
+    fields = [];
     adversarial_value =
       Some
         (Alcobar.choose
@@ -1107,6 +1172,7 @@ let enum name cases =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    fields = [];
     adversarial_value = Some (unlisted_enum_gen ~mask:0xFF valid_values);
   }
 
@@ -1133,6 +1199,7 @@ let enum_open =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1156,6 +1223,7 @@ let enum_base ~typ ~size name cases =
     adversarial = bytes_fixed size;
     equal = Int.equal;
     env = None;
+    fields = [];
     adversarial_value =
       Some (unlisted_enum_gen ~mask:((1 lsl (size * 8)) - 1) valid_values);
   }
@@ -1181,6 +1249,7 @@ let enum_open_base ~typ ~size name cases =
     adversarial = bytes_fixed size;
     equal = Int.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1215,6 +1284,7 @@ let variants_u16be =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1261,6 +1331,7 @@ let bounded_u8 ~min ~max =
     equal = Int.equal;
     env = None;
     (* Out-of-range on both sides of the field's [~self_constraint]. *)
+    fields = [];
     adversarial_value =
       Some
         (Alcobar.choose
@@ -1312,6 +1383,7 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
     adversarial = boundary_bytes;
     equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1368,6 +1440,7 @@ let codec_where =
     equal = ( = );
     env = None;
     (* [a = b] fails the codec-level [~where] [a < b]. *)
+    fields = pair_fields ("a", f_a) ("b", f_b);
     adversarial_value =
       Some
         (Alcobar.map Alcobar.[ Alcobar.range ~min:0 0x100 ] (fun a -> (a, a)));
@@ -1404,6 +1477,7 @@ let u8_pair_record name f_a f_b ~positive ~adversarial =
     adversarial = adversarial_bytes;
     equal = ( = );
     env = None;
+    fields = pair_fields ("a", f_a) ("b", f_b);
     adversarial_value = Some (u8_pair_hostile adversarial_bytes);
   }
 
@@ -1484,6 +1558,7 @@ let self_int64 =
     adversarial;
     equal = Int64.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1513,6 +1588,7 @@ let where inner =
     env = None;
     (* The cond is [true_], so [where] narrows nothing: whatever the inner typ
        refuses it must still refuse through the wrapper. *)
+    fields = [];
     adversarial_value = inner.adversarial_value;
   }
 
@@ -1590,6 +1666,7 @@ let bitpack3 name ~base ~bit_order (w_a, w_b, w_c) =
     adversarial = bytes_fixed (total / 8);
     equal = ( = );
     env = None;
+    fields = triple_fields ("a", f_a) ("b", f_b) ("c", f_c);
     adversarial_value = None;
   }
 
@@ -1616,6 +1693,7 @@ let bitpack2_spill name ~base ~bit_order (w_a, w_b) =
     adversarial = bytes_fixed (2 * (total / 8));
     equal = ( = );
     env = None;
+    fields = pair_fields ("a", f_a) ("b", f_b);
     adversarial_value = None;
   }
 
@@ -1644,6 +1722,7 @@ let bitpack_split_orders =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    fields = pair_fields ("x", f_x) ("y", f_y);
     adversarial_value = None;
   }
 
@@ -1711,6 +1790,7 @@ let bit inner =
     adversarial = inner.adversarial;
     equal = Bool.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1755,6 +1835,7 @@ let field_anon =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1796,6 +1877,7 @@ let param_input =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = Some strategy;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1822,6 +1904,7 @@ let action_codec name action =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = Some { positive = Fun.id; fuzz = Alcobar.const Fun.id };
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1862,6 +1945,7 @@ let action_abort =
     adversarial = bytes_fixed 1;
     equal = Int.equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1920,6 +2004,7 @@ let nan_float64 =
     adversarial;
     equal = float64_bits_equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -1963,6 +2048,7 @@ let finite_float64 =
     adversarial;
     equal = float64_bits_equal;
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2017,6 +2103,7 @@ let expr_ops =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2059,6 +2146,7 @@ let rest_bytes =
     adversarial = bytes_fixed (1 + tail_len);
     equal = ( = );
     env = Some strategy;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2097,6 +2185,7 @@ let param_size =
     adversarial = bytes_any;
     equal = String.equal;
     env = Some strategy;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2139,6 +2228,7 @@ let if_then_else =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2176,6 +2266,7 @@ let sizeof =
     adversarial = bytes_fixed 2;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2197,6 +2288,7 @@ let gate_codec name mk_payload positive =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2241,6 +2333,30 @@ let optional_or_dynamic =
          Bytes.set_uint16_be buf 1 0xCAFE;
          ((0, 0xCAFE), buf)))
 
+(* Present/absent gate, a span of the drawn length, and a zero tail, encoded
+   through the codec so the span's length byte and the payload's offset stay
+   consistent. *)
+let opt_dyn_span_positive codec =
+  Alcobar.map
+    Alcobar.
+      [
+        Alcobar.bool;
+        Alcobar.uint16;
+        Alcobar.range ~min:0 8;
+        Alcobar.range ~min:0 4;
+      ]
+    (fun present v span_len tail_len ->
+      let value =
+        ( (if present then 1 else 0),
+          String.make span_len 'x',
+          (if present then Some v else None),
+          String.make tail_len '\x00' )
+      in
+      let sz = Wire.Codec.size_of_value codec value in
+      let buf = Bytes.create sz in
+      Wire.Codec.encode codec value buf 0;
+      (value, buf))
+
 (* Dynamic-gate optional at a *runtime* offset. [optional_dynamic] keeps its
    gate and payload adjacent at static offsets, where the payload can never
    land past the end of the buffer. Here a length-prefixed span sits between
@@ -2252,50 +2368,52 @@ let optional_or_dynamic =
 let optional_dyn_after_span =
   let f_gate = Wire.Field.v "gate" Wire.uint8 in
   let f_len = Wire.Field.v "len" Wire.uint8 in
+  let f_span =
+    Wire.Field.v "span" (Wire.byte_array ~size:(Wire.Field.ref f_len))
+  in
+  let f_payload =
+    Wire.Field.optional "payload" ~present:(gate_present f_gate) Wire.uint16be
+  in
+  let f_tail = Wire.Field.v "tail" Wire.all_zeros in
+  let gate_of (g, _, _, _) = g in
+  let len_of (_, span, _, _) = String.length span in
+  let span_of (_, span, _, _) = span in
+  let payload_of (_, _, payload, _) = payload in
+  let tail_of (_, _, _, tail) = tail in
   let codec =
     Wire.Codec.v "_opt_dyn_span"
       (fun gate _len span payload tail -> (gate, span, payload, tail))
       Wire.Codec.
         [
-          (f_gate $ fun (g, _, _, _) -> g);
-          (f_len $ fun (_, span, _, _) -> String.length span);
-          ( Wire.Field.v "span" (Wire.byte_array ~size:(Wire.Field.ref f_len))
-          $ fun (_, span, _, _) -> span );
-          ( Wire.Field.optional "payload" ~present:(gate_present f_gate)
-              Wire.uint16be
-          $ fun (_, _, payload, _) -> payload );
-          (Wire.Field.v "tail" Wire.all_zeros $ fun (_, _, _, tail) -> tail);
+          f_gate $ gate_of;
+          f_len $ len_of;
+          f_span $ span_of;
+          f_payload $ payload_of;
+          f_tail $ tail_of;
         ]
   in
-  let positive =
-    Alcobar.map
-      Alcobar.
-        [
-          Alcobar.bool;
-          Alcobar.uint16;
-          Alcobar.range ~min:0 8;
-          Alcobar.range ~min:0 4;
-        ]
-      (fun present v span_len tail_len ->
-        let value =
-          ( (if present then 1 else 0),
-            String.make span_len 'x',
-            (if present then Some v else None),
-            String.make tail_len '\x00' )
-        in
-        let sz = Wire.Codec.size_of_value codec value in
-        let buf = Bytes.create sz in
-        Wire.Codec.encode codec value buf 0;
-        (value, buf))
+  (* Every slot of the shape #262 lived in: a span at a runtime size, an
+     optional at a runtime offset behind it, and a greedy tail. Addressing them
+     one at a time is what turns [Codec.get] loose on an attacker-supplied
+     [len] and [Codec.set] loose next to a neighbour whose offset moves. *)
+  let fields =
+    [
+      slot "gate" f_gate gate_of;
+      slot "len" f_len len_of;
+      slot "span" f_span span_of;
+      slot "payload" f_payload payload_of;
+      slot "tail" f_tail tail_of;
+    ]
   in
   {
     codec;
     typ = Wire.codec codec;
-    positive;
+    positive = opt_dyn_span_positive codec;
     random = bytes_any;
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    fields;
     adversarial_value = None;
   }
 
@@ -2394,6 +2512,7 @@ let casetype_u8 name cases =
     adversarial = bytes_any;
     equal;
     env = env_strategy;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2441,6 +2560,7 @@ let casetype_u16be_default =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    fields = [];
     adversarial_value = None;
   }
 
@@ -2458,13 +2578,35 @@ module Codec = struct
   (* Assign each field a unique name by position: the [$] above leaves every
      field [_], which round-trips fine (getters, not names) but projects to
      clashing anonymous declarations in 3D. *)
+  let field_name i f = if f.name = "_" then Fmt.str "f%d" i else f.name
+
   let wire_codec_fields fields =
     let rec go : type f r. int -> (f, r) fields -> (f, r) Wire.Codec.fields =
      fun i -> function
        | [] -> Wire.Codec.[]
        | f :: rest ->
-           let name = if f.name = "_" then Fmt.str "f%d" i else f.name in
-           Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter
+           Wire.Codec.( $ ) (Wire.Field.v (field_name i f) f.gen.typ) f.getter
+           :: go (i + 1) rest
+    in
+    go 0 fields
+
+  (* The per-field checkers for the same list, in the same order and under the
+     same names: [Codec.get] and [Codec.set] resolve a field by name against
+     the sealed codec, so a checker built here addresses exactly the slot
+     [wire_codec_fields] declared. *)
+  let field_checks fields =
+    let rec go : type f r. int -> (f, r) fields -> r field_check list =
+     fun i -> function
+       | [] -> []
+       | f :: rest ->
+           let name = field_name i f in
+           Field_check
+             {
+               name;
+               field = Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter;
+               proj = f.getter;
+               equal = f.gen.equal;
+             }
            :: go (i + 1) rest
     in
     go 0 fields
@@ -2634,6 +2776,7 @@ module Codec = struct
       equal;
       env = combine_env_strategies (field_envs fields);
       adversarial_value;
+      fields = field_checks fields;
     }
 end
 
@@ -3326,60 +3469,816 @@ let hostile_value_stream g =
   | None -> Alcobar.const None
   | Some gen -> Alcobar.map Alcobar.[ gen ] (fun v -> Some v)
 
-let test_cases ?(validate = true) label g =
-  let check_positive_stream ((_, bs) as sample) =
-    check_positive label g sample;
-    if validate then check_validate_positive label g bs
+(* {1 Per-field accessor properties}
+
+   [Codec.get] and [Codec.set] are built by [build_staged_reader] and
+   [build_staged_writer], which are separate constructions from the record
+   populator [decode] runs and the record encoder [encode] runs. Addressing one
+   field at a time is therefore a second, independent reading (and writing) of
+   the same bytes rather than another call into the same code, and the two can
+   drift: a width the encoder refuses and the staged writer truncates, or a
+   write that spills into the next field, is invisible to any check phrased
+   over the whole record. *)
+
+(* The codec a per-field property addresses, paired with the fields it may
+   name. A record built by [Codec.v] is addressed directly: it kept its own
+   field list, so every checker names a slot that codec really declares. Any
+   other gen is addressed through the one-field record [codec_of_typ] wraps its
+   typ in -- the same wire format, since [typ] and [codec] are two spellings of
+   one schema, and the only spelling whose single slot is guaranteed to carry
+   the typ the checker was built from. Naming a slot of the gen's own codec
+   instead would resolve the offset by name and then read it at whatever typ
+   the checker happened to hold, which is not the same field. *)
+type 'r addressed = { acodec : 'r Wire.Codec.t; achecks : 'r field_check list }
+
+let addressed g =
+  match g.fields with
+  | [] ->
+      {
+        acodec = codec_of_typ g.typ;
+        achecks =
+          [
+            Field_check
+              {
+                name = leaf_slot_name;
+                field = leaf_field g.typ;
+                proj = Fun.id;
+                equal = g.equal;
+              };
+          ];
+      }
+  | fs -> { acodec = g.codec; achecks = fs }
+
+(* Staging refuses on a field whose access shape has no staged accessor, which
+   is a documented gap in the accessor API rather than a failure: skip. *)
+let stage_get ?env a field =
+  match Wire.Codec.get ?env a.acodec field with
+  | staged -> Some (Wire.Staged.unstage staged)
+  | exception Invalid_argument _ -> None
+
+let stage_set a field =
+  match Wire.Codec.set a.acodec field with
+  | staged -> Some (Wire.Staged.unstage staged)
+  | exception Invalid_argument _ -> None
+
+(* [Codec.get] against the value the canonical bytes were encoded from: the
+   staged reader and the encoder, over one buffer, with no shared code between
+   them. *)
+let check_field_get label ?env a value bs =
+  List.iter
+    (fun fc ->
+      match fc with
+      | Field_check f -> (
+          match stage_get ?env a f.field with
+          | None -> ()
+          | Some get -> (
+              match get bs 0 with
+              | exception Invalid_argument m ->
+                  Alcobar.failf
+                    "%s field %s: Codec.get raised on a positive: %s" label
+                    f.name m
+              | exception Wire.Parse_error e ->
+                  Alcobar.failf "%s field %s: Codec.get rejected a positive: %a"
+                    label f.name Wire.pp_parse_error e
+              | got ->
+                  if not (f.equal got (f.proj value)) then
+                    Alcobar.failf
+                      "%s field %s: Codec.get reads back a value the encoder \
+                       did not write"
+                      label f.name)))
+    a.achecks
+
+(* [Codec.set] then [Codec.get]: the staged writer against the staged reader.
+   [set] is documented to refuse a value the field cannot represent and to
+   leave the buffer untouched when it does, so a refusal is one of the two
+   accepted outcomes; what is not accepted is writing bytes that read back as a
+   different value, which puts a number on the wire the caller never asked for
+   and which no later [validate] can notice. [strict] says the value came from
+   the positive stream, so the reader has to succeed as well as agree; a
+   hostile value may legitimately be unreadable, since [set] is documented not
+   to check enum membership and the reader does. *)
+let check_field_set label ~strict a target bs =
+  List.iter
+    (fun fc ->
+      match fc with
+      | Field_check f -> (
+          match (stage_get a f.field, stage_set a f.field) with
+          | Some get, Some set -> (
+              let buf = Bytes.copy bs in
+              let want = f.proj target in
+              match set buf 0 want with
+              | exception Invalid_argument _ ->
+                  if not (Bytes.equal buf bs) then
+                    Alcobar.failf
+                      "%s field %s: Codec.set refused a value after writing to \
+                       the buffer"
+                      label f.name
+              | () -> (
+                  match get buf 0 with
+                  | exception Invalid_argument m ->
+                      Alcobar.failf
+                        "%s field %s: Codec.get raised on bytes Codec.set just \
+                         wrote: %s"
+                        label f.name m
+                  | exception Wire.Parse_error e ->
+                      if strict then
+                        Alcobar.failf
+                          "%s field %s: Codec.get rejects the value Codec.set \
+                           just wrote: %a"
+                          label f.name Wire.pp_parse_error e
+                  | got ->
+                      if not (f.equal got want) then
+                        Alcobar.failf
+                          "%s field %s: Codec.set wrote a value Codec.get \
+                           reads back as a different one"
+                          label f.name))
+          | _ -> ()))
+    a.achecks
+
+(* A value [Codec.set] will not put in a field is a value the record encoder
+   must not put there either. The two width and length checks are written
+   separately -- the staged writer's, and the per-field encoder's inside
+   [Codec.encode] -- so one can gain a refusal the other does not have, and
+   then the same frame is legal through one entry point and refused through the
+   other. Fixed-size codecs only: with a runtime-sized field the value's own
+   length changes the frame's size instead of overflowing a declared one, so
+   the two are answering different questions. *)
+let check_field_set_refusal label a record bs =
+  if Wire.Codec.is_fixed a.acodec then
+    List.iter
+      (fun fc ->
+        match fc with
+        | Field_check f -> (
+            match stage_set a f.field with
+            | None -> ()
+            | Some set -> (
+                let buf = Bytes.copy bs in
+                match set buf 0 (f.proj record) with
+                | () -> ()
+                | exception Invalid_argument _ -> (
+                    let out = Bytes.create (Bytes.length bs) in
+                    match Wire.Codec.encode a.acodec record out 0 with
+                    | exception Invalid_argument _ -> ()
+                    | () ->
+                        Alcobar.failf
+                          "%s field %s: Codec.set refuses this value but \
+                           Codec.encode writes the same record"
+                          label f.name))))
+      a.achecks
+
+(* Read a field now and hand back a predicate that re-reads it later. Lets a
+   heterogeneous field list be compared before and after a write without the
+   read values escaping their existential. *)
+let field_snapshot ?env a buf fc =
+  match fc with
+  | Field_check f -> (
+      match stage_get ?env a f.field with
+      | None -> None
+      | Some get -> (
+          match get buf 0 with
+          | (exception Invalid_argument _) | (exception Wire.Parse_error _) ->
+              None
+          | before ->
+              Some
+                ( f.name,
+                  fun after_buf ->
+                    match get after_buf 0 with
+                    | (exception Invalid_argument _)
+                    | (exception Wire.Parse_error _) ->
+                        false
+                    | after -> f.equal before after )))
+
+(* Write locality, and its mirror, read independence: setting one field must
+   not change what any other field reads, and reading a field must not depend
+   on a sibling's value. Both directions are the same experiment. Restricted to
+   fixed-size codecs, where every field has a static offset and size, because a
+   variable layout makes the dependency real: setting a length field genuinely
+   moves the span that follows it. *)
+let check_field_locality label a target bs =
+  let checks = a.achecks in
+  if Wire.Codec.is_fixed a.acodec && List.compare_length_with checks 1 > 0 then
+    List.iter
+      (fun fc ->
+        match fc with
+        | Field_check f -> (
+            match stage_set a f.field with
+            | None -> ()
+            | Some set -> (
+                let buf = Bytes.copy bs in
+                let others = List.filter (fun o -> o != fc) checks in
+                let snaps = List.filter_map (field_snapshot a buf) others in
+                match set buf 0 (f.proj target) with
+                | exception Invalid_argument _ -> ()
+                | () ->
+                    List.iter
+                      (fun (other, same) ->
+                        if not (same buf) then
+                          Alcobar.failf
+                            "%s: Codec.set on field %s changed what field %s \
+                             reads"
+                            label f.name other)
+                      snaps)))
+      checks
+
+let first_difference a b =
+  let n = min (Bytes.length a) (Bytes.length b) in
+  let rec go i =
+    if i >= n then if Bytes.length a = Bytes.length b then -1 else n
+    else if Bytes.get a i <> Bytes.get b i then i
+    else go (i + 1)
   in
-  let check_safety_stream kind ?env bs =
-    check_decode_safety label kind ?env g bs;
-    check_direct_codec_agree label kind g bs;
-    if validate then begin
-      check_validate_safety label kind ?env g bs;
-      check_decode_validate_agree label kind ?env g bs
-    end
+  go 0
+
+(* Writing back exactly what the reader just returned must not move a byte. The
+   positive stream's bytes are [encode]'s own output, so they are already the
+   canonical spelling of every field and there is nothing for a re-write to
+   normalise. This is the only check in the file that observes which bytes a
+   write touched rather than what a later read makes of them, which is the
+   channel a write that spills past its field shows up in. *)
+let check_field_write_back label a bs =
+  List.iter
+    (fun fc ->
+      match fc with
+      | Field_check f -> (
+          match (stage_get a f.field, stage_set a f.field) with
+          | Some get, Some set -> (
+              match get bs 0 with
+              | (exception Invalid_argument _) | (exception Wire.Parse_error _)
+                ->
+                  ()
+              | v -> (
+                  let buf = Bytes.copy bs in
+                  match set buf 0 v with
+                  | exception Invalid_argument _ ->
+                      if not (Bytes.equal buf bs) then
+                        Alcobar.failf
+                          "%s field %s: Codec.set refused a value after \
+                           writing to the buffer"
+                          label f.name
+                  | () ->
+                      if not (Bytes.equal buf bs) then
+                        Alcobar.failf
+                          "%s field %s: writing back the value Codec.get just \
+                           read changed the canonical encoding at byte %d"
+                          label f.name (first_difference buf bs)))
+          | _ -> ()))
+    a.achecks
+
+(* Setting every field in turn into a zeroed buffer is an encode spelled with
+   the staged writers, so it must land on the same bytes [encode] writes.
+   Fixed-size codecs only: with a variable layout the fields have to be written
+   in an order the offsets agree with, and a skipped field leaves a hole the
+   comparison would blame on the wrong writer. Inconclusive, and so skipped,
+   as soon as one field has no staged writer or refuses its own value. *)
+let check_field_set_sweep label a value bs =
+  let checks = a.achecks in
+  if Wire.Codec.is_fixed a.acodec && checks <> [] then begin
+    let buf = Bytes.make (Bytes.length bs) '\x00' in
+    let wrote fc =
+      match fc with
+      | Field_check f -> (
+          match stage_set a f.field with
+          | None -> false
+          | Some set -> (
+              match set buf 0 (f.proj value) with
+              | exception Invalid_argument _ -> false
+              | () -> true))
+    in
+    if List.for_all wrote checks && not (Bytes.equal buf bs) then
+      Alcobar.failf
+        "%s: writing every field with Codec.set does not reproduce the bytes \
+         Codec.encode writes (first difference at byte %d)"
+        label (first_difference buf bs)
+  end
+
+(* All of the above on one positive sample. [other] is a second, independent
+   positive: it supplies a value of each field's own type that differs from the
+   one already in the buffer, which is what makes the write checks a write and
+   not a no-op. [hostile] adds the values a field's own refinement rejects --
+   an integer wider than its declared width, a value a closed enum does not
+   list -- which is where [set] and [encode] are most likely to disagree. *)
+let check_fields label a g (value, bs) other hostile =
+  (* [get] threads the env the positive was encoded with; [set] takes none, so
+     the write checks stay off a codec that binds one. *)
+  check_field_get label ?env:(positive_env g) a value bs;
+  if Option.is_none g.env then begin
+    check_field_write_back label a bs;
+    check_field_set_sweep label a value bs;
+    check_field_set label ~strict:true a other bs;
+    check_field_locality label a other bs;
+    Option.iter
+      (fun h ->
+        check_field_set label ~strict:false a h bs;
+        check_field_set_refusal label a h bs;
+        check_field_locality label a h bs)
+      hostile
+  end
+
+(* The accessors against the two things that are supposed to license them.
+
+   [validate] is the gate [codec.mli] tells a caller to run before reaching for
+   an accessor on untrusted input, so a buffer it accepts must be safe for every
+   [get] the codec offers: the validator walks its own compiled layout and the
+   staged readers compute theirs separately, and a frame one of them thinks is
+   long enough and the other does not surfaces here as a read of whatever the
+   caller's buffer holds past the end.
+
+   [decode] builds the same record through a third construction again, the
+   record populator. Where it accepts, every field it filled in must equal what
+   the staged reader makes of the same bytes. On this stream the values come
+   from the fuzzer's byte generators rather than from any encoder, so neither
+   side is reading back something it wrote. *)
+let check_field_reads label kind ?env a g bs =
+  let validated = validate_accepts ?env g bs = `Accept in
+  let decoded =
+    match Wire.Codec.decode ?env g.codec bs 0 with
+    | Ok record -> Some record
+    | Error _ -> None
+    | exception Invalid_argument _ -> None
   in
-  let check_hostile_stream ?env = function
-    | None -> ()
-    | Some value ->
-        check_direct_codec_encode_agree label "hostile" g value;
-        check_encode_safety label ?env g value
-  in
-  match g.env with
+  if validated || Option.is_some decoded then
+    List.iter
+      (fun fc ->
+        match fc with
+        | Field_check f -> (
+            match stage_get ?env a f.field with
+            | None -> ()
+            | Some get -> (
+                match get bs 0 with
+                | exception Invalid_argument m ->
+                    if validated then
+                      Alcobar.failf
+                        "%s %s field %s: Codec.get raised on a buffer validate \
+                         accepted: %s"
+                        label kind f.name m
+                | exception Wire.Parse_error _ -> ()
+                | got ->
+                    Option.iter
+                      (fun record ->
+                        if not (f.equal got (f.proj record)) then
+                          Alcobar.failf
+                            "%s %s field %s: Codec.get and Codec.decode read \
+                             different values from the same bytes"
+                            label kind f.name)
+                      decoded)))
+      a.achecks
+
+(* {1 Metamorphic properties}
+
+   A transformation of the input the answer must not depend on. Reading a frame
+   at offset [k] of a longer buffer is what every caller of this library
+   actually does -- a frame inside a reassembly window, a payload behind a
+   header the layer below already consumed -- and it is a different execution
+   from reading at offset 0, where every [base + off] folds to [off]. The two
+   runs share their source but not the arithmetic under test: a reader that
+   resolves a position from the buffer's start rather than the frame's start
+   agrees at base 0 and nowhere else. Prepending only; appending is a separate
+   property ([check_frame_extent]) because a greedy tail is defined to run to
+   the end of the buffer. *)
+
+(* Bytes to prepend, and to append. Short, because every metamorphic check pays
+   for them on every sample, and drawn rather than fixed so a read resolving a
+   position from the buffer's start cannot agree with base 0 by coincidence. *)
+let noise_gen =
+  Alcobar.map
+    Alcobar.[ Alcobar.bytes ]
+    (fun s ->
+      bytes_of_string (if String.length s > 8 then String.sub s 0 8 else s))
+
+type 'a verdict = Accepted of 'a | Rejected of Wire.parse_error | Crashed
+
+let decode_at ?env g bs off =
+  match Wire.Codec.decode ?env g.codec bs off with
+  | Ok v -> Accepted v
+  | Error e -> Rejected e
+  | exception Invalid_argument _ -> Crashed
+
+let validate_at ?env g bs off =
+  match Wire.Codec.validate ?env g.codec bs off with
+  | () -> Accepted ()
+  | exception Wire.Parse_error e -> Rejected e
+  | exception Invalid_argument _ -> Crashed
+
+let size_at g bs off =
+  match Wire.Codec.wire_size_at g.codec bs off with
+  | n -> Some n
+  | exception Invalid_argument _ -> None
+  | exception Wire.Parse_error _ -> None
+
+let pad_before pad bs =
+  let k = Bytes.length pad in
+  let out = Bytes.create (k + Bytes.length bs) in
+  Bytes.blit pad 0 out 0 k;
+  Bytes.blit bs 0 out k (Bytes.length bs);
+  out
+
+(* One verdict at base 0 against the same verdict at base [k], modulo the shift
+   [k] adds to every offset the failure reports. A crash on both sides is not
+   this property's business ([check_decode_safety] owns it); a crash on one
+   side only is. *)
+let check_shifted label what ~k ~same base0 basek =
+  match (base0, basek) with
+  | Crashed, Crashed -> ()
+  | Crashed, _ ->
+      Alcobar.failf "%s: %s crashed at base 0 but not at base %d" label what k
+  | _, Crashed ->
+      Alcobar.failf "%s: %s crashed at base %d but not at base 0" label what k
+  | Accepted a, Accepted b ->
+      if not (same a b) then
+        Alcobar.failf "%s: %s at base %d read a different value than at base 0"
+          label what k
+  | Rejected a, Rejected b ->
+      if not (Wire.equal_error_kind a.Wire.kind b.Wire.kind) then
+        Alcobar.failf
+          "%s: %s rejected for a different reason at base %d (%a at base 0, %a \
+           at base %d)"
+          label what k Wire.pp_parse_error a Wire.pp_parse_error b k
+      else if b.Wire.at <> a.Wire.at + k then
+        Alcobar.failf
+          "%s: %s puts the failure at byte %d with the frame at base %d, where \
+           base 0 puts it at byte %d"
+          label what b.Wire.at k a.Wire.at
+  | Accepted _, Rejected _ ->
+      Alcobar.failf "%s: %s accepted at base 0 and rejected at base %d" label
+        what k
+  | Rejected _, Accepted _ ->
+      Alcobar.failf "%s: %s rejected at base 0 and accepted at base %d" label
+        what k
+
+let check_offset_invariance label ?env a g pad bs =
+  let k = Bytes.length pad in
+  if k > 0 then begin
+    let bs' = pad_before pad bs in
+    check_shifted label "Codec.decode" ~k ~same:g.equal (decode_at ?env g bs 0)
+      (decode_at ?env g bs' k);
+    check_shifted label "Codec.validate" ~k
+      ~same:(fun () () -> true)
+      (validate_at ?env g bs 0) (validate_at ?env g bs' k);
+    (* [wire_size_at] takes no env, so on a codec with an input param it would
+       resolve the parametric size to 0 at both bases and compare two wrong
+       answers. The question is not statable through that entry point. *)
+    (if Option.is_none g.env then
+       match (size_at g bs 0, size_at g bs' k) with
+       | Some at0, Some atk when at0 <> atk ->
+           Alcobar.failf
+             "%s: Codec.wire_size_at is %d at base 0 and %d at base %d" label
+             at0 atk k
+       | Some _, None ->
+           Alcobar.failf "%s: Codec.wire_size_at raised at base %d only" label k
+       | None, Some _ ->
+           Alcobar.failf "%s: Codec.wire_size_at raised at base 0 only" label
+       | _ -> ());
+    List.iter
+      (fun fc ->
+        match fc with
+        | Field_check f -> (
+            match stage_get ?env a f.field with
+            | None -> ()
+            | Some get ->
+                let read buf off =
+                  match get buf off with
+                  | v -> Accepted v
+                  | exception Wire.Parse_error e -> Rejected e
+                  | exception Invalid_argument _ -> Crashed
+                in
+                check_shifted
+                  (Fmt.str "%s field %s" label f.name)
+                  "Codec.get" ~k ~same:f.equal (read bs 0) (read bs' k)))
+      a.achecks
+  end
+
+(* [encode] at base [k] must write the frame [encode] at base 0 writes, and
+   must leave every byte outside it alone: a caller encoding into a reused
+   transmit buffer keeps what surrounds the frame. *)
+let check_offset_encode label ?env g value bs pad =
+  let k = Bytes.length pad in
+  if k > 0 then
+    match Wire.Codec.size_of_value g.codec value with
+    | exception Invalid_argument _ -> ()
+    | sz -> (
+        let out = Bytes.make (k + sz + k) '\xa5' in
+        match Wire.Codec.encode ?env g.codec value out k with
+        | exception Invalid_argument m ->
+            Alcobar.failf "%s: Codec.encode raised at base %d on a positive: %s"
+              label k m
+        | () ->
+            if not (Bytes.equal (Bytes.sub out k sz) bs) then
+              Alcobar.failf
+                "%s: Codec.encode at base %d wrote different bytes than at \
+                 base 0"
+                label k;
+            let untouched off len =
+              let rec go i =
+                i >= len || (Bytes.get out (off + i) = '\xa5' && go (i + 1))
+              in
+              go 0
+            in
+            if not (untouched 0 k) then
+              Alcobar.failf "%s: Codec.encode at base %d wrote before the frame"
+                label k;
+            if not (untouched (k + sz) k) then
+              Alcobar.failf "%s: Codec.encode at base %d wrote past the frame"
+                label k)
+
+(* {1 Framing}
+
+   An accepted frame declares its own extent through [wire_size_at], and a
+   reassembler advances by exactly that to find the next one. Two things have
+   to hold for that loop to stay in step, and neither is checked anywhere but
+   on a positive, where the extent is true by construction: the frame must not
+   depend on bytes past what it declared, and bytes appended after it must not
+   change it.
+
+   The second has a real exception. [all_bytes], [all_zeros] and [rest_bytes]
+   consume to the end of the buffer by design, so appending genuinely changes
+   what they read. That is written here as a stronger clause rather than as a
+   skip: a codec may let appended bytes change its answer only if its declared
+   extent grew to cover them, which for a greedy tail means it consumed the
+   whole buffer both before and after. A codec whose declared extent stays put
+   while its value moves is reading bytes it does not claim. *)
+(* Cutting the buffer to the size the frame declares must not change what it
+   decodes to: the frame must not be reading bytes it did not claim. *)
+let check_frame_fits_declared label ?env g v sz bs =
+  match decode_at ?env g (Bytes.sub bs 0 sz) 0 with
+  | Accepted v' ->
+      if not (g.equal v v') then
+        Alcobar.failf
+          "%s: cutting the buffer to the frame's own wire_size_at (%d) changed \
+           the decoded value"
+          label sz
+  | Rejected e ->
+      Alcobar.failf
+        "%s: the frame does not decode inside its own wire_size_at (%d): %a"
+        label sz Wire.pp_parse_error e
+  | Crashed ->
+      Alcobar.failf
+        "%s: cutting the buffer to the frame's own wire_size_at (%d) crashed \
+         the decoder"
+        label sz
+
+(* The appended-bytes clause, with the greedy-tail carve-out written as its own
+   test rather than as a skip: growing the declared size is allowed only when
+   the codec consumed the whole buffer both before and after. *)
+let check_frame_ignores_tail label ?env g v ~sz ~len tail bs =
+  let n_tail = Bytes.length tail in
+  let bs' = Bytes.cat bs tail in
+  match size_at g bs' 0 with
   | None ->
+      Alcobar.failf
+        "%s: Codec.wire_size_at raised after %d bytes were appended to an \
+         accepted frame"
+        label n_tail
+  | Some sz' when sz' = sz -> (
+      match decode_at ?env g bs' 0 with
+      | Accepted v' ->
+          if not (g.equal v v') then
+            Alcobar.failf
+              "%s: appending %d bytes changed the value of a frame whose \
+               declared size stayed %d"
+              label n_tail sz
+      | Rejected e ->
+          Alcobar.failf
+            "%s: appending %d bytes stopped a frame of declared size %d from \
+             decoding: %a"
+            label n_tail sz Wire.pp_parse_error e
+      | Crashed ->
+          Alcobar.failf "%s: appending %d bytes crashed the decoder" label
+            n_tail)
+  | Some sz' when sz' < sz ->
+      Alcobar.failf
+        "%s: appending %d bytes shrank the declared frame size from %d to %d"
+        label n_tail sz sz'
+  | Some sz' ->
+      if sz <> len || sz' <> Bytes.length bs' then
+        Alcobar.failf
+          "%s: appending %d bytes grew the declared frame size from %d to %d \
+           without consuming the buffer (%d then %d bytes available)"
+          label n_tail sz sz' len (Bytes.length bs')
+
+let check_frame_extent label kind ?env g tail bs =
+  (* Same reason as in [check_offset_invariance]: with an input param bound,
+     the size this codec declares is not reachable through [wire_size_at]. *)
+  if Option.is_none g.env then
+    match decode_at ?env g bs 0 with
+    | Crashed | Rejected _ -> ()
+    | Accepted v -> (
+        let label = Fmt.str "%s %s" label kind in
+        let len = Bytes.length bs in
+        match size_at g bs 0 with
+        | None ->
+            Alcobar.failf
+              "%s: Codec.wire_size_at raised on a frame decode accepted" label
+        | Some sz ->
+            let min_sz = Wire.Codec.min_wire_size g.codec in
+            if sz < min_sz || sz > len then
+              Alcobar.failf
+                "%s: Codec.wire_size_at = %d on an accepted %d-byte frame, \
+                 outside [%d, %d]"
+                label sz len min_sz len;
+            check_frame_fits_declared label ?env g v sz bs;
+            if Bytes.length tail > 0 then
+              check_frame_ignores_tail label ?env g v ~sz ~len tail bs)
+
+(* Nothing shorter than [min_wire_size] may decode. A reassembler holds off
+   until it has that many bytes, so a codec that accepts fewer has a minimum
+   that does not mean what its caller reads it as. *)
+let check_short_prefix label kind ?env g bs =
+  let min_sz = Wire.Codec.min_wire_size g.codec in
+  if min_sz > 0 && Bytes.length bs >= min_sz then
+    match decode_at ?env g (Bytes.sub bs 0 (min_sz - 1)) 0 with
+    | Rejected _ -> ()
+    | Crashed ->
+        Alcobar.failf
+          "%s %s: decode crashed on %d bytes, below min_wire_size %d" label kind
+          (min_sz - 1) min_sz
+    | Accepted _ ->
+        Alcobar.failf
+          "%s %s: decode accepted %d bytes where min_wire_size is %d" label kind
+          (min_sz - 1) min_sz
+
+(* {1 Idempotence and non-interference} *)
+
+(* Every read path leaves the buffer byte-identical. [Wire.of_string] hands the
+   decoder a [Bytes.unsafe_of_string] view of an immutable OCaml string, so a
+   write anywhere on a read path corrupts a value the caller believes frozen. *)
+let check_read_purity label kind ?env a g bs =
+  let before = Bytes.copy bs in
+  ignore (decode_at ?env g bs 0);
+  ignore (validate_at ?env g bs 0);
+  ignore (size_at g bs 0);
+  List.iter (fun fc -> ignore (field_snapshot ?env a bs fc)) a.achecks;
+  if not (Bytes.equal bs before) then
+    Alcobar.failf "%s %s: a read path wrote to the buffer at byte %d" label kind
+      (first_difference bs before)
+
+let check_repeated label what ~same first second =
+  match (first, second) with
+  | Crashed, Crashed -> ()
+  | Accepted a, Accepted b ->
+      if not (same a b) then
+        Alcobar.failf
+          "%s: %s answered differently once another frame had been read" label
+          what
+  | Rejected a, Rejected b ->
+      if
+        (not (Wire.equal_error_kind a.Wire.kind b.Wire.kind))
+        || a.Wire.at <> b.Wire.at
+      then
+        Alcobar.failf
+          "%s: %s reported a different failure once another frame had been \
+           read (%a, then %a)"
+          label what Wire.pp_parse_error a Wire.pp_parse_error b
+  | _ ->
+      Alcobar.failf "%s: %s changed verdict once another frame had been read"
+        label what
+
+(* Reading one frame must not change the answer to a question about another.
+   [decode], [validate] and the staged readers of a field carrying an action
+   all share one domain-local scratch array, each clearing on entry as much of
+   it as it believes it needs; a slot one of them leaves set and another reads
+   before setting is one frame's field value answering for a different frame,
+   which in this library is disclosure rather than a nit. The two things
+   compared are a query answered with nothing else in flight, and the same
+   query answered after a second frame has been through every read path the
+   codec offers. *)
+let check_frame_isolation label kind ?env a g bs interloper =
+  let snaps = List.filter_map (field_snapshot ?env a bs) a.achecks in
+  let alone_decode = decode_at ?env g bs 0 in
+  let alone_validate = validate_at ?env g bs 0 in
+  let alone_size = size_at g bs 0 in
+  (* Push the second frame through every read path, the staged readers already
+     in hand included, so it is one reader that sees both buffers. *)
+  ignore (decode_at ?env g interloper 0);
+  ignore (validate_at ?env g interloper 0);
+  ignore (size_at g interloper 0);
+  List.iter (fun (_, same) -> ignore (same interloper)) snaps;
+  List.iter (fun fc -> ignore (field_snapshot ?env a interloper fc)) a.achecks;
+  let label = Fmt.str "%s %s" label kind in
+  check_repeated label "Codec.decode" ~same:g.equal alone_decode
+    (decode_at ?env g bs 0);
+  check_repeated label "Codec.validate"
+    ~same:(fun () () -> true)
+    alone_validate (validate_at ?env g bs 0);
+  if alone_size <> size_at g bs 0 then
+    Alcobar.failf
+      "%s: Codec.wire_size_at answered differently once another frame had been \
+       read"
+      label;
+  List.iter
+    (fun (name, same) ->
+      if not (same bs) then
+        Alcobar.failf
+          "%s: Codec.get on field %s reads a different value once the same \
+           reader has been used on another frame"
+          label name)
+    snaps
+
+(* Two positives from one slot of the test case: the per-field write checks
+   need a second value of the record's own type to write over the first, and
+   pairing them here keeps the case's generator arity unchanged. *)
+let two_positives g =
+  Alcobar.map Alcobar.[ g.positive; g.positive ] (fun a b -> (a, b))
+
+let check_positive_stream ~validate label a g (sample, (other, other_bs))
+    hostile noise =
+  let value, bs = sample in
+  check_positive label g sample;
+  if validate then check_validate_positive label g bs;
+  check_fields label a g sample other hostile;
+  let env = positive_env g in
+  check_offset_invariance (label ^ " positive") ?env a g noise bs;
+  check_offset_encode (label ^ " positive") ?env g value bs noise;
+  check_frame_extent label "positive" ?env g noise bs;
+  check_short_prefix label "positive" ?env g bs;
+  check_read_purity label "positive" ?env a g bs;
+  check_frame_isolation label "positive" ?env a g bs other_bs
+
+let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
+  check_decode_safety label kind ?env g bs;
+  check_direct_codec_agree label kind g bs;
+  check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
+  check_frame_extent label kind ?env g noise bs;
+  check_short_prefix label kind ?env g bs;
+  check_read_purity label kind ?env a g bs;
+  check_frame_isolation label kind ?env a g bs interloper;
+  if validate then begin
+    check_validate_safety label kind ?env g bs;
+    check_decode_validate_agree label kind ?env g bs;
+    check_field_reads label kind ?env a g bs
+  end
+
+let check_hostile_stream label g ?env = function
+  | None -> ()
+  | Some value ->
+      check_direct_codec_encode_agree label "hostile" g value;
+      check_encode_safety label ?env g value
+
+(* The stream layout for a codec that binds no [Param.env]: one case, five
+   generator slots, three streams plus the noise every metamorphic check
+   transforms the sample with. Each safety stream stands in as the other's
+   interloper for the non-interference check, so no extra slot is needed for
+   the second frame. *)
+let env_free_case ~validate label a g =
+  let positive_stream = check_positive_stream ~validate label a g in
+  let safety_stream = check_safety_stream ~validate label a g in
+  let hostile_stream = check_hostile_stream label g in
+  Alcobar.test_case (label ^ " all")
+    Alcobar.
       [
-        Alcobar.test_case (label ^ " all")
-          Alcobar.
-            [ g.positive; g.random; g.adversarial; hostile_value_stream g ]
-          (fun positive random adversarial hostile ->
-            check_positive_stream positive;
-            check_safety_stream "random" random;
-            check_safety_stream "adversarial" adversarial;
-            check_hostile_stream hostile);
+        two_positives g;
+        g.random;
+        g.adversarial;
+        hostile_value_stream g;
+        noise_gen;
       ]
-  | Some s ->
+    (fun positives random adversarial hostile noise ->
+      positive_stream positives hostile noise;
+      safety_stream "random" ~interloper:adversarial ~noise random;
+      safety_stream "adversarial" ~interloper:random ~noise adversarial;
+      hostile_stream hostile)
+
+(* The same, with a binder slot per safety stream for the codec's params. *)
+let env_bound_case ~validate label a g (s : env_strategy) =
+  let positive_stream = check_positive_stream ~validate label a g in
+  let safety_stream = check_safety_stream ~validate label a g in
+  let hostile_stream = check_hostile_stream label g in
+  Alcobar.test_case (label ^ " all")
+    Alcobar.
       [
-        Alcobar.test_case (label ^ " all")
-          Alcobar.
-            [
-              g.positive;
-              g.random;
-              g.adversarial;
-              s.fuzz;
-              s.fuzz;
-              hostile_value_stream g;
-            ]
-          (fun positive random adversarial random_env adversarial_env hostile ->
-            check_positive_stream positive;
-            let env = Some (random_env (Wire.Codec.env g.codec)) in
-            check_safety_stream "random" ?env random;
-            let env = Some (adversarial_env (Wire.Codec.env g.codec)) in
-            check_safety_stream "adversarial" ?env adversarial;
-            (* The hostile value is the thing under test, so bind the params the
-               way a positive would: a random env would make encode fail for an
-               unrelated reason. *)
-            check_hostile_stream ?env:(positive_env g) hostile);
+        two_positives g;
+        g.random;
+        g.adversarial;
+        s.fuzz;
+        s.fuzz;
+        hostile_value_stream g;
+        noise_gen;
       ]
+    (fun positives
+         random
+         adversarial
+         random_env
+         adversarial_env
+         hostile
+         noise
+       ->
+      positive_stream positives hostile noise;
+      let env = Some (random_env (Wire.Codec.env g.codec)) in
+      safety_stream "random" ?env ~interloper:adversarial ~noise random;
+      let env = Some (adversarial_env (Wire.Codec.env g.codec)) in
+      safety_stream "adversarial" ?env ~interloper:random ~noise adversarial;
+      (* The hostile value is the thing under test, so bind the params the way a
+         positive would: a random env would make encode fail for an unrelated
+         reason. *)
+      hostile_stream ?env:(positive_env g) hostile)
+
+let test_cases ?(validate = true) label g =
+  (* Built once per case, not once per sample: for a gen with no field list of
+     its own [addressed] compiles a wrapper codec, which is far too expensive
+     to repeat per draw. *)
+  let a = addressed g in
+  match g.env with
+  | None -> [ env_free_case ~validate label a g ]
+  | Some s -> [ env_bound_case ~validate label a g s ]
 
 (* Cross-field sizes: a [byte_array] whose [~size] reads a preceding int field.
    The size-source field is drawn from several int-valued field types -- in
@@ -3423,6 +4322,7 @@ let sized_source name make_len bytes_of_len =
     adversarial = bytes_any;
     equal = ( = );
     env = None;
+    fields = pair_fields ("Len", len_field) ("Data", data_field);
     adversarial_value = None;
   }
 
@@ -3460,17 +4360,49 @@ let sized_cases group =
    asserts round-trip (and so [size_of_value] / [encode] consistency across the
    whole nesting), the other two assert the decoder never raises. Generated
    codecs never reference [Param.input], so no env is threaded. *)
-type nested_sample = NS : 'a t * string * ('a * bytes) -> nested_sample
+type nested_sample = NS : 'a t * string * ('a * bytes) * 'a -> nested_sample
+(* The trailing value is a second, independent positive of the same
+         generated codec, which the per-field write checks need in order to
+         write something other than what the buffer already holds. *)
 
 type nested_bytes =
   | NB :
       'a t * string * bytes * (Wire.Param.env -> Wire.Param.env) option
       -> nested_bytes
 
+let check_nested_positive label noise
+    (NS (g, comp, ((value, bs) as pos), other)) =
+  let label = Fmt.str "%s [%s]" label comp in
+  try
+    let a = addressed g in
+    let env = positive_env g in
+    check_positive label g pos;
+    check_validate_positive label g bs;
+    check_fields label a g pos other None;
+    check_offset_invariance (label ^ " positive") ?env a g noise bs;
+    check_offset_encode (label ^ " positive") ?env g value bs noise;
+    check_frame_extent label "positive" ?env g noise bs;
+    check_read_purity label "positive" ?env a g bs
+  with Failure m -> Alcobar.failf "%s raised: %s" label m
+
+let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
+  let label = Fmt.str "%s [%s]" label comp in
+  let a = addressed g in
+  let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
+  check_decode_safety label kind ?env g bs;
+  check_validate_safety label kind ?env g bs;
+  check_direct_codec_agree label kind g bs;
+  check_field_reads label kind ?env a g bs;
+  check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
+  check_frame_extent label kind ?env g noise bs;
+  check_read_purity label kind ?env a g bs
+
 let nested_cases label depth =
   let positive =
     Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
-        Alcobar.map Alcobar.[ a.g.positive ] (fun pos -> NS (a.g, a.label, pos)))
+        Alcobar.map
+          Alcobar.[ a.g.positive; a.g.positive ]
+          (fun pos (other, _) -> NS (a.g, a.label, pos, other)))
   in
   let with_bytes adversarial =
     Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
@@ -3487,23 +4419,11 @@ let nested_cases label depth =
   in
   [
     Alcobar.test_case (label ^ " all")
-      Alcobar.[ positive; with_bytes false; with_bytes true ]
-      (fun (NS (g, comp, ((value, bs) as pos))) random adversarial ->
-        let nested_label = Fmt.str "%s [%s]" label comp in
-        (try
-           check_positive nested_label g pos;
-           check_validate_positive nested_label g bs;
-           ignore value
-         with Failure m -> Alcobar.failf "%s raised: %s" nested_label m);
-        let check kind (NB (g, comp, bs, mk)) =
-          let nested_label = Fmt.str "%s [%s]" label comp in
-          let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
-          check_decode_safety nested_label kind ?env g bs;
-          check_validate_safety nested_label kind ?env g bs;
-          check_direct_codec_agree nested_label kind g bs
-        in
-        check "random" random;
-        check "adversarial" adversarial);
+      Alcobar.[ positive; with_bytes false; with_bytes true; noise_gen ]
+      (fun positive random adversarial noise ->
+        check_nested_positive label noise positive;
+        check_nested_bytes label "random" noise random;
+        check_nested_bytes label "adversarial" noise adversarial);
   ]
 
 (* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
@@ -3637,6 +4557,22 @@ let binds_env (Pack g) = Option.is_some g.env
 
 let registry_record =
   Codec.v "RegRecord" (fun a b -> (a, b)) Codec.[ uint8 $ fst; uint16be $ snd ]
+
+(* Two bitfields packed into one base word, as a record whose field list the
+   fuzzer keeps: the shape where a [Codec.set] that rewrites the whole word
+   instead of its own bits destroys the neighbour, and the only shape in the
+   registry where two fields share a byte. The hand-built [bitpack_*] gens
+   pack the same way but seal their codec, so their slots are not addressable
+   one at a time. *)
+let registry_bits_u8 =
+  Codec.v "RegBitsU8"
+    (fun hi lo -> (hi, lo))
+    Codec.[ bits ~width:3 Wire.U8 $ fst; bits ~width:5 Wire.U8 $ snd ]
+
+let registry_bits_u16be =
+  Codec.v "RegBitsU16be"
+    (fun hi lo -> (hi, lo))
+    Codec.[ bits ~width:4 Wire.U16be $ fst; bits ~width:12 Wire.U16be $ snd ]
 
 let registry_casetype =
   casetype_u8 "RegPayload"
@@ -3840,6 +4776,8 @@ let composite_gens =
     ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
     ("repeat_seq(7,uint16be)", Pack (repeat_seq ~bytes:7 uint16be));
     ("record", Pack registry_record);
+    ("record_bits(3+5,U8)", Pack registry_bits_u8);
+    ("record_bits(4+12,U16be)", Pack registry_bits_u16be);
     ("casetype_u8", Pack registry_casetype);
     ("casetype_u16be_default", Pack casetype_u16be_default);
     ("field_anon", Pack field_anon);
@@ -4515,6 +5453,39 @@ let check_sampler_distribution () =
       if not ok then Alcobar.failf "sampler distribution: %s" what)
     checks
 
+(* How many registry entries the per-field properties actually reach. Staging an
+   accessor is allowed to refuse -- a field shape with no staged accessor is a
+   documented gap, not a failure -- so a change to [addressed], to the registry
+   or to the accessor API could turn every per-field property into a silent
+   no-op without one test going red. Pin the floor. *)
+let field_reach () =
+  let reach (readable, writable, multi) (_, Pack g) =
+    let a = addressed g in
+    let readable_field fc =
+      match fc with Field_check f -> Option.is_some (stage_get a f.field)
+    in
+    let writable_field fc =
+      match fc with Field_check f -> Option.is_some (stage_set a f.field)
+    in
+    (* [set] takes no env, so the write properties skip a codec that binds one;
+       locality needs two fields to play one off against the other. *)
+    let env_free = Option.is_none g.env in
+    ( (if List.exists readable_field a.achecks then readable + 1 else readable),
+      (if env_free && List.exists writable_field a.achecks then writable + 1
+       else writable),
+      if env_free && List.compare_length_with a.achecks 1 > 0 then multi + 1
+      else multi )
+  in
+  List.fold_left reach (0, 0, 0) registry
+
+let check_field_reach () =
+  let readable, writable, multi = field_reach () in
+  if readable < 120 || writable < 115 || multi < 15 then
+    Alcobar.failf
+      "per-field properties reach %d readable, %d writable and %d multi-field \
+       registry entries out of %d"
+      readable writable multi (List.length registry)
+
 let const_case name check =
   Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
 
@@ -4527,6 +5498,7 @@ let invariant_cases label =
       (label ^ " sampler adversarial bias")
       check_sampler_adversarial_bias;
     const_case (label ^ " sampler distribution") check_sampler_distribution;
+    const_case (label ^ " field access reach") check_field_reach;
   ]
 
 let expect_invalid label f =
@@ -4584,6 +5556,7 @@ let check_all_zeros_semantic label () =
       adversarial = bytes_any;
       equal = String.equal;
       env = None;
+      fields = [];
       adversarial_value = None;
     }
   in
@@ -4611,6 +5584,7 @@ let signed_slice_semantic_codec () =
           Int.equal l1 l2
           && String.equal (string_of_slice s1) (string_of_slice s2));
       env = None;
+      fields = [];
       adversarial_value = None;
     }
   in

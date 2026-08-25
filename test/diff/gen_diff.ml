@@ -8,7 +8,8 @@
     predicate must stay in agreement. Emits the EverParse C into [<argv1>/]
     (default [schemas/]) and [wire_ffi.c] + [stubs.ml] + [diff_index.ml] (a
     [covered] array pairing each codec's label with a [bytes -> bool] accept
-    check) into the current directory. Run by the [gen] dune rule.
+    check) into the current directory. Run by the code generation rule in
+    [fuzz/diff/].
 
     EverParse spends ~9s verifying each module, so the codecs are generated in a
     bounded fork pool, each run in a private directory (EverParse's shared

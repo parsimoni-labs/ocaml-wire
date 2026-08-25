@@ -134,8 +134,12 @@ end
 module Reader = Bytesrw.Bytes.Reader
 module Slice = Bytesrw.Bytes.Slice
 
-let[@inline] check_eof len need =
-  if need > len then raise_eof ~at:len ~expected:need ~got:len
+(* [n] bytes starting at [off] must fit inside the region ending at [limit].
+   {!Types.Unexpected_eof} counts bytes, not positions: the value needed [n] of
+   them and the region had only [limit - off] left. *)
+let[@inline] check_eof limit ~off ~n =
+  if off + n > limit then
+    raise_eof ~at:limit ~expected:n ~got:(max 0 (limit - off))
 
 (* A span of [n] bytes starting at [off]. [n] comes from a size expression, so
    an underflowing subtraction or a negative literal reaches here as data: a
@@ -143,7 +147,7 @@ let[@inline] check_eof len need =
    [Invalid_argument] that escapes [of_string]'s result. *)
 let[@inline] check_span len ~off ~n =
   if n < 0 then raise_out_of_range ~at:off (Int64.of_int n);
-  check_eof len (off + n)
+  check_eof len ~off ~n
 
 (* The single decoder kernel. Bytes-based, returns [(value, end_off)].
    All types handled here -- no fallback. Expressions are evaluated in
@@ -177,10 +181,7 @@ let parse_codec_typ codec_decode fixed_size size_of buf off len =
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
    decode paths agree on an unlisted code. *)
 let check_enum_membership ~at ~closed cases v =
-  if closed then begin
-    let valid = List.map snd cases in
-    if not (List.mem v valid) then raise_invalid_enum ~at ~value:v ~valid
-  end
+  if closed then Types.check_enum_decode ~at ~cases v
 
 (* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
    is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key
@@ -227,7 +228,7 @@ let parse_struct_typ s buf off len =
   ((), off + sz)
 
 let parse_fixed size get buf off len =
-  check_eof len (off + size);
+  check_eof len ~off ~n:size;
   (get buf off, off + size)
 
 let int32_le buf off = Int32.to_int (Bytes.get_int32_le buf off)
@@ -266,7 +267,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       (Uint_var.read endian buf off n, off + n)
   | Bits { width; base; bit_order } ->
       let sz = Bitfield.byte_size base in
-      check_eof len (off + sz);
+      check_eof len ~off ~n:sz;
       let total = Bitfield.total_bits base in
       let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
       let mask = (1 lsl width) - 1 in
@@ -312,9 +313,9 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       if (not at_most) && consumed <> n then
         raise_eof ~at:inner_end ~expected:n ~got:consumed;
       (v, off + n)
-  | Map { inner; decode; _ } ->
+  | Map { inner; decode; index_bound; _ } ->
       let v, off' = parse_direct inner buf off len in
-      (decode v, off')
+      (Types.map_decode ~index_bound decode ~at:off v, off')
   | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
@@ -342,9 +343,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Repeat { size; elem; seq } ->
       let budget = Eval.expr Eval.empty size in
       parse_repeat_loop ~elem ~seq buf off len ~budget
-  | Type_ref _ -> failwith "type_ref requires a type registry"
-  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
-  | Apply _ -> failwith "apply requires a type registry"
+  | Type_ref _ -> invalid_arg "Wire.type_ref: decoding needs a type registry"
+  | Qualified_ref _ ->
+      invalid_arg "Wire.qualified_ref: decoding needs a type registry"
+  | Apply _ -> invalid_arg "Wire.apply: decoding needs a type registry"
 
 and parse_where : type a. a typ -> bool expr -> bytes -> int -> int -> a * int =
  fun inner cond buf off len ->
@@ -398,8 +400,8 @@ and parse_repeat_loop : type elt seq.
     seq * int =
  fun ~elem ~seq:(Seq_map s) buf off len ~budget ->
   let start = off in
-  if budget < 0 then raise_eof ~at:off ~expected:0 ~got:budget;
-  check_eof len (start + budget);
+  if budget < 0 then raise_eof ~at:off ~expected:budget ~got:(max 0 (len - off));
+  check_eof len ~off:start ~n:budget;
   let region_end = start + budget in
   let rec loop acc off' =
     if off' = region_end then (s.finish acc, off')
@@ -486,10 +488,8 @@ let read_exact reader (n : int) =
         let need = n - off in
         let take = Int.min need slice_len in
         Bytes.blit (Slice.bytes slice) (Slice.first slice) buf off take;
-        (if slice_len > take then
-           match Slice.drop take slice with
-           | None -> assert false
-           | Some rest -> Reader.push_back reader rest);
+        if slice_len > take then
+          Reader.push_back reader (Slice.drop_first_or_eod take slice);
         loop (off + take)
   in
   loop 0
@@ -808,16 +808,17 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         v
       |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
-  | Struct _ -> failwith "struct encoding: use Codec.encode"
-  | Type_ref _ -> failwith "type_ref requires a type registry"
-  | Qualified_ref _ -> failwith "qualified_ref requires a type registry"
-  | Apply _ -> failwith "apply requires a type registry"
+  | Struct _ -> invalid_arg "Wire.struct_: encoding a struct goes through Codec"
+  | Type_ref _ -> invalid_arg "Wire.type_ref: encoding needs a type registry"
+  | Qualified_ref _ ->
+      invalid_arg "Wire.qualified_ref: encoding needs a type registry"
+  | Apply _ -> invalid_arg "Wire.apply: encoding needs a type registry"
 
 and encode_casetype : type a k.
     k typ -> (a, k) case_branch list -> a -> encoder -> unit =
  fun tag cases v enc ->
   let rec find_case = function
-    | [] -> failwith "casetype encoding: no matching case"
+    | [] -> Types.raise_no_matching_case ()
     | Case_branch { cb_inner; cb_project; _ } :: rest -> (
         match cb_project v with
         | Some (t, body) ->
@@ -909,7 +910,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Uint_var { size = Int n; endian } ->
       Uint_var.write endian buf off n v;
       off + n
-  | Uint_var _ -> failwith "encode_direct: Uint_var with dynamic size"
+  | Uint_var _ ->
+      invalid_arg "Wire.uint: encoding a field-dependent size needs Codec"
   | Bits { width; base; bit_order } ->
       encode_bits buf off v width base bit_order
   | Unit -> off

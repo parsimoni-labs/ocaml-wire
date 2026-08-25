@@ -1011,8 +1011,7 @@ let test_validate_overrun_field_offset () =
    wrapper around validate, which reports a garbage location; the offset is
    what shows a real per-field guard ran, at the field that overran. *)
 let check_located_eof name ~at ~expected ~got = function
-  | Ok () ->
-      Alcotest.failf "%s: accepted a record whose field runs off the end" name
+  | Ok () -> Alcotest.failf "%s: accepted a buffer its own decoder rejects" name
   | Error (e : parse_error) -> (
       Alcotest.(check int) (name ^ ": offset of the failing field") at e.at;
       match e.kind with
@@ -1153,11 +1152,94 @@ let validate_uint_var_codec =
 
 let test_validate_uint_var_past_end () =
   let buf = Bytes.of_string "\x07\x00\x00" in
-  (* The span check reports the offset the buffer would have had to reach (8)
-     against the length it has (3), the way a truncated byte span does. *)
-  check_located_eof "validate" ~at:1 ~expected:8 ~got:3
+  (* The span check reports the 7 bytes the field asked for against the 2 the
+     buffer still had at offset 1, the way a truncated byte span does. *)
+  check_located_eof "validate" ~at:1 ~expected:7 ~got:2
     (validating "validate" (fun () ->
          Codec.validate validate_uint_var_codec buf 0))
+
+(* A [Field.repeat] consumes its byte budget exactly, so an 11-byte budget over
+   a 2-byte element is illegal however long the buffer is (here 64 bytes): the
+   budget does not split into whole elements. EverParse rejects the same frame
+   from the same schema, with a dedicated "list size not multiple" error, and so
+   does [Codec.decode]. [Codec.validate] used to accept it: it reaches a field
+   only through that field's populate, and the repeat had none. Bytes are the
+   fuzz sample verbatim ([fuzz.exe -s 32582623701 -r 7500]). *)
+let repeat_odd_budget =
+  "\x00\x0b\x1a\x15\x11\x9d\x47\x90\x0d\xcf\xbd\xa9\x80\xf5\x21\x27\x44\xad\x4d\xa6\xc1\xde\xd7\xf6\x1a\x42\x1a\x51\x9d\x9d\x57\x5c\x2c\x8c\x75\xa1\xba\xfb\xaf\xe3\xd7\xaa\x2b\x1d\x90\xfb\xce\x47\xf9\xa4\x4e\x46\xbe\x2a\xa1\xbb\x18\xfc\x72\xe2\x8e\x47\xf9\x41"
+
+let repeat_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        (Field.repeat "items" ~size:(Field.ref f_total) uint16be $ fun xs -> xs);
+      ]
+
+(* [repeat_seq] builds the same [Repeat] node with a different sequence builder,
+   so it shares the populate and the budget check; pinned here so a future split
+   of the two paths cannot fix one and leave the other. *)
+let repeat_seq_budget_codec =
+  let f_total = Field.v "total" uint16be in
+  Codec.v "RepSeqBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        (f_total $ fun xs -> 2 * List.length xs);
+        ( Field.repeat_seq "items" ~seq:seq_list ~size:(Field.ref f_total)
+            uint16be
+        $ fun xs -> xs );
+      ]
+
+let test_validate_repeat_partial_element () =
+  let buf = Bytes.of_string repeat_odd_budget in
+  let rejects name codec =
+    (* The budget runs from offset 2 to 13 and leaves one byte at 12, where a
+       2-byte element needs two. Both sides must report that same spot: a fix
+       that made them agree on accepting would pass a bare "they agree" check. *)
+    check_located_eof (name ^ " validate") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " validate") (fun () -> Codec.validate codec buf 0));
+    check_located_eof (name ^ " decode") ~at:12 ~expected:2 ~got:1
+      (validating (name ^ " decode") (fun () ->
+           match Codec.decode codec buf 0 with
+           | Ok _ -> ()
+           | Error e -> raise (Wire.Parse_error e)))
+  in
+  rejects "repeat" repeat_budget_codec;
+  rejects "repeat_seq" repeat_seq_budget_codec;
+  (* A budget that does split stays accepted on both sides: what is rejected is
+     the partial element, not every repeat. *)
+  let whole =
+    Bytes.of_string ("\x00\x0a" ^ String.sub repeat_odd_budget 2 10)
+  in
+  let accepts name codec =
+    (match Codec.validate codec whole 0 with
+    | () -> ()
+    | exception Wire.Parse_error e ->
+        Alcotest.failf "%s: validate rejected a whole budget: %a" name
+          Wire.pp_parse_error e);
+    match Codec.decode codec whole 0 with
+    | Ok xs ->
+        Alcotest.(check int) (name ^ ": elements decoded") 5 (List.length xs)
+    | Error e ->
+        Alcotest.failf "%s: decode rejected a whole budget: %a" name
+          Wire.pp_parse_error e
+  in
+  accepts "repeat" repeat_budget_codec;
+  accepts "repeat_seq" repeat_seq_budget_codec
+
+(* The same truncation read at a nonzero base. [expected] and [got] are byte
+   counts, so they say the same thing wherever the frame sits; only [at] moves.
+   Reporting buffer positions instead made both of them grow with the base, and
+   made [got] equal [expected] on a failure that says the input ran out. *)
+let test_eof_counts_are_base_invariant () =
+  let pad = 8 in
+  let buf = Bytes.of_string (String.make pad '\xee' ^ "\x07\x00\x00") in
+  check_located_eof "validate at base 8" ~at:(pad + 1) ~expected:7 ~got:2
+    (validating "validate at base 8" (fun () ->
+         Codec.validate validate_uint_var_codec buf pad))
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -3705,6 +3787,135 @@ let test_encode_shared_bitfield () =
   Alcotest.(check int) "top nibble (MSB-first)" 0xA0 (Bytes.get_uint8 buf 0)
 
 (* -- API misuse / safety tests -- *)
+
+(* A description that cannot be decoded or encoded whatever the input is a
+   programmer error, and [wire.mli] says so: it "raises [Invalid_argument], the
+   same way encoding does". Eighteen sites raised [Failure] instead, thirteen of
+   them reachable from a public entry point, which no documented caller has any
+   reason to catch and which a [Codec.encode] caller cannot tell apart from a
+   bug in the library. The evidence that the code was wrong rather than the doc
+   is next door: an unbound field ref in a size expression already raised
+   [Invalid_argument] while the same ref in a where clause raised [Failure].
+   Every reachable site gets a case, so one that regresses names itself. *)
+
+type misuse_v = A of int | B of int | Other of int
+
+let misuse_casetype =
+  casetype "MisuseCT" uint8
+    [
+      case ~index:1 uint8
+        ~inject:(fun x -> A x)
+        ~project:(function A x -> Some x | _ -> None);
+      case ~index:2 uint8
+        ~inject:(fun x -> B x)
+        ~project:(function B x -> Some x | _ -> None);
+    ]
+
+let misuse_casetype_codec =
+  Codec.v "MisuseCTRec" Fun.id Codec.[ Field.v "u" misuse_casetype $ Fun.id ]
+
+let f_absent = Field.v "absent" uint8
+let f_absent64 = Field.v "absent64" uint64be
+
+let test_undecodable_description_is_invalid_argument () =
+  let expect (name, f) =
+    match f () with
+    | () -> Alcotest.failf "%s: raised nothing" name
+    | exception Invalid_argument _ -> ()
+    | exception Failure m ->
+        Alcotest.failf "%s: raised Failure %S, which the contract forbids" name
+          m
+  in
+  List.iter expect
+    [
+      (* Direct decode and encode of a form with no reader or writer. *)
+      ("of_string type_ref", fun () -> ignore (of_string (type_ref "T") "abcd"));
+      ( "of_string qualified_ref",
+        fun () -> ignore (of_string (qualified_ref "M" "T") "abcd") );
+      ( "of_string apply",
+        fun () -> ignore (of_string (apply uint8 [ int 1 ]) "abcd") );
+      ("to_string type_ref", fun () -> ignore (to_string (type_ref "T") 0));
+      ( "to_string qualified_ref",
+        fun () -> ignore (to_string (qualified_ref "M" "T") 0) );
+      ("to_string apply", fun () -> ignore (to_string (apply uint8 [ int 1 ]) 0));
+      ( "to_string struct_typ",
+        fun () ->
+          ignore
+            (to_string (struct_typ (struct_ "MisuseS" [ field "a" uint8 ])) ())
+      );
+      (* A cross-field reference evaluated where there is no record. *)
+      ( "of_string size ref outside a struct",
+        fun () ->
+          ignore (of_string (byte_array ~size:(Field.ref f_absent)) "\003abc")
+      );
+      ( "to_string size ref outside a struct",
+        fun () ->
+          ignore (to_string (byte_array ~size:(Field.ref f_absent)) "abc") );
+      ( "of_string int64 ref outside a struct",
+        fun () ->
+          ignore
+            (of_string
+               (where Expr.(Field.int64 f_absent64 = int64 0L) uint8)
+               "\003") );
+      (* A casetype value no case projects. *)
+      ( "to_string casetype no case matches",
+        fun () -> ignore (to_string misuse_casetype (Other 5)) );
+      ( "Codec.encode casetype no case matches",
+        fun () ->
+          Codec.encode misuse_casetype_codec (Other 5) (Bytes.make 8 '\000') 0
+      );
+      (* A codec sealed against a field it never got. *)
+      ( "Codec.v where ref to a field not in the codec",
+        fun () ->
+          ignore
+            (Codec.v "MisuseWhere"
+               ~where:Expr.(Field.ref f_absent = int 0)
+               Fun.id
+               Codec.[ Field.v "a" uint8 $ Fun.id ]) );
+      ( "Codec.v constraint ref to a field not in the codec",
+        fun () ->
+          ignore
+            (Codec.v "MisuseConstraint" Fun.id
+               Codec.
+                 [
+                   Field.v "a" uint8
+                     ~constraint_:Expr.(Field.ref f_absent = int 0)
+                   $ Fun.id;
+                 ]) );
+    ]
+
+(* [Codec.size_of_value] answers how many bytes [Codec.encode] will write, and a
+   caller sizes its buffer from that answer. For a casetype value no case
+   projects there are no such bytes: encode refuses it. Answering with the tag
+   width instead sent the caller off to allocate for a write that cannot happen
+   and meet the refusal one line later, so the two must refuse the same value in
+   the same words. *)
+let invalid_argument_message f =
+  match f () with () -> None | exception Invalid_argument m -> Some m
+
+let test_size_of_value_refuses_unmatched_case () =
+  let buf = Bytes.make 8 '\000' in
+  let sized =
+    invalid_argument_message (fun () ->
+        ignore (Codec.size_of_value misuse_casetype_codec (Other 5) : int))
+  in
+  (match sized with
+  | None ->
+      Alcotest.fail
+        "Codec.size_of_value answered with a size for a value no case projects"
+  | Some _ -> ());
+  let encoded =
+    invalid_argument_message (fun () ->
+        Codec.encode misuse_casetype_codec (Other 5) buf 0)
+  in
+  Alcotest.(check (option string))
+    "size_of_value refuses in encode's own words" encoded sized;
+  (* The control: a value a case does project still sizes what encode writes. *)
+  let n = Codec.size_of_value misuse_casetype_codec (B 9) in
+  Codec.encode misuse_casetype_codec (B 9) buf 0;
+  Alcotest.(check int) "a projected value sizes its tag and its body" 2 n;
+  Alcotest.(check string)
+    "and encode wrote exactly those bytes" "\002\009" (Bytes.sub_string buf 0 n)
 
 let test_get_field_notin_codec () =
   (* get with a field that was never added to this codec raises Not_found
@@ -7527,6 +7738,351 @@ let test_set_no_allocation () =
   check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
   check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
 
+(* {2 Resource bounds}
+
+   Allocation is the deterministic half of cost: the same work turns over the
+   same number of words on any machine, where wall-clock does not. The two
+   tests below are not performance targets. They assert a shape -- how much
+   memory a read path churns must not be a function of a length the sender
+   picked -- on the entry points [codec.mli] tells a caller to run per packet
+   on untrusted input.
+
+   [Gc.minor_words] cannot measure it: it does not count blocks over
+   [Max_young_wosize] (256 words), so a version written with it silently
+   measures nothing once the payload passes 2 KiB. *)
+let words_per_call ~iters f =
+  ignore (Sys.opaque_identity (f ()));
+  Gc.full_major ();
+  let before = Gc.allocated_bytes () in
+  for _ = 1 to iters do
+    ignore (Sys.opaque_identity (f ()))
+  done;
+  let after = Gc.allocated_bytes () in
+  int_of_float (Float.round ((after -. before) /. float_of_int iters /. 8.))
+
+(* Length-parameterised span types, each with a payload it accepts. All five
+   hand the caller one string of about [n] bytes, so they are comparable to
+   each other and to the payload; [byte_array] and [all_bytes] are the
+   unrefined twins of the three that check something as they go. *)
+(* The two a presence gate can hold: [optional] and [optional_or] refuse an
+   inner that is neither byte-sized nor self-delimiting, since 3D has no way to
+   bound one inside a gate, which rules out the terminator search and both
+   greedy spans. *)
+let gateable_span_typs =
+  [
+    ( "byte_array",
+      (fun n -> byte_array ~size:(int n)),
+      fun n -> Bytes.make n 'a' );
+    ( "byte_array_where",
+      (fun n -> byte_array_where ~size:(int n) ~per_byte:printable_byte),
+      fun n -> Bytes.make n 'a' );
+  ]
+
+let span_typs =
+  gateable_span_typs
+  @ [
+      ( "zeroterm_at_most",
+        (fun n -> zeroterm_at_most ~size:(int n)),
+        fun n ->
+          let b = Bytes.make n 'a' in
+          Bytes.set b (n - 1) '\000';
+          b );
+      ("all_bytes", (fun _ -> all_bytes), fun n -> Bytes.make n 'a');
+      ("all_zeros", (fun _ -> all_zeros), fun n -> Bytes.make n '\000');
+    ]
+
+let span_family name typ =
+  Codec.v name Fun.id Codec.[ Field.v "d" typ $ Fun.id ]
+
+let span_families =
+  List.map
+    (fun (name, typ, payload) ->
+      (name, (fun n -> span_family ("Span" ^ name) (typ n)), payload))
+    span_typs
+
+(* The same spans behind a presence gate. [optional] and [optional_or] lay out
+   their inner themselves instead of going through the plain field path, and
+   each has a branch for a gate the schema fixes and one for a gate the frame
+   carries, so a scan wired into one of the four says nothing about the other
+   three. A leading gate byte puts the span at offset 1. *)
+let f_span_gate = Field.v "gate" uint8
+let gate_is_set = Expr.(Field.ref f_span_gate = int 1)
+
+let gated_payload payload n =
+  let src = payload n in
+  let b = Bytes.make (Bytes.length src + 1) '\001' in
+  Bytes.blit src 0 b 1 (Bytes.length src);
+  b
+
+let optional_family name ~present typ =
+  Codec.v name
+    (fun _ d -> d)
+    Codec.
+      [ (f_span_gate $ fun _ -> 1); Field.optional "d" ~present typ $ Fun.id ]
+
+let optional_or_family name ~present typ =
+  Codec.v name
+    (fun _ d -> d)
+    Codec.
+      [
+        (f_span_gate $ fun _ -> 1);
+        Field.optional_or "d" ~present ~default:"" typ $ Fun.id;
+      ]
+
+(* A [name, validate this size] pair, so gates whose codecs have different
+   record types measure through one fold. *)
+let validate_case name mk payload n =
+  let c = mk n and buf = gated_payload payload n in
+  (name, fun () -> Codec.validate c buf 0)
+
+let gated_span_cases n =
+  List.concat_map
+    (fun (name, typ, payload) ->
+      [
+        validate_case ("optional(true)/" ^ name)
+          (fun n -> optional_family "OptT" ~present:Expr.true_ (typ n))
+          payload n;
+        validate_case ("optional(gate)/" ^ name)
+          (fun n -> optional_family "OptG" ~present:gate_is_set (typ n))
+          payload n;
+        validate_case
+          ("optional_or(true)/" ^ name)
+          (fun n -> optional_or_family "OptOrT" ~present:Expr.true_ (typ n))
+          payload n;
+        validate_case
+          ("optional_or(gate)/" ^ name)
+          (fun n -> optional_or_family "OptOrG" ~present:gate_is_set (typ n))
+          payload n;
+      ])
+    gateable_span_typs
+
+let report_span_failures what failures =
+  if failures <> [] then
+    Alcotest.failf "%s: %s" what (String.concat "; " (List.rev failures))
+
+(* [Codec.validate] returns unit, so everything it allocates it drops on the
+   floor. What it turns over must therefore not depend on how long the sender
+   made the frame. The two runs compared differ in nothing but a number the
+   sender chose, which is what makes the growth between them attributable. A
+   validator that copies the span it is scanning gives an attacker a heap
+   multiplier on a path a server runs once per packet. *)
+let test_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let cases n =
+    List.map
+      (fun (name, mk, mkbuf) ->
+        let c = mk n and buf = mkbuf n in
+        (name, fun () -> Codec.validate c buf 0))
+      span_families
+    @ gated_span_cases n
+  in
+  let failures =
+    List.fold_left2
+      (fun acc (name, at_small) (_, at_large) ->
+        let at_small = words_per_call ~iters:2000 at_small in
+        let at_large = words_per_call ~iters:2000 at_large in
+        if at_large - at_small > 32 then
+          Fmt.str
+            "%s grows %d words between a %d-byte and a %d-byte frame (%d then \
+             %d)"
+            name (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      [] (cases small) (cases large)
+  in
+  report_span_failures "validate allocation scales with the frame length"
+    failures
+
+(* A [repeat]'s element count comes from its byte budget, which comes from a
+   length field: the sender picks how many times the element loop runs.
+   [Codec.validate] wants those elements checked and does not want the
+   sequence, so building one and dropping it handed an attacker a heap
+   multiplier per packet. The byte spans and the 64-bit and floating-point
+   scalars are here for the same reason one step in: their reader's only product
+   is the value, boxed for the wide scalars and copied for the spans, so on a
+   walk that keeps nothing they have nothing to do. What an element's reader has to do to check it (a
+   sub-codec's constraints, a casetype's tag dispatch) is a separate question,
+   so those stay out. *)
+let f_repeat_len = Field.v "len" uint16be
+
+let repeat_budget_codec elem =
+  Codec.v "RepeatBudget"
+    (fun _ xs -> xs)
+    Codec.
+      [
+        f_repeat_len $ List.length;
+        Field.repeat "xs" ~size:(Field.ref f_repeat_len) elem $ Fun.id;
+      ]
+
+let repeat_budget_buf n =
+  let b = Bytes.make (2 + n) '\001' in
+  Bytes.set_uint16_be b 0 n;
+  b
+
+(* A NUL every fourth byte, so a repeat of NUL-terminated elements splits any
+   multiple-of-four budget into four-byte elements. *)
+let repeat_zeroterm_buf n =
+  let b = Bytes.make (2 + n) 'a' in
+  Bytes.set_uint16_be b 0 n;
+  for i = 0 to n - 1 do
+    if i mod 4 = 3 then Bytes.set b (2 + i) '\000'
+  done;
+  b
+
+(* A [name, validate this budget] pair, so elements of different value types
+   measure through one fold. *)
+let repeat_budget_case ?(buf = repeat_budget_buf) name elem =
+  let c = repeat_budget_codec elem in
+  ( name,
+    fun n ->
+      let buf = buf n in
+      fun () -> Codec.validate c buf 0 )
+
+let test_repeat_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let failures =
+    List.fold_left
+      (fun acc (name, at) ->
+        let words n = words_per_call ~iters:500 (at n) in
+        let at_small = words small and at_large = words large in
+        if at_large <> at_small then
+          Fmt.str
+            "%s grows %d words between a %d-byte and a %d-byte budget (%d then \
+             %d)"
+            name (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      []
+      [
+        repeat_budget_case "uint8" uint8;
+        repeat_budget_case "uint16be" uint16be;
+        repeat_budget_case "uint32be" uint32be;
+        repeat_budget_case "int8" int8;
+        repeat_budget_case "int16be" int16be;
+        repeat_budget_case "uint63be" uint63be;
+        repeat_budget_case "uint64be" uint64be;
+        repeat_budget_case "int64be" int64be;
+        repeat_budget_case "float32be" float32be;
+        repeat_budget_case "float64be" float64be;
+        repeat_budget_case "byte_array" (byte_array ~size:(int 4));
+        repeat_budget_case "byte_slice" (byte_slice ~size:(int 4));
+        repeat_budget_case ~buf:repeat_zeroterm_buf "zeroterm" zeroterm;
+      ]
+  in
+  report_span_failures "validate allocation scales with a repeat's budget"
+    failures
+
+(* A closed [enum] checks membership once per decoded element, and both sides of
+   that cost are the sender's: the element count comes from the byte budget, and
+   a protocol enum names as many codes as it likes. Validating a repeat of them
+   must turn over the same words whatever the budget and whatever the case
+   count, or naming 128 codes multiplies the heap a packet churns by the number
+   of elements it carries. *)
+let enum_of_case_count n =
+  enum "Codes" (List.init n (fun i -> (Fmt.str "C%d" i, i))) uint8
+
+let enum_budget_words ~cases ~budget =
+  let c = repeat_budget_codec (enum_of_case_count cases) in
+  let buf = repeat_budget_buf budget in
+  words_per_call ~iters:500 (fun () -> Codec.validate c buf 0)
+
+let test_enum_element_validate_allocation_is_bounded () =
+  skip_unless_gc_counters ();
+  let small = 512 and large = 4096 in
+  let failures =
+    List.fold_left
+      (fun acc cases ->
+        let at_small = enum_budget_words ~cases ~budget:small in
+        let at_large = enum_budget_words ~cases ~budget:large in
+        if at_large <> at_small then
+          Fmt.str
+            "a %d-case enum grows %d words between a %d-byte and a %d-byte \
+             budget (%d then %d)"
+            cases (at_large - at_small) small large at_small at_large
+          :: acc
+        else acc)
+      [] [ 2; 128 ]
+  in
+  let few = enum_budget_words ~cases:2 ~budget:large in
+  let many = enum_budget_words ~cases:128 ~budget:large in
+  let failures =
+    if many <> few then
+      Fmt.str "a 128-case enum costs %d words where a 2-case one costs %d" many
+        few
+      :: failures
+    else failures
+  in
+  report_span_failures "validate allocation scales with a closed enum" failures
+
+(* A check-free codec skips the validator pass, so it never builds an
+   evaluation context. One with a constraint or a where clause does run the
+   pass, and a parameter-free codec has nothing to put in the context it used to
+   build on the way in. [Codec.validate] is the entry point a server runs per
+   packet, so what it costs must not depend on whether the codec checks
+   anything. *)
+let checked_no_param_codecs =
+  let f_a = Field.v "a" uint8 in
+  let f_bounded =
+    Field.v "b" ~self_constraint:(fun self -> Expr.(self < int 200)) uint8
+  in
+  [
+    ( "field constraint",
+      Codec.v "Constrained"
+        (fun a b -> (a, b))
+        Codec.[ (f_a $ fun (a, _) -> a); (f_bounded $ fun (_, b) -> b) ] );
+    ( "where clause",
+      Codec.v "Whered"
+        ~where:Expr.(Field.ref f_a < int 200)
+        (fun a b -> (a, b))
+        Codec.[ (f_a $ fun (a, _) -> a); (Field.v "b" uint8 $ fun (_, b) -> b) ]
+    );
+  ]
+
+let test_validate_checked_no_param_no_alloc () =
+  skip_unless_gc_counters ();
+  let buf = Bytes.make 8 '\001' in
+  let failures =
+    List.fold_left
+      (fun acc (name, c) ->
+        let words =
+          words_per_call ~iters:5000 (fun () -> Codec.validate c buf 0)
+        in
+        if words <> 0 then
+          Fmt.str "a codec with a %s costs %d words a validate" name words
+          :: acc
+        else acc)
+      [] checked_no_param_codecs
+  in
+  report_span_failures "a parameter-free validate allocates" failures
+
+(* [Codec.decode] hands the span back, so one copy of it is the price of the
+   answer. A second copy is work the caller never sees and the sender sizes.
+   The bound is against the payload the returned value carries, not against
+   another run of the same decoder: a decoder measured against itself would
+   agree with any amount of copying. *)
+let test_decode_allocates_one_copy () =
+  skip_unless_gc_counters ();
+  let n = 4096 in
+  let payload = n / 8 in
+  let failures =
+    List.fold_left
+      (fun acc (name, mk, mkbuf) ->
+        let c = mk n and buf = mkbuf n in
+        let words =
+          words_per_call ~iters:2000 (fun () -> Codec.decode c buf 0)
+        in
+        if words > payload + 32 then
+          Fmt.str "%s allocates %d words for a %d-word payload" name words
+            payload
+          :: acc
+        else acc)
+      [] span_families
+  in
+  report_span_failures "decode allocates more than the value it returns"
+    failures
+
 (* Decode diagnostics: end of input is reported only for a read that actually
    ran off the end of the buffer. A misuse in a size expression keeps its own
    error, and a byte span the data sizes below zero stays inside the result
@@ -7599,6 +8155,39 @@ let test_truncated_still_reports_eof () =
     (Codec.decode two_span_codec (Bytes.of_string "\010X") 0);
   expect_eof "of_string two-span" (of_string (codec two_span_codec) "\010X")
 
+(* [Codec.validate] scans a refined span where it lies rather than copying it,
+   so the scan has to refuse everything the reader refuses. A literal width
+   below zero is refused before any scan, and by the reader, so both entry
+   points have to name the same fault: a validate that reported end-of-input
+   here while decode reported the negative width would be a validator that
+   rejects for a different reason than the decoder it stands in for. *)
+let test_negative_span_width_agrees () =
+  let c =
+    Codec.v "NegWidth" Fun.id
+      Codec.
+        [
+          Field.v "d"
+            (byte_array_where ~size:(int (-1)) ~per_byte:printable_byte)
+          $ Fun.id;
+        ]
+  in
+  let buf = Bytes.make 8 'a' in
+  let kind f =
+    match f () with
+    | () -> Alcotest.failf "accepted a span of width -1"
+    | exception Wire.Parse_error e -> Fmt.str "%a" pp_error_kind e.kind
+  in
+  let validated = kind (fun () -> Codec.validate c buf 0) in
+  let decoded =
+    kind (fun () ->
+        match Codec.decode c buf 0 with
+        | Ok _ -> ()
+        | Error e -> raise (Wire.Parse_error e))
+  in
+  Alcotest.(check string)
+    "validate rejects a negative span width for decode's reason" decoded
+    validated
+
 let test_negative_span_is_parse_error () =
   let neg_codec =
     Codec.v "NegSpan" Fun.id
@@ -7616,6 +8205,228 @@ let test_negative_span_is_parse_error () =
   expect "of_string typ" (of_string (byte_array ~size:(int (-1))) "abc");
   expect "of_bytes typ"
     (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
+
+(* -- Accessor and container contracts -- *)
+
+(* [Codec.set] documents [Invalid_argument] "leaving the buffer untouched". A
+   sub-codec field writes the whole sub-record and validates it afterwards, so
+   the refusal used to arrive with the rejected byte already on the wire. *)
+let test_set_refusal_leaves_buffer_untouched () =
+  let inner_f =
+    Field.v "v" uint8 ~self_constraint:(fun r ->
+        Expr.(r >= int 10 && r <= int 100))
+  in
+  let inner = Codec.v "SetRollbackInner" Fun.id Codec.[ inner_f $ Fun.id ] in
+  let outer_f = Codec.(Field.v "v" (codec inner) $ Fun.id) in
+  let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
+  let set = Staged.unstage (Codec.set outer outer_f) in
+  let buf = Bytes.make 1 '\xee' in
+  (match set buf 0 200 with
+  | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
+  | exception Invalid_argument _ -> ());
+  Alcotest.(check string)
+    "buffer untouched after a refused set" "\xee" (Bytes.to_string buf);
+  set buf 0 42;
+  Alcotest.(check string)
+    "an accepted set still writes" "\x2a" (Bytes.to_string buf)
+
+(* A bitfield accessor takes its offset from the caller, so it has to check
+   that its base word is in the buffer. The U32 word helpers reached the bytes
+   unchecked, so [Codec.get] on a frame shorter than the word answered with
+   whatever followed the buffer -- the same bytes read one value at base 0 and
+   another once the frame moved along the buffer, and neither was in the frame
+   -- while [Codec.set] laid down the low half of the word before the high half
+   raised. Walked over every base and every offset that puts part of the word
+   past the end: only the U32 bases were unchecked, and the half-written word
+   only shows on a field the low half carries. *)
+let bounds_bitpack base bit_order (w_a, w_b, w_c) =
+  let f_a = Field.v "a" (bits ~bit_order ~width:w_a base) in
+  let f_b = Field.v "b" (bits ~bit_order ~width:w_b base) in
+  let f_c = Field.v "c" (bits ~bit_order ~width:w_c base) in
+  let proj_a (a, _, _) = a and proj_b (_, b, _) = b and proj_c (_, _, c) = c in
+  let codec =
+    Codec.v "BfBounds"
+      (fun a b c -> (a, b, c))
+      Codec.[ f_a $ proj_a; f_b $ proj_b; f_c $ proj_c ]
+  in
+  ( codec,
+    [
+      ("a", Codec.( $ ) f_a proj_a);
+      ("b", Codec.( $ ) f_b proj_b);
+      ("c", Codec.( $ ) f_c proj_c);
+    ] )
+
+let bitpack_bases =
+  [
+    ("U16", U16, Msb_first, (3, 2, 11));
+    ("U16be", U16be, Lsb_first, (3, 2, 11));
+    ("U32", U32, Msb_first, (6, 10, 16));
+    ("U32be", U32be, Lsb_first, (6, 10, 16));
+  ]
+
+(* Every (base, field) pair with the word size the base needs. *)
+let iter_bitpacks f =
+  List.iter
+    (fun (name, base, bit_order, widths) ->
+      let codec, fields = bounds_bitpack base bit_order widths in
+      let word = Codec.wire_size codec in
+      List.iter (fun (fname, field) -> f name word fname field codec) fields)
+    bitpack_bases
+
+let test_get_bitfield_word_past_buffer_raises () =
+  iter_bitpacks (fun name word fname field codec ->
+      let get = Staged.unstage (Codec.get codec field) in
+      let load =
+        Staged.unstage (Codec.load_word (Codec.bitfield codec field))
+      in
+      let expect_refusal reader len off =
+        match reader (Bytes.make len '\xff') off with
+        | v ->
+            Alcotest.failf
+              "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
+              v off len
+        | exception Invalid_argument _ -> ()
+      in
+      List.iter
+        (fun reader ->
+          (* No room for the word at all, and room for it but not where the
+             frame starts. *)
+          for len = 0 to word - 1 do
+            expect_refusal reader len 0
+          done;
+          for off = 1 to word do
+            expect_refusal reader word off
+          done)
+        [ get; (fun buf off -> Optint.to_int (load buf off)) ])
+
+let test_set_bitfield_word_past_buffer_writes_nothing () =
+  iter_bitpacks (fun name word fname field codec ->
+      let set = Staged.unstage (Codec.set codec field) in
+      for len = 0 to word - 1 do
+        let buf = Bytes.make len '\x00' in
+        (match set buf 0 1 with
+        | () ->
+            Alcotest.failf
+              "%s field %s: Codec.set wrote a word into a %d-byte buffer" name
+              fname len
+        | exception Invalid_argument _ -> ());
+        Alcotest.(check string)
+          (Fmt.str "%s field %s: %d-byte buffer untouched" name fname len)
+          (String.make len '\x00') (Bytes.to_string buf)
+      done)
+
+(* [Codec.get] had no reader for a statically gated optional and fell through
+   to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
+   both flavours and both gates against what decode returns. *)
+let test_get_static_optional_agrees_with_decode () =
+  let f_len = Field.optional_or "Len" ~present:Expr.true_ ~default:0 uint8 in
+  let f_on = Field.optional "On" ~present:Expr.true_ uint8 in
+  let f_off = Field.optional "Off" ~present:Expr.false_ uint8 in
+  let f_or_off =
+    Field.optional_or "OrOff" ~present:Expr.false_ ~default:7 uint8
+  in
+  let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len)) in
+  let cf_len = Codec.(f_len $ fun (l, _, _, _, _) -> l) in
+  let cf_on = Codec.(f_on $ fun (_, o, _, _, _) -> o) in
+  let cf_off = Codec.(f_off $ fun (_, _, o, _, _) -> o) in
+  let cf_or_off = Codec.(f_or_off $ fun (_, _, _, o, _) -> o) in
+  let cf_data = Codec.(f_data $ fun (_, _, _, _, d) -> d) in
+  let c =
+    Codec.v "StaticGates"
+      (fun len on off or_off data -> (len, on, off, or_off, data))
+      [ cf_len; cf_on; cf_off; cf_or_off; cf_data ]
+  in
+  let buf = Bytes.of_string "\003\009abc" in
+  let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
+  let read f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check int) "optional_or, gate on" len (read cf_len);
+  Alcotest.(check (option int)) "optional, gate on" on (read cf_on);
+  Alcotest.(check (option int)) "optional, gate off" off (read cf_off);
+  Alcotest.(check int)
+    "optional_or, gate off is the default" or_off (read cf_or_off);
+  Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
+  (* And the matching setter, so a field [get] can read is one [set] can
+     write. The absent gates own no bytes, so writing them moves nothing. *)
+  Staged.unstage (Codec.set c cf_on) buf 0 (Some 5);
+  Staged.unstage (Codec.set c cf_off) buf 0 None;
+  Staged.unstage (Codec.set c cf_or_off) buf 0 7;
+  Alcotest.(check (option int)) "set then get, gate on" (Some 5) (read cf_on);
+  Alcotest.(check string)
+    "the absent gates wrote no bytes" "\003\005abc" (Bytes.to_string buf)
+
+(* A runtime gate is decided by an expression over sibling fields, which only
+   the compiled record plan evaluates. The accessor cannot read it, and has to
+   say so with the exception the interface documents. *)
+let test_get_dynamic_optional_refuses_cleanly () =
+  let f_gate = Field.v "gate" uint8 in
+  let f_pay =
+    Field.optional "pay" ~present:Expr.(Field.ref f_gate <> int 0) uint16be
+  in
+  let cf_pay = Codec.(f_pay $ snd) in
+  let c =
+    Codec.v "DynGate"
+      (fun gate pay -> (gate, pay))
+      [ Codec.(f_gate $ fst); cf_pay ]
+  in
+  Alcotest.(check bool)
+    "Codec.get refuses a runtime-gated optional with Invalid_argument" true
+    (raises_invalid (fun () -> Codec.get c cf_pay))
+
+(* A [repeat] element whose decoder runs to the end of the buffer cannot be
+   iterated: the first element takes the whole budget, so anything the encoder
+   writes past it is bytes the decoder (and the EverParse validator built from
+   the same schema) refuses. The greedy tail counts whether it is the element's
+   own last field or sits at the end of a sub-codec the element ends with. *)
+let test_repeat_rejects_nested_greedy_element () =
+  let pad =
+    Codec.v "PadTail"
+      (fun n tail -> (n, tail))
+      Codec.[ Field.v "n" uint8 $ fst; Field.v "tail" all_zeros $ snd ]
+  in
+  let greedy_elem =
+    Codec.v "GreedyElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec pad) $ snd ]
+  in
+  Alcotest.(check bool)
+    "repeat over a codec whose own tail is greedy rejected" true
+    (raises_invalid (fun () -> Field.repeat "items" ~size:(int 12) (codec pad)));
+  Alcotest.(check bool)
+    "repeat over a codec ending in a greedy sub-codec rejected" true
+    (raises_invalid (fun () ->
+         Field.repeat "items" ~size:(int 12) (codec greedy_elem)))
+
+(* The control for the rejection above: give the same element a bounded tail
+   and it is self-delimiting again, so the repeat builds and more than one
+   element survives the round trip. *)
+let test_repeat_bounded_element_roundtrips () =
+  let bounded =
+    Codec.v "PadFixed"
+      (fun n tail -> (n, tail))
+      Codec.
+        [
+          Field.v "n" uint8 $ fst;
+          Field.v "tail" (byte_array ~size:(int 2)) $ snd;
+        ]
+  in
+  let elem =
+    Codec.v "BoundedElem"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "f0" uint8 $ fst; Field.v "f1" (codec bounded) $ snd ]
+  in
+  let f_total = Field.v "total" uint8 in
+  let f_items = Field.repeat "items" ~size:(Field.ref f_total) (codec elem) in
+  let outer =
+    Codec.v "BoundedRep"
+      (fun _ xs -> xs)
+      Codec.
+        [ (f_total $ fun xs -> 4 * List.length xs); (f_items $ fun xs -> xs) ]
+  in
+  let xs = [ (1, (2, "\000\000")); (3, (4, "\000\000")) ] in
+  let buf = Bytes.create (Codec.size_of_value outer xs) in
+  Codec.encode outer xs buf 0;
+  let ys = decode_ok (Codec.decode outer buf 0) in
+  Alcotest.(check bool) "two bounded elements round-trip" true (ys = xs)
 
 (* -- Suite -- *)
 
@@ -7723,6 +8534,8 @@ let suite =
         `Quick test_validate_present_optional_or_past_end;
       Alcotest.test_case "validate: runtime-width uint past end fails cleanly"
         `Quick test_validate_uint_var_past_end;
+      Alcotest.test_case "validate: repeat budget with a partial element" `Quick
+        test_validate_repeat_partial_element;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
         test_repeat_array_reject_bitfield;
       Alcotest.test_case "array/repeat reject zero-width element" `Quick
@@ -8222,6 +9035,19 @@ let suite =
         test_get_no_allocation;
       Alcotest.test_case "set: immediate fields allocate nothing" `Quick
         test_set_no_allocation;
+      Alcotest.test_case "validate: allocation does not scale with the frame"
+        `Quick test_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: allocation does not scale with a repeat's budget" `Quick
+        test_repeat_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: allocation does not scale with an enum's cases" `Quick
+        test_enum_element_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: a checked param-free codec allocates nothing" `Quick
+        test_validate_checked_no_param_no_alloc;
+      Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
+        test_decode_allocates_one_copy;
       (* decode diagnostics *)
       Alcotest.test_case "diag: field_pos in a size expression reports itself"
         `Quick test_size_misuse_reports_itself;
@@ -8229,4 +9055,30 @@ let suite =
         test_truncated_still_reports_eof;
       Alcotest.test_case "diag: negative span is a parse error" `Quick
         test_negative_span_is_parse_error;
+      Alcotest.test_case "diag: eof counts do not move with the base" `Quick
+        test_eof_counts_are_base_invariant;
+      Alcotest.test_case "diag: negative span width agrees with decode" `Quick
+        test_negative_span_width_agrees;
+      (* accessor and container contracts *)
+      Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
+        test_set_refusal_leaves_buffer_untouched;
+      Alcotest.test_case
+        "misuse: an undecodable description raises Invalid_argument" `Quick
+        test_undecodable_description_is_invalid_argument;
+      Alcotest.test_case
+        "size_of_value: a casetype value no case projects raises" `Quick
+        test_size_of_value_refuses_unmatched_case;
+      Alcotest.test_case "get: a bitfield word past the buffer raises" `Quick
+        test_get_bitfield_word_past_buffer_raises;
+      Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
+        `Quick test_set_bitfield_word_past_buffer_writes_nothing;
+      Alcotest.test_case "get: statically gated optionals agree with decode"
+        `Quick test_get_static_optional_agrees_with_decode;
+      Alcotest.test_case
+        "get: runtime-gated optional refused with Invalid_argument" `Quick
+        test_get_dynamic_optional_refuses_cleanly;
+      Alcotest.test_case "repeat: element ending in a greedy sub-codec rejected"
+        `Quick test_repeat_rejects_nested_greedy_element;
+      Alcotest.test_case "repeat: bounded element round-trips" `Quick
+        test_repeat_bounded_element_roundtrips;
     ] )

@@ -577,7 +577,7 @@ let check_action_forms codec =
       let expected =
         expected_action_form ~named:(Option.is_some name) ~is_bitfield
       in
-      if form <> expected then
+      if not (Wire.Everparse.equal_field_action_form form expected) then
         Alcotest.failf "%s field %s: expected %s, got %s" schema.name
           (Option.value name ~default:"<anon>")
           (pp_action_form expected) (pp_action_form form))

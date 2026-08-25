@@ -23,7 +23,7 @@
    emit .3d files for verified C parser generation via EverParse.")
  (depends
   (ocaml (>= 5.2))
-  (bytesrw (>= 0.1))
+  (bytesrw (>= 0.4.0))
   (fmt (>= 0.9))
   (optint (>= 0.3))
   (memtrace :with-test)

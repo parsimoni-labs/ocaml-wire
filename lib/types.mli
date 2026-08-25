@@ -33,9 +33,12 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
-(** Parse failure categories. For {!constructor-Constraint_failed}, [value] is
-    the offending field's value for a single-field self-constraint and [None]
-    for a cross-field or where predicate. *)
+(** Parse failure categories. {!constructor-Unexpected_eof} counts bytes, not
+    buffer positions: [expected] is how many the value needed and [got] how many
+    were left where it starts, so both are the same whatever offset the frame is
+    read at. For {!constructor-Constraint_failed}, [value] is the offending
+    field's value for a single-field self-constraint and [None] for a
+    cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Invalid_enum of { value : int; valid : int list }
@@ -120,6 +123,11 @@ val check_nested_size : at_most:bool -> expected:int -> actual:int -> unit
 (** Check an inner value against an exact or at-most nested region. Internal
     helper shared by sizing and encoders. *)
 
+val raise_no_matching_case : unit -> 'a
+(** Raise [Invalid_argument] for a casetype value no case projects. Such a value
+    has no encoding, so it has no size either: the size path and both encode
+    paths raise through here so all three say the same thing. *)
+
 val enum_values : (string * int) list -> int list
 (** The value set of an enum's named cases. *)
 
@@ -127,6 +135,12 @@ val enum_member : int list -> int -> bool
 (** [enum_member valid v] is [true] when [v] is one of [valid]. The single
     membership rule decode and encode share, so the two halves agree on what a
     closed enum admits. *)
+
+val check_enum_decode : at:int -> cases:(string * int) list -> int -> unit
+(** Check a decoded value against a closed enum's named cases. An unlisted value
+    raises {!constructor-Invalid_enum} carrying the case set. Scans the cases in
+    place, so a value that is a member costs no allocation however many cases
+    there are. *)
 
 val check_enum_encode : name:string -> valid:int list -> int -> unit
 (** Check a value against a closed enum's case set before encoding it. An
@@ -962,6 +976,14 @@ val raise_eof : at:int -> expected:int -> got:int -> 'a
 val raise_invalid_tag : at:int -> int -> 'a
 (** Raise {!Parse_error} for a tag or lookup index with no matching case. *)
 
+val map_decode : index_bound:int option -> ('w -> 'a) -> at:int -> 'w -> 'a
+(** [map_decode ~index_bound decode ~at v] is [decode v], with any
+    {!Parse_error} it raises moved to [at]. A {!constructor-Map}'s [decode] sees
+    only the value, so the bound a {!cases} map enforces can only be reported at
+    offset 0; [at] is the absolute offset the reader took [v] from, which is
+    what {!parse_error} promises. Maps with no [index_bound] reject nothing and
+    are called directly. *)
+
 val raise_invalid_enum : at:int -> value:int -> valid:int list -> 'a
 (** Raise {!Parse_error} for an enum value outside its named set. *)
 
@@ -987,6 +1009,9 @@ val pp_error_kind : Format.formatter -> error_kind -> unit
 val equal_parse_error : parse_error -> parse_error -> bool
 (** Structural equality on parse errors. *)
 
+val equal_error_kind : error_kind -> error_kind -> bool
+(** Structural equality on parse error kinds, ignoring location. *)
+
 val compare_parse_error : parse_error -> parse_error -> int
 (** Total order on parse errors. *)
 
@@ -997,6 +1022,15 @@ val is_greedy : 'a typ -> bool
 (** Whether a type reads "the rest of the buffer" (a greedy byte span, through
     transparent wrappers). Such a field is only valid as the last field of a
     struct or codec. *)
+
+val ends_greedy : 'a typ -> bool
+(** Like {!is_greedy} but through composition: a sub-codec or casetype case
+    whose own tail is greedy reads to the end of the buffer just the same. Such
+    a type can only be the last thing in the buffer, so nothing may follow it
+    and no container may iterate it. *)
+
+val struct_ends_greedy : struct_ -> bool
+(** [struct_ends_greedy s] is {!ends_greedy} of [s]'s last field. *)
 
 val nz : 'a typ -> bool
 (** Whether the type's parser always consumes a positive minimum number of bytes
@@ -1017,7 +1051,8 @@ val size_of_typ_value : 'a typ -> 'a -> int
     computed from the value rather than from a buffer. Falls back to [0] for
     typs whose size depends on an out-of-band parameter or sibling field --
     those only appear inside a codec, where {!Codec.size_of_value} sums per-
-    field projections instead. *)
+    field projections instead. Raises [Invalid_argument] for a casetype value no
+    case projects, which encoding refuses for the same reason. *)
 
 val c_type_of : 'a typ -> string
 (** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).

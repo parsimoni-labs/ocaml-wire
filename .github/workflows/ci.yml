@@ -27,7 +27,18 @@ jobs:
 
       - run: opam install . --deps-only --with-test
       - run: opam exec -- dune build @install
+
+      # Seed the property tests from the run id so each run explores a
+      # different input set instead of replaying alcobar's constant seed.
+      # Alcobar prints the counterexample on failure but not the seed, so a red
+      # run is replayed with the one recorded here:
+      #   WIRE_FUZZ_SEED=<run id> dune runtest
+      # 20000 iterations rather than alcobar's 5000, because 5000 was not
+      # enough to find the defects that are there.
       - run: opam exec -- dune runtest
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+          WIRE_FUZZ_REPEAT: 20000
 
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
@@ -74,17 +85,26 @@ jobs:
           ocaml-compiler: '5.4'
           dune-version: '3.21'
 
-      - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
       - run: opam install . --deps-only --with-test
-      - run: opam install merlint
+      - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
+
+      # merlint pins bytesrw to a commit older than the 0.4.0 wire needs and
+      # calls no bytesrw API itself, so the pin must not move the one the
+      # project just resolved.
+      - run: opam install merlint --ignore-constraints-on bytesrw
+
+      # merlint --build runs this itself but reports only the exit code, so
+      # run it here first to get the compiler error on its own line.
+      - run: opam exec -- dune build @check
       - run: opam exec -- merlint --build
 
   # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
   # validation) and fuzz/3d/ fuzzes [wire_3d] (the EverParse / 3D projection),
   # mirroring the lib/ layout. The [afl] profile (dune-workspace) instruments
-  # native code with AFL coverage, and each dir's [fuzz] alias seeds its corpus
-  # and runs afl-fuzz for a fixed wall-clock budget. The job then fails if
-  # afl-fuzz found any crashing input in either fuzzer.
+  # native code with AFL coverage, and a dir's [fuzz] alias seeds its corpus and
+  # runs afl-fuzz for a fixed wall-clock budget. The job names those two aliases
+  # non-recursively, as fuzz/diff/ belongs to fuzz-afl-diff below. The job then
+  # fails if afl-fuzz found any crashing input in either fuzzer.
   fuzz-afl:
     runs-on: ubuntu-latest
     steps:
@@ -103,7 +123,7 @@ jobs:
         run: |
           sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
           export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
-          opam exec -- dune build --profile afl @fuzz/fuzz
+          opam exec -- dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
 
       - name: Fail on crashes
         run: |
@@ -232,6 +252,10 @@ jobs:
   # 3d.exe both are skipped, so a shape that builds but does not project to a
   # validator EverParse verifies (a composite-over-composite gap) would slip
   # past the plain build job, which only string-checks the projection.
+  #
+  # The job also runs the suites gated on BUILD_EVERPARSE=1, which nothing else
+  # reaches: fuzz-afl-diff sets the variable but builds only @fuzz/diff/fuzz
+  # under --profile afl, and those rules require a non-afl profile.
   everparse-3d:
     runs-on: ubuntu-latest
     steps:
@@ -254,3 +278,17 @@ jobs:
         run: opam exec -- dune runtest
         env:
           WIRE_3D_BATCH: 1
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+          WIRE_FUZZ_REPEAT: 20000
+
+      # Named one alias at a time rather than through dune runtest, because
+      # BUILD_EVERPARSE=1 also enables test/bench's own executable, and that one
+      # does not link on Linux: the bench C tier's archives reach the linker in
+      # an order GNU ld will not resolve. Add @test/bench/runtest here once that
+      # is fixed.
+      - name: Run the suites that need EverParse-generated C
+        run: |
+          opam exec -- dune build \
+            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest
+        env:
+          BUILD_EVERPARSE: 1

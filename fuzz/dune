@@ -2,13 +2,35 @@
  (name fuzz)
  (libraries wire alcobar fuzz_gen))
 
+; Alcobar seeds its PRNG from a constant and never self-inits, so a run with no
+; [-s] replays one fixed input set, and the seed each test gets is drawn in test
+; order, so re-running a single failing test does not replay what the suite ran.
+; Passing [-s] explicitly fixes both: every test uses that seed, and
+; [fuzz.exe test wire <n> -s <seed>] is an exact replay. Alcobar prints the
+; counterexample on failure but never the seed, so the seed has to be one the
+; caller chose and recorded; CI passes the run id.
+;
+; The defaults keep the per-commit loop short and deterministic; CI overrides
+; only the seed. To widen the search, locally or there:
+;   WIRE_FUZZ_SEED=$RANDOM WIRE_FUZZ_REPEAT=20000 dune runtest
+; [WIRE_FUZZ_BUDGET] is alcobar's per-test wall-clock cap, which binds well
+; before the default repeat is exhausted, so a raised repeat only buys its full
+; increase with the budget raised or set to 0 alongside it.
+
 (rule
  (alias runtest)
  (enabled_if
   (<> %{profile} afl))
  (deps fuzz.exe afl.dict)
  (action
-  (run %{exe:fuzz.exe})))
+  (run
+   %{exe:fuzz.exe}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   %{env:WIRE_FUZZ_REPEAT=5000}
+   --budget
+   %{env:WIRE_FUZZ_BUDGET=2})))
 
 ; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
 ; cwd is this dir in the build tree, where fuzz.exe is built).

@@ -859,9 +859,12 @@ val size : 'a typ -> int option
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
-(** Parse failure categories. For {!constructor-Constraint_failed}, [value] is
-    the offending field's value for a single-field self-constraint and [None]
-    for a cross-field or where predicate. *)
+(** Parse failure categories. {!constructor-Unexpected_eof} counts bytes, not
+    buffer positions: [expected] is how many the value needed and [got] how many
+    were left where it starts, so both are the same whatever offset the frame is
+    read at. For {!constructor-Constraint_failed}, [value] is the offending
+    field's value for a single-field self-constraint and [None] for a
+    cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Invalid_enum of { value : int; valid : int list }
@@ -889,6 +892,9 @@ val pp_error_kind : Format.formatter -> error_kind -> unit
 
 val equal_parse_error : parse_error -> parse_error -> bool
 (** Structural equality on parse errors. *)
+
+val equal_error_kind : error_kind -> error_kind -> bool
+(** Structural equality on error kinds, ignoring location. *)
 
 val compare_parse_error : parse_error -> parse_error -> int
 (** Total order on parse errors. *)
@@ -1064,7 +1070,9 @@ module Codec : sig
   val size_of_value : 'r t -> 'r -> int
   (** [size_of_value c v] returns the number of bytes that [encode c v] will
       write for value [v]. For fixed-size codecs, this is the same as
-      {!wire_size}; for dynamic-size codecs, the result depends on [v]. *)
+      {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises
+      [Invalid_argument] for a value {!encode} would refuse, such as a casetype
+      value no case projects. *)
 
   val is_fixed : 'r t -> bool
   (** Returns true iff the codec has a statically known size. *)
@@ -1315,6 +1323,9 @@ module Everparse : sig
   (** Names of every extern function declared in the schema's module. *)
 
   type field_action_form = No_action | On_act | On_success
+
+  val equal_field_action_form : field_action_form -> field_action_form -> bool
+  (** Structural equality on field action forms. *)
 
   val field_action_forms :
     struct_ -> (string option * bool * field_action_form) list
