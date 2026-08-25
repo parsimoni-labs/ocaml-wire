@@ -87,6 +87,10 @@
 
 ### Fixed
 
+- Fix `Codec.validate` skipping a sub-codec field's constraints, `where`,
+  closed-enum membership, `per_byte` refinements and actions, which now reject
+  the same bytes as decoding and generated EverParse validators (#311, @samoht)
+
 - Fix `Codec.{get,set}` on a bitfield whose base word is not entirely inside the
   buffer. A `u32` word is assembled from unchecked byte reads, so a short frame
   read at an application-chosen offset answered with the bytes that followed it,

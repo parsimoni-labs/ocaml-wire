@@ -1249,6 +1249,12 @@ type 'r t = {
   wire_size : wire_size_info;
   struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
+  validate_ctx : runtime -> bytes -> int -> unit;
+      (* [validate] for a codec embedded in another: the same bounds check and
+         the same field pass, with parameters resolved by name against the
+         caller's context rather than a [Param.env]. This is what a use site of
+         the codec runs, so a sub-codec's checks are enforced wherever it
+         appears. *)
   validate_arr : slots -> runtime -> bytes -> int -> unit;
   populate : slots -> runtime -> bytes -> int -> unit;
   n_array_slots : int;
@@ -1928,6 +1934,17 @@ let null_int_reader : runtime -> bytes -> int -> int =
 let no_populate : slots -> runtime -> bytes -> int -> unit =
  fun _arr _runtime _buf _base -> ()
 
+(* A sub-codec field's check pass: run the sub-codec's own validator where the
+   field sits. This is the whole of what the generated C emits for a sub-struct
+   field, a call to the nested struct's validator, and it is what makes
+   [Codec.validate] reject at a use site everything the sub-codec's [decode]
+   rejects. No int slot is filled: a record-typed field has no scalar value an
+   enclosing expression could reference. *)
+let sub_codec_populate ~codec_validate ~off_fn :
+    slots -> runtime -> bytes -> int -> unit =
+ fun _arr runtime buf base ->
+  codec_validate runtime buf (base + off_fn runtime buf base)
+
 (* Reader+writer pair for a Codec-or-scalar inner type placed at the current
    frame offset. Extracted so [compile_optional] and [compile_optional_or]
    share it. *)
@@ -2066,11 +2083,13 @@ let compile_codec_variable : type a r.
     layout_ctx ->
     get:(r -> a) ->
     codec_decode:(runtime -> bytes -> int -> a) ->
+    codec_validate:(runtime -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_size_of:(runtime -> bytes -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
- fun ctx ~get ~codec_decode ~codec_encode ~codec_size_of ~nested_readers ->
+ fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_size_of
+     ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
     match ctx.next_off with
     | Static n ->
@@ -2107,20 +2126,21 @@ let compile_codec_variable : type a r.
     int_reader = null_int_reader;
     nested_readers;
     validator_off;
-    populate = no_populate;
+    populate = sub_codec_populate ~codec_validate ~off_fn;
   }
 
 let compile_codec : type a r.
     layout_ctx ->
     (a, r) field ->
     codec_decode:(runtime -> bytes -> int -> a) ->
+    codec_validate:(runtime -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
     codec_size_of:(runtime -> bytes -> int -> int) ->
     codec_field_readers:field_reader list ->
     (a, r) compiled_field =
- fun ctx fld ~codec_decode ~codec_encode ~codec_fixed_size ~codec_size_of
-     ~codec_field_readers ->
+ fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
+     ~codec_size_of ~codec_field_readers ->
   let nested_readers = build_nested_readers ctx codec_field_readers in
   let get = fld.get in
   match codec_fixed_size with
@@ -2140,11 +2160,11 @@ let compile_codec : type a r.
         int_reader = null_int_reader;
         nested_readers;
         validator_off = validator_off_of ctx;
-        populate = no_populate;
+        populate = sub_codec_populate ~codec_validate ~off_fn:(off_fn_of ctx);
       }
   | None ->
-      compile_codec_variable ctx ~get ~codec_decode ~codec_encode ~codec_size_of
-        ~nested_readers
+      compile_codec_variable ctx ~get ~codec_decode ~codec_validate
+        ~codec_encode ~codec_size_of ~nested_readers
 
 (* Variable-size sub-codec: dispatch on whether we sit at a static or a
    dynamic running offset. Mirrors [compile_var_bytes] -- both flavours
@@ -2299,28 +2319,59 @@ let repeat_raw_reader : type elt seq.
   | Some esz -> repeat_raw_fixed seq ~read esz ~off_fn ~size_fn
   | None -> repeat_raw_variable seq ~read ~size_of_elem ~off_fn ~size_fn
 
-(* An element whose reader's only product is the value it hands back. A
-   fixed-width byte span re-slices or copies bytes the budget prologue has
-   already bounded to the buffer, a NUL-terminated one's terminator search has
-   run in [size_of_elem] before the reader is called, and a 64-bit or
-   floating-point scalar is one unchecked read of a word inside the same
-   bounded budget, so on the check walk there is nothing left for the reader to
-   do. Every other element's reader does something [Codec.validate] needs (an
-   enum's membership, a sub-codec's constraints, a casetype's tag dispatch), so
-   it runs. *)
-let elem_reader_is_value_only : type a. a typ -> bool = function
-  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm -> true
-  | Uint64 _ | Int64 _ | Float32 _ | Float64 _ -> true
-  | _ -> false
+(* How the check walk gets at an element's checks without keeping the value.
 
-(* The element read the check walk runs. Skipping a value-only reader keeps the
-   span out of the heap: the element count comes from the byte budget, which
-   comes from a length field, so a copy per element is a multiplier the sender
-   sizes on the path a server runs once per packet. *)
+   [By_reading] is the derived answer: run the element's own reader and drop
+   what it built. It cannot disagree with decode, because it is decode, so it is
+   the default for anything not deliberately classified otherwise.
+
+   [Value_only] says the reader's only product is the value it hands back, so on
+   the check walk there is nothing left for it to do: a fixed-width byte span
+   re-slices or copies bytes the budget prologue has already bounded to the
+   buffer, a NUL-terminated one's terminator search has run in [size_of_elem]
+   before the reader is called, and a 64-bit or floating-point scalar is one
+   unchecked read of a word inside the same bounded budget.
+
+   [By] says the element type carries its own validator, which a sub-codec does.
+
+   The last two are departures from derivation, and each is a claim about a
+   reader that [Codec.validate] agreeing with [Codec.decode] is what keeps
+   honest. *)
+type 'a elem_strategy =
+  | By_reading
+  | Value_only
+  | By of (runtime -> bytes -> int -> unit)
+
+(* Every constructor is listed and there is deliberately no [| _ -> ...]: a typ
+   added later must not pick a strategy by falling through, since picking
+   [Value_only] for a reader that checks something is how [Codec.validate] comes
+   to accept what [Codec.decode] rejects. Adding one stops the build until
+   somebody chooses. *)
+let elem_strategy : type a. a typ -> a elem_strategy = function
+  | Codec { codec_validate; _ } -> By codec_validate
+  | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm ->
+      Value_only
+  | Uint64 _ | Int64 _ | Float32 _ | Float64 _ -> Value_only
+  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Int8 | Int16 _ | Int32 _
+  | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm_at_most _
+  | Where _ | Array _ | Byte_array _ | Byte_array_where _ | Byte_slice _
+  | Single_elem _ | Enum _ | Casetype _ | Struct _ | Type_ref _
+  | Qualified_ref _ | Map _ | Apply _ | Optional _ | Optional_or _ | Repeat _ ->
+      By_reading
+
+(* The element check the walk runs. Skipping a value-only reader keeps the span
+   out of the heap, and letting a sub-codec check itself keeps the record out of
+   it: the element count comes from the byte budget, which comes from a length
+   field, so anything built per element is a multiplier the sender sizes on the
+   path a server runs once per packet. This is the C's element loop, which calls
+   the element validator and keeps one position. *)
 let elem_check : type a. a typ -> runtime -> bytes -> int -> unit =
  fun typ ->
-  if elem_reader_is_value_only typ then fun _runtime _buf _off -> ()
-  else fun runtime buf off -> ignore (read_elem typ runtime buf off : a)
+  match elem_strategy typ with
+  | Value_only -> fun _runtime _buf _off -> ()
+  | By check -> check
+  | By_reading ->
+      fun runtime buf off -> ignore (read_elem typ runtime buf off : a)
 
 (* Write a repeat's elements at their own strides. Kept out of
    [compile_repeat] so the writer is staged once, with the sequence, the element
@@ -2828,14 +2879,15 @@ let rec compile_field : type a r.
   | Codec
       {
         codec_decode;
+        codec_validate;
         codec_encode;
         codec_fixed_size;
         codec_size_of;
         codec_field_readers;
         _;
       } ->
-      compile_codec ctx fld ~codec_decode ~codec_encode ~codec_fixed_size
-        ~codec_size_of ~codec_field_readers
+      compile_codec ctx fld ~codec_decode ~codec_validate ~codec_encode
+        ~codec_fixed_size ~codec_size_of ~codec_field_readers
   | Optional { present; inner } -> compile_optional ctx fld present inner
   | Optional_or { present; inner; default } ->
       compile_optional_or ctx fld present inner default
@@ -3867,6 +3919,25 @@ let has_encode_checks struct_fields where =
          Option.fold ~none:false ~some:is_real_cond f.constraint_)
        struct_fields
 
+(* Bind the codec's formals from the caller's context, and write the mutable
+   ones back after the pass. Written as loops taking everything as arguments
+   rather than as [List.iteri] over a closure: this runs once per sub-codec per
+   element of an enclosing repeat, where the element count is the sender's to
+   choose, and a closure capturing the slots and the context is two heap blocks
+   a validator has no business turning over. *)
+let rec seed_params arr runtime param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name;
+      seed_params arr runtime param_base (i + 1) rest
+
+let rec writeback_params arr runtime param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      if p.Types.mutable_ then
+        Types.eval_set_param runtime p.Types.name arr.ints.(param_base + i);
+      writeback_params arr runtime param_base (i + 1) rest
+
 (* Replay the decode-side check pass over the record encode just assembled, so a
    cond that reads sibling fields is enforced on both halves. Field actions are
    deliberately excluded: [populate] runs the check-only validators, so encoding
@@ -3875,14 +3946,23 @@ let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
     ~compiled_where runtime buf off =
   let arr = scratch () in
   clear_slots arr n_total;
-  List.iteri
-    (fun i (Param.Pack p) ->
-      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name)
-    param_handles;
+  seed_params arr runtime param_base 0 param_handles;
   populate arr runtime buf off;
   match compiled_where with
   | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
   | _ -> ()
+
+(* The check pass over one codec's fields at [off], with its parameters bound
+   from the caller's context. Taken apart from [validate_runtime] so [seal] can
+   build the same pass into the sub-codec entry point a use site calls, and the
+   two cannot drift. *)
+let validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
+    ~validate_arr runtime buf off =
+  let arr = scratch () in
+  clear_slots arr n_total;
+  seed_params arr runtime param_base 0 param_handles;
+  validate_arr arr runtime buf off;
+  writeback_params arr runtime param_base 0 param_handles
 
 let build_record_encoder name writers size_of_value ~check =
   let n = Array.length writers in
@@ -3962,6 +4042,11 @@ let seal : type r. (r, r) record -> r t =
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
+    validate_ctx =
+      (fun runtime buf off ->
+        check_decode_bounds wire_size_info min_size runtime buf off;
+        validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
+          ~validate_arr runtime buf off);
     validate_arr;
     populate;
     n_array_slots = n_total;
@@ -4303,18 +4388,9 @@ let embed_encode_ctx (t : 'r t) v runtime buf off = t.encode v runtime buf off
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
 let validate_runtime t runtime buf off =
-  let arr = t.decode_scratch () in
-  clear_slots arr t.n_array_slots;
-  List.iteri
-    (fun i (Param.Pack p) ->
-      arr.ints.(t.param_base + i) <- Types.eval_param runtime p.Types.name)
-    t.param_handles;
-  t.validate_arr arr runtime buf off;
-  List.iteri
-    (fun i (Param.Pack p) ->
-      if p.Types.mutable_ then
-        Types.eval_set_param runtime p.name arr.ints.(t.param_base + i))
-    t.param_handles
+  validate_runtime_of ~scratch:t.decode_scratch ~n_total:t.n_array_slots
+    ~param_base:t.param_base ~param_handles:t.param_handles
+    ~validate_arr:t.validate_arr runtime buf off
 
 let embed_decode_ctx (t : 'r t) runtime buf off =
   let v = t.decode runtime buf off in
@@ -4322,6 +4398,10 @@ let embed_decode_ctx (t : 'r t) runtime buf off =
   v
 
 let embed_decode (t : 'r t) buf off = embed_decode_ctx t no_runtime buf off
+
+(* [embed_decode_ctx] with the record construction dropped: the same bounds
+   check and the same field pass, and nothing built. *)
+let embed_validate_ctx (t : 'r t) = t.validate_ctx
 
 let wire_size_info_ctx (t : _ t) =
   match t.wire_size with
