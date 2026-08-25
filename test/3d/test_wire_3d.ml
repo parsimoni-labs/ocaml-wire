@@ -562,6 +562,75 @@ let test_doc_differential_no_params () =
   differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
     [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
+(* A uniform byte draw cannot reach this accepting side: one 32-bit value out
+   of 2^32 satisfies the magic constraint. The generated corpus must construct
+   accepted records and retain rejected neighbours. This test is pure OCaml and
+   therefore runs without 3d.exe. *)
+let corpus_magic_codec =
+  let open Wire in
+  let magic =
+    Field.v "magic" uint32be ~self_constraint:(fun self ->
+        Expr.(self = int 0x53504F53))
+  in
+  let ver = Field.v "ver" uint8 in
+  Codec.v "Super"
+    (fun m v -> (m, v))
+    [ Codec.( $ ) magic fst; Codec.( $ ) ver snd ]
+
+let corpus_verdicts ?(count = 256) codecs =
+  let buf = Buffer.create 4096 in
+  let ppf = Fmt.with_buffer buf in
+  Wire_3d.generate_corpus ~count ppf codecs;
+  Format.pp_print_flush ppf ();
+  Buffer.contents buf |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+      match String.rindex_opt line ' ' with
+      | Some i -> Some (String.sub line (i + 1) (String.length line - i - 1))
+      | None -> None)
+  |> List.fold_left
+       (fun (accepted, rejected) -> function
+         | "1" -> (accepted + 1, rejected)
+         | "0" -> (accepted, rejected + 1)
+         | _ -> (accepted, rejected))
+       (0, 0)
+
+let test_corpus_straddles_a_constraint () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_magic_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus reaches the accepting side (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps rejected inputs (%d rejected)" rejected)
+    true (rejected > 0);
+  Alcotest.(check int) "every line carries a verdict" 256 (accepted + rejected)
+
+(* A whole-record where-clause has no failing field offset to repair. Refuse a
+   one-sided corpus instead of allowing an always-rejecting validator to pass. *)
+let corpus_unseedable_codec =
+  let open Wire in
+  let tag = Field.v "tag" uint32be in
+  Codec.v "Opaque"
+    ~where:Expr.(Field.ref tag = int 0x53504F53)
+    Fun.id
+    [ Codec.( $ ) tag Fun.id ]
+
+let test_corpus_refuses_when_vacuous () =
+  match corpus_verdicts ~count:64 [ Wire_3d.pack corpus_unseedable_codec ] with
+  | accepted, rejected ->
+      Alcotest.failf
+        "generate_corpus returned a vacuous corpus (%d accepted, %d rejected) \
+         instead of refusing"
+        accepted rejected
+  | exception Failure msg ->
+      Alcotest.(check bool)
+        "the refusal names the codec" true
+        (Re.execp (Re.compile (Re.str "Opaque")) msg);
+      Alcotest.(check bool)
+        "the refusal reports the tally" true
+        (Re.execp (Re.compile (Re.str "0 accepted")) msg)
+
 let test_doc_differential_nested_regions () =
   needs_3d_exe ();
   differential_ok ~name:"nestedspec" ~package:"nested-doc"
@@ -1637,6 +1706,10 @@ let suite =
         test_generate_dune_standalone_name_override;
       Alcotest.test_case "generate_dune_standalone context policy" `Quick
         test_generate_dune_standalone_context_policy;
+      Alcotest.test_case "corpus straddles a constraint" `Quick
+        test_corpus_straddles_a_constraint;
+      Alcotest.test_case "corpus refuses when vacuous" `Quick
+        test_corpus_refuses_when_vacuous;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
       Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick

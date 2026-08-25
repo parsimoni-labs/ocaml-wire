@@ -255,15 +255,30 @@ val archive_link_steps :
     logic. *)
 
 val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
-(** [generate_corpus ?count ppf codecs] prints, for each codec, [count] fuzzed
-    inputs as [<codec> <hex> <verdict>] lines, where [verdict] is [1] when the
+(** [generate_corpus ?count ppf codecs] prints, for each codec, [count] inputs
+    as [<codec> <params> <hex> <verdict>] lines, where [verdict] is [1] when the
     OCaml codec accepts the bytes (decodes, validates, and the record spans the
     whole input -- matching the hardened [Check] wrapper's whole-buffer
-    contract) and [0] otherwise, and [<hex>] is [-] for the empty input. Lengths
-    are biased around each codec's minimum size so the corpus straddles the
-    accept/reject boundary. This is the oracle half of the doc pipeline's
-    differential self-check; {!main}'s [corpus] subcommand calls it on stdout.
-*)
+    contract) and [0] otherwise, [<params>] is the comma-separated input
+    parameter values ([-] when the codec takes none), and [<hex>] is [-] for the
+    empty input. [count] must be at least two. This is the oracle half of the
+    doc pipeline's differential self-check; {!main}'s [corpus] subcommand calls
+    it on stdout.
+
+    The inputs come from four streams: accepting seeds, built by writing the
+    values each constrained field's own declaration names (see
+    {!Wire.Everparse.Raw.field_seeds}) at the offsets the codec's parse errors
+    report; boundary inputs, each seed with one constrained field set to each of
+    those values and its immediate neighbours; mutants of the seeds; and
+    uniformly drawn bytes at lengths biased around the codec's minimum size.
+
+    Uniform bytes alone are vacuous for a codec that pins a field:
+    [magic == 0x53504F53] leaves one accepting value in [2^32], so every input
+    is a reject and the differential holds equally for a validator that rejects
+    everything. [generate_corpus] therefore raises [Failure] rather than emit a
+    corpus with nothing on one side of the accept/reject boundary, naming the
+    codec and tally. A constraint {!Wire.Everparse.Raw.field_seeds} cannot
+    describe needs a hand-written corpus. *)
 
 val generate_agree :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
