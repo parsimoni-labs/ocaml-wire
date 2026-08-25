@@ -3438,28 +3438,59 @@ let check_encode_safety label ?env g value =
           Alcobar.failf
             "%s encode safety: encode wrote bytes that crash the decoder" label)
 
-let decode_accepts ?env g bs =
-  try
-    match Wire.Codec.decode ?env g.codec bs 0 with
-    | Ok _ -> `Accept
-    | Error _ -> `Reject
-  with Invalid_argument _ -> `Crash
+(* One entry point's answer on one buffer: the value it built, the parse error
+   it reported, or [Invalid_argument], which no entry point is allowed to raise
+   ([check_decode_safety] / [check_validate_safety] own that). *)
+type 'a verdict = Accepted of 'a | Rejected of Wire.parse_error | Crashed
 
-let validate_accepts ?env g bs =
-  match validate_one ?env g bs with
-  | `Ok -> `Accept
-  | `Reject -> `Reject
-  | `Crash -> `Crash
+let decode_at ?env g bs off =
+  match Wire.Codec.decode ?env g.codec bs off with
+  | Ok v -> Accepted v
+  | Error e -> Rejected e
+  | exception Invalid_argument _ -> Crashed
 
+let validate_at ?env g bs off =
+  match Wire.Codec.validate ?env g.codec bs off with
+  | () -> Accepted ()
+  | exception Wire.Parse_error e -> Rejected e
+  | exception Invalid_argument _ -> Crashed
+
+(* Two rejections of the same buffer, blamed on the same field, must give the
+   same reason. Blamed on different fields they need not: a buffer can break
+   several fields at once, and the two paths do not reach them in the same order
+   (decode fills a record, so its field readers run in the compiler's argument
+   order; validate walks the compiled field list in declaration order). Which of
+   several genuine faults gets reported is not a property worth pinning; that a
+   fault the other path found is a fault this one found too, is. *)
+let same_rejection (a : Wire.parse_error) (b : Wire.parse_error) =
+  List.compare String.compare a.Wire.field b.Wire.field <> 0
+  || Wire.equal_error_kind a.Wire.kind b.Wire.kind
+
+(* [Codec.validate] is the gate [codec.mli] tells a caller to run on untrusted
+   input before reading fields zero-copy, so it must raise on exactly the bytes
+   [Codec.decode] returns [Error] on, and for the same reason. Two entry points
+   of one library that disagree about which bytes are valid are a parser
+   differential inside it: what the caller validated is not what it goes on to
+   read. Only the reason is compared, not the offset -- validate reaches a
+   failing field through its own populate and may locate the same rejection at a
+   different byte. *)
 let check_decode_validate_agree label kind ?env g bs =
-  match (decode_accepts ?env g bs, validate_accepts ?env g bs) with
-  | `Crash, _ -> Alcobar.failf "%s %s crashed decoder" label kind
-  | _, `Crash -> Alcobar.failf "%s %s crashed validator" label kind
-  | `Accept, `Accept | `Reject, `Reject -> ()
-  | `Accept, `Reject ->
-      Alcobar.failf "%s %s decode accepted but validate rejected" label kind
-  | `Reject, `Accept ->
-      Alcobar.failf "%s %s validate accepted but decode rejected" label kind
+  match (decode_at ?env g bs 0, validate_at ?env g bs 0) with
+  | Crashed, _ -> Alcobar.failf "%s %s crashed decoder" label kind
+  | _, Crashed -> Alcobar.failf "%s %s crashed validator" label kind
+  | Accepted _, Accepted () -> ()
+  | Rejected d, Rejected v ->
+      if not (same_rejection d v) then
+        Alcobar.failf
+          "%s %s: decode and validate rejected for different reasons (decode: \
+           %a, validate: %a)"
+          label kind Wire.pp_parse_error d Wire.pp_parse_error v
+  | Accepted _, Rejected v ->
+      Alcobar.failf "%s %s: decode accepted but validate rejected (%a)" label
+        kind Wire.pp_parse_error v
+  | Rejected d, Accepted () ->
+      Alcobar.failf "%s %s: validate accepted what decode rejects (%a)" label
+        kind Wire.pp_parse_error d
 
 (* One sample of the hostile-value stream, or [None] for a shape with no
    refinement to violate. Kept as an [option] stream so every gen presents the
@@ -3789,7 +3820,9 @@ let check_fields label a g (value, bs) other hostile =
    from the fuzzer's byte generators rather than from any encoder, so neither
    side is reading back something it wrote. *)
 let check_field_reads label kind ?env a g bs =
-  let validated = validate_accepts ?env g bs = `Accept in
+  let validated =
+    match validate_at ?env g bs 0 with Accepted () -> true | _ -> false
+  in
   let decoded =
     match Wire.Codec.decode ?env g.codec bs 0 with
     | Ok record -> Some record
@@ -3844,20 +3877,6 @@ let noise_gen =
     Alcobar.[ Alcobar.bytes ]
     (fun s ->
       bytes_of_string (if String.length s > 8 then String.sub s 0 8 else s))
-
-type 'a verdict = Accepted of 'a | Rejected of Wire.parse_error | Crashed
-
-let decode_at ?env g bs off =
-  match Wire.Codec.decode ?env g.codec bs off with
-  | Ok v -> Accepted v
-  | Error e -> Rejected e
-  | exception Invalid_argument _ -> Crashed
-
-let validate_at ?env g bs off =
-  match Wire.Codec.validate ?env g.codec bs off with
-  | () -> Accepted ()
-  | exception Wire.Parse_error e -> Rejected e
-  | exception Invalid_argument _ -> Crashed
 
 let size_at g bs off =
   match Wire.Codec.wire_size_at g.codec bs off with
@@ -4397,6 +4416,20 @@ let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
   check_frame_extent label kind ?env g noise bs;
   check_read_purity label kind ?env a g bs
 
+(* An arbitrary nested codec paired with one buffer to read it at: the
+   adversarial stream sits on the codec's own boundaries, the random one is
+   arbitrary bytes. *)
+let nested_bytes_gen depth ~adversarial =
+  Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
+      let stream = if adversarial then a.g.adversarial else bytes_any in
+      match a.g.env with
+      | None ->
+          Alcobar.map Alcobar.[ stream ] (fun bs -> NB (a.g, a.label, bs, None))
+      | Some s ->
+          Alcobar.map
+            Alcobar.[ stream; s.fuzz ]
+            (fun bs mk -> NB (a.g, a.label, bs, Some mk)))
+
 let nested_cases label depth =
   let positive =
     Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
@@ -4404,19 +4437,7 @@ let nested_cases label depth =
           Alcobar.[ a.g.positive; a.g.positive ]
           (fun pos (other, _) -> NS (a.g, a.label, pos, other)))
   in
-  let with_bytes adversarial =
-    Alcobar.dynamic_bind (gen_any depth) (fun (Any a) ->
-        let stream = if adversarial then a.g.adversarial else bytes_any in
-        match a.g.env with
-        | None ->
-            Alcobar.map
-              Alcobar.[ stream ]
-              (fun bs -> NB (a.g, a.label, bs, None))
-        | Some s ->
-            Alcobar.map
-              Alcobar.[ stream; s.fuzz ]
-              (fun bs mk -> NB (a.g, a.label, bs, Some mk)))
-  in
+  let with_bytes adversarial = nested_bytes_gen depth ~adversarial in
   [
     Alcobar.test_case (label ^ " all")
       Alcobar.[ positive; with_bytes false; with_bytes true; noise_gen ]
@@ -4424,6 +4445,30 @@ let nested_cases label depth =
         check_nested_positive label noise positive;
         check_nested_bytes label "random" noise random;
         check_nested_bytes label "adversarial" noise adversarial);
+  ]
+
+(* The agreement property on generated compositions rather than curated ones.
+   A check a combinator carries is enforced at every use site or at none, and a
+   use site only exists once the combinator is nested inside something else, so
+   the shapes that can drift are exactly the ones no curated list enumerates:
+   the registry gens are each their own top-level codec, where decode and
+   validate share the same compiled field list and cannot disagree. *)
+let validate_agrees_cases label depth =
+  let check kind (NB (g, comp, bs, mk)) =
+    let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
+    check_decode_validate_agree (Fmt.str "%s [%s]" label comp) kind ?env g bs
+  in
+  [
+    Alcobar.test_case
+      (label ^ " validate agrees with decode")
+      Alcobar.
+        [
+          nested_bytes_gen depth ~adversarial:false;
+          nested_bytes_gen depth ~adversarial:true;
+        ]
+      (fun random adversarial ->
+        check "random" random;
+        check "adversarial" adversarial);
   ]
 
 (* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
