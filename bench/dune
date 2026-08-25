@@ -5,18 +5,6 @@
  (modules bench_lib)
  (libraries unix fmt))
 
-; -- Optional C tier (select: c_stubs when available, else stubs returning None) --
-
-(library
- (name c_tier)
- (modules c_tier)
- (libraries
-  (select
-   c_tier.ml
-   from
-   (c_stubs -> c_tier.everparse.ml)
-   (-> c_tier.none.ml))))
-
 ; -- EverParse benchmark infrastructure --
 
 ; Generator -- pure OCaml, always builds
