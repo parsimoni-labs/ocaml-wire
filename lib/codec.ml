@@ -191,14 +191,6 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v ->
         UInt32.set_be buf off v;
         off + 4
-  | Uint63 Little ->
-      fun _runtime buf off v ->
-        UInt63.set_le buf off v;
-        off + 8
-  | Uint63 Big ->
-      fun _runtime buf off v ->
-        UInt63.set_be buf off v;
-        off + 8
   | Uint64 Little ->
       fun _runtime buf off v ->
         Bytes.set_int64_le buf off v;
@@ -333,8 +325,6 @@ let rec build_field_reader_ctx : type a.
       fun _runtime buf base -> Bytes.get_uint16_be buf (base + field_off)
   | Uint32 Little -> fun _runtime buf base -> UInt32.le buf (base + field_off)
   | Uint32 Big -> fun _runtime buf base -> UInt32.be buf (base + field_off)
-  | Uint63 Little -> fun _runtime buf base -> UInt63.le buf (base + field_off)
-  | Uint63 Big -> fun _runtime buf base -> UInt63.be buf (base + field_off)
   | Uint64 Little ->
       fun _runtime buf base -> Bytes.get_int64_le buf (base + field_off)
   | Uint64 Big ->
@@ -439,8 +429,6 @@ let rec build_immediate_reader : type a.
   | Uint16 Big -> Some (fun buf base -> Bytes.get_uint16_be buf (at base))
   | Uint32 Little -> Some (fun buf base -> UInt32.le buf (at base))
   | Uint32 Big -> Some (fun buf base -> UInt32.be buf (at base))
-  | Uint63 Little -> Some (fun buf base -> UInt63.le buf (at base))
-  | Uint63 Big -> Some (fun buf base -> UInt63.be buf (at base))
   | Uint64 Little -> Some (fun buf base -> Bytes.get_int64_le buf (at base))
   | Uint64 Big -> Some (fun buf base -> Bytes.get_int64_be buf (at base))
   | Int8 -> Some (fun buf base -> Bytes.get_int8 buf (at base))
@@ -494,8 +482,6 @@ let rec build_immediate_encoder : type a.
   | Uint16 Big -> Some (setter_off 2 Types.set_uint16_be)
   | Uint32 Little -> Some (setter_off 4 UInt32.set_le)
   | Uint32 Big -> Some (setter_off 4 UInt32.set_be)
-  | Uint63 Little -> Some (setter_off 8 UInt63.set_le)
-  | Uint63 Big -> Some (setter_off 8 UInt63.set_be)
   | Uint64 Little -> Some (setter_off 8 Bytes.set_int64_le)
   | Uint64 Big -> Some (setter_off 8 Bytes.set_int64_be)
   | Int8 -> Some (setter_off 1 Types.set_int8)
@@ -580,7 +566,7 @@ let populate_uint32 idx reader =
     Option.iter (set_int_slot slots idx)
       (Int32.unsigned_to_int (UInt32.to_int32 (reader runtime buf base)))
 
-let populate_uint63 idx reader =
+let populate_uint_var idx reader =
   if Sys.int_size >= 63 then fun slots runtime buf base ->
     set_int_slot slots idx (UInt63.to_int (reader runtime buf base))
   else fun slots runtime buf base ->
@@ -620,9 +606,8 @@ let rec build_populate : type a.
   | Int16 _ -> populate_int idx reader
   | Int32 _ -> populate_int idx reader
   | Bits _ -> populate_int idx reader
-  | Uint_var _ -> populate_uint63 idx reader
+  | Uint_var _ -> populate_uint_var idx reader
   | Uint32 _ -> populate_uint32 idx reader
-  | Uint63 _ -> populate_uint63 idx reader
   (* [Uint64] / [Int64] populate both slots: the full value in [int64s] for
      full-width [Field.int64] refs, and the truncated value in [ints] so legacy
      int-kind [Field.ref] / [Field.int] constraints keep their pre-int64
@@ -1596,9 +1581,9 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
      structural form. *)
   | Codec { codec_struct; _ } ->
       iter_param_refs_fields f codec_struct.fields codec_struct.where
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros
-  | Zeroterm | Struct _ | Type_ref _ | Qualified_ref _ ->
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
+  | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm
+  | Struct _ | Type_ref _ | Qualified_ref _ ->
       ()
 
 and iter_param_refs_fields f fields where =
@@ -1629,7 +1614,7 @@ let tag_byte_size : type a. a typ -> int =
   | Uint8 | Int8 -> 1
   | Uint16 _ | Int16 _ -> 2
   | Uint32 _ | Int32 _ -> 4
-  | Uint63 _ | Uint64 _ | Int64 _ -> 8
+  | Uint64 _ | Int64 _ -> 8
   | _ -> ( match field_wire_size typ with Some n -> n | None -> assert false)
 
 (* Read one element of a typ at a given buffer position. Used by Repeat. *)
@@ -1641,8 +1626,6 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   | Uint16 Big -> Bytes.get_uint16_be buf off
   | Uint32 Little -> UInt32.le buf off
   | Uint32 Big -> UInt32.be buf off
-  | Uint63 Little -> UInt63.le buf off
-  | Uint63 Big -> UInt63.be buf off
   | Uint64 Little -> Bytes.get_int64_le buf off
   | Uint64 Big -> Bytes.get_int64_be buf off
   | Int8 -> Bytes.get_int8 buf off
@@ -1748,8 +1731,6 @@ let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
   | Uint16 Big -> Types.set_uint16_be buf off v
   | Uint32 Little -> UInt32.set_le buf off v
   | Uint32 Big -> UInt32.set_be buf off v
-  | Uint63 Little -> UInt63.set_le buf off v
-  | Uint63 Big -> UInt63.set_be buf off v
   | Uint64 Little -> Bytes.set_int64_le buf off v
   | Uint64 Big -> Bytes.set_int64_be buf off v
   | Int8 -> Types.set_int8 buf off v
@@ -2352,11 +2333,11 @@ let elem_strategy : type a. a typ -> a elem_strategy = function
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm ->
       Value_only
   | Uint64 _ | Int64 _ | Float32 _ | Float64 _ -> Value_only
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Int8 | Int16 _ | Int32 _
-  | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm_at_most _
-  | Where _ | Array _ | Byte_array _ | Byte_array_where _ | Byte_slice _
-  | Single_elem _ | Enum _ | Casetype _ | Struct _ | Type_ref _
-  | Qualified_ref _ | Map _ | Apply _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Uint8 | Uint16 _ | Uint32 _ | Int8 | Int16 _ | Int32 _ | Uint_var _ | Bits _
+  | Unit | All_bytes | All_zeros | Zeroterm_at_most _ | Where _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Single_elem _ | Enum _
+  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Map _ | Apply _
+  | Optional _ | Optional_or _ | Repeat _ ->
       By_reading
 
 (* The element check the walk runs. Skipping a value-only reader keeps the span
@@ -3176,10 +3157,10 @@ let compile_field_check cc fld =
    A field's own [constraint_] / [action] / a [where] clause are accounted for
    separately, so this is only about the type's intrinsic read-time validation. *)
 let rec field_reader_validates : type a. a Types.typ -> bool = function
-  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint63 _
-  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
-  | Types.Float32 _ | Types.Float64 _ | Types.Uint_var _ | Types.Bits _
-  | Types.Byte_array _ | Types.Byte_slice _ | Types.All_bytes | Types.Unit ->
+  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint64 _ | Types.Int8
+  | Types.Int16 _ | Types.Int32 _ | Types.Int64 _ | Types.Float32 _
+  | Types.Float64 _ | Types.Uint_var _ | Types.Bits _ | Types.Byte_array _
+  | Types.Byte_slice _ | Types.All_bytes | Types.Unit ->
       false
   | Types.Enum { closed; _ } -> closed
   | Types.Map { inner; index_bound; _ } ->

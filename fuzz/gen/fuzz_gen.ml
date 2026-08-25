@@ -192,14 +192,6 @@ let above_uint32 =
     Alcobar.[ Alcobar.int ]
     (fun n -> Optint.of_int (n land mask lor (mask + 1)))
 
-(* [uint63] fills its carrier, so the only unrepresentable value left is a
-   negative one: [chunk] would drop its sign bit and leave a legal positive
-   number on the wire. *)
-let below_zero_uint63 =
-  Alcobar.map
-    Alcobar.[ Alcobar.int ]
-    (fun n -> Optint.Int63.of_int (-(n land max_int) - 1))
-
 (* A byte string of one of the lengths around [n], for a byte span whose
    declared size is [n]: only the exact length may encode. *)
 let byte_lengths_around n =
@@ -273,22 +265,12 @@ let scalar_optint ~hostile typ size value_gen boundaries =
   in
   { g with adversarial_value = Some hostile }
 
-let scalar_optint63 ~hostile typ size value_gen boundaries =
-  let g =
-    leaf ~equal:Optint.Int63.equal ~typ ~value_gen ~random:(bytes_fixed size)
-      ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
-  in
-  { g with adversarial_value = Some hostile }
-
 let u8_boundaries = [ 0; 1; 0x7F; 0x80; 0xFE; 0xFF ]
 let u16_boundaries = [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
 
 let u32_boundaries =
   List.map Optint.of_int
     [ 0; 1; 0xFFFF; 0x7FFF_FFFF; 0x8000_0000; 0xFFFF_FFFE; 0xFFFF_FFFF ]
-
-let u63_boundaries =
-  List.map Optint.Int63.of_int [ 0; 1; 0xFFFF_FFFF; max_int - 1; max_int ]
 
 let u64_boundaries_i64 =
   Int64.[ zero; one; of_int 0xFFFF_FFFF; max_int; min_int; -1L; sub max_int 1L ]
@@ -318,24 +300,11 @@ let masked_u32 =
     Alcobar.[ Alcobar.int ]
     (fun n -> Optint.of_int (n land 0xFFFF_FFFF))
 
-let masked_u63 =
-  Alcobar.map
-    Alcobar.[ Alcobar.int ]
-    (fun n -> Optint.Int63.of_int (n land max_int))
-
 let uint32 =
   scalar_optint ~hostile:above_uint32 Wire.uint32 4 masked_u32 u32_boundaries
 
 let uint32be =
   scalar_optint ~hostile:above_uint32 Wire.uint32be 4 masked_u32 u32_boundaries
-
-let uint63 =
-  scalar_optint63 ~hostile:below_zero_uint63 Wire.uint63 8 masked_u63
-    u63_boundaries
-
-let uint63be =
-  scalar_optint63 ~hostile:below_zero_uint63 Wire.uint63be 8 masked_u63
-    u63_boundaries
 
 let uint64 = scalar_int64 Wire.uint64 8 Alcobar.int64 u64_boundaries_i64
 let uint64be = scalar_int64 Wire.uint64be 8 Alcobar.int64 u64_boundaries_i64
@@ -4644,8 +4613,6 @@ let unsigned_scalar_gens =
     ("uint32be", Pack uint32be);
     ("uint32(endian_edges)", Pack uint32_endian_edges);
     ("uint32be(endian_edges)", Pack uint32be_endian_edges);
-    ("uint63", Pack uint63);
-    ("uint63be", Pack uint63be);
     ("uint64", Pack uint64);
     ("uint64be", Pack uint64be);
     ("uint64(endian_edges)", Pack uint64_endian_edges);
@@ -5151,8 +5118,6 @@ let expected_registry_labels =
     "uint32be";
     "uint32(endian_edges)";
     "uint32be(endian_edges)";
-    "uint63";
-    "uint63be";
     "uint64";
     "uint64be";
     "uint64(endian_edges)";

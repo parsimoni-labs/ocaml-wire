@@ -256,12 +256,6 @@ val uint32 : Optint.t t
 val uint32be : Optint.t t
 (** [uint32be] generates for {!Wire.uint32be}. *)
 
-val uint63 : Optint.Int63.t t
-(** [uint63] generates for {!Wire.uint63}. *)
-
-val uint63be : Optint.Int63.t t
-(** [uint63be] generates for {!Wire.uint63be}. *)
-
 val uint64 : int64 t
 (** [uint64] generates for {!Wire.uint64}. *)
 

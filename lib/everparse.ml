@@ -69,8 +69,6 @@ let rec type_suffix : type a. a Types.typ -> string = function
   | Types.Uint16 Types.Big -> "U16BE"
   | Types.Uint32 Types.Little -> "U32"
   | Types.Uint32 Types.Big -> "U32BE"
-  | Types.Uint63 Types.Little -> "U63"
-  | Types.Uint63 Types.Big -> "U63BE"
   | Types.Uint64 Types.Little -> "U64"
   | Types.Uint64 Types.Big -> "U64BE"
   (* Signed integers and floats project to the same-width [UINT*] (the

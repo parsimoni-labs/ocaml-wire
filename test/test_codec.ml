@@ -1788,10 +1788,10 @@ let test_array_repeat_reject_non_nz_codec () =
 let projects c = match render_3d c with _ -> true | exception _ -> false
 let arr_field elem = Codec.v "Arr" Fun.id Codec.[ Field.v "x" elem $ Fun.id ]
 
-(* An [array] over a float, signed integer, or [uint63] element builds,
-   round-trips, and projects to a verified 3D schema: [inner_wire_size] sizes
-   every fixed-width scalar element (unsigned and signed ints, floats, [uint63],
-   and bitfields), so the projector can size it. *)
+(* An [array] over a float or signed integer element builds, round-trips, and
+   projects to a verified 3D schema: [inner_wire_size] sizes every fixed-width
+   scalar element (unsigned and signed ints, floats, and bitfields), so the
+   projector can size it. *)
 let test_array_scalar_element_projects () =
   let yes name c =
     Alcotest.(check bool) (name ^ " array projects") true (projects c)
@@ -1802,7 +1802,7 @@ let test_array_scalar_element_projects () =
   yes "int16be" (arr_field (array ~len:(int 2) int16be));
   yes "int32be" (arr_field (array ~len:(int 2) int32be));
   yes "int64be" (arr_field (array ~len:(int 2) int64be));
-  yes "uint63be" (arr_field (array ~len:(int 2) uint63be));
+  yes "uint64be" (arr_field (array ~len:(int 2) uint64be));
   (* and it still round-trips *)
   let c = arr_field (array ~len:(int 2) float64be) in
   let v = [ 1.5; -2.25 ] in
@@ -2966,17 +2966,6 @@ let test_encode_exact_uint32 () =
           ~outside:[ Optint.of_int (mask + 1); Optint.of_int (-1) ])
       [ ("uint32", uint32); ("uint32be", uint32be) ]
 
-(* [uint63] fills its carrier, so the only unrepresentable value left is a
-   negative one, and that one is unrepresentable on every target. *)
-let test_encode_exact_uint63 () =
-  List.iter
-    (fun (name, typ) ->
-      check_scalar_range ~name ~typ ~sub:"does not fit an unsigned 8-byte field"
-        ~equal:Optint.Int63.equal ~pp:Optint.Int63.pp
-        ~inside:[ Optint.Int63.zero; Optint.Int63.max_int ]
-        ~outside:[ Optint.Int63.of_int (-1); Optint.Int63.min_int ])
-    [ ("uint63", uint63); ("uint63be", uint63be) ]
-
 (* An 8-byte field spans 2^64 wire patterns and the generated C validator hands
    every one of them on unchanged, so the OCaml side must too. A carrier that
    held fewer would mask the top bits and hand back a legal smaller number, one
@@ -2996,8 +2985,6 @@ let check_eight_byte_unsigned name typ =
         wire (Bytes.to_string out)
 
 let test_eight_byte_unsigned_preserves_wire () =
-  check_eight_byte_unsigned "uint63" uint63;
-  check_eight_byte_unsigned "uint63be" uint63be;
   check_eight_byte_unsigned "uint64" uint64;
   check_eight_byte_unsigned "uint64be" uint64be
 
@@ -8135,7 +8122,6 @@ let test_repeat_validate_allocation_is_bounded () =
         repeat_budget_case "uint32be" uint32be;
         repeat_budget_case "int8" int8;
         repeat_budget_case "int16be" int16be;
-        repeat_budget_case "uint63be" uint63be;
         repeat_budget_case "uint64be" uint64be;
         repeat_budget_case "int64be" int64be;
         repeat_budget_case "float32be" float32be;
@@ -8812,7 +8798,6 @@ let suite =
       Alcotest.test_case "exact width: signed scalars" `Quick
         test_encode_exact_signed_scalar;
       Alcotest.test_case "exact width: uint32" `Quick test_encode_exact_uint32;
-      Alcotest.test_case "exact width: uint63" `Quick test_encode_exact_uint63;
       Alcotest.test_case "exact width: int64 carrier has no range" `Quick
         test_encode_int64_carrier_has_no_range;
       Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick

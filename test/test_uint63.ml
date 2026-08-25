@@ -1,68 +1,56 @@
-(* Tests for UInt63: unsigned 63-bit get/set over bytes (8-byte slot).
-   Values above 31 bits are written as [Int64] literals and compared through
-   [Optint.Int63.to_int64]: an int literal would itself truncate on a
+(* Tests for UInt63, the carrier [uint ~size] decodes into. Widths are built
+   from [Int64] literals and compared through [Optint.Int63.to_int64]: a
+   7-byte maximum written as an int literal would itself truncate on a
    narrow-int target (wasm_of_ocaml, js_of_ocaml), and these tests run there
    too. *)
 
 open Wire.Private
 
 let of_int64 = Optint.Int63.of_int64
-let to_int64 = Optint.Int63.to_int64
+let sizes = [ 1; 2; 3; 4; 5; 6; 7 ]
 
-let check_roundtrip name ~set ~get v =
-  let buf = Bytes.create 8 in
-  set buf 0 (of_int64 v);
-  Alcotest.(check int64) name v (to_int64 (get buf 0))
-
-let test_roundtrip_le () =
-  check_roundtrip "le roundtrip" ~set:UInt63.set_le ~get:UInt63.le
-    0x1234_5678_9ABCL
-
-let test_roundtrip_be () =
-  check_roundtrip "be roundtrip" ~set:UInt63.set_be ~get:UInt63.be
-    0x1234_5678_9ABCL
+let refuses name ~size v =
+  match UInt63.check_encode ~size v with
+  | () -> Alcotest.failf "%s: expected Invalid_argument" name
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        (name ^ ": message names the field width")
+        true
+        (String.ends_with
+           ~suffix:(Fmt.str "does not fit an unsigned %d-byte field" size)
+           msg)
 
 let test_of_int_identity () =
   Alcotest.(check int) "identity" 42 (UInt63.to_int (UInt63.of_int 42))
 
-(* Pin the wire byte order across all eight bytes so the read/write paths
-   cannot drift. *)
-let test_byte_layout () =
-  let buf = Bytes.of_string "\x01\x02\x03\x04\x05\x06\x07\x08" in
-  Alcotest.(check int64)
-    "le read" 0x0807_0605_0403_0201L
-    (to_int64 (UInt63.le buf 0));
-  Alcotest.(check int64)
-    "be read" 0x0102_0304_0506_0708L
-    (to_int64 (UInt63.be buf 0));
-  let out = Bytes.create 8 in
-  UInt63.set_le out 0 (of_int64 0x0807_0605_0403_0201L);
-  Alcotest.(check string)
-    "le write" "\x01\x02\x03\x04\x05\x06\x07\x08" (Bytes.to_string out);
-  UInt63.set_be out 0 (of_int64 0x0102_0304_0506_0708L);
-  Alcotest.(check string)
-    "be write" "\x01\x02\x03\x04\x05\x06\x07\x08" (Bytes.to_string out)
-
-let test_boundaries () =
+(* The carrier is wider than every width it serves -- seven bytes need 56 bits,
+   the carrier holds 62 -- so the widest value of each width passes the encode
+   guard untouched. The first value past it is refused rather than truncated to
+   a legal smaller number the wire cannot be told apart from. *)
+let test_check_encode_widths () =
   List.iter
-    (fun v ->
-      check_roundtrip "le" ~set:UInt63.set_le ~get:UInt63.le v;
-      check_roundtrip "be" ~set:UInt63.set_be ~get:UInt63.be v)
-    [
-      0x0L;
-      0x1L;
-      0xFFFFL;
-      0x1_0000_0000L;
-      0x0102_0304_0506_0708L;
-      0x3FFF_FFFF_FFFF_FFFFL (* 63-bit max *);
-    ]
+    (fun size ->
+      let widest = Int64.sub (Int64.shift_left 1L (8 * size)) 1L in
+      UInt63.check_encode ~size (of_int64 widest);
+      refuses
+        (Fmt.str "uint(%d) <- 0x%Lx" size (Int64.add widest 1L))
+        ~size
+        (of_int64 (Int64.add widest 1L)))
+    sizes
+
+(* A negative value would reach the wire as its low bytes, a legal positive
+   number of that width. *)
+let test_check_encode_rejects_negative () =
+  List.iter
+    (fun size ->
+      refuses (Fmt.str "uint(%d) <- -1" size) ~size (UInt63.of_int (-1)))
+    sizes
 
 let suite =
   ( "uint63",
     [
-      Alcotest.test_case "roundtrip le" `Quick test_roundtrip_le;
-      Alcotest.test_case "roundtrip be" `Quick test_roundtrip_be;
       Alcotest.test_case "of_int identity" `Quick test_of_int_identity;
-      Alcotest.test_case "byte layout" `Quick test_byte_layout;
-      Alcotest.test_case "boundaries" `Quick test_boundaries;
+      Alcotest.test_case "check_encode widths" `Quick test_check_encode_widths;
+      Alcotest.test_case "check_encode rejects negative" `Quick
+        test_check_encode_rejects_negative;
     ] )

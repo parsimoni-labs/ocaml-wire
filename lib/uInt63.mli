@@ -1,4 +1,6 @@
-(** Unsigned 63-bit integer. Reads 8 bytes, masks to 63 bits.
+(** Carrier for [uint ~size], the 1-to-7-byte unsigned integers. Seven bytes
+    need 56 bits, so every value of every width it serves is represented exactly
+    and nothing is masked.
 
     Backed by {!Optint.Int63}: an unboxed native [int] on a 64-bit host, a boxed
     [int64] where the native [int] is narrower (there a plain-[int] composition
@@ -7,31 +9,16 @@
 type t = Optint.Int63.t
 
 val pp : Format.formatter -> t -> unit
-(** Pretty-printer for unsigned 63-bit values. *)
-
-val le : bytes -> int -> t
-(** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
-
-val be : bytes -> int -> t
-(** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
+(** Pretty-printer. *)
 
 val check_encode : size:int -> t -> unit
 (** [check_encode ~size v] raises [Invalid_argument] when [v] is negative or
     needs more than [size] bytes. Truncating it would leave a legal [size]-byte
     number on the wire that nothing downstream can tell from the one the caller
-    meant. Shared by every [size]-byte unsigned field: the eight-byte {!set_le}
-    and {!set_be} below, and the narrower [uint ~size]. *)
-
-val set_le : bytes -> int -> t -> unit
-(** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
-    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
-
-val set_be : bytes -> int -> t -> unit
-(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off].
-    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
+    meant. *)
 
 val to_int : t -> int
 (** [to_int t] is the value as a native [int]. Exact on a 64-bit host. *)
 
 val of_int : int -> t
-(** [of_int n] is [n] as a 63-bit value. *)
+(** [of_int n] is [n] as a {!type-t}. *)

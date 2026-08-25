@@ -169,7 +169,6 @@ and _ typ =
   | Uint8 : int typ
   | Uint16 : endian -> int typ
   | Uint32 : endian -> UInt32.t typ
-  | Uint63 : endian -> UInt63.t typ
   | Uint64 : endian -> int64 typ (* boxed, for full 64-bit *)
   | Int8 : int typ
   | Int16 : endian -> int typ
@@ -468,8 +467,6 @@ let uint16 = Uint16 Little
 let uint16be = Uint16 Big
 let uint32 = Uint32 Little
 let uint32be = Uint32 Big
-let uint63 = Uint63 Little
-let uint63be = Uint63 Big
 let uint64 = Uint64 Little
 let uint64be = Uint64 Big
 let int8 = Int8
@@ -643,7 +640,7 @@ let check_nested_size ~at_most ~expected ~actual =
    fixed [wire_size]. Reject everything else at the smart constructor
    so the error fires at the user's call site. *)
 let rec has_wire_size_expr : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ -> true
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
   | Float32 _ | Float64 _ -> true
   | Bits _ -> true
@@ -671,7 +668,7 @@ let rec has_wire_size_expr : type a. a typ -> bool = function
    This is what makes a named composite usable as an element: a [T_nlist] over a
    non-[nz] element fails EverParse extraction. *)
 let rec nz : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ -> true
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
   | Float32 _ | Float64 _ -> true
   | Bits _ -> true
@@ -710,7 +707,7 @@ and struct_nz (s : struct_) =
    stricter than [has_wire_size_expr], which admits sized-but-undecodable
    elements for the [optional] byte-size suffix. *)
 let rec is_array_element : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ -> true
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ -> true
   | Int8 | Int16 _ | Int32 _ | Int64 _ -> true
   | Float32 _ | Float64 _ -> true
   (* [Unit] is 0-width: an array of it carries no bytes and projects to a
@@ -946,7 +943,7 @@ let default inner ~inject ~project =
    projected as its base scalar with a membership refinement (closed) or bare
    base (open) instead, the same shape used outside the doc projection. *)
 let enum_base_is_be : type a. a typ -> bool = function
-  | Uint16 Big | Uint32 Big | Uint63 Big | Uint64 Big -> true
+  | Uint16 Big | Uint32 Big | Uint64 Big -> true
   | Int16 Big | Int32 Big | Int64 Big -> true
   | Uint_var { endian = Big; _ } -> true
   | _ -> false
@@ -1052,7 +1049,7 @@ let struct_project s ~name ~keep =
 type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
 
 let rec ocaml_kind_of : type a. a typ -> ocaml_kind = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ -> Int
+  | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ -> Int
   | Uint64 _ -> Int64
   | Int8 | Int16 _ | Int32 _ -> Int
   | Int64 _ -> Int64
@@ -1286,8 +1283,8 @@ let list_elem_pp : type a.
    shaped scalars plus enums. String/byte tags use the two-step shape
    (split into adjacent fields, dispatch in caller code) instead. *)
 let is_int_dispatch_typ : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint_var _ | Int8 | Int16 _
-  | Int32 _ | Bits _ | Enum _ ->
+  | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ | Int8 | Int16 _ | Int32 _ | Bits _
+  | Enum _ ->
       true
   | _ -> false
 
@@ -1302,7 +1299,7 @@ let uint32_case_index k =
         "Wire.casetype: case index %Ld does not fit this platform's native int"
         index
 
-let uint63_case_index k =
+let uint_var_case_index k =
   match UInt63.to_int k with
   | index -> index
   | exception (Failure _ | Invalid_argument _) ->
@@ -1320,8 +1317,7 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Uint8 -> Pack_expr (Int k)
   | Uint16 _ -> Pack_expr (Int k)
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
-  | Uint63 _ -> Pack_expr (Int (uint63_case_index k))
-  | Uint_var _ -> Pack_expr (Int (uint63_case_index k))
+  | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int k)
   | Int16 _ -> Pack_expr (Int k)
   | Int32 _ -> Pack_expr (Int k)
@@ -1398,8 +1394,6 @@ let rec wrap_tag : type a. a typ -> string = function
   | Uint16 Big -> "u16b"
   | Uint32 Little -> "u32l"
   | Uint32 Big -> "u32b"
-  | Uint63 Little -> "u63l"
-  | Uint63 Big -> "u63b"
   | Uint64 Little -> "u64l"
   | Uint64 Big -> "u64b"
   | Int8 -> "i8"
@@ -1438,8 +1432,8 @@ let rec wrap_tag : type a. a typ -> string = function
 let some fmt = Fmt.kstr (fun s -> Some s) fmt
 
 let rec single_elem_struct : type a. a typ -> string option = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Float32 _ | Float64 _ | Codec _ | Casetype _ ->
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
+  | Float32 _ | Float64 _ | Codec _ | Casetype _ ->
       None
   | Map { inner; _ } -> single_elem_struct inner
   | Where { inner; _ } -> single_elem_struct inner
@@ -1759,10 +1753,6 @@ and pp_typ : type a. a typ Fmt.t =
   | Uint8 -> Fmt.string ppf "UINT8"
   | Uint16 e -> Fmt.pf ppf "UINT16%a" pp_endian e
   | Uint32 e -> Fmt.pf ppf "UINT32%a" pp_endian e
-  (* 3D has no 63-bit type. Project to the 8-byte UINT64: both decoders then
-     accept every 8-byte input (the OCaml reader keeps the low 63 bits), so the
-     C validator never accepts more than the OCaml one. *)
-  | Uint63 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   | Uint64 e -> Fmt.pf ppf "UINT64%a" pp_endian e
   (* 3D has no native signed types: project to the same-width UINT*. The
      two's-complement reinterpretation lives in the OCaml decoder. *)
@@ -2056,7 +2046,7 @@ let rec inner_wire_size : type a. a typ -> int option = function
   | Uint8 | Int8 -> Some 1
   | Uint16 _ | Int16 _ -> Some 2
   | Uint32 _ | Int32 _ | Float32 _ -> Some 4
-  | Uint63 _ | Uint64 _ | Int64 _ | Float64 _ -> Some 8
+  | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | Bits { base = U8; _ } -> Some 1
   | Bits { base = U16 _; _ } -> Some 2
   | Bits { base = U32 _; _ } -> Some 4
@@ -2155,7 +2145,6 @@ let rec bit_width_of : type a. a typ -> int option = function
   | Uint8 | Int8 -> Some 8
   | Uint16 _ | Int16 _ -> Some 16
   | Uint32 _ | Int32 _ -> Some 32
-  | Uint63 _ -> Some 63
   | Uint64 _ | Int64 _ -> Some 64
   | Map { inner; _ } -> bit_width_of inner
   | Where { inner; _ } -> bit_width_of inner
@@ -3182,7 +3171,6 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Uint8 -> 1
   | Uint16 _ -> 2
   | Uint32 _ -> 4
-  | Uint63 _ -> 8
   | Uint64 _ -> 8
   | Int8 -> 1
   | Int16 _ -> 2
@@ -3278,7 +3266,6 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Uint8 -> Some 1
   | Uint16 _ -> Some 2
   | Uint32 _ -> Some 4
-  | Uint63 _ -> Some 8
   | Uint64 _ -> Some 8
   | Int8 -> Some 1
   | Int16 _ -> Some 2
@@ -3313,7 +3300,7 @@ let rec field_wire_size : type a. a typ -> int option = function
 let c_type_of : type a. a typ -> string = function
   | Uint8 | Bits { base = U8; _ } -> "uint8_t"
   | Uint16 _ | Bits { base = U16 _; _ } -> "uint16_t"
-  | Uint32 _ | Uint63 _ | Bits { base = U32 _; _ } -> "uint32_t"
+  | Uint32 _ | Bits { base = U32 _; _ } -> "uint32_t"
   | Uint64 _ -> "uint64_t"
   (* Signed types project to UINT* in 3D so EverParse only sees unsigned
      widths; the same width drives the C field type. *)
@@ -3330,8 +3317,7 @@ let c_type_of : type a. a typ -> string = function
   | _ -> "uint32_t"
 
 let ml_type_of : type a. a typ -> string = function
-  | Uint8 | Uint16 _ | Uint_var _ | Bits _ -> "int"
-  | Uint32 _ | Uint63 _ -> "int"
+  | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ | Bits _ -> "int"
   | Uint64 _ -> "int64"
   | Int8 | Int16 _ | Int32 _ -> "int"
   | Int64 _ -> "int64"
@@ -3357,7 +3343,7 @@ let rec int_slot_of_typ : type a. a typ -> int_slot option = function
   | Uint8 | Int8 -> Some { width = 1; endian = Big }
   | Uint16 e | Int16 e -> Some { width = 2; endian = e }
   | Uint32 e | Int32 e -> Some { width = 4; endian = e }
-  | Uint63 e | Uint64 e | Int64 e -> Some { width = 8; endian = e }
+  | Uint64 e | Int64 e -> Some { width = 8; endian = e }
   | Uint_var { size = Int width; endian } -> Some { width; endian }
   | Enum { base; _ } -> int_slot_of_typ base
   | Where { inner; _ } -> int_slot_of_typ inner

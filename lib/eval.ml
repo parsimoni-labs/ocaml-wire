@@ -39,11 +39,10 @@ let rec int_of : type a. a typ -> a -> int option =
   | Uint8 -> Some v
   | Uint16 _ -> Some v
   | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
-  (* On a narrow-int platform a u32/u63 value may not fit either; the
-     unsigned conversions return [None] exactly then and are identity-exact
-     on a 64-bit host. *)
+  (* On a narrow-int platform a u32 value may not fit either; the unsigned
+     conversion returns [None] exactly then and is identity-exact on a 64-bit
+     host. *)
   | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
-  | Uint63 _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
   | Uint64 _ -> Int64.unsigned_to_int v
   | Int8 -> Some v
   | Int16 _ -> Some v
@@ -96,12 +95,6 @@ let rec int_of_exn : type a. a typ -> a -> int =
         | None ->
             int_overflow
               (Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL))
-  | Uint63 _ -> (
-      if Sys.int_size >= 63 then UInt63.to_int v
-      else
-        match Int64.unsigned_to_int (Optint.Int63.to_int64 v) with
-        | Some n -> n
-        | None -> int_overflow (Optint.Int63.to_int64 v))
   | Uint64 _ -> (
       match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Int8 -> v
