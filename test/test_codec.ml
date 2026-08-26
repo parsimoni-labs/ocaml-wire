@@ -2398,6 +2398,112 @@ let test_encode_rejects_unlisted_enum () =
   Codec.encode open_enum_codec 99 buf 0;
   Alcotest.(check string) "open enum" "\099" (Bytes.to_string buf)
 
+(* The compiled codec reaches an enum / lookup / variants / bit field through
+   its own readers, writers and staged accessors, none of which the typ-level
+   [of_string] path shares. A base whose OCaml carrier is not [int] --
+   [uint32], [int32] -- must travel all of them: the integer the refinement is
+   compiled against is the only thing these combinators take from their base. *)
+let carrier_enum_field =
+  Codec.(Field.v "E" (enum "Code32" [ ("A", 1); ("B", 2) ] uint32be) $ Fun.id)
+
+let carrier_enum_codec = Codec.v "CarrierEnum" Fun.id [ carrier_enum_field ]
+
+let test_enum_over_carrier_base () =
+  let buf = Bytes.of_string "\x00\x00\x00\x02" in
+  (match Codec.decode carrier_enum_codec buf 0 with
+  | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Codec.validate carrier_enum_codec buf 0;
+  let get = Staged.unstage (Codec.get carrier_enum_codec carrier_enum_field) in
+  Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
+  expect_decode_rejects "unlisted code" carrier_enum_codec "\x00\x00\x00\x63";
+  expect_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ] (fun () ->
+      Codec.encode carrier_enum_codec (UInt32.of_int 99) buf 0);
+  Codec.encode carrier_enum_codec (UInt32.of_int 1) buf 0;
+  Alcotest.(check string)
+    "encode listed code" "\x00\x00\x00\x01" (Bytes.to_string buf);
+  let set = Staged.unstage (Codec.set carrier_enum_codec carrier_enum_field) in
+  set buf 0 (UInt32.of_int 2);
+  Alcotest.(check string) "set" "\x00\x00\x00\x02" (Bytes.to_string buf)
+
+let carrier_variants_field =
+  Codec.(
+    Field.v "V"
+      (variants "Sign"
+         [ ("Neg", `Neg); ("Zero", `Zero); ("Pos", `Pos) ]
+         int32be)
+    $ Fun.id)
+
+let carrier_variants_codec =
+  Codec.v "CarrierVariants" Fun.id [ carrier_variants_field ]
+
+let test_variants_over_carrier_base () =
+  let buf = Bytes.of_string "\x00\x00\x00\x01" in
+  (match Codec.decode carrier_variants_codec buf 0 with
+  | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Codec.validate carrier_variants_codec buf 0;
+  let get =
+    Staged.unstage (Codec.get carrier_variants_codec carrier_variants_field)
+  in
+  Alcotest.(check bool) "get variant" true (get buf 0 = `Zero);
+  Codec.encode carrier_variants_codec `Pos buf 0;
+  Alcotest.(check string) "encode" "\x00\x00\x00\x02" (Bytes.to_string buf);
+  expect_decode_rejects "index past the variant list" carrier_variants_codec
+    "\x00\x00\x00\x07"
+
+let carrier_lookup_field =
+  Codec.(Field.v "L" (lookup [ "a"; "b"; "c" ] uint32be) $ Fun.id)
+
+let carrier_lookup_codec =
+  Codec.v "CarrierLookup" Fun.id [ carrier_lookup_field ]
+
+let carrier_bit_codec =
+  Codec.v "CarrierBit" Fun.id Codec.[ Field.v "B" (bit uint32be) $ Fun.id ]
+
+let test_lookup_and_bit_over_carrier_base () =
+  let buf = Bytes.of_string "\x00\x00\x00\x02" in
+  (match Codec.decode carrier_lookup_codec buf 0 with
+  | Ok v -> Alcotest.(check string) "lookup decode" "c" v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Codec.validate carrier_lookup_codec buf 0;
+  let get =
+    Staged.unstage (Codec.get carrier_lookup_codec carrier_lookup_field)
+  in
+  Alcotest.(check string) "lookup get" "c" (get buf 0);
+  Codec.encode carrier_lookup_codec "b" buf 0;
+  Alcotest.(check string)
+    "lookup encode" "\x00\x00\x00\x01" (Bytes.to_string buf);
+  expect_decode_rejects "index past the table" carrier_lookup_codec
+    "\x00\x00\x00\x07";
+  (match Codec.decode carrier_bit_codec buf 0 with
+  | Ok v -> Alcotest.(check bool) "bit decode" true v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Codec.encode carrier_bit_codec false buf 0;
+  Alcotest.(check string) "bit encode" "\x00\x00\x00\x00" (Bytes.to_string buf)
+
+(* An enum over a little-endian [uint32] keeps its named 3D type, exactly as one
+   over [uint8] does; over the big-endian base it falls back to the membership
+   refinement EverParse can type. Both must project, or the widened base would
+   ship an OCaml-only feature. *)
+let test_enum_over_carrier_base_projects () =
+  let le = enum "Code32le" [ ("A", 1); ("B", 2) ] uint32 in
+  let out =
+    to_3d ~enum_as_type:true
+      (module_ [ typedef (struct_ "LeEnum32" [ field "v" le ]) ])
+  in
+  Alcotest.(check bool)
+    "uint32 enum keeps its enum decl" true
+    (contains ~sub:"enum Code32le" out);
+  let be = enum "Code32be" [ ("A", 1); ("B", 2) ] uint32be in
+  let out_be =
+    to_3d ~enum_as_type:true
+      (module_ [ typedef (struct_ "BeEnum32" [ field "v" be ]) ])
+  in
+  Alcotest.(check bool)
+    "uint32be enum carries a membership refinement" true
+    (contains ~sub:"UINT32BE" out_be && contains ~sub:"== 2" out_be)
+
 let zeros_codec =
   Codec.v "Padded"
     (fun tag pad -> (tag, pad))
@@ -8982,6 +9088,14 @@ let suite =
         test_exact_byte_field_expression_size;
       Alcotest.test_case "encode rejects: unlisted enum value" `Quick
         test_encode_rejects_unlisted_enum;
+      Alcotest.test_case "enum: over a non-int carrier base" `Quick
+        test_enum_over_carrier_base;
+      Alcotest.test_case "variants: over a non-int carrier base" `Quick
+        test_variants_over_carrier_base;
+      Alcotest.test_case "lookup/bit: over a non-int carrier base" `Quick
+        test_lookup_and_bit_over_carrier_base;
+      Alcotest.test_case "enum: non-int carrier base projects to 3D" `Quick
+        test_enum_over_carrier_base_projects;
       Alcotest.test_case "encode rejects: non-zero all_zeros" `Quick
         test_encode_rejects_non_zero_padding;
       Alcotest.test_case "encode rejects: refined byte span" `Quick

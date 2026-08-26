@@ -1280,6 +1280,60 @@ let test_enum_open_of_string_accepts_unlisted () =
   | Ok v -> Alcotest.(check int) "of_string accepts unlisted" 50 v
   | Error e -> Alcotest.failf "of_string rejected unlisted: %a" pp_parse_error e
 
+(* [bit], [lookup], [enum], [enum_open] and [variants] all refine the integer a
+   field decodes to. That integer is the whole of what they need from their
+   base, so which OCaml type carries it is theirs to convert, not a restriction
+   to put on the caller. [uint32] and [int32] carry theirs in a type of their
+   own and are the proof: each combinator decodes, rejects and encodes over
+   them exactly as it does over [uint8]. *)
+let test_bit_over_carrier_base () =
+  let t = bit uint32be in
+  (match of_string t "\x00\x00\x00\x01" with
+  | Ok v -> Alcotest.(check bool) "non-zero decodes true" true v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  (match of_string t "\x00\x00\x00\x00" with
+  | Ok v -> Alcotest.(check bool) "zero decodes false" false v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode true" "\x00\x00\x00\x01" (to_string t true);
+  Alcotest.(check string) "encode false" "\x00\x00\x00\x00" (to_string t false)
+
+let test_lookup_over_carrier_base () =
+  let t = lookup [ "a"; "b"; "c" ] uint32be in
+  (match of_string t "\x00\x00\x00\x02" with
+  | Ok v -> Alcotest.(check string) "index selects entry" "c" v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode" "\x00\x00\x00\x01" (to_string t "b");
+  expect_typ_decode_rejects "index past the table" t "\x00\x00\x00\x07";
+  expect_typ_encode_rejects "value not in the table" ~names:[ "lookup" ]
+    (fun () -> to_string t "z")
+
+let test_enum_over_carrier_base () =
+  let closed = enum "Code32" [ ("A", 1); ("B", 2) ] uint32be in
+  (match of_string closed "\x00\x00\x00\x02" with
+  | Ok v -> Alcotest.(check int) "listed code" 2 (UInt32.to_int v)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  expect_typ_decode_rejects "unlisted code" closed "\x00\x00\x00\x63";
+  expect_typ_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ]
+    (fun () -> to_string closed (UInt32.of_int 99));
+  Alcotest.(check string)
+    "encode listed code" "\x00\x00\x00\x01"
+    (to_string closed (UInt32.of_int 1));
+  let open_ = enum_open "Code32" [ ("A", 1); ("B", 2) ] uint32be in
+  match of_string open_ "\x00\x00\x00\x63" with
+  | Ok v ->
+      Alcotest.(check int) "open enum accepts unlisted" 99 (UInt32.to_int v)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_variants_over_carrier_base () =
+  let t =
+    variants "Sign" [ ("Neg", `Neg); ("Zero", `Zero); ("Pos", `Pos) ] int32be
+  in
+  (match of_string t "\x00\x00\x00\x01" with
+  | Ok v -> Alcotest.(check bool) "variant value" true (v = `Zero)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode" "\x00\x00\x00\x02" (to_string t `Pos);
+  expect_typ_decode_rejects "index past the variant list" t "\x00\x00\x00\x07"
+
 (* A variable-size codec computes its span by reading length fields; on a
    truncated buffer that read runs off the end. [of_string] must return a clean
    [Error] (eof), not raise [Invalid_argument], the same way [Codec.decode]
@@ -1401,6 +1455,14 @@ let suite =
         test_validate_rejects_unknown_variant;
       Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
         test_enum_open_of_string_accepts_unlisted;
+      Alcotest.test_case "bit: over a non-int carrier base" `Quick
+        test_bit_over_carrier_base;
+      Alcotest.test_case "lookup: over a non-int carrier base" `Quick
+        test_lookup_over_carrier_base;
+      Alcotest.test_case "enum: over a non-int carrier base" `Quick
+        test_enum_over_carrier_base;
+      Alcotest.test_case "variants: over a non-int carrier base" `Quick
+        test_variants_over_carrier_base;
       Alcotest.test_case "of_string: truncated variable codec rejects" `Quick
         test_of_string_truncated_variable_codec;
       Alcotest.test_case "expr: equality operators" `Quick
