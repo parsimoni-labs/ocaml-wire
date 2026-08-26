@@ -1644,26 +1644,26 @@ let host_context = "(= %{context_name} default)"
    it (the one-line form runs past the margin). *)
 let host_context_and cond = Fmt.str "(and\n   %s\n   %s)" host_context cond
 
-(* The [.3d] and [agree.c] are pure OCaml ([gen.exe 3d] / [gen.exe agree]), so
-   they regenerate on demand and never go stale. The C needs [3d.exe], so its
-   rule exists only under [BUILD_EVERPARSE=1] ([mode promote] writes it back into
-   the tree); a plain [dune build] uses the committed C and never invokes
-   [3d.exe], and fails loudly if the C was never committed rather than silently
-   shelling out. A codec change refreshes the [.3d] and [agree.c] while the
-   committed C goes stale -- the runtest differential below catches that, since
-   it regenerates the corpus and [agree.c] from the current codec and runs them
-   against the committed validator. *)
+(* The committed [.3d] is a plain source that no rule names as a target. The
+   install stanza depends on it, so a rule producing it would run on any build
+   that installs anything and promote over the file before the drift check in
+   [emit_drift_check_rules] compares it. Drift is reported there instead, by
+   diffing the committed schema against a scratch [<Base>.3d.gen], and [dune
+   promote] writes the new bytes after an intended codec change, reviewed as a
+   source diff like anything else.
+
+   [agree.c] is pure OCaml and a scratch target, never promoted, so it
+   regenerates on demand. The C needs [3d.exe], so its rule exists only under
+   [BUILD_EVERPARSE=1] ([mode promote] writes it back into the tree); a plain
+   [dune build] uses the committed C and never invokes [3d.exe], and fails
+   loudly if the C was never committed rather than silently shelling out. A
+   codec change refreshes the [.3d] and [agree.c] while the committed C goes
+   stale -- the runtest differential below catches that, since it regenerates
+   the corpus and [agree.c] from the current codec and runs them against the
+   committed validator. *)
 let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
   Fmt.pf ppf
     "(rule\n\
-    \ (alias 3d)\n\
-    \ (enabled_if\n\
-    \  %s)\n\
-    \ (mode promote)\n\
-    \ (targets %s)\n\
-    \ (action\n\
-    \  (run %%{exe:gen.exe} 3d)))\n\n\
-     (rule\n\
     \ (enabled_if\n\
     \  %s)\n\
     \ (targets agree.c)\n\
@@ -1678,7 +1678,7 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
     \ (deps %s)\n\
     \ (action\n\
     \  (run %%{exe:gen.exe} c)))\n\n"
-    host_context three_d host_context
+    host_context
     (host_context_and "(= %{env:BUILD_EVERPARSE=} \"1\")")
     (String.concat " " c_files)
     provenance three_d

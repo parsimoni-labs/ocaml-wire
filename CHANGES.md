@@ -105,6 +105,13 @@
 
 ### Fixed
 
+- The single-file documentation build no longer regenerates the committed
+  `<Name>.3d` behind your back. It was a promoted rule target the install stanza
+  depended on, so every build rewrote it before the drift check compared it, and
+  a schema that no longer matched its codec could not fail `runtest`. The
+  committed schema is now a plain source: drift fails `runtest`, and `dune
+  promote` writes the new bytes after an intended codec change (#317, @samoht)
+
 - Fix `Codec.validate` skipping a sub-codec field's constraints, `where`,
   closed-enum membership, `per_byte` refinements and actions, which now reject
   the same bytes as decoding and generated EverParse validators (#311, @samoht)
