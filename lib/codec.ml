@@ -2366,7 +2366,15 @@ type 'a elem_strategy =
    added later must not pick a strategy by falling through, since picking
    [Value_only] for a reader that checks something is how [Codec.validate] comes
    to accept what [Codec.decode] rejects. Adding one stops the build until
-   somebody chooses. *)
+   somebody chooses.
+
+   Exhaustiveness only catches a typ arriving. Moving one that is already here,
+   [Codec] out of [By] into [By_reading] above all, type-checks and keeps every
+   verdict intact, because reading an element and dropping it reaches the same
+   answer by building the record first. What catches that is
+   [test_repeat_validate_allocation_is_bounded] in [test/test_codec.ml], which
+   validates one repeat at two byte budgets and requires the words per call to
+   come out equal, with a sub-codec among the element types it measures. *)
 let elem_strategy : type a. a typ -> a elem_strategy = function
   | Codec { codec_validate; _ } -> By codec_validate
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm ->
