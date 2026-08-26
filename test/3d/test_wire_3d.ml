@@ -324,6 +324,13 @@ let test_generate_dune_standalone () =
   Alcotest.(check bool)
     "runtest diffs the committed spec" true
     (has "(diff MyPkg.3d MyPkg.3d.gen)");
+  (* The install stanza depends on the committed spec, so a rule that produces
+     it runs on any build that installs anything, and promotion overwrites the
+     file the diff above is meant to police. Keep it a plain source: the diff
+     then reports drift, and [dune promote] writes the new bytes on request. *)
+  Alcotest.(check bool)
+    "committed spec is a source, not a rule target" false
+    (has "(targets MyPkg.3d)");
   Alcotest.(check bool)
     "runtest regenerates dune.inc" true
     (has "targets dune.inc.gen");
