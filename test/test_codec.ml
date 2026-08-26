@@ -3026,6 +3026,39 @@ let test_eight_byte_unsigned_preserves_wire () =
   check_eight_byte_unsigned "uint64" uint64;
   check_eight_byte_unsigned "uint64be" uint64be
 
+(* The same rule one width down, on the signed side. Four bytes spell 2^32
+   patterns and the generated C validator hands every one of them on unchanged.
+   [int32] carries a native [int], so where that int is narrower than the field
+   ([wasm_of_ocaml] is 31 bits) [Int32.to_int] drops the top bits on the way in,
+   and nothing on the way out objects: [check_signed_encode] guards itself with
+   [bits < Sys.int_size], and 32 < 31 is false, so the check disables itself
+   exactly where it is needed. A frame leaves as different bytes with no error
+   on either path. Refusing it would be sound; altering it is not.
+
+   Native and js_of_ocaml hold 32 bits in an [int] and already pass. This case
+   is the one that fails under wasm_of_ocaml. *)
+let check_four_byte_signed name typ wire =
+  let cf = Codec.(Field.v "v" typ $ Fun.id) in
+  let codec = Codec.v "FourByteSigned" Fun.id Codec.[ cf ] in
+  match Codec.decode codec (Bytes.of_string wire) 0 with
+  | Error _ -> ()
+  | Ok v ->
+      let out = Bytes.make 4 '\x00' in
+      Codec.encode codec v out 0;
+      Fmt.kstr
+        (fun msg -> Alcotest.(check string) msg wire (Bytes.to_string out))
+        "%s: frame %a re-encodes unchanged" name
+        Fmt.(list ~sep:nop (fmt "%02x"))
+        (List.map Char.code (List.of_seq (String.to_seq wire)))
+
+let test_four_byte_signed_preserves_wire () =
+  List.iter
+    (fun (name, typ) ->
+      List.iter
+        (check_four_byte_signed name typ)
+        [ String.make 4 '\xff'; "\x80\x00\x00\x00"; "\x7f\xff\xff\xff" ])
+    [ ("int32", int32); ("int32be", int32be) ]
+
 (* [array] and [repeat] elements are written by an encoder of their own, so a
    value no element can hold has to be refused on that path too. *)
 let test_element_exact_width () =
@@ -8843,6 +8876,8 @@ let suite =
         test_encode_int64_carrier_has_no_range;
       Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick
         test_eight_byte_unsigned_preserves_wire;
+      Alcotest.test_case "4-byte signed fields preserve the wire" `Quick
+        test_four_byte_signed_preserves_wire;
       Alcotest.test_case "exact width: array and repeat elements" `Quick
         test_element_exact_width;
       Alcotest.test_case "exact byte field: literal size" `Quick
