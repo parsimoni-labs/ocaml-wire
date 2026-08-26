@@ -8440,6 +8440,46 @@ let test_truncated_still_reports_eof () =
     (Codec.decode two_span_codec (Bytes.of_string "\010X") 0);
   expect_eof "of_string two-span" (of_string (codec two_span_codec) "\010X")
 
+(* A sub-codec sized from a length field it carries. The field is two bytes
+   wide, so a region of one byte cannot hold it. *)
+let region_len_codec =
+  let f_len = Field.v "len" uint16be in
+  Codec.v "RegionLen"
+    (fun _len body -> body)
+    Codec.
+      [
+        (f_len $ fun body -> String.length body);
+        Field.v "body" (byte_array ~size:(Field.ref f_len)) $ Fun.id;
+      ]
+
+(* A [nested] region declares how many bytes of the buffer the value may
+   occupy; the bytes past it belong to whatever follows, or to nothing at all.
+   Sizing the sub-codec from those bytes makes the [expected] count of the
+   resulting end-of-input a number no byte of the declared region carried, and
+   a caller that sizes its next read from [expected] is then reading on the
+   word of memory outside the region. Pin both halves of that: the reported
+   shortfall is the length field's own extent, and it does not move when the
+   bytes past the region do. *)
+let test_nested_region_eof_stays_in_region () =
+  let region = 1 in
+  let error_for filler =
+    let buf = Bytes.make 64 filler in
+    Bytes.set_uint8 buf 0 0x00;
+    match of_bytes (nested ~size:(int region) (codec region_len_codec)) buf with
+    | Ok _ -> Alcotest.fail "decoded a region too short for its length field"
+    | Error e -> e
+  in
+  let e = error_for '\x99' in
+  (match e.kind with
+  | Unexpected_eof { expected; got } ->
+      Alcotest.(check int) "bytes the length field needed" 2 expected;
+      Alcotest.(check int) "bytes the region had" region got
+  | k -> Alcotest.failf "expected an eof, got %a" pp_error_kind k);
+  Alcotest.(check string)
+    "the shortfall ignores the bytes past the region"
+    (Fmt.str "%a" pp_parse_error e)
+    (Fmt.str "%a" pp_parse_error (error_for '\x01'))
+
 (* [Codec.validate] scans a refined span where it lies rather than copying it,
    so the scan has to refuse everything the reader refuses. A literal width
    below zero is refused before any scan, and by the reader, so both entry
@@ -9351,6 +9391,8 @@ let suite =
         `Quick test_size_misuse_reports_itself;
       Alcotest.test_case "diag: truncated buffer still reports eof" `Quick
         test_truncated_still_reports_eof;
+      Alcotest.test_case "diag: a nested region sizes only from its own bytes"
+        `Quick test_nested_region_eof_stays_in_region;
       Alcotest.test_case "diag: negative span is a parse error" `Quick
         test_negative_span_is_parse_error;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
