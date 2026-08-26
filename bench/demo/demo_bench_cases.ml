@@ -427,10 +427,10 @@ let ipv4_case =
       set;
       write_template = Bytes.copy ipv4_dataset.items.(0);
       write_offset = 0;
-      write_value = Optint.of_int 0x0A00_0001;
-      equal = Optint.equal;
+      write_value = Wire.UInt32.of_int 0x0A00_0001;
+      equal = Wire.UInt32.equal;
       bench_read = true;
-      of_c_field = of_int Optint.of_int;
+      of_c_field = of_int Wire.UInt32.of_int;
     }
 
 let tcp_case =

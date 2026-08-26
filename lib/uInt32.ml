@@ -1,7 +1,17 @@
 type t = Optint.t
 
-let compare = Optint.compare
+(* [Optint.t] is the native [int] only where that holds more than 32 bits, and
+   there every uint32 is a non-negative [int] whose natural order is already the
+   unsigned one. Where it falls back to [Int32] the values with bit 31 set are
+   negative, so the unsigned comparison has to be asked for by name: an
+   inherited signed one ranks 0xFFFFFFFF, the largest uint32, below 1. Chosen
+   once at module initialisation, not per call. *)
+let compare =
+  if Sys.int_size > 32 then Optint.compare
+  else fun a b -> Int32.unsigned_compare (Optint.to_int32 a) (Optint.to_int32 b)
+
 let equal = Optint.equal
+let zero = Optint.zero
 let pp = Optint.pp
 
 (* Compose two unboxed 16-bit reads/writes through [Optint]. On a 64-bit host
@@ -54,7 +64,17 @@ let set_be buf off v =
   Bytes.set_uint16_be buf (off + 2) (low16 v)
 
 let to_int = Optint.to_int
-let of_int v = Optint.of_int (v land mask32)
+
+(* Refuses rather than masks. Masking turns a number the field cannot hold into
+   a legal 32-bit value on the wire that nothing downstream can tell from the
+   one the caller meant, which is the failure this library exists to avoid.
+   Only a native [int] wider than the field can supply such a number. *)
+let of_int n =
+  let v = Optint.of_int (n land mask32) in
+  if not (Optint.equal (Optint.of_int n) v) then
+    Fmt.invalid_arg "Wire.UInt32.of_int: %d is not an unsigned 32-bit value" n;
+  v
+
 let to_int32 = Optint.to_int32
 
 (* [Optint.of_int32] keeps the signed view, so where [Optint.t] is a wide native

@@ -31,7 +31,7 @@ let decode_record codec s =
 
 (* -- Record codec tests -- *)
 
-type simple_record = { a : int; b : int; c : Optint.t }
+type simple_record = { a : int; b : int; c : UInt32.t }
 
 let simple_record_codec =
   let open Codec in
@@ -44,7 +44,7 @@ let simple_record_codec =
     ]
 
 let test_record_encode () =
-  let v = { a = 0x42; b = 0x1234; c = Optint.of_int32 0x56789ABCl } in
+  let v = { a = 0x42; b = 0x1234; c = UInt32.of_int32 0x56789ABCl } in
   match encode_record simple_record_codec v with
   | Error e -> Alcotest.failf "%a" pp_parse_error e
   | Ok encoded ->
@@ -61,11 +61,11 @@ let test_record_decode () =
   | Ok v ->
       Alcotest.(check int) "a" 0x42 v.a;
       Alcotest.(check int) "b" 0x1234 v.b;
-      Alcotest.(check int32) "c" 0x56789ABCl (Optint.to_int32 v.c)
+      Alcotest.(check int32) "c" 0x56789ABCl (UInt32.to_int32 v.c)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_record_roundtrip () =
-  let original = { a = 0xAB; b = 0xCDEF; c = Optint.of_int 0x12345678 } in
+  let original = { a = 0xAB; b = 0xCDEF; c = UInt32.of_int 0x12345678 } in
   match encode_record simple_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
@@ -74,7 +74,7 @@ let test_record_roundtrip () =
           Alcotest.(check int) "a roundtrip" original.a decoded.a;
           Alcotest.(check int) "b roundtrip" original.b decoded.b;
           Alcotest.(check int)
-            "c roundtrip" (Optint.to_int original.c) (Optint.to_int decoded.c)
+            "c roundtrip" (UInt32.to_int original.c) (UInt32.to_int decoded.c)
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
 let test_duplicate_names_rejected () =
@@ -703,7 +703,7 @@ let test_record_with_multi () =
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
 
 (* Record with byte_array field *)
-type ba_record = { id : Optint.t; uuid : string; tag : int }
+type ba_record = { id : UInt32.t; uuid : string; tag : int }
 
 let ba_record_codec =
   let open Codec in
@@ -717,7 +717,7 @@ let ba_record_codec =
 
 let test_record_byte_array_roundtrip () =
   let original =
-    { id = Optint.of_int 0x12345678; uuid = "0123456789abcdef"; tag = 0xABCD }
+    { id = UInt32.of_int 0x12345678; uuid = "0123456789abcdef"; tag = 0xABCD }
   in
   match encode_record ba_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
@@ -727,8 +727,8 @@ let test_record_byte_array_roundtrip () =
       | Ok decoded ->
           Alcotest.(check int)
             "id"
-            (Optint.to_int original.id)
-            (Optint.to_int decoded.id);
+            (UInt32.to_int original.id)
+            (UInt32.to_int decoded.id);
           Alcotest.(check string) "uuid" original.uuid decoded.uuid;
           Alcotest.(check int) "tag" original.tag decoded.tag
       | Error e -> Alcotest.failf "%a" pp_parse_error e)
@@ -736,7 +736,7 @@ let test_record_byte_array_roundtrip () =
 let test_record_byte_array_trailing_zeros () =
   (* A caller wanting "short" in a 16-byte span supplies the zeros itself. *)
   let original =
-    { id = Optint.of_int 1; uuid = "short" ^ String.make 11 '\x00'; tag = 2 }
+    { id = UInt32.of_int 1; uuid = "short" ^ String.make 11 '\x00'; tag = 2 }
   in
   match encode_record ba_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
@@ -3021,20 +3021,34 @@ let test_sint32_of_int_range () =
         (SInt32.to_int32 (SInt32.of_int32 n)))
     Int32.[ min_int; minus_one; zero; one; max_int ]
 
-(* [uint32] rides an [Optint.t], which is a plain [int] where that is wide
-   enough to hold more than 32 bits and a boxed [int32] where it is not. Only
-   the first can carry an out-of-range value, so the case exists only there. *)
-let test_encode_exact_uint32 () =
+(* The unsigned 32-bit range is enforced where the value is built rather than
+   where it is written, so a number the field cannot hold never becomes a
+   [uint32] in the first place. Only a native [int] wider than the field can
+   supply one, so the refusal is reachable only there. [of_int32] needs no
+   guard: every [int32] pattern is a legal uint32. *)
+let test_uint32_of_int_range () =
+  let mask = Wire.Private.UInt32.mask32 in
   if width_is_testable 32 then
-    let mask = Wire.Private.UInt32.mask32 in
     List.iter
-      (fun (name, typ) ->
-        check_scalar_range ~name ~typ
-          ~sub:"does not fit an unsigned 32-bit field" ~equal:Optint.equal
-          ~pp:Optint.pp
-          ~inside:[ Optint.zero; Optint.of_int mask ]
-          ~outside:[ Optint.of_int (mask + 1); Optint.of_int (-1) ])
-      [ ("uint32", uint32); ("uint32be", uint32be) ]
+      (fun n ->
+        match UInt32.of_int n with
+        | v -> Alcotest.failf "UInt32.of_int %d built %a" n UInt32.pp v
+        | exception Invalid_argument _ -> ())
+      [ mask + 1; -1; min_int ];
+  List.iter
+    (fun n ->
+      Fmt.kstr
+        (fun msg -> Alcotest.(check int) msg n)
+        "UInt32.of_int %d round-trips" n
+        (UInt32.to_int (UInt32.of_int n)))
+    [ 0; 1; 0xFFFF ];
+  List.iter
+    (fun n ->
+      Fmt.kstr
+        (fun msg -> Alcotest.(check int32) msg n)
+        "UInt32.of_int32 %ld round-trips" n
+        (UInt32.to_int32 (UInt32.of_int32 n)))
+    Int32.[ min_int; minus_one; zero; one; max_int ]
 
 (* An 8-byte field spans 2^64 wire patterns and the generated C validator hands
    every one of them on unchanged, so the OCaml side must too. A carrier that
@@ -4673,7 +4687,7 @@ let test_raw_with_offset () =
     (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
   Alcotest.(check int32)
     "get at offset 10" 0xDEADBEEFl
-    (Optint.to_int32 ((Staged.unstage (Codec.get codec cf_v)) buf 10))
+    (UInt32.to_int32 ((Staged.unstage (Codec.get codec cf_v)) buf 10))
 
 (* -- Dependent-size byte_slice tests -- *)
 
@@ -5256,6 +5270,8 @@ let test_bitfield_load_shared () =
   let wa = load_a buf 0 in
   let wb = load_b buf 0 in
   (* Same base word, same value *)
+  (* [Codec.load_word] hands back the bitfield's raw base word, an [Optint.t],
+     not a uint32 field value. *)
   Alcotest.check (Alcotest.testable Optint.pp Optint.equal) "same word" wa wb;
   let a = Codec.extract a wa in
   let b = Codec.extract b wa in
@@ -5745,7 +5761,7 @@ let test_optional_codec_absent () =
 
 (* Multiple optional fields (TM frame pattern) *)
 
-type multi_opt = { data : int; ocf : Optint.t option; fecf : int option }
+type multi_opt = { data : int; ocf : UInt32.t option; fecf : int option }
 
 let multi_opt_codec ~ocf ~fecf =
   Codec.v "MultiOpt"
@@ -5771,7 +5787,7 @@ let test_optional_both_present () =
   Alcotest.(check int) "data" 0x1111 r.data;
   Alcotest.(check (option int))
     "ocf" (Some 0x22222222)
-    (Option.map Optint.to_int r.ocf);
+    (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" (Some 0x3333) r.fecf
 
 let test_optional_both_absent () =
@@ -5781,7 +5797,7 @@ let test_optional_both_absent () =
   Bytes.set_uint16_be buf 0 0x1111;
   let r = decode_ok (Codec.decode c buf 0) in
   Alcotest.(check int) "data" 0x1111 r.data;
-  Alcotest.(check (option int)) "ocf" None (Option.map Optint.to_int r.ocf);
+  Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" None r.fecf
 
 let test_optional_mixed () =
@@ -5794,7 +5810,7 @@ let test_optional_mixed () =
   Alcotest.(check int) "data" 0x1111 r.data;
   Alcotest.(check (option int))
     "ocf" (Some 0x22222222)
-    (Option.map Optint.to_int r.ocf);
+    (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" None r.fecf
 
 (* Dynamic optional: presence determined by a previously-parsed field. *)
@@ -5910,7 +5926,7 @@ let test_encode_totality () =
 type tm_opt = {
   ocf_flag : bool;
   data : int;
-  ocf : Optint.t option;
+  ocf : UInt32.t option;
   trail : int;
 }
 
@@ -5942,7 +5958,7 @@ let test_dyn_opt_anyref_present () =
   Alcotest.(check int) "data" 0x1234 r.data;
   Alcotest.(check (option int32))
     "ocf" (Some 0xDEADBEEFl)
-    (Option.map Optint.to_int32 r.ocf);
+    (Option.map UInt32.to_int32 r.ocf);
   Alcotest.(check int) "trail" 0xFF r.trail
 
 let test_dyn_opt_anyref_absent () =
@@ -5953,7 +5969,7 @@ let test_dyn_opt_anyref_absent () =
   let r = decode_ok (Codec.decode tm_opt_codec buf 0) in
   Alcotest.(check bool) "ocf_flag" false r.ocf_flag;
   Alcotest.(check int) "data" 0x1234 r.data;
-  Alcotest.(check (option int)) "ocf" None (Option.map Optint.to_int r.ocf);
+  Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
   Alcotest.(check int) "trail" 0xFF r.trail
 
 (* -- Predicates with bitwise/shift/mod operators in [optional] --
@@ -6300,7 +6316,7 @@ let test_repeat_variable_size_elements () =
 
 (* -- Casetype as a trailing variable-size codec field -- *)
 
-type ev_payload = [ `Login of int | `Logout of Optint.t | `Other of int ]
+type ev_payload = [ `Login of int | `Logout of UInt32.t | `Other of int ]
 
 let casetype_field_event_typ : ev_payload Wire.typ =
   Wire.casetype "EvPayload" Wire.uint8
@@ -6344,7 +6360,7 @@ let test_casetype_field_logout () =
   let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
   Alcotest.(check bool)
     "Logout" true
-    (r.data = `Logout (Optint.of_int32 0x55667788l))
+    (r.data = `Logout (UInt32.of_int32 0x55667788l))
 
 let test_casetype_field_default () =
   let buf = Bytes.create 10 in
@@ -6467,7 +6483,7 @@ type tm_like = {
   hdr : int;
   data_len : int;
   packets : packet list;
-  ocf : Optint.t option;
+  ocf : UInt32.t option;
   fecf : int option;
 }
 
@@ -6515,7 +6531,7 @@ let test_tm_like_full () =
   Alcotest.(check int) "pkt1.id" 0x02 (List.nth r.packets 1).id;
   Alcotest.(check (option int))
     "ocf" (Some 0x33333333)
-    (Option.map Optint.to_int r.ocf);
+    (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" (Some 0x4444) r.fecf
 
 let test_tm_like_no_trailing () =
@@ -6528,7 +6544,7 @@ let test_tm_like_no_trailing () =
   Bytes.set_uint16_be buf 4 0x1111;
   let r = decode_ok (Codec.decode c buf 0) in
   Alcotest.(check int) "packet count" 1 (List.length r.packets);
-  Alcotest.(check (option int)) "ocf" None (Option.map Optint.to_int r.ocf);
+  Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" None r.fecf
 
 let test_tm_like_roundtrip () =
@@ -6559,8 +6575,8 @@ let test_tm_like_roundtrip () =
     original.packets decoded.packets;
   Alcotest.(check (option int32))
     "ocf"
-    (Option.map Optint.to_int32 original.ocf)
-    (Option.map Optint.to_int32 decoded.ocf);
+    (Option.map UInt32.to_int32 original.ocf)
+    (Option.map UInt32.to_int32 decoded.ocf);
   Alcotest.(check (option int)) "fecf" original.fecf decoded.fecf
 
 (* -- Multiple consecutive variable-size fields (CFDP-style) --
@@ -6695,7 +6711,7 @@ let test_multi_var_fixed_after () =
 
 module Slice = Bytesrw.Bytes.Slice
 
-type ssh_string = { len : Optint.t; data : Slice.t }
+type ssh_string = { len : UInt32.t; data : Slice.t }
 
 let ssh_f_len = Field.v "len" uint32be
 let ssh_f_data = Field.v "data" (byte_slice ~size:(Field.ref ssh_f_len))
@@ -6708,7 +6724,7 @@ let ssh_string_codec =
 let mk_ssh_string s =
   let b = Bytes.of_string s in
   {
-    len = Optint.of_int (String.length s);
+    len = UInt32.of_int (String.length s);
     data = Slice.make b ~first:0 ~length:(Bytes.length b);
   }
 
@@ -6725,19 +6741,19 @@ let test_ssh_two_var_slices () =
       (fun reason _ desc _ lang -> (reason, desc, lang))
       [
         (f_reason $ fun (r, _, _) -> r);
-        (f_desc_len $ fun (_, d, _) -> Optint.of_int (Slice.length d));
+        (f_desc_len $ fun (_, d, _) -> UInt32.of_int (Slice.length d));
         (f_desc $ fun (_, d, _) -> d);
-        (f_lang_len $ fun (_, _, l) -> Optint.of_int (Slice.length l));
+        (f_lang_len $ fun (_, _, l) -> UInt32.of_int (Slice.length l));
         (f_lang $ fun (_, _, l) -> l);
       ]
   in
   let v =
-    (Optint.of_int 11, (mk_ssh_string "bye").data, (mk_ssh_string "en-US").data)
+    (UInt32.of_int 11, (mk_ssh_string "bye").data, (mk_ssh_string "en-US").data)
   in
   let buf = Bytes.create 200 in
   Codec.encode codec v buf 0;
   let r, d, l = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "reason" 11 (Optint.to_int r);
+  Alcotest.(check int) "reason" 11 (UInt32.to_int r);
   Alcotest.(check string) "desc" "bye" (Slice.to_string d);
   Alcotest.(check string) "lang" "en-US" (Slice.to_string l)
 
@@ -6754,9 +6770,9 @@ let test_two_var_codecs_embedded () =
   let buf = Bytes.create 200 in
   Codec.encode pair_codec v buf 0;
   let a, b = decode_ok (Codec.decode pair_codec buf 0) in
-  Alcotest.(check int) "a.len" 4 (Optint.to_int a.len);
+  Alcotest.(check int) "a.len" 4 (UInt32.to_int a.len);
   Alcotest.(check string) "a.data" "abcd" (Slice.to_string a.data);
-  Alcotest.(check int) "b.len" 2 (Optint.to_int b.len);
+  Alcotest.(check int) "b.len" 2 (UInt32.to_int b.len);
   Alcotest.(check string) "b.data" "xy" (Slice.to_string b.data)
 
 let test_three_var_codecs_embedded () =
@@ -8906,7 +8922,8 @@ let suite =
         test_encode_exact_unsigned_scalar;
       Alcotest.test_case "exact width: signed scalars" `Quick
         test_encode_exact_signed_scalar;
-      Alcotest.test_case "exact width: uint32" `Quick test_encode_exact_uint32;
+      Alcotest.test_case "exact width: UInt32.of_int range" `Quick
+        test_uint32_of_int_range;
       Alcotest.test_case "exact width: int64 carrier has no range" `Quick
         test_encode_int64_carrier_has_no_range;
       Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick

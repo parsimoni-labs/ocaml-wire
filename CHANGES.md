@@ -2,6 +2,10 @@
 
 ### Added
 
+- Add `Wire.UInt32`, the unsigned 32-bit carrier behind `uint32` and `uint32be`.
+  It was reachable before only as `Wire.Private.UInt32`, with `Optint.t` as the
+  public type (#322, @samoht)
+
 - Add `Wire.SInt32`, the signed 32-bit carrier behind `int32` and `int32be`. It
   is deliberately not interchangeable with the unsigned 32-bit carrier: the two
   share a representation, so a value read with the wrong signedness would be a
@@ -41,6 +45,12 @@
   (#263, @samoht)
 
 ### Changed
+
+- **Breaking:** `uint32` and `uint32be` decode to an abstract `Wire.UInt32.t`
+  rather than `Optint.t`, and `Wire.UInt32.of_int` refuses a number outside the
+  range instead of masking it to a legal value the caller did not mean. Convert
+  a decoded field with `Wire.UInt32.to_int32` or `to_int`, and reinterpret a bit
+  pattern with `of_int32` (#322, @samoht)
 
 - **Breaking:** `int32` and `int32be` decode to `Wire.SInt32.t` rather than a
   native `int`, and `Wire.rest_bytes` accepts a parameter of any integer type
@@ -128,6 +138,11 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- `uint32` values now order as unsigned numbers on every target. The carrier was
+  `Optint.t`, which is `Int32` where the native `int` is narrower than the
+  field, so a comparison ranked 0xFFFFFFFF, the largest `uint32`, below 1 under
+  js_of_ocaml and wasm_of_ocaml (#322, @samoht)
 
 - A 4-byte signed field no longer alters the frame it decodes where the native
   `int` is narrower than the field. Under wasm_of_ocaml an `int` is 31 bits, so

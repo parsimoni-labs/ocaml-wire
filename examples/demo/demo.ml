@@ -37,8 +37,8 @@ type all_ints = {
   u8 : int;
   u16 : int;
   u16be : int;
-  u32 : Optint.t;
-  u32be : Optint.t;
+  u32 : UInt32.t;
+  u32be : UInt32.t;
   u64be : int64;
 }
 
@@ -66,8 +66,8 @@ let all_ints_default =
     u8 = 0xFF;
     u16 = 0x1234;
     u16be = 0x5678;
-    u32 = Optint.of_int 0xDEADBEEF;
-    u32be = Optint.of_int 0xCAFEBABE;
+    u32 = UInt32.of_int 0xDEADBEEF;
+    u32be = UInt32.of_int 0xCAFEBABE;
     u64be = 0x0102030405060708L;
   }
 
@@ -202,7 +202,7 @@ let bool_fields_data n =
 (* -- 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes -- *)
 
 type large_mixed = {
-  sync : Optint.t;
+  sync : UInt32.t;
   version : int;
   type_ : int;
   spacecraft : int;
@@ -210,7 +210,7 @@ type large_mixed = {
   count : int;
   offset : int;
   length : int;
-  crc : Optint.t;
+  crc : UInt32.t;
   timestamp : int64;
 }
 
@@ -251,7 +251,7 @@ let large_mixed_size = Codec.wire_size large_mixed_codec
 
 let large_mixed_default =
   {
-    sync = Optint.of_int 0x1ACFFC1D;
+    sync = UInt32.of_int 0x1ACFFC1D;
     version = 2;
     type_ = 0;
     spacecraft = 0x01FF;
@@ -259,7 +259,7 @@ let large_mixed_default =
     count = 66;
     offset = 16;
     length = 1024;
-    crc = Optint.of_int 0xDEADBEEF;
+    crc = UInt32.of_int 0xDEADBEEF;
     timestamp = 0x0102030405060708L;
   }
 

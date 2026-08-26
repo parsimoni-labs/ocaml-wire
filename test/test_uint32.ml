@@ -16,14 +16,22 @@ let test_roundtrip_le () =
 let test_roundtrip_be () =
   check_roundtrip "be roundtrip" ~set:UInt32.set_be ~get:UInt32.be 0xCAFE_BABEl
 
-let test_of_int_masks () =
-  Alcotest.(check int) "mask" 0xFF (UInt32.to_int (UInt32.of_int 0xFF));
+let test_of_int_refuses_out_of_range () =
+  Alcotest.(check int) "in range" 0xFF (UInt32.to_int (UInt32.of_int 0xFF));
   Alcotest.(check int) "identity" 42 (UInt32.to_int (UInt32.of_int 42));
-  (* The mask keeps the low 32 bits on every int width: [-1] is the u32
-     all-ones there, and the no-op mask where the int is narrower. *)
+  (* [-1] used to become the all-ones uint32. Turning a number the field cannot
+     hold into a legal one is the coercion this refuses; reinterpreting a bit
+     pattern is what [of_int32] is for. *)
   Alcotest.(check int32)
-    "of_int (-1) is all-ones" (-1l)
-    (UInt32.to_int32 (UInt32.of_int (-1)));
+    "of_int32 (-1) is all-ones" (-1l)
+    (UInt32.to_int32 (UInt32.of_int32 (-1l)));
+  if Sys.int_size > 32 then
+    List.iter
+      (fun n ->
+        match UInt32.of_int n with
+        | v -> Alcotest.failf "of_int %d built %a" n UInt32.pp v
+        | exception Invalid_argument _ -> ())
+      [ -1; UInt32.mask32 + 1; max_int; min_int ];
   Alcotest.(check int64)
     "mask32 low 32 bits" 0xFFFF_FFFFL
     (Int64.logand (Int64.of_int UInt32.mask32) 0xFFFF_FFFFL)
@@ -77,7 +85,8 @@ let suite =
     [
       Alcotest.test_case "roundtrip le" `Quick test_roundtrip_le;
       Alcotest.test_case "roundtrip be" `Quick test_roundtrip_be;
-      Alcotest.test_case "of_int masks" `Quick test_of_int_masks;
+      Alcotest.test_case "of_int refuses out of range" `Quick
+        test_of_int_refuses_out_of_range;
       Alcotest.test_case "byte layout" `Quick test_byte_layout;
       Alcotest.test_case "high bit preserved" `Quick test_high_bit;
       Alcotest.test_case "boundaries" `Quick test_boundaries;

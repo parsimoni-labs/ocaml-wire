@@ -908,7 +908,7 @@ type tm_like = {
   hdr : int;
   data_len : int;
   packets : packet list;
-  ocf : Optint.t option;
+  ocf : UInt32.t option;
   fecf : int option;
 }
 

@@ -361,12 +361,20 @@ end
     Fields carry no buffer position -- that comes from the {!Codec} they are
     bound into. The same field can appear in multiple codecs. *)
 
+module UInt32 = UInt32
+(** Unsigned 32-bit integers, the carrier of {!uint32} and {!uint32be}.
+
+    Ordered as an unsigned number on every target: the representation is shared
+    with {!SInt32}, and where the native [int] is narrower than the field it is
+    [Int32], whose comparison ranks 0xFFFFFFFF, the largest value here, below 1.
+*)
+
 module SInt32 = SInt32
 (** Signed 32-bit integers, the carrier of {!int32} and {!int32be}.
 
-    Distinct from the unsigned 32-bit carrier on purpose: the two share a
-    representation, and a value read with the wrong signedness is a silent
-    misparse rather than a type error. *)
+    Distinct from {!UInt32} on purpose: the two share a representation, and a
+    value read with the wrong signedness is a silent misparse rather than a type
+    error. *)
 
 module Field : sig
   type 'a t
@@ -551,18 +559,14 @@ val uint16 : int typ
 val uint16be : int typ
 (** Unsigned 16-bit big-endian integer. Encodes [0] to [65535]. *)
 
-val uint32 : Optint.t typ
-(** Unsigned 32-bit little-endian integer. Decodes to an [Optint.t] so a value
-    with bit 31 set survives on a narrow-int target (js/wasm).
+val uint32 : UInt32.t typ
+(** Unsigned 32-bit little-endian integer. Encodes [0] to [2{^32} - 1], and
+    carries the value as a {!UInt32.t} so a word with bit 31 set survives on a
+    target whose native [int] is narrower than the field. Build one with
+    {!UInt32.of_int32} from a bit pattern, or {!UInt32.of_int}. *)
 
-    On a 64-bit host that [Optint.t] is a native [int] wide enough to hold more
-    than 32 bits, so encoding checks the range and refuses a negative value
-    rather than reading it as its two's complement. Build a word with bit 31 set
-    from its bit pattern with [Wire.Private.UInt32.of_int32], not with
-    [Optint.of_int32], which keeps the signed view. *)
-
-val uint32be : Optint.t typ
-(** Unsigned 32-bit big-endian integer. Decodes to an [Optint.t]. *)
+val uint32be : UInt32.t typ
+(** Unsigned 32-bit big-endian integer. Encodes [0] to [2{^32} - 1]. *)
 
 val uint64 : int64 typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
