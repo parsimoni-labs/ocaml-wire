@@ -126,6 +126,44 @@ let test_int8_full_range () =
     Alcotest.(check int) (Fmt.str "%d" i) i (of_string_exn int8 s)
   done
 
+(* [of_reader] on a value with no fixed wire size accumulates slices and retries
+   the parse. It used to rebuild the whole accumulated buffer with
+   [Buffer.to_bytes] and re-parse it from offset 0 after every single slice, so
+   a frame arriving a byte at a time cost O(n^2) in copying and in parsing
+   both. The failing parse already says how many more bytes the value needs
+   ([Unexpected_eof] carries [expected] and [got]), which is enough to read that
+   far before retrying instead of retrying blind.
+
+   [Gc.minor_words] cannot see this: the accumulated buffer is large enough to
+   be allocated straight into the major heap. *)
+let test_reader_incremental_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let f_len = Field.v "len" uint16be in
+  let frame_codec =
+    Codec.v "DribbleFrame"
+      (fun _len d -> d)
+      Codec.
+        [
+          (Field.v "len" uint16be $ fun d -> String.length d);
+          Field.v "data" (byte_array ~size:(Field.ref f_len)) $ Fun.id;
+        ]
+  in
+  let typ = Wire.codec frame_codec in
+  let payload = String.make 4096 'x' in
+  let frame = Wire.to_string typ payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Gc.allocated_bytes () in
+  let got = Wire.of_reader_exn typ reader in
+  let words = (Gc.allocated_bytes () -. before) /. 8. in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (words < 200_000.))
+    "a 4096-byte frame dribbled one byte at a time stays sub-quadratic (got \
+     %.0f words)"
+    words
+
 let test_int16be_negative () =
   let buf = Bytes.of_string "\xFF\xFE" in
   Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int16be buf)
@@ -1380,6 +1418,8 @@ let suite =
       Alcotest.test_case "parse: int8 negative" `Quick test_int8_negative;
       Alcotest.test_case "parse: int8 full range" `Quick test_int8_full_range;
       Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;
+      Alcotest.test_case "reader: incremental parse is not quadratic" `Quick
+        test_reader_incremental_is_not_quadratic;
       Alcotest.test_case "parse: int32be negative" `Quick test_int32be_negative;
       Alcotest.test_case "parse: int64le roundtrip" `Quick
         test_int64le_roundtrip;
