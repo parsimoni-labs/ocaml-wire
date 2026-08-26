@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        ocaml-compiler: ['5.4', '5.3', '5.2']
+        ocaml-compiler: ['5.4', '5.3']
         include:
           - os: macos-latest
             ocaml-compiler: '5.4'

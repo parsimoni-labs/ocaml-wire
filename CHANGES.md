@@ -37,6 +37,8 @@
 
 ### Changed
 
+- **Breaking:** Require OCaml 5.3, up from 5.2 (#320, @samoht)
+
 - The EverParse differential compares decoded field values, not only the
   accept/reject verdict. On an input both sides accept, every field the two can
   both report must carry the same value; two decoders that agree on which bytes
@@ -115,6 +117,11 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- A fresh domain's first decode or validate no longer costs about a word per
+  compiled validator the program ever built, which reached roughly 1 MB at
+  50,000 validators and was charged even to domains that never decode
+  (#320, @samoht)
 
 - The single-file documentation build no longer regenerates the committed
   `<Name>.3d` behind your back. It was a promoted rule target the install stanza
