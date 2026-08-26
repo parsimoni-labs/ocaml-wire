@@ -2,6 +2,10 @@
 
 ### Added
 
+- Add `Wire.Everparse.Raw.field_seeds`, exposing constrained whole-byte integer
+  values so generated corpora can construct inputs that uniform bytes would
+  never reach (#314, @samoht)
+
 - Add `Wire.equal_error_kind`, structural equality on error kinds ignoring
   location (#299, @samoht)
 
@@ -26,6 +30,10 @@
   (#263, @samoht)
 
 ### Changed
+
+- Seed `Wire_3d.generate_corpus` from accepted inputs and constraint boundaries,
+  and refuse one-sided corpora, which cannot distinguish a validator from a
+  constant answer (#314, @samoht)
 
 - **Breaking:** `Codec.encode` and `Wire.to_string` raise `Invalid_argument` on
   a value their own decoder rejects, rather than writing bytes that fail to read

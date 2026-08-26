@@ -88,10 +88,7 @@ jobs:
       - run: opam install . --deps-only --with-test
       - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
 
-      # merlint pins bytesrw to a commit older than the 0.4.0 wire needs and
-      # calls no bytesrw API itself, so the pin must not move the one the
-      # project just resolved.
-      - run: opam install merlint --ignore-constraints-on bytesrw
+      - run: opam install merlint
 
       # merlint --build runs this itself but reports only the exit code, so
       # run it here first to get the compiler error on its own line.

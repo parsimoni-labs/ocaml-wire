@@ -1066,3 +1066,25 @@ val ml_type_of : 'a typ -> string
 (** [ml_type_of typ] returns the OCaml type name for FFI stub generation:
     ["int"] for integer types that fit in OCaml integers, ["int64"] for uint64.
 *)
+
+(** {1 Seed values} *)
+
+type int_slot = { width : int; endian : endian }
+(** Byte width and order of a whole-byte integer field on the wire. *)
+
+type field_seed = { field : string; slot : int_slot; values : int64 list }
+(** A field whose own declaration singles out particular wire values. *)
+
+val field_seeds : struct_ -> field_seed list
+(** [field_seeds s] is, for each named whole-byte integer field of [s] whose
+    declaration singles out values, the byte slot it occupies and those values:
+    the constant an equality or inequality refinement names, the values either
+    side of an ordering refinement's boundary, and the members of a closed
+    enumeration. Fields with no such value, and fields that are not whole-byte
+    integers (bitfields in particular, whose base word is shared), are omitted.
+
+    The list over-approximates: it names candidates worth trying, not values the
+    description is guaranteed to admit, so a consumer must run each through the
+    codec to learn the verdict. It exists so a generated corpus can reach the
+    accepting side of a constraint that drawing bytes never would -- a magic
+    number leaves one accepting value in [2^32]. *)
