@@ -1,6 +1,10 @@
 type t = int64
 
-let compare = Int64.compare
+(* Signed on the carrier, unsigned on the field: this is the whole reason the
+   type is abstract. [Int64.compare] reads the top bit as a sign and so ranks
+   0xFFFF_FFFF_FFFF_FFFF, the largest value here, below zero. Wrong on every
+   target, since nothing about the platform is involved. *)
+let compare = Int64.unsigned_compare
 let equal = Int64.equal
 let zero = 0L
 let max_int = -1L

@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add `Wire.UInt64`, the unsigned 64-bit carrier behind `uint64` and `uint64be`
+  (#323, @samoht)
+
 - Add `Wire.UInt32`, the unsigned 32-bit carrier behind `uint32` and `uint32be`.
   It was reachable before only as `Wire.Private.UInt32`, with `Optint.t` as the
   public type (#322, @samoht)
@@ -45,6 +48,13 @@
   (#263, @samoht)
 
 ### Changed
+
+- **Breaking:** `uint64` and `uint64be` decode to an abstract `Wire.UInt64.t`
+  rather than `int64`, so an unsigned field can no longer be read where a signed
+  one is expected. Convert with `Wire.UInt64.to_int64` and build with
+  `of_int64`. `Wire.Field.int64` now accepts a field of any type carrying a
+  64-bit slot, which is the set it already checked for at run time (#323,
+  @samoht)
 
 - **Breaking:** `uint32` and `uint32be` decode to an abstract `Wire.UInt32.t`
   rather than `Optint.t`, and `Wire.UInt32.of_int` refuses a number outside the
@@ -138,6 +148,10 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- `uint64` values now order as unsigned numbers. The carrier was `int64`, whose
+  comparison reads the top bit as a sign and so ranked
+  0xFFFF_FFFF_FFFF_FFFF, the largest `uint64`, below zero (#323, @samoht)
 
 - `uint32` values now order as unsigned numbers on every target. The carrier was
   `Optint.t`, which is `Int32` where the native `int` is narrower than the

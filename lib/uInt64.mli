@@ -26,7 +26,6 @@ val max_int : t
 val compare : t -> t -> int
 (** [compare a b] orders two values as unsigned 64-bit integers, so
     0xFFFF_FFFF_FFFF_FFFF is the largest. *)
-(* TODO: this is [Int64.compare] for now, which is signed. *)
 
 val equal : t -> t -> bool
 (** [equal a b] is [true] when [a] and [b] are the same value. *)
