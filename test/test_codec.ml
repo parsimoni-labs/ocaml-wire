@@ -8657,6 +8657,31 @@ let test_nested_region_eof_stays_in_region () =
     (Fmt.str "%a" pp_parse_error e)
     (Fmt.str "%a" pp_parse_error (error_for '\x01'))
 
+(* Demanding the codec's mandatory extent from the region closes off a length
+   field the codec always carries, but [two_span_codec]'s second one sits
+   behind a span the first one sizes, so where it falls is data. A region as
+   long as the mandatory extent still stops short of it, and the size walk
+   reads it anyway. Cutting the buffer at the region has to give the answer a
+   buffer that really ends there gives: any other answer was resolved from
+   bytes the parse was never handed. *)
+let test_dynamic_length_field_stays_in_region () =
+  let region = 2 in
+  let error_in buf =
+    Bytes.set_uint8 buf 0 200;
+    match of_bytes (nested ~size:(int region) (codec two_span_codec)) buf with
+    | Ok _ ->
+        Alcotest.fail "decoded a region that cannot reach its length field"
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let past_the_region filler = error_in (Bytes.make 512 filler) in
+  Alcotest.(check string)
+    "a region ends the buffer as far as the walk is concerned"
+    (error_in (Bytes.make region '\x00'))
+    (past_the_region '\x99');
+  Alcotest.(check string)
+    "the shortfall ignores the bytes past the region" (past_the_region '\x01')
+    (past_the_region '\xff')
+
 (* [Codec.validate] scans a refined span where it lies rather than copying it,
    so the scan has to refuse everything the reader refuses. A literal width
    below zero is refused before any scan, and by the reader, so both entry
@@ -9581,6 +9606,8 @@ let suite =
         test_truncated_still_reports_eof;
       Alcotest.test_case "diag: a nested region sizes only from its own bytes"
         `Quick test_nested_region_eof_stays_in_region;
+      Alcotest.test_case "diag: a region bounds a length field it cannot reach"
+        `Quick test_dynamic_length_field_stays_in_region;
       Alcotest.test_case "diag: negative span is a parse error" `Quick
         test_negative_span_is_parse_error;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
