@@ -7,6 +7,13 @@
 
 type t = Optint.t
 
+val compare : t -> t -> int
+(** [compare a b] orders two values as unsigned 32-bit integers, so 0xFFFFFFFF
+    is the largest. *)
+
+val equal : t -> t -> bool
+(** [equal a b] is [true] when [a] and [b] are the same value. *)
+
 val pp : Format.formatter -> t -> unit
 (** Pretty-printer for unsigned 32-bit values. *)
 

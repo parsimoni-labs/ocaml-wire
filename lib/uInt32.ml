@@ -1,5 +1,7 @@
 type t = Optint.t
 
+let compare = Optint.compare
+let equal = Optint.equal
 let pp = Optint.pp
 
 (* Compose two unboxed 16-bit reads/writes through [Optint]. On a 64-bit host

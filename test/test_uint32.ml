@@ -55,6 +55,23 @@ let test_boundaries () =
       check_roundtrip "be" ~set:UInt32.set_be ~get:UInt32.be v)
     [ 0x0l; 0x1l; 0xFFFFl; 0x1_0000l; 0x7FFF_FFFFl; 0x8000_0000l; 0xFFFF_FFFFl ]
 
+(* [UInt32.compare] is the order of the field, which is unsigned: 0xFFFFFFFF is
+   its largest value. The carrier does not agree on every target. Where the
+   native [int] is narrower than 32 bits [Optint] is [include Int32], so an
+   inherited comparison is signed and puts 0xFFFFFFFF below 1, reversing the
+   order under wasm_of_ocaml while staying right on native. *)
+let test_compare_is_unsigned () =
+  let u = UInt32.of_int32 in
+  let gt name a b =
+    Alcotest.(check bool) name true (UInt32.compare (u a) (u b) > 0)
+  in
+  gt "0xFFFFFFFF > 1" 0xFFFF_FFFFl 1l;
+  gt "0xFFFFFFFF > 0x7FFFFFFF" 0xFFFF_FFFFl 0x7FFF_FFFFl;
+  gt "0x80000000 > 0x7FFFFFFF" 0x8000_0000l 0x7FFF_FFFFl;
+  gt "0x80000000 > 0" 0x8000_0000l 0l;
+  Alcotest.(check bool) "0 < 1" true (UInt32.compare (u 0l) (u 1l) < 0);
+  Alcotest.(check bool) "equal" true (UInt32.equal (u 42l) (u 42l))
+
 let suite =
   ( "uint32",
     [
@@ -64,4 +81,5 @@ let suite =
       Alcotest.test_case "byte layout" `Quick test_byte_layout;
       Alcotest.test_case "high bit preserved" `Quick test_high_bit;
       Alcotest.test_case "boundaries" `Quick test_boundaries;
+      Alcotest.test_case "compare is unsigned" `Quick test_compare_is_unsigned;
     ] )
