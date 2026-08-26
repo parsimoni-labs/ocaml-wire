@@ -526,6 +526,44 @@ let test_validate_check_free_no_alloc () =
        per_call)
     true (per_call < 1.0)
 
+(* A compiled validator keeps a per-domain scratch, and the cost of reaching it
+   on a domain that has not decoded yet must not track how many validators the
+   program ever built. It used to: each validator minted its own
+   [Domain.DLS.new_key], and a domain sizes its DLS array from the global key
+   counter, so the first validate on a fresh domain paid about one word per key
+   ever created. Measured here at 10,000 validators it was 32,792 words, and at
+   50,000 it was 131,096, about 1 MB, charged to domains that never decode.
+
+   [Gc.minor_words] cannot see this. The array is large enough to be allocated
+   straight into the major heap, so read [Gc.allocated_bytes], which counts
+   both. *)
+let test_fresh_domain_validate_flat_in_validator_count () =
+  skip_unless_gc_counters ();
+  let f_x = Field.v "x" uint8 in
+  let mk name =
+    Codec.v name
+      ~where:Expr.(Field.ref f_x <= int 200)
+      (fun x -> x)
+      Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
+  in
+  for i = 1 to 10_000 do
+    ignore (Sys.opaque_identity (Fmt.kstr mk "S%d" i))
+  done;
+  let c = mk "Last" in
+  let buf = Bytes.make 8 '\007' in
+  let words =
+    Domain.join
+      (Domain.spawn (fun () ->
+           let before = Gc.allocated_bytes () in
+           Codec.validate c buf 0;
+           (Gc.allocated_bytes () -. before) /. 8.))
+  in
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (words < 4096.))
+    "a fresh domain's first validate does not track the validator count (got \
+     %.0f words)"
+    words
+
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
    reaches the EverParse refinement, so leaving it unchecked on the OCaml side
@@ -8636,6 +8674,9 @@ let suite =
         test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
         test_validate_check_free_no_alloc;
+      Alcotest.test_case
+        "validate: fresh domain cost is flat in validator count" `Quick
+        test_fresh_domain_validate_flat_in_validator_count;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
       Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
