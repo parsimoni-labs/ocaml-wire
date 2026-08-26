@@ -2,6 +2,12 @@
 
 ### Added
 
+- Add `Wire.Codec.field_readers` and `Wire.Everparse.Raw.int_slots`.
+  `field_readers` is the decoder's own reader for every named int-valued field,
+  keyed by name, so a caller holding a type-erased codec can read a field
+  without a field handle; `int_slots` is the byte slot of every named whole-byte
+  integer field (#PR2, @samoht)
+
 - Add `Wire.Everparse.Raw.field_seeds`, exposing constrained whole-byte integer
   values so generated corpora can construct inputs that uniform bytes would
   never reach (#314, @samoht)

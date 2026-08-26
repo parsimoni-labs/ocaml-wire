@@ -1068,6 +1068,13 @@ type int_slot = { width : int; endian : endian }
 type field_seed = { field : string; slot : int_slot; values : int64 list }
 (** A field whose own declaration singles out particular wire values. *)
 
+val int_slots : struct_ -> (string * int_slot) list
+(** [int_slots s] is the byte slot of every named whole-byte integer field of
+    [s], in declaration order. Bitfields (their base word is shared), floats,
+    byte spans and composites have no slot of their own and are left out.
+    {!field_seeds} is this same set narrowed to the fields whose declaration
+    singles out particular values. *)
+
 val field_seeds : struct_ -> field_seed list
 (** [field_seeds s] is, for each named whole-byte integer field of [s] whose
     declaration singles out values, the byte slot it occupies and those values:

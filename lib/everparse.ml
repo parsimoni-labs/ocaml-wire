@@ -778,6 +778,7 @@ module Raw = struct
     values : int64 list;
   }
 
+  let int_slots = Types.int_slots
   let field_seeds = Types.field_seeds
   let struct_params (s : Types.struct_) = s.params
 
