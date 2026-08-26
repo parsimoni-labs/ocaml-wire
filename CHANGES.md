@@ -2,6 +2,11 @@
 
 ### Added
 
+- Add `Wire.SInt32`, the signed 32-bit carrier behind `int32` and `int32be`. It
+  is deliberately not interchangeable with the unsigned 32-bit carrier: the two
+  share a representation, so a value read with the wrong signedness would be a
+  silent misparse rather than a type error (#321, @samoht)
+
 - Add `Wire.Codec.field_readers` and `Wire.Everparse.Raw.int_slots`.
   `field_readers` is the decoder's own reader for every named int-valued field,
   keyed by name, so a caller holding a type-erased codec can read a field
@@ -36,6 +41,12 @@
   (#263, @samoht)
 
 ### Changed
+
+- **Breaking:** `int32` and `int32be` decode to `Wire.SInt32.t` rather than a
+  native `int`, and `Wire.rest_bytes` accepts a parameter of any integer type
+  rather than only an `int` one. Convert a decoded field with
+  `Wire.SInt32.to_int32`, and build one with `Wire.SInt32.of_int32` or the
+  range-checked `of_int` (#321, @samoht)
 
 - **Breaking:** Require OCaml 5.3, up from 5.2 (#320, @samoht)
 
@@ -117,6 +128,12 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- A 4-byte signed field no longer alters the frame it decodes where the native
+  `int` is narrower than the field. Under wasm_of_ocaml an `int` is 31 bits, so
+  `int32` dropped the top bits on the way in and the encode-side range check
+  disabled itself, sending the value back out as different bytes with no error
+  on either path (#321, @samoht)
 
 - A fresh domain's first decode or validate no longer costs about a word per
   compiled validator the program ever built, which reached roughly 1 MB at

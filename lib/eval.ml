@@ -46,7 +46,7 @@ let rec int_of : type a. a typ -> a -> int option =
   | Uint64 _ -> Int64.unsigned_to_int v
   | Int8 -> Some v
   | Int16 _ -> Some v
-  | Int32 _ -> Some v
+  | Int32 _ -> SInt32.to_int_opt v
   | Int64 _ -> Int64.unsigned_to_int v
   | Float32 _ -> None
   | Float64 _ -> None
@@ -99,7 +99,10 @@ let rec int_of_exn : type a. a typ -> a -> int =
       match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Int8 -> v
   | Int16 _ -> v
-  | Int32 _ -> v
+  | Int32 _ -> (
+      match SInt32.to_int_opt v with
+      | Some n -> n
+      | None -> int_overflow (Int64.of_int32 (SInt32.to_int32 v)))
   | Int64 _ -> (
       match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
   | Float32 _ -> not_an_integer ()

@@ -34,7 +34,7 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
       }
   | Int8 -> id
   | Int16 _ -> id
-  | Int32 _ -> id
+  | Int32 _ -> { fwd = SInt32.to_int; bwd = SInt32.of_int }
   | Int64 _ -> { fwd = Int64.to_int; bwd = Int64.of_int }
   | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
   | Float64 _ -> invalid_arg "Param: floats are not integer-representable"

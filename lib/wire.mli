@@ -361,6 +361,13 @@ end
     Fields carry no buffer position -- that comes from the {!Codec} they are
     bound into. The same field can appear in multiple codecs. *)
 
+module SInt32 = SInt32
+(** Signed 32-bit integers, the carrier of {!int32} and {!int32be}.
+
+    Distinct from the unsigned 32-bit carrier on purpose: the two share a
+    representation, and a value read with the wrong signedness is a silent
+    misparse rather than a type error. *)
+
 module Field : sig
   type 'a t
   (** A named field carrying values of type ['a]. *)
@@ -577,12 +584,12 @@ val int16 : int typ
 val int16be : int typ
 (** Signed 16-bit big-endian integer. Encodes [-32768] to [32767]. *)
 
-val int32 : int typ
-(** [int32] is a signed 32-bit little-endian integer, returned as an OCaml
-    integer (64-bit hosts only: on a 32-bit host, the top bit may not fit).
-    Encodes [-2^31] to [2^31 - 1]. *)
+val int32 : SInt32.t typ
+(** Signed 32-bit little-endian integer. Encodes [-2{^31}] to [2{^31} - 1], and
+    carries the value as a {!SInt32.t} so the whole range survives on a target
+    whose native [int] is narrower than the field. *)
 
-val int32be : int typ
+val int32be : SInt32.t typ
 (** [int32be] is a signed 32-bit big-endian integer, returned as an OCaml
     integer. *)
 
@@ -759,7 +766,7 @@ val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
     [Invalid_argument] unless the slice is exactly [size] bytes, as for
     {!byte_array}. *)
 
-val rest_bytes : (int, _) Param.t -> string typ
+val rest_bytes : (_, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
     length is bound to [total]. Equivalent to
     [byte_array ~size:Expr.(Param.expr total - sizeof_this)]. Use this as the
