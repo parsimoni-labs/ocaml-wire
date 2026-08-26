@@ -9,6 +9,7 @@ let () =
       Test_ascii.suite;
       Test_staged.suite;
       Test_uint32.suite;
+      Test_uint64.suite;
       Test_sint32.suite;
       Test_uint63.suite;
       Test_types.suite;

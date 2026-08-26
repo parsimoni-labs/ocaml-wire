@@ -256,10 +256,10 @@ val uint32 : Wire.UInt32.t t
 val uint32be : Wire.UInt32.t t
 (** [uint32be] generates for {!Wire.uint32be}. *)
 
-val uint64 : int64 t
+val uint64 : Wire.UInt64.t t
 (** [uint64] generates for {!Wire.uint64}. *)
 
-val uint64be : int64 t
+val uint64be : Wire.UInt64.t t
 (** [uint64be] generates for {!Wire.uint64be}. *)
 
 val int8 : int t
@@ -427,7 +427,7 @@ val field_constraint : (int * int) t
 val field_int : (int * int) t
 (** [field_int] exercises {!Wire.Field.int} in a field self constraint. *)
 
-val self_int64 : int64 t
+val self_int64 : Wire.UInt64.t t
 (** [self_int64] exercises [Wire.Field.v ~self_int64] over a 64-bit field. *)
 
 val param_input : int t

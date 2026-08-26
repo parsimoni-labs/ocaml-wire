@@ -28,9 +28,8 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
   | Uint32 _ -> { fwd = optint_to_int UInt32.to_int; bwd = UInt32.of_int }
   | Uint64 _ ->
       {
-        fwd =
-          (fun v -> Int64.unsigned_to_int v |> Option.value ~default:max_int);
-        bwd = Int64.of_int;
+        fwd = (fun v -> UInt64.to_int_opt v |> Option.value ~default:max_int);
+        bwd = UInt64.of_int;
       }
   | Int8 -> id
   | Int16 _ -> id

@@ -50,10 +50,10 @@ type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 val minimal_case : int read_case
 (** Minimal 1-byte uint8 schema. *)
 
-val all_ints_case : int64 read_case
+val all_ints_case : Wire.UInt64.t read_case
 (** All integer widths, projecting u64be. *)
 
-val large_mixed_case : int64 read_case
+val large_mixed_case : Wire.UInt64.t read_case
 (** Large mixed-field struct, projecting a uint64be timestamp. *)
 
 val bitfield8_case : int read_case

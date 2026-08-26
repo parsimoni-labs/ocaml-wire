@@ -113,7 +113,12 @@ let test_int64_accepts_map_over_uint64 () =
   (* A map over uint64 keeps its int64 slot: [build_populate] fills it with the
      raw pre-map wire value, so an int64 self-constraint over the raw word is
      well defined and is accepted (unlike a map over uint8). *)
-  let mapped = Types.map Int64.neg Int64.neg Types.uint64be in
+  let mapped =
+    Types.map
+      (fun v -> Int64.neg (Wire.UInt64.to_int64 v))
+      (fun v -> Wire.UInt64.of_int64 (Int64.neg v))
+      Types.uint64be
+  in
   ignore
     (Field.v "Seek" mapped ~self_int64:(fun self ->
          Types.Expr.(self <= int64 0L))

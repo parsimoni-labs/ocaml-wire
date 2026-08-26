@@ -33,16 +33,16 @@ type all_ints = {
   u16be : int;
   u32 : Wire.UInt32.t;
   u32be : Wire.UInt32.t;
-  u64be : int64;
+  u64be : Wire.UInt64.t;
 }
 
 val all_ints_codec : all_ints Wire.Codec.t
 (** Codec covering all integer widths and endiannesses. *)
 
-val f_ints_u64be : int64 Wire.Field.t
+val f_ints_u64be : Wire.UInt64.t Wire.Field.t
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
-val bf_ints_u64be : (int64, all_ints) Wire.Codec.field
+val bf_ints_u64be : (Wire.UInt64.t, all_ints) Wire.Codec.field
 (** Bound field for Codec.get/set on U64BE. *)
 
 val all_ints_struct : Wire.Everparse.Raw.struct_
@@ -171,17 +171,17 @@ type large_mixed = {
   offset : int;
   length : int;
   crc : Wire.UInt32.t;
-  timestamp : int64;
+  timestamp : Wire.UInt64.t;
 }
 
 val large_mixed_codec : large_mixed Wire.Codec.t
 (** Codec mixing uint8/16/32/64 and bitfield groups. *)
 
-val f_mixed_timestamp : int64 Wire.Field.t
+val f_mixed_timestamp : Wire.UInt64.t Wire.Field.t
 (** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
     fields). *)
 
-val bf_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
+val bf_mixed_timestamp : (Wire.UInt64.t, large_mixed) Wire.Codec.field
 (** Bound field for Codec.get/set on Timestamp. *)
 
 val large_mixed_struct : Wire.Everparse.Raw.struct_

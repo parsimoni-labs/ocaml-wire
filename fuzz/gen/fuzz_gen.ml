@@ -246,6 +246,13 @@ let scalar_int ?hostile typ size value_gen boundaries =
 (* [uint64] and [int64] are carried in an [int64], which is exactly the eight
    bytes written: every value of it is in range, so there is no hostile value to
    draw and no guard for one to exercise. *)
+(* [uint64] is carried in a [Wire.UInt64.t]. Like [scalar_int64] every bit
+   pattern is a legal value, so there is no hostile value to draw; it needs its
+   own equality because the carrier is abstract. *)
+let scalar_uint64 typ size value_gen boundaries =
+  leaf ~equal:Wire.UInt64.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
 let scalar_int64 typ size value_gen boundaries =
   leaf ~equal:Int64.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
@@ -303,8 +310,10 @@ let masked_u32 =
 
 let uint32 = scalar_optint Wire.uint32 4 masked_u32 u32_boundaries
 let uint32be = scalar_optint Wire.uint32be 4 masked_u32 u32_boundaries
-let uint64 = scalar_int64 Wire.uint64 8 Alcobar.int64 u64_boundaries_i64
-let uint64be = scalar_int64 Wire.uint64be 8 Alcobar.int64 u64_boundaries_i64
+let u64_value_gen = Alcobar.map Alcobar.[ Alcobar.int64 ] Wire.UInt64.of_int64
+let u64_boundaries = List.map Wire.UInt64.of_int64 u64_boundaries_i64
+let uint64 = scalar_uint64 Wire.uint64 8 u64_value_gen u64_boundaries
+let uint64be = scalar_uint64 Wire.uint64be 8 u64_value_gen u64_boundaries
 
 let int8 =
   scalar_int ~hostile:(outside_signed_width 8) Wire.int8 1 Alcobar.int8
@@ -755,6 +764,7 @@ let exact_cases ~typ ~equal cases =
 
 let exact_int typ cases = exact_cases ~typ ~equal:Int.equal cases
 let exact_int64 typ cases = exact_cases ~typ ~equal:Int64.equal cases
+let exact_uint64 typ cases = exact_cases ~typ ~equal:Wire.UInt64.equal cases
 let exact_optint typ cases = exact_cases ~typ ~equal:Wire.UInt32.equal cases
 let exact_sint32 typ cases = exact_cases ~typ ~equal:Wire.SInt32.equal cases
 
@@ -792,20 +802,24 @@ let uint32be_endian_edges =
       (Wire.UInt32.of_int 0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
     ]
 
+let u64 = Wire.UInt64.of_int64
+
 let uint64_endian_edges =
-  exact_int64 Wire.uint64
+  exact_uint64 Wire.uint64
     [
-      ( 0x0123456789ABCDEFL,
+      ( u64 0x0123456789ABCDEFL,
         bytes_of_octets [ 0xEF; 0xCD; 0xAB; 0x89; 0x67; 0x45; 0x23; 0x01 ] );
-      (-2L, bytes_of_octets [ 0xFE; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ]);
+      ( u64 (-2L),
+        bytes_of_octets [ 0xFE; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ] );
     ]
 
 let uint64be_endian_edges =
-  exact_int64 Wire.uint64be
+  exact_uint64 Wire.uint64be
     [
-      ( 0x0123456789ABCDEFL,
+      ( u64 0x0123456789ABCDEFL,
         bytes_of_octets [ 0x01; 0x23; 0x45; 0x67; 0x89; 0xAB; 0xCD; 0xEF ] );
-      (-2L, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFE ]);
+      ( u64 (-2L),
+        bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFE ] );
     ]
 
 let int16_endian_edges =
@@ -1506,7 +1520,7 @@ let self_int64 =
         let v = Int64.of_int n in
         let buf = Bytes.create 8 in
         Bytes.set_int64_be buf 0 v;
-        (v, buf))
+        (Wire.UInt64.of_int64 v, buf))
   in
   let adversarial =
     Alcobar.map
@@ -1522,7 +1536,7 @@ let self_int64 =
     positive;
     random = bytes_fixed 8;
     adversarial;
-    equal = Int64.equal;
+    equal = Wire.UInt64.equal;
     env = None;
     fields = [];
     adversarial_value = None;

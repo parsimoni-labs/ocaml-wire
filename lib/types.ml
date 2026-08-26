@@ -169,7 +169,7 @@ and _ typ =
   | Uint8 : int typ
   | Uint16 : endian -> int typ
   | Uint32 : endian -> UInt32.t typ
-  | Uint64 : endian -> int64 typ (* boxed, for full 64-bit *)
+  | Uint64 : endian -> UInt64.t typ (* boxed, for full 64-bit *)
   | Int8 : int typ
   | Int16 : endian -> int typ
   | Int32 : endian -> SInt32.t typ

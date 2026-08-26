@@ -1574,12 +1574,12 @@ let test_nested_over_array () =
           $ Fun.id;
         ]
   in
-  let v = [ 1L; 2L ] in
+  let v = List.map UInt64.of_int64 [ 1L; 2L ] in
   let buf = Bytes.create (Codec.size_of_value codec v) in
   Codec.encode codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
-    (decode_ok (Codec.decode codec buf 0) = v)
+    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf 0)) v)
 
 let test_nested_at_most_over_array () =
   let codec =
@@ -1592,12 +1592,12 @@ let test_nested_at_most_over_array () =
           $ Fun.id;
         ]
   in
-  let v = [ 7L; 9L ] in
+  let v = List.map UInt64.of_int64 [ 7L; 9L ] in
   let buf = Bytes.create (Codec.size_of_value codec v) in
   Codec.encode codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
-    (decode_ok (Codec.decode codec buf 0) = v)
+    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf 0)) v)
 
 let test_nested_exact_region () =
   let make name typ =
@@ -3127,22 +3127,23 @@ let test_element_exact_width () =
    no value of it is out of range and none may be refused. A guard here would be
    dead code that only ever rejected a legal frame. *)
 let test_encode_int64_carrier_has_no_range () =
-  List.iter
-    (fun (name, typ) ->
-      List.iter
-        (fun v ->
-          let s = Wire.to_string typ v in
-          Alcotest.(check int) (name ^ ": eight bytes") 8 (String.length s);
-          Alcotest.(check int64)
-            (Fmt.str "%s <- %Ld round-trips" name v)
-            v (Wire.of_string_exn typ s))
-        Int64.[ min_int; -1L; zero; max_int ])
-    [
-      ("uint64", uint64);
-      ("uint64be", uint64be);
-      ("int64", int64);
-      ("int64be", int64be);
-    ]
+  let check name typ to_i64 of_i64 =
+    List.iter
+      (fun v ->
+        let s = Wire.to_string typ (of_i64 v) in
+        Alcotest.(check int) (name ^ ": eight bytes") 8 (String.length s);
+        Alcotest.(check int64)
+          (Fmt.str "%s <- %Ld round-trips" name v)
+          v
+          (to_i64 (Wire.of_string_exn typ s)))
+      Int64.[ min_int; -1L; zero; max_int ]
+  in
+  (* The two signednesses carry their values in different types now, so the
+     round-trip goes through each one's own conversion. *)
+  check "uint64" uint64 UInt64.to_int64 UInt64.of_int64;
+  check "uint64be" uint64be UInt64.to_int64 UInt64.of_int64;
+  check "int64" int64 Fun.id Fun.id;
+  check "int64be" int64be Fun.id Fun.id
 
 (* A reference-free constant size expression normalises to the literal form at
    construction, so every [Int n] fast path and range guard in the library sees
@@ -5075,7 +5076,7 @@ let test_int64_field_constraint_accepts_signed_magnitude_domain () =
       let decoded =
         decode_ok (Codec.decode signed_magnitude_seek_codec (seek_buf v) 0)
       in
-      Alcotest.(check int64) "seek" v decoded)
+      Alcotest.(check int64) "seek" v (UInt64.to_int64 decoded))
     [ 0L; Int64.max_int; Int64.succ Int64.min_int; -1L ]
 
 let test_int64_field_constraint_rejects_negative_zero () =
@@ -5102,7 +5103,8 @@ let test_int64_mask_constraint_over_map () =
   let accept v =
     Alcotest.(check int64)
       "accept" v
-      (decode_ok (Codec.decode mask_seek_codec (seek_buf v) 0))
+      (UInt64.to_int64
+         (decode_ok (Codec.decode mask_seek_codec (seek_buf v) 0)))
   in
   let reject v =
     match Codec.decode mask_seek_codec (seek_buf v) 0 with
@@ -5130,7 +5132,7 @@ let test_uint64_int_ref_constraint_enforced () =
   in
   Alcotest.(check int64)
     "in-range accepts" 3L
-    (decode_ok (Codec.decode codec (buf 3L) 0));
+    (UInt64.to_int64 (decode_ok (Codec.decode codec (buf 3L) 0)));
   match Codec.decode codec (buf 20L) 0 with
   | Ok _ -> Alcotest.fail "20 exceeds the bound and must be rejected"
   | Error { kind = Constraint_failed _; _ } -> ()
@@ -6065,7 +6067,7 @@ let test_uint64_in_size_expr () =
   Bytes.set_int64_be buf 0 3L;
   Bytes.blit_string "ABC" 0 buf 8 3;
   let len, data = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int64) "len" 3L len;
+  Alcotest.(check int64) "len" 3L (UInt64.to_int64 len);
   Alcotest.(check string) "data" "ABC" data
 
 (* -- Nested: Repeat typ: parse elements until byte budget exhausted --

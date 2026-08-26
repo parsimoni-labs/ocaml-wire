@@ -112,9 +112,12 @@ val ref : 'a t -> int Types.expr
 val int : 'a t -> int Types.expr
 (** [int f] returns this field as a native-integer expression. *)
 
-val int64 : int64 t -> int64 Types.expr
+val int64 : 'a t -> int64 Types.expr
 (** [int64 f] returns the expression referencing this field's full 64-bit value,
-    without truncating to OCaml's native integer range. *)
+    without truncating to OCaml's native integer range. Raises
+    [Invalid_argument] on a field with no 64-bit slot; the accepted set is the
+    one {!Types.has_int64_slot} names, which is wider than any single carrier
+    type ([uint64], [int64] and [float64] all have one). *)
 
 val name : 'a t -> string
 (** Field name. *)

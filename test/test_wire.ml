@@ -77,7 +77,9 @@ let test_parse_uint32_be () =
 let test_parse_uint64_le () =
   let input = "\x01\x02\x03\x04\x05\x06\x07\x08" in
   match of_string uint64 input with
-  | Ok v -> Alcotest.(check int64) "uint64 le value" 0x0807060504030201L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 le value" 0x0807060504030201L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_array () =
@@ -1108,21 +1110,27 @@ let test_stream_uint32_chunk3 () =
   | Error e -> Alcotest.failf "uint32be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk1 () =
-  let encoded = to_string uint64 0x0102030405060708L in
+  let encoded = to_string uint64 (UInt64.of_int64 0x0102030405060708L) in
   match parse_chunked ~chunk_size:1 uint64 encoded with
-  | Ok v -> Alcotest.(check int64) "uint64 chunk=1" 0x0102030405060708L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 chunk=1" 0x0102030405060708L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint64_chunk3 () =
-  let encoded = to_string uint64be 0xFEDCBA9876543210L in
+  let encoded = to_string uint64be (UInt64.of_int64 0xFEDCBA9876543210L) in
   match parse_chunked ~chunk_size:3 uint64be encoded with
-  | Ok v -> Alcotest.(check int64) "uint64be chunk=3" 0xFEDCBA9876543210L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64be chunk=3" 0xFEDCBA9876543210L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk5 () =
-  let encoded = to_string uint64 0xAAAABBBBCCCCDDDDL in
+  let encoded = to_string uint64 (UInt64.of_int64 0xAAAABBBBCCCCDDDDL) in
   match parse_chunked ~chunk_size:5 uint64 encoded with
-  | Ok v -> Alcotest.(check int64) "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64 chunk=5: %a" pp_parse_error e
 
 let test_stream_reader_sequential_fixed () =

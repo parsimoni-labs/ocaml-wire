@@ -13,10 +13,10 @@ let test_int_of () =
     (Eval.int_of Types.uint16be 300);
   Alcotest.(check (option int))
     "uint64 small" (Some 42)
-    (Eval.int_of Types.uint64be 42L);
+    (Eval.int_of Types.uint64be (Wire.UInt64.of_int64 42L));
   Alcotest.(check (option int))
     "uint64 overflow" None
-    (Eval.int_of Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
+    (Eval.int_of Types.uint64be (Wire.UInt64.of_int64 0xFFFF_FFFF_FFFF_FFFFL));
   Alcotest.(check (option int)) "unit" None (Eval.int_of Types.Unit ())
 
 (* [int_of_exn] returns the same value as [int_of] on the representable cases,
@@ -44,24 +44,29 @@ let raises_invalid_arg name f =
 let test_int_of_exn_ok () =
   Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 7);
   Alcotest.(check int) "uint16be" 300 (Eval.int_of_exn Types.uint16be 300);
-  Alcotest.(check int) "uint64 small" 42 (Eval.int_of_exn Types.uint64be 42L);
+  Alcotest.(check int)
+    "uint64 small" 42
+    (Eval.int_of_exn Types.uint64be (Wire.UInt64.of_int64 42L));
   Alcotest.(check int)
     "int64 small" 100
     (Eval.int_of_exn Types.(Int64 Big) 100L);
   (* [max_int] is the largest value [Int64.unsigned_to_int] accepts. *)
   Alcotest.(check int)
     "uint64 = max_int" max_int
-    (Eval.int_of_exn Types.uint64be (Int64.of_int max_int))
+    (Eval.int_of_exn Types.uint64be (Wire.UInt64.of_int max_int))
 
 let test_int_of_exn_overflow () =
   (* Adversarial 64-bit lengths that do not fit a native int must fail the
      parse rather than be read as 0. *)
   raises_out_of_range "uint64 all-ones" (fun () ->
-      Eval.int_of_exn Types.uint64be 0xFFFF_FFFF_FFFF_FFFFL);
+      Eval.int_of_exn Types.uint64be
+        (Wire.UInt64.of_int64 0xFFFF_FFFF_FFFF_FFFFL));
   raises_out_of_range "uint64 = 2^63" (fun () ->
-      Eval.int_of_exn Types.uint64be 0x8000_0000_0000_0000L);
+      Eval.int_of_exn Types.uint64be
+        (Wire.UInt64.of_int64 0x8000_0000_0000_0000L));
   raises_out_of_range "uint64 = max_int + 1" (fun () ->
-      Eval.int_of_exn Types.uint64be (Int64.add (Int64.of_int max_int) 1L));
+      Eval.int_of_exn Types.uint64be
+        (Wire.UInt64.of_int64 (Int64.add (Int64.of_int max_int) 1L)));
   (* A signed int64 with the top bit set is a huge unsigned value. *)
   raises_out_of_range "int64 = -1" (fun () ->
       Eval.int_of_exn Types.(Int64 Big) (-1L));

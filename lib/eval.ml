@@ -43,7 +43,7 @@ let rec int_of : type a. a typ -> a -> int option =
      conversion returns [None] exactly then and is identity-exact on a 64-bit
      host. *)
   | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
-  | Uint64 _ -> Int64.unsigned_to_int v
+  | Uint64 _ -> UInt64.to_int_opt v
   | Int8 -> Some v
   | Int16 _ -> Some v
   | Int32 _ -> SInt32.to_int_opt v
@@ -96,7 +96,9 @@ let rec int_of_exn : type a. a typ -> a -> int =
             int_overflow
               (Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL))
   | Uint64 _ -> (
-      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
+      match UInt64.to_int_opt v with
+      | Some n -> n
+      | None -> int_overflow (UInt64.to_int64 v))
   | Int8 -> v
   | Int16 _ -> v
   | Int32 _ -> (

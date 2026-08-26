@@ -361,6 +361,13 @@ end
     Fields carry no buffer position -- that comes from the {!Codec} they are
     bound into. The same field can appear in multiple codecs. *)
 
+module UInt64 = UInt64
+(** Unsigned 64-bit integers, the carrier of {!uint64} and {!uint64be}.
+
+    Ordered as an unsigned number, which [int64] is not: [Int64.compare] ranks
+    0xFFFF_FFFF_FFFF_FFFF, the largest value here, below 1, on every target. The
+    carrier holds the eight bytes exactly, so there is no range to enforce. *)
+
 module UInt32 = UInt32
 (** Unsigned 32-bit integers, the carrier of {!uint32} and {!uint32be}.
 
@@ -505,7 +512,7 @@ module Field : sig
   val int : 'a t -> int expr
   (** [int f] returns this field as a native-integer expression. *)
 
-  val int64 : int64 t -> int64 expr
+  val int64 : 'a t -> int64 expr
   (** [int64 f] returns the expression referencing this field's full 64-bit
       value, without truncating to OCaml's native integer range. *)
 
@@ -568,12 +575,12 @@ val uint32 : UInt32.t typ
 val uint32be : UInt32.t typ
 (** Unsigned 32-bit big-endian integer. Encodes [0] to [2{^32} - 1]. *)
 
-val uint64 : int64 typ
+val uint64 : UInt64.t typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
     64-bit integer. The representation is exactly the eight bytes written, so
     every [int64] encodes and none is out of range. *)
 
-val uint64be : int64 typ
+val uint64be : UInt64.t typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as an OCaml
     64-bit integer. *)
 

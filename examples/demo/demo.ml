@@ -39,7 +39,7 @@ type all_ints = {
   u16be : int;
   u32 : UInt32.t;
   u32be : UInt32.t;
-  u64be : int64;
+  u64be : UInt64.t;
 }
 
 let f_ints_u64be = Field.v "U64BE" uint64be
@@ -68,7 +68,7 @@ let all_ints_default =
     u16be = 0x5678;
     u32 = UInt32.of_int 0xDEADBEEF;
     u32be = UInt32.of_int 0xCAFEBABE;
-    u64be = 0x0102030405060708L;
+    u64be = UInt64.of_int64 0x0102030405060708L;
   }
 
 let all_ints_data n =
@@ -211,7 +211,7 @@ type large_mixed = {
   offset : int;
   length : int;
   crc : UInt32.t;
-  timestamp : int64;
+  timestamp : UInt64.t;
 }
 
 let f_mixed_timestamp = Field.v "Timestamp" uint64be
@@ -260,7 +260,7 @@ let large_mixed_default =
     offset = 16;
     length = 1024;
     crc = UInt32.of_int 0xDEADBEEF;
-    timestamp = 0x0102030405060708L;
+    timestamp = UInt64.of_int64 0x0102030405060708L;
   }
 
 let large_mixed_data n =

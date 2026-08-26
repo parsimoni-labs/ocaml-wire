@@ -61,7 +61,7 @@ type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
 let of_int f = Int f
 let id_int = Int Fun.id
-let id_int64 = Int64 Fun.id
+let id_uint64 = Int64 Wire.UInt64.of_int64
 let bool_of_int = Int (fun v -> v <> 0)
 
 let priority_decode =
@@ -251,10 +251,10 @@ let all_ints_case =
       set;
       write_template = Bytes.copy ints_dataset.items.(0);
       write_offset = 0;
-      write_value = 0x0102_0304_0506_0708L;
-      equal = Int64.equal;
+      write_value = Wire.UInt64.of_int64 0x0102_0304_0506_0708L;
+      equal = Wire.UInt64.equal;
       bench_read = true;
-      of_c_field = id_int64;
+      of_c_field = id_uint64;
     }
 
 let large_mixed_case =
@@ -276,10 +276,10 @@ let large_mixed_case =
       set;
       write_template = Bytes.copy mixed_dataset.items.(0);
       write_offset = 0;
-      write_value = 0x1122_3344_5566_7788L;
-      equal = Int64.equal;
+      write_value = Wire.UInt64.of_int64 0x1122_3344_5566_7788L;
+      equal = Wire.UInt64.equal;
       bench_read = true;
-      of_c_field = id_int64;
+      of_c_field = id_uint64;
     }
 
 let bitfield8_case =

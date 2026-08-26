@@ -275,7 +275,9 @@ and _ typ =
   | Uint8 : int typ  (** 8-bit unsigned. *)
   | Uint16 : endian -> int typ  (** 16-bit unsigned. *)
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
-  | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
+  | Uint64 : endian -> UInt64.t typ
+      (** 64-bit unsigned. Carried by {!UInt64.t}, which orders as an unsigned
+          number; [int64] would rank the largest value below 1. *)
   | Int8 : int typ  (** 8-bit signed. *)
   | Int16 : endian -> int typ  (** 16-bit signed. *)
   | Int32 : endian -> SInt32.t typ
@@ -581,10 +583,10 @@ val uint32 : UInt32.t typ
 val uint32be : UInt32.t typ
 (** 32-bit unsigned, big-endian. *)
 
-val uint64 : int64 typ
+val uint64 : UInt64.t typ
 (** 64-bit unsigned, little-endian. *)
 
-val uint64be : int64 typ
+val uint64be : UInt64.t typ
 (** 64-bit unsigned, big-endian. *)
 
 val int8 : int typ
