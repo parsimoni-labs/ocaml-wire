@@ -557,17 +557,6 @@ val uint32 : Optint.t typ
 val uint32be : Optint.t typ
 (** Unsigned 32-bit big-endian integer. Decodes to an [Optint.t]. *)
 
-val uint63 : Optint.Int63.t typ
-(** Unsigned 63-bit little-endian integer carried on 8 bytes. Decodes to an
-    [Optint.Int63.t], whose range starts at zero, so encoding refuses a negative
-    value. The eight wire bytes hold more than the carrier does: the decoder
-    keeps the low bits, so the widest value that round-trips is
-    [Optint.Int63.max_int]. *)
-
-val uint63be : Optint.Int63.t typ
-(** Unsigned 63-bit big-endian integer carried on 8 bytes. Decodes to an
-    [Optint.Int63.t]. *)
-
 val uint64 : int64 typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
     64-bit integer. The representation is exactly the eight bytes written, so

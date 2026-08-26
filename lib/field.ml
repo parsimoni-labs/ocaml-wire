@@ -83,8 +83,8 @@ let rec is_repeat_case_body : type a. a Types.typ -> bool =
  fun typ ->
   let open Types in
   match typ with
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Float32 _ | Float64 _ | Unit | Zeroterm | Bits _ ->
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
+  | Float32 _ | Float64 _ | Unit | Zeroterm | Bits _ ->
       true
   | Uint_var { size = Int _; _ } -> true
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } -> true
@@ -115,8 +115,8 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
  fun typ ->
   let open Types in
   match typ with
-  | Uint8 | Uint16 _ | Uint32 _ | Uint63 _ | Uint64 _ | Int8 | Int16 _ | Int32 _
-  | Int64 _ | Float32 _ | Float64 _ | Uint_var _ | Zeroterm ->
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
+  | Float32 _ | Float64 _ | Uint_var _ | Zeroterm ->
       true
   (* [Unit] is 0-width: a byte-budget list of it carries no bytes and projects to
      a zero-size element EverParse refuses to extract, like the [array] case. A

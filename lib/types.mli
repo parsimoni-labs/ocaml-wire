@@ -275,7 +275,6 @@ and _ typ =
   | Uint8 : int typ  (** 8-bit unsigned. *)
   | Uint16 : endian -> int typ  (** 16-bit unsigned. *)
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
-  | Uint63 : endian -> UInt63.t typ  (** 63-bit unsigned. *)
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
   | Int8 : int typ  (** 8-bit signed. *)
   | Int16 : endian -> int typ  (** 16-bit signed. *)
@@ -579,12 +578,6 @@ val uint32 : UInt32.t typ
 
 val uint32be : UInt32.t typ
 (** 32-bit unsigned, big-endian. *)
-
-val uint63 : UInt63.t typ
-(** 63-bit unsigned, little-endian. *)
-
-val uint63be : UInt63.t typ
-(** 63-bit unsigned, big-endian. *)
 
 val uint64 : int64 typ
 (** 64-bit unsigned, little-endian. *)

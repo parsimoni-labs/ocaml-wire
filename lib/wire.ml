@@ -249,8 +249,6 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Uint16 Big -> parse_fixed 2 Bytes.get_uint16_be buf off len
   | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
   | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
-  | Uint63 Little -> parse_fixed 8 UInt63.le buf off len
-  | Uint63 Big -> parse_fixed 8 UInt63.be buf off len
   | Uint64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
   | Uint64 Big -> parse_fixed 8 Bytes.get_int64_be buf off len
   | Int8 -> parse_fixed 1 Bytes.get_int8 buf off len
@@ -647,16 +645,6 @@ let[@inline] write_int64_be enc v =
   Bytes.set_int64_be enc.o enc.o_next v;
   enc.o_next <- enc.o_next + 8
 
-let[@inline] write_uint63_le enc v =
-  ensure enc 8;
-  UInt63.set_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 8
-
-let[@inline] write_uint63_be enc v =
-  ensure enc 8;
-  UInt63.set_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 8
-
 let write_string enc s =
   let len = String.length s in
   if len <= enc.o_max + 1 - enc.o_next then begin
@@ -696,8 +684,6 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       write_uint16_be enc v
   | Uint32 Little -> write_uint32_le enc v
   | Uint32 Big -> write_uint32_be enc v
-  | Uint63 Little -> write_uint63_le enc v
-  | Uint63 Big -> write_uint63_be enc v
   | Uint64 Little -> write_int64_le enc v
   | Uint64 Big -> write_int64_be enc v
   | Int8 ->
@@ -898,12 +884,6 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Uint32 Big ->
       UInt32.set_be buf off v;
       off + 4
-  | Uint63 Little ->
-      UInt63.set_le buf off v;
-      off + 8
-  | Uint63 Big ->
-      UInt63.set_be buf off v;
-      off + 8
   | Uint64 Little ->
       Bytes.set_int64_le buf off v;
       off + 8

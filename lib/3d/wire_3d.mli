@@ -212,14 +212,16 @@ val generate_standalone :
 val generate_dune_standalone :
   ?name:string -> outdir:string -> package:string -> packed list -> unit
 (** [generate_dune_standalone ?name ~outdir ~package codecs] writes a [dune.inc]
-    for the single-file documentation build: rules that emit [<Name>.3d] and
-    compile it to [<Name>.c], a rule that builds the validator into an installed
-    [lib<name>.a] archive, a [runtest] rule that runs the differential
+    for the single-file documentation build: a rule that compiles the committed
+    [<Name>.3d] to [<Name>.c], a rule that builds the validator into an
+    installed [lib<name>.a] archive, a [runtest] rule that runs the differential
     self-check (see {!generate_corpus} / {!generate_agree}), and an install
     stanza (under opam [package]) for the spec, parser, and archive. The
     [runtest] rules also regenerate the committed [.3d] and [dune.inc] into
-    [.gen] targets and diff them. [name] defaults to [package]; see
-    {!generate_standalone}.
+    [.gen] targets and diff them; neither committed file is a rule target, so a
+    schema that drifted from its codec fails [runtest] instead of being
+    overwritten, and [dune promote] writes the new bytes on request. [name]
+    defaults to [package]; see {!generate_standalone}.
 
     The [c/] archive builds and installs in every dune context through that
     context's own toolchain ([%{ocaml-config:c_compiler}], the [ocaml-config]

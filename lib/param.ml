@@ -26,7 +26,6 @@ let rec int_cvt : type a. a Types.typ -> a int_cvt =
   | Uint16 _ -> id
   | Uint_var _ -> { fwd = optint_to_int UInt63.to_int; bwd = UInt63.of_int }
   | Uint32 _ -> { fwd = optint_to_int UInt32.to_int; bwd = UInt32.of_int }
-  | Uint63 _ -> { fwd = optint_to_int UInt63.to_int; bwd = UInt63.of_int }
   | Uint64 _ ->
       {
         fwd =
@@ -58,8 +57,8 @@ let of_int typ v = (int_cvt typ).bwd v
 
 let rec is_int_representable : type a. a Types.typ -> bool = function
   | Types.Uint8 | Types.Uint16 _ | Types.Uint_var _ | Types.Uint32 _
-  | Types.Uint63 _ | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _
-  | Types.Int64 _ | Types.Bits _ ->
+  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
+  | Types.Bits _ ->
       true
   | Types.Enum { base; _ } -> is_int_representable base
   | Types.Map { inner; _ } -> is_int_representable inner

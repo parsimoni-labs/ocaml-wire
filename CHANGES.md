@@ -35,6 +35,16 @@
   and refuse one-sided corpora, which cannot distinguish a validator from a
   constant answer (#314, @samoht)
 
+- **Breaking:** Remove `uint63` and `uint63be`. An 8-byte field spans more
+  values than their `Optint.Int63.t` carrier holds, and decoding masked the
+  difference away instead of failing: eight `0xff` bytes arrived as
+  `0x3fff_ffff_ffff_ffff` and were written back out as those bytes, with no
+  error on either path, while the generated C validator passed the same frame
+  through untouched. Use `uint64` / `uint64be` instead, whose `int64` carrier is
+  exactly the eight bytes on the wire, and convert an existing value with
+  `Optint.Int63.to_int64`. `Wire.uint ~size` is unaffected: its carrier is exact
+  for the one to seven bytes it accepts (#316, @samoht)
+
 - **Breaking:** `Codec.encode` and `Wire.to_string` raise `Invalid_argument` on
   a value their own decoder rejects, rather than writing bytes that fail to read
   back: an unlisted value in a closed `enum`, a non-zero byte in an `all_zeros`
@@ -64,10 +74,10 @@
 - Require `bytesrw` >= 0.4.0, for `Bytes.Slice.drop_first_or_eod`
   (#297, @samoht)
 
-- `Wire.uint` decodes to `Optint.Int63.t` rather than a native `int`, like
-  `uint63` before it: a 7-byte value needs 56 bits, which does not fit an int on
-  a narrow-int target and used to truncate there. Read the value with
-  `Optint.Int63.to_int` / `to_int64` (#232, @samoht)
+- `Wire.uint` decodes to `Optint.Int63.t` rather than a native `int`: a 7-byte
+  value needs 56 bits, which does not fit an int on a narrow-int target and used
+  to truncate there. Read the value with `Optint.Int63.to_int` / `to_int64`
+  (#232, @samoht)
 
 - Spell `Wire.uint`'s result type as `Optint.Int63.t` rather than the `UInt63.t`
   alias, reachable only through the unstable `Wire.Private`. Same type, same
@@ -94,6 +104,13 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- The single-file documentation build no longer regenerates the committed
+  `<Name>.3d` behind your back. It was a promoted rule target the install stanza
+  depended on, so every build rewrote it before the drift check compared it, and
+  a schema that no longer matched its codec could not fail `runtest`. The
+  committed schema is now a plain source: drift fails `runtest`, and `dune
+  promote` writes the new bytes after an intended codec change (#317, @samoht)
 
 - Fix `Codec.validate` skipping a sub-codec field's constraints, `where`,
   closed-enum membership, `per_byte` refinements and actions, which now reject
