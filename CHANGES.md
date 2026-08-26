@@ -149,6 +149,12 @@
 
 ### Fixed
 
+- A value with no fixed wire size read through `Wire.of_reader` no longer costs
+  time and memory quadratic in its length. The reader rebuilt the whole
+  accumulated buffer and re-parsed it from offset zero after every slice, so a
+  4 KiB frame arriving a byte at a time allocated 1,194,134 words where it now
+  allocates 19,082 (#325, @samoht)
+
 - `uint64` values now order as unsigned numbers. The carrier was `int64`, whose
   comparison reads the top bit as a sign and so ranked
   0xFFFF_FFFF_FFFF_FFFF, the largest `uint64`, below zero (#323, @samoht)

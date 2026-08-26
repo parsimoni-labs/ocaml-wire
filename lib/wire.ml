@@ -515,31 +515,78 @@ let missing_more_input e =
   | Unexpected_eof _ | Missing_terminator -> true
   | _ -> false
 
+(* A growable scratch the incremental reader accumulates slices into, so
+   retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
+   everything read so far on every call, which is what made a value arriving in
+   small slices quadratic.
+
+   [Bytes.make] rather than [Bytes.create]: the parse is given a length, but a
+   size expression can still read the bytes behind it, and those must not be
+   whatever the allocator last held. *)
+type scratch = { mutable buf : bytes; mutable filled : int }
+
+let scratch_create () = { buf = Bytes.make 256 '\000'; filled = 0 }
+
+let scratch_ensure s n =
+  if n > Bytes.length s.buf then begin
+    (* [Stdlib.ref]: [ref] here is [Types.ref], the field-reference
+       combinator. *)
+    let cap = Stdlib.ref (Bytes.length s.buf) in
+    while n > !cap do
+      cap := !cap * 2
+    done;
+    let b = Bytes.make !cap '\000' in
+    Bytes.blit s.buf 0 b 0 s.filled;
+    s.buf <- b
+  end
+
+(* Read one slice into [s]. [false] at the end of the reader. *)
+let scratch_read s reader =
+  let slice = Reader.read reader in
+  if Slice.is_eod slice then false
+  else begin
+    let n = Slice.length slice in
+    scratch_ensure s (s.filled + n);
+    Bytes.blit (Slice.bytes slice) (Slice.first slice) s.buf s.filled n;
+    s.filled <- s.filled + n;
+    true
+  end
+
+(* Read until [target] bytes are buffered, or the reader ends first. *)
+let rec scratch_fill s reader target =
+  s.filled >= target || (scratch_read s reader && scratch_fill s reader target)
+
+(* How far to read before retrying a parse that ran short. [expected] is what
+   the value needed and [got] what was left where it starts, so the shortfall is
+   the difference; never less than one byte, or a hint of zero would spin.
+   [Missing_terminator] carries no count, because a zeroterm cannot know where
+   its NUL is until it sees one, so that case advances a slice at a time. *)
+let retry_target s e =
+  match e.kind with
+  | Unexpected_eof { expected; got } -> s.filled + max 1 (expected - got)
+  | _ -> s.filled + 1
+
 let of_reader_incremental typ reader =
-  let buf = Buffer.create 256 in
+  let s = scratch_create () in
+  let give_up e =
+    push_back_bytes reader s.buf 0 s.filled;
+    raise (Parse_error e)
+  in
   let rec loop () =
-    let bytes = Buffer.to_bytes buf in
-    let len = Bytes.length bytes in
-    let read_more on_eod =
-      let slice = Reader.read reader in
-      if Slice.is_eod slice then on_eod ()
-      else begin
-        Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
-          (Slice.length slice);
-        loop ()
-      end
-    in
-    match parse_direct typ bytes 0 len with
+    match parse_direct typ s.buf 0 s.filled with
     | v, off ->
-        push_back_bytes reader bytes off (len - off);
+        push_back_bytes reader s.buf off (s.filled - off);
         v
     | exception Parse_error e when missing_more_input e ->
-        read_more (fun () ->
-            push_back_bytes reader bytes 0 len;
-            raise (Parse_error e))
-    | exception Parse_error e ->
-        push_back_bytes reader bytes 0 len;
-        raise (Parse_error e)
+        let before = s.filled in
+        ignore (scratch_fill s reader (retry_target s e) : bool);
+        (* The hint says how far to read ahead, never whether to fail. A size
+           that depends on a field the parse has not reached yet is computed
+           from whatever lies at that offset, so the figure can be far larger
+           than the input, and reaching the end of the reader while chasing it
+           is not an error. Give up only when a read yields nothing at all. *)
+        if s.filled > before then loop () else give_up e
+    | exception Parse_error e -> give_up e
   in
   loop ()
 
