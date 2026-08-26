@@ -72,6 +72,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
   let codec_size_of_value = Codec.size_of_value c in
+  let codec_min_size = Codec.min_wire_size c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
       Codec
@@ -81,6 +82,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_validate;
           codec_encode;
           codec_fixed_size = Some n;
+          codec_min_size;
           codec_size_of = (fun _ctx _buf _off -> n);
           codec_size_of_value;
           codec_field_readers;
@@ -94,6 +96,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_validate;
           codec_encode;
           codec_fixed_size = None;
+          codec_min_size;
           codec_size_of = size_of;
           codec_size_of_value;
           codec_field_readers;
@@ -170,13 +173,21 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
-let parse_codec_typ codec_decode fixed_size size_of buf off len =
+let parse_codec_typ codec_decode fixed_size min_size size_of buf off len =
   (* A variable-size codec computes its span by reading length / gate fields
-     from the buffer. Those reads bound-check themselves, so a buffer too short
-     to hold them already fails as end-of-input at the field that was missing;
-     a misuse in the size expression, or an exception from a user [map]
-     callback, reaches the caller unchanged. *)
-  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+     from the buffer. Those reads bound-check themselves against the buffer,
+     which inside a nested region holds more than this parse was handed, so
+     demand the codec's mandatory extent from the region first: a region too
+     short to carry the length fields then reports their shortfall instead of a
+     span sized from bytes outside it. A misuse in the size expression, or an
+     exception from a user [map] callback, reaches the caller unchanged. *)
+  let sz =
+    match fixed_size with
+    | Some n -> n
+    | None ->
+        check_eof len ~off ~n:min_size;
+        size_of buf off
+  in
   check_span len ~off ~n:sz;
   (codec_decode buf off, off + sz)
 
@@ -225,6 +236,7 @@ let validator_for_struct s =
 
 let parse_struct_typ s buf off len =
   let v = validator_for_struct s in
+  check_eof len ~off ~n:(Codec.struct_min_size v);
   let sz = Codec.struct_size_of v buf off in
   check_span len ~off ~n:sz;
   Codec.validate_struct v buf off;
@@ -322,10 +334,11 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let v, off' = parse_direct base buf off len in
       check_enum_membership ~at:off ~closed cases v;
       (v, off')
-  | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
+  | Codec { codec_decode; codec_fixed_size; codec_min_size; codec_size_of; _ }
+    ->
       parse_codec_typ
         (codec_decode Types.unbound_eval_ctx)
-        codec_fixed_size
+        codec_fixed_size codec_min_size
         (codec_size_of Types.unbound_eval_ctx)
         buf off len
   | Struct s -> parse_struct_typ s buf off len

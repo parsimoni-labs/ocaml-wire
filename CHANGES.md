@@ -155,6 +155,13 @@
   4 KiB frame arriving a byte at a time allocated 1,194,134 words where it now
   allocates 19,082 (#325, @samoht)
 
+- A value parsed inside a `nested` region or a `repeat` budget no longer reports
+  an end-of-input whose byte count was read from outside that region. A region
+  too short to carry the length field the value's size depends on was sized from
+  whatever the buffer held past it, so the reported shortfall named bytes the
+  parse never claimed; it now names the length field's own extent (#326,
+  @samoht)
+
 - `uint64` values now order as unsigned numbers. The carrier was `int64`, whose
   comparison reads the top bit as a sign and so ranked
   0xFFFF_FFFF_FFFF_FFFF, the largest `uint64`, below zero (#323, @samoht)

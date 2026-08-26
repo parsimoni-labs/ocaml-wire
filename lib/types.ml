@@ -249,6 +249,13 @@ and _ typ =
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;
+      codec_min_size : int;
+          (* Bytes the codec occupies whatever its variable-size fields hold,
+             hence the extent [codec_size_of] has to be able to read before it
+             can resolve a span. A decoder bounds this against the region it
+             was given, so a region too short to carry the length fields fails
+             on their own extent rather than on a span sized from bytes outside
+             it. *)
       codec_size_of : eval_ctx -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
