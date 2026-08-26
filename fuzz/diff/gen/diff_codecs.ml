@@ -69,6 +69,38 @@ let included, excluded =
   in
   (List.rev inc, List.rev exc)
 
+type compared_field = { name : string; width : int }
+
+(* Which fields the differential can compare by value. Two conditions, and both
+   are about what the two sides can actually hand back rather than about what is
+   interesting:
+
+   - The field must occupy whole bytes of its own on the wire
+     ([Everparse.Raw.int_slots]). A bitfield shares its base word with its
+     neighbours, so it has no slot; a float is not an integer; a byte span, an
+     array and a nested record are not scalars. None of those are compared.
+   - The default plug must report the field's value. A byte span, a nested
+     region and a variable-width integer all route to [<Name>SetBytes], which
+     hands back the field's byte offset instead, so there is no value on the C
+     side to compare. That drops [uint], the one whole-byte integer the plug
+     does not carry.
+
+   What is left is the fixed-width scalars -- [uint8] .. [uint64], [int8] ..
+   [int64], and the enums, lookups, maps and refinements layered over them. *)
+let compared_fields (Fuzz_gen.Pack g) =
+  let s = Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g) in
+  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
+  let reported_as_offset (p : Wire.Everparse.plug_field) =
+    if String.ends_with ~suffix:"SetBytes" p.setter then Some p.name else None
+  in
+  let offsets =
+    List.filter_map reported_as_offset (Wire.Everparse.plug_fields schema)
+  in
+  List.filter_map
+    (fun (name, (slot : Wire.Everparse.Raw.int_slot)) ->
+      if List.mem name offsets then None else Some { name; width = slot.width })
+    (Wire.Everparse.Raw.int_slots s)
+
 let summary =
   let tally =
     List.fold_left

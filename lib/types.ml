@@ -3412,6 +3412,14 @@ let rec typ_constraints : type a. string -> a typ -> int64 list =
   | Optional_or { inner; _ } -> typ_constraints name inner
   | _ -> []
 
+let int_slots s =
+  List.filter_map
+    (fun (Field f) ->
+      match (f.field_name, int_slot_of_typ f.field_typ) with
+      | Some name, Some slot -> Some (name, slot)
+      | _ -> None)
+    s.fields
+
 let field_seeds s =
   let of_field (Field f) =
     match (f.field_name, int_slot_of_typ f.field_typ) with

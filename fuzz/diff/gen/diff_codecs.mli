@@ -20,6 +20,17 @@ val excluded : (string * Fuzz_gen.packed * exclusion) list
 (** Sampled codecs skipped, each with the reason it is out of scope, so coverage
     stays explicit. *)
 
+type compared_field = { name : string; width : int }
+(** A named field the differential compares by value, with its byte width on the
+    wire. *)
+
+val compared_fields : Fuzz_gen.packed -> compared_field list
+(** [compared_fields p] is the fields of [p] whose decoded value both sides can
+    hand back, in declaration order: the named whole-byte integer fields, minus
+    the ones the default plug reports as a byte offset rather than a value. A
+    bitfield, a float and a byte span are all left out; see the implementation
+    for why each is. *)
+
 val summary : string
 (** One-line tally: total candidates, included count, and excluded count broken
     down by reason. *)

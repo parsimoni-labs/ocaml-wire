@@ -22,7 +22,7 @@
    Define your wire format once, then use it for OCaml parsing via bytesrw or \
    emit .3d files for verified C parser generation via EverParse.")
  (depends
-  (ocaml (>= 5.2))
+  (ocaml (>= 5.3))
   (bytesrw (>= 0.4.0))
   (fmt (>= 0.9))
   (optint (>= 0.3))

@@ -1125,6 +1125,20 @@ module Codec : sig
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
 
+  val field_readers : 'r t -> (string * (bytes -> int -> int)) list
+  (** [field_readers c] is the decoder's own reader for every named int-valued
+      field of [c], keyed by field name: [read buf base] is the value
+      {!val-decode} makes of that field's bytes, converted to [int] (a [Map]
+      reports the raw value it was decoded from, which is what the wire
+      carries). Composite fields read as [0].
+
+      Unlike {!get} it needs no field handle, so a caller holding only a
+      type-erased codec can still read a field by name -- which is how the
+      differential fuzzer compares the OCaml decoder against a generated C
+      validator field by field. Raises {!exception-Parse_error} when the field's
+      bytes are out of the buffer, or when the value does not fit an OCaml
+      [int]. *)
+
   (** {2 Slice navigation}
 
       Zero-copy access to the offset/length of a [byte_slice] field. The naive
@@ -1428,6 +1442,13 @@ module Everparse : sig
 
     type field_seed = { field : string; slot : int_slot; values : int64 list }
     (** A field whose own declaration singles out particular wire values. *)
+
+    val int_slots : struct_ -> (string * int_slot) list
+    (** [int_slots s] is the byte slot of every named whole-byte integer field
+        of [s], in declaration order. Bitfields (their base word is shared),
+        floats, byte spans and composites have no slot of their own and are left
+        out. {!field_seeds} is this same set narrowed to the fields whose
+        declaration singles out particular values. *)
 
     val field_seeds : struct_ -> field_seed list
     (** [field_seeds s] is, for each named whole-byte integer field of [s] whose

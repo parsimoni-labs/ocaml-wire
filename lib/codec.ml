@@ -518,18 +518,54 @@ let clear_slots s n =
   Array.fill s.ints 0 n 0;
   Array.fill s.int64s 0 n 0L
 
+(* Grow [table] until it has a cell for domain index [i]. The new array reuses
+   the existing [Atomic.t] cells rather than their contents, so a domain writing
+   its scratch through the array it read races with nobody: both arrays name the
+   same cell. Losing the CAS means another domain grew it first, so retry and
+   take theirs. *)
+let rec slots_cells table i =
+  let a = Atomic.get table in
+  let len = Array.length a in
+  if i < len then a
+  else
+    let b =
+      Array.init
+        (max (i + 1) (max 8 (2 * len)))
+        (fun j -> if j < len then a.(j) else Atomic.make None)
+    in
+    if Atomic.compare_and_set table a b then b else slots_cells table i
+
 (* A per-domain [slots] scratch. The validators and decoders below reuse one
    scratch across calls to stay allocation-free, but a codec value is shared
    across domains, so a single shared scratch lets two domains decoding at once
    overwrite each other's fields. A misparsed segment is then dropped, which in
-   a TCP stack pinned one flow per core stalls that flow. Domain-local storage
-   gives each domain its own scratch, still reused within the domain: a decode
-   performs no effects, so cooperative fibers never interleave mid-decode.
-   Preemptive systhreads sharing a domain must still not decode one codec at
-   once. *)
+   a TCP stack pinned one flow per core stalls that flow. Per-domain scratch
+   keeps the reuse and drops the sharing: a decode performs no effects, so
+   cooperative fibers never interleave mid-decode. Preemptive systhreads sharing
+   a domain must still not decode one codec at once.
+
+   The scratch hangs off the validator and is indexed by [Domain.self_index ()],
+   rather than living in [Domain.DLS] under a key minted here. A DLS key is
+   drawn from a global counter and a domain sizes its DLS array from that
+   counter, so one key per compiled validator made the first DLS read on a fresh
+   domain cost a word per validator the program ever built, charged even to
+   domains that never decode. [self_index] is dense over live domains instead,
+   so the array here is bounded by the domains actually running.
+
+   An index is reused once its domain terminates, handing the new occupant the
+   old scratch. That is sound because every caller clears the scratch on entry,
+   and two live domains never share an index. *)
 let domain_local_slots n =
-  let key = Domain.DLS.new_key (fun () -> alloc_slots n) in
-  fun () -> Domain.DLS.get key
+  let table = Atomic.make [||] in
+  fun () ->
+    let i = Domain.self_index () in
+    let cell = (slots_cells table i).(i) in
+    match Atomic.get cell with
+    | Some s -> s
+    | None ->
+        let s = alloc_slots n in
+        Atomic.set cell (Some s);
+        s
 
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
