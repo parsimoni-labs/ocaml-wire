@@ -112,7 +112,7 @@ type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
 let seq_list = Types.seq_list
 let array_seq = Types.array_seq
 
-let rest_bytes (total : (int, _) Param.t) =
+let rest_bytes total =
   Types.byte_array ~size:Types.(Sub (Param_ref total, Sizeof_this))
 
 let bits ?(bit_order = Types.Msb_first) ~width bf =
@@ -234,8 +234,8 @@ let parse_fixed size get buf off len =
   check_eof len ~off ~n:size;
   (get buf off, off + size)
 
-let int32_le buf off = Int32.to_int (Bytes.get_int32_le buf off)
-let int32_be buf off = Int32.to_int (Bytes.get_int32_be buf off)
+let int32_le = SInt32.le
+let int32_be = SInt32.be
 let float32_le buf off = Int32.float_of_bits (Bytes.get_int32_le buf off)
 let float32_be buf off = Int32.float_of_bits (Bytes.get_int32_be buf off)
 let float64_le buf off = Int64.float_of_bits (Bytes.get_int64_le buf off)
@@ -696,11 +696,11 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       Types.check_signed_encode ~bits:16 v;
       write_int16_be enc v
   | Int32 Little ->
-      Types.check_signed_encode ~bits:32 v;
-      write_int32_le enc (Int32.of_int v)
+      SInt32.check_encode v;
+      write_int32_le enc (SInt32.to_int32 v)
   | Int32 Big ->
-      Types.check_signed_encode ~bits:32 v;
-      write_int32_be enc (Int32.of_int v)
+      SInt32.check_encode v;
+      write_int32_be enc (SInt32.to_int32 v)
   | Int64 Little -> write_int64_le enc v
   | Int64 Big -> write_int64_be enc v
   | Float32 Little -> write_int32_le enc (Int32.bits_of_float v)
@@ -951,6 +951,7 @@ let pp_value (type r) (c : r Codec.t) ppf (v : r) =
     readers;
   Fmt.pf ppf "@ }@]"
 
+module SInt32 = SInt32
 module Ascii = Ascii
 
 module Private = struct

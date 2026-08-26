@@ -334,12 +334,8 @@ let rec build_field_reader_ctx : type a.
       fun _runtime buf base -> Bytes.get_int16_le buf (base + field_off)
   | Int16 Big ->
       fun _runtime buf base -> Bytes.get_int16_be buf (base + field_off)
-  | Int32 Little ->
-      fun _runtime buf base ->
-        Int32.to_int (Bytes.get_int32_le buf (base + field_off))
-  | Int32 Big ->
-      fun _runtime buf base ->
-        Int32.to_int (Bytes.get_int32_be buf (base + field_off))
+  | Int32 Little -> fun _runtime buf base -> SInt32.le buf (base + field_off)
+  | Int32 Big -> fun _runtime buf base -> SInt32.be buf (base + field_off)
   | Int64 Little ->
       fun _runtime buf base -> Bytes.get_int64_le buf (base + field_off)
   | Int64 Big ->
@@ -434,10 +430,8 @@ let rec build_immediate_reader : type a.
   | Int8 -> Some (fun buf base -> Bytes.get_int8 buf (at base))
   | Int16 Little -> Some (fun buf base -> Bytes.get_int16_le buf (at base))
   | Int16 Big -> Some (fun buf base -> Bytes.get_int16_be buf (at base))
-  | Int32 Little ->
-      Some (fun buf base -> Int32.to_int (Bytes.get_int32_le buf (at base)))
-  | Int32 Big ->
-      Some (fun buf base -> Int32.to_int (Bytes.get_int32_be buf (at base)))
+  | Int32 Little -> Some (fun buf base -> SInt32.le buf (at base))
+  | Int32 Big -> Some (fun buf base -> SInt32.be buf (at base))
   | Int64 Little -> Some (fun buf base -> Bytes.get_int64_le buf (at base))
   | Int64 Big -> Some (fun buf base -> Bytes.get_int64_be buf (at base))
   | Float32 Little ->
@@ -602,6 +596,17 @@ let populate_uint32 idx reader =
     Option.iter (set_int_slot slots idx)
       (Int32.unsigned_to_int (UInt32.to_int32 (reader runtime buf base)))
 
+(* Same shape as [populate_uint32] on the signed side: the slot is a native
+   [int], so where that int is narrower than the field only the values it can
+   hold are mirrored, and a constraint over the rest reads an unpopulated zero
+   rather than a truncated number. *)
+let populate_sint32 idx reader =
+  if Sys.int_size > 32 then fun slots runtime buf base ->
+    set_int_slot slots idx (SInt32.to_int (reader runtime buf base))
+  else fun slots runtime buf base ->
+    Option.iter (set_int_slot slots idx)
+      (SInt32.to_int_opt (reader runtime buf base))
+
 let populate_uint_var idx reader =
   if Sys.int_size >= 63 then fun slots runtime buf base ->
     set_int_slot slots idx (UInt63.to_int (reader runtime buf base))
@@ -640,7 +645,7 @@ let rec build_populate : type a.
   | Uint16 _ -> populate_int idx reader
   | Int8 -> populate_int idx reader
   | Int16 _ -> populate_int idx reader
-  | Int32 _ -> populate_int idx reader
+  | Int32 _ -> populate_sint32 idx reader
   | Bits _ -> populate_int idx reader
   | Uint_var _ -> populate_uint_var idx reader
   | Uint32 _ -> populate_uint32 idx reader
@@ -1667,8 +1672,8 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   | Int8 -> Bytes.get_int8 buf off
   | Int16 Little -> Bytes.get_int16_le buf off
   | Int16 Big -> Bytes.get_int16_be buf off
-  | Int32 Little -> Int32.to_int (Bytes.get_int32_le buf off)
-  | Int32 Big -> Int32.to_int (Bytes.get_int32_be buf off)
+  | Int32 Little -> SInt32.le buf off
+  | Int32 Big -> SInt32.be buf off
   | Int64 Little -> Bytes.get_int64_le buf off
   | Int64 Big -> Bytes.get_int64_be buf off
   | Float32 Little -> Int32.float_of_bits (Bytes.get_int32_le buf off)

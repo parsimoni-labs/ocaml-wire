@@ -271,10 +271,10 @@ val int16 : int t
 val int16be : int t
 (** [int16be] generates for {!Wire.int16be}. *)
 
-val int32 : int t
+val int32 : Wire.SInt32.t t
 (** [int32] generates for {!Wire.int32}. *)
 
-val int32be : int t
+val int32be : Wire.SInt32.t t
 (** [int32be] generates for {!Wire.int32be}. *)
 
 val int64 : int64 t

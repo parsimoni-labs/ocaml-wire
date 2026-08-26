@@ -130,7 +130,9 @@ let test_int16be_negative () =
 
 let test_int32be_negative () =
   let buf = Bytes.of_string "\xFF\xFF\xFF\xFE" in
-  Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int32be buf)
+  Alcotest.(check int32)
+    "-2 BE" (-2l)
+    (SInt32.to_int32 (of_bytes_exn int32be buf))
 
 let test_int64le_roundtrip () =
   roundtrip "roundtrip" int64 Alcotest.int64 (-0x0102_0304_0506_0708L)
@@ -188,7 +190,9 @@ let test_rest_of_buffer_codec () =
     Codec.v "RestDemo" (fun h d -> (h, d)) Codec.[ f_h $ fst; f_d $ snd ]
   in
   let buf = Bytes.of_string "\x01HELLO" in
-  let env = Codec.env codec |> Param.bind total (Bytes.length buf) in
+  let env =
+    Codec.env codec |> Param.bind total (SInt32.of_int (Bytes.length buf))
+  in
   match Codec.decode ~env codec buf 0 with
   | Ok (h, d) ->
       Alcotest.(check int) "header" 1 h;

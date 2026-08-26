@@ -1625,7 +1625,7 @@ let test_nested_exact_region () =
 
 (* A casetype whose case body is a [nested] region (a scalar in a fixed span):
    the tag-dispatched case decodes and sizes through the region. *)
-type nest_case = N of int | U of int
+type nest_case = N of SInt32.t | U of int
 
 let nest_case_codec =
   let ct =
@@ -1650,7 +1650,7 @@ let test_casetype_nested_case_body () =
       Alcotest.(check bool)
         "roundtrip" true
         (decode_ok (Codec.decode nest_case_codec buf 0) = v))
-    [ N 12345; U 7 ]
+    [ N (SInt32.of_int 12345); U 7 ]
 
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decodes the list and projects to a single [:byte-size]
@@ -2981,13 +2981,45 @@ let test_encode_exact_signed_scalar () =
           ~equal:Int.equal ~pp:Fmt.int
           ~inside:[ -limit; limit - 1 ]
           ~outside:[ limit; -limit - 1 ])
-    [
-      ("int8", 8, int8);
-      ("int16", 16, int16);
-      ("int16be", 16, int16be);
-      ("int32", 32, int32);
-      ("int32be", 32, int32be);
-    ]
+    (* [int32] is absent on purpose: its carrier is {!SInt32.t}, whose
+       constructors refuse an out-of-range number, so there is no such value to
+       hand the encoder. [test_sint32_of_int_range] pins that refusal instead,
+       one step earlier than this check can reach. *)
+    [ ("int8", 8, int8); ("int16", 16, int16); ("int16be", 16, int16be) ]
+
+(* The signed 32-bit range is enforced where the value is built rather than
+   where it is written, so a number the field cannot hold never becomes an
+   [int32] in the first place. [of_int32] needs no such guard: every [int32] is
+   in range by construction. *)
+let test_sint32_of_int_range () =
+  (* Only a native [int] wider than the field can hold a number outside it, so
+     the refusal is reachable only there; where the [int] is narrower every one
+     of its values is a legal signed 32-bit field. *)
+  if width_is_testable 32 then begin
+    let limit = 1 lsl 31 in
+    List.iter
+      (fun n ->
+        match SInt32.of_int n with
+        | v -> Alcotest.failf "SInt32.of_int %d built %a" n SInt32.pp v
+        | exception Invalid_argument _ -> ())
+      [ limit; -limit - 1 ]
+  end;
+  List.iter
+    (fun n ->
+      Fmt.kstr
+        (fun msg -> Alcotest.(check int32) msg (Int32.of_int n))
+        "SInt32.of_int %d round-trips" n
+        (SInt32.to_int32 (SInt32.of_int n)))
+    [ -1; 0; 1 ];
+  (* [of_int32] is total: every [int32] is in range by construction, including
+     the two ends no native [int] is guaranteed to hold. *)
+  List.iter
+    (fun n ->
+      Fmt.kstr
+        (fun msg -> Alcotest.(check int32) msg n)
+        "SInt32.of_int32 %ld round-trips" n
+        (SInt32.to_int32 (SInt32.of_int32 n)))
+    Int32.[ min_int; minus_one; zero; one; max_int ]
 
 (* [uint32] rides an [Optint.t], which is a plain [int] where that is wide
    enough to hold more than 32 bits and a boxed [int32] where it is not. Only
@@ -3025,6 +3057,39 @@ let check_eight_byte_unsigned name typ =
 let test_eight_byte_unsigned_preserves_wire () =
   check_eight_byte_unsigned "uint64" uint64;
   check_eight_byte_unsigned "uint64be" uint64be
+
+(* The same rule one width down, on the signed side. Four bytes spell 2^32
+   patterns and the generated C validator hands every one of them on unchanged.
+   [int32] carries a native [int], so where that int is narrower than the field
+   ([wasm_of_ocaml] is 31 bits) [Int32.to_int] drops the top bits on the way in,
+   and nothing on the way out objects: [check_signed_encode] guards itself with
+   [bits < Sys.int_size], and 32 < 31 is false, so the check disables itself
+   exactly where it is needed. A frame leaves as different bytes with no error
+   on either path. Refusing it would be sound; altering it is not.
+
+   Native and js_of_ocaml hold 32 bits in an [int] and already pass. This case
+   is the one that fails under wasm_of_ocaml. *)
+let check_four_byte_signed name typ wire =
+  let cf = Codec.(Field.v "v" typ $ Fun.id) in
+  let codec = Codec.v "FourByteSigned" Fun.id Codec.[ cf ] in
+  match Codec.decode codec (Bytes.of_string wire) 0 with
+  | Error _ -> ()
+  | Ok v ->
+      let out = Bytes.make 4 '\x00' in
+      Codec.encode codec v out 0;
+      Fmt.kstr
+        (fun msg -> Alcotest.(check string) msg wire (Bytes.to_string out))
+        "%s: frame %a re-encodes unchanged" name
+        Fmt.(list ~sep:nop (fmt "%02x"))
+        (List.map Char.code (List.of_seq (String.to_seq wire)))
+
+let test_four_byte_signed_preserves_wire () =
+  List.iter
+    (fun (name, typ) ->
+      List.iter
+        (check_four_byte_signed name typ)
+        [ String.make 4 '\xff'; "\x80\x00\x00\x00"; "\x7f\xff\xff\xff" ])
+    [ ("int32", int32); ("int32be", int32be) ]
 
 (* [array] and [repeat] elements are written by an encoder of their own, so a
    value no element can hold has to be refused on that path too. *)
@@ -7836,7 +7901,7 @@ type alloc_accessor = {
   lo : int;
   u8 : int;
   u16 : int;
-  i32 : int;
+  i32 : SInt32.t;
   priority : alloc_priority;
 }
 
@@ -7913,10 +7978,13 @@ let test_set_no_allocation () =
   and set_u16 = set alloc_bf_u16
   and set_i32 = set alloc_bf_i32
   and set_priority = set alloc_bf_priority in
+  (* Built once: the point of the check is the setter's own cost, not the
+     carrier's constructor. *)
+  let i32_v = SInt32.of_int 70_000 in
   check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
   check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 7);
   check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 513);
-  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 70_000);
+  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 i32_v);
   check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
 
 (* {2 Resource bounds}
@@ -8843,6 +8911,10 @@ let suite =
         test_encode_int64_carrier_has_no_range;
       Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick
         test_eight_byte_unsigned_preserves_wire;
+      Alcotest.test_case "4-byte signed fields preserve the wire" `Quick
+        test_four_byte_signed_preserves_wire;
+      Alcotest.test_case "exact width: SInt32.of_int range" `Quick
+        test_sint32_of_int_range;
       Alcotest.test_case "exact width: array and repeat elements" `Quick
         test_element_exact_width;
       Alcotest.test_case "exact byte field: literal size" `Quick

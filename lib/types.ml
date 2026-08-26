@@ -172,7 +172,7 @@ and _ typ =
   | Uint64 : endian -> int64 typ (* boxed, for full 64-bit *)
   | Int8 : int typ
   | Int16 : endian -> int typ
-  | Int32 : endian -> int typ (* fits OCaml int on 64-bit hosts *)
+  | Int32 : endian -> SInt32.t typ
   | Int64 : endian -> int64 typ
   | Float32 :
       endian
@@ -1288,6 +1288,14 @@ let is_int_dispatch_typ : type a. a typ -> bool = function
       true
   | _ -> false
 
+let int32_case_index k =
+  match SInt32.to_int_opt k with
+  | Some index -> index
+  | None ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %ld does not fit this platform's native int"
+        (SInt32.to_int32 k)
+
 let uint32_case_index k =
   match UInt32.to_int k with
   | index -> index
@@ -1320,7 +1328,7 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int k)
   | Int16 _ -> Pack_expr (Int k)
-  | Int32 _ -> Pack_expr (Int k)
+  | Int32 _ -> Pack_expr (Int (int32_case_index k))
   | Bits _ -> Pack_expr (Int k)
   | Enum _ -> Pack_expr (Int k)
   | _ -> assert false (* guarded by [is_int_dispatch_typ] *)
@@ -1952,13 +1960,8 @@ let set_int16_be buf off v =
   check_signed_encode ~bits:16 v;
   Bytes.set_int16_be buf off v
 
-let set_int32_le buf off v =
-  check_signed_encode ~bits:32 v;
-  Bytes.set_int32_le buf off (Int32.of_int v)
-
-let set_int32_be buf off v =
-  check_signed_encode ~bits:32 v;
-  Bytes.set_int32_be buf off (Int32.of_int v)
+let set_int32_le = SInt32.set_le
+let set_int32_be = SInt32.set_be
 
 (* 3D's [var x = a; p] requires [a] to be an atomic action (extern call,
    field_ptr, ...), not an arbitrary expression. Wire's [Action.var name e]

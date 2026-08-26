@@ -203,10 +203,10 @@ val set_int16_le : bytes -> int -> int -> unit
 val set_int16_be : bytes -> int -> int -> unit
 (** [set_int16_be buf off v] writes [v] as two signed big-endian bytes. *)
 
-val set_int32_le : bytes -> int -> int -> unit
+val set_int32_le : bytes -> int -> SInt32.t -> unit
 (** [set_int32_le buf off v] writes [v] as four signed little-endian bytes. *)
 
-val set_int32_be : bytes -> int -> int -> unit
+val set_int32_be : bytes -> int -> SInt32.t -> unit
 (** [set_int32_be buf off v] writes [v] as four signed big-endian bytes. *)
 
 (** {1 Param handles} *)
@@ -278,8 +278,10 @@ and _ typ =
   | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
   | Int8 : int typ  (** 8-bit signed. *)
   | Int16 : endian -> int typ  (** 16-bit signed. *)
-  | Int32 : endian -> int typ
-      (** 32-bit signed, returned as OCaml [int] (64-bit hosts only). *)
+  | Int32 : endian -> SInt32.t typ
+      (** 32-bit signed. Carried by {!SInt32.t}, which holds the full range on
+          every target; a plain [int] drops the top bits where it is narrower
+          than the field. *)
   | Int64 : endian -> int64 typ  (** 64-bit signed. *)
   | Float32 : endian -> float typ
       (** IEEE 754 binary32, widened to OCaml [float]. *)
@@ -594,13 +596,13 @@ val int16 : int typ
 val int16be : int typ
 (** 16-bit signed, big-endian. *)
 
-val int32 : int typ
-(** [int32] is a 32-bit signed little-endian integer, returned as an OCaml
-    integer (64-bit hosts only). *)
+val int32 : SInt32.t typ
+(** [int32] is a 32-bit signed little-endian integer, returned as a {!SInt32.t}.
+*)
 
-val int32be : int typ
-(** [int32be] is a 32-bit signed big-endian integer, returned as an OCaml
-    integer. *)
+val int32be : SInt32.t typ
+(** [int32be] is a 32-bit signed big-endian integer, returned as a {!SInt32.t}.
+*)
 
 val int64 : int64 typ
 (** 64-bit signed, little-endian. *)
