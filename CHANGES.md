@@ -6,7 +6,7 @@
   `field_readers` is the decoder's own reader for every named int-valued field,
   keyed by name, so a caller holding a type-erased codec can read a field
   without a field handle; `int_slots` is the byte slot of every named whole-byte
-  integer field (#PR2, @samoht)
+  integer field (#318, @samoht)
 
 - Add `Wire.Everparse.Raw.field_seeds`, exposing constrained whole-byte integer
   values so generated corpora can construct inputs that uniform bytes would
@@ -36,6 +36,11 @@
   (#263, @samoht)
 
 ### Changed
+
+- The EverParse differential compares decoded field values, not only the
+  accept/reject verdict. On an input both sides accept, every field the two can
+  both report must carry the same value; two decoders that agree on which bytes
+  are valid and read a different number out of them used to pass (#318, @samoht)
 
 - Seed `Wire_3d.generate_corpus` from accepted inputs and constraint boundaries,
   and refuse one-sided corpora, which cannot distinguish a validator from a

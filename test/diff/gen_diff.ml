@@ -120,6 +120,53 @@ let generate_all schema_dir included =
     seed_fail @ rest_fail
   end
 
+(* The generated OCaml that reads one codec's field values back out of the C
+   plug. [<lower>_parse_k] applies its continuation to one argument per named
+   field, in declaration order and in the OCaml type [field_kinds] gives it, so
+   the continuation only has to name the arguments and keep the compared ones.
+   A field the comparison leaves out ([Diff_codecs.compared_fields]) gets a
+   [_]-prefixed argument, and a codec with nothing to compare never calls into
+   C at all. *)
+let value_reader (label, (Fuzz_gen.Pack g as p)) ppf =
+  let kinds =
+    Wire.Everparse.Raw.field_kinds
+      (Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g))
+    |> List.mapi (fun i (name, kind) -> (i, name, kind))
+  in
+  let compared = Diff_codecs.compared_fields p in
+  let is_compared name =
+    List.exists (fun (c : Diff_codecs.compared_field) -> c.name = name) compared
+  in
+  let int64_of (i, name, kind) =
+    match kind with
+    | Wire.Everparse.Raw.Int -> Fmt.str "Int64.of_int a%d" i
+    | Int64 -> Fmt.str "a%d" i
+    | Float32 | Float64 | Bool | String | Unit ->
+        Fmt.failwith
+          "gen_diff: %s field %s is compared by value, but the FFI hands it \
+           back as a non-integer"
+          label name
+  in
+  let arg ppf (i, name, _) =
+    Fmt.pf ppf "%sa%d" (if is_compared name then "" else "_") i
+  in
+  let binding ppf ((_, name, _) as f) =
+    Fmt.pf ppf "(%S, %s)" name (int64_of f)
+  in
+  if compared = [] then Fmt.pf ppf "    (%S, fun _ -> []);@\n" label
+  else
+    Fmt.pf ppf
+      "    ( %S,@\n\
+      \      fun b ->@\n\
+      \        Stubs.%s_parse_k@\n\
+      \          (fun %a -> [ %a ])@\n\
+      \          b 0 );@\n"
+      label (lower_name g)
+      Fmt.(list ~sep:(any " ") arg)
+      kinds
+      Fmt.(list ~sep:(any "; ") binding)
+      (List.filter (fun (_, name, _) -> is_compared name) kinds)
+
 let () =
   let schema_dir =
     if Array.length Sys.argv > 1 then Sys.argv.(1) else "schemas"
@@ -162,6 +209,14 @@ let () =
          _ -> false);\n"
         label (lower_name g))
     Diff_codecs.included;
+  pr "  |]\n\n";
+  pr "(* Each codec's label paired with a [bytes -> (string * int64) list]\n";
+  pr "   reader of the field values the EverParse validator extracted, taken\n";
+  pr "   from the default <Name>Fields plug through the generated FFI\n";
+  pr "   continuation. Scoped by [Diff_codecs.compared_fields], which the\n";
+  pr "   OCaml side of the comparison scopes off too. *)\n";
+  pr "let values : (string * (bytes -> (string * int64) list)) array =\n  [|\n";
+  List.iter (fun item -> pr "%t" (value_reader item)) Diff_codecs.included;
   pr "  |]\n";
   Format.pp_print_flush ppf ();
   close_out oc
