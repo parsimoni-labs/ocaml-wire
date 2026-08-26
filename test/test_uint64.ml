@@ -80,6 +80,22 @@ let test_to_int_opt () =
     "max_int fits" (Some max_int)
     (UInt64.to_int_opt (UInt64.of_int max_int))
 
+(* [UInt64.compare] is the order of the field, which is unsigned:
+   0xFFFF_FFFF_FFFF_FFFF is its largest value, not its smallest. The carrier
+   disagrees on every target, not just narrow ones: [Int64.compare] reads the
+   top bit as a sign, so it ranks the largest value here below zero. *)
+let test_compare_is_unsigned () =
+  let u = UInt64.of_int64 in
+  let gt name a b =
+    Alcotest.(check bool) name true (UInt64.compare (u a) (u b) > 0)
+  in
+  gt "all ones > 1" (-1L) 1L;
+  gt "all ones > max_int64" (-1L) Int64.max_int;
+  gt "top bit set > max_int64" Int64.min_int Int64.max_int;
+  gt "top bit set > 0" Int64.min_int 0L;
+  Alcotest.(check bool) "0 < 1" true (UInt64.compare (u 0L) (u 1L) < 0);
+  Alcotest.(check bool) "equal" true (UInt64.equal (u 42L) (u 42L))
+
 let suite =
   ( "uint64",
     [
@@ -91,4 +107,5 @@ let suite =
       Alcotest.test_case "of_int refuses negative" `Quick
         test_of_int_refuses_negative;
       Alcotest.test_case "to_int_opt" `Quick test_to_int_opt;
+      Alcotest.test_case "compare is unsigned" `Quick test_compare_is_unsigned;
     ] )
