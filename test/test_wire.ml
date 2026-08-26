@@ -166,6 +166,53 @@ let test_reader_incremental_is_not_quadratic () =
      %.0f words)"
     words
 
+(* The test above pins the re-parse a dribbled value costs; this one pins the
+   terminator search. A [zeroterm] has no length field, so its size is the
+   search itself: retrying once per slice restarts that search at the string's
+   first byte every time. Only wall time separates the two shapes, since the
+   retries allocate the same either way, so this measures the scan directly. *)
+let test_reader_zeroterm_scan_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let payload = String.make 65536 'x' in
+  let frame = Wire.to_string zeroterm payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Sys.time () in
+  let got = Wire.of_reader_exn zeroterm reader in
+  let elapsed = Sys.time () -. before in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (elapsed < 0.25))
+    "a 64 KiB zeroterm dribbled one byte at a time scans each byte about once \
+     (took %.3f s)"
+    elapsed
+
+(* The same scan, reached through a codec rather than at the top level. A
+   zeroterm has no length field wherever it sits, so an embedded one restarts
+   its terminator search per slice exactly as a top-level one does; pin both, or
+   a cursor that only the top-level path consults would look correct here. *)
+let test_reader_embedded_zeroterm_scan_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let inner =
+    Codec.v "EmbeddedZt" (fun s -> s) Codec.[ Field.v "s" zeroterm $ Fun.id ]
+  in
+  let typ = codec inner in
+  let payload = String.make 65536 'x' in
+  let frame = Wire.to_string typ payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Sys.time () in
+  let got = Wire.of_reader_exn typ reader in
+  let elapsed = Sys.time () -. before in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (elapsed < 0.25))
+    "a 64 KiB zeroterm inside a codec, dribbled one byte at a time, scans each \
+     byte about once (took %.3f s)"
+    elapsed
+
 let test_int16be_negative () =
   let buf = Bytes.of_string "\xFF\xFE" in
   Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int16be buf)
@@ -1484,6 +1531,10 @@ let suite =
       Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;
       Alcotest.test_case "reader: incremental parse is not quadratic" `Quick
         test_reader_incremental_is_not_quadratic;
+      Alcotest.test_case "reader: zeroterm scan is not quadratic" `Quick
+        test_reader_zeroterm_scan_is_not_quadratic;
+      Alcotest.test_case "reader: embedded zeroterm scan is not quadratic"
+        `Quick test_reader_embedded_zeroterm_scan_is_not_quadratic;
       Alcotest.test_case "parse: int32be negative" `Quick test_int32be_negative;
       Alcotest.test_case "parse: int64le roundtrip" `Quick
         test_int64le_roundtrip;
