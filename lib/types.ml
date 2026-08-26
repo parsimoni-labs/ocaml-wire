@@ -209,13 +209,15 @@ and _ typ =
   | Enum : {
       name : string;
       cases : (string * int) list;
-      base : int typ;
+      base : 'a typ;
+          (* Any type with an integer view: the case values name integers, and
+             [int_of_exn] is what reads one out of a decoded [base] value. *)
       closed : bool;
           (* [true]: only the listed values are valid (decode rejects others, the
              3D projection emits a membership refinement). [false]: an open set,
              the names document known values but any value is accepted. *)
     }
-      -> int typ
+      -> 'a typ
   | Casetype : {
       name : string;
       tag : 'k typ;
@@ -529,6 +531,154 @@ let bits ?(bit_order = Msb_first) ~width base =
 let bit b = Bool.to_int b
 let is_set n = n <> 0
 
+(* -- Integer views --
+
+   [bool], [cases], [enum] and [variants] refine the integer a field decodes to
+   and need nothing else from their base. Which OCaml type carries that integer
+   is the base's own business: [uint32] keeps a 32-bit unsigned value in a
+   module of its own, [uint64] a 64-bit one, and both read as the same [int] a
+   [uint8] does. Deciding that reading here, once, is what keeps [Eval], the
+   codec's enum checks, [Param]'s environments and the 3D projection agreeing
+   on which types have an integer view and what it is. *)
+
+(* Convert a typed value to [int]. Returns [None] for types that don't
+   fit in OCaml int (uint64 over 2^63, non-numeric). *)
+let rec int_of : type a. a typ -> a -> int option =
+ fun typ v ->
+  match typ with
+  | Uint8 -> Some v
+  | Uint16 _ -> Some v
+  | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
+  (* On a narrow-int platform a u32 value may not fit either; the unsigned
+     conversion returns [None] exactly then and is identity-exact on a 64-bit
+     host. *)
+  | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
+  | Uint64 _ -> UInt64.to_int_opt v
+  | Int8 -> Some v
+  | Int16 _ -> Some v
+  | Int32 _ -> SInt32.to_int_opt v
+  | Int64 _ -> Int64.unsigned_to_int v
+  | Float32 _ -> None
+  | Float64 _ -> None
+  | Bits _ -> Some v
+  | Enum { base; _ } -> int_of base v
+  | Where { inner; _ } -> int_of inner v
+  | Single_elem { elem; _ } -> int_of elem v
+  | Apply { typ; _ } -> int_of typ v
+  | Map { inner; encode; _ } -> int_of inner (encode v)
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
+      None
+
+(* Hot-path variant of [int_of] for the cross-field size/offset/present
+   readers, which need a plain [int]. Returns it directly (no [Some] box on the
+   numeric path). A [uint64]/[int64] beyond the native int range is adversarial
+   input and raises [Parse_error] ([Value_out_of_range]); a non-integer field
+   referenced where an integer is required is a schema error and raises
+   [Invalid_argument]. *)
+let int_overflow v = raise_out_of_range ~at:0 v
+
+let not_an_integer () =
+  invalid_arg "Wire: non-integer field referenced where an integer is required"
+
+let rec int_of_exn : type a. a typ -> a -> int =
+ fun typ v ->
+  match typ with
+  | Uint8 -> v
+  | Uint16 _ -> v
+  | Uint_var _ -> (
+      if Sys.int_size > 56 then UInt63.to_int v
+      else
+        match Int64.unsigned_to_int (Optint.Int63.to_int64 v) with
+        | Some n -> n
+        | None -> int_overflow (Optint.Int63.to_int64 v))
+  (* The narrow-int branches raise the typed overflow error instead of
+     letting [Optint.to_int]'s [Failure] escape; a 64-bit host keeps the
+     direct allocation-free conversion. *)
+  | Uint32 _ -> (
+      if Sys.int_size > 32 then UInt32.to_int v
+      else
+        match Int32.unsigned_to_int (UInt32.to_int32 v) with
+        | Some n -> n
+        | None ->
+            int_overflow
+              (Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL))
+  | Uint64 _ -> (
+      match UInt64.to_int_opt v with
+      | Some n -> n
+      | None -> int_overflow (UInt64.to_int64 v))
+  | Int8 -> v
+  | Int16 _ -> v
+  | Int32 _ -> (
+      match SInt32.to_int_opt v with
+      | Some n -> n
+      | None -> int_overflow (Int64.of_int32 (SInt32.to_int32 v)))
+  | Int64 _ -> (
+      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
+  | Float32 _ -> not_an_integer ()
+  | Float64 _ -> not_an_integer ()
+  | Bits _ -> v
+  | Enum { base; _ } -> int_of_exn base v
+  | Where { inner; _ } -> int_of_exn inner v
+  | Single_elem { elem; _ } -> int_of_exn elem v
+  | Apply { typ; _ } -> int_of_exn typ v
+  | Map { inner; encode; _ } -> int_of_exn inner (encode v)
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
+      not_an_integer ()
+
+(* The other direction: the value a type carries for a given integer. The
+   narrow constructors raise [Invalid_argument] on a number their field cannot
+   hold, so a case value or table index that does not fit its base is refused
+   where it is written down rather than silently reshaped. *)
+let rec of_int : type a. a typ -> int -> a =
+ fun typ n ->
+  match typ with
+  | Uint8 -> n
+  | Uint16 _ -> n
+  | Uint_var _ -> UInt63.of_int n
+  | Uint32 _ -> UInt32.of_int n
+  | Uint64 _ -> UInt64.of_int n
+  | Int8 -> n
+  | Int16 _ -> n
+  | Int32 _ -> SInt32.of_int n
+  | Int64 _ -> Int64.of_int n
+  | Float32 _ -> not_an_integer ()
+  | Float64 _ -> not_an_integer ()
+  | Bits _ -> n
+  | Enum { base; _ } -> of_int base n
+  | Where { inner; _ } -> of_int inner n
+  | Single_elem { elem; _ } -> of_int elem n
+  | Apply { typ; _ } -> of_int typ n
+  | Map { inner; decode; _ } -> decode (of_int inner n)
+  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
+  | Repeat _ ->
+      not_an_integer ()
+
+(* The types [int_of_exn] and [of_int] have a conversion for. Checked at
+   construction by every combinator that needs one, so an unusable base fails
+   at the description rather than on the first byte decoded. *)
+let rec is_int_representable : type a. a typ -> bool = function
+  | Uint8 | Uint16 _ | Uint_var _ | Uint32 _ | Uint64 _ | Int8 | Int16 _
+  | Int32 _ | Int64 _ | Bits _ ->
+      true
+  | Enum { base; _ } -> is_int_representable base
+  | Map { inner; _ } -> is_int_representable inner
+  | Where { inner; _ } -> is_int_representable inner
+  | Single_elem { elem; _ } -> is_int_representable elem
+  | Apply { typ; _ } -> is_int_representable typ
+  | _ -> false
+
+let reject_non_integer ~combinator typ =
+  if not (is_int_representable typ) then
+    Fmt.invalid_arg "Wire.%s: base type must be an integer type" combinator
+
 (* Field decorations [Optional], [Optional_or], [Repeat] only have a 3D
    projection when they appear at the top of a struct field's type --
    anywhere else (array elem, casetype case body, [where]/[map]/[apply]
@@ -555,7 +705,15 @@ let map decode encode inner =
   Map { inner; decode; encode; index_bound = None }
 
 let bool inner =
-  Map { inner; decode = is_set; encode = bit; index_bound = None }
+  reject_non_integer ~combinator:"bit" inner;
+  let to_int = int_of_exn inner and of_int = of_int inner in
+  Map
+    {
+      inner;
+      decode = (fun v -> is_set (to_int v));
+      encode = (fun b -> of_int (bit b));
+      index_bound = None;
+    }
 
 (* Top-level so [variants_lookup] does not allocate a closure per call.
    Returns -1 if [v] is not in [arr] (used as a non-allocating sentinel
@@ -566,16 +724,19 @@ let rec variants_lookup arr v i =
   else variants_lookup arr v (i + 1)
 
 let cases variants inner =
+  reject_non_integer ~combinator:"lookup" inner;
+  let to_int = int_of_exn inner and of_int = of_int inner in
   let arr = Array.of_list variants in
   let len = Array.length arr in
-  let decode n =
+  let decode v =
     (* Offset 0 is relative to the value handed in; [map_decode] moves the
        failure to where the reader found that value. *)
+    let n = to_int v in
     if n >= 0 && n < len then arr.(n) else raise_invalid_tag ~at:0 n
   in
   let encode v =
     let i = variants_lookup arr v 0 in
-    if i < 0 then invalid_arg "Wire.lookup: unknown variant" else i
+    if i < 0 then invalid_arg "Wire.lookup: unknown variant" else of_int i
   in
   Map { inner; decode; encode; index_bound = Some len }
 
@@ -896,23 +1057,31 @@ let nested_at_most ~size elem =
   reject_bitfield_element ~combinator:"nested_at_most" elem;
   Single_elem { size = fold_size size; elem; at_most = true }
 
-let enum name cases base = Enum { name; cases; base; closed = true }
-let enum_open name cases base = Enum { name; cases; base; closed = false }
+let enum name cases base =
+  reject_non_integer ~combinator:"enum" base;
+  Enum { name; cases; base; closed = true }
+
+let enum_open name cases base =
+  reject_non_integer ~combinator:"enum_open" base;
+  Enum { name; cases; base; closed = false }
 
 let variants name cases base =
+  reject_non_integer ~combinator:"variants" base;
+  let to_int = int_of_exn base and of_int = of_int base in
   let enum_cases = List.mapi (fun i (s, _) -> (s, i)) cases in
   let arr = Array.of_list (List.map snd cases) in
   let len = Array.length arr in
   (* [enum name enum_cases base] is closed, so [enum_check] rejects any value
      outside [0, len) before [decode] runs; the [else] is a defensive fallback. *)
-  let decode n =
+  let decode v =
+    let n = to_int v in
     if n >= 0 && n < len then arr.(n)
     else raise_invalid_enum ~at:0 ~value:n ~valid:(List.init len Fun.id)
   in
   let encode v =
     let i = variants_lookup arr v 0 in
     if i < 0 then Fmt.invalid_arg "Wire.variants %s: unknown variant" name
-    else i
+    else of_int i
   in
   map decode encode (enum name enum_cases base)
 
@@ -1326,7 +1495,7 @@ let uint_var_case_index k =
    expression. Only called for int-shaped tags; non-int tags don't reach
    here because their casetype field is rewritten away before
    [casetype_decls_of_struct] walks it. *)
-let case_index_to_expr : type k. k typ -> k -> packed_expr =
+let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
  fun tag_typ k ->
   match tag_typ with
   | Uint8 -> Pack_expr (Int k)
@@ -1337,7 +1506,7 @@ let case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Int16 _ -> Pack_expr (Int k)
   | Int32 _ -> Pack_expr (Int (int32_case_index k))
   | Bits _ -> Pack_expr (Int k)
-  | Enum _ -> Pack_expr (Int k)
+  | Enum { base; _ } -> case_index_to_expr base k
   | _ -> assert false (* guarded by [is_int_dispatch_typ] *)
 
 (* Auto-emit a dispatch + wrapper for each [Casetype] used in a struct.

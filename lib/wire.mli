@@ -664,13 +664,19 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
 
-val bit : int typ -> bool typ
+val bit : 'a typ -> bool typ
 (** [bit t] views an integer wire value as a boolean. Zero is [false], non-zero
-    is [true]. *)
+    is [true].
 
-val lookup : 'a list -> int typ -> 'a typ
+    [t] may be any integer-valued description, whatever OCaml type carries the
+    integer: a {!val-uint8}, a bitfield, a {!val-uint32}. A description with no
+    integer reading raises [Invalid_argument] where it is written down. *)
+
+val lookup : 'a list -> 'b typ -> 'a typ
 (** [lookup table t] decodes an integer as a zero-based index into a finite
     table.
+
+    [t] may be any integer-valued description, as for {!bit}.
 
     The decoded integer selects the corresponding element from the list. An
     out-of-range index produces an {!Invalid_tag} parse error (reported via
@@ -802,15 +808,19 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
     consume fewer bytes than the available space. Encoding zero-pads the unused
     region; a value larger than [size] raises [Invalid_argument]. *)
 
-val enum : string -> (string * int) list -> int typ -> int typ
+val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the
     named values, on encode as well as on decode: encoding an unlisted value
-    raises [Invalid_argument]. The result is still an OCaml integer -- use
-    {!variants} instead if you want to decode to proper OCaml values. [enum] is
-    mainly useful for 3D projection where the name and cases appear in the
-    generated [.3d] file. *)
+    raises [Invalid_argument]. The result still decodes to whatever [base]
+    decodes to -- use {!variants} instead if you want proper OCaml values.
+    [enum] is mainly useful for 3D projection where the name and cases appear in
+    the generated [.3d] file.
 
-val enum_open : string -> (string * int) list -> int typ -> int typ
+    [base] may be any integer-valued description, whatever OCaml type carries
+    the integer the case values name. A description with no integer reading
+    raises [Invalid_argument] where it is written down. *)
+
+val enum_open : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum_open name cases base] is like {!enum} but for an open value set: the
     named cases document the known values, but any value is accepted. Decode
     does not reject unlisted values, and the field projects as its base scalar
@@ -818,9 +828,11 @@ val enum_open : string -> (string * int) list -> int typ -> int typ
     future codes is not wrongly rejected. The known codes are still emitted as a
     3D enum declaration, so they remain documented in the generated [.3d]. *)
 
-val variants : string -> (string * 'a) list -> int typ -> 'a typ
+val variants : string -> (string * 'a) list -> 'b typ -> 'a typ
 (** [variants name cases base] maps integer values to OCaml values via a named
-    enumeration. Unlike {!enum}, this converts to proper OCaml values. *)
+    enumeration. Unlike {!enum}, this converts to proper OCaml values.
+
+    [base] may be any integer-valued description, as for {!enum}. *)
 
 type ('a, 'k) case_def
 

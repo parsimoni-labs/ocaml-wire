@@ -325,12 +325,14 @@ and _ typ =
   | Enum : {
       name : string;
       cases : (string * int) list;
-      base : int typ;
+      base : 'a typ;
+          (** Any type with an integer view: the case values name integers, and
+              {!int_of_exn} reads one out of a decoded [base] value. *)
       closed : bool;
           (** [true]: only the listed values are valid. [false]: open set, the
               names document known values but any value is accepted. *)
     }
-      -> int typ  (** Named enumeration. *)
+      -> 'a typ  (** Named enumeration. *)
   | Casetype : {
       name : string;
       tag : 'k typ;
@@ -655,11 +657,47 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)
 
-val bool : int typ -> bool typ
-(** Map an integer type to boolean (0 = false). *)
+(** {1 Integer views}
 
-val cases : 'a list -> int typ -> 'a typ
-(** Map integer values to a list of cases by index. *)
+    A combinator that refines the integer a field decodes to needs nothing else
+    from its base, so which OCaml type carries that integer is the base's own
+    business. These decide that reading once, for every type that has one, so
+    the codec's checks, {!Eval}, {!Param}'s environments and the 3D projection
+    all agree on it. *)
+
+val int_of : 'a typ -> 'a -> int option
+(** [int_of typ v] converts a typed value to [int]. [None] for a value that does
+    not fit the native int (a {!val-uint64} over 2{^ 62}) and for a type with no
+    integer view. *)
+
+val int_of_exn : 'a typ -> 'a -> int
+(** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
+    [int] directly (no boxing on the numeric path) and raises {!Parse_error}
+    ({!constructor-Value_out_of_range}) for a value beyond the native int range,
+    [Invalid_argument] for a type with no integer view. *)
+
+val of_int : 'a typ -> int -> 'a
+(** [of_int typ n] is the value [typ] carries for the integer [n]. Raises
+    [Invalid_argument] when [n] is outside what the type's field can hold, or
+    when the type has no integer view. *)
+
+val is_int_representable : 'a typ -> bool
+(** [is_int_representable typ] is [true] when {!int_of_exn} and {!of_int} have a
+    conversion for [typ]. *)
+
+val reject_non_integer : combinator:string -> 'a typ -> unit
+(** [reject_non_integer ~combinator typ] raises [Invalid_argument] naming
+    [combinator] unless [typ] {!is_int_representable}. Called at construction,
+    so a base a combinator cannot read as an integer fails at the description
+    rather than on the first byte decoded. *)
+
+val bool : 'a typ -> bool typ
+(** Map an integer-valued type to boolean (0 = false). Raises [Invalid_argument]
+    on a base with no integer view. *)
+
+val cases : 'a list -> 'b typ -> 'a typ
+(** Map integer values to a list of cases by index. Raises [Invalid_argument] on
+    a base with no integer view. *)
 
 val unit : unit typ
 (** Zero-width unit type. *)
@@ -742,16 +780,18 @@ val nested : size:int expr -> 'a typ -> 'a typ
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** Single element in a sized region (may be smaller). *)
 
-val enum : string -> (string * int) list -> int typ -> int typ
-(** Named enumeration over an integer base. *)
+val enum : string -> (string * int) list -> 'a typ -> 'a typ
+(** Named enumeration over an integer-valued base. Raises [Invalid_argument] on
+    a base with no integer view. *)
 
-val enum_open : string -> (string * int) list -> int typ -> int typ
+val enum_open : string -> (string * int) list -> 'a typ -> 'a typ
 (** Open enumeration: the named codes are declared in the 3D projection for
     documentation, but any value is accepted (no membership refinement, no
     decode rejection). *)
 
-val variants : string -> (string * 'a) list -> int typ -> 'a typ
-(** Named variant mapping over an integer base. *)
+val variants : string -> (string * 'a) list -> 'b typ -> 'a typ
+(** Named variant mapping over an integer-valued base. Raises [Invalid_argument]
+    on a base with no integer view. *)
 
 type ('a, 'k) case_def
 (** A casetype branch definition. ['k] is the discriminator type. *)

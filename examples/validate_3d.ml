@@ -51,8 +51,29 @@ let doc_cases =
           ] );
   ]
 
+(* [enum], [enum_open], [lookup], [bit] and [variants] read the integer a field
+   decodes to and take nothing else from their base, so they accept one whose
+   OCaml carrier is not [int]. That widening is only shipped if it reaches
+   EverParse, which is what this schema pins: every one of them over a [uint32]
+   or [int32] base, alongside the [uint8] bases the rest of the registry
+   already covers. *)
+let wide_base_struct =
+  let open Wire in
+  Raw.struct_ "WideBases"
+    [
+      Raw.field "c32" (enum "Code32" [ ("Code32A", 1); ("Code32B", 2) ] uint32);
+      Raw.field "c32be"
+        (enum "Code32be" [ ("Code32beA", 1); ("Code32beB", 2) ] uint32be);
+      Raw.field "open32" (enum_open "Open32" [ ("Open32A", 1) ] uint32);
+      Raw.field "flag" (bit uint32);
+      Raw.field "idx" (lookup [ `A; `B; `C ] uint32);
+      Raw.field "sign"
+        (variants "Sign" [ ("Neg", `Neg); ("Zero", `Zero) ] int32);
+    ]
+
 let cases =
   [
+    raw_struct wide_base_struct;
     raw_struct Demo.minimal_struct;
     raw_struct Demo.all_ints_struct;
     raw_struct Demo.bf8_struct;

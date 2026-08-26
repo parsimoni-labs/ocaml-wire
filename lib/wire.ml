@@ -194,8 +194,8 @@ let parse_codec_typ codec_decode fixed_size min_size size_of buf off len =
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
    decode paths agree on an unlisted code. *)
-let check_enum_membership ~at ~closed cases v =
-  if closed then Types.check_enum_decode ~at ~cases v
+let check_enum_membership ~at ~closed ~base cases v =
+  if closed then Types.check_enum_decode ~at ~cases (Types.int_of_exn base v)
 
 (* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
    is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key
@@ -332,7 +332,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
-      check_enum_membership ~at:off ~closed cases v;
+      check_enum_membership ~at:off ~closed ~base cases v;
       (v, off')
   | Codec { codec_decode; codec_fixed_size; codec_min_size; codec_size_of; _ }
     ->
@@ -839,7 +839,8 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       done
   | Enum { name; base; cases; closed } ->
       if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
+          (Types.int_of_exn base v);
       encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
@@ -981,7 +982,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       encode_direct inner buf off v
   | Enum { name; base; cases; closed } ->
       if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
+          (Types.int_of_exn base v);
       encode_direct base buf off v
   | Codec { codec_encode; _ } -> codec_encode v Types.unbound_eval_ctx buf off
   | _ -> encode_via_writer typ buf off v

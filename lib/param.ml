@@ -4,11 +4,11 @@ type ('a, 'k) t = ('a, 'k) Types.param_handle
 
 let pp ppf (p : (_, _) t) = Fmt.string ppf p.Types.name
 
-(* Per-typ converter from the OCaml representation to [int] and back. One
-   match dispatches both directions; [to_int] and [of_int] just project
-   the relevant field. Avoids drift between the parallel cases. *)
-type 'a int_cvt = { fwd : 'a -> int; bwd : int -> 'a }
-
+(* Reading a bound value as the [int] an environment slot holds. The other
+   direction is [Types.of_int], shared with every other integer view of a type;
+   this one stays separate because a parameter that does not fit the native int
+   is a caller error [bind] reports as [Invalid_argument], not the malformed
+   input the decode-path conversion raises a parse error on. *)
 exception Unfittable_native_int
 
 let id_counter = Atomic.make 0
@@ -18,54 +18,36 @@ let optint_to_int to_int value =
   | value -> value
   | exception (Failure _ | Invalid_argument _) -> raise Unfittable_native_int
 
-let rec int_cvt : type a. a Types.typ -> a int_cvt =
- fun typ ->
-  let id : 'a int_cvt = { fwd = (fun v -> v); bwd = (fun v -> v) } in
+let rec to_int : type a. a Types.typ -> a -> int =
+ fun typ v ->
   match typ with
-  | Uint8 -> id
-  | Uint16 _ -> id
-  | Uint_var _ -> { fwd = optint_to_int UInt63.to_int; bwd = UInt63.of_int }
-  | Uint32 _ -> { fwd = optint_to_int UInt32.to_int; bwd = UInt32.of_int }
-  | Uint64 _ ->
-      {
-        fwd = (fun v -> UInt64.to_int_opt v |> Option.value ~default:max_int);
-        bwd = UInt64.of_int;
-      }
-  | Int8 -> id
-  | Int16 _ -> id
-  | Int32 _ -> { fwd = SInt32.to_int; bwd = SInt32.of_int }
-  | Int64 _ -> { fwd = Int64.to_int; bwd = Int64.of_int }
+  | Uint8 -> v
+  | Uint16 _ -> v
+  | Uint_var _ -> optint_to_int UInt63.to_int v
+  | Uint32 _ -> optint_to_int UInt32.to_int v
+  | Uint64 _ -> UInt64.to_int_opt v |> Option.value ~default:max_int
+  | Int8 -> v
+  | Int16 _ -> v
+  | Int32 _ -> SInt32.to_int v
+  | Int64 _ -> Int64.to_int v
   | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
   | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
-  | Bits _ -> id
-  | Enum { base; _ } -> int_cvt base
-  | Where { inner; _ } -> int_cvt inner
-  | Single_elem { elem; _ } -> int_cvt elem
-  | Map { inner; encode; decode; _ } ->
-      let c = int_cvt inner in
-      { fwd = (fun v -> c.fwd (encode v)); bwd = (fun v -> decode (c.bwd v)) }
-  | Apply { typ; _ } -> int_cvt typ
+  | Bits _ -> v
+  | Enum { base; _ } -> to_int base v
+  | Where { inner; _ } -> to_int inner v
+  | Single_elem { elem; _ } -> to_int elem v
+  | Map { inner; encode; _ } -> to_int inner (encode v)
+  | Apply { typ; _ } -> to_int typ v
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
   | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
   | Repeat _ ->
       invalid_arg "Param: unsupported parameter type"
 
-let to_int typ v = (int_cvt typ).fwd v
-let of_int typ v = (int_cvt typ).bwd v
-
-let rec is_int_representable : type a. a Types.typ -> bool = function
-  | Types.Uint8 | Types.Uint16 _ | Types.Uint_var _ | Types.Uint32 _
-  | Types.Uint64 _ | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _
-  | Types.Bits _ ->
-      true
-  | Types.Enum { base; _ } -> is_int_representable base
-  | Types.Map { inner; _ } -> is_int_representable inner
-  | Types.Where { inner; _ } -> is_int_representable inner
-  | _ -> false
+let of_int = Types.of_int
 
 let check_typ name typ =
-  if not (is_int_representable typ) then
+  if not (Types.is_int_representable typ) then
     Fmt.invalid_arg "Param.%s: only integer-representable types are supported"
       name
 

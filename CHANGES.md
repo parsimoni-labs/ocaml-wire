@@ -49,6 +49,12 @@
 
 ### Changed
 
+- `Wire.enum`, `Wire.enum_open`, `Wire.variants`, `Wire.lookup` and `Wire.bit`
+  accept any integer-valued base, not only one that decodes to a native `int`.
+  An enum, variant mapping, lookup table or flag can now sit over `uint32`,
+  `int32` or `uint64` as readily as over `uint8`, and projects to EverParse the
+  same way (#328, @samoht)
+
 - **Breaking:** `uint64` and `uint64be` decode to an abstract `Wire.UInt64.t`
   rather than `int64`, so an unsigned field can no longer be read where a signed
   one is expected. Convert with `Wire.UInt64.to_int64` and build with
