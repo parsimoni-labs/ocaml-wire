@@ -8365,6 +8365,76 @@ let test_repeat_validate_allocation_is_bounded () =
   report_span_failures "validate allocation scales with a repeat's budget"
     failures
 
+(* A sub-codec as a plain field runs the sub-codec's own validator, so the
+   record never reaches the heap. Reaching the same sub-codec through a
+   container -- an [array] of them, a [nested] region holding one, a casetype
+   case body -- has to cost the same: a container has nothing of its own to
+   build, so whatever it turns over is the record [Codec.validate] exists not
+   to build. Measured against the same sub-codec as a plain field rather than
+   against a fixed number, so what is pinned is the shape and not this codec's
+   own cost. *)
+let container_elem_codec =
+  Codec.v "ContainerElem"
+    (fun a b -> (a, b))
+    Codec.
+      [
+        ( Field.v "a" uint8 ~self_constraint:(fun r -> Expr.(r <> int 0))
+        $ fun (a, _) -> a );
+        (Field.v "b" uint8 $ fun (_, b) -> b);
+      ]
+
+(* Tag 1 selects the sub-codec body; the second case is there so the tag is
+   dispatched rather than assumed. Neither [inject] allocates, so what the
+   measurement sees is the container and not the case's own injection. *)
+let container_case_typ =
+  casetype "ContainerCase" uint8
+    [
+      case ~index:1 (codec container_elem_codec) ~inject:Fun.id
+        ~project:(fun v -> Some v);
+      case ~index:2 uint16be
+        ~inject:(fun v -> (v lsr 8, v land 0xff))
+        ~project:(fun (a, b) -> Some ((a lsl 8) lor b));
+    ]
+
+let container_words name typ buf =
+  let c = Codec.v name Fun.id Codec.[ Field.v "x" typ $ Fun.id ] in
+  words_per_call ~iters:5000 (fun () -> Codec.validate c buf 0)
+
+let test_container_subcodec_validate_no_alloc () =
+  skip_unless_gc_counters ();
+  let ones n = Bytes.make n '\001' in
+  let direct = container_words "Direct" (codec container_elem_codec) (ones 2) in
+  let failures =
+    List.fold_left
+      (fun acc (name, words) ->
+        if words <> direct then
+          Fmt.str
+            "a sub-codec through %s costs %d words a validate where the same \
+             sub-codec as a field costs %d"
+            name words direct
+          :: acc
+        else acc)
+      []
+      [
+        ( "an array of 4",
+          container_words "ArrayOf4"
+            (array ~len:(int 4) (codec container_elem_codec))
+            (ones 8) );
+        ( "an array of 32",
+          container_words "ArrayOf32"
+            (array ~len:(int 32) (codec container_elem_codec))
+            (ones 64) );
+        ( "a nested region",
+          container_words "NestedOne"
+            (nested ~size:(int 2) (codec container_elem_codec))
+            (ones 2) );
+        ( "a casetype case body",
+          container_words "CaseBody" container_case_typ (ones 3) );
+      ]
+  in
+  report_span_failures "a container decodes a sub-codec validate only checks"
+    failures
+
 (* A closed [enum] checks membership once per decoded element, and both sides of
    that cost are the sender's: the element count comes from the byte budget, and
    a protocol enum names as many codes as it likes. Validating a repeat of them
@@ -9495,6 +9565,9 @@ let suite =
       Alcotest.test_case
         "validate: allocation does not scale with an enum's cases" `Quick
         test_enum_element_validate_allocation_is_bounded;
+      Alcotest.test_case
+        "validate: a sub-codec in a container costs what it costs as a field"
+        `Quick test_container_subcodec_validate_no_alloc;
       Alcotest.test_case
         "validate: a checked param-free codec allocates nothing" `Quick
         test_validate_checked_no_param_no_alloc;
