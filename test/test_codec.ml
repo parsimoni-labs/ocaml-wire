@@ -3020,8 +3020,8 @@ let test_map_inherits_exact_width () =
    narrow ones in a plain [int], which holds far more than the field does, so
    nothing but a runtime check stands between a caller's 0x1FF and an 0xFF on
    the wire that reads back as a perfectly legal 255. The signed ones accept
-   exactly what their decoder produces, [-2^(n-1) .. 2^(n-1) - 1]: 200 into an
-   [int8] is refused rather than round-tripped back as -56. *)
+   exactly what their decoder produces, [-2^(n-1) .. 2^(n-1) - 1]: 40000 into
+   an [int16] is refused rather than round-tripped back as -25536. *)
 let scalar_range_codec name typ =
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   (Codec.v name Fun.id Codec.[ cf ], cf)
@@ -3087,11 +3087,12 @@ let test_encode_exact_signed_scalar () =
           ~equal:Int.equal ~pp:Fmt.int
           ~inside:[ -limit; limit - 1 ]
           ~outside:[ limit; -limit - 1 ])
-    (* [int32] is absent on purpose: its carrier is {!SInt32.t}, whose
-       constructors refuse an out-of-range number, so there is no such value to
-       hand the encoder. [test_sint32_of_int_range] pins that refusal instead,
-       one step earlier than this check can reach. *)
-    [ ("int8", 8, int8); ("int16", 16, int16); ("int16be", 16, int16be) ]
+    (* [int8] and [int32] are absent on purpose: their carriers, {!SInt8.t}
+       and {!SInt32.t}, refuse an out-of-range number, so there is no such
+       value to hand the encoder. [test_sint32_of_int_range] and the [sint8]
+       suite pin those refusals instead, one step earlier than this check can
+       reach. *)
+    [ ("int16", 16, int16); ("int16be", 16, int16be) ]
 
 (* The signed 32-bit range is enforced where the value is built rather than
    where it is written, so a number the field cannot hold never becomes an

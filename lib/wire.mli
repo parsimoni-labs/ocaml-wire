@@ -383,6 +383,13 @@ module SInt32 = SInt32
     value read with the wrong signedness is a silent misparse rather than a type
     error. *)
 
+module SInt8 = SInt8
+(** Signed 8-bit integers, the carrier of {!int8}.
+
+    A [private int], so a value reads as the [int] it is; only building one
+    names the range, and [SInt8.v 200] is refused there rather than at the
+    encoder. *)
+
 module Field : sig
   type 'a t
   (** A named field carrying values of type ['a]. *)
@@ -584,10 +591,12 @@ val uint64be : UInt64.t typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as an OCaml
     64-bit integer. *)
 
-val int8 : int typ
-(** Signed 8-bit two's-complement integer. Encodes [-128] to [127]: [200] is not
+val int8 : SInt8.t typ
+(** Signed 8-bit two's-complement integer. Holds [-128] to [127]: [200] is not
     an [int8], even though its low byte is a legal one, and would come back from
-    the decoder as [-56]. *)
+    the decoder as [-56]. The range is the carrier's, so {!SInt8.v} refuses it
+    where the value is built and every encode path takes only values the byte
+    holds. *)
 
 val int16 : int typ
 (** Signed 16-bit little-endian integer. Encodes [-32768] to [32767]. *)

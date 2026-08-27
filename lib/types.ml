@@ -170,7 +170,7 @@ and _ typ =
   | Uint16 : endian -> int typ
   | Uint32 : endian -> UInt32.t typ
   | Uint64 : endian -> UInt64.t typ (* boxed, for full 64-bit *)
-  | Int8 : int typ
+  | Int8 : SInt8.t typ
   | Int16 : endian -> int typ
   | Int32 : endian -> SInt32.t typ
   | Int64 : endian -> int64 typ
@@ -554,7 +554,7 @@ let rec int_of : type a. a typ -> a -> int option =
      host. *)
   | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
   | Uint64 _ -> UInt64.to_int_opt v
-  | Int8 -> Some v
+  | Int8 -> Some (SInt8.to_int v)
   | Int16 _ -> Some v
   | Int32 _ -> SInt32.to_int_opt v
   | Int64 _ -> Int64.unsigned_to_int v
@@ -609,7 +609,7 @@ let rec int_of_exn : type a. a typ -> a -> int =
       match UInt64.to_int_opt v with
       | Some n -> n
       | None -> int_overflow (UInt64.to_int64 v))
-  | Int8 -> v
+  | Int8 -> SInt8.to_int v
   | Int16 _ -> v
   | Int32 _ -> (
       match SInt32.to_int_opt v with
@@ -643,7 +643,7 @@ let rec of_int : type a. a typ -> int -> a =
   | Uint_var _ -> UInt63.of_int n
   | Uint32 _ -> UInt32.of_int n
   | Uint64 _ -> UInt64.of_int n
-  | Int8 -> n
+  | Int8 -> SInt8.v n
   | Int16 _ -> n
   | Int32 _ -> SInt32.of_int n
   | Int64 _ -> Int64.of_int n
@@ -1502,7 +1502,7 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Uint16 _ -> Pack_expr (Int k)
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
-  | Int8 -> Pack_expr (Int k)
+  | Int8 -> Pack_expr (Int (SInt8.to_int k))
   | Int16 _ -> Pack_expr (Int k)
   | Int32 _ -> Pack_expr (Int (int32_case_index k))
   | Bits _ -> Pack_expr (Int k)
@@ -2123,10 +2123,6 @@ let set_uint16_le buf off v =
 let set_uint16_be buf off v =
   check_unsigned_encode ~bits:16 v;
   Bytes.set_uint16_be buf off v
-
-let set_int8 buf off v =
-  check_signed_encode ~bits:8 v;
-  Bytes.set_int8 buf off v
 
 let set_int16_le buf off v =
   check_signed_encode ~bits:16 v;

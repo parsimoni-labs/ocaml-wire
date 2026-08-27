@@ -167,8 +167,8 @@ let above_bit_width width =
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
 
 (* The signed counterpart, drawn from both ends: a signed [width]-bit field
-   holds [-2^(width-1) .. 2^(width-1) - 1], so 200 into an [int8] is as
-   unrepresentable as -200 even though its low byte is a legal one. *)
+   holds [-2^(width-1) .. 2^(width-1) - 1], so 40000 into an [int16] is as
+   unrepresentable as -40000 even though its low two bytes are legal ones. *)
 let outside_signed_width width =
   let limit = 1 lsl (width - 1) in
   Alcobar.map
@@ -265,6 +265,14 @@ let scalar_sint32 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt32.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
+(* [int8] is carried in a [Wire.SInt8.t], whose only constructor refuses a
+   number the byte cannot hold: every value of it is a legal signed 8-bit field,
+   so there is no hostile value to draw and no guard for one to exercise. Same
+   reasoning as [scalar_sint32]. *)
+let scalar_sint8 typ size value_gen boundaries =
+  leaf ~equal:Wire.SInt8.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
 (* [uint32] is carried in a [Wire.UInt32.t], whose only constructors are the
    4-byte pattern and a checked [of_int]: every value of it is a legal unsigned
    32-bit field, so there is no hostile value to draw and no guard for one to
@@ -283,7 +291,7 @@ let u32_boundaries =
 let u64_boundaries_i64 =
   Int64.[ zero; one; of_int 0xFFFF_FFFF; max_int; min_int; -1L; sub max_int 1L ]
 
-let s8_boundaries = [ -128; -1; 0; 1; 127 ]
+let s8_boundaries = List.map Wire.SInt8.v [ -128; -1; 0; 1; 127 ]
 let s16_boundaries = [ -0x8000; -1; 0; 1; 0x7FFF ]
 
 let s32_boundaries =
@@ -314,10 +322,8 @@ let u64_value_gen = Alcobar.map Alcobar.[ Alcobar.int64 ] Wire.UInt64.of_int64
 let u64_boundaries = List.map Wire.UInt64.of_int64 u64_boundaries_i64
 let uint64 = scalar_uint64 Wire.uint64 8 u64_value_gen u64_boundaries
 let uint64be = scalar_uint64 Wire.uint64be 8 u64_value_gen u64_boundaries
-
-let int8 =
-  scalar_int ~hostile:(outside_signed_width 8) Wire.int8 1 Alcobar.int8
-    s8_boundaries
+let s8_value_gen = Alcobar.map Alcobar.[ Alcobar.int8 ] Wire.SInt8.v
+let int8 = scalar_sint8 Wire.int8 1 s8_value_gen s8_boundaries
 
 let int16 =
   scalar_int ~hostile:(outside_signed_width 16) Wire.int16 2 Alcobar.int16
@@ -5597,12 +5603,14 @@ let signed_slice_semantic_codec () =
     {
       codec;
       typ = Wire.codec codec;
-      positive = Alcobar.const ((0, slice_of_string ""), Bytes.of_string "\000");
+      positive =
+        Alcobar.const
+          ((Wire.SInt8.v 0, slice_of_string ""), Bytes.of_string "\000");
       random = bytes_any;
       adversarial = bytes_any;
       equal =
         (fun (l1, s1) (l2, s2) ->
-          Int.equal l1 l2
+          Wire.SInt8.equal l1 l2
           && String.equal (string_of_slice s1) (string_of_slice s2));
       env = None;
       fields = [];

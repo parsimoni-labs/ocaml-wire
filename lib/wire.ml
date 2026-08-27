@@ -263,7 +263,7 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
   | Uint64 Little -> parse_fixed 8 UInt64.le buf off len
   | Uint64 Big -> parse_fixed 8 UInt64.be buf off len
-  | Int8 -> parse_fixed 1 Bytes.get_int8 buf off len
+  | Int8 -> parse_fixed 1 SInt8.get buf off len
   | Int16 Little -> parse_fixed 2 Bytes.get_int16_le buf off len
   | Int16 Big -> parse_fixed 2 Bytes.get_int16_be buf off len
   | Int32 Little -> parse_fixed 4 int32_le buf off len
@@ -652,7 +652,7 @@ let[@inline] write_byte enc b =
 
 let[@inline] write_int8 enc v =
   ensure enc 1;
-  Bytes.set_int8 enc.o enc.o_next v;
+  SInt8.set enc.o enc.o_next v;
   enc.o_next <- enc.o_next + 1
 
 let[@inline] write_int16_le enc v =
@@ -746,9 +746,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Uint32 Big -> write_uint32_be enc v
   | Uint64 Little -> write_int64_le enc (UInt64.to_int64 v)
   | Uint64 Big -> write_int64_be enc (UInt64.to_int64 v)
-  | Int8 ->
-      Types.check_signed_encode ~bits:8 v;
-      write_int8 enc v
+  | Int8 -> write_int8 enc v
   | Int16 Little ->
       Types.check_signed_encode ~bits:16 v;
       write_int16_le enc v
@@ -1015,6 +1013,7 @@ let pp_value (type r) (c : r Codec.t) ppf (v : r) =
 
 module UInt64 = UInt64
 module SInt32 = SInt32
+module SInt8 = SInt8
 module Ascii = Ascii
 
 module Private = struct

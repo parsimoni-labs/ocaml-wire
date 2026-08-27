@@ -118,12 +118,14 @@ let test_byte_slice_zero () =
 
 let test_int8_negative () =
   let buf = Bytes.of_string "\xFE" in
-  Alcotest.(check int) "-2" (-2) (of_bytes_exn int8 buf)
+  Alcotest.(check int) "-2" (-2) (SInt8.to_int (of_bytes_exn int8 buf))
 
 let test_int8_full_range () =
   for i = -128 to 127 do
-    let s = to_string int8 i in
-    Alcotest.(check int) (Fmt.str "%d" i) i (of_string_exn int8 s)
+    let s = to_string int8 (SInt8.v i) in
+    Alcotest.(check int)
+      (Fmt.str "%d" i) i
+      (SInt8.to_int (of_string_exn int8 s))
   done
 
 (* [of_reader] on a value with no fixed wire size accumulates slices and retries

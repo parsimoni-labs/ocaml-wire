@@ -175,8 +175,8 @@ val check_unsigned_encode : bits:int -> int -> unit
 val check_signed_encode : bits:int -> int -> unit
 (** Check an integer fits a signed [bits]-wide field before encoding it. The
     accepted range is [[-2^(bits-1), 2^(bits-1) - 1]]: the decoder produces
-    exactly that, so [200] into an {!val-int8} is refused rather than
-    round-tripping back as [-56]. Same narrow-target narrowing as
+    exactly that, so [40000] into an {!val-int16} is refused rather than
+    round-tripping back as [-25536]. Same narrow-target narrowing as
     {!check_unsigned_encode}. *)
 
 (** {2 Checked scalar writers}
@@ -193,9 +193,6 @@ val set_uint16_le : bytes -> int -> int -> unit
 
 val set_uint16_be : bytes -> int -> int -> unit
 (** [set_uint16_be buf off v] writes [v] as two unsigned big-endian bytes. *)
-
-val set_int8 : bytes -> int -> int -> unit
-(** [set_int8 buf off v] writes [v] as one signed byte. *)
 
 val set_int16_le : bytes -> int -> int -> unit
 (** [set_int16_le buf off v] writes [v] as two signed little-endian bytes. *)
@@ -278,7 +275,9 @@ and _ typ =
   | Uint64 : endian -> UInt64.t typ
       (** 64-bit unsigned. Carried by {!UInt64.t}, which orders as an unsigned
           number; [int64] would rank the largest value below 1. *)
-  | Int8 : int typ  (** 8-bit signed. *)
+  | Int8 : SInt8.t typ
+      (** 8-bit signed. Carried by {!SInt8.t}, whose range is the field's: a
+          number the byte cannot hold is refused where it is built. *)
   | Int16 : endian -> int typ  (** 16-bit signed. *)
   | Int32 : endian -> SInt32.t typ
       (** 32-bit signed. Carried by {!SInt32.t}, which holds the full range on
@@ -595,7 +594,7 @@ val uint64 : UInt64.t typ
 val uint64be : UInt64.t typ
 (** 64-bit unsigned, big-endian. *)
 
-val int8 : int typ
+val int8 : SInt8.t typ
 (** 8-bit signed two's-complement integer. *)
 
 val int16 : int typ
