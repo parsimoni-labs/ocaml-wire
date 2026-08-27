@@ -173,20 +173,23 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
-let parse_codec_typ codec_decode fixed_size min_size size_of buf off len =
+let parse_codec_typ codec_decode fixed_size min_size typ buf off len =
   (* A variable-size codec computes its span by reading length / gate fields
      from the buffer. Those reads bound-check themselves against the buffer,
      which inside a nested region holds more than this parse was handed, so
      demand the codec's mandatory extent from the region first: a region too
      short to carry the length fields then reports their shortfall instead of a
-     span sized from bytes outside it. A misuse in the size expression, or an
-     exception from a user [map] callback, reaches the caller unchanged. *)
+     span sized from bytes outside it. That closes off every length field the
+     codec always carries, but not one the data puts wherever a preceding span
+     ends, so hand the region's end to the size walk as well. A misuse in the
+     size expression, or an exception from a user [map] callback, reaches the
+     caller unchanged. *)
   let sz =
     match fixed_size with
     | Some n -> n
     | None ->
         check_eof len ~off ~n:min_size;
-        size_of buf off
+        Codec.elem_size_within typ Types.unbound_eval_ctx buf off ~input_end:len
   in
   check_span len ~off ~n:sz;
   (codec_decode buf off, off + sz)
@@ -334,13 +337,10 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
       let v, off' = parse_direct base buf off len in
       check_enum_membership ~at:off ~closed ~base cases v;
       (v, off')
-  | Codec { codec_decode; codec_fixed_size; codec_min_size; codec_size_of; _ }
-    ->
+  | Codec { codec_decode; codec_fixed_size; codec_min_size; _ } ->
       parse_codec_typ
         (codec_decode Types.unbound_eval_ctx)
-        codec_fixed_size codec_min_size
-        (codec_size_of Types.unbound_eval_ctx)
-        buf off len
+        codec_fixed_size codec_min_size typ buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
   | Optional { present; inner } ->
@@ -571,9 +571,13 @@ let rec scratch_fill s reader target =
   s.filled >= target || (scratch_read s reader && scratch_fill s reader target)
 
 (* How far to read before retrying a parse that ran short. [expected] is what
-   the value needed and [got] what was left where it starts, so the shortfall is
-   the difference; never less than one byte, or a hint of zero would spin. *)
-let retry_target s ~expected ~got = s.filled + max 1 (expected - got)
+   the read needed and [got] what was already there, so [at] plus the shortfall
+   between them is where that read ends; never less than one byte past what is
+   buffered, or a hint of zero would spin. Taking the end from [at] rather than
+   from what is buffered matters for a read the data places: it can start past
+   everything read so far, and then nothing but [at] says how far ahead the
+   shortfall lies. *)
+let retry_target s ~at ~expected ~got = max (s.filled + 1) (at + expected - got)
 
 (* First NUL at or after [i] among the buffered bytes, or [-1] for none. *)
 let rec nul_at s i =
@@ -626,7 +630,8 @@ let of_reader_incremental typ reader =
            chasing it is not an error. *)
         | Unexpected_eof { expected; got } ->
             ignore
-              (scratch_fill s reader (retry_target s ~expected ~got) : bool);
+              (scratch_fill s reader (retry_target s ~at:e.at ~expected ~got)
+                : bool);
             if s.filled > before then loop () else give_up e
         | _ -> give_up e)
   in

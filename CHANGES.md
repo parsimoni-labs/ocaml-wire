@@ -168,6 +168,10 @@
   its length, at the top level or inside a codec: a 64 KiB string arriving one
   byte at a time took 1.7 s and now takes a millisecond (#331, @samoht)
 
+- `Wire.nested` now sizes a value from the region's own bytes even when the
+  length field it depends on sits past the region: the end-of-input it reports
+  no longer counts bytes the parse was never handed (#332, @samoht)
+
 - A value with no fixed wire size read through `Wire.of_reader` no longer costs
   time and memory quadratic in its length. The reader rebuilt the whole
   accumulated buffer and re-parsed it from offset zero after every slice, so a

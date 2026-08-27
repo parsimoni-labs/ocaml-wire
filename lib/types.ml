@@ -30,17 +30,37 @@ type bindings = { param : string -> int; set_param : string -> int -> unit }
 (* The buffer travels as its own argument rather than inside the context, so
    the parameter-free hot path is the constant constructor [Unbound]. Being a
    constant, it is an immediate: an encode or decode without parameters builds
-   no context block and allocates nothing. *)
-type eval_ctx = Unbound | Bound of bindings
+   no context block and allocates nothing.
+
+   [Within] carries where the bytes a parse was handed stop, which a nested
+   region puts short of the end of the buffer. It is the one context a read has
+   to build, and it is built only once a walk has already overrun its region,
+   so a region that holds what it was given still allocates nothing. *)
+type eval_ctx =
+  | Unbound
+  | Bound of bindings
+  | Within of { input_end : int; inner : eval_ctx }
 
 let unbound_eval_ctx = Unbound
 let eval_ctx ?(set_param = fun _ _ -> ()) param = Bound { param; set_param }
+let eval_ctx_within ~input_end inner = Within { input_end; inner }
 
-let eval_param ctx name =
-  match ctx with Unbound -> 0 | Bound b -> b.param name
+(* The innermost region wins: each one wraps the context its enclosing parse
+   handed down, so the outermost [Within] is the narrowest. *)
+let[@inline] eval_input_end ctx =
+  match ctx with Unbound | Bound _ -> max_int | Within w -> w.input_end
 
-let eval_set_param ctx name value =
-  match ctx with Unbound -> () | Bound b -> b.set_param name value
+let rec eval_param ctx name =
+  match ctx with
+  | Unbound -> 0
+  | Bound b -> b.param name
+  | Within w -> eval_param w.inner name
+
+let rec eval_set_param ctx name value =
+  match ctx with
+  | Unbound -> ()
+  | Bound b -> b.set_param name value
+  | Within w -> eval_set_param w.inner name value
 
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the

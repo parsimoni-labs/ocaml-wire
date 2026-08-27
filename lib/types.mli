@@ -18,6 +18,14 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
+val eval_ctx_within : input_end:int -> eval_ctx -> eval_ctx
+(** [eval_ctx_within ~input_end ctx] is [ctx] with the bytes a read may reach
+    stopping at [input_end], as they do inside a nested region. Internal use. *)
+
+val eval_input_end : eval_ctx -> int
+(** Where the bytes a read may reach stop, or [max_int] when the whole buffer is
+    in play. Internal use. *)
+
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 
