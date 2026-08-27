@@ -77,7 +77,7 @@ val packet_case : int read_case
 val ipv4_case : Wire.UInt32.t read_case
 (** IPv4 source address (uint32be). *)
 
-val tcp_case : int read_case
+val tcp_case : Wire.UInt16.t read_case
 (** TCP destination port (uint16be). *)
 
 val tcp_syn_case : bool read_case

@@ -187,7 +187,7 @@ and bitfield_base = U8 | U16 of endian | U32 of endian
 (* Types *)
 and _ typ =
   | Uint8 : int typ
-  | Uint16 : endian -> int typ
+  | Uint16 : endian -> UInt16.t typ
   | Uint32 : endian -> UInt32.t typ
   | Uint64 : endian -> UInt64.t typ (* boxed, for full 64-bit *)
   | Int8 : SInt8.t typ
@@ -567,7 +567,7 @@ let rec int_of : type a. a typ -> a -> int option =
  fun typ v ->
   match typ with
   | Uint8 -> Some v
-  | Uint16 _ -> Some v
+  | Uint16 _ -> Some (UInt16.to_int v)
   | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
   (* On a narrow-int platform a u32 value may not fit either; the unsigned
      conversion returns [None] exactly then and is identity-exact on a 64-bit
@@ -607,7 +607,7 @@ let rec int_of_exn : type a. a typ -> a -> int =
  fun typ v ->
   match typ with
   | Uint8 -> v
-  | Uint16 _ -> v
+  | Uint16 _ -> UInt16.to_int v
   | Uint_var _ -> (
       if Sys.int_size > 56 then UInt63.to_int v
       else
@@ -659,7 +659,7 @@ let rec of_int : type a. a typ -> int -> a =
  fun typ n ->
   match typ with
   | Uint8 -> n
-  | Uint16 _ -> n
+  | Uint16 _ -> UInt16.v n
   | Uint_var _ -> UInt63.of_int n
   | Uint32 _ -> UInt32.of_int n
   | Uint64 _ -> UInt64.of_int n
@@ -1519,7 +1519,7 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
  fun tag_typ k ->
   match tag_typ with
   | Uint8 -> Pack_expr (Int k)
-  | Uint16 _ -> Pack_expr (Int k)
+  | Uint16 _ -> Pack_expr (Int (UInt16.to_int k))
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int (SInt8.to_int k))
@@ -2096,7 +2096,7 @@ let check_zeroterm_region ~region ~len =
       region
 
 (* An unsigned field of [bits] bits owns exactly those bits, whether it was
-   declared as a fixed-width scalar or as a [bits ~width] slice of one: both are
+   declared as a [uint8] or as a [bits ~width] slice of a wider word: both are
    carried in an OCaml [int], which holds far more than the field does. Masking
    a wider value is the one truncation nothing downstream can catch, because the
    masked result is itself a legal field value that decode, [validate] and the
@@ -2109,33 +2109,27 @@ let check_zeroterm_region ~region ~len =
    range, so the guard narrows to what is still checkable there rather than
    rejecting a value the target can represent.
 
-   The signed widths need nothing here. {!SInt8.t} and {!SInt16.t} carry the
-   field's range in the type, so a value that reaches an encoder is in range by
-   construction; {!SInt32.check_encode} sits next to the representation that
-   decides what fits, as {!UInt32.check_encode} and {!UInt63.check_encode} do on
-   the unsigned side; and [uint64] and [int64] need no guard at all, because an
-   [int64] is exactly the eight bytes written. *)
+   Every fixed-width scalar but [uint8] needs nothing here. {!UInt16.t},
+   {!SInt8.t} and {!SInt16.t} carry the field's range in the type, so a value
+   that reaches an encoder is in range by construction; {!UInt32.check_encode},
+   {!SInt32.check_encode} and {!UInt63.check_encode} sit next to the
+   representation that decides what fits; and [uint64] and [int64] need no guard
+   at all, because an [int64] is exactly the eight bytes written. *)
 let check_unsigned_encode ~bits v =
   let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
   if out_of_range then
     Fmt.invalid_arg
       "Wire.encode: value %d does not fit an unsigned %d-bit field" v bits
 
-(* The range-checking counterparts of [Bytes.set_*]: every wire encode path
-   writes a fixed-width scalar through one of these, because the [Bytes]
-   primitives mask instead ([Bytes.set_uint8 b 0 0x1FF] writes 0xFF). *)
+(* [Bytes.set_uint8] masks rather than refusing ([Bytes.set_uint8 b 0 0x1FF]
+   writes 0xFF), so [uint8] writes through a checked counterpart; the signed
+   32-bit writers stand beside it under the names the encode paths use. Every
+   other fixed-width scalar writes through its own carrier, whose range is
+   already the field's. *)
 
 let set_uint8 buf off v =
   check_unsigned_encode ~bits:8 v;
   Bytes.set_uint8 buf off v
-
-let set_uint16_le buf off v =
-  check_unsigned_encode ~bits:16 v;
-  Bytes.set_uint16_le buf off v
-
-let set_uint16_be buf off v =
-  check_unsigned_encode ~bits:16 v;
-  Bytes.set_uint16_be buf off v
 
 let set_int32_le = SInt32.set_le
 let set_int32_be = SInt32.set_be

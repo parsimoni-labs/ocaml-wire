@@ -17,7 +17,7 @@ let ethernet_payload_size = 40
 type ethernet = {
   dst : Slice.t;
   src : Slice.t;
-  ethertype : int;
+  ethertype : UInt16.t;
   payload : Slice.t;
 }
 
@@ -52,13 +52,13 @@ type ipv4 = {
   ihl : int;
   dscp : int;
   ecn : int;
-  total_length : int;
-  identification : int;
+  total_length : UInt16.t;
+  identification : UInt16.t;
   flags : int;
   fragment_offset : int;
   ttl : int;
   protocol : int;
-  checksum : int;
+  checksum : UInt16.t;
   src : UInt32.t;
   dst : UInt32.t;
   payload : Slice.t;
@@ -178,8 +178,8 @@ let ipv4_size = Codec.wire_size ipv4_codec
 (* -- TCP header: 20 bytes fixed (no options) -- *)
 
 type tcp = {
-  src_port : int;
-  dst_port : int;
+  src_port : UInt16.t;
+  dst_port : UInt16.t;
   seq : UInt32.t;
   ack_num : UInt32.t;
   data_offset : int;
@@ -193,9 +193,9 @@ type tcp = {
   rst : bool;
   syn : bool;
   fin : bool;
-  window : int;
-  checksum : int;
-  urgent_ptr : int;
+  window : UInt16.t;
+  checksum : UInt16.t;
+  urgent_ptr : UInt16.t;
 }
 
 let f_tcp_src_port = Field.v "SrcPort" uint16be
@@ -260,7 +260,12 @@ let tcp_size = Codec.wire_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
 
-type udp = { src_port : int; dst_port : int; length : int; checksum : int }
+type udp = {
+  src_port : UInt16.t;
+  dst_port : UInt16.t;
+  length : UInt16.t;
+  checksum : UInt16.t;
+}
 
 let f_udp_src_port = Field.v "SrcPort" ~doc:"RFC 768: source port" uint16be
 let f_udp_dst_port = Field.v "DstPort" ~doc:"RFC 768: destination port" uint16be

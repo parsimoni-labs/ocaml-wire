@@ -11,7 +11,7 @@
     {[
     open Wire
 
-    type header = { version : int; length : int }
+    type header = { version : int; length : UInt16.t }
 
     let f_version = Field.v "Version" (bits ~width:4 U8)
     let f_length = Field.v "Length" uint16be
@@ -24,13 +24,13 @@
         Codec.[ bf_version; bf_length ]
 
     let buf = Bytes.create (Codec.wire_size codec)
-    let () = Codec.encode codec { version = 1; length = 42 } buf 0
+    let () = Codec.encode codec { version = 1; length = UInt16.v 42 } buf 0
     let get_version = Staged.unstage (Codec.get codec bf_version)
     let () = assert (get_version buf 0 = 1)
 
     let () =
       match Codec.decode codec buf 0 with
-      | Ok h -> assert (h.version = 1 && h.length = 42)
+      | Ok h -> assert (h.version = 1 && UInt16.to_int h.length = 42)
       | Error _ -> assert false
     ]}
 
@@ -101,7 +101,7 @@ module Param : sig
       {[
       open Wire
 
-      type bounded = { len : int; data : Bytesrw.Bytes.Slice.t }
+      type bounded = { len : UInt16.t; data : Bytesrw.Bytes.Slice.t }
 
       let max_len = Param.input "max_len" uint16be
       let out_len = Param.output "out_len" uint16be
@@ -397,6 +397,13 @@ module SInt16 = SInt16
     it is, only building one names the range, and [SInt16.v 40000] is refused
     there rather than at the encoder. *)
 
+module UInt16 = UInt16
+(** Unsigned 16-bit integers, the carrier of {!uint16} and {!uint16be}.
+
+    A [private int] for the same reason {!SInt16} is, over the other two bytes:
+    a value reads as the [int] it is, only building one names the range, and
+    [UInt16.v 70000] is refused there rather than at the encoder. *)
+
 module Field : sig
   type 'a t
   (** A named field carrying values of type ['a]. *)
@@ -574,11 +581,16 @@ end
 val uint8 : int typ
 (** Unsigned 8-bit integer. Encodes [0] to [255]. *)
 
-val uint16 : int typ
-(** Unsigned 16-bit little-endian integer. Encodes [0] to [65535]. *)
+val uint16 : UInt16.t typ
+(** Unsigned 16-bit little-endian integer. Holds [0] to [65535]: [70000] is not
+    a [uint16], even though its low two bytes are legal ones, and would come
+    back from the decoder as [4464]. The range is the carrier's, so {!UInt16.v}
+    refuses it where the value is built and every encode path takes only values
+    the field holds. *)
 
-val uint16be : int typ
-(** Unsigned 16-bit big-endian integer. Encodes [0] to [65535]. *)
+val uint16be : UInt16.t typ
+(** Unsigned 16-bit big-endian integer. Same range and same carrier as
+    {!uint16}. *)
 
 val uint32 : UInt32.t typ
 (** Unsigned 32-bit little-endian integer. Encodes [0] to [2{^32} - 1], and

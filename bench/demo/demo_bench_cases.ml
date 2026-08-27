@@ -448,10 +448,10 @@ let tcp_case =
       set;
       write_template = Bytes.copy tcp_dataset.items.(0);
       write_offset = 0;
-      write_value = 8080;
-      equal = Int.equal;
+      write_value = Wire.UInt16.v 8080;
+      equal = Wire.UInt16.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt16.v;
     }
 
 let tcp_syn_case =
@@ -618,7 +618,7 @@ let verify_nested_write ~label ~set ~get ~equal value () =
 let nested_tcp_dst_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
   let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
-  let value = 8080 in
+  let value = Wire.UInt16.v 8080 in
   {
     label = "Eth->TCP.dst_port (3 layers)";
     run =
@@ -628,19 +628,19 @@ let nested_tcp_dst_write_case =
         set tcp_frame tcp value);
     verify =
       verify_nested_write ~label:"Eth->TCP.dst_port (3 layers)" ~set ~get
-        ~equal:Int.equal value;
+        ~equal:Wire.UInt16.equal value;
   }
 
 let tcp_dst_port_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
   let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
-  let value = 8080 in
+  let value = Wire.UInt16.v 8080 in
   {
     label = "TCP.dst_port (uint16be)";
     run = (fun () -> set tcp_frame tcp_off value);
     verify =
       verify_write_case ~label:"TCP.dst_port (uint16be)" ~template:tcp_frame
-        ~offset:tcp_off ~get ~set ~equal:Int.equal value;
+        ~offset:tcp_off ~get ~set ~equal:Wire.UInt16.equal value;
   }
 
 let nested_tcp_syn_write_case =

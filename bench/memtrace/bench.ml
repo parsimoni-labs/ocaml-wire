@@ -33,7 +33,7 @@ let schema name codec size default make_data =
 (* -- Nested codec schemas for allocation tracking -- *)
 
 (* Codec embed: outer record containing an inner sub-codec *)
-type inner_rec = { tag : int; value : int }
+type inner_rec = { tag : int; value : Wire.UInt16.t }
 type outer_rec = { hdr : int; inner : inner_rec; trail : int }
 
 let inner_codec =
@@ -56,7 +56,9 @@ let outer_codec =
       ]
 
 let outer_size = 5
-let outer_default = { hdr = 0; inner = { tag = 0; value = 0 }; trail = 0 }
+
+let outer_default =
+  { hdr = 0; inner = { tag = 0; value = Wire.UInt16.zero }; trail = 0 }
 
 let outer_data n =
   Array.init n (fun i ->
@@ -68,7 +70,11 @@ let outer_data n =
       b)
 
 (* Optional: record with optional trailing field *)
-type opt_rec = { hdr : int; data : int; fecf : int option }
+type opt_rec = {
+  hdr : Wire.UInt16.t;
+  data : Wire.UInt16.t;
+  fecf : Wire.UInt16.t option;
+}
 
 let opt_codec_present =
   Wire.Codec.v "OptPresent"
@@ -82,7 +88,13 @@ let opt_codec_present =
       ]
 
 let opt_present_size = 6
-let opt_present_default = { hdr = 0; data = 0; fecf = Some 0 }
+
+let opt_present_default =
+  {
+    hdr = Wire.UInt16.zero;
+    data = Wire.UInt16.zero;
+    fecf = Some Wire.UInt16.zero;
+  }
 
 let opt_present_data n =
   Array.init n (fun i ->
@@ -114,7 +126,11 @@ let repeat_default =
   {
     len = 9;
     items =
-      [ { tag = 0; value = 0 }; { tag = 0; value = 0 }; { tag = 0; value = 0 } ];
+      [
+        { tag = 0; value = Wire.UInt16.zero };
+        { tag = 0; value = Wire.UInt16.zero };
+        { tag = 0; value = Wire.UInt16.zero };
+      ];
   }
 
 let repeat_data n =

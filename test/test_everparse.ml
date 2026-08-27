@@ -905,11 +905,11 @@ let test_3d_field_pos_rejected () =
    {!Test_helpers}. *)
 
 type tm_like = {
-  hdr : int;
+  hdr : UInt16.t;
   data_len : int;
   packets : packet list;
   ocf : UInt32.t option;
-  fecf : int option;
+  fecf : UInt16.t option;
 }
 
 let f_tm_data_len = Field.v "DataLen" uint8
@@ -1144,7 +1144,7 @@ let test_3d_bitorder_native_noreorder () =
 
 (* -- Variable-size schema projection -- *)
 
-type dep_frame = { frame_length : int; data : string }
+type dep_frame = { frame_length : UInt16.t; data : string }
 
 let f_frame_length = Field.v "FrameLength" uint16be
 let header_size = 2
@@ -1173,13 +1173,13 @@ let test_3d_dep_size_schema () =
     (contains ~sub:":byte-size (FrameLength - 2)" s)
 
 let test_3d_dep_size_roundtrip () =
-  let original = { frame_length = 7; data = "HELLO" } in
+  let original = { frame_length = UInt16.v 7; data = "HELLO" } in
   let buf = Bytes.create 7 in
   Codec.encode dep_frame_codec original buf 0;
   let decoded = Codec.decode dep_frame_codec buf 0 in
   match decoded with
   | Ok v ->
-      Alcotest.(check int) "frame_length" 7 v.frame_length;
+      Alcotest.(check int) "frame_length" 7 (UInt16.to_int v.frame_length);
       Alcotest.(check string) "data" "HELLO" v.data
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 

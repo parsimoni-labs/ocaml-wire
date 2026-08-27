@@ -22,7 +22,7 @@ let rec to_int : type a. a Types.typ -> a -> int =
  fun typ v ->
   match typ with
   | Uint8 -> v
-  | Uint16 _ -> v
+  | Uint16 _ -> UInt16.to_int v
   | Uint_var _ -> optint_to_int UInt63.to_int v
   | Uint32 _ -> optint_to_int UInt32.to_int v
   | Uint64 _ -> UInt64.to_int_opt v |> Option.value ~default:max_int

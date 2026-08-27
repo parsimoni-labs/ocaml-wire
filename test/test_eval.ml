@@ -10,7 +10,7 @@ let test_int_of () =
   Alcotest.(check (option int)) "uint8" (Some 7) (Eval.int_of Types.uint8 7);
   Alcotest.(check (option int))
     "uint16be" (Some 300)
-    (Eval.int_of Types.uint16be 300);
+    (Eval.int_of Types.uint16be (Wire.UInt16.v 300));
   Alcotest.(check (option int))
     "uint64 small" (Some 42)
     (Eval.int_of Types.uint64be (Wire.UInt64.of_int64 42L));
@@ -43,7 +43,9 @@ let raises_invalid_arg name f =
 
 let test_int_of_exn_ok () =
   Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 7);
-  Alcotest.(check int) "uint16be" 300 (Eval.int_of_exn Types.uint16be 300);
+  Alcotest.(check int)
+    "uint16be" 300
+    (Eval.int_of_exn Types.uint16be (Wire.UInt16.v 300));
   Alcotest.(check int)
     "uint64 small" 42
     (Eval.int_of_exn Types.uint64be (Wire.UInt64.of_int64 42L));

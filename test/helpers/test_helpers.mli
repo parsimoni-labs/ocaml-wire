@@ -2,13 +2,13 @@
 
 open Wire
 
-type inner = { tag : int; value : int }
+type inner = { tag : int; value : UInt16.t }
 
 val f_inner_tag : int Field.t
 (** [f_inner_tag] is the field reference for the inner tag; reused by codecs
     that depend on the parsed tag value. *)
 
-val f_inner_value : int Field.t
+val f_inner_value : UInt16.t Field.t
 (** [f_inner_value] is the field reference for the inner value. *)
 
 val inner_codec : inner Codec.t
@@ -22,7 +22,7 @@ val outer_codec : outer Codec.t
     exercises the [codec] field combinator. *)
 
 type l2 = { x : int }
-type l1 = { inner : l2; y : int }
+type l1 = { inner : l2; y : UInt16.t }
 type l0 = { inner : l1; z : int }
 
 val l2_codec : l2 Codec.t
@@ -35,7 +35,7 @@ val l0_codec : l0 Codec.t
 (** [l0_codec] is the outermost level, embedding {!l1_codec}; exercises
     two-level nesting. *)
 
-type opt_record = { hdr : int; payload : int option; trail : int }
+type opt_record = { hdr : int; payload : UInt16.t option; trail : int }
 
 val opt_codec : present:bool -> opt_record Codec.t
 (** [opt_codec ~present] is a record with an optional middle field; [present]
@@ -56,13 +56,13 @@ val f_cnt_length : int Field.t
 val repeat_codec : container Codec.t
 (** [repeat_codec] is a length-prefixed list of {!type:inner} elements. *)
 
-type packet = { id : int; data : int }
+type packet = { id : int; data : UInt16.t }
 
 val packet_codec : packet Codec.t
 (** [packet_codec] is a fixed-shape packet record reused by TM-frame style
     composition tests. *)
 
-type multi_record = { x : int; y : int }
+type multi_record = { x : UInt16.t; y : UInt16.t }
 
 val multi_record_codec : multi_record Codec.t
 (** [multi_record_codec] is a two-[uint16be]-field record reused by ASCII

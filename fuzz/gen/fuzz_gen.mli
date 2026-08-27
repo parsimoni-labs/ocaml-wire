@@ -244,10 +244,10 @@ val sized_cases : string -> Alcobar.test_case list
 val uint8 : int t
 (** [uint8] generates for {!Wire.uint8}. *)
 
-val uint16 : int t
+val uint16 : Wire.UInt16.t t
 (** [uint16] generates for {!Wire.uint16}. *)
 
-val uint16be : int t
+val uint16be : Wire.UInt16.t t
 (** [uint16be] generates for {!Wire.uint16be}. *)
 
 val uint32 : Wire.UInt32.t t
@@ -385,14 +385,14 @@ val array : int -> 'a t -> 'a list t
 val enum : string -> (string * int) list -> int t
 (** [enum name cases] generates for [Wire.enum name cases Wire.uint8]. *)
 
-val enum_u16be : int t
+val enum_u16be : Wire.UInt16.t t
 (** [enum_u16be] generates for [Wire.enum ... Wire.uint16be]. *)
 
 val enum_open : int t
 (** [enum_open] generates for [Wire.enum_open ... Wire.uint8], accepting
     unlisted values as positives. *)
 
-val enum_open_u16be : int t
+val enum_open_u16be : Wire.UInt16.t t
 (** [enum_open_u16be] generates for [Wire.enum_open ... Wire.uint16be]. *)
 
 val variants_u16be : [ `High | `One | `Zero ] t
@@ -450,12 +450,12 @@ val nan_float64 : float t
 (** [nan_float64] is a single-float codec with [~where:(is_nan f)]; positives
     are NaN bit patterns, non-NaN bytes are rejected. *)
 
-val optional_dynamic : (int * int option) t
+val optional_dynamic : (int * Wire.UInt16.t option) t
 (** [optional_dynamic] is a codec with
     [Field.optional ~present:(ref gate <> 0)]; the payload is present or absent
     depending on the gate byte. *)
 
-val optional_or_dynamic : (int * int) t
+val optional_or_dynamic : (int * Wire.UInt16.t) t
 (** [optional_or_dynamic] is the {!val-optional_or} equivalent of
     {!optional_dynamic}, using a fixed default value when absent. *)
 
@@ -508,7 +508,8 @@ val casetype_u8 : string -> 'a case list -> 'a t
     [Wire.casetype name Wire.uint8 cases]. Positives pick a case uniformly, emit
     its tag byte, and append the inner case's positive bytes. *)
 
-val casetype_u16be_default : [ `A of int | `Other of int * int ] t
+val casetype_u16be_default :
+  [ `A of int | `Other of Wire.UInt16.t * Wire.UInt16.t ] t
 (** [casetype_u16be_default] generates for [Wire.casetype] over a uint16be
     discriminator and a [Wire.default] branch that preserves the matched tag. *)
 

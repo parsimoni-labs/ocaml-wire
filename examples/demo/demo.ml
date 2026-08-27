@@ -35,8 +35,8 @@ let minimal_data n =
 
 type all_ints = {
   u8 : int;
-  u16 : int;
-  u16be : int;
+  u16 : UInt16.t;
+  u16be : UInt16.t;
   u32 : UInt32.t;
   u32be : UInt32.t;
   u64be : UInt64.t;
@@ -64,8 +64,8 @@ let all_ints_size = Codec.wire_size all_ints_codec
 let all_ints_default =
   {
     u8 = 0xFF;
-    u16 = 0x1234;
-    u16be = 0x5678;
+    u16 = UInt16.v 0x1234;
+    u16be = UInt16.v 0x5678;
     u32 = UInt32.of_int 0xDEADBEEF;
     u32be = UInt32.of_int 0xCAFEBABE;
     u64be = UInt64.of_int64 0x0102030405060708L;
@@ -205,11 +205,11 @@ type large_mixed = {
   sync : UInt32.t;
   version : int;
   type_ : int;
-  spacecraft : int;
+  spacecraft : UInt16.t;
   vcid : int;
   count : int;
-  offset : int;
-  length : int;
+  offset : UInt16.t;
+  length : UInt16.t;
   crc : UInt32.t;
   timestamp : UInt64.t;
 }
@@ -254,11 +254,11 @@ let large_mixed_default =
     sync = UInt32.of_int 0x1ACFFC1D;
     version = 2;
     type_ = 0;
-    spacecraft = 0x01FF;
+    spacecraft = UInt16.v 0x01FF;
     vcid = 3;
     count = 66;
-    offset = 16;
-    length = 1024;
+    offset = UInt16.v 16;
+    length = UInt16.v 1024;
     crc = UInt32.of_int 0xDEADBEEF;
     timestamp = UInt64.of_int64 0x0102030405060708L;
   }
@@ -432,7 +432,7 @@ let constrained_data n =
 
 (* -- 12. Lowercase name: exercises filename capitalization -- *)
 
-type lowercase_record = { x : int; y : int }
+type lowercase_record = { x : int; y : UInt16.t }
 
 let lowercase_codec =
   Codec.v "lowercase_record"
@@ -444,7 +444,7 @@ let lowercase_codec =
 
 (* -- 13. Reserved-word field names -- *)
 
-type reserved_fields = { type_ : int; case : int; value : int }
+type reserved_fields = { type_ : int; case : int; value : UInt16.t }
 
 let reserved_fields_codec =
   let f_type = Field.v "type" uint8 in

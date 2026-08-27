@@ -1,6 +1,6 @@
 open Wire
 
-type inner = { tag : int; value : int }
+type inner = { tag : int; value : UInt16.t }
 
 let f_inner_tag = Field.v "Tag" uint8
 let f_inner_value = Field.v "Value" uint16be
@@ -27,7 +27,7 @@ let outer_codec =
       ]
 
 type l2 = { x : int }
-type l1 = { inner : l2; y : int }
+type l1 = { inner : l2; y : UInt16.t }
 type l0 = { inner : l1; z : int }
 
 let l2_codec =
@@ -53,7 +53,7 @@ let l0_codec =
         (Field.v "Z" uint8 $ fun (r : l0) -> r.z);
       ]
 
-type opt_record = { hdr : int; payload : int option; trail : int }
+type opt_record = { hdr : int; payload : UInt16.t option; trail : int }
 
 let opt_codec ~present =
   Codec.v "OptRecord"
@@ -83,7 +83,7 @@ let repeat_codec =
         $ fun (r : container) -> r.items );
       ]
 
-type packet = { id : int; data : int }
+type packet = { id : int; data : UInt16.t }
 
 let packet_codec =
   Codec.v "Packet"
@@ -94,7 +94,7 @@ let packet_codec =
         (Field.v "Data" uint16be $ fun (r : packet) -> r.data);
       ]
 
-type multi_record = { x : int; y : int }
+type multi_record = { x : UInt16.t; y : UInt16.t }
 
 let multi_record_codec =
   Codec.v "MultiRecord"

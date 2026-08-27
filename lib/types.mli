@@ -176,24 +176,20 @@ val check_unsigned_encode : bits:int -> int -> unit
     encode stays inverse to decode; anything else raises [Invalid_argument],
     because masking it would put a different, equally legal, number on the wire
     that no later check can tell from the one the caller meant. Shared by
-    {!val-uint8}, {!val-uint16} and [bits ~width], one rule at three widths.
-    Where the native [int] is no wider than the field the guard narrows to what
-    is still checkable, so it never rejects a value the target can represent. *)
+    {!val-uint8} and [bits ~width], the two shapes still carried in a bare
+    [int]. Where the native [int] is no wider than the field the guard narrows
+    to what is still checkable, so it never rejects a value the target can
+    represent. *)
 
 (** {2 Checked scalar writers}
 
-    The range-checking counterparts of [Bytes.set_*]. Every wire encode path
-    writes a fixed-width scalar through one of these, because the [Bytes]
-    primitives mask silently. *)
+    [Bytes.set_uint8] masks silently, so {!val-uint8} writes through a checked
+    counterpart; the signed 32-bit writers stand beside it under the names the
+    encode paths use. Every other fixed-width scalar writes through its own
+    carrier, whose range is already the field's. *)
 
 val set_uint8 : bytes -> int -> int -> unit
 (** [set_uint8 buf off v] writes [v] as one unsigned byte. *)
-
-val set_uint16_le : bytes -> int -> int -> unit
-(** [set_uint16_le buf off v] writes [v] as two unsigned little-endian bytes. *)
-
-val set_uint16_be : bytes -> int -> int -> unit
-(** [set_uint16_be buf off v] writes [v] as two unsigned big-endian bytes. *)
 
 val set_int32_le : bytes -> int -> SInt32.t -> unit
 (** [set_int32_le buf off v] writes [v] as four signed little-endian bytes. *)
@@ -265,7 +261,9 @@ and bitfield_base = U8 | U16 of endian | U32 of endian
 
 and _ typ =
   | Uint8 : int typ  (** 8-bit unsigned. *)
-  | Uint16 : endian -> int typ  (** 16-bit unsigned. *)
+  | Uint16 : endian -> UInt16.t typ
+      (** 16-bit unsigned. Carried by {!UInt16.t}, whose range is the field's: a
+          number two bytes cannot hold is refused where it is built. *)
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
   | Uint64 : endian -> UInt64.t typ
       (** 64-bit unsigned. Carried by {!UInt64.t}, which orders as an unsigned
@@ -573,10 +571,10 @@ end
 val uint8 : int typ
 (** 8-bit unsigned, native endian. *)
 
-val uint16 : int typ
+val uint16 : UInt16.t typ
 (** 16-bit unsigned, little-endian. *)
 
-val uint16be : int typ
+val uint16be : UInt16.t typ
 (** 16-bit unsigned, big-endian. *)
 
 val uint32 : UInt32.t typ

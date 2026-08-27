@@ -52,7 +52,7 @@ let generate_stream n =
     let o = !off in
     set_apid buf o apid;
     set_seq buf o (i mod 16384);
-    set_dlen buf o (plen - 1);
+    set_dlen buf o (Wire.UInt16.v (plen - 1));
     off := o + hdr + plen;
     payload_total := !payload_total + plen
   done;
@@ -91,7 +91,7 @@ let step ~buf ~total_bytes state () =
   let route = route_of_apid apid in
   Array.unsafe_set state.handler_counts route
     (Array.unsafe_get state.handler_counts route + 1);
-  state.off := o + hdr + dlen + 1
+  state.off := o + hdr + Wire.UInt16.to_int dlen + 1
 
 let state () = { off = ref 0; handler_counts = Array.make n_routes 0 }
 

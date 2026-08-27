@@ -187,11 +187,11 @@ and build_field_encoder_ctx : type a.
         off + 1
   | Uint16 Little ->
       fun _runtime buf off v ->
-        Types.set_uint16_le buf off v;
+        UInt16.set_le buf off v;
         off + 2
   | Uint16 Big ->
       fun _runtime buf off v ->
-        Types.set_uint16_be buf off v;
+        UInt16.set_be buf off v;
         off + 2
   | Uint32 Little ->
       fun _runtime buf off v ->
@@ -330,10 +330,8 @@ let rec build_field_reader_ctx : type a.
  fun typ field_off ->
   match typ with
   | Uint8 -> fun _runtime buf base -> Bytes.get_uint8 buf (base + field_off)
-  | Uint16 Little ->
-      fun _runtime buf base -> Bytes.get_uint16_le buf (base + field_off)
-  | Uint16 Big ->
-      fun _runtime buf base -> Bytes.get_uint16_be buf (base + field_off)
+  | Uint16 Little -> fun _runtime buf base -> UInt16.le buf (base + field_off)
+  | Uint16 Big -> fun _runtime buf base -> UInt16.be buf (base + field_off)
   | Uint32 Little -> fun _runtime buf base -> UInt32.le buf (base + field_off)
   | Uint32 Big -> fun _runtime buf base -> UInt32.be buf (base + field_off)
   | Uint64 Little -> fun _runtime buf base -> UInt64.le buf (base + field_off)
@@ -428,8 +426,8 @@ let rec build_immediate_reader : type a.
   let at base = base + field_off in
   match typ with
   | Uint8 -> Some (fun buf base -> Bytes.get_uint8 buf (at base))
-  | Uint16 Little -> Some (fun buf base -> Bytes.get_uint16_le buf (at base))
-  | Uint16 Big -> Some (fun buf base -> Bytes.get_uint16_be buf (at base))
+  | Uint16 Little -> Some (fun buf base -> UInt16.le buf (at base))
+  | Uint16 Big -> Some (fun buf base -> UInt16.be buf (at base))
   | Uint32 Little -> Some (fun buf base -> UInt32.le buf (at base))
   | Uint32 Big -> Some (fun buf base -> UInt32.be buf (at base))
   | Uint64 Little -> Some (fun buf base -> UInt64.le buf (at base))
@@ -479,8 +477,8 @@ let rec build_immediate_encoder : type a.
         (fun buf off v ->
           Types.set_uint8 buf off v;
           off + 1)
-  | Uint16 Little -> Some (setter_off 2 Types.set_uint16_le)
-  | Uint16 Big -> Some (setter_off 2 Types.set_uint16_be)
+  | Uint16 Little -> Some (setter_off 2 UInt16.set_le)
+  | Uint16 Big -> Some (setter_off 2 UInt16.set_be)
   | Uint32 Little -> Some (setter_off 4 UInt32.set_le)
   | Uint32 Big -> Some (setter_off 4 UInt32.set_be)
   | Uint64 Little -> Some (setter_off 8 UInt64.set_le)
@@ -624,14 +622,17 @@ let populate_uint_var idx reader =
 let populate_int idx reader slots runtime buf base =
   set_int_slot slots idx (reader runtime buf base)
 
-(* [SInt8.t] and [SInt16.t] are native [int]s behind a range, so the slot
-   takes the decoded value unchanged and no platform has a value it cannot
-   hold. *)
+(* [SInt8.t], [SInt16.t] and [UInt16.t] are native [int]s behind a range, so
+   the slot takes the decoded value unchanged and no platform has a value it
+   cannot hold. *)
 let populate_sint8 idx reader slots runtime buf base =
   set_int_slot slots idx (SInt8.to_int (reader runtime buf base))
 
 let populate_sint16 idx reader slots runtime buf base =
   set_int_slot slots idx (SInt16.to_int (reader runtime buf base))
+
+let populate_uint16 idx reader slots runtime buf base =
+  set_int_slot slots idx (UInt16.to_int (reader runtime buf base))
 
 (* Floats store their IEEE 754 bit pattern in the int slot so [Ref name] in a
    constraint sees the value the 3D side sees; a float64 also fills the int64
@@ -658,7 +659,7 @@ let rec build_populate : type a.
  fun typ idx reader ->
   match typ with
   | Uint8 -> populate_int idx reader
-  | Uint16 _ -> populate_int idx reader
+  | Uint16 _ -> populate_uint16 idx reader
   | Int8 -> populate_sint8 idx reader
   | Int16 _ -> populate_sint16 idx reader
   | Int32 _ -> populate_sint32 idx reader
@@ -1453,8 +1454,8 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
  fun typ runtime buf off ->
   match typ with
   | Uint8 -> Bytes.get_uint8 buf off
-  | Uint16 Little -> Bytes.get_uint16_le buf off
-  | Uint16 Big -> Bytes.get_uint16_be buf off
+  | Uint16 Little -> UInt16.le buf off
+  | Uint16 Big -> UInt16.be buf off
   | Uint32 Little -> UInt32.le buf off
   | Uint32 Big -> UInt32.be buf off
   | Uint64 Little -> UInt64.le buf off
@@ -1561,8 +1562,8 @@ let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
  fun typ runtime buf off v ->
   match typ with
   | Uint8 -> Types.set_uint8 buf off v
-  | Uint16 Little -> Types.set_uint16_le buf off v
-  | Uint16 Big -> Types.set_uint16_be buf off v
+  | Uint16 Little -> UInt16.set_le buf off v
+  | Uint16 Big -> UInt16.set_be buf off v
   | Uint32 Little -> UInt32.set_le buf off v
   | Uint32 Big -> UInt32.set_be buf off v
   | Uint64 Little -> UInt64.set_le buf off v

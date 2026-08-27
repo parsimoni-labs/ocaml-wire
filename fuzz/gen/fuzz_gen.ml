@@ -158,10 +158,10 @@ let unlisted_enum_gen ~mask valid =
   in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> step (n land mask) 0)
 
-(* A value with bits set above [width], for any unsigned [width]-bit field:
-   [uint8], [uint16] and [bits ~width] alike. Only the low [width] bits reach
-   the wire, and the masked remainder is itself a legal field value, so encode
-   has to refuse rather than truncate. *)
+(* A value with bits set above [width], for the unsigned [width]-bit fields
+   still carried in a bare [int]: [uint8] and [bits ~width]. Only the low
+   [width] bits reach the wire, and the masked remainder is itself a legal field
+   value, so encode has to refuse rather than truncate. *)
 let above_bit_width width =
   let mask = (1 lsl width) - 1 in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
@@ -254,16 +254,21 @@ let scalar_sint32 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt32.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
-(* [int8] and [int16] are carried in a [Wire.SInt8.t] and a [Wire.SInt16.t],
-   whose only constructor refuses a number the field cannot hold: every value of
-   them is a legal signed field, so there is no hostile value to draw and no
-   guard for one to exercise. Same reasoning as [scalar_sint32]. *)
+(* [int8], [int16] and [uint16] are carried in a [Wire.SInt8.t], a
+   [Wire.SInt16.t] and a [Wire.UInt16.t], whose only constructor refuses a
+   number the field cannot hold: every value of them is a legal field value, so
+   there is no hostile value to draw and no guard for one to exercise. Same
+   reasoning as [scalar_sint32]. *)
 let scalar_sint8 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt8.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
 let scalar_sint16 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt16.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
+let scalar_uint16 typ size value_gen boundaries =
+  leaf ~equal:Wire.UInt16.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
 (* [uint32] is carried in a [Wire.UInt32.t], whose only constructors are the
@@ -275,7 +280,9 @@ let scalar_optint typ size value_gen boundaries =
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
 let u8_boundaries = [ 0; 1; 0x7F; 0x80; 0xFE; 0xFF ]
-let u16_boundaries = [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
+
+let u16_boundaries =
+  List.map Wire.UInt16.v [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
 
 let u32_boundaries =
   List.map Wire.UInt32.of_int
@@ -296,13 +303,9 @@ let uint8 =
   scalar_int ~hostile:(above_bit_width 8) Wire.uint8 1 Alcobar.uint8
     u8_boundaries
 
-let uint16 =
-  scalar_int ~hostile:(above_bit_width 16) Wire.uint16 2 Alcobar.uint16
-    u16_boundaries
-
-let uint16be =
-  scalar_int ~hostile:(above_bit_width 16) Wire.uint16be 2 Alcobar.uint16
-    u16_boundaries
+let u16_value_gen = Alcobar.map Alcobar.[ Alcobar.uint16 ] Wire.UInt16.v
+let uint16 = scalar_uint16 Wire.uint16 2 u16_value_gen u16_boundaries
+let uint16be = scalar_uint16 Wire.uint16be 2 u16_value_gen u16_boundaries
 
 let masked_u32 =
   Alcobar.map
@@ -755,29 +758,30 @@ let exact_cases ~typ ~equal cases =
     adversarial_value = None;
   }
 
-let exact_int typ cases = exact_cases ~typ ~equal:Int.equal cases
 let exact_int64 typ cases = exact_cases ~typ ~equal:Int64.equal cases
 let exact_uint64 typ cases = exact_cases ~typ ~equal:Wire.UInt64.equal cases
 let exact_optint typ cases = exact_cases ~typ ~equal:Wire.UInt32.equal cases
 let exact_sint32 typ cases = exact_cases ~typ ~equal:Wire.SInt32.equal cases
 let exact_sint16 typ cases = exact_cases ~typ ~equal:Wire.SInt16.equal cases
+let exact_uint16 typ cases = exact_cases ~typ ~equal:Wire.UInt16.equal cases
+let u16 = Wire.UInt16.v
 
 let uint16_endian_edges =
-  exact_int Wire.uint16
+  exact_uint16 Wire.uint16
     [
-      (0x0001, bytes_of_octets [ 0x01; 0x00 ]);
-      (0x1234, bytes_of_octets [ 0x34; 0x12 ]);
-      (0x8000, bytes_of_octets [ 0x00; 0x80 ]);
-      (0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
+      (u16 0x0001, bytes_of_octets [ 0x01; 0x00 ]);
+      (u16 0x1234, bytes_of_octets [ 0x34; 0x12 ]);
+      (u16 0x8000, bytes_of_octets [ 0x00; 0x80 ]);
+      (u16 0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
     ]
 
 let uint16be_endian_edges =
-  exact_int Wire.uint16be
+  exact_uint16 Wire.uint16be
     [
-      (0x0001, bytes_of_octets [ 0x00; 0x01 ]);
-      (0x1234, bytes_of_octets [ 0x12; 0x34 ]);
-      (0x8000, bytes_of_octets [ 0x80; 0x00 ]);
-      (0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
+      (u16 0x0001, bytes_of_octets [ 0x00; 0x01 ]);
+      (u16 0x1234, bytes_of_octets [ 0x12; 0x34 ]);
+      (u16 0x8000, bytes_of_octets [ 0x80; 0x00 ]);
+      (u16 0xFFFF, bytes_of_octets [ 0xFF; 0xFF ]);
     ]
 
 let uint32_endian_edges =
@@ -990,9 +994,10 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
     let items_bytes xs =
-      List.fold_left
-        (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
-        0 xs
+      Wire.UInt16.v
+        (List.fold_left
+           (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+           0 xs)
     in
     Wire.Codec.v name
       (fun _ xs -> xs)
@@ -1179,14 +1184,17 @@ let enum_open =
     adversarial_value = None;
   }
 
-let enum_base ~typ ~size name cases =
+(* The case values are written as [int], but the base's carrier is whatever
+   holds them on the wire, so [of_int] lifts a drawn case into it and [equal]
+   compares two of them. *)
+let enum_base ~typ ~size ~of_int ~equal name cases =
   let codec = codec_of_typ (Wire.enum name cases typ) in
   let valid_values = List.map snd cases in
   let value_gen =
     let n = max 1 (List.length valid_values) in
     Alcobar.map
       Alcobar.[ Alcobar.range ~min:0 n ]
-      (fun i -> List.nth valid_values (i mod n))
+      (fun i -> of_int (List.nth valid_values (i mod n)))
   in
   let positive =
     Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode_via_codec codec v))
@@ -1197,14 +1205,18 @@ let enum_base ~typ ~size name cases =
     positive;
     random = bytes_fixed size;
     adversarial = bytes_fixed size;
-    equal = Int.equal;
+    equal;
     env = None;
     fields = [];
     adversarial_value =
-      Some (unlisted_enum_gen ~mask:((1 lsl (size * 8)) - 1) valid_values);
+      Some
+        (Alcobar.map
+           Alcobar.
+             [ unlisted_enum_gen ~mask:((1 lsl (size * 8)) - 1) valid_values ]
+           of_int);
   }
 
-let enum_open_base ~typ ~size name cases =
+let enum_open_base ~typ ~size ~of_int ~equal name cases =
   let typ = Wire.enum_open name cases typ in
   let codec = codec_of_typ typ in
   let max_value =
@@ -1214,7 +1226,7 @@ let enum_open_base ~typ ~size name cases =
     Alcobar.map
       Alcobar.[ Alcobar.int ]
       (fun n ->
-        let v = n land max_value in
+        let v = of_int (n land max_value) in
         (v, encode_via_codec codec v))
   in
   {
@@ -1223,18 +1235,20 @@ let enum_open_base ~typ ~size name cases =
     positive;
     random = bytes_fixed size;
     adversarial = bytes_fixed size;
-    equal = Int.equal;
+    equal;
     env = None;
     fields = [];
     adversarial_value = None;
   }
 
 let enum_u16be =
-  enum_base ~typ:Wire.uint16be ~size:2 "WideCode"
+  enum_base ~typ:Wire.uint16be ~size:2 ~of_int:Wire.UInt16.v
+    ~equal:Wire.UInt16.equal "WideCode"
     [ ("Zero", 0); ("One", 1); ("High", 0xBEEF) ]
 
 let enum_open_u16be =
-  enum_open_base ~typ:Wire.uint16be ~size:2 "OpenWideCode"
+  enum_open_base ~typ:Wire.uint16be ~size:2 ~of_int:Wire.UInt16.v
+    ~equal:Wire.UInt16.equal "OpenWideCode"
     [ ("Zero", 0); ("One", 1); ("High", 0xBEEF) ]
 
 let variants_u16be =
@@ -1365,7 +1379,8 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
 
 let bounded_u16be =
   bounded_int ~inner_typ:Wire.uint16be ~size:2 ~set:Bytes.set_uint16_be
-    ~max_val:0xFFFF ~min:1000 ~max:60000 ~of_int:Fun.id ~equal:Int.equal
+    ~max_val:0xFFFF ~min:1000 ~max:60000 ~of_int:Wire.UInt16.v
+    ~equal:Wire.UInt16.equal
 
 let bounded_u32be =
   bounded_int ~inner_typ:Wire.uint32be ~size:4
@@ -2098,11 +2113,12 @@ let rest_bytes =
   let tail_len = 5 in
   let strategy =
     {
-      positive = (fun env -> Wire.Param.bind total (1 + tail_len) env);
+      positive =
+        (fun env -> Wire.Param.bind total (Wire.UInt16.v (1 + tail_len)) env);
       fuzz =
         Alcobar.map
           Alcobar.[ Alcobar.uint16 ]
-          (fun n env -> Wire.Param.bind total n env);
+          (fun n env -> Wire.Param.bind total (Wire.UInt16.v n) env);
     }
   in
   let positive =
@@ -2282,7 +2298,8 @@ let gate_positive ~present_value ~absent =
   Alcobar.map
     Alcobar.[ Alcobar.bool; Alcobar.uint16 ]
     (fun present v ->
-      if present then (present_value v, gate_on_bytes v) else absent ())
+      if present then (present_value (Wire.UInt16.v v), gate_on_bytes v)
+      else absent ())
 
 (* Dynamic-gate optional: a uint8 [gate] field controls whether a uint16be
    payload is present via [Field.optional ~present:(Field.ref gate <> 0)]. *)
@@ -2299,15 +2316,15 @@ let optional_dynamic =
 let optional_or_dynamic =
   gate_codec "_opt_or_dyn"
     (fun g ->
-      Wire.Field.optional_or "payload" ~present:(gate_present g) ~default:0xCAFE
-        Wire.uint16be)
+      Wire.Field.optional_or "payload" ~present:(gate_present g)
+        ~default:(Wire.UInt16.v 0xCAFE) Wire.uint16be)
     (gate_positive
        ~present_value:(fun v -> (1, v))
        ~absent:(fun () ->
          let buf = Bytes.create 3 in
          Bytes.set_uint8 buf 0 0;
          Bytes.set_uint16_be buf 1 0xCAFE;
-         ((0, 0xCAFE), buf)))
+         ((0, Wire.UInt16.v 0xCAFE), buf)))
 
 (* Present/absent gate, a span of the drawn length, and a zero tail, encoded
    through the codec so the span's length byte and the payload's offset stay
@@ -2325,7 +2342,7 @@ let opt_dyn_span_positive codec =
       let value =
         ( (if present then 1 else 0),
           String.make span_len 'x',
-          (if present then Some v else None),
+          (if present then Some (Wire.UInt16.v v) else None),
           String.make tail_len '\x00' )
       in
       let sz = Wire.Codec.size_of_value codec value in
@@ -2499,7 +2516,7 @@ let casetype_u16be_default =
   let typ =
     Wire.casetype "WideTagged" Wire.uint16be
       [
-        Wire.case ~index:0x0102 Wire.uint8
+        Wire.case ~index:(Wire.UInt16.v 0x0102) Wire.uint8
           ~inject:(fun v -> `A v)
           ~project:(function `A v -> Some v | _ -> None);
         Wire.default Wire.uint16be
@@ -2526,7 +2543,7 @@ let casetype_u16be_default =
               let buf = Bytes.create 4 in
               Bytes.set_uint16_be buf 0 tag;
               Bytes.set_uint16_be buf 2 v;
-              (`Other (tag, v), buf)))
+              (`Other (Wire.UInt16.v tag, Wire.UInt16.v v), buf)))
   in
   {
     codec;
@@ -4292,7 +4309,7 @@ let u16be_size_bytes n =
   Bytes.set_uint16_be b 0 n;
   b
 
-let sized_source name make_len bytes_of_len =
+let sized_source ~of_len name make_len bytes_of_len =
   let len_field = make_len () in
   let data_field =
     Wire.Field.v "Data" (Wire.byte_array ~size:(Wire.Field.ref len_field))
@@ -4307,7 +4324,7 @@ let sized_source name make_len bytes_of_len =
       Alcobar.[ Alcobar.range ~min:0 7 ]
       (fun len ->
         let data = String.make len 'a' in
-        ((len, data), Bytes.cat (bytes_of_len len) (bytes_of_string data)))
+        ((of_len len, data), Bytes.cat (bytes_of_len len) (bytes_of_string data)))
   in
   {
     codec;
@@ -4322,33 +4339,37 @@ let sized_source name make_len bytes_of_len =
   }
 
 let sized_cases group =
-  List.concat_map
-    (fun (slabel, src) -> test_cases (group ^ " " ^ slabel) src)
+  (* The u16be source carries its length in a [Wire.UInt16.t] and the rest in
+     an [int], so the sources cannot sit in one list; each is turned into test
+     cases where its own type is still known. *)
+  let case slabel src = test_cases (group ^ " " ^ slabel) src in
+  List.concat
     [
-      ( "u8",
-        sized_source "U8"
-          (fun () -> Wire.Field.v "Len" Wire.uint8)
-          u8_size_bytes );
-      ( "u16be",
-        sized_source "U16be"
-          (fun () -> Wire.Field.v "Len" Wire.uint16be)
-          u16be_size_bytes );
-      ( "map",
-        sized_source "Map"
-          (fun () ->
-            Wire.Field.v "Len"
-              (Wire.map ~decode:Fun.id ~encode:Fun.id Wire.uint8))
-          u8_size_bytes );
-      ( "optional_or",
-        sized_source "OptOr"
-          (fun () ->
-            Wire.Field.optional_or "Len" ~present:Wire.Expr.true_ ~default:0
-              Wire.uint8)
-          u8_size_bytes );
-      ( "where",
-        sized_source "Where"
-          (fun () -> Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
-          u8_size_bytes );
+      case "u8"
+        (sized_source ~of_len:Fun.id "U8"
+           (fun () -> Wire.Field.v "Len" Wire.uint8)
+           u8_size_bytes);
+      case "u16be"
+        (sized_source ~of_len:Wire.UInt16.v "U16be"
+           (fun () -> Wire.Field.v "Len" Wire.uint16be)
+           u16be_size_bytes);
+      case "map"
+        (sized_source ~of_len:Fun.id "Map"
+           (fun () ->
+             Wire.Field.v "Len"
+               (Wire.map ~decode:Fun.id ~encode:Fun.id Wire.uint8))
+           u8_size_bytes);
+      case "optional_or"
+        (sized_source ~of_len:Fun.id "OptOr"
+           (fun () ->
+             Wire.Field.optional_or "Len" ~present:Wire.Expr.true_ ~default:0
+               Wire.uint8)
+           u8_size_bytes);
+      case "where"
+        (sized_source ~of_len:Fun.id "Where"
+           (fun () ->
+             Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
+           u8_size_bytes);
     ]
 
 (* Drive a freshly generated nested composition per sample: the positive case
@@ -5548,8 +5569,8 @@ let construction_guard_cases label =
             Wire.casetype "BadEnumTag"
               (Wire.enum "BadTag" [ ("A", 0) ] Wire.uint16be)
               [
-                Wire.case ~index:0 Wire.uint8 ~inject:Fun.id ~project:(fun v ->
-                    Some v);
+                Wire.case ~index:(Wire.UInt16.v 0) Wire.uint8 ~inject:Fun.id
+                  ~project:(fun v -> Some v);
               ]));
     const_case (label ^ " repeat empty") (fun () ->
         expect_invalid "repeat empty" (fun () ->

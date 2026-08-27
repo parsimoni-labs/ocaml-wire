@@ -260,8 +260,8 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
   match typ with
   | Uint8 -> parse_fixed 1 Bytes.get_uint8 buf off len
-  | Uint16 Little -> parse_fixed 2 Bytes.get_uint16_le buf off len
-  | Uint16 Big -> parse_fixed 2 Bytes.get_uint16_be buf off len
+  | Uint16 Little -> parse_fixed 2 UInt16.le buf off len
+  | Uint16 Big -> parse_fixed 2 UInt16.be buf off len
   | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
   | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
   | Uint64 Little -> parse_fixed 8 UInt64.le buf off len
@@ -770,12 +770,8 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Uint8 ->
       Types.check_unsigned_encode ~bits:8 v;
       write_byte enc v
-  | Uint16 Little ->
-      Types.check_unsigned_encode ~bits:16 v;
-      write_uint16_le enc v
-  | Uint16 Big ->
-      Types.check_unsigned_encode ~bits:16 v;
-      write_uint16_be enc v
+  | Uint16 Little -> write_uint16_le enc (UInt16.to_int v)
+  | Uint16 Big -> write_uint16_be enc (UInt16.to_int v)
   | Uint32 Little -> write_uint32_le enc v
   | Uint32 Big -> write_uint32_be enc v
   | Uint64 Little -> write_int64_le enc (UInt64.to_int64 v)
@@ -962,10 +958,10 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       Types.set_uint8 buf off v;
       off + 1
   | Uint16 Little ->
-      Types.set_uint16_le buf off v;
+      UInt16.set_le buf off v;
       off + 2
   | Uint16 Big ->
-      Types.set_uint16_be buf off v;
+      UInt16.set_be buf off v;
       off + 2
   | Uint32 Little ->
       UInt32.set_le buf off v;
@@ -1045,6 +1041,7 @@ module UInt64 = UInt64
 module SInt32 = SInt32
 module SInt8 = SInt8
 module SInt16 = SInt16
+module UInt16 = UInt16
 module Ascii = Ascii
 
 module Private = struct

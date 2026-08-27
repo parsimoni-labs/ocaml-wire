@@ -134,11 +134,11 @@ let test_output_param_computed () =
   let buf = Bytes.of_string "\x15" in
   let env = Codec.env c in
   ignore (decode_ok (Codec.decode ~env c buf 0));
-  Alcotest.(check int) "out" 42 (Param.get env out)
+  Alcotest.(check int) "out" 42 (UInt16.to_int (Param.get env out))
 
 (* -- Where clause with params (via Codec) -- *)
 
-type bounded_value = { bv_value : int }
+type bounded_value = { bv_value : UInt16.t }
 
 let test_where_clause_pass () =
   let max_val = Param.input "max_val" uint16be in
@@ -152,9 +152,9 @@ let test_where_clause_pass () =
   in
   (* max_val=100, value=50: passes *)
   let buf = Bytes.of_string "\x00\x32" in
-  let env = Codec.env c |> Param.bind max_val 100 in
+  let env = Codec.env c |> Param.bind max_val (UInt16.v 100) in
   let r = decode_ok (Codec.decode ~env c buf 0) in
-  Alcotest.(check int) "value" 50 r.bv_value
+  Alcotest.(check int) "value" 50 (UInt16.to_int r.bv_value)
 
 let test_where_clause_fail () =
   let max_val = Param.input "max_val" uint16be in
@@ -168,7 +168,7 @@ let test_where_clause_fail () =
   in
   (* max_val=10, value=50: where clause fails *)
   let buf = Bytes.of_string "\x00\x32" in
-  let env = Codec.env c |> Param.bind max_val 10 in
+  let env = Codec.env c |> Param.bind max_val (UInt16.v 10) in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
   | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
@@ -191,7 +191,8 @@ let test_bind_by_name () =
   (* max_val=100 (>= 50): accepts *)
   let env = Codec.env c |> Param.bind_by_name "max_val" 100 in
   Alcotest.(check int)
-    "value" 50 (decode_ok (Codec.decode ~env c buf 0)).bv_value;
+    "value" 50
+    (UInt16.to_int (decode_ok (Codec.decode ~env c buf 0)).bv_value);
   (* max_val=10 (< 50): the where clause fails *)
   let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
   (match Codec.decode ~env c buf 0 with
@@ -200,10 +201,13 @@ let test_bind_by_name () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e);
   (* an unreferenced name is a no-op, not an error *)
   let env =
-    Codec.env c |> Param.bind_by_name "nope" 7 |> Param.bind max_val 100
+    Codec.env c
+    |> Param.bind_by_name "nope" 7
+    |> Param.bind max_val (UInt16.v 100)
   in
   Alcotest.(check int)
-    "ignores unknown name" 50 (decode_ok (Codec.decode ~env c buf 0)).bv_value
+    "ignores unknown name" 50
+    (UInt16.to_int (decode_ok (Codec.decode ~env c buf 0)).bv_value)
 
 (* -- Mixed input + output params (via Codec) -- *)
 

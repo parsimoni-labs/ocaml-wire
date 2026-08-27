@@ -54,7 +54,7 @@ let generate_frames n =
       let o = !data_off in
       set_apid buf o (!total_pkts mod 2048);
       set_seq buf o (!total_pkts mod 16384);
-      set_dlen buf o (pkt_payload - 1);
+      set_dlen buf o (Wire.UInt16.v (pkt_payload - 1));
       data_off := o + pkt_size;
       incr total_pkts
     done;

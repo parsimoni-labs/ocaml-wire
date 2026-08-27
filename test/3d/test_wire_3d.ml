@@ -884,7 +884,7 @@ let e2e_underflow_codec =
    [Casetype], then references the wrapper as the field type. End-to-end
    check that 3d.exe accepts the synthesised module and the generated C
    compiles. *)
-type ep_case_v = [ `U16 of int | `Default of int ]
+type ep_case_v = [ `U16 of Wire.UInt16.t | `Default of int ]
 
 let e2e_casetype_codec =
   let open Wire in
@@ -931,7 +931,7 @@ let e2e_ssh_casetype_codec =
    sub-codec consumes through end-of-buffer -- correct because the
    casetype is constrained to be the last field of its parent. *)
 type session = { recipient : int; rest : string }
-type channel_confirm = Session of session | Tcpip of int
+type channel_confirm = Session of session | Tcpip of Wire.UInt16.t
 
 let session_codec =
   let open Wire in

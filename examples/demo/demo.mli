@@ -29,8 +29,8 @@ val minimal_data : int -> bytes array
 
 type all_ints = {
   u8 : int;
-  u16 : int;
-  u16be : int;
+  u16 : Wire.UInt16.t;
+  u16be : Wire.UInt16.t;
   u32 : Wire.UInt32.t;
   u32be : Wire.UInt32.t;
   u64be : Wire.UInt64.t;
@@ -165,11 +165,11 @@ type large_mixed = {
   sync : Wire.UInt32.t;
   version : int;
   type_ : int;
-  spacecraft : int;
+  spacecraft : Wire.UInt16.t;
   vcid : int;
   count : int;
-  offset : int;
-  length : int;
+  offset : Wire.UInt16.t;
+  length : Wire.UInt16.t;
   crc : Wire.UInt32.t;
   timestamp : Wire.UInt64.t;
 }

@@ -58,6 +58,11 @@
   `Wire.SInt16.to_int`, build one with the range-checked `Wire.SInt16.v`
   (#333, @samoht)
 
+- **Breaking:** `uint16` and `uint16be` decode to `Wire.UInt16.t`, a `private
+  int` whose range is the field's, rather than a native `int`. Read one with
+  `Wire.UInt16.to_int`, build one with the range-checked `Wire.UInt16.v`
+  (#335, @samoht)
+
 - `Wire.enum`, `Wire.enum_open`, `Wire.variants`, `Wire.lookup` and `Wire.bit`
   accept any integer-valued base, not only one that decodes to a native `int`.
   An enum, variant mapping, lookup table or flag can now sit over `uint32`,
