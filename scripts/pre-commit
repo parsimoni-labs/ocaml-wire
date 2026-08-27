@@ -25,10 +25,13 @@ if ! opam exec -- dune build @check >/tmp/git-merlint-hook.log 2>&1; then
   exit 1
 fi
 
-git diff --cached --name-only --diff-filter=ACM -z -- \
-  '*.ml' '*.mli' '*.mll' '*.mly' \
-  | xargs -0 merlint >/tmp/git-merlint-hook.log 2>&1 \
-  || {
-    echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
-    exit 1
-  }
+# Whole project, through the same script CI's lane calls, rather than the
+# staged files: the lane's verdict is one verdict over everything, and a run
+# scoped to the staged files answers a narrower question that has twice come
+# out green under a red lane. It reads the worktree, so a finding parked in a
+# file this commit does not touch surfaces here rather than on the lane.
+# --optional keeps a checkout without merlint installed committable.
+if ! scripts/lint --optional >/tmp/git-merlint-hook.log 2>&1; then
+  echo "merlint failed; see /tmp/git-merlint-hook.log for details" >&2
+  exit 1
+fi

@@ -1,0 +1,56 @@
+#!/bin/sh
+# The project's lint run. CI's merlint lane and scripts/pre-commit both go
+# through here, so what a laptop reports is what the lane reports.
+#
+# Whole project, no file arguments, which is what the lane has always run.
+# Two branches passed a staged-files-only run here and then failed the lane on
+# a finding the narrower scope never asks about, at half an hour a round trip,
+# so there is one scope now and this is it.
+#
+# Not a dune alias: [merlint --build] shells out to [dune build @check], and a
+# dune action that calls dune waits on the build lock its own parent holds,
+# which merlint retries for a minute before giving up.
+
+set -eu
+
+# The tangled overlay carries merlint.dev alone, and its source is the tip of
+# merlint's main branch, so an install without this pin builds whatever landed
+# upstream that morning. CI installs the commit named here. Bump it on purpose,
+# reading what changed, rather than by standing still.
+merlint_commit=2fd9aaff2b3e4703699d5e25e13478b4e715595d
+
+if [ "${1-}" = "--commit" ]; then
+  echo "$merlint_commit"
+  exit 0
+fi
+
+# scripts/pre-commit passes --optional: a checkout without merlint is still a
+# checkout you can commit from. An explicit [make lint] has been asked for a
+# verdict, and reports that it has none.
+optional=false
+if [ "${1-}" = "--optional" ]; then
+  optional=true
+fi
+
+if ! opam exec -- sh -c 'command -v merlint' >/dev/null 2>&1; then
+  cat >&2 <<MSG
+merlint not found. Install the commit this project is linted with:
+  opam repository add tangled \\
+    git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
+  opam pin add -yn merlint \\
+    git+https://tangled.org/gazagnaire.org/merlint#$merlint_commit
+  opam install merlint
+MSG
+  if [ "$optional" = true ]; then
+    exit 0
+  fi
+  exit 1
+fi
+
+# Which linter this run got, next to the one it was meant to get. The two are
+# the same only where the pin was installed, and a verdict from a merlint the
+# project did not pin is a verdict this lane cannot promise.
+echo "merlint $(opam exec -- sh -c 'command -v merlint') \
+version $(opam exec -- merlint --version), pinned $merlint_commit"
+
+exec opam exec -- merlint --build

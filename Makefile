@@ -1,4 +1,4 @@
-.PHONY: build test test-wasm 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+.PHONY: build test test-wasm lint 3d bench bench-demo bench-routing bench-gateway bench-clcw \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -7,6 +7,11 @@ build:
 
 test:
 	dune runtest
+
+# The same run as CI's merlint lane, down to the scope and the linter's
+# commit. scripts/lint holds both.
+lint:
+	scripts/lint
 
 # Runs test/wasm under node with wasm_of_ocaml (31-bit ints), then fails on
 # any integer-overflow truncation warning from wire's own code. optint's two

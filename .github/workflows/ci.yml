@@ -88,12 +88,20 @@ jobs:
       - run: opam install . --deps-only --with-test
       - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
 
-      - run: opam install merlint
+      # The overlay carries merlint.dev alone, and its source is the tip of
+      # merlint's main branch, so an unpinned install changes the rules under
+      # this lane between one run and the next. scripts/lint names the commit
+      # the project is linted with; installing that one is what lets a clean
+      # run on a laptop predict this lane.
+      - run: |
+          opam pin add -y -n merlint \
+            "git+https://tangled.org/gazagnaire.org/merlint#$(scripts/lint --commit)"
+          opam install merlint
 
       # merlint --build runs this itself but reports only the exit code, so
       # run it here first to get the compiler error on its own line.
       - run: opam exec -- dune build @check
-      - run: opam exec -- merlint --build
+      - run: make lint
 
   # Static analysis over the hand-written C. EverParse proves the parsers it
   # generates, but nothing covered the benchmark C written by hand around them,
