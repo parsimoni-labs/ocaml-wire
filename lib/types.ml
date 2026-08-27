@@ -241,8 +241,8 @@ and _ typ =
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
   | Codec : {
       codec_name : string;
-      codec_decode : eval_ctx -> bytes -> int -> 'r;
-      codec_validate : eval_ctx -> bytes -> int -> unit;
+      codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (* Everything [codec_decode] checks, none of what it builds. The
              OCaml counterpart of the call to a nested struct's validator that
              EverParse generates for a sub-struct field: a use site runs the
@@ -258,14 +258,15 @@ and _ typ =
              was given, so a region too short to carry the length fields fails
              on their own extent rather than on a span sized from bytes outside
              it. *)
-      codec_size_of : eval_ctx -> bytes -> int -> int;
+      codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
              than by re-reading the buffer. The buffer-driven [codec_size_of]
              is wrong for variable-size codecs ending in [all_bytes] /
              [rest_bytes] / [all_zeros]: it reads "remaining buffer space",
              not the value's actual tail length. *)
-      codec_field_readers : (string * (eval_ctx -> bytes -> int -> int)) list;
+      codec_field_readers :
+        (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)

@@ -2,9 +2,10 @@
 
    The module is parametric in leaf resolution, so the whole operator table is
    reachable from a [leaves] record built here: no buffer, no int slots and no
-   sealed codec. The three curried context arguments carry an int environment,
-   a 64-bit environment and a field position, which also pins that a leaf reads
-   the context it was given rather than a captured one.
+   sealed codec. The four curried context arguments carry an int environment, a
+   64-bit environment, the size of the value being read and a field position,
+   which also pins that a leaf reads the context it was given rather than a
+   captured one.
 
    What is left to check is the arithmetic itself, the [Eq]/[Ne] refinement
    that picks a compiler from the operand type, and the 64-bit fallback that
@@ -24,25 +25,26 @@ let param name : (Wire.UInt8.t, Types.param_input) Types.param_handle =
     mutable_ = false;
   }
 
-let leaves : (ints, i64s, int) Expr_compiler.leaves =
+let leaves : (ints, i64s, int, int) Expr_compiler.leaves =
   {
-    ref_ = (fun name ints _ _ -> List.assoc name ints);
-    i64 = (fun name _ i64s _ -> List.assoc name i64s);
+    ref_ = (fun name ints _ _ _ -> List.assoc name ints);
+    i64 = (fun name _ i64s _ _ -> List.assoc name i64s);
     param_ref =
-      (fun (Expr_compiler.Pack_param p) ints _ _ ->
+      (fun (Expr_compiler.Pack_param p) ints _ _ _ ->
         List.assoc p.Types.name ints);
     sizeof_typ =
-      (fun (Types.Pack_typ t) _ _ _ ->
+      (fun (Types.Pack_typ t) _ _ _ _ ->
         Option.value ~default:0 (Types.field_wire_size t));
-    sizeof_this = (fun _ _ _ -> 16);
-    field_pos = (fun _ _ pos -> pos);
+    sizeof_this = (fun _ _ size _ -> size);
+    field_pos = (fun _ _ _ pos -> pos);
   }
 
 let ints : ints = [ ("a", 10); ("b", 3); ("limit", 7) ]
 let i64s : i64s = [ ("wide", 0xFFFF_FFFF_FFFF_FFFFL); ("small", 5L) ]
+let size = 16
 let pos = 12
-let eval_int e = Expr_compiler.compile_int leaves e ints i64s pos
-let eval_bool e = Expr_compiler.compile_bool leaves e ints i64s pos
+let eval_int e = Expr_compiler.compile_int leaves e ints i64s size pos
+let eval_bool e = Expr_compiler.compile_bool leaves e ints i64s size pos
 let int n : int Types.expr = Types.Int n
 let int64 n : int64 Types.expr = Types.Int64 n
 let bool b : bool Types.expr = Types.Bool b
@@ -60,7 +62,7 @@ let test_leaves () =
     "Param_ref" 7
     (eval_int (Types.Param_ref (param "limit")));
   Alcotest.(check int) "Sizeof" 2 (eval_int (Types.Sizeof Types.uint16be));
-  Alcotest.(check int) "Sizeof_this" 16 (eval_int Types.Sizeof_this);
+  Alcotest.(check int) "Sizeof_this" size (eval_int Types.Sizeof_this);
   Alcotest.(check int) "Field_pos" pos (eval_int Types.Field_pos)
 
 let test_arithmetic () =
@@ -88,7 +90,7 @@ let test_div_mod () =
    returned closure, not something the walk over the expression discovers. *)
 let test_div_by_zero_is_deferred () =
   let f = Expr_compiler.compile_int leaves (Types.Div (a, int 0)) in
-  match f ints i64s pos with
+  match f ints i64s size pos with
   | n -> Alcotest.failf "division by zero produced %d" n
   | exception Division_by_zero -> ()
 
@@ -236,7 +238,7 @@ let test_lsr64_shift_must_be_constant () =
     (Invalid_argument "Wire: Lsr64 shift amount must be a constant") (fun () ->
       (* Binding the closure rather than calling it shows the refusal lands on
          the walk over the expression, before any context is supplied. *)
-      let _ : ints -> i64s -> int -> bool =
+      let _ : ints -> i64s -> int -> int -> bool =
         Expr_compiler.compile_bool leaves
           (Types.Eq (Types.Lsr64 (wide, a), int64 0L))
       in
@@ -246,7 +248,7 @@ let test_lsr64_shift_must_be_constant () =
    resolves once when the codec is sealed and not again per decode. *)
 let test_leaf_resolution_is_staged () =
   let resolutions = ref 0 in
-  let counting : (ints, i64s, int) Expr_compiler.leaves =
+  let counting : (ints, i64s, int, int) Expr_compiler.leaves =
     {
       leaves with
       ref_ =
@@ -260,16 +262,16 @@ let test_leaf_resolution_is_staged () =
   in
   Alcotest.(check int) "one resolution per Ref occurrence" 3 !resolutions;
   for _ = 1 to 5 do
-    Alcotest.(check int) "value" 40 (f ints i64s pos)
+    Alcotest.(check int) "value" 40 (f ints i64s size pos)
   done;
   Alcotest.(check int) "no resolution per call" 3 !resolutions
 
-(* The context is three curried arguments, so a call reads the arguments it was
+(* The context is four curried arguments, so a call reads the arguments it was
    handed: the same compiled closure answers differently for two environments. *)
 let test_context_is_per_call () =
   let f = Expr_compiler.compile_int leaves (Types.Add (a, Types.Field_pos)) in
-  Alcotest.(check int) "first context" 22 (f ints i64s pos);
-  Alcotest.(check int) "second context" 105 (f [ ("a", 100) ] [] 5)
+  Alcotest.(check int) "first context" 22 (f ints i64s size pos);
+  Alcotest.(check int) "second context" 105 (f [ ("a", 100) ] [] 0 5)
 
 let suite =
   ( "expr_compiler",

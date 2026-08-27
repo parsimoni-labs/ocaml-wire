@@ -340,8 +340,8 @@ and _ typ =
       (** Parameterised type application. *)
   | Codec : {
       codec_name : string;
-      codec_decode : eval_ctx -> bytes -> int -> 'r;
-      codec_validate : eval_ctx -> bytes -> int -> unit;
+      codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (** Everything [codec_decode] checks, none of what it builds. Run at
               every use site of the sub-codec, as the generated C runs the
               nested struct's validator. *)
@@ -351,11 +351,12 @@ and _ typ =
           (** Bytes the codec occupies whatever its variable-size fields hold,
               hence the extent [codec_size_of] has to read before it can resolve
               a span. *)
-      codec_size_of : eval_ctx -> bytes -> int -> int;
+      codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
               than by re-reading the buffer. *)
-      codec_field_readers : (string * (eval_ctx -> bytes -> int -> int)) list;
+      codec_field_readers :
+        (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
     }

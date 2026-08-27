@@ -16,6 +16,7 @@ let () =
       Test_uint8.suite;
       Test_uint16.suite;
       Test_uint63.suite;
+      Test_input_end.suite;
       Test_types.suite;
       Test_eval.suite;
       Test_expr_compiler.suite;

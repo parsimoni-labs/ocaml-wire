@@ -12,20 +12,22 @@ let blit_slice_exact n buf off src =
   Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
   off + n
 
-(* Bytes of [buf] a read starting at [off] can have, which is what
-   {!Types.Unexpected_eof}'s [got] counts. A start before the buffer or past
-   its end has none of them; the count is never negative. *)
-let[@inline] bytes_from buf off =
-  if off < 0 || off > Bytes.length buf then 0 else Bytes.length buf - off
+(* Bytes a read starting at [off] can have, which is what
+   {!Types.Unexpected_eof}'s [got] counts. A start before the input or past
+   where it stops has none of them; the count is never negative. *)
+let[@inline] bytes_from input_end off =
+  let stop = Input_end.to_int input_end in
+  if off < 0 || off > stop then 0 else stop - off
 
-(* A read of [width] bytes at [at] that must stay inside [buf]. Reads whose
-   position was itself computed from the buffer can land past the end on
-   truncated input; reporting the span here keeps the failure a precise
-   end-of-input instead of a raw out-of-bounds [Invalid_argument], which a
-   caller cannot tell apart from a misuse or from a user [map] callback. *)
-let[@inline] check_read_bounds buf ~at ~width =
-  if at < 0 || at + width > Bytes.length buf then
-    raise_eof ~at ~expected:width ~got:(bytes_from buf at)
+(* A read of [width] bytes at [at] that must stay inside the bytes the parse
+   was handed. Reads whose position was itself computed from the buffer can
+   land past the end on truncated input; reporting the span here keeps the
+   failure a precise end-of-input instead of a raw out-of-bounds
+   [Invalid_argument], which a caller cannot tell apart from a misuse or from a
+   user [map] callback. *)
+let[@inline] check_read_bounds input_end ~at ~width =
+  if at < 0 || at + width > Input_end.to_int input_end then
+    raise_eof ~at ~expected:width ~got:(bytes_from input_end at)
 
 (* Reader for a byte span of constant width. A negative width comes from a size
    expression that underflows or names a negative literal, so it is data rather
@@ -35,7 +37,7 @@ let[@inline] check_read_bounds buf ~at ~width =
    no test. *)
 let const_span_reader ~field_off n read =
   if n >= 0 then read
-  else fun _runtime _buf base ->
+  else fun _runtime _input_end _buf base ->
     raise_out_of_range ~at:(base + field_off) (Int64.of_int n)
 
 (* The refinement of a [byte_array_where] lives in its reader: every compiled
@@ -316,75 +318,90 @@ let no_field_reader : type a b. a typ -> b =
 (** Build a direct field reader that reads at a fixed offset. No tuples, no refs
     \- just pure value read. Caller must ensure the buffer is large enough. *)
 let rec build_field_reader_ctx : type a.
-    a typ -> int -> Types.eval_ctx -> bytes -> int -> a =
+    a typ -> int -> Types.eval_ctx -> Input_end.t -> bytes -> int -> a =
  fun typ field_off ->
   match typ with
-  | Uint8 -> fun _runtime buf base -> UInt8.get buf (base + field_off)
-  | Uint16 Little -> fun _runtime buf base -> UInt16.le buf (base + field_off)
-  | Uint16 Big -> fun _runtime buf base -> UInt16.be buf (base + field_off)
-  | Uint32 Little -> fun _runtime buf base -> UInt32.le buf (base + field_off)
-  | Uint32 Big -> fun _runtime buf base -> UInt32.be buf (base + field_off)
-  | Uint64 Little -> fun _runtime buf base -> UInt64.le buf (base + field_off)
-  | Uint64 Big -> fun _runtime buf base -> UInt64.be buf (base + field_off)
-  | Int8 -> fun _runtime buf base -> SInt8.get buf (base + field_off)
-  | Int16 Little -> fun _runtime buf base -> SInt16.le buf (base + field_off)
-  | Int16 Big -> fun _runtime buf base -> SInt16.be buf (base + field_off)
-  | Int32 Little -> fun _runtime buf base -> SInt32.le buf (base + field_off)
-  | Int32 Big -> fun _runtime buf base -> SInt32.be buf (base + field_off)
+  | Uint8 -> fun _runtime _input_end buf base -> UInt8.get buf (base + field_off)
+  | Uint16 Little ->
+      fun _runtime _input_end buf base -> UInt16.le buf (base + field_off)
+  | Uint16 Big ->
+      fun _runtime _input_end buf base -> UInt16.be buf (base + field_off)
+  | Uint32 Little ->
+      fun _runtime _input_end buf base -> UInt32.le buf (base + field_off)
+  | Uint32 Big ->
+      fun _runtime _input_end buf base -> UInt32.be buf (base + field_off)
+  | Uint64 Little ->
+      fun _runtime _input_end buf base -> UInt64.le buf (base + field_off)
+  | Uint64 Big ->
+      fun _runtime _input_end buf base -> UInt64.be buf (base + field_off)
+  | Int8 -> fun _runtime _input_end buf base -> SInt8.get buf (base + field_off)
+  | Int16 Little ->
+      fun _runtime _input_end buf base -> SInt16.le buf (base + field_off)
+  | Int16 Big ->
+      fun _runtime _input_end buf base -> SInt16.be buf (base + field_off)
+  | Int32 Little ->
+      fun _runtime _input_end buf base -> SInt32.le buf (base + field_off)
+  | Int32 Big ->
+      fun _runtime _input_end buf base -> SInt32.be buf (base + field_off)
   | Int64 Little ->
-      fun _runtime buf base -> Bytes.get_int64_le buf (base + field_off)
+      fun _runtime _input_end buf base ->
+        Bytes.get_int64_le buf (base + field_off)
   | Int64 Big ->
-      fun _runtime buf base -> Bytes.get_int64_be buf (base + field_off)
+      fun _runtime _input_end buf base ->
+        Bytes.get_int64_be buf (base + field_off)
   | Float32 Little ->
-      fun _runtime buf base ->
+      fun _runtime _input_end buf base ->
         Int32.float_of_bits (Bytes.get_int32_le buf (base + field_off))
   | Float32 Big ->
-      fun _runtime buf base ->
+      fun _runtime _input_end buf base ->
         Int32.float_of_bits (Bytes.get_int32_be buf (base + field_off))
   | Float64 Little ->
-      fun _runtime buf base ->
+      fun _runtime _input_end buf base ->
         Int64.float_of_bits (Bytes.get_int64_le buf (base + field_off))
   | Float64 Big ->
-      fun _runtime buf base ->
+      fun _runtime _input_end buf base ->
         Int64.float_of_bits (Bytes.get_int64_be buf (base + field_off))
   | Uint_var { size = Int n; endian } ->
-      fun _runtime buf base -> Uint_var.read endian buf (base + field_off) n
+      fun _runtime _input_end buf base ->
+        Uint_var.read endian buf (base + field_off) n
   | Byte_array { size = Int n } ->
-      const_span_reader ~field_off n (fun _runtime buf base ->
+      const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Bytes.sub_string buf (base + field_off) n)
   | Byte_array_where { size = Int n; elt_var; cond } ->
-      const_span_reader ~field_off n (fun _runtime buf base ->
+      const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           refined_span_reader ~elt_var ~cond buf ~first:(base + field_off)
             ~len:n)
   | Byte_slice { size = Int n } ->
-      const_span_reader ~field_off n (fun _runtime buf base ->
+      const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Slice.make_or_eod buf ~first:(base + field_off) ~length:n)
   | Where { inner; _ } -> build_field_reader_ctx inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader_ctx base field_off in
       let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
-      fun runtime buf base ->
-        check ~at:(base + field_off) (read runtime buf base)
+      fun runtime input_end buf base ->
+        check ~at:(base + field_off) (read runtime input_end buf base)
   | Map { inner; decode; index_bound; _ } ->
       let read = build_field_reader_ctx inner field_off in
       let decode = Types.map_decode ~index_bound decode in
-      fun runtime buf base ->
-        decode ~at:(base + field_off) (read runtime buf base)
-  | Unit -> fun _runtime _buf _base -> ()
+      fun runtime input_end buf base ->
+        decode ~at:(base + field_off) (read runtime input_end buf base)
+  | Unit -> fun _runtime _input_end _buf _base -> ()
   (* A fixed-size sub-record / sub-codec as an array or nested element: decode
      it at the element offset. The element must be fixed-width (the Array case
      already gates on [field_wire_size]), so the sub-codec is too. *)
   | Codec { codec_decode; _ } ->
-      fun runtime buf base -> codec_decode runtime buf (base + field_off)
+      fun runtime input_end buf base ->
+        codec_decode runtime input_end buf (base + field_off)
   | Array { len = Int n; elem; seq = Seq_map s } -> (
       match field_wire_size elem with
       | Some elem_sz ->
           let read_elem = build_field_reader_ctx elem 0 in
-          fun runtime buf base ->
+          fun runtime input_end buf base ->
             let acc = Stdlib.ref s.empty in
             for i = 0 to n - 1 do
               let v =
-                read_elem runtime buf (base + field_off + (i * elem_sz))
+                read_elem runtime input_end buf
+                  (base + field_off + (i * elem_sz))
               in
               acc := s.add !acc v
             done;
@@ -398,12 +415,13 @@ let rec build_field_reader_ctx : type a.
      over sibling fields, which only the compiled record plan holds. *)
   | Optional { present = Bool true; inner } ->
       let read = build_field_reader_ctx inner field_off in
-      fun runtime buf base -> Some (read runtime buf base)
-  | Optional { present = Bool false; _ } -> fun _runtime _buf _base -> None
+      fun runtime input_end buf base -> Some (read runtime input_end buf base)
+  | Optional { present = Bool false; _ } ->
+      fun _runtime _input_end _buf _base -> None
   | Optional_or { present = Bool true; inner; _ } ->
       build_field_reader_ctx inner field_off
   | Optional_or { present = Bool false; default; _ } ->
-      fun _runtime _buf _base -> default
+      fun _runtime _input_end _buf _base -> default
   | _ -> no_field_reader typ
 
 (* [eval_ctx] is necessary for parameter-dependent layouts, but routing every
@@ -581,57 +599,59 @@ let raise_field_constraint ~field_idx ~at arr =
    only mirrors values the int can hold; a 64-bit host keeps the direct
    store. *)
 let populate_uint32 idx reader =
-  if Sys.int_size > 32 then fun slots runtime buf base ->
-    set_int_slot slots idx (UInt32.to_int (reader runtime buf base))
-  else fun slots runtime buf base ->
+  if Sys.int_size > 32 then fun slots runtime input_end buf base ->
+    set_int_slot slots idx (UInt32.to_int (reader runtime input_end buf base))
+  else fun slots runtime input_end buf base ->
     Option.iter (set_int_slot slots idx)
-      (Int32.unsigned_to_int (UInt32.to_int32 (reader runtime buf base)))
+      (Int32.unsigned_to_int
+         (UInt32.to_int32 (reader runtime input_end buf base)))
 
 (* Same shape as [populate_uint32] on the signed side: the slot is a native
    [int], so where that int is narrower than the field only the values it can
    hold are mirrored, and a constraint over the rest reads an unpopulated zero
    rather than a truncated number. *)
 let populate_sint32 idx reader =
-  if Sys.int_size > 32 then fun slots runtime buf base ->
-    set_int_slot slots idx (SInt32.to_int (reader runtime buf base))
-  else fun slots runtime buf base ->
+  if Sys.int_size > 32 then fun slots runtime input_end buf base ->
+    set_int_slot slots idx (SInt32.to_int (reader runtime input_end buf base))
+  else fun slots runtime input_end buf base ->
     Option.iter (set_int_slot slots idx)
-      (SInt32.to_int_opt (reader runtime buf base))
+      (SInt32.to_int_opt (reader runtime input_end buf base))
 
 let populate_uint_var idx reader =
-  if Sys.int_size >= 63 then fun slots runtime buf base ->
-    set_int_slot slots idx (UInt63.to_int (reader runtime buf base))
-  else fun slots runtime buf base ->
+  if Sys.int_size >= 63 then fun slots runtime input_end buf base ->
+    set_int_slot slots idx (UInt63.to_int (reader runtime input_end buf base))
+  else fun slots runtime input_end buf base ->
     Option.iter (set_int_slot slots idx)
-      (Int64.unsigned_to_int (Optint.Int63.to_int64 (reader runtime buf base)))
+      (Int64.unsigned_to_int
+         (Optint.Int63.to_int64 (reader runtime input_end buf base)))
 
-let populate_int idx reader slots runtime buf base =
-  set_int_slot slots idx (reader runtime buf base)
+let populate_int idx reader slots runtime input_end buf base =
+  set_int_slot slots idx (reader runtime input_end buf base)
 
 (* [SInt8.t], [SInt16.t], [UInt8.t] and [UInt16.t] are native [int]s behind a
    range, so the slot takes the decoded value unchanged and no platform has a
    value it cannot hold. *)
-let populate_sint8 idx reader slots runtime buf base =
-  set_int_slot slots idx (SInt8.to_int (reader runtime buf base))
+let populate_sint8 idx reader slots runtime input_end buf base =
+  set_int_slot slots idx (SInt8.to_int (reader runtime input_end buf base))
 
-let populate_sint16 idx reader slots runtime buf base =
-  set_int_slot slots idx (SInt16.to_int (reader runtime buf base))
+let populate_sint16 idx reader slots runtime input_end buf base =
+  set_int_slot slots idx (SInt16.to_int (reader runtime input_end buf base))
 
-let populate_uint8 idx reader slots runtime buf base =
-  set_int_slot slots idx (UInt8.to_int (reader runtime buf base))
+let populate_uint8 idx reader slots runtime input_end buf base =
+  set_int_slot slots idx (UInt8.to_int (reader runtime input_end buf base))
 
-let populate_uint16 idx reader slots runtime buf base =
-  set_int_slot slots idx (UInt16.to_int (reader runtime buf base))
+let populate_uint16 idx reader slots runtime input_end buf base =
+  set_int_slot slots idx (UInt16.to_int (reader runtime input_end buf base))
 
 (* Floats store their IEEE 754 bit pattern in the int slot so [Ref name] in a
    constraint sees the value the 3D side sees; a float64 also fills the int64
    slot with the full pattern, which its predicates read (the int slot cannot
    hold bits 52-62 on a narrow-int platform). The user-facing reader still
    returns the [float], reinterpreted via [Int*.float_of_bits] elsewhere. *)
-let populate_float32 idx read slots _runtime buf base =
+let populate_float32 idx read slots _runtime _input_end buf base =
   set_int_slot slots idx (Int32.to_int (read buf base))
 
-let populate_float64 idx read slots _runtime buf base =
+let populate_float64 idx read slots _runtime _input_end buf base =
   let bits = read buf base in
   set_int64_slot slots idx bits;
   set_int_slot slots idx (Int64.to_int bits)
@@ -639,9 +659,10 @@ let populate_float64 idx read slots _runtime buf base =
 let rec build_populate : type a.
     a typ ->
     int ->
-    (runtime -> bytes -> int -> a) ->
+    (runtime -> Input_end.t -> bytes -> int -> a) ->
     slots ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     unit =
@@ -661,13 +682,13 @@ let rec build_populate : type a.
      behavior instead of silently reading an unpopulated zero. ([has_int64_slot]
      gates the int64 ref API to exactly these types.) *)
   | Uint64 _ ->
-      fun slots runtime buf base ->
-        let v = reader runtime buf base in
+      fun slots runtime input_end buf base ->
+        let v = reader runtime input_end buf base in
         set_int64_slot slots idx (UInt64.to_int64 v);
         Option.iter (set_int_slot slots idx) (UInt64.to_int_opt v)
   | Int64 _ ->
-      fun slots runtime buf base ->
-        let v = reader runtime buf base in
+      fun slots runtime input_end buf base ->
+        let v = reader runtime input_end buf base in
         set_int64_slot slots idx v;
         set_int_slot slots idx (Int64.to_int v)
   | Float32 Little -> populate_float32 idx Bytes.get_int32_le
@@ -677,11 +698,11 @@ let rec build_populate : type a.
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; cases; closed; _ } ->
       let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
-      build_populate base idx (fun runtime buf b ->
-          check ~at:b (reader runtime buf b))
+      build_populate base idx (fun runtime input_end buf b ->
+          check ~at:b (reader runtime input_end buf b))
   | Map { inner; encode; _ } ->
-      build_populate inner idx (fun runtime buf base ->
-          encode (reader runtime buf base))
+      build_populate inner idx (fun runtime input_end buf base ->
+          encode (reader runtime input_end buf base))
   | Optional_or { inner; _ } ->
       (* [Optional_or] returns the inner type directly (no [option] wrapper),
          so the reader is already of the inner's value type. *)
@@ -690,21 +711,21 @@ let rec build_populate : type a.
       (* The optional decodes as ['inner option]; populate from the inner
          value when present, leave the slot at 0 when absent. *)
       let inner_populate =
-        build_populate inner idx (fun runtime buf base ->
-            match reader runtime buf base with
+        build_populate inner idx (fun runtime input_end buf base ->
+            match reader runtime input_end buf base with
             | Some v -> v
             | None -> assert false)
       in
-      fun slots runtime buf base ->
-        match reader runtime buf base with
-        | Some _ -> inner_populate slots runtime buf base
+      fun slots runtime input_end buf base ->
+        match reader runtime input_end buf base with
+        | Some _ -> inner_populate slots runtime input_end buf base
         | None -> ())
   | Byte_array _ | Byte_slice _ | All_bytes | Unit ->
       (* A plain byte span (or unit) carries no constrained data, so its reader
          only re-slices the buffer. Running it for effect would allocate a string
          or slice per validate with nothing to check; skip it so validating a
          span-only codec stays allocation-free on a hot read path. *)
-      fun _slots _runtime _buf _base -> ()
+      fun _slots _runtime _input_end _buf _base -> ()
   | _ ->
       (* No int slot to populate, but the reader performs a real decode-side
          check (an embedded codec, an array or repeat element's constraints), so
@@ -713,7 +734,8 @@ let rec build_populate : type a.
          do not reach here: [span_populate] gives them the scan without the
          copy, since what a validator drops on the floor must not be sized by
          the sender. *)
-      fun _slots runtime buf base -> ignore (reader runtime buf base)
+      fun _slots runtime input_end buf base ->
+        ignore (reader runtime input_end buf base)
 
 (* Bitfield extraction descriptor: word reader + packed shift/mask.
    Packing shift and mask into a single int lets [extract] be a direct
@@ -754,22 +776,28 @@ type field_access =
       shift : int;
       width : int;
     }
-  | Dynamic of (runtime -> bytes -> int -> int)
-  | Variable of { off : int; size_fn : runtime -> bytes -> int -> int }
+  | Dynamic of (runtime -> Input_end.t -> bytes -> int -> int)
+  | Variable of {
+      off : int;
+      size_fn : runtime -> Input_end.t -> bytes -> int -> int;
+    }
   | Variable_dynamic of {
-      off_fn : runtime -> bytes -> int -> int;
-      size_fn : runtime -> bytes -> int -> int;
+      off_fn : runtime -> Input_end.t -> bytes -> int -> int;
+      size_fn : runtime -> Input_end.t -> bytes -> int -> int;
     }
 
 (* Absolute offset of the bytes a field occupies, from the record's base. A
    staged reader that rejects the value it read reports it here, so that [at]
    names the field and not the record; a bitfield names the base word it is
    packed into, the smallest span its value can be located in. *)
-let access_at : field_access -> runtime -> bytes -> int -> int = function
-  | Fixed off | Variable { off; _ } -> fun _runtime _buf base -> base + off
-  | Bitfield { byte_off; _ } -> fun _runtime _buf base -> base + byte_off
+let access_at : field_access -> runtime -> Input_end.t -> bytes -> int -> int =
+  function
+  | Fixed off | Variable { off; _ } ->
+      fun _runtime _input_end _buf base -> base + off
+  | Bitfield { byte_off; _ } ->
+      fun _runtime _input_end _buf base -> base + byte_off
   | Dynamic off_fn | Variable_dynamic { off_fn; _ } ->
-      fun runtime buf base -> base + off_fn runtime buf base
+      fun runtime input_end buf base -> base + off_fn runtime input_end buf base
 
 (* [access_at] for the environment-free readers, which never see an offset that
    depends on the buffer: [build_immediate_staged_reader] hands back [None] for
@@ -820,7 +848,8 @@ let struct' = struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers * (runtime -> bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers
+      * (runtime -> Input_end.t -> bytes -> int -> 'a)
       -> ('full, 'rest) readers
 
 (* Bitfield group state: tracks the current base word being packed. *)
@@ -834,18 +863,21 @@ type bf_codec_state = {
 
 (* Track the byte offset for the next field: static (constant) until we hit
    a variable-size field, then dynamic (computed from the buffer). *)
-type next_off = Static of int | Dynamic of (runtime -> bytes -> int -> int)
-(* [compute runtime buf base] returns the absolute byte offset where the next
-   field starts. [base] is the record's base offset in [buf]. *)
+type next_off =
+  | Static of int
+  | Dynamic of (runtime -> Input_end.t -> bytes -> int -> int)
+(* [compute runtime input_end buf base] returns the absolute byte offset where
+   the next field starts. [base] is the record's base offset in [buf]. *)
 
-type field_reader = string * (runtime -> bytes -> int -> int)
+type field_reader = string * (runtime -> Input_end.t -> bytes -> int -> int)
 (* Name + context/buffer/base reader for a previously-declared int field. *)
 
 (* Closure access layer: reads leaves out of the buffer, resolving parameters
    through the operation's immutable evaluation context. *)
 let bytes_leaves
-    ?(sizeof_this : runtime -> bytes -> int -> int = fun _ _ _ -> 0)
-    (env : field_reader list) : (runtime, bytes, int) Expr_compiler.leaves =
+    ?(sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
+      fun _ _ _ _ -> 0) (env : field_reader list) :
+    (runtime, Input_end.t, bytes, int) Expr_compiler.leaves =
   {
     ref_ =
       (fun name ->
@@ -855,21 +887,21 @@ let bytes_leaves
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
     i64 =
-      (fun name _ _ _ ->
+      (fun name _ _ _ _ ->
         Fmt.invalid_arg
           "Codec: full-width field ref %S is only available in field \
            constraints"
           name);
     param_ref =
-      (fun (Expr_compiler.Pack_param p) rt _ _ -> Types.eval_param rt p.name);
+      (fun (Expr_compiler.Pack_param p) rt _ _ _ -> Types.eval_param rt p.name);
     sizeof_typ =
       (fun (Pack_typ t) ->
         match field_wire_size t with
-        | Some n -> fun _ _ _ -> n
+        | Some n -> fun _ _ _ _ -> n
         | None -> invalid_arg "Codec: sizeof on variable-size type");
     sizeof_this;
     field_pos =
-      (fun _ _ _ ->
+      (fun _ _ _ _ ->
         invalid_arg "Codec: [field_pos] only valid inside an action");
   }
 
@@ -898,18 +930,19 @@ type compile_ctx = {
 let mk_ctx ?(sizeof_this = 0) ?(field_pos = 0) ~param_slots idx =
   { idx; sizeof_this; field_pos; param_slots }
 
-let array_leaves (cc : compile_ctx) : (slots, unit, unit) Expr_compiler.leaves =
+let array_leaves (cc : compile_ctx) :
+    (slots, unit, unit, unit) Expr_compiler.leaves =
   {
     ref_ =
       (fun name ->
         let i = cc.idx name in
-        fun a () () -> a.ints.(i));
+        fun a () () () -> a.ints.(i));
     i64 =
       (fun name ->
         let i = cc.idx name in
-        fun a () () -> a.int64s.(i));
+        fun a () () () -> a.int64s.(i));
     param_ref =
-      (fun (Expr_compiler.Pack_param p) a () () ->
+      (fun (Expr_compiler.Pack_param p) a () () () ->
         (* The per-codec slot map is filled at seal, after these leaves are
            built, so it must be consulted per call. *)
         match Hashtbl.find_opt cc.param_slots p.Types.name with
@@ -918,20 +951,20 @@ let array_leaves (cc : compile_ctx) : (slots, unit, unit) Expr_compiler.leaves =
     sizeof_typ =
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
-        fun _ () () -> n);
-    sizeof_this = (fun _ () () -> cc.sizeof_this);
-    field_pos = (fun _ () () -> cc.field_pos);
+        fun _ () () () -> n);
+    sizeof_this = (fun _ () () () -> cc.sizeof_this);
+    field_pos = (fun _ () () () -> cc.field_pos);
   }
 
-(* The int-array layer needs only the array, so the second context argument is
-   an immediate unit -- threaded here so callers keep the [arr -> _] shape. *)
+(* The int-array layer needs only the array, so the remaining context arguments
+   are immediate units -- threaded here so callers keep the [arr -> _] shape. *)
 let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
-  fun arr -> f arr () ()
+  fun arr -> f arr () () ()
 
 let compile_bool_arr cc e =
   let f = Expr_compiler.compile_bool (array_leaves cc) e in
-  fun arr -> f arr () ()
+  fun arr -> f arr () () ()
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign updates the mutable parameter's array slot.
@@ -1015,10 +1048,12 @@ type ('f, 'r) record =
       next_off : next_off; (* where the next field starts *)
       fields_rev : Types.field list;
       validators_rev :
-        (int (* byte offset *) * (slots -> runtime -> bytes -> int -> unit))
+        (int (* byte offset *)
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
         list;
       checkers_rev :
-        (int (* byte offset *) * (slots -> runtime -> bytes -> int -> unit))
+        (int (* byte offset *)
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
         list;
       field_actions_rev : (string * compiled_action) list;
       n_fields : int; (* count of named fields (for field indexing) *)
@@ -1036,7 +1071,10 @@ type ('f, 'r) record =
 
 type wire_size_info =
   | Fixed of int
-  | Variable of { min_size : int; compute : runtime -> bytes -> int -> int }
+  | Variable of {
+      min_size : int;
+      compute : runtime -> Input_end.t -> bytes -> int -> int;
+    }
 
 let id_counter = Atomic.make 0
 
@@ -1047,7 +1085,7 @@ type 'r t = {
   field_access : (string * field_access) list;
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
-  decode : runtime -> bytes -> int -> 'r;
+  decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   encode : 'r -> runtime -> bytes -> int -> int;
       (* Public encode entry. [encode v runtime buf base] writes the record at
          [base], threads each per-field writer's return as the next
@@ -1055,14 +1093,14 @@ type 'r t = {
   wire_size : wire_size_info;
   struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
-  validate_ctx : runtime -> bytes -> int -> unit;
+  validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
          caller's context rather than a [Param.env]. This is what a use site of
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
-  validate_arr : slots -> runtime -> bytes -> int -> unit;
-  populate : slots -> runtime -> bytes -> int -> unit;
+  validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
+  populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
   decode_scratch : unit -> slots;
       (* Validation scratch, one per domain (see [domain_local_slots]) and
@@ -1439,8 +1477,9 @@ let tag_byte_size : type a. a typ -> int =
   | _ -> ( match field_wire_size typ with Some n -> n | None -> assert false)
 
 (* Read one element of a typ at a given buffer position. Used by Repeat. *)
-let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
- fun typ runtime buf off ->
+let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
+    =
+ fun typ runtime input_end buf off ->
   match typ with
   | Uint8 -> UInt8.get buf off
   | Uint16 Little -> UInt16.le buf off
@@ -1461,23 +1500,23 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
   | Float64 Little -> Int64.float_of_bits (Bytes.get_int64_le buf off)
   | Float64 Big -> Int64.float_of_bits (Bytes.get_int64_be buf off)
   | Uint_var { size = Int n; endian } -> Uint_var.read endian buf off n
-  | Codec { codec_decode; _ } -> codec_decode runtime buf off
+  | Codec { codec_decode; _ } -> codec_decode runtime input_end buf off
   | Map { inner; decode; index_bound; _ } ->
       Types.map_decode ~index_bound decode ~at:off
-        (read_elem inner runtime buf off)
-  | Where { inner; _ } -> read_elem inner runtime buf off
+        (read_elem inner runtime input_end buf off)
+  | Where { inner; _ } -> read_elem inner runtime input_end buf off
   | Enum { base; cases; closed; _ } ->
       (* Applied whole rather than through [enum_check]: an element's check runs
          per element, and staging one here would allocate the closure per
          element too (the integer view included), on a count the sender picks
          through the byte budget. *)
-      let v = read_elem base runtime buf off in
+      let v = read_elem base runtime input_end buf off in
       if closed then
         Types.check_enum_decode ~at:off ~cases (Types.int_of_exn base v);
       v
   | Casetype { tag; cases; _ } ->
-      let tag_val = read_elem tag runtime buf off in
-      read_case_body ~at:off ~tag cases tag_val runtime buf
+      let tag_val = read_elem tag runtime input_end buf off in
+      read_case_body ~at:off ~tag cases tag_val runtime input_end buf
         (off + tag_byte_size tag)
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
@@ -1511,12 +1550,14 @@ let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
       | Some esz ->
           let acc = Stdlib.ref s.empty in
           for i = 0 to n - 1 do
-            acc := s.add !acc (read_elem elem runtime buf (off + (i * esz)))
+            acc :=
+              s.add !acc
+                (read_elem elem runtime input_end buf (off + (i * esz)))
           done;
           s.finish !acc)
   (* A nested region as an element: decode its inner at the region start; the
      enclosing region size (padding) is accounted for by the caller. *)
-  | Single_elem { elem; _ } -> read_elem elem runtime buf off
+  | Single_elem { elem; _ } -> read_elem elem runtime input_end buf off
   | _ ->
       Fmt.invalid_arg "Wire.repeat: no element reader for %s" (field_shape typ)
 
@@ -1529,10 +1570,11 @@ and read_case_body : type a k.
     (a, k) case_branch list ->
     k ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     a =
- fun ~at ~tag cases tag_val runtime buf body_off ->
+ fun ~at ~tag cases tag_val runtime input_end buf body_off ->
   match cases with
   | [] ->
       (* No branch matched the discriminant. [tag] is integer-typed in the
@@ -1541,10 +1583,11 @@ and read_case_body : type a k.
       raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; cb_inject; _ } :: _
     when t = tag_val ->
-      cb_inject tag_val (read_elem cb_inner runtime buf body_off)
+      cb_inject tag_val (read_elem cb_inner runtime input_end buf body_off)
   | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-      cb_inject tag_val (read_elem cb_inner runtime buf body_off)
-  | _ :: rest -> read_case_body ~at ~tag rest tag_val runtime buf body_off
+      cb_inject tag_val (read_elem cb_inner runtime input_end buf body_off)
+  | _ :: rest ->
+      read_case_body ~at ~tag rest tag_val runtime input_end buf body_off
 
 (* Write one element of a typ at a given buffer position. Used by Repeat. *)
 let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
@@ -1594,20 +1637,22 @@ let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
 
 (* Compute the wire size of one element at a buffer position. Used by Repeat
    for variable-size elements. *)
-let rec elem_size_of : type a. a typ -> runtime -> bytes -> int -> int =
- fun typ runtime buf off ->
+let rec elem_size_of : type a.
+    a typ -> runtime -> Input_end.t -> bytes -> int -> int =
+ fun typ runtime input_end buf off ->
   match typ with
-  | Codec { codec_size_of; _ } -> codec_size_of runtime buf off
+  | Codec { codec_size_of; _ } -> codec_size_of runtime input_end buf off
   | Casetype { tag; cases; _ } ->
       let tag_size = tag_byte_size tag in
       (* The position comes from a preceding length field, so a truncated
          buffer can put the tag past the end. *)
-      check_read_bounds buf ~at:off ~width:tag_size;
-      let tag_val = read_elem tag runtime buf off in
+      check_read_bounds input_end ~at:off ~width:tag_size;
+      let tag_val = read_elem tag runtime input_end buf off in
       tag_size
-      + size_case_body ~at:off ~tag cases tag_val runtime buf (off + tag_size)
-  | Map { inner; _ } -> elem_size_of inner runtime buf off
-  | Where { inner; _ } -> elem_size_of inner runtime buf off
+      + size_case_body ~at:off ~tag cases tag_val runtime input_end buf
+          (off + tag_size)
+  | Map { inner; _ } -> elem_size_of inner runtime input_end buf off
+  | Where { inner; _ } -> elem_size_of inner runtime input_end buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
   | Zeroterm ->
       let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
@@ -1634,18 +1679,20 @@ and size_case_body : type a k.
     (a, k) case_branch list ->
     k ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     int =
- fun ~at ~tag cases tag_val runtime buf body_off ->
+ fun ~at ~tag cases tag_val runtime input_end buf body_off ->
   match cases with
   | [] ->
       raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | Case_branch { cb_tag = Some t; cb_inner; _ } :: _ when t = tag_val ->
-      elem_size_of cb_inner runtime buf body_off
+      elem_size_of cb_inner runtime input_end buf body_off
   | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
-      elem_size_of cb_inner runtime buf body_off
-  | _ :: rest -> size_case_body ~at ~tag rest tag_val runtime buf body_off
+      elem_size_of cb_inner runtime input_end buf body_off
+  | _ :: rest ->
+      size_case_body ~at ~tag rest tag_val runtime input_end buf body_off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
@@ -1653,7 +1700,7 @@ and size_case_body : type a k.
    record state. The per-type [compile_*] helpers build one; [apply_compiled]
    consumes it and produces the updated record state. *)
 type ('a, 'r) compiled_field = {
-  raw_reader : runtime -> bytes -> int -> 'a;
+  raw_reader : runtime -> Input_end.t -> bytes -> int -> 'a;
   raw_writer : 'r -> runtime -> bytes -> int -> int -> int;
       (* [raw_writer v runtime buf base write_off] writes the field's bytes
          starting at [write_off] in [buf] and returns the offset just
@@ -1668,13 +1715,13 @@ type ('a, 'r) compiled_field = {
   size_delta : int; (* added to [min_wire_size] *)
   next_off : next_off; (* new [next_off] *)
   bf_after : bf_codec_state option;
-  int_reader : runtime -> bytes -> int -> int;
+  int_reader : runtime -> Input_end.t -> bytes -> int -> int;
       (* Entry stored in [field_readers] under the field name; const 0 for
          composite types that have no int-array slot of their own. *)
   nested_readers : field_reader list;
       (* Embedded sub-codec field readers, shifted into the parent frame. *)
   validator_off : int; (* [-1] when the byte offset is dynamic *)
-  populate : slots -> runtime -> bytes -> int -> unit;
+  populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
       (* Pre-built populate function for the int-array validator path; the
          slot index (n_fields at the time the field is compiled) is baked
          in. Composite types use a no-op. *)
@@ -1704,10 +1751,15 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
 let static_off_of (ctx : layout_ctx) : int option =
   match ctx.next_off with Static n -> Some n | Dynamic _ -> None
 
-let off_fn_of (ctx : layout_ctx) : runtime -> bytes -> int -> int =
-  match ctx.next_off with
-  | Static n -> fun _runtime _buf _base -> n
-  | Dynamic f -> fun runtime buf base -> f runtime buf base - base
+(* Where the next field starts, counted from the record base. The relative
+   twin of [next_off_pos], which counts from the buffer. *)
+let next_off_rel : next_off -> runtime -> Input_end.t -> bytes -> int -> int =
+  function
+  | Static n -> fun _runtime _input_end _buf _base -> n
+  | Dynamic f ->
+      fun runtime input_end buf base -> f runtime input_end buf base - base
+
+let off_fn_of (ctx : layout_ctx) = next_off_rel ctx.next_off
 
 (* Byte offset used as [sizeof_this] when compiling constraints/actions: a
    real static offset when known, the [-1] sentinel otherwise. *)
@@ -1731,13 +1783,15 @@ let require_static_off (ctx : layout_ctx) ~what : int =
 let advance_next_off (no : next_off) (n : int) : next_off =
   match no with
   | Static k -> Static (k + n)
-  | Dynamic f -> Dynamic (fun runtime buf base -> f runtime buf base + n)
+  | Dynamic f ->
+      Dynamic
+        (fun runtime input_end buf base -> f runtime input_end buf base + n)
 
-let null_int_reader : runtime -> bytes -> int -> int =
- fun _runtime _buf _base -> 0
+let null_int_reader : runtime -> Input_end.t -> bytes -> int -> int =
+ fun _runtime _input_end _buf _base -> 0
 
-let no_populate : slots -> runtime -> bytes -> int -> unit =
- fun _arr _runtime _buf _base -> ()
+let no_populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit =
+ fun _arr _runtime _input_end _buf _base -> ()
 
 (* A sub-codec field's check pass: run the sub-codec's own validator where the
    field sits. This is the whole of what the generated C emits for a sub-struct
@@ -1746,9 +1800,9 @@ let no_populate : slots -> runtime -> bytes -> int -> unit =
    rejects. No int slot is filled: a record-typed field has no scalar value an
    enclosing expression could reference. *)
 let sub_codec_populate ~codec_validate ~off_fn :
-    slots -> runtime -> bytes -> int -> unit =
- fun _arr runtime buf base ->
-  codec_validate runtime buf (base + off_fn runtime buf base)
+    slots -> runtime -> Input_end.t -> bytes -> int -> unit =
+ fun _arr runtime input_end buf base ->
+  codec_validate runtime input_end buf (base + off_fn runtime input_end buf base)
 
 (* Reader+writer pair for a Codec-or-scalar inner type placed at the current
    frame offset. Extracted so [compile_optional] and [compile_optional_or]
@@ -1756,29 +1810,32 @@ let sub_codec_populate ~codec_validate ~off_fn :
 let inner_codec_accessors : type w.
     w typ ->
     layout_ctx ->
-    (runtime -> bytes -> int -> w) * (runtime -> bytes -> int -> w -> int) =
+    (runtime -> Input_end.t -> bytes -> int -> w)
+    * (runtime -> bytes -> int -> w -> int) =
  fun inner ctx ->
   let field_off_static = static_off_of ctx in
   let field_off_fn = off_fn_of ctx in
-  let reader : runtime -> bytes -> int -> w =
+  let reader : runtime -> Input_end.t -> bytes -> int -> w =
     match inner with
     | Codec { codec_decode; _ } -> (
         match field_off_static with
-        | Some fo -> fun runtime buf base -> codec_decode runtime buf (base + fo)
+        | Some fo ->
+            fun runtime input_end buf base ->
+              codec_decode runtime input_end buf (base + fo)
         | None ->
-            fun runtime buf base ->
-              let fo = field_off_fn runtime buf base in
-              codec_decode runtime buf (base + fo))
+            fun runtime input_end buf base ->
+              let fo = field_off_fn runtime input_end buf base in
+              codec_decode runtime input_end buf (base + fo))
     | _ -> (
         match field_off_static with
         | Some fo ->
             let reader = build_field_reader_ctx inner fo in
-            fun runtime buf base -> reader runtime buf base
+            fun runtime input_end buf base -> reader runtime input_end buf base
         | None ->
             let reader_at_0 = build_field_reader_ctx inner 0 in
-            fun runtime buf base ->
-              let fo = field_off_fn runtime buf base in
-              reader_at_0 runtime buf (base + fo))
+            fun runtime input_end buf base ->
+              let fo = field_off_fn runtime input_end buf base in
+              reader_at_0 runtime input_end buf (base + fo))
   in
   (* Writer takes the absolute byte position to write at. The caller
      gets this from the threaded [write_off]; no buffer-driven
@@ -1798,15 +1855,18 @@ let build_nested_readers ctx readers =
   | Some fo ->
       List.map
         (fun (n, reader) ->
-          (n, fun runtime buf base -> reader runtime buf (base + fo)))
+          ( n,
+            fun runtime input_end buf base ->
+              reader runtime input_end buf (base + fo) ))
         readers
   | None ->
       let off_fn = off_fn_of ctx in
       List.map
         (fun (n, reader) ->
           ( n,
-            fun runtime buf base ->
-              reader runtime buf (base + off_fn runtime buf base) ))
+            fun runtime input_end buf base ->
+              reader runtime input_end buf
+                (base + off_fn runtime input_end buf base) ))
         readers
 
 (* -- Per-type [compile_field] helpers -- *)
@@ -1852,7 +1912,7 @@ let compile_bits : type r.
   in
   let shift = Bitfield.shift ~bit_order ~total ~bits_used ~width in
   let read = build_bf_reader base base_off shift width in
-  let raw_reader _runtime buf base = read buf base in
+  let raw_reader _runtime _input_end buf base = read buf base in
   let raw_writer_inner = build_bf_writer base 0 shift width in
   let get = fld.get in
   let back, advance =
@@ -1887,10 +1947,10 @@ let compile_bits : type r.
 let compile_codec_variable : type a r.
     layout_ctx ->
     get:(r -> a) ->
-    codec_decode:(runtime -> bytes -> int -> a) ->
-    codec_validate:(runtime -> bytes -> int -> unit) ->
+    codec_decode:(runtime -> Input_end.t -> bytes -> int -> a) ->
+    codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
-    codec_size_of:(runtime -> bytes -> int -> int) ->
+    codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
  fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_size_of
@@ -1898,12 +1958,19 @@ let compile_codec_variable : type a r.
   let off_fn, (field_access : field_access), validator_off =
     match ctx.next_off with
     | Static n ->
-        let size_fn runtime buf base = codec_size_of runtime buf (base + n) in
-        ((fun _runtime _buf _base -> n), Variable { off = n; size_fn }, n)
+        let size_fn runtime input_end buf base =
+          codec_size_of runtime input_end buf (base + n)
+        in
+        ( (fun _runtime _input_end _buf _base -> n),
+          Variable { off = n; size_fn },
+          n )
     | Dynamic prev_end ->
-        let off_fn runtime buf base = prev_end runtime buf base - base in
-        let size_fn runtime buf base =
-          codec_size_of runtime buf (base + off_fn runtime buf base)
+        let off_fn runtime input_end buf base =
+          prev_end runtime input_end buf base - base
+        in
+        let size_fn runtime input_end buf base =
+          codec_size_of runtime input_end buf
+            (base + off_fn runtime input_end buf base)
         in
         (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
   in
@@ -1915,8 +1982,9 @@ let compile_codec_variable : type a r.
   in
   {
     raw_reader =
-      (fun runtime buf base ->
-        codec_decode runtime buf (base + off_fn runtime buf base));
+      (fun runtime input_end buf base ->
+        codec_decode runtime input_end buf
+          (base + off_fn runtime input_end buf base));
     raw_writer =
       (fun v runtime buf _base write_off ->
         codec_encode (get v) runtime buf write_off);
@@ -1925,8 +1993,10 @@ let compile_codec_variable : type a r.
     size_delta = 0;
     next_off =
       Dynamic
-        (fun runtime buf base ->
-          base + off_fn runtime buf base + size_fn runtime buf base);
+        (fun runtime input_end buf base ->
+          base
+          + off_fn runtime input_end buf base
+          + size_fn runtime input_end buf base);
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers;
@@ -1937,11 +2007,11 @@ let compile_codec_variable : type a r.
 let compile_codec : type a r.
     layout_ctx ->
     (a, r) field ->
-    codec_decode:(runtime -> bytes -> int -> a) ->
-    codec_validate:(runtime -> bytes -> int -> unit) ->
+    codec_decode:(runtime -> Input_end.t -> bytes -> int -> a) ->
+    codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
-    codec_size_of:(runtime -> bytes -> int -> int) ->
+    codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     codec_field_readers:field_reader list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
@@ -1980,17 +2050,18 @@ let compile_codec : type a r.
 let dynamic_optional_next_off ctx present_fn fsize =
   let base_off = ctx.next_off in
   Dynamic
-    (fun runtime buf base ->
+    (fun runtime input_end buf base ->
       let off =
         match base_off with
         | Static n -> base + n
-        | Dynamic f -> f runtime buf base
+        | Dynamic f -> f runtime input_end buf base
       in
-      if present_fn runtime buf base then off + fsize else off)
+      if present_fn runtime input_end buf base then off + fsize else off)
 
 (* Absolute byte position a [next_off] points at, given the record [base]. *)
-let next_off_pos : next_off -> runtime -> bytes -> int -> int = function
-  | Static n -> fun _runtime _buf base -> base + n
+let next_off_pos : next_off -> runtime -> Input_end.t -> bytes -> int -> int =
+  function
+  | Static n -> fun _runtime _input_end _buf base -> base + n
   | Dynamic f -> f
 
 (* [present_fn] plus the bounds check the field's read needs when the gate is
@@ -2002,20 +2073,22 @@ let next_off_pos : next_off -> runtime -> bytes -> int -> int = function
    end-of-input at its own span instead of crashing. *)
 let present_in_bounds ctx present_fn fsize =
   let pos = next_off_pos ctx.next_off in
-  fun runtime buf base ->
-    let present = present_fn runtime buf base in
+  fun runtime input_end buf base ->
+    let present = present_fn runtime input_end buf base in
     if present then
-      check_read_bounds buf ~at:(pos runtime buf base) ~width:fsize;
+      check_read_bounds input_end
+        ~at:(pos runtime input_end buf base)
+        ~width:fsize;
     present
 
 let optional_compiled : type a r.
     layout_ctx ->
-    ?int_reader:(runtime -> bytes -> int -> int) ->
-    raw_reader:(runtime -> bytes -> int -> a) ->
+    ?int_reader:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    raw_reader:(runtime -> Input_end.t -> bytes -> int -> a) ->
     raw_writer:(r -> runtime -> bytes -> int -> int -> int) ->
     size_delta:int ->
     next_off:next_off ->
-    populate:(slots -> runtime -> bytes -> int -> unit) ->
+    populate:(slots -> runtime -> Input_end.t -> bytes -> int -> unit) ->
     unit ->
     (a, r) compiled_field =
  fun ctx ?(int_reader = null_int_reader) ~raw_reader ~raw_writer ~size_delta
@@ -2040,55 +2113,61 @@ let optional_compiled : type a r.
 
 let repeat_raw_fixed : type elt seq.
     (elt, seq) seq_map ->
-    read:(runtime -> bytes -> int -> elt) ->
+    read:(runtime -> Input_end.t -> bytes -> int -> elt) ->
     int ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     seq =
- fun (Seq_map seq) ~read esz ~off_fn ~size_fn runtime buf base ->
-  let budget = size_fn runtime buf base in
-  let start = base + off_fn runtime buf base in
+ fun (Seq_map seq) ~read esz ~off_fn ~size_fn runtime input_end buf base ->
+  let budget = size_fn runtime input_end buf base in
+  let start = base + off_fn runtime input_end buf base in
   (* The budget comes from a length field, i.e. untrusted input. Bound it to the
      buffer before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
+    raise_eof ~at:start ~expected:budget
+      ~got:(bytes_from (Input_end.of_bytes buf) start);
   let remainder = if esz > 0 then budget mod esz else budget in
   if remainder <> 0 then
     raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
   let n = if esz > 0 then budget / esz else 0 in
   let rec loop acc i =
     if i >= n then seq.finish acc
-    else loop (seq.add acc (read runtime buf (start + (i * esz)))) (i + 1)
+    else
+      loop (seq.add acc (read runtime input_end buf (start + (i * esz)))) (i + 1)
   in
   loop seq.empty 0
 
 let repeat_raw_variable : type elt seq.
     (elt, seq) seq_map ->
-    read:(runtime -> bytes -> int -> elt) ->
-    size_of_elem:(runtime -> bytes -> int -> int) ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
+    read:(runtime -> Input_end.t -> bytes -> int -> elt) ->
+    size_of_elem:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     seq =
- fun (Seq_map seq) ~read ~size_of_elem ~off_fn ~size_fn runtime buf base ->
-  let budget = size_fn runtime buf base in
-  let start = base + off_fn runtime buf base in
+ fun (Seq_map seq) ~read ~size_of_elem ~off_fn ~size_fn runtime input_end buf
+     base ->
+  let budget = size_fn runtime input_end buf base in
+  let start = base + off_fn runtime input_end buf base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
+    raise_eof ~at:start ~expected:budget
+      ~got:(bytes_from (Input_end.of_bytes buf) start);
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
-      let esz = size_of_elem runtime buf pos in
+      let esz = size_of_elem runtime input_end buf pos in
       if esz <= 0 || esz > remaining then
         raise_eof ~at:pos ~expected:esz ~got:remaining;
-      let v = read runtime buf pos in
+      let v = read runtime input_end buf pos in
       loop (seq.add acc v) (pos + esz) (remaining - esz)
   in
   loop seq.empty start budget
@@ -2110,12 +2189,13 @@ let seq_discard : type elt. (elt, unit) seq_map =
 
 let repeat_raw_reader : type elt seq.
     (elt, seq) seq_map ->
-    read:(runtime -> bytes -> int -> elt) ->
-    size_of_elem:(runtime -> bytes -> int -> int) ->
+    read:(runtime -> Input_end.t -> bytes -> int -> elt) ->
+    size_of_elem:(runtime -> Input_end.t -> bytes -> int -> int) ->
     elem_size:int option ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     seq =
@@ -2145,14 +2225,14 @@ let repeat_raw_reader : type elt seq.
 type 'a elem_strategy =
   | By_reading
   | Value_only
-  | By of (runtime -> bytes -> int -> unit)
+  | By of (runtime -> Input_end.t -> bytes -> int -> unit)
 
 (* An array's walk: every element checked at its own stride. Top level and
    partially applied while the strategy is chosen, so no closure is built per
    element. *)
-let array_elem_check ~n ~esz check runtime buf off =
+let array_elem_check ~n ~esz check runtime input_end buf off =
   for i = 0 to n - 1 do
-    check runtime buf (off + (i * esz))
+    check runtime input_end buf (off + (i * esz))
   done
 
 (* Run the matched case's check. Mirrors [read_case_body], on cases whose
@@ -2162,19 +2242,20 @@ let array_elem_check ~n ~esz check runtime buf off =
 let rec dispatch_case_check : type k.
     at:int ->
     tag:k typ ->
-    (k option * (runtime -> bytes -> int -> unit)) list ->
+    (k option * (runtime -> Input_end.t -> bytes -> int -> unit)) list ->
     k ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     unit =
- fun ~at ~tag cases tag_val runtime buf body_off ->
+ fun ~at ~tag cases tag_val runtime input_end buf body_off ->
   match cases with
   | [] ->
       raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
   | (Some t, _) :: rest when t <> tag_val ->
-      dispatch_case_check ~at ~tag rest tag_val runtime buf body_off
-  | (_, check) :: _ -> check runtime buf body_off
+      dispatch_case_check ~at ~tag rest tag_val runtime input_end buf body_off
+  | (_, check) :: _ -> check runtime input_end buf body_off
 
 (* A casetype's check: read the discriminant, then run the selected body's
    check where the body starts. The tag's own extent was bounded before the
@@ -2182,14 +2263,15 @@ let rec dispatch_case_check : type k.
    expression ([elem_size_of], which guards the tag) for a field. *)
 let casetype_elem_check : type k.
     tag:k typ ->
-    (k option * (runtime -> bytes -> int -> unit)) list ->
+    (k option * (runtime -> Input_end.t -> bytes -> int -> unit)) list ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     unit =
- fun ~tag cases runtime buf off ->
-  let tag_val = read_elem tag runtime buf off in
-  dispatch_case_check ~at:off ~tag cases tag_val runtime buf
+ fun ~tag cases runtime input_end buf off ->
+  let tag_val = read_elem tag runtime input_end buf off in
+  dispatch_case_check ~at:off ~tag cases tag_val runtime input_end buf
     (off + tag_byte_size tag)
 
 (* Every constructor is listed and there is deliberately no [| _ -> ...]: a typ
@@ -2245,19 +2327,21 @@ let rec elem_strategy : type a. a typ -> a elem_strategy = function
    field, so anything built per element is a multiplier the sender sizes on the
    path a server runs once per packet. This is the C's element loop, which calls
    the element validator and keeps one position. *)
-and elem_check : type a. a typ -> runtime -> bytes -> int -> unit =
+and elem_check : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> unit
+    =
  fun typ ->
   match elem_strategy typ with
-  | Value_only -> fun _runtime _buf _off -> ()
+  | Value_only -> fun _runtime _input_end _buf _off -> ()
   | By check -> check
   | By_reading ->
-      fun runtime buf off -> ignore (read_elem typ runtime buf off : a)
+      fun runtime input_end buf off ->
+        ignore (read_elem typ runtime input_end buf off : a)
 
 (* A casetype's cases with each body's check already chosen, so dispatching one
    is a tag comparison and a call. *)
 and case_checks : type a k.
     (a, k) case_branch list ->
-    (k option * (runtime -> bytes -> int -> unit)) list =
+    (k option * (runtime -> Input_end.t -> bytes -> int -> unit)) list =
  fun cases ->
   List.map
     (fun (Case_branch { cb_tag; cb_inner; _ }) -> (cb_tag, elem_check cb_inner))
@@ -2270,7 +2354,7 @@ let repeat_raw_writer : type elt seq r.
     (elt, seq) seq_map ->
     elt typ ->
     (r -> seq) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
     r ->
     runtime ->
     bytes ->
@@ -2278,7 +2362,7 @@ let repeat_raw_writer : type elt seq r.
     int ->
     int =
  fun seq elem get ~size_fn v runtime buf base write_off ->
-  let expected = size_fn runtime buf base in
+  let expected = size_fn runtime (Input_end.of_bytes buf) buf base in
   let sized_items =
     Types.exact_repeat_elements seq ~expected
       ~size_of:(Types.size_of_typ_value elem)
@@ -2304,18 +2388,23 @@ let compile_repeat : type elt seq r.
      when a [Repeat] sits after a variable-size field, the running offset is
      [Dynamic] and is resolved at runtime rather than from a static offset. *)
   let off_fn, (field_access : field_access), validator_off =
-    let sizeof_this : runtime -> bytes -> int -> int =
+    let sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
       match ctx.next_off with
-      | Static n -> fun _runtime _buf _base -> n
+      | Static n -> fun _runtime _input_end _buf _base -> n
       | Dynamic prev_end ->
-          fun runtime buf base -> prev_end runtime buf base - base
+          fun runtime input_end buf base ->
+            prev_end runtime input_end buf base - base
     in
     let size_fn = compile_expr ~sizeof_this ctx.field_readers size_expr in
     match ctx.next_off with
     | Static n ->
-        ((fun _runtime _buf _base -> n), Variable { off = n; size_fn }, n)
+        ( (fun _runtime _input_end _buf _base -> n),
+          Variable { off = n; size_fn },
+          n )
     | Dynamic prev_end ->
-        let off_fn runtime buf base = prev_end runtime buf base - base in
+        let off_fn runtime input_end buf base =
+          prev_end runtime input_end buf base - base
+        in
         (off_fn, Variable_dynamic { off_fn; size_fn }, -1)
   in
   let size_fn =
@@ -2338,8 +2427,10 @@ let compile_repeat : type elt seq r.
     size_delta = 0;
     next_off =
       Dynamic
-        (fun runtime buf base ->
-          base + off_fn runtime buf base + size_fn runtime buf base);
+        (fun runtime input_end buf base ->
+          base
+          + off_fn runtime input_end buf base
+          + size_fn runtime input_end buf base);
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -2352,7 +2443,7 @@ let compile_repeat : type elt seq r.
          repeat_raw_reader seq_discard ~read:(elem_check elem) ~size_of_elem
            ~elem_size ~off_fn ~size_fn
        in
-       fun _arr runtime buf base -> check runtime buf base);
+       fun _arr runtime input_end buf base -> check runtime input_end buf base);
   }
 
 (* The span [first, first + sz) must lie inside [buf]. Both ends derive from
@@ -2362,22 +2453,24 @@ let compile_repeat : type elt seq r.
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-    raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
+    raise_eof ~at:first ~expected:sz
+      ~got:(bytes_from (Input_end.of_bytes buf) first)
 
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
    terminator is found -- a truncated / unterminated zero-terminated string. *)
 let var_bytes_reader : type a.
     a typ ->
-    (runtime -> bytes -> int -> int) ->
-    (runtime -> bytes -> int -> int) ->
+    (runtime -> Input_end.t -> bytes -> int -> int) ->
+    (runtime -> Input_end.t -> bytes -> int -> int) ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     a =
- fun typ off_fn size_fn runtime buf base ->
-  let fo = off_fn runtime buf base in
-  let sz = size_fn runtime buf base in
+ fun typ off_fn size_fn runtime input_end buf base ->
+  let fo = off_fn runtime input_end buf base in
+  let sz = size_fn runtime input_end buf base in
   let first = base + fo in
   (match typ with
   | Byte_slice _ ->
@@ -2387,7 +2480,8 @@ let var_bytes_reader : type a.
          [make_or_eod] with a raw [Invalid_argument] that escapes the decode
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
-        raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
+        raise_eof ~at:first ~expected:sz
+          ~got:(bytes_from (Input_end.of_bytes buf) first)
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
@@ -2402,13 +2496,17 @@ let var_bytes_reader : type a.
       let nul = zeroterm_nul_pos buf ~first ~limit:(first + sz) in
       Bytes.sub_string buf first (nul - first)
   | All_zeros -> all_zeros_reader buf ~first:(base + fo) ~len:sz
-  | Casetype _ -> read_elem typ runtime buf (base + fo)
+  | Casetype _ -> read_elem typ runtime input_end buf (base + fo)
   | Single_elem { elem; at_most; _ } ->
       let first = base + fo in
-      let consumed = elem_size_of elem runtime buf first in
+      (* The region hands its value [sz] bytes and no more, so the walk that
+         sizes it stops there: a length field the data puts past the region is
+         missing, not read from whatever follows. *)
+      let region_end = Input_end.narrow input_end (first + sz) in
+      let consumed = elem_size_of elem runtime region_end buf first in
       if consumed > sz || ((not at_most) && consumed <> sz) then
         raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-      read_elem elem runtime buf first
+      read_elem elem runtime input_end buf first
   | _ -> assert false
 
 (* The scan a span type's reader performs, without the string it hands back.
@@ -2445,18 +2543,18 @@ let span_check : type a. a typ -> (bytes -> first:int -> len:int -> unit) option
    generic [build_populate]. *)
 let span_populate : type a.
     a typ ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
-    (slots -> runtime -> bytes -> int -> unit) option =
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    (slots -> runtime -> Input_end.t -> bytes -> int -> unit) option =
  fun typ ~off_fn ~size_fn ->
   match span_check typ with
   | None -> None
   | Some check ->
       Some
-        (fun _slots runtime buf base ->
+        (fun _slots runtime input_end buf base ->
           check buf
-            ~first:(base + off_fn runtime buf base)
-            ~len:(size_fn runtime buf base))
+            ~first:(base + off_fn runtime input_end buf base)
+            ~len:(size_fn runtime input_end buf base))
 
 (* Populate for a container field: the walk [elem_check] runs over what the
    container holds, in place of a reader that decodes the whole of it and drops
@@ -2467,38 +2565,43 @@ let span_populate : type a.
    [build_populate]. *)
 let container_populate : type a.
     a typ ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
-    (slots -> runtime -> bytes -> int -> unit) option =
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    (slots -> runtime -> Input_end.t -> bytes -> int -> unit) option =
  fun typ ~off_fn ~size_fn ->
   match typ with
   | Array _ | Casetype _ ->
       let check = elem_check typ in
       Some
-        (fun _slots runtime buf base ->
-          let first = base + off_fn runtime buf base in
-          check_span_bounds buf ~first ~sz:(size_fn runtime buf base);
-          check runtime buf first)
+        (fun _slots runtime input_end buf base ->
+          let first = base + off_fn runtime input_end buf base in
+          check_span_bounds buf ~first ~sz:(size_fn runtime input_end buf base);
+          check runtime input_end buf first)
   | Single_elem { elem; at_most; _ } ->
       let check = elem_check elem in
       Some
-        (fun _slots runtime buf base ->
-          let first = base + off_fn runtime buf base in
-          let sz = size_fn runtime buf base in
+        (fun _slots runtime input_end buf base ->
+          let first = base + off_fn runtime input_end buf base in
+          let sz = size_fn runtime input_end buf base in
           check_span_bounds buf ~first ~sz;
-          let consumed = elem_size_of elem runtime buf first in
+          (* Sized against the region's own bytes, as the reader sizes it: a
+             validate that answered from bytes the reader is not given would
+             accept and reject on different grounds than the decode it stands
+             in for. *)
+          let region_end = Input_end.narrow input_end (first + sz) in
+          let consumed = elem_size_of elem runtime region_end buf first in
           if consumed > sz || ((not at_most) && consumed <> sz) then
             raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-          check runtime buf first)
+          check runtime input_end buf first)
   | _ -> None
 
 (* What a field's validate runs in place of its reader: a span's scan, or a
    container's walk over its contents. *)
 let check_populate : type a.
     a typ ->
-    off_fn:(runtime -> bytes -> int -> int) ->
-    size_fn:(runtime -> bytes -> int -> int) ->
-    (slots -> runtime -> bytes -> int -> unit) option =
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    size_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
+    (slots -> runtime -> Input_end.t -> bytes -> int -> unit) option =
  fun typ ~off_fn ~size_fn ->
   match span_populate typ ~off_fn ~size_fn with
   | Some p -> Some p
@@ -2507,7 +2610,8 @@ let check_populate : type a.
 (* Kept at top level: as local closures they would be heap-allocated on
    every call (two allocations per variable-bytes field on each encode). *)
 let var_bytes_check_len size_fn runtime buf base ~actual =
-  check_byte_field_size ~expected:(size_fn runtime buf base) ~actual
+  let expected = size_fn runtime (Input_end.of_bytes buf) buf base in
+  check_byte_field_size ~expected ~actual
 
 let var_bytes_write_str buf write_off s =
   let len = String.length s in
@@ -2517,7 +2621,7 @@ let var_bytes_write_str buf write_off s =
 let var_bytes_writer : type a r.
     a typ ->
     (r -> a) ->
-    (runtime -> bytes -> int -> int) ->
+    (runtime -> Input_end.t -> bytes -> int -> int) ->
     r ->
     runtime ->
     bytes ->
@@ -2556,7 +2660,7 @@ let var_bytes_writer : type a r.
   | Zeroterm_at_most _ ->
       let s = (value : string) in
       Types.check_zeroterm_encode s;
-      let region = size_fn runtime buf base in
+      let region = size_fn runtime (Input_end.of_bytes buf) buf base in
       let len = String.length s in
       Types.check_zeroterm_region ~region ~len;
       Bytes.blit_string s 0 buf write_off len;
@@ -2565,7 +2669,7 @@ let var_bytes_writer : type a r.
       write_off + region
   | Casetype _ -> build_field_encoder_ctx typ runtime buf write_off value
   | Single_elem { elem; at_most; _ } ->
-      let n = size_fn runtime buf base in
+      let n = size_fn runtime (Input_end.of_bytes buf) buf base in
       let actual = Types.size_of_typ_value elem value in
       Types.check_nested_size ~at_most ~expected:n ~actual;
       let inner_end =
@@ -2579,8 +2683,9 @@ let var_bytes_writer : type a r.
 let compile_var_size_fn : type a.
     layout_ctx ->
     a typ ->
-    off_fn:(runtime -> bytes -> int -> int) ->
+    off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
     runtime ->
+    Input_end.t ->
     bytes ->
     int ->
     int =
@@ -2591,16 +2696,18 @@ let compile_var_size_fn : type a.
          current offset. The OCaml decoder gets the buffer length via
          [Bytes.length buf]; the 3D projection emits [all_bytes], which
          3D handles natively. *)
-      fun runtime buf base -> Bytes.length buf - (base + off_fn runtime buf base)
+      fun runtime input_end buf base ->
+        Bytes.length buf - (base + off_fn runtime input_end buf base)
   | Casetype _ ->
       (* Tag is decoded first; the case body's size is whatever the
          selected case's inner typ reports. *)
-      fun runtime buf base ->
-        elem_size_of typ runtime buf (base + off_fn runtime buf base)
+      fun runtime input_end buf base ->
+        elem_size_of typ runtime input_end buf
+          (base + off_fn runtime input_end buf base)
   | Zeroterm ->
       (* Consumed bytes = string length plus the one-byte NUL terminator. *)
-      fun runtime buf base ->
-        let first = base + off_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let first = base + off_fn runtime input_end buf base in
         zeroterm_nul_pos buf ~first ~limit:(Bytes.length buf) - first + 1
   | _ ->
       let size_expr =
@@ -2613,11 +2720,12 @@ let compile_var_size_fn : type a.
         | Zeroterm_at_most { size } -> size
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
-      let sizeof_this : runtime -> bytes -> int -> int =
+      let sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
         match ctx.next_off with
-        | Static n -> fun _runtime _buf _base -> n
+        | Static n -> fun _runtime _input_end _buf _base -> n
         | Dynamic prev_end ->
-            fun runtime buf base -> prev_end runtime buf base - base
+            fun runtime input_end buf base ->
+              prev_end runtime input_end buf base - base
       in
       compile_expr ~sizeof_this ctx.field_readers size_expr
 
@@ -2625,13 +2733,8 @@ let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   let typ = fld.typ in
-  let off_fn, validator_off =
-    match ctx.next_off with
-    | Static n ->
-        ((fun (_runtime : runtime) (_buf : bytes) (_base : int) -> n), n)
-    | Dynamic prev_end ->
-        ((fun runtime buf base -> prev_end runtime buf base - base), -1)
-  in
+  let off_fn = off_fn_of ctx in
+  let validator_off = validator_off_of ctx in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
   let field_access : field_access =
     match ctx.next_off with
@@ -2642,10 +2745,10 @@ let compile_var_bytes : type a r.
     match typ with
     | Uint_var { endian; _ } ->
         let get = fld.get in
-        let raw_reader : runtime -> bytes -> int -> a =
-         fun runtime buf base ->
-          let fo = off_fn runtime buf base in
-          let sz = size_fn runtime buf base in
+        let raw_reader : runtime -> Input_end.t -> bytes -> int -> a =
+         fun runtime input_end buf base ->
+          let fo = off_fn runtime input_end buf base in
+          let sz = size_fn runtime input_end buf base in
           let first = base + fo in
           (* This branch bypasses [var_bytes_reader]; run the same span check it
              would have run, so a [uint] sized past the end reports truncation
@@ -2655,19 +2758,19 @@ let compile_var_bytes : type a r.
         in
         let raw_writer : r -> runtime -> bytes -> int -> int -> int =
          fun v runtime buf base write_off ->
-          let sz = size_fn runtime buf base in
+          let sz = size_fn runtime (Input_end.of_bytes buf) buf base in
           Uint_var.write endian buf write_off sz (get v);
           write_off + sz
         in
-        let int_reader runtime buf base =
-          int_of_typ_value typ (raw_reader runtime buf base)
+        let int_reader runtime input_end buf base =
+          int_of_typ_value typ (raw_reader runtime input_end buf base)
         in
         (raw_reader, raw_writer, int_reader)
     | _ ->
         let raw_reader = var_bytes_reader typ off_fn size_fn in
         let raw_writer = var_bytes_writer typ fld.get size_fn in
-        let int_reader runtime buf base =
-          int_of_typ_value typ (raw_reader runtime buf base)
+        let int_reader runtime input_end buf base =
+          int_of_typ_value typ (raw_reader runtime input_end buf base)
         in
         (raw_reader, raw_writer, int_reader)
   in
@@ -2684,9 +2787,9 @@ let compile_var_bytes : type a r.
     size_delta = 0;
     next_off =
       Dynamic
-        (fun runtime buf base ->
-          let fo = off_fn runtime buf base in
-          base + fo + size_fn runtime buf base);
+        (fun runtime input_end buf base ->
+          let fo = off_fn runtime input_end buf base in
+          base + fo + size_fn runtime input_end buf base);
     bf_after = None;
     int_reader;
     nested_readers = [];
@@ -2707,20 +2810,20 @@ let compile_scalar_or_var : type a r.
         match field_off_static with
         | Some _ ->
             let reader = build_field_reader_ctx typ field_off in
-            fun runtime buf base -> reader runtime buf base
+            fun runtime input_end buf base -> reader runtime input_end buf base
         | None ->
             let reader_at_0 = build_field_reader_ctx typ 0 in
-            fun runtime buf base ->
-              let off = field_off_fn runtime buf base in
-              reader_at_0 runtime buf (base + off)
+            fun runtime input_end buf base ->
+              let off = field_off_fn runtime input_end buf base in
+              reader_at_0 runtime input_end buf (base + off)
       in
       let get = fld.get in
       let raw_writer : r -> runtime -> bytes -> int -> int -> int =
        fun v runtime buf _base write_off ->
         build_field_encoder_ctx typ runtime buf write_off (get v)
       in
-      let int_reader runtime buf base =
-        int_of_typ_value typ (raw_reader runtime buf base)
+      let int_reader runtime input_end buf base =
+        int_of_typ_value typ (raw_reader runtime input_end buf base)
       in
       let populate =
         (* A negative literal width never reaches a scan: the reader refuses it
@@ -2730,7 +2833,7 @@ let compile_scalar_or_var : type a r.
           if fsize < 0 then None
           else
             check_populate typ ~off_fn:field_off_fn
-              ~size_fn:(fun _runtime _buf _base -> fsize)
+              ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
         with
         | Some p -> p
         | None -> build_populate typ ctx.n_fields raw_reader
@@ -2759,12 +2862,13 @@ let inner_span_scan ctx inner fsize =
   if fsize < 0 then None
   else
     span_populate inner ~off_fn:(off_fn_of ctx)
-      ~size_fn:(fun _runtime _buf _base -> fsize)
+      ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
 
 (* An absent field is not there to be checked, so its populate runs only when
    the gate says the bytes are. *)
-let gated_populate gate populate arr runtime buf base =
-  if gate runtime buf base then populate arr runtime buf base
+let gated_populate gate populate arr runtime input_end buf base =
+  if gate runtime input_end buf base then
+    populate arr runtime input_end buf base
 
 (* An [optional] field whose value disagrees with its presence predicate cannot
    be encoded: reject it rather than write a record decode cannot read back. *)
@@ -2776,6 +2880,18 @@ let optional_presence_mismatch : type a. bool -> a =
   else
     invalid_arg
       "Codec.encode: optional field present but presence predicate is false"
+
+(* An [optional_or] whose gate is fixed absent: the field occupies no bytes,
+   every read answers the default and encode writes nothing. *)
+let absent_optional_or : type a r.
+    layout_ctx -> a typ -> a -> (a, r) compiled_field =
+ fun ctx inner default ->
+  optional_compiled ctx
+    ~raw_reader:(fun _runtime _input_end _buf _base -> default)
+    ~int_reader:(fun _runtime _input_end _buf _base ->
+      int_of_typ_value inner default)
+    ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
+    ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
@@ -2799,21 +2915,21 @@ let rec compile_field : type a r.
       {
         cf with
         raw_reader =
-          (fun runtime buf off ->
+          (fun runtime input_end buf off ->
             check
               ~at:(at_of off cf.validator_off)
-              (cf.raw_reader runtime buf off));
+              (cf.raw_reader runtime input_end buf off));
         raw_writer =
           (fun v runtime buf base write_off ->
             encode_check (get v);
             cf.raw_writer v runtime buf base write_off);
         populate =
-          (fun arr runtime buf base ->
-            cf.populate arr runtime buf base;
+          (fun arr runtime input_end buf base ->
+            cf.populate arr runtime input_end buf base;
             ignore
               (int_check
                  ~at:(at_of base cf.validator_off)
-                 (cf.int_reader runtime buf base)));
+                 (cf.int_reader runtime input_end buf base)));
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
@@ -2857,8 +2973,10 @@ and compile_map : type a w r.
   in
   let cf = compile_field ctx inner_fld in
   let decode = Types.map_decode ~index_bound decode in
-  let checked_reader runtime buf off =
-    decode ~at:(at_of off cf.validator_off) (cf.raw_reader runtime buf off)
+  let checked_reader runtime input_end buf off =
+    decode
+      ~at:(at_of off cf.validator_off)
+      (cf.raw_reader runtime input_end buf off)
   in
   {
     cf with
@@ -2867,9 +2985,9 @@ and compile_map : type a w r.
        populate too so [Codec.validate] enforces the bound decode does. The inner
        populate still fills the int slot from the raw value. *)
     populate =
-      (fun arr runtime buf base ->
-        cf.populate arr runtime buf base;
-        ignore (checked_reader runtime buf base));
+      (fun arr runtime input_end buf base ->
+        cf.populate arr runtime input_end buf base;
+        ignore (checked_reader runtime input_end buf base));
   }
 
 and compile_optional : type a r.
@@ -2891,8 +3009,8 @@ and compile_optional : type a r.
       in
       let get = fld.get in
       optional_compiled ctx
-        ~raw_reader:(fun runtime buf base ->
-          Some (inner_reader runtime buf base))
+        ~raw_reader:(fun runtime input_end buf base ->
+          Some (inner_reader runtime input_end buf base))
         ~raw_writer:(fun v runtime buf _base write_off ->
           match get v with
           | Some iv -> inner_writer runtime buf write_off iv
@@ -2902,7 +3020,7 @@ and compile_optional : type a r.
         ~populate:inner_populate ()
   | Bool false, _ ->
       optional_compiled ctx
-        ~raw_reader:(fun _runtime _buf _base -> None)
+        ~raw_reader:(fun _runtime _input_end _buf _base -> None)
         ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
@@ -2916,11 +3034,14 @@ and compile_optional : type a r.
       in
       let get = fld.get in
       optional_compiled ctx
-        ~raw_reader:(fun runtime buf base ->
-          if readable runtime buf base then Some (inner_reader runtime buf base)
+        ~raw_reader:(fun runtime input_end buf base ->
+          if readable runtime input_end buf base then
+            Some (inner_reader runtime input_end buf base)
           else None)
         ~raw_writer:(fun v runtime buf base write_off ->
-          match (present_fn runtime buf base, get v) with
+          match
+            (present_fn runtime (Input_end.of_bytes buf) buf base, get v)
+          with
           | true, Some iv -> inner_writer runtime buf write_off iv
           | false, None -> write_off
           | present, _ -> optional_presence_mismatch present)
@@ -2959,21 +3080,22 @@ and compile_optional_variable : type a r.
   in
   let cf = compile_field ctx inner_fld in
   optional_compiled ctx
-    ~raw_reader:(fun runtime buf base ->
-      if present_fn runtime buf base then Some (cf.raw_reader runtime buf base)
+    ~raw_reader:(fun runtime input_end buf base ->
+      if present_fn runtime input_end buf base then
+        Some (cf.raw_reader runtime input_end buf base)
       else None)
     ~raw_writer:(fun v runtime buf base write_off ->
-      match (present_fn runtime buf base, get v) with
+      match (present_fn runtime (Input_end.of_bytes buf) buf base, get v) with
       | true, Some _ -> cf.raw_writer v runtime buf base write_off
       | false, None -> write_off
       | present, _ -> optional_presence_mismatch present)
     ~size_delta:0
     ~next_off:
       (Dynamic
-         (fun runtime buf base ->
-           if present_fn runtime buf base then
-             next_off_pos cf.next_off runtime buf base
-           else next_off_pos ctx.next_off runtime buf base))
+         (fun runtime input_end buf base ->
+           if present_fn runtime input_end buf base then
+             next_off_pos cf.next_off runtime input_end buf base
+           else next_off_pos ctx.next_off runtime input_end buf base))
     ~populate:(gated_populate present_fn cf.populate)
     ()
 
@@ -2996,26 +3118,22 @@ and compile_optional_or : type a r.
         | None -> build_populate fld.typ ctx.n_fields inner_reader
       in
       optional_compiled ctx ~raw_reader:inner_reader
-        ~int_reader:(fun runtime buf base ->
-          int_of_typ_value inner (inner_reader runtime buf base))
+        ~int_reader:(fun runtime input_end buf base ->
+          int_of_typ_value inner (inner_reader runtime input_end buf base))
         ~raw_writer:(fun v runtime buf _base write_off ->
           inner_writer runtime buf write_off (get v))
         ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate ()
-  | Bool false, _ ->
-      optional_compiled ctx
-        ~raw_reader:(fun _runtime _buf _base -> default)
-        ~int_reader:(fun _runtime _buf _base -> int_of_typ_value inner default)
-        ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
-        ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
+  | Bool false, _ -> absent_optional_or ctx inner default
   | _, Some fsize ->
       let present_fn = compile_bool_expr ctx.field_readers present in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
-      let raw_reader runtime buf base =
-        if readable runtime buf base then inner_reader runtime buf base
+      let raw_reader runtime input_end buf base =
+        if readable runtime input_end buf base then
+          inner_reader runtime input_end buf base
         else default
       in
       let populate =
@@ -3036,8 +3154,8 @@ and compile_optional_or : type a r.
         inner_writer runtime buf write_off (get v)
       in
       optional_compiled ctx ~raw_reader
-        ~int_reader:(fun runtime buf base ->
-          int_of_typ_value inner (raw_reader runtime buf base))
+        ~int_reader:(fun runtime input_end buf base ->
+          int_of_typ_value inner (raw_reader runtime input_end buf base))
         ~raw_writer ~size_delta:fsize
         ~next_off:(advance_next_off ctx.next_off fsize)
         ~populate ()
@@ -3067,8 +3185,9 @@ and compile_optional_or_variable : type a r.
   in
   let cf = compile_field ctx inner_fld in
   optional_compiled ctx
-    ~raw_reader:(fun runtime buf base ->
-      if present_fn runtime buf base then cf.raw_reader runtime buf base
+    ~raw_reader:(fun runtime input_end buf base ->
+      if present_fn runtime input_end buf base then
+        cf.raw_reader runtime input_end buf base
       else default)
     ~raw_writer:(fun v runtime buf base write_off ->
       cf.raw_writer v runtime buf base write_off)
@@ -3141,13 +3260,13 @@ let rec field_reader_validates : type a. a Types.typ -> bool = function
    unwinds. Only fields that can raise an attributable error are wrapped; a plain
    scalar read raises only [Unexpected_eof] from the record's bounds check, which
    is recorded without a path. *)
-let prepend_field name f runtime buf base =
-  try f runtime buf base
+let prepend_field name f runtime input_end buf base =
+  try f runtime input_end buf base
   with Types.Parse_error e ->
     raise (Types.Parse_error { e with field = name :: e.field })
 
-let prepend_field_check name f arr runtime buf base =
-  try f arr runtime buf base
+let prepend_field_check name f arr runtime input_end buf base =
+  try f arr runtime input_end buf base
   with Types.Parse_error e ->
     raise (Types.Parse_error { e with field = name :: e.field })
 
@@ -3175,27 +3294,31 @@ let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
    occupies nothing -- so it carries its own presence-gated check instead, in
    [present_in_bounds]. *)
 let read_guard : type a r.
-    (a, r) compiled_field -> a typ -> (runtime -> bytes -> int -> unit) option =
+    (a, r) compiled_field ->
+    a typ ->
+    (runtime -> Input_end.t -> bytes -> int -> unit) option =
  fun cf typ ->
   match cf.field_access with
   | Bitfield { base = word; byte_off; _ } ->
       let width = Bitfield.byte_size word in
       Some
-        (fun _runtime buf base ->
-          check_read_bounds buf ~at:(base + byte_off) ~width)
+        (fun _runtime input_end _buf base ->
+          check_read_bounds input_end ~at:(base + byte_off) ~width)
   | Fixed off -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
           Some
-            (fun _runtime buf base ->
-              check_read_bounds buf ~at:(base + off) ~width)
+            (fun _runtime input_end _buf base ->
+              check_read_bounds input_end ~at:(base + off) ~width)
       | _ -> None)
   | Dynamic off_fn -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
           Some
-            (fun runtime buf base ->
-              check_read_bounds buf ~at:(base + off_fn runtime buf base) ~width)
+            (fun runtime input_end buf base ->
+              check_read_bounds input_end
+                ~at:(base + off_fn runtime input_end buf base)
+                ~width)
       | _ -> None)
   | Variable _ | Variable_dynamic _ -> None
 
@@ -3207,9 +3330,9 @@ let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
   match read_guard cf typ with
   | None -> reader
   | Some guard ->
-      fun runtime buf base ->
-        guard runtime buf base;
-        reader runtime buf base
+      fun runtime input_end buf base ->
+        guard runtime input_end buf base;
+        reader runtime input_end buf base
 
 (* [Codec.validate] reaches a field's bytes only through its populate: unlike
    decode, it never walks the record field by field, so a field pushed past the
@@ -3218,29 +3341,36 @@ let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
    expression readers use, so validating truncated input ends in a located
    end-of-input rather than a raw out-of-bounds [Invalid_argument]. *)
 let guarded_populate : type a r.
-    (a, r) compiled_field -> a typ -> slots -> runtime -> bytes -> int -> unit =
+    (a, r) compiled_field ->
+    a typ ->
+    slots ->
+    runtime ->
+    Input_end.t ->
+    bytes ->
+    int ->
+    unit =
  fun cf typ ->
   let populate = cf.populate in
   match read_guard cf typ with
   | None -> populate
   | Some guard ->
-      fun arr runtime buf base ->
-        guard runtime buf base;
-        populate arr runtime buf base
+      fun arr runtime input_end buf base ->
+        guard runtime input_end buf base;
+        populate arr runtime input_end buf base
 
 (* A field's two validators. [check_only] fills the field's int slot and tests
    its constraint; [full] adds the field action. Decode and [Codec.validate]
    both run [full], so an action never fires on one path only. *)
 let field_validators ~field_idx ~validator_off ~populate ~check ~act =
-  let check_only arr runtime buf base =
-    populate arr runtime buf base;
+  let check_only arr runtime input_end buf base =
+    populate arr runtime input_end buf base;
     match check with
     | Some f when not (f arr) ->
         raise_field_constraint ~field_idx ~at:(at_of base validator_off) arr
     | _ -> ()
   in
-  let full arr runtime buf base =
-    check_only arr runtime buf base;
+  let full arr runtime input_end buf base =
+    check_only arr runtime input_end buf base;
     match act with Some f -> f arr | None -> ()
   in
   (check_only, full)
@@ -3257,7 +3387,7 @@ let apply_compiled : type a f r.
   in
   let n_extra_vars = List.length action_vanames in
   let field_idx = r.n_fields in
-  let dummy_reader _runtime _buf _base = 0 in
+  let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
     let base = (fld.name, dummy_reader) :: r.field_readers in
     List.fold_left (fun acc vn -> (vn, dummy_reader) :: acc) base action_vanames
@@ -3343,7 +3473,8 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
-      (runtime -> bytes -> int -> 'a) * ('rest, 'result) readers_fwd
+      (runtime -> Input_end.t -> bytes -> int -> 'a)
+      * ('rest, 'result) readers_fwd
       -> ('a -> 'rest, 'result) readers_fwd
 
 (* Convert a [readers] snoc-list to a [readers_fwd] cons-list. O(n), runs
@@ -3374,118 +3505,115 @@ let to_fwd : type full result.
    patterns across ~500 lines; the flat table is both shorter and easier to
    read. *)
 let rec apply_fwd : type mid result.
-    mid -> (mid, result) readers_fwd -> runtime -> bytes -> int -> result =
- fun f fwd runtime buf off ->
+    mid ->
+    (mid, result) readers_fwd ->
+    runtime -> Input_end.t -> bytes -> int -> result =
+ fun f fwd runtime input_end buf off ->
   match fwd with
   | FNil -> f
   | FCons (r1, FNil) ->
-      f (r1 runtime buf off)
+      f (r1 runtime input_end buf off)
   | FCons (r1, FCons (r2, FNil)) ->
-      f (r1 runtime buf off) (r2 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FNil))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FNil)))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FNil))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FNil)))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FNil))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FNil)))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FNil))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FNil)))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FNil))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FNil)))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FNil))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FNil)))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FNil))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FNil)))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FNil))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FNil)))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FNil))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FNil)))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FNil))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FNil)))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FNil))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FNil)))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FNil))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FNil)))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FNil))))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FNil)))))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off) (r28 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FNil))))))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off) (r28 runtime buf off) (r29 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FNil)))))))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off) (r28 runtime buf off) (r29 runtime buf off) (r30 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FNil))))))))))))))))))))))))))))))) ->
-      f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off) (r28 runtime buf off) (r29 runtime buf off) (r30 runtime buf off) (r31 runtime buf off)
+      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off) (r31 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FCons (r32, rest)))))))))))))))))))))))))))))))) ->
-      apply_fwd (f (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off) (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off) (r7 runtime buf off) (r8 runtime buf off) (r9 runtime buf off) (r10 runtime buf off) (r11 runtime buf off) (r12 runtime buf off) (r13 runtime buf off) (r14 runtime buf off) (r15 runtime buf off) (r16 runtime buf off) (r17 runtime buf off) (r18 runtime buf off) (r19 runtime buf off) (r20 runtime buf off) (r21 runtime buf off) (r22 runtime buf off) (r23 runtime buf off) (r24 runtime buf off) (r25 runtime buf off) (r26 runtime buf off) (r27 runtime buf off) (r28 runtime buf off) (r29 runtime buf off) (r30 runtime buf off) (r31 runtime buf off) (r32 runtime buf off)) rest runtime buf off
+      apply_fwd (f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off) (r31 runtime input_end buf off) (r32 runtime input_end buf off)) rest runtime input_end buf off
 [@@ocamlformat "disable"]
 
+(* Saturate [make] in a single call for up to eight fields, so a decode
+   allocates no intermediate closure; beyond that the fold in [apply_fwd]
+   takes over. The formatter is disabled for the same reason it is there: the
+   table is a row per arity, and staircasing each argument onto its own line
+   makes it four times longer without making it clearer. *)
 let build_decode : type full r.
-    full -> (full, r) readers -> runtime -> bytes -> int -> r =
+    full -> (full, r) readers -> runtime -> Input_end.t -> bytes -> int -> r =
  fun make readers ->
   match readers with
-  | Nil -> fun _runtime _buf _off -> make
-  | Snoc (Nil, r1) -> fun runtime buf off -> make (r1 runtime buf off)
+  | Nil -> fun _runtime _input_end _buf _off -> make
+  | Snoc (Nil, r1) ->
+      fun runtime input_end buf off -> make (r1 runtime input_end buf off)
   | Snoc (Snoc (Nil, r1), r2) ->
-      fun runtime buf off -> make (r1 runtime buf off) (r2 runtime buf off)
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off)
   | Snoc (Snoc (Snoc (Nil, r1), r2), r3) ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off)
   | Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4) ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
-          (r4 runtime buf off)
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off)
   | Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5) ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
-          (r4 runtime buf off) (r5 runtime buf off)
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off)
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6) ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
-          (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off)
-  | Snoc
-      (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7)
-    ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
-          (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off)
-          (r7 runtime buf off)
-  | Snoc
-      ( Snoc
-          ( Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6),
-            r7 ),
-        r8 ) ->
-      fun runtime buf off ->
-        make (r1 runtime buf off) (r2 runtime buf off) (r3 runtime buf off)
-          (r4 runtime buf off) (r5 runtime buf off) (r6 runtime buf off)
-          (r7 runtime buf off) (r8 runtime buf off)
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off)
+  | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7) ->
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off)
+  | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7), r8) ->
+      fun runtime input_end buf off ->
+        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off)
   | readers ->
       let fwd = to_fwd readers in
-      fun runtime buf off -> apply_fwd make fwd runtime buf off
+      fun runtime input_end buf off -> apply_fwd make fwd runtime input_end buf off
+[@@ocamlformat "disable"]
 
 let lookup_reader_idx rev_readers name =
   let rec find i = function
@@ -3540,9 +3668,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
     param_slots n_total =
   let validator_fns = Array.of_list (List.map snd validators_rev) in
   let n_validators = Array.length validator_fns in
-  let validate_arr arr runtime buf off =
+  let validate_arr arr runtime input_end buf off =
     for i = 0 to n_validators - 1 do
-      validator_fns.(i) arr runtime buf off
+      validator_fns.(i) arr runtime input_end buf off
     done;
     match compiled_where with
     | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
@@ -3550,9 +3678,9 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
   in
   let checker_fns = Array.of_list (List.map snd checkers_rev) in
   let n_checkers = Array.length checker_fns in
-  let populate arr runtime buf off =
+  let populate arr runtime input_end buf off =
     for i = 0 to n_checkers - 1 do
-      checker_fns.(i) arr runtime buf off
+      checker_fns.(i) arr runtime input_end buf off
     done
   in
   (* Run the validator pass only when the struct actually has something to
@@ -3572,7 +3700,7 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
            evaluate correctly. *)
         seed_param_slots arr n_total env_slots;
         let runtime = validation_runtime param_slots arr in
-        validate_arr arr runtime buf off
+        validate_arr arr runtime (Input_end.of_bytes buf) buf off
   in
   (validate_arr, populate, validate)
 
@@ -3604,9 +3732,10 @@ let fill_param_slots tbl param_base handles =
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
    before a zero-copy [get] reads its fields. *)
-let check_decode_bounds wire_size_info min_size runtime buf off =
+let check_decode_bounds wire_size_info min_size runtime input_end buf off =
   if off + min_size > Bytes.length buf then
-    raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
+    raise_eof ~at:off ~expected:min_size
+      ~got:(bytes_from (Input_end.of_bytes buf) off);
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -3614,16 +3743,18 @@ let check_decode_bounds wire_size_info min_size runtime buf off =
          reads bound-check themselves ([expr_reader]), so a buffer too short to
          hold them already surfaces as end-of-input here; anything else they
          raise is a real error and propagates. *)
-      let end_off = compute runtime buf off in
+      let end_off = compute runtime input_end buf off in
       if end_off < off + min_size then
-        raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
+        raise_eof ~at:off ~expected:min_size
+          ~got:(bytes_from (Input_end.of_bytes buf) off);
       if end_off > Bytes.length buf then
-        raise_eof ~at:off ~expected:(end_off - off) ~got:(bytes_from buf off)
+        raise_eof ~at:off ~expected:(end_off - off)
+          ~got:(bytes_from (Input_end.of_bytes buf) off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
- fun runtime buf off ->
-  check_decode_bounds wire_size_info min_size runtime buf off;
-  raw_decode runtime buf off
+ fun runtime input_end buf off ->
+  check_decode_bounds wire_size_info min_size runtime input_end buf off;
+  raw_decode runtime input_end buf off
 
 (* [Codec.validate] is the safety gate before a batch of zero-copy [get] calls on
    untrusted input, so it must run decode's structural bounds check even for a
@@ -3641,7 +3772,8 @@ let validate_with_bounds wire_size_info min_size param_slots param_base
             | Some idx -> slots.(idx - param_base)
             | None -> 0)
   in
-  check_decode_bounds wire_size_info min_size runtime buf off;
+  check_decode_bounds wire_size_info min_size runtime (Input_end.of_bytes buf)
+    buf off;
   validate_checks ?env_slots buf off
 
 let build_size_of_value size_funcs =
@@ -3698,7 +3830,7 @@ let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
   let arr = scratch () in
   clear_slots arr n_total;
   seed_params arr runtime param_base 0 param_handles;
-  populate arr runtime buf off;
+  populate arr runtime (Input_end.of_bytes buf) buf off;
   match compiled_where with
   | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
   | _ -> ()
@@ -3708,11 +3840,11 @@ let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
    build the same pass into the sub-codec entry point a use site calls, and the
    two cannot drift. *)
 let validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
-    ~validate_arr runtime buf off =
+    ~validate_arr runtime input_end buf off =
   let arr = scratch () in
   clear_slots arr n_total;
   seed_params arr runtime param_base 0 param_handles;
-  validate_arr arr runtime buf off;
+  validate_arr arr runtime input_end buf off;
   writeback_params arr runtime param_base 0 param_handles
 
 let build_record_encoder name writers size_of_value ~check =
@@ -3794,10 +3926,10 @@ let seal : type r. (r, r) record -> r t =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
     validate_ctx =
-      (fun runtime buf off ->
-        check_decode_bounds wire_size_info min_size runtime buf off;
+      (fun runtime input_end buf off ->
+        check_decode_bounds wire_size_info min_size runtime input_end buf off;
         validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
-          ~validate_arr runtime buf off);
+          ~validate_arr runtime input_end buf off);
     validate_arr;
     populate;
     n_array_slots = n_total;
@@ -3820,13 +3952,15 @@ type validator = {
   min_size : int;
   wire_size : wire_size_info;
   validate : bytes -> int -> unit;
-  validate_ctx : runtime -> bytes -> int -> unit;
+  validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
 }
 
 (* Internal accumulator -- the validator-relevant subset of [record]. *)
 type validator_acc = {
-  validators_rev : (int * (slots -> runtime -> bytes -> int -> unit)) list;
-  checkers_rev : (int * (slots -> runtime -> bytes -> int -> unit)) list;
+  validators_rev :
+    (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
+  checkers_rev :
+    (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
   field_readers : field_reader list;
   n_fields : int;
   n_array_slots : int;
@@ -3871,14 +4005,12 @@ let layout_ctx_of_validator_acc acc =
 (* Common access patterns over [next_off]: a fresh-buffer offset
    function and a "previous end" helper that hides the static/dynamic
    split. *)
-let acc_off_fn (acc : validator_acc) : runtime -> bytes -> int -> int =
-  match acc.next_off with
-  | Static n -> fun _runtime _buf _base -> n
-  | Dynamic f -> fun runtime buf base -> f runtime buf base - base
+let acc_off_fn (acc : validator_acc) = next_off_rel acc.next_off
 
-let acc_prev_end (acc : validator_acc) : runtime -> bytes -> int -> int =
+let acc_prev_end (acc : validator_acc) :
+    runtime -> Input_end.t -> bytes -> int -> int =
   match acc.next_off with
-  | Static n -> fun _runtime _buf base -> base + n
+  | Static n -> fun _runtime _input_end _buf base -> base + n
   | Dynamic f -> f
 
 (* Validator step for a [Struct]-typed field. [compile_field] doesn't
@@ -3897,7 +4029,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
     | Some (Types.Success stmts | Types.Act stmts) ->
         List.fold_left action_vars [] stmts
   in
-  let dummy_reader _runtime _buf _base = 0 in
+  let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
     let base = (name, dummy_reader) :: acc.field_readers in
     List.fold_left
@@ -3921,20 +4053,25 @@ let rec apply_struct_field acc inner_struct =
   let inner_v = validator_of_struct inner_struct in
   let static_off = match acc.next_off with Static n -> n | Dynamic _ -> -1 in
   let off_fn = acc_off_fn acc in
-  let validator _arr runtime buf base =
-    inner_v.validate_ctx runtime buf (base + off_fn runtime buf base)
+  let validator _arr runtime input_end buf base =
+    inner_v.validate_ctx runtime input_end buf
+      (base + off_fn runtime input_end buf base)
   in
   let prev_end = acc_prev_end acc in
   let size_delta, next_off =
     match (acc.next_off, inner_v.wire_size) with
     | Static n, Fixed sz -> (sz, Static (n + sz))
     | _, Fixed sz ->
-        (sz, Dynamic (fun runtime buf base -> prev_end runtime buf base + sz))
+        ( sz,
+          Dynamic
+            (fun runtime input_end buf base ->
+              prev_end runtime input_end buf base + sz) )
     | _, Variable { min_size; compute } ->
         ( min_size,
           Dynamic
-            (fun runtime buf base ->
-              compute runtime buf (prev_end runtime buf base)) )
+            (fun runtime input_end buf base ->
+              compute runtime input_end buf
+                (prev_end runtime input_end buf base)) )
   in
   {
     validators_rev = (static_off, validator) :: acc.validators_rev;
@@ -4015,16 +4152,18 @@ and validator_of_struct (s : Types.struct_) : validator =
      actions). [validate_arr] runs full validators against a per-domain
      scratch, zeroed on entry. *)
   let get_arr = domain_local_slots n_total in
-  let validate_ctx runtime buf off =
+  let validate_ctx runtime input_end buf off =
     let arr = get_arr () in
     if n_total > 0 then clear_slots arr n_total;
     List.iteri
       (fun i (Param.Pack p) ->
         arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name)
       param_handles;
-    validate_arr arr runtime buf off
+    validate_arr arr runtime input_end buf off
   in
-  let validate buf off = validate_ctx no_runtime buf off in
+  let validate buf off =
+    validate_ctx no_runtime (Input_end.of_bytes buf) buf off
+  in
   {
     min_size = acc.min_size;
     wire_size = wire_size_info;
@@ -4037,7 +4176,8 @@ let validate_struct (v : validator) buf off = v.validate buf off
 let struct_size_of (v : validator) buf off =
   match v.wire_size with
   | Fixed n -> n
-  | Variable { compute; _ } -> compute no_runtime buf off - off
+  | Variable { compute; _ } ->
+      compute no_runtime (Input_end.of_bytes buf) buf off - off
 
 let struct_min_size (v : validator) = v.min_size
 
@@ -4045,7 +4185,8 @@ let wire_size_info_of_validator (v : validator) =
   match v.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } ->
-      `Variable (fun buf off -> compute no_runtime buf off)
+      `Variable
+        (fun buf off -> compute no_runtime (Input_end.of_bytes buf) buf off)
 
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
@@ -4079,14 +4220,16 @@ let min_wire_size (t : _ t) =
 let wire_size_at (t : _ t) buf off =
   match t.wire_size with
   | Fixed n -> n
-  | Variable { compute; _ } -> compute no_runtime buf off - off
+  | Variable { compute; _ } ->
+      compute no_runtime (Input_end.of_bytes buf) buf off - off
 
 let size_of_value (t : _ t) v = t.size_of_value v
 
 let is_fixed (t : _ t) =
   match t.wire_size with Fixed _ -> true | Variable _ -> false
 
-let raw_decode (t : _ t) buf off = t.decode no_runtime buf off
+let raw_decode (t : _ t) buf off =
+  t.decode no_runtime (Input_end.of_bytes buf) buf off
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
@@ -4138,17 +4281,18 @@ let raw_encode ?env:e t v buf off =
 let embed_encode_ctx (t : 'r t) v runtime buf off = t.encode v runtime buf off
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
-let validate_runtime t runtime buf off =
+let validate_runtime t runtime input_end buf off =
   validate_runtime_of ~scratch:t.decode_scratch ~n_total:t.n_array_slots
     ~param_base:t.param_base ~param_handles:t.param_handles
-    ~validate_arr:t.validate_arr runtime buf off
+    ~validate_arr:t.validate_arr runtime input_end buf off
 
-let embed_decode_ctx (t : 'r t) runtime buf off =
-  let v = t.decode runtime buf off in
-  validate_runtime t runtime buf off;
+let embed_decode_ctx (t : 'r t) runtime input_end buf off =
+  let v = t.decode runtime input_end buf off in
+  validate_runtime t runtime input_end buf off;
   v
 
-let embed_decode (t : 'r t) buf off = embed_decode_ctx t no_runtime buf off
+let embed_decode (t : 'r t) buf off =
+  embed_decode_ctx t no_runtime (Input_end.of_bytes buf) buf off
 
 (* [embed_decode_ctx] with the record construction dropped: the same bounds
    check and the same field pass, and nothing built. *)
@@ -4158,13 +4302,17 @@ let wire_size_info_ctx (t : _ t) =
   match t.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } ->
-      `Variable (fun runtime buf off -> compute runtime buf off - off)
+      `Variable
+        (fun runtime input_end buf off ->
+          compute runtime input_end buf off - off)
 
 let wire_size_info (t : _ t) =
   match t.wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } ->
-      `Variable (fun buf off -> compute no_runtime buf off - off)
+      `Variable
+        (fun buf off ->
+          compute no_runtime (Input_end.of_bytes buf) buf off - off)
 
 let env (t : _ t) : Param.env =
   {
@@ -4183,14 +4331,15 @@ let decode_exn ?env:e t buf off =
      input, so it raises [Invalid_argument] rather than returning a parse error. *)
   require_env ~op:"decode" t e;
   let runtime = runtime ?env:e () in
-  let v = t.decode runtime buf off in
+  let input_end = Input_end.of_bytes buf in
+  let v = t.decode runtime input_end buf off in
   let arr = t.decode_scratch () in
   clear_slots arr t.n_array_slots;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
       Array.blit e.slots 0 arr.ints t.param_base t.n_params
   | _ -> ());
-  t.validate_arr arr runtime buf off;
+  t.validate_arr arr runtime input_end buf off;
   (match e with
   | Some (e : Param.env) ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
@@ -4240,64 +4389,70 @@ let validate ?env:e (t : _ t) buf off =
    For Bitfield: the GADT ensures 'a = int via Bits constructor.
    For Dynamic: compute offset at read time. *)
 let rec build_staged_reader : type a.
-    a typ -> field_access -> runtime -> bytes -> int -> a =
+    a typ -> field_access -> runtime -> Input_end.t -> bytes -> int -> a =
  fun typ access ->
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
       let read = build_bf_accessor_reader base byte_off shift width in
-      fun _runtime buf base -> read buf base
+      fun _runtime _input_end buf base -> read buf base
   | _, Fixed off ->
       let read = build_field_reader_ctx typ off in
-      fun runtime buf base -> read runtime buf base
+      fun runtime input_end buf base -> read runtime input_end buf base
   | _, Dynamic fn ->
       let reader_at_0 = build_field_reader_ctx typ 0 in
-      fun runtime buf base ->
-        let off = fn runtime buf base in
-        reader_at_0 runtime buf (base + off)
+      fun runtime input_end buf base ->
+        let off = fn runtime input_end buf base in
+        reader_at_0 runtime input_end buf (base + off)
   | Byte_slice _, Variable { off; size_fn } ->
-      fun runtime buf base ->
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let sz = size_fn runtime input_end buf base in
         Slice.make_or_eod buf ~first:(base + off) ~length:sz
   | Byte_array _, Variable { off; size_fn } ->
-      fun runtime buf base ->
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let sz = size_fn runtime input_end buf base in
         Bytes.sub_string buf (base + off) sz
   | Byte_array_where { elt_var; cond; _ }, Variable { off; size_fn } ->
-      fun runtime buf base ->
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let sz = size_fn runtime input_end buf base in
         refined_span_reader ~elt_var ~cond buf ~first:(base + off) ~len:sz
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime buf base ->
-        let fo = off_fn runtime buf base in
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let fo = off_fn runtime input_end buf base in
+        let sz = size_fn runtime input_end buf base in
         Slice.make_or_eod buf ~first:(base + fo) ~length:sz
   | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime buf base ->
-        let fo = off_fn runtime buf base in
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let fo = off_fn runtime input_end buf base in
+        let sz = size_fn runtime input_end buf base in
         Bytes.sub_string buf (base + fo) sz
   | Byte_array_where { elt_var; cond; _ }, Variable_dynamic { off_fn; size_fn }
     ->
-      fun runtime buf base ->
-        let fo = off_fn runtime buf base in
-        let sz = size_fn runtime buf base in
+      fun runtime input_end buf base ->
+        let fo = off_fn runtime input_end buf base in
+        let sz = size_fn runtime input_end buf base in
         refined_span_reader ~elt_var ~cond buf ~first:(base + fo) ~len:sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
       let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
       let at = access_at access in
-      fun runtime buf base ->
-        check ~at:(at runtime buf base) (read runtime buf base)
+      fun runtime input_end buf base ->
+        check
+          ~at:(at runtime input_end buf base)
+          (read runtime input_end buf base)
   | Map { inner; decode; index_bound; _ }, _ -> (
       let read = build_staged_reader inner access in
       match index_bound with
-      | None -> fun runtime buf base -> decode (read runtime buf base)
+      | None ->
+          fun runtime input_end buf base ->
+            decode (read runtime input_end buf base)
       | Some _ ->
           let decode = Types.map_decode ~index_bound decode in
           let at = access_at access in
-          fun runtime buf base ->
-            decode ~at:(at runtime buf base) (read runtime buf base))
+          fun runtime input_end buf base ->
+            decode
+              ~at:(at runtime input_end buf base)
+              (read runtime input_end buf base))
   | _, Bitfield _ ->
       invalid_arg "Codec.get: non-bitfield type with bitfield access"
   | _, Variable _ | _, Variable_dynamic _ ->
@@ -4358,7 +4513,7 @@ let rec build_staged_writer : type a.
   | _, Dynamic fn ->
       let encode = field_writer typ in
       fun runtime buf base value ->
-        let off = fn runtime buf base in
+        let off = fn runtime (Input_end.of_bytes buf) buf base in
         encode runtime buf (base + off) value
   (* A field whose size is only known at run time still owns exactly that many
      bytes: writing the value's length instead would overwrite the fields that
@@ -4383,21 +4538,21 @@ let rec build_staged_writer : type a.
         Bytes.blit_string s 0 buf (base + off) len
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base value ->
-        let fo = off_fn runtime buf base in
+        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
         let src = (value : Slice.t) in
         let len = Slice.length src in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
         Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + fo) len
   | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base value ->
-        let fo = off_fn runtime buf base in
+        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
         Bytes.blit_string s 0 buf (base + fo) len
   | Byte_array_where _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base value ->
-        let fo = off_fn runtime buf base in
+        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
@@ -4478,7 +4633,9 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   | None -> (
       match build_immediate_staged_reader f.typ access with
       | Some read -> Staged.stage read
-      | None -> Staged.stage (fun buf off -> read rt buf off))
+      | None ->
+          Staged.stage (fun buf off -> read rt (Input_end.of_bytes buf) buf off)
+      )
   | Some act ->
       (* Reuse the codec's own domain-local scratch rather than minting another
          [Domain.DLS] key here: [get] returns a staged reader, but a caller that
@@ -4506,11 +4663,12 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                   Array.blit e.slots 0 arr.ints param_base n_params )
       in
       Staged.stage (fun buf off ->
-          let v = read rt buf off in
+          let input_end = Input_end.of_bytes buf in
+          let v = read rt input_end buf off in
           let arr = get_arr () in
           clear_slots arr n;
           blit_input arr;
-          populate arr rt buf off;
+          populate arr rt input_end buf off;
           act arr;
           sync arr;
           v)
@@ -4530,7 +4688,8 @@ let field_readers_ctx (t : _ t) = t.field_readers
 
 let field_readers (t : _ t) =
   List.map
-    (fun (name, read) -> (name, fun buf off -> read no_runtime buf off))
+    (fun (name, read) ->
+      (name, fun buf off -> read no_runtime (Input_end.of_bytes buf) buf off))
     t.field_readers
 
 let pp ppf (t : _ t) = Fmt.string ppf t.name
@@ -4554,10 +4713,13 @@ let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
   match field_access codec f.name with
   | Fixed off -> Staged.stage (fun _buf base -> base + off)
-  | Dynamic fn -> Staged.stage (fun buf base -> base + fn no_runtime buf base)
+  | Dynamic fn ->
+      Staged.stage (fun buf base ->
+          base + fn no_runtime (Input_end.of_bytes buf) buf base)
   | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
   | Variable_dynamic { off_fn; _ } ->
-      Staged.stage (fun buf base -> base + off_fn no_runtime buf base)
+      Staged.stage (fun buf base ->
+          base + off_fn no_runtime (Input_end.of_bytes buf) buf base)
   | Bitfield _ ->
       Fmt.invalid_arg
         "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
@@ -4575,7 +4737,8 @@ let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
              -- internal inconsistency"
             f.name)
   | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
-      Staged.stage (fun buf base -> size_fn no_runtime buf base)
+      Staged.stage (fun buf base ->
+          size_fn no_runtime (Input_end.of_bytes buf) buf base)
   | _, (Fixed _ | Dynamic _) ->
       Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
   | _, Bitfield _ ->

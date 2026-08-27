@@ -206,22 +206,26 @@ val embed_decode : 'r t -> bytes -> int -> 'r
     field constraints against param values seeded by the enclosing codec.
     Internal use. *)
 
-val embed_decode_ctx : 'r t -> Types.eval_ctx -> bytes -> int -> 'r
+val embed_decode_ctx :
+  'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> 'r
 (** Context-threaded embedded decode. Internal use. *)
 
-val embed_validate_ctx : 'r t -> Types.eval_ctx -> bytes -> int -> unit
-(** [embed_validate_ctx c ctx buf off] runs everything {!embed_decode_ctx}
-    checks and builds nothing: the bounds check, the field constraints, the
-    [where] clauses, the enum and span refinements and the field actions of the
-    sub-codec at [off]. This is what an embedded codec's use site runs,
-    mirroring the call to the nested struct's validator the generated C makes.
-    Internal use. *)
+val embed_validate_ctx :
+  'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> unit
+(** [embed_validate_ctx c ctx input_end buf off] runs everything
+    {!embed_decode_ctx} checks and builds nothing: the bounds check, the field
+    constraints, the [where] clauses, the enum and span refinements and the
+    field actions of the sub-codec at [off]. This is what an embedded codec's
+    use site runs, mirroring the call to the nested struct's validator the
+    generated C makes. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 
 val wire_size_info_ctx :
-  'r t -> [ `Fixed of int | `Variable of Types.eval_ctx -> bytes -> int -> int ]
+  'r t ->
+  [ `Fixed of int
+  | `Variable of Types.eval_ctx -> Input_end.t -> bytes -> int -> int ]
 (** Context-threaded wire size information for embedding. Internal use. *)
 
 val name : 'r t -> string
@@ -244,7 +248,7 @@ val field_readers : 'r t -> (string * (bytes -> int -> int)) list
     sub-codec via {!Wire.codec}. *)
 
 val field_readers_ctx :
-  'r t -> (string * (Types.eval_ctx -> bytes -> int -> int)) list
+  'r t -> (string * (Types.eval_ctx -> Input_end.t -> bytes -> int -> int)) list
 (** Context-threaded field readers for embedding. Internal use. *)
 
 val pp : Format.formatter -> 'r t -> unit

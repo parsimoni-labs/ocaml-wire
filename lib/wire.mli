@@ -1617,6 +1617,7 @@ end
 module Private : sig
   module UInt32 = UInt32
   module UInt63 = UInt63
+  module Input_end = Input_end
   module Types = Types
 
   (** Top-level expression evaluation, in a context with no field bindings. *)
