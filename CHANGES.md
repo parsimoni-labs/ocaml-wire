@@ -164,6 +164,10 @@
   for a plain field and a `Field.repeat` element, and allocates nothing
   (#329, @samoht)
 
+- A `zeroterm` read through `Wire.of_reader` no longer costs time quadratic in
+  its length, at the top level or inside a codec: a 64 KiB string arriving one
+  byte at a time took 1.7 s and now takes a millisecond (#331, @samoht)
+
 - A value with no fixed wire size read through `Wire.of_reader` no longer costs
   time and memory quadratic in its length. The reader rebuilt the whole
   accumulated buffer and re-parsed it from offset zero after every slice, so a

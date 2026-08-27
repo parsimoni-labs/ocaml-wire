@@ -520,14 +520,6 @@ let parse_or_rewind typ reader bytes len =
       push_back_bytes reader bytes 0 len;
       raise (Parse_error e)
 
-let missing_more_input e =
-  (* A truncated zeroterm reports [Missing_terminator] (from
-     [Codec.zeroterm_nul_pos]); both it and an [Unexpected_eof] mean the reader
-     should fetch more input before giving up. *)
-  match e.kind with
-  | Unexpected_eof _ | Missing_terminator -> true
-  | _ -> false
-
 (* A growable scratch the incremental reader accumulates slices into, so
    retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
    everything read so far on every call, which is what made a value arriving in
@@ -536,9 +528,18 @@ let missing_more_input e =
    [Bytes.make] rather than [Bytes.create]: the parse is given a length, but a
    size expression can still read the bytes behind it, and those must not be
    whatever the allocator last held. *)
-type scratch = { mutable buf : bytes; mutable filled : int }
+type scratch = {
+  mutable buf : bytes;
+  mutable filled : int;
+  (* How far the terminator search has looked. A zeroterm cannot know where its
+     NUL is until it sees one, so a retry per slice rescans from the string's
+     start every time, which is what makes a dribbled zeroterm quadratic. The
+     cursor carries the search across retries so each byte is looked at once. *)
+  mutable nul_from : int;
+}
 
-let scratch_create () = { buf = Bytes.make 256 '\000'; filled = 0 }
+let scratch_create () =
+  { buf = Bytes.make 256 '\000'; filled = 0; nul_from = 0 }
 
 let scratch_ensure s n =
   if n > Bytes.length s.buf then begin
@@ -571,13 +572,29 @@ let rec scratch_fill s reader target =
 
 (* How far to read before retrying a parse that ran short. [expected] is what
    the value needed and [got] what was left where it starts, so the shortfall is
-   the difference; never less than one byte, or a hint of zero would spin.
-   [Missing_terminator] carries no count, because a zeroterm cannot know where
-   its NUL is until it sees one, so that case advances a slice at a time. *)
-let retry_target s e =
-  match e.kind with
-  | Unexpected_eof { expected; got } -> s.filled + max 1 (expected - got)
-  | _ -> s.filled + 1
+   the difference; never less than one byte, or a hint of zero would spin. *)
+let retry_target s ~expected ~got = s.filled + max 1 (expected - got)
+
+(* First NUL at or after [i] among the buffered bytes, or [-1] for none. *)
+let rec nul_at s i =
+  if i >= s.filled then -1
+  else if Bytes.get_uint8 s.buf i = 0 then i
+  else nul_at s (i + 1)
+
+(* Read until a NUL turns up at or after the scan cursor, or the reader ends.
+   Returns whether a terminator the retry has not been offered yet is buffered.
+   The cursor makes this one pass over the input however many slices it takes,
+   where a search restarted per slice reads the same bytes over and over. *)
+let rec fill_to_nul s reader =
+  let p = nul_at s s.nul_from in
+  if p >= 0 then begin
+    s.nul_from <- p + 1;
+    true
+  end
+  else begin
+    s.nul_from <- s.filled;
+    scratch_read s reader && fill_to_nul s reader
+  end
 
 let of_reader_incremental typ reader =
   let s = scratch_create () in
@@ -585,21 +602,33 @@ let of_reader_incremental typ reader =
     push_back_bytes reader s.buf 0 s.filled;
     raise (Parse_error e)
   in
+  (* Both recoverable kinds read ahead and retry, and give up only when the read
+     yields nothing at all. What differs is how far ahead to read. *)
   let rec loop () =
     match parse_direct typ s.buf 0 s.filled with
     | v, off ->
         push_back_bytes reader s.buf off (s.filled - off);
         v
-    | exception Parse_error e when missing_more_input e ->
+    | exception Parse_error e -> (
         let before = s.filled in
-        ignore (scratch_fill s reader (retry_target s e) : bool);
-        (* The hint says how far to read ahead, never whether to fail. A size
-           that depends on a field the parse has not reached yet is computed
-           from whatever lies at that offset, so the figure can be far larger
-           than the input, and reaching the end of the reader while chasing it
-           is not an error. Give up only when a read yields nothing at all. *)
-        if s.filled > before then loop () else give_up e
-    | exception Parse_error e -> give_up e
+        match e.kind with
+        (* A search ran the length of the buffer without meeting its terminator,
+           so no retry can succeed until a NUL arrives: read until one does.
+           Waiting on it can only delay a retry, never skip one, since a reader
+           that ends first still retries over everything that arrived. *)
+        | Missing_terminator ->
+            let found = fill_to_nul s reader in
+            if found || s.filled > before then loop () else give_up e
+        (* The shortfall says how far to read ahead, never whether to fail. A
+           size that depends on a field the parse has not reached yet is
+           computed from whatever lies at that offset, so the figure can be far
+           larger than the input, and reaching the end of the reader while
+           chasing it is not an error. *)
+        | Unexpected_eof { expected; got } ->
+            ignore
+              (scratch_fill s reader (retry_target s ~expected ~got) : bool);
+            if s.filled > before then loop () else give_up e
+        | _ -> give_up e)
   in
   loop ()
 
