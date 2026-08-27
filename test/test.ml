@@ -13,6 +13,7 @@ let () =
       Test_sint32.suite;
       Test_sint8.suite;
       Test_sint16.suite;
+      Test_uint8.suite;
       Test_uint16.suite;
       Test_uint63.suite;
       Test_types.suite;
