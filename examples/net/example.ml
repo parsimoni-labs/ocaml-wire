@@ -22,7 +22,8 @@ let () =
     Slice.first
       ((Staged.unstage (Codec.get ethernet_codec bf_eth_payload)) buf 0)
   in
-  Fmt.pr "Ethernet: ethertype=0x%04X payload_off=%d\n" etype ip_off;
+  Fmt.pr "Ethernet: ethertype=0x%04X payload_off=%d\n" (UInt16.to_int etype)
+    ip_off;
 
   (* Layer 2: IPv4 -- read fields, navigate to TCP sub-region *)
   let protocol =
@@ -34,8 +35,8 @@ let () =
     Slice.first
       ((Staged.unstage (Codec.get ipv4_codec bf_ip_payload)) buf ip_off)
   in
-  Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n" protocol
-    pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
+  Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n"
+    (UInt8.to_int protocol) pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
 
   (* Layer 3: TCP -- read fields *)
   let src_port =
@@ -46,12 +47,15 @@ let () =
   in
   let syn = (Staged.unstage (Codec.get tcp_codec bf_tcp_syn)) buf tcp_off in
   let ack = (Staged.unstage (Codec.get tcp_codec bf_tcp_ack)) buf tcp_off in
-  Fmt.pr "TCP:      %d -> %d SYN=%b ACK=%b\n\n" src_port dst_port syn ack;
+  Fmt.pr "TCP:      %d -> %d SYN=%b ACK=%b\n\n" (UInt16.to_int src_port)
+    (UInt16.to_int dst_port) syn ack;
 
   (* In-place mutation: change destination port *)
-  (Staged.unstage (Codec.set tcp_codec bf_tcp_dst_port)) buf tcp_off 8080;
+  (Staged.unstage (Codec.set tcp_codec bf_tcp_dst_port))
+    buf tcp_off (UInt16.v 8080);
   Fmt.pr "After set: TCP dst_port=%d\n"
-    ((Staged.unstage (Codec.get tcp_codec bf_tcp_dst_port)) buf tcp_off);
+    (UInt16.to_int
+       ((Staged.unstage (Codec.get tcp_codec bf_tcp_dst_port)) buf tcp_off));
 
   Fmt.pr
     "\n\

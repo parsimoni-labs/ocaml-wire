@@ -18,6 +18,14 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
+val eval_ctx_within : input_end:int -> eval_ctx -> eval_ctx
+(** [eval_ctx_within ~input_end ctx] is [ctx] with the bytes a read may reach
+    stopping at [input_end], as they do inside a nested region. Internal use. *)
+
+val eval_input_end : eval_ctx -> int
+(** Where the bytes a read may reach stop, or [max_int] when the whole buffer is
+    in play. Internal use. *)
+
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 
@@ -167,41 +175,16 @@ val check_unsigned_encode : bits:int -> int -> unit
     accepted range is [[0, 2^bits - 1]], exactly what the decoder produces, so
     encode stays inverse to decode; anything else raises [Invalid_argument],
     because masking it would put a different, equally legal, number on the wire
-    that no later check can tell from the one the caller meant. Shared by
-    {!val-uint8}, {!val-uint16} and [bits ~width], one rule at three widths.
-    Where the native [int] is no wider than the field the guard narrows to what
-    is still checkable, so it never rejects a value the target can represent. *)
-
-val check_signed_encode : bits:int -> int -> unit
-(** Check an integer fits a signed [bits]-wide field before encoding it. The
-    accepted range is [[-2^(bits-1), 2^(bits-1) - 1]]: the decoder produces
-    exactly that, so [200] into an {!val-int8} is refused rather than
-    round-tripping back as [-56]. Same narrow-target narrowing as
-    {!check_unsigned_encode}. *)
+    that no later check can tell from the one the caller meant. Used by
+    [bits ~width], the one shape still carried in a bare [int]. Where the native
+    [int] is no wider than the slice the guard narrows to what is still
+    checkable, so it never rejects a value the target can represent. *)
 
 (** {2 Checked scalar writers}
 
-    The range-checking counterparts of [Bytes.set_*]. Every wire encode path
-    writes a fixed-width scalar through one of these, because the [Bytes]
-    primitives mask silently. *)
-
-val set_uint8 : bytes -> int -> int -> unit
-(** [set_uint8 buf off v] writes [v] as one unsigned byte. *)
-
-val set_uint16_le : bytes -> int -> int -> unit
-(** [set_uint16_le buf off v] writes [v] as two unsigned little-endian bytes. *)
-
-val set_uint16_be : bytes -> int -> int -> unit
-(** [set_uint16_be buf off v] writes [v] as two unsigned big-endian bytes. *)
-
-val set_int8 : bytes -> int -> int -> unit
-(** [set_int8 buf off v] writes [v] as one signed byte. *)
-
-val set_int16_le : bytes -> int -> int -> unit
-(** [set_int16_le buf off v] writes [v] as two signed little-endian bytes. *)
-
-val set_int16_be : bytes -> int -> int -> unit
-(** [set_int16_be buf off v] writes [v] as two signed big-endian bytes. *)
+    The signed 32-bit writers, under the names the encode paths use. Every
+    fixed-width scalar writes through its own carrier, whose range is already
+    the field's. *)
 
 val set_int32_le : bytes -> int -> SInt32.t -> unit
 (** [set_int32_le buf off v] writes [v] as four signed little-endian bytes. *)
@@ -272,12 +255,22 @@ and _ expr =
 and bitfield_base = U8 | U16 of endian | U32 of endian
 
 and _ typ =
-  | Uint8 : int typ  (** 8-bit unsigned. *)
-  | Uint16 : endian -> int typ  (** 16-bit unsigned. *)
+  | Uint8 : UInt8.t typ
+      (** 8-bit unsigned. Carried by {!UInt8.t}, whose range is the field's: a
+          number the byte cannot hold is refused where it is built. *)
+  | Uint16 : endian -> UInt16.t typ
+      (** 16-bit unsigned. Carried by {!UInt16.t}, whose range is the field's: a
+          number two bytes cannot hold is refused where it is built. *)
   | Uint32 : endian -> UInt32.t typ  (** 32-bit unsigned. *)
-  | Uint64 : endian -> int64 typ  (** 64-bit unsigned. *)
-  | Int8 : int typ  (** 8-bit signed. *)
-  | Int16 : endian -> int typ  (** 16-bit signed. *)
+  | Uint64 : endian -> UInt64.t typ
+      (** 64-bit unsigned. Carried by {!UInt64.t}, which orders as an unsigned
+          number; [int64] would rank the largest value below 1. *)
+  | Int8 : SInt8.t typ
+      (** 8-bit signed. Carried by {!SInt8.t}, whose range is the field's: a
+          number the byte cannot hold is refused where it is built. *)
+  | Int16 : endian -> SInt16.t typ
+      (** 16-bit signed. Carried by {!SInt16.t}, whose range is the field's: a
+          number two bytes cannot hold is refused where it is built. *)
   | Int32 : endian -> SInt32.t typ
       (** 32-bit signed. Carried by {!SInt32.t}, which holds the full range on
           every target; a plain [int] drops the top bits where it is narrower
@@ -323,12 +316,14 @@ and _ typ =
   | Enum : {
       name : string;
       cases : (string * int) list;
-      base : int typ;
+      base : 'a typ;
+          (** Any type with an integer view: the case values name integers, and
+              {!int_of_exn} reads one out of a decoded [base] value. *)
       closed : bool;
           (** [true]: only the listed values are valid. [false]: open set, the
               names document known values but any value is accepted. *)
     }
-      -> int typ  (** Named enumeration. *)
+      -> 'a typ  (** Named enumeration. *)
   | Casetype : {
       name : string;
       tag : 'k typ;
@@ -360,6 +355,10 @@ and _ typ =
               nested struct's validator. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
+      codec_min_size : int;
+          (** Bytes the codec occupies whatever its variable-size fields hold,
+              hence the extent [codec_size_of] has to read before it can resolve
+              a span. *)
       codec_size_of : eval_ctx -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
@@ -566,13 +565,13 @@ end
 
 (** {1 Type Constructors} *)
 
-val uint8 : int typ
+val uint8 : UInt8.t typ
 (** 8-bit unsigned, native endian. *)
 
-val uint16 : int typ
+val uint16 : UInt16.t typ
 (** 16-bit unsigned, little-endian. *)
 
-val uint16be : int typ
+val uint16be : UInt16.t typ
 (** 16-bit unsigned, big-endian. *)
 
 val uint32 : UInt32.t typ
@@ -581,19 +580,19 @@ val uint32 : UInt32.t typ
 val uint32be : UInt32.t typ
 (** 32-bit unsigned, big-endian. *)
 
-val uint64 : int64 typ
+val uint64 : UInt64.t typ
 (** 64-bit unsigned, little-endian. *)
 
-val uint64be : int64 typ
+val uint64be : UInt64.t typ
 (** 64-bit unsigned, big-endian. *)
 
-val int8 : int typ
+val int8 : SInt8.t typ
 (** 8-bit signed two's-complement integer. *)
 
-val int16 : int typ
+val int16 : SInt16.t typ
 (** 16-bit signed, little-endian. *)
 
-val int16be : int typ
+val int16be : SInt16.t typ
 (** 16-bit signed, big-endian. *)
 
 val int32 : SInt32.t typ
@@ -649,11 +648,47 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)
 
-val bool : int typ -> bool typ
-(** Map an integer type to boolean (0 = false). *)
+(** {1 Integer views}
 
-val cases : 'a list -> int typ -> 'a typ
-(** Map integer values to a list of cases by index. *)
+    A combinator that refines the integer a field decodes to needs nothing else
+    from its base, so which OCaml type carries that integer is the base's own
+    business. These decide that reading once, for every type that has one, so
+    the codec's checks, {!Eval}, {!Param}'s environments and the 3D projection
+    all agree on it. *)
+
+val int_of : 'a typ -> 'a -> int option
+(** [int_of typ v] converts a typed value to [int]. [None] for a value that does
+    not fit the native int (a {!val-uint64} over 2{^ 62}) and for a type with no
+    integer view. *)
+
+val int_of_exn : 'a typ -> 'a -> int
+(** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
+    [int] directly (no boxing on the numeric path) and raises {!Parse_error}
+    ({!constructor-Value_out_of_range}) for a value beyond the native int range,
+    [Invalid_argument] for a type with no integer view. *)
+
+val of_int : 'a typ -> int -> 'a
+(** [of_int typ n] is the value [typ] carries for the integer [n]. Raises
+    [Invalid_argument] when [n] is outside what the type's field can hold, or
+    when the type has no integer view. *)
+
+val is_int_representable : 'a typ -> bool
+(** [is_int_representable typ] is [true] when {!int_of_exn} and {!of_int} have a
+    conversion for [typ]. *)
+
+val reject_non_integer : combinator:string -> 'a typ -> unit
+(** [reject_non_integer ~combinator typ] raises [Invalid_argument] naming
+    [combinator] unless [typ] {!is_int_representable}. Called at construction,
+    so a base a combinator cannot read as an integer fails at the description
+    rather than on the first byte decoded. *)
+
+val bool : 'a typ -> bool typ
+(** Map an integer-valued type to boolean (0 = false). Raises [Invalid_argument]
+    on a base with no integer view. *)
+
+val cases : 'a list -> 'b typ -> 'a typ
+(** Map integer values to a list of cases by index. Raises [Invalid_argument] on
+    a base with no integer view. *)
 
 val unit : unit typ
 (** Zero-width unit type. *)
@@ -736,16 +771,18 @@ val nested : size:int expr -> 'a typ -> 'a typ
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** Single element in a sized region (may be smaller). *)
 
-val enum : string -> (string * int) list -> int typ -> int typ
-(** Named enumeration over an integer base. *)
+val enum : string -> (string * int) list -> 'a typ -> 'a typ
+(** Named enumeration over an integer-valued base. Raises [Invalid_argument] on
+    a base with no integer view. *)
 
-val enum_open : string -> (string * int) list -> int typ -> int typ
+val enum_open : string -> (string * int) list -> 'a typ -> 'a typ
 (** Open enumeration: the named codes are declared in the 3D projection for
     documentation, but any value is accepted (no membership refinement, no
     decode rejection). *)
 
-val variants : string -> (string * 'a) list -> int typ -> 'a typ
-(** Named variant mapping over an integer base. *)
+val variants : string -> (string * 'a) list -> 'b typ -> 'a typ
+(** Named variant mapping over an integer-valued base. Raises [Invalid_argument]
+    on a base with no integer view. *)
 
 type ('a, 'k) case_def
 (** A casetype branch definition. ['k] is the discriminator type. *)

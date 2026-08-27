@@ -1,4 +1,4 @@
-(** Top-level expression evaluator and value-to-int conversion.
+(** Top-level expression evaluator.
 
     The full struct-internal expression machinery (with [Ref]/[Sizeof_this]/
     [Field_pos] resolution against bound fields) lives in {!Codec} as the
@@ -21,16 +21,13 @@ val bind : string -> int -> ctx -> ctx
 (** [bind name v ctx] extends [ctx] so that [Ref name] evaluates to [v]. *)
 
 val int_of : 'a Types.typ -> 'a -> int option
-(** [int_of typ v] converts a typed value to [int]. Returns [None] for types
-    that don't fit in OCaml int (uint64 > 2^62, non-numeric). *)
+(** {!Types.int_of}, re-exported: the conversion is a fold over the type
+    description and is decided there. *)
 
 val int_of_exn : 'a Types.typ -> 'a -> int
-(** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
-    [int] directly (no boxing on the numeric path) and raises
-    {!Types.Parse_error} for the cases {!val-int_of} reports as [None] (a
-    [uint64]/[int64] value beyond the native int range, or a non-integer type).
-    Used by the cross-field size/offset/present readers, where an
-    unrepresentable value must fail the parse. *)
+(** {!Types.int_of_exn}, re-exported. Used by the cross-field
+    size/offset/present readers, where an unrepresentable value must fail the
+    parse. *)
 
 val expr : ctx -> 'a Types.expr -> 'a
 (** [expr ctx e] evaluates a top-level expression. Raises on [Ref] (cross-field

@@ -61,7 +61,7 @@ type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
 let of_int f = Int f
 let id_int = Int Fun.id
-let id_int64 = Int64 Fun.id
+let id_uint64 = Int64 Wire.UInt64.of_int64
 let bool_of_int = Int (fun v -> v <> 0)
 
 let priority_decode =
@@ -230,10 +230,10 @@ let minimal_case =
       set;
       write_template = Bytes.copy minimal_dataset.packed;
       write_offset = 0;
-      write_value = 42;
-      equal = Int.equal;
+      write_value = Wire.UInt8.v 42;
+      equal = Wire.UInt8.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt8.v;
     }
 
 let all_ints_case =
@@ -251,10 +251,10 @@ let all_ints_case =
       set;
       write_template = Bytes.copy ints_dataset.items.(0);
       write_offset = 0;
-      write_value = 0x0102_0304_0506_0708L;
-      equal = Int64.equal;
+      write_value = Wire.UInt64.of_int64 0x0102_0304_0506_0708L;
+      equal = Wire.UInt64.equal;
       bench_read = true;
-      of_c_field = id_int64;
+      of_c_field = id_uint64;
     }
 
 let large_mixed_case =
@@ -276,10 +276,10 @@ let large_mixed_case =
       set;
       write_template = Bytes.copy mixed_dataset.items.(0);
       write_offset = 0;
-      write_value = 0x1122_3344_5566_7788L;
-      equal = Int64.equal;
+      write_value = Wire.UInt64.of_int64 0x1122_3344_5566_7788L;
+      equal = Wire.UInt64.equal;
       bench_read = true;
-      of_c_field = id_int64;
+      of_c_field = id_uint64;
     }
 
 let bitfield8_case =
@@ -427,10 +427,10 @@ let ipv4_case =
       set;
       write_template = Bytes.copy ipv4_dataset.items.(0);
       write_offset = 0;
-      write_value = Optint.of_int 0x0A00_0001;
-      equal = Optint.equal;
+      write_value = Wire.UInt32.of_int 0x0A00_0001;
+      equal = Wire.UInt32.equal;
       bench_read = true;
-      of_c_field = of_int Optint.of_int;
+      of_c_field = of_int Wire.UInt32.of_int;
     }
 
 let tcp_case =
@@ -448,10 +448,10 @@ let tcp_case =
       set;
       write_template = Bytes.copy tcp_dataset.items.(0);
       write_offset = 0;
-      write_value = 8080;
-      equal = Int.equal;
+      write_value = Wire.UInt16.v 8080;
+      equal = Wire.UInt16.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt16.v;
     }
 
 let tcp_syn_case =
@@ -553,10 +553,10 @@ let constrained_case =
       set;
       write_template = Bytes.copy constrained_dataset.items.(0);
       write_offset = 0;
-      write_value = 9;
-      equal = Int.equal;
+      write_value = Wire.UInt8.v 9;
+      equal = Wire.UInt8.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt8.v;
     }
 
 let all_cases =
@@ -618,7 +618,7 @@ let verify_nested_write ~label ~set ~get ~equal value () =
 let nested_tcp_dst_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
   let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
-  let value = 8080 in
+  let value = Wire.UInt16.v 8080 in
   {
     label = "Eth->TCP.dst_port (3 layers)";
     run =
@@ -628,19 +628,19 @@ let nested_tcp_dst_write_case =
         set tcp_frame tcp value);
     verify =
       verify_nested_write ~label:"Eth->TCP.dst_port (3 layers)" ~set ~get
-        ~equal:Int.equal value;
+        ~equal:Wire.UInt16.equal value;
   }
 
 let tcp_dst_port_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
   let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
-  let value = 8080 in
+  let value = Wire.UInt16.v 8080 in
   {
     label = "TCP.dst_port (uint16be)";
     run = (fun () -> set tcp_frame tcp_off value);
     verify =
       verify_write_case ~label:"TCP.dst_port (uint16be)" ~template:tcp_frame
-        ~offset:tcp_off ~get ~set ~equal:Int.equal value;
+        ~offset:tcp_off ~get ~set ~equal:Wire.UInt16.equal value;
   }
 
 let nested_tcp_syn_write_case =

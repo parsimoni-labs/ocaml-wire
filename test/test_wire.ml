@@ -17,6 +17,11 @@ let reader_decode_ok typ reader =
   | Ok v -> v
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let uint8_testable = Alcotest.testable UInt8.pp UInt8.equal
+let uint16_testable = Alcotest.testable UInt16.pp UInt16.equal
+let read_u8 reader = UInt8.to_int (reader_decode_ok uint8 reader)
+let read_u16 typ reader = UInt16.to_int (reader_decode_ok typ reader)
+
 (* Helper: encode to string via streaming writer with [chunk_size] buffer *)
 let encode_chunked ~chunk_size typ v =
   let buf = Buffer.create 64 in
@@ -47,44 +52,48 @@ let test_expr_equality_operators () =
 let test_parse_uint8 () =
   let input = "\x42" in
   match of_string uint8 input with
-  | Ok v -> Alcotest.(check int) "uint8 value" 0x42 v
+  | Ok v -> Alcotest.(check int) "uint8 value" 0x42 (UInt8.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint16_le () =
   let input = "\x01\x02" in
   match of_string uint16 input with
-  | Ok v -> Alcotest.(check int) "uint16 le value" 0x0201 v
+  | Ok v -> Alcotest.(check int) "uint16 le value" 0x0201 (UInt16.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint16_be () =
   let input = "\x01\x02" in
   match of_string uint16be input with
-  | Ok v -> Alcotest.(check int) "uint16 be value" 0x0102 v
+  | Ok v -> Alcotest.(check int) "uint16 be value" 0x0102 (UInt16.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint32_le () =
   let input = "\x01\x02\x03\x04" in
   match of_string uint32 input with
-  | Ok v -> Alcotest.(check int) "uint32 le value" 0x04030201 (Optint.to_int v)
+  | Ok v -> Alcotest.(check int) "uint32 le value" 0x04030201 (UInt32.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint32_be () =
   let input = "\x01\x02\x03\x04" in
   match of_string uint32be input with
-  | Ok v -> Alcotest.(check int) "uint32 be value" 0x01020304 (Optint.to_int v)
+  | Ok v -> Alcotest.(check int) "uint32 be value" 0x01020304 (UInt32.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint64_le () =
   let input = "\x01\x02\x03\x04\x05\x06\x07\x08" in
   match of_string uint64 input with
-  | Ok v -> Alcotest.(check int64) "uint64 le value" 0x0807060504030201L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 le value" 0x0807060504030201L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_array () =
   let input = "\x01\x02\x03" in
   let t = array ~len:(int 3) uint8 in
   match of_string t input with
-  | Ok v -> Alcotest.(check (list int)) "array values" [ 1; 2; 3 ] v
+  | Ok v ->
+      Alcotest.(check (list int))
+        "array values" [ 1; 2; 3 ] (List.map UInt8.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_byte_array () =
@@ -116,17 +125,104 @@ let test_byte_slice_zero () =
 
 let test_int8_negative () =
   let buf = Bytes.of_string "\xFE" in
-  Alcotest.(check int) "-2" (-2) (of_bytes_exn int8 buf)
+  Alcotest.(check int) "-2" (-2) (SInt8.to_int (of_bytes_exn int8 buf))
 
 let test_int8_full_range () =
   for i = -128 to 127 do
-    let s = to_string int8 i in
-    Alcotest.(check int) (Fmt.str "%d" i) i (of_string_exn int8 s)
+    let s = to_string int8 (SInt8.v i) in
+    Alcotest.(check int)
+      (Fmt.str "%d" i) i
+      (SInt8.to_int (of_string_exn int8 s))
   done
+
+(* [of_reader] on a value with no fixed wire size accumulates slices and retries
+   the parse. It used to rebuild the whole accumulated buffer with
+   [Buffer.to_bytes] and re-parse it from offset 0 after every single slice, so
+   a frame arriving a byte at a time cost O(n^2) in copying and in parsing
+   both. The failing parse already says how many more bytes the value needs
+   ([Unexpected_eof] carries [expected] and [got]), which is enough to read that
+   far before retrying instead of retrying blind.
+
+   [Gc.minor_words] cannot see this: the accumulated buffer is large enough to
+   be allocated straight into the major heap. *)
+let test_reader_incremental_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let f_len = Field.v "len" uint16be in
+  let frame_codec =
+    Codec.v "DribbleFrame"
+      (fun _len d -> d)
+      Codec.
+        [
+          (Field.v "len" uint16be $ fun d -> UInt16.v (String.length d));
+          Field.v "data" (byte_array ~size:(Field.ref f_len)) $ Fun.id;
+        ]
+  in
+  let typ = Wire.codec frame_codec in
+  let payload = String.make 4096 'x' in
+  let frame = Wire.to_string typ payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Gc.allocated_bytes () in
+  let got = Wire.of_reader_exn typ reader in
+  let words = (Gc.allocated_bytes () -. before) /. 8. in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (words < 200_000.))
+    "a 4096-byte frame dribbled one byte at a time stays sub-quadratic (got \
+     %.0f words)"
+    words
+
+(* The test above pins the re-parse a dribbled value costs; this one pins the
+   terminator search. A [zeroterm] has no length field, so its size is the
+   search itself: retrying once per slice restarts that search at the string's
+   first byte every time. Only wall time separates the two shapes, since the
+   retries allocate the same either way, so this measures the scan directly. *)
+let test_reader_zeroterm_scan_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let payload = String.make 65536 'x' in
+  let frame = Wire.to_string zeroterm payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Sys.time () in
+  let got = Wire.of_reader_exn zeroterm reader in
+  let elapsed = Sys.time () -. before in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (elapsed < 0.25))
+    "a 64 KiB zeroterm dribbled one byte at a time scans each byte about once \
+     (took %.3f s)"
+    elapsed
+
+(* The same scan, reached through a codec rather than at the top level. A
+   zeroterm has no length field wherever it sits, so an embedded one restarts
+   its terminator search per slice exactly as a top-level one does; pin both, or
+   a cursor that only the top-level path consults would look correct here. *)
+let test_reader_embedded_zeroterm_scan_is_not_quadratic () =
+  (match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ());
+  let inner =
+    Codec.v "EmbeddedZt" (fun s -> s) Codec.[ Field.v "s" zeroterm $ Fun.id ]
+  in
+  let typ = codec inner in
+  let payload = String.make 65536 'x' in
+  let frame = Wire.to_string typ payload in
+  let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
+  let before = Sys.time () in
+  let got = Wire.of_reader_exn typ reader in
+  let elapsed = Sys.time () -. before in
+  Alcotest.(check string) "payload round-trips" payload got;
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (elapsed < 0.25))
+    "a 64 KiB zeroterm inside a codec, dribbled one byte at a time, scans each \
+     byte about once (took %.3f s)"
+    elapsed
 
 let test_int16be_negative () =
   let buf = Bytes.of_string "\xFF\xFE" in
-  Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int16be buf)
+  Alcotest.(check int) "-2 BE" (-2) (SInt16.to_int (of_bytes_exn int16be buf))
 
 let test_int32be_negative () =
   let buf = Bytes.of_string "\xFF\xFF\xFF\xFE" in
@@ -195,7 +291,7 @@ let test_rest_of_buffer_codec () =
   in
   match Codec.decode ~env codec buf 0 with
   | Ok (h, d) ->
-      Alcotest.(check int) "header" 1 h;
+      Alcotest.(check int) "header" 1 (UInt8.to_int h);
       Alcotest.(check string) "data" "HELLO" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -210,7 +306,7 @@ let test_all_bytes_in_codec () =
   let buf = Bytes.of_string "\x2AHello" in
   match Codec.decode codec buf 0 with
   | Ok (h, d) ->
-      Alcotest.(check int) "header" 0x2A h;
+      Alcotest.(check int) "header" 0x2A (UInt8.to_int h);
       Alcotest.(check string) "data" "Hello" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -228,14 +324,14 @@ let test_codec_all_bytes_tail () =
   let f_payload = Field.v "Payload" (codec inner) in
   let outer = Codec.v "Outer" (fun p -> p) Codec.[ (f_payload $ fun p -> p) ] in
   let roundtrip label tail =
-    let v = (0x42, tail) in
+    let v = (UInt8.v 0x42, tail) in
     let sz = 1 + String.length tail in
     let buf = Bytes.create sz in
     Codec.encode outer v buf 0;
     Alcotest.(check int) (label ^ ": buf length") sz (Bytes.length buf);
     match Codec.decode outer buf 0 with
     | Ok (h, d) ->
-        Alcotest.(check int) (label ^ ": header") 0x42 h;
+        Alcotest.(check int) (label ^ ": header") 0x42 (UInt8.to_int h);
         Alcotest.(check string) (label ^ ": tail") tail d
     | Error e -> Alcotest.failf "%s decode: %a" label pp_parse_error e
   in
@@ -253,7 +349,7 @@ let test_all_zeros_in_codec () =
   let ok_buf = Bytes.of_string "\x55\x00\x00\x00" in
   (match Codec.decode codec ok_buf 0 with
   | Ok (h, p) ->
-      Alcotest.(check int) "tag" 0x55 h;
+      Alcotest.(check int) "tag" 0x55 (UInt8.to_int h);
       Alcotest.(check string) "padding" "\000\000\000" p
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
   let bad_buf = Bytes.of_string "\x55\x00\x01\x00" in
@@ -459,7 +555,7 @@ let test_parse_struct_action_abort () =
   | Error { kind = Constraint_failed { which = Action; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-type bounded_payload = { length : int; data : string }
+type bounded_payload = { length : UInt16.t; data : string }
 
 let test_parse_param_with_params () =
   let max_len = Param.input "max_len" uint16be in
@@ -482,10 +578,11 @@ let test_parse_param_with_params () =
             r.data );
         ]
   in
-  let env = Codec.env c |> Param.bind max_len 3 in
+  let env = Codec.env c |> Param.bind max_len (UInt16.v 3) in
   let buf = Bytes.of_string "\x00\x03abc" in
   match Codec.decode ~env c buf 0 with
-  | Ok _ -> Alcotest.(check int) "out_len" 3 (Param.get env out_len)
+  | Ok _ ->
+      Alcotest.(check int) "out_len" 3 (UInt16.to_int (Param.get env out_len))
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 (* Encoding a parametric [byte_array ~size:(Param.expr p)] field must use
@@ -510,7 +607,7 @@ let test_param_size_encode () =
   let c, p_len = param_codec () in
   List.iter
     (fun n ->
-      let env = Codec.env c |> Param.bind p_len n in
+      let env = Codec.env c |> Param.bind p_len (UInt8.v n) in
       let payload = String.make n 'A' in
       let buf = Bytes.create 32 in
       Codec.encode ~env c { payload } buf 0;
@@ -524,7 +621,7 @@ let test_param_size_encode () =
 
 let test_param_encode_length_mismatch () =
   let c, p_len = param_codec () in
-  let env = Codec.env c |> Param.bind p_len 4 in
+  let env = Codec.env c |> Param.bind p_len (UInt8.v 4) in
   let buf = Bytes.create 16 in
   match Codec.encode ~env c { payload = "ab" } buf 0 with
   | () -> Alcotest.fail "expected Invalid_argument"
@@ -578,7 +675,7 @@ let test_parse_param_where_fail () =
             r.data );
         ]
   in
-  let env = Codec.env c |> Param.bind max_len 2 in
+  let env = Codec.env c |> Param.bind max_len (UInt16.v 2) in
   let buf = Bytes.of_string "\x00\x03abc" in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
@@ -663,7 +760,7 @@ let test_field_pos_fail () =
   | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-type sizeof_action_record = { a : int; b : int; c : int }
+type sizeof_action_record = { a : UInt8.t; b : UInt16.t; c : UInt8.t }
 
 let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
@@ -684,34 +781,37 @@ let test_sizeof_this_with_action () =
   let env = Codec.env c in
   let buf = Bytes.of_string "\x01\x00\x02\x00" in
   match Codec.decode ~env c buf 0 with
-  | Ok _ -> Alcotest.(check int) "sizeof_this via action" 3 (Param.get env out)
+  | Ok _ ->
+      Alcotest.(check int)
+        "sizeof_this via action" 3
+        (UInt8.to_int (Param.get env out))
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
 (* -- Encoding tests -- *)
 
 let test_encode_uint8 () =
-  let encoded = to_string uint8 0x42 in
+  let encoded = to_string uint8 (UInt8.v 0x42) in
   Alcotest.(check string) "uint8 encoding" "\x42" encoded
 
 let test_encode_uint16_le () =
-  let encoded = to_string uint16 0x0201 in
+  let encoded = to_string uint16 (UInt16.v 0x0201) in
   Alcotest.(check string) "uint16 le encoding" "\x01\x02" encoded
 
 let test_encode_uint16_be () =
-  let encoded = to_string uint16be 0x0102 in
+  let encoded = to_string uint16be (UInt16.v 0x0102) in
   Alcotest.(check string) "uint16 be encoding" "\x01\x02" encoded
 
 let test_encode_uint32_le () =
-  let encoded = to_string uint32 (Optint.of_int 0x04030201) in
+  let encoded = to_string uint32 (UInt32.of_int 0x04030201) in
   Alcotest.(check string) "uint32 le encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_uint32_be () =
-  let encoded = to_string uint32be (Optint.of_int 0x01020304) in
+  let encoded = to_string uint32be (UInt32.of_int 0x01020304) in
   Alcotest.(check string) "uint32 be encoding" "\x01\x02\x03\x04" encoded
 
 let test_encode_array () =
   let t = array ~len:(int 3) uint8 in
-  let encoded = to_string t [ 1; 2; 3 ] in
+  let encoded = to_string t (List.map UInt8.v [ 1; 2; 3 ]) in
   Alcotest.(check string) "array encoding" "\x01\x02\x03" encoded
 
 let seq_array : ('a, 'a array) seq_map =
@@ -737,11 +837,18 @@ let expect_direct_array_cardinality label typ value expected actual =
 
 let test_encode_array_cardinality () =
   let list = array ~len:(int 3) uint8 in
-  expect_direct_array_cardinality "short list" list [ 1; 2 ] 3 2;
-  expect_direct_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  expect_direct_array_cardinality "short list" list
+    (List.map UInt8.v [ 1; 2 ])
+    3 2;
+  expect_direct_array_cardinality "long list" list
+    (List.map UInt8.v [ 1; 2; 3; 4 ])
+    3 4;
   let custom = array_seq seq_array ~len:(int 3) uint8 in
-  expect_direct_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
-  expect_direct_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+  expect_direct_array_cardinality "short custom sequence" custom
+    (Array.map UInt8.v [| 1; 2 |])
+    3 2;
+  expect_direct_array_cardinality "long custom sequence" custom
+    (Array.map UInt8.v [| 1; 2; 3; 4 |])
     3 4
 
 let expect_direct_repeat_encode_error label typ value =
@@ -755,7 +862,8 @@ let expect_direct_repeat_encode_error label typ value =
 let test_repeat_exact_budget_direct () =
   let fixed = Field.typ (Field.repeat "items" ~size:(int 2) uint16be) in
   expect_direct_repeat_encode_error "fixed underrun" fixed [];
-  expect_direct_repeat_encode_error "fixed overshoot" fixed [ 1; 2 ];
+  expect_direct_repeat_encode_error "fixed overshoot" fixed
+    [ UInt16.v 1; UInt16.v 2 ];
   let fixed_remainder =
     Field.typ (Field.repeat "items" ~size:(int 1) uint16be)
   in
@@ -868,8 +976,8 @@ let test_region_cardinality_contract () =
     Codec.v "InvariantArray" Fun.id Codec.[ Field.v "items" array_typ $ Fun.id ]
   in
   for n = 0 to 5 do
-    let values = List.init n Fun.id in
-    check_invariant_encoding ~equal:(List.equal Int.equal)
+    let values = List.init n UInt8.v in
+    check_invariant_encoding ~equal:(List.equal UInt8.equal)
       (Fmt.str "array count %d" n)
       array_typ array_codec values
   done;
@@ -879,8 +987,8 @@ let test_region_cardinality_contract () =
       Codec.[ Field.v "items" repeat_typ $ Fun.id ]
   in
   for n = 0 to 4 do
-    let values = List.init n Fun.id in
-    check_invariant_encoding ~equal:(List.equal Int.equal)
+    let values = List.init n UInt16.v in
+    check_invariant_encoding ~equal:(List.equal UInt16.equal)
       (Fmt.str "repeat count %d" n)
       repeat_typ repeat_codec values
   done;
@@ -959,21 +1067,21 @@ let test_bits_roundtrip_all_combos () =
 (* -- Roundtrip tests -- *)
 
 let test_roundtrip_uint8 () =
-  roundtrip "roundtrip uint8" uint8 Alcotest.int 0x42
+  roundtrip "roundtrip uint8" uint8 uint8_testable (UInt8.v 0x42)
 
 let test_roundtrip_uint16 () =
-  roundtrip "roundtrip uint16" uint16 Alcotest.int 0x1234
+  roundtrip "roundtrip uint16" uint16 uint16_testable (UInt16.v 0x1234)
 
 let test_roundtrip_uint32 () =
   roundtrip "roundtrip uint32" uint32
-    (Alcotest.testable Optint.pp Optint.equal)
-    (Optint.of_int 0x12345678)
+    (Alcotest.testable UInt32.pp UInt32.equal)
+    (UInt32.of_int 0x12345678)
 
 let test_roundtrip_array () =
   roundtrip "roundtrip array"
     (array ~len:(int 5) uint8)
-    Alcotest.(list int)
-    [ 1; 2; 3; 4; 5 ]
+    (Alcotest.list uint8_testable)
+    (List.map UInt8.v [ 1; 2; 3; 4; 5 ])
 
 let test_roundtrip_byte_array () =
   roundtrip "roundtrip byte_array"
@@ -1043,14 +1151,14 @@ let test_encode_rejects_unlisted_enum () =
   let closed = enum "Code" [ ("A", 1); ("B", 2) ] uint8 in
   let open_ = enum_open "Code" [ ("A", 1); ("B", 2) ] uint8 in
   expect_typ_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
-      to_string closed 99);
+      to_string closed (UInt8.v 99));
   expect_typ_decode_rejects "closed enum" closed "\099";
-  Alcotest.(check string) "listed value" "\002" (to_string closed 2);
+  Alcotest.(check string) "listed value" "\002" (to_string closed (UInt8.v 2));
   (* An open enum names known codes without restricting them. *)
-  Alcotest.(check string) "open enum" "\099" (to_string open_ 99);
+  Alcotest.(check string) "open enum" "\099" (to_string open_ (UInt8.v 99));
   (* The streaming writer shares the kernel, so it rejects the same value. *)
   expect_typ_encode_rejects "closed enum streamed" ~names:[ "got 99" ]
-    (fun () -> encode_chunked ~chunk_size:1 closed 99)
+    (fun () -> encode_chunked ~chunk_size:1 closed (UInt8.v 99))
 
 let test_encode_rejects_non_zero_padding () =
   expect_typ_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ]
@@ -1065,73 +1173,79 @@ let test_encode_rejects_non_zero_padding () =
 let test_encode_rejects_where_violation () =
   let t = where Expr.(int 3 = int 7) uint8 in
   expect_typ_encode_rejects "where" ~names:[ "where constraint" ] (fun () ->
-      to_string t 3);
+      to_string t (UInt8.v 3));
   expect_typ_decode_rejects "where" t "\003";
   Alcotest.(check string)
     "satisfied cond" "\003"
-    (to_string (where Expr.(int 7 = int 7) uint8) 3)
+    (to_string (where Expr.(int 7 = int 7) uint8) (UInt8.v 3))
 
 (* -- Streaming: cross-slice boundary tests -- *)
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
 let test_stream_uint8 () =
-  let encoded = to_string uint8 42 in
+  let encoded = to_string uint8 (UInt8.v 42) in
   match parse_chunked ~chunk_size:1 uint8 encoded with
-  | Ok v -> Alcotest.(check int) "uint8 chunk=1" 42 v
+  | Ok v -> Alcotest.(check int) "uint8 chunk=1" 42 (UInt8.to_int v)
   | Error e -> Alcotest.failf "uint8 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk1 () =
-  let encoded = to_string uint16 0xCAFE in
+  let encoded = to_string uint16 (UInt16.v 0xCAFE) in
   match parse_chunked ~chunk_size:1 uint16 encoded with
-  | Ok v -> Alcotest.(check int) "uint16 chunk=1" 0xCAFE v
+  | Ok v -> Alcotest.(check int) "uint16 chunk=1" 0xCAFE (UInt16.to_int v)
   | Error e -> Alcotest.failf "uint16 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk3 () =
   (* chunk=3 means 2-byte value fits in one slice -- fast path *)
-  let encoded = to_string uint16be 0xBEEF in
+  let encoded = to_string uint16be (UInt16.v 0xBEEF) in
   match parse_chunked ~chunk_size:3 uint16be encoded with
-  | Ok v -> Alcotest.(check int) "uint16be chunk=3" 0xBEEF v
+  | Ok v -> Alcotest.(check int) "uint16be chunk=3" 0xBEEF (UInt16.to_int v)
   | Error e -> Alcotest.failf "uint16be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint32_chunk1 () =
   let encoded = to_string uint32 (Wire.Private.UInt32.of_int32 0xDEADBEEFl) in
   match parse_chunked ~chunk_size:1 uint32 encoded with
   | Ok v ->
-      Alcotest.(check int32) "uint32 chunk=1" 0xDEADBEEFl (Optint.to_int32 v)
+      Alcotest.(check int32) "uint32 chunk=1" 0xDEADBEEFl (UInt32.to_int32 v)
   | Error e -> Alcotest.failf "uint32 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint32_chunk3 () =
   (* chunk=3: 4-byte value straddles at byte 3 *)
-  let encoded = to_string uint32be (Optint.of_int 0x12345678) in
+  let encoded = to_string uint32be (UInt32.of_int 0x12345678) in
   match parse_chunked ~chunk_size:3 uint32be encoded with
-  | Ok v -> Alcotest.(check int) "uint32be chunk=3" 0x12345678 (Optint.to_int v)
+  | Ok v -> Alcotest.(check int) "uint32be chunk=3" 0x12345678 (UInt32.to_int v)
   | Error e -> Alcotest.failf "uint32be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk1 () =
-  let encoded = to_string uint64 0x0102030405060708L in
+  let encoded = to_string uint64 (UInt64.of_int64 0x0102030405060708L) in
   match parse_chunked ~chunk_size:1 uint64 encoded with
-  | Ok v -> Alcotest.(check int64) "uint64 chunk=1" 0x0102030405060708L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 chunk=1" 0x0102030405060708L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint64_chunk3 () =
-  let encoded = to_string uint64be 0xFEDCBA9876543210L in
+  let encoded = to_string uint64be (UInt64.of_int64 0xFEDCBA9876543210L) in
   match parse_chunked ~chunk_size:3 uint64be encoded with
-  | Ok v -> Alcotest.(check int64) "uint64be chunk=3" 0xFEDCBA9876543210L v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64be chunk=3" 0xFEDCBA9876543210L (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64be chunk=3: %a" pp_parse_error e
 
 let test_stream_uint64_chunk5 () =
-  let encoded = to_string uint64 0xAAAABBBBCCCCDDDDL in
+  let encoded = to_string uint64 (UInt64.of_int64 0xAAAABBBBCCCCDDDDL) in
   match parse_chunked ~chunk_size:5 uint64 encoded with
-  | Ok v -> Alcotest.(check int64) "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL v
+  | Ok v ->
+      Alcotest.(check int64)
+        "uint64 chunk=5" 0xAAAABBBBCCCCDDDDL (UInt64.to_int64 v)
   | Error e -> Alcotest.failf "uint64 chunk=5: %a" pp_parse_error e
 
 let test_stream_reader_sequential_fixed () =
   let reader =
     Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\x01\x02\x03\x04\x05"
   in
-  Alcotest.(check int) "first" 0x01 (reader_decode_ok uint8 reader);
-  Alcotest.(check int) "second" 0x0203 (reader_decode_ok uint16be reader);
-  Alcotest.(check int) "third" 0x0405 (reader_decode_ok uint16be reader);
+  Alcotest.(check int) "first" 0x01 (read_u8 reader);
+  Alcotest.(check int) "second" 0x0203 (read_u16 uint16be reader);
+  Alcotest.(check int) "third" 0x0405 (read_u16 uint16be reader);
   Alcotest.(check bool)
     "reader exhausted" true
     (Bytesrw.Bytes.Slice.is_eod (Bytesrw.Bytes.Reader.read reader))
@@ -1140,13 +1254,13 @@ let test_stream_reader_sequential_cross_slice () =
   let reader =
     Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03\x04"
   in
-  Alcotest.(check int) "first" 0x0102 (reader_decode_ok uint16be reader);
-  Alcotest.(check int) "second" 0x0304 (reader_decode_ok uint16be reader)
+  Alcotest.(check int) "first" 0x0102 (read_u16 uint16be reader);
+  Alcotest.(check int) "second" 0x0304 (read_u16 uint16be reader)
 
 let test_stream_reader_sequential_zeroterm () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:2 "abc\000\x7f" in
   Alcotest.(check string) "text" "abc" (reader_decode_ok zeroterm reader);
-  Alcotest.(check int) "tail" 0x7f (reader_decode_ok uint8 reader)
+  Alcotest.(check int) "tail" 0x7f (read_u8 reader)
 
 (* Rewind on error: a failed decode pushes back everything it consumed, so
    the same bytes decode under another description (one test per of_reader
@@ -1157,19 +1271,19 @@ let test_stream_rewind_fixed () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\xff\x01\x02" in
   (match Wire.of_reader bad reader with
   | Error { kind = Invalid_enum _; _ } -> ()
-  | Ok v -> Alcotest.failf "expected enum failure, got %d" v
+  | Ok v -> Alcotest.failf "expected enum failure, got %d" (UInt8.to_int v)
   | Error e -> Alcotest.failf "expected Invalid_enum: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound first" 0xff (reader_decode_ok uint8 reader);
-  Alcotest.(check int) "rest intact" 0x0102 (reader_decode_ok uint16be reader)
+  Alcotest.(check int) "rewound first" 0xff (read_u8 reader);
+  Alcotest.(check int) "rest intact" 0x0102 (read_u16 uint16be reader)
 
 let test_stream_rewind_partial_fixed () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "\x01\x02\x03" in
   (match Wire.of_reader uint32be reader with
   | Error { kind = Unexpected_eof _; _ } -> ()
-  | Ok v -> Alcotest.failf "expected eof, got %d" (Optint.to_int v)
+  | Ok v -> Alcotest.failf "expected eof, got %d" (UInt32.to_int v)
   | Error e -> Alcotest.failf "expected Unexpected_eof: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound" 0x0102 (reader_decode_ok uint16be reader);
-  Alcotest.(check int) "rest intact" 0x03 (reader_decode_ok uint8 reader)
+  Alcotest.(check int) "rewound" 0x0102 (read_u16 uint16be reader);
+  Alcotest.(check int) "rest intact" 0x03 (read_u8 reader)
 
 let test_stream_rewind_incremental () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "abc" in
@@ -1177,8 +1291,8 @@ let test_stream_rewind_incremental () =
   | Error { kind = Missing_terminator; _ } -> ()
   | Ok s -> Alcotest.failf "expected missing NUL, got %S" s
   | Error e -> Alcotest.failf "expected Missing_terminator: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound" 0x61 (reader_decode_ok uint8 reader);
-  Alcotest.(check int) "rest intact" 0x6263 (reader_decode_ok uint16be reader)
+  Alcotest.(check int) "rewound" 0x61 (read_u8 reader);
+  Alcotest.(check int) "rest intact" 0x6263 (read_u16 uint16be reader)
 
 let test_stream_rewind_consumes_rest () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "ab" in
@@ -1186,7 +1300,7 @@ let test_stream_rewind_consumes_rest () =
   | Error { kind = Non_zero_padding; _ } -> ()
   | Ok s -> Alcotest.failf "expected all_zeros failure, got %S" s
   | Error e -> Alcotest.failf "expected Non_zero_padding: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound" 0x6162 (reader_decode_ok uint16be reader)
+  Alcotest.(check int) "rewound" 0x6162 (read_u16 uint16be reader)
 
 let test_stream_bitfield_chunk1 () =
   (* Bitfield: 6+10+16 bits packed in a uint32 *)
@@ -1206,15 +1320,15 @@ let test_stream_encode_chunk1 () =
   in
   match of_string uint32be encoded with
   | Ok decoded ->
-      Alcotest.(check int32) "encode chunk=1" v (Optint.to_int32 decoded)
+      Alcotest.(check int32) "encode chunk=1" v (UInt32.to_int32 decoded)
   | Error e -> Alcotest.failf "encode chunk=1: %a" pp_parse_error e
 
 let test_stream_encode_chunk3 () =
   let v = 0x12345678 in
-  let encoded = encode_chunked ~chunk_size:3 uint32be (Optint.of_int v) in
+  let encoded = encode_chunked ~chunk_size:3 uint32be (UInt32.of_int v) in
   match of_string uint32be encoded with
   | Ok decoded ->
-      Alcotest.(check int) "encode chunk=3" v (Optint.to_int decoded)
+      Alcotest.(check int) "encode chunk=3" v (UInt32.to_int decoded)
   | Error e -> Alcotest.failf "encode chunk=3: %a" pp_parse_error e
 
 (* An open enum accepts any value, named or not. The typ-level [of_string] path
@@ -1228,11 +1342,67 @@ let test_enum_open_of_string_accepts_unlisted () =
     (* 50, not a named code *)
   in
   (match Codec.decode c (Bytes.of_string unlisted) 0 with
-  | Ok v -> Alcotest.(check int) "codec decode accepts unlisted" 50 v
+  | Ok v ->
+      Alcotest.(check int) "codec decode accepts unlisted" 50 (UInt8.to_int v)
   | Error e -> Alcotest.failf "codec rejected unlisted: %a" pp_parse_error e);
   match of_string typ unlisted with
-  | Ok v -> Alcotest.(check int) "of_string accepts unlisted" 50 v
+  | Ok v ->
+      Alcotest.(check int) "of_string accepts unlisted" 50 (UInt8.to_int v)
   | Error e -> Alcotest.failf "of_string rejected unlisted: %a" pp_parse_error e
+
+(* [bit], [lookup], [enum], [enum_open] and [variants] all refine the integer a
+   field decodes to. That integer is the whole of what they need from their
+   base, so which OCaml type carries it is theirs to convert, not a restriction
+   to put on the caller. [uint32] and [int32] carry theirs in a type of their
+   own and are the proof: each combinator decodes, rejects and encodes over
+   them exactly as it does over [uint8]. *)
+let test_bit_over_carrier_base () =
+  let t = bit uint32be in
+  (match of_string t "\x00\x00\x00\x01" with
+  | Ok v -> Alcotest.(check bool) "non-zero decodes true" true v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  (match of_string t "\x00\x00\x00\x00" with
+  | Ok v -> Alcotest.(check bool) "zero decodes false" false v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode true" "\x00\x00\x00\x01" (to_string t true);
+  Alcotest.(check string) "encode false" "\x00\x00\x00\x00" (to_string t false)
+
+let test_lookup_over_carrier_base () =
+  let t = lookup [ "a"; "b"; "c" ] uint32be in
+  (match of_string t "\x00\x00\x00\x02" with
+  | Ok v -> Alcotest.(check string) "index selects entry" "c" v
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode" "\x00\x00\x00\x01" (to_string t "b");
+  expect_typ_decode_rejects "index past the table" t "\x00\x00\x00\x07";
+  expect_typ_encode_rejects "value not in the table" ~names:[ "lookup" ]
+    (fun () -> to_string t "z")
+
+let test_enum_over_carrier_base () =
+  let closed = enum "Code32" [ ("A", 1); ("B", 2) ] uint32be in
+  (match of_string closed "\x00\x00\x00\x02" with
+  | Ok v -> Alcotest.(check int) "listed code" 2 (UInt32.to_int v)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  expect_typ_decode_rejects "unlisted code" closed "\x00\x00\x00\x63";
+  expect_typ_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ]
+    (fun () -> to_string closed (UInt32.of_int 99));
+  Alcotest.(check string)
+    "encode listed code" "\x00\x00\x00\x01"
+    (to_string closed (UInt32.of_int 1));
+  let open_ = enum_open "Code32" [ ("A", 1); ("B", 2) ] uint32be in
+  match of_string open_ "\x00\x00\x00\x63" with
+  | Ok v ->
+      Alcotest.(check int) "open enum accepts unlisted" 99 (UInt32.to_int v)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e
+
+let test_variants_over_carrier_base () =
+  let t =
+    variants "Sign" [ ("Neg", `Neg); ("Zero", `Zero); ("Pos", `Pos) ] int32be
+  in
+  (match of_string t "\x00\x00\x00\x01" with
+  | Ok v -> Alcotest.(check bool) "variant value" true (v = `Zero)
+  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  Alcotest.(check string) "encode" "\x00\x00\x00\x02" (to_string t `Pos);
+  expect_typ_decode_rejects "index past the variant list" t "\x00\x00\x00\x07"
 
 (* A variable-size codec computes its span by reading length fields; on a
    truncated buffer that read runs off the end. [of_string] must return a clean
@@ -1355,6 +1525,14 @@ let suite =
         test_validate_rejects_unknown_variant;
       Alcotest.test_case "enum_open: of_string accepts unlisted" `Quick
         test_enum_open_of_string_accepts_unlisted;
+      Alcotest.test_case "bit: over a non-int carrier base" `Quick
+        test_bit_over_carrier_base;
+      Alcotest.test_case "lookup: over a non-int carrier base" `Quick
+        test_lookup_over_carrier_base;
+      Alcotest.test_case "enum: over a non-int carrier base" `Quick
+        test_enum_over_carrier_base;
+      Alcotest.test_case "variants: over a non-int carrier base" `Quick
+        test_variants_over_carrier_base;
       Alcotest.test_case "of_string: truncated variable codec rejects" `Quick
         test_of_string_truncated_variable_codec;
       Alcotest.test_case "expr: equality operators" `Quick
@@ -1372,6 +1550,12 @@ let suite =
       Alcotest.test_case "parse: int8 negative" `Quick test_int8_negative;
       Alcotest.test_case "parse: int8 full range" `Quick test_int8_full_range;
       Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;
+      Alcotest.test_case "reader: incremental parse is not quadratic" `Quick
+        test_reader_incremental_is_not_quadratic;
+      Alcotest.test_case "reader: zeroterm scan is not quadratic" `Quick
+        test_reader_zeroterm_scan_is_not_quadratic;
+      Alcotest.test_case "reader: embedded zeroterm scan is not quadratic"
+        `Quick test_reader_embedded_zeroterm_scan_is_not_quadratic;
       Alcotest.test_case "parse: int32be negative" `Quick test_int32be_negative;
       Alcotest.test_case "parse: int64le roundtrip" `Quick
         test_int64le_roundtrip;

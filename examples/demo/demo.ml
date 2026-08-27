@@ -13,7 +13,7 @@ open Wire.Everparse.Raw
 
 (* -- 1. Minimal: single uint8 = 1 byte -- *)
 
-type minimal = { m_value : int }
+type minimal = { m_value : UInt8.t }
 
 let f_minimal_value = Field.v "Value" uint8
 let bf_minimal_value = Codec.(f_minimal_value $ fun m -> m.m_value)
@@ -23,7 +23,7 @@ let minimal_codec =
 
 let minimal_struct = Everparse.Raw.struct_of_codec minimal_codec
 let minimal_size = Codec.wire_size minimal_codec
-let minimal_default = { m_value = 42 }
+let minimal_default = { m_value = UInt8.v 42 }
 
 let minimal_data n =
   Array.init n (fun i ->
@@ -34,12 +34,12 @@ let minimal_data n =
 (* -- 2. AllInts: all integer widths = 1+2+2+4+4+8 = 21 bytes -- *)
 
 type all_ints = {
-  u8 : int;
-  u16 : int;
-  u16be : int;
-  u32 : Optint.t;
-  u32be : Optint.t;
-  u64be : int64;
+  u8 : UInt8.t;
+  u16 : UInt16.t;
+  u16be : UInt16.t;
+  u32 : UInt32.t;
+  u32be : UInt32.t;
+  u64be : UInt64.t;
 }
 
 let f_ints_u64be = Field.v "U64BE" uint64be
@@ -63,12 +63,12 @@ let all_ints_size = Codec.wire_size all_ints_codec
 
 let all_ints_default =
   {
-    u8 = 0xFF;
-    u16 = 0x1234;
-    u16be = 0x5678;
-    u32 = Optint.of_int 0xDEADBEEF;
-    u32be = Optint.of_int 0xCAFEBABE;
-    u64be = 0x0102030405060708L;
+    u8 = UInt8.v 0xFF;
+    u16 = UInt16.v 0x1234;
+    u16be = UInt16.v 0x5678;
+    u32 = UInt32.of_int 0xDEADBEEF;
+    u32be = UInt32.of_int 0xCAFEBABE;
+    u64be = UInt64.of_int64 0x0102030405060708L;
   }
 
 let all_ints_data n =
@@ -169,7 +169,7 @@ let bf32_data n =
 
 (* -- 6. BoolFields: bool(1bit)+bool(1bit)+6bits+uint8 = 2 bytes -- *)
 
-type bool_fields = { active : bool; valid : bool; mode : int; code : int }
+type bool_fields = { active : bool; valid : bool; mode : int; code : UInt8.t }
 
 let f_bool_active = Field.v "Active" (bit (bits ~width:1 U8))
 let bf_bool_active = Codec.(f_bool_active $ fun b -> b.active)
@@ -189,7 +189,7 @@ let bool_fields_struct = Everparse.Raw.struct_of_codec bool_fields_codec
 let bool_fields_size = Codec.wire_size bool_fields_codec
 
 let bool_fields_default =
-  { active = true; valid = false; mode = 7; code = 0xAB }
+  { active = true; valid = false; mode = 7; code = UInt8.v 0xAB }
 
 let bool_fields_data n =
   Array.init n (fun i ->
@@ -202,16 +202,16 @@ let bool_fields_data n =
 (* -- 7. Large mixed: u32be+u8+u8+u16be+u8+u8+u16be+u16be+u32be+u64be = 26 bytes -- *)
 
 type large_mixed = {
-  sync : Optint.t;
-  version : int;
-  type_ : int;
-  spacecraft : int;
-  vcid : int;
-  count : int;
-  offset : int;
-  length : int;
-  crc : Optint.t;
-  timestamp : int64;
+  sync : UInt32.t;
+  version : UInt8.t;
+  type_ : UInt8.t;
+  spacecraft : UInt16.t;
+  vcid : UInt8.t;
+  count : UInt8.t;
+  offset : UInt16.t;
+  length : UInt16.t;
+  crc : UInt32.t;
+  timestamp : UInt64.t;
 }
 
 let f_mixed_timestamp = Field.v "Timestamp" uint64be
@@ -251,16 +251,16 @@ let large_mixed_size = Codec.wire_size large_mixed_codec
 
 let large_mixed_default =
   {
-    sync = Optint.of_int 0x1ACFFC1D;
-    version = 2;
-    type_ = 0;
-    spacecraft = 0x01FF;
-    vcid = 3;
-    count = 66;
-    offset = 16;
-    length = 1024;
-    crc = Optint.of_int 0xDEADBEEF;
-    timestamp = 0x0102030405060708L;
+    sync = UInt32.of_int 0x1ACFFC1D;
+    version = UInt8.v 2;
+    type_ = UInt8.v 0;
+    spacecraft = UInt16.v 0x01FF;
+    vcid = UInt8.v 3;
+    count = UInt8.v 66;
+    offset = UInt16.v 16;
+    length = UInt16.v 1024;
+    crc = UInt32.of_int 0xDEADBEEF;
+    timestamp = UInt64.of_int64 0x0102030405060708L;
   }
 
 let large_mixed_data n =
@@ -297,10 +297,14 @@ let int_of_priority = function
   | High -> 2
   | Critical -> 3
 
-type mapped = { priority : priority; value : int }
+type mapped = { priority : priority; value : UInt8.t }
 
 let f_mp_priority =
-  Field.v "Priority" (map ~decode:priority_of_int ~encode:int_of_priority uint8)
+  Field.v "Priority"
+    (map
+       ~decode:(fun v -> priority_of_int (UInt8.to_int v))
+       ~encode:(fun p -> UInt8.v (int_of_priority p))
+       uint8)
 
 let f_mp_value = Field.v "Value" uint8
 let bf_mp_priority = Codec.(f_mp_priority $ fun m -> m.priority)
@@ -312,13 +316,13 @@ let mapped_codec =
 
 let mapped_struct = Everparse.Raw.struct_of_codec mapped_codec
 let mapped_size = Codec.wire_size mapped_codec
-let mapped_default = { priority = High; value = 42 }
+let mapped_default = { priority = High; value = UInt8.v 42 }
 
 let mapped_data n =
   let buf = Bytes.create (n * mapped_size) in
   for i = 0 to n - 1 do
     Codec.encode mapped_codec
-      { priority = priority_of_int (i mod 4); value = i mod 256 }
+      { priority = priority_of_int (i mod 4); value = UInt8.v (i mod 256) }
       buf (i * mapped_size)
   done;
   buf
@@ -367,7 +371,7 @@ let cases_demo_data n =
    Codec.get calls the map decode on every read. *)
 
 type status = [ `Ok | `Warn | `Err | `Crit ]
-type enum_demo = { status : status; code : int }
+type enum_demo = { status : status; code : UInt8.t }
 
 let f_en_status =
   Field.v "StatusCode"
@@ -385,14 +389,14 @@ let enum_demo_codec =
 
 let enum_demo_struct = Everparse.Raw.struct_of_codec enum_demo_codec
 let enum_demo_size = Codec.wire_size enum_demo_codec
-let enum_demo_default = { status = `Ok; code = 42 }
+let enum_demo_default = { status = `Ok; code = UInt8.v 42 }
 
 let enum_demo_data n =
   let buf = Bytes.create (n * enum_demo_size) in
   let statuses = [| `Ok; `Warn; `Err; `Crit |] in
   for i = 0 to n - 1 do
     Codec.encode enum_demo_codec
-      { status = statuses.(i mod 4); code = i mod 256 }
+      { status = statuses.(i mod 4); code = UInt8.v (i mod 256) }
       buf (i * enum_demo_size)
   done;
   buf
@@ -402,7 +406,7 @@ let enum_demo_data n =
    (Version must be 0) but Codec.get strips the constraint entirely.
    This measures C constraint-checking overhead vs OCaml unchecked read. *)
 
-type constrained = { version : int; data : int }
+type constrained = { version : UInt8.t; data : UInt8.t }
 
 let f_co_version_c = field "Version" uint8
 
@@ -419,20 +423,20 @@ let constrained_codec =
 
 let constrained_struct = Everparse.Raw.struct_of_codec constrained_codec
 let constrained_size = Codec.wire_size constrained_codec
-let constrained_default = { version = 0; data = 42 }
+let constrained_default = { version = UInt8.zero; data = UInt8.v 42 }
 
 let constrained_data n =
   let buf = Bytes.create (n * constrained_size) in
   for i = 0 to n - 1 do
     Codec.encode constrained_codec
-      { version = 0; data = i mod 256 }
+      { version = UInt8.zero; data = UInt8.v (i mod 256) }
       buf (i * constrained_size)
   done;
   buf
 
 (* -- 12. Lowercase name: exercises filename capitalization -- *)
 
-type lowercase_record = { x : int; y : int }
+type lowercase_record = { x : UInt8.t; y : UInt16.t }
 
 let lowercase_codec =
   Codec.v "lowercase_record"
@@ -444,7 +448,7 @@ let lowercase_codec =
 
 (* -- 13. Reserved-word field names -- *)
 
-type reserved_fields = { type_ : int; case : int; value : int }
+type reserved_fields = { type_ : UInt8.t; case : UInt8.t; value : UInt16.t }
 
 let reserved_fields_codec =
   let f_type = Field.v "type" uint8 in

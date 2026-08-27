@@ -2,6 +2,13 @@
 
 ### Added
 
+- Add `Wire.UInt64`, the unsigned 64-bit carrier behind `uint64` and `uint64be`
+  (#323, @samoht)
+
+- Add `Wire.UInt32`, the unsigned 32-bit carrier behind `uint32` and `uint32be`.
+  It was reachable before only as `Wire.Private.UInt32`, with `Optint.t` as the
+  public type (#322, @samoht)
+
 - Add `Wire.SInt32`, the signed 32-bit carrier behind `int32` and `int32be`. It
   is deliberately not interchangeable with the unsigned 32-bit carrier: the two
   share a representation, so a value read with the wrong signedness would be a
@@ -41,6 +48,44 @@
   (#263, @samoht)
 
 ### Changed
+
+- **Breaking:** `int8` decodes to `Wire.SInt8.t`, a `private int` whose range is
+  the field's, rather than a native `int`. Read one with `Wire.SInt8.to_int`,
+  build one with the range-checked `Wire.SInt8.v` (#330, @samoht)
+
+- **Breaking:** `int16` and `int16be` decode to `Wire.SInt16.t`, a `private
+  int` whose range is the field's, rather than a native `int`. Read one with
+  `Wire.SInt16.to_int`, build one with the range-checked `Wire.SInt16.v`
+  (#333, @samoht)
+
+- **Breaking:** `uint16` and `uint16be` decode to `Wire.UInt16.t`, a `private
+  int` whose range is the field's, rather than a native `int`. Read one with
+  `Wire.UInt16.to_int`, build one with the range-checked `Wire.UInt16.v`
+  (#335, @samoht)
+
+- **Breaking:** `uint8` decodes to `Wire.UInt8.t`, a `private int` whose range
+  is the field's, rather than a native `int`. Read one with
+  `Wire.UInt8.to_int`, build one with the range-checked `Wire.UInt8.v`
+  (#336, @samoht)
+
+- `Wire.enum`, `Wire.enum_open`, `Wire.variants`, `Wire.lookup` and `Wire.bit`
+  accept any integer-valued base, not only one that decodes to a native `int`.
+  An enum, variant mapping, lookup table or flag can now sit over `uint32`,
+  `int32` or `uint64` as readily as over `uint8`, and projects to EverParse the
+  same way (#328, @samoht)
+
+- **Breaking:** `uint64` and `uint64be` decode to an abstract `Wire.UInt64.t`
+  rather than `int64`, so an unsigned field can no longer be read where a signed
+  one is expected. Convert with `Wire.UInt64.to_int64` and build with
+  `of_int64`. `Wire.Field.int64` now accepts a field of any type carrying a
+  64-bit slot, which is the set it already checked for at run time (#323,
+  @samoht)
+
+- **Breaking:** `uint32` and `uint32be` decode to an abstract `Wire.UInt32.t`
+  rather than `Optint.t`, and `Wire.UInt32.of_int` refuses a number outside the
+  range instead of masking it to a legal value the caller did not mean. Convert
+  a decoded field with `Wire.UInt32.to_int32` or `to_int`, and reinterpret a bit
+  pattern with `of_int32` (#322, @samoht)
 
 - **Breaking:** `int32` and `int32be` decode to `Wire.SInt32.t` rather than a
   native `int`, and `Wire.rest_bytes` accepts a parameter of any integer type
@@ -128,6 +173,41 @@
   follow as `<Base>CheckWire<Name>` (#235, @samoht)
 
 ### Fixed
+
+- `Codec.validate` no longer decodes a sub-codec reached through an `array`, a
+  `nested` region or a casetype case body: it checks in place, as it already did
+  for a plain field and a `Field.repeat` element, and allocates nothing
+  (#329, @samoht)
+
+- A `zeroterm` read through `Wire.of_reader` no longer costs time quadratic in
+  its length, at the top level or inside a codec: a 64 KiB string arriving one
+  byte at a time took 1.7 s and now takes a millisecond (#331, @samoht)
+
+- `Wire.nested` now sizes a value from the region's own bytes even when the
+  length field it depends on sits past the region: the end-of-input it reports
+  no longer counts bytes the parse was never handed (#332, @samoht)
+
+- A value with no fixed wire size read through `Wire.of_reader` no longer costs
+  time and memory quadratic in its length. The reader rebuilt the whole
+  accumulated buffer and re-parsed it from offset zero after every slice, so a
+  4 KiB frame arriving a byte at a time allocated 1,194,134 words where it now
+  allocates 19,082 (#325, @samoht)
+
+- A value parsed inside a `nested` region or a `repeat` budget no longer reports
+  an end-of-input whose byte count was read from outside that region. A region
+  too short to carry the length field the value's size depends on was sized from
+  whatever the buffer held past it, so the reported shortfall named bytes the
+  parse never claimed; it now names the length field's own extent (#326,
+  @samoht)
+
+- `uint64` values now order as unsigned numbers. The carrier was `int64`, whose
+  comparison reads the top bit as a sign and so ranked
+  0xFFFF_FFFF_FFFF_FFFF, the largest `uint64`, below zero (#323, @samoht)
+
+- `uint32` values now order as unsigned numbers on every target. The carrier was
+  `Optint.t`, which is `Int32` where the native `int` is narrower than the
+  field, so a comparison ranked 0xFFFFFFFF, the largest `uint32`, below 1 under
+  js_of_ocaml and wasm_of_ocaml (#322, @samoht)
 
 - A 4-byte signed field no longer alters the frame it decodes where the native
   `int` is narrower than the field. Under wasm_of_ocaml an `int` is 31 bits, so

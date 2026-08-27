@@ -10,7 +10,7 @@
     {[
     open Wire
 
-    type header = { version : int; length : int }
+    type header = { version : int; length : UInt16.t }
 
     let codec =
       Codec.v "Header"

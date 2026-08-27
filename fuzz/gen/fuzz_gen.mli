@@ -241,34 +241,34 @@ val sized_cases : string -> Alcobar.test_case list
 
 (** {1 Scalar leaves} *)
 
-val uint8 : int t
+val uint8 : Wire.UInt8.t t
 (** [uint8] generates for {!Wire.uint8}. *)
 
-val uint16 : int t
+val uint16 : Wire.UInt16.t t
 (** [uint16] generates for {!Wire.uint16}. *)
 
-val uint16be : int t
+val uint16be : Wire.UInt16.t t
 (** [uint16be] generates for {!Wire.uint16be}. *)
 
-val uint32 : Optint.t t
+val uint32 : Wire.UInt32.t t
 (** [uint32] generates for {!Wire.uint32}. *)
 
-val uint32be : Optint.t t
+val uint32be : Wire.UInt32.t t
 (** [uint32be] generates for {!Wire.uint32be}. *)
 
-val uint64 : int64 t
+val uint64 : Wire.UInt64.t t
 (** [uint64] generates for {!Wire.uint64}. *)
 
-val uint64be : int64 t
+val uint64be : Wire.UInt64.t t
 (** [uint64be] generates for {!Wire.uint64be}. *)
 
-val int8 : int t
+val int8 : Wire.SInt8.t t
 (** [int8] generates for {!Wire.int8}. *)
 
-val int16 : int t
+val int16 : Wire.SInt16.t t
 (** [int16] generates for {!Wire.int16}. *)
 
-val int16be : int t
+val int16be : Wire.SInt16.t t
 (** [int16be] generates for {!Wire.int16be}. *)
 
 val int32 : Wire.SInt32.t t
@@ -382,23 +382,23 @@ val array : int -> 'a t -> 'a list t
 (** [array n inner] generates for [Wire.array ~len:(Wire.int n) inner.typ].
     Positives are a fixed-length list of [inner.positive] samples. *)
 
-val enum : string -> (string * int) list -> int t
+val enum : string -> (string * int) list -> Wire.UInt8.t t
 (** [enum name cases] generates for [Wire.enum name cases Wire.uint8]. *)
 
-val enum_u16be : int t
+val enum_u16be : Wire.UInt16.t t
 (** [enum_u16be] generates for [Wire.enum ... Wire.uint16be]. *)
 
-val enum_open : int t
+val enum_open : Wire.UInt8.t t
 (** [enum_open] generates for [Wire.enum_open ... Wire.uint8], accepting
     unlisted values as positives. *)
 
-val enum_open_u16be : int t
+val enum_open_u16be : Wire.UInt16.t t
 (** [enum_open_u16be] generates for [Wire.enum_open ... Wire.uint16be]. *)
 
 val variants_u16be : [ `High | `One | `Zero ] t
 (** [variants_u16be] generates for [Wire.variants ... Wire.uint16be]. *)
 
-val bounded_u8 : min:int -> max:int -> int t
+val bounded_u8 : min:int -> max:int -> Wire.UInt8.t t
 (** [bounded_u8 ~min ~max] generates for a single-field record whose
     [Wire.uint8] field carries a [~self_constraint] [min <= v <= max].
     Adversarials are bytes at each boundary on both sides of the range. *)
@@ -417,45 +417,45 @@ val repeat_seq : bytes:int -> 'a t -> 'a list t
 (** [repeat_seq ~bytes inner] generates for
     [Field.repeat_seq ~seq:seq_list ~size:(...)]. *)
 
-val field_anon : (int * int) t
+val field_anon : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [field_anon] exercises [Wire.Field.anon]. *)
 
-val field_constraint : (int * int) t
+val field_constraint : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [field_constraint] exercises [Wire.Field.v ~constraint_] with a constraint
     referencing a previous field. *)
 
-val field_int : (int * int) t
+val field_int : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [field_int] exercises {!Wire.Field.int} in a field self constraint. *)
 
-val self_int64 : int64 t
+val self_int64 : Wire.UInt64.t t
 (** [self_int64] exercises [Wire.Field.v ~self_int64] over a 64-bit field. *)
 
-val param_input : int t
+val param_input : Wire.UInt8.t t
 (** [param_input] is a codec referencing [Wire.Param.input] in its [~where];
     tests bind the env. *)
 
-val action : int t
+val action : Wire.UInt8.t t
 (** [action] is a codec with [Wire.Field.v ~action:...] exercising the
     {!Wire.Action} surface ([on_success], [var], [assign], [if_],
     [return_bool]). *)
 
-val action_abort : int t
+val action_abort : Wire.UInt8.t t
 (** [action_abort] is a codec whose field's [~action] is {!Wire.Action.abort}:
     every decode is rejected. Use {!reject_cases}. *)
 
-val action_on_act : int t
+val action_on_act : Wire.UInt8.t t
 (** [action_on_act] mirrors {!action} using [Action.on_act]. *)
 
 val nan_float64 : float t
 (** [nan_float64] is a single-float codec with [~where:(is_nan f)]; positives
     are NaN bit patterns, non-NaN bytes are rejected. *)
 
-val optional_dynamic : (int * int option) t
+val optional_dynamic : (Wire.UInt8.t * Wire.UInt16.t option) t
 (** [optional_dynamic] is a codec with
     [Field.optional ~present:(ref gate <> 0)]; the payload is present or absent
     depending on the gate byte. *)
 
-val optional_or_dynamic : (int * int) t
+val optional_or_dynamic : (Wire.UInt8.t * Wire.UInt16.t) t
 (** [optional_or_dynamic] is the {!val-optional_or} equivalent of
     {!optional_dynamic}, using a fixed default value when absent. *)
 
@@ -463,25 +463,25 @@ val finite_float64 : float t
 (** [finite_float64] is a single-float codec with [~self_constraint:is_finite];
     adversarials produce NaN and infinity bit patterns. *)
 
-val expr_ops : (int * int) t
+val expr_ops : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [expr_ops] is a codec whose [~where] uses every integer [Wire.Expr] operator
     (arithmetic, bitwise, comparison, logical, [to_uint*] casts). *)
 
-val rest_bytes : (int * string) t
+val rest_bytes : (Wire.UInt8.t * string) t
 (** [rest_bytes] is a codec whose final field is [Wire.rest_bytes] sized from a
     bound [Wire.Param.input]. *)
 
-val sizeof : (int * int) t
+val sizeof : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [sizeof] is a two-uint8 codec whose second field's [~self_constraint]
     references [Wire.sizeof_this] / [Wire.field_pos] / [Wire.sizeof]. *)
 
-val codec_where : (int * int) t
+val codec_where : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [codec_where] generates for a two-{!val-uint8} record whose
     {!module-Codec.val-v} carries [~where:(a < b)]. Positives satisfy the
     predicate, adversarials sit at the equality boundary so the {!val-where}
     check fires. *)
 
-val typ_where : (int * int) t
+val typ_where : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [typ_where] generates for a two-{!val-uint8} record whose second field's typ
     is [Wire.where (len < 2) uint8]. This exercises the typ-level {!val-where}
     (a refinement carried in the field type), distinct from {!codec_where}'s
@@ -508,7 +508,8 @@ val casetype_u8 : string -> 'a case list -> 'a t
     [Wire.casetype name Wire.uint8 cases]. Positives pick a case uniformly, emit
     its tag byte, and append the inner case's positive bytes. *)
 
-val casetype_u16be_default : [ `A of int | `Other of int * int ] t
+val casetype_u16be_default :
+  [ `A of Wire.UInt8.t | `Other of Wire.UInt16.t * Wire.UInt16.t ] t
 (** [casetype_u16be_default] generates for [Wire.casetype] over a uint16be
     discriminator and a [Wire.default] branch that preserves the matched tag. *)
 

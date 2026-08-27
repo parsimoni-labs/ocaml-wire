@@ -2,15 +2,15 @@
 
 (** {1 Minimal (1 byte)} *)
 
-type minimal = { m_value : int }
+type minimal = { m_value : Wire.UInt8.t }
 
 val minimal_codec : minimal Wire.Codec.t
 (** Codec for the minimal 1-byte schema. *)
 
-val f_minimal_value : int Wire.Field.t
+val f_minimal_value : Wire.UInt8.t Wire.Field.t
 (** Zero-copy field accessor for the Value field. *)
 
-val bf_minimal_value : (int, minimal) Wire.Codec.field
+val bf_minimal_value : (Wire.UInt8.t, minimal) Wire.Codec.field
 (** Bound field for Codec.get/set on Value. *)
 
 val minimal_struct : Wire.Everparse.Raw.struct_
@@ -28,21 +28,21 @@ val minimal_data : int -> bytes array
 (** {1 AllInts (21 bytes)} *)
 
 type all_ints = {
-  u8 : int;
-  u16 : int;
-  u16be : int;
-  u32 : Optint.t;
-  u32be : Optint.t;
-  u64be : int64;
+  u8 : Wire.UInt8.t;
+  u16 : Wire.UInt16.t;
+  u16be : Wire.UInt16.t;
+  u32 : Wire.UInt32.t;
+  u32be : Wire.UInt32.t;
+  u64be : Wire.UInt64.t;
 }
 
 val all_ints_codec : all_ints Wire.Codec.t
 (** Codec covering all integer widths and endiannesses. *)
 
-val f_ints_u64be : int64 Wire.Field.t
+val f_ints_u64be : Wire.UInt64.t Wire.Field.t
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
-val bf_ints_u64be : (int64, all_ints) Wire.Codec.field
+val bf_ints_u64be : (Wire.UInt64.t, all_ints) Wire.Codec.field
 (** Bound field for Codec.get/set on U64BE. *)
 
 val all_ints_struct : Wire.Everparse.Raw.struct_
@@ -135,7 +135,12 @@ val bf32_data : int -> bytes array
 
 (** {1 BoolFields (2 bytes)} *)
 
-type bool_fields = { active : bool; valid : bool; mode : int; code : int }
+type bool_fields = {
+  active : bool;
+  valid : bool;
+  mode : int;
+  code : Wire.UInt8.t;
+}
 
 val bool_fields_codec : bool_fields Wire.Codec.t
 (** Codec with boolean and integer bitfields in a uint16be. *)
@@ -162,26 +167,26 @@ val bool_fields_data : int -> bytes array
 (** {1 LargeMixed (26 bytes)} *)
 
 type large_mixed = {
-  sync : Optint.t;
-  version : int;
-  type_ : int;
-  spacecraft : int;
-  vcid : int;
-  count : int;
-  offset : int;
-  length : int;
-  crc : Optint.t;
-  timestamp : int64;
+  sync : Wire.UInt32.t;
+  version : Wire.UInt8.t;
+  type_ : Wire.UInt8.t;
+  spacecraft : Wire.UInt16.t;
+  vcid : Wire.UInt8.t;
+  count : Wire.UInt8.t;
+  offset : Wire.UInt16.t;
+  length : Wire.UInt16.t;
+  crc : Wire.UInt32.t;
+  timestamp : Wire.UInt64.t;
 }
 
 val large_mixed_codec : large_mixed Wire.Codec.t
 (** Codec mixing uint8/16/32/64 and bitfield groups. *)
 
-val f_mixed_timestamp : int64 Wire.Field.t
+val f_mixed_timestamp : Wire.UInt64.t Wire.Field.t
 (** Zero-copy field accessor for the Timestamp field (uint64be, last of 10
     fields). *)
 
-val bf_mixed_timestamp : (int64, large_mixed) Wire.Codec.field
+val bf_mixed_timestamp : (Wire.UInt64.t, large_mixed) Wire.Codec.field
 (** Bound field for Codec.get/set on Timestamp. *)
 
 val large_mixed_struct : Wire.Everparse.Raw.struct_
@@ -199,7 +204,7 @@ val large_mixed_data : int -> bytes array
 (** {1 Mapped (2 bytes)} *)
 
 type priority = Low | Medium | High | Critical
-type mapped = { priority : priority; value : int }
+type mapped = { priority : priority; value : Wire.UInt8.t }
 
 val mapped_codec : mapped Wire.Codec.t
 (** Mapped-priority codec. *)
@@ -213,7 +218,7 @@ val f_mp_priority : priority Wire.Field.t
 val bf_mp_priority : (priority, mapped) Wire.Codec.field
 (** Bound field for Codec.get/set on Priority. *)
 
-val f_mp_value : int Wire.Field.t
+val f_mp_value : Wire.UInt8.t Wire.Field.t
 (** Value field. *)
 
 val mapped_size : int
@@ -257,7 +262,7 @@ val cases_demo_data : int -> bytes
 (** {1 EnumDemo (2 bytes)} *)
 
 type status = [ `Ok | `Warn | `Err | `Crit ]
-type enum_demo = { status : status; code : int }
+type enum_demo = { status : status; code : Wire.UInt8.t }
 
 val enum_demo_codec : enum_demo Wire.Codec.t
 (** Enum-demo codec. *)
@@ -271,7 +276,7 @@ val f_en_status : status Wire.Field.t
 val bf_en_status : (status, enum_demo) Wire.Codec.field
 (** Bound field for Codec.get/set on StatusCode. *)
 
-val f_en_code : int Wire.Field.t
+val f_en_code : Wire.UInt8.t Wire.Field.t
 (** Code field. *)
 
 val enum_demo_size : int
@@ -285,7 +290,7 @@ val enum_demo_data : int -> bytes
 
 (** {1 Constrained (2 bytes)} *)
 
-type constrained = { version : int; data : int }
+type constrained = { version : Wire.UInt8.t; data : Wire.UInt8.t }
 
 val constrained_codec : constrained Wire.Codec.t
 (** Constrained codec. *)
@@ -293,13 +298,13 @@ val constrained_codec : constrained Wire.Codec.t
 val constrained_struct : Wire.Everparse.Raw.struct_
 (** 3D struct for constrained. *)
 
-val f_co_version : int Wire.Field.t
+val f_co_version : Wire.UInt8.t Wire.Field.t
 (** Version field. *)
 
-val f_co_data : int Wire.Field.t
+val f_co_data : Wire.UInt8.t Wire.Field.t
 (** Data field. *)
 
-val bf_co_data : (int, constrained) Wire.Codec.field
+val bf_co_data : (Wire.UInt8.t, constrained) Wire.Codec.field
 (** Bound field for Codec.get/set on Data. *)
 
 val constrained_size : int

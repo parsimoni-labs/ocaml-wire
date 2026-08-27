@@ -11,7 +11,7 @@
     {[
     open Wire
 
-    type header = { version : int; length : int }
+    type header = { version : int; length : UInt16.t }
 
     let f_version = Field.v "Version" (bits ~width:4 U8)
     let f_length = Field.v "Length" uint16be
@@ -24,13 +24,13 @@
         Codec.[ bf_version; bf_length ]
 
     let buf = Bytes.create (Codec.wire_size codec)
-    let () = Codec.encode codec { version = 1; length = 42 } buf 0
+    let () = Codec.encode codec { version = 1; length = UInt16.v 42 } buf 0
     let get_version = Staged.unstage (Codec.get codec bf_version)
     let () = assert (get_version buf 0 = 1)
 
     let () =
       match Codec.decode codec buf 0 with
-      | Ok h -> assert (h.version = 1 && h.length = 42)
+      | Ok h -> assert (h.version = 1 && UInt16.to_int h.length = 42)
       | Error _ -> assert false
     ]}
 
@@ -101,7 +101,7 @@ module Param : sig
       {[
       open Wire
 
-      type bounded = { len : int; data : Bytesrw.Bytes.Slice.t }
+      type bounded = { len : UInt16.t; data : Bytesrw.Bytes.Slice.t }
 
       let max_len = Param.input "max_len" uint16be
       let out_len = Param.output "out_len" uint16be
@@ -361,12 +361,55 @@ end
     Fields carry no buffer position -- that comes from the {!Codec} they are
     bound into. The same field can appear in multiple codecs. *)
 
+module UInt64 = UInt64
+(** Unsigned 64-bit integers, the carrier of {!uint64} and {!uint64be}.
+
+    Ordered as an unsigned number, which [int64] is not: [Int64.compare] ranks
+    0xFFFF_FFFF_FFFF_FFFF, the largest value here, below 1, on every target. The
+    carrier holds the eight bytes exactly, so there is no range to enforce. *)
+
+module UInt32 = UInt32
+(** Unsigned 32-bit integers, the carrier of {!uint32} and {!uint32be}.
+
+    Ordered as an unsigned number on every target: the representation is shared
+    with {!SInt32}, and where the native [int] is narrower than the field it is
+    [Int32], whose comparison ranks 0xFFFFFFFF, the largest value here, below 1.
+*)
+
 module SInt32 = SInt32
 (** Signed 32-bit integers, the carrier of {!int32} and {!int32be}.
 
-    Distinct from the unsigned 32-bit carrier on purpose: the two share a
-    representation, and a value read with the wrong signedness is a silent
-    misparse rather than a type error. *)
+    Distinct from {!UInt32} on purpose: the two share a representation, and a
+    value read with the wrong signedness is a silent misparse rather than a type
+    error. *)
+
+module SInt8 = SInt8
+(** Signed 8-bit integers, the carrier of {!int8}.
+
+    A [private int], so a value reads as the [int] it is; only building one
+    names the range, and [SInt8.v 200] is refused there rather than at the
+    encoder. *)
+
+module SInt16 = SInt16
+(** Signed 16-bit integers, the carrier of {!int16} and {!int16be}.
+
+    A [private int] for the same reason {!SInt8} is: a value reads as the [int]
+    it is, only building one names the range, and [SInt16.v 40000] is refused
+    there rather than at the encoder. *)
+
+module UInt8 = UInt8
+(** Unsigned 8-bit integers, the carrier of {!uint8}.
+
+    A [private int] for the same reason {!SInt8} is, over the byte's unsigned
+    range: a value reads as the [int] it is, only building one names the range,
+    and [UInt8.v 511] is refused there rather than at the encoder. *)
+
+module UInt16 = UInt16
+(** Unsigned 16-bit integers, the carrier of {!uint16} and {!uint16be}.
+
+    A [private int] for the same reason {!SInt16} is, over the other two bytes:
+    a value reads as the [int] it is, only building one names the range, and
+    [UInt16.v 70000] is refused there rather than at the encoder. *)
 
 module Field : sig
   type 'a t
@@ -418,7 +461,7 @@ module Field : sig
       parent codec. This shape projects to 3D as a gate-selected sub-codec.
 
       {[
-      type ext = { len : int; items : int list }
+      type ext = { len : UInt8.t; items : UInt8.t list }
 
       let f_ext_len = Field.v "ExtLen" uint8
 
@@ -497,7 +540,7 @@ module Field : sig
   val int : 'a t -> int expr
   (** [int f] returns this field as a native-integer expression. *)
 
-  val int64 : int64 t -> int64 expr
+  val int64 : 'a t -> int64 expr
   (** [int64 f] returns the expression referencing this field's full 64-bit
       value, without truncating to OCaml's native integer range. *)
 
@@ -534,55 +577,66 @@ end
 
     Every fixed-width integer accepts exactly the range its decoder produces:
     [0] to [2^n - 1] for an unsigned width, [-2^(n-1)] to [2^(n-1) - 1] for a
-    signed one. Encoding anything else raises [Invalid_argument] rather than
-    dropping the bits that do not fit, on every entry point ({!to_string},
-    {!Codec.encode} and {!Codec.set} alike). OCaml carries the narrow widths in
-    a plain [int], which holds far more than the field does, so [uint8] given
-    [0x1FF] would otherwise put an [0xFF] on the wire that reads back as a
-    perfectly legal [255], with nothing left to say the caller meant something
-    else. *)
+    signed one, and carries that range in its own type, so a number the field
+    cannot hold is refused where the value is built. A {!bits} slice is the one
+    shape left in a plain [int], which holds far more than the slice does, so a
+    four-bit slice given [0x1F] raises [Invalid_argument] on every entry point
+    ({!to_string}, {!Codec.encode} and {!Codec.set} alike) rather than putting
+    an [0xF] on the wire that reads back as a perfectly legal [15], with nothing
+    left to say the caller meant something else. *)
 
-val uint8 : int typ
-(** Unsigned 8-bit integer. Encodes [0] to [255]. *)
+val uint8 : UInt8.t typ
+(** Unsigned 8-bit integer. Holds [0] to [255]: [511] is not a [uint8], even
+    though its low byte is a legal one, and would come back from the decoder as
+    [255]. The range is the carrier's, so {!UInt8.v} refuses it where the value
+    is built and every encode path takes only values the field holds. *)
 
-val uint16 : int typ
-(** Unsigned 16-bit little-endian integer. Encodes [0] to [65535]. *)
+val uint16 : UInt16.t typ
+(** Unsigned 16-bit little-endian integer. Holds [0] to [65535]: [70000] is not
+    a [uint16], even though its low two bytes are legal ones, and would come
+    back from the decoder as [4464]. The range is the carrier's, so {!UInt16.v}
+    refuses it where the value is built and every encode path takes only values
+    the field holds. *)
 
-val uint16be : int typ
-(** Unsigned 16-bit big-endian integer. Encodes [0] to [65535]. *)
+val uint16be : UInt16.t typ
+(** Unsigned 16-bit big-endian integer. Same range and same carrier as
+    {!uint16}. *)
 
-val uint32 : Optint.t typ
-(** Unsigned 32-bit little-endian integer. Decodes to an [Optint.t] so a value
-    with bit 31 set survives on a narrow-int target (js/wasm).
+val uint32 : UInt32.t typ
+(** Unsigned 32-bit little-endian integer. Encodes [0] to [2{^32} - 1], and
+    carries the value as a {!UInt32.t} so a word with bit 31 set survives on a
+    target whose native [int] is narrower than the field. Build one with
+    {!UInt32.of_int32} from a bit pattern, or {!UInt32.of_int}. *)
 
-    On a 64-bit host that [Optint.t] is a native [int] wide enough to hold more
-    than 32 bits, so encoding checks the range and refuses a negative value
-    rather than reading it as its two's complement. Build a word with bit 31 set
-    from its bit pattern with [Wire.Private.UInt32.of_int32], not with
-    [Optint.of_int32], which keeps the signed view. *)
+val uint32be : UInt32.t typ
+(** Unsigned 32-bit big-endian integer. Encodes [0] to [2{^32} - 1]. *)
 
-val uint32be : Optint.t typ
-(** Unsigned 32-bit big-endian integer. Decodes to an [Optint.t]. *)
-
-val uint64 : int64 typ
+val uint64 : UInt64.t typ
 (** [uint64] is an unsigned 64-bit little-endian integer represented as an OCaml
     64-bit integer. The representation is exactly the eight bytes written, so
     every [int64] encodes and none is out of range. *)
 
-val uint64be : int64 typ
+val uint64be : UInt64.t typ
 (** [uint64be] is an unsigned 64-bit big-endian integer represented as an OCaml
     64-bit integer. *)
 
-val int8 : int typ
-(** Signed 8-bit two's-complement integer. Encodes [-128] to [127]: [200] is not
+val int8 : SInt8.t typ
+(** Signed 8-bit two's-complement integer. Holds [-128] to [127]: [200] is not
     an [int8], even though its low byte is a legal one, and would come back from
-    the decoder as [-56]. *)
+    the decoder as [-56]. The range is the carrier's, so {!SInt8.v} refuses it
+    where the value is built and every encode path takes only values the byte
+    holds. *)
 
-val int16 : int typ
-(** Signed 16-bit little-endian integer. Encodes [-32768] to [32767]. *)
+val int16 : SInt16.t typ
+(** Signed 16-bit little-endian integer. Holds [-32768] to [32767]: [40000] is
+    not an [int16], even though its low two bytes are legal ones, and would come
+    back from the decoder as [-25536]. The range is the carrier's, so
+    {!SInt16.v} refuses it where the value is built and every encode path takes
+    only values the field holds. *)
 
-val int16be : int typ
-(** Signed 16-bit big-endian integer. Encodes [-32768] to [32767]. *)
+val int16be : SInt16.t typ
+(** Signed 16-bit big-endian integer. Same range and same carrier as {!int16}.
+*)
 
 val int32 : SInt32.t typ
 (** Signed 32-bit little-endian integer. Encodes [-2{^31}] to [2{^31} - 1], and
@@ -653,13 +707,19 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
 
-val bit : int typ -> bool typ
+val bit : 'a typ -> bool typ
 (** [bit t] views an integer wire value as a boolean. Zero is [false], non-zero
-    is [true]. *)
+    is [true].
 
-val lookup : 'a list -> int typ -> 'a typ
+    [t] may be any integer-valued description, whatever OCaml type carries the
+    integer: a {!val-uint8}, a bitfield, a {!val-uint32}. A description with no
+    integer reading raises [Invalid_argument] where it is written down. *)
+
+val lookup : 'a list -> 'b typ -> 'a typ
 (** [lookup table t] decodes an integer as a zero-based index into a finite
     table.
+
+    [t] may be any integer-valued description, as for {!bit}.
 
     The decoded integer selects the corresponding element from the list. An
     out-of-range index produces an {!Invalid_tag} parse error (reported via
@@ -791,15 +851,19 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
     consume fewer bytes than the available space. Encoding zero-pads the unused
     region; a value larger than [size] raises [Invalid_argument]. *)
 
-val enum : string -> (string * int) list -> int typ -> int typ
+val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the
     named values, on encode as well as on decode: encoding an unlisted value
-    raises [Invalid_argument]. The result is still an OCaml integer -- use
-    {!variants} instead if you want to decode to proper OCaml values. [enum] is
-    mainly useful for 3D projection where the name and cases appear in the
-    generated [.3d] file. *)
+    raises [Invalid_argument]. The result still decodes to whatever [base]
+    decodes to -- use {!variants} instead if you want proper OCaml values.
+    [enum] is mainly useful for 3D projection where the name and cases appear in
+    the generated [.3d] file.
 
-val enum_open : string -> (string * int) list -> int typ -> int typ
+    [base] may be any integer-valued description, whatever OCaml type carries
+    the integer the case values name. A description with no integer reading
+    raises [Invalid_argument] where it is written down. *)
+
+val enum_open : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum_open name cases base] is like {!enum} but for an open value set: the
     named cases document the known values, but any value is accepted. Decode
     does not reject unlisted values, and the field projects as its base scalar
@@ -807,9 +871,11 @@ val enum_open : string -> (string * int) list -> int typ -> int typ
     future codes is not wrongly rejected. The known codes are still emitted as a
     3D enum declaration, so they remain documented in the generated [.3d]. *)
 
-val variants : string -> (string * 'a) list -> int typ -> 'a typ
+val variants : string -> (string * 'a) list -> 'b typ -> 'a typ
 (** [variants name cases base] maps integer values to OCaml values via a named
-    enumeration. Unlike {!enum}, this converts to proper OCaml values. *)
+    enumeration. Unlike {!enum}, this converts to proper OCaml values.
+
+    [base] may be any integer-valued description, as for {!enum}. *)
 
 type ('a, 'k) case_def
 
@@ -1571,6 +1637,8 @@ module Private : sig
     (** {!val-int_of} without the option; raises {!Types.Parse_error}. *)
   end
 
+  module Expr_compiler = Expr_compiler
+
   (** Packed bitfield base words. *)
   module Bitfield : sig
     val byte_size : Types.bitfield_base -> int
@@ -1602,6 +1670,7 @@ module Private : sig
   end
 
   module Uint_var = Uint_var
+  module Shape = Shape
 
   val param_name : param -> string
   (** Name of a formal parameter. *)

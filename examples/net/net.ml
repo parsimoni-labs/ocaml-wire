@@ -17,7 +17,7 @@ let ethernet_payload_size = 40
 type ethernet = {
   dst : Slice.t;
   src : Slice.t;
-  ethertype : int;
+  ethertype : UInt16.t;
   payload : Slice.t;
 }
 
@@ -52,15 +52,15 @@ type ipv4 = {
   ihl : int;
   dscp : int;
   ecn : int;
-  total_length : int;
-  identification : int;
+  total_length : UInt16.t;
+  identification : UInt16.t;
   flags : int;
   fragment_offset : int;
-  ttl : int;
-  protocol : int;
-  checksum : int;
-  src : Optint.t;
-  dst : Optint.t;
+  ttl : UInt8.t;
+  protocol : UInt8.t;
+  checksum : UInt16.t;
+  src : UInt32.t;
+  dst : UInt32.t;
   payload : Slice.t;
 }
 
@@ -178,10 +178,10 @@ let ipv4_size = Codec.wire_size ipv4_codec
 (* -- TCP header: 20 bytes fixed (no options) -- *)
 
 type tcp = {
-  src_port : int;
-  dst_port : int;
-  seq : Optint.t;
-  ack_num : Optint.t;
+  src_port : UInt16.t;
+  dst_port : UInt16.t;
+  seq : UInt32.t;
+  ack_num : UInt32.t;
   data_offset : int;
   reserved : int;
   ns : bool;
@@ -193,9 +193,9 @@ type tcp = {
   rst : bool;
   syn : bool;
   fin : bool;
-  window : int;
-  checksum : int;
-  urgent_ptr : int;
+  window : UInt16.t;
+  checksum : UInt16.t;
+  urgent_ptr : UInt16.t;
 }
 
 let f_tcp_src_port = Field.v "SrcPort" uint16be
@@ -260,7 +260,12 @@ let tcp_size = Codec.wire_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
 
-type udp = { src_port : int; dst_port : int; length : int; checksum : int }
+type udp = {
+  src_port : UInt16.t;
+  dst_port : UInt16.t;
+  length : UInt16.t;
+  checksum : UInt16.t;
+}
 
 let f_udp_src_port = Field.v "SrcPort" ~doc:"RFC 768: source port" uint16be
 let f_udp_dst_port = Field.v "DstPort" ~doc:"RFC 768: destination port" uint16be
@@ -289,18 +294,18 @@ let udp_size = Codec.wire_size udp_codec
 
 (* -- Utilities -- *)
 
-(* Addresses stay in [Optint.t] like the [f_ip_src]/[f_ip_dst] fields: an
+(* Addresses stay in [UInt32.t] like the [f_ip_src]/[f_ip_dst] fields: an
    address at or above 128.0.0.0 sets bit 31, which a narrow-int platform
    (wasm_of_ocaml, js_of_ocaml) cannot hold in an int. *)
 let pp_ipv4_addr ppf addr =
-  let v = Optint.to_int32 addr in
+  let v = UInt32.to_int32 addr in
   let octet shift =
     Int32.to_int (Int32.logand (Int32.shift_right_logical v shift) 0xFFl)
   in
   Fmt.pf ppf "%d.%d.%d.%d" (octet 24) (octet 16) (octet 8) (octet 0)
 
 let ipv4_addr a b c d =
-  Optint.of_int32
+  UInt32.of_int32
     (Int32.logor
        (Int32.shift_left (Int32.of_int a) 24)
        (Int32.of_int ((b lsl 16) lor (c lsl 8) lor d)))
@@ -336,8 +341,8 @@ let tcp_frame_data n =
       Bytes.set_uint8 b (ip + 8) 64;
       Bytes.set_uint8 b (ip + 9) 6;
       Bytes.set_uint16_be b (ip + 10) 0;
-      Bytes.set_int32_be b (ip + 12) (Optint.to_int32 (ipv4_addr 192 168 1 100));
-      Bytes.set_int32_be b (ip + 16) (Optint.to_int32 (ipv4_addr 10 0 0 1));
+      Bytes.set_int32_be b (ip + 12) (UInt32.to_int32 (ipv4_addr 192 168 1 100));
+      Bytes.set_int32_be b (ip + 16) (UInt32.to_int32 (ipv4_addr 10 0 0 1));
       (* TCP at offset 34 *)
       let tcp = 34 in
       Bytes.set_uint16_be b tcp (12345 + (i mod 1000));
@@ -375,8 +380,8 @@ let udp_frame_data n =
       Bytes.set_uint8 b (ip + 8) 64;
       Bytes.set_uint8 b (ip + 9) 17;
       Bytes.set_uint16_be b (ip + 10) 0;
-      Bytes.set_int32_be b (ip + 12) (Optint.to_int32 (ipv4_addr 192 168 1 100));
-      Bytes.set_int32_be b (ip + 16) (Optint.to_int32 (ipv4_addr 10 0 0 1));
+      Bytes.set_int32_be b (ip + 12) (UInt32.to_int32 (ipv4_addr 192 168 1 100));
+      Bytes.set_int32_be b (ip + 16) (UInt32.to_int32 (ipv4_addr 10 0 0 1));
       let udp = 34 in
       Bytes.set_uint16_be b udp (5353 + (i mod 100));
       Bytes.set_uint16_be b (udp + 2) 53;

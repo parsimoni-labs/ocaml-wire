@@ -40,7 +40,7 @@ API reference: [wire on ocaml.org](https://ocaml.org/p/wire/latest).
 ```ocaml
 open Wire
 
-type packet = { version : int; flags : int; length : int; tag : int }
+type packet = { version : int; flags : int; length : UInt16.t; tag : UInt8.t }
 
 let f_version = Field.v "Version" (bits ~width:4 U8)
 let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
@@ -77,7 +77,9 @@ let set_version = Staged.unstage (Codec.set codec bf_version)
 
 let buf = Bytes.create (Codec.wire_size codec)
 let () =
-  Codec.encode codec { version = 1; flags = 2; length = 1024; tag = 0 } buf 0
+  Codec.encode codec
+    { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
+    buf 0
 let v = get_version buf 0        (* read version without allocating a record *)
 let () = set_version buf 0 3     (* mutate version in place *)
 ```
@@ -248,7 +250,7 @@ let f_ack = Field.v "ACK" (bit (bits ~width:1 U16be))
 ### Parameters and actions
 
 ```ocaml
-type bounded = { len : int; data : string }
+type bounded = { len : UInt16.t; data : string }
 
 let max_len = Param.input "max_len" uint16be
 let out_len = Param.output "out_len" uint16be
@@ -266,7 +268,7 @@ let codec =
     [ f_len  $ (fun r -> r.len);
       f_data $ (fun r -> r.data) ]
 
-let env = Codec.env codec |> Param.bind max_len 1024
+let env = Codec.env codec |> Param.bind max_len (UInt16.v 1024)
 let _ = Codec.decode ~env codec buf 0
 let len = Param.get env out_len
 ```

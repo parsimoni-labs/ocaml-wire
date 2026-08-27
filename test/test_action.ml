@@ -13,7 +13,11 @@ open Wire
 open Test_helpers
 
 (* Record type for two-field codecs *)
-type xy = { x : int; y : int }
+type xy = { x : UInt8.t; y : UInt8.t }
+
+(* A [bits ~width] slice stays in a plain [int], so the bitfield case gets its
+   own record rather than borrowing the whole-byte one. *)
+type bits_xy = { bx : int; by : int }
 
 (* -- Assign -- *)
 
@@ -38,8 +42,8 @@ let test_assign_propagates () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x0A\x14" in
   let r = decode_ok (Codec.decode ~env codec buf 0) in
-  Alcotest.(check int) "x" 10 r.x;
-  Alcotest.(check int) "out" 10 (Param.get env out)
+  Alcotest.(check int) "x" 10 (UInt8.to_int r.x);
+  Alcotest.(check int) "out" 10 (UInt8.to_int (Param.get env out))
 
 let test_assign_propagates_fail () =
   (* Assign out = x, then constraint out + y <= 10 fails. *)
@@ -89,7 +93,7 @@ let test_assign_expr () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 43 (Param.get env out)
+  Alcotest.(check int) "out" 43 (UInt8.to_int (Param.get env out))
 
 (* -- Return -- *)
 
@@ -199,7 +203,7 @@ let test_var_local () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 84 (Param.get env out)
+  Alcotest.(check int) "out" 84 (UInt8.to_int (Param.get env out))
 
 (* -- If -- *)
 
@@ -231,7 +235,7 @@ let check_if_gate name ~threshold ~input ~expected =
   in
   let env = Codec.env codec in
   ignore (decode_ok (Codec.decode ~env codec (Bytes.of_string input) 0));
-  Alcotest.(check int) "out" expected (Param.get env out)
+  Alcotest.(check int) "out" expected (UInt8.to_int (Param.get env out))
 
 let test_if_true_branch () =
   check_if_gate "IfTrue" ~threshold:0 ~input:"\x2A\x00" ~expected:1
@@ -267,7 +271,7 @@ let test_if_else () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 20 (Param.get env out)
+  Alcotest.(check int) "out" 20 (UInt8.to_int (Param.get env out))
 
 let test_if_abort_in_else () =
   (* if (x > 0) { out = x } else { abort } *)
@@ -329,7 +333,7 @@ let test_if_nested () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x32\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 1 (Param.get env out)
+  Alcotest.(check int) "out" 1 (UInt8.to_int (Param.get env out))
 
 (* -- On_act vs On_success -- *)
 
@@ -383,7 +387,7 @@ let test_stmt_sequencing () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 86 (Param.get env out)
+  Alcotest.(check int) "out" 86 (UInt8.to_int (Param.get env out))
 
 let test_return_short_circuits () =
   (* return true; abort => should succeed (abort never reached) *)
@@ -441,19 +445,19 @@ let test_action_on_bitfield () =
   let codec =
     let open Codec in
     v "BFAction"
-      (fun x y -> { x; y })
+      (fun bx by -> { bx; by })
       [
         ( Field.v "x"
             ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
             (bits ~width:4 U8)
-        $ fun r -> r.x );
-        (Field.v "y" (bits ~width:4 U8) $ fun r -> r.y);
+        $ fun r -> r.bx );
+        (Field.v "y" (bits ~width:4 U8) $ fun r -> r.by);
       ]
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\xAB" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  let out_val = Param.get env out in
+  let out_val = UInt8.to_int (Param.get env out) in
   Alcotest.(check bool) "out <= 15" true (out_val <= 15)
 
 (* -- Encode -- *)
@@ -475,12 +479,15 @@ let test_encode_output_no_env () =
         $ fun x -> x );
       ]
   in
-  let buf = Bytes.create (Codec.size_of_value codec 7) in
-  Codec.encode codec 7 buf 0;
+  let seven = UInt8.v 7 in
+  let buf = Bytes.create (Codec.size_of_value codec seven) in
+  Codec.encode codec seven buf 0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0);
   let env = Codec.env codec in
-  Alcotest.(check int) "decoded" 7 (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 7 (Param.get env out)
+  Alcotest.(check int)
+    "decoded" 7
+    (UInt8.to_int (decode_ok (Codec.decode ~env codec buf 0)));
+  Alcotest.(check int) "out" 7 (UInt8.to_int (Param.get env out))
 
 (* An embedded output-param sub-codec encodes from the parent without an env,
    too: the parent forwards no env and the sub-codec needs none. *)
@@ -504,8 +511,9 @@ let test_encode_embedded_output_no_env () =
       (fun i -> i)
       [ (Field.v "inner" (codec inner) $ fun i -> i) ]
   in
-  let buf = Bytes.create (Codec.size_of_value outer 7) in
-  Codec.encode outer 7 buf 0;
+  let seven = UInt8.v 7 in
+  let buf = Bytes.create (Codec.size_of_value outer seven) in
+  Codec.encode outer seven buf 0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0)
 
 (* -- Suite -- *)

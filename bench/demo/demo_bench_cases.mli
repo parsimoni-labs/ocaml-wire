@@ -47,13 +47,13 @@ type 'a read_case =
 type packed_case = C : _ read_case -> packed_case
 type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
-val minimal_case : int read_case
+val minimal_case : Wire.UInt8.t read_case
 (** Minimal 1-byte uint8 schema. *)
 
-val all_ints_case : int64 read_case
+val all_ints_case : Wire.UInt64.t read_case
 (** All integer widths, projecting u64be. *)
 
-val large_mixed_case : int64 read_case
+val large_mixed_case : Wire.UInt64.t read_case
 (** Large mixed-field struct, projecting a uint64be timestamp. *)
 
 val bitfield8_case : int read_case
@@ -74,10 +74,10 @@ val clcw_case : int read_case
 val packet_case : int read_case
 (** CCSDS Space Packet APID (11-bit bitfield). *)
 
-val ipv4_case : Optint.t read_case
+val ipv4_case : Wire.UInt32.t read_case
 (** IPv4 source address (uint32be). *)
 
-val tcp_case : int read_case
+val tcp_case : Wire.UInt16.t read_case
 (** TCP destination port (uint16be). *)
 
 val tcp_syn_case : bool read_case
@@ -92,7 +92,7 @@ val cases_case : Demo.ptype read_case
 val enum_case : Demo.status read_case
 (** Enum field with mapped status values. *)
 
-val constrained_case : int read_case
+val constrained_case : Wire.UInt8.t read_case
 (** Constrained field with a where-clause predicate. *)
 
 val projection_cases : packed_case list

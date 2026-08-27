@@ -112,7 +112,7 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
           ]
 
     let buf = Bytes.create 12
-    let env = Codec.env codec |> Param.bind p_iv_len 12
+    let env = Codec.env codec |> Param.bind p_iv_len (UInt8.v 12)
 
     let () =
       Codec.encode ~env codec (String.make 12 'a') buf 0;
@@ -185,6 +185,14 @@ val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 (** [zeroterm_nul_pos buf ~first ~limit] is the index of the first NUL byte in
     [\[first, limit)], raising [Parse_error] on an unterminated run. Internal
     use (shared with the streaming decoders). *)
+
+val elem_size_within :
+  'a Types.typ -> Types.eval_ctx -> bytes -> int -> input_end:int -> int
+(** [elem_size_within t ctx buf off ~input_end] is the wire size of the value of
+    type [t] at [off], sized against the bytes the parse was handed rather than
+    against all of [buf]: a nested region stops at [input_end], and a size a
+    byte past it could not justify is reported as end of input there. Internal
+    use. *)
 
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)

@@ -14,7 +14,7 @@ type packet = {
   apid : int;
   seq_flags : int;
   seq_count : int;
-  data_len : int;
+  data_len : UInt16.t;
 }
 
 let f_sp_apid = Field.v "APID" (bits ~width:11 U16be)
@@ -55,7 +55,7 @@ let packet_default =
     apid = 0x7FF;
     seq_flags = 3;
     seq_count = 0;
-    data_len = 255;
+    data_len = UInt16.v 255;
   }
 
 let packet_data n =
@@ -76,7 +76,7 @@ type full_packet = {
   version : int;
   type_ : int;
   apid : int;
-  frame_len : int;
+  frame_len : UInt16.t;
   data : string;
 }
 
@@ -314,7 +314,7 @@ type tm_with_ocf = {
   mc_count : int;
   vc_count : int;
   first_hdr : int;
-  ocf : Optint.t option;
+  ocf : UInt32.t option;
 }
 
 let f_tmo_ocf_flag = Field.v "OCFFlag" (bit (bits ~width:1 U16be))
@@ -354,7 +354,7 @@ let tm_with_ocf_codec =
 
 (* -- 4. Nested protocol -- *)
 
-type inner_cmd = { id : int; seq : int; flags : int }
+type inner_cmd = { id : UInt8.t; seq : UInt16.t; flags : UInt8.t }
 
 let f_cmd_id = Field.v "CmdId" uint8
 let f_cmd_seq = Field.v "Seq" uint16be
@@ -376,9 +376,9 @@ let inner_cmd_codec =
 let inner_cmd_size = Codec.wire_size inner_cmd_codec
 
 type outer_hdr = {
-  version : int;
-  type_ : int;
-  length : int;
+  version : UInt8.t;
+  type_ : UInt8.t;
+  length : UInt16.t;
   payload : Bytesrw.Bytes.Slice.t;
 }
 

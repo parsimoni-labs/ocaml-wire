@@ -1,4 +1,4 @@
-(* Top-level expression evaluator and value-to-int conversion.
+(* Top-level expression evaluator.
 
    The full struct-internal expression machinery (with [Ref]/[Sizeof_this]/
    [Field_pos] resolution against bound fields) lives in [Codec] as the
@@ -31,93 +31,11 @@ let rec lookup name = function
         name
   | b :: tl -> if String.equal b.name name then b.value else lookup name tl
 
-(* Convert a typed value to [int]. Returns [None] for types that don't
-   fit in OCaml int (uint64 over 2^63, non-numeric). *)
-let rec int_of : type a. a typ -> a -> int option =
- fun typ v ->
-  match typ with
-  | Uint8 -> Some v
-  | Uint16 _ -> Some v
-  | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
-  (* On a narrow-int platform a u32 value may not fit either; the unsigned
-     conversion returns [None] exactly then and is identity-exact on a 64-bit
-     host. *)
-  | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
-  | Uint64 _ -> Int64.unsigned_to_int v
-  | Int8 -> Some v
-  | Int16 _ -> Some v
-  | Int32 _ -> SInt32.to_int_opt v
-  | Int64 _ -> Int64.unsigned_to_int v
-  | Float32 _ -> None
-  | Float64 _ -> None
-  | Bits _ -> Some v
-  | Enum { base; _ } -> int_of base v
-  | Where { inner; _ } -> int_of inner v
-  | Single_elem { elem; _ } -> int_of elem v
-  | Apply { typ; _ } -> int_of typ v
-  | Map { inner; encode; _ } -> int_of inner (encode v)
-  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
-      None
-
-(* Hot-path variant of [int_of] for the cross-field size/offset/present
-   readers, which need a plain [int]. Returns it directly (no [Some] box on the
-   numeric path). A [uint64]/[int64] beyond the native int range is adversarial
-   input and raises [Parse_error] ([Value_out_of_range]); a non-integer field
-   referenced where an integer is required is a schema error and raises
-   [Invalid_argument]. *)
-let int_overflow v = raise_out_of_range ~at:0 v
-
-let not_an_integer () =
-  invalid_arg "Wire: non-integer field referenced where an integer is required"
-
-let rec int_of_exn : type a. a typ -> a -> int =
- fun typ v ->
-  match typ with
-  | Uint8 -> v
-  | Uint16 _ -> v
-  | Uint_var _ -> (
-      if Sys.int_size > 56 then UInt63.to_int v
-      else
-        match Int64.unsigned_to_int (Optint.Int63.to_int64 v) with
-        | Some n -> n
-        | None -> int_overflow (Optint.Int63.to_int64 v))
-  (* The narrow-int branches raise the typed overflow error instead of
-     letting [Optint.to_int]'s [Failure] escape; a 64-bit host keeps the
-     direct allocation-free conversion. *)
-  | Uint32 _ -> (
-      if Sys.int_size > 32 then UInt32.to_int v
-      else
-        match Int32.unsigned_to_int (UInt32.to_int32 v) with
-        | Some n -> n
-        | None ->
-            int_overflow
-              (Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL))
-  | Uint64 _ -> (
-      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
-  | Int8 -> v
-  | Int16 _ -> v
-  | Int32 _ -> (
-      match SInt32.to_int_opt v with
-      | Some n -> n
-      | None -> int_overflow (Int64.of_int32 (SInt32.to_int32 v)))
-  | Int64 _ -> (
-      match Int64.unsigned_to_int v with Some n -> n | None -> int_overflow v)
-  | Float32 _ -> not_an_integer ()
-  | Float64 _ -> not_an_integer ()
-  | Bits _ -> v
-  | Enum { base; _ } -> int_of_exn base v
-  | Where { inner; _ } -> int_of_exn inner v
-  | Single_elem { elem; _ } -> int_of_exn elem v
-  | Apply { typ; _ } -> int_of_exn typ v
-  | Map { inner; encode; _ } -> int_of_exn inner (encode v)
-  | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
-      not_an_integer ()
+(* Value-to-int conversion is a fold over the type description, so it is
+   decided next to the type definitions; re-exported here because the
+   evaluator's callers reach for it alongside [expr]. *)
+let int_of = Types.int_of
+let int_of_exn = Types.int_of_exn
 
 let rec expr : type a. ctx -> a expr -> a =
  fun ctx e ->

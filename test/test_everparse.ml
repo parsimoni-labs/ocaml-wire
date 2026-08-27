@@ -334,7 +334,8 @@ let test_enum_open_accepts_and_no_refinement () =
   let c = Codec.v "OpenK" (fun v -> v) Codec.[ (Field.v "k" e $ fun v -> v) ] in
   let buf = Bytes.make 1 '\x05' in
   (match Codec.decode c buf 0 with
-  | Ok v -> Alcotest.(check int) "open accepts unlisted value" 5 v
+  | Ok v ->
+      Alcotest.(check int) "open accepts unlisted value" 5 (UInt8.to_int v)
   | Error _ -> Alcotest.fail "open enum wrongly rejected an unlisted value");
   let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
   Alcotest.(check bool)
@@ -905,11 +906,11 @@ let test_3d_field_pos_rejected () =
    {!Test_helpers}. *)
 
 type tm_like = {
-  hdr : int;
-  data_len : int;
+  hdr : UInt16.t;
+  data_len : UInt8.t;
   packets : packet list;
-  ocf : Optint.t option;
-  fecf : int option;
+  ocf : UInt32.t option;
+  fecf : UInt16.t option;
 }
 
 let f_tm_data_len = Field.v "DataLen" uint8
@@ -1144,7 +1145,7 @@ let test_3d_bitorder_native_noreorder () =
 
 (* -- Variable-size schema projection -- *)
 
-type dep_frame = { frame_length : int; data : string }
+type dep_frame = { frame_length : UInt16.t; data : string }
 
 let f_frame_length = Field.v "FrameLength" uint16be
 let header_size = 2
@@ -1173,13 +1174,13 @@ let test_3d_dep_size_schema () =
     (contains ~sub:":byte-size (FrameLength - 2)" s)
 
 let test_3d_dep_size_roundtrip () =
-  let original = { frame_length = 7; data = "HELLO" } in
+  let original = { frame_length = UInt16.v 7; data = "HELLO" } in
   let buf = Bytes.create 7 in
   Codec.encode dep_frame_codec original buf 0;
   let decoded = Codec.decode dep_frame_codec buf 0 in
   match decoded with
   | Ok v ->
-      Alcotest.(check int) "frame_length" 7 v.frame_length;
+      Alcotest.(check int) "frame_length" 7 (UInt16.to_int v.frame_length);
       Alcotest.(check string) "data" "HELLO" v.data
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 

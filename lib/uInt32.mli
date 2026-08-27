@@ -5,7 +5,21 @@
     bit 31 set survive decoding on js_of_ocaml / wasm_of_ocaml, where a plain
     [int] would drop it. *)
 
-type t = Optint.t
+type t
+(** Abstract on purpose. The representation is shared with the signed 32-bit
+    carrier {!Wire.SInt32.t}, and where the native [int] is narrower than the
+    field it is [Int32], whose inherited comparison is signed and so wrong here.
+    Keeping the type opaque is what stops either being reached for. *)
+
+val compare : t -> t -> int
+(** [compare a b] orders two values as unsigned 32-bit integers, so 0xFFFFFFFF
+    is the largest. *)
+
+val equal : t -> t -> bool
+(** [equal a b] is [true] when [a] and [b] are the same value. *)
+
+val zero : t
+(** [zero] is 0. *)
 
 val pp : Format.formatter -> t -> unit
 (** Pretty-printer for unsigned 32-bit values. *)
@@ -40,7 +54,9 @@ val to_int : t -> int
     prefer {!to_int32} across such a boundary. *)
 
 val of_int : int -> t
-(** [of_int n] is the low 32 bits of [n]. *)
+(** [of_int n] is [n] as an unsigned 32-bit value. Raises [Invalid_argument]
+    when [n] is outside the range, rather than masking it to a legal value the
+    caller did not mean. Use {!of_int32} to reinterpret a bit pattern. *)
 
 val to_int32 : t -> int32
 (** [to_int32 t] is the value as an [int32] (its bit pattern, exact on every

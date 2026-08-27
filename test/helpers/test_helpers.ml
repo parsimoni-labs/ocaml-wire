@@ -1,6 +1,6 @@
 open Wire
 
-type inner = { tag : int; value : int }
+type inner = { tag : UInt8.t; value : UInt16.t }
 
 let f_inner_tag = Field.v "Tag" uint8
 let f_inner_value = Field.v "Value" uint16be
@@ -14,7 +14,7 @@ let inner_codec =
         (f_inner_value $ fun (r : inner) -> r.value);
       ]
 
-type outer = { header : int; inner : inner; trailer : int }
+type outer = { header : UInt8.t; inner : inner; trailer : UInt8.t }
 
 let outer_codec =
   Codec.v "Outer"
@@ -26,9 +26,9 @@ let outer_codec =
         (Field.v "Trailer" uint8 $ fun (r : outer) -> r.trailer);
       ]
 
-type l2 = { x : int }
-type l1 = { inner : l2; y : int }
-type l0 = { inner : l1; z : int }
+type l2 = { x : UInt8.t }
+type l1 = { inner : l2; y : UInt16.t }
+type l0 = { inner : l1; z : UInt8.t }
 
 let l2_codec =
   Codec.v "L2"
@@ -53,7 +53,7 @@ let l0_codec =
         (Field.v "Z" uint8 $ fun (r : l0) -> r.z);
       ]
 
-type opt_record = { hdr : int; payload : int option; trail : int }
+type opt_record = { hdr : UInt8.t; payload : UInt16.t option; trail : UInt8.t }
 
 let opt_codec ~present =
   Codec.v "OptRecord"
@@ -69,7 +69,7 @@ let opt_codec ~present =
 let opt_codec_present = opt_codec ~present:true
 let opt_codec_absent = opt_codec ~present:false
 
-type container = { length : int; items : inner list }
+type container = { length : UInt8.t; items : inner list }
 
 let f_cnt_length = Field.v "Length" uint8
 
@@ -83,7 +83,7 @@ let repeat_codec =
         $ fun (r : container) -> r.items );
       ]
 
-type packet = { id : int; data : int }
+type packet = { id : UInt8.t; data : UInt16.t }
 
 let packet_codec =
   Codec.v "Packet"
@@ -94,7 +94,7 @@ let packet_codec =
         (Field.v "Data" uint16be $ fun (r : packet) -> r.data);
       ]
 
-type multi_record = { x : int; y : int }
+type multi_record = { x : UInt16.t; y : UInt16.t }
 
 let multi_record_codec =
   Codec.v "MultiRecord"

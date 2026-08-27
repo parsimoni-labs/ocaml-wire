@@ -72,6 +72,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
   let codec_size_of_value = Codec.size_of_value c in
+  let codec_min_size = Codec.min_wire_size c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
       Codec
@@ -81,6 +82,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_validate;
           codec_encode;
           codec_fixed_size = Some n;
+          codec_min_size;
           codec_size_of = (fun _ctx _buf _off -> n);
           codec_size_of_value;
           codec_field_readers;
@@ -94,6 +96,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_validate;
           codec_encode;
           codec_fixed_size = None;
+          codec_min_size;
           codec_size_of = size_of;
           codec_size_of_value;
           codec_field_readers;
@@ -170,21 +173,32 @@ let parse_all_zeros buf off len =
   in
   (check 0, len)
 
-let parse_codec_typ codec_decode fixed_size size_of buf off len =
+let parse_codec_typ codec_decode fixed_size min_size typ buf off len =
   (* A variable-size codec computes its span by reading length / gate fields
-     from the buffer. Those reads bound-check themselves, so a buffer too short
-     to hold them already fails as end-of-input at the field that was missing;
-     a misuse in the size expression, or an exception from a user [map]
-     callback, reaches the caller unchanged. *)
-  let sz = match fixed_size with Some n -> n | None -> size_of buf off in
+     from the buffer. Those reads bound-check themselves against the buffer,
+     which inside a nested region holds more than this parse was handed, so
+     demand the codec's mandatory extent from the region first: a region too
+     short to carry the length fields then reports their shortfall instead of a
+     span sized from bytes outside it. That closes off every length field the
+     codec always carries, but not one the data puts wherever a preceding span
+     ends, so hand the region's end to the size walk as well. A misuse in the
+     size expression, or an exception from a user [map] callback, reaches the
+     caller unchanged. *)
+  let sz =
+    match fixed_size with
+    | Some n -> n
+    | None ->
+        check_eof len ~off ~n:min_size;
+        Codec.elem_size_within typ Types.unbound_eval_ctx buf off ~input_end:len
+  in
   check_span len ~off ~n:sz;
   (codec_decode buf off, off + sz)
 
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
    decode paths agree on an unlisted code. *)
-let check_enum_membership ~at ~closed cases v =
-  if closed then Types.check_enum_decode ~at ~cases v
+let check_enum_membership ~at ~closed ~base cases v =
+  if closed then Types.check_enum_decode ~at ~cases (Types.int_of_exn base v)
 
 (* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
    is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key
@@ -225,6 +239,7 @@ let validator_for_struct s =
 
 let parse_struct_typ s buf off len =
   let v = validator_for_struct s in
+  check_eof len ~off ~n:(Codec.struct_min_size v);
   let sz = Codec.struct_size_of v buf off in
   check_span len ~off ~n:sz;
   Codec.validate_struct v buf off;
@@ -244,16 +259,16 @@ let float64_be buf off = Int64.float_of_bits (Bytes.get_int64_be buf off)
 let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
   match typ with
-  | Uint8 -> parse_fixed 1 Bytes.get_uint8 buf off len
-  | Uint16 Little -> parse_fixed 2 Bytes.get_uint16_le buf off len
-  | Uint16 Big -> parse_fixed 2 Bytes.get_uint16_be buf off len
+  | Uint8 -> parse_fixed 1 UInt8.get buf off len
+  | Uint16 Little -> parse_fixed 2 UInt16.le buf off len
+  | Uint16 Big -> parse_fixed 2 UInt16.be buf off len
   | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
   | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
-  | Uint64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
-  | Uint64 Big -> parse_fixed 8 Bytes.get_int64_be buf off len
-  | Int8 -> parse_fixed 1 Bytes.get_int8 buf off len
-  | Int16 Little -> parse_fixed 2 Bytes.get_int16_le buf off len
-  | Int16 Big -> parse_fixed 2 Bytes.get_int16_be buf off len
+  | Uint64 Little -> parse_fixed 8 UInt64.le buf off len
+  | Uint64 Big -> parse_fixed 8 UInt64.be buf off len
+  | Int8 -> parse_fixed 1 SInt8.get buf off len
+  | Int16 Little -> parse_fixed 2 SInt16.le buf off len
+  | Int16 Big -> parse_fixed 2 SInt16.be buf off len
   | Int32 Little -> parse_fixed 4 int32_le buf off len
   | Int32 Big -> parse_fixed 4 int32_be buf off len
   | Int64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
@@ -320,14 +335,12 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Where { cond; inner } -> parse_where inner cond buf off len
   | Enum { base; cases; closed; _ } ->
       let v, off' = parse_direct base buf off len in
-      check_enum_membership ~at:off ~closed cases v;
+      check_enum_membership ~at:off ~closed ~base cases v;
       (v, off')
-  | Codec { codec_decode; codec_fixed_size; codec_size_of; _ } ->
+  | Codec { codec_decode; codec_fixed_size; codec_min_size; _ } ->
       parse_codec_typ
         (codec_decode Types.unbound_eval_ctx)
-        codec_fixed_size
-        (codec_size_of Types.unbound_eval_ctx)
-        buf off len
+        codec_fixed_size codec_min_size typ buf off len
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
   | Optional { present; inner } ->
@@ -507,39 +520,120 @@ let parse_or_rewind typ reader bytes len =
       push_back_bytes reader bytes 0 len;
       raise (Parse_error e)
 
-let missing_more_input e =
-  (* A truncated zeroterm reports [Missing_terminator] (from
-     [Codec.zeroterm_nul_pos]); both it and an [Unexpected_eof] mean the reader
-     should fetch more input before giving up. *)
-  match e.kind with
-  | Unexpected_eof _ | Missing_terminator -> true
-  | _ -> false
+(* A growable scratch the incremental reader accumulates slices into, so
+   retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
+   everything read so far on every call, which is what made a value arriving in
+   small slices quadratic.
+
+   [Bytes.make] rather than [Bytes.create]: the parse is given a length, but a
+   size expression can still read the bytes behind it, and those must not be
+   whatever the allocator last held. *)
+type scratch = {
+  mutable buf : bytes;
+  mutable filled : int;
+  (* How far the terminator search has looked. A zeroterm cannot know where its
+     NUL is until it sees one, so a retry per slice rescans from the string's
+     start every time, which is what makes a dribbled zeroterm quadratic. The
+     cursor carries the search across retries so each byte is looked at once. *)
+  mutable nul_from : int;
+}
+
+let scratch_create () =
+  { buf = Bytes.make 256 '\000'; filled = 0; nul_from = 0 }
+
+let scratch_ensure s n =
+  if n > Bytes.length s.buf then begin
+    (* [Stdlib.ref]: [ref] here is [Types.ref], the field-reference
+       combinator. *)
+    let cap = Stdlib.ref (Bytes.length s.buf) in
+    while n > !cap do
+      cap := !cap * 2
+    done;
+    let b = Bytes.make !cap '\000' in
+    Bytes.blit s.buf 0 b 0 s.filled;
+    s.buf <- b
+  end
+
+(* Read one slice into [s]. [false] at the end of the reader. *)
+let scratch_read s reader =
+  let slice = Reader.read reader in
+  if Slice.is_eod slice then false
+  else begin
+    let n = Slice.length slice in
+    scratch_ensure s (s.filled + n);
+    Bytes.blit (Slice.bytes slice) (Slice.first slice) s.buf s.filled n;
+    s.filled <- s.filled + n;
+    true
+  end
+
+(* Read until [target] bytes are buffered, or the reader ends first. *)
+let rec scratch_fill s reader target =
+  s.filled >= target || (scratch_read s reader && scratch_fill s reader target)
+
+(* How far to read before retrying a parse that ran short. [expected] is what
+   the read needed and [got] what was already there, so [at] plus the shortfall
+   between them is where that read ends; never less than one byte past what is
+   buffered, or a hint of zero would spin. Taking the end from [at] rather than
+   from what is buffered matters for a read the data places: it can start past
+   everything read so far, and then nothing but [at] says how far ahead the
+   shortfall lies. *)
+let retry_target s ~at ~expected ~got = max (s.filled + 1) (at + expected - got)
+
+(* First NUL at or after [i] among the buffered bytes, or [-1] for none. *)
+let rec nul_at s i =
+  if i >= s.filled then -1
+  else if Bytes.get_uint8 s.buf i = 0 then i
+  else nul_at s (i + 1)
+
+(* Read until a NUL turns up at or after the scan cursor, or the reader ends.
+   Returns whether a terminator the retry has not been offered yet is buffered.
+   The cursor makes this one pass over the input however many slices it takes,
+   where a search restarted per slice reads the same bytes over and over. *)
+let rec fill_to_nul s reader =
+  let p = nul_at s s.nul_from in
+  if p >= 0 then begin
+    s.nul_from <- p + 1;
+    true
+  end
+  else begin
+    s.nul_from <- s.filled;
+    scratch_read s reader && fill_to_nul s reader
+  end
 
 let of_reader_incremental typ reader =
-  let buf = Buffer.create 256 in
+  let s = scratch_create () in
+  let give_up e =
+    push_back_bytes reader s.buf 0 s.filled;
+    raise (Parse_error e)
+  in
+  (* Both recoverable kinds read ahead and retry, and give up only when the read
+     yields nothing at all. What differs is how far ahead to read. *)
   let rec loop () =
-    let bytes = Buffer.to_bytes buf in
-    let len = Bytes.length bytes in
-    let read_more on_eod =
-      let slice = Reader.read reader in
-      if Slice.is_eod slice then on_eod ()
-      else begin
-        Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
-          (Slice.length slice);
-        loop ()
-      end
-    in
-    match parse_direct typ bytes 0 len with
+    match parse_direct typ s.buf 0 s.filled with
     | v, off ->
-        push_back_bytes reader bytes off (len - off);
+        push_back_bytes reader s.buf off (s.filled - off);
         v
-    | exception Parse_error e when missing_more_input e ->
-        read_more (fun () ->
-            push_back_bytes reader bytes 0 len;
-            raise (Parse_error e))
-    | exception Parse_error e ->
-        push_back_bytes reader bytes 0 len;
-        raise (Parse_error e)
+    | exception Parse_error e -> (
+        let before = s.filled in
+        match e.kind with
+        (* A search ran the length of the buffer without meeting its terminator,
+           so no retry can succeed until a NUL arrives: read until one does.
+           Waiting on it can only delay a retry, never skip one, since a reader
+           that ends first still retries over everything that arrived. *)
+        | Missing_terminator ->
+            let found = fill_to_nul s reader in
+            if found || s.filled > before then loop () else give_up e
+        (* The shortfall says how far to read ahead, never whether to fail. A
+           size that depends on a field the parse has not reached yet is
+           computed from whatever lies at that offset, so the figure can be far
+           larger than the input, and reaching the end of the reader while
+           chasing it is not an error. *)
+        | Unexpected_eof { expected; got } ->
+            ignore
+              (scratch_fill s reader (retry_target s ~at:e.at ~expected ~got)
+                : bool);
+            if s.filled > before then loop () else give_up e
+        | _ -> give_up e)
   in
   loop ()
 
@@ -592,17 +686,17 @@ let[@inline] write_byte enc b =
 
 let[@inline] write_int8 enc v =
   ensure enc 1;
-  Bytes.set_int8 enc.o enc.o_next v;
+  SInt8.set enc.o enc.o_next v;
   enc.o_next <- enc.o_next + 1
 
 let[@inline] write_int16_le enc v =
   ensure enc 2;
-  Bytes.set_int16_le enc.o enc.o_next v;
+  SInt16.set_le enc.o enc.o_next v;
   enc.o_next <- enc.o_next + 2
 
 let[@inline] write_int16_be enc v =
   ensure enc 2;
-  Bytes.set_int16_be enc.o enc.o_next v;
+  SInt16.set_be enc.o enc.o_next v;
   enc.o_next <- enc.o_next + 2
 
 let[@inline] write_uint16_le enc v =
@@ -673,28 +767,16 @@ let check_byte_field_size size ~actual =
 let rec encode_into : type a. a typ -> a -> encoder -> unit =
  fun typ v enc ->
   match typ with
-  | Uint8 ->
-      Types.check_unsigned_encode ~bits:8 v;
-      write_byte enc v
-  | Uint16 Little ->
-      Types.check_unsigned_encode ~bits:16 v;
-      write_uint16_le enc v
-  | Uint16 Big ->
-      Types.check_unsigned_encode ~bits:16 v;
-      write_uint16_be enc v
+  | Uint8 -> write_byte enc (UInt8.to_int v)
+  | Uint16 Little -> write_uint16_le enc (UInt16.to_int v)
+  | Uint16 Big -> write_uint16_be enc (UInt16.to_int v)
   | Uint32 Little -> write_uint32_le enc v
   | Uint32 Big -> write_uint32_be enc v
-  | Uint64 Little -> write_int64_le enc v
-  | Uint64 Big -> write_int64_be enc v
-  | Int8 ->
-      Types.check_signed_encode ~bits:8 v;
-      write_int8 enc v
-  | Int16 Little ->
-      Types.check_signed_encode ~bits:16 v;
-      write_int16_le enc v
-  | Int16 Big ->
-      Types.check_signed_encode ~bits:16 v;
-      write_int16_be enc v
+  | Uint64 Little -> write_int64_le enc (UInt64.to_int64 v)
+  | Uint64 Big -> write_int64_be enc (UInt64.to_int64 v)
+  | Int8 -> write_int8 enc v
+  | Int16 Little -> write_int16_le enc v
+  | Int16 Big -> write_int16_be enc v
   | Int32 Little ->
       SInt32.check_encode v;
       write_int32_le enc (SInt32.to_int32 v)
@@ -779,7 +861,8 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       done
   | Enum { name; base; cases; closed } ->
       if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
+          (Types.int_of_exn base v);
       encode_into base v enc
   | Map { inner; encode; _ } -> encode_into inner (encode v) enc
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
@@ -870,13 +953,13 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
  fun typ buf off v ->
   match typ with
   | Uint8 ->
-      Types.set_uint8 buf off v;
+      UInt8.set buf off v;
       off + 1
   | Uint16 Little ->
-      Types.set_uint16_le buf off v;
+      UInt16.set_le buf off v;
       off + 2
   | Uint16 Big ->
-      Types.set_uint16_be buf off v;
+      UInt16.set_be buf off v;
       off + 2
   | Uint32 Little ->
       UInt32.set_le buf off v;
@@ -885,10 +968,10 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       UInt32.set_be buf off v;
       off + 4
   | Uint64 Little ->
-      Bytes.set_int64_le buf off v;
+      UInt64.set_le buf off v;
       off + 8
   | Uint64 Big ->
-      Bytes.set_int64_be buf off v;
+      UInt64.set_be buf off v;
       off + 8
   | Uint_var { size = Int n; endian } ->
       Uint_var.write endian buf off n v;
@@ -921,7 +1004,8 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       encode_direct inner buf off v
   | Enum { name; base; cases; closed } ->
       if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases) v;
+        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
+          (Types.int_of_exn base v);
       encode_direct base buf off v
   | Codec { codec_encode; _ } -> codec_encode v Types.unbound_eval_ctx buf off
   | _ -> encode_via_writer typ buf off v
@@ -951,7 +1035,12 @@ let pp_value (type r) (c : r Codec.t) ppf (v : r) =
     readers;
   Fmt.pf ppf "@ }@]"
 
+module UInt64 = UInt64
 module SInt32 = SInt32
+module SInt8 = SInt8
+module SInt16 = SInt16
+module UInt8 = UInt8
+module UInt16 = UInt16
 module Ascii = Ascii
 
 module Private = struct
@@ -959,8 +1048,10 @@ module Private = struct
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+  module Expr_compiler = Expr_compiler
   module Bitfield = Bitfield
   module Uint_var = Uint_var
+  module Shape = Shape
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

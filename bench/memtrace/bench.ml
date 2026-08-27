@@ -33,8 +33,8 @@ let schema name codec size default make_data =
 (* -- Nested codec schemas for allocation tracking -- *)
 
 (* Codec embed: outer record containing an inner sub-codec *)
-type inner_rec = { tag : int; value : int }
-type outer_rec = { hdr : int; inner : inner_rec; trail : int }
+type inner_rec = { tag : Wire.UInt8.t; value : Wire.UInt16.t }
+type outer_rec = { hdr : Wire.UInt8.t; inner : inner_rec; trail : Wire.UInt8.t }
 
 let inner_codec =
   Wire.Codec.v "Inner"
@@ -56,7 +56,13 @@ let outer_codec =
       ]
 
 let outer_size = 5
-let outer_default = { hdr = 0; inner = { tag = 0; value = 0 }; trail = 0 }
+
+let outer_default =
+  {
+    hdr = Wire.UInt8.zero;
+    inner = { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+    trail = Wire.UInt8.zero;
+  }
 
 let outer_data n =
   Array.init n (fun i ->
@@ -68,7 +74,11 @@ let outer_data n =
       b)
 
 (* Optional: record with optional trailing field *)
-type opt_rec = { hdr : int; data : int; fecf : int option }
+type opt_rec = {
+  hdr : Wire.UInt16.t;
+  data : Wire.UInt16.t;
+  fecf : Wire.UInt16.t option;
+}
 
 let opt_codec_present =
   Wire.Codec.v "OptPresent"
@@ -82,7 +92,13 @@ let opt_codec_present =
       ]
 
 let opt_present_size = 6
-let opt_present_default = { hdr = 0; data = 0; fecf = Some 0 }
+
+let opt_present_default =
+  {
+    hdr = Wire.UInt16.zero;
+    data = Wire.UInt16.zero;
+    fecf = Some Wire.UInt16.zero;
+  }
 
 let opt_present_data n =
   Array.init n (fun i ->
@@ -93,7 +109,7 @@ let opt_present_data n =
       b)
 
 (* Repeat: container with repeated sub-codec elements *)
-type repeat_rec = { len : int; items : inner_rec list }
+type repeat_rec = { len : Wire.UInt8.t; items : inner_rec list }
 
 let f_r_len = Wire.Field.v "Len" Wire.uint8
 
@@ -112,9 +128,13 @@ let repeat_size = 10 (* 1 + 3*3 = 10 bytes for 3 inner items *)
 
 let repeat_default =
   {
-    len = 9;
+    len = Wire.UInt8.v 9;
     items =
-      [ { tag = 0; value = 0 }; { tag = 0; value = 0 }; { tag = 0; value = 0 } ];
+      [
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+      ];
   }
 
 let repeat_data n =
@@ -152,8 +172,8 @@ type kexinit = {
   comp_s2c : Slice.t;
   lang_c2s : Slice.t;
   lang_s2c : Slice.t;
-  first_follows : int;
-  reserved : Optint.t;
+  first_follows : Wire.UInt8.t;
+  reserved : Wire.UInt32.t;
 }
 
 let kex_len name = Wire.Field.v name Wire.uint32be
@@ -194,25 +214,25 @@ let kexinit_codec =
       [
         ( Wire.Field.v "Cookie" (Wire.byte_slice ~size:(Wire.int 16)) $ fun r ->
           r.cookie );
-        (f_kex_len $ fun r -> Optint.of_int (Slice.length r.kex));
+        (f_kex_len $ fun r -> Wire.UInt32.of_int (Slice.length r.kex));
         (name_list "Kex" f_kex_len $ fun r -> r.kex);
-        (f_hk_len $ fun r -> Optint.of_int (Slice.length r.host_key));
+        (f_hk_len $ fun r -> Wire.UInt32.of_int (Slice.length r.host_key));
         (name_list "HostKey" f_hk_len $ fun r -> r.host_key);
-        (f_ec_len $ fun r -> Optint.of_int (Slice.length r.enc_c2s));
+        (f_ec_len $ fun r -> Wire.UInt32.of_int (Slice.length r.enc_c2s));
         (name_list "EncC2S" f_ec_len $ fun r -> r.enc_c2s);
-        (f_es_len $ fun r -> Optint.of_int (Slice.length r.enc_s2c));
+        (f_es_len $ fun r -> Wire.UInt32.of_int (Slice.length r.enc_s2c));
         (name_list "EncS2C" f_es_len $ fun r -> r.enc_s2c);
-        (f_mc_len $ fun r -> Optint.of_int (Slice.length r.mac_c2s));
+        (f_mc_len $ fun r -> Wire.UInt32.of_int (Slice.length r.mac_c2s));
         (name_list "MacC2S" f_mc_len $ fun r -> r.mac_c2s);
-        (f_ms_len $ fun r -> Optint.of_int (Slice.length r.mac_s2c));
+        (f_ms_len $ fun r -> Wire.UInt32.of_int (Slice.length r.mac_s2c));
         (name_list "MacS2C" f_ms_len $ fun r -> r.mac_s2c);
-        (f_cc_len $ fun r -> Optint.of_int (Slice.length r.comp_c2s));
+        (f_cc_len $ fun r -> Wire.UInt32.of_int (Slice.length r.comp_c2s));
         (name_list "CompC2S" f_cc_len $ fun r -> r.comp_c2s);
-        (f_cs_len $ fun r -> Optint.of_int (Slice.length r.comp_s2c));
+        (f_cs_len $ fun r -> Wire.UInt32.of_int (Slice.length r.comp_s2c));
         (name_list "CompS2C" f_cs_len $ fun r -> r.comp_s2c);
-        (f_lc_len $ fun r -> Optint.of_int (Slice.length r.lang_c2s));
+        (f_lc_len $ fun r -> Wire.UInt32.of_int (Slice.length r.lang_c2s));
         (name_list "LangC2S" f_lc_len $ fun r -> r.lang_c2s);
-        (f_ls_len $ fun r -> Optint.of_int (Slice.length r.lang_s2c));
+        (f_ls_len $ fun r -> Wire.UInt32.of_int (Slice.length r.lang_s2c));
         (name_list "LangS2C" f_ls_len $ fun r -> r.lang_s2c);
         (Wire.Field.v "FirstFollows" Wire.uint8 $ fun r -> r.first_follows);
         (Wire.Field.v "Reserved" Wire.uint32be $ fun r -> r.reserved);

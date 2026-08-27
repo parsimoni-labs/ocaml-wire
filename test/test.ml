@@ -9,11 +9,18 @@ let () =
       Test_ascii.suite;
       Test_staged.suite;
       Test_uint32.suite;
+      Test_uint64.suite;
       Test_sint32.suite;
+      Test_sint8.suite;
+      Test_sint16.suite;
+      Test_uint8.suite;
+      Test_uint16.suite;
       Test_uint63.suite;
       Test_types.suite;
       Test_eval.suite;
+      Test_expr_compiler.suite;
       Test_bitfield.suite;
       Test_field.suite;
       Test_uint_var.suite;
+      Test_shape.suite;
     ]
