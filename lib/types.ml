@@ -30,37 +30,17 @@ type bindings = { param : string -> int; set_param : string -> int -> unit }
 (* The buffer travels as its own argument rather than inside the context, so
    the parameter-free hot path is the constant constructor [Unbound]. Being a
    constant, it is an immediate: an encode or decode without parameters builds
-   no context block and allocates nothing.
-
-   [Within] carries where the bytes a parse was handed stop, which a nested
-   region puts short of the end of the buffer. It is the one context a read has
-   to build, and it is built only once a walk has already overrun its region,
-   so a region that holds what it was given still allocates nothing. *)
-type eval_ctx =
-  | Unbound
-  | Bound of bindings
-  | Within of { input_end : int; inner : eval_ctx }
+   no context block and allocates nothing. *)
+type eval_ctx = Unbound | Bound of bindings
 
 let unbound_eval_ctx = Unbound
 let eval_ctx ?(set_param = fun _ _ -> ()) param = Bound { param; set_param }
-let eval_ctx_within ~input_end inner = Within { input_end; inner }
 
-(* The innermost region wins: each one wraps the context its enclosing parse
-   handed down, so the outermost [Within] is the narrowest. *)
-let[@inline] eval_input_end ctx =
-  match ctx with Unbound | Bound _ -> max_int | Within w -> w.input_end
+let eval_param ctx name =
+  match ctx with Unbound -> 0 | Bound b -> b.param name
 
-let rec eval_param ctx name =
-  match ctx with
-  | Unbound -> 0
-  | Bound b -> b.param name
-  | Within w -> eval_param w.inner name
-
-let rec eval_set_param ctx name value =
-  match ctx with
-  | Unbound -> ()
-  | Bound b -> b.set_param name value
-  | Within w -> eval_set_param w.inner name value
+let eval_set_param ctx name value =
+  match ctx with Unbound -> () | Bound b -> b.set_param name value
 
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the
@@ -261,8 +241,8 @@ and _ typ =
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
   | Codec : {
       codec_name : string;
-      codec_decode : eval_ctx -> bytes -> int -> 'r;
-      codec_validate : eval_ctx -> bytes -> int -> unit;
+      codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (* Everything [codec_decode] checks, none of what it builds. The
              OCaml counterpart of the call to a nested struct's validator that
              EverParse generates for a sub-struct field: a use site runs the
@@ -278,14 +258,15 @@ and _ typ =
              was given, so a region too short to carry the length fields fails
              on their own extent rather than on a span sized from bytes outside
              it. *)
-      codec_size_of : eval_ctx -> bytes -> int -> int;
+      codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
              than by re-reading the buffer. The buffer-driven [codec_size_of]
              is wrong for variable-size codecs ending in [all_bytes] /
              [rest_bytes] / [all_zeros]: it reads "remaining buffer space",
              not the value's actual tail length. *)
-      codec_field_readers : (string * (eval_ctx -> bytes -> int -> int)) list;
+      codec_field_readers :
+        (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)

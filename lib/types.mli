@@ -18,14 +18,6 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
-val eval_ctx_within : input_end:int -> eval_ctx -> eval_ctx
-(** [eval_ctx_within ~input_end ctx] is [ctx] with the bytes a read may reach
-    stopping at [input_end], as they do inside a nested region. Internal use. *)
-
-val eval_input_end : eval_ctx -> int
-(** Where the bytes a read may reach stop, or [max_int] when the whole buffer is
-    in play. Internal use. *)
-
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 
@@ -348,8 +340,8 @@ and _ typ =
       (** Parameterised type application. *)
   | Codec : {
       codec_name : string;
-      codec_decode : eval_ctx -> bytes -> int -> 'r;
-      codec_validate : eval_ctx -> bytes -> int -> unit;
+      codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
+      codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (** Everything [codec_decode] checks, none of what it builds. Run at
               every use site of the sub-codec, as the generated C runs the
               nested struct's validator. *)
@@ -359,11 +351,12 @@ and _ typ =
           (** Bytes the codec occupies whatever its variable-size fields hold,
               hence the extent [codec_size_of] has to read before it can resolve
               a span. *)
-      codec_size_of : eval_ctx -> bytes -> int -> int;
+      codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
       codec_size_of_value : 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
               than by re-reading the buffer. *)
-      codec_field_readers : (string * (eval_ctx -> bytes -> int -> int)) list;
+      codec_field_readers :
+        (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
     }
