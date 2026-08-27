@@ -2366,6 +2366,51 @@ type 'a elem_strategy =
   | Value_only
   | By of (runtime -> bytes -> int -> unit)
 
+(* An array's walk: every element checked at its own stride. Top level and
+   partially applied while the strategy is chosen, so no closure is built per
+   element. *)
+let array_elem_check ~n ~esz check runtime buf off =
+  for i = 0 to n - 1 do
+    check runtime buf (off + (i * esz))
+  done
+
+(* Run the matched case's check. Mirrors [read_case_body], on cases whose
+   bodies already carry their check, and is a top-level recursion for the same
+   reason: an inner [let rec find] would allocate a closure per casetype
+   checked. *)
+let rec dispatch_case_check : type k.
+    at:int ->
+    tag:k typ ->
+    (k option * (runtime -> bytes -> int -> unit)) list ->
+    k ->
+    runtime ->
+    bytes ->
+    int ->
+    unit =
+ fun ~at ~tag cases tag_val runtime buf body_off ->
+  match cases with
+  | [] ->
+      raise_invalid_tag ~at (Option.value ~default:0 (Eval.int_of tag tag_val))
+  | (Some t, _) :: rest when t <> tag_val ->
+      dispatch_case_check ~at ~tag rest tag_val runtime buf body_off
+  | (_, check) :: _ -> check runtime buf body_off
+
+(* A casetype's check: read the discriminant, then run the selected body's
+   check where the body starts. The tag's own extent was bounded before the
+   walk was reached -- by the budget for a repeat element, by the field's size
+   expression ([elem_size_of], which guards the tag) for a field. *)
+let casetype_elem_check : type k.
+    tag:k typ ->
+    (k option * (runtime -> bytes -> int -> unit)) list ->
+    runtime ->
+    bytes ->
+    int ->
+    unit =
+ fun ~tag cases runtime buf off ->
+  let tag_val = read_elem tag runtime buf off in
+  dispatch_case_check ~at:off ~tag cases tag_val runtime buf
+    (off + tag_byte_size tag)
+
 (* Every constructor is listed and there is deliberately no [| _ -> ...]: a typ
    added later must not pick a strategy by falling through, since picking
    [Value_only] for a reader that checks something is how [Codec.validate] comes
@@ -2378,17 +2423,39 @@ type 'a elem_strategy =
    answer by building the record first. What catches that is
    [test_repeat_validate_allocation_is_bounded] in [test/test_codec.ml], which
    validates one repeat at two byte budgets and requires the words per call to
-   come out equal, with a sub-codec among the element types it measures. *)
-let elem_strategy : type a. a typ -> a elem_strategy = function
+   come out equal, with a sub-codec among the element types it measures.
+
+   A container has nothing of its own to check, so its strategy is its
+   contents': reading one to drop it builds the sequence, the region's value or
+   the case body first, and for a sub-codec body that is exactly the record
+   [codec_validate] exists not to build. Putting one back on [By_reading] also
+   type-checks and keeps every verdict;
+   [test_container_subcodec_validate_no_alloc] is what catches it, by measuring
+   a sub-codec through each container against the same sub-codec as a plain
+   field. *)
+let rec elem_strategy : type a. a typ -> a elem_strategy = function
   | Codec { codec_validate; _ } -> By codec_validate
   | Byte_array { size = Int _ } | Byte_slice { size = Int _ } | Zeroterm ->
       Value_only
   | Uint64 _ | Int64 _ | Float32 _ | Float64 _ -> Value_only
+  | Single_elem { elem; _ } -> By (elem_check elem)
+  | Array { len = Int n; elem; _ } -> (
+      match field_wire_size elem with
+      (* No stride to walk at. Leave it to [read_elem], which is where the
+         missing element size is reported. *)
+      | None -> By_reading
+      | Some esz -> (
+          match elem_strategy elem with
+          | Value_only -> Value_only
+          | By_reading | By _ -> By (array_elem_check ~n ~esz (elem_check elem))
+          ))
+  | Casetype { tag; cases; _ } ->
+      By (casetype_elem_check ~tag (case_checks cases))
   | Uint8 | Uint16 _ | Uint32 _ | Int8 | Int16 _ | Int32 _ | Uint_var _ | Bits _
   | Unit | All_bytes | All_zeros | Zeroterm_at_most _ | Where _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Single_elem _ | Enum _
-  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Map _ | Apply _
-  | Optional _ | Optional_or _ | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Enum _ | Struct _
+  | Type_ref _ | Qualified_ref _ | Map _ | Apply _ | Optional _ | Optional_or _
+  | Repeat _ ->
       By_reading
 
 (* The element check the walk runs. Skipping a value-only reader keeps the span
@@ -2397,13 +2464,23 @@ let elem_strategy : type a. a typ -> a elem_strategy = function
    field, so anything built per element is a multiplier the sender sizes on the
    path a server runs once per packet. This is the C's element loop, which calls
    the element validator and keeps one position. *)
-let elem_check : type a. a typ -> runtime -> bytes -> int -> unit =
+and elem_check : type a. a typ -> runtime -> bytes -> int -> unit =
  fun typ ->
   match elem_strategy typ with
   | Value_only -> fun _runtime _buf _off -> ()
   | By check -> check
   | By_reading ->
       fun runtime buf off -> ignore (read_elem typ runtime buf off : a)
+
+(* A casetype's cases with each body's check already chosen, so dispatching one
+   is a tag comparison and a call. *)
+and case_checks : type a k.
+    (a, k) case_branch list ->
+    (k option * (runtime -> bytes -> int -> unit)) list =
+ fun cases ->
+  List.map
+    (fun (Case_branch { cb_tag; cb_inner; _ }) -> (cb_tag, elem_check cb_inner))
+    cases
 
 (* Write a repeat's elements at their own strides. Kept out of
    [compile_repeat] so the writer is staged once, with the sequence, the element
@@ -2600,6 +2677,52 @@ let span_populate : type a.
             ~first:(base + off_fn runtime buf base)
             ~len:(size_fn runtime buf base))
 
+(* Populate for a container field: the walk [elem_check] runs over what the
+   container holds, in place of a reader that decodes the whole of it and drops
+   the result. The region checks are the reader's own (see
+   [var_bytes_reader]), so a truncated or misdeclared region still fails where
+   decode fails; what is left out is the sequence, the nested region's value
+   and the case body's record. [None] leaves the field to the generic
+   [build_populate]. *)
+let container_populate : type a.
+    a typ ->
+    off_fn:(runtime -> bytes -> int -> int) ->
+    size_fn:(runtime -> bytes -> int -> int) ->
+    (slots -> runtime -> bytes -> int -> unit) option =
+ fun typ ~off_fn ~size_fn ->
+  match typ with
+  | Array _ | Casetype _ ->
+      let check = elem_check typ in
+      Some
+        (fun _slots runtime buf base ->
+          let first = base + off_fn runtime buf base in
+          check_span_bounds buf ~first ~sz:(size_fn runtime buf base);
+          check runtime buf first)
+  | Single_elem { elem; at_most; _ } ->
+      let check = elem_check elem in
+      Some
+        (fun _slots runtime buf base ->
+          let first = base + off_fn runtime buf base in
+          let sz = size_fn runtime buf base in
+          check_span_bounds buf ~first ~sz;
+          let consumed = elem_size_of elem runtime buf first in
+          if consumed > sz || ((not at_most) && consumed <> sz) then
+            raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+          check runtime buf first)
+  | _ -> None
+
+(* What a field's validate runs in place of its reader: a span's scan, or a
+   container's walk over its contents. *)
+let check_populate : type a.
+    a typ ->
+    off_fn:(runtime -> bytes -> int -> int) ->
+    size_fn:(runtime -> bytes -> int -> int) ->
+    (slots -> runtime -> bytes -> int -> unit) option =
+ fun typ ~off_fn ~size_fn ->
+  match span_populate typ ~off_fn ~size_fn with
+  | Some p -> Some p
+  | None -> container_populate typ ~off_fn ~size_fn
+
 (* Kept at top level: as local closures they would be heap-allocated on
    every call (two allocations per variable-bytes field on each encode). *)
 let var_bytes_check_len size_fn runtime buf base ~actual =
@@ -2768,7 +2891,7 @@ let compile_var_bytes : type a r.
         (raw_reader, raw_writer, int_reader)
   in
   let populate =
-    match span_populate typ ~off_fn ~size_fn with
+    match check_populate typ ~off_fn ~size_fn with
     | Some p -> p
     | None -> build_populate typ ctx.n_fields raw_reader
   in
@@ -2825,7 +2948,7 @@ let compile_scalar_or_var : type a r.
         match
           if fsize < 0 then None
           else
-            span_populate typ ~off_fn:field_off_fn
+            check_populate typ ~off_fn:field_off_fn
               ~size_fn:(fun _runtime _buf _base -> fsize)
         with
         | Some p -> p

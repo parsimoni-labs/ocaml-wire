@@ -155,6 +155,11 @@
 
 ### Fixed
 
+- `Codec.validate` no longer decodes a sub-codec reached through an `array`, a
+  `nested` region or a casetype case body: it checks in place, as it already did
+  for a plain field and a `Field.repeat` element, and allocates nothing
+  (#329, @samoht)
+
 - A value with no fixed wire size read through `Wire.of_reader` no longer costs
   time and memory quadratic in its length. The reader rebuilt the whole
   accumulated buffer and re-parsed it from offset zero after every slice, so a
