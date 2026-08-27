@@ -107,6 +107,13 @@
 
 ### Fixed
 
+- Generating C for a codec with a long name no longer fails with
+  `Invalid_argument "List.iter2"`. Past a certain length the generated callback
+  declarations wrap onto a second line, which the field-plug generator read as
+  no declarations at all; both layouts are read now, and a header that still
+  cannot be read is named in the error rather than surfacing as a crash
+  somewhere else (@samoht)
+
 - A value with no fixed wire size read through `Wire.of_reader` no longer costs
   time and memory quadratic in its length. The reader rebuilt the whole
   accumulated buffer and re-parsed it from offset zero after every slice, so a

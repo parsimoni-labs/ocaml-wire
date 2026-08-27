@@ -1694,6 +1694,63 @@ let test_keyword_field_escaped () =
   Alcotest.(check bool) "match_ field" true (contains out "match_");
   Alcotest.(check bool) "type_ field" true (contains out "type_")
 
+(* KaRaMeL pretty-prints an extern declaration to a column budget, so a schema
+   name long enough to push the declaration past it lands [extern void] on one
+   line and the symbol it introduces on the next. Both layouts have to read, and
+   a header holding no declaration at all has to say so by name: pairing the
+   symbols off against the schema's setters is what fails otherwise, from a call
+   site that cannot tell which file came up short. Fabricate the header rather
+   than shell out, so this runs in the lanes with no EverParse. *)
+let test_extern_names_wrapped () =
+  let base = "Smp27bits15u16belsbbits15u16belsbbits15u16belsbbits15u1" in
+  let schema =
+    Wire.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Everparse.plug_setters schema in
+  let symbol i = Fmt.str "%sSetter%d" base i in
+  let wrapped =
+    String.concat ""
+      (List.mapi
+         (fun i (_, c_type) ->
+           Fmt.str
+             "extern void\n\
+              %s(\n\
+             \  WIRECTX *ctx,\n\
+             \  uint32_t idx,\n\
+             \  %s v\n\
+              );\n\n"
+             (symbol i) c_type)
+         setters)
+  in
+  let fields_impl header =
+    let dir = Filename.temp_dir "wire_3d_extern" "" in
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        Out_channel.with_open_bin
+          (Filename.concat dir (base ^ "_ExternalAPI.h"))
+          (fun oc -> Out_channel.output_string oc header);
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir (base ^ "_Fields.c")))
+  in
+  Alcotest.(check bool)
+    "the schema declares setters to pair" true (setters <> []);
+  let impl = fields_impl wrapped in
+  List.iteri
+    (fun i _ ->
+      Alcotest.(check bool)
+        (Fmt.str "setter %d read across the wrap" i)
+        true
+        (contains impl (Fmt.str "void %s(WIRECTX *ctx," (symbol i))))
+    setters;
+  match fields_impl "/* nothing to read here */\n" with
+  | impl -> Alcotest.failf "a header with no declaration produced %S" impl
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "the failure names the header it could not read" true
+        (contains msg (base ^ "_ExternalAPI.h"))
+
 let suite =
   ( "wire_3d",
     [
@@ -1739,6 +1796,8 @@ let suite =
         test_doc_differential_caps_name;
       Alcotest.test_case "doc differential trailing bytes (needs 3d.exe)" `Quick
         test_doc_differential_trailing_bytes;
+      Alcotest.test_case "extern names across a wrapped declaration" `Quick
+        test_extern_names_wrapped;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
