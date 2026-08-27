@@ -1,6 +1,7 @@
 (library
  (name wire)
  (public_name wire)
+ (private_modules expr_compiler)
  (libraries bytesrw fmt optint))
 
 (mdx
