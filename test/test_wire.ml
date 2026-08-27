@@ -215,7 +215,7 @@ let test_reader_embedded_zeroterm_scan_is_not_quadratic () =
 
 let test_int16be_negative () =
   let buf = Bytes.of_string "\xFF\xFE" in
-  Alcotest.(check int) "-2 BE" (-2) (of_bytes_exn int16be buf)
+  Alcotest.(check int) "-2 BE" (-2) (SInt16.to_int (of_bytes_exn int16be buf))
 
 let test_int32be_negative () =
   let buf = Bytes.of_string "\xFF\xFF\xFF\xFE" in

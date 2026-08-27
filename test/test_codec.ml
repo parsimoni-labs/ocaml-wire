@@ -3017,11 +3017,12 @@ let test_map_inherits_exact_width () =
       Bytes.to_string buf)
 
 (* The fixed-width scalars are the same rule at a fixed width. OCaml carries the
-   narrow ones in a plain [int], which holds far more than the field does, so
-   nothing but a runtime check stands between a caller's 0x1FF and an 0xFF on
-   the wire that reads back as a perfectly legal 255. The signed ones accept
-   exactly what their decoder produces, [-2^(n-1) .. 2^(n-1) - 1]: 40000 into
-   an [int16] is refused rather than round-tripped back as -25536. *)
+   narrow unsigned ones in a plain [int], which holds far more than the field
+   does, so nothing but a runtime check stands between a caller's 0x1FF and an
+   0xFF on the wire that reads back as a perfectly legal 255. The signed ones
+   put that range in their carrier instead, so this sweep has no out-of-range
+   value to hand them; [test_sint32_of_int_range] and the [sint8] and [sint16]
+   suites pin that refusal, one step earlier than an encoder can reach. *)
 let scalar_range_codec name typ =
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   (Codec.v name Fun.id Codec.[ cf ], cf)
@@ -3076,23 +3077,6 @@ let test_encode_exact_unsigned_scalar () =
         ~equal:Int.equal ~pp:Fmt.int ~inside:[ 0; widest ]
         ~outside:[ widest + 1; -1 ])
     [ ("uint8", 8, uint8); ("uint16", 16, uint16); ("uint16be", 16, uint16be) ]
-
-let test_encode_exact_signed_scalar () =
-  List.iter
-    (fun (name, bits, typ) ->
-      if width_is_testable bits then
-        let limit = 1 lsl (bits - 1) in
-        check_scalar_range ~name ~typ
-          ~sub:(Fmt.str "does not fit a signed %d-bit field" bits)
-          ~equal:Int.equal ~pp:Fmt.int
-          ~inside:[ -limit; limit - 1 ]
-          ~outside:[ limit; -limit - 1 ])
-    (* [int8] and [int32] are absent on purpose: their carriers, {!SInt8.t}
-       and {!SInt32.t}, refuse an out-of-range number, so there is no such
-       value to hand the encoder. [test_sint32_of_int_range] and the [sint8]
-       suite pin those refusals instead, one step earlier than this check can
-       reach. *)
-    [ ("int16", 16, int16); ("int16be", 16, int16be) ]
 
 (* The signed 32-bit range is enforced where the value is built rather than
    where it is written, so a number the field cannot hold never becomes an
@@ -3180,16 +3164,12 @@ let test_eight_byte_unsigned_preserves_wire () =
   check_eight_byte_unsigned "uint64be" uint64be
 
 (* The same rule one width down, on the signed side. Four bytes spell 2^32
-   patterns and the generated C validator hands every one of them on unchanged.
-   [int32] carries a native [int], so where that int is narrower than the field
-   ([wasm_of_ocaml] is 31 bits) [Int32.to_int] drops the top bits on the way in,
-   and nothing on the way out objects: [check_signed_encode] guards itself with
-   [bits < Sys.int_size], and 32 < 31 is false, so the check disables itself
-   exactly where it is needed. A frame leaves as different bytes with no error
-   on either path. Refusing it would be sound; altering it is not.
-
-   Native and js_of_ocaml hold 32 bits in an [int] and already pass. This case
-   is the one that fails under wasm_of_ocaml. *)
+   patterns and the generated C validator hands every one of them on unchanged,
+   so the OCaml side has to as well. A frame that leaves as different bytes with
+   no error on either path is the failure this pins: refusing one the target
+   cannot hold would be sound, altering it silently is not. The carrier is what
+   makes it hold, {!SInt32.t} widening to a boxed [int32] wherever the native
+   [int] is narrower than the field, so no target drops the top bits. *)
 let check_four_byte_signed name typ wire =
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "FourByteSigned" Fun.id Codec.[ cf ] in
@@ -9164,8 +9144,6 @@ let suite =
         test_map_inherits_exact_width;
       Alcotest.test_case "exact width: unsigned scalars" `Quick
         test_encode_exact_unsigned_scalar;
-      Alcotest.test_case "exact width: signed scalars" `Quick
-        test_encode_exact_signed_scalar;
       Alcotest.test_case "exact width: UInt32.of_int range" `Quick
         test_uint32_of_int_range;
       Alcotest.test_case "exact width: int64 carrier has no range" `Quick

@@ -166,17 +166,6 @@ let above_bit_width width =
   let mask = (1 lsl width) - 1 in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
 
-(* The signed counterpart, drawn from both ends: a signed [width]-bit field
-   holds [-2^(width-1) .. 2^(width-1) - 1], so 40000 into an [int16] is as
-   unrepresentable as -40000 even though its low two bytes are legal ones. *)
-let outside_signed_width width =
-  let limit = 1 lsl (width - 1) in
-  Alcobar.map
-    Alcobar.[ Alcobar.int ]
-    (fun n ->
-      let over = (n land (limit - 1)) + limit in
-      if n < 0 then -over - 1 else over)
-
 (* The [uint ~size] counterpart: a value needing more than [size] bytes. *)
 let above_byte_width size =
   let max_v = (1 lsl (size * 8)) - 1 in
@@ -265,12 +254,16 @@ let scalar_sint32 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt32.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
-(* [int8] is carried in a [Wire.SInt8.t], whose only constructor refuses a
-   number the byte cannot hold: every value of it is a legal signed 8-bit field,
-   so there is no hostile value to draw and no guard for one to exercise. Same
-   reasoning as [scalar_sint32]. *)
+(* [int8] and [int16] are carried in a [Wire.SInt8.t] and a [Wire.SInt16.t],
+   whose only constructor refuses a number the field cannot hold: every value of
+   them is a legal signed field, so there is no hostile value to draw and no
+   guard for one to exercise. Same reasoning as [scalar_sint32]. *)
 let scalar_sint8 typ size value_gen boundaries =
   leaf ~equal:Wire.SInt8.equal ~typ ~value_gen ~random:(bytes_fixed size)
+    ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
+
+let scalar_sint16 typ size value_gen boundaries =
+  leaf ~equal:Wire.SInt16.equal ~typ ~value_gen ~random:(bytes_fixed size)
     ~adversarial:(Alcobar.choose (List.map Alcobar.const boundaries))
 
 (* [uint32] is carried in a [Wire.UInt32.t], whose only constructors are the
@@ -292,7 +285,7 @@ let u64_boundaries_i64 =
   Int64.[ zero; one; of_int 0xFFFF_FFFF; max_int; min_int; -1L; sub max_int 1L ]
 
 let s8_boundaries = List.map Wire.SInt8.v [ -128; -1; 0; 1; 127 ]
-let s16_boundaries = [ -0x8000; -1; 0; 1; 0x7FFF ]
+let s16_boundaries = List.map Wire.SInt16.v [ -0x8000; -1; 0; 1; 0x7FFF ]
 
 let s32_boundaries =
   List.map Wire.SInt32.of_int32 Int32.[ min_int; minus_one; zero; one; max_int ]
@@ -324,15 +317,9 @@ let uint64 = scalar_uint64 Wire.uint64 8 u64_value_gen u64_boundaries
 let uint64be = scalar_uint64 Wire.uint64be 8 u64_value_gen u64_boundaries
 let s8_value_gen = Alcobar.map Alcobar.[ Alcobar.int8 ] Wire.SInt8.v
 let int8 = scalar_sint8 Wire.int8 1 s8_value_gen s8_boundaries
-
-let int16 =
-  scalar_int ~hostile:(outside_signed_width 16) Wire.int16 2 Alcobar.int16
-    s16_boundaries
-
-let int16be =
-  scalar_int ~hostile:(outside_signed_width 16) Wire.int16be 2 Alcobar.int16
-    s16_boundaries
-
+let s16_value_gen = Alcobar.map Alcobar.[ Alcobar.int16 ] Wire.SInt16.v
+let int16 = scalar_sint16 Wire.int16 2 s16_value_gen s16_boundaries
+let int16be = scalar_sint16 Wire.int16be 2 s16_value_gen s16_boundaries
 let int32_value_gen = Alcobar.map Alcobar.[ Alcobar.int32 ] Wire.SInt32.of_int32
 let int32 = scalar_sint32 Wire.int32 4 int32_value_gen s32_boundaries
 let int32be = scalar_sint32 Wire.int32be 4 int32_value_gen s32_boundaries
@@ -773,6 +760,7 @@ let exact_int64 typ cases = exact_cases ~typ ~equal:Int64.equal cases
 let exact_uint64 typ cases = exact_cases ~typ ~equal:Wire.UInt64.equal cases
 let exact_optint typ cases = exact_cases ~typ ~equal:Wire.UInt32.equal cases
 let exact_sint32 typ cases = exact_cases ~typ ~equal:Wire.SInt32.equal cases
+let exact_sint16 typ cases = exact_cases ~typ ~equal:Wire.SInt16.equal cases
 
 let uint16_endian_edges =
   exact_int Wire.uint16
@@ -828,22 +816,24 @@ let uint64be_endian_edges =
         bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFE ] );
     ]
 
+let sint16 = Wire.SInt16.v
+
 let int16_endian_edges =
-  exact_int Wire.int16
+  exact_sint16 Wire.int16
     [
-      (-0x8000, bytes_of_octets [ 0x00; 0x80 ]);
-      (-2, bytes_of_octets [ 0xFE; 0xFF ]);
-      (0x1234, bytes_of_octets [ 0x34; 0x12 ]);
-      (0x7FFF, bytes_of_octets [ 0xFF; 0x7F ]);
+      (sint16 (-0x8000), bytes_of_octets [ 0x00; 0x80 ]);
+      (sint16 (-2), bytes_of_octets [ 0xFE; 0xFF ]);
+      (sint16 0x1234, bytes_of_octets [ 0x34; 0x12 ]);
+      (sint16 0x7FFF, bytes_of_octets [ 0xFF; 0x7F ]);
     ]
 
 let int16be_endian_edges =
-  exact_int Wire.int16be
+  exact_sint16 Wire.int16be
     [
-      (-0x8000, bytes_of_octets [ 0x80; 0x00 ]);
-      (-2, bytes_of_octets [ 0xFF; 0xFE ]);
-      (0x1234, bytes_of_octets [ 0x12; 0x34 ]);
-      (0x7FFF, bytes_of_octets [ 0x7F; 0xFF ]);
+      (sint16 (-0x8000), bytes_of_octets [ 0x80; 0x00 ]);
+      (sint16 (-2), bytes_of_octets [ 0xFF; 0xFE ]);
+      (sint16 0x1234, bytes_of_octets [ 0x12; 0x34 ]);
+      (sint16 0x7FFF, bytes_of_octets [ 0x7F; 0xFF ]);
     ]
 
 let sint32 n = Wire.SInt32.of_int32 (Int32.of_int n)

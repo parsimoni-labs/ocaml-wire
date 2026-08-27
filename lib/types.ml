@@ -191,7 +191,7 @@ and _ typ =
   | Uint32 : endian -> UInt32.t typ
   | Uint64 : endian -> UInt64.t typ (* boxed, for full 64-bit *)
   | Int8 : SInt8.t typ
-  | Int16 : endian -> int typ
+  | Int16 : endian -> SInt16.t typ
   | Int32 : endian -> SInt32.t typ
   | Int64 : endian -> int64 typ
   | Float32 :
@@ -575,7 +575,7 @@ let rec int_of : type a. a typ -> a -> int option =
   | Uint32 _ -> Int32.unsigned_to_int (UInt32.to_int32 v)
   | Uint64 _ -> UInt64.to_int_opt v
   | Int8 -> Some (SInt8.to_int v)
-  | Int16 _ -> Some v
+  | Int16 _ -> Some (SInt16.to_int v)
   | Int32 _ -> SInt32.to_int_opt v
   | Int64 _ -> Int64.unsigned_to_int v
   | Float32 _ -> None
@@ -630,7 +630,7 @@ let rec int_of_exn : type a. a typ -> a -> int =
       | Some n -> n
       | None -> int_overflow (UInt64.to_int64 v))
   | Int8 -> SInt8.to_int v
-  | Int16 _ -> v
+  | Int16 _ -> SInt16.to_int v
   | Int32 _ -> (
       match SInt32.to_int_opt v with
       | Some n -> n
@@ -664,7 +664,7 @@ let rec of_int : type a. a typ -> int -> a =
   | Uint32 _ -> UInt32.of_int n
   | Uint64 _ -> UInt64.of_int n
   | Int8 -> SInt8.v n
-  | Int16 _ -> n
+  | Int16 _ -> SInt16.v n
   | Int32 _ -> SInt32.of_int n
   | Int64 _ -> Int64.of_int n
   | Float32 _ -> not_an_integer ()
@@ -1523,7 +1523,7 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int (SInt8.to_int k))
-  | Int16 _ -> Pack_expr (Int k)
+  | Int16 _ -> Pack_expr (Int (SInt16.to_int k))
   | Int32 _ -> Pack_expr (Int (int32_case_index k))
   | Bits _ -> Pack_expr (Int k)
   | Enum { base; _ } -> case_index_to_expr base k
@@ -2095,38 +2095,31 @@ let check_zeroterm_region ~region ~len =
       "Wire.encode: zeroterm string needs %d bytes but region is %d" (len + 1)
       region
 
-(* A field of [bits] bits owns exactly those bits, whether it was declared as a
-   fixed-width scalar or as a [bits ~width] slice of one: both are carried in an
-   OCaml [int], which holds far more than the field does. Masking a wider value
-   is the one truncation nothing downstream can catch, because the masked result
-   is itself a legal field value that decode, [validate] and the EverParse
-   validator all accept, and the number the caller meant is gone without trace.
-   So each width accepts exactly what its decoder produces -- [0, 2^bits - 1]
-   unsigned, [-2^(bits-1), 2^(bits-1) - 1] signed -- and encode stays inverse to
-   decode.
+(* An unsigned field of [bits] bits owns exactly those bits, whether it was
+   declared as a fixed-width scalar or as a [bits ~width] slice of one: both are
+   carried in an OCaml [int], which holds far more than the field does. Masking
+   a wider value is the one truncation nothing downstream can catch, because the
+   masked result is itself a legal field value that decode, [validate] and the
+   EverParse validator all accept, and the number the caller meant is gone
+   without trace. So each width accepts exactly what its decoder produces,
+   [0, 2^bits - 1], and encode stays inverse to decode.
 
    Where the native [int] is no wider than the field (a 32-bit field under
    js_of_ocaml, anything from 31 bits up under wasm_of_ocaml) no [int] is out of
    range, so the guard narrows to what is still checkable there rather than
    rejecting a value the target can represent.
 
-   The wider carriers guard themselves, next to the representation that decides
-   what fits: {!UInt32.check_encode} and {!UInt63.check_encode}. [uint64] and
-   [int64] have no guard, because an [int64] is exactly the eight bytes written
-   and no value of it is out of range. *)
+   The signed widths need nothing here. {!SInt8.t} and {!SInt16.t} carry the
+   field's range in the type, so a value that reaches an encoder is in range by
+   construction; {!SInt32.check_encode} sits next to the representation that
+   decides what fits, as {!UInt32.check_encode} and {!UInt63.check_encode} do on
+   the unsigned side; and [uint64] and [int64] need no guard at all, because an
+   [int64] is exactly the eight bytes written. *)
 let check_unsigned_encode ~bits v =
   let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
   if out_of_range then
     Fmt.invalid_arg
       "Wire.encode: value %d does not fit an unsigned %d-bit field" v bits
-
-let check_signed_encode ~bits v =
-  if bits < Sys.int_size then begin
-    let limit = 1 lsl (bits - 1) in
-    if v < -limit || v >= limit then
-      Fmt.invalid_arg "Wire.encode: value %d does not fit a signed %d-bit field"
-        v bits
-  end
 
 (* The range-checking counterparts of [Bytes.set_*]: every wire encode path
    writes a fixed-width scalar through one of these, because the [Bytes]
@@ -2143,14 +2136,6 @@ let set_uint16_le buf off v =
 let set_uint16_be buf off v =
   check_unsigned_encode ~bits:16 v;
   Bytes.set_uint16_be buf off v
-
-let set_int16_le buf off v =
-  check_signed_encode ~bits:16 v;
-  Bytes.set_int16_le buf off v
-
-let set_int16_be buf off v =
-  check_signed_encode ~bits:16 v;
-  Bytes.set_int16_be buf off v
 
 let set_int32_le = SInt32.set_le
 let set_int32_be = SInt32.set_be

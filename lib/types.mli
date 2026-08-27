@@ -180,13 +180,6 @@ val check_unsigned_encode : bits:int -> int -> unit
     Where the native [int] is no wider than the field the guard narrows to what
     is still checkable, so it never rejects a value the target can represent. *)
 
-val check_signed_encode : bits:int -> int -> unit
-(** Check an integer fits a signed [bits]-wide field before encoding it. The
-    accepted range is [[-2^(bits-1), 2^(bits-1) - 1]]: the decoder produces
-    exactly that, so [40000] into an {!val-int16} is refused rather than
-    round-tripping back as [-25536]. Same narrow-target narrowing as
-    {!check_unsigned_encode}. *)
-
 (** {2 Checked scalar writers}
 
     The range-checking counterparts of [Bytes.set_*]. Every wire encode path
@@ -201,12 +194,6 @@ val set_uint16_le : bytes -> int -> int -> unit
 
 val set_uint16_be : bytes -> int -> int -> unit
 (** [set_uint16_be buf off v] writes [v] as two unsigned big-endian bytes. *)
-
-val set_int16_le : bytes -> int -> int -> unit
-(** [set_int16_le buf off v] writes [v] as two signed little-endian bytes. *)
-
-val set_int16_be : bytes -> int -> int -> unit
-(** [set_int16_be buf off v] writes [v] as two signed big-endian bytes. *)
 
 val set_int32_le : bytes -> int -> SInt32.t -> unit
 (** [set_int32_le buf off v] writes [v] as four signed little-endian bytes. *)
@@ -286,7 +273,9 @@ and _ typ =
   | Int8 : SInt8.t typ
       (** 8-bit signed. Carried by {!SInt8.t}, whose range is the field's: a
           number the byte cannot hold is refused where it is built. *)
-  | Int16 : endian -> int typ  (** 16-bit signed. *)
+  | Int16 : endian -> SInt16.t typ
+      (** 16-bit signed. Carried by {!SInt16.t}, whose range is the field's: a
+          number two bytes cannot hold is refused where it is built. *)
   | Int32 : endian -> SInt32.t typ
       (** 32-bit signed. Carried by {!SInt32.t}, which holds the full range on
           every target; a plain [int] drops the top bits where it is narrower
@@ -605,10 +594,10 @@ val uint64be : UInt64.t typ
 val int8 : SInt8.t typ
 (** 8-bit signed two's-complement integer. *)
 
-val int16 : int typ
+val int16 : SInt16.t typ
 (** 16-bit signed, little-endian. *)
 
-val int16be : int typ
+val int16be : SInt16.t typ
 (** 16-bit signed, big-endian. *)
 
 val int32 : SInt32.t typ

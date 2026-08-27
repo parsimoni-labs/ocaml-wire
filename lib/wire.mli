@@ -390,6 +390,13 @@ module SInt8 = SInt8
     names the range, and [SInt8.v 200] is refused there rather than at the
     encoder. *)
 
+module SInt16 = SInt16
+(** Signed 16-bit integers, the carrier of {!int16} and {!int16be}.
+
+    A [private int] for the same reason {!SInt8} is: a value reads as the [int]
+    it is, only building one names the range, and [SInt16.v 40000] is refused
+    there rather than at the encoder. *)
+
 module Field : sig
   type 'a t
   (** A named field carrying values of type ['a]. *)
@@ -598,11 +605,16 @@ val int8 : SInt8.t typ
     where the value is built and every encode path takes only values the byte
     holds. *)
 
-val int16 : int typ
-(** Signed 16-bit little-endian integer. Encodes [-32768] to [32767]. *)
+val int16 : SInt16.t typ
+(** Signed 16-bit little-endian integer. Holds [-32768] to [32767]: [40000] is
+    not an [int16], even though its low two bytes are legal ones, and would come
+    back from the decoder as [-25536]. The range is the carrier's, so
+    {!SInt16.v} refuses it where the value is built and every encode path takes
+    only values the field holds. *)
 
-val int16be : int typ
-(** Signed 16-bit big-endian integer. Encodes [-32768] to [32767]. *)
+val int16be : SInt16.t typ
+(** Signed 16-bit big-endian integer. Same range and same carrier as {!int16}.
+*)
 
 val int32 : SInt32.t typ
 (** Signed 32-bit little-endian integer. Encodes [-2{^31}] to [2{^31} - 1], and

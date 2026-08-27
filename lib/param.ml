@@ -27,7 +27,7 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Uint32 _ -> optint_to_int UInt32.to_int v
   | Uint64 _ -> UInt64.to_int_opt v |> Option.value ~default:max_int
   | Int8 -> SInt8.to_int v
-  | Int16 _ -> v
+  | Int16 _ -> SInt16.to_int v
   | Int32 _ -> SInt32.to_int v
   | Int64 _ -> Int64.to_int v
   | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
