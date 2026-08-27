@@ -15,8 +15,11 @@
       actions have zero overhead.
 
     - {!validate} checks all field [~constraint_] checks and [~where] clauses
-      without constructing a record and without firing actions. Use it before a
-      batch of {!get} calls on untrusted input. *)
+      without constructing a record. Field [~action]s do fire, so an action that
+      rejects rejects here too and {!validate} and {!decode} agree on what is
+      valid; nothing is written back, so the output parameters an action assigns
+      are not observable. Use it before a batch of {!get} calls on untrusted
+      input. *)
 
 type ('a, 'r) field
 (** A field bound to a record projection. *)
