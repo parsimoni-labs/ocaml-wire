@@ -12,6 +12,7 @@ let () =
       Test_uint64.suite;
       Test_sint32.suite;
       Test_sint8.suite;
+      Test_sint16.suite;
       Test_uint63.suite;
       Test_types.suite;
       Test_eval.suite;
