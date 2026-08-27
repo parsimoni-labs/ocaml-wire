@@ -95,6 +95,28 @@ jobs:
       - run: opam exec -- dune build @check
       - run: opam exec -- merlint --build
 
+  # Static analysis over the hand-written C. EverParse proves the parsers it
+  # generates, but nothing covered the benchmark C written by hand around them,
+  # in a project whose shipped deliverable is a C archive. The lane needs no
+  # opam switch, so it costs a checkout and an apt install, and it is wired as
+  # a normal blocking lane on that basis. cppcheck comes from the runner image,
+  # so an image bump can bring a version with new checks; that shows up here as
+  # a red lane on an unrelated pull request, and is fixed in the C or in the
+  # suppression list, never by dropping the lane.
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      # make cppcheck skips when the tool is absent, which would leave this
+      # lane green having checked nothing. Fail here instead if apt did not
+      # deliver it, and record the version the findings came from.
+      - run: cppcheck --version
+
+      - run: make cppcheck
+
   # One AFL job per fuzzer: fuzz/ fuzzes the [wire] library (round-trip and
   # validation) and fuzz/3d/ fuzzes [wire_3d] (the EverParse / 3D projection),
   # mirroring the lib/ layout. The [afl] profile (dune-workspace) instruments

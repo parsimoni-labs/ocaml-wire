@@ -1,5 +1,6 @@
 .PHONY: build test test-wasm 3d bench bench-demo bench-routing bench-gateway bench-clcw \
-       prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw clean
+       prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
+       cppcheck clean
 
 build:
 	dune build
@@ -68,6 +69,34 @@ memtrace-gateway:
 memtrace-clcw:
 	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=release bench/clcw/bench.exe
 	memtrace_hotspots clcw.ctf
+
+# Static analysis over the project's hand-written C: the benchmark application
+# loops and the header they share. EverParse proves the parsers it generates;
+# nothing covered the C written by hand around them. The file list comes from
+# git rather than a literal so a new hand-written file cannot escape it, and
+# every tracked .c/.h is hand-written, as the generated parsers are produced
+# into _build and never committed. -I bench resolves bench_common.h, so a
+# finding inside it surfaces too. The headers that stay unresolved are external
+# (OCaml's caml/*, EverParse's generated schemas): pointing cppcheck at OCaml's
+# headers multiplies the #ifdef configuration space by sixty and finds nothing.
+# unusedFunction fires on every CAMLprim, whose only caller is the OCaml
+# runtime. cppcheck prints the name of each file it opens, which is the proof
+# that the list reached it.
+cppcheck:
+	@if ! command -v cppcheck >/dev/null 2>&1; then \
+	  echo "cppcheck not found: skipping (brew install cppcheck)"; \
+	  exit 0; \
+	fi; \
+	files=$$(git ls-files '*.c' '*.h'); \
+	if [ -z "$$files" ]; then \
+	  echo "error: found no hand-written C to check"; exit 1; \
+	fi; \
+	cppcheck --enable=all --check-level=exhaustive --inconclusive \
+	  --std=c11 --language=c -I bench \
+	  --suppress=missingIncludeSystem --suppress=missingInclude \
+	  --suppress=unusedFunction --suppress=checkersReport \
+	  --suppress=normalCheckLevelMaxBranches --suppress=unmatchedSuppression \
+	  --inline-suppr --error-exitcode=1 $$files
 
 clean:
 	dune clean
