@@ -1052,8 +1052,10 @@ module Private = struct
   module UInt63 = UInt63
   module Types = Types
   module Eval = Eval
+  module Expr_compiler = Expr_compiler
   module Bitfield = Bitfield
   module Uint_var = Uint_var
+  module Shape = Shape
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

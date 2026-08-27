@@ -1615,6 +1615,8 @@ module Private : sig
     (** {!val-int_of} without the option; raises {!Types.Parse_error}. *)
   end
 
+  module Expr_compiler = Expr_compiler
+
   (** Packed bitfield base words. *)
   module Bitfield : sig
     val byte_size : Types.bitfield_base -> int
@@ -1646,6 +1648,7 @@ module Private : sig
   end
 
   module Uint_var = Uint_var
+  module Shape = Shape
 
   val param_name : param -> string
   (** Name of a formal parameter. *)
