@@ -40,7 +40,7 @@ API reference: [wire on ocaml.org](https://ocaml.org/p/wire/latest).
 ```ocaml
 open Wire
 
-type packet = { version : int; flags : int; length : UInt16.t; tag : int }
+type packet = { version : int; flags : int; length : UInt16.t; tag : UInt8.t }
 
 let f_version = Field.v "Version" (bits ~width:4 U8)
 let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
@@ -78,7 +78,7 @@ let set_version = Staged.unstage (Codec.set codec bf_version)
 let buf = Bytes.create (Codec.wire_size codec)
 let () =
   Codec.encode codec
-    { version = 1; flags = 2; length = UInt16.v 1024; tag = 0 }
+    { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
     buf 0
 let v = get_version buf 0        (* read version without allocating a record *)
 let () = set_version buf 0 3     (* mutate version in place *)

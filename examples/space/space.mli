@@ -140,13 +140,13 @@ val inner_cmd_codec : inner_cmd Wire.Codec.t
 val inner_cmd_size : int
 (** Wire size of an InnerCmd in bytes. *)
 
-val f_cmd_id : int Wire.Field.t
+val f_cmd_id : Wire.UInt8.t Wire.Field.t
 (** Zero-copy field accessor for the InnerCmd CmdId field. *)
 
 val f_cmd_seq : Wire.UInt16.t Wire.Field.t
 (** Zero-copy field accessor for the InnerCmd Seq field. *)
 
-val bf_cmd_id : (int, inner_cmd) Wire.Codec.field
+val bf_cmd_id : (Wire.UInt8.t, inner_cmd) Wire.Codec.field
 (** Bound field for the InnerCmd CmdId field. *)
 
 val bf_cmd_seq : (Wire.UInt16.t, inner_cmd) Wire.Codec.field

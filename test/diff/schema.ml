@@ -7,7 +7,7 @@ open Wire
 open Wire.Everparse.Raw
 
 (* Simple header schema: version (u8) + length (u16) + flags (u8) *)
-type simple_header = { version : int; length : UInt16.t; flags : int }
+type simple_header = { version : UInt8.t; length : UInt16.t; flags : UInt8.t }
 
 let simple_header_codec =
   Codec.v "SimpleHeader"
@@ -29,7 +29,7 @@ let simple_header_module =
 (* Constrained schema - constraints are applied in 3D generation,
    the OCaml parser doesn't validate constraints on individual fields.
    For differential testing, we validate manually or use the C parser. *)
-type constrained_packet = { type_ : int; length : UInt16.t }
+type constrained_packet = { type_ : UInt8.t; length : UInt16.t }
 
 let constrained_packet_codec =
   Codec.v "ConstrainedPacket"

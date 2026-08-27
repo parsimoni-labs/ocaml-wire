@@ -354,7 +354,7 @@ let tm_with_ocf_codec =
 
 (* -- 4. Nested protocol -- *)
 
-type inner_cmd = { id : int; seq : UInt16.t; flags : int }
+type inner_cmd = { id : UInt8.t; seq : UInt16.t; flags : UInt8.t }
 
 let f_cmd_id = Field.v "CmdId" uint8
 let f_cmd_seq = Field.v "Seq" uint16be
@@ -376,8 +376,8 @@ let inner_cmd_codec =
 let inner_cmd_size = Codec.wire_size inner_cmd_codec
 
 type outer_hdr = {
-  version : int;
-  type_ : int;
+  version : UInt8.t;
+  type_ : UInt8.t;
   length : UInt16.t;
   payload : Bytesrw.Bytes.Slice.t;
 }

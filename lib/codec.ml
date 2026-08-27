@@ -183,7 +183,7 @@ and build_field_encoder_ctx : type a.
   match typ with
   | Uint8 ->
       fun _runtime buf off v ->
-        Types.set_uint8 buf off v;
+        UInt8.set buf off v;
         off + 1
   | Uint16 Little ->
       fun _runtime buf off v ->
@@ -329,7 +329,7 @@ let rec build_field_reader_ctx : type a.
     a typ -> int -> Types.eval_ctx -> bytes -> int -> a =
  fun typ field_off ->
   match typ with
-  | Uint8 -> fun _runtime buf base -> Bytes.get_uint8 buf (base + field_off)
+  | Uint8 -> fun _runtime buf base -> UInt8.get buf (base + field_off)
   | Uint16 Little -> fun _runtime buf base -> UInt16.le buf (base + field_off)
   | Uint16 Big -> fun _runtime buf base -> UInt16.be buf (base + field_off)
   | Uint32 Little -> fun _runtime buf base -> UInt32.le buf (base + field_off)
@@ -425,7 +425,7 @@ let rec build_immediate_reader : type a.
  fun typ field_off ->
   let at base = base + field_off in
   match typ with
-  | Uint8 -> Some (fun buf base -> Bytes.get_uint8 buf (at base))
+  | Uint8 -> Some (fun buf base -> UInt8.get buf (at base))
   | Uint16 Little -> Some (fun buf base -> UInt16.le buf (at base))
   | Uint16 Big -> Some (fun buf base -> UInt16.be buf (at base))
   | Uint32 Little -> Some (fun buf base -> UInt32.le buf (at base))
@@ -472,11 +472,7 @@ let rec build_immediate_reader : type a.
 (* Symmetric bytes-only writer for parameter-independent scalar fields. *)
 let rec build_immediate_encoder : type a.
     a typ -> (bytes -> int -> a -> int) option = function
-  | Uint8 ->
-      Some
-        (fun buf off v ->
-          Types.set_uint8 buf off v;
-          off + 1)
+  | Uint8 -> Some (setter_off 1 UInt8.set)
   | Uint16 Little -> Some (setter_off 2 UInt16.set_le)
   | Uint16 Big -> Some (setter_off 2 UInt16.set_be)
   | Uint32 Little -> Some (setter_off 4 UInt32.set_le)
@@ -622,14 +618,17 @@ let populate_uint_var idx reader =
 let populate_int idx reader slots runtime buf base =
   set_int_slot slots idx (reader runtime buf base)
 
-(* [SInt8.t], [SInt16.t] and [UInt16.t] are native [int]s behind a range, so
-   the slot takes the decoded value unchanged and no platform has a value it
-   cannot hold. *)
+(* [SInt8.t], [SInt16.t], [UInt8.t] and [UInt16.t] are native [int]s behind a
+   range, so the slot takes the decoded value unchanged and no platform has a
+   value it cannot hold. *)
 let populate_sint8 idx reader slots runtime buf base =
   set_int_slot slots idx (SInt8.to_int (reader runtime buf base))
 
 let populate_sint16 idx reader slots runtime buf base =
   set_int_slot slots idx (SInt16.to_int (reader runtime buf base))
+
+let populate_uint8 idx reader slots runtime buf base =
+  set_int_slot slots idx (UInt8.to_int (reader runtime buf base))
 
 let populate_uint16 idx reader slots runtime buf base =
   set_int_slot slots idx (UInt16.to_int (reader runtime buf base))
@@ -658,7 +657,7 @@ let rec build_populate : type a.
     unit =
  fun typ idx reader ->
   match typ with
-  | Uint8 -> populate_int idx reader
+  | Uint8 -> populate_uint8 idx reader
   | Uint16 _ -> populate_uint16 idx reader
   | Int8 -> populate_sint8 idx reader
   | Int16 _ -> populate_sint16 idx reader
@@ -1453,7 +1452,7 @@ let tag_byte_size : type a. a typ -> int =
 let rec read_elem : type a. a typ -> runtime -> bytes -> int -> a =
  fun typ runtime buf off ->
   match typ with
-  | Uint8 -> Bytes.get_uint8 buf off
+  | Uint8 -> UInt8.get buf off
   | Uint16 Little -> UInt16.le buf off
   | Uint16 Big -> UInt16.be buf off
   | Uint32 Little -> UInt32.le buf off
@@ -1561,7 +1560,7 @@ and read_case_body : type a k.
 let rec write_elem : type a. a typ -> runtime -> bytes -> int -> a -> unit =
  fun typ runtime buf off v ->
   match typ with
-  | Uint8 -> Types.set_uint8 buf off v
+  | Uint8 -> UInt8.set buf off v
   | Uint16 Little -> UInt16.set_le buf off v
   | Uint16 Big -> UInt16.set_be buf off v
   | Uint32 Little -> UInt32.set_le buf off v

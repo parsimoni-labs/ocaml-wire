@@ -30,20 +30,21 @@ let decode_record codec s =
 
 (** Test SimpleHeader roundtrip *)
 let test_simple_header_roundtrip version length flags =
-  let version = abs version mod 256 in
+  let version = Wire.UInt8.v (abs version mod 256) in
   let length = Wire.UInt16.v (abs length mod 65536) in
-  let flags = abs flags mod 256 in
+  let flags = Wire.UInt8.v (abs flags mod 256) in
   let original = Schema.{ version; length; flags } in
   match encode_record Schema.simple_header_codec original with
   | Error _ -> Alcobar.fail "encode failed"
   | Ok encoded -> (
       match decode_record Schema.simple_header_codec encoded with
       | Ok decoded ->
-          if original.version <> decoded.version then
+          if not (Wire.UInt8.equal original.version decoded.version) then
             Alcobar.fail "version mismatch";
-          if not (UInt16.equal original.length decoded.length) then
+          if not (Wire.UInt16.equal original.length decoded.length) then
             Alcobar.fail "length mismatch";
-          if original.flags <> decoded.flags then Alcobar.fail "flags mismatch"
+          if not (Wire.UInt8.equal original.flags decoded.flags) then
+            Alcobar.fail "flags mismatch"
       | Error _ -> Alcobar.fail "decode failed")
 
 (** Test SimpleHeader decode crash safety *)
@@ -54,7 +55,7 @@ let test_simple_header_crash buf =
 
 (** Test ConstrainedPacket roundtrip with valid values *)
 let test_constrained_packet_roundtrip pkt_type pkt_length =
-  let type_ = abs pkt_type mod 4 in
+  let type_ = Wire.UInt8.v (abs pkt_type mod 4) in
   let length = Wire.UInt16.v (abs pkt_length mod 1025) in
   let original = Schema.{ type_; length } in
   match encode_record Schema.constrained_packet_codec original with
@@ -62,9 +63,9 @@ let test_constrained_packet_roundtrip pkt_type pkt_length =
   | Ok encoded -> (
       match decode_record Schema.constrained_packet_codec encoded with
       | Ok decoded ->
-          if original.type_ <> decoded.type_ then
+          if not (Wire.UInt8.equal original.type_ decoded.type_) then
             Alcobar.fail "pkt_type mismatch";
-          if not (UInt16.equal original.length decoded.length) then
+          if not (Wire.UInt16.equal original.length decoded.length) then
             Alcobar.fail "pkt_length mismatch"
       | Error _ -> Alcobar.fail "decode failed")
 

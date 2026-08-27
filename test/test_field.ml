@@ -70,8 +70,8 @@ let test_ref_mapped_field () =
   let f =
     Field.v "Code"
       (Types.map
-         (fun n -> string_of_int n)
-         (fun s -> int_of_string s)
+         (fun n -> string_of_int (Wire.UInt8.to_int n))
+         (fun s -> Wire.UInt8.v (int_of_string s))
          Types.uint8)
   in
   match Field.ref f with
@@ -99,7 +99,11 @@ let test_int64_rejects_field_without_int64_slot () =
     | exception Invalid_argument _ -> ()
   in
   let mapped =
-    Field.v "Mapped" (Types.map Int64.of_int Int64.to_int Types.uint8)
+    Field.v "Mapped"
+      (Types.map
+         (fun n -> Int64.of_int (Wire.UInt8.to_int n))
+         (fun n -> Wire.UInt8.v (Int64.to_int n))
+         Types.uint8)
   in
   check_invalid "mapped field" (fun () ->
       ignore (Field.int64 mapped : int64 Types.expr));
@@ -107,7 +111,7 @@ let test_int64_rejects_field_without_int64_slot () =
       ignore
         (Field.v "Tiny" Types.uint8 ~self_int64:(fun self ->
              Types.Expr.(self = int64 0L))
-          : int Field.t))
+          : Wire.UInt8.t Field.t))
 
 let test_int64_accepts_map_over_uint64 () =
   (* A map over uint64 keeps its int64 slot: [build_populate] fills it with the

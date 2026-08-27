@@ -259,7 +259,7 @@ let float64_be buf off = Int64.float_of_bits (Bytes.get_int64_be buf off)
 let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
  fun typ buf off len ->
   match typ with
-  | Uint8 -> parse_fixed 1 Bytes.get_uint8 buf off len
+  | Uint8 -> parse_fixed 1 UInt8.get buf off len
   | Uint16 Little -> parse_fixed 2 UInt16.le buf off len
   | Uint16 Big -> parse_fixed 2 UInt16.be buf off len
   | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
@@ -767,9 +767,7 @@ let check_byte_field_size size ~actual =
 let rec encode_into : type a. a typ -> a -> encoder -> unit =
  fun typ v enc ->
   match typ with
-  | Uint8 ->
-      Types.check_unsigned_encode ~bits:8 v;
-      write_byte enc v
+  | Uint8 -> write_byte enc (UInt8.to_int v)
   | Uint16 Little -> write_uint16_le enc (UInt16.to_int v)
   | Uint16 Big -> write_uint16_be enc (UInt16.to_int v)
   | Uint32 Little -> write_uint32_le enc v
@@ -955,7 +953,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
  fun typ buf off v ->
   match typ with
   | Uint8 ->
-      Types.set_uint8 buf off v;
+      UInt8.set buf off v;
       off + 1
   | Uint16 Little ->
       UInt16.set_le buf off v;
@@ -1041,6 +1039,7 @@ module UInt64 = UInt64
 module SInt32 = SInt32
 module SInt8 = SInt8
 module SInt16 = SInt16
+module UInt8 = UInt8
 module UInt16 = UInt16
 module Ascii = Ascii
 

@@ -47,7 +47,7 @@ type 'a read_case =
 type packed_case = C : _ read_case -> packed_case
 type write_case = { label : string; run : unit -> unit; verify : unit -> unit }
 
-val minimal_case : int read_case
+val minimal_case : Wire.UInt8.t read_case
 (** Minimal 1-byte uint8 schema. *)
 
 val all_ints_case : Wire.UInt64.t read_case
@@ -92,7 +92,7 @@ val cases_case : Demo.ptype read_case
 val enum_case : Demo.status read_case
 (** Enum field with mapped status values. *)
 
-val constrained_case : int read_case
+val constrained_case : Wire.UInt8.t read_case
 (** Constrained field with a where-clause predicate. *)
 
 val projection_cases : packed_case list

@@ -112,7 +112,7 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
           ]
 
     let buf = Bytes.create 12
-    let env = Codec.env codec |> Param.bind p_iv_len 12
+    let env = Codec.env codec |> Param.bind p_iv_len (UInt8.v 12)
 
     let () =
       Codec.encode ~env codec (String.make 12 'a') buf 0;

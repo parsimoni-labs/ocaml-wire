@@ -1,6 +1,10 @@
 (** Schema definitions for differential testing. *)
 
-type simple_header = { version : int; length : Wire.UInt16.t; flags : int }
+type simple_header = {
+  version : Wire.UInt8.t;
+  length : Wire.UInt16.t;
+  flags : Wire.UInt8.t;
+}
 (** A simple packet header with version, length, and flags fields. *)
 
 val simple_header_codec : simple_header Wire.Codec.t
@@ -12,7 +16,7 @@ val simple_header_struct : Wire.Everparse.Raw.struct_
 val simple_header_module : Wire.Everparse.Raw.module_
 (** Module definition for 3D code generation. *)
 
-type constrained_packet = { type_ : int; length : Wire.UInt16.t }
+type constrained_packet = { type_ : Wire.UInt8.t; length : Wire.UInt16.t }
 (** A packet with type and length fields, where length must be >= 4. *)
 
 val constrained_packet_codec : constrained_packet Wire.Codec.t

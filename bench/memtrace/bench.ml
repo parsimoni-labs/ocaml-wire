@@ -33,8 +33,8 @@ let schema name codec size default make_data =
 (* -- Nested codec schemas for allocation tracking -- *)
 
 (* Codec embed: outer record containing an inner sub-codec *)
-type inner_rec = { tag : int; value : Wire.UInt16.t }
-type outer_rec = { hdr : int; inner : inner_rec; trail : int }
+type inner_rec = { tag : Wire.UInt8.t; value : Wire.UInt16.t }
+type outer_rec = { hdr : Wire.UInt8.t; inner : inner_rec; trail : Wire.UInt8.t }
 
 let inner_codec =
   Wire.Codec.v "Inner"
@@ -58,7 +58,11 @@ let outer_codec =
 let outer_size = 5
 
 let outer_default =
-  { hdr = 0; inner = { tag = 0; value = Wire.UInt16.zero }; trail = 0 }
+  {
+    hdr = Wire.UInt8.zero;
+    inner = { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+    trail = Wire.UInt8.zero;
+  }
 
 let outer_data n =
   Array.init n (fun i ->
@@ -105,7 +109,7 @@ let opt_present_data n =
       b)
 
 (* Repeat: container with repeated sub-codec elements *)
-type repeat_rec = { len : int; items : inner_rec list }
+type repeat_rec = { len : Wire.UInt8.t; items : inner_rec list }
 
 let f_r_len = Wire.Field.v "Len" Wire.uint8
 
@@ -124,12 +128,12 @@ let repeat_size = 10 (* 1 + 3*3 = 10 bytes for 3 inner items *)
 
 let repeat_default =
   {
-    len = 9;
+    len = Wire.UInt8.v 9;
     items =
       [
-        { tag = 0; value = Wire.UInt16.zero };
-        { tag = 0; value = Wire.UInt16.zero };
-        { tag = 0; value = Wire.UInt16.zero };
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
+        { tag = Wire.UInt8.zero; value = Wire.UInt16.zero };
       ];
   }
 
@@ -168,7 +172,7 @@ type kexinit = {
   comp_s2c : Slice.t;
   lang_c2s : Slice.t;
   lang_s2c : Slice.t;
-  first_follows : int;
+  first_follows : Wire.UInt8.t;
   reserved : Wire.UInt32.t;
 }
 

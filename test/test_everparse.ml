@@ -334,7 +334,8 @@ let test_enum_open_accepts_and_no_refinement () =
   let c = Codec.v "OpenK" (fun v -> v) Codec.[ (Field.v "k" e $ fun v -> v) ] in
   let buf = Bytes.make 1 '\x05' in
   (match Codec.decode c buf 0 with
-  | Ok v -> Alcotest.(check int) "open accepts unlisted value" 5 v
+  | Ok v ->
+      Alcotest.(check int) "open accepts unlisted value" 5 (UInt8.to_int v)
   | Error _ -> Alcotest.fail "open enum wrongly rejected an unlisted value");
   let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
   Alcotest.(check bool)
@@ -906,7 +907,7 @@ let test_3d_field_pos_rejected () =
 
 type tm_like = {
   hdr : UInt16.t;
-  data_len : int;
+  data_len : UInt8.t;
   packets : packet list;
   ocf : UInt32.t option;
   fecf : UInt16.t option;

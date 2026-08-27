@@ -17,7 +17,9 @@ let reader_decode_ok typ reader =
   | Ok v -> v
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let uint8_testable = Alcotest.testable UInt8.pp UInt8.equal
 let uint16_testable = Alcotest.testable UInt16.pp UInt16.equal
+let read_u8 reader = UInt8.to_int (reader_decode_ok uint8 reader)
 let read_u16 typ reader = UInt16.to_int (reader_decode_ok typ reader)
 
 (* Helper: encode to string via streaming writer with [chunk_size] buffer *)
@@ -50,7 +52,7 @@ let test_expr_equality_operators () =
 let test_parse_uint8 () =
   let input = "\x42" in
   match of_string uint8 input with
-  | Ok v -> Alcotest.(check int) "uint8 value" 0x42 v
+  | Ok v -> Alcotest.(check int) "uint8 value" 0x42 (UInt8.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_uint16_le () =
@@ -89,7 +91,9 @@ let test_parse_array () =
   let input = "\x01\x02\x03" in
   let t = array ~len:(int 3) uint8 in
   match of_string t input with
-  | Ok v -> Alcotest.(check (list int)) "array values" [ 1; 2; 3 ] v
+  | Ok v ->
+      Alcotest.(check (list int))
+        "array values" [ 1; 2; 3 ] (List.map UInt8.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_parse_byte_array () =
@@ -287,7 +291,7 @@ let test_rest_of_buffer_codec () =
   in
   match Codec.decode ~env codec buf 0 with
   | Ok (h, d) ->
-      Alcotest.(check int) "header" 1 h;
+      Alcotest.(check int) "header" 1 (UInt8.to_int h);
       Alcotest.(check string) "data" "HELLO" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -302,7 +306,7 @@ let test_all_bytes_in_codec () =
   let buf = Bytes.of_string "\x2AHello" in
   match Codec.decode codec buf 0 with
   | Ok (h, d) ->
-      Alcotest.(check int) "header" 0x2A h;
+      Alcotest.(check int) "header" 0x2A (UInt8.to_int h);
       Alcotest.(check string) "data" "Hello" d
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
@@ -320,14 +324,14 @@ let test_codec_all_bytes_tail () =
   let f_payload = Field.v "Payload" (codec inner) in
   let outer = Codec.v "Outer" (fun p -> p) Codec.[ (f_payload $ fun p -> p) ] in
   let roundtrip label tail =
-    let v = (0x42, tail) in
+    let v = (UInt8.v 0x42, tail) in
     let sz = 1 + String.length tail in
     let buf = Bytes.create sz in
     Codec.encode outer v buf 0;
     Alcotest.(check int) (label ^ ": buf length") sz (Bytes.length buf);
     match Codec.decode outer buf 0 with
     | Ok (h, d) ->
-        Alcotest.(check int) (label ^ ": header") 0x42 h;
+        Alcotest.(check int) (label ^ ": header") 0x42 (UInt8.to_int h);
         Alcotest.(check string) (label ^ ": tail") tail d
     | Error e -> Alcotest.failf "%s decode: %a" label pp_parse_error e
   in
@@ -345,7 +349,7 @@ let test_all_zeros_in_codec () =
   let ok_buf = Bytes.of_string "\x55\x00\x00\x00" in
   (match Codec.decode codec ok_buf 0 with
   | Ok (h, p) ->
-      Alcotest.(check int) "tag" 0x55 h;
+      Alcotest.(check int) "tag" 0x55 (UInt8.to_int h);
       Alcotest.(check string) "padding" "\000\000\000" p
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
   let bad_buf = Bytes.of_string "\x55\x00\x01\x00" in
@@ -603,7 +607,7 @@ let test_param_size_encode () =
   let c, p_len = param_codec () in
   List.iter
     (fun n ->
-      let env = Codec.env c |> Param.bind p_len n in
+      let env = Codec.env c |> Param.bind p_len (UInt8.v n) in
       let payload = String.make n 'A' in
       let buf = Bytes.create 32 in
       Codec.encode ~env c { payload } buf 0;
@@ -617,7 +621,7 @@ let test_param_size_encode () =
 
 let test_param_encode_length_mismatch () =
   let c, p_len = param_codec () in
-  let env = Codec.env c |> Param.bind p_len 4 in
+  let env = Codec.env c |> Param.bind p_len (UInt8.v 4) in
   let buf = Bytes.create 16 in
   match Codec.encode ~env c { payload = "ab" } buf 0 with
   | () -> Alcotest.fail "expected Invalid_argument"
@@ -756,7 +760,7 @@ let test_field_pos_fail () =
   | Error { kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
-type sizeof_action_record = { a : int; b : UInt16.t; c : int }
+type sizeof_action_record = { a : UInt8.t; b : UInt16.t; c : UInt8.t }
 
 let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
@@ -777,13 +781,16 @@ let test_sizeof_this_with_action () =
   let env = Codec.env c in
   let buf = Bytes.of_string "\x01\x00\x02\x00" in
   match Codec.decode ~env c buf 0 with
-  | Ok _ -> Alcotest.(check int) "sizeof_this via action" 3 (Param.get env out)
+  | Ok _ ->
+      Alcotest.(check int)
+        "sizeof_this via action" 3
+        (UInt8.to_int (Param.get env out))
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
 (* -- Encoding tests -- *)
 
 let test_encode_uint8 () =
-  let encoded = to_string uint8 0x42 in
+  let encoded = to_string uint8 (UInt8.v 0x42) in
   Alcotest.(check string) "uint8 encoding" "\x42" encoded
 
 let test_encode_uint16_le () =
@@ -804,7 +811,7 @@ let test_encode_uint32_be () =
 
 let test_encode_array () =
   let t = array ~len:(int 3) uint8 in
-  let encoded = to_string t [ 1; 2; 3 ] in
+  let encoded = to_string t (List.map UInt8.v [ 1; 2; 3 ]) in
   Alcotest.(check string) "array encoding" "\x01\x02\x03" encoded
 
 let seq_array : ('a, 'a array) seq_map =
@@ -830,11 +837,18 @@ let expect_direct_array_cardinality label typ value expected actual =
 
 let test_encode_array_cardinality () =
   let list = array ~len:(int 3) uint8 in
-  expect_direct_array_cardinality "short list" list [ 1; 2 ] 3 2;
-  expect_direct_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  expect_direct_array_cardinality "short list" list
+    (List.map UInt8.v [ 1; 2 ])
+    3 2;
+  expect_direct_array_cardinality "long list" list
+    (List.map UInt8.v [ 1; 2; 3; 4 ])
+    3 4;
   let custom = array_seq seq_array ~len:(int 3) uint8 in
-  expect_direct_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
-  expect_direct_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+  expect_direct_array_cardinality "short custom sequence" custom
+    (Array.map UInt8.v [| 1; 2 |])
+    3 2;
+  expect_direct_array_cardinality "long custom sequence" custom
+    (Array.map UInt8.v [| 1; 2; 3; 4 |])
     3 4
 
 let expect_direct_repeat_encode_error label typ value =
@@ -962,8 +976,8 @@ let test_region_cardinality_contract () =
     Codec.v "InvariantArray" Fun.id Codec.[ Field.v "items" array_typ $ Fun.id ]
   in
   for n = 0 to 5 do
-    let values = List.init n Fun.id in
-    check_invariant_encoding ~equal:(List.equal Int.equal)
+    let values = List.init n UInt8.v in
+    check_invariant_encoding ~equal:(List.equal UInt8.equal)
       (Fmt.str "array count %d" n)
       array_typ array_codec values
   done;
@@ -1053,7 +1067,7 @@ let test_bits_roundtrip_all_combos () =
 (* -- Roundtrip tests -- *)
 
 let test_roundtrip_uint8 () =
-  roundtrip "roundtrip uint8" uint8 Alcotest.int 0x42
+  roundtrip "roundtrip uint8" uint8 uint8_testable (UInt8.v 0x42)
 
 let test_roundtrip_uint16 () =
   roundtrip "roundtrip uint16" uint16 uint16_testable (UInt16.v 0x1234)
@@ -1066,8 +1080,8 @@ let test_roundtrip_uint32 () =
 let test_roundtrip_array () =
   roundtrip "roundtrip array"
     (array ~len:(int 5) uint8)
-    Alcotest.(list int)
-    [ 1; 2; 3; 4; 5 ]
+    (Alcotest.list uint8_testable)
+    (List.map UInt8.v [ 1; 2; 3; 4; 5 ])
 
 let test_roundtrip_byte_array () =
   roundtrip "roundtrip byte_array"
@@ -1137,14 +1151,14 @@ let test_encode_rejects_unlisted_enum () =
   let closed = enum "Code" [ ("A", 1); ("B", 2) ] uint8 in
   let open_ = enum_open "Code" [ ("A", 1); ("B", 2) ] uint8 in
   expect_typ_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
-      to_string closed 99);
+      to_string closed (UInt8.v 99));
   expect_typ_decode_rejects "closed enum" closed "\099";
-  Alcotest.(check string) "listed value" "\002" (to_string closed 2);
+  Alcotest.(check string) "listed value" "\002" (to_string closed (UInt8.v 2));
   (* An open enum names known codes without restricting them. *)
-  Alcotest.(check string) "open enum" "\099" (to_string open_ 99);
+  Alcotest.(check string) "open enum" "\099" (to_string open_ (UInt8.v 99));
   (* The streaming writer shares the kernel, so it rejects the same value. *)
   expect_typ_encode_rejects "closed enum streamed" ~names:[ "got 99" ]
-    (fun () -> encode_chunked ~chunk_size:1 closed 99)
+    (fun () -> encode_chunked ~chunk_size:1 closed (UInt8.v 99))
 
 let test_encode_rejects_non_zero_padding () =
   expect_typ_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ]
@@ -1159,19 +1173,19 @@ let test_encode_rejects_non_zero_padding () =
 let test_encode_rejects_where_violation () =
   let t = where Expr.(int 3 = int 7) uint8 in
   expect_typ_encode_rejects "where" ~names:[ "where constraint" ] (fun () ->
-      to_string t 3);
+      to_string t (UInt8.v 3));
   expect_typ_decode_rejects "where" t "\003";
   Alcotest.(check string)
     "satisfied cond" "\003"
-    (to_string (where Expr.(int 7 = int 7) uint8) 3)
+    (to_string (where Expr.(int 7 = int 7) uint8) (UInt8.v 3))
 
 (* -- Streaming: cross-slice boundary tests -- *)
 
 (* Parse roundtrip with every chunk size forcing boundary straddles *)
 let test_stream_uint8 () =
-  let encoded = to_string uint8 42 in
+  let encoded = to_string uint8 (UInt8.v 42) in
   match parse_chunked ~chunk_size:1 uint8 encoded with
-  | Ok v -> Alcotest.(check int) "uint8 chunk=1" 42 v
+  | Ok v -> Alcotest.(check int) "uint8 chunk=1" 42 (UInt8.to_int v)
   | Error e -> Alcotest.failf "uint8 chunk=1: %a" pp_parse_error e
 
 let test_stream_uint16_chunk1 () =
@@ -1229,7 +1243,7 @@ let test_stream_reader_sequential_fixed () =
   let reader =
     Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\x01\x02\x03\x04\x05"
   in
-  Alcotest.(check int) "first" 0x01 (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "first" 0x01 (read_u8 reader);
   Alcotest.(check int) "second" 0x0203 (read_u16 uint16be reader);
   Alcotest.(check int) "third" 0x0405 (read_u16 uint16be reader);
   Alcotest.(check bool)
@@ -1246,7 +1260,7 @@ let test_stream_reader_sequential_cross_slice () =
 let test_stream_reader_sequential_zeroterm () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:2 "abc\000\x7f" in
   Alcotest.(check string) "text" "abc" (reader_decode_ok zeroterm reader);
-  Alcotest.(check int) "tail" 0x7f (reader_decode_ok uint8 reader)
+  Alcotest.(check int) "tail" 0x7f (read_u8 reader)
 
 (* Rewind on error: a failed decode pushes back everything it consumed, so
    the same bytes decode under another description (one test per of_reader
@@ -1257,9 +1271,9 @@ let test_stream_rewind_fixed () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:8 "\xff\x01\x02" in
   (match Wire.of_reader bad reader with
   | Error { kind = Invalid_enum _; _ } -> ()
-  | Ok v -> Alcotest.failf "expected enum failure, got %d" v
+  | Ok v -> Alcotest.failf "expected enum failure, got %d" (UInt8.to_int v)
   | Error e -> Alcotest.failf "expected Invalid_enum: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound first" 0xff (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "rewound first" 0xff (read_u8 reader);
   Alcotest.(check int) "rest intact" 0x0102 (read_u16 uint16be reader)
 
 let test_stream_rewind_partial_fixed () =
@@ -1269,7 +1283,7 @@ let test_stream_rewind_partial_fixed () =
   | Ok v -> Alcotest.failf "expected eof, got %d" (UInt32.to_int v)
   | Error e -> Alcotest.failf "expected Unexpected_eof: %a" pp_parse_error e);
   Alcotest.(check int) "rewound" 0x0102 (read_u16 uint16be reader);
-  Alcotest.(check int) "rest intact" 0x03 (reader_decode_ok uint8 reader)
+  Alcotest.(check int) "rest intact" 0x03 (read_u8 reader)
 
 let test_stream_rewind_incremental () =
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 "abc" in
@@ -1277,7 +1291,7 @@ let test_stream_rewind_incremental () =
   | Error { kind = Missing_terminator; _ } -> ()
   | Ok s -> Alcotest.failf "expected missing NUL, got %S" s
   | Error e -> Alcotest.failf "expected Missing_terminator: %a" pp_parse_error e);
-  Alcotest.(check int) "rewound" 0x61 (reader_decode_ok uint8 reader);
+  Alcotest.(check int) "rewound" 0x61 (read_u8 reader);
   Alcotest.(check int) "rest intact" 0x6263 (read_u16 uint16be reader)
 
 let test_stream_rewind_consumes_rest () =
@@ -1328,10 +1342,12 @@ let test_enum_open_of_string_accepts_unlisted () =
     (* 50, not a named code *)
   in
   (match Codec.decode c (Bytes.of_string unlisted) 0 with
-  | Ok v -> Alcotest.(check int) "codec decode accepts unlisted" 50 v
+  | Ok v ->
+      Alcotest.(check int) "codec decode accepts unlisted" 50 (UInt8.to_int v)
   | Error e -> Alcotest.failf "codec rejected unlisted: %a" pp_parse_error e);
   match of_string typ unlisted with
-  | Ok v -> Alcotest.(check int) "of_string accepts unlisted" 50 v
+  | Ok v ->
+      Alcotest.(check int) "of_string accepts unlisted" 50 (UInt8.to_int v)
   | Error e -> Alcotest.failf "of_string rejected unlisted: %a" pp_parse_error e
 
 (* [bit], [lookup], [enum], [enum_open] and [variants] all refine the integer a

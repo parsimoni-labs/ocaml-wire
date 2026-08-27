@@ -397,6 +397,13 @@ module SInt16 = SInt16
     it is, only building one names the range, and [SInt16.v 40000] is refused
     there rather than at the encoder. *)
 
+module UInt8 = UInt8
+(** Unsigned 8-bit integers, the carrier of {!uint8}.
+
+    A [private int] for the same reason {!SInt8} is, over the byte's unsigned
+    range: a value reads as the [int] it is, only building one names the range,
+    and [UInt8.v 511] is refused there rather than at the encoder. *)
+
 module UInt16 = UInt16
 (** Unsigned 16-bit integers, the carrier of {!uint16} and {!uint16be}.
 
@@ -454,7 +461,7 @@ module Field : sig
       parent codec. This shape projects to 3D as a gate-selected sub-codec.
 
       {[
-      type ext = { len : int; items : int list }
+      type ext = { len : UInt8.t; items : UInt8.t list }
 
       let f_ext_len = Field.v "ExtLen" uint8
 
@@ -570,16 +577,19 @@ end
 
     Every fixed-width integer accepts exactly the range its decoder produces:
     [0] to [2^n - 1] for an unsigned width, [-2^(n-1)] to [2^(n-1) - 1] for a
-    signed one. Encoding anything else raises [Invalid_argument] rather than
-    dropping the bits that do not fit, on every entry point ({!to_string},
-    {!Codec.encode} and {!Codec.set} alike). OCaml carries the narrow widths in
-    a plain [int], which holds far more than the field does, so [uint8] given
-    [0x1FF] would otherwise put an [0xFF] on the wire that reads back as a
-    perfectly legal [255], with nothing left to say the caller meant something
-    else. *)
+    signed one, and carries that range in its own type, so a number the field
+    cannot hold is refused where the value is built. A {!bits} slice is the one
+    shape left in a plain [int], which holds far more than the slice does, so a
+    four-bit slice given [0x1F] raises [Invalid_argument] on every entry point
+    ({!to_string}, {!Codec.encode} and {!Codec.set} alike) rather than putting
+    an [0xF] on the wire that reads back as a perfectly legal [15], with nothing
+    left to say the caller meant something else. *)
 
-val uint8 : int typ
-(** Unsigned 8-bit integer. Encodes [0] to [255]. *)
+val uint8 : UInt8.t typ
+(** Unsigned 8-bit integer. Holds [0] to [255]: [511] is not a [uint8], even
+    though its low byte is a legal one, and would come back from the decoder as
+    [255]. The range is the carrier's, so {!UInt8.v} refuses it where the value
+    is built and every encode path takes only values the field holds. *)
 
 val uint16 : UInt16.t typ
 (** Unsigned 16-bit little-endian integer. Holds [0] to [65535]: [70000] is not

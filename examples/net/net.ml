@@ -56,8 +56,8 @@ type ipv4 = {
   identification : UInt16.t;
   flags : int;
   fragment_offset : int;
-  ttl : int;
-  protocol : int;
+  ttl : UInt8.t;
+  protocol : UInt8.t;
   checksum : UInt16.t;
   src : UInt32.t;
   dst : UInt32.t;

@@ -97,7 +97,8 @@ let test_nested_where_rejected () =
     [
       Types.field "n" Types.uint8;
       Types.field "maybe"
-        (Types.optional_or guard ~default:0 (Types.where guard Types.uint8));
+        (Types.optional_or guard ~default:Wire.UInt8.zero
+           (Types.where guard Types.uint8));
     ];
   (* The container may be reached through a decoration, so the walk has to see
      past a [map] to the element underneath. *)
@@ -116,8 +117,8 @@ let test_where_in_case_body_rejected () =
   let tagged =
     Types.casetype "Body" Types.uint8
       [
-        Types.case ~index:1 (Types.where guard Types.uint8) ~inject:Fun.id
-          ~project:(fun v -> Some v);
+        Types.case ~index:(Wire.UInt8.v 1) (Types.where guard Types.uint8)
+          ~inject:Fun.id ~project:(fun v -> Some v);
       ]
   in
   rejects "casetype case body" ~codec:"Tagged" ~mentions:[ "payload" ]

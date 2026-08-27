@@ -230,10 +230,10 @@ let minimal_case =
       set;
       write_template = Bytes.copy minimal_dataset.packed;
       write_offset = 0;
-      write_value = 42;
-      equal = Int.equal;
+      write_value = Wire.UInt8.v 42;
+      equal = Wire.UInt8.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt8.v;
     }
 
 let all_ints_case =
@@ -553,10 +553,10 @@ let constrained_case =
       set;
       write_template = Bytes.copy constrained_dataset.items.(0);
       write_offset = 0;
-      write_value = 9;
-      equal = Int.equal;
+      write_value = Wire.UInt8.v 9;
+      equal = Wire.UInt8.equal;
       bench_read = true;
-      of_c_field = id_int;
+      of_c_field = of_int Wire.UInt8.v;
     }
 
 let all_cases =

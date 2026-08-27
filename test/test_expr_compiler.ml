@@ -15,7 +15,7 @@ open Wire.Private
 type ints = (string * int) list
 type i64s = (string * int64) list
 
-let param name : (int, Types.param_input) Types.param_handle =
+let param name : (Wire.UInt8.t, Types.param_input) Types.param_handle =
   {
     Types.id = 1;
     name;

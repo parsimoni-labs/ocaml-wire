@@ -31,7 +31,7 @@ let decode_record codec s =
 
 (* -- Record codec tests -- *)
 
-type simple_record = { a : int; b : UInt16.t; c : UInt32.t }
+type simple_record = { a : UInt8.t; b : UInt16.t; c : UInt32.t }
 
 let simple_record_codec =
   let open Codec in
@@ -44,7 +44,9 @@ let simple_record_codec =
     ]
 
 let test_record_encode () =
-  let v = { a = 0x42; b = UInt16.v 0x1234; c = UInt32.of_int32 0x56789ABCl } in
+  let v =
+    { a = UInt8.v 0x42; b = UInt16.v 0x1234; c = UInt32.of_int32 0x56789ABCl }
+  in
   match encode_record simple_record_codec v with
   | Error e -> Alcotest.failf "%a" pp_parse_error e
   | Ok encoded ->
@@ -59,21 +61,22 @@ let test_record_decode () =
   let input = "\x42\x34\x12\xBC\x9A\x78\x56" in
   match decode_record simple_record_codec input with
   | Ok v ->
-      Alcotest.(check int) "a" 0x42 v.a;
+      Alcotest.(check int) "a" 0x42 (UInt8.to_int v.a);
       Alcotest.(check int) "b" 0x1234 (UInt16.to_int v.b);
       Alcotest.(check int32) "c" 0x56789ABCl (UInt32.to_int32 v.c)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
 let test_record_roundtrip () =
   let original =
-    { a = 0xAB; b = UInt16.v 0xCDEF; c = UInt32.of_int 0x12345678 }
+    { a = UInt8.v 0xAB; b = UInt16.v 0xCDEF; c = UInt32.of_int 0x12345678 }
   in
   match encode_record simple_record_codec original with
   | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
   | Ok encoded -> (
       match decode_record simple_record_codec encoded with
       | Ok decoded ->
-          Alcotest.(check int) "a roundtrip" original.a decoded.a;
+          Alcotest.(check int)
+            "a roundtrip" (UInt8.to_int original.a) (UInt8.to_int decoded.a);
           Alcotest.(check int)
             "b roundtrip" (UInt16.to_int original.b) (UInt16.to_int decoded.b);
           Alcotest.(check int)
@@ -115,7 +118,7 @@ let test_struct_of_record () =
   Alcotest.(check bool) "contains field b" true (contains ~sub:"b;" output);
   Alcotest.(check bool) "contains field c" true (contains ~sub:"c;" output)
 
-type meta_record = { x : int }
+type meta_record = { x : UInt8.t }
 
 let meta_f_x = Field.v "x" uint8
 
@@ -139,7 +142,7 @@ let meta_codec =
 let test_codec_metadata_decode_ok () =
   let buf = Bytes.of_string "\x08" in
   let v = decode_ok (Codec.decode meta_codec buf 0) in
-  Alcotest.(check int) "x" 8 v.x
+  Alcotest.(check int) "x" 8 (UInt8.to_int v.x)
 
 let test_metadata_constraint_fail () =
   let buf = Bytes.of_string "\x0B" in
@@ -176,14 +179,18 @@ let projection_codec =
     ]
 
 let test_metadata_with_params () =
-  let env = Codec.env projection_codec |> Param.bind projection_limit 10 in
+  let env =
+    Codec.env projection_codec |> Param.bind projection_limit (UInt8.v 10)
+  in
   let buf = Bytes.of_string "\x08" in
   let v = decode_ok (Codec.decode ~env projection_codec buf 0) in
-  Alcotest.(check int) "x" 8 v.x;
-  Alcotest.(check int) "outx" 8 (Param.get env projection_outx)
+  Alcotest.(check int) "x" 8 (UInt8.to_int v.x);
+  Alcotest.(check int) "outx" 8 (UInt8.to_int (Param.get env projection_outx))
 
 let test_metadata_where_fail () =
-  let env = Codec.env projection_codec |> Param.bind projection_limit 7 in
+  let env =
+    Codec.env projection_codec |> Param.bind projection_limit (UInt8.v 7)
+  in
   let buf = Bytes.of_string "\x08" in
   match Codec.decode ~env projection_codec buf 0 with
   | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
@@ -211,7 +218,7 @@ let test_validate_rejects_bad_where () =
   let buf = Bytes.of_string "\x07" in
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
   (* get returns raw value without checking *)
-  Alcotest.(check int) "get bypasses where" 7 (get_x buf 0);
+  Alcotest.(check int) "get bypasses where" 7 (UInt8.to_int (get_x buf 0));
   (* validate catches the violation *)
   match Codec.validate validate_codec buf 0 with
   | () -> Alcotest.fail "expected validate to reject where violation"
@@ -221,7 +228,7 @@ let test_validate_rejects_bad_constraint () =
   (* constraint requires x <= 10, set x = 11 *)
   let buf = Bytes.of_string "\x0B" in
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
-  Alcotest.(check int) "get bypasses constraint" 11 (get_x buf 0);
+  Alcotest.(check int) "get bypasses constraint" 11 (UInt8.to_int (get_x buf 0));
   match Codec.validate validate_codec buf 0 with
   | () -> Alcotest.fail "expected validate to reject constraint violation"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
@@ -231,7 +238,7 @@ let test_validate_then_get () =
   let buf = Bytes.of_string "\x08" in
   Codec.validate validate_codec buf 0;
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
-  Alcotest.(check int) "validate then get" 8 (get_x buf 0)
+  Alcotest.(check int) "validate then get" 8 (UInt8.to_int (get_x buf 0))
 
 (* [Codec.validate] is the safety gate before a zero-copy [get] on untrusted
    input, so it must run decode's structural bounds check even for a codec with
@@ -659,7 +666,7 @@ let test_reject_nested_where () =
             Field.v "body"
               (casetype "BodyW" uint8
                  [
-                   case ~index:1
+                   case ~index:(UInt8.v 1)
                      (where Expr.(int 1 = int 1) uint8)
                      ~inject:(fun s -> s)
                      ~project:Option.some;
@@ -804,8 +811,10 @@ let test_codec_array_cardinality () =
     Codec.v "ArrayList" Fun.id
       Codec.[ Field.v "values" (array ~len:(int 3) uint8) $ Fun.id ]
   in
-  expect_codec_array_cardinality "short list" list [ 1; 2 ] 3 2;
-  expect_codec_array_cardinality "long list" list [ 1; 2; 3; 4 ] 3 4;
+  expect_codec_array_cardinality "short list" list [ UInt8.v 1; UInt8.v 2 ] 3 2;
+  expect_codec_array_cardinality "long list" list
+    [ UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 ]
+    3 4;
   let custom =
     Codec.v "ArrayCustom" Fun.id
       Codec.
@@ -814,8 +823,11 @@ let test_codec_array_cardinality () =
           $ Fun.id;
         ]
   in
-  expect_codec_array_cardinality "short custom sequence" custom [| 1; 2 |] 3 2;
-  expect_codec_array_cardinality "long custom sequence" custom [| 1; 2; 3; 4 |]
+  expect_codec_array_cardinality "short custom sequence" custom
+    [| UInt8.v 1; UInt8.v 2 |]
+    3 2;
+  expect_codec_array_cardinality "long custom sequence" custom
+    [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
 (* Field.repeat over a zeroterm element: a list of NUL-terminated strings
@@ -849,7 +861,7 @@ let test_repeat_zeroterm_projection () =
 (* Dynamic [Field.optional] over a variable-size inner. Group A: a byte array
    sized by a prior field. The gate drives present/absent, and both round-trip
    (absent consumes no bytes, present consumes the inner). *)
-type opt_var = { gate : int; len : int; body : string option }
+type opt_var = { gate : UInt8.t; len : UInt8.t; body : string option }
 
 let opt_var_codec =
   let f_gate = Field.v "gate" uint8 in
@@ -875,10 +887,15 @@ let roundtrip codec v =
   (n, Codec.decode_exn codec buf 0)
 
 let test_optional_var_byte_array () =
-  let n, d = roundtrip opt_var_codec { gate = 1; len = 3; body = Some "abc" } in
+  let n, d =
+    roundtrip opt_var_codec
+      { gate = UInt8.v 1; len = UInt8.v 3; body = Some "abc" }
+  in
   Alcotest.(check int) "present size" 5 n;
   Alcotest.(check (option string)) "present body" (Some "abc") d.body;
-  let n, d = roundtrip opt_var_codec { gate = 0; len = 0; body = None } in
+  let n, d =
+    roundtrip opt_var_codec { gate = UInt8.v 0; len = UInt8.v 0; body = None }
+  in
   Alcotest.(check int) "absent size" 2 n;
   Alcotest.(check (option string)) "absent body" None d.body
 
@@ -890,11 +907,11 @@ let sub_string_codec =
     (fun _slen s -> s)
     Codec.
       [
-        f_slen $ String.length;
+        (f_slen $ fun x -> UInt8.v (String.length x));
         Field.v "sdata" (byte_array ~size:(Field.ref f_slen)) $ Fun.id;
       ]
 
-type opt_sub = { g : int; desc : string option }
+type opt_sub = { g : UInt8.t; desc : string option }
 
 let opt_sub_codec =
   let f_g = Field.v "g" uint8 in
@@ -908,9 +925,9 @@ let opt_sub_codec =
     Codec.[ (f_g $ fun r -> r.g); (f_desc $ fun r -> r.desc) ]
 
 let test_optional_self_delimiting_codec () =
-  let _, d = roundtrip opt_sub_codec { g = 1; desc = Some "hi" } in
+  let _, d = roundtrip opt_sub_codec { g = UInt8.v 1; desc = Some "hi" } in
   Alcotest.(check (option string)) "present desc" (Some "hi") d.desc;
-  let n, d = roundtrip opt_sub_codec { g = 0; desc = None } in
+  let n, d = roundtrip opt_sub_codec { g = UInt8.v 0; desc = None } in
   Alcotest.(check int) "absent size" 1 n;
   Alcotest.(check (option string)) "absent desc" None d.desc
 
@@ -918,7 +935,7 @@ let test_optional_self_delimiting_codec () =
    Keeping those fields in a sub-codec lets their expressions stay local to
    the group, while a following payload remains in the parent codec. This is
    the shape of an optional secondary header that declares its own length. *)
-type transfer_extensions = { items_len : int; items : int list }
+type transfer_extensions = { items_len : UInt8.t; items : UInt8.t list }
 
 let transfer_extensions_codec =
   let f_len = Field.v "ext_items_len" uint8 in
@@ -928,9 +945,9 @@ let transfer_extensions_codec =
     Codec.[ (f_len $ fun r -> r.items_len); (f_items $ fun r -> r.items) ]
 
 type transfer_segment = {
-  start : int;
+  start : UInt8.t;
   extensions : transfer_extensions option;
-  data_len : int;
+  data_len : UInt8.t;
   data : string;
 }
 
@@ -957,18 +974,22 @@ let transfer_segment_codec =
 let test_optional_length_prefixed_group () =
   let present =
     {
-      start = 1;
-      extensions = Some { items_len = 2; items = [ 0xA1; 0xB2 ] };
-      data_len = 3;
+      start = UInt8.v 1;
+      extensions =
+        Some { items_len = UInt8.v 2; items = [ UInt8.v 0xA1; UInt8.v 0xB2 ] };
+      data_len = UInt8.v 3;
       data = "xyz";
     }
   in
   let n, decoded = roundtrip transfer_segment_codec present in
   Alcotest.(check int) "present size" 8 n;
   Alcotest.(check (list int))
-    "extension items" [ 0xA1; 0xB2 ] (Option.get decoded.extensions).items;
+    "extension items" [ 0xA1; 0xB2 ]
+    (List.map UInt8.to_int (Option.get decoded.extensions).items);
   Alcotest.(check string) "following data" "xyz" decoded.data;
-  let absent = { start = 0; extensions = None; data_len = 2; data = "ok" } in
+  let absent =
+    { start = UInt8.zero; extensions = None; data_len = UInt8.v 2; data = "ok" }
+  in
   let n, decoded = roundtrip transfer_segment_codec absent in
   Alcotest.(check int) "absent size" 4 n;
   Alcotest.(check bool)
@@ -992,7 +1013,7 @@ let test_optional_length_prefixed_group () =
 (* Wire.array over a fixed byte_array element: a fixed-count list of n-byte
    chunks (e.g. an array of IPv4 addresses). Used to project a double
    [:byte-size]; the element is now emitted as bare bytes under the budget. *)
-type arr_chunks = { atag : int; addrs : string list }
+type arr_chunks = { atag : UInt8.t; addrs : string list }
 
 let arr_chunks_codec =
   let f_tag = Field.v "tag" uint8 in
@@ -1004,7 +1025,7 @@ let arr_chunks_codec =
     Codec.[ (f_tag $ fun r -> r.atag); (f_addrs $ fun r -> r.addrs) ]
 
 let test_array_byte_array_element () =
-  let v = { atag = 7; addrs = [ "aaaa"; "bbbb"; "cccc" ] } in
+  let v = { atag = UInt8.v 7; addrs = [ "aaaa"; "bbbb"; "cccc" ] } in
   let sz = Codec.size_of_value arr_chunks_codec v in
   Alcotest.(check int) "wire size" 13 sz;
   let buf = Bytes.create sz in
@@ -1523,7 +1544,7 @@ let test_array_accepts_fixed_byte_span () =
    structs. Decoding raised Failure "build_field_reader: unsupported type"
    because the array element reader had no Codec case. The schema projects the
    element as the sub-struct under a [:byte-size] budget. *)
-type pt = { px : int; py : UInt16.t }
+type pt = { px : UInt8.t; py : UInt16.t }
 
 let pt_codec =
   Codec.v "Pt"
@@ -1534,7 +1555,7 @@ let pt_codec =
         (Field.v "py" uint16be $ fun r -> r.py);
       ]
 
-type arr_recs = { rtag : int; pts : pt list }
+type arr_recs = { rtag : UInt8.t; pts : pt list }
 
 let arr_recs_codec =
   Codec.v "ArrRecs"
@@ -1548,9 +1569,12 @@ let arr_recs_codec =
 let test_array_record_element () =
   let v =
     {
-      rtag = 9;
+      rtag = UInt8.v 9;
       pts =
-        [ { px = 1; py = UInt16.v 0x0203 }; { px = 4; py = UInt16.v 0x0506 } ];
+        [
+          { px = UInt8.v 1; py = UInt16.v 0x0203 };
+          { px = UInt8.v 4; py = UInt16.v 0x0506 };
+        ];
     }
   in
   let sz = Codec.size_of_value arr_recs_codec v in
@@ -1561,8 +1585,8 @@ let test_array_record_element () =
   | Ok d ->
       Alcotest.(check (list (pair int int)))
         "pts"
-        (List.map (fun p -> (p.px, UInt16.to_int p.py)) v.pts)
-        (List.map (fun p -> (p.px, UInt16.to_int p.py)) d.pts)
+        (List.map (fun p -> (UInt8.to_int p.px, UInt16.to_int p.py)) v.pts)
+        (List.map (fun p -> (UInt8.to_int p.px, UInt16.to_int p.py)) d.pts)
   | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
 
 let test_array_record_projection () =
@@ -1645,17 +1669,17 @@ let test_nested_exact_region () =
 
 (* A casetype whose case body is a [nested] region (a scalar in a fixed span):
    the tag-dispatched case decodes and sizes through the region. *)
-type nest_case = N of SInt32.t | U of int
+type nest_case = N of SInt32.t | U of UInt8.t
 
 let nest_case_codec =
   let ct =
     casetype "NcT" uint8
       [
-        case ~index:1
+        case ~index:(UInt8.v 1)
           (nested ~size:(int 4) int32be)
           ~inject:(fun v -> N v)
           ~project:(function N v -> Some v | _ -> None);
-        case ~index:2 uint8
+        case ~index:(UInt8.v 2) uint8
           ~inject:(fun v -> U v)
           ~project:(function U v -> Some v | _ -> None);
       ]
@@ -1670,7 +1694,7 @@ let test_casetype_nested_case_body () =
       Alcotest.(check bool)
         "roundtrip" true
         (decode_ok (Codec.decode nest_case_codec buf 0) = v))
-    [ N (SInt32.of_int 12345); U 7 ]
+    [ N (SInt32.of_int 12345); U (UInt8.v 7) ]
 
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
    a byte budget. Decodes the list and projects to a single [:byte-size]
@@ -1905,7 +1929,9 @@ let test_optional_reject_bitfield () =
 let test_casetype_reject_greedy_case_body () =
   let build inner =
     casetype "Greedy" uint8
-      [ case ~index:1 inner ~inject:(fun s -> s) ~project:Option.some ]
+      [
+        case ~index:(UInt8.v 1) inner ~inject:(fun s -> s) ~project:Option.some;
+      ]
   in
   Alcotest.(check bool)
     "casetype with all_bytes case body rejected" true
@@ -1936,12 +1962,13 @@ let test_greedy_not_last_rejected () =
       (fun a b -> (a, b))
       Codec.[ Field.v "n" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
   in
-  let v = (5, "tail") in
+  let v = (UInt8.v 5, "tail") in
   let buf = Bytes.create (Codec.size_of_value c v) in
   Codec.encode c v buf 0;
   Alcotest.(check bool)
     "greedy last roundtrip" true
-    (decode_ok (Codec.decode c buf 0) = v)
+    (let n, rest = decode_ok (Codec.decode c buf 0) in
+     UInt8.equal n (fst v) && String.equal rest (snd v))
 
 (* A casetype whose case body is a sub-codec ending in a greedy field consumes
    the rest of the buffer when that case is selected; placed before another
@@ -1954,10 +1981,10 @@ let test_casetype_greedy_case_not_last_rejected () =
   let ct =
     casetype "CtG" uint8
       [
-        case ~index:1 uint8
+        case ~index:(UInt8.v 1) uint8
           ~inject:(fun v -> `U v)
           ~project:(function `U v -> Some v | _ -> None);
-        case ~index:2 (codec greedy)
+        case ~index:(UInt8.v 2) (codec greedy)
           ~inject:(fun v -> `G v)
           ~project:(function `G v -> Some v | _ -> None);
       ]
@@ -1986,10 +2013,10 @@ let test_casetype_wrapped_greedy_not_last_rejected () =
   let payload =
     casetype "GreedyCase" uint8
       [
-        case ~index:1 (codec body)
+        case ~index:(UInt8.v 1) (codec body)
           ~inject:(fun v -> `Greedy v)
           ~project:(function `Greedy v -> Some v | _ -> None);
-        case ~index:2 uint8
+        case ~index:(UInt8.v 2) uint8
           ~inject:(fun v -> `Byte v)
           ~project:(function `Byte v -> Some v | _ -> None);
       ]
@@ -2026,7 +2053,7 @@ let test_optional_greedy_not_last_rejected () =
   check_rejected "dynamic optional greedy body before tail rejected"
     (Field.optional "body" ~present:Expr.(int 1 = int 1) (codec greedy));
   check_rejected "optional_or greedy body before tail rejected"
-    (Field.optional_or "body" ~present:Expr.true_ ~default:(0, "")
+    (Field.optional_or "body" ~present:Expr.true_ ~default:(UInt8.zero, "")
        (codec greedy));
   Alcotest.(check bool)
     "statically absent optional greedy body before tail accepted" false
@@ -2107,7 +2134,7 @@ let test_casetype_reject_unprojectable_tag () =
   Alcotest.(check bool)
     "little-endian enum tag accepted" false
     (raises_invalid (fun () ->
-         one_case ~index:1 (enum "TagLe" [ ("A", 0); ("B", 1) ] uint8)))
+         one_case ~index:(UInt8.v 1) (enum "TagLe" [ ("A", 0); ("B", 1) ] uint8)))
 
 (* -- Codec bitfield tests -- *)
 
@@ -2369,14 +2396,14 @@ let exact_vs_codec =
 let test_exact_byte_field_expression_size () =
   let buf = Bytes.create 16 in
   expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_vb_codec (4, "abcdef") buf 0);
+      Codec.encode exact_vb_codec (UInt8.v 4, "abcdef") buf 0);
   expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_vb_codec (4, "ab") buf 0);
+      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf 0);
   expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_vs_codec (4, slice_of_string "abcdef") buf 0);
+      Codec.encode exact_vs_codec (UInt8.v 4, slice_of_string "abcdef") buf 0);
   expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_vs_codec (4, slice_of_string "ab") buf 0);
-  Codec.encode exact_vb_codec (4, "abcd") buf 0;
+      Codec.encode exact_vs_codec (UInt8.v 4, slice_of_string "ab") buf 0);
+  Codec.encode exact_vb_codec (UInt8.v 4, "abcd") buf 0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
 (* Encode must not emit a value its own decoder rejects: a refinement the
@@ -2412,13 +2439,13 @@ let open_enum_codec =
 let test_encode_rejects_unlisted_enum () =
   let buf = Bytes.create 1 in
   expect_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
-      Codec.encode closed_enum_codec 99 buf 0);
+      Codec.encode closed_enum_codec (UInt8.v 99) buf 0);
   expect_decode_rejects "closed enum" closed_enum_codec "\099";
-  Codec.encode closed_enum_codec 2 buf 0;
+  Codec.encode closed_enum_codec (UInt8.v 2) buf 0;
   Alcotest.(check string) "listed value" "\002" (Bytes.to_string buf);
   (* An open enum documents its codes without restricting them, so encode
      stays permissive exactly where decode does. *)
-  Codec.encode open_enum_codec 99 buf 0;
+  Codec.encode open_enum_codec (UInt8.v 99) buf 0;
   Alcotest.(check string) "open enum" "\099" (Bytes.to_string buf)
 
 (* The compiled codec reaches an enum / lookup / variants / bit field through
@@ -2535,9 +2562,9 @@ let zeros_codec =
 let test_encode_rejects_non_zero_padding () =
   let buf = Bytes.create 4 in
   expect_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ] (fun () ->
-      Codec.encode zeros_codec (1, "abc") buf 0);
+      Codec.encode zeros_codec (UInt8.v 1, "abc") buf 0);
   expect_decode_rejects "all_zeros" zeros_codec "\001abc";
-  Codec.encode zeros_codec (1, "\000\000\000") buf 0;
+  Codec.encode zeros_codec (UInt8.v 1, "\000\000\000") buf 0;
   Alcotest.(check string)
     "zero padding" "\001\000\000\000" (Bytes.to_string buf)
 
@@ -2676,15 +2703,15 @@ let codec_where_codec =
 let test_encode_rejects_where_violation () =
   let buf = Bytes.create 2 in
   expect_encode_rejects "typ where" ~names:[ "TypWhereEncode"; "constraint" ]
-    (fun () -> Codec.encode where_codec (6, 0) buf 0);
+    (fun () -> Codec.encode where_codec (UInt8.v 6, UInt8.v 0) buf 0);
   expect_decode_rejects "typ where" where_codec "\006\000";
-  Codec.encode where_codec (1, 0) buf 0;
+  Codec.encode where_codec (UInt8.v 1, UInt8.v 0) buf 0;
   Alcotest.(check string) "satisfied cond" "\001\000" (Bytes.to_string buf);
   expect_encode_rejects "codec where"
     ~names:[ "CodecWhereEncode"; "constraint" ] (fun () ->
-      Codec.encode codec_where_codec (6, 0) buf 0);
+      Codec.encode codec_where_codec (UInt8.v 6, UInt8.v 0) buf 0);
   expect_decode_rejects "codec where" codec_where_codec "\006\000";
-  Codec.encode codec_where_codec (1, 0) buf 0;
+  Codec.encode codec_where_codec (UInt8.v 1, UInt8.v 0) buf 0;
   Alcotest.(check string)
     "satisfied codec where" "\001\000" (Bytes.to_string buf)
 
@@ -3039,63 +3066,10 @@ let test_map_inherits_exact_width () =
       set buf 0 0xFF;
       Bytes.to_string buf)
 
-(* The fixed-width scalars are the same rule at a fixed width. [uint8] is the
-   one still carried in a plain [int], which holds far more than the byte does,
-   so nothing but a runtime check stands between a caller's 0x1FF and an 0xFF on
-   the wire that reads back as a perfectly legal 255. Every wider scalar puts
-   that range in its carrier instead, so this sweep has no out-of-range value to
-   hand it; [test_uint32_of_int_range], [test_sint32_of_int_range] and the
-   [sint8], [sint16] and [uint16] suites pin those refusals, one step earlier
-   than an encoder can reach. *)
-let scalar_range_codec name typ =
-  let cf = Codec.(Field.v "v" typ $ Fun.id) in
-  (Codec.v name Fun.id Codec.[ cf ], cf)
-
-(* Sweep one scalar typ. Every [outside] value must be refused by all three
-   entry points and leave the buffer untouched; every [inside] one must write
-   the same bytes through both encoders and read back through [Codec.get]. *)
-let check_scalar_range ~name ~typ ~sub ~equal ~pp ~inside ~outside =
-  let codec, cf = scalar_range_codec name typ in
-  let size = Codec.wire_size codec in
-  let set = Staged.unstage (Codec.set codec cf) in
-  let get = Staged.unstage (Codec.get codec cf) in
-  List.iter
-    (fun v ->
-      let label = Fmt.str "%s <- %a" name pp v in
-      expect_exact_width_error (label ^ " to_string") ~sub (fun () ->
-          Wire.to_string typ v);
-      expect_exact_width_error (label ^ " Codec.encode") ~sub (fun () ->
-          let buf = Bytes.make size '\x00' in
-          Codec.encode codec v buf 0;
-          Bytes.to_string buf);
-      let buf = Bytes.make size '\x00' in
-      expect_exact_width_error (label ^ " Codec.set") ~sub (fun () ->
-          set buf 0 v;
-          Bytes.to_string buf);
-      Alcotest.(check string)
-        (label ^ ": rejected set left the buffer alone")
-        (String.make size '\x00') (Bytes.to_string buf))
-    outside;
-  List.iter
-    (fun v ->
-      let label = Fmt.str "%s <- %a" name pp v in
-      let buf = Bytes.make size '\x00' in
-      Codec.encode codec v buf 0;
-      Alcotest.(check string)
-        (label ^ ": widest legal value agrees across entry points")
-        (Wire.to_string typ v) (Bytes.to_string buf);
-      Bytes.fill buf 0 size '\x00';
-      set buf 0 v;
-      Alcotest.(check bool)
-        (label ^ ": widest legal value reads back")
-        true
-        (equal (get buf 0) v))
-    inside
-
-let test_encode_exact_unsigned_scalar () =
-  check_scalar_range ~name:"uint8" ~typ:uint8
-    ~sub:"does not fit an unsigned 8-bit field" ~equal:Int.equal ~pp:Fmt.int
-    ~inside:[ 0; 0xFF ] ~outside:[ 0x100; -1 ]
+(* Every fixed-width scalar puts that range in its carrier instead, so there is
+   no out-of-range value left to hand an encoder: [test_uint32_of_int_range],
+   [test_sint32_of_int_range] and the [sint8], [sint16], [uint8] and [uint16]
+   suites pin those refusals, one step earlier than an encoder can reach. *)
 
 (* The signed 32-bit range is enforced where the value is built rather than
    where it is written, so a number the field cannot hold never becomes an
@@ -3211,24 +3185,6 @@ let test_four_byte_signed_preserves_wire () =
         [ String.make 4 '\xff'; "\x80\x00\x00\x00"; "\x7f\xff\xff\xff" ])
     [ ("int32", int32); ("int32be", int32be) ]
 
-(* [array] and [repeat] elements are written by an encoder of their own, so a
-   value no element can hold has to be refused on that path too. *)
-let test_element_exact_width () =
-  let acf = Codec.(Field.v "vs" (array ~len:(int 3) uint8) $ Fun.id) in
-  let acodec = Codec.v "ArrayU8" Fun.id Codec.[ acf ] in
-  expect_exact_width_error "array(3,uint8) <- [0; 0x1FF; 0]"
-    ~sub:"does not fit an unsigned 8-bit field" (fun () ->
-      let buf = Bytes.make 3 '\x00' in
-      Codec.encode acodec [ 0; 0x1FF; 0 ] buf 0;
-      Bytes.to_string buf);
-  let rcf = Codec.(Field.repeat "vs" ~size:(int 3) uint8 $ Fun.id) in
-  let rcodec = Codec.v "RepeatU8" Fun.id Codec.[ rcf ] in
-  expect_exact_width_error "repeat(3,uint8) <- [0; 0x1FF; 0]"
-    ~sub:"does not fit an unsigned 8-bit field" (fun () ->
-      let buf = Bytes.make 3 '\x00' in
-      Codec.encode rcodec [ 0; 0x1FF; 0 ] buf 0;
-      Bytes.to_string buf)
-
 (* The other end of the rule: an [int64] is exactly the eight bytes written, so
    no value of it is out of range and none may be refused. A guard here would be
    dead code that only ever rejected a legal frame. *)
@@ -3325,7 +3281,7 @@ let test_packed_bf_size () =
 
 type packed_bool_header = {
   magic : string;
-  version : int;
+  version : UInt8.t;
   reserved : int;
   flag : bool;
 }
@@ -3342,7 +3298,9 @@ let packed_bool_header_codec =
       ]
 
 let test_packed_mapped_bf_size () =
-  let value = { magic = "dtn!"; version = 4; reserved = 0; flag = true } in
+  let value =
+    { magic = "dtn!"; version = UInt8.v 4; reserved = 0; flag = true }
+  in
   Alcotest.(check int)
     "wire_size counts packed bool bitfield once" 6
     (Codec.wire_size packed_bool_header_codec);
@@ -3653,11 +3611,17 @@ let test_view_shared_set_independent () =
 
 let test_action_fires_decode_env () =
   (* decode_env fires actions and syncs output params *)
-  let env = Codec.env projection_codec |> Param.bind projection_limit 10 in
+  let env =
+    Codec.env projection_codec |> Param.bind projection_limit (UInt8.v 10)
+  in
   let buf = Bytes.of_string "\x05" in
-  Alcotest.(check int) "outx before" 0 (Param.get env projection_outx);
+  Alcotest.(check int)
+    "outx before" 0
+    (UInt8.to_int (Param.get env projection_outx));
   let _v = decode_ok (Codec.decode ~env projection_codec buf 0) in
-  Alcotest.(check int) "outx after decode_env" 5 (Param.get env projection_outx)
+  Alcotest.(check int)
+    "outx after decode_env" 5
+    (UInt8.to_int (Param.get env projection_outx))
 
 let test_action_fires_on_get () =
   (* get fires field actions. A return_bool action that rejects odd values
@@ -3675,7 +3639,9 @@ let test_action_fires_on_get () =
   let codec = Codec.v "ActionGet" (fun v -> v) [ cf_v ] in
   let get_v = Staged.unstage (Codec.get codec cf_v) in
   (* Even value: action passes *)
-  Alcotest.(check int) "get even" 0x42 (get_v (Bytes.of_string "\x42") 0);
+  Alcotest.(check int)
+    "get even" 0x42
+    (UInt8.to_int (get_v (Bytes.of_string "\x42") 0));
   (* Odd value: action rejects *)
   match get_v (Bytes.of_string "\x43") 0 with
   | _ -> Alcotest.fail "expected action to reject odd value"
@@ -3700,7 +3666,7 @@ let test_action_unfired_by_validate () =
   (* validate does NOT fire actions *)
   Alcotest.(check int)
     "action not fired by validate" 0
-    (Param.get env action_out2)
+    (UInt8.to_int (Param.get env action_out2))
 
 let test_get_noaction_zero_overhead () =
   (* get on a field without an action should not allocate.
@@ -3709,7 +3675,7 @@ let test_get_noaction_zero_overhead () =
   let codec = Codec.v "NoAction" (fun v -> v) [ cf_v ] in
   let buf = Bytes.of_string "\x42" in
   let get_v = Staged.unstage (Codec.get codec cf_v) in
-  Alcotest.(check int) "get returns value" 0x42 (get_v buf 0)
+  Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int (get_v buf 0))
 
 let test_get_with_env () =
   (* get ~env fires action and syncs output params to env *)
@@ -3727,8 +3693,10 @@ let test_get_with_env () =
   let buf = Bytes.of_string "\x42" in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   let v = get_v buf 0 in
-  Alcotest.(check int) "get returns value" 0x42 v;
-  Alcotest.(check int) "output param synced" 0x42 (Param.get env out)
+  Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int v);
+  Alcotest.(check int)
+    "output param synced" 0x42
+    (UInt8.to_int (Param.get env out))
 
 let test_get_action_field_twocodecs () =
   (* Same action field in two codecs -- each codec gets its own action runner *)
@@ -3754,7 +3722,9 @@ let test_get_action_field_twocodecs () =
   in
   let codec2 =
     let open Codec in
-    v "ActTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v2 ]
+    v "ActTwo2"
+      (fun _pad v -> v)
+      [ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); cf_v2 ]
   in
   let env1 = Codec.env codec1 in
   let env2 = Codec.env codec2 in
@@ -3762,10 +3732,10 @@ let test_get_action_field_twocodecs () =
   let get1 = Staged.unstage (Codec.get ~env:env1 codec1 cf_v) in
   let get2 = Staged.unstage (Codec.get ~env:env2 codec2 cf_v2) in
   (* codec1 reads offset 0 = 0xAA *)
-  Alcotest.(check int) "codec1 get" 0xAA (get1 buf 0);
-  Alcotest.(check int) "codec1 out" 0xAA (Param.get env1 out1);
+  Alcotest.(check int) "codec1 get" 0xAA (UInt8.to_int (get1 buf 0));
+  Alcotest.(check int) "codec1 out" 0xAA (UInt8.to_int (Param.get env1 out1));
   (* codec2 reads offset 1 = 0xBB *)
-  Alcotest.(check int) "codec2 get" 0xBB (get2 buf 0);
+  Alcotest.(check int) "codec2 get" 0xBB (UInt8.to_int (get2 buf 0));
   Alcotest.(check int) "codec2 out" 0xBB (UInt16.to_int (Param.get env2 out2))
 
 let test_get_action_no_env () =
@@ -3784,8 +3754,10 @@ let test_get_action_no_env () =
   let buf = Bytes.of_string "\x42" in
   (* No ~env: action fires (no crash) but output stays 0 *)
   let get_v = Staged.unstage (Codec.get codec cf_v) in
-  Alcotest.(check int) "get returns value" 0x42 (get_v buf 0);
-  Alcotest.(check int) "output not synced without env" 0 (Param.get env out)
+  Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int (get_v buf 0));
+  Alcotest.(check int)
+    "output not synced without env" 0
+    (UInt8.to_int (Param.get env out))
 
 let test_get_action_abort_field () =
   (* get on a field with abort action always raises *)
@@ -3808,7 +3780,7 @@ let test_get_noaction_ignores_env () =
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   Alcotest.(check int)
     "get returns value" 0x42
-    (get_v (Bytes.of_string "\x42") 0)
+    (UInt8.to_int (get_v (Bytes.of_string "\x42") 0))
 
 let test_get_action_multiple_calls () =
   (* get with ~env updates output on every call *)
@@ -3825,9 +3797,9 @@ let test_get_action_multiple_calls () =
   let env = Codec.env codec in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   ignore (get_v (Bytes.of_string "\x10") 0);
-  Alcotest.(check int) "after first" 0x10 (Param.get env out);
+  Alcotest.(check int) "after first" 0x10 (UInt8.to_int (Param.get env out));
   ignore (get_v (Bytes.of_string "\x20") 0);
-  Alcotest.(check int) "after second" 0x20 (Param.get env out)
+  Alcotest.(check int) "after second" 0x20 (UInt8.to_int (Param.get env out))
 
 let test_get_action_with_inputparam () =
   (* Action references an input param -- get ~env must blit it into the
@@ -3848,13 +3820,15 @@ let test_get_action_with_inputparam () =
       $ fun v -> v)
   in
   let codec = Codec.v "InputParam" (fun v -> v) [ cf_v ] in
-  let env = Codec.env codec |> Param.bind limit 50 in
+  let env = Codec.env codec |> Param.bind limit (UInt8.v 50) in
   let buf_ok = Bytes.of_string "\x30" in
   let buf_bad = Bytes.of_string "\x40" in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   (* 0x30 = 48 <= 50: passes *)
-  Alcotest.(check int) "get with input param" 0x30 (get_v buf_ok 0);
-  Alcotest.(check int) "output synced" 0x30 (Param.get env out);
+  Alcotest.(check int)
+    "get with input param" 0x30
+    (UInt8.to_int (get_v buf_ok 0));
+  Alcotest.(check int) "output synced" 0x30 (UInt8.to_int (Param.get env out));
   (* 0x40 = 64 > 50: action rejects *)
   match get_v buf_bad 0 with
   | _ -> Alcotest.fail "expected rejection from input param check"
@@ -3877,7 +3851,9 @@ let test_get_action_inputparam_noenv () =
   (* No env: limit defaults to 0, so any positive value > 0 fails *)
   let get_v = Staged.unstage (Codec.get codec cf_v) in
   (* 0 <= 0: passes *)
-  Alcotest.(check int) "zero passes" 0 (get_v (Bytes.of_string "\x00") 0);
+  Alcotest.(check int)
+    "zero passes" 0
+    (UInt8.to_int (get_v (Bytes.of_string "\x00") 0));
   (* 1 > 0: fails *)
   match get_v (Bytes.of_string "\x01") 0 with
   | _ -> Alcotest.fail "expected rejection without env"
@@ -3898,7 +3874,7 @@ let test_embed_param_sized () =
   let outer =
     Codec.v "EmbOuter" (fun s -> s) Codec.[ Field.v "s" (codec sub) $ Fun.id ]
   in
-  let env = Codec.env outer |> Param.bind elen 3 in
+  let env = Codec.env outer |> Param.bind elen (UInt8.v 3) in
   let n = Codec.size_of_value outer "abc" in
   Alcotest.(check int) "wire size" 3 n;
   let buf = Bytes.create n in
@@ -3922,11 +3898,11 @@ let test_get_embed_param_fixed () =
   let f_sub = Field.v "sub" (codec sub) in
   let cf_sub = Codec.(f_sub $ Fun.id) in
   let outer = Codec.v "GetEmbedOuter" Fun.id Codec.[ cf_sub ] in
-  let env = Codec.env outer |> Param.bind limit 10 in
+  let env = Codec.env outer |> Param.bind limit (UInt8.v 10) in
   let get_sub = Staged.unstage (Codec.get ~env outer cf_sub) in
   Alcotest.(check int)
     "embedded validation sees env" 5
-    (get_sub (Bytes.of_string "\x05") 0)
+    (UInt8.to_int (get_sub (Bytes.of_string "\x05") 0))
 
 (* The outer codec inherits the embedded sub-codec's input param, so encoding it
    without an env is rejected. *)
@@ -3964,7 +3940,7 @@ let test_embed_where_enforced () =
     | _ -> true);
   Alcotest.(check int)
     "satisfying value accepted" 5
-    (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0))
+    (UInt8.to_int (decode_ok (Codec.decode outer (Bytes.make 1 '\x05') 0)))
 
 let test_embed_output_param () =
   let out = Param.output "embedded_out" uint8 in
@@ -3984,8 +3960,9 @@ let test_embed_output_param () =
   let env = Codec.env outer in
   Alcotest.(check int)
     "decoded value" 42
-    (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0));
-  Alcotest.(check int) "forwarded output" 42 (Param.get env out)
+    (UInt8.to_int
+       (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0)));
+  Alcotest.(check int) "forwarded output" 42 (UInt8.to_int (Param.get env out))
 
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
@@ -4003,14 +3980,16 @@ let test_embed_param_repeat () =
   let outer =
     Codec.v "RepOuter" (fun n xs -> (n, xs)) Codec.[ f_n $ fst; f_items $ snd ]
   in
-  let v = (3, [ 1; 5; 9 ]) in
-  let env = Codec.env outer |> Param.bind rlim 100 in
+  let v = (UInt8.v 3, List.map UInt8.v [ 1; 5; 9 ]) in
+  let env = Codec.env outer |> Param.bind rlim (UInt8.v 100) in
   let n = Codec.size_of_value outer v in
   let buf = Bytes.create n in
   Codec.encode ~env outer v buf 0;
+  let dn, dxs = decode_ok (Codec.decode ~env outer buf 0) in
+  let vn, vxs = v in
   Alcotest.(check bool)
     "roundtrip" true
-    (decode_ok (Codec.decode ~env outer buf 0) = v)
+    (UInt8.equal dn vn && List.equal UInt8.equal dxs vxs)
 
 let test_get_action_output_only () =
   (* Action with only assign (no return_bool/abort) -- should never fail *)
@@ -4027,10 +4006,14 @@ let test_get_action_output_only () =
   let env = Codec.env codec in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   (* Any value should work -- no validation in this action *)
-  Alcotest.(check int) "get 0xFF" 0xFF (get_v (Bytes.of_string "\xFF") 0);
-  Alcotest.(check int) "output 0xFF" 0xFF (Param.get env out);
-  Alcotest.(check int) "get 0x00" 0x00 (get_v (Bytes.of_string "\x00") 0);
-  Alcotest.(check int) "output 0x00" 0x00 (Param.get env out)
+  Alcotest.(check int)
+    "get 0xFF" 0xFF
+    (UInt8.to_int (get_v (Bytes.of_string "\xFF") 0));
+  Alcotest.(check int) "output 0xFF" 0xFF (UInt8.to_int (Param.get env out));
+  Alcotest.(check int)
+    "get 0x00" 0x00
+    (UInt8.to_int (get_v (Bytes.of_string "\x00") 0));
+  Alcotest.(check int) "output 0x00" 0x00 (UInt8.to_int (Param.get env out))
 
 let test_get_action_varthen_assign () =
   (* Action with local var computation then assign to output *)
@@ -4051,8 +4034,10 @@ let test_get_action_varthen_assign () =
   let codec = Codec.v "VarAssign" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
   let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
-  Alcotest.(check int) "get value" 21 (get_v (Bytes.of_string "\x15") 0);
-  Alcotest.(check int) "doubled output" 42 (Param.get env out)
+  Alcotest.(check int)
+    "get value" 21
+    (UInt8.to_int (get_v (Bytes.of_string "\x15") 0));
+  Alcotest.(check int) "doubled output" 42 (UInt8.to_int (Param.get env out))
 
 let test_get_action_crossfield_ref () =
   (* Action on field y references field x's value *)
@@ -4073,9 +4058,11 @@ let test_get_action_crossfield_ref () =
   let buf = Bytes.of_string "\x0A\x14" in
   let get_y = Staged.unstage (Codec.get ~env codec cf_y) in
   let y = get_y buf 0 in
-  Alcotest.(check int) "y value" 0x14 y;
+  Alcotest.(check int) "y value" 0x14 (UInt8.to_int y);
   (* Action computed x + 100 = 10 + 100 = 110 *)
-  Alcotest.(check int) "cross-field output" 110 (Param.get env out)
+  Alcotest.(check int)
+    "cross-field output" 110
+    (UInt8.to_int (Param.get env out))
 
 let test_validate_constraint_only () =
   (* Codec with constraint but no where clause *)
@@ -4128,8 +4115,8 @@ let test_get_twostaged_same_field () =
   (* Each staged getter has its own scratch array and env *)
   ignore (get1 (Bytes.of_string "\xAA") 0);
   ignore (get2 (Bytes.of_string "\xBB") 0);
-  Alcotest.(check int) "env1" 0xAA (Param.get env1 out);
-  Alcotest.(check int) "env2" 0xBB (Param.get env2 out)
+  Alcotest.(check int) "env1" 0xAA (UInt8.to_int (Param.get env1 out));
+  Alcotest.(check int) "env2" 0xBB (UInt8.to_int (Param.get env2 out))
 
 let test_encode_shared_bitfield () =
   (* Encode via a codec that shares a bitfield with another codec.
@@ -4165,15 +4152,15 @@ let test_encode_shared_bitfield () =
    [Invalid_argument] while the same ref in a where clause raised [Failure].
    Every reachable site gets a case, so one that regresses names itself. *)
 
-type misuse_v = A of int | B of int | Other of int
+type misuse_v = A of UInt8.t | B of UInt8.t | Other of int
 
 let misuse_casetype =
   casetype "MisuseCT" uint8
     [
-      case ~index:1 uint8
+      case ~index:(UInt8.v 1) uint8
         ~inject:(fun x -> A x)
         ~project:(function A x -> Some x | _ -> None);
-      case ~index:2 uint8
+      case ~index:(UInt8.v 2) uint8
         ~inject:(fun x -> B x)
         ~project:(function B x -> Some x | _ -> None);
     ]
@@ -4204,7 +4191,8 @@ let test_undecodable_description_is_invalid_argument () =
       ("to_string type_ref", fun () -> ignore (to_string (type_ref "T") 0));
       ( "to_string qualified_ref",
         fun () -> ignore (to_string (qualified_ref "M" "T") 0) );
-      ("to_string apply", fun () -> ignore (to_string (apply uint8 [ int 1 ]) 0));
+      ( "to_string apply",
+        fun () -> ignore (to_string (apply uint8 [ int 1 ]) (UInt8.v 0)) );
       ( "to_string struct_typ",
         fun () ->
           ignore
@@ -4278,8 +4266,8 @@ let test_size_of_value_refuses_unmatched_case () =
   Alcotest.(check (option string))
     "size_of_value refuses in encode's own words" encoded sized;
   (* The control: a value a case does project still sizes what encode writes. *)
-  let n = Codec.size_of_value misuse_casetype_codec (B 9) in
-  Codec.encode misuse_casetype_codec (B 9) buf 0;
+  let n = Codec.size_of_value misuse_casetype_codec (B (UInt8.v 9)) in
+  Codec.encode misuse_casetype_codec (B (UInt8.v 9)) buf 0;
   Alcotest.(check int) "a projected value sizes its tag and its body" 2 n;
   Alcotest.(check string)
     "and encode wrote exactly those bytes" "\002\009" (Bytes.sub_string buf 0 n)
@@ -4310,8 +4298,12 @@ let test_set_field_notin_codec () =
   | exception Invalid_argument _ -> ()
 
 let test_bitfield_on_non_bitfield () =
-  (* bitfield on a uint8 (non-bitfield) field *)
-  let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
+  (* [bitfield] takes an int-valued field; a whole byte mapped to [int] is one
+     that is still not a bitfield. *)
+  let cf_x =
+    Codec.(
+      Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) $ fun v -> v)
+  in
   let codec = Codec.v "NoBf" (fun v -> v) [ cf_x ] in
   match Codec.bitfield codec cf_x with
   | _ -> Alcotest.fail "expected error for non-bitfield"
@@ -4341,10 +4333,10 @@ let test_foreign_env_codec_operations () =
       Fun.id
       Codec.[ f_b $ Fun.id ]
   in
-  let env_b = Codec.env codec_b |> Param.bind p_b 0xff in
+  let env_b = Codec.env codec_b |> Param.bind p_b (UInt8.v 0xff) in
   let buf = Bytes.of_string "\x01" in
   expect_foreign_env ~op:"Codec.encode" ~codec:"EnvA" (fun () ->
-      Codec.encode ~env:env_b codec_a 1 buf 0);
+      Codec.encode ~env:env_b codec_a (UInt8.v 1) buf 0);
   expect_foreign_env ~op:"Codec.decode" ~codec:"EnvA" (fun () ->
       Codec.decode ~env:env_b codec_a buf 0);
   expect_foreign_env ~op:"Codec.validate" ~codec:"EnvA" (fun () ->
@@ -4360,9 +4352,9 @@ let test_foreign_env_codec_operations () =
       Fun.id
       Codec.[ f_c $ Fun.id ]
   in
-  let env_a = Codec.env codec_a |> Param.bind p_a 0xff in
+  let env_a = Codec.env codec_a |> Param.bind p_a (UInt8.v 0xff) in
   expect_foreign_env ~op:"Codec.encode" ~codec:"EnvC" (fun () ->
-      Codec.encode ~env:env_a codec_c 1 buf 0);
+      Codec.encode ~env:env_a codec_c (UInt8.v 1) buf 0);
   expect_foreign_env ~op:"Codec.decode" ~codec:"EnvC" (fun () ->
       Codec.decode ~env:env_a codec_c buf 0)
 
@@ -4468,21 +4460,25 @@ let test_samefield_twocodecs_set () =
   let cf_v = Codec.(f_v $ fun v -> v) in
   let codec1 =
     let open Codec in
-    v "SetTwo1" (fun v _pad -> v) [ cf_v; (Field.v "pad" uint8 $ fun _ -> 0) ]
+    v "SetTwo1"
+      (fun v _pad -> v)
+      [ cf_v; (Field.v "pad" uint8 $ fun _ -> UInt8.v 0) ]
   in
   let codec2 =
     let open Codec in
-    v "SetTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v ]
+    v "SetTwo2"
+      (fun _pad v -> v)
+      [ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); cf_v ]
   in
   let buf = Bytes.make 2 '\x00' in
   (* set via codec1 should write to offset 0 *)
-  (Staged.unstage (Codec.set codec1 cf_v)) buf 0 0xAA;
+  (Staged.unstage (Codec.set codec1 cf_v)) buf 0 (UInt8.v 0xAA);
   Alcotest.(check int) "codec1 set -> byte 0" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int)
     "codec1 set -> byte 1 untouched" 0 (Bytes.get_uint8 buf 1);
   Bytes.fill buf 0 2 '\x00';
   (* set via codec2 should write to offset 1 *)
-  (Staged.unstage (Codec.set codec2 cf_v)) buf 0 0xBB;
+  (Staged.unstage (Codec.set codec2 cf_v)) buf 0 (UInt8.v 0xBB);
   Alcotest.(check int)
     "codec2 set -> byte 0 untouched" 0 (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "codec2 set -> byte 1" 0xBB (Bytes.get_uint8 buf 1)
@@ -4519,14 +4515,18 @@ let test_samefield_twocodecs_encode () =
   let cf_v = Codec.(f_v $ fun v -> v) in
   let codec1 =
     let open Codec in
-    v "EncTwo1" (fun v _pad -> v) [ cf_v; (Field.v "pad" uint8 $ fun _ -> 0) ]
+    v "EncTwo1"
+      (fun v _pad -> v)
+      [ cf_v; (Field.v "pad" uint8 $ fun _ -> UInt8.v 0) ]
   in
   let _codec2 =
     let open Codec in
-    v "EncTwo2" (fun _pad v -> v) [ (Field.v "pad" uint8 $ fun _ -> 0); cf_v ]
+    v "EncTwo2"
+      (fun _pad v -> v)
+      [ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); cf_v ]
   in
   let buf = Bytes.make 2 '\x00' in
-  Codec.encode codec1 0xAA buf 0;
+  Codec.encode codec1 (UInt8.v 0xAA) buf 0;
   (* codec1 should write v at offset 0 *)
   Alcotest.(check int) "byte 0" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "byte 1" 0x00 (Bytes.get_uint8 buf 1)
@@ -4569,7 +4569,9 @@ let test_samefield_staged_before_secondseal () =
   let cf_x = Codec.(f_x $ fun x -> x) in
   let codec1 =
     let open Codec in
-    v "StagedTwo1" (fun x _y -> x) [ cf_x; (Field.v "y" uint8 $ fun _ -> 0) ]
+    v "StagedTwo1"
+      (fun x _y -> x)
+      [ cf_x; (Field.v "y" uint8 $ fun _ -> UInt8.v 0) ]
   in
   (* Stage get from codec1 *)
   let get_x_1 = Staged.unstage (Codec.get codec1 cf_x) in
@@ -4578,13 +4580,15 @@ let test_samefield_staged_before_secondseal () =
     let open Codec in
     v "StagedTwo2"
       (fun _pad x -> x)
-      [ (Field.v "pad" uint8 $ fun _ -> 0); cf_x ]
+      [ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); cf_x ]
   in
   let buf = Bytes.create 2 in
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
   (* get_x_1 was staged before codec2 -- should still read offset 0 *)
-  Alcotest.(check int) "staged before second seal" 0xAA (get_x_1 buf 0)
+  Alcotest.(check int)
+    "staged before second seal" 0xAA
+    (UInt8.to_int (get_x_1 buf 0))
 
 (* -- byte_slice tests -- *)
 
@@ -4635,7 +4639,7 @@ let test_view_byte_slice_decode () =
   Bytes.set_uint8 buf 2 0xBB;
   Bytes.set_uint8 buf 3 0xCC;
   let tag, payload = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "tag" 0xFF tag;
+  Alcotest.(check int) "tag" 0xFF (UInt8.to_int tag);
   Alcotest.(check int) "payload first" 1 (Bs.first payload);
   Alcotest.(check int) "payload length" 3 (Bs.length payload);
   Alcotest.(check int)
@@ -4683,7 +4687,7 @@ let test_raw_get_uint () =
     (UInt16.to_int ((Staged.unstage (Codec.get codec cf_a)) buf 0));
   Alcotest.(check int)
     "get b" 0xFF
-    ((Staged.unstage (Codec.get codec cf_b)) buf 0)
+    (UInt8.to_int ((Staged.unstage (Codec.get codec cf_b)) buf 0))
 
 let test_raw_get_bitfield () =
   (* Default [bit_order = Msb_first]: [hi] (first declared) is the top nibble,
@@ -4711,7 +4715,7 @@ let test_raw_set_uint () =
   let buf = Bytes.create 3 in
   Bytes.fill buf 0 3 '\x00';
   (Staged.unstage (Codec.set codec cf_a)) buf 0 (UInt16.v 0xABCD);
-  (Staged.unstage (Codec.set codec cf_b)) buf 0 0x42;
+  (Staged.unstage (Codec.set codec cf_b)) buf 0 (UInt8.v 0x42);
   Alcotest.(check int) "set a" 0xABCD (Bytes.get_uint16_be buf 0);
   Alcotest.(check int) "set b" 0x42 (Bytes.get_uint8 buf 2)
 
@@ -4785,7 +4789,7 @@ let test_raw_sub_three_layers () =
   in
   Alcotest.(check int) "inner offset" 3 inner_off;
   let x = (Staged.unstage (Codec.get inner cf_x)) buf inner_off in
-  Alcotest.(check int) "3-layer get" 0xCC x
+  Alcotest.(check int) "3-layer get" 0xCC (UInt8.to_int x)
 
 let test_raw_with_offset () =
   (* get / set work correctly with non-zero base offset *)
@@ -5107,7 +5111,7 @@ let test_dep_codec_ref () =
     Bytes.set_uint8 buf (1 + i) (0x10 + i)
   done;
   let len, data = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "ref len" 5 len;
+  Alcotest.(check int) "ref len" 5 (UInt8.to_int len);
   Alcotest.(check int) "ref data length" 5 (Bs.length data);
   Alcotest.(check int)
     "ref data[0]" 0x10
@@ -5275,28 +5279,32 @@ let test_struct_of_dep_trailer () =
 
 (* -- sizeof_this / field_pos in codec -- *)
 
-type pos_record = { pa : int; pb : int; pc : int }
+type pos_record = { pa : UInt8.t; pb : UInt8.t; pc : UInt8.t }
+
+(* [sizeof_this] is only worth checking past a field wider than a byte, so this
+   one carries a two-byte middle field of its own. *)
+type wide_pos_record = { wa : UInt8.t; wb : UInt16.t; wc : UInt8.t }
 
 let test_codec_sizeof_this () =
   let out = Param.output "out" uint8 in
   let codec =
     let open Codec in
     v "SizeofThisCodec"
-      (fun a b c -> { pa = a; pb = UInt16.to_int b; pc = c })
+      (fun wa wb wc -> { wa; wb; wc })
       [
-        (Field.v "a" uint8 $ fun r -> r.pa);
-        (Field.v "b" uint16be $ fun r -> UInt16.v r.pb);
+        (Field.v "a" uint8 $ fun r -> r.wa);
+        (Field.v "b" uint16be $ fun r -> r.wb);
         ( Field.v "c"
             ~action:(Action.on_success [ Action.assign out sizeof_this ])
             uint8
-        $ fun r -> r.pc );
+        $ fun r -> r.wc );
       ]
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 3 (Param.get env out)
+  Alcotest.(check int) "sizeof_this at c" 3 (UInt8.to_int (Param.get env out))
 
 let test_codec_field_pos () =
   let out = Param.output "out" uint8 in
@@ -5317,7 +5325,7 @@ let test_codec_field_pos () =
   let buf = Bytes.of_string "\x01\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* field_pos at c = 2 (third field, zero-indexed) *)
-  Alcotest.(check int) "field_pos at c" 2 (Param.get env out)
+  Alcotest.(check int) "field_pos at c" 2 (UInt8.to_int (Param.get env out))
 
 (* -- Bitfield batch access -- *)
 
@@ -5350,7 +5358,7 @@ let test_bitfield_extract () =
   Alcotest.(check int) "lo" 0x7 lo
 
 let test_bitfield_non_bf_raises () =
-  let f_x = Field.v "x" uint8 in
+  let f_x = Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) in
   let cf_x = Codec.(f_x $ fun x -> x) in
   let codec = Codec.v "NonBf" (fun x -> x) Codec.[ cf_x ] in
   match Codec.bitfield codec cf_x with
@@ -5407,17 +5415,17 @@ let test_codec_embed_decode () =
   Bytes.set_uint16_be buf 2 0x1234;
   Bytes.set_uint8 buf 4 0xBB;
   let r = decode_ok (Codec.decode outer_codec buf 0) in
-  Alcotest.(check int) "header" 0xAA r.header;
-  Alcotest.(check int) "inner.tag" 0x42 r.inner.tag;
+  Alcotest.(check int) "header" 0xAA (UInt8.to_int r.header);
+  Alcotest.(check int) "inner.tag" 0x42 (UInt8.to_int r.inner.tag);
   Alcotest.(check int) "inner.value" 0x1234 (UInt16.to_int r.inner.value);
-  Alcotest.(check int) "trailer" 0xBB r.trailer
+  Alcotest.(check int) "trailer" 0xBB (UInt8.to_int r.trailer)
 
 let test_codec_embed_encode () =
   let v =
     {
-      header = 0xAA;
-      inner = { tag = 0x42; value = UInt16.v 0x1234 };
-      trailer = 0xBB;
+      header = UInt8.v 0xAA;
+      inner = { tag = UInt8.v 0x42; value = UInt16.v 0x1234 };
+      trailer = UInt8.v 0xBB;
     }
   in
   let buf = Bytes.create 5 in
@@ -5430,21 +5438,30 @@ let test_codec_embed_encode () =
 let test_codec_embed_roundtrip () =
   let original =
     {
-      header = 0x11;
-      inner = { tag = 0x22; value = UInt16.v 0x3344 };
-      trailer = 0x55;
+      header = UInt8.v 0x11;
+      inner = { tag = UInt8.v 0x22; value = UInt16.v 0x3344 };
+      trailer = UInt8.v 0x55;
     }
   in
   let buf = Bytes.create 5 in
   Codec.encode outer_codec original buf 0;
   let decoded = decode_ok (Codec.decode outer_codec buf 0) in
-  Alcotest.(check int) "header" original.header decoded.header;
-  Alcotest.(check int) "inner.tag" original.inner.tag decoded.inner.tag;
+  Alcotest.(check int)
+    "header"
+    (UInt8.to_int original.header)
+    (UInt8.to_int decoded.header);
+  Alcotest.(check int)
+    "inner.tag"
+    (UInt8.to_int original.inner.tag)
+    (UInt8.to_int decoded.inner.tag);
   Alcotest.(check int)
     "inner.value"
     (UInt16.to_int original.inner.value)
     (UInt16.to_int decoded.inner.value);
-  Alcotest.(check int) "trailer" original.trailer decoded.trailer
+  Alcotest.(check int)
+    "trailer"
+    (UInt8.to_int original.trailer)
+    (UInt8.to_int decoded.trailer)
 
 let test_codec_embed_wire_size () =
   Alcotest.(check int) "wire_size" 5 (Codec.wire_size outer_codec);
@@ -5463,7 +5480,7 @@ let bf_inner_codec =
         (Field.v "Flags" (bits ~width:4 U8) $ fun r -> r.flags);
       ]
 
-type bf_outer = { id : UInt16.t; bf : bf_inner; checksum : int }
+type bf_outer = { id : UInt16.t; bf : bf_inner; checksum : UInt8.t }
 
 let bf_outer_codec =
   Codec.v "BfOuter"
@@ -5486,7 +5503,7 @@ let test_codec_embed_bitfield () =
   Alcotest.(check int) "id" 0x1234 (UInt16.to_int r.id);
   Alcotest.(check int) "version" 0xA r.bf.version;
   Alcotest.(check int) "flags" 0x5 r.bf.flags;
-  Alcotest.(check int) "checksum" 0xFF r.checksum
+  Alcotest.(check int) "checksum" 0xFF (UInt8.to_int r.checksum)
 
 (* Two levels of nesting --
    [l0] / [l1] / [l2] and their codecs live in {!Test_helpers}. *)
@@ -5498,30 +5515,36 @@ let test_codec_embed_nested () =
   Bytes.set_uint16_be buf 1 0xABCD;
   Bytes.set_uint8 buf 3 0xFF;
   let r = decode_ok (Codec.decode l0_codec buf 0) in
-  Alcotest.(check int) "l2.x" 0x42 r.inner.inner.x;
+  Alcotest.(check int) "l2.x" 0x42 (UInt8.to_int r.inner.inner.x);
   Alcotest.(check int) "l1.y" 0xABCD (UInt16.to_int r.inner.y);
-  Alcotest.(check int) "l0.z" 0xFF r.z
+  Alcotest.(check int) "l0.z" 0xFF (UInt8.to_int r.z)
 
 let test_codec_embed_nested_roundtrip () =
   let original : l0 =
-    { inner = { inner = { x = 0x42 }; y = UInt16.v 0xABCD }; z = 0xFF }
+    {
+      inner = { inner = { x = UInt8.v 0x42 }; y = UInt16.v 0xABCD };
+      z = UInt8.v 0xFF;
+    }
   in
   let buf = Bytes.create 4 in
   Codec.encode l0_codec original buf 0;
   let decoded = decode_ok (Codec.decode l0_codec buf 0) in
-  Alcotest.(check int) "l2.x" original.inner.inner.x decoded.inner.inner.x;
+  Alcotest.(check int)
+    "l2.x"
+    (UInt8.to_int original.inner.inner.x)
+    (UInt8.to_int decoded.inner.inner.x);
   Alcotest.(check int)
     "l1.y"
     (UInt16.to_int original.inner.y)
     (UInt16.to_int decoded.inner.y);
-  Alcotest.(check int) "l0.z" original.z decoded.z
+  Alcotest.(check int) "l0.z" (UInt8.to_int original.z) (UInt8.to_int decoded.z)
 
 (* -- Cross-codec Field.ref: parent expression references sub-codec field -- *)
 
 (* TC/TM-style frame: header contains a length field, the data field's size
    is computed from that nested header field via Field.ref. *)
 
-type tc_header = { version : int; frame_len : int }
+type tc_header = { version : UInt8.t; frame_len : UInt8.t }
 
 let f_tc_version = Field.v "Version" uint8
 let f_tc_frame_len = Field.v "FrameLen" uint8
@@ -5535,7 +5558,7 @@ let tc_header_codec =
         (f_tc_frame_len $ fun r -> r.frame_len);
       ]
 
-type tc_frame = { hdr : tc_header; data : string; check : int }
+type tc_frame = { hdr : tc_header; data : string; check : UInt8.t }
 
 (* The data field's size is `Field.ref f_tc_frame_len - 2 - 1` (header is 2 bytes,
    trailer is 1 byte). The Field.ref must resolve into the embedded header codec. *)
@@ -5561,10 +5584,10 @@ let test_codec_cross_field_ref () =
   Bytes.blit_string "HELLO" 0 buf 2 5;
   Bytes.set_uint8 buf 7 0xCC;
   let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
-  Alcotest.(check int) "version" 1 r.hdr.version;
-  Alcotest.(check int) "frame_len" 8 r.hdr.frame_len;
+  Alcotest.(check int) "version" 1 (UInt8.to_int r.hdr.version);
+  Alcotest.(check int) "frame_len" 8 (UInt8.to_int r.hdr.frame_len);
   Alcotest.(check string) "data" "HELLO" r.data;
-  Alcotest.(check int) "check" 0xCC r.check
+  Alcotest.(check int) "check" 0xCC (UInt8.to_int r.check)
 
 let test_codec_crossref_field_varying () =
   (* frame_len=5 -> data is 2 bytes *)
@@ -5574,9 +5597,9 @@ let test_codec_crossref_field_varying () =
   Bytes.blit_string "AB" 0 buf 2 2;
   Bytes.set_uint8 buf 4 0xFF;
   let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
-  Alcotest.(check int) "frame_len" 5 r.hdr.frame_len;
+  Alcotest.(check int) "frame_len" 5 (UInt8.to_int r.hdr.frame_len);
   Alcotest.(check string) "data" "AB" r.data;
-  Alcotest.(check int) "check" 0xFF r.check
+  Alcotest.(check int) "check" 0xFF (UInt8.to_int r.check)
 
 (* -- Adversarial: cross-codec Field.ref edge cases -- *)
 
@@ -5620,13 +5643,13 @@ let test_codec_crossref_field_zerodata () =
   Bytes.set_uint8 buf 2 0xCC;
   let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
   Alcotest.(check string) "data" "" r.data;
-  Alcotest.(check int) "check" 0xCC r.check
+  Alcotest.(check int) "check" 0xCC (UInt8.to_int r.check)
 
 (* Sub-codec field name shadowing: parent has its own field with same name as
    a sub-codec field. The parent's name should win for parent-scope expressions
    defined after the parent field. *)
 
-type shadow_inner = { si_x : int }
+type shadow_inner = { si_x : UInt8.t }
 
 let f_si_x = Field.v "Shared" uint8
 
@@ -5635,7 +5658,7 @@ let shadow_inner_codec =
     (fun x -> { si_x = x })
     Codec.[ (f_si_x $ fun r -> r.si_x) ]
 
-type shadow_outer = { inner : shadow_inner; shared : int; data : string }
+type shadow_outer = { inner : shadow_inner; shared : UInt8.t; data : string }
 
 let f_so_shared = Field.v "Shared" uint8
 
@@ -5659,13 +5682,13 @@ let test_codec_field_shadow () =
   (* parent.shared *)
   Bytes.blit_string "ABC" 0 buf 2 3;
   let r = decode_ok (Codec.decode shadow_outer_codec buf 0) in
-  Alcotest.(check int) "inner.shared" 5 r.inner.si_x;
-  Alcotest.(check int) "parent.shared" 3 r.shared;
+  Alcotest.(check int) "inner.shared" 5 (UInt8.to_int r.inner.si_x);
+  Alcotest.(check int) "parent.shared" 3 (UInt8.to_int r.shared);
   Alcotest.(check string) "data" "ABC" r.data
 
 (* Two-level deep nesting: outer references a field three levels down. *)
 
-type inner_l1 = { il1_x : int }
+type inner_l1 = { il1_x : UInt8.t }
 
 let f_il1_x = Field.v "DeepLen" uint8
 
@@ -5674,7 +5697,7 @@ let inner_l1_codec =
     (fun x -> { il1_x = x })
     Codec.[ (f_il1_x $ fun r -> r.il1_x) ]
 
-type middle_l2 = { inner : inner_l1; y : int }
+type middle_l2 = { inner : inner_l1; y : UInt8.t }
 
 let middle_l2_codec =
   Codec.v "MiddleL2"
@@ -5705,8 +5728,8 @@ let test_codec_crossref_field_twolevels () =
   (* l2.y *)
   Bytes.blit_string "ABCD" 0 buf 2 4;
   let r = decode_ok (Codec.decode outer_l3_codec buf 0) in
-  Alcotest.(check int) "deep_len" 4 r.mid.inner.il1_x;
-  Alcotest.(check int) "y" 0xFF r.mid.y;
+  Alcotest.(check int) "deep_len" 4 (UInt8.to_int r.mid.inner.il1_x);
+  Alcotest.(check int) "y" 0xFF (UInt8.to_int r.mid.y);
   Alcotest.(check string) "data" "ABCD" r.data
 
 (* Sub-codec with bitfield referenced from parent. The sub-codec packs a 4-bit
@@ -5756,11 +5779,11 @@ let test_optional_present_decode () =
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xBB;
   let r = decode_ok (Codec.decode opt_codec_present buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "payload" (Some 0x1234)
     (Option.map UInt16.to_int r.payload);
-  Alcotest.(check int) "trail" 0xBB r.trail
+  Alcotest.(check int) "trail" 0xBB (UInt8.to_int r.trail)
 
 let test_optional_absent_decode () =
   (* hdr(1) + trail(1) = 2 bytes (no payload) *)
@@ -5768,15 +5791,19 @@ let test_optional_absent_decode () =
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
   let r = decode_ok (Codec.decode opt_codec_absent buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "payload" None
     (Option.map UInt16.to_int r.payload);
-  Alcotest.(check int) "trail" 0xBB r.trail
+  Alcotest.(check int) "trail" 0xBB (UInt8.to_int r.trail)
 
 let test_optional_present_encode () =
   let v : opt_record =
-    { hdr = 0xAA; payload = Some (UInt16.v 0x1234); trail = 0xBB }
+    {
+      hdr = UInt8.v 0xAA;
+      payload = Some (UInt16.v 0x1234);
+      trail = UInt8.v 0xBB;
+    }
   in
   let buf = Bytes.create 4 in
   Codec.encode opt_codec_present v buf 0;
@@ -5785,7 +5812,9 @@ let test_optional_present_encode () =
   Alcotest.(check int) "trail" 0xBB (Bytes.get_uint8 buf 3)
 
 let test_optional_absent_encode () =
-  let v : opt_record = { hdr = 0xAA; payload = None; trail = 0xBB } in
+  let v : opt_record =
+    { hdr = UInt8.v 0xAA; payload = None; trail = UInt8.v 0xBB }
+  in
   let buf = Bytes.create 2 in
   Codec.encode opt_codec_absent v buf 0;
   Alcotest.(check int) "hdr" 0xAA (Bytes.get_uint8 buf 0);
@@ -5793,29 +5822,47 @@ let test_optional_absent_encode () =
 
 let test_optional_present_roundtrip () =
   let original : opt_record =
-    { hdr = 0x11; payload = Some (UInt16.v 0x2233); trail = 0x44 }
+    {
+      hdr = UInt8.v 0x11;
+      payload = Some (UInt16.v 0x2233);
+      trail = UInt8.v 0x44;
+    }
   in
   let buf = Bytes.create 4 in
   Codec.encode opt_codec_present original buf 0;
   let decoded = decode_ok (Codec.decode opt_codec_present buf 0) in
-  Alcotest.(check int) "hdr" original.hdr decoded.hdr;
+  Alcotest.(check int)
+    "hdr"
+    (UInt8.to_int original.hdr)
+    (UInt8.to_int decoded.hdr);
   Alcotest.(check (option int))
     "payload"
     (Option.map UInt16.to_int original.payload)
     (Option.map UInt16.to_int decoded.payload);
-  Alcotest.(check int) "trail" original.trail decoded.trail
+  Alcotest.(check int)
+    "trail"
+    (UInt8.to_int original.trail)
+    (UInt8.to_int decoded.trail)
 
 let test_optional_absent_roundtrip () =
-  let original : opt_record = { hdr = 0x11; payload = None; trail = 0x44 } in
+  let original : opt_record =
+    { hdr = UInt8.v 0x11; payload = None; trail = UInt8.v 0x44 }
+  in
   let buf = Bytes.create 2 in
   Codec.encode opt_codec_absent original buf 0;
   let decoded = decode_ok (Codec.decode opt_codec_absent buf 0) in
-  Alcotest.(check int) "hdr" original.hdr decoded.hdr;
+  Alcotest.(check int)
+    "hdr"
+    (UInt8.to_int original.hdr)
+    (UInt8.to_int decoded.hdr);
   Alcotest.(check (option int))
     "payload"
     (Option.map UInt16.to_int original.payload)
     (Option.map UInt16.to_int decoded.payload);
-  Alcotest.(check int) "trail" original.trail decoded.trail
+  Alcotest.(check int)
+    "trail"
+    (UInt8.to_int original.trail)
+    (UInt8.to_int decoded.trail)
 
 (* A byte_array whose ~size reads an optional_or field. The size expression
    reads the optional_or's present-or-default value, so encode and decode agree
@@ -5825,7 +5872,7 @@ let test_bytearray_sized_by_optional_or () =
   let f_len =
     Field.optional_or "len"
       ~present:Expr.(Field.ref f_gate <> int 0)
-      ~default:3 uint8
+      ~default:(UInt8.v 3) uint8
   in
   let f_data = Field.v "data" (byte_array ~size:(Field.ref f_len)) in
   let c =
@@ -5843,13 +5890,17 @@ let test_bytearray_sized_by_optional_or () =
     Codec.encode c v buf 0;
     Alcotest.(check string) "encoded bytes" expected (Bytes.to_string buf);
     match Codec.decode c buf 0 with
-    | Ok d -> Alcotest.(check bool) "round-trip" true (d = v)
+    | Ok (g, l, d) ->
+        let vg, vl, vd = v in
+        Alcotest.(check bool)
+          "round-trip" true
+          (UInt8.equal g vg && UInt8.equal l vl && String.equal d vd)
     | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
   in
   (* gate set: len present (2), data is 2 bytes *)
-  rt (1, 2, "ab") "\x01\x02ab";
+  rt (UInt8.v 1, UInt8.v 2, "ab") "\x01\x02ab";
   (* gate clear: len falls back to the default (3), data is 3 bytes *)
-  rt (0, 3, "xyz") "\x00\x03xyz"
+  rt (UInt8.zero, UInt8.v 3, "xyz") "\x00\x03xyz"
 
 let test_optional_wire_size_present () =
   Alcotest.(check int) "wire_size present" 4 (Codec.wire_size opt_codec_present)
@@ -5859,7 +5910,7 @@ let test_optional_wire_size_absent () =
 
 (* Optional with codec inner type *)
 
-type opt_codec_record = { hdr : int; inner : inner option; trail : int }
+type opt_codec_record = { hdr : UInt8.t; inner : inner option; trail : UInt8.t }
 
 let opt_inner_codec ~present =
   Codec.v "OptCodecRecord"
@@ -5881,13 +5932,13 @@ let test_optional_codec_present () =
   Bytes.set_uint16_be buf 2 0x1234;
   Bytes.set_uint8 buf 4 0xBB;
   let r = decode_ok (Codec.decode c buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   (match r.inner with
   | None -> Alcotest.fail "expected Some"
   | Some inner ->
-      Alcotest.(check int) "inner.tag" 0x42 inner.tag;
+      Alcotest.(check int) "inner.tag" 0x42 (UInt8.to_int inner.tag);
       Alcotest.(check int) "inner.value" 0x1234 (UInt16.to_int inner.value));
-  Alcotest.(check int) "trail" 0xBB r.trail
+  Alcotest.(check int) "trail" 0xBB (UInt8.to_int r.trail)
 
 let test_optional_codec_absent () =
   let c = opt_inner_codec ~present:false in
@@ -5896,11 +5947,11 @@ let test_optional_codec_absent () =
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
   let r = decode_ok (Codec.decode c buf 0) in
-  Alcotest.(check int) "hdr" 0xAA r.hdr;
+  Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "inner" None
-    (Option.map (fun (i : inner) -> i.tag) r.inner);
-  Alcotest.(check int) "trail" 0xBB r.trail
+    (Option.map (fun (i : inner) -> UInt8.to_int i.tag) r.inner);
+  Alcotest.(check int) "trail" 0xBB (UInt8.to_int r.trail)
 
 (* Multiple optional fields (TM frame pattern) *)
 
@@ -5964,7 +6015,7 @@ let test_optional_mixed () =
 
 (* Dynamic optional: presence determined by a previously-parsed field. *)
 
-type dyn_opt = { flags : int; payload : UInt16.t option; trail : int }
+type dyn_opt = { flags : UInt8.t; payload : UInt16.t option; trail : UInt8.t }
 
 let f_do_flags = Field.v "Flags" uint8
 
@@ -5988,11 +6039,11 @@ let test_dyn_opt_present () =
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xFF;
   let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
-  Alcotest.(check int) "flags" 1 r.flags;
+  Alcotest.(check int) "flags" 1 (UInt8.to_int r.flags);
   Alcotest.(check (option int))
     "payload" (Some 0x1234)
     (Option.map UInt16.to_int r.payload);
-  Alcotest.(check int) "trail" 0xFF r.trail
+  Alcotest.(check int) "trail" 0xFF (UInt8.to_int r.trail)
 
 let test_dyn_opt_absent () =
   (* flags=0 -> payload absent. Layout: [00] [FF] *)
@@ -6000,11 +6051,11 @@ let test_dyn_opt_absent () =
   Bytes.set_uint8 buf 0 0;
   Bytes.set_uint8 buf 1 0xFF;
   let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
-  Alcotest.(check int) "flags" 0 r.flags;
+  Alcotest.(check int) "flags" 0 (UInt8.to_int r.flags);
   Alcotest.(check (option int))
     "payload" None
     (Option.map UInt16.to_int r.payload);
-  Alcotest.(check int) "trail" 0xFF r.trail
+  Alcotest.(check int) "trail" 0xFF (UInt8.to_int r.trail)
 
 let test_dyn_opt_get_trail () =
   let cf_trail = Codec.(Field.v "Trail" uint8 $ fun r -> r.trail) in
@@ -6014,12 +6065,12 @@ let test_dyn_opt_get_trail () =
   Bytes.set_uint8 buf1 0 1;
   Bytes.set_uint16_be buf1 1 0x1234;
   Bytes.set_uint8 buf1 3 0xAA;
-  Alcotest.(check int) "trail (present)" 0xAA (get_trail buf1 0);
+  Alcotest.(check int) "trail (present)" 0xAA (UInt8.to_int (get_trail buf1 0));
   (* Absent: trail at offset 1. *)
   let buf2 = Bytes.create 2 in
   Bytes.set_uint8 buf2 0 0;
   Bytes.set_uint8 buf2 1 0xBB;
-  Alcotest.(check int) "trail (absent)" 0xBB (get_trail buf2 0)
+  Alcotest.(check int) "trail (absent)" 0xBB (UInt8.to_int (get_trail buf2 0))
 
 let check_dyn_opt_roundtrip label expected_len expected_bytes original =
   Alcotest.(check int)
@@ -6033,18 +6084,28 @@ let check_dyn_opt_roundtrip label expected_len expected_bytes original =
     (label ^ " wire_size_at") expected_len
     (Codec.wire_size_at dyn_opt_codec buf 0);
   let decoded = decode_ok (Codec.decode dyn_opt_codec buf 0) in
-  Alcotest.(check int) (label ^ " flags") original.flags decoded.flags;
+  Alcotest.(check int)
+    (label ^ " flags")
+    (UInt8.to_int original.flags)
+    (UInt8.to_int decoded.flags);
   Alcotest.(check (option int))
     (label ^ " payload")
     (Option.map UInt16.to_int original.payload)
     (Option.map UInt16.to_int decoded.payload);
-  Alcotest.(check int) (label ^ " trail") original.trail decoded.trail
+  Alcotest.(check int)
+    (label ^ " trail")
+    (UInt8.to_int original.trail)
+    (UInt8.to_int decoded.trail)
 
 let test_field_optional_dynamic_roundtrip () =
   check_dyn_opt_roundtrip "present" 4 "\x01\x12\x34\xFF"
-    { flags = 1; payload = Some (UInt16.v 0x1234); trail = 0xFF };
+    {
+      flags = UInt8.v 1;
+      payload = Some (UInt16.v 0x1234);
+      trail = UInt8.v 0xFF;
+    };
   check_dyn_opt_roundtrip "absent" 2 "\x00\xEE"
-    { flags = 0; payload = None; trail = 0xEE }
+    { flags = UInt8.v 0; payload = None; trail = UInt8.v 0xEE }
 
 let test_dyn_opt_reject_gate () =
   let check_reject label v =
@@ -6054,9 +6115,13 @@ let test_dyn_opt_reject_gate () =
     | exception Invalid_argument _ -> ()
   in
   check_reject "gate true / value None"
-    { flags = 1; payload = None; trail = 0xEE };
+    { flags = UInt8.v 1; payload = None; trail = UInt8.v 0xEE };
   check_reject "gate false / value Some"
-    { flags = 0; payload = Some (UInt16.v 0x1234); trail = 0xEE }
+    {
+      flags = UInt8.v 0;
+      payload = Some (UInt16.v 0x1234);
+      trail = UInt8.v 0xEE;
+    }
 
 let test_encode_totality () =
   let check_exact label original =
@@ -6072,8 +6137,13 @@ let test_encode_totality () =
       | exception Invalid_argument _ -> ()
   in
   check_exact "present"
-    { flags = 1; payload = Some (UInt16.v 0x1234); trail = 0xFF };
-  check_exact "absent" { flags = 0; payload = None; trail = 0xEE }
+    {
+      flags = UInt8.v 1;
+      payload = Some (UInt16.v 0x1234);
+      trail = UInt8.v 0xFF;
+    };
+  check_exact "absent"
+    { flags = UInt8.v 0; payload = None; trail = UInt8.v 0xEE }
 
 (* Dynamic optional via Field.ref on a bool field -- the TM frame pattern.
    Field.ref now accepts 'a t, so a bool field created with [bit] can be
@@ -6083,7 +6153,7 @@ type tm_opt = {
   ocf_flag : bool;
   data : UInt16.t;
   ocf : UInt32.t option;
-  trail : int;
+  trail : UInt8.t;
 }
 
 let f_to_ocf_flag = Field.v "OCFFlag" (bit (bits ~width:1 U8))
@@ -6115,7 +6185,7 @@ let test_dyn_opt_anyref_present () =
   Alcotest.(check (option int32))
     "ocf" (Some 0xDEADBEEFl)
     (Option.map UInt32.to_int32 r.ocf);
-  Alcotest.(check int) "trail" 0xFF r.trail
+  Alcotest.(check int) "trail" 0xFF (UInt8.to_int r.trail)
 
 let test_dyn_opt_anyref_absent () =
   let buf = Bytes.create 4 in
@@ -6126,7 +6196,7 @@ let test_dyn_opt_anyref_absent () =
   Alcotest.(check bool) "ocf_flag" false r.ocf_flag;
   Alcotest.(check int) "data" 0x1234 (UInt16.to_int r.data);
   Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
-  Alcotest.(check int) "trail" 0xFF r.trail
+  Alcotest.(check int) "trail" 0xFF (UInt8.to_int r.trail)
 
 (* -- Predicates with bitwise/shift/mod operators in [optional] --
    Reproduces the silent miscompile where [compile_bool_expr]'s
@@ -6134,7 +6204,7 @@ let test_dyn_opt_anyref_absent () =
    predicate using [Land] / [Lor] / [Lsr] / [Mod] / [Cast] / etc.,
    so a high-bit-gated optional would always read its payload. *)
 
-type bit_gated = { flags : int; body : int option }
+type bit_gated = { flags : UInt8.t; body : UInt8.t option }
 
 let f_bg_flags = Field.v "Flags" uint8
 
@@ -6153,9 +6223,13 @@ let check_bit_gated ~present ~present_buf ~present_label ~absent_buf
     ~absent_label =
   let c = bg_codec ~present in
   let r = decode_ok (Codec.decode c (Bytes.of_string present_buf) 0) in
-  Alcotest.(check (option int)) present_label (Some 0x2A) r.body;
+  Alcotest.(check (option int))
+    present_label (Some 0x2A)
+    (Option.map UInt8.to_int r.body);
   let r = decode_ok (Codec.decode c (Bytes.of_string absent_buf) 0) in
-  Alcotest.(check (option int)) absent_label None r.body
+  Alcotest.(check (option int))
+    absent_label None
+    (Option.map UInt8.to_int r.body)
 
 let test_optional_land_predicate () =
   check_bit_gated
@@ -6185,7 +6259,7 @@ let test_optional_lor_predicate () =
    int_array slot is populated for [Optional] fields, so a constraint or size
    expression referring to the optional sees the real value. *)
 
-type ref_opt = { x : int option; check : int }
+type ref_opt = { x : UInt8.t option; check : UInt8.t }
 
 let f_ro_x = Field.optional "X" ~present:Expr.true_ uint8
 
@@ -6203,8 +6277,8 @@ let test_field_ref_through_optional () =
      failed; with the fix it reads 0x80 and the decode succeeds. *)
   let buf = Bytes.of_string "\x80\x7F" in
   let r = decode_ok (Codec.decode ref_opt_codec buf 0) in
-  Alcotest.(check (option int)) "x" (Some 0x80) r.x;
-  Alcotest.(check int) "check" 0x7F r.check
+  Alcotest.(check (option int)) "x" (Some 0x80) (Option.map UInt8.to_int r.x);
+  Alcotest.(check int) "check" 0x7F (UInt8.to_int r.check)
 
 let test_uint64_in_size_expr () =
   let f_len = Field.v "Len" uint64be in
@@ -6232,7 +6306,7 @@ let test_repeat_decode_empty () =
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 0 r.length;
+  Alcotest.(check int) "length" 0 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 0 (List.length r.items)
 
 let test_repeat_decode_one () =
@@ -6242,10 +6316,10 @@ let test_repeat_decode_one () =
   Bytes.set_uint8 buf 1 0x42;
   Bytes.set_uint16_be buf 2 0x1234;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 3 r.length;
+  Alcotest.(check int) "length" 3 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 1 (List.length r.items);
   let item = List.hd r.items in
-  Alcotest.(check int) "item.tag" 0x42 item.tag;
+  Alcotest.(check int) "item.tag" 0x42 (UInt8.to_int item.tag);
   Alcotest.(check int) "item.value" 0x1234 (UInt16.to_int item.value)
 
 let test_repeat_decode_multiple () =
@@ -6262,11 +6336,12 @@ let test_repeat_decode_multiple () =
   Bytes.set_uint8 buf 7 0x03;
   Bytes.set_uint16_be buf 8 0x0003;
   let r = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" 9 r.length;
+  Alcotest.(check int) "length" 9 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 3 (List.length r.items);
   List.iteri
     (fun i (item : inner) ->
-      Alcotest.(check int) (Fmt.str "item[%d].tag" i) (i + 1) item.tag;
+      Alcotest.(check int)
+        (Fmt.str "item[%d].tag" i) (i + 1) (UInt8.to_int item.tag);
       Alcotest.(check int)
         (Fmt.str "item[%d].value" i)
         (i + 1) (UInt16.to_int item.value))
@@ -6275,11 +6350,11 @@ let test_repeat_decode_multiple () =
 let test_repeat_encode () =
   let v =
     {
-      length = 6;
+      length = UInt8.v 6;
       items =
         [
-          { tag = 0x01; value = UInt16.v 0x0001 };
-          { tag = 0x02; value = UInt16.v 0x0002 };
+          { tag = UInt8.v 0x01; value = UInt16.v 0x0001 };
+          { tag = UInt8.v 0x02; value = UInt16.v 0x0002 };
         ];
     }
   in
@@ -6314,9 +6389,9 @@ let test_repeat_exact_budget () =
   (match Codec.decode fixed (Bytes.of_string "\x01\xaa") 0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
-  expect_repeat_encode_error "fixed underrun" fixed (6, [ UInt16.v 1 ]);
+  expect_repeat_encode_error "fixed underrun" fixed (UInt8.v 6, [ UInt16.v 1 ]);
   expect_repeat_encode_error "fixed overshoot" fixed
-    (2, [ UInt16.v 1; UInt16.v 2 ]);
+    (UInt8.v 2, [ UInt16.v 1; UInt16.v 2 ]);
   let f_var_size = Field.v "size" uint8 in
   let variable =
     Codec.v "RepeatVariableBudget"
@@ -6334,27 +6409,30 @@ let test_repeat_exact_budget () =
 let test_repeat_roundtrip () =
   let items =
     [
-      { tag = 0x0A; value = UInt16.v 0x000A };
-      { tag = 0x0B; value = UInt16.v 0x000B };
-      { tag = 0x0C; value = UInt16.v 0x000C };
+      { tag = UInt8.v 0x0A; value = UInt16.v 0x000A };
+      { tag = UInt8.v 0x0B; value = UInt16.v 0x000B };
+      { tag = UInt8.v 0x0C; value = UInt16.v 0x000C };
     ]
   in
-  let original : container = { length = 9; items } in
+  let original : container = { length = UInt8.v 9; items } in
   let buf = Bytes.create 10 in
   Codec.encode repeat_codec original buf 0;
   let decoded = decode_ok (Codec.decode repeat_codec buf 0) in
-  Alcotest.(check int) "length" original.length decoded.length;
+  Alcotest.(check int)
+    "length"
+    (UInt8.to_int original.length)
+    (UInt8.to_int decoded.length);
   Alcotest.(check int) "item count" 3 (List.length decoded.items);
   List.iter2
     (fun (orig : inner) (dec : inner) ->
-      Alcotest.(check int) "tag" orig.tag dec.tag;
+      Alcotest.(check int) "tag" (UInt8.to_int orig.tag) (UInt8.to_int dec.tag);
       Alcotest.(check int)
         "value" (UInt16.to_int orig.value) (UInt16.to_int dec.value))
     original.items decoded.items
 
 (* Repeat with fixed-size primitive elements *)
 
-type int_container = { count : int; values : UInt16.t list }
+type int_container = { count : UInt8.t; values : UInt16.t list }
 
 let f_ic_count = Field.v "Count" uint8
 
@@ -6376,7 +6454,7 @@ let test_repeat_primitive () =
   Bytes.set_uint16_be buf 3 0x2222;
   Bytes.set_uint16_be buf 5 0x3333;
   let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
-  Alcotest.(check int) "count" 6 r.count;
+  Alcotest.(check int) "count" 6 (UInt8.to_int r.count);
   Alcotest.(check int) "n values" 3 (List.length r.values);
   Alcotest.(check (list int))
     "values" [ 0x1111; 0x2222; 0x3333 ]
@@ -6387,7 +6465,7 @@ let test_repeat_primitive () =
    encoding. *)
 let test_repeat_size_of_value () =
   let v =
-    { count = 6; values = List.map UInt16.v [ 0x1111; 0x2222; 0x3333 ] }
+    { count = UInt8.v 6; values = List.map UInt16.v [ 0x1111; 0x2222; 0x3333 ] }
   in
   (* Count (1) + 3 * uint16be (6) = 7 *)
   let n = Codec.size_of_value repeat_int_codec v in
@@ -6405,7 +6483,7 @@ let test_repeat_size_of_value () =
 
 (* Repeat with trailer after *)
 
-type repeat_trailer = { len : int; items : inner list; check : int }
+type repeat_trailer = { len : UInt8.t; items : inner list; check : UInt8.t }
 
 let f_rt_len = Field.v "Len" uint8
 
@@ -6430,13 +6508,13 @@ let test_repeat_with_trailer () =
   Bytes.set_uint16_be buf 5 0x0002;
   Bytes.set_uint8 buf 7 0xFF;
   let r = decode_ok (Codec.decode repeat_trailer_codec buf 0) in
-  Alcotest.(check int) "len" 6 r.len;
+  Alcotest.(check int) "len" 6 (UInt8.to_int r.len);
   Alcotest.(check int) "item count" 2 (List.length r.items);
-  Alcotest.(check int) "check" 0xFF r.check
+  Alcotest.(check int) "check" 0xFF (UInt8.to_int r.check)
 
 (* Variable-size repeat: codec with dependent-size field *)
 
-type var_inner = { len : int; data : string }
+type var_inner = { len : UInt8.t; data : string }
 
 let f_vi_len = Field.v "Len" uint8
 
@@ -6480,27 +6558,28 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check int) "item count" 2 (List.length r.items);
   let i0 = List.nth r.items 0 in
   let i1 = List.nth r.items 1 in
-  Alcotest.(check int) "item0.len" 2 i0.len;
+  Alcotest.(check int) "item0.len" 2 (UInt8.to_int i0.len);
   Alcotest.(check string) "item0.data" "ab" i0.data;
-  Alcotest.(check int) "item1.len" 3 i1.len;
+  Alcotest.(check int) "item1.len" 3 (UInt8.to_int i1.len);
   Alcotest.(check string) "item1.data" "cde" i1.data
 
 (* -- Casetype as a trailing variable-size codec field -- *)
 
-type ev_payload = [ `Login of UInt16.t | `Logout of UInt32.t | `Other of int ]
+type ev_payload =
+  [ `Login of UInt16.t | `Logout of UInt32.t | `Other of UInt8.t ]
 
 let casetype_field_event_typ : ev_payload Wire.typ =
   Wire.casetype "EvPayload" Wire.uint8
     [
-      Wire.case ~index:1 Wire.uint16be
+      Wire.case ~index:(UInt8.v 1) Wire.uint16be
         ~inject:(fun v -> `Login v)
         ~project:(function `Login v -> Some v | _ -> None);
-      Wire.case ~index:2 Wire.uint32be
+      Wire.case ~index:(UInt8.v 2) Wire.uint32be
         ~inject:(fun v -> `Logout v)
         ~project:(function `Logout v -> Some v | _ -> None);
       Wire.default Wire.uint8
         ~inject:(fun _tag v -> `Other v)
-        ~project:(function `Other v -> Some (0xFF, v) | _ -> None);
+        ~project:(function `Other v -> Some (UInt8.v 0xFF, v) | _ -> None);
     ]
 
 type ev_event = { ts : int64; data : ev_payload }
@@ -6539,7 +6618,7 @@ let test_casetype_field_default () =
   Bytes.set_uint8 buf 8 99;
   Bytes.set_uint8 buf 9 7;
   let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
-  Alcotest.(check bool) "Other 7" true (r.data = `Other 7)
+  Alcotest.(check bool) "Other 7" true (r.data = `Other (UInt8.v 7))
 
 (* A casetype whose discriminant matches no case fails with a typed
    [Invalid_tag] carrying the tag value, not a stringly constraint failure. *)
@@ -6547,10 +6626,10 @@ let test_casetype_no_match_invalid_tag () =
   let typ =
     Wire.casetype "Closed" Wire.uint8
       [
-        Wire.case ~index:1 Wire.uint8
+        Wire.case ~index:(UInt8.v 1) Wire.uint8
           ~inject:(fun v -> `A v)
           ~project:(function `A v -> Some v | _ -> None);
-        Wire.case ~index:2 Wire.uint8
+        Wire.case ~index:(UInt8.v 2) Wire.uint8
           ~inject:(fun v -> `B v)
           ~project:(function `B v -> Some v | _ -> None);
       ]
@@ -6564,12 +6643,12 @@ let test_casetype_no_match_invalid_tag () =
 
 (* The default branch recovers the matched tag and re-encodes it, so an
    arbitrary unclaimed tag round-trips (the DHCP / TCP-options shape). *)
-type tlv = Known of UInt16.t | Unknown of (int * string)
+type tlv = Known of UInt16.t | Unknown of (UInt8.t * string)
 
 let tlv_typ : tlv Wire.typ =
   Wire.casetype "Tlv" Wire.uint8
     [
-      Wire.case ~index:1 Wire.uint16be
+      Wire.case ~index:(UInt8.v 1) Wire.uint16be
         ~inject:(fun v -> Known v)
         ~project:(function Known v -> Some v | _ -> None);
       Wire.default
@@ -6582,14 +6661,14 @@ let tlv_codec =
   Codec.v "Tlv" (fun x -> x) Codec.[ (Field.v "v" tlv_typ $ fun x -> x) ]
 
 let test_casetype_default_recovers_tag () =
-  let v = Unknown (0x42, "ab") in
+  let v = Unknown (UInt8.v 0x42, "ab") in
   let buf = Bytes.create (Codec.size_of_value tlv_codec v) in
   Codec.encode tlv_codec v buf 0;
   Alcotest.(check int)
     "encode writes the captured tag" 0x42 (Bytes.get_uint8 buf 0);
   match Codec.decode tlv_codec buf 0 with
   | Ok (Unknown (t, b)) ->
-      Alcotest.(check int) "decode recovers the tag" 0x42 t;
+      Alcotest.(check int) "decode recovers the tag" 0x42 (UInt8.to_int t);
       Alcotest.(check string) "decode body" "ab" b
   | Ok _ -> Alcotest.fail "expected Unknown"
   | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
@@ -6618,7 +6697,7 @@ let test_casetype_size_of_value () =
 (* Length-prefixed casetype dispatch: [tag][length][body] where length
    bounds the inner casetype's tag + body. *)
 
-type lp_event = { tag : int; len : UInt16.t; data : ev_payload }
+type lp_event = { tag : UInt8.t; len : UInt16.t; data : ev_payload }
 
 let lp_event_len = Field.v "Length" uint16be
 
@@ -6642,7 +6721,7 @@ let test_length_prefixed_casetype () =
   Bytes.set_uint8 buf 3 1;
   Bytes.set_uint16_be buf 4 0x4242;
   let r = decode_ok (Codec.decode lp_event_codec buf 0) in
-  Alcotest.(check int) "tag" 0xAA r.tag;
+  Alcotest.(check int) "tag" 0xAA (UInt8.to_int r.tag);
   Alcotest.(check int) "len" 3 (UInt16.to_int r.len);
   Alcotest.(check bool) "data" true (r.data = `Login (UInt16.v 0x4242))
 
@@ -6652,7 +6731,7 @@ let test_length_prefixed_casetype () =
 
 type tm_like = {
   hdr : UInt16.t;
-  data_len : int;
+  data_len : UInt8.t;
   packets : packet list;
   ocf : UInt32.t option;
   fecf : UInt16.t option;
@@ -6696,10 +6775,10 @@ let test_tm_like_full () =
   Bytes.set_uint16_be buf 13 0x4444;
   let r = decode_ok (Codec.decode c buf 0) in
   Alcotest.(check int) "hdr" 0xAAAA (UInt16.to_int r.hdr);
-  Alcotest.(check int) "data_len" 6 r.data_len;
+  Alcotest.(check int) "data_len" 6 (UInt8.to_int r.data_len);
   Alcotest.(check int) "packet count" 2 (List.length r.packets);
-  Alcotest.(check int) "pkt0.id" 0x01 (List.nth r.packets 0).id;
-  Alcotest.(check int) "pkt1.id" 0x02 (List.nth r.packets 1).id;
+  Alcotest.(check int) "pkt0.id" 0x01 (UInt8.to_int (List.nth r.packets 0).id);
+  Alcotest.(check int) "pkt1.id" 0x02 (UInt8.to_int (List.nth r.packets 1).id);
   Alcotest.(check (option int))
     "ocf" (Some 0x33333333)
     (Option.map UInt32.to_int r.ocf);
@@ -6725,12 +6804,12 @@ let test_tm_like_roundtrip () =
   let original =
     {
       hdr = UInt16.v 0xBBBB;
-      data_len = 9;
+      data_len = UInt8.v 9;
       packets =
         [
-          ({ id = 0x0A; data = UInt16.v 0x000A } : packet);
-          ({ id = 0x0B; data = UInt16.v 0x000B } : packet);
-          ({ id = 0x0C; data = UInt16.v 0x000C } : packet);
+          ({ id = UInt8.v 0x0A; data = UInt16.v 0x000A } : packet);
+          ({ id = UInt8.v 0x0B; data = UInt16.v 0x000B } : packet);
+          ({ id = UInt8.v 0x0C; data = UInt16.v 0x000C } : packet);
         ];
       ocf = Some (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
       fecf = Some (UInt16.v 0xCAFE);
@@ -6746,7 +6825,7 @@ let test_tm_like_roundtrip () =
   Alcotest.(check int) "packet count" 3 (List.length decoded.packets);
   List.iter2
     (fun (o : packet) (d : packet) ->
-      Alcotest.(check int) "pkt.id" o.id d.id;
+      Alcotest.(check int) "pkt.id" (UInt8.to_int o.id) (UInt8.to_int d.id);
       Alcotest.(check int)
         "pkt.data" (UInt16.to_int o.data) (UInt16.to_int d.data))
     original.packets decoded.packets;
@@ -6766,8 +6845,8 @@ let test_tm_like_roundtrip () =
    fields. This layout projects, resolving each field's offset at runtime. *)
 
 type cfdp_hdr = {
-  eid_len : int;
-  txseq_len : int;
+  eid_len : UInt8.t;
+  txseq_len : UInt8.t;
   src : string;
   txseq : string;
   dst : string;
@@ -6805,8 +6884,8 @@ let test_multi_var_decode () =
   Bytes.blit_string "\xCC\xDD\xEE" 0 buf 4 3;
   Bytes.blit_string "\xFF\x00" 0 buf 7 2;
   let r = decode_ok (Codec.decode cfdp_codec buf 0) in
-  Alcotest.(check int) "eid_len" 1 r.eid_len;
-  Alcotest.(check int) "txseq_len" 2 r.txseq_len;
+  Alcotest.(check int) "eid_len" 1 (UInt8.to_int r.eid_len);
+  Alcotest.(check int) "txseq_len" 2 (UInt8.to_int r.txseq_len);
   Alcotest.(check string) "src" "\xAA\xBB" r.src;
   Alcotest.(check string) "txseq" "\xCC\xDD\xEE" r.txseq;
   Alcotest.(check string) "dst" "\xFF\x00" r.dst
@@ -6814,8 +6893,8 @@ let test_multi_var_decode () =
 let test_multi_var_roundtrip () =
   let original =
     {
-      eid_len = 1;
-      txseq_len = 2;
+      eid_len = UInt8.v 1;
+      txseq_len = UInt8.v 2;
       src = "\xAA\xBB";
       txseq = "\xCC\xDD\xEE";
       dst = "\xFF\x00";
@@ -7020,9 +7099,9 @@ let test_slice_then_array () =
     v "SliceThenArray"
       (fun _ slice _ array -> (slice, array))
       [
-        (f_slice_len $ fun (slice, _) -> Slice.length slice);
+        (f_slice_len $ fun (slice, _) -> UInt8.v (Slice.length slice));
         (f_slice $ fun (slice, _) -> slice);
-        (f_array_len $ fun (_, array) -> String.length array);
+        (f_array_len $ fun (_, array) -> UInt8.v (String.length array));
         (f_array $ fun (_, array) -> array);
       ]
   in
@@ -7045,7 +7124,7 @@ let test_codec_then_array () =
       (fun msg _ array -> (msg, array))
       [
         (f_msg $ fun (msg, _) -> msg);
-        (f_array_len $ fun (_, array) -> String.length array);
+        (f_array_len $ fun (_, array) -> UInt8.v (String.length array));
         (f_array $ fun (_, array) -> array);
       ]
   in
@@ -7070,9 +7149,9 @@ let test_repeat_after_var_slice () =
     v "PrefixedItems"
       (fun _ prefix _ items -> (prefix, items))
       [
-        (f_prefix_len $ fun (p, _) -> Slice.length p);
+        (f_prefix_len $ fun (p, _) -> UInt8.v (Slice.length p));
         (f_prefix $ fun (p, _) -> p);
-        (f_count $ fun (_, items) -> 2 * List.length items);
+        (f_count $ fun (_, items) -> UInt8.v (2 * List.length items));
         (f_items $ fun (_, items) -> items);
       ]
   in
@@ -7095,7 +7174,7 @@ module UInt63 = Optint.Int63
 
 let u63 = Alcotest.testable UInt63.pp ( = )
 
-type uint_rec = { tag : int; value : UInt63.t }
+type uint_rec = { tag : UInt8.t; value : UInt63.t }
 
 let test_uint_3byte_be () =
   let codec =
@@ -7107,7 +7186,7 @@ let test_uint_3byte_be () =
         (Field.v "Value" (uint (Wire.int 3)) $ fun r -> r.value);
       ]
   in
-  let original = { tag = 0x42; value = UInt63.of_int 0x1A2B3C } in
+  let original = { tag = UInt8.v 0x42; value = UInt63.of_int 0x1A2B3C } in
   let buf = Bytes.create 4 in
   Codec.encode codec original buf 0;
   Alcotest.(check int) "tag byte" 0x42 (Bytes.get_uint8 buf 0);
@@ -7115,7 +7194,10 @@ let test_uint_3byte_be () =
   Alcotest.(check int) "be byte 1" 0x2B (Bytes.get_uint8 buf 2);
   Alcotest.(check int) "be byte 2" 0x3C (Bytes.get_uint8 buf 3);
   let decoded = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "tag" original.tag decoded.tag;
+  Alcotest.(check int)
+    "tag"
+    (UInt8.to_int original.tag)
+    (UInt8.to_int decoded.tag);
   Alcotest.check u63 "value" original.value decoded.value
 
 let test_uint_1byte () =
@@ -7166,7 +7248,7 @@ let test_uint_dynamic () =
   Bytes.set_uint8 buf 1 0x12;
   Bytes.set_uint8 buf 2 0x34;
   let n, value = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int) "n" 2 n;
+  Alcotest.(check int) "n" 2 (UInt8.to_int n);
   Alcotest.check u63 "value" (UInt63.of_int 0x1234) value
 
 (* -- Adversarial bit-order tests --
@@ -7281,18 +7363,21 @@ let opt_body_codec =
   Codec.v "OptBody"
     (fun _l d -> { data = d })
     Codec.
-      [ (ob_len $ fun b -> String.length b.data); (ob_data $ fun b -> b.data) ]
+      [
+        (ob_len $ fun b -> UInt8.v (String.length b.data));
+        (ob_data $ fun b -> b.data);
+      ]
 
 let dhcp_opt_typ : dhcp_opt typ =
   casetype "DhcpOpt" uint8
     [
-      case ~index:0 empty
+      case ~index:(UInt8.v 0) empty
         ~inject:(fun () -> Pad)
         ~project:(function Pad -> Some () | _ -> None);
-      case ~index:255 empty
+      case ~index:(UInt8.v 255) empty
         ~inject:(fun () -> End)
         ~project:(function End -> Some () | _ -> None);
-      case ~index:53 (codec opt_body_codec)
+      case ~index:(UInt8.v 53) (codec opt_body_codec)
         ~inject:(fun b -> Generic b.data)
         ~project:(function Generic d -> Some { data = d } | _ -> None);
     ]
@@ -7311,7 +7396,7 @@ let dhcp_codec =
     Codec.
       [
         ( dhcp_f_total $ fun xs ->
-          List.fold_left (fun a o -> a + dhcp_opt_size o) 0 xs );
+          UInt8.v (List.fold_left (fun a o -> a + dhcp_opt_size o) 0 xs) );
         (dhcp_f_opts $ fun xs -> xs);
       ]
 
@@ -7342,16 +7427,16 @@ let test_repeat_casetype_empty () =
    build_field_encoder, and elem_size_of all lacked the zeroterm_at_most case,
    so encode raised "unsupported type" and sizing raised "cannot determine
    element size". *)
-type zt_opt = Str of string | Num of int
+type zt_opt = Str of string | Num of UInt8.t
 
 let zt_opt_typ : zt_opt typ =
   casetype "ZtOpt" uint8
     [
-      case ~index:1
+      case ~index:(UInt8.v 1)
         (zeroterm_at_most ~size:(int 6))
         ~inject:(fun s -> Str s)
         ~project:(function Str s -> Some s | _ -> None);
-      case ~index:2 uint8
+      case ~index:(UInt8.v 2) uint8
         ~inject:(fun n -> Num n)
         ~project:(function Num n -> Some n | _ -> None);
     ]
@@ -7371,7 +7456,7 @@ let zt_codec =
       ]
 
 let test_repeat_casetype_zeroterm_at_most () =
-  let v = [ Str "hi"; Num 7; Str "" ] in
+  let v = [ Str "hi"; Num (UInt8.v 7); Str "" ] in
   let buf = Bytes.create (Codec.size_of_value zt_codec v) in
   Codec.encode zt_codec v buf 0;
   Alcotest.(check bool)
@@ -7384,15 +7469,15 @@ let test_repeat_casetype_zeroterm_at_most () =
    projects to 3D inside a repeated casetype (the casetype packs it into its
    base word); a list of bare bitfields, by contrast, has no projection and is
    rejected. *)
-type bf_opt = Bf of int | Raw of int
+type bf_opt = Bf of int | Raw of UInt8.t
 
 let bf_opt_typ : bf_opt typ =
   casetype "BfOpt" uint8
     [
-      case ~index:1 (bits ~width:3 U8)
+      case ~index:(UInt8.v 1) (bits ~width:3 U8)
         ~inject:(fun b -> Bf b)
         ~project:(function Bf b -> Some b | _ -> None);
-      case ~index:2 uint8
+      case ~index:(UInt8.v 2) uint8
         ~inject:(fun v -> Raw v)
         ~project:(function Raw v -> Some v | _ -> None);
     ]
@@ -7411,7 +7496,7 @@ let bf_codec =
       ]
 
 let test_repeat_casetype_bits_case () =
-  let v = [ Bf 5; Raw 9; Bf 0 ] in
+  let v = [ Bf 5; Raw (UInt8.v 9); Bf 0 ] in
   let buf = Bytes.create (Codec.size_of_value bf_codec v) in
   Codec.encode bf_codec v buf 0;
   Alcotest.(check bool)
@@ -7427,7 +7512,7 @@ let test_repeat_casetype_unprojectable_case_rejected () =
   let nested_case =
     casetype "NestCaseOpt" uint8
       [
-        case ~index:1
+        case ~index:(UInt8.v 1)
           (nested ~size:(int 1) int8)
           ~inject:(fun v -> `N v)
           ~project:(function `N v -> Some v);
@@ -7439,7 +7524,7 @@ let test_repeat_casetype_unprojectable_case_rejected () =
 
 (* -- Zero-terminated strings ([zeroterm] / [zeroterm_at_most]) -- *)
 
-type zt_rec = { name : string; tag : string; n : int }
+type zt_rec = { name : string; tag : string; n : UInt8.t }
 
 let zt_f_name = Field.v "name" zeroterm
 let zt_f_tag = Field.v "tag" (zeroterm_at_most ~size:(int 8))
@@ -7456,7 +7541,7 @@ let zt_codec =
       ]
 
 let test_zeroterm_roundtrip () =
-  let v = { name = "hello"; tag = "ab"; n = 7 } in
+  let v = { name = "hello"; tag = "ab"; n = UInt8.v 7 } in
   (* name(5+1) + tag(8) + n(1) = 15 *)
   let buf = Bytes.create 15 in
   Codec.encode zt_codec v buf 0;
@@ -7465,10 +7550,10 @@ let test_zeroterm_roundtrip () =
   let r = decode_ok (Codec.decode zt_codec buf 0) in
   Alcotest.(check string) "name" "hello" r.name;
   Alcotest.(check string) "tag" "ab" r.tag;
-  Alcotest.(check int) "n" 7 r.n
+  Alcotest.(check int) "n" 7 (UInt8.to_int r.n)
 
 let test_zeroterm_empty () =
-  let v = { name = ""; tag = ""; n = 0 } in
+  let v = { name = ""; tag = ""; n = UInt8.v 0 } in
   let buf = Bytes.create 15 in
   Codec.encode zt_codec v buf 0;
   let r = decode_ok (Codec.decode zt_codec buf 0) in
@@ -7476,7 +7561,7 @@ let test_zeroterm_empty () =
   Alcotest.(check string) "tag" "" r.tag
 
 let test_zeroterm_embedded_nul_rejected () =
-  let v = { name = "a\000b"; tag = ""; n = 0 } in
+  let v = { name = "a\000b"; tag = ""; n = UInt8.v 0 } in
   let buf = Bytes.create 15 in
   match Codec.encode zt_codec v buf 0 with
   | () -> Alcotest.fail "expected Invalid_argument for embedded NUL"
@@ -7489,10 +7574,10 @@ type zt_case = Zt of string | Zt_at_most of string
 let zt_case_typ : zt_case typ =
   casetype "ZtCase" uint8
     [
-      case ~index:1 zeroterm
+      case ~index:(UInt8.v 1) zeroterm
         ~inject:(fun s -> Zt s)
         ~project:(function Zt s -> Some s | _ -> None);
-      case ~index:2
+      case ~index:(UInt8.v 2)
         (zeroterm_at_most ~size:(int 8))
         ~inject:(fun s -> Zt_at_most s)
         ~project:(function Zt_at_most s -> Some s | _ -> None);
@@ -7522,9 +7607,9 @@ let test_zeroterm_nul_message_shared () =
       ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) nul));
   let field_buf = Bytes.create 15 in
   check "Codec.encode zeroterm field" (fun () ->
-      Codec.encode zt_codec { name = nul; tag = ""; n = 0 } field_buf 0);
+      Codec.encode zt_codec { name = nul; tag = ""; n = UInt8.v 0 } field_buf 0);
   check "Codec.encode zeroterm_at_most field" (fun () ->
-      Codec.encode zt_codec { name = ""; tag = nul; n = 0 } field_buf 0);
+      Codec.encode zt_codec { name = ""; tag = nul; n = UInt8.v 0 } field_buf 0);
   let case_buf = Bytes.create 16 in
   check "Codec.encode zeroterm case body" (fun () ->
       Codec.encode zt_case_codec (Zt nul) case_buf 0);
@@ -7546,7 +7631,9 @@ let test_zeroterm_region_message_shared () =
   check "Wire.to_string" (fun () ->
       ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) full));
   check "Codec.encode field" (fun () ->
-      Codec.encode zt_codec { name = ""; tag = full; n = 0 } (Bytes.create 15) 0);
+      Codec.encode zt_codec
+        { name = ""; tag = full; n = UInt8.v 0 }
+        (Bytes.create 15) 0);
   check "Codec.encode case body" (fun () ->
       Codec.encode zt_case_codec (Zt_at_most full) (Bytes.create 16) 0)
 
@@ -7559,7 +7646,7 @@ let test_zeroterm_missing_terminator () =
 
 (* -- Codec.rename -- *)
 
-type rename_rec = { ra : int; rb : UInt16.t }
+type rename_rec = { ra : UInt8.t; rb : UInt16.t }
 
 let rename_codec =
   Codec.v "OrigName"
@@ -7588,7 +7675,7 @@ let test_rename_projection () =
 
 let test_rename_roundtrip () =
   let renamed = Codec.rename "NewName" rename_codec in
-  let v = { ra = 7; rb = UInt16.v 1000 } in
+  let v = { ra = UInt8.v 7; rb = UInt16.v 1000 } in
   match (encode_record rename_codec v, encode_record renamed v) with
   | Ok b1, Ok b2 -> (
       Alcotest.(check string) "encode unchanged by rename" b1 b2;
@@ -7628,53 +7715,53 @@ let test_enum_codec_validates () =
    closure per decode, visible under flambda-off. The 8-vs-16 field decode
    must grow only by the 8 extra record slots -- no closure. *)
 type alloc_r8 = {
-  a1 : int;
-  a2 : int;
-  a3 : int;
-  a4 : int;
-  a5 : int;
-  a6 : int;
-  a7 : int;
-  a8 : int;
+  a1 : UInt8.t;
+  a2 : UInt8.t;
+  a3 : UInt8.t;
+  a4 : UInt8.t;
+  a5 : UInt8.t;
+  a6 : UInt8.t;
+  a7 : UInt8.t;
+  a8 : UInt8.t;
 }
 
 type alloc_r16 = {
-  b1 : int;
-  b2 : int;
-  b3 : int;
-  b4 : int;
-  b5 : int;
-  b6 : int;
-  b7 : int;
-  b8 : int;
-  b9 : int;
-  b10 : int;
-  b11 : int;
-  b12 : int;
-  b13 : int;
-  b14 : int;
-  b15 : int;
-  b16 : int;
+  b1 : UInt8.t;
+  b2 : UInt8.t;
+  b3 : UInt8.t;
+  b4 : UInt8.t;
+  b5 : UInt8.t;
+  b6 : UInt8.t;
+  b7 : UInt8.t;
+  b8 : UInt8.t;
+  b9 : UInt8.t;
+  b10 : UInt8.t;
+  b11 : UInt8.t;
+  b12 : UInt8.t;
+  b13 : UInt8.t;
+  b14 : UInt8.t;
+  b15 : UInt8.t;
+  b16 : UInt8.t;
 }
 
 type alloc_r17 = {
-  c1 : int;
-  c2 : int;
-  c3 : int;
-  c4 : int;
-  c5 : int;
-  c6 : int;
-  c7 : int;
-  c8 : int;
-  c9 : int;
-  c10 : int;
-  c11 : int;
-  c12 : int;
-  c13 : int;
-  c14 : int;
-  c15 : int;
-  c16 : int;
-  c17 : int;
+  c1 : UInt8.t;
+  c2 : UInt8.t;
+  c3 : UInt8.t;
+  c4 : UInt8.t;
+  c5 : UInt8.t;
+  c6 : UInt8.t;
+  c7 : UInt8.t;
+  c8 : UInt8.t;
+  c9 : UInt8.t;
+  c10 : UInt8.t;
+  c11 : UInt8.t;
+  c12 : UInt8.t;
+  c13 : UInt8.t;
+  c14 : UInt8.t;
+  c15 : UInt8.t;
+  c16 : UInt8.t;
+  c17 : UInt8.t;
 }
 
 let alloc_codec8 =
@@ -7766,74 +7853,74 @@ let alloc_codec17 =
    [make] call, no closure. 33 fields is the first arity past the table, so it
    makes one partial application and exercises the recursive unroll. *)
 type alloc_r32 = {
-  d1 : int;
-  d2 : int;
-  d3 : int;
-  d4 : int;
-  d5 : int;
-  d6 : int;
-  d7 : int;
-  d8 : int;
-  d9 : int;
-  d10 : int;
-  d11 : int;
-  d12 : int;
-  d13 : int;
-  d14 : int;
-  d15 : int;
-  d16 : int;
-  d17 : int;
-  d18 : int;
-  d19 : int;
-  d20 : int;
-  d21 : int;
-  d22 : int;
-  d23 : int;
-  d24 : int;
-  d25 : int;
-  d26 : int;
-  d27 : int;
-  d28 : int;
-  d29 : int;
-  d30 : int;
-  d31 : int;
-  d32 : int;
+  d1 : UInt8.t;
+  d2 : UInt8.t;
+  d3 : UInt8.t;
+  d4 : UInt8.t;
+  d5 : UInt8.t;
+  d6 : UInt8.t;
+  d7 : UInt8.t;
+  d8 : UInt8.t;
+  d9 : UInt8.t;
+  d10 : UInt8.t;
+  d11 : UInt8.t;
+  d12 : UInt8.t;
+  d13 : UInt8.t;
+  d14 : UInt8.t;
+  d15 : UInt8.t;
+  d16 : UInt8.t;
+  d17 : UInt8.t;
+  d18 : UInt8.t;
+  d19 : UInt8.t;
+  d20 : UInt8.t;
+  d21 : UInt8.t;
+  d22 : UInt8.t;
+  d23 : UInt8.t;
+  d24 : UInt8.t;
+  d25 : UInt8.t;
+  d26 : UInt8.t;
+  d27 : UInt8.t;
+  d28 : UInt8.t;
+  d29 : UInt8.t;
+  d30 : UInt8.t;
+  d31 : UInt8.t;
+  d32 : UInt8.t;
 }
 
 type alloc_r33 = {
-  e1 : int;
-  e2 : int;
-  e3 : int;
-  e4 : int;
-  e5 : int;
-  e6 : int;
-  e7 : int;
-  e8 : int;
-  e9 : int;
-  e10 : int;
-  e11 : int;
-  e12 : int;
-  e13 : int;
-  e14 : int;
-  e15 : int;
-  e16 : int;
-  e17 : int;
-  e18 : int;
-  e19 : int;
-  e20 : int;
-  e21 : int;
-  e22 : int;
-  e23 : int;
-  e24 : int;
-  e25 : int;
-  e26 : int;
-  e27 : int;
-  e28 : int;
-  e29 : int;
-  e30 : int;
-  e31 : int;
-  e32 : int;
-  e33 : int;
+  e1 : UInt8.t;
+  e2 : UInt8.t;
+  e3 : UInt8.t;
+  e4 : UInt8.t;
+  e5 : UInt8.t;
+  e6 : UInt8.t;
+  e7 : UInt8.t;
+  e8 : UInt8.t;
+  e9 : UInt8.t;
+  e10 : UInt8.t;
+  e11 : UInt8.t;
+  e12 : UInt8.t;
+  e13 : UInt8.t;
+  e14 : UInt8.t;
+  e15 : UInt8.t;
+  e16 : UInt8.t;
+  e17 : UInt8.t;
+  e18 : UInt8.t;
+  e19 : UInt8.t;
+  e20 : UInt8.t;
+  e21 : UInt8.t;
+  e22 : UInt8.t;
+  e23 : UInt8.t;
+  e24 : UInt8.t;
+  e25 : UInt8.t;
+  e26 : UInt8.t;
+  e27 : UInt8.t;
+  e28 : UInt8.t;
+  e29 : UInt8.t;
+  e30 : UInt8.t;
+  e31 : UInt8.t;
+  e32 : UInt8.t;
+  e33 : UInt8.t;
 }
 
 let alloc_codec32 =
@@ -8024,31 +8111,31 @@ let test_decode_high_arity_roundtrip () =
   (* Exercise the saturated 16-field case. *)
   let buf16 = Bytes.init 16 (fun i -> Char.chr (i + 1)) in
   let v16 = Codec.decode_exn alloc_codec16 buf16 0 in
-  Alcotest.(check int) "b1" 1 v16.b1;
-  Alcotest.(check int) "b16" 16 v16.b16;
+  Alcotest.(check int) "b1" 1 (UInt8.to_int v16.b1);
+  Alcotest.(check int) "b16" 16 (UInt8.to_int v16.b16);
   (* 17 fields: still saturated after the table was widened to 32. *)
   let buf17 = Bytes.init 17 (fun i -> Char.chr (i + 1)) in
   let v17 = Codec.decode_exn alloc_codec17 buf17 0 in
-  Alcotest.(check int) "c1" 1 v17.c1;
-  Alcotest.(check int) "c16" 16 v17.c16;
-  Alcotest.(check int) "c17" 17 v17.c17;
+  Alcotest.(check int) "c1" 1 (UInt8.to_int v17.c1);
+  Alcotest.(check int) "c16" 16 (UInt8.to_int v17.c16);
+  Alcotest.(check int) "c17" 17 (UInt8.to_int v17.c17);
   let out = Bytes.create 17 in
   Codec.encode alloc_codec17 v17 out 0;
   Alcotest.(check bytes) "17-field roundtrip" buf17 out;
   (* 32 fields: the saturated-table ceiling. *)
   let buf32 = Bytes.init 32 (fun i -> Char.chr (i + 1)) in
   let v32 = Codec.decode_exn alloc_codec32 buf32 0 in
-  Alcotest.(check int) "d1" 1 v32.d1;
-  Alcotest.(check int) "d32" 32 v32.d32;
+  Alcotest.(check int) "d1" 1 (UInt8.to_int v32.d1);
+  Alcotest.(check int) "d32" 32 (UInt8.to_int v32.d32);
   let out32 = Bytes.create 32 in
   Codec.encode alloc_codec32 v32 out32 0;
   Alcotest.(check bytes) "32-field roundtrip" buf32 out32;
   (* 33 fields: the first arity past the table, exercising the recursive arm. *)
   let buf33 = Bytes.init 33 (fun i -> Char.chr (i + 1)) in
   let v33 = Codec.decode_exn alloc_codec33 buf33 0 in
-  Alcotest.(check int) "e1" 1 v33.e1;
-  Alcotest.(check int) "e32" 32 v33.e32;
-  Alcotest.(check int) "e33" 33 v33.e33;
+  Alcotest.(check int) "e1" 1 (UInt8.to_int v33.e1);
+  Alcotest.(check int) "e32" 32 (UInt8.to_int v33.e32);
+  Alcotest.(check int) "e33" 33 (UInt8.to_int v33.e33);
   let out33 = Bytes.create 33 in
   Codec.encode alloc_codec33 v33 out33 0;
   Alcotest.(check bytes) "33-field roundtrip" buf33 out33
@@ -8100,7 +8187,7 @@ type alloc_priority = Low | High
 type alloc_accessor = {
   hi : int;
   lo : int;
-  u8 : int;
+  u8 : UInt8.t;
   u16 : UInt16.t;
   i32 : SInt32.t;
   priority : alloc_priority;
@@ -8115,8 +8202,8 @@ let alloc_i32 = Field.v "I32" int32be
 let alloc_priority =
   Field.v "Priority"
     (map
-       ~decode:(function 0 -> Low | _ -> High)
-       ~encode:(function Low -> 0 | High -> 1)
+       ~decode:(fun v -> if UInt8.equal v UInt8.zero then Low else High)
+       ~encode:(function Low -> UInt8.zero | High -> UInt8.v 1)
        uint8)
 
 let alloc_bf_hi = Codec.(alloc_hi $ fun r -> r.hi)
@@ -8184,7 +8271,7 @@ let test_set_no_allocation () =
   let i32_v = SInt32.of_int 70_000 in
   let u16_v = UInt16.v 513 in
   check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
-  check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 7);
+  check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 (UInt8.v 7));
   check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 u16_v);
   check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 i32_v);
   check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
@@ -8269,14 +8356,17 @@ let optional_family name ~present typ =
   Codec.v name
     (fun _ d -> d)
     Codec.
-      [ (f_span_gate $ fun _ -> 1); Field.optional "d" ~present typ $ Fun.id ]
+      [
+        (f_span_gate $ fun _ -> UInt8.v 1);
+        Field.optional "d" ~present typ $ Fun.id;
+      ]
 
 let optional_or_family name ~present typ =
   Codec.v name
     (fun _ d -> d)
     Codec.
       [
-        (f_span_gate $ fun _ -> 1);
+        (f_span_gate $ fun _ -> UInt8.v 1);
         Field.optional_or "d" ~present ~default:"" typ $ Fun.id;
       ]
 
@@ -8467,13 +8557,14 @@ let container_elem_codec =
 let container_case_typ =
   casetype "ContainerCase" uint8
     [
-      case ~index:1 (codec container_elem_codec) ~inject:Fun.id
+      case ~index:(UInt8.v 1) (codec container_elem_codec) ~inject:Fun.id
         ~project:(fun v -> Some v);
-      case ~index:2 uint16be
+      case ~index:(UInt8.v 2) uint16be
         ~inject:(fun v ->
           let v = UInt16.to_int v in
-          (v lsr 8, v land 0xff))
-        ~project:(fun (a, b) -> Some (UInt16.v ((a lsl 8) lor b)));
+          (UInt8.v (v lsr 8), UInt8.v (v land 0xff)))
+        ~project:(fun (a, b) ->
+          Some (UInt16.v ((UInt8.to_int a lsl 8) lor UInt8.to_int b)));
     ]
 
 let container_words name typ buf =
@@ -8636,7 +8727,7 @@ let field_pos_size_codec =
     (fun _len body -> body)
     Codec.
       [
-        f_diag_len $ String.length;
+        (f_diag_len $ fun x -> UInt8.v (String.length x));
         Field.v "body"
           (byte_array ~size:Expr.(Field.ref f_diag_len + field_pos))
         $ Fun.id;
@@ -8662,7 +8753,7 @@ let dep_size_codec =
     (fun _len body -> body)
     Codec.
       [
-        f_diag_len $ String.length;
+        (f_diag_len $ fun x -> UInt8.v (String.length x));
         Field.v "body" (byte_array ~size:(Field.ref f_diag_len)) $ Fun.id;
       ]
 
@@ -8675,7 +8766,7 @@ let two_span_codec =
     (fun _len a n b -> (a, n, b))
     Codec.
       [
-        (f_diag_len $ fun (a, _, _) -> String.length a);
+        (f_diag_len $ fun (a, _, _) -> UInt8.v (String.length a));
         ( Field.v "a" (byte_array ~size:(Field.ref f_diag_len))
         $ fun (a, _, _) -> a );
         (f_n $ fun (_, n, _) -> n);
@@ -8827,12 +8918,12 @@ let test_set_refusal_leaves_buffer_untouched () =
   let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
   let set = Staged.unstage (Codec.set outer outer_f) in
   let buf = Bytes.make 1 '\xee' in
-  (match set buf 0 200 with
+  (match set buf 0 (UInt8.v 200) with
   | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
   | exception Invalid_argument _ -> ());
   Alcotest.(check string)
     "buffer untouched after a refused set" "\xee" (Bytes.to_string buf);
-  set buf 0 42;
+  set buf 0 (UInt8.v 42);
   Alcotest.(check string)
     "an accepted set still writes" "\x2a" (Bytes.to_string buf)
 
@@ -8925,11 +9016,13 @@ let test_set_bitfield_word_past_buffer_writes_nothing () =
    to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
    both flavours and both gates against what decode returns. *)
 let test_get_static_optional_agrees_with_decode () =
-  let f_len = Field.optional_or "Len" ~present:Expr.true_ ~default:0 uint8 in
+  let f_len =
+    Field.optional_or "Len" ~present:Expr.true_ ~default:UInt8.zero uint8
+  in
   let f_on = Field.optional "On" ~present:Expr.true_ uint8 in
   let f_off = Field.optional "Off" ~present:Expr.false_ uint8 in
   let f_or_off =
-    Field.optional_or "OrOff" ~present:Expr.false_ ~default:7 uint8
+    Field.optional_or "OrOff" ~present:Expr.false_ ~default:(UInt8.v 7) uint8
   in
   let f_data = Field.v "Data" (byte_array ~size:(Field.ref f_len)) in
   let cf_len = Codec.(f_len $ fun (l, _, _, _, _) -> l) in
@@ -8945,18 +9038,29 @@ let test_get_static_optional_agrees_with_decode () =
   let buf = Bytes.of_string "\003\009abc" in
   let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
   let read f = Staged.unstage (Codec.get c f) buf 0 in
-  Alcotest.(check int) "optional_or, gate on" len (read cf_len);
-  Alcotest.(check (option int)) "optional, gate on" on (read cf_on);
-  Alcotest.(check (option int)) "optional, gate off" off (read cf_off);
   Alcotest.(check int)
-    "optional_or, gate off is the default" or_off (read cf_or_off);
+    "optional_or, gate on" (UInt8.to_int len)
+    (UInt8.to_int (read cf_len));
+  Alcotest.(check (option int))
+    "optional, gate on"
+    (Option.map UInt8.to_int on)
+    (Option.map UInt8.to_int (read cf_on));
+  Alcotest.(check (option int))
+    "optional, gate off"
+    (Option.map UInt8.to_int off)
+    (Option.map UInt8.to_int (read cf_off));
+  Alcotest.(check int)
+    "optional_or, gate off is the default" (UInt8.to_int or_off)
+    (UInt8.to_int (read cf_or_off));
   Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
   (* And the matching setter, so a field [get] can read is one [set] can
      write. The absent gates own no bytes, so writing them moves nothing. *)
-  Staged.unstage (Codec.set c cf_on) buf 0 (Some 5);
+  Staged.unstage (Codec.set c cf_on) buf 0 (Some (UInt8.v 5));
   Staged.unstage (Codec.set c cf_off) buf 0 None;
-  Staged.unstage (Codec.set c cf_or_off) buf 0 7;
-  Alcotest.(check (option int)) "set then get, gate on" (Some 5) (read cf_on);
+  Staged.unstage (Codec.set c cf_or_off) buf 0 (UInt8.v 7);
+  Alcotest.(check (option int))
+    "set then get, gate on" (Some 5)
+    (Option.map UInt8.to_int (read cf_on));
   Alcotest.(check string)
     "the absent gates wrote no bytes" "\003\005abc" (Bytes.to_string buf)
 
@@ -9026,13 +9130,25 @@ let test_repeat_bounded_element_roundtrips () =
     Codec.v "BoundedRep"
       (fun _ xs -> xs)
       Codec.
-        [ (f_total $ fun xs -> 4 * List.length xs); (f_items $ fun xs -> xs) ]
+        [
+          (f_total $ fun xs -> UInt8.v (4 * List.length xs));
+          (f_items $ fun xs -> xs);
+        ]
   in
-  let xs = [ (1, (2, "\000\000")); (3, (4, "\000\000")) ] in
+  let xs =
+    [
+      (UInt8.v 1, (UInt8.v 2, "\000\000")); (UInt8.v 3, (UInt8.v 4, "\000\000"));
+    ]
+  in
   let buf = Bytes.create (Codec.size_of_value outer xs) in
   Codec.encode outer xs buf 0;
   let ys = decode_ok (Codec.decode outer buf 0) in
-  Alcotest.(check bool) "two bounded elements round-trip" true (ys = xs)
+  let elem_equal (a, (b, s)) (a', (b', s')) =
+    UInt8.equal a a' && UInt8.equal b b' && String.equal s s'
+  in
+  Alcotest.(check bool)
+    "two bounded elements round-trip" true
+    (List.equal elem_equal ys xs)
 
 (* -- Suite -- *)
 
@@ -9241,8 +9357,6 @@ let suite =
         test_set_bits_no_silent_truncation;
       Alcotest.test_case "exact width: map reaches the inner typ" `Quick
         test_map_inherits_exact_width;
-      Alcotest.test_case "exact width: unsigned scalars" `Quick
-        test_encode_exact_unsigned_scalar;
       Alcotest.test_case "exact width: UInt32.of_int range" `Quick
         test_uint32_of_int_range;
       Alcotest.test_case "exact width: int64 carrier has no range" `Quick
@@ -9253,8 +9367,6 @@ let suite =
         test_four_byte_signed_preserves_wire;
       Alcotest.test_case "exact width: SInt32.of_int range" `Quick
         test_sint32_of_int_range;
-      Alcotest.test_case "exact width: array and repeat elements" `Quick
-        test_element_exact_width;
       Alcotest.test_case "exact byte field: literal size" `Quick
         test_exact_byte_field_literal_size;
       Alcotest.test_case "exact byte field: expression size" `Quick

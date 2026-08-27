@@ -186,7 +186,7 @@ and bitfield_base = U8 | U16 of endian | U32 of endian
 
 (* Types *)
 and _ typ =
-  | Uint8 : int typ
+  | Uint8 : UInt8.t typ
   | Uint16 : endian -> UInt16.t typ
   | Uint32 : endian -> UInt32.t typ
   | Uint64 : endian -> UInt64.t typ (* boxed, for full 64-bit *)
@@ -566,7 +566,7 @@ let is_set n = n <> 0
 let rec int_of : type a. a typ -> a -> int option =
  fun typ v ->
   match typ with
-  | Uint8 -> Some v
+  | Uint8 -> Some (UInt8.to_int v)
   | Uint16 _ -> Some (UInt16.to_int v)
   | Uint_var _ -> Int64.unsigned_to_int (Optint.Int63.to_int64 v)
   (* On a narrow-int platform a u32 value may not fit either; the unsigned
@@ -606,7 +606,7 @@ let not_an_integer () =
 let rec int_of_exn : type a. a typ -> a -> int =
  fun typ v ->
   match typ with
-  | Uint8 -> v
+  | Uint8 -> UInt8.to_int v
   | Uint16 _ -> UInt16.to_int v
   | Uint_var _ -> (
       if Sys.int_size > 56 then UInt63.to_int v
@@ -658,7 +658,7 @@ let rec int_of_exn : type a. a typ -> a -> int =
 let rec of_int : type a. a typ -> int -> a =
  fun typ n ->
   match typ with
-  | Uint8 -> n
+  | Uint8 -> UInt8.v n
   | Uint16 _ -> UInt16.v n
   | Uint_var _ -> UInt63.of_int n
   | Uint32 _ -> UInt32.of_int n
@@ -1518,7 +1518,7 @@ let uint_var_case_index k =
 let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
  fun tag_typ k ->
   match tag_typ with
-  | Uint8 -> Pack_expr (Int k)
+  | Uint8 -> Pack_expr (Int (UInt8.to_int k))
   | Uint16 _ -> Pack_expr (Int (UInt16.to_int k))
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
@@ -2095,21 +2095,20 @@ let check_zeroterm_region ~region ~len =
       "Wire.encode: zeroterm string needs %d bytes but region is %d" (len + 1)
       region
 
-(* An unsigned field of [bits] bits owns exactly those bits, whether it was
-   declared as a [uint8] or as a [bits ~width] slice of a wider word: both are
-   carried in an OCaml [int], which holds far more than the field does. Masking
-   a wider value is the one truncation nothing downstream can catch, because the
-   masked result is itself a legal field value that decode, [validate] and the
+(* A [bits ~width] slice owns exactly [bits] bits of a wider word and is carried
+   in an OCaml [int], which holds far more than the slice does. Masking a wider
+   value is the one truncation nothing downstream can catch, because the masked
+   result is itself a legal field value that decode, [validate] and the
    EverParse validator all accept, and the number the caller meant is gone
    without trace. So each width accepts exactly what its decoder produces,
    [0, 2^bits - 1], and encode stays inverse to decode.
 
-   Where the native [int] is no wider than the field (a 32-bit field under
+   Where the native [int] is no wider than the slice (a 32-bit slice under
    js_of_ocaml, anything from 31 bits up under wasm_of_ocaml) no [int] is out of
    range, so the guard narrows to what is still checkable there rather than
    rejecting a value the target can represent.
 
-   Every fixed-width scalar but [uint8] needs nothing here. {!UInt16.t},
+   No fixed-width scalar reaches here any more. {!UInt8.t}, {!UInt16.t},
    {!SInt8.t} and {!SInt16.t} carry the field's range in the type, so a value
    that reaches an encoder is in range by construction; {!UInt32.check_encode},
    {!SInt32.check_encode} and {!UInt63.check_encode} sit next to the
@@ -2121,15 +2120,9 @@ let check_unsigned_encode ~bits v =
     Fmt.invalid_arg
       "Wire.encode: value %d does not fit an unsigned %d-bit field" v bits
 
-(* [Bytes.set_uint8] masks rather than refusing ([Bytes.set_uint8 b 0 0x1FF]
-   writes 0xFF), so [uint8] writes through a checked counterpart; the signed
-   32-bit writers stand beside it under the names the encode paths use. Every
-   other fixed-width scalar writes through its own carrier, whose range is
-   already the field's. *)
-
-let set_uint8 buf off v =
-  check_unsigned_encode ~bits:8 v;
-  Bytes.set_uint8 buf off v
+(* The signed 32-bit writers, under the names the encode paths use. Every
+   fixed-width scalar writes through its own carrier, whose range is already the
+   field's. *)
 
 let set_int32_le = SInt32.set_le
 let set_int32_be = SInt32.set_be

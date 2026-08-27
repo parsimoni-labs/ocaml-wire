@@ -50,7 +50,9 @@ let test_read_ocaml_override () =
     v ~name:"Override" ~read:c_read ~write:mock_c_write ~project:encode_simple
       ~equal:String.equal ~ocaml_read ()
   in
-  let result = s.Wire_diff.test_read (encode_simple (7, UInt16.v 1000)) in
+  let result =
+    s.Wire_diff.test_read (encode_simple (UInt8.v 7, UInt16.v 1000))
+  in
   Alcotest.(check bool) "read uses override" true (result = Wire_diff.Match)
 
 let check_result label ~expected ~f s buf =
@@ -61,7 +63,7 @@ let test_write () =
   check_result "write result" ~expected:Wire_diff.Match
     ~f:(fun s buf -> s.Wire_diff.test_write buf)
     s
-    (encode_simple (7, UInt16.v 1000))
+    (encode_simple (UInt8.v 7, UInt16.v 1000))
 
 let test_write_ocaml_override () =
   let c_write _ = Some "abc" in
@@ -71,7 +73,7 @@ let test_write_ocaml_override () =
       ~project:(fun _ -> "override")
       ~equal:String.equal ~ocaml_read ()
   in
-  let buf = encode_simple (7, UInt16.v 1000) in
+  let buf = encode_simple (UInt8.v 7, UInt16.v 1000) in
   let result = s.Wire_diff.test_write buf in
   Alcotest.(check bool) "write uses override" true (result = Wire_diff.Match)
 
@@ -80,7 +82,7 @@ let test_full_roundtrip () =
   check_result "full_roundtrip result" ~expected:Wire_diff.Match
     ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
     s
-    (encode_simple (3, UInt16.v 512))
+    (encode_simple (UInt8.v 3, UInt16.v 512))
 
 let c_reject_schema name =
   let c_write_reject _ = None in
@@ -92,14 +94,14 @@ let test_full_roundtrip_c_rejects () =
     ~expected:(Wire_diff.Only_ocaml_ok "External write failed")
     ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
     (c_reject_schema "CReject")
-    (encode_simple (3, UInt16.v 512))
+    (encode_simple (UInt8.v 3, UInt16.v 512))
 
 let test_write_c_rejects () =
   check_result "write c rejects -> Only_ocaml_ok"
     ~expected:(Wire_diff.Only_ocaml_ok "External write failed")
     ~f:(fun s buf -> s.Wire_diff.test_write buf)
     (c_reject_schema "CRejectW")
-    (encode_simple (3, UInt16.v 512))
+    (encode_simple (UInt8.v 3, UInt16.v 512))
 
 let projection_codec =
   let open Codec in
@@ -108,18 +110,19 @@ let projection_codec =
     [ f_diff_version $ Fun.id; (f_diff_length $ fun _ -> UInt16.zero) ]
 
 let projection_read buf =
-  if String.length buf < 3 then None else Some (String.get_uint8 buf 0)
+  if String.length buf < 3 then None
+  else Some (UInt8.v (String.get_uint8 buf 0))
 
 let projection_write version =
   let buf = Bytes.create 3 in
-  Bytes.set_uint8 buf 0 version;
+  UInt8.set buf 0 version;
   Bytes.set_uint16_be buf 1 0;
   Some (Bytes.unsafe_to_string buf)
 
 let mk_projection () =
   Wire_diff.harness ~name:"Projection" ~codec:projection_codec
     ~read:projection_read ~write:projection_write ~project:Fun.id
-    ~equal:Int.equal ()
+    ~equal:UInt8.equal ()
 
 let test_projection_read () =
   let s = mk_projection () in
@@ -131,7 +134,7 @@ let test_projection_roundtrip () =
   check_result "projection roundtrip" ~expected:Wire_diff.Match
     ~f:(fun s buf -> s.Wire_diff.test_roundtrip buf)
     (mk_projection ())
-    (encode_simple (7, UInt16.zero))
+    (encode_simple (UInt8.v 7, UInt16.zero))
 
 let test_harness () =
   let s =

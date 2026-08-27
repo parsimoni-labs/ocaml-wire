@@ -35,8 +35,8 @@ let () =
     Slice.first
       ((Staged.unstage (Codec.get ipv4_codec bf_ip_payload)) buf ip_off)
   in
-  Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n" protocol
-    pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
+  Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n"
+    (UInt8.to_int protocol) pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
 
   (* Layer 3: TCP -- read fields *)
   let src_port =

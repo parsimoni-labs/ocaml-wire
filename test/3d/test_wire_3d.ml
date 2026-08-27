@@ -884,19 +884,19 @@ let e2e_underflow_codec =
    [Casetype], then references the wrapper as the field type. End-to-end
    check that 3d.exe accepts the synthesised module and the generated C
    compiles. *)
-type ep_case_v = [ `U16 of Wire.UInt16.t | `Default of int ]
+type ep_case_v = [ `U16 of Wire.UInt16.t | `Default of Wire.UInt8.t ]
 
 let e2e_casetype_codec =
   let open Wire in
   let body : ep_case_v typ =
     casetype "CtBody" uint8
       [
-        case ~index:1 uint16
+        case ~index:(UInt8.v 1) uint16
           ~inject:(fun v -> `U16 v)
           ~project:(function `U16 v -> Some v | _ -> None);
         default uint8
           ~inject:(fun _tag v -> `Default v)
-          ~project:(function `Default v -> Some (0xFF, v) | _ -> None);
+          ~project:(function `Default v -> Some (UInt8.v 0xFF, v) | _ -> None);
       ]
   in
   let f = Field.v "msg" body in
@@ -906,7 +906,7 @@ let e2e_casetype_codec =
    into two adjacent byte spans (tag and body) so dispatch happens in
    caller code, mirroring OpenSSH's two-step pattern. No 3D-side extern,
    scratch slot or runtime helper -- just two SetBytes setters. *)
-type ssh_auth = [ `Publickey of int | `Other of int ]
+type ssh_auth = [ `Publickey of Wire.UInt8.t | `Other of Wire.UInt8.t ]
 
 let e2e_ssh_casetype_codec =
   let open Wire in
@@ -949,10 +949,10 @@ let e2e_codec_in_casetype =
   let body : channel_confirm typ =
     casetype "Confirm" uint8
       [
-        case ~index:1 (codec session_codec)
+        case ~index:(UInt8.v 1) (codec session_codec)
           ~inject:(fun s -> Session s)
           ~project:(function Session s -> Some s | _ -> None);
-        case ~index:2 uint16be
+        case ~index:(UInt8.v 2) uint16be
           ~inject:(fun n -> Tcpip n)
           ~project:(function Tcpip n -> Some n | _ -> None);
       ]
@@ -972,7 +972,7 @@ let ext_codec =
   Codec.v "Ext"
     (fun _l n -> { name = n })
     [
-      Codec.( $ ) f_len (fun e -> String.length e.name);
+      Codec.( $ ) f_len (fun e -> UInt8.v (String.length e.name));
       Codec.( $ ) f_name (fun e -> e.name);
     ]
 
@@ -986,7 +986,8 @@ let e2e_repeat_var_elem =
     (fun _t xs -> xs)
     [
       Codec.( $ ) f_total (fun xs ->
-          List.fold_left (fun a e -> a + 1 + String.length e.name) 0 xs);
+          UInt8.v
+            (List.fold_left (fun a e -> a + 1 + String.length e.name) 0 xs));
       Codec.( $ ) f_exts (fun xs -> xs);
     ]
 
@@ -1004,7 +1005,7 @@ let dhcp_opt_body_codec =
   Codec.v "DhcpOptBody"
     (fun _l d -> d)
     [
-      Codec.( $ ) f_len (fun d -> String.length d);
+      Codec.( $ ) f_len (fun d -> UInt8.v (String.length d));
       Codec.( $ ) f_data (fun d -> d);
     ]
 
@@ -1013,13 +1014,13 @@ let e2e_repeat_casetype_codec =
   let opt : dhcp_opt typ =
     casetype "DhcpOpt" uint8
       [
-        case ~index:0 empty
+        case ~index:(UInt8.v 0) empty
           ~inject:(fun () -> Pad)
           ~project:(function Pad -> Some () | _ -> None);
-        case ~index:255 empty
+        case ~index:(UInt8.v 255) empty
           ~inject:(fun () -> End)
           ~project:(function End -> Some () | _ -> None);
-        case ~index:53
+        case ~index:(UInt8.v 53)
           (codec dhcp_opt_body_codec)
           ~inject:(fun d -> Generic d)
           ~project:(function Generic d -> Some d | _ -> None);
@@ -1031,7 +1032,8 @@ let e2e_repeat_casetype_codec =
   Codec.v "DhcpOpts"
     (fun _t xs -> xs)
     [
-      Codec.( $ ) f_total (List.fold_left (fun a o -> a + size o) 0);
+      Codec.( $ ) f_total (fun xs ->
+          UInt8.v (List.fold_left (fun a o -> a + size o) 0 xs));
       Codec.( $ ) f_opts (fun xs -> xs);
     ]
 

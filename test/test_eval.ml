@@ -7,7 +7,9 @@
 open Wire.Private
 
 let test_int_of () =
-  Alcotest.(check (option int)) "uint8" (Some 7) (Eval.int_of Types.uint8 7);
+  Alcotest.(check (option int))
+    "uint8" (Some 7)
+    (Eval.int_of Types.uint8 (Wire.UInt8.v 7));
   Alcotest.(check (option int))
     "uint16be" (Some 300)
     (Eval.int_of Types.uint16be (Wire.UInt16.v 300));
@@ -42,7 +44,7 @@ let raises_invalid_arg name f =
         (Printexc.to_string e)
 
 let test_int_of_exn_ok () =
-  Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 7);
+  Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 (Wire.UInt8.v 7));
   Alcotest.(check int)
     "uint16be" 300
     (Eval.int_of_exn Types.uint16be (Wire.UInt16.v 300));
