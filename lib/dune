@@ -1,7 +1,7 @@
 (library
  (name wire)
  (public_name wire)
- (private_modules expr_compiler)
+ (private_modules expr_compiler shape)
  (libraries bytesrw fmt optint))
 
 (mdx
