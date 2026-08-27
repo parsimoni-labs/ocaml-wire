@@ -12,30 +12,20 @@ let blit_slice_exact n buf off src =
   Bytes.blit (Slice.bytes src) (Slice.first src) buf off n;
   off + n
 
-(* Where the bytes a read may reach stop. The buffer's end, except inside a
-   nested region, which hands the parse fewer bytes than the buffer holds: a
-   read past the region has none of them however many the buffer has left. *)
-let[@inline] input_end ctx buf =
-  let stop = Types.eval_input_end ctx in
-  let len = Bytes.length buf in
-  if stop < len then stop else len
+(* Bytes of [buf] a read starting at [off] can have, which is what
+   {!Types.Unexpected_eof}'s [got] counts. A start before the buffer or past
+   its end has none of them; the count is never negative. *)
+let[@inline] bytes_from buf off =
+  if off < 0 || off > Bytes.length buf then 0 else Bytes.length buf - off
 
-(* Bytes a read starting at [off] can have, which is what
-   {!Types.Unexpected_eof}'s [got] counts. A start before the input or past its
-   end has none of them; the count is never negative. *)
-let[@inline] bytes_from ~input_end off =
-  if off < 0 || off > input_end then 0 else input_end - off
-
-(* A read of [width] bytes at [at] that must stay inside the bytes the parse
-   was handed. Reads whose position was itself computed from the buffer can
-   land past the end on truncated input; reporting the span here keeps the
-   failure a precise end-of-input instead of a raw out-of-bounds
-   [Invalid_argument], which a caller cannot tell apart from a misuse or from a
-   user [map] callback. *)
-let[@inline] check_read_bounds ctx buf ~at ~width =
-  let input_end = input_end ctx buf in
-  if at < 0 || at + width > input_end then
-    raise_eof ~at ~expected:width ~got:(bytes_from ~input_end at)
+(* A read of [width] bytes at [at] that must stay inside [buf]. Reads whose
+   position was itself computed from the buffer can land past the end on
+   truncated input; reporting the span here keeps the failure a precise
+   end-of-input instead of a raw out-of-bounds [Invalid_argument], which a
+   caller cannot tell apart from a misuse or from a user [map] callback. *)
+let[@inline] check_read_bounds buf ~at ~width =
+  if at < 0 || at + width > Bytes.length buf then
+    raise_eof ~at ~expected:width ~got:(bytes_from buf at)
 
 (* Reader for a byte span of constant width. A negative width comes from a size
    expression that underflows or names a negative literal, so it is data rather
@@ -1612,7 +1602,7 @@ let rec elem_size_of : type a. a typ -> runtime -> bytes -> int -> int =
       let tag_size = tag_byte_size tag in
       (* The position comes from a preceding length field, so a truncated
          buffer can put the tag past the end. *)
-      check_read_bounds runtime buf ~at:off ~width:tag_size;
+      check_read_bounds buf ~at:off ~width:tag_size;
       let tag_val = read_elem tag runtime buf off in
       tag_size
       + size_case_body ~at:off ~tag cases tag_val runtime buf (off + tag_size)
@@ -1656,31 +1646,6 @@ and size_case_body : type a k.
   | Case_branch { cb_tag = None; cb_inner; _ } :: _ ->
       elem_size_of cb_inner runtime buf body_off
   | _ :: rest -> size_case_body ~at ~tag rest tag_val runtime buf body_off
-
-(* [elem_size_of] against the bytes the parse was handed rather than against
-   the whole buffer, which a nested region ends before.
-
-   A size walk reads the length and gate fields of the record it is sizing, and
-   those all lie inside that record, so a record that ends by [input_end] was
-   sized from bytes the region holds and the plain walk already answered from
-   them. One that ends past [input_end], or that ran off the buffer while being
-   sized, took at least one of its answers from a byte no region of this length
-   carries: walk it again with the region's end standing in for the end of the
-   buffer, so the size it settles on, or the end-of-input it reports, names a
-   byte the parse was handed. Narrowing is what builds a context, and only the
-   second walk narrows, so a region that holds its record allocates nothing. *)
-let elem_size_within : type a.
-    a typ -> runtime -> bytes -> int -> input_end:int -> int =
- fun typ runtime buf off ~input_end ->
-  if input_end >= Bytes.length buf then elem_size_of typ runtime buf off
-  else
-    let sz =
-      match elem_size_of typ runtime buf off with
-      | n -> n
-      | exception Types.Parse_error _ -> input_end - off + 1
-    in
-    if off + sz <= input_end then sz
-    else elem_size_of typ (Types.eval_ctx_within ~input_end runtime) buf off
 
 (* -- Compiled field: intermediate plan for one field's contribution -- *)
 
@@ -2040,7 +2005,7 @@ let present_in_bounds ctx present_fn fsize =
   fun runtime buf base ->
     let present = present_fn runtime buf base in
     if present then
-      check_read_bounds runtime buf ~at:(pos runtime buf base) ~width:fsize;
+      check_read_bounds buf ~at:(pos runtime buf base) ~width:fsize;
     present
 
 let optional_compiled : type a r.
@@ -2090,8 +2055,7 @@ let repeat_raw_fixed : type elt seq.
      buffer before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget
-      ~got:(bytes_from ~input_end:(Bytes.length buf) start);
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
   let remainder = if esz > 0 then budget mod esz else budget in
   if remainder <> 0 then
     raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
@@ -2117,8 +2081,7 @@ let repeat_raw_variable : type elt seq.
   let start = base + off_fn runtime buf base in
   (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
   if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget
-      ~got:(bytes_from ~input_end:(Bytes.length buf) start);
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from buf start);
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
@@ -2399,8 +2362,7 @@ let compile_repeat : type elt seq r.
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-    raise_eof ~at:first ~expected:sz
-      ~got:(bytes_from ~input_end:(Bytes.length buf) first)
+    raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
 
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
@@ -2425,8 +2387,7 @@ let var_bytes_reader : type a.
          [make_or_eod] with a raw [Invalid_argument] that escapes the decode
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
-        raise_eof ~at:first ~expected:sz
-          ~got:(bytes_from ~input_end:(Bytes.length buf) first)
+        raise_eof ~at:first ~expected:sz ~got:(bytes_from buf first)
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
@@ -2444,9 +2405,7 @@ let var_bytes_reader : type a.
   | Casetype _ -> read_elem typ runtime buf (base + fo)
   | Single_elem { elem; at_most; _ } ->
       let first = base + fo in
-      let consumed =
-        elem_size_within elem runtime buf first ~input_end:(first + sz)
-      in
+      let consumed = elem_size_of elem runtime buf first in
       if consumed > sz || ((not at_most) && consumed <> sz) then
         raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
       read_elem elem runtime buf first
@@ -3222,23 +3181,21 @@ let read_guard : type a r.
   | Bitfield { base = word; byte_off; _ } ->
       let width = Bitfield.byte_size word in
       Some
-        (fun runtime buf base ->
-          check_read_bounds runtime buf ~at:(base + byte_off) ~width)
+        (fun _runtime buf base ->
+          check_read_bounds buf ~at:(base + byte_off) ~width)
   | Fixed off -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
           Some
-            (fun runtime buf base ->
-              check_read_bounds runtime buf ~at:(base + off) ~width)
+            (fun _runtime buf base ->
+              check_read_bounds buf ~at:(base + off) ~width)
       | _ -> None)
   | Dynamic off_fn -> (
       match field_wire_size typ with
       | Some width when width = cf.size_delta ->
           Some
             (fun runtime buf base ->
-              check_read_bounds runtime buf
-                ~at:(base + off_fn runtime buf base)
-                ~width)
+              check_read_bounds buf ~at:(base + off_fn runtime buf base) ~width)
       | _ -> None)
   | Variable _ | Variable_dynamic _ -> None
 
@@ -3649,8 +3606,7 @@ let fill_param_slots tbl param_base handles =
    before a zero-copy [get] reads its fields. *)
 let check_decode_bounds wire_size_info min_size runtime buf off =
   if off + min_size > Bytes.length buf then
-    raise_eof ~at:off ~expected:min_size
-      ~got:(bytes_from ~input_end:(Bytes.length buf) off);
+    raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -3660,11 +3616,9 @@ let check_decode_bounds wire_size_info min_size runtime buf off =
          raise is a real error and propagates. *)
       let end_off = compute runtime buf off in
       if end_off < off + min_size then
-        raise_eof ~at:off ~expected:min_size
-          ~got:(bytes_from ~input_end:(Bytes.length buf) off);
+        raise_eof ~at:off ~expected:min_size ~got:(bytes_from buf off);
       if end_off > Bytes.length buf then
-        raise_eof ~at:off ~expected:(end_off - off)
-          ~got:(bytes_from ~input_end:(Bytes.length buf) off)
+        raise_eof ~at:off ~expected:(end_off - off) ~got:(bytes_from buf off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime buf off ->
