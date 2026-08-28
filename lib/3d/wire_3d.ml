@@ -124,38 +124,56 @@ let check_name_collisions schemas =
   check "the file" (fun s -> file_base s ^ ".3d");
   check "the C identifier" c_ident
 
+let extern_api_path ~outdir s =
+  Filename.concat outdir (file_base s ^ "_ExternalAPI.h")
+
 (* EverParse normalizes extern callback names in ways that are awkward to
    mirror exactly (runs of uppercase after a digit get lowercased, trailing
    uppercase runs get lowercased, ...). Rather than re-implement EverParse's
    rule and drift from it over time, we read the normalized names straight
-   out of the [_ExternalAPI.h] file EverParse has just generated. *)
+   out of the [_ExternalAPI.h] file EverParse has just generated.
+
+   KaRaMeL pretty-prints the declaration to a column budget, so a long enough
+   schema name puts [extern void] and the name it introduces on separate lines.
+   Scanning the file as one string rather than line by line reads both layouts. *)
 let read_extern_names ~outdir s =
-  let path = Filename.concat outdir (file_base s ^ "_ExternalAPI.h") in
-  let ic = open_in path in
-  let names = ref [] in
-  (try
-     while true do
-       let line = input_line ic in
-       match
-         ( String.index_opt line '(',
-           String.index_opt line ' ',
-           String.length line )
-       with
-       | Some lp, _, _ when String.length line >= 11 ->
-           let prefix = "extern void " in
-           let plen = String.length prefix in
-           if
-             String.length line > plen
-             && String.sub line 0 plen = prefix
-             && lp > plen
-           then
-             let name = String.sub line plen (lp - plen) in
-             names := name :: !names
-       | _ -> ()
-     done
-   with End_of_file -> ());
-  close_in ic;
-  List.rev !names
+  let text =
+    In_channel.with_open_text (extern_api_path ~outdir s) In_channel.input_all
+  in
+  let len = String.length text in
+  let prefix = "extern void" in
+  let plen = String.length prefix in
+  let is_space c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
+  let is_ident c =
+    (c >= 'A' && c <= 'Z')
+    || (c >= 'a' && c <= 'z')
+    || (c >= '0' && c <= '9')
+    || c = '_'
+  in
+  let starts_prefix i =
+    i + plen <= len
+    &&
+    let rec same k = k = plen || (text.[i + k] = prefix.[k] && same (k + 1)) in
+    same 0
+  in
+  let skip pred i =
+    let j = ref i in
+    while !j < len && pred text.[!j] do
+      incr j
+    done;
+    !j
+  in
+  let rec scan i acc =
+    if i >= len then List.rev acc
+    else if starts_prefix i && i + plen < len && is_space text.[i + plen] then
+      let start = skip is_space (i + plen) in
+      let stop = skip is_ident start in
+      if stop > start && stop < len && text.[stop] = '(' then
+        scan stop (String.sub text start (stop - start) :: acc)
+      else scan (i + plen) acc
+    else scan (i + 1) acc
+  in
+  scan 0 []
 
 (* EverParse's top-level validator function follows its own normalization rule
    and includes the 3D struct tag after [Validate]. Rather than duplicate that
@@ -528,8 +546,17 @@ let write_fields_impl ~outdir s =
      uppercase runs after a digit are lowercased). Read the actual symbol
      names from the just-generated [_ExternalAPI.h] rather than re-deriving
      them. Order matches the declaration order of the extern functions,
-     which matches [plug_setters]. *)
+     which matches [plug_setters]. A header this cannot read yields too few
+     names, and pairing them off silently would emit a [_Fields.c] missing
+     setters the validator calls; say which file came up short instead. *)
   let physical_names = read_extern_names ~outdir s in
+  if List.compare_lengths setters physical_names <> 0 then
+    Fmt.invalid_arg
+      "Wire_3d: codec %S declares %d extern setter(s) but %d were read from \
+       %s; the generated header is not in a layout this understands"
+      s.name (List.length setters)
+      (List.length physical_names)
+      (extern_api_path ~outdir s);
   let path = Filename.concat outdir (base ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in

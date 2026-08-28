@@ -107,6 +107,19 @@
 
 ### Fixed
 
+- A codec that embeds a sub-codec now projects to a schema EverParse accepts
+  whatever that sub-codec holds. The types a sub-codec's own fields name were
+  declared after it rather than before, and a refined byte span reached only
+  through a sub-codec was never declared at all, so EverParse rejected the
+  schema with a "not found" naming a type the codec does use (#344, @samoht)
+
+- Generating C for a codec with a long name no longer fails with
+  `Invalid_argument "List.iter2"`. Past a certain length the generated callback
+  declarations wrap onto a second line, which the field-plug generator read as
+  no declarations at all; both layouts are read now, and a header that still
+  cannot be read is named in the error rather than surfacing as a crash
+  somewhere else (#344, @samoht)
+
 - A value with no fixed wire size read through `Wire.of_reader` no longer costs
   time and memory quadratic in its length. The reader rebuilt the whole
   accumulated buffer and re-parsed it from offset zero after every slice, so a

@@ -2998,9 +2998,13 @@ let map_of (Any a) =
 let where_of (Any a) =
   Any { g = where a.g; size = a.size; label = "wh:" ^ a.label }
 
-let pair_of (Any a) (Any b) =
+(* [name] is the sub-codec's 3D struct name. It is a parameter because a
+   projection keys its typedefs by name: two records that share a name collapse
+   onto whichever body projects first, so a composition holding more than one of
+   them has to name each apart. *)
+let pair_of name (Any a) (Any b) =
   let g =
-    Codec.v "R2"
+    Codec.v name
       ~equal:(fun (x1, y1) (x2, y2) -> a.g.equal x1 x2 && b.g.equal y1 y2)
       (fun x y -> (x, y))
       Codec.[ a.g $ fst; b.g $ snd ]
@@ -3014,12 +3018,12 @@ let pair_of (Any a) (Any b) =
       label = "(" ^ a.label ^ "," ^ b.label ^ ")";
     }
 
-(* Flat records of arity 3 and 4: like [pair_of] but for more fields, so the
+(* Records of arity 3 and 4: like [pair_of] but for more fields, so the
    Boltzmann sampler can emit records wider than a pair. Each unpacks its [Any]
-   elements and seals a flat [Codec.v]. *)
-let rec3_of (Any a) (Any b) (Any c) =
+   elements and seals one [Codec.v]. *)
+let rec3_of name (Any a) (Any b) (Any c) =
   let g =
-    Codec.v "R3"
+    Codec.v name
       ~equal:(fun (x1, y1, z1) (x2, y2, z2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2)
       (fun x y z -> (x, y, z))
@@ -3037,9 +3041,9 @@ let rec3_of (Any a) (Any b) (Any c) =
       label = Fmt.str "(%s,%s,%s)" a.label b.label c.label;
     }
 
-let rec4_of (Any a) (Any b) (Any c) (Any d) =
+let rec4_of name (Any a) (Any b) (Any c) (Any d) =
   let g =
-    Codec.v "R4"
+    Codec.v name
       ~equal:(fun (x1, y1, z1, w1) (x2, y2, z2, w2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2 && d.g.equal w1 w2)
       (fun x y z w -> (x, y, z, w))
@@ -3160,18 +3164,18 @@ let rec gen_fixed depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
           bind1 (gen_fixed (depth - 1)) map_of;
           bind1 (gen_fixed (depth - 1)) where_of;
-          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_of;
+          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) (pair_of "R2");
           bind3
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            rec3_of;
+            (rec3_of "R3");
           bind4
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            rec4_of;
+            (rec4_of "R4");
         ])
 
 let rec gen_any depth : any Alcobar.gen =
@@ -3192,18 +3196,18 @@ let rec gen_any depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
           bind1_opt (gen_fixed (depth - 1)) (array_of 2);
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
-          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_of;
+          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) (pair_of "R2");
           bind3
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            rec3_of;
+            (rec3_of "R3");
           bind4
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            rec4_of;
+            (rec4_of "R4");
           bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
         ])
 
@@ -4966,13 +4970,14 @@ let afl_env_cases ?max_len label =
    A well-distributed random codec sampler. Rather than enumerate a handpicked
    set, [sample] draws codecs whose shape follows a Boltzmann law: the arity of
    a record is geometric (the Boltzmann distribution for a sequence, tuned to a
-   small expected size via [continue]), and each field is drawn from a fixed
-   leaf vocabulary that deliberately over-samples weird / adversarial shapes.
-   It stays in the fixed-size fragment (flat records and homogeneous arrays of
-   leaves) so the differential fuzzer can compile every sample to a standalone C
-   validator. Driven by a [Random.State.t], so a [seed] reproduces the exact
-   set: the differential's generator and its runner both call [sample] with the
-   same seed and agree on the shapes. *)
+   small expected size via [continue]), and each field is drawn either from a
+   fixed leaf vocabulary that deliberately over-samples weird / adversarial
+   shapes or, recursively, from the sampler itself. It stays in the fixed-size
+   fragment (records and homogeneous arrays) so the differential fuzzer can
+   compile every sample to a standalone C validator. Driven by a
+   [Random.State.t], so a [seed] reproduces the exact set: the differential's
+   generator and its runner both call [sample] with the same seed and agree on
+   the shapes. *)
 
 (* Fixed-size leaf vocabulary: every leaf has a standalone validator, so a flat
    record or array of them compiles to one C entrypoint. The sampler chooses
@@ -5066,65 +5071,165 @@ let sample_arity rng ~continue ~max_arity =
   in
   go 1
 
-(* The shape of one sampled codec, paired with the leaf-vocabulary labels it
-   draws (in draw order). The sampler stays in the fixed-size fragment, so a
-   composition is only a flat record of leaves or an array of one leaf --
-   "depth" here is record arity and array presence, not arbitrary nesting.
-   Exposed alongside each sample so coverage metrics read the structure directly
-   rather than parsing the debug label. *)
-type sample_shape = Leaf | Array | Record of int
+(* The shape of one sampled codec as a tree, paired with the leaf-vocabulary
+   labels it draws (in draw order). An array element and a record field are each
+   a shape in their own right, so an array can sit next to other fields, and a
+   record or an array can sit under either. Exposed alongside each sample so
+   coverage metrics read the structure directly rather than parsing the debug
+   label. *)
+type sample_shape =
+  | Leaf
+  | Array of sample_shape  (** element shape *)
+  | Record of sample_shape list  (** field shapes, in declaration order *)
+
 type sample_meta = { shape : sample_shape; leaves : string list }
 
-(* One Boltzmann-distributed projectable codec, with the structural metadata
-   needed for coverage metrics. A composition Wire refuses to build (e.g. a
-   bitfield array element) raises [Invalid_argument]; fall back to a bare leaf so
-   the sampler never crashes. The leaves drawn are recorded as a side effect, so
-   the RNG draw sequence is byte-identical to a plain sampler and a given seed
-   reproduces the exact same set. *)
-let boltzmann_any rng : any * sample_meta =
-  let regular = Array.of_list sampler_regular_leaves in
-  let adversarial = Array.of_list sampler_adversarial_leaves in
-  let pick xs = xs.(Random.State.int rng (Array.length xs)) in
-  let drawn = ref [] in
-  let leaf () =
-    let a =
-      if Random.State.int rng 4 = 0 then pick regular else pick adversarial
+let rec equal_shape a b =
+  match (a, b) with
+  | Leaf, Leaf -> true
+  | Array x, Array y -> equal_shape x y
+  | Record xs, Record ys -> List.equal equal_shape xs ys
+  | (Leaf | Array _ | Record _), _ -> false
+
+let rec shape_depth = function
+  | Leaf -> 1
+  | Array s -> 1 + shape_depth s
+  | Record fs -> 1 + List.fold_left (fun d s -> max d (shape_depth s)) 0 fs
+
+let rec shape_has_array = function
+  | Leaf -> false
+  | Array _ -> true
+  | Record fs -> List.exists shape_has_array fs
+
+(* An array that shares its record with at least one other field. This is the
+   shape where a mis-sized element does the most damage: it shifts the offset of
+   every field after it, which a record whose only field is the array cannot
+   show. *)
+let rec shape_has_array_beside_fields = function
+  | Leaf -> false
+  | Array s -> shape_has_array_beside_fields s
+  | Record fs ->
+      List.compare_length_with fs 1 > 0
+      && List.exists (function Array _ -> true | Leaf | Record _ -> false) fs
+      || List.exists shape_has_array_beside_fields fs
+
+(* An array whose element repeats again inside itself. Wire rejects an array
+   directly under an array (3D projects an array as a count of fixed-size
+   elements, and a list is not one), so the reachable form is an array of a
+   record that holds an array. *)
+let rec shape_has_nested_repetition = function
+  | Leaf -> false
+  | Array s -> shape_has_array s || shape_has_nested_repetition s
+  | Record fs -> List.exists shape_has_nested_repetition fs
+
+(* How deep a sample may nest. The branching is subcritical on its own (a node
+   composes with probability 1/2 and then has 1.875 children on average), so the
+   budget only caps the tail; 3 is the floor that reaches an array of a record
+   holding an array, which needs a record between the two arrays. *)
+let sample_budget = 3
+let sampler_regular_pool = Array.of_list sampler_regular_leaves
+let sampler_adversarial_pool = Array.of_list sampler_adversarial_leaves
+
+(* One leaf, adversarially biased 3:1, appended to [drawn] so the caller ends up
+   with the vocabulary the sample actually holds. *)
+let sample_leaf rng drawn =
+  let pool =
+    if Random.State.int rng 4 = 0 then sampler_regular_pool
+    else sampler_adversarial_pool
+  in
+  let a = pool.(Random.State.int rng (Array.length pool)) in
+  let (Any l) = a in
+  drawn := l.label :: !drawn;
+  a
+
+(* One node of a sampled shape. Each draws its own arity: 1 stops at a leaf,
+   otherwise the node is an array of one shape or a record of that many shapes,
+   and the recursion repeats until [budget] runs out. The set of legal shapes is
+   unchanged -- the same leaf vocabulary and the same three combinators, every
+   intermediate node fixed-size.
+
+   A composition Wire refuses to build (an array of arrays, an array of a
+   bitfield) raises [Invalid_argument] or yields [None]; that node drops back to
+   a bare leaf, and the leaves the abandoned subtree recorded are rolled back so
+   the caller's list holds exactly what the returned codec does. [uid] names the
+   sub-codecs apart, since a projection keys its typedefs by name. *)
+let sample_node rng ~drawn ~uid budget =
+  let bare () = (sample_leaf rng drawn, Leaf) in
+  let compose f =
+    let saved = !drawn in
+    let fallback () =
+      drawn := saved;
+      bare ()
     in
-    let (Any l) = a in
-    drawn := l.label :: !drawn;
-    a
+    match f () with
+    | Some r -> r
+    | None -> fallback ()
+    | exception Invalid_argument _ -> fallback ()
   in
-  let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
-  let shape = ref Leaf in
-  let result =
-    try
-      if k = 1 then leaf ()
-      else if Random.State.bool rng then
-        match array_of (1 + Random.State.int rng 6) (leaf ()) with
-        | Some a ->
-            shape := Array;
-            a
-        | None -> leaf ()
-      else
-        match k with
-        | 2 ->
-            shape := Record 2;
-            pair_of (leaf ()) (leaf ())
-        | 3 ->
-            shape := Record 3;
-            rec3_of (leaf ()) (leaf ()) (leaf ())
-        | _ ->
-            shape := Record 4;
-            rec4_of (leaf ()) (leaf ()) (leaf ()) (leaf ())
-    with Invalid_argument _ -> leaf ()
+  (* A name with an upper-case letter past the first cannot collide with the
+     entrypoint name [sampled] derives from the label, which [camel_of_label]
+     lower-cases. *)
+  let fresh k =
+    incr uid;
+    Fmt.str "R%dN%d" k !uid
   in
-  (result, { shape = !shape; leaves = List.rev !drawn })
+  let rec draw budget =
+    let k = sample_arity rng ~continue:0.5 ~max_arity:4 in
+    if budget <= 0 || k = 1 then bare ()
+    else if Random.State.bool rng then draw_array budget
+    else draw_record budget k
+  and draw_array budget =
+    let n = 1 + Random.State.int rng 6 in
+    compose (fun () ->
+        let element, inner = draw (budget - 1) in
+        Option.map (fun a -> (a, Array inner)) (array_of n element))
+  and draw_record budget k =
+    compose (fun () ->
+        let fields = draw_fields (budget - 1) k in
+        let name = fresh k in
+        let shape = Record (List.map snd fields) in
+        match List.map fst fields with
+        | [ a; b ] -> Some (pair_of name a b, shape)
+        | [ a; b; c ] -> Some (rec3_of name a b c, shape)
+        | [ a; b; c; d ] -> Some (rec4_of name a b c d, shape)
+        | _ -> None)
+  (* Explicit recursion rather than [List.init], so the fields are drawn left to
+     right and the draw order is fixed by this code alone. *)
+  and draw_fields budget k =
+    if k <= 0 then []
+    else
+      let field = draw budget in
+      field :: draw_fields budget (k - 1)
+  in
+  draw budget
+
+(* One Boltzmann-distributed projectable codec, with the structural metadata
+   needed for coverage metrics. The draw sequence is a pure function of [rng],
+   so a seed reproduces the exact same set: the differential's generator and its
+   runner rely on it to agree on the shapes. *)
+let boltzmann_any rng : any * sample_meta =
+  let drawn = ref [] in
+  let uid = ref 0 in
+  let result, shape = sample_node rng ~drawn ~uid sample_budget in
+  (result, { shape; leaves = List.rev !drawn })
+
+(* A nested shape's label nests too, so it grows with the tree. The label names
+   the codec, and the codec name becomes a C identifier and a file name in the
+   differential's generated schema directory, so cap the shape part: the
+   [smp<i>_] prefix is what makes the name unique, and the rest is for reading. *)
+let sample_label i shape =
+  let max_shape = 64 in
+  let shape =
+    if String.length shape <= max_shape then shape
+    else String.sub shape 0 max_shape
+  in
+  Fmt.str "smp%d_%s" i shape
 
 let sampled ~seed ~count : (string * packed * sample_meta) list =
   let rng = Random.State.make [| seed |] in
   List.init count (fun i ->
       let Any a, meta = boltzmann_any rng in
-      let label = Fmt.str "smp%d_%s" i a.label in
+      let label = sample_label i a.label in
       (label, rename_case label (Pack a.g), meta))
 
 let sample ~seed ~count : (string * packed) list =
@@ -5443,6 +5548,23 @@ let check_sampler_invariants () =
         Alcobar.failf "sample label %S does not start with %S" label prefix)
     labels
 
+(* The differential's code generator and its runner each call [sample] at the
+   same seed and pair the results up by label; they are two processes, so
+   nothing but reproducibility keeps them comparing the same codec. A draw
+   sequence that depended on anything outside [rng] -- evaluation order, a
+   counter shared between samples, a hash -- would have them silently compare
+   mismatched shapes rather than fail. Redraw the differential's own seed and
+   count, and pin both the labels and the shapes. *)
+let check_sampler_reproducible () =
+  let shapes () =
+    List.map (fun (label, _, m) -> (label, m.shape)) (sampled ~seed:1 ~count:64)
+  in
+  let first = shapes () in
+  let again = shapes () in
+  let same (l1, s1) (l2, s2) = String.equal l1 l2 && equal_shape s1 s2 in
+  if not (List.equal same first again) then
+    Alcobar.failf "sample ~seed:1 is not reproducible across two calls"
+
 let check_sampler_adversarial_bias () =
   let adversarial = any_labels sampler_adversarial_leaves in
   let is_adversarial l = List.mem l adversarial in
@@ -5458,9 +5580,22 @@ let check_sampler_adversarial_bias () =
       "adversarial-biased sampler produced %d/256 weird/adversarial shapes"
       adversarial_hits
 
-let shape_is_leaf = function Leaf -> true | _ -> false
-let shape_is_array = function Array -> true | _ -> false
-let shape_is_record_arity n = function Record k -> k = n | _ -> false
+let shape_is_leaf = function Leaf -> true | Array _ | Record _ -> false
+let shape_is_array = function Array _ -> true | Leaf | Record _ -> false
+
+let shape_is_record_arity n = function
+  | Record fs -> List.compare_length_with fs n = 0
+  | Leaf | Array _ -> false
+
+(* [p] holds somewhere in the tree, not only at its root: nesting is the point,
+   so a record of arity 3 buried under an array still counts as one seen. *)
+let rec shape_exists p s =
+  p s
+  ||
+  match s with
+  | Leaf -> false
+  | Array e -> shape_exists p e
+  | Record fs -> List.exists (shape_exists p) fs
 
 (* Beyond the gross 3:1 adversarial-bias ratio ([check_sampler_adversarial_bias]),
    enforce that one deterministic sample actually spreads across the grammar:
@@ -5478,10 +5613,13 @@ let check_sampler_distribution () =
   let checks =
     [
       ("no bare leaves", has_shape shape_is_leaf);
-      ("no arrays", has_shape shape_is_array);
-      ("no record of arity 2", has_shape (shape_is_record_arity 2));
-      ("no record of arity 3", has_shape (shape_is_record_arity 3));
-      ("no record of arity 4", has_shape (shape_is_record_arity 4));
+      ("no arrays", has_shape (shape_exists shape_is_array));
+      ( "no record of arity 2",
+        has_shape (shape_exists (shape_is_record_arity 2)) );
+      ( "no record of arity 3",
+        has_shape (shape_exists (shape_is_record_arity 3)) );
+      ( "no record of arity 4",
+        has_shape (shape_exists (shape_is_record_arity 4)) );
       ( "no little-endian multibyte int",
         has_any [ "u16"; "u32"; "u64"; "i16"; "i32"; "i64" ] );
       ( "no big-endian multibyte int",
@@ -5508,6 +5646,26 @@ let check_sampler_distribution () =
   List.iter
     (fun (what, ok) ->
       if not ok then Alcobar.failf "sampler distribution: %s" what)
+    checks
+
+(* The three shapes a flat sampler cannot reach, and the three the differential
+   most wants: an array next to another field, an array inside an array's
+   element, and a third level of structure over either. A mis-sized inner value
+   shifts every field that follows it, and only a nested draw ever puts a field
+   after one. Kept apart from [check_sampler_distribution] so a regression here
+   names the nesting rather than the vocabulary. *)
+let check_sampler_nesting () =
+  let metas = List.map (fun (_, _, m) -> m) (sampled ~seed:7 ~count:256) in
+  let has p = List.exists (fun m -> p m.shape) metas in
+  let checks =
+    [
+      ("no array beside other record fields", has shape_has_array_beside_fields);
+      ("no array of a repeating element", has shape_has_nested_repetition);
+      ("no three-level shape", has (fun s -> shape_depth s >= 3));
+    ]
+  in
+  List.iter
+    (fun (what, ok) -> if not ok then Alcobar.failf "sampler nesting: %s" what)
     checks
 
 (* How many registry entries the per-field properties actually reach. Staging an
@@ -5551,10 +5709,12 @@ let invariant_cases label =
     const_case (label ^ " registry") check_registry_invariants;
     const_case (label ^ " composition vocabulary") check_composition_vocabulary;
     const_case (label ^ " sampler") check_sampler_invariants;
+    const_case (label ^ " sampler reproducible") check_sampler_reproducible;
     const_case
       (label ^ " sampler adversarial bias")
       check_sampler_adversarial_bias;
     const_case (label ^ " sampler distribution") check_sampler_distribution;
+    const_case (label ^ " sampler nesting") check_sampler_nesting;
     const_case (label ^ " field access reach") check_field_reach;
   ]
 

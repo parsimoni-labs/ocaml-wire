@@ -146,15 +146,18 @@ val codec : 'a t -> 'a Wire.Codec.t
 
 val sample : seed:int -> count:int -> (string * packed) list
 (** [sample ~seed ~count] is a deterministic, well-distributed Boltzmann sample
-    of [count] codecs in the fixed-size fragment (flat records and homogeneous
-    arrays of leaves), each renamed to a unique struct name. Record arity
-    follows a geometric (Boltzmann-for-sequence) law and each leaf is drawn from
-    a fixed vocabulary that deliberately oversamples the weird / adversarial
-    shapes (3:1 over the regular leaves) -- refined byte spans, range bounds,
-    cross-field constraints and variable-width integers included, since bugs
-    cluster there; {!val-invariant_cases} asserts the resulting spread across
-    the grammar. The same [seed] yields the same set, so a code generator and
-    its consumer can agree on the shapes. *)
+    of [count] codecs in the fixed-size fragment (records and homogeneous
+    arrays), each renamed to a unique struct name. The shape is drawn as a tree:
+    an array element and a record field are themselves sampled shapes, so a
+    sample can nest a record under an array, put an array next to other fields,
+    or stack a third level over either. Record arity follows a geometric
+    (Boltzmann-for-sequence) law and each leaf is drawn from a fixed vocabulary
+    that deliberately oversamples the weird / adversarial shapes (3:1 over the
+    regular leaves) -- refined byte spans, range bounds, cross-field constraints
+    and variable-width integers included, since bugs cluster there;
+    {!val-invariant_cases} asserts the resulting spread across the grammar. The
+    same [seed] yields the same set, so a code generator and its consumer can
+    agree on the shapes. *)
 
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /

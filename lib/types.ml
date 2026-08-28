@@ -1676,6 +1676,18 @@ let rec wrapper_refined_byte : type a. a typ -> (string * bool expr) option =
   | Where { inner; _ } -> wrapper_refined_byte inner
   | _ -> None
 
+(* The synthesised 1-byte struct a refined span renders as, emitted once per
+   name. [refined_byte_typedefs] only walks the entrypoint's own fields, so a
+   span reached through a sub-codec, an array element or a case body has no
+   other source of a declaration. *)
+let emit_refined_byte seen acc elt_var cond =
+  let synth = synth_name_of_elt_var elt_var in
+  if not (Hashtbl.mem seen synth) then begin
+    Hashtbl.add seen synth ();
+    acc :=
+      typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ]) :: !acc
+  end
+
 let rec collect_casetype_decls : type a.
     (string, unit) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
  fun seen acc typ ->
@@ -1689,14 +1701,7 @@ let rec collect_casetype_decls : type a.
     if not (Hashtbl.mem seen name) then begin
       Hashtbl.add seen name ();
       (match wrapper_refined_byte elem with
-      | Some (elt_var, cond) ->
-          let synth = synth_name_of_elt_var elt_var in
-          if not (Hashtbl.mem seen synth) then begin
-            Hashtbl.add seen synth ();
-            acc :=
-              typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ])
-              :: !acc
-          end
+      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
       | None -> ());
       acc := typedef (struct_ name [ field "v" elem ]) :: !acc
     end
@@ -1717,11 +1722,11 @@ let rec collect_casetype_decls : type a.
   | Codec { codec_name; codec_struct; _ } when not (Hashtbl.mem seen codec_name)
     ->
       (* Embedded sub-codec: emit its struct alongside the parent so 3D
-         references to [codec_name] resolve. Recurse into the sub-codec's
-         own fields to catch nested casetype / sub-codec dependencies. *)
+         references to [codec_name] resolve, and only after visiting its own
+         fields, so whatever they name is declared ahead of it. *)
       Hashtbl.add seen codec_name ();
-      acc := typedef codec_struct :: !acc;
-      List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields
+      List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
+      acc := typedef codec_struct :: !acc
   | Codec _ -> ()
   | Map { inner; _ } -> extract inner
   | Where { inner; _ } -> extract inner
@@ -1752,6 +1757,8 @@ let rec collect_casetype_decls : type a.
   | Single_elem { elem; _ } ->
       extract elem;
       Option.iter (fun n -> emit_wrapper n elem) (single_elem_struct elem)
+  | Byte_array_where { elt_var; cond; _ } ->
+      emit_refined_byte seen acc elt_var cond
   | _ -> ()
 
 let casetype_decls_of_struct (s : struct_) : decl list =

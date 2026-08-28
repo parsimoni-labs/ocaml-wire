@@ -6,6 +6,12 @@ open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
+(* Return the byte offset of the first occurrence of [sub] in [s], or -1 if not
+   found. Used to assert relative declaration and field ordering. *)
+let index_of ~sub s =
+  let re = Re.compile (Re.str sub) in
+  match Re.exec_opt re s with Some g -> Re.Group.start g 0 | None -> -1
+
 let test_bitfields () =
   let f_y = field "y" (bits ~width:10 U32) in
   let f_z = field "z" (bits ~width:16 U32) in
@@ -556,6 +562,80 @@ let test_3d_nested_byte_array_where () =
     "refined-byte typedef is defined, not just referenced" true
     (contains ~sub:"} _RefByte_" output)
 
+let test_3d_sub_codec_declaration_order () =
+  (* 3D resolves a type name against what is already declared, so a sub-codec's
+     typedef has to follow every typedef its own fields name. It takes three
+     levels to tell the two orders apart: with only a sub-codec of leaves the
+     entrypoint is the sole referrer and any order works. *)
+  let leaf =
+    Codec.v "OrdLeaf"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "a" uint8 $ fun (a, _) -> a);
+          (Field.v "b" uint16be $ fun (_, b) -> b);
+        ]
+  in
+  let middle =
+    Codec.v "OrdMiddle"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "l" (codec leaf) $ fun (a, _) -> a);
+          (Field.v "c" uint8 $ fun (_, b) -> b);
+        ]
+  in
+  let top =
+    Codec.v "OrdTop"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "m" (codec middle) $ fun (a, _) -> a);
+          (Field.v "z" uint8 $ fun (_, b) -> b);
+        ]
+  in
+  let output = to_3d (Everparse.project ~mode:`Ffi top).module_ in
+  let leaf_decl = index_of ~sub:"} OrdLeaf;" output in
+  let middle_decl = index_of ~sub:"} OrdMiddle;" output in
+  Alcotest.(check bool) "OrdLeaf declared" true (leaf_decl >= 0);
+  Alcotest.(check bool) "OrdMiddle declared" true (middle_decl >= 0);
+  Alcotest.(check bool)
+    "OrdLeaf declared before the OrdMiddle whose field names it" true
+    (leaf_decl < middle_decl)
+
+let test_3d_sub_codec_refined_byte_typedef () =
+  (* The synthesised refined-byte struct is collected from the entrypoint's own
+     fields, so a refined span reached only through a sub-codec had nothing
+     declaring it: the schema named a type it never defined. Reach one the way
+     an array element does, and check the typedef is defined and defined before
+     the sub-codec whose field names it. *)
+  let span =
+    byte_array_where ~size:(int 3) ~per_byte:(fun b -> Expr.(b < int 128))
+  in
+  let inner =
+    Codec.v "RefInner"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          (Field.v "s" span $ fun (a, _) -> a);
+          (Field.v "n" uint16be $ fun (_, b) -> b);
+        ]
+  in
+  let top =
+    Codec.v "RefTop"
+      (fun v -> v)
+      Codec.[ (Field.v "xs" (array ~len:(int 2) (codec inner)) $ fun v -> v) ]
+  in
+  let output = to_3d (Everparse.project ~mode:`Ffi top).module_ in
+  let synth_decl = index_of ~sub:"} _RefByte_" output in
+  let inner_decl = index_of ~sub:"} RefInner;" output in
+  Alcotest.(check bool)
+    "refined-byte typedef is defined, not just referenced" true (synth_decl >= 0);
+  Alcotest.(check bool) "RefInner declared" true (inner_decl >= 0);
+  Alcotest.(check bool)
+    "the refined-byte typedef precedes the sub-codec naming it" true
+    (synth_decl < inner_decl)
+
 let test_3d_static_optional_transparent () =
   (* A statically-present optional projects as its inner: a byte-span or
      composite inner keeps its offset setter (passing the field value made
@@ -1037,12 +1117,6 @@ let test_3d_tm_like () =
    widths don't fill the word, prepending anonymous padding. These tests
    lock in that the reorder actually happens in the emitted 3D text. *)
 
-(* Return the byte offset of the first occurrence of [sub] in [s],
-   or -1 if not found. Used to assert relative field ordering. *)
-let index_of ~sub s =
-  let re = Re.compile (Re.str sub) in
-  match Re.exec_opt re s with Some g -> Re.Group.start g 0 | None -> -1
-
 let test_3d_bitorder_u8msb_reorder () =
   (* Non-native: (U8, Msb_first). EverParse native for UINT8 is LSB-first,
      so the projection reverses [a; b] to [b; a] in the emitted 3D text.
@@ -1500,6 +1574,10 @@ let suite =
         test_doc_bit_order_matches_schema;
       Alcotest.test_case "3d: nested byte_array_where refined typedef" `Quick
         test_3d_nested_byte_array_where;
+      Alcotest.test_case "3d: sub-codec declaration order" `Quick
+        test_3d_sub_codec_declaration_order;
+      Alcotest.test_case "3d: sub-codec refined-byte typedef" `Quick
+        test_3d_sub_codec_refined_byte_typedef;
       Alcotest.test_case "3d: static optional transparent projection" `Quick
         test_3d_static_optional_transparent;
       Alcotest.test_case "3d: absent optional projects to unit" `Quick
