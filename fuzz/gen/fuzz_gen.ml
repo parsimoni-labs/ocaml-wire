@@ -987,6 +987,13 @@ let list_equal eq a b = List.length a = List.length b && List.for_all2 eq a b
 (* [repeat] and [repeat_seq] differ only in the codec name and the items
    field constructor (list vs seq); the length-prefixed payload generation is
    identical. *)
+(* A short stable tag for a shape, so two structurally different sub-codecs
+   never take the same name. Sharing one would make the projection refuse the
+   schema, and deduping them would leave both validated against whichever was
+   reached first. Same shape yields the same tag, which is the sharing we do
+   want. *)
+let shape_tag label = Fmt.str "%06x" (Hashtbl.hash label land 0xffffff)
+
 let repeat_sized name make_items ~bytes:total_bytes inner =
   let f_total = Wire.Field.v "_total" Wire.uint16be in
   let f_items = make_items ~size:(Wire.Field.ref f_total) inner.typ in
@@ -1037,8 +1044,8 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     adversarial_value = None;
   }
 
-let repeat ~bytes inner =
-  repeat_sized "_rep"
+let repeat ?(name = "_rep") ~bytes inner =
+  repeat_sized name
     (fun ~size typ -> Wire.Field.repeat "_items" ~size typ)
     ~bytes inner
 
@@ -1798,8 +1805,8 @@ let bit inner =
 
 let array_seq n inner = array_sized (Wire.array_seq Wire.seq_list) n inner
 
-let repeat_seq ~bytes inner =
-  repeat_sized "_rep_seq"
+let repeat_seq ?(name = "_rep_seq") ~bytes inner =
+  repeat_sized name
     (fun ~size typ ->
       Wire.Field.repeat_seq "_items" ~seq:Wire.seq_list ~size typ)
     ~bytes inner
@@ -2979,10 +2986,22 @@ let optional_of (Any a) =
   Any { g = optional a.g; size = None; label = "opt:" ^ a.label }
 
 let repeat_of (Any a) =
-  Any { g = repeat ~bytes:12 a.g; size = None; label = "rep:" ^ a.label }
+  let label = "rep:" ^ a.label in
+  Any
+    {
+      g = repeat ~name:("_rep" ^ shape_tag label) ~bytes:12 a.g;
+      size = None;
+      label;
+    }
 
 let repeat_seq_of (Any a) =
-  Any { g = repeat_seq ~bytes:12 a.g; size = None; label = "reps:" ^ a.label }
+  let label = "reps:" ^ a.label in
+  Any
+    {
+      g = repeat_seq ~name:("_rep_seq" ^ shape_tag label) ~bytes:12 a.g;
+      size = None;
+      label;
+    }
 
 let nested_at_most_of (Any a) =
   match a.size with
@@ -3160,6 +3179,20 @@ let bind4 g1 g2 g3 g4 f =
    need a known element width); [gen_any] yields any node. Both compose the
    full combinator set so the fuzzer reaches every nesting -- the point is to
    surface compositions Wire mishandles, not to pre-filter them. *)
+(* The recursive samplers can build structurally different records at the same
+   depth, so a record takes its name from its own shape rather than from its
+   arity alone. *)
+let pair_uniq (Any a as x) (Any b as y) =
+  pair_of ("R2" ^ shape_tag (a.label ^ "," ^ b.label)) x y
+
+let rec3_uniq (Any a as x) (Any b as y) (Any c as z) =
+  rec3_of ("R3" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label)) x y z
+
+let rec4_uniq (Any a as x) (Any b as y) (Any c as z) (Any d as w) =
+  rec4_of
+    ("R4" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label ^ "," ^ d.label))
+    x y z w
+
 let rec gen_fixed depth : any Alcobar.gen =
   let leaves = List.map Alcobar.const fixed_leaves in
   if depth <= 0 then Alcobar.choose leaves
@@ -3173,18 +3206,18 @@ let rec gen_fixed depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
           bind1 (gen_fixed (depth - 1)) map_of;
           bind1 (gen_fixed (depth - 1)) where_of;
-          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) (pair_of "R2");
+          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_uniq;
           bind3
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            (rec3_of "R3");
+            rec3_uniq;
           bind4
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            (rec4_of "R4");
+            rec4_uniq;
         ])
 
 let rec gen_any depth : any Alcobar.gen =
@@ -3205,18 +3238,18 @@ let rec gen_any depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
           bind1_opt (gen_fixed (depth - 1)) (array_of 2);
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
-          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) (pair_of "R2");
+          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_uniq;
           bind3
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            (rec3_of "R3");
+            rec3_uniq;
           bind4
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            (rec4_of "R4");
+            rec4_uniq;
           bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
         ])
 
