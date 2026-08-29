@@ -1382,7 +1382,7 @@ type module_ = { doc : string option; decls : decl list }
    mapping is OCaml-only). An enum over a big-endian base is skipped too (no 3D
    enum type for it; the field carries a membership refinement instead). *)
 let enum_decls (s : struct_) : decl list =
-  let seen = Hashtbl.create 4 in
+  let seen : (string, string) Hashtbl.t = Hashtbl.create 4 in
   let decls = Stdlib.ref [] in
   let is_bits : type a. a typ -> bool = function
     | Bits _ -> true
@@ -1392,16 +1392,31 @@ let enum_decls (s : struct_) : decl list =
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
         | Enum { name; cases; base; _ }
-          when (not (Hashtbl.mem seen name))
-               && (not (is_bits base))
-               && not (enum_base_is_be base) ->
+          when (not (is_bits base)) && not (enum_base_is_be base) -> (
             (* Both open and closed enums declare a 3D enum type so the named
                codes survive in the generated .3d. A closed enum additionally
                constrains its field with a membership refinement; an open enum
                leaves the field as its base scalar (any value accepted) while
-               still documenting the known codes through the declaration. *)
-            Hashtbl.add seen name ();
-            decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
+               still documenting the known codes through the declaration.
+
+               A second enum under the same name is dropped as a repeat of the
+               first, so two different ones would leave both fields validated
+               against whichever was reached first. *)
+            let shape =
+              String.concat ","
+                (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
+            in
+            match Hashtbl.find_opt seen name with
+            | Some first when not (String.equal first shape) ->
+                Fmt.invalid_arg
+                  "Wire: two different enums are named %S; every field typed \
+                   by it would be validated against one of them, so rename one"
+                  name
+            | Some _ -> ()
+            | None ->
+                Hashtbl.add seen name shape;
+                decls :=
+                  Enum_decl { name; cases; base = Pack_typ base } :: !decls)
         | Map { inner; _ } -> extract inner
         | Where { inner; _ } -> extract inner
         (* An enum can sit inside a container (an array or repeat element, an
@@ -1484,7 +1499,7 @@ let emit_enum_elem_struct seen acc elem =
   | Some (name, base, (_ :: _ as cases)) ->
       let sname = enum_elem_struct_name name in
       if not (Hashtbl.mem seen sname) then begin
-        Hashtbl.add seen sname ();
+        Hashtbl.add seen sname sname;
         Option.iter
           (fun d -> acc := d :: !acc)
           (enum_elem_struct_decl name base cases)
@@ -1771,13 +1786,24 @@ let rec wrapper_refined_byte : type a. a typ -> (string * bool expr) option =
 let emit_refined_byte seen acc elt_var cond =
   let synth = synth_name_of_elt_var elt_var in
   if not (Hashtbl.mem seen synth) then begin
-    Hashtbl.add seen synth ();
+    Hashtbl.add seen synth synth;
     acc :=
       typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ]) :: !acc
   end
 
+(* A structural key for a sub-codec's struct: its name, its fields' names, and
+   each field's shape as [wrap_tag] renders it. Pure, so it can be compared
+   where the declaration itself cannot. *)
+let codec_shape name (st : struct_) =
+  name ^ "|"
+  ^ String.concat ","
+      (List.map
+         (fun (Field f) ->
+           Option.value ~default:"_" f.field_name ^ ":" ^ wrap_tag f.field_typ)
+         st.fields)
+
 let rec collect_casetype_decls : type a.
-    (string, unit) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
+    (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
  fun seen acc typ ->
   let extract : type b. b typ -> unit =
    fun t -> collect_casetype_decls seen acc t
@@ -1787,7 +1813,7 @@ let rec collect_casetype_decls : type a.
      refined-byte element inside the wrapper needs its own typedef emitted first. *)
   let emit_wrapper name elem =
     if not (Hashtbl.mem seen name) then begin
-      Hashtbl.add seen name ();
+      Hashtbl.add seen name name;
       (match wrapper_refined_byte elem with
       | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
       | None -> ());
@@ -1797,7 +1823,7 @@ let rec collect_casetype_decls : type a.
   match typ with
   | Casetype { name; tag; cases }
     when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
-      Hashtbl.add seen name ();
+      Hashtbl.add seen name name;
       (* Visit case inners first so any sub-codecs / nested casetypes they
          reference are declared before the dispatch that names them. *)
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
@@ -1807,15 +1833,27 @@ let rec collect_casetype_decls : type a.
       (* String-tagged casetype: handled by [split_string_casetype_fields].
          Still walk inner case typs for nested int-tagged casetypes. *)
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
-  | Codec { codec_name; codec_struct; _ } when not (Hashtbl.mem seen codec_name)
-    ->
+  | Codec { codec_name; codec_struct; _ } -> (
       (* Embedded sub-codec: emit its struct alongside the parent so 3D
          references to [codec_name] resolve, and only after visiting its own
-         fields, so whatever they name is declared ahead of it. *)
-      Hashtbl.add seen codec_name ();
-      List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
-      acc := typedef codec_struct :: !acc
-  | Codec _ -> ()
+         fields, so whatever they name is declared ahead of it. A second
+         sub-codec under the same name is dropped as a repeat of the first, so
+         two different ones would leave every reference resolving to whichever
+         was reached first, and a validator reading a different number of bytes
+         than the codec. Compared by shape rather than by equality, which a
+         [decl] cannot support: it holds the codec's closures. *)
+      let shape = codec_shape codec_name codec_struct in
+      match Hashtbl.find_opt seen codec_name with
+      | Some first when not (String.equal first shape) ->
+          Fmt.invalid_arg
+            "Wire: two different sub-codecs are named %S; every reference to \
+             it resolves to one of them, so rename one"
+            codec_name
+      | Some _ -> ()
+      | None ->
+          Hashtbl.add seen codec_name shape;
+          List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
+          acc := typedef codec_struct :: !acc)
   | Map { inner; _ } -> extract inner
   | Where { inner; _ } -> extract inner
   | Optional { inner; _ } when not (has_wire_size_expr inner) ->
@@ -1824,7 +1862,7 @@ let rec collect_casetype_decls : type a.
       extract inner;
       let opt_name = optional_casetype_name inner in
       if not (Hashtbl.mem seen opt_name) then begin
-        Hashtbl.add seen opt_name ();
+        Hashtbl.add seen opt_name opt_name;
         acc := optional_casetype_decl opt_name inner :: !acc
       end
   | Optional { inner; _ } ->
@@ -3379,11 +3417,39 @@ let pp_module ppf m =
     m.doc;
   List.iter (pp_decl ppf) m.decls
 
+(* Two declarations under one name are two different types with one name, and
+   3D resolves every reference to whichever came first. [Everparse.write]
+   already refuses this across schemas; within one schema nothing did, so a
+   second sub-codec of a different width silently gave a validator reading a
+   different number of bytes than the codec. Compared by what each renders to,
+   because a [decl] holds closures and structural equality raises on them.
+   Identical redeclarations are left alone: 3D says so itself, loudly. *)
+let check_unique_decl_names decls =
+  let seen = Hashtbl.create 16 in
+  List.iter
+    (fun d ->
+      match decl_name d with
+      | None -> ()
+      | Some n -> (
+          let text = Fmt.str "%a" pp_decl d in
+          match Hashtbl.find_opt seen n with
+          | None -> Hashtbl.add seen n text
+          | Some first ->
+              if not (String.equal first text) then
+                Fmt.invalid_arg
+                  "Wire: the schema declares %S twice with different \
+                   definitions; every reference to it would resolve to the \
+                   first, so rename one of them"
+                  n))
+    decls
+
 let to_3d ?(enum_as_type = false) m =
   render_enum_as_type := enum_as_type;
   Fun.protect
     ~finally:(fun () -> render_enum_as_type := false)
-    (fun () -> Fmt.str "@[<v>%a@]" pp_module m)
+    (fun () ->
+      check_unique_decl_names m.decls;
+      Fmt.str "@[<v>%a@]" pp_module m)
 
 let to_3d_file ?(enum_as_type = false) path m =
   let oc = open_out path in
