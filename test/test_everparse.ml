@@ -637,6 +637,44 @@ let test_casetype_tag_field_seed () =
       Alcotest.failf "expected one seed for the casetype tag, got %d"
         (List.length seeds)
 
+(* A refinement is checked at the field carrying it but compares whatever it
+   references, so the values it names belong to the field on the other side.
+   Crediting them to the carrier reported nothing for either field, and a
+   struct-level [where] was not read at all, though the projection lowers it
+   onto a field before EverParse sees it. *)
+let test_seeds_follow_the_compared_field () =
+  let f_len = Field.v "len" uint8 in
+  let carried =
+    Codec.v "Carried"
+      (fun l d -> (l, d))
+      Codec.
+        [
+          (f_len $ fun (l, _) -> l);
+          ( Field.v "d" (where Expr.(Field.ref f_len < int 2) uint8)
+          $ fun (_, d) -> d );
+        ]
+  in
+  let f_v = Field.v "v" uint8 in
+  let record_where =
+    Codec.v "RecordWhere"
+      ~where:Expr.(Field.ref f_v < int 4)
+      (fun v -> v)
+      Codec.[ (f_v $ fun v -> v) ]
+  in
+  let named c =
+    List.map
+      (fun (s : field_seed) -> (s.field, s.values))
+      (field_seeds (struct_of_codec c))
+  in
+  Alcotest.(check (list (pair string (list int64))))
+    "the value belongs to the field the refinement compares"
+    [ ("len", [ 1L; 2L; 3L ]) ]
+    (named carried);
+  Alcotest.(check (list (pair string (list int64))))
+    "a struct-level where is read where the projection puts it"
+    [ ("v", [ 3L; 4L; 5L ]) ]
+    (named record_where)
+
 (* A [lookup] admits exactly the indices into its table, and no other part of a
    field's declaration names them, so without a seed a generated corpus never
    reaches an accepted record and the codec reads as unfuzzable. *)
@@ -1730,6 +1768,8 @@ let suite =
         `Quick test_doc_merge_shared_sub_codec;
       Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
         test_3d_casetype_tag_int_carriers;
+      Alcotest.test_case "seeds: follow the compared field" `Quick
+        test_seeds_follow_the_compared_field;
       Alcotest.test_case "seeds: lookup names its table indices" `Quick
         test_lookup_field_seed;
       Alcotest.test_case "seeds: casetype tag names its case indices" `Quick
