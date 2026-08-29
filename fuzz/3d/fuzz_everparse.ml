@@ -4,18 +4,21 @@
     ({!Fuzz_gen.everparse_cases}), so the projection and code-generation path is
     exercised on the same compositions the OCaml round-trip suite uses, plus
     arbitrary nested ones. When [3d.exe] is available {e and} [WIRE_3D_BATCH=1]
-    is set, the {e whole} registry is additionally run through EverParse (one
-    [3d.exe --batch] over all the generated files): every codec that builds must
-    also project to a schema EverParse verifies, except the few in
-    {!no_3d_projection} that wire rejects at projection (asserted to reject
-    instead). That extraction pass is the only check that catches errors
-    surfacing during F* verification rather than pretty-printing (a kind error
-    on a possibly-empty list, an invalid action or expression). It is opt-in
-    because it takes ~90s (too heavy for a plain [dune test]); the everparse-3d
-    CI job sets [WIRE_3D_BATCH=1]. It is skipped where [3d.exe] is absent (the
-    plain CI build, AFL) or the variable is unset. *)
+    is set, the {e whole} registry is additionally run through EverParse, once
+    per projection mode: every codec that builds must project to a schema
+    EverParse verifies as the standalone spec {e and} as the FFI schema, except
+    the few in {!no_3d_projection} that wire rejects at projection and the known
+    standalone-only gaps in {!no_3d_standalone} (both asserted to reject). That
+    extraction pass is the only check that catches errors surfacing during F*
+    verification rather than pretty-printing (a kind error on a possibly-empty
+    list, an invalid action or expression). It is opt-in because it takes
+    several minutes (too heavy for a plain [dune test]); the everparse-3d CI job
+    sets [WIRE_3D_BATCH=1]. It is skipped where [3d.exe] is absent (the plain CI
+    build, AFL) or the variable is unset. *)
 
 open Alcobar
+
+let err_c_compile fmt = Fmt.kstr (fun s -> Error s) fmt
 
 (* Shapes wire rejects at projection: they use a construct with no 3D form, so
    [to_3d] raises a clear [Invalid_argument]. [expr_ops] uses a negative integer
@@ -67,24 +70,25 @@ let normal_mode () =
 
 (* Adversarially test the generated 3d files: every shape in the registry that
    wire claims projects (all but the {!no_3d_projection} ones, asserted to reject
-   in [pp_cases]) must verify, or it is a build-but-fail-3d hole. Running one
-   [3d.exe --batch] per schema is far too slow for the expanded, adversarially
-   biased registry (hundreds of schemas, each paying EverParse's F* / KaRaMeL
-   startup), and doing it lazily inside the test cases also trips alcobar's
-   per-test timeout. Instead, the whole set is validated in a single
-   [3d.exe --batch] over all the generated files (EverParse's own corpus-test
-   strategy), run once at module load.
+   in [pp_cases]) must verify in both projection modes, or it is a
+   build-but-fail-3d hole. Doing that lazily inside the test cases trips
+   alcobar's per-test timeout, so the whole set is verified once at module load,
+   one [.3d] module per schema, run concurrently (EverParse's own corpus-test
+   strategy; the cost is F* verification, not startup).
 
-   This still takes ~90s, which is too heavy for a plain [dune test], so it is
-   off by default and opt-in via [WIRE_3D_BATCH=1] (set in the everparse-3d CI
-   job). It is also skipped without [3d.exe] and in corpus / AFL modes. *)
+   Two modes over a few hundred schemas takes several minutes, which is too
+   heavy for a plain [dune test], so it is off by default and opt-in via
+   [WIRE_3D_BATCH=1] (set in the everparse-3d CI job). It is also skipped
+   without [3d.exe] and in corpus / AFL modes. *)
 let batch_requested () = Sys.getenv_opt "WIRE_3D_BATCH" = Some "1"
 
 (* A distinct, valid 3d module name per schema (one [.3d] file each), keeping the
-   registry label in it so a batch failure points back to the codec. *)
-let batch_module_name i label =
+   registry label and the projection mode in it, so a batch failure points back
+   to the codec and says which of its two projections broke. The mode tag is
+   what keeps the two sweeps below from writing one file twice. *)
+let batch_module_name i tag label =
   let b = Buffer.create (String.length label + 8) in
-  Buffer.add_string b ("S" ^ string_of_int i ^ "_");
+  Buffer.add_string b ("S" ^ string_of_int i ^ tag ^ "_");
   String.iter
     (fun c ->
       if
@@ -95,36 +99,222 @@ let batch_module_name i label =
     label;
   Buffer.contents b
 
-let batch_schemas =
-  if not (Wire_3d.has_3d_exe () && normal_mode () && batch_requested ()) then []
+let batch_enabled () =
+  Wire_3d.has_3d_exe () && normal_mode () && batch_requested ()
+
+(* Shapes whose FFI projection verifies but whose standalone rendering does
+   not. Keep each in the registry and assert its standalone rejection below, so
+   the exception cannot hide a new gap or outlive the projection bug that
+   requires it. *)
+let no_3d_standalone = [ "casetype_where_tag"; "action"; "action_on_act" ]
+
+(* Every registry entry [keep] admits, projected under [mode], each schema named
+   apart from its sibling in the other mode. *)
+let sweep_schemas ~mode ~tag keep =
+  if not (batch_enabled ()) then []
   else
     Fuzz_gen.registry
-    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
+    |> List.filter (fun (name, _) ->
+        (not (List.mem name no_3d_projection)) && keep name)
     |> List.mapi (fun i (label, Fuzz_gen.Pack g) ->
-        let s = Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g) in
-        { s with Wire.Everparse.name = batch_module_name i label })
+        let s = Wire.Everparse.project ~mode (Fuzz_gen.codec g) in
+        { s with Wire.Everparse.name = batch_module_name i tag label })
 
-let batch_result =
-  match batch_schemas with
-  | [] -> None
-  | schemas ->
-      let outdir = Filename.temp_dir "wire_fuzz3d_batch" "" in
-      Some (Wire_3d.batch_check ~outdir schemas)
+(* Each mode is swept through the writer that actually ships it, since the two
+   writers do not render the same schema the same way: the [`Ffi] one emits a
+   file per schema and spells an enum field as its base type plus a membership
+   refinement, the [`Standalone] one merges a family into one spec and spells it
+   as the named 3D enum type. Running a [`Standalone] projection through the FFI
+   writer would verify a file nothing ever emits. [Wire_3d.batch_check] is the
+   FFI writer already, so [`Ffi] uses it and [`Standalone] gets the same
+   one-module-per-schema treatment over [Everparse.write ~mode:`Standalone],
+   which is what [Wire_3d.generate_3d_standalone] calls. *)
+let ffi_check schemas =
+  let outdir = Filename.temp_dir "wire_fuzz3d_ffi" "" in
+  Fun.protect
+    ~finally:(fun () -> Wire_3d.rm_rf outdir)
+    (fun () -> Wire_3d.batch_check ~outdir schemas)
 
-let extract_cases =
-  match batch_result with
+let standalone_check schemas =
+  let outdir = Filename.temp_dir "wire_fuzz3d_std" "" in
+  Fun.protect
+    ~finally:(fun () -> Wire_3d.rm_rf outdir)
+    (fun () ->
+      let arr = Array.of_list schemas in
+      let log_of i = Filename.concat outdir (string_of_int i ^ ".log") in
+      let jobs =
+        Array.mapi
+          (fun i (s : Wire.Everparse.t) () ->
+            (* Concurrent [3d.exe] runs race on EverParse's shared intermediate
+               files, so each job gets a directory of its own. *)
+            let work = Filename.temp_dir "wire_fuzz3d_stdjob" "" in
+            Fun.protect
+              ~finally:(fun () -> Wire_3d.rm_rf work)
+              (fun () ->
+                Wire.Everparse.write ~mode:`Standalone ~outdir:work ~name:s.name
+                  [ s ];
+                match
+                  Wire_3d.parse_3d ~batch:true ~outdir:work
+                    (Wire.Everparse.filename s)
+                with
+                | Ok () -> ()
+                | Error m ->
+                    Out_channel.with_open_text (log_of i) (fun oc ->
+                        Out_channel.output_string oc m);
+                    failwith "EverParse rejected"))
+          arr
+      in
+      let max_jobs = max 1 (min 4 (Domain.recommended_domain_count ())) in
+      let errors =
+        Wire_3d.fork_pool ~max_jobs jobs
+        |> Array.to_list
+        |> List.mapi (fun i passed ->
+            if passed then None
+            else
+              let msg =
+                try In_channel.with_open_text (log_of i) In_channel.input_all
+                with Sys_error _ -> ""
+              in
+              Fmt.kstr
+                (fun s -> Some s)
+                "%s:\n%s" arr.(i).Wire.Everparse.name msg)
+        |> List.filter_map Fun.id
+      in
+      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+
+let run check = function [] -> None | schemas -> Some (check schemas)
+
+(* One sweep: its mode's name, the schemas it covers, and EverParse's verdict on
+   them ([None] when the sweep is off). *)
+let sweep ~mode ~tag ~check ~name keep =
+  let schemas = sweep_schemas ~mode ~tag keep in
+  (name, schemas, run check schemas)
+
+let sweeps =
+  [
+    sweep ~mode:`Standalone ~tag:"S" ~check:standalone_check ~name:"standalone"
+      (fun name -> not (List.mem name no_3d_standalone));
+    sweep ~mode:`Ffi ~tag:"F" ~check:ffi_check ~name:"ffi" (Fun.const true);
+  ]
+
+let refused_sweeps =
+  [
+    sweep ~mode:`Standalone ~tag:"XS" ~check:standalone_check ~name:"standalone"
+      (fun name -> List.mem name no_3d_standalone);
+  ]
+
+let verdict_case name schemas result ~expected =
+  match result with
   | None -> []
   | Some res ->
       [
         Alcobar.test_case
-          (Fmt.str "3d.exe batch (%d schemas)" (List.length batch_schemas))
+          (Fmt.str "3d.exe %s %s (%d schemas)"
+             (if expected then "accepts" else "rejects")
+             name (List.length schemas))
           [ const () ]
           (fun () ->
-            match res with
-            | Ok () -> ()
-            | Error m ->
-                Alcobar.failf "EverParse rejected a generated schema:\n%s" m);
+            match (res, expected) with
+            | Ok (), true | Error _, false -> ()
+            | Error m, true ->
+                Alcobar.failf "EverParse rejected a generated schema:\n%s" m
+            | Ok (), false ->
+                Alcobar.failf
+                  "EverParse now accepts %s; drop it from [no_3d_standalone]"
+                  (String.concat ", " no_3d_standalone));
       ]
+
+let extract_cases =
+  List.concat_map
+    (fun (name, schemas, res) -> verdict_case name schemas res ~expected:true)
+    sweeps
+  @ List.concat_map
+      (fun (name, schemas, res) ->
+        verdict_case name schemas res ~expected:false)
+      refused_sweeps
+
+(* {1 The generated C compiles}
+
+   [3d.exe --batch] verifying a schema says nothing about the C wire ships.
+   After EverParse writes the parser, [Wire_3d.generate_c] rewrites the
+   [<Base>CheckWire<Codec>] wrapper's success tail to demand full consumption,
+   and that rewrite is textual: it splices in a comparison naming a variable
+   EverParse chose. When a future EverParse names it something else, the splice
+   still matches the surrounding tail, the C stops compiling, and nothing in the
+   sweep notices, because the sweep stops at verification. So take a handful of
+   registry shapes the whole way: generate the standalone spec, run EverParse
+   over it, and compile the parser and its hardened wrapper with the same strict
+   flags the shipped dune rule uses.
+
+   A handful, not the registry: each one is a full EverParse C generation, and
+   the wrapper shape follows the entrypoint's kind (plain, parameterized,
+   variable-size, tag-dispatched), not the leaf types under it. *)
+
+let c_compile_labels =
+  [
+    "uint32be";
+    "record";
+    "casetype_u8";
+    "subcodec_last(record)";
+    "repeat(8,uint8)";
+    "zeroterm";
+    "param_size";
+  ]
+
+(* The [.3d] the standalone writer just produced, found by listing rather than by
+   recomputing the base, so the module name stays [Wire_3d]'s business. *)
+let sole_3d_base outdir =
+  Sys.readdir outdir |> Array.to_list
+  |> List.filter (fun f -> Filename.check_suffix f ".3d")
+
+let shell cmd =
+  let ic = Unix.open_process_in (cmd ^ " 2>&1") in
+  let out = In_channel.input_all ic in
+  (out, Unix.close_process_in ic)
+
+let c_compiles (Fuzz_gen.Pack g) =
+  let outdir = Filename.temp_dir "wire_fuzz3d_cc" "" in
+  Fun.protect
+    ~finally:(fun () -> Wire_3d.rm_rf outdir)
+    (fun () ->
+      let name = "fuzzcc" in
+      Wire_3d.generate_standalone ~outdir ~name ~package:name
+        [ Wire_3d.pack (Fuzz_gen.codec g) ];
+      match sole_3d_base outdir with
+      | [ file ] -> (
+          let base = Filename.remove_extension file in
+          let out, status =
+            Fmt.kstr shell "cd %s && cc %s %s -c %s.c %sWrapper.c"
+              (Filename.quote outdir) Wire_3d.strict_cc_flags
+              Wire_3d.everparse_type_defines base base
+          in
+          match status with Unix.WEXITED 0 -> Ok () | _ -> Error out)
+      | files ->
+          err_c_compile "expected one .3d in %s, found [%s]" outdir
+            (String.concat "; " files))
+
+(* Run at module load, like the sweeps and for the same reason: a full EverParse
+   C generation inside a test body outlasts alcobar's per-test timeout. The case
+   only reports what the run already found. *)
+let c_compile_results =
+  if not (batch_enabled ()) then []
+  else
+    Fuzz_gen.registry
+    |> List.filter (fun (label, _) -> List.mem label c_compile_labels)
+    |> List.map (fun (label, packed) -> (label, c_compiles packed))
+
+let c_compile_cases =
+  List.map
+    (fun (label, res) ->
+      Alcobar.test_case ("cc " ^ label)
+        [ const () ]
+        (fun () ->
+          match res with
+          | Ok () -> ()
+          | Error out ->
+              Alcobar.failf "%s: the generated C does not compile:\n%s" label
+                out))
+    c_compile_results
 
 (* {1 Corpus oracle}
 
@@ -204,6 +394,14 @@ let no_corpus_seed =
        reach. One-sided by nature rather than by omission, and the only entry
        here that a better seeder could not remove. *)
     "all_bytes";
+    (* A per-byte refinement is not one of the constraint forms
+       [Everparse.Raw.field_seeds] names a value for, so nothing seeds the
+       accepting side and all 24 lines come out rejected. The flat
+       [byte_array_where(4)] is in the same position and stays out of this list
+       only by luck: it draws no seed either, and lands exactly one accepted
+       line out of 24 because the fixed corpus RNG happens to roll four
+       printable bytes. Seeding a refined span would remove both. *)
+    "nested(4,byte_array_where4)";
   ]
 
 let corpus_oracle_case (label, Fuzz_gen.Pack g) =
@@ -346,49 +544,6 @@ let corpus_cases () =
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
     |> List.map corpus_oracle_case
-
-(* {1 The generated C compiles}
-
-   The wrapper EverParse emits is rewritten after generation to require whole
-   buffer consumption, and that rewrite is textual on a shape EverParse owns.
-   Running 3d.exe does not notice when it stops matching: the schema still
-   verifies and the C is still written, and only a compiler sees that the
-   rewrite spliced in a reference to something no longer declared. Compile a
-   generated schema the way a caller would. *)
-(* Run outside the test case, as the batch check is: generating C runs 3d.exe,
-   whose verification pass takes far longer than a case's time budget. *)
-let c_compile_result =
-  match batch_schemas with
-  | [] -> None
-  | schema :: _ ->
-      let outdir = Filename.temp_dir "wire_fuzz3d_cc" "" in
-      Wire_3d.generate_3d ~outdir [ schema ];
-      Wire_3d.generate_c ~outdir [ schema ];
-      (* Every .c the generator wrote, found by listing rather than by
-         predicting EverParse's naming. *)
-      let cmd =
-        Fmt.str "cd %s && cc %s -c ./*.c 2>&1" (Filename.quote outdir)
-          Wire_3d.strict_cc_flags
-      in
-      let ic = Unix.open_process_in cmd in
-      let out = In_channel.input_all ic in
-      let status = Unix.close_process_in ic in
-      ignore (Fmt.kstr Sys.command "rm -rf %s" (Filename.quote outdir));
-      Some (match status with Unix.WEXITED 0 -> Ok () | _ -> Error out)
-
-let c_compile_cases =
-  match c_compile_result with
-  | None -> []
-  | Some res ->
-      [
-        Alcobar.test_case "generated C compiles"
-          [ const () ]
-          (fun () ->
-            match res with
-            | Ok () -> ()
-            | Error out ->
-                Alcobar.failf "the generated C does not compile:\n%s" out);
-      ]
 
 let suite =
   if Fuzz_gen.file_input_mode () then
