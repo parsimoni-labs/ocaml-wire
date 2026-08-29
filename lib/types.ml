@@ -1506,11 +1506,14 @@ let list_elem_pp : type a.
 (* True for tag types that the 3D side can dispatch on natively: integer-
    shaped scalars plus enums. String/byte tags use the two-step shape
    (split into adjacent fields, dispatch in caller code) instead. *)
-let is_int_dispatch_typ : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ | Int8 | Int16 _ | Int32 _ | Bits _
-  | Enum _ ->
-      true
-  | _ -> false
+(* Whether a casetype dispatches on an integer tag. This has to admit exactly
+   what [case_index_to_expr] can project, which is every carrier with an integer
+   view: disagreeing sends the casetype down the string-tag rewrite, where the
+   whole union collapses to a tag plus [all_bytes] and the generated validator
+   checks no case body at all. A [variants] or [lookup] tag is a [Map] over an
+   integer and dispatches like one. *)
+let is_int_dispatch_typ : type a. a typ -> bool =
+ fun typ -> is_int_representable typ
 
 let int32_case_index k =
   match SInt32.to_int_opt k with
