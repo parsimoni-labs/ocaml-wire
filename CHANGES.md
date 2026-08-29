@@ -74,6 +74,12 @@
   `where` where the projection puts it. A constraint written on one field about
   another, and any codec-level `where`, previously yielded no values at all
   (#362, @samoht)
+- A casetype whose tag is a `variants`, a `lookup`, a plain `map` or a bare
+  `uint64` now dispatches in the generated C as it does in OCaml. The tag was
+  not recognised as an integer one, so the union was rewritten to a tag followed
+  by opaque bytes: EverParse accepted the schema and the validator checked no
+  case body at all, while `Codec.decode` rejected the same input (#363, @samoht)
+
 ## 1.2.0
 
 ### Added
