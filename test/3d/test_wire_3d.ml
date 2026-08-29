@@ -927,6 +927,47 @@ let test_doc_differential_trailing_bytes () =
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
 
+(* EverParse renamed the wrapper's status local between releases ([result] up
+   to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
+   name whichever one the wrapper actually binds; naming a fixed one emitted C
+   referencing an undeclared identifier, which failed to compile. *)
+let wrapper_src var =
+  Fmt.str
+    "BOOLEAN WCheckW(uint8_t *base, uint32_t len) {\n\
+     \tWFields frame;\n\
+     \tuint64_t %s = WValidateW( (uint8_t*)&frame, &DefaultErrorHandler, base, \
+     len, 0);\n\
+     \tif (EverParseIsError(%s))\n\
+     \t{\n\
+     \t\treturn FALSE;\n\
+     \t}\n\
+     \treturn TRUE;\n\
+     }"
+    var var
+
+let test_wrapper_hardening_names_the_status_var () =
+  List.iter
+    (fun var ->
+      let hardened = Wire_3d.harden_wrapper_source (wrapper_src var) in
+      let want = Fmt.str "if (%s != (uint64_t) len)" var in
+      if not (Re.execp (Re.compile (Re.str want)) hardened) then
+        Alcotest.failf "hardened wrapper for %S lacks %S:\n%s" var want hardened)
+    [ "result"; "ep_status" ]
+
+let test_wrapper_hardening_is_idempotent () =
+  let once = Wire_3d.harden_wrapper_source (wrapper_src "ep_status") in
+  Alcotest.(check string)
+    "already hardened" once
+    (Wire_3d.harden_wrapper_source once)
+
+let test_wrapper_hardening_refuses_unknown_shape () =
+  match
+    Wire_3d.harden_wrapper_source
+      "BOOLEAN WCheckW(uint8_t *base, uint32_t len) { return TRUE; }"
+  with
+  | _ -> Alcotest.fail "expected an unrecognized wrapper shape to be refused"
+  | exception Failure _ -> ()
+
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
    the one test that catches every kind of name mismatch between what
@@ -1968,6 +2009,12 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
+      Alcotest.test_case "wrapper hardening names the status var" `Quick
+        test_wrapper_hardening_names_the_status_var;
+      Alcotest.test_case "wrapper hardening is idempotent" `Quick
+        test_wrapper_hardening_is_idempotent;
+      Alcotest.test_case "wrapper hardening refuses an unknown shape" `Quick
+        test_wrapper_hardening_refuses_unknown_shape;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
     ] )
