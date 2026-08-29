@@ -104,6 +104,11 @@
   base that is never declared, and a `uint ~size` parameter named no type at
   all and is now refused where it is built (#366, @samoht)
 
+- `Field.optional` over a sub-codec that takes `Param.input` values now projects
+  to a schema EverParse accepts. The conditional payload was described in a
+  scope that did not carry those parameters, so `3d.exe` refused the file with
+  an unbound variable (@samoht)
+
 ## 1.2.0
 
 ### Added

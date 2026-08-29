@@ -1751,6 +1751,27 @@ let optional_casetype_name : type a. a typ -> string =
   in
   "Opt_" ^ base inner
 
+(* The formals the gate casetype has to declare on top of the gate itself. The
+   casetype is a 3D scope of its own, and its default case applies the inner: a
+   parametric sub-codec renders there as [Sub(p1, ...)], naming formals that only
+   the enclosing struct surfaces. Redeclaring them here, and passing them on from
+   the use site, puts them back in scope. Walks the transparent wrappers the way
+   [optional_casetype_name] does, so a name and its formals describe the same
+   inner; an [apply] carries its own arguments and lifts nothing. *)
+let rec optional_casetype_formals : type a. a typ -> param list = function
+  | Codec { codec_struct; _ } -> codec_struct.params
+  | Map { inner; _ } -> optional_casetype_formals inner
+  | Where { inner; _ } -> optional_casetype_formals inner
+  | _ -> []
+
+(* What a use site passes to the gate casetype after the gate: one argument per
+   lifted formal, resolved against the enclosing struct that surfaces it. *)
+let optional_casetype_args : type a. a typ -> packed_expr list =
+ fun inner ->
+  List.map
+    (fun (p : param) -> Pack_expr (Ref (I, p.param_name)))
+    (optional_casetype_formals inner)
+
 (* Project a self-delimiting [optional] inner as a casetype dispatched on the
    gate: [case 0] parses a 0-byte field (the gate arg is [present ? 1 : 0], so 0
    means absent), the default case parses the inner. An empty case body is a 3D
@@ -1760,7 +1781,7 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
   Casetype_decl
     {
       name;
-      params = [ param "present" Uint8 ];
+      params = param "present" Uint8 :: optional_casetype_formals inner;
       tag = Pack_typ Uint8;
       cases =
         [
@@ -2515,7 +2536,11 @@ let rec optional_suffix : type a.
       ( No_suffix,
         fun ppf ->
           pp_typ ppf
-            (Apply { typ = Type_ref opt_name; args = [ Pack_expr arg ] }) )
+            (Apply
+               {
+                 typ = Type_ref opt_name;
+                 args = Pack_expr arg :: optional_casetype_args inner;
+               }) )
 
 and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
