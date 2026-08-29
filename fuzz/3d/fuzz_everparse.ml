@@ -126,7 +126,139 @@ let extract_cases =
                 Alcobar.failf "EverParse rejected a generated schema:\n%s" m);
       ]
 
+(* {1 Corpus oracle}
+
+   [Wire_3d.generate_corpus] is the differential's oracle: the verdict column it
+   writes is what the generated C validator is checked against. Nothing checked
+   the oracle itself, so a wrong verdict did not refuse, it disagreed, and the
+   disagreement was reported against the validator rather than against the
+   harness. Sweep the registry through it and replay every line against the
+   codec it claims to speak for.
+
+   The replay is written out here rather than reusing [Wire_3d]'s own verdict,
+   so the check does not lean on the code it is checking. It answers the same
+   question: does the record decode, validate, and span exactly the bytes on the
+   line, under that line's parameters. *)
+
+let corpus_count = 24
+
+let bytes_of_hex h =
+  if String.equal h "-" then Bytes.empty
+  else
+    Bytes.init
+      (String.length h / 2)
+      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub h (2 * i) 2)))
+
+(* [name params hex verdict] per line; [params] is "-" or comma separated. *)
+let corpus_lines codec =
+  let buf = Buffer.create 4096 in
+  let ppf = Fmt.with_buffer buf in
+  Wire_3d.generate_corpus ~count:corpus_count ppf [ Wire_3d.pack codec ];
+  Format.pp_print_flush ppf ();
+  Buffer.contents buf |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+      match String.split_on_char ' ' line with
+      | [ _; params; hex; verdict ] ->
+          let pvals =
+            if String.equal params "-" then []
+            else List.map int_of_string (String.split_on_char ',' params)
+          in
+          Some (pvals, hex, String.equal verdict "1")
+      | _ -> None)
+
+let input_params codec =
+  match (Wire.Everparse.project ~mode:`Standalone codec).source with
+  | Some source -> Wire.Everparse.Raw.input_param_names source
+  | None -> []
+
+let env_of codec pnames pvals =
+  match pnames with
+  | [] -> None
+  | _ ->
+      Some
+        (List.fold_left2
+           (fun env name value -> Wire.Param.bind_by_name name value env)
+           (Wire.Codec.env codec) pnames pvals)
+
+let record_spans codec env b =
+  match Wire.Codec.decode ?env codec b 0 with
+  | Error _ -> false
+  | Ok _ -> (
+      match
+        Wire.Codec.validate ?env codec b 0;
+        Wire.Codec.wire_size_at ?env codec b 0
+      with
+      | n -> Int.equal n (Bytes.length b)
+      | exception Wire.Parse_error _ -> false)
+
+(* Shapes whose accepting side the seeder cannot construct, so
+   [generate_corpus] refuses rather than emit a corpus that says the same thing
+   about every input. Pinned so the set stays visible: a shape that newly stops
+   being seedable is a regression, and one that becomes seedable has to be
+   dropped from here. Vacuity is the seeder reporting that it cannot build a
+   record, which is exactly how the casetype-tag and length-field gaps hid, as
+   an absence rather than a failure. *)
+let no_corpus_seed =
+  [
+    (* Accepts every buffer it is given, so there is no rejecting side to
+       reach. One-sided by nature rather than by omission. *)
+    "all_bytes";
+    (* Needs a NUL at the right offset, and a terminator is not a value any
+       field declaration singles out, so nothing seeds it. *)
+    "zeroterm";
+    "zeroterm_at_most(1)";
+    "zeroterm_at_most(8)";
+    (* Constraint-shaped: the accepting side is a predicate over the record
+       rather than a value some field's declaration names, which is the only
+       thing [field_seeds] reports. Several of these look like seeding gaps
+       rather than inherent properties; shrinking this list is the follow-up,
+       and pinning it is what makes the set visible enough to shrink. *)
+    "optional_dyn_after_span";
+    "typ_where";
+    "field_constraint";
+    "field_int";
+    "param_input";
+    "nan_float64";
+  ]
+
+let corpus_oracle_case (label, Fuzz_gen.Pack g) =
+  let codec = Fuzz_gen.codec g in
+  Alcobar.test_case ("corpus oracle " ^ label)
+    [ const () ]
+    (fun () ->
+      match corpus_lines codec with
+      | exception Failure msg ->
+          if not (List.mem label no_corpus_seed) then
+            Alcobar.failf "%s: generate_corpus refused a corpus: %s" label msg
+      | lines ->
+          if List.mem label no_corpus_seed then
+            Alcobar.failf "%s: is seedable now; drop it from [no_corpus_seed]"
+              label;
+          let pnames = input_params codec in
+          List.iter
+            (fun (pvals, hex, verdict) ->
+              let env = env_of codec pnames pvals in
+              let b = bytes_of_hex hex in
+              let spans = record_spans codec env b in
+              if not (Bool.equal spans verdict) then
+                Alcobar.failf
+                  "%s: corpus records %b for params [%s] %s, the codec answers \
+                   %b"
+                  label verdict
+                  (String.concat "," (List.map string_of_int pvals))
+                  hex spans)
+            lines)
+
+let corpus_cases () =
+  if not (normal_mode ()) then []
+  else
+    Fuzz_gen.registry
+    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
+    |> List.map corpus_oracle_case
+
 let suite =
   if Fuzz_gen.file_input_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
-  else ("everparse", pp_cases () @ nested_pp_cases () @ extract_cases)
+  else
+    ( "everparse",
+      pp_cases () @ nested_pp_cases () @ corpus_cases () @ extract_cases )
