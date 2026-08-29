@@ -945,14 +945,18 @@ let check_invariant_encoding ~equal label typ codec value =
       Alcotest.(check bool)
         (label ^ ": sizing rejects too")
         true
-        (match Wire.Private.Types.size_of_typ_value typ value with
+        (match
+           Wire.Private.Types.size_of_typ_value
+             Wire.Private.Types.unbound_eval_ctx typ value
+         with
         | _ -> false
         | exception Invalid_argument _ -> true)
   | Encoded bytes ->
       Alcotest.(check int)
         (label ^ ": direct sizing")
         (String.length bytes)
-        (Wire.Private.Types.size_of_typ_value typ value);
+        (Wire.Private.Types.size_of_typ_value
+           Wire.Private.Types.unbound_eval_ctx typ value);
       Alcotest.(check int)
         (label ^ ": compiled sizing")
         (String.length bytes)

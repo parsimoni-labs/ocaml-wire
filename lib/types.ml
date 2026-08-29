@@ -259,7 +259,7 @@ and _ typ =
              on their own extent rather than on a span sized from bytes outside
              it. *)
       codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
-      codec_size_of_value : 'r -> int;
+      codec_size_of_value : eval_ctx -> 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
              than by re-reading the buffer. The buffer-driven [codec_size_of]
              is wrong for variable-size codecs ending in [all_bytes] /
@@ -442,29 +442,48 @@ let const_cast width v =
   | `U32 -> v land UInt32.mask32
   | `U64 -> v
 
-let rec const_int_expr : int expr -> int option = function
+(* The arithmetic is shared between two readers of a size expression: constant
+   folding at construction, where no leaf resolves, and value-driven sizing at
+   encode, where a bound parameter does. [leaf] is what each makes of the
+   irreducible nodes. *)
+let rec int_expr_with : (int expr -> int option) -> int expr -> int option =
+ fun leaf e ->
+  match e with
   | Int n -> Some n
-  | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> None
-  | Add (a, b) -> const_binop const_add a b
-  | Sub (a, b) -> const_binop const_sub a b
-  | Mul (a, b) -> const_binop const_mul a b
-  | Div (a, b) -> const_binop const_div a b
-  | Mod (a, b) -> const_binop const_rem a b
-  | Land (a, b) -> const_binop (fun a b -> Some (a land b)) a b
-  | Lor (a, b) -> const_binop (fun a b -> Some (a lor b)) a b
-  | Lxor (a, b) -> const_binop (fun a b -> Some (a lxor b)) a b
-  | Lnot a -> Option.map lnot (const_int_expr a)
-  | Lsl (a, b) -> const_binop const_shift_left a b
-  | Lsr (a, b) -> const_binop const_shift_right a b
-  | Cast (width, e) -> Option.map (const_cast width) (const_int_expr e)
+  | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> leaf e
+  | Add (a, b) -> int_binop leaf const_add a b
+  | Sub (a, b) -> int_binop leaf const_sub a b
+  | Mul (a, b) -> int_binop leaf const_mul a b
+  | Div (a, b) -> int_binop leaf const_div a b
+  | Mod (a, b) -> int_binop leaf const_rem a b
+  | Land (a, b) -> int_binop leaf (fun a b -> Some (a land b)) a b
+  | Lor (a, b) -> int_binop leaf (fun a b -> Some (a lor b)) a b
+  | Lxor (a, b) -> int_binop leaf (fun a b -> Some (a lxor b)) a b
+  | Lnot a -> Option.map lnot (int_expr_with leaf a)
+  | Lsl (a, b) -> int_binop leaf const_shift_left a b
+  | Lsr (a, b) -> int_binop leaf const_shift_right a b
+  | Cast (width, e) -> Option.map (const_cast width) (int_expr_with leaf e)
   (* A constant condition would need the same pass over [bool expr]; leave the
      whole node symbolic. *)
   | If_then_else _ -> None
 
-and const_binop f a b =
-  match (const_int_expr a, const_int_expr b) with
+and int_binop leaf f a b =
+  match (int_expr_with leaf a, int_expr_with leaf b) with
   | Some a, Some b -> f a b
   | None, _ | _, None -> None
+
+let const_int_expr e = int_expr_with (fun _ -> None) e
+
+(* A size expression resolved as far as the encode-side context allows. A bound
+   input parameter answers; a reference to a sibling field or to a position does
+   not, because a value on its own does not carry the record around it. *)
+let size_in_ctx ctx e =
+  match ctx with
+  | Unbound -> None
+  | Bound _ ->
+      int_expr_with
+        (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)
+        e
 
 (* [fold_size e] is [e] with a reference-free constant folded to its literal.
    Every smart constructor taking a size or length expression runs its argument
@@ -3362,9 +3381,22 @@ let equal_parse_error a b = compare_parse_error a b = 0
    [Repeat] / [Single_elem]) are not handled here -- they only appear
    inside a codec, which threads its own value-driven size at seal. *)
 
+(* A field whose byte extent is an input parameter cannot be measured from the
+   value alone. Returning 0 would under-report the whole field, and a caller
+   sizing a buffer from that answer writes past it, so refuse instead. *)
+
 (** Compute wire size of a type (None for variable-size types). *)
-let rec size_of_typ_value : type a. a typ -> a -> int =
- fun typ v ->
+let unsized_field what =
+  Fmt.invalid_arg
+    "Codec.size_of_value: the %s field's size is an input parameter; pass ?env \
+     so it can be resolved."
+    what
+
+let resolved_size ctx size what =
+  match size_in_ctx ctx size with Some n -> n | None -> unsized_field what
+
+let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
+ fun ctx typ v ->
   match typ with
   | Uint8 -> 1
   | Uint16 _ -> 2
@@ -3384,7 +3416,7 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | All_zeros -> String.length v
   | Zeroterm -> String.length v + 1
   | Zeroterm_at_most { size = Int n } -> n
-  | Zeroterm_at_most _ -> 0
+  | Zeroterm_at_most { size } -> resolved_size ctx size "zeroterm_at_most"
   | Byte_array { size = Int n } -> n
   | Byte_array _ -> String.length v
   | Byte_array_where { size = Int n; _ } -> n
@@ -3392,53 +3424,75 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
-  | Uint_var _ -> 0
-  | Map { inner; encode; _ } -> size_of_typ_value inner (encode v)
-  | Where { inner; _ } -> size_of_typ_value inner v
-  | Enum { base; _ } -> size_of_typ_value base v
+  | Uint_var { size; _ } -> resolved_size ctx size "uint"
+  | Map { inner; encode; _ } -> size_of_typ_value ctx inner (encode v)
+  | Where { inner; _ } -> size_of_typ_value ctx inner v
+  | Enum { base; _ } -> size_of_typ_value ctx base v
   | Optional { present = Bool true; inner } ->
-      size_of_typ_value inner (Option.get v)
+      size_of_typ_value ctx inner (Option.get v)
   | Optional { present = Bool false; _ } -> 0
   | Optional { inner; _ } -> (
       (* Dynamic gate: value drives presence at encode time. The
          buffer-driven [present_fn] is the decode-side oracle and would
          disagree with [v] here, so consult [v] directly. *)
       match v with
-      | Some inner_v -> size_of_typ_value inner inner_v
+      | Some inner_v -> size_of_typ_value ctx inner inner_v
       | None -> 0)
-  | Optional_or { present = Bool true; inner; _ } -> size_of_typ_value inner v
+  | Optional_or { present = Bool true; inner; _ } ->
+      size_of_typ_value ctx inner v
   | Optional_or { present = Bool false; _ } -> 0
   | Optional_or { inner; _ } ->
       (* Dynamic gate: encode always has a value (the default fills in
          for [None]); the encoder writes the inner regardless of what
          the runtime gate would have said at decode. *)
-      size_of_typ_value inner v
-  | Codec { codec_size_of_value; _ } -> codec_size_of_value v
+      size_of_typ_value ctx inner v
+  | Codec { codec_size_of_value; _ } -> codec_size_of_value ctx v
   | Single_elem { size = Int n; elem; at_most } ->
-      let actual = size_of_typ_value elem v in
+      let actual = size_of_typ_value ctx elem v in
       check_nested_size ~at_most ~expected:n ~actual;
       n
-  | Single_elem _ -> 0
+  | Single_elem { size; elem; at_most } ->
+      let n = resolved_size ctx size "nested" in
+      let actual = size_of_typ_value ctx elem v in
+      check_nested_size ~at_most ~expected:n ~actual;
+      n
   | Repeat { size = Int expected; elem; seq } ->
-      exact_repeat_elements seq ~expected ~size_of:(size_of_typ_value elem) v
+      exact_repeat_elements seq ~expected
+        ~size_of:(size_of_typ_value ctx elem)
+        v
       |> List.fold_left (fun total (_, size) -> total + size) 0
-  | Repeat { elem; seq = Seq_map s; _ } ->
-      (* Sum the actual element sizes from the value, like [Array]. The byte
-         budget ([size]) is only a literal when fixed; a dynamic budget left
-         this at 0, so [Codec.size_of_value] under-counted a repeat field. *)
-      let total = Stdlib.ref 0 in
-      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
-      !total
+  | Repeat { size; elem; seq = Seq_map s } -> (
+      (* The budget is what the description declares the region to be; when the
+         context resolves it, encode is held to it here as it is for a literal.
+         A budget naming a sibling field does not resolve from a value, so the
+         elements' own extent is the answer, which is what encode writes. *)
+      match size_in_ctx ctx size with
+      | Some expected ->
+          exact_repeat_elements (Seq_map s) ~expected
+            ~size_of:(size_of_typ_value ctx elem)
+            v
+          |> List.fold_left (fun total (_, size) -> total + size) 0
+      | None ->
+          let total = Stdlib.ref 0 in
+          s.iter (fun e -> total := !total + size_of_typ_value ctx elem e) v;
+          !total)
   | Array { len = Int expected; elem; seq } ->
       exact_array_elements seq ~expected v
       |> List.fold_left
-           (fun total value -> total + size_of_typ_value elem value)
+           (fun total value -> total + size_of_typ_value ctx elem value)
            0
-  | Array { elem; seq = Seq_map s; _ } ->
-      let total = Stdlib.ref 0 in
-      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
-      !total
-  | Apply { typ; _ } -> size_of_typ_value typ v
+  | Array { len; elem; seq = Seq_map s } -> (
+      match size_in_ctx ctx len with
+      | Some expected ->
+          exact_array_elements (Seq_map s) ~expected v
+          |> List.fold_left
+               (fun total value -> total + size_of_typ_value ctx elem value)
+               0
+      | None ->
+          let total = Stdlib.ref 0 in
+          s.iter (fun e -> total := !total + size_of_typ_value ctx elem e) v;
+          !total)
+  | Apply { typ; _ } -> size_of_typ_value ctx typ v
   | Casetype { tag; cases; _ } ->
       (* Tag bytes plus the matched case's body: find the branch whose
          [project] accepts [v], then size its inner from the projected body.
@@ -3452,7 +3506,8 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
         | [] -> raise_no_matching_case ()
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
-            | Some (_tag, body) -> tag_size + size_of_typ_value cb_inner body
+            | Some (_tag, body) ->
+                tag_size + size_of_typ_value ctx cb_inner body
             | None -> find rest)
       in
       find cases

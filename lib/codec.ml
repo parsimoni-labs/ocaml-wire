@@ -102,7 +102,7 @@ let setter_off n set buf off v =
 (* Encode a value into a fixed [n]-byte region: write it with [enc], then
    zero-pad the remainder. Used for [nested] regions. *)
 let single_elem_region ~at_most n typ enc buf off v =
-  let actual = Types.size_of_typ_value typ v in
+  let actual = Types.size_of_typ_value Types.unbound_eval_ctx typ v in
   Types.check_nested_size ~at_most ~expected:n ~actual;
   let inner_end = enc buf off v in
   if inner_end < off + n then
@@ -1037,7 +1037,7 @@ type ('f, 'r) record =
       make : 'full;
       readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
-      size_of_value_rev : ('r -> int) list;
+      size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
              instead of the buffer-driven [wire_size.compute] when sizing
@@ -1081,7 +1081,7 @@ let id_counter = Atomic.make 0
 type 'r t = {
   id : int;
   name : string;
-  size_of_value : 'r -> int;
+  size_of_value : Types.eval_ctx -> 'r -> int;
   field_access : (string * field_access) list;
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
@@ -2365,7 +2365,7 @@ let repeat_raw_writer : type elt seq r.
   let expected = size_fn runtime (Input_end.of_bytes buf) buf base in
   let sized_items =
     Types.exact_repeat_elements seq ~expected
-      ~size_of:(Types.size_of_typ_value elem)
+      ~size_of:(Types.size_of_typ_value runtime elem)
       (get v)
   in
   let pos = Stdlib.ref write_off in
@@ -2670,7 +2670,7 @@ let var_bytes_writer : type a r.
   | Casetype _ -> build_field_encoder_ctx typ runtime buf write_off value
   | Single_elem { elem; at_most; _ } ->
       let n = size_fn runtime (Input_end.of_bytes buf) buf base in
-      let actual = Types.size_of_typ_value elem value in
+      let actual = Types.size_of_typ_value runtime elem value in
       Types.check_nested_size ~at_most ~expected:n ~actual;
       let inner_end =
         build_field_encoder_ctx elem runtime buf write_off value
@@ -3428,8 +3428,8 @@ let apply_compiled : type a f r.
      [Map]/[Where]/[Enum] even though they still pack into the current word. *)
   let field_size_of_value =
     match cf.field_access with
-    | Bitfield _ -> fun _ -> cf.size_delta
-    | _ -> fun v -> size_of_typ_value field_typ (field_get v)
+    | Bitfield _ -> fun _ _ -> cf.size_delta
+    | _ -> fun ctx v -> size_of_typ_value ctx field_typ (field_get v)
   in
   let raw_reader, full, check_only =
     wrap_field_errors
@@ -3786,10 +3786,10 @@ let validate_with_bounds wire_size_info min_size param_slots param_base
 
 let build_size_of_value size_funcs =
   let n = Array.length size_funcs in
-  fun value ->
+  fun ctx value ->
     let total = Stdlib.ref 0 in
     for i = 0 to n - 1 do
-      total := !total + size_funcs.(i) value
+      total := !total + size_funcs.(i) ctx value
     done;
     !total
 
@@ -3858,7 +3858,7 @@ let validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
 let build_record_encoder name writers size_of_value ~check =
   let n = Array.length writers in
   fun value runtime buf off ->
-    let need = size_of_value value in
+    let need = size_of_value runtime value in
     if off + need > Bytes.length buf then
       Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name
         need
@@ -4225,7 +4225,7 @@ let wire_size (t : _ t) =
 let min_wire_size (t : _ t) =
   match t.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
-let size_of_value (t : _ t) v = t.size_of_value v
+let size_of_value_ctx (t : _ t) = t.size_of_value
 
 let is_fixed (t : _ t) =
   match t.wire_size with Fixed _ -> true | Variable _ -> false
@@ -4288,6 +4288,17 @@ let wire_size_at ?env:e (t : _ t) buf off =
   | Fixed n -> n
   | Variable { compute; _ } ->
       compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off - off
+
+(* A parametric field size resolves through [env], as it does for {!encode}.
+   Without one the size stays symbolic and a field measured by it refuses
+   rather than reporting 0, which a caller would allocate from. *)
+let size_of_value ?env:e (t : _ t) v =
+  (* An env that is given must be this codec's and fully bound, as for encode.
+     One that is absent is not an error: a caller legitimately asks for the size
+     before it has a budget to bind, and every extent the value itself settles
+     still answers. *)
+  (match e with None -> () | Some _ -> require_env ~op:"size_of_value" t e);
+  t.size_of_value (runtime ?env:e ()) v
 
 let raw_encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
@@ -4372,8 +4383,9 @@ let decode ?env t buf off =
 
 let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
-  let expected = t.size_of_value v in
-  let actual = t.encode v (runtime ?env:e ()) buf off - off in
+  let rt = runtime ?env:e () in
+  let expected = t.size_of_value rt v in
+  let actual = t.encode v rt buf off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
      of the value. Overrun is loud already. *)
@@ -4504,7 +4516,7 @@ let field_writer : type a. a typ -> Types.eval_ctx -> bytes -> int -> a -> unit
     let room = Bytes.length buf - off in
     let saved =
       if off >= 0 && room > 0 then
-        Bytes.sub buf off (min (Types.size_of_typ_value typ value) room)
+        Bytes.sub buf off (min (Types.size_of_typ_value runtime typ value) room)
       else Bytes.empty
     in
     match encode runtime buf off value with

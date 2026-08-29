@@ -42,6 +42,12 @@
   repeat and why: 3D's only list construct is the byte budget, so a repeat that
   consumed whatever remained would have no projection (#351, @samoht)
 
+- `Wire.Codec.size_of_value` takes `?env` and resolves a field whose byte extent
+  is an input parameter, refusing when it has none rather than reporting 0. It
+  used to under-report such a field by its whole width, so a caller sizing a
+  buffer from the answer got one too short and `encode` ran off the end with a
+  raw out-of-bounds instead of a wire error (#353, @samoht)
+
 ## 1.2.0
 
 ### Added

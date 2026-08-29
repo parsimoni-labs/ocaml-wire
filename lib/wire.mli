@@ -1142,7 +1142,7 @@ module Codec : sig
       param-sized field as empty and report an extent shorter than the record.
   *)
 
-  val size_of_value : 'r t -> 'r -> int
+  val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
   (** [size_of_value c v] returns the number of bytes that [encode c v] will
       write for value [v]. For fixed-size codecs, this is the same as
       {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises

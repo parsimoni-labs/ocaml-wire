@@ -352,7 +352,7 @@ and _ typ =
               hence the extent [codec_size_of] has to read before it can resolve
               a span. *)
       codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
-      codec_size_of_value : 'r -> int;
+      codec_size_of_value : eval_ctx -> 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
               than by re-reading the buffer. *)
       codec_field_readers :
@@ -1075,13 +1075,15 @@ val struct_nz : struct_ -> bool
 (** [struct_nz s] is [true] iff some field of [s] is {!nz}, i.e. the struct's
     parser has a positive minimum size. *)
 
-val size_of_typ_value : 'a typ -> 'a -> int
-(** [size_of_typ_value typ v] is the encoded byte size of [v] under [typ],
-    computed from the value rather than from a buffer. Falls back to [0] for
-    typs whose size depends on an out-of-band parameter or sibling field --
-    those only appear inside a codec, where {!Codec.size_of_value} sums per-
-    field projections instead. Raises [Invalid_argument] for a casetype value no
-    case projects, which encoding refuses for the same reason. *)
+val size_of_typ_value : eval_ctx -> 'a typ -> 'a -> int
+(** [size_of_typ_value ctx typ v] is the encoded byte size of [v] under [typ],
+    computed from the value rather than from a buffer. A size that names an
+    input parameter resolves through [ctx]; one that names a sibling field or a
+    position does not, since a value on its own does not carry the record around
+    it, and a typ measured only by such a size raises [Invalid_argument] rather
+    than reporting [0] for a field the encoder will fill. Also raises for a
+    casetype value no case projects, which encoding refuses for the same reason.
+*)
 
 val c_type_of : 'a typ -> string
 (** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).
