@@ -6,6 +6,10 @@ open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
+(* The 3D printer wraps a long parameter or argument list over several lines, so
+   an assertion that spans one compares against a whitespace-flattened copy. *)
+let flatten s = Re.replace_string (Re.compile (Re.rep1 Re.space)) ~by:" " s
+
 (* Return the byte offset of the first occurrence of [sub] in [s], or -1 if not
    found. Used to assert relative declaration and field ordering. *)
 let index_of ~sub s =
@@ -1019,6 +1023,41 @@ let test_3d_absent_optional_projects_to_unit () =
     "absent optional has no zero-length byte-size suffix" false
     (contains ~sub:"[:byte-size 0]" out)
 
+(* A self-delimiting [optional] dispatches through a synthesised gate casetype,
+   which is a 3D scope of its own: a parametric sub-codec as the inner is applied
+   to its formals inside that scope, so the casetype has to declare them and the
+   use site has to pass them on. Without that EverParse rejects the schema with
+   "Variable n not found". *)
+let test_3d_optional_over_param_codec () =
+  let p_n = Param.input "n" uint8 in
+  let sub =
+    Codec.v "OptPSub"
+      (fun d -> d)
+      Codec.[ (Field.v "d" (byte_array ~size:(Param.expr p_n)) $ fun v -> v) ]
+  in
+  let f_g = Field.v "g" uint8 in
+  let c =
+    Codec.v "OptParam"
+      (fun g v -> (g, v))
+      Codec.
+        [
+          (Field.v "g" uint8 $ fun (g, _) -> g);
+          ( Field.optional "o" ~present:Expr.(Field.ref f_g = int 1) (codec sub)
+          $ fun (_, v) -> v );
+        ]
+  in
+  let check mode =
+    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+    Alcotest.(check bool)
+      "gate casetype declares the sub-codec formal" true
+      (contains ~sub:"_Opt_OptPSub(UINT8 present, UINT8 n)" out);
+    Alcotest.(check bool)
+      "use site passes the formal to the gate casetype" true
+      (contains ~sub:", n) o" out)
+  in
+  check `Ffi;
+  check `Standalone
+
 let test_3d_on_act_drops_bool_return () =
   (* An [on_act] body that ends in [return_bool] projects to an [:act] block,
      which is unit in 3D: the trailing return is dropped (a no-op success in
@@ -1941,6 +1980,8 @@ let suite =
         test_3d_static_optional_transparent;
       Alcotest.test_case "3d: absent optional projects to unit" `Quick
         test_3d_absent_optional_projects_to_unit;
+      Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
+        test_3d_optional_over_param_codec;
       Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick
