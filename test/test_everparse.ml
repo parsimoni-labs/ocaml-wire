@@ -557,6 +557,42 @@ let test_doc_merge_shared_sub_codec () =
   check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
   check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
 
+(* A tag the dispatch gate did not admit was routed to the rewrite meant for
+   string tags, where the union collapses to a tag plus [all_bytes]: EverParse
+   accepted the schema and the generated validator checked no case body at all,
+   while the OCaml codec dispatched normally. The gate has to admit exactly what
+   the case-index projection can render. *)
+let test_casetype_integer_tags_dispatch () =
+  let dispatches name tag lift =
+    let c =
+      Codec.v name
+        (fun v -> v)
+        Codec.
+          [
+            ( Field.v "b"
+                (casetype (name ^ "Body") tag
+                   [
+                     case ~index:(lift 0) uint8 ~inject:Fun.id
+                       ~project:Option.some;
+                   ])
+            $ fun v -> v );
+          ]
+    in
+    let out =
+      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    in
+    Alcotest.(check bool)
+      (name ^ ": dispatches on the tag")
+      true
+      (contains ~sub:"switch (tag)" out);
+    Alcotest.(check bool)
+      (name ^ ": does not swallow the body as bytes")
+      false
+      (contains ~sub:"all_bytes" out)
+  in
+  dispatches "Lk" (lookup [ 0; 1 ] uint8) Fun.id;
+  dispatches "U6" uint64 UInt64.of_int
+
 (* A casetype dispatches on any enum, and an enum takes any base with an integer
    view, so a tag reaches the case-index projection wrapped in a [lookup]'s map,
    behind a [where], or over a 64-bit base. Each still names one integer per
@@ -1766,6 +1802,8 @@ let suite =
         test_doc_merge_name_collision;
       Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
         `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: integer casetype tags dispatch" `Quick
+        test_casetype_integer_tags_dispatch;
       Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
         test_3d_casetype_tag_int_carriers;
       Alcotest.test_case "seeds: follow the compared field" `Quick
