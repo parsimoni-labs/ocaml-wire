@@ -557,6 +557,43 @@ let test_doc_merge_shared_sub_codec () =
   check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
   check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
 
+(* A formal's type is rendered in two positions with different rules. A
+   casetype's switch discriminant may be the enum type; a struct's formal is
+   used in the size arithmetic of the fields it parameterises, where EverParse
+   requires an integer type and reported "Unknown integer type" for an enum even
+   once declared. And a case label may name an enum constant only where the enum
+   is declared, which one over a bitfield base never is. *)
+let test_formal_and_label_positions () =
+  let p = Param.input "pn" (enum "PKind" [ ("PA", 1) ] uint8) in
+  let param_codec =
+    Codec.v "PEnum"
+      (fun v -> v)
+      Codec.[ (Field.v "d" (byte_array ~size:(Param.expr p)) $ fun v -> v) ]
+  in
+  let bits_tag =
+    Codec.v "BTag"
+      (fun h b -> (h, b))
+      Codec.
+        [
+          Field.v "hi" (bits ~width:4 U8) $ fst;
+          Field.v "b"
+            (casetype "QBody"
+               (enum "BKind" [ ("BA", 1) ] (bits ~width:4 U8))
+               [ case ~index:1 uint8 ~inject:Fun.id ~project:Option.some ])
+          $ snd;
+        ]
+  in
+  let doc c =
+    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+  in
+  Alcotest.(check bool)
+    "a struct formal renders as its integer base" true
+    (contains ~sub:"(UINT8 pn)" (doc param_codec));
+  Alcotest.(check bool)
+    "a bitfield-based enum tag labels by value, not by a name it never declares"
+    false
+    (contains ~sub:"case BA:" (doc bits_tag))
+
 (* Two declarations under one name are two types with one name, and every
    reference resolves to whichever was reached first: two same-named sub-codecs
    of different widths gave a validator reading a different number of bytes than
@@ -1874,6 +1911,8 @@ let suite =
         test_doc_merge_name_collision;
       Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
         `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: formal and label positions" `Quick
+        test_formal_and_label_positions;
       Alcotest.test_case "3d: duplicate declaration names rejected" `Quick
         test_duplicate_declaration_names_rejected;
       Alcotest.test_case "3d: casetype case bodies keep refinements" `Quick
