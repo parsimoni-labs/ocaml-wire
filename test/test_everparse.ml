@@ -625,6 +625,24 @@ let test_casetype_tag_field_seed () =
       Alcotest.failf "expected one seed for the casetype tag, got %d"
         (List.length seeds)
 
+(* A [lookup] admits exactly the indices into its table, and no other part of a
+   field's declaration names them, so without a seed a generated corpus never
+   reaches an accepted record and the codec reads as unfuzzable. *)
+let test_lookup_field_seed () =
+  let c =
+    Codec.v "Picked"
+      (fun v -> v)
+      Codec.[ (Field.v "k" (lookup [ `A; `B; `C ] uint8) $ fun v -> v) ]
+  in
+  match field_seeds (struct_of_codec c) with
+  | [ seed ] ->
+      Alcotest.(check string) "names the field" "k" seed.field;
+      Alcotest.(check (list int64))
+        "names both ends of the table" [ 0L; 2L ] seed.values
+  | seeds ->
+      Alcotest.failf "expected one seed for the lookup, got %d"
+        (List.length seeds)
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -1700,6 +1718,8 @@ let suite =
         `Quick test_doc_merge_shared_sub_codec;
       Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
         test_3d_casetype_tag_int_carriers;
+      Alcotest.test_case "seeds: lookup names its table indices" `Quick
+        test_lookup_field_seed;
       Alcotest.test_case "seeds: casetype tag names its case indices" `Quick
         test_casetype_tag_field_seed;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
