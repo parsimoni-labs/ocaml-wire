@@ -2,6 +2,11 @@
 
 ### Fixed
 
+- `Wire_3d.generate_c` works against EverParse releases after v2026.02.25. The
+  whole-buffer check it adds to each generated wrapper named a variable those
+  releases renamed, so the emitted C referenced an undeclared identifier and
+  failed to compile (#367, @samoht)
+
 - `Wire.Everparse.write` no longer refuses a family in which a sub-codec is both
   packed as a codec of its own and reached through another codec's field,
   reporting the two as conflicting definitions of one type. They differ only in

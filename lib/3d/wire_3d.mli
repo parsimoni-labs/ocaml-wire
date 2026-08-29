@@ -176,6 +176,18 @@ val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 
     Requires [3d.exe] (EverParse) in PATH. *)
 
+val harden_wrapper_source : string -> string
+(** [harden_wrapper_source src] is the EverParse wrapper [src] with its success
+    tail rewritten to also require that the validator consumed the whole buffer,
+    which is the rewrite {!generate_c} applies to each emitted wrapper. The
+    validator's status variable is read back out of [src], since EverParse has
+    renamed it across releases.
+
+    @raise Failure
+      if [src] is neither a wrapper shape this recognizes nor one already
+      carrying its own consumption check, rather than returning a prefix
+      recognizer. *)
+
 val run : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [run ?quiet ~outdir schemas] runs the full pipeline: writes [.3d] files,
     invokes EverParse, and produces C validators. The [quiet] flag is passed
