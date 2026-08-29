@@ -1259,12 +1259,16 @@ let seed_for seeds (e : Wire.parse_error) =
         seeds
   | [] -> None
 
-(* An EOF can be repaired by growing the input. Other failures can be repaired
-   when the failing field's declaration names candidate values. *)
+(* An EOF can be repaired by growing the input, and a missing terminator by
+   writing one where the scan gave up: both are structural, so neither needs a
+   value the declaration singles out. Anything else is repairable only when the
+   failing field's declaration names candidate values. *)
 let repair_for ~seeds ~len (e : Wire.parse_error) =
   match e.kind with
   | Wire.Unexpected_eof { expected; got } when expected > got ->
       `Grow (len + expected - got)
+  | Wire.Missing_terminator when e.at < len -> `Terminate e.at
+  | Wire.Missing_terminator -> `Grow (e.at + 1)
   | _ -> (
       match seed_for seeds e with
       | Some seed -> `Place (e.at, seed)
@@ -1273,9 +1277,9 @@ let repair_for ~seeds ~len (e : Wire.parse_error) =
 (* Construct one accepting input by repeatedly asking the codec how to repair
    the earliest failure. The field offsets come from parse errors rather than a
    static layout, so the same loop works after variable-width prefixes. *)
-let seed_input ?env rng ~seeds ~center c =
+let seed_input ?env rng ~seeds ~center ~fill c =
   let fuel = ref ((2 * List.length seeds) + 6) in
-  let buf = ref (random_bytes rng (max 1 center)) in
+  let buf = ref (fill rng (max 1 center)) in
   let placed = ref [] in
   let out = ref None in
   let place off (seed : Raw.field_seed) =
@@ -1311,6 +1315,7 @@ let seed_input ?env rng ~seeds ~center c =
     | `Reject e -> (
         match repair_for ~seeds ~len:(Bytes.length !buf) e with
         | `Grow n -> grow n
+        | `Terminate off -> Bytes.set !buf off '\000'
         | `Place (off, seed) -> place off seed
         | `Stuck -> fuel := 0)
   done;
@@ -1362,13 +1367,31 @@ let mutate rng seed =
 (* Try a bounded number of fresh byte/parameter combinations for each desired
    accepting seed. An unsolved constraint is reported by the vacuity check
    rather than spinning. *)
+(* Where a record's accepting side sits at an extreme, a uniform draw never
+   lands on it: a predicate satisfied at the minimum, a terminator in the first
+   byte, a float pattern the bytes have to spell out. Start from the extremes as
+   well as from noise and let the same repair loop settle the rest, which costs
+   a way to solve for the value nothing at all. *)
+let extremal_fills =
+  [| (fun _rng n -> Bytes.make n '\000'); (fun _rng n -> Bytes.make n '\255') |]
+
 let corpus_seeds ?env_of rng ~seeds ~center ~draw_params ~want c =
   let env_of = match env_of with Some f -> f | None -> fun _ -> None in
-  let found = ref [] and attempts = ref (4 * want) in
+  let n_extremal = Array.length extremal_fills in
+  (* The extremes are tried first and are deterministic, so they are extra
+     attempts rather than a share of the random ones: a shape whose accepting
+     side is only ever found by chance keeps every draw it had. *)
+  let found = ref []
+  and tried = ref 0
+  and attempts = ref ((4 * want) + n_extremal) in
   while List.length !found < want && !attempts > 0 do
     decr attempts;
+    let fill =
+      if !tried < n_extremal then extremal_fills.(!tried) else random_bytes
+    in
+    incr tried;
     let pvals = draw_params () in
-    match seed_input ?env:(env_of pvals) rng ~seeds ~center c with
+    match seed_input ?env:(env_of pvals) rng ~seeds ~center ~fill c with
     | Some (b, placed) -> found := (pvals, b, placed) :: !found
     | None -> ()
   done;

@@ -64,6 +64,11 @@
   occupies rather than zero, so a buffer sized from it holds the record. A
   parse error from a `zeroterm` field with no terminator also names the field
   it came from (#361, @samoht)
+- `Wire_3d.generate_corpus` reaches records whose accepting side sits at an
+  extreme, such as a predicate satisfied at the minimum or a string whose
+  terminator has to be written rather than drawn. It seeds from the extremes as
+  well as from noise, and repairs a missing terminator the way it already
+  repaired a short input (#360, @samoht)
 
 ## 1.2.0
 
