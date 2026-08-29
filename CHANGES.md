@@ -60,25 +60,33 @@
   the bytes that were missing rather than a negative count. `Wire.of_reader`
   computes how much more to read from that number, so a negative one left it
   asking for a position behind what it had already buffered (#359, @samoht)
-- `Wire.Codec.min_wire_size` reports the region a `zeroterm_at_most` field
-  occupies rather than zero, so a buffer sized from it holds the record. A
-  parse error from a `zeroterm` field with no terminator also names the field
-  it came from (#361, @samoht)
+
 - `Wire_3d.generate_corpus` reaches records whose accepting side sits at an
   extreme, such as a predicate satisfied at the minimum or a string whose
   terminator has to be written rather than drawn. It seeds from the extremes as
   well as from noise, and repairs a missing terminator the way it already
   repaired a short input (#360, @samoht)
+
+- `Wire.Codec.min_wire_size` reports the region a `zeroterm_at_most` field
+  occupies rather than zero, so a buffer sized from it holds the record. A
+  parse error from a `zeroterm` field with no terminator also names the field
+  it came from (#361, @samoht)
+
 - `Wire.Everparse.Raw.field_seeds` credits a refinement's values to the field it
   compares rather than to the field carrying it, and reads a struct-level
   `where` where the projection puts it. A constraint written on one field about
   another, and any codec-level `where`, previously yielded no values at all
   (#362, @samoht)
+
 - A casetype whose tag is a `variants`, a `lookup`, a plain `map` or a bare
   `uint64` now dispatches in the generated C as it does in OCaml. The tag was
   not recognised as an integer one, so the union was rewritten to a tag followed
   by opaque bytes: EverParse accepted the schema and the validator checked no
   case body at all, while `Codec.decode` rejected the same input (#363, @samoht)
+
+- A casetype case body keeps the refinement its type carries. A closed enum's
+  membership and a `lookup`'s index bound were dropped from the generated
+  validator, which then accepted bodies `Codec.decode` rejects (#364, @samoht)
 
 ## 1.2.0
 
