@@ -512,9 +512,17 @@ module Field : sig
       encoding raises [Invalid_argument] when the supplied values span fewer or
       more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
       There is no count-driven form: "a count field, then that many
-      variable-size elements" is expressible neither here nor in 3D (3D arrays
-      are byte-budgeted), so that shape needs caller-side iteration over the
-      element parser. *)
+      variable-size elements" is expressible neither here nor in 3D, whose only
+      list construct is the byte budget ([elem[n]] is rejected for any element
+      wider than a byte), so that shape needs caller-side iteration over the
+      element parser.
+
+      There is no sizeless form either, for the same reason: 3D has no
+      rest-of-region list, so a repeat that consumed whatever remained would
+      have no projection. When the region size is not known where the codec is
+      built, take it as a {!Param.input} and bind it per call. Baking in a
+      literal makes the budget a constant the encoder will also hold the values
+      to, which is a promise the values cannot keep. *)
 
   val repeat_seq :
     string ->

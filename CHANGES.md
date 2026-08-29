@@ -34,6 +34,14 @@
   own codec accepts, and a differential over that corpus blamed the generated C
   validator for the harness's answer (#350, @samoht)
 
+- `Field.repeat` now explains itself when the encoded elements do not fill the
+  declared byte budget. The budget is the region size the description declares,
+  which encode holds the values to as well, so a caller who does not know that
+  size where the codec is built should take it as a `Param.input` rather than
+  baking in a literal. The documentation also records that there is no sizeless
+  repeat and why: 3D's only list construct is the byte budget, so a repeat that
+  consumed whatever remained would have no projection (#351, @samoht)
+
 ## 1.2.0
 
 ### Added

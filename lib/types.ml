@@ -780,7 +780,12 @@ let exact_repeat_elements seq ~expected ~size_of values =
   in
   let actual = List.fold_left (fun total (_, size) -> total + size) 0 sized in
   if actual <> expected then
-    Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
+    Fmt.invalid_arg
+      "Wire.repeat: byte budget is %d but the elements span %d. The budget is \
+       the region size the description declares, and encode holds the values \
+       to it; if that size is not known where the codec is built, take it as a \
+       Param.input and bind it per call rather than baking in a literal."
+      expected actual;
   sized
 
 (* A fixed-size byte field is exact. Truncating a long value or zero-padding a
