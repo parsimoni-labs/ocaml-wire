@@ -48,6 +48,10 @@
   buffer from the answer got one too short and `encode` ran off the end with a
   raw out-of-bounds instead of a wire error (#353, @samoht)
 
+- `Wire.Everparse.Raw.field_seeds` names the indices a `Wire.lookup` admits, so
+  `Wire_3d.generate_corpus` can reach an accepted record for a table-dispatched
+  field instead of reporting the codec as vacuous (#355, @samoht)
+
 ## 1.2.0
 
 ### Added

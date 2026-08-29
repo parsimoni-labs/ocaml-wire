@@ -3650,6 +3650,12 @@ let constraint_values name (e : bool expr) =
 let rec enum_seed_values : type a. a typ -> int64 list = function
   | Enum { cases; closed = true; _ } ->
       List.map (fun (_, value) -> Int64.of_int value) cases
+  (* A [lookup] admits exactly the indices into its table. Naming both ends is
+     enough to straddle it: the seeder needs one accepting value, and the
+     boundary cases it derives already step either side of each. Listing the
+     whole table would multiply out through those without saying more. *)
+  | Map { index_bound = Some n; _ } when n > 0 ->
+      if n = 1 then [ 0L ] else [ 0L; Int64.of_int (n - 1) ]
   | Where { inner; _ } -> enum_seed_values inner
   | Map { inner; _ } -> enum_seed_values inner
   | Optional { inner; _ } -> enum_seed_values inner
