@@ -545,6 +545,51 @@ let test_doc_merge_shared_sub_codec () =
   check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
   check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
 
+(* A casetype dispatches on any enum, and an enum takes any base with an integer
+   view, so a tag reaches the case-index projection wrapped in a [lookup]'s map,
+   behind a [where], or over a 64-bit base. Each still names one integer per
+   case, so each must project to a switch on the enum constant. *)
+let test_3d_casetype_tag_int_carriers () =
+  let dispatch name tag index =
+    Codec.v name
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "u"
+              (casetype ("Sel" ^ name) tag
+                 [ case ~index uint8 ~inject:Fun.id ~project:Option.some ])
+          $ fun v -> v );
+        ]
+  in
+  let dir = Filename.get_temp_dir_name () in
+  (* Go through [write], not the projected module on its own: the merge is where
+     a synthesised wrapper's own dependencies -- here the tag's enum
+     declaration -- are absorbed, so this is the spec a consumer actually gets. *)
+  let projects what c =
+    let name = "wire_casetype_tag_" ^ String.lowercase_ascii what in
+    Everparse.write ~mode:`Standalone ~outdir:dir ~name
+      [ Everparse.project ~mode:`Standalone c ];
+    let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+    let out = In_channel.with_open_text path In_channel.input_all in
+    Sys.remove path;
+    Alcotest.(check bool)
+      (what ^ ": switch names the enum constant")
+      true
+      (contains ~sub:"case A:" out);
+    Alcotest.(check bool)
+      (what ^ ": the tag's enum is declared")
+      true
+      (contains ~sub:"enum E" out)
+  in
+  projects "lookup"
+    (dispatch "Map" (enum "EMap" [ ("A", 0) ] (lookup [ 0; 1 ] uint8)) 0);
+  projects "uint64"
+    (dispatch "U64" (enum "EU64" [ ("A", 0) ] uint64) (UInt64.of_int 0));
+  projects "where"
+    (dispatch "Where"
+       (enum "EWhere" [ ("A", 0) ] (where Expr.(int 0 = int 0) uint8))
+       (UInt8.v 0))
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -1618,6 +1663,8 @@ let suite =
         test_doc_merge_name_collision;
       Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
         `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
+        test_3d_casetype_tag_int_carriers;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
         test_doc_field_citation;
       Alcotest.test_case "doc: bit order matches schema projection" `Quick
