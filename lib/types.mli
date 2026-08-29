@@ -1112,7 +1112,9 @@ val field_seeds : struct_ -> field_seed list
     declaration singles out values, the byte slot it occupies and those values:
     the constant an equality or inequality refinement names, the values either
     side of an ordering refinement's boundary, and the members of a closed
-    enumeration. Fields with no such value, and fields that are not whole-byte
+    enumeration. A casetype field seeds too: its tag is parsed at the start of
+    the field's own bytes, so the slot is the tag's and the values are the case
+    indices. Fields with no such value, and fields that are not whole-byte
     integers (bitfields in particular, whose base word is shared), are omitted.
 
     The list over-approximates: it names candidates worth trying, not values the

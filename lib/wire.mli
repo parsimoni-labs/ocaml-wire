@@ -1532,8 +1532,10 @@ module Everparse : sig
         declaration singles out values, the byte slot it occupies and those
         values: the constant an equality or inequality refinement names, the
         values either side of an ordering refinement's boundary, and the members
-        of a closed enumeration. Bitfields are omitted because their base word
-        is shared, so a byte offset alone cannot seed one.
+        of a closed enumeration. A casetype field seeds too: its tag is parsed
+        at the start of the field's own bytes, so the slot is the tag's and the
+        values are the case indices. Bitfields are omitted because their base
+        word is shared, so a byte offset alone cannot seed one.
 
         The list over-approximates: it names candidates worth trying, not values
         the description is guaranteed to admit, so a consumer must run each

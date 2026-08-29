@@ -13,6 +13,14 @@
   longer fails the 3D projection with an assertion failure. Every integer
   carrier an enum base accepts now yields a case label (#347, @samoht)
 
+- A parse error from an unmatched casetype tag now names the casetype field. It
+  used to arrive with an empty field path, leaving a caller no way to tell which
+  field the bad tag belonged to (#348, @samoht)
+
+- `Wire.Everparse.Raw.field_seeds` now names a casetype's case indices, so
+  `Wire_3d.generate_corpus` can reach a tagged record instead of reporting the
+  codec as vacuous (#348, @samoht)
+
 ## 1.2.0
 
 ### Added

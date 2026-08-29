@@ -3613,7 +3613,57 @@ let int_slots s =
       | _ -> None)
     s.fields
 
+(* The wire bytes a tag constant stands for, as the [int64] a seed carries.
+   Deliberately not routed through [int_of]: a four-byte magic overflows a
+   native [int] on a 31-bit target, and a seed has to survive there -- which is
+   why [field_seed] holds [int64] in the first place. A signed value keeps its
+   sign here and [write_slot] lays down its two's complement. *)
+let rec tag_wire_value : type k. k typ -> k -> int64 option =
+ fun typ k ->
+  match typ with
+  | Uint8 -> Some (Int64.of_int (UInt8.to_int k))
+  | Int8 -> Some (Int64.of_int (SInt8.to_int k))
+  | Uint16 _ -> Some (Int64.of_int (UInt16.to_int k))
+  | Int16 _ -> Some (Int64.of_int (SInt16.to_int k))
+  | Uint32 _ ->
+      Some (Int64.logand (Int64.of_int32 (UInt32.to_int32 k)) 0xFFFF_FFFFL)
+  | Int32 _ -> Some (Int64.of_int32 (SInt32.to_int32 k))
+  | Uint64 _ -> Some (UInt64.to_int64 k)
+  | Int64 _ -> Some k
+  | Uint_var _ -> Some (Optint.Int63.to_int64 k)
+  | Bits _ -> Some (Int64.of_int k)
+  | Enum { base; _ } -> tag_wire_value base k
+  | Where { inner; _ } -> tag_wire_value inner k
+  | Map { inner; encode; _ } -> tag_wire_value inner (encode k)
+  | Single_elem { elem; _ } -> tag_wire_value elem k
+  | Apply { typ; _ } -> tag_wire_value typ k
+  | _ -> None
+
+(* A casetype parses its tag inline, at the start of the field's own bytes, so
+   the field seeds like an integer even though it is not one: the slot is the
+   tag's and the values it singles out are the case indices. A [default] branch
+   claims every remaining tag and names no value, so it contributes none. *)
+let rec casetype_tag_seed : type a. a typ -> (int_slot * int64 list) option =
+  function
+  | Casetype { tag; cases; _ } ->
+      let index (Case_branch { cb_tag; _ }) =
+        Option.bind cb_tag (tag_wire_value tag)
+      in
+      Option.map
+        (fun slot -> (slot, List.filter_map index cases))
+        (int_slot_of_typ tag)
+  | Where { inner; _ } -> casetype_tag_seed inner
+  | Map { inner; _ } -> casetype_tag_seed inner
+  | Optional { inner; _ } -> casetype_tag_seed inner
+  | Optional_or { inner; _ } -> casetype_tag_seed inner
+  | _ -> None
+
 let field_seeds s =
+  let seed name slot values =
+    match List.sort_uniq Int64.compare values with
+    | [] -> None
+    | values -> Some { field = name; slot; values }
+  in
   let of_field (Field f) =
     match (f.field_name, int_slot_of_typ f.field_typ) with
     | Some name, Some slot ->
@@ -3622,13 +3672,14 @@ let field_seeds s =
           | Some constraint_ -> constraint_values name constraint_
           | None -> []
         in
-        let values =
-          from_field
+        seed name slot
+          (from_field
           @ typ_constraints name f.field_typ
-          @ enum_seed_values f.field_typ
-          |> List.sort_uniq Int64.compare
-        in
-        if values = [] then None else Some { field = name; slot; values }
-    | _ -> None
+          @ enum_seed_values f.field_typ)
+    | Some name, None -> (
+        match casetype_tag_seed f.field_typ with
+        | Some (slot, values) -> seed name slot values
+        | None -> None)
+    | None, _ -> None
   in
   List.filter_map of_field s.fields
