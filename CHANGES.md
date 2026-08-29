@@ -9,6 +9,10 @@
   declaration that still gets a validator of its own and keeps the codec's doc
   comment, whichever schema was projected first (#346, @samoht)
 
+- A casetype tag whose enum sits over a `lookup`, a `where` or a 64-bit base no
+  longer fails the 3D projection with an assertion failure. Every integer
+  carrier an enum base accepts now yields a case label (#347, @samoht)
+
 ## 1.2.0
 
 ### Added

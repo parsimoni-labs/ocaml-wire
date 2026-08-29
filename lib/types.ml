@@ -1492,23 +1492,61 @@ let uint_var_case_index k =
         "Wire.casetype: case index %a does not fit this platform's native int"
         UInt63.pp k
 
+(* Both widths project to 3D's UINT64, so the case label is the unsigned
+   reinterpretation of the eight wire bytes -- which is what [int_of] reads out
+   of them, and what the generated [switch] compares against. *)
+let uint64_case_index k =
+  match UInt64.to_int_opt k with
+  | Some index -> index
+  | None ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %Lu does not fit this platform's native int"
+        (UInt64.to_int64 k)
+
+let int64_case_index k =
+  match Int64.unsigned_to_int k with
+  | Some index -> index
+  | None ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %Lu does not fit this platform's native int"
+        k
+
 (* Project a case-branch discriminator value of type ['k] to a 3D constant
-   expression. Only called for int-shaped tags; non-int tags don't reach
-   here because their casetype field is rewritten away before
-   [casetype_decls_of_struct] walks it. *)
+   expression. Only called for int-shaped tags; non-int tags don't reach here
+   because their casetype field is rewritten away before
+   [casetype_decls_of_struct] walks it.
+
+   [is_int_dispatch_typ] lets an [Enum] through whatever its base, and [enum]
+   takes any base [is_int_representable] accepts, so every integer carrier
+   reachable that way has to be covered here -- the transparent [map] / [where]
+   / [nested] / [apply] wrappers a [variants] or [lookup] base carries
+   included. The match is left exhaustive so a new typ constructor is a
+   compile error rather than a crash on a schema that uses it. *)
 let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
  fun tag_typ k ->
   match tag_typ with
   | Uint8 -> Pack_expr (Int (UInt8.to_int k))
   | Uint16 _ -> Pack_expr (Int (UInt16.to_int k))
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
+  | Uint64 _ -> Pack_expr (Int (uint64_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int (SInt8.to_int k))
   | Int16 _ -> Pack_expr (Int (SInt16.to_int k))
   | Int32 _ -> Pack_expr (Int (int32_case_index k))
+  | Int64 _ -> Pack_expr (Int (int64_case_index k))
   | Bits _ -> Pack_expr (Int k)
   | Enum { base; _ } -> case_index_to_expr base k
-  | _ -> assert false (* guarded by [is_int_dispatch_typ] *)
+  | Map { inner; encode; _ } -> case_index_to_expr inner (encode k)
+  | Where { inner; _ } -> case_index_to_expr inner k
+  | Single_elem { elem; _ } -> case_index_to_expr elem k
+  | Apply { typ; _ } -> case_index_to_expr typ k
+  | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
+  | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
+  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
+  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+      invalid_arg
+        "Wire.casetype: this tag type carries no integer case index; use a \
+         fixed-width integer, bitfield, or enum tag."
 
 (* Auto-emit a dispatch + wrapper for each [Casetype] used in a struct.
 
