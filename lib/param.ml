@@ -46,9 +46,25 @@ let rec to_int : type a. a Types.typ -> a -> int =
 
 let of_int = Types.of_int
 
+(* A [uint ~size] renders as [UINTBE(n)], which is an array suffix rather than a
+   type, so it cannot name a 3D formal. Rejected here for the same reason
+   [Wire.casetype] rejects it as a tag: the position takes less than a field
+   does. *)
+let rec is_uint_var : type a. a Types.typ -> bool = function
+  | Types.Uint_var _ -> true
+  | Types.Enum { base; _ } -> is_uint_var base
+  | Types.Map { inner; _ } -> is_uint_var inner
+  | Types.Where { inner; _ } -> is_uint_var inner
+  | _ -> false
+
 let check_typ name typ =
   if not (Types.is_int_representable typ) then
     Fmt.invalid_arg "Param.%s: only integer-representable types are supported"
+      name;
+  if is_uint_var typ then
+    Fmt.invalid_arg
+      "Param.%s: a [uint ~size] has no 3D parameter type; use a fixed-width \
+       integer"
       name
 
 let input name typ =

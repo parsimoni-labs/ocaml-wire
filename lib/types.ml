@@ -3200,15 +3200,21 @@ let pp_param_typ : type a. Format.formatter -> a typ -> unit =
   | Some n -> Fmt.string ppf (escape_3d n)
   | None -> pp_scalar_of ppf t
 
-let pp_param ppf p =
+(* [~as_enum] is what separates the two formal positions. A casetype's switch
+   discriminant may be the enum type, and reads better as it. A struct's formal
+   is used in the size and offset arithmetic of the fields it parameterises, and
+   EverParse requires an integer type there: naming the enum got "Unknown
+   integer type" even with the enum declared. *)
+let pp_param ~as_enum ppf p =
   let (Pack_typ t) = p.param_typ in
   let name = escape_3d p.param_name in
-  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_param_typ t name
-  else Fmt.pf ppf "%a %s" pp_param_typ t name
+  let pp ppf t = if as_enum then pp_param_typ ppf t else pp_scalar_of ppf t in
+  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp t name
+  else Fmt.pf ppf "%a %s" pp t name
 
-let pp_params ppf params =
+let pp_params ?(as_enum = false) ppf params =
   if not (List.is_empty params) then
-    Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma pp_param) params
+    Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma (pp_param ~as_enum)) params
 
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar
@@ -3300,7 +3306,7 @@ let pp_struct ppf (s : struct_) =
         | _ -> None)
       fields
   in
-  Fmt.pf ppf "typedef struct %s%a" tag pp_params s.params;
+  Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
   List.iter (pp_field widenable ppf) fields;
@@ -3330,7 +3336,11 @@ let pp_casetype_cases : type k.
     | _ -> None
   in
   let enum_label k =
-    if not !render_enum_as_type then None
+    (* [enum_type_name] is the same test that decides whether the tag renders as
+       the enum: an enum over a bitfield base has no 3D enum type and so no
+       declaration, and naming its constant referred to nothing. *)
+    if (not !render_enum_as_type) || Option.is_none (enum_type_name tag) then
+      None
     else
       match named_cases tag with
       | Some ecases ->
@@ -3383,7 +3393,7 @@ let pp_decl ppf = function
       else Fmt.pf ppf "#define %s 0x%x@," name value
   | Extern_fn { name; params; ret = Pack_typ ret } ->
       Fmt.pf ppf "@[<h>extern %a %s(%a)@]@,@," pp_typ ret name
-        Fmt.(list ~sep:comma pp_param)
+        Fmt.(list ~sep:comma (pp_param ~as_enum:false))
         params
   | Extern_probe { init; name } ->
       (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
@@ -3404,8 +3414,8 @@ let pp_decl ppf = function
           (name, String.sub name 1 (String.length name - 1))
         else ("_" ^ name, name)
       in
-      Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name pp_params
-        params disc_name;
+      Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name
+        (pp_params ~as_enum:true) params disc_name;
       pp_casetype_cases ppf tag cases;
       Fmt.pf ppf "@,}@]@,} %s;@,@," public_name
 

@@ -93,6 +93,12 @@
   sub-codecs of different widths produced a validator reading a different number
   of bytes than the codec (#365, @samoht)
 
+- A codec parameter and a casetype case label each render as something the
+  schema declares. A parameter typed by an enum named a type EverParse rejects
+  in that position, a case label named a constant of an enum over a bitfield
+  base that is never declared, and a `uint ~size` parameter named no type at
+  all and is now refused where it is built (#366, @samoht)
+
 ## 1.2.0
 
 ### Added
