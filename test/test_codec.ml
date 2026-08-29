@@ -830,6 +830,67 @@ let test_codec_array_cardinality () =
     [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
+(* A bounded zero-terminated string occupies its whole region whatever the
+   terminator's position, so a buffer sized from the codec's own minimum has to
+   hold it. It reported zero, because the field had no reader on the fixed-size
+   compile path and so compiled as variable-size; the terminator check has to
+   survive the move. And a [zeroterm] field's terminator is found by the size
+   walk, which named no field until now. *)
+let test_zeroterm_extent_and_attribution () =
+  let bounded =
+    Codec.v "Ztam" Fun.id
+      Codec.[ Field.v "s" (zeroterm_at_most ~size:(int 8)) $ Fun.id ]
+  in
+  Alcotest.(check int)
+    "the region is the minimum size" 8
+    (Codec.min_wire_size bounded);
+  (match Codec.decode bounded (Bytes.of_string "abcdefgh") 0 with
+  | Ok _ -> Alcotest.fail "expected a missing terminator"
+  | Error { kind = Missing_terminator; _ } -> ()
+  | Error _ -> Alcotest.fail "wrong error for an unterminated region");
+  (match Codec.decode bounded (Bytes.of_string "abc\x00defg") 0 with
+  | Ok v -> Alcotest.(check string) "reads up to the NUL" "abc" v
+  | Error _ -> Alcotest.fail "expected the terminated region to decode");
+  let greedy = Codec.v "Zt" Fun.id Codec.[ Field.v "s" zeroterm $ Fun.id ] in
+  match Codec.decode greedy (Bytes.of_string "ab") 0 with
+  | Ok _ -> Alcotest.fail "expected a missing terminator"
+  | Error { kind = Missing_terminator; field; _ } ->
+      Alcotest.(check (list string)) "names the field" [ "s" ] field
+  | Error _ -> Alcotest.fail "wrong error for an unterminated string"
+
+(* [expected] is documented as a count of bytes, and every consumer does
+   arithmetic on it: the streaming reader's retry target and the corpus seeder's
+   growth target both read it that way. A greedy field whose start overran the
+   buffer used to report the negative size the offset produced, which reads as
+   "nothing is missing" and sends both consumers backwards. *)
+let test_eof_expected_is_a_byte_count () =
+  let f_len = Field.v "len" uint8 in
+  let c =
+    Codec.v "Greedy"
+      (fun l s t -> (l, s, t))
+      Codec.
+        [
+          (f_len $ fun (l, _, _) -> l);
+          ( Field.v "span" (byte_array ~size:(Field.ref f_len))
+          $ fun (_, s, _) -> s );
+          (Field.v "tail" all_zeros $ fun (_, _, t) -> t);
+        ]
+  in
+  (* [len] is 20, so the tail starts at 21 in a two-byte buffer. *)
+  let buf = Bytes.of_string "\x14\x00" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "expected the overrun to be refused"
+  | Error { kind = Unexpected_eof { expected; got }; at; _ } ->
+      Alcotest.(check bool)
+        (Fmt.str "expected is a byte count, not %d" expected)
+        true (expected >= 0);
+      (* The shortfall names exactly where the read starts, which is what both
+         consumers compute from it. *)
+      Alcotest.(check int)
+        "the shortfall reaches the read" at
+        (Bytes.length buf + expected - got)
+  | Error _ -> Alcotest.fail "expected an end-of-input refusal"
+
 (* A value too wide for the native int is refused by the conversion, which is
    handed the value and nothing else and so reports byte 0. The reader knows
    where it found it, and a caller that seeks to the reported offset has to land
@@ -9780,6 +9841,10 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "zeroterm: extent and field attribution" `Quick
+        test_zeroterm_extent_and_attribution;
+      Alcotest.test_case "decode: eof expected is a byte count" `Quick
+        test_eof_expected_is_a_byte_count;
       Alcotest.test_case "decode: out-of-range offset follows the frame" `Quick
         test_out_of_range_offset_follows_the_frame;
       Alcotest.test_case "size_of_value: resolves param-driven sizes" `Quick
