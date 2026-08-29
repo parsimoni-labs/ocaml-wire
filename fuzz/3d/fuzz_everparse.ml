@@ -201,24 +201,9 @@ let record_spans codec env b =
 let no_corpus_seed =
   [
     (* Accepts every buffer it is given, so there is no rejecting side to
-       reach. One-sided by nature rather than by omission. *)
+       reach. One-sided by nature rather than by omission, and the only entry
+       here that a better seeder could not remove. *)
     "all_bytes";
-    (* Needs a NUL at the right offset, and a terminator is not a value any
-       field declaration singles out, so nothing seeds it. *)
-    "zeroterm";
-    "zeroterm_at_most(1)";
-    "zeroterm_at_most(8)";
-    (* Constraint-shaped: the accepting side is a predicate over the record
-       rather than a value some field's declaration names, which is the only
-       thing [field_seeds] reports. Several of these look like seeding gaps
-       rather than inherent properties; shrinking this list is the follow-up,
-       and pinning it is what makes the set visible enough to shrink. *)
-    "optional_dyn_after_span";
-    "typ_where";
-    "field_constraint";
-    "field_int";
-    "param_input";
-    "nan_float64";
   ]
 
 let corpus_oracle_case (label, Fuzz_gen.Pack g) =
