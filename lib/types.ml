@@ -3690,33 +3690,43 @@ let neighbours k =
    values. This is intentionally an over-approximation: consumers must ask the
    codec for the verdict, so an inadmissible candidate costs one retry rather
    than producing a wrong oracle. *)
-let constraint_values name (e : bool expr) =
-  let is_self : type a. a expr -> bool = function
-    | Ref (_, n) -> String.equal n name
-    | _ -> false
+(* Which field a comparison names, and the value it names for it. The generated
+   validator checks a refinement at the field it is attached to but compares
+   whatever fields the expression references, so a literal belongs to the field
+   on the other side of the comparison rather than to the field carrying the
+   constraint: [UINT8 d { (len < 2) }] singles out a value for [len], not for
+   [d]. *)
+let constraint_bindings (e : bool expr) : (string * int64 list) list =
+  let named : type a. a expr -> string option = function
+    | Ref (_, n) -> Some n
+    | _ -> None
   in
   let literal : type a. a expr -> int64 option = function
     | Int k -> Some (Int64.of_int k)
     | Int64 k -> Some k
     | _ -> None
   in
-  let against : type a. a expr -> a expr -> int64 option =
+  let against : type a. a expr -> a expr -> (string * int64) option =
    fun x y ->
-    if is_self x then literal y else if is_self y then literal x else None
+    match (named x, literal y) with
+    | Some n, Some k -> Some (n, k)
+    | _ -> (
+        match (named y, literal x) with
+        | Some n, Some k -> Some (n, k)
+        | _ -> None)
   in
-  let rec go : bool expr -> int64 list = function
+  let bind f a b =
+    match against a b with Some (n, k) -> [ (n, f k) ] | None -> []
+  in
+  let rec go : bool expr -> (string * int64 list) list = function
     | And (a, b) | Or (a, b) -> go a @ go b
     | Not a -> go a
-    | Eq (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
-    | Ne (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
-    | Lt (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Le (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Gt (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Ge (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
+    | Eq (a, b) -> bind (fun k -> [ k ]) a b
+    | Ne (a, b) -> bind (fun k -> [ k ]) a b
+    | Lt (a, b) -> bind neighbours a b
+    | Le (a, b) -> bind neighbours a b
+    | Gt (a, b) -> bind neighbours a b
+    | Ge (a, b) -> bind neighbours a b
     | _ -> []
   in
   go e
@@ -3737,13 +3747,11 @@ let rec enum_seed_values : type a. a typ -> int64 list = function
   | Optional_or { inner; _ } -> enum_seed_values inner
   | _ -> []
 
-let rec typ_constraints : type a. string -> a typ -> int64 list =
- fun name -> function
-  | Where { cond; inner } ->
-      constraint_values name cond @ typ_constraints name inner
-  | Map { inner; _ } -> typ_constraints name inner
-  | Optional { inner; _ } -> typ_constraints name inner
-  | Optional_or { inner; _ } -> typ_constraints name inner
+let rec typ_bindings : type a. a typ -> (string * int64 list) list = function
+  | Where { cond; inner } -> constraint_bindings cond @ typ_bindings inner
+  | Map { inner; _ } -> typ_bindings inner
+  | Optional { inner; _ } -> typ_bindings inner
+  | Optional_or { inner; _ } -> typ_bindings inner
   | _ -> []
 
 let int_slots s =
@@ -3800,6 +3808,27 @@ let rec casetype_tag_seed : type a. a typ -> (int_slot * int64 list) option =
   | _ -> None
 
 let field_seeds s =
+  (* Read the record the way the projection does. A struct-level [where] is
+     lowered onto the last field it references before EverParse sees it, so
+     lower it here rather than keeping a second rule about where a constraint
+     lives, and collect every refinement's values across the whole record: the
+     generated validator checks a refinement at the field carrying it but
+     compares whatever it references. *)
+  let _, fields = lower_where_to_field_constraint s.where s.fields in
+  let bindings =
+    List.concat_map
+      (fun (Field f) ->
+        (match f.constraint_ with
+          | Some c -> constraint_bindings c
+          | None -> [])
+        @ typ_bindings f.field_typ)
+      fields
+  in
+  let named name =
+    List.concat_map
+      (fun (n, vs) -> if String.equal n name then vs else [])
+      bindings
+  in
   let seed name slot values =
     match List.sort_uniq Int64.compare values with
     | [] -> None
@@ -3808,19 +3837,11 @@ let field_seeds s =
   let of_field (Field f) =
     match (f.field_name, int_slot_of_typ f.field_typ) with
     | Some name, Some slot ->
-        let from_field =
-          match f.constraint_ with
-          | Some constraint_ -> constraint_values name constraint_
-          | None -> []
-        in
-        seed name slot
-          (from_field
-          @ typ_constraints name f.field_typ
-          @ enum_seed_values f.field_typ)
+        seed name slot (named name @ enum_seed_values f.field_typ)
     | Some name, None -> (
         match casetype_tag_seed f.field_typ with
         | Some (slot, values) -> seed name slot values
         | None -> None)
     | None, _ -> None
   in
-  List.filter_map of_field s.fields
+  List.filter_map of_field fields

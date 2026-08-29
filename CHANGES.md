@@ -69,7 +69,11 @@
   terminator has to be written rather than drawn. It seeds from the extremes as
   well as from noise, and repairs a missing terminator the way it already
   repaired a short input (#360, @samoht)
-
+- `Wire.Everparse.Raw.field_seeds` credits a refinement's values to the field it
+  compares rather than to the field carrying it, and reads a struct-level
+  `where` where the projection puts it. A constraint written on one field about
+  another, and any codec-level `where`, previously yielded no values at all
+  (#362, @samoht)
 ## 1.2.0
 
 ### Added
