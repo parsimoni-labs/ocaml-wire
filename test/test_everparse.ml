@@ -1709,6 +1709,66 @@ let test_3d_nested_over_array () =
     "use site is a single-element-array of the named wrapper" true
     (contains ~sub:"xs[:byte-size-single-element-array 16]" s)
 
+(* A [nested] region lifts its inner into a synthesised wrapper struct, which is
+   a 3D scope of its own: an inner sized from a field of the enclosing struct
+   named something the wrapper never declared, and EverParse rejected the schema
+   with "Variable n not found". The wrapper takes the name as a formal and the
+   use site passes the field on. *)
+let test_3d_nested_inner_sized_by_a_field () =
+  let f_n = Field.v "n" uint8 in
+  let c =
+    Codec.v "NestRef"
+      (fun n a -> (n, a))
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun (n, _) -> n);
+          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
+          $ fun (_, a) -> a );
+        ]
+  in
+  let check mode =
+    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+    Alcotest.(check bool)
+      "wrapper declares the field it is sized by" true
+      (contains ~sub:"(UINT32 n)" out);
+    Alcotest.(check bool)
+      "use site passes the field to the wrapper" true
+      (contains ~sub:"(n) a[:byte-size-single-element-array 4]" out)
+  in
+  check `Ffi;
+  check `Standalone
+
+(* Two [nested] inners of different shapes each need a wrapper of their own.
+   Both used to be named after the same catch-all, so the second was dropped as
+   a repeat of the first and its field then validated against the first's
+   length. *)
+let test_3d_nested_wrapper_per_shape () =
+  let f_n = Field.v "n" uint8 in
+  let f_m = Field.v "m" uint8 in
+  let c =
+    Codec.v "TwoNest"
+      (fun n m a b -> (n, m, a, b))
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun (n, _, _, _) -> n);
+          (Field.v "m" uint8 $ fun (_, m, _, _) -> m);
+          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
+          $ fun (_, _, a, _) -> a );
+          ( Field.v "b" (nested ~size:(int 8) (byte_slice ~size:(Field.ref f_m)))
+          $ fun (_, _, _, b) -> b );
+        ]
+  in
+  let out = flatten (to_3d (Everparse.project ~mode:`Ffi c).module_) in
+  Alcotest.(check bool)
+    "the first inner keeps its own length" true
+    (contains ~sub:"UINT8 v[:byte-size n]" out);
+  Alcotest.(check bool)
+    "the second inner keeps its own length" true
+    (contains ~sub:"UINT8 v[:byte-size m]" out);
+  Alcotest.(check bool)
+    "each use site passes its own field" true
+    (contains ~sub:"(m) b[:byte-size-single-element-array 8]" out)
+
 (* -- Reserved word escaping -- *)
 
 let test_reserved_word_escaping () =
@@ -1912,6 +1972,10 @@ let suite =
       Alcotest.test_case "3d: param embed" `Quick test_3d_param_embed;
       Alcotest.test_case "3d: nested over array" `Quick
         test_3d_nested_over_array;
+      Alcotest.test_case "3d: nested inner sized by a field" `Quick
+        test_3d_nested_inner_sized_by_a_field;
+      Alcotest.test_case "3d: one nested wrapper per shape" `Quick
+        test_3d_nested_wrapper_per_shape;
       Alcotest.test_case "3d: reserved word escaping" `Quick
         test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
