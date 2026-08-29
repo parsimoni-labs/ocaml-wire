@@ -497,6 +497,54 @@ let test_doc_merge_name_collision () =
     "equal copies declared once" 1
     (List.length (Re.all (Re.compile (Re.str "enum Shared")) content))
 
+(* A sub-codec packed as a codec of its own and also reached through another
+   codec's field projects twice: once carrying [entrypoint] and the codec's doc,
+   once carrying neither. Both describe the same type, so the merge must collapse
+   them instead of reading the markers as a conflicting redeclaration -- and the
+   surviving copy must keep the entrypoint whichever schema came first, or the
+   shared type silently loses its validator. *)
+let test_doc_merge_shared_sub_codec () =
+  let shared =
+    Codec.v "Chunk" ~doc:"The shared chunk header."
+      (fun v -> v)
+      Codec.[ (Field.v "len" uint8 $ fun v -> v) ]
+  in
+  let outer =
+    Codec.v "Frame"
+      (fun k c -> (k, c))
+      Codec.
+        [
+          (Field.v "kind" uint8 $ fun (k, _) -> k);
+          (Field.v "chunk" (codec shared) $ fun (_, c) -> c);
+        ]
+  in
+  let dir = Filename.get_temp_dir_name () in
+  let write name schemas =
+    Everparse.write ~mode:`Standalone ~outdir:dir ~name schemas;
+    let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+    let content = In_channel.with_open_text path In_channel.input_all in
+    Sys.remove path;
+    content
+  in
+  let sub = Everparse.project ~mode:`Standalone shared in
+  let parent = Everparse.project ~mode:`Standalone outer in
+  let check order content =
+    Alcotest.(check int)
+      (order ^ ": Chunk declared once")
+      1
+      (List.length (Re.all (Re.compile (Re.str "} Chunk;")) content));
+    Alcotest.(check bool)
+      (order ^ ": Chunk keeps its entrypoint")
+      true
+      (contains ~sub:"entrypoint\ntypedef struct WireChunk" content);
+    Alcotest.(check bool)
+      (order ^ ": Chunk keeps its doc")
+      true
+      (contains ~sub:"The shared chunk header." content)
+  in
+  check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
+  check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -1568,6 +1616,8 @@ let suite =
         test_doc_merge_dedup;
       Alcotest.test_case "doc: merge rejects conflicting redeclaration" `Quick
         test_doc_merge_name_collision;
+      Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
+        `Quick test_doc_merge_shared_sub_codec;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
         test_doc_field_citation;
       Alcotest.test_case "doc: bit order matches schema projection" `Quick
