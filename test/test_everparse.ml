@@ -557,6 +557,41 @@ let test_doc_merge_shared_sub_codec () =
   check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
   check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
 
+(* Two declarations under one name are two types with one name, and every
+   reference resolves to whichever was reached first: two same-named sub-codecs
+   of different widths gave a validator reading a different number of bytes than
+   the codec, with no error anywhere. [Everparse.write] refuses this across
+   schemas; within one schema nothing did. *)
+let test_duplicate_declaration_names_rejected () =
+  let two name a b =
+    Codec.v name
+      (fun x y -> (x, y))
+      Codec.[ Field.v "x" a $ fst; Field.v "y" b $ snd ]
+  in
+  let refuses what c =
+    match
+      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    with
+    | _ -> Alcotest.failf "%s: expected the collision to be refused" what
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          (what ^ ": names the colliding declaration")
+          true
+          (contains ~sub:"named" msg)
+  in
+  refuses "sub-codecs"
+    (two "Clash"
+       (codec (two "Dk" uint8 uint8))
+       (codec (two "Dk" uint16 uint16)));
+  refuses "enums"
+    (Codec.v "EClash"
+       (fun x y -> (x, y))
+       Codec.
+         [
+           Field.v "x" (enum "Dup" [ ("A", 1) ] uint8) $ fst;
+           Field.v "y" (enum "Dup" [ ("B", 9) ] uint8) $ snd;
+         ])
+
 (* A case body was rendered through the type suffix alone, never through the
    refinement machinery a field of the same type goes through, so a closed
    enum's membership and a lookup's index bound vanished from the generated
@@ -1839,6 +1874,8 @@ let suite =
         test_doc_merge_name_collision;
       Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
         `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: duplicate declaration names rejected" `Quick
+        test_duplicate_declaration_names_rejected;
       Alcotest.test_case "3d: casetype case bodies keep refinements" `Quick
         test_casetype_case_bodies_keep_refinements;
       Alcotest.test_case "3d: integer casetype tags dispatch" `Quick
