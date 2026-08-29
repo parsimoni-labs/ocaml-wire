@@ -654,6 +654,15 @@ val int_of : 'a typ -> 'a -> int option
     not fit the native int (a {!val-uint64} over 2{^ 62}) and for a type with no
     integer view. *)
 
+val relocate_at : at:int -> (unit -> 'a) -> 'a
+(** [relocate_at ~at f] runs [f], moving any parse error it raises to byte [at].
+    A conversion handed a value alone has no offset to name and reports 0; the
+    reader that found the value does. *)
+
+val int_view_is_total : 'a typ -> bool
+(** [int_view_is_total typ] is [true] when every value of [typ] fits the native
+    int, so taking its integer view cannot fail and needs no relocation. *)
+
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
     [int] directly (no boxing on the numeric path) and raises {!Parse_error}

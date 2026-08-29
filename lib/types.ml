@@ -96,6 +96,14 @@ let map_decode ~index_bound decode =
       fun ~at v ->
         try decode v with Parse_error e -> raise (Parse_error { e with at }))
 
+(* [int_of_exn] is handed a value and nothing else, so an out-of-range one has
+   no offset to name and reports 0, the same blind spot [map_decode] covers for
+   a lookup. A reader knows where it found the value, so relocate the failure
+   there; only a carrier wider than the native int can raise, and the handler is
+   installed only for those, so a byte- or word-wide read pays nothing. *)
+let relocate_at ~at f =
+  try f () with Parse_error e -> raise (Parse_error { e with at })
+
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })
 
@@ -591,6 +599,21 @@ let rec int_of : type a. a typ -> a -> int option =
   | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
   | Repeat _ ->
       None
+
+(* Whether every value of a carrier fits the native int, so its integer view
+   cannot fail. A reader over one of these needs no relocating handler: the
+   narrow widths always fit, and the wide ones depend on [Sys.int_size], which
+   is 63 on a native build and 31 under wasm_of_ocaml. *)
+let rec int_view_is_total : type a. a typ -> bool = function
+  | Uint8 | Int8 | Uint16 _ | Int16 _ | Bits _ -> true
+  | Uint32 _ | Int32 _ -> Sys.int_size > 32
+  | Uint64 _ | Int64 _ | Uint_var _ -> false
+  | Enum { base; _ } -> int_view_is_total base
+  | Where { inner; _ } -> int_view_is_total inner
+  | Single_elem { elem; _ } -> int_view_is_total elem
+  | Apply { typ; _ } -> int_view_is_total typ
+  | Map { inner; _ } -> int_view_is_total inner
+  | _ -> false
 
 (* Hot-path variant of [int_of] for the cross-field size/offset/present
    readers, which need a plain [int]. Returns it directly (no [Some] box on the

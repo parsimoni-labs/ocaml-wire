@@ -52,6 +52,10 @@
   `Wire_3d.generate_corpus` can reach an accepted record for a table-dispatched
   field instead of reporting the codec as vacuous (#355, @samoht)
 
+- A value too wide for the platform's native integer is now reported at the
+  field it was read from rather than at byte 0, so seeking to the offset a parse
+  error names lands on the field whatever base the frame sits at (#356, @samoht)
+
 ## 1.2.0
 
 ### Added

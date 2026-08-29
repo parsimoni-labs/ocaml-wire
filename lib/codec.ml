@@ -293,10 +293,21 @@ let enum_checker ~to_int cases ~at v =
   Types.check_enum_decode ~at ~cases (to_int v);
   v
 
+(* [to_int] is handed the value alone, so a carrier wider than the native int
+   reports its refusal at byte 0. Relocate it to the field, as the element
+   reader does. Only a wide carrier can raise, so the narrow ones keep the bare
+   checker and pay nothing for the handler. *)
+let enum_checker_wide ~to_int cases ~at v =
+  Types.relocate_at ~at (fun () ->
+      Types.check_enum_decode ~at ~cases (to_int v));
+  v
+
 (* An open enum ([closed = false]) accepts any base value: the names only
    document known members, so decode does not reject the rest. *)
-let enum_check ~to_int cases closed =
-  if closed then enum_checker ~to_int cases else fun ~at:_ v -> v
+let enum_check ~base ~to_int cases closed =
+  if not closed then fun ~at:_ v -> v
+  else if Types.int_view_is_total base then enum_checker ~to_int cases
+  else enum_checker_wide ~to_int cases
 
 (* Encode-side twin of [enum_check], gated on [closed] by the same rule so the
    two halves admit exactly the same values. Encoding an unlisted value raises
@@ -377,7 +388,9 @@ let rec build_field_reader_ctx : type a.
   | Where { inner; _ } -> build_field_reader_ctx inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader_ctx base field_off in
-      let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+      let check =
+        enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+      in
       fun runtime input_end buf base ->
         check ~at:(base + field_off) (read runtime input_end buf base)
   | Map { inner; decode; index_bound; _ } ->
@@ -466,7 +479,9 @@ let rec build_immediate_reader : type a.
       match build_immediate_reader base field_off with
       | None -> None
       | Some read ->
-          let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+          let check =
+            enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+          in
           Some (fun buf base -> check ~at:(at base) (read buf base)))
   | Map { inner; decode; index_bound; _ } -> (
       match build_immediate_reader inner field_off with
@@ -697,7 +712,9 @@ let rec build_populate : type a.
   | Float64 Big -> populate_float64 idx Bytes.get_int64_be
   | Where { inner; _ } -> build_populate inner idx reader
   | Enum { base; cases; closed; _ } ->
-      let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+      let check =
+        enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+      in
       build_populate base idx (fun runtime input_end buf b ->
           check ~at:b (reader runtime input_end buf b))
   | Map { inner; encode; _ } ->
@@ -1512,7 +1529,13 @@ let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
          through the byte budget. *)
       let v = read_elem base runtime input_end buf off in
       if closed then
-        Types.check_enum_decode ~at:off ~cases (Types.int_of_exn base v);
+        (* A base whose values all fit the native int cannot raise on the way to
+           its integer view, so it skips the relocating handler entirely. *)
+        if Types.int_view_is_total base then
+          Types.check_enum_decode ~at:off ~cases (Types.int_of_exn base v)
+        else
+          Types.relocate_at ~at:off (fun () ->
+              Types.check_enum_decode ~at:off ~cases (Types.int_of_exn base v));
       v
   | Casetype { tag; cases; _ } ->
       let tag_val = read_elem tag runtime input_end buf off in
@@ -2927,10 +2950,12 @@ let rec compile_field : type a r.
          the named cases. [compile_field] would otherwise strip the cases and
          accept any base value, unlike the EverParse validator. *)
       let cf = compile_field ctx { fld with typ = base } in
-      let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+      let check =
+        enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+      in
       (* [populate] reads the field's integer slot rather than its value, so it
          checks membership on the integer the slot already holds. *)
-      let int_check = enum_check ~to_int:Fun.id cases closed in
+      let int_check = enum_check ~base ~to_int:Fun.id cases closed in
       let get = fld.get in
       let encode_check =
         enum_encode_check ~name ~cases ~closed ~to_int:(Types.int_of_exn base)
@@ -4461,7 +4486,9 @@ let rec build_staged_reader : type a.
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
-      let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+      let check =
+        enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+      in
       let at = access_at access in
       fun runtime input_end buf base ->
         check
@@ -4609,7 +4636,9 @@ let rec build_immediate_staged_reader : type a.
       match build_immediate_staged_reader base access with
       | None -> None
       | Some read ->
-          let check = enum_check ~to_int:(Types.int_of_exn base) cases closed in
+          let check =
+            enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+          in
           let off = immediate_access_off access in
           Some (fun buf base -> check ~at:(base + off) (read buf base)))
   | Map { inner; decode; index_bound; _ }, _ -> (
