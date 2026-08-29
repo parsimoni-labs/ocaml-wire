@@ -2729,6 +2729,28 @@ let compile_var_size_fn : type a.
       in
       compile_expr ~sizeof_this ctx.field_readers size_expr
 
+(* Prepend [name] to the field path of a parse error escaping [f], so a failure
+   deep in a nested decode accumulates its root-to-leaf path as the exception
+   unwinds. Only fields that can raise an attributable error are wrapped; a plain
+   scalar read raises only [Unexpected_eof] from the record's bounds check, which
+   is recorded without a path. *)
+let prepend_field name f runtime input_end buf base =
+  try f runtime input_end buf base
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+let prepend_field_check name f arr runtime input_end buf base =
+  try f arr runtime input_end buf base
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+(* A casetype's extent comes from dispatching on its tag, and the record's
+   bounds check walks that extent before any field reader runs, so an unknown
+   tag surfaces from the size walk rather than from the wrapped reader. Name the
+   field there too, or the failure reaches the caller with no path at all. *)
+let attribute_size_errors typ name size_fn =
+  match typ with Casetype _ -> prepend_field name size_fn | _ -> size_fn
+
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -2736,6 +2758,7 @@ let compile_var_bytes : type a r.
   let off_fn = off_fn_of ctx in
   let validator_off = validator_off_of ctx in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
+  let size_fn = attribute_size_errors typ fld.name size_fn in
   let field_access : field_access =
     match ctx.next_off with
     | Static n -> Variable { off = n; size_fn }
@@ -3254,21 +3277,6 @@ let rec field_reader_validates : type a. a Types.typ -> bool = function
      into [elem]. *)
   | Types.Repeat _ -> true
   | _ -> true
-
-(* Prepend [name] to the field path of a parse error escaping [f], so a failure
-   deep in a nested decode accumulates its root-to-leaf path as the exception
-   unwinds. Only fields that can raise an attributable error are wrapped; a plain
-   scalar read raises only [Unexpected_eof] from the record's bounds check, which
-   is recorded without a path. *)
-let prepend_field name f runtime input_end buf base =
-  try f runtime input_end buf base
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
-
-let prepend_field_check name f arr runtime input_end buf base =
-  try f arr runtime input_end buf base
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
 
 (* Tag a field's reader and its two validators with [name] so a parse error
    escaping any of them carries the field in its path; [attributable = false] (a
