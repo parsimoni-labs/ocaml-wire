@@ -114,7 +114,16 @@ let test_casetype_enum_tag_labels () =
       kind
       [ decl_case 0 uint32; decl_case 2 uint16 ]
   in
-  let output = to_3d (module_ [ d ]) in
+  (* Only where the module declares the enum type. The codegen projection
+     renders the tag as its base scalar, so a constant name there would refer to
+     a type it never declares. *)
+  let m =
+    module_
+      [
+        enum_decl "PageKind" [ ("LeafIndex", 0); ("InteriorIndex", 2) ] uint8; d;
+      ]
+  in
+  let output = to_3d ~enum_as_type:true m in
   Alcotest.(check bool)
     "low case uses the enum constant name" true
     (contains ~sub:"case LeafIndex:" output);
@@ -123,7 +132,10 @@ let test_casetype_enum_tag_labels () =
     (contains ~sub:"case InteriorIndex:" output);
   Alcotest.(check bool)
     "no raw-integer case label" false
-    (contains ~sub:"case 2:" output)
+    (contains ~sub:"case 2:" output);
+  Alcotest.(check bool)
+    "the enum it names is declared" true
+    (contains ~sub:"enum PageKind" output)
 
 let test_casetype_wide_index_error () =
   let high = Wire.Private.UInt32.be (Bytes.of_string "\x80\x00\x00\x00") 0 in

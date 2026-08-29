@@ -2609,6 +2609,11 @@ let rec enum_type_name : type a. a typ -> string option = function
   | Apply { typ; _ } -> enum_type_name typ
   | _ -> None
 
+(* A [where] anywhere in a field's type becomes a field constraint, including
+   one under an [enum] or a [map]: 3D takes at most one refinement after a field
+   name, so leaving an inner one to render inline on the type produced two
+   stacked braces and a syntax error. Rebuilding the wrapper around the
+   extracted inner keeps the type it renders as unchanged. *)
 let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
  fun typ ->
   match typ with
@@ -2616,6 +2621,14 @@ let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
       match extract_where_constraint inner with
       | Some c2, inner' -> (Some (And (cond, c2)), inner')
       | None, inner' -> (Some cond, inner'))
+  | Enum ({ base; _ } as e) -> (
+      match extract_where_constraint base with
+      | None, _ -> (None, typ)
+      | Some c, base' -> (Some c, Enum { e with base = base' }))
+  | Map ({ inner; _ } as m) -> (
+      match extract_where_constraint inner with
+      | None, _ -> (None, typ)
+      | Some c, inner' -> (Some c, Map { m with inner = inner' }))
   | _ -> (None, typ)
 
 let combine_constraints a b =
@@ -3109,11 +3122,34 @@ let pp_field widenable ppf (Field f) =
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
   Fmt.string ppf ";"
 
+(* The scalar an enum-shaped type projects to, seen through the transparent
+   wrappers. Used where a type has to render without an enum declaration to
+   refer to. *)
+let rec pp_scalar_of : type a. Format.formatter -> a typ -> unit =
+ fun ppf t ->
+  match t with
+  | Enum { base; _ } -> pp_scalar_of ppf base
+  | Map { inner; _ } -> pp_scalar_of ppf inner
+  | Where { inner; _ } -> pp_scalar_of ppf inner
+  | Apply { typ; _ } -> pp_scalar_of ppf typ
+  | t -> pp_typ ppf t
+
+(* A parameter's type renders under the same rule as a field's: the named enum
+   only where the module declares enum types, and the base it projects to
+   otherwise. Naming an enum unconditionally left the codegen projection
+   referring to a type it never declares, and a [where]-wrapped base rendering
+   as a refinement, which is not a parameter type at all. *)
+let pp_param_typ : type a. Format.formatter -> a typ -> unit =
+ fun ppf t ->
+  match if !render_enum_as_type then enum_type_name t else None with
+  | Some n -> Fmt.string ppf (escape_3d n)
+  | None -> pp_scalar_of ppf t
+
 let pp_param ppf p =
   let (Pack_typ t) = p.param_typ in
   let name = escape_3d p.param_name in
-  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_typ t name
-  else Fmt.pf ppf "%a %s" pp_typ t name
+  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_param_typ t name
+  else Fmt.pf ppf "%a %s" pp_param_typ t name
 
 let pp_params ppf params =
   if not (List.is_empty params) then
@@ -3227,13 +3263,26 @@ let pp_casetype_cases : type k.
  fun ppf tag cases ->
   (* When the switch tag is an enum, EverParse requires each case label to be the
      enum constant name, not the raw integer it stands for. *)
-  let enum_label k =
-    match tag with
-    | Enum { cases = ecases; _ } ->
-        List.find_map
-          (fun (n, v) -> if Int.equal v k then Some n else None)
-          ecases
+  (* Only where the module declares enum types: the codegen projection renders
+     the tag as its base scalar, so a constant name there would refer to a type
+     the module never declares. Seen through the transparent wrappers, since the
+     tag's enum can sit behind a [lookup]'s map or a [where]. *)
+  let rec named_cases : type k. k typ -> (string * int) list option = function
+    | Enum { cases; _ } -> Some cases
+    | Map { inner; _ } -> named_cases inner
+    | Where { inner; _ } -> named_cases inner
+    | Apply { typ; _ } -> named_cases typ
     | _ -> None
+  in
+  let enum_label k =
+    if not !render_enum_as_type then None
+    else
+      match named_cases tag with
+      | Some ecases ->
+          List.find_map
+            (fun (n, v) -> if Int.equal v k then Some n else None)
+            ecases
+      | None -> None
   in
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
