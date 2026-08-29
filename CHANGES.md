@@ -1,3 +1,14 @@
+## unreleased
+
+### Fixed
+
+- `Wire.Everparse.write` no longer refuses a family in which a sub-codec is both
+  packed as a codec of its own and reached through another codec's field,
+  reporting the two as conflicting definitions of one type. They differ only in
+  how the type is used, not in what it is, so they now collapse into a single
+  declaration that still gets a validator of its own and keeps the codec's doc
+  comment, whichever schema was projected first (#346, @samoht)
+
 ## 1.2.0
 
 ### Added
