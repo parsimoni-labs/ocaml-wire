@@ -646,6 +646,33 @@ let test_corpus_seeds_a_casetype_tag () =
     (Fmt.str "corpus keeps unmatched tags (%d rejected)" rejected)
     true (rejected > 0)
 
+(* An unconstrained length field filled from uniform bytes asks for gigabytes,
+   and the demand surfaces on the record's whole extent, naming no field to
+   repair. Growing to it is impossible, so the seeder must damp the length
+   instead of giving up on the codec. *)
+let corpus_length_codec =
+  let open Wire in
+  let len = Field.v "len" uint32be in
+  Codec.v "Load"
+    (fun l d -> (l, d))
+    [
+      Codec.( $ ) len (fun (l, _) -> l);
+      Codec.( $ )
+        (Field.v "data" (byte_array ~size:(Field.ref len)))
+        (fun (_, d) -> d);
+    ]
+
+let test_corpus_damps_a_runaway_length () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_length_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus reaches a well-sized record (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps mis-sized records (%d rejected)" rejected)
+    true (rejected > 0)
+
 (* A whole-record where-clause has no failing field offset to repair. Refuse a
    one-sided corpus instead of allowing an always-rejecting validator to pass. *)
 let corpus_unseedable_codec =
@@ -1811,6 +1838,8 @@ let suite =
         test_corpus_refuses_when_vacuous;
       Alcotest.test_case "corpus: seeds a casetype tag" `Quick
         test_corpus_seeds_a_casetype_tag;
+      Alcotest.test_case "corpus: damps a runaway length" `Quick
+        test_corpus_damps_a_runaway_length;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
       Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick
