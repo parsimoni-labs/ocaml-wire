@@ -3064,6 +3064,62 @@ let lookup_bound_cond raw_name field_typ =
   | Some len -> Some (Lt (Ref (I, raw_name), Int len))
   | None -> None
 
+(* How a declaration position renders a type: the base to print, its suffix, and
+   the refinement that has to follow the name. Shared by [pp_field] and
+   [pp_casetype_cases] so a case body carries the same membership, index bound
+   and [where] a field of that type would. Rendering a case body through
+   [field_suffix] alone dropped every one of them, and the generated validator
+   then accepted bodies the codec rejects. *)
+let render_typ_at : type a.
+    name:string ->
+    widenable:string list ->
+    own:bool expr option ->
+    a typ ->
+    (Format.formatter -> unit) * field_suffix * bool expr option =
+ fun ~name ~widenable ~own field_typ ->
+  (* Extract Where constraints from the type so they appear as field
+     constraints in the 3D output, not inline in the type. *)
+  let where_cond, typ = extract_where_constraint field_typ in
+  let bound_cond = lookup_bound_cond name field_typ in
+  (* The documentation projection types the field as its named enum, so
+     EverParse enforces membership through the type. The codegen projection
+     instead emits membership as a refinement on the base type, which the OCaml
+     decoder mirrors on decode. *)
+  let doc_enum =
+    if !render_enum_as_type then enum_type_name field_typ else None
+  in
+  let enum_cond =
+    match (doc_enum, enum_cases_of field_typ) with
+    | None, Some (v0 :: rest) ->
+        Some
+          (List.fold_left
+             (fun acc v -> Or (acc, Eq (Ref (I, name), Int v)))
+             (Eq (Ref (I, name), Int v0))
+             rest)
+    | _ -> None
+  in
+  let constraint_ =
+    combine_constraints
+      (combine_constraints (combine_constraints own where_cond) bound_cond)
+      enum_cond
+  in
+  (* Rewrite a signed field's ordering refinement to its two's-complement
+     unsigned form (the field projects to an unsigned type), and reject a float
+     ordering refinement, which has no faithful unsigned projection. *)
+  let constraint_ =
+    Option.map (project_refinement ~name ~kind:(scalar_kind typ)) constraint_
+  in
+  let constraint_ =
+    Option.map (project_field_arith name widenable) constraint_
+  in
+  let suffix, pp_base = field_suffix typ in
+  let pp_base =
+    match doc_enum with
+    | Some n -> fun ppf -> Fmt.string ppf n
+    | None -> pp_base
+  in
+  (pp_base, suffix, constraint_)
+
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
@@ -3074,50 +3130,8 @@ let pp_field widenable ppf (Field f) =
         let s = Fmt.str "_anon_%d" n in
         (s, s)
   in
-  (* Extract Where constraints from the type so they appear as field
-     constraints in the 3D output, not inline in the type. *)
-  let where_cond, typ = extract_where_constraint f.field_typ in
-  let bound_cond = lookup_bound_cond raw_name f.field_typ in
-  (* The documentation projection types the field as its named enum, so
-     EverParse enforces membership through the type. The codegen projection
-     instead emits membership as a refinement on the base type, which the OCaml
-     decoder mirrors on decode. *)
-  let doc_enum =
-    if !render_enum_as_type then enum_type_name f.field_typ else None
-  in
-  let enum_cond =
-    match (doc_enum, enum_cases_of f.field_typ) with
-    | None, Some (v0 :: rest) ->
-        Some
-          (List.fold_left
-             (fun acc v -> Or (acc, Eq (Ref (I, raw_name), Int v)))
-             (Eq (Ref (I, raw_name), Int v0))
-             rest)
-    | _ -> None
-  in
-  let constraint_ =
-    combine_constraints
-      (combine_constraints
-         (combine_constraints f.constraint_ where_cond)
-         bound_cond)
-      enum_cond
-  in
-  (* Rewrite a signed field's ordering refinement to its two's-complement
-     unsigned form (the field projects to an unsigned type), and reject a float
-     ordering refinement, which has no faithful unsigned projection. *)
-  let constraint_ =
-    Option.map
-      (project_refinement ~name:raw_name ~kind:(scalar_kind typ))
-      constraint_
-  in
-  let constraint_ =
-    Option.map (project_field_arith raw_name widenable) constraint_
-  in
-  let suffix, pp_base = field_suffix typ in
-  let pp_base =
-    match doc_enum with
-    | Some n -> fun ppf -> Fmt.string ppf n
-    | None -> pp_base
+  let pp_base, suffix, constraint_ =
+    render_typ_at ~name:raw_name ~widenable ~own:f.constraint_ f.field_typ
   in
   Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
@@ -3290,9 +3304,12 @@ let pp_casetype_cases : type k.
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
-      let suffix, pp_base = field_suffix typ in
+      let pp_base, suffix, constraint_ =
+        render_typ_at ~name:field_name ~widenable:[] ~own:None typ
+      in
       let pp_body ppf () =
-        Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix
+        Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix;
+        Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_
       in
       match tag_opt with
       | None -> Fmt.pf ppf "@,default: %a;" pp_body ()
