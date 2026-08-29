@@ -1666,6 +1666,33 @@ let repeat_elem_struct : type a. a typ -> string option = function
   | Zeroterm -> Some "ZtElem"
   | _ -> None
 
+let endian_tag = function Little -> "l" | Big -> "b"
+
+let bitfield_base_tag = function
+  | U8 -> "u8"
+  | U16 e -> "u16" ^ endian_tag e
+  | U32 e -> "u32" ^ endian_tag e
+
+let bit_order_tag = function Msb_first -> "m" | Lsb_first -> "l"
+
+let cast_tag = function
+  | `U8 -> "8"
+  | `U16 -> "16"
+  | `U32 -> "32"
+  | `U64 -> "64"
+
+(* A decimal literal as an identifier fragment: a negative one leads with [m],
+   since [-] is no part of an identifier. *)
+let literal_tag s =
+  if String.length s > 0 && s.[0] = '-' then
+    "m" ^ String.sub s 1 (String.length s - 1)
+  else s
+
+(* An [elt_var] is bound by the refined-byte struct its span renders through, so
+   it is not free here; and the counter that makes it unique would make two
+   identically shaped spans look different, so it does not name itself either. *)
+let is_elt_var name = String.starts_with ~prefix:elt_var_prefix name
+
 (* A [nested ~size] projects to [<elem>[:byte-size-single-element-array n]],
    whose element must be a single type token. A bare scalar or an already-named
    struct ([codec] / [casetype]) works inline, but an element that renders with
@@ -1674,45 +1701,176 @@ let repeat_elem_struct : type a. a typ -> string option = function
    declaration ([enum]) cannot. Those go through a synthesised wrapper struct,
    named deterministically from the element so the field renderer and the
    typedef emitter agree without shared state. *)
+
 (* A deterministic, collision-free identifier fragment for an inner type, used
-   to name its synthesised wrapper struct. Two structurally equal inners get the
-   same fragment (so their wrapper is shared); different shapes differ. *)
-let rec wrap_tag : type a. a typ -> string = function
-  | Uint8 -> "u8"
-  | Uint16 Little -> "u16l"
-  | Uint16 Big -> "u16b"
-  | Uint32 Little -> "u32l"
-  | Uint32 Big -> "u32b"
-  | Uint64 Little -> "u64l"
-  | Uint64 Big -> "u64b"
-  | Int8 -> "i8"
-  | Int16 Little -> "i16l"
-  | Int16 Big -> "i16b"
-  | Int32 Little -> "i32l"
-  | Int32 Big -> "i32b"
-  | Int64 Little -> "i64l"
-  | Int64 Big -> "i64b"
-  | Float32 _ -> "f32"
-  | Float64 _ -> "f64"
-  | Uint_var { size = Int n; _ } -> Fmt.str "uv%d" n
-  | Bits { width; _ } -> Fmt.str "bf%d" width
-  | Byte_array { size = Int n } -> Fmt.str "ba%d" n
-  | Byte_slice { size = Int n } -> Fmt.str "bs%d" n
-  | Byte_array_where { size = Int n; _ } -> Fmt.str "rb%d" n
-  | Zeroterm -> "zt"
-  | Zeroterm_at_most { size = Int n } -> Fmt.str "ztam%d" n
-  | Unit -> "unit"
-  | Enum { name; _ } -> "e" ^ name
-  | Map { inner; _ } -> wrap_tag inner
-  | Where { inner; _ } -> wrap_tag inner
-  | Array { len = Int n; elem; _ } -> Fmt.str "arr%d_%s" n (wrap_tag elem)
-  | Single_elem { size = Int n; elem; _ } -> Fmt.str "se%d_%s" n (wrap_tag elem)
-  | Optional { inner; _ } -> "opt_" ^ wrap_tag inner
-  | Optional_or { inner; _ } -> "optd_" ^ wrap_tag inner
-  | Repeat { elem; _ } -> "rep_" ^ wrap_tag elem
-  | Codec { codec_name; _ } -> codec_name
-  | Casetype { name; _ } -> name
-  | _ -> "x"
+   to name its synthesised wrapper struct, paired with the formals that wrapper
+   has to declare. Two structurally equal inners get the same fragment (so their
+   wrapper is shared); different shapes differ, which is why the match is total:
+   a catch-all names unrelated shapes alike, and the second is then dropped as a
+   repeat of the first and its field validated as the first's element.
+
+   A wrapper struct is a 3D scope of its own, so a size expression naming a
+   field of the enclosing struct has nothing to resolve against inside it. Those
+   names come back as [UINT32] formals, the type 3D gives every byte-size
+   expression (it widens a narrower argument to it, and refuses a wider one
+   rather than truncating); a bound parameter comes back as its own declared
+   type. The use site passes each one on by name. A sub-codec or a casetype
+   keeps a scope of its own and applies its own arguments, so nothing is lifted
+   through one.
+
+   Pure, so it can be compared where the declaration itself cannot. *)
+let rec wrap_shape : type a. a typ -> string * param list =
+ fun typ ->
+  let plain tag = (tag, []) in
+  let sized prefix size =
+    let tag, formals = expr_shape size in
+    (prefix ^ tag, formals)
+  in
+  let over prefix size elem =
+    let stag, sformals = expr_shape size in
+    let etag, eformals = wrap_shape elem in
+    (Fmt.str "%s%s_%s" prefix stag etag, sformals @ eformals)
+  in
+  match typ with
+  | Uint8 -> plain "u8"
+  | Uint16 e -> plain ("u16" ^ endian_tag e)
+  | Uint32 e -> plain ("u32" ^ endian_tag e)
+  | Uint64 e -> plain ("u64" ^ endian_tag e)
+  | Int8 -> plain "i8"
+  | Int16 e -> plain ("i16" ^ endian_tag e)
+  | Int32 e -> plain ("i32" ^ endian_tag e)
+  | Int64 e -> plain ("i64" ^ endian_tag e)
+  | Float32 e -> plain ("f32" ^ endian_tag e)
+  | Float64 e -> plain ("f64" ^ endian_tag e)
+  | Uint_var { size; endian } -> sized ("uv" ^ endian_tag endian) size
+  | Bits { width; base; bit_order } ->
+      Fmt.kstr plain "bf%d%s%s" width (bitfield_base_tag base)
+        (bit_order_tag bit_order)
+  | Unit -> plain "unit"
+  | All_bytes -> plain "all"
+  | All_zeros -> plain "zeros"
+  | Zeroterm -> plain "zt"
+  | Zeroterm_at_most { size } -> sized "ztam" size
+  | Byte_array { size } -> sized "ba" size
+  | Byte_slice { size } -> sized "bs" size
+  | Byte_array_where { size; cond; _ } ->
+      (* The per-byte constraint tells two spans of one size apart, but it
+         renders in their own [_RefByte_*] struct and resolves there, so it
+         lifts nothing here. *)
+      let stag, sformals = expr_shape size in
+      let ctag, _ = expr_shape cond in
+      (Fmt.str "rb%s_%s" stag ctag, sformals)
+  | Where { cond; inner } ->
+      let ctag, cformals = expr_shape cond in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "w%s_%s" ctag itag, cformals @ iformals)
+  | Array { len; elem; _ } -> over "arr" len elem
+  | Single_elem { size; elem; at_most } ->
+      over (if at_most then "seam" else "se") size elem
+  | Repeat { size; elem; _ } -> over "rep" size elem
+  | Optional { present; inner } ->
+      let ptag, pformals = expr_shape present in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "opt%s_%s" ptag itag, pformals @ iformals)
+  | Optional_or { present; inner; _ } ->
+      let ptag, pformals = expr_shape present in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "optd%s_%s" ptag itag, pformals @ iformals)
+  | Enum { name; _ } -> plain ("e" ^ name)
+  | Casetype { name; _ } -> plain name
+  | Struct { name; _ } -> plain name
+  | Type_ref name -> plain name
+  | Qualified_ref { module_; name } -> plain (module_ ^ "_" ^ name)
+  | Map { inner; _ } -> wrap_shape inner
+  | Apply { typ; args } ->
+      let ttag, _ = wrap_shape typ in
+      let atags, aformals =
+        List.split (List.map (fun (Pack_expr e) -> expr_shape e) args)
+      in
+      (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
+  | Codec { codec_name; _ } -> plain codec_name
+
+and expr_shape : type a. a expr -> string * param list =
+ fun e ->
+  let un op x =
+    let tag, formals = expr_shape x in
+    (Fmt.str "%s_%s" op tag, formals)
+  in
+  let bin : type b c. string -> b expr -> c expr -> string * param list =
+   fun op x y ->
+    let xtag, xformals = expr_shape x in
+    let ytag, yformals = expr_shape y in
+    (Fmt.str "%s_%s_%s" op xtag ytag, xformals @ yformals)
+  in
+  match e with
+  | Int n -> (literal_tag (string_of_int n), [])
+  | Int64 n -> ("l" ^ literal_tag (Int64.to_string n), [])
+  | Bool b -> ((if b then "true" else "false"), [])
+  | Ref (_, name) when is_elt_var name -> ("elt", [])
+  | Ref (_, name) -> (name, [ param name uint32 ])
+  | Param_ref p ->
+      ( "p" ^ p.name,
+        [
+          {
+            param_name = p.name;
+            param_typ = p.packed_typ;
+            mutable_ = p.mutable_;
+          };
+        ] )
+  | Sizeof t -> ("sz" ^ fst (wrap_shape t), [])
+  | Sizeof_this -> ("szthis", [])
+  | Field_pos -> ("fpos", [])
+  | Add (a, b) -> bin "add" a b
+  | Sub (a, b) -> bin "sub" a b
+  | Mul (a, b) -> bin "mul" a b
+  | Div (a, b) -> bin "div" a b
+  | Mod (a, b) -> bin "mod" a b
+  | Land (a, b) -> bin "land" a b
+  | Lor (a, b) -> bin "lor" a b
+  | Lxor (a, b) -> bin "lxor" a b
+  | Lnot a -> un "lnot" a
+  | Lsl (a, b) -> bin "lsl" a b
+  | Lsr (a, b) -> bin "lsr" a b
+  | Land64 (a, b) -> bin "land64" a b
+  | Lsr64 (a, b) -> bin "lsr64" a b
+  | Eq (a, b) -> bin "eq" a b
+  | Ne (a, b) -> bin "ne" a b
+  | Lt (a, b) -> bin "lt" a b
+  | Le (a, b) -> bin "le" a b
+  | Gt (a, b) -> bin "gt" a b
+  | Ge (a, b) -> bin "ge" a b
+  | And (a, b) -> bin "and" a b
+  | Or (a, b) -> bin "or" a b
+  | Not a -> un "not" a
+  | Cast (w, a) -> un ("cast" ^ cast_tag w) a
+  | If_then_else (c, t, f) ->
+      let ctag, cformals = expr_shape c in
+      let ttag, tformals = expr_shape t in
+      let ftag, fformals = expr_shape f in
+      (Fmt.str "ite_%s_%s_%s" ctag ttag ftag, cformals @ tformals @ fformals)
+
+let wrap_tag t = fst (wrap_shape t)
+
+(* The formals a synthesised wrapper over [t] declares: first occurrence of each
+   name wins, so its declaration and its use sites agree on their order. *)
+let wrap_formals t =
+  let seen = Hashtbl.create 4 in
+  List.filter
+    (fun (p : param) ->
+      if Hashtbl.mem seen p.param_name then false
+      else (
+        Hashtbl.add seen p.param_name ();
+        true))
+    (snd (wrap_shape t))
+
+let formal_args formals =
+  List.map (fun (p : param) -> Pack_expr (Ref (I, p.param_name))) formals
+
+(* A reference to a synthesised declaration, applied to the formals it lifted so
+   the enclosing scope's values flow into the new one. *)
+let synth_ref name = function
+  | [] -> Type_ref name
+  | formals -> Apply { typ = Type_ref name; args = formal_args formals }
 
 (* The synthesised wrapper-struct name for a [nested] inner that has no valid
    bare single-element-array token. A scalar, sub-codec, or casetype renders
@@ -1726,12 +1884,12 @@ let rec single_elem_struct : type a. a typ -> string option = function
       None
   | Map { inner; _ } -> single_elem_struct inner
   | Where { inner; _ } -> single_elem_struct inner
-  (* Keep the historical names for the byte-span family so existing schemas and
-     tests are unchanged; everything else gets a structural name. *)
+  (* Keep the historical names of the byte-span family where the size alone
+     pins the shape, so existing schemas and tests are unchanged. A refined span
+     and a variable-width integer also differ in their constraint and their
+     endianness, so those take a structural name, as everything else does. *)
   | Byte_array { size = Int n } -> some "SeBytes%d" n
   | Byte_slice { size = Int n } -> some "SeSlice%d" n
-  | Byte_array_where { size = Int n; _ } -> some "SeRBytes%d" n
-  | Uint_var { size = Int n; _ } -> some "SeUvar%d" n
   | Zeroterm_at_most { size = Int n } -> some "SeZtam%d" n
   | Enum { name; _ } -> Some ("Se_" ^ name)
   | other -> Some ("Se_" ^ wrap_tag other)
@@ -1767,10 +1925,7 @@ let rec optional_casetype_formals : type a. a typ -> param list = function
 (* What a use site passes to the gate casetype after the gate: one argument per
    lifted formal, resolved against the enclosing struct that surfaces it. *)
 let optional_casetype_args : type a. a typ -> packed_expr list =
- fun inner ->
-  List.map
-    (fun (p : param) -> Pack_expr (Ref (I, p.param_name)))
-    (optional_casetype_formals inner)
+ fun inner -> formal_args (optional_casetype_formals inner)
 
 (* Project a self-delimiting [optional] inner as a casetype dispatched on the
    gate: [case 0] parses a 0-byte field (the gate arg is [present ? 1 : 0], so 0
@@ -1824,23 +1979,35 @@ let codec_shape name (st : struct_) =
            Option.value ~default:"_" f.field_name ^ ":" ^ wrap_tag f.field_typ)
          st.fields)
 
+(* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
+   struct when it has no usable bare token; emit it once, deduped by name. A
+   refined-byte element inside the wrapper needs its own typedef emitted first.
+   A name already standing for another shape is refused: sharing it would drop
+   one of the two elements and validate its field as the other. *)
+let emit_wrapper seen acc name elem =
+  let shape = wrap_tag elem in
+  match Hashtbl.find_opt seen name with
+  | Some first when not (String.equal first shape) ->
+      Fmt.invalid_arg
+        "Wire: two elements of different shapes both project to the \
+         synthesised type %S, so one would be validated as the other; give one \
+         of them a sub-codec of its own"
+        name
+  | Some _ -> ()
+  | None ->
+      Hashtbl.add seen name shape;
+      (match wrapper_refined_byte elem with
+      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
+      | None -> ());
+      acc :=
+        typedef (param_struct name (wrap_formals elem) [ field "v" elem ])
+        :: !acc
+
 let rec collect_casetype_decls : type a.
     (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
  fun seen acc typ ->
   let extract : type b. b typ -> unit =
    fun t -> collect_casetype_decls seen acc t
-  in
-  (* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
-     struct when it has no usable bare token; emit it once, deduped by name. A
-     refined-byte element inside the wrapper needs its own typedef emitted first. *)
-  let emit_wrapper name elem =
-    if not (Hashtbl.mem seen name) then begin
-      Hashtbl.add seen name name;
-      (match wrapper_refined_byte elem with
-      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
-      | None -> ());
-      acc := typedef (struct_ name [ field "v" elem ]) :: !acc
-    end
   in
   match typ with
   | Casetype { name; tag; cases }
@@ -1895,7 +2062,9 @@ let rec collect_casetype_decls : type a.
   | Repeat { elem; _ } ->
       extract elem;
       emit_enum_elem_struct seen acc elem;
-      Option.iter (fun n -> emit_wrapper n elem) (repeat_elem_struct elem)
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (repeat_elem_struct elem)
   | Array { elem; _ } ->
       extract elem;
       (* A 1-byte little-endian closed-enum array element renders as the named
@@ -1904,7 +2073,9 @@ let rec collect_casetype_decls : type a.
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
   | Single_elem { elem; _ } ->
       extract elem;
-      Option.iter (fun n -> emit_wrapper n elem) (single_elem_struct elem)
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (single_elem_struct elem)
   | Byte_array_where { elt_var; cond; _ } ->
       emit_refined_byte seen acc elt_var cond
   | _ -> ()
@@ -2554,11 +2725,12 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
-      (* A wrapper-needing element goes through its synthesised struct name; a
-         bare scalar or named struct renders inline. *)
+      (* A wrapper-needing element goes through its synthesised struct, applied
+         to the formals that struct lifted out of the enclosing scope; a bare
+         scalar or named struct renders inline. *)
       let pp_elem ppf =
         match single_elem_struct elem with
-        | Some name -> Fmt.string ppf name
+        | Some name -> pp_typ ppf (synth_ref name (wrap_formals elem))
         | None -> pp_typ ppf elem
       in
       (Single_elem { size; at_most }, pp_elem)

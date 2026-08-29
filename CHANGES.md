@@ -109,6 +109,17 @@
   scope that did not carry those parameters, so `3d.exe` refused the file with
   an unbound variable (@samoht)
 
+- `nested` now projects a region whose contents are sized from a field of the
+  enclosing record. Those contents are described in a scope of their own, which
+  did not carry the field, so `3d.exe` refused the file with an unbound
+  variable (@samoht)
+
+- Two `nested` regions whose contents differ in shape no longer share one
+  generated type. Shapes the naming could not tell apart collapsed into a
+  single declaration and the second region was then validated against the
+  first's contents, silently; a description that would still land two shapes on
+  one name is now refused (@samoht)
+
 ## 1.2.0
 
 ### Added
