@@ -27,6 +27,13 @@
   abandoned, which covers both dependent and unconstrained length fields
   (#349, @samoht)
 
+- `Wire.Codec.wire_size_at` takes `?env` and refuses without one when the codec
+  has input params, as `decode` already did. An unbound param reads 0, so a
+  param-sized field measured as empty and the reported extent was shorter than
+  the record; `Wire_3d.generate_corpus` recorded a reject verdict for input its
+  own codec accepts, and a differential over that corpus blamed the generated C
+  validator for the harness's answer (#350, @samoht)
+
 ## 1.2.0
 
 ### Added

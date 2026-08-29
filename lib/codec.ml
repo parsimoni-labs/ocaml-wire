@@ -4225,12 +4225,6 @@ let wire_size (t : _ t) =
 let min_wire_size (t : _ t) =
   match t.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
-let wire_size_at (t : _ t) buf off =
-  match t.wire_size with
-  | Fixed n -> n
-  | Variable { compute; _ } ->
-      compute no_runtime (Input_end.of_bytes buf) buf off - off
-
 let size_of_value (t : _ t) v = t.size_of_value v
 
 let is_fixed (t : _ t) =
@@ -4281,6 +4275,19 @@ let require_env ~op t = function
              before use."
             op t.name
             (String.concat ", " missing))
+
+(* The record's extent as the buffer describes it. A parametric span resolves
+   through [env]: without one every [Param.expr] reads 0, so a param-sized field
+   measures as empty and the answer comes back quietly short. That is not a
+   smaller record, it is a different verdict about the same bytes, so a codec
+   with input params refuses here exactly as it does on [decode] rather than
+   answering. *)
+let wire_size_at ?env:e (t : _ t) buf off =
+  require_env ~op:"wire_size_at" t e;
+  match t.wire_size with
+  | Fixed n -> n
+  | Variable { compute; _ } ->
+      compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off - off
 
 let raw_encode ?env:e t v buf off =
   require_env ~op:"encode" t e;

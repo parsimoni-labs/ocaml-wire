@@ -1126,8 +1126,13 @@ module Codec : sig
   val min_wire_size : 'r t -> int
   (** Minimum wire size of the codec. *)
 
-  val wire_size_at : 'r t -> bytes -> int -> int
-  (** Computes the actual wire size from a buffer at the given base offset. *)
+  val wire_size_at : ?env:Param.env -> 'r t -> bytes -> int -> int
+  (** Computes the actual wire size from a buffer at the given base offset. A
+      codec whose field sizes are driven by an input param needs [?env] to
+      resolve them, and raises [Invalid_argument] without it, the same as
+      {!decode}: an unbound param reads 0, which would silently measure a
+      param-sized field as empty and report an extent shorter than the record.
+  *)
 
   val size_of_value : 'r t -> 'r -> int
   (** [size_of_value c v] returns the number of bytes that [encode c v] will

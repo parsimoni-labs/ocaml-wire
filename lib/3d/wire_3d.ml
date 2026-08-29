@@ -1193,7 +1193,7 @@ let codec_verdict ?env c buf =
   | Ok _ -> (
       match
         Wire.Codec.validate ?env c buf 0;
-        Wire.Codec.wire_size_at c buf 0
+        Wire.Codec.wire_size_at ?env c buf 0
       with
       | n -> if n = Bytes.length buf then `Accept else `Resize n
       | exception Wire.Parse_error e -> `Reject e)
