@@ -830,6 +830,27 @@ let test_codec_array_cardinality () =
     [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
+(* A value too wide for the native int is refused by the conversion, which is
+   handed the value and nothing else and so reports byte 0. The reader knows
+   where it found it, and a caller that seeks to the reported offset has to land
+   on the field rather than on the start of the buffer, whatever base the frame
+   sits at. *)
+let test_out_of_range_offset_follows_the_frame () =
+  let c =
+    Codec.v "Wide" Fun.id
+      Codec.[ Field.v "k" (enum "K" [ ("A", 1) ] uint64) $ Fun.id ]
+  in
+  let at_of base b =
+    match Codec.decode c b base with
+    | Ok _ -> Alcotest.fail "expected the wide value to be refused"
+    | Error e -> e.at
+  in
+  let wide = Bytes.make 8 '\xff' in
+  Alcotest.(check int) "at base 0" 0 (at_of 0 wide);
+  Alcotest.(check int)
+    "at base 8" 8
+    (at_of 8 (Bytes.cat (Bytes.make 8 '\x00') wide))
+
 (* A field whose byte extent is an input parameter cannot be measured from the
    value alone. Reporting 0 for it is worse than refusing: a caller sizes a
    buffer from the answer, and encode then writes past the allocation, which
@@ -9759,6 +9780,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "decode: out-of-range offset follows the frame" `Quick
+        test_out_of_range_offset_follows_the_frame;
       Alcotest.test_case "size_of_value: resolves param-driven sizes" `Quick
         test_size_of_value_resolves_param_sizes;
       Alcotest.test_case "repeat: budget mismatch names the remedy" `Quick
