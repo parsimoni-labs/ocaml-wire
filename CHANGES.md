@@ -88,6 +88,11 @@
   membership and a `lookup`'s index bound were dropped from the generated
   validator, which then accepted bodies `Codec.decode` rejects (#364, @samoht)
 
+- A schema that declares two different types under one name is refused instead
+  of resolving every reference to whichever came first. Two same-named
+  sub-codecs of different widths produced a validator reading a different number
+  of bytes than the codec (#365, @samoht)
+
 ## 1.2.0
 
 ### Added
