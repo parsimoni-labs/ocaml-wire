@@ -56,6 +56,15 @@
   field it was read from rather than at byte 0, so seeking to the offset a parse
   error names lands on the field whatever base the frame sits at (#356, @samoht)
 
+- A parse error from a field whose start ran past the end of the input reports
+  the bytes that were missing rather than a negative count. `Wire.of_reader`
+  computes how much more to read from that number, so a negative one left it
+  asking for a position behind what it had already buffered (#359, @samoht)
+- `Wire.Codec.min_wire_size` reports the region a `zeroterm_at_most` field
+  occupies rather than zero, so a buffer sized from it holds the record. A
+  parse error from a `zeroterm` field with no terminator also names the field
+  it came from (#361, @samoht)
+
 ## 1.2.0
 
 ### Added

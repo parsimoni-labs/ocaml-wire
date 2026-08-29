@@ -3605,7 +3605,10 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Unit -> Some 0
   | Byte_array { size = Int n }
   | Byte_array_where { size = Int n; _ }
-  | Byte_slice { size = Int n } ->
+  | Byte_slice { size = Int n }
+  (* A bounded zero-terminated string spans its whole region whatever the
+     terminator's position, as [elem_size_of] already reports it. *)
+  | Zeroterm_at_most { size = Int n } ->
       Some n
   | Where { inner; _ } -> field_wire_size inner
   | Enum { base; _ } -> field_wire_size base

@@ -40,6 +40,13 @@ let const_span_reader ~field_off n read =
   else fun _runtime _input_end _buf base ->
     raise_out_of_range ~at:(base + field_off) (Int64.of_int n)
 
+let rec nul_scan buf ~at ~limit i =
+  if i >= limit then raise_missing_terminator ~at
+  else if Bytes.get_uint8 buf i = 0 then i
+  else nul_scan buf ~at ~limit (i + 1)
+
+let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
+
 (* The refinement of a [byte_array_where] lives in its reader: every compiled
    path that yields the span runs it, so [Codec.decode] and [Codec.validate]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
@@ -385,6 +392,14 @@ let rec build_field_reader_ctx : type a.
   | Byte_slice { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Slice.make_or_eod buf ~first:(base + field_off) ~length:n)
+  (* The region is fixed, so the field compiles on this path like any other
+     constant span; the value is the bytes up to the NUL within it, and
+     [zeroterm_nul_pos] refuses a region with no terminator. *)
+  | Zeroterm_at_most { size = Int n } ->
+      const_span_reader ~field_off n (fun _runtime _input_end buf base ->
+          let first = base + field_off in
+          let nul = zeroterm_nul_pos buf ~first ~limit:(first + n) in
+          Bytes.sub_string buf first (nul - first))
   | Where { inner; _ } -> build_field_reader_ctx inner field_off
   | Enum { base; cases; closed; _ } ->
       let read = build_field_reader_ctx base field_off in
@@ -1474,12 +1489,6 @@ and iter_param_refs_fields f fields where =
 (* Kept at top level: as a local closure the scan would be heap-allocated on
    every terminator search, and a repeat of NUL-terminated elements searches
    once per element on a count the sender picks through the byte budget. *)
-let rec nul_scan buf ~at ~limit i =
-  if i >= limit then raise_missing_terminator ~at
-  else if Bytes.get_uint8 buf i = 0 then i
-  else nul_scan buf ~at ~limit (i + 1)
-
-let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
 
 (* Byte size of a casetype tag. The tag is always a fixed-size scalar int, so
    the common widths answer directly: [field_wire_size] would box a [Some n]
@@ -2469,14 +2478,26 @@ let compile_repeat : type elt seq r.
        fun _arr runtime input_end buf base -> check runtime input_end buf base);
   }
 
+(* [expected] is a byte count, so a span whose offset overran the buffer cannot
+   report its size: that size comes out negative, and every consumer does
+   arithmetic on the count (the streaming reader's retry target, the corpus
+   seeder's growth target), which a negative turns into a position behind what
+   is already buffered. Report the bytes missing before the read could start
+   instead, and keep the size for the ordinary case of a span that simply
+   reaches too far. *)
+let missing_before ~first ~sz ~len =
+  if sz < 0 || first < 0 then max 0 (first - len) else sz
+
 (* The span [first, first + sz) must lie inside [buf]. Both ends derive from
    length fields, i.e. untrusted input: a span sized past the buffer, or a
    negative size from an overrun offset, would crash the read with a raw
    [Invalid_argument] that escapes the decode result. Report the missing bytes
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
-  if sz < 0 || first < 0 || first + sz > Bytes.length buf then
-    raise_eof ~at:first ~expected:sz
+  let len = Bytes.length buf in
+  if sz < 0 || first < 0 || first + sz > len then
+    raise_eof ~at:first
+      ~expected:(missing_before ~first ~sz ~len)
       ~got:(bytes_from (Input_end.of_bytes buf) first)
 
 (* Absolute index of the first NUL at or after [first], searching up to (but
@@ -2503,7 +2524,8 @@ let var_bytes_reader : type a.
          [make_or_eod] with a raw [Invalid_argument] that escapes the decode
          result. Fail cleanly instead. *)
       if sz < 0 || first < 0 then
-        raise_eof ~at:first ~expected:sz
+        raise_eof ~at:first
+          ~expected:(missing_before ~first ~sz ~len:(Bytes.length buf))
           ~got:(bytes_from (Input_end.of_bytes buf) first)
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
@@ -2767,12 +2789,26 @@ let prepend_field_check name f arr runtime input_end buf base =
   with Types.Parse_error e ->
     raise (Types.Parse_error { e with field = name :: e.field })
 
-(* A casetype's extent comes from dispatching on its tag, and the record's
-   bounds check walks that extent before any field reader runs, so an unknown
-   tag surfaces from the size walk rather than from the wrapped reader. Name the
-   field there too, or the failure reaches the caller with no path at all. *)
-let attribute_size_errors typ name size_fn =
-  match typ with Casetype _ -> prepend_field name size_fn | _ -> size_fn
+(* Some extents are resolved by walking the field's own bytes, and the record's
+   bounds check does that walk before any field reader runs, so the failure
+   surfaces from the size walk rather than from the wrapped reader: a casetype
+   dispatching on an unknown tag, a zero-terminated string with no terminator.
+   Name the field there too, or the failure reaches the caller with no path at
+   all. Every other extent is arithmetic over fields already read and raises
+   nothing of its own. *)
+let attribute_size_errors : type a.
+    a typ ->
+    string ->
+    (runtime -> Input_end.t -> bytes -> int -> int) ->
+    runtime ->
+    Input_end.t ->
+    bytes ->
+    int ->
+    int =
+ fun typ name size_fn ->
+  match typ with
+  | Casetype _ | Zeroterm -> prepend_field name size_fn
+  | _ -> size_fn
 
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
