@@ -613,6 +613,39 @@ let test_corpus_straddles_a_constraint () =
     true (rejected > 0);
   Alcotest.(check int) "every line carries a verdict" 256 (accepted + rejected)
 
+(* Two four-byte magic tags out of 2^32: uniform bytes never select a case, and
+   the tag is not a field of its own but the head of the casetype's bytes. The
+   corpus must seed it from the case indices. *)
+let corpus_casetype_codec =
+  let open Wire in
+  let body =
+    casetype "Node" uint32be
+      [
+        case
+          ~index:(UInt32.of_int32 0x4c454146l)
+          uint8
+          ~inject:(fun v -> `Leaf v)
+          ~project:(function `Leaf v -> Some v | _ -> None);
+        case
+          ~index:(UInt32.of_int32 0x4e4f4445l)
+          uint16
+          ~inject:(fun v -> `Branch v)
+          ~project:(function `Branch v -> Some v | _ -> None);
+      ]
+  in
+  Codec.v "Page" Fun.id [ Codec.( $ ) (Field.v "body" body) Fun.id ]
+
+let test_corpus_seeds_a_casetype_tag () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_casetype_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus selects a case (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps unmatched tags (%d rejected)" rejected)
+    true (rejected > 0)
+
 (* A whole-record where-clause has no failing field offset to repair. Refuse a
    one-sided corpus instead of allowing an always-rejecting validator to pass. *)
 let corpus_unseedable_codec =
@@ -1776,6 +1809,8 @@ let suite =
         test_corpus_straddles_a_constraint;
       Alcotest.test_case "corpus refuses when vacuous" `Quick
         test_corpus_refuses_when_vacuous;
+      Alcotest.test_case "corpus: seeds a casetype tag" `Quick
+        test_corpus_seeds_a_casetype_tag;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
       Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick

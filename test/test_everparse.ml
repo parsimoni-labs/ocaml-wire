@@ -590,6 +590,41 @@ let test_3d_casetype_tag_int_carriers () =
        (enum "EWhere" [ ("A", 0) ] (where Expr.(int 0 = int 0) uint8))
        (UInt8.v 0))
 
+(* A casetype's tag sits at the start of the field's own bytes and takes one of
+   a closed set of case indices, so the field is seedable even though it is not
+   itself an integer. Without the seed a fuzzed corpus never reaches a valid
+   tag. *)
+let test_casetype_tag_field_seed () =
+  let body =
+    casetype "Body" uint32be
+      [
+        case
+          ~index:(UInt32.of_int32 0x4c454146l)
+          uint8
+          ~inject:(fun v -> `Leaf v)
+          ~project:(function `Leaf v -> Some v | _ -> None);
+        case
+          ~index:(UInt32.of_int32 0x4e4f4445l)
+          uint16
+          ~inject:(fun v -> `Node v)
+          ~project:(function `Node v -> Some v | _ -> None);
+      ]
+  in
+  let c =
+    Codec.v "Page" (fun v -> v) Codec.[ (Field.v "body" body $ fun v -> v) ]
+  in
+  match field_seeds (struct_of_codec c) with
+  | [ seed ] ->
+      Alcotest.(check string) "names the casetype field" "body" seed.field;
+      Alcotest.(check int) "slot is the tag's width" 4 seed.slot.width;
+      Alcotest.(check (list int64))
+        "values are the case indices"
+        [ 0x4c454146L; 0x4e4f4445L ]
+        seed.values
+  | seeds ->
+      Alcotest.failf "expected one seed for the casetype tag, got %d"
+        (List.length seeds)
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -1665,6 +1700,8 @@ let suite =
         `Quick test_doc_merge_shared_sub_codec;
       Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
         test_3d_casetype_tag_int_carriers;
+      Alcotest.test_case "seeds: casetype tag names its case indices" `Quick
+        test_casetype_tag_field_seed;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
         test_doc_field_citation;
       Alcotest.test_case "doc: bit order matches schema projection" `Quick

@@ -6641,6 +6641,31 @@ let test_casetype_no_match_invalid_tag () =
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
   | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
 
+(* A casetype's extent depends on which case the tag selects, so the record's
+   bounds walk dispatches on the tag before any field reader runs, and that is
+   where an unknown tag surfaces. The failure must still name the field: a
+   caller repairing malformed input has only the path to go on. *)
+let test_casetype_no_match_names_field () =
+  let typ =
+    Wire.casetype "Sized" Wire.uint8
+      [
+        Wire.case ~index:(UInt8.v 1) Wire.uint8
+          ~inject:(fun v -> `A v)
+          ~project:(function `A v -> Some v | _ -> None);
+        Wire.case ~index:(UInt8.v 2) Wire.uint16
+          ~inject:(fun v -> `B v)
+          ~project:(function `B v -> Some v | _ -> None);
+      ]
+  in
+  let c = Codec.v "Tagged" Fun.id Codec.[ Field.v "body" typ $ Fun.id ] in
+  match Codec.decode c (Bytes.of_string "\x63\x00\x00") 0 with
+  | Error { kind = Invalid_tag n; field; at } ->
+      Alcotest.(check int) "unmatched tag" 99 n;
+      Alcotest.(check int) "at the casetype field" 0 at;
+      Alcotest.(check (list string)) "names the field" [ "body" ] field
+  | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
+  | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
+
 (* The default branch recovers the matched tag and re-encodes it, so an
    arbitrary unclaimed tag round-trips (the DHCP / TCP-options shape). *)
 type tlv = Known of UInt16.t | Unknown of (UInt8.t * string)
@@ -9691,6 +9716,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "casetype field: no match names the field" `Quick
+        test_casetype_no_match_names_field;
       Alcotest.test_case "casetype field: no match is Invalid_tag" `Quick
         test_casetype_no_match_invalid_tag;
       Alcotest.test_case "casetype default recovers matched tag" `Quick
