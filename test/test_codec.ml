@@ -830,6 +830,28 @@ let test_codec_array_cardinality () =
     [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
+(* A field whose byte extent is an input parameter cannot be measured from the
+   value alone. Reporting 0 for it is worse than refusing: a caller sizes a
+   buffer from the answer, and encode then writes past the allocation, which
+   surfaced as a raw out-of-bounds rather than as a wire error. *)
+let test_size_of_value_resolves_param_sizes () =
+  let p = Param.input "n" uint8 in
+  let c =
+    Codec.v "Nest" Fun.id
+      Codec.[ Field.v "body" (nested ~size:(Param.expr p) uint16be) $ Fun.id ]
+  in
+  (* Reporting 0 here is what let a caller allocate a buffer encode then ran
+     off the end of, so the answer has to be refused, not guessed. *)
+  (match Codec.size_of_value c (UInt16.v 7) with
+  | n -> Alcotest.failf "expected a refusal without ?env, got %d" n
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "the refusal names the remedy" true (contains ~sub:"?env" msg));
+  (* And the record really is the width the parameter names. *)
+  let env = Param.bind_by_name "n" 2 (Codec.env c) in
+  let buf = Bytes.create 2 in
+  Codec.encode ~env c (UInt16.v 7) buf 0
+
 (* A literal byte budget is the region size the description declares, and since
    1.2.0 encode holds the values to it too. A caller who does not know that size
    where the codec is built has nothing truthful to put there, and 3D has no
@@ -9737,6 +9759,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "size_of_value: resolves param-driven sizes" `Quick
+        test_size_of_value_resolves_param_sizes;
       Alcotest.test_case "repeat: budget mismatch names the remedy" `Quick
         test_repeat_budget_mismatch_names_the_remedy;
       Alcotest.test_case "casetype field: no match names the field" `Quick
