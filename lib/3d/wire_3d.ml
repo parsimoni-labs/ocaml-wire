@@ -1278,16 +1278,30 @@ let seed_input ?env rng ~seeds ~center c =
   let buf = ref (random_bytes rng (max 1 center)) in
   let placed = ref [] in
   let out = ref None in
-  let grow n =
-    if n >= 0 && n <> Bytes.length !buf && n <= max_corpus_input then
-      buf := resize rng !buf n
-    else fuel := 0
-  in
   let place off (seed : Raw.field_seed) =
     let values = Array.of_list seed.values in
-    write_slot !buf off seed.slot
-      values.(Random.State.int rng (Array.length values));
-    if not (List.mem_assoc off !placed) then placed := (off, seed) :: !placed
+    let value = values.(Random.State.int rng (Array.length values)) in
+    write_slot !buf off seed.slot value;
+    if not (List.mem_assoc off !placed) then
+      placed := (off, (seed, value)) :: !placed
+  in
+  (* A record asking for more bytes than a corpus line may carry was sized by a
+     length field the byte draw filled with a huge value. No parse error names
+     that field -- the demand surfaces on the record's whole extent -- so damp
+     every length at once: zeroed bytes are the smallest value each can hold.
+     The values already settled are written back, so the loop resumes from the
+     progress it had made rather than starting over. *)
+  let damp () =
+    Bytes.fill !buf 0 (Bytes.length !buf) '\000';
+    List.iter
+      (fun (off, ((seed : Raw.field_seed), value)) ->
+        write_slot !buf off seed.slot value)
+      !placed
+  in
+  let grow n =
+    if n > max_corpus_input then damp ()
+    else if n >= 0 && n <> Bytes.length !buf then buf := resize rng !buf n
+    else fuel := 0
   in
   while !out = None && !fuel > 0 do
     decr fuel;
@@ -1312,7 +1326,7 @@ let neighbours v =
    stale validator whose boundary differs by one without relying on chance. *)
 let boundary_inputs seed placed =
   List.concat_map
-    (fun (off, (field_seed : Raw.field_seed)) ->
+    (fun (off, ((field_seed : Raw.field_seed), _)) ->
       field_seed.values |> List.concat_map neighbours
       |> List.sort_uniq Int64.compare
       |> List.map (fun value ->

@@ -21,6 +21,12 @@
   `Wire_3d.generate_corpus` can reach a tagged record instead of reporting the
   codec as vacuous (#348, @samoht)
 
+- `Wire_3d.generate_corpus` no longer gives up on a record whose length field
+  the byte draw filled with a huge value. A draw asking for more bytes than a
+  corpus line can carry is brought back into range rather than the codec being
+  abandoned, which covers both dependent and unconstrained length fields
+  (#349, @samoht)
+
 ## 1.2.0
 
 ### Added
