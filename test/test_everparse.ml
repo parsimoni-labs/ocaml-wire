@@ -557,6 +557,43 @@ let test_doc_merge_shared_sub_codec () =
   check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
   check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
 
+(* A case body was rendered through the type suffix alone, never through the
+   refinement machinery a field of the same type goes through, so a closed
+   enum's membership and a lookup's index bound vanished from the generated
+   validator while the codec kept enforcing them. *)
+let test_casetype_case_bodies_keep_refinements () =
+  let c =
+    Codec.v "CaseRef"
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "b"
+              (casetype "CBody" uint8
+                 [
+                   case ~index:(UInt8.v 1)
+                     (enum "RCode" [ ("C7", 7); ("C9", 9) ] uint8)
+                     ~inject:(fun v -> `E v)
+                     ~project:(function `E v -> Some v | _ -> None);
+                   case ~index:(UInt8.v 2)
+                     (lookup [ 0; 1; 2 ] uint8)
+                     ~inject:(fun v -> `L v)
+                     ~project:(function `L v -> Some v | _ -> None);
+                 ])
+          $ fun v -> v );
+        ]
+  in
+  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  Alcotest.(check bool)
+    "the enum body keeps its membership" true
+    (contains ~sub:"{ ((v0 == 7) || (v0 == 9)) }" out);
+  Alcotest.(check bool)
+    "the lookup body keeps its index bound" true
+    (contains ~sub:"{ (v1 < 3) }" out);
+  (* The codec rejects a body the unrefined validator would have accepted. *)
+  match Codec.decode c (Bytes.of_string "\x01\x05") 0 with
+  | Ok _ -> Alcotest.fail "expected the enum body to be refused"
+  | Error _ -> ()
+
 (* A tag the dispatch gate did not admit was routed to the rewrite meant for
    string tags, where the union collapses to a tag plus [all_bytes]: EverParse
    accepted the schema and the generated validator checked no case body at all,
@@ -1802,6 +1839,8 @@ let suite =
         test_doc_merge_name_collision;
       Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
         `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: casetype case bodies keep refinements" `Quick
+        test_casetype_case_bodies_keep_refinements;
       Alcotest.test_case "3d: integer casetype tags dispatch" `Quick
         test_casetype_integer_tags_dispatch;
       Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
