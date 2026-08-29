@@ -830,6 +830,27 @@ let test_codec_array_cardinality () =
     [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
+(* A literal byte budget is the region size the description declares, and since
+   1.2.0 encode holds the values to it too. A caller who does not know that size
+   where the codec is built has nothing truthful to put there, and 3D has no
+   rest-of-region list to offer as a sizeless alternative, so the refusal has to
+   name the one thing that does work. *)
+let test_repeat_budget_mismatch_names_the_remedy () =
+  let c =
+    Codec.v "Region" Fun.id
+      Codec.[ Field.repeat "items" ~size:(int 0) uint16be $ Fun.id ]
+  in
+  match Codec.size_of_value c [ UInt16.v 1; UInt16.v 2 ] with
+  | _ -> Alcotest.fail "expected the budget mismatch to be refused"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "names the budget and what the values came to" true
+        (contains ~sub:"byte budget is 0" msg
+        && contains ~sub:"elements span 4" msg);
+      Alcotest.(check bool)
+        "points at the parameter, not a literal" true
+        (contains ~sub:"Param.input" msg)
+
 (* Field.repeat over a zeroterm element: a list of NUL-terminated strings
    within a byte budget. Used to raise Failure at decode; now decodes and
    projects through a synthesised element struct. *)
@@ -9716,6 +9737,8 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "repeat: budget mismatch names the remedy" `Quick
+        test_repeat_budget_mismatch_names_the_remedy;
       Alcotest.test_case "casetype field: no match names the field" `Quick
         test_casetype_no_match_names_field;
       Alcotest.test_case "casetype field: no match is Invalid_tag" `Quick
