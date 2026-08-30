@@ -39,6 +39,21 @@ let int n : int Types.expr = Types.Int n
 let bool b : bool Types.expr = Types.Bool b
 let guard = Types.Lt (Types.ref "n", int 4)
 
+let int_tagged =
+  Types.casetype "Tag" Types.uint8
+    [
+      Types.case ~index:(Wire.UInt8.v 1) Types.uint16be ~inject:Fun.id
+        ~project:(fun v -> Some v);
+      Types.case ~index:(Wire.UInt8.v 2) Types.uint16be ~inject:Fun.id
+        ~project:(fun v -> Some v);
+    ]
+
+let sub =
+  Wire.Codec.v "ShapeSub"
+    (fun a b -> (a, b))
+    Wire.Codec.
+      [ Wire.Field.v "sa" Wire.uint8 $ fst; Wire.Field.v "sb" Wire.uint8 $ snd ]
+
 (* A greedy field consumes the rest of the buffer, so anything after it is
    starved; 3D's [:consume-all] has the same rule. *)
 let test_greedy_not_last () =
@@ -144,6 +159,159 @@ let test_harmless_where_accepted () =
     [
       Types.field "n" Types.uint8;
       Types.field "vals" (Types.array ~len:(Types.ref "n") Types.uint8);
+    ]
+
+(* The projection rewrites a casetype whose tag is not integer-dispatched into
+   the tag plus an [all_bytes] body, so such a field runs to the end of the
+   buffer whatever its cases hold. 3d.exe parses the result and then fails
+   verification on the kind of that body, so the shape is caught here instead. *)
+let string_tagged =
+  Types.casetype "Body" Types.zeroterm
+    [
+      Types.case ~index:"a"
+        (Types.byte_array ~size:(int 2))
+        ~inject:Fun.id
+        ~project:(fun v -> Some v);
+      Types.case ~index:"b"
+        (Types.byte_array ~size:(int 2))
+        ~inject:Fun.id
+        ~project:(fun v -> Some v);
+    ]
+
+let test_string_tagged_casetype_not_last () =
+  rejects "string-tagged casetype before another field" ~codec:"Union"
+    ~mentions:[ "kind" ]
+    [ Types.field "kind" string_tagged; Types.field "crc" Types.uint16be ];
+  rejects "string-tagged casetype in the middle" ~codec:"Framed"
+    ~mentions:[ "kind" ]
+    [
+      Types.field "n" Types.uint8;
+      Types.field "kind" string_tagged;
+      Types.field "crc" Types.uint16be;
+    ]
+
+(* As the last field the same casetype is the shape EverParse verifies, and an
+   integer tag bounds the body wherever the field sits. *)
+let test_tagged_casetype_accepted () =
+  accepts "Trailing"
+    [ Types.field "n" Types.uint8; Types.field "kind" string_tagged ];
+  accepts "IntTagged"
+    [ Types.field "kind" int_tagged; Types.field "crc" Types.uint16be ]
+
+(* EverParse #321: a direct [[:zeroterm]] field extracts by itself, but placing
+   any other field before or after it creates a KaRaMeL bundling cycle. The
+   bounded form is a different prelude construct and keeps extracting. *)
+let test_zeroterm_with_sibling_rejected () =
+  accepts "OnlyZeroterm" [ Types.field "z" Types.zeroterm ];
+  rejects "field before zeroterm" ~codec:"TrailingZeroterm" ~mentions:[ "z" ]
+    [ Types.field "n" Types.uint8; Types.field "z" Types.zeroterm ];
+  rejects "field after zeroterm" ~codec:"LeadingZeroterm" ~mentions:[ "z" ]
+    [ Types.field "z" Types.zeroterm; Types.field "n" Types.uint8 ];
+  accepts "BoundedZeroterm"
+    [
+      Types.field "n" Types.uint8;
+      Types.field "z" (Types.zeroterm_at_most ~size:(int 8));
+    ]
+
+(* 3D takes a refinement only after a field it reads as a scalar. On a byte
+   span, an array, a sub-codec or a casetype, 3d.exe refuses the generated
+   [.3d] ("Non-scalar field 'X' cannot be refined with constraints", or no
+   reader for the field) while OCaml decode still enforces the predicate. *)
+let constrained typ =
+  [
+    Types.field "n" Types.uint8;
+    Types.field "x" ~constraint_:guard typ;
+    Types.field "tail" Types.uint8;
+  ]
+
+let rejects_constrained label typ =
+  rejects label ~codec:"Refined" ~mentions:[ "x" ] (constrained typ)
+
+let test_refined_non_scalar_rejected () =
+  rejects_constrained "byte_array" (Types.byte_array ~size:(int 4));
+  rejects_constrained "byte_slice" (Types.byte_slice ~size:(int 4));
+  rejects_constrained "byte_array_where"
+    (Types.byte_array_where ~size:(int 4) ~per_byte:(fun b ->
+         Types.Lt (b, int 9)));
+  rejects_constrained "uint ~size" (Types.uint 3);
+  rejects_constrained "zeroterm" Types.zeroterm;
+  rejects_constrained "zeroterm_at_most" (Types.zeroterm_at_most ~size:(int 8));
+  rejects_constrained "array" (Types.array ~len:(int 4) Types.uint8);
+  rejects_constrained "repeat" (Types.repeat ~size:(int 4) Types.uint8);
+  rejects_constrained "nested" (Types.nested ~size:(int 4) Types.uint32be);
+  rejects_constrained "nested_at_most"
+    (Types.nested_at_most ~size:(int 8) Types.uint32be);
+  rejects_constrained "dynamic optional" (Types.optional guard Types.uint16be);
+  rejects_constrained "sub-codec" (Wire.codec sub);
+  rejects_constrained "casetype" int_tagged;
+  (* A span under a [map] renders as the span does. *)
+  rejects_constrained "span under a map"
+    (Types.map String.length (fun _ -> "xxxx") (Types.byte_array ~size:(int 4)));
+  (* A greedy field is refined the same way, and is legal only last. *)
+  rejects "all_bytes" ~codec:"Greedy" ~mentions:[ "x" ]
+    [
+      Types.field "n" Types.uint8;
+      Types.field "x" ~constraint_:guard Types.all_bytes;
+    ];
+  rejects "all_zeros" ~codec:"Padded" ~mentions:[ "x" ]
+    [
+      Types.field "n" Types.uint8;
+      Types.field "x" ~constraint_:guard Types.all_zeros;
+    ]
+
+(* A [where] at the top of a field's type, or under the [enum] / [map] wrappers
+   the projection sees through, is lifted to the field's refinement, so it meets
+   the same rule as a [~constraint_] written there. *)
+let test_lifted_where_on_non_scalar_rejected () =
+  rejects "where on a span" ~codec:"Wrapped" ~mentions:[ "x" ]
+    [
+      Types.field "n" Types.uint8;
+      Types.field "x" (Types.where guard (Types.byte_array ~size:(int 4)));
+      Types.field "tail" Types.uint8;
+    ];
+  rejects "where under a map over a span" ~codec:"Lifted" ~mentions:[ "x" ]
+    [
+      Types.field "n" Types.uint8;
+      Types.field "x"
+        (Types.map String.length
+           (fun _ -> "xxxx")
+           (Types.where guard (Types.byte_array ~size:(int 4))));
+      Types.field "tail" Types.uint8;
+    ]
+
+(* Refining the field whose value the predicate reads is the form that projects,
+   so every scalar carrier has to stay allowed. *)
+let test_refined_scalar_accepted () =
+  accepts "Scalars"
+    [
+      Types.field "n" Types.uint8;
+      Types.field "a" ~constraint_:guard Types.uint32be;
+      Types.field "b" ~constraint_:guard Types.int16be;
+      Types.field "c" ~constraint_:guard Types.float64;
+      Types.field "d" ~constraint_:guard (Types.bits ~width:4 Types.U8);
+      Types.field "e" ~constraint_:guard (Types.bits ~width:4 Types.U8);
+    ];
+  accepts "Wrappers"
+    [
+      Types.field "n" Types.uint8;
+      Types.field "a" ~constraint_:guard
+        (Types.enum "E" [ ("A", 1); ("B", 2) ] Types.uint8);
+      Types.field "b" ~constraint_:guard
+        (Types.map Wire.UInt8.to_int Wire.UInt8.v Types.uint8);
+      Types.field "c" ~constraint_:guard (Types.where guard Types.uint8);
+    ];
+  (* A statically-present optional renders as its inner; a statically-absent one
+     projects to a 0-byte [unit] field that carries no refinement at all; a
+     dynamic [optional_or] occupies its inner's bytes either way. *)
+  accepts "Optionals"
+    [
+      Types.field "n" Types.uint8;
+      Types.field "a" ~constraint_:guard
+        (Types.optional (bool true) Types.uint16be);
+      Types.field "b" ~constraint_:guard
+        (Types.optional (bool false) Types.uint16be);
+      Types.field "c" ~constraint_:guard
+        (Types.optional_or guard ~default:(Wire.UInt16.v 0) Types.uint16be);
     ]
 
 (* EverParse holds a byte size in a [u32]. A count bounded by [n <= K] times a
@@ -263,6 +431,18 @@ let suite =
         test_nested_where_rejected;
       Alcotest.test_case "where in case body rejected" `Quick
         test_where_in_case_body_rejected;
+      Alcotest.test_case "string-tagged casetype not last rejected" `Quick
+        test_string_tagged_casetype_not_last;
+      Alcotest.test_case "tagged casetype accepted" `Quick
+        test_tagged_casetype_accepted;
+      Alcotest.test_case "zeroterm with sibling rejected" `Quick
+        test_zeroterm_with_sibling_rejected;
+      Alcotest.test_case "refined non-scalar rejected" `Quick
+        test_refined_non_scalar_rejected;
+      Alcotest.test_case "lifted where on non-scalar rejected" `Quick
+        test_lifted_where_on_non_scalar_rejected;
+      Alcotest.test_case "refined scalar accepted" `Quick
+        test_refined_scalar_accepted;
       Alcotest.test_case "harmless where accepted" `Quick
         test_harmless_where_accepted;
       Alcotest.test_case "byte-size product rejected" `Quick
