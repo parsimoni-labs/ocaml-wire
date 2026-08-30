@@ -46,6 +46,7 @@ type error_kind =
   | Missing_terminator
   | Non_zero_padding
   | Value_out_of_range of { value : int64 }
+  | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
 type parse_error = { at : int; field : string list; kind : error_kind }
@@ -568,6 +569,14 @@ val checked_mul : int -> int -> int
 (** Native-integer multiplication that raises {!exception-Parse_error} with
     {!constructor-Value_out_of_range} on overflow. *)
 
+val checked_div : int -> int -> int
+(** Native-integer division that raises {!exception-Parse_error} with
+    {!constructor-Zero_divisor} when its divisor is zero. *)
+
+val checked_mod : int -> int -> int
+(** Native-integer modulo that raises {!exception-Parse_error} with
+    {!constructor-Zero_divisor} when its divisor is zero. *)
+
 (** {1 Type Constructors} *)
 
 val uint8 : UInt8.t typ
@@ -1045,6 +1054,9 @@ val raise_non_zero_padding : at:int -> 'a
 
 val raise_out_of_range : at:int -> int64 -> 'a
 (** Raise {!Parse_error} for an integer beyond the native integer range. *)
+
+val raise_zero_divisor : at:int -> 'a
+(** Raise {!Parse_error} for division or modulo by zero. *)
 
 val raise_constraint : at:int -> which:predicate -> ?value:int64 -> unit -> 'a
 (** Raise {!Parse_error} for a violated predicate [which], optionally carrying

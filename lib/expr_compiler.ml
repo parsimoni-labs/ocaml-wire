@@ -75,10 +75,10 @@ let rec compile_int : type c1 c2 c3 c4.
       fun c1 c2 c3 c4 -> checked_mul (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Div (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 / fb c1 c2 c3 c4
+      fun c1 c2 c3 c4 -> checked_div (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Mod (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 mod fb c1 c2 c3 c4
+      fun c1 c2 c3 c4 -> checked_mod (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Land (a, b) ->
       let fa = rec_ a and fb = rec_ b in
       fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 land fb c1 c2 c3 c4

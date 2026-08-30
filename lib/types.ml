@@ -60,6 +60,7 @@ type error_kind =
   | Missing_terminator
   | Non_zero_padding
   | Value_out_of_range of { value : int64 }
+  | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
 (* [at] is the absolute byte offset of the failing field in the input; [field]
@@ -112,6 +113,8 @@ let raise_non_zero_padding ~at = raise_error ~at Non_zero_padding
 
 let raise_out_of_range ~at value =
   raise_error ~at (Value_out_of_range { value })
+
+let raise_zero_divisor ~at = raise_error ~at Zero_divisor
 
 let raise_constraint ~at ~which ?value () =
   raise_error ~at (Constraint_failed { which; value })
@@ -457,6 +460,11 @@ let[@inline] checked_mul a b =
   if mul_overflows a b product then
     arithmetic_overflow ~positive:(Bool.equal (a < 0) (b < 0))
   else product
+
+let[@inline] checked_div a b = if b = 0 then raise_zero_divisor ~at:0 else a / b
+
+let[@inline] checked_mod a b =
+  if b = 0 then raise_zero_divisor ~at:0 else a mod b
 
 (* [min_int / -1] is the one division whose true result is not representable;
    OCaml returns [min_int] for it rather than trapping. *)
@@ -3713,6 +3721,7 @@ let pp_error_kind ppf = function
   | Missing_terminator -> Fmt.string ppf "missing NUL terminator"
   | Non_zero_padding -> Fmt.string ppf "non-zero padding byte"
   | Value_out_of_range { value } -> Fmt.pf ppf "value out of range: %Ld" value
+  | Zero_divisor -> Fmt.string ppf "zero divisor in expression"
   | Constraint_failed { which; value } -> (
       match value with
       | Some v -> Fmt.pf ppf "%a violated (value %Ld)" pp_predicate which v
@@ -3736,7 +3745,8 @@ let kind_rank = function
   | Missing_terminator -> 3
   | Non_zero_padding -> 4
   | Value_out_of_range _ -> 5
-  | Constraint_failed _ -> 6
+  | Zero_divisor -> 6
+  | Constraint_failed _ -> 7
 
 let compare_error_kind a b =
   match (a, b) with
@@ -3751,8 +3761,9 @@ let compare_error_kind a b =
   | Constraint_failed a, Constraint_failed b ->
       let c = compare_predicate a.which b.which in
       if c <> 0 then c else Option.compare Int64.compare a.value b.value
-  | Missing_terminator, Missing_terminator | Non_zero_padding, Non_zero_padding
-    ->
+  | Missing_terminator, Missing_terminator
+  | Non_zero_padding, Non_zero_padding
+  | Zero_divisor, Zero_divisor ->
       0
   | _ -> Int.compare (kind_rank a) (kind_rank b)
 

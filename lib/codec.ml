@@ -939,7 +939,7 @@ let bytes_leaves
 
 let eval_buffer_expr f runtime input_end buf base =
   try f runtime input_end buf base
-  with Parse_error ({ kind = Value_out_of_range _; _ } as e) ->
+  with Parse_error ({ kind = Value_out_of_range _ | Zero_divisor; _ } as e) ->
     raise (Parse_error { e with at = base })
 
 let compile_expr ?sizeof_this env e =

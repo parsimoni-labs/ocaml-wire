@@ -2,6 +2,10 @@
 
 ### Fixed
 
+- A zero divisor supplied to expression division or modulo is now reported as
+  `Zero_divisor`. It used to escape decoding as the host exception
+  `Division_by_zero` instead of a wire parse error (#376, @samoht)
+
 - Expression addition, subtraction and multiplication now reject native-integer
   overflow. A dependent byte span could otherwise turn a huge declared size
   into zero or one and pass bounds validation (#375, @samoht)

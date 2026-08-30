@@ -45,7 +45,8 @@ val compile_int :
     [c1 c2 c3 c4], with leaves resolved by [l]. The walk over [e] happens in the
     partial application [compile_int l e], so a caller stages that once and
     calls the result per decode. Raises [Invalid_argument] for a shape with no
-    compilable form, such as a non-constant [Lsr64] shift. *)
+    compilable form, such as a non-constant [Lsr64] shift, and
+    {!Types.Parse_error} when evaluated arithmetic is invalid. *)
 
 val compile_bool :
   ('c1, 'c2, 'c3, 'c4) leaves ->

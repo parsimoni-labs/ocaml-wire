@@ -58,8 +58,8 @@ let rec expr : type a. ctx -> a expr -> a =
   | Add (a, b) -> checked_add (expr ctx a) (expr ctx b)
   | Sub (a, b) -> checked_sub (expr ctx a) (expr ctx b)
   | Mul (a, b) -> checked_mul (expr ctx a) (expr ctx b)
-  | Div (a, b) -> expr ctx a / expr ctx b
-  | Mod (a, b) -> expr ctx a mod expr ctx b
+  | Div (a, b) -> checked_div (expr ctx a) (expr ctx b)
+  | Mod (a, b) -> checked_mod (expr ctx a) (expr ctx b)
   | Land (a, b) -> expr ctx a land expr ctx b
   | Land64 (a, b) -> Int64.logand (expr ctx a) (expr ctx b)
   | Lsr64 (a, b) -> Int64.shift_right_logical (expr ctx a) (expr ctx b)
