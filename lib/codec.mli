@@ -158,8 +158,10 @@ val to_struct : 'r t -> Types.struct_
 
 val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
 (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
-    without constructing a record and without firing actions. [?env] supplies
-    bindings for any [Param.input] referenced in those clauses.
+    without constructing a record. Field [~action]s do fire, so a rejecting
+    action fails validation, but assigned output parameters are not written back
+    to [?env]. [?env] supplies bindings for any [Param.input] referenced in
+    those clauses.
 
     Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
     input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
