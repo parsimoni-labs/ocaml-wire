@@ -2063,10 +2063,24 @@ let finite_float64 =
 
 (* Codec whose constraint exercises every integer Expr operator
    (arithmetic, bitwise, comparison, logical, casts). Positives satisfy
-   the chained predicate; adversarials probably do not. *)
+   the chained predicate. The selected arithmetic operation uses input values
+   at the native-integer boundaries, so adversarials reach every checked
+   overflow and zero-divisor path. *)
 let build_expr_ops_pred a b =
   let module E = Wire.Expr in
-  let arith = E.((a + b - (a * Wire.int 1)) / Wire.int 1 mod Wire.int 256) in
+  let selector = E.(a land Wire.int 7) in
+  let arith =
+    E.if_then_else
+      E.(selector = Wire.int 0)
+      E.(Wire.int max_int - a + b)
+      (E.if_then_else
+         E.(selector = Wire.int 1)
+         E.(Wire.int min_int + a - b)
+         (E.if_then_else
+            E.(selector = Wire.int 2)
+            E.((a - b) * Wire.int max_int)
+            (E.if_then_else E.(selector = Wire.int 3) E.(a / b) E.(a mod b))))
+  in
   let bw = E.(a land Wire.int 0xFF lor (a lxor a)) in
   let shifted = E.((a lsl Wire.int 0) lsr Wire.int 0) in
   let casts = E.(to_uint8 a + to_uint16 b + to_uint32 a + to_uint64 b) in
@@ -2099,17 +2113,36 @@ let expr_ops =
     Alcobar.map
       Alcobar.[ Alcobar.uint8; Alcobar.uint8 ]
       (fun a b ->
+        let b = 1 + (b mod 255) in
+        let a = if a land 1 = 0 || b = 255 then b else b + 1 in
         let buf = Bytes.create 2 in
         Bytes.set_uint8 buf 0 a;
         Bytes.set_uint8 buf 1 b;
         ((Wire.UInt8.v a, Wire.UInt8.v b), buf))
+  in
+  let adversarial =
+    Alcobar.choose
+      (List.map
+         (fun octets -> Alcobar.const (bytes_of_octets octets))
+         [
+           [ 0; 1 ];
+           (* addition overflow *)
+           [ 1; 2 ];
+           (* subtraction underflow *)
+           [ 10; 1 ];
+           (* multiplication overflow *)
+           [ 3; 0 ];
+           (* division by zero *)
+           [ 4; 0 ];
+           (* modulo by zero *)
+         ])
   in
   {
     codec;
     typ;
     positive;
     random = bytes_fixed 2;
-    adversarial = bytes_fixed 2;
+    adversarial;
     equal = ( = );
     env = None;
     fields = [];
