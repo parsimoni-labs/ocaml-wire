@@ -2243,13 +2243,15 @@ let if_then_else =
   }
 
 (* Two-field codec whose second field's [~self_constraint] references
-   [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. *)
+   [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. [sizeof_this] is
+   the description's fixed prefix, so it is 2 here (both fields) wherever it is
+   read, not the offset of the field reading it. *)
 let sizeof =
   let f_a = Wire.Field.v "a" Wire.uint8 in
   let f_b =
     Wire.Field.v "b" Wire.uint8 ~self_constraint:(fun _ ->
         Wire.Expr.(
-          Wire.sizeof_this = Wire.int 1
+          Wire.sizeof_this = Wire.int 2
           && Wire.field_pos = Wire.int 1
           && Wire.sizeof Wire.uint8 = Wire.int 1))
   in
