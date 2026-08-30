@@ -5359,6 +5359,50 @@ let test_where_arithmetic_overflow_offset () =
       Alcotest.failf "validate: expected Value_out_of_range, got %s"
         (Printexc.to_string exn)
 
+let zero_divisor_span_codec name size =
+  let f_divisor = Field.v "Divisor" uint8 in
+  let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_divisor))) in
+  Codec.v name
+    (fun divisor data -> (divisor, data))
+    Codec.[ f_divisor $ fst; f_data $ snd ]
+
+let test_dep_size_zero_divisor () =
+  let int = Wire.int in
+  let codecs =
+    [
+      ( "division",
+        zero_divisor_span_codec "DivZero" (fun divisor ->
+            Expr.(int 8 / divisor)) );
+      ( "modulo",
+        zero_divisor_span_codec "ModZero" (fun divisor ->
+            Expr.(int 8 mod divisor)) );
+    ]
+  in
+  let base = 5 in
+  let buf = Bytes.make (base + 2) '\000' in
+  List.iter
+    (fun (name, codec) ->
+      (match Codec.decode codec buf base with
+      | Error { at; kind = Zero_divisor; _ } ->
+          Alcotest.(check int) (name ^ " decode offset") base at
+      | Error e ->
+          Alcotest.failf "%s decode: expected Zero_divisor, got %a" name
+            pp_parse_error e
+      | Ok _ -> Alcotest.failf "%s decode: accepted a zero divisor" name
+      | exception Division_by_zero ->
+          Alcotest.failf "%s decode: leaked Division_by_zero" name
+      | exception exn ->
+          Alcotest.failf "%s decode: raised %s" name (Printexc.to_string exn));
+      match Codec.validate codec buf base with
+      | exception Parse_error { at; kind = Zero_divisor; _ } ->
+          Alcotest.(check int) (name ^ " validate offset") base at
+      | () -> Alcotest.failf "%s validate: accepted a zero divisor" name
+      | exception Division_by_zero ->
+          Alcotest.failf "%s validate: leaked Division_by_zero" name
+      | exception exn ->
+          Alcotest.failf "%s validate: raised %s" name (Printexc.to_string exn))
+    codecs
+
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
   let f_sz = Field.v "Size" uint8 in
@@ -9795,6 +9839,8 @@ let suite =
         test_dep_size_arithmetic_overflow;
       Alcotest.test_case "codec: where arithmetic overflow offset" `Quick
         test_where_arithmetic_overflow_offset;
+      Alcotest.test_case "dep: size zero divisor raises" `Quick
+        test_dep_size_zero_divisor;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;
       (* struct_of_codec for variable-size codecs *)

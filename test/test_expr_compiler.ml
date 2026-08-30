@@ -102,13 +102,23 @@ let test_div_mod () =
     "Mod keeps the dividend's sign" (-1)
     (eval_int (Types.Mod (int (-10), b)))
 
-(* Compilation is staged: a division by zero is a run-time fault of the
-   returned closure, not something the walk over the expression discovers. *)
-let test_div_by_zero_is_deferred () =
-  let f = Expr_compiler.compile_int leaves (Types.Div (a, int 0)) in
-  match f ints i64s size pos with
-  | n -> Alcotest.failf "division by zero produced %d" n
-  | exception Division_by_zero -> ()
+(* Compilation is staged: a divisor read from the input is only known when the
+   returned closure runs. It is still bad wire data, not a host-language fault
+   that may escape the decoder. *)
+let test_zero_divisor_is_parse_error () =
+  let zero = [ ("a", 10); ("b", 0) ] in
+  let check name e =
+    let f = Expr_compiler.compile_int leaves e in
+    match f zero i64s size pos with
+    | n -> Alcotest.failf "%s by zero produced %d" name n
+    | exception Types.Parse_error _ -> ()
+    | exception Division_by_zero ->
+        Alcotest.failf "%s leaked Division_by_zero" name
+    | exception exn ->
+        Alcotest.failf "%s raised %s" name (Printexc.to_string exn)
+  in
+  check "division" (Types.Div (a, b));
+  check "modulo" (Types.Mod (a, b))
 
 let test_bitwise () =
   Alcotest.(check int) "Land" 0x30 (eval_int (Types.Land (int 0xF0, int 0x3C)));
@@ -296,8 +306,8 @@ let suite =
       Alcotest.test_case "arithmetic" `Quick test_arithmetic;
       Alcotest.test_case "arithmetic overflow" `Quick test_arithmetic_overflow;
       Alcotest.test_case "div and mod" `Quick test_div_mod;
-      Alcotest.test_case "div by zero is deferred" `Quick
-        test_div_by_zero_is_deferred;
+      Alcotest.test_case "zero divisor is a parse error" `Quick
+        test_zero_divisor_is_parse_error;
       Alcotest.test_case "bitwise" `Quick test_bitwise;
       Alcotest.test_case "cast widths" `Quick test_cast;
       Alcotest.test_case "if_then_else" `Quick test_if_then_else;
