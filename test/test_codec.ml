@@ -860,9 +860,9 @@ let test_zeroterm_extent_and_attribution () =
 
 (* [expected] is documented as a count of bytes, and every consumer does
    arithmetic on it: the streaming reader's retry target and the corpus seeder's
-   growth target both read it that way. A greedy field whose start overran the
-   buffer used to report the negative size the offset produced, which reads as
-   "nothing is missing" and sends both consumers backwards. *)
+   growth target both read it that way. The overrunning field is the one blamed,
+   so the count is the whole span it asked for and [got] is what the buffer
+   holds from where that span starts. *)
 let test_eof_expected_is_a_byte_count () =
   let f_len = Field.v "len" uint8 in
   let c =
@@ -876,7 +876,7 @@ let test_eof_expected_is_a_byte_count () =
           (Field.v "tail" all_zeros $ fun (_, _, t) -> t);
         ]
   in
-  (* [len] is 20, so the tail starts at 21 in a two-byte buffer. *)
+  (* [len] is 20, so the span at offset 1 asks for 20 bytes with 1 left. *)
   let buf = Bytes.of_string "\x14\x00" in
   match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "expected the overrun to be refused"
@@ -884,11 +884,14 @@ let test_eof_expected_is_a_byte_count () =
       Alcotest.(check bool)
         (Fmt.str "expected is a byte count, not %d" expected)
         true (expected >= 0);
-      (* The shortfall names exactly where the read starts, which is what both
-         consumers compute from it. *)
+      (* [got] is what remains from where the read starts, so a consumer sizing
+         a new buffer takes [at + expected] and lands past the current end. *)
       Alcotest.(check int)
-        "the shortfall reaches the read" at
-        (Bytes.length buf + expected - got)
+        "got is what remains from the read" got
+        (Bytes.length buf - at);
+      Alcotest.(check bool)
+        "the growth target passes the current end" true
+        (at + expected > Bytes.length buf)
   | Error _ -> Alcotest.fail "expected an end-of-input refusal"
 
 (* A value too wide for the native int is refused by the conversion, which is
@@ -1357,10 +1360,12 @@ let test_validate_struct_field_past_end () =
   let s = validate_struct_overrun () in
   let v = Codec.validator_of_struct s in
   let buf = Bytes.of_string validate_struct_overrun_input in
-  (* [V] wants 2 bytes at 201; the 5-byte buffer has none of them. *)
-  check_located_eof "validate_struct" ~at:201 ~expected:2 ~got:0
+  (* [Data] is the field that overruns: it is declared 200 bytes at offset 1
+     and the buffer holds 4 from there. The fields after it sit at offsets the
+     overrun invented, so the failure belongs here rather than to [V] at 201. *)
+  check_located_eof "validate_struct" ~at:1 ~expected:200 ~got:4
     (validating "validate_struct" (fun () -> Codec.validate_struct v buf 0));
-  check_located_eof "of_string" ~at:201 ~expected:2 ~got:0
+  check_located_eof "of_string" ~at:1 ~expected:200 ~got:4
     (validating "of_string" (fun () ->
          match of_string (T.struct_typ s) validate_struct_overrun_input with
          | Ok () -> ()
@@ -1409,8 +1414,10 @@ let validate_optional_codec =
 
 let test_validate_present_optional_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
-  (* [opt] wants 2 bytes at 202; the 5-byte buffer has none of them. *)
-  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+  (* The span before it is what overruns: 200 bytes declared at offset 2 with 3
+     in the buffer from there. [opt] would sit at 202, an offset the overrun
+     invented, so the failure belongs to the span. *)
+  check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
          Codec.validate validate_optional_codec buf 0))
 
@@ -1436,7 +1443,7 @@ let validate_optional_or_codec =
 
 let test_validate_present_optional_or_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
-  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+  check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
          Codec.validate validate_optional_or_codec buf 0))
 

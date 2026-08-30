@@ -2,6 +2,12 @@
 
 ### Fixed
 
+- A record truncated in the middle now reports the first field that cannot be
+  read, at its own offset. Fields were read in reverse, so the failure was
+  blamed on a later field and located where an earlier field's declared size
+  had already run past the end of the buffer, which left `at` pointing outside
+  the input a caller had passed in (#372, @samoht)
+
 - `Wire_3d.generate_c` works against EverParse releases after v2026.02.25. The
   whole-buffer check it adds to each generated wrapper named a variable those
   releases renamed, so the emitted C referenced an undeclared identifier and

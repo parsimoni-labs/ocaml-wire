@@ -2581,6 +2581,13 @@ let span_check : type a. a typ -> (bytes -> first:int -> len:int -> unit) option
       (* The terminator search is the size computation, so [len] could not have
          been reached without it. Only the span itself is left to check. *)
       Some (fun buf ~first ~len -> check_span_bounds buf ~first ~sz:len)
+  | Byte_array _ | Byte_slice _ | All_bytes ->
+      (* Nothing to scan, since the reader only re-slices the buffer, but the
+         span is still checked: a size taken from a length field can reach past
+         the end, and a span that skipped the walk left the overrun to surface
+         against whichever later field did have a check, blamed at the position
+         the overrun had already produced. *)
+      Some (fun buf ~first ~len -> check_span_bounds buf ~first ~sz:len)
   | _ -> None
 
 (* Populate for a span field: the reader's checks, none of its copying, and no
@@ -3648,37 +3655,79 @@ let rec apply_fwd : type mid result.
 
 (* Saturate [make] in a single call for up to eight fields, so a decode
    allocates no intermediate closure; beyond that the fold in [apply_fwd]
-   takes over. The formatter is disabled for the same reason it is there: the
-   table is a row per arity, and staircasing each argument onto its own line
-   makes it four times longer without making it clearer. *)
+   takes over. Each reader is bound in turn rather than passed straight to
+   [make]: OCaml evaluates arguments right to left, so applying them directly
+   ran the last field's reader first, and a record truncated in the middle
+   failed against whichever later field was read first, reported at the offset
+   the earlier field's declared size had already carried past. The bindings
+   cost nothing at runtime and put the failure back on the first field that
+   cannot be read. The formatter stays off so each arity keeps to one line per
+   reader. *)
 let build_decode : type full r.
     full -> (full, r) readers -> runtime -> Input_end.t -> bytes -> int -> r =
  fun make readers ->
   match readers with
   | Nil -> fun _runtime _input_end _buf _off -> make
   | Snoc (Nil, r1) ->
-      fun runtime input_end buf off -> make (r1 runtime input_end buf off)
+      fun runtime input_end buf off ->
+        let v1 = r1 runtime input_end buf off in
+        make v1
   | Snoc (Snoc (Nil, r1), r2) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        make v1 v2
   | Snoc (Snoc (Snoc (Nil, r1), r2), r3) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        make v1 v2 v3
   | Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        let v4 = r4 runtime input_end buf off in
+        make v1 v2 v3 v4
   | Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        let v4 = r4 runtime input_end buf off in
+        let v5 = r5 runtime input_end buf off in
+        make v1 v2 v3 v4 v5
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        let v4 = r4 runtime input_end buf off in
+        let v5 = r5 runtime input_end buf off in
+        let v6 = r6 runtime input_end buf off in
+        make v1 v2 v3 v4 v5 v6
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        let v4 = r4 runtime input_end buf off in
+        let v5 = r5 runtime input_end buf off in
+        let v6 = r6 runtime input_end buf off in
+        let v7 = r7 runtime input_end buf off in
+        make v1 v2 v3 v4 v5 v6 v7
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7), r8) ->
       fun runtime input_end buf off ->
-        make (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off)
+        let v1 = r1 runtime input_end buf off in
+        let v2 = r2 runtime input_end buf off in
+        let v3 = r3 runtime input_end buf off in
+        let v4 = r4 runtime input_end buf off in
+        let v5 = r5 runtime input_end buf off in
+        let v6 = r6 runtime input_end buf off in
+        let v7 = r7 runtime input_end buf off in
+        let v8 = r8 runtime input_end buf off in
+        make v1 v2 v3 v4 v5 v6 v7 v8
   | readers ->
       let fwd = to_fwd readers in
       fun runtime input_end buf off -> apply_fwd make fwd runtime input_end buf off

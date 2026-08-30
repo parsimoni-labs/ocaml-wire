@@ -284,15 +284,21 @@ let accepted_agrees g codec env b =
 (* A rejected record: the offset is a real position, and a failure about one
    field's value names that field. A path may legitimately be empty at a
    top-level or anonymous position, so only the kinds that always come from a
-   named field are required to carry one. Only the lower bound on the offset is
-   asserted: a record whose declared sizes reach past the buffer is blamed at
-   the offset those sizes imply, which can sit beyond the end. *)
+   named field are required to carry one. The offset has to be a position in
+   the buffer: a span sized past the end used to leave the failure to whichever
+   later field had a check, reported where the overrun had already carried
+   to. *)
 let rejection_is_attributed codec env b =
+  let len = Bytes.length b in
   match Wire.Codec.decode ?env codec b 0 with
   | Ok _ -> None
   | Error e -> (
-      if e.Wire.at < 0 then
-        Fmt.kstr (fun s -> Some s) "reports negative offset %d" e.Wire.at
+      if e.Wire.at < 0 || e.Wire.at > len then
+        Fmt.kstr
+          (fun s -> Some s)
+          "reports offset %d outside a %d byte buffer, for %a at [%s]" e.Wire.at
+          len Wire.pp_error_kind e.Wire.kind
+          (String.concat "/" e.Wire.field)
       else
         match e.Wire.kind with
         | (Wire.Invalid_tag _ | Wire.Invalid_enum _ | Wire.Value_out_of_range _)
