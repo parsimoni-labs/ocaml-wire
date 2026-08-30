@@ -556,6 +556,18 @@ module Expr : sig
   (** Cast to 64-bit unsigned. *)
 end
 
+val checked_add : int -> int -> int
+(** Native-integer addition that raises {!exception-Parse_error} with
+    {!constructor-Value_out_of_range} on overflow. *)
+
+val checked_sub : int -> int -> int
+(** Native-integer subtraction that raises {!exception-Parse_error} with
+    {!constructor-Value_out_of_range} on overflow. *)
+
+val checked_mul : int -> int -> int
+(** Native-integer multiplication that raises {!exception-Parse_error} with
+    {!constructor-Value_out_of_range} on overflow. *)
+
 (** {1 Type Constructors} *)
 
 val uint8 : UInt8.t typ

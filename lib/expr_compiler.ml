@@ -66,13 +66,13 @@ let rec compile_int : type c1 c2 c3 c4.
   | Field_pos -> l.field_pos
   | Add (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 + fb c1 c2 c3 c4
+      fun c1 c2 c3 c4 -> checked_add (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Sub (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 - fb c1 c2 c3 c4
+      fun c1 c2 c3 c4 -> checked_sub (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Mul (a, b) ->
       let fa = rec_ a and fb = rec_ b in
-      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 * fb c1 c2 c3 c4
+      fun c1 c2 c3 c4 -> checked_mul (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
   | Div (a, b) ->
       let fa = rec_ a and fb = rec_ b in
       fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 / fb c1 c2 c3 c4

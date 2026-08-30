@@ -2,6 +2,10 @@
 
 ### Fixed
 
+- Expression addition, subtraction and multiplication now reject native-integer
+  overflow. A dependent byte span could otherwise turn a huge declared size
+  into zero or one and pass bounds validation (#375, @samoht)
+
 - `Expr.sizeof_this` is the enclosing description's fixed prefix, which is what
   3D's `sizeof(this)` means: one constant for the description, the same wherever
   it is read. It used to be the bytes consumed up to the reading field, so it

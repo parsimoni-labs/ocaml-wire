@@ -55,9 +55,9 @@ let rec expr : type a. ctx -> a expr -> a =
   | Sizeof t -> field_wire_size t |> Option.value ~default:0
   | Sizeof_this -> 0
   | Field_pos -> 0
-  | Add (a, b) -> expr ctx a + expr ctx b
-  | Sub (a, b) -> expr ctx a - expr ctx b
-  | Mul (a, b) -> expr ctx a * expr ctx b
+  | Add (a, b) -> checked_add (expr ctx a) (expr ctx b)
+  | Sub (a, b) -> checked_sub (expr ctx a) (expr ctx b)
+  | Mul (a, b) -> checked_mul (expr ctx a) (expr ctx b)
   | Div (a, b) -> expr ctx a / expr ctx b
   | Mod (a, b) -> expr ctx a mod expr ctx b
   | Land (a, b) -> expr ctx a land expr ctx b
