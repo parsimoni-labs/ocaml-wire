@@ -217,11 +217,19 @@ val sizeof : 'a typ -> int expr
 (** Size of a fixed-size wire description. *)
 
 val sizeof_this : int expr
-(** Number of bytes already consumed in the enclosing sequential description.
+(** Size in bytes of the enclosing description's fixed prefix: the bytes before
+    its first field whose extent is not statically known, or its whole size when
+    every field is fixed.
 
-    This is meaningful only while interpreting a larger description, typically a
-    struct or record-shaped layout. It is used in dependent sizes and
-    constraints for later fields. *)
+    One constant for the description, the same wherever it is read, and not the
+    number of bytes consumed up to the reading field. A field after a
+    variable-size one adds nothing to it. This is 3D's [sizeof(this)], which
+    EverParse resolves from the type's own size and requires to fold to a
+    compile-time constant.
+
+    It is used in dependent sizes and constraints, most often as
+    [Param.expr total - sizeof_this] for a trailing payload; see
+    {!val-rest_bytes}. *)
 
 val field_pos : int expr
 (** Zero-based index of the current field in the enclosing sequential

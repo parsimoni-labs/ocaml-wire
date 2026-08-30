@@ -5436,7 +5436,7 @@ let test_codec_sizeof_this () =
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 3 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "sizeof_this at c" 4 (UInt8.to_int (Param.get env out))
 
 let test_codec_field_pos () =
   let out = Param.output "out" uint8 in

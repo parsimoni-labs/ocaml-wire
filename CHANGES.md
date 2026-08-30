@@ -2,6 +2,14 @@
 
 ### Fixed
 
+- `Expr.sizeof_this` is the enclosing description's fixed prefix, which is what
+  3D's `sizeof(this)` means: one constant for the description, the same wherever
+  it is read. It used to be the bytes consumed up to the reading field, so it
+  disagreed with the generated validator at every position but the end of a
+  fixed-size record, and after a variable-size field the two read different
+  layouts while both verified. A constraint reading it no longer sees a `-1`
+  sentinel (#374, @samoht)
+
 - A record truncated in the middle now reports the first field that cannot be
   read, at its own offset. Fields were read in reverse, so the failure was
   blamed on a later field and located where an earlier field's declared size

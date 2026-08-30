@@ -950,7 +950,7 @@ type idx = string -> int
 
 type compile_ctx = {
   idx : idx;
-  sizeof_this : int;
+  sizeof_this : int ref;
   field_pos : int;
   param_slots : (string, int) Hashtbl.t;
       (* Per-codec map from param name to its slot in this codec's decode
@@ -959,7 +959,7 @@ type compile_ctx = {
          with different slots. *)
 }
 
-let mk_ctx ?(sizeof_this = 0) ?(field_pos = 0) ~param_slots idx =
+let mk_ctx ?(sizeof_this = Stdlib.ref 0) ?(field_pos = 0) ~param_slots idx =
   { idx; sizeof_this; field_pos; param_slots }
 
 let array_leaves (cc : compile_ctx) :
@@ -984,7 +984,7 @@ let array_leaves (cc : compile_ctx) :
       (fun (Pack_typ t) ->
         let n = field_wire_size t |> Option.value ~default:0 in
         fun _ () () () -> n);
-    sizeof_this = (fun _ () () () -> cc.sizeof_this);
+    sizeof_this = (fun _ () () () -> !(cc.sizeof_this));
     field_pos = (fun _ () () () -> cc.field_pos);
   }
 
@@ -1078,6 +1078,12 @@ type ('f, 'r) record =
       min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)
       next_off : next_off; (* where the next field starts *)
+      fixed_prefix : int ref;
+          (* 3D's [sizeof(this)]: the byte count before the first
+             variable-size field. EverParse resolves it from the type's own
+             size, which stops accumulating once a field's extent is dynamic
+             ([sum_size] returns the accumulator unchanged from there), so
+             fixed fields after a variable one do not add to it. *)
       fields_rev : Types.field list;
       validators_rev :
         (int (* byte offset *)
@@ -1160,6 +1166,7 @@ let record_start ?where ?doc name make =
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
+      fixed_prefix = Stdlib.ref 0;
       fields_rev = [];
       validators_rev = [];
       checkers_rev = [];
@@ -1764,6 +1771,7 @@ type ('a, 'r) compiled_field = {
    the record's 'f type. *)
 type layout_ctx = {
   next_off : next_off;
+  fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
   n_fields : int;
@@ -1773,6 +1781,7 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
  fun (Record r) ->
   {
     next_off = r.next_off;
+    fixed_prefix = r.fixed_prefix;
     bf = r.r_bf;
     field_readers = r.field_readers;
     n_fields = r.n_fields;
@@ -1812,6 +1821,16 @@ let require_static_off (ctx : layout_ctx) ~what : int =
         ("add_field: " ^ what ^ " after variable-size field not supported")
 
 (* New [next_off] after appending a fixed-size contribution of [n] bytes. *)
+(* Mirrors EverParse's [sum_size], which is what resolves 3D's [sizeof(this)]:
+   while every field so far is fixed the count is the running offset, the first
+   field with a dynamic extent freezes it at the offset that field starts from,
+   and nothing after it moves the count again. *)
+let note_fixed_prefix ~before ~after cell =
+  match (before, after) with
+  | Static _, Static n -> cell := n
+  | Static n, Dynamic _ -> cell := n
+  | Dynamic _, _ -> ()
+
 let advance_next_off (no : next_off) (n : int) : next_off =
   match no with
   | Static k -> Static (k + n)
@@ -2421,11 +2440,10 @@ let compile_repeat : type elt seq r.
      [Dynamic] and is resolved at runtime rather than from a static offset. *)
   let off_fn, (field_access : field_access), validator_off =
     let sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
-      match ctx.next_off with
-      | Static n -> fun _runtime _input_end _buf _base -> n
-      | Dynamic prev_end ->
-          fun runtime input_end buf base ->
-            prev_end runtime input_end buf base - base
+      (* One constant for the whole description, as 3D's [sizeof(this)] is,
+         resolved once the last field is in. *)
+      let cell = ctx.fixed_prefix in
+      fun _runtime _input_end _buf _base -> !cell
     in
     let size_fn = compile_expr ~sizeof_this ctx.field_readers size_expr in
     match ctx.next_off with
@@ -2773,11 +2791,8 @@ let compile_var_size_fn : type a.
         | _ -> invalid_arg "add_field: unsupported variable-size field type"
       in
       let sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
-        match ctx.next_off with
-        | Static n -> fun _runtime _input_end _buf _base -> n
-        | Dynamic prev_end ->
-            fun runtime input_end buf base ->
-              prev_end runtime input_end buf base - base
+        let cell = ctx.fixed_prefix in
+        fun _runtime _input_end _buf _base -> !cell
       in
       compile_expr ~sizeof_this ctx.field_readers size_expr
 
@@ -3470,7 +3485,7 @@ let apply_compiled : type a f r.
   in
   let idx = build_idx cc_readers in
   let cc =
-    mk_ctx ~sizeof_this:cf.validator_off ~field_pos:field_idx
+    mk_ctx ~sizeof_this:r.fixed_prefix ~field_pos:field_idx
       ~param_slots:r.param_slots idx
   in
   let check = compile_field_check cc fld in
@@ -3504,6 +3519,7 @@ let apply_compiled : type a f r.
       ~validates:(field_reader_validates fld.typ)
       ~check ~act fld.name cf.raw_reader full check_only
   in
+  note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
   Record
     {
       name = r.name;
@@ -3513,6 +3529,7 @@ let apply_compiled : type a f r.
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size = r.min_wire_size + cf.size_delta;
       next_off = cf.next_off;
+      fixed_prefix = r.fixed_prefix;
       fields_rev = struct_field fld :: r.fields_rev;
       validators_rev = (byte_off, full) :: r.validators_rev;
       checkers_rev = (byte_off, check_only) :: r.checkers_rev;
@@ -4084,6 +4101,7 @@ type validator_acc = {
   n_array_slots : int;
   min_size : int;
   next_off : next_off;
+  fixed_prefix : int ref;
   bf : bf_codec_state option;
   param_slots : (string, int) Hashtbl.t;
 }
@@ -4097,6 +4115,7 @@ let empty_validator_acc () =
     n_array_slots = 0;
     min_size = 0;
     next_off = Static 0;
+    fixed_prefix = Stdlib.ref 0;
     bf = None;
     param_slots = Hashtbl.create 4;
   }
@@ -4104,6 +4123,7 @@ let empty_validator_acc () =
 let layout_ctx_of_validator_acc acc =
   {
     next_off = acc.next_off;
+    fixed_prefix = acc.fixed_prefix;
     bf = acc.bf;
     field_readers = acc.field_readers;
     n_fields = acc.n_fields;
@@ -4156,7 +4176,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let idx = build_idx cc_readers in
   let cc =
-    mk_ctx ~sizeof_this:validator_off ~field_pos:acc.n_fields
+    mk_ctx ~sizeof_this:acc.fixed_prefix ~field_pos:acc.n_fields
       ~param_slots:acc.param_slots idx
   in
   let check = Option.map (compile_bool_arr cc) constraint_ in
@@ -4199,6 +4219,7 @@ let rec apply_struct_field acc inner_struct =
     n_array_slots = acc.n_array_slots;
     min_size = acc.min_size + size_delta;
     next_off;
+    fixed_prefix = acc.fixed_prefix;
     bf = None;
     param_slots = acc.param_slots;
   }
@@ -4236,7 +4257,11 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         n_fields = List.length new_field_readers;
         n_array_slots = List.length new_field_readers + n_extra_vars;
         min_size = acc.min_size + cf.size_delta;
-        next_off = cf.next_off;
+        next_off =
+          (note_fixed_prefix ~before:acc.next_off ~after:cf.next_off
+             acc.fixed_prefix;
+           cf.next_off);
+        fixed_prefix = acc.fixed_prefix;
         bf = cf.bf_after;
         param_slots = acc.param_slots;
       }
