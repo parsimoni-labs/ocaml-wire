@@ -186,22 +186,42 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 | Feature | OCaml | [EverParse 3D][3d-ref] |
 |---------|-------|------------------------|
 | Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, ... |
-| Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
-| Bool | `bit (bits ~width:1 U8)` | -- |
-| Byte slices | `byte_slice ~size:e` (zero-copy from `bytes`) | `UINT8 [: e]` |
-| Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
+| Bitfields | `bits ~width:4 U32be` | [`UINT32BE Flags : 4;`][3d-bits] |
+| Bool | `bit (bits ~width:1 U16be)` | `UINT16BE SYN : 1;` |
+| Byte slices | `byte_slice ~size:(Field.ref f_len)` (zero-copy from `bytes`) | `UINT8 Data[:byte-size Len];` |
+| Byte arrays | `byte_array ~size:(Field.ref f_len)` (copied) | `UINT8 Data[:byte-size Len];` |
+| Fixed-count arrays | `array ~len:(int 3) uint32be` | [`UINT32BE Items[:byte-size (3 * 4)];`][3d-array] |
+| Byte-budgeted lists | `Field.repeat ~size:(Field.ref f_len) uint16be` | [`UINT16BE Items[:byte-size Len];`][3d-array] |
+| Sized payloads | `nested ~size:(Field.ref f_len) (codec inner)` | [`Inner Body[:byte-size-single-element-array Len];`][3d-array] |
 | Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
-| Constraints | `where`, `~constraint_` | [`where`][3d-where] |
-| Actions | `Action.assign`, `abort`, `if_` | [`:on-success`][3d-act] |
-| Parameters | `Param.input` / `Param.output` | [`entrypoint ... (params)`][3d-param] |
+| Field constraints | `where`, `Field.v ~constraint_` | [`UINT32BE Age { Age >= 21 };`][3d-refine] |
+| Codec preconditions | `Codec.v ~where` | [`where bound <= 1729`][3d-where] |
+| Actions | `Action.assign`, `abort`, `if_` | [`{:on-success ... }`][3d-act] |
+| Parameters | `Param.input` / `Param.output` | [`typedef struct _T (UINT32 bound)`][3d-param] |
 | Tagged unions | `casetype` | [`casetype`][3d-case] |
-| Arrays | `array ~len:e`, `nested ~size:e` | `t [: e]` |
 | Dependent sizes | `Field.ref f_len` | field references |
 | Custom mappings | `map ~decode ~encode` | -- |
 
+Two distinctions the syntax makes and the OCaml names blur. A 3D array is a
+byte budget, never an element count, so `array ~len:n` multiplies the count by
+the element width and needs elements of a fixed size, whereas `nested ~size:e`
+is the single-element form and lowers to a different suffix entirely. And 3D's
+`where` clause is a precondition on a type's parameters, checked before any
+field is read; the field-level check that `Wire.where` and `~constraint_` mean
+is the unnamed `{ ... }` refinement, which the manual files under Constraints.
+
+Only integer tags lower to a 3D `casetype`. A tag of another type lowers to the
+tag bytes followed by a rest-of-buffer body, so the generated C validator checks
+framing but leaves dispatch to its caller; the OCaml decoder still rejects an
+unknown tag without a default case. That body must be the final field of its
+struct.
+
 [3d-ref]: https://project-everest.github.io/everparse/3d-lang.html
+[3d-bits]: https://project-everest.github.io/everparse/3d-lang.html#bitfields
+[3d-array]: https://project-everest.github.io/everparse/3d-lang.html#arrays
 [3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations
-[3d-where]: https://project-everest.github.io/everparse/3d-lang.html#constraints
+[3d-refine]: https://project-everest.github.io/everparse/3d-lang.html#constraints
+[3d-where]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types
 [3d-act]: https://project-everest.github.io/everparse/3d-lang.html#actions
 [3d-param]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types
 [3d-case]: https://project-everest.github.io/everparse/3d-lang.html#tagged-unions-or-casetype
