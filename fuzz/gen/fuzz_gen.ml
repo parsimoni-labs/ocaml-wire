@@ -4654,6 +4654,9 @@ let reject_cases label g =
 
 type packed = Pack : 'a t -> packed
 
+(* The value equality the generator was built with, so a caller can compare two
+   decodes of the same record without knowing its type. *)
+let equal g = g.equal
 let codec g = g.codec
 let binds_env (Pack g) = Option.is_some g.env
 

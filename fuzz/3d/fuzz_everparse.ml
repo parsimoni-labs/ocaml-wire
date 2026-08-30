@@ -234,6 +234,106 @@ let corpus_oracle_case (label, Fuzz_gen.Pack g) =
                   hex spans)
             lines)
 
+(* {1 What a corpus line carries beyond its verdict}
+
+   Each line pairs an env with a buffer the codec accepts or rejects, so both
+   sides answer more than the verdict. An accepted buffer has to agree with
+   what the codec says it would encode, and a rejected one has to say which
+   field went wrong. Both were places a wrong answer arrived silently: sizing
+   with an unbound param read 0, so a param-sized field measured as empty, and
+   an unmatched tag arrived with no field path at all. *)
+
+(* Re-encoding an accepted record preserves it. Compared through the
+   generator's own equality rather than byte-wise, since a padded region
+   re-encodes to different bytes for the same value. *)
+let reencodes g codec env v sz =
+  let buf = Bytes.create sz in
+  match Wire.Codec.encode ?env codec v buf 0 with
+  | exception Wire.Parse_error e ->
+      Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.pp_parse_error e
+  | () -> (
+      match Wire.Codec.decode ?env codec buf 0 with
+      | Error e ->
+          Fmt.kstr
+            (fun s -> Some s)
+            "re-encoded bytes no longer decode: %a" Wire.pp_parse_error e
+      | Ok v' ->
+          if Fuzz_gen.equal g v v' then None
+          else Some "re-encoding does not preserve the value")
+
+(* An accepted record: the size agrees with the buffer it was read from, and
+   the value survives a round trip. Sizing with an unbound param used to read
+   0, so a param-sized field measured as empty and a caller sizing a buffer
+   from the answer got one too short. *)
+let accepted_agrees g codec env b =
+  match Wire.Codec.decode ?env codec b 0 with
+  | Error _ -> None
+  | Ok v -> (
+      let len = Bytes.length b in
+      match Wire.Codec.size_of_value ?env codec v with
+      | exception Invalid_argument m ->
+          Fmt.kstr
+            (fun s -> Some s)
+            "size_of_value refused an accepted record: %s" m
+      | sz when not (Int.equal sz len) ->
+          Fmt.kstr
+            (fun s -> Some s)
+            "size_of_value answers %d for a %d byte record" sz len
+      | sz -> reencodes g codec env v sz)
+
+(* A rejected record: the offset is a real position, and a failure about one
+   field's value names that field. A path may legitimately be empty at a
+   top-level or anonymous position, so only the kinds that always come from a
+   named field are required to carry one. Only the lower bound on the offset is
+   asserted: a record whose declared sizes reach past the buffer is blamed at
+   the offset those sizes imply, which can sit beyond the end. *)
+let rejection_is_attributed codec env b =
+  match Wire.Codec.decode ?env codec b 0 with
+  | Ok _ -> None
+  | Error e -> (
+      if e.Wire.at < 0 then
+        Fmt.kstr (fun s -> Some s) "reports negative offset %d" e.Wire.at
+      else
+        match e.Wire.kind with
+        | (Wire.Invalid_tag _ | Wire.Invalid_enum _ | Wire.Value_out_of_range _)
+          when List.compare_length_with e.Wire.field 0 = 0 ->
+            Fmt.kstr
+              (fun s -> Some s)
+              "blames no field for %a" Wire.pp_error_kind e.Wire.kind
+        | _ -> None)
+
+let corpus_property_case (label, Fuzz_gen.Pack g) =
+  let codec = Fuzz_gen.codec g in
+  Alcobar.test_case
+    ("corpus properties " ^ label)
+    [ const () ]
+    (fun () ->
+      match corpus_lines codec with
+      | exception Failure _ -> ()
+      | lines ->
+          let pnames = input_params codec in
+          List.iter
+            (fun (pvals, hex, verdict) ->
+              let env = env_of codec pnames pvals in
+              let b = bytes_of_hex hex in
+              let checks =
+                if verdict then [ accepted_agrees g codec env b ]
+                else [ rejection_is_attributed codec env b ]
+              in
+              List.iter
+                (function
+                  | None -> ()
+                  | Some msg -> Alcobar.failf "%s: %s (on %s)" label msg hex)
+                checks)
+            lines)
+
+let corpus_property_cases () =
+  if not (normal_mode ()) then []
+  else
+    Fuzz_gen.registry
+    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
+    |> List.map corpus_property_case
+
 let corpus_cases () =
   if not (normal_mode ()) then []
   else
@@ -241,9 +341,53 @@ let corpus_cases () =
     |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
     |> List.map corpus_oracle_case
 
+(* {1 The generated C compiles}
+
+   The wrapper EverParse emits is rewritten after generation to require whole
+   buffer consumption, and that rewrite is textual on a shape EverParse owns.
+   Running 3d.exe does not notice when it stops matching: the schema still
+   verifies and the C is still written, and only a compiler sees that the
+   rewrite spliced in a reference to something no longer declared. Compile a
+   generated schema the way a caller would. *)
+(* Run outside the test case, as the batch check is: generating C runs 3d.exe,
+   whose verification pass takes far longer than a case's time budget. *)
+let c_compile_result =
+  match batch_schemas with
+  | [] -> None
+  | schema :: _ ->
+      let outdir = Filename.temp_dir "wire_fuzz3d_cc" "" in
+      Wire_3d.generate_3d ~outdir [ schema ];
+      Wire_3d.generate_c ~outdir [ schema ];
+      (* Every .c the generator wrote, found by listing rather than by
+         predicting EverParse's naming. *)
+      let cmd =
+        Fmt.str "cd %s && cc %s -c ./*.c 2>&1" (Filename.quote outdir)
+          Wire_3d.strict_cc_flags
+      in
+      let ic = Unix.open_process_in cmd in
+      let out = In_channel.input_all ic in
+      let status = Unix.close_process_in ic in
+      ignore (Fmt.kstr Sys.command "rm -rf %s" (Filename.quote outdir));
+      Some (match status with Unix.WEXITED 0 -> Ok () | _ -> Error out)
+
+let c_compile_cases =
+  match c_compile_result with
+  | None -> []
+  | Some res ->
+      [
+        Alcobar.test_case "generated C compiles"
+          [ const () ]
+          (fun () ->
+            match res with
+            | Ok () -> ()
+            | Error out ->
+                Alcobar.failf "the generated C does not compile:\n%s" out);
+      ]
+
 let suite =
   if Fuzz_gen.file_input_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
   else
     ( "everparse",
-      pp_cases () @ nested_pp_cases () @ corpus_cases () @ extract_cases )
+      pp_cases () @ nested_pp_cases () @ corpus_cases ()
+      @ corpus_property_cases () @ extract_cases @ c_compile_cases )

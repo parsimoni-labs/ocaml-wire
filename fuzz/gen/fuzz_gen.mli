@@ -141,6 +141,10 @@ val validate_cases : string -> 'a t -> Alcobar.test_case list
 (** A gen with its value type hidden, for uniform iteration over {!registry}. *)
 type packed = Pack : 'a t -> packed
 
+val equal : 'a t -> 'a -> 'a -> bool
+(** [equal g a b] is [g]'s own value equality, for comparing two decodes of one
+    record without naming its type. *)
+
 val codec : 'a t -> 'a Wire.Codec.t
 (** [codec g] is the codec [g] generates for. *)
 
