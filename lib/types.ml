@@ -1381,6 +1381,30 @@ type module_ = { doc : string option; decls : decl list }
    bases are skipped: they map to plain bitfields in 3D (the enum/variant
    mapping is OCaml-only). An enum over a big-endian base is skipped too (no 3D
    enum type for it; the field carries a membership refinement instead). *)
+(* Both open and closed enums declare a 3D enum type so the named codes survive
+   in the generated .3d. A closed enum additionally constrains its field with a
+   membership refinement; an open enum leaves the field as its base scalar (any
+   value accepted) while still documenting the known codes through the
+   declaration.
+
+   A second enum under the same name is dropped as a repeat of the first, so
+   two different ones would leave both fields validated against whichever was
+   reached first. *)
+let record_enum seen decls name cases base =
+  let shape =
+    String.concat "," (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
+  in
+  match Hashtbl.find_opt seen name with
+  | Some first when not (String.equal first shape) ->
+      Fmt.invalid_arg
+        "Wire: two different enums are named %S; every field typed by it would \
+         be validated against one of them, so rename one"
+        name
+  | Some _ -> ()
+  | None ->
+      Hashtbl.add seen name shape;
+      decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
+
 let enum_decls (s : struct_) : decl list =
   let seen : (string, string) Hashtbl.t = Hashtbl.create 4 in
   let decls = Stdlib.ref [] in
@@ -1392,31 +1416,8 @@ let enum_decls (s : struct_) : decl list =
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
         | Enum { name; cases; base; _ }
-          when (not (is_bits base)) && not (enum_base_is_be base) -> (
-            (* Both open and closed enums declare a 3D enum type so the named
-               codes survive in the generated .3d. A closed enum additionally
-               constrains its field with a membership refinement; an open enum
-               leaves the field as its base scalar (any value accepted) while
-               still documenting the known codes through the declaration.
-
-               A second enum under the same name is dropped as a repeat of the
-               first, so two different ones would leave both fields validated
-               against whichever was reached first. *)
-            let shape =
-              String.concat ","
-                (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
-            in
-            match Hashtbl.find_opt seen name with
-            | Some first when not (String.equal first shape) ->
-                Fmt.invalid_arg
-                  "Wire: two different enums are named %S; every field typed \
-                   by it would be validated against one of them, so rename one"
-                  name
-            | Some _ -> ()
-            | None ->
-                Hashtbl.add seen name shape;
-                decls :=
-                  Enum_decl { name; cases; base = Pack_typ base } :: !decls)
+          when (not (is_bits base)) && not (enum_base_is_be base) ->
+            record_enum seen decls name cases base
         | Map { inner; _ } -> extract inner
         | Where { inner; _ } -> extract inner
         (* An enum can sit inside a container (an array or repeat element, an
