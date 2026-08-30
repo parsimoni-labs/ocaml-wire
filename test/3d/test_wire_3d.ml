@@ -1036,7 +1036,7 @@ let test_wrapper_hardening_refuses_unknown_shape () =
    cc/ld fails and the test fails with the actual compiler error.
    Parameterised over the schema so tricky names (underscores, all-
    caps prefixes, mixed case) each exercise the pipeline end-to-end. *)
-let compile_and_run ~name codec =
+let compile_generated ?(run = true) ~name codec =
   needs_3d_exe ();
   begin
     let tmpdir = Filename.temp_dir ("wire_3d_e2e_" ^ name) "" in
@@ -1048,9 +1048,9 @@ let compile_and_run ~name codec =
       (* Compile with the exact strict-C11 flags the generated dune emits, so
          the e2e checks the validators under the same standard a downstream
          caller would. *)
-      Fmt.str
-        "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1 && ./test_bin"
-        tmpdir Wire_3d.strict_cc_flags base base
+      Fmt.str "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1%s" tmpdir
+        Wire_3d.strict_cc_flags base base
+        (if run then " && ./test_bin" else "")
     in
     let ic = Unix.open_process_in cmd in
     let output = In_channel.input_all ic in
@@ -1063,6 +1063,9 @@ let compile_and_run ~name codec =
     | _ ->
         Alcotest.failf "%s: compile/run terminated abnormally:\n%s" name output
   end
+
+let compile_and_run = compile_generated
+let compile_only = compile_generated ~run:false
 
 (* Schemas exercising every name-normalization edge case we know about. *)
 let e2e_simple_codec =
@@ -1269,21 +1272,20 @@ let e2e_repeat_casetype_codec =
       Codec.( $ ) f_opts (fun xs -> xs);
     ]
 
-(* Zero-terminated strings: [name] runs to a NUL, [tag] is NUL-terminated
-   within a fixed region, then a trailing scalar. Projects to the 3D
-   [field[:zeroterm]] and [field[:zeroterm-byte-size-at-most n]] forms. *)
+(* A [zeroterm] field extracts only as a one-field struct (EverParse #321). *)
 let e2e_zeroterm_codec =
   let open Wire in
   let f_name = Field.v "name" zeroterm in
+  Codec.v "ZtRec" Fun.id Codec.[ f_name $ Fun.id ]
+
+(* The bounded form extracts beside other fields. *)
+let e2e_zeroterm_at_most_codec =
+  let open Wire in
   let f_tag = Field.v "tag" (zeroterm_at_most ~size:(int 8)) in
   let f_n = Field.v "n" uint8 in
-  Codec.v "ZtRec"
-    (fun name tag n -> (name, tag, n))
-    [
-      Codec.( $ ) f_name (fun (s, _, _) -> s);
-      Codec.( $ ) f_tag (fun (_, t, _) -> t);
-      Codec.( $ ) f_n (fun (_, _, n) -> n);
-    ]
+  Codec.v "ZtAtMostRec"
+    (fun tag n -> (tag, n))
+    [ Codec.( $ ) f_tag fst; Codec.( $ ) f_n snd ]
 
 (* Embedded variable-size sub-codec via the WireSet* setter path, with a
    field after it (SSH Disconnect shape: a length-prefixed [SshString] is not
@@ -1402,6 +1404,9 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"OptVarRec" e2e_optional_var_codec;
   compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
   compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;
+  (* The bounded terminator is a value constraint, so arbitrary random bytes
+     are not all valid. Compiling still exercises the extraction path. *)
+  compile_only ~name:"ZtAtMostRec" e2e_zeroterm_at_most_codec;
   compile_and_run ~name:"CLCW" e2e_allcaps_codec;
   compile_and_run ~name:"TMFrame" e2e_tm_codec;
   compile_and_run ~name:"Ctt" e2e_casetype_codec;

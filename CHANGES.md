@@ -45,6 +45,11 @@
 
 ### Fixed
 
+- `Codec.v` rejects a non-final string-tagged `casetype`, a non-scalar
+  field refinement and a `zeroterm` field with siblings, instead of letting
+  EverParse fail later while compiling or extracting their validators
+  (#XXX, @samoht)
+
 - A casetype in the generated C dispatches on every tag type it does in OCaml,
   and a case body keeps the refinement its type carries. With a `variants`, a
   `lookup`, a plain `map` or a bare `uint64` tag the union was validated as a
