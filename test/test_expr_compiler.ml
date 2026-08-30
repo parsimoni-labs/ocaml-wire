@@ -73,6 +73,22 @@ let test_arithmetic () =
     "nested" 13
     (eval_int (Types.Add (a, Types.Sub (b, int 0))))
 
+let test_arithmetic_overflow () =
+  let check name e =
+    match eval_int e with
+    | n -> Alcotest.failf "%s: overflow produced %d" name n
+    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+    | exception exn ->
+        Alcotest.failf "%s: expected Value_out_of_range, got %s" name
+          (Printexc.to_string exn)
+  in
+  (* These are not merely just past the native-int boundary: unchecked
+     arithmetic wraps each mathematical result to zero or one, exactly the
+     small sizes that used to pass a byte-span bounds check. *)
+  check "Add" (Types.Add (Types.Add (int max_int, int max_int), int 2));
+  check "Sub" (Types.Add (Types.Sub (int max_int, int min_int), int 1));
+  check "Mul" (Types.Mul (int max_int, int max_int))
+
 (* [Div] and [Mod] are OCaml's, which truncate towards zero rather than
    flooring: a size expression over a negative intermediate must round the way
    the generated C rounds. *)
@@ -278,6 +294,7 @@ let suite =
     [
       Alcotest.test_case "leaves" `Quick test_leaves;
       Alcotest.test_case "arithmetic" `Quick test_arithmetic;
+      Alcotest.test_case "arithmetic overflow" `Quick test_arithmetic_overflow;
       Alcotest.test_case "div and mod" `Quick test_div_mod;
       Alcotest.test_case "div by zero is deferred" `Quick
         test_div_by_zero_is_deferred;

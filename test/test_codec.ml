@@ -5294,6 +5294,71 @@ let test_dep_size_out_of_range () =
             pp_parse_error e)
     cases
 
+let overflowing_span_codec name size =
+  let f_len = Field.v "Len" uint64be in
+  let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_len))) in
+  Codec.v name (fun len data -> (len, data)) Codec.[ f_len $ fst; f_data $ snd ]
+
+let test_dep_size_arithmetic_overflow () =
+  let int = Wire.int in
+  let codecs =
+    [
+      ( "Add",
+        overflowing_span_codec "AddOverflow" (fun n -> Expr.(n + n + int 2)) );
+      ( "Sub",
+        overflowing_span_codec "SubOverflow" (fun n ->
+            Expr.(n - int min_int + int 1)) );
+      ("Mul", overflowing_span_codec "MulOverflow" (fun n -> Expr.(n * n)));
+    ]
+  in
+  let base = 5 in
+  let buf = Bytes.make (base + 9) '\000' in
+  Bytes.set_int64_be buf base (Int64.of_int max_int);
+  List.iter
+    (fun (name, codec) ->
+      (match Codec.decode codec buf base with
+      | Error { at; kind = Value_out_of_range _; _ } ->
+          Alcotest.(check int) (name ^ " decode offset") base at
+      | Error e ->
+          Alcotest.failf "%s decode: expected Value_out_of_range, got %a" name
+            pp_parse_error e
+      | Ok _ -> Alcotest.failf "%s decode: accepted the wrapped span" name);
+      match Codec.validate codec buf base with
+      | () -> Alcotest.failf "%s validate: accepted the wrapped span" name
+      | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
+          Alcotest.(check int) (name ^ " validate offset") base at
+      | exception exn ->
+          Alcotest.failf "%s validate: expected Value_out_of_range, got %s" name
+            (Printexc.to_string exn))
+    codecs
+
+let test_where_arithmetic_overflow_offset () =
+  let f_a = Field.v "a" uint8 in
+  let f_b = Field.v "b" uint8 in
+  let codec =
+    Codec.v "WhereOverflow"
+      ~where:Expr.(int max_int - Field.ref f_a + Field.ref f_b >= int 0)
+      (fun a b -> (a, b))
+      Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let base = 5 in
+  let buf = Bytes.make (base + 2) '\000' in
+  Bytes.set_uint8 buf (base + 1) 1;
+  (match Codec.decode codec buf base with
+  | Error { at; kind = Value_out_of_range _; _ } ->
+      Alcotest.(check int) "decode offset" base at
+  | Error e ->
+      Alcotest.failf "decode: expected Value_out_of_range, got %a"
+        pp_parse_error e
+  | Ok _ -> Alcotest.fail "decode accepted overflowing where expression");
+  match Codec.validate codec buf base with
+  | () -> Alcotest.fail "validate accepted overflowing where expression"
+  | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
+      Alcotest.(check int) "validate offset" base at
+  | exception exn ->
+      Alcotest.failf "validate: expected Value_out_of_range, got %s"
+        (Printexc.to_string exn)
+
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
   let f_sz = Field.v "Size" uint8 in
@@ -9726,6 +9791,10 @@ let suite =
       Alcotest.test_case "dep: u64 size in range" `Quick test_dep_size_in_range;
       Alcotest.test_case "dep: u64 size out of range raises" `Quick
         test_dep_size_out_of_range;
+      Alcotest.test_case "dep: size arithmetic overflow raises" `Quick
+        test_dep_size_arithmetic_overflow;
+      Alcotest.test_case "codec: where arithmetic overflow offset" `Quick
+        test_where_arithmetic_overflow_offset;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;
       (* struct_of_codec for variable-size codecs *)

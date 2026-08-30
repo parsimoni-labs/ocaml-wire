@@ -126,6 +126,17 @@ let test_cast_negative () =
   let v = Eval.expr Eval.empty (Types.Cast (`U8, Types.Int (-1))) in
   Alcotest.(check int) "cast U8 of -1" 0xFF v
 
+let test_expr_arithmetic_overflow () =
+  let int n : int Types.expr = Types.Int n in
+  List.iter
+    (fun (name, e) ->
+      raises_out_of_range name (fun () -> Eval.expr Eval.empty e))
+    [
+      ("Add", Types.Add (Types.Add (int max_int, int max_int), int 2));
+      ("Sub", Types.Add (Types.Sub (int max_int, int min_int), int 1));
+      ("Mul", Types.Mul (int max_int, int max_int));
+    ]
+
 let suite =
   ( "eval",
     [
@@ -136,6 +147,8 @@ let suite =
       Alcotest.test_case "int_of_exn non-integer raises" `Quick
         test_int_of_exn_non_integer;
       Alcotest.test_case "expr constants" `Quick test_expr_const;
+      Alcotest.test_case "expr arithmetic overflow" `Quick
+        test_expr_arithmetic_overflow;
       Alcotest.test_case "expr Ref fails" `Quick test_expr_ref_fails;
       Alcotest.test_case "cast U8" `Quick test_cast_u8;
       Alcotest.test_case "cast U16" `Quick test_cast_u16;
