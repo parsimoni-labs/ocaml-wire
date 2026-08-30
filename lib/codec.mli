@@ -55,10 +55,14 @@ val wire_size : 'r t -> int
 val min_wire_size : 'r t -> int
 (** Minimum wire size in bytes (for variable-length codecs). *)
 
-val wire_size_at : 'r t -> bytes -> int -> int
-(** Compute the actual wire size from a buffer at a given offset. *)
+val wire_size_at : ?env:Param.env -> 'r t -> bytes -> int -> int
+(** Compute the actual wire size from a buffer at a given offset. A codec whose
+    field sizes are driven by an input param needs [?env] to resolve them, and
+    raises [Invalid_argument] without it, the same as {!decode}: an unbound
+    param reads 0, which would silently measure a param-sized field as empty and
+    report an extent shorter than the record. *)
 
-val size_of_value : 'r t -> 'r -> int
+val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
 (** [size_of_value c v] returns the number of bytes that [encode c v] will
     write. Computed from [v], not from a buffer: works for variable-size codecs
     whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
@@ -69,6 +73,10 @@ val size_of_value : 'r t -> 'r -> int
     Raises [Invalid_argument] for a value {!encode} would refuse, such as a
     casetype value no case projects: there is no size to report for bytes that
     cannot be written. *)
+
+val size_of_value_ctx : 'r t -> Types.eval_ctx -> 'r -> int
+(** Context-threaded {!size_of_value}, for an embedded sub-codec whose parent
+    already holds the evaluation context. Internal use. *)
 
 val is_fixed : 'r t -> bool
 (** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)

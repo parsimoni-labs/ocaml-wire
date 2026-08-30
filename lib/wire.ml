@@ -71,7 +71,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_encode = Codec.embed_encode_ctx c in
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
-  let codec_size_of_value = Codec.size_of_value c in
+  let codec_size_of_value = Codec.size_of_value_ctx c in
   let codec_min_size = Codec.min_wire_size c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
@@ -857,7 +857,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
       write_string enc (Bytes.sub_string src off len)
   | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
-      let inner_sz = Types.size_of_typ_value elem v in
+      let inner_sz = Types.size_of_typ_value Types.unbound_eval_ctx elem v in
       Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
       encode_into elem v enc;
       for _ = inner_sz to n - 1 do
@@ -872,7 +872,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
       encode_codec
         ~encode:(fun v buf off -> codec_encode v Types.unbound_eval_ctx buf off)
-        ~fixed_size:codec_fixed_size ~size_of_value:codec_size_of_value v enc
+        ~fixed_size:codec_fixed_size
+        ~size_of_value:(codec_size_of_value Types.unbound_eval_ctx)
+        v enc
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
   | Optional_or { present; inner; _ } ->
@@ -880,7 +882,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Repeat { size; elem; seq } ->
       let expected = Eval.expr Eval.empty size in
       Types.exact_repeat_elements seq ~expected
-        ~size_of:(Types.size_of_typ_value elem)
+        ~size_of:(Types.size_of_typ_value Types.unbound_eval_ctx elem)
         v
       |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
@@ -997,7 +999,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
   | Byte_array { size = Int n } -> Codec.blit_string_exact n buf off v
   | Byte_slice { size = Int n } -> Codec.blit_slice_exact n buf off v
   | Single_elem { size = Int n; elem; at_most } ->
-      let inner_sz = Types.size_of_typ_value elem v in
+      let inner_sz = Types.size_of_typ_value Types.unbound_eval_ctx elem v in
       Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
       let off' = encode_direct elem buf off v in
       if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';

@@ -96,6 +96,14 @@ let map_decode ~index_bound decode =
       fun ~at v ->
         try decode v with Parse_error e -> raise (Parse_error { e with at }))
 
+(* [int_of_exn] is handed a value and nothing else, so an out-of-range one has
+   no offset to name and reports 0, the same blind spot [map_decode] covers for
+   a lookup. A reader knows where it found the value, so relocate the failure
+   there; only a carrier wider than the native int can raise, and the handler is
+   installed only for those, so a byte- or word-wide read pays nothing. *)
+let relocate_at ~at f =
+  try f () with Parse_error e -> raise (Parse_error { e with at })
+
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })
 
@@ -259,7 +267,7 @@ and _ typ =
              on their own extent rather than on a span sized from bytes outside
              it. *)
       codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
-      codec_size_of_value : 'r -> int;
+      codec_size_of_value : eval_ctx -> 'r -> int;
           (* Encoded byte length of a value, computed from the value rather
              than by re-reading the buffer. The buffer-driven [codec_size_of]
              is wrong for variable-size codecs ending in [all_bytes] /
@@ -442,29 +450,48 @@ let const_cast width v =
   | `U32 -> v land UInt32.mask32
   | `U64 -> v
 
-let rec const_int_expr : int expr -> int option = function
+(* The arithmetic is shared between two readers of a size expression: constant
+   folding at construction, where no leaf resolves, and value-driven sizing at
+   encode, where a bound parameter does. [leaf] is what each makes of the
+   irreducible nodes. *)
+let rec int_expr_with : (int expr -> int option) -> int expr -> int option =
+ fun leaf e ->
+  match e with
   | Int n -> Some n
-  | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> None
-  | Add (a, b) -> const_binop const_add a b
-  | Sub (a, b) -> const_binop const_sub a b
-  | Mul (a, b) -> const_binop const_mul a b
-  | Div (a, b) -> const_binop const_div a b
-  | Mod (a, b) -> const_binop const_rem a b
-  | Land (a, b) -> const_binop (fun a b -> Some (a land b)) a b
-  | Lor (a, b) -> const_binop (fun a b -> Some (a lor b)) a b
-  | Lxor (a, b) -> const_binop (fun a b -> Some (a lxor b)) a b
-  | Lnot a -> Option.map lnot (const_int_expr a)
-  | Lsl (a, b) -> const_binop const_shift_left a b
-  | Lsr (a, b) -> const_binop const_shift_right a b
-  | Cast (width, e) -> Option.map (const_cast width) (const_int_expr e)
+  | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> leaf e
+  | Add (a, b) -> int_binop leaf const_add a b
+  | Sub (a, b) -> int_binop leaf const_sub a b
+  | Mul (a, b) -> int_binop leaf const_mul a b
+  | Div (a, b) -> int_binop leaf const_div a b
+  | Mod (a, b) -> int_binop leaf const_rem a b
+  | Land (a, b) -> int_binop leaf (fun a b -> Some (a land b)) a b
+  | Lor (a, b) -> int_binop leaf (fun a b -> Some (a lor b)) a b
+  | Lxor (a, b) -> int_binop leaf (fun a b -> Some (a lxor b)) a b
+  | Lnot a -> Option.map lnot (int_expr_with leaf a)
+  | Lsl (a, b) -> int_binop leaf const_shift_left a b
+  | Lsr (a, b) -> int_binop leaf const_shift_right a b
+  | Cast (width, e) -> Option.map (const_cast width) (int_expr_with leaf e)
   (* A constant condition would need the same pass over [bool expr]; leave the
      whole node symbolic. *)
   | If_then_else _ -> None
 
-and const_binop f a b =
-  match (const_int_expr a, const_int_expr b) with
+and int_binop leaf f a b =
+  match (int_expr_with leaf a, int_expr_with leaf b) with
   | Some a, Some b -> f a b
   | None, _ | _, None -> None
+
+let const_int_expr e = int_expr_with (fun _ -> None) e
+
+(* A size expression resolved as far as the encode-side context allows. A bound
+   input parameter answers; a reference to a sibling field or to a position does
+   not, because a value on its own does not carry the record around it. *)
+let size_in_ctx ctx e =
+  match ctx with
+  | Unbound -> None
+  | Bound _ ->
+      int_expr_with
+        (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)
+        e
 
 (* [fold_size e] is [e] with a reference-free constant folded to its literal.
    Every smart constructor taking a size or length expression runs its argument
@@ -572,6 +599,21 @@ let rec int_of : type a. a typ -> a -> int option =
   | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
   | Repeat _ ->
       None
+
+(* Whether every value of a carrier fits the native int, so its integer view
+   cannot fail. A reader over one of these needs no relocating handler: the
+   narrow widths always fit, and the wide ones depend on [Sys.int_size], which
+   is 63 on a native build and 31 under wasm_of_ocaml. *)
+let rec int_view_is_total : type a. a typ -> bool = function
+  | Uint8 | Int8 | Uint16 _ | Int16 _ | Bits _ -> true
+  | Uint32 _ | Int32 _ -> Sys.int_size > 32
+  | Uint64 _ | Int64 _ | Uint_var _ -> false
+  | Enum { base; _ } -> int_view_is_total base
+  | Where { inner; _ } -> int_view_is_total inner
+  | Single_elem { elem; _ } -> int_view_is_total elem
+  | Apply { typ; _ } -> int_view_is_total typ
+  | Map { inner; _ } -> int_view_is_total inner
+  | _ -> false
 
 (* Hot-path variant of [int_of] for the cross-field size/offset/present
    readers, which need a plain [int]. Returns it directly (no [Some] box on the
@@ -780,7 +822,12 @@ let exact_repeat_elements seq ~expected ~size_of values =
   in
   let actual = List.fold_left (fun total (_, size) -> total + size) 0 sized in
   if actual <> expected then
-    Fmt.invalid_arg "Wire.repeat: expected %d bytes, got %d" expected actual;
+    Fmt.invalid_arg
+      "Wire.repeat: byte budget is %d but the elements span %d. The budget is \
+       the region size the description declares, and encode holds the values \
+       to it; if that size is not known where the codec is built, take it as a \
+       Param.input and bind it per call rather than baking in a literal."
+      expected actual;
   sized
 
 (* A fixed-size byte field is exact. Truncating a long value or zero-padding a
@@ -1334,8 +1381,32 @@ type module_ = { doc : string option; decls : decl list }
    bases are skipped: they map to plain bitfields in 3D (the enum/variant
    mapping is OCaml-only). An enum over a big-endian base is skipped too (no 3D
    enum type for it; the field carries a membership refinement instead). *)
+(* Both open and closed enums declare a 3D enum type so the named codes survive
+   in the generated .3d. A closed enum additionally constrains its field with a
+   membership refinement; an open enum leaves the field as its base scalar (any
+   value accepted) while still documenting the known codes through the
+   declaration.
+
+   A second enum under the same name is dropped as a repeat of the first, so
+   two different ones would leave both fields validated against whichever was
+   reached first. *)
+let record_enum seen decls name cases base =
+  let shape =
+    String.concat "," (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
+  in
+  match Hashtbl.find_opt seen name with
+  | Some first when not (String.equal first shape) ->
+      Fmt.invalid_arg
+        "Wire: two different enums are named %S; every field typed by it would \
+         be validated against one of them, so rename one"
+        name
+  | Some _ -> ()
+  | None ->
+      Hashtbl.add seen name shape;
+      decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
+
 let enum_decls (s : struct_) : decl list =
-  let seen = Hashtbl.create 4 in
+  let seen : (string, string) Hashtbl.t = Hashtbl.create 4 in
   let decls = Stdlib.ref [] in
   let is_bits : type a. a typ -> bool = function
     | Bits _ -> true
@@ -1345,16 +1416,8 @@ let enum_decls (s : struct_) : decl list =
     (fun (Field f) ->
       let rec extract : type a. a typ -> unit = function
         | Enum { name; cases; base; _ }
-          when (not (Hashtbl.mem seen name))
-               && (not (is_bits base))
-               && not (enum_base_is_be base) ->
-            (* Both open and closed enums declare a 3D enum type so the named
-               codes survive in the generated .3d. A closed enum additionally
-               constrains its field with a membership refinement; an open enum
-               leaves the field as its base scalar (any value accepted) while
-               still documenting the known codes through the declaration. *)
-            Hashtbl.add seen name ();
-            decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
+          when (not (is_bits base)) && not (enum_base_is_be base) ->
+            record_enum seen decls name cases base
         | Map { inner; _ } -> extract inner
         | Where { inner; _ } -> extract inner
         (* An enum can sit inside a container (an array or repeat element, an
@@ -1437,7 +1500,7 @@ let emit_enum_elem_struct seen acc elem =
   | Some (name, base, (_ :: _ as cases)) ->
       let sname = enum_elem_struct_name name in
       if not (Hashtbl.mem seen sname) then begin
-        Hashtbl.add seen sname ();
+        Hashtbl.add seen sname sname;
         Option.iter
           (fun d -> acc := d :: !acc)
           (enum_elem_struct_decl name base cases)
@@ -1459,11 +1522,14 @@ let list_elem_pp : type a.
 (* True for tag types that the 3D side can dispatch on natively: integer-
    shaped scalars plus enums. String/byte tags use the two-step shape
    (split into adjacent fields, dispatch in caller code) instead. *)
-let is_int_dispatch_typ : type a. a typ -> bool = function
-  | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ | Int8 | Int16 _ | Int32 _ | Bits _
-  | Enum _ ->
-      true
-  | _ -> false
+(* Whether a casetype dispatches on an integer tag. This has to admit exactly
+   what [case_index_to_expr] can project, which is every carrier with an integer
+   view: disagreeing sends the casetype down the string-tag rewrite, where the
+   whole union collapses to a tag plus [all_bytes] and the generated validator
+   checks no case body at all. A [variants] or [lookup] tag is a [Map] over an
+   integer and dispatches like one. *)
+let is_int_dispatch_typ : type a. a typ -> bool =
+ fun typ -> is_int_representable typ
 
 let int32_case_index k =
   match SInt32.to_int_opt k with
@@ -1492,23 +1558,61 @@ let uint_var_case_index k =
         "Wire.casetype: case index %a does not fit this platform's native int"
         UInt63.pp k
 
+(* Both widths project to 3D's UINT64, so the case label is the unsigned
+   reinterpretation of the eight wire bytes -- which is what [int_of] reads out
+   of them, and what the generated [switch] compares against. *)
+let uint64_case_index k =
+  match UInt64.to_int_opt k with
+  | Some index -> index
+  | None ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %Lu does not fit this platform's native int"
+        (UInt64.to_int64 k)
+
+let int64_case_index k =
+  match Int64.unsigned_to_int k with
+  | Some index -> index
+  | None ->
+      Fmt.invalid_arg
+        "Wire.casetype: case index %Lu does not fit this platform's native int"
+        k
+
 (* Project a case-branch discriminator value of type ['k] to a 3D constant
-   expression. Only called for int-shaped tags; non-int tags don't reach
-   here because their casetype field is rewritten away before
-   [casetype_decls_of_struct] walks it. *)
+   expression. Only called for int-shaped tags; non-int tags don't reach here
+   because their casetype field is rewritten away before
+   [casetype_decls_of_struct] walks it.
+
+   [is_int_dispatch_typ] lets an [Enum] through whatever its base, and [enum]
+   takes any base [is_int_representable] accepts, so every integer carrier
+   reachable that way has to be covered here -- the transparent [map] / [where]
+   / [nested] / [apply] wrappers a [variants] or [lookup] base carries
+   included. The match is left exhaustive so a new typ constructor is a
+   compile error rather than a crash on a schema that uses it. *)
 let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
  fun tag_typ k ->
   match tag_typ with
   | Uint8 -> Pack_expr (Int (UInt8.to_int k))
   | Uint16 _ -> Pack_expr (Int (UInt16.to_int k))
   | Uint32 _ -> Pack_expr (Int (uint32_case_index k))
+  | Uint64 _ -> Pack_expr (Int (uint64_case_index k))
   | Uint_var _ -> Pack_expr (Int (uint_var_case_index k))
   | Int8 -> Pack_expr (Int (SInt8.to_int k))
   | Int16 _ -> Pack_expr (Int (SInt16.to_int k))
   | Int32 _ -> Pack_expr (Int (int32_case_index k))
+  | Int64 _ -> Pack_expr (Int (int64_case_index k))
   | Bits _ -> Pack_expr (Int k)
   | Enum { base; _ } -> case_index_to_expr base k
-  | _ -> assert false (* guarded by [is_int_dispatch_typ] *)
+  | Map { inner; encode; _ } -> case_index_to_expr inner (encode k)
+  | Where { inner; _ } -> case_index_to_expr inner k
+  | Single_elem { elem; _ } -> case_index_to_expr elem k
+  | Apply { typ; _ } -> case_index_to_expr typ k
+  | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
+  | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
+  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
+  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+      invalid_arg
+        "Wire.casetype: this tag type carries no integer case index; use a \
+         fixed-width integer, bitfield, or enum tag."
 
 (* Auto-emit a dispatch + wrapper for each [Casetype] used in a struct.
 
@@ -1562,6 +1666,33 @@ let repeat_elem_struct : type a. a typ -> string option = function
   | Zeroterm -> Some "ZtElem"
   | _ -> None
 
+let endian_tag = function Little -> "l" | Big -> "b"
+
+let bitfield_base_tag = function
+  | U8 -> "u8"
+  | U16 e -> "u16" ^ endian_tag e
+  | U32 e -> "u32" ^ endian_tag e
+
+let bit_order_tag = function Msb_first -> "m" | Lsb_first -> "l"
+
+let cast_tag = function
+  | `U8 -> "8"
+  | `U16 -> "16"
+  | `U32 -> "32"
+  | `U64 -> "64"
+
+(* A decimal literal as an identifier fragment: a negative one leads with [m],
+   since [-] is no part of an identifier. *)
+let literal_tag s =
+  if String.length s > 0 && s.[0] = '-' then
+    "m" ^ String.sub s 1 (String.length s - 1)
+  else s
+
+(* An [elt_var] is bound by the refined-byte struct its span renders through, so
+   it is not free here; and the counter that makes it unique would make two
+   identically shaped spans look different, so it does not name itself either. *)
+let is_elt_var name = String.starts_with ~prefix:elt_var_prefix name
+
 (* A [nested ~size] projects to [<elem>[:byte-size-single-element-array n]],
    whose element must be a single type token. A bare scalar or an already-named
    struct ([codec] / [casetype]) works inline, but an element that renders with
@@ -1570,45 +1701,176 @@ let repeat_elem_struct : type a. a typ -> string option = function
    declaration ([enum]) cannot. Those go through a synthesised wrapper struct,
    named deterministically from the element so the field renderer and the
    typedef emitter agree without shared state. *)
+
 (* A deterministic, collision-free identifier fragment for an inner type, used
-   to name its synthesised wrapper struct. Two structurally equal inners get the
-   same fragment (so their wrapper is shared); different shapes differ. *)
-let rec wrap_tag : type a. a typ -> string = function
-  | Uint8 -> "u8"
-  | Uint16 Little -> "u16l"
-  | Uint16 Big -> "u16b"
-  | Uint32 Little -> "u32l"
-  | Uint32 Big -> "u32b"
-  | Uint64 Little -> "u64l"
-  | Uint64 Big -> "u64b"
-  | Int8 -> "i8"
-  | Int16 Little -> "i16l"
-  | Int16 Big -> "i16b"
-  | Int32 Little -> "i32l"
-  | Int32 Big -> "i32b"
-  | Int64 Little -> "i64l"
-  | Int64 Big -> "i64b"
-  | Float32 _ -> "f32"
-  | Float64 _ -> "f64"
-  | Uint_var { size = Int n; _ } -> Fmt.str "uv%d" n
-  | Bits { width; _ } -> Fmt.str "bf%d" width
-  | Byte_array { size = Int n } -> Fmt.str "ba%d" n
-  | Byte_slice { size = Int n } -> Fmt.str "bs%d" n
-  | Byte_array_where { size = Int n; _ } -> Fmt.str "rb%d" n
-  | Zeroterm -> "zt"
-  | Zeroterm_at_most { size = Int n } -> Fmt.str "ztam%d" n
-  | Unit -> "unit"
-  | Enum { name; _ } -> "e" ^ name
-  | Map { inner; _ } -> wrap_tag inner
-  | Where { inner; _ } -> wrap_tag inner
-  | Array { len = Int n; elem; _ } -> Fmt.str "arr%d_%s" n (wrap_tag elem)
-  | Single_elem { size = Int n; elem; _ } -> Fmt.str "se%d_%s" n (wrap_tag elem)
-  | Optional { inner; _ } -> "opt_" ^ wrap_tag inner
-  | Optional_or { inner; _ } -> "optd_" ^ wrap_tag inner
-  | Repeat { elem; _ } -> "rep_" ^ wrap_tag elem
-  | Codec { codec_name; _ } -> codec_name
-  | Casetype { name; _ } -> name
-  | _ -> "x"
+   to name its synthesised wrapper struct, paired with the formals that wrapper
+   has to declare. Two structurally equal inners get the same fragment (so their
+   wrapper is shared); different shapes differ, which is why the match is total:
+   a catch-all names unrelated shapes alike, and the second is then dropped as a
+   repeat of the first and its field validated as the first's element.
+
+   A wrapper struct is a 3D scope of its own, so a size expression naming a
+   field of the enclosing struct has nothing to resolve against inside it. Those
+   names come back as [UINT32] formals, the type 3D gives every byte-size
+   expression (it widens a narrower argument to it, and refuses a wider one
+   rather than truncating); a bound parameter comes back as its own declared
+   type. The use site passes each one on by name. A sub-codec or a casetype
+   keeps a scope of its own and applies its own arguments, so nothing is lifted
+   through one.
+
+   Pure, so it can be compared where the declaration itself cannot. *)
+let rec wrap_shape : type a. a typ -> string * param list =
+ fun typ ->
+  let plain tag = (tag, []) in
+  let sized prefix size =
+    let tag, formals = expr_shape size in
+    (prefix ^ tag, formals)
+  in
+  let over prefix size elem =
+    let stag, sformals = expr_shape size in
+    let etag, eformals = wrap_shape elem in
+    (Fmt.str "%s%s_%s" prefix stag etag, sformals @ eformals)
+  in
+  match typ with
+  | Uint8 -> plain "u8"
+  | Uint16 e -> plain ("u16" ^ endian_tag e)
+  | Uint32 e -> plain ("u32" ^ endian_tag e)
+  | Uint64 e -> plain ("u64" ^ endian_tag e)
+  | Int8 -> plain "i8"
+  | Int16 e -> plain ("i16" ^ endian_tag e)
+  | Int32 e -> plain ("i32" ^ endian_tag e)
+  | Int64 e -> plain ("i64" ^ endian_tag e)
+  | Float32 e -> plain ("f32" ^ endian_tag e)
+  | Float64 e -> plain ("f64" ^ endian_tag e)
+  | Uint_var { size; endian } -> sized ("uv" ^ endian_tag endian) size
+  | Bits { width; base; bit_order } ->
+      Fmt.kstr plain "bf%d%s%s" width (bitfield_base_tag base)
+        (bit_order_tag bit_order)
+  | Unit -> plain "unit"
+  | All_bytes -> plain "all"
+  | All_zeros -> plain "zeros"
+  | Zeroterm -> plain "zt"
+  | Zeroterm_at_most { size } -> sized "ztam" size
+  | Byte_array { size } -> sized "ba" size
+  | Byte_slice { size } -> sized "bs" size
+  | Byte_array_where { size; cond; _ } ->
+      (* The per-byte constraint tells two spans of one size apart, but it
+         renders in their own [_RefByte_*] struct and resolves there, so it
+         lifts nothing here. *)
+      let stag, sformals = expr_shape size in
+      let ctag, _ = expr_shape cond in
+      (Fmt.str "rb%s_%s" stag ctag, sformals)
+  | Where { cond; inner } ->
+      let ctag, cformals = expr_shape cond in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "w%s_%s" ctag itag, cformals @ iformals)
+  | Array { len; elem; _ } -> over "arr" len elem
+  | Single_elem { size; elem; at_most } ->
+      over (if at_most then "seam" else "se") size elem
+  | Repeat { size; elem; _ } -> over "rep" size elem
+  | Optional { present; inner } ->
+      let ptag, pformals = expr_shape present in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "opt%s_%s" ptag itag, pformals @ iformals)
+  | Optional_or { present; inner; _ } ->
+      let ptag, pformals = expr_shape present in
+      let itag, iformals = wrap_shape inner in
+      (Fmt.str "optd%s_%s" ptag itag, pformals @ iformals)
+  | Enum { name; _ } -> plain ("e" ^ name)
+  | Casetype { name; _ } -> plain name
+  | Struct { name; _ } -> plain name
+  | Type_ref name -> plain name
+  | Qualified_ref { module_; name } -> plain (module_ ^ "_" ^ name)
+  | Map { inner; _ } -> wrap_shape inner
+  | Apply { typ; args } ->
+      let ttag, _ = wrap_shape typ in
+      let atags, aformals =
+        List.split (List.map (fun (Pack_expr e) -> expr_shape e) args)
+      in
+      (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
+  | Codec { codec_name; _ } -> plain codec_name
+
+and expr_shape : type a. a expr -> string * param list =
+ fun e ->
+  let un op x =
+    let tag, formals = expr_shape x in
+    (Fmt.str "%s_%s" op tag, formals)
+  in
+  let bin : type b c. string -> b expr -> c expr -> string * param list =
+   fun op x y ->
+    let xtag, xformals = expr_shape x in
+    let ytag, yformals = expr_shape y in
+    (Fmt.str "%s_%s_%s" op xtag ytag, xformals @ yformals)
+  in
+  match e with
+  | Int n -> (literal_tag (string_of_int n), [])
+  | Int64 n -> ("l" ^ literal_tag (Int64.to_string n), [])
+  | Bool b -> ((if b then "true" else "false"), [])
+  | Ref (_, name) when is_elt_var name -> ("elt", [])
+  | Ref (_, name) -> (name, [ param name uint32 ])
+  | Param_ref p ->
+      ( "p" ^ p.name,
+        [
+          {
+            param_name = p.name;
+            param_typ = p.packed_typ;
+            mutable_ = p.mutable_;
+          };
+        ] )
+  | Sizeof t -> ("sz" ^ fst (wrap_shape t), [])
+  | Sizeof_this -> ("szthis", [])
+  | Field_pos -> ("fpos", [])
+  | Add (a, b) -> bin "add" a b
+  | Sub (a, b) -> bin "sub" a b
+  | Mul (a, b) -> bin "mul" a b
+  | Div (a, b) -> bin "div" a b
+  | Mod (a, b) -> bin "mod" a b
+  | Land (a, b) -> bin "land" a b
+  | Lor (a, b) -> bin "lor" a b
+  | Lxor (a, b) -> bin "lxor" a b
+  | Lnot a -> un "lnot" a
+  | Lsl (a, b) -> bin "lsl" a b
+  | Lsr (a, b) -> bin "lsr" a b
+  | Land64 (a, b) -> bin "land64" a b
+  | Lsr64 (a, b) -> bin "lsr64" a b
+  | Eq (a, b) -> bin "eq" a b
+  | Ne (a, b) -> bin "ne" a b
+  | Lt (a, b) -> bin "lt" a b
+  | Le (a, b) -> bin "le" a b
+  | Gt (a, b) -> bin "gt" a b
+  | Ge (a, b) -> bin "ge" a b
+  | And (a, b) -> bin "and" a b
+  | Or (a, b) -> bin "or" a b
+  | Not a -> un "not" a
+  | Cast (w, a) -> un ("cast" ^ cast_tag w) a
+  | If_then_else (c, t, f) ->
+      let ctag, cformals = expr_shape c in
+      let ttag, tformals = expr_shape t in
+      let ftag, fformals = expr_shape f in
+      (Fmt.str "ite_%s_%s_%s" ctag ttag ftag, cformals @ tformals @ fformals)
+
+let wrap_tag t = fst (wrap_shape t)
+
+(* The formals a synthesised wrapper over [t] declares: first occurrence of each
+   name wins, so its declaration and its use sites agree on their order. *)
+let wrap_formals t =
+  let seen = Hashtbl.create 4 in
+  List.filter
+    (fun (p : param) ->
+      if Hashtbl.mem seen p.param_name then false
+      else (
+        Hashtbl.add seen p.param_name ();
+        true))
+    (snd (wrap_shape t))
+
+let formal_args formals =
+  List.map (fun (p : param) -> Pack_expr (Ref (I, p.param_name))) formals
+
+(* A reference to a synthesised declaration, applied to the formals it lifted so
+   the enclosing scope's values flow into the new one. *)
+let synth_ref name = function
+  | [] -> Type_ref name
+  | formals -> Apply { typ = Type_ref name; args = formal_args formals }
 
 (* The synthesised wrapper-struct name for a [nested] inner that has no valid
    bare single-element-array token. A scalar, sub-codec, or casetype renders
@@ -1622,12 +1884,12 @@ let rec single_elem_struct : type a. a typ -> string option = function
       None
   | Map { inner; _ } -> single_elem_struct inner
   | Where { inner; _ } -> single_elem_struct inner
-  (* Keep the historical names for the byte-span family so existing schemas and
-     tests are unchanged; everything else gets a structural name. *)
+  (* Keep the historical names of the byte-span family where the size alone
+     pins the shape, so existing schemas and tests are unchanged. A refined span
+     and a variable-width integer also differ in their constraint and their
+     endianness, so those take a structural name, as everything else does. *)
   | Byte_array { size = Int n } -> some "SeBytes%d" n
   | Byte_slice { size = Int n } -> some "SeSlice%d" n
-  | Byte_array_where { size = Int n; _ } -> some "SeRBytes%d" n
-  | Uint_var { size = Int n; _ } -> some "SeUvar%d" n
   | Zeroterm_at_most { size = Int n } -> some "SeZtam%d" n
   | Enum { name; _ } -> Some ("Se_" ^ name)
   | other -> Some ("Se_" ^ wrap_tag other)
@@ -1647,6 +1909,24 @@ let optional_casetype_name : type a. a typ -> string =
   in
   "Opt_" ^ base inner
 
+(* The formals the gate casetype has to declare on top of the gate itself. The
+   casetype is a 3D scope of its own, and its default case applies the inner: a
+   parametric sub-codec renders there as [Sub(p1, ...)], naming formals that only
+   the enclosing struct surfaces. Redeclaring them here, and passing them on from
+   the use site, puts them back in scope. Walks the transparent wrappers the way
+   [optional_casetype_name] does, so a name and its formals describe the same
+   inner; an [apply] carries its own arguments and lifts nothing. *)
+let rec optional_casetype_formals : type a. a typ -> param list = function
+  | Codec { codec_struct; _ } -> codec_struct.params
+  | Map { inner; _ } -> optional_casetype_formals inner
+  | Where { inner; _ } -> optional_casetype_formals inner
+  | _ -> []
+
+(* What a use site passes to the gate casetype after the gate: one argument per
+   lifted formal, resolved against the enclosing struct that surfaces it. *)
+let optional_casetype_args : type a. a typ -> packed_expr list =
+ fun inner -> formal_args (optional_casetype_formals inner)
+
 (* Project a self-delimiting [optional] inner as a casetype dispatched on the
    gate: [case 0] parses a 0-byte field (the gate arg is [present ? 1 : 0], so 0
    means absent), the default case parses the inner. An empty case body is a 3D
@@ -1656,7 +1936,7 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
   Casetype_decl
     {
       name;
-      params = [ param "present" Uint8 ];
+      params = param "present" Uint8 :: optional_casetype_formals inner;
       tag = Pack_typ Uint8;
       cases =
         [
@@ -1683,33 +1963,56 @@ let rec wrapper_refined_byte : type a. a typ -> (string * bool expr) option =
 let emit_refined_byte seen acc elt_var cond =
   let synth = synth_name_of_elt_var elt_var in
   if not (Hashtbl.mem seen synth) then begin
-    Hashtbl.add seen synth ();
+    Hashtbl.add seen synth synth;
     acc :=
       typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ]) :: !acc
   end
 
+(* A structural key for a sub-codec's struct: its name, its fields' names, and
+   each field's shape as [wrap_tag] renders it. Pure, so it can be compared
+   where the declaration itself cannot. *)
+let codec_shape name (st : struct_) =
+  name ^ "|"
+  ^ String.concat ","
+      (List.map
+         (fun (Field f) ->
+           Option.value ~default:"_" f.field_name ^ ":" ^ wrap_tag f.field_typ)
+         st.fields)
+
+(* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
+   struct when it has no usable bare token; emit it once, deduped by name. A
+   refined-byte element inside the wrapper needs its own typedef emitted first.
+   A name already standing for another shape is refused: sharing it would drop
+   one of the two elements and validate its field as the other. *)
+let emit_wrapper seen acc name elem =
+  let shape = wrap_tag elem in
+  match Hashtbl.find_opt seen name with
+  | Some first when not (String.equal first shape) ->
+      Fmt.invalid_arg
+        "Wire: two elements of different shapes both project to the \
+         synthesised type %S, so one would be validated as the other; give one \
+         of them a sub-codec of its own"
+        name
+  | Some _ -> ()
+  | None ->
+      Hashtbl.add seen name shape;
+      (match wrapper_refined_byte elem with
+      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
+      | None -> ());
+      acc :=
+        typedef (param_struct name (wrap_formals elem) [ field "v" elem ])
+        :: !acc
+
 let rec collect_casetype_decls : type a.
-    (string, unit) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
+    (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
  fun seen acc typ ->
   let extract : type b. b typ -> unit =
    fun t -> collect_casetype_decls seen acc t
   in
-  (* A fixed-size element used inside [repeat] / [nested] needs a named wrapper
-     struct when it has no usable bare token; emit it once, deduped by name. A
-     refined-byte element inside the wrapper needs its own typedef emitted first. *)
-  let emit_wrapper name elem =
-    if not (Hashtbl.mem seen name) then begin
-      Hashtbl.add seen name ();
-      (match wrapper_refined_byte elem with
-      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
-      | None -> ());
-      acc := typedef (struct_ name [ field "v" elem ]) :: !acc
-    end
-  in
   match typ with
   | Casetype { name; tag; cases }
     when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
-      Hashtbl.add seen name ();
+      Hashtbl.add seen name name;
       (* Visit case inners first so any sub-codecs / nested casetypes they
          reference are declared before the dispatch that names them. *)
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
@@ -1719,15 +2022,27 @@ let rec collect_casetype_decls : type a.
       (* String-tagged casetype: handled by [split_string_casetype_fields].
          Still walk inner case typs for nested int-tagged casetypes. *)
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
-  | Codec { codec_name; codec_struct; _ } when not (Hashtbl.mem seen codec_name)
-    ->
+  | Codec { codec_name; codec_struct; _ } -> (
       (* Embedded sub-codec: emit its struct alongside the parent so 3D
          references to [codec_name] resolve, and only after visiting its own
-         fields, so whatever they name is declared ahead of it. *)
-      Hashtbl.add seen codec_name ();
-      List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
-      acc := typedef codec_struct :: !acc
-  | Codec _ -> ()
+         fields, so whatever they name is declared ahead of it. A second
+         sub-codec under the same name is dropped as a repeat of the first, so
+         two different ones would leave every reference resolving to whichever
+         was reached first, and a validator reading a different number of bytes
+         than the codec. Compared by shape rather than by equality, which a
+         [decl] cannot support: it holds the codec's closures. *)
+      let shape = codec_shape codec_name codec_struct in
+      match Hashtbl.find_opt seen codec_name with
+      | Some first when not (String.equal first shape) ->
+          Fmt.invalid_arg
+            "Wire: two different sub-codecs are named %S; every reference to \
+             it resolves to one of them, so rename one"
+            codec_name
+      | Some _ -> ()
+      | None ->
+          Hashtbl.add seen codec_name shape;
+          List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
+          acc := typedef codec_struct :: !acc)
   | Map { inner; _ } -> extract inner
   | Where { inner; _ } -> extract inner
   | Optional { inner; _ } when not (has_wire_size_expr inner) ->
@@ -1736,7 +2051,7 @@ let rec collect_casetype_decls : type a.
       extract inner;
       let opt_name = optional_casetype_name inner in
       if not (Hashtbl.mem seen opt_name) then begin
-        Hashtbl.add seen opt_name ();
+        Hashtbl.add seen opt_name opt_name;
         acc := optional_casetype_decl opt_name inner :: !acc
       end
   | Optional { inner; _ } ->
@@ -1747,7 +2062,9 @@ let rec collect_casetype_decls : type a.
   | Repeat { elem; _ } ->
       extract elem;
       emit_enum_elem_struct seen acc elem;
-      Option.iter (fun n -> emit_wrapper n elem) (repeat_elem_struct elem)
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (repeat_elem_struct elem)
   | Array { elem; _ } ->
       extract elem;
       (* A 1-byte little-endian closed-enum array element renders as the named
@@ -1756,7 +2073,9 @@ let rec collect_casetype_decls : type a.
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
   | Single_elem { elem; _ } ->
       extract elem;
-      Option.iter (fun n -> emit_wrapper n elem) (single_elem_struct elem)
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (single_elem_struct elem)
   | Byte_array_where { elt_var; cond; _ } ->
       emit_refined_byte seen acc elt_var cond
   | _ -> ()
@@ -2388,7 +2707,11 @@ let rec optional_suffix : type a.
       ( No_suffix,
         fun ppf ->
           pp_typ ppf
-            (Apply { typ = Type_ref opt_name; args = [ Pack_expr arg ] }) )
+            (Apply
+               {
+                 typ = Type_ref opt_name;
+                 args = Pack_expr arg :: optional_casetype_args inner;
+               }) )
 
 and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
  fun typ ->
@@ -2402,11 +2725,12 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
   | Single_elem { size; elem; at_most } ->
-      (* A wrapper-needing element goes through its synthesised struct name; a
-         bare scalar or named struct renders inline. *)
+      (* A wrapper-needing element goes through its synthesised struct, applied
+         to the formals that struct lifted out of the enclosing scope; a bare
+         scalar or named struct renders inline. *)
       let pp_elem ppf =
         match single_elem_struct elem with
-        | Some name -> Fmt.string ppf name
+        | Some name -> pp_typ ppf (synth_ref name (wrap_formals elem))
         | None -> pp_typ ppf elem
       in
       (Single_elem { size; at_most }, pp_elem)
@@ -2524,6 +2848,11 @@ let rec enum_type_name : type a. a typ -> string option = function
   | Apply { typ; _ } -> enum_type_name typ
   | _ -> None
 
+(* A [where] anywhere in a field's type becomes a field constraint, including
+   one under an [enum] or a [map]: 3D takes at most one refinement after a field
+   name, so leaving an inner one to render inline on the type produced two
+   stacked braces and a syntax error. Rebuilding the wrapper around the
+   extracted inner keeps the type it renders as unchanged. *)
 let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
  fun typ ->
   match typ with
@@ -2531,6 +2860,14 @@ let rec extract_where_constraint : type a. a typ -> bool expr option * a typ =
       match extract_where_constraint inner with
       | Some c2, inner' -> (Some (And (cond, c2)), inner')
       | None, inner' -> (Some cond, inner'))
+  | Enum ({ base; _ } as e) -> (
+      match extract_where_constraint base with
+      | None, _ -> (None, typ)
+      | Some c, base' -> (Some c, Enum { e with base = base' }))
+  | Map ({ inner; _ } as m) -> (
+      match extract_where_constraint inner with
+      | None, _ -> (None, typ)
+      | Some c, inner' -> (Some c, Map { m with inner = inner' }))
   | _ -> (None, typ)
 
 let combine_constraints a b =
@@ -2963,6 +3300,62 @@ let lookup_bound_cond raw_name field_typ =
   | Some len -> Some (Lt (Ref (I, raw_name), Int len))
   | None -> None
 
+(* How a declaration position renders a type: the base to print, its suffix, and
+   the refinement that has to follow the name. Shared by [pp_field] and
+   [pp_casetype_cases] so a case body carries the same membership, index bound
+   and [where] a field of that type would. Rendering a case body through
+   [field_suffix] alone dropped every one of them, and the generated validator
+   then accepted bodies the codec rejects. *)
+let render_typ_at : type a.
+    name:string ->
+    widenable:string list ->
+    own:bool expr option ->
+    a typ ->
+    (Format.formatter -> unit) * field_suffix * bool expr option =
+ fun ~name ~widenable ~own field_typ ->
+  (* Extract Where constraints from the type so they appear as field
+     constraints in the 3D output, not inline in the type. *)
+  let where_cond, typ = extract_where_constraint field_typ in
+  let bound_cond = lookup_bound_cond name field_typ in
+  (* The documentation projection types the field as its named enum, so
+     EverParse enforces membership through the type. The codegen projection
+     instead emits membership as a refinement on the base type, which the OCaml
+     decoder mirrors on decode. *)
+  let doc_enum =
+    if !render_enum_as_type then enum_type_name field_typ else None
+  in
+  let enum_cond =
+    match (doc_enum, enum_cases_of field_typ) with
+    | None, Some (v0 :: rest) ->
+        Some
+          (List.fold_left
+             (fun acc v -> Or (acc, Eq (Ref (I, name), Int v)))
+             (Eq (Ref (I, name), Int v0))
+             rest)
+    | _ -> None
+  in
+  let constraint_ =
+    combine_constraints
+      (combine_constraints (combine_constraints own where_cond) bound_cond)
+      enum_cond
+  in
+  (* Rewrite a signed field's ordering refinement to its two's-complement
+     unsigned form (the field projects to an unsigned type), and reject a float
+     ordering refinement, which has no faithful unsigned projection. *)
+  let constraint_ =
+    Option.map (project_refinement ~name ~kind:(scalar_kind typ)) constraint_
+  in
+  let constraint_ =
+    Option.map (project_field_arith name widenable) constraint_
+  in
+  let suffix, pp_base = field_suffix typ in
+  let pp_base =
+    match doc_enum with
+    | Some n -> fun ppf -> Fmt.string ppf n
+    | None -> pp_base
+  in
+  (pp_base, suffix, constraint_)
+
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
@@ -2973,50 +3366,8 @@ let pp_field widenable ppf (Field f) =
         let s = Fmt.str "_anon_%d" n in
         (s, s)
   in
-  (* Extract Where constraints from the type so they appear as field
-     constraints in the 3D output, not inline in the type. *)
-  let where_cond, typ = extract_where_constraint f.field_typ in
-  let bound_cond = lookup_bound_cond raw_name f.field_typ in
-  (* The documentation projection types the field as its named enum, so
-     EverParse enforces membership through the type. The codegen projection
-     instead emits membership as a refinement on the base type, which the OCaml
-     decoder mirrors on decode. *)
-  let doc_enum =
-    if !render_enum_as_type then enum_type_name f.field_typ else None
-  in
-  let enum_cond =
-    match (doc_enum, enum_cases_of f.field_typ) with
-    | None, Some (v0 :: rest) ->
-        Some
-          (List.fold_left
-             (fun acc v -> Or (acc, Eq (Ref (I, raw_name), Int v)))
-             (Eq (Ref (I, raw_name), Int v0))
-             rest)
-    | _ -> None
-  in
-  let constraint_ =
-    combine_constraints
-      (combine_constraints
-         (combine_constraints f.constraint_ where_cond)
-         bound_cond)
-      enum_cond
-  in
-  (* Rewrite a signed field's ordering refinement to its two's-complement
-     unsigned form (the field projects to an unsigned type), and reject a float
-     ordering refinement, which has no faithful unsigned projection. *)
-  let constraint_ =
-    Option.map
-      (project_refinement ~name:raw_name ~kind:(scalar_kind typ))
-      constraint_
-  in
-  let constraint_ =
-    Option.map (project_field_arith raw_name widenable) constraint_
-  in
-  let suffix, pp_base = field_suffix typ in
-  let pp_base =
-    match doc_enum with
-    | Some n -> fun ppf -> Fmt.string ppf n
-    | None -> pp_base
+  let pp_base, suffix, constraint_ =
+    render_typ_at ~name:raw_name ~widenable ~own:f.constraint_ f.field_typ
   in
   Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
@@ -3024,15 +3375,44 @@ let pp_field widenable ppf (Field f) =
   Option.iter (Fmt.pf ppf " %a" pp_action) f.action;
   Fmt.string ppf ";"
 
-let pp_param ppf p =
+(* The scalar an enum-shaped type projects to, seen through the transparent
+   wrappers. Used where a type has to render without an enum declaration to
+   refer to. *)
+let rec pp_scalar_of : type a. Format.formatter -> a typ -> unit =
+ fun ppf t ->
+  match t with
+  | Enum { base; _ } -> pp_scalar_of ppf base
+  | Map { inner; _ } -> pp_scalar_of ppf inner
+  | Where { inner; _ } -> pp_scalar_of ppf inner
+  | Apply { typ; _ } -> pp_scalar_of ppf typ
+  | t -> pp_typ ppf t
+
+(* A parameter's type renders under the same rule as a field's: the named enum
+   only where the module declares enum types, and the base it projects to
+   otherwise. Naming an enum unconditionally left the codegen projection
+   referring to a type it never declares, and a [where]-wrapped base rendering
+   as a refinement, which is not a parameter type at all. *)
+let pp_param_typ : type a. Format.formatter -> a typ -> unit =
+ fun ppf t ->
+  match if !render_enum_as_type then enum_type_name t else None with
+  | Some n -> Fmt.string ppf (escape_3d n)
+  | None -> pp_scalar_of ppf t
+
+(* [~as_enum] is what separates the two formal positions. A casetype's switch
+   discriminant may be the enum type, and reads better as it. A struct's formal
+   is used in the size and offset arithmetic of the fields it parameterises, and
+   EverParse requires an integer type there: naming the enum got "Unknown
+   integer type" even with the enum declared. *)
+let pp_param ~as_enum ppf p =
   let (Pack_typ t) = p.param_typ in
   let name = escape_3d p.param_name in
-  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp_typ t name
-  else Fmt.pf ppf "%a %s" pp_typ t name
+  let pp ppf t = if as_enum then pp_param_typ ppf t else pp_scalar_of ppf t in
+  if p.mutable_ then Fmt.pf ppf "mutable %a *%s" pp t name
+  else Fmt.pf ppf "%a %s" pp t name
 
-let pp_params ppf params =
+let pp_params ?(as_enum = false) ppf params =
   if not (List.is_empty params) then
-    Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma pp_param) params
+    Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma (pp_param ~as_enum)) params
 
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar
@@ -3124,7 +3504,7 @@ let pp_struct ppf (s : struct_) =
         | _ -> None)
       fields
   in
-  Fmt.pf ppf "typedef struct %s%a" tag pp_params s.params;
+  Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
   List.iter (pp_field widenable ppf) fields;
@@ -3142,20 +3522,40 @@ let pp_casetype_cases : type k.
  fun ppf tag cases ->
   (* When the switch tag is an enum, EverParse requires each case label to be the
      enum constant name, not the raw integer it stands for. *)
-  let enum_label k =
-    match tag with
-    | Enum { cases = ecases; _ } ->
-        List.find_map
-          (fun (n, v) -> if Int.equal v k then Some n else None)
-          ecases
+  (* Only where the module declares enum types: the codegen projection renders
+     the tag as its base scalar, so a constant name there would refer to a type
+     the module never declares. Seen through the transparent wrappers, since the
+     tag's enum can sit behind a [lookup]'s map or a [where]. *)
+  let rec named_cases : type k. k typ -> (string * int) list option = function
+    | Enum { cases; _ } -> Some cases
+    | Map { inner; _ } -> named_cases inner
+    | Where { inner; _ } -> named_cases inner
+    | Apply { typ; _ } -> named_cases typ
     | _ -> None
+  in
+  let enum_label k =
+    (* [enum_type_name] is the same test that decides whether the tag renders as
+       the enum: an enum over a bitfield base has no 3D enum type and so no
+       declaration, and naming its constant referred to nothing. *)
+    if (not !render_enum_as_type) || Option.is_none (enum_type_name tag) then
+      None
+    else
+      match named_cases tag with
+      | Some ecases ->
+          List.find_map
+            (fun (n, v) -> if Int.equal v k then Some n else None)
+            ecases
+      | None -> None
   in
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
-      let suffix, pp_base = field_suffix typ in
+      let pp_base, suffix, constraint_ =
+        render_typ_at ~name:field_name ~widenable:[] ~own:None typ
+      in
       let pp_body ppf () =
-        Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix
+        Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix;
+        Option.iter (Fmt.pf ppf " { %a }" pp_expr) constraint_
       in
       match tag_opt with
       | None -> Fmt.pf ppf "@,default: %a;" pp_body ()
@@ -3191,7 +3591,7 @@ let pp_decl ppf = function
       else Fmt.pf ppf "#define %s 0x%x@," name value
   | Extern_fn { name; params; ret = Pack_typ ret } ->
       Fmt.pf ppf "@[<h>extern %a %s(%a)@]@,@," pp_typ ret name
-        Fmt.(list ~sep:comma pp_param)
+        Fmt.(list ~sep:comma (pp_param ~as_enum:false))
         params
   | Extern_probe { init; name } ->
       (* 3D's [EXTERN PROBE q? IDENT] rule has no terminator. *)
@@ -3212,8 +3612,8 @@ let pp_decl ppf = function
           (name, String.sub name 1 (String.length name - 1))
         else ("_" ^ name, name)
       in
-      Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name pp_params
-        params disc_name;
+      Fmt.pf ppf "casetype %s%a {@[<v 2>@,switch (%s) {" internal_name
+        (pp_params ~as_enum:true) params disc_name;
       pp_casetype_cases ppf tag cases;
       Fmt.pf ppf "@,}@]@,} %s;@,@," public_name
 
@@ -3225,11 +3625,39 @@ let pp_module ppf m =
     m.doc;
   List.iter (pp_decl ppf) m.decls
 
+(* Two declarations under one name are two different types with one name, and
+   3D resolves every reference to whichever came first. [Everparse.write]
+   already refuses this across schemas; within one schema nothing did, so a
+   second sub-codec of a different width silently gave a validator reading a
+   different number of bytes than the codec. Compared by what each renders to,
+   because a [decl] holds closures and structural equality raises on them.
+   Identical redeclarations are left alone: 3D says so itself, loudly. *)
+let check_unique_decl_names decls =
+  let seen = Hashtbl.create 16 in
+  List.iter
+    (fun d ->
+      match decl_name d with
+      | None -> ()
+      | Some n -> (
+          let text = Fmt.str "%a" pp_decl d in
+          match Hashtbl.find_opt seen n with
+          | None -> Hashtbl.add seen n text
+          | Some first ->
+              if not (String.equal first text) then
+                Fmt.invalid_arg
+                  "Wire: the schema declares %S twice with different \
+                   definitions; every reference to it would resolve to the \
+                   first, so rename one of them"
+                  n))
+    decls
+
 let to_3d ?(enum_as_type = false) m =
   render_enum_as_type := enum_as_type;
   Fun.protect
     ~finally:(fun () -> render_enum_as_type := false)
-    (fun () -> Fmt.str "@[<v>%a@]" pp_module m)
+    (fun () ->
+      check_unique_decl_names m.decls;
+      Fmt.str "@[<v>%a@]" pp_module m)
 
 let to_3d_file ?(enum_as_type = false) path m =
   let oc = open_out path in
@@ -3319,9 +3747,22 @@ let equal_parse_error a b = compare_parse_error a b = 0
    [Repeat] / [Single_elem]) are not handled here -- they only appear
    inside a codec, which threads its own value-driven size at seal. *)
 
+(* A field whose byte extent is an input parameter cannot be measured from the
+   value alone. Returning 0 would under-report the whole field, and a caller
+   sizing a buffer from that answer writes past it, so refuse instead. *)
+
 (** Compute wire size of a type (None for variable-size types). *)
-let rec size_of_typ_value : type a. a typ -> a -> int =
- fun typ v ->
+let unsized_field what =
+  Fmt.invalid_arg
+    "Codec.size_of_value: the %s field's size is an input parameter; pass ?env \
+     so it can be resolved."
+    what
+
+let resolved_size ctx size what =
+  match size_in_ctx ctx size with Some n -> n | None -> unsized_field what
+
+let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
+ fun ctx typ v ->
   match typ with
   | Uint8 -> 1
   | Uint16 _ -> 2
@@ -3341,7 +3782,7 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | All_zeros -> String.length v
   | Zeroterm -> String.length v + 1
   | Zeroterm_at_most { size = Int n } -> n
-  | Zeroterm_at_most _ -> 0
+  | Zeroterm_at_most { size } -> resolved_size ctx size "zeroterm_at_most"
   | Byte_array { size = Int n } -> n
   | Byte_array _ -> String.length v
   | Byte_array_where { size = Int n; _ } -> n
@@ -3349,53 +3790,75 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
   | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
-  | Uint_var _ -> 0
-  | Map { inner; encode; _ } -> size_of_typ_value inner (encode v)
-  | Where { inner; _ } -> size_of_typ_value inner v
-  | Enum { base; _ } -> size_of_typ_value base v
+  | Uint_var { size; _ } -> resolved_size ctx size "uint"
+  | Map { inner; encode; _ } -> size_of_typ_value ctx inner (encode v)
+  | Where { inner; _ } -> size_of_typ_value ctx inner v
+  | Enum { base; _ } -> size_of_typ_value ctx base v
   | Optional { present = Bool true; inner } ->
-      size_of_typ_value inner (Option.get v)
+      size_of_typ_value ctx inner (Option.get v)
   | Optional { present = Bool false; _ } -> 0
   | Optional { inner; _ } -> (
       (* Dynamic gate: value drives presence at encode time. The
          buffer-driven [present_fn] is the decode-side oracle and would
          disagree with [v] here, so consult [v] directly. *)
       match v with
-      | Some inner_v -> size_of_typ_value inner inner_v
+      | Some inner_v -> size_of_typ_value ctx inner inner_v
       | None -> 0)
-  | Optional_or { present = Bool true; inner; _ } -> size_of_typ_value inner v
+  | Optional_or { present = Bool true; inner; _ } ->
+      size_of_typ_value ctx inner v
   | Optional_or { present = Bool false; _ } -> 0
   | Optional_or { inner; _ } ->
       (* Dynamic gate: encode always has a value (the default fills in
          for [None]); the encoder writes the inner regardless of what
          the runtime gate would have said at decode. *)
-      size_of_typ_value inner v
-  | Codec { codec_size_of_value; _ } -> codec_size_of_value v
+      size_of_typ_value ctx inner v
+  | Codec { codec_size_of_value; _ } -> codec_size_of_value ctx v
   | Single_elem { size = Int n; elem; at_most } ->
-      let actual = size_of_typ_value elem v in
+      let actual = size_of_typ_value ctx elem v in
       check_nested_size ~at_most ~expected:n ~actual;
       n
-  | Single_elem _ -> 0
+  | Single_elem { size; elem; at_most } ->
+      let n = resolved_size ctx size "nested" in
+      let actual = size_of_typ_value ctx elem v in
+      check_nested_size ~at_most ~expected:n ~actual;
+      n
   | Repeat { size = Int expected; elem; seq } ->
-      exact_repeat_elements seq ~expected ~size_of:(size_of_typ_value elem) v
+      exact_repeat_elements seq ~expected
+        ~size_of:(size_of_typ_value ctx elem)
+        v
       |> List.fold_left (fun total (_, size) -> total + size) 0
-  | Repeat { elem; seq = Seq_map s; _ } ->
-      (* Sum the actual element sizes from the value, like [Array]. The byte
-         budget ([size]) is only a literal when fixed; a dynamic budget left
-         this at 0, so [Codec.size_of_value] under-counted a repeat field. *)
-      let total = Stdlib.ref 0 in
-      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
-      !total
+  | Repeat { size; elem; seq = Seq_map s } -> (
+      (* The budget is what the description declares the region to be; when the
+         context resolves it, encode is held to it here as it is for a literal.
+         A budget naming a sibling field does not resolve from a value, so the
+         elements' own extent is the answer, which is what encode writes. *)
+      match size_in_ctx ctx size with
+      | Some expected ->
+          exact_repeat_elements (Seq_map s) ~expected
+            ~size_of:(size_of_typ_value ctx elem)
+            v
+          |> List.fold_left (fun total (_, size) -> total + size) 0
+      | None ->
+          let total = Stdlib.ref 0 in
+          s.iter (fun e -> total := !total + size_of_typ_value ctx elem e) v;
+          !total)
   | Array { len = Int expected; elem; seq } ->
       exact_array_elements seq ~expected v
       |> List.fold_left
-           (fun total value -> total + size_of_typ_value elem value)
+           (fun total value -> total + size_of_typ_value ctx elem value)
            0
-  | Array { elem; seq = Seq_map s; _ } ->
-      let total = Stdlib.ref 0 in
-      s.iter (fun e -> total := !total + size_of_typ_value elem e) v;
-      !total
-  | Apply { typ; _ } -> size_of_typ_value typ v
+  | Array { len; elem; seq = Seq_map s } -> (
+      match size_in_ctx ctx len with
+      | Some expected ->
+          exact_array_elements (Seq_map s) ~expected v
+          |> List.fold_left
+               (fun total value -> total + size_of_typ_value ctx elem value)
+               0
+      | None ->
+          let total = Stdlib.ref 0 in
+          s.iter (fun e -> total := !total + size_of_typ_value ctx elem e) v;
+          !total)
+  | Apply { typ; _ } -> size_of_typ_value ctx typ v
   | Casetype { tag; cases; _ } ->
       (* Tag bytes plus the matched case's body: find the branch whose
          [project] accepts [v], then size its inner from the projected body.
@@ -3409,7 +3872,8 @@ let rec size_of_typ_value : type a. a typ -> a -> int =
         | [] -> raise_no_matching_case ()
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
-            | Some (_tag, body) -> tag_size + size_of_typ_value cb_inner body
+            | Some (_tag, body) ->
+                tag_size + size_of_typ_value ctx cb_inner body
             | None -> find rest)
       in
       find cases
@@ -3435,7 +3899,10 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Unit -> Some 0
   | Byte_array { size = Int n }
   | Byte_array_where { size = Int n; _ }
-  | Byte_slice { size = Int n } ->
+  | Byte_slice { size = Int n }
+  (* A bounded zero-terminated string spans its whole region whatever the
+     terminator's position, as [elem_size_of] already reports it. *)
+  | Zeroterm_at_most { size = Int n } ->
       Some n
   | Where { inner; _ } -> field_wire_size inner
   | Enum { base; _ } -> field_wire_size base
@@ -3517,33 +3984,43 @@ let neighbours k =
    values. This is intentionally an over-approximation: consumers must ask the
    codec for the verdict, so an inadmissible candidate costs one retry rather
    than producing a wrong oracle. *)
-let constraint_values name (e : bool expr) =
-  let is_self : type a. a expr -> bool = function
-    | Ref (_, n) -> String.equal n name
-    | _ -> false
+(* Which field a comparison names, and the value it names for it. The generated
+   validator checks a refinement at the field it is attached to but compares
+   whatever fields the expression references, so a literal belongs to the field
+   on the other side of the comparison rather than to the field carrying the
+   constraint: [UINT8 d { (len < 2) }] singles out a value for [len], not for
+   [d]. *)
+let constraint_bindings (e : bool expr) : (string * int64 list) list =
+  let named : type a. a expr -> string option = function
+    | Ref (_, n) -> Some n
+    | _ -> None
   in
   let literal : type a. a expr -> int64 option = function
     | Int k -> Some (Int64.of_int k)
     | Int64 k -> Some k
     | _ -> None
   in
-  let against : type a. a expr -> a expr -> int64 option =
+  let against : type a. a expr -> a expr -> (string * int64) option =
    fun x y ->
-    if is_self x then literal y else if is_self y then literal x else None
+    match (named x, literal y) with
+    | Some n, Some k -> Some (n, k)
+    | _ -> (
+        match (named y, literal x) with
+        | Some n, Some k -> Some (n, k)
+        | _ -> None)
   in
-  let rec go : bool expr -> int64 list = function
+  let bind f a b =
+    match against a b with Some (n, k) -> [ (n, f k) ] | None -> []
+  in
+  let rec go : bool expr -> (string * int64 list) list = function
     | And (a, b) | Or (a, b) -> go a @ go b
     | Not a -> go a
-    | Eq (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
-    | Ne (a, b) -> ( match against a b with Some k -> [ k ] | None -> [])
-    | Lt (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Le (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Gt (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
-    | Ge (a, b) -> (
-        match against a b with Some k -> neighbours k | None -> [])
+    | Eq (a, b) -> bind (fun k -> [ k ]) a b
+    | Ne (a, b) -> bind (fun k -> [ k ]) a b
+    | Lt (a, b) -> bind neighbours a b
+    | Le (a, b) -> bind neighbours a b
+    | Gt (a, b) -> bind neighbours a b
+    | Ge (a, b) -> bind neighbours a b
     | _ -> []
   in
   go e
@@ -3552,19 +4029,23 @@ let constraint_values name (e : bool expr) =
 let rec enum_seed_values : type a. a typ -> int64 list = function
   | Enum { cases; closed = true; _ } ->
       List.map (fun (_, value) -> Int64.of_int value) cases
+  (* A [lookup] admits exactly the indices into its table. Naming both ends is
+     enough to straddle it: the seeder needs one accepting value, and the
+     boundary cases it derives already step either side of each. Listing the
+     whole table would multiply out through those without saying more. *)
+  | Map { index_bound = Some n; _ } when n > 0 ->
+      if n = 1 then [ 0L ] else [ 0L; Int64.of_int (n - 1) ]
   | Where { inner; _ } -> enum_seed_values inner
   | Map { inner; _ } -> enum_seed_values inner
   | Optional { inner; _ } -> enum_seed_values inner
   | Optional_or { inner; _ } -> enum_seed_values inner
   | _ -> []
 
-let rec typ_constraints : type a. string -> a typ -> int64 list =
- fun name -> function
-  | Where { cond; inner } ->
-      constraint_values name cond @ typ_constraints name inner
-  | Map { inner; _ } -> typ_constraints name inner
-  | Optional { inner; _ } -> typ_constraints name inner
-  | Optional_or { inner; _ } -> typ_constraints name inner
+let rec typ_bindings : type a. a typ -> (string * int64 list) list = function
+  | Where { cond; inner } -> constraint_bindings cond @ typ_bindings inner
+  | Map { inner; _ } -> typ_bindings inner
+  | Optional { inner; _ } -> typ_bindings inner
+  | Optional_or { inner; _ } -> typ_bindings inner
   | _ -> []
 
 let int_slots s =
@@ -3575,22 +4056,86 @@ let int_slots s =
       | _ -> None)
     s.fields
 
+(* The wire bytes a tag constant stands for, as the [int64] a seed carries.
+   Deliberately not routed through [int_of]: a four-byte magic overflows a
+   native [int] on a 31-bit target, and a seed has to survive there -- which is
+   why [field_seed] holds [int64] in the first place. A signed value keeps its
+   sign here and [write_slot] lays down its two's complement. *)
+let rec tag_wire_value : type k. k typ -> k -> int64 option =
+ fun typ k ->
+  match typ with
+  | Uint8 -> Some (Int64.of_int (UInt8.to_int k))
+  | Int8 -> Some (Int64.of_int (SInt8.to_int k))
+  | Uint16 _ -> Some (Int64.of_int (UInt16.to_int k))
+  | Int16 _ -> Some (Int64.of_int (SInt16.to_int k))
+  | Uint32 _ ->
+      Some (Int64.logand (Int64.of_int32 (UInt32.to_int32 k)) 0xFFFF_FFFFL)
+  | Int32 _ -> Some (Int64.of_int32 (SInt32.to_int32 k))
+  | Uint64 _ -> Some (UInt64.to_int64 k)
+  | Int64 _ -> Some k
+  | Uint_var _ -> Some (Optint.Int63.to_int64 k)
+  | Bits _ -> Some (Int64.of_int k)
+  | Enum { base; _ } -> tag_wire_value base k
+  | Where { inner; _ } -> tag_wire_value inner k
+  | Map { inner; encode; _ } -> tag_wire_value inner (encode k)
+  | Single_elem { elem; _ } -> tag_wire_value elem k
+  | Apply { typ; _ } -> tag_wire_value typ k
+  | _ -> None
+
+(* A casetype parses its tag inline, at the start of the field's own bytes, so
+   the field seeds like an integer even though it is not one: the slot is the
+   tag's and the values it singles out are the case indices. A [default] branch
+   claims every remaining tag and names no value, so it contributes none. *)
+let rec casetype_tag_seed : type a. a typ -> (int_slot * int64 list) option =
+  function
+  | Casetype { tag; cases; _ } ->
+      let index (Case_branch { cb_tag; _ }) =
+        Option.bind cb_tag (tag_wire_value tag)
+      in
+      Option.map
+        (fun slot -> (slot, List.filter_map index cases))
+        (int_slot_of_typ tag)
+  | Where { inner; _ } -> casetype_tag_seed inner
+  | Map { inner; _ } -> casetype_tag_seed inner
+  | Optional { inner; _ } -> casetype_tag_seed inner
+  | Optional_or { inner; _ } -> casetype_tag_seed inner
+  | _ -> None
+
 let field_seeds s =
+  (* Read the record the way the projection does. A struct-level [where] is
+     lowered onto the last field it references before EverParse sees it, so
+     lower it here rather than keeping a second rule about where a constraint
+     lives, and collect every refinement's values across the whole record: the
+     generated validator checks a refinement at the field carrying it but
+     compares whatever it references. *)
+  let _, fields = lower_where_to_field_constraint s.where s.fields in
+  let bindings =
+    List.concat_map
+      (fun (Field f) ->
+        (match f.constraint_ with
+          | Some c -> constraint_bindings c
+          | None -> [])
+        @ typ_bindings f.field_typ)
+      fields
+  in
+  let named name =
+    List.concat_map
+      (fun (n, vs) -> if String.equal n name then vs else [])
+      bindings
+  in
+  let seed name slot values =
+    match List.sort_uniq Int64.compare values with
+    | [] -> None
+    | values -> Some { field = name; slot; values }
+  in
   let of_field (Field f) =
     match (f.field_name, int_slot_of_typ f.field_typ) with
     | Some name, Some slot ->
-        let from_field =
-          match f.constraint_ with
-          | Some constraint_ -> constraint_values name constraint_
-          | None -> []
-        in
-        let values =
-          from_field
-          @ typ_constraints name f.field_typ
-          @ enum_seed_values f.field_typ
-          |> List.sort_uniq Int64.compare
-        in
-        if values = [] then None else Some { field = name; slot; values }
-    | _ -> None
+        seed name slot (named name @ enum_seed_values f.field_typ)
+    | Some name, None -> (
+        match casetype_tag_seed f.field_typ with
+        | Some (slot, values) -> seed name slot values
+        | None -> None)
+    | None, _ -> None
   in
-  List.filter_map of_field s.fields
+  List.filter_map of_field fields

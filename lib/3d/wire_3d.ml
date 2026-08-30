@@ -636,33 +636,78 @@ let fields_c_files schemas =
    backstop is the differential runtest, whose corpus includes over-length
    inputs the oracle rejects. *)
 let wrapper_success_tail = "\t\treturn FALSE;\n\t}\n\treturn TRUE;\n}"
-let wrapper_consumption_check = "result != (uint64_t) len"
 
-let wrapper_hardened_tail =
-  "\t\treturn FALSE;\n\
-   \t}\n\
-   \tif (result != (uint64_t) len)\n\
-   \t{\n\
-   \t\treturn FALSE;\n\
-   \t}\n\
-   \treturn TRUE;\n\
-   }"
+(* The wrapper binds the validator's result to a local whose name EverParse
+   has changed across releases ([result] up to v2026.02.25, [ep_status] by
+   v2026.08.21), so read the name back out of the wrapper instead of assuming
+   one: hard-coding it produced a check against an undeclared identifier, and
+   the generated C stopped compiling. *)
+let wrapper_status_binding =
+  Re.compile
+    (Re.seq
+       [
+         Re.str "uint64_t";
+         Re.rep1 Re.space;
+         Re.group
+           (Re.seq
+              [
+                Re.alt [ Re.alpha; Re.char '_' ];
+                Re.rep (Re.alt [ Re.alnum; Re.char '_' ]);
+              ]);
+         Re.rep Re.space;
+         Re.char '=';
+         Re.rep (Re.compl [ Re.char '\n' ]);
+         Re.str "Validate";
+       ])
+
+let wrapper_status_var src =
+  Option.map
+    (fun g -> Re.Group.get g 1)
+    (Re.exec_opt wrapper_status_binding src)
+
+let wrapper_consumption_check var = var ^ " != (uint64_t) len"
+
+let wrapper_hardened_tail var =
+  Fmt.str
+    "\t\treturn FALSE;\n\
+     \t}\n\
+     \tif (%s)\n\
+     \t{\n\
+     \t\treturn FALSE;\n\
+     \t}\n\
+     \treturn TRUE;\n\
+     }"
+    (wrapper_consumption_check var)
+
+let harden_wrapper_source src =
+  let var =
+    match wrapper_status_var src with
+    | Some v -> v
+    | None ->
+        failwith
+          "unrecognized EverParse wrapper shape: no validator status binding"
+  in
+  (* Tested before the success tail, which the hardened form still ends with:
+     matching that first would splice in a second, redundant check. *)
+  if Re.execp (Re.compile (Re.str (wrapper_consumption_check var))) src then src
+  else
+    let tail = Re.compile (Re.str wrapper_success_tail) in
+    if Re.execp tail src then
+      Re.replace_string tail ~by:(wrapper_hardened_tail var) src
+    else
+      failwith
+        "unrecognized EverParse wrapper shape; cannot insert the \
+         full-consumption check"
 
 let harden_wrapper ~outdir base =
   let path = Filename.concat outdir (base ^ "Wrapper.c") in
   if Sys.file_exists path then begin
     let src = In_channel.with_open_text path In_channel.input_all in
-    let tail = Re.compile (Re.str wrapper_success_tail) in
-    if Re.execp tail src then
-      Out_channel.with_open_text path (fun oc ->
-          Out_channel.output_string oc
-            (Re.replace_string tail ~by:wrapper_hardened_tail src))
-    else if not (Re.execp (Re.compile (Re.str wrapper_consumption_check)) src)
-    then
-      Fmt.failwith
-        "%s: unrecognized EverParse wrapper shape; cannot insert the \
-         full-consumption check"
-        path
+    match harden_wrapper_source src with
+    | hardened ->
+        Out_channel.with_open_text path (fun oc ->
+            Out_channel.output_string oc hardened)
+    | exception Failure msg -> Fmt.failwith "%s: %s" path msg
   end
 
 let run_everparse_files ?(quiet = true) ~outdir files =
@@ -1193,7 +1238,7 @@ let codec_verdict ?env c buf =
   | Ok _ -> (
       match
         Wire.Codec.validate ?env c buf 0;
-        Wire.Codec.wire_size_at c buf 0
+        Wire.Codec.wire_size_at ?env c buf 0
       with
       | n -> if n = Bytes.length buf then `Accept else `Resize n
       | exception Wire.Parse_error e -> `Reject e)
@@ -1259,12 +1304,16 @@ let seed_for seeds (e : Wire.parse_error) =
         seeds
   | [] -> None
 
-(* An EOF can be repaired by growing the input. Other failures can be repaired
-   when the failing field's declaration names candidate values. *)
+(* An EOF can be repaired by growing the input, and a missing terminator by
+   writing one where the scan gave up: both are structural, so neither needs a
+   value the declaration singles out. Anything else is repairable only when the
+   failing field's declaration names candidate values. *)
 let repair_for ~seeds ~len (e : Wire.parse_error) =
   match e.kind with
   | Wire.Unexpected_eof { expected; got } when expected > got ->
       `Grow (len + expected - got)
+  | Wire.Missing_terminator when e.at < len -> `Terminate e.at
+  | Wire.Missing_terminator -> `Grow (e.at + 1)
   | _ -> (
       match seed_for seeds e with
       | Some seed -> `Place (e.at, seed)
@@ -1273,21 +1322,35 @@ let repair_for ~seeds ~len (e : Wire.parse_error) =
 (* Construct one accepting input by repeatedly asking the codec how to repair
    the earliest failure. The field offsets come from parse errors rather than a
    static layout, so the same loop works after variable-width prefixes. *)
-let seed_input ?env rng ~seeds ~center c =
+let seed_input ?env rng ~seeds ~center ~fill c =
   let fuel = ref ((2 * List.length seeds) + 6) in
-  let buf = ref (random_bytes rng (max 1 center)) in
+  let buf = ref (fill rng (max 1 center)) in
   let placed = ref [] in
   let out = ref None in
-  let grow n =
-    if n >= 0 && n <> Bytes.length !buf && n <= max_corpus_input then
-      buf := resize rng !buf n
-    else fuel := 0
-  in
   let place off (seed : Raw.field_seed) =
     let values = Array.of_list seed.values in
-    write_slot !buf off seed.slot
-      values.(Random.State.int rng (Array.length values));
-    if not (List.mem_assoc off !placed) then placed := (off, seed) :: !placed
+    let value = values.(Random.State.int rng (Array.length values)) in
+    write_slot !buf off seed.slot value;
+    if not (List.mem_assoc off !placed) then
+      placed := (off, (seed, value)) :: !placed
+  in
+  (* A record asking for more bytes than a corpus line may carry was sized by a
+     length field the byte draw filled with a huge value. No parse error names
+     that field -- the demand surfaces on the record's whole extent -- so damp
+     every length at once: zeroed bytes are the smallest value each can hold.
+     The values already settled are written back, so the loop resumes from the
+     progress it had made rather than starting over. *)
+  let damp () =
+    Bytes.fill !buf 0 (Bytes.length !buf) '\000';
+    List.iter
+      (fun (off, ((seed : Raw.field_seed), value)) ->
+        write_slot !buf off seed.slot value)
+      !placed
+  in
+  let grow n =
+    if n > max_corpus_input then damp ()
+    else if n >= 0 && n <> Bytes.length !buf then buf := resize rng !buf n
+    else fuel := 0
   in
   while !out = None && !fuel > 0 do
     decr fuel;
@@ -1297,6 +1360,7 @@ let seed_input ?env rng ~seeds ~center c =
     | `Reject e -> (
         match repair_for ~seeds ~len:(Bytes.length !buf) e with
         | `Grow n -> grow n
+        | `Terminate off -> Bytes.set !buf off '\000'
         | `Place (off, seed) -> place off seed
         | `Stuck -> fuel := 0)
   done;
@@ -1312,7 +1376,7 @@ let neighbours v =
    stale validator whose boundary differs by one without relying on chance. *)
 let boundary_inputs seed placed =
   List.concat_map
-    (fun (off, (field_seed : Raw.field_seed)) ->
+    (fun (off, ((field_seed : Raw.field_seed), _)) ->
       field_seed.values |> List.concat_map neighbours
       |> List.sort_uniq Int64.compare
       |> List.map (fun value ->
@@ -1348,13 +1412,31 @@ let mutate rng seed =
 (* Try a bounded number of fresh byte/parameter combinations for each desired
    accepting seed. An unsolved constraint is reported by the vacuity check
    rather than spinning. *)
+(* Where a record's accepting side sits at an extreme, a uniform draw never
+   lands on it: a predicate satisfied at the minimum, a terminator in the first
+   byte, a float pattern the bytes have to spell out. Start from the extremes as
+   well as from noise and let the same repair loop settle the rest, which costs
+   a way to solve for the value nothing at all. *)
+let extremal_fills =
+  [| (fun _rng n -> Bytes.make n '\000'); (fun _rng n -> Bytes.make n '\255') |]
+
 let corpus_seeds ?env_of rng ~seeds ~center ~draw_params ~want c =
   let env_of = match env_of with Some f -> f | None -> fun _ -> None in
-  let found = ref [] and attempts = ref (4 * want) in
+  let n_extremal = Array.length extremal_fills in
+  (* The extremes are tried first and are deterministic, so they are extra
+     attempts rather than a share of the random ones: a shape whose accepting
+     side is only ever found by chance keeps every draw it had. *)
+  let found = ref []
+  and tried = ref 0
+  and attempts = ref ((4 * want) + n_extremal) in
   while List.length !found < want && !attempts > 0 do
     decr attempts;
+    let fill =
+      if !tried < n_extremal then extremal_fills.(!tried) else random_bytes
+    in
+    incr tried;
     let pvals = draw_params () in
-    match seed_input ?env:(env_of pvals) rng ~seeds ~center c with
+    match seed_input ?env:(env_of pvals) rng ~seeds ~center ~fill c with
     | Some (b, placed) -> found := (pvals, b, placed) :: !found
     | None -> ()
   done;

@@ -352,7 +352,7 @@ and _ typ =
               hence the extent [codec_size_of] has to read before it can resolve
               a span. *)
       codec_size_of : eval_ctx -> Input_end.t -> bytes -> int -> int;
-      codec_size_of_value : 'r -> int;
+      codec_size_of_value : eval_ctx -> 'r -> int;
           (** Encoded byte length of a value, computed from the value rather
               than by re-reading the buffer. *)
       codec_field_readers :
@@ -653,6 +653,15 @@ val int_of : 'a typ -> 'a -> int option
 (** [int_of typ v] converts a typed value to [int]. [None] for a value that does
     not fit the native int (a {!val-uint64} over 2{^ 62}) and for a type with no
     integer view. *)
+
+val relocate_at : at:int -> (unit -> 'a) -> 'a
+(** [relocate_at ~at f] runs [f], moving any parse error it raises to byte [at].
+    A conversion handed a value alone has no offset to name and reports 0; the
+    reader that found the value does. *)
+
+val int_view_is_total : 'a typ -> bool
+(** [int_view_is_total typ] is [true] when every value of [typ] fits the native
+    int, so taking its integer view cannot fail and needs no relocation. *)
 
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
@@ -1075,13 +1084,15 @@ val struct_nz : struct_ -> bool
 (** [struct_nz s] is [true] iff some field of [s] is {!nz}, i.e. the struct's
     parser has a positive minimum size. *)
 
-val size_of_typ_value : 'a typ -> 'a -> int
-(** [size_of_typ_value typ v] is the encoded byte size of [v] under [typ],
-    computed from the value rather than from a buffer. Falls back to [0] for
-    typs whose size depends on an out-of-band parameter or sibling field --
-    those only appear inside a codec, where {!Codec.size_of_value} sums per-
-    field projections instead. Raises [Invalid_argument] for a casetype value no
-    case projects, which encoding refuses for the same reason. *)
+val size_of_typ_value : eval_ctx -> 'a typ -> 'a -> int
+(** [size_of_typ_value ctx typ v] is the encoded byte size of [v] under [typ],
+    computed from the value rather than from a buffer. A size that names an
+    input parameter resolves through [ctx]; one that names a sibling field or a
+    position does not, since a value on its own does not carry the record around
+    it, and a typ measured only by such a size raises [Invalid_argument] rather
+    than reporting [0] for a field the encoder will fill. Also raises for a
+    casetype value no case projects, which encoding refuses for the same reason.
+*)
 
 val c_type_of : 'a typ -> string
 (** [c_type_of typ] returns the C type name (e.g., ["uint8_t"], ["uint32_t"]).
@@ -1108,11 +1119,16 @@ val int_slots : struct_ -> (string * int_slot) list
     singles out particular values. *)
 
 val field_seeds : struct_ -> field_seed list
-(** [field_seeds s] is, for each named whole-byte integer field of [s] whose
-    declaration singles out values, the byte slot it occupies and those values:
-    the constant an equality or inequality refinement names, the values either
-    side of an ordering refinement's boundary, and the members of a closed
-    enumeration. Fields with no such value, and fields that are not whole-byte
+(** [field_seeds s] is, for each named whole-byte integer field of [s] whose any
+    refinement in the record compares against a value, the byte slot it occupies
+    and those values: the constant an equality or inequality names, the values
+    either side of an ordering boundary, and the members of a closed
+    enumeration. A refinement is credited to the field it compares rather than
+    to the field carrying it, and a struct-level [where] is read where the
+    projection puts it, so a field's values are the ones the generated validator
+    tests it against. A casetype field seeds too: its tag is parsed at the start
+    of the field's own bytes, so the slot is the tag's and the values are the
+    case indices. Fields with no such value, and fields that are not whole-byte
     integers (bitfields in particular, whose base word is shared), are omitted.
 
     The list over-approximates: it names candidates worth trying, not values the

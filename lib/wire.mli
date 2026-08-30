@@ -217,11 +217,19 @@ val sizeof : 'a typ -> int expr
 (** Size of a fixed-size wire description. *)
 
 val sizeof_this : int expr
-(** Number of bytes already consumed in the enclosing sequential description.
+(** Size in bytes of the enclosing description's fixed prefix: the bytes before
+    its first field whose extent is not statically known, or its whole size when
+    every field is fixed.
 
-    This is meaningful only while interpreting a larger description, typically a
-    struct or record-shaped layout. It is used in dependent sizes and
-    constraints for later fields. *)
+    One constant for the description, the same wherever it is read, and not the
+    number of bytes consumed up to the reading field. A field after a
+    variable-size one adds nothing to it. This is 3D's [sizeof(this)], which
+    EverParse resolves from the type's own size and requires to fold to a
+    compile-time constant.
+
+    It is used in dependent sizes and constraints, most often as
+    [Param.expr total - sizeof_this] for a trailing payload; see
+    {!val-rest_bytes}. *)
 
 val field_pos : int expr
 (** Zero-based index of the current field in the enclosing sequential
@@ -512,9 +520,17 @@ module Field : sig
       encoding raises [Invalid_argument] when the supplied values span fewer or
       more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
       There is no count-driven form: "a count field, then that many
-      variable-size elements" is expressible neither here nor in 3D (3D arrays
-      are byte-budgeted), so that shape needs caller-side iteration over the
-      element parser. *)
+      variable-size elements" is expressible neither here nor in 3D, whose only
+      list construct is the byte budget ([elem[n]] is rejected for any element
+      wider than a byte), so that shape needs caller-side iteration over the
+      element parser.
+
+      There is no sizeless form either, for the same reason: 3D has no
+      rest-of-region list, so a repeat that consumed whatever remained would
+      have no projection. When the region size is not known where the codec is
+      built, take it as a {!Param.input} and bind it per call. Baking in a
+      literal makes the budget a constant the encoder will also hold the values
+      to, which is a promise the values cannot keep. *)
 
   val repeat_seq :
     string ->
@@ -1126,10 +1142,15 @@ module Codec : sig
   val min_wire_size : 'r t -> int
   (** Minimum wire size of the codec. *)
 
-  val wire_size_at : 'r t -> bytes -> int -> int
-  (** Computes the actual wire size from a buffer at the given base offset. *)
+  val wire_size_at : ?env:Param.env -> 'r t -> bytes -> int -> int
+  (** Computes the actual wire size from a buffer at the given base offset. A
+      codec whose field sizes are driven by an input param needs [?env] to
+      resolve them, and raises [Invalid_argument] without it, the same as
+      {!decode}: an unbound param reads 0, which would silently measure a
+      param-sized field as empty and report an extent shorter than the record.
+  *)
 
-  val size_of_value : 'r t -> 'r -> int
+  val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
   (** [size_of_value c v] returns the number of bytes that [encode c v] will
       write for value [v]. For fixed-size codecs, this is the same as
       {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises
@@ -1416,8 +1437,12 @@ module Everparse : sig
       and [~name] is ignored. With [`Standalone] (the default), the schemas are
       merged into a single [<name>.3d] -- a type shared across several codecs is
       emitted once -- so a whole protocol family reads as one spec, and [~name]
-      is required. Raises [Invalid_argument] if two schemas declare different
-      types under the same name, since one merged spec cannot honour both. *)
+      is required. A sub-codec packed as a codec of its own and also reached
+      through another codec's field is one such shared type; the surviving
+      declaration keeps the entrypoint marker and the doc comment either copy
+      carried, so it still gets a validator of its own. Raises
+      [Invalid_argument] if two schemas declare different types under the same
+      name, since one merged spec cannot honour both. *)
 
   module Raw : sig
     (** Escape hatch for manual 3D authoring.
@@ -1525,11 +1550,16 @@ module Everparse : sig
 
     val field_seeds : struct_ -> field_seed list
     (** [field_seeds s] is, for each named whole-byte integer field of [s] whose
-        declaration singles out values, the byte slot it occupies and those
-        values: the constant an equality or inequality refinement names, the
-        values either side of an ordering refinement's boundary, and the members
-        of a closed enumeration. Bitfields are omitted because their base word
-        is shared, so a byte offset alone cannot seed one.
+        any refinement in the record compares against a value, the byte slot it
+        occupies and those values: the constant an equality or inequality names,
+        the values either side of an ordering boundary, and the members of a
+        closed enumeration. A refinement is credited to the field it compares
+        rather than to the field carrying it, and a struct-level {!val-where} is
+        read where the projection puts it, so a field's values are the ones the
+        generated validator tests it against. A casetype field seeds too: its
+        tag is parsed at the start of the field's own bytes, so the slot is the
+        tag's and the values are the case indices. Bitfields are omitted because
+        their base word is shared, so a byte offset alone cannot seed one.
 
         The list over-approximates: it names candidates worth trying, not values
         the description is guaranteed to admit, so a consumer must run each

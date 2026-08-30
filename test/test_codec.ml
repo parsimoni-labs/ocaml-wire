@@ -830,6 +830,134 @@ let test_codec_array_cardinality () =
     [| UInt8.v 1; UInt8.v 2; UInt8.v 3; UInt8.v 4 |]
     3 4
 
+(* A bounded zero-terminated string occupies its whole region whatever the
+   terminator's position, so a buffer sized from the codec's own minimum has to
+   hold it. It reported zero, because the field had no reader on the fixed-size
+   compile path and so compiled as variable-size; the terminator check has to
+   survive the move. And a [zeroterm] field's terminator is found by the size
+   walk, which named no field until now. *)
+let test_zeroterm_extent_and_attribution () =
+  let bounded =
+    Codec.v "Ztam" Fun.id
+      Codec.[ Field.v "s" (zeroterm_at_most ~size:(int 8)) $ Fun.id ]
+  in
+  Alcotest.(check int)
+    "the region is the minimum size" 8
+    (Codec.min_wire_size bounded);
+  (match Codec.decode bounded (Bytes.of_string "abcdefgh") 0 with
+  | Ok _ -> Alcotest.fail "expected a missing terminator"
+  | Error { kind = Missing_terminator; _ } -> ()
+  | Error _ -> Alcotest.fail "wrong error for an unterminated region");
+  (match Codec.decode bounded (Bytes.of_string "abc\x00defg") 0 with
+  | Ok v -> Alcotest.(check string) "reads up to the NUL" "abc" v
+  | Error _ -> Alcotest.fail "expected the terminated region to decode");
+  let greedy = Codec.v "Zt" Fun.id Codec.[ Field.v "s" zeroterm $ Fun.id ] in
+  match Codec.decode greedy (Bytes.of_string "ab") 0 with
+  | Ok _ -> Alcotest.fail "expected a missing terminator"
+  | Error { kind = Missing_terminator; field; _ } ->
+      Alcotest.(check (list string)) "names the field" [ "s" ] field
+  | Error _ -> Alcotest.fail "wrong error for an unterminated string"
+
+(* [expected] is documented as a count of bytes, and every consumer does
+   arithmetic on it: the streaming reader's retry target and the corpus seeder's
+   growth target both read it that way. The overrunning field is the one blamed,
+   so the count is the whole span it asked for and [got] is what the buffer
+   holds from where that span starts. *)
+let test_eof_expected_is_a_byte_count () =
+  let f_len = Field.v "len" uint8 in
+  let c =
+    Codec.v "Greedy"
+      (fun l s t -> (l, s, t))
+      Codec.
+        [
+          (f_len $ fun (l, _, _) -> l);
+          ( Field.v "span" (byte_array ~size:(Field.ref f_len))
+          $ fun (_, s, _) -> s );
+          (Field.v "tail" all_zeros $ fun (_, _, t) -> t);
+        ]
+  in
+  (* [len] is 20, so the span at offset 1 asks for 20 bytes with 1 left. *)
+  let buf = Bytes.of_string "\x14\x00" in
+  match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "expected the overrun to be refused"
+  | Error { kind = Unexpected_eof { expected; got }; at; _ } ->
+      Alcotest.(check bool)
+        (Fmt.str "expected is a byte count, not %d" expected)
+        true (expected >= 0);
+      (* [got] is what remains from where the read starts, so a consumer sizing
+         a new buffer takes [at + expected] and lands past the current end. *)
+      Alcotest.(check int)
+        "got is what remains from the read" got
+        (Bytes.length buf - at);
+      Alcotest.(check bool)
+        "the growth target passes the current end" true
+        (at + expected > Bytes.length buf)
+  | Error _ -> Alcotest.fail "expected an end-of-input refusal"
+
+(* A value too wide for the native int is refused by the conversion, which is
+   handed the value and nothing else and so reports byte 0. The reader knows
+   where it found it, and a caller that seeks to the reported offset has to land
+   on the field rather than on the start of the buffer, whatever base the frame
+   sits at. *)
+let test_out_of_range_offset_follows_the_frame () =
+  let c =
+    Codec.v "Wide" Fun.id
+      Codec.[ Field.v "k" (enum "K" [ ("A", 1) ] uint64) $ Fun.id ]
+  in
+  let at_of base b =
+    match Codec.decode c b base with
+    | Ok _ -> Alcotest.fail "expected the wide value to be refused"
+    | Error e -> e.at
+  in
+  let wide = Bytes.make 8 '\xff' in
+  Alcotest.(check int) "at base 0" 0 (at_of 0 wide);
+  Alcotest.(check int)
+    "at base 8" 8
+    (at_of 8 (Bytes.cat (Bytes.make 8 '\x00') wide))
+
+(* A field whose byte extent is an input parameter cannot be measured from the
+   value alone. Reporting 0 for it is worse than refusing: a caller sizes a
+   buffer from the answer, and encode then writes past the allocation, which
+   surfaced as a raw out-of-bounds rather than as a wire error. *)
+let test_size_of_value_resolves_param_sizes () =
+  let p = Param.input "n" uint8 in
+  let c =
+    Codec.v "Nest" Fun.id
+      Codec.[ Field.v "body" (nested ~size:(Param.expr p) uint16be) $ Fun.id ]
+  in
+  (* Reporting 0 here is what let a caller allocate a buffer encode then ran
+     off the end of, so the answer has to be refused, not guessed. *)
+  (match Codec.size_of_value c (UInt16.v 7) with
+  | n -> Alcotest.failf "expected a refusal without ?env, got %d" n
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "the refusal names the remedy" true (contains ~sub:"?env" msg));
+  (* And the record really is the width the parameter names. *)
+  let env = Param.bind_by_name "n" 2 (Codec.env c) in
+  let buf = Bytes.create 2 in
+  Codec.encode ~env c (UInt16.v 7) buf 0
+
+(* A literal byte budget is the region size the description declares, and since
+   1.2.0 encode holds the values to it too. A caller who does not know that size
+   where the codec is built has nothing truthful to put there, and 3D has no
+   rest-of-region list to offer as a sizeless alternative, so the refusal has to
+   name the one thing that does work. *)
+let test_repeat_budget_mismatch_names_the_remedy () =
+  let c =
+    Codec.v "Region" Fun.id
+      Codec.[ Field.repeat "items" ~size:(int 0) uint16be $ Fun.id ]
+  in
+  match Codec.size_of_value c [ UInt16.v 1; UInt16.v 2 ] with
+  | _ -> Alcotest.fail "expected the budget mismatch to be refused"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "names the budget and what the values came to" true
+        (contains ~sub:"byte budget is 0" msg
+        && contains ~sub:"elements span 4" msg);
+      Alcotest.(check bool)
+        "points at the parameter, not a literal" true
+        (contains ~sub:"Param.input" msg)
+
 (* Field.repeat over a zeroterm element: a list of NUL-terminated strings
    within a byte budget. Used to raise Failure at decode; now decodes and
    projects through a synthesised element struct. *)
@@ -1232,10 +1360,12 @@ let test_validate_struct_field_past_end () =
   let s = validate_struct_overrun () in
   let v = Codec.validator_of_struct s in
   let buf = Bytes.of_string validate_struct_overrun_input in
-  (* [V] wants 2 bytes at 201; the 5-byte buffer has none of them. *)
-  check_located_eof "validate_struct" ~at:201 ~expected:2 ~got:0
+  (* [Data] is the field that overruns: it is declared 200 bytes at offset 1
+     and the buffer holds 4 from there. The fields after it sit at offsets the
+     overrun invented, so the failure belongs here rather than to [V] at 201. *)
+  check_located_eof "validate_struct" ~at:1 ~expected:200 ~got:4
     (validating "validate_struct" (fun () -> Codec.validate_struct v buf 0));
-  check_located_eof "of_string" ~at:201 ~expected:2 ~got:0
+  check_located_eof "of_string" ~at:1 ~expected:200 ~got:4
     (validating "of_string" (fun () ->
          match of_string (T.struct_typ s) validate_struct_overrun_input with
          | Ok () -> ()
@@ -1284,8 +1414,10 @@ let validate_optional_codec =
 
 let test_validate_present_optional_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
-  (* [opt] wants 2 bytes at 202; the 5-byte buffer has none of them. *)
-  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+  (* The span before it is what overruns: 200 bytes declared at offset 2 with 3
+     in the buffer from there. [opt] would sit at 202, an offset the overrun
+     invented, so the failure belongs to the span. *)
+  check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
          Codec.validate validate_optional_codec buf 0))
 
@@ -1311,7 +1443,7 @@ let validate_optional_or_codec =
 
 let test_validate_present_optional_or_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
-  check_located_eof "validate" ~at:202 ~expected:2 ~got:0
+  check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
          Codec.validate validate_optional_or_codec buf 0))
 
@@ -5304,7 +5436,7 @@ let test_codec_sizeof_this () =
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 3 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "sizeof_this at c" 4 (UInt8.to_int (Param.get env out))
 
 let test_codec_field_pos () =
   let out = Param.output "out" uint8 in
@@ -6638,6 +6770,31 @@ let test_casetype_no_match_invalid_tag () =
   match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
   | Error { kind = Invalid_tag n; _ } ->
       Alcotest.(check int) "unmatched tag" 99 n
+  | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
+  | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
+
+(* A casetype's extent depends on which case the tag selects, so the record's
+   bounds walk dispatches on the tag before any field reader runs, and that is
+   where an unknown tag surfaces. The failure must still name the field: a
+   caller repairing malformed input has only the path to go on. *)
+let test_casetype_no_match_names_field () =
+  let typ =
+    Wire.casetype "Sized" Wire.uint8
+      [
+        Wire.case ~index:(UInt8.v 1) Wire.uint8
+          ~inject:(fun v -> `A v)
+          ~project:(function `A v -> Some v | _ -> None);
+        Wire.case ~index:(UInt8.v 2) Wire.uint16
+          ~inject:(fun v -> `B v)
+          ~project:(function `B v -> Some v | _ -> None);
+      ]
+  in
+  let c = Codec.v "Tagged" Fun.id Codec.[ Field.v "body" typ $ Fun.id ] in
+  match Codec.decode c (Bytes.of_string "\x63\x00\x00") 0 with
+  | Error { kind = Invalid_tag n; field; at } ->
+      Alcotest.(check int) "unmatched tag" 99 n;
+      Alcotest.(check int) "at the casetype field" 0 at;
+      Alcotest.(check (list string)) "names the field" [ "body" ] field
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
   | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
 
@@ -9691,6 +9848,18 @@ let suite =
         test_casetype_field_logout;
       Alcotest.test_case "casetype field: default" `Quick
         test_casetype_field_default;
+      Alcotest.test_case "zeroterm: extent and field attribution" `Quick
+        test_zeroterm_extent_and_attribution;
+      Alcotest.test_case "decode: eof expected is a byte count" `Quick
+        test_eof_expected_is_a_byte_count;
+      Alcotest.test_case "decode: out-of-range offset follows the frame" `Quick
+        test_out_of_range_offset_follows_the_frame;
+      Alcotest.test_case "size_of_value: resolves param-driven sizes" `Quick
+        test_size_of_value_resolves_param_sizes;
+      Alcotest.test_case "repeat: budget mismatch names the remedy" `Quick
+        test_repeat_budget_mismatch_names_the_remedy;
+      Alcotest.test_case "casetype field: no match names the field" `Quick
+        test_casetype_no_match_names_field;
       Alcotest.test_case "casetype field: no match is Invalid_tag" `Quick
         test_casetype_no_match_invalid_tag;
       Alcotest.test_case "casetype default recovers matched tag" `Quick

@@ -6,6 +6,10 @@ open Test_helpers
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
+(* The 3D printer wraps a long parameter or argument list over several lines, so
+   an assertion that spans one compares against a whitespace-flattened copy. *)
+let flatten s = Re.replace_string (Re.compile (Re.rep1 Re.space)) ~by:" " s
+
 (* Return the byte offset of the first occurrence of [sub] in [s], or -1 if not
    found. Used to assert relative declaration and field ordering. *)
 let index_of ~sub s =
@@ -114,7 +118,16 @@ let test_casetype_enum_tag_labels () =
       kind
       [ decl_case 0 uint32; decl_case 2 uint16 ]
   in
-  let output = to_3d (module_ [ d ]) in
+  (* Only where the module declares the enum type. The codegen projection
+     renders the tag as its base scalar, so a constant name there would refer to
+     a type it never declares. *)
+  let m =
+    module_
+      [
+        enum_decl "PageKind" [ ("LeafIndex", 0); ("InteriorIndex", 2) ] uint8; d;
+      ]
+  in
+  let output = to_3d ~enum_as_type:true m in
   Alcotest.(check bool)
     "low case uses the enum constant name" true
     (contains ~sub:"case LeafIndex:" output);
@@ -123,7 +136,10 @@ let test_casetype_enum_tag_labels () =
     (contains ~sub:"case InteriorIndex:" output);
   Alcotest.(check bool)
     "no raw-integer case label" false
-    (contains ~sub:"case 2:" output)
+    (contains ~sub:"case 2:" output);
+  Alcotest.(check bool)
+    "the enum it names is declared" true
+    (contains ~sub:"enum PageKind" output)
 
 let test_casetype_wide_index_error () =
   let high = Wire.Private.UInt32.be (Bytes.of_string "\x80\x00\x00\x00") 0 in
@@ -497,6 +513,335 @@ let test_doc_merge_name_collision () =
     "equal copies declared once" 1
     (List.length (Re.all (Re.compile (Re.str "enum Shared")) content))
 
+(* A sub-codec packed as a codec of its own and also reached through another
+   codec's field projects twice: once carrying [entrypoint] and the codec's doc,
+   once carrying neither. Both describe the same type, so the merge must collapse
+   them instead of reading the markers as a conflicting redeclaration -- and the
+   surviving copy must keep the entrypoint whichever schema came first, or the
+   shared type silently loses its validator. *)
+let test_doc_merge_shared_sub_codec () =
+  let shared =
+    Codec.v "Chunk" ~doc:"The shared chunk header."
+      (fun v -> v)
+      Codec.[ (Field.v "len" uint8 $ fun v -> v) ]
+  in
+  let outer =
+    Codec.v "Frame"
+      (fun k c -> (k, c))
+      Codec.
+        [
+          (Field.v "kind" uint8 $ fun (k, _) -> k);
+          (Field.v "chunk" (codec shared) $ fun (_, c) -> c);
+        ]
+  in
+  let dir = Filename.get_temp_dir_name () in
+  let write name schemas =
+    Everparse.write ~mode:`Standalone ~outdir:dir ~name schemas;
+    let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+    let content = In_channel.with_open_text path In_channel.input_all in
+    Sys.remove path;
+    content
+  in
+  let sub = Everparse.project ~mode:`Standalone shared in
+  let parent = Everparse.project ~mode:`Standalone outer in
+  let check order content =
+    Alcotest.(check int)
+      (order ^ ": Chunk declared once")
+      1
+      (List.length (Re.all (Re.compile (Re.str "} Chunk;")) content));
+    Alcotest.(check bool)
+      (order ^ ": Chunk keeps its entrypoint")
+      true
+      (contains ~sub:"entrypoint\ntypedef struct WireChunk" content);
+    Alcotest.(check bool)
+      (order ^ ": Chunk keeps its doc")
+      true
+      (contains ~sub:"The shared chunk header." content)
+  in
+  check "sub first" (write "wire_doc_merge_shared_a" [ sub; parent ]);
+  check "parent first" (write "wire_doc_merge_shared_b" [ parent; sub ])
+
+(* A formal's type is rendered in two positions with different rules. A
+   casetype's switch discriminant may be the enum type; a struct's formal is
+   used in the size arithmetic of the fields it parameterises, where EverParse
+   requires an integer type and reported "Unknown integer type" for an enum even
+   once declared. And a case label may name an enum constant only where the enum
+   is declared, which one over a bitfield base never is. *)
+let test_formal_and_label_positions () =
+  let p = Param.input "pn" (enum "PKind" [ ("PA", 1) ] uint8) in
+  let param_codec =
+    Codec.v "PEnum"
+      (fun v -> v)
+      Codec.[ (Field.v "d" (byte_array ~size:(Param.expr p)) $ fun v -> v) ]
+  in
+  let bits_tag =
+    Codec.v "BTag"
+      (fun h b -> (h, b))
+      Codec.
+        [
+          Field.v "hi" (bits ~width:4 U8) $ fst;
+          Field.v "b"
+            (casetype "QBody"
+               (enum "BKind" [ ("BA", 1) ] (bits ~width:4 U8))
+               [ case ~index:1 uint8 ~inject:Fun.id ~project:Option.some ])
+          $ snd;
+        ]
+  in
+  let doc c =
+    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+  in
+  Alcotest.(check bool)
+    "a struct formal renders as its integer base" true
+    (contains ~sub:"(UINT8 pn)" (doc param_codec));
+  Alcotest.(check bool)
+    "a bitfield-based enum tag labels by value, not by a name it never declares"
+    false
+    (contains ~sub:"case BA:" (doc bits_tag))
+
+(* Two declarations under one name are two types with one name, and every
+   reference resolves to whichever was reached first: two same-named sub-codecs
+   of different widths gave a validator reading a different number of bytes than
+   the codec, with no error anywhere. [Everparse.write] refuses this across
+   schemas; within one schema nothing did. *)
+let test_duplicate_declaration_names_rejected () =
+  let two name a b =
+    Codec.v name
+      (fun x y -> (x, y))
+      Codec.[ Field.v "x" a $ fst; Field.v "y" b $ snd ]
+  in
+  let refuses what c =
+    match
+      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    with
+    | _ -> Alcotest.failf "%s: expected the collision to be refused" what
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool)
+          (what ^ ": names the colliding declaration")
+          true
+          (contains ~sub:"named" msg)
+  in
+  refuses "sub-codecs"
+    (two "Clash"
+       (codec (two "Dk" uint8 uint8))
+       (codec (two "Dk" uint16 uint16)));
+  refuses "enums"
+    (Codec.v "EClash"
+       (fun x y -> (x, y))
+       Codec.
+         [
+           Field.v "x" (enum "Dup" [ ("A", 1) ] uint8) $ fst;
+           Field.v "y" (enum "Dup" [ ("B", 9) ] uint8) $ snd;
+         ])
+
+(* A case body was rendered through the type suffix alone, never through the
+   refinement machinery a field of the same type goes through, so a closed
+   enum's membership and a lookup's index bound vanished from the generated
+   validator while the codec kept enforcing them. *)
+let test_casetype_case_bodies_keep_refinements () =
+  let c =
+    Codec.v "CaseRef"
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "b"
+              (casetype "CBody" uint8
+                 [
+                   case ~index:(UInt8.v 1)
+                     (enum "RCode" [ ("C7", 7); ("C9", 9) ] uint8)
+                     ~inject:(fun v -> `E v)
+                     ~project:(function `E v -> Some v | _ -> None);
+                   case ~index:(UInt8.v 2)
+                     (lookup [ 0; 1; 2 ] uint8)
+                     ~inject:(fun v -> `L v)
+                     ~project:(function `L v -> Some v | _ -> None);
+                 ])
+          $ fun v -> v );
+        ]
+  in
+  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  Alcotest.(check bool)
+    "the enum body keeps its membership" true
+    (contains ~sub:"{ ((v0 == 7) || (v0 == 9)) }" out);
+  Alcotest.(check bool)
+    "the lookup body keeps its index bound" true
+    (contains ~sub:"{ (v1 < 3) }" out);
+  (* The codec rejects a body the unrefined validator would have accepted. *)
+  match Codec.decode c (Bytes.of_string "\x01\x05") 0 with
+  | Ok _ -> Alcotest.fail "expected the enum body to be refused"
+  | Error _ -> ()
+
+(* A tag the dispatch gate did not admit was routed to the rewrite meant for
+   string tags, where the union collapses to a tag plus [all_bytes]: EverParse
+   accepted the schema and the generated validator checked no case body at all,
+   while the OCaml codec dispatched normally. The gate has to admit exactly what
+   the case-index projection can render. *)
+let test_casetype_integer_tags_dispatch () =
+  let dispatches name tag lift =
+    let c =
+      Codec.v name
+        (fun v -> v)
+        Codec.
+          [
+            ( Field.v "b"
+                (casetype (name ^ "Body") tag
+                   [
+                     case ~index:(lift 0) uint8 ~inject:Fun.id
+                       ~project:Option.some;
+                   ])
+            $ fun v -> v );
+          ]
+    in
+    let out =
+      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    in
+    Alcotest.(check bool)
+      (name ^ ": dispatches on the tag")
+      true
+      (contains ~sub:"switch (tag)" out);
+    Alcotest.(check bool)
+      (name ^ ": does not swallow the body as bytes")
+      false
+      (contains ~sub:"all_bytes" out)
+  in
+  dispatches "Lk" (lookup [ 0; 1 ] uint8) Fun.id;
+  dispatches "U6" uint64 UInt64.of_int
+
+(* A casetype dispatches on any enum, and an enum takes any base with an integer
+   view, so a tag reaches the case-index projection wrapped in a [lookup]'s map,
+   behind a [where], or over a 64-bit base. Each still names one integer per
+   case, so each must project to a switch on the enum constant. *)
+let test_3d_casetype_tag_int_carriers () =
+  let dispatch name tag index =
+    Codec.v name
+      (fun v -> v)
+      Codec.
+        [
+          ( Field.v "u"
+              (casetype ("Sel" ^ name) tag
+                 [ case ~index uint8 ~inject:Fun.id ~project:Option.some ])
+          $ fun v -> v );
+        ]
+  in
+  let dir = Filename.get_temp_dir_name () in
+  (* Go through [write], not the projected module on its own: the merge is where
+     a synthesised wrapper's own dependencies -- here the tag's enum
+     declaration -- are absorbed, so this is the spec a consumer actually gets. *)
+  let projects what c =
+    let name = "wire_casetype_tag_" ^ String.lowercase_ascii what in
+    Everparse.write ~mode:`Standalone ~outdir:dir ~name
+      [ Everparse.project ~mode:`Standalone c ];
+    let path = Filename.concat dir (String.capitalize_ascii name ^ ".3d") in
+    let out = In_channel.with_open_text path In_channel.input_all in
+    Sys.remove path;
+    Alcotest.(check bool)
+      (what ^ ": switch names the enum constant")
+      true
+      (contains ~sub:"case A:" out);
+    Alcotest.(check bool)
+      (what ^ ": the tag's enum is declared")
+      true
+      (contains ~sub:"enum E" out)
+  in
+  projects "lookup"
+    (dispatch "Map" (enum "EMap" [ ("A", 0) ] (lookup [ 0; 1 ] uint8)) 0);
+  projects "uint64"
+    (dispatch "U64" (enum "EU64" [ ("A", 0) ] uint64) (UInt64.of_int 0));
+  projects "where"
+    (dispatch "Where"
+       (enum "EWhere" [ ("A", 0) ] (where Expr.(int 0 = int 0) uint8))
+       (UInt8.v 0))
+
+(* A casetype's tag sits at the start of the field's own bytes and takes one of
+   a closed set of case indices, so the field is seedable even though it is not
+   itself an integer. Without the seed a fuzzed corpus never reaches a valid
+   tag. *)
+let test_casetype_tag_field_seed () =
+  let body =
+    casetype "Body" uint32be
+      [
+        case
+          ~index:(UInt32.of_int32 0x4c454146l)
+          uint8
+          ~inject:(fun v -> `Leaf v)
+          ~project:(function `Leaf v -> Some v | _ -> None);
+        case
+          ~index:(UInt32.of_int32 0x4e4f4445l)
+          uint16
+          ~inject:(fun v -> `Node v)
+          ~project:(function `Node v -> Some v | _ -> None);
+      ]
+  in
+  let c =
+    Codec.v "Page" (fun v -> v) Codec.[ (Field.v "body" body $ fun v -> v) ]
+  in
+  match field_seeds (struct_of_codec c) with
+  | [ seed ] ->
+      Alcotest.(check string) "names the casetype field" "body" seed.field;
+      Alcotest.(check int) "slot is the tag's width" 4 seed.slot.width;
+      Alcotest.(check (list int64))
+        "values are the case indices"
+        [ 0x4c454146L; 0x4e4f4445L ]
+        seed.values
+  | seeds ->
+      Alcotest.failf "expected one seed for the casetype tag, got %d"
+        (List.length seeds)
+
+(* A refinement is checked at the field carrying it but compares whatever it
+   references, so the values it names belong to the field on the other side.
+   Crediting them to the carrier reported nothing for either field, and a
+   struct-level [where] was not read at all, though the projection lowers it
+   onto a field before EverParse sees it. *)
+let test_seeds_follow_the_compared_field () =
+  let f_len = Field.v "len" uint8 in
+  let carried =
+    Codec.v "Carried"
+      (fun l d -> (l, d))
+      Codec.
+        [
+          (f_len $ fun (l, _) -> l);
+          ( Field.v "d" (where Expr.(Field.ref f_len < int 2) uint8)
+          $ fun (_, d) -> d );
+        ]
+  in
+  let f_v = Field.v "v" uint8 in
+  let record_where =
+    Codec.v "RecordWhere"
+      ~where:Expr.(Field.ref f_v < int 4)
+      (fun v -> v)
+      Codec.[ (f_v $ fun v -> v) ]
+  in
+  let named c =
+    List.map
+      (fun (s : field_seed) -> (s.field, s.values))
+      (field_seeds (struct_of_codec c))
+  in
+  Alcotest.(check (list (pair string (list int64))))
+    "the value belongs to the field the refinement compares"
+    [ ("len", [ 1L; 2L; 3L ]) ]
+    (named carried);
+  Alcotest.(check (list (pair string (list int64))))
+    "a struct-level where is read where the projection puts it"
+    [ ("v", [ 3L; 4L; 5L ]) ]
+    (named record_where)
+
+(* A [lookup] admits exactly the indices into its table, and no other part of a
+   field's declaration names them, so without a seed a generated corpus never
+   reaches an accepted record and the codec reads as unfuzzable. *)
+let test_lookup_field_seed () =
+  let c =
+    Codec.v "Picked"
+      (fun v -> v)
+      Codec.[ (Field.v "k" (lookup [ `A; `B; `C ] uint8) $ fun v -> v) ]
+  in
+  match field_seeds (struct_of_codec c) with
+  | [ seed ] ->
+      Alcotest.(check string) "names the field" "k" seed.field;
+      Alcotest.(check (list int64))
+        "names both ends of the table" [ 0L; 2L ] seed.values
+  | seeds ->
+      Alcotest.failf "expected one seed for the lookup, got %d"
+        (List.length seeds)
+
 let test_doc_field_citation () =
   (* [Field.v ~doc] renders as a plain [/* ... */] comment above the field --
      3d.exe rejects [/*++ --*/] at field position, so the per-field note uses
@@ -677,6 +1022,41 @@ let test_3d_absent_optional_projects_to_unit () =
   Alcotest.(check bool)
     "absent optional has no zero-length byte-size suffix" false
     (contains ~sub:"[:byte-size 0]" out)
+
+(* A self-delimiting [optional] dispatches through a synthesised gate casetype,
+   which is a 3D scope of its own: a parametric sub-codec as the inner is applied
+   to its formals inside that scope, so the casetype has to declare them and the
+   use site has to pass them on. Without that EverParse rejects the schema with
+   "Variable n not found". *)
+let test_3d_optional_over_param_codec () =
+  let p_n = Param.input "n" uint8 in
+  let sub =
+    Codec.v "OptPSub"
+      (fun d -> d)
+      Codec.[ (Field.v "d" (byte_array ~size:(Param.expr p_n)) $ fun v -> v) ]
+  in
+  let f_g = Field.v "g" uint8 in
+  let c =
+    Codec.v "OptParam"
+      (fun g v -> (g, v))
+      Codec.
+        [
+          (Field.v "g" uint8 $ fun (g, _) -> g);
+          ( Field.optional "o" ~present:Expr.(Field.ref f_g = int 1) (codec sub)
+          $ fun (_, v) -> v );
+        ]
+  in
+  let check mode =
+    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+    Alcotest.(check bool)
+      "gate casetype declares the sub-codec formal" true
+      (contains ~sub:"_Opt_OptPSub(UINT8 present, UINT8 n)" out);
+    Alcotest.(check bool)
+      "use site passes the formal to the gate casetype" true
+      (contains ~sub:", n) o" out)
+  in
+  check `Ffi;
+  check `Standalone
 
 let test_3d_on_act_drops_bool_return () =
   (* An [on_act] body that ends in [return_bool] projects to an [:act] block,
@@ -1329,6 +1709,66 @@ let test_3d_nested_over_array () =
     "use site is a single-element-array of the named wrapper" true
     (contains ~sub:"xs[:byte-size-single-element-array 16]" s)
 
+(* A [nested] region lifts its inner into a synthesised wrapper struct, which is
+   a 3D scope of its own: an inner sized from a field of the enclosing struct
+   named something the wrapper never declared, and EverParse rejected the schema
+   with "Variable n not found". The wrapper takes the name as a formal and the
+   use site passes the field on. *)
+let test_3d_nested_inner_sized_by_a_field () =
+  let f_n = Field.v "n" uint8 in
+  let c =
+    Codec.v "NestRef"
+      (fun n a -> (n, a))
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun (n, _) -> n);
+          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
+          $ fun (_, a) -> a );
+        ]
+  in
+  let check mode =
+    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+    Alcotest.(check bool)
+      "wrapper declares the field it is sized by" true
+      (contains ~sub:"(UINT32 n)" out);
+    Alcotest.(check bool)
+      "use site passes the field to the wrapper" true
+      (contains ~sub:"(n) a[:byte-size-single-element-array 4]" out)
+  in
+  check `Ffi;
+  check `Standalone
+
+(* Two [nested] inners of different shapes each need a wrapper of their own.
+   Both used to be named after the same catch-all, so the second was dropped as
+   a repeat of the first and its field then validated against the first's
+   length. *)
+let test_3d_nested_wrapper_per_shape () =
+  let f_n = Field.v "n" uint8 in
+  let f_m = Field.v "m" uint8 in
+  let c =
+    Codec.v "TwoNest"
+      (fun n m a b -> (n, m, a, b))
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun (n, _, _, _) -> n);
+          (Field.v "m" uint8 $ fun (_, m, _, _) -> m);
+          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
+          $ fun (_, _, a, _) -> a );
+          ( Field.v "b" (nested ~size:(int 8) (byte_slice ~size:(Field.ref f_m)))
+          $ fun (_, _, _, b) -> b );
+        ]
+  in
+  let out = flatten (to_3d (Everparse.project ~mode:`Ffi c).module_) in
+  Alcotest.(check bool)
+    "the first inner keeps its own length" true
+    (contains ~sub:"UINT8 v[:byte-size n]" out);
+  Alcotest.(check bool)
+    "the second inner keeps its own length" true
+    (contains ~sub:"UINT8 v[:byte-size m]" out);
+  Alcotest.(check bool)
+    "each use site passes its own field" true
+    (contains ~sub:"(m) b[:byte-size-single-element-array 8]" out)
+
 (* -- Reserved word escaping -- *)
 
 let test_reserved_word_escaping () =
@@ -1532,6 +1972,10 @@ let suite =
       Alcotest.test_case "3d: param embed" `Quick test_3d_param_embed;
       Alcotest.test_case "3d: nested over array" `Quick
         test_3d_nested_over_array;
+      Alcotest.test_case "3d: nested inner sized by a field" `Quick
+        test_3d_nested_inner_sized_by_a_field;
+      Alcotest.test_case "3d: one nested wrapper per shape" `Quick
+        test_3d_nested_wrapper_per_shape;
       Alcotest.test_case "3d: reserved word escaping" `Quick
         test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
@@ -1568,6 +2012,24 @@ let suite =
         test_doc_merge_dedup;
       Alcotest.test_case "doc: merge rejects conflicting redeclaration" `Quick
         test_doc_merge_name_collision;
+      Alcotest.test_case "doc: merge keeps a shared sub-codec's entrypoint"
+        `Quick test_doc_merge_shared_sub_codec;
+      Alcotest.test_case "3d: formal and label positions" `Quick
+        test_formal_and_label_positions;
+      Alcotest.test_case "3d: duplicate declaration names rejected" `Quick
+        test_duplicate_declaration_names_rejected;
+      Alcotest.test_case "3d: casetype case bodies keep refinements" `Quick
+        test_casetype_case_bodies_keep_refinements;
+      Alcotest.test_case "3d: integer casetype tags dispatch" `Quick
+        test_casetype_integer_tags_dispatch;
+      Alcotest.test_case "3d: casetype tag over map/where/uint64 bases" `Quick
+        test_3d_casetype_tag_int_carriers;
+      Alcotest.test_case "seeds: follow the compared field" `Quick
+        test_seeds_follow_the_compared_field;
+      Alcotest.test_case "seeds: lookup names its table indices" `Quick
+        test_lookup_field_seed;
+      Alcotest.test_case "seeds: casetype tag names its case indices" `Quick
+        test_casetype_tag_field_seed;
       Alcotest.test_case "doc: field ~doc renders as citation comment" `Quick
         test_doc_field_citation;
       Alcotest.test_case "doc: bit order matches schema projection" `Quick
@@ -1582,6 +2044,8 @@ let suite =
         test_3d_static_optional_transparent;
       Alcotest.test_case "3d: absent optional projects to unit" `Quick
         test_3d_absent_optional_projects_to_unit;
+      Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
+        test_3d_optional_over_param_codec;
       Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick

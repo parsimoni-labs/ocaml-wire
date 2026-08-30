@@ -987,6 +987,13 @@ let list_equal eq a b = List.length a = List.length b && List.for_all2 eq a b
 (* [repeat] and [repeat_seq] differ only in the codec name and the items
    field constructor (list vs seq); the length-prefixed payload generation is
    identical. *)
+(* A short stable tag for a shape, so two structurally different sub-codecs
+   never take the same name. Sharing one would make the projection refuse the
+   schema, and deduping them would leave both validated against whichever was
+   reached first. Same shape yields the same tag, which is the sharing we do
+   want. *)
+let shape_tag label = Fmt.str "%06x" (Hashtbl.hash label land 0xffffff)
+
 let repeat_sized name make_items ~bytes:total_bytes inner =
   let f_total = Wire.Field.v "_total" Wire.uint16be in
   let f_items = make_items ~size:(Wire.Field.ref f_total) inner.typ in
@@ -1037,8 +1044,8 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     adversarial_value = None;
   }
 
-let repeat ~bytes inner =
-  repeat_sized "_rep"
+let repeat ?(name = "_rep") ~bytes inner =
+  repeat_sized name
     (fun ~size typ -> Wire.Field.repeat "_items" ~size typ)
     ~bytes inner
 
@@ -1798,8 +1805,8 @@ let bit inner =
 
 let array_seq n inner = array_sized (Wire.array_seq Wire.seq_list) n inner
 
-let repeat_seq ~bytes inner =
-  repeat_sized "_rep_seq"
+let repeat_seq ?(name = "_rep_seq") ~bytes inner =
+  repeat_sized name
     (fun ~size typ ->
       Wire.Field.repeat_seq "_items" ~seq:Wire.seq_list ~size typ)
     ~bytes inner
@@ -2236,13 +2243,15 @@ let if_then_else =
   }
 
 (* Two-field codec whose second field's [~self_constraint] references
-   [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. *)
+   [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. [sizeof_this] is
+   the description's fixed prefix, so it is 2 here (both fields) wherever it is
+   read, not the offset of the field reading it. *)
 let sizeof =
   let f_a = Wire.Field.v "a" Wire.uint8 in
   let f_b =
     Wire.Field.v "b" Wire.uint8 ~self_constraint:(fun _ ->
         Wire.Expr.(
-          Wire.sizeof_this = Wire.int 1
+          Wire.sizeof_this = Wire.int 2
           && Wire.field_pos = Wire.int 1
           && Wire.sizeof Wire.uint8 = Wire.int 1))
   in
@@ -2464,20 +2473,27 @@ let combine_env_strategies (strategies : env_strategy option list) :
    an [int] and lifted into the discriminator's carrier here. The composer's
    default branch ignores the matched tag and always re-encodes the fixed [t],
    so adapt to the tag-aware API. *)
-let casetype_case_def (Case c) =
+let casetype_case_def_with lift (Case c) =
   match (c.index, c.default_tag) with
   | Some i, _ ->
-      Wire.case ~index:(Wire.UInt8.v i) c.inner.typ ~inject:c.inject
-        ~project:c.project
+      Wire.case ~index:(lift i) c.inner.typ ~inject:c.inject ~project:c.project
   | None, Some t ->
-      let t = Wire.UInt8.v t in
+      let t = lift t in
       Wire.default c.inner.typ
         ~inject:(fun _tag w -> c.inject w)
         ~project:(fun a -> Option.map (fun w -> (t, w)) (c.project a))
   | None, None -> invalid_arg "casetype_u8: case must supply ~index or ~tag"
 
-let casetype_u8 name cases =
-  let typ = Wire.casetype name Wire.uint8 (List.map casetype_case_def cases) in
+(* The discriminator is a parameter because a casetype dispatches on any enum,
+   and an enum takes any base with an integer view: the tag reaches the
+   case-index projection wrapped in a [lookup]'s map, behind a [where], or over
+   a 64-bit base. Generating only a bare [uint8] tag left every one of those
+   carriers unreached. [lift] carries a case's integer index into whatever the
+   tag's carrier turns out to be. *)
+let casetype_tagged name tag lift cases =
+  let typ =
+    Wire.casetype name tag (List.map (casetype_case_def_with lift) cases)
+  in
   let codec = codec_of_typ typ in
   let n = max 1 (List.length cases) in
   let env_strategy =
@@ -2522,6 +2538,8 @@ let casetype_u8 name cases =
     fields = [];
     adversarial_value = None;
   }
+
+let casetype_u8 name cases = casetype_tagged name Wire.uint8 Wire.UInt8.v cases
 
 (* A direct [Wire.casetype] over a wider discriminator, with a default branch
    that preserves the actual unclaimed tag. This mirrors [Wire.default]'s API
@@ -2970,10 +2988,22 @@ let optional_of (Any a) =
   Any { g = optional a.g; size = None; label = "opt:" ^ a.label }
 
 let repeat_of (Any a) =
-  Any { g = repeat ~bytes:12 a.g; size = None; label = "rep:" ^ a.label }
+  let label = "rep:" ^ a.label in
+  Any
+    {
+      g = repeat ~name:("_rep" ^ shape_tag label) ~bytes:12 a.g;
+      size = None;
+      label;
+    }
 
 let repeat_seq_of (Any a) =
-  Any { g = repeat_seq ~bytes:12 a.g; size = None; label = "reps:" ^ a.label }
+  let label = "reps:" ^ a.label in
+  Any
+    {
+      g = repeat_seq ~name:("_rep_seq" ^ shape_tag label) ~bytes:12 a.g;
+      size = None;
+      label;
+    }
 
 let nested_at_most_of (Any a) =
   match a.size with
@@ -3151,6 +3181,20 @@ let bind4 g1 g2 g3 g4 f =
    need a known element width); [gen_any] yields any node. Both compose the
    full combinator set so the fuzzer reaches every nesting -- the point is to
    surface compositions Wire mishandles, not to pre-filter them. *)
+(* The recursive samplers can build structurally different records at the same
+   depth, so a record takes its name from its own shape rather than from its
+   arity alone. *)
+let pair_uniq (Any a as x) (Any b as y) =
+  pair_of ("R2" ^ shape_tag (a.label ^ "," ^ b.label)) x y
+
+let rec3_uniq (Any a as x) (Any b as y) (Any c as z) =
+  rec3_of ("R3" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label)) x y z
+
+let rec4_uniq (Any a as x) (Any b as y) (Any c as z) (Any d as w) =
+  rec4_of
+    ("R4" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label ^ "," ^ d.label))
+    x y z w
+
 let rec gen_fixed depth : any Alcobar.gen =
   let leaves = List.map Alcobar.const fixed_leaves in
   if depth <= 0 then Alcobar.choose leaves
@@ -3164,18 +3208,18 @@ let rec gen_fixed depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
           bind1 (gen_fixed (depth - 1)) map_of;
           bind1 (gen_fixed (depth - 1)) where_of;
-          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) (pair_of "R2");
+          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_uniq;
           bind3
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            (rec3_of "R3");
+            rec3_uniq;
           bind4
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
             (gen_fixed (depth - 1))
-            (rec4_of "R4");
+            rec4_uniq;
         ])
 
 let rec gen_any depth : any Alcobar.gen =
@@ -3196,18 +3240,18 @@ let rec gen_any depth : any Alcobar.gen =
           bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
           bind1_opt (gen_fixed (depth - 1)) (array_of 2);
           bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
-          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) (pair_of "R2");
+          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_uniq;
           bind3
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            (rec3_of "R3");
+            rec3_uniq;
           bind4
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
             (gen_any (depth - 1))
-            (rec4_of "R4");
+            rec4_uniq;
           bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
         ])
 
@@ -4612,6 +4656,9 @@ let reject_cases label g =
 
 type packed = Pack : 'a t -> packed
 
+(* The value equality the generator was built with, so a caller can compare two
+   decodes of the same record without knowing its type. *)
+let equal g = g.equal
 let codec g = g.codec
 let binds_env (Pack g) = Option.is_some g.env
 
@@ -4647,6 +4694,43 @@ let registry_casetype =
         ~inject:(fun v -> `Other v)
         ~project:(function `Other v -> Some v | _ -> None);
     ]
+
+(* One casetype per integer carrier an enum base can take. Each dispatches the
+   same two branches; what differs is what the tag's case index has to be
+   projected through, which is where the projection used to assert. *)
+let tagged_cases =
+  [
+    case ~index:1 uint16be
+      ~inject:(fun v -> `A v)
+      ~project:(function `A v -> Some v | _ -> None);
+    case ~index:2 uint32be
+      ~inject:(fun v -> `B v)
+      ~project:(function `B v -> Some v | _ -> None);
+  ]
+
+let registry_casetype_enum_tag =
+  casetype_tagged "RegEnumTag"
+    (Wire.enum "RegEnumTagKind" [ ("A", 1); ("B", 2) ] Wire.uint8)
+    Wire.UInt8.v tagged_cases
+
+let registry_casetype_lookup_tag =
+  casetype_tagged "RegLookupTag"
+    (Wire.enum "RegLookupTagKind"
+       [ ("A", 1); ("B", 2) ]
+       (Wire.lookup [ 0; 1; 2 ] Wire.uint8))
+    Fun.id tagged_cases
+
+let registry_casetype_where_tag =
+  casetype_tagged "RegWhereTag"
+    (Wire.enum "RegWhereTagKind"
+       [ ("A", 1); ("B", 2) ]
+       (Wire.where Wire.Expr.(Wire.int 0 = Wire.int 0) Wire.uint8))
+    Wire.UInt8.v tagged_cases
+
+let registry_casetype_u64_tag =
+  casetype_tagged "RegU64Tag"
+    (Wire.enum "RegU64TagKind" [ ("A", 1); ("B", 2) ] Wire.uint64)
+    Wire.UInt64.of_int tagged_cases
 
 let unsigned_scalar_gens =
   [
@@ -4843,6 +4927,10 @@ let composite_gens =
     ("record_bits(4+12,U16be)", Pack registry_bits_u16be);
     ("casetype_u8", Pack registry_casetype);
     ("casetype_u16be_default", Pack casetype_u16be_default);
+    ("casetype_enum_tag", Pack registry_casetype_enum_tag);
+    ("casetype_lookup_tag", Pack registry_casetype_lookup_tag);
+    ("casetype_where_tag", Pack registry_casetype_where_tag);
+    ("casetype_u64_tag", Pack registry_casetype_u64_tag);
     ("field_anon", Pack field_anon);
   ]
 
@@ -6262,6 +6350,56 @@ let once_case name check =
         check ()
       end)
 
+(* [write ~mode:`Standalone] is only a merge when it is handed more than one
+   schema, and a one-element list never sees a name twice, so the dedup went
+   unexercised. A sub-codec packed as a codec of its own and also reached
+   through another codec's field is the shape that drives it: the same struct
+   projects twice, once carrying the entrypoint marker and the codec's doc and
+   once carrying neither, and the merged spec has to collapse them into one
+   declaration that keeps both. *)
+let merged_write_once ~outdir =
+  let shared =
+    Wire.Codec.v "FuzzShared" ~doc:"The shared sub-codec." Fun.id
+      Wire.Codec.[ Wire.Field.v "v" Wire.uint8 $ Fun.id ]
+  in
+  let parent =
+    Wire.Codec.v "FuzzParent"
+      (fun k s -> (k, s))
+      Wire.Codec.
+        [
+          Wire.Field.v "k" Wire.uint8 $ fst;
+          Wire.Field.v "s" (Wire.codec shared) $ snd;
+        ]
+  in
+  let project c = Wire.Everparse.project ~mode:`Standalone c in
+  let name = "ApiMerged" in
+  (* Either order has to give the same spec: which schema was projected first
+     decides nothing about what the type is. *)
+  List.iter
+    (fun schemas ->
+      Wire.Everparse.write ~mode:`Standalone ~outdir ~name schemas;
+      let path =
+        Filename.concat outdir (String.capitalize_ascii name ^ ".3d")
+      in
+      let out = In_channel.with_open_text path In_channel.input_all in
+      let occurrences sub =
+        let n = String.length sub and len = String.length out in
+        let rec go i acc =
+          if i + n > len then acc
+          else if String.equal (String.sub out i n) sub then go (i + n) (acc + 1)
+          else go (i + 1) acc
+        in
+        go 0 0
+      in
+      if occurrences "} FuzzShared;" <> 1 then
+        Alcobar.failf "merged spec declares FuzzShared %d times, expected once"
+          (occurrences "} FuzzShared;");
+      if occurrences "entrypoint\ntypedef struct WireFuzzShared" <> 1 then
+        Alcobar.failf "merged spec dropped FuzzShared's entrypoint marker";
+      if occurrences "The shared sub-codec." <> 1 then
+        Alcobar.failf "merged spec dropped FuzzShared's doc comment")
+    [ [ project shared; project parent ]; [ project parent; project shared ] ]
+
 let check_write_helpers_once () =
   let codec = fst5 (api_access_codec ()) in
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
@@ -6272,6 +6410,7 @@ let check_write_helpers_once () =
   (try Sys.mkdir outdir 0o700 with Sys_error _ -> ());
   Wire.Everparse.write ~mode:`Ffi ~outdir [ schema ];
   Wire.Everparse.write ~mode:`Standalone ~outdir ~name:"ApiDoc" [ doc_schema ];
+  merged_write_once ~outdir;
   Wire.Everparse.Raw.to_3d_file ~enum_as_type:true
     (Filename.concat outdir "ApiRawDirect.3d")
     schema.module_

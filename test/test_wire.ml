@@ -702,30 +702,31 @@ let test_sizeof () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
 
 let test_sizeof_this () =
-  (* sizeof_this tracks bytes consumed: after field a (1 byte) and b (2 bytes),
-     sizeof_this should be 3 at the point field c is parsed. *)
+  (* sizeof_this is the description's fixed prefix, one constant wherever it is
+     read, not the bytes consumed up to the reading field: a (1) + b (2) + c (1)
+     is 4 at every position. 3d.exe folds sizeof(this) to 4ul for this shape. *)
   let s =
     struct_ "SizeofThis"
       [
         field "a" uint8;
         field "b" uint16be;
-        field "c" ~constraint_:Expr.(sizeof_this = int 3) uint8;
+        field "c" ~constraint_:Expr.(sizeof_this = int 4) uint8;
       ]
   in
-  (* a=1, b=2, sizeof_this=3 at c, c=0: constraint passes *)
+  (* a=1, b=2, c=0, sizeof_this=4: constraint passes *)
   match of_string (struct_typ s) "\x01\x00\x02\x00" with
   | Ok () -> ()
   | Error e -> Alcotest.failf "sizeof_this: %a" pp_parse_error e
 
 let test_sizeof_this_fail () =
-  (* sizeof_this should be 1 at field b, not 2 *)
+  (* sizeof_this is the whole fixed prefix, 2 here, not the offset of b *)
   let s =
     struct_ "SizeofThisFail"
       [
-        field "a" uint8; field "b" ~constraint_:Expr.(sizeof_this = int 2) uint8;
+        field "a" uint8; field "b" ~constraint_:Expr.(sizeof_this = int 1) uint8;
       ]
   in
-  (* sizeof_this=1 at b, constraint says =2: fails *)
+  (* sizeof_this=2, constraint says =1: fails *)
   match of_string (struct_typ s) "\x01\x02" with
   | Ok _ -> Alcotest.fail "expected sizeof_this constraint failure"
   | Error { kind = Constraint_failed _; _ } -> ()
@@ -763,7 +764,7 @@ let test_field_pos_fail () =
 type sizeof_action_record = { a : UInt8.t; b : UInt16.t; c : UInt8.t }
 
 let test_sizeof_this_with_action () =
-  (* sizeof_this visible to actions: assign out = sizeof_this at field c *)
+  (* sizeof_this visible to actions, as the description's fixed prefix (4) *)
   let out = Param.output "out" uint8 in
   let c =
     Codec.v "SizeofThisAction"
@@ -783,7 +784,7 @@ let test_sizeof_this_with_action () =
   match Codec.decode ~env c buf 0 with
   | Ok _ ->
       Alcotest.(check int)
-        "sizeof_this via action" 3
+        "sizeof_this via action" 4
         (UInt8.to_int (Param.get env out))
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
@@ -945,14 +946,18 @@ let check_invariant_encoding ~equal label typ codec value =
       Alcotest.(check bool)
         (label ^ ": sizing rejects too")
         true
-        (match Wire.Private.Types.size_of_typ_value typ value with
+        (match
+           Wire.Private.Types.size_of_typ_value
+             Wire.Private.Types.unbound_eval_ctx typ value
+         with
         | _ -> false
         | exception Invalid_argument _ -> true)
   | Encoded bytes ->
       Alcotest.(check int)
         (label ^ ": direct sizing")
         (String.length bytes)
-        (Wire.Private.Types.size_of_typ_value typ value);
+        (Wire.Private.Types.size_of_typ_value
+           Wire.Private.Types.unbound_eval_ctx typ value);
       Alcotest.(check int)
         (label ^ ": compiled sizing")
         (String.length bytes)

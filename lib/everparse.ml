@@ -636,8 +636,19 @@ let write_ffi ~outdir schemas =
     (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
     schemas
 
-(* Identity of a declaration for merge purposes: the 3D it renders to on its
-   own. [Types.decl] holds closures (codec and map encode/decode pairs), so
+(* The entrypoint marker and the doc comment say how a typedef is used, not what
+   it is: the same struct projects with [entrypoint] set when it is packed as a
+   codec of its own and clear when it is reached through another codec's field,
+   and only the codec-derived projection carries the doc. Strip both before
+   comparing, so a sub-codec shared between a packed codec and its parent is one
+   declaration rather than a conflict. [output] and [extern_] stay in: they
+   change what the declaration is, not what it is for. *)
+let decl_shape = function
+  | Types.Typedef t -> Types.Typedef { t with entrypoint = false; doc = None }
+  | d -> d
+
+(* Identity of a declaration for merge purposes: the 3D its shape renders to on
+   its own. [Types.decl] holds closures (codec and map encode/decode pairs), so
    polymorphic equality raises on it, and the rendered text is exactly what the
    merged file would say about the type. Rendering is deterministic: its only
    render-time global, the anonymous-field counter, is reset per struct.
@@ -645,9 +656,44 @@ let write_ffi ~outdir schemas =
    two identical ones still compare equal and the projection error surfaces at
    emit time as before, not as a spurious collision. *)
 let decl_identity d =
-  match Types.to_3d ~enum_as_type:true (Types.module_ [ d ]) with
+  match Types.to_3d ~enum_as_type:true (Types.module_ [ decl_shape d ]) with
   | text -> Ok text
   | exception e -> Error (Printexc.to_string e)
+
+let decl_name = function
+  | Types.Typedef { struct_ = { name; _ }; _ } -> Some name
+  | Types.Enum_decl { name; _ } | Types.Casetype_decl { name; _ } -> Some name
+  | Types.Define { name; _ } | Types.Extern_fn { name; _ } -> Some name
+  | _ -> None
+
+(* The entrypoint marker and the doc comment a merged typedef should end up
+   with: the union over every copy of it. A sub-codec that one schema packs as
+   its own codec and another reaches through a field is declared once, and this
+   is what keeps that one declaration's validator and prose whichever schema
+   happened to contribute it first. *)
+let typedef_roles (ts : t list) =
+  let roles = Hashtbl.create 16 in
+  let note d =
+    match (decl_name d, d) with
+    | Some n, Types.Typedef { entrypoint; doc; _ } ->
+        let seen_entry, seen_doc =
+          Option.value (Hashtbl.find_opt roles n) ~default:(false, None)
+        in
+        let doc = match seen_doc with None -> doc | kept -> kept in
+        Hashtbl.replace roles n (seen_entry || entrypoint, doc)
+    | _ -> ()
+  in
+  List.iter (fun (t : t) -> List.iter note t.module_.decls) ts;
+  roles
+
+let with_role roles d =
+  match (decl_name d, d) with
+  | Some n, Types.Typedef t ->
+      let entrypoint, doc =
+        Option.value (Hashtbl.find_opt roles n) ~default:(t.entrypoint, t.doc)
+      in
+      Types.Typedef { t with entrypoint; doc }
+  | _ -> d
 
 (* Merge several clean (doc) schemas into one module: union their decls, keeping
    the first definition of each named typedef / enum / casetype so a type shared
@@ -657,13 +703,8 @@ let decl_identity d =
    Two schemas declaring different types under one name cannot both be honoured
    by a single merged spec, so that is rejected rather than resolved silently. *)
 let merge ~name (ts : t list) : t =
-  let decl_name = function
-    | Types.Typedef { struct_ = { name; _ }; _ } -> Some name
-    | Types.Enum_decl { name; _ } | Types.Casetype_decl { name; _ } -> Some name
-    | Types.Define { name; _ } | Types.Extern_fn { name; _ } -> Some name
-    | _ -> None
-  in
   let seen = Hashtbl.create 16 in
+  let roles = typedef_roles ts in
   let keep owner d =
     match decl_name d with
     | None -> true
@@ -689,6 +730,7 @@ let merge ~name (ts : t list) : t =
           acc t.module_.decls)
       [] ts
     |> List.rev
+    |> List.map (with_role roles)
   in
   { name; module_ = Types.module_ decls; wire_size = None; source = None }
 

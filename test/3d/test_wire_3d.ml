@@ -613,6 +613,138 @@ let test_corpus_straddles_a_constraint () =
     true (rejected > 0);
   Alcotest.(check int) "every line carries a verdict" 256 (accepted + rejected)
 
+(* Two four-byte magic tags out of 2^32: uniform bytes never select a case, and
+   the tag is not a field of its own but the head of the casetype's bytes. The
+   corpus must seed it from the case indices. *)
+let corpus_casetype_codec =
+  let open Wire in
+  let body =
+    casetype "Node" uint32be
+      [
+        case
+          ~index:(UInt32.of_int32 0x4c454146l)
+          uint8
+          ~inject:(fun v -> `Leaf v)
+          ~project:(function `Leaf v -> Some v | _ -> None);
+        case
+          ~index:(UInt32.of_int32 0x4e4f4445l)
+          uint16
+          ~inject:(fun v -> `Branch v)
+          ~project:(function `Branch v -> Some v | _ -> None);
+      ]
+  in
+  Codec.v "Page" Fun.id [ Codec.( $ ) (Field.v "body" body) Fun.id ]
+
+let test_corpus_seeds_a_casetype_tag () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_casetype_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus selects a case (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps unmatched tags (%d rejected)" rejected)
+    true (rejected > 0)
+
+(* An unconstrained length field filled from uniform bytes asks for gigabytes,
+   and the demand surfaces on the record's whole extent, naming no field to
+   repair. Growing to it is impossible, so the seeder must damp the length
+   instead of giving up on the codec. *)
+let corpus_length_codec =
+  let open Wire in
+  let len = Field.v "len" uint32be in
+  Codec.v "Load"
+    (fun l d -> (l, d))
+    [
+      Codec.( $ ) len (fun (l, _) -> l);
+      Codec.( $ )
+        (Field.v "data" (byte_array ~size:(Field.ref len)))
+        (fun (_, d) -> d);
+    ]
+
+let test_corpus_damps_a_runaway_length () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_length_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus reaches a well-sized record (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps mis-sized records (%d rejected)" rejected)
+    true (rejected > 0)
+
+(* A span sized from an input param. The record's extent is only computable with
+   the env bound: without one every [Param.expr] resolves to 0, so the span
+   measures as empty and the extent comes back shorter than the record. *)
+let corpus_param_span_codec =
+  let open Wire in
+  let size = Param.input "size" uint8 in
+  Codec.v "ParamSpan"
+    (fun k d -> (k, d))
+    [
+      Codec.( $ ) (Field.v "kind" uint8) fst;
+      Codec.( $ ) (Field.v "data" (byte_array ~size:(Param.expr size))) snd;
+    ]
+
+(* One [name params hex verdict] corpus line, split into the parts a reader
+   needs to replay it. *)
+let corpus_lines ?(count = 128) codecs =
+  let buf = Buffer.create 4096 in
+  let ppf = Fmt.with_buffer buf in
+  Wire_3d.generate_corpus ~count ppf codecs;
+  Format.pp_print_flush ppf ();
+  Buffer.contents buf |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+      match String.split_on_char ' ' line with
+      | [ _; params; hex; verdict ] ->
+          Some (int_of_string params, hex, String.equal verdict "1")
+      | _ -> None)
+
+let bytes_of_hex h =
+  if String.equal h "-" then Bytes.empty
+  else
+    Bytes.init
+      (String.length h / 2)
+      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub h (2 * i) 2)))
+
+(* The corpus verdict is the differential's oracle, so a wrong one does not
+   refuse, it disagrees -- and the disagreement is reported against the C
+   validator rather than against the harness. Nothing else checks the oracle,
+   so replay every line through the codec it claims to speak for. Deliberately
+   an independent reimplementation of the verdict, not a call into it. *)
+let test_corpus_verdict_resolves_params () =
+  let open Wire in
+  let c = corpus_param_span_codec in
+  let lines = corpus_lines [ Wire_3d.pack c ] in
+  Alcotest.(check bool) "the corpus is non-empty" true (lines <> []);
+  List.iter
+    (fun (p, hex, verdict) ->
+      let env = Param.bind_by_name "size" p (Codec.env c) in
+      let b = bytes_of_hex hex in
+      (* Sized from the decoded value, not from [wire_size_at]: an oracle that
+         went back through the extent reader would be re-using the thing it is
+         meant to check. *)
+      let accepts =
+        match Codec.decode ~env c b 0 with
+        | Error _ -> false
+        | Ok v -> (
+            match
+              Codec.validate ~env c b 0;
+              Codec.size_of_value c v
+            with
+            | n -> Int.equal n (Bytes.length b)
+            | exception Wire.Parse_error _ -> false)
+      in
+      if not (Bool.equal accepts verdict) then
+        Alcotest.failf "corpus records %b for size=%d %s, the codec answers %b"
+          verdict p hex accepts)
+    lines;
+  (* With the extent measured without the env, the only records that can span
+     their whole buffer are the ones whose param is 0. *)
+  Alcotest.(check bool)
+    "an accepted record binds a non-zero param" true
+    (List.exists (fun (p, _, v) -> p <> 0 && v) lines)
+
 (* A whole-record where-clause has no failing field offset to repair. Refuse a
    one-sided corpus instead of allowing an always-rejecting validator to pass. *)
 let corpus_unseedable_codec =
@@ -794,6 +926,47 @@ let test_doc_differential_trailing_bytes () =
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
+
+(* EverParse renamed the wrapper's status local between releases ([result] up
+   to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
+   name whichever one the wrapper actually binds; naming a fixed one emitted C
+   referencing an undeclared identifier, which failed to compile. *)
+let wrapper_src var =
+  Fmt.str
+    "BOOLEAN WCheckW(uint8_t *base, uint32_t len) {\n\
+     \tWFields frame;\n\
+     \tuint64_t %s = WValidateW( (uint8_t*)&frame, &DefaultErrorHandler, base, \
+     len, 0);\n\
+     \tif (EverParseIsError(%s))\n\
+     \t{\n\
+     \t\treturn FALSE;\n\
+     \t}\n\
+     \treturn TRUE;\n\
+     }"
+    var var
+
+let test_wrapper_hardening_names_the_status_var () =
+  List.iter
+    (fun var ->
+      let hardened = Wire_3d.harden_wrapper_source (wrapper_src var) in
+      let want = Fmt.str "if (%s != (uint64_t) len)" var in
+      if not (Re.execp (Re.compile (Re.str want)) hardened) then
+        Alcotest.failf "hardened wrapper for %S lacks %S:\n%s" var want hardened)
+    [ "result"; "ep_status" ]
+
+let test_wrapper_hardening_is_idempotent () =
+  let once = Wire_3d.harden_wrapper_source (wrapper_src "ep_status") in
+  Alcotest.(check string)
+    "already hardened" once
+    (Wire_3d.harden_wrapper_source once)
+
+let test_wrapper_hardening_refuses_unknown_shape () =
+  match
+    Wire_3d.harden_wrapper_source
+      "BOOLEAN WCheckW(uint8_t *base, uint32_t len) { return TRUE; }"
+  with
+  | _ -> Alcotest.fail "expected an unrecognized wrapper shape to be refused"
+  | exception Failure _ -> ()
 
 (* End-to-end compile+run. Generates C for a schema, invokes the same
    cc command [generate_dune] emits, runs the resulting binary. This is
@@ -1776,6 +1949,12 @@ let suite =
         test_corpus_straddles_a_constraint;
       Alcotest.test_case "corpus refuses when vacuous" `Quick
         test_corpus_refuses_when_vacuous;
+      Alcotest.test_case "corpus: verdict resolves input params" `Quick
+        test_corpus_verdict_resolves_params;
+      Alcotest.test_case "corpus: seeds a casetype tag" `Quick
+        test_corpus_seeds_a_casetype_tag;
+      Alcotest.test_case "corpus: damps a runaway length" `Quick
+        test_corpus_damps_a_runaway_length;
       Alcotest.test_case "generate_standalone (needs 3d.exe)" `Quick
         test_generate_standalone;
       Alcotest.test_case "archive hides raw validators (needs 3d.exe)" `Quick
@@ -1830,6 +2009,12 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
+      Alcotest.test_case "wrapper hardening names the status var" `Quick
+        test_wrapper_hardening_names_the_status_var;
+      Alcotest.test_case "wrapper hardening is idempotent" `Quick
+        test_wrapper_hardening_is_idempotent;
+      Alcotest.test_case "wrapper hardening refuses an unknown shape" `Quick
+        test_wrapper_hardening_refuses_unknown_shape;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
     ] )

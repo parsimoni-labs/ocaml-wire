@@ -141,6 +141,10 @@ val validate_cases : string -> 'a t -> Alcobar.test_case list
 (** A gen with its value type hidden, for uniform iteration over {!registry}. *)
 type packed = Pack : 'a t -> packed
 
+val equal : 'a t -> 'a -> 'a -> bool
+(** [equal g a b] is [g]'s own value equality, for comparing two decodes of one
+    record without naming its type. *)
+
 val codec : 'a t -> 'a Wire.Codec.t
 (** [codec g] is the codec [g] generates for. *)
 
@@ -328,7 +332,7 @@ val optional_or : ?present:bool -> default:'a -> 'a t -> 'a t
 (** [optional_or ~present ~default inner] generates for a
     [Field.optional_or]-wrapped record with a static [~present] gate. *)
 
-val repeat : bytes:int -> 'a t -> 'a list t
+val repeat : ?name:string -> bytes:int -> 'a t -> 'a list t
 (** [repeat ~bytes inner] generates for a [Field.repeat] whose byte-budget is
     the value of a uint16 length-prefix field. *)
 
@@ -416,7 +420,7 @@ val array_seq : int -> 'a t -> 'a list t
 (** [array_seq n inner] generates for
     [Wire.array_seq Wire.seq_list ~len:(Wire.int n) inner.typ]. *)
 
-val repeat_seq : bytes:int -> 'a t -> 'a list t
+val repeat_seq : ?name:string -> bytes:int -> 'a t -> 'a list t
 (** [repeat_seq ~bytes inner] generates for
     [Field.repeat_seq ~seq:seq_list ~size:(...)]. *)
 

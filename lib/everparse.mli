@@ -144,8 +144,12 @@ val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
     [~name] is ignored. With [`Standalone] (the default), the schemas are merged
     into a single [<name>.3d] -- a type shared across several codecs is emitted
     once -- so a whole protocol family reads as one spec, and [~name] is
-    required. Raises [Invalid_argument] if two schemas declare different types
-    under the same name, since one merged spec cannot honour both. *)
+    required. A sub-codec packed as a codec of its own and also reached through
+    another codec's field is one such shared type; the surviving declaration
+    keeps the entrypoint marker and the doc comment either copy carried, so it
+    still gets a validator of its own. Raises [Invalid_argument] if two schemas
+    declare different types under the same name, since one merged spec cannot
+    honour both. *)
 
 module Raw : sig
   type nonrec struct_ = struct_
@@ -264,11 +268,16 @@ module Raw : sig
 
   val field_seeds : struct_ -> field_seed list
   (** [field_seeds s] is, for each named whole-byte integer field of [s] whose
-      declaration singles out values, the byte slot it occupies and those
-      values: the constant an equality or inequality refinement names, the
-      values either side of an ordering refinement's boundary, and the members
-      of a closed enumeration. Bitfields are omitted because their base word is
-      shared, so a byte offset alone cannot seed one.
+      any refinement in the record compares against a value, the byte slot it
+      occupies and those values: the constant an equality or inequality names,
+      the values either side of an ordering boundary, and the members of a
+      closed enumeration. A refinement is credited to the field it compares
+      rather than to the field carrying it, and a struct-level [where] is read
+      where the projection puts it, so a field's values are the ones the
+      generated validator tests it against. A casetype field seeds too: its tag
+      is parsed at the start of the field's own bytes, so the slot is the tag's
+      and the values are the case indices. Bitfields are omitted because their
+      base word is shared, so a byte offset alone cannot seed one.
 
       The list over-approximates: it names candidates worth trying, not values
       the description is guaranteed to admit, so a consumer must run each
