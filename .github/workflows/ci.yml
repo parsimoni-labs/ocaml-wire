@@ -19,9 +19,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
 
@@ -46,12 +46,12 @@ jobs:
   tsan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install ThreadSanitizer link dependencies
         run: sudo apt-get update && sudo apt-get install -y libunwind-dev
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: 'ocaml-variants.5.4.1+options,ocaml-option-tsan'
 
@@ -65,9 +65,9 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.3'
 
@@ -78,9 +78,9 @@ jobs:
   merlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.4'
           dune-version: '3.21'
@@ -106,7 +106,7 @@ jobs:
   cppcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - run: sudo apt-get update && sudo apt-get install -y cppcheck
 
@@ -127,9 +127,9 @@ jobs:
   fuzz-afl:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.3'
 
@@ -169,7 +169,7 @@ jobs:
 
       - name: Upload findings on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: afl-findings
           path: afl-findings.tar.gz
@@ -182,9 +182,9 @@ jobs:
   fuzz-afl-diff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.3'
 
@@ -195,9 +195,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Fuzz diff (OCaml codec vs EverParse C)
@@ -226,7 +228,7 @@ jobs:
 
       - name: Upload findings on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: afl-diff-findings
           path: afl-diff-findings.tar.gz
@@ -239,13 +241,13 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.3'
 
@@ -255,10 +257,12 @@ jobs:
       # version 119 or newer; the Ubuntu package is too old.
       - name: Install binaryen
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/WebAssembly/binaryen/releases/download/version_131/binaryen-version_131-x86_64-linux.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
-          echo "$HOME/.local/binaryen-version_131/bin" >> "$GITHUB_PATH"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$BINARYEN_LINUX_X86_64_URL" \
+            "$BINARYEN_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/binaryen-$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
 
       - run: opam install wasm_of_ocaml-compiler
 
@@ -278,9 +282,9 @@ jobs:
   everparse-3d:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
         with:
           ocaml-compiler: '5.3'
 
@@ -288,9 +292,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Run tests with 3d.exe projection checks

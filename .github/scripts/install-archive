@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+  echo "usage: $0 URL SHA256 DESTINATION" >&2
+  exit 2
+fi
+
+url=$1
+expected=$2
+destination=$3
+archive=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wire-ci-archive.XXXXXX")
+trap 'rm -f -- "$archive"' EXIT
+
+curl --fail --show-error --location --retry 3 --output "$archive" "$url"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$archive")
+else
+  actual=$(shasum -a 256 "$archive")
+fi
+actual=${actual%% *}
+if [[ "$actual" != "$expected" ]]; then
+  echo "SHA-256 mismatch for $url" >&2
+  echo "expected: $expected" >&2
+  echo "actual:   $actual" >&2
+  exit 1
+fi
+
+mkdir -p "$destination"
+tar xzf "$archive" -C "$destination"
