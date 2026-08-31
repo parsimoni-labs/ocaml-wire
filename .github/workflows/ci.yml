@@ -195,9 +195,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Fuzz diff (OCaml codec vs EverParse C)
@@ -255,10 +257,12 @@ jobs:
       # version 119 or newer; the Ubuntu package is too old.
       - name: Install binaryen
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/WebAssembly/binaryen/releases/download/version_131/binaryen-version_131-x86_64-linux.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
-          echo "$HOME/.local/binaryen-version_131/bin" >> "$GITHUB_PATH"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$BINARYEN_LINUX_X86_64_URL" \
+            "$BINARYEN_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/binaryen-$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
 
       - run: opam install wasm_of_ocaml-compiler
 
@@ -288,9 +292,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Run tests with 3d.exe projection checks

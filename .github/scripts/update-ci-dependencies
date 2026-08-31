@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 EVERPARSE_TAG BINARYEN_TAG" >&2
+  exit 2
+fi
+
+everparse_version=$1
+binaryen_version=$2
+everparse_url="https://github.com/project-everest/everparse/releases/download/$everparse_version/everparse_${everparse_version}_Linux_x86_64.tar.gz"
+binaryen_url="https://github.com/WebAssembly/binaryen/releases/download/$binaryen_version/binaryen-$binaryen_version-x86_64-linux.tar.gz"
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wire-ci-update.XXXXXX")
+trap 'rm -rf -- "$tmpdir"' EXIT
+
+digest() {
+  local url=$1
+  local output=$2
+  curl --fail --show-error --location --retry 3 --output "$output" "$url"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$output" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$output" | cut -d ' ' -f 1
+  fi
+}
+
+everparse_sha=$(digest "$everparse_url" "$tmpdir/everparse.tar.gz")
+binaryen_sha=$(digest "$binaryen_url" "$tmpdir/binaryen.tar.gz")
+
+cat <<EOF
+# Immutable release archives used by CI. To update both versions and verified
+# digests, run:
+#
+#   .github/scripts/update-ci-dependencies $everparse_version $binaryen_version \\
+#     > .github/ci-dependencies.env
+#
+# Replace both tag arguments when updating either dependency, then review the
+# version, URL, and digest changes together.
+EVERPARSE_VERSION=$everparse_version
+EVERPARSE_LINUX_X86_64_URL=$everparse_url
+EVERPARSE_LINUX_X86_64_SHA256=$everparse_sha
+
+BINARYEN_VERSION=$binaryen_version
+BINARYEN_LINUX_X86_64_URL=$binaryen_url
+BINARYEN_LINUX_X86_64_SHA256=$binaryen_sha
+EOF
