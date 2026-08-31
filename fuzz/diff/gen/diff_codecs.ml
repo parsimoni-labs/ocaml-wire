@@ -82,8 +82,8 @@ type compared_field = { name : string; width : int }
    - The default plug must report the field's value. A byte span, a nested
      region and a variable-width integer all route to [<Name>SetBytes], which
      hands back the field's byte offset instead, so there is no value on the C
-     side to compare. That drops [uint], the one whole-byte integer the plug
-     does not carry.
+     side to compare. That drops [uint], the one whole-byte integer the
+     plug does not carry.
 
    What is left is the fixed-width scalars -- [uint8] .. [uint64], [int8] ..
    [int64], and the enums, lookups, maps and refinements layered over them. *)

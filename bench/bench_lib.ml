@@ -10,11 +10,11 @@
 
 (* -- Timing primitives -- *)
 
-let time_ns n f =
+let time_ns ?(now = Unix.gettimeofday) n f =
   Gc.compact ();
-  let t0 = Unix.gettimeofday () in
+  let t0 = now () in
   f ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = now () in
   (t1 -. t0) *. 1e9 /. float_of_int n
 
 let alloc_words n f =
@@ -115,8 +115,8 @@ let check t =
       f ()
   | None -> ()
 
-let run_one ~n t =
-  check t;
+let run_one ~prechecked ~n t =
+  if not prechecked then check t;
   let c_ns =
     match t.c with
     | None -> None
@@ -192,11 +192,11 @@ let print_row widths cells =
   List.iter2 (fun (_, w) cell -> Fmt.pr "  %-*s" w cell) widths cells;
   Fmt.pr "\n"
 
-let run_table ~title ~n ?(unit = "op") specs =
+let run_table ~title ~n ?(unit = "op") ?(prechecked = false) specs =
   let w = print_header title (cols unit) in
   List.iter
     (fun t ->
-      let r = run_one ~n t in
+      let r = run_one ~prechecked ~n t in
       print_row w
         [
           t.label;

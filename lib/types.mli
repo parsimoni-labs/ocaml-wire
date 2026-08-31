@@ -303,7 +303,7 @@ and _ typ =
       (** Byte span with a per-byte refinement: each decoded byte must satisfy
           [cond], where [elt_var] is bound to the byte's value. *)
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
-      (** Zero-copy byte span. *)
+      (** Byte span that aliases mutable decoder input. *)
   | Single_elem : { size : int expr; elem : 'a typ; at_most : bool } -> 'a typ
       (** Single element in a sized region. *)
   | Enum : {
@@ -358,6 +358,8 @@ and _ typ =
               than by re-reading the buffer. *)
       codec_field_readers :
         (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
+      codec_returns_slice : bool;
+          (** Whether a decoded value can retain a mutable byte slice. *)
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
     }
@@ -636,9 +638,13 @@ val float64 : float typ
 val float64be : float typ
 (** [float64be] is an IEEE 754 binary64 big-endian. *)
 
-val uint : ?endian:endian -> int expr -> UInt63.t typ
-(** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
-    {!Big}. The size may be a dynamic expression for parameter-driven widths. *)
+val uint : ?endian:endian -> int -> UInt63.t typ
+(** [uint size] is an unsigned integer occupying [size] bytes (1-7). Default
+    endian is {!Big}. *)
+
+val uint_var : ?endian:endian -> int expr -> UInt63.t typ
+(** [uint_var size] is like {!uint}, with a dynamic size expression for
+    parameter-driven widths. *)
 
 val bf_uint8 : bitfield_base
 (** 8-bit bitfield base. *)
@@ -773,8 +779,9 @@ val index_bound_elt : 'a typ -> (string * bool expr) option
     used by the EverParse projection. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Zero-copy byte span. Encoding a slice whose length differs from [size]
-    raises [Invalid_argument]. *)
+(** Byte span backed by the mutable input for bytes-based decoders. String
+    decoders copy the span before exposing it as mutable. Encoding a slice whose
+    length differs from [size] raises [Invalid_argument]. *)
 
 val optional : bool expr -> 'a typ -> 'a option typ
 (** Conditionally present field. *)

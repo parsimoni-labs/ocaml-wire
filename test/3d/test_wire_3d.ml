@@ -260,6 +260,65 @@ let test_name_collision () =
     && Sys.file_exists (Filename.concat tmpdir "Beta.3d"));
   Wire_3d.rm_rf tmpdir
 
+(* Schema names become 3D module names, generated C identifiers, dune atoms,
+   and output file basenames. Reject anything outside their common portable
+   identifier subset before opening even an earlier schema's output file. *)
+let test_output_name_validation () =
+  let schema name =
+    Wire.Everparse.Raw.of_module ~name ~module_:simple_module ~wire_size:3
+  in
+  let valid = "mIxEd_Case9" in
+  let invalid =
+    [
+      "";
+      "../escaped";
+      "dir/escaped";
+      "dir\\escaped";
+      "/absolute";
+      "bad\nname";
+      "has-hyphen";
+      "9starts_with_digit";
+      "NUL";
+      "com1";
+    ]
+  in
+  let with_tmp f =
+    let tmpdir = Filename.temp_dir "wire_3d_name" "" in
+    Fun.protect ~finally:(fun () -> Wire_3d.rm_rf tmpdir) (fun () -> f tmpdir)
+  in
+  let rejects mode name generate =
+    with_tmp (fun outdir ->
+        match generate outdir with
+        | () -> Alcotest.failf "%s accepted invalid output name %S" mode name
+        | exception Invalid_argument msg ->
+            Alcotest.(check bool)
+              (Fmt.str "%s error identifies %S" mode name)
+              true
+              (Re.execp (Re.compile (Fmt.kstr Re.str "%S" name)) msg);
+            Alcotest.(check (array string))
+              (Fmt.str "%s writes no files for %S" mode name)
+              [||] (Sys.readdir outdir))
+  in
+  List.iter
+    (fun name ->
+      rejects "FFI" name (fun outdir ->
+          Wire.Everparse.write ~mode:`Ffi ~outdir [ schema valid; schema name ]);
+      rejects "standalone" name (fun outdir ->
+          Wire.Everparse.write ~mode:`Standalone ~outdir ~name [ schema valid ]))
+    invalid;
+  let expected = "MIxEd_Case9.3d" in
+  with_tmp (fun outdir ->
+      Wire.Everparse.write ~mode:`Ffi ~outdir [ schema valid ];
+      Alcotest.(check bool)
+        "FFI accepts mixed-case identifier" true
+        (Sys.file_exists (Filename.concat outdir expected)));
+  with_tmp (fun outdir ->
+      Wire.Everparse.write ~mode:`Standalone ~outdir ~name:valid
+        [ schema valid ];
+      Alcotest.(check bool)
+        "standalone accepts mixed-case identifier" true
+        (Sys.file_exists (Filename.concat outdir expected)))
+
 let raises_failure f =
   match f () with () -> false | exception Failure _ -> true
 
@@ -1938,6 +1997,8 @@ let suite =
       Alcotest.test_case "freestanding endianness header (needs 3d.exe)" `Quick
         test_endianness_freestanding;
       Alcotest.test_case "generated-name collision" `Quick test_name_collision;
+      Alcotest.test_case "output-name validation" `Quick
+        test_output_name_validation;
       Alcotest.test_case "check_provenance" `Quick test_check_provenance;
       Alcotest.test_case "generate_dune_standalone" `Quick
         test_generate_dune_standalone;

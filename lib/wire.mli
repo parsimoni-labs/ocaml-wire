@@ -696,15 +696,19 @@ val is_nan : float Field.t -> bool expr
 (** [is_nan f] holds iff [f] decodes to a NaN bit pattern (exponent all-ones AND
     mantissa non-zero). *)
 
-val uint : ?endian:endian -> int expr -> Optint.Int63.t typ
-(** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
-    order (default {!Big}). The size may be a dynamic expression for
-    parameter-driven widths. Decodes to an [Optint.Int63.t]: a 7-byte value
-    needs 56 bits, which does not fit an int on a narrow-int target (js/wasm).
+val uint : ?endian:endian -> int -> Optint.Int63.t typ
+(** [uint size] is an unsigned integer occupying [size] bytes (1-7) with the
+    given byte order (default {!Big}). Decodes to an [Optint.Int63.t]: a 7-byte
+    value needs 56 bits, which does not fit an int on a narrow-int target
+    (js/wasm).
 
     Encoding a value that needs more than [size] bytes raises [Invalid_argument]
     rather than dropping its high bytes: the truncated result is itself a legal
     [size]-byte number, so nothing downstream could tell the two apart. *)
+
+val uint_var : ?endian:endian -> int expr -> Optint.Int63.t typ
+(** [uint_var size] is like {!uint}, with a dynamic size expression for
+    parameter-driven widths. *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
 (** [bits ~width base] declares a bitfield of [width] bits inside [base].
@@ -838,9 +842,10 @@ val byte_array_where :
     printable US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding raises
-    [Invalid_argument] unless the slice is exactly [size] bytes, as for
-    {!byte_array}. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based
+    decoders. {!of_string} gives the mutable result its own backing bytes.
+    Encoding raises [Invalid_argument] unless the slice is exactly [size] bytes,
+    as for {!byte_array}. *)
 
 val rest_bytes : (_, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
@@ -1041,7 +1046,9 @@ val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 
 val of_string : 'a typ -> string -> ('a, parse_error) result
 (** Decodes one value from the start of the string. Trailing bytes, if any, are
-    left uninterpreted. *)
+    left uninterpreted. Decoding itself does not copy the input; mutable
+    {!byte_slice} values that escape in the result receive their own backing
+    bytes so they cannot modify the source string. *)
 
 val of_string_exn : 'a typ -> string -> 'a
 (** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
@@ -1387,8 +1394,16 @@ module Everparse : sig
   (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
       [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
 
+  val validate_output_name : string -> unit
+  (** [validate_output_name name] accepts portable ASCII identifiers beginning
+      with a letter or underscore and containing only letters, digits, and
+      underscores, except filesystem device names such as [NUL] and [COM1].
+      Raises [Invalid_argument] for any other name. *)
+
   val filename : t -> string
-  (** [filename s] is the [.3d] output filename for schema [s]. *)
+  (** [filename s] is the [.3d] output filename for schema [s]. Raises
+      [Invalid_argument] when [s]'s name does not satisfy
+      {!validate_output_name}. *)
 
   val uses_wire_ctx : t -> bool
   (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
@@ -1442,8 +1457,9 @@ module Everparse : sig
       through another codec's field is one such shared type; the surviving
       declaration keeps the entrypoint marker and the doc comment either copy
       carried, so it still gets a validator of its own. Raises
-      [Invalid_argument] if two schemas declare different types under the same
-      name, since one merged spec cannot honour both. *)
+      [Invalid_argument] before opening a file if any output name does not
+      satisfy {!validate_output_name}, or if two schemas declare different types
+      under the same name, since one merged spec cannot honour both. *)
 
   module Raw : sig
     (** Escape hatch for manual 3D authoring.

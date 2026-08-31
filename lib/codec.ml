@@ -2867,8 +2867,8 @@ let compile_var_bytes : type a r.
           let sz = size_fn runtime input_end buf base in
           let first = base + fo in
           (* This branch bypasses [var_bytes_reader]; run the same span check it
-             would have run, so a [uint] sized past the end reports truncation
-             the way a [byte_array] does instead of crashing. *)
+             would have run, so a [uint_var] sized past the end reports
+             truncation the way a [byte_array] does instead of crashing. *)
           check_span_bounds buf ~first ~sz;
           Uint_var.read endian buf first sz
         in
@@ -3392,8 +3392,8 @@ let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
 
    Only accesses with a known extent get a guard. A variable-width field reads
    through a span check of its own ([var_bytes_reader], or [check_span_bounds]
-   directly for a [uint] of computed width). A conditional optional has no
-   extent here -- [field_wire_size] is [None] for it, since an absent one
+   directly for a [uint_var] of computed width). A conditional optional has
+   no extent here -- [field_wire_size] is [None] for it, since an absent one
    occupies nothing -- so it carries its own presence-gated check instead, in
    [present_in_bounds]. *)
 let read_guard : type a r.

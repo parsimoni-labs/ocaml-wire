@@ -195,9 +195,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Fuzz diff (OCaml codec vs EverParse C)
@@ -255,10 +257,12 @@ jobs:
       # version 119 or newer; the Ubuntu package is too old.
       - name: Install binaryen
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/WebAssembly/binaryen/releases/download/version_131/binaryen-version_131-x86_64-linux.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
-          echo "$HOME/.local/binaryen-version_131/bin" >> "$GITHUB_PATH"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$BINARYEN_LINUX_X86_64_URL" \
+            "$BINARYEN_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/binaryen-$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
 
       - run: opam install wasm_of_ocaml-compiler
 
@@ -288,9 +292,11 @@ jobs:
 
       - name: Install EverParse
         run: |
-          mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
-          curl -sL "$url" | tar xz -C "$HOME/.local"
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
       - name: Run tests with 3d.exe projection checks
@@ -300,14 +306,12 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
-      # Named one alias at a time rather than through dune runtest, because
-      # BUILD_EVERPARSE=1 also enables test/bench's own executable, and that one
-      # does not link on Linux: the bench C tier's archives reach the linker in
-      # an order GNU ld will not resolve. Add @test/bench/runtest here once that
-      # is fixed.
+      # Name the aliases explicitly so this lane documents every suite which
+      # needs generated C and cannot run in the ordinary build matrix.
       - name: Run the suites that need EverParse-generated C
         run: |
           opam exec -- dune build \
-            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest
+            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
+            @test/bench/runtest
         env:
           BUILD_EVERPARSE: 1

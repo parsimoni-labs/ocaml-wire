@@ -8,6 +8,7 @@
  (modules)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries c_stubs_c)
  (foreign_stubs
   (language c)
   (names routing_c)
@@ -21,4 +22,4 @@
  (modules bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries routing_bench routing_bench_c c_stubs_c wire.stubs))
+ (libraries routing_bench routing_bench_c wire.stubs))

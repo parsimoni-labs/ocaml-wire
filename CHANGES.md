@@ -1,6 +1,21 @@
 ## unreleased
 
+### Changed
+
+- **Breaking:** `Wire.uint` now takes its 1-7 byte width as an `int`, so a
+  three-byte integer is `uint 3` rather than `uint (int 3)`. Use `Wire.uint_var`
+  when the width is a field- or parameter-driven expression. (#382)
+
 ### Fixed
+
+- EverParse output names are now validated as portable ASCII identifiers before
+  any generated files are opened, preventing path escapes and malformed 3D, C,
+  or dune output. (#385, @samoht)
+
+- A mutable `byte_slice` returned by `Wire.of_string` now owns its backing
+  bytes, so it cannot modify the caller's immutable source string. Other
+  decoded values remain copy-free, and bytes inputs still alias. (#383,
+  @samoht)
 
 - A zero divisor supplied to expression division or modulo is now reported as
   `Zero_divisor`. It used to escape decoding as the host exception
@@ -123,7 +138,7 @@
 - A codec parameter and a casetype case label each render as something the
   schema declares. A parameter typed by an enum named a type EverParse rejects
   in that position, a case label named a constant of an enum over a bitfield
-  base that is never declared, and a `uint ~size` parameter named no type at
+  base that is never declared, and a `uint_var size` parameter named no type at
   all and is now refused where it is built (#366, @samoht)
 
 - `Field.optional` over a sub-codec that takes `Param.input` values now projects

@@ -166,7 +166,7 @@ let above_bit_width width =
   let mask = (1 lsl width) - 1 in
   Alcobar.map Alcobar.[ Alcobar.int ] (fun n -> n land mask lor (mask + 1))
 
-(* The [uint ~size] counterpart: a value needing more than [size] bytes. *)
+(* The [uint size] counterpart: a value needing more than [size] bytes. *)
 let above_byte_width size =
   let max_v = (1 lsl (size * 8)) - 1 in
   Alcobar.map
@@ -707,7 +707,7 @@ let map ~decode ~encode inner =
   }
 
 let uint_var ~endian size =
-  let typ = Wire.uint ~endian (Wire.int size) in
+  let typ = Wire.uint ~endian size in
   let codec = codec_of_typ typ in
   let max_v = (1 lsl (size * 8)) - 1 in
   let value_gen =
@@ -891,7 +891,7 @@ let int64be_endian_edges =
 
 let uint_var_endian_edges ~endian size cases =
   let cases = List.map (fun (v, bs) -> (Optint.Int63.of_int v, bs)) cases in
-  exact_cases ~typ:(Wire.uint ~endian (Wire.int size)) ~equal:( = ) cases
+  exact_cases ~typ:(Wire.uint ~endian size) ~equal:( = ) cases
 
 let uint_var3_little_edges =
   uint_var_endian_edges ~endian:Wire.Little 3
@@ -4238,9 +4238,9 @@ let check_short_prefix label kind ?env g bs =
 
 (* {1 Idempotence and non-interference} *)
 
-(* Every read path leaves the buffer byte-identical. [Wire.of_string] hands the
-   decoder a [Bytes.unsafe_of_string] view of an immutable OCaml string, so a
-   write anywhere on a read path corrupts a value the caller believes frozen. *)
+(* Every read path leaves the buffer byte-identical. Callers of the bytes-based
+   APIs retain that buffer, so a write anywhere on a read path corrupts their
+   input. *)
 let check_read_purity label kind ?env a g bs =
   let before = Bytes.copy bs in
   ignore (decode_at ?env g bs 0);
@@ -5810,7 +5810,7 @@ let check_sampler_distribution () =
       ("no 32-bit bitpack", has_any [ "bp32m"; "bp32bel" ]);
       ("no byte span", has "ba3");
       ("no refined byte span", has "baw3");
-      ("no variable-width uint", has_any [ "uv3"; "uv3le" ]);
+      ("no arbitrary-width uint", has_any [ "uv3"; "uv3le" ]);
       ("no wide bounded int", has_any [ "bnd16"; "bnd32" ]);
       ("no refined sub-codec", has_any [ "twhere"; "fconstraint" ]);
     ]
@@ -5910,7 +5910,7 @@ let construction_guard_cases label =
     const_case (label ^ " casetype dynamic tag") (fun () ->
         expect_invalid "casetype dynamic tag" (fun () ->
             Wire.casetype "BadDynTag"
-              (Wire.uint ~endian:Wire.Big (Wire.int 2))
+              (Wire.uint ~endian:Wire.Big 2)
               [
                 Wire.case ~index:(Optint.Int63.of_int 0) Wire.uint8
                   ~inject:Fun.id ~project:(fun v -> Some v);

@@ -182,7 +182,7 @@ val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared
     size, an integer outside the range of its width (fixed or [bits ~width] or
-    [uint ~size] alike), a byte a [byte_array_where] refinement rejects, or a
+    [uint size] alike), a byte a [byte_array_where] refinement rejects, or a
     sub-codec value its own [where] clause or field [~constraint_] rejects. Each
     of those would otherwise put different bytes on the wire than the caller
     asked for, and a masked integer is indistinguishable from a value meant that
