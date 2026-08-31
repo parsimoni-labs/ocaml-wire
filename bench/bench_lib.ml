@@ -10,11 +10,11 @@
 
 (* -- Timing primitives -- *)
 
-let time_ns n f =
+let time_ns ?(now = Unix.gettimeofday) n f =
   Gc.compact ();
-  let t0 = Unix.gettimeofday () in
+  let t0 = now () in
   f ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = now () in
   (t1 -. t0) *. 1e9 /. float_of_int n
 
 let alloc_words n f =

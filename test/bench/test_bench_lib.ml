@@ -274,17 +274,19 @@ let test_time_ns_non_negative () =
   Alcotest.(check bool) "non-negative" true (ns >= 0.0)
 
 let test_time_ns_division () =
-  (* time_ns 2 should return roughly half of time_ns 1 for the same work *)
-  let work () =
-    let r = ref 0 in
-    for i = 1 to 10_000 do
-      r := Sys.opaque_identity (!r + i)
-    done
+  let timestamps = ref [ 1.0; 3.0 ] in
+  let now () =
+    match !timestamps with
+    | timestamp :: rest ->
+        timestamps := rest;
+        timestamp
+    | [] -> Alcotest.fail "time_ns read the clock more than twice"
   in
-  let t1 = time_ns 1 work in
-  let t2 = time_ns 2 work in
-  (* t2 should be roughly t1/2 (within 10x tolerance for CI noise) *)
-  Alcotest.(check bool) "t2 < t1" true (t2 < t1 *. 10.0)
+  let ran = ref false in
+  let ns = time_ns ~now 2 (fun () -> ran := true) in
+  Alcotest.(check bool) "work ran" true !ran;
+  Alcotest.(check (float 0.0)) "two seconds / two iterations" 1e9 ns;
+  Alcotest.(check int) "clock read twice" 0 (List.length !timestamps)
 
 let test_alloc_words_zero () =
   let w = alloc_words 100 noop in

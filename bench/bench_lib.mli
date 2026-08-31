@@ -10,8 +10,10 @@
 
 (** {1 Timing primitives} *)
 
-val time_ns : int -> (unit -> unit) -> float
-(** [time_ns n f] runs [f ()] and returns elapsed nanoseconds per iteration. *)
+val time_ns : ?now:(unit -> float) -> int -> (unit -> unit) -> float
+(** [time_ns n f] runs [f ()] and returns elapsed nanoseconds per iteration.
+    [now] defaults to {!Unix.gettimeofday}; it can be supplied when a stable
+    measurement source is required. *)
 
 val alloc_words : int -> (unit -> unit) -> float
 (** [alloc_words n f] runs [f] [n] times and returns minor words allocated per
