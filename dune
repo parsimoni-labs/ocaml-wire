@@ -11,3 +11,9 @@
  (deps (universe) test/ci/check-dependency-pins.sh)
  (action
   (run bash %{dep:test/ci/check-dependency-pins.sh})))
+
+(rule
+ (alias runtest)
+ (deps (universe) test/ci/check-everparse-bench.sh)
+ (action
+  (run bash %{dep:test/ci/check-everparse-bench.sh})))
