@@ -123,6 +123,36 @@ let test_byte_slice_zero () =
         (Bytesrw.Bytes.Slice.length s)
   | Error e -> Alcotest.failf "codec rejected zero slice: %a" pp_parse_error e
 
+let overwrite_first slice =
+  Bytes.set
+    (Bytesrw.Bytes.Slice.bytes slice)
+    (Bytesrw.Bytes.Slice.first slice)
+    'X'
+
+let test_byte_slice_input_ownership () =
+  let large_source = String.make (1024 * 1024) '\x2a' in
+  ignore (of_string_exn uint8 large_source : UInt8.t);
+  let before = Gc.allocated_bytes () in
+  ignore (of_string_exn uint8 large_source : UInt8.t);
+  let allocated = Gc.allocated_bytes () -. before in
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (allocated < 4096.))
+    "scalar decode does not copy a 1 MiB string (allocated %.0f bytes)"
+    allocated;
+  let typ = byte_slice ~size:(int 3) in
+  let source = String.init 3 (fun i -> Char.chr (Char.code 'a' + i)) in
+  overwrite_first (of_string_exn typ source);
+  Alcotest.(check string) "direct source string remains immutable" "abc" source;
+  let field = Field.v "payload" typ in
+  let container = Codec.v "Slice" Fun.id Codec.[ field $ Fun.id ] in
+  let source = String.init 3 (fun i -> Char.chr (Char.code 'a' + i)) in
+  overwrite_first (of_string_exn (codec container) source);
+  Alcotest.(check string) "codec source string remains immutable" "abc" source;
+  let source = Bytes.of_string "abc" in
+  overwrite_first (of_bytes_exn typ source);
+  Alcotest.(check bytes)
+    "mutable byte input remains aliased" (Bytes.of_string "Xbc") source
+
 let test_int8_negative () =
   let buf = Bytes.of_string "\xFE" in
   Alcotest.(check int) "-2" (-2) (SInt8.to_int (of_bytes_exn int8 buf))
@@ -1553,6 +1583,8 @@ let suite =
       Alcotest.test_case "parse: array" `Quick test_parse_array;
       Alcotest.test_case "parse: byte_array" `Quick test_parse_byte_array;
       Alcotest.test_case "parse: byte_slice size 0" `Quick test_byte_slice_zero;
+      Alcotest.test_case "parse: byte_slice input ownership" `Quick
+        test_byte_slice_input_ownership;
       Alcotest.test_case "parse: int8 negative" `Quick test_int8_negative;
       Alcotest.test_case "parse: int8 full range" `Quick test_int8_full_range;
       Alcotest.test_case "parse: int16be negative" `Quick test_int16be_negative;
