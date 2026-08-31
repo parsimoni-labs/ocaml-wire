@@ -68,12 +68,16 @@ val check : t -> unit
 (** [check t] verifies all tiers agree on the test data: OCaml read succeeds,
     FFI validation succeeds, and C loop accepts the buffer. [reset] runs before
     each tier so stateful closures see the same starting point. Raises on
-    mismatch. Called automatically by {!run_table} before timing. *)
+    mismatch. Called automatically by {!run_table} before timing unless its
+    [prechecked] argument is [true]. *)
 
-val run_table : title:string -> n:int -> ?unit:string -> t list -> unit
+val run_table :
+  title:string -> n:int -> ?unit:string -> ?prechecked:bool -> t list -> unit
 (** [run_table ~title ~n specs] runs all specs and prints a table. [~unit] sets
     the throughput column header (default ["op"] -> ["Mop/s"]; ["pkt"] ->
-    ["Mpkt/s"]). *)
+    ["Mpkt/s"]). When [prechecked] is [true], the caller promises it has already
+    called {!check}; this is useful for keeping verification outside a profiling
+    capture. *)
 
 (** {1 Utilities} *)
 

@@ -155,20 +155,22 @@ let check ~n_frames =
   Bench_lib.check t
 
 let main () =
-  Memtrace.trace_if_requested ~context:"gateway" ();
   let n_frames =
     if Array.length Sys.argv > 1 then int_of_string Sys.argv.(1) else 1_000_000
   in
   let t, st = benchmark ~n_frames in
-  Fmt.pr
-    "TM frame reassembly (%d frames, %d-byte CADUs, %d embedded packets)\n\n"
-    n_frames cadu_size st.total_pkts;
-  run_table ~title:"TM frame reassembly" ~n:n_frames ~unit:"frm" [ t ];
+  Bench_lib.check t;
   let ocaml_checksum =
     process_all ~n_frames:st.n_frames ~walk:st.walk_frame
       ~get_vcid:(fun base -> st.get_vcid st.buf base)
       ~get_fhp:(fun base -> st.get_fhp st.buf base)
   in
   let c_checksum = c_tm_reassemble_checksum st.buf 0 in
+  Fmt.pr
+    "TM frame reassembly (%d frames, %d-byte CADUs, %d embedded packets)\n\n"
+    n_frames cadu_size st.total_pkts;
+  Memtrace.trace_if_requested ~context:"gateway" ();
+  run_table ~prechecked:true ~title:"TM frame reassembly" ~n:n_frames
+    ~unit:"frm" [ t ];
   Fmt.pr "\n  OCaml checksum: 0x%Lx\n  C checksum:     0x%Lx\n" ocaml_checksum
     c_checksum

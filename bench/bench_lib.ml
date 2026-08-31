@@ -115,8 +115,8 @@ let check t =
       f ()
   | None -> ()
 
-let run_one ~n t =
-  check t;
+let run_one ~prechecked ~n t =
+  if not prechecked then check t;
   let c_ns =
     match t.c with
     | None -> None
@@ -192,11 +192,11 @@ let print_row widths cells =
   List.iter2 (fun (_, w) cell -> Fmt.pr "  %-*s" w cell) widths cells;
   Fmt.pr "\n"
 
-let run_table ~title ~n ?(unit = "op") specs =
+let run_table ~title ~n ?(unit = "op") ?(prechecked = false) specs =
   let w = print_header title (cols unit) in
   List.iter
     (fun t ->
-      let r = run_one ~n t in
+      let r = run_one ~prechecked ~n t in
       print_row w
         [
           t.label;
