@@ -542,7 +542,43 @@ let project : type r. ?mode:mode -> r Codec.t -> t =
   | `Standalone ->
       standalone_of_struct ?doc:(Codec.doc codec) (Codec.to_struct codec)
 
-let filename (s : t) = String.capitalize_ascii s.name ^ ".3d"
+let ascii_letter c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+let ascii_digit c = c >= '0' && c <= '9'
+
+(* Even with an extension, these basenames name devices rather than ordinary
+   files on Windows. Reject them case-insensitively so generated sources remain
+   portable and a checkout cannot behave differently from the machine that
+   produced it. *)
+let reserved_device_name name =
+  let name = String.uppercase_ascii name in
+  match name with
+  | "CON" | "PRN" | "AUX" | "NUL" -> true
+  | _ when String.length name = 4 ->
+      let prefix = String.sub name 0 3 in
+      (prefix = "COM" || prefix = "LPT") && name.[3] >= '1' && name.[3] <= '9'
+  | _ -> false
+
+let validate_output_name name =
+  let len = String.length name in
+  let valid_start c = ascii_letter c || c = '_' in
+  let valid_tail c = valid_start c || ascii_digit c in
+  let rec valid_from i =
+    i = len || (valid_tail name.[i] && valid_from (i + 1))
+  in
+  if
+    len = 0
+    || (not (valid_start name.[0]))
+    || (not (valid_from 1))
+    || reserved_device_name name
+  then
+    Fmt.invalid_arg
+      "Everparse: invalid output name %S; expected an ASCII identifier \
+       matching [A-Za-z_][A-Za-z0-9_]* and not a reserved device name"
+      name
+
+let filename (s : t) =
+  validate_output_name s.name;
+  String.capitalize_ascii s.name ^ ".3d"
 
 let uses_wire_ctx s =
   List.exists
@@ -632,9 +668,10 @@ let field_action_forms (st : Types.struct_) =
     st.fields
 
 let write_ffi ~outdir schemas =
+  let outputs = List.map (fun s -> (s, filename s)) schemas in
   List.iter
-    (fun s -> Types.to_3d_file (Filename.concat outdir (filename s)) s.module_)
-    schemas
+    (fun (s, file) -> Types.to_3d_file (Filename.concat outdir file) s.module_)
+    outputs
 
 (* The entrypoint marker and the doc comment say how a typedef is used, not what
    it is: the same struct projects with [entrypoint] set when it is packed as a
@@ -735,6 +772,7 @@ let merge ~name (ts : t list) : t =
   { name; module_ = Types.module_ decls; wire_size = None; source = None }
 
 let write_standalone ~outdir ~name (ts : t list) =
+  validate_output_name name;
   Types.to_3d_file ~enum_as_type:true
     (Filename.concat outdir (String.capitalize_ascii name ^ ".3d"))
     (merge ~name ts).module_

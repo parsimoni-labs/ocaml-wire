@@ -62,13 +62,15 @@ val pascal_case : string -> string
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules.
 
-    Raises [Invalid_argument] if two schemas would generate the same [.3d] file
-    or the same C identifier, naming both codecs: the second write would
-    otherwise silently replace the first, leaving that codec's FFI stubs running
-    against another spec's verified C. Names collide after capitalization
-    ([header] and [Header]) and after EverParse's identifier mangling ([TMFrame]
-    and [Tmframe]). The same check guards {!generate_c}, {!generate_dune},
-    {!write_external_typedefs} and {!write_fields}. *)
+    Raises [Invalid_argument] before writing any file if a schema name does not
+    satisfy {!Wire.Everparse.validate_output_name}, or if two schemas would
+    generate the same [.3d] file or C identifier. A collision names both codecs:
+    the second write would otherwise silently replace the first, leaving that
+    codec's FFI stubs running against another spec's verified C. Names collide
+    after capitalization ([header] and [Header]) and after EverParse's
+    identifier mangling ([TMFrame] and [Tmframe]). The same checks guard
+    {!generate_c}, {!generate_dune}, {!write_external_typedefs} and
+    {!write_fields}. *)
 
 val generate_dune :
   outdir:string -> package:string -> Wire.Everparse.t list -> unit

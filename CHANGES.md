@@ -8,6 +8,10 @@
 
 ### Fixed
 
+- EverParse output names are now validated as portable ASCII identifiers before
+  any generated files are opened, preventing path escapes and malformed 3D, C,
+  or dune output. (#385, @samoht)
+
 - A mutable `byte_slice` returned by `Wire.of_string` now owns its backing
   bytes, so it cannot modify the caller's immutable source string. Other
   decoded values remain copy-free, and bytes inputs still alias. (#383,

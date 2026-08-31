@@ -65,9 +65,19 @@ type t = {
 val pp : Format.formatter -> t -> unit
 (** Pretty-print a schema summary. *)
 
+val validate_output_name : string -> unit
+(** [validate_output_name name] accepts portable ASCII identifiers beginning
+    with a letter or underscore and containing only letters, digits, and
+    underscores, except case-insensitive filesystem device names such as [NUL]
+    and [COM1].
+
+    Raises [Invalid_argument] for any other name. Writers apply this check to
+    every output name before opening a file. *)
+
 val filename : t -> string
 (** [filename s] is the [.3d] output filename for schema [s]. EverParse requires
-    filenames to start with a capital letter. *)
+    filenames to start with a capital letter. Raises [Invalid_argument] when
+    [s]'s name does not satisfy {!validate_output_name}. *)
 
 val uses_wire_ctx : t -> bool
 (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern

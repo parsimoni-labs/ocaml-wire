@@ -1394,8 +1394,16 @@ module Everparse : sig
   (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
       [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
 
+  val validate_output_name : string -> unit
+  (** [validate_output_name name] accepts portable ASCII identifiers beginning
+      with a letter or underscore and containing only letters, digits, and
+      underscores, except filesystem device names such as [NUL] and [COM1].
+      Raises [Invalid_argument] for any other name. *)
+
   val filename : t -> string
-  (** [filename s] is the [.3d] output filename for schema [s]. *)
+  (** [filename s] is the [.3d] output filename for schema [s]. Raises
+      [Invalid_argument] when [s]'s name does not satisfy
+      {!validate_output_name}. *)
 
   val uses_wire_ctx : t -> bool
   (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
@@ -1449,8 +1457,9 @@ module Everparse : sig
       through another codec's field is one such shared type; the surviving
       declaration keeps the entrypoint marker and the doc comment either copy
       carried, so it still gets a validator of its own. Raises
-      [Invalid_argument] if two schemas declare different types under the same
-      name, since one merged spec cannot honour both. *)
+      [Invalid_argument] before opening a file if any output name does not
+      satisfy {!validate_output_name}, or if two schemas declare different types
+      under the same name, since one merged spec cannot honour both. *)
 
   module Raw : sig
     (** Escape hatch for manual 3D authoring.

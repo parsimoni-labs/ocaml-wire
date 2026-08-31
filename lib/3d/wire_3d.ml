@@ -85,7 +85,10 @@ let pascal_case name =
    and CamelCases segments ([rpmsg_endpoint_info] -> [RpmsgEndpointInfo]).
    Keep the two concerns separate: [file_base] for filenames, [c_ident] for
    C identifiers. *)
-let file_base (s : t) = String.capitalize_ascii s.name
+let file_base (s : t) =
+  Wire.Everparse.validate_output_name s.name;
+  String.capitalize_ascii s.name
+
 let c_ident (s : t) = everparse_name s.name
 
 (* Both mangles are many-to-one, so two codecs with different names can land
@@ -989,6 +992,7 @@ let fork_pool ~max_jobs jobs =
    with their captured diagnostics. The caller provides schemas with distinct
    names (each becomes its own .3d module). *)
 let batch_check ?max_jobs ~outdir schemas =
+  check_name_collisions schemas;
   match (locate_3d_exe (), schemas) with
   | None, _ -> Error "3d.exe not found in PATH or ~/.local/everparse/bin/"
   | Some _, [] -> Ok ()
@@ -1211,7 +1215,11 @@ let doc_module_name package =
    opam [~package]. Lets the emitted [<Base>.3d] / [.c] be named independently of
    the install package (whose name [~package] keeps for the install stanza). *)
 let standalone_base ?name ~package () =
-  doc_module_name (match name with Some n -> n | None -> package)
+  let base =
+    doc_module_name (match name with Some n -> n | None -> package)
+  in
+  Wire.Everparse.validate_output_name base;
+  base
 
 (* -- Differential self-check for the doc pipeline. The doc projection emits a
    validator-only C parser with no FFI, so nothing otherwise confirms that the
