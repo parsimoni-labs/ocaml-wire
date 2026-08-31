@@ -3608,9 +3608,41 @@ let hostile_value_stream g =
    the typ the checker was built from. Naming a slot of the gen's own codec
    instead would resolve the offset by name and then read it at whatever typ
    the checker happened to hold, which is not the same field. *)
-type 'r addressed = { acodec : 'r Wire.Codec.t; achecks : 'r field_check list }
+module Schema_types = Wire.Private.Types
+
+let rec typ_field_names : type a. a Schema_types.typ -> string list = function
+  | Schema_types.Codec { codec_struct; _ } -> struct_field_names codec_struct
+  | Schema_types.Struct st -> struct_field_names st
+  | Schema_types.Casetype { cases; _ } ->
+      List.concat_map
+        (fun (Schema_types.Case_branch { cb_inner; _ }) ->
+          typ_field_names cb_inner)
+        cases
+  | Schema_types.Array { elem; _ } -> typ_field_names elem
+  | Schema_types.Repeat { elem; _ } -> typ_field_names elem
+  | Schema_types.Single_elem { elem; _ } -> typ_field_names elem
+  | Schema_types.Optional { inner; _ } -> typ_field_names inner
+  | Schema_types.Optional_or { inner; _ } -> typ_field_names inner
+  | Schema_types.Where { inner; _ } -> typ_field_names inner
+  | Schema_types.Map { inner; _ } -> typ_field_names inner
+  | Schema_types.Enum { base; _ } -> typ_field_names base
+  | Schema_types.Apply { typ; _ } -> typ_field_names typ
+  | _ -> []
+
+and struct_field_names (st : Schema_types.struct_) =
+  List.concat_map
+    (fun (Schema_types.Field f) ->
+      Option.to_list f.field_name @ typ_field_names f.field_typ)
+    st.Schema_types.fields
+
+type 'r addressed = {
+  acodec : 'r Wire.Codec.t;
+  achecks : 'r field_check list;
+  anames : string list;
+}
 
 let addressed g =
+  let anames = leaf_slot_name :: typ_field_names g.typ in
   match g.fields with
   | [] ->
       {
@@ -3625,8 +3657,9 @@ let addressed g =
                 equal = g.equal;
               };
           ];
+        anames;
       }
-  | fs -> { acodec = g.codec; achecks = fs }
+  | fs -> { acodec = g.codec; achecks = fs; anames }
 
 (* Staging refuses on a field whose access shape has no staged accessor, which
    is a documented gap in the accessor API rather than a failure: skip. *)
@@ -4300,8 +4333,26 @@ let check_positive_stream ~validate label a g (sample, (other, other_bs))
   check_read_purity label "positive" ?env a g bs;
   check_frame_isolation label "positive" ?env a g bs other_bs
 
+(* Every component of a rejection's root-to-leaf field path must name a field
+   the codec declares somewhere in its schema. An empty path is valid for a
+   top-level or anonymous failure; an invented name sends the caller to bytes
+   that do not exist. *)
+let check_rejection_names label kind ?env a g bs =
+  match Wire.Codec.decode ?env g.codec bs 0 with
+  | Ok _ | (exception Invalid_argument _) -> ()
+  | Error e ->
+      List.iter
+        (fun name ->
+          if not (List.mem name a.anames) then
+            Alcobar.failf
+              "%s %s: rejection names undeclared field %S (declared: %s)" label
+              kind name
+              (String.concat ", " a.anames))
+        e.Wire.field
+
 let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_decode_safety label kind ?env g bs;
+  check_rejection_names label kind ?env a g bs;
   check_direct_codec_agree label kind g bs;
   check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
   check_frame_extent label kind ?env g noise bs;
@@ -6013,6 +6064,32 @@ let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
   check_int "Codec.extract hi" hi (Wire.Codec.extract bit_hi word);
   check_int "Codec.extract lo" lo (Wire.Codec.extract bit_lo word)
 
+(* [byte_slice] is the mutable zero-copy span: both staged access and record
+   decode must retain an alias to the caller's buffer, in both directions. *)
+let check_api_slice_aliases codec bf_payload buf base =
+  let module Slice = Bytesrw.Bytes.Slice in
+  let get = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let payload = get buf base in
+  let first = Slice.first payload in
+  let original = Bytes.get_uint8 buf first in
+  let changed = original lxor 0xFF in
+  Bytes.set_uint8 (Slice.bytes payload) first changed;
+  check_int "Codec.get slice aliases buffer" changed (Bytes.get_uint8 buf first);
+  Bytes.set_uint8 buf first original;
+  check_int "buffer aliases Codec.get slice" original
+    (Bytes.get_uint8 (Slice.bytes payload) first);
+  match Wire.Codec.decode codec buf base with
+  | Error e ->
+      Alcobar.failf "Codec.decode for slice alias failed: %a"
+        Wire.pp_parse_error e
+  | Ok decoded ->
+      Bytes.set_uint8 buf first changed;
+      check_int "buffer aliases decoded slice" changed
+        (Bytes.get_uint8
+           (Slice.bytes decoded.payload)
+           (Slice.first decoded.payload));
+      Bytes.set_uint8 buf first original
+
 let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s =
   let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
@@ -6059,6 +6136,7 @@ let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
   Wire.Codec.encode codec value buf base;
   check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo payload_s;
   check_api_bitfields codec bf_hi bf_lo buf base hi lo;
+  check_api_slice_aliases codec bf_payload buf base;
   check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s;
   check_api_decode_after_set codec buf base next_a next_hi next_lo
