@@ -937,11 +937,20 @@ let bytes_leaves
         invalid_arg "Codec: [field_pos] only valid inside an action");
   }
 
+let eval_buffer_expr f runtime input_end buf base =
+  try f runtime input_end buf base
+  with Parse_error ({ kind = Value_out_of_range _ | Zero_divisor; _ } as e) ->
+    raise (Parse_error { e with at = base })
+
 let compile_expr ?sizeof_this env e =
-  Expr_compiler.compile_int (bytes_leaves ?sizeof_this env) e
+  let f = Expr_compiler.compile_int (bytes_leaves ?sizeof_this env) e in
+  fun runtime input_end buf base ->
+    eval_buffer_expr f runtime input_end buf base
 
 let compile_bool_expr ?sizeof_this env e =
-  Expr_compiler.compile_bool (bytes_leaves ?sizeof_this env) e
+  let f = Expr_compiler.compile_bool (bytes_leaves ?sizeof_this env) e in
+  fun runtime input_end buf base ->
+    eval_buffer_expr f runtime input_end buf base
 
 (* Int-array access layer: zero-alloc per decode. Used by field
    constraints / where clauses where the validator has already populated
@@ -997,6 +1006,9 @@ let compile_int_arr cc e =
 let compile_bool_arr cc e =
   let f = Expr_compiler.compile_bool (array_leaves cc) e in
   fun arr -> f arr () () ()
+
+let eval_arr_at ~at f arr =
+  try f arr with Parse_error e -> raise (Parse_error { e with at })
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign updates the mutable parameter's array slot.
@@ -3455,14 +3467,17 @@ let guarded_populate : type a r.
 let field_validators ~field_idx ~validator_off ~populate ~check ~act =
   let check_only arr runtime input_end buf base =
     populate arr runtime input_end buf base;
+    let at = at_of base validator_off in
     match check with
-    | Some f when not (f arr) ->
-        raise_field_constraint ~field_idx ~at:(at_of base validator_off) arr
+    | Some f when not (eval_arr_at ~at f arr) ->
+        raise_field_constraint ~field_idx ~at arr
     | _ -> ()
   in
   let full arr runtime input_end buf base =
     check_only arr runtime input_end buf base;
-    match act with Some f -> f arr | None -> ()
+    match act with
+    | Some f -> eval_arr_at ~at:(at_of base validator_off) f arr
+    | None -> ()
   in
   (check_only, full)
 
@@ -3808,7 +3823,8 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
       validator_fns.(i) arr runtime input_end buf off
     done;
     match compiled_where with
-    | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
+    | Some f when not (eval_arr_at ~at:off f arr) ->
+        raise_constraint ~at:off ~which:Where ()
     | _ -> ()
   in
   let checker_fns = Array.of_list (List.map snd checkers_rev) in
@@ -3967,7 +3983,8 @@ let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
   seed_params arr runtime param_base 0 param_handles;
   populate arr runtime (Input_end.of_bytes buf) buf off;
   match compiled_where with
-  | Some f when not (f arr) -> raise_constraint ~at:off ~which:Where ()
+  | Some f when not (eval_arr_at ~at:off f arr) ->
+      raise_constraint ~at:off ~which:Where ()
   | _ -> ()
 
 (* The check pass over one codec's fields at [off], with its parameters bound

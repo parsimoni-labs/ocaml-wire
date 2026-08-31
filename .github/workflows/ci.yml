@@ -196,7 +196,7 @@ jobs:
       - name: Install EverParse
         run: |
           mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.02.25/everparse_v2026.02.25_Linux_x86_64.tar.gz
+          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
           curl -sL "$url" | tar xz -C "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 
@@ -289,7 +289,7 @@ jobs:
       - name: Install EverParse
         run: |
           mkdir -p "$HOME/.local"
-          url=https://github.com/project-everest/everparse/releases/download/v2026.02.25/everparse_v2026.02.25_Linux_x86_64.tar.gz
+          url=https://github.com/project-everest/everparse/releases/download/v2026.08.21/everparse_v2026.08.21_Linux_x86_64.tar.gz
           curl -sL "$url" | tar xz -C "$HOME/.local"
           echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
 

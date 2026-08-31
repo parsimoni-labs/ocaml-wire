@@ -950,6 +950,7 @@ type error_kind =
   | Missing_terminator
   | Non_zero_padding
   | Value_out_of_range of { value : int64 }
+  | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
 type parse_error = { at : int; field : string list; kind : error_kind }
