@@ -306,14 +306,12 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
-      # Named one alias at a time rather than through dune runtest, because
-      # BUILD_EVERPARSE=1 also enables test/bench's own executable, and that one
-      # does not link on Linux: the bench C tier's archives reach the linker in
-      # an order GNU ld will not resolve. Add @test/bench/runtest here once that
-      # is fixed.
+      # Name the aliases explicitly so this lane documents every suite which
+      # needs generated C and cannot run in the ordinary build matrix.
       - name: Run the suites that need EverParse-generated C
         run: |
           opam exec -- dune build \
-            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest
+            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
+            @test/bench/runtest
         env:
           BUILD_EVERPARSE: 1

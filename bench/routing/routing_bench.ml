@@ -61,22 +61,22 @@ let generate_stream n =
 let n_apids = 2048 (* 11-bit APID field: 0..2047 *)
 let n_routes = 4
 
-let routing_table : int iarray =
+let routing_table : int array =
   let t =
-    Iarray.init n_apids (fun apid ->
+    Array.init n_apids (fun apid ->
         if apid < 256 then 0
         else if apid < 1024 then 1
         else if apid < 1536 then 2
         else 3)
   in
-  assert (Iarray.length t = n_apids);
-  Iarray.iter (fun r -> assert (r >= 0 && r < n_routes)) t;
+  assert (Array.length t = n_apids);
+  Array.iter (fun r -> assert (r >= 0 && r < n_routes)) t;
   t
 
 let pp_counts ppf (hk, sci, diag, idle) =
   Fmt.pf ppf "(hk=%d sci=%d diag=%d idle=%d)" hk sci diag idle
 
-let[@inline] route_of_apid apid = Iarray.unsafe_get routing_table apid
+let[@inline] route_of_apid apid = Array.unsafe_get routing_table apid
 let hdr = Wire.Codec.wire_size Space.packet_codec
 let apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid)
 let dlen = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_data_len)
