@@ -321,8 +321,7 @@ val bit : int t -> bool t
 (** [bit inner] generates for [Wire.bit inner.typ]. *)
 
 val uint_var : endian:Wire.endian -> int -> Optint.Int63.t t
-(** [uint_var ~endian size] generates for [Wire.uint ~endian (Wire.int size)].
-*)
+(** [uint_var ~endian size] generates for [Wire.uint ~endian size]. *)
 
 val optional : ?present:bool -> 'a t -> 'a option t
 (** [optional ~present inner] generates for a [Field.optional]-wrapped record

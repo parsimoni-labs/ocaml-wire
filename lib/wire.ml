@@ -427,7 +427,7 @@ and parse_repeat_loop : type elt seq.
       let v, off'' = parse_direct elem buf off' region_end in
       (* An element that consumes nothing never moves the cursor to
          [region_end], so the byte-budget loop would spin. A literal zero-size
-         span is refused by [Field.repeat], but a [uint ~size] whose size
+         span is refused by [Field.repeat], but a [uint_var size] whose size
          expression evaluates to zero is only detectable here, so report the
          same eof [Codec.decode]'s compiled repeat reports for it. *)
       if off'' <= off' then
@@ -983,7 +983,7 @@ let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
       Uint_var.write endian buf off n v;
       off + n
   | Uint_var _ ->
-      invalid_arg "Wire.uint: encoding a field-dependent size needs Codec"
+      invalid_arg "Wire.uint_var: encoding a field-dependent size needs Codec"
   | Bits { width; base; bit_order } ->
       encode_bits buf off v width base bit_order
   | Unit -> off

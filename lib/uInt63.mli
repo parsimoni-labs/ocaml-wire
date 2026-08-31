@@ -1,6 +1,6 @@
-(** Carrier for [uint ~size], the 1-to-7-byte unsigned integers. Seven bytes
-    need 56 bits, so every value of every width it serves is represented exactly
-    and nothing is masked.
+(** Carrier for [uint] and [uint_var], the 1-to-7-byte unsigned integers. Seven
+    bytes need 56 bits, so every value of every width it serves is represented
+    exactly and nothing is masked.
 
     Backed by {!Optint.Int63}: an unboxed native [int] on a 64-bit host, a boxed
     [int64] where the native [int] is narrower (there a plain-[int] composition

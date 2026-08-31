@@ -696,15 +696,19 @@ val is_nan : float Field.t -> bool expr
 (** [is_nan f] holds iff [f] decodes to a NaN bit pattern (exponent all-ones AND
     mantissa non-zero). *)
 
-val uint : ?endian:endian -> int expr -> Optint.Int63.t typ
-(** [uint size] is an unsigned integer of [size] bytes (1-7) with the given byte
-    order (default {!Big}). The size may be a dynamic expression for
-    parameter-driven widths. Decodes to an [Optint.Int63.t]: a 7-byte value
-    needs 56 bits, which does not fit an int on a narrow-int target (js/wasm).
+val uint : ?endian:endian -> int -> Optint.Int63.t typ
+(** [uint size] is an unsigned integer occupying [size] bytes (1-7) with the
+    given byte order (default {!Big}). Decodes to an [Optint.Int63.t]: a 7-byte
+    value needs 56 bits, which does not fit an int on a narrow-int target
+    (js/wasm).
 
     Encoding a value that needs more than [size] bytes raises [Invalid_argument]
     rather than dropping its high bytes: the truncated result is itself a legal
     [size]-byte number, so nothing downstream could tell the two apart. *)
+
+val uint_var : ?endian:endian -> int expr -> Optint.Int63.t typ
+(** [uint_var size] is like {!uint}, with a dynamic size expression for
+    parameter-driven widths. *)
 
 val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
 (** [bits ~width base] declares a bitfield of [width] bits inside [base].

@@ -46,8 +46,8 @@ let rec to_int : type a. a Types.typ -> a -> int =
 
 let of_int = Types.of_int
 
-(* A [uint ~size] renders as [UINTBE(n)], which is an array suffix rather than a
-   type, so it cannot name a 3D formal. Rejected here for the same reason
+(* A [uint] or [uint_var] renders as [UINTBE(n)], which is an array suffix rather
+   than a type, so it cannot name a 3D formal. Rejected here for the same reason
    [Wire.casetype] rejects it as a tag: the position takes less than a field
    does. *)
 let rec is_uint_var : type a. a Types.typ -> bool = function
@@ -63,8 +63,8 @@ let check_typ name typ =
       name;
   if is_uint_var typ then
     Fmt.invalid_arg
-      "Param.%s: a [uint ~size] has no 3D parameter type; use a fixed-width \
-       integer"
+      "Param.%s: a [uint] or [uint_var] has no 3D parameter type; use a \
+       fixed-width integer"
       name
 
 let input name typ =

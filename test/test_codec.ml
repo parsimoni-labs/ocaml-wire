@@ -1289,8 +1289,7 @@ let validate_overrun_codec =
       [
         (Field.v "rep" (codec rep) $ fun (w, _, _, _) -> w);
         (Field.v "i8" int8 $ fun (_, x, _, _) -> x);
-        ( Field.v "uv" (uint ~endian:Wire.Little (Wire.int 3))
-        $ fun (_, _, y, _) -> y );
+        (Field.v "uv" (uint ~endian:Wire.Little 3) $ fun (_, _, y, _) -> y);
         (Field.v "tail" (codec tail) $ fun (_, _, _, z) -> z);
       ]
 
@@ -1447,8 +1446,8 @@ let test_validate_present_optional_or_past_end () =
     (validating "validate" (fun () ->
          Codec.validate validate_optional_or_codec buf 0))
 
-(* A [uint] of runtime width reads its bytes directly instead of through the
-   span reader every other variable-width field uses, so it needs that
+(* A [uint_var] of runtime width reads its bytes directly instead of through
+   the span reader every other variable-width field uses, so it needs that
    reader's span check of its own. [len] is 7, so [v] claims bytes 1..8 of a
    3-byte buffer. *)
 let validate_uint_var_codec =
@@ -1458,7 +1457,7 @@ let validate_uint_var_codec =
     Codec.
       [
         (f_len $ fun (len, _, _) -> len);
-        (Field.v "v" (uint (Field.int f_len)) $ fun (_, v, _) -> v);
+        (Field.v "v" (uint_var (Field.int f_len)) $ fun (_, v, _) -> v);
         (Field.v "z" all_zeros $ fun (_, _, z) -> z);
       ]
 
@@ -1659,8 +1658,8 @@ let test_array_rejects_zero_width_span () =
      alone), so it never reaches the literal-size case and [array] already
      refuses it. *)
   Alcotest.(check bool)
-    "uint sized by sizeof empty" true
-    (array_rejects (uint (sizeof empty)))
+    "uint_var sized by sizeof empty" true
+    (array_rejects (uint_var (sizeof empty)))
 
 (* The guard must still admit a legitimate fixed-size byte element: a positive
    literal span projects to a count of fixed-size elements. *)
@@ -2198,18 +2197,18 @@ let test_optional_greedy_not_last_rejected () =
                Field.v "tail" uint8 $ snd;
              ]))
 
-(* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that range
-   is refused at construction. *)
+(* [uint] is a 1-to-7-byte unsigned integer; a literal size outside that
+   range is refused at construction. *)
 let test_uint_size_bounds () =
   Alcotest.(check bool)
     "uint 0 rejected" true
-    (raises_invalid (fun () -> uint (int 0)));
+    (raises_invalid (fun () -> uint 0));
   Alcotest.(check bool)
     "uint 8 rejected" true
-    (raises_invalid (fun () -> uint (int 8)));
+    (raises_invalid (fun () -> uint 8));
   Alcotest.(check bool)
     "uint 4 accepted" false
-    (raises_invalid (fun () -> uint (int 4)))
+    (raises_invalid (fun () -> uint 4))
 
 (* A bitfield wider than its base word, or narrower than one bit, has no faithful
    wire meaning (the OCaml shift and the 3D field would read different values), so
@@ -2238,7 +2237,7 @@ let test_casetype_case_requires_index () =
            [ case uint8 ~inject:Fun.id ~project:Option.some ]))
 
 (* A casetype tag must project to a 3D type the [switch] dispatches on. A
-   [uint ~size] tag renders as a non-3D [UINTBE(n)], and an enum over a
+   [uint size] tag renders as a non-3D [UINTBE(n)], and an enum over a
    big-endian base has no 3D enum type for its case labels, so both are refused
    at construction; a little-endian / 1-byte enum tag is fine. *)
 let test_casetype_reject_unprojectable_tag () =
@@ -2249,10 +2248,9 @@ let test_casetype_reject_unprojectable_tag () =
       [ case ~index uint8 ~inject:(fun s -> s) ~project:Option.some ]
   in
   Alcotest.(check bool)
-    "uint ~size tag rejected" true
+    "uint tag rejected" true
     (raises_invalid (fun () ->
-         casetype "CtTag"
-           (uint (int 2))
+         casetype "CtTag" (uint 2)
            [
              case ~index:(Optint.Int63.of_int 1) uint8
                ~inject:(fun s -> s)
@@ -2969,11 +2967,11 @@ let test_set_exact_fixed_byte_array () =
     ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY"
     (Staged.unstage (Codec.set codec cf))
 
-(* A width-refined leaf -- [bits ~width], [uint ~size] -- is exact for a harsher
-   reason than a fixed-size byte field. A masked value is still a legal value at
-   that width, so decode, [validate] and the EverParse validator all accept it:
-   the number the caller meant is gone with nothing left to detect it. Every
-   entry point that can write one has to refuse instead. *)
+(* A width-refined leaf -- [bits ~width], [uint size] -- is exact for a
+   harsher reason than a fixed-size byte field. A masked value is still a legal
+   value at that width, so decode, [validate] and the EverParse validator all
+   accept it: the number the caller meant is gone with nothing left to detect
+   it. Every entry point that can write one has to refuse instead. *)
 let expect_exact_width_error label ~sub f =
   match f () with
   | wrote ->
@@ -2984,7 +2982,7 @@ let expect_exact_width_error label ~sub f =
         true (contains ~sub msg)
 
 let uint_width_codec ~endian n =
-  let cf = Codec.(Field.v "v" (uint ~endian (int n)) $ Fun.id) in
+  let cf = Codec.(Field.v "v" (uint ~endian n) $ Fun.id) in
   (Codec.v (Fmt.str "ExactUint%d" n) Fun.id Codec.[ cf ], cf)
 
 (* A hostile value needs one bit more than the field it overflows, so a width is
@@ -3005,14 +3003,14 @@ let uint_width_cases =
 
 let uint_endians = [ (Big, "be"); (Little, "le") ]
 
-(* 0x1FF through a 1-byte [uint] used to come out as 0xFF on both encode entry
-   points, and decode back as 255. *)
+(* 0x1FF through a 1-byte [uint] used to come out as 0xFF on both encode
+   entry points, and decode back as 255. *)
 let test_encode_exact_uint_width () =
   List.iter
     (fun (n, max_v, over) ->
       List.iter
         (fun (endian, ename) ->
-          let typ = uint ~endian (int n) in
+          let typ = uint ~endian n in
           let codec, _ = uint_width_codec ~endian n in
           let label = Fmt.str "uint(%d,%s) <- 0x%X" n ename over in
           let sub = Fmt.str "does not fit an unsigned %d-byte field" n in
@@ -3059,8 +3057,8 @@ let test_set_exact_uint_width () =
         uint_endians)
     uint_width_cases
 
-(* The decode half of the same rule, at every width [uint ~size] accepts. A
-   full-width frame must come back as the number those bytes spell and go out
+(* The decode half of the same rule, at every width [uint size] accepts.
+   A full-width frame must come back as the number those bytes spell and go out
    again byte for byte: a carrier too narrow for the field would mask the top
    bits and hand back a legal smaller number instead. Widths are compared
    through [Int64] because a 7-byte maximum overflows the native [int] where it
@@ -3387,19 +3385,19 @@ let test_constant_size_expression_folds () =
   Alcotest.(check bool) "constant is_fixed" true (Codec.is_fixed folded);
   Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
   Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
-  (* 3. the uint 1-7 range guard *)
-  let uint_rejects label size =
-    match uint size with
-    | _ -> Alcotest.failf "%s: expected uint to reject the size" label
+  (* 3. the uint_var 1-7 range guard after constant folding *)
+  let uint_var_rejects label size =
+    match uint_var size with
+    | _ -> Alcotest.failf "%s: expected uint_var to reject the size" label
     | exception Invalid_argument msg ->
         Alcotest.(check bool)
           (label ^ ": names the bound")
           true
           (contains ~sub:"size must be 1-7" msg)
   in
-  uint_rejects "literal 0" (int 0);
-  uint_rejects "constant 0" Expr.(int 1 - int 1);
-  uint_rejects "constant 8" Expr.(int 4 + int 4)
+  uint_var_rejects "literal 0" (int 0);
+  uint_var_rejects "constant 0" Expr.(int 1 - int 1);
+  uint_var_rejects "constant 8" Expr.(int 4 + int 4)
 
 let test_packed_bf_size () =
   let f_a = Field.v "a" (bits ~width:1 U8) in
@@ -7432,10 +7430,10 @@ let test_repeat_after_var_slice () =
     "items" [ 0x0102; 0x0304; 0x0506 ]
     (List.map UInt16.to_int items)
 
-(* -- uint: variable-width unsigned integer -- *)
+(* -- uint: arbitrary byte-width unsigned integer -- *)
 
-(* [uint] decodes to an [Optint.Int63.t]. Aliasing [Optint.Int63] rather than
-   [Wire.Private.UInt63] keeps these tests within the public API. *)
+(* [uint] decodes to an [Optint.Int63.t]. Aliasing [Optint.Int63] rather
+   than [Wire.Private.UInt63] keeps these tests within the public API. *)
 module UInt63 = Optint.Int63
 
 let u63 = Alcotest.testable UInt63.pp ( = )
@@ -7449,7 +7447,7 @@ let test_uint_3byte_be () =
       (fun tag value -> { tag; value })
       [
         (Field.v "Tag" uint8 $ fun r -> r.tag);
-        (Field.v "Value" (uint (Wire.int 3)) $ fun r -> r.value);
+        (Field.v "Value" (uint 3) $ fun r -> r.value);
       ]
   in
   let original = { tag = UInt8.v 0x42; value = UInt63.of_int 0x1A2B3C } in
@@ -7469,7 +7467,7 @@ let test_uint_3byte_be () =
 let test_uint_1byte () =
   let codec =
     let open Codec in
-    v "U1" (fun v -> v) [ (Field.v "V" (uint (Wire.int 1)) $ fun v -> v) ]
+    v "U1" (fun v -> v) [ (Field.v "V" (uint 1) $ fun v -> v) ]
   in
   let buf = Bytes.create 1 in
   Codec.encode codec (UInt63.of_int 0xAB) buf 0;
@@ -7482,7 +7480,7 @@ let test_uint_5byte_le () =
     let open Codec in
     v "U5LE"
       (fun v -> v)
-      [ (Field.v "V" (uint ~endian:Wire.Little (Wire.int 5)) $ fun v -> v) ]
+      [ (Field.v "V" (uint ~endian:Wire.Little 5) $ fun v -> v) ]
   in
   (* 40 bits: holds on every platform because the value lives in a
      [Optint.Int63.t], not a native int. *)
@@ -7497,7 +7495,7 @@ let test_uint_5byte_le () =
   let decoded = decode_ok (Codec.decode codec buf 0) in
   Alcotest.check u63 "roundtrip" value decoded
 
-let test_uint_dynamic () =
+let test_uint_var_dynamic () =
   let f_n = Field.v "N" uint8 in
   let codec =
     let open Codec in
@@ -7505,10 +7503,10 @@ let test_uint_dynamic () =
       (fun n value -> (n, value))
       [
         (f_n $ fun (n, _) -> n);
-        (Field.v "Value" (uint (Field.ref f_n)) $ fun (_, v) -> v);
+        (Field.v "Value" (uint_var (Field.ref f_n)) $ fun (_, v) -> v);
       ]
   in
-  (* n=2 -> 2-byte BE uint = 0x1234, layout: [02] [12 34] *)
+  (* n=2 -> 2-byte BE uint_var = 0x1234, layout: [02] [12 34] *)
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 2;
   Bytes.set_uint8 buf 1 0x12;
@@ -9525,8 +9523,9 @@ let suite =
         `Quick test_validate_present_optional_past_end;
       Alcotest.test_case "validate: present optional_or past end fails cleanly"
         `Quick test_validate_present_optional_or_past_end;
-      Alcotest.test_case "validate: runtime-width uint past end fails cleanly"
-        `Quick test_validate_uint_var_past_end;
+      Alcotest.test_case
+        "validate: runtime-width uint_var past end fails cleanly" `Quick
+        test_validate_uint_var_past_end;
       Alcotest.test_case "validate: repeat budget with a partial element" `Quick
         test_validate_repeat_partial_element;
       Alcotest.test_case "repeat/array reject bitfield element" `Quick
@@ -10037,11 +10036,11 @@ let suite =
         test_codec_then_array;
       Alcotest.test_case "multi-var: repeat after variable byte_slice" `Quick
         test_repeat_after_var_slice;
-      (* uint: variable-width unsigned integer *)
+      (* uint: arbitrary byte-width unsigned integer *)
       Alcotest.test_case "uint: 3-byte BE roundtrip" `Quick test_uint_3byte_be;
       Alcotest.test_case "uint: 1-byte like uint8" `Quick test_uint_1byte;
       Alcotest.test_case "uint: 5-byte LE roundtrip" `Quick test_uint_5byte_le;
-      Alcotest.test_case "uint: dynamic size" `Quick test_uint_dynamic;
+      Alcotest.test_case "uint_var: dynamic size" `Quick test_uint_var_dynamic;
       Alcotest.test_case "enum: codec rejects unknown values" `Quick
         test_enum_codec_validates;
       (* decode allocation *)

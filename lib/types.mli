@@ -636,9 +636,13 @@ val float64 : float typ
 val float64be : float typ
 (** [float64be] is an IEEE 754 binary64 big-endian. *)
 
-val uint : ?endian:endian -> int expr -> UInt63.t typ
-(** [uint size] is an unsigned integer of [size] bytes (1-7). Default endian is
-    {!Big}. The size may be a dynamic expression for parameter-driven widths. *)
+val uint : ?endian:endian -> int -> UInt63.t typ
+(** [uint size] is an unsigned integer occupying [size] bytes (1-7). Default
+    endian is {!Big}. *)
+
+val uint_var : ?endian:endian -> int expr -> UInt63.t typ
+(** [uint_var size] is like {!uint}, with a dynamic size expression for
+    parameter-driven widths. *)
 
 val bf_uint8 : bitfield_base
 (** 8-bit bitfield base. *)

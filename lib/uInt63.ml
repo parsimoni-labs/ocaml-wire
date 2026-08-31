@@ -1,5 +1,5 @@
-(* Carrier for [uint ~size], the 1-to-7-byte unsigned integers: 56 bits at the
-   widest, well inside the range Optint.Int63 represents exactly.
+(* Carrier for [uint] and [uint_var], the 1-to-7-byte unsigned integers: 56 bits at
+   the widest, well inside the range Optint.Int63 represents exactly.
 
    Backed by Optint.Int63: an unboxed native int on a 64-bit host, a boxed
    int64 where the native int is narrower. On such a target a plain-int

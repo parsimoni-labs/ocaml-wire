@@ -1,4 +1,4 @@
-(* Tests for UInt63, the carrier [uint ~size] decodes into. Widths are built
+(* Tests for UInt63, the carrier [uint size] decodes into. Widths are built
    from [Int64] literals and compared through [Optint.Int63.to_int64]: a
    7-byte maximum written as an int literal would itself truncate on a
    narrow-int target (wasm_of_ocaml, js_of_ocaml), and these tests run there

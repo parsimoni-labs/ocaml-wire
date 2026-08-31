@@ -556,13 +556,16 @@ let float32be = Float32 Big
 let float64 = Float64 Little
 let float64be = Float64 Big
 
-let uint ?(endian = Big) size =
+let uint_typ name endian size =
   let size = fold_size size in
   (match size with
   | Int n when n < 1 || n > 7 ->
-      Fmt.invalid_arg "uint: size must be 1-7, got %d" n
+      Fmt.invalid_arg "%s: size must be 1-7, got %d" name n
   | _ -> ());
   Uint_var { size; endian }
+
+let uint ?(endian = Big) size = uint_typ "uint" endian (Int size)
+let uint_var ?(endian = Big) size = uint_typ "uint_var" endian size
 
 (* Bitfield bases *)
 let bf_uint8 = U8
@@ -967,7 +970,8 @@ let rec is_array_element : type a. a typ -> bool = function
   (* [Unit] is 0-width: an array of it carries no bytes and projects to a
      zero-size 3D array EverParse rejects, so it is not a valid element. A byte
      span whose declared size is a literal zero (or less) is 0-width for the
-     same reason, so admit only a positive one. [uint] already refuses a
+     same reason, so admit only a positive one. [uint] and [uint_var] already
+     refuse a
      non-positive literal size, and a symbolic one is not [Int _]. *)
   | Uint_var { size = Int _; _ } -> true
   | Byte_array { size = Int n } | Byte_slice { size = Int n } -> n > 0
@@ -1211,15 +1215,16 @@ let enum_base_is_be : type a. a typ -> bool = function
   | _ -> false
 
 (* A casetype tag must project to a 3D type the generated [switch] dispatches on.
-   A [uint ~size] (Uint_var) tag renders as [UINTBE(n)], which is not a 3D type;
+   A [uint size] or [uint_var size] (Uint_var) tag renders as [UINTBE(n)], which
+   is not a 3D type;
    an enum over a big-endian base has no 3D enum type to name in the case labels.
    Neither projects, so reject it at construction (seen through the transparent
    [Map] / [Where] wrappers a [variants] tag carries). *)
 let rec reject_unprojectable_casetype_tag : type k. k typ -> unit = function
   | Uint_var _ ->
       invalid_arg
-        "Wire.casetype: a [uint ~size] tag has no 3D projection; use a \
-         fixed-width integer, bitfield, or enum tag."
+        "Wire.casetype: a [uint size] or [uint_var size] tag has no 3D \
+         projection; use a fixed-width integer, bitfield, or enum tag."
   | Enum { base; _ } when enum_base_is_be base ->
       invalid_arg
         "Wire.casetype: an enum over a big-endian base has no 3D casetype-tag \
@@ -3831,7 +3836,7 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
   | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
-  | Uint_var { size; _ } -> resolved_size ctx size "uint"
+  | Uint_var { size; _ } -> resolved_size ctx size "uint_var"
   | Map { inner; encode; _ } -> size_of_typ_value ctx inner (encode v)
   | Where { inner; _ } -> size_of_typ_value ctx inner v
   | Enum { base; _ } -> size_of_typ_value ctx base v

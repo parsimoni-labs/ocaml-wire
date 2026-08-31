@@ -876,17 +876,18 @@ let test_repeat_exact_budget_direct () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
 
-(* A [uint ~size] whose size expression evaluates to zero consumes no bytes, so
-   the byte-budget loop would never reach the end of its region. The direct
-   decoder reports the same eof the compiled [Codec.decode] repeat reports.
+(* A [uint_var size] whose size expression evaluates to zero consumes no
+   bytes, so the byte-budget loop would never reach the end of its region. The
+   direct decoder reports the same eof the compiled [Codec.decode] repeat
+   reports.
 
    The size must stay unfoldable, hence [sizeof empty] rather than arithmetic
    such as [int 1 - int 1]: constant folding would reduce that to a literal
-   zero, which [uint] refuses at construction, and the decoder's guard would
-   never be reached. Do not "simplify" this back to arithmetic. *)
+   zero, which [uint_var] refuses at construction, and the decoder's guard
+   would never be reached. Do not "simplify" this back to arithmetic. *)
 let test_repeat_zero_width_element_direct () =
   let zero_width =
-    Field.typ (Field.repeat "items" ~size:(int 4) (uint (sizeof empty)))
+    Field.typ (Field.repeat "items" ~size:(int 4) (uint_var (sizeof empty)))
   in
   match of_string zero_width "abcd" with
   | Ok _ -> Alcotest.fail "zero-width repeat element accepted"
