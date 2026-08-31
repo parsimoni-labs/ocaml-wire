@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/wire-docs.XXXXXX")
+trap 'rm -rf -- "$scratch"' EXIT
+output=$scratch/output
+
+if ! ODOC_WARN_ERROR=true opam exec -- dune build \
+  --build-dir "$scratch/build" @doc >"$output" 2>&1; then
+  cat "$output"
+  exit 1
+fi
+
+cat "$output"
+if grep -q '^Warning:' "$output"; then
+  echo "documentation policy: odoc emitted warnings" >&2
+  exit 1
+fi

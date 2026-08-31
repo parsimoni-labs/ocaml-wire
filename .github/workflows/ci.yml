@@ -40,6 +40,20 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3.8.0
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only --with-test --with-doc
+
+      - name: Build documentation without warnings
+        run: bash .github/scripts/check-docs
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
