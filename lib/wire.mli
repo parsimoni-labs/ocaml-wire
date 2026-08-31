@@ -842,9 +842,10 @@ val byte_array_where :
     printable US-ASCII. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice. Encoding raises
-    [Invalid_argument] unless the slice is exactly [size] bytes, as for
-    {!byte_array}. *)
+(** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based
+    decoders. {!of_string} gives the mutable result its own backing bytes.
+    Encoding raises [Invalid_argument] unless the slice is exactly [size] bytes,
+    as for {!byte_array}. *)
 
 val rest_bytes : (_, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
@@ -1045,7 +1046,9 @@ val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 
 val of_string : 'a typ -> string -> ('a, parse_error) result
 (** Decodes one value from the start of the string. Trailing bytes, if any, are
-    left uninterpreted. *)
+    left uninterpreted. Decoding itself does not copy the input; mutable
+    {!byte_slice} values that escape in the result receive their own backing
+    bytes so they cannot modify the source string. *)
 
 val of_string_exn : 'a typ -> string -> 'a
 (** Like {!of_string} but raises {!exception:Parse_error} on failure. *)

@@ -8,6 +8,11 @@
 
 ### Fixed
 
+- A mutable `byte_slice` returned by `Wire.of_string` now owns its backing
+  bytes, so it cannot modify the caller's immutable source string. Other
+  decoded values remain copy-free, and bytes inputs still alias. (#383,
+  @samoht)
+
 - A zero divisor supplied to expression division or modulo is now reported as
   `Zero_divisor`. It used to escape decoding as the host exception
   `Division_by_zero` instead of a wire parse error (#376, @samoht)

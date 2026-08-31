@@ -278,6 +278,9 @@ and _ typ =
              not the value's actual tail length. *)
       codec_field_readers :
         (string * (eval_ctx -> Input_end.t -> bytes -> int -> int)) list;
+      codec_returns_slice : bool;
+          (* Whether a decoded value can retain a mutable byte slice. Computed
+             once from [codec_struct] when the codec typ is constructed. *)
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)

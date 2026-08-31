@@ -188,7 +188,7 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 | Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, ... |
 | Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
 | Bool | `bit (bits ~width:1 U8)` | -- |
-| Byte slices | `byte_slice ~size:e` (zero-copy) | `UINT8 [: e]` |
+| Byte slices | `byte_slice ~size:e` (zero-copy from `bytes`) | `UINT8 [: e]` |
 | Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
 | Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
 | Constraints | `where`, `~constraint_` | [`where`][3d-where] |

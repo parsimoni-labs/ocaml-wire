@@ -4238,9 +4238,9 @@ let check_short_prefix label kind ?env g bs =
 
 (* {1 Idempotence and non-interference} *)
 
-(* Every read path leaves the buffer byte-identical. [Wire.of_string] hands the
-   decoder a [Bytes.unsafe_of_string] view of an immutable OCaml string, so a
-   write anywhere on a read path corrupts a value the caller believes frozen. *)
+(* Every read path leaves the buffer byte-identical. Callers of the bytes-based
+   APIs retain that buffer, so a write anywhere on a read path corrupts their
+   input. *)
 let check_read_purity label kind ?env a g bs =
   let before = Bytes.copy bs in
   ignore (decode_at ?env g bs 0);

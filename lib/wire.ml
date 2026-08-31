@@ -31,6 +31,39 @@ let empty = Types.unit
 let size = Types.field_wire_size
 let lookup = Types.cases
 
+(* A string can be viewed as bytes while it is only read, but a mutable slice
+   backed by that view must not escape. Codecs hide their result type behind a
+   decode closure, so record once, when constructing their typ, whether their
+   structural form can retain a slice. A legacy [Struct] produces [unit], hence
+   its fields do not escape through the direct decoder. *)
+let rec typ_returns_slice : type a. a typ -> bool = function
+  | Byte_slice _ -> true
+  | Where { inner; _ } -> typ_returns_slice inner
+  | Single_elem { elem; _ } -> typ_returns_slice elem
+  | Map { inner; _ } -> typ_returns_slice inner
+  | Apply { typ; _ } -> typ_returns_slice typ
+  | Optional { inner; _ } -> typ_returns_slice inner
+  | Optional_or { inner; _ } -> typ_returns_slice inner
+  | Enum { base; _ } -> typ_returns_slice base
+  | Array { elem; _ } -> typ_returns_slice elem
+  | Repeat { elem; _ } -> typ_returns_slice elem
+  | Casetype { tag; cases; _ } ->
+      typ_returns_slice tag
+      || List.exists
+           (fun (Case_branch { cb_inner; _ }) -> typ_returns_slice cb_inner)
+           cases
+  | Codec { codec_returns_slice; _ } -> codec_returns_slice
+  | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
+  | Float32 _ | Float64 _ | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros
+  | Zeroterm | Zeroterm_at_most _ | Byte_array _ | Byte_array_where _ | Struct _
+  | Type_ref _ | Qualified_ref _ ->
+      false
+
+let struct_returns_slice s =
+  List.exists
+    (fun (Field { field_typ; _ }) -> typ_returns_slice field_typ)
+    s.fields
+
 (* IEEE 754 predicates compile to bit-mask checks over the float's bit
    pattern, which [build_populate] stores for float fields: a float32's in
    the int slot (its 31 low bits carry the whole exponent and mantissa on any
@@ -71,6 +104,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_encode = Codec.embed_encode_ctx c in
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
+  let codec_returns_slice = struct_returns_slice codec_struct in
   let codec_size_of_value = Codec.size_of_value_ctx c in
   let codec_min_size = Codec.min_wire_size c in
   match Codec.wire_size_info_ctx c with
@@ -86,6 +120,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_size_of = (fun _ctx _input_end _buf _off -> n);
           codec_size_of_value;
           codec_field_readers;
+          codec_returns_slice;
           codec_struct;
         }
   | `Variable size_of ->
@@ -100,6 +135,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_size_of = size_of;
           codec_size_of_value;
           codec_field_readers;
+          codec_returns_slice;
           codec_struct;
         }
 
@@ -177,7 +213,7 @@ let parse_all_zeros buf off len =
    supplied here rather than by the caller: a top-level parse has no field
    bindings, so binding one argument at the call site would turn each of them
    into a closure built per parse for nothing. *)
-let parse_codec_typ decode fixed_size min_size size_of buf off len =
+let parse_codec_typ ~copy_input decode fixed_size min_size size_of buf off len =
   (* A variable-size codec computes its span by reading length / gate fields
      from the buffer, and inside a nested region the buffer holds more than
      this parse was handed. Demanding the codec's mandatory extent from the
@@ -196,7 +232,14 @@ let parse_codec_typ decode fixed_size min_size size_of buf off len =
         size_of ctx input_end buf off
   in
   check_span len ~off ~n:sz;
-  (decode ctx input_end buf off, off + sz)
+  if not copy_input then (decode ctx input_end buf off, off + sz)
+  else
+    let copy = Bytes.sub buf off sz in
+    let copy_end = Input_end.of_bytes copy in
+    match decode ctx copy_end copy 0 with
+    | value -> (value, off + sz)
+    | exception Parse_error error ->
+        raise (Parse_error { error with at = off + error.at })
 
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
@@ -260,8 +303,9 @@ let float32_be buf off = Int32.float_of_bits (Bytes.get_int32_be buf off)
 let float64_le buf off = Int64.float_of_bits (Bytes.get_int64_le buf off)
 let float64_be buf off = Int64.float_of_bits (Bytes.get_int64_be buf off)
 
-let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
- fun typ buf off len ->
+let rec parse_direct : type a.
+    copy_slices:bool -> a typ -> bytes -> int -> int -> a * int =
+ fun ~copy_slices typ buf off len ->
   match typ with
   | Uint8 -> parse_fixed 1 UInt8.get buf off len
   | Uint16 Little -> parse_fixed 2 UInt16.le buf off len
@@ -324,74 +368,95 @@ let rec parse_direct : type a. a typ -> bytes -> int -> int -> a * int =
   | Byte_slice { size } ->
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
-      (Slice.make_or_eod buf ~first:off ~length:n, off + n)
+      if copy_slices then
+        let copy = Bytes.sub buf off n in
+        (Slice.make_or_eod copy ~first:0 ~length:n, off + n)
+      else (Slice.make_or_eod buf ~first:off ~length:n, off + n)
   | Single_elem { size; elem; at_most } ->
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
-      let v, inner_end = parse_direct elem buf off (off + n) in
+      let v, inner_end = parse_direct ~copy_slices elem buf off (off + n) in
       let consumed = inner_end - off in
       if (not at_most) && consumed <> n then
         raise_eof ~at:inner_end ~expected:n ~got:consumed;
       (v, off + n)
   | Map { inner; decode; index_bound; _ } ->
-      let v, off' = parse_direct inner buf off len in
+      let v, off' = parse_direct ~copy_slices inner buf off len in
       (Types.map_decode ~index_bound decode ~at:off v, off')
-  | Where { cond; inner } -> parse_where inner cond buf off len
+  | Where { cond; inner } -> parse_where ~copy_slices inner cond buf off len
   | Enum { base; cases; closed; _ } ->
-      let v, off' = parse_direct base buf off len in
+      let v, off' = parse_direct ~copy_slices base buf off len in
       check_enum_membership ~at:off ~closed ~base cases v;
       (v, off')
-  | Codec { codec_decode; codec_fixed_size; codec_min_size; codec_size_of; _ }
-    ->
-      parse_codec_typ codec_decode codec_fixed_size codec_min_size codec_size_of
-        buf off len
+  | Codec
+      {
+        codec_decode;
+        codec_fixed_size;
+        codec_min_size;
+        codec_size_of;
+        codec_returns_slice;
+        _;
+      } ->
+      parse_codec_typ
+        ~copy_input:(copy_slices && codec_returns_slice)
+        codec_decode codec_fixed_size codec_min_size codec_size_of buf off len
   | Struct s -> parse_struct_typ s buf off len
-  | Casetype { cases; tag; _ } -> parse_casetype tag cases buf off len
+  | Casetype { cases; tag; _ } ->
+      parse_casetype ~copy_slices tag cases buf off len
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then
-        let v, off' = parse_direct inner buf off len in
+        let v, off' = parse_direct ~copy_slices inner buf off len in
         (Some v, off')
       else (None, off)
   | Optional_or { present; inner; default } ->
-      if Eval.expr Eval.empty present then parse_direct inner buf off len
+      if Eval.expr Eval.empty present then
+        parse_direct ~copy_slices inner buf off len
       else (default, off)
   | Array { len = len_expr; elem; seq } ->
       let n = Eval.expr Eval.empty len_expr in
-      parse_array_loop ~elem ~seq buf off len ~n
+      parse_array_loop ~copy_slices ~elem ~seq buf off len ~n
   | Repeat { size; elem; seq } ->
       let budget = Eval.expr Eval.empty size in
-      parse_repeat_loop ~elem ~seq buf off len ~budget
+      parse_repeat_loop ~copy_slices ~elem ~seq buf off len ~budget
   | Type_ref _ -> invalid_arg "Wire.type_ref: decoding needs a type registry"
   | Qualified_ref _ ->
       invalid_arg "Wire.qualified_ref: decoding needs a type registry"
   | Apply _ -> invalid_arg "Wire.apply: decoding needs a type registry"
 
-and parse_where : type a. a typ -> bool expr -> bytes -> int -> int -> a * int =
- fun inner cond buf off len ->
-  let v, off' = parse_direct inner buf off len in
+and parse_where : type a.
+    copy_slices:bool -> a typ -> bool expr -> bytes -> int -> int -> a * int =
+ fun ~copy_slices inner cond buf off len ->
+  let v, off' = parse_direct ~copy_slices inner buf off len in
   if Eval.expr Eval.empty cond then (v, off')
   else raise_constraint ~at:off ~which:Where ()
 
 and parse_casetype : type a k.
-    k typ -> (a, k) case_branch list -> bytes -> int -> int -> a * int =
- fun tag cases buf off len ->
-  let tag_val, off' = parse_direct tag buf off len in
+    copy_slices:bool ->
+    k typ ->
+    (a, k) case_branch list ->
+    bytes ->
+    int ->
+    int ->
+    a * int =
+ fun ~copy_slices tag cases buf off len ->
+  let tag_val, off' = parse_direct ~copy_slices tag buf off len in
   let rec find_case = function
     | [] ->
         raise_invalid_tag ~at:off
           (Option.value ~default:0 (Eval.int_of tag tag_val))
     | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
         if expected = tag_val then
-          let body, off'' = parse_direct cb_inner buf off' len in
+          let body, off'' = parse_direct ~copy_slices cb_inner buf off' len in
           (cb_inject tag_val body, off'')
         else find_case rest
     | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-        let body, off'' = parse_direct cb_inner buf off' len in
+        let body, off'' = parse_direct ~copy_slices cb_inner buf off' len in
         (cb_inject tag_val body, off'')
   in
   find_case cases
 
 and parse_array_loop : type elt seq.
+    copy_slices:bool ->
     elem:elt typ ->
     seq:(elt, seq) seq_map ->
     bytes ->
@@ -399,16 +464,17 @@ and parse_array_loop : type elt seq.
     int ->
     n:int ->
     seq * int =
- fun ~elem ~seq:(Seq_map s) buf off len ~n ->
+ fun ~copy_slices ~elem ~seq:(Seq_map s) buf off len ~n ->
   let rec loop acc off' i =
     if i >= n then (s.finish acc, off')
     else
-      let v, off'' = parse_direct elem buf off' len in
+      let v, off'' = parse_direct ~copy_slices elem buf off' len in
       loop (s.add acc v) off'' (i + 1)
   in
   loop s.empty off 0
 
 and parse_repeat_loop : type elt seq.
+    copy_slices:bool ->
     elem:elt typ ->
     seq:(elt, seq) seq_map ->
     bytes ->
@@ -416,7 +482,7 @@ and parse_repeat_loop : type elt seq.
     int ->
     budget:int ->
     seq * int =
- fun ~elem ~seq:(Seq_map s) buf off len ~budget ->
+ fun ~copy_slices ~elem ~seq:(Seq_map s) buf off len ~budget ->
   let start = off in
   if budget < 0 then raise_eof ~at:off ~expected:budget ~got:(max 0 (len - off));
   check_eof len ~off:start ~n:budget;
@@ -424,7 +490,7 @@ and parse_repeat_loop : type elt seq.
   let rec loop acc off' =
     if off' = region_end then (s.finish acc, off')
     else
-      let v, off'' = parse_direct elem buf off' region_end in
+      let v, off'' = parse_direct ~copy_slices elem buf off' region_end in
       (* An element that consumes nothing never moves the cursor to
          [region_end], so the byte-budget loop would spin. A literal zero-size
          span is refused by [Field.repeat], but a [uint_var size] whose size
@@ -440,14 +506,15 @@ exception Parse_error = Parse_error
 
 let of_string_exn typ s =
   let buf = Bytes.unsafe_of_string s in
-  fst (parse_direct typ buf 0 (Bytes.length buf))
+  fst (parse_direct ~copy_slices:true typ buf 0 (Bytes.length buf))
 
 let of_string typ s =
   match of_string_exn typ s with
   | v -> Ok v
   | exception Parse_error e -> Error e
 
-let of_bytes_exn typ b = fst (parse_direct typ b 0 (Bytes.length b))
+let of_bytes_exn typ b =
+  fst (parse_direct ~copy_slices:false typ b 0 (Bytes.length b))
 
 let of_bytes typ b =
   match of_bytes_exn typ b with v -> Ok v | exception Parse_error e -> Error e
@@ -516,7 +583,7 @@ let read_exact reader (n : int) =
    bytes past the decoded value, on parse error push back everything so the
    reader is restored to its position before the failed decode. *)
 let parse_or_rewind typ reader bytes len =
-  match parse_direct typ bytes 0 len with
+  match parse_direct ~copy_slices:false typ bytes 0 len with
   | v, off ->
       push_back_bytes reader bytes off (len - off);
       v
@@ -613,7 +680,7 @@ let of_reader_incremental typ reader =
   (* Both recoverable kinds read ahead and retry, and give up only when the read
      yields nothing at all. What differs is how far ahead to read. *)
   let rec loop () =
-    match parse_direct typ s.buf 0 s.filled with
+    match parse_direct ~copy_slices:false typ s.buf 0 s.filled with
     | v, off ->
         push_back_bytes reader s.buf off (s.filled - off);
         v
