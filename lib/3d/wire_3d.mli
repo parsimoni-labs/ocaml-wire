@@ -185,10 +185,9 @@ val harden_wrapper_source : string -> string
     validator's status variable is read back out of [src], since EverParse has
     renamed it across releases.
 
-    @raise Failure
-      if [src] is neither a wrapper shape this recognizes nor one already
-      carrying its own consumption check, rather than returning a prefix
-      recognizer. *)
+    Raises [Failure] if [src] is neither a wrapper shape this recognizes nor one
+    already carrying its own consumption check, rather than returning a prefix
+    recognizer. *)
 
 val run : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [run ?quiet ~outdir schemas] runs the full pipeline: writes [.3d] files,

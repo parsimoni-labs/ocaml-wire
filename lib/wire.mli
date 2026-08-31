@@ -528,7 +528,7 @@ module Field : sig
       There is no sizeless form either, for the same reason: 3D has no
       rest-of-region list, so a repeat that consumed whatever remained would
       have no projection. When the region size is not known where the codec is
-      built, take it as a {!Param.input} and bind it per call. Baking in a
+      built, take it as a {!type:Param.input} and bind it per call. Baking in a
       literal makes the budget a constant the encoder will also hold the values
       to, which is a promise the values cannot keep. *)
 
@@ -1324,9 +1324,9 @@ val pp_value : 'r codec -> 'r Fmt.t
     are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v].
 
     It encodes the value to read the fields back and threads no {!Param.env}, so
-    on a codec whose sizes or constraints reference a {!Param.input} it raises
-    [Invalid_argument]: with no binding those params read as zero, and the
-    record that comes out is not one the codec accepts. *)
+    on a codec whose sizes or constraints reference a {!type:Param.input} it
+    raises [Invalid_argument]: with no binding those params read as zero, and
+    the record that comes out is not one the codec accepts. *)
 
 (** {1 Nested Codec Combinators}
 
