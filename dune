@@ -5,3 +5,9 @@
 (mdx
  (files README.md)
  (libraries wire wire.3d wire.stubs))
+
+(rule
+ (alias runtest)
+ (deps (universe) test/ci/check-dependency-pins.sh)
+ (action
+  (run bash %{dep:test/ci/check-dependency-pins.sh})))
