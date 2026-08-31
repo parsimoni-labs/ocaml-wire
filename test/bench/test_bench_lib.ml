@@ -333,6 +333,15 @@ let test_run_table_size_zero () =
   (* Write benchmarks use size:0 *)
   run_table ~title:"writes" ~n:100 [ v "write" ~size:0 noop ]
 
+let test_run_table_prechecked () =
+  let verifications = ref 0 in
+  let t =
+    v "prechecked" ~size:4 noop |> with_verify (fun () -> incr verifications)
+  in
+  check t;
+  run_table ~prechecked:true ~title:"prechecked" ~n:2 [ t ];
+  Alcotest.(check int) "verification runs once" 1 !verifications
+
 let test_run_table_ffi_reset () =
   let idx = ref 0 in
   let seen = ref [] in
@@ -417,6 +426,8 @@ let suite =
       Alcotest.test_case "run_table: multiple specs" `Quick
         test_run_table_multiple_specs;
       Alcotest.test_case "run_table: size zero" `Quick test_run_table_size_zero;
+      Alcotest.test_case "run_table: prechecked" `Quick
+        test_run_table_prechecked;
       Alcotest.test_case "run_table: ffi reset" `Quick test_run_table_ffi_reset;
       Alcotest.test_case "integration: cycling through run_table" `Quick
         test_cycling_through_run_table;
