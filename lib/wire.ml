@@ -504,20 +504,28 @@ and parse_repeat_loop : type elt seq.
 
 exception Parse_error = Parse_error
 
-let of_string_exn typ s =
+let of_string_exn ?(consume = `Prefix) typ s =
   let buf = Bytes.unsafe_of_string s in
-  fst (parse_direct ~copy_slices:true typ buf 0 (Bytes.length buf))
+  let available = Bytes.length buf in
+  let value, consumed = parse_direct ~copy_slices:true typ buf 0 available in
+  check_consumption consume ~consumed ~available;
+  value
 
-let of_string typ s =
-  match of_string_exn typ s with
+let of_string ?consume typ s =
+  match of_string_exn ?consume typ s with
   | v -> Ok v
   | exception Parse_error e -> Error e
 
-let of_bytes_exn typ b =
-  fst (parse_direct ~copy_slices:false typ b 0 (Bytes.length b))
+let of_bytes_exn ?(consume = `Prefix) typ b =
+  let available = Bytes.length b in
+  let value, consumed = parse_direct ~copy_slices:false typ b 0 available in
+  check_consumption consume ~consumed ~available;
+  value
 
-let of_bytes typ b =
-  match of_bytes_exn typ b with v -> Ok v | exception Parse_error e -> Error e
+let of_bytes ?consume typ b =
+  match of_bytes_exn ?consume typ b with
+  | v -> Ok v
+  | exception Parse_error e -> Error e
 
 let drain_reader reader =
   let buf = Buffer.create 256 in

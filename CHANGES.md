@@ -2,6 +2,11 @@
 
 ### Added
 
+- Add ``~consume:`All`` to the string/bytes and `Codec.decode` entry points for
+  callers that require exactly one value. The existing default is explicit as
+  ``~consume:`Prefix``; exact rejection reports a structured `Trailing_bytes`
+  parse error (#404, @samoht)
+
 - Add `Wire.Codec.to_bytes` and `Wire.Codec.to_string`: they allocate an
   exact-size buffer, encode the whole record into it and run the same checks as
   `validate`, so a one-call encode cannot return bytes `decode` would reject.

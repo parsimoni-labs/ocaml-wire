@@ -52,9 +52,11 @@ let eval_set_param ctx name value =
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
 type predicate = Where | Field | Action | Per_byte
+type consumption = [ `Prefix | `All ]
 
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
+  | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
   | Missing_terminator
@@ -77,6 +79,12 @@ let eof ?(at = 0) ?(field = []) ~expected ~got () =
 
 let err ~at kind = parse_error ~at kind
 let raise_error ~at kind = raise (Parse_error (err ~at kind))
+
+let check_consumption mode ~consumed ~available =
+  match mode with
+  | `Prefix -> ()
+  | `All when consumed = available -> ()
+  | `All -> raise_error ~at:consumed (Trailing_bytes (available - consumed))
 
 let raise_eof ~at ~expected ~got =
   raise_error ~at (Unexpected_eof { expected; got })
@@ -3721,6 +3729,8 @@ let pp_predicate ppf (p : predicate) =
 let pp_error_kind ppf = function
   | Unexpected_eof { expected; got } ->
       Fmt.pf ppf "unexpected EOF: expected %d bytes, got %d" expected got
+  | Trailing_bytes n ->
+      Fmt.pf ppf "%d trailing byte%s" n (if n = 1 then "" else "s")
   | Invalid_enum { value; valid } ->
       Fmt.pf ppf "invalid enum value %d, valid: [%a]" value
         Fmt.(list ~sep:comma int)
@@ -3748,19 +3758,21 @@ let compare_predicate a b = Int.compare (predicate_rank a) (predicate_rank b)
 
 let kind_rank = function
   | Unexpected_eof _ -> 0
-  | Invalid_enum _ -> 1
-  | Invalid_tag _ -> 2
-  | Missing_terminator -> 3
-  | Non_zero_padding -> 4
-  | Value_out_of_range _ -> 5
-  | Zero_divisor -> 6
-  | Constraint_failed _ -> 7
+  | Trailing_bytes _ -> 1
+  | Invalid_enum _ -> 2
+  | Invalid_tag _ -> 3
+  | Missing_terminator -> 4
+  | Non_zero_padding -> 5
+  | Value_out_of_range _ -> 6
+  | Zero_divisor -> 7
+  | Constraint_failed _ -> 8
 
 let compare_error_kind a b =
   match (a, b) with
   | Unexpected_eof a, Unexpected_eof b ->
       let c = Int.compare a.expected b.expected in
       if c <> 0 then c else Int.compare a.got b.got
+  | Trailing_bytes a, Trailing_bytes b -> Int.compare a b
   | Invalid_enum a, Invalid_enum b ->
       let c = Int.compare a.value b.value in
       if c <> 0 then c else List.compare Int.compare a.valid b.valid
