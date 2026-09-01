@@ -2609,6 +2609,17 @@ let test_exact_byte_field_expression_size () =
   Codec.encode exact_vb_codec (UInt8.v 4, "abcd") buf 0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
+(* Full-record encoding is deliberately non-transactional: a late refusal does
+   not roll back fields already written. Callers that catch the exception must
+   discard the destination instead of retrying from its contents. *)
+let test_encode_failure_leaves_partial_record () =
+  let buf = Bytes.make 6 '\xcc' in
+  expect_exact_byte_error "late byte_array" ~expected:4 ~actual:2 (fun () ->
+      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf 0);
+  Alcotest.(check string)
+    "earlier field remains written" "\x04\xcc\xcc\xcc\xcc\xcc"
+    (Bytes.to_string buf)
+
 (* Encode must not emit a value its own decoder rejects: a refinement the
    decoder enforces (enum membership, all-zero padding, a per-byte span
    predicate, a where cond) has to gate encode too, or the record ships bytes
@@ -9757,6 +9768,8 @@ let suite =
         test_exact_byte_field_literal_size;
       Alcotest.test_case "exact byte field: expression size" `Quick
         test_exact_byte_field_expression_size;
+      Alcotest.test_case "encode failure: destination is partial" `Quick
+        test_encode_failure_leaves_partial_record;
       Alcotest.test_case "encode rejects: unlisted enum value" `Quick
         test_encode_rejects_unlisted_enum;
       Alcotest.test_case "enum: over a non-int carrier base" `Quick
