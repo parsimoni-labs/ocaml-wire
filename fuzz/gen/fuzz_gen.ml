@@ -2638,34 +2638,23 @@ module Codec = struct
      clashing anonymous declarations in 3D. *)
   let field_name i f = if f.name = "_" then Fmt.str "f%d" i else f.name
 
+  (* Build the codec fields and their checkers together, so both retain the
+     identity of the same source [Field.t]. Accessors intentionally reject a
+     separately declared lookalike field, even when its name and type match. *)
   let wire_codec_fields fields =
-    let rec go : type f r. int -> (f, r) fields -> (f, r) Wire.Codec.fields =
+    let rec go : type f r.
+        int -> (f, r) fields -> (f, r) Wire.Codec.fields * r field_check list =
      fun i -> function
-       | [] -> Wire.Codec.[]
-       | f :: rest ->
-           Wire.Codec.( $ ) (Wire.Field.v (field_name i f) f.gen.typ) f.getter
-           :: go (i + 1) rest
-    in
-    go 0 fields
-
-  (* The per-field checkers for the same list, in the same order and under the
-     same names: [Codec.get] and [Codec.set] resolve a field by name against
-     the sealed codec, so a checker built here addresses exactly the slot
-     [wire_codec_fields] declared. *)
-  let field_checks fields =
-    let rec go : type f r. int -> (f, r) fields -> r field_check list =
-     fun i -> function
-       | [] -> []
+       | [] -> (Wire.Codec.[], [])
        | f :: rest ->
            let name = field_name i f in
-           Field_check
-             {
-               name;
-               field = Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter;
-               proj = f.getter;
-               equal = f.gen.equal;
-             }
-           :: go (i + 1) rest
+           let field =
+             Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter
+           in
+           let wire_fields, checks = go (i + 1) rest in
+           ( Wire.Codec.(field :: wire_fields),
+             Field_check { name; field; proj = f.getter; equal = f.gen.equal }
+             :: checks )
     in
     go 0 fields
 
@@ -2780,7 +2769,8 @@ module Codec = struct
   let v : type f r.
       string -> ?equal:(r -> r -> bool) -> f -> (f, r) fields -> r t =
    fun name ?(equal = ( = )) builder fields ->
-    let codec = Wire.Codec.v name builder (wire_codec_fields fields) in
+    let wire_fields, field_checks = wire_codec_fields fields in
+    let codec = Wire.Codec.v name builder wire_fields in
     let typ = Wire.codec codec in
     let positives = field_positives fields in
     let n_fields = field_count fields in
@@ -2834,7 +2824,7 @@ module Codec = struct
       equal;
       env = combine_env_strategies (field_envs fields);
       adversarial_value;
-      fields = field_checks fields;
+      fields = field_checks;
     }
 end
 
@@ -3395,32 +3385,73 @@ let check_positive_decode label g value bs env =
       Alcobar.failf "%s positive decode_exn failed: %a" label
         Wire.pp_parse_error e
 
-let check_positive_size label g value bs =
+(* The names of the input params a codec reads out of an env, [[]] for one that
+   reads none. An [~action] codec writes output params and needs an env without
+   reading one, so "has an env strategy" is not the same question. *)
+let input_param_names g =
+  Wire.Everparse.Raw.input_param_names
+    (Wire.Everparse.Raw.struct_of_codec g.codec)
+
+let check_positive_size label g value bs env =
   let sz = Wire.Codec.size_of_value g.codec value in
   if sz <> Bytes.length bs then
     Alcobar.failf "%s size_of_value = %d but canonical encoding is %d" label sz
       (Bytes.length bs);
-  sz
+  (* [size_of_value] measures the value, not the buffer, so it answers without
+     an env; threading one must not change the answer. *)
+  match env with
+  | None -> sz
+  | Some env ->
+      let with_env = Wire.Codec.size_of_value ~env g.codec value in
+      if with_env <> sz then
+        Alcobar.failf "%s size_of_value = %d with an env bound, %d without"
+          label with_env sz;
+      sz
 
-let check_positive_size_metadata label g bs =
-  if Option.is_none g.env then begin
-    let min_sz = Wire.Codec.min_wire_size g.codec in
-    if min_sz > Bytes.length bs then
-      Alcobar.failf "%s min_wire_size = %d but canonical encoding is %d" label
-        min_sz (Bytes.length bs);
-    (match Wire.Codec.wire_size_at g.codec bs 0 with
-    | actual ->
-        if actual <> Bytes.length bs then
-          Alcobar.failf "%s wire_size_at = %d but canonical encoding is %d"
-            label actual (Bytes.length bs)
-    | exception Invalid_argument _ ->
-        Alcobar.failf "%s wire_size_at raised on a positive" label);
-    match Wire.Codec.wire_size_opt g.codec with
-    | Some fixed when fixed <> Bytes.length bs ->
-        Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label
-          fixed (Bytes.length bs)
-    | Some _ | None -> ()
-  end
+(* [wire_size_at] measures the buffer, so a parametric field's width comes from
+   the env: with one bound it must span exactly the canonical encoding, the same
+   contract the env-free codecs are held to. The env branch used to be skipped
+   whole, which is how a param-sized field measured as empty stayed invisible. *)
+let check_positive_size_metadata label g bs env =
+  let len = Bytes.length bs in
+  let min_sz = Wire.Codec.min_wire_size g.codec in
+  if min_sz > len then
+    Alcobar.failf "%s min_wire_size = %d but canonical encoding is %d" label
+      min_sz len;
+  (match Wire.Codec.wire_size_at ?env g.codec bs 0 with
+  | actual ->
+      if actual <> len then
+        Alcobar.failf "%s wire_size_at = %d but canonical encoding is %d" label
+          actual len
+  | exception Invalid_argument m ->
+      Alcobar.failf "%s wire_size_at raised on a positive: %s" label m);
+  match Wire.Codec.wire_size_opt g.codec with
+  | Some fixed when fixed <> len ->
+      Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label fixed
+        len
+  | Some _ | None -> ()
+
+(* The other half of the parametric-size contract: with no env, a codec that
+   reads an input param must refuse outright. Resolving an unbound param to 0
+   would measure a param-sized field as empty and answer a short size instead of
+   failing, which reads as a valid short record rather than as an error. *)
+let check_env_required label g bs =
+  match input_param_names g with
+  | [] -> ()
+  | _ :: _ -> (
+      (match Wire.Codec.wire_size_at g.codec bs 0 with
+      | n ->
+          Alcobar.failf "%s wire_size_at answered %d with no env bound" label n
+      | exception Invalid_argument _ -> ());
+      (match Wire.Codec.decode g.codec bs 0 with
+      | _ -> Alcobar.failf "%s decode answered with no env bound" label
+      | exception Invalid_argument _ -> ());
+      match Wire.Codec.validate g.codec bs 0 with
+      | () -> Alcobar.failf "%s validate passed with no env bound" label
+      | exception Invalid_argument _ -> ()
+      | exception Wire.Parse_error _ ->
+          Alcobar.failf "%s validate reported a parse error with no env bound"
+            label)
 
 let check_positive_encode label g value bs env sz =
   let bs_str = string_of_bytes bs in
@@ -3434,8 +3465,9 @@ let check_positive label g (value, bs) =
   let env = positive_env g in
   check_positive_decode label g value bs env;
   check_direct_codec_encode_agree label "positive" g value;
-  let sz = check_positive_size label g value bs in
-  check_positive_size_metadata label g bs;
+  let sz = check_positive_size label g value bs env in
+  check_positive_size_metadata label g bs env;
+  if Option.is_some env then check_env_required label g bs;
   check_positive_encode label g value bs env sz
 
 let validate_one ?env g bs =
@@ -3636,21 +3668,22 @@ type 'r addressed = {
   anames : string list;
 }
 
+(* [g.typ] is the whole schema for a [Codec.v] gen ([Wire.codec] of its own
+   codec, so the walk reaches its field list); a leaf gen's codec is the
+   one-slot record [codec_of_typ] wraps the typ in, whose slot [leaf_slot_name]
+   names. Both spellings are admitted, so a leaf rejection may be attributed to
+   either. *)
 let addressed g =
   let anames = leaf_slot_name :: typ_field_names g.typ in
   match g.fields with
   | [] ->
+      let field = leaf_field g.typ in
       {
-        acodec = codec_of_typ g.typ;
+        acodec = Wire.Codec.v leaf_codec_name Fun.id [ field ];
         achecks =
           [
             Field_check
-              {
-                name = leaf_slot_name;
-                field = leaf_field g.typ;
-                proj = Fun.id;
-                equal = g.equal;
-              };
+              { name = leaf_slot_name; field; proj = Fun.id; equal = g.equal };
           ];
         anames;
       }
@@ -4747,6 +4780,9 @@ let binds_env (Pack g) = Option.is_some g.env
 let registry_record =
   Codec.v "RegRecord" (fun a b -> (a, b)) Codec.[ uint8 $ fst; uint16be $ snd ]
 
+(* One closed byte-wide enum, used both on its own and as a list element. *)
+let registry_enum_color = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]
+
 (* Two bitfields packed into one base word, as a record whose field list the
    fuzzer keeps: the shape where a [Codec.set] that rewrites the whole word
    instead of its own bits destroys the neighbour, and the only shape in the
@@ -4762,6 +4798,70 @@ let registry_bits_u16be =
   Codec.v "RegBitsU16be"
     (fun hi lo -> (hi, lo))
     Codec.[ bits ~width:4 Wire.U16be $ fst; bits ~width:12 Wire.U16be $ snd ]
+
+(* {2 A sub-codec reached through a field}
+
+   [array(2,record)] already puts a [Wire.codec] in an element position, but no
+   entry put one in a field position, which is the position that makes the
+   projection declare the inner struct before the outer names it and makes the
+   outer's later fields start at the inner's own width rather than a scalar's.
+   The gens below fill it: a sub-codec last, first, twice, two levels deep, and
+   one whose width the inner's own contents decide. *)
+
+let registry_subcodec_last =
+  Codec.v "RegSubLast"
+    (fun tag body -> (tag, body))
+    Codec.[ uint8 $ fst; registry_record $ snd ]
+
+(* The sub-codec first: its bitfields must not coalesce with the outer field
+   after it, and that field starts at the inner struct's width. *)
+let registry_subcodec_first =
+  Codec.v "RegSubFirst"
+    (fun body tail -> (body, tail))
+    Codec.[ registry_bits_u8 $ fst; uint16be $ snd ]
+
+(* The same sub-codec in two slots: one declaration, two references. *)
+let registry_subcodec_twice =
+  Codec.v "RegSubTwice"
+    (fun a b -> (a, b))
+    Codec.[ registry_record $ fst; registry_record $ snd ]
+
+let registry_subcodec_leaf =
+  Codec.v "RegSubLeaf" (fun a b -> (a, b)) Codec.[ uint8 $ fst; uint8 $ snd ]
+
+let registry_subcodec_mid =
+  Codec.v "RegSubMid"
+    (fun leaf tail -> (leaf, tail))
+    Codec.[ registry_subcodec_leaf $ fst; uint16be $ snd ]
+
+(* Two levels: the leaf has to be declared before the struct that names it, and
+   that one before the outer. *)
+let registry_subcodec_deep =
+  Codec.v "RegSubDeep"
+    (fun tag mid -> (tag, mid))
+    Codec.[ uint8 $ fst; registry_subcodec_mid $ snd ]
+
+(* A sub-codec whose width its own length prefix decides, with a field after it:
+   the trailing field's offset is what the inner consumed, not a constant. *)
+let registry_subcodec_var_body =
+  repeat_sized "RegSubVarBody"
+    (fun ~size typ -> Wire.Field.repeat "items" ~size typ)
+    ~bytes:8 uint8
+
+let registry_subcodec_var =
+  Codec.v "RegSubVar"
+    (fun body tail -> (body, tail))
+    Codec.[ registry_subcodec_var_body $ fst; uint8 $ snd ]
+
+(* A valid NUL-terminated sub-codec: its variable field is the only field in the
+   inner record, so the containing field can still be projected and extracted. *)
+let registry_subcodec_zt_only_body =
+  Codec.v "RegSubZtOnlyBody" (fun a -> a) Codec.[ zeroterm $ Fun.id ]
+
+let registry_subcodec_zt_only =
+  Codec.v "RegSubZtOnly"
+    (fun tag body -> (tag, body))
+    Codec.[ uint8 $ fst; registry_subcodec_zt_only_body $ snd ]
 
 let registry_casetype =
   casetype_u8 "RegPayload"
@@ -4966,7 +5066,7 @@ let wrapper_gens =
            uint8) );
     ("variants", Pack (variants "Flag" [ ("A", `A); ("B", `B); ("C", `C) ]));
     ("variants_u16be", Pack variants_u16be);
-    ("enum", Pack (enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]));
+    ("enum", Pack registry_enum_color);
     ("enum_u16be", Pack enum_u16be);
     ("enum_open", Pack enum_open);
     ("enum_open_u16be", Pack enum_open_u16be);
@@ -4986,6 +5086,18 @@ let wrapper_gens =
     ("nested(0,empty)", Pack (nested 0 empty));
     ("nested(2,uint16be)", Pack (nested 2 uint16be));
     ("nested(4,byte_array4)", Pack (nested 4 (byte_array 4)));
+    (* A [nested] region whose inner carries its own array / refinement
+       qualifier is lifted into a synthesised [Se*] wrapper struct. Only the
+       [SeBytes] arm above was reached; these three reach the rest of the
+       family, and the refined-span one also orders the [_RefByte_*] typedef
+       the wrapper names against the wrapper itself. *)
+    ("nested(3,byte_slice3)", Pack (nested 3 (byte_slice 3)));
+    ( "nested(4,byte_array_where4)",
+      Pack
+        (nested 4
+           (byte_array_where 4 ~per_byte:(fun b ->
+                Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)))) );
+    ("nested(8,zeroterm_at_most8)", Pack (nested 8 (zeroterm_at_most 8)));
     ("nested_at_most(0,empty)", Pack (nested_at_most 0 empty));
     ("nested_at_most(2,uint16be)", Pack (nested_at_most 2 uint16be));
     ("nested_at_most(4,uint16be)", Pack (nested_at_most 4 uint16be));
@@ -4999,12 +5111,25 @@ let composite_gens =
     ("array_seq(0,uint8)", Pack (array_seq 0 uint8));
     ("array(2,record)", Pack (array 2 registry_record));
     ("array(3,bounded_u8)", Pack (array 3 (bounded_u8 ~min:10 ~max:100)));
+    (* A closed enum under a byte budget cannot be spelled as a 1-byte enum
+       type, so it goes through the synthesised [_EnumElt_] struct that carries
+       the membership refinement per element. An [array] takes that route only
+       when the base is wider than a byte or big-endian; a [repeat] takes it at
+       every width. Neither position had an entry. *)
+    ("array(2,enum_u16be)", Pack (array 2 enum_u16be));
+    ("repeat(6,enum)", Pack (repeat ~bytes:6 registry_enum_color));
     ("repeat(0,uint8)", Pack (repeat ~bytes:0 uint8));
     ("repeat(8,uint8)", Pack (repeat ~bytes:8 uint8));
     ("repeat(7,uint16be)", Pack (repeat ~bytes:7 uint16be));
     ("repeat_seq(8,uint8)", Pack (repeat_seq ~bytes:8 uint8));
     ("repeat_seq(7,uint16be)", Pack (repeat_seq ~bytes:7 uint16be));
     ("record", Pack registry_record);
+    ("subcodec_last(record)", Pack registry_subcodec_last);
+    ("subcodec_first(bits)", Pack registry_subcodec_first);
+    ("subcodec_twice(record)", Pack registry_subcodec_twice);
+    ("subcodec_deep(record)", Pack registry_subcodec_deep);
+    ("subcodec_var(repeat)", Pack registry_subcodec_var);
+    ("subcodec_ztonly(zeroterm)", Pack registry_subcodec_zt_only);
     ("record_bits(3+5,U8)", Pack registry_bits_u8);
     ("record_bits(4+12,U16be)", Pack registry_bits_u16be);
     ("casetype_u8", Pack registry_casetype);
@@ -5552,6 +5677,9 @@ let expected_registry_labels =
     "nested(0,empty)";
     "nested(2,uint16be)";
     "nested(4,byte_array4)";
+    "nested(3,byte_slice3)";
+    "nested(4,byte_array_where4)";
+    "nested(8,zeroterm_at_most8)";
     "nested_at_most(0,empty)";
     "nested_at_most(2,uint16be)";
     "nested_at_most(4,uint16be)";
@@ -5559,12 +5687,20 @@ let expected_registry_labels =
     "array(3,uint16be)";
     "array_seq(3,uint16be)";
     "array_seq(0,uint8)";
+    "array(2,enum_u16be)";
     "repeat(0,uint8)";
     "repeat(8,uint8)";
     "repeat(7,uint16be)";
+    "repeat(6,enum)";
     "repeat_seq(8,uint8)";
     "repeat_seq(7,uint16be)";
     "record";
+    "subcodec_last(record)";
+    "subcodec_first(bits)";
+    "subcodec_twice(record)";
+    "subcodec_deep(record)";
+    "subcodec_var(repeat)";
+    "subcodec_ztonly(zeroterm)";
     "casetype_u8";
     "casetype_u16be_default";
     "field_anon";

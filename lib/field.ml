@@ -1,10 +1,13 @@
 type 'a t = {
+  id : int;
   name : string;
   typ : 'a Types.typ;
   constraint_ : bool Types.expr option;
   action : Types.action option;
   doc : string option;
 }
+
+let id_counter = Atomic.make 0
 
 type 'a anon = { anon_typ : 'a Types.typ }
 
@@ -50,7 +53,8 @@ let v name ?constraint_ ?self_constraint ?self_int64 ?action ?doc typ =
     |> combine
          (Option.map (fun f -> f (Types.Ref (Types.I64, name))) self_int64)
   in
-  { name; typ; constraint_; action; doc }
+  let id = Atomic.fetch_and_add id_counter 1 in
+  { id; name; typ; constraint_; action; doc }
 
 (* Field decorations: produce a field directly from a typ + optional/
    repeat metadata. Exposing these only at the field level keeps
@@ -165,6 +169,7 @@ let int64 f =
   Types.Ref (Types.I64, f.name)
 
 let name f = f.name
+let id f = f.id
 let typ f = f.typ
 let constraint_ f = f.constraint_
 let action f = f.action

@@ -81,6 +81,11 @@ type endian = Types.endian = Little | Big
 
 type 'a typ = 'a Types.typ
 
+type consumption = Types.consumption
+(** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
+    leading value and leaves any remaining bytes uninterpreted; [`All] requires
+    that value to consume the rest of the supplied input. *)
+
 type param
 (** Untyped formal parameter declaration. Create via {!val:Param.input} or
     {!val:Param.output}. *)
@@ -445,6 +450,10 @@ module Field : sig
       convenience for full-width 64-bit constraints using {!Expr.int64} literals
       and {!int64} field references.
 
+      EverParse refines scalar fields only. {!Codec.v} therefore rejects
+      [?constraint_] and [?self_constraint] on a byte span, array, sub-codec or
+      casetype field; put the predicate on a scalar field it reads instead.
+
       Use {!optional} / {!optional_or} / {!repeat} for optional and repeating
       payloads -- they only project to 3D as the top of a struct field, never as
       a nested type. *)
@@ -527,9 +536,9 @@ module Field : sig
       There is no sizeless form either, for the same reason: 3D has no
       rest-of-region list, so a repeat that consumed whatever remained would
       have no projection. When the region size is not known where the codec is
-      built, take it as a {!Param.input} and bind it per call. Baking in a
-      literal makes the budget a constant the encoder will also hold the values
-      to, which is a promise the values cannot keep. *)
+      built, take it as a {!module-Param.val-input} and bind it per call. Baking
+      in a literal makes the budget a constant the encoder will also hold the
+      values to, which is a promise the values cannot keep. *)
 
   val repeat_seq :
     string ->
@@ -769,8 +778,12 @@ val zeroterm : string typ
     [0x00] raises [Invalid_argument].
 
     Projects to the 3D [field[:zeroterm]] form, which desugars to the EverParse
-    prelude [cstring]/[parse_string] combinator. This 3D feature predates the
-    manual and has no [3d-lang.html] section; see [EverParse3d.Prelude.fsti]. *)
+    prelude [cstring]/[parse_string] combinator. EverParse cannot extract a
+    struct where that field has a sibling (project-everest/everparse#321), so
+    {!Codec.v} accepts it only as the codec's sole field; use
+    {!zeroterm_at_most} in a larger record. The manual's Arrays section does not
+    cover either form; the grammar is in 3D's lexer and the semantics in
+    [EverParse3d.Prelude.fsti]. *)
 
 val zeroterm_at_most : size:int expr -> string typ
 (** [zeroterm_at_most ~size] is a NUL-terminated string occupying a fixed
@@ -779,11 +792,16 @@ val zeroterm_at_most : size:int expr -> string typ
     zero padding).
 
     Projects to the 3D [field[:zeroterm-byte-size-at-most size]] form
-    ([t_at_most] of [cstring]). Like {!zeroterm}, undocumented in the manual;
+    ([t_at_most] of [cstring]). Like {!zeroterm}, it is absent from the manual;
     see [EverParse3d.Prelude.fsti]. *)
 
 val where : bool expr -> 'a typ -> 'a typ
 (** Refine a description with a boolean constraint.
+
+    This projects to 3D's unnamed field refinement, [T f { e }], evaluated as
+    soon as the field is read. Despite the name it is not 3D's [where] clause,
+    which is what {!Codec.v}'s [?where] projects to. {!Field.v}'s [?constraint_]
+    is the same refinement written at the field instead of the type.
 
     Encoding a value the constraint rejects raises [Invalid_argument] rather
     than emitting bytes decode would refuse. *)
@@ -861,7 +879,9 @@ val nested : size:int expr -> 'a typ -> 'a typ
     but that region is known to contain exactly one value, such as a single
     nested message. Decoding rejects an inner value that consumes fewer bytes;
     encoding raises [Invalid_argument] unless the value's encoded size is
-    exactly [size]. *)
+    exactly [size]. It projects to 3D as
+    [t f[:byte-size-single-element-array size]], a different construct from the
+    byte-budgeted list {!array} and {!Field.repeat} project to. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
@@ -869,7 +889,8 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
 
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. Encoding zero-pads the unused
-    region; a value larger than [size] raises [Invalid_argument]. *)
+    region; a value larger than [size] raises [Invalid_argument]. It projects to
+    3D as [t f[:byte-size-single-element-array-at-most size]]. *)
 
 val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the
@@ -926,7 +947,17 @@ val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
     ['k] can be an integer, a string, or any other typ with decidable equality;
     every case must supply an explicit [~index]. Projecting an integer-tagged
     casetype raises [Invalid_argument] naming the case index when it cannot fit
-    the platform's native integer representation. *)
+    the platform's native integer representation.
+
+    An integer tag projects to a 3D [casetype], whose validator switches on the
+    tag and validates the selected case body. 3D dispatches on integers only, so
+    a tag of any other type projects to framing instead: the tag bytes, then a
+    rest-of-buffer field holding the body. The generated C therefore accepts any
+    tag with any body and leaves dispatch to its caller. The OCaml decoder does
+    dispatch, and rejects a tag no case claims unless a {!default} branch
+    catches it, so on an unknown tag the two sides disagree by design. Because
+    the body takes whatever bytes remain, such a casetype has to be the trailing
+    field of its struct. *)
 
 val size : 'a typ -> int option
 (** [size t] is the fixed wire size of a description, if known statically. *)
@@ -949,6 +980,7 @@ type predicate = Where | Field | Action | Per_byte
     cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
+  | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
   | Missing_terminator
@@ -1043,20 +1075,24 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 (** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
 
-val of_string : 'a typ -> string -> ('a, parse_error) result
-(** Decodes one value from the start of the string. Trailing bytes, if any, are
-    left uninterpreted. Decoding itself does not copy the input; mutable
-    {!byte_slice} values that escape in the result receive their own backing
-    bytes so they cannot modify the source string. *)
+val of_string :
+  ?consume:consumption -> 'a typ -> string -> ('a, parse_error) result
+(** Decodes one value from the start of the string. [consume] defaults to
+    [`Prefix], leaving trailing bytes uninterpreted; [`All] returns a
+    {!constructor-Trailing_bytes} error unless the value consumes the whole
+    string. Decoding itself does not copy the input; mutable {!byte_slice}
+    values that escape in the result receive their own backing bytes so they
+    cannot modify the source string. *)
 
-val of_string_exn : 'a typ -> string -> 'a
+val of_string_exn : ?consume:consumption -> 'a typ -> string -> 'a
 (** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
 
-val of_bytes : 'a typ -> bytes -> ('a, parse_error) result
-(** Decodes one value from the start of the byte sequence. Trailing bytes, if
-    any, are left uninterpreted. *)
+val of_bytes :
+  ?consume:consumption -> 'a typ -> bytes -> ('a, parse_error) result
+(** Decodes one value from the start of the byte sequence, with the same
+    [consume] contract as {!of_string}. *)
 
-val of_bytes_exn : 'a typ -> bytes -> 'a
+val of_bytes_exn : ?consume:consumption -> 'a typ -> bytes -> 'a
 (** Like {!of_bytes} but raises {!exception:Parse_error} on failure. *)
 
 (** {1 Direct Encoding}
@@ -1107,7 +1143,10 @@ module Codec : sig
   (** Sealed codec for record values of type ['r]. *)
 
   type ('a, 'r) field
-  (** A field bound to a record projection. *)
+  (** A field bound to a record projection. The binding retains the identity of
+      its source {!Field.t}: an accessor may use another binding of that same
+      source field, but not a newly declared field that merely has the same
+      name. One source field may still be shared by multiple codecs. *)
 
   type ('f, 'r) fields =
     | [] : ('r, 'r) fields
@@ -1122,6 +1161,13 @@ module Codec : sig
       note (e.g. an RFC citation) that the documentation projection renders as a
       [/*++ ... --*/] comment on the codec's 3D typedef; see
       {!Everparse.project}.
+
+      [?where] is a whole-codec constraint. Mentioning only
+      {!module-Param.val-input} parameters, it projects to 3D's [where] clause,
+      which EverParse checks before reading any field. 3D's [where] sees
+      parameters only, so an expression that also refers to fields projects as a
+      refinement on the last field it mentions, the earliest point at which 3D
+      can evaluate it.
 
       {[
       let codec =
@@ -1171,8 +1217,17 @@ module Codec : sig
   (** [env c] creates a fresh parameter environment for codec [c]. *)
 
   val decode :
-    ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
+    ?consume:consumption ->
+    ?env:Param.env ->
+    'r t ->
+    bytes ->
+    int ->
+    ('r, parse_error) result
   (** [decode ?env c buf off] decodes one record value at the given base offset.
+      [consume] defaults to [`Prefix], accepting one record followed by more
+      bytes. [`All] requires the record to end at [Bytes.length buf] and returns
+      a {!constructor-Trailing_bytes} error otherwise.
+
       If [?env] is supplied, input params are read from it and output params are
       written back to it on success.
 
@@ -1182,7 +1237,8 @@ module Codec : sig
       would resolve a parametric field size to 0 and silently truncate the
       field. *)
 
-  val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+  val decode_exn :
+    ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
   val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
@@ -1198,7 +1254,20 @@ module Codec : sig
       when the codec has parameters and no env is supplied, when the env left
       any input param unbound (the error names it), when the destination buffer
       is too short, or when a parametric byte field's value length does not
-      match its env-bound size. *)
+      match its env-bound size.
+
+      Also raises [Invalid_argument] on a record {!decode} would reject: a
+      closed enum field carrying an unlisted value, an {!val-all_zeros} field
+      carrying a non-zero byte, a {!val-byte_array_where} byte failing its
+      refinement, or a {!val-where} clause or field [~constraint_] that does not
+      hold for the values given. Encode never emits bytes its own decoder
+      refuses. Field [~action]s are not run by encode.
+
+      Encode is not all-or-nothing: it writes the record field by field and
+      checks the result, so after any of those raises the bytes from [off] on
+      hold a partial record and must be treated as scrap. Use {!to_bytes} or
+      {!to_string} when no destination buffer should escape on failure. Only the
+      single-field {!set} rolls its write back. *)
 
   val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
   (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
@@ -1228,9 +1297,11 @@ module Codec : sig
       every read. Pass [~env] to sync output parameters after each action and to
       resolve a dependent layout's parameters; omit it for parameter-free
       accessors. Raises [Invalid_argument] when the codec has input params and
-      [~env] is omitted, or when it was created for another codec: an unbound
-      param reads 0, which would stage the reader onto the bytes in front of the
-      field.
+      [~env] is omitted, when it was created for another codec, or when the
+      field binding does not share its source {!Field.t} with the field in the
+      codec: an unbound param reads 0, which would stage the reader onto the
+      bytes in front of the field, while a same-named lookalike could interpret
+      those bytes with a different wire type.
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
@@ -1283,12 +1354,14 @@ module Codec : sig
       [Slice.first (Codec.get c f buf base)]'s 4 words.
 
       Type-restricted to [Slice.t] fields, so passing a non-slice field is a
-      compile-time error. *)
+      compile-time error. Raises [Invalid_argument] if [f] was not bound from
+      the source {!Field.t} used in [c]. *)
 
   val slice_length :
     'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
   (** [slice_length c f] is a staged reader returning the byte length of slice
-      field [f]. *)
+      field [f]. Raises [Invalid_argument] if [f] was not bound from the source
+      {!Field.t} used in [c]. *)
 
   (** {2 Bitfield batch access}
 
@@ -1300,7 +1373,9 @@ module Codec : sig
   (** A bitfield accessor -- shift and mask for one field in a packed word. *)
 
   val bitfield : 'r t -> (int, 'r) field -> bitfield
-  (** [bitfield codec field] returns a bitfield accessor. *)
+  (** [bitfield codec field] returns a bitfield accessor. Raises
+      [Invalid_argument] if [field] was not bound from the source {!Field.t}
+      used in [codec]. *)
 
   val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
   (** Staged word reader. Force once, reuse for every read. Fields in the same
@@ -1349,9 +1424,9 @@ val pp_value : 'r codec -> 'r Fmt.t
     are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v].
 
     It encodes the value to read the fields back and threads no {!Param.env}, so
-    on a codec whose sizes or constraints reference a {!Param.input} it raises
-    [Invalid_argument]: with no binding those params read as zero, and the
-    record that comes out is not one the codec accepts. *)
+    on a codec whose sizes or constraints reference a {!module-Param.val-input}
+    it raises [Invalid_argument]: with no binding those params read as zero, and
+    the record that comes out is not one the codec accepts. *)
 
 (** {1 Nested Codec Combinators}
 
@@ -1376,7 +1451,8 @@ val codec : 'r Codec.t -> 'r typ
     - build a record-shaped description with {!module-Field} and
       {!module-Codec};
     - project it with {!Everparse.project};
-    - emit one [.3d] file per schema with {!Everparse.write};
+    - emit separate FFI schemas or one merged standalone family with
+      {!Everparse.write};
     - run EverParse/C tooling with [Wire_3d];
     - optionally generate OCaml FFI stubs with [Wire_stubs].
 

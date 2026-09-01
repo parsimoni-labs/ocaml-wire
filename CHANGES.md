@@ -2,6 +2,11 @@
 
 ### Added
 
+- Add ``~consume:`All`` to the string/bytes and `Codec.decode` entry points for
+  callers that require exactly one value. The existing default is explicit as
+  ``~consume:`Prefix``; exact rejection reports a structured `Trailing_bytes`
+  parse error (#408, @samoht)
+
 - Add `Wire.Codec.to_bytes` and `Wire.Codec.to_string`: they allocate an
   exact-size buffer, encode the whole record into it and run the same checks as
   `validate`, so a one-call encode cannot return bytes `decode` would reject.
@@ -34,6 +39,11 @@
 
 ### Documentation
 
+- State in the installed `Wire.Codec` signature that `encode` is
+  non-transactional: after an exception, the destination contains a partial
+  record and must be discarded. `to_bytes` and `to_string` keep that partial
+  buffer private (#409, @samoht)
+
 - `Wire.Codec.validate` runs field actions but does not write their output
   assignments back to the caller's `Param.env`; use `decode` where you relied on
   them. The documentation claimed otherwise (#394, @samoht)
@@ -44,6 +54,20 @@
   literal (#351, @samoht)
 
 ### Fixed
+
+- `Codec.decode` reports `Unexpected_eof` instead of raising
+  `Invalid_argument` when a variable-width field moves a following fixed-width
+  field past the input (#402, @samoht)
+
+- Field accessors are bound to the `Field.t` that declared them. `Codec.get`,
+  `set`, `bitfield`, `slice_offset` and `slice_length` now reject a different
+  same-named field instead of silently using its access plan against the wrong
+  layout (#402, @samoht)
+
+- `Codec.v` rejects a non-final string-tagged `casetype`, a non-scalar
+  field refinement and a `zeroterm` field with siblings, instead of letting
+  EverParse fail later while compiling or extracting their validators
+  (#399, @samoht)
 
 - A casetype in the generated C dispatches on every tag type it does in OCaml,
   and a case body keeps the refinement its type carries. With a `variants`, a

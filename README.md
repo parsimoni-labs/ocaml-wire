@@ -62,6 +62,16 @@ let codec =
     [ bf_version; bf_flags; bf_length; bf_tag ]
 ```
 
+### Whole-buffer decoding
+
+Bytes-backed decoders accept one leading value by default, which is convenient
+for framed streams and concatenated records. When the buffer should contain
+exactly one record, require full consumption explicitly:
+
+```ocaml
+let decode_packet buf = Codec.decode ~consume:`All codec buf 0
+```
+
 ```
   0               1               2               3
   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -98,7 +108,7 @@ The same codec produces `.3d` files:
 ```ocaml
 let schema = Everparse.project ~mode:`Ffi codec
 
-let _write () = Everparse.write ~mode:`Ffi ~outdir:"schemas" [ schema ]
+let write () = Everparse.write ~mode:`Ffi ~outdir:"schemas" [ schema ]
 ```
 
 The 3D output uses the EverParse output-types pattern: the generated C
@@ -109,13 +119,13 @@ extern callbacks (`<Name>SetU8`, `<Name>SetU16BE`, ...). See
 To turn those schemas into EverParse-generated C:
 
 ```ocaml
-let _run_3d () = Wire_3d.run ~outdir:"schemas" [ schema ]
+let run_3d () = Wire_3d.run ~outdir:"schemas" [ schema ]
 ```
 
 If OCaml needs to call the generated C validators, generate FFI stubs:
 
 ```ocaml
-let _stubs () =
+let stubs () =
   Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"."
     [ Wire_stubs.C codec ]
 ```
@@ -138,11 +148,17 @@ static void err(const char *t, const char *f, const char *r,
                 uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) { (void)0; }
 
 SpacePacketFields p = {0};
-if (EverParseIsSuccess(SpacePacketValidateSpacePacket(
-        (WIRECTX *)&p, NULL, err, buf, len, 0))) {
+uint64_t consumed = SpacePacketValidateSpacePacket(
+    (WIRECTX *)&p, NULL, err, buf, len, 0);
+if (EverParseIsSuccess(consumed) && consumed == len) {
   printf("APID=%u SeqCount=%u\n", p.APID, p.SeqCount);
 }
 ```
+
+The raw `Validate` entry point accepts a valid prefix and returns its consumed
+position. Compare that position with `len`, as above, when the buffer must hold
+exactly one record. Wire's generated `Check` wrappers perform this
+whole-buffer check themselves.
 
 ### Custom plug (hot-path optimisation)
 
@@ -186,22 +202,42 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 | Feature | OCaml | [EverParse 3D][3d-ref] |
 |---------|-------|------------------------|
 | Integer types | `uint8`, `uint16be`, `uint32be`, `uint64be` | `UINT8`, `UINT16BE`, ... |
-| Bitfields | `bits ~width:n U8/U16be/U32be` | `UINT32BE { x : 4 }` |
-| Bool | `bit (bits ~width:1 U8)` | -- |
-| Byte slices | `byte_slice ~size:e` (zero-copy from `bytes`) | `UINT8 [: e]` |
-| Byte arrays | `byte_array ~size:e` (copied) | `UINT8 [: e]` |
+| Bitfields | `bits ~width:4 U32be` | [`UINT32BE Flags : 4;`][3d-bits] |
+| Bool | `bit (bits ~width:1 U16be)` | `UINT16BE SYN : 1;` |
+| Byte slices | `byte_slice ~size:(Field.ref f_len)` (zero-copy from `bytes`) | `UINT8 Data[:byte-size Len];` |
+| Byte arrays | `byte_array ~size:(Field.ref f_len)` (copied) | `UINT8 Data[:byte-size Len];` |
+| Fixed-count arrays | `array ~len:(int 3) uint32be` | [`UINT32BE Items[:byte-size (3 * 4)];`][3d-array] |
+| Byte-budgeted lists | `Field.repeat ~size:(Field.ref f_len) uint16be` | [`UINT16BE Items[:byte-size Len];`][3d-array] |
+| Sized payloads | `nested ~size:(Field.ref f_len) (codec inner)` | [`Inner Body[:byte-size-single-element-array Len];`][3d-array] |
 | Enumerations | `enum`, `variants` | [`enum`][3d-enum] |
-| Constraints | `where`, `~constraint_` | [`where`][3d-where] |
-| Actions | `Action.assign`, `abort`, `if_` | [`:on-success`][3d-act] |
-| Parameters | `Param.input` / `Param.output` | [`entrypoint ... (params)`][3d-param] |
+| Field constraints | `where`, `Field.v ~constraint_` | [`UINT32BE Age { Age >= 21 };`][3d-refine] |
+| Codec preconditions | `Codec.v ~where` | [`where bound <= 1729`][3d-where] |
+| Actions | `Action.assign`, `abort`, `if_` | [`{:on-success ... }`][3d-act] |
+| Parameters | `Param.input` / `Param.output` | [`typedef struct _T (UINT32 bound)`][3d-param] |
 | Tagged unions | `casetype` | [`casetype`][3d-case] |
-| Arrays | `array ~len:e`, `nested ~size:e` | `t [: e]` |
 | Dependent sizes | `Field.ref f_len` | field references |
 | Custom mappings | `map ~decode ~encode` | -- |
 
+Two distinctions the syntax makes and the OCaml names blur. A 3D array is a
+byte budget, never an element count, so `array ~len:n` multiplies the count by
+the element width and needs elements of a fixed size, whereas `nested ~size:e`
+is the single-element form and lowers to a different suffix entirely. And 3D's
+`where` clause is a precondition on a type's parameters, checked before any
+field is read; the field-level check that `Wire.where` and `~constraint_` mean
+is the unnamed `{ ... }` refinement, which the manual files under Constraints.
+
+Only integer tags lower to a 3D `casetype`. A tag of another type lowers to the
+tag bytes followed by a rest-of-buffer body, so the generated C validator checks
+framing but leaves dispatch to its caller; the OCaml decoder still rejects an
+unknown tag without a default case. That body must be the final field of its
+struct.
+
 [3d-ref]: https://project-everest.github.io/everparse/3d-lang.html
+[3d-bits]: https://project-everest.github.io/everparse/3d-lang.html#bitfields
+[3d-array]: https://project-everest.github.io/everparse/3d-lang.html#arrays
 [3d-enum]: https://project-everest.github.io/everparse/3d-lang.html#constants-and-enumerations
-[3d-where]: https://project-everest.github.io/everparse/3d-lang.html#constraints
+[3d-refine]: https://project-everest.github.io/everparse/3d-lang.html#constraints
+[3d-where]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types
 [3d-act]: https://project-everest.github.io/everparse/3d-lang.html#actions
 [3d-param]: https://project-everest.github.io/everparse/3d-lang.html#parameterized-data-types
 [3d-case]: https://project-everest.github.io/everparse/3d-lang.html#tagged-unions-or-casetype
@@ -210,8 +246,29 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 
 The [`examples/`](https://github.com/parsimoni-labs/ocaml-wire/tree/main/examples)
 directory has complete definitions for CCSDS space packets and TCP/IP headers.
-The fragments below give the flavour; `Ascii.of_codec` renders the diagrams
-shown alongside them.
+The fragments below give the flavour.
+
+### Diagrams from the codec
+
+The diagrams below are not hand-drawn. `Ascii.of_codec` renders any codec as a
+32-bit-wide bit layout in the conventions of RFC 791: a two-row bit ruler, one
+row per 32 bits, and each field sized by the bits it actually occupies, so a
+diagram cannot drift from the definition the parser is built from.
+
+```ocaml
+let diagram = Ascii.of_codec codec
+let () = print_string diagram
+```
+
+`Ascii.pp_codec` is the `Format` version, and `of_struct` / `pp_struct` take a
+`Types.struct_` for a description that has no codec. A field whose width is not
+known until decode renders as a full-width row carrying its size expression:
+
+```
+ +-------------------------------+
+ | Data (Len * 8 bits)           |
+ +-------------------------------+
+```
 
 ### IPv4 header
 
