@@ -445,6 +445,10 @@ module Field : sig
       convenience for full-width 64-bit constraints using {!Expr.int64} literals
       and {!int64} field references.
 
+      EverParse refines scalar fields only. {!Codec.v} therefore rejects
+      [?constraint_] and [?self_constraint] on a byte span, array, sub-codec or
+      casetype field; put the predicate on a scalar field it reads instead.
+
       Use {!optional} / {!optional_or} / {!repeat} for optional and repeating
       payloads -- they only project to 3D as the top of a struct field, never as
       a nested type. *)
@@ -769,8 +773,12 @@ val zeroterm : string typ
     [0x00] raises [Invalid_argument].
 
     Projects to the 3D [field[:zeroterm]] form, which desugars to the EverParse
-    prelude [cstring]/[parse_string] combinator. This 3D feature predates the
-    manual and has no [3d-lang.html] section; see [EverParse3d.Prelude.fsti]. *)
+    prelude [cstring]/[parse_string] combinator. EverParse cannot extract a
+    struct where that field has a sibling (project-everest/everparse#321), so
+    {!Codec.v} accepts it only as the codec's sole field; use
+    {!zeroterm_at_most} in a larger record. The manual's Arrays section does not
+    cover either form; the grammar is in 3D's lexer and the semantics in
+    [EverParse3d.Prelude.fsti]. *)
 
 val zeroterm_at_most : size:int expr -> string typ
 (** [zeroterm_at_most ~size] is a NUL-terminated string occupying a fixed

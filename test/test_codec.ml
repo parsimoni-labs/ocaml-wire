@@ -7833,46 +7833,44 @@ let test_repeat_casetype_unprojectable_case_rejected () =
 
 (* -- Zero-terminated strings ([zeroterm] / [zeroterm_at_most]) -- *)
 
-type zt_rec = { name : string; tag : string; n : UInt8.t }
-
 let zt_f_name = Field.v "name" zeroterm
 let zt_f_tag = Field.v "tag" (zeroterm_at_most ~size:(int 8))
 let zt_f_n = Field.v "n" uint8
+let zt_codec = Codec.v "ZtRec" Fun.id Codec.[ zt_f_name $ Fun.id ]
 
-let zt_codec =
-  Codec.v "ZtRec"
-    (fun name tag n -> { name; tag; n })
-    Codec.
-      [
-        (zt_f_name $ fun r -> r.name);
-        (zt_f_tag $ fun r -> r.tag);
-        (zt_f_n $ fun r -> r.n);
-      ]
+type zt_bounded_rec = { tag : string; n : UInt8.t }
+
+let zt_bounded_codec =
+  Codec.v "ZtBoundedRec"
+    (fun tag n -> { tag; n })
+    Codec.[ (zt_f_tag $ fun r -> r.tag); (zt_f_n $ fun r -> r.n) ]
 
 let test_zeroterm_roundtrip () =
-  let v = { name = "hello"; tag = "ab"; n = UInt8.v 7 } in
-  (* name(5+1) + tag(8) + n(1) = 15 *)
-  let buf = Bytes.create 15 in
-  Codec.encode zt_codec v buf 0;
+  let buf = Bytes.create 6 in
+  Codec.encode zt_codec "hello" buf 0;
   Alcotest.(check int) "NUL after name" 0 (Bytes.get_uint8 buf 5);
-  Alcotest.(check int) "NUL after tag" 0 (Bytes.get_uint8 buf 8);
-  let r = decode_ok (Codec.decode zt_codec buf 0) in
-  Alcotest.(check string) "name" "hello" r.name;
+  Alcotest.(check string)
+    "name" "hello"
+    (decode_ok (Codec.decode zt_codec buf 0));
+  let bounded = Bytes.create 9 in
+  Codec.encode zt_bounded_codec { tag = "ab"; n = UInt8.v 7 } bounded 0;
+  Alcotest.(check int) "NUL after tag" 0 (Bytes.get_uint8 bounded 2);
+  let r = decode_ok (Codec.decode zt_bounded_codec bounded 0) in
   Alcotest.(check string) "tag" "ab" r.tag;
   Alcotest.(check int) "n" 7 (UInt8.to_int r.n)
 
 let test_zeroterm_empty () =
-  let v = { name = ""; tag = ""; n = UInt8.v 0 } in
-  let buf = Bytes.create 15 in
-  Codec.encode zt_codec v buf 0;
-  let r = decode_ok (Codec.decode zt_codec buf 0) in
-  Alcotest.(check string) "name" "" r.name;
+  let buf = Bytes.create 1 in
+  Codec.encode zt_codec "" buf 0;
+  Alcotest.(check string) "name" "" (decode_ok (Codec.decode zt_codec buf 0));
+  let bounded = Bytes.create 9 in
+  Codec.encode zt_bounded_codec { tag = ""; n = UInt8.v 0 } bounded 0;
+  let r = decode_ok (Codec.decode zt_bounded_codec bounded 0) in
   Alcotest.(check string) "tag" "" r.tag
 
 let test_zeroterm_embedded_nul_rejected () =
-  let v = { name = "a\000b"; tag = ""; n = UInt8.v 0 } in
-  let buf = Bytes.create 15 in
-  match Codec.encode zt_codec v buf 0 with
+  let buf = Bytes.create 4 in
+  match Codec.encode zt_codec "a\000b" buf 0 with
   | () -> Alcotest.fail "expected Invalid_argument for embedded NUL"
   | exception Invalid_argument _ -> ()
 
@@ -7914,11 +7912,13 @@ let test_zeroterm_nul_message_shared () =
       ignore (Wire.to_string zeroterm nul));
   check "Wire.to_string zeroterm_at_most" (fun () ->
       ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) nul));
-  let field_buf = Bytes.create 15 in
+  let field_buf = Bytes.create 4 in
   check "Codec.encode zeroterm field" (fun () ->
-      Codec.encode zt_codec { name = nul; tag = ""; n = UInt8.v 0 } field_buf 0);
+      Codec.encode zt_codec nul field_buf 0);
   check "Codec.encode zeroterm_at_most field" (fun () ->
-      Codec.encode zt_codec { name = ""; tag = nul; n = UInt8.v 0 } field_buf 0);
+      Codec.encode zt_bounded_codec
+        { tag = nul; n = UInt8.v 0 }
+        (Bytes.create 9) 0);
   let case_buf = Bytes.create 16 in
   check "Codec.encode zeroterm case body" (fun () ->
       Codec.encode zt_case_codec (Zt nul) case_buf 0);
@@ -7940,9 +7940,9 @@ let test_zeroterm_region_message_shared () =
   check "Wire.to_string" (fun () ->
       ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) full));
   check "Codec.encode field" (fun () ->
-      Codec.encode zt_codec
-        { name = ""; tag = full; n = UInt8.v 0 }
-        (Bytes.create 15) 0);
+      Codec.encode zt_bounded_codec
+        { tag = full; n = UInt8.v 0 }
+        (Bytes.create 9) 0);
   check "Codec.encode case body" (fun () ->
       Codec.encode zt_case_codec (Zt_at_most full) (Bytes.create 16) 0)
 
@@ -8453,33 +8453,38 @@ let test_decode_high_arity_roundtrip () =
    check and string blit are top-level functions; were they local to the
    writer, each would be a heap-allocated closure per var-bytes field on
    every encode under flambda-off. *)
-type alloc_vb = { a : string; b : string; z : string }
+type alloc_vb = { a : string; b : string }
 
 let alloc_vb_alen = Field.v "ALen" uint16be
 let alloc_vb_blen = Field.v "BLen" uint16be
 
 let alloc_vb_codec =
   Codec.v "AllocVb"
-    (fun _alen a _blen b z -> { a; b; z })
+    (fun _alen a _blen b -> { a; b })
     Codec.
       [
         (alloc_vb_alen $ fun r -> UInt16.v (String.length r.a));
         (Field.v "A" (byte_array ~size:(Field.ref alloc_vb_alen)) $ fun r -> r.a);
         (alloc_vb_blen $ fun r -> UInt16.v (String.length r.b));
         (Field.v "B" (byte_array ~size:(Field.ref alloc_vb_blen)) $ fun r -> r.b);
-        (Field.v "Z" zeroterm $ fun r -> r.z);
       ]
+
+let alloc_zt_codec =
+  Codec.v "AllocZt" Fun.id Codec.[ Field.v "Z" zeroterm $ Fun.id ]
 
 let test_encode_var_bytes_no_closure () =
   skip_unless_gc_counters ();
-  let v = { a = String.make 32 'x'; b = String.make 16 'y'; z = "hi" } in
-  let buf = Bytes.create (2 + 32 + 2 + 16 + 2 + 1) in
+  let v = { a = String.make 32 'x'; b = String.make 16 'y' } in
+  let buf = Bytes.create (2 + 32 + 2 + 16) in
+  let zbuf = Bytes.create 3 in
   Codec.encode alloc_vb_codec v buf 0;
+  Codec.encode alloc_zt_codec "hi" zbuf 0;
   let iters = 200_000 in
   Gc.full_major ();
   let before = Gc.minor_words () in
   for _ = 1 to iters do
-    Codec.encode alloc_vb_codec v buf 0
+    Codec.encode alloc_vb_codec v buf 0;
+    Codec.encode alloc_zt_codec "hi" zbuf 0
   done;
   let after = Gc.minor_words () in
   let words =
