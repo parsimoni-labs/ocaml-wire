@@ -98,7 +98,7 @@ The same codec produces `.3d` files:
 ```ocaml
 let schema = Everparse.project ~mode:`Ffi codec
 
-let _write () = Everparse.write ~mode:`Ffi ~outdir:"schemas" [ schema ]
+let write () = Everparse.write ~mode:`Ffi ~outdir:"schemas" [ schema ]
 ```
 
 The 3D output uses the EverParse output-types pattern: the generated C
@@ -109,13 +109,13 @@ extern callbacks (`<Name>SetU8`, `<Name>SetU16BE`, ...). See
 To turn those schemas into EverParse-generated C:
 
 ```ocaml
-let _run_3d () = Wire_3d.run ~outdir:"schemas" [ schema ]
+let run_3d () = Wire_3d.run ~outdir:"schemas" [ schema ]
 ```
 
 If OCaml needs to call the generated C validators, generate FFI stubs:
 
 ```ocaml
-let _stubs () =
+let stubs () =
   Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"."
     [ Wire_stubs.C codec ]
 ```
@@ -210,8 +210,29 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 
 The [`examples/`](https://github.com/parsimoni-labs/ocaml-wire/tree/main/examples)
 directory has complete definitions for CCSDS space packets and TCP/IP headers.
-The fragments below give the flavour; `Ascii.of_codec` renders the diagrams
-shown alongside them.
+The fragments below give the flavour.
+
+### Diagrams from the codec
+
+The diagrams below are not hand-drawn. `Ascii.of_codec` renders any codec as a
+32-bit-wide bit layout in the conventions of RFC 791: a two-row bit ruler, one
+row per 32 bits, and each field sized by the bits it actually occupies, so a
+diagram cannot drift from the definition the parser is built from.
+
+```ocaml
+let diagram = Ascii.of_codec codec
+let () = print_string diagram
+```
+
+`Ascii.pp_codec` is the `Format` version, and `of_struct` / `pp_struct` take a
+`Types.struct_` for a description that has no codec. A field whose width is not
+known until decode renders as a full-width row carrying its size expression:
+
+```
+ +-------------------------------+
+ | Data (Len * 8 bits)           |
+ +-------------------------------+
+```
 
 ### IPv4 header
 
