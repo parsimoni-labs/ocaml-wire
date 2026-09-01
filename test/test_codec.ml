@@ -1380,6 +1380,48 @@ let validating name f =
   | exception Invalid_argument m ->
       Alcotest.failf "%s: crashed instead of failing cleanly: %s" name m
 
+(* A variable-size sub-codec can move the fixed field after it past the end of
+   the buffer. A trailing greedy field then resolves the whole record's end
+   back to the buffer length, so the structural bounds check alone cannot see
+   the intermediate overrun. This is the composer's
+   [(u64le,optdyn,i32,az)] failure reduced to its essential layout. *)
+let dynamic_subcodec_before_fixed =
+  let f_gate = Field.v "gate" uint8 in
+  let inner =
+    Codec.v "DynamicInner"
+      (fun gate payload -> (gate, payload))
+      Codec.
+        [
+          f_gate $ fst;
+          Field.optional "payload"
+            ~present:Expr.(Field.ref f_gate <> int 0)
+            uint16be
+          $ snd;
+        ]
+  in
+  Codec.v "DynamicBeforeFixed"
+    (fun inner value tail -> (inner, value, tail))
+    Codec.
+      [
+        (Field.v "inner" (codec inner) $ fun (inner, _, _) -> inner);
+        (Field.v "value" int32be $ fun (_, value, _) -> value);
+        (Field.v "tail" all_zeros $ fun (_, _, tail) -> tail);
+      ]
+
+let test_decode_dynamic_field_past_end () =
+  let buf = Bytes.of_string "\x01\x00\x00\x00" in
+  let decoded =
+    match Codec.decode dynamic_subcodec_before_fixed buf 0 with
+    | Ok _ -> Ok ()
+    | Error e -> Error e
+    | exception Invalid_argument m ->
+        Alcotest.failf "decode crashed instead of failing cleanly: %s" m
+  in
+  check_located_eof "decode" ~at:3 ~expected:4 ~got:1 decoded;
+  check_located_eof "validate" ~at:3 ~expected:4 ~got:1
+    (validating "validate" (fun () ->
+         Codec.validate dynamic_subcodec_before_fixed buf 0))
+
 (* [Codec.validate_struct] runs the same populate-driven field pass as
    [Codec.validate] and needs the same per-field bounds check. [Data] is sized
    by [Len], so a [Len] of 200 in a 5-byte buffer puts [V] at offset 201: the
@@ -9604,6 +9646,8 @@ let suite =
         test_byte_slice_negative_size;
       Alcotest.test_case "validate: field past end fails cleanly" `Quick
         test_validate_overrun_field_offset;
+      Alcotest.test_case "decode: dynamic field past end fails cleanly" `Quick
+        test_decode_dynamic_field_past_end;
       Alcotest.test_case "validate_struct: field past end fails cleanly" `Quick
         test_validate_struct_field_past_end;
       Alcotest.test_case "validate_struct: fixed field past a short buffer"
