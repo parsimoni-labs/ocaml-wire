@@ -35,6 +35,22 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     values and write the same bytes. A refinement one path enforces and the
     other drops shows up here rather than in the generated C.
 
+    A positive also has to agree about its own size, under whatever env it
+    needs. {!Wire.Codec.size_of_value} measures the value and must answer the
+    encoded length with an env bound and without one; {!Wire.Codec.wire_size_at}
+    measures the buffer, so a parametric field's width comes out of the env, and
+    with one bound it must span exactly the canonical encoding. Without one, a
+    codec that reads an input param must refuse: decode, validate and
+    [wire_size_at] all raise rather than resolve the unbound param to 0 and
+    measure a param-sized field as empty, which would read as a valid short
+    record instead of an error.
+
+    Every rejection also has to say which field it is about, and mean it: each
+    name on a parse error's field path must be a field the codec declares
+    somewhere, at any depth. An empty path is allowed (a top-level or anonymous
+    failure has no field to name), a name that is not in the schema is not: it
+    sends the caller to bytes that do not exist.
+
     Every stream is also read and written one field at a time through
     {!Wire.Codec.get} and {!Wire.Codec.set}, which are built from separate
     constructions to the record decoder and encoder. Per field: [get] must read
