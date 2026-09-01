@@ -91,8 +91,17 @@ val env : 'r t -> Param.env
     initialised to 0. *)
 
 val decode :
-  ?env:Param.env -> 'r t -> bytes -> int -> ('r, Types.parse_error) result
+  ?consume:Types.consumption ->
+  ?env:Param.env ->
+  'r t ->
+  bytes ->
+  int ->
+  ('r, Types.parse_error) result
 (** [decode ?env c buf off] decodes a record from [buf] at offset [off].
+
+    [consume] defaults to [`Prefix], accepting one record followed by more
+    bytes. [`All] requires the record to end at [Bytes.length buf] and returns a
+    {!Types.Trailing_bytes} error otherwise.
 
     If [?env] is supplied, input params are read from it and output params are
     written back to it after decoding.
@@ -103,7 +112,8 @@ val decode :
     input param would resolve a parametric field size to 0 and silently truncate
     the field, so it is rejected up front the same way {!encode} does. *)
 
-val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+val decode_exn :
+  ?consume:Types.consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
 (** [decode_exn ?env c buf off] is like {!decode} but raises
     {!Types.Parse_error} on failure. *)
 

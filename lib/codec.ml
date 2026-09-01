@@ -4535,7 +4535,7 @@ let env (t : _ t) : Param.env =
     bound = Array.make t.n_params false;
   }
 
-let decode_exn ?env:e t buf off =
+let decode_exn ?(consume = `Prefix) ?env:e t buf off =
   (* Require an env that binds every input param, as encode does: an unbound
      input param resolves a parametric size to 0, silently truncating the field
      and misaligning the rest of the record. This is a usage error, not malformed
@@ -4551,6 +4551,13 @@ let decode_exn ?env:e t buf off =
       Array.blit e.slots 0 arr.ints t.param_base t.n_params
   | _ -> ());
   t.validate_arr arr runtime input_end buf off;
+  let consumed =
+    match t.wire_size with
+    | Fixed n -> off + n
+    | Variable { compute; _ } -> compute runtime input_end buf off
+  in
+  Types.check_consumption consume ~consumed
+    ~available:(Input_end.to_int input_end);
   (match e with
   | Some (e : Param.env) ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
@@ -4563,8 +4570,9 @@ let decode_exn ?env:e t buf off =
   | None -> ());
   v
 
-let decode ?env t buf off =
-  try Ok (decode_exn ?env t buf off) with Types.Parse_error e -> Error e
+let decode ?consume ?env t buf off =
+  try Ok (decode_exn ?consume ?env t buf off)
+  with Types.Parse_error e -> Error e
 
 let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;

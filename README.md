@@ -62,6 +62,16 @@ let codec =
     [ bf_version; bf_flags; bf_length; bf_tag ]
 ```
 
+### Whole-buffer decoding
+
+Bytes-backed decoders accept one leading value by default, which is convenient
+for framed streams and concatenated records. When the buffer should contain
+exactly one record, require full consumption explicitly:
+
+```ocaml
+let decode_packet buf = Codec.decode ~consume:`All codec buf 0
+```
+
 ```
   0               1               2               3
   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -138,11 +148,17 @@ static void err(const char *t, const char *f, const char *r,
                 uint64_t c, uint8_t *ctx, uint8_t *i, uint64_t p) { (void)0; }
 
 SpacePacketFields p = {0};
-if (EverParseIsSuccess(SpacePacketValidateSpacePacket(
-        (WIRECTX *)&p, NULL, err, buf, len, 0))) {
+uint64_t consumed = SpacePacketValidateSpacePacket(
+    (WIRECTX *)&p, NULL, err, buf, len, 0);
+if (EverParseIsSuccess(consumed) && consumed == len) {
   printf("APID=%u SeqCount=%u\n", p.APID, p.SeqCount);
 }
 ```
+
+The raw `Validate` entry point accepts a valid prefix and returns its consumed
+position. Compare that position with `len`, as above, when the buffer must hold
+exactly one record. Wire's generated `Check` wrappers perform this
+whole-buffer check themselves.
 
 ### Custom plug (hot-path optimisation)
 
