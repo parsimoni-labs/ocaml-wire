@@ -3430,6 +3430,31 @@ let read_guard : type a r.
       | _ -> None)
   | Variable _ | Variable_dynamic _ -> None
 
+(* A fixed-width field after a variable one is the only record reader whose
+   position can outrun the buffer without the whole-record bounds check seeing
+   it: a trailing greedy field can resolve the final end back to the buffer
+   length. Static reads are covered by [min_wire_size], while variable reads
+   guard their own spans, so keep their hot paths unchanged. *)
+let guarded_dynamic_reader : type a r.
+    (a, r) compiled_field ->
+    a typ ->
+    runtime ->
+    Input_end.t ->
+    bytes ->
+    int ->
+    a =
+ fun cf typ ->
+  let reader = cf.raw_reader in
+  match cf.field_access with
+  | Dynamic _ -> (
+      match read_guard cf typ with
+      | None -> reader
+      | Some guard ->
+          fun runtime input_end buf base ->
+            guard runtime input_end buf base;
+            reader runtime input_end buf base)
+  | Fixed _ | Bitfield _ | Variable _ | Variable_dynamic _ -> reader
+
 (* Size, offset, presence and [where] expressions read earlier fields through
    these readers. *)
 let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
@@ -3534,10 +3559,11 @@ let apply_compiled : type a f r.
     | Bitfield _ -> fun _ _ -> cf.size_delta
     | _ -> fun ctx v -> size_of_typ_value ctx field_typ (field_get v)
   in
+  let raw_reader = guarded_dynamic_reader cf fld.typ in
   let raw_reader, full, check_only =
     wrap_field_errors
       ~validates:(field_reader_validates fld.typ)
-      ~check ~act fld.name cf.raw_reader full check_only
+      ~check ~act fld.name raw_reader full check_only
   in
   note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
   Record
