@@ -841,6 +841,7 @@ let immediate_access_off = function
   | Dynamic _ | Variable_dynamic _ -> 0
 
 type ('a, 'r) field = {
+  id : int;
   name : string;
   typ : 'a typ;
   constraint_ : bool expr option;
@@ -1110,7 +1111,7 @@ type ('f, 'r) record =
       n_array_slots : int;
           (* fields + action-local vars (for array allocation) *)
       r_bf : bf_codec_state option;
-      field_access_rev : (string * field_access) list;
+      field_access_rev : (string * (int * field_access)) list;
       where : bool expr option;
       doc : string option;
       field_readers : field_reader list;
@@ -1132,7 +1133,7 @@ type 'r t = {
   id : int;
   name : string;
   size_of_value : Types.eval_ctx -> 'r -> int;
-  field_access : (string * field_access) list;
+  field_access : (string * (int * field_access)) list;
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
@@ -1194,6 +1195,7 @@ let record_start ?where ?doc name make =
 
 let bind (f : 'a Field.t) get =
   {
+    id = Field.id f;
     name = Field.name f;
     typ = Field.typ f;
     constraint_ = Field.constraint_ f;
@@ -3081,6 +3083,7 @@ and compile_map : type a w r.
   let outer_get = fld.get in
   let inner_fld =
     {
+      id = fld.id;
       name = fld.name;
       typ = inner;
       constraint_ = fld.constraint_;
@@ -3184,6 +3187,7 @@ and compile_optional_variable : type a r.
   let get = fld.get in
   let inner_fld =
     {
+      id = fld.id;
       name = fld.name;
       typ = inner;
       constraint_ = None;
@@ -3293,6 +3297,7 @@ and compile_optional_or_variable : type a r.
   let present_fn = compile_bool_expr ctx.field_readers present in
   let inner_fld =
     {
+      id = fld.id;
       name = fld.name;
       typ = inner;
       constraint_ = None;
@@ -3555,7 +3560,8 @@ let apply_compiled : type a f r.
       n_fields = List.length new_field_readers;
       n_array_slots = List.length new_field_readers + n_extra_vars;
       r_bf = cf.bf_after;
-      field_access_rev = (fld.name, cf.field_access) :: r.field_access_rev;
+      field_access_rev =
+        (fld.name, (fld.id, cf.field_access)) :: r.field_access_rev;
       field_readers = new_field_readers;
       where = r.where;
       doc = r.doc;
@@ -4248,6 +4254,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
       let name = Option.value f.field_name ~default:"" in
       let codec_field : (_, unit) field =
         {
+          id = -1;
           name;
           typ = f.field_typ;
           constraint_ = f.constraint_;
@@ -4813,11 +4820,12 @@ let rec build_immediate_staged_writer : type a.
       )
   | _ -> None
 
-let field_access (codec : _ t) name =
-  match List.assoc_opt name codec.field_access with
-  | Some a -> a
-  | None ->
-      Fmt.invalid_arg "Codec: field %S not found in codec %S" name codec.name
+let field_access ~op (codec : _ t) (f : (_, _) field) =
+  match List.assoc_opt f.name codec.field_access with
+  | Some (id, access) when id = f.id -> access
+  | Some _ | None ->
+      Fmt.invalid_arg "%s: field %S does not belong to codec %S" op f.name
+        codec.name
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
@@ -4826,7 +4834,7 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
      onto the field. That is the same silent misread [decode] refuses, so it is
      refused here on the same terms. *)
   require_env ~op:"get" codec env;
-  let access = field_access codec f.name in
+  let access = field_access ~op:"Codec.get" codec f in
   let read = build_staged_reader f.typ access in
   (* The context no longer carries the buffer, so [env] resolves once here
      instead of per staged call. *)
@@ -4881,7 +4889,7 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
      for a writer means overwriting a field the caller never named and leaving
      the one it did name as it was. *)
   require_env ~op:"set" codec env;
-  let access = field_access codec f.name in
+  let access = field_access ~op:"Codec.set" codec f in
   let write = build_staged_writer f.typ access in
   let rt = runtime ?env () in
   match build_immediate_staged_writer f.typ access with
@@ -4918,7 +4926,7 @@ let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
    - [Variable_dynamic { off_fn; _ }]: variable size, dynamic position. *)
 let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
-  match field_access codec f.name with
+  match field_access ~op:"Codec.slice_offset" codec f with
   | Fixed off -> Staged.stage (fun _buf base -> base + off)
   | Dynamic fn ->
       Staged.stage (fun buf base ->
@@ -4933,7 +4941,7 @@ let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
 
 let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
-  match (f.typ, field_access codec f.name) with
+  match (f.typ, field_access ~op:"Codec.slice_length" codec f) with
   | Byte_slice { size }, Fixed _ | Byte_slice { size }, Dynamic _ -> (
       (* Static-size byte_slice: size is a constant expression. *)
       match size with
@@ -4957,7 +4965,7 @@ let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
 type bitfield = bf_info
 
 let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
-  match field_access codec f.name with
+  match field_access ~op:"Codec.bitfield" codec f with
   | Bitfield { base; byte_off; shift; width } ->
       (* Dispatch on [base] once at construction so the resulting closure
          is a direct read of the right width with [byte_off] baked in.

@@ -122,6 +122,9 @@ val int64 : 'a t -> int64 Types.expr
 val name : 'a t -> string
 (** Field name. *)
 
+val id : 'a t -> int
+(** Internal identity shared by bindings made from this field. *)
+
 val typ : 'a t -> 'a Types.typ
 (** Wire type. *)
 

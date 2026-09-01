@@ -3640,17 +3640,13 @@ let addressed g =
   let anames = leaf_slot_name :: typ_field_names g.typ in
   match g.fields with
   | [] ->
+      let field = leaf_field g.typ in
       {
-        acodec = codec_of_typ g.typ;
+        acodec = Wire.Codec.v leaf_codec_name Fun.id [ field ];
         achecks =
           [
             Field_check
-              {
-                name = leaf_slot_name;
-                field = leaf_field g.typ;
-                proj = Fun.id;
-                equal = g.equal;
-              };
+              { name = leaf_slot_name; field; proj = Fun.id; equal = g.equal };
           ];
         anames;
       }

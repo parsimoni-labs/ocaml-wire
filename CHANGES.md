@@ -45,6 +45,11 @@
 
 ### Fixed
 
+- Field accessors are bound to the `Field.t` that declared them. `Codec.get`,
+  `set`, `bitfield`, `slice_offset` and `slice_length` now reject a different
+  same-named field instead of silently using its access plan against the wrong
+  layout (#402, @samoht)
+
 - `Codec.v` rejects a non-final string-tagged `casetype`, a non-scalar
   field refinement and a `zeroterm` field with siblings, instead of letting
   EverParse fail later while compiling or extracting their validators

@@ -6346,6 +6346,7 @@ let test_optional_mixed () =
 type dyn_opt = { flags : UInt8.t; payload : UInt16.t option; trail : UInt8.t }
 
 let f_do_flags = Field.v "Flags" uint8
+let f_do_trail = Field.v "Trail" uint8
 
 let dyn_opt_codec =
   Codec.v "DynOpt"
@@ -6357,7 +6358,7 @@ let dyn_opt_codec =
             ~present:Expr.(Field.ref f_do_flags <> int 0)
             uint16be
         $ fun r -> r.payload );
-        (Field.v "Trail" uint8 $ fun r -> r.trail);
+        (f_do_trail $ fun r -> r.trail);
       ]
 
 let test_dyn_opt_present () =
@@ -6386,7 +6387,7 @@ let test_dyn_opt_absent () =
   Alcotest.(check int) "trail" 0xFF (UInt8.to_int r.trail)
 
 let test_dyn_opt_get_trail () =
-  let cf_trail = Codec.(Field.v "Trail" uint8 $ fun r -> r.trail) in
+  let cf_trail = Codec.(f_do_trail $ fun r -> r.trail) in
   let get_trail = Staged.unstage (Codec.get dyn_opt_codec cf_trail) in
   (* Present: trail at offset 3. *)
   let buf1 = Bytes.create 4 in
@@ -7208,6 +7209,16 @@ type cfdp_hdr = {
 let f_cfdp_eid_len = Field.v "EIDLen" uint8
 let f_cfdp_txseq_len = Field.v "TxSeqLen" uint8
 
+let f_cfdp_src =
+  Field.v "SourceEID" (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
+
+let f_cfdp_txseq =
+  Field.v "TxSeqNum"
+    (byte_array ~size:Expr.(Field.ref f_cfdp_txseq_len + int 1))
+
+let f_cfdp_dst =
+  Field.v "DestEID" (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
+
 let cfdp_codec =
   let open Codec in
   v "CFDPHeader"
@@ -7216,15 +7227,9 @@ let cfdp_codec =
     [
       (f_cfdp_eid_len $ fun r -> r.eid_len);
       (f_cfdp_txseq_len $ fun r -> r.txseq_len);
-      ( Field.v "SourceEID"
-          (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
-      $ fun r -> r.src );
-      ( Field.v "TxSeqNum"
-          (byte_array ~size:Expr.(Field.ref f_cfdp_txseq_len + int 1))
-      $ fun r -> r.txseq );
-      ( Field.v "DestEID"
-          (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
-      $ fun r -> r.dst );
+      (f_cfdp_src $ fun r -> r.src);
+      (f_cfdp_txseq $ fun r -> r.txseq);
+      (f_cfdp_dst $ fun r -> r.dst);
     ]
 
 let test_multi_var_decode () =
@@ -7268,18 +7273,8 @@ let test_multi_var_get () =
   Bytes.blit_string "\xAA\xBB" 0 buf 2 2;
   Bytes.blit_string "\xCC\xDD\xEE" 0 buf 4 3;
   Bytes.blit_string "\xFF\x00" 0 buf 7 2;
-  let cf_txseq =
-    Codec.(
-      Field.v "TxSeqNum"
-        (byte_array ~size:Expr.(Field.ref f_cfdp_txseq_len + int 1))
-      $ fun r -> r.txseq)
-  in
-  let cf_dst =
-    Codec.(
-      Field.v "DestEID"
-        (byte_array ~size:Expr.(Field.ref f_cfdp_eid_len + int 1))
-      $ fun r -> r.dst)
-  in
+  let cf_txseq = Codec.(f_cfdp_txseq $ fun r -> r.txseq) in
+  let cf_dst = Codec.(f_cfdp_dst $ fun r -> r.dst) in
   let get_txseq = Staged.unstage (Codec.get cfdp_codec cf_txseq) in
   let get_dst = Staged.unstage (Codec.get cfdp_codec cf_dst) in
   Alcotest.(check string) "get txseq" "\xCC\xDD\xEE" (get_txseq buf 0);
