@@ -39,6 +39,11 @@
 
 ### Documentation
 
+- State in the installed `Wire.Codec` signature that `encode` is
+  non-transactional: after an exception, the destination contains a partial
+  record and must be discarded. `to_bytes` and `to_string` keep that partial
+  buffer private (#409, @samoht)
+
 - `Wire.Codec.validate` runs field actions but does not write their output
   assignments back to the caller's `Param.env`; use `decode` where you relied on
   them. The documentation claimed otherwise (#394, @samoht)
