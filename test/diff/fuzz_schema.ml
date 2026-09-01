@@ -10,11 +10,7 @@ let truncate buf =
   if String.length buf > max_len then String.sub buf 0 max_len else buf
 
 (* Helper: encode record to string using Codec API *)
-let encode_record codec v =
-  let ws = Codec.wire_size codec in
-  let buf = Bytes.create ws in
-  Codec.encode codec v buf 0;
-  Ok (Bytes.unsafe_to_string buf)
+let encode_record codec v = Ok (Codec.to_string codec v)
 
 (* Helper: decode record from string using Codec API *)
 let decode_record codec s =

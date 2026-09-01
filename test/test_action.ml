@@ -550,11 +550,15 @@ let test_allocating_encode_returns_fresh_storage () =
   in
   let value = UInt8.v 0x42 in
   let bytes = Codec.to_bytes codec value in
+  let other_bytes = Codec.to_bytes codec value in
   let string = Codec.to_string codec value in
   Alcotest.(check string) "bytes" "\x42" (Bytes.to_string bytes);
+  Alcotest.(check string) "other bytes" "\x42" (Bytes.to_string other_bytes);
   Alcotest.(check string) "string" "\x42" string;
   Bytes.set_uint8 bytes 0 0x24;
-  Alcotest.(check string) "string does not alias bytes" "\x42" string
+  Alcotest.(check string)
+    "allocations do not alias" "\x42"
+    (Bytes.to_string other_bytes)
 
 (* -- Suite -- *)
 

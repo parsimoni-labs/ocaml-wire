@@ -2851,9 +2851,7 @@ end
 
 type any = Any : { g : 'a t; size : int option; label : string } -> any
 
-let fixed_size g =
-  if Wire.Codec.is_fixed g.codec then Some (Wire.Codec.wire_size g.codec)
-  else None
+let fixed_size g = Wire.Codec.wire_size_opt g.codec
 
 (* Fixed-width leaves: usable as [array] / [nested] elements. *)
 let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
@@ -3417,14 +3415,11 @@ let check_positive_size_metadata label g bs =
             label actual (Bytes.length bs)
     | exception Invalid_argument _ ->
         Alcobar.failf "%s wire_size_at raised on a positive" label);
-    if Wire.Codec.is_fixed g.codec then
-      match Wire.Codec.wire_size g.codec with
-      | fixed ->
-          if fixed <> Bytes.length bs then
-            Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label
-              fixed (Bytes.length bs)
-      | exception Invalid_argument _ ->
-          Alcobar.failf "%s fixed codec raised in wire_size" label
+    match Wire.Codec.wire_size_opt g.codec with
+    | Some fixed when fixed <> Bytes.length bs ->
+        Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label
+          fixed (Bytes.length bs)
+    | Some _ | None -> ()
   end
 
 let check_positive_encode label g value bs env sz =
@@ -3756,7 +3751,7 @@ let check_field_set label ~strict a target bs =
    length changes the frame's size instead of overflowing a declared one, so
    the two are answering different questions. *)
 let check_field_set_refusal label a record bs =
-  if Wire.Codec.is_fixed a.acodec then
+  if Option.is_some (Wire.Codec.wire_size_opt a.acodec) then
     List.iter
       (fun fc ->
         match fc with
@@ -3808,7 +3803,10 @@ let field_snapshot ?env a buf fc =
    moves the span that follows it. *)
 let check_field_locality label a target bs =
   let checks = a.achecks in
-  if Wire.Codec.is_fixed a.acodec && List.compare_length_with checks 1 > 0 then
+  if
+    Option.is_some (Wire.Codec.wire_size_opt a.acodec)
+    && List.compare_length_with checks 1 > 0
+  then
     List.iter
       (fun fc ->
         match fc with
@@ -3884,7 +3882,7 @@ let check_field_write_back label a bs =
    as soon as one field has no staged writer or refuses its own value. *)
 let check_field_set_sweep label a value bs =
   let checks = a.achecks in
-  if Wire.Codec.is_fixed a.acodec && checks <> [] then begin
+  if Option.is_some (Wire.Codec.wire_size_opt a.acodec) && checks <> [] then begin
     let buf = Bytes.make (Bytes.length bs) '\x00' in
     let wrote fc =
       match fc with

@@ -1,12 +1,26 @@
 ## unreleased
 
+### Added
+
+- `Wire.Codec.to_bytes` and `Wire.Codec.to_string` allocate an exact-size
+  whole-record encoding and run field actions before returning it, replacing
+  the easy-to-miss manual `encode` then `validate` sequence. (#394)
+
 ### Changed
+
+- **Breaking:** `Wire.Codec.is_fixed` is replaced by `wire_size_opt`, which
+  returns the fixed size in one lookup. `wire_size` remains available when a
+  fixed-size layout is required. (#394)
 
 - **Breaking:** `Wire.uint` now takes its 1-7 byte width as an `int`, so a
   three-byte integer is `uint 3` rather than `uint (int 3)`. Use `Wire.uint_var`
   when the width is a field- or parameter-driven expression. (#382)
 
 ### Fixed
+
+- `Wire.Codec.validate` documentation now correctly states that validation
+  runs field actions without writing their output assignments back to the
+  caller's environment. (#394)
 
 - EverParse output names are now validated as portable ASCII identifiers before
   any generated files are opened, preventing path escapes and malformed 3D, C,
