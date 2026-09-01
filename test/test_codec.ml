@@ -62,6 +62,36 @@ let test_record_decode () =
       Alcotest.(check int32) "c" 0x56789ABCl (UInt32.to_int32 v.c)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let test_codec_decode_consumption_modes () =
+  let field = Field.v "value" uint8 in
+  let codec = Codec.v "OneByte" Fun.id Codec.[ field $ Fun.id ] in
+  let buf = Bytes.of_string "\x00\x2a\xff" in
+  let check_value label = function
+    | Ok v -> Alcotest.(check int) label 0x2a (UInt8.to_int v)
+    | Error e -> Alcotest.failf "%s: %a" label pp_parse_error e
+  in
+  check_value "default prefix" (Codec.decode codec buf 1);
+  check_value "explicit prefix" (Codec.decode ~consume:`Prefix codec buf 1);
+  (match Codec.decode ~consume:`All codec buf 1 with
+  | Error { at = 2; field = []; kind = Trailing_bytes 1 } -> ()
+  | Error e -> Alcotest.failf "all: wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "all: accepted a trailing byte");
+  let exact = Bytes.of_string "\x00\x2a" in
+  check_value "all consumed" (Codec.decode ~consume:`All codec exact 1);
+  let variable_field = Field.v "text" zeroterm in
+  let variable_codec =
+    Codec.v "Terminated" Fun.id Codec.[ variable_field $ Fun.id ]
+  in
+  (match
+     Codec.decode ~consume:`All variable_codec (Bytes.of_string "ok\x00!") 0
+   with
+  | Error { at = 3; field = []; kind = Trailing_bytes 1 } -> ()
+  | Error e -> Alcotest.failf "variable all: wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte");
+  Alcotest.check_raises "raising variant"
+    (Parse_error { at = 2; field = []; kind = Trailing_bytes 1 })
+    (fun () -> ignore (Codec.decode_exn ~consume:`All codec buf 1))
+
 let test_record_roundtrip () =
   let original =
     { a = UInt8.v 0xAB; b = UInt16.v 0xCDEF; c = UInt32.of_int 0x12345678 }
@@ -9515,6 +9545,8 @@ let suite =
       (* record *)
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
+      Alcotest.test_case "decode: prefix and all consumption" `Quick
+        test_codec_decode_consumption_modes;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
       Alcotest.test_case "record: duplicate names rejected" `Quick
         test_duplicate_names_rejected;
