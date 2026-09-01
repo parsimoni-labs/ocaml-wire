@@ -81,6 +81,11 @@ type endian = Types.endian = Little | Big
 
 type 'a typ = 'a Types.typ
 
+type consumption = Types.consumption
+(** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
+    leading value and leaves any remaining bytes uninterpreted; [`All] requires
+    that value to consume the rest of the supplied input. *)
+
 type param
 (** Untyped formal parameter declaration. Create via {!val:Param.input} or
     {!val:Param.output}. *)
@@ -975,6 +980,7 @@ type predicate = Where | Field | Action | Per_byte
     cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
+  | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
   | Missing_terminator
@@ -1069,20 +1075,24 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 (** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
 
-val of_string : 'a typ -> string -> ('a, parse_error) result
-(** Decodes one value from the start of the string. Trailing bytes, if any, are
-    left uninterpreted. Decoding itself does not copy the input; mutable
-    {!byte_slice} values that escape in the result receive their own backing
-    bytes so they cannot modify the source string. *)
+val of_string :
+  ?consume:consumption -> 'a typ -> string -> ('a, parse_error) result
+(** Decodes one value from the start of the string. [consume] defaults to
+    [`Prefix], leaving trailing bytes uninterpreted; [`All] returns a
+    {!constructor-Trailing_bytes} error unless the value consumes the whole
+    string. Decoding itself does not copy the input; mutable {!byte_slice}
+    values that escape in the result receive their own backing bytes so they
+    cannot modify the source string. *)
 
-val of_string_exn : 'a typ -> string -> 'a
+val of_string_exn : ?consume:consumption -> 'a typ -> string -> 'a
 (** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
 
-val of_bytes : 'a typ -> bytes -> ('a, parse_error) result
-(** Decodes one value from the start of the byte sequence. Trailing bytes, if
-    any, are left uninterpreted. *)
+val of_bytes :
+  ?consume:consumption -> 'a typ -> bytes -> ('a, parse_error) result
+(** Decodes one value from the start of the byte sequence, with the same
+    [consume] contract as {!of_string}. *)
 
-val of_bytes_exn : 'a typ -> bytes -> 'a
+val of_bytes_exn : ?consume:consumption -> 'a typ -> bytes -> 'a
 (** Like {!of_bytes} but raises {!exception:Parse_error} on failure. *)
 
 (** {1 Direct Encoding}
@@ -1207,8 +1217,17 @@ module Codec : sig
   (** [env c] creates a fresh parameter environment for codec [c]. *)
 
   val decode :
-    ?env:Param.env -> 'r t -> bytes -> int -> ('r, parse_error) result
+    ?consume:consumption ->
+    ?env:Param.env ->
+    'r t ->
+    bytes ->
+    int ->
+    ('r, parse_error) result
   (** [decode ?env c buf off] decodes one record value at the given base offset.
+      [consume] defaults to [`Prefix], accepting one record followed by more
+      bytes. [`All] requires the record to end at [Bytes.length buf] and returns
+      a {!constructor-Trailing_bytes} error otherwise.
+
       If [?env] is supplied, input params are read from it and output params are
       written back to it on success.
 
@@ -1218,7 +1237,8 @@ module Codec : sig
       would resolve a parametric field size to 0 and silently truncate the
       field. *)
 
-  val decode_exn : ?env:Param.env -> 'r t -> bytes -> int -> 'r
+  val decode_exn :
+    ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
   val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit

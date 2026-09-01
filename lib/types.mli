@@ -33,6 +33,11 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Which predicate a {!Constraint_failed} came from. *)
 type predicate = Where | Field | Action | Per_byte
 
+type consumption = [ `Prefix | `All ]
+(** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
+    leading value and leaves any remaining bytes uninterpreted; [`All] requires
+    that value to consume the rest of the supplied input. *)
+
 (** Parse failure categories. {!constructor-Unexpected_eof} counts bytes, not
     buffer positions: [expected] is how many the value needed and [got] how many
     were left where it starts, so both are the same whatever offset the frame is
@@ -41,6 +46,7 @@ type predicate = Where | Field | Action | Per_byte
     cross-field or where predicate. *)
 type error_kind =
   | Unexpected_eof of { expected : int; got : int }
+  | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
   | Invalid_tag of int
   | Missing_terminator
@@ -69,6 +75,11 @@ val eof :
   parse_error
 (** [eof ~expected ~got ()] is [parse_error (Unexpected_eof { expected; got })]:
     the input ended with [got] bytes where [expected] were needed. *)
+
+val check_consumption : consumption -> consumed:int -> available:int -> unit
+(** Enforce a bytes-backed decoder's consumption mode. Raises {!Parse_error}
+    carrying {!constructor-Trailing_bytes} at [consumed] when [`All] leaves
+    bytes before [available]. Internal to decoder entry points. *)
 
 (** Which end of a packed base word the first declared bitfield occupies.
 
