@@ -2638,34 +2638,23 @@ module Codec = struct
      clashing anonymous declarations in 3D. *)
   let field_name i f = if f.name = "_" then Fmt.str "f%d" i else f.name
 
+  (* Build the codec fields and their checkers together, so both retain the
+     identity of the same source [Field.t]. Accessors intentionally reject a
+     separately declared lookalike field, even when its name and type match. *)
   let wire_codec_fields fields =
-    let rec go : type f r. int -> (f, r) fields -> (f, r) Wire.Codec.fields =
+    let rec go : type f r.
+        int -> (f, r) fields -> (f, r) Wire.Codec.fields * r field_check list =
      fun i -> function
-       | [] -> Wire.Codec.[]
-       | f :: rest ->
-           Wire.Codec.( $ ) (Wire.Field.v (field_name i f) f.gen.typ) f.getter
-           :: go (i + 1) rest
-    in
-    go 0 fields
-
-  (* The per-field checkers for the same list, in the same order and under the
-     same names: [Codec.get] and [Codec.set] resolve a field by name against
-     the sealed codec, so a checker built here addresses exactly the slot
-     [wire_codec_fields] declared. *)
-  let field_checks fields =
-    let rec go : type f r. int -> (f, r) fields -> r field_check list =
-     fun i -> function
-       | [] -> []
+       | [] -> (Wire.Codec.[], [])
        | f :: rest ->
            let name = field_name i f in
-           Field_check
-             {
-               name;
-               field = Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter;
-               proj = f.getter;
-               equal = f.gen.equal;
-             }
-           :: go (i + 1) rest
+           let field =
+             Wire.Codec.( $ ) (Wire.Field.v name f.gen.typ) f.getter
+           in
+           let wire_fields, checks = go (i + 1) rest in
+           ( Wire.Codec.(field :: wire_fields),
+             Field_check { name; field; proj = f.getter; equal = f.gen.equal }
+             :: checks )
     in
     go 0 fields
 
@@ -2780,7 +2769,8 @@ module Codec = struct
   let v : type f r.
       string -> ?equal:(r -> r -> bool) -> f -> (f, r) fields -> r t =
    fun name ?(equal = ( = )) builder fields ->
-    let codec = Wire.Codec.v name builder (wire_codec_fields fields) in
+    let wire_fields, field_checks = wire_codec_fields fields in
+    let codec = Wire.Codec.v name builder wire_fields in
     let typ = Wire.codec codec in
     let positives = field_positives fields in
     let n_fields = field_count fields in
@@ -2834,7 +2824,7 @@ module Codec = struct
       equal;
       env = combine_env_strategies (field_envs fields);
       adversarial_value;
-      fields = field_checks fields;
+      fields = field_checks;
     }
 end
 
