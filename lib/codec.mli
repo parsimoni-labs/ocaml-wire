@@ -189,12 +189,23 @@ val get :
 (** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
     [f] has an action, it fires on every read. [env] syncs output parameters
     after each action and supplies parameters for dependent field layouts; omit
-    it for parameter-free accessors. An environment created for another codec
-    raises [Invalid_argument]. Does not check record-level where-clauses or
-    other fields' constraints -- call {!validate} first on untrusted input. *)
+    it for parameter-free accessors. Raises [Invalid_argument] when the codec
+    has input params and [env] is omitted, or when it was created for another
+    codec: an unbound param reads 0, which would stage the reader onto the bytes
+    in front of the field. Does not check record-level where-clauses or other
+    fields' constraints -- call {!validate} first on untrusted input. *)
 
-val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter.
+val set :
+  ?env:Param.env ->
+  'r t ->
+  ('a, 'r) field ->
+  (bytes -> int -> 'a -> unit) Staged.t
+(** Staged zero-copy field setter. [env] supplies the input params a dependent
+    field layout is measured from; omit it for parameter-free codecs. Raises
+    [Invalid_argument] when the codec has input params and [env] is omitted, or
+    when it was created for another codec: an unbound param reads 0, which would
+    put the write on a field the caller never named and leave the one it did
+    name unchanged.
 
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared

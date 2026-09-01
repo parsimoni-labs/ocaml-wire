@@ -964,8 +964,14 @@ let test_get_needs_the_param_to_locate_the_field () =
 let test_set_never_writes_over_an_unnamed_field () =
   let c, f_v = param_offset_codec () in
   let buf = Bytes.of_string "AAAA\x12\x34" in
-  (* The write lands on the padding and leaves "v" as it was, so the record a
-     caller reads back differs from the one it asked to change. *)
+  let env = Param.bind_by_name "n" 4 (Codec.env c) in
+  let write = Staged.unstage (Codec.set ~env c f_v) in
+  write buf 0 (UInt16.v 0xbeef);
+  Alcotest.(check string)
+    "with ?env only the named field moves" "AAAA\xbe\xef" (Bytes.to_string buf);
+  Bytes.blit_string "AAAA\x12\x34" 0 buf 0 6;
+  (* Without it the write would land on the padding and leave "v" as it was, so
+     the record a caller reads back differs from the one it asked to change. *)
   match Codec.set c f_v with
   | _ -> Alcotest.fail "expected set to refuse a param layout without ?env"
   | exception Invalid_argument msg ->
@@ -4001,7 +4007,10 @@ let test_get_action_with_inputparam () =
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 let test_get_action_inputparam_noenv () =
-  (* Action references an input param but no env passed -- param reads as 0 *)
+  (* An action comparing against an input param is a verdict on the bytes, so
+     resolving the unbound param to 0 does not weaken the check, it answers a
+     different question: every value above 0 was rejected against a bound the
+     caller never set. The reader refuses instead, and answers once bound. *)
   let limit = Param.input "lim2" uint8 in
   let f_ref = Field.v "v" uint8 in
   let cf_v =
@@ -4014,15 +4023,18 @@ let test_get_action_inputparam_noenv () =
       $ fun v -> v)
   in
   let codec = Codec.v "NoEnvInput" (fun v -> v) [ cf_v ] in
-  (* No env: limit defaults to 0, so any positive value > 0 fails *)
-  let get_v = Staged.unstage (Codec.get codec cf_v) in
-  (* 0 <= 0: passes *)
+  (match Codec.get codec cf_v with
+  | _ -> Alcotest.fail "expected get to refuse an unbound action param"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "the refusal names the remedy" true (contains ~sub:"?env" msg));
+  let env = Param.bind_by_name "lim2" 4 (Codec.env codec) in
+  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
   Alcotest.(check int)
-    "zero passes" 0
-    (UInt8.to_int (get_v (Bytes.of_string "\x00") 0));
-  (* 1 > 0: fails *)
-  match get_v (Bytes.of_string "\x01") 0 with
-  | _ -> Alcotest.fail "expected rejection without env"
+    "within the bound the value reads back" 4
+    (UInt8.to_int (get_v (Bytes.of_string "\x04") 0));
+  match get_v (Bytes.of_string "\x05") 0 with
+  | _ -> Alcotest.fail "expected rejection above the bound"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
 (* -- Param forwarding into embedded sub-codecs -- *)
@@ -9727,7 +9739,7 @@ let suite =
         test_get_action_multiple_calls;
       Alcotest.test_case "action: with input param" `Quick
         test_get_action_with_inputparam;
-      Alcotest.test_case "action: input param no env" `Quick
+      Alcotest.test_case "action: input param needs an env" `Quick
         test_get_action_inputparam_noenv;
       Alcotest.test_case "embed: param-sized sub-codec forwards param" `Quick
         test_embed_param_sized;

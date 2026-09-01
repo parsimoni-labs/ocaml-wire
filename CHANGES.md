@@ -25,10 +25,12 @@
   where the two used to disagree. A constraint reading it no longer sees a
   negative placeholder (#374, @samoht)
 
-- **Breaking:** `Wire.Codec.wire_size_at` takes `?env` and raises
-  `Invalid_argument` without one when the codec has input params, as `decode`
-  already did. An unbound param reads 0, so a param-sized field measured as
-  empty and the reported extent came back quietly short (#350, @samoht)
+- **Breaking:** `Wire.Codec.wire_size_at`, `get` and `set` raise
+  `Invalid_argument` when the codec has input params and no `?env`, as `decode`
+  already did, and `set` gains the `?env` that makes a dependent layout
+  addressable. Each used to answer from a parameter it had not been given, and
+  the answer was a shorter record, the wrong field, or a write over a field the
+  caller never named (#350, #396, @samoht)
 
 ### Documentation
 
