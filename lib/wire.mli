@@ -1225,17 +1225,29 @@ module Codec : sig
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
   (** Staged field reader. If the field has an [~action], the action fires on
-      every read. Pass [~env] to sync output parameters after each action. An
-      environment created for another codec raises [Invalid_argument]. Omit
-      [~env] for parameter-free accessors; dependent layouts use it to resolve
-      their parameters.
+      every read. Pass [~env] to sync output parameters after each action and to
+      resolve a dependent layout's parameters; omit it for parameter-free
+      accessors. Raises [Invalid_argument] when the codec has input params and
+      [~env] is omitted, or when it was created for another codec: an unbound
+      param reads 0, which would stage the reader onto the bytes in front of the
+      field.
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
 
-  val set : 'r t -> ('a, 'r) field -> (bytes -> int -> 'a -> unit) Staged.t
-  (** Staged field writer. Does not check constraints or fire actions -- call
-      {!validate} after a batch of writes to verify constraints still hold. *)
+  val set :
+    ?env:Param.env ->
+    'r t ->
+    ('a, 'r) field ->
+    (bytes -> int -> 'a -> unit) Staged.t
+  (** Staged field writer. [~env] supplies the input params a dependent field
+      layout is measured from; omit it for parameter-free codecs. Raises
+      [Invalid_argument] on the same terms as {!get}: an unbound param reads 0,
+      which would put the write on a field the caller never named and leave the
+      one it did name unchanged.
+
+      Does not check constraints or fire actions -- call {!validate} after a
+      batch of writes to verify constraints still hold. *)
 
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)

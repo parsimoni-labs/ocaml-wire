@@ -4821,7 +4821,11 @@ let field_access (codec : _ t) name =
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a) Staged.t =
-  Option.iter (check_env_owner ~op:"get" codec) env;
+  (* A field's offset can be driven by an input param, and an unbound one reads
+     0, which stages a reader onto the bytes in front of the field rather than
+     onto the field. That is the same silent misread [decode] refuses, so it is
+     refused here on the same terms. *)
+  require_env ~op:"get" codec env;
   let access = field_access codec f.name in
   let read = build_staged_reader f.typ access in
   (* The context no longer carries the buffer, so [env] resolves once here
@@ -4871,13 +4875,18 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
           sync arr;
           v)
 
-let[@inline] set (type a r) (codec : r t) (f : (a, r) field) :
+let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> a -> unit) Staged.t =
+  (* As for [get]: an unbound param places the write on the wrong bytes, which
+     for a writer means overwriting a field the caller never named and leaving
+     the one it did name as it was. *)
+  require_env ~op:"set" codec env;
   let access = field_access codec f.name in
   let write = build_staged_writer f.typ access in
+  let rt = runtime ?env () in
   match build_immediate_staged_writer f.typ access with
   | Some write -> Staged.stage write
-  | None -> Staged.stage (fun buf off value -> write no_runtime buf off value)
+  | None -> Staged.stage (fun buf off value -> write rt buf off value)
 
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
