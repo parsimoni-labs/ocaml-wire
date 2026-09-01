@@ -1133,7 +1133,10 @@ module Codec : sig
   (** Sealed codec for record values of type ['r]. *)
 
   type ('a, 'r) field
-  (** A field bound to a record projection. *)
+  (** A field bound to a record projection. The binding retains the identity of
+      its source {!Field.t}: an accessor may use another binding of that same
+      source field, but not a newly declared field that merely has the same
+      name. One source field may still be shared by multiple codecs. *)
 
   type ('f, 'r) fields =
     | [] : ('r, 'r) fields
@@ -1261,9 +1264,11 @@ module Codec : sig
       every read. Pass [~env] to sync output parameters after each action and to
       resolve a dependent layout's parameters; omit it for parameter-free
       accessors. Raises [Invalid_argument] when the codec has input params and
-      [~env] is omitted, or when it was created for another codec: an unbound
-      param reads 0, which would stage the reader onto the bytes in front of the
-      field.
+      [~env] is omitted, when it was created for another codec, or when the
+      field binding does not share its source {!Field.t} with the field in the
+      codec: an unbound param reads 0, which would stage the reader onto the
+      bytes in front of the field, while a same-named lookalike could interpret
+      those bytes with a different wire type.
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
@@ -1316,12 +1321,14 @@ module Codec : sig
       [Slice.first (Codec.get c f buf base)]'s 4 words.
 
       Type-restricted to [Slice.t] fields, so passing a non-slice field is a
-      compile-time error. *)
+      compile-time error. Raises [Invalid_argument] if [f] was not bound from
+      the source {!Field.t} used in [c]. *)
 
   val slice_length :
     'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
   (** [slice_length c f] is a staged reader returning the byte length of slice
-      field [f]. *)
+      field [f]. Raises [Invalid_argument] if [f] was not bound from the source
+      {!Field.t} used in [c]. *)
 
   (** {2 Bitfield batch access}
 
@@ -1333,7 +1340,9 @@ module Codec : sig
   (** A bitfield accessor -- shift and mask for one field in a packed word. *)
 
   val bitfield : 'r t -> (int, 'r) field -> bitfield
-  (** [bitfield codec field] returns a bitfield accessor. *)
+  (** [bitfield codec field] returns a bitfield accessor. Raises
+      [Invalid_argument] if [field] was not bound from the source {!Field.t}
+      used in [codec]. *)
 
   val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
   (** Staged word reader. Force once, reuse for every read. Fields in the same

@@ -22,7 +22,10 @@
       input. *)
 
 type ('a, 'r) field
-(** A field bound to a record projection. *)
+(** A field bound to a record projection. The binding retains the identity of
+    its source {!Field.t}: an accessor may use another binding of that same
+    source field, but not a newly declared field that merely has the same name.
+    One source field may still be shared by multiple codecs. *)
 
 type 'r t
 (** A sealed record codec for type ['r]. *)
@@ -191,8 +194,10 @@ val get :
     after each action and supplies parameters for dependent field layouts; omit
     it for parameter-free accessors. Raises [Invalid_argument] when the codec
     has input params and [env] is omitted, or when it was created for another
-    codec: an unbound param reads 0, which would stage the reader onto the bytes
-    in front of the field. Does not check record-level where-clauses or other
+    codec, or when [f] was not bound from a source {!Field.t} used in [c]: an
+    unbound param reads 0, which would stage the reader onto the bytes in front
+    of the field, while a same-named lookalike could interpret those bytes with
+    a different wire type. Does not check record-level where-clauses or other
     fields' constraints -- call {!validate} first on untrusted input. *)
 
 val set :
@@ -203,9 +208,10 @@ val set :
 (** Staged zero-copy field setter. [env] supplies the input params a dependent
     field layout is measured from; omit it for parameter-free codecs. Raises
     [Invalid_argument] when the codec has input params and [env] is omitted, or
-    when it was created for another codec: an unbound param reads 0, which would
-    put the write on a field the caller never named and leave the one it did
-    name unchanged.
+    when it was created for another codec, or when the field binding does not
+    share its source {!Field.t} with the field in the codec: an unbound param
+    reads 0, which would put the write on a field the caller never named and
+    leave the one it did name unchanged.
 
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared
@@ -310,12 +316,14 @@ val slice_offset :
     resulting [buf -> base -> int] reader on the hot path.
 
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a
-    compile-time error. *)
+    compile-time error. Raises [Invalid_argument] if [f] was not bound from the
+    source {!Field.t} used in [c]. *)
 
 val slice_length :
   'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
 (** [slice_length c f] is a staged reader returning the byte length of slice
-    field [f]. *)
+    field [f]. Raises [Invalid_argument] if [f] was not bound from the source
+    {!Field.t} used in [c]. *)
 
 type validator
 (** A struct validator without a constructor. The same int-array validation
@@ -349,7 +357,7 @@ type bitfield
 
 val bitfield : 'r t -> (int, 'r) field -> bitfield
 (** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
-    a bitfield. *)
+    a bitfield or was not bound from the source {!Field.t} used in [codec]. *)
 
 val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
 (** [load_word bf] returns a staged word reader. Force once, then call the
