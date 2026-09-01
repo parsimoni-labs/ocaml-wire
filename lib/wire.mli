@@ -1254,7 +1254,20 @@ module Codec : sig
       when the codec has parameters and no env is supplied, when the env left
       any input param unbound (the error names it), when the destination buffer
       is too short, or when a parametric byte field's value length does not
-      match its env-bound size. *)
+      match its env-bound size.
+
+      Also raises [Invalid_argument] on a record {!decode} would reject: a
+      closed enum field carrying an unlisted value, an {!val-all_zeros} field
+      carrying a non-zero byte, a {!val-byte_array_where} byte failing its
+      refinement, or a {!val-where} clause or field [~constraint_] that does not
+      hold for the values given. Encode never emits bytes its own decoder
+      refuses. Field [~action]s are not run by encode.
+
+      Encode is not all-or-nothing: it writes the record field by field and
+      checks the result, so after any of those raises the bytes from [off] on
+      hold a partial record and must be treated as scrap. Use {!to_bytes} or
+      {!to_string} when no destination buffer should escape on failure. Only the
+      single-field {!set} rolls its write back. *)
 
   val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
   (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
