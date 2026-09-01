@@ -55,6 +55,31 @@ let test_parse_uint8 () =
   | Ok v -> Alcotest.(check int) "uint8 value" 0x42 (UInt8.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e
 
+let check_trailing_byte_error label = function
+  | Error { at = 1; field = []; kind = Trailing_bytes 1 } -> ()
+  | Error e -> Alcotest.failf "%s: wrong error: %a" label pp_parse_error e
+  | Ok _ -> Alcotest.failf "%s: accepted a trailing byte" label
+
+let test_direct_consumption_modes () =
+  let input = "\x2a\xff" in
+  let check_value label = function
+    | Ok v -> Alcotest.(check int) label 0x2a (UInt8.to_int v)
+    | Error e -> Alcotest.failf "%s: %a" label pp_parse_error e
+  in
+  check_value "default prefix" (of_string uint8 input);
+  check_value "explicit prefix" (of_string ~consume:`Prefix uint8 input);
+  check_trailing_byte_error "string all" (of_string ~consume:`All uint8 input);
+  check_trailing_byte_error "bytes all"
+    (of_bytes ~consume:`All uint8 (Bytes.of_string input));
+  check_value "all consumed" (of_string ~consume:`All uint8 "\x2a");
+  (match of_string ~consume:`All zeroterm "ok\x00!" with
+  | Error { at = 3; field = []; kind = Trailing_bytes 1 } -> ()
+  | Error e -> Alcotest.failf "variable all: wrong error: %a" pp_parse_error e
+  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte");
+  Alcotest.check_raises "raising variant"
+    (Parse_error { at = 1; field = []; kind = Trailing_bytes 1 })
+    (fun () -> ignore (of_string_exn ~consume:`All uint8 input))
+
 let test_parse_uint16_le () =
   let input = "\x01\x02" in
   match of_string uint16 input with
@@ -1575,6 +1600,8 @@ let suite =
         test_expr_equality_operators;
       (* parsing *)
       Alcotest.test_case "parse: uint8" `Quick test_parse_uint8;
+      Alcotest.test_case "parse: prefix and all consumption" `Quick
+        test_direct_consumption_modes;
       Alcotest.test_case "parse: uint16 le" `Quick test_parse_uint16_le;
       Alcotest.test_case "parse: uint16 be" `Quick test_parse_uint16_be;
       Alcotest.test_case "parse: uint32 le" `Quick test_parse_uint32_le;
