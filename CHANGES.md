@@ -2,174 +2,144 @@
 
 ### Added
 
-- `Wire.Codec.to_bytes` and `Wire.Codec.to_string` allocate an exact-size
-  whole-record encoding and run field actions before returning it, replacing
-  the easy-to-miss manual `encode` then `validate` sequence. (#394)
+- Add `Wire.Codec.to_bytes` and `Wire.Codec.to_string`: they allocate an
+  exact-size buffer, encode the whole record into it and run the same checks as
+  `validate`, so a one-call encode cannot return bytes `decode` would reject.
+  They replace the easy-to-miss manual `encode` then `validate` sequence
+  (#394, @samoht)
 
 ### Changed
 
-- **Breaking:** `Wire.Codec.is_fixed` is replaced by `wire_size_opt`, which
-  returns the fixed size in one lookup. `wire_size` remains available when a
-  fixed-size layout is required. (#394)
+- **Breaking:** Replace `Wire.Codec.is_fixed` with `wire_size_opt`, which
+  answers the same question and hands back the size in the same call.
+  `wire_size` remains for a layout that must be fixed (#394, @samoht)
 
-- **Breaking:** `Wire.uint` now takes its 1-7 byte width as an `int`, so a
+- **Breaking:** `Wire.uint` takes its 1-7 byte width as an `int`, so a
   three-byte integer is `uint 3` rather than `uint (int 3)`. Use `Wire.uint_var`
-  when the width is a field- or parameter-driven expression. (#382)
+  where the width is a field- or parameter-driven expression (#382, @samoht)
+
+- **Breaking:** `Wire.sizeof_this` is the enclosing description's fixed prefix:
+  one constant, the same wherever it is read. It used to be the bytes consumed
+  up to the reading field, so a description reading it after a variable-size
+  field now means something different, and agrees with the generated validator
+  where the two used to disagree. A constraint reading it no longer sees a
+  negative placeholder (#374, @samoht)
+
+- **Breaking:** `Wire.Codec.wire_size_at` takes `?env` and raises
+  `Invalid_argument` without one when the codec has input params, as `decode`
+  already did. An unbound param reads 0, so a param-sized field measured as
+  empty and the reported extent came back quietly short (#350, @samoht)
+
+### Documentation
+
+- `Wire.Codec.validate` runs field actions but does not write their output
+  assignments back to the caller's `Param.env`; use `decode` where you relied on
+  them. The documentation claimed otherwise (#394, @samoht)
+
+- Document that `Field.repeat` has no sizeless form: its budget is the region
+  size the description declares, and a caller who does not know that size where
+  the codec is built should take it as a `Param.input` rather than baking in a
+  literal (#351, @samoht)
 
 ### Fixed
 
-- `Wire.Codec.validate` documentation now correctly states that validation
-  runs field actions without writing their output assignments back to the
-  caller's environment. (#394)
-
-- EverParse output names are now validated as portable ASCII identifiers before
-  any generated files are opened, preventing path escapes and malformed 3D, C,
-  or dune output. (#385, @samoht)
-
-- A mutable `byte_slice` returned by `Wire.of_string` now owns its backing
-  bytes, so it cannot modify the caller's immutable source string. Other
-  decoded values remain copy-free, and bytes inputs still alias. (#383,
-  @samoht)
-
-- A zero divisor supplied to expression division or modulo is now reported as
-  `Zero_divisor`. It used to escape decoding as the host exception
-  `Division_by_zero` instead of a wire parse error (#376, @samoht)
-
-- Expression addition, subtraction and multiplication now reject native-integer
-  overflow. A dependent byte span could otherwise turn a huge declared size
-  into zero or one and pass bounds validation (#375, @samoht)
-
-- `Expr.sizeof_this` is the enclosing description's fixed prefix, which is what
-  3D's `sizeof(this)` means: one constant for the description, the same wherever
-  it is read. It used to be the bytes consumed up to the reading field, so it
-  disagreed with the generated validator at every position but the end of a
-  fixed-size record, and after a variable-size field the two read different
-  layouts while both verified. A constraint reading it no longer sees a `-1`
-  sentinel (#374, @samoht)
-
-- A record truncated in the middle now reports the first field that cannot be
-  read, at its own offset. Fields were read in reverse, so the failure was
-  blamed on a later field and located where an earlier field's declared size
-  had already run past the end of the buffer, which left `at` pointing outside
-  the input a caller had passed in (#372, @samoht)
-
-- `Wire_3d.generate_c` works against EverParse releases after v2026.02.25. The
-  whole-buffer check it adds to each generated wrapper named a variable those
-  releases renamed, so the emitted C referenced an undeclared identifier and
-  failed to compile (#367, @samoht)
-
-- `Wire.Everparse.write` no longer refuses a family in which a sub-codec is both
-  packed as a codec of its own and reached through another codec's field,
-  reporting the two as conflicting definitions of one type. They differ only in
-  how the type is used, not in what it is, so they now collapse into a single
-  declaration that still gets a validator of its own and keeps the codec's doc
-  comment, whichever schema was projected first (#346, @samoht)
-
-- A casetype tag whose enum sits over a `lookup`, a `where` or a 64-bit base no
-  longer fails the 3D projection with an assertion failure. Every integer
-  carrier an enum base accepts now yields a case label (#347, @samoht)
-
-- A parse error from an unmatched casetype tag now names the casetype field. It
-  used to arrive with an empty field path, leaving a caller no way to tell which
-  field the bad tag belonged to (#348, @samoht)
-
-- `Wire.Everparse.Raw.field_seeds` now names a casetype's case indices, so
-  `Wire_3d.generate_corpus` can reach a tagged record instead of reporting the
-  codec as vacuous (#348, @samoht)
-
-- `Wire_3d.generate_corpus` no longer gives up on a record whose length field
-  the byte draw filled with a huge value. A draw asking for more bytes than a
-  corpus line can carry is brought back into range rather than the codec being
-  abandoned, which covers both dependent and unconstrained length fields
-  (#349, @samoht)
-
-- `Wire.Codec.wire_size_at` takes `?env` and refuses without one when the codec
-  has input params, as `decode` already did. An unbound param reads 0, so a
-  param-sized field measured as empty and the reported extent was shorter than
-  the record; `Wire_3d.generate_corpus` recorded a reject verdict for input its
-  own codec accepts, and a differential over that corpus blamed the generated C
-  validator for the harness's answer (#350, @samoht)
-
-- `Field.repeat` now explains itself when the encoded elements do not fill the
-  declared byte budget. The budget is the region size the description declares,
-  which encode holds the values to as well, so a caller who does not know that
-  size where the codec is built should take it as a `Param.input` rather than
-  baking in a literal. The documentation also records that there is no sizeless
-  repeat and why: 3D's only list construct is the byte budget, so a repeat that
-  consumed whatever remained would have no projection (#351, @samoht)
-
-- `Wire.Codec.size_of_value` takes `?env` and resolves a field whose byte extent
-  is an input parameter, refusing when it has none rather than reporting 0. It
-  used to under-report such a field by its whole width, so a caller sizing a
-  buffer from the answer got one too short and `encode` ran off the end with a
-  raw out-of-bounds instead of a wire error (#353, @samoht)
-
-- `Wire.Everparse.Raw.field_seeds` names the indices a `Wire.lookup` admits, so
-  `Wire_3d.generate_corpus` can reach an accepted record for a table-dispatched
-  field instead of reporting the codec as vacuous (#355, @samoht)
-
-- A value too wide for the platform's native integer is now reported at the
-  field it was read from rather than at byte 0, so seeking to the offset a parse
-  error names lands on the field whatever base the frame sits at (#356, @samoht)
-
-- A parse error from a field whose start ran past the end of the input reports
-  the bytes that were missing rather than a negative count. `Wire.of_reader`
-  computes how much more to read from that number, so a negative one left it
-  asking for a position behind what it had already buffered (#359, @samoht)
-
-- `Wire_3d.generate_corpus` reaches records whose accepting side sits at an
-  extreme, such as a predicate satisfied at the minimum or a string whose
-  terminator has to be written rather than drawn. It seeds from the extremes as
-  well as from noise, and repairs a missing terminator the way it already
-  repaired a short input (#360, @samoht)
-
-- `Wire.Codec.min_wire_size` reports the region a `zeroterm_at_most` field
-  occupies rather than zero, so a buffer sized from it holds the record. A
-  parse error from a `zeroterm` field with no terminator also names the field
-  it came from (#361, @samoht)
-
-- `Wire.Everparse.Raw.field_seeds` credits a refinement's values to the field it
-  compares rather than to the field carrying it, and reads a struct-level
-  `where` where the projection puts it. A constraint written on one field about
-  another, and any codec-level `where`, previously yielded no values at all
-  (#362, @samoht)
-
-- A casetype whose tag is a `variants`, a `lookup`, a plain `map` or a bare
-  `uint64` now dispatches in the generated C as it does in OCaml. The tag was
-  not recognised as an integer one, so the union was rewritten to a tag followed
-  by opaque bytes: EverParse accepted the schema and the validator checked no
-  case body at all, while `Codec.decode` rejected the same input (#363, @samoht)
-
-- A casetype case body keeps the refinement its type carries. A closed enum's
-  membership and a `lookup`'s index bound were dropped from the generated
-  validator, which then accepted bodies `Codec.decode` rejects (#364, @samoht)
+- A casetype in the generated C dispatches on every tag type it does in OCaml,
+  and a case body keeps the refinement its type carries. With a `variants`, a
+  `lookup`, a plain `map` or a bare `uint64` tag the union was validated as a
+  tag followed by opaque bytes and no case body was checked at all, and a closed
+  enum's membership and a `lookup`'s index bound were dropped. Both accepted
+  bytes `Codec.decode` rejects, so regenerate the C (#363, #364, @samoht)
 
 - A schema that declares two different types under one name is refused instead
   of resolving every reference to whichever came first. Two same-named
   sub-codecs of different widths produced a validator reading a different number
   of bytes than the codec (#365, @samoht)
 
-- A codec parameter and a casetype case label each render as something the
-  schema declares. A parameter typed by an enum named a type EverParse rejects
-  in that position, a case label named a constant of an enum over a bitfield
-  base that is never declared, and a `uint_var size` parameter named no type at
-  all and is now refused where it is built (#366, @samoht)
-
-- `Field.optional` over a sub-codec that takes `Param.input` values now projects
-  to a schema EverParse accepts. The conditional payload was described in a
-  scope that did not carry those parameters, so `3d.exe` refused the file with
-  an unbound variable (@samoht)
-
-- `nested` now projects a region whose contents are sized from a field of the
-  enclosing record. Those contents are described in a scope of their own, which
-  did not carry the field, so `3d.exe` refused the file with an unbound
-  variable (@samoht)
-
 - Two `nested` regions whose contents differ in shape no longer share one
-  generated type. Shapes the naming could not tell apart collapsed into a
-  single declaration and the second region was then validated against the
-  first's contents, silently; a description that would still land two shapes on
-  one name is now refused (@samoht)
+  generated type. The second region was silently validated against the first's
+  contents; a description that would still land two shapes on one name is
+  refused where it is built (@samoht)
+
+- A mutable `byte_slice` returned by `Wire.of_string` owns its backing bytes, so
+  it cannot modify the caller's immutable source string. Other decoded values
+  remain copy-free, and bytes inputs still alias (#383, @samoht)
+
+- Expression addition, subtraction and multiplication reject native-integer
+  overflow. A dependent byte span could otherwise turn a huge declared size into
+  zero or one and pass bounds validation (#375, @samoht)
+
+- `Wire.Codec.size_of_value` takes `?env` and resolves a field whose byte extent
+  is an input parameter, refusing where it has none rather than reporting 0. It
+  used to under-report such a field by its whole width, so a caller sizing a
+  buffer from the answer got one too short and `encode` ran off the end with a
+  raw out-of-bounds instead of a wire error (#353, @samoht)
+
+- EverParse output names are validated as portable ASCII identifiers before any
+  generated file is opened, preventing path escapes and malformed 3D, C or dune
+  output (#385, @samoht)
+
+- A zero divisor supplied to expression division or modulo is reported as
+  `Zero_divisor`. It used to escape decoding as the host exception
+  `Division_by_zero` rather than a wire parse error (#376, @samoht)
+
+- `Wire.Everparse.write` no longer refuses a family in which a sub-codec is both
+  packed as a codec of its own and reached through another codec's field. The
+  two differ only in how the type is used, not in what it is, so they collapse
+  into a single declaration that still gets a validator of its own and keeps the
+  codec's doc comment (#346, @samoht)
+
+- `Field.optional` over a sub-codec that takes `Param.input` values, and a
+  `nested` region whose contents are sized from a field of the enclosing record,
+  project to a schema EverParse accepts. Both described their contents in a
+  scope that did not carry those values, so `3d.exe` refused the file with an
+  unbound variable (@samoht)
+
+- A casetype tag whose enum sits over a `lookup`, a `where` or a 64-bit base no
+  longer fails the 3D projection with an assertion failure. Every integer
+  carrier an enum base accepts now yields a case label (#347, @samoht)
+
+- A codec parameter typed by an enum, and a casetype case label over a bitfield
+  base, name a type the generated schema declares rather than one EverParse
+  rejects or never sees declared; a `uint_var`-sized parameter names no type at
+  all and is refused where it is built (#366, @samoht)
+
+- `Wire_3d.generate_c` works against EverParse releases after v2026.02.25. The
+  whole-buffer check it adds to each generated wrapper named a variable those
+  releases renamed, so the emitted C referenced an undeclared identifier and
+  failed to compile (#367, @samoht)
+
+- A record truncated in the middle reports the first field that cannot be read,
+  at its own offset. Fields were read in reverse, so the failure was blamed on a
+  later field and `at` could point outside the input the caller passed in
+  (#372, @samoht)
+
+- A value too wide for the platform's native integer is reported at the field it
+  was read from rather than at byte 0, so seeking to the offset a parse error
+  names lands on the field whatever base the frame sits at (#356, @samoht)
+
+- A parse error from a field whose start ran past the end of the input reports
+  the bytes that were missing rather than a negative count. `Wire.of_reader`
+  computes how much more to read from that number, so a negative one left it
+  asking for a position behind what it had already buffered (#359, @samoht)
+
+- A parse error from an unmatched casetype tag names the casetype field. It used
+  to arrive with an empty field path, leaving a caller no way to tell which
+  field the bad tag belonged to (#348, @samoht)
+
+- `Wire.Codec.min_wire_size` reports the region a `zeroterm_at_most` field
+  occupies rather than zero, so a buffer sized from it holds the record. A parse
+  error from a `zeroterm` field with no terminator also names the field it came
+  from (#361, @samoht)
+
+- `Field.repeat` says what the byte budget is for when the encoded elements do
+  not fill it, instead of refusing without naming the remedy (#351, @samoht)
+
+- `Wire_3d.generate_corpus` reaches records it used to report as unreachable:
+  casetype tags, `lookup` table indices, a constraint written on one field about
+  another, a codec-level `where`, a predicate satisfied only at its minimum, a
+  string whose terminator has to be written rather than drawn, and a length
+  field a byte draw blew up out of range. `Wire.Everparse.Raw.field_seeds`
+  supplies those values (#348, #349, #355, #360, #362, @samoht)
 
 ## 1.2.0
 
