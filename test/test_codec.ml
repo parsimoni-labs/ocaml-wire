@@ -4487,6 +4487,50 @@ let test_bitfield_on_non_bitfield () =
   | _ -> Alcotest.fail "expected error for non-bitfield"
   | exception Invalid_argument _ -> ()
 
+let expect_foreign_field ~op ~field ~codec f =
+  match f () with
+  | () -> Alcotest.failf "expected Invalid_argument from %s" op
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool) "names the operation" true (contains ~sub:op msg);
+      Alcotest.(check bool) "names the field" true (contains ~sub:field msg);
+      Alcotest.(check bool) "names the codec" true (contains ~sub:codec msg)
+
+let test_lookalike_field_handles () =
+  let word = Field.v "word" uint16be in
+  let word_field = Codec.(word $ Fun.id) in
+  let word_again = Codec.(word $ Fun.id) in
+  let lookalike_word = Codec.(Field.v "word" uint16 $ Fun.id) in
+  let word_codec = Codec.v "WordOwner" Fun.id [ word_field ] in
+  let buf = Bytes.of_string "\x12\x34" in
+  let read = Staged.unstage (Codec.get word_codec word_again) in
+  Alcotest.(check int)
+    "rebinding the same Field.t works" 0x1234
+    (UInt16.to_int (read buf 0));
+  expect_foreign_field ~op:"Codec.get" ~field:"word" ~codec:"WordOwner"
+    (fun () -> ignore (Codec.get word_codec lookalike_word));
+  expect_foreign_field ~op:"Codec.set" ~field:"word" ~codec:"WordOwner"
+    (fun () -> ignore (Codec.set word_codec lookalike_word));
+
+  let flags = Field.v "flags" (bits ~width:4 U16be) in
+  let flags_field = Codec.(flags $ Fun.id) in
+  let lookalike_flags = Codec.(Field.v "flags" (bits ~width:4 U16) $ Fun.id) in
+  let flags_codec = Codec.v "FlagsOwner" Fun.id [ flags_field ] in
+  expect_foreign_field ~op:"Codec.bitfield" ~field:"flags" ~codec:"FlagsOwner"
+    (fun () -> ignore (Codec.bitfield flags_codec lookalike_flags));
+
+  let payload = Field.v "payload" (byte_slice ~size:(int 2)) in
+  let payload_field = Codec.(payload $ Fun.id) in
+  let lookalike_payload =
+    Codec.(Field.v "payload" (byte_slice ~size:(int 1)) $ Fun.id)
+  in
+  let payload_codec = Codec.v "PayloadOwner" Fun.id [ payload_field ] in
+  expect_foreign_field ~op:"Codec.slice_offset" ~field:"payload"
+    ~codec:"PayloadOwner" (fun () ->
+      ignore (Codec.slice_offset payload_codec lookalike_payload));
+  expect_foreign_field ~op:"Codec.slice_length" ~field:"payload"
+    ~codec:"PayloadOwner" (fun () ->
+      ignore (Codec.slice_length payload_codec lookalike_payload))
+
 let expect_foreign_env ~op ~codec f =
   match f () with
   | _ -> Alcotest.failf "expected Invalid_argument from %s" op
@@ -9778,6 +9822,8 @@ let suite =
         test_set_field_notin_codec;
       Alcotest.test_case "misuse: bitfield on non-bitfield" `Quick
         test_bitfield_on_non_bitfield;
+      Alcotest.test_case "misuse: lookalike field handles" `Quick
+        test_lookalike_field_handles;
       Alcotest.test_case "misuse: foreign env codec operations" `Quick
         test_foreign_env_codec_operations;
       Alcotest.test_case "misuse: env from wrong codec" `Quick
