@@ -49,8 +49,13 @@ val v :
     Raises [Invalid_argument] if two fields have the same name, or if distinct
     parameter handles referenced by the codec have the same name. *)
 
+val wire_size_opt : 'r t -> int option
+(** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
+
 val wire_size : 'r t -> int
-(** Fixed wire size in bytes. Raises if variable-length. *)
+(** Fixed wire size in bytes.
+
+    Raises [Invalid_argument] if the codec is variable-length. *)
 
 val min_wire_size : 'r t -> int
 (** Minimum wire size in bytes (for variable-length codecs). *)
@@ -77,9 +82,6 @@ val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
 val size_of_value_ctx : 'r t -> Types.eval_ctx -> 'r -> int
 (** Context-threaded {!size_of_value}, for an embedded sub-codec whose parent
     already holds the evaluation context. Internal use. *)
-
-val is_fixed : 'r t -> bool
-(** [is_fixed c] is [true] iff the codec [c] has a fixed wire size. *)
 
 val env : 'r t -> Param.env
 (** [env c] creates a fresh parameter environment for codec [c], with all params
@@ -152,6 +154,21 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     the result, so after any of those raises the bytes from [off] on hold a
     partial record and must be treated as scrap. Only the single-field {!set}
     rolls its write back. *)
+
+val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
+(** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs the
+    same validation pass as {!validate}. In particular, field [~action]s fire,
+    so this one-call whole-record operation cannot return bytes that {!decode}
+    would reject. Action assignments are not written back to [?env].
+
+    Raises [Invalid_argument] under the same conditions as {!encode}, and when a
+    field action rejects the encoded record. Because the buffer is fresh, no
+    partially encoded buffer is returned when either pass raises. *)
+
+val to_string : ?env:Param.env -> 'r t -> 'r -> string
+(** [to_string ?env c r] is the string counterpart of {!to_bytes}. The string is
+    backed by the fresh encoding buffer, which is safe because no mutable alias
+    to that buffer escapes. *)
 
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)

@@ -11,11 +11,7 @@ let render_3d codec =
   to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])
 
 (* Helper: encode record to string using Codec API *)
-let encode_record codec v =
-  let ws = Codec.wire_size codec in
-  let buf = Bytes.create ws in
-  Codec.encode codec v buf 0;
-  Ok (Bytes.unsafe_to_string buf)
+let encode_record codec v = Ok (Codec.to_string codec v)
 
 (* Helper: decode record from string using Codec API *)
 let decode_record codec s =
@@ -3380,9 +3376,7 @@ let test_constant_size_expression_folds () =
       Codec.encode folded "ab" buf 0);
   Codec.encode folded "abcd" buf 0;
   Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
-  (* 2. is_fixed / wire_size *)
-  Alcotest.(check bool) "literal is_fixed" true (Codec.is_fixed lit);
-  Alcotest.(check bool) "constant is_fixed" true (Codec.is_fixed folded);
+  (* 2. wire_size *)
   Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
   Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
   (* 3. the uint_var 1-7 range guard after constant folding *)
@@ -3777,8 +3771,10 @@ let test_action_fires_on_get () =
   | _ -> Alcotest.fail "expected action to reject odd value"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
-let test_action_unfired_by_validate () =
-  (* validate checks constraints + where, but does NOT fire actions. *)
+let test_action_validate_does_not_writeback () =
+  (* validate runs actions in scratch storage but does not expose their output
+     assignments through the caller's env. [test_validate_runs_field_action]
+     separately proves that the action itself runs. *)
   let action_out2 = Param.output "act_out2" uint8 in
   let f_ref2 = Field.v "v" uint8 in
   let cf_v2 =
@@ -3793,9 +3789,8 @@ let test_action_unfired_by_validate () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
   Codec.validate ~env codec buf 0;
-  (* validate does NOT fire actions *)
   Alcotest.(check int)
-    "action not fired by validate" 0
+    "action output not written back by validate" 0
     (UInt8.to_int (Param.get env action_out2))
 
 let test_get_noaction_zero_overhead () =
@@ -5166,18 +5161,16 @@ let test_dep_trailer_roundtrip () =
 
 (* -- wire_size API for variable codecs -- *)
 
-let test_dep_is_fixed () =
-  Alcotest.(check bool)
-    "fixed codec is_fixed" true
-    (Codec.is_fixed simple_record_codec);
-  Alcotest.(check bool)
-    "variable codec is_fixed" false
-    (Codec.is_fixed dep_slice_codec);
-  Alcotest.(check bool)
-    "trailer codec is_fixed" false
-    (Codec.is_fixed trailer_codec)
-
-let test_dep_wire_size_raises () =
+let test_dep_wire_size_metadata () =
+  Alcotest.(check (option int))
+    "fixed codec size" (Some 7)
+    (Codec.wire_size_opt simple_record_codec);
+  Alcotest.(check (option int))
+    "dependent slice is variable" None
+    (Codec.wire_size_opt dep_slice_codec);
+  Alcotest.(check (option int))
+    "trailer is variable" None
+    (Codec.wire_size_opt trailer_codec);
   (* wire_size raises Invalid_argument for variable-size codecs *)
   (match Codec.wire_size dep_slice_codec with
   | _ -> Alcotest.fail "expected Invalid_argument from wire_size"
@@ -5703,8 +5696,7 @@ let test_codec_embed_roundtrip () =
     (UInt8.to_int decoded.trailer)
 
 let test_codec_embed_wire_size () =
-  Alcotest.(check int) "wire_size" 5 (Codec.wire_size outer_codec);
-  Alcotest.(check bool) "is_fixed" true (Codec.is_fixed outer_codec)
+  Alcotest.(check int) "wire_size" 5 (Codec.wire_size outer_codec)
 
 (* Nested codec with bitfields *)
 
@@ -9678,8 +9670,8 @@ let suite =
       Alcotest.test_case "action: fires on decode_env" `Quick
         test_action_fires_decode_env;
       Alcotest.test_case "action: fires on get" `Quick test_action_fires_on_get;
-      Alcotest.test_case "action: not fired by validate" `Quick
-        test_action_unfired_by_validate;
+      Alcotest.test_case "action: validate does not write back" `Quick
+        test_action_validate_does_not_writeback;
       Alcotest.test_case "action: no action zero overhead" `Quick
         test_get_noaction_zero_overhead;
       Alcotest.test_case "action: get with env" `Quick test_get_with_env;
@@ -9824,9 +9816,8 @@ let suite =
       Alcotest.test_case "dep: fixed after variable roundtrip" `Quick
         test_dep_trailer_roundtrip;
       (* wire_size API for variable codecs *)
-      Alcotest.test_case "dep: is_fixed" `Quick test_dep_is_fixed;
-      Alcotest.test_case "dep: wire_size raises" `Quick
-        test_dep_wire_size_raises;
+      Alcotest.test_case "dep: wire_size metadata" `Quick
+        test_dep_wire_size_metadata;
       Alcotest.test_case "dep: min_wire_size" `Quick test_dep_min_wire_size;
       Alcotest.test_case "dep: wire_size_at" `Quick test_dep_compute_wire_size;
       (* Field.ref expressions *)

@@ -24,12 +24,7 @@ type result =
   | Only_ocaml_ok of string
 
 let wire_size (Harness h) = Wire.Codec.wire_size h.codec
-
-let string_of_record codec v =
-  let buf = Bytes.create (Wire.Codec.wire_size codec) in
-  Wire.Codec.encode codec v buf 0;
-  Bytes.unsafe_to_string buf
-
+let string_of_record codec v = Wire.Codec.to_string codec v
 let record_of_string codec s = Wire.Codec.decode_exn codec (Bytes.of_string s) 0
 
 let default_ocaml_read codec project buf =

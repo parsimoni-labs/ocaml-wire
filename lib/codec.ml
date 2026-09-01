@@ -4366,21 +4366,21 @@ let view : type f r.
 
 let v = view
 
+let wire_size_opt (t : _ t) =
+  match t.wire_size with Fixed n -> Some n | Variable _ -> None
+
 let wire_size (t : _ t) =
   match t.wire_size with
   | Fixed n -> n
   | Variable _ ->
       invalid_arg
-        "Codec.wire_size: variable-size codec (use min_wire_size or \
-         compute_wire_size instead)"
+        "Codec.wire_size: variable-size codec (use wire_size_opt or \
+         wire_size_at instead)"
 
 let min_wire_size (t : _ t) =
   match t.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
 let size_of_value_ctx (t : _ t) = t.size_of_value
-
-let is_fixed (t : _ t) =
-  match t.wire_size with Fixed _ -> true | Variable _ -> false
 
 let raw_decode (t : _ t) buf off =
   t.decode no_runtime (Input_end.of_bytes buf) buf off
@@ -4562,6 +4562,21 @@ let validate ?env:e (t : _ t) buf off =
   require_env ~op:"validate" t e;
   let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
   t.validate ?env_slots buf off
+
+let encode_fresh ~op ?env t v =
+  let buf = Bytes.create (size_of_value ?env t v) in
+  encode ?env t v buf 0;
+  (try validate ?env t buf 0
+   with Types.Parse_error e ->
+     Fmt.invalid_arg
+       "Codec.%s %s: the encoded record is rejected by validation (%a)" op
+       t.name Types.pp_parse_error e);
+  buf
+
+let to_bytes ?env t v = encode_fresh ~op:"to_bytes" ?env t v
+
+let to_string ?env t v =
+  Bytes.unsafe_to_string (encode_fresh ~op:"to_string" ?env t v)
 
 (* Build a staged reader from field type and access info.
    For Fixed: use build_field_reader which handles Where/Enum/Map.

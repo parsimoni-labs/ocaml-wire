@@ -20,7 +20,9 @@ the format, then:
 - **Read and write fields in-place** via staged `Codec.get` / `Codec.set` --
   zero-copy, with zero per-call allocation for parameter-free immediate types
   (int, bool)
-- **Decode and encode records** via `Codec.decode` / `Codec.encode`
+- **Decode records** via `Codec.decode`, allocate validated encodings with
+  `Codec.to_bytes` / `Codec.to_string`, or encode into an existing buffer with
+  `Codec.encode`
 - **Export EverParse `.3d` schemas** via `Everparse.project` / `Everparse.write`
 - **Generate verified C artifacts** via `Wire_3d.run`
 - **Generate OCaml FFI stubs** via `Wire_stubs` when OCaml should call the C
@@ -75,11 +77,9 @@ let codec =
 let get_version = Staged.unstage (Codec.get codec bf_version)
 let set_version = Staged.unstage (Codec.set codec bf_version)
 
-let buf = Bytes.create (Codec.wire_size codec)
-let () =
-  Codec.encode codec
+let buf =
+  Codec.to_bytes codec
     { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
-    buf 0
 let v = get_version buf 0        (* read version without allocating a record *)
 let () = set_version buf 0 3     (* mutate version in place *)
 ```

@@ -23,8 +23,7 @@
         (fun version length -> { version; length })
         Codec.[ bf_version; bf_length ]
 
-    let buf = Bytes.create (Codec.wire_size codec)
-    let () = Codec.encode codec { version = 1; length = UInt16.v 42 } buf 0
+    let buf = Codec.to_bytes codec { version = 1; length = UInt16.v 42 }
     let get_version = Staged.unstage (Codec.get codec bf_version)
     let () = assert (get_version buf 0 = 1)
 
@@ -1142,6 +1141,9 @@ module Codec : sig
   val doc : 'r t -> string option
   (** [doc c] is the note attached via {!v}'s [?doc], if any. *)
 
+  val wire_size_opt : 'r t -> int option
+  (** Fixed wire size of the codec, or [None] if it is variable-size. *)
+
   val wire_size : 'r t -> int
   (** Fixed wire size of the codec.
 
@@ -1164,9 +1166,6 @@ module Codec : sig
       {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises
       [Invalid_argument] for a value {!encode} would refuse, such as a casetype
       value no case projects. *)
-
-  val is_fixed : 'r t -> bool
-  (** Returns true iff the codec has a statically known size. *)
 
   val env : 'r t -> Param.env
   (** [env c] creates a fresh parameter environment for codec [c]. *)
@@ -1201,10 +1200,24 @@ module Codec : sig
       is too short, or when a parametric byte field's value length does not
       match its env-bound size. *)
 
+  val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
+  (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
+      the same validation pass as {!validate}. Field [~action]s therefore fire,
+      and a rejecting action raises [Invalid_argument] instead of allowing bytes
+      that {!decode} would reject to escape. Action assignments are not written
+      back to [?env]. Because the buffer is fresh, no partially encoded buffer
+      is returned when either pass raises. *)
+
+  val to_string : ?env:Param.env -> 'r t -> 'r -> string
+  (** String counterpart of {!to_bytes}. The result is backed by the fresh
+      encoding buffer; no mutable alias to that buffer escapes. *)
+
   val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
   (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
-      without constructing a record and without firing actions. [?env] supplies
-      bindings for any {!val:Param.input} referenced in those clauses.
+      without constructing a record. Field [~action]s do fire, so a rejecting
+      action fails validation, but assigned output parameters are not written
+      back to [?env]. [?env] supplies bindings for any {!val:Param.input}
+      referenced in those clauses.
 
       Raises [Invalid_argument] when [?env] belongs to another codec or leaves
       an input parameter unbound, and {!exception-Parse_error} on failure. *)

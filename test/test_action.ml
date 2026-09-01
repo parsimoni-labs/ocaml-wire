@@ -516,6 +516,50 @@ let test_encode_embedded_output_no_env () =
   Codec.encode outer seven buf 0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0)
 
+(* The allocating encoders are the safe whole-record boundary: unlike the
+   buffer-level [encode], they run field actions over the bytes they produced.
+   This is the distinction that lets a caller replace an easy-to-forget
+   [encode; validate] pair with one operation. *)
+let test_allocating_encode_runs_actions () =
+  let codec =
+    let open Codec in
+    v "AllocAction" Fun.id
+      [
+        Field.v "x" ~action:(Action.on_success [ Action.abort ]) uint8 $ Fun.id;
+      ]
+  in
+  let value = UInt8.v 7 in
+  let buf = Bytes.create 1 in
+  Codec.encode codec value buf 0;
+  Alcotest.(check int)
+    "buffer encode remains action-free" 7 (Bytes.get_uint8 buf 0);
+  let rejects name f =
+    match f () with
+    | _ -> Alcotest.failf "%s: expected Invalid_argument" name
+    | exception Invalid_argument _ -> ()
+    | exception exn ->
+        Alcotest.failf "%s: expected Invalid_argument, got %s" name
+          (Printexc.to_string exn)
+  in
+  rejects "Codec.to_bytes" (fun () -> Codec.to_bytes codec value);
+  rejects "Codec.to_string" (fun () -> Codec.to_string codec value)
+
+let test_allocating_encode_returns_fresh_storage () =
+  let codec =
+    Codec.v "AllocBytes" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ]
+  in
+  let value = UInt8.v 0x42 in
+  let bytes = Codec.to_bytes codec value in
+  let other_bytes = Codec.to_bytes codec value in
+  let string = Codec.to_string codec value in
+  Alcotest.(check string) "bytes" "\x42" (Bytes.to_string bytes);
+  Alcotest.(check string) "other bytes" "\x42" (Bytes.to_string other_bytes);
+  Alcotest.(check string) "string" "\x42" string;
+  Bytes.set_uint8 bytes 0 0x24;
+  Alcotest.(check string)
+    "allocations do not alias" "\x42"
+    (Bytes.to_string other_bytes)
+
 (* -- Suite -- *)
 
 let suite =
@@ -558,4 +602,8 @@ let suite =
         test_encode_output_no_env;
       Alcotest.test_case "encode embedded output param without env" `Quick
         test_encode_embedded_output_no_env;
+      Alcotest.test_case "allocating encode runs actions" `Quick
+        test_allocating_encode_runs_actions;
+      Alcotest.test_case "allocating encode returns fresh storage" `Quick
+        test_allocating_encode_returns_fresh_storage;
     ] )
