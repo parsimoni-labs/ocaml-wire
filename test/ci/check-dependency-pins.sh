@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo=${1:-$(git rev-parse --show-toplevel)}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+find_repo() {
+  local dir=$script_dir
+  while [[ "$dir" != / ]]; do
+    if [[ -f "$dir/.github/workflows/ci.yml" ]]; then
+      printf '%s\n' "$dir"
+      return
+    fi
+    dir=$(dirname -- "$dir")
+  done
+  echo "dependency-pin policy: unable to locate the repository root" >&2
+  return 1
+}
+
+repo=${1:-$(find_repo)}
 workflow=$repo/.github/workflows/ci.yml
 manifest=$repo/.github/ci-dependencies.env
 installer=$repo/.github/scripts/install-archive
