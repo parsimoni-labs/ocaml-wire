@@ -79,6 +79,10 @@
   a nested codec, named by its path (`ipv4_tcp_src_port`). Member indices
   shift: rebuild custom plugs (#446, @samoht)
 
+- **Breaking:** an integer under `map`, `where`, `enum` or an optional that is
+  always present has its own C type, not `uint32_t`, so a wrapped `uint64`
+  keeps its high bits. Rebuild C plugs (#474, @frejsoya)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
