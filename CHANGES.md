@@ -87,6 +87,11 @@
   of optional fields, nested ones included. The code changes only for outputs
   under more than four optional fields nested inside each other (#473, @samoht)
 
+- **Breaking:** an integer under `map`, `where`, `enum` or an optional that is
+  always present has its own C type, not `uint32_t`, as a plug member and as
+  a parameter, so a wrapped `uint64` keeps its high bits. Rebuild C plugs
+  (#412, #474, @frejsoya)
+
 ### Fixed
 
 - The 3D projection of a codec holding an array of `lookup` indices in a
