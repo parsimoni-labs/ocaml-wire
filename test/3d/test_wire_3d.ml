@@ -986,6 +986,32 @@ let test_doc_differential_trailing_bytes () =
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
 
+(* A parameter under [Wire.map]. The agree harness casts each corpus parameter
+   to the C type wire reports for it, so a type narrower than the integer drops
+   the high bits before the validator sees them. Two lines either side of
+   2^32: the bound is met only if all 64 bits arrive. *)
+let diff_wrapped_param_codec =
+  let open Wire in
+  let limit =
+    Param.input "limit" (map ~decode:Fun.id ~encode:Fun.id uint64be)
+  in
+  let f_v = Field.v "v" uint64be in
+  Codec.v "Limited"
+    ~where:Expr.(Field.ref f_v <= Param.expr limit)
+    (fun v -> v)
+    [ Codec.( $ ) f_v (fun v -> v) ]
+
+let test_doc_differential_wrapped_param () =
+  needs_3d_exe ();
+  differential_ok ~name:"limitspec" ~package:"limit-doc"
+    ~corpus:
+      (`Lines
+         [
+           "Limited 4294967296 0000000000000005 1";
+           "Limited 4 0000000000000005 0";
+         ])
+    [ Wire_3d.pack diff_wrapped_param_codec ]
+
 (* EverParse renamed the wrapper's status local between releases ([result] up
    to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
    name whichever one the wrapper actually binds; naming a fixed one emitted C
@@ -2041,6 +2067,8 @@ let suite =
         test_doc_differential_caps_name;
       Alcotest.test_case "doc differential trailing bytes (needs 3d.exe)" `Quick
         test_doc_differential_trailing_bytes;
+      Alcotest.test_case "doc differential wrapped param (needs 3d.exe)" `Quick
+        test_doc_differential_wrapped_param;
       Alcotest.test_case "extern names across a wrapped declaration" `Quick
         test_extern_names_wrapped;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;

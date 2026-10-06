@@ -1,3 +1,14 @@
+## unreleased
+
+### Fixed
+
+- Fix the C type of an integer under `Wire.map`, `Wire.where`, `Wire.enum` or
+  `Wire.Field.optional`. As a member of the generated `<Name>Fields` struct
+  and as a parameter it was `uint32_t` whatever the integer's width, so a
+  `Wire.uint64` was truncated. It now has the integer's own type. The struct
+  layout changes for such a schema: rebuild C compiled against the old header
+  (@frejsoya)
+
 ## 1.3.0
 
 ### Added
