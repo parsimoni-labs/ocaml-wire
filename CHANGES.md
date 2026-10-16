@@ -1,3 +1,17 @@
+## unreleased
+
+### Changed
+
+- `Wire.Codec.v` checks the description and compiles nothing: the layout,
+  readers, writers and validators are compiled by the first operation on the
+  codec, once, from whichever domain gets there first. A program that builds
+  its codecs at module initialisation no longer pays for the ones it never
+  uses; building a 14-field IPv4 header allocated 4,294 words and now
+  allocates 522. A field ref in a constraint, an action or `~where` that names
+  no visible field still raises at `v`; a size expression with such a ref, a
+  bitfield after a variable-size field, or a field type with no reader now
+  raises `Invalid_argument` at the first use (#413, @samoht)
+
 ## 1.3.0
 
 ### Added

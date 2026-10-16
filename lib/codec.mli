@@ -49,8 +49,23 @@ val v :
     renders as a [/*++ ... --*/] comment on the codec's 3D typedef; see
     {!Everparse.project}.
 
-    Raises [Invalid_argument] if two fields have the same name, or if distinct
-    parameter handles referenced by the codec have the same name. *)
+    [v] checks the description and compiles nothing. The layout, readers,
+    writers and validators are compiled by the first operation that needs them,
+    on whichever domain calls it first: every function of this module that takes
+    a codec except {!name}, {!rename}, {!doc}, {!pp}, {!to_struct} and {!env}.
+    Embedding a codec with {!Wire.codec} compiles it.
+
+    Raises [Invalid_argument] if two fields have the same name, if distinct
+    parameter handles referenced by the codec have the same name, if the field
+    list has a shape EverParse 3D cannot validate (such as a field that consumes
+    the rest of the buffer followed by more fields), or if a field constraint, a
+    field action or [?where] refers to a field it cannot see: a constraint or an
+    action sees the fields before it and its own, and [?where] sees them all.
+
+    The first operation on the codec raises [Invalid_argument] for what only the
+    compile finds, and raises it again on every later call: a size expression
+    that refers to a field it cannot see, a bitfield after a variable-size
+    field, or a field type the codec has no reader or writer for. *)
 
 val wire_size_opt : 'r t -> int option
 (** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
