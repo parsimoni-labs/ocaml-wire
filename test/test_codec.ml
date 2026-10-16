@@ -582,8 +582,9 @@ let test_fresh_domain_validate_flat_in_validator_count () =
       (fun x -> x)
       Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
   in
+  (* [wire_size_opt] forces the compile, which builds the validator. *)
   for i = 1 to 10_000 do
-    ignore (Sys.opaque_identity (Fmt.kstr mk "S%d" i))
+    ignore (Sys.opaque_identity (Codec.wire_size_opt (Fmt.kstr mk "S%d" i)))
   done;
   let c = mk "Last" in
   let buf = Bytes.make 8 '\007' in
@@ -599,6 +600,116 @@ let test_fresh_domain_validate_flat_in_validator_count () =
     "a fresh domain's first validate does not track the validator count (got \
      %.0f words)"
     words
+
+(* [Codec.v] checks the description and compiles nothing: the readers, writers,
+   layout and validators are built by the first operation that needs them. A
+   program builds most of its codecs at module initialisation, so an eager
+   compile charges every codec it links, used or not, before [main] runs. The
+   first decode here pays for the compile, so it has to cost more than [v]. *)
+module Deferred = struct
+  type t = {
+    version : int;
+    kind : int;
+    flags : int;
+    len : UInt8.t;
+    seq : UInt16.t;
+    body : string;
+  }
+
+  let codec () =
+    let f_len = Field.v "len" uint8 in
+    Codec.v "Deferred"
+      ~where:Expr.(Field.ref f_len <= int 64)
+      (fun version kind flags len seq body ->
+        { version; kind; flags; len; seq; body })
+      Codec.
+        [
+          (Field.v "version" (bits ~width:3 U8) $ fun r -> r.version);
+          (Field.v "kind" (bits ~width:1 U8) $ fun r -> r.kind);
+          (Field.v "flags" (bits ~width:4 U8) $ fun r -> r.flags);
+          (f_len $ fun r -> r.len);
+          ( Field.v "seq" ~constraint_:Expr.(Field.ref f_len >= int 1) uint16be
+          $ fun r -> r.seq );
+          (Field.v "body" (byte_array ~size:(Field.ref f_len)) $ fun r -> r.body);
+        ]
+end
+
+let test_v_defers_compilation () =
+  skip_unless_gc_counters ();
+  let words f =
+    let before = Gc.minor_words () in
+    let r = Sys.opaque_identity (f ()) in
+    (r, Gc.minor_words () -. before)
+  in
+  let c, built = words Deferred.codec in
+  let buf = Bytes.of_string "\x21\003\000\007abc" in
+  let decoded, first = words (fun () -> Codec.decode c buf 0) in
+  (match decoded with
+  | Ok r -> Alcotest.(check string) "body" "abc" r.Deferred.body
+  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e);
+  Fmt.kstr
+    (fun msg -> Alcotest.(check bool) msg true (built < first))
+    "Codec.v allocates less than the first decode, which compiles (v: %.0f \
+     words, first decode: %.0f)"
+    built first
+
+(* The compile runs once per codec value, whichever domain asks first. Two
+   domains racing on a codec nobody has used yet both get a working codec. *)
+let test_first_use_races_across_domains () =
+  let c = Deferred.codec () in
+  let buf = Bytes.of_string "\x21\003\000\007abc" in
+  let decode () =
+    match Codec.decode c buf 0 with
+    | Ok r -> r.Deferred.body
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let ds = List.init 4 (fun _ -> Domain.spawn decode) in
+  List.iter (fun d -> Alcotest.(check string) "body" "abc" (Domain.join d)) ds
+
+(* What [v] checks of the description stays where the codec is built: the
+   shape, and every field ref a constraint, an action or the [where] clause
+   makes. *)
+let test_v_rejects_bad_description_eagerly () =
+  let f_later = Field.v "later" uint8 in
+  let f_missing = Field.v "missing" uint8 in
+  let expect (what, build) =
+    match build () with
+    | (_ : (UInt8.t * UInt8.t) Codec.t) ->
+        Alcotest.failf "Codec.v accepted %s" what
+    | exception Invalid_argument _ -> ()
+  in
+  List.iter expect
+    [
+      ( "two fields named x",
+        fun () ->
+          Codec.v "Dup"
+            (fun a b -> (a, b))
+            Codec.[ Field.v "x" uint8 $ fst; Field.v "x" uint8 $ snd ] );
+      ( "a constraint on a field declared after it",
+        fun () ->
+          Codec.v "Forward"
+            (fun a b -> (a, b))
+            Codec.
+              [
+                Field.v "a" ~constraint_:Expr.(Field.ref f_later > int 0) uint8
+                $ fst;
+                f_later $ snd;
+              ] );
+      ( "an action reading a field the codec does not have",
+        fun () ->
+          Codec.v "ActionRef"
+            (fun a b -> (a, b))
+            Codec.
+              [
+                Field.v "a"
+                  ~action:
+                    (Action.on_success
+                       [ Action.return_bool Expr.(Field.ref f_missing = int 0) ])
+                  uint8
+                $ fst;
+                Field.v "b" uint8 $ snd;
+              ] );
+    ]
 
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
@@ -9638,6 +9749,12 @@ let suite =
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;
+      Alcotest.test_case "v: compiles on first use, not when built" `Quick
+        test_v_defers_compilation;
+      Alcotest.test_case "v: first use racing across domains compiles once"
+        `Quick test_first_use_races_across_domains;
+      Alcotest.test_case "v: a bad description still fails where it is built"
+        `Quick test_v_rejects_bad_description_eagerly;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
       Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
