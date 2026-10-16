@@ -1169,6 +1169,16 @@ module Codec : sig
       refinement on the last field it mentions, the earliest point at which 3D
       can evaluate it.
 
+      [v] checks the description and compiles nothing; the first operation that
+      needs the layout (encoding, decoding, validating, sizing, staging an
+      accessor, embedding with {!codec}) compiles it, once, from any domain.
+      Raises [Invalid_argument] on a repeated field or parameter name, on a
+      field list EverParse 3D cannot validate, and on a constraint, action or
+      [?where] that refers to a field it cannot see. What only the compile finds
+      (a size expression referring to a field it cannot see, a bitfield after a
+      variable-size field, a field type with no reader or writer) raises
+      [Invalid_argument] at the first use instead.
+
       {[
       let codec =
         Codec.v "Packet"

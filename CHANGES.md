@@ -1,3 +1,14 @@
+## unreleased
+
+### Changed
+
+- `Wire.Codec.v` no longer compiles the codec. The first operation that needs
+  it compiles it, once, so a program that builds its codecs at start-up no
+  longer pays for the ones it never uses. Mistakes in the description still
+  raise at `v`. A size expression naming a field it cannot see, a bitfield
+  after a variable-size field, or a field type with no reader now raises
+  `Invalid_argument` at first use instead (#413, @samoht)
+
 ## 1.3.0
 
 ### Added
