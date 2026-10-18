@@ -19,6 +19,8 @@ make clean              # dune clean
 
 `make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
 All bench/prof/memtrace targets use `--profile=release`.
+The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
+(`make test-wasm`) are in [docs/projection.md](docs/projection.md#narrow-int-targets).
 
 ## Project structure
 
@@ -50,6 +52,57 @@ projection is **not shipped**. The OCaml side and the 3D side are part
 of the same release-shaped unit; partial work goes in a branch but
 does not merge until both halves land.
 
+A shape that cannot project is rejected when it is built, never
+half-supported in OCaml: the combinator raises `Invalid_argument` with a
+message naming the shape and the reason, and every rejection has a unit
+test asserting it. The reject predicate mirrors the handler's supported
+set (`Field.is_repeat_case_body` mirrors `Codec.read_elem`). Before
+extending an element handler to a new shape, check that the shape
+projects in that position (as a repeat element, not only standalone).
+
+The EverParse limits that decide what projects, and so what must be
+rejected, are listed in [docs/projection.md](docs/projection.md#the-3d-ceiling).
+
+### Tagged unions
+
+`variants` and `casetype` stay separate. `variants` maps a discriminator
+to a named OCaml value, numbered by list position; `casetype` selects a
+different body layout per tag, with explicit indices because protocol
+tags are assigned and sparse (DHCP option 53, TCP option kind 8). A
+single combinator would make one of the two verbose or wrong.
+
+## Security posture
+
+`wire` parses adversarial input. No code path assumes input is
+well-behaved: a data-dependent failure returns `Error`, never
+`invalid_arg`, and no value that feeds constraint evaluation is silently
+truncated. A confirmed buffer corruption, out-of-bounds access or silent
+wrong answer is fixed when found; an API design fork may need a choice,
+but every option on the table fixes the defect.
+
+## Scalar type names
+
+A numbered scalar type name states the field's width on the wire, never
+the OCaml carrier: `uint8`, `uint16`, `uint32`, `uint64` are 1, 2, 4 and
+8 bytes. `uint ~size:n` is n bytes (1 to 7) and `bits ~width:n` is n
+bits. Widths without a power-of-two size have no alias and go through
+`uint ~size`; a new name is added only for a width a real protocol
+needs, and never by renaming an existing type. A carrier narrower than
+its field is a carrier defect, fixed by changing the carrier.
+
+## Tests and commits
+
+- Cram tests never pin compiler diagnostic text, whose quoting differs
+  between OCaml patch releases (opam-repo-ci uses an older image than
+  this repo's CI). Grep the stable part and normalise:
+  `... 2>&1 | grep 'Unbound value' | tr -d '"'`.
+- The pre-commit hook checks the working-tree copy of each staged
+  `.ml`/`.mli`, not the staged content, so a file with unstaged edits is
+  judged on those edits: split two changes to one file by sequencing the
+  working tree, not with `git apply --cached`. It merlints every touched
+  file in full, so pre-existing issues in a touched file are fixed in
+  the same branch.
+
 ## Code generation pipeline
 
 All C code generation flows through `Wire.Everparse` (no duplication):
@@ -57,6 +110,9 @@ All C code generation flows through `Wire.Everparse` (no duplication):
 2. `Everparse.write_3d ~outdir [ schema ]` -- write `.3d` files
 3. `Wire_3d.run ~outdir [ schema ]` -- invoke EverParse to produce C parsers
 4. `Wire_stubs.generate ~schema_dir ~outdir [ C codec ]` -- generate OCaml FFI bindings
+
+How the standalone C archive builds in every dune context, and how many
+codecs share one library, is in [docs/projection.md](docs/projection.md#generated-c).
 
 ## Benchmarking principles
 
