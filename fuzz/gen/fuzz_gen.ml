@@ -3499,14 +3499,53 @@ let validate_one ?env g bs =
         Alcobar.failf "parse error field path has an empty segment";
       `Reject
 
+(* What one validation of [bs] at [off] did, for comparing two of them. *)
+type outcome = Passed | Rejected_with of Wire.parse_error | Misuse
+
+let outcome f =
+  match f () with
+  | () -> Passed
+  | exception Wire.Parse_error e -> Rejected_with e
+  | exception Invalid_argument _ -> Misuse
+
+let verdict = function
+  | Passed -> `Pass
+  | Rejected_with _ -> `Reject
+  | Misuse -> `Misuse
+
+let pp_outcome ppf = function
+  | Passed -> Fmt.string ppf "passed"
+  | Rejected_with e -> Fmt.pf ppf "rejected (%a)" Wire.pp_parse_error e
+  | Misuse -> Fmt.string ppf "Invalid_argument"
+
+(* On the same bytes, [Codec.validate] must accept exactly what
+   [Codec.decode_exn] accepts. The bytes are tried at offset 0 and behind a
+   prefix, to catch a check that reads at the wrong offset. *)
+let check_validate_agrees label kind ?env g bs =
+  let at buf off =
+    let decoded =
+      outcome (fun () -> ignore (Wire.Codec.decode_exn ?env g.codec buf off))
+    in
+    let validated =
+      outcome (fun () -> Wire.Codec.validate ?env g.codec buf off)
+    in
+    if verdict decoded <> verdict validated then
+      Alcobar.failf "%s %s at %d: decode %a but validate %a" label kind off
+        pp_outcome decoded pp_outcome validated
+  in
+  at bs 0;
+  at (Bytes.cat (Bytes.make 3 '\xa5') bs) 3
+
 let check_validate_positive label g bs =
   let env = positive_env g in
+  check_validate_agrees label "positive" ?env g bs;
   match validate_one ?env g bs with
   | `Ok -> ()
   | `Reject -> Alcobar.failf "%s validate rejected a positive" label
   | `Crash -> Alcobar.failf "%s validate crashed on a positive" label
 
 let check_validate_safety label kind ?env g bs =
+  check_validate_agrees label kind ?env g bs;
   match validate_one ?env g bs with
   | `Ok | `Reject -> ()
   | `Crash -> Alcobar.failf "%s validate %s crashed" label kind
