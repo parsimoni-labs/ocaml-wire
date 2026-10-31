@@ -3934,10 +3934,22 @@ let fill_param_slots tbl param_base handles =
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
    before a zero-copy [get] reads its fields. *)
-let check_decode_bounds wire_size_info min_size runtime input_end buf off =
+let check_min_bounds min_size buf off =
   if off + min_size > Bytes.length buf then
     raise_eof ~at:off ~expected:min_size
+      ~got:(bytes_from (Input_end.of_bytes buf) off)
+
+(* The record ending at [end_off] holds [min_size] bytes and fits the buffer. *)
+let check_end_bounds min_size buf off end_off =
+  if end_off < off + min_size then
+    raise_eof ~at:off ~expected:min_size
       ~got:(bytes_from (Input_end.of_bytes buf) off);
+  if end_off > Bytes.length buf then
+    raise_eof ~at:off ~expected:(end_off - off)
+      ~got:(bytes_from (Input_end.of_bytes buf) off)
+
+let check_decode_bounds wire_size_info min_size runtime input_end buf off =
+  check_min_bounds min_size buf off;
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -3945,13 +3957,7 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
          reads bound-check themselves ([expr_reader]), so a buffer too short to
          hold them already surfaces as end-of-input here; anything else they
          raise is a real error and propagates. *)
-      let end_off = compute runtime input_end buf off in
-      if end_off < off + min_size then
-        raise_eof ~at:off ~expected:min_size
-          ~got:(bytes_from (Input_end.of_bytes buf) off);
-      if end_off > Bytes.length buf then
-        raise_eof ~at:off ~expected:(end_off - off)
-          ~got:(bytes_from (Input_end.of_bytes buf) off)
+      check_end_bounds min_size buf off (compute runtime input_end buf off)
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
@@ -4713,6 +4719,521 @@ let validate ?env:e (t : _ t) buf off =
   require_env ~op:"validate" t e;
   let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
   (compiled t).validate ?env_slots buf off
+
+(* -- Staged validator --
+
+   [validate] reaches each field through the kernel's closures: a reader, a
+   populate, a guard and an expression tree per check, each its own indirect
+   call, and a scratch cleared on entry. [validator] compiles the common shape
+   instead: scalars at static offsets, plain byte spans, and checks over those
+   scalars, with no parameters and no actions. Each field becomes one step that
+   reads its bytes, stores its slot and runs its checks, and a comparison
+   between a field and a literal or another field is a single closure. Every
+   other codec is staged onto [validate]'s own pass.
+
+   A step raises what the kernel raises for that field, at the same offset and
+   with the same field path; the two are held together by test and fuzz. The
+   kernel runs a [map]'s [decode] once per wrapper level and the step runs it
+   once, which only a [decode] with side effects can tell apart. *)
+
+type plan_operand = Slot of int | Const of int
+
+let plan_operand : type a. (string -> int) -> a expr -> plan_operand option =
+ fun idx -> function
+  | Int n -> Some (Const n)
+  | Ref (I, name) -> Some (Slot (idx name))
+  | _ -> None
+
+(* Whether [e] reads only literals, constant sizes and the scalar fields
+   [known] names: the leaves a plan's int slots can answer. *)
+let rec plan_expr_ok : type a. (string -> bool) -> a expr -> bool =
+ fun known e ->
+  let ok e = plan_expr_ok known e in
+  match e with
+  | Int _ | Int64 _ | Bool _ | Sizeof _ -> true
+  | Ref (I, name) -> known name
+  | Ref (I64, _) | Param_ref _ | Sizeof_this | Field_pos -> false
+  | Add (a, b) | Sub (a, b) | Mul (a, b) | Div (a, b) | Mod (a, b) ->
+      ok a && ok b
+  | Land (a, b) | Lor (a, b) | Lxor (a, b) | Lsl (a, b) | Lsr (a, b) ->
+      ok a && ok b
+  | Lnot a | Cast (_, a) -> ok a
+  | Land64 (a, b) -> ok a && ok b
+  | Lsr64 (a, b) -> ok a && ok b
+  | Eq (a, b) -> ok a && ok b
+  | Ne (a, b) -> ok a && ok b
+  | Lt (a, b) -> ok a && ok b
+  | Le (a, b) -> ok a && ok b
+  | Gt (a, b) -> ok a && ok b
+  | Ge (a, b) -> ok a && ok b
+  | And (a, b) | Or (a, b) -> ok a && ok b
+  | Not a -> ok a
+  | If_then_else (c, a, b) -> ok c && ok a && ok b
+
+let plan_leaves idx : (int array, unit, unit, unit) Expr_compiler.leaves =
+  let unplanned what = Fmt.invalid_arg "Codec.validator: %s in a plan" what in
+  {
+    ref_ =
+      (fun name ->
+        let i = idx name in
+        fun a () () () -> a.(i));
+    i64 = (fun _ -> unplanned "an int64 ref");
+    param_ref = (fun _ -> unplanned "a parameter");
+    sizeof_typ =
+      (fun (Pack_typ t) ->
+        let n = field_wire_size t |> Option.value ~default:0 in
+        fun _ () () () -> n);
+    sizeof_this = (fun _ -> unplanned "sizeof_this");
+    field_pos = (fun _ -> unplanned "field_pos");
+  }
+
+let flip = function
+  | `Lt -> `Gt
+  | `Le -> `Ge
+  | `Gt -> `Lt
+  | `Ge -> `Le
+  | (`Eq | `Ne) as c -> c
+
+let cmp_slot_const cmp i n : int array -> bool =
+  match cmp with
+  | `Eq -> fun a -> a.(i) = n
+  | `Ne -> fun a -> a.(i) <> n
+  | `Lt -> fun a -> a.(i) < n
+  | `Le -> fun a -> a.(i) <= n
+  | `Gt -> fun a -> a.(i) > n
+  | `Ge -> fun a -> a.(i) >= n
+
+let cmp_slot_slot cmp i j : int array -> bool =
+  match cmp with
+  | `Eq -> fun a -> a.(i) = a.(j)
+  | `Ne -> fun a -> a.(i) <> a.(j)
+  | `Lt -> fun a -> a.(i) < a.(j)
+  | `Le -> fun a -> a.(i) <= a.(j)
+  | `Gt -> fun a -> a.(i) > a.(j)
+  | `Ge -> fun a -> a.(i) >= a.(j)
+
+(* [e] over the plan's slots. A comparison of two int leaves is one closure;
+   anything else goes through [Expr_compiler], which gives the kernel's
+   semantics by construction. *)
+let rec plan_cond idx (e : bool expr) : int array -> bool =
+  let compiled () =
+    let f = Expr_compiler.compile_bool (plan_leaves idx) e in
+    fun a -> f a () () ()
+  in
+  let cmp op x y =
+    match (plan_operand idx x, plan_operand idx y) with
+    | Some (Slot i), Some (Const n) -> cmp_slot_const op i n
+    | Some (Const n), Some (Slot i) -> cmp_slot_const (flip op) i n
+    | Some (Slot i), Some (Slot j) -> cmp_slot_slot op i j
+    | _ -> compiled ()
+  in
+  match e with
+  | Bool b -> fun _ -> b
+  | And (x, y) ->
+      let fx = plan_cond idx x and fy = plan_cond idx y in
+      fun a -> fx a && fy a
+  | Or (x, y) ->
+      let fx = plan_cond idx x and fy = plan_cond idx y in
+      fun a -> fx a || fy a
+  | Not x ->
+      let fx = plan_cond idx x in
+      fun a -> not (fx a)
+  | Eq (x, y) -> cmp `Eq x y
+  | Ne (x, y) -> cmp `Ne x y
+  | Lt (x, y) -> cmp `Lt x y
+  | Le (x, y) -> cmp `Le x y
+  | Gt (x, y) -> cmp `Gt x y
+  | Ge (x, y) -> cmp `Ge x y
+  | Ref _ -> .
+
+(* The int a scalar's slot holds, read straight from the bytes: what
+   [build_populate] stores for the scalar under any [where], [enum] and [map]
+   wrappers. [None] for a field the plan does not cover. *)
+let rec plan_int_reader : type a.
+    a typ -> field_access -> (bytes -> int -> int) option =
+ fun typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      Some (build_bf_reader base byte_off shift width)
+  | Uint8, Fixed off ->
+      Some (fun buf b -> UInt8.to_int (UInt8.get buf (b + off)))
+  | Uint16 Big, Fixed off ->
+      Some (fun buf b -> UInt16.to_int (UInt16.be buf (b + off)))
+  | Uint16 Little, Fixed off ->
+      Some (fun buf b -> UInt16.to_int (UInt16.le buf (b + off)))
+  | Int8, Fixed off ->
+      Some (fun buf b -> SInt8.to_int (SInt8.get buf (b + off)))
+  | Int16 Big, Fixed off ->
+      Some (fun buf b -> SInt16.to_int (SInt16.be buf (b + off)))
+  | Int16 Little, Fixed off ->
+      Some (fun buf b -> SInt16.to_int (SInt16.le buf (b + off)))
+  | Uint32 Big, Fixed off when Sys.int_size > 32 ->
+      Some (fun buf b -> UInt32.to_int (UInt32.be buf (b + off)))
+  | Uint32 Little, Fixed off when Sys.int_size > 32 ->
+      Some (fun buf b -> UInt32.to_int (UInt32.le buf (b + off)))
+  | Int32 Big, Fixed off when Sys.int_size > 32 ->
+      Some (fun buf b -> SInt32.to_int (SInt32.be buf (b + off)))
+  | Int32 Little, Fixed off when Sys.int_size > 32 ->
+      Some (fun buf b -> SInt32.to_int (SInt32.le buf (b + off)))
+  | Where { inner; _ }, _ -> plan_int_reader inner access
+  | Enum { base; _ }, _ -> (
+      match base with
+      | Where _ | Enum _ | Map _ -> None
+      | _ -> plan_int_reader base access)
+  | Map { inner; _ }, _ -> plan_int_reader inner access
+  | _ -> None
+
+(* The typed value the kernel's field reader builds, with the same [enum]
+   checks and [map] decodes at the same offset [b + voff]. Only run for its
+   checks. *)
+let rec plan_typed_reader : type a.
+    a typ -> field_access -> voff:int -> (bytes -> int -> a) option =
+ fun typ access ~voff ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      Some (build_bf_reader base byte_off shift width)
+  | Bits _, _ -> None
+  | Where { inner; _ }, _ -> plan_typed_reader inner access ~voff
+  | Enum { base; cases; closed; _ }, _ ->
+      Option.map
+        (fun read ->
+          let check =
+            enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
+          in
+          fun buf b -> check ~at:(b + voff) (read buf b))
+        (plan_typed_reader base access ~voff)
+  | Map { inner; decode; index_bound; _ }, _ ->
+      Option.map
+        (fun read ->
+          let decode = Types.map_decode ~index_bound decode in
+          fun buf b -> decode ~at:(b + voff) (read buf b))
+        (plan_typed_reader inner access ~voff)
+  | _, Fixed off -> build_immediate_reader typ off
+  | _ -> None
+
+let rec has_map : type a. a typ -> bool = function
+  | Map _ -> true
+  | Where { inner; _ } -> has_map inner
+  | Enum { base; _ } -> has_map base
+  | _ -> false
+
+let rec closed_enum_cases : type a. a typ -> (string * int) list option =
+  function
+  | Enum { cases; closed = true; _ } -> Some cases
+  | Where { inner; _ } -> closed_enum_cases inner
+  | _ -> None
+
+(* The type-level checks of a scalar step, given its slot value [v]: a closed
+   enum's membership on the int itself, or, under a [map], the typed reader
+   whose [decode] the kernel runs for its refusals. *)
+let plan_type_check : type a.
+    a typ -> field_access -> voff:int -> (bytes -> int -> int -> unit) option =
+ fun typ access ~voff ->
+  if has_map typ then
+    Option.map
+      (fun read buf b _ -> ignore (read buf b))
+      (plan_typed_reader typ access ~voff)
+  else
+    Option.map
+      (fun cases _ b v -> Types.check_enum_decode ~at:(b + voff) ~cases v)
+      (closed_enum_cases typ)
+
+type plan_step = int array -> bytes -> int -> unit
+
+let with_field_path name (step : plan_step) : plan_step =
+ fun a buf b ->
+  try step a buf b
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+(* The checks of a scalar whose value the read pass already stored in [slot]. *)
+let scalar_step ~slot ~voff ~type_check ~cond : plan_step option =
+  let raise_field ~at v =
+    raise_constraint ~at ~which:Field ~value:(Int64.of_int v) ()
+  in
+  match (type_check, cond) with
+  | None, None -> None
+  | Some tc, None -> Some (fun a buf b -> tc buf b a.(slot))
+  | None, Some f ->
+      Some
+        (fun a _ b ->
+          let at = b + voff in
+          if not (eval_arr_at ~at f a) then raise_field ~at a.(slot))
+  | Some tc, Some f ->
+      Some
+        (fun a buf b ->
+          let v = a.(slot) in
+          tc buf b v;
+          let at = b + voff in
+          if not (eval_arr_at ~at f a) then raise_field ~at v)
+
+(* A size expression over the slots. Like [eval_buffer_expr], an arithmetic
+   failure is reported at the record's base. *)
+let plan_size idx (e : int expr) : int array -> int -> int =
+  let f = Expr_compiler.compile_int (plan_leaves idx) e in
+  fun a base ->
+    try f a () () ()
+    with
+    | Parse_error ({ kind = Value_out_of_range _ | Zero_divisor; _ } as err) ->
+      raise (Parse_error { err with at = base })
+
+let span_size_expr : type a. a typ -> int expr option = function
+  | Byte_array { size } | Byte_slice { size } -> Some size
+  | _ -> None
+
+type plan = {
+  reads : (int * (bytes -> int -> int)) array;
+      (* Each scalar's slot and reader, run before anything is checked: the
+         sizes the bounds check needs read them, as [compute] does. *)
+  layout : plan_step array;
+      (* From the first variable-size field on: each span's start and size in
+         its two slots, the running end in [cursor]. *)
+  cursor : int option;
+  checks : plan_step array;
+  where : (int array -> bool) option;
+  n_slots : int;
+}
+
+exception Unplanned
+
+(* A plan being built: the slots allocated so far, by field name for the
+   scalars, and the passes in reverse. *)
+type builder = {
+  scalars : (string, int) Hashtbl.t;
+  needed : (int, unit) Hashtbl.t;
+      (* The slots a check or a size reads; only those are read. *)
+  mutable n_slots : int;
+  mutable reads : (int * (bytes -> int -> int)) list;
+  mutable layout : plan_step list;
+  mutable checks : plan_step list;
+  mutable cursor : int option;
+}
+
+let alloc b =
+  let i = b.n_slots in
+  b.n_slots <- i + 1;
+  i
+
+let slot_of b name =
+  let i = Hashtbl.find b.scalars name in
+  Hashtbl.replace b.needed i ();
+  i
+
+let expr_ok b e =
+  if not (plan_expr_ok (Hashtbl.mem b.scalars) e) then raise Unplanned
+
+let cond_of b (conds : bool expr list) =
+  match conds with
+  | [] -> None
+  | first :: rest ->
+      let c = List.fold_left (fun a c -> And (a, c)) first rest in
+      expr_ok b c;
+      Some (plan_cond (slot_of b) c)
+
+let cursor_slot b =
+  match b.cursor with
+  | Some c -> c
+  | None ->
+      let c = alloc b in
+      b.cursor <- Some c;
+      c
+
+(* A span whose start and size the layout pass computes; its check is the
+   bound check its populate makes. *)
+let variable_span b ~first size =
+  let cur = cursor_slot b in
+  let fs = alloc b and ss = alloc b in
+  b.layout <-
+    List.cons
+      (fun a buf base ->
+        let rel = first a in
+        let sz = size a buf base rel in
+        a.(fs) <- base + rel;
+        a.(ss) <- sz;
+        a.(cur) <- rel + sz)
+      b.layout;
+  b.checks <-
+    List.cons
+      (fun a buf _ -> check_span_bounds buf ~first:a.(fs) ~sz:a.(ss))
+      b.checks
+
+let span_size : type a.
+    builder -> a typ -> int array -> bytes -> int -> int -> int =
+ fun b typ ->
+  match (typ, span_size_expr typ) with
+  | All_bytes, _ -> fun _ buf base rel -> Bytes.length buf - (base + rel)
+  | _, Some e ->
+      expr_ok b e;
+      let f = plan_size (slot_of b) e in
+      fun a _ base _ -> f a base
+  | _ -> raise Unplanned
+
+(* A fixed-width span behind a variable one: the guard and the bound check
+   its populate makes, at the running end. *)
+let dynamic_span : type a. builder -> a typ -> unit =
+ fun b typ ->
+  match field_wire_size typ with
+  | Some width when width >= 0 ->
+      let cur = cursor_slot b in
+      let fs = alloc b in
+      let span = match typ with Unit -> false | _ -> true in
+      b.layout <-
+        List.cons
+          (fun a _ base ->
+            a.(fs) <- base + a.(cur);
+            a.(cur) <- a.(cur) + width)
+          b.layout;
+      b.checks <-
+        List.cons
+          (fun a buf _ ->
+            let at = a.(fs) in
+            check_read_bounds (Input_end.of_bytes buf) ~at ~width;
+            if span then check_span_bounds buf ~first:at ~sz:width)
+          b.checks
+  | _ -> raise Unplanned
+
+let plan_span : type a. builder -> a typ -> field_access -> unit =
+ fun b typ access ->
+  match (typ, access) with
+  | (Byte_array _ | Byte_slice _ | All_bytes | Unit), Fixed _ ->
+      (* Inside [min_size], which the bounds check has already passed. *)
+      ()
+  | (Byte_array _ | Byte_slice _ | All_bytes), Variable { off; _ } ->
+      variable_span b ~first:(fun _ -> off) (span_size b typ)
+  | (Byte_array _ | Byte_slice _ | All_bytes), Variable_dynamic _ ->
+      let cur = cursor_slot b in
+      variable_span b ~first:(fun a -> a.(cur)) (span_size b typ)
+  | (Byte_array _ | Byte_slice _ | Unit), Dynamic _ -> dynamic_span b typ
+  | _ -> raise Unplanned
+
+(* A bitfield sharing its word with the field before it is located past that
+   word, where the kernel's static offset stands. *)
+let scalar_voff ~prev_word (access : field_access) =
+  match access with
+  | Fixed off -> off
+  | Bitfield { base; byte_off; _ } ->
+      if prev_word = Some byte_off then byte_off + bf_base_byte_size base
+      else byte_off
+  | _ -> raise Unplanned
+
+let plan_scalar : type a.
+    builder ->
+    prev_word:int option ->
+    string ->
+    a typ ->
+    field_access ->
+    bool expr list ->
+    (bytes -> int -> int) ->
+    unit =
+ fun b ~prev_word name typ access conds read ->
+  let voff = scalar_voff ~prev_word access in
+  let slot = alloc b in
+  Hashtbl.replace b.scalars name slot;
+  b.reads <- List.cons (slot, read) b.reads;
+  let cond = cond_of b conds in
+  let type_check = plan_type_check typ access ~voff in
+  Option.iter
+    (fun s ->
+      Hashtbl.replace b.needed slot ();
+      let s =
+        if Option.is_some cond || field_reader_validates typ then
+          with_field_path name s
+        else s
+      in
+      b.checks <- List.cons s b.checks)
+    (scalar_step ~slot ~voff ~type_check ~cond)
+
+(* Adds one field to [b] and returns the word it sits in, if a bitfield. *)
+let plan_field b prev_word (Types.Field f, (name, (_, access))) =
+  if Option.is_some f.action then raise Unplanned;
+  let conds = Option.to_list f.constraint_ @ typ_where_conds f.field_typ in
+  (match plan_int_reader f.field_typ access with
+  | Some read -> plan_scalar b ~prev_word name f.field_typ access conds read
+  | None ->
+      if conds <> [] then raise Unplanned;
+      plan_span b f.field_typ access);
+  match access with Bitfield { byte_off; _ } -> Some byte_off | _ -> None
+
+(* The plan of a codec, or [None] when a field or a check falls outside it. *)
+let plan_of (t : 'r t) (c : 'r compiled) : plan option =
+  let b =
+    {
+      scalars = Hashtbl.create 8;
+      needed = Hashtbl.create 8;
+      n_slots = 0;
+      reads = [];
+      layout = [];
+      checks = [];
+      cursor = None;
+    }
+  in
+  match
+    if t.n_params > 0 then raise Unplanned;
+    ignore
+      (List.fold_left (plan_field b) None
+         (List.combine t.struct_fields c.field_access));
+    Option.bind t.where (fun w -> cond_of b [ w ])
+  with
+  | exception Unplanned -> None
+  | where ->
+      let array l = Array.of_list (List.rev l) in
+      Some
+        {
+          reads =
+            array (List.filter (fun (i, _) -> Hashtbl.mem b.needed i) b.reads);
+          layout = array b.layout;
+          cursor = b.cursor;
+          checks = array b.checks;
+          where;
+          n_slots = b.n_slots;
+        }
+
+let run_plan (t : 'r t) (c : 'r compiled) p : bytes -> int -> unit =
+  let min_size =
+    match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+  in
+  let { reads; layout; cursor; checks; where; n_slots } = p in
+  let checks =
+    if has_validation_checks t.where t.struct_fields then checks else [||]
+  in
+  let n_reads = Array.length reads
+  and n_layout = Array.length layout
+  and n_checks = Array.length checks in
+  let scratch = domain_local_slots n_slots in
+  if
+    n_reads = 0 && Option.is_none cursor && n_checks = 0 && Option.is_none where
+  then check_min_bounds min_size
+  else fun buf off ->
+    check_min_bounds min_size buf off;
+    let a = (scratch ()).ints in
+    for i = 0 to n_reads - 1 do
+      let slot, read = reads.(i) in
+      a.(slot) <- read buf off
+    done;
+    (match cursor with
+    | None -> ()
+    | Some cur ->
+        for i = 0 to n_layout - 1 do
+          layout.(i) a buf off
+        done;
+        check_end_bounds min_size buf off (off + a.(cur)));
+    for i = 0 to n_checks - 1 do
+      checks.(i) a buf off
+    done;
+    match where with
+    | Some w when not (eval_arr_at ~at:off w a) ->
+        raise_constraint ~at:off ~which:Where ()
+    | _ -> ()
+
+let validator ?env:e (t : _ t) =
+  require_env ~op:"validator" t e;
+  let c = compiled t in
+  match plan_of t c with
+  | Some p -> Staged.stage (run_plan t c p)
+  | None ->
+      let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
+      let validate = c.validate in
+      Staged.stage (fun buf off -> validate ?env_slots buf off)
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in

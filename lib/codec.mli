@@ -210,7 +210,24 @@ val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
 
     Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
     input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
-    failure. *)
+    failure. To validate many buffers against one codec, stage it with
+    {!validator}. *)
+
+val validator : ?env:Param.env -> 'r t -> (bytes -> int -> unit) Staged.t
+(** [validator ?env c] is a staged {!validate}:
+    [Staged.unstage (validator ?env c) buf off] raises what
+    [validate ?env c buf off] raises, and returns when it returns. Stage once
+    per codec and call the result per buffer.
+
+    Staging compiles the checks of a codec whose fields are scalars at static
+    offsets and plain byte spans, with no parameters and no actions, into one
+    direct read and test per field. Any other codec is staged onto the pass
+    {!validate} runs, with [?env] checked once. A {!Wire.map} decoding function
+    is run once per check rather than once per wrapper, which only one with side
+    effects can observe.
+
+    Raises [Invalid_argument] on the same [?env] errors as {!validate}, when
+    staging rather than when called. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t

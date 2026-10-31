@@ -1,5 +1,13 @@
 ## unreleased
 
+### Added
+
+- Add `Wire.Codec.validator`, a staged `validate` that raises what `validate`
+  raises. A codec of scalars at static offsets and plain byte spans, with no
+  parameters or actions, compiles to one direct read and check per field: a
+  SQLite leaf page validates in 2,933 instructions instead of 10,140 (#417,
+  @samoht)
+
 ### Changed
 
 - `Wire.Codec.v` checks the description and compiles nothing: the layout,
