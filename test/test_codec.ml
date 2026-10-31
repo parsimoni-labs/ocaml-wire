@@ -9697,11 +9697,293 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* -- Codec.validator --
+
+   The staged validator compiles a codec of scalars at static offsets and plain
+   spans to its own steps, and stages any other onto [validate]. Either way it
+   must raise exactly what [validate] raises: the same parse error, at the same
+   offset, with the same field path. *)
+
+type outcome = Passed | Rejected of parse_error | Misuse
+
+let outcome f =
+  match f () with
+  | () -> Passed
+  | exception Parse_error e -> Rejected e
+  | exception Invalid_argument _ -> Misuse
+
+let pp_outcome ppf = function
+  | Passed -> Fmt.string ppf "passed"
+  | Rejected e -> Fmt.pf ppf "rejected (%a)" pp_parse_error e
+  | Misuse -> Fmt.string ppf "Invalid_argument"
+
+let staged_outcome ?env c buf off =
+  match Codec.validator ?env c with
+  | v -> outcome (fun () -> Staged.unstage v buf off)
+  | exception Invalid_argument _ -> Misuse
+
+(* [validator] and [validate] on [buf] at [off]; returns what both did. *)
+let check_agrees ?env what c buf off =
+  let expected = outcome (fun () -> Codec.validate ?env c buf off) in
+  let got = staged_outcome ?env c buf off in
+  if expected <> got then
+    Alcotest.failf "%s at %d: validate %a, validator %a" what off pp_outcome
+      expected pp_outcome got;
+  expected
+
+(* Every value of every byte, every truncation, and the same bytes behind a
+   three-byte prefix, so that offsets are checked away from 0. *)
+let check_agrees_around ?env what c buf =
+  let len = Bytes.length buf in
+  let at_offsets b =
+    ignore (check_agrees ?env what c b 0);
+    ignore (check_agrees ?env what c (Bytes.cat (Bytes.make 3 '\xff') b) 3)
+  in
+  at_offsets buf;
+  List.iter
+    (fun i ->
+      for v = 0 to 255 do
+        let b = Bytes.copy buf in
+        Bytes.set_uint8 b i v;
+        at_offsets b
+      done)
+    (List.init len Fun.id);
+  for n = 0 to len - 1 do
+    at_offsets (Bytes.sub buf 0 n)
+  done
+
+let expect_outcome what expected got =
+  if expected <> got then
+    Alcotest.failf "%s: expected %a, got %a" what pp_outcome expected pp_outcome
+      got
+
+(* An IPv4-like header: constraints on the two nibbles of one word (the second
+   is located past the word), a closed enum, a [map] whose [decode] refuses
+   some values, a [where] over two fields and a full-width word. *)
+let v_ihl =
+  Field.v "IHL" ~self_constraint:Expr.(fun v -> v >= int 5) (bits ~width:4 U8)
+
+let v_len = Field.v "Len" uint16be
+
+let v_proto =
+  Field.v "Proto"
+    (map
+       ~decode:(fun p ->
+         if UInt8.to_int p = 0xff then invalid_arg "reserved" else p)
+       ~encode:Fun.id uint8)
+
+let validator_header =
+  Codec.v "VHeader"
+    ~where:Expr.(Field.ref v_len >= int 4 * Field.ref v_ihl)
+    (fun version ihl kind len proto addr ->
+      (version, ihl, kind, len, proto, addr))
+    Codec.
+      [
+        ( Field.v "Version"
+            ~self_constraint:Expr.(fun v -> v = int 4)
+            (bits ~width:4 U8)
+        $ fun (v, _, _, _, _, _) -> v );
+        (v_ihl $ fun (_, v, _, _, _, _) -> v);
+        ( Field.v "Kind" (enum "Kind" [ ("A", 1); ("B", 2); ("C", 7) ] uint8)
+        $ fun (_, _, v, _, _, _) -> v );
+        (v_len $ fun (_, _, _, v, _, _) -> v);
+        (v_proto $ fun (_, _, _, _, v, _) -> v);
+        (Field.v "Addr" uint32be $ fun (_, _, _, _, _, v) -> v);
+      ]
+
+let validator_header_buf =
+  Bytes.of_string "\x45\x02\x00\x18\x06\x0a\x00\x00\x01"
+
+(* A page-like codec: spans sized by earlier fields, a fixed span behind them,
+   and the rest of the buffer, so that the bounds check and the span checks
+   depend on the bytes. *)
+let v_count =
+  Field.v "count" ~self_constraint:Expr.(fun v -> v <= int 100) uint8
+
+let v_start =
+  Field.v "start"
+    ~self_constraint:
+      Expr.(fun v -> Field.ref v_count + Field.ref v_count + int 3 <= v)
+    uint8
+
+let validator_page =
+  Codec.v "VPage"
+    (fun kind count start ptrs gap tag rest ->
+      (kind, count, start, ptrs, gap, tag, rest))
+    Codec.
+      [
+        ( Field.v "kind"
+            (map ~decode:UInt8.to_int ~encode:UInt8.v
+               (enum "PageKind" [ ("Leaf", 0x0d); ("Interior", 0x05) ] uint8))
+        $ fun (v, _, _, _, _, _, _) -> v );
+        (v_count $ fun (_, v, _, _, _, _, _) -> v);
+        (v_start $ fun (_, _, v, _, _, _, _) -> v);
+        ( Field.v "ptrs" (byte_array ~size:Expr.(int 2 * Field.ref v_count))
+        $ fun (_, _, _, v, _, _, _) -> v );
+        ( Field.v "gap"
+            (byte_array
+               ~size:
+                 Expr.(Field.ref v_start - int 3 - (int 2 * Field.ref v_count)))
+        $ fun (_, _, _, _, v, _, _) -> v );
+        ( Field.v "tag" (byte_array ~size:(int 2)) $ fun (_, _, _, _, _, v, _) ->
+          v );
+        (Field.v "rest" all_bytes $ fun (_, _, _, _, _, _, v) -> v);
+      ]
+
+let validator_page_buf = Bytes.of_string "\x0d\x02\x08\x00\x10\x00\x20\x00TTxyz"
+
+(* A constraint whose arithmetic can fail, and a lookup whose index is
+   bounded: the failures [validate] locates at the field. *)
+let v_div = Field.v "div" uint8
+
+let validator_arith =
+  Codec.v "VArith"
+    (fun d q l -> (d, q, l))
+    Codec.
+      [
+        (v_div $ fun (d, _, _) -> d);
+        ( Field.v "q"
+            ~constraint_:Expr.(int 100 / Field.ref v_div >= int 1)
+            uint8
+        $ fun (_, q, _) -> q );
+        (Field.v "l" (lookup [ "a"; "b"; "c" ] uint8) $ fun (_, _, l) -> l);
+      ]
+
+let validator_arith_buf = Bytes.of_string "\x05\x00\x01"
+
+let test_validator_agrees_on_header () =
+  expect_outcome "a valid header" Passed
+    (check_agrees "header" validator_header validator_header_buf 0);
+  check_agrees_around "header" validator_header validator_header_buf
+
+let test_validator_agrees_on_spans () =
+  expect_outcome "a valid page" Passed
+    (check_agrees "page" validator_page validator_page_buf 0);
+  check_agrees_around "page" validator_page validator_page_buf
+
+let test_validator_agrees_on_arith () =
+  expect_outcome "a valid record" Passed
+    (check_agrees "arith" validator_arith validator_arith_buf 0);
+  check_agrees_around "arith" validator_arith validator_arith_buf
+
+(* Each failure kind, pinned so that a regression in the plan cannot hide
+   behind a matching regression in [validate]. *)
+let test_validator_failure_kinds () =
+  let header s = Bytes.of_string s in
+  let rejected what = function
+    | Rejected e -> e
+    | o -> Alcotest.failf "%s: expected a rejection, got %a" what pp_outcome o
+  in
+  let check what c buf ~at ~field kind =
+    let e = rejected what (check_agrees what c buf 0) in
+    Alcotest.(check int) (what ^ ": at") at e.at;
+    Alcotest.(check (list string)) (what ^ ": field") field e.field;
+    if not (kind e.kind) then
+      Alcotest.failf "%s: unexpected error %a" what pp_parse_error e
+  in
+  let constraint_ which = function
+    | Constraint_failed { which = w; _ } -> w = which
+    | _ -> false
+  in
+  check "version constraint" validator_header
+    (header "\x55\x02\x00\x18\x06\x0a\x00\x00\x01")
+    ~at:0 ~field:[ "Version" ] (constraint_ Field);
+  check "continuation nibble constraint" validator_header
+    (header "\x44\x02\x00\x18\x06\x0a\x00\x00\x01")
+    ~at:1 ~field:[ "IHL" ] (constraint_ Field);
+  check "closed enum" validator_header
+    (header "\x45\x03\x00\x18\x06\x0a\x00\x00\x01") ~at:1 ~field:[ "Kind" ]
+    (function
+    | Invalid_enum _ -> true
+    | _ -> false);
+  check "where clause" validator_header
+    (header "\x45\x02\x00\x10\x06\x0a\x00\x00\x01")
+    ~at:0 ~field:[] (constraint_ Where);
+  check "fixed bounds" validator_header (header "\x45\x02") ~at:0 ~field:[]
+    (function
+    | Unexpected_eof _ -> true
+    | _ -> false);
+  check "span past the end" validator_page (header "\x0d\x40\xff\x00")
+    ~at:0 ~field:[] (function
+    | Unexpected_eof _ -> true
+    | _ -> false);
+  check "division by zero" validator_arith (header "\x00\x00\x01") ~at:1
+    ~field:[ "q" ] (function
+    | Zero_divisor -> true
+    | _ -> false);
+  check "lookup index" validator_arith (header "\x05\x00\x09") ~at:2
+    ~field:[ "l" ] (function
+    | Invalid_tag _ -> true
+    | _ -> false);
+  match
+    check_agrees "map decode" validator_header
+      (header "\x45\x02\x00\x18\xff\x0a\x00\x00\x01")
+      0
+  with
+  | Misuse -> ()
+  | o ->
+      Alcotest.failf "map decode: expected its exception, got %a" pp_outcome o
+
+(* A codec with parameters or actions is staged onto [validate]'s own pass,
+   with the env checked when staging. *)
+let test_validator_params_and_actions () =
+  let p = Param.input "max" uint8 in
+  let f_x = Field.v "x" uint8 in
+  let param =
+    Codec.v "VParam"
+      (fun x y -> (x, y))
+      Codec.
+        [
+          f_x $ fst;
+          Field.v "y" ~self_constraint:(fun v -> Expr.(v <= Param.expr p)) uint8
+          $ snd;
+        ]
+  in
+  let env = Codec.env param |> Param.bind p (UInt8.v 10) in
+  check_agrees_around ~env "param" param (Bytes.of_string "\x01\x05");
+  expect_outcome "param without env" Misuse
+    (check_agrees "param" param (Bytes.of_string "\x01\x05") 0);
+  expect_outcome "an env of another codec" Misuse
+    (check_agrees
+       ~env:(Codec.env validator_header)
+       "param" param
+       (Bytes.of_string "\x01\x05")
+       0);
+  let action =
+    Codec.v "VAction"
+      (fun x y -> (x, y))
+      Codec.
+        [
+          f_x $ fst;
+          Field.v "y"
+            ~action:
+              (Action.on_success
+                 [ Action.return_bool Expr.(Field.ref f_x < int 128) ])
+            uint8
+          $ snd;
+        ]
+  in
+  (match check_agrees "action" action (Bytes.of_string "\xf0\x00") 0 with
+  | Rejected { kind = Constraint_failed { which = Action; _ }; _ } -> ()
+  | o -> Alcotest.failf "action: expected its rejection, got %a" pp_outcome o);
+  check_agrees_around "action" action (Bytes.of_string "\x01\x05")
+
 (* -- Suite -- *)
 
 let suite =
   ( "codec",
     [
+      (* Codec.validator *)
+      Alcotest.test_case "validator: agrees with validate on a header" `Quick
+        test_validator_agrees_on_header;
+      Alcotest.test_case "validator: agrees with validate on spans" `Quick
+        test_validator_agrees_on_spans;
+      Alcotest.test_case "validator: agrees with validate on arithmetic" `Quick
+        test_validator_agrees_on_arith;
+      Alcotest.test_case "validator: each failure kind" `Quick
+        test_validator_failure_kinds;
+      Alcotest.test_case "validator: params and actions" `Quick
+        test_validator_params_and_actions;
       (* Codec.rename *)
       Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
       Alcotest.test_case "rename: roundtrip unchanged" `Quick

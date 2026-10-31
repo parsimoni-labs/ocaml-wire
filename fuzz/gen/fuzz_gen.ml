@@ -3497,14 +3497,57 @@ let validate_one ?env g bs =
         Alcobar.failf "parse error field path has an empty segment";
       `Reject
 
+(* What one validation of [bs] at [off] did, for comparing two of them. *)
+type outcome = Passed | Rejected_with of Wire.parse_error | Misuse
+
+let outcome f =
+  match f () with
+  | () -> Passed
+  | exception Wire.Parse_error e -> Rejected_with e
+  | exception Invalid_argument _ -> Misuse
+
+let pp_outcome ppf = function
+  | Passed -> Fmt.string ppf "passed"
+  | Rejected_with e -> Fmt.pf ppf "rejected (%a)" Wire.pp_parse_error e
+  | Misuse -> Fmt.string ppf "Invalid_argument"
+
+(* [Codec.validator] is a staged [Codec.validate], compiled to its own steps
+   for the codecs it can plan: on the same bytes it must raise the same error,
+   at the same offset and with the same field path, or neither must raise. The
+   bytes are tried at the record's start and behind a prefix, since the plan
+   locates every error from the base it is given. *)
+let check_validator_agrees label kind ?env g bs =
+  let staged =
+    match Wire.Codec.validator ?env g.codec with
+    | v -> Ok (Wire.Staged.unstage v)
+    | exception Invalid_argument _ -> Error ()
+  in
+  let at buf off =
+    let expected =
+      outcome (fun () -> Wire.Codec.validate ?env g.codec buf off)
+    in
+    let got =
+      match staged with
+      | Ok v -> outcome (fun () -> v buf off)
+      | Error () -> Misuse
+    in
+    if expected <> got then
+      Alcobar.failf "%s %s at %d: validate %a but validator %a" label kind off
+        pp_outcome expected pp_outcome got
+  in
+  at bs 0;
+  at (Bytes.cat (Bytes.make 3 '\xa5') bs) 3
+
 let check_validate_positive label g bs =
   let env = positive_env g in
+  check_validator_agrees label "positive" ?env g bs;
   match validate_one ?env g bs with
   | `Ok -> ()
   | `Reject -> Alcobar.failf "%s validate rejected a positive" label
   | `Crash -> Alcobar.failf "%s validate crashed on a positive" label
 
 let check_validate_safety label kind ?env g bs =
+  check_validator_agrees label kind ?env g bs;
   match validate_one ?env g bs with
   | `Ok | `Reject -> ()
   | `Crash -> Alcobar.failf "%s validate %s crashed" label kind

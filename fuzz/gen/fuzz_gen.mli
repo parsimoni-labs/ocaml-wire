@@ -33,7 +33,9 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     accept/reject verdict on the same bytes (and the same value where both
     accept), and {!Wire.to_bytes} and {!Wire.Codec.encode} must refuse the same
     values and write the same bytes. A refinement one path enforces and the
-    other drops shows up here rather than in the generated C.
+    other drops shows up here rather than in the generated C. Wherever
+    {!Wire.Codec.validate} runs, {!Wire.Codec.validator} runs on the same bytes
+    and must raise the same error or none.
 
     A positive also has to agree about its own size, under whatever env it
     needs. {!Wire.Codec.size_of_value} measures the value and must answer the
