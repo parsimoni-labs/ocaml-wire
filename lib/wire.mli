@@ -1299,7 +1299,10 @@ module Codec : sig
       referenced in those clauses.
 
       Raises [Invalid_argument] when [?env] belongs to another codec or leaves
-      an input parameter unbound, and {!exception-Parse_error} on failure. *)
+      an input parameter unbound, and {!exception-Parse_error} on failure. A
+      codec of scalars at fixed offsets and plain byte spans, with no parameters
+      and no actions, is checked with one read and one test per field, compiled
+      on the first call. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t

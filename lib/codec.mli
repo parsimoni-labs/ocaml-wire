@@ -210,7 +210,13 @@ val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
 
     Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
     input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
-    failure. *)
+    failure.
+
+    When the fields are scalars at fixed offsets and plain byte spans, with no
+    parameters and no actions, the first call compiles the checks into one read
+    and one test per field. A {!Wire.map} decoding function then runs once per
+    check rather than once per wrapper, which only one with side effects can
+    notice. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t

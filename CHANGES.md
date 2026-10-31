@@ -2,6 +2,9 @@
 
 ### Changed
 
+- `Wire.Codec.validate` is several times faster on a codec of fixed-offset
+  fields with no parameters or actions. Its first call compiles the checks to
+  one read and one test per field (#417, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still
