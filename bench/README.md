@@ -47,6 +47,21 @@ work with `Codec.get`/`Codec.set`.
 | `make bench-gateway` | TM frame reassembly (1M frames) | TMFrame + Space Packet |
 | `make bench-clcw` | COP-1 CLCW polling (10M words) | CLCW |
 
+## Whole-record validation
+
+`make bench-validate` (`bench/validate/`) times `Codec.validate` against the
+staged `Codec.validator` on checked IPv4, TCP and CCSDS headers and a SQLite
+leaf page, in ns and words per call. It needs no EverParse. For an instruction
+count, run one loop alone under `/usr/bin/time -l`:
+
+```
+dune build --profile=release bench/validate/bench.exe
+/usr/bin/time -l _build/default/bench/validate/bench.exe 4 staged 1000000
+```
+
+The arguments are the case index, `validate` or `staged`, and the iteration
+count; subtract a run with a count of 0.
+
 ## Profiling
 
 ```

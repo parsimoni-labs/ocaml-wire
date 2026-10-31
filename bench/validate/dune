@@ -1,0 +1,6 @@
+; Whole-record validation: Codec.validate against the staged Codec.validator.
+; Pure OCaml, so it builds without EverParse.
+
+(executable
+ (name bench)
+ (libraries wire net bench_lib fmt))
