@@ -11,6 +11,7 @@ make bench              # EverParse C vs OCaml (needs 3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
+make bench-validate     # Codec.validate vs the staged Codec.validator
 make prof               # CPU profile with Instruments (open prof.trace)
 make memtrace           # allocation hotspots via memtrace
 make cppcheck           # static analysis of the hand-written C (skips if cppcheck absent)
@@ -35,6 +36,7 @@ All bench/prof/memtrace targets use `--profile=release`.
   - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
+  - `bench/validate/` -- whole-record `Codec.validate` vs staged `Codec.validator`
   - `bench/gen_stubs.ml` -- generates C/OCaml stubs for EverParse comparison
   - `bench/bench_lib.ml` -- shared benchmark framework (timing, tables, comparison)
   - `bench/memtrace/` -- allocation profiling

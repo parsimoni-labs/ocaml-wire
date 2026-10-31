@@ -1299,7 +1299,16 @@ module Codec : sig
       referenced in those clauses.
 
       Raises [Invalid_argument] when [?env] belongs to another codec or leaves
-      an input parameter unbound, and {!exception-Parse_error} on failure. *)
+      an input parameter unbound, and {!exception-Parse_error} on failure. To
+      validate many buffers against one codec, stage it with {!validator}. *)
+
+  val validator : ?env:Param.env -> 'r t -> (bytes -> int -> unit) Staged.t
+  (** [validator ?env c] is a staged {!validate}: the unstaged function raises
+      what [validate ?env c] raises on the same buffer and offset, and returns
+      when it returns. A codec of scalars at static offsets and plain byte
+      spans, with no parameters and no actions, is compiled to one direct read
+      and test per field; any other is staged onto {!validate}'s pass. Raises
+      [Invalid_argument] on {!validate}'s [?env] errors, when staging. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t

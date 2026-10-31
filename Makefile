@@ -1,4 +1,5 @@
 .PHONY: build test test-wasm 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+       bench-validate \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -43,6 +44,9 @@ bench-gateway:
 
 bench-clcw:
 	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
+
+bench-validate:
+	dune exec --profile=release bench/validate/bench.exe
 
 PROF_EXE ?= bench/clcw/bench.exe
 
