@@ -64,9 +64,7 @@ let nested_pp_cases () =
   @ Fuzz_gen.everparse_nested_cases "nested(d3)" 3
   @ Fuzz_gen.everparse_nested_cases "nested(d4)" 4
 
-let normal_mode () =
-  (not (Fuzz_gen.corpus_generation_mode ()))
-  && not (Fuzz_gen.file_input_mode ())
+let normal_mode () = not (Fuzz_gen.afl_mode ())
 
 (* Adversarially test the generated 3d files: every shape in the registry that
    wire claims projects (all but the {!no_3d_projection} ones, asserted to reject
@@ -546,7 +544,7 @@ let corpus_cases () =
     |> List.map corpus_oracle_case
 
 let suite =
-  if Fuzz_gen.file_input_mode () then
+  if Fuzz_gen.afl_mode () then
     ("everparse", Fuzz_gen.afl_everparse_cases "everparse")
   else
     ( "everparse",

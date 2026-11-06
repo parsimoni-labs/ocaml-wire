@@ -695,7 +695,7 @@ let decl_shape = function
 let decl_identity d =
   match Types.to_3d ~enum_as_type:true (Types.module_ [ decl_shape d ]) with
   | text -> Ok text
-  | exception e -> Error (Printexc.to_string e)
+  | exception Invalid_argument msg -> Error msg
 
 let decl_name = function
   | Types.Typedef { struct_ = { name; _ }; _ } -> Some name

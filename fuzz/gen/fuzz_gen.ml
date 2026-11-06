@@ -84,6 +84,8 @@ let file_input_mode () =
   Sys.file_exists path
   && try not (Sys.is_directory path) with Sys_error _ -> false
 
+let afl_mode () = corpus_generation_mode () || file_input_mode ()
+
 let slice_of_string s =
   let b = Bytes.of_string s in
   Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
@@ -3739,40 +3741,38 @@ let check_field_get label ?env a value bs =
    to check enum membership and the reader does. *)
 let check_field_set label ~strict a target bs =
   List.iter
-    (fun fc ->
-      match fc with
-      | Field_check f -> (
-          match (stage_get a f.field, stage_set a f.field) with
-          | Some get, Some set -> (
-              let buf = Bytes.copy bs in
-              let want = f.proj target in
-              match set buf 0 want with
-              | exception Invalid_argument _ ->
-                  if not (Bytes.equal buf bs) then
+    (fun (Field_check f) ->
+      match (stage_get a f.field, stage_set a f.field) with
+      | Some get, Some set -> (
+          let buf = Bytes.copy bs in
+          let want = f.proj target in
+          match set buf 0 want with
+          | exception Invalid_argument _ ->
+              if not (Bytes.equal buf bs) then
+                Alcobar.failf
+                  "%s field %s: Codec.set refused a value after writing to the \
+                   buffer"
+                  label f.name
+          | () -> (
+              match get buf 0 with
+              | exception Invalid_argument m ->
+                  Alcobar.failf
+                    "%s field %s: Codec.get raised on bytes Codec.set just \
+                     wrote: %s"
+                    label f.name m
+              | exception Wire.Parse_error e ->
+                  if strict then
                     Alcobar.failf
-                      "%s field %s: Codec.set refused a value after writing to \
-                       the buffer"
-                      label f.name
-              | () -> (
-                  match get buf 0 with
-                  | exception Invalid_argument m ->
-                      Alcobar.failf
-                        "%s field %s: Codec.get raised on bytes Codec.set just \
-                         wrote: %s"
-                        label f.name m
-                  | exception Wire.Parse_error e ->
-                      if strict then
-                        Alcobar.failf
-                          "%s field %s: Codec.get rejects the value Codec.set \
-                           just wrote: %a"
-                          label f.name Wire.pp_parse_error e
-                  | got ->
-                      if not (f.equal got want) then
-                        Alcobar.failf
-                          "%s field %s: Codec.set wrote a value Codec.get \
-                           reads back as a different one"
-                          label f.name))
-          | _ -> ()))
+                      "%s field %s: Codec.get rejects the value Codec.set just \
+                       wrote: %a"
+                      label f.name Wire.pp_parse_error e
+              | got ->
+                  if not (f.equal got want) then
+                    Alcobar.failf
+                      "%s field %s: Codec.set wrote a value Codec.get reads \
+                       back as a different one"
+                      label f.name))
+      | _ -> ())
     a.achecks
 
 (* A value [Codec.set] will not put in a field is a value the record encoder
@@ -3786,24 +3786,22 @@ let check_field_set label ~strict a target bs =
 let check_field_set_refusal label a record bs =
   if Option.is_some (Wire.Codec.wire_size_opt a.acodec) then
     List.iter
-      (fun fc ->
-        match fc with
-        | Field_check f -> (
-            match stage_set a f.field with
-            | None -> ()
-            | Some set -> (
-                let buf = Bytes.copy bs in
-                match set buf 0 (f.proj record) with
-                | () -> ()
-                | exception Invalid_argument _ -> (
-                    let out = Bytes.create (Bytes.length bs) in
-                    match Wire.Codec.encode a.acodec record out 0 with
-                    | exception Invalid_argument _ -> ()
-                    | () ->
-                        Alcobar.failf
-                          "%s field %s: Codec.set refuses this value but \
-                           Codec.encode writes the same record"
-                          label f.name))))
+      (fun (Field_check f) ->
+        match stage_set a f.field with
+        | None -> ()
+        | Some set -> (
+            let buf = Bytes.copy bs in
+            match set buf 0 (f.proj record) with
+            | () -> ()
+            | exception Invalid_argument _ -> (
+                let out = Bytes.create (Bytes.length bs) in
+                match Wire.Codec.encode a.acodec record out 0 with
+                | exception Invalid_argument _ -> ()
+                | () ->
+                    Alcobar.failf
+                      "%s field %s: Codec.set refuses this value but \
+                       Codec.encode writes the same record"
+                      label f.name)))
       a.achecks
 
 (* Read a field now and hand back a predicate that re-reads it later. Lets a
@@ -3841,26 +3839,23 @@ let check_field_locality label a target bs =
     && List.compare_length_with checks 1 > 0
   then
     List.iter
-      (fun fc ->
-        match fc with
-        | Field_check f -> (
-            match stage_set a f.field with
-            | None -> ()
-            | Some set -> (
-                let buf = Bytes.copy bs in
-                let others = List.filter (fun o -> o != fc) checks in
-                let snaps = List.filter_map (field_snapshot a buf) others in
-                match set buf 0 (f.proj target) with
-                | exception Invalid_argument _ -> ()
-                | () ->
-                    List.iter
-                      (fun (other, same) ->
-                        if not (same buf) then
-                          Alcobar.failf
-                            "%s: Codec.set on field %s changed what field %s \
-                             reads"
-                            label f.name other)
-                      snaps)))
+      (fun (Field_check f as fc) ->
+        match stage_set a f.field with
+        | None -> ()
+        | Some set -> (
+            let buf = Bytes.copy bs in
+            let others = List.filter (fun o -> o != fc) checks in
+            let snaps = List.filter_map (field_snapshot a buf) others in
+            match set buf 0 (f.proj target) with
+            | exception Invalid_argument _ -> ()
+            | () ->
+                List.iter
+                  (fun (other, same) ->
+                    if not (same buf) then
+                      Alcobar.failf
+                        "%s: Codec.set on field %s changed what field %s reads"
+                        label f.name other)
+                  snaps))
       checks
 
 let first_difference a b =
@@ -3880,31 +3875,28 @@ let first_difference a b =
    channel a write that spills past its field shows up in. *)
 let check_field_write_back label a bs =
   List.iter
-    (fun fc ->
-      match fc with
-      | Field_check f -> (
-          match (stage_get a f.field, stage_set a f.field) with
-          | Some get, Some set -> (
-              match get bs 0 with
-              | (exception Invalid_argument _) | (exception Wire.Parse_error _)
-                ->
-                  ()
-              | v -> (
-                  let buf = Bytes.copy bs in
-                  match set buf 0 v with
-                  | exception Invalid_argument _ ->
-                      if not (Bytes.equal buf bs) then
-                        Alcobar.failf
-                          "%s field %s: Codec.set refused a value after \
-                           writing to the buffer"
-                          label f.name
-                  | () ->
-                      if not (Bytes.equal buf bs) then
-                        Alcobar.failf
-                          "%s field %s: writing back the value Codec.get just \
-                           read changed the canonical encoding at byte %d"
-                          label f.name (first_difference buf bs)))
-          | _ -> ()))
+    (fun (Field_check f) ->
+      match (stage_get a f.field, stage_set a f.field) with
+      | Some get, Some set -> (
+          match get bs 0 with
+          | (exception Invalid_argument _) | (exception Wire.Parse_error _) ->
+              ()
+          | v -> (
+              let buf = Bytes.copy bs in
+              match set buf 0 v with
+              | exception Invalid_argument _ ->
+                  if not (Bytes.equal buf bs) then
+                    Alcobar.failf
+                      "%s field %s: Codec.set refused a value after writing to \
+                       the buffer"
+                      label f.name
+              | () ->
+                  if not (Bytes.equal buf bs) then
+                    Alcobar.failf
+                      "%s field %s: writing back the value Codec.get just read \
+                       changed the canonical encoding at byte %d"
+                      label f.name (first_difference buf bs)))
+      | _ -> ())
     a.achecks
 
 (* Setting every field in turn into a zeroed buffer is an encode spelled with
@@ -3983,29 +3975,27 @@ let check_field_reads label kind ?env a g bs =
   in
   if validated || Option.is_some decoded then
     List.iter
-      (fun fc ->
-        match fc with
-        | Field_check f -> (
-            match stage_get ?env a f.field with
-            | None -> ()
-            | Some get -> (
-                match get bs 0 with
-                | exception Invalid_argument m ->
-                    if validated then
+      (fun (Field_check f) ->
+        match stage_get ?env a f.field with
+        | None -> ()
+        | Some get -> (
+            match get bs 0 with
+            | exception Invalid_argument m ->
+                if validated then
+                  Alcobar.failf
+                    "%s %s field %s: Codec.get raised on a buffer validate \
+                     accepted: %s"
+                    label kind f.name m
+            | exception Wire.Parse_error _ -> ()
+            | got ->
+                Option.iter
+                  (fun record ->
+                    if not (f.equal got (f.proj record)) then
                       Alcobar.failf
-                        "%s %s field %s: Codec.get raised on a buffer validate \
-                         accepted: %s"
-                        label kind f.name m
-                | exception Wire.Parse_error _ -> ()
-                | got ->
-                    Option.iter
-                      (fun record ->
-                        if not (f.equal got (f.proj record)) then
-                          Alcobar.failf
-                            "%s %s field %s: Codec.get and Codec.decode read \
-                             different values from the same bytes"
-                            label kind f.name)
-                      decoded)))
+                        "%s %s field %s: Codec.get and Codec.decode read \
+                         different values from the same bytes"
+                        label kind f.name)
+                  decoded))
       a.achecks
 
 (* {1 Metamorphic properties}
@@ -6709,9 +6699,8 @@ let everparse_cases label g =
       (fun () ->
         match Wire.Everparse.project ~mode:`Ffi g.codec with
         | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
-        | exception e ->
-            Alcobar.failf "%s: 3D projection raised %s" label
-              (Printexc.to_string e));
+        | exception Invalid_argument msg ->
+            Alcobar.failf "%s: 3D projection raised %s" label msg);
   ]
 
 (* Same, over a freshly generated nested composition per sample: arbitrary
@@ -6725,9 +6714,8 @@ let everparse_nested_cases label depth =
         fun () ->
           match Wire.Everparse.project ~mode:`Ffi codec with
           | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
-          | exception e ->
-              Alcobar.failf "%s [%s]: 3D projection raised %s" label comp
-                (Printexc.to_string e))
+          | exception Invalid_argument msg ->
+              Alcobar.failf "%s [%s]: 3D projection raised %s" label comp msg)
   in
   [
     Alcobar.test_case
@@ -6764,9 +6752,8 @@ let afl_everparse_cases ?max_len label =
         ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
       with
       | () -> ()
-      | exception e ->
-          Alcobar.failf "%s: 3D projection raised %s" case
-            (Printexc.to_string e))
+      | exception Invalid_argument msg ->
+          Alcobar.failf "%s: 3D projection raised %s" case msg)
 
 (* Per sample, pick a random registry gen and round-trip it through the
    alternate entry points, so they cover the whole registry over many samples

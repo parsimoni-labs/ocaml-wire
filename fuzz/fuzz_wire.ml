@@ -34,7 +34,7 @@ let entry_point_tests () = entry_point_cases "entry"
 let api_tests () = api_cases "api"
 
 let suite =
-  if file_input_mode () then ("wire", afl_cases "wire")
+  if afl_mode () then ("wire", afl_cases "wire")
   else
     ( "wire",
       registry_tests ()

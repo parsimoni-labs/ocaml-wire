@@ -98,7 +98,8 @@ let generate_all schema_dir included =
     let seed_fail =
       match Wire_3d.run ~outdir:schema_dir [ schema_of included.(0) ] with
       | () -> []
-      | exception e -> [ (fst included.(0), Printexc.to_string e) ]
+      | exception (Failure msg | Invalid_argument msg) ->
+          [ (fst included.(0), msg) ]
     in
     let jobs =
       Array.init (n - 1) (fun k ->

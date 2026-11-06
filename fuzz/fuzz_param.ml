@@ -9,7 +9,7 @@ open Fuzz_gen
 let env_registry () = List.filter (fun (_, p) -> binds_env p) registry
 
 let suite =
-  if file_input_mode () then ("param", afl_env_cases "param")
+  if afl_mode () then ("param", afl_env_cases "param")
   else
     ( "param",
       List.concat_map

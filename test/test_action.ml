@@ -537,9 +537,6 @@ let test_allocating_encode_runs_actions () =
     match f () with
     | _ -> Alcotest.failf "%s: expected Invalid_argument" name
     | exception Invalid_argument _ -> ()
-    | exception exn ->
-        Alcotest.failf "%s: expected Invalid_argument, got %s" name
-          (Printexc.to_string exn)
   in
   rejects "Codec.to_bytes" (fun () -> Codec.to_bytes codec value);
   rejects "Codec.to_string" (fun () -> Codec.to_string codec value)
