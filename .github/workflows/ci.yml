@@ -43,8 +43,10 @@ jobs:
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
+  # Ubuntu 26.04 ships GCC 15, which cannot build the OCaml 5.4 runtime with
+  # TSan, so this job stays on 24.04 until OCaml is fixed.
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
