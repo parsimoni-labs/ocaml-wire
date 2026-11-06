@@ -84,6 +84,8 @@ let file_input_mode () =
   Sys.file_exists path
   && try not (Sys.is_directory path) with Sys_error _ -> false
 
+let afl_mode () = corpus_generation_mode () || file_input_mode ()
+
 let slice_of_string s =
   let b = Bytes.of_string s in
   Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)

@@ -157,7 +157,7 @@ let afl_case ?(max_len = 256) () =
     ~check:(fun _label case input -> diff_check case input.payload)
 
 let cases =
-  if file_input_mode () then afl_case () else List.map sample_case covered_cases
+  if afl_mode () then afl_case () else List.map sample_case covered_cases
 
 let () =
   List.iter

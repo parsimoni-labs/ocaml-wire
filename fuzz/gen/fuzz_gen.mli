@@ -21,6 +21,12 @@ val file_input_mode : unit -> bool
 (** [file_input_mode ()] is [true] when the executable is processing one
     AFL-provided file input. *)
 
+val afl_mode : unit -> bool
+(** [afl_mode ()] is [true] when the executable is generating an AFL seed corpus
+    or processing one AFL input. A fuzzer selects its AFL suite on it, so the
+    seeds come from the same tests AFL runs. Alcobar starts each seed with the
+    index of the test it was made for. *)
+
 val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 (** [test_cases label g] batches [g]'s four streams into one Alcobar case:
     positives check codec round-trip plus validation, random/adversarial bytes
