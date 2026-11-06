@@ -31,9 +31,6 @@ let raises_out_of_range name f =
   | exception Types.Parse_error { Types.kind = Types.Value_out_of_range _; _ }
     ->
       ()
-  | exception e ->
-      Alcotest.failf "%s: expected Parse_error, got %s" name
-        (Printexc.to_string e)
 
 let raises_parse_error name f =
   match f () with
@@ -41,17 +38,11 @@ let raises_parse_error name f =
   | exception Types.Parse_error _ -> ()
   | exception Division_by_zero ->
       Alcotest.failf "%s: leaked Division_by_zero" name
-  | exception e ->
-      Alcotest.failf "%s: expected Parse_error, got %s" name
-        (Printexc.to_string e)
 
 let raises_invalid_arg name f =
   match f () with
   | _ -> Alcotest.failf "%s: expected Invalid_argument, got a value" name
   | exception Invalid_argument _ -> ()
-  | exception e ->
-      Alcotest.failf "%s: expected Invalid_argument, got %s" name
-        (Printexc.to_string e)
 
 let test_int_of_exn_ok () =
   Alcotest.(check int) "uint8" 7 (Eval.int_of_exn Types.uint8 (Wire.UInt8.v 7));

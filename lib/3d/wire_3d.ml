@@ -964,13 +964,20 @@ let fork_pool ~max_jobs jobs =
       let i = !next in
       incr next;
       match Unix.fork () with
-      | 0 -> (
-          try
-            jobs.(i) ();
-            Unix._exit 0
-          with e ->
-            Fmt.epr "%s\n%!" (Printexc.to_string e);
-            Unix._exit 1)
+      | 0 ->
+          (* The child must never return into the parent's loop. On success
+             [_exit 0] runs before [finally]; an exception the handlers below
+             do not name reaches [finally], and the child exits with 1. *)
+          Fun.protect
+            ~finally:(fun () -> Unix._exit 1)
+            (fun () ->
+              match jobs.(i) () with
+              | () -> Unix._exit 0
+              | exception (Failure msg | Invalid_argument msg | Sys_error msg)
+                ->
+                  Fmt.epr "%s\n%!" msg
+              | exception Unix.Unix_error (e, fn, arg) ->
+                  Fmt.epr "%s %s: %s\n%!" fn arg (Unix.error_message e))
       | pid ->
           Hashtbl.add pid_idx pid i;
           incr running

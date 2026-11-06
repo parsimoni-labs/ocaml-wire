@@ -2113,7 +2113,9 @@ let test_array_repeat_reject_non_nz_codec () =
     "repeat over a codec with a fixed-size field allowed" false
     (repeat_rejects (codec scalar_bearing_codec))
 
-let projects c = match render_3d c with _ -> true | exception _ -> false
+let projects c =
+  match render_3d c with _ -> true | exception Invalid_argument _ -> false
+
 let arr_field elem = Codec.v "Arr" Fun.id Codec.[ Field.v "x" elem $ Fun.id ]
 
 (* An [array] over a float or signed integer element builds, round-trips, and
@@ -5497,10 +5499,7 @@ let test_dep_size_arithmetic_overflow () =
       match Codec.validate codec buf base with
       | () -> Alcotest.failf "%s validate: accepted the wrapped span" name
       | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
-          Alcotest.(check int) (name ^ " validate offset") base at
-      | exception exn ->
-          Alcotest.failf "%s validate: expected Value_out_of_range, got %s" name
-            (Printexc.to_string exn))
+          Alcotest.(check int) (name ^ " validate offset") base at)
     codecs
 
 let test_where_arithmetic_overflow_offset () =
@@ -5526,9 +5525,6 @@ let test_where_arithmetic_overflow_offset () =
   | () -> Alcotest.fail "validate accepted overflowing where expression"
   | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
       Alcotest.(check int) "validate offset" base at
-  | exception exn ->
-      Alcotest.failf "validate: expected Value_out_of_range, got %s"
-        (Printexc.to_string exn)
 
 let zero_divisor_span_codec name size =
   let f_divisor = Field.v "Divisor" uint8 in
@@ -5561,17 +5557,13 @@ let test_dep_size_zero_divisor () =
             pp_parse_error e
       | Ok _ -> Alcotest.failf "%s decode: accepted a zero divisor" name
       | exception Division_by_zero ->
-          Alcotest.failf "%s decode: leaked Division_by_zero" name
-      | exception exn ->
-          Alcotest.failf "%s decode: raised %s" name (Printexc.to_string exn));
+          Alcotest.failf "%s decode: leaked Division_by_zero" name);
       match Codec.validate codec buf base with
       | exception Parse_error { at; kind = Zero_divisor; _ } ->
           Alcotest.(check int) (name ^ " validate offset") base at
       | () -> Alcotest.failf "%s validate: accepted a zero divisor" name
       | exception Division_by_zero ->
-          Alcotest.failf "%s validate: leaked Division_by_zero" name
-      | exception exn ->
-          Alcotest.failf "%s validate: raised %s" name (Printexc.to_string exn))
+          Alcotest.failf "%s validate: leaked Division_by_zero" name)
     codecs
 
 let test_dep_ref_size_eval () =

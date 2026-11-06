@@ -78,9 +78,6 @@ let test_arithmetic_overflow () =
     match eval_int e with
     | n -> Alcotest.failf "%s: overflow produced %d" name n
     | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
-    | exception exn ->
-        Alcotest.failf "%s: expected Value_out_of_range, got %s" name
-          (Printexc.to_string exn)
   in
   (* These are not merely just past the native-int boundary: unchecked
      arithmetic wraps each mathematical result to zero or one, exactly the
@@ -114,8 +111,6 @@ let test_zero_divisor_is_parse_error () =
     | exception Types.Parse_error _ -> ()
     | exception Division_by_zero ->
         Alcotest.failf "%s leaked Division_by_zero" name
-    | exception exn ->
-        Alcotest.failf "%s raised %s" name (Printexc.to_string exn)
   in
   check "division" (Types.Div (a, b));
   check "modulo" (Types.Mod (a, b))

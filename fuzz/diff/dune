@@ -48,7 +48,7 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    (<> %{profile} afl)))
- (deps fuzz.exe ../afl.dict)
+ (deps fuzz.exe)
  (action
   (run %{exe:fuzz.exe})))
 
