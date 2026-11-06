@@ -562,6 +562,35 @@ let test_validate_check_free_no_alloc () =
        per_call)
     true (per_call < 1.0)
 
+(* Encoding a fixed-size record writes its bytes and nothing else, whatever the
+   field types: a signed or a float field must not cost more than an unsigned
+   one. *)
+let test_encode_fixed_no_alloc () =
+  skip_unless_gc_counters ();
+  let c =
+    Codec.v "Fixed"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (Field.v "a" uint8 $ fun (a, _, _, _) -> a);
+          (Field.v "b" int16be $ fun (_, b, _, _) -> b);
+          (Field.v "c" int32be $ fun (_, _, c, _) -> c);
+          (Field.v "d" float64be $ fun (_, _, _, d) -> d);
+        ]
+  in
+  let v = (UInt8.v 1, SInt16.v 2, SInt32.of_int32 3l, 4.0) in
+  let buf = Bytes.create 15 in
+  Codec.encode c v buf 0;
+  let n = 100_000 in
+  let before = Gc.minor_words () in
+  for _ = 1 to n do
+    Codec.encode c v buf 0
+  done;
+  let per_call = (Gc.minor_words () -. before) /. float_of_int n in
+  Alcotest.(check bool)
+    (Fmt.str "encode of a fixed codec allocates ~0 words (got %.2f)" per_call)
+    true (per_call < 1.0)
+
 (* A compiled validator keeps a per-domain scratch, and the cost of reaching it
    on a domain that has not decoded yet must not track how many validators the
    program ever built. It used to: each validator minted its own
@@ -10019,6 +10048,8 @@ let suite =
         test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
         test_validate_check_free_no_alloc;
+      Alcotest.test_case "encode: fixed codec allocates nothing" `Quick
+        test_encode_fixed_no_alloc;
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;
