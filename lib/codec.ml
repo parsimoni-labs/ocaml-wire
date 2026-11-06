@@ -131,12 +131,22 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
-let float32_field_encoder setter buf off v =
-  setter buf off (Int32.bits_of_float v);
+(* Each endianness gets its own writer so the bits go straight to the
+   primitive: passed through an unknown setter they would be boxed. *)
+let float32_le_encoder buf off v =
+  Bytes.set_int32_le buf off (Int32.bits_of_float v);
   off + 4
 
-let float64_field_encoder setter buf off v =
-  setter buf off (Int64.bits_of_float v);
+let float32_be_encoder buf off v =
+  Bytes.set_int32_be buf off (Int32.bits_of_float v);
+  off + 4
+
+let float64_le_encoder buf off v =
+  Bytes.set_int64_le buf off (Int64.bits_of_float v);
+  off + 8
+
+let float64_be_encoder buf off v =
+  Bytes.set_int64_be buf off (Int64.bits_of_float v);
   off + 8
 
 let uint_var_field_encoder endian n buf off v =
@@ -208,23 +218,30 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v ->
         UInt64.set_be buf off v;
         off + 8
-  | Int8 -> fun _runtime -> setter_off 1 SInt8.set
-  | Int16 Little -> fun _runtime -> setter_off 2 SInt16.set_le
-  | Int16 Big -> fun _runtime -> setter_off 2 SInt16.set_be
-  | Int32 Little -> fun _runtime -> setter_off 4 Types.set_int32_le
-  | Int32 Big -> fun _runtime -> setter_off 4 Types.set_int32_be
-  | Int64 Little -> fun _runtime -> setter_off 8 Bytes.set_int64_le
-  | Int64 Big -> fun _runtime -> setter_off 8 Bytes.set_int64_be
-  | Float32 Little -> fun _runtime -> float32_field_encoder Bytes.set_int32_le
-  | Float32 Big -> fun _runtime -> float32_field_encoder Bytes.set_int32_be
-  | Float64 Little -> fun _runtime -> float64_field_encoder Bytes.set_int64_le
-  | Float64 Big -> fun _runtime -> float64_field_encoder Bytes.set_int64_be
+  | Int8 -> fun _runtime buf off v -> setter_off 1 SInt8.set buf off v
+  | Int16 Little ->
+      fun _runtime buf off v -> setter_off 2 SInt16.set_le buf off v
+  | Int16 Big -> fun _runtime buf off v -> setter_off 2 SInt16.set_be buf off v
+  | Int32 Little ->
+      fun _runtime buf off v -> setter_off 4 Types.set_int32_le buf off v
+  | Int32 Big ->
+      fun _runtime buf off v -> setter_off 4 Types.set_int32_be buf off v
+  | Int64 Little ->
+      fun _runtime buf off v -> setter_off 8 Bytes.set_int64_le buf off v
+  | Int64 Big ->
+      fun _runtime buf off v -> setter_off 8 Bytes.set_int64_be buf off v
+  | Float32 Little -> fun _runtime buf off v -> float32_le_encoder buf off v
+  | Float32 Big -> fun _runtime buf off v -> float32_be_encoder buf off v
+  | Float64 Little -> fun _runtime buf off v -> float64_le_encoder buf off v
+  | Float64 Big -> fun _runtime buf off v -> float64_be_encoder buf off v
   | Uint_var { size = Int n; endian } ->
-      fun _runtime -> uint_var_field_encoder endian n
-  | Byte_array { size = Int n } -> fun _runtime -> blit_string_exact n
+      fun _runtime buf off v -> uint_var_field_encoder endian n buf off v
+  | Byte_array { size = Int n } ->
+      fun _runtime buf off v -> blit_string_exact n buf off v
   | Byte_array_where { size = Int n; elt_var; cond } ->
-      fun _runtime -> refined_bytes_encoder n ~elt_var ~cond
-  | Byte_slice { size = Int n } -> fun _runtime -> blit_slice_exact n
+      fun _runtime buf off v -> refined_bytes_encoder n ~elt_var ~cond buf off v
+  | Byte_slice { size = Int n } ->
+      fun _runtime buf off v -> blit_slice_exact n buf off v
   | Where { cond; inner } ->
       where_field_encoder cond (build_field_encoder_ctx inner)
   | Enum { name; base; cases; closed } ->
@@ -264,7 +281,8 @@ and build_field_encoder_ctx : type a.
   (* A lone bitfield (e.g. a casetype case body) occupies its whole base word;
      write the value at its bit offset into an otherwise-zero word. *)
   | Bits { width; base; bit_order } ->
-      fun _runtime -> bits_field_encoder ~width ~base ~bit_order
+      fun _runtime buf off v ->
+        bits_field_encoder ~width ~base ~bit_order buf off v
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
   | Single_elem { size = Int n; elem; at_most } ->
@@ -524,10 +542,10 @@ let rec build_immediate_encoder : type a.
   | Int32 Big -> Some (setter_off 4 Types.set_int32_be)
   | Int64 Little -> Some (setter_off 8 Bytes.set_int64_le)
   | Int64 Big -> Some (setter_off 8 Bytes.set_int64_be)
-  | Float32 Little -> Some (float32_field_encoder Bytes.set_int32_le)
-  | Float32 Big -> Some (float32_field_encoder Bytes.set_int32_be)
-  | Float64 Little -> Some (float64_field_encoder Bytes.set_int64_le)
-  | Float64 Big -> Some (float64_field_encoder Bytes.set_int64_be)
+  | Float32 Little -> Some float32_le_encoder
+  | Float32 Big -> Some float32_be_encoder
+  | Float64 Little -> Some float64_le_encoder
+  | Float64 Big -> Some float64_be_encoder
   | Uint_var { size = Int n; endian } -> Some (uint_var_field_encoder endian n)
   | Where { inner; _ } -> build_immediate_encoder inner
   | Enum { base; _ } -> build_immediate_encoder base
@@ -1152,6 +1170,9 @@ type 'r compiled = {
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
+  has_checks : bool;
+      (* Whether [validate_arr] checks anything: a constraint, a [where]
+         clause, an action, or a field type whose reader validates. *)
   decode_scratch : unit -> slots;
       (* Validation scratch, one per domain (see [domain_local_slots]) and
          zeroed per decode (see [decode_exn]), mirroring the [validate]
@@ -2949,9 +2970,7 @@ let compile_scalar_or_var : type a r.
       let field_off = match field_off_static with Some n -> n | None -> -1 in
       let raw_reader =
         match field_off_static with
-        | Some _ ->
-            let reader = build_field_reader_ctx typ field_off in
-            fun runtime input_end buf base -> reader runtime input_end buf base
+        | Some _ -> build_field_reader_ctx typ field_off
         | None ->
             let reader_at_0 = build_field_reader_ctx typ 0 in
             fun runtime input_end buf base ->
@@ -2959,9 +2978,9 @@ let compile_scalar_or_var : type a r.
               reader_at_0 runtime input_end buf (base + off)
       in
       let get = fld.get in
+      let encode = build_field_encoder_ctx typ in
       let raw_writer : r -> runtime -> bytes -> int -> int -> int =
-       fun v runtime buf _base write_off ->
-        build_field_encoder_ctx typ runtime buf write_off (get v)
+       fun v runtime buf _base write_off -> encode runtime buf write_off (get v)
       in
       let int_reader runtime input_end buf base =
         int_of_typ_value typ (raw_reader runtime input_end buf base)
@@ -3655,9 +3674,10 @@ let to_fwd : type full result.
   in
   go readers FNil
 
-(* Apply a forward reader list to [make], saturating the constructor in a
-   single call for up to 32 fields, so no intermediate closure is allocated
-   per decode. Beyond 32 fields one partial application is made per extra 32
+(* Stage a forward reader list: match it once, when the codec is compiled, and
+   return the function that reads every field and applies [make], saturating
+   the constructor in a single call for up to 32 fields, so no intermediate
+   closure is allocated per decode. Beyond 32 fields one partial application is made per extra 32
    (a [caml_curry] chain under flambda-off); the threshold clears every real
    protocol header (the widest, IPv4 and USLP, reach ~28 fields) in one
    saturated call.
@@ -4130,7 +4150,12 @@ let seal : type r.
     field_actions;
     decode = build_checked_decode raw_decode wire_size_info min_size;
     encode =
-      build_record_encoder r.name writers size_of_value ~check:encode_check;
+      (let size_of_value =
+         match wire_size_info with
+         | Fixed n -> fun _ _ -> n
+         | Variable _ -> size_of_value
+       in
+       build_record_encoder r.name writers size_of_value ~check:encode_check);
     wire_size = wire_size_info;
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
@@ -4143,6 +4168,7 @@ let seal : type r.
     validate_arr;
     populate;
     n_array_slots = n_total;
+    has_checks = has_validation_checks compiled_where struct_fields;
     decode_scratch = scratch;
     param_base;
   }
@@ -4661,13 +4687,20 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
   let runtime = runtime ?env:e () in
   let input_end = Input_end.of_bytes buf in
   let v = c.decode runtime input_end buf off in
-  let arr = c.decode_scratch () in
-  clear_slots arr c.n_array_slots;
-  (match e with
-  | Some (e : Param.env) when t.n_params > 0 ->
-      Array.blit e.slots 0 arr.ints c.param_base t.n_params
-  | _ -> ());
-  c.validate_arr arr runtime input_end buf off;
+  (* A codec with nothing to check and no parameters has nothing left to do
+     after the read: the decode has already checked the bounds. *)
+  let arr =
+    if (not c.has_checks) && t.n_params = 0 then None
+    else
+      let arr = c.decode_scratch () in
+      clear_slots arr c.n_array_slots;
+      (match e with
+      | Some (e : Param.env) when t.n_params > 0 ->
+          Array.blit e.slots 0 arr.ints c.param_base t.n_params
+      | _ -> ());
+      c.validate_arr arr runtime input_end buf off;
+      Some arr
+  in
   let consumed =
     match c.wire_size with
     | Fixed n -> off + n
@@ -4675,8 +4708,8 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
   in
   Types.check_consumption consume ~consumed
     ~available:(Input_end.to_int input_end);
-  (match e with
-  | Some (e : Param.env) ->
+  (match (e, arr) with
+  | Some (e : Param.env), Some arr ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
          [i]. Write decoded output params back into the environment. *)
       List.iteri
@@ -4684,7 +4717,7 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
           let v = arr.ints.(c.param_base + i) in
           e.slots.(i) <- v)
         t.param_handles
-  | None -> ());
+  | _ -> ());
   v
 
 let decode ?consume ?env t buf off =
@@ -4695,7 +4728,9 @@ let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in
-  let expected = c.size_of_value rt v in
+  let expected =
+    match c.wire_size with Fixed n -> n | Variable _ -> c.size_of_value rt v
+  in
   let actual = c.encode v rt buf off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
