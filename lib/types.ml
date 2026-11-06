@@ -3980,7 +3980,7 @@ let rec field_wire_size : type a. a typ -> int option = function
       match field_wire_size elem with Some k -> Some (n * k) | None -> None)
   | _ -> None
 
-let c_type_of : type a. a typ -> string = function
+let rec c_type_of : type a. a typ -> string = function
   | Uint8 | Bits { base = U8; _ } -> "uint8_t"
   | Uint16 _ | Bits { base = U16 _; _ } -> "uint16_t"
   | Uint32 _ | Bits { base = U32 _; _ } -> "uint32_t"
@@ -3996,8 +3996,20 @@ let c_type_of : type a. a typ -> string = function
      OCaml-side. *)
   | Float32 _ -> "uint32_t"
   | Float64 _ -> "uint64_t"
-  | Uint_var _ -> "uint32_t"
-  | _ -> "uint32_t"
+  (* A wrapper does not change the wire bytes, so the C type is the inner
+     type's. *)
+  | Map { inner; _ } -> c_type_of inner
+  | Enum { base; _ } -> c_type_of base
+  | Where { inner; _ } -> c_type_of inner
+  | Optional { inner; _ } -> c_type_of inner
+  | Optional_or { inner; _ } -> c_type_of inner
+  (* No wildcard, so that a new constructor has to be placed by hand. A
+     field of one of these reaches C as the offset it starts at. *)
+  | Uint_var _ | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _
+  | Array _ | Byte_array _ | Byte_array_where _ | Byte_slice _ | Single_elem _
+  | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Apply _ | Codec _
+  | Repeat _ ->
+      "uint32_t"
 
 let ml_type_of : type a. a typ -> string = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint_var _ | Bits _ -> "int"
