@@ -6,6 +6,10 @@
   name, as it does in the generated 3D. A `where` clause, a field constraint, a
   size and `Wire.Codec.field_readers` could read the sub-codec's field instead
   (#420, @samoht)
+- `Wire.Codec.decode` reads a record of more than eight fields in field order.
+  It read them last to first, so a record whose fields failed to decode
+  reported its last bad field rather than its first, and `map` decoders ran in
+  reverse (#424, @samoht)
 
 ## 1.3.0
 
