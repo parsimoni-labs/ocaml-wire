@@ -980,6 +980,56 @@ let[@inline] read_field : type a.
   | Data s -> read_scalar s buf base
   | Fn f -> f runtime input_end buf base
 
+(* How [encode] writes a field it has a descriptor for: the field's value, put
+   at the descriptor's offset with no bounds check of its own. *)
+type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+
+let bits_of_mask mask =
+  let rec go n = if mask lsr n = 0 then n else go (n + 1) in
+  go 0
+
+(* A bitfield value wider than its field, off the hot path. *)
+let bits_too_wide ~mask v =
+  Types.check_unsigned_encode ~bits:(bits_of_mask mask) v
+
+(* Calls nothing on the normal path. A bitfield is or-ed into its word, which
+   the encoder has zeroed first, as the general writer does. *)
+let write_scalar : type a. a scalar -> bytes -> int -> a -> unit =
+ fun r buf base v ->
+  match r with
+  | Byte off -> Unchecked.set_u8 buf (base + off) (UInt8.to_int v)
+  | U16le off -> Unchecked.set_u16le buf (base + off) (UInt16.to_int v)
+  | U16be off -> Unchecked.set_u16be buf (base + off) (UInt16.to_int v)
+  | U32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | U32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | Sbyte off -> Unchecked.set_u8 buf (base + off) (SInt8.to_int v)
+  | I16le off -> Unchecked.set_u16le buf (base + off) (SInt16.to_int v)
+  | I16be off -> Unchecked.set_u16be buf (base + off) (SInt16.to_int v)
+  | I32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | I32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | Bits8 { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u8 buf p (Unchecked.u8 buf p lor (v lsl shift))
+  | Bits16le { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (v lsl shift))
+  | Bits16be { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16be buf p (Unchecked.u16be buf p lor (v lsl shift))
+
+(* The scalars whose value an int holds exactly, so a write converts it with no
+   loss. *)
+let int_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
 (* The data form of a field read, when the field is a bare scalar at a fixed
    offset or packed in an 8- or 16-bit word. *)
 let field_read : type a.
@@ -1297,6 +1347,8 @@ type ('f, 'r) record =
       make : 'full;
       readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
+      puts_rev : 'r put list option;
+          (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -1389,6 +1441,9 @@ type 'r compiled = {
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   plain_validate : bytes -> int -> unit;
+  plain_encode : ('r -> bytes -> int -> unit) option;
+      (* [encode] of a fixed-size codec without parameters whose fields all
+         have a descriptor write. *)
   fixed_frame : int;
       (* The frame of a fixed-size codec, or -1: with [plain_pass], what
          [validate] of a codec without parameters runs with no closure call. *)
@@ -1442,6 +1497,7 @@ let record_start ?where ?doc name make =
       doc;
       readers = Nil;
       writers_rev = [];
+      puts_rev = Some [];
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
@@ -3944,6 +4000,11 @@ let apply_compiled : type a f r.
       make = r.make;
       readers = Snoc (r.readers, read);
       writers_rev = new_writers_rev;
+      puts_rev =
+        (match (r.puts_rev, read) with
+        | Some puts, Data scalar when int_scalar scalar ->
+            Some (Put { get = fld.get; scalar } :: puts)
+        | _ -> None);
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
@@ -4590,6 +4651,65 @@ let plain_validate wire_size_info min_size pass =
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
         run_plain_pass pass input_end buf off
 
+let encode_too_short name n buf off =
+  if off < 0 then Fmt.invalid_arg "Codec.encode %s: negative offset %d" name off;
+  Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name n
+    (Bytes.length buf - off)
+
+let encode_rejected name e =
+  Fmt.invalid_arg
+    "Codec.encode %s: the encoded record is rejected by its own constraints \
+     (%a)"
+    name Types.pp_parse_error e
+
+(* The words the bitfields are or-ed into, zeroed before the writes. *)
+let bitfield_words puts =
+  let words =
+    List.filter_map
+      (fun (Put { scalar; _ }) ->
+        match scalar with
+        | Bits8 { off; _ } -> Some (off, false)
+        | Bits16le { off; _ } | Bits16be { off; _ } -> Some (off, true)
+        | _ -> None)
+      puts
+  in
+  List.sort_uniq compare words
+
+(* Frame, then one write per field. The frame covers every write, so none is
+   checked; a codec with constraints and no actions runs [validate]'s pass over
+   what it wrote. *)
+let build_plain_encode name n puts check =
+  let words = Array.of_list (bitfield_words puts) in
+  let puts = Array.of_list puts in
+  fun v buf off ->
+    if off < 0 || off > Bytes.length buf - n then
+      encode_too_short name n buf off;
+    for i = 0 to Array.length words - 1 do
+      let w, wide = Array.unsafe_get words i in
+      if wide then Unchecked.set_u16le buf (off + w) 0
+      else Unchecked.set_u8 buf (off + w) 0
+    done;
+    for i = 0 to Array.length puts - 1 do
+      let (Put { get; scalar }) = Array.unsafe_get puts i in
+      write_scalar scalar buf off (get v)
+    done;
+    match check with
+    | No_checks -> ()
+    | pass -> (
+        try run_plain_pass pass (Input_end.of_bytes buf) buf off
+        with Types.Parse_error e -> encode_rejected name e)
+
+let plain_encoder ~name ~n_params ~wire_size_info ~struct_fields ~encode_check
+    puts check =
+  let no_actions =
+    List.for_all (fun (Types.Field f) -> Option.is_none f.action) struct_fields
+  in
+  match (wire_size_info, puts) with
+  | Fixed n, Some puts
+    when n_params = 0 && (Option.is_none encode_check || no_actions) ->
+      Some (build_plain_encode name n (List.rev puts) check)
+  | _ -> None
+
 (* A fixed-size record's size is known without walking its fields. *)
 let record_encoder name writers wire_size_info size_of_value check =
   let size_of_value =
@@ -4665,6 +4785,9 @@ let seal : type r.
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
     plain_validate = plain_validate wire_size_info min_size check;
+    plain_encode =
+      plain_encoder ~name:r.name ~n_params ~wire_size_info ~struct_fields
+        ~encode_check r.puts_rev check;
     fixed_frame = (match wire_size_info with Fixed _ -> min_size | _ -> -1);
     plain_pass = check;
     validate =
@@ -5245,7 +5368,7 @@ let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
   with Types.Parse_error e -> Error e
 
-let encode ?env:e t v buf off =
+let encode_slow e t v buf off =
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in
@@ -5261,6 +5384,14 @@ let encode ?env:e t v buf off =
       "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
+
+let encode ?env:e t v buf off =
+  match e with
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some { plain_encode = Some f; _ } -> f v buf off
+      | _ -> encode_slow e t v buf off)
+  | _ -> encode_slow e t v buf off
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where

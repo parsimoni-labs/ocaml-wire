@@ -1,5 +1,5 @@
-(** Buffer reads with no bounds check. The caller must have checked that the
-    bytes read lie in the buffer. *)
+(** Buffer reads and writes with no bounds check. The caller must have checked
+    that the bytes lie in the buffer. *)
 
 val u8 : bytes -> int -> int
 (** [u8 buf off] is the byte at [off]. *)
@@ -15,3 +15,23 @@ val i32le : bytes -> int -> int32
 
 val i32be : bytes -> int -> int32
 (** [i32be buf off] is the big-endian 32-bit value at [off]. *)
+
+(** {1 Writes}
+
+    With no bounds check either. A 16-bit write keeps the low 16 bits of the
+    value. *)
+
+val set_u8 : bytes -> int -> int -> unit
+(** [set_u8 buf off v] writes the low byte of [v] at [off]. *)
+
+val set_u16le : bytes -> int -> int -> unit
+(** [set_u16le buf off v] writes [v] as a little-endian 16-bit value. *)
+
+val set_u16be : bytes -> int -> int -> unit
+(** [set_u16be buf off v] writes [v] as a big-endian 16-bit value. *)
+
+val set_i32le : bytes -> int -> int32 -> unit
+(** [set_i32le buf off v] writes [v] as a little-endian 32-bit value. *)
+
+val set_i32be : bytes -> int -> int32 -> unit
+(** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)

@@ -32,6 +32,10 @@
   uses it; a comparison between a field and a literal is tested directly.
   `decode` runs the checks before it builds the value, so it reports the same
   first failure as `validate` (#426, @samoht)
+- `Wire.Codec.encode` is about twice as fast on a fixed-size codec of plain
+  scalar and bitfield fields: it checks the buffer once and writes each field
+  with no check of its own. A negative offset is refused with
+  `Invalid_argument` naming it (#429, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still
