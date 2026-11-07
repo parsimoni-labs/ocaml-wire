@@ -16,6 +16,13 @@
   parse error rather than raising `Invalid_argument`. The record's bounds
   check alone missed both when a later field that takes the rest gave the
   bytes back (#428, @samoht)
+### Added
+
+- `Wire.Codec.valid` and `Wire.Codec.read`: `valid` checks a buffer once and
+  returns a proof of it, and a reader staged with `read` takes a field from
+  that proof with no bounds check of its own. Reading a few fields of a
+  validated header costs a few loads instead of a full decode (#429, @samoht)
+
 ### Changed
 
 - `Wire.Codec.decode` and `Wire.Codec.encode` are several times faster on a

@@ -953,6 +953,35 @@ let test_plain_encode () =
   refused "short buffer" (fun () -> Codec.encode c v buf 1);
   refused "constraint" (fun () -> Codec.encode c (0, 0, 0, 0, 1001, 0l) buf 0)
 
+(* A value [valid] accepted reads every field as [get] does. A reader refuses a
+   value validated by another codec of the same type, and [valid] refuses what
+   [validate] refuses. *)
+let test_valid_read () =
+  let a = Codec.(Field.v "a" uint8 $ fun (a, _, _) -> a) in
+  let b = Codec.(Field.v "b" (bits ~width:4 U16be) $ fun (_, b, _) -> b) in
+  let s = Codec.(Field.v "s" (byte_array ~size:(int 3)) $ fun (_, _, s) -> s) in
+  let make () = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
+  let c = make () and other = make () in
+  let buf = Bytes.of_string "\x07\xa0\x00xyz" in
+  let v = Codec.valid c buf 0 in
+  let read f = Staged.unstage (Codec.read c f) v in
+  let get f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check bool) "uint8" true (read a = get a);
+  Alcotest.(check int) "bits" (get b) (read b);
+  Alcotest.(check string) "byte_array" (get s) (read s);
+  let raises f =
+    match f () with _ -> false | exception Invalid_argument _ -> true
+  in
+  Alcotest.(check bool)
+    "another codec's value" true
+    (raises (fun () ->
+         Staged.unstage (Codec.read c a) (Codec.valid other buf 0)));
+  Alcotest.(check bool)
+    "short buffer" true
+    (match Codec.valid c (Bytes.make 3 '\x00') 0 with
+    | _ -> false
+    | exception Wire.Parse_error _ -> true)
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10114,6 +10143,7 @@ let suite =
       Alcotest.test_case "check: a failure reports this frame's value" `Quick
         test_failure_value_is_this_frames;
       Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
+      Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
