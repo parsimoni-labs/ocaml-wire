@@ -17,7 +17,10 @@ a prefix of them.
    a fixed offset below `min_size` is in the buffer.
 2. **Check.** Evaluate the field constraints, the `where` clause, closed enum
    membership and `map` refusals, in field order. The first failure is the
-   one reported.
+   one reported. A scalar inside the frame is read into its slot only when a
+   constraint, an action or the `where` clause uses it, and a comparison of a
+   field with a literal or another field is tested directly. Any other field
+   runs its general validator, so the choice is made field by field.
 3. **Read.** Build the value. A field at a fixed offset inside `min_size` is
    read with no bounds check; any other field is read with one.
 

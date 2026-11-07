@@ -946,6 +946,33 @@ let read_scalar : type a. a scalar -> bytes -> int -> a =
   | Bits16be { off; shift; mask } ->
       (Unchecked.u16be buf (base + off) lsr shift) land mask
 
+(* The int a scalar's validation slot holds, for the scalars whose value an
+   int holds exactly. *)
+let slot_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
+(* Calls nothing, like [read_scalar]. *)
+let read_slot : type a. a scalar -> bytes -> int -> int =
+ fun r buf base ->
+  match r with
+  | Byte off -> UInt8.to_int (UInt8.unsafe_get buf (base + off))
+  | U16le off -> UInt16.to_int (UInt16.unsafe_le buf (base + off))
+  | U16be off -> UInt16.to_int (UInt16.unsafe_be buf (base + off))
+  | U32le off -> UInt32.to_int (UInt32.unsafe_le buf (base + off))
+  | U32be off -> UInt32.to_int (UInt32.unsafe_be buf (base + off))
+  | Sbyte off -> SInt8.to_int (SInt8.unsafe_get buf (base + off))
+  | I16le off -> SInt16.to_int (SInt16.unsafe_le buf (base + off))
+  | I16be off -> SInt16.to_int (SInt16.unsafe_be buf (base + off))
+  | I32le off -> SInt32.to_int (SInt32.unsafe_le buf (base + off))
+  | I32be off -> SInt32.to_int (SInt32.unsafe_be buf (base + off))
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+
 let[@inline] read_field : type a.
     a field_read -> runtime -> Input_end.t -> bytes -> int -> a =
  fun r runtime input_end buf base ->
@@ -1109,9 +1136,66 @@ let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
   fun arr -> f arr () () ()
 
-let compile_bool_arr cc e =
-  let f = Expr_compiler.compile_bool (array_leaves cc) e in
-  fun arr -> f arr () () ()
+type cmp = Eq | Ne | Lt | Le | Gt | Ge
+
+let flip = function
+  | Lt -> Gt
+  | Le -> Ge
+  | Gt -> Lt
+  | Ge -> Le
+  | (Eq | Ne) as c -> c
+
+let cmp_slot_const cmp i n : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = n
+  | Ne -> fun a -> a.ints.(i) <> n
+  | Lt -> fun a -> a.ints.(i) < n
+  | Le -> fun a -> a.ints.(i) <= n
+  | Gt -> fun a -> a.ints.(i) > n
+  | Ge -> fun a -> a.ints.(i) >= n
+
+let cmp_slots cmp i j : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = a.ints.(j)
+  | Ne -> fun a -> a.ints.(i) <> a.ints.(j)
+  | Lt -> fun a -> a.ints.(i) < a.ints.(j)
+  | Le -> fun a -> a.ints.(i) <= a.ints.(j)
+  | Gt -> fun a -> a.ints.(i) > a.ints.(j)
+  | Ge -> fun a -> a.ints.(i) >= a.ints.(j)
+
+(* [e] over the slots. A comparison between an int field and a literal or
+   another int field is one closure, the shape almost every constraint takes;
+   anything else goes through [Expr_compiler]. *)
+let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
+  let general () =
+    let f = Expr_compiler.compile_bool (array_leaves cc) e in
+    fun arr -> f arr () () ()
+  in
+  let cmp : type a. cmp -> a expr -> a expr -> slots -> bool =
+   fun op x y ->
+    match (x, y) with
+    | Ref (I, a), Int n -> cmp_slot_const op (cc.idx a) n
+    | Int n, Ref (I, a) -> cmp_slot_const (flip op) (cc.idx a) n
+    | Ref (I, a), Ref (I, b) -> cmp_slots op (cc.idx a) (cc.idx b)
+    | _ -> general ()
+  in
+  match e with
+  | And (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a && fy a
+  | Or (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a || fy a
+  | Not x ->
+      let fx = compile_bool_arr cc x in
+      fun a -> not (fx a)
+  | Eq (x, y) -> cmp Eq x y
+  | Ne (x, y) -> cmp Ne x y
+  | Lt (x, y) -> cmp Lt x y
+  | Le (x, y) -> cmp Le x y
+  | Gt (x, y) -> cmp Gt x y
+  | Ge (x, y) -> cmp Ge x y
+  | _ -> general ()
 
 let eval_arr_at ~at f arr =
   try f arr with Parse_error e -> raise (Parse_error { e with at })
@@ -1181,6 +1265,20 @@ let compile_action (cc : compile_ctx) (act : action option) :
       let f = compile_stmts cc stmts in
       Some (fun arr -> try f arr with Return_true -> ())
 
+(* One step of the check pass. A scalar inside the frame is read into its slot
+   with no bounds check and its constraint tested in place; any other field
+   runs its general validator. *)
+type step =
+  | Slot : { slot : int; scalar : 'a scalar } -> step
+  | Check : {
+      name : string;
+      slot : int;
+      voff : int;
+      cond : slots -> bool;
+    }
+      -> step
+  | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+
 type ('f, 'r) record =
   | Record : {
       name : string;
@@ -1202,10 +1300,10 @@ type ('f, 'r) record =
              size, which stops accumulating once a field's extent is dynamic
              ([sum_size] returns the accumulator unchanged from there), so
              fixed fields after a variable one do not add to it. *)
-      validators_rev :
-        (int (* byte offset *)
-        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
-        list;
+      used_slots : (int, unit) Hashtbl.t;
+          (* The slots a constraint, an action or the [where] clause reads; the
+             check pass fills only those. *)
+      validators_rev : (int (* byte offset *) * step) list;
       checkers_rev :
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
@@ -1258,6 +1356,9 @@ type 'r compiled = {
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
+  clear_scratch : slots -> unit;
+      (* Zeroes the scratch before [validate_arr], when a slot can be read
+         before the pass writes it. *)
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
   has_checks : bool;
@@ -1301,6 +1402,7 @@ let record_start ?where ?doc name make =
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
+      used_slots = Hashtbl.create 8;
       validators_rev = [];
       checkers_rev = [];
       field_actions_rev = [];
@@ -1485,6 +1587,12 @@ let unbound_check_ref name =
 
 let unbound_where_ref name =
   Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
+
+(* [idx], noting each slot it hands out in [used]. *)
+let used_idx used idx name =
+  let i = idx name in
+  Hashtbl.replace used i ();
+  i
 
 let build_idx readers =
   let rev_readers = List.rev readers in
@@ -3135,6 +3243,22 @@ let absent_optional_or : type a r.
     ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
     ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
+(* An enum's populate: the base's, then membership on the slot's int. A wide
+   carrier's value can be refused by the conversion to that int, which reports
+   byte 0, so name the field instead, as the reader does. *)
+let enum_populate ~base cf int_check =
+  if Types.int_view_is_total base then (fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    ignore
+      (int_check
+         ~at:(at_of base cf.validator_off)
+         (cf.int_reader runtime input_end buf base)))
+  else fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    let at = at_of base cf.validator_off in
+    Types.relocate_at ~at (fun () ->
+        ignore (int_check ~at (cf.int_reader runtime input_end buf base)))
+
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -3167,13 +3291,7 @@ let rec compile_field : type a r.
           (fun v runtime buf base write_off ->
             encode_check (get v);
             cf.raw_writer v runtime buf base write_off);
-        populate =
-          (fun arr runtime input_end buf base ->
-            cf.populate arr runtime input_end buf base;
-            ignore
-              (int_check
-                 ~at:(at_of base cf.validator_off)
-                 (cf.int_reader runtime input_end buf base)));
+        populate = enum_populate ~base cf int_check;
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
@@ -3635,6 +3753,18 @@ let field_validators ~field_idx ~validator_off ~populate ~check ~act =
   in
   (check_only, full)
 
+(* The check-pass steps of a field, last first. *)
+let field_steps ~used ~name ~slot ~voff read check full =
+  match read with
+  | Data scalar when slot_scalar scalar -> (
+      let read = Slot { slot; scalar } in
+      match check with
+      | None -> [ read ]
+      | Some cond ->
+          Hashtbl.replace used slot ();
+          [ Check { name; slot; voff; cond }; read ])
+  | _ -> [ Full full ]
+
 (* The record's minimum size after [cf]: what [decode] checks the buffer
    against before its unchecked reads, so it only grows, and stays a byte count
    a buffer can hold. *)
@@ -3671,7 +3801,7 @@ let apply_compiled : type a f r.
     let base = (fld.name, dummy_reader) :: r.field_readers in
     List.fold_left (fun acc vn -> (vn, dummy_reader) :: acc) base action_vanames
   in
-  let idx = build_idx cc_readers in
+  let idx = used_idx r.used_slots (build_idx cc_readers) in
   let cc =
     mk_ctx ~sizeof_this:r.fixed_prefix ~field_pos:field_idx
       ~param_slots:r.param_slots idx
@@ -3699,22 +3829,27 @@ let apply_compiled : type a f r.
   in
   note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
   let min_wire_size = add_min_size r.name fld.name r.min_wire_size cf in
+  let read =
+    field_read ~min_wire_size cf.field_access fld.typ raw_reader
+      ~plain:(Option.is_none act && not validates)
+  in
   Record
     {
       name = r.name;
       make = r.make;
-      readers =
-        Snoc
-          ( r.readers,
-            field_read ~min_wire_size cf.field_access fld.typ raw_reader
-              ~plain:
-                (Option.is_none check && Option.is_none act && not validates) );
+      readers = Snoc (r.readers, read);
       writers_rev = new_writers_rev;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
       fixed_prefix = r.fixed_prefix;
-      validators_rev = (byte_off, full) :: r.validators_rev;
+      used_slots = r.used_slots;
+      validators_rev =
+        List.map
+          (fun step -> (byte_off, step))
+          (field_steps ~used:r.used_slots ~name:fld.name ~slot:field_idx
+             ~voff:byte_off read check full)
+        @ r.validators_rev;
       checkers_rev = (byte_off, check_only) :: r.checkers_rev;
       field_actions_rev =
         (match faction with
@@ -3857,12 +3992,13 @@ let lookup_reader_idx rev_readers name =
   in
   find 0 rev_readers
 
-let compile_where_clause param_slots field_readers where =
+let compile_where_clause ?(used = Hashtbl.create 0) param_slots field_readers
+    where =
   match where with
   | None -> None
   | Some cond ->
       let rev_readers = List.rev field_readers in
-      let idx name = lookup_reader_idx rev_readers name in
+      let idx = used_idx used (lookup_reader_idx rev_readers) in
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
@@ -3898,14 +4034,55 @@ let validation_runtime param_slots arr =
         | Some idx -> arr.ints.(idx)
         | None -> 0)
 
-let build_validators validators_rev checkers_rev compiled_where struct_fields
-    param_slots n_total =
-  let validator_fns = Array.of_list (List.map snd validators_rev) in
-  let n_validators = Array.length validator_fns in
+(* A failed [Check], off the hot path. *)
+let check_failed ~name ~slot ~voff arr base =
+  try raise_field_constraint ~field_idx:slot ~at:(at_of base voff) arr
+  with Types.Parse_error e ->
+    raise (Types.Parse_error { e with field = name :: e.field })
+
+let check_cond ~name ~voff cond arr base =
+  try cond arr
+  with Types.Parse_error e ->
+    raise
+      (Types.Parse_error
+         { e with at = at_of base voff; field = name :: e.field })
+
+let run_steps steps arr runtime input_end buf off =
+  for i = 0 to Array.length steps - 1 do
+    match steps.(i) with
+    | Slot { slot; scalar } -> arr.ints.(slot) <- read_slot scalar buf off
+    | Check { name; slot; voff; cond } ->
+        if not (check_cond ~name ~voff cond arr off) then
+          check_failed ~name ~slot ~voff arr off
+    | Full f -> f arr runtime input_end buf off
+  done
+
+(* The steps whose work is needed: a slot nothing reads is not filled. *)
+let used_steps used steps =
+  let needed = function
+    | Slot { slot; _ } -> (
+        match used with None -> true | Some u -> Hashtbl.mem u slot)
+    | Check _ | Full _ -> true
+  in
+  List.filter needed steps
+
+(* Every slot is written before it is read when each step fills its own slot
+   and nothing else lives in the array, so there is nothing to clear. *)
+let scratch_clear steps n_total =
+  let n_slots =
+    List.fold_left
+      (fun n -> function Slot _ -> n + 1 | Check _ -> n | Full _ -> n_total)
+      0 steps
+  in
+  if n_slots = n_total then fun _ -> () else fun arr -> clear_slots arr n_total
+
+let build_validators ?used validators_rev checkers_rev compiled_where
+    struct_fields param_slots n_total =
+  let all_steps = List.map snd validators_rev in
+  let steps = Array.of_list (used_steps used all_steps) in
+  let clear = scratch_clear all_steps n_total in
   let validate_arr arr runtime input_end buf off =
-    for i = 0 to n_validators - 1 do
-      validator_fns.(i) arr runtime input_end buf off
-    done;
+    run_steps steps arr runtime input_end buf off;
     match compiled_where with
     | Some f when not (eval_arr_at ~at:off f arr) ->
         raise_constraint ~at:off ~which:Where ()
@@ -3930,14 +4107,14 @@ let build_validators validators_rev checkers_rev compiled_where struct_fields
       let get_arr = domain_local_slots n_total in
       fun ?env_slots buf off ->
         let arr = get_arr () in
-        clear_slots arr n_total;
+        clear arr;
         (* Seed param slots so [where] clauses referencing [Param.input]
            evaluate correctly. *)
         seed_param_slots arr n_total env_slots;
         let runtime = validation_runtime param_slots arr in
         validate_arr arr runtime (Input_end.of_bytes buf) buf off
   in
-  (validate_arr, populate, validate)
+  (validate_arr, populate, validate, clear)
 
 let collect_param_handles codec_name struct_fields where =
   let seen = Hashtbl.create 4 in
@@ -3998,18 +4175,22 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
          raise is a real error and propagates. *)
       check_end_bounds min_size buf off (compute runtime input_end buf off)
 
-let build_plain_decode make fwd wire_size_info min_size =
-  match wire_size_info with
-  | Fixed _ ->
+(* Frame, check, read: the three phases of docs/execution.md, for a codec
+   without parameters. *)
+let build_plain_decode make fwd wire_size_info min_size check =
+  match (wire_size_info, check) with
+  | Fixed _, None ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off;
         apply_fwd make fwd no_runtime input_end buf off
-  | Variable _ ->
+  | _ ->
+      let check = Option.value check ~default:(fun _ _ _ -> ()) in
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
+        check input_end buf off;
         apply_fwd make fwd no_runtime input_end buf off
 
 let build_checked_decode raw_decode wire_size_info min_size =
@@ -4101,10 +4282,10 @@ let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
    from the caller's context. Taken apart from [validate_runtime] so [seal] can
    build the same pass into the sub-codec entry point a use site calls, and the
    two cannot drift. *)
-let validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
-    ~validate_arr runtime input_end buf off =
+let validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
+    runtime input_end buf off =
   let arr = scratch () in
-  clear_slots arr n_total;
+  clear arr;
   seed_params arr runtime param_base 0 param_handles;
   validate_arr arr runtime input_end buf off;
   writeback_params arr runtime param_base 0 param_handles
@@ -4132,14 +4313,25 @@ let build_record_encoder name writers size_of_value ~check =
             name Types.pp_parse_error e));
     !write_off
 
-let build_decoders make readers wire_size_info min_size ~plain =
+let build_decoders make readers wire_size_info min_size ~plain ~check =
   let fwd = to_fwd readers in
   let raw_decode runtime input_end buf off =
     apply_fwd make fwd runtime input_end buf off
   in
   ( build_checked_decode raw_decode wire_size_info min_size,
-    if plain then Some (build_plain_decode make fwd wire_size_info min_size)
+    if plain then
+      Some (build_plain_decode make fwd wire_size_info min_size check)
     else None )
+
+(* The check pass [decode] runs between the frame and the reads. *)
+let decode_check ~has_checks ~scratch ~clear validate_arr =
+  if not has_checks then None
+  else
+    Some
+      (fun input_end buf off ->
+        let arr = scratch () in
+        clear arr;
+        validate_arr arr no_runtime input_end buf off)
 
 (* [struct_fields] and [param_handles] are the ones [view] derived and checked
    from the same field list. *)
@@ -4163,11 +4355,12 @@ let seal : type r.
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
   let compiled_where =
-    compile_where_clause r.param_slots r.field_readers r.where
+    compile_where_clause ~used:r.used_slots r.param_slots r.field_readers
+      r.where
   in
-  let validate_arr, populate, validate_checks =
-    build_validators validators (List.rev r.checkers_rev) compiled_where
-      struct_fields r.param_slots n_total
+  let validate_arr, populate, validate_checks, clear =
+    build_validators ~used:r.used_slots validators (List.rev r.checkers_rev)
+      compiled_where struct_fields r.param_slots n_total
   in
   let scratch = domain_local_slots n_total in
   let encode_check =
@@ -4183,8 +4376,8 @@ let seal : type r.
   let size_of_value = build_size_of_value size_funcs in
   let has_checks = has_validation_checks compiled_where struct_fields in
   let decode, plain_decode =
-    build_decoders r.make r.readers wire_size_info min_size
-      ~plain:((not has_checks) && n_params = 0)
+    build_decoders r.make r.readers wire_size_info min_size ~plain:(n_params = 0)
+      ~check:(decode_check ~has_checks ~scratch ~clear validate_arr)
   in
   {
     size_of_value;
@@ -4207,9 +4400,10 @@ let seal : type r.
     validate_ctx =
       (fun runtime input_end buf off ->
         check_decode_bounds wire_size_info min_size runtime input_end buf off;
-        validate_runtime_of ~scratch ~n_total ~param_base ~param_handles
+        validate_runtime_of ~scratch ~clear ~param_base ~param_handles
           ~validate_arr runtime input_end buf off);
     validate_arr;
+    clear_scratch = clear;
     populate;
     n_array_slots = n_total;
     has_checks;
@@ -4426,9 +4620,9 @@ and validator_of_struct (s : Types.struct_) : validator =
   let compiled_where =
     compile_where_clause acc.param_slots acc.field_readers s.where
   in
-  let validate_arr, _populate, _validate =
+  let validate_arr, _populate, _validate, _clear =
     build_validators
-      (List.rev acc.validators_rev)
+      (List.rev_map (fun (off, f) -> (off, Full f)) acc.validators_rev)
       (List.rev acc.checkers_rev)
       compiled_where s.fields acc.param_slots n_total
   in
@@ -4677,7 +4871,7 @@ let embed_encode_ctx (t : 'r t) v runtime buf off =
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
 let validate_runtime t c runtime input_end buf off =
-  validate_runtime_of ~scratch:c.decode_scratch ~n_total:c.n_array_slots
+  validate_runtime_of ~scratch:c.decode_scratch ~clear:c.clear_scratch
     ~param_base:c.param_base ~param_handles:t.param_handles
     ~validate_arr:c.validate_arr runtime input_end buf off
 
@@ -4736,7 +4930,7 @@ let decode_slow consume e t c buf off =
     if (not c.has_checks) && t.n_params = 0 then None
     else
       let arr = c.decode_scratch () in
-      clear_slots arr c.n_array_slots;
+      c.clear_scratch arr;
       (match e with
       | Some (e : Param.env) when t.n_params > 0 ->
           Array.blit e.slots 0 arr.ints c.param_base t.n_params
