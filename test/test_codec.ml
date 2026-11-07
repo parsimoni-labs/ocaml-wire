@@ -465,6 +465,30 @@ let test_validate_negative_span () =
   Alcotest.(check string) "decode" "refused" decoded;
   Alcotest.(check string) "validate agrees" decoded validated
 
+(* An overlong span left in a record whose last span takes the rest: the
+   record's extent still fits, the span does not, and both entry points refuse
+   it with a parse error rather than an [Invalid_argument]. *)
+let test_overlong_span () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "LongSpan"
+      (fun n b rest -> (n, b, rest))
+      Codec.
+        [
+          (n $ fun (n, _, _) -> n);
+          (Field.v "b" (byte_slice ~size:(Field.ref n)) $ fun (_, b, _) -> b);
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.make 8 '\x00' in
+  Bytes.set_uint8 buf 0 12;
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted an overlong span"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted an overlong span"
+  | exception Wire.Parse_error _ -> ()
+
 let test_validate_matches_decode_rejections () =
   let rejects what c bytes =
     let buf = Bytes.of_string bytes in
@@ -9747,6 +9771,8 @@ let suite =
         test_validate_matches_decode_rejections;
       Alcotest.test_case "validate: refuses a negative span size" `Quick
         test_validate_negative_span;
+      Alcotest.test_case "decode: refuses an overlong span" `Quick
+        test_overlong_span;
       Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
         test_validate_runs_sub_codec_checks;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
