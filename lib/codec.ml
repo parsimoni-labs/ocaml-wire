@@ -910,6 +910,8 @@ and _ field_read =
   | Data : 'a scalar -> 'a field_read
   | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
       (** A scalar under a total [map]: read, then decoded. *)
+  | Span : int * int -> string field_read
+      (** A fixed byte array: its offset and length. *)
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -981,6 +983,7 @@ let[@inline] read_field : type a.
   match r with
   | Data s -> read_scalar s buf base
   | Mapped (s, decode) -> decode (read_scalar s buf base)
+  | Span (off, n) -> Bytes.sub_string buf (base + off) n
   | Fn f -> f runtime input_end buf base
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
@@ -1077,7 +1080,12 @@ let rec read_view : type a.
       match read_view ~min_wire_size access inner with
       | Some (Data s) -> Some (Mapped (s, decode))
       | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
-      | Some (Fn _) | None -> None)
+      | Some (Span _ | Fn _) | None -> None)
+  | Byte_array { size = Int n } -> (
+      match access with
+      | Fixed off when off >= 0 && n >= 0 && off + n <= min_wire_size ->
+          Some (Span (off, n))
+      | _ -> None)
   | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
 
 let field_read ~min_wire_size access typ fn ~plain =
@@ -4085,7 +4093,6 @@ let apply_compiled : type a f r.
     | Some (Types.Success stmts | Types.Act stmts) ->
         List.fold_left action_vars [] stmts
   in
-  let n_extra_vars = List.length action_vanames in
   let field_idx = r.n_fields in
   let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
@@ -4104,11 +4111,7 @@ let apply_compiled : type a f r.
       ~populate:(guarded_populate cf fld.typ)
       ~check ~act
   in
-  let faction =
-    match act with None -> None | Some act_fn -> Some (fld.name, act_fn)
-  in
   let byte_off = cf.validator_off in
-  let new_writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev in
   let new_field_readers =
     extend_scope fld.name (expr_reader cf fld.typ) cf.nested_readers
       r.field_readers
@@ -4130,7 +4133,7 @@ let apply_compiled : type a f r.
       make = r.make;
       readers = Snoc (r.readers, read);
       checked_readers = Snoc (r.checked_readers, checked_read);
-      writers_rev = new_writers_rev;
+      writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev;
       puts_rev = field_put r.puts_rev fld checked_read;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
@@ -4147,11 +4150,11 @@ let apply_compiled : type a f r.
         @ r.validators_rev;
       checkers_rev = (byte_off, check_only) :: r.checkers_rev;
       field_actions_rev =
-        (match faction with
-        | Some fa -> fa :: r.field_actions_rev
+        (match act with
+        | Some act_fn -> (fld.name, act_fn) :: r.field_actions_rev
         | None -> r.field_actions_rev);
       n_fields = List.length new_field_readers;
-      n_array_slots = List.length new_field_readers + n_extra_vars;
+      n_array_slots = List.length new_field_readers + List.length action_vanames;
       r_bf = cf.bf_after;
       field_access_rev =
         (fld.name, (fld.id, cf.field_access)) :: r.field_access_rev;
