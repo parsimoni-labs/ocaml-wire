@@ -1073,6 +1073,87 @@ let test_staged_spans () =
     Alcotest.(check string) "encode" (Bytes.to_string buf) (Bytes.to_string out)
   done
 
+(* A variable-size record of plain spans sized by its header gives the same
+   answer, error included, as the same record forced onto the general path by
+   an input parameter, on pseudo-random headers that fit, overrun or go
+   negative. *)
+let test_layout_pass () =
+  let page ~params =
+    let n = Field.v "n" uint8 in
+    let m = Field.v "m" uint8 in
+    let p = Param.input "p" uint8 in
+    let where = if params then Some Expr.(Param.expr p >= int 0) else None in
+    let c =
+      Codec.v "Page" ?where
+        (fun n m a b rest -> (n, m, a, b, rest))
+        Codec.
+          [
+            (n $ fun (n, _, _, _, _) -> n);
+            (m $ fun (_, m, _, _, _) -> m);
+            ( Field.v "a" (byte_array ~size:Expr.(Field.ref n * int 2))
+            $ fun (_, _, a, _, _) -> a );
+            ( Field.v "b" (byte_slice ~size:Expr.(Field.ref m - int 4))
+            $ fun (_, _, _, b, _) -> b );
+            (Field.v "rest" all_bytes $ fun (_, _, _, _, r) -> r);
+          ]
+    in
+    let env =
+      if params then Some (Param.bind p (UInt8.v 0) (Codec.env c)) else None
+    in
+    (c, env)
+  in
+  let fast, _ = page ~params:false and slow, env = page ~params:true in
+  let outcome c env buf =
+    let v =
+      match Codec.validate ?env c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+    in
+    let d =
+      match Codec.decode ?env c buf 0 with
+      | Ok (_, _, a, _, rest) -> Fmt.str "ok %S %S" a rest
+      | Error e -> Fmt.str "%a" pp_parse_error e
+    in
+    v ^ " / " ^ d
+  in
+  let rand = Random.State.make [| 3 |] in
+  for _ = 1 to 2000 do
+    let len = Random.State.int rand 40 in
+    let buf = Bytes.init len (fun _ -> Char.chr (Random.State.int rand 256)) in
+    if len >= 2 then begin
+      Bytes.set_uint8 buf 0 (Random.State.int rand 12);
+      Bytes.set_uint8 buf 1 (Random.State.int rand 16)
+    end;
+    Alcotest.(check string)
+      "same answer" (outcome slow env buf) (outcome fast None buf)
+  done
+
+(* A gated optional sits at a fixed offset but has no fixed size, so the
+   layout pass cannot count it as a constant: with the gate on and one byte
+   left, validate refuses the record as decode does. *)
+let test_layout_gated_optional () =
+  let gate = Field.v "gate" uint8 in
+  let c =
+    Codec.v "Gated"
+      (fun g p rest -> (g, p, rest))
+      Codec.
+        [
+          (gate $ fun (g, _, _) -> g);
+          ( Field.optional "payload"
+              ~present:Expr.(Field.ref gate <> int 0)
+              uint16be
+          $ fun (_, p, _) -> p );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.of_string "\x01\x00" in
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted a missing payload"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted a missing payload"
+  | exception Wire.Parse_error _ -> ()
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10237,6 +10318,10 @@ let suite =
         test_staged_scalars;
       Alcotest.test_case "decode: fixed byte arrays agree with get" `Quick
         test_staged_spans;
+      Alcotest.test_case "layout: agrees with the general path" `Quick
+        test_layout_pass;
+      Alcotest.test_case "layout: a gated optional has no fixed size" `Quick
+        test_layout_gated_optional;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
