@@ -14,9 +14,8 @@ let equal = Optint.equal
 let zero = Optint.zero
 let pp = Optint.pp
 
-(* Compose two unboxed 16-bit reads/writes through [Optint]. On a 64-bit host
-   [Optint.t] is an unboxed native [int], so the shifts and [logor] stay in
-   registers exactly like the old [int] code (measured identical, zero alloc);
+(* Writes compose two 16-bit stores through [Optint]. On a 64-bit host
+   [Optint.t] is an unboxed native [int], so the shifts stay in registers;
    where the native [int] is narrower than 32 bits [Optint.t] falls back to a
    boxed [int32], which is what keeps a value with bit 31 set (a TCP sequence
    number) from being truncated. *)
@@ -39,15 +38,17 @@ let check_encode v =
     Fmt.invalid_arg
       "Wire.encode: value %a does not fit an unsigned 32-bit field" Optint.pp v
 
-let le buf off =
-  let lo = Bytes.get_uint16_le buf off in
-  let hi = Bytes.get_uint16_le buf (off + 2) in
-  Optint.(logor (of_int lo) (shift_left (of_int hi) 16))
+(* As in [SInt32]: on a 64-bit host the read is one load into a native
+   [int], masked to the unsigned value. *)
+let le buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Bytes.get_int32_le buf off) land mask32
+  | False -> Bytes.get_int32_le buf off
 
-let be buf off =
-  let hi = Bytes.get_uint16_be buf off in
-  let lo = Bytes.get_uint16_be buf (off + 2) in
-  Optint.(logor (shift_left (of_int hi) 16) (of_int lo))
+let be buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Bytes.get_int32_be buf off) land mask32
+  | False -> Bytes.get_int32_be buf off
 
 let low16 v = Optint.to_int (Optint.logand v mask16)
 
@@ -75,10 +76,14 @@ let of_int n =
     Fmt.invalid_arg "Wire.UInt32.of_int: %d is not an unsigned 32-bit value" n;
   v
 
-let to_int32 = Optint.to_int32
+let to_int32 (v : t) : int32 =
+  match Optint.is_immediate with True -> Int32.of_int v | False -> v
 
 (* [Optint.of_int32] keeps the signed view, so where [Optint.t] is a wide native
    int a word with bit 31 set arrives as a negative number: not what [le] and
    [be] decode those same bytes to, and not a value a uint32 field may hold.
    Masking back to the field brings it to the one canonical representation. *)
-let of_int32 n = Optint.logand (Optint.of_int32 n) field_mask
+let of_int32 (n : int32) : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int n land mask32
+  | False -> n

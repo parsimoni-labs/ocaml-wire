@@ -4582,7 +4582,7 @@ let check_env_owner ~op t (env : Param.env) =
       t.name
 
 let require_env ~op t = function
-  | None when not (has_input_params t) -> ()
+  | None when t.n_params = 0 || not (has_input_params t) -> ()
   | None ->
       Fmt.invalid_arg
         "Codec.%s: codec %s has input params; pass ?env (e.g. [Codec.env c |> \
