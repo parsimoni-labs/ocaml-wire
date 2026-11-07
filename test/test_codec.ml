@@ -591,6 +591,61 @@ let test_encode_fixed_no_alloc () =
     (Fmt.str "encode of a fixed codec allocates ~0 words (got %.2f)" per_call)
     true (per_call < 1.0)
 
+(* [decode] reads a fixed scalar field with no bounds check of its own, after
+   checking the record's extent. Each such read must give what the
+   bounds-checked [Codec.get] gives, sign included, on bytes with the top bit
+   set. *)
+let test_decode_scalars_agree_with_get () =
+  let buf = Bytes.of_string "\x00\xf1\x82\x93\xa4\xb5" in
+  let check : type a. string -> a typ -> unit =
+   fun name typ ->
+    let b = Codec.(Field.v "x" typ $ Fun.id) in
+    let c =
+      Codec.v name
+        (fun _pad x -> x)
+        Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); b ]
+    in
+    let get = Staged.unstage (Codec.get c b) in
+    Alcotest.(check bool) name true (Codec.decode_exn c buf 0 = get buf 0)
+  in
+  check "uint8" uint8;
+  check "uint16" uint16;
+  check "uint16be" uint16be;
+  check "uint32" uint32;
+  check "uint32be" uint32be;
+  check "int8" int8;
+  check "int16" int16;
+  check "int16be" int16be;
+  check "int32" int32;
+  check "int32be" int32be;
+  List.iter
+    (fun (name, base) ->
+      let hi = Codec.(Field.v "hi" (bits ~width:3 base) $ fst) in
+      let lo = Codec.(Field.v "lo" (bits ~width:5 base) $ snd) in
+      let c =
+        Codec.v name
+          (fun _pad hi lo -> (hi, lo))
+          Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); hi; lo ]
+      in
+      let get f = Staged.unstage (Codec.get c f) buf 0 in
+      Alcotest.(check (pair int int))
+        name
+        (get hi, get lo)
+        (Codec.decode_exn c buf 0))
+    [ ("bits u8", U8); ("bits u16", U16); ("bits u16be", U16be) ]
+
+(* The fixed fields are read with no check of their own, so the offset is
+   checked first, in a way that cannot overflow. *)
+let test_decode_offset_out_of_range () =
+  let c = Codec.v "Two" Fun.id Codec.[ Field.v "x" uint16be $ Fun.id ] in
+  let buf = Bytes.make 4 '\x00' in
+  (match Codec.decode c buf (-1) with
+  | exception Invalid_argument _ -> ()
+  | _ -> Alcotest.fail "decode at -1: expected Invalid_argument");
+  match Codec.decode c buf (max_int - 1) with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "decode at max_int - 1: expected an error"
+
 (* A compiled validator keeps a per-domain scratch, and the cost of reaching it
    on a domain that has not decoded yet must not track how many validators the
    program ever built. It used to: each validator minted its own
@@ -10050,6 +10105,10 @@ let suite =
         test_validate_check_free_no_alloc;
       Alcotest.test_case "encode: fixed codec allocates nothing" `Quick
         test_encode_fixed_no_alloc;
+      Alcotest.test_case "decode: fixed scalars agree with get" `Quick
+        test_decode_scalars_agree_with_get;
+      Alcotest.test_case "decode: offset out of range" `Quick
+        test_decode_offset_out_of_range;
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;
