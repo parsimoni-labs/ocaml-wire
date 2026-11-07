@@ -16,6 +16,12 @@ val i32le : bytes -> int -> int32
 val i32be : bytes -> int -> int32
 (** [i32be buf off] is the big-endian 32-bit value at [off]. *)
 
+val i64le : bytes -> int -> int64
+(** [i64le buf off] is the little-endian 64-bit value at [off]. *)
+
+val i64be : bytes -> int -> int64
+(** [i64be buf off] is the big-endian 64-bit value at [off]. *)
+
 (** {1 Writes}
 
     With no bounds check either. A 16-bit write keeps the low 16 bits of the

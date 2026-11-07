@@ -57,3 +57,16 @@ let[@inline] set_i32be buf off v =
   if Paranoid.enabled then Bytes.set_int32_be buf off v
   else if Sys.big_endian then set32 buf off v
   else set32 buf off (swap32 v)
+
+external get64 : bytes -> int -> int64 = "%caml_bytes_get64u"
+external swap64 : int64 -> int64 = "%bswap_int64"
+
+let[@inline] i64le buf off =
+  if Paranoid.enabled then Bytes.get_int64_le buf off
+  else if Sys.big_endian then swap64 (get64 buf off)
+  else get64 buf off
+
+let[@inline] i64be buf off =
+  if Paranoid.enabled then Bytes.get_int64_be buf off
+  else if Sys.big_endian then get64 buf off
+  else swap64 (get64 buf off)
