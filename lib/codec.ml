@@ -797,6 +797,7 @@ type bf_info = {
   word_reader : bytes -> int -> Optint.t;
   bf_shift : int;
   bf_mask : Optint.t;
+  bf_mask_int : int;
 }
 
 let no_runtime = Types.unbound_eval_ctx
@@ -6495,6 +6496,52 @@ let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
 
 type bitfield = bf_info
 
+(* The word a bitfield sits in, read with one checked load. Where [Optint.t] is
+   the native [int] the word is that [int], with no conversion. *)
+let bf_word_reader base byte_off : bytes -> int -> Optint.t =
+  let n = bf_base_byte_size base in
+  match (Optint.is_immediate, base) with
+  | True, U8 ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Unchecked.u8 buf p
+  | True, U16 Little ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Unchecked.u16le buf p
+  | True, U16 Big ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Unchecked.u16be buf p
+  | True, U32 Little ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Int32.to_int (Unchecked.i32le buf p) land 0xffff_ffff
+  | True, U32 Big ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Int32.to_int (Unchecked.i32be buf p) land 0xffff_ffff
+  | False, U32 Little ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Optint.of_int32 (Unchecked.i32le buf p)
+  | False, U32 Big ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Optint.of_int32 (Unchecked.i32be buf p)
+  | False, (U8 | U16 _) ->
+      fun buf off ->
+        let p = off + byte_off in
+        Bitfield.check_word buf p n;
+        Optint.of_int (Bitfield.read_word base buf p)
+
 let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
   match field_access ~op:"Codec.bitfield" codec f with
   | Bitfield { base; byte_off; shift; width } ->
@@ -6502,41 +6549,25 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
          is a direct read of the right width with [byte_off] baked in.
          Avoids the partial-application + runtime [match] that
          [Bitfield.read_word base] would create. *)
-      let read_word =
-        match base with
-        | U8 ->
-            fun buf off -> Optint.of_int (Bytes.get_uint8 buf (off + byte_off))
-        | U16 Little ->
-            fun buf off -> Optint.of_int (Bitfield.u16_le buf (off + byte_off))
-        | U16 Big ->
-            fun buf off -> Optint.of_int (Bitfield.u16_be buf (off + byte_off))
-        | U32 Little ->
-            if Bitfield.int_holds_u32 then fun buf off ->
-              Optint.of_int (Bitfield.u32_le buf (off + byte_off))
-            else fun buf off ->
-              Optint.of_int32 (Bytes.get_int32_le buf (off + byte_off))
-        | U32 Big ->
-            if Bitfield.int_holds_u32 then fun buf off ->
-              Optint.of_int (Bitfield.u32_be buf (off + byte_off))
-            else fun buf off ->
-              Optint.of_int32 (Bytes.get_int32_be buf (off + byte_off))
-      in
-      (* Same caller-supplied offset as {!get}, so the same span check. *)
-      let word = bf_base_byte_size base in
-      let word_reader buf off =
-        Bitfield.check_word buf (off + byte_off) word;
-        read_word buf off
-      in
+      let word_reader = bf_word_reader base byte_off in
       let mask = (1 lsl width) - 1 in
-      { word_reader; bf_shift = shift; bf_mask = Optint.of_int mask }
+      {
+        word_reader;
+        bf_shift = shift;
+        bf_mask = Optint.of_int mask;
+        bf_mask_int = mask;
+      }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
 let load_word (bf : bitfield) : (bytes -> int -> Optint.t) Staged.t =
   Staged.stage bf.word_reader
 
-let[@inline always] extract (bf : bitfield) word =
-  Optint.to_int
-    (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
+let[@inline always] extract (bf : bitfield) (word : Optint.t) =
+  match Optint.is_immediate with
+  | True -> (word lsr bf.bf_shift) land bf.bf_mask_int
+  | False ->
+      Optint.to_int
+        (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
 
 (* -- Snapshot: batch bitfield access -- *)
 
