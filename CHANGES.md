@@ -3,9 +3,10 @@
 ### Fixed
 
 - `Wire.Codec.validate` refuses a byte span whose size, read from the data,
-  is negative, as `Wire.Codec.decode` does. A codec without constraints ran
-  only the record's bounds check, which a later span could satisfy by taking
-  the bytes back (#NNN, @samoht)
+  is negative or runs past the end, and `Wire.Codec.decode` refuses a
+  `byte_slice` that runs past the end with a parse error rather than raising
+  `Invalid_argument`. The record's bounds check alone missed both when a
+  later span that takes the rest gave the bytes back (#428, @samoht)
 
 ## 1.3.0
 
