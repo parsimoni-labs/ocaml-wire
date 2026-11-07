@@ -908,6 +908,8 @@ type (_, _) readers =
    span [decode] has already bounds-checked, so the reads skip their own check. *)
 and _ field_read =
   | Data : 'a scalar -> 'a field_read
+  | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
+      (** A scalar under a total [map]: read, then decoded. *)
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -978,6 +980,7 @@ let[@inline] read_field : type a.
  fun r runtime input_end buf base ->
   match r with
   | Data s -> read_scalar s buf base
+  | Mapped (s, decode) -> decode (read_scalar s buf base)
   | Fn f -> f runtime input_end buf base
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
@@ -1061,10 +1064,26 @@ let field_scalar : type a.
       | U32 _ -> None)
   | _ -> None
 
+(* How [decode] reads a field through [where], [enum] and total [map]
+   wrappers. Their checks run in the check pass before any read, so the read
+   only takes the value off the wire and decodes it. *)
+let rec read_view : type a.
+    min_wire_size:int -> field_access -> a typ -> a field_read option =
+ fun ~min_wire_size access typ ->
+  match typ with
+  | Where { inner; _ } -> read_view ~min_wire_size access inner
+  | Enum { base; _ } -> read_view ~min_wire_size access base
+  | Map { inner; decode; index_bound = None; _ } -> (
+      match read_view ~min_wire_size access inner with
+      | Some (Data s) -> Some (Mapped (s, decode))
+      | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
+      | Some (Fn _) | None -> None)
+  | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
+
 let field_read ~min_wire_size access typ fn ~plain =
-  match field_scalar ~min_wire_size access typ with
-  | Some s when plain -> Data s
-  | _ -> Fn fn
+  if not plain then Fn fn
+  else
+    match read_view ~min_wire_size access typ with Some r -> r | None -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
@@ -1331,13 +1350,15 @@ type step =
       slot : int;
       scalar : 'a scalar;
       voff : int;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       store : bool;
     }
       -> step
-      (** A scalar whose constraints all compare it with literals: read, keep in
-          its slot when something else reads it, and test [lo <= v <= hi]. *)
+      (** A scalar whose checks all bound its wire value: read it, keep it in
+          its slot when something else reads it, and test it against [set], a
+          few disjoint intervals. [fail] is the field's general validator, which
+          raises the error the field's checks give. *)
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
 
 type ('f, 'r) record =
@@ -1345,6 +1366,10 @@ type ('f, 'r) record =
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
+          (* For a decode that has run the check pass first. *)
+      checked_readers : ('full, 'f) readers;
+          (* For one that reads before it checks: a field whose type validates
+             checks itself as it is read. *)
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
           (* The fields' descriptor writes, while every field has one. *)
@@ -1398,8 +1423,8 @@ let id_counter = Atomic.make 0
 type interval =
   | Interval : {
       scalar : 'a scalar;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       name : string;
       voff : int;
     }
@@ -1499,6 +1524,7 @@ let record_start ?where ?doc name make =
       make;
       doc;
       readers = Nil;
+      checked_readers = Nil;
       writers_rev = [];
       puts_rev = Some [];
       size_of_value_rev = [];
@@ -3858,27 +3884,62 @@ let field_validators ~field_idx ~validator_off ~populate ~check ~act =
 
 (* The interval a conjunction of comparisons between the field [name] and
    literals allows, or [None] for any other constraint. *)
-let rec self_range name (e : bool expr) ((lo, hi) as r) =
-  let bound : type a. cmp -> a expr -> a expr -> (int * int) option =
+(* Sets of ints as sorted, disjoint intervals. *)
+let set_inter a b =
+  let rec go a b =
+    match (a, b) with
+    | [], _ | _, [] -> []
+    | (l1, h1) :: r1, (l2, h2) :: r2 ->
+        let rest = if h1 < h2 then go r1 b else go a r2 in
+        let lo = max l1 l2 and hi = min h1 h2 in
+        if lo <= hi then (lo, hi) :: rest else rest
+  in
+  go a b
+
+let set_union a b =
+  let rec merge = function
+    | (l1, h1) :: (l2, h2) :: rest when h1 = max_int || l2 <= h1 + 1 ->
+        merge ((l1, max h1 h2) :: rest)
+    | x :: rest -> x :: merge rest
+    | [] -> []
+  in
+  merge (List.sort compare (a @ b))
+
+let all_ints = [ (min_int, max_int) ]
+
+(* The values [cmp] keeps when comparing with [n]. *)
+let cmp_set cmp n =
+  match cmp with
+  | Eq -> [ (n, n) ]
+  | Ge -> [ (n, max_int) ]
+  | Le -> [ (min_int, n) ]
+  | Gt -> if n = max_int then [] else [ (n + 1, max_int) ]
+  | Lt -> if n = min_int then [] else [ (min_int, n - 1) ]
+  | Ne ->
+      set_union
+        (if n = min_int then [] else [ (min_int, n - 1) ])
+        (if n = max_int then [] else [ (n + 1, max_int) ])
+
+(* The values of the field [name] that [e] accepts, when [e] only compares the
+   field with literals, through [&&] and [||]. *)
+let rec self_set name (e : bool expr) =
+  let bound : type a. cmp -> a expr -> a expr -> (int * int) list option =
    fun op x y ->
-    let op, n =
-      match (x, y) with
-      | Ref (I, a), Int n when a = name -> (Some op, n)
-      | Int n, Ref (I, a) when a = name -> (Some (flip op), n)
-      | _ -> (None, 0)
-    in
-    match op with
-    | None -> None
-    | Some Eq -> Some (max lo n, min hi n)
-    | Some Ge -> Some (max lo n, hi)
-    | Some Le -> Some (lo, min hi n)
-    | Some Gt -> if n = max_int then Some (1, 0) else Some (max lo (n + 1), hi)
-    | Some Lt -> if n = min_int then Some (1, 0) else Some (lo, min hi (n - 1))
-    | Some Ne -> None
+    match (x, y) with
+    | Ref (I, a), Int n when a = name -> Some (cmp_set op n)
+    | Int n, Ref (I, a) when a = name -> Some (cmp_set (flip op) n)
+    | _ -> None
+  in
+  let both f a b =
+    match (self_set name a, self_set name b) with
+    | Some a, Some b -> Some (f a b)
+    | _ -> None
   in
   match e with
-  | Bool true -> Some r
-  | And (a, b) -> Option.bind (self_range name a r) (self_range name b)
+  | Bool true -> Some all_ints
+  | Bool false -> Some []
+  | And (a, b) -> both set_inter a b
+  | Or (a, b) -> both set_union a b
   | Eq (x, y) -> bound Eq x y
   | Ne (x, y) -> bound Ne x y
   | Lt (x, y) -> bound Lt x y
@@ -3887,28 +3948,79 @@ let rec self_range name (e : bool expr) ((lo, hi) as r) =
   | Ge (x, y) -> bound Ge x y
   | _ -> None
 
+type base_view = Base : 'b typ * (int * int) list list -> base_view
+
+(* The scalar on the wire under [where], [map] and [enum] wrappers, with the
+   sets of values a closed enum and a lookup [map] accept. Constraints and these
+   sets bound the wire value, as in the 3D projection, so the check pass reads
+   the scalar and never calls a [map]'s decode. *)
+let rec typ_view : type a. a typ -> base_view option = function
+  | Uint8 -> Some (Base (Uint8, []))
+  | Uint16 e -> Some (Base (Uint16 e, []))
+  | Uint32 e -> Some (Base (Uint32 e, []))
+  | Int8 -> Some (Base (Int8, []))
+  | Int16 e -> Some (Base (Int16 e, []))
+  | Int32 e -> Some (Base (Int32 e, []))
+  | Bits _ as t -> Some (Base (t, []))
+  | Where { inner; _ } -> typ_view inner
+  | Map { inner; index_bound; _ } ->
+      Option.map
+        (fun (Base (b, sets)) ->
+          match index_bound with
+          | None -> Base (b, sets)
+          | Some n -> Base (b, [ (0, n - 1) ] :: sets))
+        (typ_view inner)
+  | Enum { base; cases; closed; _ } ->
+      Option.map
+        (fun (Base (b, sets)) ->
+          if not closed then Base (b, sets)
+          else
+            let members =
+              List.fold_left
+                (fun acc (_, v) -> set_union acc [ (v, v) ])
+                [] cases
+            in
+            Base (b, members :: sets))
+        (typ_view base)
+  | _ -> None
+
+type packed_scalar = Ps : 'a scalar -> packed_scalar
+
+(* The scalar the check pass reads for a field, and the sets its type adds. *)
+let check_view ~min_wire_size access typ ~act =
+  if Option.is_some act then None
+  else
+    match typ_view typ with
+    | Some (Base (b, sets)) -> (
+        match field_scalar ~min_wire_size access b with
+        | Some s -> Some (Ps s, sets)
+        | None -> None)
+    | None -> None
+
 (* The check-pass steps of a field, last first. *)
-let field_steps ~used ~name ~slot ~voff ~conds read check full =
-  match read with
-  | Data scalar when slot_scalar scalar -> (
-      let range =
+let field_steps ~used ~name ~slot ~voff ~conds view check full =
+  match view with
+  | Some (Ps scalar, typ_sets) when slot_scalar scalar -> (
+      let cset =
         match conds with
-        | [] -> None
-        | c :: cs ->
-            self_range name
-              (List.fold_left (fun a c -> And (a, c)) c cs)
-              (min_int, max_int)
+        | [] -> Some all_ints
+        | c :: cs -> self_set name (List.fold_left (fun a c -> And (a, c)) c cs)
       in
-      match (check, range) with
-      | None, _ -> [ Slot { slot; scalar } ]
-      | Some _, Some (lo, hi) ->
-          (* Only the field's own constraint has named its slot so far; a
-             later field or the [where] clause that reads it marks it again. *)
+      match (check, cset, typ_sets) with
+      | None, _, [] -> [ Slot { slot; scalar } ]
+      | _, Some cset, _ ->
+          (* Only the field's own constraint has named its slot so far; a later
+             field or the [where] clause that reads it marks it again. *)
           Hashtbl.remove used slot;
-          [ Range { name; slot; scalar; voff; lo; hi; store = true } ]
-      | Some cond, None ->
+          let set = Array.of_list (List.fold_left set_inter cset typ_sets) in
+          let fail runtime input_end buf off =
+            full (alloc_slots (slot + 1)) runtime input_end buf off
+          in
+          [ Range { name; slot; scalar; voff; set; fail; store = true } ]
+      | Some cond, None, [] ->
           Hashtbl.replace used slot ();
-          [ Check { name; slot; voff; cond }; Slot { slot; scalar } ])
+          [ Check { name; slot; voff; cond }; Slot { slot; scalar } ]
+      | _ -> [ Full full ])
   | _ -> [ Full full ]
 
 (* The record's minimum size after [cf]: what [decode] checks the buffer
@@ -3929,6 +4041,22 @@ let field_size_of_value (fld : (_, _) field) cf =
   match cf.field_access with
   | Bitfield _ -> fun _ _ -> cf.size_delta
   | _ -> fun ctx v -> size_of_typ_value ctx fld.typ (fld.get v)
+
+(* A field's reader for a decode that has run the check pass, and for one
+   that reads before it checks. *)
+let field_reads ~min_wire_size ~validates cf (fld : (_, _) field) act raw_reader
+    =
+  ( field_read ~min_wire_size cf.field_access fld.typ raw_reader
+      ~plain:(Option.is_none act),
+    field_read ~min_wire_size cf.field_access fld.typ raw_reader
+      ~plain:(Option.is_none act && not validates) )
+
+(* The encoder's write of a field, while every field so far has one. *)
+let field_put puts (fld : (_, _) field) checked_read =
+  match (puts, checked_read) with
+  | Some puts, Data scalar when int_scalar scalar ->
+      Some (Put { get = fld.get; scalar } :: puts)
+  | _ -> None
 
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
@@ -3975,21 +4103,17 @@ let apply_compiled : type a f r.
   in
   note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
   let min_wire_size = add_min_size r.name fld.name r.min_wire_size cf in
-  let read =
-    field_read ~min_wire_size cf.field_access fld.typ raw_reader
-      ~plain:(Option.is_none act && not validates)
+  let read, checked_read =
+    field_reads ~min_wire_size ~validates cf fld act raw_reader
   in
   Record
     {
       name = r.name;
       make = r.make;
       readers = Snoc (r.readers, read);
+      checked_readers = Snoc (r.checked_readers, checked_read);
       writers_rev = new_writers_rev;
-      puts_rev =
-        (match (r.puts_rev, read) with
-        | Some puts, Data scalar when int_scalar scalar ->
-            Some (Put { get = fld.get; scalar } :: puts)
-        | _ -> None);
+      puts_rev = field_put r.puts_rev fld checked_read;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
@@ -3999,7 +4123,9 @@ let apply_compiled : type a f r.
         List.map
           (fun step -> (byte_off, step))
           (field_steps ~used:r.used_slots ~name:fld.name ~slot:field_idx
-             ~voff:byte_off ~conds:(field_conds fld) read check full)
+             ~voff:byte_off ~conds:(field_conds fld)
+             (check_view ~min_wire_size cf.field_access fld.typ ~act)
+             check full)
         @ r.validators_rev;
       checkers_rev = (byte_off, check_only) :: r.checkers_rev;
       field_actions_rev =
@@ -4206,6 +4332,26 @@ let check_cond ~name ~voff cond arr base =
       (Types.Parse_error
          { e with at = at_of base voff; field = name :: e.field })
 
+(* Top level, so a test allocates no closure. *)
+let rec in_set_from (set : (int * int) array) (v : int) i =
+  i < Array.length set
+  &&
+  let lo, hi = Array.unsafe_get set i in
+  (v >= lo && v <= hi) || in_set_from set v (i + 1)
+
+let in_set (set : (int * int) array) v =
+  if Array.length set = 1 then
+    let lo, hi = Array.unsafe_get set 0 in
+    v >= lo && v <= hi
+  else in_set_from set v 0
+
+(* A failed set test: the field's general validator raises the field's own
+   error. It always does, as the set is what its checks accept; the constraint
+   error after it only stands in if they ever disagree. *)
+let set_failed ~name ~voff ~fail v runtime input_end buf off =
+  fail runtime input_end buf off;
+  range_failed ~name ~voff v off
+
 (* [i] ranges over the array's own indices, so its reads need no check. *)
 let run_steps steps arr runtime input_end buf off =
   for i = 0 to Array.length steps - 1 do
@@ -4214,10 +4360,11 @@ let run_steps steps arr runtime input_end buf off =
     | Check { name; slot; voff; cond } ->
         if not (check_cond ~name ~voff cond arr off) then
           check_failed ~name ~slot ~voff arr off
-    | Range { name; slot; scalar; voff; lo; hi; store } ->
+    | Range { name; slot; scalar; voff; set; fail; store } ->
         let v = read_slot scalar buf off in
         if store then arr.ints.(slot) <- v;
-        if v < lo || v > hi then range_failed ~name ~voff v off
+        if not (in_set set v) then
+          set_failed ~name ~voff ~fail v runtime input_end buf off
     | Full f -> f arr runtime input_end buf off
   done
 
@@ -4357,10 +4504,10 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
 
 let no_slots = { ints = [||]; int64s = [||] }
 
-(* An interval test as six ints: the read's kind, its offset, the bitfield
-   shift and mask (0 and -1 for a whole scalar), and the bounds. *)
-let flat_interval : type a. a scalar -> lo:int -> hi:int -> int array =
- fun scalar ~lo ~hi ->
+(* A set test as ints: the read's kind, its offset, the bitfield shift and mask
+   (0 and -1 for a whole scalar), the number of intervals, then their bounds. *)
+let flat_interval : type a. a scalar -> (int * int) array -> int array =
+ fun scalar set ->
   let kind, off, shift, mask =
     match scalar with
     | Byte off -> (0, off, 0, -1)
@@ -4377,7 +4524,12 @@ let flat_interval : type a. a scalar -> lo:int -> hi:int -> int array =
     | Bits16le { off; shift; mask } -> (1, off, shift, mask)
     | Bits16be { off; shift; mask } -> (2, off, shift, mask)
   in
-  [| kind; off; shift; mask; lo; hi |]
+  Array.concat
+    [
+      [| kind; off; shift; mask; Array.length set |];
+      Array.concat
+        (Array.to_list (Array.map (fun (lo, hi) -> [| lo; hi |]) set));
+    ]
 
 (* The index of the first failed test in [d], from [i], or -1. The read is
    dispatched in place and nothing is called, so the loop keeps its state in
@@ -4408,17 +4560,30 @@ let rec scan_intervals d tables buf off n i =
     let v =
       (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
     in
-    if v < Array.unsafe_get d (i + 4) || v > Array.unsafe_get d (i + 5) then
-      i / 6
-    else scan_intervals d tables buf off n (i + 6)
+    let k = Array.unsafe_get d (i + 4) in
+    if k = 1 then
+      if v >= Array.unsafe_get d (i + 5) && v <= Array.unsafe_get d (i + 6) then
+        scan_intervals d tables buf off n (i + 7)
+      else i
+    else scan_set d tables buf off n i v (i + 5) (i + 5 + (2 * k))
 
-(* The first interval, in declaration order, the value fails. *)
-let first_failed intervals buf off =
+(* The rest of a test with several intervals. Every call in the scan is a tail
+   call, so the scan keeps its state in registers. *)
+and scan_set d tables buf off n i (v : int) j stop =
+  if j >= stop then i
+  else if v >= Array.unsafe_get d j && v <= Array.unsafe_get d (j + 1) then
+    scan_intervals d tables buf off n stop
+  else scan_set d tables buf off n i v (j + 2) stop
+
+(* The first test, in declaration order, the value fails. *)
+let first_failed intervals input_end buf off =
   let rec go i =
     if i < Array.length intervals then
-      let (Interval { scalar; lo; hi; name; voff }) = intervals.(i) in
+      let (Interval { scalar; set; fail; name; voff }) = intervals.(i) in
       let v = read_slot scalar buf off in
-      if v < lo || v > hi then range_failed ~name ~voff v off else go (i + 1)
+      if not (in_set set v) then
+        set_failed ~name ~voff ~fail v no_runtime input_end buf off
+      else go (i + 1)
   in
   go 0
 
@@ -4427,7 +4592,7 @@ let run_plain_pass pass input_end buf off =
   | No_checks -> ()
   | Intervals { flat; tables; intervals } ->
       if scan_intervals flat tables buf off (Array.length flat) 0 >= 0 then
-        first_failed intervals buf off
+        first_failed intervals input_end buf off
   | Steps { steps; where; scratch; clear } ->
       let arr =
         match scratch with
@@ -4454,32 +4619,28 @@ let byte_view : type a. a scalar -> (int * (int -> int)) option = function
 let flatten_intervals intervals =
   let groups = Hashtbl.create 8 in
   Array.iter
-    (fun (Interval { scalar; lo; hi; _ }) ->
+    (fun (Interval { scalar; set; _ }) ->
       match byte_view scalar with
       | Some (off, value) ->
           let prev = Option.value ~default:[] (Hashtbl.find_opt groups off) in
-          Hashtbl.replace groups off ((value, lo, hi) :: prev)
+          Hashtbl.replace groups off ((value, set) :: prev)
       | None -> ())
     intervals;
   let tables = Stdlib.ref [] and n_tables = Stdlib.ref 0 in
   let emitted = Hashtbl.create 8 in
   let table off tests =
     let accept b =
-      List.for_all
-        (fun (value, lo, hi) ->
-          let v = value b in
-          v >= lo && v <= hi)
-        tests
+      List.for_all (fun (value, set) -> in_set set (value b)) tests
     in
     let t = String.init 256 (fun b -> if accept b then '\001' else '\000') in
     tables := t :: !tables;
     let i = !n_tables in
     incr n_tables;
-    [| 10 + i; off; 0; -1; 1; 1 |]
+    [| 10 + i; off; 0; -1; 1; 1; 1 |]
   in
   let flat =
     Array.to_list intervals
-    |> List.filter_map (fun (Interval { scalar; lo; hi; _ }) ->
+    |> List.filter_map (fun (Interval { scalar; set; _ }) ->
         match byte_view scalar with
         | Some (off, _) when List.length (Hashtbl.find groups off) > 1 ->
             if Hashtbl.mem emitted off then None
@@ -4487,14 +4648,14 @@ let flatten_intervals intervals =
               Hashtbl.replace emitted off ();
               Some (table off (Hashtbl.find groups off))
             end
-        | _ -> Some (flat_interval scalar ~lo ~hi))
+        | _ -> Some (flat_interval scalar set))
   in
   (Array.concat flat, Array.of_list (List.rev !tables))
 
 let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   let interval = function
-    | Range { scalar; lo; hi; name; voff; store = false; _ } ->
-        Some (Interval { scalar; lo; hi; name; voff })
+    | Range { scalar; set; fail; name; voff; store = false; _ } ->
+        Some (Interval { scalar; set; fail; name; voff })
     | Range _ | Slot _ | Check _ | Full _ -> None
   in
   let intervals = Array.map interval steps in
@@ -4658,10 +4819,11 @@ let build_record_encoder name writers size_of_value ~check =
             name Types.pp_parse_error e));
     !write_off
 
-let build_decoders make readers wire_size_info min_size ~plain ~check =
-  let fwd = to_fwd readers in
+let build_decoders make readers checked_readers wire_size_info min_size ~plain
+    ~check =
+  let fwd = to_fwd readers and checked = to_fwd checked_readers in
   let raw_decode runtime input_end buf off =
-    apply_fwd make fwd runtime input_end buf off
+    apply_fwd make checked runtime input_end buf off
   in
   ( build_checked_decode raw_decode wire_size_info min_size,
     if plain then
@@ -4810,7 +4972,7 @@ let seal : type r.
     plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where
   in
   let decode, plain_decode =
-    build_decoders r.make r.readers wire_size_info min_size
+    build_decoders r.make r.readers r.checked_readers wire_size_info min_size
       ~plain:(n_params = 0) ~check
   in
   {
@@ -5348,7 +5510,7 @@ let env (t : _ t) : Param.env =
     bound = Array.make t.n_params false;
   }
 
-let decode_slow consume e t c buf off =
+let decode_slow consume e t (c : _ compiled) buf off =
   (* Require an env that binds every input param, as encode does: an unbound
      input param resolves a parametric size to 0, silently truncating the field
      and misaligning the rest of the record. This is a usage error, not malformed
