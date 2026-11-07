@@ -54,3 +54,7 @@ val set : bytes -> int -> t -> unit
 val unsafe_get : bytes -> int -> t
 (** [unsafe_get buf off] is the value at [off], read with no bounds check: the
     caller has checked that the byte is in [buf]. *)
+
+val int_eq : (t, int) Type.eq
+(** The proof that {!type-t} is [int], for a reader that computes a value as an
+    int. *)

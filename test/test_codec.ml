@@ -917,6 +917,281 @@ let test_shared_byte_constraints () =
   Alcotest.(check string) "second table" "hi" (two_outcome '\x45' '\x41');
   Alcotest.(check string) "first table" "ihl" (two_outcome '\x44' '\x31')
 
+(* The checks on a field under [map] and [enum], and a disjunction, still give
+   the errors they gave, whatever path the check pass takes. *)
+let test_mapped_and_disjunctive_checks () =
+  let u16 = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
+  let start =
+    Field.v "start"
+      ~self_constraint:(fun s -> Expr.(s = int 0 || s >= int 8))
+      u16
+  in
+  let kind =
+    Field.v "kind" (enum "Kind" [ ("A", 2); ("B", 5); ("C", 13) ] uint8)
+  in
+  let hi =
+    Field.v "hi"
+      ~self_constraint:(fun s -> Expr.(s <= int 3))
+      (bits ~width:4 U8)
+  in
+  let lo =
+    Field.v "lo"
+      ~self_constraint:(fun s -> Expr.(s >= int 1))
+      (bits ~width:4 U8)
+  in
+  let c =
+    Codec.v "Mapped"
+      (fun s k h l -> (s, k, h, l))
+      Codec.
+        [
+          (start $ fun (s, _, _, _) -> s);
+          (kind $ fun (_, k, _, _) -> k);
+          (hi $ fun (_, _, h, _) -> h);
+          (lo $ fun (_, _, _, l) -> l);
+        ]
+  in
+  let describe (e : parse_error) =
+    let kind =
+      match e.kind with
+      | Constraint_failed _ -> "constraint"
+      | Invalid_enum _ -> "enum"
+      | _ -> "other"
+    in
+    Fmt.str "%s:%s" (String.concat "." e.field) kind
+  in
+  let outcome s k b =
+    let buf = Bytes.create 4 in
+    Bytes.set_uint16_be buf 0 s;
+    Bytes.set_uint8 buf 2 k;
+    Bytes.set_uint8 buf 3 b;
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> describe e
+    in
+    let decoded =
+      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+    in
+    Alcotest.(check string) "decode agrees" validated decoded;
+    validated
+  in
+  let check name expected s k b =
+    Alcotest.(check string) name expected (outcome s k b)
+  in
+  check "start 0" "ok" 0 2 0x31;
+  check "start 8" "ok" 8 5 0x31;
+  check "start 100" "ok" 100 13 0x31;
+  check "start 1" "start:constraint" 1 2 0x31;
+  check "start 7" "start:constraint" 7 2 0x31;
+  check "kind 3" "kind:enum" 8 3 0x31;
+  check "hi 4" "hi:constraint" 8 2 0x41;
+  check "lo 0" "lo:constraint" 8 2 0x30
+
+(* A record of every fixed scalar kind, big enough for the staged reads and
+   writes, decodes each field as [get] reads it and encodes back the bytes it
+   came from, on pseudo-random buffers. *)
+let staged_scalars ~d_typ ~f_typ =
+  let a = Codec.(Field.v "a" uint8 $ fun (a, _, _, _, _, _, _, _, _, _) -> a) in
+  let b = Codec.(Field.v "b" int8 $ fun (_, b, _, _, _, _, _, _, _, _) -> b) in
+  let c =
+    Codec.(Field.v "c" uint16be $ fun (_, _, c, _, _, _, _, _, _, _) -> c)
+  in
+  let d = Codec.(Field.v "d" d_typ $ fun (_, _, _, d, _, _, _, _, _, _) -> d) in
+  let e =
+    Codec.(Field.v "e" int32be $ fun (_, _, _, _, e, _, _, _, _, _) -> e)
+  in
+  let f = Codec.(Field.v "f" f_typ $ fun (_, _, _, _, _, f, _, _, _, _) -> f) in
+  let g =
+    Codec.(
+      Field.v "g" (bits ~width:3 U8) $ fun (_, _, _, _, _, _, g, _, _, _) -> g)
+  in
+  let h =
+    Codec.(
+      Field.v "h" (bits ~width:5 U8) $ fun (_, _, _, _, _, _, _, h, _, _) -> h)
+  in
+  let i =
+    Codec.(
+      Field.v "i" (bits ~width:4 U16be) $ fun (_, _, _, _, _, _, _, _, i, _) ->
+      i)
+  in
+  let j =
+    Codec.(
+      Field.v "j" (bits ~width:12 U16be) $ fun (_, _, _, _, _, _, _, _, _, j) ->
+      j)
+  in
+  let codec =
+    Codec.v "Staged"
+      (fun a b c d e f g h i j -> (a, b, c, d, e, f, g, h, i, j))
+      [ a; b; c; d; e; f; g; h; i; j ]
+  in
+  let rand = Random.State.make [| 42 |] in
+  for _ = 1 to 2000 do
+    let buf = Bytes.init 15 (fun _ -> Char.chr (Random.State.int rand 256)) in
+    let v = Codec.decode_exn codec buf 0 in
+    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let a', b', c', d', e', f', g', h', i', j' = v in
+    Alcotest.(check bool) "a" true (a' = get a);
+    Alcotest.(check bool) "b" true (b' = get b);
+    Alcotest.(check bool) "c" true (c' = get c);
+    Alcotest.(check bool) "d" true (d' = get d);
+    Alcotest.(check bool) "e" true (SInt32.equal e' (get e));
+    Alcotest.(check bool) "f" true (f' = get f);
+    Alcotest.(check int) "g" (get g) g';
+    Alcotest.(check int) "h" (get h) h';
+    Alcotest.(check int) "i" (get i) i';
+    Alcotest.(check int) "j" (get j) j';
+    let out = Bytes.make 15 '\xff' in
+    Codec.encode codec v out 0;
+    Alcotest.(check string)
+      "encode"
+      (Bytes.sub_string buf 0 15)
+      (Bytes.sub_string out 0 15)
+  done
+
+(* Little-endian fields take the reader closures, big-endian ones the reads in
+   place. *)
+let test_staged_scalars () =
+  staged_scalars ~d_typ:int16 ~f_typ:uint16;
+  staged_scalars ~d_typ:int16be ~f_typ:uint16be
+
+(* Fixed byte arrays read as spans of the frame: each decodes as [get] reads it
+   and encodes back the bytes it came from. *)
+let test_staged_spans () =
+  let a = Codec.(Field.v "a" (byte_array ~size:(int 6)) $ fun (a, _, _) -> a) in
+  let t = Codec.(Field.v "t" uint16be $ fun (_, t, _) -> t) in
+  let b = Codec.(Field.v "b" (byte_array ~size:(int 3)) $ fun (_, _, b) -> b) in
+  let codec = Codec.v "Spans" (fun a t b -> (a, t, b)) [ a; t; b ] in
+  let rand = Random.State.make [| 7 |] in
+  for _ = 1 to 500 do
+    let buf = Bytes.init 11 (fun _ -> Char.chr (Random.State.int rand 256)) in
+    let ((a', _, b') as v) = Codec.decode_exn codec buf 0 in
+    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    Alcotest.(check string) "a" (get a) a';
+    Alcotest.(check string) "b" (get b) b';
+    let out = Bytes.make 11 '\x00' in
+    Codec.encode codec v out 0;
+    Alcotest.(check string) "encode" (Bytes.to_string buf) (Bytes.to_string out)
+  done
+
+(* A variable-size record of plain spans sized by its header gives the same
+   answer, error included, as the same record forced onto the general path by
+   an input parameter, on pseudo-random headers that fit, overrun or go
+   negative. *)
+let test_layout_pass () =
+  let page ~params =
+    let n = Field.v "n" uint8 in
+    let m = Field.v "m" uint8 in
+    let p = Param.input "p" uint8 in
+    let where = if params then Some Expr.(Param.expr p >= int 0) else None in
+    let c =
+      Codec.v "Page" ?where
+        (fun n m a b rest -> (n, m, a, b, rest))
+        Codec.
+          [
+            (n $ fun (n, _, _, _, _) -> n);
+            (m $ fun (_, m, _, _, _) -> m);
+            ( Field.v "a" (byte_array ~size:Expr.(Field.ref n * int 2))
+            $ fun (_, _, a, _, _) -> a );
+            ( Field.v "b" (byte_slice ~size:Expr.(Field.ref m - int 4))
+            $ fun (_, _, _, b, _) -> b );
+            (Field.v "rest" all_bytes $ fun (_, _, _, _, r) -> r);
+          ]
+    in
+    let env =
+      if params then Some (Param.bind p (UInt8.v 0) (Codec.env c)) else None
+    in
+    (c, env)
+  in
+  let fast, _ = page ~params:false and slow, env = page ~params:true in
+  let outcome c env buf =
+    let v =
+      match Codec.validate ?env c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+    in
+    let d =
+      match Codec.decode ?env c buf 0 with
+      | Ok (_, _, a, _, rest) -> Fmt.str "ok %S %S" a rest
+      | Error e -> Fmt.str "%a" pp_parse_error e
+    in
+    v ^ " / " ^ d
+  in
+  let rand = Random.State.make [| 3 |] in
+  for _ = 1 to 2000 do
+    let len = Random.State.int rand 40 in
+    let buf = Bytes.init len (fun _ -> Char.chr (Random.State.int rand 256)) in
+    if len >= 2 then begin
+      Bytes.set_uint8 buf 0 (Random.State.int rand 12);
+      Bytes.set_uint8 buf 1 (Random.State.int rand 16)
+    end;
+    Alcotest.(check string)
+      "same answer" (outcome slow env buf) (outcome fast None buf)
+  done
+
+(* A fixed record of byte arrays, a bitfield and an int writes the same bytes,
+   or raises the same error, plain as on the general path an input parameter
+   forces, whatever the lengths of the arrays and the width of the bitfield
+   value. *)
+let test_plain_encode_blits () =
+  let enc ~params =
+    let p = Param.input "p" uint8 in
+    let where = if params then Some Expr.(Param.expr p >= int 0) else None in
+    let c =
+      Codec.v "Blits" ?where
+        (fun a f b t -> (a, f, b, t))
+        Codec.
+          [
+            (Field.v "a" (byte_array ~size:(int 3)) $ fun (a, _, _, _) -> a);
+            (Field.v "f" (bits ~width:4 U8) $ fun (_, f, _, _) -> f);
+            (Field.v "b" (byte_array ~size:(int 2)) $ fun (_, _, b, _) -> b);
+            (Field.v "t" uint16be $ fun (_, _, _, t) -> t);
+          ]
+    in
+    let env =
+      if params then Some (Param.bind p (UInt8.v 0) (Codec.env c)) else None
+    in
+    fun v ->
+      let buf = Bytes.make 8 '\xff' in
+      match Codec.encode ?env c v buf 0 with
+      | () -> Bytes.to_string buf
+      | exception Invalid_argument m -> m
+  in
+  let plain = enc ~params:false and slow = enc ~params:true in
+  let rand = Random.State.make [| 5 |] in
+  let str n = String.init n (fun i -> Char.chr (65 + i)) in
+  for _ = 1 to 500 do
+    let la = 2 + Random.State.int rand 3 and lb = 1 + Random.State.int rand 3 in
+    let f = Random.State.int rand 20 and t = Random.State.int rand 0x10000 in
+    let v = (str la, f, str lb, UInt16.v t) in
+    Alcotest.(check string) "same bytes or error" (slow v) (plain v)
+  done
+
+(* A gated optional sits at a fixed offset but has no fixed size, so the
+   layout pass cannot count it as a constant: with the gate on and one byte
+   left, validate refuses the record as decode does. *)
+let test_layout_gated_optional () =
+  let gate = Field.v "gate" uint8 in
+  let c =
+    Codec.v "Gated"
+      (fun g p rest -> (g, p, rest))
+      Codec.
+        [
+          (gate $ fun (g, _, _) -> g);
+          ( Field.optional "payload"
+              ~present:Expr.(Field.ref gate <> int 0)
+              uint16be
+          $ fun (_, p, _) -> p );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.of_string "\x01\x00" in
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted a missing payload"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted a missing payload"
+  | exception Wire.Parse_error _ -> ()
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10075,6 +10350,18 @@ let suite =
       Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
         test_shared_byte_constraints;
+      Alcotest.test_case "check: mapped and disjunctive constraints" `Quick
+        test_mapped_and_disjunctive_checks;
+      Alcotest.test_case "decode: staged scalars agree with get" `Quick
+        test_staged_scalars;
+      Alcotest.test_case "decode: fixed byte arrays agree with get" `Quick
+        test_staged_spans;
+      Alcotest.test_case "layout: agrees with the general path" `Quick
+        test_layout_pass;
+      Alcotest.test_case "encode: fixed byte arrays agree with the general path"
+        `Quick test_plain_encode_blits;
+      Alcotest.test_case "layout: a gated optional has no fixed size" `Quick
+        test_layout_gated_optional;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
