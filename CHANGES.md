@@ -2,12 +2,28 @@
 
 ### Changed
 
+- `Wire.Codec.decode` and `Wire.Codec.encode` are several times faster on a
+  fixed-size codec with nothing to check, such as a plain IPv4 header. Decode
+  no longer re-reads every field to check nothing, and reads fixed-offset
+  fields straight from the buffer once the record's bounds are checked. Encode
+  no longer allocates for signed integer, float or fixed byte fields. An offset
+  near `max_int` is now a parse error rather than an `Invalid_argument` from
+  `Bytes`, and a negative offset raises `Invalid_argument` naming it (#425,
+  @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still
   raise at `v`. A size expression naming a field it cannot see, a bitfield
   after a variable-size field, or a field type with no reader now raises
   `Invalid_argument` at first use instead (#413, @samoht)
+
+### Fixed
+
+- A negative or oversized literal size is refused when its type is built:
+  `byte_array`, `byte_slice`, `byte_array_where`, `zeroterm_at_most`, `array`
+  and `array_seq` raise `Invalid_argument`, as does a record whose fixed size no
+  buffer can hold. A negative literal size used to build, and failed only when
+  a buffer was decoded (#425, @samoht)
 
 ## 1.3.0
 

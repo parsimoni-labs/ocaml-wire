@@ -16,28 +16,20 @@ let max_int = Optint.of_int32 Int32.max_int
 let compare = Optint.compare
 let equal = Optint.equal
 let mask16 = Optint.of_int 0xFFFF
-let sign_bit = Optint.shift_left Optint.one 31
 
-(* Sign-extend the 32-bit pattern in [w] through whatever the carrier is, with
-   no branch on the platform. Where the native [int] is wide the subtraction
-   turns a pattern with bit 31 set into the negative number it spells; where
-   [Optint.t] is a boxed [int32] the same two steps wrap back to [w], which is
-   already that number. *)
-let of_word w = Optint.sub (Optint.logxor w sign_bit) sign_bit
+(* On a 64-bit host [Optint.t] is the native [int], and matching on
+   [Optint.is_immediate] lets each conversion below use it as one: the
+   compiler keeps the [int32] in a register, so a read is one load and a
+   conversion no call. Elsewhere [Optint.t] is the [int32] itself. *)
+let le buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Bytes.get_int32_le buf off)
+  | False -> Bytes.get_int32_le buf off
 
-(* Composed from two unboxed 16-bit reads rather than [Bytes.get_int32_*],
-   which hands back a boxed [int32] on the way to [Optint.of_int32]. [Codec.get]
-   on this field is a hot path the library keeps allocation-free, and the box
-   showed up there. *)
-let le buf off =
-  let lo = Bytes.get_uint16_le buf off in
-  let hi = Bytes.get_uint16_le buf (off + 2) in
-  of_word Optint.(logor (of_int lo) (shift_left (of_int hi) 16))
-
-let be buf off =
-  let hi = Bytes.get_uint16_be buf off in
-  let lo = Bytes.get_uint16_be buf (off + 2) in
-  of_word Optint.(logor (shift_left (of_int hi) 16) (of_int lo))
+let be buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Bytes.get_int32_be buf off)
+  | False -> Bytes.get_int32_be buf off
 
 (* An int32 field owns exactly 32 bits of signed range. Where the native int is
    wide, [Optint.t] is that int and holds numbers the field cannot; truncating
@@ -50,8 +42,12 @@ let check_encode v =
     Fmt.invalid_arg "Wire.encode: value %a does not fit a signed 32-bit field"
       Optint.pp v
 
-let to_int32 = Optint.to_int32
-let of_int32 = Optint.of_int32
+(* Exact: every [t] holds a signed 32-bit value. *)
+let to_int32 (v : t) : int32 =
+  match Optint.is_immediate with True -> Int32.of_int v | False -> v
+
+let of_int32 (n : int32) : t =
+  match Optint.is_immediate with True -> Int32.to_int n | False -> n
 
 (* Every encoder path (typ-level, compiled field, [Codec.set]) writes an int32
    through here, so the width check belongs here too. *)
@@ -82,3 +78,13 @@ let of_int n =
   if compare v min_int < 0 || compare v max_int > 0 then
     Fmt.invalid_arg "Wire.SInt32.of_int: %d is not a signed 32-bit value" n;
   v
+
+let unsafe_le buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32le buf off)
+  | False -> Unchecked.i32le buf off
+
+let unsafe_be buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32be buf off)
+  | False -> Unchecked.i32be buf off

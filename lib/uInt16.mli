@@ -56,3 +56,12 @@ val set_le : bytes -> int -> t -> unit
 val set_be : bytes -> int -> t -> unit
 (** [set_be buf off v] writes [v] as two unsigned big-endian bytes at offset
     [off]. Needs no range check, as for {!set_le}. *)
+
+(**/**)
+
+val unsafe_le : bytes -> int -> t
+(** [unsafe_le buf off] is the little-endian value at [off], read with no bounds
+    check: the caller has checked that its bytes are in [buf]. *)
+
+val unsafe_be : bytes -> int -> t
+(** [unsafe_be buf off] is {!unsafe_le} for a big-endian value. *)

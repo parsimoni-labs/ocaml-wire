@@ -547,6 +547,15 @@ let size_in_ctx ctx e =
    through it. *)
 let fold_size e = match const_int_expr e with Some n -> Int n | None -> e
 
+(* A literal size is a count of bytes in the buffer: never negative, and never
+   more than a buffer can hold. *)
+let literal_size ~combinator e =
+  match fold_size e with
+  | Int n when n < 0 || n > Sys.max_string_length ->
+      Fmt.invalid_arg "Wire.%s: size %d is not a byte count a buffer can hold"
+        combinator n
+  | e -> e
+
 (* Type constructors *)
 let uint8 = Uint8
 let uint16 = Uint16 Little
@@ -839,7 +848,9 @@ let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
 let zeroterm = Zeroterm
-let zeroterm_at_most ~size = Zeroterm_at_most { size = fold_size size }
+
+let zeroterm_at_most ~size =
+  Zeroterm_at_most { size = literal_size ~combinator:"zeroterm_at_most" size }
 
 let where cond inner =
   reject_decoration ~combinator:"where" inner;
@@ -1091,19 +1102,9 @@ and struct_ends_greedy (s : struct_) =
   | Field f :: _ -> ends_greedy f.field_typ
   | [] -> false
 
-let array ~len elem =
-  reject_decoration ~combinator:"array" elem;
-  reject_bitfield_element ~combinator:"array" elem;
-  reject_non_array_element ~combinator:"array" elem;
-  Array { len = fold_size len; elem; seq = seq_list }
+let byte_array ~size =
+  Byte_array { size = literal_size ~combinator:"byte_array" size }
 
-let array_seq seq ~len elem =
-  reject_decoration ~combinator:"array_seq" elem;
-  reject_bitfield_element ~combinator:"array_seq" elem;
-  reject_non_array_element ~combinator:"array_seq" elem;
-  Array { len = fold_size len; elem; seq }
-
-let byte_array ~size = Byte_array { size = fold_size size }
 let byte_array_where_counter = Atomic.make 0
 let elt_var_prefix = "__elt_"
 
@@ -1111,7 +1112,8 @@ let byte_array_where ~size ~per_byte =
   let n = Atomic.fetch_and_add byte_array_where_counter 1 in
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
-  Byte_array_where { size = fold_size size; elt_var; cond }
+  Byte_array_where
+    { size = literal_size ~combinator:"byte_array_where" size; elt_var; cond }
 
 (* The 3D synthesized typedef name derived from an elt_var. The element
    field inside the synthesized struct keeps the elt_var as its name so the
@@ -1123,7 +1125,8 @@ let synth_name_of_elt_var ev =
     "_RefByte_" ^ String.sub ev plen (String.length ev - plen)
   else "_RefByte_" ^ ev
 
-let byte_slice ~size = Byte_slice { size = fold_size size }
+let byte_slice ~size =
+  Byte_slice { size = literal_size ~combinator:"byte_slice" size }
 
 let optional present inner =
   reject_bitfield_element ~combinator:"optional" inner;
@@ -3979,6 +3982,29 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Array { len = Int n; elem; _ } -> (
       match field_wire_size elem with Some k -> Some (n * k) | None -> None)
   | _ -> None
+
+(* An array of a literal count of fixed-width elements is a byte count too. *)
+let array_len ~combinator len elem =
+  match (literal_size ~combinator len, field_wire_size elem) with
+  | Int n, Some k when k > 0 && n > Sys.max_string_length / k ->
+      Fmt.invalid_arg
+        "Wire.%s: %d elements of %d bytes are more than a buffer can hold"
+        combinator n k
+  | len, _ -> len
+
+let array ~len elem =
+  reject_decoration ~combinator:"array" elem;
+  reject_bitfield_element ~combinator:"array" elem;
+  reject_non_array_element ~combinator:"array" elem;
+  (Array { len = array_len ~combinator:"array" len elem; elem; seq = seq_list }
+    : _ typ)
+
+let array_seq seq ~len elem =
+  reject_decoration ~combinator:"array_seq" elem;
+  reject_bitfield_element ~combinator:"array_seq" elem;
+  reject_non_array_element ~combinator:"array_seq" elem;
+  (Array { len = array_len ~combinator:"array_seq" len elem; elem; seq }
+    : _ typ)
 
 let c_type_of : type a. a typ -> string = function
   | Uint8 | Bits { base = U8; _ } -> "uint8_t"
