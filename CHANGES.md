@@ -6,6 +6,10 @@
   fixed-size codec with nothing to check, such as a plain IPv4 header. Decode
   no longer re-reads every field to check nothing, and encode no longer
   allocates for signed integer, float or fixed byte fields (#419, @samoht)
+- `Wire.Codec.decode` reads fixed-offset fields without a function call per
+  field. An offset near `max_int` is now a parse error rather than an
+  `Invalid_argument` from `Bytes`, and a negative offset raises
+  `Invalid_argument` naming it (#419, @samoht)
 - `Wire.Codec.validate` is several times faster on a codec of fixed-offset
   fields with no parameters or actions. Its first call compiles the checks to
   one read and one test per field (#417, @samoht)

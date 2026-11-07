@@ -899,9 +899,79 @@ let struct' = struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers
-      * (runtime -> Input_end.t -> bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers * 'a field_read
       -> ('full, 'rest) readers
+
+(* How [decode] reads one field. A scalar at a fixed offset is data, read by
+   [read_field] in one direct call; any other field is a closure, which costs
+   an indirect call through [caml_applyN]. The offsets are relative to the
+   record and inside the span [decode] has already bounds-checked, so the reads
+   skip their own check. *)
+and _ field_read =
+  | Byte : int -> UInt8.t field_read
+  | U16le : int -> UInt16.t field_read
+  | U16be : int -> UInt16.t field_read
+  | U32le : int -> UInt32.t field_read
+  | U32be : int -> UInt32.t field_read
+  | Sbyte : int -> SInt8.t field_read
+  | I16le : int -> SInt16.t field_read
+  | I16be : int -> SInt16.t field_read
+  | I32le : int -> SInt32.t field_read
+  | I32be : int -> SInt32.t field_read
+  | Bits8 : { off : int; shift : int; mask : int } -> int field_read
+  | Bits16le : { off : int; shift : int; mask : int } -> int field_read
+  | Bits16be : { off : int; shift : int; mask : int } -> int field_read
+  | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
+
+let read_field : type a.
+    a field_read -> runtime -> Input_end.t -> bytes -> int -> a =
+ fun r runtime input_end buf base ->
+  match r with
+  | Byte off -> UInt8.unsafe_get buf (base + off)
+  | U16le off -> UInt16.unsafe_le buf (base + off)
+  | U16be off -> UInt16.unsafe_be buf (base + off)
+  | U32le off -> UInt32.unsafe_le buf (base + off)
+  | U32be off -> UInt32.unsafe_be buf (base + off)
+  | Sbyte off -> SInt8.unsafe_get buf (base + off)
+  | I16le off -> SInt16.unsafe_le buf (base + off)
+  | I16be off -> SInt16.unsafe_be buf (base + off)
+  | I32le off -> SInt32.unsafe_le buf (base + off)
+  | I32be off -> SInt32.unsafe_be buf (base + off)
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+  | Fn f -> f runtime input_end buf base
+
+(* The data form of a field read, when the field is a bare scalar at a fixed
+   offset or packed in an 8- or 16-bit word. *)
+let field_read : type a.
+    field_access ->
+    a typ ->
+    (runtime -> Input_end.t -> bytes -> int -> a) ->
+    a field_read =
+ fun access typ fn ->
+  match (access, typ) with
+  | Fixed off, Uint8 -> Byte off
+  | Fixed off, Uint16 Little -> U16le off
+  | Fixed off, Uint16 Big -> U16be off
+  | Fixed off, Uint32 Little -> U32le off
+  | Fixed off, Uint32 Big -> U32be off
+  | Fixed off, Int8 -> Sbyte off
+  | Fixed off, Int16 Little -> I16le off
+  | Fixed off, Int16 Big -> I16be off
+  | Fixed off, Int32 Little -> I32le off
+  | Fixed off, Int32 Big -> I32be off
+  | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
+      let mask = (1 lsl width) - 1 in
+      match base with
+      | U8 -> Bits8 { off; shift; mask }
+      | U16 Little -> Bits16le { off; shift; mask }
+      | U16 Big -> Bits16be { off; shift; mask }
+      | U32 _ -> Fn fn)
+  | _ -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
@@ -3602,17 +3672,21 @@ let apply_compiled : type a f r.
     | _ -> fun ctx v -> size_of_typ_value ctx field_typ (field_get v)
   in
   let raw_reader = guarded_dynamic_reader cf fld.typ in
+  let validates = field_reader_validates fld.typ in
   let raw_reader, full, check_only =
-    wrap_field_errors
-      ~validates:(field_reader_validates fld.typ)
-      ~check ~act fld.name raw_reader full check_only
+    wrap_field_errors ~validates ~check ~act fld.name raw_reader full check_only
   in
   note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
   Record
     {
       name = r.name;
       make = r.make;
-      readers = Snoc (r.readers, raw_reader);
+      readers =
+        Snoc
+          ( r.readers,
+            if Option.is_some check || Option.is_some act || validates then
+              Fn raw_reader
+            else field_read cf.field_access fld.typ raw_reader );
       writers_rev = new_writers_rev;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size = r.min_wire_size + cf.size_delta;
@@ -3654,8 +3728,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
-      (runtime -> Input_end.t -> bytes -> int -> 'a)
-      * ('rest, 'result) readers_fwd
+      'a field_read * ('rest, 'result) readers_fwd
       -> ('a -> 'rest, 'result) readers_fwd
 
 (* Convert a [readers] snoc-list to a [readers_fwd] cons-list. O(n), runs
@@ -3694,69 +3767,69 @@ let rec apply_fwd : type mid result.
   match fwd with
   | FNil -> f
   | FCons (r1, FNil) ->
-      f (r1 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off)
   | FCons (r1, FCons (r2, FNil)) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FNil))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FNil)))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FNil))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FNil)))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FNil))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FNil)))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FNil))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FNil)))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FNil))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FNil)))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FNil))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FNil)))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FNil))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FNil)))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FNil))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FNil)))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FNil))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FNil)))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FNil))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FNil)))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FNil))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FNil)))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FNil))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FNil)))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FNil))))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FNil)))))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off) (read_field r28 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FNil))))))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off) (read_field r28 runtime input_end buf off) (read_field r29 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FNil)))))))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off) (read_field r28 runtime input_end buf off) (read_field r29 runtime input_end buf off) (read_field r30 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FNil))))))))))))))))))))))))))))))) ->
-      f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off) (r31 runtime input_end buf off)
+      f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off) (read_field r28 runtime input_end buf off) (read_field r29 runtime input_end buf off) (read_field r30 runtime input_end buf off) (read_field r31 runtime input_end buf off)
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FCons (r32, rest)))))))))))))))))))))))))))))))) ->
-      apply_fwd (f (r1 runtime input_end buf off) (r2 runtime input_end buf off) (r3 runtime input_end buf off) (r4 runtime input_end buf off) (r5 runtime input_end buf off) (r6 runtime input_end buf off) (r7 runtime input_end buf off) (r8 runtime input_end buf off) (r9 runtime input_end buf off) (r10 runtime input_end buf off) (r11 runtime input_end buf off) (r12 runtime input_end buf off) (r13 runtime input_end buf off) (r14 runtime input_end buf off) (r15 runtime input_end buf off) (r16 runtime input_end buf off) (r17 runtime input_end buf off) (r18 runtime input_end buf off) (r19 runtime input_end buf off) (r20 runtime input_end buf off) (r21 runtime input_end buf off) (r22 runtime input_end buf off) (r23 runtime input_end buf off) (r24 runtime input_end buf off) (r25 runtime input_end buf off) (r26 runtime input_end buf off) (r27 runtime input_end buf off) (r28 runtime input_end buf off) (r29 runtime input_end buf off) (r30 runtime input_end buf off) (r31 runtime input_end buf off) (r32 runtime input_end buf off)) rest runtime input_end buf off
+      apply_fwd (f (read_field r1 runtime input_end buf off) (read_field r2 runtime input_end buf off) (read_field r3 runtime input_end buf off) (read_field r4 runtime input_end buf off) (read_field r5 runtime input_end buf off) (read_field r6 runtime input_end buf off) (read_field r7 runtime input_end buf off) (read_field r8 runtime input_end buf off) (read_field r9 runtime input_end buf off) (read_field r10 runtime input_end buf off) (read_field r11 runtime input_end buf off) (read_field r12 runtime input_end buf off) (read_field r13 runtime input_end buf off) (read_field r14 runtime input_end buf off) (read_field r15 runtime input_end buf off) (read_field r16 runtime input_end buf off) (read_field r17 runtime input_end buf off) (read_field r18 runtime input_end buf off) (read_field r19 runtime input_end buf off) (read_field r20 runtime input_end buf off) (read_field r21 runtime input_end buf off) (read_field r22 runtime input_end buf off) (read_field r23 runtime input_end buf off) (read_field r24 runtime input_end buf off) (read_field r25 runtime input_end buf off) (read_field r26 runtime input_end buf off) (read_field r27 runtime input_end buf off) (read_field r28 runtime input_end buf off) (read_field r29 runtime input_end buf off) (read_field r30 runtime input_end buf off) (read_field r31 runtime input_end buf off) (read_field r32 runtime input_end buf off)) rest runtime input_end buf off
 [@@ocamlformat "disable"]
 
 (* Saturate [make] in a single call for up to eight fields, so a decode
@@ -3776,63 +3849,63 @@ let build_decode : type full r.
   | Nil -> fun _runtime _input_end _buf _off -> make
   | Snoc (Nil, r1) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
         make v1
   | Snoc (Snoc (Nil, r1), r2) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
         make v1 v2
   | Snoc (Snoc (Snoc (Nil, r1), r2), r3) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
         make v1 v2 v3
   | Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
+        let v4 = read_field r4 runtime input_end buf off in
         make v1 v2 v3 v4
   | Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
+        let v4 = read_field r4 runtime input_end buf off in
+        let v5 = read_field r5 runtime input_end buf off in
         make v1 v2 v3 v4 v5
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
+        let v4 = read_field r4 runtime input_end buf off in
+        let v5 = read_field r5 runtime input_end buf off in
+        let v6 = read_field r6 runtime input_end buf off in
         make v1 v2 v3 v4 v5 v6
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
-        let v7 = r7 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
+        let v4 = read_field r4 runtime input_end buf off in
+        let v5 = read_field r5 runtime input_end buf off in
+        let v6 = read_field r6 runtime input_end buf off in
+        let v7 = read_field r7 runtime input_end buf off in
         make v1 v2 v3 v4 v5 v6 v7
   | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7), r8) ->
       fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
-        let v7 = r7 runtime input_end buf off in
-        let v8 = r8 runtime input_end buf off in
+        let v1 = read_field r1 runtime input_end buf off in
+        let v2 = read_field r2 runtime input_end buf off in
+        let v3 = read_field r3 runtime input_end buf off in
+        let v4 = read_field r4 runtime input_end buf off in
+        let v5 = read_field r5 runtime input_end buf off in
+        let v6 = read_field r6 runtime input_end buf off in
+        let v7 = read_field r7 runtime input_end buf off in
+        let v8 = read_field r8 runtime input_end buf off in
         make v1 v2 v3 v4 v5 v6 v7 v8
   | readers ->
       let fwd = to_fwd readers in
@@ -3953,14 +4026,20 @@ let fill_param_slots tbl param_base handles =
     (fun i (Param.Pack p) -> Hashtbl.replace tbl p.Types.name (param_base + i))
     handles
 
+let min_bounds_error min_size buf off =
+  if off < 0 then Fmt.invalid_arg "Codec: negative offset %d" off;
+  raise_eof ~at:off ~expected:min_size
+    ~got:(bytes_from (Input_end.of_bytes buf) off)
+
 (* The structural bounds check decode runs before reading any field: the buffer
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
-   before a zero-copy [get] reads its fields. *)
+   before a zero-copy [get] reads its fields. [decode] then reads the fixed
+   fields with no check of their own, so the test cannot overflow, and its one
+   call is on the error path, where nothing is live after it. *)
 let check_min_bounds min_size buf off =
-  if off + min_size > Bytes.length buf then
-    raise_eof ~at:off ~expected:min_size
-      ~got:(bytes_from (Input_end.of_bytes buf) off)
+  if off < 0 || off > Bytes.length buf - min_size then
+    min_bounds_error min_size buf off
 
 (* The record ending at [end_off] holds [min_size] bytes and fits the buffer. *)
 let check_end_bounds min_size buf off end_off =

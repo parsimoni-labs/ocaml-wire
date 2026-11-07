@@ -56,3 +56,10 @@ val set_le : bytes -> int -> t -> unit
 val set_be : bytes -> int -> t -> unit
 (** [set_be buf off v] writes [v] as two unsigned big-endian bytes at offset
     [off]. Needs no range check, as for {!set_le}. *)
+
+(**/**)
+
+(* Reads with no bounds check, for [Wire.Codec.decode] once it has checked the
+   record's extent. *)
+val unsafe_le : bytes -> int -> t
+val unsafe_be : bytes -> int -> t

@@ -67,3 +67,10 @@ val of_int32 : int32 -> t
     {!le} and {!be} decode those four bytes to, on every platform. Prefer it to
     [Optint.of_int32], which keeps the signed view and so yields a negative
     number for a word with bit 31 set where [Optint.t] is a wide native int. *)
+
+(**/**)
+
+(* Reads with no bounds check, for [Wire.Codec.decode] once it has checked the
+   record's extent. *)
+val unsafe_le : bytes -> int -> t
+val unsafe_be : bytes -> int -> t

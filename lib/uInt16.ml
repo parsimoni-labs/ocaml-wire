@@ -20,3 +20,5 @@ let le buf off = Bytes.get_uint16_le buf off
 let be buf off = Bytes.get_uint16_be buf off
 let set_le buf off n = Bytes.set_uint16_le buf off n
 let set_be buf off n = Bytes.set_uint16_be buf off n
+let unsafe_le = Unchecked.u16le
+let unsafe_be = Unchecked.u16be

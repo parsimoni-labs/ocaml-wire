@@ -48,3 +48,9 @@ val get : bytes -> int -> t
 val set : bytes -> int -> t -> unit
 (** [set buf off v] writes [v] as one signed byte at offset [off]. Needs no
     range check: every {!type-t} is a value the byte holds. *)
+
+(**/**)
+
+(* Reads with no bounds check, for [Wire.Codec.decode] once it has checked the
+   record's extent. *)
+val unsafe_get : bytes -> int -> t
