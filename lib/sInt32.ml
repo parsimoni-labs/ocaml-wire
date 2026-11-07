@@ -78,3 +78,13 @@ let of_int n =
   if compare v min_int < 0 || compare v max_int > 0 then
     Fmt.invalid_arg "Wire.SInt32.of_int: %d is not a signed 32-bit value" n;
   v
+
+let unsafe_le buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32le buf off)
+  | False -> Unchecked.i32le buf off
+
+let unsafe_be buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32be buf off)
+  | False -> Unchecked.i32be buf off

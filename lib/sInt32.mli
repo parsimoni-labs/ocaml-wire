@@ -72,3 +72,10 @@ val of_int : int -> t
 (** [of_int n] is [n] as a signed 32-bit value. Raises [Invalid_argument] when
     [n] is outside the range, rather than masking it to a legal value the caller
     did not mean. *)
+
+(**/**)
+
+(* Reads with no bounds check, for [Wire.Codec.decode] once it has checked the
+   record's extent. *)
+val unsafe_le : bytes -> int -> t
+val unsafe_be : bytes -> int -> t

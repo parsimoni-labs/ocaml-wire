@@ -87,3 +87,13 @@ let of_int32 (n : int32) : t =
   match Optint.is_immediate with
   | True -> Int32.to_int n land mask32
   | False -> n
+
+let unsafe_le buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32le buf off) land mask32
+  | False -> Unchecked.i32le buf off
+
+let unsafe_be buf off : t =
+  match Optint.is_immediate with
+  | True -> Int32.to_int (Unchecked.i32be buf off) land mask32
+  | False -> Unchecked.i32be buf off
