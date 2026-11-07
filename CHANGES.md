@@ -1,3 +1,12 @@
+## unreleased
+
+### Fixed
+
+- A codec's own field now shadows an embedded sub-codec's field of the same
+  name, as it does in the generated 3D. A `where` clause, a field constraint, a
+  size and `Wire.Codec.field_readers` could read the sub-codec's field instead
+  (#420, @samoht)
+
 ## 1.3.0
 
 ### Added
