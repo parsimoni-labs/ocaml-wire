@@ -30,3 +30,30 @@ let[@inline] i32be buf off =
   if Paranoid.enabled then Bytes.get_int32_be buf off
   else if Sys.big_endian then get32 buf off
   else swap32 (get32 buf off)
+
+external set16 : bytes -> int -> int -> unit = "%caml_bytes_set16u"
+external set32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32u"
+
+let[@inline] set_u8 buf off v =
+  if Paranoid.enabled then Bytes.set_uint8 buf off v
+  else Bytes.unsafe_set buf off (Char.unsafe_chr (v land 0xff))
+
+let[@inline] set_u16le buf off v =
+  if Paranoid.enabled then Bytes.set_uint16_le buf off v
+  else if Sys.big_endian then set16 buf off (swap16 v)
+  else set16 buf off v
+
+let[@inline] set_u16be buf off v =
+  if Paranoid.enabled then Bytes.set_uint16_be buf off v
+  else if Sys.big_endian then set16 buf off v
+  else set16 buf off (swap16 v)
+
+let[@inline] set_i32le buf off v =
+  if Paranoid.enabled then Bytes.set_int32_le buf off v
+  else if Sys.big_endian then set32 buf off (swap32 v)
+  else set32 buf off v
+
+let[@inline] set_i32be buf off v =
+  if Paranoid.enabled then Bytes.set_int32_be buf off v
+  else if Sys.big_endian then set32 buf off v
+  else set32 buf off (swap32 v)
