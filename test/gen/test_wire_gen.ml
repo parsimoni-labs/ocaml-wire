@@ -374,6 +374,91 @@ let test_valid () =
   viewed Schemas.eth ~valid:G_eth.Valid.v
     ~reads:[ (get Schemas.eth Schemas.eth_src Fun.id, G_eth.read_src) ]
 
+(* The [Bigstring] functions on a bigarray copy of a buffer return what their
+   [bytes] twins return on the buffer, or raise the same error. *)
+let bigstring buf =
+  Bigarray.Array1.init Bigarray.char Bigarray.c_layout (Bytes.length buf)
+    (Bytes.get buf)
+
+let same_on_bigstring ?(fix = fun _ _ -> ()) codec ~on_bytes ~on_big =
+  let size = Codec.min_wire_size codec in
+  for _ = 1 to 2000 do
+    let buf, off = input ~size ~fix in
+    Alcotest.(check string)
+      "bigstring"
+      (outcome (fun () -> on_bytes buf off))
+      (outcome (fun () -> on_big (bigstring buf) off))
+  done
+
+let big_to_string b =
+  String.init (Bigarray.Array1.dim b) (Bigarray.Array1.get b)
+
+let test_bigstring () =
+  let enc c v = Codec.to_string c v in
+  same_on_bigstring Schemas.ipv4
+    ~on_bytes:(fun b o -> enc Schemas.ipv4 (G_ipv4.decode b o))
+    ~on_big:(fun b o -> enc Schemas.ipv4 (G_ipv4.Bigstring.decode b o));
+  same_on_bigstring ~fix:fix_checked Schemas.checked
+    ~on_bytes:(fun b o ->
+      G_checked.validate b o;
+      "")
+    ~on_big:(fun b o ->
+      G_checked.Bigstring.validate b o;
+      "");
+  same_on_bigstring ~fix:fix_checked Schemas.checked
+    ~on_bytes:(fun b o -> enc Schemas.checked (G_checked.decode b o))
+    ~on_big:(fun b o -> enc Schemas.checked (G_checked.Bigstring.decode b o));
+  same_on_bigstring Schemas.mixed
+    ~on_bytes:(fun b o -> enc Schemas.mixed (G_mixed.decode b o))
+    ~on_big:(fun b o -> enc Schemas.mixed (G_mixed.Bigstring.decode b o));
+  same_on_bigstring Schemas.eth
+    ~on_bytes:(fun b o ->
+      enc Schemas.eth (G_eth.decode b o) ^ G_eth.get_src b o)
+    ~on_big:(fun b o ->
+      enc Schemas.eth (G_eth.Bigstring.decode b o) ^ G_eth.Bigstring.get_src b o);
+  same_on_bigstring Schemas.ipv4
+    ~on_bytes:(fun b o ->
+      string_of_int (G_ipv4.get_src_int b o + (G_ipv4.get_proto b o :> int)))
+    ~on_big:(fun b o ->
+      string_of_int
+        (G_ipv4.Bigstring.get_src_int b o
+        + (G_ipv4.Bigstring.get_proto b o :> int)));
+  same_on_bigstring ~fix:fix_checked Schemas.checked
+    ~on_bytes:(fun b _ ->
+      let v = G_checked.Valid.v b in
+      string_of_int ((G_checked.read_proto v :> int) + G_checked.read_ihl v))
+    ~on_big:(fun b _ ->
+      let v = G_checked.Bigstring.Valid.v b in
+      string_of_int
+        ((G_checked.Bigstring.read_proto v :> int)
+        + G_checked.Bigstring.read_ihl v));
+  same_on_bigstring Schemas.wide
+    ~on_bytes:(fun b o ->
+      string_of_int (G_wide.c_of_word (G_wide.get_c_word b o)))
+    ~on_big:(fun b o ->
+      string_of_int (G_wide.c_of_word (G_wide.Bigstring.get_c_word b o)));
+  let size = Codec.min_wire_size Schemas.checked in
+  for _ = 1 to 2000 do
+    let w k = Random.State.int rand (k + 40) - 20 in
+    let a = w 16 and b = w 16 and c = w 0x10000 and d = w 256 in
+    let e = List.nth [ 1; 6; 17; 9 ] (Random.State.int rand 4) in
+    let len = size + Random.State.int rand 3 in
+    let off = Random.State.int rand (len + 2) - 1 in
+    let on_bytes =
+      outcome (fun () ->
+          let buf = Bytes.make len '\xaa' in
+          G_checked.write_int buf off a b c d e;
+          Bytes.to_string buf)
+    in
+    let on_big =
+      outcome (fun () ->
+          let buf = bigstring (Bytes.make len '\xaa') in
+          G_checked.Bigstring.write_int buf off a b c d e;
+          big_to_string buf)
+    in
+    Alcotest.(check string) "write" on_bytes on_big
+  done
+
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, and adds a stack-allocated decode for the generated record. The
    stock compiler cannot build it; the OxCaml tests do. *)
@@ -412,4 +497,5 @@ let suite =
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;
+      Alcotest.test_case "bigstring buffers" `Quick test_bigstring;
     ] )
