@@ -691,6 +691,72 @@ let test_array_size_overflow () =
     "array" true
     (raises_invalid (fun () -> array ~len:(int Sys.max_string_length) uint32))
 
+(* A field whose constraints only compare it with literals is checked as one
+   interval test. Its slot is still filled when a later constraint or the
+   [where] clause reads it, and a failure reports the field and its value. *)
+let test_constraint_intervals () =
+  let describe (e : parse_error) =
+    let value =
+      match e.kind with Constraint_failed { value; _ } -> value | _ -> None
+    in
+    Fmt.str "%s@%d=%a"
+      (String.concat "." e.field)
+      e.at
+      Fmt.(option ~none:(any "-") int64)
+      value
+  in
+  let a =
+    Field.v "a"
+      ~self_constraint:(fun s -> Expr.(s >= int 5 && s <= int 10))
+      uint8
+  in
+  let b =
+    Field.v "b" ~self_constraint:(fun s -> Expr.(s > Field.ref a)) uint8
+  in
+  let c =
+    Codec.v "Interval"
+      ~where:Expr.(Field.ref a <> int 7)
+      (fun a b -> (UInt8.to_int a, UInt8.to_int b))
+      Codec.[ (a $ fun (x, _) -> UInt8.v x); (b $ fun (_, y) -> UInt8.v y) ]
+  in
+  let outcome x y =
+    let buf = Bytes.create 2 in
+    Bytes.set_uint8 buf 0 x;
+    Bytes.set_uint8 buf 1 y;
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> describe e
+    in
+    let decoded =
+      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+    in
+    Alcotest.(check string) "decode agrees with validate" validated decoded;
+    validated
+  in
+  let check name x y expected =
+    Alcotest.(check string) name expected (outcome x y)
+  in
+  check "below" 4 9 "a@0=4";
+  check "above" 11 12 "a@0=11";
+  check "low bound" 5 6 "ok";
+  check "high bound" 10 11 "ok";
+  check "later field reads it" 6 5 "b@1=5";
+  check "where reads it" 7 9 "@0=-";
+  let never =
+    Codec.v "Never" Fun.id
+      Codec.
+        [
+          Field.v "n" ~self_constraint:(fun s -> Expr.(s > int max_int)) uint8
+          $ Fun.id;
+        ]
+  in
+  Alcotest.(check bool)
+    "an empty interval refuses everything" true
+    (match Codec.validate never (Bytes.make 1 '\xff') 0 with
+    | () -> false
+    | exception Wire.Parse_error _ -> true)
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -9841,6 +9907,8 @@ let suite =
         test_decode_offset_out_of_range;
       Alcotest.test_case "decode: fields read in order" `Quick
         test_decode_reads_in_order;
+      Alcotest.test_case "check: constraint intervals" `Quick
+        test_constraint_intervals;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
