@@ -215,6 +215,38 @@ let test_write_int () =
       (run (fun buf off -> G_mixed.write_int buf off a b c d e f g h))
   done
 
+let test_wide () =
+  reads Schemas.wide ~decode:G_wide.decode ~validate:G_wide.validate;
+  let wild () =
+    let w k = Random.State.full_int rand ((1 lsl k) + 4) in
+    (w 1, w 8, w 23, w 3, w 29, w 31)
+  in
+  writes Schemas.wide
+    ~write:(fun (a, b, c, d, e, f) buf off -> G_wide.write buf off a b c d e f)
+    (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
+
+(* A field taken out of its word reads what its own getter reads. *)
+let test_words () =
+  let size = Codec.min_wire_size Schemas.wide in
+  for _ = 1 to 2000 do
+    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
+    let fields =
+      [
+        (G_wide.get_a, G_wide.get_a_word, G_wide.a_of_word);
+        (G_wide.get_c, G_wide.get_c_word, G_wide.c_of_word);
+        (G_wide.get_e, G_wide.get_e_word, G_wide.e_of_word);
+        (G_wide.get_f, G_wide.get_f_word, G_wide.f_of_word);
+      ]
+    in
+    List.iter
+      (fun (get, word, of_word) ->
+        Alcotest.(check string)
+          "word"
+          (outcome (fun () -> string_of_int (get buf off)))
+          (outcome (fun () -> string_of_int (of_word (word buf off)))))
+      fields
+  done
+
 let test_variable () =
   reads Schemas.variable ~decode:G_variable.decode ~validate:G_variable.validate
 
@@ -371,6 +403,8 @@ let suite =
       Alcotest.test_case "little-endian, signed, bitfields" `Quick test_mixed;
       Alcotest.test_case "under one word" `Quick test_small;
       Alcotest.test_case "byte arrays" `Quick test_eth;
+      Alcotest.test_case "32-bit bitfields" `Quick test_wide;
+      Alcotest.test_case "fields from their word" `Quick test_words;
       Alcotest.test_case "not specialised" `Quick test_variable;
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;

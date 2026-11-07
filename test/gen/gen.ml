@@ -13,4 +13,5 @@ let () =
   g "g_mixed.ml" ~make:"Schemas.mixed_make" "mixed" Schemas.mixed;
   g "g_small.ml" ~make:"Schemas.small_make" "small" Schemas.small;
   g "g_eth.ml" ~make:"Schemas.eth_make" "eth" Schemas.eth;
+  g "g_wide.ml" ~make:"Schemas.wide_make" "wide" Schemas.wide;
   g "g_variable.ml" ~make:"Schemas.variable_make" "variable" Schemas.variable

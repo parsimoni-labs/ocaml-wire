@@ -170,7 +170,8 @@ let layout (s : T.struct_) =
     Hashtbl.replace names name v;
     let own = Option.to_list f.constraint_ in
     match f.field_typ with
-    | T.Bits { base = T.U32 _; _ } -> fail_unsupported "32-bit bitfields"
+    | T.Bits { base = T.U32 _; _ } when Sys.int_size <= 32 ->
+        fail_unsupported "32-bit bitfields on this host"
     | T.Bits { width; base; bit_order } ->
         let w, shift, next =
           place_bits ~off ~word ~base ~order:bit_order ~width
@@ -237,6 +238,8 @@ let unsigned ~words ~off ~bytes ~endian =
       Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land 0x%x)" a
         (8 * (a + 8 - off - bytes))
         ((1 lsl (8 * bytes)) - 1)
+  | _ when bytes = 4 ->
+      Fmt.str "(Int32.to_int %s land 0xffff_ffff)" (load ~off ~bytes ~endian)
   | _ -> load ~off ~bytes ~endian
 
 let read ~words f =
@@ -456,14 +459,20 @@ let bit_words ppf fields =
             | _ -> None)
           fields
       in
-      let suffix =
-        match base with
-        | T.U8 -> "8"
-        | T.U16 e | T.U32 e -> "16" ^ endian_suffix e
-      in
-      Fmt.pf ppf "    Wire.Private.Unchecked.set_u%s buf (off + %d) (%s);@\n"
-        suffix o
-        (String.concat " lor " parts))
+      let value = String.concat " lor " parts in
+      match base with
+      | T.U8 ->
+          Fmt.pf ppf "    Wire.Private.Unchecked.set_u8 buf (off + %d) (%s);@\n"
+            o value
+      | T.U16 e ->
+          Fmt.pf ppf
+            "    Wire.Private.Unchecked.set_u16%s buf (off + %d) (%s);@\n"
+            (endian_suffix e) o value
+      | T.U32 e ->
+          Fmt.pf ppf
+            "    Wire.Private.Unchecked.set_i32%s buf (off + %d) (Int32.of_int \
+             (%s));@\n"
+            (endian_suffix e) o value)
     words
 
 let pp_write_int ppf ~target ~fields ~where =
@@ -569,10 +578,13 @@ let checked_read f =
       else v
   | Bits { base; shift; width } ->
       let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
-      Fmt.str "((%s lsr %d) land 0x%x)"
-        (checked_load ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian)
-        shift
-        ((1 lsl width) - 1)
+      let bytes = Bitfield.byte_size base in
+      let word = checked_load ~off:f.off ~bytes ~endian in
+      let word =
+        if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
+        else word
+      in
+      Fmt.str "((%s lsr %d) land 0x%x)" word shift ((1 lsl width) - 1)
   | Bytes n -> Fmt.str "(Bytes.sub_string buf (off + %d) %d)" f.off n
 
 let pp_getter ppf ~target f =
@@ -602,13 +614,38 @@ let pp_getter ppf ~target f =
         (label f.name) f.var (checked_read f) (int_view f)
   | _ -> ()
 
+(* A bitfield's word, read once for all the fields packed in it:
+   [get_<field>_word] is the checked load of the word that holds the field, and
+   [<field>_of_word] takes the field out of it. *)
+let pp_word_getters ppf ~target f =
+  match f.store with
+  | Bits { base; shift; width } ->
+      let attr =
+        match target with
+        | `OxCaml -> "[@inline][@zero_alloc]"
+        | `OCaml -> "[@inline]"
+      in
+      let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
+      let bytes = Bitfield.byte_size base in
+      let word = checked_load ~off:f.off ~bytes ~endian in
+      let word =
+        if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
+        else word
+      in
+      Fmt.pf ppf "let%s get_%s_word buf off = %s@\n@\n" attr (label f.name) word;
+      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land 0x%x@\n@\n" attr
+        (label f.name) shift
+        ((1 lsl width) - 1)
+  | _ -> ()
+
 let pp_getters ppf ~target fields =
   Fmt.pf ppf
     "let%s get_failed name buf off = Wire.Private.Gen.get_failed codec name \
      buf off@\n\
      @\n"
     (cold target);
-  List.iter (pp_getter ppf ~target) fields
+  List.iter (pp_getter ppf ~target) fields;
+  List.iter (pp_word_getters ppf ~target) fields
 
 (* [Valid.v buf] validates the record at offset 0 and is the proof of it: a
    buffer's length never changes, so each [read_<field>] after it is one load

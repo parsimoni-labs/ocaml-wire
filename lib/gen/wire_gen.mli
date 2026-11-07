@@ -15,9 +15,11 @@
     offset, and [get_<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
     validates the record at offset 0 and is the proof of it: a buffer's length
     never changes, so [read_<field>] on it is one load with no check of its own.
-    It has [size], [decode], [validate] and [write buf off v1 ... vn], which
-    stores field values in order. Without [~make] it also defines a record [t]
-    of the field values, [make] and [encode]. A codec it cannot specialise
+    For a bitfield, [get_<field>_word] loads the word that holds it and
+    [<field>_of_word] takes the field out, so fields packed in one word share
+    one load. It has [size], [decode], [validate] and [write buf off v1 ... vn],
+    which stores field values in order. Without [~make] it also defines a record
+    [t] of the field values, [make] and [encode]. A codec it cannot specialise
     (variable size, parameters, actions, maps) gets a module with [decode] and
     [validate] that call the codec. *)
 

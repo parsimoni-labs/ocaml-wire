@@ -25,8 +25,9 @@
   encode, which still checks each value's range, in about 150. The generated
   module also has a getter per field, one bounds-checked load at a constant
   offset as `Codec.get` makes, and a `Valid` view: once `Valid.v` has
-  validated a record at offset 0, each read is one load with no check. It
-  refuses to load if its codec has changed since, and hands any input
+  validated a record at offset 0, each read is one load with no check.
+  Fields packed in one bitfield word, 32-bit words included, can share one
+  load. It refuses to load if its codec has changed since, and hands any input
   it rejects back to the codec, so its errors are the codec's own. A codec it
   cannot specialise gets a module that calls the codec. With
   ``~target:`OxCaml`` the module also has its hot paths checked by

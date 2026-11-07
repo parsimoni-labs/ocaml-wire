@@ -16,6 +16,7 @@
   g_mixed.ml
   g_small.ml
   g_eth.ml
+  g_wide.ml
   g_variable.ml)
  (action
   (run ./gen.exe)))
@@ -31,5 +32,6 @@
   g_mixed
   g_small
   g_eth
+  g_wide
   g_variable)
  (libraries schemas wire wire.gen fmt alcotest))
