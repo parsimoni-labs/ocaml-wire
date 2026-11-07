@@ -1,5 +1,12 @@
 ## unreleased
 
+### Added
+
+- `Wire.Codec.valid` and `Wire.Codec.read`: `valid` checks a buffer once and
+  returns a proof of it, and a reader staged with `read` takes a field from
+  that proof with no bounds check of its own. Reading a few fields of a
+  validated header costs a few loads instead of a full decode (#429, @samoht)
+
 ### Changed
 
 - `Wire.Codec.decode` and `Wire.Codec.encode` are several times faster on a

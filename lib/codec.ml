@@ -5732,6 +5732,101 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   | Some write -> Staged.stage write
   | None -> Staged.stage (fun buf off value -> write rt buf off value)
 
+type 'r valid = { buf : bytes; off : int; codec : int }
+
+let valid_slow env (t : 'r t) buf off =
+  validate ?env t buf off;
+  { buf; off; codec = t.id }
+
+let valid ?env (t : 'r t) buf off =
+  match env with
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some c when c.fixed_frame >= 0 ->
+          validate_fixed c.fixed_frame c.plain_pass buf off;
+          { buf; off; codec = t.id }
+      | _ -> valid_slow env t buf off)
+  | _ -> valid_slow env t buf off
+
+let wrong_valid name =
+  Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
+
+(* One closure per kind, chosen when the reader is staged, so a read is the
+   codec check and one load. *)
+let valid_reader : type a r. id:int -> name:string -> a scalar -> r valid -> a =
+ fun ~id ~name s ->
+  match s with
+  | Byte o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt8.unsafe_get v.buf (v.off + o)
+  | U16le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt16.unsafe_le v.buf (v.off + o)
+  | U16be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt16.unsafe_be v.buf (v.off + o)
+  | U32le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt32.unsafe_le v.buf (v.off + o)
+  | U32be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt32.unsafe_be v.buf (v.off + o)
+  | Sbyte o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt8.unsafe_get v.buf (v.off + o)
+  | I16le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt16.unsafe_le v.buf (v.off + o)
+  | I16be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt16.unsafe_be v.buf (v.off + o)
+  | I32le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt32.unsafe_le v.buf (v.off + o)
+  | I32be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt32.unsafe_be v.buf (v.off + o)
+  | Bits8 { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u8 v.buf (v.off + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u16le v.buf (v.off + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u16be v.buf (v.off + off) lsr shift) land mask
+
+let read (type a r) ?env (codec : r t) (f : (a, r) field) :
+    (r valid -> a) Staged.t =
+  let access = field_access ~op:"Codec.read" codec f in
+  let c = compiled codec in
+  let frame =
+    match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+  in
+  let id = codec.id and name = codec.name in
+  match
+    if List.mem_assoc f.name c.field_actions then None
+    else field_scalar ~min_wire_size:frame access f.typ
+  with
+  | Some s -> Staged.stage (valid_reader ~id ~name s)
+  | None ->
+      let get = Staged.unstage (get ?env codec f) in
+      Staged.stage (fun v ->
+          if v.codec <> id then wrong_valid name else get v.buf v.off)
+
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
 let doc (t : _ t) = t.doc
