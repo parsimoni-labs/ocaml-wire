@@ -692,6 +692,135 @@ let test_validate_check_free_no_alloc () =
        per_call)
     true (per_call < 1.0)
 
+(* Encoding a fixed-size record writes its bytes and nothing else, whatever the
+   field types: a signed or a float field must not cost more than an unsigned
+   one. *)
+let test_encode_fixed_no_alloc () =
+  skip_unless_gc_counters ();
+  let c =
+    Codec.v "Fixed"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (Field.v "a" uint8 $ fun (a, _, _, _) -> a);
+          (Field.v "b" int16be $ fun (_, b, _, _) -> b);
+          (Field.v "c" int32be $ fun (_, _, c, _) -> c);
+          (Field.v "d" float64be $ fun (_, _, _, d) -> d);
+        ]
+  in
+  let v = (UInt8.v 1, SInt16.v 2, SInt32.of_int32 3l, 4.0) in
+  let buf = Bytes.create 15 in
+  Codec.encode c v buf 0;
+  let n = 100_000 in
+  let before = Gc.minor_words () in
+  for _ = 1 to n do
+    Codec.encode c v buf 0
+  done;
+  let per_call = (Gc.minor_words () -. before) /. float_of_int n in
+  Alcotest.(check bool)
+    (Fmt.str "encode of a fixed codec allocates ~0 words (got %.2f)" per_call)
+    true (per_call < 1.0)
+
+(* [decode] reads a fixed scalar field with no bounds check of its own, after
+   checking the record's extent. Each such read must give what the
+   bounds-checked [Codec.get] gives, sign included, on bytes with the top bit
+   set. *)
+let test_decode_scalars_agree_with_get () =
+  let buf = Bytes.of_string "\x00\xf1\x82\x93\xa4\xb5" in
+  let check : type a. string -> a typ -> unit =
+   fun name typ ->
+    let b = Codec.(Field.v "x" typ $ Fun.id) in
+    let c =
+      Codec.v name
+        (fun _pad x -> x)
+        Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); b ]
+    in
+    let get = Staged.unstage (Codec.get c b) in
+    Alcotest.(check bool) name true (Codec.decode_exn c buf 0 = get buf 0)
+  in
+  check "uint8" uint8;
+  check "uint16" uint16;
+  check "uint16be" uint16be;
+  check "uint32" uint32;
+  check "uint32be" uint32be;
+  check "int8" int8;
+  check "int16" int16;
+  check "int16be" int16be;
+  check "int32" int32;
+  check "int32be" int32be;
+  List.iter
+    (fun (name, base) ->
+      let hi = Codec.(Field.v "hi" (bits ~width:3 base) $ fst) in
+      let lo = Codec.(Field.v "lo" (bits ~width:5 base) $ snd) in
+      let c =
+        Codec.v name
+          (fun _pad hi lo -> (hi, lo))
+          Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); hi; lo ]
+      in
+      let get f = Staged.unstage (Codec.get c f) buf 0 in
+      Alcotest.(check (pair int int))
+        name
+        (get hi, get lo)
+        (Codec.decode_exn c buf 0))
+    [ ("bits u8", U8); ("bits u16", U16); ("bits u16be", U16be) ]
+
+(* The fixed fields are read with no check of their own, so the offset is
+   checked first, in a way that cannot overflow. *)
+let test_decode_offset_out_of_range () =
+  let c = Codec.v "Two" Fun.id Codec.[ Field.v "x" uint16be $ Fun.id ] in
+  let buf = Bytes.make 4 '\x00' in
+  (match Codec.decode c buf (-1) with
+  | exception Invalid_argument _ -> ()
+  | _ -> Alcotest.fail "decode at -1: expected Invalid_argument");
+  match Codec.decode c buf (max_int - 1) with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "decode at max_int - 1: expected an error"
+
+let raises_invalid f =
+  try
+    ignore (f ());
+    false
+  with Invalid_argument _ -> true
+
+(* A literal size is a byte count. A negative one used to shrink the span
+   [decode] checks before its unchecked reads, so the fields in front of it were
+   read past the end of the buffer. *)
+let test_literal_size_is_a_byte_count () =
+  let check name f = Alcotest.(check bool) name true (raises_invalid f) in
+  let big = Sys.max_string_length + 1 in
+  check "byte_array -4" (fun () -> byte_array ~size:(int (-4)));
+  check "byte_slice -1" (fun () -> byte_slice ~size:(int (-1)));
+  check "zeroterm_at_most -1" (fun () -> zeroterm_at_most ~size:(int (-1)));
+  check "byte_array_where -1" (fun () ->
+      byte_array_where ~size:(int (-1)) ~per_byte:(fun _ -> Expr.bool true));
+  check "array -1" (fun () -> array ~len:(int (-1)) uint8);
+  check "byte_array folded negative" (fun () ->
+      byte_array ~size:Expr.(int 1 - int 2));
+  check "byte_array too big" (fun () -> byte_array ~size:(int big))
+
+(* The fixed part of a record has to fit in a buffer, or the frame check
+   [decode] makes before its unchecked reads would wrap round. *)
+let test_record_too_big_for_a_buffer () =
+  let c =
+    Codec.v "Huge"
+      (fun _ _ -> ())
+      Codec.
+        [
+          ( Field.v "a" (byte_array ~size:(int Sys.max_string_length)) $ fun _ ->
+            "" );
+          (Field.v "b" uint32 $ fun _ -> UInt32.of_int 0);
+        ]
+  in
+  Alcotest.(check bool)
+    "first use" true
+    (raises_invalid (fun () -> Codec.decode c (Bytes.create 8) 0))
+
+(* An array's size is a byte count too: one that would overflow is refused. *)
+let test_array_size_overflow () =
+  Alcotest.(check bool)
+    "array" true
+    (raises_invalid (fun () -> array ~len:(int Sys.max_string_length) uint32))
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -715,7 +844,7 @@ let test_decode_reads_in_order () =
   Alcotest.(check (list int))
     "read order"
     [ 1; 2; 3; 4; 5; 6; 7; 8; 9 ]
-    (List.filteri (fun i _ -> i < 9) (List.rev !seen))
+    (List.rev !seen)
 
 (* A compiled validator keeps a per-domain scratch, and the cost of reaching it
    on a domain that has not decoded yet must not track how many validators the
@@ -1965,11 +2094,6 @@ let test_byte_slice_negative_size () =
 
 (* A bitfield has no standalone element form, so [array] / [Field.repeat] over
    one is rejected at construction rather than crashing at decode. *)
-let raises_invalid f =
-  try
-    ignore (f ());
-    false
-  with Invalid_argument _ -> true
 
 let test_repeat_array_reject_bitfield () =
   Alcotest.(check bool)
@@ -2016,9 +2140,6 @@ let test_array_rejects_zero_width_span () =
   Alcotest.(check bool)
     "byte_slice of size 0" true
     (array_rejects (byte_slice ~size:(int 0)));
-  Alcotest.(check bool)
-    "byte_array of negative size" true
-    (array_rejects (byte_array ~size:(int (-1))));
   Alcotest.(check bool)
     "byte_array of size 0 under a map" true
     (array_rejects
@@ -2269,9 +2390,6 @@ let test_repeat_rejects_zero_width_span () =
   Alcotest.(check bool)
     "byte_slice of size 0" true
     (repeat_rejects (byte_slice ~size:(int 0)));
-  Alcotest.(check bool)
-    "byte_array of negative size" true
-    (repeat_rejects (byte_array ~size:(int (-1))));
   Alcotest.(check bool)
     "byte_array of size 0 under a map" true
     (repeat_rejects
@@ -9544,57 +9662,6 @@ let test_dynamic_length_field_stays_in_region () =
     "the shortfall ignores the bytes past the region" (past_the_region '\x01')
     (past_the_region '\xff')
 
-(* [Codec.validate] scans a refined span where it lies rather than copying it,
-   so the scan has to refuse everything the reader refuses. A literal width
-   below zero is refused before any scan, and by the reader, so both entry
-   points have to name the same fault: a validate that reported end-of-input
-   here while decode reported the negative width would be a validator that
-   rejects for a different reason than the decoder it stands in for. *)
-let test_negative_span_width_agrees () =
-  let c =
-    Codec.v "NegWidth" Fun.id
-      Codec.
-        [
-          Field.v "d"
-            (byte_array_where ~size:(int (-1)) ~per_byte:printable_byte)
-          $ Fun.id;
-        ]
-  in
-  let buf = Bytes.make 8 'a' in
-  let kind f =
-    match f () with
-    | () -> Alcotest.failf "accepted a span of width -1"
-    | exception Wire.Parse_error e -> Fmt.str "%a" pp_error_kind e.kind
-  in
-  let validated = kind (fun () -> Codec.validate c buf 0) in
-  let decoded =
-    kind (fun () ->
-        match Codec.decode c buf 0 with
-        | Ok _ -> ()
-        | Error e -> raise (Wire.Parse_error e))
-  in
-  Alcotest.(check string)
-    "validate rejects a negative span width for decode's reason" decoded
-    validated
-
-let test_negative_span_is_parse_error () =
-  let neg_codec =
-    Codec.v "NegSpan" Fun.id
-      Codec.[ Field.v "b" (byte_array ~size:(int (-1))) $ Fun.id ]
-  in
-  let expect name = function
-    | Ok _ -> Alcotest.failf "%s: accepted a negative span" name
-    | Error { kind = Value_out_of_range _; _ } -> ()
-    | Error e ->
-        Alcotest.failf "%s: expected Value_out_of_range, got %a" name
-          pp_parse_error e
-  in
-  expect "Codec.decode" (Codec.decode neg_codec (Bytes.of_string "abc") 0);
-  expect "of_string codec" (of_string (codec neg_codec) "abc");
-  expect "of_string typ" (of_string (byte_array ~size:(int (-1))) "abc");
-  expect "of_bytes typ"
-    (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
-
 (* -- Accessor and container contracts -- *)
 
 (* [Codec.set] documents [Invalid_argument] "leaving the buffer untouched". A
@@ -9899,6 +9966,18 @@ let suite =
         test_validate_check_free_no_alloc;
       Alcotest.test_case "decode: fields read in order" `Quick
         test_decode_reads_in_order;
+      Alcotest.test_case "encode: fixed codec allocates nothing" `Quick
+        test_encode_fixed_no_alloc;
+      Alcotest.test_case "decode: fixed scalars agree with get" `Quick
+        test_decode_scalars_agree_with_get;
+      Alcotest.test_case "decode: offset out of range" `Quick
+        test_decode_offset_out_of_range;
+      Alcotest.test_case "size: a literal size is a byte count" `Quick
+        test_literal_size_is_a_byte_count;
+      Alcotest.test_case "size: a record must fit in a buffer" `Quick
+        test_record_too_big_for_a_buffer;
+      Alcotest.test_case "size: an overflowing array is refused" `Quick
+        test_array_size_overflow;
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;
@@ -10539,12 +10618,8 @@ let suite =
         `Quick test_nested_region_eof_stays_in_region;
       Alcotest.test_case "diag: a region bounds a length field it cannot reach"
         `Quick test_dynamic_length_field_stays_in_region;
-      Alcotest.test_case "diag: negative span is a parse error" `Quick
-        test_negative_span_is_parse_error;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
         test_eof_counts_are_base_invariant;
-      Alcotest.test_case "diag: negative span width agrees with decode" `Quick
-        test_negative_span_width_agrees;
       (* accessor and container contracts *)
       Alcotest.test_case "set: a refused sub-codec value writes nothing" `Quick
         test_set_refusal_leaves_buffer_untouched;
