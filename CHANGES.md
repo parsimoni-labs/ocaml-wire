@@ -43,6 +43,11 @@
   scalar and bitfield fields: it checks the buffer once and writes each field
   with no check of its own. A negative offset is refused with
   `Invalid_argument` naming it (#429, @samoht)
+- `Wire.Codec.validate` and `Wire.Codec.decode` take the fast path for fields
+  under `map`, `where` and `enum` too, and for constraints that combine
+  comparisons with `||`: a closed enum, a lookup's index bound and such a
+  constraint become a test of the wire value against a few intervals. A
+  constraint applies to the wire value, as in the 3D projection (#430, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still

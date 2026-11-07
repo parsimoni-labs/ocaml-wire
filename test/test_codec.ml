@@ -1047,6 +1047,76 @@ let test_shared_byte_constraints () =
   Alcotest.(check string) "second table" "hi" (two_outcome '\x45' '\x41');
   Alcotest.(check string) "first table" "ihl" (two_outcome '\x44' '\x31')
 
+(* The checks on a field under [map] and [enum], and a disjunction, still give
+   the errors they gave, whatever path the check pass takes. *)
+let test_mapped_and_disjunctive_checks () =
+  let u16 = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
+  let start =
+    Field.v "start"
+      ~self_constraint:(fun s -> Expr.(s = int 0 || s >= int 8))
+      u16
+  in
+  let kind =
+    Field.v "kind" (enum "Kind" [ ("A", 2); ("B", 5); ("C", 13) ] uint8)
+  in
+  let hi =
+    Field.v "hi"
+      ~self_constraint:(fun s -> Expr.(s <= int 3))
+      (bits ~width:4 U8)
+  in
+  let lo =
+    Field.v "lo"
+      ~self_constraint:(fun s -> Expr.(s >= int 1))
+      (bits ~width:4 U8)
+  in
+  let c =
+    Codec.v "Mapped"
+      (fun s k h l -> (s, k, h, l))
+      Codec.
+        [
+          (start $ fun (s, _, _, _) -> s);
+          (kind $ fun (_, k, _, _) -> k);
+          (hi $ fun (_, _, h, _) -> h);
+          (lo $ fun (_, _, _, l) -> l);
+        ]
+  in
+  let describe (e : parse_error) =
+    let kind =
+      match e.kind with
+      | Constraint_failed _ -> "constraint"
+      | Invalid_enum _ -> "enum"
+      | _ -> "other"
+    in
+    Fmt.str "%s:%s" (String.concat "." e.field) kind
+  in
+  let outcome s k b =
+    let buf = Bytes.create 4 in
+    Bytes.set_uint16_be buf 0 s;
+    Bytes.set_uint8 buf 2 k;
+    Bytes.set_uint8 buf 3 b;
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> describe e
+    in
+    let decoded =
+      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+    in
+    Alcotest.(check string) "decode agrees" validated decoded;
+    validated
+  in
+  let check name expected s k b =
+    Alcotest.(check string) name expected (outcome s k b)
+  in
+  check "start 0" "ok" 0 2 0x31;
+  check "start 8" "ok" 8 5 0x31;
+  check "start 100" "ok" 100 13 0x31;
+  check "start 1" "start:constraint" 1 2 0x31;
+  check "start 7" "start:constraint" 7 2 0x31;
+  check "kind 3" "kind:enum" 8 3 0x31;
+  check "hi 4" "hi:constraint" 8 2 0x41;
+  check "lo 0" "lo:constraint" 8 2 0x30
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10211,6 +10281,8 @@ let suite =
       Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
         test_shared_byte_constraints;
+      Alcotest.test_case "check: mapped and disjunctive constraints" `Quick
+        test_mapped_and_disjunctive_checks;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
