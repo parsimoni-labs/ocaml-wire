@@ -757,6 +757,32 @@ let test_constraint_intervals () =
     | () -> false
     | exception Wire.Parse_error _ -> true)
 
+(* A failure reports the frame's own value, never one a previous decode left in
+   the scratch: a 64-bit value an int cannot hold leaves the int slot unset. *)
+let test_failure_value_is_this_frames () =
+  let codec () =
+    Codec.v "Wide" Fun.id
+      Codec.
+        [
+          Field.v "v" ~self_int64:(fun s -> Expr.(s < int64 1000L)) uint64be
+          $ Fun.id;
+        ]
+  in
+  let frame n =
+    let b = Bytes.create 8 in
+    Bytes.set_int64_be b 0 n;
+    b
+  in
+  let failure c b =
+    match Codec.decode c b 0 with
+    | Ok _ -> Alcotest.fail "expected a constraint failure"
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let fresh = failure (codec ()) (frame (-1L)) in
+  let c = codec () in
+  ignore (failure c (frame 1001L));
+  Alcotest.(check string) "after another frame" fresh (failure c (frame (-1L)))
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -9909,6 +9935,8 @@ let suite =
         test_decode_reads_in_order;
       Alcotest.test_case "check: constraint intervals" `Quick
         test_constraint_intervals;
+      Alcotest.test_case "check: a failure reports this frame's value" `Quick
+        test_failure_value_is_this_frames;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick

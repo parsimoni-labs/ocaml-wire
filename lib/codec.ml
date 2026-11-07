@@ -4141,13 +4141,14 @@ let used_steps used steps =
 (* Every slot is written before it is read when each step fills its own slot
    and nothing else lives in the array, so there is nothing to clear. *)
 let scratch_clear steps n_total =
-  let n_slots =
-    List.fold_left
-      (fun n -> function
-        | Slot _ | Range _ -> n + 1 | Check _ -> n | Full _ -> n_total)
-      0 steps
+  let own_slot = function
+    | Slot _ | Range _ -> true
+    | Check _ | Full _ -> false
   in
-  if n_slots = n_total then fun _ -> () else fun arr -> clear_slots arr n_total
+  let n_own = List.length (List.filter own_slot steps) in
+  let general = List.exists (function Full _ -> true | _ -> false) steps in
+  if (not general) && n_own = n_total then fun _ -> ()
+  else fun arr -> clear_slots arr n_total
 
 (* The check pass: the steps, then the [where] clause. *)
 let run_pass steps where arr runtime input_end buf off =
