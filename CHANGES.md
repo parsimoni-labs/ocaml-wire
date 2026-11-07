@@ -35,8 +35,8 @@
 - `Wire.Codec.decode` and `Wire.Codec.encode` of a fixed-size record without
   parameters run as one function built when the codec is compiled. A record
   whose fields are all big-endian or single bytes is read with no call per
-  field, and a fixed byte array is copied straight out of the frame. A
-  variable-size record of byte spans sized by its header is laid out in one
+  field, and a fixed byte array is copied straight out of the frame, or into
+  it when encoding. A variable-size record of byte spans sized by its header is laid out in one
   pass that reads each length once (#430, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no

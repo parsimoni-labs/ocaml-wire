@@ -1128,6 +1128,44 @@ let test_layout_pass () =
       "same answer" (outcome slow env buf) (outcome fast None buf)
   done
 
+(* A fixed record of byte arrays, a bitfield and an int writes the same bytes,
+   or raises the same error, plain as on the general path an input parameter
+   forces, whatever the lengths of the arrays and the width of the bitfield
+   value. *)
+let test_plain_encode_blits () =
+  let enc ~params =
+    let p = Param.input "p" uint8 in
+    let where = if params then Some Expr.(Param.expr p >= int 0) else None in
+    let c =
+      Codec.v "Blits" ?where
+        (fun a f b t -> (a, f, b, t))
+        Codec.
+          [
+            (Field.v "a" (byte_array ~size:(int 3)) $ fun (a, _, _, _) -> a);
+            (Field.v "f" (bits ~width:4 U8) $ fun (_, f, _, _) -> f);
+            (Field.v "b" (byte_array ~size:(int 2)) $ fun (_, _, b, _) -> b);
+            (Field.v "t" uint16be $ fun (_, _, _, t) -> t);
+          ]
+    in
+    let env =
+      if params then Some (Param.bind p (UInt8.v 0) (Codec.env c)) else None
+    in
+    fun v ->
+      let buf = Bytes.make 8 '\xff' in
+      match Codec.encode ?env c v buf 0 with
+      | () -> Bytes.to_string buf
+      | exception Invalid_argument m -> m
+  in
+  let plain = enc ~params:false and slow = enc ~params:true in
+  let rand = Random.State.make [| 5 |] in
+  let str n = String.init n (fun i -> Char.chr (65 + i)) in
+  for _ = 1 to 500 do
+    let la = 2 + Random.State.int rand 3 and lb = 1 + Random.State.int rand 3 in
+    let f = Random.State.int rand 20 and t = Random.State.int rand 0x10000 in
+    let v = (str la, f, str lb, UInt16.v t) in
+    Alcotest.(check string) "same bytes or error" (slow v) (plain v)
+  done
+
 (* A gated optional sits at a fixed offset but has no fixed size, so the
    layout pass cannot count it as a constant: with the gate on and one byte
    left, validate refuses the record as decode does. *)
@@ -10320,6 +10358,8 @@ let suite =
         test_staged_spans;
       Alcotest.test_case "layout: agrees with the general path" `Quick
         test_layout_pass;
+      Alcotest.test_case "encode: fixed byte arrays agree with the general path"
+        `Quick test_plain_encode_blits;
       Alcotest.test_case "layout: a gated optional has no fixed size" `Quick
         test_layout_gated_optional;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
