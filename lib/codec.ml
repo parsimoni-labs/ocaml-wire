@@ -1032,39 +1032,38 @@ let int_scalar : type a. a scalar -> bool = function
 
 (* The data form of a field read, when the field is a bare scalar at a fixed
    offset or packed in an 8- or 16-bit word. *)
-let field_read : type a.
-    min_wire_size:int ->
-    field_access ->
-    a typ ->
-    (runtime -> Input_end.t -> bytes -> int -> a) ->
-    plain:bool ->
-    a field_read =
- fun ~min_wire_size access typ fn ~plain ->
+let field_scalar : type a.
+    min_wire_size:int -> field_access -> a typ -> a scalar option =
+ fun ~min_wire_size access typ ->
   match (access, typ) with
-  | _ when not plain -> Fn fn
   | (Fixed off | Bitfield { byte_off = off; _ }), _
     when off < 0
          || off + Option.value ~default:max_int (field_wire_size typ)
             > min_wire_size ->
       (* Unchecked only inside the span [decode] has checked. *)
-      Fn fn
-  | Fixed off, Uint8 -> Data (Byte off)
-  | Fixed off, Uint16 Little -> Data (U16le off)
-  | Fixed off, Uint16 Big -> Data (U16be off)
-  | Fixed off, Uint32 Little -> Data (U32le off)
-  | Fixed off, Uint32 Big -> Data (U32be off)
-  | Fixed off, Int8 -> Data (Sbyte off)
-  | Fixed off, Int16 Little -> Data (I16le off)
-  | Fixed off, Int16 Big -> Data (I16be off)
-  | Fixed off, Int32 Little -> Data (I32le off)
-  | Fixed off, Int32 Big -> Data (I32be off)
+      None
+  | Fixed off, Uint8 -> Some (Byte off)
+  | Fixed off, Uint16 Little -> Some (U16le off)
+  | Fixed off, Uint16 Big -> Some (U16be off)
+  | Fixed off, Uint32 Little -> Some (U32le off)
+  | Fixed off, Uint32 Big -> Some (U32be off)
+  | Fixed off, Int8 -> Some (Sbyte off)
+  | Fixed off, Int16 Little -> Some (I16le off)
+  | Fixed off, Int16 Big -> Some (I16be off)
+  | Fixed off, Int32 Little -> Some (I32le off)
+  | Fixed off, Int32 Big -> Some (I32be off)
   | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
       let mask = (1 lsl width) - 1 in
       match base with
-      | U8 -> Data (Bits8 { off; shift; mask })
-      | U16 Little -> Data (Bits16le { off; shift; mask })
-      | U16 Big -> Data (Bits16be { off; shift; mask })
-      | U32 _ -> Fn fn)
+      | U8 -> Some (Bits8 { off; shift; mask })
+      | U16 Little -> Some (Bits16le { off; shift; mask })
+      | U16 Big -> Some (Bits16be { off; shift; mask })
+      | U32 _ -> None)
+  | _ -> None
+
+let field_read ~min_wire_size access typ fn ~plain =
+  match field_scalar ~min_wire_size access typ with
+  | Some s when plain -> Data s
   | _ -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
@@ -4485,15 +4484,17 @@ let build_plain_decode make fwd wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else apply_fwd make fwd no_runtime input_end buf off
   | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else begin
+          run_plain_pass pass input_end buf off;
+          apply_fwd make fwd no_runtime input_end buf off
+        end
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -4643,8 +4644,8 @@ let plain_validate wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off
+          min_bounds_error min_size buf off
+        else run_plain_pass pass input_end buf off
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -4683,21 +4684,23 @@ let build_plain_encode name n puts check =
   let puts = Array.of_list puts in
   fun v buf off ->
     if off < 0 || off > Bytes.length buf - n then
-      encode_too_short name n buf off;
-    for i = 0 to Array.length words - 1 do
-      let w, wide = Array.unsafe_get words i in
-      if wide then Unchecked.set_u16le buf (off + w) 0
-      else Unchecked.set_u8 buf (off + w) 0
-    done;
-    for i = 0 to Array.length puts - 1 do
-      let (Put { get; scalar }) = Array.unsafe_get puts i in
-      write_scalar scalar buf off (get v)
-    done;
-    match check with
-    | No_checks -> ()
-    | pass -> (
-        try run_plain_pass pass (Input_end.of_bytes buf) buf off
-        with Types.Parse_error e -> encode_rejected name e)
+      encode_too_short name n buf off
+    else begin
+      for i = 0 to Array.length words - 1 do
+        let w, wide = Array.unsafe_get words i in
+        if wide then Unchecked.set_u16le buf (off + w) 0
+        else Unchecked.set_u8 buf (off + w) 0
+      done;
+      for i = 0 to Array.length puts - 1 do
+        let (Put { get; scalar }) = Array.unsafe_get puts i in
+        write_scalar scalar buf off (get v)
+      done;
+      match check with
+      | No_checks -> ()
+      | pass -> (
+          try run_plain_pass pass (Input_end.of_bytes buf) buf off
+          with Types.Parse_error e -> encode_rejected name e)
+    end
 
 let plain_encoder ~name ~n_params ~wire_size_info ~struct_fields ~encode_check
     puts check =
@@ -5409,8 +5412,11 @@ let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 let validate_fixed min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    min_bounds_error min_size buf off;
-  match pass with No_checks -> () | _ -> run_plain_pass pass input_end buf off
+    min_bounds_error min_size buf off
+  else
+    match pass with
+    | No_checks -> ()
+    | _ -> run_plain_pass pass input_end buf off
 
 let validate ?env:e (t : _ t) buf off =
   match e with
