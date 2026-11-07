@@ -691,6 +691,98 @@ let test_array_size_overflow () =
     "array" true
     (raises_invalid (fun () -> array ~len:(int Sys.max_string_length) uint32))
 
+(* A field whose constraints only compare it with literals is checked as one
+   interval test. Its slot is still filled when a later constraint or the
+   [where] clause reads it, and a failure reports the field and its value. *)
+let test_constraint_intervals () =
+  let describe (e : parse_error) =
+    let value =
+      match e.kind with Constraint_failed { value; _ } -> value | _ -> None
+    in
+    Fmt.str "%s@%d=%a"
+      (String.concat "." e.field)
+      e.at
+      Fmt.(option ~none:(any "-") int64)
+      value
+  in
+  let a =
+    Field.v "a"
+      ~self_constraint:(fun s -> Expr.(s >= int 5 && s <= int 10))
+      uint8
+  in
+  let b =
+    Field.v "b" ~self_constraint:(fun s -> Expr.(s > Field.ref a)) uint8
+  in
+  let c =
+    Codec.v "Interval"
+      ~where:Expr.(Field.ref a <> int 7)
+      (fun a b -> (UInt8.to_int a, UInt8.to_int b))
+      Codec.[ (a $ fun (x, _) -> UInt8.v x); (b $ fun (_, y) -> UInt8.v y) ]
+  in
+  let outcome x y =
+    let buf = Bytes.create 2 in
+    Bytes.set_uint8 buf 0 x;
+    Bytes.set_uint8 buf 1 y;
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> describe e
+    in
+    let decoded =
+      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+    in
+    Alcotest.(check string) "decode agrees with validate" validated decoded;
+    validated
+  in
+  let check name x y expected =
+    Alcotest.(check string) name expected (outcome x y)
+  in
+  check "below" 4 9 "a@0=4";
+  check "above" 11 12 "a@0=11";
+  check "low bound" 5 6 "ok";
+  check "high bound" 10 11 "ok";
+  check "later field reads it" 6 5 "b@1=5";
+  check "where reads it" 7 9 "@0=-";
+  let never =
+    Codec.v "Never" Fun.id
+      Codec.
+        [
+          Field.v "n" ~self_constraint:(fun s -> Expr.(s > int max_int)) uint8
+          $ Fun.id;
+        ]
+  in
+  Alcotest.(check bool)
+    "an empty interval refuses everything" true
+    (match Codec.validate never (Bytes.make 1 '\xff') 0 with
+    | () -> false
+    | exception Wire.Parse_error _ -> true)
+
+(* A failure reports the frame's own value, never one a previous decode left in
+   the scratch: a 64-bit value an int cannot hold leaves the int slot unset. *)
+let test_failure_value_is_this_frames () =
+  let codec () =
+    Codec.v "Wide" Fun.id
+      Codec.
+        [
+          Field.v "v" ~self_int64:(fun s -> Expr.(s < int64 1000L)) uint64be
+          $ Fun.id;
+        ]
+  in
+  let frame n =
+    let b = Bytes.create 8 in
+    Bytes.set_int64_be b 0 n;
+    b
+  in
+  let failure c b =
+    match Codec.decode c b 0 with
+    | Ok _ -> Alcotest.fail "expected a constraint failure"
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let fresh = failure (codec ()) (frame (-1L)) in
+  let c = codec () in
+  ignore (failure c (frame 1001L));
+  Alcotest.(check string) "after another frame" fresh (failure c (frame (-1L)))
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -1198,11 +1290,16 @@ let test_out_of_range_offset_follows_the_frame () =
     | Ok _ -> Alcotest.fail "expected the wide value to be refused"
     | Error e -> e.at
   in
+  let validated_at base b =
+    match Codec.validate c b base with
+    | () -> Alcotest.fail "expected validate to refuse the wide value"
+    | exception Wire.Parse_error e -> e.at
+  in
   let wide = Bytes.make 8 '\xff' in
+  let shifted = Bytes.cat (Bytes.make 8 '\x00') wide in
   Alcotest.(check int) "at base 0" 0 (at_of 0 wide);
-  Alcotest.(check int)
-    "at base 8" 8
-    (at_of 8 (Bytes.cat (Bytes.make 8 '\x00') wide))
+  Alcotest.(check int) "at base 8" 8 (at_of 8 shifted);
+  Alcotest.(check int) "validate at base 8" 8 (validated_at 8 shifted)
 
 (* A field whose byte extent is an input parameter cannot be measured from the
    value alone. Reporting 0 for it is worse than refusing: a caller sizes a
@@ -9836,6 +9933,10 @@ let suite =
         test_decode_offset_out_of_range;
       Alcotest.test_case "decode: fields read in order" `Quick
         test_decode_reads_in_order;
+      Alcotest.test_case "check: constraint intervals" `Quick
+        test_constraint_intervals;
+      Alcotest.test_case "check: a failure reports this frame's value" `Quick
+        test_failure_value_is_this_frames;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
