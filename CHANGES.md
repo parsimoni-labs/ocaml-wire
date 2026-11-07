@@ -26,6 +26,12 @@
   near `max_int` is now a parse error rather than an `Invalid_argument` from
   `Bytes`, and a negative offset raises `Invalid_argument` naming it (#425,
   @samoht)
+- `Wire.Codec.validate` and `Wire.Codec.decode` are several times faster on a
+  codec with constraints. A field at a fixed offset is read once, with no
+  bounds check of its own, and only when a constraint or the `where` clause
+  uses it; a comparison between a field and a literal is tested directly.
+  `decode` runs the checks before it builds the value, so it reports the same
+  first failure as `validate` (#426, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still
@@ -35,6 +41,9 @@
 
 ### Fixed
 
+- `Wire.Codec.validate` reports a closed `enum` over a 64-bit carrier whose
+  value does not fit in an int at the field's offset rather than at byte 0, as
+  `Wire.Codec.decode` does (#426, @samoht)
 - A negative or oversized literal size is refused when its type is built:
   `byte_array`, `byte_slice`, `byte_array_where`, `zeroterm_at_most`, `array`
   and `array_seq` raise `Invalid_argument`, as does a record whose fixed size no
