@@ -50,7 +50,9 @@
   constraint applies to the wire value, as in the 3D projection (#430, @samoht)
 - `Wire.Codec.encode` of a fixed-size record of up to 16 integer fields
   without parameters stores each field in place, with no call per field, and
-  a fixed byte array is copied straight into or out of the frame. A
+  a fixed byte array is copied straight into or out of the frame.
+  `Wire.UInt8.v`, `UInt16.v`, `SInt8.v` and `SInt16.v` check their range
+  inline, and a negative offset is refused by name on every encode path. A
   variable-size record of byte spans sized by its header is laid out in one
   pass that reads each length once (#430, @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs

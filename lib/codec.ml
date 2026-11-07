@@ -5943,6 +5943,8 @@ let decode ?consume ?env t buf off =
   with Types.Parse_error e -> Error e
 
 let encode_slow e t v buf off =
+  if off < 0 then
+    Fmt.invalid_arg "Codec.encode %s: negative offset %d" t.name off;
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in

@@ -1258,6 +1258,18 @@ let test_layout_pass () =
       "same answer" (outcome slow env buf) (outcome fast None buf)
   done
 
+(* A negative offset is refused by name on every encode path, the general one
+   included: a codec with a [where] clause does not take the plain one. *)
+let test_encode_negative_offset () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "Neg" ~where:Expr.(Field.ref n > int 0) Fun.id Codec.[ n $ Fun.id ]
+  in
+  match Codec.encode c (UInt8.v 1) (Bytes.create 4) (-1) with
+  | () -> Alcotest.fail "encoded at a negative offset"
+  | exception Invalid_argument m ->
+      Alcotest.(check string) "message" "Codec.encode Neg: negative offset -1" m
+
 (* A fixed record of byte arrays, a bitfield and an int writes the same bytes,
    or raises the same error, plain as on the general path an input parameter
    forces, whatever the lengths of the arrays and the width of the bitfield
@@ -10496,6 +10508,8 @@ let suite =
         test_layout_pass;
       Alcotest.test_case "encode: fixed byte arrays agree with the general path"
         `Quick test_plain_encode_blits;
+      Alcotest.test_case "encode: a negative offset is named" `Quick
+        test_encode_negative_offset;
       Alcotest.test_case "layout: a gated optional has no fixed size" `Quick
         test_layout_gated_optional;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
