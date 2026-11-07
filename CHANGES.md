@@ -35,7 +35,8 @@
 - `Wire.Codec.decode` and `Wire.Codec.encode` of a fixed-size record without
   parameters run as one function built when the codec is compiled. A record
   whose fields are all big-endian or single bytes is read with no call per
-  field (#430, @samoht)
+  field, and a fixed byte array is copied straight out of the frame (#430,
+  @samoht)
 - `Wire.Codec.v` no longer compiles the codec. The first operation that needs
   it compiles it, once, so a program that builds its codecs at start-up no
   longer pays for the ones it never uses. Mistakes in the description still

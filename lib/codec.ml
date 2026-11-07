@@ -910,6 +910,8 @@ and _ field_read =
   | Data : 'a scalar -> 'a field_read
   | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
       (** A scalar under a total [map]: read, then decoded. *)
+  | Span : int * int -> string field_read
+      (** A fixed byte array: its offset and length. *)
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -981,6 +983,7 @@ let[@inline] read_field : type a.
   match r with
   | Data s -> read_scalar s buf base
   | Mapped (s, decode) -> decode (read_scalar s buf base)
+  | Span (off, n) -> Bytes.sub_string buf (base + off) n
   | Fn f -> f runtime input_end buf base
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
@@ -1077,7 +1080,12 @@ let rec read_view : type a.
       match read_view ~min_wire_size access inner with
       | Some (Data s) -> Some (Mapped (s, decode))
       | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
-      | Some (Fn _) | None -> None)
+      | Some (Span _ | Fn _) | None -> None)
+  | Byte_array { size = Int n } -> (
+      match access with
+      | Fixed off when off >= 0 && n >= 0 && off + n <= min_wire_size ->
+          Some (Span (off, n))
+      | _ -> None)
   | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
 
 let field_read ~min_wire_size access typ fn ~plain =
@@ -4715,6 +4723,8 @@ let field_reader : type a. a field_read -> cursor -> a = function
         (Unchecked.u16be buf (off + o) lsr shift) land mask
   | Mapped (s, decode) ->
       fun { cbuf = buf; coff = off } -> decode (read_scalar s buf off)
+  | Span (o, n) ->
+      fun { cbuf = buf; coff = off } -> Bytes.sub_string buf (off + o) n
   | Fn f ->
       fun { cbuf = buf; coff = off } ->
         f no_runtime (Input_end.of_bytes buf) buf off

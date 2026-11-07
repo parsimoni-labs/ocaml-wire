@@ -1054,6 +1054,25 @@ let test_staged_scalars () =
   staged_scalars ~d_typ:int16 ~f_typ:uint16;
   staged_scalars ~d_typ:int16be ~f_typ:uint16be
 
+(* Fixed byte arrays read as spans of the frame: each decodes as [get] reads it
+   and encodes back the bytes it came from. *)
+let test_staged_spans () =
+  let a = Codec.(Field.v "a" (byte_array ~size:(int 6)) $ fun (a, _, _) -> a) in
+  let t = Codec.(Field.v "t" uint16be $ fun (_, t, _) -> t) in
+  let b = Codec.(Field.v "b" (byte_array ~size:(int 3)) $ fun (_, _, b) -> b) in
+  let codec = Codec.v "Spans" (fun a t b -> (a, t, b)) [ a; t; b ] in
+  let rand = Random.State.make [| 7 |] in
+  for _ = 1 to 500 do
+    let buf = Bytes.init 11 (fun _ -> Char.chr (Random.State.int rand 256)) in
+    let ((a', _, b') as v) = Codec.decode_exn codec buf 0 in
+    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    Alcotest.(check string) "a" (get a) a';
+    Alcotest.(check string) "b" (get b) b';
+    let out = Bytes.make 11 '\x00' in
+    Codec.encode codec v out 0;
+    Alcotest.(check string) "encode" (Bytes.to_string buf) (Bytes.to_string out)
+  done
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10216,6 +10235,8 @@ let suite =
         test_mapped_and_disjunctive_checks;
       Alcotest.test_case "decode: staged scalars agree with get" `Quick
         test_staged_scalars;
+      Alcotest.test_case "decode: fixed byte arrays agree with get" `Quick
+        test_staged_spans;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick
