@@ -783,6 +783,140 @@ let test_failure_value_is_this_frames () =
   ignore (failure c (frame 1001L));
   Alcotest.(check string) "after another frame" fresh (failure c (frame (-1L)))
 
+(* A fixed codec of plain fields encodes through one frame check and one write
+   per field. Bitfield words start from zero whatever the buffer held, a value
+   too wide for its bits and a buffer too short are refused, and a codec with
+   constraints refuses to write a value that breaks them. *)
+let test_plain_encode () =
+  let hi = Field.v "hi" (bits ~width:3 U8)
+  and lo = Field.v "lo" (bits ~width:5 U8) in
+  let f = Field.v "f" (bits ~width:4 U16be)
+  and g = Field.v "g" (bits ~width:12 U16be) in
+  let n = Field.v "n" ~self_constraint:(fun s -> Expr.(s <= int 1000)) uint16 in
+  let x = Field.v "x" int32be in
+  let c =
+    Codec.v "Plain"
+      (fun hi lo f g n x -> (hi, lo, f, g, UInt16.to_int n, SInt32.to_int32 x))
+      Codec.
+        [
+          (hi $ fun (v, _, _, _, _, _) -> v);
+          (lo $ fun (_, v, _, _, _, _) -> v);
+          (f $ fun (_, _, v, _, _, _) -> v);
+          (g $ fun (_, _, _, v, _, _) -> v);
+          (n $ fun (_, _, _, _, v, _) -> UInt16.v v);
+          (x $ fun (_, _, _, _, _, v) -> SInt32.of_int32 v);
+        ]
+  in
+  let v = (5, 17, 9, 0xabc, 513, -2l) in
+  let buf = Bytes.make 9 '\xff' in
+  Codec.encode c v buf 0;
+  Alcotest.(check string)
+    "bytes" "\xb1\x9a\xbc\x01\x02\xff\xff\xff\xfe" (Bytes.to_string buf);
+  Alcotest.(check bool) "roundtrip" true (Codec.decode_exn c buf 0 = v);
+  let refused name f =
+    Alcotest.(check bool)
+      name true
+      (match f () with () -> false | exception Invalid_argument _ -> true)
+  in
+  refused "bits too wide" (fun () -> Codec.encode c (8, 0, 0, 0, 0, 0l) buf 0);
+  refused "negative offset" (fun () -> Codec.encode c v buf (-1));
+  refused "short buffer" (fun () -> Codec.encode c v buf 1);
+  refused "constraint" (fun () -> Codec.encode c (0, 0, 0, 0, 1001, 0l) buf 0)
+
+(* A value [valid] accepted reads every field as [get] does. A reader refuses a
+   value validated by another codec of the same type, and [valid] refuses what
+   [validate] refuses. *)
+let test_valid_read () =
+  let a = Codec.(Field.v "a" uint8 $ fun (a, _, _) -> a) in
+  let b = Codec.(Field.v "b" (bits ~width:4 U16be) $ fun (_, b, _) -> b) in
+  let s = Codec.(Field.v "s" (byte_array ~size:(int 3)) $ fun (_, _, s) -> s) in
+  let make () = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
+  let c = make () and other = make () in
+  let buf = Bytes.of_string "\x07\xa0\x00xyz" in
+  let v = Codec.valid c buf 0 in
+  let read f = Staged.unstage (Codec.read c f) v in
+  let get f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check bool) "uint8" true (read a = get a);
+  Alcotest.(check int) "bits" (get b) (read b);
+  Alcotest.(check string) "byte_array" (get s) (read s);
+  let raises f =
+    match f () with _ -> false | exception Invalid_argument _ -> true
+  in
+  Alcotest.(check bool)
+    "another codec's value" true
+    (raises (fun () ->
+         Staged.unstage (Codec.read c a) (Codec.valid other buf 0)));
+  Alcotest.(check bool)
+    "short buffer" true
+    (match Codec.valid c (Bytes.make 3 '\x00') 0 with
+    | _ -> false
+    | exception Wire.Parse_error _ -> true)
+
+(* Constraints on fields that share a byte are checked together, and a failure
+   still names the first field, in declaration order, whose constraint fails. *)
+let test_shared_byte_constraints () =
+  let version =
+    Field.v "version"
+      ~self_constraint:(fun s -> Expr.(s = int 4))
+      (bits ~width:4 U8)
+  in
+  let ihl =
+    Field.v "ihl"
+      ~self_constraint:(fun s -> Expr.(s >= int 5))
+      (bits ~width:4 U8)
+  in
+  let c =
+    Codec.v "VersionIhl" (fun v i -> (v, i)) Codec.[ version $ fst; ihl $ snd ]
+  in
+  let outcome byte =
+    let buf = Bytes.make 1 (Char.chr byte) in
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Wire.Parse_error e -> String.concat "." e.field
+    in
+    let decoded =
+      match Codec.decode c buf 0 with
+      | Ok _ -> "ok"
+      | Error e -> String.concat "." e.field
+    in
+    Alcotest.(check string) "decode agrees" validated decoded;
+    validated
+  in
+  Alcotest.(check string) "0x45" "ok" (outcome 0x45);
+  Alcotest.(check string) "0x4f" "ok" (outcome 0x4f);
+  Alcotest.(check string) "0x44" "ihl" (outcome 0x44);
+  Alcotest.(check string) "0x55" "version" (outcome 0x55);
+  Alcotest.(check string) "0x30" "version" (outcome 0x30);
+  (* Two bytes, each with its own table. *)
+  let two =
+    Codec.v "TwoBytes"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (version $ fun (a, _, _, _) -> a);
+          (ihl $ fun (_, b, _, _) -> b);
+          ( Field.v "hi"
+              ~self_constraint:(fun s -> Expr.(s <= int 3))
+              (bits ~width:4 U8)
+          $ fun (_, _, c, _) -> c );
+          ( Field.v "lo"
+              ~self_constraint:(fun s -> Expr.(s >= int 1))
+              (bits ~width:4 U8)
+          $ fun (_, _, _, d) -> d );
+        ]
+  in
+  let two_outcome b0 b1 =
+    match
+      Codec.validate two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
+    with
+    | () -> "ok"
+    | exception Wire.Parse_error e -> String.concat "." e.field
+  in
+  Alcotest.(check string) "two tables" "ok" (two_outcome '\x45' '\x31');
+  Alcotest.(check string) "second table" "hi" (two_outcome '\x45' '\x41');
+  Alcotest.(check string) "first table" "ihl" (two_outcome '\x44' '\x31')
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -9937,6 +10071,10 @@ let suite =
         test_constraint_intervals;
       Alcotest.test_case "check: a failure reports this frame's value" `Quick
         test_failure_value_is_this_frames;
+      Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
+      Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
+      Alcotest.test_case "check: constraints sharing a byte" `Quick
+        test_shared_byte_constraints;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick

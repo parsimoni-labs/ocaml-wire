@@ -980,41 +980,90 @@ let[@inline] read_field : type a.
   | Data s -> read_scalar s buf base
   | Fn f -> f runtime input_end buf base
 
+(* How [encode] writes a field it has a descriptor for: the field's value, put
+   at the descriptor's offset with no bounds check of its own. *)
+type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+
+let bits_of_mask mask =
+  let rec go n = if mask lsr n = 0 then n else go (n + 1) in
+  go 0
+
+(* A bitfield value wider than its field, off the hot path. *)
+let bits_too_wide ~mask v =
+  Types.check_unsigned_encode ~bits:(bits_of_mask mask) v
+
+(* Calls nothing on the normal path. A bitfield is or-ed into its word, which
+   the encoder has zeroed first, as the general writer does. *)
+let write_scalar : type a. a scalar -> bytes -> int -> a -> unit =
+ fun r buf base v ->
+  match r with
+  | Byte off -> Unchecked.set_u8 buf (base + off) (UInt8.to_int v)
+  | U16le off -> Unchecked.set_u16le buf (base + off) (UInt16.to_int v)
+  | U16be off -> Unchecked.set_u16be buf (base + off) (UInt16.to_int v)
+  | U32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | U32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | Sbyte off -> Unchecked.set_u8 buf (base + off) (SInt8.to_int v)
+  | I16le off -> Unchecked.set_u16le buf (base + off) (SInt16.to_int v)
+  | I16be off -> Unchecked.set_u16be buf (base + off) (SInt16.to_int v)
+  | I32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | I32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | Bits8 { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u8 buf p (Unchecked.u8 buf p lor (v lsl shift))
+  | Bits16le { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (v lsl shift))
+  | Bits16be { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16be buf p (Unchecked.u16be buf p lor (v lsl shift))
+
+(* The scalars whose value an int holds exactly, so a write converts it with no
+   loss. *)
+let int_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
 (* The data form of a field read, when the field is a bare scalar at a fixed
    offset or packed in an 8- or 16-bit word. *)
-let field_read : type a.
-    min_wire_size:int ->
-    field_access ->
-    a typ ->
-    (runtime -> Input_end.t -> bytes -> int -> a) ->
-    plain:bool ->
-    a field_read =
- fun ~min_wire_size access typ fn ~plain ->
+let field_scalar : type a.
+    min_wire_size:int -> field_access -> a typ -> a scalar option =
+ fun ~min_wire_size access typ ->
   match (access, typ) with
-  | _ when not plain -> Fn fn
   | (Fixed off | Bitfield { byte_off = off; _ }), _
     when off < 0
          || off + Option.value ~default:max_int (field_wire_size typ)
             > min_wire_size ->
       (* Unchecked only inside the span [decode] has checked. *)
-      Fn fn
-  | Fixed off, Uint8 -> Data (Byte off)
-  | Fixed off, Uint16 Little -> Data (U16le off)
-  | Fixed off, Uint16 Big -> Data (U16be off)
-  | Fixed off, Uint32 Little -> Data (U32le off)
-  | Fixed off, Uint32 Big -> Data (U32be off)
-  | Fixed off, Int8 -> Data (Sbyte off)
-  | Fixed off, Int16 Little -> Data (I16le off)
-  | Fixed off, Int16 Big -> Data (I16be off)
-  | Fixed off, Int32 Little -> Data (I32le off)
-  | Fixed off, Int32 Big -> Data (I32be off)
+      None
+  | Fixed off, Uint8 -> Some (Byte off)
+  | Fixed off, Uint16 Little -> Some (U16le off)
+  | Fixed off, Uint16 Big -> Some (U16be off)
+  | Fixed off, Uint32 Little -> Some (U32le off)
+  | Fixed off, Uint32 Big -> Some (U32be off)
+  | Fixed off, Int8 -> Some (Sbyte off)
+  | Fixed off, Int16 Little -> Some (I16le off)
+  | Fixed off, Int16 Big -> Some (I16be off)
+  | Fixed off, Int32 Little -> Some (I32le off)
+  | Fixed off, Int32 Big -> Some (I32be off)
   | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
       let mask = (1 lsl width) - 1 in
       match base with
-      | U8 -> Data (Bits8 { off; shift; mask })
-      | U16 Little -> Data (Bits16le { off; shift; mask })
-      | U16 Big -> Data (Bits16be { off; shift; mask })
-      | U32 _ -> Fn fn)
+      | U8 -> Some (Bits8 { off; shift; mask })
+      | U16 Little -> Some (Bits16le { off; shift; mask })
+      | U16 Big -> Some (Bits16be { off; shift; mask })
+      | U32 _ -> None)
+  | _ -> None
+
+let field_read ~min_wire_size access typ fn ~plain =
+  match field_scalar ~min_wire_size access typ with
+  | Some s when plain -> Data s
   | _ -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
@@ -1297,6 +1346,8 @@ type ('f, 'r) record =
       make : 'full;
       readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
+      puts_rev : 'r put list option;
+          (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -1358,7 +1409,11 @@ type interval =
    [decode] run it with one direct call. *)
 type pass =
   | No_checks
-  | Intervals of { flat : int array; intervals : interval array }
+  | Intervals of {
+      flat : int array;
+      tables : string array;
+      intervals : interval array;
+    }
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names
           the field of a failed one. *)
@@ -1389,6 +1444,9 @@ type 'r compiled = {
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   plain_validate : bytes -> int -> unit;
+  plain_encode : ('r -> bytes -> int -> unit) option;
+      (* [encode] of a fixed-size codec without parameters whose fields all
+         have a descriptor write. *)
   fixed_frame : int;
       (* The frame of a fixed-size codec, or -1: with [plain_pass], what
          [validate] of a codec without parameters runs with no closure call. *)
@@ -1442,6 +1500,7 @@ let record_start ?where ?doc name make =
       doc;
       readers = Nil;
       writers_rev = [];
+      puts_rev = Some [];
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
@@ -3926,6 +3985,11 @@ let apply_compiled : type a f r.
       make = r.make;
       readers = Snoc (r.readers, read);
       writers_rev = new_writers_rev;
+      puts_rev =
+        (match (r.puts_rev, read) with
+        | Some puts, Data scalar when int_scalar scalar ->
+            Some (Put { get = fld.get; scalar } :: puts)
+        | _ -> None);
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
@@ -4318,7 +4382,7 @@ let flat_interval : type a. a scalar -> lo:int -> hi:int -> int array =
 (* The index of the first failed test in [d], from [i], or -1. The read is
    dispatched in place and nothing is called, so the loop keeps its state in
    registers. The offsets lie inside the frame the caller has checked. *)
-let rec scan_intervals d buf off n i =
+let rec scan_intervals d tables buf off n i =
   if i >= n then -1
   else
     let q = off + Array.unsafe_get d (i + 1) in
@@ -4333,23 +4397,37 @@ let rec scan_intervals d buf off n i =
       | 6 -> UInt32.to_int (UInt32.unsafe_le buf q)
       | 7 -> UInt32.to_int (UInt32.unsafe_be buf q)
       | 8 -> SInt32.to_int (SInt32.unsafe_le buf q)
-      | _ -> SInt32.to_int (SInt32.unsafe_be buf q)
+      | 9 -> SInt32.to_int (SInt32.unsafe_be buf q)
+      | k ->
+          (* A byte table: kind [10 + n] looks the byte up in table [n]. *)
+          Char.code
+            (String.unsafe_get
+               (Array.unsafe_get tables (k - 10))
+               (Unchecked.u8 buf q))
     in
     let v =
       (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
     in
     if v < Array.unsafe_get d (i + 4) || v > Array.unsafe_get d (i + 5) then
       i / 6
-    else scan_intervals d buf off n (i + 6)
+    else scan_intervals d tables buf off n (i + 6)
+
+(* The first interval, in declaration order, the value fails. *)
+let first_failed intervals buf off =
+  let rec go i =
+    if i < Array.length intervals then
+      let (Interval { scalar; lo; hi; name; voff }) = intervals.(i) in
+      let v = read_slot scalar buf off in
+      if v < lo || v > hi then range_failed ~name ~voff v off else go (i + 1)
+  in
+  go 0
 
 let run_plain_pass pass input_end buf off =
   match pass with
   | No_checks -> ()
-  | Intervals { flat; intervals } ->
-      let k = scan_intervals flat buf off (Array.length flat) 0 in
-      if k >= 0 then
-        let (Interval { scalar; name; voff; _ }) = intervals.(k) in
-        range_failed ~name ~voff (read_slot scalar buf off) off
+  | Intervals { flat; tables; intervals } ->
+      if scan_intervals flat tables buf off (Array.length flat) 0 >= 0 then
+        first_failed intervals buf off
   | Steps { steps; where; scratch; clear } ->
       let arr =
         match scratch with
@@ -4361,6 +4439,58 @@ let run_plain_pass pass input_end buf off =
       in
       run_pass steps where arr no_runtime input_end buf off
 
+(* The byte an interval reads, and the field value a byte [b] gives, for the
+   intervals that read a single byte. *)
+let byte_view : type a. a scalar -> (int * (int -> int)) option = function
+  | Byte off -> Some (off, Fun.id)
+  | Sbyte off ->
+      Some (off, fun b -> (b lsl (Sys.int_size - 8)) asr (Sys.int_size - 8))
+  | Bits8 { off; shift; mask } -> Some (off, fun b -> (b lsr shift) land mask)
+  | _ -> None
+
+(* Several intervals on one byte become one lookup in a table of the 256 byte
+   values, whatever the fields they test: [version = 4 && ihl >= 5] is one load
+   and one lookup. *)
+let flatten_intervals intervals =
+  let groups = Hashtbl.create 8 in
+  Array.iter
+    (fun (Interval { scalar; lo; hi; _ }) ->
+      match byte_view scalar with
+      | Some (off, value) ->
+          let prev = Option.value ~default:[] (Hashtbl.find_opt groups off) in
+          Hashtbl.replace groups off ((value, lo, hi) :: prev)
+      | None -> ())
+    intervals;
+  let tables = Stdlib.ref [] and n_tables = Stdlib.ref 0 in
+  let emitted = Hashtbl.create 8 in
+  let table off tests =
+    let accept b =
+      List.for_all
+        (fun (value, lo, hi) ->
+          let v = value b in
+          v >= lo && v <= hi)
+        tests
+    in
+    let t = String.init 256 (fun b -> if accept b then '\001' else '\000') in
+    tables := t :: !tables;
+    let i = !n_tables in
+    incr n_tables;
+    [| 10 + i; off; 0; -1; 1; 1 |]
+  in
+  let flat =
+    Array.to_list intervals
+    |> List.filter_map (fun (Interval { scalar; lo; hi; _ }) ->
+        match byte_view scalar with
+        | Some (off, _) when List.length (Hashtbl.find groups off) > 1 ->
+            if Hashtbl.mem emitted off then None
+            else begin
+              Hashtbl.replace emitted off ();
+              Some (table off (Hashtbl.find groups off))
+            end
+        | _ -> Some (flat_interval scalar ~lo ~hi))
+  in
+  (Array.concat flat, Array.of_list (List.rev !tables))
+
 let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   let interval = function
     | Range { scalar; lo; hi; name; voff; store = false; _ } ->
@@ -4371,15 +4501,8 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   if not has_checks then No_checks
   else if Option.is_none where && Array.for_all Option.is_some intervals then
     let intervals = Array.map Option.get intervals in
-    let flat =
-      Array.concat
-        (Array.to_list
-           (Array.map
-              (fun (Interval { scalar; lo; hi; _ }) ->
-                flat_interval scalar ~lo ~hi)
-              intervals))
-    in
-    Intervals { flat; intervals }
+    let flat, tables = flatten_intervals intervals in
+    Intervals { flat; tables; intervals }
   else
     Steps
       {
@@ -4397,15 +4520,17 @@ let build_plain_decode make fwd wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else apply_fwd make fwd no_runtime input_end buf off
   | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else begin
+          run_plain_pass pass input_end buf off;
+          apply_fwd make fwd no_runtime input_end buf off
+        end
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -4555,13 +4680,74 @@ let plain_validate wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off
+          min_bounds_error min_size buf off
+        else run_plain_pass pass input_end buf off
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
         run_plain_pass pass input_end buf off
+
+let encode_too_short name n buf off =
+  if off < 0 then Fmt.invalid_arg "Codec.encode %s: negative offset %d" name off;
+  Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name n
+    (Bytes.length buf - off)
+
+let encode_rejected name e =
+  Fmt.invalid_arg
+    "Codec.encode %s: the encoded record is rejected by its own constraints \
+     (%a)"
+    name Types.pp_parse_error e
+
+(* The words the bitfields are or-ed into, zeroed before the writes. *)
+let bitfield_words puts =
+  let words =
+    List.filter_map
+      (fun (Put { scalar; _ }) ->
+        match scalar with
+        | Bits8 { off; _ } -> Some (off, false)
+        | Bits16le { off; _ } | Bits16be { off; _ } -> Some (off, true)
+        | _ -> None)
+      puts
+  in
+  List.sort_uniq compare words
+
+(* Frame, then one write per field. The frame covers every write, so none is
+   checked; a codec with constraints and no actions runs [validate]'s pass over
+   what it wrote. *)
+let build_plain_encode name n puts check =
+  let words = Array.of_list (bitfield_words puts) in
+  let puts = Array.of_list puts in
+  fun v buf off ->
+    if off < 0 || off > Bytes.length buf - n then
+      encode_too_short name n buf off
+    else begin
+      for i = 0 to Array.length words - 1 do
+        let w, wide = Array.unsafe_get words i in
+        if wide then Unchecked.set_u16le buf (off + w) 0
+        else Unchecked.set_u8 buf (off + w) 0
+      done;
+      for i = 0 to Array.length puts - 1 do
+        let (Put { get; scalar }) = Array.unsafe_get puts i in
+        write_scalar scalar buf off (get v)
+      done;
+      match check with
+      | No_checks -> ()
+      | pass -> (
+          try run_plain_pass pass (Input_end.of_bytes buf) buf off
+          with Types.Parse_error e -> encode_rejected name e)
+    end
+
+let plain_encoder ~name ~n_params ~wire_size_info ~struct_fields ~encode_check
+    puts check =
+  let no_actions =
+    List.for_all (fun (Types.Field f) -> Option.is_none f.action) struct_fields
+  in
+  match (wire_size_info, puts) with
+  | Fixed n, Some puts
+    when n_params = 0 && (Option.is_none encode_check || no_actions) ->
+      Some (build_plain_encode name n (List.rev puts) check)
+  | _ -> None
 
 (* A fixed-size record's size is known without walking its fields. *)
 let record_encoder name writers wire_size_info size_of_value check =
@@ -4638,6 +4824,9 @@ let seal : type r.
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
     plain_validate = plain_validate wire_size_info min_size check;
+    plain_encode =
+      plain_encoder ~name:r.name ~n_params ~wire_size_info ~struct_fields
+        ~encode_check r.puts_rev check;
     fixed_frame = (match wire_size_info with Fixed _ -> min_size | _ -> -1);
     plain_pass = check;
     validate =
@@ -5218,7 +5407,7 @@ let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
   with Types.Parse_error e -> Error e
 
-let encode ?env:e t v buf off =
+let encode_slow e t v buf off =
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in
@@ -5234,6 +5423,14 @@ let encode ?env:e t v buf off =
       "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
+
+let encode ?env:e t v buf off =
+  match e with
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some { plain_encode = Some f; _ } -> f v buf off
+      | _ -> encode_slow e t v buf off)
+  | _ -> encode_slow e t v buf off
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where
@@ -5251,8 +5448,11 @@ let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 let validate_fixed min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    min_bounds_error min_size buf off;
-  match pass with No_checks -> () | _ -> run_plain_pass pass input_end buf off
+    min_bounds_error min_size buf off
+  else
+    match pass with
+    | No_checks -> ()
+    | _ -> run_plain_pass pass input_end buf off
 
 let validate ?env:e (t : _ t) buf off =
   match e with
@@ -5594,6 +5794,101 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   match build_immediate_staged_writer f.typ access with
   | Some write -> Staged.stage write
   | None -> Staged.stage (fun buf off value -> write rt buf off value)
+
+type 'r valid = { buf : bytes; off : int; codec : int }
+
+let valid_slow env (t : 'r t) buf off =
+  validate ?env t buf off;
+  { buf; off; codec = t.id }
+
+let valid ?env (t : 'r t) buf off =
+  match env with
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some c when c.fixed_frame >= 0 ->
+          validate_fixed c.fixed_frame c.plain_pass buf off;
+          { buf; off; codec = t.id }
+      | _ -> valid_slow env t buf off)
+  | _ -> valid_slow env t buf off
+
+let wrong_valid name =
+  Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
+
+(* One closure per kind, chosen when the reader is staged, so a read is the
+   codec check and one load. *)
+let valid_reader : type a r. id:int -> name:string -> a scalar -> r valid -> a =
+ fun ~id ~name s ->
+  match s with
+  | Byte o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt8.unsafe_get v.buf (v.off + o)
+  | U16le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt16.unsafe_le v.buf (v.off + o)
+  | U16be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt16.unsafe_be v.buf (v.off + o)
+  | U32le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt32.unsafe_le v.buf (v.off + o)
+  | U32be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else UInt32.unsafe_be v.buf (v.off + o)
+  | Sbyte o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt8.unsafe_get v.buf (v.off + o)
+  | I16le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt16.unsafe_le v.buf (v.off + o)
+  | I16be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt16.unsafe_be v.buf (v.off + o)
+  | I32le o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt32.unsafe_le v.buf (v.off + o)
+  | I32be o ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else SInt32.unsafe_be v.buf (v.off + o)
+  | Bits8 { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u8 v.buf (v.off + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u16le v.buf (v.off + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      fun v ->
+        if v.codec <> id then wrong_valid name
+        else (Unchecked.u16be v.buf (v.off + off) lsr shift) land mask
+
+let read (type a r) ?env (codec : r t) (f : (a, r) field) :
+    (r valid -> a) Staged.t =
+  let access = field_access ~op:"Codec.read" codec f in
+  let c = compiled codec in
+  let frame =
+    match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+  in
+  let id = codec.id and name = codec.name in
+  match
+    if List.mem_assoc f.name c.field_actions then None
+    else field_scalar ~min_wire_size:frame access f.typ
+  with
+  | Some s -> Staged.stage (valid_reader ~id ~name s)
+  | None ->
+      let get = Staged.unstage (get ?env codec f) in
+      Staged.stage (fun v ->
+          if v.codec <> id then wrong_valid name else get v.buf v.off)
 
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
