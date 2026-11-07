@@ -1409,7 +1409,11 @@ type interval =
    [decode] run it with one direct call. *)
 type pass =
   | No_checks
-  | Intervals of { flat : int array; intervals : interval array }
+  | Intervals of {
+      flat : int array;
+      tables : string array;
+      intervals : interval array;
+    }
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names
           the field of a failed one. *)
@@ -4378,7 +4382,7 @@ let flat_interval : type a. a scalar -> lo:int -> hi:int -> int array =
 (* The index of the first failed test in [d], from [i], or -1. The read is
    dispatched in place and nothing is called, so the loop keeps its state in
    registers. The offsets lie inside the frame the caller has checked. *)
-let rec scan_intervals d buf off n i =
+let rec scan_intervals d tables buf off n i =
   if i >= n then -1
   else
     let q = off + Array.unsafe_get d (i + 1) in
@@ -4393,23 +4397,37 @@ let rec scan_intervals d buf off n i =
       | 6 -> UInt32.to_int (UInt32.unsafe_le buf q)
       | 7 -> UInt32.to_int (UInt32.unsafe_be buf q)
       | 8 -> SInt32.to_int (SInt32.unsafe_le buf q)
-      | _ -> SInt32.to_int (SInt32.unsafe_be buf q)
+      | 9 -> SInt32.to_int (SInt32.unsafe_be buf q)
+      | k ->
+          (* A byte table: kind [10 + n] looks the byte up in table [n]. *)
+          Char.code
+            (String.unsafe_get
+               (Array.unsafe_get tables (k - 10))
+               (Unchecked.u8 buf q))
     in
     let v =
       (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
     in
     if v < Array.unsafe_get d (i + 4) || v > Array.unsafe_get d (i + 5) then
       i / 6
-    else scan_intervals d buf off n (i + 6)
+    else scan_intervals d tables buf off n (i + 6)
+
+(* The first interval, in declaration order, the value fails. *)
+let first_failed intervals buf off =
+  let rec go i =
+    if i < Array.length intervals then
+      let (Interval { scalar; lo; hi; name; voff }) = intervals.(i) in
+      let v = read_slot scalar buf off in
+      if v < lo || v > hi then range_failed ~name ~voff v off else go (i + 1)
+  in
+  go 0
 
 let run_plain_pass pass input_end buf off =
   match pass with
   | No_checks -> ()
-  | Intervals { flat; intervals } ->
-      let k = scan_intervals flat buf off (Array.length flat) 0 in
-      if k >= 0 then
-        let (Interval { scalar; name; voff; _ }) = intervals.(k) in
-        range_failed ~name ~voff (read_slot scalar buf off) off
+  | Intervals { flat; tables; intervals } ->
+      if scan_intervals flat tables buf off (Array.length flat) 0 >= 0 then
+        first_failed intervals buf off
   | Steps { steps; where; scratch; clear } ->
       let arr =
         match scratch with
@@ -4421,6 +4439,58 @@ let run_plain_pass pass input_end buf off =
       in
       run_pass steps where arr no_runtime input_end buf off
 
+(* The byte an interval reads, and the field value a byte [b] gives, for the
+   intervals that read a single byte. *)
+let byte_view : type a. a scalar -> (int * (int -> int)) option = function
+  | Byte off -> Some (off, Fun.id)
+  | Sbyte off ->
+      Some (off, fun b -> (b lsl (Sys.int_size - 8)) asr (Sys.int_size - 8))
+  | Bits8 { off; shift; mask } -> Some (off, fun b -> (b lsr shift) land mask)
+  | _ -> None
+
+(* Several intervals on one byte become one lookup in a table of the 256 byte
+   values, whatever the fields they test: [version = 4 && ihl >= 5] is one load
+   and one lookup. *)
+let flatten_intervals intervals =
+  let groups = Hashtbl.create 8 in
+  Array.iter
+    (fun (Interval { scalar; lo; hi; _ }) ->
+      match byte_view scalar with
+      | Some (off, value) ->
+          let prev = Option.value ~default:[] (Hashtbl.find_opt groups off) in
+          Hashtbl.replace groups off ((value, lo, hi) :: prev)
+      | None -> ())
+    intervals;
+  let tables = Stdlib.ref [] and n_tables = Stdlib.ref 0 in
+  let emitted = Hashtbl.create 8 in
+  let table off tests =
+    let accept b =
+      List.for_all
+        (fun (value, lo, hi) ->
+          let v = value b in
+          v >= lo && v <= hi)
+        tests
+    in
+    let t = String.init 256 (fun b -> if accept b then '\001' else '\000') in
+    tables := t :: !tables;
+    let i = !n_tables in
+    incr n_tables;
+    [| 10 + i; off; 0; -1; 1; 1 |]
+  in
+  let flat =
+    Array.to_list intervals
+    |> List.filter_map (fun (Interval { scalar; lo; hi; _ }) ->
+        match byte_view scalar with
+        | Some (off, _) when List.length (Hashtbl.find groups off) > 1 ->
+            if Hashtbl.mem emitted off then None
+            else begin
+              Hashtbl.replace emitted off ();
+              Some (table off (Hashtbl.find groups off))
+            end
+        | _ -> Some (flat_interval scalar ~lo ~hi))
+  in
+  (Array.concat flat, Array.of_list (List.rev !tables))
+
 let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   let interval = function
     | Range { scalar; lo; hi; name; voff; store = false; _ } ->
@@ -4431,15 +4501,8 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   if not has_checks then No_checks
   else if Option.is_none where && Array.for_all Option.is_some intervals then
     let intervals = Array.map Option.get intervals in
-    let flat =
-      Array.concat
-        (Array.to_list
-           (Array.map
-              (fun (Interval { scalar; lo; hi; _ }) ->
-                flat_interval scalar ~lo ~hi)
-              intervals))
-    in
-    Intervals { flat; intervals }
+    let flat, tables = flatten_intervals intervals in
+    Intervals { flat; tables; intervals }
   else
     Steps
       {
