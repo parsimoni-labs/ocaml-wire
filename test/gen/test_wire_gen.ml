@@ -236,6 +236,56 @@ let test_fallback () =
     "falls back" true
     (contains src "Wire.Codec.decode_exn codec")
 
+(* A generated getter reads what [Codec.get] reads, or raises what it raises,
+   on random buffers and offsets around the field. *)
+let getter codec field ~get ~show =
+  let read = Staged.unstage (Codec.get codec field) in
+  let size = Codec.min_wire_size codec in
+  for _ = 1 to 2000 do
+    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
+    Alcotest.(check string)
+      "get"
+      (outcome (fun () -> show (read buf off)))
+      (outcome (fun () -> show (get buf off)))
+  done
+
+(* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
+let int_getter codec field ~get ~to_int =
+  let read = Staged.unstage (Codec.get codec field) in
+  let size = Codec.min_wire_size codec in
+  for _ = 1 to 2000 do
+    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
+    Alcotest.(check string)
+      "get int"
+      (outcome (fun () -> string_of_int (to_int (read buf off))))
+      (outcome (fun () -> string_of_int (get buf off)))
+  done
+
+let test_getters () =
+  let u8 v = string_of_int (UInt8.to_int v)
+  and u16 v = string_of_int (UInt16.to_int v) in
+  getter Schemas.ipv4 Schemas.ipv4_frag ~get:G_ipv4.get_frag ~show:u16;
+  getter Schemas.ipv4 Schemas.ipv4_proto ~get:G_ipv4.get_proto ~show:u8;
+  getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.get_src ~show:(fun v ->
+      string_of_int (SInt32.to_int v));
+  getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.get_dst ~show:(fun v ->
+      string_of_int (UInt32.to_int v));
+  int_getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.get_src_int
+    ~to_int:SInt32.to_int;
+  int_getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.get_dst_int
+    ~to_int:UInt32.to_int;
+  int_getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.get_f_int
+    ~to_int:SInt32.to_int;
+  getter Schemas.checked Schemas.checked_proto ~get:G_checked.get_proto ~show:u8;
+  getter Schemas.mixed Schemas.mixed_b ~get:G_mixed.get_b ~show:(fun v ->
+      string_of_int (SInt16.to_int v));
+  getter Schemas.mixed Schemas.mixed_e ~get:G_mixed.get_e ~show:(fun v ->
+      string_of_int (UInt32.to_int v));
+  getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.get_f ~show:(fun v ->
+      string_of_int (SInt32.to_int v));
+  getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.get_h ~show:string_of_int;
+  getter Schemas.eth Schemas.eth_src ~get:G_eth.get_src ~show:Fun.id
+
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, and adds a stack-allocated decode for the generated record. The
    stock compiler cannot build it; the OxCaml tests do. *)
@@ -270,4 +320,5 @@ let suite =
       Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
+      Alcotest.test_case "getters" `Quick test_getters;
     ] )

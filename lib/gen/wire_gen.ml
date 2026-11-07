@@ -546,6 +546,70 @@ let pp_encode ppf fields =
   Fmt.pf ppf "let encode t buf off = write buf off %a@\n" pp_list
     (List.map (fun f -> "t." ^ label f.name) fields)
 
+(* [get_<field> buf off] reads one field as [Codec.get] does, with the same
+   bounds-checked load: the compiler's check jumps to a handler that does not
+   return, so nothing is kept live across it, and an offset out of range raises
+   what [Codec.get] raises. A closed enum's value is then checked to be a case. *)
+let checked_load ~off ~bytes ~endian =
+  match bytes with
+  | 1 -> Fmt.str "(Bytes.get_uint8 buf (off + %d))" off
+  | 2 ->
+      Fmt.str "(Bytes.get_uint16_%s buf (off + %d))" (endian_suffix endian) off
+  | _ ->
+      Fmt.str "(Bytes.get_int32_%s buf (off + %d))" (endian_suffix endian) off
+
+let checked_read f =
+  match f.store with
+  | Int { width = 32; endian; _ } -> checked_load ~off:f.off ~bytes:4 ~endian
+  | Int { width; endian; signed } ->
+      let v = checked_load ~off:f.off ~bytes:(width / 8) ~endian in
+      if signed then
+        Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
+          width
+      else v
+  | Bits { base; shift; width } ->
+      let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
+      Fmt.str "((%s lsr %d) land 0x%x)"
+        (checked_load ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian)
+        shift
+        ((1 lsl width) - 1)
+  | Bytes n -> Fmt.str "(Bytes.sub_string buf (off + %d) %d)" f.off n
+
+let pp_getter ppf ~target f =
+  let attr =
+    match (target, f.store) with
+    | `OxCaml, (Int _ | Bits _) -> "[@inline][@zero_alloc]"
+    | _ -> "[@inline]"
+  in
+  Fmt.pf ppf "let%s get_%s buf off =@\n" attr (label f.name);
+  (match f.store with
+  | Int { width = 32; _ } ->
+      Fmt.pf ppf "  let %s_raw = %s in@\n  let %s = %s in@\n" f.var
+        (checked_read f) f.var (int_view f)
+  | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.var (checked_read f));
+  (match f.enum with
+  | Some (_, valid) ->
+      Fmt.pf ppf "  if not %s then get_failed %S buf off else@\n"
+        (member f valid) f.name
+  | None -> ());
+  Fmt.pf ppf "  %s@\n@\n" (typed_value f);
+  match f.store with
+  | Int { width = 32; _ } ->
+      (* The [int] view of a 32-bit field, with no conversion through its
+         typed form. *)
+      Fmt.pf ppf
+        "let%s get_%s_int buf off =@\n  let %s_raw = %s in@\n  %s@\n@\n" attr
+        (label f.name) f.var (checked_read f) (int_view f)
+  | _ -> ()
+
+let pp_getters ppf ~target fields =
+  Fmt.pf ppf
+    "let%s get_failed name buf off = Wire.Private.Gen.get_failed codec name \
+     buf off@\n\
+     @\n"
+    (cold target);
+  List.iter (pp_getter ppf ~target) fields
+
 (* [decode_local] builds the generated record in the caller's frame, so a
    decode allocates nothing on the heap; [decode_with] takes the constructor
    as an argument, which flambda2 inlines with it. *)
@@ -585,6 +649,7 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   if target = `OxCaml then pp_oxcaml ppf ~record ~fields ~size ~where;
   pp_write_int ppf ~target ~fields ~where;
   pp_write ppf ~target fields;
+  pp_getters ppf ~target fields;
   if record then pp_encode ppf fields
 
 let pp ?(target = `OCaml) ?make ~codec ppf c =

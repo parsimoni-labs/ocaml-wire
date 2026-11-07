@@ -23,7 +23,8 @@
   read from 64-bit words, and a direct call to the record's constructor. On an
   IPv4 header the generated decode runs in about 145 instructions and the
   encode, which still checks each value's range, in about 150. The generated
-  module refuses to load if its codec has changed since, and hands any input
+  module also has a getter per field, one bounds-checked load at a constant
+  offset as `Codec.get` makes. It refuses to load if its codec has changed since, and hands any input
   it rejects back to the codec, so its errors are the codec's own. A codec it
   cannot specialise gets a module that calls the codec. With
   ``~target:`OxCaml`` the module also has its hot paths checked by
