@@ -610,6 +610,50 @@ let pp_getters ppf ~target fields =
     (cold target);
   List.iter (pp_getter ppf ~target) fields
 
+(* [Valid.v buf] validates the record at offset 0 and is the proof of it: a
+   buffer's length never changes, so each [read_<field>] after it is one load
+   at a constant offset with no check of its own. This is EverParse's
+   validate-then-read, with the proof a type. *)
+let pp_valid ppf ~target ~fields ~where =
+  Fmt.pf ppf
+    "module Valid : sig@\n\
+    \  type t = private bytes@\n\
+     @\n\
+    \  val v : bytes -> t@\n\
+     end = struct@\n\
+    \  type t = bytes@\n\
+     @\n\
+    \  let[@inline] v buf =@\n\
+    \    if Bytes.length buf < size then fail buf 0@\n\
+    \    else begin@\n";
+  (match all_tests ~fields ~where with
+  | [] -> ()
+  | _ -> Fmt.pf ppf "      validate buf 0;@\n");
+  Fmt.pf ppf "      buf@\n    end@\nend@\n@\n";
+  List.iter
+    (fun f ->
+      let attr =
+        match (target, f.store) with
+        | `OxCaml, (Int _ | Bits _) -> "[@inline][@zero_alloc]"
+        | _ -> "[@inline]"
+      in
+      Fmt.pf ppf
+        "let%s read_%s (v : Valid.t) =@\n\
+        \  let buf = (v :> bytes) and off = 0 in@\n"
+        attr (label f.name);
+      pp_reads ppf ~words:[] [ f ];
+      Fmt.pf ppf "  %s@\n@\n" (typed_value f);
+      match f.store with
+      | Int { width = 32; _ } ->
+          Fmt.pf ppf
+            "let%s read_%s_int (v : Valid.t) =@\n\
+            \  let buf = (v :> bytes) and off = 0 in@\n"
+            attr (label f.name);
+          pp_reads ppf ~words:[] [ f ];
+          Fmt.pf ppf "  %s@\n@\n" f.var
+      | _ -> ())
+    fields
+
 (* [decode_local] builds the generated record in the caller's frame, so a
    decode allocates nothing on the heap; [decode_with] takes the constructor
    as an argument, which flambda2 inlines with it. *)
@@ -650,6 +694,7 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   pp_write_int ppf ~target ~fields ~where;
   pp_write ppf ~target fields;
   pp_getters ppf ~target fields;
+  pp_valid ppf ~target ~fields ~where;
   if record then pp_encode ppf fields
 
 let pp ?(target = `OCaml) ?make ~codec ppf c =
