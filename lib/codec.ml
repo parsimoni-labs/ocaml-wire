@@ -988,7 +988,10 @@ let[@inline] read_field : type a.
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
    at the descriptor's offset with no bounds check of its own. *)
-type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+type 'r put =
+  | Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+  | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
+      (** A fixed byte array: copied in after a check of its length. *)
 
 let bits_of_mask mask =
   let rec go n = if mask lsr n = 0 then n else go (n + 1) in
@@ -4120,10 +4123,13 @@ let field_reads ~min_wire_size ~validates cf (fld : (_, _) field) act raw_reader
       ~plain:(Option.is_none act && not validates) )
 
 (* The encoder's write of a field, while every field so far has one. *)
-let field_put puts (fld : (_, _) field) checked_read =
+let field_put : type a r.
+    r put list option -> (a, r) field -> a field_read -> r put list option =
+ fun puts fld checked_read ->
   match (puts, checked_read) with
   | Some puts, Data scalar when int_scalar scalar ->
       Some (Put { get = fld.get; scalar } :: puts)
+  | Some puts, Span (at, len) -> Some (Blit { get = fld.get; at; len } :: puts)
   | _ -> None
 
 let apply_compiled : type a f r.
@@ -5057,11 +5063,11 @@ let encode_rejected name e =
 let bitfield_words puts =
   let words =
     List.filter_map
-      (fun (Put { scalar; _ }) ->
-        match scalar with
-        | Bits8 { off; _ } -> Some (off, false)
-        | Bits16le { off; _ } | Bits16be { off; _ } -> Some (off, true)
-        | _ -> None)
+      (function
+        | Put { scalar = Bits8 { off; _ }; _ } -> Some (off, false)
+        | Put { scalar = Bits16le { off; _ } | Bits16be { off; _ }; _ } ->
+            Some (off, true)
+        | Put _ | Blit _ -> None)
       puts
   in
   List.sort_uniq compare words
@@ -5086,25 +5092,27 @@ type 'r wput = {
 let int_getter : type a r. (a, int) Type.eq -> (r -> a) -> r -> int =
  fun Type.Equal get -> get
 
-let wput_of (Put { get; scalar }) =
-  let w eq kind at ~shift ~mask =
-    Some { get = int_getter eq get; kind; at; shift; mask }
-  in
-  let opt eq f = match eq with Some eq -> f eq | None -> None in
-  match scalar with
-  | Byte at -> w UInt8.int_eq 0 at ~shift:0 ~mask:0
-  | Sbyte at -> w SInt8.int_eq 0 at ~shift:0 ~mask:0
-  | U16be at -> w UInt16.int_eq 1 at ~shift:0 ~mask:0
-  | I16be at -> w SInt16.int_eq 1 at ~shift:0 ~mask:0
-  | U16le at -> w UInt16.int_eq 2 at ~shift:0 ~mask:0
-  | I16le at -> w SInt16.int_eq 2 at ~shift:0 ~mask:0
-  | U32be at -> opt UInt32.int_eq (fun eq -> w eq 3 at ~shift:0 ~mask:0)
-  | I32be at -> opt SInt32.int_eq (fun eq -> w eq 3 at ~shift:0 ~mask:0)
-  | U32le at -> opt UInt32.int_eq (fun eq -> w eq 4 at ~shift:0 ~mask:0)
-  | I32le at -> opt SInt32.int_eq (fun eq -> w eq 4 at ~shift:0 ~mask:0)
-  | Bits8 { off; shift; mask } -> w Type.Equal 5 off ~shift ~mask
-  | Bits16be { off; shift; mask } -> w Type.Equal 6 off ~shift ~mask
-  | Bits16le { off; shift; mask } -> w Type.Equal 7 off ~shift ~mask
+let wput_of : type r. r put -> r wput option = function
+  | Blit _ -> None
+  | Put { get; scalar } -> (
+      let w eq kind at ~shift ~mask =
+        Some { get = int_getter eq get; kind; at; shift; mask }
+      in
+      let opt eq f = match eq with Some eq -> f eq | None -> None in
+      match scalar with
+      | Byte at -> w UInt8.int_eq 0 at ~shift:0 ~mask:0
+      | Sbyte at -> w SInt8.int_eq 0 at ~shift:0 ~mask:0
+      | U16be at -> w UInt16.int_eq 1 at ~shift:0 ~mask:0
+      | I16be at -> w SInt16.int_eq 1 at ~shift:0 ~mask:0
+      | U16le at -> w UInt16.int_eq 2 at ~shift:0 ~mask:0
+      | I16le at -> w SInt16.int_eq 2 at ~shift:0 ~mask:0
+      | U32be at -> opt UInt32.int_eq (fun eq -> w eq 3 at ~shift:0 ~mask:0)
+      | I32be at -> opt SInt32.int_eq (fun eq -> w eq 3 at ~shift:0 ~mask:0)
+      | U32le at -> opt UInt32.int_eq (fun eq -> w eq 4 at ~shift:0 ~mask:0)
+      | I32le at -> opt SInt32.int_eq (fun eq -> w eq 4 at ~shift:0 ~mask:0)
+      | Bits8 { off; shift; mask } -> w Type.Equal 5 off ~shift ~mask
+      | Bits16be { off; shift; mask } -> w Type.Equal 6 off ~shift ~mask
+      | Bits16le { off; shift; mask } -> w Type.Equal 7 off ~shift ~mask)
 
 (* One store, chosen in place. A bitfield value wider than its field sets
    [bad] instead of raising, so the row makes no call but the getters. *)
@@ -5177,10 +5185,32 @@ let zero_words words buf off =
     else Unchecked.set_u8 buf (off + w) 0
   done
 
+(* The byte arrays of a record, copied in when each has its length; [false]
+   when one does not, and nothing written. *)
+let blit_all blits v buf off =
+  let ok = Stdlib.ref true in
+  for i = 0 to Array.length blits - 1 do
+    match Array.unsafe_get blits i with
+    | Blit { get; len; _ } -> if String.length (get v) <> len then ok := false
+    | Put _ -> ()
+  done;
+  if !ok then
+    for i = 0 to Array.length blits - 1 do
+      match Array.unsafe_get blits i with
+      | Blit { get; at; len } ->
+          Bytes.unsafe_blit_string (get v) 0 buf (off + at) len
+      | Put _ -> ()
+    done;
+  !ok
+
 let build_plain_encode name n puts check =
   let words = Array.of_list (bitfield_words puts) in
-  let wputs = List.filter_map wput_of puts in
-  let all_ints = List.length wputs = List.length puts in
+  let blits, ints =
+    List.partition (function Blit _ -> true | Put _ -> false) puts
+  in
+  let wputs = List.filter_map wput_of ints in
+  let all_ints = List.length wputs = List.length ints in
+  let blits = Array.of_list blits in
   let puts = Array.of_list puts in
   let finish buf off =
     match check with
@@ -5195,14 +5225,16 @@ let build_plain_encode name n puts check =
     else begin
       zero_words words buf off;
       for i = 0 to Array.length puts - 1 do
-        let (Put { get; scalar }) = Array.unsafe_get puts i in
-        write_scalar scalar buf off (get v)
+        match Array.unsafe_get puts i with
+        | Put { get; scalar } -> write_scalar scalar buf off (get v)
+        | Blit { get; at; len } ->
+            ignore (blit_string_exact len buf (off + at) (get v))
       done;
       finish buf off
     end
   in
   match if all_ints then stage_puts wputs ~slow ~finish else None with
-  | Some write ->
+  | Some write when Array.length blits = 0 ->
       fun v buf off ->
         if off < 0 || off > Bytes.length buf - n then
           encode_too_short name n buf off
@@ -5210,6 +5242,15 @@ let build_plain_encode name n puts check =
           zero_words words buf off;
           write v buf off
         end
+  | Some write ->
+      fun v buf off ->
+        if off < 0 || off > Bytes.length buf - n then
+          encode_too_short name n buf off
+        else if blit_all blits v buf off then begin
+          zero_words words buf off;
+          write v buf off
+        end
+        else slow v buf off
   | None -> slow
 
 let plain_encoder ~name ~n_params ~wire_size_info ~struct_fields ~encode_check
