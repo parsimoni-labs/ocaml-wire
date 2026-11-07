@@ -4,12 +4,12 @@
 
 - `Wire.Codec.decode` and `Wire.Codec.encode` are several times faster on a
   fixed-size codec with nothing to check, such as a plain IPv4 header. Decode
-  no longer re-reads every field to check nothing, and encode no longer
-  allocates for signed integer, float or fixed byte fields (#419, @samoht)
-- `Wire.Codec.decode` reads fixed-offset fields without a function call per
-  field. An offset near `max_int` is now a parse error rather than an
-  `Invalid_argument` from `Bytes`, and a negative offset raises
-  `Invalid_argument` naming it (#419, @samoht)
+  no longer re-reads every field to check nothing, and reads fixed-offset
+  fields straight from the buffer once the record's bounds are checked. Encode
+  no longer allocates for signed integer, float or fixed byte fields. An offset
+  near `max_int` is now a parse error rather than an `Invalid_argument` from
+  `Bytes`, and a negative offset raises `Invalid_argument` naming it (#419,
+  @samoht)
 - `Wire.Codec.validate` is several times faster on a codec of fixed-offset
   fields with no parameters or actions. Its first call compiles the checks to
   one read and one test per field (#417, @samoht)
@@ -19,6 +19,13 @@
   raise at `v`. A size expression naming a field it cannot see, a bitfield
   after a variable-size field, or a field type with no reader now raises
   `Invalid_argument` at first use instead (#413, @samoht)
+
+### Fixed
+
+- `Wire.Codec.decode` reads a record of more than eight fields in field order.
+  It read them last to first, so a record whose fields failed to decode
+  reported its last bad field rather than its first, and `map` decoders ran in
+  reverse (#419, @samoht)
 
 ## 1.3.0
 
