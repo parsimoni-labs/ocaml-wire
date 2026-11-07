@@ -4286,29 +4286,95 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
          raise is a real error and propagates. *)
       check_end_bounds min_size buf off (compute runtime input_end buf off)
 
+let no_slots = { ints = [||]; int64s = [||] }
+
+(* A fused interval test, for a pass made of nothing else. *)
+type interval =
+  | Interval : {
+      scalar : 'a scalar;
+      lo : int;
+      hi : int;
+      name : string;
+      voff : int;
+    }
+      -> interval
+
+(* The check pass of a codec without parameters, as data, so [validate] and
+   [decode] run it with one direct call. *)
+type pass =
+  | No_checks
+  | Intervals of interval array
+      (** Interval tests only, on slots nothing else reads: no scratch, no
+          dispatch. *)
+  | Steps of {
+      steps : step array;
+      where : (slots -> bool) option;
+      scratch : (unit -> slots) option;
+          (** [None] when no step reads or writes a slot. *)
+      clear : slots -> unit;
+    }
+
+let run_plain_pass pass input_end buf off =
+  match pass with
+  | No_checks -> ()
+  | Intervals rs ->
+      for i = 0 to Array.length rs - 1 do
+        let (Interval { scalar; lo; hi; name; voff }) = rs.(i) in
+        let v = read_slot scalar buf off in
+        if v < lo || v > hi then range_failed ~name ~voff v off
+      done
+  | Steps { steps; where; scratch; clear } ->
+      let arr =
+        match scratch with
+        | None -> no_slots
+        | Some scratch ->
+            let arr = scratch () in
+            clear arr;
+            arr
+      in
+      run_pass steps where arr no_runtime input_end buf off
+
+let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
+  let interval = function
+    | Range { scalar; lo; hi; name; voff; store = false; _ } ->
+        Some (Interval { scalar; lo; hi; name; voff })
+    | Range _ | Slot _ | Check _ | Full _ -> None
+  in
+  let intervals = Array.map interval steps in
+  if not has_checks then No_checks
+  else if Option.is_none where && Array.for_all Option.is_some intervals then
+    Intervals (Array.map Option.get intervals)
+  else
+    Steps
+      {
+        steps;
+        where;
+        scratch = (if needs_arr then Some scratch else None);
+        clear;
+      }
+
 (* Frame, check, read: the three phases of docs/execution.md, for a codec
    without parameters. *)
-let build_plain_decode make fwd wire_size_info min_size check =
-  match (wire_size_info, check) with
-  | Fixed _, None ->
+let build_plain_decode make fwd wire_size_info min_size pass =
+  match (wire_size_info, pass) with
+  | Fixed _, No_checks ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off;
         apply_fwd make fwd no_runtime input_end buf off
-  | Fixed _, Some check ->
+  | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off;
-        check input_end buf off;
+        run_plain_pass pass input_end buf off;
         apply_fwd make fwd no_runtime input_end buf off
-  | Variable _, _ ->
-      let check = Option.value check ~default:(fun _ _ _ -> ()) in
+  | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
-        check input_end buf off;
+        run_plain_pass pass input_end buf off;
         apply_fwd make fwd no_runtime input_end buf off
 
 let build_checked_decode raw_decode wire_size_info min_size =
@@ -4442,43 +4508,24 @@ let build_decoders make readers wire_size_info min_size ~plain ~check =
     else None )
 
 (* The check pass [decode] runs between the frame and the reads. *)
-let no_slots = { ints = [||]; int64s = [||] }
-
-(* The check pass of a codec without parameters, between the frame and the
-   reads. A pass of interval tests on slots nothing else reads needs no
-   scratch. *)
-let plain_check ~has_checks ~needs_arr ~scratch ~clear steps where =
-  if not has_checks then None
-  else if not needs_arr then
-    Some
-      (fun input_end buf off ->
-        run_pass steps where no_slots no_runtime input_end buf off)
-  else
-    Some
-      (fun input_end buf off ->
-        let arr = scratch () in
-        clear arr;
-        run_pass steps where arr no_runtime input_end buf off)
-
 (* [validate] of a codec without parameters: the frame, then [check]. *)
-let plain_validate wire_size_info min_size check =
-  match (wire_size_info, check) with
-  | Fixed _, None ->
+let plain_validate wire_size_info min_size pass =
+  match (wire_size_info, pass) with
+  | Fixed _, No_checks ->
       fun buf off ->
         if off < 0 || off > Bytes.length buf - min_size then
           min_bounds_error min_size buf off
-  | Fixed _, Some check ->
+  | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off;
-        check input_end buf off
-  | Variable _, _ ->
-      let check = Option.value check ~default:(fun _ _ _ -> ()) in
+        run_plain_pass pass input_end buf off
+  | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
-        check input_end buf off
+        run_plain_pass pass input_end buf off
 
 (* A fixed-size record's size is known without walking its fields. *)
 let record_encoder name writers wire_size_info size_of_value check =
@@ -4538,7 +4585,7 @@ let seal : type r.
   in
   let has_checks = has_validation_checks compiled_where struct_fields in
   let check =
-    plain_check ~has_checks ~needs_arr ~scratch ~clear steps compiled_where
+    plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where
   in
   let decode, plain_decode =
     build_decoders r.make r.readers wire_size_info min_size
