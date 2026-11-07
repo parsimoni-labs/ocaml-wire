@@ -4139,9 +4139,10 @@ let check_cond ~name ~voff cond arr base =
       (Types.Parse_error
          { e with at = at_of base voff; field = name :: e.field })
 
+(* [i] ranges over the array's own indices, so its reads need no check. *)
 let run_steps steps arr runtime input_end buf off =
   for i = 0 to Array.length steps - 1 do
-    match steps.(i) with
+    match Array.unsafe_get steps i with
     | Slot { slot; scalar } -> arr.ints.(slot) <- read_slot scalar buf off
     | Check { name; slot; voff; cond } ->
         if not (check_cond ~name ~voff cond arr off) then
@@ -4320,7 +4321,7 @@ let run_plain_pass pass input_end buf off =
   | No_checks -> ()
   | Intervals rs ->
       for i = 0 to Array.length rs - 1 do
-        let (Interval { scalar; lo; hi; name; voff }) = rs.(i) in
+        let (Interval { scalar; lo; hi; name; voff }) = Array.unsafe_get rs i in
         let v = read_slot scalar buf off in
         if v < lo || v > hi then range_failed ~name ~voff v off
       done
@@ -5164,11 +5165,18 @@ let decode_slow consume e t c buf off =
   | _ -> ());
   v
 
+(* The first decode of a codec compiles it. Kept out of [decode_exn] so nothing
+   there is live across a call, and its arguments stay in registers. *)
+let decode_first consume e t buf off =
+  decode_slow consume e t (compiled t) buf off
+
 let decode_exn ?(consume = `Prefix) ?env:e t buf off =
-  let c = compiled t in
-  match (e, consume, c.plain_decode) with
-  | None, `Prefix, Some decode -> decode buf off
-  | _ -> decode_slow consume e t c buf off
+  match Atomic.get t.compiled with
+  | None -> decode_first consume e t buf off
+  | Some c -> (
+      match (e, consume, c.plain_decode) with
+      | None, `Prefix, Some decode -> decode buf off
+      | _ -> decode_slow consume e t c buf off)
 
 let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
@@ -5202,9 +5210,14 @@ let to_struct t =
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
+let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
+
 let validate ?env:e (t : _ t) buf off =
   match e with
-  | None when t.n_params = 0 -> (compiled t).plain_validate buf off
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some c -> c.plain_validate buf off
+      | None -> validate_first t buf off)
   | _ ->
       require_env ~op:"validate" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
