@@ -48,3 +48,9 @@ val get : bytes -> int -> t
 val set : bytes -> int -> t -> unit
 (** [set buf off v] writes [v] as one signed byte at offset [off]. Needs no
     range check: every {!type-t} is a value the byte holds. *)
+
+(**/**)
+
+val unsafe_get : bytes -> int -> t
+(** [unsafe_get buf off] is the value at [off], read with no bounds check: the
+    caller has checked that the byte is in [buf]. *)

@@ -20,3 +20,6 @@ let le buf off = Bytes.get_int16_le buf off
 let be buf off = Bytes.get_int16_be buf off
 let set_le buf off n = Bytes.set_int16_le buf off n
 let set_be buf off n = Bytes.set_int16_be buf off n
+let sext16 n = (n lsl (Sys.int_size - 16)) asr (Sys.int_size - 16)
+let unsafe_le buf off = sext16 (Unchecked.u16le buf off)
+let unsafe_be buf off = sext16 (Unchecked.u16be buf off)

@@ -18,3 +18,4 @@ let v_opt n = if n < min_int || n > max_int then None else Some n
 let to_int n = n
 let get buf off = Bytes.get_uint8 buf off
 let set buf off n = Bytes.set_uint8 buf off n
+let unsafe_get = Unchecked.u8
