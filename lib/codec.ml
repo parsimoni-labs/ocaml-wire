@@ -1343,6 +1343,33 @@ type wire_size_info =
 
 let id_counter = Atomic.make 0
 
+(* A fused interval test, for a pass made of nothing else. *)
+type interval =
+  | Interval : {
+      scalar : 'a scalar;
+      lo : int;
+      hi : int;
+      name : string;
+      voff : int;
+    }
+      -> interval
+
+(* The check pass of a codec without parameters, as data, so [validate] and
+   [decode] run it with one direct call. *)
+type pass =
+  | No_checks
+  | Intervals of { flat : int array; intervals : interval array }
+      (** Interval tests only, on slots nothing else reads: no scratch. [flat]
+          holds six ints per test, read by {!scan_intervals}; [intervals] names
+          the field of a failed one. *)
+  | Steps of {
+      steps : step array;
+      where : (slots -> bool) option;
+      scratch : (unit -> slots) option;
+          (** [None] when no step reads or writes a slot. *)
+      clear : slots -> unit;
+    }
+
 (* What [seal] builds from a field list: the layout, the readers and writers
    and the validators. [view] does not build it; the first operation that needs
    it does (see [compiled]). *)
@@ -1362,7 +1389,10 @@ type 'r compiled = {
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   plain_validate : bytes -> int -> unit;
-      (* [validate] for a codec without parameters. *)
+  fixed_frame : int;
+      (* The frame of a fixed-size codec, or -1: with [plain_pass], what
+         [validate] of a codec without parameters runs with no closure call. *)
+  plain_pass : pass; (* [validate] for a codec without parameters. *)
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
@@ -4263,41 +4293,63 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
 
 let no_slots = { ints = [||]; int64s = [||] }
 
-(* A fused interval test, for a pass made of nothing else. *)
-type interval =
-  | Interval : {
-      scalar : 'a scalar;
-      lo : int;
-      hi : int;
-      name : string;
-      voff : int;
-    }
-      -> interval
+(* An interval test as six ints: the read's kind, its offset, the bitfield
+   shift and mask (0 and -1 for a whole scalar), and the bounds. *)
+let flat_interval : type a. a scalar -> lo:int -> hi:int -> int array =
+ fun scalar ~lo ~hi ->
+  let kind, off, shift, mask =
+    match scalar with
+    | Byte off -> (0, off, 0, -1)
+    | U16le off -> (1, off, 0, -1)
+    | U16be off -> (2, off, 0, -1)
+    | Sbyte off -> (3, off, 0, -1)
+    | I16le off -> (4, off, 0, -1)
+    | I16be off -> (5, off, 0, -1)
+    | U32le off -> (6, off, 0, -1)
+    | U32be off -> (7, off, 0, -1)
+    | I32le off -> (8, off, 0, -1)
+    | I32be off -> (9, off, 0, -1)
+    | Bits8 { off; shift; mask } -> (0, off, shift, mask)
+    | Bits16le { off; shift; mask } -> (1, off, shift, mask)
+    | Bits16be { off; shift; mask } -> (2, off, shift, mask)
+  in
+  [| kind; off; shift; mask; lo; hi |]
 
-(* The check pass of a codec without parameters, as data, so [validate] and
-   [decode] run it with one direct call. *)
-type pass =
-  | No_checks
-  | Intervals of interval array
-      (** Interval tests only, on slots nothing else reads: no scratch, no
-          dispatch. *)
-  | Steps of {
-      steps : step array;
-      where : (slots -> bool) option;
-      scratch : (unit -> slots) option;
-          (** [None] when no step reads or writes a slot. *)
-      clear : slots -> unit;
-    }
+(* The index of the first failed test in [d], from [i], or -1. The read is
+   dispatched in place and nothing is called, so the loop keeps its state in
+   registers. The offsets lie inside the frame the caller has checked. *)
+let rec scan_intervals d buf off n i =
+  if i >= n then -1
+  else
+    let q = off + Array.unsafe_get d (i + 1) in
+    let v =
+      match Array.unsafe_get d i with
+      | 0 -> Unchecked.u8 buf q
+      | 1 -> Unchecked.u16le buf q
+      | 2 -> Unchecked.u16be buf q
+      | 3 -> SInt8.to_int (SInt8.unsafe_get buf q)
+      | 4 -> SInt16.to_int (SInt16.unsafe_le buf q)
+      | 5 -> SInt16.to_int (SInt16.unsafe_be buf q)
+      | 6 -> UInt32.to_int (UInt32.unsafe_le buf q)
+      | 7 -> UInt32.to_int (UInt32.unsafe_be buf q)
+      | 8 -> SInt32.to_int (SInt32.unsafe_le buf q)
+      | _ -> SInt32.to_int (SInt32.unsafe_be buf q)
+    in
+    let v =
+      (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
+    in
+    if v < Array.unsafe_get d (i + 4) || v > Array.unsafe_get d (i + 5) then
+      i / 6
+    else scan_intervals d buf off n (i + 6)
 
 let run_plain_pass pass input_end buf off =
   match pass with
   | No_checks -> ()
-  | Intervals rs ->
-      for i = 0 to Array.length rs - 1 do
-        let (Interval { scalar; lo; hi; name; voff }) = Array.unsafe_get rs i in
-        let v = read_slot scalar buf off in
-        if v < lo || v > hi then range_failed ~name ~voff v off
-      done
+  | Intervals { flat; intervals } ->
+      let k = scan_intervals flat buf off (Array.length flat) 0 in
+      if k >= 0 then
+        let (Interval { scalar; name; voff; _ }) = intervals.(k) in
+        range_failed ~name ~voff (read_slot scalar buf off) off
   | Steps { steps; where; scratch; clear } ->
       let arr =
         match scratch with
@@ -4318,7 +4370,16 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   let intervals = Array.map interval steps in
   if not has_checks then No_checks
   else if Option.is_none where && Array.for_all Option.is_some intervals then
-    Intervals (Array.map Option.get intervals)
+    let intervals = Array.map Option.get intervals in
+    let flat =
+      Array.concat
+        (Array.to_list
+           (Array.map
+              (fun (Interval { scalar; lo; hi; _ }) ->
+                flat_interval scalar ~lo ~hi)
+              intervals))
+    in
+    Intervals { flat; intervals }
   else
     Steps
       {
@@ -4577,6 +4638,8 @@ let seal : type r.
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
     plain_validate = plain_validate wire_size_info min_size check;
+    fixed_frame = (match wire_size_info with Fixed _ -> min_size | _ -> -1);
+    plain_pass = check;
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
@@ -5185,11 +5248,20 @@ let to_struct t =
 
 let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 
+let validate_fixed min_size pass buf off =
+  let input_end = Input_end.of_bytes buf in
+  if off < 0 || off > Input_end.to_int input_end - min_size then
+    min_bounds_error min_size buf off;
+  match pass with No_checks -> () | _ -> run_plain_pass pass input_end buf off
+
 let validate ?env:e (t : _ t) buf off =
   match e with
   | None when t.n_params = 0 -> (
       match Atomic.get t.compiled with
-      | Some c -> c.plain_validate buf off
+      | Some c ->
+          if c.fixed_frame >= 0 then
+            validate_fixed c.fixed_frame c.plain_pass buf off
+          else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->
       require_env ~op:"validate" t e;
