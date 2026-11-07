@@ -6539,3 +6539,65 @@ let[@inline always] extract (bf : bitfield) word =
     (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
 
 (* -- Snapshot: batch bitfield access -- *)
+
+(* The support generated code calls into: casts from an [int] it has read, and
+   the cold paths, which hand the failing input to the codec itself so the error
+   is the one [decode], [validate] or [encode] raises. *)
+module Gen = struct
+  let to_struct = to_struct
+
+  (* An [int] as a type the proof says is [int]. *)
+  let[@inline] cast : type a. (a, int) Type.eq -> int -> a =
+   fun Type.Equal v -> v
+
+  let uint8 x = cast UInt8.int_eq x
+  let uint16 x = cast UInt16.int_eq x
+  let int8 x = cast SInt8.int_eq x
+  let int16 x = cast SInt16.int_eq x
+
+  let pp_field ppf (Types.Field f) =
+    Fmt.pf ppf "%a:%a:%a:%b;"
+      Fmt.(option string)
+      f.field_name Types.pp_typ f.field_typ
+      Fmt.(option Types.pp_expr)
+      f.constraint_ (Option.is_some f.action)
+
+  let digest t =
+    let s = to_struct t in
+    let d =
+      Fmt.str "%s(%d)%a%a" s.name (List.length s.params)
+        Fmt.(option Types.pp_expr)
+        s.where (Fmt.list pp_field) s.fields
+    in
+    Digest.to_hex (Digest.string d)
+
+  let check t d =
+    if not (String.equal (digest t) d) then
+      Fmt.invalid_arg
+        "Wire: the generated code for %s is out of date with its codec; \
+         generate it again"
+        t.name
+
+  let disagrees t =
+    Fmt.invalid_arg "Wire: the generated code for %s disagrees with its codec"
+      t.name
+
+  let fail t buf off =
+    validate t buf off;
+    disagrees t
+
+  let encode_too_short t buf off = encode_too_short t.name (wire_size t) buf off
+
+  let bits_too_wide ~mask v =
+    bits_too_wide ~mask v;
+    Fmt.invalid_arg "Wire: %d does not fit its bitfield" v
+
+  let byte_length ~expected ~actual =
+    Types.check_byte_field_size ~expected ~actual;
+    Fmt.invalid_arg "Wire: byte field of length %d" actual
+
+  let encode_rejected t buf off =
+    match validate t buf off with
+    | () -> disagrees t
+    | exception Types.Parse_error e -> encode_rejected t.name e
+end

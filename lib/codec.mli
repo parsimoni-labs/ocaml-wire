@@ -422,3 +422,54 @@ val blit_slice_exact : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
 (** [blit_slice_exact n buf off src] is like {!blit_string_exact} but copies
     from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
     [byte_slice] fields. *)
+
+(**/**)
+
+(** Support for code generated from a codec. *)
+module Gen : sig
+  val to_struct : 'r t -> Types.struct_
+  (** [to_struct t] is the description [t] is built from. *)
+
+  val uint8 : int -> UInt8.t
+  (** [uint8 n] is [n], read from an 8-bit unsigned field. *)
+
+  val uint16 : int -> UInt16.t
+  (** [uint16 n] is [n], read from a 16-bit unsigned field. *)
+
+  val int8 : int -> SInt8.t
+  (** [int8 n] is [n], read from an 8-bit signed field. *)
+
+  val int16 : int -> SInt16.t
+  (** [int16 n] is [n], read from a 16-bit signed field. *)
+
+  val digest : 'r t -> string
+  (** [digest t] names the shape of [t]: its fields, their types and
+      constraints. *)
+
+  val check : 'r t -> string -> unit
+  (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
+
+  val disagrees : 'r t -> 'a
+  (** [disagrees t] raises [Invalid_argument]: generated code found an error [t]
+      does not. *)
+
+  val fail : 'r t -> bytes -> int -> 'a
+  (** [fail t buf off] raises the error {!val-validate} raises on [buf] at
+      [off]. *)
+
+  val encode_too_short : 'r t -> bytes -> int -> 'a
+  (** [encode_too_short t buf off] raises the error {!val-encode} raises when
+      [t] does not fit [buf] at [off]. *)
+
+  val bits_too_wide : mask:int -> int -> 'a
+  (** [bits_too_wide ~mask v] raises the error for a bitfield value [v] wider
+      than [mask]. *)
+
+  val byte_length : expected:int -> actual:int -> 'a
+  (** [byte_length ~expected ~actual] raises the error for a byte array of
+      [actual] bytes where [expected] are needed. *)
+
+  val encode_rejected : 'r t -> bytes -> int -> 'a
+  (** [encode_rejected t buf off] raises the error {!val-encode} raises when the
+      record it wrote at [off] fails its constraints. *)
+end

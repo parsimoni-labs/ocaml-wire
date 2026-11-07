@@ -1,0 +1,4 @@
+(library
+ (name wire_gen)
+ (public_name wire.gen)
+ (libraries wire fmt))
