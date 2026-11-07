@@ -1,3 +1,12 @@
+## unreleased
+
+### Fixed
+
+- `Wire.Codec.validate` refuses a byte span whose size, read from the data,
+  is negative, as `Wire.Codec.decode` does. A codec without constraints ran
+  only the record's bounds check, which a later span could satisfy by taking
+  the bytes back (#NNN, @samoht)
+
 ## 1.3.0
 
 ### Added
