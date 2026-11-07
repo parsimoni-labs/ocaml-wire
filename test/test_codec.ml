@@ -1328,11 +1328,16 @@ let test_out_of_range_offset_follows_the_frame () =
     | Ok _ -> Alcotest.fail "expected the wide value to be refused"
     | Error e -> e.at
   in
+  let validated_at base b =
+    match Codec.validate c b base with
+    | () -> Alcotest.fail "expected validate to refuse the wide value"
+    | exception Wire.Parse_error e -> e.at
+  in
   let wide = Bytes.make 8 '\xff' in
+  let shifted = Bytes.cat (Bytes.make 8 '\x00') wide in
   Alcotest.(check int) "at base 0" 0 (at_of 0 wide);
-  Alcotest.(check int)
-    "at base 8" 8
-    (at_of 8 (Bytes.cat (Bytes.make 8 '\x00') wide))
+  Alcotest.(check int) "at base 8" 8 (at_of 8 shifted);
+  Alcotest.(check int) "validate at base 8" 8 (validated_at 8 shifted)
 
 (* A field whose byte extent is an input parameter cannot be measured from the
    value alone. Reporting 0 for it is worse than refusing: a caller sizes a
