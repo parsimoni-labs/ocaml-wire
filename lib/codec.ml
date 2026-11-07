@@ -3833,12 +3833,24 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
+(* A span whose size the data decides: its own check refuses a negative or
+   overlong size, which the record's frame can miss when a later span takes the
+   bytes back. *)
+let computed_span : type a. a Types.typ -> bool = function
+  | Types.Byte_array { size = Types.Int _ }
+  | Types.Byte_slice { size = Types.Int _ }
+  | Types.Uint_var { size = Types.Int _; _ } ->
+      false
+  | Types.Byte_array _ | Types.Byte_slice _ | Types.Uint_var _ -> true
+  | _ -> false
+
 let has_validation_checks compiled_where struct_fields =
   compiled_where <> None
   || List.exists
        (fun (Types.Field f) ->
          f.constraint_ <> None || f.action <> None
-         || field_reader_validates f.field_typ)
+         || field_reader_validates f.field_typ
+         || computed_span f.field_typ)
        struct_fields
 
 let seed_param_slots arr n_total = function
