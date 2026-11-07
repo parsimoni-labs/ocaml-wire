@@ -10,11 +10,12 @@
   It read them last to first, so a record whose fields failed to decode
   reported its last bad field rather than its first, and `map` decoders ran in
   reverse (#424, @samoht)
-- `Wire.Codec.validate` refuses a byte span whose size, read from the data,
-  is negative or runs past the end, and `Wire.Codec.decode` refuses a
-  `byte_slice` that runs past the end with a parse error rather than raising
-  `Invalid_argument`. The record's bounds check alone missed both when a
-  later span that takes the rest gave the bytes back (#428, @samoht)
+- `Wire.Codec.validate` refuses a field whose size, read from the data, is
+  negative or runs past the end, such as a byte span or a gated optional, and
+  `Wire.Codec.decode` refuses a `byte_slice` that runs past the end with a
+  parse error rather than raising `Invalid_argument`. The record's bounds
+  check alone missed both when a later field that takes the rest gave the
+  bytes back (#428, @samoht)
 
 ## 1.3.0
 
