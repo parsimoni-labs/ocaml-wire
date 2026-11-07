@@ -562,6 +562,31 @@ let test_validate_check_free_no_alloc () =
        per_call)
     true (per_call < 1.0)
 
+(* Fields are read in declaration order, so the first field whose decoding
+   fails is the one reported. Nine fields used to be read last to first. *)
+let test_decode_reads_in_order () =
+  let seen = ref [] in
+  let f i =
+    let typ =
+      map
+        ~decode:(fun v ->
+          seen := i :: !seen;
+          v)
+        ~encode:Fun.id uint8
+    in
+    Codec.(Field.v (Fmt.str "f%d" i) typ $ fun _ -> UInt8.v 0)
+  in
+  let c =
+    Codec.v "Nine"
+      (fun _ _ _ _ _ _ _ _ _ -> ())
+      Codec.[ f 1; f 2; f 3; f 4; f 5; f 6; f 7; f 8; f 9 ]
+  in
+  Codec.decode_exn c (Bytes.make 9 '\x00') 0;
+  Alcotest.(check (list int))
+    "read order"
+    [ 1; 2; 3; 4; 5; 6; 7; 8; 9 ]
+    (List.filteri (fun i _ -> i < 9) (List.rev !seen))
+
 (* A compiled validator keeps a per-domain scratch, and the cost of reaching it
    on a domain that has not decoded yet must not track how many validators the
    program ever built. It used to: each validator minted its own
@@ -9627,6 +9652,8 @@ let suite =
         test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
         test_validate_check_free_no_alloc;
+      Alcotest.test_case "decode: fields read in order" `Quick
+        test_decode_reads_in_order;
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;
