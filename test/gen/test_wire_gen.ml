@@ -236,6 +236,26 @@ let test_fallback () =
     "falls back" true
     (contains src "Wire.Codec.decode_exn codec")
 
+(* The OxCaml target checks the hot paths for allocation, marks the cold ones
+   as raising, and adds a stack-allocated decode for the generated record. The
+   stock compiler cannot build it; the OxCaml tests do. *)
+let test_oxcaml () =
+  let src = Wire_gen.ml ~target:`OxCaml ~codec:"Schemas.ipv4" Schemas.ipv4 in
+  List.iter
+    (fun s -> Alcotest.(check bool) s true (contains src s))
+    [
+      "let[@zero_alloc] validate";
+      "[@zero_alloc] write_int";
+      "[@zero_alloc assume error] fail";
+      "let[@zero_alloc] decode_local";
+      "exclave_ stack_ {";
+      "let[@inline] decode_with make";
+    ];
+  let stock = Wire_gen.ml ~codec:"Schemas.ipv4" Schemas.ipv4 in
+  Alcotest.(check bool)
+    "stock has no OxCaml syntax" false
+    (contains stock "exclave_")
+
 let suite =
   ( "wire_gen",
     [
@@ -249,4 +269,5 @@ let suite =
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
+      Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
     ] )

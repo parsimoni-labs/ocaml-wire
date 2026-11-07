@@ -25,7 +25,11 @@
   encode, which still checks each value's range, in about 150. The generated
   module refuses to load if its codec has changed since, and hands any input
   it rejects back to the codec, so its errors are the codec's own. A codec it
-  cannot specialise gets a module that calls the codec (#431, @samoht)
+  cannot specialise gets a module that calls the codec. With
+  ``~target:`OxCaml`` the module also has its hot paths checked by
+  `[@zero_alloc]`, a `decode_with` that takes the constructor for flambda2 to
+  inline, and a `decode_local` that builds the record on the stack (#431,
+  @samoht)
 - `Wire.Codec.valid` and `Wire.Codec.read`: `valid` checks a buffer once and
   returns a proof of it, and a reader staged with `read` takes a field from
   that proof with no bounds check of its own. Reading a few fields of a
