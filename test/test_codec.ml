@@ -366,6 +366,57 @@ let test_field_path_nested () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "decode accepted a violating nested field"
 
+(* A codec's own field shadows an embedded sub-codec's field of the same name,
+   as it does in the 3D struct EverParse checks: a [where] clause, a size and
+   [Codec.field_readers] all name the codec's own [x], whether the sub-codec
+   comes before it or after it. *)
+let shadow_inner =
+  Codec.v "ShadowInner"
+    (fun x y -> (x, y))
+    Codec.[ Field.v "x" uint8 $ fst; Field.v "y" uint8 $ snd ]
+
+let test_own_field_shadows_where () =
+  let f_x = Field.v "x" uint8 in
+  let outer =
+    Codec.v "ShadowWhere"
+      ~where:Expr.(Field.ref f_x = int 7)
+      (fun s x -> (s, x))
+      Codec.[ Field.v "s" (codec shadow_inner) $ fst; f_x $ snd ]
+  in
+  (* the sub-codec's x is 1, the codec's own x is 7 *)
+  match Codec.decode outer (Bytes.of_string "\x01\x02\x07") 0 with
+  | Ok (_, x) -> Alcotest.(check int) "own x" 7 (UInt8.to_int x)
+  | Error e ->
+      Alcotest.failf "where read the sub-codec's x: %a" pp_parse_error e
+
+let test_own_field_shadows_size () =
+  let f_x = Field.v "x" uint8 in
+  let outer =
+    Codec.v "ShadowSize"
+      (fun x _ d -> (x, d))
+      Codec.
+        [
+          (f_x $ fun (x, _) -> x);
+          (Field.v "s" (codec shadow_inner) $ fun _ -> (UInt8.v 5, UInt8.v 0));
+          Field.v "data" (byte_array ~size:(Field.ref f_x)) $ snd;
+        ]
+  in
+  (* the codec's own x is 2, the sub-codec's x is 5 *)
+  match Codec.decode outer (Bytes.of_string "\x02\x05\x00ab") 0 with
+  | Ok (_, d) -> Alcotest.(check string) "sized by own x" "ab" d
+  | Error e -> Alcotest.failf "size read the sub-codec's x: %a" pp_parse_error e
+
+let test_own_field_shadows_readers () =
+  let outer =
+    Codec.v "ShadowReaders"
+      (fun s x -> (s, x))
+      Codec.[ Field.v "s" (codec shadow_inner) $ fst; Field.v "x" uint8 $ snd ]
+  in
+  match List.assoc_opt "x" (Codec.field_readers outer) with
+  | None -> Alcotest.fail "no reader for x"
+  | Some read ->
+      Alcotest.(check int) "own x" 7 (read (Bytes.of_string "\x01\x02\x07") 0)
+
 (* The public [parse_error] / [eof] constructors build the record with the
    documented defaults, for a caller synthesizing an error outside a codec run. *)
 let test_error_constructors () =
@@ -9623,6 +9674,12 @@ let suite =
         test_all_zeros_offset_on_struct_path;
       Alcotest.test_case "error: nested field path" `Quick
         test_field_path_nested;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in where"
+        `Quick test_own_field_shadows_where;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in a size"
+        `Quick test_own_field_shadows_size;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in readers"
+        `Quick test_own_field_shadows_readers;
       Alcotest.test_case "error: parse_error / eof constructors" `Quick
         test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
