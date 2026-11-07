@@ -24,6 +24,68 @@ type field = {
   enum : (string * int list) option;
 }
 
+(* OCaml's keywords, which a field name may spell. *)
+let keywords =
+  [
+    "and";
+    "as";
+    "assert";
+    "begin";
+    "class";
+    "constraint";
+    "do";
+    "done";
+    "downto";
+    "else";
+    "end";
+    "exception";
+    "external";
+    "false";
+    "for";
+    "fun";
+    "function";
+    "functor";
+    "if";
+    "in";
+    "include";
+    "inherit";
+    "initializer";
+    "lazy";
+    "let";
+    "match";
+    "method";
+    "module";
+    "mutable";
+    "new";
+    "nonrec";
+    "object";
+    "of";
+    "open";
+    "or";
+    "private";
+    "rec";
+    "sig";
+    "struct";
+    "then";
+    "to";
+    "true";
+    "try";
+    "type";
+    "val";
+    "virtual";
+    "when";
+    "while";
+    "with";
+    "land";
+    "lor";
+    "lxor";
+    "lsl";
+    "lsr";
+    "asr";
+    "mod";
+    "effect";
+  ]
+
 let label name =
   let l =
     String.map
@@ -33,7 +95,9 @@ let label name =
         | _ -> '_')
       name
   in
-  if l = "" || (l.[0] >= '0' && l.[0] <= '9') then "f_" ^ l else l
+  if l = "" || (l.[0] >= '0' && l.[0] <= '9') then "f_" ^ l
+  else if List.mem l keywords then l ^ "_"
+  else l
 
 let pp_list = Fmt.(list ~sep:(any " ") string)
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.var) fields)
