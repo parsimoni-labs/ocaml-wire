@@ -385,6 +385,85 @@ let test_error_constructors () =
    embedded element) lives in its reader, not in a user constraint, so
    [Codec.validate] must run the validator pass for every codec or it would
    accept inputs [decode] rejects. Each case feeds bytes both reject. *)
+(* A span sized by an expression can come out negative from the header. The
+   record's frame still fits, since the next span takes the bytes back, so the
+   span's own check is what refuses it, in validate as in decode. *)
+let test_validate_negative_span () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "NegSpan"
+      (fun n b rest -> (n, b, rest))
+      Codec.
+        [
+          (n $ fun (n, _, _) -> n);
+          ( Field.v "b" (byte_slice ~size:Expr.(Field.ref n - int 4))
+          $ fun (_, b, _) -> b );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.make 16 '\x00' in
+  Bytes.set_uint8 buf 0 1;
+  let decoded =
+    match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+  in
+  let validated =
+    match Codec.validate c buf 0 with
+    | () -> "ok"
+    | exception Wire.Parse_error _ -> "refused"
+  in
+  Alcotest.(check string) "decode" "refused" decoded;
+  Alcotest.(check string) "validate agrees" decoded validated
+
+(* A gated optional has no size of its own: with the gate on and one byte
+   left before a field that takes the rest, both entry points refuse the
+   record. *)
+let test_validate_gated_optional () =
+  let gate = Field.v "gate" uint8 in
+  let c =
+    Codec.v "Gated"
+      (fun g p rest -> (g, p, rest))
+      Codec.
+        [
+          (gate $ fun (g, _, _) -> g);
+          ( Field.optional "payload"
+              ~present:Expr.(Field.ref gate <> int 0)
+              uint16be
+          $ fun (_, p, _) -> p );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.of_string "\x01\x00" in
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted a missing payload"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted a missing payload"
+  | exception Wire.Parse_error _ -> ()
+
+(* An overlong span left in a record whose last span takes the rest: the
+   record's extent still fits, the span does not, and both entry points refuse
+   it with a parse error rather than an [Invalid_argument]. *)
+let test_overlong_span () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "LongSpan"
+      (fun n b rest -> (n, b, rest))
+      Codec.
+        [
+          (n $ fun (n, _, _) -> n);
+          (Field.v "b" (byte_slice ~size:(Field.ref n)) $ fun (_, b, _) -> b);
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.make 8 '\x00' in
+  Bytes.set_uint8 buf 0 12;
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted an overlong span"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted an overlong span"
+  | exception Wire.Parse_error _ -> ()
+
 let test_validate_matches_decode_rejections () =
   let rejects what c bytes =
     let buf = Bytes.of_string bytes in
@@ -9632,6 +9711,12 @@ let suite =
         test_fresh_domain_validate_flat_in_validator_count;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
+      Alcotest.test_case "validate: refuses a negative span size" `Quick
+        test_validate_negative_span;
+      Alcotest.test_case "decode: refuses an overlong span" `Quick
+        test_overlong_span;
+      Alcotest.test_case "validate: refuses a missing gated optional" `Quick
+        test_validate_gated_optional;
       Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
         test_validate_runs_sub_codec_checks;
       Alcotest.test_case "decode: enforces typ-level where" `Quick

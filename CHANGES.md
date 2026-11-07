@@ -1,3 +1,14 @@
+## unreleased
+
+### Fixed
+
+- `Wire.Codec.validate` refuses a field whose size, read from the data, is
+  negative or runs past the end, such as a byte span or a gated optional, and
+  `Wire.Codec.decode` refuses a `byte_slice` that runs past the end with a
+  parse error rather than raising `Invalid_argument`. The record's bounds
+  check alone missed both when a later field that takes the rest gave the
+  bytes back (#428, @samoht)
+
 ## 1.3.0
 
 ### Added

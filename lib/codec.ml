@@ -2550,15 +2550,15 @@ let var_bytes_reader : type a.
   let first = base + fo in
   (match typ with
   | Byte_slice _ ->
-      (* A byte_slice reading at or past the end yields an eod slice (an oversize
-         length is caught by the top-level bounds check), but a negative size or
-         offset, from a [Sub] or an overrun length field, would crash
-         [make_or_eod] with a raw [Invalid_argument] that escapes the decode
-         result. Fail cleanly instead. *)
+      (* An empty byte_slice at or past the end is an eod slice. A negative size
+         or offset, or a length past the end, would make [make_or_eod] raise a
+         raw [Invalid_argument]: the record's bounds check does not catch the
+         last, since a later span that takes the rest can take the bytes back. *)
       if sz < 0 || first < 0 then
         raise_eof ~at:first
           ~expected:(missing_before ~first ~sz ~len:(Bytes.length buf))
           ~got:(bytes_from (Input_end.of_bytes buf) first)
+      else if sz > 0 then check_span_bounds buf ~first ~sz
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
@@ -3814,12 +3814,21 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
+(* A field whose size the data decides: its own bounds check refuses a size
+   that is negative or runs past the end, which the record's bounds check can
+   miss when a later field that takes the rest gives the bytes back. A field
+   that takes the rest has no size of its own to check. *)
+let data_sized : type a. a Types.typ -> bool = function
+  | Types.All_bytes -> false
+  | typ -> Option.is_none (Types.field_wire_size typ)
+
 let has_validation_checks compiled_where struct_fields =
   compiled_where <> None
   || List.exists
        (fun (Types.Field f) ->
          f.constraint_ <> None || f.action <> None
-         || field_reader_validates f.field_typ)
+         || field_reader_validates f.field_typ
+         || data_sized f.field_typ)
        struct_fields
 
 let seed_param_slots arr n_total = function
