@@ -1117,6 +1117,73 @@ let test_mapped_and_disjunctive_checks () =
   check "hi 4" "hi:constraint" 8 2 0x41;
   check "lo 0" "lo:constraint" 8 2 0x30
 
+(* A record of every fixed scalar kind, big enough for the staged reads and
+   writes, decodes each field as [get] reads it and encodes back the bytes it
+   came from, on pseudo-random buffers. *)
+let staged_scalars ~d_typ ~f_typ =
+  let a = Codec.(Field.v "a" uint8 $ fun (a, _, _, _, _, _, _, _, _, _) -> a) in
+  let b = Codec.(Field.v "b" int8 $ fun (_, b, _, _, _, _, _, _, _, _) -> b) in
+  let c =
+    Codec.(Field.v "c" uint16be $ fun (_, _, c, _, _, _, _, _, _, _) -> c)
+  in
+  let d = Codec.(Field.v "d" d_typ $ fun (_, _, _, d, _, _, _, _, _, _) -> d) in
+  let e =
+    Codec.(Field.v "e" int32be $ fun (_, _, _, _, e, _, _, _, _, _) -> e)
+  in
+  let f = Codec.(Field.v "f" f_typ $ fun (_, _, _, _, _, f, _, _, _, _) -> f) in
+  let g =
+    Codec.(
+      Field.v "g" (bits ~width:3 U8) $ fun (_, _, _, _, _, _, g, _, _, _) -> g)
+  in
+  let h =
+    Codec.(
+      Field.v "h" (bits ~width:5 U8) $ fun (_, _, _, _, _, _, _, h, _, _) -> h)
+  in
+  let i =
+    Codec.(
+      Field.v "i" (bits ~width:4 U16be) $ fun (_, _, _, _, _, _, _, _, i, _) ->
+      i)
+  in
+  let j =
+    Codec.(
+      Field.v "j" (bits ~width:12 U16be) $ fun (_, _, _, _, _, _, _, _, _, j) ->
+      j)
+  in
+  let codec =
+    Codec.v "Staged"
+      (fun a b c d e f g h i j -> (a, b, c, d, e, f, g, h, i, j))
+      [ a; b; c; d; e; f; g; h; i; j ]
+  in
+  let rand = Random.State.make [| 42 |] in
+  for _ = 1 to 2000 do
+    let buf = Bytes.init 15 (fun _ -> Char.chr (Random.State.int rand 256)) in
+    let v = Codec.decode_exn codec buf 0 in
+    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let a', b', c', d', e', f', g', h', i', j' = v in
+    Alcotest.(check bool) "a" true (a' = get a);
+    Alcotest.(check bool) "b" true (b' = get b);
+    Alcotest.(check bool) "c" true (c' = get c);
+    Alcotest.(check bool) "d" true (d' = get d);
+    Alcotest.(check bool) "e" true (SInt32.equal e' (get e));
+    Alcotest.(check bool) "f" true (f' = get f);
+    Alcotest.(check int) "g" (get g) g';
+    Alcotest.(check int) "h" (get h) h';
+    Alcotest.(check int) "i" (get i) i';
+    Alcotest.(check int) "j" (get j) j';
+    let out = Bytes.make 15 '\xff' in
+    Codec.encode codec v out 0;
+    Alcotest.(check string)
+      "encode"
+      (Bytes.sub_string buf 0 15)
+      (Bytes.sub_string out 0 15)
+  done
+
+(* Little-endian fields take the reader closures, big-endian ones the reads in
+   place. *)
+let test_staged_scalars () =
+  staged_scalars ~d_typ:int16 ~f_typ:uint16;
+  staged_scalars ~d_typ:int16be ~f_typ:uint16be
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -10283,6 +10350,8 @@ let suite =
         test_shared_byte_constraints;
       Alcotest.test_case "check: mapped and disjunctive constraints" `Quick
         test_mapped_and_disjunctive_checks;
+      Alcotest.test_case "decode: staged scalars agree with get" `Quick
+        test_staged_scalars;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick

@@ -23,3 +23,4 @@ let set_be buf off n = Bytes.set_int16_be buf off n
 let sext16 n = (n lsl (Sys.int_size - 16)) asr (Sys.int_size - 16)
 let unsafe_le buf off = sext16 (Unchecked.u16le buf off)
 let unsafe_be buf off = sext16 (Unchecked.u16be buf off)
+let int_eq : (t, int) Type.eq = Type.Equal

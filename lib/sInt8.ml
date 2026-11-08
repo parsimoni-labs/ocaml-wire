@@ -21,3 +21,5 @@ let set buf off n = Bytes.set_int8 buf off n
 
 let unsafe_get buf off =
   (Unchecked.u8 buf off lsl (Sys.int_size - 8)) asr (Sys.int_size - 8)
+
+let int_eq : (t, int) Type.eq = Type.Equal

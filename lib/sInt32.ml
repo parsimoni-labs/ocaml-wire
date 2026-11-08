@@ -88,3 +88,6 @@ let unsafe_be buf off : t =
   match Optint.is_immediate with
   | True -> Int32.to_int (Unchecked.i32be buf off)
   | False -> Unchecked.i32be buf off
+
+let int_eq : (t, int) Type.eq option =
+  match Optint.is_immediate with True -> Some Type.Equal | False -> None

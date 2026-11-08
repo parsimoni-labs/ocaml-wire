@@ -19,3 +19,4 @@ let to_int n = n
 let get buf off = Bytes.get_uint8 buf off
 let set buf off n = Bytes.set_uint8 buf off n
 let unsafe_get = Unchecked.u8
+let int_eq : (t, int) Type.eq = Type.Equal

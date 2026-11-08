@@ -65,3 +65,7 @@ val unsafe_le : bytes -> int -> t
 
 val unsafe_be : bytes -> int -> t
 (** [unsafe_be buf off] is {!unsafe_le} for a big-endian value. *)
+
+val int_eq : (t, int) Type.eq
+(** The proof that {!type-t} is [int], for a reader that computes a value as an
+    int. *)
