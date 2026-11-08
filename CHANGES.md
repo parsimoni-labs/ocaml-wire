@@ -1,94 +1,38 @@
 ## unreleased
 
-### Fixed
-
-- A codec's own field now shadows an embedded sub-codec's field of the same
-  name, as it does in the generated 3D. A `where` clause, a field constraint, a
-  size and `Wire.Codec.field_readers` could read the sub-codec's field instead
-  (#420, @samoht)
-- `Wire.Codec.decode` reads a record of more than eight fields in field order.
-  It read them last to first, so a record whose fields failed to decode
-  reported its last bad field rather than its first, and `map` decoders ran in
-  reverse (#424, @samoht)
-- `Wire.Codec.validate` refuses a field whose size, read from the data, is
-  negative or runs past the end, such as a byte span or a gated optional, and
-  `Wire.Codec.decode` refuses a `byte_slice` that runs past the end with a
-  parse error rather than raising `Invalid_argument`. The record's bounds
-  check alone missed both when a later field that takes the rest gave the
-  bytes back (#428, @samoht)
 ### Added
 
-- `Wire_gen.ml`, in the new `wire.gen` library, writes a codec out as OCaml
-  source: decode, validate and encode with every offset a constant, fields
-  read from 64-bit words, and a direct call to the record's constructor. On an
-  IPv4 header the generated decode runs in about 145 instructions and the
-  encode, which still checks each value's range, in about 150. The generated
-  module also has a getter per field, one bounds-checked load at a constant
-  offset as `Codec.get` makes, and a `Valid` view: once `Valid.v` has
-  validated a record at offset 0, each read is one load with no check.
-  Fields packed in one bitfield word, 32-bit words included, can share one
-  load. A `Bigstring` submodule does the same on a bigarray of bytes. It
-  refuses to load if its codec has changed since, and hands any input
-  it rejects back to the codec, so its errors are the codec's own. A codec it
-  cannot specialise gets a module that calls the codec. With
-  ``~target:`OxCaml`` the module also has its hot paths checked by
-  `[@zero_alloc]`, a `decode_with` that takes the constructor for flambda2 to
-  inline, and a `decode_local` that builds the record on the stack (#431,
-  @samoht)
-- `Wire.Codec.valid` and `Wire.Codec.read`: `valid` checks a buffer once and
-  returns a proof of it, and a reader staged with `read` takes a field from
-  that proof with no bounds check of its own. Reading a few fields of a
-  validated header costs a few loads instead of a full decode (#429, @samoht)
+- `Wire_gen`, in the new `wire.gen` library, writes a fixed-size codec out as
+  OCaml for `bytes` or bigarray buffers, maps the caller names included, with
+  constant offsets. Its errors are the codec's own (#431, @samoht)
+- `Wire.Codec.valid` and `Wire.Codec.read` read fields of a buffer validated
+  once, with no bounds check per read (#429, @samoht)
 
 ### Changed
 
-- `Wire.Codec.decode` and `Wire.Codec.encode` are several times faster on a
-  fixed-size codec with nothing to check, such as a plain IPv4 header. Decode
-  no longer re-reads every field to check nothing, and reads fixed-offset
-  fields straight from the buffer once the record's bounds are checked. Encode
-  no longer allocates for signed integer, float or fixed byte fields. An offset
-  near `max_int` is now a parse error rather than an `Invalid_argument` from
-  `Bytes`, and a negative offset raises `Invalid_argument` naming it (#425,
-  @samoht)
-- `Wire.Codec.validate` and `Wire.Codec.decode` are several times faster on a
-  codec with constraints. A field at a fixed offset is read once, with no
-  bounds check of its own, and only when a constraint or the `where` clause
-  uses it; a comparison between a field and a literal is tested directly.
-  `decode` runs the checks before it builds the value, so it reports the same
-  first failure as `validate` (#426, @samoht)
-- `Wire.Codec.encode` is about twice as fast on a fixed-size codec of plain
-  scalar and bitfield fields: it checks the buffer once and writes each field
-  with no check of its own. A negative offset is refused with
-  `Invalid_argument` naming it (#429, @samoht)
-- `Wire.Codec.validate` and `Wire.Codec.decode` take the fast path for fields
-  under `map`, `where` and `enum` too, and for constraints that combine
-  comparisons with `||`: a closed enum, a lookup's index bound and such a
-  constraint become a test of the wire value against a few intervals. A
-  constraint applies to the wire value, as in the 3D projection (#430, @samoht)
-- `Wire.Codec.encode` of a fixed-size record of up to 16 integer fields
-  without parameters stores each field in place, with no call per field, and
-  a fixed byte array is copied straight into or out of the frame.
-  `Wire.UInt8.v`, `UInt16.v`, `SInt8.v` and `SInt16.v` check their range
-  inline, and a negative offset is refused by name on every encode path. A
-  variable-size record of byte spans sized by its header is laid out in one
-  pass that reads each length once (#430, @samoht)
-- `Wire.Codec.v` no longer compiles the codec. The first operation that needs
-  it compiles it, once, so a program that builds its codecs at start-up no
-  longer pays for the ones it never uses. Mistakes in the description still
-  raise at `v`. A size expression naming a field it cannot see, a bitfield
-  after a variable-size field, or a field type with no reader now raises
-  `Invalid_argument` at first use instead (#413, @samoht)
+- `Wire.Codec.decode`, `encode` and `validate` are several times faster on
+  fixed-size codecs, constrained, mapped and enumerated fields included, and on
+  records of byte spans sized by their header (#425, #426, #429, #430, @samoht)
+- `Wire.Codec.v` no longer compiles the codec: the first operation that needs it
+  does, and a mistake only compilation finds raises there (#413, @samoht)
+- A constraint on a field under `map` applies to the wire value, as in the 3D
+  projection (#430, @samoht)
 
 ### Fixed
 
-- `Wire.Codec.validate` reports a closed `enum` over a 64-bit carrier whose
-  value does not fit in an int at the field's offset rather than at byte 0, as
-  `Wire.Codec.decode` does (#426, @samoht)
-- A negative or oversized literal size is refused when its type is built:
-  `byte_array`, `byte_slice`, `byte_array_where`, `zeroterm_at_most`, `array`
-  and `array_seq` raise `Invalid_argument`, as does a record whose fixed size no
-  buffer can hold. A negative literal size used to build, and failed only when
-  a buffer was decoded (#425, @samoht)
+- A codec's own field shadows a sub-codec's field of the same name in `where`
+  clauses, constraints, sizes and `field_readers`, as in the 3D (#420, @samoht)
+- `Wire.Codec.decode` reads a record of more than eight fields in field order,
+  so it reports the first field that fails (#424, @samoht)
+- A negative or oversized literal size raises `Invalid_argument` when its type
+  is built, instead of failing at decode (#425, @samoht)
+- A negative offset raises `Invalid_argument` naming it, and an offset near
+  `max_int` is a parse error, not `Invalid_argument` (#425, #429, #430, @samoht)
+- `Wire.Codec.validate` reports a wide closed `enum` at the field's offset, not
+  at byte 0 (#426, @samoht)
+- `Wire.Codec.validate` refuses a field whose size, read from the data, is
+  negative or past the end, and `decode` reports such a `byte_slice` as a parse
+  error instead of raising `Invalid_argument` (#428, @samoht)
 
 ## 1.3.0
 
