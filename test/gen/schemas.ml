@@ -150,3 +150,29 @@ let wide =
         (Field.v "E" (bits ~width:29 U32) $ fun (_, _, _, _, x, _) -> x);
         (Field.v "F" (bits ~width:31 U32be) $ fun (_, _, _, _, _, x) -> x);
       ]
+
+let u16be_int = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be
+let i32be_int = map ~decode:SInt32.to_int32 ~encode:SInt32.of_int32 int32be
+let proto_lookup = lookup [ `Icmp; `Tcp; `Udp ] uint8
+
+let flag_bit =
+  map
+    ~decode:(fun x -> x = 1)
+    ~encode:(fun b -> if b then 1 else 0)
+    (bits ~width:1 U8)
+
+type mapped = int * int32 * [ `Icmp | `Tcp | `Udp ] * bool * int
+
+let mapped_make len addr proto flag rest = (len, addr, proto, flag, rest)
+let mapped_len = Codec.(Field.v "Len" u16be_int $ fun (x, _, _, _, _) -> x)
+
+let mapped =
+  Codec.v "Mapped" mapped_make
+    Codec.
+      [
+        mapped_len;
+        (Field.v "Addr" i32be_int $ fun (_, x, _, _, _) -> x);
+        (Field.v "Proto" proto_lookup $ fun (_, _, x, _, _) -> x);
+        (Field.v "Flag" flag_bit $ fun (_, _, _, x, _) -> x);
+        (Field.v "Rest" (bits ~width:7 U8) $ fun (_, _, _, _, x) -> x);
+      ]

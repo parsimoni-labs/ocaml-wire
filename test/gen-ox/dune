@@ -14,7 +14,7 @@
   g_small.ml
   g_eth.ml
   g_wide.ml
-  g_variable.ml)
+  g_mapped.ml)
  (action
   (run ../gen/gen.exe --oxcaml)))
 
@@ -31,7 +31,7 @@
   g_small
   g_eth
   g_wide
-  g_variable)
+  g_mapped)
  (libraries schemas wire))
 
 (executable

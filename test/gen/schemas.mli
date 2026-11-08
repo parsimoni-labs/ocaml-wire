@@ -114,3 +114,28 @@ val wide_make : int -> int -> int -> int -> int -> int -> wide
 
 val wide : wide Codec.t
 (** [wide] has 32-bit bitfield words in both byte orders. *)
+
+val u16be_int : int typ
+(** [u16be_int] is a big-endian 16-bit integer viewed as an [int]. *)
+
+val i32be_int : int32 typ
+(** [i32be_int] is a big-endian 32-bit integer viewed as an [int32]. *)
+
+val proto_lookup : [ `Icmp | `Tcp | `Udp ] typ
+(** [proto_lookup] is a byte read as an index into three cases. *)
+
+val flag_bit : bool typ
+(** [flag_bit] is a one-bit field viewed as a [bool]. *)
+
+type mapped = int * int32 * [ `Icmp | `Tcp | `Udp ] * bool * int
+
+val mapped_make :
+  int -> int32 -> [ `Icmp | `Tcp | `Udp ] -> bool -> int -> mapped
+(** [mapped_make] builds a {!mapped} record. *)
+
+val mapped_len : (int, mapped) Codec.field
+(** [mapped_len] is the mapped 16-bit field of {!val-mapped}. *)
+
+val mapped : mapped Codec.t
+(** [mapped] has every field under a map: over 16- and 32-bit integers, a lookup
+    with an index bound, and a bitfield. *)

@@ -247,9 +247,6 @@ let test_words () =
       fields
   done
 
-let test_variable () =
-  reads Schemas.variable ~decode:G_variable.decode ~validate:G_variable.validate
-
 (* Generated code names the shape of the codec it comes from, and refuses to
    run against a codec whose shape has changed since. *)
 let test_stale () =
@@ -285,12 +282,23 @@ let test_digest () =
   in
   differ "bit order" (bits Msb_first) (bits Lsb_first)
 
-(* A codec the generator does not specialise gets a module that calls it. *)
-let test_fallback () =
-  let src = Wire_gen.ml ~codec:"Schemas.variable" Schemas.variable in
-  Alcotest.(check bool)
-    "falls back" true
-    (contains src "Wire.Codec.decode_exn codec")
+(* A codec the generator cannot specialise is refused when the code is
+   generated, naming the field and why, rather than given a module with fewer
+   functions. *)
+let test_refused () =
+  let refused ~maps name =
+    match Wire_gen.ml ~maps ~make:"m" ~codec:"c" Schemas.mapped with
+    | _ -> Alcotest.failf "%s: generated" name
+    | exception Invalid_argument m ->
+        Alcotest.(check bool)
+          (name ^ ": names the field")
+          true (contains m "Len")
+  in
+  refused ~maps:[] "an unnamed map";
+  match Wire_gen.ml ~codec:"Schemas.variable" Schemas.variable with
+  | _ -> Alcotest.fail "a variable-size codec was generated"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) "names the field" true (contains m "Rest")
 
 (* A generated getter reads what [Codec.get] reads, or raises what it raises,
    on random buffers and offsets around the field. *)
@@ -304,6 +312,21 @@ let getter codec field ~get ~show =
       (outcome (fun () -> show (read buf off)))
       (outcome (fun () -> show (get buf off)))
   done
+
+(* Every field under a map: over 16- and 32-bit integers, a lookup whose index
+   bound validate checks, and a bitfield. *)
+let test_mapped () =
+  reads Schemas.mapped ~decode:G_mapped.decode ~validate:G_mapped.validate;
+  writes Schemas.mapped
+    ~write:(fun (a, b, c, d, e) buf off -> G_mapped.write buf off a b c d e)
+    (decoded Schemas.mapped 300);
+  getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.get_len
+    ~show:string_of_int;
+  let lookalike = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
+  Wire.Private.Gen.check_map Schemas.mapped "Len" Schemas.u16be_int;
+  match Wire.Private.Gen.check_map Schemas.mapped "Len" lookalike with
+  | () -> Alcotest.fail "a different map of the same shape was accepted"
+  | exception Invalid_argument _ -> ()
 
 (* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
 let int_getter codec field ~get ~to_int =
@@ -514,12 +537,12 @@ let suite =
       Alcotest.test_case "byte arrays" `Quick test_eth;
       Alcotest.test_case "32-bit bitfields" `Quick test_wide;
       Alcotest.test_case "fields from their word" `Quick test_words;
-      Alcotest.test_case "not specialised" `Quick test_variable;
+      Alcotest.test_case "maps" `Quick test_mapped;
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
-      Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
+      Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;

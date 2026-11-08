@@ -3462,7 +3462,7 @@ let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   match fld.typ with
-  | Map { inner; decode; encode; index_bound } ->
+  | Map { inner; decode; encode; index_bound; _ } ->
       compile_map ctx fld inner decode encode ~index_bound
   | Enum { name; base; cases; closed } ->
       (* Compile as the base integer, then validate the decoded value is one of
@@ -5086,6 +5086,8 @@ let encode_rejected name e =
      (%a)"
     name Types.pp_parse_error e
 
+let rejected_by_constraints = encode_rejected
+
 (* The words the bitfields are or-ed into, zeroed before the writes. *)
 let bitfield_words puts =
   let words =
@@ -6625,79 +6627,58 @@ module Gen = struct
     | Types.U32 e -> "32" ^ endian e
 
   let order = function Types.Msb_first -> "msb" | Types.Lsb_first -> "lsb"
-  let expr b e = Buffer.add_string b (Fmt.str "%a" Types.pp_expr e)
 
-  let rec describe : type a. Buffer.t -> a Types.typ -> unit =
-   fun b t ->
-    let add = Buffer.add_string b in
-    let wrap name f =
-      add name;
-      add "(";
-      f ();
-      add ")"
-    in
+  let rec describe : type a. a Types.typ Fmt.t =
+   fun ppf t ->
+    let expr = Types.pp_expr in
     match t with
-    | Types.Uint8 -> add "u8"
-    | Types.Int8 -> add "i8"
-    | Types.Uint16 e -> add ("u16" ^ endian e)
-    | Types.Int16 e -> add ("i16" ^ endian e)
-    | Types.Uint32 e -> add ("u32" ^ endian e)
-    | Types.Int32 e -> add ("i32" ^ endian e)
-    | Types.Uint64 e -> add ("u64" ^ endian e)
-    | Types.Int64 e -> add ("i64" ^ endian e)
-    | Types.Float32 e -> add ("f32" ^ endian e)
-    | Types.Float64 e -> add ("f64" ^ endian e)
+    | Types.Uint8 -> Fmt.string ppf "u8"
+    | Types.Int8 -> Fmt.string ppf "i8"
+    | Types.Uint16 e -> Fmt.pf ppf "u16%s" (endian e)
+    | Types.Int16 e -> Fmt.pf ppf "i16%s" (endian e)
+    | Types.Uint32 e -> Fmt.pf ppf "u32%s" (endian e)
+    | Types.Int32 e -> Fmt.pf ppf "i32%s" (endian e)
+    | Types.Uint64 e -> Fmt.pf ppf "u64%s" (endian e)
+    | Types.Int64 e -> Fmt.pf ppf "i64%s" (endian e)
+    | Types.Float32 e -> Fmt.pf ppf "f32%s" (endian e)
+    | Types.Float64 e -> Fmt.pf ppf "f64%s" (endian e)
     | Types.Uint_var { size; endian = e } ->
-        wrap ("uvar" ^ endian e) (fun () -> expr b size)
+        Fmt.pf ppf "uvar%s(%a)" (endian e) expr size
     | Types.Bits { width; base = w; bit_order } ->
-        add (Fmt.str "bits(%d,%s,%s)" width (base w) (order bit_order))
+        Fmt.pf ppf "bits(%d,%s,%s)" width (base w) (order bit_order)
     | Types.Where { cond; inner } ->
-        wrap "where" (fun () ->
-            expr b cond;
-            add ",";
-            describe b inner)
-    | Types.Byte_array { size } -> wrap "bytes" (fun () -> expr b size)
-    | Types.Byte_slice { size } -> wrap "slice" (fun () -> expr b size)
+        Fmt.pf ppf "where(%a,%a)" expr cond describe inner
+    | Types.Byte_array { size } -> Fmt.pf ppf "bytes(%a)" expr size
+    | Types.Byte_slice { size } -> Fmt.pf ppf "slice(%a)" expr size
     | Types.Byte_array_where { size; elt_var; cond } ->
-        wrap "bytes_where" (fun () ->
-            expr b size;
-            add ("," ^ elt_var ^ ",");
-            expr b cond)
+        Fmt.pf ppf "bytes_where(%a,%s,%a)" expr size elt_var expr cond
     | Types.Enum { name; cases; base = inner; closed } ->
-        wrap "enum" (fun () ->
-            add (Fmt.str "%s,%b," name closed);
-            List.iter (fun (n, v) -> add (Fmt.str "%s=%d;" n v)) cases;
-            describe b inner)
+        Fmt.pf ppf "enum(%s,%b,%a,%a)" name closed
+          Fmt.(list ~sep:(any ";") (pair ~sep:(any "=") string int))
+          cases describe inner
     | Types.Map { inner; index_bound; _ } ->
-        wrap "map" (fun () ->
-            add (Fmt.str "%a," Fmt.(option int) index_bound);
-            describe b inner)
+        Fmt.pf ppf "map(%a,%a)" Fmt.(option int) index_bound describe inner
     | Types.Optional { present; inner } ->
-        wrap "optional" (fun () ->
-            expr b present;
-            add ",";
-            describe b inner)
+        Fmt.pf ppf "optional(%a,%a)" expr present describe inner
     | Types.Codec { codec_name; codec_struct; _ } ->
-        wrap "codec" (fun () ->
-            add codec_name;
-            describe_struct b codec_struct)
-    | t -> add (Fmt.str "?%a" Types.pp_typ t)
+        Fmt.pf ppf "codec(%s,%a)" codec_name describe_struct codec_struct
+    | t -> Fmt.pf ppf "?%a" Types.pp_typ t
 
-  and describe_struct b (s : Types.struct_) =
-    Buffer.add_string b (Fmt.str "%s(%d)" s.name (List.length s.params));
-    Option.iter (expr b) s.where;
+  and describe_struct ppf (s : Types.struct_) =
+    Fmt.pf ppf "%s(%d)%a" s.name (List.length s.params)
+      Fmt.(option Types.pp_expr)
+      s.where;
     List.iter
       (fun (Types.Field f) ->
-        Buffer.add_string b (Fmt.str "[%a:" Fmt.(option string) f.field_name);
-        describe b f.field_typ;
-        Option.iter (expr b) f.constraint_;
-        Buffer.add_string b (Fmt.str ":%b]" (Option.is_some f.action)))
+        Fmt.pf ppf "[%a:%a%a:%b]"
+          Fmt.(option string)
+          f.field_name describe f.field_typ
+          Fmt.(option Types.pp_expr)
+          f.constraint_ (Option.is_some f.action))
       s.fields
 
   let digest t =
-    let b = Buffer.create 256 in
-    describe_struct b (to_struct t);
-    Digest.to_hex (Digest.string (Buffer.contents b))
+    Digest.to_hex (Fmt.kstr Digest.string "%a" describe_struct (to_struct t))
 
   let check t d =
     if not (String.equal (digest t) d) then
@@ -6746,4 +6727,107 @@ module Gen = struct
     match validate t buf off with
     | () -> disagrees t
     | exception Types.Parse_error e -> encode_rejected t.name e
+
+  (* A map's functions, typed through its inner type: the wire value is read
+     as an [int] (or an [int32] for a 32-bit field), and [dec] decodes it as
+     the codec does, the index bound of a lookup checked and a failure placed at
+     [at]. *)
+  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+  type 'w view = { of_raw : int -> 'w; to_raw : 'w -> int }
+  type 'w view32 = { of_raw32 : int32 -> 'w; to_raw32 : 'w -> int32 }
+
+  let rec int_view : type w. w Types.typ -> w view option = function
+    | Types.Uint8 -> Some { of_raw = uint8; to_raw = UInt8.to_int }
+    | Types.Int8 -> Some { of_raw = int8; to_raw = SInt8.to_int }
+    | Types.Uint16 _ -> Some { of_raw = uint16; to_raw = UInt16.to_int }
+    | Types.Int16 _ -> Some { of_raw = int16; to_raw = SInt16.to_int }
+    | Types.Bits _ -> Some { of_raw = Fun.id; to_raw = Fun.id }
+    | Types.Where { inner; _ } -> int_view inner
+    | Types.Enum { base; _ } -> int_view base
+    | _ -> None
+
+  let rec int32_view : type w. w Types.typ -> w view32 option = function
+    | Types.Uint32 _ ->
+        Some { of_raw32 = UInt32.of_int32; to_raw32 = UInt32.to_int32 }
+    | Types.Int32 _ ->
+        Some { of_raw32 = SInt32.of_int32; to_raw32 = SInt32.to_int32 }
+    | Types.Where { inner; _ } -> int32_view inner
+    | Types.Enum { base; _ } -> int32_view base
+    | _ -> None
+
+  let not_a_map () = invalid_arg "Wire: not a map over an integer"
+
+  let map_int : type a. a Types.typ -> (int, a) map = function
+    | Types.Map { inner; decode; encode; index_bound; _ } -> (
+        match int_view inner with
+        | Some v ->
+            let decode = Types.map_decode ~index_bound decode in
+            {
+              dec = (fun ~at x -> decode ~at (v.of_raw x));
+              enc = (fun a -> v.to_raw (encode a));
+            }
+        | None -> not_a_map ())
+    | _ -> not_a_map ()
+
+  let map_int32 : type a. a Types.typ -> (int32, a) map = function
+    | Types.Map { inner; decode; encode; index_bound; _ } -> (
+        match int32_view inner with
+        | Some v ->
+            let decode = Types.map_decode ~index_bound decode in
+            {
+              dec = (fun ~at x -> decode ~at (v.of_raw32 x));
+              enc = (fun a -> v.to_raw32 (encode a));
+            }
+        | None -> not_a_map ())
+    | _ -> not_a_map ()
+
+  let map_id : type a. a Types.typ -> int option = function
+    | Types.Map { map_id; _ } -> Some map_id
+    | _ -> None
+
+  let check_map t name typ =
+    let holds =
+      List.exists
+        (fun (Types.Field f) ->
+          f.field_name = Some name
+          && Option.is_some (map_id typ)
+          && map_id f.field_typ = map_id typ)
+        (to_struct t).fields
+    in
+    if not holds then
+      Fmt.invalid_arg
+        "Wire: the generated code for %s names a map its field %s no longer \
+         has; generate it again"
+        t.name name
+
+  (* The bytes a cold path on a bigarray hands to the codec: the record's own
+     region, at most [size] bytes from [off], and failures moved back by [off]. *)
+  let on_region t buf off f =
+    let len = Unchecked.Bigstring.length buf in
+    if off < 0 || off > len then f (Unchecked.Bigstring.to_bytes buf) off
+    else
+      let n = min (min_wire_size t) (len - off) in
+      let region =
+        Bytes.init n (fun i -> Char.chr (Unchecked.Bigstring.u8 buf (off + i)))
+      in
+      try f region 0
+      with Types.Parse_error e ->
+        raise (Types.Parse_error { e with at = e.at + off })
+
+  let fail_bigstring t buf off = on_region t buf off (fail t)
+
+  let get_failed_bigstring t name buf off =
+    on_region t buf off (get_failed t name)
+
+  let encode_rejected_bigstring t buf off =
+    match on_region t buf off (validate t) with
+    | () -> disagrees t
+    | exception Types.Parse_error e -> rejected_by_constraints t.name e
+
+  let encode_too_short_bigstring t buf off =
+    if off < 0 then
+      Fmt.invalid_arg "Codec.encode %s: negative offset %d" t.name off;
+    Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" t.name
+      (wire_size t)
+      (Unchecked.Bigstring.length buf - off)
 end

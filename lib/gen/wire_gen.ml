@@ -22,7 +22,26 @@ type field = {
   store : store;
   tests : string list;
   enum : (string * int list) option;
+  map : string option;
 }
+
+type typ = Typ : 'a Wire.typ -> typ
+
+(* The OCaml path of each map a caller names, found by the map value itself. *)
+type maps = { find : 'a. 'a T.typ -> string option }
+
+let maps_of named =
+  {
+    find =
+      (fun typ ->
+        List.find_map
+          (fun (path, Typ t) ->
+            let id = Wire.Private.Gen.map_id typ in
+            if Option.is_some id && Wire.Private.Gen.map_id t = id then
+              Some path
+            else None)
+          named);
+  }
 
 (* OCaml's keywords, which a field name may spell. *)
 let keywords =
@@ -177,11 +196,13 @@ let rec classify : type a. a T.typ -> store * (string -> bool T.expr list) =
       in
       (s, fun self -> Option.to_list (member self) @ t self)
   | T.Enum { base; closed = false; _ } -> classify base
-  | _ -> fail_unsupported "field type %a" T.pp_typ typ
+  | T.Map _ -> fail_unsupported "a map inside its type"
+  | _ -> fail_unsupported "its type, %a" T.pp_typ typ
 
 let rec enum_of : type a. a T.typ -> (string * int list) option = function
   | T.Enum { name; cases; closed = true; _ } -> Some (name, List.map snd cases)
   | T.Where { inner; _ } -> enum_of inner
+  | T.Map { inner; _ } -> enum_of inner
   | _ -> None
 
 let width_bytes = function
@@ -214,47 +235,79 @@ let place_bits ~off ~word ~base ~order ~width =
   let next = if w.used = 0 then off + Bitfield.byte_size base else off in
   (w, shift, next)
 
-(* The fields of a fixed record in order, with their offsets, and its size. *)
-let layout (s : T.struct_) =
-  if s.params <> [] then fail_unsupported "parameters";
+(* One field laid out at [off], its value under [map] when it has one. *)
+let field_of : type b.
+    var:(string -> string) ->
+    string ->
+    string ->
+    _ ->
+    int ->
+    b T.typ ->
+    bool T.expr list ->
+    string option ->
+    field * word option * int =
+ fun ~var name v word off typ own map ->
+  match typ with
+  | T.Bits { base = T.U32 _; _ } when Sys.int_size <= 32 ->
+      fail_unsupported "32-bit bitfields on this host"
+  | T.Bits { width; base; bit_order } ->
+      let w, shift, next =
+        place_bits ~off ~word ~base ~order:bit_order ~width
+      in
+      let store = Bits { base; shift; width } in
+      let tests = List.map (expr var) own in
+      ( { name; var = v; off = w.at; store; tests; enum = None; map },
+        Some { w with used = w.used + width },
+        next )
+  | typ ->
+      let store, refine = classify typ in
+      let conds = refine name @ own in
+      (match (store, conds) with
+      | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
+      | _ -> ());
+      let tests = List.map (expr var) conds in
+      ( { name; var = v; off; store; tests; enum = enum_of typ; map },
+        None,
+        off + width_bytes store )
+
+(* The fields of a fixed record in order, with their offsets, and its size. A
+   field under a [map] is laid out as the map's inner type, and only for a map
+   the caller names, since its functions are called by that name. *)
+let layout ~maps (s : T.struct_) =
+  if s.params <> [] then fail_unsupported "the codec has parameters";
   let names = Hashtbl.create 16 in
   let var name =
     match Hashtbl.find_opt names name with
     | Some v -> v
-    | None -> fail_unsupported "reference to %s" name
+    | None -> fail_unsupported "a reference to %s" name
   in
   let field i word off (T.Field f) =
-    if Option.is_some f.action then fail_unsupported "actions";
     let name =
       match f.field_name with
       | Some n -> n
-      | None -> fail_unsupported "anonymous fields"
+      | None -> fail_unsupported "an anonymous field"
     in
-    let v = Fmt.str "f%d_%s" i (label name) in
-    Hashtbl.replace names name v;
-    let own = Option.to_list f.constraint_ in
-    match f.field_typ with
-    | T.Bits { base = T.U32 _; _ } when Sys.int_size <= 32 ->
-        fail_unsupported "32-bit bitfields on this host"
-    | T.Bits { width; base; bit_order } ->
-        let w, shift, next =
-          place_bits ~off ~word ~base ~order:bit_order ~width
-        in
-        let store = Bits { base; shift; width } in
-        let tests = List.map (expr var) own in
-        ( { name; var = v; off = w.at; store; tests; enum = None },
-          Some { w with used = w.used + width },
-          next )
-    | typ ->
-        let store, refine = classify typ in
-        let conds = refine name @ own in
-        (match (store, conds) with
-        | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
-        | _ -> ());
-        let tests = List.map (expr var) conds in
-        ( { name; var = v; off; store; tests; enum = enum_of typ },
-          None,
-          off + width_bytes store )
+    try
+      if Option.is_some f.action then fail_unsupported "an action";
+      let v = Fmt.str "f%d_%s" i (label name) in
+      Hashtbl.replace names name v;
+      let own = Option.to_list f.constraint_ in
+      match f.field_typ with
+      | T.Map { inner; index_bound; _ } as m -> (
+          match maps.find m with
+          | None ->
+              fail_unsupported "a map; name it in ~maps to generate this codec"
+          | Some path ->
+              let fld, word, next =
+                field_of ~var name v word off inner own (Some path)
+              in
+              let bound =
+                Option.map (fun n -> Fmt.str "(%s < %d)" v n) index_bound
+              in
+              ({ fld with tests = Option.to_list bound @ fld.tests }, word, next)
+          )
+      | typ -> field_of ~var name v word off typ own None
+    with Unsupported why -> fail_unsupported "field %s: %s" name why
   in
   let rec go i word off acc = function
     | [] -> (List.rev acc, off)
@@ -293,7 +346,7 @@ type src = {
   u : string;
   len : string;
   checked : string;
-  copy : string;
+  get_failed : string;
 }
 
 let bytes_src =
@@ -302,7 +355,7 @@ let bytes_src =
     u = "Wire.Private.Unchecked";
     len = "Bytes.length";
     checked = "Bytes";
-    copy = "Fun.id";
+    get_failed = "Wire.Private.Gen.get_failed";
   }
 
 let bigstring_src =
@@ -311,7 +364,7 @@ let bigstring_src =
     u = "Wire.Private.Unchecked.Bigstring";
     len = "Wire.Private.Unchecked.Bigstring.length";
     checked = "Wire.Private.Unchecked.Bigstring";
-    copy = "Wire.Private.Unchecked.Bigstring.to_bytes";
+    get_failed = "Wire.Private.Gen.get_failed_bigstring";
   }
 
 let load ~src ~off ~bytes ~endian =
@@ -357,22 +410,30 @@ let int_view f =
         (if signed then "" else " land 0xffff_ffff")
   | _ -> f.var
 
-(* The value handed to the constructor. *)
+let map_var f = "map_" ^ f.var
+
+(* The value handed to the constructor: through the field's map when it has
+   one, the failure placed at the field. *)
 let typed_value f =
-  match f.store with
-  | Int { width = 8; signed; _ } ->
-      Fmt.str "(Wire.Private.Gen.%s %s)"
-        (if signed then "int8" else "uint8")
-        f.var
-  | Int { width = 16; signed; _ } ->
-      Fmt.str "(Wire.Private.Gen.%s %s)"
-        (if signed then "int16" else "uint16")
-        f.var
-  | Int { signed; _ } ->
-      Fmt.str "(Wire.%s.of_int32 %s_raw)"
-        (if signed then "SInt32" else "UInt32")
-        f.var
-  | Bits _ | Bytes _ -> f.var
+  match (f.map, f.store) with
+  | Some _, Int { width = 32; _ } ->
+      Fmt.str "(%s.dec ~at:(off + %d) %s_raw)" (map_var f) f.off f.var
+  | Some _, _ -> Fmt.str "(%s.dec ~at:(off + %d) %s)" (map_var f) f.off f.var
+  | None, _ -> (
+      match f.store with
+      | Int { width = 8; signed; _ } ->
+          Fmt.str "(Wire.Private.Gen.%s %s)"
+            (if signed then "int8" else "uint8")
+            f.var
+      | Int { width = 16; signed; _ } ->
+          Fmt.str "(Wire.Private.Gen.%s %s)"
+            (if signed then "int16" else "uint16")
+            f.var
+      | Int { signed; _ } ->
+          Fmt.str "(Wire.%s.of_int32 %s_raw)"
+            (if signed then "SInt32" else "UInt32")
+            f.var
+      | Bits _ | Bytes _ -> f.var)
 
 let all_tests ~fields ~where =
   List.concat_map (fun f -> f.tests) fields @ Option.to_list where
@@ -588,15 +649,24 @@ let pp_write_int ?(src = bytes_src) ppf ~target ~fields ~where =
 (* [write] takes the codec's typed values, in range by construction, and
    stores them through [write_int]. *)
 let plain_value f =
-  match f.store with
-  | Int { width = 32; signed; _ } ->
-      Fmt.str "(Wire.%s.to_int32 %s)"
-        (if signed then "SInt32" else "UInt32")
-        f.var
-  | Int _ -> Fmt.str "(%s : %s :> int)" f.var (type_of f)
-  | Bits _ | Bytes _ -> f.var
+  match (f.map, f.store) with
+  | Some _, _ -> Fmt.str "(%s.enc %s)" (map_var f) f.var
+  | None, _ -> (
+      match f.store with
+      | Int { width = 32; signed; _ } ->
+          Fmt.str "(Wire.%s.to_int32 %s)"
+            (if signed then "SInt32" else "UInt32")
+            f.var
+      | Int _ -> Fmt.str "(%s : %s :> int)" f.var (type_of f)
+      | Bits _ | Bytes _ -> f.var)
 
+(* A map's functions are the caller's code, so a write through one makes no
+   promise about allocation. *)
 let pp_write ppf ~target fields =
+  let target =
+    if List.exists (fun f -> Option.is_some f.map) fields then `OCaml
+    else target
+  in
   Fmt.pf ppf "let[@@inline]%s write buf off %a =@\n  write_int buf off %a@\n@\n"
     (zero_alloc target) pp_vars fields pp_list
     (List.map plain_value fields)
@@ -615,15 +685,25 @@ let pp_header ppf ~target ~codec ~digest =
      @\n"
     codec codec digest (cold target) (cold target)
 
-let fallback ppf ~target ~codec ~digest reason =
-  pp_header ppf ~target ~codec ~digest;
-  Fmt.pf ppf
-    "(* Not specialised: %s. *)@\n\
-     @\n\
-     let size = Wire.Codec.min_wire_size codec@\n\
-     let decode buf off = Wire.Codec.decode_exn codec buf off@\n\
-     let validate buf off = Wire.Codec.validate codec buf off@\n"
-    reason
+(* Each named map, bound once, and checked to be the codec's own when the
+   module loads. *)
+let pp_maps ppf fields =
+  List.iter
+    (fun f ->
+      match f.map with
+      | Some path ->
+          let make =
+            match f.store with
+            | Int { width = 32; _ } -> "map_int32"
+            | _ -> "map_int"
+          in
+          Fmt.pf ppf
+            "let %s = Wire.Private.Gen.%s %s@\n\
+             let () = Wire.Private.Gen.check_map codec %S %s@\n"
+            (map_var f) make path f.name path
+      | None -> ())
+    fields;
+  Fmt.pf ppf "@\n"
 
 let pp_record ppf fields =
   Fmt.pf ppf "type t = {@\n";
@@ -676,7 +756,8 @@ let checked_read ~src f =
 let pp_getter ~src ppf ~target f =
   let attr =
     match (target, f.store) with
-    | `OxCaml, (Int _ | Bits _) -> "[@inline][@zero_alloc]"
+    | `OxCaml, (Int _ | Bits _) when Option.is_none f.map ->
+        "[@inline][@zero_alloc]"
     | _ -> "[@inline]"
   in
   Fmt.pf ppf "let%s get_%s buf off =@\n" attr (label f.name);
@@ -725,11 +806,8 @@ let pp_word_getters ~src ppf ~target f =
   | _ -> ()
 
 let pp_getters ?(src = bytes_src) ppf ~target fields =
-  Fmt.pf ppf
-    "let%s get_failed name buf off =@\n\
-    \  Wire.Private.Gen.get_failed codec name (%s buf) off@\n\
-     @\n"
-    (cold target) src.copy;
+  Fmt.pf ppf "let%s get_failed name buf off = %s codec name buf off@\n@\n"
+    (cold target) src.get_failed;
   List.iter (pp_getter ~src ppf ~target) fields;
   List.iter (pp_word_getters ~src ppf ~target) fields
 
@@ -758,7 +836,8 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
     (fun f ->
       let attr =
         match (target, f.store) with
-        | `OxCaml, (Int _ | Bits _) -> "[@inline][@zero_alloc]"
+        | `OxCaml, (Int _ | Bits _) when Option.is_none f.map ->
+            "[@inline][@zero_alloc]"
         | _ -> "[@inline]"
       in
       Fmt.pf ppf
@@ -801,9 +880,9 @@ let pp_bigstring ppf ~target ~make ~record ~fields ~size ~where =
   let src = bigstring_src in
   Fmt.pf ppf
     "module Bigstring = struct@\n\
-     let to_bytes = Wire.Private.Unchecked.Bigstring.to_bytes@\n\
-     let%s fail buf off = fail (to_bytes buf) off@\n\
-     let%s too_short buf off = too_short (to_bytes buf) off@\n\
+     let%s fail buf off = Wire.Private.Gen.fail_bigstring codec buf off@\n\
+     let%s too_short buf off =@\n\
+    \  Wire.Private.Gen.encode_too_short_bigstring codec buf off@\n\
      @\n"
     (cold target) (cold target);
   pp_validate ~src ppf ~target ~fields ~where;
@@ -812,7 +891,7 @@ let pp_bigstring ppf ~target ~make ~record ~fields ~size ~where =
     \  match validate buf off with@\n\
     \  | () -> ()@\n\
     \  | exception Wire.Parse_error _ ->@\n\
-    \      Wire.Private.Gen.encode_rejected codec (to_bytes buf) off@\n\
+    \      Wire.Private.Gen.encode_rejected_bigstring codec buf off@\n\
      @\n";
   pp_decode ~src ppf ~head:"let decode buf off"
     ~call:(fun args -> Fmt.str "%s %a" make pp_list args)
@@ -851,14 +930,25 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   if record then pp_encode ppf fields;
   pp_bigstring ppf ~target ~make ~record ~fields ~size ~where
 
-let pp ?(target = `OCaml) ?make ~codec ppf c =
+let refuse ~codec reason =
+  Fmt.invalid_arg "Wire_gen: cannot specialise %s: %s" codec reason
+
+let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
   let digest = Wire.Private.Gen.digest c in
-  match layout (Wire.Private.Gen.to_struct c) with
-  | exception Unsupported reason -> fallback ppf ~target ~codec ~digest reason
+  match layout ~maps:(maps_of maps) (Wire.Private.Gen.to_struct c) with
+  | exception Unsupported reason -> refuse ~codec reason
   | _, size, _ when Wire.Codec.wire_size_opt c <> Some size ->
-      fallback ppf ~target ~codec ~digest "its size is not the layout's"
+      refuse ~codec "its size is not fixed"
+  | fields, _, _
+    when Option.is_none make
+         && List.exists (fun f -> Option.is_some f.map) fields ->
+      refuse ~codec
+        "a field is a map, and the generated record cannot name its type; pass \
+         ~make"
   | fields, size, where ->
       pp_header ppf ~target ~codec ~digest;
+      pp_maps ppf fields;
       pp_body ppf ~target ~make ~fields ~size ~where
 
-let ml ?target ?make ~codec c = Fmt.str "%a" (pp ?target ?make ~codec) c
+let ml ?target ?make ?maps ~codec c =
+  Fmt.str "%a" (pp ?target ?make ?maps ~codec) c
