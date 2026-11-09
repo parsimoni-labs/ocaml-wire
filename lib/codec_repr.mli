@@ -232,6 +232,10 @@ type step =
       -> step
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
 
+(** How the encoder writes a field it has a descriptor for: the field's value,
+    put at the descriptor's offset with no bounds check of its own. *)
+type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+
 (** A record under construction: the fields added so far. *)
 type ('f, 'r) record =
   | Record : {
@@ -239,6 +243,7 @@ type ('f, 'r) record =
       make : 'full;
       readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
+      puts_rev : 'r put list option;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
       min_wire_size : int;
       next_off : next_off;
@@ -302,6 +307,7 @@ type 'r compiled = {
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   plain_validate : bytes -> int -> unit;
+  plain_encode : ('r -> bytes -> int -> unit) option;
   fixed_frame : int;
   plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
@@ -365,3 +371,12 @@ val slot_scalar : 'a scalar -> bool
 val read_slot : 'a scalar -> bytes -> int -> int
 (** [read_slot s buf base] is the integer the scalar [s] holds in the record at
     [base], read with no bounds check. *)
+
+val int_scalar : 'a scalar -> bool
+(** [int_scalar s] is [true] when an [int] holds every value of [s] exactly, so
+    a write converts it with no loss. *)
+
+val write_scalar : 'a scalar -> bytes -> int -> 'a -> unit
+(** [write_scalar s buf base v] writes [v] as the scalar [s] of the record at
+    [base], with no bounds check. A bitfield is or-ed into its word, which the
+    encoder has zeroed first. *)

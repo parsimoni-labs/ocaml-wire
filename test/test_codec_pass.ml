@@ -248,6 +248,46 @@ let test_failure_value_is_this_frames () =
   ignore (failure c (frame 1001L));
   Alcotest.(check string) "after another frame" fresh (failure c (frame (-1L)))
 
+(* A fixed codec of plain fields encodes through one frame check and one write
+   per field. Bitfield words start from zero whatever the buffer held, a value
+   too wide for its bits and a buffer too short are refused, and a codec with
+   constraints refuses to write a value that breaks them. *)
+let test_plain_encode () =
+  let hi = Field.v "hi" (bits ~width:3 U8)
+  and lo = Field.v "lo" (bits ~width:5 U8) in
+  let f = Field.v "f" (bits ~width:4 U16be)
+  and g = Field.v "g" (bits ~width:12 U16be) in
+  let n = Field.v "n" ~self_constraint:(fun s -> Expr.(s <= int 1000)) uint16 in
+  let x = Field.v "x" int32be in
+  let c =
+    Codec.v "Plain"
+      (fun hi lo f g n x -> (hi, lo, f, g, UInt16.to_int n, SInt32.to_int32 x))
+      Codec.
+        [
+          (hi $ fun (v, _, _, _, _, _) -> v);
+          (lo $ fun (_, v, _, _, _, _) -> v);
+          (f $ fun (_, _, v, _, _, _) -> v);
+          (g $ fun (_, _, _, v, _, _) -> v);
+          (n $ fun (_, _, _, _, v, _) -> UInt16.v v);
+          (x $ fun (_, _, _, _, _, v) -> SInt32.of_int32 v);
+        ]
+  in
+  let v = (5, 17, 9, 0xabc, 513, -2l) in
+  let buf = Bytes.make 9 '\xff' in
+  Codec.encode c v buf 0;
+  Alcotest.(check string)
+    "bytes" "\xb1\x9a\xbc\x01\x02\xff\xff\xff\xfe" (Bytes.to_string buf);
+  Alcotest.(check bool) "roundtrip" true (Codec.decode_exn c buf 0 = v);
+  let refused name f =
+    Alcotest.(check bool)
+      name true
+      (match f () with () -> false | exception Invalid_argument _ -> true)
+  in
+  refused "bits too wide" (fun () -> Codec.encode c (8, 0, 0, 0, 0, 0l) buf 0);
+  refused "negative offset" (fun () -> Codec.encode c v buf (-1));
+  refused "short buffer" (fun () -> Codec.encode c v buf 1);
+  refused "constraint" (fun () -> Codec.encode c (0, 0, 0, 0, 1001, 0l) buf 0)
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -437,6 +477,7 @@ let suite =
         test_constraint_intervals;
       Alcotest.test_case "check: a failure reports this frame's value" `Quick
         test_failure_value_is_this_frames;
+      Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
       Alcotest.test_case "size: a literal size is a byte count" `Quick
         test_literal_size_is_a_byte_count;
       Alcotest.test_case "size: a record must fit in a buffer" `Quick

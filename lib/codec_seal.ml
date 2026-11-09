@@ -330,6 +330,11 @@ let apply_compiled : type a f r.
       make = r.make;
       readers = Snoc (r.readers, read);
       writers_rev = new_writers_rev;
+      puts_rev =
+        (match (r.puts_rev, read) with
+        | Some puts, Data scalar when int_scalar scalar ->
+            Some (Put { get = fld.get; scalar } :: puts)
+        | _ -> None);
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
@@ -810,15 +815,17 @@ let build_plain_decode make fwd wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else apply_fwd make fwd no_runtime input_end buf off
   | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+          min_bounds_error min_size buf off
+        else begin
+          run_plain_pass pass input_end buf off;
+          apply_fwd make fwd no_runtime input_end buf off
+        end
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -968,13 +975,74 @@ let plain_validate wire_size_info min_size pass =
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off;
-        run_plain_pass pass input_end buf off
+          min_bounds_error min_size buf off
+        else run_plain_pass pass input_end buf off
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
         run_plain_pass pass input_end buf off
+
+let encode_too_short name n buf off =
+  if off < 0 then Fmt.invalid_arg "Codec.encode %s: negative offset %d" name off;
+  Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name n
+    (Bytes.length buf - off)
+
+let encode_rejected name e =
+  Fmt.invalid_arg
+    "Codec.encode %s: the encoded record is rejected by its own constraints \
+     (%a)"
+    name Types.pp_parse_error e
+
+(* The words the bitfields are or-ed into, zeroed before the writes. *)
+let bitfield_words puts =
+  let words =
+    List.filter_map
+      (fun (Put { scalar; _ }) ->
+        match scalar with
+        | Bits8 { off; _ } -> Some (off, false)
+        | Bits16le { off; _ } | Bits16be { off; _ } -> Some (off, true)
+        | _ -> None)
+      puts
+  in
+  List.sort_uniq compare words
+
+(* Frame, then one write per field. The frame covers every write, so none is
+   checked; a codec with constraints and no actions runs [validate]'s pass over
+   what it wrote. *)
+let build_plain_encode name n puts check =
+  let words = Array.of_list (bitfield_words puts) in
+  let puts = Array.of_list puts in
+  fun v buf off ->
+    if off < 0 || off > Bytes.length buf - n then
+      encode_too_short name n buf off
+    else begin
+      for i = 0 to Array.length words - 1 do
+        let w, wide = Array.unsafe_get words i in
+        if wide then Unchecked.set_u16le buf (off + w) 0
+        else Unchecked.set_u8 buf (off + w) 0
+      done;
+      for i = 0 to Array.length puts - 1 do
+        let (Put { get; scalar }) = Array.unsafe_get puts i in
+        write_scalar scalar buf off (get v)
+      done;
+      match check with
+      | No_checks -> ()
+      | pass -> (
+          try run_plain_pass pass (Input_end.of_bytes buf) buf off
+          with Types.Parse_error e -> encode_rejected name e)
+    end
+
+let plain_encoder ~name ~n_params ~wire_size_info ~struct_fields ~encode_check
+    puts check =
+  let no_actions =
+    List.for_all (fun (Types.Field f) -> Option.is_none f.action) struct_fields
+  in
+  match (wire_size_info, puts) with
+  | Fixed n, Some puts
+    when n_params = 0 && (Option.is_none encode_check || no_actions) ->
+      Some (build_plain_encode name n (List.rev puts) check)
+  | _ -> None
 
 (* A fixed-size record's size is known without walking its fields. *)
 let record_encoder name writers wire_size_info size_of_value check =
@@ -1051,6 +1119,9 @@ let seal : type r.
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
     plain_validate = plain_validate wire_size_info min_size check;
+    plain_encode =
+      plain_encoder ~name:r.name ~n_params ~wire_size_info ~struct_fields
+        ~encode_check r.puts_rev check;
     fixed_frame = (match wire_size_info with Fixed _ -> min_size | _ -> -1);
     plain_pass = check;
     validate =

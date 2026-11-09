@@ -642,7 +642,7 @@ let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
   with Types.Parse_error e -> Error e
 
-let encode ?env:e t v buf off =
+let encode_slow e t v buf off =
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in
@@ -658,6 +658,14 @@ let encode ?env:e t v buf off =
       "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
+
+let encode ?env:e t v buf off =
+  match e with
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some { plain_encode = Some f; _ } -> f v buf off
+      | _ -> encode_slow e t v buf off)
+  | _ -> encode_slow e t v buf off
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where
@@ -675,8 +683,11 @@ let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 let validate_fixed min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    min_bounds_error min_size buf off;
-  match pass with No_checks -> () | _ -> run_plain_pass pass input_end buf off
+    min_bounds_error min_size buf off
+  else
+    match pass with
+    | No_checks -> ()
+    | _ -> run_plain_pass pass input_end buf off
 
 let validate ?env:e (t : _ t) buf off =
   match e with

@@ -423,18 +423,62 @@ let[@inline] read_field : type a.
   | Data s -> read_scalar s buf base
   | Fn f -> f runtime input_end buf base
 
+(* How [encode] writes a field it has a descriptor for: the field's value, put
+   at the descriptor's offset with no bounds check of its own. *)
+type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+
+let bits_of_mask mask =
+  let rec go n = if mask lsr n = 0 then n else go (n + 1) in
+  go 0
+
+(* A bitfield value wider than its field, off the hot path. *)
+let bits_too_wide ~mask v =
+  Types.check_unsigned_encode ~bits:(bits_of_mask mask) v
+
+(* Calls nothing on the normal path. A bitfield is or-ed into its word, which
+   the encoder has zeroed first, as the general writer does. *)
+let write_scalar : type a. a scalar -> bytes -> int -> a -> unit =
+ fun r buf base v ->
+  match r with
+  | Byte off -> Unchecked.set_u8 buf (base + off) (UInt8.to_int v)
+  | U16le off -> Unchecked.set_u16le buf (base + off) (UInt16.to_int v)
+  | U16be off -> Unchecked.set_u16be buf (base + off) (UInt16.to_int v)
+  | U32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | U32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | Sbyte off -> Unchecked.set_u8 buf (base + off) (SInt8.to_int v)
+  | I16le off -> Unchecked.set_u16le buf (base + off) (SInt16.to_int v)
+  | I16be off -> Unchecked.set_u16be buf (base + off) (SInt16.to_int v)
+  | I32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | I32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | Bits8 { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u8 buf p (Unchecked.u8 buf p lor (v lsl shift))
+  | Bits16le { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (v lsl shift))
+  | Bits16be { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16be buf p (Unchecked.u16be buf p lor (v lsl shift))
+
+(* The scalars whose value an int holds exactly, so a write converts it with no
+   loss. *)
+let int_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
 (* The data form of a field read, when the field is a bare scalar at a fixed
    offset or packed in an 8- or 16-bit word. *)
-let field_read : type a.
-    min_wire_size:int ->
-    field_access ->
-    a typ ->
-    (runtime -> Input_end.t -> bytes -> int -> a) ->
-    plain:bool ->
-    a field_read =
- fun ~min_wire_size access typ fn ~plain ->
+let field_scalar : type a.
+    min_wire_size:int -> field_access -> a typ -> a scalar option =
+ fun ~min_wire_size access typ ->
   match (access, typ) with
-  | _ when not plain -> Fn fn
   | (Fixed off | Bitfield { byte_off = off; _ }), _
     when off < 0
          ||
@@ -442,24 +486,29 @@ let field_read : type a.
          | Some w -> off + w > min_wire_size
          | None -> true ->
       (* Unchecked only inside the span [decode] has checked. *)
-      Fn fn
-  | Fixed off, Uint8 -> Data (Byte off)
-  | Fixed off, Uint16 Little -> Data (U16le off)
-  | Fixed off, Uint16 Big -> Data (U16be off)
-  | Fixed off, Uint32 Little -> Data (U32le off)
-  | Fixed off, Uint32 Big -> Data (U32be off)
-  | Fixed off, Int8 -> Data (Sbyte off)
-  | Fixed off, Int16 Little -> Data (I16le off)
-  | Fixed off, Int16 Big -> Data (I16be off)
-  | Fixed off, Int32 Little -> Data (I32le off)
-  | Fixed off, Int32 Big -> Data (I32be off)
+      None
+  | Fixed off, Uint8 -> Some (Byte off)
+  | Fixed off, Uint16 Little -> Some (U16le off)
+  | Fixed off, Uint16 Big -> Some (U16be off)
+  | Fixed off, Uint32 Little -> Some (U32le off)
+  | Fixed off, Uint32 Big -> Some (U32be off)
+  | Fixed off, Int8 -> Some (Sbyte off)
+  | Fixed off, Int16 Little -> Some (I16le off)
+  | Fixed off, Int16 Big -> Some (I16be off)
+  | Fixed off, Int32 Little -> Some (I32le off)
+  | Fixed off, Int32 Big -> Some (I32be off)
   | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
       let mask = (1 lsl width) - 1 in
       match base with
-      | U8 -> Data (Bits8 { off; shift; mask })
-      | U16 Little -> Data (Bits16le { off; shift; mask })
-      | U16 Big -> Data (Bits16be { off; shift; mask })
-      | U32 _ -> Fn fn)
+      | U8 -> Some (Bits8 { off; shift; mask })
+      | U16 Little -> Some (Bits16le { off; shift; mask })
+      | U16 Big -> Some (Bits16be { off; shift; mask })
+      | U32 _ -> None)
+  | _ -> None
+
+let field_read ~min_wire_size access typ fn ~plain =
+  match field_scalar ~min_wire_size access typ with
+  | Some s when plain -> Data s
   | _ -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
@@ -745,6 +794,8 @@ type ('f, 'r) record =
       make : 'full;
       readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
+      puts_rev : 'r put list option;
+          (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -837,6 +888,9 @@ type 'r compiled = {
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   plain_validate : bytes -> int -> unit;
+  plain_encode : ('r -> bytes -> int -> unit) option;
+      (* [encode] of a fixed-size codec without parameters whose fields all
+         have a descriptor write. *)
   fixed_frame : int;
       (* The frame of a fixed-size codec, or -1: with [plain_pass], what
          [validate] of a codec without parameters runs with no closure call. *)
@@ -893,6 +947,7 @@ let record_start ?where ?doc name make =
       doc;
       readers = Nil;
       writers_rev = [];
+      puts_rev = Some [];
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
