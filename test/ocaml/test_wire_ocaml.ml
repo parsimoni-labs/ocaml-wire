@@ -247,9 +247,6 @@ let test_words () =
       fields
   done
 
-let test_variable () =
-  reads Schemas.variable ~decode:G_variable.decode ~validate:G_variable.validate
-
 (* Generated code names the shape of the codec it comes from, and refuses to
    run against a codec whose shape has changed since. *)
 let test_stale () =
@@ -283,14 +280,50 @@ let test_digest () =
       (Codec.v "D" Fun.id
          Codec.[ Field.v "x" (bits ~bit_order:order ~width:3 U8) $ Fun.id ])
   in
-  differ "bit order" (bits Msb_first) (bits Lsb_first)
+  differ "bit order" (bits Msb_first) (bits Lsb_first);
+  (* Operators and references the 3D printer spells alike. *)
+  let two x y where =
+    let x = Field.v "x" x and y = Field.v "y" y in
+    Wire.Private.Gen.digest
+      (Codec.v "D" ~where:(where x y)
+         (fun a b -> (a, b))
+         Codec.[ x $ fst; y $ snd ])
+  in
+  differ "lsr and lsr64"
+    (two uint64 uint64 (fun x y ->
+         Expr.(Field.int x lsr int 1 = Field.int y lsr int 1)))
+    (two uint64 uint64 (fun x y ->
+         Expr.(lsr64 (Field.int64 x) (int 1) = lsr64 (Field.int64 y) (int 1))));
+  differ "a reference as an int and as an int64"
+    (two uint64 uint64 (fun x y -> Expr.(Field.int x = Field.int y)))
+    (two uint64 uint64 (fun x y -> Expr.(Field.int64 x = Field.int64 y)))
 
-(* A codec the generator does not specialise gets a module that calls it. *)
-let test_fallback () =
-  let src = Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable in
-  Alcotest.(check bool)
-    "falls back" true
-    (contains src "Wire.Codec.decode_exn codec")
+(* A signed field refined against a negative literal projects to 3D, so the
+   generator specialises it. *)
+let test_signed () =
+  ignore (Wire.Everparse.project Schemas.signed : Wire.Everparse.t);
+  reads Schemas.signed ~decode:G_signed.decode ~validate:G_signed.validate;
+  writes Schemas.signed
+    ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
+    (decoded Schemas.signed 200)
+
+(* A codec the generator cannot specialise is refused when the code is
+   generated, naming the field and why, rather than given a module with fewer
+   functions. *)
+let test_refused () =
+  let refused ~maps name =
+    match Wire_ocaml.ml ~maps ~make:"m" ~codec:"c" Schemas.mapped with
+    | _ -> Alcotest.failf "%s: generated" name
+    | exception Invalid_argument m ->
+        Alcotest.(check bool)
+          (name ^ ": names the field")
+          true (contains m "Len")
+  in
+  refused ~maps:[] "an unnamed map";
+  match Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable with
+  | _ -> Alcotest.fail "a variable-size codec was generated"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) "names the field" true (contains m "Rest")
 
 (* A generated getter reads what [Codec.get] reads, or raises what it raises,
    on random buffers and offsets around the field. *)
@@ -304,6 +337,21 @@ let getter codec field ~get ~show =
       (outcome (fun () -> show (read buf off)))
       (outcome (fun () -> show (get buf off)))
   done
+
+(* Every field under a map: over 16- and 32-bit integers, a lookup whose index
+   bound validate checks, and a bitfield. *)
+let test_mapped () =
+  reads Schemas.mapped ~decode:G_mapped.decode ~validate:G_mapped.validate;
+  writes Schemas.mapped
+    ~write:(fun (a, b, c, d, e) buf off -> G_mapped.write buf off a b c d e)
+    (decoded Schemas.mapped 300);
+  getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.get_len
+    ~show:string_of_int;
+  let lookalike = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
+  Wire.Private.Gen.check_map Schemas.mapped "Len" Schemas.u16be_int;
+  match Wire.Private.Gen.check_map Schemas.mapped "Len" lookalike with
+  | () -> Alcotest.fail "a different map of the same shape was accepted"
+  | exception Invalid_argument _ -> ()
 
 (* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
 let int_getter codec field ~get ~to_int =
@@ -514,12 +562,13 @@ let suite =
       Alcotest.test_case "byte arrays" `Quick test_eth;
       Alcotest.test_case "32-bit bitfields" `Quick test_wide;
       Alcotest.test_case "fields from their word" `Quick test_words;
-      Alcotest.test_case "not specialised" `Quick test_variable;
+      Alcotest.test_case "maps" `Quick test_mapped;
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
-      Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
+      Alcotest.test_case "negative literals" `Quick test_signed;
+      Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;

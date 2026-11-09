@@ -295,6 +295,7 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
           (** When [Some n] the raw [inner] value is a valid index only when
               [< n] (set by {!cases}). [decode] enforces it on the OCaml side;
               the 3D projection emits it as a field refinement. *)

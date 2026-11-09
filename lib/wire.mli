@@ -1938,7 +1938,8 @@ module Private : sig
 
     val digest : 'r Codec.t -> string
     (** [digest t] names the shape of [t]: its fields, their types and
-        constraints. *)
+        constraints, every expression in full, and the version of what generated
+        code assumes of it. *)
 
     val check : 'r Codec.t -> string -> unit
     (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
@@ -1970,6 +1971,53 @@ module Private : sig
     val encode_rejected : 'r Codec.t -> bytes -> int -> 'a
     (** [encode_rejected t buf off] raises the error {!Codec.val-encode} raises
         when the record it wrote at [off] fails its constraints. *)
+
+    (** {2 Maps} *)
+
+    type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+    (** A map's decoder and encoder over its raw wire value. *)
+
+    val map_int : 'a Types.typ -> (int, 'a) map
+    (** [map_int t] is the map [t] over an integer up to 16 bits wide or a
+        bitfield, read as an [int]. Raises [Invalid_argument] for any other [t].
+    *)
+
+    val map_int32 : 'a Types.typ -> (int32, 'a) map
+    (** [map_int32 t] is the map [t] over a 32-bit integer. *)
+
+    val map_id : 'a Types.typ -> int option
+    (** [map_id t] identifies the map [t] among every map built, [None] when [t]
+        is not a map. *)
+
+    val check_map : 'r Codec.t -> string -> 'a Types.typ -> unit
+    (** [check_map c name t] raises [Invalid_argument] unless the field [name]
+        of [c] is the very value [t]. *)
+
+    (** {2 Cold paths on a bigarray}
+
+        Each copies at most the record's bytes from [off] to hand to the codec,
+        and moves a failure's offset back by [off]. *)
+
+    val fail_bigstring : 'r Codec.t -> Unchecked.Bigstring.t -> int -> 'a
+    (** [fail_bigstring c buf off] raises the error {!Codec.val-validate} raises
+        on the record at [off]. *)
+
+    val get_failed_bigstring :
+      'r Codec.t -> string -> Unchecked.Bigstring.t -> int -> 'a
+    (** [get_failed_bigstring c name buf off] raises the error the getter of
+        [name] raises at [off]. *)
+
+    val encode_rejected_bigstring :
+      'r Codec.t -> Unchecked.Bigstring.t -> int -> 'a
+    (** [encode_rejected_bigstring c buf off] raises the error
+        {!Codec.val-encode} raises when the record written at [off] fails its
+        constraints. *)
+
+    val encode_too_short_bigstring :
+      'r Codec.t -> Unchecked.Bigstring.t -> int -> 'a
+    (** [encode_too_short_bigstring c buf off] raises the error
+        {!Codec.val-encode} raises when the record does not fit [buf] at [off].
+    *)
   end
 
   (** How a codec is compiled, for the fuzzer: the same codec with every fast

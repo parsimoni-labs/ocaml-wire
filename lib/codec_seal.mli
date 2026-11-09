@@ -130,3 +130,6 @@ val encode_too_short : string -> int -> bytes -> int -> 'a
 val encode_rejected : string -> Types.parse_error -> 'a
 (** [encode_rejected name e] raises the [Invalid_argument] of an encode of codec
     [name] whose result fails its own checks with [e]. *)
+
+val rejected_by_constraints : string -> Types.parse_error -> 'a
+(** [rejected_by_constraints] is {!encode_rejected}. *)

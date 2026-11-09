@@ -1346,6 +1346,8 @@ let encode_rejected name e =
      (%a)"
     name Types.pp_parse_error e
 
+let rejected_by_constraints = encode_rejected
+
 (* The words the bitfields are or-ed into, zeroed before the writes. *)
 let bitfield_words puts =
   let words =

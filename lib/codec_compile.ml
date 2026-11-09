@@ -1502,7 +1502,7 @@ let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   match fld.typ with
-  | Map { inner; decode; encode; index_bound } ->
+  | Map { inner; decode; encode; index_bound; _ } ->
       compile_map ctx fld inner decode encode ~index_bound
   | Enum { name; base; cases; closed } ->
       (* Compile as the base integer, then validate the decoded value is one of

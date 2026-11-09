@@ -24,9 +24,7 @@
     submodule has the same functions, [Valid] included, on a bigarray of bytes.
     It has [size], [decode], [validate] and [write buf off v1 ... vn], which
     stores field values in order. Without [~make] it also defines a record [t]
-    of the field values, [make] and [encode]. A codec it cannot specialise
-    (variable size, parameters, actions, maps) gets a module with [decode] and
-    [validate] that call the codec. *)
+    of the field values, [make] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
@@ -35,10 +33,28 @@ type target = [ `OCaml | `OxCaml ]
     fields reads only those, under one frame check; and, for the generated
     record, [decode_local], which builds it on the stack. *)
 
+(** A {!Wire.typ} of any value type. *)
+type typ = Typ : 'a Wire.typ -> typ
+
 val ml :
-  ?target:target -> ?make:string -> codec:string -> 'r Wire.Codec.t -> string
-(** [ml ?target ?make ~codec c] is the source of a module specialised to [c],
-    for [target] (default [`OCaml]). [codec] is the OCaml path of [c] as the
-    generated module sees it. [make], the path of a function taking the field
-    values in order, builds the decoded value; it defaults to a generated
-    record. *)
+  ?target:target ->
+  ?make:string ->
+  ?maps:(string * typ) list ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  string
+(** [ml ?target ?make ?maps ~codec c] is the source of a module specialised to
+    [c], for [target] (default [`OCaml]). [codec] is the OCaml path of [c] as
+    the generated module sees it. [make], the path of a function taking the
+    field values in order, builds the decoded value; it defaults to a generated
+    record, which a codec with a map field cannot use.
+
+    A field under a {!Wire.map} is specialised when [maps] names the map: a pair
+    of its OCaml path and the map itself, as in
+    [("Page.u16be_int", Typ Page.u16be_int)]. The generated module calls the
+    map's functions by that path, and checks when it loads that the field still
+    holds that very map.
+
+    Raises [Invalid_argument], naming the field and the reason, for a codec it
+    cannot specialise: a variable size, parameters, actions, or a map [maps]
+    does not name. *)

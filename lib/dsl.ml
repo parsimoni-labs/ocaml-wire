@@ -262,6 +262,9 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
+          (* Each map value its own: a generated module names the map it calls
+             and checks the codec still holds that very one. *)
           (* When [Some n] the raw [inner] value is a valid index only when
              [< n] (set by {!cases} / lookup). [decode] enforces this on the
              OCaml side; the 3D projection emits it as a field refinement so the
@@ -827,9 +830,12 @@ let reject_decoration ~combinator t =
        field type directly via [Field.v]."
       combinator combinator
 
+let map_ids = Atomic.make 0
+let fresh_map_id () = Atomic.fetch_and_add map_ids 1
+
 let map decode encode inner =
   reject_decoration ~combinator:"map" inner;
-  Map { inner; decode; encode; index_bound = None }
+  Map { inner; decode; encode; index_bound = None; map_id = fresh_map_id () }
 
 let bool inner =
   reject_non_integer ~combinator:"bit" inner;
@@ -840,6 +846,7 @@ let bool inner =
       decode = (fun v -> is_set (to_int v));
       encode = (fun b -> of_int (bit b));
       index_bound = None;
+      map_id = fresh_map_id ();
     }
 
 (* Top-level so [variants_lookup] does not allocate a closure per call.
@@ -865,7 +872,8 @@ let cases variants inner =
     let i = variants_lookup arr v 0 in
     if i < 0 then invalid_arg "Wire.lookup: unknown variant" else of_int i
   in
-  Map { inner; decode; encode; index_bound = Some len }
+  Map
+    { inner; decode; encode; index_bound = Some len; map_id = fresh_map_id () }
 
 let unit = Unit
 let all_bytes = All_bytes
