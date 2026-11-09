@@ -20,12 +20,13 @@
     change after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
     [get_<field>_word] loads the word that holds it and [<field>_of_word] takes
-    the field out, so fields packed in one word share one load. It has [size],
-    [decode], [validate] and [write buf off v1 ... vn], which stores field
-    values in order. Without [~make] it also defines a record [t] of the field
-    values, [make] and [encode]. A codec it cannot specialise (variable size,
-    parameters, actions, maps) gets a module with [decode] and [validate] that
-    call the codec. *)
+    the field out, so fields packed in one word share one load. A [Bigstring]
+    submodule has the same functions, [Valid] included, on a bigarray of bytes.
+    It has [size], [decode], [validate] and [write buf off v1 ... vn], which
+    stores field values in order. Without [~make] it also defines a record [t]
+    of the field values, [make] and [encode]. A codec it cannot specialise
+    (variable size, parameters, actions, maps) gets a module with [decode] and
+    [validate] that call the codec. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]

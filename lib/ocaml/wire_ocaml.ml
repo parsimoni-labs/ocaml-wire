@@ -221,32 +221,58 @@ let words ~size fields =
 
 let endian_suffix = function T.Big -> "be" | T.Little -> "le"
 
-let load ~off ~bytes ~endian =
+(* The buffer the generated code reads: its unchecked accessors, its length,
+   the module of its bounds-checked loads, and how it copies to and from a
+   string. *)
+type src = {
+  typ : string;
+  u : string;
+  len : string;
+  checked : string;
+  copy : string;
+}
+
+let bytes_src =
+  {
+    typ = "bytes";
+    u = "Wire.Private.Unchecked";
+    len = "Bytes.length";
+    checked = "Bytes";
+    copy = "Fun.id";
+  }
+
+let bigstring_src =
+  {
+    typ = "Wire.Private.Unchecked.Bigstring.t";
+    u = "Wire.Private.Unchecked.Bigstring";
+    len = "Wire.Private.Unchecked.Bigstring.length";
+    checked = "Wire.Private.Unchecked.Bigstring";
+    copy = "Wire.Private.Unchecked.Bigstring.to_bytes";
+  }
+
+let load ~src ~off ~bytes ~endian =
   match bytes with
-  | 1 -> Fmt.str "(Wire.Private.Unchecked.u8 buf (off + %d))" off
-  | 2 ->
-      Fmt.str "(Wire.Private.Unchecked.u16%s buf (off + %d))"
-        (endian_suffix endian) off
-  | _ ->
-      Fmt.str "(Wire.Private.Unchecked.i32%s buf (off + %d))"
-        (endian_suffix endian) off
+  | 1 -> Fmt.str "(%s.u8 buf (off + %d))" src.u off
+  | 2 -> Fmt.str "(%s.u16%s buf (off + %d))" src.u (endian_suffix endian) off
+  | _ -> Fmt.str "(%s.i32%s buf (off + %d))" src.u (endian_suffix endian) off
 
 (* An unsigned value of [bytes] bytes at [off], from a word when one covers it. *)
-let unsigned ~words ~off ~bytes ~endian =
+let unsigned ~src ~words ~off ~bytes ~endian =
   match List.find_opt (fun a -> a <= off && off + bytes <= a + 8) words with
   | Some a when bytes = 1 || endian = T.Big ->
       Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land 0x%x)" a
         (8 * (a + 8 - off - bytes))
         ((1 lsl (8 * bytes)) - 1)
   | _ when bytes = 4 ->
-      Fmt.str "(Int32.to_int %s land 0xffff_ffff)" (load ~off ~bytes ~endian)
-  | _ -> load ~off ~bytes ~endian
+      Fmt.str "(Int32.to_int %s land 0xffff_ffff)"
+        (load ~src ~off ~bytes ~endian)
+  | _ -> load ~src ~off ~bytes ~endian
 
-let read ~words f =
+let read ~src ~words f =
   match f.store with
-  | Int { width = 32; endian; _ } -> load ~off:f.off ~bytes:4 ~endian
+  | Int { width = 32; endian; _ } -> load ~src ~off:f.off ~bytes:4 ~endian
   | Int { width; endian; signed } ->
-      let v = unsigned ~words ~off:f.off ~bytes:(width / 8) ~endian in
+      let v = unsigned ~src ~words ~off:f.off ~bytes:(width / 8) ~endian in
       if signed then
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -254,10 +280,10 @@ let read ~words f =
   | Bits { base; shift; width } ->
       let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
       let v =
-        unsigned ~words ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian
+        unsigned ~src ~words ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian
       in
       Fmt.str "((%s lsr %d) land 0x%x)" v shift ((1 lsl width) - 1)
-  | Bytes n -> Fmt.str "(Bytes.sub_string buf (off + %d) %d)" f.off n
+  | Bytes n -> Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.off n
 
 (* The [int] a test sees of a 32-bit field, read as an [int32]. *)
 let int_view f =
@@ -287,22 +313,21 @@ let typed_value f =
 let all_tests ~fields ~where =
   List.concat_map (fun f -> f.tests) fields @ Option.to_list where
 
-let pp_frame ppf on_short =
-  Fmt.pf ppf "off < 0 || off > Bytes.length buf - size then %s buf off" on_short
+let pp_frame ~src ppf on_short =
+  Fmt.pf ppf "off < 0 || off > %s buf - size then %s buf off" src.len on_short
 
-let pp_reads ppf ~words fields =
+let pp_reads ~src ppf ~words fields =
   List.iter
     (fun a ->
-      Fmt.pf ppf
-        "    let w%d = Wire.Private.Unchecked.i64be buf (off + %d) in@\n" a a)
+      Fmt.pf ppf "    let w%d = %s.i64be buf (off + %d) in@\n" a src.u a)
     words;
   List.iter
     (fun f ->
       match f.store with
       | Int { width = 32; _ } ->
-          Fmt.pf ppf "    let %s_raw = %s in@\n" f.var (read ~words f);
+          Fmt.pf ppf "    let %s_raw = %s in@\n" f.var (read ~src ~words f);
           Fmt.pf ppf "    let %s = %s in@\n" f.var (int_view f)
-      | _ -> Fmt.pf ppf "    let %s = %s in@\n" f.var (read ~words f))
+      | _ -> Fmt.pf ppf "    let %s = %s in@\n" f.var (read ~src ~words f))
     fields
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
@@ -317,19 +342,19 @@ let cold = function
 
 let pp_tests ppf tests = Fmt.(list ~sep:(any "@\n      && ") string) ppf tests
 
-let pp_decode ppf ~head ~call ~size ~fields ~where =
+let pp_decode ?(src = bytes_src) ppf ~head ~call ~size ~fields ~where =
   let words = words ~size fields in
-  Fmt.pf ppf "%s =@\n  if %a@\n  else begin@\n" head pp_frame "fail";
-  pp_reads ppf ~words fields;
+  Fmt.pf ppf "%s =@\n  if %a@\n  else begin@\n" head (pp_frame ~src) "fail";
+  pp_reads ~src ppf ~words fields;
   (match all_tests ~fields ~where with
   | [] -> ()
   | tests ->
       Fmt.pf ppf "    if not (%a) then fail buf off else@\n" pp_tests tests);
   Fmt.pf ppf "    %s@\n  end@\n@\n" (call (List.map typed_value fields))
 
-let pp_validate ppf ~target ~fields ~where =
-  Fmt.pf ppf "let%s validate buf off =@\n  if %a" (zero_alloc target) pp_frame
-    "fail";
+let pp_validate ~src ppf ~target ~fields ~where =
+  Fmt.pf ppf "let%s validate buf off =@\n  if %a" (zero_alloc target)
+    (pp_frame ~src) "fail";
   match all_tests ~fields ~where with
   | [] -> Fmt.pf ppf "@\n@\n"
   | tests ->
@@ -339,7 +364,7 @@ let pp_validate ppf ~target ~fields ~where =
           fields
       in
       Fmt.pf ppf "@\n  else begin@\n";
-      pp_reads ppf ~words:[] fields;
+      pp_reads ~src ppf ~words:[] fields;
       Fmt.pf ppf "    ignore (%a);@\n"
         Fmt.(list ~sep:(any ", ") string)
         (List.map (fun f -> f.var) fields);
@@ -381,7 +406,7 @@ let member f valid =
 (* [first_error] raises what the codec raises for these values: converting each
    to its field's type, in field order; then the frame; then each bitfield's
    width, byte array's length and enum case, in field order. *)
-let pp_first_error ppf ~target fields =
+let pp_first_error ~src ppf ~target fields =
   Fmt.pf ppf "let%s first_error buf off %a =@\n" (cold target) pp_vars fields;
   List.iter
     (fun f ->
@@ -392,7 +417,7 @@ let pp_first_error ppf ~target fields =
             w f.var
       | _ -> ())
     fields;
-  Fmt.pf ppf "  if %a;@\n" pp_frame "too_short";
+  Fmt.pf ppf "  if %a;@\n" (pp_frame ~src) "too_short";
   List.iter
     (fun f ->
       (match f.store with
@@ -421,26 +446,25 @@ let pp_first_error ppf ~target fields =
     fields;
   Fmt.pf ppf "  Wire.Private.Gen.disagrees codec@\n@\n"
 
-let store ppf f =
+let store ~src ppf f =
   let o = f.off in
   match f.store with
   | Int { width = 8; _ } ->
-      Fmt.pf ppf "    Wire.Private.Unchecked.set_u8 buf (off + %d) %s;@\n" o
-        f.var
+      Fmt.pf ppf "    %s.set_u8 buf (off + %d) %s;@\n" src.u o f.var
   | Int { width = 16; endian; _ } ->
-      Fmt.pf ppf "    Wire.Private.Unchecked.set_u16%s buf (off + %d) %s;@\n"
+      Fmt.pf ppf "    %s.set_u16%s buf (off + %d) %s;@\n" src.u
         (endian_suffix endian) o f.var
   | Int { endian; _ } ->
-      Fmt.pf ppf "    Wire.Private.Unchecked.set_i32%s buf (off + %d) %s;@\n"
+      Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u
         (endian_suffix endian) o f.var
   | Bits _ -> ()
   | Bytes n ->
-      Fmt.pf ppf "    Bytes.unsafe_blit_string %s 0 buf (off + %d) %d;@\n" f.var
-        o n
+      Fmt.pf ppf "    %s.unsafe_blit_string %s 0 buf (off + %d) %d;@\n"
+        src.checked f.var o n
 
 (* Each bitfield word, stored once: the values of its fields, each in range,
    shifted into place and or-ed. *)
-let bit_words ppf fields =
+let bit_words ~src ppf fields =
   let words =
     List.filter_map
       (fun f ->
@@ -461,22 +485,17 @@ let bit_words ppf fields =
       in
       let value = String.concat " lor " parts in
       match base with
-      | T.U8 ->
-          Fmt.pf ppf "    Wire.Private.Unchecked.set_u8 buf (off + %d) (%s);@\n"
-            o value
+      | T.U8 -> Fmt.pf ppf "    %s.set_u8 buf (off + %d) (%s);@\n" src.u o value
       | T.U16 e ->
-          Fmt.pf ppf
-            "    Wire.Private.Unchecked.set_u16%s buf (off + %d) (%s);@\n"
+          Fmt.pf ppf "    %s.set_u16%s buf (off + %d) (%s);@\n" src.u
             (endian_suffix e) o value
       | T.U32 e ->
-          Fmt.pf ppf
-            "    Wire.Private.Unchecked.set_i32%s buf (off + %d) (Int32.of_int \
-             (%s));@\n"
-            (endian_suffix e) o value)
+          Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (Int32.of_int (%s));@\n"
+            src.u (endian_suffix e) o value)
     words
 
-let pp_write_int ppf ~target ~fields ~where =
-  pp_first_error ppf ~target fields;
+let pp_write_int ?(src = bytes_src) ppf ~target ~fields ~where =
+  pp_first_error ~src ppf ~target fields;
   Fmt.pf ppf "let[@@inline]%s write_int buf off %a =@\n" (zero_alloc target)
     pp_vars fields;
   let bad = List.filter_map out_of_range fields in
@@ -494,9 +513,9 @@ let pp_write_int ppf ~target ~fields ~where =
       Fmt.pf ppf "  if %s then first_error buf off %a@\n  else"
         (String.concat " || " guard)
         pp_vars fields);
-  Fmt.pf ppf "  if %a@\n  else begin@\n" pp_frame "too_short";
-  bit_words ppf fields;
-  List.iter (store ppf) fields;
+  Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short";
+  bit_words ~src ppf fields;
+  List.iter (store ~src ppf) fields;
   (match all_tests ~fields ~where with
   | [] -> Fmt.pf ppf "    ()@\n"
   | _ -> Fmt.pf ppf "    validate_written buf off@\n");
@@ -559,19 +578,22 @@ let pp_encode ppf fields =
    bounds-checked load: the compiler's check jumps to a handler that does not
    return, so nothing is kept live across it, and an offset out of range raises
    what [Codec.get] raises. A closed enum's value is then checked to be a case. *)
-let checked_load ~off ~bytes ~endian =
+let checked_load ~src ~off ~bytes ~endian =
   match bytes with
-  | 1 -> Fmt.str "(Bytes.get_uint8 buf (off + %d))" off
+  | 1 -> Fmt.str "(%s.get_uint8 buf (off + %d))" src.checked off
   | 2 ->
-      Fmt.str "(Bytes.get_uint16_%s buf (off + %d))" (endian_suffix endian) off
+      Fmt.str "(%s.get_uint16_%s buf (off + %d))" src.checked
+        (endian_suffix endian) off
   | _ ->
-      Fmt.str "(Bytes.get_int32_%s buf (off + %d))" (endian_suffix endian) off
+      Fmt.str "(%s.get_int32_%s buf (off + %d))" src.checked
+        (endian_suffix endian) off
 
-let checked_read f =
+let checked_read ~src f =
   match f.store with
-  | Int { width = 32; endian; _ } -> checked_load ~off:f.off ~bytes:4 ~endian
+  | Int { width = 32; endian; _ } ->
+      checked_load ~src ~off:f.off ~bytes:4 ~endian
   | Int { width; endian; signed } ->
-      let v = checked_load ~off:f.off ~bytes:(width / 8) ~endian in
+      let v = checked_load ~src ~off:f.off ~bytes:(width / 8) ~endian in
       if signed then
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -579,15 +601,15 @@ let checked_read f =
   | Bits { base; shift; width } ->
       let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
       let bytes = Bitfield.byte_size base in
-      let word = checked_load ~off:f.off ~bytes ~endian in
+      let word = checked_load ~src ~off:f.off ~bytes ~endian in
       let word =
         if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
         else word
       in
       Fmt.str "((%s lsr %d) land 0x%x)" word shift ((1 lsl width) - 1)
-  | Bytes n -> Fmt.str "(Bytes.sub_string buf (off + %d) %d)" f.off n
+  | Bytes n -> Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.off n
 
-let pp_getter ppf ~target f =
+let pp_getter ~src ppf ~target f =
   let attr =
     match (target, f.store) with
     | `OxCaml, (Int _ | Bits _) -> "[@inline][@zero_alloc]"
@@ -597,8 +619,8 @@ let pp_getter ppf ~target f =
   (match f.store with
   | Int { width = 32; _ } ->
       Fmt.pf ppf "  let %s_raw = %s in@\n  let %s = %s in@\n" f.var
-        (checked_read f) f.var (int_view f)
-  | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.var (checked_read f));
+        (checked_read ~src f) f.var (int_view f)
+  | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.var (checked_read ~src f));
   (match f.enum with
   | Some (_, valid) ->
       Fmt.pf ppf "  if not %s then get_failed %S buf off else@\n"
@@ -611,13 +633,13 @@ let pp_getter ppf ~target f =
          typed form. *)
       Fmt.pf ppf
         "let%s get_%s_int buf off =@\n  let %s_raw = %s in@\n  %s@\n@\n" attr
-        (label f.name) f.var (checked_read f) (int_view f)
+        (label f.name) f.var (checked_read ~src f) (int_view f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
    [get_<field>_word] is the checked load of the word that holds the field, and
    [<field>_of_word] takes the field out of it. *)
-let pp_word_getters ppf ~target f =
+let pp_word_getters ~src ppf ~target f =
   match f.store with
   | Bits { base; shift; width } ->
       let attr =
@@ -627,7 +649,7 @@ let pp_word_getters ppf ~target f =
       in
       let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
       let bytes = Bitfield.byte_size base in
-      let word = checked_load ~off:f.off ~bytes ~endian in
+      let word = checked_load ~src ~off:f.off ~bytes ~endian in
       let word =
         if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
         else word
@@ -638,32 +660,33 @@ let pp_word_getters ppf ~target f =
         ((1 lsl width) - 1)
   | _ -> ()
 
-let pp_getters ppf ~target fields =
+let pp_getters ?(src = bytes_src) ppf ~target fields =
   Fmt.pf ppf
-    "let%s get_failed name buf off = Wire.Private.Gen.get_failed codec name \
-     buf off@\n\
+    "let%s get_failed name buf off =@\n\
+    \  Wire.Private.Gen.get_failed codec name (%s buf) off@\n\
      @\n"
-    (cold target);
-  List.iter (pp_getter ppf ~target) fields;
-  List.iter (pp_word_getters ppf ~target) fields
+    (cold target) src.copy;
+  List.iter (pp_getter ~src ppf ~target) fields;
+  List.iter (pp_word_getters ~src ppf ~target) fields
 
 (* [Valid.v buf] validates the record at offset 0. A buffer's length never
    changes, so each [read_<field>] after it is one load at a constant offset
    with no check of its own, and stays in the buffer even if its bytes change;
    only then may it read a value that breaks a constraint. This is EverParse's
    validate-then-read, with the proof a type. *)
-let pp_valid ppf ~target ~fields ~where =
+let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
   Fmt.pf ppf
     "module Valid : sig@\n\
-    \  type t = private bytes@\n\
+    \  type t = private %s@\n\
      @\n\
-    \  val v : bytes -> t@\n\
+    \  val v : %s -> t@\n\
      end = struct@\n\
-    \  type t = bytes@\n\
+    \  type t = %s@\n\
      @\n\
     \  let[@inline] v buf =@\n\
-    \    if Bytes.length buf < size then fail buf 0@\n\
-    \    else begin@\n";
+    \    if %s buf < size then fail buf 0@\n\
+    \    else begin@\n"
+    src.typ src.typ src.typ src.len;
   (match all_tests ~fields ~where with
   | [] -> ()
   | _ -> Fmt.pf ppf "      validate buf 0;@\n");
@@ -677,17 +700,17 @@ let pp_valid ppf ~target ~fields ~where =
       in
       Fmt.pf ppf
         "let%s read_%s (v : Valid.t) =@\n\
-        \  let buf = (v :> bytes) and off = 0 in@\n"
-        attr (label f.name);
-      pp_reads ppf ~words:[] [ f ];
+        \  let buf = (v :> %s) and off = 0 in@\n"
+        attr (label f.name) src.typ;
+      pp_reads ~src ppf ~words:[] [ f ];
       Fmt.pf ppf "  %s@\n@\n" (typed_value f);
       match f.store with
       | Int { width = 32; _ } ->
           Fmt.pf ppf
             "let%s read_%s_int (v : Valid.t) =@\n\
-            \  let buf = (v :> bytes) and off = 0 in@\n"
-            attr (label f.name);
-          pp_reads ppf ~words:[] [ f ];
+            \  let buf = (v :> %s) and off = 0 in@\n"
+            attr (label f.name) src.typ;
+          pp_reads ~src ppf ~words:[] [ f ];
           Fmt.pf ppf "  %s@\n@\n" f.var
       | _ -> ())
     fields
@@ -719,11 +742,40 @@ let pp_oxcaml ppf ~record ~fields ~size ~where =
              fields args))
       ~size ~fields ~where
 
+(* The same reads and writes on a bigarray of bytes. A rejected input is
+   copied to [bytes] and handed to the codec, so the errors are the same. *)
+let pp_bigstring ppf ~target ~make ~record ~fields ~size ~where =
+  let src = bigstring_src in
+  Fmt.pf ppf
+    "module Bigstring = struct@\n\
+     let to_bytes = Wire.Private.Unchecked.Bigstring.to_bytes@\n\
+     let%s fail buf off = fail (to_bytes buf) off@\n\
+     let%s too_short buf off = too_short (to_bytes buf) off@\n\
+     @\n"
+    (cold target) (cold target);
+  pp_validate ~src ppf ~target ~fields ~where;
+  Fmt.pf ppf
+    "let[@inline never] validate_written buf off =@\n\
+    \  match validate buf off with@\n\
+    \  | () -> ()@\n\
+    \  | exception Wire.Parse_error _ ->@\n\
+    \      Wire.Private.Gen.encode_rejected codec (to_bytes buf) off@\n\
+     @\n";
+  pp_decode ~src ppf ~head:"let decode buf off"
+    ~call:(fun args -> Fmt.str "%s %a" make pp_list args)
+    ~size ~fields ~where;
+  pp_write_int ~src ppf ~target ~fields ~where;
+  pp_write ppf ~target fields;
+  pp_getters ~src ppf ~target fields;
+  pp_valid ~src ppf ~target ~fields ~where;
+  if record then pp_encode ppf fields;
+  Fmt.pf ppf "end@\n@\n"
+
 let pp_body ppf ~target ~make ~fields ~size ~where =
   Fmt.pf ppf "let size = %d@\n@\n" size;
   let record = Option.is_none make in
   if record then pp_record ppf fields;
-  pp_validate ppf ~target ~fields ~where;
+  pp_validate ~src:bytes_src ppf ~target ~fields ~where;
   Fmt.pf ppf
     "let%s validate_written buf off =@\n\
     \  match validate buf off with@\n\
@@ -743,7 +795,8 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   pp_write ppf ~target fields;
   pp_getters ppf ~target fields;
   pp_valid ppf ~target ~fields ~where;
-  if record then pp_encode ppf fields
+  if record then pp_encode ppf fields;
+  pp_bigstring ppf ~target ~make ~record ~fields ~size ~where
 
 let pp ?(target = `OCaml) ?make ~codec ppf c =
   let digest = Wire.Private.Gen.digest c in
