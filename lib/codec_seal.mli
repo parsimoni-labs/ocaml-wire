@@ -38,7 +38,7 @@ val add_field : ('a -> 'f, 'r) record -> ('a, 'r) field -> ('f, 'r) record
 
 val compile_where_clause :
   (string, int) Hashtbl.t ->
-  (string * 'a) list ->
+  (string option * 'a) list ->
   bool Types.expr option ->
   (slots -> bool) option
 (** [compile_where_clause param_slots field_readers where] compiles a record's

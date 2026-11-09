@@ -40,7 +40,18 @@ val build_bf_clear : Types.bitfield_base -> int -> bytes -> int -> unit
 (** [build_bf_clear base byte_off buf off] zeroes the base word at
     [off + byte_off]. *)
 
-val build_idx : (string * 'a) list -> string -> int
+val extend_scope :
+  string ->
+  'a ->
+  (string option * 'a) list ->
+  (string option * 'a) list ->
+  (string option * 'a) list
+(** [extend_scope name own nested prev] adds field [name] and the fields its
+    sub-codec brings ([nested]) to the scope [prev], newest first. An entry that
+    loses its name to a newer one keeps its place, which numbers a slot, and has
+    no name. *)
+
+val build_idx : (string option * 'a) list -> string -> int
 (** [build_idx readers name] is the slot of [name], in declaration order. Raises
     [Invalid_argument] on an unbound name. *)
 

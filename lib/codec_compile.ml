@@ -335,11 +335,15 @@ let compile_codec : type a r.
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
-    codec_field_readers:field_reader list ->
+    codec_field_readers:
+      (string * (runtime -> Input_end.t -> bytes -> int -> int)) list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
      ~codec_size_of ~codec_field_readers ->
-  let nested_readers = build_nested_readers ctx codec_field_readers in
+  let nested_readers =
+    build_nested_readers ctx
+      (List.map (fun (n, r) -> (Some n, r)) codec_field_readers)
+  in
   let get = fld.get in
   match codec_fixed_size with
   | Some fsize ->

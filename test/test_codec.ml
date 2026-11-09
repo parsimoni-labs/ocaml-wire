@@ -312,6 +312,129 @@ let test_field_path_nested () =
   | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "decode accepted a violating nested field"
 
+(* A codec's own field shadows an embedded sub-codec's field of the same name,
+   as it does in the 3D struct EverParse checks: a [where] clause, a size and
+   [Codec.field_readers] all name the codec's own [x], whether the sub-codec
+   comes before it or after it. *)
+let shadow_inner =
+  Codec.v "ShadowInner"
+    (fun x y -> (x, y))
+    Codec.[ Field.v "x" uint8 $ fst; Field.v "y" uint8 $ snd ]
+
+(* [Codec.validate], and the validator built from [s], the same layout as a
+   struct, read the codec's own [x]: they accept [own], where it holds the
+   value the codec needs, and refuse [sub], where only the sub-codec's [x]
+   does. *)
+let check_validates_own_x c s ~own ~sub =
+  let v = Codec.validator_of_struct s in
+  let accepts f bytes =
+    match f (Bytes.of_string bytes) 0 with
+    | () -> true
+    | exception Parse_error _ -> false
+  in
+  List.iter
+    (fun (what, f) ->
+      Alcotest.(check bool) (what ^ " reads own x") true (accepts f own);
+      Alcotest.(check bool)
+        (what ^ " ignores the sub-codec's x")
+        false (accepts f sub))
+    [
+      ("validate", Codec.validate c);
+      ("validate_struct", Codec.validate_struct v);
+    ]
+
+let test_own_field_shadows_where () =
+  let f_x = Field.v "x" uint8 in
+  let outer =
+    Codec.v "ShadowWhere"
+      ~where:Expr.(Field.ref f_x = int 7)
+      (fun s x -> (s, x))
+      Codec.[ Field.v "s" (codec shadow_inner) $ fst; f_x $ snd ]
+  in
+  (* the sub-codec's x is 1, the codec's own x is 7 *)
+  let s =
+    let module T = Private.Types in
+    T.param_struct "ShadowWhere" []
+      ~where:Expr.(T.ref "x" = int 7)
+      [ T.field "s" (codec shadow_inner); T.field "x" uint8 ]
+  in
+  check_validates_own_x outer s ~own:"\x01\x02\x07" ~sub:"\x07\x02\x01";
+  match Codec.decode outer (Bytes.of_string "\x01\x02\x07") 0 with
+  | Ok (_, x) -> Alcotest.(check int) "own x" 7 (UInt8.to_int x)
+  | Error e ->
+      Alcotest.failf "where read the sub-codec's x: %a" pp_parse_error e
+
+let test_own_field_shadows_size () =
+  let f_x = Field.v "x" uint8 in
+  let outer =
+    Codec.v "ShadowSize"
+      (fun x _ d -> (x, d))
+      Codec.
+        [
+          (f_x $ fun (x, _) -> x);
+          (Field.v "s" (codec shadow_inner) $ fun _ -> (UInt8.v 5, UInt8.v 0));
+          Field.v "data" (byte_array ~size:(Field.ref f_x)) $ snd;
+        ]
+  in
+  (* the codec's own x is 2, the sub-codec's x is 5 *)
+  let s =
+    let module T = Private.Types in
+    T.struct_ "ShadowSize"
+      [
+        T.field "x" uint8;
+        T.field "s" (codec shadow_inner);
+        T.field "data" (byte_array ~size:(T.ref "x"));
+      ]
+  in
+  check_validates_own_x outer s ~own:"\x02\x05\x00ab" ~sub:"\x05\x02\x00ab";
+  match Codec.decode outer (Bytes.of_string "\x02\x05\x00ab") 0 with
+  | Ok (_, d) -> Alcotest.(check string) "sized by own x" "ab" d
+  | Error e -> Alcotest.failf "size read the sub-codec's x: %a" pp_parse_error e
+
+let test_own_field_shadows_readers () =
+  let outer =
+    Codec.v "ShadowReaders"
+      (fun s x -> (s, x))
+      Codec.[ Field.v "s" (codec shadow_inner) $ fst; Field.v "x" uint8 $ snd ]
+  in
+  match List.assoc_opt "x" (Codec.field_readers outer) with
+  | None -> Alcotest.fail "no reader for x"
+  | Some read ->
+      Alcotest.(check int) "own x" 7 (read (Bytes.of_string "\x01\x02\x07") 0)
+
+(* [Codec.field_readers] lists each visible name once, and none of the entries
+   the scope keeps for the fields it shadows. *)
+let test_field_readers_hide_shadowed () =
+  let outer =
+    Codec.v "ShadowNames"
+      (fun s x -> (s, x))
+      Codec.[ Field.v "s" (codec shadow_inner) $ fst; Field.v "x" uint8 $ snd ]
+  in
+  let names = List.sort compare (List.map fst (Codec.field_readers outer)) in
+  Alcotest.(check (list string)) "names" [ "s"; "x"; "y" ] names
+
+(* A shadowed field has no name of its own, so no field name is reserved: a
+   field called [.x] is listed, and a size naming it reads it, beside a
+   sub-codec's shadowed [x]. *)
+let test_shadowed_field_takes_no_name () =
+  let f_dot = Field.v ".x" uint8 in
+  let outer =
+    Codec.v "ShadowDot"
+      (fun _ _ _ d -> d)
+      Codec.
+        [
+          (Field.v "s" (codec shadow_inner) $ fun _ -> (UInt8.v 1, UInt8.v 0));
+          (Field.v "x" uint8 $ fun _ -> UInt8.v 7);
+          (f_dot $ fun d -> UInt8.v (String.length d));
+          Field.v "data" (byte_array ~size:(Field.ref f_dot)) $ Fun.id;
+        ]
+  in
+  let names = List.sort compare (List.map fst (Codec.field_readers outer)) in
+  Alcotest.(check (list string)) "names" [ ".x"; "data"; "s"; "x"; "y" ] names;
+  match Codec.decode outer (Bytes.of_string "\x01\x00\x07\x02ab") 0 with
+  | Ok d -> Alcotest.(check string) "sized by .x" "ab" d
+  | Error e -> Alcotest.failf "size read another field: %a" pp_parse_error e
+
 (* The public [parse_error] / [eof] constructors build the record with the
    documented defaults, for a caller synthesizing an error outside a codec run. *)
 let test_error_constructors () =
@@ -1263,6 +1386,16 @@ let suite =
         test_all_zeros_offset_on_struct_path;
       Alcotest.test_case "error: nested field path" `Quick
         test_field_path_nested;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in where"
+        `Quick test_own_field_shadows_where;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in a size"
+        `Quick test_own_field_shadows_size;
+      Alcotest.test_case "scope: own field shadows a sub-codec's in readers"
+        `Quick test_own_field_shadows_readers;
+      Alcotest.test_case "scope: field_readers hides shadowed fields" `Quick
+        test_field_readers_hide_shadowed;
+      Alcotest.test_case "scope: a shadowed field takes no name" `Quick
+        test_shadowed_field_takes_no_name;
       Alcotest.test_case "error: parse_error / eof constructors" `Quick
         test_error_constructors;
       Alcotest.test_case "validate: check-free codec allocates nothing" `Quick

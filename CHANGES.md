@@ -1,3 +1,11 @@
+## unreleased
+
+### Fixed
+
+- A codec's own field shadows a sub-codec's field of the same name everywhere,
+  as in 3D. The codec and the generated C could read different bytes (#453,
+  @samoht)
+
 ## 1.3.0
 
 ### Added
