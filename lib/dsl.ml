@@ -51,10 +51,10 @@ let eval_set_param ctx name value =
    or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
-type predicate = Where | Field | Action | Per_byte
+type predicate = Errors.predicate = Where | Field | Action | Per_byte
 type consumption = [ `Prefix | `All ]
 
-type error_kind =
+type error_kind = Errors.error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -68,9 +68,13 @@ type error_kind =
 (* [at] is the absolute byte offset of the failing field in the input; [field]
    is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
    empty at a top-level or anonymous position. *)
-type parse_error = { at : int; field : string list; kind : error_kind }
+type parse_error = Errors.parse_error = {
+  at : int;
+  field : string list;
+  kind : error_kind;
+}
 
-exception Parse_error of parse_error
+exception Parse_error = Errors.Parse_error
 
 let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
 
@@ -928,11 +932,7 @@ let exact_repeat_elements seq ~expected ~size_of values =
    short one would make the bytes on the wire differ from the value the caller
    signed, hashed or length-prefixed, with nothing to signal it. *)
 let check_byte_field_size ~expected ~actual =
-  if actual <> expected then
-    Fmt.invalid_arg
-      "Wire.encode: byte field expected %d bytes, got %d (a fixed-size byte \
-       field is exact; use zeroterm_at_most for a shorter value)"
-      expected actual
+  if actual <> expected then Errors.byte_length ~expected ~actual
 
 let check_nested_size ~at_most ~expected ~actual =
   if actual > expected then
@@ -1483,37 +1483,8 @@ let casetype_decl name params tag cases =
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
 
-let pp_predicate ppf (p : predicate) =
-  match p with
-  | Where -> Fmt.string ppf "where clause"
-  | Field -> Fmt.string ppf "field constraint"
-  | Action -> Fmt.string ppf "field action"
-  | Per_byte -> Fmt.string ppf "per-byte refinement"
-
-let pp_error_kind ppf = function
-  | Unexpected_eof { expected; got } ->
-      Fmt.pf ppf "unexpected EOF: expected %d bytes, got %d" expected got
-  | Trailing_bytes n ->
-      Fmt.pf ppf "%d trailing byte%s" n (if n = 1 then "" else "s")
-  | Invalid_enum { value; valid } ->
-      Fmt.pf ppf "invalid enum value %d, valid: [%a]" value
-        Fmt.(list ~sep:comma int)
-        valid
-  | Invalid_tag tag -> Fmt.pf ppf "invalid tag: %d" tag
-  | Missing_terminator -> Fmt.string ppf "missing NUL terminator"
-  | Non_zero_padding -> Fmt.string ppf "non-zero padding byte"
-  | Value_out_of_range { value } -> Fmt.pf ppf "value out of range: %Ld" value
-  | Zero_divisor -> Fmt.string ppf "zero divisor in expression"
-  | Constraint_failed { which; value } -> (
-      match value with
-      | Some v -> Fmt.pf ppf "%a violated (value %Ld)" pp_predicate which v
-      | None -> Fmt.pf ppf "%a violated" pp_predicate which)
-
-let pp_parse_error ppf { at; field; kind } =
-  (match field with
-  | [] -> ()
-  | _ -> Fmt.(list ~sep:(any ".") string) ppf field);
-  Fmt.pf ppf "@%d: %a" at pp_error_kind kind
+let pp_error_kind = Errors.pp_error_kind
+let pp_parse_error = Errors.pp_parse_error
 
 let predicate_rank (p : predicate) =
   match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3

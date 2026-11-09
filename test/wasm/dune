@@ -23,7 +23,7 @@
 (test
  (name test)
  (modes js wasm)
- (libraries wire test_helpers alcotest re bytesrw fmt optint)
+ (libraries wire wire.runtime test_helpers alcotest re bytesrw fmt optint)
  (enabled_if %{bin-available:node})
  (js_of_ocaml
   (enabled_if %{bin-available:js_of_ocaml}))

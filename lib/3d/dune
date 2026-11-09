@@ -6,4 +6,4 @@
 
 (mdx
  (files wire_3d.mli)
- (libraries wire wire.3d))
+ (libraries wire wire.runtime wire.3d))

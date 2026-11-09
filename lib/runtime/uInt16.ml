@@ -1,21 +1,25 @@
 type t = int
 
 let min_int = 0
-let max_int = 0xFF
+let max_int = 0xFFFF
 let zero = 0
 let equal : t -> t -> bool = Int.equal
-let pp = Fmt.int
+let pp = Format.pp_print_int
 
 (* The one place the range is enforced. Every other path takes a [t] and so
    takes a value the field holds, which is what lets the encoders drop their
    own width checks instead of carrying one that cannot fire. *)
 let[@inline never] out_of_range n =
-  Fmt.invalid_arg "Wire.UInt8.v: %d is not an unsigned 8-bit value" n
+  invalid_arg
+    ("Wire.UInt16.v: " ^ string_of_int n ^ " is not an unsigned 16-bit value")
 
 let[@inline] v n = if n < min_int || n > max_int then out_of_range n else n
 let v_opt n = if n < min_int || n > max_int then None else Some n
 let to_int n = n
-let get buf off = Bytes.get_uint8 buf off
-let set buf off n = Bytes.set_uint8 buf off n
-let unsafe_get = Unchecked.u8
+let le buf off = Bytes.get_uint16_le buf off
+let be buf off = Bytes.get_uint16_be buf off
+let set_le buf off n = Bytes.set_uint16_le buf off n
+let set_be buf off n = Bytes.set_uint16_be buf off n
+let unsafe_le = Unchecked.u16le
+let unsafe_be = Unchecked.u16be
 let int_eq : (t, int) Type.eq = Type.Equal

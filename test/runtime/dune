@@ -1,0 +1,6 @@
+; wire.runtime on its own: nothing here links wire, so a module that needs it
+; to build fails here first.
+
+(test
+ (name test)
+ (libraries wire.runtime alcotest fmt))
