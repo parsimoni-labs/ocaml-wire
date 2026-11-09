@@ -48,6 +48,11 @@
   `end_`, naming both. Such a field used to fail inside EverParse (#434,
   @samoht)
 
+- The default plug (`<Name>Fields`) escapes C keywords in its member names, such
+  as `int_` and `restrict_`, and refuses fields whose members or `_IDX_` macros
+  it would spell alike, such as `X` and `x`. Such a field gave a header the C
+  compiler rejects (#434, @samoht)
+
 ## 1.3.0
 
 ### Added

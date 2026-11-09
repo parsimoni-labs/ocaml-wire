@@ -372,6 +372,123 @@ let test_extern_names_wrapped () =
         "the failure names the header it could not read" true
         (contains msg (base ^ "_ExternalAPI.h"))
 
+(* The default plug of a schema, written next to a stand-in for the
+   [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
+   own name. *)
+let plug_of fields =
+  let schema =
+    Wire.Everparse.Raw.project_struct ~mode:`Ffi (struct_ "Kw" fields)
+  in
+  let dir = Filename.temp_dir "wire_3d_plug" "" in
+  Fun.protect
+    ~finally:(fun () -> Wire_3d.rm_rf dir)
+    (fun () ->
+      let api =
+        String.concat ""
+          (List.map
+             (fun (setter, c_type) ->
+               Fmt.str "extern void %s(WIRECTX *ctx, uint32_t idx, %s v);\n"
+                 setter c_type)
+             (Wire.Everparse.plug_setters schema))
+      in
+      Out_channel.with_open_bin (Filename.concat dir "Kw_ExternalAPI.h")
+        (fun oc -> Out_channel.output_string oc api);
+      Wire_3d.write_fields ~outdir:dir [ schema ];
+      let header = read_file (Filename.concat dir "Kw_Fields.h") in
+      let source name text =
+        let path = Filename.concat dir name in
+        Out_channel.with_open_bin path (fun oc ->
+            Out_channel.output_string oc text);
+        path
+      in
+      let compile file =
+        Fmt.kstr Sys.command "cc -std=c2x -c %s -o %s > %s 2>&1"
+          (Filename.quote file)
+          (Filename.quote (Filename.concat dir "probe.o"))
+          Filename.null
+        = 0
+      in
+      let compiles =
+        (not (compile (source "empty.c" "int probe_empty;\n")))
+        || compile
+             (source "probe.c"
+                "#include \"Kw_Fields.h\"\nKwFields probe_fields;\n")
+      in
+      (header, read_file (Filename.concat dir "Kw_Fields.c"), compiles))
+
+(* The plug names a field three ways: the [_IDX_] macro upper-cases it, so [X]
+   and [x] would define one macro twice; the struct member escapes C's
+   keywords with a trailing underscore, so [restrict] and [restrict_] would be
+   one member. Both are refused naming the two fields. *)
+let test_plug_names () =
+  let rejects what subs fields =
+    match plug_of fields with
+    | _ -> Alcotest.failf "%s: accepted" what
+    | exception Invalid_argument msg ->
+        List.iter
+          (fun sub ->
+            if not (contains msg sub) then
+              Alcotest.failf "%s: %S does not mention %S" what msg sub)
+          subs
+  in
+  rejects "X and x"
+    [ "\"X\""; "\"x\""; "KW_IDX_X" ]
+    [ field "X" uint8; field "x" uint8 ];
+  rejects "restrict and restrict_"
+    [ "\"restrict\""; "\"restrict_\"" ]
+    [ field "restrict" uint8; field "restrict_" uint8 ];
+  let header, impl, compiles =
+    plug_of
+      [
+        field "int" uint8;
+        field "restrict" uint8;
+        field "typeof" uint8;
+        field "NULL" uint8;
+        field "end" uint8;
+      ]
+  in
+  List.iter
+    (fun m ->
+      Alcotest.(check bool)
+        ("member " ^ m) true
+        (contains header (Fmt.str " %s;" m));
+      Alcotest.(check bool) ("set " ^ m) true (contains impl ("f->" ^ m ^ " ")))
+    [ "int_"; "restrict_"; "typeof_"; "NULL_"; "end" ];
+  Alcotest.(check bool)
+    "macro keeps the field name" true
+    (contains header "#define KW_IDX_RESTRICT 1");
+  Alcotest.(check bool) "the plug header compiles as C23" true compiles
+
+(* A field named for an F* keyword reaches the F* EverParse writes once a
+   constraint reads it, and [typeof] reaches the C, where GNU C and C23 read
+   it as a keyword; both validate and compile once escaped. *)
+let test_keyword_fields_e2e () =
+  needs_3d_exe ();
+  let f_end = field "end" uint8 in
+  let s =
+    struct_ "KwEnd"
+      [
+        f_end;
+        field "y" ~constraint_:Expr.(field_ref f_end <= int 200) uint8;
+        field "typeof" uint8;
+        field "restrict" uint8;
+      ]
+  in
+  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
+  let dir = Filename.temp_dir "wire_3d_kw" "" in
+  Fun.protect
+    ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" dir))
+    (fun () ->
+      Wire_3d.run ~outdir:dir [ schema ];
+      let compile file =
+        Fmt.kstr Sys.command "cc %s -I %s -c %s -o %s > %s 2>&1"
+          Wire_3d.strict_cc_flags (Filename.quote dir)
+          (Filename.quote (Filename.concat dir file))
+          Filename.null Filename.null
+      in
+      Alcotest.(check int) "the validator compiles" 0 (compile "KwEnd.c");
+      Alcotest.(check int) "the plug compiles" 0 (compile "KwEnd_Fields.c"))
+
 let suite =
   ( "wire_3d_shapes",
     [
@@ -402,4 +519,7 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
+      Alcotest.test_case "plug: field names" `Quick test_plug_names;
+      Alcotest.test_case "keyword field names (needs 3d.exe)" `Quick
+        test_keyword_fields_e2e;
     ] )

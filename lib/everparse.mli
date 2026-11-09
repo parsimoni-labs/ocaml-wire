@@ -98,6 +98,11 @@ type plug_field = {
     {!Wire_3d}'s [<Name>_Fields] default plug) to materialise a typed struct
     plus [WireSet*] switch dispatchers from a schema. *)
 
+val plug_member : string -> string
+(** [plug_member name] is the plug struct member a field named [name] takes:
+    [name], with a trailing underscore when it is a C keyword or a macro of the
+    headers the plug includes ([int_], [NULL_]). *)
+
 val plug_fields : t -> plug_field list
 (** [plug_fields s] enumerates the named fields of the source struct in
     declaration order. Returns [[]] for schemas without a {!field-source}

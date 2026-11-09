@@ -1547,6 +1547,11 @@ module Everparse : sig
   (** Plug info: the data needed to materialise a typed struct and [<Name>Set*]
       dispatchers for a schema. See {!Everparse.plug_field}. *)
 
+  val plug_member : string -> string
+  (** [plug_member name] is the plug struct member a field named [name] takes:
+      [name], with a trailing underscore when it is a C keyword or a macro of
+      the headers the plug includes ([int_], [NULL_]). *)
+
   val plug_fields : t -> plug_field list
   (** [plug_fields s] enumerates the named fields of the source struct in
       declaration order. Returns [[]] for schemas without a source struct. *)

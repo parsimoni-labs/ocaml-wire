@@ -379,6 +379,33 @@ let write_external_typedefs ~outdir schemas =
       end)
     schemas
 
+let plug_prefix s =
+  String.uppercase_ascii (c_ident s) |> fun p ->
+  String.map (fun c -> if c = '-' then '_' else c) p
+
+let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
+
+(* The plug names each field twice in C: the [_IDX_] macro upper-cases the
+   name, so [X] and [x] would define one macro twice, and the struct member
+   escapes C's keywords, so [restrict] and [restrict_] would be one member.
+   Refuse naming both fields before writing either file. *)
+let check_plug_names s =
+  let fields = Wire.Everparse.plug_fields s in
+  let check what ident =
+    match
+      Wire.Private.Names.clash
+        (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)
+    with
+    | None -> ()
+    | Some (a, b, id) ->
+        Fmt.invalid_arg
+          "Wire_3d: in %S, fields %S and %S both define the plug's %s %S; \
+           rename one of them"
+          s.name a b what id
+  in
+  check "macro" (index_macro s);
+  check "struct member" Wire.Everparse.plug_member
+
 (* Typed-struct plug: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
@@ -393,27 +420,24 @@ let write_fields_header ~outdir s =
     String.uppercase_ascii ident ^ "_FIELDS_H" |> fun g ->
     String.map (fun c -> if c = '-' then '_' else c) g
   in
-  let prefix =
-    String.uppercase_ascii ident |> fun p ->
-    String.map (fun c -> if c = '-' then '_' else c) p
-  in
   pr "#ifndef %s@\n" guard;
   pr "#define %s@\n" guard;
   pr "#include <stdint.h>@\n@\n";
   pr "/* Field indices -- use with the schema's WireSet* callbacks in a@\n";
   pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
   List.iter
-    (fun f ->
-      pr "#define %s_IDX_%s %d@\n" prefix
-        (String.uppercase_ascii f.Wire.Everparse.name)
-        f.idx)
+    (fun f -> pr "#define %s %d@\n" (index_macro s f.Wire.Everparse.name) f.idx)
     fields;
   if fields <> [] then pr "@\n";
   pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
     ident;
   pr "typedef struct %sFields {@\n" ident;
-  List.iter (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.c_type f.name) fields;
+  List.iter
+    (fun f ->
+      pr "  %s %s;@\n" f.Wire.Everparse.c_type
+        (Wire.Everparse.plug_member f.name))
+    fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
   pr "#endif@\n";
@@ -426,14 +450,15 @@ let write_fields_header ~outdir s =
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
+    let member = Wire.Everparse.plug_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
           "    case %d: { %s _x; memcpy(&_x, &v, sizeof _x); f->%s = _x; \
            break; }@\n"
-          f.idx f.c_type f.name
+          f.idx f.c_type member
     | _ ->
-        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx f.name
+        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
 let write_fields_impl ~outdir s =
@@ -485,6 +510,7 @@ let write_fields_impl ~outdir s =
 
 let write_fields ~outdir schemas =
   check_name_collisions schemas;
+  List.iter check_plug_names schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin

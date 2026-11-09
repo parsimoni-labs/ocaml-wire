@@ -499,6 +499,8 @@ let plug_field (s : t) idx (Types.Field f) =
           val_c_type = Types.c_type_of val_typ;
         }
 
+let plug_member name = Names.escape Names.c_keywords name
+
 let plug_fields s =
   match s.source with
   | None -> []
