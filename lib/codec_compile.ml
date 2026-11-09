@@ -1482,6 +1482,22 @@ let absent_optional_or : type a r.
     ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
     ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
+(* An enum's populate: the base's, then membership on the slot's int. A wide
+   carrier's value can be refused by the conversion to that int, which reports
+   byte 0, so name the field instead, as the reader does. *)
+let enum_populate ~base cf int_check =
+  if Types.int_view_is_total base then (fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    ignore
+      (int_check
+         ~at:(at_of base cf.validator_off)
+         (cf.int_reader runtime input_end buf base)))
+  else fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    let at = at_of base cf.validator_off in
+    Types.relocate_at ~at (fun () ->
+        ignore (int_check ~at (cf.int_reader runtime input_end buf base)))
+
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1514,13 +1530,7 @@ let rec compile_field : type a r.
           (fun v runtime buf base write_off ->
             encode_check (get v);
             cf.raw_writer v runtime buf base write_off);
-        populate =
-          (fun arr runtime input_end buf base ->
-            cf.populate arr runtime input_end buf base;
-            ignore
-              (int_check
-                 ~at:(at_of base cf.validator_off)
-                 (cf.int_reader runtime input_end buf base)));
+        populate = enum_populate ~base cf int_check;
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order

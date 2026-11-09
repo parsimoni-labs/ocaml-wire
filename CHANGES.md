@@ -35,9 +35,9 @@
   `byte_slice`, `array`, `nested`, `Field.repeat` and every other sized
   description, instead of failing at decode (#435, @samoht)
 
-- `Wire.Codec.decode` is several times faster on fixed-size codecs: it checks
-  the frame once and reads each field with no bounds check of its own (#435,
-  @samoht)
+- `Wire.Codec.decode` and `validate` are several times faster on fixed-size
+  codecs, constrained fields included: one bounds check for the frame, then one
+  pass over the checks (#435, @samoht)
 
 ### Fixed
 
@@ -68,6 +68,13 @@
 
 - The errors of a codec built by `Wire.Codec.rename` name its new name; `encode`
   reported the old one (#435, @samoht)
+
+- `Wire.Codec.validate` reports a wide closed `enum` at the field's offset, not
+  at byte 0 (#435, @samoht)
+
+- `Wire.Codec.decode` checks a record before it reads it, as `validate` does, so
+  the two report the same first failure, and a `map` decoder runs only on a
+  record that passed (#435, @samoht)
 
 ## 1.3.0
 

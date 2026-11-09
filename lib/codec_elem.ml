@@ -183,6 +183,12 @@ let unbound_check_ref name =
 let unbound_where_ref name =
   Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
 
+(* [idx], noting each slot it hands out in [used]. *)
+let used_idx used idx name =
+  let i = idx name in
+  Hashtbl.replace used i ();
+  i
+
 let build_idx readers =
   let rev_readers = List.rev readers in
   fun name ->

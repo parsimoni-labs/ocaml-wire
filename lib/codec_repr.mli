@@ -191,6 +191,9 @@ val mk_ctx :
   compile_ctx
 (** [mk_ctx ~param_slots idx] is a compile context. *)
 
+(** A comparison operator. *)
+type cmp = Eq | Ne | Lt | Le | Gt | Ge
+
 val compile_bool_arr : compile_ctx -> bool Types.expr -> slots -> bool
 (** [compile_bool_arr cc e arr] evaluates [e] over the populated scratch [arr].
 *)
@@ -206,6 +209,29 @@ val compile_action :
 (** [compile_action cc a] compiles [a]; a failed [return] or an [abort] raises
     an action constraint error. *)
 
+(** One step of the check pass: a scalar read into its slot, a condition over
+    the slots, a range test of a scalar, or a general validator. *)
+type step =
+  | Slot : { slot : int; scalar : 'a scalar } -> step
+  | Check : {
+      name : string;
+      slot : int;
+      voff : int;
+      cond : slots -> bool;
+    }
+      -> step
+  | Range : {
+      name : string;
+      slot : int;
+      scalar : 'a scalar;
+      voff : int;
+      lo : int;
+      hi : int;
+      store : bool;
+    }
+      -> step
+  | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+
 (** A record under construction: the fields added so far. *)
 type ('f, 'r) record =
   | Record : {
@@ -217,8 +243,8 @@ type ('f, 'r) record =
       min_wire_size : int;
       next_off : next_off;
       fixed_prefix : int ref;
-      validators_rev :
-        (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
+      used_slots : (int, unit) Hashtbl.t;
+      validators_rev : (int * step) list;
       checkers_rev :
         (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
       field_actions_rev : (string * compiled_action) list;
@@ -244,6 +270,27 @@ type wire_size_info =
 val id_counter : int Atomic.t
 (** Source of codec identities. *)
 
+(** A fused interval test, for a pass made of nothing else. *)
+type interval =
+  | Interval : {
+      scalar : 'a scalar;
+      lo : int;
+      hi : int;
+      name : string;
+      voff : int;
+    }
+      -> interval
+
+type pass =
+  | No_checks
+  | Intervals of { flat : int array; intervals : interval array }
+  | Steps of {
+      steps : step array;
+      where : (slots -> bool) option;
+      scratch : (unit -> slots) option;
+      clear : slots -> unit;
+    }
+
 type 'r compiled = {
   size_of_value : Types.eval_ctx -> 'r -> int;
   field_access : (string * (int * field_access)) list;
@@ -254,8 +301,12 @@ type 'r compiled = {
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
+  plain_validate : bytes -> int -> unit;
+  fixed_frame : int;
+  plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
+  clear_scratch : slots -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
   has_checks : bool;
@@ -302,3 +353,15 @@ val read_field : 'a field_read -> runtime -> Input_end.t -> bytes -> int -> 'a
 (** [read_field r runtime input_end buf base] is the value [r] reads from the
     record at [base]. A {!constructor-Data} read skips the bounds check: the
     caller has checked the record's span. *)
+
+val flip : cmp -> cmp
+(** [flip c] is the comparison that holds of [(y, x)] when [c] holds of
+    [(x, y)]. *)
+
+val slot_scalar : 'a scalar -> bool
+(** [slot_scalar s] is [true] when an [int] holds every value of [s] exactly, so
+    its validation slot can stand for it. *)
+
+val read_slot : 'a scalar -> bytes -> int -> int
+(** [read_slot s buf base] is the integer the scalar [s] holds in the record at
+    [base], read with no bounds check. *)

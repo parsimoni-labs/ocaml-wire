@@ -389,6 +389,33 @@ let read_scalar : type a. a scalar -> bytes -> int -> a =
   | Bits16be { off; shift; mask } ->
       (Unchecked.u16be buf (base + off) lsr shift) land mask
 
+(* The int a scalar's validation slot holds, for the scalars whose value an
+   int holds exactly. *)
+let slot_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
+(* Calls nothing, like [read_scalar]. *)
+let read_slot : type a. a scalar -> bytes -> int -> int =
+ fun r buf base ->
+  match r with
+  | Byte off -> UInt8.to_int (UInt8.unsafe_get buf (base + off))
+  | U16le off -> UInt16.to_int (UInt16.unsafe_le buf (base + off))
+  | U16be off -> UInt16.to_int (UInt16.unsafe_be buf (base + off))
+  | U32le off -> UInt32.to_int (UInt32.unsafe_le buf (base + off))
+  | U32be off -> UInt32.to_int (UInt32.unsafe_be buf (base + off))
+  | Sbyte off -> SInt8.to_int (SInt8.unsafe_get buf (base + off))
+  | I16le off -> SInt16.to_int (SInt16.unsafe_le buf (base + off))
+  | I16be off -> SInt16.to_int (SInt16.unsafe_be buf (base + off))
+  | I32le off -> SInt32.to_int (SInt32.unsafe_le buf (base + off))
+  | I32be off -> SInt32.to_int (SInt32.unsafe_be buf (base + off))
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+
 let[@inline] read_field : type a.
     a field_read -> runtime -> Input_end.t -> bytes -> int -> a =
  fun r runtime input_end buf base ->
@@ -557,9 +584,66 @@ let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
   fun arr -> f arr () () ()
 
-let compile_bool_arr cc e =
-  let f = Expr_compiler.compile_bool (array_leaves cc) e in
-  fun arr -> f arr () () ()
+type cmp = Eq | Ne | Lt | Le | Gt | Ge
+
+let flip = function
+  | Lt -> Gt
+  | Le -> Ge
+  | Gt -> Lt
+  | Ge -> Le
+  | (Eq | Ne) as c -> c
+
+let cmp_slot_const cmp i n : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = n
+  | Ne -> fun a -> a.ints.(i) <> n
+  | Lt -> fun a -> a.ints.(i) < n
+  | Le -> fun a -> a.ints.(i) <= n
+  | Gt -> fun a -> a.ints.(i) > n
+  | Ge -> fun a -> a.ints.(i) >= n
+
+let cmp_slots cmp i j : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = a.ints.(j)
+  | Ne -> fun a -> a.ints.(i) <> a.ints.(j)
+  | Lt -> fun a -> a.ints.(i) < a.ints.(j)
+  | Le -> fun a -> a.ints.(i) <= a.ints.(j)
+  | Gt -> fun a -> a.ints.(i) > a.ints.(j)
+  | Ge -> fun a -> a.ints.(i) >= a.ints.(j)
+
+(* [e] over the slots. A comparison between an int field and a literal or
+   another int field is one closure, the shape almost every constraint takes;
+   anything else goes through [Expr_compiler]. *)
+let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
+  let general () =
+    let f = Expr_compiler.compile_bool (array_leaves cc) e in
+    fun arr -> f arr () () ()
+  in
+  let cmp : type a. cmp -> a expr -> a expr -> slots -> bool =
+   fun op x y ->
+    match (x, y) with
+    | Ref (I, a), Int n -> cmp_slot_const op (cc.idx a) n
+    | Int n, Ref (I, a) -> cmp_slot_const (flip op) (cc.idx a) n
+    | Ref (I, a), Ref (I, b) -> cmp_slots op (cc.idx a) (cc.idx b)
+    | _ -> general ()
+  in
+  match e with
+  | And (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a && fy a
+  | Or (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a || fy a
+  | Not x ->
+      let fx = compile_bool_arr cc x in
+      fun a -> not (fx a)
+  | Eq (x, y) -> cmp Eq x y
+  | Ne (x, y) -> cmp Ne x y
+  | Lt (x, y) -> cmp Lt x y
+  | Le (x, y) -> cmp Le x y
+  | Gt (x, y) -> cmp Gt x y
+  | Ge (x, y) -> cmp Ge x y
+  | _ -> general ()
 
 let eval_arr_at ~at f arr =
   try f arr with Parse_error e -> raise (Parse_error { e with at })
@@ -629,6 +713,32 @@ let compile_action (cc : compile_ctx) (act : action option) :
       let f = compile_stmts cc stmts in
       Some (fun arr -> try f arr with Return_true -> ())
 
+(* One step of the check pass. A scalar inside the frame is read into its slot
+   with no bounds check and its constraint tested in place; any other field
+   runs its general validator. *)
+type step =
+  | Slot : { slot : int; scalar : 'a scalar } -> step
+  | Check : {
+      name : string;
+      slot : int;
+      voff : int;
+      cond : slots -> bool;
+    }
+      -> step
+  | Range : {
+      name : string;
+      slot : int;
+      scalar : 'a scalar;
+      voff : int;
+      lo : int;
+      hi : int;
+      store : bool;
+    }
+      -> step
+      (** A scalar whose constraints all compare it with literals: read, keep in
+          its slot when something else reads it, and test [lo <= v <= hi]. *)
+  | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+
 type ('f, 'r) record =
   | Record : {
       name : string;
@@ -650,10 +760,10 @@ type ('f, 'r) record =
              size, which stops accumulating once a field's extent is dynamic
              ([sum_size] returns the accumulator unchanged from there), so
              fixed fields after a variable one do not add to it. *)
-      validators_rev :
-        (int (* byte offset *)
-        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
-        list;
+      used_slots : (int, unit) Hashtbl.t;
+          (* The slots a constraint, an action or the [where] clause reads; the
+             check pass fills only those. *)
+      validators_rev : (int (* byte offset *) * step) list;
       checkers_rev :
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
@@ -681,6 +791,33 @@ type wire_size_info =
 
 let id_counter = Atomic.make 0
 
+(* A fused interval test, for a pass made of nothing else. *)
+type interval =
+  | Interval : {
+      scalar : 'a scalar;
+      lo : int;
+      hi : int;
+      name : string;
+      voff : int;
+    }
+      -> interval
+
+(* The check pass of a codec without parameters, as data, so [validate] and
+   [decode] run it with one direct call. *)
+type pass =
+  | No_checks
+  | Intervals of { flat : int array; intervals : interval array }
+      (** Interval tests only, on slots nothing else reads: no scratch. [flat]
+          holds six ints per test, read by {!scan_intervals}; [intervals] names
+          the field of a failed one. *)
+  | Steps of {
+      steps : step array;
+      where : (slots -> bool) option;
+      scratch : (unit -> slots) option;
+          (** [None] when no step reads or writes a slot. *)
+      clear : slots -> unit;
+    }
+
 (* What [seal] builds from a field list: the layout, the readers and writers
    and the validators. [view] does not build it; the first operation that needs
    it does (see [compiled]). *)
@@ -699,6 +836,11 @@ type 'r compiled = {
          writer's [write_off], and returns the final offset. *)
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
+  plain_validate : bytes -> int -> unit;
+  fixed_frame : int;
+      (* The frame of a fixed-size codec, or -1: with [plain_pass], what
+         [validate] of a codec without parameters runs with no closure call. *)
+  plain_pass : pass; (* [validate] for a codec without parameters. *)
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
@@ -706,6 +848,9 @@ type 'r compiled = {
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
+  clear_scratch : slots -> unit;
+      (* Zeroes the scratch before [validate_arr], when a slot can be read
+         before the pass writes it. *)
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
   has_checks : bool;
@@ -752,6 +897,7 @@ let record_start ?where ?doc name make =
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
+      used_slots = Hashtbl.create 8;
       validators_rev = [];
       checkers_rev = [];
       field_actions_rev = [];

@@ -96,3 +96,6 @@ val iter_refs :
 val unbound_check_ref : string -> 'a
 (** [unbound_check_ref name] raises [Invalid_argument]: a field constraint or
     action refers to [name], which no field binds. *)
+
+val used_idx : ('a, unit) Hashtbl.t -> ('b -> 'a) -> 'b -> 'a
+(** [used_idx used idx name] is [idx name], after noting the slot in [used]. *)

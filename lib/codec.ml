@@ -238,9 +238,9 @@ and validator_of_struct (s : Types.struct_) : validator =
   let compiled_where =
     compile_where_clause acc.param_slots acc.field_readers s.where
   in
-  let validate_arr, _populate, _validate =
+  let validate_arr, _populate, _validate, _clear, _ =
     build_validators
-      (List.rev acc.validators_rev)
+      (List.rev_map (fun (off, f) -> (off, Full f)) acc.validators_rev)
       (List.rev acc.checkers_rev)
       compiled_where s.fields acc.param_slots n_total
   in
@@ -489,7 +489,7 @@ let embed_encode_ctx (t : 'r t) v runtime buf off =
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
 let validate_runtime t c runtime input_end buf off =
-  validate_runtime_of ~scratch:c.decode_scratch ~n_total:c.n_array_slots
+  validate_runtime_of ~scratch:c.decode_scratch ~clear:c.clear_scratch
     ~param_base:c.param_base ~param_handles:t.param_handles
     ~validate_arr:c.validate_arr runtime input_end buf off
 
@@ -533,29 +533,55 @@ let env (t : _ t) : Param.env =
     bound = Array.make t.n_params false;
   }
 
-let decode_slow consume e t c buf off =
-  (* Require an env that binds every input param, as encode does: an unbound
-     input param resolves a parametric size to 0, silently truncating the field
-     and misaligning the rest of the record. This is a usage error, not malformed
-     input, so it raises [Invalid_argument] rather than returning a parse error. *)
-  require_env ~op:"decode" t e;
+(* The params of a check pass, held in its slots as [validate] holds them:
+   handle [i] at [param_base + i], so a sub-codec's check pass sets an output
+   param in the slots that are written back, not in the env behind them. *)
+let slots_runtime (t : _ t) (c : _ compiled) arr =
+  if t.n_params = 0 then no_runtime
+  else
+    let find name =
+      List.find_index
+        (fun (Param.Pack p) -> String.equal p.Types.name name)
+        t.param_handles
+    in
+    Types.eval_ctx
+      ~set_param:(fun name value ->
+        match find name with
+        | Some i -> arr.ints.(c.param_base + i) <- value
+        | None -> ())
+      (fun name ->
+        match find name with Some i -> arr.ints.(c.param_base + i) | None -> 0)
+
+(* The decode of a codec with params, or of one with no plain decode: it checks
+   the bounds and then runs the check pass with the params the env binds, as
+   [validate] does, so it reports the same first failure; only then does it
+   read, so a [map] decoder sees only a record that passed. Last, it writes the
+   output params back: the read sees the env the caller bound. *)
+let decode_params consume e t (c : _ compiled) buf off =
   let runtime = runtime ?env:e () in
   let input_end = Input_end.of_bytes buf in
-  let v = c.decode runtime input_end buf off in
-  (* A codec with nothing to check and no parameters has nothing left to do
-     after the read: the decode has already checked the bounds. *)
+  (* A codec with nothing to check and no parameters has only its bounds to
+     check, and the read checks them. *)
   let arr =
     if (not c.has_checks) && t.n_params = 0 then None
-    else
+    else begin
+      let min_size =
+        match c.wire_size with
+        | Fixed n -> n
+        | Variable { min_size; _ } -> min_size
+      in
+      check_decode_bounds c.wire_size min_size runtime input_end buf off;
       let arr = c.decode_scratch () in
-      clear_slots arr c.n_array_slots;
+      c.clear_scratch arr;
       (match e with
       | Some (e : Param.env) when t.n_params > 0 ->
           Array.blit e.slots 0 arr.ints c.param_base t.n_params
       | _ -> ());
-      c.validate_arr arr runtime input_end buf off;
+      c.validate_arr arr (slots_runtime t c arr) input_end buf off;
       Some arr
+    end
   in
+  let v = c.decode runtime input_end buf off in
   let consumed =
     match c.wire_size with
     | Fixed n -> off + n
@@ -575,11 +601,42 @@ let decode_slow consume e t c buf off =
   | _ -> ());
   v
 
-let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+let decode_slow consume e t (c : _ compiled) buf off =
+  (* Require an env that binds every input param, as encode does: an unbound
+     input param resolves a parametric size to 0, silently truncating the field
+     and misaligning the rest of the record. This is a usage error, not malformed
+     input, so it raises [Invalid_argument] rather than returning a parse error. *)
+  require_env ~op:"decode" t e;
+  match c.plain_decode with
+  | Some decode ->
+      (* No params: the plain decode checks before it reads, as [validate]
+         does, and leaves only the consumption to check. *)
+      let v = decode buf off in
+      let consumed =
+        match c.wire_size with
+        | Fixed n -> off + n
+        | Variable { compute; _ } ->
+            compute no_runtime (Input_end.of_bytes buf) buf off
+      in
+      Types.check_consumption consume ~consumed ~available:(Bytes.length buf);
+      v
+  | None -> decode_params consume e t c buf off
+
+(* The first decode of a codec compiles it. Kept out of [decode_exn] so nothing
+   there is live across a call, and its arguments stay in registers. *)
+let decode_first consume e t buf off =
   let c = compiled t in
   match (e, consume, c.plain_decode) with
   | None, `Prefix, Some decode -> decode buf off
   | _ -> decode_slow consume e t c buf off
+
+let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+  match Atomic.get t.compiled with
+  | None -> decode_first consume e t buf off
+  | Some c -> (
+      match (e, consume, c.plain_decode) with
+      | None, `Prefix, Some decode -> decode buf off
+      | _ -> decode_slow consume e t c buf off)
 
 let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
@@ -613,9 +670,23 @@ let to_struct t =
   | [], None -> struct' t.name t.struct_fields
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
+let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
+
+let validate_fixed min_size pass buf off =
+  let input_end = Input_end.of_bytes buf in
+  if off < 0 || off > Input_end.to_int input_end - min_size then
+    min_bounds_error min_size buf off;
+  match pass with No_checks -> () | _ -> run_plain_pass pass input_end buf off
+
 let validate ?env:e (t : _ t) buf off =
   match e with
-  | None when t.n_params = 0 -> (compiled t).validate buf off
+  | None when t.n_params = 0 -> (
+      match Atomic.get t.compiled with
+      | Some c ->
+          if c.fixed_frame >= 0 then
+            validate_fixed c.fixed_frame c.plain_pass buf off
+          else c.plain_validate buf off
+      | None -> validate_first t buf off)
   | _ ->
       require_env ~op:"validate" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in

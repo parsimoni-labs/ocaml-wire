@@ -579,6 +579,90 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* Every decode entry point checks before it reads, as [validate] does: a
+   fresh codec's first decode, a later one, one with [~consume:`All] and one
+   with an env all report [validate]'s first failure, here [a]'s constraint at
+   byte 0 rather than [b]'s enum at byte 1. *)
+let test_decode_reports_validate_first_failure () =
+  let c =
+    Codec.v "CheckFirst"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          Field.v "a" uint8 ~self_constraint:(fun a -> Expr.(a <= int 10)) $ fst;
+          Field.v "b" (enum "E" [ ("x", 0) ] uint8) $ snd;
+        ]
+  in
+  let buf = Bytes.of_string "\x20\x05" in
+  let error what = function
+    | Ok _ -> Alcotest.failf "%s accepted the record" what
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let first = error "first decode" (Codec.decode c buf 0) in
+  let validated =
+    match Codec.validate c buf 0 with
+    | () -> Alcotest.fail "validate accepted the record"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  Alcotest.(check string) "first decode" validated first;
+  Alcotest.(check string)
+    "second decode" validated
+    (error "second decode" (Codec.decode c buf 0));
+  Alcotest.(check string)
+    "consume all" validated
+    (error "consume all" (Codec.decode ~consume:`All c buf 0));
+  Alcotest.(check string)
+    "with an env" validated
+    (error "with an env" (Codec.decode ~env:(Codec.env c) c buf 0))
+
+(* A codec with params checks before it reads too: its decode reports
+   [validate]'s first failure, [a]'s constraint at byte 0 rather than [b]'s
+   enum at byte 1, and runs a [map] decoder only on a record that passes. *)
+let test_decode_params_reports_validate_first_failure () =
+  let limit = Param.input "limit" uint8 in
+  let f_a = Field.v "a" uint8 ~self_constraint:(fun a -> Expr.(a <= int 10)) in
+  let calls = ref 0 in
+  let counted =
+    map
+      ~decode:(fun x ->
+        incr calls;
+        x)
+      ~encode:Fun.id uint8
+  in
+  let c =
+    Codec.v "CheckFirstParams"
+      ~where:Expr.(Field.ref f_a <= Param.expr limit)
+      (fun a b c -> (a, b, c))
+      Codec.
+        [
+          (f_a $ fun (a, _, _) -> a);
+          (Field.v "b" (enum "E" [ ("x", 0) ] uint8) $ fun (_, b, _) -> b);
+          (Field.v "c" counted $ fun (_, _, c) -> c);
+        ]
+  in
+  let env () = Codec.env c |> Param.bind limit (UInt8.v 255) in
+  let buf = Bytes.of_string "\x20\x05\x07" in
+  let error what = function
+    | Ok _ -> Alcotest.failf "%s accepted the record" what
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let validated =
+    match Codec.validate ~env:(env ()) c buf 0 with
+    | () -> Alcotest.fail "validate accepted the record"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  Alcotest.(check string)
+    "decode" validated
+    (error "decode" (Codec.decode ~env:(env ()) c buf 0));
+  Alcotest.(check string)
+    "consume all" validated
+    (error "consume all" (Codec.decode ~consume:`All ~env:(env ()) c buf 0));
+  Alcotest.(check int) "no map decode on a refused record" 0 !calls;
+  match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
+  | Ok (_, _, c) when UInt8.to_int c = 7 -> ()
+  | Ok _ -> Alcotest.fail "wrong value"
+  | Error e -> Alcotest.failf "valid record refused: %a" pp_parse_error e
+
 (* A literal region size is a byte count for [nested], [nested_at_most] and
    [Field.repeat] as for every other sized description: a negative one raises
    where it is written. *)
@@ -715,6 +799,10 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "decode: every entry point checks before it reads"
+        `Quick test_decode_reports_validate_first_failure;
+      Alcotest.test_case "decode: a codec with params checks before it reads"
+        `Quick test_decode_params_reports_validate_first_failure;
       Alcotest.test_case "size: a negative literal region raises" `Quick
         test_negative_literal_region_raises;
       Alcotest.test_case "validate: data-sized fields agree with decode" `Quick
