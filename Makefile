@@ -1,4 +1,4 @@
-.PHONY: build test test-wasm fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
+.PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
        fuzz-nightly 3d bench bench-demo bench-routing bench-gateway bench-clcw \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
@@ -29,6 +29,15 @@ test-wasm:
 	! grep "integer-overflow" _build/wasm-build.log \
 	  | grep -v -e 0x7fffffff -e 0x40000000 | grep -q . \
 	  || { echo "error: wasm_of_ocaml truncated an integer literal"; exit 1; }
+
+# The wire.ocaml tests and its differential lane on the code it writes for
+# OxCaml, with every [@zero_alloc] checked: run from an OxCaml switch that has
+# the test dependencies (alcobar included). The release profile, because the
+# dev one compiles libraries -opaque and the checks cannot pass there.
+test-oxcaml:
+	@test "$$(ocamlopt -config-var ox)" = true || \
+	  { echo "not an OxCaml compiler"; exit 1; }
+	dune build --profile release @test/ocaml-ox/runtest @fuzz/diff/ocaml-ox/runtest
 
 # The wire fuzz properties alone; WIRE_FUZZ_SEED, WIRE_FUZZ_REPEAT and
 # WIRE_FUZZ_BUDGET widen the search (fuzz/dune).

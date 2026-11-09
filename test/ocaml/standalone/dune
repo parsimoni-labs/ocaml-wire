@@ -40,14 +40,44 @@
 ; The generated modules link wire.runtime and nothing else; the checks that
 ; drive them sit in libraries of their own, which may use fmt.
 
+; As in test/ocaml-ox: the dev profile compiles libraries -opaque, so the
+; zero_alloc checks of the OxCaml output cannot pass there and are off in dev
+; only.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (= %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "(-zero-alloc-check none)"))))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (<> %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "()"))))
+
 (library
  (name standalone_narrow)
+ (ocamlopt_flags
+  (:standard
+   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules s_checked s_eth s_signed s_refined)
  (libraries wire.runtime))
 
 (library
  (name standalone_wide)
+ (ocamlopt_flags
+  (:standard
+   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules s_ipv4 s_mixed s_wide)
  (libraries wire.runtime))

@@ -67,8 +67,37 @@
  (action
   (run ../ocaml/gen.exe)))
 
+; Dune's dev profile compiles libraries -opaque, which hides from the
+; zero_alloc checker what a function of another library allocates, so every
+; call out of the module looks like it may. The checks run in any other
+; profile (make test-oxcaml uses release) and are off in dev, where they
+; cannot pass.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (= %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "(-zero-alloc-check none)"))))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (<> %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "()"))))
+
 (library
  (name gens_ox)
+ (ocamlopt_flags
+  (:standard
+   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules
   test_wire_ocaml
