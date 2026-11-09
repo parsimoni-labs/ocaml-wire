@@ -43,9 +43,8 @@
   `validate` and `valid` never call it (#435, @samoht)
 
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, constrained, mapped and enumerated fields included: one
-  bounds check for the frame, then one pass over the checks and the fields
-  (#435, @samoht)
+  fixed-size codecs, constrained, mapped and enumerated fields included, and on
+  records of byte spans sized by their header (#435, @samoht)
 
 ### Fixed
 

@@ -579,6 +579,48 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* What [decode], [validate] and [valid] make of the same bytes: each one
+   accepts them or each one refuses. *)
+let check_entry_points_agree what c bytes =
+  let buf = Bytes.of_string bytes in
+  let verdict f =
+    match f () with () -> "ok" | exception Parse_error _ -> "refused"
+  in
+  let decoded =
+    match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+  in
+  Alcotest.(check string)
+    (what ^ ": validate") decoded
+    (verdict (fun () -> Codec.validate c buf 0));
+  Alcotest.(check string)
+    (what ^ ": valid") decoded
+    (verdict (fun () -> ignore (Codec.valid c buf 0)))
+
+(* A fixed-size field after the last span must fit in the buffer too. *)
+let test_fixed_after_span_fits () =
+  let len = Field.v "len" uint8 in
+  let after_span what span tail =
+    let c =
+      Codec.v what
+        (fun n d t -> (n, d, t))
+        Codec.
+          [
+            (len $ fun (n, _, _) -> n);
+            (Field.v "data" span $ fun (_, d, _) -> d);
+            (Field.v "tail" tail $ fun (_, _, t) -> t);
+          ]
+    in
+    check_entry_points_agree what c "\003abcde";
+    check_entry_points_agree what c "\003abcdefg"
+  in
+  after_span "array then bytes"
+    (byte_array ~size:(Field.ref len))
+    (byte_array ~size:(int 4));
+  after_span "slice then bytes"
+    (byte_slice ~size:(Field.ref len))
+    (byte_array ~size:(int 4));
+  after_span "array then scalar" (byte_array ~size:(Field.ref len)) uint32be
+
 (* Every decode entry point checks before it reads, as [validate] does: a
    fresh codec's first decode, a later one, one with [~consume:`All] and one
    with an env all report [validate]'s first failure, here [a]'s constraint at
@@ -801,6 +843,8 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "layout: a fixed field after the last span must fit"
+        `Quick test_fixed_after_span_fits;
       Alcotest.test_case "decode: every entry point checks before it reads"
         `Quick test_decode_reports_validate_first_failure;
       Alcotest.test_case "decode: a codec with params checks before it reads"

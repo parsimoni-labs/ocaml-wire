@@ -113,6 +113,7 @@ type (_, _) readers =
 and _ field_read =
   | Data : 'a scalar -> 'a field_read
   | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
+  | Span : int * int -> string field_read
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -232,10 +233,18 @@ type step =
     }
       -> step
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
 
 (** How the encoder writes a field it has a descriptor for: the field's value,
     put at the descriptor's offset with no bounds check of its own. *)
 type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+
+(** How a field adds to the record's extent, for the layout pass: a fixed width,
+    a byte span whose size the data decides, or the rest of the buffer. *)
+type layout = Lfix of int | Lspan of int Types.expr | Lrest
+
+(** A scalar of any type. *)
+type packed_scalar = Ps : 'a scalar -> packed_scalar
 
 (** A record under construction: the fields added so far. *)
 type ('f, 'r) record =
@@ -246,6 +255,8 @@ type ('f, 'r) record =
       checked_readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
+      layout_rev : layout list option;
+      prefix : (string * packed_scalar) list;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
       min_wire_size : int;
       next_off : next_off;

@@ -353,6 +353,8 @@ and _ field_read =
   | Data : 'a scalar -> 'a field_read
   | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
       (** A scalar under a total [map]: read, then decoded. *)
+  | Span : int * int -> string field_read
+      (** A fixed byte array: its offset and length. *)
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -424,6 +426,7 @@ let[@inline] read_field : type a.
   match r with
   | Data s -> read_scalar s buf base
   | Mapped (s, decode) -> decode (read_scalar s buf base)
+  | Span (off, n) -> Bytes.sub_string buf (base + off) n
   | Fn f -> f runtime input_end buf base
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
@@ -522,7 +525,12 @@ let rec read_view : type a.
       match read_view ~min_wire_size access inner with
       | Some (Data s) -> Some (Mapped (s, decode))
       | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
-      | Some (Fn _) | None -> None)
+      | Some (Span _ | Fn _) | None -> None)
+  | Byte_array { size = Int n } -> (
+      match access with
+      | Fixed off when off >= 0 && n >= 0 && off + n <= min_wire_size ->
+          Some (Span (off, n))
+      | _ -> None)
   | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
 
 let field_read ~min_wire_size access typ fn ~plain =
@@ -808,6 +816,14 @@ type step =
           few disjoint intervals. [fail] is the field's general validator, which
           raises the error the field's checks give. *)
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A plain byte span's bounds check: the general validator, which a
+          layout pass that checks every span's bounds makes redundant. *)
+
+type packed_scalar = Ps : 'a scalar -> packed_scalar
+
+(* How a field adds to the record's extent, for the layout pass. *)
+type layout = Lfix of int | Lspan of int expr | Lrest
 
 type ('f, 'r) record =
   | Record : {
@@ -820,7 +836,12 @@ type ('f, 'r) record =
              checks itself as it is read. *)
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
-          (* The fields' descriptor writes, while every field has one. *)
+      layout_rev : layout list option;
+          (* Each field's extent, while every field is fixed or a plain byte
+             span. *)
+      prefix : (string * packed_scalar) list;
+      (* The fixed-offset fields a span's size can read, by name. *)
+      (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -978,6 +999,8 @@ let record_start ?where ?doc name make =
       checked_readers = Nil;
       writers_rev = [];
       puts_rev = Some [];
+      layout_rev = Some [];
+      prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
