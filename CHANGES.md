@@ -43,6 +43,11 @@
   structs, refined byte arrays or optional casetypes under one name, instead of
   projecting one as the other (#434, @samoht)
 
+- The 3D projection escapes every F* and 3D keyword a field or parameter can
+  spell, and refuses a struct where two names escape onto one, such as `end` and
+  `end_`, naming both. Such a field used to fail inside EverParse (#434,
+  @samoht)
+
 ## 1.3.0
 
 ### Added

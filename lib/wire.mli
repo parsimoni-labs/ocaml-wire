@@ -1845,6 +1845,7 @@ module Private : sig
 
   module Uint_var = Uint_var
   module Shape = Shape
+  module Names = Names
 
   val param_name : param -> string
   (** Name of a formal parameter. *)

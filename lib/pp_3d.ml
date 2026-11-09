@@ -1,7 +1,13 @@
 open Dsl
 open Lower_3d
 
-(* 3D and C reserved words that cannot be used as field/param names. *)
+(* The names a field or parameter cannot take in 3D, in the F* EverParse
+   writes from it, or in the C KaRaMeL writes from that. The 3D parser rejects
+   its own keywords and type names outright; an F* keyword passes 3D but
+   reaches the F* as a binder once a constraint reads the field or a sub-codec
+   types it, and fails there with a syntax error ([end], [in], [of], ...).
+   KaRaMeL renames a C keyword it knows, but not [typeof], which GNU C and C23
+   read as a keyword. Checked against 3d.exe for each name. *)
 module Reserved_3d = Set.Make (String)
 
 let reserved_3d =
@@ -20,7 +26,10 @@ let reserved_3d =
         new new_effect noeq noextract opaque_to_smt open polymonadic_bind \
         polymonadic_subcomp private range_of rec reflectable reifiable reify \
         requires restart_solver returns set_range_of sub_effect synth then tot \
-        total try unfold unopteq val when with")
+        total try unfold unopteq val when with end in of opaque quote \
+        unfoldable aligned all_bytes all_zeros field_pos field_ptr \
+        field_ptr_after is_range_okay pointer probe refining specialize string \
+        UINT8BE typeof")
 
 (* Append a trailing underscore to names that 3D or F* reserves so the
    projection always produces a parseable identifier even when the user
@@ -896,7 +905,32 @@ let reorder_bit_groups_for_3d fields =
   in
   go [] fields
 
+(* A struct's parameters and fields share one 3D scope, and the escape of a
+   keyword can spell another name in it: [end] and [end_] would both be
+   [end_], and a field [ctx] would shadow the FFI projection's [ctx]
+   parameter, which 3D rejects. Refuse naming both rather than hand 3d.exe a
+   declaration it fails on, or one it reads as another. *)
+let check_3d_names (s : struct_) =
+  let params =
+    List.map
+      (fun p -> (Fmt.str "parameter %S" p.param_name, escape_3d p.param_name))
+      s.params
+  in
+  let fields =
+    List.filter_map
+      (fun (Field f) ->
+        Option.map (fun n -> (Fmt.str "field %S" n, escape_3d n)) f.field_name)
+      s.fields
+  in
+  match Names.clash (params @ fields) with
+  | None -> ()
+  | Some (a, b, id) ->
+      Fmt.invalid_arg
+        "Everparse: in %S, %s and %s both project to the 3D name %S" s.name a b
+        id
+
 let pp_struct ppf (s : struct_) =
+  check_3d_names s;
   anon_counter := 0;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in

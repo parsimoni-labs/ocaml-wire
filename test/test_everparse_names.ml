@@ -119,6 +119,88 @@ let test_reserved_word_escaping () =
     "no bare reserved word as field" false
     (contains ~sub:"UINT8 type;" output)
 
+(* Every name below is a keyword of 3D or of the F* EverParse writes from it,
+   checked against 3d.exe: a field so named either fails the 3D parser or,
+   once a constraint reads it or a sub-codec types it, gets into the F* as a
+   bare binder and fails there with a syntax error. *)
+let reserved_3d_or_fstar =
+  [
+    "end";
+    "in";
+    "of";
+    "opaque";
+    "quote";
+    "unfoldable";
+    "aligned";
+    "all_bytes";
+    "all_zeros";
+    "field_pos";
+    "field_ptr";
+    "field_ptr_after";
+    "is_range_okay";
+    "pointer";
+    "probe";
+    "refining";
+    "specialize";
+    "string";
+    "UINT8BE";
+  ]
+
+let test_reserved_word_escaping_fstar () =
+  List.iter
+    (fun name ->
+      let f = field name uint8 in
+      let s =
+        struct_ "Kw"
+          [ f; field "y" ~constraint_:Expr.(field_ref f <= int 10) uint8 ]
+      in
+      let out = to_3d (module_ [ typedef ~entrypoint:true s ]) in
+      Alcotest.(check bool)
+        (Fmt.str "%s escaped" name)
+        true
+        (contains ~sub:(Fmt.str "UINT8 %s_;" name) out);
+      Alcotest.(check bool)
+        (Fmt.str "%s escaped where read" name)
+        true
+        (contains ~sub:(Fmt.str "(%s_ <= 10)" name) out))
+    reserved_3d_or_fstar
+
+let invalid_arg_mentions what subs f =
+  match f () with
+  | _ -> Alcotest.failf "%s: accepted" what
+  | exception Invalid_argument msg ->
+      List.iter
+        (fun sub ->
+          if not (contains ~sub msg) then
+            Alcotest.failf "%s: %S does not mention %S" what msg sub)
+        subs
+
+(* A keyword is escaped by a trailing underscore, which can spell another
+   field's name: [end] and [end_] would both be [end_] in 3D. A struct's
+   parameters share its fields' scope, so the [ctx] parameter of the FFI
+   projection clashes with a field of that name. *)
+let test_3d_escaped_names_clash () =
+  let module_of s = module_ [ typedef ~entrypoint:true s ] in
+  invalid_arg_mentions "end and end_" [ "\"end\""; "\"end_\"" ] (fun () ->
+      to_3d (module_of (struct_ "Kw" [ field "end" uint8; field "end_" uint8 ])));
+  invalid_arg_mentions "type and type_" [ "\"type\""; "\"type_\"" ] (fun () ->
+      to_3d
+        (module_of (struct_ "Kw" [ field "type_" uint8; field "type" uint8 ])));
+  invalid_arg_mentions "param and field" [ "\"n\"" ] (fun () ->
+      to_3d
+        (module_of (param_struct "Kw" [ param "n" uint8 ] [ field "n" uint8 ])));
+  invalid_arg_mentions "field ctx in FFI" [ "\"ctx\"" ] (fun () ->
+      Everparse.Raw.project_struct ~mode:`Ffi
+        (struct_ "Kw" [ field "ctx" uint8 ])
+      |> fun s -> to_3d s.Everparse.module_);
+  (* Distinct names still project, the escaped one under its escape. *)
+  let out =
+    to_3d (module_of (struct_ "Kw" [ field "end" uint8; field "end2" uint8 ]))
+  in
+  Alcotest.(check bool)
+    "end_ and end2" true
+    (contains ~sub:"UINT8 end_;" out && contains ~sub:"UINT8 end2;" out)
+
 let suite =
   ( "everparse_names",
     [
@@ -128,4 +210,8 @@ let suite =
         test_reserved_word_escaping;
       Alcotest.test_case "3d: duplicate declaration names rejected" `Quick
         test_duplicate_declaration_names_rejected;
+      Alcotest.test_case "3d: F* and 3D keywords are escaped" `Quick
+        test_reserved_word_escaping_fstar;
+      Alcotest.test_case "3d: names that escape onto each other" `Quick
+        test_3d_escaped_names_clash;
     ] )

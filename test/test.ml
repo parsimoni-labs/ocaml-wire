@@ -43,4 +43,5 @@ let () =
       Test_field.suite;
       Test_uint_var.suite;
       Test_shape.suite;
+      Test_names.suite;
     ]
