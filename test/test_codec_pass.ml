@@ -33,6 +33,129 @@ let test_validate_check_free_no_alloc () =
        per_call)
     true (per_call < 1.0)
 
+(* Encoding a fixed-size record writes its bytes and nothing else, whatever the
+   field types: a signed or a float field must not cost more than an unsigned
+   one. *)
+let test_encode_fixed_no_alloc () =
+  skip_unless_gc_counters ();
+  let c =
+    Codec.v "Fixed"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (Field.v "a" uint8 $ fun (a, _, _, _) -> a);
+          (Field.v "b" int16be $ fun (_, b, _, _) -> b);
+          (Field.v "c" int32be $ fun (_, _, c, _) -> c);
+          (Field.v "d" float64be $ fun (_, _, _, d) -> d);
+        ]
+  in
+  let v = (UInt8.v 1, SInt16.v 2, SInt32.of_int32 3l, 4.0) in
+  let buf = Bytes.create 15 in
+  Codec.encode c v buf 0;
+  let n = 100_000 in
+  let before = Gc.minor_words () in
+  for _ = 1 to n do
+    Codec.encode c v buf 0
+  done;
+  let per_call = (Gc.minor_words () -. before) /. float_of_int n in
+  Alcotest.(check bool)
+    (Fmt.str "encode of a fixed codec allocates ~0 words (got %.2f)" per_call)
+    true (per_call < 1.0)
+
+(* [decode] reads a fixed scalar field with no bounds check of its own, after
+   checking the record's extent. Each such read must give what the
+   bounds-checked [Codec.get] gives, sign included, on bytes with the top bit
+   set. *)
+let test_decode_scalars_agree_with_get () =
+  let buf = Bytes.of_string "\x00\xf1\x82\x93\xa4\xb5" in
+  let check : type a. string -> a typ -> unit =
+   fun name typ ->
+    let b = Codec.(Field.v "x" typ $ Fun.id) in
+    let c =
+      Codec.v name
+        (fun _pad x -> x)
+        Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); b ]
+    in
+    let get = Staged.unstage (Codec.get c b) in
+    Alcotest.(check bool) name true (Codec.decode_exn c buf 0 = get buf 0)
+  in
+  check "uint8" uint8;
+  check "uint16" uint16;
+  check "uint16be" uint16be;
+  check "uint32" uint32;
+  check "uint32be" uint32be;
+  check "int8" int8;
+  check "int16" int16;
+  check "int16be" int16be;
+  check "int32" int32;
+  check "int32be" int32be;
+  List.iter
+    (fun (name, base) ->
+      let hi = Codec.(Field.v "hi" (bits ~width:3 base) $ fst) in
+      let lo = Codec.(Field.v "lo" (bits ~width:5 base) $ snd) in
+      let c =
+        Codec.v name
+          (fun _pad hi lo -> (hi, lo))
+          Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); hi; lo ]
+      in
+      let get f = Staged.unstage (Codec.get c f) buf 0 in
+      Alcotest.(check (pair int int))
+        name
+        (get hi, get lo)
+        (Codec.decode_exn c buf 0))
+    [ ("bits u8", U8); ("bits u16", U16); ("bits u16be", U16be) ]
+
+(* The fixed fields are read with no check of their own, so the offset is
+   checked first, in a way that cannot overflow. *)
+let test_decode_offset_out_of_range () =
+  let c = Codec.v "Two" Fun.id Codec.[ Field.v "x" uint16be $ Fun.id ] in
+  let buf = Bytes.make 4 '\x00' in
+  (match Codec.decode c buf (-1) with
+  | exception Invalid_argument _ -> ()
+  | _ -> Alcotest.fail "decode at -1: expected Invalid_argument");
+  match Codec.decode c buf (max_int - 1) with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "decode at max_int - 1: expected an error"
+
+(* A literal size is a byte count. A negative one used to shrink the span
+   [decode] checks before its unchecked reads, so the fields in front of it were
+   read past the end of the buffer. *)
+let test_literal_size_is_a_byte_count () =
+  let check name f = Alcotest.(check bool) name true (raises_invalid f) in
+  let big = Sys.max_string_length + 1 in
+  check "byte_array -4" (fun () -> byte_array ~size:(int (-4)));
+  check "byte_slice -1" (fun () -> byte_slice ~size:(int (-1)));
+  check "zeroterm_at_most -1" (fun () -> zeroterm_at_most ~size:(int (-1)));
+  check "byte_array_where -1" (fun () ->
+      byte_array_where ~size:(int (-1)) ~per_byte:(fun _ -> Expr.bool true));
+  check "array -1" (fun () -> array ~len:(int (-1)) uint8);
+  check "byte_array folded negative" (fun () ->
+      byte_array ~size:Expr.(int 1 - int 2));
+  check "byte_array too big" (fun () -> byte_array ~size:(int big))
+
+(* The fixed part of a record has to fit in a buffer, or the frame check
+   [decode] makes before its unchecked reads would wrap round. *)
+let test_record_too_big_for_a_buffer () =
+  let c =
+    Codec.v "Huge"
+      (fun _ _ -> ())
+      Codec.
+        [
+          ( Field.v "a" (byte_array ~size:(int Sys.max_string_length)) $ fun _ ->
+            "" );
+          (Field.v "b" uint32 $ fun _ -> UInt32.of_int 0);
+        ]
+  in
+  Alcotest.(check bool)
+    "first use" true
+    (raises_invalid (fun () -> Codec.decode c (Bytes.create 8) 0))
+
+(* An array's size is a byte count too: one that would overflow is refused. *)
+let test_array_size_overflow () =
+  Alcotest.(check bool)
+    "array" true
+    (raises_invalid (fun () -> array ~len:(int Sys.max_string_length) uint32))
+
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
 let test_decode_reads_in_order () =
@@ -56,7 +179,7 @@ let test_decode_reads_in_order () =
   Alcotest.(check (list int))
     "read order"
     [ 1; 2; 3; 4; 5; 6; 7; 8; 9 ]
-    (List.filteri (fun i _ -> i < 9) (List.rev !seen))
+    (List.rev !seen)
 
 (* A compiled validator keeps a per-domain scratch, and the cost of reaching it
    on a domain that has not decoded yet must not track how many validators the
@@ -212,6 +335,18 @@ let suite =
         test_validate_check_free_no_alloc;
       Alcotest.test_case "decode: fields read in order" `Quick
         test_decode_reads_in_order;
+      Alcotest.test_case "encode: fixed codec allocates nothing" `Quick
+        test_encode_fixed_no_alloc;
+      Alcotest.test_case "decode: fixed scalars agree with get" `Quick
+        test_decode_scalars_agree_with_get;
+      Alcotest.test_case "decode: offset out of range" `Quick
+        test_decode_offset_out_of_range;
+      Alcotest.test_case "size: a literal size is a byte count" `Quick
+        test_literal_size_is_a_byte_count;
+      Alcotest.test_case "size: a record must fit in a buffer" `Quick
+        test_record_too_big_for_a_buffer;
+      Alcotest.test_case "size: an overflowing array is refused" `Quick
+        test_array_size_overflow;
       Alcotest.test_case
         "validate: fresh domain cost is flat in validator count" `Quick
         test_fresh_domain_validate_flat_in_validator_count;

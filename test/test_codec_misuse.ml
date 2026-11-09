@@ -579,6 +579,23 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* A literal region size is a byte count for [nested], [nested_at_most] and
+   [Field.repeat] as for every other sized description: a negative one raises
+   where it is written. *)
+let test_negative_literal_region_raises () =
+  let raises what f =
+    match f () with
+    | () -> Alcotest.failf "%s accepted a negative size" what
+    | exception Invalid_argument _ -> ()
+  in
+  raises "nested" (fun () -> ignore (nested ~size:(int (-1)) uint8));
+  raises "nested_at_most" (fun () ->
+      ignore (nested_at_most ~size:(int (-1)) uint8));
+  raises "repeat" (fun () -> ignore (Field.repeat "xs" ~size:(int (-2)) uint8));
+  raises "repeat_seq" (fun () ->
+      ignore (Field.repeat_seq "xs" ~seq:seq_list ~size:(int (-2)) uint8));
+  raises "folded" (fun () -> ignore (nested ~size:Expr.(int 1 - int 2) uint8))
+
 (* A size the header decides can come out negative or run past the buffer, in
    a [byte_array], a [uint_var] or a [nested] region, with or without a field
    after it: [validate] refuses what [decode] refuses. *)
@@ -698,6 +715,8 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "size: a negative literal region raises" `Quick
+        test_negative_literal_region_raises;
       Alcotest.test_case "validate: data-sized fields agree with decode" `Quick
         test_validate_data_sized_fields;
     ] )

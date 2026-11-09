@@ -107,9 +107,27 @@ val struct' : string -> Types.field list -> Types.struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers
-      * (runtime -> Input_end.t -> bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers * 'a field_read
       -> ('full, 'rest) readers
+
+and _ field_read =
+  | Data : 'a scalar -> 'a field_read
+  | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
+
+and _ scalar =
+  | Byte : int -> UInt8.t scalar
+  | U16le : int -> UInt16.t scalar
+  | U16be : int -> UInt16.t scalar
+  | U32le : int -> UInt32.t scalar
+  | U32be : int -> UInt32.t scalar
+  | Sbyte : int -> SInt8.t scalar
+  | I16le : int -> SInt16.t scalar
+  | I16be : int -> SInt16.t scalar
+  | I32le : int -> SInt32.t scalar
+  | I32be : int -> SInt32.t scalar
+  | Bits8 : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16le : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16be : { off : int; shift : int; mask : int } -> int scalar
 
 type bf_codec_state = {
   base : Types.bitfield_base;
@@ -232,6 +250,7 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  plain_decode : (bytes -> int -> 'r) option;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
@@ -239,6 +258,7 @@ type 'r compiled = {
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
+  has_checks : bool;
   decode_scratch : unit -> slots;
   param_base : int;
 }
@@ -266,3 +286,19 @@ val record_start :
 
 val ( $ ) : 'a Field.t -> ('b -> 'a) -> ('a, 'b) field
 (** [f $ proj] binds [f] to the record projection [proj]. *)
+
+val field_read :
+  min_wire_size:int ->
+  field_access ->
+  'a Types.typ ->
+  (runtime -> Input_end.t -> bytes -> int -> 'a) ->
+  plain:bool ->
+  'a field_read
+(** [field_read ~min_wire_size access typ reader ~plain] is how the decoder
+    reads a field: as data when it is a bare scalar at a fixed offset or packed
+    in an 8- or 16-bit word, through [reader] otherwise. *)
+
+val read_field : 'a field_read -> runtime -> Input_end.t -> bytes -> int -> 'a
+(** [read_field r runtime input_end buf base] is the value [r] reads from the
+    record at [base]. A {!constructor-Data} read skips the bounds check: the
+    caller has checked the record's span. *)

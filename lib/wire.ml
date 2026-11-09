@@ -1138,6 +1138,7 @@ module Ascii = Ascii
 
 module Private = struct
   module UInt32 = UInt32
+  module Unchecked = Unchecked
   module UInt63 = UInt63
   module Input_end = Input_end
   module Types = Types

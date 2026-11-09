@@ -10,6 +10,9 @@
 - `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
   field names against the FFI pipeline before writing anything (#434, @samoht)
 
+- A `paranoid` dune profile turns every unchecked read back into a checked one,
+  so a read past the frame raises in tests (#435, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
@@ -26,6 +29,15 @@
   bitfield after a variable-size field, a field type with no reader or writer)
   now raises `Invalid_argument` from that first operation, `decode` included,
   instead of from `Codec.v` (#435, @samoht)
+
+- **Breaking:** A literal size that is negative or more than a buffer can hold
+  raises `Invalid_argument` where its type is built, in `byte_array`,
+  `byte_slice`, `array`, `nested`, `Field.repeat` and every other sized
+  description, instead of failing at decode (#435, @samoht)
+
+- `Wire.Codec.decode` is several times faster on fixed-size codecs: it checks
+  the frame once and reads each field with no bounds check of its own (#435,
+  @samoht)
 
 ### Fixed
 

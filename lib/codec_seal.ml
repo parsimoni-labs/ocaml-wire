@@ -198,6 +198,25 @@ let field_validators ~field_idx ~validator_off ~populate ~check ~act =
   in
   (check_only, full)
 
+(* The record's minimum size after [cf]: what [decode] checks the buffer
+   against before its unchecked reads, so it only grows, and stays a byte count
+   a buffer can hold. *)
+let add_min_size record field min_size cf =
+  if cf.size_delta < 0 || min_size > Sys.max_string_length - cf.size_delta then
+    Fmt.invalid_arg
+      "Codec %s: field %s takes the record past the largest buffer size" record
+      field;
+  min_size + cf.size_delta
+
+(* Bitfields share a base word; [cf.size_delta] is the correct non-overlapping
+   contribution. Key this off the compiled access rather than the field's type:
+   wrapped bitfields such as [bit (bits ...)] arrive here as [Map]/[Where]/[Enum]
+   even though they still pack into the current word. *)
+let field_size_of_value (fld : (_, _) field) cf =
+  match cf.field_access with
+  | Bitfield _ -> fun _ _ -> cf.size_delta
+  | _ -> fun ctx v -> size_of_typ_value ctx fld.typ (fld.get v)
+
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
     =
@@ -238,32 +257,27 @@ let apply_compiled : type a f r.
     extend_scope fld.name (expr_reader cf fld.typ) cf.nested_readers
       r.field_readers
   in
-  let field_typ = fld.typ in
-  let field_get = fld.get in
-  (* Bitfields share a base word; [cf.size_delta] is the correct
-     non-overlapping contribution. Key this off the compiled access rather than
-     [field_typ]: wrapped bitfields such as [bit (bits ...)] arrive here as
-     [Map]/[Where]/[Enum] even though they still pack into the current word. *)
-  let field_size_of_value =
-    match cf.field_access with
-    | Bitfield _ -> fun _ _ -> cf.size_delta
-    | _ -> fun ctx v -> size_of_typ_value ctx field_typ (field_get v)
-  in
+  let field_size_of_value = field_size_of_value fld cf in
   let raw_reader = guarded_dynamic_reader cf fld.typ in
+  let validates = field_reader_validates fld.typ in
   let raw_reader, full, check_only =
-    wrap_field_errors
-      ~validates:(field_reader_validates fld.typ)
-      ~check ~act fld.name raw_reader full check_only
+    wrap_field_errors ~validates ~check ~act fld.name raw_reader full check_only
   in
   note_fixed_prefix ~before:r.next_off ~after:cf.next_off r.fixed_prefix;
+  let min_wire_size = add_min_size r.name fld.name r.min_wire_size cf in
   Record
     {
       name = r.name;
       make = r.make;
-      readers = Snoc (r.readers, raw_reader);
+      readers =
+        Snoc
+          ( r.readers,
+            field_read ~min_wire_size cf.field_access fld.typ raw_reader
+              ~plain:
+                (Option.is_none check && Option.is_none act && not validates) );
       writers_rev = new_writers_rev;
       size_of_value_rev = field_size_of_value :: r.size_of_value_rev;
-      min_wire_size = r.min_wire_size + cf.size_delta;
+      min_wire_size;
       next_off = cf.next_off;
       fixed_prefix = r.fixed_prefix;
       validators_rev = (byte_off, full) :: r.validators_rev;
@@ -302,8 +316,7 @@ let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
 type (_, _) readers_fwd =
   | FNil : ('r, 'r) readers_fwd
   | FCons :
-      (runtime -> Input_end.t -> bytes -> int -> 'a)
-      * ('rest, 'result) readers_fwd
+      'a field_read * ('rest, 'result) readers_fwd
       -> ('a -> 'rest, 'result) readers_fwd
 
 (* Convert a [readers] snoc-list to a [readers_fwd] cons-list. O(n), runs
@@ -322,18 +335,11 @@ let to_fwd : type full result.
   in
   go readers FNil
 
-(* Apply a forward reader list to [make], saturating the constructor in a
-   single call for up to 32 fields, so no intermediate closure is allocated
-   per decode. Beyond 32 fields one partial application is made per extra 32
-   (a [caml_curry] chain under flambda-off); the threshold clears every real
-   protocol header (the widest, IPv4 and USLP, reach ~28 fields) in one
-   saturated call. The reads are let-bound, as in [build_decode], so they run
-   in field order.
-
-   The cases are a saturation table, one row per arity. The formatter is
-   disabled here because it would otherwise staircase the deep [FCons]
-   patterns across ~500 lines; the flat table is both shorter and easier to
-   read. *)
+(* Read every field and apply [make] to the values, in one saturated call for
+   up to 32 fields; past 32, one partial application per extra 32. The reads
+   are let-bound so they run in field order: a record that fails to read fails
+   on its first unreadable field. One row per arity; the formatter would
+   staircase the nested [FCons] patterns. *)
 let rec apply_fwd : type mid result.
     mid ->
     (mid, result) readers_fwd ->
@@ -342,149 +348,71 @@ let rec apply_fwd : type mid result.
   match fwd with
   | FNil -> f
   | FCons (r1, FNil) ->
-      let v1 = r1 runtime input_end buf off in f v1
+      let v1 = read_field r1 runtime input_end buf off in f v1
   | FCons (r1, FCons (r2, FNil)) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in f v1 v2
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in f v1 v2
   | FCons (r1, FCons (r2, FCons (r3, FNil))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in f v1 v2 v3
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in f v1 v2 v3
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FNil)))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in f v1 v2 v3 v4
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in f v1 v2 v3 v4
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FNil))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in f v1 v2 v3 v4 v5
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in f v1 v2 v3 v4 v5
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FNil)))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in f v1 v2 v3 v4 v5 v6
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in f v1 v2 v3 v4 v5 v6
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FNil))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FNil)))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FNil))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FNil)))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FNil))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FNil)))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FNil))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FNil)))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FNil))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FNil)))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FNil))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FNil)))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FNil))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FNil)))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FNil))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FNil)))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FNil))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FNil)))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FNil))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FNil)))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FNil))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FNil)))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in let v28 = r28 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FNil))))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in let v28 = r28 runtime input_end buf off in let v29 = r29 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in let v29 = read_field r29 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FNil)))))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in let v28 = r28 runtime input_end buf off in let v29 = r29 runtime input_end buf off in let v30 = r30 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in let v29 = read_field r29 runtime input_end buf off in let v30 = read_field r30 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FNil))))))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in let v28 = r28 runtime input_end buf off in let v29 = r29 runtime input_end buf off in let v30 = r30 runtime input_end buf off in let v31 = r31 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in let v29 = read_field r29 runtime input_end buf off in let v30 = read_field r30 runtime input_end buf off in let v31 = read_field r31 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31
+  | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FCons (r32, FNil)))))))))))))))))))))))))))))))) ->
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in let v29 = read_field r29 runtime input_end buf off in let v30 = read_field r30 runtime input_end buf off in let v31 = read_field r31 runtime input_end buf off in let v32 = read_field r32 runtime input_end buf off in f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31 v32
   | FCons (r1, FCons (r2, FCons (r3, FCons (r4, FCons (r5, FCons (r6, FCons (r7, FCons (r8, FCons (r9, FCons (r10, FCons (r11, FCons (r12, FCons (r13, FCons (r14, FCons (r15, FCons (r16, FCons (r17, FCons (r18, FCons (r19, FCons (r20, FCons (r21, FCons (r22, FCons (r23, FCons (r24, FCons (r25, FCons (r26, FCons (r27, FCons (r28, FCons (r29, FCons (r30, FCons (r31, FCons (r32, rest)))))))))))))))))))))))))))))))) ->
-      let v1 = r1 runtime input_end buf off in let v2 = r2 runtime input_end buf off in let v3 = r3 runtime input_end buf off in let v4 = r4 runtime input_end buf off in let v5 = r5 runtime input_end buf off in let v6 = r6 runtime input_end buf off in let v7 = r7 runtime input_end buf off in let v8 = r8 runtime input_end buf off in let v9 = r9 runtime input_end buf off in let v10 = r10 runtime input_end buf off in let v11 = r11 runtime input_end buf off in let v12 = r12 runtime input_end buf off in let v13 = r13 runtime input_end buf off in let v14 = r14 runtime input_end buf off in let v15 = r15 runtime input_end buf off in let v16 = r16 runtime input_end buf off in let v17 = r17 runtime input_end buf off in let v18 = r18 runtime input_end buf off in let v19 = r19 runtime input_end buf off in let v20 = r20 runtime input_end buf off in let v21 = r21 runtime input_end buf off in let v22 = r22 runtime input_end buf off in let v23 = r23 runtime input_end buf off in let v24 = r24 runtime input_end buf off in let v25 = r25 runtime input_end buf off in let v26 = r26 runtime input_end buf off in let v27 = r27 runtime input_end buf off in let v28 = r28 runtime input_end buf off in let v29 = r29 runtime input_end buf off in let v30 = r30 runtime input_end buf off in let v31 = r31 runtime input_end buf off in let v32 = r32 runtime input_end buf off in apply_fwd (f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31 v32) rest runtime input_end buf off
-[@@ocamlformat "disable"]
-
-(* Saturate [make] in a single call for up to eight fields, so a decode
-   allocates no intermediate closure; beyond that the fold in [apply_fwd]
-   takes over. Each reader is bound in turn rather than passed straight to
-   [make]: OCaml evaluates arguments right to left, so applying them directly
-   ran the last field's reader first, and a record truncated in the middle
-   failed against whichever later field was read first, reported at the offset
-   the earlier field's declared size had already carried past. The bindings
-   cost nothing at runtime and put the failure back on the first field that
-   cannot be read. The formatter stays off so each arity keeps to one line per
-   reader. *)
-let build_decode : type full r.
-    full -> (full, r) readers -> runtime -> Input_end.t -> bytes -> int -> r =
- fun make readers ->
-  match readers with
-  | Nil -> fun _runtime _input_end _buf _off -> make
-  | Snoc (Nil, r1) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        make v1
-  | Snoc (Snoc (Nil, r1), r2) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        make v1 v2
-  | Snoc (Snoc (Snoc (Nil, r1), r2), r3) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        make v1 v2 v3
-  | Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        make v1 v2 v3 v4
-  | Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        make v1 v2 v3 v4 v5
-  | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
-        make v1 v2 v3 v4 v5 v6
-  | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
-        let v7 = r7 runtime input_end buf off in
-        make v1 v2 v3 v4 v5 v6 v7
-  | Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Snoc (Nil, r1), r2), r3), r4), r5), r6), r7), r8) ->
-      fun runtime input_end buf off ->
-        let v1 = r1 runtime input_end buf off in
-        let v2 = r2 runtime input_end buf off in
-        let v3 = r3 runtime input_end buf off in
-        let v4 = r4 runtime input_end buf off in
-        let v5 = r5 runtime input_end buf off in
-        let v6 = r6 runtime input_end buf off in
-        let v7 = r7 runtime input_end buf off in
-        let v8 = r8 runtime input_end buf off in
-        make v1 v2 v3 v4 v5 v6 v7 v8
-  | readers ->
-      let fwd = to_fwd readers in
-      fun runtime input_end buf off -> apply_fwd make fwd runtime input_end buf off
+      let v1 = read_field r1 runtime input_end buf off in let v2 = read_field r2 runtime input_end buf off in let v3 = read_field r3 runtime input_end buf off in let v4 = read_field r4 runtime input_end buf off in let v5 = read_field r5 runtime input_end buf off in let v6 = read_field r6 runtime input_end buf off in let v7 = read_field r7 runtime input_end buf off in let v8 = read_field r8 runtime input_end buf off in let v9 = read_field r9 runtime input_end buf off in let v10 = read_field r10 runtime input_end buf off in let v11 = read_field r11 runtime input_end buf off in let v12 = read_field r12 runtime input_end buf off in let v13 = read_field r13 runtime input_end buf off in let v14 = read_field r14 runtime input_end buf off in let v15 = read_field r15 runtime input_end buf off in let v16 = read_field r16 runtime input_end buf off in let v17 = read_field r17 runtime input_end buf off in let v18 = read_field r18 runtime input_end buf off in let v19 = read_field r19 runtime input_end buf off in let v20 = read_field r20 runtime input_end buf off in let v21 = read_field r21 runtime input_end buf off in let v22 = read_field r22 runtime input_end buf off in let v23 = read_field r23 runtime input_end buf off in let v24 = read_field r24 runtime input_end buf off in let v25 = read_field r25 runtime input_end buf off in let v26 = read_field r26 runtime input_end buf off in let v27 = read_field r27 runtime input_end buf off in let v28 = read_field r28 runtime input_end buf off in let v29 = read_field r29 runtime input_end buf off in let v30 = read_field r30 runtime input_end buf off in let v31 = read_field r31 runtime input_end buf off in let v32 = read_field r32 runtime input_end buf off in apply_fwd (f v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24 v25 v26 v27 v28 v29 v30 v31 v32) rest runtime input_end buf off
 [@@ocamlformat "disable"]
 
 let lookup_reader_idx rev_readers name =
@@ -610,14 +538,32 @@ let fill_param_slots tbl param_base handles =
     (fun i (Param.Pack p) -> Hashtbl.replace tbl p.Types.name (param_base + i))
     handles
 
+let min_bounds_error min_size buf off =
+  if off < 0 then Fmt.invalid_arg "Codec: negative offset %d" off;
+  raise_eof ~at:off ~expected:min_size
+    ~got:(bytes_from (Input_end.of_bytes buf) off)
+
 (* The structural bounds check decode runs before reading any field: the buffer
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
-   before a zero-copy [get] reads its fields. *)
-let check_decode_bounds wire_size_info min_size runtime input_end buf off =
-  if off + min_size > Bytes.length buf then
+   before a zero-copy [get] reads its fields. [decode] then reads the fixed
+   fields with no check of their own, so the test cannot overflow, and its one
+   call is on the error path, where nothing is live after it. *)
+let check_min_bounds min_size buf off =
+  if off < 0 || off > Bytes.length buf - min_size then
+    min_bounds_error min_size buf off
+
+(* The record ending at [end_off] holds [min_size] bytes and fits the buffer. *)
+let check_end_bounds min_size buf off end_off =
+  if end_off < off + min_size then
     raise_eof ~at:off ~expected:min_size
       ~got:(bytes_from (Input_end.of_bytes buf) off);
+  if end_off > Bytes.length buf then
+    raise_eof ~at:off ~expected:(end_off - off)
+      ~got:(bytes_from (Input_end.of_bytes buf) off)
+
+let check_decode_bounds wire_size_info min_size runtime input_end buf off =
+  check_min_bounds min_size buf off;
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -625,13 +571,21 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
          reads bound-check themselves ([expr_reader]), so a buffer too short to
          hold them already surfaces as end-of-input here; anything else they
          raise is a real error and propagates. *)
-      let end_off = compute runtime input_end buf off in
-      if end_off < off + min_size then
-        raise_eof ~at:off ~expected:min_size
-          ~got:(bytes_from (Input_end.of_bytes buf) off);
-      if end_off > Bytes.length buf then
-        raise_eof ~at:off ~expected:(end_off - off)
-          ~got:(bytes_from (Input_end.of_bytes buf) off)
+      check_end_bounds min_size buf off (compute runtime input_end buf off)
+
+let build_plain_decode make fwd wire_size_info min_size =
+  match wire_size_info with
+  | Fixed _ ->
+      fun buf off ->
+        let input_end = Input_end.of_bytes buf in
+        if off < 0 || off > Input_end.to_int input_end - min_size then
+          min_bounds_error min_size buf off;
+        apply_fwd make fwd no_runtime input_end buf off
+  | Variable _ ->
+      fun buf off ->
+        let input_end = Input_end.of_bytes buf in
+        check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
+        apply_fwd make fwd no_runtime input_end buf off
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
@@ -753,6 +707,15 @@ let build_record_encoder name writers size_of_value ~check =
             name Types.pp_parse_error e));
     !write_off
 
+let build_decoders make readers wire_size_info min_size ~plain =
+  let fwd = to_fwd readers in
+  let raw_decode runtime input_end buf off =
+    apply_fwd make fwd runtime input_end buf off
+  in
+  ( build_checked_decode raw_decode wire_size_info min_size,
+    if plain then Some (build_plain_decode make fwd wire_size_info min_size)
+    else None )
+
 (* [struct_fields] and [param_handles] are the ones [view] derived and checked
    from the same field list. *)
 let seal : type r.
@@ -769,7 +732,6 @@ let seal : type r.
   in
   let min_size = r.min_wire_size in
   let writers = Array.of_list (List.rev r.writers_rev) in
-  let raw_decode = build_decode r.make r.readers in
   let validators = List.rev r.validators_rev in
   let param_base = r.n_array_slots in
   let n_params = List.length param_handles in
@@ -794,14 +756,25 @@ let seal : type r.
   let field_actions = List.rev r.field_actions_rev in
   let size_funcs = Array.of_list (List.rev r.size_of_value_rev) in
   let size_of_value = build_size_of_value size_funcs in
+  let has_checks = has_validation_checks compiled_where struct_fields in
+  let decode, plain_decode =
+    build_decoders r.make r.readers wire_size_info min_size
+      ~plain:((not has_checks) && n_params = 0)
+  in
   {
     size_of_value;
     field_access;
     field_readers = List.rev r.field_readers;
     field_actions;
-    decode = build_checked_decode raw_decode wire_size_info min_size;
+    decode;
+    plain_decode;
     encode =
-      build_record_encoder r.name writers size_of_value ~check:encode_check;
+      (let size_of_value =
+         match wire_size_info with
+         | Fixed n -> fun _ _ -> n
+         | Variable _ -> size_of_value
+       in
+       build_record_encoder r.name writers size_of_value ~check:encode_check);
     wire_size = wire_size_info;
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
@@ -814,6 +787,7 @@ let seal : type r.
     validate_arr;
     populate;
     n_array_slots = n_total;
+    has_checks;
     decode_scratch = scratch;
     param_base;
   }

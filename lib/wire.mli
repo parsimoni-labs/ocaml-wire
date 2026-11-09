@@ -527,11 +527,12 @@ module Field : sig
       length-prefixed sub-codec). An element cannot cross the region boundary;
       encoding raises [Invalid_argument] when the supplied values span fewer or
       more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
-      There is no count-driven form: "a count field, then that many
-      variable-size elements" is expressible neither here nor in 3D, whose only
-      list construct is the byte budget ([elem[n]] is rejected for any element
-      wider than a byte), so that shape needs caller-side iteration over the
-      element parser.
+      Raises [Invalid_argument] on a literal [size] that is negative or more
+      than a buffer can hold. There is no count-driven form: "a count field,
+      then that many variable-size elements" is expressible neither here nor in
+      3D, whose only list construct is the byte budget ([elem[n]] is rejected
+      for any element wider than a byte), so that shape needs caller-side
+      iteration over the element parser.
 
       There is no sizeless form either, for the same reason: 3D has no
       rest-of-region list, so a repeat that consumed whatever remained would
@@ -906,7 +907,9 @@ val nested : size:int expr -> 'a typ -> 'a typ
     encoding raises [Invalid_argument] unless the value's encoded size is
     exactly [size]. It projects to 3D as
     [t f[:byte-size-single-element-array size]], a different construct from the
-    byte-budgeted list {!array} and {!Field.repeat} project to. *)
+    byte-budgeted list {!array} and {!Field.repeat} project to. Raises
+    [Invalid_argument] on a literal [size] that is negative or more than a
+    buffer can hold. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
@@ -915,7 +918,9 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. Encoding zero-pads the unused
     region; a value larger than [size] raises [Invalid_argument]. It projects to
-    3D as [t f[:byte-size-single-element-array-at-most size]]. *)
+    3D as [t f[:byte-size-single-element-array-at-most size]]. Raises
+    [Invalid_argument] on a literal [size] that is negative or more than a
+    buffer can hold. *)
 
 val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the
@@ -1804,6 +1809,7 @@ end
 
 module Private : sig
   module UInt32 = UInt32
+  module Unchecked = Unchecked
   module UInt63 = UInt63
   module Input_end = Input_end
   module Types = Types

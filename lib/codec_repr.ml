@@ -342,9 +342,98 @@ let struct' = struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers
-      * (runtime -> Input_end.t -> bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers * 'a field_read
       -> ('full, 'rest) readers
+
+(* How [decode] reads one field. A scalar at a fixed offset is data, read by
+   [read_scalar]; any other field is a closure, which costs an indirect call
+   through [caml_applyN]. The offsets are relative to the record and inside the
+   span [decode] has already bounds-checked, so the reads skip their own check. *)
+and _ field_read =
+  | Data : 'a scalar -> 'a field_read
+  | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
+
+and _ scalar =
+  | Byte : int -> UInt8.t scalar
+  | U16le : int -> UInt16.t scalar
+  | U16be : int -> UInt16.t scalar
+  | U32le : int -> UInt32.t scalar
+  | U32be : int -> UInt32.t scalar
+  | Sbyte : int -> SInt8.t scalar
+  | I16le : int -> SInt16.t scalar
+  | I16be : int -> SInt16.t scalar
+  | I32le : int -> SInt32.t scalar
+  | I32be : int -> SInt32.t scalar
+  | Bits8 : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16le : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16be : { off : int; shift : int; mask : int } -> int scalar
+
+(* Calls nothing, so it runs without a stack frame. *)
+let read_scalar : type a. a scalar -> bytes -> int -> a =
+ fun r buf base ->
+  match r with
+  | Byte off -> UInt8.unsafe_get buf (base + off)
+  | U16le off -> UInt16.unsafe_le buf (base + off)
+  | U16be off -> UInt16.unsafe_be buf (base + off)
+  | U32le off -> UInt32.unsafe_le buf (base + off)
+  | U32be off -> UInt32.unsafe_be buf (base + off)
+  | Sbyte off -> SInt8.unsafe_get buf (base + off)
+  | I16le off -> SInt16.unsafe_le buf (base + off)
+  | I16be off -> SInt16.unsafe_be buf (base + off)
+  | I32le off -> SInt32.unsafe_le buf (base + off)
+  | I32be off -> SInt32.unsafe_be buf (base + off)
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+
+let[@inline] read_field : type a.
+    a field_read -> runtime -> Input_end.t -> bytes -> int -> a =
+ fun r runtime input_end buf base ->
+  match r with
+  | Data s -> read_scalar s buf base
+  | Fn f -> f runtime input_end buf base
+
+(* The data form of a field read, when the field is a bare scalar at a fixed
+   offset or packed in an 8- or 16-bit word. *)
+let field_read : type a.
+    min_wire_size:int ->
+    field_access ->
+    a typ ->
+    (runtime -> Input_end.t -> bytes -> int -> a) ->
+    plain:bool ->
+    a field_read =
+ fun ~min_wire_size access typ fn ~plain ->
+  match (access, typ) with
+  | _ when not plain -> Fn fn
+  | (Fixed off | Bitfield { byte_off = off; _ }), _
+    when off < 0
+         ||
+         match field_wire_size typ with
+         | Some w -> off + w > min_wire_size
+         | None -> true ->
+      (* Unchecked only inside the span [decode] has checked. *)
+      Fn fn
+  | Fixed off, Uint8 -> Data (Byte off)
+  | Fixed off, Uint16 Little -> Data (U16le off)
+  | Fixed off, Uint16 Big -> Data (U16be off)
+  | Fixed off, Uint32 Little -> Data (U32le off)
+  | Fixed off, Uint32 Big -> Data (U32be off)
+  | Fixed off, Int8 -> Data (Sbyte off)
+  | Fixed off, Int16 Little -> Data (I16le off)
+  | Fixed off, Int16 Big -> Data (I16be off)
+  | Fixed off, Int32 Little -> Data (I32le off)
+  | Fixed off, Int32 Big -> Data (I32be off)
+  | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
+      let mask = (1 lsl width) - 1 in
+      match base with
+      | U8 -> Data (Bits8 { off; shift; mask })
+      | U16 Little -> Data (Bits16le { off; shift; mask })
+      | U16 Big -> Data (Bits16be { off; shift; mask })
+      | U32 _ -> Fn fn)
+  | _ -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
@@ -601,6 +690,9 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  plain_decode : (bytes -> int -> 'r) option;
+      (* [decode] for a codec with no parameters and nothing to check after the
+         reads: [Codec.decode] has only the bounds to check. *)
   encode : 'r -> runtime -> bytes -> int -> int;
       (* Public encode entry. [encode v runtime buf base] writes the record at
          [base], threads each per-field writer's return as the next
@@ -616,6 +708,9 @@ type 'r compiled = {
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
+  has_checks : bool;
+      (* Whether [validate_arr] checks anything: a constraint, a [where]
+         clause, an action, or a field type whose reader validates. *)
   decode_scratch : unit -> slots;
       (* Validation scratch, one per domain (see [domain_local_slots]) and
          zeroed per decode (see [decode_exn]), mirroring the [validate]

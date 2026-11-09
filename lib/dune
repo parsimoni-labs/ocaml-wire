@@ -18,3 +18,24 @@
 (mdx
  (files codec.mli field.mli wire.mli)
  (libraries wire bytesrw))
+
+; The paranoid profile checks every read [Unchecked] makes, so the tests and
+; the fuzzers catch a read outside the frame (docs/execution.md).
+
+(rule
+ (target paranoid.ml)
+ (enabled_if
+  (= %{profile} paranoid))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let enabled = true\n"))))
+
+(rule
+ (target paranoid.ml)
+ (enabled_if
+  (<> %{profile} paranoid))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let enabled = false\n"))))

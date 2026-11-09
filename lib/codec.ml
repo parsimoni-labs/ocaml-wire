@@ -383,12 +383,13 @@ let v = view
 (* Two domains may both compile a codec neither has used; the first to publish
    wins and the other's result is dropped. Compiling is pure, so the two are
    interchangeable. *)
-let rec compiled (t : 'r t) : 'r compiled =
-  match Atomic.get t.compiled with
-  | Some c -> c
-  | None ->
-      let c = t.compile t.name in
-      if Atomic.compare_and_set t.compiled None (Some c) then c else compiled t
+let rec compile (t : 'r t) : 'r compiled =
+  let c = t.compile t.name in
+  if Atomic.compare_and_set t.compiled None (Some c) then c
+  else match Atomic.get t.compiled with Some c -> c | None -> compile t
+
+let[@inline] compiled (t : 'r t) : 'r compiled =
+  match Atomic.get t.compiled with Some c -> c | None -> compile t
 
 let wire_size_opt (t : _ t) =
   match (compiled t).wire_size with Fixed n -> Some n | Variable _ -> None
@@ -437,7 +438,7 @@ let check_env_owner ~op t (env : Param.env) =
       t.name
 
 let require_env ~op t = function
-  | None when not (has_input_params t) -> ()
+  | None when t.n_params = 0 || not (has_input_params t) -> ()
   | None ->
       Fmt.invalid_arg
         "Codec.%s: codec %s has input params; pass ?env (e.g. [Codec.env c |> \
@@ -532,23 +533,29 @@ let env (t : _ t) : Param.env =
     bound = Array.make t.n_params false;
   }
 
-let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+let decode_slow consume e t c buf off =
   (* Require an env that binds every input param, as encode does: an unbound
      input param resolves a parametric size to 0, silently truncating the field
      and misaligning the rest of the record. This is a usage error, not malformed
      input, so it raises [Invalid_argument] rather than returning a parse error. *)
   require_env ~op:"decode" t e;
-  let c = compiled t in
   let runtime = runtime ?env:e () in
   let input_end = Input_end.of_bytes buf in
   let v = c.decode runtime input_end buf off in
-  let arr = c.decode_scratch () in
-  clear_slots arr c.n_array_slots;
-  (match e with
-  | Some (e : Param.env) when t.n_params > 0 ->
-      Array.blit e.slots 0 arr.ints c.param_base t.n_params
-  | _ -> ());
-  c.validate_arr arr runtime input_end buf off;
+  (* A codec with nothing to check and no parameters has nothing left to do
+     after the read: the decode has already checked the bounds. *)
+  let arr =
+    if (not c.has_checks) && t.n_params = 0 then None
+    else
+      let arr = c.decode_scratch () in
+      clear_slots arr c.n_array_slots;
+      (match e with
+      | Some (e : Param.env) when t.n_params > 0 ->
+          Array.blit e.slots 0 arr.ints c.param_base t.n_params
+      | _ -> ());
+      c.validate_arr arr runtime input_end buf off;
+      Some arr
+  in
   let consumed =
     match c.wire_size with
     | Fixed n -> off + n
@@ -556,8 +563,8 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
   in
   Types.check_consumption consume ~consumed
     ~available:(Input_end.to_int input_end);
-  (match e with
-  | Some (e : Param.env) ->
+  (match (e, arr) with
+  | Some (e : Param.env), Some arr ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
          [i]. Write decoded output params back into the environment. *)
       List.iteri
@@ -565,8 +572,14 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
           let v = arr.ints.(c.param_base + i) in
           e.slots.(i) <- v)
         t.param_handles
-  | None -> ());
+  | _ -> ());
   v
+
+let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+  let c = compiled t in
+  match (e, consume, c.plain_decode) with
+  | None, `Prefix, Some decode -> decode buf off
+  | _ -> decode_slow consume e t c buf off
 
 let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
@@ -576,7 +589,9 @@ let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
   let c = compiled t in
   let rt = runtime ?env:e () in
-  let expected = c.size_of_value rt v in
+  let expected =
+    match c.wire_size with Fixed n -> n | Variable _ -> c.size_of_value rt v
+  in
   let actual = c.encode v rt buf off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
@@ -599,9 +614,12 @@ let to_struct t =
   | _ -> param_struct t.name formals ?where:t.where t.struct_fields
 
 let validate ?env:e (t : _ t) buf off =
-  require_env ~op:"validate" t e;
-  let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
-  (compiled t).validate ?env_slots buf off
+  match e with
+  | None when t.n_params = 0 -> (compiled t).validate buf off
+  | _ ->
+      require_env ~op:"validate" t e;
+      let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
+      (compiled t).validate ?env_slots buf off
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in

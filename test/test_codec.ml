@@ -1315,57 +1315,6 @@ let test_dynamic_length_field_stays_in_region () =
     "the shortfall ignores the bytes past the region" (past_the_region '\x01')
     (past_the_region '\xff')
 
-(* [Codec.validate] scans a refined span where it lies rather than copying it,
-   so the scan has to refuse everything the reader refuses. A literal width
-   below zero is refused before any scan, and by the reader, so both entry
-   points have to name the same fault: a validate that reported end-of-input
-   here while decode reported the negative width would be a validator that
-   rejects for a different reason than the decoder it stands in for. *)
-let test_negative_span_width_agrees () =
-  let c =
-    Codec.v "NegWidth" Fun.id
-      Codec.
-        [
-          Field.v "d"
-            (byte_array_where ~size:(int (-1)) ~per_byte:printable_byte)
-          $ Fun.id;
-        ]
-  in
-  let buf = Bytes.make 8 'a' in
-  let kind f =
-    match f () with
-    | () -> Alcotest.failf "accepted a span of width -1"
-    | exception Wire.Parse_error e -> Fmt.str "%a" pp_error_kind e.kind
-  in
-  let validated = kind (fun () -> Codec.validate c buf 0) in
-  let decoded =
-    kind (fun () ->
-        match Codec.decode c buf 0 with
-        | Ok _ -> ()
-        | Error e -> raise (Wire.Parse_error e))
-  in
-  Alcotest.(check string)
-    "validate rejects a negative span width for decode's reason" decoded
-    validated
-
-let test_negative_span_is_parse_error () =
-  let neg_codec =
-    Codec.v "NegSpan" Fun.id
-      Codec.[ Field.v "b" (byte_array ~size:(int (-1))) $ Fun.id ]
-  in
-  let expect name = function
-    | Ok _ -> Alcotest.failf "%s: accepted a negative span" name
-    | Error { kind = Value_out_of_range _; _ } -> ()
-    | Error e ->
-        Alcotest.failf "%s: expected Value_out_of_range, got %a" name
-          pp_parse_error e
-  in
-  expect "Codec.decode" (Codec.decode neg_codec (Bytes.of_string "abc") 0);
-  expect "of_string codec" (of_string (codec neg_codec) "abc");
-  expect "of_string typ" (of_string (byte_array ~size:(int (-1))) "abc");
-  expect "of_bytes typ"
-    (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
-
 let suite =
   ( "codec",
     [
@@ -1470,8 +1419,4 @@ let suite =
         `Quick test_nested_region_eof_stays_in_region;
       Alcotest.test_case "diag: a region bounds a length field it cannot reach"
         `Quick test_dynamic_length_field_stays_in_region;
-      Alcotest.test_case "diag: negative span is a parse error" `Quick
-        test_negative_span_is_parse_error;
-      Alcotest.test_case "diag: negative span width agrees with decode" `Quick
-        test_negative_span_width_agrees;
     ] )
