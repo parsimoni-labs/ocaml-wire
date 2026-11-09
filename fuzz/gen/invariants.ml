@@ -89,34 +89,6 @@ let expected_registry_labels =
     "zeroterm";
     "zeroterm_at_most(1)";
     "zeroterm_at_most(8)";
-    "bits(1,U8)";
-    "bits(1,U8,Lsb)";
-    "bits(3,U8)";
-    "bits(3,U8,Lsb)";
-    "bits(7,U8)";
-    "bits(7,U8,Lsb)";
-    "bits(8,U8)";
-    "bits(8,U8,Lsb)";
-    "bits(1,U16)";
-    "bits(15,U16)";
-    "bits(16,U16)";
-    "bits(16,U16,Lsb)";
-    "bits(1,U16be)";
-    "bits(10,U16be)";
-    "bits(4,U16be)";
-    "bits(15,U16be,Lsb)";
-    "bits(16,U16be)";
-    "bits(16,U16be,Lsb)";
-    "bits(1,U32)";
-    "bits(17,U32)";
-    "bits(17,U32,Lsb)";
-    "bits(32,U32,Lsb)";
-    "bits(1,U32be)";
-    "bits(31,U32be)";
-    "bits(31,U32be,Lsb)";
-    "bits(32,U32be)";
-    "bits(32,U32be,Lsb)";
-    "bits(4,U32,Lsb)";
     "bitpack_u8_msb(1,2,5)";
     "bitpack_u8_lsb(1,2,5)";
     "bitpack_u8_spill(5,5)";
@@ -194,6 +166,13 @@ let expected_registry_labels =
     "finite_float64";
     "nan_float64";
   ]
+
+(* The [bits] shapes this platform's [int] holds (see [bits_shapes]). *)
+let expected_bits_labels =
+  List.filter_map
+    (fun ((width, _, _) as shape) ->
+      if int_holds_width width then Some (bits_label shape) else None)
+    bits_shapes
 
 let expected_fixed_labels =
   [
@@ -276,7 +255,8 @@ let expected_sampler_labels =
 let check_registry_invariants () =
   let labels = List.map fst registry in
   assert_no_duplicates "registry" labels;
-  assert_contains "registry" labels expected_registry_labels
+  assert_contains "registry" labels
+    (expected_registry_labels @ expected_bits_labels)
 
 let check_vocabulary_group (group, labels) =
   if labels = [] then Alcobar.failf "%s is empty" group;

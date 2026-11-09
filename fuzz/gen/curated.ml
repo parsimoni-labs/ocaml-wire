@@ -243,44 +243,63 @@ let byte_gens =
     ("zeroterm_at_most(8)", Pack (zeroterm_at_most 8));
   ]
 
-let bits_gens =
+(* Every [bits] shape the registry draws. On js_of_ocaml (32-bit [int]) and
+   wasm_of_ocaml (31-bit) [Wire.bits] refuses a width the native int cannot hold
+   without its sign bit, so those shapes are left out there rather than
+   aborting the registry at startup. *)
+let bits_shapes =
   [
-    ("bits(1,U8)", Pack (bits ~width:1 Wire.U8));
-    ("bits(1,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:1 Wire.U8));
-    ("bits(3,U8)", Pack (bits ~width:3 Wire.U8));
-    ("bits(3,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:3 Wire.U8));
-    ("bits(7,U8)", Pack (bits ~width:7 Wire.U8));
-    ("bits(7,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:7 Wire.U8));
-    ("bits(8,U8)", Pack (bits ~width:8 Wire.U8));
-    ("bits(8,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:8 Wire.U8));
-    ("bits(1,U16)", Pack (bits ~width:1 Wire.U16));
-    ("bits(15,U16)", Pack (bits ~width:15 Wire.U16));
-    ("bits(16,U16)", Pack (bits ~width:16 Wire.U16));
-    ( "bits(16,U16,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16) );
-    ("bits(1,U16be)", Pack (bits ~width:1 Wire.U16be));
-    ("bits(10,U16be)", Pack (bits ~width:10 Wire.U16be));
-    ("bits(4,U16be)", Pack (bits ~width:4 Wire.U16be));
-    ( "bits(15,U16be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:15 Wire.U16be) );
-    ("bits(16,U16be)", Pack (bits ~width:16 Wire.U16be));
-    ( "bits(16,U16be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16be) );
-    ("bits(1,U32)", Pack (bits ~width:1 Wire.U32));
-    ("bits(17,U32)", Pack (bits ~width:17 Wire.U32));
-    ( "bits(17,U32,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:17 Wire.U32) );
-    ( "bits(32,U32,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32) );
-    ("bits(1,U32be)", Pack (bits ~width:1 Wire.U32be));
-    ("bits(31,U32be)", Pack (bits ~width:31 Wire.U32be));
-    ( "bits(31,U32be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:31 Wire.U32be) );
-    ("bits(32,U32be)", Pack (bits ~width:32 Wire.U32be));
-    ( "bits(32,U32be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32be) );
-    ("bits(4,U32,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U32));
+    (1, Wire.U8, Wire.Msb_first);
+    (1, Wire.U8, Wire.Lsb_first);
+    (3, Wire.U8, Wire.Msb_first);
+    (3, Wire.U8, Wire.Lsb_first);
+    (7, Wire.U8, Wire.Msb_first);
+    (7, Wire.U8, Wire.Lsb_first);
+    (8, Wire.U8, Wire.Msb_first);
+    (8, Wire.U8, Wire.Lsb_first);
+    (1, Wire.U16, Wire.Msb_first);
+    (15, Wire.U16, Wire.Msb_first);
+    (16, Wire.U16, Wire.Msb_first);
+    (16, Wire.U16, Wire.Lsb_first);
+    (1, Wire.U16be, Wire.Msb_first);
+    (10, Wire.U16be, Wire.Msb_first);
+    (4, Wire.U16be, Wire.Msb_first);
+    (15, Wire.U16be, Wire.Lsb_first);
+    (16, Wire.U16be, Wire.Msb_first);
+    (16, Wire.U16be, Wire.Lsb_first);
+    (1, Wire.U32, Wire.Msb_first);
+    (17, Wire.U32, Wire.Msb_first);
+    (17, Wire.U32, Wire.Lsb_first);
+    (32, Wire.U32, Wire.Lsb_first);
+    (1, Wire.U32be, Wire.Msb_first);
+    (31, Wire.U32be, Wire.Msb_first);
+    (31, Wire.U32be, Wire.Lsb_first);
+    (32, Wire.U32be, Wire.Msb_first);
+    (32, Wire.U32be, Wire.Lsb_first);
+    (4, Wire.U32, Wire.Lsb_first);
   ]
+
+let bits_label (width, base, bit_order) =
+  let base =
+    match base with
+    | Wire.U8 -> "U8"
+    | U16 -> "U16"
+    | U16be -> "U16be"
+    | U32 -> "U32"
+    | U32be -> "U32be"
+  in
+  let lsb = match bit_order with Wire.Lsb_first -> ",Lsb" | Msb_first -> "" in
+  Fmt.str "bits(%d,%s%s)" width base lsb
+
+let int_holds_width width = width <= Sys.int_size - 1
+
+let bits_gens =
+  List.filter_map
+    (fun ((width, base, bit_order) as shape) ->
+      if int_holds_width width then
+        Some (bits_label shape, Pack (bits ~bit_order ~width base))
+      else None)
+    bits_shapes
 
 let bitpack_gens =
   [

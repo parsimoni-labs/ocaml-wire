@@ -21,3 +21,15 @@ val rename_case : string -> packed -> packed
 
 val registry : (string * packed) list
 (** [registry] is the curated gens, each with a unique struct name. *)
+
+val int_holds_width : int -> bool
+(** [int_holds_width width] is [true] when an [int] of this platform holds every
+    unsigned value of [width] bits. *)
+
+val bits_label : int * Wire.bitfield * Wire.bit_order -> string
+(** [bits_label (width, base, bit_order)] is the label of the registry's
+    bitfield generator of that shape. *)
+
+val bits_shapes : (int * Wire.bitfield * Wire.bit_order) list
+(** [bits_shapes] is every bitfield shape the registry draws: width, base and
+    bit order. *)

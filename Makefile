@@ -9,8 +9,10 @@ build:
 test:
 	dune runtest
 
-# Runs test/wasm under node with wasm_of_ocaml (31-bit ints), then fails on
-# any integer-overflow truncation warning from wire's own code. optint's two
+# Runs test/wasm and a short smoke of the fuzz properties (fuzz/wasm) under
+# node, built with wasm_of_ocaml (31-bit ints) and js_of_ocaml (32-bit), then
+# fails on any integer-overflow truncation warning from wire's own code or the
+# fuzz generators. optint's two
 # known literals (0x7fffffff, 0x40000000) are filtered: its 32-bit emulation
 # modules truncate to the bit patterns they intend on a 31-bit target, and
 # the runtime checks prove the values survive. Warnings only surface for
@@ -21,7 +23,7 @@ test-wasm:
 	  { echo "wasm_of_ocaml not found: opam install wasm_of_ocaml-compiler"; exit 1; }
 	@command -v node >/dev/null || { echo "node not found"; exit 1; }
 	@mkdir -p _build
-	dune build @test/wasm/runtest 2> _build/wasm-build.log; \
+	dune build @test/wasm/runtest @fuzz/wasm/runtest 2> _build/wasm-build.log; \
 	status=$$?; cat _build/wasm-build.log >&2; \
 	test $$status -eq 0 || exit $$status; \
 	! grep "integer-overflow" _build/wasm-build.log \
