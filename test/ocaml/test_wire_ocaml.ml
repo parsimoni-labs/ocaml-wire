@@ -261,6 +261,30 @@ let test_stale () =
   | () -> Alcotest.fail "a changed codec was accepted"
   | exception Invalid_argument _ -> ()
 
+(* The digest a generated module checks at load time changes with anything its
+   code relies on: a field's sign, an enum's cases, a bitfield's layout. *)
+let test_digest () =
+  let differ msg a b = Alcotest.(check bool) msg false (String.equal a b) in
+  let signed_vs_unsigned =
+    let u = Codec.v "D" (fun x -> x) Codec.[ Field.v "x" uint16 $ Fun.id ] in
+    let i = Codec.v "D" (fun x -> x) Codec.[ Field.v "x" int16 $ Fun.id ] in
+    (Wire.Private.Gen.digest u, Wire.Private.Gen.digest i)
+  in
+  differ "signed and unsigned" (fst signed_vs_unsigned) (snd signed_vs_unsigned);
+  let enum cases =
+    Wire.Private.Gen.digest
+      (Codec.v "D" Fun.id Codec.[ Field.v "x" (enum "E" cases uint8) $ Fun.id ])
+  in
+  differ "enum cases"
+    (enum [ ("a", 1); ("b", 2) ])
+    (enum [ ("a", 1); ("b", 3) ]);
+  let bits order =
+    Wire.Private.Gen.digest
+      (Codec.v "D" Fun.id
+         Codec.[ Field.v "x" (bits ~bit_order:order ~width:3 U8) $ Fun.id ])
+  in
+  differ "bit order" (bits Msb_first) (bits Lsb_first)
+
 (* A codec the generator does not specialise gets a module that calls it. *)
 let test_fallback () =
   let src = Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable in
@@ -493,6 +517,8 @@ let suite =
       Alcotest.test_case "not specialised" `Quick test_variable;
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;
+      Alcotest.test_case "the digest sees sign, cases and layout" `Quick
+        test_digest;
       Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;

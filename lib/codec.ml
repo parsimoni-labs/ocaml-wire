@@ -1291,21 +1291,92 @@ module Gen = struct
   let int8 x = cast SInt8.int_eq x
   let int16 x = cast SInt16.int_eq x
 
-  let pp_field ppf (Types.Field f) =
-    Fmt.pf ppf "%a:%a:%a:%b;"
-      Fmt.(option string)
-      f.field_name Types.pp_typ f.field_typ
-      Fmt.(option Types.pp_expr)
-      f.constraint_ (Option.is_some f.action)
+  (* A description of a codec that changes whenever anything the generated
+     code relies on changes: each integer's width, sign and byte order, each
+     bitfield's width, base word and bit order, each enum's cases, each
+     refinement and size. A [map]'s functions cannot be compared; the generator
+     does not specialise them. *)
+  let endian = function Types.Little -> "le" | Types.Big -> "be"
+
+  let base = function
+    | Types.U8 -> "8"
+    | Types.U16 e -> "16" ^ endian e
+    | Types.U32 e -> "32" ^ endian e
+
+  let order = function Types.Msb_first -> "msb" | Types.Lsb_first -> "lsb"
+  let expr b e = Buffer.add_string b (Fmt.str "%a" Types.pp_expr e)
+
+  let rec describe : type a. Buffer.t -> a Types.typ -> unit =
+   fun b t ->
+    let add = Buffer.add_string b in
+    let wrap name f =
+      add name;
+      add "(";
+      f ();
+      add ")"
+    in
+    match t with
+    | Types.Uint8 -> add "u8"
+    | Types.Int8 -> add "i8"
+    | Types.Uint16 e -> add ("u16" ^ endian e)
+    | Types.Int16 e -> add ("i16" ^ endian e)
+    | Types.Uint32 e -> add ("u32" ^ endian e)
+    | Types.Int32 e -> add ("i32" ^ endian e)
+    | Types.Uint64 e -> add ("u64" ^ endian e)
+    | Types.Int64 e -> add ("i64" ^ endian e)
+    | Types.Float32 e -> add ("f32" ^ endian e)
+    | Types.Float64 e -> add ("f64" ^ endian e)
+    | Types.Uint_var { size; endian = e } ->
+        wrap ("uvar" ^ endian e) (fun () -> expr b size)
+    | Types.Bits { width; base = w; bit_order } ->
+        add (Fmt.str "bits(%d,%s,%s)" width (base w) (order bit_order))
+    | Types.Where { cond; inner } ->
+        wrap "where" (fun () ->
+            expr b cond;
+            add ",";
+            describe b inner)
+    | Types.Byte_array { size } -> wrap "bytes" (fun () -> expr b size)
+    | Types.Byte_slice { size } -> wrap "slice" (fun () -> expr b size)
+    | Types.Byte_array_where { size; elt_var; cond } ->
+        wrap "bytes_where" (fun () ->
+            expr b size;
+            add ("," ^ elt_var ^ ",");
+            expr b cond)
+    | Types.Enum { name; cases; base = inner; closed } ->
+        wrap "enum" (fun () ->
+            add (Fmt.str "%s,%b," name closed);
+            List.iter (fun (n, v) -> add (Fmt.str "%s=%d;" n v)) cases;
+            describe b inner)
+    | Types.Map { inner; index_bound; _ } ->
+        wrap "map" (fun () ->
+            add (Fmt.str "%a," Fmt.(option int) index_bound);
+            describe b inner)
+    | Types.Optional { present; inner } ->
+        wrap "optional" (fun () ->
+            expr b present;
+            add ",";
+            describe b inner)
+    | Types.Codec { codec_name; codec_struct; _ } ->
+        wrap "codec" (fun () ->
+            add codec_name;
+            describe_struct b codec_struct)
+    | t -> add (Fmt.str "?%a" Types.pp_typ t)
+
+  and describe_struct b (s : Types.struct_) =
+    Buffer.add_string b (Fmt.str "%s(%d)" s.name (List.length s.params));
+    Option.iter (expr b) s.where;
+    List.iter
+      (fun (Types.Field f) ->
+        Buffer.add_string b (Fmt.str "[%a:" Fmt.(option string) f.field_name);
+        describe b f.field_typ;
+        Option.iter (expr b) f.constraint_;
+        Buffer.add_string b (Fmt.str ":%b]" (Option.is_some f.action)))
+      s.fields
 
   let digest t =
-    let s = to_struct t in
-    let d =
-      Fmt.str "%s(%d)%a%a" s.name (List.length s.params)
-        Fmt.(option Types.pp_expr)
-        s.where (Fmt.list pp_field) s.fields
-    in
-    Digest.to_hex (Digest.string d)
+    let b = Buffer.create 256 in
+    describe_struct b (to_struct t);
+    Digest.to_hex (Digest.string (Buffer.contents b))
 
   let check t d =
     if not (String.equal (digest t) d) then
