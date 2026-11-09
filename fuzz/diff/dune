@@ -30,7 +30,7 @@
  (modules fuzz stubs diff_index)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
- (libraries wire fuzz_gen diff_codecs alcobar fmt)
+ (libraries wire fuzz_gen diff_codecs diff_driver alcobar fmt)
  (foreign_archives diffcodecs)
  (foreign_stubs
   (language c)

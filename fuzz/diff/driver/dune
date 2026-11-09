@@ -1,0 +1,3 @@
+(library
+ (name diff_driver)
+ (libraries fmt fuzz_gen diff_codecs alcobar))
