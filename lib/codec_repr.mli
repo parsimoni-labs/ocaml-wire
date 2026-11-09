@@ -380,3 +380,9 @@ val write_scalar : 'a scalar -> bytes -> int -> 'a -> unit
 (** [write_scalar s buf base v] writes [v] as the scalar [s] of the record at
     [base], with no bounds check. A bitfield is or-ed into its word, which the
     encoder has zeroed first. *)
+
+val field_scalar :
+  min_wire_size:int -> field_access -> 'a Types.typ -> 'a scalar option
+(** [field_scalar ~min_wire_size access typ] is the scalar a field of type [typ]
+    at [access] is, when it is a bare scalar at a fixed offset inside the first
+    [min_wire_size] bytes or packed in an 8- or 16-bit word. *)

@@ -13,6 +13,9 @@
 - A `paranoid` dune profile turns every unchecked read back into a checked one,
   so a read past the frame raises in tests (#435, @samoht)
 
+- `Wire.Codec.valid` and `Wire.Codec.read` read the fields of a buffer validated
+  once, with no bounds check per read (#435, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a

@@ -1346,6 +1346,23 @@ module Codec : sig
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
 
+  type 'r valid
+  (** A buffer and offset where {!valid} has accepted a ['r]. Only {!valid}
+      makes one, and a buffer's length never changes, so a field read through
+      {!read} stays inside the buffer whatever the bytes become later. *)
+
+  val valid : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
+  (** [valid ?env c buf off] runs {!validate} and returns the proof that it
+      passed. Raises what {!validate} raises. *)
+
+  val read :
+    ?env:Param.env -> 'r t -> ('a, 'r) field -> ('r valid -> 'a) Staged.t
+  (** [read ?env c f] is a staged reader of field [f] from a value {!valid} has
+      accepted. A scalar at a fixed offset is one load with no bounds check; any
+      other field reads as {!get} does. Raises [Invalid_argument] on the same
+      terms as {!get}, and when the staged reader is given a value validated by
+      another codec. *)
+
   val set :
     ?env:Param.env ->
     'r t ->
