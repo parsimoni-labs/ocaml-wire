@@ -17,11 +17,11 @@
   @samoht)
 
 - `Wire_ocaml`, in the new `wire.ocaml` library, writes a fixed-size codec out
-  as OCaml with every offset a constant: `decode`, `validate` and `write`. The
-  generated module checks when it loads that its codec has not changed, and
-  hands any input it rejects to the codec, so its errors are the codec's own.
-  With ``~target:`OxCaml`` its hot paths are checked `[@zero_alloc]` (#436,
-  @samoht)
+  as OCaml with every offset a constant: `decode`, `validate`, `write` and a
+  getter per field. The generated module checks when it loads that its codec has
+  not changed, and hands any input it rejects to the codec, so its errors are
+  the codec's own. With ``~target:`OxCaml`` its hot paths are checked
+  `[@zero_alloc]` (#436, @samoht)
 
 ### Changed
 

@@ -76,3 +76,33 @@ val variable_make : UInt8.t -> string -> UInt8.t * string
 val variable : (UInt8.t * string) Codec.t
 (** [variable] has a byte array sized by a field, which the generator does not
     specialise. *)
+
+val ipv4_frag : (UInt16.t, ipv4) Codec.field
+(** [ipv4_frag] is a field of {!val-ipv4}. *)
+
+val ipv4_proto : (UInt8.t, ipv4) Codec.field
+(** [ipv4_proto] is a field of {!val-ipv4}. *)
+
+val ipv4_src : (SInt32.t, ipv4) Codec.field
+(** [ipv4_src] is a field of {!val-ipv4}. *)
+
+val ipv4_dst : (UInt32.t, ipv4) Codec.field
+(** [ipv4_dst] is a field of {!val-ipv4}. *)
+
+val mixed_b : (SInt16.t, mixed) Codec.field
+(** [mixed_b] is a field of {!val-mixed}. *)
+
+val mixed_e : (UInt32.t, mixed) Codec.field
+(** [mixed_e] is a field of {!val-mixed}. *)
+
+val mixed_f : (SInt32.t, mixed) Codec.field
+(** [mixed_f] is a field of {!val-mixed}. *)
+
+val mixed_h : (int, mixed) Codec.field
+(** [mixed_h] is a field of {!val-mixed}. *)
+
+val eth_src : (string, string * string * UInt16.t) Codec.field
+(** [eth_src] is a field of {!val-eth}. *)
+
+val checked_proto : (UInt8.t, checked) Codec.field
+(** [checked_proto] is the closed enum of {!val-checked}. *)

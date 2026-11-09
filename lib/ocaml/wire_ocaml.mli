@@ -10,11 +10,14 @@
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
 
-    The generated module has [size], [decode], [validate] and
-    [write buf off v1 ... vn], which stores field values in order. Without
-    [~make] it also defines a record [t] of the field values, [make] and
-    [encode]. A codec it cannot specialise (variable size, parameters, actions,
-    maps) gets a module with [decode] and [validate] that call the codec. *)
+    The generated module has [get_<field> buf off] for each field, which reads
+    it as {!Wire.Codec.get} does with one bounds-checked load at a constant
+    offset, and [get_<field>_int] for a 32-bit field's [int] view. It has
+    [size], [decode], [validate] and [write buf off v1 ... vn], which stores
+    field values in order. Without [~make] it also defines a record [t] of the
+    field values, [make] and [encode]. A codec it cannot specialise (variable
+    size, parameters, actions, maps) gets a module with [decode] and [validate]
+    that call the codec. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]

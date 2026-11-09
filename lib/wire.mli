@@ -1963,6 +1963,10 @@ module Private : sig
     (** [byte_length ~expected ~actual] raises the error for a byte array of
         [actual] bytes where [expected] are needed. *)
 
+    val get_failed : 'r Codec.t -> string -> bytes -> int -> 'a
+    (** [get_failed t name buf off] raises the error a getter for the field
+        [name] of [t] raises on [buf] at [off]. *)
+
     val encode_rejected : 'r Codec.t -> bytes -> int -> 'a
     (** [encode_rejected t buf off] raises the error {!Codec.val-encode} raises
         when the record it wrote at [off] fails its constraints. *)
