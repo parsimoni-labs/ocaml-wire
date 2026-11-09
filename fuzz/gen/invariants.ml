@@ -271,6 +271,7 @@ let expected_sampler_labels =
     "twhere";
     "fconstraint";
   ]
+  @ any_labels [ flat_check_order; flat_table; flat_fixed_steps; wide 6 ]
 
 let check_registry_invariants () =
   let labels = List.map fst registry in
@@ -481,6 +482,33 @@ let check_field_reach () =
        registry entries out of %d"
       readable writable multi (List.length registry)
 
+(* Every fast path [Codec] can select must be selected by some codec the
+   fuzzer draws -- a registry entry, a composition leaf or a fixed-seed sample
+   -- or the oracles comparing fast and general paths never run it. Computed
+   once: the sample builds its codecs afresh. *)
+let missing_paths =
+  lazy
+    (let paths g = Wire.Private.Testing.paths g.codec in
+     let reached =
+       List.concat_map (fun (_, Pack g) -> paths g) registry
+       @ List.concat_map
+           (fun (Any a) -> paths a.g)
+           (fixed_leaves @ var_leaves @ env_leaves @ flat_leaves)
+       @ List.concat_map
+           (fun (_, Pack g) -> paths g)
+           (sample ~seed:42 ~count:64)
+     in
+     List.filter
+       (fun p -> not (List.mem p reached))
+       Wire.Private.Testing.all_paths)
+
+let check_path_coverage () =
+  match Lazy.force missing_paths with
+  | [] -> ()
+  | missing ->
+      Alcobar.failf "no codec the fuzzer draws selects the fast paths: %s"
+        (String.concat ", " missing)
+
 (* A check with no random input. Alcobar runs a case's body on every
    iteration, each under its per-iteration timeout, so such a check only
    repeated itself, and a slow one could cross the timeout on a slow runner:
@@ -515,4 +543,5 @@ let invariant_cases label =
     const_case (label ^ " sampler distribution") check_sampler_distribution;
     const_case (label ^ " sampler nesting") check_sampler_nesting;
     const_case (label ^ " field access reach") check_field_reach;
+    const_case (label ^ " fast path coverage") check_path_coverage;
   ]

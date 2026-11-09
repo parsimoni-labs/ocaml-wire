@@ -86,6 +86,28 @@ let file_input_mode () =
 
 let afl_mode () = corpus_generation_mode () || file_input_mode ()
 
+(* Alcobar's AFL runner turns a failed property into a bare exception and
+   prints nothing, so replaying a crashing input in CI would not say what
+   diverged. On a file input, print the failure before raising it. *)
+let file_input = lazy (file_input_mode ())
+let reported = ref false
+
+module Alcobar = struct
+  include Alcobar
+
+  let fail msg =
+    if Lazy.force file_input then begin
+      reported := true;
+      Fmt.epr "FAIL %s@." msg
+    end;
+    Alcobar.fail msg
+
+  let failf fmt = Fmt.kstr fail fmt
+end
+
+let failure_reported () = !reported
+let failf = Alcobar.failf
+
 let slice_of_string s =
   let b = Bytes.of_string s in
   Bytesrw.Bytes.Slice.make_or_eod b ~first:0 ~length:(Bytes.length b)
@@ -102,6 +124,8 @@ let bytes_of_octets xs =
   let b = Bytes.create (List.length xs) in
   List.iteri (fun i x -> Bytes.set_uint8 b i (x land 0xFF)) xs;
   b
+
+let pp_hex ppf s = String.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) s
 
 let bytes_fixed n =
   Alcobar.map Alcobar.[ Alcobar.bytes_fixed n ] bytes_of_string

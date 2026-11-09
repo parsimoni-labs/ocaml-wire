@@ -1275,3 +1275,56 @@ let[@inline always] extract (bf : bitfield) (word : Optint.t) =
         (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
 
 (* -- Snapshot: batch bitfield access -- *)
+
+module Testing = struct
+  (* Every fast path off: the compiled record of [t] with the plain entry
+     points dropped, so each operation takes its general path. *)
+  let general (t : 'r t) : 'r t =
+    let compile name =
+      let c = t.compile name in
+      {
+        c with
+        plain_decode = None;
+        plain_encode = None;
+        fixed_frame = -1;
+        plain_validate = (fun buf off -> c.validate buf off);
+        paths = ([] : string list);
+      }
+    in
+    { t with compiled = Atomic.make None; compile }
+
+  let fresh (t : 'r t) : 'r t = { t with compiled = Atomic.make None }
+
+  let read_paths (t : _ t) (c : _ compiled) : string list =
+    let frame =
+      match c.wire_size with
+      | Fixed n -> n
+      | Variable { min_size; _ } -> min_size
+    in
+    let scalar (Types.Field f) =
+      match f.field_name with
+      | None -> false
+      | Some name -> (
+          (not (List.mem_assoc name c.field_actions))
+          &&
+          match List.assoc_opt name c.field_access with
+          | Some (_, access) ->
+              Option.is_some
+                (field_scalar ~min_wire_size:frame access f.field_typ)
+          | None -> false)
+    in
+    if List.exists scalar t.struct_fields then [ "read.scalar" ] else []
+
+  let paths t : string list =
+    let c = compiled t in
+    c.paths @ if t.n_params = 0 then read_paths t c else []
+
+  let all_paths : string list =
+    [ "decode.fixed"; "decode.variable"; "decode.layout" ]
+    @ List.concat_map
+        (fun p ->
+          [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ])
+        [ "pass"; "layout" ]
+    @ List.init 16 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
+    @ ([ "encode.plain"; "encode.blit"; "read.scalar" ] : string list)
+end

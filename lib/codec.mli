@@ -424,3 +424,21 @@ val blit_slice_exact : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
 (** [blit_slice_exact n buf off src] is like {!blit_string_exact} but copies
     from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
     [byte_slice] fields. *)
+
+(** Test-only views of how a codec is compiled. *)
+module Testing : sig
+  val general : 'r t -> 'r t
+  (** [general t] is [t] compiled with every fast path off: {!val-decode},
+      {!val-validate}, {!val-valid} and {!val-encode} take their general path,
+      which a fast path must agree with. *)
+
+  val fresh : 'r t -> 'r t
+  (** [fresh t] is [t] not yet compiled, so its next operation is its first. *)
+
+  val paths : 'r t -> string list
+  (** [paths t] names the fast paths compiling [t] selected, from {!all_paths}.
+  *)
+
+  val all_paths : string list
+  (** Every name {!paths} can return. *)
+end

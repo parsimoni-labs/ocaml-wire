@@ -1147,6 +1147,7 @@ module Private = struct
   module Bitfield = Bitfield
   module Uint_var = Uint_var
   module Shape = Shape
+  module Testing = Codec.Testing
   module Names = Names
 
   let param_name = param_name

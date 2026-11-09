@@ -40,19 +40,38 @@ let afl_contract_cases ?(max_len = 256) label cases ~check =
             let name, item =
               List.nth cases (input.selector mod List.length cases)
             in
-            check (label ^ " " ^ name) item input);
+            let label = label ^ " " ^ name in
+            try check label item input
+            with e when Lazy.force file_input ->
+              if not (failure_reported ()) then
+                Fmt.epr "FAIL %s: %s@." label (Printexc.to_string e);
+              Fmt.epr "  case %s, mode %d, payload %a@." label input.mode pp_hex
+                (string_of_bytes input.payload);
+              raise e);
       ]
 
+(* A registry codec for the AFL lane, with what the fast-path oracles compare
+   it against, built on the first input that selects it. *)
+type afl_target = Target : 'a t * 'a addressed Lazy.t -> afl_target
+
 let afl_cases_for ?max_len cases label =
-  afl_contract_cases ?max_len label cases ~check:(fun case (Pack g) input ->
+  let cases =
+    List.map
+      (fun (name, Pack g) -> (name, Target (g, lazy (addressed g))))
+      cases
+  in
+  afl_contract_cases ?max_len label cases
+    ~check:(fun case (Target (g, a)) input ->
       let env = positive_env g in
-      match input.mode mod 4 with
+      match input.mode mod 6 with
       | 0 ->
           check_decode_safety case "afl" ?env g input.payload;
           check_validate_safety case "afl" ?env g input.payload
       | 1 -> check_decode_safety case "afl" ?env g input.payload
       | 2 -> check_validate_safety case "afl" ?env g input.payload
-      | _ -> check_decode_validate_agree case "afl" ?env g input.payload)
+      | 3 -> check_decode_validate_agree case "afl" ?env g input.payload
+      | 4 -> check_fast_general case "afl" ?env (Lazy.force a) g input.payload
+      | _ -> check_cold_warm case "afl" ?env (Lazy.force a) g input.payload)
 
 (* AFL fuzzes the whole registry, not a curated subset: the [selector] byte
    picks one codec per input, so covering every combinator costs nothing

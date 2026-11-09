@@ -971,6 +971,8 @@ type 'r compiled = {
          Domain-local so concurrent decode of one codec value on separate
          domains does not share the scratch. *)
   param_base : int;
+  paths : string list;
+      (* The fast paths [seal] selected, by name: read by [Testing.paths]. *)
 }
 
 type 'r t = {

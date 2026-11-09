@@ -72,6 +72,12 @@ let sampler_weird_leaves : any list =
       };
     Any
       { g = lookup [ 'a'; 'b'; 'c'; 'd' ] uint8; size = Some 1; label = "lkp" };
+    (* Flat records on the fast paths: checks folded into intervals and a byte
+       table, a general check step, and a staged encode wider than a pair. *)
+    flat_check_order;
+    flat_table;
+    flat_fixed_steps;
+    wide 6;
   ]
 
 (* Refined and byte-span shapes. Every one is fixed-size and parameter-free, so

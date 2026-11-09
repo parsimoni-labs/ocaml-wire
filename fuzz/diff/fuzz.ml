@@ -20,8 +20,15 @@
 
 open Fuzz_gen
 
-let accepts f =
-  match f () with () -> true | exception Wire.Parse_error _ -> false
+let pp_hex ppf s = String.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) s
+
+(* The parse error a clean rejection raised, [None] on acceptance. *)
+let rejection f =
+  match f () with () -> None | exception Wire.Parse_error e -> Some e
+
+let pp_verdict ppf = function
+  | None -> Fmt.string ppf "accepts"
+  | Some e -> Fmt.pf ppf "rejects (%a)" Wire.pp_parse_error e
 
 (* The EverParse validator accepts iff the bytes parse (enough input, valid
    structure) and every refinement holds. [Codec.decode_exn] is exactly that:
@@ -34,14 +41,23 @@ let accepts f =
    the closer counterpart of a C validator, since it checks without building a
    record. Run it alongside, so a refinement that reaches one of the two OCaml
    paths but not the other is caught here rather than papered over by whichever
-   one the C side happens to agree with. *)
-let ocaml_accepts label (Pack g) b =
+   one the C side happens to agree with. The same codec with its fast paths off
+   must reach the same verdict too. *)
+let general_verdict (Pack g) =
+  let general = Wire.Private.Testing.general (codec g) in
+  fun b -> rejection (fun () -> ignore (Wire.Codec.decode_exn general b 0))
+
+let ocaml_accepts label (Pack g) general b =
   let c = codec g in
-  let decoded = accepts (fun () -> ignore (Wire.Codec.decode_exn c b 0)) in
-  let validated = accepts (fun () -> Wire.Codec.validate c b 0) in
-  if decoded <> validated then
-    Alcobar.failf "%s: OCaml decode accepts=%b but Codec.validate accepts=%b"
-      label decoded validated;
+  let decoded = rejection (fun () -> ignore (Wire.Codec.decode_exn c b 0)) in
+  let validated = rejection (fun () -> Wire.Codec.validate c b 0) in
+  let slow = general b in
+  if Option.is_none decoded <> Option.is_none validated then
+    failf "%s: on %a, OCaml decode %a but Codec.validate %a" label pp_hex
+      (Bytes.to_string b) pp_verdict decoded pp_verdict validated;
+  if Option.is_none decoded <> Option.is_none slow then
+    failf "%s: on %a, OCaml decode %a but its general path %a" label pp_hex
+      (Bytes.to_string b) pp_verdict decoded pp_verdict slow;
   decoded
 
 type field_check = {
@@ -61,18 +77,17 @@ let to_slot width v =
 
 let diff_field label b c_fields f =
   match List.assoc_opt f.fname c_fields with
-  | None ->
-      Alcobar.failf "%s: EverParse C reported no value for field %s" label
-        f.fname
+  | None -> failf "%s: EverParse C reported no value for field %s" label f.fname
   | Some raw -> (
       let c = to_slot f.width raw in
       match f.read b 0 with
       | v ->
           let o = to_slot f.width (Int64.of_int v) in
           if not (Int64.equal o c) then
-            Alcobar.failf
-              "%s: field %s: OCaml decoded 0x%Lx but EverParse C decoded 0x%Lx"
-              label f.fname o c
+            failf
+              "%s: field %s: OCaml decoded 0x%Lx but EverParse C decoded 0x%Lx \
+               from %a"
+              label f.fname o c pp_hex (Bytes.to_string b)
       | exception Wire.Parse_error _ ->
           (* [Codec.field_readers] reports through an OCaml [int], one bit short
              of an 8-byte field, so past 2^62 it has no [int] to report and
@@ -80,7 +95,7 @@ let diff_field label b c_fields f =
              does not fit an [int] either, which still holds the field's top two
              bits to what the OCaml decoder made of them. *)
           if Int64.unsigned_to_int c <> None then
-            Alcobar.failf
+            failf
               "%s: field %s: OCaml decoded a value too large for an int but \
                EverParse C decoded 0x%Lx"
               label f.fname c)
@@ -89,14 +104,16 @@ let diff_values label fields c_values b =
   if fields <> [] then begin
     let c_fields = c_values b in
     if List.compare_lengths c_fields fields <> 0 then
-      Alcobar.failf "%s: EverParse C reported %d field values, expected %d"
-        label (List.length c_fields) (List.length fields);
+      failf "%s: EverParse C reported %d field values, expected %d" label
+        (List.length c_fields) (List.length fields);
     List.iter (diff_field label b c_fields) fields
   end
 
 type case = {
   label : string;
   packed : packed;
+  general : bytes -> Wire.parse_error option;
+      (** The OCaml codec's verdict with its fast paths off. *)
   c_check : bytes -> bool;
   c_values : bytes -> (string * int64) list;
   fields : field_check list;
@@ -108,11 +125,13 @@ type case = {
 (* Compare both decoders on one codec: first on the verdict, then, when both
    accepted, on every field value they both report. *)
 let diff_check case b =
-  let o = ocaml_accepts case.label case.packed b and c = case.c_check b in
-  if o <> c then
-    Alcobar.failf "%s: OCaml accepts=%b but EverParse C accepts=%b" case.label o
-      c;
-  if o then diff_values case.label case.fields case.c_values b
+  let o = ocaml_accepts case.label case.packed case.general b
+  and c = case.c_check b in
+  if Option.is_none o <> c then
+    failf "%s: on %a, OCaml %a but EverParse C %s" case.label pp_hex
+      (Bytes.to_string b) pp_verdict o
+      (if c then "accepts" else "rejects");
+  if Option.is_none o then diff_values case.label case.fields case.c_values b
 
 (* The OCaml half of the value comparison. [Codec.field_readers] keys the
    decoder's own per-field readers by name, which is what makes this reachable
@@ -139,6 +158,7 @@ let covered_cases =
         {
           label;
           packed;
+          general = general_verdict packed;
           c_check;
           c_values = List.assoc label values;
           fields = field_checks label packed;

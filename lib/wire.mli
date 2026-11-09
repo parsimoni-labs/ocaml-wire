@@ -1902,6 +1902,23 @@ module Private : sig
   module Shape = Shape
   module Names = Names
 
+  (** How a codec is compiled, for the fuzzer: the same codec with every fast
+      path off, a codec not yet compiled, and the fast paths compiling selected.
+  *)
+  module Testing : sig
+    val general : 'r Codec.t -> 'r Codec.t
+    (** [general t] is [t] with every fast path off. *)
+
+    val fresh : 'r Codec.t -> 'r Codec.t
+    (** [fresh t] is [t] not yet compiled. *)
+
+    val paths : 'r Codec.t -> string list
+    (** [paths t] names the fast paths compiling [t] selected. *)
+
+    val all_paths : string list
+    (** Every name {!paths} can return. *)
+  end
+
   val param_name : param -> string
   (** Name of a formal parameter. *)
 

@@ -338,6 +338,7 @@ type 'r compiled = {
   has_checks : bool;
   decode_scratch : unit -> slots;
   param_base : int;
+  paths : string list;
 }
 (** What {!Codec_seal.seal} builds from a field list; built on first use. *)
 

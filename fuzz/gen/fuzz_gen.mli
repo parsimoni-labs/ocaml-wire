@@ -27,6 +27,10 @@ val afl_mode : unit -> bool
     seeds come from the same tests AFL runs. Alcobar starts each seed with the
     index of the test it was made for. *)
 
+val failf : ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [failf fmt] is {!Alcobar.failf}, which on an AFL file input also prints the
+    failure, since Alcobar's AFL runner raises without printing it. *)
+
 val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 (** [test_cases label g] batches [g]'s four streams into one Alcobar case:
     positives check codec round-trip plus validation, random/adversarial bytes
@@ -82,7 +86,17 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     Finally, every read path must leave the buffer byte-identical, and running
     one frame through all of them must not change the answer a later read of a
     different frame gives, which is what the shared per-domain decode scratch
-    makes possible. [validate] defaults to [true]. *)
+    makes possible.
+
+    Every stream is also run through the codec with its fast paths off
+    ({!Wire.Private.Testing.general}) and through one not yet compiled
+    ({!Wire.Private.Testing.fresh}): [decode], [validate], [valid] then [read],
+    [get], [set] and [encode] must answer exactly as the warm codec does, the
+    same value or bytes, or the same error at the same offset for the same
+    field, or the same [Invalid_argument]. A hostile value whose getters answer
+    differently on successive calls is exempt from the byte comparisons and is
+    held instead to an encoding of one of its answers. [validate] defaults to
+    [true]. *)
 
 val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
 (** [afl_cases label] is the fast file-input AFL smoke suite. It reuses a
@@ -124,8 +138,10 @@ val invariant_cases : string -> Alcobar.test_case list
     asserts registry labels are unique, the registry still mirrors the Wire API
     families, recursive composition leaves include the expected weird /
     adversarial terms, the deterministic differential sampler remains
-    reproducible and unique, and the per-field accessor properties still reach
-    most of the registry rather than skipping it. *)
+    reproducible and unique, the per-field accessor properties still reach most
+    of the registry rather than skipping it, and every fast path {!Wire.Codec}
+    can select is selected by a registry codec, a composition leaf or a
+    fixed-seed sample, failing with the names of those that are not. *)
 
 val semantic_invariant_cases : string -> Alcobar.test_case list
 (** [semantic_invariant_cases label] checks high-level API invariants over exact

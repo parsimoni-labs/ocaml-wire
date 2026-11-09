@@ -1579,6 +1579,50 @@ let plain_passes ~wire_size_info ~n_params ~min_size prefix layout ~where ~steps
   in
   (check, layout)
 
+(* The names of the fast paths a record's shape selects, for the coverage
+   test. Each reads the value [seal] dispatches on, so it cannot name a path the
+   codec does not run. *)
+let pass_paths prefix = function
+  | No_checks -> [ prefix ^ ".none" ]
+  | Steps _ -> [ prefix ^ ".steps" ]
+  | Intervals { flat = [||]; _ } -> [ prefix ^ ".none" ]
+  | Intervals { flat; tables; _ } ->
+      let rec plain i =
+        i < Array.length flat
+        && (flat.(i) < 10 || plain (i + 5 + (2 * flat.(i + 4))))
+      in
+      (if Array.length tables > 0 then [ prefix ^ ".byte_table" ] else [])
+      @ if plain 0 then [ prefix ^ ".interval" ] else []
+
+let encode_paths puts =
+  let ints = List.filter (function Put _ -> true | Blit _ -> false) puts in
+  let wputs = List.filter_map wput_of ints in
+  let staged =
+    List.length wputs = List.length ints
+    && Option.is_some
+         (stage_puts wputs ~slow:(fun _ _ _ -> ()) ~finish:(fun _ _ -> ()))
+  in
+  (if staged then [ Fmt.str "encode.staged.%d" (List.length wputs) ]
+   else [ "encode.plain" ])
+  @
+  if List.exists (function Blit _ -> true | Put _ -> false) puts then
+    [ "encode.blit" ]
+  else []
+
+let selected_paths wire_size_info n_params layout check puts =
+  if n_params > 0 then []
+  else
+    (match (wire_size_info, layout) with
+      | Fixed _, _ -> "decode.fixed" :: pass_paths "pass" check
+      | Variable _, Some (_, fast, _) ->
+          ("decode.layout" :: pass_paths "layout" fast)
+          @ pass_paths "pass" check
+      | Variable _, None -> "decode.variable" :: pass_paths "pass" check)
+    @
+    match (wire_size_info, puts) with
+    | Fixed _, Some puts -> encode_paths (List.rev puts)
+    | _ -> []
+
 (* [struct_fields] and [param_handles] are the ones [view] derived and checked
    from the same field list. *)
 let seal : type r.
@@ -1659,4 +1703,5 @@ let seal : type r.
     has_checks;
     decode_scratch = scratch;
     param_base;
+    paths = selected_paths wire_size_info n_params layout check r.puts_rev;
   }
