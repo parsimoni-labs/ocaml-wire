@@ -365,12 +365,12 @@ let where_of (Any a) =
    projection keys its typedefs by name: two records that share a name collapse
    onto whichever body projects first, so a composition holding more than one of
    them has to name each apart. *)
-let pair_of name (Any a) (Any b) =
+let pair_of ?(names = []) name (Any a) (Any b) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1) (x2, y2) -> a.g.equal x1 x2 && b.g.equal y1 y2)
       (fun x y -> (x, y))
-      Codec.[ a.g $ fst; b.g $ snd ]
+      (Codec.with_names names Codec.[ a.g $ fst; b.g $ snd ])
   in
   Any
     {
@@ -384,18 +384,19 @@ let pair_of name (Any a) (Any b) =
 (* Records of arity 3 and 4: like [pair_of] but for more fields, so the
    Boltzmann sampler can emit records wider than a pair. Each unpacks its [Any]
    elements and seals one [Codec.v]. *)
-let rec3_of name (Any a) (Any b) (Any c) =
+let rec3_of ?(names = []) name (Any a) (Any b) (Any c) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1, z1) (x2, y2, z2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2)
       (fun x y z -> (x, y, z))
-      Codec.
-        [
-          (a.g $ fun (x, _, _) -> x);
-          (b.g $ fun (_, y, _) -> y);
-          (c.g $ fun (_, _, z) -> z);
-        ]
+      (Codec.with_names names
+         Codec.
+           [
+             (a.g $ fun (x, _, _) -> x);
+             (b.g $ fun (_, y, _) -> y);
+             (c.g $ fun (_, _, z) -> z);
+           ])
   in
   Any
     {
@@ -404,19 +405,20 @@ let rec3_of name (Any a) (Any b) (Any c) =
       label = Fmt.str "(%s,%s,%s)" a.label b.label c.label;
     }
 
-let rec4_of name (Any a) (Any b) (Any c) (Any d) =
+let rec4_of ?(names = []) name (Any a) (Any b) (Any c) (Any d) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1, z1, w1) (x2, y2, z2, w2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2 && d.g.equal w1 w2)
       (fun x y z w -> (x, y, z, w))
-      Codec.
-        [
-          (a.g $ fun (x, _, _, _) -> x);
-          (b.g $ fun (_, y, _, _) -> y);
-          (c.g $ fun (_, _, z, _) -> z);
-          (d.g $ fun (_, _, _, w) -> w);
-        ]
+      (Codec.with_names names
+         Codec.
+           [
+             (a.g $ fun (x, _, _, _) -> x);
+             (b.g $ fun (_, y, _, _) -> y);
+             (c.g $ fun (_, _, z, _) -> z);
+             (d.g $ fun (_, _, _, w) -> w);
+           ])
   in
   Any
     {

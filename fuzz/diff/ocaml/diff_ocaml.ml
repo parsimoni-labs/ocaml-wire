@@ -144,16 +144,23 @@ let flat_count = 4096
    to 3D, so it is out of the EverParse backend's scope too. *)
 let specialisable_packed (Fuzz_gen.Pack g) = specialisable (Fuzz_gen.codec g)
 
+(* The EverParse backend's scope, less its refusal of field names the FFI
+   pipeline spells alike: the generator names fields its own way and refuses
+   its own clashes, so a codec the plug alone refuses ([restrict] and
+   [restrict_]) is still compared here. *)
 let in_scope p =
-  match Diff_codecs.in_scope p with
-  | b -> b
+  match Diff_codecs.scope_exclusion p with
+  | None | Some Name_clash -> true
+  | Some _ -> false
   | exception Invalid_argument _ -> false
 
+let sampled = List.filter (fun (_, p) -> in_scope p) Diff_codecs.candidates
+
 let codecs =
-  Diff_codecs.included
+  sampled
   @ List.filter
       (fun (label, p) ->
-        (not (List.mem_assoc label Diff_codecs.included))
+        (not (List.mem_assoc label sampled))
         && in_scope p && specialisable_packed p)
       (Fuzz_gen.flat_records ~seed:Diff_codecs.sample_seed ~count:flat_count)
 
@@ -313,19 +320,17 @@ let reason msg =
   if String.starts_with ~prefix:"field " r then after ": " r else r
 
 let report name refused =
-  let sampled, flat =
-    List.partition
-      (fun (label, _, _) -> List.mem_assoc label Diff_codecs.included)
-      refused
+  let sampled_refused, flat =
+    List.partition (fun (label, _, _) -> List.mem_assoc label sampled) refused
   in
-  let total = List.length Diff_codecs.included and n = List.length sampled in
+  let total = List.length sampled and n = List.length sampled_refused in
   let tally =
     List.fold_left
       (fun acc (_, _, msg) ->
         let k = reason msg in
         let c = Option.value ~default:0 (List.assoc_opt k acc) in
         (k, c + 1) :: List.remove_assoc k acc)
-      [] sampled
+      [] sampled_refused
   in
   Fmt.epr "%s: %d of the %d sampled codecs specialised, %d refused (%d%%)@."
     name (total - n) total n

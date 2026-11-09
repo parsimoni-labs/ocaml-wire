@@ -197,7 +197,54 @@ let sample_leaf rng drawn =
    a bare leaf, and the leaves the abandoned subtree recorded are rolled back so
    the caller's list holds exactly what the returned codec does. [uid] names the
    sub-codecs apart, since a projection keys its typedefs by name. *)
-let sample_node rng ~drawn ~uid budget =
+(* Field names a code generator can trip on, in groups. Every generator
+   escapes a keyword of its target with a trailing underscore and folds case
+   where its target does, and refuses, naming both fields, two names that still
+   spell one identifier (see [Wire.Private.Names]); which lane refuses a group
+   is noted against it. The EverParse lane drops what it refuses with
+   [Diff_codecs.Name_clash]; the OCaml lane counts a name clash as an expected
+   refusal. *)
+let sampler_name_groups =
+  [|
+    (* A name and the [_int] getter of a 32-bit field or the [_word] getter of
+       a bitfield: refused by the OCaml lane alone. *)
+    [ "x"; "x_int" ];
+    [ "x_int"; "x" ];
+    [ "x"; "x_word" ];
+    [ "x_word"; "x" ];
+    (* Keywords of OCaml and OxCaml, escaped by both lanes, and a name whose
+       getter [get_failed] the OCaml lane's module defines for itself, refused
+       by that lane alone. *)
+    [ "done" ];
+    [ "method"; "local_"; "exclave_"; "stack_" ];
+    [ "failed" ];
+    (* Keywords of 3D, F* and C, escaped apart: accepted by both lanes. *)
+    [ "end"; "typeof"; "int"; "string" ];
+    (* Two names one case fold spells alike: refused by both lanes (the plug's
+       [_IDX_] macro, the stubs' and the OCaml lane's label). *)
+    [ "X"; "x" ];
+    (* A keyword next to its escape. [done]: refused by both lanes (the stubs'
+       and the OCaml lane's label), not by 3D. [end]: refused by both (the 3D
+       name and the labels). [restrict]: refused by the EverParse lane alone
+       (the plug's struct member); the OCaml lane compares it. *)
+    [ "done"; "done_" ];
+    [ "end"; "end_" ];
+    [ "restrict"; "restrict_" ];
+  |]
+
+(* The names of a record's [k] fields: half the time an adversarial group in
+   front, the rest left to [Codec.field_name]. Drawn from their own stream, so
+   the shapes a seed draws do not depend on them. *)
+let sample_names names k =
+  if Random.State.bool names then
+    let g =
+      sampler_name_groups.(Random.State.int names
+                             (Array.length sampler_name_groups))
+    in
+    List.filteri (fun i _ -> i < k) g
+  else []
+
+let sample_node rng ~names ~drawn ~uid budget =
   let bare () = (sample_leaf rng drawn, Leaf) in
   let compose f =
     let saved = !drawn in
@@ -230,12 +277,12 @@ let sample_node rng ~drawn ~uid budget =
   and draw_record budget k =
     compose (fun () ->
         let fields = draw_fields (budget - 1) k in
-        let name = fresh k in
+        let name = fresh k and names = sample_names names k in
         let shape = Record (List.map snd fields) in
         match List.map fst fields with
-        | [ a; b ] -> Some (pair_of name a b, shape)
-        | [ a; b; c ] -> Some (rec3_of name a b c, shape)
-        | [ a; b; c; d ] -> Some (rec4_of name a b c d, shape)
+        | [ a; b ] -> Some (pair_of ~names name a b, shape)
+        | [ a; b; c ] -> Some (rec3_of ~names name a b c, shape)
+        | [ a; b; c; d ] -> Some (rec4_of ~names name a b c d, shape)
         | _ -> None)
   (* Explicit recursion rather than [List.init], so the fields are drawn left to
      right and the draw order is fixed by this code alone. *)
@@ -251,10 +298,10 @@ let sample_node rng ~drawn ~uid budget =
    needed for coverage metrics. The draw sequence is a pure function of [rng],
    so a seed reproduces the exact same set: the differential's generator and its
    runner rely on it to agree on the shapes. *)
-let boltzmann_any rng : any * sample_meta =
+let boltzmann_any rng ~names : any * sample_meta =
   let drawn = ref [] in
   let uid = ref 0 in
-  let result, shape = sample_node rng ~drawn ~uid sample_budget in
+  let result, shape = sample_node rng ~names ~drawn ~uid sample_budget in
   (result, { shape; leaves = List.rev !drawn })
 
 (* A nested shape's label nests too, so it grows with the tree. The label names
@@ -271,8 +318,9 @@ let sample_label i shape =
 
 let sampled ~seed ~count : (string * packed * sample_meta) list =
   let rng = Random.State.make [| seed |] in
+  let names = Random.State.make [| seed; 1 |] in
   List.init count (fun i ->
-      let Any a, meta = boltzmann_any rng in
+      let Any a, meta = boltzmann_any rng ~names in
       let label = sample_label i a.label in
       (label, rename_case label (Pack a.g), meta))
 

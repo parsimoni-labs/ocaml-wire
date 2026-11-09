@@ -4,6 +4,9 @@
 
 (** Why a candidate is out of the differential's scope. *)
 type exclusion =
+  | Name_clash
+      (** two field names spell one identifier the FFI pipeline generates (a 3D
+          name, a plug macro or member, a stub label), so it refuses them *)
   | Variable_size  (** no fixed wire size, so no standalone validator *)
   | Zero_size  (** unit codec, hits a setter arity mismatch *)
   | Parameterised  (** binds [Param.env], so has no standalone entrypoint *)
@@ -17,6 +20,14 @@ val sample_seed : int
 
 val sample_count : int
 (** [sample_count] is the size of that sample. *)
+
+val candidates : (string * Fuzz_gen.packed) list
+(** [candidates] is the sample {!included} and {!excluded} partition, in sample
+    order. *)
+
+val scope_exclusion : Fuzz_gen.packed -> exclusion option
+(** [scope_exclusion p] is [None] when {!included} takes [p], and the reason it
+    does not otherwise. *)
 
 val in_scope : Fuzz_gen.packed -> bool
 (** [in_scope p] is [true] when [p] passes the filter {!included} applies. *)

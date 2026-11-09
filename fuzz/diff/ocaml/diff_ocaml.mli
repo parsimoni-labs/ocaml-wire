@@ -50,9 +50,11 @@ val views : 'a Wire.Private.Types.typ -> view list
 *)
 
 val codecs : (string * Fuzz_gen.packed) list
-(** [codecs] is the codecs the backend compares: {!Diff_codecs.included}, then
-    the flat records ({!Fuzz_gen.flat_records}) of a longer run of the same
-    sample that are {!specialisable}. *)
+(** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
+    {!Diff_codecs.included} takes or excludes only for a
+    {!Diff_codecs.Name_clash} of the FFI pipeline, then the flat records
+    ({!Fuzz_gen.flat_records}) of a longer run of the same sample that are
+    {!specialisable}. *)
 
 val specialisable : 'r Wire.Codec.t -> bool
 (** [specialisable c] is [true] when [c] is in the scope {!Wire_ocaml}
@@ -70,7 +72,7 @@ val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
     Fails with {!Alcobar.failf}. *)
 
 val report : string -> (string * Fuzz_gen.packed * string) list -> bool
-(** [report name refused] prints how many of {!Diff_codecs.included}, and of the
-    other {!codecs}, the generator refused and why, and is [false] when one of
+(** [report name refused] prints how many of the sampled {!codecs}, and of the
+    flat records, the generator refused and why, and is [false] when one of
     [refused] (a label, the codec and the refusal) is {!specialisable} and was
     refused for another reason than a clash of its field names. *)
