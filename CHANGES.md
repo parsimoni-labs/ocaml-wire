@@ -19,8 +19,9 @@
 - `Wire_ocaml`, in the new `wire.ocaml` library, writes a fixed-size codec out
   as OCaml with every offset a constant: `decode`, `validate` and `write`. The
   generated module checks when it loads that its codec has not changed, and
-  hands any input it rejects to the codec, so its errors are the codec's own
-  (#436, @samoht)
+  hands any input it rejects to the codec, so its errors are the codec's own.
+  With ``~target:`OxCaml`` its hot paths are checked `[@zero_alloc]` (#436,
+  @samoht)
 
 ### Changed
 
@@ -80,6 +81,9 @@
 
 - A negative offset raises `Invalid_argument`; one near `max_int` is a parse
   error (#435, @samoht)
+
+- `wire` builds on OxCaml compilers, where a GADT equation in the expression
+  evaluator escaped its scope (#436, @samoht)
 
 ## 1.3.0
 

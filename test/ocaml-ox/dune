@@ -1,0 +1,72 @@
+; The generator's tests again, on the code it writes for OxCaml. The modules
+; are a library so the compiler checks each [@zero_alloc] they carry. On any
+; other compiler they hold the code for the default target instead, and [dune
+; runtest] says the tests were skipped rather than repeat test/ocaml.
+
+(copy_files
+ (files ../ocaml/test_wire_ocaml.{ml,mli}))
+
+(rule
+ (copy ../ocaml/test.ml test.ml))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (targets
+  g_ipv4.ml
+  g_ipv4_record.ml
+  g_checked.ml
+  g_mixed.ml
+  g_small.ml
+  g_eth.ml
+  g_variable.ml)
+ (action
+  (run ../ocaml/gen.exe --oxcaml)))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (targets
+  g_ipv4.ml
+  g_ipv4_record.ml
+  g_checked.ml
+  g_mixed.ml
+  g_small.ml
+  g_eth.ml
+  g_variable.ml)
+ (action
+  (run ../ocaml/gen.exe)))
+
+(library
+ (name gens_ox)
+ (wrapped false)
+ (modules
+  test_wire_ocaml
+  g_ipv4
+  g_ipv4_record
+  g_checked
+  g_mixed
+  g_small
+  g_eth
+  g_variable)
+ (libraries schemas wire wire.ocaml fmt alcotest))
+
+(executable
+ (name test)
+ (modules test)
+ (libraries gens_ox alcotest))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (run ./test.exe)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (echo
+   "test/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))

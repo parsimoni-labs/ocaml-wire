@@ -16,8 +16,16 @@
     [encode]. A codec it cannot specialise (variable size, parameters, actions,
     maps) gets a module with [decode] and [validate] that call the codec. *)
 
-val ml : ?make:string -> codec:string -> 'r Wire.Codec.t -> string
-(** [ml ?make ~codec c] is the source of a module specialised to [c]. [codec] is
-    the OCaml path of [c] as the generated module sees it. [make], the path of a
-    function taking the field values in order, builds the decoded value; it
-    defaults to a generated record. *)
+type target = [ `OCaml | `OxCaml ]
+(** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
+    checks on [validate], [write_int] and [write]; [decode_with make], which
+    takes the constructor as an argument for flambda2 to inline; and, for the
+    generated record, [decode_local], which builds it on the stack. *)
+
+val ml :
+  ?target:target -> ?make:string -> codec:string -> 'r Wire.Codec.t -> string
+(** [ml ?target ?make ~codec c] is the source of a module specialised to [c],
+    for [target] (default [`OCaml]). [codec] is the OCaml path of [c] as the
+    generated module sees it. [make], the path of a function taking the field
+    values in order, builds the decoded value; it defaults to a generated
+    record. *)

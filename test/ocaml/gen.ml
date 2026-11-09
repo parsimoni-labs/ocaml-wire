@@ -3,9 +3,13 @@ let write file s =
   output_string oc s;
   close_out oc
 
+(* [--oxcaml] generates for the OxCaml target. *)
 let () =
+  let target =
+    if Array.exists (String.equal "--oxcaml") Sys.argv then `OxCaml else `OCaml
+  in
   let g name ?make codec c =
-    write name (Wire_ocaml.ml ?make ~codec:("Schemas." ^ codec) c)
+    write name (Wire_ocaml.ml ~target ?make ~codec:("Schemas." ^ codec) c)
   in
   g "g_ipv4.ml" ~make:"Schemas.ipv4_make" "ipv4" Schemas.ipv4;
   g "g_ipv4_record.ml" "ipv4" Schemas.ipv4;
