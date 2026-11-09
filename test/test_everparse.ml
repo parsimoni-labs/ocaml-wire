@@ -1355,6 +1355,111 @@ let test_3d_bitorder_native_noreorder () =
   Alcotest.(check bool) "x before y (no reorder)" true (ix < iy);
   Alcotest.(check bool) "no padding" false (contains ~sub:"_anon_" s)
 
+(* A constrained group of [Msb_first] bitfields in a base whose native order
+   is [Lsb_first] must be reversed (and padded) wherever its struct is
+   emitted: at top level, and as a sub-codec in a field, an array element or a
+   casetype case. Emitted in declaration order, the C reads the other end of
+   the word from the OCaml codec. *)
+let msb_group (name, base, bits_word) =
+  ( name,
+    bits_word,
+    Codec.v name
+      (fun a b -> (a, b))
+      Codec.
+        [
+          Field.v "a"
+            ~self_constraint:(fun r -> Expr.(r <= int 5))
+            (bits ~width:3 base)
+          $ fst;
+          Field.v "b"
+            ~self_constraint:(fun r -> Expr.(r <= int 20))
+            (bits ~width:5 base)
+          $ snd;
+        ] )
+
+let msb_groups =
+  List.map msb_group
+    [
+      ("MsbU8", U8, "UINT8");
+      ("MsbU16", U16, "UINT16");
+      ("MsbU32", U32, "UINT32");
+    ]
+
+let msb_group_positions (name, inner) =
+  let top =
+    ( Fmt.str "%s at top level" name,
+      fun () -> Everparse.project ~mode:`Ffi inner )
+  in
+  let field =
+    ( Fmt.str "%s in a field" name,
+      fun () ->
+        Everparse.project ~mode:`Ffi
+          (Codec.v (name ^ "Field")
+             (fun g x -> (g, x))
+             Codec.[ Field.v "g" (codec inner) $ fst; Field.v "x" uint8 $ snd ])
+    )
+  in
+  let array =
+    ( Fmt.str "%s as an array element" name,
+      fun () ->
+        Everparse.project ~mode:`Ffi
+          (Codec.v (name ^ "Array")
+             (fun v -> v)
+             Codec.
+               [ (Field.v "v" (array ~len:(int 2) (codec inner)) $ fun v -> v) ])
+    )
+  in
+  let case =
+    ( Fmt.str "%s in a casetype case" name,
+      fun () ->
+        Everparse.project ~mode:`Ffi
+          (Codec.v (name ^ "Case")
+             (fun v -> v)
+             Codec.
+               [
+                 ( Field.v "v"
+                     (casetype (name ^ "Body") uint8
+                        [
+                          case ~index:(UInt8.v 1) (codec inner)
+                            ~inject:(fun v -> `G v)
+                            ~project:(function `G v -> Some v);
+                        ])
+                 $ fun v -> v );
+               ]) )
+  in
+  [ top; field; array; case ]
+
+(* The body of the typedef of struct [name] in [out]. *)
+let typedef_body name out =
+  let start = index_of ~sub:("typedef struct Wire" ^ name ^ "\n") out in
+  let start =
+    if start >= 0 then start
+    else index_of ~sub:("typedef struct Wire" ^ name) out
+  in
+  if start < 0 then Alcotest.failf "no typedef for %s in:\n%s" name out;
+  let rest = String.sub out start (String.length out - start) in
+  let stop = index_of ~sub:("} " ^ name ^ ";") rest in
+  if stop < 0 then Alcotest.failf "unterminated typedef for %s" name;
+  String.sub rest 0 stop
+
+let test_3d_bitorder_msb_constrained_everywhere () =
+  List.iter
+    (fun (name, word, inner) ->
+      List.iter
+        (fun (label, project) ->
+          let out = to_3d (project () : Everparse.t).module_ in
+          let body = typedef_body name out in
+          let ia = index_of ~sub:(word ^ " a : 3") body in
+          let ib = index_of ~sub:(word ^ " b : 5") body in
+          if ia < 0 || ib < 0 then
+            Alcotest.failf "%s: fields missing from:\n%s" label body;
+          if ib > ia then
+            Alcotest.failf "%s: the group is not reversed:\n%s" label body;
+          if word <> "UINT8" && not (contains ~sub:"_anon_" body) then
+            Alcotest.failf "%s: the group is not padded:\n%s" label body)
+        (msb_group_positions (name, inner)))
+    msb_groups
+
 (* -- Variable-size schema projection -- *)
 
 type dep_frame = { frame_length : UInt16.t; data : string }
@@ -1723,6 +1828,8 @@ let suite =
         test_3d_bitorder_native_noreorder;
       Alcotest.test_case "3d: bit_order constraint collapse" `Quick
         test_3d_bitorder_constraint_collapse;
+      Alcotest.test_case "3d: bit_order Msb_first constrained everywhere" `Quick
+        test_3d_bitorder_msb_constrained_everywhere;
       Alcotest.test_case "3d: dep-size schema" `Quick test_3d_dep_size_schema;
       Alcotest.test_case "3d: dep-size roundtrip" `Quick
         test_3d_dep_size_roundtrip;

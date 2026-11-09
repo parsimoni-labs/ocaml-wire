@@ -628,6 +628,18 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
 (** [bits ~width base] extracts [width] bits from a bitfield base. The bit order
     defaults to {!Msb_first}. *)
 
+val bitfield_base_bits : bitfield_base -> int
+(** [bitfield_base_bits base] is the width of [base] in bits. *)
+
+val equal_bitfield_base : bitfield_base -> bitfield_base -> bool
+(** [equal_bitfield_base a b] is [true] when [a] and [b] are the same width and
+    byte order. *)
+
+val native_bit_order : bitfield_base -> bit_order
+(** [native_bit_order base] is the bit order EverParse packs [base] in:
+    {!constructor-Lsb_first} for the little-endian bases,
+    {!constructor-Msb_first} for the big-endian ones. *)
+
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)
 

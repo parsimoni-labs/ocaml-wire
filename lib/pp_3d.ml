@@ -777,11 +777,131 @@ let pp_params ?(as_enum = false) ppf params =
   if not (List.is_empty params) then
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma (pp_param ~as_enum)) params
 
+(* Conjoin a list of constraint expressions, skipping [None]s. *)
+let conjoin_constraints constraints =
+  List.fold_left
+    (fun acc c ->
+      match (acc, c) with
+      | acc, None -> acc
+      | None, Some c -> Some c
+      | Some a, Some b -> Some (And (a, b)))
+    None constraints
+
+(* Collapse all constraints in a reversed bit group onto the last field,
+   where every referenced field has already been parsed. Backward
+   references to other fields in the group would otherwise break under
+   reversal, because the reversed field is parsed before its referents.
+
+   The combined constraint is semantically equivalent for validation
+   (accept/reject) -- EverParse's per-field constraints are pure boolean
+   predicates, so moving them later in the parse still produces the same
+   overall verdict. Bitfield actions use 3D's [:act] form, which fires
+   regardless of validation outcome, so moving constraints does not
+   affect callback behaviour. *)
+let collapse_constraints_into_last group =
+  let constraints = List.map (fun (Field f) -> f.constraint_) group in
+  let combined = conjoin_constraints constraints in
+  let rec walk = function
+    | [] -> []
+    | [ Field f ] -> [ Field { f with constraint_ = combined } ]
+    | Field f :: rest -> Field { f with constraint_ = None } :: walk rest
+  in
+  walk group
+
+(* Reorder consecutive bitfield groups so every pairing of [bitfield_base] and
+   [bit_order] projects to a valid EverParse 3D struct while keeping the same
+   byte layout. EverParse couples bit order to the base's byte order
+   (LE -> LSB-first, BE -> MSB-first). When the user's [bit_order] differs
+   from that native choice, we reverse the group's declaration order and
+   prepend [total_bits - used_bits] of anonymous padding; in EverParse's
+   native packing this produces the identical bit layout. Fields outside
+   bit groups are left untouched. [pp_struct] applies it to every struct it
+   prints, so a sub-codec, a wrapper or a casetype body gets the same layout
+   as an entrypoint. Extern-call indices embedded in actions are stamped
+   before printing, so WireSet callbacks still write into the original
+   (wire-declaration) slots -- the stub generator never sees the reordered
+   struct. *)
+(* Extract bitfield info through any number of [Map]/[Enum]/[Where] wrappers.
+   [bit (bits ~width:1 U8)] is [Map { inner = Bits _ }] at the outer level;
+   without unwrapping, grouping logic would treat it as a non-bitfield and
+   break apart consecutive bit groups, producing wrong .3d layouts. *)
+let rec unwrap_bits : type a. a typ -> (bitfield_base * bit_order * int) option
+    = function
+  | Bits { base; bit_order; width } -> Some (base, bit_order, width)
+  | Map { inner; _ } -> unwrap_bits inner
+  | Enum { base; _ } -> unwrap_bits base
+  | Where { inner; _ } -> unwrap_bits inner
+  | _ -> None
+
+let is_same_bit_group base bit_order (Field f) =
+  match unwrap_bits f.field_typ with
+  | Some (b2, bo2, _) ->
+      equal_bitfield_base b2 base && equal_bit_order bo2 bit_order
+  | None -> false
+
+let bit_width (Field f) =
+  match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
+
+(* Greedy: collect consecutive Bits with the same (base, bit_order)
+   that still fit in one base word. *)
+let collect_bit_group base bit_order total f0 rest =
+  let rec collect used group = function
+    | f :: rest' when is_same_bit_group base bit_order f ->
+        let w = bit_width f in
+        if used + w <= total then collect (used + w) (f :: group) rest'
+        else (used, List.rev group, f :: rest')
+    | rest' -> (used, List.rev group, rest')
+  in
+  collect (bit_width f0) [ f0 ] rest
+
+let pad_reversed_group total used base native reversed =
+  let padding = total - used in
+  if padding > 0 then
+    let pad_typ = Bits { width = padding; base; bit_order = native } in
+    Field
+      {
+        field_name = None;
+        field_typ = pad_typ;
+        constraint_ = None;
+        action = None;
+        field_doc = None;
+      }
+    :: reversed
+  else reversed
+
+let reorder_bit_group base bit_order f0 rest =
+  let total = bitfield_base_bits base in
+  let native = native_bit_order base in
+  let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  let emitted =
+    if equal_bit_order bit_order native then group
+    else
+      (* Backward references in reversed order would break: fields now
+         come before the values their constraints read. Collapse all
+         constraints onto the last reversed field. *)
+      let reversed = collapse_constraints_into_last (List.rev group) in
+      pad_reversed_group total used base native reversed
+  in
+  (emitted, rest')
+
+let reorder_bit_groups_for_3d fields =
+  let rec go acc = function
+    | [] -> List.rev acc
+    | (Field f as f0) :: rest -> (
+        match unwrap_bits f.field_typ with
+        | Some (base, bit_order, _) ->
+            let emitted, rest' = reorder_bit_group base bit_order f0 rest in
+            go (List.rev_append emitted acc) rest'
+        | None -> go (f0 :: acc) rest)
+  in
+  go [] fields
+
 let pp_struct ppf (s : struct_) =
   anon_counter := 0;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
-  let where, fields = lower_where_to_field_constraint s.where s.fields in
+  let fields = reorder_bit_groups_for_3d s.fields in
+  let where, fields = lower_where_to_field_constraint s.where fields in
   let fields = guard_subtraction_sizes fields in
   let widenable =
     List.filter_map

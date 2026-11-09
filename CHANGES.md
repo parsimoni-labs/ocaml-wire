@@ -34,6 +34,11 @@
   what `decode` refuses when a later field takes the rest of the buffer (#434,
   @samoht)
 
+- The 3D projection lays out a bit group whose order is not its base's native
+  one (`Msb_first` over a little-endian word, `Lsb_first` over a big-endian one)
+  in a sub-codec, an array element or a casetype as it does in the entrypoint.
+  The generated C read the other end of the word (#434, @samoht)
+
 ## 1.3.0
 
 ### Added

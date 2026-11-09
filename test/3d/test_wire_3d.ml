@@ -640,6 +640,53 @@ let test_doc_differential_nested_regions () =
       Wire_3d.pack diff_nested_at_most_codec;
     ]
 
+(* A constrained Msb_first group in a sub-codec, embedded as a field and as an
+   array element: the C validator must read the same bits the codec does, so
+   the byte the differential fuzzer found ([0xab]: [a = 5], [b = 11] from the
+   top of the byte, [3] and [21] from the bottom) is accepted on both sides. *)
+let diff_msb_inner base name =
+  let open Wire in
+  Codec.v name
+    (fun a b -> (a, b))
+    Codec.
+      [
+        Field.v "a"
+          ~self_constraint:(fun r -> Expr.(r <= int 5))
+          (bits ~width:3 base)
+        $ fst;
+        Field.v "b"
+          ~self_constraint:(fun r -> Expr.(r <= int 20))
+          (bits ~width:5 base)
+        $ snd;
+      ]
+
+let diff_msb_field_codec =
+  let open Wire in
+  let inner = diff_msb_inner U8 "MsbInner" in
+  Codec.v "MsbField"
+    (fun g x -> (g, x))
+    Codec.[ Field.v "g" (codec inner) $ fst; Field.v "x" uint8 $ snd ]
+
+let diff_msb_array_codec =
+  let open Wire in
+  let inner = diff_msb_inner U16 "MsbInner16" in
+  Codec.v "MsbArray" Fun.id
+    Codec.[ Field.v "items" (array ~len:(int 2) (codec inner)) $ Fun.id ]
+
+let test_doc_differential_msb_sub_codec () =
+  needs_3d_exe ();
+  differential_ok ~name:"msbspec" ~package:"msb-doc"
+    ~corpus:
+      (`Lines
+         [
+           "MsbField - ab00 1";
+           "MsbField - c000 0";
+           "MsbField - 1500 0";
+           "MsbArray - 00ab00ab 1";
+           "MsbArray - 0015a000 0";
+         ])
+    [ Wire_3d.pack diff_msb_field_codec; Wire_3d.pack diff_msb_array_codec ]
+
 let test_doc_differential_region_cardinality () =
   needs_3d_exe ();
   differential_ok ~name:"invariantspec" ~package:"invariant-doc"
@@ -1896,6 +1943,8 @@ let suite =
         test_doc_differential_nested_regions;
       Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
         `Quick test_doc_differential_region_cardinality;
+      Alcotest.test_case "doc differential Msb_first sub-codec (needs 3d.exe)"
+        `Quick test_doc_differential_msb_sub_codec;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
       Alcotest.test_case "doc differential union (needs 3d.exe)" `Quick

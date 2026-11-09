@@ -601,6 +601,18 @@ let bitfield_base_bits : bitfield_base -> int = function
   | U16 _ -> 16
   | U32 _ -> 32
 
+let equal_bitfield_base a b =
+  match (a, b) with
+  | U8, U8 -> true
+  | U16 e1, U16 e2 | U32 e1, U32 e2 -> equal_endian e1 e2
+  | (U8 | U16 _ | U32 _), _ -> false
+
+(* EverParse's own bit order for a base: LSB-first for the little-endian
+   ones (MSVC C bit-field packing), MSB-first for the big-endian ones. *)
+let native_bit_order = function
+  | U8 | U16 Little | U32 Little -> Lsb_first
+  | U16 Big | U32 Big -> Msb_first
+
 let bits ?(bit_order = Msb_first) ~width base =
   (* A bitfield must fit its base word: a [width] above the base size, or below
      1, has no faithful wire meaning and the OCaml shift and the 3D [base F :
