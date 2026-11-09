@@ -38,9 +38,14 @@
   `byte_slice`, `array`, `nested`, `Field.repeat` and every other sized
   description, instead of failing at decode (#435, @samoht)
 
+- **Breaking:** A constraint on a field under `map` applies to the wire value,
+  as in the 3D projection, and `Wire.map` requires its decode to be total:
+  `validate` and `valid` never call it (#435, @samoht)
+
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, constrained fields included: one bounds check for the
-  frame, then one pass over the checks and the fields (#435, @samoht)
+  fixed-size codecs, constrained, mapped and enumerated fields included: one
+  bounds check for the frame, then one pass over the checks and the fields
+  (#435, @samoht)
 
 ### Fixed
 

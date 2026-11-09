@@ -617,7 +617,8 @@ let test_decode_reports_validate_first_failure () =
 
 (* A codec with params checks before it reads too: its decode reports
    [validate]'s first failure, [a]'s constraint at byte 0 rather than [b]'s
-   enum at byte 1, and runs a [map] decoder only on a record that passes. *)
+   enum at byte 1, and runs a [map] decoder only on a record that passes, once
+   per field. *)
 let test_decode_params_reports_validate_first_failure () =
   let limit = Param.input "limit" uint8 in
   let f_a = Field.v "a" uint8 ~self_constraint:(fun a -> Expr.(a <= int 10)) in
@@ -658,10 +659,11 @@ let test_decode_params_reports_validate_first_failure () =
     "consume all" validated
     (error "consume all" (Codec.decode ~consume:`All ~env:(env ()) c buf 0));
   Alcotest.(check int) "no map decode on a refused record" 0 !calls;
-  match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
+  (match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
   | Ok (_, _, c) when UInt8.to_int c = 7 -> ()
   | Ok _ -> Alcotest.fail "wrong value"
-  | Error e -> Alcotest.failf "valid record refused: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "valid record refused: %a" pp_parse_error e);
+  Alcotest.(check int) "one map decode on a valid record" 1 !calls
 
 (* A literal region size is a byte count for [nested], [nested_at_most] and
    [Field.repeat] as for every other sized description: a negative one raises

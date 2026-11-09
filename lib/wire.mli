@@ -756,7 +756,13 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
     than masking it, for the same reason as {!uint}. *)
 
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
-(** [map ~decode ~encode t] views a wire value through conversion functions. *)
+(** [map ~decode ~encode t] views a wire value through conversion functions.
+
+    [decode] must be total over the wire values [t] and its constraints admit.
+    {!Codec.validate} and {!Codec.valid} do not call it, so a [decode] that
+    raises on such a value makes {!Codec.decode} raise on a buffer they accept.
+    For a table indexed by the wire value use {!lookup}, whose bound they check.
+*)
 
 val bool : bool -> bool expr
 (** Constant boolean expression. *)

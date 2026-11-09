@@ -112,6 +112,7 @@ type (_, _) readers =
 
 and _ field_read =
   | Data : 'a scalar -> 'a field_read
+  | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -225,8 +226,8 @@ type step =
       slot : int;
       scalar : 'a scalar;
       voff : int;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       store : bool;
     }
       -> step
@@ -242,6 +243,7 @@ type ('f, 'r) record =
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
+      checked_readers : ('full, 'f) readers;
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
@@ -279,8 +281,8 @@ val id_counter : int Atomic.t
 type interval =
   | Interval : {
       scalar : 'a scalar;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       name : string;
       voff : int;
     }
@@ -390,3 +392,6 @@ val field_scalar :
 (** [field_scalar ~min_wire_size access typ] is the scalar a field of type [typ]
     at [access] is, when it is a bare scalar at a fixed offset inside the first
     [min_wire_size] bytes or packed in an 8- or 16-bit word. *)
+
+val alloc_slots : int -> slots
+(** [alloc_slots n] is a fresh scratch of [n] zeroed slots. *)

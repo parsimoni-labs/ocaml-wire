@@ -351,6 +351,8 @@ type (_, _) readers =
    span [decode] has already bounds-checked, so the reads skip their own check. *)
 and _ field_read =
   | Data : 'a scalar -> 'a field_read
+  | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
+      (** A scalar under a total [map]: read, then decoded. *)
   | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
 
 and _ scalar =
@@ -421,6 +423,7 @@ let[@inline] read_field : type a.
  fun r runtime input_end buf base ->
   match r with
   | Data s -> read_scalar s buf base
+  | Mapped (s, decode) -> decode (read_scalar s buf base)
   | Fn f -> f runtime input_end buf base
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
@@ -506,10 +509,26 @@ let field_scalar : type a.
       | U32 _ -> None)
   | _ -> None
 
+(* How [decode] reads a field through [where], [enum] and total [map]
+   wrappers. Their checks run in the check pass before any read, so the read
+   only takes the value off the wire and decodes it. *)
+let rec read_view : type a.
+    min_wire_size:int -> field_access -> a typ -> a field_read option =
+ fun ~min_wire_size access typ ->
+  match typ with
+  | Where { inner; _ } -> read_view ~min_wire_size access inner
+  | Enum { base; _ } -> read_view ~min_wire_size access base
+  | Map { inner; decode; index_bound = None; _ } -> (
+      match read_view ~min_wire_size access inner with
+      | Some (Data s) -> Some (Mapped (s, decode))
+      | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
+      | Some (Fn _) | None -> None)
+  | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
+
 let field_read ~min_wire_size access typ fn ~plain =
-  match field_scalar ~min_wire_size access typ with
-  | Some s when plain -> Data s
-  | _ -> Fn fn
+  if not plain then Fn fn
+  else
+    match read_view ~min_wire_size access typ with Some r -> r | None -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
@@ -779,13 +798,15 @@ type step =
       slot : int;
       scalar : 'a scalar;
       voff : int;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       store : bool;
     }
       -> step
-      (** A scalar whose constraints all compare it with literals: read, keep in
-          its slot when something else reads it, and test [lo <= v <= hi]. *)
+      (** A scalar whose checks all bound its wire value: read it, keep it in
+          its slot when something else reads it, and test it against [set], a
+          few disjoint intervals. [fail] is the field's general validator, which
+          raises the error the field's checks give. *)
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
 
 type ('f, 'r) record =
@@ -793,6 +814,10 @@ type ('f, 'r) record =
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
+          (* For a decode that has run the check pass first. *)
+      checked_readers : ('full, 'f) readers;
+          (* For one that reads before it checks: a field whose type validates
+             checks itself as it is read. *)
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
           (* The fields' descriptor writes, while every field has one. *)
@@ -846,8 +871,8 @@ let id_counter = Atomic.make 0
 type interval =
   | Interval : {
       scalar : 'a scalar;
-      lo : int;
-      hi : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
       name : string;
       voff : int;
     }
@@ -950,6 +975,7 @@ let record_start ?where ?doc name make =
       make;
       doc;
       readers = Nil;
+      checked_readers = Nil;
       writers_rev = [];
       puts_rev = Some [];
       size_of_value_rev = [];
