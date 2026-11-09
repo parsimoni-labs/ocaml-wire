@@ -278,3 +278,12 @@ let sampled ~seed ~count : (string * packed * sample_meta) list =
 
 let sample ~seed ~count : (string * packed) list =
   List.map (fun (label, p, _) -> (label, p)) (sampled ~seed ~count)
+
+let flat_records ~seed ~count : (string * packed) list =
+  List.filter_map
+    (fun (label, p, meta) ->
+      match meta.shape with
+      | Record fields when List.for_all (equal_shape Leaf) fields ->
+          Some (label, p)
+      | Leaf | Array _ | Record _ -> None)
+    (sampled ~seed ~count)

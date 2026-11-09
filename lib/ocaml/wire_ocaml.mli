@@ -37,6 +37,15 @@ type target = [ `OCaml | `OxCaml ]
     fields reads only those, under one frame check; and, for the generated
     record, [decode_local], which builds it on the stack. *)
 
+val ident : string -> string
+(** [ident name] is the OCaml name a generated module derives from the field
+    [name], for either target: its getter is [get_<ident name>], its read
+    [read_<ident name>] and its record field [ident name]. It is [name]
+    lower-cased, any character other than a letter, a digit or ['_'] turned into
+    ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
+    suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
+    for the default target compiles on an OxCaml compiler too. *)
+
 (** A {!Wire.typ} of any value type. *)
 type typ = Typ : 'a Wire.typ -> typ
 

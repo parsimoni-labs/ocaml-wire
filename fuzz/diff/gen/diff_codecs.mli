@@ -12,6 +12,15 @@ type exclusion =
 val string_of_exclusion : exclusion -> string
 (** A short human-readable reason, for logs. *)
 
+val sample_seed : int
+(** [sample_seed] is the seed of the sample the codecs come from. *)
+
+val sample_count : int
+(** [sample_count] is the size of that sample. *)
+
+val in_scope : Fuzz_gen.packed -> bool
+(** [in_scope p] is [true] when [p] passes the filter {!included} applies. *)
+
 val included : (string * Fuzz_gen.packed) list
 (** Sampled codecs the differential fuzzer covers: fixed-size, parameter-free
     projections of a single uniquely-named validator, in sample order. *)

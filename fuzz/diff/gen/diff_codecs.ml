@@ -53,6 +53,7 @@ let scope_exclusion (Fuzz_gen.Pack g as p) =
   | Some _ -> None
 
 let candidates = Fuzz_gen.sample ~seed:sample_seed ~count:sample_count
+let in_scope p = Option.is_none (scope_exclusion p)
 
 (* Every candidate with a standalone fixed-size validator is included; the rest
    carry an explicit out-of-scope reason. A shared synthesised type does not

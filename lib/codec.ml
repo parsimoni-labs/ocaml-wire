@@ -1441,7 +1441,10 @@ module Gen = struct
     Types.check_byte_field_size ~expected ~actual;
     Fmt.invalid_arg "Wire: byte field of length %d" actual
 
-  let get_failed t name buf off =
+  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+
+  (* The reader [Codec.get] stages for a field, found by its name. *)
+  let with_field_reader t name { k } =
     let typ =
       List.find_map
         (fun (Types.Field f) ->
@@ -1449,14 +1452,20 @@ module Gen = struct
           else None)
         (to_struct t).fields
     in
-    (match (typ, List.assoc_opt name (compiled t).field_access) with
+    match (typ, List.assoc_opt name (compiled t).field_access) with
     | Some (Types.Pack_typ typ), Some (_, access) -> (
         match build_immediate_staged_reader typ access with
-        | Some read -> ignore (read buf off)
+        | Some read -> Some (k typ read)
         | None ->
             let read = build_staged_reader typ access in
-            ignore (read (runtime ()) (Input_end.of_bytes buf) buf off))
-    | _ -> ());
+            Some
+              (k typ (fun buf off ->
+                   read (runtime ()) (Input_end.of_bytes buf) buf off)))
+    | _ -> None
+
+  let get_failed t name buf off =
+    ignore
+      (with_field_reader t name { k = (fun _ read -> ignore (read buf off)) });
     disagrees t
 
   let encode_rejected t buf off =

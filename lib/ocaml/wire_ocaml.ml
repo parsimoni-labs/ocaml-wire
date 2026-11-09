@@ -982,5 +982,7 @@ let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
       pp_maps ppf fields;
       pp_body ppf ~target ~make ~fields ~size ~where
 
+let ident = label
+
 let ml ?target ?make ?maps ~codec c =
   Fmt.str "%a" (pp ?target ?make ?maps ~codec) c

@@ -1964,6 +1964,14 @@ module Private : sig
     (** [byte_length ~expected ~actual] raises the error for a byte array of
         [actual] bytes where [expected] are needed. *)
 
+    type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+    (** A use of a field's reader, whatever the field's type. *)
+
+    val with_field_reader : 'r Codec.t -> string -> 'b field_k -> 'b option
+    (** [with_field_reader t name k] is [k.k ty read], where [read] is the
+        reader {!Codec.val-get} stages for the field [name] of [t] and [ty] its
+        type, or [None] when [t] has no field [name]. *)
+
     val get_failed : 'r Codec.t -> string -> bytes -> int -> 'a
     (** [get_failed t name buf off] raises the error a getter for the field
         [name] of [t] raises on [buf] at [off]. *)
