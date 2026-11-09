@@ -157,6 +157,13 @@ let registry_casetype_u64_tag =
     (Wire.enum "RegU64TagKind" [ ("A", 1); ("B", 2) ] Wire.uint64)
     Wire.UInt64.of_int tagged_cases
 
+(* A casetype dispatching on an enum whose type and case names are 3D and F*
+   keywords: each case label is the escaped enum constant. *)
+let registry_casetype_keyword_tag =
+  casetype_tagged "RegKeywordTag"
+    (Wire.enum "end" [ ("in", 1); ("of", 2) ] Wire.uint8)
+    Wire.UInt8.v tagged_cases
+
 let unsigned_scalar_gens =
   [
     ("uint8", Pack uint8);
@@ -401,6 +408,7 @@ let composite_gens =
     ("casetype_lookup_tag", Pack registry_casetype_lookup_tag);
     ("casetype_where_tag", Pack registry_casetype_where_tag);
     ("casetype_u64_tag", Pack registry_casetype_u64_tag);
+    ("casetype_keyword_tag", Pack registry_casetype_keyword_tag);
     ("field_anon", Pack field_anon);
   ]
 

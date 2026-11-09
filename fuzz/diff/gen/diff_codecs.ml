@@ -38,7 +38,7 @@ type exclusion =
   | Casetype
 
 let string_of_exclusion = function
-  | Name_clash -> "two field names spell one generated identifier"
+  | Name_clash -> "two names spell one generated identifier"
   | Variable_size -> "variable size, no standalone validator"
   | Zero_size -> "zero size, setter arity mismatch"
   | Parameterised -> "parameterised, binds Param.env"
