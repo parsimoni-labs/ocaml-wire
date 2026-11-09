@@ -151,7 +151,7 @@ and pp_typ : type a. a typ Fmt.t =
   | Single_elem { size; elem; at_most = true } ->
       Fmt.pf ppf "%a[:byte-size-single-element-array-at-most %a]" pp_typ elem
         pp_expr size
-  | Enum { name; _ } -> Fmt.string ppf name
+  | Enum { name; _ } -> Fmt.string ppf (escape_3d name)
   | Casetype { name; _ } -> Fmt.string ppf name
   | Struct { name; _ } -> Fmt.string ppf name
   | Type_ref name -> Fmt.string ppf name
@@ -723,19 +723,28 @@ let render_typ_at : type a.
   let suffix, pp_base = field_suffix typ in
   let pp_base =
     match doc_enum with
-    | Some n -> fun ppf -> Fmt.string ppf n
+    | Some n -> fun ppf -> Fmt.string ppf (escape_3d n)
     | None -> pp_base
   in
   (pp_base, suffix, constraint_)
+
+(* The 3D names of a struct's named fields, which an anonymous field's name
+   must avoid. Set by [pp_struct] for the struct it prints. *)
+let named_fields_3d : string list ref = Stdlib.ref []
+
+(* 3D needs a name for an anonymous field too: the first [_anon_<n>] no named
+   field of the struct already takes. *)
+let rec fresh_anon_name () =
+  let s = Fmt.str "_anon_%d" !anon_counter in
+  incr anon_counter;
+  if List.mem s !named_fields_3d then fresh_anon_name () else s
 
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
     | None ->
-        let n = !anon_counter in
-        incr anon_counter;
-        let s = Fmt.str "_anon_%d" n in
+        let s = fresh_anon_name () in
         (s, s)
   in
   let pp_base, suffix, constraint_ =
@@ -941,6 +950,10 @@ let check_3d_names (s : struct_) =
 let pp_struct ppf (s : struct_) =
   check_3d_names s;
   anon_counter := 0;
+  named_fields_3d :=
+    List.filter_map
+      (fun (Field f) -> Option.map escape_3d f.field_name)
+      s.fields;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
   let fields = reorder_bit_groups_for_3d s.fields in
@@ -964,7 +977,7 @@ let pp_enum_cases ppf cases =
   List.iteri
     (fun i (cname, value) ->
       if not (Int.equal i 0) then Fmt.string ppf ",";
-      Fmt.pf ppf "@,%s = %d" cname value)
+      Fmt.pf ppf "@,%s = %d" (escape_3d cname) value)
     cases
 
 let pp_casetype_cases : type k.
@@ -1048,7 +1061,7 @@ let pp_decl ppf = function
       if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
-      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
+      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base (escape_3d name);
       pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ tag; cases } ->
@@ -1101,12 +1114,46 @@ let check_unique_decl_names decls =
                   n))
     decls
 
+(* Every top-level declaration of a module names a 3D identifier, and so does
+   every enum case: 3D declares them all in one namespace, beside the types.
+   Escaping a keyword, or two enums of one codec naming the same case, can spell
+   two declarations alike, which EverParse rejects as a clash. A declaration
+   repeated verbatim is one source and no clash. *)
+let module_idents decls =
+  List.concat_map
+    (function
+      | Typedef { struct_ = st; _ } ->
+          let src = Fmt.str "struct %S" st.name in
+          [ (src, escape_3d st.name); (src, struct_tag_name st) ]
+      | Define { name; _ } -> [ (Fmt.str "constant %S" name, name) ]
+      | Extern_fn { name; _ } -> [ (Fmt.str "extern %S" name, name) ]
+      | Extern_probe { name; _ } -> [ (Fmt.str "probe %S" name, name) ]
+      | Enum_decl { name; cases; _ } ->
+          (Fmt.str "enum %S" name, escape_3d name)
+          :: List.map
+               (fun (c, _) ->
+                 (Fmt.str "case %S of enum %S" c name, escape_3d c))
+               cases
+      | Casetype_decl { name; _ } ->
+          let src = Fmt.str "casetype %S" name in
+          if String.length name > 0 && name.[0] = '_' then
+            [ (src, name); (src, String.sub name 1 (String.length name - 1)) ]
+          else [ (src, "_" ^ name); (src, name) ])
+    decls
+
+let check_module_names decls =
+  match Names.clash (module_idents decls) with
+  | None -> ()
+  | Some (a, b, id) ->
+      Fmt.invalid_arg "Everparse: %s and %s both declare the 3D name %S" a b id
+
 let to_3d ?(enum_as_type = false) m =
   render_enum_as_type := enum_as_type;
   Fun.protect
     ~finally:(fun () -> render_enum_as_type := false)
     (fun () ->
       check_unique_decl_names m.decls;
+      check_module_names m.decls;
       Fmt.str "@[<v>%a@]" pp_module m)
 
 let to_3d_file ?(enum_as_type = false) path m =

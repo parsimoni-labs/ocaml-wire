@@ -224,6 +224,65 @@ let test_3d_names_are_identifiers () =
     "identifiers project" true
     (contains ~sub:"UINT8 _a1;" out && contains ~sub:"UINT8 A_b;" out)
 
+(* The 3D a codec projects to, with its enums declared as types, as the
+   EverParse pipeline writes it. *)
+let codec_3d c =
+  to_3d ~enum_as_type:true (Everparse.project c).Everparse.module_
+
+let one_field_codec name typ =
+  let f = Field.v "k" typ in
+  Codec.v name Fun.id Codec.[ f $ Fun.id ]
+
+(* An enum's type and case names are 3D declarations like any other: a keyword
+   among them is escaped the way a field's is, wherever it is written. *)
+let test_3d_enum_keyword_names () =
+  let out =
+    codec_3d (one_field_codec "Kw" (enum "end" [ ("in", 1); ("of", 2) ] uint8))
+  in
+  Alcotest.(check bool) "type escaped" true (contains ~sub:"enum end_ {" out);
+  Alcotest.(check bool)
+    "cases escaped" true
+    (contains ~sub:"in_ = 1" out && contains ~sub:"of_ = 2" out);
+  Alcotest.(check bool)
+    "field typed as escape" true
+    (contains ~sub:"end_ k;" out);
+  let kw = enum "end" [ ("in", 1) ] uint8 in
+  let out = codec_3d (one_field_codec "Arr" (array ~len:(int 2) kw)) in
+  Alcotest.(check bool)
+    "array names the escape" true
+    (contains ~sub:"end_ k[" out)
+
+(* Enum cases live in the module's namespace, beside its types: two cases that
+   escape onto each other, or two enums of one codec naming the same case, are
+   one 3D declaration twice, which EverParse rejects. *)
+let test_3d_enum_case_clash () =
+  invalid_arg_mentions "end and end_" [ "\"end\""; "\"end_\"" ] (fun () ->
+      codec_3d
+        (one_field_codec "Cl" (enum "E" [ ("end", 1); ("end_", 2) ] uint8)));
+  let a = Field.v "a" (enum "Color" [ ("Red", 1) ] uint8) in
+  let b = Field.v "b" (enum "Fruit" [ ("Red", 3) ] uint8) in
+  invalid_arg_mentions "Red in two enums" [ "\"Color\""; "\"Fruit\""; "Red" ]
+    (fun () ->
+      codec_3d (Codec.v "Two" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]));
+  invalid_arg_mentions "case named as the struct" [ "\"Two\"" ] (fun () ->
+      codec_3d (one_field_codec "Two" (enum "Kind" [ ("Two", 1) ] uint8)));
+  invalid_arg_mentions "case named as its enum" [ "\"end\"" ] (fun () ->
+      codec_3d (one_field_codec "Kw" (enum "end" [ ("end", 1) ] uint8)))
+
+(* Reversing a bit group into its base's native order pads the word with an
+   anonymous field, which 3D needs a name for. The name it gets must not be a
+   field's. *)
+let test_3d_padding_name_is_fresh () =
+  let a = Field.v "_anon_0" uint8 in
+  let b = Field.v "b" (bits ~width:3 U8) in
+  let out =
+    codec_3d (Codec.v "Pad" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ])
+  in
+  Alcotest.(check bool) "field kept" true (contains ~sub:"UINT8 _anon_0;" out);
+  Alcotest.(check bool)
+    "padding named apart" false
+    (contains ~sub:"_anon_0 :" out)
+
 let suite =
   ( "everparse_names",
     [
@@ -239,4 +298,10 @@ let suite =
         test_3d_escaped_names_clash;
       Alcotest.test_case "3d: names are identifiers" `Quick
         test_3d_names_are_identifiers;
+      Alcotest.test_case "3d: enum keywords are escaped" `Quick
+        test_3d_enum_keyword_names;
+      Alcotest.test_case "3d: enum cases that clash" `Quick
+        test_3d_enum_case_clash;
+      Alcotest.test_case "3d: padding takes a fresh name" `Quick
+        test_3d_padding_name_is_fresh;
     ] )

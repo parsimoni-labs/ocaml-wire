@@ -85,6 +85,13 @@
 
 - `wire` builds on OxCaml (#436, @samoht)
 
+- The 3D projection escapes keywords among an enum's type and case names, and
+  refuses a codec where two declarations or enum cases spell one 3D name, such
+  as two enums both naming a case `Red`, naming both. It names the padding of a
+  reversed bit group apart from the struct's fields, which a field called
+  `_anon_0` used to share. Each of these failed inside EverParse (#438,
+  @samoht)
+
 ## 1.3.0
 
 ### Added
