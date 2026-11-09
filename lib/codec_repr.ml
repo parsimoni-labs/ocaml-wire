@@ -431,7 +431,10 @@ let[@inline] read_field : type a.
 
 (* How [encode] writes a field it has a descriptor for: the field's value, put
    at the descriptor's offset with no bounds check of its own. *)
-type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+type 'r put =
+  | Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+  | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
+      (** A fixed byte array: copied in after a check of its length. *)
 
 let bits_of_mask mask =
   let rec go n = if mask lsr n = 0 then n else go (n + 1) in

@@ -237,7 +237,9 @@ type step =
 
 (** How the encoder writes a field it has a descriptor for: the field's value,
     put at the descriptor's offset with no bounds check of its own. *)
-type 'r put = Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+type 'r put =
+  | Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+  | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
 
 (** How a field adds to the record's extent, for the layout pass: a fixed width,
     a byte span whose size the data decides, or the rest of the buffer. *)

@@ -579,6 +579,36 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* A getter that answers differently on each call: the fixed-size encoder
+   checks and copies the same string, so it writes a whole value or raises,
+   and never copies bytes from past the end of a short one. *)
+let test_encode_impure_byte_array_getter () =
+  let calls = Stdlib.ref 0 in
+  let data () =
+    incr calls;
+    if !calls mod 2 = 1 then String.make 16 'a' else "x"
+  in
+  let c =
+    Codec.v "ImpureBlit"
+      (fun _ _ -> ())
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun () -> UInt8.v 1);
+          (Field.v "d" (byte_array ~size:(int 16)) $ fun () -> data ());
+        ]
+  in
+  ignore (Codec.wire_size c);
+  let buf = Bytes.make 17 '\x00' in
+  for start = 0 to 1 do
+    calls := start;
+    match Codec.encode c () buf 0 with
+    | () ->
+        Alcotest.(check string)
+          "a whole value" (String.make 16 'a')
+          (Bytes.sub_string buf 1 16)
+    | exception Invalid_argument _ -> ()
+  done
+
 (* What [decode], [validate] and [valid] make of the same bytes: each one
    accepts them or each one refuses. *)
 let check_entry_points_agree what c bytes =
@@ -843,6 +873,8 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "encode: a getter is called once per write" `Quick
+        test_encode_impure_byte_array_getter;
       Alcotest.test_case "layout: a fixed field after the last span must fit"
         `Quick test_fixed_after_span_fits;
       Alcotest.test_case "decode: every entry point checks before it reads"
