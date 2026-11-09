@@ -21,6 +21,10 @@
 - A codec named with a capital after a digit (`Foo2Bar`) gets the C names
   EverParse emits, so its FFI stubs link (#441, @samoht)
 
+- `Wire.Codec.decode` reads a record of more than eight fields in field order,
+  so it reports the first field that fails and runs `map` decoders in order
+  (#434, @samoht)
+
 ## 1.3.0
 
 ### Added
