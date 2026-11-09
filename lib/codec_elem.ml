@@ -176,13 +176,18 @@ let extend_scope name own nested prev =
   in
   nested @ ((name, own) :: prev)
 
+let unbound_check_ref name =
+  Fmt.invalid_arg "Codec: unbound field ref %S in a field constraint or action"
+    name
+
+let unbound_where_ref name =
+  Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
+
 let build_idx readers =
   let rev_readers = List.rev readers in
   fun name ->
     let rec find i = function
-      | [] ->
-          Fmt.invalid_arg
-            "Codec: unbound field ref %S in a field constraint or action" name
+      | [] -> unbound_check_ref name
       | (n, _) :: _ when n = Some name -> i
       | _ :: rest -> find (i + 1) rest
     in
@@ -198,9 +203,13 @@ let rec action_vars acc = function
       | None -> acc)
   | _ -> acc
 
-let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
- fun f -> function
-  | Param_ref p -> f (Param.Pack p)
+(* Every leaf of [e] that names something: a parameter handle, or a field by
+   name. *)
+let rec iter_refs : type a.
+    param:(Param.packed -> unit) -> field:(string -> unit) -> a expr -> unit =
+ fun ~param ~field -> function
+  | Param_ref p -> param (Param.Pack p)
+  | Ref (_, name) -> field name
   | Add (a, b)
   | Sub (a, b)
   | Mul (a, b)
@@ -211,43 +220,45 @@ let rec iter_param_refs : type a. (Param.packed -> unit) -> a expr -> unit =
   | Lxor (a, b)
   | Lsl (a, b)
   | Lsr (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Land64 (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Lsr64 (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Lt (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Le (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Gt (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Ge (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Eq (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | Ne (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
   | And (a, b) | Or (a, b) ->
-      iter_param_refs f a;
-      iter_param_refs f b
-  | Not a -> iter_param_refs f a
-  | Lnot a -> iter_param_refs f a
-  | Cast (_, a) -> iter_param_refs f a
+      iter_refs ~param ~field a;
+      iter_refs ~param ~field b
+  | Not a -> iter_refs ~param ~field a
+  | Lnot a -> iter_refs ~param ~field a
+  | Cast (_, a) -> iter_refs ~param ~field a
   | If_then_else (c, t, e) ->
-      iter_param_refs f c;
-      iter_param_refs f t;
-      iter_param_refs f e
-  | Int _ | Int64 _ | Bool _ | Ref _ | Sizeof _ | Sizeof_this | Field_pos -> ()
+      iter_refs ~param ~field c;
+      iter_refs ~param ~field t;
+      iter_refs ~param ~field e
+  | Int _ | Int64 _ | Bool _ | Sizeof _ | Sizeof_this | Field_pos -> ()
+
+let iter_param_refs f e = iter_refs ~param:f ~field:ignore e
 
 let rec iter_param_refs_stmt f = function
   | Types.Assign (p, e) ->

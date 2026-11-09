@@ -83,5 +83,15 @@ val validate_runtime_of :
 (** [validate_runtime_of] runs [validate_arr] on a cleared scratch seeded with
     the context's parameters, then writes the output parameters back. *)
 
-val seal : ('r, 'r) record -> 'r t
-(** [seal r] is the codec of the finished record [r]. *)
+val seal :
+  struct_fields:Types.field list ->
+  param_handles:Param.packed list ->
+  ('r, 'r) Codec_repr.record ->
+  'r Codec_repr.compiled
+(** [seal ~struct_fields ~param_handles r] is the compiled form of the finished
+    record [r], whose fields are [struct_fields] and parameters [param_handles].
+*)
+
+val typ_where_conds : 'a Types.typ -> bool Types.expr list
+(** [typ_where_conds t] is the conditions of the [where] wrappers of [t],
+    outermost first. *)

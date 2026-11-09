@@ -20,6 +20,13 @@
   keyword (`effect_`), and two fields that give one label are refused (#434,
   @samoht)
 
+- **Breaking:** `Wire.Codec.v` no longer compiles the codec: the first operation
+  that needs it does, so a program pays only for the codecs it uses. A mistake
+  only compilation finds (a size that refers to a field it cannot see, a
+  bitfield after a variable-size field, a field type with no reader or writer)
+  now raises `Invalid_argument` from that first operation, `decode` included,
+  instead of from `Codec.v` (#435, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
@@ -46,6 +53,9 @@
 
 - `Wire_stubs`: a codec named for an OCaml keyword (`Type`) gives stubs that
   compile (#434, @samoht)
+
+- The errors of a codec built by `Wire.Codec.rename` name its new name; `encode`
+  reported the old one (#435, @samoht)
 
 ## 1.3.0
 

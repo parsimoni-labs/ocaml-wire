@@ -292,22 +292,109 @@ type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
 
+(* The field refs of an action that [compile_stmt] resolves. *)
+let rec iter_stmt_field_refs f = function
+  | Types.Assign (_, e) | Types.Var (_, e) -> iter_refs ~param:ignore ~field:f e
+  | Types.Return e -> iter_refs ~param:ignore ~field:f e
+  | Types.If (c, then_, else_) ->
+      iter_refs ~param:ignore ~field:f c;
+      List.iter (iter_stmt_field_refs f) then_;
+      Option.iter (List.iter (iter_stmt_field_refs f)) else_
+  | Types.Field_assign _ | Types.Extern_call _ | Types.Abort -> ()
+
+(* The names a field adds to the scope of later fields and of the [where]
+   clause, as [apply_compiled] adds them: an embedded sub-codec brings its own
+   fields along. *)
+let rec nested_names : type a. a typ -> string list = function
+  | Codec { codec_field_readers; _ } -> List.map fst codec_field_readers
+  | Map { inner; _ } -> nested_names inner
+  | Enum { base; _ } -> nested_names base
+  | Where { inner; _ } -> nested_names inner
+  | _ -> []
+
+(* A constraint or an action may only name the fields before it, and the
+   [where] clause may name them all. Checking that here, with the scope and the
+   error the compile uses, makes a bad name fail where the codec is built.
+   Returns the scope of the [where] clause. *)
+let check_field_refs : type f r. (f, r) fields -> string list =
+ fun flds ->
+  let rec go : type g. string list -> (g, r) fields -> string list =
+   fun scope -> function
+     | [] -> scope
+     | fld :: rest ->
+         let stmts : Types.action_stmt list =
+           match fld.action with
+           | None -> []
+           | Some (Types.Success stmts | Types.Act stmts) -> stmts
+         in
+         let conds = Option.to_list fld.constraint_ @ typ_where_conds fld.typ in
+         if not (List.is_empty conds && List.is_empty stmts) then (
+           let visible = List.fold_left action_vars (fld.name :: scope) stmts in
+           let check name =
+             if not (List.mem name visible) then unbound_check_ref name
+           in
+           List.iter (iter_refs ~param:ignore ~field:check) conds;
+           List.iter (iter_stmt_field_refs check) stmts);
+         go (nested_names fld.typ @ (fld.name :: scope)) rest
+  in
+  go [] flds
+
+let check_where_refs scope where =
+  let check name = if not (List.mem name scope) then unbound_where_ref name in
+  Option.iter (iter_refs ~param:ignore ~field:check) where
+
 let view : type f r.
     string -> ?where:bool expr -> ?doc:string -> f -> (f, r) fields -> r t =
  fun name ?where ?doc constructor flds ->
-  let rec add : type g. (g, r) record -> (g, r) fields -> r t =
-   fun r flds ->
-    match flds with [] -> seal r | f :: rest -> add (add_field r f) rest
+  let rec struct_fields : type g. (g, r) fields -> Types.field list = function
+    | [] -> []
+    | f :: rest -> struct_field f :: struct_fields rest
   in
-  add (record_start ?where ?doc name constructor) flds
+  (* Check the description now, so a malformed codec fails where it is built.
+     The compile waits for the first operation that needs it. *)
+  let scope = check_field_refs flds in
+  let struct_fields = struct_fields flds in
+  Shape.reject_invalid_codec_shape name struct_fields;
+  let param_handles = collect_param_handles name struct_fields where in
+  check_where_refs scope where;
+  let compile name =
+    let rec add : type g. (g, r) record -> (g, r) fields -> r compiled =
+     fun r flds ->
+      match flds with
+      | [] -> seal ~struct_fields ~param_handles r
+      | f :: rest -> add (add_field r f) rest
+    in
+    add (record_start ?where ?doc name constructor) flds
+  in
+  {
+    id = Atomic.fetch_and_add id_counter 1;
+    name;
+    struct_fields;
+    n_params = List.length param_handles;
+    param_handles;
+    where;
+    doc;
+    compiled = Atomic.make None;
+    compile;
+  }
 
 let v = view
 
+(* Two domains may both compile a codec neither has used; the first to publish
+   wins and the other's result is dropped. Compiling is pure, so the two are
+   interchangeable. *)
+let rec compiled (t : 'r t) : 'r compiled =
+  match Atomic.get t.compiled with
+  | Some c -> c
+  | None ->
+      let c = t.compile t.name in
+      if Atomic.compare_and_set t.compiled None (Some c) then c else compiled t
+
 let wire_size_opt (t : _ t) =
-  match t.wire_size with Fixed n -> Some n | Variable _ -> None
+  match (compiled t).wire_size with Fixed n -> Some n | Variable _ -> None
 
 let wire_size (t : _ t) =
-  match t.wire_size with
+  match (compiled t).wire_size with
   | Fixed n -> n
   | Variable _ ->
       invalid_arg
@@ -315,12 +402,14 @@ let wire_size (t : _ t) =
          wire_size_at instead)"
 
 let min_wire_size (t : _ t) =
-  match t.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+  match (compiled t).wire_size with
+  | Fixed n -> n
+  | Variable { min_size; _ } -> min_size
 
-let size_of_value_ctx (t : _ t) = t.size_of_value
+let size_of_value_ctx (t : _ t) = (compiled t).size_of_value
 
 let raw_decode (t : _ t) buf off =
-  t.decode no_runtime (Input_end.of_bytes buf) buf off
+  (compiled t).decode no_runtime (Input_end.of_bytes buf) buf off
 
 (* Reject [encode] on a parametric codec without an env, and reject envs
    that left an input param unbound. Either case would silently resolve
@@ -373,7 +462,7 @@ let require_env ~op t = function
    answering. *)
 let wire_size_at ?env:e (t : _ t) buf off =
   require_env ~op:"wire_size_at" t e;
-  match t.wire_size with
+  match (compiled t).wire_size with
   | Fixed n -> n
   | Variable { compute; _ } ->
       compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off - off
@@ -387,23 +476,26 @@ let size_of_value ?env:e (t : _ t) v =
      before it has a budget to bind, and every extent the value itself settles
      still answers. *)
   (match e with None -> () | Some _ -> require_env ~op:"size_of_value" t e);
-  t.size_of_value (runtime ?env:e ()) v
+  (compiled t).size_of_value (runtime ?env:e ()) v
 
 let raw_encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
-  t.encode v (runtime ?env:e ()) buf off
+  (compiled t).encode v (runtime ?env:e ()) buf off
 
-let embed_encode_ctx (t : 'r t) v runtime buf off = t.encode v runtime buf off
+let embed_encode_ctx (t : 'r t) v runtime buf off =
+  (compiled t).encode v runtime buf off
+
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
-let validate_runtime t runtime input_end buf off =
-  validate_runtime_of ~scratch:t.decode_scratch ~n_total:t.n_array_slots
-    ~param_base:t.param_base ~param_handles:t.param_handles
-    ~validate_arr:t.validate_arr runtime input_end buf off
+let validate_runtime t c runtime input_end buf off =
+  validate_runtime_of ~scratch:c.decode_scratch ~n_total:c.n_array_slots
+    ~param_base:c.param_base ~param_handles:t.param_handles
+    ~validate_arr:c.validate_arr runtime input_end buf off
 
 let embed_decode_ctx (t : 'r t) runtime input_end buf off =
-  let v = t.decode runtime input_end buf off in
-  validate_runtime t runtime input_end buf off;
+  let c = compiled t in
+  let v = c.decode runtime input_end buf off in
+  validate_runtime t c runtime input_end buf off;
   v
 
 let embed_decode (t : 'r t) buf off =
@@ -411,10 +503,11 @@ let embed_decode (t : 'r t) buf off =
 
 (* [embed_decode_ctx] with the record construction dropped: the same bounds
    check and the same field pass, and nothing built. *)
-let embed_validate_ctx (t : 'r t) = t.validate_ctx
+let embed_validate_ctx (t : 'r t) runtime input_end buf off =
+  (compiled t).validate_ctx runtime input_end buf off
 
 let wire_size_info_ctx (t : _ t) =
-  match t.wire_size with
+  match (compiled t).wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } ->
       `Variable
@@ -422,7 +515,7 @@ let wire_size_info_ctx (t : _ t) =
           compute runtime input_end buf off - off)
 
 let wire_size_info (t : _ t) =
-  match t.wire_size with
+  match (compiled t).wire_size with
   | Fixed n -> `Fixed n
   | Variable { compute; _ } ->
       `Variable
@@ -445,18 +538,19 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
      and misaligning the rest of the record. This is a usage error, not malformed
      input, so it raises [Invalid_argument] rather than returning a parse error. *)
   require_env ~op:"decode" t e;
+  let c = compiled t in
   let runtime = runtime ?env:e () in
   let input_end = Input_end.of_bytes buf in
-  let v = t.decode runtime input_end buf off in
-  let arr = t.decode_scratch () in
-  clear_slots arr t.n_array_slots;
+  let v = c.decode runtime input_end buf off in
+  let arr = c.decode_scratch () in
+  clear_slots arr c.n_array_slots;
   (match e with
   | Some (e : Param.env) when t.n_params > 0 ->
-      Array.blit e.slots 0 arr.ints t.param_base t.n_params
+      Array.blit e.slots 0 arr.ints c.param_base t.n_params
   | _ -> ());
-  t.validate_arr arr runtime input_end buf off;
+  c.validate_arr arr runtime input_end buf off;
   let consumed =
-    match t.wire_size with
+    match c.wire_size with
     | Fixed n -> off + n
     | Variable { compute; _ } -> compute runtime input_end buf off
   in
@@ -468,7 +562,7 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
          [i]. Write decoded output params back into the environment. *)
       List.iteri
         (fun i (Param.Pack _p) ->
-          let v = arr.ints.(t.param_base + i) in
+          let v = arr.ints.(c.param_base + i) in
           e.slots.(i) <- v)
         t.param_handles
   | None -> ());
@@ -480,9 +574,10 @@ let decode ?consume ?env t buf off =
 
 let encode ?env:e t v buf off =
   require_env ~op:"encode" t e;
+  let c = compiled t in
   let rt = runtime ?env:e () in
-  let expected = t.size_of_value rt v in
-  let actual = t.encode v rt buf off - off in
+  let expected = c.size_of_value rt v in
+  let actual = c.encode v rt buf off - off in
   (* Underrun = silent data corruption: the trailing bytes the caller
      allocated stay uninitialised and the decoder reads them as part
      of the value. Overrun is loud already. *)
@@ -506,7 +601,7 @@ let to_struct t =
 let validate ?env:e (t : _ t) buf off =
   require_env ~op:"validate" t e;
   let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
-  t.validate ?env_slots buf off
+  (compiled t).validate ?env_slots buf off
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in
@@ -759,7 +854,7 @@ let rec build_immediate_staged_writer : type a.
   | _ -> None
 
 let field_access ~op (codec : _ t) (f : (_, _) field) =
-  match List.assoc_opt f.name codec.field_access with
+  match List.assoc_opt f.name (compiled codec).field_access with
   | Some (id, access) when id = f.id -> access
   | Some _ | None ->
       Fmt.invalid_arg "%s: field %S does not belong to codec %S" op f.name
@@ -777,7 +872,8 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   (* The context no longer carries the buffer, so [env] resolves once here
      instead of per staged call. *)
   let rt = runtime ?env () in
-  match List.assoc_opt f.name codec.field_actions with
+  let c = compiled codec in
+  match List.assoc_opt f.name c.field_actions with
   | None -> (
       match build_immediate_staged_reader f.typ access with
       | Some read -> Staged.stage read
@@ -790,16 +886,16 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
          re-stages instead of reusing would leak a key per call. [decode_scratch]
          is sized [n_array_slots] and only ever touched by one operation at a
          time on a given domain, so sharing it with decode is safe. *)
-      let get_arr = codec.decode_scratch in
-      let n = codec.n_array_slots in
-      let populate = codec.populate in
+      let get_arr = c.decode_scratch in
+      let n = c.n_array_slots in
+      let populate = c.populate in
       let n_params = codec.n_params in
       let sync, blit_input =
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
             let param_handles = codec.param_handles in
-            let param_base = codec.param_base in
+            let param_base = c.param_base in
             ( (fun arr ->
                 List.iteri
                   (fun i (Param.Pack _p) ->
@@ -835,13 +931,16 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   | None -> Staged.stage (fun buf off value -> write rt buf off value)
 
 let name (t : _ t) = t.name
-let rename new_name (t : _ t) = { t with name = new_name }
+
+let rename new_name (t : _ t) =
+  { t with name = new_name; compiled = Atomic.make None }
+
 let doc (t : _ t) = t.doc
 
 let field_readers_ctx (t : _ t) =
   List.filter_map
     (fun (name, read) -> Option.map (fun name -> (name, read)) name)
-    t.field_readers
+    (compiled t).field_readers
 
 let field_readers t =
   List.map

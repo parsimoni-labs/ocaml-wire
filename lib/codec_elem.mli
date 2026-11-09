@@ -80,3 +80,19 @@ val elem_size_of :
   'a Types.typ -> Codec_repr.runtime -> Input_end.t -> bytes -> int -> int
 (** [elem_size_of t runtime input_end buf off] is the wire size of the element
     of type [t] at [off]. *)
+
+val unbound_where_ref : string -> 'a
+(** [unbound_where_ref name] raises [Invalid_argument]: a [where] clause refers
+    to [name], which no field or parameter binds. *)
+
+val iter_refs :
+  param:(Param.packed -> unit) ->
+  field:(string -> unit) ->
+  'a Types.expr ->
+  unit
+(** [iter_refs ~param ~field e] calls [param] on every parameter and [field] on
+    every field name [e] reads. *)
+
+val unbound_check_ref : string -> 'a
+(** [unbound_check_ref name] raises [Invalid_argument]: a field constraint or
+    action refers to [name], which no field binds. *)

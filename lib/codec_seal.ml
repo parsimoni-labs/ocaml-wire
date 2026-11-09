@@ -266,7 +266,6 @@ let apply_compiled : type a f r.
       min_wire_size = r.min_wire_size + cf.size_delta;
       next_off = cf.next_off;
       fixed_prefix = r.fixed_prefix;
-      fields_rev = struct_field fld :: r.fields_rev;
       validators_rev = (byte_off, full) :: r.validators_rev;
       checkers_rev = (byte_off, check_only) :: r.checkers_rev;
       field_actions_rev =
@@ -490,7 +489,7 @@ let build_decode : type full r.
 
 let lookup_reader_idx rev_readers name =
   let rec find i = function
-    | [] -> Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
+    | [] -> unbound_where_ref name
     | (n, _) :: _ when n = Some name -> i
     | _ :: rest -> find (i + 1) rest
   in
@@ -754,9 +753,14 @@ let build_record_encoder name writers size_of_value ~check =
             name Types.pp_parse_error e));
     !write_off
 
-let seal : type r. (r, r) record -> r t =
- fun (Record r) ->
-  let codec_id = Atomic.fetch_and_add id_counter 1 in
+(* [struct_fields] and [param_handles] are the ones [view] derived and checked
+   from the same field list. *)
+let seal : type r.
+    struct_fields:Types.field list ->
+    param_handles:Param.packed list ->
+    (r, r) record ->
+    r compiled =
+ fun ~struct_fields ~param_handles (Record r) ->
   let field_access = List.rev r.field_access_rev in
   let wire_size_info =
     match r.next_off with
@@ -768,10 +772,6 @@ let seal : type r. (r, r) record -> r t =
   let raw_decode = build_decode r.make r.readers in
   let validators = List.rev r.validators_rev in
   let param_base = r.n_array_slots in
-  (* Collect and index params *)
-  let struct_fields = List.rev r.fields_rev in
-  Shape.reject_invalid_codec_shape r.name struct_fields;
-  let param_handles = collect_param_handles r.name struct_fields r.where in
   let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
@@ -795,8 +795,6 @@ let seal : type r. (r, r) record -> r t =
   let size_funcs = Array.of_list (List.rev r.size_of_value_rev) in
   let size_of_value = build_size_of_value size_funcs in
   {
-    id = codec_id;
-    name = r.name;
     size_of_value;
     field_access;
     field_readers = List.rev r.field_readers;
@@ -805,7 +803,6 @@ let seal : type r. (r, r) record -> r t =
     encode =
       build_record_encoder r.name writers size_of_value ~check:encode_check;
     wire_size = wire_size_info;
-    struct_fields;
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
@@ -819,8 +816,4 @@ let seal : type r. (r, r) record -> r t =
     n_array_slots = n_total;
     decode_scratch = scratch;
     param_base;
-    n_params;
-    param_handles;
-    where = r.where;
-    doc = r.doc;
   }

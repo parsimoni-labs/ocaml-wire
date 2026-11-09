@@ -1143,6 +1143,16 @@ let test_rename_roundtrip () =
       | Error _ -> Alcotest.fail "decode failed after rename")
   | _ -> Alcotest.fail "encode failed"
 
+(* A renamed codec's errors name it by its new name. *)
+let test_rename_errors () =
+  let renamed = Codec.rename "NewName" rename_codec in
+  let v = { ra = UInt8.v 7; rb = UInt16.v 1000 } in
+  match Codec.encode renamed v (Bytes.create 2) 0 with
+  | () -> Alcotest.fail "encode into a short buffer succeeded"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) "new name" true (contains ~sub:"NewName" m);
+      Alcotest.(check bool) "old name absent" false (contains ~sub:"OrigName" m)
+
 let test_enum_codec_validates () =
   (* The Codec decode path rejects an enum value that is not one of the named
      cases, on a scalar field and on every array element, matching the EverParse
@@ -1362,6 +1372,8 @@ let suite =
       Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
       Alcotest.test_case "rename: roundtrip unchanged" `Quick
         test_rename_roundtrip;
+      Alcotest.test_case "rename: errors name the new name" `Quick
+        test_rename_errors;
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "decode: prefix and all consumption" `Quick

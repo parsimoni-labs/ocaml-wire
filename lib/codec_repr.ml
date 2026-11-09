@@ -561,7 +561,6 @@ type ('f, 'r) record =
              size, which stops accumulating once a field's extent is dynamic
              ([sum_size] returns the accumulator unchanged from there), so
              fixed fields after a variable one do not add to it. *)
-      fields_rev : Types.field list;
       validators_rev :
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
@@ -593,9 +592,10 @@ type wire_size_info =
 
 let id_counter = Atomic.make 0
 
-type 'r t = {
-  id : int;
-  name : string;
+(* What [seal] builds from a field list: the layout, the readers and writers
+   and the validators. [view] does not build it; the first operation that needs
+   it does (see [compiled]). *)
+type 'r compiled = {
   size_of_value : Types.eval_ctx -> 'r -> int;
   field_access : (string * (int * field_access)) list;
   field_readers : field_reader list;
@@ -606,7 +606,6 @@ type 'r t = {
          [base], threads each per-field writer's return as the next
          writer's [write_off], and returns the final offset. *)
   wire_size : wire_size_info;
-  struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
@@ -624,12 +623,24 @@ type 'r t = {
          Domain-local so concurrent decode of one codec value on separate
          domains does not share the scratch. *)
   param_base : int;
+}
+
+type 'r t = {
+  id : int;
+  name : string;
+  struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
   where : bool expr option;
   doc : string option;
       (** Free-text note (e.g. an RFC citation) projected as a [/*++ ... --*/]
           comment on the codec's 3D typedef. *)
+  compiled : 'r compiled option Atomic.t;
+      (* Set once, by the first [compiled]. An atomic rather than a [Lazy.t]
+         because a codec is shared across domains, and forcing one lazy value
+         from two domains at once raises [Lazy.Undefined]. *)
+  compile : string -> 'r compiled;
+      (* Compiles the codec under the given name, which its errors report. *)
 }
 
 let pp ppf (t : _ t) = Fmt.string ppf t.name
@@ -646,7 +657,6 @@ let record_start ?where ?doc name make =
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
-      fields_rev = [];
       validators_rev = [];
       checkers_rev = [];
       field_actions_rev = [];

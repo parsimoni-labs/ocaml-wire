@@ -199,7 +199,6 @@ type ('f, 'r) record =
       min_wire_size : int;
       next_off : next_off;
       fixed_prefix : int ref;
-      fields_rev : Types.field list;
       validators_rev :
         (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
       checkers_rev :
@@ -227,9 +226,7 @@ type wire_size_info =
 val id_counter : int Atomic.t
 (** Source of codec identities. *)
 
-type 'r t = {
-  id : int;
-  name : string;
+type 'r compiled = {
   size_of_value : Types.eval_ctx -> 'r -> int;
   field_access : (string * (int * field_access)) list;
   field_readers : field_reader list;
@@ -237,7 +234,6 @@ type 'r t = {
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
-  struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
@@ -245,10 +241,19 @@ type 'r t = {
   n_array_slots : int;
   decode_scratch : unit -> slots;
   param_base : int;
+}
+(** What {!Codec_seal.seal} builds from a field list; built on first use. *)
+
+type 'r t = {
+  id : int;
+  name : string;
+  struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
   where : bool Types.expr option;
   doc : string option;
+  compiled : 'r compiled option Atomic.t;
+  compile : string -> 'r compiled;
 }
 (** A sealed codec. *)
 
