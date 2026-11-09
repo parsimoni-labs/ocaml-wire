@@ -10,11 +10,11 @@
 - `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
   field names against the FFI pipeline before writing anything (#434, @samoht)
 
-- A `paranoid` dune profile turns every unchecked read back into a checked one,
-  so a read past the frame raises in tests (#435, @samoht)
+- `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
+  its fields with no further bounds check (#435, @samoht)
 
-- `Wire.Codec.valid` and `Wire.Codec.read` read the fields of a buffer validated
-  once, with no bounds check per read (#435, @samoht)
+- A `paranoid` dune profile that bounds-checks every read, for tests (#435,
+  @samoht)
 
 ### Changed
 
@@ -26,25 +26,18 @@
   keyword (`effect_`), and two fields that give one label are refused (#434,
   @samoht)
 
-- **Breaking:** `Wire.Codec.v` no longer compiles the codec: the first operation
-  that needs it does, so a program pays only for the codecs it uses. A mistake
-  only compilation finds (a size that refers to a field it cannot see, a
-  bitfield after a variable-size field, a field type with no reader or writer)
-  now raises `Invalid_argument` from that first operation, `decode` included,
-  instead of from `Codec.v` (#435, @samoht)
-
-- **Breaking:** A literal size that is negative or more than a buffer can hold
-  raises `Invalid_argument` where its type is built, in `byte_array`,
-  `byte_slice`, `array`, `nested`, `Field.repeat` and every other sized
-  description, instead of failing at decode (#435, @samoht)
-
-- **Breaking:** A constraint on a field under `map` applies to the wire value,
-  as in the 3D projection, and `Wire.map` requires its decode to be total:
-  `validate` and `valid` never call it (#435, @samoht)
-
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, constrained, mapped and enumerated fields included, and on
-  records of byte spans sized by their header (#435, @samoht)
+  fixed-size codecs (#435, @samoht)
+
+- **Breaking:** `Wire.Codec.v` no longer compiles the codec; the first
+  operation does. A mistake only compilation finds now raises
+  `Invalid_argument` there (#435, @samoht)
+
+- **Breaking:** a literal size that is negative or too large raises
+  `Invalid_argument` where the type is built, not at decode (#435, @samoht)
+
+- **Breaking:** a constraint on a field under `map` applies to the wire value,
+  as in 3D, and a `map` decoder must be total (#435, @samoht)
 
 ### Fixed
 
@@ -73,18 +66,14 @@
 - `Wire_stubs`: a codec named for an OCaml keyword (`Type`) gives stubs that
   compile (#434, @samoht)
 
-- The errors of a codec built by `Wire.Codec.rename` name its new name; `encode`
-  reported the old one (#435, @samoht)
+- `decode` checks a record before reading it, so it reports the same first
+  failure as `validate` (#435, @samoht)
 
-- `Wire.Codec.validate` reports a wide closed `enum` at the field's offset, not
-  at byte 0 (#435, @samoht)
+- Errors name the right place: a renamed codec's new name, a wide enum's own
+  offset (#435, @samoht)
 
-- `Wire.Codec.decode` checks a record before it reads it, as `validate` does, so
-  the two report the same first failure, and a `map` decoder runs only on a
-  record that passed (#435, @samoht)
-
-- A negative offset raises `Invalid_argument` naming it, and an offset near
-  `max_int` is a parse error rather than `Invalid_argument` (#435, @samoht)
+- A negative offset raises `Invalid_argument`; one near `max_int` is a parse
+  error (#435, @samoht)
 
 ## 1.3.0
 

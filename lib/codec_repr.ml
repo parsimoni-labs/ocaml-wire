@@ -240,6 +240,7 @@ type bf_info = {
   word_reader : bytes -> int -> Optint.t;
   bf_shift : int;
   bf_mask : Optint.t;
+  bf_mask_int : int;
 }
 
 let no_runtime = Types.unbound_eval_ctx

@@ -99,3 +99,7 @@ val unbound_check_ref : string -> 'a
 
 val used_idx : ('a, unit) Hashtbl.t -> ('b -> 'a) -> 'b -> 'a
 (** [used_idx used idx name] is [idx name], after noting the slot in [used]. *)
+
+val mask32 : int
+(** [mask32] is the low 32 bits set, built from an [int64] literal so a 31-bit
+    [int] build does not truncate it. *)

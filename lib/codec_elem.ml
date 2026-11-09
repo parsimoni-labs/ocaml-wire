@@ -46,12 +46,38 @@ let build_bf_reader base byte_off shift width =
    reads, so [Codec.get] on a frame shorter than the word used to answer with
    whatever followed it: the same bytes read one value where the frame lay and
    another once it moved along the buffer, and neither was in the frame. *)
+(* The low 32 bits, from an [int64] literal so a 31-bit [int] build does not
+   truncate it. *)
+let mask32 = Int64.to_int 0xFFFF_FFFFL
+
+(* A bitfield read for [Codec.get]: one load whose own bounds check raises
+   what [Bytes.get_uint8] raises, then a shift and a mask. *)
 let build_bf_accessor_reader base byte_off shift width =
-  let read = build_bf_reader base byte_off shift width in
-  let word = bf_base_byte_size base in
-  fun buf off ->
-    Bitfield.check_word buf (off + byte_off) word;
-    read buf off
+  let mask = (1 lsl width) - 1 in
+  match base with
+  | U8 ->
+      fun buf off -> (Bytes.get_uint8 buf (off + byte_off) lsr shift) land mask
+  | U16 Little ->
+      fun buf off ->
+        (Bytes.get_uint16_le buf (off + byte_off) lsr shift) land mask
+  | U16 Big ->
+      fun buf off ->
+        (Bytes.get_uint16_be buf (off + byte_off) lsr shift) land mask
+  | U32 Little when Bitfield.int_holds_u32 ->
+      fun buf off ->
+        (Int32.to_int (Bytes.get_int32_le buf (off + byte_off)) land mask32)
+        lsr shift
+        land mask
+  | U32 Big when Bitfield.int_holds_u32 ->
+      fun buf off ->
+        (Int32.to_int (Bytes.get_int32_be buf (off + byte_off)) land mask32)
+        lsr shift
+        land mask
+  | U32 _ ->
+      let read = build_bf_reader base byte_off shift width in
+      fun buf off ->
+        Bitfield.check_word buf (off + byte_off) 4;
+        read buf off
 
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
