@@ -36,8 +36,23 @@ let reserved_3d =
    picks something like [total]. The same escaping is applied wherever a
    user-chosen name reaches 3D output: param decls, [Param_ref], [Ref],
    field names. The OCaml-side name is unchanged. *)
+(* KaRaMeL, which writes EverParse's C, drops an identifier's trailing
+   underscores and renames a C keyword it knows ([int] becomes [int0]), but not
+   GNU C's [typeof]: a field spelt [typeof_] in 3D was a C local named
+   [typeof], which the C compiler refused. A name that would reach C so is
+   spelt [typeof_3d], which reaches it as [typeof3d]. *)
+let rec strip_underscores s =
+  let n = String.length s in
+  if n > 0 && s.[n - 1] = '_' then strip_underscores (String.sub s 0 (n - 1))
+  else s
+
+let c_unsafe = [ "typeof" ]
+
 let escape_3d name =
-  if Reserved_3d.mem name reserved_3d then name ^ "_" else name
+  let base = strip_underscores name in
+  if List.mem base c_unsafe then base ^ "_3d"
+  else if Reserved_3d.mem name reserved_3d then name ^ "_"
+  else name
 
 let struct_tag_name (s : struct_) = "Wire" ^ escape_3d s.name
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"

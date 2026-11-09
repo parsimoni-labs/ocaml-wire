@@ -62,9 +62,6 @@
 - 3D: a bit group in a non-native order is laid out the same in a sub-codec,
   an array or a casetype as at top level (#434, @samoht)
 
-- 3D: two different declarations under one name are refused, and every F*, 3D
-  and C keyword a field can spell is escaped (#434, @samoht)
-
 - 3D: a field name that is not an identifier (`a-b`) is refused, and so are
   two codecs whose names differ only in case (#434, @samoht)
 
@@ -85,16 +82,10 @@
 
 - `wire` builds on OxCaml (#436, @samoht)
 
-- The 3D projection escapes keywords among an enum's type and case names, and
-  refuses a codec where two declarations or enum cases spell one 3D name, such
-  as two enums both naming a case `Red`, naming both. It names the padding of a
-  reversed bit group apart from the struct's fields, which a field called
-  `_anon_0` used to share. Each of these failed inside EverParse (#438,
-  @samoht)
+- 3D: two different declarations under one name are refused, and every F*, 3D
+  and C keyword a field can spell is escaped (#434, #438, @samoht)
 
-- The 3D projection declares an enum used only inside a sub-codec. The
-  module named a type it never declared, which EverParse refused (#438,
-  @samoht)
+- 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
 
 ## 1.3.0
 

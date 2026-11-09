@@ -224,6 +224,28 @@ let test_3d_names_are_identifiers () =
     "identifiers project" true
     (contains ~sub:"UINT8 _a1;" out && contains ~sub:"UINT8 A_b;" out)
 
+(* EverParse's C names a field's local after its 3D name less any trailing
+   underscore, so [typeof], or [typeof_], escaped the 3D way still reached C as
+   GNU C's [typeof] keyword. Both are spelt [typeof_3d], and so clash. *)
+let test_3d_typeof_reaches_c_escaped () =
+  let module_of s = module_ [ typedef ~entrypoint:true s ] in
+  let f = field "typeof" uint8 in
+  let s =
+    struct_ "T" [ f; field "y" ~constraint_:Expr.(field_ref f <= int 3) uint8 ]
+  in
+  let out = to_3d (module_of s) in
+  Alcotest.(check bool)
+    "typeof escaped" true
+    (contains ~sub:"UINT8 typeof_3d;" out);
+  Alcotest.(check bool)
+    "escape read" true
+    (contains ~sub:"(typeof_3d <= 3)" out);
+  invalid_arg_mentions "typeof and typeof_" [ "\"typeof\""; "\"typeof_\"" ]
+    (fun () ->
+      to_3d
+        (module_of
+           (struct_ "T" [ field "typeof" uint8; field "typeof_" uint8 ])))
+
 (* The 3D a codec projects to, with its enums declared as types, as the
    EverParse pipeline writes it. *)
 let codec_3d c =
@@ -324,6 +346,8 @@ let suite =
         test_3d_escaped_names_clash;
       Alcotest.test_case "3d: names are identifiers" `Quick
         test_3d_names_are_identifiers;
+      Alcotest.test_case "3d: typeof reaches C escaped" `Quick
+        test_3d_typeof_reaches_c_escaped;
       Alcotest.test_case "3d: enum keywords are escaped" `Quick
         test_3d_enum_keyword_names;
       Alcotest.test_case "3d: enum cases that clash" `Quick
