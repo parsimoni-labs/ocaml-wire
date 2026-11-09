@@ -376,6 +376,76 @@ let test_clash () =
     "OxCaml label" true
     (contains (Wire_ocaml.ml ~target:`OxCaml ~codec:"c" c) "  local__ :")
 
+(* The integer literals of OCaml source, outside strings and comments: a
+   token that starts with a digit and is not an [int32], [int64] or
+   [nativeint] literal. *)
+let int_literals src =
+  let n = String.length src in
+  let is_tok c =
+    match c with
+    | '0' .. '9' | 'a' .. 'z' | 'A' .. 'Z' | '_' -> true
+    | _ -> false
+  in
+  let rec go i depth acc =
+    if i >= n then List.rev acc
+    else
+      match src.[i] with
+      | '(' when i + 1 < n && src.[i + 1] = '*' -> go (i + 2) (depth + 1) acc
+      | '*' when depth > 0 && i + 1 < n && src.[i + 1] = ')' ->
+          go (i + 2) (depth - 1) acc
+      | _ when depth > 0 -> go (i + 1) depth acc
+      | '"' ->
+          let rec close j =
+            if j >= n then j
+            else if src.[j] = '\\' then close (j + 2)
+            else if src.[j] = '"' then j + 1
+            else close (j + 1)
+          in
+          go (close (i + 1)) depth acc
+      | '0' .. '9' when i = 0 || not (is_tok src.[i - 1]) ->
+          let j = ref i in
+          while !j < n && is_tok src.[!j] do
+            incr j
+          done;
+          let tok = String.sub src i (!j - i) in
+          let acc =
+            match tok.[String.length tok - 1] with
+            | 'l' | 'L' | 'n' -> acc
+            | _ -> tok :: acc
+          in
+          go !j depth acc
+      | _ -> go (i + 1) depth acc
+  in
+  go 0 0 []
+
+(* js_of_ocaml has 32-bit ints and wasm_of_ocaml 31-bit ones, and the code is
+   compiled for its target, not on the host that generates it: no literal
+   may need more than 31 bits, and code that reads a 32-bit field into an
+   [int] refuses to load on such a target. *)
+let test_narrow_ints () =
+  let max31 = (1 lsl 30) - 1 in
+  List.iter
+    (fun (name, src) ->
+      List.iter
+        (fun tok ->
+          match int_of_string_opt tok with
+          | Some v when abs v <= max31 -> ()
+          | _ ->
+              Alcotest.failf "%s: the literal %s needs more than 31 bits" name
+                tok)
+        (int_literals src);
+      Alcotest.(check bool)
+        (name ^ ": checks the int size")
+        true
+        (contains src "Sys.int_size"))
+    [
+      ("ipv4", Wire_ocaml.ml ~codec:"Schemas.ipv4" Schemas.ipv4);
+      ("mixed", Wire_ocaml.ml ~codec:"Schemas.mixed" Schemas.mixed);
+      ("wide", Wire_ocaml.ml ~codec:"Schemas.wide" Schemas.wide);
+      ( "wide OxCaml",
+        Wire_ocaml.ml ~target:`OxCaml ~codec:"Schemas.wide" Schemas.wide );
+    ]
+
 (* A generated getter reads what [Codec.get] reads, or raises what it raises,
    on random buffers and offsets around the field. *)
 let getter codec field ~get ~show =
@@ -621,6 +691,8 @@ let suite =
       Alcotest.test_case "negative literals" `Quick test_signed;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
+      Alcotest.test_case "no literal needs more than 31 bits" `Quick
+        test_narrow_ints;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;

@@ -54,13 +54,30 @@ let label name = Wire.Private.Names.ocaml_label name
 let pp_list = Fmt.(list ~sep:(any " ") string)
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.var) fields)
 
+(* The generated code is compiled for its target, whose [int] may have 31 bits
+   (wasm_of_ocaml) or 32 (js_of_ocaml), so no literal it holds needs more than
+   31 bits: a wider integer is written through [int64], and the mask of 32 bits
+   is [mask32], bound by the module. *)
+let max31 = (1 lsl 30) - 1
+
+let int_lit n =
+  if n > max31 || n < -max31 - 1 then
+    Fmt.str "(Int64.to_int %LdL)" (Int64.of_int n)
+  else if n < 0 then Fmt.str "(%d)" n
+  else string_of_int n
+
+(* The mask of the [width] low bits, [width] at most 32. *)
+let mask width =
+  if width <= 30 then Fmt.str "0x%x" ((1 lsl width) - 1)
+  else Fmt.str "(mask32 lsr %d)" (32 - width)
+
 (* An OCaml expression for [e], over the plain values of the fields read so
    far, which are what the codec's constraints see. *)
 let rec expr : type a. (string -> string) -> a T.expr -> string =
  fun var e ->
   let bin op a b = Fmt.str "(%s %s %s)" (expr var a) op (expr var b) in
   match e with
-  | T.Int n -> if n < 0 then Fmt.str "(%d)" n else string_of_int n
+  | T.Int n -> int_lit n
   | T.Bool b -> string_of_bool b
   | T.Ref (T.I, name) -> var name
   | T.Add (a, b) -> bin "+" a b
@@ -110,9 +127,7 @@ let rec classify : type a. a T.typ -> store * (string -> bool T.expr list) =
   | T.Int8 -> int 8 T.Big true
   | T.Uint16 e -> int 16 e false
   | T.Int16 e -> int 16 e true
-  | T.Uint32 e ->
-      if Sys.int_size <= 32 then fail_unsupported "uint32 on this host";
-      int 32 e false
+  | T.Uint32 e -> int 32 e false
   | T.Int32 e -> int 32 e true
   | T.Byte_array { size = T.Int n } when n >= 0 -> (Bytes n, none)
   | T.Where { cond; inner } ->
@@ -182,8 +197,6 @@ let field_of : type b.
     field * word option * int =
  fun ~var ~label name v word off typ own map ->
   match typ with
-  | T.Bits { base = T.U32 _; _ } when Sys.int_size <= 32 ->
-      fail_unsupported "32-bit bitfields on this host"
   | T.Bits { width; base; bit_order } ->
       let w, shift, next =
         place_bits ~off ~word ~base ~order:bit_order ~width
@@ -316,8 +329,7 @@ let unsigned ~src ~words ~off ~bytes ~endian =
         (8 * (a + 8 - off - bytes))
         ((1 lsl (8 * bytes)) - 1)
   | _ when bytes = 4 ->
-      Fmt.str "(Int32.to_int %s land 0xffff_ffff)"
-        (load ~src ~off ~bytes ~endian)
+      Fmt.str "(Int32.to_int %s land mask32)" (load ~src ~off ~bytes ~endian)
   | _ -> load ~src ~off ~bytes ~endian
 
 let read ~src ~words f =
@@ -334,7 +346,7 @@ let read ~src ~words f =
       let v =
         unsigned ~src ~words ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian
       in
-      Fmt.str "((%s lsr %d) land 0x%x)" v shift ((1 lsl width) - 1)
+      Fmt.str "((%s lsr %d) land %s)" v shift (mask width)
   | Bytes n -> Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.off n
 
 (* The [int] a test sees of a 32-bit field, read as an [int32]. *)
@@ -342,7 +354,7 @@ let int_view f =
   match f.store with
   | Int { width = 32; signed; _ } ->
       Fmt.str "(Int32.to_int %s_raw%s)" f.var
-        (if signed then "" else " land 0xffff_ffff")
+        (if signed then "" else " land mask32")
   | _ -> f.var
 
 let map_var f = "map_" ^ f.var
@@ -458,7 +470,8 @@ let out_of_range f =
 
 let member f valid =
   Fmt.str "(%a)"
-    Fmt.(list ~sep:(any " || ") (fun ppf v -> pf ppf "%s = %d" f.var v))
+    Fmt.(
+      list ~sep:(any " || ") (fun ppf v -> pf ppf "%s = %s" f.var (int_lit v)))
     valid
 
 (* [first_error] raises what the codec raises for these values: converting each
@@ -481,11 +494,9 @@ let pp_first_error ~src ppf ~target fields =
       (match f.store with
       | Bits { width; _ } ->
           Fmt.pf ppf
-            "  if %s lsr %d <> 0 then Wire.Private.Gen.bits_too_wide \
-             ~mask:0x%x %s;@\n"
-            f.var width
-            ((1 lsl width) - 1)
-            f.var
+            "  if %s lsr %d <> 0 then Wire.Private.Gen.bits_too_wide ~mask:%s \
+             %s;@\n"
+            f.var width (mask width) f.var
       | Bytes n ->
           Fmt.pf ppf
             "  if String.length %s <> %d then Wire.Private.Gen.byte_length \
@@ -498,7 +509,7 @@ let pp_first_error ~src ppf ~target fields =
             "  if not %s then Wire.Private.Types.check_enum_encode ~name:%S \
              ~valid:[%a] %s;@\n"
             (member f valid) name
-            Fmt.(list ~sep:(any "; ") int)
+            Fmt.(list ~sep:(any "; ") (using int_lit string))
             valid f.var
       | None -> ())
     fields;
@@ -604,6 +615,31 @@ let pp_write ppf ~target fields =
     (zero_alloc target) pp_vars fields pp_list
     (List.map plain_value fields)
 
+(* A 32-bit field is read into an [int], which a target with ints of 32 bits
+   or fewer cannot hold, so the module refuses to load there. *)
+let wide fields =
+  List.exists
+    (fun f ->
+      match f.store with
+      | Int { width = 32; _ } | Bits { base = T.U32 _; _ } -> true
+      | Int _ | Bits _ | Bytes _ -> false)
+    fields
+
+let pp_wide ppf ~codec fields =
+  if wide fields then
+    Fmt.pf ppf
+      "let () =@\n\
+      \  if Sys.int_size <= 32 then@\n\
+      \    invalid_arg@\n\
+      \      %S@\n\
+       @\n\
+       let mask32 = Int64.to_int 0xFFFF_FFFFL@\n\
+       @\n"
+      (Fmt.str
+         "Wire_ocaml: the code generated from %s reads a 32-bit field into an \
+          int, which needs ints wider than 32 bits"
+         codec)
+
 let pp_header ppf ~target ~codec ~digest =
   Fmt.pf ppf
     "(* Generated by Wire_ocaml from %s. Do not edit: generate it again when \
@@ -678,10 +714,9 @@ let checked_read ~src f =
       let bytes = Bitfield.byte_size base in
       let word = checked_load ~src ~off:f.off ~bytes ~endian in
       let word =
-        if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
-        else word
+        if bytes = 4 then Fmt.str "(Int32.to_int %s land mask32)" word else word
       in
-      Fmt.str "((%s lsr %d) land 0x%x)" word shift ((1 lsl width) - 1)
+      Fmt.str "((%s lsr %d) land %s)" word shift (mask width)
   | Bytes n -> Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.off n
 
 let pp_getter ~src ppf ~target f =
@@ -727,13 +762,11 @@ let pp_word_getters ~src ppf ~target f =
       let bytes = Bitfield.byte_size base in
       let word = checked_load ~src ~off:f.off ~bytes ~endian in
       let word =
-        if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
-        else word
+        if bytes = 4 then Fmt.str "(Int32.to_int %s land mask32)" word else word
       in
       Fmt.pf ppf "let%s get_%s_word buf off = %s@\n@\n" attr f.label word;
-      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land 0x%x@\n@\n" attr f.label
-        shift
-        ((1 lsl width) - 1)
+      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land %s@\n@\n" attr f.label
+        shift (mask width)
   | _ -> ()
 
 let pp_getters ?(src = bytes_src) ppf ~target fields =
@@ -895,6 +928,7 @@ let own_names =
     "t";
     "Valid";
     "Bigstring";
+    "mask32";
   ]
 
 (* The names a field's functions and record field take. *)
@@ -944,6 +978,7 @@ let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
   | fields, size, where ->
       check_names ~codec fields;
       pp_header ppf ~target ~codec ~digest;
+      pp_wide ppf ~codec fields;
       pp_maps ppf fields;
       pp_body ppf ~target ~make ~fields ~size ~where
 

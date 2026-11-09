@@ -22,8 +22,9 @@
   reads are bare loads. It specialises the maps the caller names and refuses,
   naming the field, what it cannot specialise. The generated module checks when
   it loads that its codec has not changed, and hands any input it rejects to the
-  codec, so its errors are the codec's own. With ``~target:`OxCaml`` its hot
-  paths are checked `[@zero_alloc]` (#436, @samoht)
+  codec, so its errors are the codec's own. It builds for js_of_ocaml and
+  wasm_of_ocaml too, and with ``~target:`OxCaml`` its hot paths are checked
+  `[@zero_alloc]` (#436, @samoht)
 
 ### Changed
 

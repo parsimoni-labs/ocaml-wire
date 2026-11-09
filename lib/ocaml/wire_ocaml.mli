@@ -5,7 +5,11 @@
     constant, so the compiler sees straight-line loads and stores and a direct
     call to the record's constructor. The generated module checks at start-up
     that the codec it was generated from has not changed, and hands any input it
-    rejects to the codec, so its errors are the codec's own.
+    rejects to the codec, so its errors are the codec's own. Its code holds no
+    integer literal wider than 31 bits, so js_of_ocaml and wasm_of_ocaml compile
+    it as written; a module that reads a 32-bit field into an [int] raises
+    [Invalid_argument] when it loads on a target whose ints have 32 bits or
+    fewer.
 
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
