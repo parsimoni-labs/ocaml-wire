@@ -12,18 +12,25 @@
 
     The generated module has [get_<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
-    offset, and [get_<field>_int] for a 32-bit field's [int] view. It has
-    [size], [decode], [validate] and [write buf off v1 ... vn], which stores
-    field values in order. Without [~make] it also defines a record [t] of the
-    field values, [make] and [encode]. A codec it cannot specialise (variable
-    size, parameters, actions, maps) gets a module with [decode] and [validate]
-    that call the codec. *)
+    offset, and [get_<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
+    validates the record at offset 0, as {!Wire.Codec.valid} does, and
+    [read_<field>] on what it returns is one load with no check of its own. As
+    for {!Wire.Codec.valid}, the promise is memory safety only: a buffer's
+    length never changes, so a read never leaves the buffer, but if its bytes
+    change after [Valid.v], a read may return a value that breaks a constraint.
+    [(v :> bytes)] is the buffer itself, not a copy. It has [size], [decode],
+    [validate] and [write buf off v1 ... vn], which stores field values in
+    order. Without [~make] it also defines a record [t] of the field values,
+    [make] and [encode]. A codec it cannot specialise (variable size,
+    parameters, actions, maps) gets a module with [decode] and [validate] that
+    call the codec. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
-    checks on [validate], [write_int] and [write]; [decode_with make], which
-    takes the constructor as an argument for flambda2 to inline; and, for the
-    generated record, [decode_local], which builds it on the stack. *)
+    checks on [validate], [write_int], [write] and the reads; [decode_with k],
+    which takes a continuation for flambda2 to inline, so a [k] that uses a few
+    fields reads only those, under one frame check; and, for the generated
+    record, [decode_local], which builds it on the stack. *)
 
 val ml :
   ?target:target -> ?make:string -> codec:string -> 'r Wire.Codec.t -> string

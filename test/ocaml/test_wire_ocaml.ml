@@ -286,6 +286,62 @@ let test_getters () =
   getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.get_h ~show:string_of_int;
   getter Schemas.eth Schemas.eth_src ~get:G_eth.get_src ~show:Fun.id
 
+(* [Valid.v] accepts a buffer exactly when [Codec.validate] does at offset 0,
+   raising its error otherwise, and each [read_<field>] then reads what
+   [Codec.get] reads. *)
+let viewed ?(fix = fun _ _ -> ()) codec ~valid ~reads =
+  let size = Codec.min_wire_size codec in
+  for _ = 1 to 2000 do
+    let len = size + Random.State.int rand 4 - 1 in
+    let buf = Bytes.init (max 0 len) (fun _ -> byte ()) in
+    if Random.State.bool rand && len >= size then fix buf 0;
+    let expected =
+      outcome (fun () ->
+          Codec.validate codec buf 0;
+          String.concat "," (List.map (fun (get, _) -> get buf) reads))
+    in
+    let got =
+      outcome (fun () ->
+          let v = valid buf in
+          String.concat "," (List.map (fun (_, read) -> read v) reads))
+    in
+    Alcotest.(check string) "view" expected got
+  done
+
+let test_valid () =
+  let get codec field show =
+    let read = Staged.unstage (Codec.get codec field) in
+    fun buf -> show (read buf 0)
+  in
+  let i32 v = string_of_int (SInt32.to_int v) in
+  let u32 v = string_of_int (UInt32.to_int v) in
+  viewed Schemas.ipv4 ~valid:G_ipv4.Valid.v
+    ~reads:
+      [
+        ( get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
+              string_of_int (UInt16.to_int v)),
+          fun v -> string_of_int (UInt16.to_int (G_ipv4.read_frag v)) );
+        ( get Schemas.ipv4 Schemas.ipv4_src i32,
+          fun v -> string_of_int (G_ipv4.read_src_int v) );
+        (get Schemas.ipv4 Schemas.ipv4_dst u32, fun v -> u32 (G_ipv4.read_dst v));
+      ];
+  viewed ~fix:fix_checked Schemas.checked ~valid:G_checked.Valid.v
+    ~reads:
+      [
+        ( get Schemas.checked Schemas.checked_proto (fun v ->
+              string_of_int (UInt8.to_int v)),
+          fun v -> string_of_int (UInt8.to_int (G_checked.read_proto v)) );
+      ];
+  viewed Schemas.mixed ~valid:G_mixed.Valid.v
+    ~reads:
+      [
+        (get Schemas.mixed Schemas.mixed_f i32, fun v -> i32 (G_mixed.read_f v));
+        ( get Schemas.mixed Schemas.mixed_h string_of_int,
+          fun v -> string_of_int (G_mixed.read_h v) );
+      ];
+  viewed Schemas.eth ~valid:G_eth.Valid.v
+    ~reads:[ (get Schemas.eth Schemas.eth_src Fun.id, G_eth.read_src) ]
+
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, and adds a stack-allocated decode for the generated record. The
    stock compiler cannot build it; the OxCaml tests do. *)
@@ -321,4 +377,5 @@ let suite =
       Alcotest.test_case "unsupported codecs fall back" `Quick test_fallback;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
+      Alcotest.test_case "validated view" `Quick test_valid;
     ] )
