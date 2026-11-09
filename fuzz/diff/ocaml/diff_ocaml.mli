@@ -49,6 +49,12 @@ val views : 'a Wire.Private.Types.typ -> view list
 (** [views t] is the getters the generated module has for a field of type [t].
 *)
 
+val reference : 'r Wire.Codec.t -> string -> bytes -> int -> string
+(** [reference c name buf off] reads the field [name] of [c] at [off] in [buf]
+    with the reader {!Wire.Codec.get} stages, and shows its value as
+    {!show_code} shows a generated getter's: an integer in decimal, a byte array
+    quoted. *)
+
 val codecs : (string * Fuzz_gen.packed) list
 (** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
     {!Diff_codecs.included} takes or excludes only for a

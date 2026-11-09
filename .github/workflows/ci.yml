@@ -58,6 +58,28 @@ jobs:
         env:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
 
+  # The Rust Wire_rust generates, compiled without std and compared with the
+  # codecs it comes from on the differential fuzzer's sample. Needs rustc only:
+  # the generated code depends on nothing but core.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      # The runner image ships a stable Rust toolchain.
+      - run: rustc --version
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- dune build @test/rust/runtest @fuzz/diff/rust/runtest
+        env:
+          BUILD_RUST: 1
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
@@ -228,7 +250,9 @@ jobs:
         run: |
           sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
           export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
-          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl @fuzz/diff/fuzz
+          # Not fuzz/diff/rust, whose campaign needs rustc (BUILD_RUST=1).
+          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl \
+            @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
 
       - name: Fail on crashes
         run: |
@@ -300,8 +324,8 @@ jobs:
   # past the plain build job, which only string-checks the projection.
   #
   # The job also runs the suites gated on BUILD_EVERPARSE=1, which nothing else
-  # reaches: fuzz-afl-diff sets the variable but builds only @fuzz/diff/fuzz
-  # under --profile afl, and those rules require a non-afl profile.
+  # reaches: fuzz-afl-diff sets the variable but builds only the fuzz/diff
+  # campaigns under --profile afl, and those rules require a non-afl profile.
   everparse-3d:
     runs-on: ubuntu-latest
     steps:

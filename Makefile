@@ -1,5 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
-       fuzz-nightly 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+       fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
+       bench-clcw \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -50,12 +51,20 @@ fuzz-paranoid:
 
 # AFL campaigns, WIRE_AFL_SECONDS each (default 60); fuzz-afl-diff needs
 # EverParse. A crash is replayed with _build/default/<dir>/fuzz.exe <file>,
-# which prints the divergence.
+# which prints the divergence. The Rust lane's campaign needs rustc:
+# BUILD_RUST=1 dune build --profile afl @fuzz/diff/rust/fuzz.
+FUZZ_AFL_DIFF = @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
+
 fuzz-afl:
 	dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
 
 fuzz-afl-diff:
-	BUILD_EVERPARSE=1 dune build --profile afl @fuzz/diff/fuzz
+	BUILD_EVERPARSE=1 dune build --profile afl $(FUZZ_AFL_DIFF)
+
+# The sampled codecs against the Rust Wire_rust generates from them (needs
+# rustc).
+fuzz-rust:
+	BUILD_RUST=1 dune build @fuzz/diff/rust/runtest
 
 # What the nightly workflow runs: long property runs, then long campaigns.
 fuzz-nightly:

@@ -11,6 +11,7 @@ make bench              # EverParse C vs OCaml (needs 3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
+make fuzz-rust          # sampled codecs vs the Rust Wire_rust generates (needs rustc)
 make prof               # CPU profile with Instruments (open prof.trace)
 make memtrace           # allocation hotspots via memtrace
 make cppcheck           # static analysis of the hand-written C (skips if cppcheck absent)

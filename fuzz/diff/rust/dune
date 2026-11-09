@@ -1,0 +1,110 @@
+; Differential fuzzer: each sampled codec of Diff_ocaml.codecs against the Rust
+; Wire_rust generates from it. Compiling that code needs rustc, so the lane
+; builds only with BUILD_RUST=1 (rustc in PATH), as the EverParse lane needs
+; BUILD_EVERPARSE=1. The generator (test/diff/gen_rust.ml) is pure OCaml and
+; always builds.
+
+(library
+ (name diff_rust)
+ (modules diff_rust)
+ (libraries wire fuzz_gen diff_ocaml alcobar fmt))
+
+; The generator writes a module per codec and lib.rs, which rustc compiles
+; into one no_std static library with a single C entry point.
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_RUST=} "1"))
+ (targets
+  (dir rs)
+  rust_index.ml)
+ (deps ../../../test/diff/gen_rust.exe)
+ (action
+  (run %{dep:../../../test/diff/gen_rust.exe} rs)))
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_RUST=} "1"))
+ (targets libdiffrust.a)
+ (deps rs)
+ (action
+  (run
+   rustc
+   --edition
+   2021
+   --crate-type
+   staticlib
+   -C
+   panic=abort
+   -C
+   opt-level=2
+   -o
+   libdiffrust.a
+   rs/lib.rs)))
+
+(executable
+ (name fuzz)
+ (modules fuzz rust_index)
+ (enabled_if
+  (= %{env:BUILD_RUST=} "1"))
+ (libraries
+  wire
+  fuzz_gen
+  diff_codecs
+  diff_driver
+  diff_ocaml
+  diff_rust
+  alcobar
+  fmt)
+ (foreign_archives diffrust)
+ (foreign_stubs
+  (language c)
+  (names rust_ffi)))
+
+; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
+; per codec by default.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_RUST=} "1")
+   (<> %{profile} afl)))
+ (action
+  (run
+   %{exe:fuzz.exe}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   %{env:WIRE_FUZZ_REPEAT=5000}
+   --budget
+   %{env:WIRE_FUZZ_BUDGET=1})))
+
+; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
+; cwd is this dir in the build tree, where fuzz.exe is built). As in
+; fuzz/diff/dune, the alias gates on the profile alone, so naming it without
+; BUILD_RUST=1 fails rather than skipping the campaign silently.
+
+(rule
+ (alias fuzz)
+ (enabled_if
+  (= %{profile} afl))
+ (deps fuzz.exe ../../afl.dict)
+ (action
+  (progn
+   (run %{exe:fuzz.exe} --gen-corpus corpus)
+   (run
+    afl-fuzz
+    -V
+    %{env:WIRE_AFL_SECONDS=60}
+    -t
+    8000
+    -x
+    ../../afl.dict
+    -i
+    corpus
+    -o
+    _fuzz
+    --
+    ./fuzz.exe
+    @@))))

@@ -116,7 +116,9 @@ jobs:
         run: |
           sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
           export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
-          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl @fuzz/diff/fuzz
+          # Not fuzz/diff/rust, whose campaign needs rustc (BUILD_RUST=1).
+          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl \
+            @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
         env:
           WIRE_AFL_SECONDS: 7200
 
