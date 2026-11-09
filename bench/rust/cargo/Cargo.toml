@@ -1,0 +1,15 @@
+[package]
+name = "wire-bench-rust"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Ethernet/IPv4/TCP/UDP header parsing: Wire_rust against etherparse and smoltcp"
+
+[dependencies]
+etherparse = { version = "0.21", default-features = false }
+# medium-ethernet turns on smoltcp's sockets, which need at least one kind.
+smoltcp = { version = "0.14", default-features = false, features = ["proto-ipv4", "medium-ethernet", "socket-raw"] }
+
+[profile.release]
+codegen-units = 1
+lto = true

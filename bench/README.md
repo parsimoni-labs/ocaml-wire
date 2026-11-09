@@ -47,6 +47,52 @@ work with `Codec.get`/`Codec.set`.
 | `make bench-gateway` | TM frame reassembly (1M frames) | TMFrame + Space Packet |
 | `make bench-clcw` | COP-1 CLCW polling (10M words) | CLCW |
 
+## Cross-language headers (`bench/rust/`)
+
+The code generators against established parsers: Ethernet, IPv4 and TCP or
+UDP headers, read from one corpus of 64-byte packets by
+
+- `Wire.Codec` (`valid`, then a proof-carrying `read` per field), on OCaml 5
+  and on OxCaml;
+- the OCaml `Wire_ocaml` generates (`validate`, then a getter per field): for
+  the default target on OCaml 5, and with ``~target:`OxCaml`` on OxCaml;
+- the Rust `Wire_rust` generates (`Valid::at`, then a read per field);
+- `etherparse` (`SlicedPacket::from_ethernet`) and `smoltcp::wire`
+  (`new_checked` per layer), two widely used Rust crates.
+
+Every row does the work `SlicedPacket::from_ethernet` does on each packet:
+
+1. the Ethernet header is checked to fit and its EtherType read; a packet
+   that is not IPv4 stops there;
+2. the IPv4 header: version 4, a header length of at least 5 words, a total
+   length that covers the header and lies inside the packet, so the payload
+   is bounded by the total length; addresses, TTL, protocol and total length
+   read;
+3. unless the packet is a fragment (more fragments, or a fragment offset),
+   the TCP or UDP header at the header length: a TCP data offset of at least
+   5 words inside the payload, or a UDP length of at least 8 inside it; ports
+   and the other fields read.
+
+The codecs (`headers.ml`) make the checks on a header's own fields; the
+bounds against the packet and the fragment test are a few lines in each
+harness, the same in OCaml and Rust (`smoltcp` checks the bounds itself; its
+row adds the version and fragment tests). A packet counts only when every
+header it has passes, as with `etherparse`. No row copies a byte: the crates
+return sub-slices, the other rows the same bounds as offsets. Every row folds
+the same fields into a checksum, the report fails if they disagree, and the
+corpus has fragments and packets that fail each bound, so they agree only if
+every row makes every check.
+
+```
+make bench-rust           # needs cargo; fetches the two crates the first time
+```
+
+`OXCAML_SWITCH` names the opam switch the OxCaml run uses (default
+`5.4.0-ox9`; skipped when absent), and `BENCH_RUST_PACKETS` and
+`BENCH_RUST_RUNS` size the corpus and the number of timed passes. The report
+gives the best and the median pass: on a loaded machine the best is the
+steadier measure of the code's own cost.
+
 ## Profiling
 
 ```

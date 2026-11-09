@@ -11,6 +11,7 @@ make bench              # EverParse C vs OCaml (needs 3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
+make bench-rust         # Ethernet/IPv4/TCP/UDP: OCaml, OxCaml, Rust (needs cargo)
 make fuzz-rust          # sampled codecs vs the Rust Wire_rust generates (needs rustc)
 make prof               # CPU profile with Instruments (open prof.trace)
 make memtrace           # allocation hotspots via memtrace
@@ -140,6 +141,18 @@ the shipped `<Name>_Fields.c`).
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
 does the same work with `Codec.get`/`Codec.set`.
+
+**Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
+exception to the three tiers: it measures the code generators against
+established parsers of another language. Ethernet, IPv4 and TCP/UDP headers
+are read from one packet corpus by `Wire.Codec`, by the OCaml `Wire_ocaml`
+generates (for the OCaml target on OCaml, for the OxCaml target on OxCaml), by
+the Rust `Wire_rust` generates, and by two widely used Rust crates,
+`etherparse` and `smoltcp::wire`, as external reference implementations.
+Every implementation does the checks `etherparse` does (bench/README.md lists
+them), reads the same fields and folds them into one checksum, which must
+agree; the corpus holds packets failing each check. The Rust side is a cargo
+project outside the dune build, so `dune build` never needs the network.
 
 ## Style
 
