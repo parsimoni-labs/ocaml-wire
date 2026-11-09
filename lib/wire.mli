@@ -1882,6 +1882,13 @@ module Private : sig
     val read_word : Types.bitfield_base -> bytes -> int -> int
     (** Read a base word at a byte offset. *)
 
+    val u32_field_le : bytes -> int -> int -> int -> int
+    (** [u32_field_le buf off shift mask] is a field of the little-endian 32-bit
+        word at [off]. *)
+
+    val u32_field_be : bytes -> int -> int -> int -> int
+    (** Big-endian {!u32_field_le}. *)
+
     val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
     (** Write a base word at a byte offset. *)
 

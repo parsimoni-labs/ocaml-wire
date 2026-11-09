@@ -1,6 +1,11 @@
 (** Buffer reads and writes with no bounds check. The caller must have checked
     that the bytes lie in the buffer. *)
 
+val checked : bool
+(** [checked] is [true] in the [paranoid] and [afl] build profiles. Every
+    function below then checks its bounds, and raises [Invalid_argument] outside
+    the buffer. *)
+
 val u8 : bytes -> int -> int
 (** [u8 buf off] is the byte at [off]. *)
 
@@ -41,3 +46,6 @@ val set_i32le : bytes -> int -> int32 -> unit
 
 val set_i32be : bytes -> int -> int32 -> unit
 (** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)
+
+val blit_string : string -> bytes -> int -> unit
+(** [blit_string s buf off] copies [s] into [buf] at [off]. *)

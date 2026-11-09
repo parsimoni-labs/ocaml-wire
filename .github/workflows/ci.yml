@@ -40,6 +40,24 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
+  # The paranoid profile swaps the unchecked reads the fast paths make for
+  # checked ones (lib/dune), so a read past the frame raises in the tests and
+  # the fuzz properties instead of returning whatever the buffer holds next.
+  paranoid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- dune runtest --profile paranoid
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
@@ -125,7 +143,9 @@ jobs:
   # native code with AFL coverage, and a dir's [fuzz] alias seeds its corpus and
   # runs afl-fuzz for a fixed wall-clock budget. The job names those two aliases
   # non-recursively, as fuzz/diff/ belongs to fuzz-afl-diff below. The job then
-  # fails if afl-fuzz found any crashing input in either fuzzer.
+  # fails if afl-fuzz found any crashing input in either fuzzer, replaying each
+  # one so the log names the codec and both answers. The afl profile also
+  # checks every unchecked read (lib/dune).
   fuzz-afl:
     runs-on: ubuntu-latest
     steps:

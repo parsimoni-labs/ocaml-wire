@@ -2,6 +2,8 @@
    it reads from: [Codec.decode] reads a record's fixed fields this way after
    checking the record's extent. The [paranoid] profile checks them anyway. *)
 
+let checked = Paranoid.enabled
+
 external get16 : bytes -> int -> int = "%caml_bytes_get16u"
 external get32 : bytes -> int -> int32 = "%caml_bytes_get32u"
 external swap16 : int -> int = "%bswap16"
@@ -70,3 +72,8 @@ let[@inline] i64be buf off =
   if Paranoid.enabled then Bytes.get_int64_be buf off
   else if Sys.big_endian then get64 buf off
   else swap64 (get64 buf off)
+
+let[@inline] blit_string s buf off =
+  let len = String.length s in
+  if Paranoid.enabled then Bytes.blit_string s 0 buf off len
+  else Bytes.unsafe_blit_string s 0 buf off len

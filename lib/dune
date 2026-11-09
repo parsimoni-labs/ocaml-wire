@@ -20,12 +20,16 @@
  (libraries wire bytesrw))
 
 ; The paranoid profile checks every read [Unchecked] makes, so the tests and
-; the fuzzers catch a read outside the frame (docs/execution.md).
+; the fuzzers catch a read outside the frame (docs/execution.md). The afl
+; profile does too: an AFL campaign looks for bugs rather than speed, and a read
+; past the frame raises there instead of reading whatever follows.
 
 (rule
  (target paranoid.ml)
  (enabled_if
-  (= %{profile} paranoid))
+  (or
+   (= %{profile} paranoid)
+   (= %{profile} afl)))
  (action
   (with-stdout-to
    %{target}
@@ -34,7 +38,9 @@
 (rule
  (target paranoid.ml)
  (enabled_if
-  (<> %{profile} paranoid))
+  (and
+   (<> %{profile} paranoid)
+   (<> %{profile} afl)))
  (action
   (with-stdout-to
    %{target}

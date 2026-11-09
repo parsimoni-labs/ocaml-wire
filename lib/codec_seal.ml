@@ -1478,7 +1478,7 @@ let blit_all blits v buf off =
         let s = get v in
         String.length s = len
         && begin
-          Bytes.unsafe_blit_string s 0 buf (off + at) len;
+          Unchecked.blit_string s buf (off + at);
           go (i + 1)
         end
     | Put _ -> go (i + 1)
