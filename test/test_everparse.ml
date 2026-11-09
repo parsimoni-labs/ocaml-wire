@@ -764,6 +764,61 @@ let test_3d_static_optional_transparent () =
     "byte_array_where optional emits its refined typedef" true
     (contains ~sub:"} _RefByte_" out_baw)
 
+(* The C type of field [a] in the [<Name>Fields] struct. [mk] receives a ref to
+   a gate field declared before [a]. *)
+let member_c_type mk =
+  let f_g = Field.v "g" uint8 in
+  let f_a = mk (Field.ref f_g) in
+  let c =
+    Codec.v "T"
+      (fun _ a -> a)
+      Codec.[ (f_g $ fun _ -> UInt8.zero); (f_a $ fun a -> a) ]
+  in
+  let fields = Everparse.plug_fields (Everparse.project ~mode:`Ffi c) in
+  match List.find_opt (fun f -> f.Everparse.name = "a") fields with
+  | Some f -> f.c_type
+  | None -> Alcotest.failf "no plug field a"
+
+let test_plug_member_c_types () =
+  let id t = map ~decode:Fun.id ~encode:Fun.id t in
+  let static t _ = Field.optional "a" ~present:Expr.true_ t in
+  let gated t g = Field.optional "a" ~present:Expr.(g <> int 0) t in
+  let gated_or t d g =
+    Field.optional_or "a" ~present:Expr.(g <> int 0) ~default:d t
+  in
+  let plain t _ = Field.v "a" t in
+  let ev = [ ("A", 0); ("B", 1) ] in
+  let check name expected got = Alcotest.(check string) name expected got in
+  check "map uint8" "uint8_t" (member_c_type (plain (id uint8)));
+  check "map uint16" "uint16_t" (member_c_type (plain (id uint16)));
+  check "map uint64" "uint64_t" (member_c_type (plain (id uint64)));
+  check "enum uint8" "uint8_t" (member_c_type (plain (enum "E" ev uint8)));
+  check "enum uint16" "uint16_t" (member_c_type (plain (enum "E" ev uint16be)));
+  check "where uint16" "uint16_t"
+    (member_c_type (plain (where Expr.true_ uint16)));
+  check "where uint64" "uint64_t"
+    (member_c_type (plain (where Expr.true_ uint64)));
+  check "static optional uint8" "uint8_t" (member_c_type (static uint8));
+  check "static optional uint16" "uint16_t" (member_c_type (static uint16));
+  check "static optional uint64" "uint64_t" (member_c_type (static uint64));
+  (* A gated optional reaches C through [<Name>SetBytes] as a uint32 byte
+     offset, so the member must hold one whatever the inner width. *)
+  check "gated optional uint8" "uint32_t" (member_c_type (gated uint8));
+  check "gated optional uint16" "uint32_t" (member_c_type (gated uint16));
+  check "gated optional uint64" "uint32_t" (member_c_type (gated uint64));
+  check "gated optional map uint8" "uint32_t" (member_c_type (gated (id uint8)));
+  check "gated optional_or uint8" "uint32_t"
+    (member_c_type (gated_or uint8 UInt8.zero));
+  check "gated optional_or uint64" "uint32_t"
+    (member_c_type (gated_or uint64 UInt64.zero));
+  check "int8" "uint8_t" (member_c_type (plain int8));
+  check "int16" "uint16_t" (member_c_type (plain int16be));
+  check "int64" "uint64_t" (member_c_type (plain int64));
+  check "map int16" "uint16_t" (member_c_type (plain (id int16)));
+  check "bits U8" "uint8_t" (member_c_type (plain (bits ~width:3 U8)));
+  check "bits U16" "uint16_t" (member_c_type (plain (bits ~width:9 U16be)));
+  check "bits U32" "uint32_t" (member_c_type (plain (bits ~width:17 U32)))
+
 let test_3d_absent_optional_projects_to_unit () =
   (* A statically-absent optional contributes no bytes, so it projects as a
      [unit] field and the schema carries no zero-length byte-size suffix (which
@@ -1782,6 +1837,7 @@ let suite =
         test_3d_sub_codec_refined_byte_typedef;
       Alcotest.test_case "3d: static optional transparent projection" `Quick
         test_3d_static_optional_transparent;
+      Alcotest.test_case "plug: member C types" `Quick test_plug_member_c_types;
       Alcotest.test_case "3d: absent optional projects to unit" `Quick
         test_3d_absent_optional_projects_to_unit;
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
