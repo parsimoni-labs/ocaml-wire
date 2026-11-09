@@ -26,15 +26,13 @@ type test = { fast : string; slow : string option }
    field derive from, the variable that holds its plain value, where it sits,
    how it is stored, the OCaml tests its value must pass in the order the codec
    runs them, each with what its failure raises, and the closed enum the
-   encoder checks it against. [at] is the offset the codec names when one of
-   its checks fails: the field's own, except for a bitfield after the first of
-   its word, which the codec reports past the word it has read. *)
+   encoder checks it against. A failed check names [off], as the codec does:
+   for a bitfield, the offset of its word. *)
 type field = {
   name : string;
   label : string;
   var : string;
   off : int;
-  at : int;
   store : store;
   checks : (test * kind) list;
   enum : (string * int list) option;
@@ -255,8 +253,7 @@ let field_of : type b.
       in
       let store = Bits { base; shift; width } in
       let checks = extra @ own in
-      let at = if w.used = 0 then w.at else w.at + Bitfield.byte_size base in
-      ( { name; label; var = v; off = w.at; at; store; checks; enum = None; map },
+      ( { name; label; var = v; off = w.at; store; checks; enum = None; map },
         Some { w with used = w.used + width },
         next )
   | typ ->
@@ -266,17 +263,7 @@ let field_of : type b.
       (match (store, checks) with
       | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
       | _ -> ());
-      ( {
-          name;
-          label;
-          var = v;
-          off;
-          at = off;
-          store;
-          checks;
-          enum = enum_of typ;
-          map;
-        },
+      ( { name; label; var = v; off; store; checks; enum = enum_of typ; map },
         None,
         off + width_bytes store )
 
@@ -886,7 +873,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
    codec runs them, then the where clause. [fail] runs only once a fast test
    failed, so it always finds an error; [too_short] is the encoder's. *)
 let raise_check (f : field) (_, kind) =
-  let at = Fmt.str "(off + %d)" f.at in
+  let at = Fmt.str "(off + %d)" f.off in
   match kind with
   | Constraint ->
       Fmt.str "%s.field_constraint ~at:%s ~field:%S %s" errors at f.name f.var
@@ -925,7 +912,7 @@ let pp_cold ~src ppf ~target ~fields ~where =
     (fun (f : field) ->
       List.iter
         (fun ((test, _) as c) ->
-          let at = Fmt.str "(off + %d)" f.at in
+          let at = Fmt.str "(off + %d)" f.off in
           Fmt.pf ppf "    if not %s then %s;@\n"
             (slow_test ~at ~field:[ f.name ] test)
             (raise_check f c))

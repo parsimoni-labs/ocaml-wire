@@ -87,6 +87,10 @@
 
 - 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
 
+- A constraint failure of a bitfield packed after the first one of its word is
+  reported at the word's offset, not at the offset of the field after the word
+  (#439, @samoht)
+
 ## 1.3.0
 
 ### Added

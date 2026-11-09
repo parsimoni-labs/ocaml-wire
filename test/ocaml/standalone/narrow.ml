@@ -36,7 +36,7 @@ let refined () =
   round_trip "refined" ~size:S_refined.size ~decode:S_refined.decode
     ~encode:S_refined.encode ~big_decode:S_refined.Bigstring.decode
     ~big_encode:S_refined.Bigstring.encode [ 0x13; 2; 20 ];
-  parse_error "refined: Lo past its word" ~field:[ "Lo" ] ~at:1
+  parse_error "refined: Lo at its word" ~field:[ "Lo" ] ~at:0
     (Constraint_failed { which = Field; value = Some 0L })
     (fun () -> S_refined.validate (bytes_of [ 0x10; 2; 20 ]) 0)
 

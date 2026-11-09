@@ -1320,6 +1320,46 @@ let test_dynamic_length_field_stays_in_region () =
     "the shortfall ignores the bytes past the region" (past_the_region '\x01')
     (past_the_region '\xff')
 
+(* A bitfield packed after the first one of its word is reached with the
+   cursor past the word, but its error names the word's offset, as
+   [parse_error] promises: the field's own offset. *)
+let test_bitfield_error_offset () =
+  let field name width =
+    Field.v name (bits ~width U16be) ~self_constraint:(fun self ->
+        Expr.(self <= int 2))
+  in
+  let c =
+    Codec.v "BitfieldErrorOffset"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (field "a" 3 $ fun (x, _, _, _) -> x);
+          (field "b" 5 $ fun (_, x, _, _) -> x);
+          (field "c" 8 $ fun (_, _, x, _) -> x);
+          ( Field.v "d" uint8 ~self_constraint:(fun self -> Expr.(self <= int 2))
+          $ fun (_, _, _, x) -> x );
+        ]
+  in
+  (* At offset 1: the word is bytes 1 and 2, [d] is byte 3. *)
+  List.iter
+    (fun (input, field, at) ->
+      let buf = Bytes.of_string input in
+      let check what f =
+        match f () with
+        | exception Parse_error e ->
+            Alcotest.(check (list string)) (what ^ ": field") [ field ] e.field;
+            Alcotest.(check int) (what ^ ": offset of " ^ field) at e.at
+        | () -> Alcotest.failf "%s: accepted a bad %s" what field
+      in
+      check "validate" (fun () -> Codec.validate c buf 1);
+      check "decode" (fun () -> ignore (Codec.decode_exn c buf 1)))
+    [
+      ("\x00\xe0\x00\x00\x00", "a", 1);
+      ("\x00\x1f\x00\x00\x00", "b", 1);
+      ("\x00\x00\xff\x00\x00", "c", 1);
+      ("\x00\x00\x00\xff\x00", "d", 3);
+    ]
+
 let suite =
   ( "codec",
     [
@@ -1424,4 +1464,6 @@ let suite =
         `Quick test_nested_region_eof_stays_in_region;
       Alcotest.test_case "diag: a region bounds a length field it cannot reach"
         `Quick test_dynamic_length_field_stays_in_region;
+      Alcotest.test_case "error: a bitfield names its word's offset" `Quick
+        test_bitfield_error_offset;
     ] )
