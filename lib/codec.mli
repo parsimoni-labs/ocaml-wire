@@ -65,7 +65,8 @@ val v :
     The first operation on the codec raises [Invalid_argument] for what only the
     compile finds, and raises it again on every later call: a size expression
     that refers to a field it cannot see, a bitfield after a variable-size
-    field, or a field type the codec has no reader or writer for. *)
+    field, a field type the codec has no reader or writer for, or fixed fields
+    that add up to more than a buffer can hold. *)
 
 val wire_size_opt : 'r t -> int option
 (** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
@@ -121,11 +122,12 @@ val decode :
     If [?env] is supplied, input params are read from it and output params are
     written back to it after decoding.
 
-    Raises [Invalid_argument] when [?env] was created for a different codec,
-    when the codec has input params and no env is supplied, or when the env left
-    any input param unbound (the error names the offending param). An unbound
-    input param would resolve a parametric field size to 0 and silently truncate
-    the field, so it is rejected up front the same way {!encode} does. *)
+    Raises [Invalid_argument] when [off] is negative, when [?env] was created
+    for a different codec, when the codec has input params and no env is
+    supplied, or when the env left any input param unbound (the error names the
+    offending param). An unbound input param would resolve a parametric field
+    size to 0 and silently truncate the field, so it is rejected up front the
+    same way {!encode} does. *)
 
 val decode_exn :
   ?consume:Types.consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
@@ -208,9 +210,9 @@ val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
     to [?env]. [?env] supplies bindings for any [Param.input] referenced in
     those clauses.
 
-    Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
-    input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
-    failure. *)
+    Raises [Invalid_argument] if [off] is negative or if [?env] belongs to
+    another codec or leaves an input parameter unbound, and {!Types.Parse_error}
+    on constraint/where-clause failure. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t

@@ -83,6 +83,9 @@
   the two report the same first failure, and a `map` decoder runs only on a
   record that passed (#435, @samoht)
 
+- A negative offset raises `Invalid_argument` naming it, and an offset near
+  `max_int` is a parse error rather than `Invalid_argument` (#435, @samoht)
+
 ## 1.3.0
 
 ### Added
