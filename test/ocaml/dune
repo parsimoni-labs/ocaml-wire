@@ -1,0 +1,35 @@
+(library
+ (name schemas)
+ (modules schemas)
+ (libraries wire))
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries schemas wire.ocaml))
+
+(rule
+ (targets
+  g_ipv4.ml
+  g_ipv4_record.ml
+  g_checked.ml
+  g_mixed.ml
+  g_small.ml
+  g_eth.ml
+  g_variable.ml)
+ (action
+  (run ./gen.exe)))
+
+(test
+ (name test)
+ (modules
+  test
+  test_wire_ocaml
+  g_ipv4
+  g_ipv4_record
+  g_checked
+  g_mixed
+  g_small
+  g_eth
+  g_variable)
+ (libraries schemas wire wire.ocaml fmt alcotest))

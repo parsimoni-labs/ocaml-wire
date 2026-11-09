@@ -410,3 +410,7 @@ val field_scalar :
 
 val alloc_slots : int -> slots
 (** [alloc_slots n] is a fresh scratch of [n] zeroed slots. *)
+
+val bits_too_wide : mask:int -> int -> unit
+(** [bits_too_wide ~mask v] raises [Invalid_argument] when [v] does not fit the
+    bitfield of mask [mask]. *)

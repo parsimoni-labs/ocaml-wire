@@ -1147,6 +1147,7 @@ module Private = struct
   module Bitfield = Bitfield
   module Uint_var = Uint_var
   module Shape = Shape
+  module Gen = Codec.Gen
   module Testing = Codec.Testing
   module Names = Names
 

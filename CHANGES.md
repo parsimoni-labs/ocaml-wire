@@ -16,6 +16,12 @@
 - A `paranoid` dune profile that bounds-checks every read, for tests (#435,
   @samoht)
 
+- `Wire_ocaml`, in the new `wire.ocaml` library, writes a fixed-size codec out
+  as OCaml with every offset a constant: `decode`, `validate` and `write`. The
+  generated module checks when it loads that its codec has not changed, and
+  hands any input it rejects to the codec, so its errors are the codec's own
+  (#436, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
