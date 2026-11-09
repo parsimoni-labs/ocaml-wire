@@ -505,12 +505,21 @@ let compile_where_clause param_slots field_readers where =
       let cc = mk_ctx ~param_slots idx in
       Some (compile_bool_arr cc cond)
 
+(* A field whose size the data decides: its own bounds check refuses a size
+   that is negative or runs past the end, which the record's bounds check can
+   miss when a later field that takes the rest gives the bytes back. A field
+   that takes the rest has no size of its own to check. *)
+let data_sized : type a. a Types.typ -> bool = function
+  | Types.All_bytes -> false
+  | typ -> Option.is_none (Types.field_wire_size typ)
+
 let has_validation_checks compiled_where struct_fields =
   compiled_where <> None
   || List.exists
        (fun (Types.Field f) ->
          f.constraint_ <> None || f.action <> None
-         || field_reader_validates f.field_typ)
+         || field_reader_validates f.field_typ
+         || data_sized f.field_typ)
        struct_fields
 
 let seed_param_slots arr n_total = function

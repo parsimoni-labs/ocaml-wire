@@ -820,15 +820,15 @@ let var_bytes_reader : type a.
   let first = base + fo in
   (match typ with
   | Byte_slice _ ->
-      (* A byte_slice reading at or past the end yields an eod slice (an oversize
-         length is caught by the top-level bounds check), but a negative size or
-         offset, from a [Sub] or an overrun length field, would crash
-         [make_or_eod] with a raw [Invalid_argument] that escapes the decode
-         result. Fail cleanly instead. *)
+      (* An empty byte_slice at or past the end is an eod slice. A negative size
+         or offset, or a length past the end, would make [make_or_eod] raise a
+         raw [Invalid_argument]: the record's bounds check does not catch the
+         last, since a later span that takes the rest can take the bytes back. *)
       if sz < 0 || first < 0 then
         raise_eof ~at:first
           ~expected:(missing_before ~first ~sz ~len:(Bytes.length buf))
           ~got:(bytes_from (Input_end.of_bytes buf) first)
+      else if sz > 0 then check_span_bounds buf ~first ~sz
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz

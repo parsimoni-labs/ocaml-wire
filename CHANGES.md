@@ -25,6 +25,15 @@
   so it reports the first field that fails and runs `map` decoders in order
   (#434, @samoht)
 
+- `Wire.Codec.validate` refuses a byte span whose size, read from the data, is
+  negative, as `decode` does, and `decode` reports a `byte_slice` that runs past
+  the end as a parse error instead of raising `Invalid_argument` (#434, @samoht)
+
+- `Wire.Codec.validate` checks every field whose size the data decides (a gated
+  optional, a repeat, a `uint_var`, a `nested` region, an array), so it refuses
+  what `decode` refuses when a later field takes the rest of the buffer (#434,
+  @samoht)
+
 ## 1.3.0
 
 ### Added
