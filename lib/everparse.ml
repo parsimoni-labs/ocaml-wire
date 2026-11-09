@@ -270,19 +270,21 @@ let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
     | _ -> None
   in
   let synth_of (Types.Field f) = synth_of_typ f.field_typ in
-  (* Equal index bounds share one synthesised typedef, so emit each name once. *)
+  (* Equal index bounds share one synthesised typedef, so emit each name once;
+     two different conditions under one name are refused. *)
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun field ->
       match synth_of field with
       | Some (elt_var, cond) ->
           let synth = Types.synth_name_of_elt_var elt_var in
-          if Hashtbl.mem seen synth then None
-          else begin
-            Hashtbl.add seen synth ();
+          if
+            Types.claim_name seen ~kind:"refined bytes" synth
+              (Fmt.str "%a" Types.pp_expr cond)
+          then
             let elt_field = Types.field elt_var ~constraint_:cond Types.uint8 in
             Some (Types.typedef (Types.struct_ synth [ elt_field ]))
-          end
+          else None
       | None -> None)
     s.fields
 

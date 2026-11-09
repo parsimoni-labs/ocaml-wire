@@ -172,13 +172,15 @@ val uint_var7_big_edges : Optint.Int63.t t
 (** [uint_var7_big_edges] pins a big-endian 7-byte {!Wire.uint} to exact byte
     patterns. *)
 
-val optional : ?present:bool -> 'a t -> 'a option t
+val optional : ?name:string -> ?present:bool -> 'a t -> 'a option t
 (** [optional ~present inner] generates for a [Field.optional]-wrapped record
-    with a static [~present] gate. *)
+    with a static [~present] gate. [name] is the record's name, ["_opt"] by
+    default; two different records embedded in one codec need two names. *)
 
-val optional_or : ?present:bool -> default:'a -> 'a t -> 'a t
+val optional_or : ?name:string -> ?present:bool -> default:'a -> 'a t -> 'a t
 (** [optional_or ~present ~default inner] generates for a
-    [Field.optional_or]-wrapped record with a static [~present] gate. *)
+    [Field.optional_or]-wrapped record with a static [~present] gate. [name] is
+    as for {!optional}, ["_opt_or"] by default. *)
 
 val shape_tag : 'a -> string
 (** [shape_tag label] is a short stable tag for a shape, so two structurally

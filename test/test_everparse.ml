@@ -1460,6 +1460,41 @@ let test_3d_bitorder_msb_constrained_everywhere () =
         (msb_group_positions (name, inner)))
     msb_groups
 
+(* Two different casetypes under one name are two types with one name: every
+   reference would resolve to the first, so the projection refuses them as it
+   refuses two different sub-codecs. The same casetype reached twice is one
+   declaration. *)
+let body second =
+  casetype "Body" uint8
+    [
+      case ~index:(UInt8.v 1) uint8
+        ~inject:(fun v -> `A v)
+        ~project:(function `A v -> Some v | `B _ -> None);
+      case ~index:(UInt8.v 2) second
+        ~inject:(fun v -> `B v)
+        ~project:(function `B v -> Some v | `A _ -> None);
+    ]
+
+let two_bodies name b1 b2 =
+  Codec.v name
+    (fun x y -> (x, y))
+    Codec.[ Field.v "x" b1 $ fst; Field.v "y" b2 $ snd ]
+
+let test_3d_casetype_name_collision () =
+  (match
+     Everparse.project ~mode:`Ffi
+       (two_bodies "TwoBodies" (body uint8) (body uint16be))
+   with
+  | _ -> Alcotest.fail "two different casetypes named Body were projected"
+  | exception Invalid_argument _ -> ());
+  let b = body uint8 in
+  let out =
+    to_3d (Everparse.project ~mode:`Ffi (two_bodies "SameBody" b b)).module_
+  in
+  let count sub = List.length (Re.all (Re.compile (Re.str sub)) out) in
+  Alcotest.(check int) "one dispatch" 1 (count "casetype _Body_Body");
+  Alcotest.(check int) "one wrapper" 1 (count "typedef struct WireBody")
+
 (* -- Variable-size schema projection -- *)
 
 type dep_frame = { frame_length : UInt16.t; data : string }
@@ -1828,6 +1863,8 @@ let suite =
         test_3d_bitorder_native_noreorder;
       Alcotest.test_case "3d: bit_order constraint collapse" `Quick
         test_3d_bitorder_constraint_collapse;
+      Alcotest.test_case "3d: casetype name collision" `Quick
+        test_3d_casetype_name_collision;
       Alcotest.test_case "3d: bit_order Msb_first constrained everywhere" `Quick
         test_3d_bitorder_msb_constrained_everywhere;
       Alcotest.test_case "3d: dep-size schema" `Quick test_3d_dep_size_schema;

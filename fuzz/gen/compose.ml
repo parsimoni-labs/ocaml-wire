@@ -182,7 +182,8 @@ let array_of = array_like "arr" { mk = array }
 let array_seq_of = array_like "arrs" { mk = array_seq }
 
 let optional_of (Any a) =
-  Any { g = optional a.g; size = None; label = "opt:" ^ a.label }
+  let label = "opt:" ^ a.label in
+  Any { g = optional ~name:("_opt" ^ shape_tag label) a.g; size = None; label }
 
 let repeat_of (Any a) =
   let label = "rep:" ^ a.label in
@@ -291,7 +292,8 @@ let rec4_of name (Any a) (Any b) (Any c) (Any d) =
 
 let casetype_of (Any a) (Any b) =
   let g =
-    casetype_u8 "CT2"
+    casetype_u8
+      ("CT2" ^ shape_tag (a.label ^ "|" ^ b.label))
       [
         case ~index:1 a.g
           ~inject:(fun v -> `A v)

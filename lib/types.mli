@@ -797,6 +797,14 @@ val byte_array_where :
     encode raises [Invalid_argument]. Encoding otherwise follows {!byte_array}:
     the value's length must equal [size]. *)
 
+val claim_name :
+  (string, string) Hashtbl.t -> kind:string -> string -> string -> bool
+(** [claim_name seen ~kind name shape] records that a declaration of [shape] is
+    emitted under [name]: [true] the first time, [false] when the same [shape]
+    claims [name] again. Raises [Invalid_argument] when a different [shape]
+    does, since every 3D reference to [name] would resolve to the first. [kind]
+    names the declarations in the message. *)
+
 val synth_name_of_elt_var : string -> string
 (** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
     name derived from a {!byte_array_where} element variable. Internal: used by

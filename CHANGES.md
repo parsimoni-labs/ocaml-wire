@@ -39,6 +39,10 @@
   in a sub-codec, an array element or a casetype as it does in the entrypoint.
   The generated C read the other end of the word (#434, @samoht)
 
+- The 3D projection refuses two different casetypes, enums, enum element
+  structs, refined byte arrays or optional casetypes under one name, instead of
+  projecting one as the other (#434, @samoht)
+
 ## 1.3.0
 
 ### Added
