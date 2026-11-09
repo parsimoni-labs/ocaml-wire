@@ -325,6 +325,57 @@ let test_refused () =
   | exception Invalid_argument m ->
       Alcotest.(check bool) "names the field" true (contains m "Rest")
 
+(* Field names that spell one OCaml name twice, once lower-cased, escaped or
+   suffixed, are refused naming both fields, as is a name the generated module
+   uses for itself: a later definition would silently shadow the first. *)
+let test_clash () =
+  let pair n1 t1 n2 t2 =
+    Codec.v "C"
+      (fun a b -> (a, b))
+      Codec.[ Field.v n1 t1 $ fst; Field.v n2 t2 $ snd ]
+  in
+  let refused ?(target = `OCaml) what c names =
+    match Wire_ocaml.ml ~target ~codec:"c" c with
+    | _ -> Alcotest.failf "%s: generated" what
+    | exception Invalid_argument m ->
+        List.iter
+          (fun n ->
+            Alcotest.(check bool)
+              (Fmt.str "%s: names %s" what n)
+              true (contains m n))
+          names
+  in
+  refused "a 32-bit x and x_int"
+    (pair "x_int" uint8 "x" uint32be)
+    [ "\"x_int\""; "\"x\"" ];
+  refused "a bitfield x and x_word"
+    (pair "x" (bits ~width:3 U8) "x_word" uint8)
+    [ "\"x\""; "\"x_word\"" ];
+  refused "end and end_"
+    (pair "end" uint8 "end_" uint8)
+    [ "\"end\""; "\"end_\"" ];
+  refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
+  refused "a-b and a_b" (pair "a-b" uint8 "a_b" uint8) [ "\"a-b\""; "\"a_b\"" ];
+  refused "1 and f_1" (pair "1" uint8 "f_1" uint8) [ "\"1\""; "\"f_1\"" ];
+  refused "local_ and local__"
+    (pair "local_" uint8 "local__" uint8)
+    [ "\"local_\""; "\"local__\"" ];
+  refused "local_ and local__ under OxCaml" ~target:`OxCaml
+    (pair "local_" uint8 "local__" uint8)
+    [ "\"local_\""; "\"local__\"" ];
+  refused "failed"
+    (Codec.v "C" Fun.id Codec.[ Field.v "failed" uint8 $ Fun.id ])
+    [ "\"failed\""; "get_failed" ];
+  (* An OxCaml keyword is escaped for the default target too, so its code
+     compiles on an OxCaml compiler. *)
+  let c = Codec.v "C" Fun.id Codec.[ Field.v "local_" uint8 $ Fun.id ] in
+  Alcotest.(check bool)
+    "default-target label" true
+    (contains (Wire_ocaml.ml ~codec:"c" c) "  local__ :");
+  Alcotest.(check bool)
+    "OxCaml label" true
+    (contains (Wire_ocaml.ml ~target:`OxCaml ~codec:"c" c) "  local__ :")
+
 (* A generated getter reads what [Codec.get] reads, or raises what it raises,
    on random buffers and offsets around the field. *)
 let getter codec field ~get ~show =
@@ -569,6 +620,7 @@ let suite =
         test_digest;
       Alcotest.test_case "negative literals" `Quick test_signed;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
+      Alcotest.test_case "clashing names are refused" `Quick test_clash;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;

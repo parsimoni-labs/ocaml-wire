@@ -57,4 +57,6 @@ val ml :
 
     Raises [Invalid_argument], naming the field and the reason, for a codec it
     cannot specialise: a variable size, parameters, actions, or a map [maps]
-    does not name. *)
+    does not name; and naming both fields when two of them would define the same
+    OCaml name ({!ident}), or one of them a name the module defines for itself,
+    such as [get_failed]. *)

@@ -106,8 +106,8 @@ let small =
   Codec.v "Small" small_make
     Codec.
       [
-        (Field.v "A" uint8 $ fun (x, _) -> x);
-        (Field.v "B" uint16be $ fun (_, x) -> x);
+        (Field.v "Type" uint8 $ fun (x, _) -> x);
+        (Field.v "local_" uint16be $ fun (_, x) -> x);
       ]
 
 let eth_make dst src ty = (dst, src, ty)

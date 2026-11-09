@@ -12,11 +12,13 @@ type store =
   | Bits of { base : T.bitfield_base; shift : int; width : int }
   | Bytes of int
 
-(* A field of the record: its name, the variable that holds its plain value,
+(* A field of the record: its name, the OCaml name its functions and record
+   field derive from, the variable that holds its plain value,
    where it sits, how it is stored, the OCaml tests its value must pass, and
    the closed enum the encoder checks it against. *)
 type field = {
   name : string;
+  label : string;
   var : string;
   off : int;
   store : store;
@@ -43,17 +45,12 @@ let maps_of named =
           named);
   }
 
-let label name =
-  let l =
-    String.map
-      (function
-        | ('a' .. 'z' | '0' .. '9' | '_') as c -> c
-        | 'A' .. 'Z' as c -> Char.lowercase_ascii c
-        | _ -> '_')
-      name
-  in
-  if l = "" || (l.[0] >= '0' && l.[0] <= '9') then "f_" ^ l else l
+type target = [ `OCaml | `OxCaml ]
 
+(* A field's label: lower-cased, made an identifier, and escaped when a
+   keyword of OCaml or of OxCaml, whatever the target, so the code written for
+   the default target compiles on an OxCaml compiler too. *)
+let label name = Wire.Private.Names.ocaml_label name
 let pp_list = Fmt.(list ~sep:(any " ") string)
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.var) fields)
 
@@ -174,6 +171,7 @@ let place_bits ~off ~word ~base ~order ~width =
 (* One field laid out at [off], its value under [map] when it has one. *)
 let field_of : type b.
     var:(string -> string) ->
+    label:string ->
     string ->
     string ->
     _ ->
@@ -182,7 +180,7 @@ let field_of : type b.
     bool T.expr list ->
     string option ->
     field * word option * int =
- fun ~var name v word off typ own map ->
+ fun ~var ~label name v word off typ own map ->
   match typ with
   | T.Bits { base = T.U32 _; _ } when Sys.int_size <= 32 ->
       fail_unsupported "32-bit bitfields on this host"
@@ -192,7 +190,7 @@ let field_of : type b.
       in
       let store = Bits { base; shift; width } in
       let tests = List.map (expr var) own in
-      ( { name; var = v; off = w.at; store; tests; enum = None; map },
+      ( { name; label; var = v; off = w.at; store; tests; enum = None; map },
         Some { w with used = w.used + width },
         next )
   | typ ->
@@ -202,7 +200,7 @@ let field_of : type b.
       | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
       | _ -> ());
       let tests = List.map (expr var) conds in
-      ( { name; var = v; off; store; tests; enum = enum_of typ; map },
+      ( { name; label; var = v; off; store; tests; enum = enum_of typ; map },
         None,
         off + width_bytes store )
 
@@ -225,7 +223,8 @@ let layout ~maps (s : T.struct_) =
     in
     try
       if Option.is_some f.action then fail_unsupported "an action";
-      let v = Fmt.str "f%d_%s" i (label name) in
+      let label = label name in
+      let v = Fmt.str "f%d_%s" i label in
       Hashtbl.replace names name v;
       let own = Option.to_list f.constraint_ in
       match f.field_typ with
@@ -235,14 +234,14 @@ let layout ~maps (s : T.struct_) =
               fail_unsupported "a map; name it in ~maps to generate this codec"
           | Some path ->
               let fld, word, next =
-                field_of ~var name v word off inner own (Some path)
+                field_of ~var ~label name v word off inner own (Some path)
               in
               let bound =
                 Option.map (fun n -> Fmt.str "(%s < %d)" v n) index_bound
               in
               ({ fld with tests = Option.to_list bound @ fld.tests }, word, next)
           )
-      | typ -> field_of ~var name v word off typ own None
+      | typ -> field_of ~var ~label name v word off typ own None
     with Unsupported why -> fail_unsupported "field %s: %s" name why
   in
   let rec go i word off acc = function
@@ -393,8 +392,6 @@ let pp_reads ~src ppf ~words fields =
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
    and on a cold one the promise that it only raises. *)
-type target = [ `OCaml | `OxCaml ]
-
 let zero_alloc = function `OxCaml -> "[@zero_alloc]" | `OCaml -> ""
 
 let cold = function
@@ -643,16 +640,14 @@ let pp_maps ppf fields =
 
 let pp_record ppf fields =
   Fmt.pf ppf "type t = {@\n";
-  List.iter
-    (fun f -> Fmt.pf ppf "  %s : %s;@\n" (label f.name) (type_of f))
-    fields;
+  List.iter (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (type_of f)) fields;
   Fmt.pf ppf "}@\n@\nlet make %a = { %a }@\n@\n" pp_vars fields
     Fmt.(list ~sep:(any "; ") string)
-    (List.map (fun f -> Fmt.str "%s = %s" (label f.name) f.var) fields)
+    (List.map (fun f -> Fmt.str "%s = %s" f.label f.var) fields)
 
 let pp_encode ppf fields =
   Fmt.pf ppf "let encode t buf off = write buf off %a@\n" pp_list
-    (List.map (fun f -> "t." ^ label f.name) fields)
+    (List.map (fun f -> "t." ^ f.label) fields)
 
 (* [get_<field> buf off] reads one field as [Codec.get] does, with the same
    bounds-checked load: the compiler's check jumps to a handler that does not
@@ -696,7 +691,7 @@ let pp_getter ~src ppf ~target f =
         "[@inline][@zero_alloc]"
     | _ -> "[@inline]"
   in
-  Fmt.pf ppf "let%s get_%s buf off =@\n" attr (label f.name);
+  Fmt.pf ppf "let%s get_%s buf off =@\n" attr f.label;
   (match f.store with
   | Int { width = 32; _ } ->
       Fmt.pf ppf "  let %s_raw = %s in@\n  let %s = %s in@\n" f.var
@@ -714,7 +709,7 @@ let pp_getter ~src ppf ~target f =
          typed form. *)
       Fmt.pf ppf
         "let%s get_%s_int buf off =@\n  let %s_raw = %s in@\n  %s@\n@\n" attr
-        (label f.name) f.var (checked_read ~src f) (int_view f)
+        f.label f.var (checked_read ~src f) (int_view f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
@@ -735,9 +730,9 @@ let pp_word_getters ~src ppf ~target f =
         if bytes = 4 then Fmt.str "(Int32.to_int %s land 0xffff_ffff)" word
         else word
       in
-      Fmt.pf ppf "let%s get_%s_word buf off = %s@\n@\n" attr (label f.name) word;
-      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land 0x%x@\n@\n" attr
-        (label f.name) shift
+      Fmt.pf ppf "let%s get_%s_word buf off = %s@\n@\n" attr f.label word;
+      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land 0x%x@\n@\n" attr f.label
+        shift
         ((1 lsl width) - 1)
   | _ -> ()
 
@@ -780,7 +775,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
       Fmt.pf ppf
         "let%s read_%s (v : Valid.t) =@\n\
         \  let buf = (v :> %s) and off = 0 in@\n"
-        attr (label f.name) src.typ;
+        attr f.label src.typ;
       pp_reads ~src ppf ~words:[] [ f ];
       Fmt.pf ppf "  %s@\n@\n" (typed_value f);
       match f.store with
@@ -788,7 +783,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
           Fmt.pf ppf
             "let%s read_%s_int (v : Valid.t) =@\n\
             \  let buf = (v :> %s) and off = 0 in@\n"
-            attr (label f.name) src.typ;
+            attr f.label src.typ;
           pp_reads ~src ppf ~words:[] [ f ];
           Fmt.pf ppf "  %s@\n@\n" f.var
       | _ -> ())
@@ -816,9 +811,7 @@ let pp_oxcaml ppf ~record ~fields ~size ~where =
       ~call:(fun args ->
         Fmt.str "exclave_ stack_ { %a }"
           Fmt.(list ~sep:(any "; ") string)
-          (List.map2
-             (fun f a -> Fmt.str "%s = %s" (label f.name) a)
-             fields args))
+          (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
       ~size ~fields ~where
 
 (* The same reads and writes on a bigarray of bytes. A rejected input is
@@ -880,6 +873,62 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_ocaml: cannot specialise %s: %s" codec reason
 
+(* The names the generated module defines for itself, at top level or in
+   [Bigstring]. *)
+let own_names =
+  [
+    "codec";
+    "fail";
+    "too_short";
+    "size";
+    "validate";
+    "validate_written";
+    "decode";
+    "decode_with";
+    "decode_local";
+    "first_error";
+    "write_int";
+    "write";
+    "get_failed";
+    "make";
+    "encode";
+    "t";
+    "Valid";
+    "Bigstring";
+  ]
+
+(* The names a field's functions and record field take. *)
+let names_of f =
+  let l = f.label in
+  let derived =
+    match f.store with
+    | Int { width = 32; _ } -> [ "get_" ^ l ^ "_int"; "read_" ^ l ^ "_int" ]
+    | Bits _ -> [ "get_" ^ l ^ "_word"; l ^ "_of_word" ]
+    | Int _ | Bytes _ -> []
+  in
+  ("get_" ^ l) :: ("read_" ^ l) :: derived
+
+(* Who defines a name: the generated module itself, or a field. *)
+type source = Own | Field of string
+
+(* A later definition would shadow an earlier one of the same name without a
+   word, as the generated code silences unused values. Two fields of one label
+   also define one getter, so this covers the record's fields too. *)
+let check_names ~codec fields =
+  let own = List.map (fun n -> (Own, n)) own_names in
+  let defined =
+    List.concat_map
+      (fun f -> List.map (fun n -> (Field f.name, n)) (names_of f))
+      fields
+  in
+  match Wire.Private.Names.clash (own @ defined) with
+  | Some (Own, Field f, n) | Some (Field f, Own, n) ->
+      Fmt.kstr (refuse ~codec)
+        "field %S defines %s, which the generated module defines for itself" f n
+  | Some (Field g, Field f, n) ->
+      Fmt.kstr (refuse ~codec) "fields %S and %S both define %s" g f n
+  | Some (Own, Own, _) | None -> ()
+
 let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
   let digest = Wire.Private.Gen.digest c in
   match layout ~maps:(maps_of maps) (Wire.Private.Gen.to_struct c) with
@@ -893,6 +942,7 @@ let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
         "a field is a map, and the generated record cannot name its type; pass \
          ~make"
   | fields, size, where ->
+      check_names ~codec fields;
       pp_header ppf ~target ~codec ~digest;
       pp_maps ppf fields;
       pp_body ppf ~target ~make ~fields ~size ~where

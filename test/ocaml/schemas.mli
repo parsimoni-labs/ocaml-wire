@@ -62,7 +62,9 @@ val small_make : UInt8.t -> UInt16.t -> UInt8.t * UInt16.t
 (** [small_make] builds a {!small} record. *)
 
 val small : (UInt8.t * UInt16.t) Codec.t
-(** [small] is narrower than one 64-bit word. *)
+(** [small] is narrower than one 64-bit word. Its fields are named [Type] and
+    [local_], a keyword of OCaml and one of OxCaml, so the code written for the
+    default target escapes both and compiles on either compiler. *)
 
 val eth_make : string -> string -> UInt16.t -> string * string * UInt16.t
 (** [eth_make] builds an Ethernet header. *)
