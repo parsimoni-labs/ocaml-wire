@@ -1,0 +1,72 @@
+; The generated code embedded without wire: each module compiles against
+; wire.runtime alone, the runner checks it decodes, encodes and fails as
+; documented, and that no generated source names [Wire]. node/ runs the same
+; modules under js_of_ocaml and wasm_of_ocaml, except those that read a 32-bit
+; field into an int; an OxCaml compiler builds the OxCaml output.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries schemas wire.ocaml))
+
+(rule
+ (targets
+  s_ipv4.ml
+  s_checked.ml
+  s_mixed.ml
+  s_eth.ml
+  s_wide.ml
+  s_signed.ml
+  s_refined.ml)
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (run ./gen.exe)))
+
+(rule
+ (targets
+  s_ipv4.ml
+  s_checked.ml
+  s_mixed.ml
+  s_eth.ml
+  s_wide.ml
+  s_signed.ml
+  s_refined.ml)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (run ./gen.exe --oxcaml)))
+
+; The generated modules link wire.runtime and nothing else; the checks that
+; drive them sit in libraries of their own, which may use fmt.
+
+(library
+ (name standalone_narrow)
+ (wrapped false)
+ (modules s_checked s_eth s_signed s_refined)
+ (libraries wire.runtime))
+
+(library
+ (name standalone_wide)
+ (wrapped false)
+ (modules s_ipv4 s_mixed s_wide)
+ (libraries wire.runtime))
+
+(library
+ (name standalone_checks)
+ (wrapped false)
+ (modules expect narrow)
+ (libraries standalone_narrow wire.runtime fmt))
+
+(library
+ (name standalone_checks_wide)
+ (wrapped false)
+ (modules wide)
+ (libraries standalone_checks standalone_wide wire.runtime))
+
+(test
+ (name test)
+ (modules test)
+ (deps
+  (glob_files s_*.ml))
+ (libraries standalone_checks standalone_checks_wide))

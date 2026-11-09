@@ -19,7 +19,7 @@
 (executable
  (name fuzz)
  (modules fuzz ocaml_index)
- (libraries wire fuzz_gen diff_driver diff_ocaml alcobar fmt))
+ (libraries wire wire.runtime fuzz_gen diff_driver diff_ocaml alcobar fmt))
 
 ; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
 ; per codec by default.

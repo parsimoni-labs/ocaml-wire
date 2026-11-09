@@ -20,11 +20,13 @@
   as OCaml with every offset a constant, for `bytes` and for bigarray buffers:
   `decode`, `validate`, `write`, a getter per field and a `Valid` view whose
   reads are bare loads. It specialises the maps the caller names and refuses,
-  naming the field, what it cannot specialise. The generated module checks when
-  it loads that its codec has not changed, and hands any input it rejects to the
-  codec, so its errors are the codec's own. It builds for js_of_ocaml and
-  wasm_of_ocaml too, and with ``~target:`OxCaml`` its hot paths are checked
-  `[@zero_alloc]` (#436, @samoht)
+  naming the field, what it cannot specialise. The generated module links the
+  new `wire.runtime` library (the integer carriers, unchecked access and parse
+  errors, on `optint` alone) rather than `wire`, needs no codec at run time,
+  and raises the codec's own errors itself; `Wire_ocaml.bridge` writes the small
+  module that checks, where `wire` is linked, that the codec has not changed. It
+  builds for js_of_ocaml and wasm_of_ocaml too, and with ``~target:`OxCaml`` its
+  hot paths are checked `[@zero_alloc]` (#436, @samoht)
 
 ### Changed
 

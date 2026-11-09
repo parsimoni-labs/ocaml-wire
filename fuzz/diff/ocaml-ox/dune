@@ -24,7 +24,7 @@
  (name ocaml_index_ox)
  (wrapped false)
  (modules ocaml_index)
- (libraries wire fuzz_gen diff_ocaml fmt))
+ (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
 
 (rule
  (copy ../ocaml/fuzz.ml fuzz.ml))

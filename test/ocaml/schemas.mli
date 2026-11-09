@@ -149,3 +149,13 @@ val signed_make : SInt8.t -> SInt16.t -> signed
 
 val signed : signed Codec.t
 (** [signed] refines signed fields against negative literals. *)
+
+type refined = int * int * UInt8.t * UInt8.t
+
+val refined_make : int -> int -> UInt8.t -> UInt8.t -> refined
+(** [refined_make] builds a {!refined} record. *)
+
+val refined : refined Codec.t
+(** [refined] has checks that fail together: a refinement over an enum, an enum
+    over a refinement, and a constrained bitfield after the first of its word,
+    so its errors say in which order the codec runs them. *)

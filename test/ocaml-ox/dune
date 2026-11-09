@@ -14,14 +14,25 @@
   (= %{ocaml-config:ox} true))
  (targets
   g_ipv4.ml
+  g_ipv4_wire.ml
   g_ipv4_record.ml
+  g_ipv4_record_wire.ml
   g_checked.ml
+  g_checked_wire.ml
   g_mixed.ml
+  g_mixed_wire.ml
   g_small.ml
+  g_small_wire.ml
   g_eth.ml
+  g_eth_wire.ml
   g_wide.ml
+  g_wide_wire.ml
   g_mapped.ml
-  g_signed.ml)
+  g_mapped_wire.ml
+  g_signed.ml
+  g_signed_wire.ml
+  g_refined.ml
+  g_refined_wire.ml)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
@@ -30,14 +41,25 @@
   (<> %{ocaml-config:ox} true))
  (targets
   g_ipv4.ml
+  g_ipv4_wire.ml
   g_ipv4_record.ml
+  g_ipv4_record_wire.ml
   g_checked.ml
+  g_checked_wire.ml
   g_mixed.ml
+  g_mixed_wire.ml
   g_small.ml
+  g_small_wire.ml
   g_eth.ml
+  g_eth_wire.ml
   g_wide.ml
+  g_wide_wire.ml
   g_mapped.ml
-  g_signed.ml)
+  g_mapped_wire.ml
+  g_signed.ml
+  g_signed_wire.ml
+  g_refined.ml
+  g_refined_wire.ml)
  (action
   (run ../ocaml/gen.exe)))
 
@@ -47,15 +69,26 @@
  (modules
   test_wire_ocaml
   g_ipv4
+  g_ipv4_wire
   g_ipv4_record
+  g_ipv4_record_wire
   g_checked
+  g_checked_wire
   g_mixed
+  g_mixed_wire
   g_small
+  g_small_wire
   g_eth
+  g_eth_wire
   g_wide
+  g_wide_wire
   g_mapped
-  g_signed)
- (libraries schemas wire wire.ocaml fmt alcotest))
+  g_mapped_wire
+  g_signed
+  g_signed_wire
+  g_refined
+  g_refined_wire)
+ (libraries schemas wire wire.runtime wire.ocaml fmt alcotest))
 
 (executable
  (name test)

@@ -434,18 +434,6 @@ module Gen : sig
   val to_struct : 'r t -> Types.struct_
   (** [to_struct t] is the description [t] is built from. *)
 
-  val uint8 : int -> UInt8.t
-  (** [uint8 n] is [n], read from an 8-bit unsigned field. *)
-
-  val uint16 : int -> UInt16.t
-  (** [uint16 n] is [n], read from a 16-bit unsigned field. *)
-
-  val int8 : int -> SInt8.t
-  (** [int8 n] is [n], read from an 8-bit signed field. *)
-
-  val int16 : int -> SInt16.t
-  (** [int16 n] is [n], read from a 16-bit signed field. *)
-
   val digest : 'r t -> string
   (** [digest t] names the shape of [t]: its fields, their types and
       constraints, every expression in full, and the version of what generated
@@ -454,41 +442,13 @@ module Gen : sig
   val check : 'r t -> string -> unit
   (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
 
-  val disagrees : 'r t -> 'a
-  (** [disagrees t] raises [Invalid_argument]: generated code found an error [t]
-      does not. *)
-
-  val fail : 'r t -> bytes -> int -> 'a
-  (** [fail t buf off] raises the error {!val-validate} raises on [buf] at
-      [off]. *)
-
-  val encode_too_short : 'r t -> bytes -> int -> 'a
-  (** [encode_too_short t buf off] raises the error {!val-encode} raises when
-      [t] does not fit [buf] at [off]. *)
-
-  val bits_too_wide : mask:int -> int -> 'a
-  (** [bits_too_wide ~mask v] raises the error for a bitfield value [v] wider
-      than [mask]. *)
-
-  val byte_length : expected:int -> actual:int -> 'a
-  (** [byte_length ~expected ~actual] raises the error for a byte array of
-      [actual] bytes where [expected] are needed. *)
-
   type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
   (** A use of a field's reader, whatever the field's type. *)
 
   val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
-  (** [with_field_reader t name k] is [k.k typ read], where [read] is the reader
-      {!get} stages for the field [name] of [t] and [typ] its type, or [None]
-      when [t] has no field [name]. *)
-
-  val get_failed : 'r t -> string -> bytes -> int -> 'a
-  (** [get_failed t name buf off] raises the error a getter for the field [name]
-      of [t] raises on [buf] at [off]. *)
-
-  val encode_rejected : 'r t -> bytes -> int -> 'a
-  (** [encode_rejected t buf off] raises the error {!val-encode} raises when the
-      record it wrote at [off] fails its constraints. *)
+  (** [with_field_reader t name k] is [k.k typ reader], where [reader] is the
+      reader {!get} stages for the field [name] of [t] and [typ] its type, or
+      [None] when [t] has no field [name]. *)
 
   (** {2 Maps} *)
 
@@ -510,28 +470,6 @@ module Gen : sig
   val check_map : 'r t -> string -> 'a Types.typ -> unit
   (** [check_map c name t] raises [Invalid_argument] unless the field [name] of
       [c] is the very value [t]. *)
-
-  (** {2 Cold paths on a bigarray}
-
-      Each copies at most the record's bytes from [off] to hand to the codec,
-      and moves a failure's offset back by [off]. *)
-
-  val fail_bigstring : 'r t -> Unchecked.Bigstring.t -> int -> 'a
-  (** [fail_bigstring c buf off] raises the error {!val-validate} raises on the
-      record at [off]. *)
-
-  val get_failed_bigstring :
-    'r t -> string -> Unchecked.Bigstring.t -> int -> 'a
-  (** [get_failed_bigstring c name buf off] raises the error the getter of
-      [name] raises at [off]. *)
-
-  val encode_rejected_bigstring : 'r t -> Unchecked.Bigstring.t -> int -> 'a
-  (** [encode_rejected_bigstring c buf off] raises the error {!val-encode}
-      raises when the record written at [off] fails its constraints. *)
-
-  val encode_too_short_bigstring : 'r t -> Unchecked.Bigstring.t -> int -> 'a
-  (** [encode_too_short_bigstring c buf off] raises the error {!val-encode}
-      raises when the record does not fit [buf] at [off]. *)
 end
 
 (** Test-only views of how a codec is compiled. *)

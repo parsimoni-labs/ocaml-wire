@@ -191,3 +191,33 @@ let signed =
             Expr.(self <> int (-1)))
         $ snd;
       ]
+
+type refined = int * int * UInt8.t * UInt8.t
+
+let refined_make hi lo kind code = (hi, lo, kind, code)
+
+(* Checks that can fail together, so the error says which the codec runs
+   first: a refinement over an enum, an enum over a refinement, and a bitfield
+   after the first of its word. *)
+let refined =
+  let kind = Field.v "Kind" uint8 in
+  let code = Field.v "Code" uint8 in
+  Codec.v "Refined" refined_make
+    Codec.
+      [
+        (Field.v "Hi" (bits ~width:4 U8) $ fun (x, _, _, _) -> x);
+        ( Field.v "Lo" (bits ~width:4 U8) ~self_constraint:(fun self ->
+              Expr.(self <> int 0))
+        $ fun (_, x, _, _) -> x );
+        ( Field.v "Kind"
+            (where
+               Expr.(Field.ref kind < int 3)
+               (enum "K" [ ("a", 1); ("b", 2); ("e", 5) ] uint8))
+            ~self_constraint:(fun self -> Expr.(self <> int 1))
+        $ fun (_, _, x, _) -> x );
+        ( Field.v "Code"
+            (enum "C"
+               [ ("x", 10); ("y", 20); ("z", 30) ]
+               (where Expr.(Field.ref code > int 15) uint8))
+        $ fun (_, _, _, x) -> x );
+      ]

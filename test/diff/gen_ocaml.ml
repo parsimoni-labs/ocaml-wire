@@ -103,6 +103,8 @@ let pp_ops ppf ~m ~buf ~back fields =
     Fmt.(list ~sep:(any "; ") (pp_read ~m))
     reads
 
+(* The module generated from [c], and its bridge, which checks it against
+   the codec. *)
 let pp_case ppf (label, c, src) =
   let fields = fields c in
   Fmt.pf ppf
@@ -110,6 +112,9 @@ let pp_case ppf (label, c, src) =
     \  | Fuzz_gen.Pack g ->@\n\
     \  let codec = Fuzz_gen.codec g in@\n\
     \  let module M = struct@\n\
+     %s@\n\
+    \  end in@\n\
+    \  let module B = struct@\n\
      %s@\n\
     \  end in@\n\
     \  {@\n\
@@ -120,6 +125,7 @@ let pp_case ppf (label, c, src) =
     \  }@\n\
      @\n"
     label src
+    (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
     (pp_ops ~m:"M" ~buf:"b" ~back:(fun ppf w -> Fmt.pf ppf "%s b o" w))
     fields
     (pp_ops ~m:"M.Bigstring" ~buf:"Diff_ocaml.big b" ~back:(fun ppf w ->

@@ -8,8 +8,13 @@ let () =
   let target =
     if Array.exists (String.equal "--oxcaml") Sys.argv then `OxCaml else `OCaml
   in
+  (* Each module, and the bridge that checks it against its codec. *)
   let g name ?make ?maps codec c =
-    write name (Wire_ocaml.ml ~target ?make ?maps ~codec:("Schemas." ^ codec) c)
+    let codec = "Schemas." ^ codec in
+    write name (Wire_ocaml.ml ~target ?make ?maps ~codec c);
+    let base = Filename.remove_extension name in
+    write (base ^ "_wire.ml")
+      (Wire_ocaml.bridge ?maps ~codec ~core:(String.capitalize_ascii base) c)
   in
   g "g_ipv4.ml" ~make:"Schemas.ipv4_make" "ipv4" Schemas.ipv4;
   g "g_ipv4_record.ml" "ipv4" Schemas.ipv4;
@@ -19,6 +24,7 @@ let () =
   g "g_eth.ml" ~make:"Schemas.eth_make" "eth" Schemas.eth;
   g "g_wide.ml" ~make:"Schemas.wide_make" "wide" Schemas.wide;
   g "g_signed.ml" ~make:"Schemas.signed_make" "signed" Schemas.signed;
+  g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
   g "g_mapped.ml" ~make:"Schemas.mapped_make"
     ~maps:
       Wire_ocaml.

@@ -307,6 +307,28 @@ let test_signed () =
     ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
     (decoded Schemas.signed 200)
 
+(* Values that make each check of [refined] pass or fail, often several at
+   once, so the generated code must report the one the codec reports. *)
+let fix_refined buf off =
+  let pick l = List.nth l (Random.State.int rand (List.length l)) in
+  Bytes.set_uint8 buf off ((Random.State.int rand 16 lsl 4) lor pick [ 0; 3 ]);
+  Bytes.set_uint8 buf (off + 1) (pick [ 0; 1; 2; 5; 7 ]);
+  Bytes.set_uint8 buf (off + 2) (pick [ 5; 10; 20; 30; 40 ])
+
+let test_refined () =
+  reads ~fix:fix_refined Schemas.refined ~decode:G_refined.decode
+    ~validate:G_refined.validate;
+  let wild () =
+    ( Random.State.int rand 18,
+      Random.State.int rand 18,
+      UInt8.v (List.nth [ 0; 1; 2; 5; 7 ] (Random.State.int rand 5)),
+      UInt8.v (List.nth [ 5; 10; 20; 40 ] (Random.State.int rand 4)) )
+  in
+  writes Schemas.refined
+    ~write:(fun (a, b, c, d) buf off -> G_refined.write buf off a b c d)
+    (decoded ~fix:fix_refined Schemas.refined 200
+    @ List.init 300 (fun _ -> wild ()))
+
 (* A codec the generator cannot specialise is refused when the code is
    generated, naming the field and why, rather than given a module with fewer
    functions. *)
@@ -689,6 +711,7 @@ let suite =
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
       Alcotest.test_case "negative literals" `Quick test_signed;
+      Alcotest.test_case "errors in the codec's order" `Quick test_refined;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
       Alcotest.test_case "no literal needs more than 31 bits" `Quick

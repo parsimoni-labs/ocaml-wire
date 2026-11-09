@@ -1339,7 +1339,6 @@ let encode_too_short name size buf off =
   Errors.encode_too_short ~name ~size ~len:(Bytes.length buf) off
 
 let encode_rejected name e = Errors.encode_rejected ~name e
-let rejected_by_constraints = encode_rejected
 
 (* The words the bitfields are or-ed into, zeroed before the writes. *)
 let bitfield_words puts =

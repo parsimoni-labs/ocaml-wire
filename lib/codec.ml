@@ -1423,24 +1423,6 @@ module Gen = struct
          generate it again"
         t.name
 
-  let disagrees t =
-    Fmt.invalid_arg "Wire: the generated code for %s disagrees with its codec"
-      t.name
-
-  let fail t buf off =
-    validate t buf off;
-    disagrees t
-
-  let encode_too_short t buf off = encode_too_short t.name (wire_size t) buf off
-
-  let bits_too_wide ~mask v =
-    bits_too_wide ~mask v;
-    Fmt.invalid_arg "Wire: %d does not fit its bitfield" v
-
-  let byte_length ~expected ~actual =
-    Types.check_byte_field_size ~expected ~actual;
-    Fmt.invalid_arg "Wire: byte field of length %d" actual
-
   type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
 
   (* The reader [Codec.get] stages for a field, found by its name. *)
@@ -1462,16 +1444,6 @@ module Gen = struct
               (k typ (fun buf off ->
                    read (runtime ()) (Input_end.of_bytes buf) buf off)))
     | _ -> None
-
-  let get_failed t name buf off =
-    ignore
-      (with_field_reader t name { k = (fun _ read -> ignore (read buf off)) });
-    disagrees t
-
-  let encode_rejected t buf off =
-    match validate t buf off with
-    | () -> disagrees t
-    | exception Types.Parse_error e -> encode_rejected t.name e
 
   (* A map's functions, typed through its inner type: the wire value is read
      as an [int] (or an [int32] for a 32-bit field), and [dec] decodes it as
@@ -1544,37 +1516,6 @@ module Gen = struct
         "Wire: the generated code for %s names a map its field %s no longer \
          has; generate it again"
         t.name name
-
-  (* The bytes a cold path on a bigarray hands to the codec: the record's own
-     region, at most [size] bytes from [off], and failures moved back by [off]. *)
-  let on_region t buf off f =
-    let len = Unchecked.Bigstring.length buf in
-    if off < 0 || off > len then f (Unchecked.Bigstring.to_bytes buf) off
-    else
-      let n = min (min_wire_size t) (len - off) in
-      let region =
-        Bytes.init n (fun i -> Char.chr (Unchecked.Bigstring.u8 buf (off + i)))
-      in
-      try f region 0
-      with Types.Parse_error e ->
-        raise (Types.Parse_error { e with at = e.at + off })
-
-  let fail_bigstring t buf off = on_region t buf off (fail t)
-
-  let get_failed_bigstring t name buf off =
-    on_region t buf off (get_failed t name)
-
-  let encode_rejected_bigstring t buf off =
-    match on_region t buf off (validate t) with
-    | () -> disagrees t
-    | exception Types.Parse_error e -> rejected_by_constraints t.name e
-
-  let encode_too_short_bigstring t buf off =
-    if off < 0 then
-      Fmt.invalid_arg "Codec.encode %s: negative offset %d" t.name off;
-    Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" t.name
-      (wire_size t)
-      (Unchecked.Bigstring.length buf - off)
 end
 
 module Testing = struct
