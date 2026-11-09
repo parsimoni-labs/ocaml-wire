@@ -7,51 +7,45 @@
 
 - `wire.3d` and the fuzz suites run on Windows (#443, @samoht)
 
+- `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
+  field names against the FFI pipeline before writing anything (#434, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
   16-bit length used to get lines of up to 64 KiB, megabytes of corpus to
   write and replay (#455, @samoht)
 
+- **Breaking:** `Wire_stubs` record labels escape every OCaml and OxCaml
+  keyword (`effect_`), and two fields that give one label are refused (#434,
+  @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
   as in 3D. The codec and the generated C could read different bytes (#453,
   @samoht)
+
 - A codec named with a capital after a digit (`Foo2Bar`) gets the C names
   EverParse emits, so its FFI stubs link (#441, @samoht)
 
-- `Wire.Codec.decode` reads a record of more than eight fields in field order,
-  so it reports the first field that fails and runs `map` decoders in order
-  (#434, @samoht)
-
-- `Wire.Codec.validate` refuses a byte span whose size, read from the data, is
-  negative, as `decode` does, and `decode` reports a `byte_slice` that runs past
-  the end as a parse error instead of raising `Invalid_argument` (#434, @samoht)
-
-- `Wire.Codec.validate` checks every field whose size the data decides (a gated
-  optional, a repeat, a `uint_var`, a `nested` region, an array), so it refuses
-  what `decode` refuses when a later field takes the rest of the buffer (#434,
+- `decode` reads a record of more than eight fields in field order (#434,
   @samoht)
 
-- The 3D projection lays out a bit group whose order is not its base's native
-  one (`Msb_first` over a little-endian word, `Lsb_first` over a big-endian one)
-  in a sub-codec, an array element or a casetype as it does in the entrypoint.
-  The generated C read the other end of the word (#434, @samoht)
+- `validate` refuses a negative span size and checks every field whose size
+  the data decides, as `decode` does (#434, @samoht)
 
-- The 3D projection refuses two different casetypes, enums, enum element
-  structs, refined byte arrays or optional casetypes under one name, instead of
-  projecting one as the other (#434, @samoht)
+- 3D: a bit group in a non-native order is laid out the same in a sub-codec,
+  an array or a casetype as at top level (#434, @samoht)
 
-- The 3D projection escapes every F* and 3D keyword a field or parameter can
-  spell, and refuses a struct where two names escape onto one, such as `end` and
-  `end_`, naming both. Such a field used to fail inside EverParse (#434,
-  @samoht)
+- 3D: two different declarations under one name are refused, and every F*, 3D
+  and C keyword a field can spell is escaped (#434, @samoht)
 
-- The default plug (`<Name>Fields`) escapes C keywords in its member names, such
-  as `int_` and `restrict_`, and refuses fields whose members or `_IDX_` macros
-  it would spell alike, such as `X` and `x`. Such a field gave a header the C
-  compiler rejects (#434, @samoht)
+- 3D: a field name that is not an identifier (`a-b`) is refused, and so are
+  two codecs whose names differ only in case (#434, @samoht)
+
+- `Wire_stubs`: a codec named for an OCaml keyword (`Type`) gives stubs that
+  compile (#434, @samoht)
 
 ## 1.3.0
 

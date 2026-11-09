@@ -39,6 +39,13 @@ val of_structs :
   schema_dir:string -> outdir:string -> Wire.Everparse.Raw.struct_ list -> unit
 (** Same as {!generate} but takes raw structs directly. *)
 
+val check_names : Wire.Everparse.Raw.struct_ -> unit
+(** [check_names s] raises [Invalid_argument] naming both fields when
+    {!of_structs} would refuse [s] because two of its fields spell one
+    identifier: one 3D name in its FFI projection, one macro or member of its
+    plug ({!Wire_3d.check_plug_names}), or one record label of its stubs. It
+    writes nothing. *)
+
 (** {1 Individual generators}
 
     These are the building blocks used by {!generate}. Most users should not
