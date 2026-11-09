@@ -106,3 +106,11 @@ val eth_src : (string, string * string * UInt16.t) Codec.field
 
 val checked_proto : (UInt8.t, checked) Codec.field
 (** [checked_proto] is the closed enum of {!val-checked}. *)
+
+type wide = int * int * int * int * int * int
+
+val wide_make : int -> int -> int -> int -> int -> int -> wide
+(** [wide_make] builds a {!wide} record. *)
+
+val wide : wide Codec.t
+(** [wide] has 32-bit bitfield words in both byte orders. *)

@@ -18,10 +18,12 @@
     for {!Wire.Codec.valid}, the promise is memory safety only: a buffer's
     length never changes, so a read never leaves the buffer, but if its bytes
     change after [Valid.v], a read may return a value that breaks a constraint.
-    [(v :> bytes)] is the buffer itself, not a copy. It has [size], [decode],
-    [validate] and [write buf off v1 ... vn], which stores field values in
-    order. Without [~make] it also defines a record [t] of the field values,
-    [make] and [encode]. A codec it cannot specialise (variable size,
+    [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
+    [get_<field>_word] loads the word that holds it and [<field>_of_word] takes
+    the field out, so fields packed in one word share one load. It has [size],
+    [decode], [validate] and [write buf off v1 ... vn], which stores field
+    values in order. Without [~make] it also defines a record [t] of the field
+    values, [make] and [encode]. A codec it cannot specialise (variable size,
     parameters, actions, maps) gets a module with [decode] and [validate] that
     call the codec. *)
 

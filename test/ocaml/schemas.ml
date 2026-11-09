@@ -134,3 +134,19 @@ let variable =
         (n $ fun (x, _) -> x);
         (Field.v "Rest" (byte_array ~size:(Field.ref n)) $ fun (_, x) -> x);
       ]
+
+type wide = int * int * int * int * int * int
+
+let wide_make a b c d e f = (a, b, c, d, e, f)
+
+let wide =
+  Codec.v "Wide" wide_make
+    Codec.
+      [
+        (Field.v "A" (bits ~width:1 U32be) $ fun (x, _, _, _, _, _) -> x);
+        (Field.v "B" (bits ~width:8 U32be) $ fun (_, x, _, _, _, _) -> x);
+        (Field.v "C" (bits ~width:23 U32be) $ fun (_, _, x, _, _, _) -> x);
+        (Field.v "D" (bits ~width:3 U32) $ fun (_, _, _, x, _, _) -> x);
+        (Field.v "E" (bits ~width:29 U32) $ fun (_, _, _, _, x, _) -> x);
+        (Field.v "F" (bits ~width:31 U32be) $ fun (_, _, _, _, _, x) -> x);
+      ]
