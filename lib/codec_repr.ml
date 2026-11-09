@@ -857,7 +857,11 @@ type interval =
    [decode] run it with one direct call. *)
 type pass =
   | No_checks
-  | Intervals of { flat : int array; intervals : interval array }
+  | Intervals of {
+      flat : int array;
+      tables : string array;
+      intervals : interval array;
+    }
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names
           the field of a failed one. *)

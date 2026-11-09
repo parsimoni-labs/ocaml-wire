@@ -288,7 +288,11 @@ type interval =
 
 type pass =
   | No_checks
-  | Intervals of { flat : int array; intervals : interval array }
+  | Intervals of {
+      flat : int array;
+      tables : string array;
+      intervals : interval array;
+    }
   | Steps of {
       steps : step array;
       where : (slots -> bool) option;
