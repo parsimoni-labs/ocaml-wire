@@ -1150,6 +1150,7 @@ module Private = struct
   module Gen = Codec.Gen
   module Testing = Codec.Testing
   module Names = Names
+  module Layout = Record_layout
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

@@ -1923,6 +1923,7 @@ module Private : sig
   module Uint_var = Uint_var
   module Shape = Shape
   module Names = Names
+  module Layout = Record_layout
 
   (** Support for code generated from a codec by [Wire_ocaml]. *)
   module Gen : sig

@@ -46,4 +46,5 @@ let () =
       Test_uint_var.suite;
       Test_shape.suite;
       Test_names.suite;
+      Test_layout.suite;
     ]
