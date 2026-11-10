@@ -348,3 +348,20 @@ val everparse_type_defines : string
     integer type ([UINT16BE], ...) to its host-order C type, needed to compile
     the wrapper of a parameterized validator (whose parameters EverParse types
     with the 3D names). Harmless for non-parameterized wrappers. *)
+
+(** {1 Private}
+
+    What {!parse_3d} and {!fork_pool} fall back to where [Unix.fork] is missing
+    (Windows), exposed so the tests exercise them on every system. Not part of
+    the stable API. *)
+
+module Private : sig
+  val run_spawned : cwd:string -> log:string -> string -> string list -> int
+  (** [run_spawned ~cwd ~log exe args] starts [exe] with [Unix.create_process]
+      in [cwd], with [args] passed literally and both output streams written to
+      [log], and returns its exit code. *)
+
+  val pool_in_process : (unit -> unit) array -> bool array
+  (** [pool_in_process jobs] runs [jobs] one after the other in this process and
+      returns each job's success, as {!fork_pool} would. *)
+end

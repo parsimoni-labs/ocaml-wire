@@ -1830,3 +1830,10 @@ let main ?name ~mode ~package codecs =
             [ standalone_base ?name ~package () ^ ".3d" ]
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)
+
+module Private = struct
+  let run_spawned ~cwd ~log exe args =
+    process_status_code (run_spawned ~output:(File log) ~cwd exe args)
+
+  let pool_in_process = pool_in_process
+end

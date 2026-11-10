@@ -88,12 +88,18 @@ let test_generate_3d_files () =
   Sys.remove path;
   Unix.rmdir tmpdir
 
-let test_parse_3d_uses_argv_and_cwd () =
+(* The fake EverParse below is a shell script, which only a POSIX system runs. *)
+let needs_posix () = if Sys.win32 then Alcotest.skip ()
+
+(* [with_fake_3d f] puts a fake [3d.exe] first on PATH, one that writes its cwd
+   and then each argument on a line of [observed] in that cwd, and calls [f
+   ~outdir ~exe ~observed] with an output directory whose name needs quoting. *)
+let with_fake_3d f =
+  needs_posix ();
   let outdir = Filename.temp_dir "wire 3d;out " "" in
   let bindir = Filename.temp_dir "wire 3d;bin " "" in
   let exe = Filename.concat bindir "3d.exe" in
   let observed = Filename.concat outdir "observed" in
-  let file = "schema name;literal.3d" in
   let old_path = Sys.getenv_opt "PATH" in
   Fun.protect
     ~finally:(fun () ->
@@ -106,14 +112,50 @@ let test_parse_3d_uses_argv_and_cwd () =
             "#!/bin/sh\n\
              { pwd; for arg do printf '%s\\n' \"$arg\"; done; } > observed\n");
       Unix.chmod exe 0o755;
-      Unix.putenv "PATH" bindir;
-      (match Wire_3d.parse_3d ~batch:true ~outdir file with
+      (* The fake must come first, but the rest of PATH stays: [printf] is not
+         a builtin of every /bin/sh (OpenBSD's ksh runs /usr/bin/printf). *)
+      Unix.putenv "PATH"
+        (match old_path with
+        | Some p when p <> "" -> bindir ^ ":" ^ p
+        | _ -> bindir);
+      f ~outdir ~exe ~observed)
+
+let fake_schema = "schema name;literal.3d"
+
+let test_parse_3d_uses_argv_and_cwd () =
+  with_fake_3d (fun ~outdir ~exe:_ ~observed ->
+      (match Wire_3d.parse_3d ~batch:true ~outdir fake_schema with
       | Ok () -> ()
       | Error e -> Alcotest.failf "fake EverParse failed: %s" e);
       Alcotest.(check (list string))
         "cwd and literal argv"
-        [ Unix.realpath outdir; "--batch"; file ]
+        [ Unix.realpath outdir; "--batch"; fake_schema ]
         (In_channel.with_open_text observed In_channel.input_lines))
+
+(* Windows has no [fork]: there [parse_3d] spawns the process from the parent,
+   which moves to the output directory for the spawn alone. *)
+let test_run_spawned () =
+  with_fake_3d (fun ~outdir ~exe ~observed ->
+      let here = Sys.getcwd () in
+      let log = Filename.concat outdir "log" in
+      let code =
+        Wire_3d.Private.run_spawned ~cwd:outdir ~log exe
+          [ "--batch"; fake_schema ]
+      in
+      Alcotest.(check int) "exit code" 0 code;
+      Alcotest.(check string) "the parent's cwd is back" here (Sys.getcwd ());
+      Alcotest.(check (list string))
+        "cwd and literal argv"
+        [ Unix.realpath outdir; "--batch"; fake_schema ]
+        (In_channel.with_open_text observed In_channel.input_lines))
+
+let test_pool_in_process () =
+  let jobs =
+    [| ignore; (fun () -> failwith "refused"); (fun () -> invalid_arg "bad") |]
+  in
+  Alcotest.(check (array bool))
+    "a job fails when it raises" [| true; false; false |]
+    (Wire_3d.Private.pool_in_process jobs)
 
 let test_schema_of_struct () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -133,13 +175,9 @@ let test_ensure_dir () =
   Alcotest.(check bool) "dir created" true (Sys.file_exists tmpdir);
   Unix.rmdir tmpdir
 
-let read_file path =
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+(* Read to the end rather than [in_channel_length] bytes: on Windows a text
+   channel turns CRLF into LF, so it holds fewer bytes than the file. *)
+let read_file path = In_channel.with_open_text path In_channel.input_all
 
 let test_generate_c () =
   needs_3d_exe ();
@@ -1377,14 +1415,7 @@ let test_projection_filenames () =
   let schema = Everparse.Raw.project_struct ~mode:`Ffi s in
   let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
   Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
-  let dune_inc =
-    let ic = open_in (Filename.concat tmpdir "dune.inc") in
-    let n = in_channel_length ic in
-    let buf = Bytes.create n in
-    really_input ic buf 0 n;
-    close_in ic;
-    Bytes.unsafe_to_string buf
-  in
+  let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   let contains_exact sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
   Alcotest.(check bool)
@@ -1795,6 +1826,8 @@ let suite =
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "parse_3d uses argv and cwd" `Quick
         test_parse_3d_uses_argv_and_cwd;
+      Alcotest.test_case "run_spawned uses argv and cwd" `Quick test_run_spawned;
+      Alcotest.test_case "pool_in_process" `Quick test_pool_in_process;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
