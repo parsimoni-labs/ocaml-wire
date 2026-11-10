@@ -1036,11 +1036,15 @@ let standalone_base ?name ~package () =
    program that runs the validator on each and fails on any disagreement. -- *)
 
 let hex_of_bytes b =
-  let buf = Buffer.create (Bytes.length b * 2) in
-  let ppf = Fmt.with_buffer buf in
-  Bytes.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) b;
-  Format.pp_print_flush ppf ();
-  Buffer.contents buf
+  let digits = "0123456789abcdef" in
+  let out = Bytes.create (Bytes.length b * 2) in
+  Bytes.iteri
+    (fun i c ->
+      let n = Char.code c in
+      Bytes.set out (2 * i) digits.[n lsr 4];
+      Bytes.set out ((2 * i) + 1) digits.[n land 0xf])
+    b;
+  Bytes.unsafe_to_string out
 
 (* The accept/reject decision the validator must reproduce, and -- on rejection
    -- what the codec objected to, which makes an input repairable. The record
