@@ -8,7 +8,7 @@
   (<> %{profile} afl))
  (deps fuzz.exe)
  (action
-  (run %{exe:fuzz.exe})))
+  (run %{exe:fuzz.exe} --timeout %{read:../alcobar-timeout})))
 
 ; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
 ; cwd is this dir in the build tree, where fuzz.exe is built).
