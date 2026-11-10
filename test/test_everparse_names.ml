@@ -269,6 +269,32 @@ let test_3d_enum_case_clash () =
   invalid_arg_mentions "case named as its enum" [ "\"end\"" ] (fun () ->
       codec_3d (one_field_codec "Kw" (enum "end" [ ("end", 1) ] uint8)))
 
+(* An enum used only inside a sub-codec is declared like one the entrypoint
+   names; the 3D otherwise referred to a type it never declared. Its cases share
+   the module's namespace with the entrypoint's. *)
+let test_3d_nested_enum_declared () =
+  let inner = one_field_codec "Inner" (enum "Color" [ ("Red", 1) ] uint8) in
+  let f = Field.v "i" (codec inner) in
+  let out = codec_3d (Codec.v "Outer" Fun.id Codec.[ f $ Fun.id ]) in
+  Alcotest.(check bool) "enum declared" true (contains ~sub:"enum Color {" out);
+  let a = Field.v "a" (enum "Color" [ ("Red", 1) ] uint8) in
+  let other = one_field_codec "Other" (enum "Fruit" [ ("Red", 3) ] uint8) in
+  let b = Field.v "b" (codec other) in
+  invalid_arg_mentions "Red in an enum and a sub-codec's enum"
+    [ "\"Color\""; "\"Fruit\"" ] (fun () ->
+      codec_3d (Codec.v "Mix" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]));
+  (* An enum over a [where]-refined base declares its bare base: 3D has no
+     refined enum base, and [UINT8 { e } enum E] is a syntax error. The
+     refinement stays on the field. *)
+  let kind = enum "Kind" [ ("A", 1) ] (where Expr.(int 0 = int 0) uint8) in
+  let inner = one_field_codec "InnerW" kind in
+  let f = Field.v "i" (codec inner) in
+  let out = codec_3d (Codec.v "OuterW" Fun.id Codec.[ f $ Fun.id ]) in
+  Alcotest.(check bool)
+    "bare base declared" true
+    (contains ~sub:"UINT8 enum Kind {" out);
+  Alcotest.(check bool) "where on the field" true (contains ~sub:"(0 == 0)" out)
+
 (* Reversing a bit group into its base's native order pads the word with an
    anonymous field, which 3D needs a name for. The name it gets must not be a
    field's. *)
@@ -304,4 +330,6 @@ let suite =
         test_3d_enum_case_clash;
       Alcotest.test_case "3d: padding takes a fresh name" `Quick
         test_3d_padding_name_is_fresh;
+      Alcotest.test_case "3d: an enum in a sub-codec is declared" `Quick
+        test_3d_nested_enum_declared;
     ] )

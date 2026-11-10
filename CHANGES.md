@@ -92,6 +92,10 @@
   `_anon_0` used to share. Each of these failed inside EverParse (#438,
   @samoht)
 
+- The 3D projection declares an enum used only inside a sub-codec. The
+  module named a type it never declared, which EverParse refused (#438,
+  @samoht)
+
 ## 1.3.0
 
 ### Added

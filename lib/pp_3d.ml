@@ -973,6 +973,14 @@ let pp_struct ppf (s : struct_) =
   List.iter (pp_field widenable ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
+(* The integer type an enum declaration names. A [where] on the enum's base is
+   a constraint on the field, which the field carries; 3D has no refined base
+   for an [enum], and [UINT8 { e } enum E] is a syntax error. *)
+let rec pp_enum_base : type a. Format.formatter -> a typ -> unit =
+ fun ppf -> function
+  | Where { inner; _ } -> pp_enum_base ppf inner
+  | t -> pp_typ ppf t
+
 let pp_enum_cases ppf cases =
   List.iteri
     (fun i (cname, value) ->
@@ -1061,7 +1069,7 @@ let pp_decl ppf = function
       if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
-      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base (escape_3d name);
+      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_enum_base base (escape_3d name);
       pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ tag; cases } ->

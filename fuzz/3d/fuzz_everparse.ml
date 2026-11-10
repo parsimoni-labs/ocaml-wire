@@ -104,7 +104,7 @@ let batch_enabled () =
    not. Keep each in the registry and assert its standalone rejection below, so
    the exception cannot hide a new gap or outlive the projection bug that
    requires it. *)
-let no_3d_standalone = [ "casetype_where_tag"; "action"; "action_on_act" ]
+let no_3d_standalone = [ "action"; "action_on_act" ]
 
 (* Every registry entry [keep] admits, projected under [mode], each schema named
    apart from its sibling in the other mode. *)

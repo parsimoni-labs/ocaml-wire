@@ -801,10 +801,19 @@ let absorb_candidate (acc_rev, seen) e =
   | Some n when List.mem n seen -> (acc_rev, seen)
   | Some n -> (e :: acc_rev, n :: seen)
 
+(* A typedef needs the enums its fields name, and so does every sub-codec
+   struct it brings in: an enum used only inside a nested record was otherwise
+   never declared, and EverParse refused the reference. *)
 let absorb_typedef_dependencies acc d =
   match d with
   | Typedef { struct_; _ } ->
-      let candidates = enum_decls struct_ @ casetype_decls_of_struct struct_ in
+      let nested = casetype_decls_of_struct struct_ in
+      let nested_enums =
+        List.concat_map
+          (function Typedef { struct_ = s; _ } -> enum_decls s | _ -> [])
+          nested
+      in
+      let candidates = enum_decls struct_ @ nested_enums @ nested in
       List.fold_left absorb_candidate acc candidates
   | _ -> acc
 
