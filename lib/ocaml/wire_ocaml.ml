@@ -300,8 +300,15 @@ let words ~size fields =
 let endian_suffix = function T.Big -> "be" | T.Little -> "le"
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
-   length, and the module of its bounds-checked loads and string copies. *)
-type src = { typ : string; u : string; len : string; checked : string }
+   length, the module of its bounds-checked loads and string copies, and an
+   expression for a buffer of no bytes. *)
+type src = {
+  typ : string;
+  u : string;
+  len : string;
+  checked : string;
+  empty : string;
+}
 
 let bytes_src =
   {
@@ -309,6 +316,7 @@ let bytes_src =
     u = rt ^ ".Unchecked";
     len = "Bytes.length";
     checked = "Bytes";
+    empty = "Bytes.empty";
   }
 
 let bigstring_src =
@@ -317,6 +325,7 @@ let bigstring_src =
     u = rt ^ ".Unchecked.Bigstring";
     len = rt ^ ".Unchecked.Bigstring.length";
     checked = rt ^ ".Unchecked.Bigstring";
+    empty = "Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0";
   }
 
 let load ~src ~off ~bytes ~endian =
@@ -325,8 +334,33 @@ let load ~src ~off ~bytes ~endian =
   | 2 -> Fmt.str "(%s.u16%s buf (off + %d))" src.u (endian_suffix endian) off
   | _ -> Fmt.str "(%s.i32%s buf (off + %d))" src.u (endian_suffix endian) off
 
+(* A 16-bit field read through the 32-bit load that ends or starts on it, when
+   that load stays inside a record of [size] bytes: one load and one byte swap,
+   with none of the 16-bit sign and zero extensions a 16-bit swap costs. The
+   shift happens on the [int32], so a 31-bit [int] loses no bit. *)
+let u16_in_word ~src ~size ~off ~endian =
+  let low i = Fmt.str "(Int32.to_int %s land 0xffff)" i
+  and high i =
+    Fmt.str "(Int32.to_int (Int32.shift_right_logical %s 16) land 0xffff)" i
+  in
+  let at o =
+    Fmt.str "(%s.i32%s buf (off + %d))" src.u (endian_suffix endian) o
+  in
+  match (size, endian) with
+  | None, _ -> None
+  | Some _, T.Big when off >= 2 -> Some (low (at (off - 2)))
+  | Some size, T.Big when off + 4 <= size -> Some (high (at off))
+  | Some size, T.Little when off + 4 <= size -> Some (low (at off))
+  | Some _, T.Little when off >= 2 -> Some (high (at (off - 2)))
+  | Some _, _ -> None
+
+(* The record size [u16_in_word] may read within, for a target where it pays:
+   flambda2 keeps the [int32] unboxed, where the stock compiler would box it. *)
+let in_word_size ~target size =
+  match target with `OxCaml -> Some size | `OCaml -> None
+
 (* An unsigned value of [bytes] bytes at [off], from a word when one covers it. *)
-let unsigned ~src ~words ~off ~bytes ~endian =
+let unsigned ?size ~src ~words ~off ~bytes ~endian () =
   match List.find_opt (fun a -> a <= off && off + bytes <= a + 8) words with
   | Some a when bytes = 1 || endian = T.Big ->
       Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land 0x%x)" a
@@ -334,13 +368,19 @@ let unsigned ~src ~words ~off ~bytes ~endian =
         ((1 lsl (8 * bytes)) - 1)
   | _ when bytes = 4 ->
       Fmt.str "(Int32.to_int %s land mask32)" (load ~src ~off ~bytes ~endian)
+  | _ when bytes = 2 -> (
+      match u16_in_word ~src ~size ~off ~endian with
+      | Some v -> v
+      | None -> load ~src ~off ~bytes ~endian)
   | _ -> load ~src ~off ~bytes ~endian
 
-let read ~src ~words f =
+let read ?size ~src ~words f =
   match f.store with
   | Int { width = 32; endian; _ } -> load ~src ~off:f.off ~bytes:4 ~endian
   | Int { width; endian; signed } ->
-      let v = unsigned ~src ~words ~off:f.off ~bytes:(width / 8) ~endian in
+      let v =
+        unsigned ?size ~src ~words ~off:f.off ~bytes:(width / 8) ~endian ()
+      in
       if signed then
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -348,7 +388,8 @@ let read ~src ~words f =
   | Bits { base; shift; width } ->
       let endian = match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e in
       let v =
-        unsigned ~src ~words ~off:f.off ~bytes:(Bitfield.byte_size base) ~endian
+        unsigned ?size ~src ~words ~off:f.off ~bytes:(Bitfield.byte_size base)
+          ~endian ()
       in
       Fmt.str "((%s lsr %d) land %s)" v shift (mask width)
   | Bytes n -> Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.off n
@@ -389,7 +430,7 @@ let all_tests ~fields ~where =
 let pp_frame ~src ppf on_short =
   Fmt.pf ppf "off < 0 || off > %s buf - size then %s buf off" src.len on_short
 
-let pp_reads ~src ppf ~words fields =
+let pp_reads ?size ~src ppf ~words fields =
   List.iter
     (fun a ->
       Fmt.pf ppf "    let w%d = %s.i64be buf (off + %d) in@\n" a src.u a)
@@ -398,9 +439,10 @@ let pp_reads ~src ppf ~words fields =
     (fun f ->
       match f.store with
       | Int { width = 32; _ } ->
-          Fmt.pf ppf "    let %s_raw = %s in@\n" f.var (read ~src ~words f);
+          Fmt.pf ppf "    let %s_raw = %s in@\n" f.var
+            (read ?size ~src ~words f);
           Fmt.pf ppf "    let %s = %s in@\n" f.var (int_view f)
-      | _ -> Fmt.pf ppf "    let %s = %s in@\n" f.var (read ~src ~words f))
+      | _ -> Fmt.pf ppf "    let %s = %s in@\n" f.var (read ?size ~src ~words f))
     fields
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
@@ -423,24 +465,50 @@ let pp_decode ?(src = bytes_src) ppf ~head ~call ~size ~fields ~where =
       Fmt.pf ppf "    if not (%a) then fail buf off else@\n" pp_tests tests);
   Fmt.pf ppf "    %s@\n  end@\n@\n" (call (List.map typed_value fields))
 
-let pp_validate ~src ppf ~target ~fields ~where =
-  Fmt.pf ppf "let%s validate buf off =@\n  if %a" (zero_alloc target)
-    (pp_frame ~src) "fail";
-  match all_tests ~fields ~where with
-  | [] -> Fmt.pf ppf "@\n@\n"
+(* Whether the OCaml source [s] uses the identifier [v]. *)
+let mentions s v =
+  let n = String.length v and m = String.length s in
+  let ident = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+    | _ -> false
+  in
+  let rec go i =
+    i + n <= m
+    && (String.sub s i n = v
+        && (i = 0 || not (ident s.[i - 1]))
+        && (i + n = m || not (ident s.[i + n]))
+       || go (i + 1))
+  in
+  go 0
+
+(* The fields some test reads: a check loads only those. *)
+let tested ~tests fields =
+  List.filter
+    (fun f ->
+      match f.store with
+      | Bytes _ -> false
+      | _ -> List.exists (fun t -> mentions t f.var) tests)
+    fields
+
+(* [is_valid] answers with a boolean, loading only the fields a test reads, so
+   a caller that drops a bad record on the floor pays for no exception handler;
+   [validate] raises what the codec raises, found off the hot path by [fail]. *)
+let pp_validate ~src ppf ~target ~size ~fields ~where =
+  let size = in_word_size ~target size in
+  let attr = "[@inline]" ^ zero_alloc target in
+  Fmt.pf ppf "let%s is_valid buf off =@\n  if off < 0 || off > %s buf - size"
+    attr src.len;
+  (match all_tests ~fields ~where with
+  | [] -> Fmt.pf ppf " then false@\n  else true@\n@\n"
   | tests ->
-      let fields =
-        List.filter
-          (fun f -> match f.store with Bytes _ -> false | _ -> true)
-          fields
-      in
-      Fmt.pf ppf "@\n  else begin@\n";
-      pp_reads ~src ppf ~words:[] fields;
-      Fmt.pf ppf "    ignore (%a);@\n"
-        Fmt.(list ~sep:(any ", ") string)
-        (List.map (fun f -> f.var) fields);
-      Fmt.pf ppf "    if not (%a) then fail buf off@\n  end@\n@\n" pp_tests
-        tests
+      Fmt.pf ppf " then false@\n  else begin@\n";
+      pp_reads ?size ~src ppf ~words:[] (tested ~tests fields);
+      Fmt.pf ppf "    %a@\n  end@\n@\n" pp_tests tests);
+  Fmt.pf ppf
+    "let%s validate buf off =@\n\
+    \  if not (is_valid buf off) then fail buf off@\n\
+     @\n"
+    attr
 
 let type_of f =
   let t = Fmt.str "%s.%s.t" rt in
@@ -831,6 +899,111 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
       | _ -> ())
     fields
 
+(* [View.at buf off] validates the record at [off] and stands for it, as
+   [Valid] does at offset 0: each [view_<field>] is one load at a constant
+   offset from [off] with no bounds check. A view that failed holds a buffer
+   of no bytes, shared by every failed view since nothing can be written to
+   it, and each read tests [ok] and gives zero without loading. On OxCaml a
+   view is an unboxed record of the buffer and the offset, so it lives in
+   registers and costs no allocation; on OCaml it is a small record. *)
+let pp_view_module ~src ppf ~target =
+  let attr =
+    match target with
+    | `OxCaml -> "[@inline][@zero_alloc]"
+    | `OCaml -> "[@inline]"
+  in
+  let layout, hash =
+    match target with
+    | `OxCaml -> (" : value & value & value", "#")
+    | `OCaml -> ("", "")
+  in
+  Fmt.pf ppf
+    "module View : sig@\n\
+    \  type t%s@\n\
+     @\n\
+    \  val at : %s -> int -> t@\n\
+    \  val check : %s -> int -> t@\n\
+    \  val ok : t -> bool@\n\
+    \  val buf : t -> %s@\n\
+    \  val off : t -> int@\n\
+     end = struct@\n\
+    \  type t = %s{ buf : %s; off : int; ok : bool }@\n\
+     @\n\
+    \  let empty = %s@\n\
+     @\n\
+    \  let%s at buf off =@\n\
+    \    validate buf off;@\n\
+    \    %s{ buf; off; ok = true }@\n\
+     @\n\
+    \  let%s check buf off =@\n\
+    \    if is_valid buf off then %s{ buf; off; ok = true }@\n\
+    \    else %s{ buf = empty; off = 0; ok = false }@\n\
+     @\n\
+    \  let%s ok (v : t) = v.%sok@\n\
+    \  let%s buf (v : t) = v.%sbuf@\n\
+    \  let%s off (v : t) = v.%soff@\n\
+     end@\n\
+     @\n"
+    layout src.typ src.typ src.typ hash src.typ src.empty attr hash attr hash
+    hash attr hash attr hash attr hash
+
+(* What a read of a failed view binds in place of its loads. *)
+let pp_zeros ppf f =
+  match f.store with
+  | Int { width = 32; _ } ->
+      Fmt.pf ppf "    let %s_raw = 0l in@\n    let %s = 0 in@\n" f.var f.var
+  | Bytes n -> Fmt.pf ppf "    let %s = String.make %d '\\000' in@\n" f.var n
+  | Int _ | Bits _ -> Fmt.pf ppf "    let %s = 0 in@\n" f.var
+
+let pp_view ?(src = bytes_src) ppf ~target ~size ~fields =
+  let size = in_word_size ~target size in
+  pp_view_module ~src ppf ~target;
+  let pp_read attr name f result =
+    Fmt.pf ppf
+      "let%s %s (v : View.t) =@\n\
+      \  let off = View.off v in@\n\
+      \  if View.ok v then begin@\n\
+      \    let buf = View.buf v in@\n"
+      attr name;
+    pp_reads ?size ~src ppf ~words:[] [ f ];
+    Fmt.pf ppf "    %s@\n  end@\n  else begin@\n" result;
+    pp_zeros ppf f;
+    Fmt.pf ppf "    %s@\n  end@\n@\n" result
+  in
+  List.iter
+    (fun f ->
+      let attr =
+        match (target, f.store) with
+        | `OxCaml, (Int _ | Bits _) when Option.is_none f.map ->
+            "[@inline][@zero_alloc]"
+        | _ -> "[@inline]"
+      in
+      pp_read attr ("view_" ^ f.label) f (typed_value f);
+      match f.store with
+      | Int { width = 32; _ } ->
+          pp_read attr (Fmt.str "view_%s_int" f.label) f f.var
+      | Bits { base; _ } ->
+          (* The word that holds the field, for [<field>_of_word]: fields
+             packed in one word share one load. *)
+          let endian =
+            match base with T.U8 -> T.Big | T.U16 e | T.U32 e -> e
+          in
+          let bytes = Bitfield.byte_size base in
+          let word =
+            unsigned ?size ~src ~words:[] ~off:f.off ~bytes ~endian ()
+          in
+          Fmt.pf ppf
+            "let%s view_%s_word (v : View.t) =@\n\
+            \  if View.ok v then begin@\n\
+            \    let buf = View.buf v and off = View.off v in@\n\
+            \    %s@\n\
+            \  end@\n\
+            \  else 0@\n\
+             @\n"
+            attr f.label word
+      | _ -> ())
+    fields
+
 (* What the codec raises for a rejected record, found again off the hot path:
    the frame, then each field's checks in field order, each in the order the
    codec runs them, then the where clause. [fail] runs only once a fast test
@@ -938,7 +1111,7 @@ let pp_bigstring ppf ~target ~make ~record ~fields ~size ~where =
   let src = bigstring_src in
   Fmt.pf ppf "module Bigstring = struct@\n";
   pp_cold ~src ppf ~target ~fields ~where;
-  pp_validate ~src ppf ~target ~fields ~where;
+  pp_validate ~src ppf ~target ~size ~fields ~where;
   pp_validate_written ppf ~target;
   pp_decode ~src ppf ~head:"let decode buf off"
     ~call:(fun args -> Fmt.str "%s %a" make pp_list args)
@@ -947,6 +1120,7 @@ let pp_bigstring ppf ~target ~make ~record ~fields ~size ~where =
   pp_write ppf ~target fields;
   pp_getters ~src ppf ~target fields;
   pp_valid ~src ppf ~target ~fields ~where;
+  pp_view ~src ppf ~target ~size ~fields;
   if record then pp_encode ppf fields;
   Fmt.pf ppf "end@\n@\n"
 
@@ -955,7 +1129,7 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   let record = Option.is_none make in
   if record then pp_record ppf fields;
   pp_cold ~src:bytes_src ppf ~target ~fields ~where;
-  pp_validate ~src:bytes_src ppf ~target ~fields ~where;
+  pp_validate ~src:bytes_src ppf ~target ~size ~fields ~where;
   pp_validate_written ppf ~target;
   let make = Option.value ~default:"make" make in
   pp_decode ppf ~head:"let decode buf off"
@@ -966,6 +1140,7 @@ let pp_body ppf ~target ~make ~fields ~size ~where =
   pp_write ppf ~target fields;
   pp_getters ppf ~target fields;
   pp_valid ppf ~target ~fields ~where;
+  pp_view ppf ~target ~size ~fields;
   if record then pp_encode ppf fields;
   pp_bigstring ppf ~target ~make ~record ~fields ~size ~where
 
@@ -983,6 +1158,7 @@ let own_names =
     "fail";
     "too_short";
     "size";
+    "is_valid";
     "validate";
     "validate_written";
     "decode";
@@ -996,6 +1172,7 @@ let own_names =
     "encode";
     "t";
     "Valid";
+    "View";
     "Bigstring";
     "mask32";
   ]
@@ -1005,11 +1182,12 @@ let names_of f =
   let l = f.label in
   let derived =
     match f.store with
-    | Int { width = 32; _ } -> [ "get_" ^ l ^ "_int"; "read_" ^ l ^ "_int" ]
-    | Bits _ -> [ "get_" ^ l ^ "_word"; l ^ "_of_word" ]
+    | Int { width = 32; _ } ->
+        [ "get_" ^ l ^ "_int"; "read_" ^ l ^ "_int"; "view_" ^ l ^ "_int" ]
+    | Bits _ -> [ "get_" ^ l ^ "_word"; "view_" ^ l ^ "_word"; l ^ "_of_word" ]
     | Int _ | Bytes _ -> []
   in
-  ("get_" ^ l) :: ("read_" ^ l) :: derived
+  ("get_" ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
 
 (* Who defines a name: the generated module itself, or a field. *)
 type source = Own | Field of string

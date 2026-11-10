@@ -68,10 +68,10 @@ let reads fields =
         f.views)
     fields
 
-let pp_read ~m ppf (f, v) =
+let pp_read ?(prefix = "read") ~m ppf (f, v) =
   match v with
-  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.read_%s v)" f.show m f.ident
-  | _ -> Fmt.pf ppf "string_of_int (%s.read_%s_int v)" m f.ident
+  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.%s_%s v)" f.show m prefix f.ident
+  | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int v)" m prefix f.ident
 
 (* The glue over [m] ("M" or "M.Bigstring"), whose buffer [buf] makes from
    the bytes [b]; [back] wraps a write so its bytes land in [b]. *)
@@ -93,6 +93,12 @@ let pp_ops ppf ~m ~buf ~back fields =
      %a      ];@\n\
     \      reads = [ %a ];@\n\
     \      valid = (fun b -> let v = %s.Valid.v (%s) in [ %a ]);@\n\
+    \      is_valid = (fun b o -> %s.is_valid (%s) o);@\n\
+    \      view = (fun b o -> let v = %s.View.at (%s) o in [ %a ]);@\n\
+    \      checked =@\n\
+    \        (fun b o ->@\n\
+    \          let v = %s.View.check (%s) o in@\n\
+    \          (%s.View.ok v, [ %a ]));@\n\
     \    }"
     m buf m buf back (Fmt.str "%s.encode r" m)
     Fmt.(list ~sep:nop (pp_gets ~m ~buf))
@@ -101,6 +107,10 @@ let pp_ops ppf ~m ~buf ~back fields =
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
     reads m buf
     Fmt.(list ~sep:(any "; ") (pp_read ~m))
+    reads m buf m buf
+    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~m))
+    reads m buf m
+    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~m))
     reads
 
 (* The module generated from [c], and its bridge, which checks it against

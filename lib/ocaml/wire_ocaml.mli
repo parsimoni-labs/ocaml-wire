@@ -36,11 +36,22 @@
     change after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
     [get_<field>_word] loads the word that holds it and [<field>_of_word] takes
-    the field out, so fields packed in one word share one load. A [Bigstring]
-    submodule has the same functions, [Valid] included, on a bigarray of bytes.
-    It has [size], [decode], [validate] and [write buf off v1 ... vn], which
-    stores field values in order. Without [~make] it also defines a record [t]
-    of the field values, [make] and [encode]. *)
+    the field out, so fields packed in one word share one load.
+
+    [is_valid buf off] checks the record at [off] without raising, loading only
+    the fields its constraints read; [validate] raises the codec's error where
+    it is false. [View.at buf off] validates the record at any offset and stands
+    for it, with the same promise as [Valid]: each [view_<field>] (and
+    [view_<field>_int], [view_<field>_word]) is one load with no bounds check.
+    [View.check buf off] does the same without raising, and [View.ok] tells
+    whether the record passed. A view that failed holds no bytes: [View.buf] is
+    then an empty buffer and each read gives zero without loading, so failed
+    views share nothing a caller can write. On OxCaml a view is an unboxed
+    record, held in registers; on OCaml it is a small record. A [Bigstring]
+    submodule has the same functions, [Valid] and [View] included, on a bigarray
+    of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
+    which stores field values in order. Without [~make] it also defines a record
+    [t] of the field values, [make] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
