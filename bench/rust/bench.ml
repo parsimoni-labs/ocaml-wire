@@ -1,9 +1,11 @@
 (* Cross-language header parsing benchmark, OCaml side.
 
    bench.exe corpus FILE N    writes N packets of [slot] bytes to FILE
-   bench.exe run FILE RUNS    times the OCaml implementations on FILE, RUNS
-                              passes each, and prints the best and the
-                              median time per packet
+   bench.exe run FILE RUNS [FILTER]
+                              times the OCaml implementations whose name
+                              contains FILTER on FILE, RUNS passes each, and
+                              prints the best, median, p10 and p90 time per
+                              packet
    bench.exe report FILE...   prints the RESULT lines of each FILE as a table
 
    Every implementation does the same work on each packet, the work
@@ -212,31 +214,35 @@ let udp_len = Staged.unstage (Codec.read H.udp H.udp_length)
    header that fails its checks drops the packet, leaving [base], what [acc]
    was before it. [payload] is how many bytes the IPv4 total length leaves
    the transport header. *)
-let codec_tcp base acc buf o ~payload =
+let[@inline] codec_tcp base acc buf o ~payload =
   match Codec.valid H.tcp buf o with
   | exception Parse_error _ -> base
-  | t when tcp_off t * 4 > payload -> base
   | t ->
-      tcp_fields acc
-        ~sp:(UInt16.to_int (tcp_sp t))
-        ~dp:(UInt16.to_int (tcp_dp t))
-        ~seq:(UInt32.to_int (tcp_seq t))
-        ~ack:(UInt32.to_int (tcp_ack t))
-        ~win:(UInt16.to_int (tcp_win t))
-        ~flags:(tcp_flags t) ~off:(tcp_off t)
+      let off = tcp_off t in
+      if off * 4 > payload then base
+      else
+        tcp_fields acc
+          ~sp:(UInt16.to_int (tcp_sp t))
+          ~dp:(UInt16.to_int (tcp_dp t))
+          ~seq:(UInt32.to_int (tcp_seq t))
+          ~ack:(UInt32.to_int (tcp_ack t))
+          ~win:(UInt16.to_int (tcp_win t))
+          ~flags:(tcp_flags t) ~off
 
-let codec_udp base acc buf o ~payload =
+let[@inline] codec_udp base acc buf o ~payload =
   match Codec.valid H.udp buf o with
   | exception Parse_error _ -> base
-  | u when UInt16.to_int (udp_len u) > payload -> base
   | u ->
-      udp_fields acc
-        ~sp:(UInt16.to_int (udp_sp u))
-        ~dp:(UInt16.to_int (udp_dp u))
-        ~len:(UInt16.to_int (udp_len u))
+      let len = UInt16.to_int (udp_len u) in
+      if len > payload then base
+      else
+        udp_fields acc
+          ~sp:(UInt16.to_int (udp_sp u))
+          ~dp:(UInt16.to_int (udp_dp u))
+          ~len
 
 (* [avail] is how many bytes of the packet follow the Ethernet header. *)
-let codec_ipv4 base acc buf o ~avail =
+let[@inline] codec_ipv4 base acc buf o ~avail =
   match Codec.valid H.ipv4 buf o with
   | exception Parse_error _ -> base
   | ip -> (
@@ -259,7 +265,7 @@ let codec_ipv4 base acc buf o ~avail =
           | 17 -> codec_udp base acc buf (o + hlen) ~payload
           | _ -> acc)
 
-let codec_packet acc buf o =
+let[@inline] codec_packet acc buf o =
   match Codec.valid H.eth buf o with
   | exception Parse_error _ -> acc
   | e ->
@@ -274,66 +280,70 @@ let codec buf =
   done;
   !acc
 
-(* {1 wire.ocaml: the generated validate, then a getter per field} *)
+(* {1 wire.ocaml: the generated view, then a read per field}
 
-let generated_tcp base acc buf o ~payload =
-  match G_tcp.validate buf o with
-  | exception Parse_error _ -> base
-  | () when G_tcp.get_data_offset buf o * 4 > payload -> base
-  | () ->
-      tcp_fields acc
-        ~sp:(UInt16.to_int (G_tcp.get_src_port buf o))
-        ~dp:(UInt16.to_int (G_tcp.get_dst_port buf o))
-        ~seq:(G_tcp.get_seq_int buf o) ~ack:(G_tcp.get_ack_int buf o)
-        ~win:(UInt16.to_int (G_tcp.get_window buf o))
-        ~flags:(G_tcp.get_flags buf o)
-        ~off:(G_tcp.get_data_offset buf o)
+   [View.check buf off] validates a header at [off] once and stands for it, as
+   wire.rust's [Valid::at] does, [View.ok] telling whether it passed; each
+   [view_<field>] is then one load with no bounds check. On OxCaml the view is
+   an unboxed record, two registers. *)
 
-let generated_udp base acc buf o ~payload =
-  match G_udp.validate buf o with
-  | exception Parse_error _ -> base
-  | () when UInt16.to_int (G_udp.get_length buf o) > payload -> base
-  | () ->
-      udp_fields acc
-        ~sp:(UInt16.to_int (G_udp.get_src_port buf o))
-        ~dp:(UInt16.to_int (G_udp.get_dst_port buf o))
-        ~len:(UInt16.to_int (G_udp.get_length buf o))
+let[@inline] generated_tcp base acc buf o ~payload =
+  let t = G_tcp.View.check buf o in
+  let w = G_tcp.view_data_offset_word t in
+  let off = G_tcp.data_offset_of_word w in
+  if (not (G_tcp.View.ok t)) || off * 4 > payload then base
+  else
+    tcp_fields acc
+      ~sp:(UInt16.to_int (G_tcp.view_src_port t))
+      ~dp:(UInt16.to_int (G_tcp.view_dst_port t))
+      ~seq:(G_tcp.view_seq_int t) ~ack:(G_tcp.view_ack_int t)
+      ~win:(UInt16.to_int (G_tcp.view_window t))
+      ~flags:(G_tcp.flags_of_word w) ~off
 
-let generated_ipv4 base acc buf o ~avail =
-  match G_ipv4.validate buf o with
-  | exception Parse_error _ -> base
-  | () -> (
-      let hlen = G_ipv4.get_ihl buf o * 4
-      and len = UInt16.to_int (G_ipv4.get_total_length buf o) in
-      if len < hlen || len > avail then base
-      else
-        let proto = UInt8.to_int (G_ipv4.get_protocol buf o) in
-        let acc =
-          ip_fields acc
-            ~src:(G_ipv4.get_src_addr_int buf o)
-            ~dst:(G_ipv4.get_dst_addr_int buf o)
-            ~ttl:(UInt8.to_int (G_ipv4.get_ttl buf o))
-            ~proto ~len
-        in
-        if
-          G_ipv4.get_flags buf o land 1 <> 0
-          || G_ipv4.get_fragment_offset buf o <> 0
-        then acc
-        else
-          let payload = len - hlen in
-          match proto with
-          | 6 -> generated_tcp base acc buf (o + hlen) ~payload
-          | 17 -> generated_udp base acc buf (o + hlen) ~payload
-          | _ -> acc)
+let[@inline] generated_udp base acc buf o ~payload =
+  let u = G_udp.View.check buf o in
+  let len = UInt16.to_int (G_udp.view_length u) in
+  if (not (G_udp.View.ok u)) || len > payload then base
+  else
+    udp_fields acc
+      ~sp:(UInt16.to_int (G_udp.view_src_port u))
+      ~dp:(UInt16.to_int (G_udp.view_dst_port u))
+      ~len
 
-let generated_packet acc buf o =
-  match G_eth.validate buf o with
-  | exception Parse_error _ -> acc
-  | () ->
-      let ty = UInt16.to_int (G_eth.get_ether_type buf o) in
-      if ty = ipv4 then
-        generated_ipv4 acc (acc + ty) buf (o + 14) ~avail:(slot - 14)
-      else acc + ty
+let[@inline] generated_ipv4 base acc buf o ~avail =
+  let ip = G_ipv4.View.check buf o in
+  let hlen = G_ipv4.view_ihl ip * 4
+  and len = UInt16.to_int (G_ipv4.view_total_length ip) in
+  if (not (G_ipv4.View.ok ip)) || len < hlen || len > avail then base
+  else
+    let proto = UInt8.to_int (G_ipv4.view_protocol ip) in
+    let acc =
+      ip_fields acc
+        ~src:(G_ipv4.view_src_addr_int ip)
+        ~dst:(G_ipv4.view_dst_addr_int ip)
+        ~ttl:(UInt8.to_int (G_ipv4.view_ttl ip))
+        ~proto ~len
+    in
+    let w = G_ipv4.view_flags_word ip in
+    if
+      G_ipv4.flags_of_word w land 1 <> 0
+      || G_ipv4.fragment_offset_of_word w <> 0
+    then acc
+    else
+      let payload = len - hlen in
+      match proto with
+      | 6 -> generated_tcp base acc buf (o + hlen) ~payload
+      | 17 -> generated_udp base acc buf (o + hlen) ~payload
+      | _ -> acc
+
+let[@inline] generated_packet acc buf o =
+  let e = G_eth.View.check buf o in
+  if not (G_eth.View.ok e) then acc
+  else
+    let ty = UInt16.to_int (G_eth.view_ether_type e) in
+    if ty = ipv4 then
+      generated_ipv4 acc (acc + ty) buf (o + 14) ~avail:(slot - 14)
+    else acc + ty
 
 let generated buf =
   let acc = ref 0 in
@@ -347,23 +357,34 @@ let generated buf =
 let mask62 = (1 lsl 62) - 1
 let oxcaml = String.contains Sys.ocaml_version '+'
 
-let measure name buf runs f =
-  let packets = Bytes.length buf / slot in
-  let sum = f buf land mask62 in
-  let times =
-    Array.init runs (fun _ ->
-        let t = Unix.gettimeofday () in
-        ignore (Sys.opaque_identity (f (Sys.opaque_identity buf)));
-        (Unix.gettimeofday () -. t) *. 1e9 /. float packets)
-  in
-  Array.sort compare times;
-  let compiler =
-    if oxcaml then "OxCaml " ^ Sys.ocaml_version
-    else "OCaml " ^ Sys.ocaml_version
-  in
-  Fmt.pr "RESULT\t%s (%s)\t%.2f\t%.2f\t%d@." name compiler times.(0)
-    times.(runs / 2)
-    sum
+(* One warm-up pass, then [runs] timed passes; prints the best, the median and
+   the 10th and 90th percentiles per packet. Only rows whose name contains
+   [filter] run, so a process can be measured whole (instructions, cycles) for
+   one row. cargo/src/main.rs does exactly the same. *)
+let contains ~sub s =
+  let n = String.length sub and m = String.length s in
+  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
+  go 0
+
+let measure ~filter name buf runs f =
+  if contains ~sub:filter name then begin
+    let packets = Bytes.length buf / slot in
+    let sum = f buf land mask62 in
+    let times =
+      Array.init runs (fun _ ->
+          let t = Unix.gettimeofday () in
+          ignore (Sys.opaque_identity (f (Sys.opaque_identity buf)));
+          (Unix.gettimeofday () -. t) *. 1e9 /. float packets)
+    in
+    Array.sort compare times;
+    let pct p = times.((runs - 1) * p / 100) in
+    let compiler =
+      if oxcaml then "OxCaml " ^ Sys.ocaml_version
+      else "OCaml " ^ Sys.ocaml_version
+    in
+    Fmt.pr "RESULT\t%s (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%d@." name compiler
+      times.(0) (pct 50) (pct 10) (pct 90) sum
+  end
 
 let results files =
   List.concat_map
@@ -371,8 +392,14 @@ let results files =
       In_channel.with_open_text file In_channel.input_lines
       |> List.filter_map (fun l ->
           match String.split_on_char '\t' l with
-          | [ "RESULT"; name; best; median; sum ] ->
-              Some (name, float_of_string best, float_of_string median, sum)
+          | [ "RESULT"; name; best; median; p10; p90; sum ] ->
+              Some
+                ( name,
+                  float_of_string best,
+                  ( float_of_string median,
+                    float_of_string p10,
+                    float_of_string p90 ),
+                  sum )
           | _ -> None))
     files
 
@@ -382,13 +409,13 @@ let report files =
     List.fold_left (fun m (_, best, _, _) -> Float.min m best) infinity rs
   in
   let sums = List.sort_uniq compare (List.map (fun (_, _, _, s) -> s) rs) in
-  Fmt.pr "%-58s %9s %9s %9s %9s@." "Implementation" "best" "median" "Mpkt/s"
-    "vs best";
-  Fmt.pr "%-58s %9s %9s@." "" "ns/pkt" "ns/pkt";
-  Fmt.pr "%s@." (String.make 98 '-');
+  Fmt.pr "%-58s %8s %8s %8s %8s %8s@." "Implementation" "best" "p10" "median"
+    "p90" "vs best";
+  Fmt.pr "%-58s %8s %8s %8s %8s@." "" "ns/pkt" "ns/pkt" "ns/pkt" "ns/pkt";
+  Fmt.pr "%s@." (String.make 104 '-');
   List.iter
-    (fun (name, best, median, _) ->
-      Fmt.pr "%-58s %9.2f %9.2f %9.1f %8.2fx@." name best median (1e3 /. best)
+    (fun (name, best, (median, p10, p90), _) ->
+      Fmt.pr "%-58s %8.2f %8.2f %8.2f %8.2f %7.2fx@." name best p10 median p90
         (best /. fastest))
     (List.sort (fun (_, a, _, _) (_, b, _, _) -> compare a b) rs);
   match sums with
@@ -402,14 +429,17 @@ let report files =
 let () =
   match Array.to_list Sys.argv with
   | [ _; "corpus"; file; n ] -> corpus file (int_of_string n)
-  | [ _; "run"; file; runs ] ->
+  | _ :: "run" :: file :: runs :: rest ->
       let buf = read_file file and runs = int_of_string runs in
+      let filter = match rest with [ f ] -> f | _ -> "" in
+      let measure = measure ~filter in
       measure "Wire.Codec valid/read" buf runs codec;
       (* dune generates for the OxCaml target on an OxCaml compiler. *)
       let target = if oxcaml then ", OxCaml target" else "" in
-      measure ("wire.ocaml validate/get" ^ target) buf runs generated
+      measure ("wire.ocaml View.check/view" ^ target) buf runs generated
   | _ :: "report" :: files -> report files
   | _ ->
       prerr_endline
-        "usage: bench.exe (corpus FILE N | run FILE RUNS | report FILE...)";
+        "usage: bench.exe (corpus FILE N | run FILE RUNS [FILTER] | report \
+         FILE...)";
       exit 2

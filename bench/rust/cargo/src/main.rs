@@ -1,7 +1,7 @@
 //! Reads the fields of every Ethernet/IPv4/TCP-or-UDP header in a corpus of
-//! packets, three ways: through the Rust that `Wire_rust` generates from the
-//! Wire codecs of `bench/rust/headers.ml`, through `etherparse` and through
-//! `smoltcp::wire`. Each does the work `etherparse::SlicedPacket` does, as
+//! packets, four ways: through the Rust that `Wire_rust` generates from the
+//! Wire codecs of `bench/rust/headers.ml`, through `etherparse`, through
+//! `smoltcp::wire` and through `pnet_packet`. Each does the work `etherparse::SlicedPacket` does, as
 //! `bench/rust/bench.ml` describes: the IPv4 payload bounded by the total
 //! length, no transport header read from a fragment, the TCP header length or
 //! UDP length bounded by the payload. A packet counts only when every header
@@ -9,9 +9,10 @@
 //! EtherType. Each reads the same fields and folds them the same way, so
 //! every implementation, OCaml ones included, must print the same checksum.
 //!
-//! Usage: `wire-bench-rust CORPUS SLOT RUNS`, printing one
-//! `RESULT <name> <best ns/packet> <median ns/packet> <checksum>` line per
-//! implementation, over RUNS timed passes.
+//! Usage: `wire-bench-rust CORPUS SLOT RUNS [FILTER]`, printing one
+//! `RESULT <name> <best> <median> <p10> <p90> <checksum>` line (ns/packet)
+//! per implementation, over RUNS timed passes; an optional FILTER runs only
+//! the rows whose name contains it.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -177,7 +178,71 @@ fn smoltcp(corpus: &[u8], slot: usize) -> u64 {
     acc
 }
 
-fn measure(name: &str, corpus: &[u8], slot: usize, runs: usize, f: fn(&[u8], usize) -> u64) {
+// pnet_packet: the `#[packet]` derive generates an accessor per field over a
+// slice whose length `new` checks against the header's minimum. Like smoltcp,
+// it leaves the version, header-length and total-length checks to the caller,
+// which makes the same ones etherparse makes; the TCP NS flag is the low bit
+// of its `reserved` field.
+fn pnet(corpus: &[u8], slot: usize) -> u64 {
+    use pnet_packet::ethernet::EthernetPacket;
+    use pnet_packet::ipv4::Ipv4Packet;
+    use pnet_packet::tcp::TcpPacket;
+    use pnet_packet::udp::UdpPacket;
+    use pnet_packet::Packet;
+    let mut acc = 0u64;
+    for p in corpus.chunks_exact(slot) {
+        let Some(e) = EthernetPacket::new(p) else { continue };
+        let ty = e.get_ethertype().0;
+        if ty != IPV4 {
+            acc = acc.wrapping_add(ty as u64);
+            continue;
+        }
+        let body = e.payload();
+        let Some(ip) = Ipv4Packet::new(body) else { continue };
+        let hlen = ip.get_header_length() as usize * 4;
+        let len = ip.get_total_length() as usize;
+        if ip.get_version() != 4 || hlen < 20 || len < hlen || len > body.len() {
+            continue;
+        }
+        let proto = ip.get_next_level_protocol().0;
+        let a = ip_fields(acc.wrapping_add(ty as u64), u32::from(ip.get_source()), u32::from(ip.get_destination()), ip.get_ttl(), proto, ip.get_total_length());
+        if ip.get_flags() & 1 != 0 || ip.get_fragment_offset() != 0 {
+            acc = a;
+            continue;
+        }
+        let l4 = &body[hlen..len];
+        match proto {
+            6 => {
+                let Some(t) = TcpPacket::new(l4) else { continue };
+                let off = t.get_data_offset();
+                if off < 5 || off as usize * 4 > l4.len() {
+                    continue;
+                }
+                let flags = ((t.get_reserved() as u16 & 1) << 8) | t.get_flags() as u16;
+                acc = tcp_fields(a, t.get_source(), t.get_destination(), t.get_sequence(), t.get_acknowledgement(), t.get_window(), flags, off);
+            }
+            17 => {
+                let Some(u) = UdpPacket::new(l4) else { continue };
+                let ulen = u.get_length();
+                if ulen < 8 || ulen as usize > l4.len() {
+                    continue;
+                }
+                acc = udp_fields(a, u.get_source(), u.get_destination(), ulen);
+            }
+            _ => acc = a,
+        }
+    }
+    acc
+}
+
+// One warm-up pass, then RUNS timed passes; prints the best, the median and
+// the 10th and 90th percentiles per packet. Only rows whose name contains
+// FILTER run, so a process can be measured whole (instructions, cycles) for
+// one row. The OCaml harness (bench.ml) does exactly the same.
+fn measure(name: &str, filter: &str, corpus: &[u8], slot: usize, runs: usize, f: fn(&[u8], usize) -> u64) {
+    if !name.contains(filter) {
+        return;
+    }
     let packets = corpus.len() / slot;
     let sum = f(black_box(corpus), slot);
     let mut times: Vec<f64> = (0..runs)
@@ -188,7 +253,16 @@ fn measure(name: &str, corpus: &[u8], slot: usize, runs: usize, f: fn(&[u8], usi
         })
         .collect();
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    println!("RESULT\t{}\t{:.2}\t{:.2}\t{}", name, times[0], times[runs / 2], sum & ((1 << 62) - 1));
+    let pct = |p: usize| times[(runs - 1) * p / 100];
+    println!(
+        "RESULT\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}",
+        name,
+        times[0],
+        pct(50),
+        pct(10),
+        pct(90),
+        sum & ((1 << 62) - 1)
+    );
 }
 
 fn main() {
@@ -196,7 +270,9 @@ fn main() {
     let corpus = std::fs::read(&args[1]).expect("corpus");
     let slot: usize = args[2].parse().expect("slot");
     let runs: usize = args[3].parse().expect("runs");
-    measure("wire.rust", &corpus, slot, runs, wire_rust);
-    measure("etherparse 0.21", &corpus, slot, runs, etherparse);
-    measure("smoltcp 0.14", &corpus, slot, runs, smoltcp);
+    let filter = args.get(4).map(String::as_str).unwrap_or("");
+    measure("wire.rust", filter, &corpus, slot, runs, wire_rust);
+    measure("etherparse 0.21", filter, &corpus, slot, runs, etherparse);
+    measure("smoltcp 0.14", filter, &corpus, slot, runs, smoltcp);
+    measure("pnet_packet 0.35", filter, &corpus, slot, runs, pnet);
 }
