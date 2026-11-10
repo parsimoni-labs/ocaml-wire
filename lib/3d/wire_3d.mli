@@ -301,10 +301,11 @@ val generate_agree :
 (** [generate_agree ?name ~outdir ~package codecs] writes [agree.c] into
     [outdir]: a C program that replays a {!generate_corpus} corpus through the
     EverParse-generated validators and exits nonzero on any input where the
-    validator's accept/reject decision differs from the recorded verdict. It
-    reads the [<Name>CheckWire<Codec>] helper names from the generated
-    [<Name>Wrapper.h], so {!generate_standalone} (or [3d.exe]) must have run
-    first. *)
+    validator's accept/reject decision differs from the recorded verdict. A
+    [<hex>] that is not an even number of hex digits, in either case, stops it
+    with ["bad hex"] and exit code 2. It reads the [<Name>CheckWire<Codec>]
+    helper names from the generated [<Name>Wrapper.h], so {!generate_standalone}
+    (or [3d.exe]) must have run first. *)
 
 val main :
   ?name:string ->

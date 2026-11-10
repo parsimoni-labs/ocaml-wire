@@ -582,28 +582,45 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
-let differential_ok ~name ~package ~corpus codecs =
+(* Build the package's validator and [agree] once, then pass [f] a function that
+   runs [agree] on a corpus and returns its exit status and output. *)
+let with_agree ~name ~package codecs f =
   let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
-  Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
-  let oc = open_out (Filename.concat tmpdir "corpus") in
-  (match corpus with
-  | `Fuzz count ->
-      let ppf = Format.formatter_of_out_channel oc in
-      Wire_3d.generate_corpus ~count ppf codecs
-  | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
-  close_out oc;
-  let base = String.capitalize_ascii name in
-  let cmd =
-    Fmt.str
-      "cd %s && cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o \
-       && cc %s %s agree.c lib.a -o agree && ./agree corpus 2>&1"
-      tmpdir Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base
-      base base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+  Fun.protect
+    ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir))
+    (fun () ->
+      Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
+      let sh cmd =
+        let ic = Unix.open_process_in (Fmt.str "cd %s && %s 2>&1" tmpdir cmd) in
+        let output = In_channel.input_all ic in
+        (Unix.close_process_in ic, output)
+      in
+      let base = String.capitalize_ascii name in
+      let run corpus =
+        let oc = open_out (Filename.concat tmpdir "corpus") in
+        (match corpus with
+        | `Fuzz count ->
+            let ppf = Format.formatter_of_out_channel oc in
+            Wire_3d.generate_corpus ~count ppf codecs
+        | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
+        close_out oc;
+        sh "./agree corpus"
+      in
+      match
+        Fmt.kstr sh
+          "cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o && cc \
+           %s %s agree.c lib.a -o agree"
+          Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base base
+          base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+      with
+      | Unix.WEXITED 0, _ -> f run
+      | _, output ->
+          Alcotest.failf "agree for %s does not build:\n%s" name output)
+
+let differential_ok ~name ~package ~corpus codecs =
+  let status, output =
+    with_agree ~name ~package codecs (fun run -> run corpus)
   in
-  let ic = Unix.open_process_in cmd in
-  let output = In_channel.input_all ic in
-  let status = Unix.close_process_in ic in
-  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   match status with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED n ->
@@ -985,6 +1002,39 @@ let test_doc_differential_trailing_bytes () =
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
+
+(* agree.c decodes the corpus hex itself. Both cases of a digit decode alike:
+   RangeMsg accepts n < 100, so a mis-decoded [A] or [F] in the first byte flips
+   the verdict. A non-hex character or an odd digit count refuses the corpus
+   with exit 2 instead of feeding a wrong byte to the validator. *)
+let test_doc_differential_hex () =
+  needs_3d_exe ();
+  with_agree ~name:"hexspec" ~package:"hex-doc"
+    [ Wire_3d.pack diff_range_codec ]
+    (fun run ->
+      (match
+         run
+           (`Lines
+              [
+                "RangeMsg - 5f00 1";
+                "RangeMsg - 5F00 1";
+                "RangeMsg - 6a00 0";
+                "RangeMsg - 6A00 0";
+                "RangeMsg - 63fF 1";
+                "RangeMsg - 64Ab 0";
+              ])
+       with
+      | Unix.WEXITED 0, _ -> ()
+      | _, output -> Alcotest.failf "mixed-case hex disagrees:\n%s" output);
+      List.iter
+        (fun hex ->
+          match run (`Lines [ "RangeMsg - " ^ hex ^ " 1" ]) with
+          | Unix.WEXITED 2, output
+            when Re.execp (Re.compile (Re.str "bad hex")) output ->
+              ()
+          | _, output ->
+              Alcotest.failf "agree did not refuse hex %S:\n%s" hex output)
+        [ "0g01"; "G001"; "010"; "+101" ])
 
 (* EverParse renamed the wrapper's status local between releases ([result] up
    to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
@@ -2041,6 +2091,8 @@ let suite =
         test_doc_differential_caps_name;
       Alcotest.test_case "doc differential trailing bytes (needs 3d.exe)" `Quick
         test_doc_differential_trailing_bytes;
+      Alcotest.test_case "doc differential hex decode (needs 3d.exe)" `Quick
+        test_doc_differential_hex;
       Alcotest.test_case "extern names across a wrapped declaration" `Quick
         test_extern_names_wrapped;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
