@@ -1445,8 +1445,53 @@ let emit_agree_run ppf triples =
   pr "  exit(3);";
   pr "}"
 
+let hex_nibble = function
+  | '0' .. '9' as c -> Char.code c - Char.code '0'
+  | 'a' .. 'f' as c -> Char.code c - Char.code 'a' + 10
+  | 'A' .. 'F' as c -> Char.code c - Char.code 'A' + 10
+  | _ -> -1
+
+(* The corpus carries each byte as two hex digits. [hex_nibble] maps every
+   character to its digit value, -1 for a non-hex one, so the decode is two
+   table reads a byte. *)
+let emit_agree_nibbles ppf =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "";
+  pr "static const signed char hex_nibble[256] = {";
+  for row = 0 to 15 do
+    List.init 16 (fun col ->
+        string_of_int (hex_nibble (Char.chr ((16 * row) + col))))
+    |> String.concat ", " |> pr "  %s,"
+  done;
+  pr "};"
+
+(* The body of the loop up to the validator call: [hex] decoded into [buf],
+   two table lookups a byte. *)
+let emit_agree_decode ppf =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "    uint32_t len = 0;";
+  pr "    if (strcmp(hex, \"-\") != 0) {";
+  pr "      size_t hl = strlen(hex);";
+  pr
+    "      if (hl %% 2 != 0) { fprintf(stderr, \"bad hex\\n\"); fclose(fp); \
+     return 2; }";
+  pr "      len = (uint32_t) (hl / 2);";
+  pr
+    "      if (len > sizeof(buf)) { fprintf(stderr, \"input too long\\n\"); \
+     fclose(fp); return 2; }";
+  pr "      for (uint32_t i = 0; i < len; i++) {";
+  pr "        int hi = hex_nibble[(unsigned char) hex[2 * i]];";
+  pr "        int lo = hex_nibble[(unsigned char) hex[2 * i + 1]];";
+  pr
+    "        if (hi < 0 || lo < 0) { fprintf(stderr, \"bad hex\\n\"); \
+     fclose(fp); return 2; }";
+  pr "        buf[i] = (uint8_t) ((hi << 4) | lo);";
+  pr "      }";
+  pr "    }"
+
 let emit_agree_main ppf =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  emit_agree_nibbles ppf;
   pr "";
   pr "int main(int argc, char **argv) {";
   pr
@@ -1464,21 +1509,7 @@ let emit_agree_main ppf =
   pr
     "  while (fscanf(fp, \"%%255s %%4095s %%131072s %%ld\", name, params, hex, \
      &verdict) == 4) {";
-  pr "    uint32_t len = 0;";
-  pr "    if (strcmp(hex, \"-\") != 0) {";
-  pr "      size_t hl = strlen(hex);";
-  pr "      len = (uint32_t) (hl / 2);";
-  pr
-    "      if (len > sizeof(buf)) { fprintf(stderr, \"input too long\\n\"); \
-     fclose(fp); return 2; }";
-  pr "      for (uint32_t i = 0; i < len; i++) {";
-  pr "        unsigned b;";
-  pr
-    "        if (sscanf(hex + 2 * i, \"%%2x\", &b) != 1) { fprintf(stderr, \
-     \"bad hex\\n\"); fclose(fp); return 2; }";
-  pr "        buf[i] = (uint8_t) b;";
-  pr "      }";
-  pr "    }";
+  emit_agree_decode ppf;
   pr "    int accept = run(name, params, buf, len);";
   pr "    total++;";
   pr "    if (accept != (int) verdict) {";
