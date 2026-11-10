@@ -481,8 +481,27 @@ let check_field_reach () =
        registry entries out of %d"
       readable writable multi (List.length registry)
 
+(* A check with no random input. Alcobar runs a case's body on every
+   iteration, each under its per-iteration timeout, so such a check only
+   repeated itself, and a slow one could cross the timeout on a slow runner:
+   the sampler checks build hundreds of codecs. Run it once, when the suite is
+   built, and let the case report that outcome. AFL runs keep the plain body. *)
 let const_case name check =
-  Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
+  let outcome =
+    if afl_mode () then None
+    else
+      Some
+        (match check () with
+        | () -> Ok ()
+        | exception e -> Error (e, Printexc.get_raw_backtrace ()))
+  in
+  Alcobar.test_case name
+    Alcobar.[ Alcobar.const () ]
+    (fun () ->
+      match outcome with
+      | None -> check ()
+      | Some (Ok ()) -> ()
+      | Some (Error (e, bt)) -> Printexc.raise_with_backtrace e bt)
 
 let invariant_cases label =
   [
