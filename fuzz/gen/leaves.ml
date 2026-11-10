@@ -774,11 +774,15 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     (* The length prefix is the actual encoded items length, not the budget:
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
-    let items_bytes xs =
-      Wire.UInt16.v
-        (List.fold_left
-           (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
-           0 xs)
+    let items_bytes =
+      match Wire.Codec.wire_size_opt inner.codec with
+      | Some size -> fun xs -> Wire.UInt16.v (size * List.length xs)
+      | None ->
+          fun xs ->
+            Wire.UInt16.v
+              (List.fold_left
+                 (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+                 0 xs)
     in
     Wire.Codec.v name
       (fun _ xs -> xs)

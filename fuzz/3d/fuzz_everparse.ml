@@ -331,11 +331,17 @@ let c_compile_cases =
 let corpus_count = 24
 
 let bytes_of_hex h =
+  let nibble = function
+    | '0' .. '9' as c -> Char.code c - Char.code '0'
+    | 'a' .. 'f' as c -> Char.code c - Char.code 'a' + 10
+    | 'A' .. 'F' as c -> Char.code c - Char.code 'A' + 10
+    | c -> Fmt.invalid_arg "bytes_of_hex: %C is not a hex digit" c
+  in
   if String.equal h "-" then Bytes.empty
   else
     Bytes.init
       (String.length h / 2)
-      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub h (2 * i) 2)))
+      (fun i -> Char.chr ((nibble h.[2 * i] lsl 4) lor nibble h.[(2 * i) + 1]))
 
 (* [name params hex verdict] per line; [params] is "-" or comma separated. *)
 let corpus_lines codec =
@@ -358,6 +364,35 @@ let input_params codec =
   match (Wire.Everparse.project ~mode:`Standalone codec).source with
   | Some source -> Wire.Everparse.Raw.input_param_names source
   | None -> []
+
+(* A registry codec's corpus and input parameters, computed once, when its
+   corpus cases are built, and shared by them. [Wire_3d.generate_corpus] draws
+   from a fixed seed, so the corpus is the same on every iteration; generating
+   it inside one spent Alcobar's per-iteration timeout, which a slow runner
+   crossed. *)
+let corpora = Hashtbl.create 64
+
+let corpus label codec =
+  match Hashtbl.find_opt corpora label with
+  | Some c -> c
+  | None ->
+      let c =
+        match corpus_lines codec with
+        | exception Failure msg -> Error msg
+        | lines -> Ok (input_params codec, Array.of_list lines)
+      in
+      Hashtbl.add corpora label c;
+      c
+
+(* The corpus cases check one line per iteration, the next one each time, so an
+   iteration costs one input instead of the whole corpus. A line can hold a 64
+   KiB repeat, and replaying all [corpus_count] lines of such a codec in one
+   iteration came close to Alcobar's per-iteration timeout on a slow runner. The
+   time budget still runs the cursor over every line many times. *)
+let next_line cursor lines =
+  let line = lines.(!cursor mod Array.length lines) in
+  incr cursor;
+  line
 
 let env_of codec pnames pvals =
   match pnames with
@@ -404,31 +439,31 @@ let no_corpus_seed =
 
 let corpus_oracle_case (label, Fuzz_gen.Pack g) =
   let codec = Fuzz_gen.codec g in
+  let corpus = corpus label codec in
+  let cursor = ref 0 in
   Alcobar.test_case ("corpus oracle " ^ label)
     [ const () ]
     (fun () ->
-      match corpus_lines codec with
-      | exception Failure msg ->
+      match corpus with
+      | Error msg ->
           if not (List.mem label no_corpus_seed) then
             Alcobar.failf "%s: generate_corpus refused a corpus: %s" label msg
-      | lines ->
+      | Ok (pnames, lines) ->
           if List.mem label no_corpus_seed then
             Alcobar.failf "%s: is seedable now; drop it from [no_corpus_seed]"
               label;
-          let pnames = input_params codec in
-          List.iter
-            (fun (pvals, hex, verdict) ->
-              let env = env_of codec pnames pvals in
-              let b = bytes_of_hex hex in
-              let spans = record_spans codec env b in
-              if not (Bool.equal spans verdict) then
-                Alcobar.failf
-                  "%s: corpus records %b for params [%s] %s, the codec answers \
-                   %b"
-                  label verdict
-                  (String.concat "," (List.map string_of_int pvals))
-                  hex spans)
-            lines)
+          if Array.length lines > 0 then begin
+            let pvals, hex, verdict = next_line cursor lines in
+            let env = env_of codec pnames pvals in
+            let b = bytes_of_hex hex in
+            let spans = record_spans codec env b in
+            if not (Bool.equal spans verdict) then
+              Alcobar.failf
+                "%s: corpus records %b for params [%s] %s, the codec answers %b"
+                label verdict
+                (String.concat "," (List.map string_of_int pvals))
+                hex spans
+          end)
 
 (* {1 What a corpus line carries beyond its verdict}
 
@@ -506,28 +541,26 @@ let rejection_is_attributed codec env b =
 
 let corpus_property_case (label, Fuzz_gen.Pack g) =
   let codec = Fuzz_gen.codec g in
+  let corpus = corpus label codec in
+  let cursor = ref 0 in
   Alcobar.test_case
     ("corpus properties " ^ label)
     [ const () ]
     (fun () ->
-      match corpus_lines codec with
-      | exception Failure _ -> ()
-      | lines ->
-          let pnames = input_params codec in
-          List.iter
-            (fun (pvals, hex, verdict) ->
-              let env = env_of codec pnames pvals in
-              let b = bytes_of_hex hex in
-              let checks =
-                if verdict then [ accepted_agrees g codec env b ]
-                else [ rejection_is_attributed codec env b ]
-              in
-              List.iter
-                (function
-                  | None -> ()
-                  | Some msg -> Alcobar.failf "%s: %s (on %s)" label msg hex)
-                checks)
-            lines)
+      match corpus with
+      | Error _ -> ()
+      | Ok (_, [||]) -> ()
+      | Ok (pnames, lines) -> (
+          let pvals, hex, verdict = next_line cursor lines in
+          let env = env_of codec pnames pvals in
+          let b = bytes_of_hex hex in
+          let check =
+            if verdict then accepted_agrees g codec env b
+            else rejection_is_attributed codec env b
+          in
+          match check with
+          | None -> ()
+          | Some msg -> Alcobar.failf "%s: %s (on %s)" label msg hex))
 
 let corpus_property_cases () =
   if not (normal_mode ()) then []
