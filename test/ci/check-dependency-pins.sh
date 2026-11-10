@@ -84,41 +84,60 @@ if [[ -f "$manifest" ]]; then
   fi
 fi
 
+# SHA-256 of a file, through whichever tool the system has: sha256sum
+# (GNU), shasum (macOS), sha256 (OpenBSD, FreeBSD) or openssl.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1"
+  elif command -v sha256 >/dev/null 2>&1; then
+    sha256 -q "$1"
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$1"
+  else
+    echo "no SHA-256 tool: need sha256sum, shasum, sha256 or openssl" >&2
+    return 1
+  fi
+}
+
 if [[ -f "$installer" ]]; then
   grep -q -- '--fail' "$installer" || fail "archive installer omits curl --fail"
   grep -q -- '--location' "$installer" || fail "archive installer omits redirect handling"
   grep -q 'sha256sum' "$installer" || fail "archive installer omits SHA-256 verification"
 
-  scratch=$(mktemp -d "${TMPDIR:-/tmp}/wire-ci-policy.XXXXXX")
-  trap 'rm -rf -- "$scratch"' EXIT
-  mkdir -p "$scratch/source"
-  printf 'verified\n' > "$scratch/source/payload"
-  tar czf "$scratch/fixture.tar.gz" -C "$scratch/source" payload
-  if command -v sha256sum >/dev/null 2>&1; then
-    fixture_sha=$(sha256sum "$scratch/fixture.tar.gz")
+  # The installer fetches with curl, which not every system ships (OpenBSD
+  # has none in base); without it only the static checks above apply.
+  if command -v curl >/dev/null 2>&1; then
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/wire-ci-policy.XXXXXX")
+    trap 'rm -rf -- "$scratch"' EXIT
+    mkdir -p "$scratch/source"
+    printf 'verified\n' > "$scratch/source/payload"
+    tar czf "$scratch/fixture.tar.gz" -C "$scratch/source" payload
+    fixture_sha=$(sha256_of "$scratch/fixture.tar.gz")
+    fixture_sha=${fixture_sha%% *}
+    if [[ ${fixture_sha:0:1} == 0 ]]; then
+      wrong_sha=1${fixture_sha:1}
+    else
+      wrong_sha=0${fixture_sha:1}
+    fi
+    if bash "$installer" "file://$scratch/fixture.tar.gz" \
+      "$wrong_sha" "$scratch/rejected" >/dev/null 2>&1; then
+      fail "archive installer accepts a wrong digest"
+    fi
+    if [[ -e "$scratch/rejected/payload" ]]; then
+      fail "archive installer extracts before checking the digest"
+    fi
+    if ! bash "$installer" "file://$scratch/fixture.tar.gz" \
+      "$fixture_sha" "$scratch/accepted" >/dev/null 2>&1; then
+      fail "archive installer rejects the correct digest"
+    elif [[ ! -f "$scratch/accepted/payload" ]]; then
+      fail "archive installer did not extract the verified payload"
+    elif [[ $(< "$scratch/accepted/payload") != verified ]]; then
+      fail "archive installer did not extract the verified payload"
+    fi
   else
-    fixture_sha=$(shasum -a 256 "$scratch/fixture.tar.gz")
-  fi
-  fixture_sha=${fixture_sha%% *}
-  if [[ ${fixture_sha:0:1} == 0 ]]; then
-    wrong_sha=1${fixture_sha:1}
-  else
-    wrong_sha=0${fixture_sha:1}
-  fi
-  if bash "$installer" "file://$scratch/fixture.tar.gz" \
-    "$wrong_sha" "$scratch/rejected" >/dev/null 2>&1; then
-    fail "archive installer accepts a wrong digest"
-  fi
-  if [[ -e "$scratch/rejected/payload" ]]; then
-    fail "archive installer extracts before checking the digest"
-  fi
-  if ! bash "$installer" "file://$scratch/fixture.tar.gz" \
-    "$fixture_sha" "$scratch/accepted" >/dev/null 2>&1; then
-    fail "archive installer rejects the correct digest"
-  elif [[ ! -f "$scratch/accepted/payload" ]]; then
-    fail "archive installer did not extract the verified payload"
-  elif [[ $(< "$scratch/accepted/payload") != verified ]]; then
-    fail "archive installer did not extract the verified payload"
+    echo "check-dependency-pins: no curl, not running the archive installer" >&2
   fi
 fi
 
