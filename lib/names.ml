@@ -153,6 +153,64 @@ let is_identifier name =
   let tail c = start c || match c with '0' .. '9' -> true | _ -> false in
   name <> "" && start name.[0] && String.for_all tail name
 
+let rust_keywords =
+  [
+    (* Strict keywords, then the ones reserved for future use (2018 and 2024
+       editions). *)
+    "as";
+    "async";
+    "await";
+    "break";
+    "const";
+    "continue";
+    "crate";
+    "dyn";
+    "else";
+    "enum";
+    "extern";
+    "false";
+    "fn";
+    "for";
+    "gen";
+    "if";
+    "impl";
+    "in";
+    "let";
+    "loop";
+    "match";
+    "mod";
+    "move";
+    "mut";
+    "pub";
+    "ref";
+    "return";
+    "self";
+    "Self";
+    "static";
+    "struct";
+    "super";
+    "trait";
+    "true";
+    "try";
+    "type";
+    "unsafe";
+    "use";
+    "where";
+    "while";
+    "abstract";
+    "become";
+    "box";
+    "do";
+    "final";
+    "macro";
+    "override";
+    "priv";
+    "typeof";
+    "unsized";
+    "virtual";
+    "yield";
+  ]
+
 let escape keywords name = if List.mem name keywords then name ^ "_" else name
 
 let ocaml_label ?(oxcaml = true) name =
@@ -180,3 +238,15 @@ let clash idents =
           Hashtbl.add seen id source;
           None)
     idents
+
+let rust_ident name =
+  let l =
+    String.map
+      (function
+        | ('a' .. 'z' | '0' .. '9' | '_') as c -> c
+        | 'A' .. 'Z' as c -> Char.lowercase_ascii c
+        | _ -> '_')
+      name
+  in
+  if l = "" || l = "_" || (l.[0] >= '0' && l.[0] <= '9') then "f_" ^ l
+  else escape rust_keywords l
