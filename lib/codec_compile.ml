@@ -849,11 +849,13 @@ let var_bytes_reader : type a.
       let first = base + fo in
       (* The region hands its value [sz] bytes and no more, so the walk that
          sizes it stops there: a length field the data puts past the region is
-         missing, not read from whatever follows. *)
-      let region_end = Input_end.narrow input_end (first + sz) in
-      let consumed = elem_size_of elem runtime region_end buf first in
-      if consumed > sz || ((not at_most) && consumed <> sz) then
-        raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+         missing, not read from whatever follows. Bytes a check pass accepted
+         had that walk there ([container_populate]), so their read skips it. *)
+      (if not (Types.is_checked runtime) then
+         let region_end = Input_end.narrow input_end (first + sz) in
+         let consumed = elem_size_of elem runtime region_end buf first in
+         if consumed > sz || ((not at_most) && consumed <> sz) then
+           raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed);
       read_elem elem runtime input_end buf first
   | _ -> assert false
 
