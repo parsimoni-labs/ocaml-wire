@@ -301,9 +301,17 @@ let test_name_single () =
     (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
 
 let test_validator_name () =
-  Alcotest.(check string)
-    "Wire-prefixed validator" "ClcwValidateWireClcw"
-    (Wire_stubs.validator_name "CLCW")
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string) name expected (Wire_stubs.validator_name name))
+    [
+      ("CLCW", "ClcwValidateWireClcw");
+      ("Foo2Bar", "Foo2barValidateWireFoo2bar");
+      ("myField", "MyFieldValidateWiremyField");
+      ("type", "TypeValidateWiretype");
+      ( "ScanBitGuardsU16BEMsb",
+        "ScanBitGuardsU16bemsbValidateWireScanBitGuardsU16bemsb" );
+    ]
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
@@ -378,28 +386,35 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
     Fmt.kstr run "%s %s" run_env (Filename.concat dir "test_e2e")
   end
 
+(* [Foo2Bar] and [myField] check the C names the stubs call against the ones
+   EverParse emits: a capital after a digit, and a lower-case first letter. *)
 let test_e2e_no_params () =
-  let f_version = Wire.Field.v "version" uint8 in
-  let f_length = Wire.Field.v "length" uint16be in
-  let codec =
-    let open Wire.Codec in
-    v "TestHeader"
-      (fun version length -> (version, length))
-      [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
-    ~test_ml:
-      {|let () =
+  List.iter
+    (fun name ->
+      let f_version = Wire.Field.v "version" uint8 in
+      let f_length = Wire.Field.v "length" uint16be in
+      let codec =
+        let open Wire.Codec in
+        v name
+          (fun version length -> (version, length))
+          [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
+      in
+      let schema = Wire.Everparse.project ~mode:`Ffi codec in
+      let s = Wire.Everparse.Raw.struct_of_codec codec in
+      e2e ~name ~structs:[ s ] ~module_:schema.module_
+        ~test_ml:
+          (Fmt.str
+             {|let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  let r = Stubs.testheader_parse buf 0 in
+  let r = Stubs.%s_parse buf 0 in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
-    ()
+             (String.lowercase_ascii name))
+        ())
+    [ "TestHeader"; "Foo2Bar"; "myField" ]
 
 let test_e2e_offset_bounds () =
   let f_version = Wire.Field.v "version" uint8 in

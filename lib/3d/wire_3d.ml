@@ -3,55 +3,11 @@
 open Wire.Everparse
 open Proc
 
-let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
-
-(* Apply EverParse's normalization to a single identifier segment (no
-   underscores): every run of two or more consecutive uppercase letters keeps
-   its first letter and lowercases the rest, wherever it occurs in the segment
-   ([SSID -> Ssid], [TMFrame -> Tmframe], [SpaceOSFrame -> SpaceOsframe]); a lone
-   uppercase letter (a camelCase word boundary) is left alone. *)
-let normalize_segment seg =
-  let len = String.length seg in
-  let b = Buffer.create len in
-  let i = ref 0 in
-  while !i < len do
-    if is_upper seg.[!i] then begin
-      let j = ref !i in
-      while !j < len && is_upper seg.[!j] do
-        incr j
-      done;
-      Buffer.add_char b seg.[!i];
-      if !j - !i >= 2 then
-        for k = !i + 1 to !j - 1 do
-          Buffer.add_char b (Char.lowercase_ascii seg.[k])
-        done;
-      i := !j
-    end
-    else begin
-      Buffer.add_char b seg.[!i];
-      incr i
-    end
-  done;
-  Buffer.contents b
-
-(* EverParse strips underscores when generating a C identifier from a name and
-   joins the [_]-separated segments into CamelCase: each segment is capitalized
-   and any internal run of two or more uppercase letters collapses to one.
-   [Grpc_message -> GrpcMessage], [EP_Header -> EpHeader],
-   [MC_Status_Reply -> McStatusReply], [SSID -> Ssid]. wire writes the .3d file
-   and type with a capitalized name, so the leading segment is normally already
-   capitalized; capitalizing it here keeps the identifier matching EverParse even
-   for an otherwise lower-case name. *)
-let everparse_name name =
-  String.split_on_char '_' name
-  |> List.map (fun seg -> String.capitalize_ascii (normalize_segment seg))
-  |> String.concat ""
-
 (* EverParse's own identifier mangling, transcribed from [pascal_case] in
-   [src/3d/Target.fst]. It drops underscores and CamelCases, but unlike
-   {!everparse_name} it lowercases every character that follows an uppercase
-   letter *or a digit* until the next lower-case letter (a digit counts as
-   uppercase, since [uppercase '2' = '2']). So [TPM2B -> Tpm2b] and
+   [src/3d/Target.fst]. It drops underscores and CamelCases, lowercasing every
+   character that follows an uppercase letter *or a digit* until the next
+   lower-case letter (a digit counts as uppercase, since
+   [uppercase '2' = '2']). So [TPM2B -> Tpm2b] and
    [Foo2Bar -> Foo2bar], not [Tpm2B] / [Foo2Bar]. EverParse builds the wrapper
    symbol as [pascal_case (module ^ "_check_" ^ codec)], so this must match it
    exactly or the differential [agree.c] links against a symbol that does not
@@ -76,6 +32,11 @@ let pascal_case name =
       name;
     Buffer.contents b
   end
+
+(* EverParse mangles a declaration's name as one component of an
+   underscore-separated C identifier. The trailing [_] puts [pascal_case] in
+   that mode even for a name with no underscore of its own. *)
+let everparse_name name = pascal_case (String.capitalize_ascii name ^ "_")
 
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
@@ -105,11 +66,9 @@ let c_ident (s : t) = everparse_name s.name
    translation unit including both takes one schema's plug layout for the
    other's). The standalone pipeline already rejects a name collision in
    [Wire.Everparse.merge]; do the same for the per-schema pipeline, up front
-   and naming both codecs. Its remaining collapse, two codecs sharing one
-   [pascal_case] wrapper symbol ([TPM2B] and [Tpm2b]), is left to the C
-   compiler: the merged module puts both definitions in one translation unit,
-   so it fails loudly at build time rather than substituting one for the
-   other. *)
+   and naming both codecs. [c_ident] is [pascal_case], the mangling behind the
+   wrapper symbols too, so two codecs that would share one ([TPM2B] and
+   [Tpm2b]) are refused here as well. *)
 let check_name_collisions schemas =
   let check what key =
     let seen = Hashtbl.create 16 in
@@ -131,11 +90,9 @@ let check_name_collisions schemas =
 let extern_api_path ~outdir s =
   Filename.concat outdir (file_base s ^ "_ExternalAPI.h")
 
-(* EverParse normalizes extern callback names in ways that are awkward to
-   mirror exactly (runs of uppercase after a digit get lowercased, trailing
-   uppercase runs get lowercased, ...). Rather than re-implement EverParse's
-   rule and drift from it over time, we read the normalized names straight
-   out of the [_ExternalAPI.h] file EverParse has just generated.
+(* The extern callback names are read straight out of the [_ExternalAPI.h]
+   file EverParse has just generated rather than predicted with [pascal_case],
+   so the plug defines exactly what that header declares.
 
    KaRaMeL pretty-prints the declaration to a column budget, so a long enough
    schema name puts [extern void] and the name it introduces on separate lines.

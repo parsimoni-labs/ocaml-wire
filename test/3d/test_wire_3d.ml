@@ -54,12 +54,20 @@ let test_everparse_name () =
     "rpmsg_endpoint_info -> RpmsgEndpointInfo" "RpmsgEndpointInfo"
     (Wire_3d.everparse_name "rpmsg_endpoint_info");
   (* Empty string *)
-  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "")
+  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "");
+  (* A capital after a digit is lowercased, as EverParse does. *)
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string) name expected (Wire_3d.everparse_name name))
+    [
+      ("Foo2Bar", "Foo2bar");
+      ("TPM2B", "Tpm2b");
+      ("ScanBitGuardsU16BEMsb", "ScanBitGuardsU16bemsb");
+    ]
 
 (* [pascal_case] mirrors EverParse's wrapper-symbol mangling. EverParse builds a
    wrapper as [pascal_case (module ^ "_check_" ^ codec)]; these expectations were
-   read straight off EverParse's generated [<Module>Wrapper.h]. The digit cases
-   are the ones [everparse_name] gets wrong (it keeps the post-digit capital). *)
+   read straight off EverParse's generated [<Module>Wrapper.h]. *)
 let test_pascal_case () =
   let check input expected =
     Alcotest.(check string)
@@ -221,6 +229,8 @@ let test_name_collision () =
   rejects "same C identifier (plug)"
     (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
+  rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
+    [ "Foo2bar" ];
   (* Distinct names still generate. *)
   generate_3d [ schema_named "Alpha"; schema_named "Beta" ];
   Alcotest.(check bool)

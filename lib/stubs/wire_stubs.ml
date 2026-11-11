@@ -4,8 +4,10 @@ let ml_type_of = Wire.Private.ml_type_of
 let everparse_name = Wire_3d.everparse_name
 
 let validator_name name =
-  let ep = everparse_name name in
-  Fmt.str "%sValidateWire%s" ep ep
+  Wire_3d.pascal_case
+    (String.capitalize_ascii name
+    ^ "_validate_Wire"
+    ^ Wire.Private.Types.escape_3d name)
 
 let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
@@ -124,10 +126,10 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "/* EverParse headers + default <Name>_Fields plug */@\n";
   List.iteri
     (fun i (s : Wire.Everparse.Raw.struct_) ->
-      let name = Wire.Everparse.Raw.struct_name s in
+      let base = String.capitalize_ascii (Wire.Everparse.Raw.struct_name s) in
       if i = 0 then Fmt.pf ppf "#include \"EverParse.h\"@\n";
-      Fmt.pf ppf "#include \"%s_Fields.h\"@\n" name;
-      Fmt.pf ppf "#include \"%s.h\"@\n" name)
+      Fmt.pf ppf "#include \"%s_Fields.h\"@\n" base;
+      Fmt.pf ppf "#include \"%s.h\"@\n" base)
     structs;
   Fmt.pf ppf "@\n/* Stubs */@\n";
   List.iter (fun s -> pp_c_stub ppf s) structs;

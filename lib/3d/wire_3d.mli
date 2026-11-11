@@ -42,12 +42,12 @@
     the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
-(** [everparse_name name] returns the C identifier EverParse derives from a
-    struct name: underscores are stripped and the [_]-separated segments are
-    joined in CamelCase. Each segment is capitalized and any internal run of two
-    or more consecutive uppercase letters collapses to a single one. E.g.
-    [Grpc_message] becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW]
-    becomes [Clcw], and [TMFrame] becomes [Tmframe]. *)
+(** [everparse_name name] is the C identifier EverParse derives from a struct
+    name, by {!pascal_case}: underscores are stripped, each [_]-separated
+    segment is capitalized, and every letter that follows an uppercase letter or
+    a digit is lowercased until the next lower-case one. E.g. [Grpc_message]
+    becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW] becomes
+    [Clcw], [TMFrame] becomes [Tmframe] and [Foo2Bar] becomes [Foo2bar]. *)
 
 val pascal_case : string -> string
 (** [pascal_case s] is EverParse's own identifier mangling, transcribed from
