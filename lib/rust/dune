@@ -1,4 +1,4 @@
 (library
  (name wire_rust)
  (public_name wire.rust)
- (libraries wire fmt))
+ (libraries wire wire.ocaml fmt))

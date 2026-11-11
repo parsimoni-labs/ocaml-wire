@@ -314,3 +314,29 @@ let rec nested n =
       ("Nested" ^ string_of_int n)
       (fun _ _ _ -> ())
       Codec.[ tag_f; inner; after ]
+
+type shared = {
+  a : UInt8.t;
+  b : UInt8.t;
+  c : UInt8.t;
+  x : UInt8.t option;
+  y : UInt8.t option;
+  z : UInt8.t option;
+}
+
+let shared =
+  let a = Field.v "a" uint8 and b = Field.v "b" uint8 in
+  let c = Field.v "c" uint8 in
+  let is f v = Expr.(Field.ref f = int v) in
+  let opt name present = Field.optional name ~present uint8 in
+  Codec.v "Shared"
+    (fun a b c x y z -> { a; b; c; x; y; z })
+    Codec.
+      [
+        (a $ fun r -> r.a);
+        (b $ fun r -> r.b);
+        (c $ fun r -> r.c);
+        (opt "x" Expr.(is a 1 && is b 1) $ fun r -> r.x);
+        (opt "y" Expr.(is a 2 && is b 1) $ fun r -> r.y);
+        (opt "z" Expr.(is c 1 && is b 2) $ fun r -> r.z);
+      ]
