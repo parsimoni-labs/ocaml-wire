@@ -111,6 +111,9 @@ let[@inline never] invalid_tag ~at ~field tag =
 let[@inline never] where_clause ~at =
   fail ~at ~field:[] (Constraint_failed { which = Where; value = None })
 
+let[@inline never] relocate ~at ~field e =
+  raise (Parse_error { e with at; field })
+
 (* {1 Encoding} *)
 
 let[@inline never] encode_too_short ~name ~size ~len off =

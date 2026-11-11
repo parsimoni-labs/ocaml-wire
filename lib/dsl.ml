@@ -444,52 +444,22 @@ end
 
 (* Native-int arithmetic that reports overflow instead of wrapping: a constant
    folded to a value its expression does not denote would be worse than leaving
-   the expression symbolic. *)
-let[@inline] add_overflows a b sum = a lxor sum land (b lxor sum) < 0
-
-let[@inline] sub_overflows a b difference =
-  a lxor b land (a lxor difference) < 0
-
-let[@inline] mul_overflows a b product =
-  a <> 0 && ((a = -1 && b = min_int) || product / a <> b)
-
+   the expression symbolic. Generated code shares these with the codec. *)
 let const_add a b =
   let s = a + b in
-  if add_overflows a b s then None else Some s
+  if Arith.add_overflows a b s then None else Some s
 
 let const_sub a b =
   let d = a - b in
-  if sub_overflows a b d then None else Some d
+  if Arith.sub_overflows a b d then None else Some d
 
 let const_mul a b =
   let p = a * b in
-  if mul_overflows a b p then None else Some p
+  if Arith.mul_overflows a b p then None else Some p
 
-(* [Value_out_of_range] carries an [int64], but a product may overflow that as
-   well as the native int. The first value on the overflowing side is enough
-   to report the failed range check without wrapping its diagnostic too. *)
-let arithmetic_overflow ~positive =
-  let value =
-    if positive then Int64.succ (Int64.of_int max_int)
-    else Int64.pred (Int64.of_int min_int)
-  in
-  raise_out_of_range ~at:0 value
-
-let[@inline] checked_add a b =
-  let sum = a + b in
-  if add_overflows a b sum then arithmetic_overflow ~positive:(a >= 0) else sum
-
-let[@inline] checked_sub a b =
-  let difference = a - b in
-  if sub_overflows a b difference then arithmetic_overflow ~positive:(a >= 0)
-  else difference
-
-let[@inline] checked_mul a b =
-  let product = a * b in
-  if mul_overflows a b product then
-    arithmetic_overflow ~positive:(Bool.equal (a < 0) (b < 0))
-  else product
-
+let checked_add = Arith.checked_add
+let checked_sub = Arith.checked_sub
+let checked_mul = Arith.checked_mul
 let[@inline] checked_div a b = if b = 0 then raise_zero_divisor ~at:0 else a / b
 
 let[@inline] checked_mod a b =

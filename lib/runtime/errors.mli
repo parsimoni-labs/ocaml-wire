@@ -73,6 +73,10 @@ val invalid_tag : at:int -> field:string -> int -> 'a
 val where_clause : at:int -> 'a
 (** [where_clause ~at] raises a violated where clause of the record at [at]. *)
 
+val relocate : at:int -> field:string list -> parse_error -> 'a
+(** [relocate ~at ~field e] raises [e] as found at [at] in [field]: where a
+    codec reports an overflow in a field's constraint or a where clause. *)
+
 (** {1 Encoding}
 
     Each raises [Invalid_argument]. *)
