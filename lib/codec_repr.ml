@@ -8,9 +8,21 @@ type runtime = Types.eval_ctx
 
 let alloc_slots n = { ints = Array.make n 0; int64s = Array.make n 0L }
 
-let clear_slots s n =
-  Array.fill s.ints 0 n 0;
-  Array.fill s.int64s 0 n 0L
+(* A loop rather than [Array.fill]: a scratch holds a slot per field, and for
+   that few the C call costs more than the stores. The [int64s] half is
+   written only by a field with a full-width slot ([Types.has_int64_slot]), so
+   a record without one has nothing there to clear. *)
+let clear_ints s n =
+  for i = 0 to n - 1 do
+    s.ints.(i) <- 0
+  done
+
+let clear_slots ?(int64s = true) s n =
+  clear_ints s n;
+  if int64s then
+    for i = 0 to n - 1 do
+      s.int64s.(i) <- 0L
+    done
 
 (* Grow [table] until it has a cell for domain index [i]. The new array reuses
    the existing [Atomic.t] cells rather than their contents, so a domain writing

@@ -773,7 +773,7 @@ let used_steps used steps =
 
 (* Every slot is written before it is read when each step fills its own slot
    and nothing else lives in the array, so there is nothing to clear. *)
-let scratch_clear steps n_total =
+let scratch_clear ~int64s steps n_total =
   let own_slot = function
     | Slot _ | Range _ -> true
     | Check _ | Full _ | Covered _ -> false
@@ -781,7 +781,8 @@ let scratch_clear steps n_total =
   let n_own = List.length (List.filter own_slot steps) in
   let general = List.exists (function Full _ -> true | _ -> false) steps in
   if (not general) && n_own = n_total then fun _ -> ()
-  else fun arr -> clear_slots arr n_total
+  else if int64s then fun arr -> clear_slots arr n_total
+  else fun arr -> clear_ints arr n_total
 
 (* The check pass: the steps, then the [where] clause. *)
 let run_pass steps where arr runtime input_end buf off =
@@ -795,7 +796,12 @@ let build_validators ?used validators_rev checkers_rev compiled_where
     struct_fields param_slots n_total =
   let all_steps = List.map snd validators_rev in
   let steps = Array.of_list (used_steps used all_steps) in
-  let clear = scratch_clear all_steps n_total in
+  let int64s =
+    List.exists
+      (fun (Types.Field f) -> Types.has_int64_slot f.field_typ)
+      struct_fields
+  in
+  let clear = scratch_clear ~int64s all_steps n_total in
   let uses_arr = function
     | Range { store; _ } -> store
     | Slot _ | Check _ | Full _ | Covered _ -> true

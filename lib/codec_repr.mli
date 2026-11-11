@@ -17,8 +17,9 @@ type slots = { ints : int array; int64s : int64 array }
 type runtime = Types.eval_ctx
 (** The evaluation context an operation threads through its readers. *)
 
-val clear_slots : slots -> int -> unit
-(** [clear_slots s n] zeroes the first [n] slots of [s]. *)
+val clear_slots : ?int64s:bool -> slots -> int -> unit
+(** [clear_slots ?int64s s n] zeroes the first [n] slots of [s]; their [int64]
+    half only when [int64s], which defaults to [true]. *)
 
 val domain_local_slots : int -> unit -> slots
 (** [domain_local_slots n ()] is this domain's scratch of [n] slots. *)
@@ -421,3 +422,7 @@ val checked_runtime : Types.eval_ctx
 (** [checked_runtime] is the context of a read after the check pass, without
     parameters: a sub-codec read through it builds its record and leaves the
     checks to the pass that ran them. *)
+
+val clear_ints : slots -> int -> unit
+(** [clear_ints s n] zeroes the first [n] integer slots of [s], and leaves its
+    [int64] half alone. *)

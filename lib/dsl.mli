@@ -684,6 +684,12 @@ val int_view_is_total : 'a typ -> bool
 (** [int_view_is_total typ] is [true] when every value of [typ] fits the native
     int, so taking its integer view cannot fail and needs no relocation. *)
 
+val has_int64_slot : 'a typ -> bool
+(** [has_int64_slot typ] is [true] when a field of [typ] fills a full-width
+    int64 validation slot, which [Field.int64] references read: a 64-bit integer
+    or float, alone or under a where, map, enum or optional wrapper. Internal
+    use. *)
+
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
     [int] directly (no boxing on the numeric path) and raises {!Parse_error}

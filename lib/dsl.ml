@@ -698,6 +698,22 @@ let rec int_view_is_total : type a. a typ -> bool = function
   | Map { inner; _ } -> int_view_is_total inner
   | _ -> false
 
+let rec has_int64_slot : type a. a typ -> bool = function
+  | Uint64 _ | Int64 _ -> true
+  (* A float64's IEEE bit pattern is 64 bits wide; its predicates (is_finite,
+     is_nan) read it from the int64 slot so they stay exact on a narrow-int
+     platform. *)
+  | Float64 _ -> true
+  | Where { inner; _ } -> has_int64_slot inner
+  | Optional { inner; _ } -> has_int64_slot inner
+  | Optional_or { inner; _ } -> has_int64_slot inner
+  (* [build_populate] fills the int64 slot with the raw pre-map wire value
+     (via [encode]) and recurses [Enum] through its base, so a constraint over
+     the raw uint64 of a [map]-decoded or enum field is well defined. *)
+  | Map { inner; _ } -> has_int64_slot inner
+  | Enum { base; _ } -> has_int64_slot base
+  | _ -> false
+
 (* Hot-path variant of [int_of] for the cross-field size/offset/present
    readers, which need a plain [int]. Returns it directly (no [Some] box on the
    numeric path). A [uint64]/[int64] beyond the native int range is adversarial
