@@ -858,6 +858,138 @@ let test_oxcaml () =
     "stock has no OxCaml syntax" false
     (contains stock "exclave_" || contains stock "#{")
 
+(* A frame of [len] bytes holding [n], then [rest]. *)
+let frame n rest =
+  let b = Bytes.create (4 + String.length rest) in
+  Bytes.set_int32_be b 0 n;
+  Bytes.blit_string rest 0 b 4 (String.length rest);
+  b
+
+let sized_reference =
+  Diff_ocaml.Reference
+    {
+      label = "sized";
+      codec = Schemas.sized;
+      known = None;
+      project =
+        (fun _ (n, body, tail) ->
+          [
+            ("n", UInt32.to_int n);
+            ("body_present", if Option.is_some body then 1 else 0);
+            ("tail", UInt8.to_int tail);
+          ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+let overflow_reference =
+  Diff_ocaml.Reference
+    {
+      label = "overflow";
+      codec = Schemas.overflow;
+      known = None;
+      project =
+        (fun _ (a, hi, lo, b, c) ->
+          [
+            ("a", UInt32.to_int a);
+            ("hi", hi);
+            ("lo", lo);
+            ("b", UInt32.to_int b);
+            ("c", UInt32.to_int c);
+          ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+let scan_ops name fields decode =
+  {
+    Diff_ocaml.scan_name = name;
+    scan_fields = fields;
+    scan = decode;
+    scan_batch = None;
+  }
+
+(* The scanner rejects a record whose condition, size or check overflows, as
+   the codec does, and only that one. *)
+let test_scan_overflow () =
+  let sized =
+    scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
+        let v = S_sized.decode b o n in
+        if v.ok then
+          Some
+            [
+              ("n", v.n);
+              ("body_present", if v.body_present then 1 else 0);
+              ("tail", v.tail);
+            ]
+        else None)
+  in
+  let overflow =
+    scan_ops "S_overflow" [ "a"; "hi"; "lo"; "b"; "c" ] (fun b o n ->
+        let v = S_overflow.decode b o n in
+        if v.ok then
+          Some
+            [ ("a", v.a); ("hi", v.hi); ("lo", v.lo); ("b", v.b); ("c", v.c) ]
+        else None)
+  in
+  List.iter
+    (fun n ->
+      List.iter
+        (fun rest ->
+          Diff_ocaml.check_scan sized_reference [ sized ] (frame n rest);
+          Diff_ocaml.check_scan overflow_reference [ overflow ] (frame n rest))
+        [ ""; "\001"; "\001\002"; "abcdefghij"; String.make 40 '\255' ])
+    [ 0l; 1l; 2l; 3l; 6l; 46341l; 0x5a827999l; 0x7fffffffl; -1l ]
+
+let skipped_reference =
+  let int8 = UInt8.to_int in
+  let opt name v =
+    [
+      (name ^ "_present", if Option.is_some v then 1 else 0);
+      (name, Option.fold ~none:0 ~some:int8 v);
+    ]
+  in
+  Diff_ocaml.Reference
+    {
+      label = "skipped";
+      codec = Schemas.skipped;
+      known = None;
+      project =
+        (fun _ (n, x, a, b) ->
+          [ ("n", UInt32.to_int n); ("x", int8 x) ] @ opt "a" a @ opt "b" b);
+      inputs = (fun b -> [ b ]);
+    }
+
+(* A condition that facts decide is still evaluated where the codec
+   evaluates it: when [x = 4] holds, [n * n > 0 && x = 3] is false, but the
+   codec computes [n * n] first and rejects the record where it overflows. *)
+let test_scan_skipped () =
+  let skipped =
+    scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
+      (fun b o n ->
+        let v = S_skipped.decode b o n in
+        if v.ok then
+          Some
+            [
+              ("n", v.n);
+              ("x", v.x);
+              ("a_present", if v.a_present then 1 else 0);
+              ("a", v.a);
+              ("b_present", if v.b_present then 1 else 0);
+              ("b", v.b);
+            ]
+        else None)
+  in
+  List.iter
+    (fun n ->
+      List.iter
+        (fun x ->
+          List.iter
+            (fun rest ->
+              Diff_ocaml.check_scan skipped_reference [ skipped ]
+                (frame n (String.make 1 (Char.chr x) ^ rest)))
+            [ ""; "\007"; "\007\008" ])
+        [ 3; 4; 5 ])
+    [ 0l; 1l; 46341l; 0x5a827999l; 0x7fffffffl; -1l ]
+
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
    and the copies on a path stay few, so the checks grow linearly with the
@@ -1008,14 +1140,26 @@ let test_portable () =
     "u16 scanner" true
     (guarded (Wire_ocaml.scanner ~codec:"c" (one uint16be)))
 
+(* The structured cases' corpora. *)
+let test_scanners () =
+  List.iter
+    (fun (Diff_codecs.Scan c as case) ->
+      Diff_ocaml.scan_corpus case ((List.assoc c.label Ocaml_index.scanners) ()))
+    Diff_codecs.scan_cases
+
 let suite =
   ( "wire_ocaml",
     [
+      Alcotest.test_case "scanned arithmetic that overflows" `Quick
+        test_scan_overflow;
+      Alcotest.test_case "overflow in a condition the facts decide" `Quick
+        test_scan_skipped;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "scanner refusals" `Quick test_scanner_refusals;
       Alcotest.test_case "scanner outputs are label paths" `Quick
         test_scanner_outputs;
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
+      Alcotest.test_case "structured scanners" `Quick test_scanners;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

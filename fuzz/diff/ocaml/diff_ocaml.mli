@@ -88,3 +88,75 @@ val report : string -> (string * Fuzz_gen.packed * string) list -> bool
     flat records, the generator refused and why, and is [false] when one of
     [refused] (a label, the codec and the refusal) is {!specialisable} and was
     refused for another reason than a clash of its field names. *)
+
+(** {1 Scanners} *)
+
+type scan_ops = {
+  scan_name : string;
+  scan_fields : string list;  (** The outputs it hands out. *)
+  scan : bytes -> int -> int -> (string * int) list option;
+      (** [scan buf off len] is the outputs of the record in the [len] bytes at
+          [off], a presence as 0 or 1, or [None] when it rejects them. *)
+  scan_batch :
+    (bytes -> int -> int -> int -> (string * int) list option list option)
+    option;
+      (** The frame fold with a stride: each frame's outputs, or [None] when it
+          rejects the bounds. *)
+}
+(** A generated scanner, through its decoder and its frame fold, or their
+    unboxed forms. *)
+
+(** What a scanner is compared with: the codec, and the outputs it states for a
+    frame it decodes ([known], or all of them when [None]). *)
+type reference =
+  | Reference : {
+      label : string;
+      codec : 'a Wire.Codec.t;
+      known : string list option;
+      project : bytes -> 'a -> (string * int) list;
+      inputs : bytes -> bytes list;
+    }
+      -> reference
+
+val of_scan_case : Diff_codecs.scan_case -> reference
+(** [of_scan_case c] states every output of [c]. *)
+
+val of_sampled : string -> Fuzz_gen.packed -> reference
+(** [of_sampled label p] states the top-level integer fields of [p]'s codec,
+    read by the reader {!Wire.Codec.get} stages. *)
+
+val check_scan :
+  ?oracle:(bytes -> int -> int -> int) ->
+  ?strides:int list ->
+  ?expand:bool ->
+  reference ->
+  scan_ops list ->
+  bytes ->
+  unit
+(** [check_scan ?oracle r backends buf] compares each scanner with [r]'s codec
+    on frames of [buf] at several offsets, bounds past the buffer included: the
+    outputs, acceptance against {!Wire.Codec.decode}, its general path and
+    {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
+    [oracle], the EverParse C validator's acceptance and consumed prefix. A read
+    must not change [buf]. Fails with {!Alcobar.failf}. *)
+
+val scan_corpus :
+  ?oracle:(bytes -> int -> int -> int) ->
+  Diff_codecs.scan_case ->
+  scan_ops list ->
+  unit
+(** [scan_corpus case backends] runs {!check_scan} on [case]'s corpus, and on
+    good, bad and partial frames joined for [fold_frames]. *)
+
+val scannable : 'r Wire.Codec.t -> bool
+(** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.scanner}
+    documents. *)
+
+val scan_codecs : (string * Fuzz_gen.packed) list
+(** [scan_codecs] is every sampled codec without parameters, fixed or not, and
+    the flat records of {!codecs}. *)
+
+val scan_report : string -> (string * Fuzz_gen.packed * string) list -> bool
+(** [scan_report name refused] prints how many of {!scan_codecs} the scanner
+    took, and is [false] when one it refused is {!scannable} and was refused for
+    another reason than an ambiguous output name. *)

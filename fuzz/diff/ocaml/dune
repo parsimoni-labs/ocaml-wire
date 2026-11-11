@@ -8,7 +8,14 @@
  (modules diff_ocaml)
  (libraries wire fuzz_gen diff_codecs alcobar fmt))
 
-; The generator (test/diff/gen_ocaml.ml) writes the module for each codec.
+; The generator (test/diff/gen_ocaml.ml) writes the module for each codec, and
+; the scanners. test/ocaml runs the structured cases' corpora through them too.
+
+(library
+ (name ocaml_index)
+ (wrapped false)
+ (modules ocaml_index)
+ (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
 
 (rule
  (action
@@ -18,8 +25,17 @@
 
 (executable
  (name fuzz)
- (modules fuzz ocaml_index)
- (libraries wire wire.runtime fuzz_gen diff_driver diff_ocaml alcobar fmt))
+ (modules fuzz)
+ (libraries
+  wire
+  wire.runtime
+  fuzz_gen
+  diff_codecs
+  diff_driver
+  diff_ocaml
+  ocaml_index
+  alcobar
+  fmt))
 
 ; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
 ; per codec by default.
