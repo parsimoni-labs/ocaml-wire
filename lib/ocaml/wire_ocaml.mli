@@ -228,7 +228,8 @@ module Plan : sig
   end
 
   val v : 'r Wire.Codec.t -> t
-  (** [v c] is the plan of [c]. Raises [Invalid_argument] as {!scanner} does. *)
+  (** [v c] is the plan of [c]. Raises [Invalid_argument] with the reason for a
+      codec {!scanner} refuses. *)
 
   val nodes : t -> node list
   (** [nodes t] is the nodes of [t], in the order the codec checks them. *)
@@ -236,10 +237,83 @@ module Plan : sig
   val outputs : t -> output list
   (** [outputs t] is the outputs of [t], in declaration order. *)
 
+  val select : t -> string list option -> output list
+  (** [select t names] is the outputs of [t] that [names] names, as {!scanner}'s
+      [fields] does, in declaration order; all of them for [None]. Raises
+      [Invalid_argument] naming a name that no output has. *)
+
+  val live : t -> output list -> string -> bool
+  (** [live t outputs v] is [true] when a walk handing out [outputs] binds the
+      variable [v]: one of [outputs], or one a check, a size or a condition
+      reads. *)
+
   val conditions : field -> bool Wire.Private.Types.expr list
   (** [conditions f] is the conditions of [f]'s checks. *)
 
   val range : t -> int Wire.Private.Types.expr -> int * int
   (** [range t e] bounds the values [e] takes, from the ranges of its variables;
       [(min_int, max_int)] when it cannot tell. *)
+
+  (** What the code at a point of a walk knows: the ranges of the variables,
+      narrowed by the checks passed on the way, and the facts those establish.
+      The arithmetic decisions below are the ones {!scanner} makes. *)
+  module Scope : sig
+    type plan := t
+    type t
+
+    val v : plan -> t
+    (** [v p] knows the ranges of [p]'s variables and no fact. *)
+
+    val facts : t -> Facts.t
+    (** [facts s] is the facts [s] knows. *)
+
+    val refine : t -> bool Wire.Private.Types.expr list -> t
+    (** [refine s conditions] is [s] after checks of [conditions] passed. *)
+
+    val range : t -> int Wire.Private.Types.expr -> int * int
+    (** [range s e] bounds the values [e] takes, as {!val-range} does with the
+        ranges [s] knows. *)
+
+    val checked : t -> int Wire.Private.Types.expr -> bool
+    (** [checked s e] is [true] when [e] is an addition, a subtraction or a
+        product that the ranges of its operands do not keep inside the native
+        int: the code checks it, and rejects the record where it overflows, as
+        the codec does. Any other is plain arithmetic. *)
+
+    val nonnegative : t -> int Wire.Private.Types.expr -> bool
+    (** [nonnegative s e] is [true] when [e] cannot be negative, by its range or
+        by a passed check comparing the operands of a subtraction. *)
+  end
+
+  (** {2 Optional fields}
+
+      A run of optional fields whose conditions exclude each other is one
+      decision tree, which tests each atom of their conditions at most once on a
+      path. *)
+
+  type tree = { tid : int; node : tnode }
+  (** A node of a decision tree; [tid] identifies it. *)
+
+  (** A leaf names the case that runs, or none. *)
+  and tnode =
+    | Leaf of int option
+    | Branch of bool Wire.Private.Types.expr * tree * tree
+
+  val gates :
+    Facts.t ->
+    node list ->
+    (bool Wire.Private.Types.expr * output * output list * node list) list
+    * node list
+  (** [gates f nodes] is the run of optional fields at the head of [nodes] whose
+      conditions, simplified by [f], exclude each other, each with its condition
+      so simplified, and the nodes after the run. *)
+
+  val decide : Facts.t -> (int * bool Wire.Private.Types.expr) list -> tree
+  (** [decide f cases] is the decision tree that picks the first of [cases]
+      whose condition holds, or none. A subtree reached from two paths is one
+      value. *)
+
+  val shared : tree -> (tree -> bool) * (int -> bool)
+  (** [shared t] tells which branches of [t] are reached more than once, and
+      which cases are, so a writer gives each of those one definition. *)
 end

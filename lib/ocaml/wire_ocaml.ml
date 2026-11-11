@@ -2,6 +2,7 @@ open Wire.Private
 open Layout
 module T = Types
 open Planner
+open Emitter
 open Record_module
 open Scan_module
 
@@ -66,10 +67,52 @@ module Plan = struct
   let v c =
     match scan_plan c with
     | plan -> plan
-    | exception Unsupported why -> refuse ~codec:(Gen.to_struct c).name why
+    | exception Unsupported why -> invalid_arg why
 
   let nodes t = t.nodes
   let outputs t = t.outputs
+
+  let select t names =
+    match selected t names with
+    | outputs -> outputs
+    | exception Unsupported why -> invalid_arg why
+
+  let live t outputs =
+    let live = live t ~outputs:(List.map (fun (o : output) -> o.id) outputs) in
+    fun v -> Sset.mem v live
+
+  module Scope = struct
+    type nonrec t = { ranges : (int * int) Smap.t; facts : facts }
+
+    let v (plan : plan) = { ranges = plan.ranges; facts = no_facts }
+    let facts s = s.facts
+
+    let refine s conditions =
+      let ranges, facts = refined s.ranges s.facts conditions in
+      { ranges; facts }
+
+    let range s e = range s.ranges e
+
+    let checked s (e : int T.expr) =
+      match e with
+      | T.Add (a, b) -> not (fits s.ranges T.checked_add a b)
+      | T.Sub (a, b) -> not (fits s.ranges T.checked_sub a b)
+      | T.Mul (a, b) -> not (fits s.ranges T.checked_mul a b)
+      | _ -> false
+
+    let nonnegative s e = nonnegative_in s.ranges s.facts e
+  end
+
   let conditions f = List.map (fun c -> c.cond) f.checks
   let range (t : t) e = range t.ranges e
+
+  type nonrec tree = tree = { tid : int; node : tnode }
+  and tnode = tnode = Leaf of int option | Branch of bool T.expr * tree * tree
+
+  let gates facts nodes = gate_run ~lower:(simplify facts) facts nodes
+  let decide = decide
+
+  let shared tree =
+    let shared, case_shared, _ = reach tree in
+    (shared, case_shared)
 end

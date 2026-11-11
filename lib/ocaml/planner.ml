@@ -174,6 +174,11 @@ let rec range ranges (e : int T.expr) =
       (min lo lo', max hi hi')
   | _ -> full
 
+(* Whether [op a b] cannot overflow the native int, so is written as plain
+   arithmetic. *)
+let fits ranges op a b =
+  Option.is_some (corners op (range ranges a) (range ranges b))
+
 (* Whether [e] holds a value, or shifts by an amount, that only an [int] of 63
    bits gets right. *)
 let rec wide_expr : type a. (int * int) Smap.t -> a T.expr -> bool =
@@ -648,3 +653,38 @@ let rec simplify facts (e : bool T.expr) : bool T.expr =
           | Some x -> T.Bool (x <> v)
           | None -> e)
       | _ -> e)
+
+(* The ranges and facts passed checks establish, for the code after them. *)
+let refined ranges facts conditions =
+  let restrict ranges n lower upper =
+    match Smap.find_opt n ranges with
+    | None -> ranges
+    | Some (lo, hi) -> Smap.add n (max lo lower, min hi upper) ranges
+  in
+  let rec go ranges : bool T.expr -> _ = function
+    | T.And (a, b) -> go (go ranges a) b
+    | T.Ge (T.Ref (T.I, n), T.Int v) | T.Le (T.Int v, T.Ref (T.I, n)) ->
+        restrict ranges n v max_int
+    | T.Le (T.Ref (T.I, n), T.Int v) | T.Ge (T.Int v, T.Ref (T.I, n)) ->
+        restrict ranges n min_int v
+    | T.Eq (T.Ref (T.I, n), T.Int v) | T.Eq (T.Int v, T.Ref (T.I, n)) ->
+        restrict ranges n v v
+    | _ -> ranges
+  in
+  ( List.fold_left go ranges conditions,
+    List.fold_left (fun f e -> assume f e true) facts conditions )
+
+(* Whether [e] is known not to be negative. *)
+let nonnegative_in ranges facts (e : int T.expr) =
+  let known e =
+    match simplify facts e with T.Bool true -> true | _ -> false
+  in
+  fst (range ranges e) >= 0
+  ||
+  match e with
+  | T.Sub (a, b) ->
+      known (T.Ge (a, b))
+      || known (T.Le (b, a))
+      || known (T.Gt (a, b))
+      || known (T.Lt (b, a))
+  | _ -> false

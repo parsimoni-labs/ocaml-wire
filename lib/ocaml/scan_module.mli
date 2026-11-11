@@ -31,3 +31,8 @@ val scanner :
   string
 (** [scanner ?target ?fields ?step ~codec c] is the scanner generated for [c];
     see {!Wire_ocaml.scanner}. *)
+
+val selected : plan -> string list option -> output list
+(** [selected plan names] is the outputs of [plan] named in [names], all of them
+    when [names] is [None]. Raises {!Planner.Unsupported} on a name [plan] does
+    not hand out. *)
