@@ -1,9 +1,9 @@
 ; Cross-language benchmark: Ethernet/IPv4/TCP-or-UDP header parsing through
 ; Wire.Codec and the OCaml Wire_ocaml generates (this directory: for the OCaml
 ; target on OCaml, for the OxCaml target on an OxCaml compiler), and through
-; the Rust Wire_rust generates against etherparse and smoltcp (cargo/, a cargo
-; project outside the dune build so that dune never needs the network).
-; `make bench-rust` runs both and prints one table.
+; the Rust Wire_rust generates against etherparse, smoltcp and pnet_packet
+; (cargo/, a cargo project outside the dune build so that dune never needs the
+; network). `make bench-rust` runs both and prints the tables.
 
 (library
  (name headers)
@@ -13,19 +13,35 @@
 (executable
  (name gen)
  (modules gen)
- (libraries headers wire.ocaml wire.rust))
+ (libraries headers net wire wire.ocaml wire.rust))
 
 (rule
  (enabled_if
   (<> %{ocaml-config:ox} true))
- (targets g_eth.ml g_ipv4.ml g_tcp.ml g_udp.ml)
+ (targets
+  g_stack.ml
+  stack_read.ml
+  g_selected.ml
+  selected_read.ml
+  g_eth.ml
+  g_ipv4.ml
+  g_tcp.ml
+  g_udp.ml)
  (action
   (run ./gen.exe --ocaml)))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_eth.ml g_ipv4.ml g_tcp.ml g_udp.ml)
+ (targets
+  g_stack.ml
+  stack_read.ml
+  g_selected.ml
+  selected_read.ml
+  g_eth.ml
+  g_ipv4.ml
+  g_tcp.ml
+  g_udp.ml)
  (action
   (run ./gen.exe --oxcaml)))
 
@@ -54,8 +70,18 @@
 
 (executable
  (name bench)
- (modules bench g_eth g_ipv4 g_tcp g_udp)
+ (modules
+  bench
+  g_stack
+  stack_read
+  g_selected
+  selected_read
+  g_eth
+  g_ipv4
+  g_tcp
+  g_udp)
  (ocamlopt_flags
   (:standard
+   -O3
    (:include zero_alloc.sexp)))
- (libraries headers wire wire.runtime unix fmt))
+ (libraries headers net wire wire.runtime unix fmt))

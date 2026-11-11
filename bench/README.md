@@ -50,13 +50,15 @@ work with `Codec.get`/`Codec.set`.
 ## Cross-language headers (`bench/rust/`)
 
 The code generators against released Rust parsers: Ethernet, IPv4 and TCP or
-UDP headers, read from one corpus of 64-byte packets. Each row uses the API a
-user would pick for exactly this work:
+UDP headers, read from the corpora below. Each row uses the API a user would
+pick for exactly this work:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | interpreted codec (OCaml 5, OxCaml) | `Codec.valid`, then a staged `Codec.read` per field |
-| `wire.ocaml` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `View.check`/`View.ok`, then a `view_<field>` per field (bitfields sharing a word: `view_<f>_word` and `<f>_of_word`) |
+| `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
+| `Wire.Codec valid/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `Codec.valid` per header, then a staged `Codec.read` per field; the harness links the layers |
+| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
+| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust` row does |
 | `wire.rust` | generated Rust (informational: the same algorithm in Rust) | `Valid::at`, then a read per field |
 | `etherparse` 0.21 | hand-written | `SlicedPacket::from_ethernet`, its one-call path |
 | `smoltcp` 0.14 | hand-written | `new_checked` per layer (`EthernetFrame`, `Ipv4Packet`, `TcpPacket`/`UdpPacket`) |
@@ -79,19 +81,45 @@ Every row does the work `SlicedPacket::from_ethernet` does on each packet:
    5 words inside the payload, or a UDP length of at least 8 inside it; ports
    and the other fields read.
 
-The codecs (`headers.ml`) make the checks on a header's own fields; the
-bounds against the packet and the fragment test are a few lines in each
-harness, the same in OCaml and Rust (`smoltcp` checks the bounds itself, its
-row adds the version and fragment tests; `pnet_packet` checks only a header's
-minimum length, its row adds the rest). A packet counts only when every header
-it has passes, as with `etherparse`. No row copies a byte: the crates
-return sub-slices, the other rows the same bounds as offsets. Every row folds
-the same fields into a checksum, and the report fails if they disagree.
+The OCaml rows use `examples/net/packet_stack.ml`: one codec owns Ethernet
+and protocol dispatch, fragment handling, options, and the nested payload
+bounds. `Wire_ocaml.scanner` writes those rules out as a fused scanner;
+the harness only folds returned scalar fields into the checksum. Its
+`off`/`len` arguments bound each frame even inside a larger corpus buffer.
+`Codec.decode` uses the same stack inside a framing region of one corpus
+slot and constructs its ordinary nested values. Byte fields are zero-copy
+slices.
 
-Three packets in four of the corpus are well formed: an IPv4 header of 20
-bytes, then TCP without options or UDP, filling the slot. The others are
-spread evenly over these cases, so each check meets packets that pass it and
-packets that fail it, and the rows agree only if each makes every check:
+The generated Rust row, and the two `linked headers` rows of OCaml, use the
+fixed header codecs in `headers.ml` with a harness that links the layers. The crate adapters apply the same
+checks (`smoltcp` checks the bounds itself; `pnet_packet`'s adapter supplies
+checks beyond its minimum header lengths). A packet counts only when every
+header it has passes, as with `etherparse`. Every row folds the same fields
+into a checksum, and the report fails if they disagree.
+
+The existing `test/ocaml` and `fuzz/diff/ocaml` suites compare scanner
+acceptance and scalar fields with `Codec`, including truncation at every
+byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations.
+Their `ocaml-ox` lanes also compare boxed and unboxed APIs and check
+`decode_unboxed` with `[@zero_alloc]` in release builds. With
+`BUILD_EVERPARSE=1`, the same differential driver compiles the projected
+3D schemas through EverParse and compares C acceptance and consumed length.
+Selected-output and validation-only scanners retain every validation check
+([execution model](../docs/execution.md#generated-code)).
+
+`bench.exe corpus DIR N` writes four corpora of N packets in fixed-stride
+slots, the only framing the batch consumers (`fold_frames`) take:
+
+| Corpus | Slots | Packets |
+|---|---|---|
+| `fixed64-random` | 64 bytes | three in four: 20-byte IPv4 and TCP or UDP headers without options, the packet filling the slot; the others one of the cases below; kinds in random order |
+| `fixed64-sorted` | 64 bytes | the same packets grouped by kind |
+| `mix128-random` | 128 bytes | IPv4 and TCP headers of 20, 24, 32 or 40 bytes (options), IPv4 total lengths from the headers to the end of the slot (packets of 54 to 128 bytes, then Ethernet padding); kinds in random order |
+| `mix128-sorted` | 128 bytes | the same packets grouped by kind |
+
+The packets of `fixed64` that are not well formed are spread evenly over
+these cases, so each check meets packets that pass it and packets that fail
+it, and the rows agree only if each makes every check:
 
 | Check | Rejected | Accepted besides the well-formed |
 |---|---|---|
@@ -104,9 +132,26 @@ packets that fail it, and the rows agree only if each makes every check:
 | TCP data offset | 4 words; 15 words, past the payload | 6 words, with options |
 | UDP length | 7; one byte past the payload | shorter than the payload |
 
-Both harnesses do the same thing: one warm-up pass, then the timed passes,
-reporting the best, the 10th percentile, the median and the 90th percentile
-per packet. The Rust side builds with `opt-level = 3`, `lto = true`,
+The kind of a packet is what the parsers must decide: in `fixed64`, its case
+above; in `mix128`, not IPv4, valid TCP, valid UDP, a fragment, a total
+length past the slot, a TCP data offset past the payload or a UDP length past
+it. In random order the branches on the kind mispredict as they would on
+mixed traffic; in sorted order they are predictable, which isolates the
+parsing work. The checksum is a sum, so both orders of a family give the
+same one, and the report fails unless every row on every corpus of a family
+agrees.
+
+Both harnesses do the same thing: one warm-up pass, which gives the
+checksum, then the timed passes. Each pass reads the wall clock and the
+process CPU time (user and system, `getrusage(RUSAGE_SELF)`: `Unix.times` in
+OCaml, `libc::getrusage` in Rust) around the call. The report prints one
+table per corpus, ranked by the best CPU time per packet, with its 10th
+percentile, median and 90th percentile and the best and median wall time,
+then the best CPU time of every row on every corpus. CPU time leaves out the
+time the process waits descheduled, which on a loaded machine dominates the
+wall time of the slower rows; it does not remove the cache and branch
+predictor state other processes leave behind, so compare rows measured in
+the same conditions. The Rust side builds with `opt-level = 3`, `lto = true`,
 `codegen-units = 1` and `panic = "abort"`, and without `target-cpu=native`,
 which the OCaml compilers have no equivalent of. The OCaml side builds with
 dune's `release` profile; on OxCaml, flambda2's `-O3` measured no faster than
@@ -117,12 +162,24 @@ make bench-rust           # needs cargo; fetches the crates the first time
 ```
 
 `OXCAML_SWITCH` names the opam switch the OxCaml run uses (default
-`5.4.0-ox9`; skipped when absent), and `BENCH_RUST_PACKETS` and
-`BENCH_RUST_RUNS` size the corpus and the number of timed passes. Each
-harness also takes a filter, so one row can run alone: on macOS,
-`/usr/bin/time -l` then gives the instructions retired and the cycles of that
-row, as `bench.exe run FILE RUNS wire.ocaml` or `wire-bench-rust FILE 64 RUNS
-smoltcp`.
+`5.4.0-ox9`; skipped when absent), `BENCH_RUST_PACKETS` and
+`BENCH_RUST_RUNS` size the corpora and the number of timed passes, and
+`BENCH_RUST_CORPORA` lists the corpora to run as `name:stride`. Each harness
+also takes a filter, so one row can run alone: on macOS, `/usr/bin/time -l`
+then gives the instructions retired and the cycles of that row, as
+`bench.exe run FILE STRIDE RUNS wire.ocaml` or `wire-bench-rust FILE STRIDE
+RUNS smoltcp`.
+
+Two inputs are not measured. A real capture (length-prefixed frames) has
+frames of every length, which the batch consumers cannot take without a
+second, per-frame code path per row, and padding each frame to a fixed slot
+would change what the parsers accept. An EverParse C row needs the stack's
+nested fields, but the projection of `Packet_stack.codec` attaches plug
+setters only to the entrypoint's own fields: its default
+`EthernetStack_Fields` plug holds `dst`, `src`, `ether_type` and the offset
+of `ipv4`, none of the IPv4, TCP or UDP fields the checksum folds, and
+reading them from the offsets would be the hand-written C parsing the rules
+above forbid.
 
 ## Profiling
 
