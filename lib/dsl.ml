@@ -30,17 +30,33 @@ type bindings = { param : string -> int; set_param : string -> int -> unit }
 (* The buffer travels as its own argument rather than inside the context, so
    the parameter-free hot path is the constant constructor [Unbound]. Being a
    constant, it is an immediate: an encode or decode without parameters builds
-   no context block and allocates nothing. *)
-type eval_ctx = Unbound | Bound of bindings
+   no context block and allocates nothing. [Checked] carries the same bindings
+   over bytes a check pass has accepted; [checked_unbound] is a static block,
+   so a parameter-free read through it allocates nothing either. *)
+type eval_ctx = Unbound | Bound of bindings | Checked of eval_ctx
 
 let unbound_eval_ctx = Unbound
 let eval_ctx ?(set_param = fun _ _ -> ()) param = Bound { param; set_param }
+let checked_unbound = Checked Unbound
 
-let eval_param ctx name =
-  match ctx with Unbound -> 0 | Bound b -> b.param name
+let checked_eval_ctx = function
+  | Unbound -> checked_unbound
+  | Checked _ as ctx -> ctx
+  | Bound _ as ctx -> Checked ctx
 
-let eval_set_param ctx name value =
-  match ctx with Unbound -> () | Bound b -> b.set_param name value
+let is_checked = function Checked _ -> true | Unbound | Bound _ -> false
+
+let rec eval_param ctx name =
+  match ctx with
+  | Unbound -> 0
+  | Bound b -> b.param name
+  | Checked ctx -> eval_param ctx name
+
+let rec eval_set_param ctx name value =
+  match ctx with
+  | Unbound -> ()
+  | Bound b -> b.set_param name value
+  | Checked ctx -> eval_set_param ctx name value
 
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the
@@ -522,9 +538,10 @@ let const_int_expr e = int_expr_with (fun _ -> None) e
 (* A size expression resolved as far as the encode-side context allows. A bound
    input parameter answers; a reference to a sibling field or to a position does
    not, because a value on its own does not carry the record around it. *)
-let size_in_ctx ctx e =
+let rec size_in_ctx ctx e =
   match ctx with
   | Unbound -> None
+  | Checked ctx -> size_in_ctx ctx e
   | Bound _ ->
       int_expr_with
         (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)

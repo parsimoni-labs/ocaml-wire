@@ -1167,7 +1167,7 @@ let build_plain_decode ~layout make fwd wire_size_info min_size pass =
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off
-        else apply_fwd make fwd no_runtime input_end buf off
+        else apply_fwd make fwd checked_runtime input_end buf off
   | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -1175,14 +1175,14 @@ let build_plain_decode ~layout make fwd wire_size_info min_size pass =
           min_bounds_error min_size buf off
         else begin
           run_plain_pass pass input_end buf off;
-          apply_fwd make fwd no_runtime input_end buf off
+          apply_fwd make fwd checked_runtime input_end buf off
         end
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         variable_frame ~layout wire_size_info min_size input_end buf off;
         if Option.is_none layout then run_plain_pass pass input_end buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+        apply_fwd make fwd checked_runtime input_end buf off
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
@@ -1307,10 +1307,11 @@ let build_record_encoder name writers size_of_value ~check =
 let build_decoders ~layout make readers checked_readers wire_size_info min_size
     ~plain ~check =
   let fwd = to_fwd readers and checked = to_fwd checked_readers in
-  let raw_decode runtime input_end buf off =
+  let read runtime input_end buf off =
     apply_fwd make checked runtime input_end buf off
   in
-  ( build_checked_decode raw_decode wire_size_info min_size,
+  ( build_checked_decode read wire_size_info min_size,
+    read,
     if plain then
       Some (build_plain_decode ~layout make fwd wire_size_info min_size check)
     else None )
@@ -1685,7 +1686,7 @@ let seal : type r.
       ~where:compiled_where ~steps ~needs_arr (fun steps needs_arr ->
         plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where)
   in
-  let decode, plain_decode =
+  let decode, read, plain_decode =
     build_decoders ~layout r.make r.readers r.checked_readers wire_size_info
       min_size ~plain:(n_params = 0) ~check
   in
@@ -1695,6 +1696,7 @@ let seal : type r.
     field_readers = List.rev r.field_readers;
     field_actions;
     decode;
+    read;
     plain_decode;
     encode =
       record_encoder r.name writers wire_size_info size_of_value encode_check;

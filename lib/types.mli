@@ -18,6 +18,15 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
+val checked_eval_ctx : eval_ctx -> eval_ctx
+(** [checked_eval_ctx ctx] is [ctx] for reading bytes a check pass has already
+    accepted: a sub-codec read through it builds its record without checking it
+    again. Allocates nothing for a context without bindings. Internal use. *)
+
+val is_checked : eval_ctx -> bool
+(** [is_checked ctx] is [true] on a context made by {!checked_eval_ctx}.
+    Internal use. *)
+
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 

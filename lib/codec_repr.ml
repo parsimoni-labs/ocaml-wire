@@ -245,6 +245,10 @@ type bf_info = {
 
 let no_runtime = Types.unbound_eval_ctx
 
+(* The context of a read after the check pass: a sub-codec read through it
+   builds its record and leaves the checks to the pass that ran them. *)
+let checked_runtime = Types.checked_eval_ctx no_runtime
+
 let runtime ?env () =
   match env with
   | None -> no_runtime
@@ -932,6 +936,9 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  read : runtime -> Input_end.t -> bytes -> int -> 'r;
+      (* [decode] without its bounds check: the read phase, for bytes whose
+         frame has been checked. *)
   plain_decode : (bytes -> int -> 'r) option;
       (* [decode] for a codec with no parameters and nothing to check after the
          reads: [Codec.decode] has only the bounds to check. *)

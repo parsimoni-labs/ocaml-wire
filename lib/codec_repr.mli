@@ -322,6 +322,7 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
@@ -414,3 +415,8 @@ val alloc_slots : int -> slots
 val bits_too_wide : mask:int -> int -> unit
 (** [bits_too_wide ~mask v] raises [Invalid_argument] when [v] does not fit the
     bitfield of mask [mask]. *)
+
+val checked_runtime : Types.eval_ctx
+(** [checked_runtime] is the context of a read after the check pass, without
+    parameters: a sub-codec read through it builds its record and leaves the
+    checks to the pass that ran them. *)

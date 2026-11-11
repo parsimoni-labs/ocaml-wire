@@ -488,16 +488,18 @@ let embed_encode_ctx (t : 'r t) v runtime buf off =
 
 let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 
-let validate_runtime t c runtime input_end buf off =
-  validate_runtime_of ~scratch:c.decode_scratch ~clear:c.clear_scratch
-    ~param_base:c.param_base ~param_handles:t.param_handles
-    ~validate_arr:c.validate_arr runtime input_end buf off
-
+(* A sub-codec read inside the read phase of an enclosing decode builds its
+   record and nothing else: the enclosing check pass has run this codec's
+   checks where it sits, so checking again would check a record once per level
+   it is nested under. Read anywhere else, it checks first and reads with the
+   context marked, so the records under it are checked by this pass alone. *)
 let embed_decode_ctx (t : 'r t) runtime input_end buf off =
   let c = compiled t in
-  let v = c.decode runtime input_end buf off in
-  validate_runtime t c runtime input_end buf off;
-  v
+  if Types.is_checked runtime then c.read runtime input_end buf off
+  else begin
+    c.validate_ctx runtime input_end buf off;
+    c.read (Types.checked_eval_ctx runtime) input_end buf off
+  end
 
 let embed_decode (t : 'r t) buf off =
   embed_decode_ctx t no_runtime (Input_end.of_bytes buf) buf off
@@ -581,7 +583,11 @@ let decode_params consume e t (c : _ compiled) buf off =
       Some arr
     end
   in
-  let v = c.decode runtime input_end buf off in
+  let v =
+    match arr with
+    | Some _ -> c.read (Types.checked_eval_ctx runtime) input_end buf off
+    | None -> c.decode runtime input_end buf off
+  in
   let consumed =
     match c.wire_size with
     | Fixed n -> off + n

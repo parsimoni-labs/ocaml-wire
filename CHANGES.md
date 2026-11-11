@@ -50,6 +50,9 @@
 - **Breaking:** a constraint on a field under `map` applies to the wire value,
   as in 3D, and a `map` decoder must be total (#435, @samoht)
 
+- `Wire.Codec.decode` checks a nested codec once, not once per level of
+  nesting (#445, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
