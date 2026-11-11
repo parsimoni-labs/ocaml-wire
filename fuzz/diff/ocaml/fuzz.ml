@@ -11,7 +11,8 @@
     would spell an OCaml name twice.
 
     The scanners are compared on every sampled shape, fixed or not, and on the
-    structured cases of {!Diff_codecs.scan_cases}. *)
+    structured cases of {!Diff_codecs.scan_cases}, with the EverParse C
+    validator too when it is built. *)
 
 let refused label = List.map (fun (l, msg) -> (l, List.assoc l label, msg))
 
@@ -35,6 +36,7 @@ let structured =
     (fun (Diff_codecs.Scan c as case) ->
       ( c.label,
         Diff_ocaml.check_scan
+          ?oracle:(Diff_driver.oracle c.label)
           (Diff_ocaml.of_scan_case case)
           ((List.assoc c.label Ocaml_index.scanners) ()) ))
     Diff_codecs.scan_cases
@@ -50,6 +52,7 @@ let () =
       Diff_ocaml.scan_report Ocaml_index.name
         (refused Diff_ocaml.scan_codecs Ocaml_index.scan_refused)
     in
+    Diff_driver.report_oracle Ocaml_index.name;
     if not (fixed && scanned) then exit 1
   end;
   Diff_driver.run Ocaml_index.name (cases @ sampled @ structured)

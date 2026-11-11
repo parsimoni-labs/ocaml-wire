@@ -1140,11 +1140,14 @@ let test_portable () =
     "u16 scanner" true
     (guarded (Wire_ocaml.scanner ~codec:"c" (one uint16be)))
 
-(* The structured cases' corpora. *)
+(* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
     (fun (Diff_codecs.Scan c as case) ->
-      Diff_ocaml.scan_corpus case ((List.assoc c.label Ocaml_index.scanners) ()))
+      Diff_ocaml.scan_corpus
+        ?oracle:(Diff_driver.oracle c.label)
+        case
+        ((List.assoc c.label Ocaml_index.scanners) ()))
     Diff_codecs.scan_cases
 
 let suite =

@@ -138,6 +138,7 @@
   wire.runtime
   wire.ocaml
   diff_codecs
+  diff_driver
   diff_ocaml
   ocaml_index_ox
   bytesrw

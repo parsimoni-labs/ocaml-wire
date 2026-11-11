@@ -75,6 +75,7 @@
   wire.ocaml
   diff_codecs
   diff_ocaml
+  diff_driver
   ocaml_index
   bytesrw
   fmt
