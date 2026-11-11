@@ -109,3 +109,127 @@ val bridge :
     at the path [core] was generated from by {!ml}, and that each map [maps]
     names is still the very map of its field. It links [wire]; link it next to
     [core] wherever [wire] is linked anyway. *)
+
+(** {1 Scanning}
+
+    [scanner] writes the code that walks a codec of any shape in its scope and
+    hands out its scalar fields, with no value built and no byte copied. *)
+
+val scanner_fields : 'r Wire.Codec.t -> (string * bool) list
+(** [scanner_fields c] is the outputs of {!scanner} for [c], in declaration
+    order: each named scalar field, its name the path of field labels ({!ident})
+    joined with ['_'], and for each optional field [<path>_present], flagged
+    [true]. A field in an anonymous one is checked but not an output. Raises
+    [Invalid_argument] as {!scanner} does. *)
+
+val scanner :
+  ?target:target ->
+  ?fields:string list ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  string
+(** [scanner ?target ?fields ~codec c] is the source of a module that checks a
+    record of [c] in a frame of bytes and hands out its scalar fields. It covers
+    integers up to 32 bits, bitfields, byte arrays and slices of any size,
+    nested codecs, optional fields and fields in a sized region, exact or at
+    most; it raises [Invalid_argument] for any other field, parameters and
+    actions. The generated module links [wire.runtime], and refuses to load
+    where ints have 32 bits or fewer if it holds a value of more than 31 bits.
+
+    [fold buf off len ~invalid ~valid] checks the record at [off] in the [len]
+    bytes there, as {!Wire.Codec.decode} does on those bytes alone, and calls
+    [valid] with each output as a labelled [int] (a [bool] for a presence), or
+    [invalid ()] when the record or the bounds are bad. An absent field is 0.
+    [fields] selects the outputs: the others are not read unless a check needs
+    them, and every check still runs. [decode buf off len] returns the outputs
+    in a record with an [ok] flag.
+
+    [n] optional fields give code linear in [n] when they follow each other, or
+    when they nest and [fields] selects no output. Nested inside each other with
+    every output handed out, they give code quadratic in [n].
+    [fold_frames buf off len ~stride ~init ~invalid ~valid] folds over the
+    [len / stride] frames of [stride] bytes, each checked on its own; it raises
+    [Invalid_argument] for bad bounds or a [stride] that is not positive.
+
+    On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
+    [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
+    [decode_unboxed] hand them out unboxed; [box] makes the record of an unboxed
+    one. *)
+
+(** {1 The plan}
+
+    The checked plan both generators print, for backends of other languages:
+    nodes in the order a codec checks them, over variables unique in the plan.
+*)
+module Plan : sig
+  (** What a failed check raises: a violated constraint, a value no case of a
+      closed enum has, an index past the cases of a lookup. *)
+  type kind = Constraint | Enum of int list | Tag
+
+  type check = { cond : bool Wire.Private.Types.expr; kind : kind }
+  (** A check: what must hold, and what its failure raises. *)
+
+  type output = {
+    id : string;  (** The variable that holds it. *)
+    name : string;  (** As {!scanner_fields} names it. *)
+    is_bool : bool;  (** A presence. *)
+    wire_width : int;  (** Its bits on the wire; 1 for a presence. *)
+    signed : bool;
+  }
+
+  type field = {
+    id : string;  (** The variable that holds its plain value. *)
+    name : string;  (** Its name in the codec; empty when anonymous. *)
+    label : string;
+    offset : int;  (** In its prefix; for a bitfield, its word's. *)
+    store : Wire.Private.Layout.store;
+    checks : check list;  (** In the order the codec runs them. *)
+    enum : (string * int list) option;
+    map : string option;
+    output : output option;
+  }
+
+  type node =
+    | Prefix of field list * int
+        (** Fields at constant offsets, and the bytes they span. *)
+    | Span of int Wire.Private.Types.expr  (** Bytes skipped. *)
+    | Gate of bool Wire.Private.Types.expr * output * output list * node list
+        (** An optional field: its condition, its presence, the outputs under it
+            and its nodes. *)
+    | Region of int Wire.Private.Types.expr * bool * node list
+        (** A sized window, [true] when its nodes may use less of it. *)
+    | Test of bool Wire.Private.Types.expr  (** A where clause. *)
+
+  type t
+
+  (** What a branch establishes about the plan's variables. *)
+  module Facts : sig
+    type t
+
+    val empty : t
+    (** [empty] establishes nothing. *)
+
+    val assume : t -> bool Wire.Private.Types.expr -> bool -> t
+    (** [assume f e b] adds to [f] that [e] is [b]. *)
+
+    val simplify :
+      t -> bool Wire.Private.Types.expr -> bool Wire.Private.Types.expr
+    (** [simplify f e] is [e] with what [f] decides folded away. *)
+  end
+
+  val v : 'r Wire.Codec.t -> t
+  (** [v c] is the plan of [c]. Raises [Invalid_argument] as {!scanner} does. *)
+
+  val nodes : t -> node list
+  (** [nodes t] is the nodes of [t], in the order the codec checks them. *)
+
+  val outputs : t -> output list
+  (** [outputs t] is the outputs of [t], in declaration order. *)
+
+  val conditions : field -> bool Wire.Private.Types.expr list
+  (** [conditions f] is the conditions of [f]'s checks. *)
+
+  val range : t -> int Wire.Private.Types.expr -> int * int
+  (** [range t e] bounds the values [e] takes, from the ranges of its variables;
+      [(min_int, max_int)] when it cannot tell. *)
+end

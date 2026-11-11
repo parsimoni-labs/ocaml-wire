@@ -1,7 +1,7 @@
 (library
  (name schemas)
  (modules schemas)
- (libraries wire))
+ (libraries wire bytesrw))
 
 (executable
  (name gen)
@@ -62,4 +62,4 @@
   g_refined_wire
   g_overflow
   g_overflow_wire)
- (libraries schemas wire wire.runtime wire.ocaml fmt alcotest))
+ (libraries schemas wire wire.runtime wire.ocaml bytesrw fmt alcotest))
