@@ -146,7 +146,8 @@ let pp_case ppf (label, c, src) =
 (* {1 Scanners}
 
    Each scanner is handed to [Diff_ocaml] as its [decode] and [fold_frames],
-   on OxCaml also as their unboxed forms. A structured case gets the scanner
+   as its [fold_step] and [fold_frames_step], and on OxCaml also as the
+   unboxed forms of the first two. A structured case gets the scanner
    of every output, one of every other output, one of none, and on OxCaml one
    for the default target too; a sampled shape the first two. *)
 
@@ -162,13 +163,13 @@ let snapshot ppf ~unboxed ~var fields =
     fields;
   Fmt.pf ppf "]"
 
+let labels fields =
+  if fields = [] then "()"
+  else
+    String.concat " " (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
+
 let pp_backend ppf ~m ~unboxed fields =
-  let args =
-    if fields = [] then "()"
-    else
-      String.concat " "
-        (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
-  in
+  let args = labels fields in
   let values ppf () =
     snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields
   in
@@ -202,24 +203,53 @@ let pp_backend ppf ~m ~unboxed fields =
         fields)
     () batch ()
 
+(* The module [fold_step] and [fold_frames_step] call by name: it conses each
+   frame's snapshot onto the accumulator. *)
+let pp_step ppf fields =
+  Fmt.pf ppf
+    "module Step = struct@\n\
+     let invalid acc = None :: acc@\n\
+     let valid acc %s = Some %a :: acc@\n\
+     end@\n"
+    (labels fields)
+    (fun ppf () ->
+      snapshot ppf ~unboxed:false ~var:(fun n -> "field_" ^ n) fields)
+    ()
+
+(* [fold_step] and [fold_frames_step], as the [decode] and [fold_frames] of
+   one more backend. *)
+let pp_step_backend ppf ~m fields =
+  Fmt.pf ppf
+    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> \
+     match %s.fold_step b o n ~init:[] with [ v ] -> v | _ -> failwith \
+     \"fold_step\"); scan_batch = Some (fun b o n stride -> try Some (List.rev \
+     (%s.fold_frames_step b o n ~stride ~init:[])) with Invalid_argument _ -> \
+     None) };@\n"
+    (m ^ " step")
+    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+    fields m m
+
 (* The backends over [c]: each module [(name, target, selected)], generated
    inside the function. *)
 let pp_scanners ppf ~label c modules =
   let fields = Wire_ocaml.scanner_fields c in
+  let selected_fields = function
+    | None -> fields
+    | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
+  in
   List.iter
     (fun (m, t, selected) ->
-      Fmt.pf ppf "let module %s = struct@\n%s@\nend in@\n" m
-        (Wire_ocaml.scanner ~target:t ?fields:selected ~codec:label c))
+      Fmt.pf ppf "let module %s = struct@\n%a%s@\nend in@\n" m pp_step
+        (selected_fields selected)
+        (Wire_ocaml.scanner ~target:t ?fields:selected ~step:"Step" ~codec:label
+           c))
     modules;
   Fmt.pf ppf "[@\n";
   List.iter
     (fun (m, t, selected) ->
-      let fields =
-        match selected with
-        | None -> fields
-        | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
-      in
+      let fields = selected_fields selected in
       pp_backend ppf ~m ~unboxed:false fields;
+      pp_step_backend ppf ~m fields;
       if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields)
     modules;
   Fmt.pf ppf "]@\n"

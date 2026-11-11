@@ -1,8 +1,8 @@
 (* Writes the code generated for the benchmark.
 
    With [--ocaml] (or [--oxcaml], for the OxCaml target), in the current
-   directory: the scanner of [Packet_stack.codec], g_stack.ml, and its
-   checksum consumers, stack_read.ml; the same scanner handing out only the
+   directory: the scanner of [Packet_stack.codec] after the checksum module it
+   calls by name, g_stack.ml, and its checksum consumers, stack_read.ml; the same scanner handing out only the
    fields the checksum reads, g_selected.ml and selected_read.ml; and the
    record modules of the fixed header codecs of [Headers], g_eth.ml,
    g_ipv4.ml, g_tcp.ml and g_udp.ml. The batch consumers take the corpus
@@ -99,6 +99,23 @@ let reader_wrappers ~wide ~fold ~batch =
   in
   (first, inside, last)
 
+(* The checksum consumer the scanner calls by name in [fold_step] and
+   [fold_frames_step]: OCaml without flambda never inlines a function passed
+   as an argument. *)
+let step ~fields =
+  let args =
+    List.map
+      (fun (name, _) ->
+        "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
+      fields
+  in
+  "module Step = struct\n\
+   let[@inline always] invalid base = base\n\
+   let[@inline always] valid base " ^ String.concat " " args
+  ^ " =\nlet contribution = "
+  ^ checksum_contribution ~wide:false Fun.id
+  ^ " in\nbase + contribution\nend\n\n"
+
 let checksum_reader target ~core ~fields name decode access =
   let batch, wide, fold = reader_modes name in
   let get n = if fold then n else "v." ^ access ^ n in
@@ -107,11 +124,19 @@ let checksum_reader target ~core ~fields name decode access =
   let base = if wide && not batch then "U.of_int base" else "base" in
   "let[@inline always]" ^ annotation ^ " " ^ name
   ^ (if batch then " ~stride" else "")
-  ^ " base buf off len =\n" ^ first
-  ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
-  ^ inside ^ "let contribution = "
-  ^ checksum_contribution ~wide get
-  ^ " in\n" ^ base ^ " + contribution\n" ^ last
+  ^ " base buf off len =\n"
+  ^
+  if fold && not wide then
+    core
+    ^ (if batch then ".fold_frames_step buf off len ~stride"
+       else ".fold_step buf off len")
+    ^ " ~init:base\n"
+  else
+    first
+    ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
+    ^ inside ^ "let contribution = "
+    ^ checksum_contribution ~wide get
+    ^ " in\n" ^ base ^ " + contribution\n" ^ last
 
 let stack_reader target ~core ~fields =
   let reader = checksum_reader target ~core ~fields in
@@ -154,12 +179,14 @@ let () =
         List.filter (fun (n, _) -> List.mem n checksum_fields) all
       in
       write "g_stack.ml"
-        (Wire_ocaml.scanner ~target ~codec:"Packet_stack.codec"
-           Packet_stack.codec);
+        (step ~fields:all
+        ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec:"Packet_stack.codec"
+            Packet_stack.codec);
       write "stack_read.ml" (stack_reader target ~core:"G_stack" ~fields:all);
       write "g_selected.ml"
-        (Wire_ocaml.scanner ~target ~fields:checksum_fields
-           ~codec:"Packet_stack.codec" Packet_stack.codec);
+        (step ~fields:selected
+        ^ Wire_ocaml.scanner ~target ~fields:checksum_fields ~step:"Step"
+            ~codec:"Packet_stack.codec" Packet_stack.codec);
       write "selected_read.ml"
         (stack_reader target ~core:"G_selected" ~fields:selected);
       headers

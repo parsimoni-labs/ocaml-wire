@@ -57,27 +57,27 @@ let to_int s ~unboxed (o : output) =
     Fmt.str "(U.to_int %s)" o.id
   else o.id
 
-(* The walk over the [stop] bytes at [base], which calls [valid]. *)
-let pp_scan s ~unboxed ~valid =
-  start ~m:(scan_mode s ~fail:"invalid ()")
-    ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known:0
-    s.plan.nodes (fun _ _ ->
-      Fmt.pf s.ppf "%s %a@\n" valid
-        (pp_args ~conv:(to_int s ~unboxed))
-        s.selected)
+(* The call of [valid] with the outputs. *)
+let call s ~unboxed valid () =
+  Fmt.pf s.ppf "%s %a@\n" valid (pp_args ~conv:(to_int s ~unboxed)) s.selected
 
-let pp_entry s ~unboxed ~valid =
+(* The walk over the [stop] bytes at [base]: each rejection is the text
+   [reject] and each acceptance what [accept] writes, in place, so a
+   continuation the generator knows is never a closure. *)
+let pp_scan s ~reject ~accept =
+  start ~m:(scan_mode s ~fail:reject) ~ppf:s.ppf ~ranges:s.plan.ranges
+    ~base:"base" ~limit:"stop" ~known:0 s.plan.nodes (fun _ _ -> accept ())
+
+let pp_entry s ~reject ~accept =
   Fmt.pf s.ppf
     "if off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf \
-     - off then invalid () else@\n";
+     - off then %s else@\n"
+    reject;
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
     (if s.num = Tagged then "off" else "U.of_int off")
     (if s.num = Tagged then "len" else "U.of_int len");
-  pp_scan s ~unboxed ~valid
+  pp_scan s ~reject ~accept
 
-(* The frame guard and a positive stride make [base + stride <= off + len] on
-   every iteration, the last included. Each frame still gets all its checks:
-   a short frame cannot borrow bytes from the next. *)
 (* The callbacks [fold_frames] takes: on OxCaml, unboxed ones have their
    types written out, the accumulator of layout [bits64]. *)
 let frames_callbacks s ~unboxed =
@@ -95,22 +95,35 @@ let frames_callbacks s ~unboxed =
     ^ String.concat " -> " (("a" :: fields) @ [ "a" ])
     ^ ") : a"
 
-let pp_frames s ~unboxed =
+(* [fold_frames], or with [step] [fold_frames_step], which calls the module
+   [step]'s functions by name. The frame guard and a positive stride make
+   [base + stride <= off + len] on every iteration, the last included. Each
+   frame still gets all its checks: a short frame cannot borrow bytes from the
+   next. *)
+let pp_frames ?step s ~unboxed =
   let ppf = s.ppf in
   let native = s.num = Unboxed in
   let binding, reference, read, assign =
     if native then ("mutable ", "", "", "<-") else ("", "ref ", "!", ":=")
   in
-  let callbacks = frames_callbacks s ~unboxed in
-  Fmt.pf ppf "let[@inline always] %s%s buf off len ~stride %s %s =@\n"
-    (if unboxed then "fold_frames_unboxed" else "fold_frames")
+  let name, callbacks, invalid, valid =
+    match step with
+    | Some m -> ("fold_frames_step", "", m ^ ".invalid", m ^ ".valid")
+    | None ->
+        ( (if unboxed then "fold_frames_unboxed" else "fold_frames"),
+          frames_callbacks s ~unboxed,
+          "invalid",
+          "valid" )
+  in
+  Fmt.pf ppf "let[@inline always] %s%s buf off len ~stride %s %s =@\n" name
     (if unboxed then " (type a : bits64)" else "")
     (if unboxed then "~(init : a)" else "~init")
     callbacks;
   Fmt.pf ppf
     "if stride <= 0 || off < 0 || len < 0 || off > Bytes.length buf || len > \
      Bytes.length buf - off then@\n\
-     invalid_arg \"fold_frames: invalid frame bounds or stride\";@\n";
+     invalid_arg \"%s: invalid frame bounds or stride\";@\n"
+    name;
   Fmt.pf ppf "let %sacc = %sinit in@\nlet %scursor = %soff in@\n" binding
     reference binding
     (if native then "U.of_int " else "ref ");
@@ -119,16 +132,23 @@ let pp_frames s ~unboxed =
     "for _ = 1 to len / stride do@\n\
      let base = %scursor in@\n\
      let current = %sacc in@\n\
-     let[@inline always] invalid () = invalid current in@\n\
      let next = (@\n\
      let stop = %s in@\n"
     read read
     (if native then "stride_word" else "stride");
-  pp_scan s ~unboxed ~valid:"valid current";
+  pp_scan s ~reject:(invalid ^ " current")
+    ~accept:(call s ~unboxed (valid ^ " current"));
   Fmt.pf ppf ") in@\nacc %s next;@\ncursor %s %s@\ndone;@\n%sacc@\n@\n" assign
     assign
     (binop s.num "+" "base" (if native then "stride_word" else "stride"))
     read
+
+(* [fold_step], which calls the module [m]'s functions by name. *)
+let pp_fold_step s m =
+  Fmt.pf s.ppf "let[@inline always] fold_step buf off len ~init =@\n";
+  pp_entry s ~reject:(m ^ ".invalid init")
+    ~accept:(call s ~unboxed:false (m ^ ".valid init"));
+  Fmt.pf s.ppf "@\n"
 
 let pp_result_type s name hash =
   Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;
@@ -158,7 +178,7 @@ let pp_decoder s name typ hash attr =
     Fmt.pf ppf "let invalid () = #{ok = false;%a} in@\n" fields zero;
     Fmt.pf ppf "let valid %a = #{ok = true;%a} in@\n" (pp_args ~conv:id)
       s.selected fields id;
-    pp_entry s ~unboxed:true ~valid:"valid"
+    pp_entry s ~reject:"invalid ()" ~accept:(call s ~unboxed:true "valid")
   end
   else
     Fmt.pf ppf
@@ -186,7 +206,7 @@ let selected (plan : plan) = function
         wanted;
       List.filter (fun (o : output) -> List.mem o.name wanted) plan.outputs
 
-let scanner ?(target = `OCaml) ?fields ~codec c =
+let scanner ?(target = `OCaml) ?fields ?step ~codec c =
   try
     let plan = scan_plan c in
     let num = if target = `OxCaml then Unboxed else Tagged in
@@ -201,13 +221,18 @@ let scanner ?(target = `OCaml) ?fields ~codec c =
          module B = Wire_runtime.Target@\n\
          @\n";
     Fmt.pf ppf "let[@inline always] fold buf off len ~invalid ~valid =@\n";
-    pp_entry s ~unboxed:false ~valid:"valid";
+    pp_entry s ~reject:"invalid ()" ~accept:(call s ~unboxed:false "valid");
     Fmt.pf ppf "@\n";
     pp_frames s ~unboxed:false;
+    Option.iter
+      (fun m ->
+        pp_fold_step s m;
+        pp_frames ~step:m s ~unboxed:false)
+      step;
     if num = Unboxed then begin
       Fmt.pf ppf
         "let[@inline always] fold_unboxed buf off len ~invalid ~valid =@\n";
-      pp_entry s ~unboxed:true ~valid:"valid";
+      pp_entry s ~reject:"invalid ()" ~accept:(call s ~unboxed:true "valid");
       Fmt.pf ppf "@\n";
       pp_frames s ~unboxed:true
     end;

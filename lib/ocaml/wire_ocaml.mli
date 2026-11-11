@@ -125,14 +125,15 @@ val scanner_fields : 'r Wire.Codec.t -> (string * bool) list
 val scanner :
   ?target:target ->
   ?fields:string list ->
+  ?step:string ->
   codec:string ->
   'r Wire.Codec.t ->
   string
-(** [scanner ?target ?fields ~codec c] is the source of a module that checks a
-    record of [c] in a frame of bytes and hands out its scalar fields. It covers
-    integers up to 32 bits, bitfields, byte arrays and slices of any size,
-    nested codecs, optional fields and fields in a sized region, exact or at
-    most; it raises [Invalid_argument] for any other field, parameters and
+(** [scanner ?target ?fields ?step ~codec c] is the source of a module that
+    checks a record of [c] in a frame of bytes and hands out its scalar fields.
+    It covers integers up to 32 bits, bitfields, byte arrays and slices of any
+    size, nested codecs, optional fields and fields in a sized region, exact or
+    at most; it raises [Invalid_argument] for any other field, parameters and
     actions. The generated module links [wire.runtime], and refuses to load
     where ints have 32 bits or fewer if it holds a value of more than 31 bits.
 
@@ -150,6 +151,15 @@ val scanner :
     [fold_frames buf off len ~stride ~init ~invalid ~valid] folds over the
     [len / stride] frames of [stride] bytes, each checked on its own; it raises
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
+
+    [step], the path of a module with [valid acc ~f1 ... ~fn] and [invalid acc],
+    adds [fold_step buf off len ~init] and
+    [fold_frames_step buf off len ~stride ~init], which are [fold] and
+    [fold_frames] with [init] as the accumulator, calling that module's
+    functions by name. OCaml without flambda never inlines a function passed as
+    an argument, so only these call the consumer with neither a closure call nor
+    an allocation per frame. The module must be in scope where the generated
+    code is compiled.
 
     On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
