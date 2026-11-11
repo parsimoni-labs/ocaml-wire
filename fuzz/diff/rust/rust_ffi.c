@@ -26,3 +26,16 @@ CAMLprim value wire_rs_call_bytecode(value *argv, int argn) {
   (void)argn;
   return call(argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6]);
 }
+
+extern int32_t wire_rs_scan(int32_t, const uint8_t *, size_t, int64_t, int64_t,
+                            int64_t *, size_t);
+
+/* The frame's offset and length go through as signed, so a negative one
+   reaches the Rust side, which refuses it as the OCaml scanner does. */
+CAMLprim value wire_rs_scan_stub(value vcase, value vbuf, value voff,
+                                 value vlen, value vres) {
+  return Val_int(wire_rs_scan(
+      Int_val(vcase), Bytes_val(vbuf), caml_string_length(vbuf),
+      (int64_t)Long_val(voff), (int64_t)Long_val(vlen),
+      (int64_t *)Bytes_val(vres), caml_string_length(vres) / 8));
+}

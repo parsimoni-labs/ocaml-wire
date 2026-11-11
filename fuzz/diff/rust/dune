@@ -1,5 +1,8 @@
 ; Differential fuzzer: each sampled codec of Diff_ocaml.codecs against the Rust
-; Wire_rust generates from it. Compiling that code needs rustc, so the lane
+; Wire_rust generates from it, and the Rust scanners of each structured case of
+; Diff_codecs.scan_cases and each sampled shape against the codec, on the
+; case's boundary corpus and on random inputs. Compiling that code needs
+; rustc, so the lane
 ; builds only with BUILD_RUST=1 (rustc in PATH), as the EverParse lane needs
 ; BUILD_EVERPARSE=1. The generator (test/diff/gen_rust.ml) is pure OCaml and
 ; always builds.
@@ -56,6 +59,7 @@
   diff_driver
   diff_ocaml
   diff_rust
+  schemas
   alcobar
   fmt)
  (foreign_archives diffrust)
