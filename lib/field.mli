@@ -29,23 +29,22 @@ val v :
     comment on the field in the generated 3D.
 
     [?self_constraint] receives a reference to the field being declared and
-    returns a constraint over it; the typical use is to prove a later
-    size-expression safe, e.g.:
+    returns a constraint over it, e.g.:
 
     {[
     open Wire
 
     let f_len =
       Field.v "Length" uint16be ~self_constraint:(fun self ->
-          Expr.(self >= int 7))
+          Expr.(self <= int 1500))
     ]}
 
-    projects to [UINT16BE Length {{ Length >= 7 }}], which EverParse's SMT can
-    then use to discharge [byte-size (Length - 7)] on a later field.
-    [?self_int64] is the same convenience for full-width 64-bit field
-    constraints, using {!Expr.int64} literals and {!int64} references. If
-    [?constraint_] and a self constraint are both given, the constraints are
-    combined with [And].
+    projects to [UINT16BE Length {{ Length <= 1500 }}]. A later span sized
+    [Length - 7] needs no constraint here: the projection states [Length >= 7]
+    on [Length] itself. [?self_int64] is the same convenience for full-width
+    64-bit field constraints, using {!Expr.int64} literals and {!int64}
+    references. If [?constraint_] and a self constraint are both given, the
+    constraints are combined with [And].
 
     For optional / repeating payloads use {!optional} / {!optional_or} /
     {!repeat} -- those decorations only have a 3D projection at the top of a

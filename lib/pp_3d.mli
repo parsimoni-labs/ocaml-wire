@@ -45,3 +45,6 @@ val index_bound_elt : 'a typ -> (string * bool expr) option
     a {!Dsl.byte_array_where} whose synthesised element struct is named
     [synth_name_of_elt_var elt_var] and refines its byte with [cond]. Internal:
     used by the EverParse projection. *)
+
+val subst_expr : (string * int expr) list -> 'a expr -> 'a expr
+(** Substitute integer references without evaluating the expression. *)

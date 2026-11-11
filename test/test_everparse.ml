@@ -767,6 +767,46 @@ let test_3d_optional_over_param_codec () =
   check `Ffi;
   check `Standalone
 
+let test_3d_span_guard_once () =
+  (* A span sized [length - 8] puts [length >= 8] on [length]. When the field
+     already states it, or two spans need it, it is written once. *)
+  let render c = flatten (to_3d (Everparse.project c).module_) in
+  let checked =
+    Field.v "length" uint16be ~self_constraint:(fun x -> Expr.(x >= int 8))
+  in
+  let c =
+    Codec.v "GuardOnce"
+      (fun l p -> (l, p))
+      Codec.
+        [
+          checked $ fst;
+          Field.v "p" (byte_slice ~size:Expr.(Field.ref checked - int 8)) $ snd;
+        ]
+  in
+  let out = render c in
+  Alcotest.(check bool)
+    "the stated guard is kept" true
+    (contains ~sub:"length { (length >= 8) }" out);
+  Alcotest.(check bool)
+    "and not repeated" false
+    (contains ~sub:"&& (length >= 8)" out);
+  let plain = Field.v "n" uint8 in
+  let twice =
+    Codec.v "GuardTwice"
+      (fun n a b -> (n, a, b))
+      Codec.
+        [
+          (plain $ fun (n, _, _) -> n);
+          ( Field.v "a" (byte_slice ~size:Expr.(Field.ref plain - int 2))
+          $ fun (_, a, _) -> a );
+          ( Field.v "b" (byte_slice ~size:Expr.(Field.ref plain - int 2))
+          $ fun (_, _, b) -> b );
+        ]
+  in
+  Alcotest.(check bool)
+    "two spans give one guard" true
+    (contains ~sub:"UINT8 n { (n >= 2) };" (render twice))
+
 let test_3d_on_act_drops_bool_return () =
   (* An [on_act] body that ends in [return_bool] projects to an [:act] block,
      which is unit in 3D: the trailing return is dropped (a no-op success in
@@ -1490,9 +1530,54 @@ let test_lookup_index_bound_exhaustive () =
     "one variant short of exhaustive still bounds its index" true
     (contains ~sub:"(v < 3)" out2)
 
+let test_optional_scalar_regions () =
+  List.iter
+    (fun at_most ->
+      let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+      let region =
+        (if at_most then nested_at_most else nested)
+          ~size:(Field.ref size) uint16be
+      in
+      let c =
+        Codec.v "OptionalRegion"
+          (fun t s v -> (t, s, v))
+          Codec.
+            [
+              (tag $ fun (t, _, _) -> t);
+              (size $ fun (_, s, _) -> s);
+              ( Field.optional "value"
+                  ~present:Expr.(Field.ref tag = int 1)
+                  region
+              $ fun (_, _, v) -> v );
+            ]
+      in
+      List.iter
+        (fun mode ->
+          let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+          Alcotest.(check bool)
+            "a gate preserves one optional region" true
+            (contains ~sub:"OptRegion_" out);
+          Alcotest.(check bool)
+            "the scalar region has a guarded size" true
+            (contains
+               ~sub:
+                 (if at_most then "_region_size >= 2" else "_region_size == 2")
+               out);
+          Alcotest.(check bool)
+            "the scalar region has its own parser" true
+            (contains
+               ~sub:
+                 (if at_most then "ScalarRegionAtMost_"
+                  else "ScalarRegionExact_")
+               out))
+        [ `Ffi; `Standalone ])
+    [ false; true ]
+
 let suite =
   ( "everparse",
     [
+      Alcotest.test_case "3d: optional scalar regions" `Quick
+        test_optional_scalar_regions;
       Alcotest.test_case "generation: lookup index bound" `Quick
         test_lookup_index_bound;
       Alcotest.test_case "generation: lookup index bound, exhaustive" `Quick
@@ -1578,6 +1663,8 @@ let suite =
         test_3d_absent_optional_projects_to_unit;
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
         test_3d_optional_over_param_codec;
+      Alcotest.test_case "3d: span guard written once" `Quick
+        test_3d_span_guard_once;
       Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick

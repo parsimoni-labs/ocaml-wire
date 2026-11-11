@@ -113,7 +113,23 @@ val lower_where_to_field_constraint :
     that references fields onto the last field it references, since 3D's [where]
     sees only parameters. *)
 
-val guard_subtraction_sizes : field list -> field list
-(** [guard_subtraction_sizes fields] adds [a >= sizeof(this)] to the field
-    before each span sized [a - sizeof(this)], so EverParse can discharge the
-    subtraction. *)
+val collect_refs : 'a expr -> string list
+(** Field-reference names occurring in an expression, including nested terms. *)
+
+val primitive_width : 'a typ -> int option
+(** [primitive_width t] is the width in bytes of [t] when it is a primitive
+    scalar, whose sized region lowers to a guarded scalar plus padding. *)
+
+val optional_region : 'a typ -> bool
+(** [optional_region t] is [true] when [t] is a single-element region, which
+    under an optional stays behind a gate and a named wrapper rather than
+    becoming a byte-budget list. *)
+
+val primitive_region : 'a typ -> (int expr * packed_typ * int * bool) option
+(** [primitive_region t] is the size, element, element width and at-most flag of
+    [t] when it is a region over one primitive scalar. *)
+
+val primitive_region_name : 'a typ -> string
+(** [primitive_region_name t] is the name of the wrapper struct of the scalar
+    region [t]. Raises [Invalid_argument] when [t] is not a single-element
+    region. *)

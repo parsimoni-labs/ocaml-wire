@@ -1029,23 +1029,39 @@ let e2e_mixed_codec =
   let fh = Field.v "h" uint8 in
   Codec.v "EP_Header" (fun h -> h) [ Codec.( $ ) fh (fun h -> h) ]
 
-(* Proximity1-style: variable-length data whose size is expressed as
-   [length - header]. EverParse's SMT needs a constraint on [length]
-   to prove the subtraction doesn't underflow, or verification of the
-   generated .fst fails. [?self_constraint] on the length field emits
-   that constraint inline. *)
+(* The decoder rejects a length below the header size. The 3D projection
+   inserts the corresponding non-underflow guard before the byte span, so
+   this codec needs no explicit length refinement to verify. *)
 let e2e_underflow_codec =
   let open Wire in
   let header_size = 7 in
-  let f_len =
-    Field.v "Length" uint16be ~self_constraint:(fun self ->
-        Expr.(self >= int header_size))
-  in
+  let f_len = Field.v "Length" uint16be in
   let f_data =
     Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int header_size))
   in
   let open Codec in
   v "UnderflowCheck" (fun len data -> (len, data)) [ f_len $ fst; f_data $ snd ]
+
+(* The same span after a field 3D cannot refine: the guard belongs on
+   [Length], not on the byte array before [Data]. *)
+let e2e_underflow_padded_codec =
+  let open Wire in
+  let f_len =
+    Field.v "Length" uint16be ~self_constraint:(fun self ->
+        Expr.(self >= int 7))
+  in
+  let f_pad = Field.v "Pad" (byte_array ~size:(int 2)) in
+  let f_data =
+    Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int 7))
+  in
+  let open Codec in
+  v "UnderflowPadded"
+    (fun len pad data -> (len, pad, data))
+    [
+      (f_len $ fun (l, _, _) -> l);
+      (f_pad $ fun (_, p, _) -> p);
+      (f_data $ fun (_, _, d) -> d);
+    ]
 
 (* [Wire.casetype] in a codec field. The Everparse projection auto-emits
    a [casetype_decl] dispatch + wrapper typedef per unique int-tagged
@@ -1347,8 +1363,11 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
   compile_and_run ~name:"Exts" e2e_repeat_var_elem;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
-  compile_and_run ~name:"EP_Header" e2e_mixed_codec;
-  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
+  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+
+let test_byte_span_subtraction () =
+  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec;
+  compile_and_run ~name:"UnderflowPadded" e2e_underflow_padded_codec
 
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -1619,4 +1638,6 @@ let suite =
         test_wrapper_hardening_refuses_unknown_shape;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
+      Alcotest.test_case "e2e: byte-span subtraction guard" `Slow
+        test_byte_span_subtraction;
     ] )

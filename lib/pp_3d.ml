@@ -285,10 +285,6 @@ type field_suffix =
   | Zeroterm_at_most of int expr
 
 let rec inner_wire_size : type a. a typ -> int option = function
-  | Uint8 | Int8 -> Some 1
-  | Uint16 _ | Int16 _ -> Some 2
-  | Uint32 _ | Int32 _ | Float32 _ -> Some 4
-  | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | Bits { base = U8; _ } -> Some 1
   | Bits { base = U16 _; _ } -> Some 2
   | Bits { base = U32 _; _ } -> Some 4
@@ -297,7 +293,7 @@ let rec inner_wire_size : type a. a typ -> int option = function
   | Enum { base; _ } -> inner_wire_size base
   | Where { inner; _ } -> inner_wire_size inner
   | Codec { codec_fixed_size = Some n; _ } -> Some n
-  | _ -> None
+  | t -> primitive_width t
 
 (* Like [inner_wire_size] but as an [int expr], so explicitly-sized
    types ([byte_array], [byte_slice], [single_elem], etc.) can drive
@@ -451,7 +447,7 @@ let rec open_enum_elem_base : type a. a typ -> (Format.formatter -> unit) option
 let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
-  match inner_wire_size_expr inner with
+  match if optional_region inner then None else inner_wire_size_expr inner with
   | Some s ->
       (* Project the optional as a conditional byte region: [present ? s : 0]
          bytes. The base printer comes from [field_suffix] so the inner's
@@ -492,6 +488,15 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
   | Byte_array_where { size; elt_var; _ } ->
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
+  | Single_elem { size; _ } when Option.is_some (primitive_region typ) ->
+      ( No_suffix,
+        fun ppf ->
+          pp_typ ppf
+            (Apply
+               {
+                 typ = Type_ref (primitive_region_name typ);
+                 args = [ Pack_expr size ];
+               }) )
   | Single_elem { size; elem; at_most } ->
       (* A wrapper-needing element goes through its synthesised struct, applied
          to the formals that struct lifted out of the enclosing scope; a bare
@@ -961,6 +966,65 @@ let check_3d_names (s : struct_) =
       Fmt.invalid_arg
         "Everparse: in %S, %s and %s both project to the 3D name %S" s.name a b
         id
+
+(* Conjoin [g] to a field's constraint. The constraint can already state it
+   ([length >= 8] on a UDP length sizing [length - 8]), and two spans can need
+   the same guard: a conjunct already there is not added again. *)
+let add_guard g (Field f as field) =
+  let rec states = function
+    | And (a, b) -> states a || states b
+    | c -> String.equal (Fmt.str "%a" pp_expr c) (Fmt.str "%a" pp_expr g)
+  in
+  match f.constraint_ with
+  | Some c when states c -> field
+  | None -> Field { f with constraint_ = Some g }
+  | Some c -> Field { f with constraint_ = Some (And (c, g)) }
+
+(* A byte span sized [a - b] rejects negative lengths in Codec; 3D must prove
+   the subtraction does not underflow. A span sized [f - k], with [f] an
+   unsigned field of at most 32 bits and [k] a nonnegative constant, puts
+   [f >= k] on [f] itself, a scalar EverParse can refine. A span sized
+   [a - sizeof(this)] puts [a >= sizeof(this)] on the field just before it.
+   Other arithmetic keeps the usual projection checks. *)
+let guard_subtraction_sizes fields =
+  let unsigned name =
+    List.exists
+      (fun (Field f) ->
+        f.field_name = Some name && widenable_unsigned f.field_typ)
+      fields
+  in
+  let size_guard : type a. a typ -> (string * bool expr) option = function
+    | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ }
+      -> (
+        match size with
+        | Sub ((Ref (I, name) as a), (Int n as b)) when n >= 0 && unsigned name
+          ->
+            Some (name, Ge (a, b))
+        | _ -> None)
+    | _ -> None
+  in
+  let guard_of : type a. a typ -> bool expr option = function
+    | Byte_array { size = Sub (a, Sizeof_this) } -> Some (Ge (a, Sizeof_this))
+    | _ -> None
+  in
+  let named =
+    List.filter_map (fun (Field f) -> size_guard f.field_typ) fields
+  in
+  let rec go = function
+    | f :: (Field nf :: _ as rest) ->
+        let f =
+          match guard_of nf.field_typ with Some g -> add_guard g f | None -> f
+        in
+        f :: go rest
+    | fs -> fs
+  in
+  let on_size_field (Field f as field) =
+    List.fold_left
+      (fun field (name, g) ->
+        if f.field_name = Some name then add_guard g field else field)
+      field named
+  in
+  go (List.map on_size_field fields)
 
 let pp_struct ppf (s : struct_) =
   check_3d_names s;
