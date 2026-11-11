@@ -1572,11 +1572,21 @@ let record_encoder name writers wire_size_info size_of_value check =
   in
   build_record_encoder name writers size_of_value ~check
 
-let validate_ctx wire_size_info min_size ~scratch ~clear ~param_base
-    ~param_handles validate_arr runtime input_end buf off =
+(* [run] is the record's check pass with its params bound from the caller's
+   context ([validate_runtime_of]). *)
+let validate_ctx wire_size_info min_size run runtime input_end buf off =
   check_decode_bounds wire_size_info min_size runtime input_end buf off;
-  validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
-    runtime input_end buf off
+  run runtime input_end buf off
+
+(* [validate_ctx] with the record's end already measured: [check_decode_bounds]
+   on that end. *)
+let validate_sized wire_size_info min_size run runtime input_end buf off end_off
+    =
+  check_min_bounds min_size buf off;
+  (match wire_size_info with
+  | Fixed _ -> ()
+  | Variable _ -> check_end_bounds min_size buf off end_off);
+  run runtime input_end buf off
 
 (* The check pass of a record without parameters and, for a variable-size
    one, its layout pass with the check pass it leaves; the full check pass is
@@ -1669,6 +1679,9 @@ let seal : type r.
       compiled_where struct_fields r.param_slots n_total
   in
   let scratch = domain_local_slots n_total in
+  let run =
+    validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
+  in
   let encode_check =
     if not (has_encode_checks struct_fields r.where) then None
     else
@@ -1676,7 +1689,6 @@ let seal : type r.
         (encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
            ~compiled_where)
   in
-  let field_actions = List.rev r.field_actions_rev in
   let size_of_value =
     build_size_of_value (Array.of_list (List.rev r.size_of_value_rev))
   in
@@ -1694,7 +1706,7 @@ let seal : type r.
     size_of_value;
     field_access;
     field_readers = List.rev r.field_readers;
-    field_actions;
+    field_actions = List.rev r.field_actions_rev;
     decode;
     read;
     plain_decode;
@@ -1710,9 +1722,8 @@ let seal : type r.
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
-    validate_ctx =
-      validate_ctx wire_size_info min_size ~scratch ~clear ~param_base
-        ~param_handles validate_arr;
+    validate_ctx = validate_ctx wire_size_info min_size run;
+    validate_sized = validate_sized wire_size_info min_size run;
     validate_arr;
     clear_scratch = clear;
     populate;

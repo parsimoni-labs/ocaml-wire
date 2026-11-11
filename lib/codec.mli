@@ -314,6 +314,13 @@ val embed_validate_ctx :
     use site runs, mirroring the call to the nested struct's validator the
     generated C makes. Internal use. *)
 
+val embed_validate_sized_ctx :
+  'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> int -> unit
+(** [embed_validate_sized_ctx c ctx input_end buf off end_off] is
+    {!embed_validate_ctx} for a sub-codec whose end [end_off] the caller has
+    just measured over the same bytes: the bounds check takes that end instead
+    of measuring the record again. Internal use. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 

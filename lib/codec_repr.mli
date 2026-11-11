@@ -332,6 +332,7 @@ type 'r compiled = {
   fixed_frame : int;
   plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;

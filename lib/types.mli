@@ -378,6 +378,11 @@ and _ typ =
           (** Everything [codec_decode] checks, none of what it builds. Run at
               every use site of the sub-codec, as the generated C runs the
               nested struct's validator. *)
+      codec_validate_sized :
+        eval_ctx -> Input_end.t -> bytes -> int -> int -> unit;
+          (** [codec_validate] of a record whose end, the last argument, the
+              caller has just measured with [codec_size_of] over the same bytes:
+              the frame checks that end instead of measuring again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;

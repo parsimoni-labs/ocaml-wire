@@ -301,6 +301,11 @@ and _ typ =
              EverParse generates for a sub-struct field: a use site runs the
              sub-codec's constraints, [where], enum membership, span refinements
              and actions without materialising the record. *)
+      codec_validate_sized :
+        eval_ctx -> Input_end.t -> bytes -> int -> int -> unit;
+          (* [codec_validate] of a record whose end, the last argument, the
+             caller has just measured with [codec_size_of] over the same
+             bytes: the frame checks that end instead of measuring again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;

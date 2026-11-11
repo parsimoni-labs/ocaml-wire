@@ -962,6 +962,10 @@ type 'r compiled = {
          caller's context rather than a [Param.env]. This is what a use site of
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+      (* [validate_ctx] of a record whose end, the last argument, the caller
+         has just measured over the same bytes: the frame checks that end
+         rather than measuring it again. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
       (* Zeroes the scratch before [validate_arr], when a slot can be read
