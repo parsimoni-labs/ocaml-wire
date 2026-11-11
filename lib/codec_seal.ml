@@ -142,18 +142,6 @@ let guarded_dynamic_reader : type a r.
             reader runtime input_end buf base)
   | Fixed _ | Bitfield _ | Variable _ | Variable_dynamic _ -> reader
 
-(* Size, offset, presence and [where] expressions read earlier fields through
-   these readers. *)
-let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
- fun cf typ ->
-  let reader = cf.int_reader in
-  match read_guard cf typ with
-  | None -> reader
-  | Some guard ->
-      fun runtime input_end buf base ->
-        guard runtime input_end buf base;
-        reader runtime input_end buf base
-
 (* [Codec.validate] reaches a field's bytes only through its populate: unlike
    decode, it never walks the record field by field, so a field pushed past the
    end by an overlong variable-size predecessor is read at its computed offset
@@ -310,6 +298,44 @@ let check_view ~min_wire_size access typ ~act =
         | Some s -> Some (Ps s, sets)
         | None -> None)
     | None -> None
+
+let scalar_at : type a. a scalar -> int = function
+  | Byte off | U16le off | U16be off | U32le off | U32be off -> off
+  | Sbyte off | I16le off | I16be off | I32le off | I32be off -> off
+  | Bits8 { off; _ } | Bits16le { off; _ } | Bits16be { off; _ } -> off
+
+let scalar_width : type a. a scalar -> int = function
+  | Byte _ | Sbyte _ | Bits8 _ -> 1
+  | U16le _ | U16be _ | I16le _ | I16be _ | Bits16le _ | Bits16be _ -> 2
+  | U32le _ | U32be _ | I32le _ | I32be _ -> 4
+
+(* Size, offset, presence and [where] expressions read earlier fields through
+   these readers. A scalar an int holds is read in place behind the bounds
+   check its general reader has, rather than through that reader and the
+   conversion of its value to an int: the same answer and the same error,
+   with one call instead of four. *)
+let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
+ fun cf typ ->
+  let scalar =
+    match typ_view typ with
+    | Some (Base (b, _)) -> (
+        match field_scalar ~min_wire_size:max_int cf.field_access b with
+        | Some s when slot_scalar s -> Some (Ps s)
+        | Some _ | None -> None)
+    | None -> None
+  in
+  match (scalar, read_guard cf typ) with
+  | Some (Ps s), Some _ ->
+      let at = scalar_at s and width = scalar_width s in
+      fun _runtime input_end buf base ->
+        check_read_bounds input_end ~at:(base + at) ~width;
+        read_slot s buf base
+  | _, None -> cf.int_reader
+  | None, Some guard ->
+      let reader = cf.int_reader in
+      fun runtime input_end buf base ->
+        guard runtime input_end buf base;
+        reader runtime input_end buf base
 
 (* The check-pass steps of a field, last first. *)
 let field_steps ~used ~name ~slot ~voff ~conds ~span view check full =
