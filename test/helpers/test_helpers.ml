@@ -125,3 +125,79 @@ let expect_kind pred = function
 
 let roundtrip name typ testable v =
   Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))
+
+(* -- Codec test fixtures -- *)
+
+open Wire.Everparse.Raw
+
+let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
+
+(* Project a codec to its 3D rendering for substring assertions. *)
+let render_3d codec =
+  to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])
+
+(* Helper: encode record to string using Codec API *)
+let encode_record codec v = Ok (Codec.to_string codec v)
+
+(* Helper: decode record from string using Codec API *)
+let decode_record codec s =
+  let ws = Codec.wire_size codec in
+  if String.length s < ws then
+    Error
+      {
+        at = 0;
+        field = [];
+        kind = Unexpected_eof { expected = ws; got = String.length s };
+      }
+  else Codec.decode codec (Bytes.of_string s) 0
+
+type simple_record = { a : UInt8.t; b : UInt16.t; c : UInt32.t }
+
+let simple_record_codec =
+  let open Codec in
+  v "SimpleRecord"
+    (fun a b c -> { a; b; c })
+    [
+      (Field.v "a" uint8 $ fun r -> r.a);
+      (Field.v "b" uint16 $ fun r -> r.b);
+      (Field.v "c" uint32 $ fun r -> r.c);
+    ]
+
+type meta_record = { x : UInt8.t }
+
+let projection_limit = Param.input "limit" uint8
+let projection_outx = Param.output "outx" uint8
+let projection_f_x = Field.v "x" uint8
+
+let projection_codec =
+  let open Codec in
+  v "ProjectionCodec"
+    ~where:Expr.(Field.ref projection_f_x <= Param.expr projection_limit)
+    (fun x -> { x })
+    [
+      ( Field.v "x"
+          ~constraint_:Expr.(Field.ref projection_f_x <= int 8)
+          ~action:
+            (Action.on_success
+               [ Action.assign projection_outx (Field.ref projection_f_x) ])
+          uint8
+      $ fun r -> r.x );
+    ]
+
+(* The allocation tests read [Gc.minor_words], which only counts under the
+   native and bytecode runtimes; under wasm_of_ocaml or js_of_ocaml the
+   counters stay at zero and the assertions would pass vacuously. *)
+let skip_unless_gc_counters () =
+  match Sys.backend_type with
+  | Sys.Other _ -> Alcotest.skip ()
+  | Sys.Native | Sys.Bytecode -> ()
+
+let raises_invalid f =
+  try
+    ignore (f ());
+    false
+  with Invalid_argument _ -> true
+
+let printable_byte b = Expr.(b >= int 0x20 && b <= int 0x7e)
+
+module Bs = Bytesrw.Bytes.Slice

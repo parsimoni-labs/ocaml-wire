@@ -84,3 +84,52 @@ val expect_kind : (error_kind -> bool) -> ('a, parse_error) result -> unit
 val roundtrip : string -> 'a typ -> 'a Alcotest.testable -> 'a -> unit
 (** [roundtrip name typ testable v] checks that decoding the encoding of [v]
     yields [v] again, failing the test on a parse error. *)
+
+(** {1 Codec test fixtures} *)
+
+val contains : sub:string -> string -> bool
+(** [contains ~sub s] is [true] iff [sub] occurs in [s]. *)
+
+val render_3d : 'r Codec.t -> string
+(** [render_3d codec] is the 3D rendering of [codec], for substring assertions.
+*)
+
+val encode_record : 'r Codec.t -> 'r -> (string, 'e) result
+(** [encode_record codec v] is [Ok] of the encoding of [v] with [codec]. *)
+
+val decode_record : 'r Codec.t -> string -> ('r, parse_error) result
+(** [decode_record codec s] decodes [s] with [codec], reporting an
+    [Unexpected_eof] when [s] is shorter than the codec's wire size. *)
+
+type simple_record = { a : UInt8.t; b : UInt16.t; c : UInt32.t }
+
+val simple_record_codec : simple_record Codec.t
+(** [simple_record_codec] is a three-field [uint8], [uint16], [uint32] record.
+*)
+
+type meta_record = { x : UInt8.t }
+
+val projection_limit : (UInt8.t, Param.input) Param.t
+(** [projection_limit] is the input parameter bounding {!projection_codec}. *)
+
+val projection_outx : (UInt8.t, Param.output) Param.t
+(** [projection_outx] is the output parameter {!projection_codec} assigns. *)
+
+val projection_f_x : UInt8.t Field.t
+(** [projection_f_x] is the field {!projection_codec}'s checks refer to. *)
+
+val projection_codec : meta_record Codec.t
+(** [projection_codec] is a one-field record carrying a where clause, a
+    constraint and an action over parameters. *)
+
+val skip_unless_gc_counters : unit -> unit
+(** [skip_unless_gc_counters ()] skips the current test unless the runtime
+    counts [Gc.minor_words], i.e. under the native and bytecode backends. *)
+
+val raises_invalid : (unit -> 'a) -> bool
+(** [raises_invalid f] is [true] iff [f ()] raises [Invalid_argument]. *)
+
+val printable_byte : int expr -> bool expr
+(** [printable_byte b] holds when [b] is a printable ASCII byte. *)
+
+module Bs = Bytesrw.Bytes.Slice
