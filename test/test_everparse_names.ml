@@ -317,6 +317,30 @@ let test_3d_nested_enum_declared () =
     (contains ~sub:"UINT8 enum Kind {" out);
   Alcotest.(check bool) "where on the field" true (contains ~sub:"(0 == 0)" out)
 
+(* Two enums that differ, in cases or in base, cannot share a name across a
+   record and its sub-codecs: one declaration would check both fields. The same
+   enum used twice is declared once. *)
+let test_3d_nested_enum_mismatch () =
+  let sub name e = Field.v name (codec (one_field_codec ("In_" ^ name) e)) in
+  let pair name a b =
+    Codec.v name (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]
+  in
+  let red = enum "Color" [ ("Red", 1) ] uint8 in
+  let refused what other =
+    invalid_arg_mentions what [ "two different enums"; "\"Color\"" ] (fun () ->
+        codec_3d (pair "Mix" (Field.v "a" red) (sub "b" other)));
+    invalid_arg_mentions (what ^ ", both in sub-codecs")
+      [ "two different enums"; "\"Color\"" ] (fun () ->
+        codec_3d (pair "Subs" (sub "a" red) (sub "b" other)))
+  in
+  refused "other cases" (enum "Color" [ ("Green", 2) ] uint8);
+  refused "another value" (enum "Color" [ ("Red", 2) ] uint8);
+  refused "another base" (enum "Color" [ ("Red", 1) ] uint16);
+  let out = codec_3d (pair "Same" (Field.v "a" red) (sub "b" red)) in
+  Alcotest.(check int)
+    "declared once" 1
+    (List.length (Re.all (Re.compile (Re.str "enum Color {")) out))
+
 (* Reversing a bit group into its base's native order pads the word with an
    anonymous field, which 3D needs a name for. The name it gets must not be a
    field's. *)
@@ -356,4 +380,6 @@ let suite =
         test_3d_padding_name_is_fresh;
       Alcotest.test_case "3d: an enum in a sub-codec is declared" `Quick
         test_3d_nested_enum_declared;
+      Alcotest.test_case "3d: enums that differ cannot share a name" `Quick
+        test_3d_nested_enum_mismatch;
     ] )
