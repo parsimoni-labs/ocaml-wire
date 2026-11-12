@@ -1,6 +1,7 @@
 (library
  (name wire_3d)
  (public_name wire.3d)
+ (private_modules check_wrapper)
  (libraries wire fmt re unix))
 
 (mdx

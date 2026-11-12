@@ -46,8 +46,7 @@ let test_simple_header_roundtrip version length flags =
 (** Test SimpleHeader decode crash safety *)
 let test_simple_header_crash buf =
   let buf = truncate buf in
-  let _ = decode_record Schema.simple_header_codec buf in
-  ()
+  match decode_record Schema.simple_header_codec buf with Ok _ | Error _ -> ()
 
 (** Test ConstrainedPacket roundtrip with valid values *)
 let test_constrained_packet_roundtrip pkt_type pkt_length =
@@ -68,8 +67,8 @@ let test_constrained_packet_roundtrip pkt_type pkt_length =
 (** Test ConstrainedPacket decode crash safety *)
 let test_constrained_packet_crash buf =
   let buf = truncate buf in
-  let _ = decode_record Schema.constrained_packet_codec buf in
-  ()
+  match decode_record Schema.constrained_packet_codec buf with
+  | Ok _ | Error _ -> ()
 
 let () =
   Alcobar.run "schema"
