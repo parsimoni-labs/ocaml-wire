@@ -14,11 +14,11 @@ depends: [
   "bytesrw" {>= "0.4.0"}
   "fmt" {>= "0.9"}
   "optint" {>= "0.3"}
-  "memtrace" {with-test}
-  "alcotest" {with-test}
-  "alcobar" {with-test}
+  "memtrace" {with-test | with-dev-setup}
+  "alcotest" {with-test | with-dev-setup}
+  "alcobar" {with-test | with-dev-setup}
   "re" {>= "1.11"}
-  "mdx" {with-test}
+  "mdx" {with-test | with-dev-setup}
   "odoc" {with-doc}
 ]
 build: [
