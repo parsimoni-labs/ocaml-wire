@@ -1,6 +1,7 @@
 (library
  (name wire)
  (public_name wire)
+ (private_modules dsl lower_3d pp_3d encode_guard layout seed)
  (libraries bytesrw fmt optint))
 
 (mdx
