@@ -3,6 +3,21 @@ let write file s =
   output_string oc s;
   close_out oc
 
+(* A consumer the scanner of [c] calls by name, which adds up the outputs,
+   and that scanner with every output. *)
+let summed ~target ~codec c =
+  let fields = Wire_ocaml.scanner_fields c in
+  let args = List.map (fun (name, _) -> "~" ^ name) fields
+  and terms =
+    List.map
+      (fun (name, is_bool) -> if is_bool then "Bool.to_int " ^ name else name)
+      fields
+  in
+  "module Step = struct\nlet invalid acc = acc - 1\nlet valid acc "
+  ^ String.concat " " args ^ " =\nacc + " ^ String.concat " + " terms
+  ^ "\nend\n\n"
+  ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec c
+
 (* [--oxcaml] generates for the OxCaml target. *)
 let () =
   let target =
@@ -32,6 +47,8 @@ let () =
     (Wire_ocaml.scanner ~target ~codec:"Schemas.overflow" Schemas.overflow);
   write "s_skipped.ml"
     (Wire_ocaml.scanner ~target ~codec:"Schemas.skipped" Schemas.skipped);
+  write "s_nested.ml"
+    (summed ~target ~codec:"Schemas.nested 12" (Schemas.nested 12));
   g "g_mapped.ml" ~make:"Schemas.mapped_make"
     ~maps:
       Wire_ocaml.

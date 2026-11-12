@@ -214,11 +214,33 @@ let test_scanner_enum () =
   has "enum" (Wire_rust.scanner ~codec:"c" c) check;
   has "enum, no output" (Wire_rust.scanner ~fields:[] ~codec:"c" c) check
 
-(* The code after an optional field is written once, so it grows linearly
-   with the number of optional fields, in a run or nested; a run binds the
-   outputs under it, so nested fields handing out everything grow with the
-   depth times the outputs. As test/ocaml measures the OCaml scanner. *)
+(* The code after an optional field is written once and an output under
+   more than [Plan.slot_depth] of them is bound once, so the code grows
+   linearly with the number of optional fields, in a run or nested, whatever
+   it hands out. As test/ocaml measures the OCaml scanner, in lines and in
+   words, a word being a run of letters, digits and underscores, which a
+   long line cannot hide. *)
 let lines s = List.length (String.split_on_char '\n' s)
+
+let words s =
+  let word = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+    | _ -> false
+  in
+  let n = ref 0 and inside = ref false in
+  String.iter
+    (fun c ->
+      if word c && not !inside then incr n;
+      inside := word c)
+    s;
+  !n
+
+(* [n] optional fields nested inside each other that hand out every output:
+   a level costs 18 lines and 74 words, its three slots, the split and reads
+   of its two prefixes, its presence, the block that leaves its tail, and
+   its three fields of [Fields] and of the result. The first four levels
+   bind their outputs in tuples instead. *)
+let nested_budget n = ((20 * n) + 80, (80 * n) + 450)
 
 let test_scanner_linear () =
   List.iter
@@ -234,10 +256,18 @@ let test_scanner_linear () =
       ("in a run", Schemas.gated, None);
       ("in a run, checks only", Schemas.gated, Some []);
       ("nested, checks only", Schemas.nested, Some []);
+      ("nested", Schemas.nested, None);
     ];
-  let nested = lines (Wire_rust.scanner ~codec:"g" (Schemas.nested 32)) in
-  if nested > 150 * 32 then
-    Alcotest.failf "32 nested optional fields: %d lines" nested
+  List.iter
+    (fun n ->
+      let src = Wire_rust.scanner ~codec:"g" (Schemas.nested n) in
+      let max_lines, max_words = nested_budget n in
+      if lines src > max_lines || words src > max_words then
+        Alcotest.failf
+          "%d nested optional fields, every output: %d lines and %d words, \
+           over %d and %d"
+          n (lines src) (words src) max_lines max_words)
+    [ 8; 16; 32; 64 ]
 
 (* A run of optional fields is one decision tree, which tests each atom once
    on a path. A subtree two paths reach is one closure, and the case it
