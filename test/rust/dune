@@ -1,7 +1,7 @@
 (executable
  (name gen)
  (modules gen)
- (libraries schemas diff_codecs wire.rust fmt))
+ (libraries schemas diff_codecs wire wire.rust fmt))
 
 (test
  (name test)
