@@ -21,11 +21,15 @@ val scanner_fields : 'a Wire.Codec.t -> (string * bool) list
 type scan = {
   plan : plan;
   selected : output list;
-  num : Emitter.num;
+  m : Emitter.mode;
   ppf : Format.formatter;
 }
-(** What a scanner is written from: the plan, the outputs it hands out, how it
-    holds integers and where it writes. *)
+(** What a scanner is written from: the plan, the outputs it hands out, the mode
+    of its walks and where it writes. *)
+
+val slots : plan -> output list -> output list
+(** [slots plan outputs] is the outputs among [outputs] that are slots; see
+    {!Wire_ocaml.Plan.slots}. *)
 
 val scanner :
   ?target:[> `OCaml | `OxCaml ] ->

@@ -100,12 +100,27 @@ The invariants above hold for it as follows.
   that branch. The code after an optional field is copied into its
   branches only while it is short, holds no optional field and the copies
   along a path stay under 16; otherwise it is written once, in a local
-  function the compiler turns into a jump. Either way the checks grow
-  linearly with the number of optional fields. The outputs do not when
-  optional fields nest: that function takes every output under it, so `n`
-  optional fields nested inside each other that hand out every output give
-  code quadratic in `n`, about 3,500 lines at 32 and 12,000 at 64. Selecting
-  outputs with `~fields` shrinks it, down to the checks alone.
+  function the compiler turns into a jump.
+- **Outputs are bound once.** An output under at most four optional fields
+  nested inside each other (`Plan.slot_depth`) is immutable: bound where its
+  field is read, to its absent value where the field is absent, and passed
+  to the function after the field. Realistic codecs nest no deeper, and
+  OCaml without flambda specialises each path over such bindings. A deeper
+  output is a mutable local: bound once to its absent value where the walk
+  starts, in each frame for `fold_frames`, and assigned where its field is
+  present, so an absent field writes nothing for it and the function after
+  one does not take it. An output is thus written by at most four optional
+  fields, and the code grows linearly with their number, nested or not,
+  whatever outputs it hands out: `n` of them nested inside each other that
+  hand out every output give about 1,400 lines at 32 and 2,700 at 64.
+- **Mutable locals are never allocated.** The generated code only reads and
+  assigns such a local in place, in the walk or in one of its local
+  functions, and only applies those in tail position. OCaml without flambda
+  then makes the `ref` a mutable variable, in a register or a stack slot,
+  and the function a jump. On OxCaml an `int64_u` has no `ref` and a `let
+  mutable` cannot be read in a local function, so the local is a one-field
+  record of `Wire_runtime.Target`, which flambda2 unboxes; `[@zero_alloc]`
+  checks it.
 - **Selecting outputs keeps every check.** A field is read when an output
   needs it or a check, a size or a condition reads it; every check runs
   either way.
@@ -116,8 +131,11 @@ a prefix is checked by `split_first_chunk`, whose array its loads index at
 constant offsets, and a size is compared as `u64` with the slice's length,
 which also rejects a negative one. An operation the plan checks returns
 `None` where the 63-bit int overflows, which rejects the record. A run of
-optional fields binds its outputs and the tail in one `let`, so the code
-after it is written once.
+optional fields binds the tail it leaves and its immutable outputs in one
+`let`, so the code after it is written once; an output under more than
+`Plan.slot_depth` optional fields is a `let mut` bound to its absent value
+where `scan` starts and assigned where its field is present, so the code is
+linear in the number of optional fields, as the OCaml is.
 
 The differential lanes compare every generated module with the codec on
 random bytes: the record modules on the sampled fixed records, the scanners
