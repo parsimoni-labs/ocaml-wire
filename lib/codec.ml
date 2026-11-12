@@ -1325,6 +1325,7 @@ module Testing = struct
         (fun p ->
           [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ])
         [ "pass"; "layout" ]
-    @ List.init 16 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
-    @ ([ "encode.plain"; "encode.blit"; "read.scalar" ] : string list)
+    @ List.init 4 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
+    @ ([ "encode.staged.rows"; "encode.plain"; "encode.blit"; "read.scalar" ]
+        : string list)
 end

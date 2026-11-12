@@ -1413,51 +1413,63 @@ let[@inline] put_word buf off kind at shift mask x bad =
     else Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (x lsl shift))
   end
 
-(* The writes of a fixed record of up to 16 int fields, staged: one row per
-   arity calls each getter and stores its value in place. [finish] runs the
-   check pass on what was written; [slow] is the general encoder, which
-   reports a bitfield value too wide for its field. *)
-let stage_puts : type r.
+(* The writes of a fixed record of int fields, staged four to a row. A row
+   calls its getters, stores their values in place and hands the bits that did
+   not fit their bitfield to the row after it. After the last, [finish] runs
+   the check pass on what was written, or [slow], the general encoder, reports
+   the bitfield value too wide for its field. *)
+let rec stage_rows : type r.
     r wput list ->
     slow:(r -> bytes -> int -> unit) ->
     finish:(bytes -> int -> unit) ->
-    (r -> bytes -> int -> unit) option =
+    r ->
+    bytes ->
+    int ->
+    int ->
+    unit =
  fun puts ~slow ~finish ->
+  let[@inline] last v buf off bad =
+    if bad <> 0 then slow v buf off else finish buf off
+  in
   match puts with
+  | [] -> fun v buf off bad -> last v buf off bad
   | [ p1 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
+      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
+      fun v buf off bad ->
+        let bad = Stdlib.ref bad in
+        put_word buf off k1 a1 s1 m1 (g1 v) bad;
+        last v buf off !bad
   | [ p1; p2 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
+      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
+      let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
+      fun v buf off bad ->
+        let bad = Stdlib.ref bad in
+        put_word buf off k1 a1 s1 m1 (g1 v) bad;
+        put_word buf off k2 a2 s2 m2 (g2 v) bad;
+        last v buf off !bad
   | [ p1; p2; p3 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11; p12 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in let { get = g12; kind = k12; at = a12; shift = s12; mask = m12 } = p12 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; put_word buf off k12 a12 s12 m12 (g12 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11; p12; p13 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in let { get = g12; kind = k12; at = a12; shift = s12; mask = m12 } = p12 in let { get = g13; kind = k13; at = a13; shift = s13; mask = m13 } = p13 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; put_word buf off k12 a12 s12 m12 (g12 v) bad; put_word buf off k13 a13 s13 m13 (g13 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11; p12; p13; p14 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in let { get = g12; kind = k12; at = a12; shift = s12; mask = m12 } = p12 in let { get = g13; kind = k13; at = a13; shift = s13; mask = m13 } = p13 in let { get = g14; kind = k14; at = a14; shift = s14; mask = m14 } = p14 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; put_word buf off k12 a12 s12 m12 (g12 v) bad; put_word buf off k13 a13 s13 m13 (g13 v) bad; put_word buf off k14 a14 s14 m14 (g14 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11; p12; p13; p14; p15 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in let { get = g12; kind = k12; at = a12; shift = s12; mask = m12 } = p12 in let { get = g13; kind = k13; at = a13; shift = s13; mask = m13 } = p13 in let { get = g14; kind = k14; at = a14; shift = s14; mask = m14 } = p14 in let { get = g15; kind = k15; at = a15; shift = s15; mask = m15 } = p15 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; put_word buf off k12 a12 s12 m12 (g12 v) bad; put_word buf off k13 a13 s13 m13 (g13 v) bad; put_word buf off k14 a14 s14 m14 (g14 v) bad; put_word buf off k15 a15 s15 m15 (g15 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | [ p1; p2; p3; p4; p5; p6; p7; p8; p9; p10; p11; p12; p13; p14; p15; p16 ] ->
-      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in let { get = g5; kind = k5; at = a5; shift = s5; mask = m5 } = p5 in let { get = g6; kind = k6; at = a6; shift = s6; mask = m6 } = p6 in let { get = g7; kind = k7; at = a7; shift = s7; mask = m7 } = p7 in let { get = g8; kind = k8; at = a8; shift = s8; mask = m8 } = p8 in let { get = g9; kind = k9; at = a9; shift = s9; mask = m9 } = p9 in let { get = g10; kind = k10; at = a10; shift = s10; mask = m10 } = p10 in let { get = g11; kind = k11; at = a11; shift = s11; mask = m11 } = p11 in let { get = g12; kind = k12; at = a12; shift = s12; mask = m12 } = p12 in let { get = g13; kind = k13; at = a13; shift = s13; mask = m13 } = p13 in let { get = g14; kind = k14; at = a14; shift = s14; mask = m14 } = p14 in let { get = g15; kind = k15; at = a15; shift = s15; mask = m15 } = p15 in let { get = g16; kind = k16; at = a16; shift = s16; mask = m16 } = p16 in Some (fun v buf off -> let bad = Stdlib.ref 0 in put_word buf off k1 a1 s1 m1 (g1 v) bad; put_word buf off k2 a2 s2 m2 (g2 v) bad; put_word buf off k3 a3 s3 m3 (g3 v) bad; put_word buf off k4 a4 s4 m4 (g4 v) bad; put_word buf off k5 a5 s5 m5 (g5 v) bad; put_word buf off k6 a6 s6 m6 (g6 v) bad; put_word buf off k7 a7 s7 m7 (g7 v) bad; put_word buf off k8 a8 s8 m8 (g8 v) bad; put_word buf off k9 a9 s9 m9 (g9 v) bad; put_word buf off k10 a10 s10 m10 (g10 v) bad; put_word buf off k11 a11 s11 m11 (g11 v) bad; put_word buf off k12 a12 s12 m12 (g12 v) bad; put_word buf off k13 a13 s13 m13 (g13 v) bad; put_word buf off k14 a14 s14 m14 (g14 v) bad; put_word buf off k15 a15 s15 m15 (g15 v) bad; put_word buf off k16 a16 s16 m16 (g16 v) bad; if !bad <> 0 then slow v buf off else finish buf off)
-  | _ -> None
-[@@ocamlformat "disable"]
+      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
+      let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
+      let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in
+      fun v buf off bad ->
+        let bad = Stdlib.ref bad in
+        put_word buf off k1 a1 s1 m1 (g1 v) bad;
+        put_word buf off k2 a2 s2 m2 (g2 v) bad;
+        put_word buf off k3 a3 s3 m3 (g3 v) bad;
+        last v buf off !bad
+  | p1 :: p2 :: p3 :: p4 :: rest ->
+      let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
+      let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
+      let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in
+      let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in
+      let rest = stage_rows rest ~slow ~finish in
+      fun v buf off bad ->
+        let bad = Stdlib.ref bad in
+        put_word buf off k1 a1 s1 m1 (g1 v) bad;
+        put_word buf off k2 a2 s2 m2 (g2 v) bad;
+        put_word buf off k3 a3 s3 m3 (g3 v) bad;
+        put_word buf off k4 a4 s4 m4 (g4 v) bad;
+        rest v buf off !bad
 
 let zero_words words buf off =
   for i = 0 to Array.length words - 1 do
@@ -1515,14 +1527,18 @@ let build_plain_encode name n puts check =
       finish buf off
     end
   in
-  match if all_ints then stage_puts wputs ~slow ~finish else None with
+  let staged =
+    if all_ints && wputs <> [] then Some (stage_rows wputs ~slow ~finish)
+    else None
+  in
+  match staged with
   | Some write when Array.length blits = 0 ->
       fun v buf off ->
         if off < 0 || off > Bytes.length buf - n then
           encode_too_short name n buf off
         else begin
           zero_words words buf off;
-          write v buf off
+          write v buf off 0
         end
   | Some write ->
       fun v buf off ->
@@ -1530,7 +1546,7 @@ let build_plain_encode name n puts check =
           encode_too_short name n buf off
         else if blit_all blits v buf off then begin
           zero_words words buf off;
-          write v buf off
+          write v buf off 0
         end
         else slow v buf off
   | None -> slow
@@ -1597,12 +1613,11 @@ let pass_paths prefix = function
 let encode_paths puts =
   let ints = List.filter (function Put _ -> true | Blit _ -> false) puts in
   let wputs = List.filter_map wput_of ints in
-  let staged =
-    List.length wputs = List.length ints
-    && Option.is_some
-         (stage_puts wputs ~slow:(fun _ _ _ -> ()) ~finish:(fun _ _ -> ()))
-  in
-  (if staged then [ Fmt.str "encode.staged.%d" (List.length wputs) ]
+  let staged = wputs <> [] && List.length wputs = List.length ints in
+  (if staged then
+     let n = List.length wputs in
+     Fmt.str "encode.staged.%d" (((n - 1) mod 4) + 1)
+     :: (if n > 4 then [ "encode.staged.rows" ] else [])
    else [ "encode.plain" ])
   @
   if List.exists (function Blit _ -> true | Put _ -> false) puts then
