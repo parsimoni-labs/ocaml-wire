@@ -55,8 +55,9 @@ let c_ident (s : t) = everparse_name s.name
 
 (* Both mangles are many-to-one, so two codecs with different names can land
    on one generated artifact and overwrite each other in silence. [file_base]
-   collides whenever the names differ only in the leading capital ([header]
-   and [Header] both write [Header.3d], and the second write wins: the
+   collides whenever the names differ only in case, since macOS and Windows
+   fold it in file names ([header] and [Header] both write [Header.3d],
+   [FooBar] and [Foobar] one file there, and the second write wins: the
    verified C, the plug and the provenance stamp then describe one codec while
    the OCaml side still parses with both, so the shadowed codec's FFI stubs
    validate against the other codec's spec). [c_ident] collides more widely,
@@ -70,21 +71,21 @@ let c_ident (s : t) = everparse_name s.name
    wrapper symbols too, so two codecs that would share one ([TPM2B] and
    [Tpm2b]) are refused here as well. *)
 let check_name_collisions schemas =
-  let check what key =
+  let check what ?(fold = Fun.id) key =
     let seen = Hashtbl.create 16 in
     List.iter
       (fun (s : t) ->
         let k = key s in
-        match Hashtbl.find_opt seen k with
+        match Hashtbl.find_opt seen (fold k) with
         | Some first ->
             Fmt.invalid_arg
               "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
                them"
               first s.name what k
-        | None -> Hashtbl.add seen k s.name)
+        | None -> Hashtbl.add seen (fold k) s.name)
       schemas
   in
-  check "the file" (fun s -> file_base s ^ ".3d");
+  check "the file" ~fold:String.lowercase_ascii (fun s -> file_base s ^ ".3d");
   check "the C identifier" c_ident
 
 let extern_api_path ~outdir s =
@@ -391,7 +392,6 @@ let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
    Refuse naming both fields before writing either file. *)
 let check_plug_names s =
   let fields = Wire.Everparse.plug_fields s in
-  let check what ident =
   List.iter
     (fun (f : Wire.Everparse.plug_field) ->
       if not (Wire.Private.Names.is_identifier f.name) then
@@ -400,6 +400,7 @@ let check_plug_names s =
            ([A-Za-z_][A-Za-z0-9_]*) and cannot name a plug member; rename it"
           s.name f.name)
     fields;
+  let check what ident =
     match
       Wire.Private.Names.clash
         (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)

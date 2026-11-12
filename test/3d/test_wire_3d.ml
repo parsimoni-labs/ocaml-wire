@@ -231,6 +231,10 @@ let test_name_collision () =
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
   rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
     [ "Foo2bar" ];
+  (* [FooBar.3d] and [Foobar.3d] are one file where the file system folds
+     case. *)
+  rejects "files differing in case" generate_3d [ "FooBar"; "Foobar" ]
+    [ "\"FooBar\""; "\"Foobar\""; "Foobar.3d" ];
   (* Distinct names still generate. *)
   generate_3d [ schema_named "Alpha"; schema_named "Beta" ];
   Alcotest.(check bool)
