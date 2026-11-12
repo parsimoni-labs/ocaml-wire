@@ -233,21 +233,7 @@ let write_3d ~outdir schemas =
   Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
 let locate_3d_exe () =
-  let path =
-    Sys.getenv_opt "PATH" |> Option.to_list
-    |> List.concat_map (String.split_on_char ':')
-    |> List.find_map (fun dir ->
-        let dir = if dir = "" then "." else dir in
-        let candidate = absolute_path (Filename.concat dir "3d.exe") in
-        if executable candidate then Some candidate else None)
-  in
-  match path with
-  | Some p -> Some p
-  | None ->
-      let local =
-        Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe"
-      in
-      if executable local then Some local else None
+  locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
 
 let everparse_version exe =
   let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
@@ -1849,4 +1835,5 @@ module Private = struct
       (run_3d_spawned ~output:(File log) ~outdir exe flags file)
 
   let pool_in_process = pool_in_process
+  let locate_3d_exe = Proc.locate_3d_exe
 end

@@ -11,6 +11,16 @@ val executable : string -> bool
 (** [executable path] is [true] when [path] is a file the process may execute.
 *)
 
+val locate_3d_exe :
+  win32:bool ->
+  getenv:(string -> string option) ->
+  executable:(string -> bool) ->
+  string option
+(** [locate_3d_exe ~win32 ~getenv ~executable] is the first [3d.exe] that
+    [executable] accepts: in a directory of [PATH], split on [';'] when [win32]
+    and on [':'] otherwise, then in [.local/everparse/bin] under [HOME] and
+    under [USERPROFILE]. A variable [getenv] does not know is skipped. *)
+
 (** Where a child's standard output and error go. *)
 type process_output = Inherit | Dev_null | File of string
 

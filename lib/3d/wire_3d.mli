@@ -352,8 +352,9 @@ val everparse_type_defines : string
 (** {1 Private}
 
     What {!parse_3d} and {!fork_pool} fall back to where [Unix.fork] is missing
-    (Windows), exposed so the tests exercise them on every system. Not part of
-    the stable API. *)
+    (Windows), and the search for [3d.exe] with the environment as an argument,
+    exposed so the tests exercise them on every system. Not part of the stable
+    API. *)
 
 module Private : sig
   val run_3d_spawned :
@@ -367,4 +368,15 @@ module Private : sig
   val pool_in_process : (unit -> unit) array -> bool array
   (** [pool_in_process jobs] runs [jobs] one after the other in this process and
       returns each job's success, as {!fork_pool} would. *)
+
+  val locate_3d_exe :
+    win32:bool ->
+    getenv:(string -> string option) ->
+    executable:(string -> bool) ->
+    string option
+  (** [locate_3d_exe ~win32 ~getenv ~executable] is the [3d.exe] the library
+      runs, found with the given environment: the first that [executable]
+      accepts in a directory of [PATH] (split on [';'] when [win32], on [':']
+      otherwise), then in [.local/everparse/bin] under [HOME] and under
+      [USERPROFILE]. *)
 end

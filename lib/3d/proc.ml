@@ -8,6 +8,53 @@ let executable path =
     not (Sys.is_directory path)
   with Unix.Unix_error _ | Sys_error _ -> false
 
+(* A Windows path is rooted by a separator or by a drive and a separator; the
+   test is spelled out so it answers for Windows on any host. *)
+let is_relative ~win32 path =
+  if not win32 then Filename.is_relative path
+  else
+    let sep i = String.length path > i && (path.[i] = '/' || path.[i] = '\\') in
+    not (sep 0 || (String.length path > 1 && path.[1] = ':' && sep 2))
+
+let unquote dir =
+  let n = String.length dir in
+  if n >= 2 && dir.[0] = '"' && dir.[n - 1] = '"' then String.sub dir 1 (n - 2)
+  else dir
+
+let path_dirs ~win32 path =
+  if win32 then
+    String.split_on_char ';' path
+    |> List.filter_map (fun dir ->
+        match unquote dir with "" -> None | dir -> Some dir)
+  else
+    String.split_on_char ':' path
+    |> List.map (fun dir -> if dir = "" then "." else dir)
+
+let locate_3d_exe ~win32 ~getenv ~executable =
+  let found candidate = if executable candidate then Some candidate else None in
+  let on_path dir =
+    let candidate = Filename.concat dir "3d.exe" in
+    found
+      (if is_relative ~win32 candidate then
+         Filename.concat (Sys.getcwd ()) candidate
+       else candidate)
+  in
+  let in_home var =
+    match getenv var with
+    | None | Some "" -> None
+    | Some home ->
+        found
+          (List.fold_left Filename.concat home
+             [ ".local"; "everparse"; "bin"; "3d.exe" ])
+  in
+  match
+    getenv "PATH" |> Option.to_list
+    |> List.concat_map (path_dirs ~win32)
+    |> List.find_map on_path
+  with
+  | Some _ as exe -> exe
+  | None -> List.find_map in_home [ "HOME"; "USERPROFILE" ]
+
 type process_output = Inherit | Dev_null | File of string
 
 let process_status_code = function

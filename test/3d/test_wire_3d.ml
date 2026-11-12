@@ -208,6 +208,61 @@ let test_spawn_keeps_cwd () =
             !runs)
         all)
 
+(* The search for 3d.exe, with the environment and the file system given. *)
+let locate ~win32 env exes =
+  Wire_3d.Private.locate_3d_exe ~win32
+    ~getenv:(fun var -> List.assoc_opt var env)
+    ~executable:(fun path -> List.mem path exes)
+
+let exe_in dir = Filename.concat dir "3d.exe"
+
+let home_exe home =
+  List.fold_left Filename.concat home [ ".local"; "everparse"; "bin"; "3d.exe" ]
+
+let test_locate_3d_exe () =
+  let check name expected found =
+    Alcotest.(check (option string)) name expected found
+  in
+  let tools = {|C:\tools\everparse\bin|} in
+  check "Windows: PATH splits on ';'"
+    (Some (exe_in tools))
+    (locate ~win32:true [ ("PATH", {|C:\Windows;|} ^ tools) ] [ exe_in tools ]);
+  check "Windows: a quoted PATH entry"
+    (Some (exe_in {|C:\Program Files\ep|}))
+    (locate ~win32:true
+       [ ("PATH", {|C:\Windows;"C:\Program Files\ep"|}) ]
+       [ exe_in {|C:\Program Files\ep|} ]);
+  check "Windows: USERPROFILE without HOME"
+    (Some (home_exe {|C:\Users\me|}))
+    (locate ~win32:true
+       [ ("PATH", {|C:\Windows|}); ("USERPROFILE", {|C:\Users\me|}) ]
+       [ home_exe {|C:\Users\me|} ]);
+  check "POSIX: PATH splits on ':'"
+    (Some (exe_in "/opt/a;b/bin"))
+    (locate ~win32:false
+       [ ("PATH", "/usr/bin:/opt/a;b/bin") ]
+       [ exe_in "/opt/a;b/bin" ]);
+  check "POSIX: an empty PATH entry is the current directory"
+    (Some (Filename.concat (Sys.getcwd ()) (exe_in ".")))
+    (locate ~win32:false
+       [ ("PATH", "/usr/bin:") ]
+       [ Filename.concat (Sys.getcwd ()) (exe_in ".") ]);
+  check "PATH comes before HOME"
+    (Some (exe_in "/opt/bin"))
+    (locate ~win32:false
+       [ ("PATH", "/opt/bin"); ("HOME", "/home/me") ]
+       [ exe_in "/opt/bin"; home_exe "/home/me" ]);
+  check "HOME"
+    (Some (home_exe "/home/me"))
+    (locate ~win32:false
+       [ ("PATH", "/usr/bin"); ("HOME", "/home/me") ]
+       [ home_exe "/home/me" ]);
+  check "no PATH, HOME or USERPROFILE" None (locate ~win32:false [] []);
+  check "nothing executable" None
+    (locate ~win32:true
+       [ ("PATH", tools); ("HOME", "/home/me"); ("USERPROFILE", "/home/me") ]
+       [])
+
 (* A job that raises fails alone, whatever it raises, in both pools. *)
 let test_pools_agree () =
   let jobs =
@@ -1901,6 +1956,7 @@ let suite =
         test_run_3d_spawned;
       Alcotest.test_case "two spawns leave the parent's cwd alone" `Quick
         test_spawn_keeps_cwd;
+      Alcotest.test_case "locate 3d.exe" `Quick test_locate_3d_exe;
       Alcotest.test_case "pools give the same verdicts" `Quick test_pools_agree;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
