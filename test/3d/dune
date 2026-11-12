@@ -5,7 +5,7 @@
 
 (test
  (name test)
- (modules test test_wire_3d test_wire_3d_corpus)
+ (modules test test_wire_3d test_wire_3d_corpus test_wire_3d_proc)
  (libraries wire wire.3d alcotest re unix threads.posix fmt))
 
 (rule
