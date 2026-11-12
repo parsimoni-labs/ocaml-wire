@@ -356,10 +356,13 @@ val everparse_type_defines : string
     the stable API. *)
 
 module Private : sig
-  val run_spawned : cwd:string -> log:string -> string -> string list -> int
-  (** [run_spawned ~cwd ~log exe args] starts [exe] with [Unix.create_process]
-      in [cwd], with [args] passed literally and both output streams written to
-      [log], and returns its exit code. *)
+  val run_3d_spawned :
+    outdir:string -> log:string -> string -> string list -> string -> int
+  (** [run_3d_spawned ~outdir ~log exe flags file] starts [exe] with
+      [Unix.create_process] in the current directory, which it never changes,
+      with [flags], then [--odir] and [outdir], then [file] in [outdir], both by
+      absolute path and each argument passed literally. Both output streams go
+      to [log]. Returns the exit code. *)
 
   val pool_in_process : (unit -> unit) array -> bool array
   (** [pool_in_process jobs] runs [jobs] one after the other in this process and

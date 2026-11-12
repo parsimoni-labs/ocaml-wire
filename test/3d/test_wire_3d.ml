@@ -92,8 +92,9 @@ let test_generate_3d_files () =
 let needs_posix () = if Sys.win32 then Alcotest.skip ()
 
 (* [with_fake_3d f] puts a fake [3d.exe] first on PATH, one that writes its cwd
-   and then each argument on a line of [observed] in that cwd, and calls [f
-   ~outdir ~exe ~observed] with an output directory whose name needs quoting. *)
+   and then each argument on a line of [observed], in the directory [--odir]
+   names or else in that cwd, and calls [f ~outdir ~exe ~observed] with an
+   output directory whose name needs quoting. *)
 let with_fake_3d f =
   needs_posix ();
   let outdir = Filename.temp_dir "wire 3d;out " "" in
@@ -110,7 +111,9 @@ let with_fake_3d f =
       Out_channel.with_open_text exe (fun oc ->
           output_string oc
             "#!/bin/sh\n\
-             { pwd; for arg do printf '%s\\n' \"$arg\"; done; } > observed\n");
+             out=observed\n\
+             if [ \"$2\" = --odir ]; then out=\"$3/observed\"; fi\n\
+             { pwd -P; for arg do printf '%s\\n' \"$arg\"; done; } > \"$out\"\n");
       Unix.chmod exe 0o755;
       (* The fake must come first, but the rest of PATH stays: [printf] is not
          a builtin of every /bin/sh (OpenBSD's ksh runs /usr/bin/printf). *)
@@ -132,22 +135,78 @@ let test_parse_3d_uses_argv_and_cwd () =
         [ Unix.realpath outdir; "--batch"; fake_schema ]
         (In_channel.with_open_text observed In_channel.input_lines))
 
-(* Windows has no [fork]: there [parse_3d] spawns the process from the parent,
-   which moves to the output directory for the spawn alone. *)
-let test_run_spawned () =
-  with_fake_3d (fun ~outdir ~exe ~observed ->
+(* Windows has no [fork]: there 3d.exe is spawned where the process is, with
+   its output directory and its input by absolute path. *)
+let spawn_fake ~exe outdir =
+  let log = Filename.concat outdir "log" in
+  let code =
+    Wire_3d.Private.run_3d_spawned ~outdir ~log exe [ "--batch" ] fake_schema
+  in
+  ( code,
+    In_channel.with_open_text
+      (Filename.concat outdir "observed")
+      In_channel.input_lines )
+
+let spawned ~here outdir =
+  ( 0,
+    [
+      Unix.realpath here;
+      "--batch";
+      "--odir";
+      outdir;
+      Filename.concat outdir fake_schema;
+    ] )
+
+let observation = Alcotest.(pair int (list string))
+
+let test_run_3d_spawned () =
+  with_fake_3d (fun ~outdir ~exe ~observed:_ ->
       let here = Sys.getcwd () in
-      let log = Filename.concat outdir "log" in
-      let code =
-        Wire_3d.Private.run_spawned ~cwd:outdir ~log exe
-          [ "--batch"; fake_schema ]
+      Alcotest.check observation "exit code, cwd and literal argv"
+        (spawned ~here outdir) (spawn_fake ~exe outdir))
+
+(* Two threads spawn at once while a third reads the directory. Each child
+   reports the directory it started in, which is the parent's if the parent
+   never moved. Threads, since [Unix.fork] refuses to run once a domain has
+   been spawned and the tests after this one fork. *)
+let test_spawn_keeps_cwd () =
+  with_fake_3d (fun ~outdir ~exe ~observed:_ ->
+      let here = Sys.getcwd () in
+      let stop = Atomic.make false and moved = Atomic.make false in
+      let watcher =
+        Thread.create
+          (fun () ->
+            while not (Atomic.get stop) do
+              if Sys.getcwd () <> here then Atomic.set moved true;
+              Thread.yield ()
+            done)
+          ()
       in
-      Alcotest.(check int) "exit code" 0 code;
-      Alcotest.(check string) "the parent's cwd is back" here (Sys.getcwd ());
-      Alcotest.(check (list string))
-        "cwd and literal argv"
-        [ Unix.realpath outdir; "--batch"; fake_schema ]
-        (In_channel.with_open_text observed In_channel.input_lines))
+      let spawns name =
+        let outdir = Filename.concat outdir name in
+        let runs = ref [] in
+        Unix.mkdir outdir 0o700;
+        let thread =
+          Thread.create
+            (fun () -> runs := List.init 5 (fun _ -> spawn_fake ~exe outdir))
+            ()
+        in
+        (name, outdir, runs, thread)
+      in
+      let all = List.map spawns [ "a"; "b" ] in
+      List.iter (fun (_, _, _, thread) -> Thread.join thread) all;
+      Atomic.set stop true;
+      Thread.join watcher;
+      Alcotest.(check bool) "the parent's cwd moved" false (Atomic.get moved);
+      Alcotest.(check string) "the parent's cwd" here (Sys.getcwd ());
+      List.iter
+        (fun (name, outdir, runs, _) ->
+          Wire_3d.rm_rf outdir;
+          Alcotest.(check int) (name ^ ": runs") 5 (List.length !runs);
+          List.iter
+            (Alcotest.check observation name (spawned ~here outdir))
+            !runs)
+        all)
 
 (* A job that raises fails alone, whatever it raises, in both pools. *)
 let test_pools_agree () =
@@ -1838,7 +1897,10 @@ let suite =
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "parse_3d uses argv and cwd" `Quick
         test_parse_3d_uses_argv_and_cwd;
-      Alcotest.test_case "run_spawned uses argv and cwd" `Quick test_run_spawned;
+      Alcotest.test_case "run_3d_spawned uses argv, not cwd" `Quick
+        test_run_3d_spawned;
+      Alcotest.test_case "two spawns leave the parent's cwd alone" `Quick
+        test_spawn_keeps_cwd;
       Alcotest.test_case "pools give the same verdicts" `Quick test_pools_agree;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;

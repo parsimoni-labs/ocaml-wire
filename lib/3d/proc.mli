@@ -25,22 +25,18 @@ val run_process :
   string list ->
   Unix.process_status
 (** [run_process ?output ~cwd exe args] runs [exe] with [args] in [cwd], without
-    a shell, and waits for it. The directory changes in the child only. *)
+    a shell, and waits for it. The directory changes in the child only. Needs
+    [Unix.fork]. *)
+
+val spawn :
+  ?output:process_output -> string -> string list -> Unix.process_status
+(** [spawn ?output exe args] runs [exe] with [args] in the current directory,
+    without a shell and without [Unix.fork], and waits for it. *)
 
 val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
 (** [fork_pool ~max_jobs jobs] runs each of [jobs] in a process of its own, at
     most [max_jobs] at once, and is each job's success, exit 0 and no exception,
     in input order. A job that raises fails alone: the others still run. *)
-
-val run_spawned :
-  ?output:process_output ->
-  cwd:string ->
-  string ->
-  string list ->
-  Unix.process_status
-(** [run_spawned ?output ~cwd exe args] is {!run_process} where there is no
-    [fork]: the parent moves to [cwd] for the spawn alone and moves back, under
-    a lock. Other domains see the move while it lasts. *)
 
 val pool_in_process : (unit -> unit) array -> bool array
 (** [pool_in_process jobs] is {!fork_pool} where there is no [fork]: the jobs

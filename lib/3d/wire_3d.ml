@@ -580,6 +580,23 @@ let fields_c_files schemas =
 
 include Check_wrapper
 
+(* Without [fork] nothing can start 3d.exe in [outdir] short of moving this
+   process there, so 3d.exe is told its output directory and its input by
+   absolute path and runs where the process is. *)
+let run_3d_spawned ?output ~outdir exe flags file =
+  let outdir = absolute_path outdir in
+  let output =
+    match output with
+    | Some (File log) -> Some (File (absolute_path log))
+    | (Some (Inherit | Dev_null) | None) as o -> o
+  in
+  spawn ?output exe (flags @ [ "--odir"; outdir; Filename.concat outdir file ])
+
+(* Run 3d.exe with [flags] on [file], a name in [outdir], writing there. *)
+let run_3d ?output ~outdir exe flags file =
+  if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
+  else run_process ?output ~cwd:outdir exe (flags @ [ file ])
+
 let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
@@ -591,8 +608,7 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     (fun f ->
       let output = if quiet then Dev_null else Inherit in
       let ret =
-        run_process ~output ~cwd:outdir exe [ "--batch"; f ]
-        |> process_status_code
+        run_3d ~output ~outdir exe [ "--batch" ] f |> process_status_code
       in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
       harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
@@ -612,10 +628,9 @@ let parse_3d ?(batch = false) ~outdir file =
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
-  let args = if batch then [ "--batch"; file ] else [ file ] in
+  let flags = if batch then [ "--batch" ] else [] in
   let ret =
-    run_process ~output:(File log_path) ~cwd:outdir exe args
-    |> process_status_code
+    run_3d ~output:(File log_path) ~outdir exe flags file |> process_status_code
   in
   let captured =
     try In_channel.with_open_text log_path In_channel.input_all
@@ -834,14 +849,11 @@ let batch_check ?max_jobs ~outdir schemas =
               (fun () ->
                 generate_3d ~outdir:work [ schema ];
                 let status =
-                  run_process
+                  run_3d
                     ~output:(File (log_of i))
-                    ~cwd:work exe
-                    [
-                      "--batch";
-                      "--no_copy_everparse_h";
-                      Wire.Everparse.filename schema;
-                    ]
+                    ~outdir:work exe
+                    [ "--batch"; "--no_copy_everparse_h" ]
+                    (Wire.Everparse.filename schema)
                 in
                 if process_status_code status <> 0 then
                   failwith "EverParse rejected"))
@@ -1832,8 +1844,9 @@ let main ?name ~mode ~package codecs =
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)
 
 module Private = struct
-  let run_spawned ~cwd ~log exe args =
-    process_status_code (run_spawned ~output:(File log) ~cwd exe args)
+  let run_3d_spawned ~outdir ~log exe flags file =
+    process_status_code
+      (run_3d_spawned ~output:(File log) ~outdir exe flags file)
 
   let pool_in_process = pool_in_process
 end

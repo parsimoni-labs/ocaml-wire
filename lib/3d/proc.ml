@@ -22,55 +22,40 @@ let open_output = function
       Some
         (Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600)
 
-(* Where there is no [fork] (Windows), the child can only start in the parent's
-   directory. The parent moves there for the spawn alone and moves back, under
-   a lock so two spawns never see each other's directory. Other domains still
-   see the move while it lasts, which is why the systems that have [fork] do not
-   take this path. *)
-let spawn_lock = Mutex.create ()
-
-let run_spawned ?(output = Inherit) ~cwd exe args =
+(* Run [exe] without a shell, in the parent's directory: the child of
+   [Unix.create_process] starts where its parent is, and the parent stays
+   where it is, since moving it would move every other domain too. *)
+let spawn ?(output = Inherit) exe args =
   let output_fd = open_output output in
   let out = Option.value output_fd ~default:Unix.stdout in
   let pid =
     Fun.protect
       ~finally:(fun () -> Option.iter Unix.close output_fd)
       (fun () ->
-        Mutex.protect spawn_lock (fun () ->
-            let here = Sys.getcwd () in
-            Sys.chdir cwd;
-            Fun.protect
-              ~finally:(fun () -> Sys.chdir here)
-              (fun () ->
-                Unix.create_process exe
-                  (Array.of_list (exe :: args))
-                  Unix.stdin out out)))
+        Unix.create_process exe (Array.of_list (exe :: args)) Unix.stdin out out)
   in
   snd (Unix.waitpid [] pid)
 
-(* Run [exe] without a shell. Redirection is opened in the parent, then the
-   child changes directory and receives each argument literally through
-   [execv]. This keeps a process-local cwd: changing it in the parent would race
-   with other domains and fibers. *)
+(* Run [exe] without a shell, in [cwd]. Redirection is opened in the parent,
+   then the child changes directory and receives each argument literally
+   through [execv]. Needs [fork]. *)
 let run_process ?(output = Inherit) ~cwd exe args =
-  if Sys.win32 then run_spawned ~output ~cwd exe args
-  else
-    let output_fd = open_output output in
-    match Unix.fork () with
-    | 0 -> (
-        try
-          Unix.chdir cwd;
-          Option.iter
-            (fun fd ->
-              Unix.dup2 fd Unix.stdout;
-              Unix.dup2 fd Unix.stderr;
-              Unix.close fd)
-            output_fd;
-          Unix.execv exe (Array.of_list (exe :: args))
-        with Unix.Unix_error _ -> Unix._exit 127)
-    | pid ->
-        Option.iter Unix.close output_fd;
-        snd (Unix.waitpid [] pid)
+  let output_fd = open_output output in
+  match Unix.fork () with
+  | 0 -> (
+      try
+        Unix.chdir cwd;
+        Option.iter
+          (fun fd ->
+            Unix.dup2 fd Unix.stdout;
+            Unix.dup2 fd Unix.stderr;
+            Unix.close fd)
+          output_fd;
+        Unix.execv exe (Array.of_list (exe :: args))
+      with Unix.Unix_error _ -> Unix._exit 127)
+  | pid ->
+      Option.iter Unix.close output_fd;
+      snd (Unix.waitpid [] pid)
 
 (* Run one pool job: [true] when it returns, [false] (with the message on
    stderr) when it raises, whatever it raises: a forked job that raises exits
