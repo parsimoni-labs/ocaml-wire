@@ -332,6 +332,35 @@ let test_refined () =
 (* A codec the generator cannot specialise is refused when the code is
    generated, naming the field and why, rather than given a module with fewer
    functions. *)
+(* Arithmetic that overflows the native int rejects the record, with the
+   codec's error, where wrapping would accept it. *)
+let test_overflow () =
+  let fix buf off =
+    Bytes.set_int32_be buf off (Int32.of_int (Random.State.int rand 8));
+    Bytes.set_uint8 buf (off + 4) (Random.State.int rand 8);
+    if Random.State.bool rand then Bytes.set_uint16_be buf (off + 5) 0
+  in
+  reads ~fix Schemas.overflow ~decode:G_overflow.decode
+    ~validate:G_overflow.validate;
+  let u32 = UInt32.of_int32 in
+  writes Schemas.overflow
+    ~write:(fun (a, hi, lo, b, c) buf off ->
+      G_overflow.write buf off a hi lo b c)
+    (decoded ~fix Schemas.overflow 200
+    @ [
+        (u32 9l, 0, 0, u32 1l, u32 1l);
+        (u32 1l, 0, 9, u32 1l, u32 1l);
+        (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
+      ]);
+  let wrapped =
+    Bytes.of_string "\000\000\000\001\000\128\000\000\000\128\000\000\000"
+  in
+  Alcotest.(check bool)
+    "a wrapped product is rejected" true
+    (match G_overflow.decode wrapped 0 with
+    | _ -> false
+    | exception Parse_error { kind = Value_out_of_range _; _ } -> true)
+
 let test_refused () =
   let refused ~maps name =
     match Wire_ocaml.ml ~maps ~make:"m" ~codec:"c" Schemas.mapped with
@@ -712,6 +741,7 @@ let suite =
         test_digest;
       Alcotest.test_case "negative literals" `Quick test_signed;
       Alcotest.test_case "errors in the codec's order" `Quick test_refined;
+      Alcotest.test_case "overflowing arithmetic" `Quick test_overflow;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
       Alcotest.test_case "no literal needs more than 31 bits" `Quick

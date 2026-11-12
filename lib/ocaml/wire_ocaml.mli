@@ -20,6 +20,9 @@
     checks it against the codec when it loads, for a program that links [wire]
     anyway.
 
+    A [+], [-] or [*] in a constraint or a [where] clause is checked as the
+    codec checks it: an overflow rejects the record with the codec's error.
+
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
 

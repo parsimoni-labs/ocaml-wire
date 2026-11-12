@@ -159,3 +159,12 @@ val refined : refined Codec.t
 (** [refined] has checks that fail together: a refinement over an enum, an enum
     over a refinement, and a constrained bitfield after the first of its word,
     so its errors say in which order the codec runs them. *)
+
+type overflow = UInt32.t * int * int * UInt32.t * UInt32.t
+
+val overflow_make : UInt32.t -> int -> int -> UInt32.t -> UInt32.t -> overflow
+(** [overflow_make] builds an {!overflow} record. *)
+
+val overflow : overflow Codec.t
+(** [overflow] has field constraints and a [where] clause whose arithmetic
+    overflows the native int on some inputs. *)

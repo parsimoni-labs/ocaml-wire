@@ -221,3 +221,28 @@ let refined =
                (where Expr.(Field.ref code > int 15) uint8))
         $ fun (_, _, _, x) -> x );
       ]
+
+type overflow = UInt32.t * int * int * UInt32.t * UInt32.t
+
+let overflow_make a hi lo b c = (a, hi, lo, b, c)
+
+(* Arithmetic that leaves the native int: the sums for any [A] or [Lo] above
+   5, the product for large [B] and [C]. *)
+let overflow =
+  let near_max = max_int - 5 in
+  let overflows self = Expr.(self + int near_max <> int 0) in
+  let b = Field.v "B" uint32be in
+  let c = Field.v "C" uint32be in
+  Codec.v "Overflow"
+    ~where:Expr.(Field.ref b * Field.ref c >= int 0)
+    overflow_make
+    Codec.
+      [
+        ( Field.v "A" uint32be ~self_constraint:overflows
+        $ fun (x, _, _, _, _) -> x );
+        (Field.v "Hi" (bits ~width:4 U8) $ fun (_, x, _, _, _) -> x);
+        ( Field.v "Lo" (bits ~width:4 U8) ~self_constraint:overflows
+        $ fun (_, _, x, _, _) -> x );
+        (b $ fun (_, _, _, x, _) -> x);
+        (c $ fun (_, _, _, _, x) -> x);
+      ]

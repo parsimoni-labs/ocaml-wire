@@ -16,17 +16,10 @@
 - A `paranoid` dune profile that bounds-checks every read, for tests (#435,
   @samoht)
 
-- `Wire_ocaml`, in the new `wire.ocaml` library, writes a fixed-size codec out
-  as OCaml with every offset a constant, for `bytes` and for bigarray buffers:
-  `decode`, `validate`, `write`, a getter per field and a `Valid` view whose
-  reads are bare loads. It specialises the maps the caller names and refuses,
-  naming the field, what it cannot specialise. The generated module links the
-  new `wire.runtime` library (the integer carriers, unchecked access and parse
-  errors, on `optint` alone) rather than `wire`, needs no codec at run time,
-  and raises the codec's own errors itself; `Wire_ocaml.bridge` writes the small
-  module that checks, where `wire` is linked, that the codec has not changed. It
-  builds for js_of_ocaml and wasm_of_ocaml too, and with ``~target:`OxCaml`` its
-  hot paths are checked `[@zero_alloc]` (#436, @samoht)
+- `wire.ocaml` (`Wire_ocaml`): generate plain OCaml from a fixed-size codec,
+  with every offset a constant. The generated code needs only the new
+  `wire.runtime`, and also builds for js_of_ocaml, wasm_of_ocaml and OxCaml
+  (#436, @samoht)
 
 ### Changed
 
@@ -87,8 +80,10 @@
 - A negative offset raises `Invalid_argument`; one near `max_int` is a parse
   error (#435, @samoht)
 
-- `wire` builds on OxCaml compilers, where a GADT equation in the expression
-  evaluator escaped its scope (#436, @samoht)
+- Generated OCaml checks arithmetic as the codec does, so it rejects what the
+  codec rejects on overflow (#436, @samoht)
+
+- `wire` builds on OxCaml (#436, @samoht)
 
 ## 1.3.0
 

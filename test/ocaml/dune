@@ -29,7 +29,9 @@
   g_signed.ml
   g_signed_wire.ml
   g_refined.ml
-  g_refined_wire.ml)
+  g_refined_wire.ml
+  g_overflow.ml
+  g_overflow_wire.ml)
  (action
   (run ./gen.exe)))
 
@@ -57,5 +59,7 @@
   g_signed
   g_signed_wire
   g_refined
-  g_refined_wire)
+  g_refined_wire
+  g_overflow
+  g_overflow_wire)
  (libraries schemas wire wire.runtime wire.ocaml fmt alcotest))

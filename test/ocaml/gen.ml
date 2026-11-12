@@ -25,6 +25,7 @@ let () =
   g "g_wide.ml" ~make:"Schemas.wide_make" "wide" Schemas.wide;
   g "g_signed.ml" ~make:"Schemas.signed_make" "signed" Schemas.signed;
   g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
+  g "g_overflow.ml" ~make:"Schemas.overflow_make" "overflow" Schemas.overflow;
   g "g_mapped.ml" ~make:"Schemas.mapped_make"
     ~maps:
       Wire_ocaml.

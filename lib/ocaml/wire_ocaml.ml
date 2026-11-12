@@ -17,6 +17,11 @@ type store =
    index past the cases of a lookup. *)
 type kind = Constraint | Enum of int list | Tag
 
+(* A test as OCaml: [fast] is false when the test fails or its arithmetic
+   overflows; [slow], present when it has arithmetic, raises the codec's error
+   on overflow. *)
+type test = { fast : string; slow : string option }
+
 (* A field of the record: its name, the OCaml name its functions and record
    field derive from, the variable that holds its plain value, where it sits,
    how it is stored, the OCaml tests its value must pass in the order the codec
@@ -31,12 +36,12 @@ type field = {
   off : int;
   at : int;
   store : store;
-  checks : (string * kind) list;
+  checks : (test * kind) list;
   enum : (string * int list) option;
   map : string option;
 }
 
-let tests f = List.map fst f.checks
+let tests f = List.map (fun (t, _) -> t.fast) f.checks
 
 type typ = Typ : 'a Wire.typ -> typ
 
@@ -82,50 +87,78 @@ let mask width =
   if width <= 30 then Fmt.str "0x%x" ((1 lsl width) - 1)
   else Fmt.str "(mask32 lsr %d)" (32 - width)
 
+let rt = "Wire_runtime"
+let errors = rt ^ ".Errors"
+let arith = rt ^ ".Arith"
+
+(* How [+], [-] and [*] are written: raising [Arith.Overflow], or the codec's
+   error. [used] is set once one is written. *)
+type ops = { checked : bool; mutable used : bool }
+
 (* An OCaml expression for [e], over the plain values of the fields read so
    far, which are what the codec's constraints see. *)
-let rec expr : type a. (string -> string) -> a T.expr -> string =
- fun var e ->
-  let bin op a b = Fmt.str "(%s %s %s)" (expr var a) op (expr var b) in
+let rec expr : type a. ops -> (string -> string) -> a T.expr -> string =
+ fun ops var e ->
+  let expr e = expr ops var e in
+  let cmp op a b = cmp ops var op a b in
+  let bin op a b = Fmt.str "(%s %s %s)" (expr a) op (expr b) in
+  let arith_op fn a b =
+    ops.used <- true;
+    Fmt.str "(%s.%s%s %s %s)" arith
+      (if ops.checked then "checked_" else "")
+      fn (expr a) (expr b)
+  in
   match e with
   | T.Int n -> int_lit n
   | T.Bool b -> string_of_bool b
   | T.Ref (T.I, name) -> var name
-  | T.Add (a, b) -> bin "+" a b
-  | T.Sub (a, b) -> bin "-" a b
-  | T.Mul (a, b) -> bin "*" a b
+  | T.Add (a, b) -> arith_op "add" a b
+  | T.Sub (a, b) -> arith_op "sub" a b
+  | T.Mul (a, b) -> arith_op "mul" a b
   | T.Land (a, b) -> bin "land" a b
   | T.Lor (a, b) -> bin "lor" a b
   | T.Lxor (a, b) -> bin "lxor" a b
-  | T.Lnot a -> Fmt.str "(lnot %s)" (expr var a)
+  | T.Lnot a -> Fmt.str "(lnot %s)" (expr a)
   | T.Lsl (a, b) -> bin "lsl" a b
   | T.Lsr (a, b) -> bin "lsr" a b
-  | T.Eq (a, b) -> cmp var "=" a b
-  | T.Ne (a, b) -> cmp var "<>" a b
-  | T.Lt (a, b) -> cmp var "<" a b
-  | T.Le (a, b) -> cmp var "<=" a b
-  | T.Gt (a, b) -> cmp var ">" a b
-  | T.Ge (a, b) -> cmp var ">=" a b
+  | T.Eq (a, b) -> cmp "=" a b
+  | T.Ne (a, b) -> cmp "<>" a b
+  | T.Lt (a, b) -> cmp "<" a b
+  | T.Le (a, b) -> cmp "<=" a b
+  | T.Gt (a, b) -> cmp ">" a b
+  | T.Ge (a, b) -> cmp ">=" a b
   | T.And (a, b) -> bin "&&" a b
   | T.Or (a, b) -> bin "||" a b
-  | T.Not a -> Fmt.str "(not %s)" (expr var a)
-  | T.Cast (`U8, a) -> Fmt.str "(%s land 0xff)" (expr var a)
-  | T.Cast (`U16, a) -> Fmt.str "(%s land 0xffff)" (expr var a)
+  | T.Not a -> Fmt.str "(not %s)" (expr a)
+  | T.Cast (`U8, a) -> Fmt.str "(%s land 0xff)" (expr a)
+  | T.Cast (`U16, a) -> Fmt.str "(%s land 0xffff)" (expr a)
   | T.If_then_else (c, a, b) ->
-      Fmt.str "(if %s then %s else %s)" (expr var c) (expr var a) (expr var b)
+      Fmt.str "(if %s then %s else %s)" (expr c) (expr a) (expr b)
   | _ -> fail_unsupported "expression %a" T.pp_expr e
 
 (* Comparisons are typed, so the compiler emits a machine comparison. *)
-and cmp : type a. (string -> string) -> string -> a T.expr -> a T.expr -> string
-    =
- fun var op a b ->
+and cmp : type a.
+    ops -> (string -> string) -> string -> a T.expr -> a T.expr -> string =
+ fun ops var op a b ->
   let ty : type a. a T.expr -> string = function
     | T.Bool _ | T.Eq _ | T.Ne _ | T.Lt _ | T.Le _ | T.Gt _ | T.Ge _ | T.And _
     | T.Or _ | T.Not _ ->
         "bool"
     | _ -> "int"
   in
-  Fmt.str "((%s : %s) %s %s)" (expr var a) (ty a) op (expr var b)
+  Fmt.str "((%s : %s) %s %s)" (expr ops var a) (ty a) op (expr ops var b)
+
+let test var e =
+  let fast = { checked = false; used = false } in
+  let s = expr fast var e in
+  if not fast.used then { fast = s; slow = None }
+  else
+    {
+      fast =
+        Fmt.str "(match %s with b -> b | exception %s.Overflow -> false)" s
+          arith;
+      slow = Some (expr { checked = true; used = false } var e);
+    }
 
 (* A field's store, and the conditions its type adds on its value, which a
    field's own constraint refers to by the field's name: the outermost first,
@@ -204,7 +237,7 @@ let place_bits ~off ~word ~base ~order ~width =
 let field_of : type b.
     var:(string -> string) ->
     label:string ->
-    ?extra:(string * kind) list ->
+    ?extra:(test * kind) list ->
     string ->
     string ->
     _ ->
@@ -214,7 +247,7 @@ let field_of : type b.
     string option ->
     field * word option * int =
  fun ~var ~label ?(extra = []) name v word off typ own map ->
-  let own = List.map (fun e -> (expr var e, Constraint)) own in
+  let own = List.map (fun e -> (test var e, Constraint)) own in
   match typ with
   | T.Bits { width; base; bit_order } ->
       let w, shift, next =
@@ -228,7 +261,7 @@ let field_of : type b.
         next )
   | typ ->
       let store, refine = classify typ in
-      let refine = List.map (fun (e, k) -> (expr var e, k)) (refine name) in
+      let refine = List.map (fun (e, k) -> (test var e, k)) (refine name) in
       let checks = refine @ extra @ own in
       (match (store, checks) with
       | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
@@ -279,7 +312,8 @@ let layout ~maps (s : T.struct_) =
               let extra =
                 Option.to_list
                   (Option.map
-                     (fun n -> (Fmt.str "(%s < %d)" v n, Tag))
+                     (fun n ->
+                       ({ fast = Fmt.str "(%s < %d)" v n; slow = None }, Tag))
                      index_bound)
               in
               field_of ~var ~label ~extra name v word off inner own (Some path))
@@ -293,7 +327,7 @@ let layout ~maps (s : T.struct_) =
         go (i + 1) word off (fld :: acc) rest
   in
   let fields, size = go 0 None 0 [] s.fields in
-  (fields, size, Option.map (expr var) s.where)
+  (fields, size, Option.map (test var) s.where)
 
 (* Reads. A frame of at least 8 bytes is loaded as big-endian 64-bit words; a
    byte, a big-endian 16-bit value or a bitfield word of either is taken out of
@@ -318,9 +352,6 @@ let endian_suffix = function T.Big -> "be" | T.Little -> "le"
 (* The buffer the generated code reads: its type, its unchecked accessors, its
    length, and the module of its bounds-checked loads and string copies. *)
 type src = { typ : string; u : string; len : string; checked : string }
-
-let rt = "Wire_runtime"
-let errors = rt ^ ".Errors"
 
 let bytes_src =
   {
@@ -402,7 +433,8 @@ let typed_value f =
       | Bits _ | Bytes _ -> f.var)
 
 let all_tests ~fields ~where =
-  List.concat_map tests fields @ Option.to_list where
+  List.concat_map tests fields
+  @ Option.to_list (Option.map (fun t -> t.fast) where)
 
 let pp_frame ~src ppf on_short =
   Fmt.pf ppf "off < 0 || off > %s buf - size then %s buf off" src.len on_short
@@ -865,6 +897,18 @@ let raise_check (f : field) (_, kind) =
         valid
   | Tag -> Fmt.str "%s.invalid_tag ~at:%s ~field:%S %s" errors at f.name f.var
 
+(* [test] in [fail], an overflow in it raised as found at [at] in [field]. *)
+let slow_test ~at ~field t =
+  match t.slow with
+  | None -> t.fast
+  | Some slow ->
+      Fmt.str
+        "(match %s with b -> b | exception %s.Parse_error e -> %s.relocate \
+         ~at:%s ~field:[%a] e)"
+        slow errors errors at
+        Fmt.(list ~sep:(any "; ") (fmt "%S"))
+        field
+
 let pp_cold ~src ppf ~target ~fields ~where =
   Fmt.pf ppf
     "let%s fail buf off =@\n\
@@ -878,15 +922,20 @@ let pp_cold ~src ppf ~target ~fields ~where =
   in
   pp_reads ~src ppf ~words:[] read;
   List.iter
-    (fun f ->
+    (fun (f : field) ->
       List.iter
         (fun ((test, _) as c) ->
-          Fmt.pf ppf "    if not %s then %s;@\n" test (raise_check f c))
+          let at = Fmt.str "(off + %d)" f.at in
+          Fmt.pf ppf "    if not %s then %s;@\n"
+            (slow_test ~at ~field:[ f.name ] test)
+            (raise_check f c))
         f.checks)
     fields;
   Option.iter
     (fun w ->
-      Fmt.pf ppf "    if not %s then %s.where_clause ~at:off;@\n" w errors)
+      Fmt.pf ppf "    if not %s then %s.where_clause ~at:off;@\n"
+        (slow_test ~at:"off" ~field:[] w)
+        errors)
     where;
   Fmt.pf ppf
     "    no_error ()@\n\
