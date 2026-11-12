@@ -998,12 +998,15 @@ type 'r compiled = {
       (* The fast paths [seal] selected, by name: read by [Testing.paths]. *)
 }
 
+type param_use = Stable | Settled | Unsettled
+
 type 'r t = {
   id : int;
   name : string;
   struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
+  param_use : param_use;
   where : bool expr option;
   doc : string option;
       (** Free-text note (e.g. an RFC citation) projected as a [/*++ ... --*/]

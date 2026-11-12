@@ -302,8 +302,8 @@ val embed_decode_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> 'r
 (** Context-threaded embedded decode. Under a context made by
     {!Types.checked_eval_ctx} it only builds the record, the enclosing check
-    pass having checked it; otherwise it checks first, as {!embed_decode} does.
-    Internal use. *)
+    pass having checked it; otherwise it checks the record too, as
+    {!embed_decode} does. Internal use. *)
 
 val embed_validate_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> unit

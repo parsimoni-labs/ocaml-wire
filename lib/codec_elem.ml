@@ -292,9 +292,9 @@ let rec iter_refs : type a.
 
 let iter_param_refs f e = iter_refs ~param:f ~field:ignore e
 
-let rec iter_param_refs_stmt f = function
+let rec iter_param_refs_stmt ~assign f = function
   | Types.Assign (p, e) ->
-      f (Param.Pack p);
+      assign (Param.Pack p);
       iter_param_refs f e
   | Types.Field_assign (_, _, e) -> iter_param_refs f e
   | Types.Extern_call (_, _) -> ()
@@ -302,16 +302,17 @@ let rec iter_param_refs_stmt f = function
   | Types.Abort -> ()
   | Types.If (c, t, e) ->
       iter_param_refs f c;
-      List.iter (iter_param_refs_stmt f) t;
-      Option.iter (List.iter (iter_param_refs_stmt f)) e
+      List.iter (iter_param_refs_stmt ~assign f) t;
+      Option.iter (List.iter (iter_param_refs_stmt ~assign f)) e
   | Types.Var (_, e) -> iter_param_refs f e
 
-let iter_param_refs_action f = function
+let iter_param_refs_action ~assign f = function
   | Types.Success stmts | Types.Act stmts ->
-      List.iter (iter_param_refs_stmt f) stmts
+      List.iter (iter_param_refs_stmt ~assign f) stmts
 
-let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
- fun f typ ->
+let rec iter_param_refs_typ : type a.
+    assign:(Param.packed -> unit) -> (Param.packed -> unit) -> a typ -> unit =
+ fun ~assign f typ ->
   match typ with
   | Byte_array { size } | Byte_slice { size } -> iter_param_refs f size
   | Byte_array_where { size; cond; _ } ->
@@ -321,57 +322,84 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
   | Zeroterm_at_most { size } -> iter_param_refs f size
   | Single_elem { size; elem; _ } ->
       iter_param_refs f size;
-      iter_param_refs_typ f elem
+      iter_param_refs_typ ~assign f elem
   | Array { len; elem; _ } ->
       iter_param_refs f len;
-      iter_param_refs_typ f elem
+      iter_param_refs_typ ~assign f elem
   | Repeat { size; elem; _ } ->
       iter_param_refs f size;
-      iter_param_refs_typ f elem
+      iter_param_refs_typ ~assign f elem
   | Where { cond; inner } ->
       iter_param_refs f cond;
-      iter_param_refs_typ f inner
+      iter_param_refs_typ ~assign f inner
   | Optional { present; inner } ->
       iter_param_refs f present;
-      iter_param_refs_typ f inner
+      iter_param_refs_typ ~assign f inner
   | Optional_or { present; inner; _ } ->
       iter_param_refs f present;
-      iter_param_refs_typ f inner
+      iter_param_refs_typ ~assign f inner
   | Apply { typ; args } ->
-      iter_param_refs_typ f typ;
+      iter_param_refs_typ ~assign f typ;
       List.iter (fun (Types.Pack_expr e) -> iter_param_refs f e) args
-  | Map { inner; _ } -> iter_param_refs_typ f inner
-  | Enum { base; _ } -> iter_param_refs_typ f base
+  | Map { inner; _ } -> iter_param_refs_typ ~assign f inner
+  | Enum { base; _ } -> iter_param_refs_typ ~assign f base
   | Casetype { tag; cases; _ } ->
-      iter_param_refs_typ f tag;
+      iter_param_refs_typ ~assign f tag;
       List.iter
         (fun (Types.Case_branch { cb_inner; _ }) ->
-          iter_param_refs_typ f cb_inner)
+          iter_param_refs_typ ~assign f cb_inner)
         cases
   | Union { on; cases; _ } ->
       iter_param_refs f on;
       List.iter
         (fun (Types.Case_branch { cb_inner; _ }) ->
-          iter_param_refs_typ f cb_inner)
+          iter_param_refs_typ ~assign f cb_inner)
         cases
   (* An embedded sub-codec carries its own params (in field sizes / where) that
      the outer codec must surface so its env can bind them. Walk the sub-codec's
      structural form. *)
   | Codec { codec_struct; _ } ->
-      iter_param_refs_fields f codec_struct.fields codec_struct.where
+      iter_params_fields ~assign f codec_struct.fields codec_struct.where
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm
   | Struct _ | Type_ref _ | Qualified_ref _ ->
       ()
 
-and iter_param_refs_fields f fields where =
+and iter_params_fields ~assign f fields where =
   List.iter
     (fun (Types.Field fld) ->
-      iter_param_refs_typ f fld.field_typ;
+      iter_param_refs_typ ~assign f fld.field_typ;
       Option.iter (iter_param_refs f) fld.constraint_;
-      Option.iter (iter_param_refs_action f) fld.action)
+      Option.iter (iter_param_refs_action ~assign f) fld.action)
     fields;
   Option.iter (iter_param_refs f) where
+
+let iter_param_refs_fields f fields where =
+  iter_params_fields ~assign:f f fields where
+
+(* The check pass sees an output parameter as the actions before each field
+   left it; the read phase sees one value throughout. They agree when no
+   expression reads an output parameter, or when every field that assigns one
+   comes before every field that reads one. *)
+let param_use fields =
+  let exception Found in
+  let output (Param.Pack p) = if p.Types.mutable_ then raise Found in
+  let found f = match f () with () -> false | exception Found -> true in
+  let reads (Types.Field fld) =
+    found (fun () -> iter_param_refs_typ ~assign:ignore output fld.field_typ)
+  in
+  let assigns (Types.Field fld) =
+    found (fun () ->
+        iter_param_refs_typ ~assign:output ignore fld.field_typ;
+        Option.iter (iter_param_refs_action ~assign:output ignore) fld.action)
+  in
+  let rec go read = function
+    | [] -> if read then Settled else Stable
+    | fld :: rest ->
+        let read = read || reads fld in
+        if read && assigns fld then Unsettled else go read rest
+  in
+  go false fields
 
 (* Kept at top level: as a local closure the scan would be heap-allocated on
    every terminator search, and a repeat of NUL-terminated elements searches

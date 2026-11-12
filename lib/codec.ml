@@ -372,6 +372,7 @@ let view : type f r.
     struct_fields;
     n_params = List.length param_handles;
     param_handles;
+    param_use = param_use struct_fields;
     where;
     doc;
     compiled = Atomic.make None;
@@ -496,10 +497,17 @@ let embed_encode (t : 'r t) v buf off = embed_encode_ctx t v no_runtime buf off
 let embed_decode_ctx (t : 'r t) runtime input_end buf off =
   let c = compiled t in
   if Types.is_checked runtime then c.read runtime input_end buf off
-  else begin
-    c.validate_ctx runtime input_end buf off;
-    c.read (Types.checked_eval_ctx runtime) input_end buf off
-  end
+  else
+    match t.param_use with
+    | Stable ->
+        c.validate_ctx runtime input_end buf off;
+        c.read (Types.checked_eval_ctx runtime) input_end buf off
+    | Settled | Unsettled ->
+        (* The check pass below writes its output parameters to [runtime],
+           and it read them from there: read first, with the same values. *)
+        let v = c.decode runtime input_end buf off in
+        c.validate_ctx runtime input_end buf off;
+        v
 
 let embed_decode (t : 'r t) buf off =
   embed_decode_ctx t no_runtime (Input_end.of_bytes buf) buf off
@@ -557,11 +565,24 @@ let slots_runtime (t : _ t) (c : _ compiled) arr =
       (fun name ->
         match find name with Some i -> arr.ints.(c.param_base + i) | None -> 0)
 
+(* The params a check pass left in its slots, for the read of a [Settled]
+   codec: each field that reads one was checked with these values. *)
+let settled_runtime (t : _ t) (c : _ compiled) arr =
+  let slots = Array.sub arr.ints c.param_base t.n_params in
+  Types.eval_ctx (fun name ->
+      match
+        List.find_index
+          (fun (Param.Pack p) -> String.equal p.Types.name name)
+          t.param_handles
+      with
+      | Some i -> slots.(i)
+      | None -> 0)
+
 (* The decode of a codec with params, or of one with no plain decode: it checks
    the bounds and then runs the check pass with the params the env binds, as
    [validate] does, so it reports the same first failure; only then does it
    read, so a [map] decoder sees only a record that passed. Last, it writes the
-   output params back: the read sees the env the caller bound. *)
+   output params back. *)
 let decode_params consume e t (c : _ compiled) buf off =
   let runtime = runtime ?env:e () in
   let input_end = Input_end.of_bytes buf in
@@ -586,15 +607,20 @@ let decode_params consume e t (c : _ compiled) buf off =
       Some arr
     end
   in
+  let read_runtime =
+    match (arr, t.param_use) with
+    | Some _, Stable -> Types.checked_eval_ctx runtime
+    | Some arr, Settled -> Types.checked_eval_ctx (settled_runtime t c arr)
+    | Some _, Unsettled | None, _ -> runtime
+  in
   let v =
-    match arr with
-    | Some _ -> c.read (Types.checked_eval_ctx runtime) input_end buf off
-    | None -> c.decode runtime input_end buf off
+    if Types.is_checked read_runtime then c.read read_runtime input_end buf off
+    else c.decode read_runtime input_end buf off
   in
   let consumed =
     match c.wire_size with
     | Fixed n -> off + n
-    | Variable { compute; _ } -> compute runtime input_end buf off
+    | Variable { compute; _ } -> compute read_runtime input_end buf off
   in
   Types.check_consumption consume ~consumed
     ~available:(Input_end.to_int input_end);

@@ -345,12 +345,20 @@ type 'r compiled = {
 }
 (** What {!Codec_seal.seal} builds from a field list; built on first use. *)
 
+type param_use =
+  | Stable  (** No expression reads an output parameter. *)
+  | Settled
+      (** Every field that assigns an output parameter comes before every field
+          that reads one. *)
+  | Unsettled  (** A field reads an output parameter a later action assigns. *)
+
 type 'r t = {
   id : int;
   name : string;
   struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
+  param_use : param_use;
   where : bool Types.expr option;
   doc : string option;
   compiled : 'r compiled option Atomic.t;
