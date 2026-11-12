@@ -331,6 +331,42 @@ let test_generate_c () =
          contents)
   end
 
+(* The real 3d.exe writes the same C spawned from here with [--odir] as it
+   does started in its output directory. *)
+let test_spawned_3d_same_c () =
+  needs_3d_exe ();
+  let exe =
+    Wire_3d.Private.locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt
+      ~executable:Sys.file_exists
+    |> Option.get
+  in
+  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+  let generated run =
+    let outdir = Filename.temp_dir "wire_3d_spawned" "" in
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf outdir)
+      (fun () ->
+        Wire_3d.generate_3d ~outdir [ s ];
+        run ~outdir;
+        List.map
+          (fun file -> read_file (Filename.concat outdir file))
+          [ "TestSimple.c"; "TestSimple.h"; "TestSimpleWrapper.c" ])
+  in
+  let in_outdir ~outdir =
+    match Wire_3d.parse_3d ~batch:true ~outdir "TestSimple.3d" with
+    | Ok () -> ()
+    | Error e -> Alcotest.failf "3d.exe in its output directory: %s" e
+  in
+  let spawned ~outdir =
+    let log = Filename.concat outdir "log" in
+    Alcotest.(check int)
+      "exit code" 0
+      (Wire_3d.Private.run_3d_spawned ~outdir ~log exe [ "--batch" ]
+         "TestSimple.3d")
+  in
+  Alcotest.(check (list string))
+    "generated C" (generated in_outdir) (generated spawned)
+
 (* 3d.exe writes its own [EverParseEndianness.h] on every run, so the
    freestanding byte-order branch is only useful if it is spliced into that
    copy afterwards. Without it the shipped header stops at [#error
@@ -1961,6 +1997,8 @@ let suite =
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
+      Alcotest.test_case "spawned 3d.exe writes the same C (needs 3d.exe)"
+        `Quick test_spawned_3d_same_c;
       Alcotest.test_case "freestanding endianness header (needs 3d.exe)" `Quick
         test_endianness_freestanding;
       Alcotest.test_case "generated-name collision" `Quick test_name_collision;
