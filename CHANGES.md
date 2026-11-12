@@ -1,3 +1,16 @@
+## unreleased
+
+### Fixed
+
+- **Breaking:** Fix the C type of an integer under `Wire.map`, `Wire.where`,
+  `Wire.enum` or a `Wire.Field.optional` whose `~present` is `Expr.true_`. As
+  a member of the generated `<Name>Fields` struct and as a parameter it was
+  `uint32_t` whatever the integer's width, so a `Wire.uint64` was truncated.
+  It now has the integer's own type. An optional with a runtime `~present`
+  reaches the plug as a byte offset and keeps a `uint32_t` member. The
+  `<Name>Fields` layout changes for such a schema: rebuild C plugs compiled
+  against the old header (#412, @frejsoya)
+
 ## 1.3.0
 
 ### Added

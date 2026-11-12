@@ -608,14 +608,14 @@ let plug_field (s : t) idx (Types.Field f) =
         else setter_of s.name f.field_typ
       in
       let (Types.Pack_typ val_typ) = setter.val_typ in
-      Some
-        {
-          name;
-          idx = i;
-          c_type = Types.c_type_of f.field_typ;
-          setter = setter.name;
-          val_c_type = Types.c_type_of val_typ;
-        }
+      let val_c_type = Types.c_type_of val_typ in
+      (* A byte field's member holds the offset its setter is passed, not a
+         value of the field's type. *)
+      let c_type =
+        if is_byte_field f.field_typ then val_c_type
+        else Types.c_type_of f.field_typ
+      in
+      Some { name; idx = i; c_type; setter = setter.name; val_c_type }
 
 let plug_fields s =
   match s.source with
