@@ -73,16 +73,19 @@ let run_process ?(output = Inherit) ~cwd exe args =
         snd (Unix.waitpid [] pid)
 
 (* Run one pool job: [true] when it returns, [false] (with the message on
-   stderr) when it fails with one of the errors a job reports. Any other
-   exception escapes. *)
+   stderr) when it raises, whatever it raises: a forked job that raises exits
+   with 1, so a job run in this process must fail the same way. *)
 let job_ok job =
-  match job () with
-  | () -> true
-  | exception (Failure msg | Invalid_argument msg | Sys_error msg) ->
+  match match job () with () -> Ok () | exception exn -> Error exn with
+  | Ok () -> true
+  | Error (Failure msg | Invalid_argument msg | Sys_error msg) ->
       Fmt.epr "%s\n%!" msg;
       false
-  | exception Unix.Unix_error (e, fn, arg) ->
+  | Error (Unix.Unix_error (e, fn, arg)) ->
       Fmt.epr "%s %s: %s\n%!" fn arg (Unix.error_message e);
+      false
+  | Error exn ->
+      Fmt.epr "%s\n%!" (Printexc.to_string exn);
       false
 
 (* Without [fork] (Windows) the jobs run one after the other in this process:
@@ -114,9 +117,8 @@ let forked_pool ~max_jobs jobs =
       match Unix.fork () with
       | 0 ->
           (* The child must never return into the parent's loop. On success
-             [_exit 0] runs before [finally]; a failure, or an exception
-             [job_ok] does not name, reaches [finally] and the child exits
-             with 1. *)
+             [_exit 0] runs before [finally]; a failure reaches [finally] and
+             the child exits with 1. *)
           Fun.protect
             ~finally:(fun () -> Unix._exit 1)
             (fun () -> if job_ok jobs.(i) then Unix._exit 0)

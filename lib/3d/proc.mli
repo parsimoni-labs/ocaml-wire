@@ -30,7 +30,7 @@ val run_process :
 val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
 (** [fork_pool ~max_jobs jobs] runs each of [jobs] in a process of its own, at
     most [max_jobs] at once, and is each job's success, exit 0 and no exception,
-    in input order. *)
+    in input order. A job that raises fails alone: the others still run. *)
 
 val run_spawned :
   ?output:process_output ->

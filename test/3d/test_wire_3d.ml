@@ -149,13 +149,25 @@ let test_run_spawned () =
         [ Unix.realpath outdir; "--batch"; fake_schema ]
         (In_channel.with_open_text observed In_channel.input_lines))
 
-let test_pool_in_process () =
+(* A job that raises fails alone, whatever it raises, in both pools. *)
+let test_pools_agree () =
   let jobs =
-    [| ignore; (fun () -> failwith "refused"); (fun () -> invalid_arg "bad") |]
+    [|
+      ignore;
+      (fun () -> failwith "refused");
+      ignore;
+      (fun () -> raise Not_found);
+      (fun () -> invalid_arg "bad");
+      ignore;
+    |]
   in
+  let verdicts = [| true; false; true; false; false; true |] in
   Alcotest.(check (array bool))
-    "a job fails when it raises" [| true; false; false |]
-    (Wire_3d.Private.pool_in_process jobs)
+    "in process" verdicts
+    (Wire_3d.Private.pool_in_process jobs);
+  Alcotest.(check (array bool))
+    "forked" verdicts
+    (Wire_3d.fork_pool ~max_jobs:2 jobs)
 
 let test_schema_of_struct () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -1827,7 +1839,7 @@ let suite =
       Alcotest.test_case "parse_3d uses argv and cwd" `Quick
         test_parse_3d_uses_argv_and_cwd;
       Alcotest.test_case "run_spawned uses argv and cwd" `Quick test_run_spawned;
-      Alcotest.test_case "pool_in_process" `Quick test_pool_in_process;
+      Alcotest.test_case "pools give the same verdicts" `Quick test_pools_agree;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;
