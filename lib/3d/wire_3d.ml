@@ -1103,6 +1103,11 @@ let fuzz_length rng center =
 (* [agree.c] reads a line into a fixed 64 KiB buffer. *)
 let max_corpus_input = 65536
 
+(* A seed grows no further than this: a line is written as hex and replayed
+   through the validator, and 256 lines at the 64 KiB a 16-bit length can ask
+   for are megabytes of both. *)
+let max_seed_input = 4096
+
 let random_bytes rng n =
   Bytes.init n (fun _ -> Char.chr (Random.State.int rng 256))
 
@@ -1165,21 +1170,24 @@ let seed_input ?env rng ~seeds ~center ~fill c =
     if not (List.mem_assoc off !placed) then
       placed := (off, (seed, value)) :: !placed
   in
-  (* A record asking for more bytes than a corpus line may carry was sized by a
-     length field the byte draw filled with a huge value. No parse error names
+  (* A record asking for more bytes than a seed may carry was sized by a
+     length field the byte draw filled with a large value. No parse error names
      that field -- the demand surfaces on the record's whole extent -- so damp
-     every length at once: zeroed bytes are the smallest value each can hold.
-     The values already settled are written back, so the loop resumes from the
-     progress it had made rather than starting over. *)
+     every length at once: each byte loses its high half, which shrinks any
+     length and reaches zero, the smallest, on the second pass. The values
+     already settled are written back, so the loop resumes from the progress it
+     had made rather than starting over. *)
   let damp () =
-    Bytes.fill !buf 0 (Bytes.length !buf) '\000';
+    Bytes.iteri
+      (fun i c -> Bytes.set !buf i (Char.chr (Char.code c lsr 4)))
+      !buf;
     List.iter
       (fun (off, ((seed : Raw.field_seed), value)) ->
         write_slot !buf off seed.slot value)
       !placed
   in
   let grow n =
-    if n > max_corpus_input then damp ()
+    if n > max_seed_input then damp ()
     else if n >= 0 && n <> Bytes.length !buf then buf := resize rng !buf n
     else fuel := 0
   in

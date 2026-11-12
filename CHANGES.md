@@ -4,6 +4,12 @@
 
 - `wire.3d` and the fuzz suites run on Windows (#443, @samoht)
 
+### Changed
+
+- `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
+  16-bit length used to get lines of up to 64 KiB, megabytes of corpus to
+  write and replay (#455, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
