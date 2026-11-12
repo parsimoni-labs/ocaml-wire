@@ -3512,8 +3512,10 @@ let check_validate_safety label kind ?env g bs =
   | `Crash -> Alcobar.failf "%s validate %s crashed" label kind
 
 let check_decode_safety label kind ?env g bs =
-  try ignore (Wire.Codec.decode ?env g.codec bs 0)
-  with Invalid_argument _ -> Alcobar.failf "%s %s crashed decoder" label kind
+  match Wire.Codec.decode ?env g.codec bs 0 with
+  | Ok _ | Error _ -> ()
+  | exception Invalid_argument _ ->
+      Alcobar.failf "%s %s crashed decoder" label kind
 
 (* The bytes a hostile value encodes to, or [None] when encode refused it, which
    is one of the two outcomes [check_encode_safety] allows. *)
@@ -4660,9 +4662,10 @@ let direct_cases label g =
         (label ^ " of_string " ^ kind)
         Alcobar.[ stream ]
         (fun bs ->
-          try ignore (Wire.of_string g.typ (string_of_bytes bs))
-          with Invalid_argument _ ->
-            Alcobar.failf "%s direct %s crashed decoder" label kind)
+          match Wire.of_string g.typ (string_of_bytes bs) with
+          | Ok _ | Error _ -> ()
+          | exception Invalid_argument _ ->
+              Alcobar.failf "%s direct %s crashed decoder" label kind)
     in
     [ pos_case; safety "random" g.random; safety "adversarial" g.adversarial ]
 
@@ -6809,9 +6812,10 @@ let ep_direct_safety label kind adversarial =
         Alcobar.[ stream ]
         (fun bs () ->
           if Option.is_none g.env then begin
-            (try ignore (Wire.of_bytes g.typ bs)
-             with Invalid_argument _ ->
-               Alcobar.failf "%s %s direct %s crashed decoder" label name kind);
+            (match Wire.of_bytes g.typ bs with
+            | Ok _ | Error _ -> ()
+            | exception Invalid_argument _ ->
+                Alcobar.failf "%s %s direct %s crashed decoder" label name kind);
             check_direct_codec_agree name ("direct " ^ kind) g bs
           end))
 

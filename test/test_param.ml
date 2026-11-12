@@ -415,14 +415,14 @@ let test_decode_rejects_unbound_param () =
     (Invalid_argument
        "Codec.decode: codec ParamSize has input params; pass ?env (e.g. \
         [Codec.env c |> Param.bind p N]).") (fun () ->
-      ignore (Codec.decode param_size_codec buf 0));
+      match Codec.decode param_size_codec buf 0 with Ok _ | Error _ -> ());
   (* env present but the param left unbound *)
   let env = Codec.env param_size_codec in
   Alcotest.check_raises "decode with unbound param"
     (Invalid_argument
        "Codec.decode: codec ParamSize has unbound input params [data_size]; \
         bind every one before use.") (fun () ->
-      ignore (Codec.decode ~env param_size_codec buf 0))
+      match Codec.decode ~env param_size_codec buf 0 with Ok _ | Error _ -> ())
 
 let test_param_size_zero () =
   let env =

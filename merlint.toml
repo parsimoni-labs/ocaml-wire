@@ -2,3 +2,18 @@
 [[rules]]
 files = "examples/net/net.ml"
 exclude = ["E350"]
+
+# Over the E015 module-length bound on main. To be split once the open pull
+# request stack that rewrites these files has landed: splitting them first
+# would conflict with every pull request in it.
+[[rules]]
+files = [
+  "lib/codec.ml",
+  "lib/types.ml",
+  "lib/3d/wire_3d.ml",
+  "fuzz/gen/fuzz_gen.ml",
+  "test/test_codec.ml",
+  "test/test_everparse.ml",
+  "test/3d/test_wire_3d.ml",
+]
+exclude = ["E015"]

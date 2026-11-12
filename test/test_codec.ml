@@ -4443,14 +4443,18 @@ let test_undecodable_description_is_invalid_argument () =
         Alcotest.failf "%s: raised Failure %S, which the contract forbids" name
           m
   in
+  (* [of_string] returning at all, [Ok] or [Error], is the failure [expect]
+     reports. *)
+  let returned = function Ok _ | Error _ -> () in
   List.iter expect
     [
       (* Direct decode and encode of a form with no reader or writer. *)
-      ("of_string type_ref", fun () -> ignore (of_string (type_ref "T") "abcd"));
+      ( "of_string type_ref",
+        fun () -> returned (of_string (type_ref "T") "abcd") );
       ( "of_string qualified_ref",
-        fun () -> ignore (of_string (qualified_ref "M" "T") "abcd") );
+        fun () -> returned (of_string (qualified_ref "M" "T") "abcd") );
       ( "of_string apply",
-        fun () -> ignore (of_string (apply uint8 [ int 1 ]) "abcd") );
+        fun () -> returned (of_string (apply uint8 [ int 1 ]) "abcd") );
       ("to_string type_ref", fun () -> ignore (to_string (type_ref "T") 0));
       ( "to_string qualified_ref",
         fun () -> ignore (to_string (qualified_ref "M" "T") 0) );
@@ -4464,14 +4468,14 @@ let test_undecodable_description_is_invalid_argument () =
       (* A cross-field reference evaluated where there is no record. *)
       ( "of_string size ref outside a struct",
         fun () ->
-          ignore (of_string (byte_array ~size:(Field.ref f_absent)) "\003abc")
+          returned (of_string (byte_array ~size:(Field.ref f_absent)) "\003abc")
       );
       ( "to_string size ref outside a struct",
         fun () ->
           ignore (to_string (byte_array ~size:(Field.ref f_absent)) "abc") );
       ( "of_string int64 ref outside a struct",
         fun () ->
-          ignore
+          returned
             (of_string
                (where Expr.(Field.int64 f_absent64 = int64 0L) uint8)
                "\003") );

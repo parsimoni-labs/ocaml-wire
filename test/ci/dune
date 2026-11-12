@@ -1,0 +1,11 @@
+(rule
+ (alias runtest)
+ (deps (universe))
+ (action
+  (run bash %{dep:check-dependency-pins.sh})))
+
+(rule
+ (alias runtest)
+ (deps (universe))
+ (action
+  (run bash %{dep:check-everparse-bench.sh})))
