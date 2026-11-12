@@ -4,6 +4,7 @@ let () =
       Test_wire.suite;
       Test_action.suite;
       Test_codec.suite;
+      Test_codec_pass.suite;
       Test_codec_variable.suite;
       Test_codec_projection.suite;
       Test_codec_bitfield.suite;
