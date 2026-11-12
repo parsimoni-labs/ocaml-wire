@@ -21,7 +21,7 @@
 - `Wire_ocaml.scanner`: generate a scanner for codecs with nested records,
   optional fields, sized regions and byte spans; `~fields` selects the outputs.
   `Wire_ocaml.Plan` is the checked plan it prints, for other backends (#447,
-  @samoht)
+  #473, @samoht)
 
 - `wire.rust` (`Wire_rust`): generate safe, `no_std` Rust from a fixed-size
   codec, and `Wire_rust.scanner`, the same scanners in Rust (#439, #448,
