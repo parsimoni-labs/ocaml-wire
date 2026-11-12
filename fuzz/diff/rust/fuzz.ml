@@ -5,9 +5,11 @@
     {!Rust_index} lists the module generated for each one the generator accepts,
     all compiled into one [no_std] static library. On every input both sides
     must agree on decode and validate, on every getter, on the bytes encode and
-    the setters write, and on [Valid::new] with its reads. A codec the generator
-    refuses must be one it documents it cannot specialise, or one whose field
-    names would spell a Rust name twice. *)
+    the setters write, and on [Valid::at] with its reads, at offsets from 0 to
+    past the end of the buffer. The library is compiled with overflow checks, so
+    arithmetic that would wrap aborts the run. A codec the generator refuses
+    must be one it documents it cannot specialise, or one whose field names
+    would spell a Rust name twice. *)
 
 let refused =
   List.map

@@ -20,6 +20,8 @@ type case = { id : int; size : int; fields : field array }
 val check : string -> Fuzz_gen.packed -> case -> bytes -> unit
 (** [check label p case buf] compares [case], generated from [p]'s codec, with
     the codec on [buf], at the offsets of {!Diff_ocaml.check} that are not
-    negative (a Rust offset is a [usize]): decode and validate, every getter and
-    bitfield word, encode into buffers around the record, the setters rebuilding
-    the record, and [Valid::new] with its reads. Fails with {!Alcobar.failf}. *)
+    negative (a Rust offset is a [usize]) and at [max_int]: decode and validate,
+    every getter and bitfield word, encode into buffers around the record, the
+    setters rebuilding the record, and [Valid::at] with its reads. At the last
+    offsets a [usize] holds, every read must find the buffer too short. Fails
+    with {!Alcobar.failf}. *)

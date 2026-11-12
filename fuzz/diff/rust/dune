@@ -38,6 +38,8 @@
    panic=abort
    -C
    opt-level=2
+   -C
+   overflow-checks=on
    -o
    libdiffrust.a
    rs/lib.rs)))

@@ -151,18 +151,45 @@ let encodes_at label c case buf off =
         (got case (rust case ~op:op_set canonical 0 o) (fun () ->
              quoted (Bytes.to_string o)))
 
-let valid label c case refs buf =
+let valid label c case refs buf off =
   let out = Bytes.create (max 1 case.size) in
   Array.iteri
     (fun i f ->
       same label
-        (Fmt.str "Valid::new then read %s" f.name)
+        (Fmt.str "Valid::at offset %d then read %s" off f.name)
         (outcome (fun () ->
-             Wire.Codec.validate c buf 0;
-             refs.(i) buf 0))
-        (got case (rust case ~op:op_valid ~field:i buf 0 out) (fun () ->
+             Wire.Codec.validate c buf off;
+             refs.(i) buf off))
+        (got case (rust case ~op:op_valid ~field:i buf off out) (fun () ->
              value case i out)))
     case.fields
+
+(* An offset the address space ends before: [-k] reaches Rust as
+   [usize::MAX - k + 1], which the codec has no word for. Every read must
+   find the buffer too short, and none may wrap or overflow on the way. *)
+let past_the_end label case buf =
+  let out = Bytes.create (max 1 case.size) in
+  List.iter
+    (fun off ->
+      let short what code =
+        same label
+          (Fmt.str "%s at offset usize::MAX - %d" what (-off - 1))
+          "short" (error case code)
+      in
+      short "validate" (rust case ~op:op_validate buf off out);
+      short "decode" (rust case ~op:op_decode buf off out);
+      Array.iteri
+        (fun i f ->
+          short ("get " ^ f.name) (rust case ~op:op_get ~field:i buf off out);
+          short
+            ("Valid::at then read " ^ f.name)
+            (rust case ~op:op_valid ~field:i buf off out);
+          if f.kind = Bits then
+            short
+              ("get " ^ f.name ^ " from its word")
+              (rust case ~op:op_word ~field:i buf off out))
+        case.fields)
+    (List.filter (fun off -> off < 0) [ -1; -case.size; -case.size - 1 ])
 
 let check label (Fuzz_gen.Pack g) case =
   let c = Fuzz_gen.codec g in
@@ -173,7 +200,9 @@ let check label (Fuzz_gen.Pack g) case =
       (fun off ->
         if off >= 0 then begin
           reads_at label c case refs buf off;
-          encodes_at label c case buf off
+          encodes_at label c case buf off;
+          valid label c case refs buf off
         end)
-      (List.sort_uniq compare [ 0; 1; n - case.size; n - case.size + 1 ]);
-    valid label c case refs buf
+      (List.sort_uniq compare
+         [ 0; 1; n - case.size; n - case.size + 1; max_int ]);
+    past_the_end label case buf

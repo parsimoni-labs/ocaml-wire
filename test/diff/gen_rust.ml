@@ -116,7 +116,8 @@ let put f v =
 
 (* The glue of case [i], over the module [m]. The operations, numbered as
    [Diff_rust] numbers them: 0 validate; 1 decode, the record encoded into
-   [out]; 2 a getter; 3 [Valid::new] then a read; 4 decode the canonical bytes
+   [out]; 2 a getter; 3 [Valid::at], or [Valid::new] at offset 0, then a read;
+   4 decode the canonical bytes
    in [buf], then encode them into [out] at [off]; 5 decode the canonical
    bytes, then set each field into [out]; 6 a bitfield from its word. *)
 let pp_case ppf (i, fields) =
@@ -152,9 +153,10 @@ let pp_case ppf (i, fields) =
     indexed;
   Fmt.pf ppf "                _ => -1,@\n            },@\n";
   Fmt.pf ppf
-    "            3 => match %s::Valid::new(buf) {@\n\
+    "            3 => match if off == 0 { %s::Valid::new(buf) } else { \
+     %s::Valid::at(buf, off) } {@\n\
     \                Ok(v) => match field {@\n"
-    m;
+    m m;
   List.iter
     (fun (j, f) ->
       Fmt.pf ppf "                    %d => %s,@\n" j
