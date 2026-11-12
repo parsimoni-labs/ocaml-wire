@@ -909,7 +909,8 @@ let reorder_bit_groups_for_3d fields =
    keyword can spell another name in it: [end] and [end_] would both be
    [end_], and a field [ctx] would shadow the FFI projection's [ctx]
    parameter, which 3D rejects. Refuse naming both rather than hand 3d.exe a
-   declaration it fails on, or one it reads as another. *)
+   declaration it fails on, or one it reads as another. A name that is not an
+   identifier, [a-b], has no 3D spelling at all. *)
 let check_3d_names (s : struct_) =
   let params =
     List.map
@@ -922,6 +923,14 @@ let check_3d_names (s : struct_) =
         Option.map (fun n -> (Fmt.str "field %S" n, escape_3d n)) f.field_name)
       s.fields
   in
+  List.iter
+    (fun (what, id) ->
+      if not (Names.is_identifier id) then
+        Fmt.invalid_arg
+          "Everparse: in %S, %s is not an identifier ([A-Za-z_][A-Za-z0-9_]*) \
+           and has no 3D name; rename it"
+          s.name what)
+    (params @ fields);
   match Names.clash (params @ fields) with
   | None -> ()
   | Some (a, b, id) ->

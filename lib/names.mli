@@ -18,6 +18,11 @@ val c_keywords : string list
 (** The keywords of C11, C23 and GNU C, and the object-like macros ([NULL],
     [TRUE], [FALSE]) of the headers generated C includes. *)
 
+val is_identifier : string -> bool
+(** [is_identifier name] is [true] when [name] matches [[A-Za-z_][A-Za-z0-9_]*],
+    the identifiers 3D, C and OCaml share. Nothing escapes any other name into
+    all three. *)
+
 val escape : string list -> string -> string
 (** [escape keywords name] is [name ^ "_"] when [name] is one of [keywords], and
     [name] otherwise. *)

@@ -148,6 +148,11 @@ let c_keywords =
     "FALSE";
   ]
 
+let is_identifier name =
+  let start = function 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false in
+  let tail c = start c || match c with '0' .. '9' -> true | _ -> false in
+  name <> "" && start name.[0] && String.for_all tail name
+
 let escape keywords name = if List.mem name keywords then name ^ "_" else name
 
 let ocaml_label ?(oxcaml = true) name =

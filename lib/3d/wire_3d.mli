@@ -161,8 +161,8 @@ val check_plug_names : Wire.Everparse.t -> unit
 (** [check_plug_names s] raises [Invalid_argument] naming both fields when two
     of [s]'s fields would define one [_IDX_] macro or one struct member of its
     default plug: the macro upper-cases the field name, and the member escapes
-    C's keywords ({!Wire.Everparse.plug_member}). {!write_fields} runs it first.
-*)
+    C's keywords ({!Wire.Everparse.plug_member}). It also refuses a field whose
+    name is not an identifier. {!write_fields} runs it first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}] plug

@@ -201,6 +201,29 @@ let test_3d_escaped_names_clash () =
     "end_ and end2" true
     (contains ~sub:"UINT8 end_;" out && contains ~sub:"UINT8 end2;" out)
 
+(* 3D has no spelling for a name that is not an identifier: [a-b] reached
+   3d.exe as a syntax error. *)
+let test_3d_names_are_identifiers () =
+  let module_of s = module_ [ typedef ~entrypoint:true s ] in
+  List.iter
+    (fun name ->
+      invalid_arg_mentions name
+        [ Fmt.str "%S" name; "identifier" ]
+        (fun () -> to_3d (module_of (struct_ "Kw" [ field name uint8 ])));
+      invalid_arg_mentions (name ^ " (parameter)")
+        [ Fmt.str "%S" name; "identifier" ]
+        (fun () ->
+          to_3d
+            (module_of
+               (param_struct "Kw" [ param name uint8 ] [ field "x" uint8 ]))))
+    [ "a-b"; "a b"; "a.b"; "1a"; ""; "é" ];
+  let out =
+    to_3d (module_of (struct_ "Kw" [ field "_a1" uint8; field "A_b" uint8 ]))
+  in
+  Alcotest.(check bool)
+    "identifiers project" true
+    (contains ~sub:"UINT8 _a1;" out && contains ~sub:"UINT8 A_b;" out)
+
 let suite =
   ( "everparse_names",
     [
@@ -214,4 +237,6 @@ let suite =
         test_reserved_word_escaping_fstar;
       Alcotest.test_case "3d: names that escape onto each other" `Quick
         test_3d_escaped_names_clash;
+      Alcotest.test_case "3d: names are identifiers" `Quick
+        test_3d_names_are_identifiers;
     ] )

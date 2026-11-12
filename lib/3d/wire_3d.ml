@@ -392,6 +392,14 @@ let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
 let check_plug_names s =
   let fields = Wire.Everparse.plug_fields s in
   let check what ident =
+  List.iter
+    (fun (f : Wire.Everparse.plug_field) ->
+      if not (Wire.Private.Names.is_identifier f.name) then
+        Fmt.invalid_arg
+          "Wire_3d: in %S, field %S is not an identifier \
+           ([A-Za-z_][A-Za-z0-9_]*) and cannot name a plug member; rename it"
+          s.name f.name)
+    fields;
     match
       Wire.Private.Names.clash
         (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)

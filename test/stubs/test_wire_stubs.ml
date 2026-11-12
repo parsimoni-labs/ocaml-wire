@@ -355,6 +355,7 @@ let test_check_names () =
   refused "one plug member" [ "restrict"; "restrict_" ];
   refused "one plug macro and label" [ "X"; "x" ];
   refused "one record label" [ "local_"; "local__" ];
+  refused "not an identifier" [ "a-b" ];
   Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ])
 
 (* A label that is a keyword of OCaml, or of OxCaml, is escaped, so the stub

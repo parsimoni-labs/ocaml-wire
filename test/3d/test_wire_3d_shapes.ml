@@ -437,6 +437,7 @@ let test_plug_names () =
   rejects "restrict and restrict_"
     [ "\"restrict\""; "\"restrict_\"" ]
     [ field "restrict" uint8; field "restrict_" uint8 ];
+  rejects "a-b" [ "\"a-b\""; "identifier" ] [ field "a-b" uint8 ];
   let header, impl, compiles =
     plug_of
       [

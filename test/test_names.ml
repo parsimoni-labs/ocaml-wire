@@ -17,6 +17,15 @@ let test_escape () =
     "already escaped" "int__"
     (Names.escape [ "int_" ] "int_")
 
+let test_is_identifier () =
+  let check name want =
+    Alcotest.(check bool) (Fmt.str "%S" name) want (Names.is_identifier name)
+  in
+  List.iter (fun n -> check n true) [ "a"; "_a"; "A_b9"; "_" ];
+  List.iter
+    (fun n -> check n false)
+    [ ""; "9a"; "a-b"; "a b"; "a.b"; "\xc3\xa9" ]
+
 let test_ocaml_label () =
   let check name want =
     Alcotest.(check string) name want (Names.ocaml_label name)
@@ -36,5 +45,6 @@ let suite =
     [
       Alcotest.test_case "clash" `Quick test_clash;
       Alcotest.test_case "escape" `Quick test_escape;
+      Alcotest.test_case "is_identifier" `Quick test_is_identifier;
       Alcotest.test_case "ocaml_label" `Quick test_ocaml_label;
     ] )
