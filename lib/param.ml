@@ -39,9 +39,9 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Map { inner; encode; _ } -> to_int inner (encode v)
   | Apply { typ; _ } -> to_int typ v
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       invalid_arg "Param: unsupported parameter type"
 
 let of_int = Types.of_int

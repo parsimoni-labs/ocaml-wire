@@ -16,6 +16,7 @@ let () =
       Test_codec_optional.suite;
       Test_codec_repeat.suite;
       Test_codec_casetype.suite;
+      Test_codec_union.suite;
       Test_codec_multi_var.suite;
       Test_codec_zeroterm.suite;
       Test_codec_alloc.suite;

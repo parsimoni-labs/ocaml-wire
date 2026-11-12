@@ -126,6 +126,17 @@ val optional_dyn_after_span :
 (** [optional_dyn_after_span] is a dynamic-gate optional behind a
     length-prefixed span, so its payload sits at a runtime offset. *)
 
+(** The body of {!union_after_span}: two tagged cases and the default, which
+    keeps the tag it caught. *)
+type union_body =
+  | Short of Wire.UInt16.t
+  | Long of Wire.UInt32.t
+  | Unknown of Wire.UInt8.t * Wire.UInt8.t
+
+val union_after_span : (string * union_body * Wire.UInt8.t) t
+(** [union_after_span] is a union switching on a tag field that a
+    length-prefixed span separates from it, followed by a fixed field. *)
+
 type 'a case
 (** A single branch of a casetype. *)
 

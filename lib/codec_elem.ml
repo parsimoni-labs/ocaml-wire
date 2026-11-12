@@ -305,6 +305,12 @@ let rec iter_param_refs_typ : type a. (Param.packed -> unit) -> a typ -> unit =
         (fun (Types.Case_branch { cb_inner; _ }) ->
           iter_param_refs_typ f cb_inner)
         cases
+  | Union { on; cases; _ } ->
+      iter_param_refs f on;
+      List.iter
+        (fun (Types.Case_branch { cb_inner; _ }) ->
+          iter_param_refs_typ f cb_inner)
+        cases
   (* An embedded sub-codec carries its own params (in field sizes / where) that
      the outer codec must surface so its env can bind them. Walk the sub-codec's
      structural form. *)

@@ -149,6 +149,15 @@ let rec casetype_tag_seed : type a. a typ -> (int_slot * int64 list) option =
       Option.map
         (fun slot -> (slot, List.filter_map index cases))
         (int_slot_of_typ tag)
+  (* A union reports an unclaimed tag at the tag field's bytes, so it seeds
+     them the same way. *)
+  | Union { tag; cases; _ } ->
+      let index (Case_branch { cb_tag; _ }) =
+        Option.bind cb_tag (tag_wire_value tag)
+      in
+      Option.map
+        (fun slot -> (slot, List.filter_map index cases))
+        (int_slot_of_typ tag)
   | Where { inner; _ } -> casetype_tag_seed inner
   | Map { inner; _ } -> casetype_tag_seed inner
   | Optional { inner; _ } -> casetype_tag_seed inner

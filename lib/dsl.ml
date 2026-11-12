@@ -243,6 +243,17 @@ and _ typ =
       cases : ('a, 'k) case_branch list;
     }
       -> 'a typ
+  | Union : {
+      name : string;
+      tag : 'k typ;
+          (* The type of the field [on] reads: what the case indices are
+             written in, and the parameter type of the 3D casetype. *)
+      on : int expr;
+      cases : ('a, 'k) case_branch list;
+    }
+      -> 'a typ
+    (* A casetype whose tag is not its own first bytes but an earlier field
+         of the enclosing struct. The union occupies the selected body only. *)
   | Struct : struct_ -> unit typ
   | Type_ref : string -> 'a typ
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
@@ -647,9 +658,9 @@ let rec int_of : type a. a typ -> a -> int option =
   | Apply { typ; _ } -> int_of typ v
   | Map { inner; encode; _ } -> int_of inner (encode v)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       None
 
 (* Whether every value of a carrier fits the native int, so its integer view
@@ -721,9 +732,9 @@ let rec int_of_exn : type a. a typ -> a -> int =
   | Apply { typ; _ } -> int_of_exn typ v
   | Map { inner; encode; _ } -> int_of_exn inner (encode v)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       not_an_integer ()
 
 (* The other direction: the value a type carries for a given integer. The
@@ -751,9 +762,9 @@ let rec of_int : type a. a typ -> int -> a =
   | Apply { typ; _ } -> of_int typ n
   | Map { inner; decode; _ } -> decode (of_int inner n)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       not_an_integer ()
 
 (* The types [int_of_exn] and [of_int] have a conversion for. Checked at
@@ -781,7 +792,7 @@ let reject_non_integer ~combinator typ =
    construction at the user's call site so the error points at the
    wrapping combinator rather than surfacing later inside [pp_typ]. *)
 let rec is_field_decoration : type a. a typ -> bool = function
-  | Optional _ | Optional_or _ | Repeat _ -> true
+  | Optional _ | Optional_or _ | Repeat _ | Union _ -> true
   | Map { inner; _ } -> is_field_decoration inner
   | Where { inner; _ } -> is_field_decoration inner
   | Apply { typ; _ } -> is_field_decoration typ
@@ -790,9 +801,9 @@ let rec is_field_decoration : type a. a typ -> bool = function
 let reject_decoration ~combinator t =
   if is_field_decoration t then
     Fmt.invalid_arg
-      "Wire.%s: [optional]/[optional_or]/[repeat] are field decorations and \
-       cannot appear nested inside [%s] -- attach them as the field type \
-       directly via [Field.v]."
+      "Wire.%s: [optional]/[optional_or]/[repeat]/[union] are field \
+       decorations and cannot appear nested inside [%s] -- attach them as the \
+       field type directly via [Field.v]."
       combinator combinator
 
 let map decode encode inner =
@@ -958,6 +969,8 @@ let rec nz : type a. a typ -> bool = function
   | Casetype { tag; cases; _ } ->
       nz tag
       || List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
+  | Union { cases; _ } ->
+      List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
   | Type_ref _ | Qualified_ref _ -> false (* opaque ref: be conservative *)
 
 and struct_nz (s : struct_) =
@@ -1244,42 +1257,54 @@ let rec reject_unprojectable_casetype_tag : type k. k typ -> unit = function
   | Where { inner; _ } -> reject_unprojectable_casetype_tag inner
   | _ -> ()
 
+let resolve_case : type a k.
+    combinator:string -> (a, k) case_def -> (a, k) case_branch =
+ fun ~combinator -> function
+  | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
+      reject_decoration ~combinator cd_inner;
+      reject_greedy_case_body cd_inner;
+      let tag_val =
+        match cd_index with
+        | Some k -> k
+        | None ->
+            Fmt.invalid_arg
+              "Wire.%s: every case must supply an explicit [~index]" combinator
+      in
+      Case_branch
+        {
+          cb_tag = Some tag_val;
+          (* [case] knows its tag from [~index], so its [inject] takes only the
+             body and its [project] yields only the body; pair the fixed tag
+             back on for the unified tag-aware branch. *)
+          cb_inner = cd_inner;
+          cb_inject = (fun _matched body -> cd_inject body);
+          cb_project =
+            (fun a -> Option.map (fun w -> (tag_val, w)) (cd_project a));
+        }
+  | Default_def { dd_inner; dd_inject; dd_project } ->
+      reject_decoration ~combinator dd_inner;
+      reject_greedy_case_body dd_inner;
+      Case_branch
+        {
+          cb_tag = None;
+          cb_inner = dd_inner;
+          cb_inject = dd_inject;
+          cb_project = dd_project;
+        }
+
 let casetype name tag defs =
   reject_unprojectable_casetype_tag tag;
-  let resolve = function
-    | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
-        reject_decoration ~combinator:"casetype" cd_inner;
-        reject_greedy_case_body cd_inner;
-        let tag_val =
-          match cd_index with
-          | Some k -> k
-          | None ->
-              invalid_arg
-                "Wire.casetype: every case must supply an explicit [~index]"
-        in
-        Case_branch
-          {
-            cb_tag = Some tag_val;
-            (* [case] knows its tag from [~index], so its [inject] takes only the
-               body and its [project] yields only the body; pair the fixed tag
-               back on for the unified tag-aware branch. *)
-            cb_inner = cd_inner;
-            cb_inject = (fun _matched body -> cd_inject body);
-            cb_project =
-              (fun a -> Option.map (fun w -> (tag_val, w)) (cd_project a));
-          }
-    | Default_def { dd_inner; dd_inject; dd_project } ->
-        reject_decoration ~combinator:"casetype" dd_inner;
-        reject_greedy_case_body dd_inner;
-        Case_branch
-          {
-            cb_tag = None;
-            cb_inner = dd_inner;
-            cb_inject = dd_inject;
-            cb_project = dd_project;
-          }
-  in
-  Casetype { name; tag; cases = List.map resolve defs }
+  Casetype
+    { name; tag; cases = List.map (resolve_case ~combinator:"casetype") defs }
+
+(* A union switches on the integer its tag field holds, in OCaml and in 3D
+   alike, so a tag with no integer view has nothing to dispatch on. *)
+let union name ~tag ~on defs =
+  if not (is_int_representable tag) then
+    invalid_arg "Wire.Field.union: the tag field must be integer-valued";
+  reject_unprojectable_casetype_tag tag;
+  Union
+    { name; tag; on; cases = List.map (resolve_case ~combinator:"union") defs }
 
 (* Struct fields *)
 let field name ?constraint_ ?action ?doc typ =

@@ -77,6 +77,39 @@ let test_corpus_seeds_a_casetype_tag () =
     (Fmt.str "corpus keeps unmatched tags (%d rejected)" rejected)
     true (rejected > 0)
 
+(* A union's tag is a field of its own, but the values that select a case are
+   written on the union: two 16-bit tags out of 2^16, with a four-byte field
+   between the tag and the body. *)
+let corpus_union_codec =
+  let open Wire in
+  let f_ether = Field.v "ether" uint16be in
+  Codec.v "Frame"
+    (fun ether id body -> (ether, id, body))
+    Codec.
+      [
+        (f_ether $ fun (e, _, _) -> e);
+        (Field.v "id" uint32be $ fun (_, i, _) -> i);
+        ( Field.union "body" ~on:f_ether ~casetype:"FrameBody"
+            [
+              case ~index:(UInt16.v 0x0800) uint8 ~inject:Either.left
+                ~project:Either.find_left;
+              case ~index:(UInt16.v 0x86dd) uint16be ~inject:Either.right
+                ~project:Either.find_right;
+            ]
+        $ fun (_, _, b) -> b );
+      ]
+
+let test_corpus_seeds_a_union_tag () =
+  let accepted, rejected =
+    corpus_verdicts [ Wire_3d.pack corpus_union_codec ]
+  in
+  Alcotest.(check bool)
+    (Fmt.str "corpus selects a case (%d accepted)" accepted)
+    true (accepted > 0);
+  Alcotest.(check bool)
+    (Fmt.str "corpus keeps unmatched tags (%d rejected)" rejected)
+    true (rejected > 0)
+
 (* An unconstrained length field filled from uniform bytes asks for gigabytes,
    and the demand surfaces on the record's whole extent, naming no field to
    repair. Growing to it is impossible, so the seeder must damp the length
@@ -250,6 +283,8 @@ let suite =
         test_corpus_seeds_a_casetype_tag;
       Alcotest.test_case "corpus: lines stay small" `Quick
         test_corpus_lines_stay_small;
+      Alcotest.test_case "corpus: seeds a union tag" `Quick
+        test_corpus_seeds_a_union_tag;
       Alcotest.test_case "corpus: damps a runaway length" `Quick
         test_corpus_damps_a_runaway_length;
     ] )

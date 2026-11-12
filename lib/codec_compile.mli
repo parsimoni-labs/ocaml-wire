@@ -28,6 +28,8 @@ type layout_ctx = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
+  field_at : string -> (runtime -> Input_end.t -> bytes -> int -> int) option;
+      (** Where an earlier field's bytes start, by name. *)
   n_fields : int;
 }
 (** The part of a record's state that compiling a field reads. *)

@@ -138,6 +138,7 @@ let var_leaves : any list =
     Any { g = optional_dynamic; size = None; label = "optdyn" };
     Any { g = optional_or_dynamic; size = None; label = "optordyn" };
     Any { g = optional_dyn_after_span; size = None; label = "optdynspan" };
+    Any { g = union_after_span; size = None; label = "unionspan" };
     Any { g = if_then_else; size = None; label = "ite" };
   ]
 
