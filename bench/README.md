@@ -79,9 +79,23 @@ harness, the same in OCaml and Rust (`smoltcp` checks the bounds itself; its
 row adds the version and fragment tests). A packet counts only when every
 header it has passes, as with `etherparse`. No row copies a byte: the crates
 return sub-slices, the other rows the same bounds as offsets. Every row folds
-the same fields into a checksum, the report fails if they disagree, and the
-corpus has fragments and packets that fail each bound, so they agree only if
-every row makes every check.
+the same fields into a checksum, and the report fails if they disagree.
+
+Three packets in four of the corpus are well formed: an IPv4 header of 20
+bytes, then TCP without options or UDP, filling the slot. The others are
+spread evenly over these cases, so each check meets packets that pass it and
+packets that fail it, and the rows agree only if each makes every check:
+
+| Check | Rejected | Accepted besides the well-formed |
+|---|---|---|
+| EtherType | | another EtherType, counted alone |
+| IPv4 version | version 6 | |
+| IPv4 header length | 4 words | 6 words, with options |
+| IPv4 total length | 19; 22 under a 24-byte header; one byte past the packet | 6 bytes short of the packet |
+| Fragment | | more fragments, or a fragment offset: IPv4 counted, no transport header read |
+| Protocol | | neither TCP nor UDP: IPv4 counted alone |
+| TCP data offset | 4 words; 15 words, past the payload | 6 words, with options |
+| UDP length | 7; one byte past the payload | shorter than the payload |
 
 ```
 make bench-rust           # needs cargo; fetches the two crates the first time

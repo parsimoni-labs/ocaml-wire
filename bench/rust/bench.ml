@@ -32,14 +32,121 @@ let ipv4 = 0x0800
 
 (* {1 The corpus}
 
-   Fixed slots of 64 bytes: an Ethernet header, then for 19 packets in 20 an
-   IPv4 header of 20 bytes whose total length covers the rest of the slot,
-   then a TCP header without options and 10 bytes of payload, or a UDP header
-   and 22 bytes. The other packets carry an EtherType no parser here reads
-   further. One packet in 20 each is a fragment, has a total length past the
-   slot, a TCP data offset past the payload, or a UDP length past it, so the
-   checksums agree only if every implementation makes the same checks.
-   Addresses, ports, sequence numbers, flags and payload are random. *)
+   Fixed slots of 64 bytes. Three packets in four are well formed: an
+   Ethernet header, an IPv4 header of 20 bytes whose total length covers the
+   rest of the slot, then a TCP header without options and 10 bytes of
+   payload, or a UDP header and 22 bytes. The others are one of the 17
+   variants below, each as likely as the next, so every check the rows make
+   meets packets that pass it and packets that fail it, and the checksums
+   agree only if every row makes every check. Addresses, ports, sequence
+   numbers, flags and payload are random. *)
+
+type variant =
+  | Well_formed
+  | Not_ipv4
+  | Version_6
+  | Ihl_4
+  | Ip_options
+  | Total_under_20
+  | Total_under_header
+  | Total_past_packet
+  | Total_inside_packet
+  | More_fragments
+  | Fragment_offset
+  | Other_protocol
+  | Tcp_offset_4
+  | Tcp_offset_past_payload
+  | Tcp_options
+  | Udp_length_7
+  | Udp_length_past_payload
+  | Udp_length_inside_payload
+
+let variants =
+  [|
+    Not_ipv4;
+    Version_6;
+    Ihl_4;
+    Ip_options;
+    Total_under_20;
+    Total_under_header;
+    Total_past_packet;
+    Total_inside_packet;
+    More_fragments;
+    Fragment_offset;
+    Other_protocol;
+    Tcp_offset_4;
+    Tcp_offset_past_payload;
+    Tcp_options;
+    Udp_length_7;
+    Udp_length_past_payload;
+    Udp_length_inside_payload;
+  |]
+
+let tcp_header b l4 rand variant =
+  let words =
+    match variant with
+    | Tcp_offset_4 -> 4
+    | Tcp_offset_past_payload -> 15
+    | Tcp_options -> 6
+    | _ -> 5
+  in
+  Bytes.set_uint16_be b (l4 + 12)
+    ((words lsl 12) lor Random.State.int rand 0x200)
+
+let udp_header b l4 rand variant ~payload =
+  let length =
+    match variant with
+    | Udp_length_7 -> 7
+    | Udp_length_past_payload -> payload + 1
+    | Udp_length_inside_payload -> 8 + Random.State.int rand (payload - 8)
+    | _ -> payload
+  in
+  Bytes.set_uint16_be b (l4 + 4) length
+
+let ipv4_packet b ip rand variant =
+  let rest = slot - 14 in
+  let version = if variant = Version_6 then 6 else 4 in
+  let ihl =
+    match variant with
+    | Ihl_4 -> 4
+    | Ip_options | Total_under_header -> 6
+    | _ -> 5
+  in
+  let total =
+    match variant with
+    | Total_under_20 -> 19
+    | Total_under_header -> 22
+    | Total_past_packet -> rest + 1
+    | Total_inside_packet -> rest - 6
+    | _ -> rest
+  in
+  let fragment =
+    match variant with
+    | More_fragments -> 0x2000
+    | Fragment_offset -> 1 + Random.State.int rand 0x1fff
+    | _ -> 0x4000
+  in
+  Bytes.set_uint8 b ip ((version lsl 4) lor ihl);
+  Bytes.set_uint16_be b (ip + 2) total;
+  Bytes.set_uint16_be b (ip + 6) fragment;
+  Bytes.set_uint8 b (ip + 8) (1 + Random.State.int rand 254);
+  let l4 = ip + (ihl * 4) and payload = total - (ihl * 4) in
+  let tcp =
+    match variant with
+    | Tcp_offset_4 | Tcp_offset_past_payload | Tcp_options -> true
+    | Udp_length_7 | Udp_length_past_payload | Udp_length_inside_payload ->
+        false
+    | _ -> Random.State.bool rand
+  in
+  if variant = Other_protocol then Bytes.set_uint8 b (ip + 9) 253
+  else if tcp then begin
+    Bytes.set_uint8 b (ip + 9) 6;
+    tcp_header b l4 rand variant
+  end
+  else begin
+    Bytes.set_uint8 b (ip + 9) 17;
+    udp_header b l4 rand variant ~payload
+  end
 
 let corpus file n =
   let rand = Random.State.make [| 42 |] in
@@ -49,30 +156,14 @@ let corpus file n =
     for k = 0 to slot - 1 do
       Bytes.set_uint8 b (o + k) (Random.State.int rand 256)
     done;
-    let kind = Random.State.int rand 20 in
-    if kind = 0 then Bytes.set_uint16_be b (o + 12) 0x88B5
+    let variant =
+      if Random.State.int rand 4 > 0 then Well_formed
+      else variants.(Random.State.int rand (Array.length variants))
+    in
+    if variant = Not_ipv4 then Bytes.set_uint16_be b (o + 12) 0x88B5
     else begin
       Bytes.set_uint16_be b (o + 12) ipv4;
-      let ip = o + 14 in
-      Bytes.set_uint8 b ip 0x45;
-      Bytes.set_uint16_be b (ip + 2) (slot - 14);
-      Bytes.set_uint16_be b (ip + 6) 0x4000;
-      Bytes.set_uint8 b (ip + 8) (1 + Random.State.int rand 254);
-      (* More fragments, or a total length one byte past the slot. *)
-      if kind = 1 then Bytes.set_uint16_be b (ip + 6) 0x2000;
-      if kind = 2 then Bytes.set_uint16_be b (ip + 2) (slot - 14 + 1);
-      let l4 = ip + 20 in
-      if kind = 3 || (kind <> 4 && kind <= 12) then begin
-        (* A data offset of 15 words is past the 30 bytes of payload. *)
-        let off = if kind = 3 then 15 else 5 in
-        Bytes.set_uint8 b (ip + 9) 6;
-        Bytes.set_uint16_be b (l4 + 12)
-          ((off lsl 12) lor Random.State.int rand 0x200)
-      end
-      else begin
-        Bytes.set_uint8 b (ip + 9) 17;
-        Bytes.set_uint16_be b (l4 + 4) (slot - 34 + if kind = 4 then 1 else 0)
-      end
+      ipv4_packet b (o + 14) rand variant
     end
   done;
   let oc = open_out_bin file in
