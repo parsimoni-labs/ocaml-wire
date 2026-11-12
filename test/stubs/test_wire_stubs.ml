@@ -386,6 +386,30 @@ let test_keyword_fields () =
         (contains ~sub:("fields." ^ m ^ ")") c))
     [ "done"; "effect"; "local_"; "int_"; "typeof_" ]
 
+(* A codec's name gives the record type of its stubs, lower-cased: [Type]
+   would declare [type type]. It is escaped as a label is. *)
+let test_keyword_codec_name () =
+  let s = struct_ "Type" [ field "x" uint8 ] in
+  check_struct s;
+  Alcotest.(check bool)
+    "type name escaped" true
+    (contains ~sub:"type type_ = {" (Wire_stubs.to_ml_stubs [ s ]))
+
+(* Two codecs whose names fold to one are one record type and one C stub. *)
+let test_codec_names_clash () =
+  let both a b =
+    let structs = List.map (fun n -> struct_ n [ field "x" uint8 ]) [ a; b ] in
+    let subs = [ Fmt.str "%S" a; Fmt.str "%S" b ] in
+    rejects (a ^ " and " ^ b) subs (fun () -> Wire_stubs.to_ml_stubs structs);
+    rejects
+      (a ^ " and " ^ b ^ " (C)")
+      subs
+      (fun () -> Wire_stubs.to_c_stubs structs)
+  in
+  both "foo" "FOO";
+  both "FooBar" "Foobar";
+  both "Type" "Type_"
+
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
 let has_3d = Wire_3d.has_3d_exe ()
@@ -1015,6 +1039,8 @@ let suite =
         test_ml_labels_clash;
       Alcotest.test_case "field names: keywords" `Quick test_keyword_fields;
       Alcotest.test_case "field names: check_names" `Quick test_check_names;
+      Alcotest.test_case "codec name: keyword" `Quick test_keyword_codec_name;
+      Alcotest.test_case "codec names: clash" `Quick test_codec_names_clash;
       (* end-to-end: generate -> EverParse -> compile -> call *)
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: offset bounds" `Slow test_e2e_offset_bounds;

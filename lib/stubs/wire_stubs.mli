@@ -52,7 +52,11 @@ val check_names : Wire.Everparse.Raw.struct_ -> unit
     need them directly. *)
 
 val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
-(** Generate C stubs that call the EverParse validators directly. *)
+(** Generate C stubs that call the EverParse validators directly.
+
+    @raise Invalid_argument
+      naming both codecs when two names fold to one stub name, as [foo] and
+      [FOO] do. *)
 
 val build_codec_archive : schema_dir:string -> archive:string -> unit
 (** [build_codec_archive ~schema_dir ~archive] compiles each generated validator
@@ -64,7 +68,12 @@ val build_codec_archive : schema_dir:string -> archive:string -> unit
     [test.c] and [<Name>Wrapper.c] are skipped. Requires [cc] and [ar]. *)
 
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
-(** Generate OCaml external declarations and record types for all structs. *)
+(** Generate OCaml external declarations and record types for all structs. A
+    struct's record type is its name lower-cased, escaped when a keyword ([Type]
+    gives [type_]).
+
+    @raise Invalid_argument
+      naming both codecs when two names give one type, as [foo] and [FOO] do. *)
 
 val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
 (** Generate a standalone OCaml module with parse and parse_k for one struct. *)
