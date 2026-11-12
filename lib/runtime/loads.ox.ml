@@ -1,5 +1,7 @@
 module Int64_u = Stdlib_upstream_compatible.Int64_u
 
+type cell = { mutable cell : int64_u }
+
 external checked16 : bytes -> int64_u -> int
   = "%caml_bytes_get16_indexed_by_int64#"
 

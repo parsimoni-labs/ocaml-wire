@@ -163,6 +163,15 @@ val plan_of : ?maps:maps -> T.struct_ -> plan
 val fields_of : node list -> field list
 (** [fields_of nodes] is every prefix field of [nodes], nested ones included. *)
 
+val slot_depth : int
+(** [slot_depth] is the number of optional fields nested inside each other under
+    which outputs are bound immutably. *)
+
+val slots : node list -> output list
+(** [slots nodes] is the outputs of [nodes] under more than {!slot_depth}
+    optional fields nested inside each other, the presence of the innermost
+    included. *)
+
 val references : node list -> string list
 (** [references nodes] is the variables the checks, sizes and conditions of
     [nodes] read. *)

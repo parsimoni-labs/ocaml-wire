@@ -83,6 +83,10 @@
   name (`Color_Red`), so two enums may share a case, and a field `typeof` is
   `typeof3d` in 3D (#471, @samoht)
 
+- `Wire_ocaml.scanner` and `Wire_rust.scanner` write code linear in the number
+  of optional fields, nested ones included. The code changes only for outputs
+  under more than four optional fields nested inside each other (#473, @samoht)
+
 ### Fixed
 
 - The 3D projection of a codec holding an array of `lookup` indices in a
