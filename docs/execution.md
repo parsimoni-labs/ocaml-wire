@@ -1,9 +1,10 @@
 # How a codec runs
 
-A codec is compiled once, on its first use, into a plan for one record in a
-buffer. Every operation runs part of that plan, and the plan reads untrusted
-bytes, so the rules below say which reads are checked and why the others
-cannot go wrong.
+A codec is compiled on its first use into a plan for one record in a
+buffer. Domains that use a new codec at the same time may each compile it:
+the compile is pure and one plan is kept. Every operation runs part of that
+plan, and the plan reads untrusted bytes, so the rules below say which reads
+are checked and why the others cannot go wrong.
 
 ## The three phases
 

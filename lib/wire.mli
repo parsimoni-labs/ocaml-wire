@@ -1216,14 +1216,15 @@ module Codec : sig
 
       [v] checks the description and compiles nothing; the first operation that
       needs the layout (encoding, decoding, validating, sizing, staging an
-      accessor, embedding with {!codec}) compiles it, once, from any domain.
-      Raises [Invalid_argument] on a repeated field or parameter name, on a
-      field list EverParse 3D cannot validate, and on a constraint, action or
-      [?where] that refers to a field it cannot see. What only the compile finds
-      (a size expression referring to a field it cannot see, a bitfield after a
-      variable-size field, a field type with no reader or writer, fixed fields
-      that add up to more than a buffer can hold) raises [Invalid_argument] at
-      the first use instead.
+      accessor, embedding with {!codec}) compiles it, from any domain. Domains
+      that use a new codec at the same time may each compile it; one result is
+      kept, and they are interchangeable. Raises [Invalid_argument] on a
+      repeated field or parameter name, on a field list EverParse 3D cannot
+      validate, and on a constraint, action or [?where] that refers to a field
+      it cannot see. What only the compile finds (a size expression referring to
+      a field it cannot see, a bitfield after a variable-size field, a field
+      type with no reader or writer, fixed fields that add up to more than a
+      buffer can hold) raises [Invalid_argument] at the first use instead.
 
       {[
       let codec =

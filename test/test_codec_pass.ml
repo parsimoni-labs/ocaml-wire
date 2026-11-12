@@ -814,8 +814,8 @@ let test_v_defers_compilation () =
      words, first decode: %.0f)"
     built first
 
-(* The compile runs once per codec value, whichever domain asks first. Two
-   domains racing on a codec nobody has used yet both get a working codec. *)
+(* Domains racing on a codec nobody has used yet may each compile it; all get
+   a working codec. *)
 let test_first_use_races_across_domains () =
   let c = Deferred.codec () in
   let buf = Bytes.of_string "\x21\003\000\007abc" in
@@ -920,8 +920,8 @@ let suite =
         test_fresh_domain_validate_flat_in_validator_count;
       Alcotest.test_case "v: compiles on first use, not when built" `Quick
         test_v_defers_compilation;
-      Alcotest.test_case "v: first use racing across domains compiles once"
-        `Quick test_first_use_races_across_domains;
+      Alcotest.test_case "v: first use racing across domains" `Quick
+        test_first_use_races_across_domains;
       Alcotest.test_case "v: a bad description still fails where it is built"
         `Quick test_v_rejects_bad_description_eagerly;
     ] )

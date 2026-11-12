@@ -53,7 +53,9 @@ val v :
     writers and validators are compiled by the first operation that needs them,
     on whichever domain calls it first: every function of this module that takes
     a codec except {!name}, {!rename}, {!doc}, {!pp}, {!to_struct} and {!env}.
-    Embedding a codec with {!Wire.codec} compiles it.
+    Embedding a codec with {!Wire.codec} compiles it. Domains that use a new
+    codec at the same time may each compile it: the compile is pure, and one
+    result is kept.
 
     Raises [Invalid_argument] if two fields have the same name, if distinct
     parameter handles referenced by the codec have the same name, if the field
