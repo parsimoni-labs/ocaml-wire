@@ -920,6 +920,34 @@ let test_ffi_member_widths () =
        (fun (f : Everparse.plug_field) -> (f.name, f.c_type, f.val_c_type))
        (Everparse.plug_fields (Everparse.project ~mode:`Ffi c)))
 
+(* An optional scalar of an embedded codec has a member after its flag, set
+   by a codec of that one field that the optional's region parses. *)
+let test_ffi_nested_optional_scalar () =
+  let f_k = Field.v "k" uint8 in
+  let present = Expr.(Field.ref f_k = int 1) in
+  let inner =
+    Codec.v "OptIn"
+      (fun k o -> (k, o))
+      Codec.[ f_k $ fst; Field.optional "o" ~present uint16be $ snd ]
+  in
+  let c =
+    Codec.v "OptTop"
+      (fun t i -> (t, i))
+      Codec.[ Field.v "t" uint8 $ fst; Field.v "i" (codec inner) $ snd ]
+  in
+  let s = Everparse.project ~mode:`Ffi c in
+  Alcotest.(check (list string))
+    "members"
+    [ "t"; "i"; "i_k"; "i_o_present"; "i_o" ]
+    (plug_names s);
+  let out = flatten (to_3d s.module_) in
+  List.iter
+    (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
+    [
+      "UINT16BE v {:on-success OptTopSetU16BE(ctx, (UINT32) 4, v);";
+      "Some_i_o(ctx) o[:byte-size";
+    ]
+
 let test_ffi_nested_name_clash () =
   let inner =
     Codec.v "ClashIn"
@@ -1923,6 +1951,8 @@ let suite =
         test_ffi_nested_plug_paths;
       Alcotest.test_case "ffi: a member is as wide as its setter's value" `Quick
         test_ffi_member_widths;
+      Alcotest.test_case "ffi: an optional scalar of an embedded codec" `Quick
+        test_ffi_nested_optional_scalar;
       Alcotest.test_case "ffi: nested name clash" `Quick
         test_ffi_nested_name_clash;
       Alcotest.test_case "ffi: nested shared codec" `Quick

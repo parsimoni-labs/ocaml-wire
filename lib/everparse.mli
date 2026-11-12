@@ -109,7 +109,8 @@ val plug_fields : t -> plug_field list
     fields of the source struct in declaration order and, when the struct embeds
     another codec (as a field, under an optional or in a sized region), each
     scalar of every embedded codec and a [<path>_present] flag per optional,
-    named by path ([ipv4_tcp_src_port]). Returns [[]] for schemas without a
+    named by path ([ipv4_tcp_src_port]). An optional integer or float of an
+    embedded codec follows its flag. Returns [[]] for schemas without a
     {!field-source} struct. Raises [Invalid_argument] when two members share a
     name. *)
 

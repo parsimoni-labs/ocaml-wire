@@ -206,7 +206,9 @@ let bytes_setter schema_name : setter_info =
    call the entrypoint's setters with the slot's index, exactly as the
    entrypoint's own fields do. A codec reached inside an array, a repeat or a
    casetype body is not flattened: it keeps its own scope and is validated, its
-   fields are not extracted. An embedded byte span has no slot.
+   fields are not extracted. An optional integer or float of an embedded codec,
+   under [map] or [enum] or bare, has a slot after its flag. An embedded byte
+   span has no slot.
 
    The validator writes a slot only for what it parses: a presence flag is
    written on every validation, 1 or 0, but the fields under an absent optional
@@ -314,9 +316,61 @@ let presence_call w idx present =
     ( w.schema ^ "SetU8",
       [ "ctx"; Fmt.str "(UINT32) %d" idx; Fmt.str "%a" Types.pp_expr value ] )
 
+(* A scalar a setter takes by value, seen through [map] and [enum]: a
+   whole-byte integer or a float. *)
+let rec boxable : type a. a Types.typ -> bool = function
+  | Types.Uint8 | Types.Uint16 _ | Types.Uint32 _ | Types.Uint64 _ -> true
+  | Types.Int8 | Types.Int16 _ | Types.Int32 _ | Types.Int64 _ -> true
+  | Types.Float32 _ | Types.Float64 _ -> true
+  | Types.Map { inner; _ } -> boxable inner
+  | Types.Enum { base; _ } -> boxable base
+  | _ -> false
+
+(* The scalar [t] of the optional field at [path] as a codec of that one
+   field, whose setter fills the slot [path]. 3D reads an optional scalar as a
+   byte region, which no action can read; a region of this codec parses its
+   field, and so sets it, where the optional is present. *)
+let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
+ fun w ~path t ->
+  let idx = new_slot w path (Types.Pack_typ t) ~bytes:false in
+  let c = Codec.v ("Some_" ^ path) Fun.id Codec.[ Field.v "v" t $ Fun.id ] in
+  let s = Codec.to_struct c in
+  let calls = [ setter_call w.schema t "v" idx None ] in
+  let codec_struct =
+    {
+      s with
+      params = s.params @ [ ctx_param ];
+      fields = List.map (fun f -> with_setter_calls f calls) s.fields;
+    }
+  in
+  let size = Codec.min_wire_size c in
+  Types.Codec
+    {
+      codec_name = s.name;
+      codec_decode = Codec.embed_decode_ctx c;
+      codec_validate = Codec.embed_validate_ctx c;
+      codec_validate_sized = Codec.embed_validate_sized_ctx c;
+      codec_encode = Codec.embed_encode_ctx c;
+      codec_fixed_size = Some size;
+      codec_min_size = size;
+      codec_size_of = (fun _ _ _ _ -> size);
+      codec_size_of_value = Codec.size_of_value_ctx c;
+      codec_field_readers = Codec.field_readers_ctx c;
+      codec_returns_slice = false;
+      codec_struct;
+    }
+
+let box_optional : type a.
+    walk -> path:string -> a Types.typ -> a Types.typ option =
+ fun w ~path -> function
+  | Types.Optional ({ inner; _ } as o) when boxable inner ->
+      Some (Types.Optional { o with inner = boxed w ~path inner })
+  | _ -> None
+
 (* One field of the entrypoint ([top]) or of an embedded codec at [prefix]: its
    own slot (an embedded byte span has none), its presence flag, then the
-   slots of the codecs it embeds, threaded through its type. *)
+   slot of the scalar an embedded optional holds, or the slots of the codecs
+   it embeds, threaded through its type. *)
 let rec flatten_field w ~top ~nested ~prefix byte_off (Types.Field f as field) =
   match f.field_name with
   | None -> field
@@ -344,9 +398,12 @@ let rec flatten_field w ~top ~nested ~prefix byte_off (Types.Field f as field) =
       in
       let calls = own @ presence in
       let direct_ok = calls = [] && Option.is_none f.action in
+      let path = prefix ^ name in
       let field_typ =
-        if nested then thread w ~direct_ok ~path:(prefix ^ name) f.field_typ
-        else f.field_typ
+        match if own = [] then box_optional w ~path f.field_typ else None with
+        | Some t -> t
+        | None when nested -> thread w ~direct_ok ~path f.field_typ
+        | None -> f.field_typ
       in
       let field = Types.Field { f with field_typ } in
       if calls = [] then field else with_setter_calls field calls

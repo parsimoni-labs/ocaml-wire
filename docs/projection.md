@@ -49,9 +49,10 @@ names from the entrypoint down joined with underscores (`ipv4_src`,
 `Wire_ocaml.scanner` gives its outputs; a path that spells another member's
 name is refused when the codec is projected. A sub-codec reached at two
 paths is declared once per path (`Leaf_a`, `Leaf_b`), since each copy calls
-the setters with its own indices. An embedded byte span has no member, and
-a sub-codec inside an array, a repeat or a casetype body is validated but
-not flattened.
+the setters with its own indices. An optional integer or float of an
+embedded codec has a member after its flag, also under `map` or `enum`. An
+embedded byte span has no member, and a sub-codec inside an array, a repeat
+or a casetype body is validated but not flattened.
 
 The validator writes a member only for what it parses. A presence flag is
 written on every successful validation, 1 or 0; the fields under an absent
