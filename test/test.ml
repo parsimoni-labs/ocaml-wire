@@ -20,6 +20,7 @@ let () =
       Test_codec_zeroterm.suite;
       Test_codec_alloc.suite;
       Test_everparse.suite;
+      Test_everparse_doc.suite;
       Test_param.suite;
       Test_ascii.suite;
       Test_staged.suite;
