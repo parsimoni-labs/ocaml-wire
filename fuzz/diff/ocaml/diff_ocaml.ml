@@ -502,16 +502,41 @@ let restrict (Reference r) fields got =
         (List.filter (fun (n, _) -> List.mem n known && List.mem n fields))
         got
 
-let scan_oracle (Reference r) oracle bounded accepted buf off len =
+(* The plug members a reference states, each with the value its C member
+   holds: the field's low [bits] bits, so a signed field reads as its two's
+   complement there, and an absent one as 0. *)
+let plug_snapshot (Reference r) fields pairs =
+  let fields =
+    match r.known with
+    | None -> fields
+    | Some known -> List.filter (fun (n, _) -> List.mem n known) fields
+  in
+  List.map
+    (fun (n, bits) ->
+      let v = Option.value ~default:0 (List.assoc_opt n pairs) in
+      (n, if bits >= Sys.int_size - 1 then v else v land ((1 lsl bits) - 1)))
+    fields
+
+let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
   Option.iter
-    (fun accepted_end ->
+    (fun (o : Diff_codecs.c_oracle) ->
       let consumed =
-        match (bounded, accepted) with
-        | Some b, true -> Wire.Codec.wire_size_at r.codec b 0
+        match (bounded, value) with
+        | Some b, Some _ -> Wire.Codec.wire_size_at r.codec b 0
         | _ -> -1
       in
+      let end_, members = o.scan buf off len in
       scan_same r.label "EverParse C acceptance and consumed prefix"
-        string_of_int consumed (accepted_end buf off len))
+        string_of_int consumed end_;
+      scan_same r.label "EverParse C standalone acceptance and consumed prefix"
+        string_of_int consumed (o.standalone buf off len);
+      Option.iter
+        (fun pairs ->
+          scan_same r.label "EverParse C plug scalars"
+            (fun l -> show_snapshot (Some l))
+            (plug_snapshot ref_ o.fields pairs)
+            (plug_snapshot ref_ o.fields members))
+        value)
     oracle
 
 let scan_batches ?strides (Reference r as ref_) oracle backends buf off len =
@@ -536,8 +561,7 @@ let scan_batches ?strides (Reference r as ref_) oracle backends buf off len =
                 (fun i ->
                   let frame = Bytes.sub b (i * stride) stride in
                   let value = expected ref_ frame in
-                  scan_oracle ref_ oracle (Some frame) (Option.is_some value)
-                    buf
+                  scan_oracle ref_ oracle (Some frame) value buf
                     (off + (i * stride))
                     stride;
                   value))
@@ -592,7 +616,7 @@ let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
     let bounded = scan_frame buf off len in
     let value = Option.bind bounded (expected ref_) in
     codec_agrees ref_ ~general bounded value;
-    scan_oracle ref_ oracle bounded (Option.is_some value) buf off len;
+    scan_oracle ref_ oracle bounded value buf off len;
     List.iter
       (fun backend ->
         scan_same r.label backend.scan_name show_snapshot

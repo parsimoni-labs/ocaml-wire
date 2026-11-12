@@ -69,6 +69,10 @@
 - `Wire.Codec.decode` checks a nested codec once, not once per level of
   nesting (#445, @samoht)
 
+- **Breaking:** the default plug (`<Name>Fields`) has one member per scalar of
+  a nested codec, named by its path (`ipv4_tcp_src_port`). Member indices
+  shift: rebuild custom plugs (#446, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,

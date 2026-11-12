@@ -10,9 +10,9 @@ val run : string -> (string * (bytes -> unit)) list -> unit
     bytes; under AFL ({!Fuzz_gen.afl_mode}) the framed input picks one codec. A
     check fails through {!Alcobar.failf}. *)
 
-val oracle : string -> (bytes -> int -> int -> int) option
-(** [oracle label] is {!C_oracle.accepted_end} for the structured case [label]
-    when the validators are built. *)
+val oracle : string -> Diff_codecs.c_oracle option
+(** [oracle label] is {!C_oracle.oracle} for the structured case [label] when
+    the validators are built. *)
 
 val report_oracle : string -> unit
 (** [report_oracle name] says whether the C validators are compared, and fails

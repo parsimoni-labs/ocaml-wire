@@ -991,6 +991,71 @@ int main(void) {
     run (Filename.concat dir "stack_test")
   end
 
+(* A 64-bit integer under [map] in an embedded codec reaches the default plug
+   whole: the member the verified validator fills is compared with what the
+   codec decodes, on a value with bits above the 32nd. *)
+let test_e2e_nested_wide () =
+  if not has_3d then ()
+  else begin
+    let wide = map ~decode:Fun.id ~encode:Fun.id uint64be in
+    let inner =
+      Codec.v "WideIn"
+        (fun w g -> (w, g))
+        Codec.[ Field.v "w" wide $ fst; Field.v "g" uint8 $ snd ]
+    in
+    let codec =
+      Codec.v "WideTop"
+        (fun t i -> (t, i))
+        Codec.[ Field.v "t" uint8 $ fst; Field.v "i" (codec inner) $ snd ]
+    in
+    let frame = Bytes.of_string "\001\x81\x23\x45\x67\x89\xab\xcd\xef\007" in
+    let expected =
+      match Codec.decode codec frame 0 with
+      | Ok (_, (w, _)) -> Fmt.str "%Lx" (UInt64.to_int64 w)
+      | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+    in
+    let dir = Filename.temp_dir "wire_e2e_wide" "" in
+    let schema = Everparse.project ~mode:`Ffi codec in
+    Wire_3d.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.run_everparse ~outdir:dir [ schema ];
+    Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
+    Wire_3d.write_fields ~outdir:dir [ schema ];
+    let driver =
+      Fmt.str
+        {c|#include "WideTop.h"
+#include "WideTop_Fields.h"
+#include <inttypes.h>
+#include <string.h>
+#include <stdio.h>
+
+static void eh(EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,
+               uint64_t c, uint8_t *ct, uint8_t *in, uint64_t p) {
+  (void)t; (void)f; (void)r; (void)c; (void)ct; (void)in; (void)p;
+}
+
+int main(void) {
+  uint8_t frame[] = {%a};
+  %s f; memset(&f, 0, sizeof f);
+  if (!EverParseIsSuccess(%s((WIRECTX *) &f, NULL, eh, frame, sizeof frame, 0)))
+    return 1;
+  printf("%%" PRIx64 "\n", (uint64_t) f.i_w);
+  return 0;
+}
+|c}
+        Fmt.(list ~sep:comma int)
+        (List.init (Bytes.length frame) (Bytes.get_uint8 frame))
+        (Wire_3d.everparse_name "WideTop" ^ "Fields")
+        (Wire_stubs.validator_name "WideTop")
+    in
+    write_file (Filename.concat dir "wide.c") driver;
+    Fmt.kstr run
+      "cd %s && cc %s -I . $(ls *.c | grep -v Wrapper) -o wide_test 2>&1" dir
+      Wire_3d.strict_cc_flags;
+    Alcotest.(check (option string))
+      "i_w, as the codec decodes it" (Some expected)
+      (capture (Filename.concat dir "wide_test"))
+  end
+
 (* -- Suite -- *)
 
 let suite =
@@ -1049,6 +1114,8 @@ let suite =
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
         test_e2e_full_stack;
+      Alcotest.test_case "e2e: a nested 64-bit member (plug vs codec)" `Slow
+        test_e2e_nested_wide;
       Alcotest.test_case "e2e: GC stress under the debug runtime" `Slow
         test_e2e_gc_stress;
       (* output pattern invariants *)

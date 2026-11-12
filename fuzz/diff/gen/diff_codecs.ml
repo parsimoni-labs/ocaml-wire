@@ -157,6 +157,12 @@ type scan_case =
     }
       -> scan_case
 
+type c_oracle = {
+  fields : (string * int) list;
+  scan : bytes -> int -> int -> int * (string * int) list;
+  standalone : bytes -> int -> int -> int;
+}
+
 let packet ~tcp ~ihl ~words ~fragment =
   let b = Bytes.make 128 '\000' in
   Bytes.set_uint16_be b 12 0x0800;

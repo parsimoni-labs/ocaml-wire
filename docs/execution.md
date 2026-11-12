@@ -122,7 +122,9 @@ after it is written once.
 The differential lanes compare every generated module with the codec on
 random bytes: the record modules on the sampled fixed records, the scanners
 on every sampled shape and on hand-written structured cases, and, with
-`BUILD_EVERPARSE=1`, those cases with the EverParse C validator for
-acceptance and the bytes it consumes. On OxCaml the scanners hold integers as
-`int64_u`; the paranoid profile checks each of their loads too, on the full
-64-bit index.
+`BUILD_EVERPARSE=1`, those cases with the EverParse C validators of their
+standalone and FFI projections for acceptance and the bytes consumed, and
+with every scalar member of the FFI projection's default plug, nested fields
+and presence flags included ([the FFI plug](projection.md#the-ffi-plug)), an
+absent field as zero. On OxCaml the scanners hold integers as `int64_u`; the
+paranoid profile checks each of their loads too, on the full 64-bit index.

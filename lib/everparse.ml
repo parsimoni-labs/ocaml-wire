@@ -136,16 +136,16 @@ let setter_call : type a.
   Types.Extern_call (setter, [ "ctx"; Fmt.str "(UINT32) %d" field_idx; value ])
 
 (* Build the statements of an [:act] block from a user action plus the auto
-   setter call. An [:act] block is unit, so a trailing [return] is dropped: in
+   setter calls. An [:act] block is unit, so a trailing [return] is dropped: in
    OCaml [on_act] and [on_success] evaluate identically and a trailing
-   [return true] is a no-op success, while the setter (also unit) runs last. *)
-let act_stmts stmts call =
+   [return true] is a no-op success, while the setters (also unit) run last. *)
+let act_stmts stmts calls =
   let stmts =
     match List.rev stmts with
     | Types.Return _ :: rest -> List.rev rest
     | _ -> stmts
   in
-  stmts @ [ call ]
+  stmts @ calls
 
 let ends_in_return stmts =
   match List.rev stmts with Types.Return _ :: _ -> true | _ -> false
@@ -159,58 +159,34 @@ let ends_in_return stmts =
      with an [else { return true }] synthesised when the user gave none;
    - one ending in a plain [return] keeps it terminal;
    - otherwise the setter and a [return true] are appended as before. *)
-let on_success_stmts stmts call =
+let on_success_stmts stmts calls =
   match List.rev stmts with
   | Types.If (cond, then_, else_opt) :: before when ends_in_return then_ ->
       let else_ =
         match else_opt with Some e -> e | None -> [ Types.Return Types.true_ ]
       in
-      (call :: List.rev before) @ [ Types.If (cond, then_, Some else_) ]
-  | Types.Return _ :: _ -> call :: stmts
-  | _ -> stmts @ [ call; Types.Return Types.true_ ]
+      calls @ List.rev before @ [ Types.If (cond, then_, Some else_) ]
+  | Types.Return _ :: _ -> calls @ stmts
+  | _ -> stmts @ calls @ [ Types.Return Types.true_ ]
 
-let map_field_action schema_name idx byte_off (Types.Field f) =
-  let field_size = Types.field_wire_size f.field_typ in
-  let next_off =
-    match (byte_off, field_size) with
-    | Some o, Some s -> Some (o + s)
-    | _ -> None
+(* Attach the setter [calls] to a field's action, keeping any user action. *)
+let with_setter_calls (Types.Field f) calls =
+  let action =
+    if is_bitfield f.field_typ then
+      (* Bitfields: :act fires per sub-field during coalesced parsing *)
+      match f.action with
+      | None -> Types.Act calls
+      | Some (Types.Act stmts) | Some (Types.Success stmts) ->
+          Types.Act (act_stmts stmts calls)
+    else
+      (* Scalars and byte-size fields: :on-success *)
+      match f.action with
+      | None -> Types.Success (calls @ [ Types.Return Types.true_ ])
+      | Some (Types.Success stmts) ->
+          Types.Success (on_success_stmts stmts calls)
+      | Some (Types.Act stmts) -> Types.Act (act_stmts stmts calls)
   in
-  let result =
-    match f.field_name with
-    | Some name ->
-        let field_idx = !idx in
-        incr idx;
-        let call =
-          setter_call schema_name f.field_typ name field_idx byte_off
-        in
-        let new_action =
-          if is_bitfield f.field_typ then
-            (* Bitfields: :act fires per sub-field during coalesced parsing *)
-            match f.action with
-            | None -> Some (Types.Act [ call ])
-            | Some (Types.Act stmts) -> Some (Types.Act (act_stmts stmts call))
-            | Some (Types.Success stmts) ->
-                Some (Types.Act (act_stmts stmts call))
-          else
-            (* Scalars and byte-size fields: :on-success *)
-            match f.action with
-            | None -> Some (Types.Success [ call; Types.Return Types.true_ ])
-            | Some (Types.Success stmts) ->
-                Some (Types.Success (on_success_stmts stmts call))
-            | Some (Types.Act stmts) -> Some (Types.Act (act_stmts stmts call))
-        in
-        Types.Field
-          {
-            field_name = Some name;
-            field_typ = f.field_typ;
-            constraint_ = f.constraint_;
-            action = new_action;
-            field_doc = f.field_doc;
-          }
-    | None -> Types.Field f
-  in
-  (result, next_off)
+  Types.Field { f with action = Some action }
 
 let bytes_setter schema_name : setter_info =
   {
@@ -218,31 +194,257 @@ let bytes_setter schema_name : setter_info =
     val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
   }
 
-let collect_extern_setters schema_name ctx_struct u32 fields =
-  let seen = Hashtbl.create 8 in
-  List.filter_map
-    (fun (Types.Field f) ->
-      match f.field_name with
-      | None -> None
-      | Some _ ->
-          let si =
-            if is_byte_field f.field_typ then bytes_setter schema_name
-            else setter_of schema_name f.field_typ
+(* {2 The plug}
+
+   One slot per named field of the entrypoint. A codec that embeds another
+   codec (as a field, under an [optional], or in a [nested] region, seen
+   through [map] / [where]) also gets one slot per scalar of every embedded
+   codec and one [<path>_present] flag per optional, at any depth, each named by
+   its path: the field names from the entrypoint down, joined with underscores,
+   the names [Wire_ocaml.scanner] gives its outputs. The embedded structs and
+   the optional casetypes over them take the [ctx] parameter, and their fields
+   call the entrypoint's setters with the slot's index, exactly as the
+   entrypoint's own fields do. A codec reached inside an array, a repeat or a
+   casetype body is not flattened: it keeps its own scope and is validated, its
+   fields are not extracted. An embedded byte span has no slot.
+
+   The validator writes a slot only for what it parses: a presence flag is
+   written on every validation, 1 or 0, but the fields under an absent optional
+   are not written at all and keep the value the caller gave the plug. 3D gives
+   a literal no big-endian type ([(UINT16BE) 0] is a [UINT16]), so the
+   validator cannot pass a zero to a big-endian setter. Initialising the plug
+   to zero before each validation, as the generated stubs do, makes them read 0,
+   the value [Wire_ocaml.scanner] gives an absent field. *)
+
+type slot = {
+  member : string;
+  index : int;
+  typ : Types.packed_typ;
+  bytes : bool;
+}
+
+type walk = {
+  schema : string;
+  next : int ref;
+  slots : slot list ref;
+  uses : (string, int) Hashtbl.t;
+}
+
+let plug_member name = Names.escape Names.c_keywords name
+let ctx_struct = Types.struct_ "WireCtx" []
+let ctx_param = Types.mutable_param "ctx" (Types.struct_typ ctx_struct)
+
+let new_slot w name typ ~bytes =
+  let i = !(w.next) in
+  incr w.next;
+  w.slots := { member = name; index = i; typ; bytes } :: !(w.slots);
+  i
+
+(* How many fields a struct has in 3D: consecutive bitfields packed into one
+   word are one, as in [coalesced_wire_size]. *)
+let projected_field_count fields =
+  let count, _ =
+    List.fold_left
+      (fun (n, group) (Types.Field f) ->
+        match Types.unwrap_bits f.field_typ with
+        | Some (base, order, width) -> (
+            match group with
+            | Some (b, o, used)
+              when Bitfield.equal b base
+                   && Types.equal_bit_order o order
+                   && used + width <= Bitfield.total_bits base ->
+                (n, Some (b, o, used + width))
+            | _ -> (n + 1, Some (base, order, width)))
+        | None -> (n + 1, None))
+      (0, None) fields
+  in
+  count
+
+(* EverParse reads a struct of one field as that field, and then refuses a
+   field of that struct's type that carries an action when the struct's field
+   carries one too ("this field cannot be read because it has multiple
+   actions"). Such a codec is flattened only where its field carries no
+   action of its own: under an optional or in a sized region, or as a nested
+   field with no user action. *)
+let flattens ~direct_ok (c : Types.struct_) =
+  direct_ok || projected_field_count c.fields > 1
+
+(* Whether a field's type embeds a codec on a path the plug flattens.
+   [direct_ok] says whether a codec directly at this position may be
+   flattened (see [flattens]). *)
+let rec embeds : type a. direct_ok:bool -> a Types.typ -> bool =
+ fun ~direct_ok -> function
+  | Types.Codec { codec_struct; _ } -> flattens ~direct_ok codec_struct
+  | Types.Optional { present = Types.Bool false; _ } -> false
+  | Types.Optional { inner; _ } -> embeds ~direct_ok:true inner
+  | Types.Single_elem { elem; _ } -> embeds ~direct_ok:true elem
+  | Types.Map { inner; _ } -> embeds ~direct_ok inner
+  | Types.Where { inner; _ } -> embeds ~direct_ok inner
+  | _ -> false
+
+(* Every codec a type reaches, flattened or not, counted by name. A codec
+   reached more than once is renamed per path when it is flattened, since each
+   copy calls the setters with its own indices. *)
+let rec count_codecs : type a. (string, int) Hashtbl.t -> a Types.typ -> unit =
+ fun uses -> function
+  | Types.Codec { codec_name; codec_struct; _ } ->
+      let n = Option.value ~default:0 (Hashtbl.find_opt uses codec_name) in
+      Hashtbl.replace uses codec_name (n + 1);
+      List.iter
+        (fun (Types.Field f) -> count_codecs uses f.field_typ)
+        codec_struct.fields
+  | Types.Optional { inner; _ } -> count_codecs uses inner
+  | Types.Optional_or { inner; _ } -> count_codecs uses inner
+  | Types.Single_elem { elem; _ } -> count_codecs uses elem
+  | Types.Array { elem; _ } -> count_codecs uses elem
+  | Types.Repeat { elem; _ } -> count_codecs uses elem
+  | Types.Map { inner; _ } -> count_codecs uses inner
+  | Types.Where { inner; _ } -> count_codecs uses inner
+  | Types.Enum { base; _ } -> count_codecs uses base
+  | Types.Apply { typ; _ } -> count_codecs uses typ
+  | Types.Casetype { cases; _ } ->
+      List.iter
+        (fun (Types.Case_branch { cb_inner; _ }) -> count_codecs uses cb_inner)
+        cases
+  | _ -> ()
+
+let presence_call w idx present =
+  let value = Types.If_then_else (present, Types.Int 1, Types.Int 0) in
+  Types.Extern_call
+    ( w.schema ^ "SetU8",
+      [ "ctx"; Fmt.str "(UINT32) %d" idx; Fmt.str "%a" Types.pp_expr value ] )
+
+(* One field of the entrypoint ([top]) or of an embedded codec at [prefix]: its
+   own slot (an embedded byte span has none), its presence flag, then the
+   slots of the codecs it embeds, threaded through its type. *)
+let rec flatten_field w ~top ~nested ~prefix byte_off (Types.Field f as field) =
+  match f.field_name with
+  | None -> field
+  | Some name ->
+      let bytes = is_byte_field f.field_typ in
+      let own =
+        if top || not bytes then
+          let idx =
+            new_slot w (prefix ^ name) (Types.Pack_typ f.field_typ) ~bytes
           in
-          if Hashtbl.mem seen si.name then None
-          else begin
-            Hashtbl.add seen si.name ();
-            let (Types.Pack_typ val_typ) = si.val_typ in
-            Some
-              (Types.extern_fn si.name
-                 [
-                   Types.mutable_param "ctx" (Types.struct_typ ctx_struct);
-                   Types.param "idx" u32;
-                   Types.param "v" val_typ;
-                 ]
-                 Types.Unit)
-          end)
-    fields
+          [ setter_call w.schema f.field_typ name idx byte_off ]
+        else []
+      in
+      let presence =
+        match f.field_typ with
+        | Types.Optional { present = Types.Bool false; _ } -> []
+        | Types.Optional { present; _ } when nested ->
+            let idx =
+              new_slot w
+                (prefix ^ name ^ "_present")
+                (Types.Pack_typ Types.Uint8) ~bytes:false
+            in
+            [ presence_call w idx present ]
+        | _ -> []
+      in
+      let calls = own @ presence in
+      let direct_ok = calls = [] && Option.is_none f.action in
+      let field_typ =
+        if nested then thread w ~direct_ok ~path:(prefix ^ name) f.field_typ
+        else f.field_typ
+      in
+      let field = Types.Field { f with field_typ } in
+      if calls = [] then field else with_setter_calls field calls
+
+and thread : type a.
+    walk -> direct_ok:bool -> path:string -> a Types.typ -> a Types.typ =
+ fun w ~direct_ok ~path typ ->
+  match typ with
+  | Types.Codec c when flattens ~direct_ok c.codec_struct ->
+      let codec_name =
+        if Hashtbl.find_opt w.uses c.codec_name = Some 1 then c.codec_name
+        else c.codec_name ^ "_" ^ path
+      in
+      let s = c.codec_struct in
+      let fields =
+        List.map
+          (flatten_field w ~top:false ~nested:true ~prefix:(path ^ "_") None)
+          s.fields
+      in
+      let codec_struct =
+        { s with name = codec_name; params = s.params @ [ ctx_param ]; fields }
+      in
+      Types.Codec { c with codec_name; codec_struct }
+  | Types.Optional ({ present = Types.Bool false; _ } as o) -> Types.Optional o
+  | Types.Optional o ->
+      Types.Optional { o with inner = thread w ~direct_ok:true ~path o.inner }
+  | Types.Single_elem e ->
+      Types.Single_elem { e with elem = thread w ~direct_ok:true ~path e.elem }
+  | Types.Map m ->
+      Types.Map { m with inner = thread w ~direct_ok ~path m.inner }
+  | Types.Where x ->
+      Types.Where { x with inner = thread w ~direct_ok ~path x.inner }
+  | t -> t
+
+(* The entrypoint's fields with their setter calls, and the plug's slots in
+   index order. Byte offsets are static while every field before them has a
+   fixed size, as before. Every named field of the entrypoint has a setter,
+   so a codec directly in one flattens only if [flattens] allows it. *)
+let flatten schema (s : Types.struct_) =
+  let nested =
+    List.exists
+      (fun (Types.Field f) ->
+        Option.is_some f.field_name && embeds ~direct_ok:false f.field_typ)
+      s.fields
+  in
+  let uses = Hashtbl.create 8 in
+  List.iter (fun (Types.Field f) -> count_codecs uses f.field_typ) s.fields;
+  let w = { schema; next = ref 0; slots = ref []; uses } in
+  let off = ref (Some 0) in
+  let fields =
+    List.map
+      (fun (Types.Field f as field) ->
+        let field' = flatten_field w ~top:true ~nested ~prefix:"" !off field in
+        (off :=
+           match (!off, Types.field_wire_size f.field_typ) with
+           | Some o, Some n -> Some (o + n)
+           | _ -> None);
+        field')
+      s.fields
+  in
+  let slots = List.rev !(w.slots) in
+  (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
+     as the plug cannot hold both. Spellings that differ but escape alike are
+     refused where the plug is written ([Wire_3d.check_plug_names]). *)
+  let seen = Hashtbl.create 16 in
+  List.iter
+    (fun sl ->
+      if Hashtbl.mem seen sl.member then
+        Fmt.invalid_arg
+          "Everparse: in %S, two fields flatten to the plug member %S; rename \
+           one of them"
+          s.name sl.member;
+      Hashtbl.add seen sl.member ())
+    slots;
+  (nested, fields, slots)
+
+let slot_setter schema sl =
+  if sl.bytes then bytes_setter schema
+  else
+    let (Types.Pack_typ t) = sl.typ in
+    setter_of schema t
+
+let collect_extern_setters schema_name slots =
+  let seen = Hashtbl.create 8 in
+  let u32 = Types.Uint32 Types.Little in
+  List.filter_map
+    (fun sl ->
+      let si = slot_setter schema_name sl in
+      if Hashtbl.mem seen si.name then None
+      else begin
+        Hashtbl.add seen si.name ();
+        let (Types.Pack_typ val_typ) = si.val_typ in
+        Some
+          (Types.extern_fn si.name
+             [ ctx_param; Types.param "idx" u32; Types.param "v" val_typ ]
+             Types.Unit)
+      end)
+    slots
 
 (* For each [Byte_array_where] field in [s], synthesise a 1-byte struct that
    names the element [elt_var] and applies [cond] as a field constraint.
@@ -299,36 +501,26 @@ let rewrite_absent_optional (Types.Field f) =
       Types.Field { f with field_typ = Types.Unit; constraint_ = None }
   | _ -> Types.Field f
 
-let ffi_decls (s : Types.struct_) : Types.decl list =
+(* The FFI declarations, and whether embedded codecs were flattened into the
+   plug: their structs then name [WireCtx] and the setters, which must be
+   declared ahead of them. *)
+let ffi_decls (s : Types.struct_) : bool * Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
   (* Extern declarations for the callback mechanism *)
-  let ctx_struct = Types.struct_ "WireCtx" [] in
   let ctx_decl = Types.typedef ~extern_:true ctx_struct in
-  let ctx_param = Types.mutable_param "ctx" (Types.struct_typ ctx_struct) in
-  (* Extern setter functions *)
-  let u32 = Types.Uint32 Types.Little in
-  (* Count named fields to assign indices in the ORIGINAL declaration order.
-     The idx baked into each Extern_call is preserved through the bit-group
-     reorder the 3D printer applies ([Types.pp_struct]), so WireSet callbacks
-     still populate the original field slot. *)
-  let idx = ref 0 in
-  let parse_fields =
-    let off = ref (Some 0) in
-    List.map
-      (fun f ->
-        let f', next = map_field_action s.name idx !off f in
-        off := next;
-        f')
-      s.fields
-  in
+  (* Indices follow the ORIGINAL declaration order. The idx baked into each
+     Extern_call is preserved through the bit-group reorder the 3D printer
+     applies ([Types.pp_struct]), so WireSet callbacks still populate the
+     original field slot. *)
+  let nested, parse_fields, slots = flatten s.name s in
   let parse_struct =
     Types.param_struct s.name (s.params @ [ ctx_param ]) ?where:s.where
       parse_fields
   in
   let parse_decl = Types.typedef ~entrypoint:true parse_struct in
-  let extern_decls = collect_extern_setters s.name ctx_struct u32 s.fields in
+  let extern_decls = collect_extern_setters s.name slots in
   let refined_decls = refined_byte_typedefs s in
-  [ ctx_decl ] @ extern_decls @ refined_decls @ [ parse_decl ]
+  (nested, [ ctx_decl ] @ extern_decls @ refined_decls @ [ parse_decl ])
 
 (* Documentation / pure-validator projection: the same structural 3D as
    [ffi_decls] but without the FFI scaffolding. No [WireCtx] extern, no
@@ -389,8 +581,21 @@ let ffi_of_struct (s : Types.struct_) : t =
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
   let wire_size = coalesced_wire_size s.fields in
-  let decls = ffi_decls s in
+  let nested, decls = ffi_decls s in
   let m = Types.module_ decls in
+  (* [Types.module_] declares the sub-codecs and casetypes ahead of every
+     declaration; flattened ones take [ctx] and call the setters, so those go
+     first. *)
+  let m =
+    if not nested then m
+    else
+      let is_ffi = function
+        | Types.Typedef { extern_ = true; _ } | Types.Extern_fn _ -> true
+        | _ -> false
+      in
+      let ffi, rest = List.partition is_ffi m.decls in
+      { m with decls = ffi @ rest }
+  in
   (* [schema] is the authoritative projectability gate: a constraint with no 3D
      projection (a [field_pos], a subtraction or multiplication over a field) is
      rejected here, when the codec is projected, rather than slipping through to
@@ -479,34 +684,27 @@ type plug_field = {
   val_c_type : string;
 }
 
-let plug_field (s : t) idx (Types.Field f) =
-  match f.field_name with
-  | None -> None
-  | Some name ->
-      let i = !idx in
-      incr idx;
-      let setter =
-        if is_byte_field f.field_typ then bytes_setter s.name
-        else setter_of s.name f.field_typ
-      in
-      let (Types.Pack_typ val_typ) = setter.val_typ in
-      Some
-        {
-          name;
-          idx = i;
-          c_type = Types.c_type_of f.field_typ;
-          setter = setter.name;
-          val_c_type = Types.c_type_of val_typ;
-        }
-
-let plug_member name = Names.escape Names.c_keywords name
+(* A member holds what its setter is passed: a value as wide as the integer
+   under any [map], [where], [enum] or optional, or the 32-bit offset
+   [<Name>SetBytes] hands out. *)
+let plug_field (s : t) sl =
+  let setter = slot_setter s.name sl in
+  let (Types.Pack_typ val_typ) = setter.val_typ in
+  let c_type = Types.c_type_of val_typ in
+  {
+    name = sl.member;
+    idx = sl.index;
+    c_type;
+    setter = setter.name;
+    val_c_type = c_type;
+  }
 
 let plug_fields s =
   match s.source with
   | None -> []
   | Some src ->
-      let idx = ref 0 in
-      List.filter_map (plug_field s idx) src.fields
+      let _, _, slots = flatten s.name src in
+      List.map (plug_field s) slots
 
 let plug_setters s =
   let seen = Hashtbl.create 8 in

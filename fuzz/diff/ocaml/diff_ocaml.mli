@@ -126,7 +126,7 @@ val of_sampled : string -> Fuzz_gen.packed -> reference
     read by the reader {!Wire.Codec.get} stages. *)
 
 val check_scan :
-  ?oracle:(bytes -> int -> int -> int) ->
+  ?oracle:Diff_codecs.c_oracle ->
   ?strides:int list ->
   ?expand:bool ->
   reference ->
@@ -137,14 +137,12 @@ val check_scan :
     on frames of [buf] at several offsets, bounds past the buffer included: the
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
     {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
-    [oracle], the EverParse C validator's acceptance and consumed prefix. A read
-    must not change [buf]. Fails with {!Alcobar.failf}. *)
+    [oracle], the acceptance and consumed prefix of the EverParse C validators
+    of the standalone and FFI projections, and the plug scalars of the FFI one.
+    A read must not change [buf]. Fails with {!Alcobar.failf}. *)
 
 val scan_corpus :
-  ?oracle:(bytes -> int -> int -> int) ->
-  Diff_codecs.scan_case ->
-  scan_ops list ->
-  unit
+  ?oracle:Diff_codecs.c_oracle -> Diff_codecs.scan_case -> scan_ops list -> unit
 (** [scan_corpus case backends] runs {!check_scan} on [case]'s corpus, and on
     good, bad and partial frames joined for [fold_frames]. *)
 
