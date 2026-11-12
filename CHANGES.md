@@ -1,5 +1,9 @@
 ## unreleased
 
+### Added
+
+- `wire.3d` and the fuzz suites run on Windows (#443, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
