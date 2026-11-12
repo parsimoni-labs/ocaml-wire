@@ -199,7 +199,7 @@ let fixed schema_dir =
        Diff_codecs.included);
   (* Archive the per-codec validators so [wire_ffi.c] (headers only) links
      against them as separate translation units. *)
-  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libdiffcodecs.a";
+  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libdiffcodecs.a" ();
   let oc = open_out "diff_index.ml" in
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
@@ -316,7 +316,7 @@ let scanners schema_dir =
     failures;
   if failures <> [] then
     failwith "EverParse rejected a required structured oracle";
-  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a";
+  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a" ();
   let b = Buffer.create 2048 in
   let ppf = Format.formatter_of_buffer b in
   Fmt.pf ppf
