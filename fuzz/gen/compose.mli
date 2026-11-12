@@ -1,0 +1,36 @@
+(** Recursive nested composition: arbitrary codecs built by picking a combinator
+    and filling its inners, restricted to the compositions Wire accepts. *)
+
+open Gen
+
+(** A gen with its value type hidden, with its byte [size] ([Some n] when fixed)
+    and a [label] naming its shape. *)
+type any = Any : { g : 'a t; size : int option; label : string } -> any
+
+val printable_byte : int Wire.expr -> bool Wire.expr
+(** [printable_byte b] holds when [b] is printable ASCII. *)
+
+val fixed_leaves : any list
+(** [fixed_leaves] are the fixed-size leaves, usable as any element or field. *)
+
+val var_leaves : any list
+(** [var_leaves] are the self-delimiting and trailing variable-size leaves. *)
+
+val env_leaves : any list
+(** [env_leaves] are the leaves whose codec reads a [Param.input]. *)
+
+val array_of : int -> any -> any option
+(** [array_of k a] is an array of [k] [a]s, or [None] when [a] is not fixed. *)
+
+val pair_of : string -> any -> any -> any
+(** [pair_of name a b] is the two-field record [name] over [a] and [b]. *)
+
+val rec3_of : string -> any -> any -> any -> any
+(** [rec3_of name a b c] is {!pair_of} for three fields. *)
+
+val rec4_of : string -> any -> any -> any -> any -> any
+(** [rec4_of name a b c d] is {!pair_of} for four fields. *)
+
+val gen_any : int -> any Alcobar.gen
+(** [gen_any depth] generates a codec nesting combinators up to [depth] levels
+    over the leaves. *)
