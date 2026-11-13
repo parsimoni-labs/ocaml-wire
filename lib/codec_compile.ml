@@ -1400,9 +1400,7 @@ let compile_scalar_or_var : type a r.
       let field_off = match field_off_static with Some n -> n | None -> -1 in
       let raw_reader =
         match field_off_static with
-        | Some _ ->
-            let reader = build_field_reader_ctx typ field_off in
-            fun runtime input_end buf base -> reader runtime input_end buf base
+        | Some _ -> build_field_reader_ctx typ field_off
         | None ->
             let reader_at_0 = build_field_reader_ctx typ 0 in
             fun runtime input_end buf base ->
@@ -1410,28 +1408,21 @@ let compile_scalar_or_var : type a r.
               reader_at_0 runtime input_end buf (base + off)
       in
       let get = fld.get in
+      (* The encoder is applied in two steps throughout this module: called
+         across a module boundary that dune's dev profile makes opaque, one
+         over-saturated application allocates a curried closure per extra
+         argument. *)
+      let encode = build_field_encoder_ctx typ in
       let raw_writer : r -> runtime -> bytes -> int -> int -> int =
-       fun v runtime buf _base write_off ->
-        let value = get v in
-        (* The encoder is applied in two steps throughout this module: called
-           across a module boundary that dune's dev profile makes opaque, one
-           over-saturated application allocates a curried closure per extra
-           argument. *)
-        let encode = build_field_encoder_ctx typ in
-        encode runtime buf write_off value
+       fun v runtime buf _base write_off -> encode runtime buf write_off (get v)
       in
       let int_reader runtime input_end buf base =
         int_of_typ_value typ (raw_reader runtime input_end buf base)
       in
       let populate =
-        (* A negative literal width never reaches a scan: the reader refuses it
-           on sight ([const_span_reader]) and allocates nothing doing so, and
-           validate has to refuse it the same way decode does. *)
         match
-          if fsize < 0 then None
-          else
-            check_populate typ ~off_fn:field_off_fn
-              ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
+          check_populate typ ~off_fn:field_off_fn
+            ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
         with
         | Some p -> p
         | None -> build_populate typ ctx.n_fields raw_reader
@@ -1491,6 +1482,22 @@ let absent_optional_or : type a r.
     ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
     ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
+(* An enum's populate: the base's, then membership on the slot's int. A wide
+   carrier's value can be refused by the conversion to that int, which reports
+   byte 0, so name the field instead, as the reader does. *)
+let enum_populate ~base cf int_check =
+  if Types.int_view_is_total base then (fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    ignore
+      (int_check
+         ~at:(at_of base cf.validator_off)
+         (cf.int_reader runtime input_end buf base)))
+  else fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    let at = at_of base cf.validator_off in
+    Types.relocate_at ~at (fun () ->
+        ignore (int_check ~at (cf.int_reader runtime input_end buf base)))
+
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1523,13 +1530,7 @@ let rec compile_field : type a r.
           (fun v runtime buf base write_off ->
             encode_check (get v);
             cf.raw_writer v runtime buf base write_off);
-        populate =
-          (fun arr runtime input_end buf base ->
-            cf.populate arr runtime input_end buf base;
-            ignore
-              (int_check
-                 ~at:(at_of base cf.validator_off)
-                 (cf.int_reader runtime input_end buf base)));
+        populate = enum_populate ~base cf int_check;
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order

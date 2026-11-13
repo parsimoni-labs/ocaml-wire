@@ -2,6 +2,8 @@ open Gen
 open Leaves
 open Wrappers
 open Record
+open Columns
+open Compose
 
 (* {1 Canonical registry and EverParse drivers}
 
@@ -402,6 +404,31 @@ let param_action_gens =
     ("nan_float64", Pack nan_float64);
   ]
 
+(* Flat records shaped for a fast path each: a fixed span after the last
+   data-sized one, a range check before an enum check, a byte table, the widest
+   staged encode, and getters that answer differently on each call. *)
+let flat_gens =
+  let gen mks = Pack (snd (flat_of "Flat" mks)) in
+  let wide16 = match wide 16 with Any a -> Pack a.g in
+  [
+    ( "flat_span_tail",
+      gen [ span_group len_u8; fixed_bytes_group ~slice:false 4 ] );
+    ( "flat_check_order",
+      gen [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ] );
+    ( "flat_table",
+      gen [ bits_group ~limits:[ 5; 20 ] Wire.U8 [ 3; 5 ]; u8_group ] );
+    ("flat_wide16", wide16);
+    ( "flat_impure",
+      Pack
+        (snd
+           (flat_of ~impure:true "Flat"
+              [
+                bits_group Wire.U8 [ 3 ];
+                fixed_bytes_group ~slice:false 4;
+                u8_group;
+              ])) );
+  ]
+
 (* A registry label rendered as a unique EverParse struct name: the
    alphanumeric characters with the first capitalized and the rest lowercased,
    e.g. ["uint_var(3,big)"] becomes ["Uintvar3big"]. EverParse lowercases all
@@ -439,4 +466,4 @@ let registry : (string * packed) list =
   List.map
     (fun (label, p) -> (label, rename_case label p))
     (scalar_gens @ byte_gens @ bits_gens @ bitpack_gens @ wrapper_gens
-   @ composite_gens @ param_action_gens)
+   @ composite_gens @ param_action_gens @ flat_gens)

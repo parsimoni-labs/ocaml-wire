@@ -240,6 +240,7 @@ type bf_info = {
   word_reader : bytes -> int -> Optint.t;
   bf_shift : int;
   bf_mask : Optint.t;
+  bf_mask_int : int;
 }
 
 let no_runtime = Types.unbound_eval_ctx
@@ -342,9 +343,204 @@ let struct' = struct_
 type (_, _) readers =
   | Nil : ('f, 'f) readers
   | Snoc :
-      ('full, 'a -> 'rest) readers
-      * (runtime -> Input_end.t -> bytes -> int -> 'a)
+      ('full, 'a -> 'rest) readers * 'a field_read
       -> ('full, 'rest) readers
+
+(* How [decode] reads one field. A scalar at a fixed offset is data, read by
+   [read_scalar]; any other field is a closure, which costs an indirect call
+   through [caml_applyN]. The offsets are relative to the record and inside the
+   span [decode] has already bounds-checked, so the reads skip their own check. *)
+and _ field_read =
+  | Data : 'a scalar -> 'a field_read
+  | Mapped : 'w scalar * ('w -> 'a) -> 'a field_read
+      (** A scalar under a total [map]: read, then decoded. *)
+  | Span : int * int -> string field_read
+      (** A fixed byte array: its offset and length. *)
+  | Fn : (runtime -> Input_end.t -> bytes -> int -> 'a) -> 'a field_read
+
+and _ scalar =
+  | Byte : int -> UInt8.t scalar
+  | U16le : int -> UInt16.t scalar
+  | U16be : int -> UInt16.t scalar
+  | U32le : int -> UInt32.t scalar
+  | U32be : int -> UInt32.t scalar
+  | Sbyte : int -> SInt8.t scalar
+  | I16le : int -> SInt16.t scalar
+  | I16be : int -> SInt16.t scalar
+  | I32le : int -> SInt32.t scalar
+  | I32be : int -> SInt32.t scalar
+  | Bits8 : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16le : { off : int; shift : int; mask : int } -> int scalar
+  | Bits16be : { off : int; shift : int; mask : int } -> int scalar
+
+(* Calls nothing, so it runs without a stack frame. *)
+let read_scalar : type a. a scalar -> bytes -> int -> a =
+ fun r buf base ->
+  match r with
+  | Byte off -> UInt8.unsafe_get buf (base + off)
+  | U16le off -> UInt16.unsafe_le buf (base + off)
+  | U16be off -> UInt16.unsafe_be buf (base + off)
+  | U32le off -> UInt32.unsafe_le buf (base + off)
+  | U32be off -> UInt32.unsafe_be buf (base + off)
+  | Sbyte off -> SInt8.unsafe_get buf (base + off)
+  | I16le off -> SInt16.unsafe_le buf (base + off)
+  | I16be off -> SInt16.unsafe_be buf (base + off)
+  | I32le off -> SInt32.unsafe_le buf (base + off)
+  | I32be off -> SInt32.unsafe_be buf (base + off)
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+
+(* The int a scalar's validation slot holds, for the scalars whose value an
+   int holds exactly. *)
+let slot_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
+(* Calls nothing, like [read_scalar]. *)
+let read_slot : type a. a scalar -> bytes -> int -> int =
+ fun r buf base ->
+  match r with
+  | Byte off -> UInt8.to_int (UInt8.unsafe_get buf (base + off))
+  | U16le off -> UInt16.to_int (UInt16.unsafe_le buf (base + off))
+  | U16be off -> UInt16.to_int (UInt16.unsafe_be buf (base + off))
+  | U32le off -> UInt32.to_int (UInt32.unsafe_le buf (base + off))
+  | U32be off -> UInt32.to_int (UInt32.unsafe_be buf (base + off))
+  | Sbyte off -> SInt8.to_int (SInt8.unsafe_get buf (base + off))
+  | I16le off -> SInt16.to_int (SInt16.unsafe_le buf (base + off))
+  | I16be off -> SInt16.to_int (SInt16.unsafe_be buf (base + off))
+  | I32le off -> SInt32.to_int (SInt32.unsafe_le buf (base + off))
+  | I32be off -> SInt32.to_int (SInt32.unsafe_be buf (base + off))
+  | Bits8 { off; shift; mask } ->
+      (Unchecked.u8 buf (base + off) lsr shift) land mask
+  | Bits16le { off; shift; mask } ->
+      (Unchecked.u16le buf (base + off) lsr shift) land mask
+  | Bits16be { off; shift; mask } ->
+      (Unchecked.u16be buf (base + off) lsr shift) land mask
+
+let[@inline] read_field : type a.
+    a field_read -> runtime -> Input_end.t -> bytes -> int -> a =
+ fun r runtime input_end buf base ->
+  match r with
+  | Data s -> read_scalar s buf base
+  | Mapped (s, decode) -> decode (read_scalar s buf base)
+  | Span (off, n) -> Bytes.sub_string buf (base + off) n
+  | Fn f -> f runtime input_end buf base
+
+(* How [encode] writes a field it has a descriptor for: the field's value, put
+   at the descriptor's offset with no bounds check of its own. *)
+type 'r put =
+  | Put : { get : 'r -> 'a; scalar : 'a scalar } -> 'r put
+  | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
+      (** A fixed byte array: copied in after a check of its length. *)
+
+let bits_of_mask mask =
+  let rec go n = if mask lsr n = 0 then n else go (n + 1) in
+  go 0
+
+(* A bitfield value wider than its field, off the hot path. *)
+let bits_too_wide ~mask v =
+  Types.check_unsigned_encode ~bits:(bits_of_mask mask) v
+
+(* Calls nothing on the normal path. A bitfield is or-ed into its word, which
+   the encoder has zeroed first, as the general writer does. *)
+let write_scalar : type a. a scalar -> bytes -> int -> a -> unit =
+ fun r buf base v ->
+  match r with
+  | Byte off -> Unchecked.set_u8 buf (base + off) (UInt8.to_int v)
+  | U16le off -> Unchecked.set_u16le buf (base + off) (UInt16.to_int v)
+  | U16be off -> Unchecked.set_u16be buf (base + off) (UInt16.to_int v)
+  | U32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | U32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (UInt32.to_int v))
+  | Sbyte off -> Unchecked.set_u8 buf (base + off) (SInt8.to_int v)
+  | I16le off -> Unchecked.set_u16le buf (base + off) (SInt16.to_int v)
+  | I16be off -> Unchecked.set_u16be buf (base + off) (SInt16.to_int v)
+  | I32le off ->
+      Unchecked.set_i32le buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | I32be off ->
+      Unchecked.set_i32be buf (base + off) (Int32.of_int (SInt32.to_int v))
+  | Bits8 { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u8 buf p (Unchecked.u8 buf p lor (v lsl shift))
+  | Bits16le { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (v lsl shift))
+  | Bits16be { off; shift; mask } ->
+      if v < 0 || v > mask then bits_too_wide ~mask v;
+      let p = base + off in
+      Unchecked.set_u16be buf p (Unchecked.u16be buf p lor (v lsl shift))
+
+(* The scalars whose value an int holds exactly, so a write converts it with no
+   loss. *)
+let int_scalar : type a. a scalar -> bool = function
+  | U32le _ | U32be _ | I32le _ | I32be _ -> Sys.int_size > 32
+  | _ -> true
+
+(* The data form of a field read, when the field is a bare scalar at a fixed
+   offset or packed in an 8- or 16-bit word. *)
+let field_scalar : type a.
+    min_wire_size:int -> field_access -> a typ -> a scalar option =
+ fun ~min_wire_size access typ ->
+  match (access, typ) with
+  | (Fixed off | Bitfield { byte_off = off; _ }), _
+    when off < 0
+         ||
+         match field_wire_size typ with
+         | Some w -> off + w > min_wire_size
+         | None -> true ->
+      (* Unchecked only inside the span [decode] has checked. *)
+      None
+  | Fixed off, Uint8 -> Some (Byte off)
+  | Fixed off, Uint16 Little -> Some (U16le off)
+  | Fixed off, Uint16 Big -> Some (U16be off)
+  | Fixed off, Uint32 Little -> Some (U32le off)
+  | Fixed off, Uint32 Big -> Some (U32be off)
+  | Fixed off, Int8 -> Some (Sbyte off)
+  | Fixed off, Int16 Little -> Some (I16le off)
+  | Fixed off, Int16 Big -> Some (I16be off)
+  | Fixed off, Int32 Little -> Some (I32le off)
+  | Fixed off, Int32 Big -> Some (I32be off)
+  | Bitfield { base; byte_off = off; shift; width }, Bits _ -> (
+      let mask = (1 lsl width) - 1 in
+      match base with
+      | U8 -> Some (Bits8 { off; shift; mask })
+      | U16 Little -> Some (Bits16le { off; shift; mask })
+      | U16 Big -> Some (Bits16be { off; shift; mask })
+      | U32 _ -> None)
+  | _ -> None
+
+(* How [decode] reads a field through [where], [enum] and total [map]
+   wrappers. Their checks run in the check pass before any read, so the read
+   only takes the value off the wire and decodes it. *)
+let rec read_view : type a.
+    min_wire_size:int -> field_access -> a typ -> a field_read option =
+ fun ~min_wire_size access typ ->
+  match typ with
+  | Where { inner; _ } -> read_view ~min_wire_size access inner
+  | Enum { base; _ } -> read_view ~min_wire_size access base
+  | Map { inner; decode; index_bound = None; _ } -> (
+      match read_view ~min_wire_size access inner with
+      | Some (Data s) -> Some (Mapped (s, decode))
+      | Some (Mapped (s, d)) -> Some (Mapped (s, fun w -> decode (d w)))
+      | Some (Span _ | Fn _) | None -> None)
+  | Byte_array { size = Int n } -> (
+      match access with
+      | Fixed off when off >= 0 && n >= 0 && off + n <= min_wire_size ->
+          Some (Span (off, n))
+      | _ -> None)
+  | _ -> Option.map (fun s -> Data s) (field_scalar ~min_wire_size access typ)
+
+let field_read ~min_wire_size access typ fn ~plain =
+  if not plain then Fn fn
+  else
+    match read_view ~min_wire_size access typ with Some r -> r | None -> Fn fn
 
 (* Bitfield group state: tracks the current base word being packed. *)
 type bf_codec_state = {
@@ -468,9 +664,66 @@ let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
   fun arr -> f arr () () ()
 
-let compile_bool_arr cc e =
-  let f = Expr_compiler.compile_bool (array_leaves cc) e in
-  fun arr -> f arr () () ()
+type cmp = Eq | Ne | Lt | Le | Gt | Ge
+
+let flip = function
+  | Lt -> Gt
+  | Le -> Ge
+  | Gt -> Lt
+  | Ge -> Le
+  | (Eq | Ne) as c -> c
+
+let cmp_slot_const cmp i n : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = n
+  | Ne -> fun a -> a.ints.(i) <> n
+  | Lt -> fun a -> a.ints.(i) < n
+  | Le -> fun a -> a.ints.(i) <= n
+  | Gt -> fun a -> a.ints.(i) > n
+  | Ge -> fun a -> a.ints.(i) >= n
+
+let cmp_slots cmp i j : slots -> bool =
+  match cmp with
+  | Eq -> fun a -> a.ints.(i) = a.ints.(j)
+  | Ne -> fun a -> a.ints.(i) <> a.ints.(j)
+  | Lt -> fun a -> a.ints.(i) < a.ints.(j)
+  | Le -> fun a -> a.ints.(i) <= a.ints.(j)
+  | Gt -> fun a -> a.ints.(i) > a.ints.(j)
+  | Ge -> fun a -> a.ints.(i) >= a.ints.(j)
+
+(* [e] over the slots. A comparison between an int field and a literal or
+   another int field is one closure, the shape almost every constraint takes;
+   anything else goes through [Expr_compiler]. *)
+let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
+  let general () =
+    let f = Expr_compiler.compile_bool (array_leaves cc) e in
+    fun arr -> f arr () () ()
+  in
+  let cmp : type a. cmp -> a expr -> a expr -> slots -> bool =
+   fun op x y ->
+    match (x, y) with
+    | Ref (I, a), Int n -> cmp_slot_const op (cc.idx a) n
+    | Int n, Ref (I, a) -> cmp_slot_const (flip op) (cc.idx a) n
+    | Ref (I, a), Ref (I, b) -> cmp_slots op (cc.idx a) (cc.idx b)
+    | _ -> general ()
+  in
+  match e with
+  | And (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a && fy a
+  | Or (x, y) ->
+      let fx = compile_bool_arr cc x and fy = compile_bool_arr cc y in
+      fun a -> fx a || fy a
+  | Not x ->
+      let fx = compile_bool_arr cc x in
+      fun a -> not (fx a)
+  | Eq (x, y) -> cmp Eq x y
+  | Ne (x, y) -> cmp Ne x y
+  | Lt (x, y) -> cmp Lt x y
+  | Le (x, y) -> cmp Le x y
+  | Gt (x, y) -> cmp Gt x y
+  | Ge (x, y) -> cmp Ge x y
+  | _ -> general ()
 
 let eval_arr_at ~at f arr =
   try f arr with Parse_error e -> raise (Parse_error { e with at })
@@ -540,12 +793,59 @@ let compile_action (cc : compile_ctx) (act : action option) :
       let f = compile_stmts cc stmts in
       Some (fun arr -> try f arr with Return_true -> ())
 
+(* One step of the check pass. A scalar inside the frame is read into its slot
+   with no bounds check and its constraint tested in place; any other field
+   runs its general validator. *)
+type step =
+  | Slot : { slot : int; scalar : 'a scalar } -> step
+  | Check : {
+      name : string;
+      slot : int;
+      voff : int;
+      cond : slots -> bool;
+    }
+      -> step
+  | Range : {
+      name : string;
+      slot : int;
+      scalar : 'a scalar;
+      voff : int;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
+      store : bool;
+    }
+      -> step
+      (** A scalar whose checks all bound its wire value: read it, keep it in
+          its slot when something else reads it, and test it against [set], a
+          few disjoint intervals. [fail] is the field's general validator, which
+          raises the error the field's checks give. *)
+  | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A plain byte span's bounds check: the general validator, which a
+          layout pass that checks every span's bounds makes redundant. *)
+
+type packed_scalar = Ps : 'a scalar -> packed_scalar
+
+(* How a field adds to the record's extent, for the layout pass. *)
+type layout = Lfix of int | Lspan of int expr | Lrest
+
 type ('f, 'r) record =
   | Record : {
       name : string;
       make : 'full;
       readers : ('full, 'f) readers;
+          (* For a decode that has run the check pass first. *)
+      checked_readers : ('full, 'f) readers;
+          (* For one that reads before it checks: a field whose type validates
+             checks itself as it is read. *)
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
+      puts_rev : 'r put list option;
+      layout_rev : layout list option;
+          (* Each field's extent, while every field is fixed or a plain byte
+             span. *)
+      prefix : (string * packed_scalar) list;
+      (* The fixed-offset fields a span's size can read, by name. *)
+      (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
              seal we sum them into [size_of_value]; encode uses that
@@ -561,11 +861,10 @@ type ('f, 'r) record =
              size, which stops accumulating once a field's extent is dynamic
              ([sum_size] returns the accumulator unchanged from there), so
              fixed fields after a variable one do not add to it. *)
-      fields_rev : Types.field list;
-      validators_rev :
-        (int (* byte offset *)
-        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
-        list;
+      used_slots : (int, unit) Hashtbl.t;
+          (* The slots a constraint, an action or the [where] clause reads; the
+             check pass fills only those. *)
+      validators_rev : (int (* byte offset *) * step) list;
       checkers_rev :
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
@@ -593,21 +892,63 @@ type wire_size_info =
 
 let id_counter = Atomic.make 0
 
-type 'r t = {
-  id : int;
-  name : string;
+(* A fused interval test, for a pass made of nothing else. *)
+type interval =
+  | Interval : {
+      scalar : 'a scalar;
+      set : (int * int) array;
+      fail : runtime -> Input_end.t -> bytes -> int -> unit;
+      name : string;
+      voff : int;
+    }
+      -> interval
+
+(* The check pass of a codec without parameters, as data, so [validate] and
+   [decode] run it with one direct call. *)
+type pass =
+  | No_checks
+  | Intervals of {
+      flat : int array;
+      tables : string array;
+      intervals : interval array;
+    }
+      (** Interval tests only, on slots nothing else reads: no scratch. [flat]
+          holds six ints per test, read by {!scan_intervals}; [intervals] names
+          the field of a failed one. *)
+  | Steps of {
+      steps : step array;
+      where : (slots -> bool) option;
+      scratch : (unit -> slots) option;
+          (** [None] when no step reads or writes a slot. *)
+      clear : slots -> unit;
+    }
+
+(* What [seal] builds from a field list: the layout, the readers and writers
+   and the validators. [view] does not build it; the first operation that needs
+   it does (see [compiled]). *)
+type 'r compiled = {
   size_of_value : Types.eval_ctx -> 'r -> int;
   field_access : (string * (int * field_access)) list;
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  plain_decode : (bytes -> int -> 'r) option;
+      (* [decode] for a codec with no parameters and nothing to check after the
+         reads: [Codec.decode] has only the bounds to check. *)
   encode : 'r -> runtime -> bytes -> int -> int;
       (* Public encode entry. [encode v runtime buf base] writes the record at
          [base], threads each per-field writer's return as the next
          writer's [write_off], and returns the final offset. *)
   wire_size : wire_size_info;
-  struct_fields : Types.field list;
   validate : ?env_slots:int array -> bytes -> int -> unit;
+  plain_validate : bytes -> int -> unit;
+  plain_encode : ('r -> bytes -> int -> unit) option;
+      (* [encode] of a fixed-size codec without parameters whose fields all
+         have a descriptor write. *)
+  fixed_frame : int;
+      (* The frame of a fixed-size codec, or -1: with [plain_pass], what
+         [validate] of a codec without parameters runs with no closure call. *)
+  plain_pass : pass; (* [validate] for a codec without parameters. *)
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
@@ -615,8 +956,14 @@ type 'r t = {
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
+  clear_scratch : slots -> unit;
+      (* Zeroes the scratch before [validate_arr], when a slot can be read
+         before the pass writes it. *)
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   n_array_slots : int;
+  has_checks : bool;
+      (* Whether [validate_arr] checks anything: a constraint, a [where]
+         clause, an action, or a field type whose reader validates. *)
   decode_scratch : unit -> slots;
       (* Validation scratch, one per domain (see [domain_local_slots]) and
          zeroed per decode (see [decode_exn]), mirroring the [validate]
@@ -624,12 +971,26 @@ type 'r t = {
          Domain-local so concurrent decode of one codec value on separate
          domains does not share the scratch. *)
   param_base : int;
+  paths : string list;
+      (* The fast paths [seal] selected, by name: read by [Testing.paths]. *)
+}
+
+type 'r t = {
+  id : int;
+  name : string;
+  struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
   where : bool expr option;
   doc : string option;
       (** Free-text note (e.g. an RFC citation) projected as a [/*++ ... --*/]
           comment on the codec's 3D typedef. *)
+  compiled : 'r compiled option Atomic.t;
+      (* Set once, by the first [compiled]. An atomic rather than a [Lazy.t]
+         because a codec is shared across domains, and forcing one lazy value
+         from two domains at once raises [Lazy.Undefined]. *)
+  compile : string -> 'r compiled;
+      (* Compiles the codec under the given name, which its errors report. *)
 }
 
 let pp ppf (t : _ t) = Fmt.string ppf t.name
@@ -641,12 +1002,16 @@ let record_start ?where ?doc name make =
       make;
       doc;
       readers = Nil;
+      checked_readers = Nil;
       writers_rev = [];
+      puts_rev = Some [];
+      layout_rev = Some [];
+      prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
-      fields_rev = [];
+      used_slots = Hashtbl.create 8;
       validators_rev = [];
       checkers_rev = [];
       field_actions_rev = [];

@@ -722,12 +722,6 @@ val zeroterm_at_most : size:int expr -> string typ
 val where : bool expr -> 'a typ -> 'a typ
 (** Guard a type with a boolean constraint. *)
 
-val array : len:int expr -> 'a typ -> 'a list typ
-(** Fixed-count array of elements. *)
-
-val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
-(** Fixed-count array with custom builder. *)
-
 val byte_array : size:int expr -> string typ
 (** Byte span as a string. Encoding a value whose length differs from [size]
     raises [Invalid_argument]. *)
@@ -1062,3 +1056,22 @@ val elt_var_prefix : string
 val enum_base_is_be : 'a typ -> bool
 (** [enum_base_is_be base] is [true] for a big-endian multi-byte base, which
     cannot carry a 3D enum type. *)
+
+val literal_size : combinator:string -> int expr -> int expr
+(** [literal_size ~combinator e] is [e], after checking that a literal [e] is a
+    byte count: not negative and no more than a buffer can hold. Raises
+    [Invalid_argument] naming [combinator] otherwise. *)
+
+val reject_decoration : combinator:string -> 'a typ -> unit
+(** [reject_decoration ~combinator t] raises [Invalid_argument] naming
+    [combinator] when [t] is a field decoration (an optional or a repeat), which
+    cannot be an element. *)
+
+val reject_bitfield_element : combinator:string -> 'a typ -> unit
+(** [reject_bitfield_element ~combinator t] raises [Invalid_argument] naming
+    [combinator] when [t] is a bitfield, which has no element form. *)
+
+val reject_non_array_element : combinator:string -> 'a typ -> unit
+(** [reject_non_array_element ~combinator t] raises [Invalid_argument] naming
+    [combinator] unless [t] has a fixed, non-zero size, as an array element
+    must. *)

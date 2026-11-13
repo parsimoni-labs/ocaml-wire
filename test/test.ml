@@ -4,6 +4,7 @@ let () =
       Test_wire.suite;
       Test_action.suite;
       Test_codec.suite;
+      Test_codec_pass.suite;
       Test_codec_variable.suite;
       Test_codec_projection.suite;
       Test_codec_bitfield.suite;
@@ -28,6 +29,7 @@ let () =
       Test_ascii.suite;
       Test_staged.suite;
       Test_uint32.suite;
+      Test_unchecked.suite;
       Test_uint64.suite;
       Test_sint32.suite;
       Test_sint8.suite;

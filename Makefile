@@ -1,4 +1,5 @@
-.PHONY: build test test-wasm 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+.PHONY: build test test-wasm fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
+       fuzz-nightly 3d bench bench-demo bench-routing bench-gateway bench-clcw \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -26,6 +27,32 @@ test-wasm:
 	! grep "integer-overflow" _build/wasm-build.log \
 	  | grep -v -e 0x7fffffff -e 0x40000000 | grep -q . \
 	  || { echo "error: wasm_of_ocaml truncated an integer literal"; exit 1; }
+
+# The wire fuzz properties alone; WIRE_FUZZ_SEED, WIRE_FUZZ_REPEAT and
+# WIRE_FUZZ_BUDGET widen the search (fuzz/dune).
+fuzz:
+	dune build @@fuzz/runtest
+
+# Every test and property with the unchecked reads checked (lib/dune).
+fuzz-paranoid:
+	dune runtest --profile paranoid
+
+# AFL campaigns, WIRE_AFL_SECONDS each (default 60); fuzz-afl-diff needs
+# EverParse. A crash is replayed with _build/default/<dir>/fuzz.exe <file>,
+# which prints the divergence.
+fuzz-afl:
+	dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
+
+fuzz-afl-diff:
+	BUILD_EVERPARSE=1 dune build --profile afl @fuzz/diff/fuzz
+
+# What the nightly workflow runs: long property runs, then long campaigns.
+fuzz-nightly:
+	WIRE_FUZZ_REPEAT=1000000 WIRE_FUZZ_BUDGET=20 dune build @@fuzz/runtest
+	WIRE_FUZZ_REPEAT=1000000 WIRE_FUZZ_BUDGET=20 \
+	  dune build @@fuzz/runtest --profile paranoid
+	WIRE_AFL_SECONDS=3600 $(MAKE) fuzz-afl
+	WIRE_AFL_SECONDS=7200 $(MAKE) fuzz-afl-diff
 
 3d:
 	dune exec examples/validate_3d.exe

@@ -192,6 +192,29 @@ let rec field_wire_size : type a. a typ -> int option = function
       match field_wire_size elem with Some k -> Some (n * k) | None -> None)
   | _ -> None
 
+(* An array of a literal count of fixed-width elements is a byte count too. *)
+let array_len ~combinator len elem =
+  match (literal_size ~combinator len, field_wire_size elem) with
+  | Int n, Some k when k > 0 && n > Sys.max_string_length / k ->
+      Fmt.invalid_arg
+        "Wire.%s: %d elements of %d bytes are more than a buffer can hold"
+        combinator n k
+  | len, _ -> len
+
+let array ~len elem =
+  reject_decoration ~combinator:"array" elem;
+  reject_bitfield_element ~combinator:"array" elem;
+  reject_non_array_element ~combinator:"array" elem;
+  (Array { len = array_len ~combinator:"array" len elem; elem; seq = seq_list }
+    : _ typ)
+
+let array_seq seq ~len elem =
+  reject_decoration ~combinator:"array_seq" elem;
+  reject_bitfield_element ~combinator:"array_seq" elem;
+  reject_non_array_element ~combinator:"array_seq" elem;
+  (Array { len = array_len ~combinator:"array_seq" len elem; elem; seq }
+    : _ typ)
+
 let c_type_of : type a. a typ -> string = function
   | Uint8 | Bits { base = U8; _ } -> "uint8_t"
   | Uint16 _ | Bits { base = U16 _; _ } -> "uint16_t"

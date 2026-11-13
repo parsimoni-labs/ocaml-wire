@@ -527,11 +527,12 @@ module Field : sig
       length-prefixed sub-codec). An element cannot cross the region boundary;
       encoding raises [Invalid_argument] when the supplied values span fewer or
       more bytes than [size]. It projects to 3D as [t name[:byte-size size]].
-      There is no count-driven form: "a count field, then that many
-      variable-size elements" is expressible neither here nor in 3D, whose only
-      list construct is the byte budget ([elem[n]] is rejected for any element
-      wider than a byte), so that shape needs caller-side iteration over the
-      element parser.
+      Raises [Invalid_argument] on a literal [size] that is negative or more
+      than a buffer can hold. There is no count-driven form: "a count field,
+      then that many variable-size elements" is expressible neither here nor in
+      3D, whose only list construct is the byte budget ([elem[n]] is rejected
+      for any element wider than a byte), so that shape needs caller-side
+      iteration over the element parser.
 
       There is no sizeless form either, for the same reason: 3D has no
       rest-of-region list, so a repeat that consumed whatever remained would
@@ -755,7 +756,13 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
     than masking it, for the same reason as {!uint}. *)
 
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
-(** [map ~decode ~encode t] views a wire value through conversion functions. *)
+(** [map ~decode ~encode t] views a wire value through conversion functions.
+
+    [decode] must be total over the wire values [t] and its constraints admit.
+    {!Codec.validate} and {!Codec.valid} do not call it, so a [decode] that
+    raises on such a value makes {!Codec.decode} raise on a buffer they accept.
+    For a table indexed by the wire value use {!lookup}, whose bound they check.
+*)
 
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
@@ -818,7 +825,8 @@ val zeroterm_at_most : size:int expr -> string typ
 
     Projects to the 3D [field[:zeroterm-byte-size-at-most size]] form
     ([t_at_most] of [cstring]). Like {!zeroterm}, it is absent from the manual;
-    see [EverParse3d.Prelude.fsti]. *)
+    see [EverParse3d.Prelude.fsti]. Raises [Invalid_argument] on a literal
+    [size] that is negative or more than a buffer can hold. *)
 
 val where : bool expr -> 'a typ -> 'a typ
 (** Refine a description with a boolean constraint.
@@ -850,11 +858,14 @@ val array : len:int expr -> 'a typ -> 'a list typ
     wire size: 3D arrays are byte-budgeted, so the count is lowered to
     [len * sizeof t] bytes. For variable-size elements use {!Field.repeat},
     which is bounded by a byte budget instead. Encoding a list whose cardinality
-    differs from [len] raises [Invalid_argument] before writing. *)
+    differs from [len] raises [Invalid_argument] before writing. Raises
+    [Invalid_argument] on a literal [len] that is negative, or whose elements
+    take more bytes than a buffer can hold. *)
 
 val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
 (** Like {!array} but accumulates into a custom sequence via a {!type-seq_map}.
-    Encoding enforces the same exact cardinality. *)
+    Encoding enforces the same exact cardinality, and a literal [len] raises as
+    for {!array}. *)
 
 val byte_array : size:int expr -> string typ
 (** Fixed-size byte sequence copied as a string.
@@ -869,7 +880,10 @@ val byte_array : size:int expr -> string typ
     field has a simple [field <= bound] constraint, {!Codec.v} rejects the codec
     if [bound * literal] can reach [2^32]. EverParse represents byte sizes as
     [u32] and cannot verify such a schema; tighten the field bound. More complex
-    bounds are left to EverParse. *)
+    bounds are left to EverParse.
+
+    Raises [Invalid_argument] on a literal [size] that is negative or more than
+    a buffer can hold. *)
 
 val byte_array_where :
   size:int expr -> per_byte:(int expr -> bool expr) -> string typ
@@ -881,13 +895,15 @@ val byte_array_where :
     constraint; encode raises [Invalid_argument]. Encoding otherwise follows
     {!byte_array}: the string must be exactly [size] bytes. The motivating shape
     is SSH name-list payloads (RFC 4251 sec 5), where every byte must be
-    printable US-ASCII. *)
+    printable US-ASCII. Raises [Invalid_argument] on a literal [size] that is
+    negative or more than a buffer can hold. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based
     decoders. {!of_string} gives the mutable result its own backing bytes.
     Encoding raises [Invalid_argument] unless the slice is exactly [size] bytes,
-    as for {!byte_array}. *)
+    as for {!byte_array}. Raises [Invalid_argument] on a literal [size] that is
+    negative or more than a buffer can hold. *)
 
 val rest_bytes : (_, _) Param.t -> string typ
 (** [rest_bytes total] is the trailing payload of a record whose total decoded
@@ -906,7 +922,9 @@ val nested : size:int expr -> 'a typ -> 'a typ
     encoding raises [Invalid_argument] unless the value's encoded size is
     exactly [size]. It projects to 3D as
     [t f[:byte-size-single-element-array size]], a different construct from the
-    byte-budgeted list {!array} and {!Field.repeat} project to. *)
+    byte-budgeted list {!array} and {!Field.repeat} project to. Raises
+    [Invalid_argument] on a literal [size] that is negative or more than a
+    buffer can hold. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
@@ -915,7 +933,9 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. Encoding zero-pads the unused
     region; a value larger than [size] raises [Invalid_argument]. It projects to
-    3D as [t f[:byte-size-single-element-array-at-most size]]. *)
+    3D as [t f[:byte-size-single-element-array-at-most size]]. Raises
+    [Invalid_argument] on a literal [size] that is negative or more than a
+    buffer can hold. *)
 
 val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the
@@ -1194,6 +1214,18 @@ module Codec : sig
       refinement on the last field it mentions, the earliest point at which 3D
       can evaluate it.
 
+      [v] checks the description and compiles nothing; the first operation that
+      needs the layout (encoding, decoding, validating, sizing, staging an
+      accessor, embedding with {!codec}) compiles it, from any domain. Domains
+      that use a new codec at the same time may each compile it; one result is
+      kept, and they are interchangeable. Raises [Invalid_argument] on a
+      repeated field or parameter name, on a field list EverParse 3D cannot
+      validate, and on a constraint, action or [?where] that refers to a field
+      it cannot see. What only the compile finds (a size expression referring to
+      a field it cannot see, a bitfield after a variable-size field, a field
+      type with no reader or writer, fixed fields that add up to more than a
+      buffer can hold) raises [Invalid_argument] at the first use instead.
+
       {[
       let codec =
         Codec.v "Packet"
@@ -1256,11 +1288,11 @@ module Codec : sig
       If [?env] is supplied, input params are read from it and output params are
       written back to it on success.
 
-      Raises [Invalid_argument] when [?env] was created for a different codec,
-      or when the codec has input params and the env is missing or leaves one
-      unbound, the same precondition {!encode} enforces: an unbound input param
-      would resolve a parametric field size to 0 and silently truncate the
-      field. *)
+      Raises [Invalid_argument] when [off] is negative, when [?env] was created
+      for a different codec, or when the codec has input params and the env is
+      missing or leaves one unbound, the same precondition {!encode} enforces:
+      an unbound input param would resolve a parametric field size to 0 and
+      silently truncate the field. *)
 
   val decode_exn :
     ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
@@ -1313,8 +1345,9 @@ module Codec : sig
       back to [?env]. [?env] supplies bindings for any {!val:Param.input}
       referenced in those clauses.
 
-      Raises [Invalid_argument] when [?env] belongs to another codec or leaves
-      an input parameter unbound, and {!exception-Parse_error} on failure. *)
+      Raises [Invalid_argument] when [off] is negative or when [?env] belongs to
+      another codec or leaves an input parameter unbound, and
+      {!exception-Parse_error} on failure. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
@@ -1330,6 +1363,23 @@ module Codec : sig
 
       Does not check [~where] clauses or other fields' constraints -- call
       {!validate} first on untrusted input. *)
+
+  type 'r valid
+  (** A buffer and offset where {!valid} has accepted a ['r]. Only {!valid}
+      makes one, and a buffer's length never changes, so a field read through
+      {!read} stays inside the buffer whatever the bytes become later. *)
+
+  val valid : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
+  (** [valid ?env c buf off] runs {!validate} and returns the proof that it
+      passed. Raises what {!validate} raises. *)
+
+  val read :
+    ?env:Param.env -> 'r t -> ('a, 'r) field -> ('r valid -> 'a) Staged.t
+  (** [read ?env c f] is a staged reader of field [f] from a value {!valid} has
+      accepted. A scalar at a fixed offset is one load with no bounds check; any
+      other field reads as {!get} does. Raises [Invalid_argument] on the same
+      terms as {!get}, and when the staged reader is given a value validated by
+      another codec. *)
 
   val set :
     ?env:Param.env ->
@@ -1794,6 +1844,7 @@ end
 
 module Private : sig
   module UInt32 = UInt32
+  module Unchecked = Unchecked
   module UInt63 = UInt63
   module Input_end = Input_end
   module Types = Types
@@ -1832,6 +1883,13 @@ module Private : sig
     val read_word : Types.bitfield_base -> bytes -> int -> int
     (** Read a base word at a byte offset. *)
 
+    val u32_field_le : bytes -> int -> int -> int -> int
+    (** [u32_field_le buf off shift mask] is a field of the little-endian 32-bit
+        word at [off]. *)
+
+    val u32_field_be : bytes -> int -> int -> int -> int
+    (** Big-endian {!u32_field_le}. *)
+
     val write_word : Types.bitfield_base -> bytes -> int -> int -> unit
     (** Write a base word at a byte offset. *)
 
@@ -1851,6 +1909,23 @@ module Private : sig
   module Uint_var = Uint_var
   module Shape = Shape
   module Names = Names
+
+  (** How a codec is compiled, for the fuzzer: the same codec with every fast
+      path off, a codec not yet compiled, and the fast paths compiling selected.
+  *)
+  module Testing : sig
+    val general : 'r Codec.t -> 'r Codec.t
+    (** [general t] is [t] with every fast path off. *)
+
+    val fresh : 'r Codec.t -> 'r Codec.t
+    (** [fresh t] is [t] not yet compiled. *)
+
+    val paths : 'r Codec.t -> string list
+    (** [paths t] names the fast paths compiling [t] selected. *)
+
+    val all_paths : string list
+    (** Every name {!paths} can return. *)
+  end
 
   val param_name : param -> string
   (** Name of a formal parameter. *)

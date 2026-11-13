@@ -1,0 +1,146 @@
+name: Nightly fuzz
+
+# The per-pull-request lanes give each AFL fuzzer a minute and each property
+# two seconds. This runs the same fuzzers for hours, on a fresh seed, so a
+# divergence a short run is unlikely to reach still turns up. Each job replays
+# what it found, so the log names the codec and both answers.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [default, paranoid]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      - run: opam install . --deps-only --with-test
+
+      # The wire suite only (fuzz/, not fuzz/3d/): twenty seconds per property
+      # over its two hundred or so is the job's budget. A failure is replayed
+      # with the seed recorded here:
+      #   WIRE_FUZZ_SEED=<run id> dune build @@fuzz/runtest --profile <profile>
+      - run: opam exec -- dune build @@fuzz/runtest --profile ${{ matrix.profile }}
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+          WIRE_FUZZ_REPEAT: 1000000
+          WIRE_FUZZ_BUDGET: 20
+
+  fuzz-afl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install afl-fuzz
+        run: sudo apt-get update && sudo apt-get install -y afl++
+
+      - name: Fuzz for an hour per fuzzer
+        run: |
+          sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
+          export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
+          opam exec -- dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
+        env:
+          WIRE_AFL_SECONDS: 3600
+
+      - name: Fail on crashes
+        run: |
+          fail=0
+          for d in fuzz fuzz/3d; do
+            out=_build/default/$d/_fuzz
+            crashes=$(find "$out" -path '*/crashes/id:*' 2>/dev/null || true)
+            if [ -n "$crashes" ]; then
+              echo "::error::afl-fuzz found crashing inputs in $d/"
+              for f in $crashes; do
+                echo "--- replaying $f ---"
+                _build/default/$d/fuzz.exe "$f" || true
+              done
+              fail=1
+            fi
+          done
+          if [ "$fail" = 0 ]; then echo "No crashes found."; else exit 1; fi
+
+      - name: Package findings
+        if: failure()
+        run: tar czf afl-findings.tar.gz -C _build/default fuzz/_fuzz fuzz/3d/_fuzz || true
+
+      - name: Upload findings on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: afl-nightly-findings
+          path: afl-findings.tar.gz
+
+  fuzz-afl-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install afl-fuzz
+        run: sudo apt-get update && sudo apt-get install -y afl++
+
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+
+      - name: Fuzz diff for two hours
+        run: |
+          sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
+          export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
+          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl @fuzz/diff/fuzz
+        env:
+          WIRE_AFL_SECONDS: 7200
+
+      - name: Fail on crashes
+        run: |
+          out=_build/default/fuzz/diff/_fuzz
+          crashes=$(find "$out" -path '*/crashes/id:*' 2>/dev/null || true)
+          if [ -n "$crashes" ]; then
+            echo "::error::afl-fuzz found a differential divergence"
+            for f in $crashes; do
+              echo "--- replaying $f ---"
+              _build/default/fuzz/diff/fuzz.exe "$f" || true
+            done
+            exit 1
+          fi
+          echo "No crashes found."
+
+      - name: Package findings
+        if: failure()
+        run: tar czf afl-diff-findings.tar.gz -C _build/default/fuzz/diff _fuzz || true
+
+      - name: Upload findings on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: afl-diff-nightly-findings
+          path: afl-diff-findings.tar.gz

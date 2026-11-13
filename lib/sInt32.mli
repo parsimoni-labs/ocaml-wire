@@ -72,3 +72,15 @@ val of_int : int -> t
 (** [of_int n] is [n] as a signed 32-bit value. Raises [Invalid_argument] when
     [n] is outside the range, rather than masking it to a legal value the caller
     did not mean. *)
+
+(**/**)
+
+val unsafe_le : bytes -> int -> t
+(** [unsafe_le buf off] is the little-endian value at [off], read with no bounds
+    check: the caller has checked that its bytes are in [buf]. *)
+
+val unsafe_be : bytes -> int -> t
+(** [unsafe_be buf off] is {!unsafe_le} for a big-endian value. *)
+
+val int_eq : (t, int) Type.eq option
+(** The proof that {!type-t} is [int], on a host whose [int] holds 32 bits. *)

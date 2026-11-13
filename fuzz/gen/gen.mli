@@ -151,3 +151,25 @@ val enum_like :
   'a t
 (** [enum_like ~typ ~value_gen ~random ~adversarial] is {!leaf} with raw
     adversarial bytes, so they can carry tags the encoder never writes. *)
+
+val file_input : bool Lazy.t
+(** [file_input] is [true] when the run replays one input file, as AFL and a
+    crash replay do. *)
+
+val failure_reported : unit -> bool
+(** [failure_reported ()] is [true] once a failure has been printed on a file
+    input. *)
+
+(** Alcobar, with a [fail] and a {!val-failf} that print the failure on a file
+    input before raising it: Alcobar's AFL runner turns a failed property into a
+    bare exception and prints nothing. *)
+module Alcobar : module type of struct
+  include Alcobar
+end
+
+val failf : ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [failf fmt] is {!Alcobar.failf}, which on an AFL file input also prints the
+    failure, since Alcobar's AFL runner raises without printing it. *)
+
+val pp_hex : Format.formatter -> string -> unit
+(** [pp_hex ppf s] prints the bytes of [s] in hexadecimal. *)

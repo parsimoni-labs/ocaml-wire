@@ -34,3 +34,23 @@ val rec4_of : string -> any -> any -> any -> any -> any
 val gen_any : int -> any Alcobar.gen
 (** [gen_any depth] generates a codec nesting combinators up to [depth] levels
     over the leaves. *)
+
+val flat_check_order : any
+(** [flat_check_order] is a flat record whose checks run in field order: a range
+    test, then an enum. *)
+
+val wide : int -> any
+(** [wide k] is a flat record of [k] columns whose every field has a staged
+    write. *)
+
+val flat_table : any
+(** [flat_table] is a flat record whose checks share one byte, which the check
+    pass folds into a byte table. *)
+
+val flat_fixed_steps : any
+(** [flat_fixed_steps] is a fixed flat record with a check no interval states,
+    so its check pass runs as steps. *)
+
+val flat_leaves : any list
+(** [flat_leaves] is the flat records used as composition leaves, one per fast-
+    path shape. *)

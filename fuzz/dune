@@ -59,6 +59,8 @@
 
 ; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
 ; cwd is this dir in the build tree, where fuzz.exe is built).
+; [WIRE_AFL_SECONDS] is afl-fuzz's wall-clock budget: a minute per pull request,
+; longer in the nightly workflow (.github/workflows/nightly.yml).
 
 (rule
  (alias fuzz)
@@ -71,7 +73,7 @@
    (run
     afl-fuzz
     -V
-    60
+    %{env:WIRE_AFL_SECONDS=60}
     -t
     8000
     -x

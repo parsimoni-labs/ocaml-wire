@@ -579,6 +579,181 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* A getter that answers differently on each call: the fixed-size encoder
+   checks and copies the same string, so it writes a whole value or raises,
+   and never copies bytes from past the end of a short one. *)
+let test_encode_impure_byte_array_getter () =
+  let calls = Stdlib.ref 0 in
+  let data () =
+    incr calls;
+    if !calls mod 2 = 1 then String.make 16 'a' else "x"
+  in
+  let c =
+    Codec.v "ImpureBlit"
+      (fun _ _ -> ())
+      Codec.
+        [
+          (Field.v "n" uint8 $ fun () -> UInt8.v 1);
+          (Field.v "d" (byte_array ~size:(int 16)) $ fun () -> data ());
+        ]
+  in
+  ignore (Codec.wire_size c);
+  let buf = Bytes.make 17 '\x00' in
+  for start = 0 to 1 do
+    calls := start;
+    match Codec.encode c () buf 0 with
+    | () ->
+        Alcotest.(check string)
+          "a whole value" (String.make 16 'a')
+          (Bytes.sub_string buf 1 16)
+    | exception Invalid_argument _ -> ()
+  done
+
+(* What [decode], [validate] and [valid] make of the same bytes: each one
+   accepts them or each one refuses. *)
+let check_entry_points_agree what c bytes =
+  let buf = Bytes.of_string bytes in
+  let verdict f =
+    match f () with () -> "ok" | exception Parse_error _ -> "refused"
+  in
+  let decoded =
+    match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+  in
+  Alcotest.(check string)
+    (what ^ ": validate") decoded
+    (verdict (fun () -> Codec.validate c buf 0));
+  Alcotest.(check string)
+    (what ^ ": valid") decoded
+    (verdict (fun () -> ignore (Codec.valid c buf 0)))
+
+(* A fixed-size field after the last span must fit in the buffer too. *)
+let test_fixed_after_span_fits () =
+  let len = Field.v "len" uint8 in
+  let after_span what span tail =
+    let c =
+      Codec.v what
+        (fun n d t -> (n, d, t))
+        Codec.
+          [
+            (len $ fun (n, _, _) -> n);
+            (Field.v "data" span $ fun (_, d, _) -> d);
+            (Field.v "tail" tail $ fun (_, _, t) -> t);
+          ]
+    in
+    check_entry_points_agree what c "\003abcde";
+    check_entry_points_agree what c "\003abcdefg"
+  in
+  after_span "array then bytes"
+    (byte_array ~size:(Field.ref len))
+    (byte_array ~size:(int 4));
+  after_span "slice then bytes"
+    (byte_slice ~size:(Field.ref len))
+    (byte_array ~size:(int 4));
+  after_span "array then scalar" (byte_array ~size:(Field.ref len)) uint32be
+
+(* Every decode entry point checks before it reads, as [validate] does: a
+   fresh codec's first decode, a later one, one with [~consume:`All] and one
+   with an env all report [validate]'s first failure, here [a]'s constraint at
+   byte 0 rather than [b]'s enum at byte 1. *)
+let test_decode_reports_validate_first_failure () =
+  let c =
+    Codec.v "CheckFirst"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          Field.v "a" uint8 ~self_constraint:(fun a -> Expr.(a <= int 10)) $ fst;
+          Field.v "b" (enum "E" [ ("x", 0) ] uint8) $ snd;
+        ]
+  in
+  let buf = Bytes.of_string "\x20\x05" in
+  let error what = function
+    | Ok _ -> Alcotest.failf "%s accepted the record" what
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let first = error "first decode" (Codec.decode c buf 0) in
+  let validated =
+    match Codec.validate c buf 0 with
+    | () -> Alcotest.fail "validate accepted the record"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  Alcotest.(check string) "first decode" validated first;
+  Alcotest.(check string)
+    "second decode" validated
+    (error "second decode" (Codec.decode c buf 0));
+  Alcotest.(check string)
+    "consume all" validated
+    (error "consume all" (Codec.decode ~consume:`All c buf 0));
+  Alcotest.(check string)
+    "with an env" validated
+    (error "with an env" (Codec.decode ~env:(Codec.env c) c buf 0))
+
+(* A codec with params checks before it reads too: its decode reports
+   [validate]'s first failure, [a]'s constraint at byte 0 rather than [b]'s
+   enum at byte 1, and runs a [map] decoder only on a record that passes, once
+   per field. *)
+let test_decode_params_reports_validate_first_failure () =
+  let limit = Param.input "limit" uint8 in
+  let f_a = Field.v "a" uint8 ~self_constraint:(fun a -> Expr.(a <= int 10)) in
+  let calls = ref 0 in
+  let counted =
+    map
+      ~decode:(fun x ->
+        incr calls;
+        x)
+      ~encode:Fun.id uint8
+  in
+  let c =
+    Codec.v "CheckFirstParams"
+      ~where:Expr.(Field.ref f_a <= Param.expr limit)
+      (fun a b c -> (a, b, c))
+      Codec.
+        [
+          (f_a $ fun (a, _, _) -> a);
+          (Field.v "b" (enum "E" [ ("x", 0) ] uint8) $ fun (_, b, _) -> b);
+          (Field.v "c" counted $ fun (_, _, c) -> c);
+        ]
+  in
+  let env () = Codec.env c |> Param.bind limit (UInt8.v 255) in
+  let buf = Bytes.of_string "\x20\x05\x07" in
+  let error what = function
+    | Ok _ -> Alcotest.failf "%s accepted the record" what
+    | Error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let validated =
+    match Codec.validate ~env:(env ()) c buf 0 with
+    | () -> Alcotest.fail "validate accepted the record"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  Alcotest.(check string)
+    "decode" validated
+    (error "decode" (Codec.decode ~env:(env ()) c buf 0));
+  Alcotest.(check string)
+    "consume all" validated
+    (error "consume all" (Codec.decode ~consume:`All ~env:(env ()) c buf 0));
+  Alcotest.(check int) "no map decode on a refused record" 0 !calls;
+  (match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
+  | Ok (_, _, c) when UInt8.to_int c = 7 -> ()
+  | Ok _ -> Alcotest.fail "wrong value"
+  | Error e -> Alcotest.failf "valid record refused: %a" pp_parse_error e);
+  Alcotest.(check int) "one map decode on a valid record" 1 !calls
+
+(* A literal region size is a byte count for [nested], [nested_at_most] and
+   [Field.repeat] as for every other sized description: a negative one raises
+   where it is written. *)
+let test_negative_literal_region_raises () =
+  let raises what f =
+    match f () with
+    | () -> Alcotest.failf "%s accepted a negative size" what
+    | exception Invalid_argument _ -> ()
+  in
+  raises "nested" (fun () -> ignore (nested ~size:(int (-1)) uint8));
+  raises "nested_at_most" (fun () ->
+      ignore (nested_at_most ~size:(int (-1)) uint8));
+  raises "repeat" (fun () -> ignore (Field.repeat "xs" ~size:(int (-2)) uint8));
+  raises "repeat_seq" (fun () ->
+      ignore (Field.repeat_seq "xs" ~seq:seq_list ~size:(int (-2)) uint8));
+  raises "folded" (fun () -> ignore (nested ~size:Expr.(int 1 - int 2) uint8))
+
 (* A size the header decides can come out negative or run past the buffer, in
    a [byte_array], a [uint_var] or a [nested] region, with or without a field
    after it: [validate] refuses what [decode] refuses. *)
@@ -698,6 +873,16 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "encode: a getter is called once per write" `Quick
+        test_encode_impure_byte_array_getter;
+      Alcotest.test_case "layout: a fixed field after the last span must fit"
+        `Quick test_fixed_after_span_fits;
+      Alcotest.test_case "decode: every entry point checks before it reads"
+        `Quick test_decode_reports_validate_first_failure;
+      Alcotest.test_case "decode: a codec with params checks before it reads"
+        `Quick test_decode_params_reports_validate_first_failure;
+      Alcotest.test_case "size: a negative literal region raises" `Quick
+        test_negative_literal_region_raises;
       Alcotest.test_case "validate: data-sized fields agree with decode" `Quick
         test_validate_data_sized_fields;
     ] )

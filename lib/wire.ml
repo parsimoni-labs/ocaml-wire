@@ -1138,6 +1138,7 @@ module Ascii = Ascii
 
 module Private = struct
   module UInt32 = UInt32
+  module Unchecked = Unchecked
   module UInt63 = UInt63
   module Input_end = Input_end
   module Types = Types
@@ -1146,6 +1147,7 @@ module Private = struct
   module Bitfield = Bitfield
   module Uint_var = Uint_var
   module Shape = Shape
+  module Testing = Codec.Testing
   module Names = Names
 
   let param_name = param_name

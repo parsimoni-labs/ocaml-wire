@@ -2,6 +2,7 @@ open Gen
 open Leaves
 open Wrappers
 open Record
+open Columns
 
 (* {1 Recursive nested composition}
 
@@ -17,6 +18,140 @@ open Record
 type any = Any : { g : 'a t; size : int option; label : string } -> any
 
 let fixed_size g = Wire.Codec.wire_size_opt g.codec
+
+(* Flat records as composition leaves: one per fast-path shape, so each
+   shape is drawn whole rather than hoped for. *)
+let flat_any ?impure name mks =
+  let label, g = flat_of ?impure name mks in
+  Any { g; size = fixed_size g; label = "flat:" ^ label }
+
+let enum_abc = enum8_group [ ("A", 1); ("B", 2); ("C", 3) ]
+
+(* Cycled to build a record of any arity whose every field has a staged
+   write. *)
+let wide_cycle =
+  [|
+    u8_group;
+    u16be_group;
+    i8_group;
+    u16le_group;
+    u32be_group;
+    i16be_group;
+    range8_group ~lo:0 ~hi:200;
+    u32le_group;
+    bits_group Wire.U8 [ 3 ];
+    bits_group Wire.U16be [ 7 ];
+  |]
+
+let wide k =
+  flat_any (Fmt.str "Wide%d" k)
+    (List.init k (fun i -> wide_cycle.(i mod Array.length wide_cycle)))
+
+(* Up to one past the widest staged encode, so the general one is reached
+   too. *)
+let flat_wide_leaves = List.init 17 (fun i -> wide (i + 1))
+
+let flat_check_order =
+  flat_any "CheckOrder" [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ]
+
+let flat_table =
+  flat_any "Table" [ bits_group ~limits:[ 5; 20 ] Wire.U8 [ 3; 5 ]; u8_group ]
+
+let flat_fixed_steps = flat_any "FixedSteps" [ even8_group; u16be_group ]
+
+let flat_shape_leaves =
+  [
+    flat_any "SpanTail" [ span_group len_u8; fixed_bytes_group ~slice:false 4 ];
+    flat_any "SpanScalar" [ span_group len_u16be; u8_group; i16be_group ];
+    flat_any "Span32"
+      [ u8_group; span_group len_u32be; fixed_bytes_group ~slice:false 2 ];
+    flat_any "SpanSlice" [ span_group ~slice:true len_u8; u16le_group ];
+    flat_any "SpanExpr"
+      [
+        span_group ~size:(Plus 1) len_u8;
+        span_group ~size:(Times 2) len_u16le;
+        u8_group;
+      ];
+    flat_any "SpanRest" [ span_group len_u8; rest_group ];
+    flat_check_order;
+    flat_table;
+    flat_any "Views" [ enum_abc; where8_group; map8_group; u8_group ];
+    flat_any "Blit"
+      [
+        fixed_bytes_group ~slice:false 4;
+        u8_group;
+        fixed_bytes_group ~slice:true 2;
+        fixed_bytes_group ~slice:false 0;
+      ];
+    flat_any ~impure:true "Impure"
+      [ bits_group Wire.U8 [ 3 ]; fixed_bytes_group ~slice:false 4; u8_group ];
+    flat_any "LayoutTable"
+      [
+        bits_group ~limits:[ 9; 9 ] Wire.U8 [ 4; 4 ];
+        span_group len_u8;
+        fixed_bytes_group ~slice:false 1;
+      ];
+    flat_any "LayoutRange"
+      [
+        range8_group ~lo:1 ~hi:100;
+        span_group len_u8;
+        fixed_bytes_group ~slice:false 2;
+      ];
+    flat_any "LayoutSteps" [ even8_group; span_group len_u8 ];
+    flat_fixed_steps;
+  ]
+
+let flat_leaves = flat_wide_leaves @ flat_shape_leaves
+
+let fixed_flat_leaves =
+  List.filter (fun (Any a) -> Option.is_some a.size) flat_leaves
+
+(* The columns a random flat record draws from. *)
+let flat_vocabulary =
+  [|
+    u8_group;
+    i8_group;
+    u16be_group;
+    u16le_group;
+    i16be_group;
+    u32be_group;
+    u32le_group;
+    range8_group ~lo:10 ~hi:100;
+    even8_group;
+    enum_abc;
+    where8_group;
+    map8_group;
+    bits_group Wire.U8 [ 3; 5 ];
+    bits_group ~limits:[ 2; 3 ] Wire.U8 [ 2; 2 ];
+    bits_group Wire.U16be [ 5; 11 ];
+    fixed_bytes_group ~slice:false 3;
+    fixed_bytes_group ~slice:false 0;
+    fixed_bytes_group ~slice:true 2;
+    span_group len_u8;
+    span_group len_u16be;
+    span_group len_u32be;
+    span_group ~slice:true len_u8;
+    span_group ~size:(Plus 2) len_u8;
+    span_group len_map8;
+  |]
+
+(* A flat record of up to 18 columns drawn from [flat_vocabulary], ending
+   with the rest of the input or not. *)
+let gen_flat : any Alcobar.gen =
+  Alcobar.map
+    Alcobar.[ Alcobar.list1 Alcobar.uint8; Alcobar.bool; Alcobar.bool ]
+    (fun picks rest impure ->
+      let picks = List.filteri (fun i _ -> i < 18) picks in
+      let mks =
+        List.map
+          (fun i -> flat_vocabulary.(i mod Array.length flat_vocabulary))
+          picks
+      in
+      let mks = if rest then mks @ [ rest_group ] else mks in
+      let label = String.concat "," (List.map (fun m -> m.glabel) mks) in
+      (* Wire refuses a bitfield after a variable-size field. *)
+      try flat_any ~impure ("Flat" ^ shape_tag label) mks
+      with Invalid_argument _ -> wide 2)
 
 (* Fixed-width leaves: usable as [array] / [nested] elements. *)
 let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
@@ -394,10 +529,14 @@ let rec4_uniq (Any a as x) (Any b as y) (Any c as z) (Any d as w) =
     ("R4" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label ^ "," ^ d.label))
     x y z w
 
-let fixed_leaf_gens = List.map Alcobar.const fixed_leaves
+let fixed_leaf_gens =
+  Alcobar.choose (List.map Alcobar.const fixed_flat_leaves)
+  :: List.map Alcobar.const fixed_leaves
 
 let any_leaf_gens =
-  List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
+  Alcobar.choose (List.map Alcobar.const flat_leaves)
+  :: gen_flat
+  :: List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
 
 (* One level over the fixed-size generator [fixed] for the level below. *)
 let fixed_level fixed =

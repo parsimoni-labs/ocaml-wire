@@ -67,3 +67,15 @@ val of_int32 : int32 -> t
     {!le} and {!be} decode those four bytes to, on every platform. Prefer it to
     [Optint.of_int32], which keeps the signed view and so yields a negative
     number for a word with bit 31 set where [Optint.t] is a wide native int. *)
+
+(**/**)
+
+val unsafe_le : bytes -> int -> t
+(** [unsafe_le buf off] is the little-endian value at [off], read with no bounds
+    check: the caller has checked that its bytes are in [buf]. *)
+
+val unsafe_be : bytes -> int -> t
+(** [unsafe_be buf off] is {!unsafe_le} for a big-endian value. *)
+
+val int_eq : (t, int) Type.eq option
+(** The proof that {!type-t} is [int], on a host whose [int] holds 32 bits. *)

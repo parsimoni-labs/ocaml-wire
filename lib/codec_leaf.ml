@@ -130,12 +130,22 @@ let bits_field_encoder ~width ~base ~bit_order buf off v =
   | _ -> Bitfield.write_word base buf off ((v land mask) lsl shift));
   off + Bitfield.byte_size base
 
-let float32_field_encoder setter buf off v =
-  setter buf off (Int32.bits_of_float v);
+(* Each endianness gets its own writer so the bits go straight to the
+   primitive: passed through an unknown setter they would be boxed. *)
+let float32_le_encoder buf off v =
+  Bytes.set_int32_le buf off (Int32.bits_of_float v);
   off + 4
 
-let float64_field_encoder setter buf off v =
-  setter buf off (Int64.bits_of_float v);
+let float32_be_encoder buf off v =
+  Bytes.set_int32_be buf off (Int32.bits_of_float v);
+  off + 4
+
+let float64_le_encoder buf off v =
+  Bytes.set_int64_le buf off (Int64.bits_of_float v);
+  off + 8
+
+let float64_be_encoder buf off v =
+  Bytes.set_int64_be buf off (Int64.bits_of_float v);
   off + 8
 
 let uint_var_field_encoder endian n buf off v =
@@ -207,23 +217,30 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v ->
         UInt64.set_be buf off v;
         off + 8
-  | Int8 -> fun _runtime -> setter_off 1 SInt8.set
-  | Int16 Little -> fun _runtime -> setter_off 2 SInt16.set_le
-  | Int16 Big -> fun _runtime -> setter_off 2 SInt16.set_be
-  | Int32 Little -> fun _runtime -> setter_off 4 Types.set_int32_le
-  | Int32 Big -> fun _runtime -> setter_off 4 Types.set_int32_be
-  | Int64 Little -> fun _runtime -> setter_off 8 Bytes.set_int64_le
-  | Int64 Big -> fun _runtime -> setter_off 8 Bytes.set_int64_be
-  | Float32 Little -> fun _runtime -> float32_field_encoder Bytes.set_int32_le
-  | Float32 Big -> fun _runtime -> float32_field_encoder Bytes.set_int32_be
-  | Float64 Little -> fun _runtime -> float64_field_encoder Bytes.set_int64_le
-  | Float64 Big -> fun _runtime -> float64_field_encoder Bytes.set_int64_be
+  | Int8 -> fun _runtime buf off v -> setter_off 1 SInt8.set buf off v
+  | Int16 Little ->
+      fun _runtime buf off v -> setter_off 2 SInt16.set_le buf off v
+  | Int16 Big -> fun _runtime buf off v -> setter_off 2 SInt16.set_be buf off v
+  | Int32 Little ->
+      fun _runtime buf off v -> setter_off 4 Types.set_int32_le buf off v
+  | Int32 Big ->
+      fun _runtime buf off v -> setter_off 4 Types.set_int32_be buf off v
+  | Int64 Little ->
+      fun _runtime buf off v -> setter_off 8 Bytes.set_int64_le buf off v
+  | Int64 Big ->
+      fun _runtime buf off v -> setter_off 8 Bytes.set_int64_be buf off v
+  | Float32 Little -> fun _runtime buf off v -> float32_le_encoder buf off v
+  | Float32 Big -> fun _runtime buf off v -> float32_be_encoder buf off v
+  | Float64 Little -> fun _runtime buf off v -> float64_le_encoder buf off v
+  | Float64 Big -> fun _runtime buf off v -> float64_be_encoder buf off v
   | Uint_var { size = Int n; endian } ->
-      fun _runtime -> uint_var_field_encoder endian n
-  | Byte_array { size = Int n } -> fun _runtime -> blit_string_exact n
+      fun _runtime buf off v -> uint_var_field_encoder endian n buf off v
+  | Byte_array { size = Int n } ->
+      fun _runtime buf off v -> blit_string_exact n buf off v
   | Byte_array_where { size = Int n; elt_var; cond } ->
-      fun _runtime -> refined_bytes_encoder n ~elt_var ~cond
-  | Byte_slice { size = Int n } -> fun _runtime -> blit_slice_exact n
+      fun _runtime buf off v -> refined_bytes_encoder n ~elt_var ~cond buf off v
+  | Byte_slice { size = Int n } ->
+      fun _runtime buf off v -> blit_slice_exact n buf off v
   | Where { cond; inner } ->
       where_field_encoder cond (build_field_encoder_ctx inner)
   | Enum { name; base; cases; closed } ->
@@ -263,7 +280,8 @@ and build_field_encoder_ctx : type a.
   (* A lone bitfield (e.g. a casetype case body) occupies its whole base word;
      write the value at its bit offset into an otherwise-zero word. *)
   | Bits { width; base; bit_order } ->
-      fun _runtime -> bits_field_encoder ~width ~base ~bit_order
+      fun _runtime buf off v ->
+        bits_field_encoder ~width ~base ~bit_order buf off v
   (* A nested region (e.g. a casetype case body): encode the inner at the
      region start, then zero-pad the rest of the fixed [n]-byte region. *)
   | Single_elem { size = Int n; elem; at_most } ->
@@ -523,10 +541,10 @@ let rec build_immediate_encoder : type a.
   | Int32 Big -> Some (setter_off 4 Types.set_int32_be)
   | Int64 Little -> Some (setter_off 8 Bytes.set_int64_le)
   | Int64 Big -> Some (setter_off 8 Bytes.set_int64_be)
-  | Float32 Little -> Some (float32_field_encoder Bytes.set_int32_le)
-  | Float32 Big -> Some (float32_field_encoder Bytes.set_int32_be)
-  | Float64 Little -> Some (float64_field_encoder Bytes.set_int64_le)
-  | Float64 Big -> Some (float64_field_encoder Bytes.set_int64_be)
+  | Float32 Little -> Some float32_le_encoder
+  | Float32 Big -> Some float32_be_encoder
+  | Float64 Little -> Some float64_le_encoder
+  | Float64 Big -> Some float64_be_encoder
   | Uint_var { size = Int n; endian } -> Some (uint_var_field_encoder endian n)
   | Where { inner; _ } -> build_immediate_encoder inner
   | Enum { base; _ } -> build_immediate_encoder base

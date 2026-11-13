@@ -6,7 +6,7 @@ let byte_size = function U8 -> 1 | U16 _ -> 2 | U32 _ -> 4
 let total_bits = function U8 -> 8 | U16 _ -> 16 | U32 _ -> 32
 let equal = Types.equal_bitfield_base
 
-(* The word helpers below reach their bytes with [Bytes.unsafe_get] and write a
+(* The word helpers below reach their bytes with [Unchecked.u8] and write a
    u32 as two halves, so a caller whose offset is not already known to be in
    the buffer checks the whole span with this first: the decoders have checked
    the frame's extent before they read a word, but [Codec.get], [Codec.set] and
@@ -20,24 +20,22 @@ let[@inline always] check_word buf off n =
 (* Fast word reads -- avoid Bytes.get_int32_be which goes through Int32
    boxing/unboxing and byte-by-byte assembly on ARM64. *)
 let[@inline always] u16_le buf off =
-  Char.code (Bytes.unsafe_get buf off)
-  lor (Char.code (Bytes.unsafe_get buf (off + 1)) lsl 8)
+  Unchecked.u8 buf off lor (Unchecked.u8 buf (off + 1) lsl 8)
 
 let[@inline always] u16_be buf off =
-  (Char.code (Bytes.unsafe_get buf off) lsl 8)
-  lor Char.code (Bytes.unsafe_get buf (off + 1))
+  (Unchecked.u8 buf off lsl 8) lor Unchecked.u8 buf (off + 1)
 
 let[@inline always] u32_le buf off =
-  Char.code (Bytes.unsafe_get buf off)
-  lor (Char.code (Bytes.unsafe_get buf (off + 1)) lsl 8)
-  lor (Char.code (Bytes.unsafe_get buf (off + 2)) lsl 16)
-  lor (Char.code (Bytes.unsafe_get buf (off + 3)) lsl 24)
+  Unchecked.u8 buf off
+  lor (Unchecked.u8 buf (off + 1) lsl 8)
+  lor (Unchecked.u8 buf (off + 2) lsl 16)
+  lor (Unchecked.u8 buf (off + 3) lsl 24)
 
 let[@inline always] u32_be buf off =
-  (Char.code (Bytes.unsafe_get buf off) lsl 24)
-  lor (Char.code (Bytes.unsafe_get buf (off + 1)) lsl 16)
-  lor (Char.code (Bytes.unsafe_get buf (off + 2)) lsl 8)
-  lor Char.code (Bytes.unsafe_get buf (off + 3))
+  (Unchecked.u8 buf off lsl 24)
+  lor (Unchecked.u8 buf (off + 1) lsl 16)
+  lor (Unchecked.u8 buf (off + 2) lsl 8)
+  lor Unchecked.u8 buf (off + 3)
 
 (* A bitfield word is a bag of bits manipulated in the native [int], never a
    uint32 field value, so these stay [int]-based rather than going through

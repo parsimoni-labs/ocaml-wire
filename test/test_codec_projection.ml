@@ -51,9 +51,6 @@ let test_array_rejects_zero_width_span () =
     "byte_slice of size 0" true
     (array_rejects (byte_slice ~size:(int 0)));
   Alcotest.(check bool)
-    "byte_array of negative size" true
-    (array_rejects (byte_array ~size:(int (-1))));
-  Alcotest.(check bool)
     "byte_array of size 0 under a map" true
     (array_rejects
        (map ~decode:String.length
@@ -303,9 +300,6 @@ let test_repeat_rejects_zero_width_span () =
   Alcotest.(check bool)
     "byte_slice of size 0" true
     (repeat_rejects (byte_slice ~size:(int 0)));
-  Alcotest.(check bool)
-    "byte_array of negative size" true
-    (repeat_rejects (byte_array ~size:(int (-1))));
   Alcotest.(check bool)
     "byte_array of size 0 under a map" true
     (repeat_rejects
