@@ -92,6 +92,15 @@
   a parameter, so a wrapped `uint64` keeps its high bits. Rebuild C plugs
   (#412, #474, @frejsoya)
 
+### Removed
+
+- **Breaking:** Remove `wire.diff-gen` (`Wire_diff_gen`). The test runner it
+  generated never compared the C validator against the OCaml codec: it counted
+  every input as passed, so a validator that rejects everything still
+  reported success. Use `wire.diff` (`Wire_diff.harness`) for differential
+  testing, and `Wire_3d` and `Wire_stubs` to generate the `.3d` files, the C
+  validators and the OCaml stubs (#475, @samoht)
+
 ### Fixed
 
 - The 3D projection of a codec holding an array of `lookup` indices in a
