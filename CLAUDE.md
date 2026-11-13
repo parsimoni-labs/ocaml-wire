@@ -31,7 +31,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
 - `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
-- `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
+- `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
