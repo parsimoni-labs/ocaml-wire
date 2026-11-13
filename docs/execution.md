@@ -70,8 +70,12 @@ spans whose size an expression gives, optional fields (gates), sized windows
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `is_valid`, the decoders and the function that finds
 the codec's error for a fixed record, and `fold`, `fold_frames` and `decode`
-for a codec of any shape in scope. The invariants above hold for it as
-follows.
+(and with `~step`, `fold_step` and `fold_frames_step`) for a codec of any
+shape in scope. OCaml without flambda never inlines a function passed as an
+argument, nor a function whose body defines a closure, so `fold_frames`
+rejects a frame with no closure of its own, and the step functions call
+their consumer by name, with no closure call and no allocation per frame.
+The invariants above hold for it as follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
   check that the bytes it spans, and those of the prefixes and where clauses

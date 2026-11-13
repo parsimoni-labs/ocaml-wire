@@ -96,30 +96,36 @@ bench-clcw:
 	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
 
 # Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml (and on
-# OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse
-# and smoltcp. cargo fetches the two crates the first time. Results land in
-# _build/bench-rust/.
+# OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse,
+# smoltcp and pnet_packet, on each corpus of BENCH_RUST_CORPORA (name:stride,
+# written by bench.exe corpus). cargo fetches the crates the first time.
+# Results land in _build/bench-rust/.
 OXCAML_SWITCH ?= 5.4.0-ox9
 BENCH_RUST_PACKETS ?= 200000
 BENCH_RUST_RUNS ?= 21
+BENCH_RUST_CORPORA ?= fixed64-random:64 fixed64-sorted:64 \
+                      mix128-random:128 mix128-sorted:128
 BENCH_RUST = _build/bench-rust
+# $(1) CORPUS STRIDE RUNS, for each corpus, appended to $(BENCH_RUST)/$(2).txt.
+bench_rust_each = for c in $(BENCH_RUST_CORPORA); do \
+	  $(1) $(BENCH_RUST)/$${c%:*}.bin $${c\#*:} $(BENCH_RUST_RUNS) \
+	    >> $(BENCH_RUST)/$(2).txt || exit 1; done
 bench-rust:
 	@mkdir -p $(BENCH_RUST) bench/rust/cargo/src/gen
 	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
 	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
-	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST)/corpus.bin \
+	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST) \
 	  $(BENCH_RUST_PACKETS)
-	cargo run --quiet --release --manifest-path bench/rust/cargo/Cargo.toml \
-	  -- $(BENCH_RUST)/corpus.bin 64 $(BENCH_RUST_RUNS) > $(BENCH_RUST)/rust.txt
-	_build/default/bench/rust/bench.exe run $(BENCH_RUST)/corpus.bin \
-	  $(BENCH_RUST_RUNS) > $(BENCH_RUST)/ocaml.txt
+	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
+	rm -f $(BENCH_RUST)/*.txt
+	$(call bench_rust_each,cargo run --quiet --release \
+	  --manifest-path bench/rust/cargo/Cargo.toml --,rust)
+	$(call bench_rust_each,_build/default/bench/rust/bench.exe run,ocaml)
 	@if opam switch list --short 2>/dev/null | grep -qx '$(OXCAML_SWITCH)'; then \
 	  opam exec --switch $(OXCAML_SWITCH) -- dune build --profile=release \
 	    --build-dir $(CURDIR)/_build/oxcaml bench/rust/bench.exe && \
-	  _build/oxcaml/default/bench/rust/bench.exe run $(BENCH_RUST)/corpus.bin \
-	    $(BENCH_RUST_RUNS) > $(BENCH_RUST)/oxcaml.txt; \
-	else rm -f $(BENCH_RUST)/oxcaml.txt; \
-	  echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	  $(call bench_rust_each,_build/oxcaml/default/bench/rust/bench.exe run,oxcaml); \
+	else echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 PROF_EXE ?= bench/clcw/bench.exe

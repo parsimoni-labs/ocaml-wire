@@ -25,8 +25,9 @@ type scan = {
 val scanner :
   ?target:[> `OCaml | `OxCaml ] ->
   ?fields:string list ->
+  ?step:string ->
   codec:string ->
   'a Wire.Codec.t ->
   string
-(** [scanner ?target ?fields ~codec c] is the scanner generated for [c]; see
-    {!Wire_ocaml.scanner}. *)
+(** [scanner ?target ?fields ?step ~codec c] is the scanner generated for [c];
+    see {!Wire_ocaml.scanner}. *)
