@@ -246,3 +246,52 @@ let overflow =
         (b $ fun (_, _, _, x, _) -> x);
         (c $ fun (_, _, _, _, x) -> x);
       ]
+
+type sized = UInt32.t * Bytesrw.Bytes.Slice.t option * UInt8.t
+
+let sized =
+  let n = Field.v "n" uint32be in
+  Codec.v "Sized"
+    (fun n body tail -> (n, body, tail))
+    Codec.
+      [
+        (n $ fun (n, _, _) -> n);
+        ( Field.optional "body"
+            ~present:Expr.(Field.ref n * Field.ref n <> int 1)
+            (byte_slice ~size:Expr.((Field.ref n * Field.ref n) - int 1))
+        $ fun (_, b, _) -> b );
+        (Field.v "tail" uint8 $ fun (_, _, t) -> t);
+      ]
+
+let rec gated n =
+  let tag = Field.v "tag" uint8 in
+  let value =
+    Field.optional "value" ~present:Expr.(Field.ref tag = int 1) uint16be
+  in
+  let tag = Codec.(tag $ fun () -> UInt8.v 0)
+  and value = Codec.(value $ fun () -> None) in
+  if n <= 1 then Codec.v "Gated" (fun _ _ -> ()) Codec.[ tag; value ]
+  else
+    let rest = Codec.(Field.v "rest" (codec (gated (n - 1))) $ fun () -> ()) in
+    Codec.v
+      ("Gated" ^ string_of_int n)
+      (fun _ _ _ -> ())
+      Codec.[ tag; value; rest ]
+
+let rec nested n =
+  let tag = Field.v "tag" uint8 in
+  let tag_f = Codec.(tag $ fun () -> UInt8.v 0)
+  and after = Codec.(Field.v "after" uint8 $ fun () -> UInt8.v 0) in
+  if n <= 1 then Codec.v "Nested" (fun _ _ -> ()) Codec.[ tag_f; after ]
+  else
+    let inner =
+      Codec.(
+        Field.optional "inner"
+          ~present:Expr.(Field.ref tag = int 1)
+          (codec (nested (n - 1)))
+        $ fun () -> None)
+    in
+    Codec.v
+      ("Nested" ^ string_of_int n)
+      (fun _ _ _ -> ())
+      Codec.[ tag_f; inner; after ]

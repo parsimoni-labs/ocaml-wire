@@ -168,3 +168,17 @@ val overflow_make : UInt32.t -> int -> int -> UInt32.t -> UInt32.t -> overflow
 val overflow : overflow Codec.t
 (** [overflow] has field constraints and a [where] clause whose arithmetic
     overflows the native int on some inputs. *)
+
+type sized = UInt32.t * Bytesrw.Bytes.Slice.t option * UInt8.t
+
+val sized : sized Codec.t
+(** [sized] has an optional slice whose condition and size overflow the native
+    int for a large [n]. *)
+
+val gated : int -> unit Codec.t
+(** [gated n] has [n] optional fields, each present when the tag before it is 1.
+*)
+
+val nested : int -> unit Codec.t
+(** [nested n] nests [n] records, each optional in the one around it and
+    followed by a field. *)

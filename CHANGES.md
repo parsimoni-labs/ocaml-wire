@@ -27,6 +27,13 @@
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)
 
+- `Wire_ocaml.scanner`: generate a scanner for codecs with nested records,
+  optional fields, sized regions and byte spans. `~fields` selects the outputs
+  (#447, @samoht)
+
+- `Wire_ocaml.Plan`: the checked plan the generators print, for backends in
+  other languages (#447, @samoht)
+
 - `wire.runtime` has `Target`, loads at `int64_u` offsets for OxCaml (#459,
   @samoht)
 

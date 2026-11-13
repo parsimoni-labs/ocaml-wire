@@ -858,9 +858,164 @@ let test_oxcaml () =
     "stock has no OxCaml syntax" false
     (contains stock "exclave_" || contains stock "#{")
 
+(* Optional fields are written once each: the code after one is joined, or
+   copied into its branches only while it is short, holds no optional field
+   and the copies on a path stay few, so the checks grow linearly with the
+   number of optional fields, in a run or nested. The test codecs nest a
+   record per field and their output names lengthen: lines, not bytes,
+   measure the code. *)
+let lines s = List.length (String.split_on_char '\n' s)
+
+(* A join passes on the outputs under it, so [n] optional fields nested inside
+   each other that hand out every output give code quadratic in [n], within
+   one budget on both targets. *)
+let nested_budget n = (7 * n * n) + (100 * n)
+
+let test_size () =
+  List.iter
+    (fun (name, codec, fields) ->
+      List.iter
+        (fun target ->
+          let size n =
+            lines (Wire_ocaml.scanner ~target ?fields ~codec:"g" (codec n))
+          in
+          let s8 = size 8 and s16 = size 16 and s32 = size 32 in
+          if s32 - s16 > (2 * (s16 - s8)) + 2 then
+            Alcotest.failf
+              "%s: 8, 16 and 32 optional fields: %d, %d and %d lines" name s8
+              s16 s32;
+          if s32 > 150 * 32 then
+            Alcotest.failf "%s: 32 optional fields: %d lines" name s32)
+        [ `OCaml; `OxCaml ])
+    [
+      ("in a run", Schemas.gated, None);
+      ("in a run, checks only", Schemas.gated, Some []);
+      ("nested, checks only", Schemas.nested, Some []);
+    ];
+  List.iter
+    (fun (target, name) ->
+      List.iter
+        (fun n ->
+          let size =
+            lines (Wire_ocaml.scanner ~target ~codec:"g" (Schemas.nested n))
+          in
+          if size > nested_budget n then
+            Alcotest.failf
+              "%s: %d nested optional fields, every output: %d lines, over %d"
+              name n size (nested_budget n))
+        [ 8; 16; 32; 64 ])
+    [ (`OCaml, "OCaml"); (`OxCaml, "OxCaml") ]
+
+let refused what generate =
+  match generate () with
+  | _ -> Alcotest.failf "%s: generated" what
+  | exception Invalid_argument _ -> ()
+
+let test_scanner_refusals () =
+  let pair n1 n2 =
+    Codec.v "Pair"
+      (fun a b -> (a, b))
+      Codec.[ Field.v n1 uint8 $ fst; Field.v n2 uint8 $ snd ]
+  in
+  refused "two outputs of one name" (fun () ->
+      Wire_ocaml.scanner ~codec:"c" (pair "a_b" "a_B"));
+  refused "an output named ok" (fun () ->
+      Wire_ocaml.scanner ~codec:"c" (pair "ok" "b"));
+  refused "an unknown output" (fun () ->
+      Wire_ocaml.scanner ~fields:[ "c" ] ~codec:"c" (pair "a" "b"));
+  refused "a structured codec through the record module" (fun () ->
+      Wire_ocaml.ml ~codec:"c" Schemas.sized);
+  Alcotest.(check (list (pair string bool)))
+    "outputs"
+    [ ("n", false); ("body_present", true); ("tail", false) ]
+    (Wire_ocaml.scanner_fields Schemas.sized)
+
+(* Every output is named by the labels on its path, never by a variable of
+   the plan. A codec's fields are all named; the anonymous fields of a 3D
+   struct reach a codec only inside a struct type, which the scanner
+   refuses. *)
+let test_scanner_outputs () =
+  let inner =
+    Codec.v "Inner"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "a" uint8 $ fst; Field.v "b" uint8 $ snd ]
+  in
+  let tag = Field.v "tag" uint8 in
+  let outer =
+    Codec.v "Outer"
+      (fun t x y -> (t, x, y))
+      Codec.
+        [
+          (tag $ fun (t, _, _) -> t);
+          ( Field.optional "x"
+              ~present:Expr.(Field.ref tag = int 1)
+              (codec inner)
+          $ fun (_, x, _) -> x );
+          ( Field.v "y" (nested_at_most ~size:(int 4) (codec inner))
+          $ fun (_, _, y) -> y );
+        ]
+  in
+  Alcotest.(check (list (pair string bool)))
+    "outputs"
+    [
+      ("tag", false);
+      ("x_present", true);
+      ("x_a", false);
+      ("x_b", false);
+      ("y_a", false);
+      ("y_b", false);
+    ]
+    (Wire_ocaml.scanner_fields outer);
+  let src = Wire_ocaml.scanner ~codec:"c" outer in
+  Alcotest.(check bool)
+    "valid takes the outputs by name" true
+    (contains src "valid ~tag:" && contains src "~x_present:"
+   && contains src "~y_b:");
+  let padded =
+    Everparse.Raw.(struct_ "Padded" [ anon_field uint8; field "z" uint8 ])
+  in
+  let holder =
+    Codec.v "Holder" Fun.id
+      Codec.[ Field.v "h" (Everparse.Raw.struct_typ padded) $ Fun.id ]
+  in
+  refused "an anonymous field in a struct type" (fun () ->
+      Wire_ocaml.scanner_fields holder);
+  refused "an anonymous field in a struct type, scanner" (fun () ->
+      Wire_ocaml.scanner ~codec:"c" holder)
+
+(* Code whose values all fit 31 bits loads on every target; code holding a
+   wider one checks the int size when it loads. *)
+let test_portable () =
+  let one t =
+    Codec.v "One" Fun.id
+      Codec.
+        [
+          Field.v "x" t ~self_constraint:(fun x -> Expr.(x * x >= int 0))
+          $ Fun.id;
+        ]
+  in
+  let guarded src = contains src "Sys.int_size <= 32" in
+  Alcotest.(check bool)
+    "u8 squared" false
+    (guarded (Wire_ocaml.ml ~codec:"c" (one uint8)));
+  Alcotest.(check bool)
+    "u16 squared" true
+    (guarded (Wire_ocaml.ml ~codec:"c" (one uint16be)));
+  Alcotest.(check bool)
+    "u8 scanner" false
+    (guarded (Wire_ocaml.scanner ~codec:"c" (one uint8)));
+  Alcotest.(check bool)
+    "u16 scanner" true
+    (guarded (Wire_ocaml.scanner ~codec:"c" (one uint16be)))
+
 let suite =
   ( "wire_ocaml",
     [
+      Alcotest.test_case "code size of optional fields" `Quick test_size;
+      Alcotest.test_case "scanner refusals" `Quick test_scanner_refusals;
+      Alcotest.test_case "scanner outputs are label paths" `Quick
+        test_scanner_outputs;
+      Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;
