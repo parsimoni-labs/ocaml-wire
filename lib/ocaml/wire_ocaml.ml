@@ -65,7 +65,7 @@ module Plan = struct
   end
 
   let v c =
-    match scan_plan c with
+    match codec_plan c with
     | plan -> plan
     | exception Unsupported why -> invalid_arg why
 

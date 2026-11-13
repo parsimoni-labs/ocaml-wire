@@ -317,8 +317,8 @@ let output st path ~id ~is_bool store =
 
 (* [e] over the variables of [env], the scalars bound so far. *)
 let bind env e =
-  let e = T.subst_expr (List.map (fun (n, v) -> (n, T.Ref (T.I, v))) env) e in
   supported e;
+  let e = T.subst_expr (List.map (fun (n, v) -> (n, T.Ref (T.I, v))) env) e in
   List.iter
     (fun r ->
       if not (List.exists (fun (_, v) -> String.equal v r) env) then

@@ -229,7 +229,8 @@ module Plan : sig
 
   val v : 'r Wire.Codec.t -> t
   (** [v c] is the plan of [c]. Raises [Invalid_argument] with the reason for a
-      codec {!scanner} refuses. *)
+      codec whose shape {!scanner} refuses; the names a backend spells its
+      outputs with are its own to check. *)
 
   val nodes : t -> node list
   (** [nodes t] is the nodes of [t], in the order the codec checks them. *)

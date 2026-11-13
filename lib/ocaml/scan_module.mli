@@ -5,6 +5,11 @@
 
 open Planner
 
+val codec_plan : 'a Wire.Codec.t -> plan
+(** [codec_plan c] is the plan of [c], with no check of the OCaml names its
+    outputs take. Raises {!Planner.Unsupported} on a shape the generator does
+    not handle. *)
+
 val scan_plan : 'a Wire.Codec.t -> plan
 (** [scan_plan c] is the plan a scanner of [c] follows. Raises
     {!Planner.Unsupported} on a shape the generator does not handle. *)

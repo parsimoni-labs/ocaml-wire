@@ -6,10 +6,13 @@ open Record_module
 
 (* {1 The scan module} *)
 
-let scan_plan c =
+let codec_plan c =
   if Sys.int_size < 63 then
     fail_unsupported "a generator running with ints of fewer than 63 bits";
-  let plan = plan_of (Gen.to_struct c) in
+  plan_of (Gen.to_struct c)
+
+let scan_plan c =
+  let plan = codec_plan c in
   (match
      Names.clash
        (("ok", "ok")

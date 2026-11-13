@@ -10,13 +10,14 @@
     The module has [SIZE], the record's size; [DIGEST], {!digest} of the codec,
     for a build to check the code against the codec it comes from; a [Record]
     struct of the field values; [validate buf off] and [decode buf off], which
-    check the record as {!Wire.Codec.validate} does; [write buf off v1 ... vn]
-    and [encode r buf off], which refuse a value that does not fit its field
-    before writing and a record that breaks its constraints after; [get_<field>]
-    and [set_<field>], which read and write one field from its bytes alone, as
-    {!Wire.Codec.get} and {!Wire.Codec.set} do; and for a bitfield,
-    [get_<field>_word] and [<field>_of_word], so the fields packed in one word
-    share one load.
+    check the record as {!Wire.Codec.validate} does, with the checks, their
+    order and their arithmetic taken from {!Wire_ocaml.Plan}, as {!scanner}'s
+    are; [write buf off v1 ... vn] and [encode r buf off], which refuse a value
+    that does not fit its field before writing and a record that breaks its
+    constraints after; [get_<field>] and [set_<field>], which read and write one
+    field from its bytes alone, as {!Wire.Codec.get} and {!Wire.Codec.set} do;
+    and for a bitfield, [get_<field>_word] and [<field>_of_word], so the fields
+    packed in one word share one load.
 
     [Valid::at(buf, off)] checks the record and returns a view whose [<field>()]
     reads index a [&[u8; SIZE]] at constant offsets: the compiler proves each in
