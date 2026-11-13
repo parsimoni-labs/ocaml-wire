@@ -3,7 +3,8 @@
 The packet traversal is `Packet_stack.codec` in `examples/net`. The
 `fused stack` and `selected outputs` rows run the scanner
 `Wire_ocaml.scanner` writes from this codec, for the OCaml target on OCaml
-and for the OxCaml target on OxCaml; `Wire.Codec stack decode` decodes the
+and for the OxCaml target on OxCaml, and the scanner `Wire_rust.scanner`
+writes from the same plan; `Wire.Codec stack decode` decodes the
 same codec. The `linked headers` rows, OCaml and generated Rust, read the
 fixed header codecs of `headers.ml` and link the layers in the harness. The
 Rust crate rows traverse the same layers. Every row computes the same
@@ -50,6 +51,8 @@ Best CPU ns/packet:
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |
 | wire.rust, linked headers | 6.60 | 5.52 | 7.78 | 3.87 |
+| wire.rust selected outputs | 6.79 | 5.68 | 7.06 | 4.03 |
+| wire.rust fused stack | 7.23 | 6.53 | 7.80 | 4.31 |
 | OxCaml selected outputs, unboxed batch | 7.90 | 9.02 | 11.74 | 4.88 |
 | OxCaml fused stack, unboxed batch | 8.15 | 8.93 | 11.70 | 4.82 |
 | smoltcp 0.14 | 8.54 | 6.93 | 8.94 | 4.68 |

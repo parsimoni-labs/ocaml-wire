@@ -9,8 +9,10 @@
    stride, which the harness passes as a literal so it stays a constant after
    inlining.
 
-   With [--rust DIR], the Wire_rust modules of the fixed header codecs,
-   eth.rs, ipv4.rs, tcp.rs and udp.rs, in [DIR]. *)
+   With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
+   codecs, eth.rs, ipv4.rs, tcp.rs and udp.rs; the scanner Wire_rust writes
+   from [Packet_stack.codec], stack.rs; and the same scanner handing out only
+   the fields the checksum reads, stack_selected.rs. *)
 
 let write file s =
   let oc = open_out_bin file in
@@ -198,6 +200,13 @@ let () =
                 (Wire_ocaml.ml ~target ~codec:("Headers." ^ name) c));
         }
   | [ _; "--rust"; dir ] ->
+      let codec = "Packet_stack.codec" in
+      write
+        (Filename.concat dir "stack.rs")
+        (Wire_rust.scanner ~codec Packet_stack.codec);
+      write
+        (Filename.concat dir "stack_selected.rs")
+        (Wire_rust.scanner ~fields:checksum_fields ~codec Packet_stack.codec);
       headers
         {
           g =
