@@ -212,125 +212,6 @@ let map_field_action schema_name idx byte_off (Types.Field f) =
   in
   (result, next_off)
 
-(* Conjoin a list of constraint expressions, skipping [None]s. *)
-let conjoin_constraints constraints =
-  List.fold_left
-    (fun acc c ->
-      match (acc, c) with
-      | acc, None -> acc
-      | None, Some c -> Some c
-      | Some a, Some b -> Some (Types.And (a, b)))
-    None constraints
-
-(* Collapse all constraints in a reversed bit group onto the last field,
-   where every referenced field has already been parsed. Backward
-   references to other fields in the group would otherwise break under
-   reversal, because the reversed field is parsed before its referents.
-
-   The combined constraint is semantically equivalent for validation
-   (accept/reject) -- EverParse's per-field constraints are pure boolean
-   predicates, so moving them later in the parse still produces the same
-   overall verdict. Bitfield actions use 3D's [:act] form, which fires
-   regardless of validation outcome, so moving constraints does not
-   affect callback behaviour. *)
-let collapse_constraints_into_last group =
-  let constraints = List.map (fun (Types.Field f) -> f.constraint_) group in
-  let combined = conjoin_constraints constraints in
-  let rec walk = function
-    | [] -> []
-    | [ Types.Field f ] -> [ Types.Field { f with constraint_ = combined } ]
-    | Types.Field f :: rest ->
-        Types.Field { f with constraint_ = None } :: walk rest
-  in
-  walk group
-
-(* Reorder consecutive bitfield groups so every pairing of [bitfield_base] and
-   [bit_order] projects to a valid EverParse 3D struct while keeping the same
-   byte layout. EverParse couples bit order to the base's byte order
-   (LE -> LSB-first, BE -> MSB-first). When the user's [bit_order] differs
-   from that native choice, we reverse the group's declaration order and
-   prepend [total_bits - used_bits] of anonymous padding; in EverParse's
-   native packing this produces the identical bit layout. Fields outside
-   bit groups are left untouched. Extern-call indices embedded in actions
-   are stamped before reordering, so WireSet callbacks still write into the
-   original (wire-declaration) slots -- the stub generator never sees the
-   reordered struct. *)
-(* Extract bitfield info through any number of [Map]/[Enum]/[Where] wrappers.
-   [bit (bits ~width:1 U8)] is [Map { inner = Bits _ }] at the outer level;
-   without unwrapping, grouping logic would treat it as a non-bitfield and
-   break apart consecutive bit groups, producing wrong .3d layouts. *)
-let rec unwrap_bits : type a.
-    a Types.typ -> (Types.bitfield_base * Types.bit_order * int) option =
-  function
-  | Types.Bits { base; bit_order; width } -> Some (base, bit_order, width)
-  | Types.Map { inner; _ } -> unwrap_bits inner
-  | Types.Enum { base; _ } -> unwrap_bits base
-  | Types.Where { inner; _ } -> unwrap_bits inner
-  | _ -> None
-
-let is_same_bit_group base bit_order (Types.Field f) =
-  match unwrap_bits f.field_typ with
-  | Some (b2, bo2, _) ->
-      Bitfield.equal b2 base && Types.equal_bit_order bo2 bit_order
-  | None -> false
-
-let bit_width (Types.Field f) =
-  match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
-
-(* Greedy: collect consecutive Bits with the same (base, bit_order)
-   that still fit in one base word. *)
-let collect_bit_group base bit_order total f0 rest =
-  let rec collect used group = function
-    | f :: rest' when is_same_bit_group base bit_order f ->
-        let w = bit_width f in
-        if used + w <= total then collect (used + w) (f :: group) rest'
-        else (used, List.rev group, f :: rest')
-    | rest' -> (used, List.rev group, rest')
-  in
-  collect (bit_width f0) [ f0 ] rest
-
-let pad_reversed_group total used base native reversed =
-  let padding = total - used in
-  if padding > 0 then
-    let pad_typ = Types.Bits { width = padding; base; bit_order = native } in
-    Types.Field
-      {
-        field_name = None;
-        field_typ = pad_typ;
-        constraint_ = None;
-        action = None;
-        field_doc = None;
-      }
-    :: reversed
-  else reversed
-
-let reorder_bit_group base bit_order f0 rest =
-  let total = Bitfield.total_bits base in
-  let native = Bitfield.native_bit_order base in
-  let used, group, rest' = collect_bit_group base bit_order total f0 rest in
-  let emitted =
-    if Types.equal_bit_order bit_order native then group
-    else
-      (* Backward references in reversed order would break: fields now
-         come before the values their constraints read. Collapse all
-         constraints onto the last reversed field. *)
-      let reversed = collapse_constraints_into_last (List.rev group) in
-      pad_reversed_group total used base native reversed
-  in
-  (emitted, rest')
-
-let reorder_bit_groups_for_3d fields =
-  let rec go acc = function
-    | [] -> List.rev acc
-    | (Types.Field f as f0) :: rest -> (
-        match unwrap_bits f.field_typ with
-        | Some (base, bit_order, _) ->
-            let emitted, rest' = reorder_bit_group base bit_order f0 rest in
-            go (List.rev_append emitted acc) rest'
-        | None -> go (f0 :: acc) rest)
-  in
-  go [] fields
-
 let bytes_setter schema_name : setter_info =
   {
     name = schema_name ^ "SetBytes";
@@ -389,19 +270,21 @@ let refined_byte_typedefs (s : Types.struct_) : Types.decl list =
     | _ -> None
   in
   let synth_of (Types.Field f) = synth_of_typ f.field_typ in
-  (* Equal index bounds share one synthesised typedef, so emit each name once. *)
+  (* Equal index bounds share one synthesised typedef, so emit each name once;
+     two different conditions under one name are refused. *)
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun field ->
       match synth_of field with
       | Some (elt_var, cond) ->
           let synth = Types.synth_name_of_elt_var elt_var in
-          if Hashtbl.mem seen synth then None
-          else begin
-            Hashtbl.add seen synth ();
+          if
+            Types.claim_name seen ~kind:"refined bytes" synth
+              (Fmt.str "%a" Types.pp_expr cond)
+          then
             let elt_field = Types.field elt_var ~constraint_:cond Types.uint8 in
             Some (Types.typedef (Types.struct_ synth [ elt_field ]))
-          end
+          else None
       | None -> None)
     s.fields
 
@@ -425,8 +308,9 @@ let ffi_decls (s : Types.struct_) : Types.decl list =
   (* Extern setter functions *)
   let u32 = Types.Uint32 Types.Little in
   (* Count named fields to assign indices in the ORIGINAL declaration order.
-     The idx baked into each Extern_call is preserved through the reorder
-     below, so WireSet callbacks still populate the original field slot. *)
+     The idx baked into each Extern_call is preserved through the bit-group
+     reorder the 3D printer applies ([Types.pp_struct]), so WireSet callbacks
+     still populate the original field slot. *)
   let idx = ref 0 in
   let parse_fields =
     let off = ref (Some 0) in
@@ -437,7 +321,6 @@ let ffi_decls (s : Types.struct_) : Types.decl list =
         f')
       s.fields
   in
-  let parse_fields = reorder_bit_groups_for_3d parse_fields in
   let parse_struct =
     Types.param_struct s.name (s.params @ [ ctx_param ]) ?where:s.where
       parse_fields
@@ -456,9 +339,8 @@ let ffi_decls (s : Types.struct_) : Types.decl list =
    no FFI. *)
 let standalone_decls ?doc (s : Types.struct_) : Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
-  let parse_fields = reorder_bit_groups_for_3d s.fields in
   let parse_struct =
-    Types.param_struct s.name s.params ?where:s.where parse_fields
+    Types.param_struct s.name s.params ?where:s.where s.fields
   in
   refined_byte_typedefs s @ [ Types.typedef ?doc ~entrypoint:true parse_struct ]
 
@@ -477,7 +359,7 @@ let coalesced_wire_size fields =
     let total, open_base, _, _ =
       List.fold_left
         (fun (total, open_base, bits_used, bit_order) (Types.Field f) ->
-          match unwrap_bits f.field_typ with
+          match Types.unwrap_bits f.field_typ with
           | Some (base, order, width) -> (
               match open_base with
               | Some b
@@ -616,6 +498,8 @@ let plug_field (s : t) idx (Types.Field f) =
           setter = setter.name;
           val_c_type = Types.c_type_of val_typ;
         }
+
+let plug_member name = Names.escape Names.c_keywords name
 
 let plug_fields s =
   match s.source with

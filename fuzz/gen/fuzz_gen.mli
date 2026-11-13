@@ -345,13 +345,15 @@ val bit : int t -> bool t
 val uint_var : endian:Wire.endian -> int -> Optint.Int63.t t
 (** [uint_var ~endian size] generates for [Wire.uint ~endian size]. *)
 
-val optional : ?present:bool -> 'a t -> 'a option t
+val optional : ?name:string -> ?present:bool -> 'a t -> 'a option t
 (** [optional ~present inner] generates for a [Field.optional]-wrapped record
-    with a static [~present] gate. *)
+    with a static [~present] gate. [name] is the record's name, ["_opt"] by
+    default; two different records embedded in one codec need two names. *)
 
-val optional_or : ?present:bool -> default:'a -> 'a t -> 'a t
+val optional_or : ?name:string -> ?present:bool -> default:'a -> 'a t -> 'a t
 (** [optional_or ~present ~default inner] generates for a
-    [Field.optional_or]-wrapped record with a static [~present] gate. *)
+    [Field.optional_or]-wrapped record with a static [~present] gate. [name] is
+    as for {!optional}, ["_opt_or"] by default. *)
 
 val repeat : ?name:string -> bytes:int -> 'a t -> 'a list t
 (** [repeat ~bytes inner] generates for a [Field.repeat] whose byte-budget is

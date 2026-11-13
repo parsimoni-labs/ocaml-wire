@@ -14,6 +14,11 @@ val pp_typ : Format.formatter -> 'a typ -> unit
 val pp_action : Format.formatter -> action -> unit
 (** Pretty-print an action block. *)
 
+val unwrap_bits : 'a typ -> (bitfield_base * bit_order * int) option
+(** [unwrap_bits t] is the base, bit order and width of the bitfield [t] is,
+    through any {!Dsl.val-map}, {!Dsl.val-enum} or [where]; [None] for any other
+    [t]. *)
+
 val pp_module : Format.formatter -> module_ -> unit
 (** Pretty-print a module as 3D source. *)
 

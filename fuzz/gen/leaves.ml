@@ -704,15 +704,13 @@ let uint_var7_big_edges =
         bytes_of_octets [ 0x7F; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ] );
     ]
 
-let optional ?(present = true) inner =
+let optional ?(name = "_opt") ?(present = true) inner =
   let f =
     Wire.Field.optional
       ~present:(if present then Wire.Expr.true_ else Wire.Expr.false_)
       "v" inner.typ
   in
-  let codec =
-    Wire.Codec.v "_opt" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
-  in
+  let codec = Wire.Codec.v name (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ] in
   let typ = Wire.codec codec in
   let wrap = if present then fun v -> Some v else fun _ -> None in
   let positive =
@@ -732,15 +730,13 @@ let optional ?(present = true) inner =
     adversarial_value = None;
   }
 
-let optional_or ?(present = true) ~default inner =
+let optional_or ?(name = "_opt_or") ?(present = true) ~default inner =
   let f =
     Wire.Field.optional_or
       ~present:(if present then Wire.Expr.true_ else Wire.Expr.false_)
       ~default "v" inner.typ
   in
-  let codec =
-    Wire.Codec.v "_opt_or" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
-  in
+  let codec = Wire.Codec.v name (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ] in
   let typ = Wire.codec codec in
   let positive =
     Alcobar.map
@@ -778,11 +774,15 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
     (* The length prefix is the actual encoded items length, not the budget:
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
-    let items_bytes xs =
-      Wire.UInt16.v
-        (List.fold_left
-           (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
-           0 xs)
+    let items_bytes =
+      match Wire.Codec.wire_size_opt inner.codec with
+      | Some size -> fun xs -> Wire.UInt16.v (size * List.length xs)
+      | None ->
+          fun xs ->
+            Wire.UInt16.v
+              (List.fold_left
+                 (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+                 0 xs)
     in
     Wire.Codec.v name
       (fun _ xs -> xs)
@@ -1076,7 +1076,12 @@ let bounded_u8 ~min ~max =
         Wire.Expr.(r >= Wire.int min && r <= Wire.int max))
   in
   let codec =
-    Wire.Codec.v "_bounded" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
+    (* Named by its range: two ranges are two shapes, and a projection keys
+       its typedefs by name. *)
+    Wire.Codec.v
+      (Fmt.str "_bounded_%d_%d" min max)
+      (fun v -> v)
+      Wire.Codec.[ (f $ fun v -> v) ]
   in
   let typ = Wire.codec codec in
   let value_gen =
@@ -1131,7 +1136,10 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
         Wire.Expr.(r >= Wire.int min && r <= Wire.int max))
   in
   let codec =
-    Wire.Codec.v "_bounded_int" (fun v -> v) Wire.Codec.[ (f $ fun v -> v) ]
+    Wire.Codec.v
+      (Fmt.str "_bounded_int%d_%d_%d" size min max)
+      (fun v -> v)
+      Wire.Codec.[ (f $ fun v -> v) ]
   in
   let value_gen =
     Alcobar.map Alcobar.[ Alcobar.range ~min (max - min + 1) ] of_int

@@ -4,13 +4,7 @@ open Types
 
 let byte_size = function U8 -> 1 | U16 _ -> 2 | U32 _ -> 4
 let total_bits = function U8 -> 8 | U16 _ -> 16 | U32 _ -> 32
-
-let equal a b =
-  match (a, b) with
-  | U8, U8 -> true
-  | U16 e1, U16 e2 -> Types.equal_endian e1 e2
-  | U32 e1, U32 e2 -> Types.equal_endian e1 e2
-  | _ -> false
+let equal = Types.equal_bitfield_base
 
 (* The word helpers below reach their bytes with [Bytes.unsafe_get] and write a
    u32 as two halves, so a caller whose offset is not already known to be in
@@ -133,11 +127,7 @@ let write_word base buf off v =
   | U32 Little -> set_u32_le buf off v
   | U32 Big -> set_u32_be buf off v
 
-(** EverParse's native bit order for a base: LE bases default to LSB-first (MSVC
-    C bit-field packing), BE bases to MSB-first (network byte order). *)
-let native_bit_order = function
-  | U8 | U16 Little | U32 Little -> Lsb_first
-  | U16 Big | U32 Big -> Msb_first
+let native_bit_order = Types.native_bit_order
 
 let[@inline] shift ~bit_order ~total ~bits_used ~width =
   match bit_order with

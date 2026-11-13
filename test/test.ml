@@ -22,6 +22,8 @@ let () =
       Test_codec_alloc.suite;
       Test_everparse.suite;
       Test_everparse_doc.suite;
+      Test_everparse_bitorder.suite;
+      Test_everparse_names.suite;
       Test_param.suite;
       Test_ascii.suite;
       Test_staged.suite;
@@ -41,4 +43,5 @@ let () =
       Test_field.suite;
       Test_uint_var.suite;
       Test_shape.suite;
+      Test_names.suite;
     ]

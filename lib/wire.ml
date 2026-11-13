@@ -1146,6 +1146,7 @@ module Private = struct
   module Bitfield = Bitfield
   module Uint_var = Uint_var
   module Shape = Shape
+  module Names = Names
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

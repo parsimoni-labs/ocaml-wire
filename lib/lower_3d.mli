@@ -9,6 +9,14 @@
 
 open Dsl
 
+val claim_name :
+  (string, string) Hashtbl.t -> kind:string -> string -> string -> bool
+(** [claim_name seen ~kind name shape] records that a declaration of [shape] is
+    emitted under [name]: [true] the first time, [false] when the same [shape]
+    claims [name] again. Raises [Invalid_argument] when a different [shape]
+    does, since every 3D reference to [name] would resolve to the first. [kind]
+    names the declarations in the message. *)
+
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!Dsl.constructor-Casetype}
     field of [s] whose tag is not an int-shaped typ into two adjacent byte

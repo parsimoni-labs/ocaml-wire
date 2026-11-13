@@ -132,6 +132,16 @@ open Wire.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
+(* The 3D printer wraps a long parameter or argument list over several lines, so
+   an assertion that spans one compares against a whitespace-flattened copy. *)
+let flatten s = Re.replace_string (Re.compile (Re.rep1 Re.space)) ~by:" " s
+
+(* Return the byte offset of the first occurrence of [sub] in [s], or -1 if not
+   found. Used to assert relative declaration and field ordering. *)
+let index_of ~sub s =
+  let re = Re.compile (Re.str sub) in
+  match Re.exec_opt re s with Some g -> Re.Group.start g 0 | None -> -1
+
 (* Project a codec to its 3D rendering for substring assertions. *)
 let render_3d codec =
   to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])

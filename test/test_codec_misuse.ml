@@ -579,6 +579,83 @@ let test_repeat_bounded_element_roundtrips () =
     "two bounded elements round-trip" true
     (List.equal elem_equal ys xs)
 
+(* A size the header decides can come out negative or run past the buffer, in
+   a [byte_array], a [uint_var] or a [nested] region, with or without a field
+   after it: [validate] refuses what [decode] refuses. *)
+let test_validate_data_sized_fields () =
+  let agree what c bytes =
+    let buf = Bytes.of_string bytes in
+    let decoded =
+      match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+    in
+    let validated =
+      match Codec.validate c buf 0 with
+      | () -> "ok"
+      | exception Parse_error _ -> "refused"
+    in
+    Alcotest.(check string) (what ^ ": decode") "refused" decoded;
+    Alcotest.(check string) (what ^ ": validate") decoded validated
+  in
+  let n = Field.v "n" uint8 in
+  let sized what typ =
+    let alone =
+      Codec.v (what ^ "Alone")
+        (fun n v -> (n, v))
+        Codec.[ n $ fst; Field.v "v" typ $ snd ]
+    in
+    let followed =
+      Codec.v (what ^ "Followed")
+        (fun n v t -> (n, v, t))
+        Codec.
+          [
+            (n $ fun (n, _, _) -> n);
+            (Field.v "v" typ $ fun (_, v, _) -> v);
+            (Field.v "t" uint8 $ fun (_, _, t) -> t);
+          ]
+    in
+    let rest =
+      Codec.v (what ^ "Rest")
+        (fun n v r -> (n, v, r))
+        Codec.
+          [
+            (n $ fun (n, _, _) -> n);
+            (Field.v "v" typ $ fun (_, v, _) -> v);
+            (Field.v "r" all_bytes $ fun (_, _, r) -> r);
+          ]
+    in
+    (alone, followed, rest)
+  in
+  let check what typ =
+    let alone, followed, rest = sized what typ in
+    (* [n] is 1, so [n - 4] is negative *)
+    agree (what ^ " negative") alone "\x01\x00\x00\x00\x00\x00\x00\x00";
+    agree
+      (what ^ " negative, then a field")
+      followed "\x01\x00\x00\x00\x00\x00\x00\x00";
+    (* [n] is 40, so [n - 4] runs past the 8-byte buffer *)
+    agree (what ^ " past the end") alone "\x28\x00\x00\x00\x00\x00\x00\x00";
+    agree
+      (what ^ " past the end, then a field")
+      followed "\x28\x00\x00\x00\x00\x00\x00\x00";
+    agree
+      (what ^ " negative, then the rest")
+      rest "\x01\x00\x00\x00\x00\x00\x00\x00";
+    agree
+      (what ^ " past the end, then the rest")
+      rest "\x28\x00\x00\x00\x00\x00\x00\x00"
+  in
+  let size = Expr.(Field.ref n - int 4) in
+  check "ByteArray" (byte_array ~size);
+  check "UintVar" (uint_var size);
+  check "Nested" (nested ~size uint8);
+  (* an empty region cannot hold a 2-byte value *)
+  let alone, followed, rest =
+    sized "NestedEmpty" (nested ~size:(int 0) uint16be)
+  in
+  agree "nested empty" alone "\x00\x01\x02";
+  agree "nested empty, then a field" followed "\x00\x01\x02\x03";
+  agree "nested empty, then the rest" rest "\x00\x01\x02\x03"
+
 let suite =
   ( "codec_misuse",
     [
@@ -621,4 +698,6 @@ let suite =
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick
         test_repeat_bounded_element_roundtrips;
+      Alcotest.test_case "validate: data-sized fields agree with decode" `Quick
+        test_validate_data_sized_fields;
     ] )

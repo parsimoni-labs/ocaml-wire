@@ -55,8 +55,9 @@ let c_ident (s : t) = everparse_name s.name
 
 (* Both mangles are many-to-one, so two codecs with different names can land
    on one generated artifact and overwrite each other in silence. [file_base]
-   collides whenever the names differ only in the leading capital ([header]
-   and [Header] both write [Header.3d], and the second write wins: the
+   collides whenever the names differ only in case, since macOS and Windows
+   fold it in file names ([header] and [Header] both write [Header.3d],
+   [FooBar] and [Foobar] one file there, and the second write wins: the
    verified C, the plug and the provenance stamp then describe one codec while
    the OCaml side still parses with both, so the shadowed codec's FFI stubs
    validate against the other codec's spec). [c_ident] collides more widely,
@@ -70,21 +71,21 @@ let c_ident (s : t) = everparse_name s.name
    wrapper symbols too, so two codecs that would share one ([TPM2B] and
    [Tpm2b]) are refused here as well. *)
 let check_name_collisions schemas =
-  let check what key =
+  let check what ?(fold = Fun.id) key =
     let seen = Hashtbl.create 16 in
     List.iter
       (fun (s : t) ->
         let k = key s in
-        match Hashtbl.find_opt seen k with
+        match Hashtbl.find_opt seen (fold k) with
         | Some first ->
             Fmt.invalid_arg
               "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
                them"
               first s.name what k
-        | None -> Hashtbl.add seen k s.name)
+        | None -> Hashtbl.add seen (fold k) s.name)
       schemas
   in
-  check "the file" (fun s -> file_base s ^ ".3d");
+  check "the file" ~fold:String.lowercase_ascii (fun s -> file_base s ^ ".3d");
   check "the C identifier" c_ident
 
 let extern_api_path ~outdir s =
@@ -379,6 +380,41 @@ let write_external_typedefs ~outdir schemas =
       end)
     schemas
 
+let plug_prefix s =
+  String.uppercase_ascii (c_ident s) |> fun p ->
+  String.map (fun c -> if c = '-' then '_' else c) p
+
+let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
+
+(* The plug names each field twice in C: the [_IDX_] macro upper-cases the
+   name, so [X] and [x] would define one macro twice, and the struct member
+   escapes C's keywords, so [restrict] and [restrict_] would be one member.
+   Refuse naming both fields before writing either file. *)
+let check_plug_names s =
+  let fields = Wire.Everparse.plug_fields s in
+  List.iter
+    (fun (f : Wire.Everparse.plug_field) ->
+      if not (Wire.Private.Names.is_identifier f.name) then
+        Fmt.invalid_arg
+          "Wire_3d: in %S, field %S is not an identifier \
+           ([A-Za-z_][A-Za-z0-9_]*) and cannot name a plug member; rename it"
+          s.name f.name)
+    fields;
+  let check what ident =
+    match
+      Wire.Private.Names.clash
+        (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)
+    with
+    | None -> ()
+    | Some (a, b, id) ->
+        Fmt.invalid_arg
+          "Wire_3d: in %S, fields %S and %S both define the plug's %s %S; \
+           rename one of them"
+          s.name a b what id
+  in
+  check "macro" (index_macro s);
+  check "struct member" Wire.Everparse.plug_member
+
 (* Typed-struct plug: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
@@ -393,27 +429,24 @@ let write_fields_header ~outdir s =
     String.uppercase_ascii ident ^ "_FIELDS_H" |> fun g ->
     String.map (fun c -> if c = '-' then '_' else c) g
   in
-  let prefix =
-    String.uppercase_ascii ident |> fun p ->
-    String.map (fun c -> if c = '-' then '_' else c) p
-  in
   pr "#ifndef %s@\n" guard;
   pr "#define %s@\n" guard;
   pr "#include <stdint.h>@\n@\n";
   pr "/* Field indices -- use with the schema's WireSet* callbacks in a@\n";
   pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
   List.iter
-    (fun f ->
-      pr "#define %s_IDX_%s %d@\n" prefix
-        (String.uppercase_ascii f.Wire.Everparse.name)
-        f.idx)
+    (fun f -> pr "#define %s %d@\n" (index_macro s f.Wire.Everparse.name) f.idx)
     fields;
   if fields <> [] then pr "@\n";
   pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
     ident;
   pr "typedef struct %sFields {@\n" ident;
-  List.iter (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.c_type f.name) fields;
+  List.iter
+    (fun f ->
+      pr "  %s %s;@\n" f.Wire.Everparse.c_type
+        (Wire.Everparse.plug_member f.name))
+    fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
   pr "#endif@\n";
@@ -426,14 +459,15 @@ let write_fields_header ~outdir s =
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
+    let member = Wire.Everparse.plug_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
           "    case %d: { %s _x; memcpy(&_x, &v, sizeof _x); f->%s = _x; \
            break; }@\n"
-          f.idx f.c_type f.name
+          f.idx f.c_type member
     | _ ->
-        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx f.name
+        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
 let write_fields_impl ~outdir s =
@@ -485,6 +519,7 @@ let write_fields_impl ~outdir s =
 
 let write_fields ~outdir schemas =
   check_name_collisions schemas;
+  List.iter check_plug_names schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -1010,11 +1045,15 @@ let standalone_base ?name ~package () =
    program that runs the validator on each and fails on any disagreement. -- *)
 
 let hex_of_bytes b =
-  let buf = Buffer.create (Bytes.length b * 2) in
-  let ppf = Fmt.with_buffer buf in
-  Bytes.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) b;
-  Format.pp_print_flush ppf ();
-  Buffer.contents buf
+  let digits = "0123456789abcdef" in
+  let out = Bytes.create (Bytes.length b * 2) in
+  Bytes.iteri
+    (fun i c ->
+      let n = Char.code c in
+      Bytes.set out (2 * i) digits.[n lsr 4];
+      Bytes.set out ((2 * i) + 1) digits.[n land 0xf])
+    b;
+  Bytes.unsafe_to_string out
 
 (* The accept/reject decision the validator must reproduce, and -- on rejection
    -- what the codec objected to, which makes an input repairable. The record

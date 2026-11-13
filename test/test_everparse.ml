@@ -4,16 +4,6 @@ open Wire
 open Wire.Everparse.Raw
 open Test_helpers
 
-(* The 3D printer wraps a long parameter or argument list over several lines, so
-   an assertion that spans one compares against a whitespace-flattened copy. *)
-let flatten s = Re.replace_string (Re.compile (Re.rep1 Re.space)) ~by:" " s
-
-(* Return the byte offset of the first occurrence of [sub] in [s], or -1 if not
-   found. Used to assert relative declaration and field ordering. *)
-let index_of ~sub s =
-  let re = Re.compile (Re.str sub) in
-  match Re.exec_opt re s with Some g -> Re.Group.start g 0 | None -> -1
-
 let test_bitfields () =
   let f_y = field "y" (bits ~width:10 U32) in
   let f_z = field "z" (bits ~width:16 U32) in
@@ -404,45 +394,6 @@ let test_formal_and_label_positions () =
     false
     (contains ~sub:"case BA:" (doc bits_tag))
 
-(* Two declarations under one name are two types with one name, and every
-   reference resolves to whichever was reached first: two same-named sub-codecs
-   of different widths gave a validator reading a different number of bytes than
-   the codec, with no error anywhere. [Everparse.write] refuses this across
-   schemas; within one schema nothing did. *)
-let test_duplicate_declaration_names_rejected () =
-  let two name a b =
-    Codec.v name
-      (fun x y -> (x, y))
-      Codec.[ Field.v "x" a $ fst; Field.v "y" b $ snd ]
-  in
-  let refuses what c =
-    match
-      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
-    with
-    | _ -> Alcotest.failf "%s: expected the collision to be refused" what
-    | exception Invalid_argument msg ->
-        Alcotest.(check bool)
-          (what ^ ": names the colliding declaration")
-          true
-          (contains ~sub:"named" msg)
-  in
-  refuses "sub-codecs"
-    (two "Clash"
-       (codec (two "Dk" uint8 uint8))
-       (codec (two "Dk" uint16 uint16)));
-  refuses "enums"
-    (Codec.v "EClash"
-       (fun x y -> (x, y))
-       Codec.
-         [
-           Field.v "x" (enum "Dup" [ ("A", 1) ] uint8) $ fst;
-           Field.v "y" (enum "Dup" [ ("B", 9) ] uint8) $ snd;
-         ])
-
-(* A case body was rendered through the type suffix alone, never through the
-   refinement machinery a field of the same type goes through, so a closed
-   enum's membership and a lookup's index bound vanished from the generated
-   validator while the codec kept enforcing them. *)
 let test_casetype_case_bodies_keep_refinements () =
   let c =
     Codec.v "CaseRef"
@@ -1248,113 +1199,6 @@ let test_3d_tm_like () =
     "Packet type referenced" true
     (contains ~sub:"Packet" output)
 
-(* -- Bit-order projection tests --
-
-   Non-native (base, bit_order) combinations should still emit a valid 3D
-   struct by reversing declaration order within the bit group and, if the
-   widths don't fill the word, prepending anonymous padding. These tests
-   lock in that the reorder actually happens in the emitted 3D text. *)
-
-let test_3d_bitorder_u8msb_reorder () =
-  (* Non-native: (U8, Msb_first). EverParse native for UINT8 is LSB-first,
-     so the projection reverses [a; b] to [b; a] in the emitted 3D text.
-     Widths sum to 8 -> no padding. *)
-  let codec =
-    let open Codec in
-    v "ReorderU8"
-      (fun a b -> (a, b))
-      [
-        Field.v "a" (bits ~width:3 U8) $ fst;
-        Field.v "b" (bits ~width:5 U8) $ snd;
-      ]
-  in
-  let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  let ia = index_of ~sub:"UINT8 a" s in
-  let ib = index_of ~sub:"UINT8 b" s in
-  Alcotest.(check bool) "a found" true (ia >= 0);
-  Alcotest.(check bool) "b found" true (ib >= 0);
-  Alcotest.(check bool) "reordered: b before a" true (ib < ia)
-
-let test_3d_bitorder_u8msb_padding () =
-  (* Non-native and incomplete: two 3-bit fields in (U8, Msb_first).
-     Reversal alone would place the 6 bits at LSB-first positions 0..5;
-     the projection prepends 2 bits of anonymous padding so the user's
-     fields land at bits 2..7 (matching their Msb_first intent). *)
-  let codec =
-    let open Codec in
-    v "ReorderU8Pad"
-      (fun a b -> (a, b))
-      [
-        Field.v "a" (bits ~width:3 U8) $ fst;
-        Field.v "b" (bits ~width:3 U8) $ snd;
-      ]
-  in
-  let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  Alcotest.(check bool)
-    "has anonymous padding field" true
-    (contains ~sub:"UINT8 _anon_" s);
-  Alcotest.(check bool) "padding width = 2" true (contains ~sub:": 2" s)
-
-let test_3d_bitorder_constraint_collapse () =
-  (* Non-native: (U8, Msb_first) with a backward-reference constraint.
-     Original order [a {a<=5}; b {a+b<=10}]. After reversal to [b; a],
-     a constraint [a+b<=10] attached to b would fire before [a] was
-     parsed. The projection therefore collapses all group constraints
-     onto the last reversed field (here [a]), where every referent is
-     available. *)
-  let f_a_placeholder = Field.v "a" (bits ~width:4 U8) in
-  let f_b_placeholder = Field.v "b" (bits ~width:4 U8) in
-  let f_a =
-    Field.v "a"
-      ~constraint_:Expr.(Field.ref f_a_placeholder <= int 5)
-      (bits ~width:4 U8)
-  in
-  let f_b =
-    Field.v "b"
-      ~constraint_:
-        Expr.(Field.ref f_a_placeholder + Field.ref f_b_placeholder <= int 10)
-      (bits ~width:4 U8)
-  in
-  let codec =
-    let open Codec in
-    v "Ranged" (fun a b -> (a, b)) [ f_a $ fst; f_b $ snd ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  (* b appears first in 3D (reversed), without a constraint block. *)
-  let ia = index_of ~sub:"UINT8 a : 4" s in
-  let ib = index_of ~sub:"UINT8 b : 4" s in
-  Alcotest.(check bool) "b before a" true (ib < ia);
-  (* The combined constraint lands on [a] (last in reversed order),
-     including both the original [a <= 5] and [a + b <= 10]. *)
-  Alcotest.(check bool)
-    "a still referenced in combined constraint" true (contains ~sub:"a <= 5" s);
-  Alcotest.(check bool)
-    "b still referenced in combined constraint" true
-    (contains ~sub:"(a + b) <= 10" s)
-
-let test_3d_bitorder_native_noreorder () =
-  (* Native: (U32be, Msb_first). Fields stay in declared order, no padding. *)
-  let codec =
-    let open Codec in
-    v "NativeU32Be"
-      (fun a b -> (a, b))
-      [
-        Field.v "x" (bits ~width:4 U32be) $ fst;
-        Field.v "y" (bits ~width:28 U32be) $ snd;
-      ]
-  in
-  let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  let ix = index_of ~sub:"UINT32BE x" s in
-  let iy = index_of ~sub:"UINT32BE y" s in
-  Alcotest.(check bool) "x found" true (ix >= 0);
-  Alcotest.(check bool) "y found" true (iy >= 0);
-  Alcotest.(check bool) "x before y (no reorder)" true (ix < iy);
-  Alcotest.(check bool) "no padding" false (contains ~sub:"_anon_" s)
-
 (* -- Variable-size schema projection -- *)
 
 type dep_frame = { frame_length : UInt16.t; data : string }
@@ -1527,46 +1371,6 @@ let test_3d_nested_wrapper_per_shape () =
     "each use site passes its own field" true
     (contains ~sub:"(m) b[:byte-size-single-element-array 8]" out)
 
-(* -- Reserved word escaping -- *)
-
-let test_reserved_word_escaping () =
-  let f_type = field "type" uint8 in
-  let f_case = field "case" uint16be in
-  let s =
-    struct_ "Reserved"
-      [ field "type" uint8; field "case" uint16be; field "value" uint32 ]
-  in
-  let m =
-    module_
-      [
-        typedef ~entrypoint:true
-          (param_struct "Reserved"
-             [ param "return" uint8 ]
-             [
-               field "type" uint8;
-               field "case"
-                 ~constraint_:
-                   Expr.(field_ref f_type + field_ref f_case <= int 10)
-                 uint16be;
-             ]);
-      ]
-  in
-  ignore s;
-  let output = to_3d m in
-  Alcotest.(check bool) "type escaped" true (contains ~sub:"UINT8 type_" output);
-  Alcotest.(check bool)
-    "case escaped" true
-    (contains ~sub:"UINT16BE case_" output);
-  Alcotest.(check bool)
-    "return escaped in param" true
-    (contains ~sub:"UINT8 return_" output);
-  Alcotest.(check bool)
-    "type_ in constraint" true
-    (contains ~sub:"type_" output);
-  Alcotest.(check bool)
-    "no bare reserved word as field" false
-    (contains ~sub:"UINT8 type;" output)
-
 let test_3d_byte_array_where () =
   (* Synthesises a refinement struct so 3D can apply the per-byte constraint
      to each element of the byte-size array. *)
@@ -1715,14 +1519,6 @@ let suite =
       Alcotest.test_case "3d: optional absent" `Quick test_3d_optional_absent;
       Alcotest.test_case "3d: repeat" `Quick test_3d_repeat;
       Alcotest.test_case "3d: tm-like" `Quick test_3d_tm_like;
-      Alcotest.test_case "3d: bit_order U8 Msb_first reorder" `Quick
-        test_3d_bitorder_u8msb_reorder;
-      Alcotest.test_case "3d: bit_order U8 Msb_first padding" `Quick
-        test_3d_bitorder_u8msb_padding;
-      Alcotest.test_case "3d: bit_order native no reorder" `Quick
-        test_3d_bitorder_native_noreorder;
-      Alcotest.test_case "3d: bit_order constraint collapse" `Quick
-        test_3d_bitorder_constraint_collapse;
       Alcotest.test_case "3d: dep-size schema" `Quick test_3d_dep_size_schema;
       Alcotest.test_case "3d: dep-size roundtrip" `Quick
         test_3d_dep_size_roundtrip;
@@ -1734,8 +1530,6 @@ let suite =
         test_3d_nested_inner_sized_by_a_field;
       Alcotest.test_case "3d: one nested wrapper per shape" `Quick
         test_3d_nested_wrapper_per_shape;
-      Alcotest.test_case "3d: reserved word escaping" `Quick
-        test_reserved_word_escaping;
       Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
         test_3d_byte_array_where;
       Alcotest.test_case "3d: signed and float setters" `Quick
@@ -1760,8 +1554,6 @@ let suite =
         test_3d_enum_membership_list_elements;
       Alcotest.test_case "3d: formal and label positions" `Quick
         test_formal_and_label_positions;
-      Alcotest.test_case "3d: duplicate declaration names rejected" `Quick
-        test_duplicate_declaration_names_rejected;
       Alcotest.test_case "3d: casetype case bodies keep refinements" `Quick
         test_casetype_case_bodies_keep_refinements;
       Alcotest.test_case "3d: integer casetype tags dispatch" `Quick

@@ -1,7 +1,13 @@
 open Dsl
 open Lower_3d
 
-(* 3D and C reserved words that cannot be used as field/param names. *)
+(* The names a field or parameter cannot take in 3D, in the F* EverParse
+   writes from it, or in the C KaRaMeL writes from that. The 3D parser rejects
+   its own keywords and type names outright; an F* keyword passes 3D but
+   reaches the F* as a binder once a constraint reads the field or a sub-codec
+   types it, and fails there with a syntax error ([end], [in], [of], ...).
+   KaRaMeL renames a C keyword it knows, but not [typeof], which GNU C and C23
+   read as a keyword. Checked against 3d.exe for each name. *)
 module Reserved_3d = Set.Make (String)
 
 let reserved_3d =
@@ -20,7 +26,10 @@ let reserved_3d =
         new new_effect noeq noextract opaque_to_smt open polymonadic_bind \
         polymonadic_subcomp private range_of rec reflectable reifiable reify \
         requires restart_solver returns set_range_of sub_effect synth then tot \
-        total try unfold unopteq val when with")
+        total try unfold unopteq val when with end in of opaque quote \
+        unfoldable aligned all_bytes all_zeros field_pos field_ptr \
+        field_ptr_after is_range_okay pointer probe refining specialize string \
+        UINT8BE typeof")
 
 (* Append a trailing underscore to names that 3D or F* reserves so the
    projection always produces a parseable identifier even when the user
@@ -777,11 +786,165 @@ let pp_params ?(as_enum = false) ppf params =
   if not (List.is_empty params) then
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma (pp_param ~as_enum)) params
 
+(* Conjoin a list of constraint expressions, skipping [None]s. *)
+let conjoin_constraints constraints =
+  List.fold_left
+    (fun acc c ->
+      match (acc, c) with
+      | acc, None -> acc
+      | None, Some c -> Some c
+      | Some a, Some b -> Some (And (a, b)))
+    None constraints
+
+(* Collapse all constraints in a reversed bit group onto the last field,
+   where every referenced field has already been parsed. Backward
+   references to other fields in the group would otherwise break under
+   reversal, because the reversed field is parsed before its referents.
+
+   The combined constraint is semantically equivalent for validation
+   (accept/reject) -- EverParse's per-field constraints are pure boolean
+   predicates, so moving them later in the parse still produces the same
+   overall verdict. Bitfield actions use 3D's [:act] form, which fires
+   regardless of validation outcome, so moving constraints does not
+   affect callback behaviour. *)
+let collapse_constraints_into_last group =
+  let constraints = List.map (fun (Field f) -> f.constraint_) group in
+  let combined = conjoin_constraints constraints in
+  let rec walk = function
+    | [] -> []
+    | [ Field f ] -> [ Field { f with constraint_ = combined } ]
+    | Field f :: rest -> Field { f with constraint_ = None } :: walk rest
+  in
+  walk group
+
+(* Reorder consecutive bitfield groups so every pairing of [bitfield_base] and
+   [bit_order] projects to a valid EverParse 3D struct while keeping the same
+   byte layout. EverParse couples bit order to the base's byte order
+   (LE -> LSB-first, BE -> MSB-first). When the user's [bit_order] differs
+   from that native choice, we reverse the group's declaration order and
+   prepend [total_bits - used_bits] of anonymous padding; in EverParse's
+   native packing this produces the identical bit layout. Fields outside
+   bit groups are left untouched. [pp_struct] applies it to every struct it
+   prints, so a sub-codec, a wrapper or a casetype body gets the same layout
+   as an entrypoint. Extern-call indices embedded in actions are stamped
+   before printing, so WireSet callbacks still write into the original
+   (wire-declaration) slots -- the stub generator never sees the reordered
+   struct. *)
+(* Extract bitfield info through any number of [Map]/[Enum]/[Where] wrappers.
+   [bit (bits ~width:1 U8)] is [Map { inner = Bits _ }] at the outer level;
+   without unwrapping, grouping logic would treat it as a non-bitfield and
+   break apart consecutive bit groups, producing wrong .3d layouts. *)
+let rec unwrap_bits : type a. a typ -> (bitfield_base * bit_order * int) option
+    = function
+  | Bits { base; bit_order; width } -> Some (base, bit_order, width)
+  | Map { inner; _ } -> unwrap_bits inner
+  | Enum { base; _ } -> unwrap_bits base
+  | Where { inner; _ } -> unwrap_bits inner
+  | _ -> None
+
+let is_same_bit_group base bit_order (Field f) =
+  match unwrap_bits f.field_typ with
+  | Some (b2, bo2, _) ->
+      equal_bitfield_base b2 base && equal_bit_order bo2 bit_order
+  | None -> false
+
+let bit_width (Field f) =
+  match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
+
+(* Greedy: collect consecutive Bits with the same (base, bit_order)
+   that still fit in one base word. *)
+let collect_bit_group base bit_order total f0 rest =
+  let rec collect used group = function
+    | f :: rest' when is_same_bit_group base bit_order f ->
+        let w = bit_width f in
+        if used + w <= total then collect (used + w) (f :: group) rest'
+        else (used, List.rev group, f :: rest')
+    | rest' -> (used, List.rev group, rest')
+  in
+  collect (bit_width f0) [ f0 ] rest
+
+let pad_reversed_group total used base native reversed =
+  let padding = total - used in
+  if padding > 0 then
+    let pad_typ = Bits { width = padding; base; bit_order = native } in
+    Field
+      {
+        field_name = None;
+        field_typ = pad_typ;
+        constraint_ = None;
+        action = None;
+        field_doc = None;
+      }
+    :: reversed
+  else reversed
+
+let reorder_bit_group base bit_order f0 rest =
+  let total = bitfield_base_bits base in
+  let native = native_bit_order base in
+  let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  let emitted =
+    if equal_bit_order bit_order native then group
+    else
+      (* Backward references in reversed order would break: fields now
+         come before the values their constraints read. Collapse all
+         constraints onto the last reversed field. *)
+      let reversed = collapse_constraints_into_last (List.rev group) in
+      pad_reversed_group total used base native reversed
+  in
+  (emitted, rest')
+
+let reorder_bit_groups_for_3d fields =
+  let rec go acc = function
+    | [] -> List.rev acc
+    | (Field f as f0) :: rest -> (
+        match unwrap_bits f.field_typ with
+        | Some (base, bit_order, _) ->
+            let emitted, rest' = reorder_bit_group base bit_order f0 rest in
+            go (List.rev_append emitted acc) rest'
+        | None -> go (f0 :: acc) rest)
+  in
+  go [] fields
+
+(* A struct's parameters and fields share one 3D scope, and the escape of a
+   keyword can spell another name in it: [end] and [end_] would both be
+   [end_], and a field [ctx] would shadow the FFI projection's [ctx]
+   parameter, which 3D rejects. Refuse naming both rather than hand 3d.exe a
+   declaration it fails on, or one it reads as another. A name that is not an
+   identifier, [a-b], has no 3D spelling at all. *)
+let check_3d_names (s : struct_) =
+  let params =
+    List.map
+      (fun p -> (Fmt.str "parameter %S" p.param_name, escape_3d p.param_name))
+      s.params
+  in
+  let fields =
+    List.filter_map
+      (fun (Field f) ->
+        Option.map (fun n -> (Fmt.str "field %S" n, escape_3d n)) f.field_name)
+      s.fields
+  in
+  List.iter
+    (fun (what, id) ->
+      if not (Names.is_identifier id) then
+        Fmt.invalid_arg
+          "Everparse: in %S, %s is not an identifier ([A-Za-z_][A-Za-z0-9_]*) \
+           and has no 3D name; rename it"
+          s.name what)
+    (params @ fields);
+  match Names.clash (params @ fields) with
+  | None -> ()
+  | Some (a, b, id) ->
+      Fmt.invalid_arg
+        "Everparse: in %S, %s and %s both project to the 3D name %S" s.name a b
+        id
+
 let pp_struct ppf (s : struct_) =
+  check_3d_names s;
   anon_counter := 0;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
-  let where, fields = lower_where_to_field_constraint s.where s.fields in
+  let fields = reorder_bit_groups_for_3d s.fields in
+  let where, fields = lower_where_to_field_constraint s.where fields in
   let fields = guard_subtraction_sizes fields in
   let widenable =
     List.filter_map
