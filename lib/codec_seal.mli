@@ -121,3 +121,12 @@ val run_plain_pass : pass -> Input_end.t -> bytes -> int -> unit
 (** [run_plain_pass pass input_end buf off] runs the check pass of a codec
     without parameters over the record at [off], whose frame the caller has
     checked. Raises [Parse_error] when a check fails. *)
+
+val encode_too_short : string -> int -> bytes -> int -> 'a
+(** [encode_too_short name n buf off] raises the [Invalid_argument] of encoding
+    codec [name], of [n] bytes, at [off] in a [buf] too short for it, or at a
+    negative [off]. *)
+
+val encode_rejected : string -> Types.parse_error -> 'a
+(** [encode_rejected name e] raises the [Invalid_argument] of an encode of codec
+    [name] whose result fails its own checks with [e]. *)

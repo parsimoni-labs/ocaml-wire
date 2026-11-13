@@ -12,6 +12,13 @@ module Codec = struct
 
   let ( $ ) gen getter = { name = "_"; gen; getter }
 
+  (* Name the first fields, in order; the rest keep [_]. *)
+  let rec with_names : type f r. string list -> (f, r) fields -> (f, r) fields =
+   fun names fields ->
+    match (names, fields) with
+    | n :: names, f :: rest -> { f with name = n } :: with_names names rest
+    | _, fields -> fields
+
   (* Assign each field a unique name by position: the [$] above leaves every
      field [_], which round-trips fine (getters, not names) but projects to
      clashing anonymous declarations in 3D. *)

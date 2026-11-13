@@ -833,7 +833,7 @@ let fill_param_slots tbl param_base handles =
     handles
 
 let min_bounds_error min_size buf off =
-  if off < 0 then Fmt.invalid_arg "Codec: negative offset %d" off;
+  if off < 0 then Errors.negative_offset off;
   raise_eof ~at:off ~expected:min_size
     ~got:(bytes_from (Input_end.of_bytes buf) off)
 
@@ -1335,16 +1335,10 @@ let plain_validate ~layout wire_size_info min_size pass =
         variable_frame ~layout wire_size_info min_size input_end buf off;
         if Option.is_none layout then run_plain_pass pass input_end buf off
 
-let encode_too_short name n buf off =
-  if off < 0 then Fmt.invalid_arg "Codec.encode %s: negative offset %d" name off;
-  Fmt.invalid_arg "Codec.encode %s: buffer too short (need %d, got %d)" name n
-    (Bytes.length buf - off)
+let encode_too_short name size buf off =
+  Errors.encode_too_short ~name ~size ~len:(Bytes.length buf) off
 
-let encode_rejected name e =
-  Fmt.invalid_arg
-    "Codec.encode %s: the encoded record is rejected by its own constraints \
-     (%a)"
-    name Types.pp_parse_error e
+let encode_rejected name e = Errors.encode_rejected ~name e
 
 (* The words the bitfields are or-ed into, zeroed before the writes. *)
 let bitfield_words puts =

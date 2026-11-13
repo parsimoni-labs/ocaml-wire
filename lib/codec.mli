@@ -427,6 +427,51 @@ val blit_slice_exact : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
     from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
     [byte_slice] fields. *)
 
+(**/**)
+
+(** Support for code generated from a codec. *)
+module Gen : sig
+  val to_struct : 'r t -> Types.struct_
+  (** [to_struct t] is the description [t] is built from. *)
+
+  val digest : 'r t -> string
+  (** [digest t] names the shape of [t]: its fields, their types and
+      constraints, every expression in full, and the version of what generated
+      code assumes of it. *)
+
+  val check : 'r t -> string -> unit
+  (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
+
+  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+  (** A use of a field's reader, whatever the field's type. *)
+
+  val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
+  (** [with_field_reader t name k] is [k.k typ reader], where [reader] is the
+      reader {!get} stages for the field [name] of [t] and [typ] its type, or
+      [None] when [t] has no field [name]. *)
+
+  (** {2 Maps} *)
+
+  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+  (** A map's decoder and encoder over its raw wire value. *)
+
+  val map_int : 'a Types.typ -> (int, 'a) map
+  (** [map_int t] is the map [t] over an integer up to 16 bits wide or a
+      bitfield, read as an [int]. Raises [Invalid_argument] for any other [t].
+  *)
+
+  val map_int32 : 'a Types.typ -> (int32, 'a) map
+  (** [map_int32 t] is the map [t] over a 32-bit integer. *)
+
+  val map_id : 'a Types.typ -> int option
+  (** [map_id t] identifies the map [t] among every map built, [None] when [t]
+      is not a map. *)
+
+  val check_map : 'r t -> string -> 'a Types.typ -> unit
+  (** [check_map c name t] raises [Invalid_argument] unless the field [name] of
+      [c] is the very value [t]. *)
+end
+
 (** Test-only views of how a codec is compiled. *)
 module Testing : sig
   val general : 'r t -> 'r t

@@ -201,6 +201,11 @@ val sample : seed:int -> count:int -> (string * packed) list
     same [seed] yields the same set, so a code generator and its consumer can
     agree on the shapes. *)
 
+val flat_records : seed:int -> count:int -> (string * packed) list
+(** [flat_records ~seed ~count] is the codecs of [sample ~seed ~count] whose
+    shape is a record of leaves, in sample order. They are rare in a sample, and
+    they are the shape a field-by-field code generator handles whole. *)
+
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
     [Param.output] and so needs a [Param.env] threaded into

@@ -1,0 +1,4 @@
+(library
+ (name wire_ocaml)
+ (public_name wire.ocaml)
+ (libraries wire fmt))

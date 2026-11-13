@@ -36,10 +36,7 @@ let check_enum_decode ~at ~cases v =
     raise_invalid_enum ~at ~value:v ~valid:(enum_values cases)
 
 let check_enum_encode ~name ~valid v =
-  if not (enum_member valid v) then
-    Fmt.invalid_arg "Wire.encode: enum %s expected one of [%a], got %d" name
-      Fmt.(list ~sep:comma int)
-      valid v
+  if not (enum_member valid v) then Errors.enum_encode ~name ~valid v
 
 (* [all_zeros] decodes only zero bytes, so a padding value carrying anything
    else round-trips to [Non_zero_padding]. *)
@@ -93,9 +90,7 @@ let check_zeroterm_region ~region ~len =
    at all, because an [int64] is exactly the eight bytes written. *)
 let check_unsigned_encode ~bits v =
   let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
-  if out_of_range then
-    Fmt.invalid_arg
-      "Wire.encode: value %d does not fit an unsigned %d-bit field" v bits
+  if out_of_range then Errors.unsigned_too_wide ~bits v
 
 (* The signed 32-bit writers, under the names the encode paths use. Every
    fixed-width scalar writes through its own carrier, whose range is already the

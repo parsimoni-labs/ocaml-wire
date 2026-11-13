@@ -1,0 +1,66 @@
+; Differential fuzzer: each sampled codec of Diff_ocaml.codecs against the
+; OCaml Wire_ocaml generates from it. Generating and compiling that code needs
+; no EverParse, so it always builds and runs in the default [dune runtest]; the
+; afl profile turns it into an AFL lane instead.
+
+(library
+ (name diff_ocaml)
+ (modules diff_ocaml)
+ (libraries wire fuzz_gen diff_codecs alcobar fmt))
+
+; The generator (test/diff/gen_ocaml.ml) writes the module for each codec.
+
+(rule
+ (action
+  (with-stdout-to
+   ocaml_index.ml
+   (run %{dep:../../../test/diff/gen_ocaml.exe}))))
+
+(executable
+ (name fuzz)
+ (modules fuzz ocaml_index)
+ (libraries wire wire.runtime fuzz_gen diff_driver diff_ocaml alcobar fmt))
+
+; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
+; per codec by default.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (<> %{profile} afl))
+ (action
+  (run
+   %{exe:fuzz.exe}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   %{env:WIRE_FUZZ_REPEAT=5000}
+   --budget
+   %{env:WIRE_FUZZ_BUDGET=1})))
+
+; afl-fuzz searches PATH for a target with no '/', so pass [./fuzz.exe] (the
+; cwd is this dir in the build tree, where fuzz.exe is built).
+
+(rule
+ (alias fuzz)
+ (enabled_if
+  (= %{profile} afl))
+ (deps fuzz.exe ../../afl.dict)
+ (action
+  (progn
+   (run %{exe:fuzz.exe} --gen-corpus corpus)
+   (run
+    afl-fuzz
+    -V
+    60
+    -t
+    8000
+    -x
+    ../../afl.dict
+    -i
+    corpus
+    -o
+    _fuzz
+    --
+    ./fuzz.exe
+    @@))))

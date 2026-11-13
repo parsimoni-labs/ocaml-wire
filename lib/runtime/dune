@@ -1,0 +1,37 @@
+; What the code Wire_ocaml generates links instead of [wire]: the integer
+; carriers, the reads and writes with no bounds check, and the parse errors.
+; [wire] is built on it, so a generated module and a codec share one type for
+; each and raise the very same exceptions. It depends on optint alone, so
+; embedding generated code pulls in nothing else.
+
+(library
+ (name wire_runtime)
+ (public_name wire.runtime)
+ (libraries optint))
+
+; The paranoid profile checks every read [Unchecked] makes, so the tests and
+; the fuzzers catch a read outside the frame (docs/execution.md). The afl
+; profile does too: an AFL campaign looks for bugs rather than speed, and a read
+; past the frame raises there instead of reading whatever follows.
+
+(rule
+ (target paranoid.ml)
+ (enabled_if
+  (or
+   (= %{profile} paranoid)
+   (= %{profile} afl)))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let enabled = true\n"))))
+
+(rule
+ (target paranoid.ml)
+ (enabled_if
+  (and
+   (<> %{profile} paranoid)
+   (<> %{profile} afl)))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo "let enabled = false\n"))))

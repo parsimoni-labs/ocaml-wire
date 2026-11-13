@@ -1896,6 +1896,15 @@ module Private : sig
     val native_bit_order : Types.bitfield_base -> Types.bit_order
     (** The bit order matching EverParse 3D's native packing for a base. *)
 
+    val shift :
+      bit_order:Types.bit_order ->
+      total:int ->
+      bits_used:int ->
+      width:int ->
+      int
+    (** Where a field of [width] bits sits in a base word of [total] bits, after
+        [bits_used] bits of earlier fields. *)
+
     val extract :
       bit_order:Types.bit_order ->
       total:int ->
@@ -1909,6 +1918,49 @@ module Private : sig
   module Uint_var = Uint_var
   module Shape = Shape
   module Names = Names
+
+  (** Support for code generated from a codec by [Wire_ocaml]. *)
+  module Gen : sig
+    val to_struct : 'r Codec.t -> Types.struct_
+    (** [to_struct t] is the description [t] is built from. *)
+
+    val digest : 'r Codec.t -> string
+    (** [digest t] names the shape of [t]: its fields, their types and
+        constraints, every expression in full, and the version of what generated
+        code assumes of it. *)
+
+    val check : 'r Codec.t -> string -> unit
+    (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
+
+    type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+    (** A use of a field's reader, whatever the field's type. *)
+
+    val with_field_reader : 'r Codec.t -> string -> 'b field_k -> 'b option
+    (** [with_field_reader t name k] is [k.k ty read], where [read] is the
+        reader {!Codec.val-get} stages for the field [name] of [t] and [ty] its
+        type, or [None] when [t] has no field [name]. *)
+
+    (** {2 Maps} *)
+
+    type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+    (** A map's decoder and encoder over its raw wire value. *)
+
+    val map_int : 'a Types.typ -> (int, 'a) map
+    (** [map_int t] is the map [t] over an integer up to 16 bits wide or a
+        bitfield, read as an [int]. Raises [Invalid_argument] for any other [t].
+    *)
+
+    val map_int32 : 'a Types.typ -> (int32, 'a) map
+    (** [map_int32 t] is the map [t] over a 32-bit integer. *)
+
+    val map_id : 'a Types.typ -> int option
+    (** [map_id t] identifies the map [t] among every map built, [None] when [t]
+        is not a map. *)
+
+    val check_map : 'r Codec.t -> string -> 'a Types.typ -> unit
+    (** [check_map c name t] raises [Invalid_argument] unless the field [name]
+        of [c] is the very value [t]. *)
+  end
 
   (** How a codec is compiled, for the fuzzer: the same codec with every fast
       path off, a codec not yet compiled, and the fast paths compiling selected.

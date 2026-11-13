@@ -39,8 +39,9 @@ let be buf off : t =
    the guard never fires. *)
 let check_encode v =
   if compare v min_int < 0 || compare v max_int > 0 then
-    Fmt.invalid_arg "Wire.encode: value %a does not fit a signed 32-bit field"
-      Optint.pp v
+    invalid_arg
+      ("Wire.encode: value " ^ Optint.to_string v
+     ^ " does not fit a signed 32-bit field")
 
 (* Exact: every [t] holds a signed 32-bit value. *)
 let to_int32 (v : t) : int32 =
@@ -76,7 +77,9 @@ let to_int_opt v =
 let of_int n =
   let v = Optint.of_int n in
   if compare v min_int < 0 || compare v max_int > 0 then
-    Fmt.invalid_arg "Wire.SInt32.of_int: %d is not a signed 32-bit value" n;
+    invalid_arg
+      ("Wire.SInt32.of_int: " ^ string_of_int n
+     ^ " is not a signed 32-bit value");
   v
 
 let unsafe_le buf off : t =

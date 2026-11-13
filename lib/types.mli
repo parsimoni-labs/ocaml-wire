@@ -31,7 +31,7 @@ val eval_set_param : eval_ctx -> string -> int -> unit
    context. See {!section:parse-errors} for the exception and helpers. *)
 
 (** Which predicate a {!Constraint_failed} came from. *)
-type predicate = Where | Field | Action | Per_byte
+type predicate = Errors.predicate = Where | Field | Action | Per_byte
 
 type consumption = [ `Prefix | `All ]
 (** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
@@ -44,7 +44,7 @@ type consumption = [ `Prefix | `All ]
     read at. For {!constructor-Constraint_failed}, [value] is the offending
     field's value for a single-field self-constraint and [None] for a
     cross-field or where predicate. *)
-type error_kind =
+type error_kind = Errors.error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -55,7 +55,11 @@ type error_kind =
   | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
-type parse_error = { at : int; field : string list; kind : error_kind }
+type parse_error = Errors.parse_error = {
+  at : int;
+  field : string list;
+  kind : error_kind;
+}
 (** [at] is the absolute byte offset of the failing field. Alongside it the
     parse error records the path of field names leading to that field (root to
     leaf, empty at a top-level or anonymous position) and the failure kind. *)
@@ -350,6 +354,7 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
           (** When [Some n] the raw [inner] value is a valid index only when
               [< n] (set by {!cases}). [decode] enforces it on the OCaml side;
               the 3D projection emits it as a field refinement. *)

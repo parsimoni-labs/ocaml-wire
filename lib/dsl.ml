@@ -51,10 +51,10 @@ let eval_set_param ctx name value =
    or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
-type predicate = Where | Field | Action | Per_byte
+type predicate = Errors.predicate = Where | Field | Action | Per_byte
 type consumption = [ `Prefix | `All ]
 
-type error_kind =
+type error_kind = Errors.error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -68,9 +68,13 @@ type error_kind =
 (* [at] is the absolute byte offset of the failing field in the input; [field]
    is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
    empty at a top-level or anonymous position. *)
-type parse_error = { at : int; field : string list; kind : error_kind }
+type parse_error = Errors.parse_error = {
+  at : int;
+  field : string list;
+  kind : error_kind;
+}
 
-exception Parse_error of parse_error
+exception Parse_error = Errors.Parse_error
 
 let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
 
@@ -262,6 +266,9 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
+          (* Each map value its own: a generated module names the map it calls
+             and checks the codec still holds that very one. *)
           (* When [Some n] the raw [inner] value is a valid index only when
              [< n] (set by {!cases} / lookup). [decode] enforces this on the
              OCaml side; the 3D projection emits it as a field refinement so the
@@ -437,52 +444,22 @@ end
 
 (* Native-int arithmetic that reports overflow instead of wrapping: a constant
    folded to a value its expression does not denote would be worse than leaving
-   the expression symbolic. *)
-let[@inline] add_overflows a b sum = a lxor sum land (b lxor sum) < 0
-
-let[@inline] sub_overflows a b difference =
-  a lxor b land (a lxor difference) < 0
-
-let[@inline] mul_overflows a b product =
-  a <> 0 && ((a = -1 && b = min_int) || product / a <> b)
-
+   the expression symbolic. Generated code shares these with the codec. *)
 let const_add a b =
   let s = a + b in
-  if add_overflows a b s then None else Some s
+  if Arith.add_overflows a b s then None else Some s
 
 let const_sub a b =
   let d = a - b in
-  if sub_overflows a b d then None else Some d
+  if Arith.sub_overflows a b d then None else Some d
 
 let const_mul a b =
   let p = a * b in
-  if mul_overflows a b p then None else Some p
+  if Arith.mul_overflows a b p then None else Some p
 
-(* [Value_out_of_range] carries an [int64], but a product may overflow that as
-   well as the native int. The first value on the overflowing side is enough
-   to report the failed range check without wrapping its diagnostic too. *)
-let arithmetic_overflow ~positive =
-  let value =
-    if positive then Int64.succ (Int64.of_int max_int)
-    else Int64.pred (Int64.of_int min_int)
-  in
-  raise_out_of_range ~at:0 value
-
-let[@inline] checked_add a b =
-  let sum = a + b in
-  if add_overflows a b sum then arithmetic_overflow ~positive:(a >= 0) else sum
-
-let[@inline] checked_sub a b =
-  let difference = a - b in
-  if sub_overflows a b difference then arithmetic_overflow ~positive:(a >= 0)
-  else difference
-
-let[@inline] checked_mul a b =
-  let product = a * b in
-  if mul_overflows a b product then
-    arithmetic_overflow ~positive:(Bool.equal (a < 0) (b < 0))
-  else product
-
+let checked_add = Arith.checked_add
+let checked_sub = Arith.checked_sub
+let checked_mul = Arith.checked_mul
 let[@inline] checked_div a b = if b = 0 then raise_zero_divisor ~at:0 else a / b
 
 let[@inline] checked_mod a b =
@@ -827,9 +804,12 @@ let reject_decoration ~combinator t =
        field type directly via [Field.v]."
       combinator combinator
 
+let map_ids = Atomic.make 0
+let fresh_map_id () = Atomic.fetch_and_add map_ids 1
+
 let map decode encode inner =
   reject_decoration ~combinator:"map" inner;
-  Map { inner; decode; encode; index_bound = None }
+  Map { inner; decode; encode; index_bound = None; map_id = fresh_map_id () }
 
 let bool inner =
   reject_non_integer ~combinator:"bit" inner;
@@ -840,6 +820,7 @@ let bool inner =
       decode = (fun v -> is_set (to_int v));
       encode = (fun b -> of_int (bit b));
       index_bound = None;
+      map_id = fresh_map_id ();
     }
 
 (* Top-level so [variants_lookup] does not allocate a closure per call.
@@ -865,7 +846,8 @@ let cases variants inner =
     let i = variants_lookup arr v 0 in
     if i < 0 then invalid_arg "Wire.lookup: unknown variant" else of_int i
   in
-  Map { inner; decode; encode; index_bound = Some len }
+  Map
+    { inner; decode; encode; index_bound = Some len; map_id = fresh_map_id () }
 
 let unit = Unit
 let all_bytes = All_bytes
@@ -920,11 +902,7 @@ let exact_repeat_elements seq ~expected ~size_of values =
    short one would make the bytes on the wire differ from the value the caller
    signed, hashed or length-prefixed, with nothing to signal it. *)
 let check_byte_field_size ~expected ~actual =
-  if actual <> expected then
-    Fmt.invalid_arg
-      "Wire.encode: byte field expected %d bytes, got %d (a fixed-size byte \
-       field is exact; use zeroterm_at_most for a shorter value)"
-      expected actual
+  if actual <> expected then Errors.byte_length ~expected ~actual
 
 let check_nested_size ~at_most ~expected ~actual =
   if actual > expected then
@@ -1475,37 +1453,8 @@ let casetype_decl name params tag cases =
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
 
-let pp_predicate ppf (p : predicate) =
-  match p with
-  | Where -> Fmt.string ppf "where clause"
-  | Field -> Fmt.string ppf "field constraint"
-  | Action -> Fmt.string ppf "field action"
-  | Per_byte -> Fmt.string ppf "per-byte refinement"
-
-let pp_error_kind ppf = function
-  | Unexpected_eof { expected; got } ->
-      Fmt.pf ppf "unexpected EOF: expected %d bytes, got %d" expected got
-  | Trailing_bytes n ->
-      Fmt.pf ppf "%d trailing byte%s" n (if n = 1 then "" else "s")
-  | Invalid_enum { value; valid } ->
-      Fmt.pf ppf "invalid enum value %d, valid: [%a]" value
-        Fmt.(list ~sep:comma int)
-        valid
-  | Invalid_tag tag -> Fmt.pf ppf "invalid tag: %d" tag
-  | Missing_terminator -> Fmt.string ppf "missing NUL terminator"
-  | Non_zero_padding -> Fmt.string ppf "non-zero padding byte"
-  | Value_out_of_range { value } -> Fmt.pf ppf "value out of range: %Ld" value
-  | Zero_divisor -> Fmt.string ppf "zero divisor in expression"
-  | Constraint_failed { which; value } -> (
-      match value with
-      | Some v -> Fmt.pf ppf "%a violated (value %Ld)" pp_predicate which v
-      | None -> Fmt.pf ppf "%a violated" pp_predicate which)
-
-let pp_parse_error ppf { at; field; kind } =
-  (match field with
-  | [] -> ()
-  | _ -> Fmt.(list ~sep:(any ".") string) ppf field);
-  Fmt.pf ppf "@%d: %a" at pp_error_kind kind
+let pp_error_kind = Errors.pp_error_kind
+let pp_parse_error = Errors.pp_parse_error
 
 let predicate_rank (p : predicate) =
   match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3

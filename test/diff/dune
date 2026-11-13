@@ -69,6 +69,14 @@
  (modules gen_diff)
  (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix fmt))
 
+; Generate the OCaml backend's modules, one per sampled codec, with Wire_ocaml
+; Run by the code generation rule in fuzz/diff/ocaml/ and fuzz/diff/ocaml-ox/
+
+(executable
+ (name gen_ocaml)
+ (modules gen_ocaml)
+ (libraries diff_ocaml fuzz_gen wire wire.ocaml fmt))
+
 ; Differential test: compile C stubs (includes EverParse generated C)
 ; NOTE: Only builds with BUILD_EVERPARSE=1 after running @gen_c first
 

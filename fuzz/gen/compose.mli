@@ -22,13 +22,14 @@ val env_leaves : any list
 val array_of : int -> any -> any option
 (** [array_of k a] is an array of [k] [a]s, or [None] when [a] is not fixed. *)
 
-val pair_of : string -> any -> any -> any
-(** [pair_of name a b] is the two-field record [name] over [a] and [b]. *)
+val pair_of : ?names:string list -> string -> any -> any -> any
+(** [pair_of ?names name a b] is the two-field record [name] over [a] and [b],
+    its fields named after [names] when given. *)
 
-val rec3_of : string -> any -> any -> any -> any
+val rec3_of : ?names:string list -> string -> any -> any -> any -> any
 (** [rec3_of name a b c] is {!pair_of} for three fields. *)
 
-val rec4_of : string -> any -> any -> any -> any -> any
+val rec4_of : ?names:string list -> string -> any -> any -> any -> any -> any
 (** [rec4_of name a b c d] is {!pair_of} for four fields. *)
 
 val gen_any : int -> any Alcobar.gen

@@ -16,6 +16,11 @@
 - A `paranoid` dune profile that bounds-checks every read, for tests (#435,
   @samoht)
 
+- `wire.ocaml` (`Wire_ocaml`): generate plain OCaml from a fixed-size codec,
+  with every offset a constant. The generated code needs only the new
+  `wire.runtime`, and also builds for js_of_ocaml, wasm_of_ocaml and OxCaml
+  (#436, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
@@ -74,6 +79,11 @@
 
 - A negative offset raises `Invalid_argument`; one near `max_int` is a parse
   error (#435, @samoht)
+
+- Generated OCaml checks arithmetic as the codec does, so it rejects what the
+  codec rejects on overflow (#436, @samoht)
+
+- `wire` builds on OxCaml (#436, @samoht)
 
 ## 1.3.0
 

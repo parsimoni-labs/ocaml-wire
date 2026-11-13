@@ -1,0 +1,85 @@
+; The OCaml backend again, on the code Wire_ocaml writes for OxCaml, whose
+; [@zero_alloc] checks the compiler enforces. On any other compiler the library
+; holds the code for the default target instead, so the afl alias still builds,
+; and [dune runtest] says the lane was skipped rather than repeat
+; fuzz/diff/ocaml.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ocaml_index.ml
+   (run %{dep:../../../test/diff/gen_ocaml.exe} --oxcaml))))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ocaml_index.ml
+   (run %{dep:../../../test/diff/gen_ocaml.exe}))))
+
+(library
+ (name ocaml_index_ox)
+ (wrapped false)
+ (modules ocaml_index)
+ (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
+
+(rule
+ (copy ../ocaml/fuzz.ml fuzz.ml))
+
+(executable
+ (name fuzz)
+ (modules fuzz)
+ (libraries fuzz_gen diff_driver diff_ocaml ocaml_index_ox))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (<> %{profile} afl)
+   (= %{ocaml-config:ox} true)))
+ (action
+  (run
+   %{exe:fuzz.exe}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   %{env:WIRE_FUZZ_REPEAT=5000}
+   --budget
+   %{env:WIRE_FUZZ_BUDGET=1})))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (<> %{profile} afl)
+   (<> %{ocaml-config:ox} true)))
+ (action
+  (echo
+   "fuzz/diff/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))
+
+(rule
+ (alias fuzz)
+ (enabled_if
+  (= %{profile} afl))
+ (deps fuzz.exe ../../afl.dict)
+ (action
+  (progn
+   (run %{exe:fuzz.exe} --gen-corpus corpus)
+   (run
+    afl-fuzz
+    -V
+    60
+    -t
+    8000
+    -x
+    ../../afl.dict
+    -i
+    corpus
+    -o
+    _fuzz
+    --
+    ./fuzz.exe
+    @@))))

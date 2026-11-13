@@ -30,29 +30,48 @@ let lines_of (Fuzz_gen.Pack g) =
        (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g))
          .Wire.Everparse.module_)
 
-type exclusion = Variable_size | Zero_size | Parameterised | Casetype
+type exclusion =
+  | Name_clash
+  | Variable_size
+  | Zero_size
+  | Parameterised
+  | Casetype
 
 let string_of_exclusion = function
+  | Name_clash -> "two field names spell one generated identifier"
   | Variable_size -> "variable size, no standalone validator"
   | Zero_size -> "zero size, setter arity mismatch"
   | Parameterised -> "parameterised, binds Param.env"
   | Casetype -> "casetype, projects an embedded sub-validator"
 
 (* The scope filter: [None] is includable, [Some r] is out of the differential's
-   scope for reason [r]. A casetype or variable/zero-size codec has no standalone
-   fixed-size validator; a parameterised one needs an env the harness does not
-   set up. *)
+   scope for reason [r]. The FFI pipeline refuses two field names that spell
+   one identifier, checked first since projecting such a codec to 3D raises. A
+   casetype or variable/zero-size codec has no standalone fixed-size validator;
+   a parameterised one needs an env the harness does not set up. *)
+let names_clash (Fuzz_gen.Pack g) =
+  match
+    Wire_stubs.check_names
+      (Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g))
+  with
+  | () -> false
+  | exception Invalid_argument _ -> true
+
 let scope_exclusion (Fuzz_gen.Pack g as p) =
-  let s = Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g) in
-  match s.Wire.Everparse.wire_size with
-  | None -> Some Variable_size
-  | Some 0 -> Some Zero_size
-  | Some _ when Fuzz_gen.binds_env p -> Some Parameterised
-  | Some _ when List.exists (fun l -> starts_with l "casetype ") (lines_of p) ->
-      Some Casetype
-  | Some _ -> None
+  if names_clash p then Some Name_clash
+  else
+    let s = Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g) in
+    match s.Wire.Everparse.wire_size with
+    | None -> Some Variable_size
+    | Some 0 -> Some Zero_size
+    | Some _ when Fuzz_gen.binds_env p -> Some Parameterised
+    | Some _ when List.exists (fun l -> starts_with l "casetype ") (lines_of p)
+      ->
+        Some Casetype
+    | Some _ -> None
 
 let candidates = Fuzz_gen.sample ~seed:sample_seed ~count:sample_count
+let in_scope p = Option.is_none (scope_exclusion p)
 
 (* Every candidate with a standalone fixed-size validator is included; the rest
    carry an explicit out-of-scope reason. A shared synthesised type does not
@@ -107,6 +126,7 @@ let summary =
       (fun acc (_, _, r) ->
         let k =
           match r with
+          | Name_clash -> "name clash"
           | Variable_size -> "variable-size"
           | Zero_size -> "zero-size"
           | Parameterised -> "parameterised"

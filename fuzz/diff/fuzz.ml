@@ -15,8 +15,8 @@
     accept/reject check on its own is blind to the more dangerous case, two
     decoders that accept the same bytes and read a different number out of them.
 
-    Codecs the candidate filter dropped (variable-size, zero-size, parameterised
-    or casetype) are reported via {!Diff_codecs.excluded}. *)
+    {!Diff_driver} runs the suite, and reports the codecs the candidate filter
+    dropped (variable-size, zero-size, parameterised or casetype). *)
 
 open Fuzz_gen
 
@@ -164,25 +164,6 @@ let covered_cases =
           fields = field_checks label packed;
         } ))
 
-(* Normal [dune test]: one case per covered codec, each on its own random bytes,
-   so a single run touches every codec. *)
-let sample_case (label, case) =
-  Alcobar.test_case label [ Alcobar.bytes ] (fun buf ->
-      diff_check case (Bytes.of_string buf))
-
-(* AFL file-input mode: the shared framed input picks one codec per input and
-   strips the selector/mode header before the bytes reach the decoders. *)
-let afl_case ?(max_len = 256) () =
-  afl_contract_cases ~max_len "diff" covered_cases
-    ~check:(fun _label case input -> diff_check case input.payload)
-
-let cases =
-  if afl_mode () then afl_case () else List.map sample_case covered_cases
-
 let () =
-  List.iter
-    (fun (label, _, reason) ->
-      Fmt.epr "diff: skipping %s (%s)@." label
-        (Diff_codecs.string_of_exclusion reason))
-    Diff_codecs.excluded;
-  Alcobar.run "diff" [ ("diff", cases) ]
+  Diff_driver.run "diff"
+    (List.map (fun (label, case) -> (label, diff_check case)) covered_cases)

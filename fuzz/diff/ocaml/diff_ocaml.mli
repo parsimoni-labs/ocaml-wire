@@ -1,0 +1,78 @@
+(** The OCaml backend of the differential fuzzer: a module {!Wire_ocaml}
+    generates from a codec, compared with the codec on the same inputs.
+
+    The generated modules differ in their functions' names and types, so the
+    glue written with each one hands them over as a {!t}, every value shown as a
+    string. *)
+
+(** Which of a field's getters: [get_<f>], [get_<f>_int] for a 32-bit field, or
+    [<f>_of_word] on [get_<f>_word] for a bitfield. *)
+type view = Get | Get_int | Of_word
+
+type ops = {
+  decode : bytes -> int -> string;
+      (** The generated decoder, the record it returns written back at offset 0
+          by the generated encoder. *)
+  validate : bytes -> int -> unit;  (** The generated validator. *)
+  encode : string -> bytes -> int -> unit;
+      (** [encode s buf off] writes, through the generated encoder, the record
+          the bytes [s] decode to. *)
+  gets : (string * view * (bytes -> int -> string)) list;
+      (** Each field's name, a getter of it and that getter. *)
+  reads : (string * view) list;
+      (** The reads {!field-valid} makes, in order: [read_<f>] as
+          {!constructor-Get}, [read_<f>_int] as {!constructor-Get_int}. *)
+  valid : bytes -> string list;
+      (** [Valid.v] on the buffer, then each of {!field-reads}. *)
+}
+(** One generated module's functions over one kind of buffer, taking [bytes]:
+    the bigarray ones copy the bytes in, and back out after a write. *)
+
+type t = { bytes : ops; bigstring : ops }
+(** A generated module: its functions and those of its [Bigstring]. *)
+
+val pp : t Fmt.t
+(** [pp] prints the getters of a generated module. *)
+
+val big : bytes -> Wire.Private.Unchecked.Bigstring.t
+(** [big b] is a bigarray copy of [b]. *)
+
+val blit_back : Wire.Private.Unchecked.Bigstring.t -> bytes -> unit
+(** [blit_back bb b] copies [bb] over [b], of the same length. *)
+
+val show_code : 'a Wire.Private.Types.typ -> string option
+(** [show_code t] is the source of the function that shows a value of type [t]
+    as a generated getter returns it: an integer in decimal, a byte array
+    quoted. [None] for a type the backend does not show. *)
+
+val views : 'a Wire.Private.Types.typ -> view list
+(** [views t] is the getters the generated module has for a field of type [t].
+*)
+
+val codecs : (string * Fuzz_gen.packed) list
+(** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
+    {!Diff_codecs.included} takes or excludes only for a
+    {!Diff_codecs.Name_clash} of the FFI pipeline, then the flat records
+    ({!Fuzz_gen.flat_records}) of a longer run of the same sample that are
+    {!specialisable}. *)
+
+val specialisable : 'r Wire.Codec.t -> bool
+(** [specialisable c] is [true] when [c] is in the scope {!Wire_ocaml}
+    documents: a fixed-size record without parameters of named fields without
+    actions, each an integer of up to 32 bits, a bitfield or a byte array,
+    refined by integer expressions. *)
+
+val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
+(** [check label p m buf] compares [m], generated from [p]'s codec, with the
+    codec on [buf] at several offsets: decode and validate give the same value
+    or raise the same error, every getter reads what {!Wire.Codec.get} reads or
+    raises what it raises, encode writes the same bytes or raises the same error
+    into buffers around the record, and [Valid.v] with its reads agrees with
+    {!Wire.Codec.validate} then {!Wire.Codec.get}, on [bytes] and on a bigarray.
+    Fails with {!Alcobar.failf}. *)
+
+val report : string -> (string * Fuzz_gen.packed * string) list -> bool
+(** [report name refused] prints how many of the sampled {!codecs}, and of the
+    flat records, the generator refused and why, and is [false] when one of
+    [refused] (a label, the codec and the refusal) is {!specialisable} and was
+    refused for another reason than a clash of its field names. *)

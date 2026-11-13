@@ -35,8 +35,9 @@ let field_mask = Optint.of_int mask32
    the guard never fires: every representable value is a legal uint32 there. *)
 let check_encode v =
   if not (Optint.equal (Optint.logand v field_mask) v) then
-    Fmt.invalid_arg
-      "Wire.encode: value %a does not fit an unsigned 32-bit field" Optint.pp v
+    invalid_arg
+      ("Wire.encode: value " ^ Optint.to_string v
+     ^ " does not fit an unsigned 32-bit field")
 
 (* As in [SInt32]: on a 64-bit host the read is one load into a native
    [int], masked to the unsigned value. *)
@@ -73,7 +74,9 @@ let to_int = Optint.to_int
 let of_int n =
   let v = Optint.of_int (n land mask32) in
   if not (Optint.equal (Optint.of_int n) v) then
-    Fmt.invalid_arg "Wire.UInt32.of_int: %d is not an unsigned 32-bit value" n;
+    invalid_arg
+      ("Wire.UInt32.of_int: " ^ string_of_int n
+     ^ " is not an unsigned 32-bit value");
   v
 
 let to_int32 (v : t) : int32 =
