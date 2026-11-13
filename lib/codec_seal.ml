@@ -408,17 +408,17 @@ let field_put : type a r.
   | Some puts, Span (at, len) -> Some (Blit { get = fld.get; at; len } :: puts)
   | _ -> None
 
-let apply_compiled : type a f r.
-    (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
-    =
- fun (Record r) fld cf ->
+(* The variables [fld]'s action assigns, and the context its constraint and
+   action compile in: the fields before it, itself and those variables. *)
+let field_check_ctx : type a f r.
+    (a -> f, r) record -> (a, r) field -> string list * compile_ctx =
+ fun (Record r) fld ->
   let action_vanames =
     match fld.action with
     | None -> []
     | Some (Types.Success stmts | Types.Act stmts) ->
         List.fold_left action_vars [] stmts
   in
-  let field_idx = r.n_fields in
   let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
     let base = extend_scope fld.name dummy_reader [] r.field_readers in
@@ -427,10 +427,16 @@ let apply_compiled : type a f r.
       base action_vanames
   in
   let idx = used_idx r.used_slots (build_idx cc_readers) in
-  let cc =
-    mk_ctx ~sizeof_this:r.fixed_prefix ~field_pos:field_idx
-      ~param_slots:r.param_slots idx
-  in
+  ( action_vanames,
+    mk_ctx ~sizeof_this:r.fixed_prefix ~field_pos:r.n_fields
+      ~param_slots:r.param_slots idx )
+
+let apply_compiled : type a f r.
+    (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
+    =
+ fun (Record r as record) fld cf ->
+  let action_vanames, cc = field_check_ctx record fld in
+  let field_idx = r.n_fields in
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let check_only, full =
