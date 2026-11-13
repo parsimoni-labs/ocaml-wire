@@ -14,8 +14,23 @@ let test_escape () =
   Alcotest.(check string) "keyword" "int_" (Names.escape Names.c_keywords "int");
   Alcotest.(check string) "name" "end" (Names.escape Names.c_keywords "end");
   Alcotest.(check string)
-    "already escaped" "int__"
-    (Names.escape [ "int_" ] "int_")
+    "a keyword's escape" "int__"
+    (Names.escape Names.c_keywords "int_");
+  Alcotest.(check string)
+    "a longer name" "integer"
+    (Names.escape Names.c_keywords "integer");
+  Alcotest.(check string)
+    "a keyword ending in _" "int__"
+    (Names.escape [ "int_" ] "int_");
+  Alcotest.(check string)
+    "another suffix" "typeof_3d3d"
+    (Names.escape ~suffix:"3d" [ "typeof" ] "typeof_3d");
+  let names = [ "end"; "end_"; "end__"; "ending"; "_end"; "end_x" ] in
+  let escaped = List.map (Names.escape [ "end" ]) names in
+  Alcotest.(check (list string))
+    "injective"
+    [ "end_"; "end__"; "end___"; "ending"; "_end"; "end_x" ]
+    escaped
 
 let test_is_identifier () =
   let check name want =
@@ -34,6 +49,7 @@ let test_ocaml_label () =
   check "done" "done_";
   check "effect" "effect_";
   check "local_" "local__";
+  check "done_" "done__";
   check "a-b" "a_b";
   check "9lives" "f_9lives";
   Alcotest.(check string)

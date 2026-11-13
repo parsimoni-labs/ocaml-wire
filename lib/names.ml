@@ -211,7 +211,28 @@ let rust_keywords =
     "yield";
   ]
 
-let escape keywords name = if List.mem name keywords then name ^ "_" else name
+(* [rest] is made of [suffix] and underscores only. *)
+let rec escaped_tail suffix rest =
+  rest = ""
+  || rest.[0] = '_'
+     && escaped_tail suffix (String.sub rest 1 (String.length rest - 1))
+  ||
+  let n = String.length suffix and r = String.length rest in
+  n > 0 && r >= n
+  && String.sub rest 0 n = suffix
+  && escaped_tail suffix (String.sub rest n (r - n))
+
+let escapes ?(suffix = "_") keywords name =
+  List.exists
+    (fun k ->
+      let n = String.length k in
+      String.length name >= n
+      && String.sub name 0 n = k
+      && escaped_tail suffix (String.sub name n (String.length name - n)))
+    keywords
+
+let escape ?(suffix = "_") keywords name =
+  if escapes ~suffix keywords name then name ^ suffix else name
 
 let ocaml_label ?(oxcaml = true) name =
   let l =
@@ -223,9 +244,10 @@ let ocaml_label ?(oxcaml = true) name =
       name
   in
   if l = "" || (l.[0] >= '0' && l.[0] <= '9') then "f_" ^ l
-  else if List.mem l ocaml_keywords || (oxcaml && List.mem l oxcaml_keywords)
-  then l ^ "_"
-  else l
+  else
+    escape
+      (if oxcaml then ocaml_keywords @ oxcaml_keywords else ocaml_keywords)
+      l
 
 let clash idents =
   let seen = Hashtbl.create 16 in

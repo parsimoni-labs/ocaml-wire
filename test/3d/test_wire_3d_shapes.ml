@@ -417,9 +417,9 @@ let plug_of fields =
       (header, read_file (Filename.concat dir "Kw_Fields.c"), compiles))
 
 (* The plug names a field three ways: the [_IDX_] macro upper-cases it, so [X]
-   and [x] would define one macro twice; the struct member escapes C's
-   keywords with a trailing underscore, so [restrict] and [restrict_] would be
-   one member. Both are refused naming the two fields. *)
+   and [x] would define one macro twice, which is refused naming the two
+   fields. The struct member escapes C's keywords injectively, so [restrict]
+   and [restrict_] are the members [restrict_] and [restrict__]. *)
 let test_plug_names () =
   let rejects what subs fields =
     match plug_of fields with
@@ -434,9 +434,6 @@ let test_plug_names () =
   rejects "X and x"
     [ "\"X\""; "\"x\""; "KW_IDX_X" ]
     [ field "X" uint8; field "x" uint8 ];
-  rejects "restrict and restrict_"
-    [ "\"restrict\""; "\"restrict_\"" ]
-    [ field "restrict" uint8; field "restrict_" uint8 ];
   rejects "a-b" [ "\"a-b\""; "identifier" ] [ field "a-b" uint8 ];
   let header, impl, compiles =
     plug_of
@@ -446,6 +443,7 @@ let test_plug_names () =
         field "typeof" uint8;
         field "NULL" uint8;
         field "end" uint8;
+        field "restrict_" uint8;
       ]
   in
   List.iter
@@ -454,7 +452,7 @@ let test_plug_names () =
         ("member " ^ m) true
         (contains header (Fmt.str " %s;" m));
       Alcotest.(check bool) ("set " ^ m) true (contains impl ("f->" ^ m ^ " ")))
-    [ "int_"; "restrict_"; "typeof_"; "NULL_"; "end" ];
+    [ "int_"; "restrict_"; "typeof_"; "NULL_"; "end"; "restrict__" ];
   Alcotest.(check bool)
     "macro keeps the field name" true
     (contains header "#define KW_IDX_RESTRICT 1");

@@ -77,6 +77,12 @@
   for codecs with input parameters. They previously read those inputs as zero
   and silently returned incorrect offsets and lengths (#465, @samoht)
 
+- **Breaking:** escaping a keyword is injective in every generator: a
+  keyword followed by underscores takes one more (`end_` is `end__`), so a
+  name and its escape no longer clash. 3D enum constants carry their enum's
+  name (`Color_Red`), so two enums may share a case, and a field `typeof` is
+  `typeof3d` in 3D (#471, @samoht)
+
 ### Fixed
 
 - The 3D projection of a codec holding an array of `lookup` indices in a
