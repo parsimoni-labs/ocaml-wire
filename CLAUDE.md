@@ -154,7 +154,7 @@ them and each row's API), reads the same fields and folds them into one
 checksum, which must agree; the corpus holds packets failing each check. The
 stack rows take dispatch, bounds and fragment rules from one codec,
 `Packet_stack.codec` in `examples/net`, so the generated scanner inherits
-them from the DSL; the `linked headers` rows and the Rust ones read the
+them from the DSL, in OCaml and in Rust; the `linked headers` rows read the
 fixed headers of `bench/rust/headers.ml` and link them in the harness. Keep
 the harnesses symmetric: a change to how one side times or folds goes into
 the other too, and never weaken a crate's row. The Rust side is a cargo

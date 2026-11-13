@@ -190,3 +190,18 @@ val gated : int -> unit Codec.t
 val nested : int -> unit Codec.t
 (** [nested n] nests [n] records, each optional in the one around it and
     followed by a field. *)
+
+type shared = {
+  a : UInt8.t;
+  b : UInt8.t;
+  c : UInt8.t;
+  x : UInt8.t option;
+  y : UInt8.t option;
+  z : UInt8.t option;
+}
+(** A {!val-shared} record. *)
+
+val shared : shared Codec.t
+(** [shared] has three optional fields whose conditions exclude each other,
+    [a = 1 && b = 1], [a = 2 && b = 1] and [c = 1 && b = 2], so the decision
+    tree reaches the test of the third from two paths. *)

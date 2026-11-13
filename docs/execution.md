@@ -110,6 +110,15 @@ The invariants above hold for it as follows.
   needs it or a check, a size or a condition reads it; every check runs
   either way.
 
+`Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
+which hands it the same decisions. A window is a slice of exactly its bytes:
+a prefix is checked by `split_first_chunk`, whose array its loads index at
+constant offsets, and a size is compared as `u64` with the slice's length,
+which also rejects a negative one. An operation the plan checks returns
+`None` where the 63-bit int overflows, which rejects the record. A run of
+optional fields binds its outputs and the tail in one `let`, so the code
+after it is written once.
+
 The differential lanes compare every generated module with the codec on
 random bytes: the record modules on the sampled fixed records, the scanners
 on every sampled shape and on hand-written structured cases, and, with

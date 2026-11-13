@@ -128,8 +128,7 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   let p : type b. b T.expr -> string = fun x -> expr w ov x in
   let num = w.m.num in
   let arith_op op fn sym a b =
-    if Option.is_some (corners op (range w.ranges a) (range w.ranges b)) then
-      binop num sym (p a) (p b)
+    if fits w.ranges op a b then binop num sym (p a) (p b)
     else begin
       ov := true;
       let fn =
@@ -375,41 +374,10 @@ let check w failure (cond : bool T.expr) =
 
 (* The ranges and facts passed checks establish, for the code after them. *)
 let refine w conditions =
-  let restrict ranges n lower upper =
-    match Smap.find_opt n ranges with
-    | None -> ranges
-    | Some (lo, hi) -> Smap.add n (max lo lower, min hi upper) ranges
-  in
-  let rec go ranges : bool T.expr -> _ = function
-    | T.And (a, b) -> go (go ranges a) b
-    | T.Ge (T.Ref (T.I, n), T.Int v) | T.Le (T.Int v, T.Ref (T.I, n)) ->
-        restrict ranges n v max_int
-    | T.Le (T.Ref (T.I, n), T.Int v) | T.Ge (T.Int v, T.Ref (T.I, n)) ->
-        restrict ranges n min_int v
-    | T.Eq (T.Ref (T.I, n), T.Int v) | T.Eq (T.Int v, T.Ref (T.I, n)) ->
-        restrict ranges n v v
-    | _ -> ranges
-  in
-  {
-    w with
-    ranges = List.fold_left go w.ranges conditions;
-    facts = List.fold_left (fun f e -> assume f e true) w.facts conditions;
-  }
+  let ranges, facts = refined w.ranges w.facts conditions in
+  { w with ranges; facts }
 
-(* Whether [e] is known not to be negative. *)
-let nonnegative w (e : int T.expr) =
-  let known e =
-    match simplify w.facts e with T.Bool true -> true | _ -> false
-  in
-  fst (range w.ranges e) >= 0
-  ||
-  match e with
-  | T.Sub (a, b) ->
-      known (T.Ge (a, b))
-      || known (T.Le (b, a))
-      || known (T.Gt (a, b))
-      || known (T.Lt (b, a))
-  | _ -> false
+let nonnegative w e = nonnegative_in w.ranges w.facts e
 
 (* The window has [need] bytes from [p]. *)
 let bound w p need =
@@ -681,16 +649,21 @@ let decide facts conds =
    [b] need not be evaluated where [a] holds: the codec evaluates it there, so
    it must not be one that may overflow, unless what [a] establishes decides
    it before any overflow. *)
-let exclusive w a b =
-  simplify (assume w.facts a true) b = T.Bool false
-  || (simplify (assume w.facts b true) a = T.Bool false && not (may_overflow b))
+let exclusive facts a b =
+  simplify (assume facts a true) b = T.Bool false
+  || (simplify (assume facts b true) a = T.Bool false && not (may_overflow b))
 
-let rec gate_run w acc = function
-  | Gate (c, p, o, body) :: rest
-    when let c = lower w c in
-         List.for_all (fun (c', _, _, _) -> exclusive w c' c) acc ->
-      gate_run w ((lower w c, p, o, body) :: acc) rest
-  | rest -> (List.rev acc, rest)
+(* The optional fields at the head of [nodes] whose conditions, as [lower]
+   writes them, exclude each other, and the nodes after them. *)
+let gate_run ~lower facts nodes =
+  let rec go acc = function
+    | Gate (c, p, o, body) :: rest
+      when let c = lower c in
+           List.for_all (fun (c', _, _, _) -> exclusive facts c' c) acc ->
+        go ((lower c, p, o, body) :: acc) rest
+    | rest -> (List.rev acc, rest)
+  in
+  go [] nodes
 
 (* A jump to the join [j] from the case [fired] of [gates], or from none:
    the outputs of the case that ran, absent ones for the others. *)
@@ -862,7 +835,7 @@ let rec walk w nodes p k =
             }
             rest stop k)
   | Gate _ :: _ ->
-      let gates, rest = gate_run w [] nodes in
+      let gates, rest = gate_run ~lower:(lower w) w.facts nodes in
       dispatch w gates p
         ~copy:(w.tail && copyable rest)
         (fun w p -> walk w rest p k)

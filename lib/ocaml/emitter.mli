@@ -175,3 +175,21 @@ val live : ?cold:bool -> plan -> outputs:Sset.elt list -> Sset.t
 (** [live ?cold plan ~outputs] is the variables a walk binds: those it reads,
     those it hands out and, for a cold walk, each checked field, whose value its
     error carries. *)
+
+val gate_run :
+  lower:(bool T.expr -> bool T.expr) ->
+  facts ->
+  node list ->
+  (bool T.expr * output * output list * node list) list * node list
+(** [gate_run ~lower facts nodes] is the optional fields at the head of [nodes]
+    whose conditions, as [lower] writes them, exclude each other, and the nodes
+    after them. *)
+
+val decide : facts -> (int * bool T.expr) list -> tree
+(** [decide facts cases] is the decision tree that picks the first of [cases]
+    whose condition holds, or none. A subtree reached from two paths is one
+    value. *)
+
+val reach : tree -> (tree -> bool) * (int -> bool) * int
+(** [reach tree] tells which subtrees of [tree] are reached more than once,
+    which cases are, and how many leaves are written, a shared case once. *)

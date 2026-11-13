@@ -1,15 +1,16 @@
 (executable
  (name gen)
  (modules gen)
- (libraries schemas wire.rust fmt))
+ (libraries schemas diff_codecs wire.rust fmt))
 
 (test
  (name test)
  (modules test test_wire_rust)
- (libraries schemas wire wire.rust fmt alcotest))
+ (libraries schemas net wire wire.rust fmt alcotest))
 
-; The modules generated from the schemas compile as one no_std crate, with
-; every warning an error. Needs rustc, so it runs with BUILD_RUST=1, as the
+; The modules generated from the schemas, and the scanners of the structured
+; cases and the scanned schemas, compile as one no_std crate, with every
+; warning an error. Needs rustc, so it runs with BUILD_RUST=1, as the
 ; Rust lane of the differential fuzzer does.
 
 (rule

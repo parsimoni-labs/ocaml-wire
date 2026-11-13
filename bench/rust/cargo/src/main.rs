@@ -1,7 +1,9 @@
 //! Reads the fields of every Ethernet/IPv4/TCP-or-UDP header in a corpus of
-//! packets, four ways: through the Rust that `Wire_rust` generates from the
-//! Wire codecs of `bench/rust/headers.ml`, through `etherparse`, through
-//! `smoltcp::wire` and through `pnet_packet`. Each does the work `etherparse::SlicedPacket` does, as
+//! packets: through the Rust that `Wire_rust` generates, from the fixed
+//! header codecs of `bench/rust/headers.ml` with the layers linked here, and
+//! from `Packet_stack.codec` as one scanner, with every output or only the
+//! ones the checksum reads; through `etherparse`, through `smoltcp::wire`
+//! and through `pnet_packet`. Each does the work `etherparse::SlicedPacket` does, as
 //! `bench/rust/bench.ml` describes: the IPv4 payload bounded by the total
 //! length, no transport header read from a fragment, the TCP header length or
 //! UDP length bounded by the payload. A packet counts only when every header
@@ -28,6 +30,10 @@ mod ipv4;
 mod tcp;
 #[path = "gen/udp.rs"]
 mod udp;
+#[path = "gen/stack.rs"]
+mod stack;
+#[path = "gen/stack_selected.rs"]
+mod stack_selected;
 
 const IPV4: u16 = 0x0800;
 
@@ -93,6 +99,32 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
         }
     }
     acc
+}
+
+// The scanner of `Packet_stack.codec` makes every check the linked headers
+// make, so the harness only folds the fields of an accepted frame.
+macro_rules! stack_fold {
+    ($scanner:ident) => {
+        |corpus: &[u8], slot: usize| -> u64 {
+            let mut acc = 0u64;
+            for p in corpus.chunks_exact(slot) {
+                let Some(f) = $scanner::scan(p) else { continue };
+                acc = acc.wrapping_add(f.ether_type as u64);
+                if !f.ipv4_present {
+                    continue;
+                }
+                let a = ip_fields(acc, f.ipv4_src as u32, f.ipv4_dst as u32, f.ipv4_ttl as u8, f.ipv4_protocol as u8, f.ipv4_total_length as u16);
+                acc = if f.ipv4_tcp_present {
+                    tcp_fields(a, f.ipv4_tcp_src_port as u16, f.ipv4_tcp_dst_port as u16, f.ipv4_tcp_seq as u32, f.ipv4_tcp_ack as u32, f.ipv4_tcp_window as u16, f.ipv4_tcp_flags as u16, f.ipv4_tcp_data_offset as u8)
+                } else if f.ipv4_udp_present {
+                    udp_fields(a, f.ipv4_udp_src_port as u16, f.ipv4_udp_dst_port as u16, f.ipv4_udp_length as u16)
+                } else {
+                    a
+                };
+            }
+            acc
+        }
+    };
 }
 
 fn etherparse(corpus: &[u8], slot: usize) -> u64 {
@@ -298,7 +330,9 @@ fn main() {
     let filter = args.get(4).map(String::as_str).unwrap_or("");
     assert!(corpus.len() % slot == 0, "the corpus is not a whole number of slots");
     let c = path.file_stem().and_then(|s| s.to_str()).expect("corpus name");
-    measure(c, "wire.rust", filter, &corpus, slot, runs, wire_rust);
+    measure(c, "wire.rust, linked headers", filter, &corpus, slot, runs, wire_rust);
+    measure(c, "wire.rust fused stack", filter, &corpus, slot, runs, stack_fold!(stack));
+    measure(c, "wire.rust selected outputs", filter, &corpus, slot, runs, stack_fold!(stack_selected));
     measure(c, "etherparse 0.21", filter, &corpus, slot, runs, etherparse);
     measure(c, "smoltcp 0.14", filter, &corpus, slot, runs, smoltcp);
     measure(c, "pnet_packet 0.35", filter, &corpus, slot, runs, pnet);

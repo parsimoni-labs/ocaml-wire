@@ -31,6 +31,9 @@
   optional fields, sized regions and byte spans. `~fields` selects the outputs
   (#447, @samoht)
 
+- `Wire_rust.scanner`: the same scanners as `Wire_ocaml.scanner`, in Rust
+  (#448, @samoht)
+
 - `Wire_ocaml.Plan`: the checked plan the generators print, for backends in
   other languages (#447, @samoht)
 

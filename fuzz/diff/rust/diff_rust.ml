@@ -191,6 +191,32 @@ let past_the_end label case buf =
         case.fields)
     (List.filter (fun off -> off < 0) [ -1; -case.size; -case.size - 1 ])
 
+type scan = { scan_id : int; variant : string; outputs : string list }
+
+external scan_call : int -> bytes -> int -> int -> bytes -> int
+  = "wire_rs_scan_stub"
+[@@noalloc]
+
+let scan_ops s =
+  let n = List.length s.outputs in
+  let res = Bytes.create (8 * max 1 n) in
+  {
+    Diff_ocaml.scan_name = "rust " ^ s.variant;
+    scan_fields = s.outputs;
+    scan =
+      (fun buf off len ->
+        match scan_call s.scan_id buf off len res with
+        | 1 ->
+            Some
+              (List.mapi
+                 (fun i name ->
+                   (name, Int64.to_int (Bytes.get_int64_le res (8 * i))))
+                 s.outputs)
+        | 0 -> None
+        | code -> Alcobar.failf "rust scanner %d: outcome %d" s.scan_id code);
+    scan_batch = None;
+  }
+
 let check label (Fuzz_gen.Pack g) case =
   let c = Fuzz_gen.codec g in
   let refs = Array.map (fun f -> Diff_ocaml.reference c f.name) case.fields in

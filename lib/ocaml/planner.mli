@@ -189,3 +189,17 @@ val simplify : facts -> bool T.expr -> bool T.expr
 val may_overflow : 'a T.expr -> bool
 (** [may_overflow e] is [true] when evaluating [e] may overflow, which rejects
     the record. *)
+
+val fits :
+  (int * int) Smap.t -> (int -> int -> int) -> int T.expr -> int T.expr -> bool
+(** [fits ranges op a b] is [true] when [op a b] cannot overflow the native int
+    for values in [ranges], so is written as plain arithmetic. *)
+
+val refined :
+  (int * int) Smap.t -> facts -> bool T.expr list -> (int * int) Smap.t * facts
+(** [refined ranges facts conditions] is the ranges and facts that hold once
+    [conditions] have passed, for the code after them. *)
+
+val nonnegative_in : (int * int) Smap.t -> facts -> int T.expr -> bool
+(** [nonnegative_in ranges facts e] is [true] when [e] is known not to be
+    negative. *)

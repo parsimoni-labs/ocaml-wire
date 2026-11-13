@@ -17,6 +17,16 @@ type case = { id : int; size : int; fields : field array }
 (** A generated module: its number in the library, the record's size and its
     fields in order. *)
 
+type scan = { scan_id : int; variant : string; outputs : string list }
+(** A scanner {!Wire_rust.scanner} generates: its number in the library, which
+    outputs it selects (["full"], ["selected"] or ["validate"], as the OCaml
+    backend's) and their names in order. *)
+
+val scan_ops : scan -> Diff_ocaml.scan_ops
+(** [scan_ops s] runs [s]'s [decode] on a frame for {!Diff_ocaml.check_scan},
+    which compares its acceptance and outputs with the codec. A negative offset
+    or length is refused, as the OCaml scanner refuses it. *)
+
 val check : string -> Fuzz_gen.packed -> case -> bytes -> unit
 (** [check label p case buf] compares [case], generated from [p]'s codec, with
     the codec on [buf], at the offsets of {!Diff_ocaml.check} that are not
