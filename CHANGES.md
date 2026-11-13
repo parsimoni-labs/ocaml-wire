@@ -30,6 +30,9 @@
 - `wire.runtime` has `Target`, loads at `int64_u` offsets for OxCaml (#459,
   @samoht)
 
+- `examples/net` has `Packet_stack`: Ethernet with IPv4 and TCP or UDP (#460,
+  @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a

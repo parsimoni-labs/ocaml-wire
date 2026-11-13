@@ -79,4 +79,103 @@ typedef struct WireUDP
    UINT16BE Checksum;
 } UDP;
 
+typedef struct WireStackTCP
+{
+   UINT16BE src_port;
+   UINT16BE dst_port;
+   UINT32BE seq;
+   UINT32BE ack;
+   UINT16BE data_offset : 4 { (data_offset >= 5) };
+   UINT16BE reserved : 3;
+   UINT16BE flags : 9;
+   UINT16BE window;
+   UINT16BE checksum;
+   UINT16BE urgent;
+   UINT8 options[:byte-size ((data_offset << 2) - 20)];
+} StackTCP;
+
+typedef struct WireOptRegion_seamsub_total_length_lsl_ihl_2_StackTCP(UINT32 total_length,
+UINT32 ihl)
+where ((total_length >= (ihl << 2)))
+{
+   StackTCP v[:byte-size-single-element-array-at-most (total_length - (ihl << 2))];
+} OptRegion_seamsub_total_length_lsl_ihl_2_StackTCP;
+
+casetype _Opt_seamsub_total_length_lsl_ihl_2_StackTCP(UINT8 present,
+UINT32 total_length,
+UINT32 ihl) {
+               switch (present) {
+               case 0: UINT8 v0[:byte-size 0];
+               default: OptRegion_seamsub_total_length_lsl_ihl_2_StackTCP(total_length,
+               ihl) v1;
+               }
+} Opt_seamsub_total_length_lsl_ihl_2_StackTCP;
+
+typedef struct WireStackUDP
+{
+   UINT16BE src_port;
+   UINT16BE dst_port;
+   UINT16BE length { (length >= 8) };
+   UINT16BE checksum;
+   UINT8 payload[:byte-size (length - 8)];
+} StackUDP;
+
+typedef struct WireOptRegion_seamsub_total_length_lsl_ihl_2_StackUDP(UINT32 total_length,
+UINT32 ihl)
+where ((total_length >= (ihl << 2)))
+{
+   StackUDP v[:byte-size-single-element-array-at-most (total_length - (ihl << 2))];
+} OptRegion_seamsub_total_length_lsl_ihl_2_StackUDP;
+
+casetype _Opt_seamsub_total_length_lsl_ihl_2_StackUDP(UINT8 present,
+UINT32 total_length,
+UINT32 ihl) {
+               switch (present) {
+               case 0: UINT8 v0[:byte-size 0];
+               default: OptRegion_seamsub_total_length_lsl_ihl_2_StackUDP(total_length,
+               ihl) v1;
+               }
+} Opt_seamsub_total_length_lsl_ihl_2_StackUDP;
+
+typedef struct WireStackIPv4
+{
+   UINT8 ihl : 4;
+   UINT8 version : 4 { ((ihl >= 5) && (version == 4)) };
+   UINT8 ecn : 2;
+   UINT8 dscp : 6;
+   UINT16BE total_length { (total_length >= (ihl << 2)) };
+   UINT16BE identification;
+   UINT16BE flags : 3;
+   UINT16BE fragment_offset : 13;
+   UINT8 ttl;
+   UINT8 protocol;
+   UINT16BE checksum;
+   UINT32BE src;
+   UINT32BE dst;
+   UINT8 options[:byte-size ((ihl << 2) - 20)];
+   Opt_seamsub_total_length_lsl_ihl_2_StackTCP(((((((flags & 1) == 0) && (fragment_offset == 0)) && (protocol == 6))) ? 1 : 0),
+   total_length,
+   ihl) tcp;
+   Opt_seamsub_total_length_lsl_ihl_2_StackUDP(((((((flags & 1) == 0) && (fragment_offset == 0)) && (protocol == 17))) ? 1 : 0),
+   total_length,
+   ihl) udp;
+   UINT8 opaque_[:byte-size (((!(((((flags & 1) == 0) && (fragment_offset == 0)) && (protocol == 6)) || ((((flags & 1) == 0) && (fragment_offset == 0)) && (protocol == 17))))) ? (total_length - (ihl << 2)) : 0)];
+} StackIPv4;
+
+casetype _Opt_StackIPv4(UINT8 present) {
+                                          switch (present) {
+                                          case 0: UINT8 v0[:byte-size 0];
+                                          default: StackIPv4 v1;
+                                          }
+} Opt_StackIPv4;
+
+entrypoint
+typedef struct WireEthernetStack
+{
+   UINT8 dst[:byte-size 6];
+   UINT8 src[:byte-size 6];
+   UINT16BE ether_type;
+   Opt_StackIPv4((((ether_type == 2048)) ? 1 : 0)) ipv4;
+} EthernetStack;
+
 

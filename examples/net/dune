@@ -1,6 +1,6 @@
 (library
  (name net)
- (modules net)
+ (modules net packet_stack)
  (wrapped false)
  (libraries wire bytesrw optint fmt))
 
