@@ -386,8 +386,8 @@ let is_elt_var name = String.starts_with ~prefix:elt_var_prefix name
    expression (it widens a narrower argument to it, and refuses a wider one
    rather than truncating); a bound parameter comes back as its own declared
    type. The use site passes each one on by name. A sub-codec or a casetype
-   keeps a scope of its own and applies its own arguments, so nothing is lifted
-   through one.
+   keeps a scope of its own; a sub-codec is applied to its formals by name
+   ([Sub(p1, ...)]), so those come back too, as declared.
 
    Pure, so it can be compared where the declaration itself cannot. *)
 let rec wrap_shape : type a. a typ -> string * param list =
@@ -462,7 +462,7 @@ let rec wrap_shape : type a. a typ -> string * param list =
         List.split (List.map (fun (Pack_expr e) -> expr_shape e) args)
       in
       (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
-  | Codec { codec_name; _ } -> plain codec_name
+  | Codec { codec_name; codec_struct; _ } -> (codec_name, codec_struct.params)
 
 and expr_shape : type a. a expr -> string * param list =
  fun e ->

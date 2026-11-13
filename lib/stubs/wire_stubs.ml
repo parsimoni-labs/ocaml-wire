@@ -170,7 +170,7 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
    shells out to [3d.exe], keeping the build rule free of inline shell.
    [test.c] (it has a [main]) and [<Name>Wrapper.c] (it needs a user-supplied
    [<Name>EverParseError] the FFI path never provides) are skipped. *)
-let build_codec_archive ~schema_dir ~archive =
+let build_codec_archive ?(cflags = []) ~schema_dir ~archive () =
   let is_codec_unit f =
     Filename.check_suffix f ".c"
     && f <> "test.c"
@@ -183,7 +183,8 @@ let build_codec_archive ~schema_dir ~archive =
   let object_of c =
     let obj = Filename.remove_extension c ^ ".codec.o" in
     let cmd =
-      Fmt.str "cc -c -D_DEFAULT_SOURCE -I %s %s -o %s"
+      Fmt.str "cc -c -D_DEFAULT_SOURCE%s -I %s %s -o %s"
+        (String.concat "" (List.map (fun f -> " " ^ Filename.quote f) cflags))
         (Filename.quote schema_dir)
         (Filename.quote (Filename.concat schema_dir c))
         (Filename.quote obj)

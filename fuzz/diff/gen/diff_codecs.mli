@@ -72,3 +72,19 @@ type scan_case =
 val scan_cases : scan_case list
 (** The structured cases: regions, optional fields, tags, bitfield tests and the
     {!Packet_stack} codec. *)
+
+type c_oracle = {
+  fields : (string * int) list;
+      (** The scalar members of the case's default plug, named by path as
+          [project] names them, each with the width of its C type in bits. *)
+  scan : bytes -> int -> int -> int * (string * int) list;
+      (** [scan buf off len] runs the EverParse validator of the case's FFI
+          projection on a zeroed plug and returns the consumed prefix, or [-1]
+          for a rejected frame, with the value of every member of
+          {!field-fields}. *)
+  standalone : bytes -> int -> int -> int;
+      (** [standalone buf off len] runs the EverParse validator of the case's
+          standalone projection, the default [.3d] output, and returns the
+          consumed prefix, or [-1] for a rejected frame. *)
+}
+(** A structured case's verified C validators. *)

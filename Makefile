@@ -98,7 +98,8 @@ bench-clcw:
 # Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml (and on
 # OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse,
 # smoltcp and pnet_packet, on each corpus of BENCH_RUST_CORPORA (name:stride,
-# written by bench.exe corpus). cargo fetches the crates the first time.
+# written by bench.exe corpus), and with BUILD_EVERPARSE=1 the EverParse C
+# validator of the same codec. cargo fetches the crates the first time.
 # Results land in _build/bench-rust/.
 OXCAML_SWITCH ?= 5.4.0-ox9
 BENCH_RUST_PACKETS ?= 200000
@@ -126,6 +127,11 @@ bench-rust:
 	    --build-dir $(CURDIR)/_build/oxcaml bench/rust/bench.exe && \
 	  $(call bench_rust_each,_build/oxcaml/default/bench/rust/bench.exe run,oxcaml); \
 	else echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
+	  BUILD_EVERPARSE=1 dune build --profile=release \
+	    bench/rust/everparse/everparse.exe && \
+	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 PROF_EXE ?= bench/clcw/bench.exe

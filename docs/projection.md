@@ -25,6 +25,42 @@ combinator must reject when it is built. The README's
   whose absent case is a zero-byte field.
 - The pointer/probe/specialisation subsystem is out of scope: it
   describes out-of-band data, not a single-buffer codec.
+- A struct with one field (after bitfield packing) is read as that field,
+  and a field of its type cannot carry an action when the struct's own
+  field carries one ("this field cannot be read because it has multiple
+  actions"). The FFI plug therefore does not flatten such a sub-codec
+  where the field holding it has a setter: as a field of the entrypoint,
+  or under a user action.
+- A literal has no big-endian type (`(UINT16BE) 0` is a `UINT16`), so an
+  action cannot pass a constant to a big-endian setter: the validator
+  cannot clear the plug members of an absent optional.
+
+## The FFI plug
+
+`Everparse.project ~mode:`Ffi` gives the entrypoint a `ctx` parameter and
+each named field a setter call, and `Wire_3d` writes the default
+`<Name>_Fields` plug, one member per setter index. A codec that embeds
+another codec (as a field, under an `optional`, or in a `nested` region)
+also flattens it: the sub-codec's struct and the optional casetype or
+region wrapper around it take `ctx`, and each of its scalar fields calls the
+entrypoint's setter with its own index. Members are named by path, the field
+names from the entrypoint down joined with underscores (`ipv4_src`,
+`ipv4_tcp_src_port`), with a `<path>_present` flag per optional, the names
+`Wire_ocaml.scanner` gives its outputs; a path that spells another member's
+name is refused when the codec is projected. A sub-codec reached at two
+paths is declared once per path (`Leaf_a`, `Leaf_b`), since each copy calls
+the setters with its own indices. An optional integer or float of an
+embedded codec has a member after its flag, also under `map` or `enum`. An
+embedded byte span has no member, and a sub-codec inside an array, a repeat
+or a casetype body is validated but not flattened.
+
+The validator writes a member only for what it parses. A presence flag is
+written on every successful validation, 1 or 0; the fields under an absent
+optional are not written and keep the plug's initial value. The generated
+stubs, the differential oracle and the benchmark loops zero the plug before
+each validation, so those fields read 0, as in `Wire_ocaml.scanner`. A
+caller that reuses a plug without zeroing it reads them only when their
+flag is 1.
 
 ## Generated C
 

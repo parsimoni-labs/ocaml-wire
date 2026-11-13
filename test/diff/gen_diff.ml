@@ -199,7 +199,7 @@ let fixed schema_dir =
        Diff_codecs.included);
   (* Archive the per-codec validators so [wire_ffi.c] (headers only) links
      against them as separate translation units. *)
-  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libdiffcodecs.a";
+  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libdiffcodecs.a" ();
   let oc = open_out "diff_index.ml" in
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
@@ -226,54 +226,134 @@ let fixed schema_dir =
   Format.pp_print_flush ppf ();
   close_out oc
 
+(* The scalar members of a schema's default plug, with the width of their C
+   type: a byte span's member holds an offset, not a value, and a float has no
+   integer view, so neither is compared. *)
+let scalar_members (schema : Wire.Everparse.t) =
+  List.filter_map
+    (fun (f : Wire.Everparse.plug_field) ->
+      let bits =
+        match f.c_type with
+        | "uint8_t" -> Some 8
+        | "uint16_t" -> Some 16
+        | "uint32_t" -> Some 32
+        | "uint64_t" -> Some 64
+        | _ -> None
+      in
+      match bits with
+      | Some bits when not (String.ends_with ~suffix:"SetBytes" f.setter) ->
+          Some (f.name, bits)
+      | _ -> None)
+    (Wire.Everparse.plug_fields schema)
+
+(* Each structured case through its FFI projection: the stub runs the verified
+   validator with a zeroed default plug, as the generated stubs do, and copies
+   every scalar member into [out]. It returns the consumed prefix, or [-1] for
+   a rejected or out-of-bounds frame. *)
+let pp_scan_stub ppf i (schema : Wire.Everparse.t) =
+  let members = scalar_members schema in
+  Fmt.pf ppf
+    "CAMLprim value wire_diff_scan_%d(value buffer, value offset, value \
+     length, value out) {@\n"
+    i;
+  Fmt.pf ppf "  uint8_t *data; uint64_t len;@\n";
+  Fmt.pf ppf
+    "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
+     Val_long(-1);@\n";
+  Fmt.pf ppf "  %sFields f;@\n  memset(&f, 0, sizeof f);@\n"
+    (Wire_3d.everparse_name schema.name);
+  Fmt.pf ppf
+    "  uint64_t end = %s((WIRECTX *) &f, NULL, scan_error, data, len, 0);@\n"
+    (Wire_stubs.validator_name schema.name);
+  Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
+  List.iteri
+    (fun k (name, _) ->
+      Fmt.pf ppf "  Field(out, %d) = Val_long((intnat) f.%s);@\n" k
+        (Wire.Everparse.plug_member name))
+    members;
+  Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
+
+(* The same case through its standalone projection, the default [.3d] output:
+   the consumed prefix, or [-1]. *)
+let pp_standalone_stub ppf i (schema : Wire.Everparse.t) =
+  Fmt.pf ppf
+    "CAMLprim value wire_diff_standalone_%d(value buffer, value offset, value \
+     length) {@\n"
+    i;
+  Fmt.pf ppf "  uint8_t *data; uint64_t len;@\n";
+  Fmt.pf ppf
+    "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
+     Val_long(-1);@\n";
+  Fmt.pf ppf "  uint64_t end = %s(NULL, scan_error, data, len, 0);@\n"
+    (Wire_stubs.validator_name schema.name);
+  Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
+  Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
+
+(* The standalone projection is of the codec under a name of its own, so its
+   validator links next to the FFI one. *)
+let standalone codec =
+  let name =
+    "Standalone" ^ Wire.Everparse.Raw.(struct_name (struct_of_codec codec))
+  in
+  Wire.Everparse.project ~mode:`Standalone (Wire.Codec.rename name codec)
+
 let scanners schema_dir =
   let cases =
     List.map
       (fun (Diff_codecs.Scan c) ->
-        (c.label, Wire.Everparse.project ~mode:`Standalone c.codec))
+        (c.label, Wire.Everparse.project ~mode:`Ffi c.codec))
       Diff_codecs.scan_cases
   in
-  let failures = generate_schemas schema_dir cases in
+  let standalones =
+    List.map
+      (fun (Diff_codecs.Scan c) ->
+        (c.label ^ " (standalone)", standalone c.codec))
+      Diff_codecs.scan_cases
+  in
+  let failures = generate_schemas schema_dir (cases @ standalones) in
   List.iter
     (fun (label, message) -> Fmt.epr "diff-gen: FATAL %s: %s@." label message)
     failures;
   if failures <> [] then
     failwith "EverParse rejected a required structured oracle";
-  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a";
+  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a" ();
   let b = Buffer.create 2048 in
   let ppf = Format.formatter_of_buffer b in
-  Fmt.pf ppf "#include <stdint.h>\n#include <caml/mlvalues.h>\n";
+  Fmt.pf ppf
+    "#include <stdint.h>\n#include <string.h>\n#include <caml/mlvalues.h>\n";
+  Fmt.pf ppf "#include \"EverParse.h\"\n";
   List.iter
     (fun (_, (schema : Wire.Everparse.t)) ->
-      Fmt.pf ppf "#include \"%s.h\"\n" schema.Wire.Everparse.name)
+      let base = String.capitalize_ascii schema.name in
+      Fmt.pf ppf "#include \"%s_Fields.h\"\n#include \"%s.h\"\n" base base)
     cases;
+  List.iter
+    (fun (_, (schema : Wire.Everparse.t)) ->
+      Fmt.pf ppf "#include \"%s.h\"\n" (String.capitalize_ascii schema.name))
+    standalones;
   Fmt.pf ppf
     {|
 static void scan_error(const char *s, const char *f, const char *r, uint64_t k,
                        uint8_t *ctx, uint8_t *input, uint64_t pos) {
   (void)s; (void)f; (void)r; (void)k; (void)ctx; (void)input; (void)pos;
 }
-typedef uint64_t (*scan_validator)(uint8_t *, EVERPARSE_ERROR_HANDLER, uint8_t *, uint64_t, uint64_t);
-static value scan_validate(scan_validator validate, value buffer, value offset, value length) {
-  intnat off = Long_val(offset), len = Long_val(length);
+static int scan_frame(value buffer, value offset, value length,
+                      uint8_t **data, uint64_t *len) {
+  intnat off = Long_val(offset), n = Long_val(length);
   mlsize_t available = caml_string_length(buffer);
-  if (off < 0 || len < 0 || (uintnat)off > available ||
-      (uintnat)len > available - (uintnat)off || (uintnat)len > UINT32_MAX)
-    return Val_long(-1);
-  uint64_t end = validate(NULL, scan_error, (uint8_t *)Bytes_val(buffer) + off, (uint64_t)len, 0);
-  if (!EverParseIsSuccess(end) || end > (uint64_t)len || end > (uint64_t)Max_long)
-    return Val_long(-1);
-  return Val_long((intnat)end);
+  if (off < 0 || n < 0 || (uintnat)off > available ||
+      (uintnat)n > available - (uintnat)off || (uintnat)n > UINT32_MAX)
+    return 0;
+  *data = (uint8_t *)Bytes_val(buffer) + off;
+  *len = (uint64_t)n;
+  return 1;
+}
+static int scan_ok(uint64_t end, uint64_t len) {
+  return EverParseIsSuccess(end) && end <= len && end <= (uint64_t)Max_long;
 }
 |};
-  List.iteri
-    (fun i (_, (schema : Wire.Everparse.t)) ->
-      Fmt.pf ppf
-        "CAMLprim value wire_diff_scan_%d(value b, value o, value n) { return \
-         scan_validate(%s, b, o, n); }\n"
-        i
-        (Wire_stubs.validator_name schema.Wire.Everparse.name))
-    cases;
+  List.iteri (fun i (_, schema) -> pp_scan_stub ppf i schema) cases;
+  List.iteri (fun i (_, schema) -> pp_standalone_stub ppf i schema) standalones;
   Format.pp_print_flush ppf ();
   Out_channel.with_open_text "scan_ffi.c" (fun oc ->
       output_string oc (Buffer.contents b));
@@ -282,13 +362,22 @@ static value scan_validate(scan_validator validate, value buffer, value offset, 
       List.iteri
         (fun i _ ->
           Fmt.pf ppf
-            "external accepted_%d : bytes -> int -> int -> int = \
-             \"wire_diff_scan_%d\" [@@@@noalloc]\n"
-            i i)
+            "external scan_%d : bytes -> int -> int -> int array -> int = \
+             \"wire_diff_scan_%d\" [@@@@noalloc]\n\
+             external standalone_%d : bytes -> int -> int -> int = \
+             \"wire_diff_standalone_%d\" [@@@@noalloc]\n"
+            i i i i)
         cases;
+      Fmt.pf ppf
+        "(* Each case's label, the scalar members of its plug with their width \
+         in bits, the stub of its FFI projection and the stub of its \
+         standalone one. *)@\n";
       Fmt.pf ppf "let covered = [\n";
       List.iteri
-        (fun i (label, _) -> Fmt.pf ppf "(%S, accepted_%d);\n" label i)
+        (fun i (label, schema) ->
+          Fmt.pf ppf "(%S, ([ %a ], scan_%d, standalone_%d));\n" label
+            Fmt.(list ~sep:(any "; ") (fun ppf (n, w) -> pf ppf "(%S, %d)" n w))
+            (scalar_members schema) i i)
         cases;
       Fmt.pf ppf "]@.";
       Format.pp_print_flush ppf ())

@@ -20,6 +20,13 @@ record the compiler versions. All rows must agree on the checksum of each
 corpus family. Keep validation, fragment handling and checksum work
 identical when changing an implementation.
 
+`make bench-rust BUILD_EVERPARSE=1` adds the EverParse C row
+(`everparse/`): the validator EverParse verifies and extracts from the same
+`Packet_stack.codec`, called once per slot in a C loop, with every field
+read from the default `EthernetStack_Fields` plug, nested IPv4, TCP and UDP
+members and presence flags included. It times its passes in C, as the Rust
+harness does, and prints the same `RESULT` lines.
+
 ## Measurements
 
 Both harnesses read the process CPU time (`getrusage`, user and system)
@@ -31,11 +38,11 @@ takes different CPU times on different cores and clocks, and other
 processes still evict caches and train the branch predictors, so read the
 p10 and median columns too.
 
-One run of `make bench-rust` with its defaults, 200,000 packets per corpus and 21
+One run of `make bench-rust BUILD_EVERPARSE=1` with its defaults, 200,000 packets per corpus and 21
 timed passes per row, on an ARM64 macOS host whose load average fell from
 68 to 52 during the run. OCaml 5.4.1 (no flambda); OxCaml 5.4.0+ox (switch
 `5.4.0-ox9`); rustc 1.94.1 with etherparse 0.21.0, smoltcp 0.14.0 and
-pnet_packet 0.35.0, as `cargo/Cargo.lock` pins them. The corpora are
+pnet_packet 0.35.0, as `cargo/Cargo.lock` pins them; EverParse 3d v2026.08.21. The corpora are
 deterministic: `bench.exe corpus DIR 200000` writes them with these SHA-256
 digests.
 
@@ -70,6 +77,7 @@ Best CPU ns/packet:
 | OxCaml View.check/view, linked headers | 13.96 | 15.29 | 20.00 | 10.44 |
 | OCaml fused stack, fold | 14.24 | 11.80 | 16.44 | 12.05 |
 | OCaml View.check/view, linked headers | 20.40 | 17.34 | 23.22 | 16.93 |
+| EverParse C, default plug | 35.36 | 33.18 | 34.79 | 31.65 |
 | OCaml fused stack, decode | 36.24 | 32.47 | 41.67 | 33.97 |
 | OCaml `Wire.Codec` valid/read, linked headers | 46.02 | 42.09 | 48.49 | 38.56 |
 | OxCaml `Wire.Codec` valid/read, linked headers | 47.95 | 62.50 | 61.29 | 46.92 |
@@ -80,6 +88,11 @@ Every row gave checksum `886803207481188` on both `fixed64` corpora and
 `836859001324973` on both `mix128` corpora. On sorted corpora the best of
 the OxCaml rows often lies well below their median, so one run does not
 order rows within about 1 ns/packet there.
+
+The EverParse C validator's C was compiled by Apple clang 21.0.0 at `-O2`.
+Each field reaches the plug through an out-of-line setter in another
+translation unit, 30 calls for a TCP packet, and the plug is zeroed per
+slot; the run does not separate that cost from the validator's own.
 
 The `fold` and `batch` rows call the scanner's `fold_step` and
 `fold_frames_step`, which call the checksum module `Step` by name. Stock

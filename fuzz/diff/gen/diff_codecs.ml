@@ -157,6 +157,12 @@ type scan_case =
     }
       -> scan_case
 
+type c_oracle = {
+  fields : (string * int) list;
+  scan : bytes -> int -> int -> int * (string * int) list;
+  standalone : bytes -> int -> int -> int;
+}
+
 let packet ~tcp ~ihl ~words ~fragment =
   let b = Bytes.make 128 '\000' in
   Bytes.set_uint16_be b 12 0x0800;
@@ -352,6 +358,56 @@ let optional_scan ~region =
                   in
                   List.init 13 (fun len -> Bytes.sub b 0 len))
                 [ 0; 1; 2; 3; 7; 255 ])
+            [ 0; 1; 2; 255 ]);
+    }
+
+(* An optional scalar of an embedded codec: the scanners and the plug hand
+   out its value and its presence by path. *)
+let nested_optional_scan =
+  let open Wire in
+  let kind = Field.v "kind" uint8 in
+  let inner =
+    Codec.v "ScanNestedOptionalInner"
+      (fun kind value tail -> (kind, value, tail))
+      Codec.
+        [
+          (kind $ fun (x, _, _) -> x);
+          ( Field.optional "value"
+              ~present:Expr.(Field.ref kind = int 1)
+              uint16be
+          $ fun (_, x, _) -> x );
+          (Field.v "tail" uint8 $ fun (_, _, x) -> x);
+        ]
+  in
+  let codec =
+    Codec.v "ScanNestedOptional"
+      (fun tag inner -> (tag, inner))
+      Codec.[ Field.v "tag" uint8 $ fst; Field.v "inner" (codec inner) $ snd ]
+  in
+  let project (tag, (kind, value, tail)) =
+    [
+      ("tag", UInt8.to_int tag);
+      ("inner_kind", UInt8.to_int kind);
+      ("inner_value_present", if Option.is_some value then 1 else 0);
+      ("inner_value", Option.fold ~none:0 ~some:UInt16.to_int value);
+      ("inner_tail", UInt8.to_int tail);
+    ]
+  in
+  Scan
+    {
+      label = "scan_nested_optional";
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus =
+        (fun () ->
+          List.concat_map
+            (fun kind ->
+              let b =
+                Bytes.init 8 (fun i ->
+                    Char.chr (if i = 1 then kind else i + 16))
+              in
+              List.init 9 (fun len -> Bytes.sub b 0 len))
             [ 0; 1; 2; 255 ]);
     }
 
@@ -691,6 +747,7 @@ let scan_cases =
       small_scan true;
       optional_scan ~region:false;
       optional_scan ~region:true;
+      nested_optional_scan;
       Scan
         {
           label = "scan_packet";

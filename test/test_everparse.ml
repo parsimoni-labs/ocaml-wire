@@ -755,17 +755,301 @@ let test_3d_optional_over_param_codec () =
           $ fun (_, v) -> v );
         ]
   in
-  let check mode =
+  (* The FFI projection flattens the sub-codec into the plug, so its struct
+     also takes [ctx], after its own formal. *)
+  let check mode ~formals ~args =
     let out = flatten (to_3d (Everparse.project ~mode c).module_) in
     Alcotest.(check bool)
       "gate casetype declares the sub-codec formal" true
-      (contains ~sub:"_Opt_OptPSub(UINT8 present, UINT8 n)" out);
+      (contains ~sub:("_Opt_OptPSub(UINT8 present, " ^ formals ^ ")") out);
     Alcotest.(check bool)
       "use site passes the formal to the gate casetype" true
-      (contains ~sub:", n) o" out)
+      (contains ~sub:(", " ^ args ^ ") o") out)
   in
-  check `Ffi;
-  check `Standalone
+  check `Ffi ~formals:"UINT8 n, mutable WireCtx *ctx" ~args:"n, ctx";
+  check `Standalone ~formals:"UINT8 n" ~args:"n"
+
+(* A three-layer stack whose layers reuse field names: [src] at the top and in
+   the middle layer, [port] in both transport layers. One transport is a fixed
+   sub-codec under an optional, the other a sized region under one. *)
+let nested_stack () =
+  let t =
+    Codec.v "NestT"
+      (fun port seq off rest -> (port, seq, off, rest))
+      Codec.
+        [
+          (Field.v "port" uint16be $ fun (p, _, _, _) -> p);
+          (Field.v "seq" uint32be $ fun (_, s, _, _) -> s);
+          (Field.v "off" (bits ~width:4 U8) $ fun (_, _, o, _) -> o);
+          (Field.v "rest" (bits ~width:4 U8) $ fun (_, _, _, r) -> r);
+        ]
+  in
+  let u =
+    Codec.v "NestU"
+      (fun port len -> (port, len))
+      Codec.[ Field.v "port" uint16be $ fst; Field.v "len" uint16be $ snd ]
+  in
+  let f_proto = Field.v "proto" uint8 in
+  let ip =
+    Codec.v "NestIp"
+      (fun src proto tcp udp pad -> (src, proto, tcp, udp, pad))
+      Codec.
+        [
+          (Field.v "src" uint32be $ fun (s, _, _, _, _) -> s);
+          (f_proto $ fun (_, p, _, _, _) -> p);
+          ( Field.optional "tcp"
+              ~present:Expr.(Field.ref f_proto = int 6)
+              (codec t)
+          $ fun (_, _, t, _, _) -> t );
+          ( Field.optional "udp"
+              ~present:Expr.(Field.ref f_proto = int 17)
+              (nested_at_most ~size:(int 8) (codec u))
+          $ fun (_, _, _, u, _) -> u );
+          ( Field.optional "pad"
+              ~present:Expr.(Field.ref f_proto = int 1)
+              (byte_array ~size:(int 2))
+          $ fun (_, _, _, _, p) -> p );
+        ]
+  in
+  let f_kind = Field.v "kind" uint16be in
+  Codec.v "NestTop"
+    (fun src kind ip -> (src, kind, ip))
+    Codec.
+      [
+        (Field.v "src" (byte_array ~size:(int 6)) $ fun (s, _, _) -> s);
+        (f_kind $ fun (_, k, _) -> k);
+        ( Field.optional "ip"
+            ~present:Expr.(Field.ref f_kind = int 0x800)
+            (codec ip)
+        $ fun (_, _, i) -> i );
+      ]
+
+let plug_names s =
+  List.map (fun f -> f.Everparse.name) (Everparse.plug_fields s)
+
+let test_ffi_nested_plug_paths () =
+  let s = Everparse.project ~mode:`Ffi (nested_stack ()) in
+  Alcotest.(check (list string))
+    "one member per scalar, named by path, and a flag per optional"
+    [
+      "src";
+      "kind";
+      "ip";
+      "ip_present";
+      "ip_src";
+      "ip_proto";
+      "ip_tcp_present";
+      "ip_tcp_port";
+      "ip_tcp_seq";
+      "ip_tcp_off";
+      "ip_tcp_rest";
+      "ip_udp_present";
+      "ip_udp_port";
+      "ip_udp_len";
+      "ip_pad_present";
+    ]
+    (plug_names s);
+  let fields = Everparse.plug_fields s in
+  Alcotest.(check (list int))
+    "indices follow declaration order"
+    (List.init (List.length fields) Fun.id)
+    (List.map (fun f -> f.Everparse.idx) fields);
+  let c_type name =
+    (List.find (fun f -> f.Everparse.name = name) fields).Everparse.c_type
+  in
+  Alcotest.(check string)
+    "the optional keeps its offset" "uint32_t" (c_type "ip");
+  Alcotest.(check string) "a presence flag" "uint8_t" (c_type "ip_present");
+  Alcotest.(check string) "a nested scalar" "uint32_t" (c_type "ip_src");
+  Alcotest.(check string) "a nested bitfield" "uint8_t" (c_type "ip_tcp_off");
+  let out = flatten (to_3d s.module_) in
+  List.iter
+    (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
+    [
+      "typedef struct WireNestIp(mutable WireCtx *ctx)";
+      "typedef struct WireNestT(mutable WireCtx *ctx)";
+      "typedef struct WireNestU(mutable WireCtx *ctx)";
+      "NestTopSetU32BE(ctx, (UINT32) 4, src)";
+      "NestTopSetU16BE(ctx, (UINT32) 7, port)";
+      "NestTopSetU16BE(ctx, (UINT32) 12, port)";
+      "NestTopSetU8(ctx, (UINT32) 9, off)";
+      "NestTopSetU8(ctx, (UINT32) 3, ((";
+      "NestTopSetU8(ctx, (UINT32) 14, ((";
+      "default: NestIp(ctx) v1;";
+    ];
+  Alcotest.(check bool)
+    "the setters are declared before the structs that call them" true
+    (index_of ~sub:"extern unit NestTopSetU8" out
+    < index_of ~sub:"typedef struct WireNestT" out)
+
+(* A member holds what its setter is passed: an integer under [map] keeps its
+   width, at the top and nested, and a field handed out as an offset keeps a
+   32-bit one. *)
+let test_ffi_member_widths () =
+  let wide = map ~decode:Fun.id ~encode:Fun.id uint64be in
+  let inner =
+    Codec.v "WideIn"
+      (fun w g -> (w, g))
+      Codec.[ Field.v "w" wide $ fst; Field.v "g" uint8 $ snd ]
+  in
+  let f_t = Field.v "t" uint8 in
+  let c =
+    Codec.v "WideTop"
+      (fun t w o i -> (t, w, o, i))
+      Codec.
+        [
+          (f_t $ fun (t, _, _, _) -> t);
+          (Field.v "w" wide $ fun (_, w, _, _) -> w);
+          ( Field.optional "o" ~present:Expr.(Field.ref f_t = int 1) uint8
+          $ fun (_, _, o, _) -> o );
+          (Field.v "i" (codec inner) $ fun (_, _, _, i) -> i);
+        ]
+  in
+  Alcotest.(check (list (triple string string string)))
+    "member, its type, its setter's value type"
+    [
+      ("t", "uint8_t", "uint8_t");
+      ("w", "uint64_t", "uint64_t");
+      ("o", "uint32_t", "uint32_t");
+      ("o_present", "uint8_t", "uint8_t");
+      ("i", "uint32_t", "uint32_t");
+      ("i_w", "uint64_t", "uint64_t");
+      ("i_g", "uint8_t", "uint8_t");
+    ]
+    (List.map
+       (fun (f : Everparse.plug_field) -> (f.name, f.c_type, f.val_c_type))
+       (Everparse.plug_fields (Everparse.project ~mode:`Ffi c)))
+
+(* An optional scalar of an embedded codec has a member after its flag, set
+   by a codec of that one field that the optional's region parses. *)
+let test_ffi_nested_optional_scalar () =
+  let f_k = Field.v "k" uint8 in
+  let present = Expr.(Field.ref f_k = int 1) in
+  let inner =
+    Codec.v "OptIn"
+      (fun k o -> (k, o))
+      Codec.[ f_k $ fst; Field.optional "o" ~present uint16be $ snd ]
+  in
+  let c =
+    Codec.v "OptTop"
+      (fun t i -> (t, i))
+      Codec.[ Field.v "t" uint8 $ fst; Field.v "i" (codec inner) $ snd ]
+  in
+  let s = Everparse.project ~mode:`Ffi c in
+  Alcotest.(check (list string))
+    "members"
+    [ "t"; "i"; "i_k"; "i_o_present"; "i_o" ]
+    (plug_names s);
+  let out = flatten (to_3d s.module_) in
+  List.iter
+    (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
+    [
+      "UINT16BE v {:on-success OptTopSetU16BE(ctx, (UINT32) 4, v);";
+      "Some_i_o(ctx) o[:byte-size";
+    ]
+
+let test_ffi_nested_name_clash () =
+  let inner =
+    Codec.v "ClashIn"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "src" uint8 $ fst; Field.v "dst" uint8 $ snd ]
+  in
+  let c =
+    Codec.v "ClashTop"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "ip_src" uint8 $ fst; Field.v "ip" (codec inner) $ snd ]
+  in
+  match Everparse.project ~mode:`Ffi c with
+  | _ -> Alcotest.failf "ip_src and ip.src both became the member ip_src"
+  | exception Invalid_argument msg ->
+      Alcotest.(check bool)
+        "names the member" true
+        (contains ~sub:"\"ip_src\"" msg)
+
+let test_ffi_nested_shared_codec () =
+  (* One sub-codec at two paths calls the setters with two sets of indices, so
+     each path gets a struct of its own. *)
+  let leaf =
+    Codec.v "Leaf2"
+      (fun x y -> (x, y))
+      Codec.[ Field.v "x" uint16be $ fst; Field.v "y" uint8 $ snd ]
+  in
+  let c =
+    Codec.v "Twice"
+      (fun a b -> (a, b))
+      Codec.[ Field.v "a" (codec leaf) $ fst; Field.v "b" (codec leaf) $ snd ]
+  in
+  let s = Everparse.project ~mode:`Ffi c in
+  Alcotest.(check (list string))
+    "members"
+    [ "a"; "a_x"; "a_y"; "b"; "b_x"; "b_y" ]
+    (plug_names s);
+  let out = flatten (to_3d s.module_) in
+  List.iter
+    (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
+    [
+      "} Leaf2_a;";
+      "} Leaf2_b;";
+      "TwiceSetU16BE(ctx, (UINT32) 1, x)";
+      "TwiceSetU16BE(ctx, (UINT32) 4, x)";
+      "Leaf2_a(ctx) a";
+      "Leaf2_b(ctx) b";
+    ]
+
+let test_ffi_single_field_codec () =
+  (* EverParse reads a one-field struct as its field and refuses a setter on
+     both, so such a codec directly in an entrypoint field (which has its own
+     setter) is not flattened; under an optional it is. *)
+  let one = Codec.v "OneF" Fun.id Codec.[ Field.v "x" uint16be $ Fun.id ] in
+  let f_g = Field.v "g" uint8 in
+  let c =
+    Codec.v "OneTop"
+      (fun g a b -> (g, a, b))
+      Codec.
+        [
+          (f_g $ fun (g, _, _) -> g);
+          (Field.v "a" (codec one) $ fun (_, a, _) -> a);
+          ( Field.optional "b" ~present:Expr.(Field.ref f_g = int 1) (codec one)
+          $ fun (_, _, b) -> b );
+        ]
+  in
+  let s = Everparse.project ~mode:`Ffi c in
+  Alcotest.(check (list string))
+    "members"
+    [ "g"; "a"; "b"; "b_present"; "b_x" ]
+    (plug_names s);
+  let out = flatten (to_3d s.module_) in
+  List.iter
+    (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
+    [ "} OneF;"; "} OneF_b;"; "OneF a"; "OneF_b(ctx) b[:byte-size" ]
+
+let test_ffi_unflattened_shapes () =
+  (* Without an embedded codec the plug is the entrypoint's fields, and an
+     optional has no flag. A codec inside an array is validated, not flattened:
+     it keeps its own scope. *)
+  let f_g = Field.v "g" uint8 in
+  let flat =
+    Codec.v "FlatOpt"
+      (fun g a -> (g, a))
+      Codec.
+        [
+          f_g $ fst;
+          Field.optional "a" ~present:Expr.(Field.ref f_g <> int 0) uint8 $ snd;
+        ]
+  in
+  Alcotest.(check (list string))
+    "no flag without nesting" [ "g"; "a" ]
+    (plug_names (Everparse.project ~mode:`Ffi flat));
+  let inner = Codec.v "ArrIn" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
+  let arr =
+    Codec.v "ArrTop" Fun.id
+      Codec.[ Field.v "xs" (array ~len:(int 2) (codec inner)) $ Fun.id ]
+  in
+  let s = Everparse.project ~mode:`Ffi arr in
+  Alcotest.(check (list string)) "array elements" [ "xs" ] (plug_names s);
+  Alcotest.(check bool)
+    "the element struct takes no ctx" true
+    (contains ~sub:"typedef struct WireArrIn\n{" (to_3d s.module_))
 
 let test_3d_span_guard_once () =
   (* A span sized [length - 8] puts [length >= 8] on [length]. When the field
@@ -1663,8 +1947,22 @@ let suite =
         test_3d_absent_optional_projects_to_unit;
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
         test_3d_optional_over_param_codec;
+      Alcotest.test_case "ffi: nested plug paths" `Quick
+        test_ffi_nested_plug_paths;
+      Alcotest.test_case "ffi: a member is as wide as its setter's value" `Quick
+        test_ffi_member_widths;
+      Alcotest.test_case "ffi: an optional scalar of an embedded codec" `Quick
+        test_ffi_nested_optional_scalar;
+      Alcotest.test_case "ffi: nested name clash" `Quick
+        test_ffi_nested_name_clash;
+      Alcotest.test_case "ffi: nested shared codec" `Quick
+        test_ffi_nested_shared_codec;
+      Alcotest.test_case "ffi: single-field codec" `Quick
+        test_ffi_single_field_codec;
       Alcotest.test_case "3d: span guard written once" `Quick
         test_3d_span_guard_once;
+      Alcotest.test_case "ffi: unflattened shapes" `Quick
+        test_ffi_unflattened_shapes;
       Alcotest.test_case "3d: on_act drops the trailing bool return" `Quick
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick

@@ -90,7 +90,8 @@ val uses_wire_ctx : t -> bool
 type plug_field = {
   name : string;  (** Field name as declared in the codec. *)
   idx : int;  (** Index passed to the [WireSet*] callback. *)
-  c_type : string;  (** C type for the generated struct member. *)
+  c_type : string;
+      (** C type for the generated struct member: {!field-val_c_type}. *)
   setter : string;  (** [WireSet*] name that extracts this field. *)
   val_c_type : string;  (** C type of the value argument to the setter. *)
 }
@@ -104,9 +105,14 @@ val plug_member : string -> string
     headers the plug includes ([int_], [NULL_]). *)
 
 val plug_fields : t -> plug_field list
-(** [plug_fields s] enumerates the named fields of the source struct in
-    declaration order. Returns [[]] for schemas without a {!field-source}
-    struct. *)
+(** [plug_fields s] enumerates the plug's members in index order: the named
+    fields of the source struct in declaration order and, when the struct embeds
+    another codec (as a field, under an optional or in a sized region), each
+    scalar of every embedded codec and a [<path>_present] flag per optional,
+    named by path ([ipv4_tcp_src_port]). An optional integer or float of an
+    embedded codec follows its flag. Returns [[]] for schemas without a
+    {!field-source} struct. Raises [Invalid_argument] when two members share a
+    name. *)
 
 val plug_setters : t -> (string * string) list
 (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
