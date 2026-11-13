@@ -373,8 +373,8 @@ let bind4 g1 g2 g3 g4 f =
                   | x -> Alcobar.const x
                   | exception Invalid_argument _ -> Alcobar.const a))))
 
-(* [gen_fixed] yields fixed-size nodes (for [array] / [nested] inners, which
-   need a known element width); [gen_any] yields any node. Both compose the
+(* [fixed_level] yields fixed-size nodes (for [array] / [nested] inners, which
+   need a known element width); [any_level] yields any node. Both compose the
    full combinator set so the fuzzer reaches every nesting -- the point is to
    surface compositions Wire mishandles, not to pre-filter them. *)
 (* The recursive samplers can build structurally different records at the same
@@ -391,62 +391,58 @@ let rec4_uniq (Any a as x) (Any b as y) (Any c as z) (Any d as w) =
     ("R4" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label ^ "," ^ d.label))
     x y z w
 
-let rec gen_fixed depth : any Alcobar.gen =
-  let leaves = List.map Alcobar.const fixed_leaves in
-  if depth <= 0 then Alcobar.choose leaves
-  else
-    Alcobar.choose
-      (leaves
-      @ [
-          bind1_opt (gen_fixed (depth - 1)) nested_of;
-          bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
-          bind1_opt (gen_fixed (depth - 1)) (array_of 2);
-          bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
-          bind1 (gen_fixed (depth - 1)) map_of;
-          bind1 (gen_fixed (depth - 1)) where_of;
-          bind2 (gen_fixed (depth - 1)) (gen_fixed (depth - 1)) pair_uniq;
-          bind3
-            (gen_fixed (depth - 1))
-            (gen_fixed (depth - 1))
-            (gen_fixed (depth - 1))
-            rec3_uniq;
-          bind4
-            (gen_fixed (depth - 1))
-            (gen_fixed (depth - 1))
-            (gen_fixed (depth - 1))
-            (gen_fixed (depth - 1))
-            rec4_uniq;
-        ])
+let fixed_leaf_gens = List.map Alcobar.const fixed_leaves
 
-let rec gen_any depth : any Alcobar.gen =
-  let leaves =
-    List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
-  in
-  if depth <= 0 then Alcobar.choose leaves
+let any_leaf_gens =
+  List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
+
+(* One level over the fixed-size generator [fixed] for the level below. *)
+let fixed_level fixed =
+  Alcobar.choose
+    (fixed_leaf_gens
+    @ [
+        bind1_opt fixed nested_of;
+        bind1_opt fixed nested_at_most_of;
+        bind1_opt fixed (array_of 2);
+        bind1_opt fixed (array_seq_of 2);
+        bind1 fixed map_of;
+        bind1 fixed where_of;
+        bind2 fixed fixed pair_uniq;
+        bind3 fixed fixed fixed rec3_uniq;
+        bind4 fixed fixed fixed fixed rec4_uniq;
+      ])
+
+(* One level over the generators [any] and [fixed] for the level below. *)
+let any_level ~any ~fixed =
+  Alcobar.choose
+    (any_leaf_gens
+    @ [
+        bind1 any optional_of;
+        bind1 any repeat_of;
+        bind1 any repeat_seq_of;
+        bind1 any map_of;
+        bind1 any where_of;
+        bind1_opt fixed nested_of;
+        bind1_opt fixed nested_at_most_of;
+        bind1_opt fixed (array_of 2);
+        bind1_opt fixed (array_seq_of 2);
+        bind2 any any pair_uniq;
+        bind3 any any any rec3_uniq;
+        bind4 any any any any rec4_uniq;
+        bind2 any any casetype_of;
+      ])
+
+(* The fixed-size and the any generator at [depth], each level built once over
+   the two below it and shared by every combinator that draws an inner from
+   them. A generator is a description and a draw reads fresh choices at every
+   position it occupies, so sharing changes nothing that is sampled, and the
+   description stays linear in [depth]; a fuzz executable holds it for its
+   whole run. *)
+let rec levels depth =
+  if depth <= 0 then
+    (Alcobar.choose fixed_leaf_gens, Alcobar.choose any_leaf_gens)
   else
-    Alcobar.choose
-      (leaves
-      @ [
-          bind1 (gen_any (depth - 1)) optional_of;
-          bind1 (gen_any (depth - 1)) repeat_of;
-          bind1 (gen_any (depth - 1)) repeat_seq_of;
-          bind1 (gen_any (depth - 1)) map_of;
-          bind1 (gen_any (depth - 1)) where_of;
-          bind1_opt (gen_fixed (depth - 1)) nested_of;
-          bind1_opt (gen_fixed (depth - 1)) nested_at_most_of;
-          bind1_opt (gen_fixed (depth - 1)) (array_of 2);
-          bind1_opt (gen_fixed (depth - 1)) (array_seq_of 2);
-          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) pair_uniq;
-          bind3
-            (gen_any (depth - 1))
-            (gen_any (depth - 1))
-            (gen_any (depth - 1))
-            rec3_uniq;
-          bind4
-            (gen_any (depth - 1))
-            (gen_any (depth - 1))
-            (gen_any (depth - 1))
-            (gen_any (depth - 1))
-            rec4_uniq;
-          bind2 (gen_any (depth - 1)) (gen_any (depth - 1)) casetype_of;
-        ])
+    let fixed, any = levels (depth - 1) in
+    (fixed_level fixed, any_level ~any ~fixed)
+
+let gen_any depth : any Alcobar.gen = snd (levels depth)

@@ -1,6 +1,7 @@
 (** Generate verified C libraries from Wire codecs via EverParse. *)
 
 open Wire.Everparse
+open Proc
 
 let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
 
@@ -231,70 +232,8 @@ let write_3d ~outdir schemas =
   check_name_collisions schemas;
   Wire.Everparse.write ~mode:`Ffi ~outdir schemas
 
-let absolute_path path =
-  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
-  else path
-
-let executable path =
-  try
-    Unix.access path [ Unix.X_OK ];
-    not (Sys.is_directory path)
-  with Unix.Unix_error _ | Sys_error _ -> false
-
 let locate_3d_exe () =
-  let path =
-    Sys.getenv_opt "PATH" |> Option.to_list
-    |> List.concat_map (String.split_on_char ':')
-    |> List.find_map (fun dir ->
-        let dir = if dir = "" then "." else dir in
-        let candidate = absolute_path (Filename.concat dir "3d.exe") in
-        if executable candidate then Some candidate else None)
-  in
-  match path with
-  | Some p -> Some p
-  | None ->
-      let local =
-        Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe"
-      in
-      if executable local then Some local else None
-
-type process_output = Inherit | Dev_null | File of string
-
-let process_status_code = function
-  | Unix.WEXITED n -> n
-  | Unix.WSIGNALED n -> 128 + n
-  | Unix.WSTOPPED n -> 128 + n
-
-(* Run [exe] without a shell. Redirection is opened in the parent, then the
-   child changes directory and receives each argument literally through
-   [execv]. This keeps a process-local cwd: changing it in the parent would race
-   with other domains and fibers. *)
-let run_process ?(output = Inherit) ~cwd exe args =
-  let output_fd =
-    match output with
-    | Inherit -> None
-    | Dev_null -> Some (Unix.openfile "/dev/null" [ Unix.O_WRONLY ] 0o600)
-    | File path ->
-        Some
-          (Unix.openfile path
-             [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ]
-             0o600)
-  in
-  match Unix.fork () with
-  | 0 -> (
-      try
-        Unix.chdir cwd;
-        Option.iter
-          (fun fd ->
-            Unix.dup2 fd Unix.stdout;
-            Unix.dup2 fd Unix.stderr;
-            Unix.close fd)
-          output_fd;
-        Unix.execv exe (Array.of_list (exe :: args))
-      with Unix.Unix_error _ -> Unix._exit 127)
-  | pid ->
-      Option.iter Unix.close output_fd;
-      snd (Unix.waitpid [] pid)
+  locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
 
 let everparse_version exe =
   let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
@@ -627,6 +566,23 @@ let fields_c_files schemas =
 
 include Check_wrapper
 
+(* Without [fork] nothing can start 3d.exe in [outdir] short of moving this
+   process there, so 3d.exe is told its output directory and its input by
+   absolute path and runs where the process is. *)
+let run_3d_spawned ?output ~outdir exe flags file =
+  let outdir = absolute_path outdir in
+  let output =
+    match output with
+    | Some (File log) -> Some (File (absolute_path log))
+    | (Some (Inherit | Dev_null) | None) as o -> o
+  in
+  spawn ?output exe (flags @ [ "--odir"; outdir; Filename.concat outdir file ])
+
+(* Run 3d.exe with [flags] on [file], a name in [outdir], writing there. *)
+let run_3d ?output ~outdir exe flags file =
+  if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
+  else run_process ?output ~cwd:outdir exe (flags @ [ file ])
+
 let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
@@ -638,8 +594,7 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     (fun f ->
       let output = if quiet then Dev_null else Inherit in
       let ret =
-        run_process ~output ~cwd:outdir exe [ "--batch"; f ]
-        |> process_status_code
+        run_3d ~output ~outdir exe [ "--batch" ] f |> process_status_code
       in
       if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
       harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
@@ -659,10 +614,9 @@ let parse_3d ?(batch = false) ~outdir file =
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
-  let args = if batch then [ "--batch"; file ] else [ file ] in
+  let flags = if batch then [ "--batch" ] else [] in
   let ret =
-    run_process ~output:(File log_path) ~cwd:outdir exe args
-    |> process_status_code
+    run_3d ~output:(File log_path) ~outdir exe flags file |> process_status_code
   in
   let captured =
     try In_channel.with_open_text log_path In_channel.input_all
@@ -849,56 +803,7 @@ let generate_3d_check ~outdir schemas =
         schemas)
 
 let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
-
-(* A bounded fork pool: each job runs in its own process, so blocking EverParse
-   runs overlap across cores with full isolation. Returns each
-   job's success (exit 0 and no exception) in input order. EverParse runs must
-   be isolated because they race on shared intermediate files in a shared
-   directory, so jobs that invoke [3d.exe] should each use a private cwd. *)
-let fork_pool ~max_jobs jobs =
-  let n = Array.length jobs in
-  let ok = Array.make n false in
-  let pid_idx = Hashtbl.create 64 in
-  let next = ref 0 and running = ref 0 in
-  let reap () =
-    let pid, status = Unix.wait () in
-    match Hashtbl.find_opt pid_idx pid with
-    | Some i ->
-        Hashtbl.remove pid_idx pid;
-        decr running;
-        ok.(i) <- (match status with Unix.WEXITED 0 -> true | _ -> false)
-    | None -> ()
-  in
-  (* Drain any buffered output before forking, so a child does not inherit and
-     re-flush the parent's pending bytes. *)
-  Format.pp_print_flush Fmt.stderr ();
-  Format.pp_print_flush Fmt.stdout ();
-  while !next < n || !running > 0 do
-    if !next < n && !running < max_jobs then begin
-      let i = !next in
-      incr next;
-      match Unix.fork () with
-      | 0 ->
-          (* The child must never return into the parent's loop. On success
-             [_exit 0] runs before [finally]; an exception the handlers below
-             do not name reaches [finally], and the child exits with 1. *)
-          Fun.protect
-            ~finally:(fun () -> Unix._exit 1)
-            (fun () ->
-              match jobs.(i) () with
-              | () -> Unix._exit 0
-              | exception (Failure msg | Invalid_argument msg | Sys_error msg)
-                ->
-                  Fmt.epr "%s\n%!" msg
-              | exception Unix.Unix_error (e, fn, arg) ->
-                  Fmt.epr "%s %s: %s\n%!" fn arg (Unix.error_message e))
-      | pid ->
-          Hashtbl.add pid_idx pid i;
-          incr running
-    end
-    else reap ()
-  done;
-  ok
+let fork_pool = fork_pool
 
 (* Verify every schema through EverParse, the way its own corpus is tested (one
    schema per .3d module, each accepted iff F* verifies it). The cost is
@@ -930,14 +835,11 @@ let batch_check ?max_jobs ~outdir schemas =
               (fun () ->
                 generate_3d ~outdir:work [ schema ];
                 let status =
-                  run_process
+                  run_3d
                     ~output:(File (log_of i))
-                    ~cwd:work exe
-                    [
-                      "--batch";
-                      "--no_copy_everparse_h";
-                      Wire.Everparse.filename schema;
-                    ]
+                    ~outdir:work exe
+                    [ "--batch"; "--no_copy_everparse_h" ]
+                    (Wire.Everparse.filename schema)
                 in
                 if process_status_code status <> 0 then
                   failwith "EverParse rejected"))
@@ -1201,6 +1103,11 @@ let fuzz_length rng center =
 (* [agree.c] reads a line into a fixed 64 KiB buffer. *)
 let max_corpus_input = 65536
 
+(* A seed grows no further than this: a line is written as hex and replayed
+   through the validator, and 256 lines at the 64 KiB a 16-bit length can ask
+   for are megabytes of both. *)
+let max_seed_input = 4096
+
 let random_bytes rng n =
   Bytes.init n (fun _ -> Char.chr (Random.State.int rng 256))
 
@@ -1263,21 +1170,24 @@ let seed_input ?env rng ~seeds ~center ~fill c =
     if not (List.mem_assoc off !placed) then
       placed := (off, (seed, value)) :: !placed
   in
-  (* A record asking for more bytes than a corpus line may carry was sized by a
-     length field the byte draw filled with a huge value. No parse error names
+  (* A record asking for more bytes than a seed may carry was sized by a
+     length field the byte draw filled with a large value. No parse error names
      that field -- the demand surfaces on the record's whole extent -- so damp
-     every length at once: zeroed bytes are the smallest value each can hold.
-     The values already settled are written back, so the loop resumes from the
-     progress it had made rather than starting over. *)
+     every length at once: each byte loses its high half, which shrinks any
+     length and reaches zero, the smallest, on the second pass. The values
+     already settled are written back, so the loop resumes from the progress it
+     had made rather than starting over. *)
   let damp () =
-    Bytes.fill !buf 0 (Bytes.length !buf) '\000';
+    Bytes.iteri
+      (fun i c -> Bytes.set !buf i (Char.chr (Char.code c lsr 4)))
+      !buf;
     List.iter
       (fun (off, ((seed : Raw.field_seed), value)) ->
         write_slot !buf off seed.slot value)
       !placed
   in
   let grow n =
-    if n > max_corpus_input then damp ()
+    if n > max_seed_input then damp ()
     else if n >= 0 && n <> Bytes.length !buf then buf := resize rng !buf n
     else fuel := 0
   in
@@ -1926,3 +1836,12 @@ let main ?name ~mode ~package codecs =
             [ standalone_base ?name ~package () ^ ".3d" ]
       | [ _; "corpus" ] -> generate_corpus Format.std_formatter codecs
       | _ -> generate_standalone ?name ~outdir:"." ~package codecs)
+
+module Private = struct
+  let run_3d_spawned ~outdir ~log exe flags file =
+    process_status_code
+      (run_3d_spawned ~output:(File log) ~outdir exe flags file)
+
+  let pool_in_process = pool_in_process
+  let locate_3d_exe = Proc.locate_3d_exe
+end

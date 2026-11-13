@@ -1,0 +1,53 @@
+(** Processes for the EverParse pipeline.
+
+    Running a program without a shell, and a bounded pool of forked jobs.
+    Internal to {!Wire_3d}. *)
+
+val absolute_path : string -> string
+(** [absolute_path path] is [path], made absolute against the current directory
+    when it is relative. *)
+
+val executable : string -> bool
+(** [executable path] is [true] when [path] is a file the process may execute.
+*)
+
+val locate_3d_exe :
+  win32:bool ->
+  getenv:(string -> string option) ->
+  executable:(string -> bool) ->
+  string option
+(** [locate_3d_exe ~win32 ~getenv ~executable] is the first [3d.exe] that
+    [executable] accepts: in a directory of [PATH], split on [';'] when [win32]
+    and on [':'] otherwise, then in [.local/everparse/bin] under [HOME] and
+    under [USERPROFILE]. A variable [getenv] does not know is skipped. *)
+
+(** Where a child's standard output and error go. *)
+type process_output = Inherit | Dev_null | File of string
+
+val process_status_code : Unix.process_status -> int
+(** [process_status_code s] is the exit code of [s], or [128] plus the signal
+    number as a shell reports it. *)
+
+val run_process :
+  ?output:process_output ->
+  cwd:string ->
+  string ->
+  string list ->
+  Unix.process_status
+(** [run_process ?output ~cwd exe args] runs [exe] with [args] in [cwd], without
+    a shell, and waits for it. The directory changes in the child only. Needs
+    [Unix.fork]. *)
+
+val spawn :
+  ?output:process_output -> string -> string list -> Unix.process_status
+(** [spawn ?output exe args] runs [exe] with [args] in the current directory,
+    without a shell and without [Unix.fork], and waits for it. *)
+
+val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
+(** [fork_pool ~max_jobs jobs] runs each of [jobs] in a process of its own, at
+    most [max_jobs] at once, and is each job's success, exit 0 and no exception,
+    in input order. A job that raises fails alone: the others still run. *)
+
+val pool_in_process : (unit -> unit) array -> bool array
+(** [pool_in_process jobs] is {!fork_pool} where there is no [fork]: the jobs
+    run one after the other in this process, with the same verdicts. *)

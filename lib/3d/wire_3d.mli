@@ -348,3 +348,35 @@ val everparse_type_defines : string
     integer type ([UINT16BE], ...) to its host-order C type, needed to compile
     the wrapper of a parameterized validator (whose parameters EverParse types
     with the 3D names). Harmless for non-parameterized wrappers. *)
+
+(** {1 Private}
+
+    What {!parse_3d} and {!fork_pool} fall back to where [Unix.fork] is missing
+    (Windows), and the search for [3d.exe] with the environment as an argument,
+    exposed so the tests exercise them on every system. Not part of the stable
+    API. *)
+
+module Private : sig
+  val run_3d_spawned :
+    outdir:string -> log:string -> string -> string list -> string -> int
+  (** [run_3d_spawned ~outdir ~log exe flags file] starts [exe] with
+      [Unix.create_process] in the current directory, which it never changes,
+      with [flags], then [--odir] and [outdir], then [file] in [outdir], both by
+      absolute path and each argument passed literally. Both output streams go
+      to [log]. Returns the exit code. *)
+
+  val pool_in_process : (unit -> unit) array -> bool array
+  (** [pool_in_process jobs] runs [jobs] one after the other in this process and
+      returns each job's success, as {!fork_pool} would. *)
+
+  val locate_3d_exe :
+    win32:bool ->
+    getenv:(string -> string option) ->
+    executable:(string -> bool) ->
+    string option
+  (** [locate_3d_exe ~win32 ~getenv ~executable] is the [3d.exe] the library
+      runs, found with the given environment: the first that [executable]
+      accepts in a directory of [PATH] (split on [';'] when [win32], on [':']
+      otherwise), then in [.local/everparse/bin] under [HOME] and under
+      [USERPROFILE]. *)
+end

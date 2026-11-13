@@ -115,9 +115,9 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   in
   let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
-    let base = (name, dummy_reader) :: acc.field_readers in
+    let base = extend_scope name dummy_reader [] acc.field_readers in
     List.fold_left
-      (fun acc' vn -> (vn, dummy_reader) :: acc')
+      (fun acc' vn -> (Some vn, dummy_reader) :: acc')
       base action_vanames
   in
   let idx = build_idx cc_readers in
@@ -195,7 +195,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
           ~constraint_:f.constraint_
       in
       let new_field_readers =
-        cf.nested_readers @ ((name, cf.int_reader) :: acc.field_readers)
+        extend_scope name cf.int_reader cf.nested_readers acc.field_readers
       in
       {
         validators_rev = (cf.validator_off, full) :: acc.validators_rev;
@@ -830,13 +830,17 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
 let name (t : _ t) = t.name
 let rename new_name (t : _ t) = { t with name = new_name }
 let doc (t : _ t) = t.doc
-let field_readers_ctx (t : _ t) = t.field_readers
 
-let field_readers (t : _ t) =
+let field_readers_ctx (t : _ t) =
+  List.filter_map
+    (fun (name, read) -> Option.map (fun name -> (name, read)) name)
+    t.field_readers
+
+let field_readers t =
   List.map
     (fun (name, read) ->
       (name, fun buf off -> read no_runtime (Input_end.of_bytes buf) buf off))
-    t.field_readers
+    (field_readers_ctx t)
 
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
 

@@ -88,33 +88,6 @@ let test_generate_3d_files () =
   Sys.remove path;
   Unix.rmdir tmpdir
 
-let test_parse_3d_uses_argv_and_cwd () =
-  let outdir = Filename.temp_dir "wire 3d;out " "" in
-  let bindir = Filename.temp_dir "wire 3d;bin " "" in
-  let exe = Filename.concat bindir "3d.exe" in
-  let observed = Filename.concat outdir "observed" in
-  let file = "schema name;literal.3d" in
-  let old_path = Sys.getenv_opt "PATH" in
-  Fun.protect
-    ~finally:(fun () ->
-      Unix.putenv "PATH" (Option.value ~default:"" old_path);
-      Wire_3d.rm_rf outdir;
-      Wire_3d.rm_rf bindir)
-    (fun () ->
-      Out_channel.with_open_text exe (fun oc ->
-          output_string oc
-            "#!/bin/sh\n\
-             { pwd; for arg do printf '%s\\n' \"$arg\"; done; } > observed\n");
-      Unix.chmod exe 0o755;
-      Unix.putenv "PATH" bindir;
-      (match Wire_3d.parse_3d ~batch:true ~outdir file with
-      | Ok () -> ()
-      | Error e -> Alcotest.failf "fake EverParse failed: %s" e);
-      Alcotest.(check (list string))
-        "cwd and literal argv"
-        [ Unix.realpath outdir; "--batch"; file ]
-        (In_channel.with_open_text observed In_channel.input_lines))
-
 let test_schema_of_struct () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
@@ -133,13 +106,9 @@ let test_ensure_dir () =
   Alcotest.(check bool) "dir created" true (Sys.file_exists tmpdir);
   Unix.rmdir tmpdir
 
-let read_file path =
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+(* Read to the end rather than [in_channel_length] bytes: on Windows a text
+   channel turns CRLF into LF, so it holds fewer bytes than the file. *)
+let read_file path = In_channel.with_open_text path In_channel.input_all
 
 let test_generate_c () =
   needs_3d_exe ();
@@ -204,9 +173,9 @@ let test_endianness_freestanding () =
        uint32_t swap(uint32_t x) { return be32toh(x); }\n";
     let compile file =
       Fmt.kstr Sys.command
-        "cd %s && cc -std=c11 -U__APPLE__ -U__linux__ -I . -c %s -o /dev/null \
-         > /dev/null 2>&1"
-        (Filename.quote tmpdir) file
+        "cd %s && cc -std=c11 -U__APPLE__ -U__linux__ -I . -c %s -o %s > %s \
+         2>&1"
+        (Filename.quote tmpdir) file Filename.null Filename.null
     in
     let freestanding_host = compile "probe.c" = 0 in
     let status = if freestanding_host then compile "freestanding.c" else 0 in
@@ -1377,14 +1346,7 @@ let test_projection_filenames () =
   let schema = Everparse.Raw.project_struct ~mode:`Ffi s in
   let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
   Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
-  let dune_inc =
-    let ic = open_in (Filename.concat tmpdir "dune.inc") in
-    let n = in_channel_length ic in
-    let buf = Bytes.create n in
-    really_input ic buf 0 n;
-    close_in ic;
-    Bytes.unsafe_to_string buf
-  in
+  let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   let contains_exact sub = Re.execp (Re.compile (Re.str sub)) dune_inc in
   Alcotest.(check bool)
@@ -1793,8 +1755,6 @@ let suite =
       Alcotest.test_case "everparse_name" `Quick test_everparse_name;
       Alcotest.test_case "pascal_case" `Quick test_pascal_case;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
-      Alcotest.test_case "parse_3d uses argv and cwd" `Quick
-        test_parse_3d_uses_argv_and_cwd;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;
       Alcotest.test_case "generate_c (needs 3d.exe)" `Quick test_generate_c;

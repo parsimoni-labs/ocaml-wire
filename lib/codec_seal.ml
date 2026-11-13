@@ -212,8 +212,10 @@ let apply_compiled : type a f r.
   let field_idx = r.n_fields in
   let dummy_reader _runtime _input_end _buf _base = 0 in
   let cc_readers =
-    let base = (fld.name, dummy_reader) :: r.field_readers in
-    List.fold_left (fun acc vn -> (vn, dummy_reader) :: acc) base action_vanames
+    let base = extend_scope fld.name dummy_reader [] r.field_readers in
+    List.fold_left
+      (fun acc vn -> (Some vn, dummy_reader) :: acc)
+      base action_vanames
   in
   let idx = build_idx cc_readers in
   let cc =
@@ -233,7 +235,8 @@ let apply_compiled : type a f r.
   let byte_off = cf.validator_off in
   let new_writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev in
   let new_field_readers =
-    cf.nested_readers @ ((fld.name, expr_reader cf fld.typ) :: r.field_readers)
+    extend_scope fld.name (expr_reader cf fld.typ) cf.nested_readers
+      r.field_readers
   in
   let field_typ = fld.typ in
   let field_get = fld.get in
@@ -487,7 +490,7 @@ let build_decode : type full r.
 let lookup_reader_idx rev_readers name =
   let rec find i = function
     | [] -> Fmt.invalid_arg "Codec: unbound field ref %S in a where clause" name
-    | (n, _) :: _ when n = name -> i
+    | (n, _) :: _ when n = Some name -> i
     | _ :: rest -> find (i + 1) rest
   in
   find 0 rev_readers

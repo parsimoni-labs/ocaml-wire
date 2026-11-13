@@ -363,8 +363,11 @@ type next_off =
 (* [compute runtime input_end buf base] returns the absolute byte offset where
    the next field starts. [base] is the record's base offset in [buf]. *)
 
-type field_reader = string * (runtime -> Input_end.t -> bytes -> int -> int)
-(* Name + context/buffer/base reader for a previously-declared int field. *)
+type field_reader =
+  string option * (runtime -> Input_end.t -> bytes -> int -> int)
+(* Name + context/buffer/base reader for a previously-declared int field. A
+   shadowed field has no name: it keeps its place, which numbers its slot, and
+   no reference can reach it. *)
 
 (* Closure access layer: reads leaves out of the buffer, resolving parameters
    through the operation's immutable evaluation context. *)
@@ -375,7 +378,7 @@ let bytes_leaves
   {
     ref_ =
       (fun name ->
-        match List.assoc_opt name env with
+        match List.assoc_opt (Some name) env with
         | Some reader -> reader
         | None ->
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"

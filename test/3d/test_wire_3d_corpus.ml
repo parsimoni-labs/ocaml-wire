@@ -104,6 +104,42 @@ let test_corpus_damps_a_runaway_length () =
     (Fmt.str "corpus keeps mis-sized records (%d rejected)" rejected)
     true (rejected > 0)
 
+(* A 16-bit length drawn from uniform bytes asks for tens of kilobytes, which a
+   line could carry: 256 such lines are megabytes of hex to write and to
+   replay. The seeder shrinks the lengths instead, and still reaches records
+   with a payload. *)
+let corpus_short_length_codec =
+  let open Wire in
+  let len = Field.v "len" uint16be in
+  Codec.v "Short"
+    (fun l d -> (l, d))
+    [
+      Codec.( $ ) len (fun (l, _) -> l);
+      Codec.( $ )
+        (Field.v "data" (byte_array ~size:(Field.ref len)))
+        (fun (_, d) -> d);
+    ]
+
+let test_corpus_lines_stay_small () =
+  let buf = Buffer.create 4096 in
+  let ppf = Fmt.with_buffer buf in
+  Wire_3d.generate_corpus ppf [ Wire_3d.pack corpus_short_length_codec ];
+  Format.pp_print_flush ppf ();
+  let lines =
+    Buffer.contents buf |> String.split_on_char '\n'
+    |> List.filter_map (fun line ->
+        match String.split_on_char ' ' line with
+        | [ _; _; hex; verdict ] -> Some (String.length hex / 2, verdict)
+        | _ -> None)
+  in
+  let longest = List.fold_left (fun m (n, _) -> max m n) 0 lines in
+  Alcotest.(check bool)
+    (Fmt.str "no line over 4 KiB (longest %d)" longest)
+    true (longest <= 4098);
+  Alcotest.(check bool)
+    "an accepted record has a payload" true
+    (List.exists (fun (n, v) -> n > 2 && String.equal v "1") lines)
+
 (* A span sized from an input param. The record's extent is only computable with
    the env bound: without one every [Param.expr] resolves to 0, so the span
    measures as empty and the extent comes back shorter than the record. *)
@@ -212,6 +248,8 @@ let suite =
         test_corpus_verdict_resolves_params;
       Alcotest.test_case "corpus: seeds a casetype tag" `Quick
         test_corpus_seeds_a_casetype_tag;
+      Alcotest.test_case "corpus: lines stay small" `Quick
+        test_corpus_lines_stay_small;
       Alcotest.test_case "corpus: damps a runaway length" `Quick
         test_corpus_damps_a_runaway_length;
     ] )

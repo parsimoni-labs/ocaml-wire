@@ -2,6 +2,29 @@
  (name fuzz)
  (libraries wire alcobar fuzz_gen))
 
+; Alcobar bounds each test iteration with SIGALRM, which Windows does not have
+; ([Sys.signal] raises there), so every runner under fuzz/ passes the timeout
+; read from [alcobar-timeout]: none on Windows, where [--budget] still bounds
+; each test, and ALCOBAR_TIMEOUT or Alcobar's 2 s elsewhere.
+
+(rule
+ (target alcobar-timeout)
+ (enabled_if
+  (= %{os_type} Win32))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo 0))))
+
+(rule
+ (target alcobar-timeout)
+ (enabled_if
+  (<> %{os_type} Win32))
+ (action
+  (with-stdout-to
+   %{target}
+   (echo %{env:ALCOBAR_TIMEOUT=2}))))
+
 ; Alcobar seeds its PRNG from a constant and never self-inits, so a run with no
 ; [-s] replays one fixed input set, and the seed each test gets is drawn in test
 ; order, so re-running a single failing test does not replay what the suite ran.
@@ -25,6 +48,8 @@
  (action
   (run
    %{exe:fuzz.exe}
+   --timeout
+   %{read:alcobar-timeout}
    -s
    %{env:WIRE_FUZZ_SEED=42}
    -r

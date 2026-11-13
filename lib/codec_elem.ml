@@ -156,6 +156,26 @@ let build_bf_accessor_writer base byte_off shift width =
 let build_bf_clear base byte_off =
  fun buf off -> bf_write_base base buf (off + byte_off) 0
 
+(* Add field [name] and the fields its sub-codec brings ([nested]) to a scope
+   listed newest first. A codec's own field shadows a sub-codec's field of the
+   same name, as in the 3D struct EverParse checks, and the first sub-codec to
+   bring a name keeps it. Every entry stays, since its position numbers a slot,
+   but an entry that loses its name has none, so each name is one field however
+   the scope is searched. *)
+let extend_scope name own nested prev =
+  let name = Some name in
+  let hide (_, r) = (None, r) in
+  let prev =
+    List.map (fun ((n, _) as e) -> if n = name then hide e else e) prev
+  in
+  let taken n = n = name || List.mem_assoc n prev in
+  let nested =
+    List.map
+      (fun ((n, _) as e) -> if n <> None && taken n then hide e else e)
+      nested
+  in
+  nested @ ((name, own) :: prev)
+
 let build_idx readers =
   let rev_readers = List.rev readers in
   fun name ->
@@ -163,7 +183,7 @@ let build_idx readers =
       | [] ->
           Fmt.invalid_arg
             "Codec: unbound field ref %S in a field constraint or action" name
-      | (n, _) :: _ when n = name -> i
+      | (n, _) :: _ when n = Some name -> i
       | _ :: rest -> find (i + 1) rest
     in
     find 0 rev_readers

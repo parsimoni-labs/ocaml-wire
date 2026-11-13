@@ -126,8 +126,10 @@ type next_off =
   | Static of int
   | Dynamic of (runtime -> Input_end.t -> bytes -> int -> int)
 
-type field_reader = string * (runtime -> Input_end.t -> bytes -> int -> int)
-(** A named int reader for a field declared earlier. *)
+type field_reader =
+  string option * (runtime -> Input_end.t -> bytes -> int -> int)
+(** An int reader for a field declared earlier, under its name. A shadowed field
+    has no name: it keeps its place, and no reference reaches it. *)
 
 val compile_expr :
   ?sizeof_this:(runtime -> Input_end.t -> bytes -> int -> int) ->
