@@ -1,9 +1,6 @@
 let enabled = true
 
-let oracle label =
-  let fields, scan, standalone =
-    List.assoc label Diff_scan_c.Scan_oracle_index.covered
-  in
+let of_entry (fields, scan, standalone) =
   let n = List.length fields in
   let scan buf off len =
     let out = Array.make n 0 in
@@ -11,3 +8,9 @@ let oracle label =
     (end_, List.mapi (fun i (name, _) -> (name, out.(i))) fields)
   in
   { Diff_codecs.fields; scan; standalone }
+
+let oracle label =
+  of_entry (List.assoc label Diff_scan_c.Scan_oracle_index.covered)
+
+let sampled label =
+  of_entry (List.assoc label Diff_scan_c.Scan_oracle_index.sampled)

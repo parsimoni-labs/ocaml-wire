@@ -126,5 +126,7 @@ on every sampled shape and on hand-written structured cases, and, with
 standalone and FFI projections for acceptance and the bytes consumed, and
 with every scalar member of the FFI projection's default plug, nested fields
 and presence flags included ([the FFI plug](projection.md#the-ffi-plug)), an
-absent field as zero. On OxCaml the scanners hold integers as `int64_u`; the
+absent field as zero. The sampled shapes are compared with those validators
+too, on acceptance, the bytes consumed and their top-level integer members.
+On OxCaml the scanners hold integers as `int64_u`; the
 paranoid profile checks each of their loads too, on the full 64-bit index.
