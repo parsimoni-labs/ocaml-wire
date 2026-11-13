@@ -225,7 +225,8 @@ let test_wide () =
     ~write:(fun (a, b, c, d, e, f) buf off -> G_wide.write buf off a b c d e f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
 
-(* A field taken out of its word reads what its own getter reads. *)
+(* A field taken out of its word reads what its own getter reads, from a
+   checked load or through a view. *)
 let test_words () =
   let size = Codec.min_wire_size Schemas.wide in
   for _ = 1 to 2000 do
@@ -244,7 +245,20 @@ let test_words () =
           "word"
           (outcome (fun () -> string_of_int (get buf off)))
           (outcome (fun () -> string_of_int (of_word (word buf off)))))
-      fields
+      fields;
+    (* The same through a view, whose word reads have no check of their own. *)
+    let v = G_wide.View.check buf off in
+    if G_wide.View.ok v then begin
+      let check name get of_view = Alcotest.(check int) name get of_view in
+      check "view a" (G_wide.get_a buf off)
+        (G_wide.a_of_word (G_wide.view_a_word v));
+      check "view c" (G_wide.get_c buf off)
+        (G_wide.c_of_word (G_wide.view_c_word v));
+      check "view e" (G_wide.get_e buf off)
+        (G_wide.e_of_word (G_wide.view_e_word v));
+      check "view f" (G_wide.get_f buf off)
+        (G_wide.f_of_word (G_wide.view_f_word v))
+    end
   done
 
 (* Generated code names the shape of the codec it comes from, and refuses to
@@ -618,6 +632,124 @@ let test_valid () =
   viewed Schemas.eth ~valid:G_eth.Valid.v
     ~reads:[ (get Schemas.eth Schemas.eth_src Fun.id, G_eth.read_src) ]
 
+(* [is_valid buf off] holds exactly when [Codec.validate] accepts the record at
+   [off]; [View.at buf off] then reads through each [view_<field>] what
+   [Codec.get] reads at [off], and raises the codec's error otherwise;
+   [View.check] answers the same through [View.ok] and never raises. The
+   reads are spelt out per module: on OxCaml a view is an unboxed record, which
+   no polymorphic helper can carry. *)
+let test_view () =
+  let get codec field show =
+    let read = Staged.unstage (Codec.get codec field) in
+    fun buf off -> show (read buf off)
+  in
+  let frag =
+    get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
+        string_of_int (UInt16.to_int v))
+  and src =
+    get Schemas.ipv4 Schemas.ipv4_src (fun v -> string_of_int (SInt32.to_int v))
+  and proto =
+    get Schemas.checked Schemas.checked_proto (fun v ->
+        string_of_int (UInt8.to_int v))
+  in
+  for _ = 1 to 2000 do
+    let size = Codec.min_wire_size Schemas.ipv4 in
+    let len = size + Random.State.int rand 8 in
+    let buf = Bytes.init len (fun _ -> byte ()) in
+    let off = Random.State.int rand (len - size + 3) - 1 in
+    let codec_ok =
+      outcome (fun () ->
+          Codec.validate Schemas.ipv4 buf off;
+          "ok")
+    in
+    Alcotest.(check bool)
+      "is_valid"
+      (String.starts_with ~prefix:"ok" codec_ok)
+      (G_ipv4.is_valid buf off);
+    let expected =
+      outcome (fun () ->
+          Codec.validate Schemas.ipv4 buf off;
+          frag buf off ^ "," ^ src buf off)
+    in
+    let got =
+      outcome (fun () ->
+          let v = G_ipv4.View.at buf off in
+          string_of_int (UInt16.to_int (G_ipv4.view_frag v))
+          ^ ","
+          ^ string_of_int (G_ipv4.view_src_int v))
+    in
+    Alcotest.(check string) "ipv4 view" expected got;
+    (* [View.check] never raises: a failed view reads zeros. *)
+    let c = G_ipv4.View.check buf off in
+    Alcotest.(check bool) "check" (G_ipv4.is_valid buf off) (G_ipv4.View.ok c);
+    let read =
+      string_of_int (UInt16.to_int (G_ipv4.view_frag c))
+      ^ ","
+      ^ string_of_int (G_ipv4.view_src_int c)
+    in
+    Alcotest.(check string)
+      "checked view"
+      (if G_ipv4.View.ok c then got else "ok 0,0")
+      ("ok " ^ read)
+  done;
+  for _ = 1 to 2000 do
+    let size = Codec.min_wire_size Schemas.checked in
+    let len = size + Random.State.int rand 8 in
+    let buf = Bytes.init len (fun _ -> byte ()) in
+    let off = Random.State.int rand (len - size + 3) - 1 in
+    if Random.State.bool rand && off >= 0 && off + size <= len then
+      fix_checked buf off;
+    let codec_ok =
+      outcome (fun () ->
+          Codec.validate Schemas.checked buf off;
+          "ok")
+    in
+    Alcotest.(check bool)
+      "is_valid"
+      (String.starts_with ~prefix:"ok" codec_ok)
+      (G_checked.is_valid buf off);
+    let expected =
+      outcome (fun () ->
+          Codec.validate Schemas.checked buf off;
+          proto buf off)
+    in
+    let got =
+      outcome (fun () ->
+          let v = G_checked.View.at buf off in
+          string_of_int (UInt8.to_int (G_checked.view_proto v)))
+    in
+    Alcotest.(check string) "checked view" expected got
+  done
+
+(* A failed view holds no bytes, so nothing written through one view's buffer
+   reaches another failed view: each still reads zeros. *)
+let test_failed_views () =
+  let short = Bytes.make 3 '\xff' in
+  let a = G_ipv4.View.check short 0 in
+  let b = G_ipv4.View.check short 0 in
+  Alcotest.(check bool) "failed" false (G_ipv4.View.ok a || G_ipv4.View.ok b);
+  let held = G_ipv4.View.buf a in
+  Bytes.fill held 0 (Bytes.length held) '\xff';
+  Alcotest.(check int) "holds no bytes" 0 (Bytes.length held);
+  Alcotest.(check int) "frag" 0 (UInt16.to_int (G_ipv4.view_frag b));
+  Alcotest.(check int) "src" 0 (G_ipv4.view_src_int b);
+  Alcotest.(check int) "its own frag" 0 (UInt16.to_int (G_ipv4.view_frag a));
+  let short =
+    Bigarray.Array1.init Bigarray.char Bigarray.c_layout 3 (fun _ -> '\xff')
+  in
+  let a = G_ipv4.Bigstring.View.check short 0 in
+  let b = G_ipv4.Bigstring.View.check short 0 in
+  let held = G_ipv4.Bigstring.View.buf a in
+  Bigarray.Array1.fill held '\xff';
+  Alcotest.(check int) "bigstring: holds no bytes" 0 (Bigarray.Array1.dim held);
+  Alcotest.(check int)
+    "bigstring: frag" 0
+    (UInt16.to_int (G_ipv4.Bigstring.view_frag b));
+  Alcotest.(check int) "bigstring: src" 0 (G_ipv4.Bigstring.view_src_int b);
+  let short = Bytes.make 2 '\xff' in
+  let e = G_eth.View.check short 0 in
+  Alcotest.(check string) "byte array" (String.make 6 '\000') (G_eth.view_src e)
+
 (* The [Bigstring] functions on a bigarray copy of a buffer return what their
    [bytes] twins return on the buffer, or raise the same error. *)
 let bigstring buf =
@@ -711,7 +843,10 @@ let test_oxcaml () =
   List.iter
     (fun s -> Alcotest.(check bool) s true (contains src s))
     [
-      "let[@zero_alloc] validate";
+      "let[@inline][@zero_alloc] validate";
+      "let[@inline][@zero_alloc] is_valid";
+      "type t : value & value & value";
+      "#{ buf; off; ok = true }";
       "[@zero_alloc] write_int";
       "[@zero_alloc assume error] fail";
       "let[@zero_alloc] decode_local";
@@ -721,7 +856,7 @@ let test_oxcaml () =
   let stock = Wire_ocaml.ml ~codec:"Schemas.ipv4" Schemas.ipv4 in
   Alcotest.(check bool)
     "stock has no OxCaml syntax" false
-    (contains stock "exclave_")
+    (contains stock "exclave_" || contains stock "#{")
 
 let suite =
   ( "wire_ocaml",
@@ -749,5 +884,7 @@ let suite =
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;
+      Alcotest.test_case "view at an offset" `Quick test_view;
       Alcotest.test_case "bigstring buffers" `Quick test_bigstring;
+      Alcotest.test_case "failed views share nothing" `Quick test_failed_views;
     ] )

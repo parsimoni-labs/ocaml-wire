@@ -8,8 +8,13 @@ description = "Ethernet/IPv4/TCP/UDP header parsing: Wire_rust against etherpars
 [dependencies]
 etherparse = { version = "0.21", default-features = false }
 # medium-ethernet turns on smoltcp's sockets, which need at least one kind.
+pnet_packet = { version = "0.35", default-features = false, features = ["std"] }
 smoltcp = { version = "0.14", default-features = false, features = ["proto-ipv4", "medium-ethernet", "socket-raw"] }
 
+# The strongest settings that stay portable: no target-cpu=native, as the
+# OCaml compilers have no equivalent for the OCaml rows.
 [profile.release]
+opt-level = 3
 codegen-units = 1
 lto = true
+panic = "abort"

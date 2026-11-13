@@ -147,11 +147,13 @@ exception to the three tiers: it measures the code generators against
 established parsers of another language. Ethernet, IPv4 and TCP/UDP headers
 are read from one packet corpus by `Wire.Codec`, by the OCaml `Wire_ocaml`
 generates (for the OCaml target on OCaml, for the OxCaml target on OxCaml), by
-the Rust `Wire_rust` generates, and by two widely used Rust crates,
-`etherparse` and `smoltcp::wire`, as external reference implementations.
+the Rust `Wire_rust` generates, and by released Rust crates, `etherparse`,
+`smoltcp::wire` and `pnet_packet`, as external reference implementations.
 Every implementation does the checks `etherparse` does (bench/README.md lists
-them), reads the same fields and folds them into one checksum, which must
-agree; the corpus holds packets failing each check. The Rust side is a cargo
+them and each row's API), reads the same fields and folds them into one
+checksum, which must agree; the corpus holds packets failing each check. Keep
+the harnesses symmetric: a change to how one side times or folds goes into
+the other too, and never weaken a crate's row. The Rust side is a cargo
 project outside the dune build, so `dune build` never needs the network.
 
 ## Style

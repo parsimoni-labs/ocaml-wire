@@ -10,6 +10,9 @@ type ops = {
   gets : (string * view * (bytes -> int -> string)) list;
   reads : (string * view) list;
   valid : bytes -> string list;
+  is_valid : bytes -> int -> bool;
+  view : bytes -> int -> string list;
+  checked : bytes -> int -> bool * string list;
 }
 
 type t = { bytes : ops; bigstring : ops }
@@ -207,6 +210,34 @@ let both case f =
   f "bytes" case.m.bytes;
   f "bigstring" case.m.bigstring
 
+(* [is_valid], [View.at] and [View.check] at [off], against [Codec.validate]
+   and each field's reader there. *)
+let views_at case c ~what ~validated ops buf off =
+  same case.label (what "is_valid")
+    (string_of_bool (validated = "ok "))
+    (string_of_bool (ops.is_valid buf off));
+  let expected =
+    outcome (fun () ->
+        Wire.Codec.validate c buf off;
+        String.concat ","
+          (List.map
+             (fun (name, _) -> List.assoc name case.refs buf off)
+             ops.reads))
+  in
+  same case.label
+    (what "View.at then each read")
+    expected
+    (outcome (fun () -> String.concat "," (ops.view buf off)));
+  let checked =
+    outcome (fun () ->
+        match ops.checked buf off with
+        | true, reads -> String.concat "," reads
+        | false, _ ->
+            Wire.Codec.validate c buf off;
+            "")
+  in
+  same case.label (what "View.check then each read") expected checked
+
 (* Decode, validate and every getter at [off]. *)
 let reads_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
@@ -232,7 +263,8 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
             (what (view_name name view))
             (outcome (fun () -> List.assoc name case.refs buf off))
             (outcome (fun () -> read buf off)))
-        ops.gets)
+        ops.gets;
+      views_at case c ~what ~validated ops buf off)
 
 (* The record [buf] holds at [off], when it decodes, encoded into buffers
    around it, too short, and at an offset out of range. *)

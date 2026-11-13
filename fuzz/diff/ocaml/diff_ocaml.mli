@@ -24,6 +24,12 @@ type ops = {
           {!constructor-Get}, [read_<f>_int] as {!constructor-Get_int}. *)
   valid : bytes -> string list;
       (** [Valid.v] on the buffer, then each of {!field-reads}. *)
+  is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
+  view : bytes -> int -> string list;
+      (** [View.at buf off], then each of {!field-reads} through [view_<f>]. *)
+  checked : bytes -> int -> bool * string list;
+      (** [View.check buf off]: [View.ok] of it, then each of {!field-reads}
+          through [view_<f>]. *)
 }
 (** One generated module's functions over one kind of buffer, taking [bytes]:
     the bigarray ones copy the bytes in, and back out after a write. *)

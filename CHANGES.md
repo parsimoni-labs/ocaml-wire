@@ -24,6 +24,9 @@
 - `wire.rust` (`Wire_rust`): generate safe, `no_std` Rust from a fixed-size
   codec (#439, @samoht)
 
+- Generated OCaml has a `View` of a record at any offset of a buffer, and
+  `is_valid`, which checks without raising (#442, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
