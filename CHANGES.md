@@ -63,9 +63,13 @@
   for codecs with input parameters, whose inputs they read as zero (#465,
   @samoht)
 
-- **Breaking:** generated names escape every keyword of the target language
-  (`effect` is `effect_`). Update code naming a generated label or plug member
-  (#434, #438, @samoht)
+- **Breaking:** generated names escape every keyword of the target language,
+  and a name ending in underscores takes one more (`effect` is `effect_`,
+  `end_` is `end__`). Update code naming a generated label or plug member
+  (#434, #438, #471, @samoht)
+
+- **Breaking:** 3D enum constants carry their enum's name (`Color_Red`), and a
+  field `typeof` is `typeof3d` in 3D (#471, @samoht)
 
 - **Breaking:** the projection refuses two fields that give one `Wire_stubs`
   label, a field name that is not an identifier (`a-b`) and two codecs whose

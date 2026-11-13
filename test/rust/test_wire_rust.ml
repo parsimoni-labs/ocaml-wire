@@ -101,9 +101,11 @@ let test_clash () =
       Codec.[ Field.v n1 t1 $ fst; Field.v n2 t2 $ snd ]
   in
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
-  refused "type and type_"
-    (pair "type" uint8 "type_" uint8)
-    [ "\"type\""; "\"type_\"" ];
+  (* The keyword escape is injective: [type] and [type_] are [type_] and
+     [type__]. *)
+  has "type and type_"
+    (Wire_rust.rs ~codec:"c" (pair "type" uint8 "type_" uint8))
+    "pub type_: u8,\n    pub type__: u8,";
   refused "a bitfield x and x_word"
     (pair "x" (bits ~width:3 U8) "x_word" uint8)
     [ "\"x\""; "\"x_word\"" ];
@@ -270,14 +272,13 @@ let scanner_refused what ?fields c names =
 
 (* What the plan refuses, the Rust scanner refuses: a map, whose functions
    are OCaml code, a 64-bit scalar and an unknown output. So are two outputs
-   that only Rust spells alike, once its keywords are escaped. *)
+   of one name. *)
 let test_scanner_refused () =
   let pair n1 n2 =
     Codec.v "C"
       (fun a b -> (a, b))
       Codec.[ Field.v n1 uint8 $ fst; Field.v n2 uint8 $ snd ]
   in
-  scanner_refused "fn and fn_" (pair "fn" "fn_") [ "\"fn\""; "\"fn_\"" ];
   scanner_refused "two outputs of one name" (pair "a_b" "a_B") [ "a_b" ];
   scanner_refused "an unknown output" ~fields:[ "nope" ] Packet_stack.codec
     [ "nope" ];
