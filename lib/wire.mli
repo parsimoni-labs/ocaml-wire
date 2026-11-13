@@ -553,6 +553,31 @@ module Field : sig
   (** Like {!repeat} but accumulates into a custom sequence via [seq], with the
       same exact byte-budget requirement. *)
 
+  val union :
+    string ->
+    ?action:Action.t ->
+    ?doc:string ->
+    on:'k t ->
+    casetype:string ->
+    ('a, 'k) Types.case_def list ->
+    'a t
+  (** [union name ~on ~casetype cases] is a field holding one of [cases],
+      selected by the value of the earlier field [on]. Unlike {!Wire.casetype},
+      whose tag is the first bytes of the value itself, the tag here is a field
+      of its own, so other fields may sit between it and the union, and several
+      unions may switch on the same tag. The union occupies the bytes of the
+      selected case only.
+
+      [on] must be integer-valued (an integer, a bitfield, an enum or a
+      {!val-variants}) and declared before the union; every {!Wire.case} gives
+      its [~index] in [on]'s type. Decoding a tag no case claims fails with
+      {!constructor-Invalid_tag} unless a {!Wire.default} branch catches it.
+      Encoding raises [Invalid_argument] when the value's case is not the one
+      the tag field holds.
+
+      Projects to a 3D [casetype] named [casetype], taking the tag as its
+      parameter, and to a field [casetype(on) name]. *)
+
   val anon : 'a typ -> 'a anon
   (** [anon typ] creates an anonymous (padding) field. *)
 
@@ -918,7 +943,7 @@ val variants : string -> (string * 'a) list -> 'b typ -> 'a typ
 
     [base] may be any integer-valued description, as for {!enum}. *)
 
-type ('a, 'k) case_def
+type ('a, 'k) case_def = ('a, 'k) Types.case_def
 
 val case :
   ?index:'k ->

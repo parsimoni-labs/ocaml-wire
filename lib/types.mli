@@ -334,6 +334,13 @@ and _ typ =
       cases : ('a, 'k) case_branch list;
     }
       -> 'a typ  (** Tag-dispatched union. *)
+  | Union : {
+      name : string;
+      tag : 'k typ;
+      on : int expr;
+      cases : ('a, 'k) case_branch list;
+    }
+      -> 'a typ  (** Union dispatched on an earlier field; see {!union}. *)
   | Struct : struct_ -> unit typ  (** Nested struct. *)
   | Type_ref : string -> 'a typ  (** Forward reference by name. *)
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
@@ -852,6 +859,13 @@ val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. Every case must supply
     an explicit [~index]; the discriminator type ['k] can be an integer, a
     string, or any other typ with decidable equality. *)
+
+val union :
+  string -> tag:'k typ -> on:int expr -> ('a, 'k) case_def list -> 'a typ
+(** [union name ~tag ~on defs] is a casetype whose tag is the integer [on]
+    evaluates to, an earlier field of type [tag], rather than its own first
+    bytes. It is a field decoration, made through {!Field.union}. Raises
+    [Invalid_argument] when [tag] has no integer view. *)
 
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field

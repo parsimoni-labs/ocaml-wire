@@ -233,8 +233,8 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Apply { typ; _ } -> case_index_to_expr typ k
   | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
   | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
-  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
-  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Byte_slice _ | Casetype _ | Union _ | Struct _ | Type_ref _
+  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
       invalid_arg
         "Wire.casetype: this tag type carries no integer case index; use a \
          fixed-width integer, bitfield, or enum tag."
@@ -260,20 +260,24 @@ let decl_case_of_branch : type a k. k typ -> (a, k) case_branch -> decl_case =
   in
   (tag_expr, Pack_typ cb_inner)
 
+(* The dispatch table of a casetype or a union: a 3D casetype parameterised on
+   the tag value. *)
+let casetype_dispatch : type a k.
+    string -> k typ -> (a, k) case_branch list -> decl =
+ fun name tag cases ->
+  Casetype_decl
+    {
+      name;
+      params = [ param "tag" tag ];
+      tag = Pack_typ tag;
+      cases = List.map (decl_case_of_branch tag) cases;
+    }
+
 let casetype_pair : type a k.
     string -> k typ -> (a, k) case_branch list -> decl * decl =
  fun name tag cases ->
   let body_name = name ^ "_Body" in
-  let decl_cases = List.map (decl_case_of_branch tag) cases in
-  let dispatch =
-    Casetype_decl
-      {
-        name = body_name;
-        params = [ param "tag" tag ];
-        tag = Pack_typ tag;
-        cases = decl_cases;
-      }
-  in
+  let dispatch = casetype_dispatch body_name tag cases in
   let tag_field = field "tag" tag in
   let body_field =
     field "body"
@@ -403,6 +407,9 @@ let rec wrap_shape : type a. a typ -> string * param list =
       (Fmt.str "optd%s_%s" ptag itag, pformals @ iformals)
   | Enum { name; _ } -> plain ("e" ^ name)
   | Casetype { name; _ } -> plain name
+  | Union { name; on; _ } ->
+      let otag, oformals = expr_shape on in
+      (Fmt.str "%s_%s" name otag, oformals)
   | Struct { name; _ } -> plain name
   | Type_ref name -> plain name
   | Qualified_ref { module_; name } -> plain (module_ ^ "_" ^ name)
@@ -643,6 +650,15 @@ let rec collect_casetype_decls : type a.
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
       let dispatch, wrapper = casetype_pair name tag cases in
       acc := wrapper :: dispatch :: !acc
+  | Union { name; tag; cases; _ } ->
+      (* The tag is a field of the enclosing struct, so there is no wrapper to
+         hold it: the dispatch is declared alone and the field applies it to
+         the tag. *)
+      if not (Hashtbl.mem seen name) then begin
+        Hashtbl.add seen name name;
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
+        acc := casetype_dispatch name tag cases :: !acc
+      end
   | Casetype { cases; _ } ->
       (* String-tagged casetype: handled by [split_string_casetype_fields].
          Still walk inner case typs for nested int-tagged casetypes. *)

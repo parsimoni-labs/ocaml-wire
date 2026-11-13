@@ -39,7 +39,7 @@ let rec is_byte_field : type a. a Types.typ -> bool = function
   (* Casetype projects to a struct value, which is not "readable" in 3D
      actions. Treat it like a byte span: the SetBytes setter receives an
      offset into the buffer, and the C side decodes if it wants to. *)
-  | Types.Casetype _ -> true
+  | Types.Casetype _ | Types.Union _ -> true
   (* A repeat-into-list field has no single value 3D can read; expose its
      bytes via the [SetBytes] offset just like other variable-size fields. *)
   | Types.Repeat _ -> true

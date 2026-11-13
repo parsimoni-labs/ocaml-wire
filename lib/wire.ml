@@ -36,6 +36,12 @@ let lookup = Types.cases
    decode closure, so record once, when constructing their typ, whether their
    structural form can retain a slice. A legacy [Struct] produces [unit], hence
    its fields do not escape through the direct decoder. *)
+(* A union reads its tag from a field of the record it belongs to; a bare typ
+   has no record. *)
+let union_outside_codec () =
+  invalid_arg
+    "Wire.Field.union: a union is only read and written as a codec field"
+
 let rec typ_returns_slice : type a. a typ -> bool = function
   | Byte_slice _ -> true
   | Where { inner; _ } -> typ_returns_slice inner
@@ -52,6 +58,10 @@ let rec typ_returns_slice : type a. a typ -> bool = function
       || List.exists
            (fun (Case_branch { cb_inner; _ }) -> typ_returns_slice cb_inner)
            cases
+  | Union { cases; _ } ->
+      List.exists
+        (fun (Case_branch { cb_inner; _ }) -> typ_returns_slice cb_inner)
+        cases
   | Codec { codec_returns_slice; _ } -> codec_returns_slice
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros
@@ -403,6 +413,7 @@ let rec parse_direct : type a.
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } ->
       parse_casetype ~copy_slices tag cases buf off len
+  | Union _ -> union_outside_codec ()
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then
         let v, off' = parse_direct ~copy_slices inner buf off len in
@@ -961,6 +972,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         v
       |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
+  | Union _ -> union_outside_codec ()
   | Struct _ -> invalid_arg "Wire.struct_: encoding a struct goes through Codec"
   | Type_ref _ -> invalid_arg "Wire.type_ref: encoding needs a type registry"
   | Qualified_ref _ ->

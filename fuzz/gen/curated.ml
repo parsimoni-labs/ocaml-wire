@@ -324,6 +324,7 @@ let wrapper_gens =
     ("optional_dynamic", Pack optional_dynamic);
     ("optional_or_dynamic", Pack optional_or_dynamic);
     ("optional_dyn_after_span", Pack optional_dyn_after_span);
+    ("union_after_span", Pack union_after_span);
     ("nested(0,empty)", Pack (nested 0 empty));
     ("nested(2,uint16be)", Pack (nested 2 uint16be));
     ("nested(4,byte_array4)", Pack (nested 4 (byte_array 4)));

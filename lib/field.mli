@@ -101,6 +101,30 @@ val repeat_seq :
   'seq t
 (** Repeat with a custom sequence builder and the same exact byte budget. *)
 
+val union :
+  string ->
+  ?action:Types.action ->
+  ?doc:string ->
+  on:'k t ->
+  casetype:string ->
+  ('a, 'k) Types.case_def list ->
+  'a t
+(** [union name ~on ~casetype cases] is a field holding one of [cases], selected
+    by the value of the earlier field [on]. Unlike {!Types.casetype}, whose tag
+    is the first bytes of the value itself, the tag here is a field of its own,
+    so other fields may sit between it and the union, and several unions may
+    switch on the same tag. The union occupies the bytes of the selected case
+    only.
+
+    [on] must be integer-valued (an integer, a bitfield, an enum or a
+    [variants]) and declared before the union; every {!Types.case} gives its
+    [~index] in [on]'s type. Decoding a tag no case claims fails with
+    [Invalid_tag] unless a {!Types.default} branch catches it. Encoding raises
+    [Invalid_argument] when the value's case is not the one the tag field holds.
+
+    Projects to a 3D [casetype] named [casetype], taking the tag as its
+    parameter, and to a field [casetype(on) name]. *)
+
 val anon : 'a Types.typ -> 'a anon
 (** [anon typ] creates an anonymous (padding) field. *)
 

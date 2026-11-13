@@ -140,6 +140,16 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
             | None -> find rest)
       in
       find cases
+  | Union { cases; _ } ->
+      (* The tag is another field's bytes: the union is its body alone. *)
+      let rec find = function
+        | [] -> Encode_guard.raise_no_matching_case ()
+        | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+            match cb_project v with
+            | Some (_tag, body) -> size_of_typ_value ctx cb_inner body
+            | None -> find rest)
+      in
+      find cases
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0

@@ -740,6 +740,60 @@ let test_doc_differential_signed () =
   differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
     [ Wire_3d.pack diff_signed_codec ]
 
+(* A union switches on an earlier field in both validators: a byte tag with a
+   default branch and fields either side of the union, and a bitfield tag with
+   none, where an unclaimed tag is a rejection the two have to agree on. *)
+let diff_union_codec =
+  let open Wire in
+  let f_kind = Field.v "kind" uint8 in
+  let body =
+    Field.union "body" ~on:f_kind ~casetype:"UnionBody"
+      [
+        case ~index:(UInt8.v 1) uint16be
+          ~inject:(fun v -> `Short v)
+          ~project:(function `Short v -> Some v | _ -> None);
+        case ~index:(UInt8.v 2) uint32be
+          ~inject:(fun v -> `Long v)
+          ~project:(function `Long v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun tag v -> `Other (tag, v))
+          ~project:(function `Other (tag, v) -> Some (tag, v) | _ -> None);
+      ]
+  in
+  Codec.v "UnionMsg"
+    (fun kind sum body tail -> (kind, sum, body, tail))
+    Codec.
+      [
+        (f_kind $ fun (k, _, _, _) -> k);
+        (Field.v "sum" uint32be $ fun (_, s, _, _) -> s);
+        (body $ fun (_, _, b, _) -> b);
+        (Field.v "tail" uint8 $ fun (_, _, _, t) -> t);
+      ]
+
+let diff_union_bits_codec =
+  let open Wire in
+  let f_kind = Field.v "kind" (bits ~width:4 U8) in
+  Codec.v "UnionBits"
+    (fun kind flags body -> (kind, flags, body))
+    Codec.
+      [
+        (f_kind $ fun (k, _, _) -> k);
+        (Field.v "flags" (bits ~width:4 U8) $ fun (_, f, _) -> f);
+        ( Field.union "body" ~on:f_kind ~casetype:"UnionBitsBody"
+            [
+              case ~index:3 uint16be ~inject:Either.left
+                ~project:Either.find_left;
+              case ~index:5 uint8 ~inject:Either.right
+                ~project:Either.find_right;
+            ]
+        $ fun (_, _, b) -> b );
+      ]
+
+let test_doc_differential_union () =
+  needs_3d_exe ();
+  differential_ok ~name:"unionspec" ~package:"union-doc" ~corpus:(`Fuzz 400)
+    [ Wire_3d.pack diff_union_codec; Wire_3d.pack diff_union_bits_codec ]
+
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
    reader's hex buffer must hold the line, or it truncates and the verdict
    misparses into a false mismatch. *)
@@ -1844,6 +1898,8 @@ let suite =
         `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
+      Alcotest.test_case "doc differential union (needs 3d.exe)" `Quick
+        test_doc_differential_union;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
         test_doc_differential_large_payload;
       Alcotest.test_case "doc differential caps name (needs 3d.exe)" `Quick

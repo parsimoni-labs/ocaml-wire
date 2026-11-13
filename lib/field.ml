@@ -160,6 +160,10 @@ let repeat_seq name ?constraint_ ?self_constraint ?self_int64 ?action ~seq ~size
   v name ?constraint_ ?self_constraint ?self_int64 ?action
     (Types.repeat_seq seq ~size typ)
 
+let union name ?action ?doc ~on ~casetype cases =
+  v name ?action ?doc
+    (Types.union casetype ~tag:on.typ ~on:(Types.Ref (Types.I, on.name)) cases)
+
 let anon typ = { anon_typ = typ }
 let ref f = Types.Ref (Types.I, f.name)
 let int f = Types.Ref (Types.I, f.name)

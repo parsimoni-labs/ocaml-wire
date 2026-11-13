@@ -150,6 +150,8 @@ and pp_typ : type a. a typ Fmt.t =
   | Apply { typ; args } ->
       Fmt.pf ppf "%a(%a)" pp_typ typ Fmt.(list ~sep:comma pp_packed_expr) args
   | Map { inner; _ } -> pp_typ ppf inner
+  (* The dispatch declaration takes the tag as its parameter. *)
+  | Union { name; on; _ } -> Fmt.pf ppf "%s(%a)" name pp_expr on
   (* A parametric sub-codec is emitted as a typedef with formals (see
      [extract]), so the use site must apply them: [Sub(p1, p2)]. The outer
      codec surfaces the same-named params, so each formal resolves to the

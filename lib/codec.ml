@@ -43,6 +43,7 @@ type validator_acc = {
   checkers_rev :
     (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
   field_readers : field_reader list;
+  field_access_rev : (string * field_access) list;
   n_fields : int;
   n_array_slots : int;
   min_size : int;
@@ -57,6 +58,7 @@ let empty_validator_acc () =
     validators_rev = [];
     checkers_rev = [];
     field_readers = [];
+    field_access_rev = [];
     n_fields = 0;
     n_array_slots = 0;
     min_size = 0;
@@ -72,6 +74,9 @@ let layout_ctx_of_validator_acc acc =
     fixed_prefix = acc.fixed_prefix;
     bf = acc.bf;
     field_readers = acc.field_readers;
+    field_at =
+      (fun name ->
+        Option.map access_at (List.assoc_opt name acc.field_access_rev));
     n_fields = acc.n_fields;
   }
 
@@ -161,6 +166,7 @@ let rec apply_struct_field acc inner_struct =
     validators_rev = (static_off, validator) :: acc.validators_rev;
     checkers_rev = (static_off, validator) :: acc.checkers_rev;
     field_readers = acc.field_readers;
+    field_access_rev = acc.field_access_rev;
     n_fields = acc.n_fields;
     n_array_slots = acc.n_array_slots;
     min_size = acc.min_size + size_delta;
@@ -201,6 +207,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         validators_rev = (cf.validator_off, full) :: acc.validators_rev;
         checkers_rev = (cf.validator_off, check_only) :: acc.checkers_rev;
         field_readers = new_field_readers;
+        field_access_rev = (name, cf.field_access) :: acc.field_access_rev;
         n_fields = List.length new_field_readers;
         n_array_slots = List.length new_field_readers + n_extra_vars;
         min_size = acc.min_size + cf.size_delta;
@@ -598,7 +605,7 @@ let rec build_staged_reader : type a.
    tag ahead of its body, an array walks its elements one at a time. Any of
    those can raise with bytes already in the buffer. *)
 let rec encoder_writes_before_checking : type a. a typ -> bool = function
-  | Codec _ | Casetype _ | Array _ | Repeat _ -> true
+  | Codec _ | Casetype _ | Union _ | Array _ | Repeat _ -> true
   | Single_elem { elem; _ } -> encoder_writes_before_checking elem
   | Map { inner; _ } -> encoder_writes_before_checking inner
   | Where { inner; _ } -> encoder_writes_before_checking inner

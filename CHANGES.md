@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add `Wire.Field.union`: a field holding one of several cases, selected by an
+  earlier integer field of the record (#414, #450, @samoht)
+
 - `wire.3d` and the fuzz suites run on Windows (#443, @samoht)
 
 ### Changed

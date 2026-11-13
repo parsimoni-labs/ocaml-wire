@@ -72,6 +72,21 @@ let reject_zeroterm_with_sibling name = function
               (Option.value ~default:"<anon>" f.field_name))
         fields
 
+(* A [where true] is elided by the projection (no refinement is emitted), so it
+   is a harmless no-op wrapper even inside a container. Only a non-trivial cond
+   emits a refined element, which is what EverParse rejects. *)
+let rec any_real_where : type a. a Types.typ -> bool = function
+  | Types.Where { cond = Types.Bool true; inner } -> any_real_where inner
+  | Types.Where _ -> true
+  | Types.Map { inner; _ } -> any_real_where inner
+  | Types.Enum { base; _ } -> any_real_where base
+  | Types.Array { elem; _ } -> any_real_where elem
+  | Types.Repeat { elem; _ } -> any_real_where elem
+  | Types.Optional { inner; _ } -> any_real_where inner
+  | Types.Optional_or { inner; _ } -> any_real_where inner
+  | Types.Single_elem { elem; _ } -> any_real_where elem
+  | _ -> false
+
 (* A [Wire.where] is expressible in 3D only as a top-level field refinement
    ([UINT8 g { cond }], which projects and is enforced). Inside a container the
    projection emits invalid 3D that 3d.exe rejects ([UINT8 { cond } vals[N]] for
@@ -80,21 +95,6 @@ let reject_zeroterm_with_sibling name = function
    would ship a codec whose [.3d] does not compile while OCaml decode silently
    drops the constraint, so reject it at construction. *)
 let reject_nested_where name fields =
-  (* A [where true] is elided by the projection (no refinement is emitted), so it
-     is a harmless no-op wrapper even inside a container. Only a non-trivial cond
-     emits a refined element, which is what EverParse rejects. *)
-  let rec any_real_where : type a. a Types.typ -> bool = function
-    | Types.Where { cond = Types.Bool true; inner } -> any_real_where inner
-    | Types.Where _ -> true
-    | Types.Map { inner; _ } -> any_real_where inner
-    | Types.Enum { base; _ } -> any_real_where base
-    | Types.Array { elem; _ } -> any_real_where elem
-    | Types.Repeat { elem; _ } -> any_real_where elem
-    | Types.Optional { inner; _ } -> any_real_where inner
-    | Types.Optional_or { inner; _ } -> any_real_where inner
-    | Types.Single_elem { elem; _ } -> any_real_where elem
-    | _ -> false
-  in
   let fail fname =
     Fmt.invalid_arg
       "Codec.v %s: field %s puts a Wire.where inside a container element; a \
@@ -102,6 +102,13 @@ let reject_nested_where name fields =
        shape has no verified validator. Move the constraint to the field \
        itself or a codec ~where."
       name fname
+  in
+  let check_cases : type a k. string -> (a, k) Types.case_branch list -> unit =
+   fun fname cases ->
+    List.iter
+      (fun (Types.Case_branch { cb_inner; _ }) ->
+        if any_real_where cb_inner then fail fname)
+      cases
   in
   let rec check_typ : type a. string -> a Types.typ -> unit =
    fun fname t ->
@@ -114,14 +121,11 @@ let reject_nested_where name fields =
     | Types.Single_elem { elem; _ } -> if any_real_where elem then fail fname
     | Types.Optional { inner; _ } -> if any_real_where inner then fail fname
     | Types.Optional_or { inner; _ } -> if any_real_where inner then fail fname
-    | Types.Casetype { cases; _ } ->
-        (* A [where] as a casetype case body projects to [case k: T { cond } v;],
-           which is not valid 3D (a refinement is not allowed on a case body),
-           unlike a top-level field refinement. Reject a non-trivial one. *)
-        List.iter
-          (fun (Types.Case_branch { cb_inner; _ }) ->
-            if any_real_where cb_inner then fail fname)
-          cases
+    (* A [where] as a case body projects to [case k: T { cond } v;], which is
+       not valid 3D (a refinement is not allowed on a case body), unlike a
+       top-level field refinement. Reject a non-trivial one. *)
+    | Types.Casetype { cases; _ } -> check_cases fname cases
+    | Types.Union { cases; _ } -> check_cases fname cases
     | _ -> ()
   in
   List.iter
@@ -236,7 +240,7 @@ let rec refinement_rejected : type a. a Types.typ -> bool = function
   | Types.All_bytes | Types.All_zeros | Types.Zeroterm
   | Types.Zeroterm_at_most _ | Types.Byte_array _ | Types.Byte_array_where _
   | Types.Byte_slice _ | Types.Uint_var _ | Types.Array _ | Types.Repeat _
-  | Types.Single_elem _ | Types.Codec _ | Types.Casetype _ ->
+  | Types.Single_elem _ | Types.Codec _ | Types.Casetype _ | Types.Union _ ->
       true
   | Types.Optional { present = Types.Bool false; _ }
   | Types.Optional_or { present = Types.Bool false; _ } ->
