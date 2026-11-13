@@ -1218,3 +1218,9 @@ val field_seeds : struct_ -> field_seed list
     codec to learn the verdict. It exists so a generated corpus can reach the
     accepting side of a constraint that drawing bytes never would -- a magic
     number leaves one accepting value in [2^32]. *)
+
+val collect_refs : 'a expr -> string list
+(** Field-reference names occurring in an expression, including nested terms. *)
+
+val subst_expr : (string * int expr) list -> 'a expr -> 'a expr
+(** Substitute integer references without evaluating the expression. *)

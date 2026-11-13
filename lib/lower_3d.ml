@@ -568,6 +568,57 @@ let rec single_elem_struct : type a. a typ -> string option = function
   | Enum { name; _ } -> Some ("Se_" ^ name)
   | other -> Some ("Se_" ^ wrap_tag other)
 
+(* A single-element region cannot become a byte-budget list when wrapped
+   in an optional: the list would parse the element repeatedly and lose the
+   exact/at-most contract. Keep it behind a gate and a named wrapper. *)
+let rec optional_region : type a. a typ -> bool = function
+  | Single_elem _ -> true
+  | Map { inner; _ } -> optional_region inner
+  | Where { inner; _ } -> optional_region inner
+  | _ -> false
+
+let optional_region_name inner = "OptRegion_" ^ wrap_tag inner
+
+(* Primitive scalars have a fixed extent. Lower their sized regions to a
+   guarded scalar plus padding instead of retaining a generic exact-parser
+   combinator, whose erased parser-kind metadata can leak into C extraction. *)
+let primitive_width : type a. a typ -> int option = function
+  | Uint8 | Int8 -> Some 1
+  | Uint16 _ | Int16 _ -> Some 2
+  | Uint32 _ | Int32 _ | Float32 _ -> Some 4
+  | Uint64 _ | Int64 _ | Float64 _ -> Some 8
+  | _ -> None
+
+let primitive_region : type a.
+    a typ -> (int expr * packed_typ * int * bool) option = function
+  | Single_elem { size; elem; at_most } ->
+      Option.map
+        (fun n -> (size, Pack_typ elem, n, at_most))
+        (primitive_width elem)
+  | _ -> None
+
+let primitive_region_name : type a. a typ -> string = function
+  | Single_elem { elem; at_most; _ } ->
+      (if at_most then "ScalarRegionAtMost_" else "ScalarRegionExact_")
+      ^ wrap_tag elem
+  | _ -> invalid_arg "Types.primitive_region_name"
+
+let primitive_region_decl typ (_, Pack_typ elem, width, at_most) =
+  let size = Ref (I, "_region_size") in
+  let where = if at_most then Ge (size, Int width) else Eq (size, Int width) in
+  let fields = [ field "_value" elem ] in
+  let fields =
+    if at_most then
+      fields
+      @ [ field "_padding" (Byte_array { size = Sub (size, Int width) }) ]
+    else fields
+  in
+  typedef
+    (param_struct
+       (primitive_region_name typ)
+       [ param "_region_size" (Uint32 Little) ]
+       ~where fields)
+
 (* The synthesised gate-dispatch casetype name for an [optional] whose inner is
    self-delimiting (no wire-size expression). Derived from the inner so two
    optionals over the same inner share one declaration. *)
@@ -581,7 +632,7 @@ let optional_casetype_name : type a. a typ -> string =
     | Apply { typ; _ } -> base typ
     | _ -> "Inner"
   in
-  "Opt_" ^ base inner
+  if optional_region inner then "Opt_" ^ wrap_tag inner else "Opt_" ^ base inner
 
 (* The formals the gate casetype has to declare on top of the gate itself. The
    casetype is a 3D scope of its own, and its default case applies the inner: a
@@ -591,6 +642,7 @@ let optional_casetype_name : type a. a typ -> string =
    [optional_casetype_name] does, so a name and its formals describe the same
    inner; an [apply] carries its own arguments and lifts nothing. *)
 let rec optional_casetype_formals : type a. a typ -> param list = function
+  | inner when optional_region inner -> wrap_formals inner
   | Codec { codec_struct; _ } -> codec_struct.params
   | Map { inner; _ } -> optional_casetype_formals inner
   | Where { inner; _ } -> optional_casetype_formals inner
@@ -615,7 +667,11 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
       cases =
         [
           (Some (Pack_expr (Int 0)), Pack_typ (Byte_array { size = Int 0 }));
-          (None, Pack_typ inner);
+          ( None,
+            if optional_region inner then
+              Pack_typ
+                (synth_ref (optional_region_name inner) (wrap_formals inner))
+            else Pack_typ inner );
         ];
     }
 
@@ -662,7 +718,13 @@ let emit_wrapper seen acc name elem =
     | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
     | None -> ());
     acc :=
-      typedef (param_struct name (wrap_formals elem) [ field "v" elem ]) :: !acc
+      (let where =
+         match elem with
+         | Single_elem { size = Sub (a, b); _ } -> Some (Ge (a, b))
+         | _ -> None
+       in
+       typedef (param_struct name (wrap_formals elem) ?where [ field "v" elem ]))
+      :: !acc
   end
 
 (* A structural key for an int-tagged casetype: its tag and, per case, the
@@ -678,6 +740,19 @@ let casetype_shape tag cases =
              | Some (Pack_expr e) -> fst (expr_shape e))
            ^ ":" ^ wrap_tag body)
          cases)
+
+(* A sized field holding one element: a scalar region, or the wrapper struct
+   of an element that needs one. *)
+let emit_single_elem seen acc typ elem =
+  match primitive_region typ with
+  | Some info ->
+      let name = primitive_region_name typ in
+      if claim_name seen ~kind:"scalar regions" name name then
+        acc := primitive_region_decl typ info :: !acc
+  | None ->
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (single_elem_struct elem)
 
 let rec collect_casetype_decls : type a.
     (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
@@ -725,10 +800,13 @@ let rec collect_casetype_decls : type a.
       end
   | Map { inner; _ } -> extract inner
   | Where { inner; _ } -> extract inner
-  | Optional { inner; _ } when not (has_wire_size_expr inner) ->
+  | Optional { inner; _ }
+    when optional_region inner || not (has_wire_size_expr inner) ->
       (* Self-delimiting inner: declare its dependencies, then the
          gate-dispatch casetype that references them. *)
       extract inner;
+      if optional_region inner then
+        emit_wrapper seen acc (optional_region_name inner) inner;
       let opt_name = optional_casetype_name inner in
       if claim_name seen ~kind:"optional casetypes" opt_name (wrap_tag inner)
       then acc := optional_casetype_decl opt_name inner :: !acc
@@ -749,11 +827,9 @@ let rec collect_casetype_decls : type a.
          enum type (declared by [enum_decls]); a wider or big-endian one renders
          through the synthesised refined-element struct, declared here. *)
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
-  | Single_elem { elem; _ } ->
+  | Single_elem { elem; _ } as typ ->
       extract elem;
-      Option.iter
-        (fun n -> emit_wrapper seen acc n elem)
-        (single_elem_struct elem)
+      emit_single_elem seen acc typ elem
   | Byte_array_where { elt_var; cond; _ } ->
       emit_refined_byte seen acc elt_var cond
   | _ -> ()
@@ -1281,35 +1357,3 @@ let lower_where_to_field_constraint where fields =
           | None -> List.hd (List.rev referenced)
         in
         (None, attach_where_to_target w target fields)
-
-(* EverParse cannot prove that a byte span sized [a - sizeof(this)] (as produced
-   by [rest_bytes]) does not underflow the u32 subtraction. Emit the guard
-   [a >= sizeof(this)] as a refinement on the immediately preceding field;
-   EverParse uses it to discharge the subtraction (a non-scalar field cannot be
-   refined, so this relies on the span following a scalar field, the usual
-   header). This is a 3D-projection concern only: the OCaml decoder already
-   knows [a]. *)
-let guard_subtraction_sizes fields =
-  let guard_of : type a. a typ -> bool expr option = function
-    | Byte_array { size = Sub (a, Sizeof_this) } -> Some (Ge (a, Sizeof_this))
-    | _ -> None
-  in
-  let add_guard g (Field f) =
-    Field
-      {
-        f with
-        constraint_ =
-          (match f.constraint_ with
-          | None -> Some g
-          | Some c -> Some (And (c, g)));
-      }
-  in
-  let rec go = function
-    | f :: (Field nf :: _ as rest) ->
-        let f =
-          match guard_of nf.field_typ with Some g -> add_guard g f | None -> f
-        in
-        f :: go rest
-    | fs -> fs
-  in
-  go fields

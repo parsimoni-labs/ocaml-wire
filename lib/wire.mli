@@ -444,11 +444,10 @@ module Field : sig
   (** [v name typ] creates a named field. [?doc] attaches a free-text note (e.g.
       an RFC section) that the documentation projection renders as a [/* ... */]
       comment on the field in the generated 3D. [?self_constraint] receives the
-      field's own ref and returns a constraint over it; useful for proving a
-      later size-expression safe (e.g. [self >= int 7] when a later field uses
-      [byte_slice ~size:(ref len - int 7)]). [?self_int64] is the same
-      convenience for full-width 64-bit constraints using {!Expr.int64} literals
-      and {!int64} field references.
+      field's own ref and returns a constraint over it (e.g.
+      [self <= int 1500]). [?self_int64] is the same convenience for full-width
+      64-bit constraints using {!Expr.int64} literals and {!int64} field
+      references.
 
       EverParse refines scalar fields only. {!Codec.v} therefore rejects
       [?constraint_] and [?self_constraint] on a byte span, array, sub-codec or
@@ -887,6 +886,11 @@ val byte_array : size:int expr -> string typ
     [u32] and cannot verify such a schema; tighten the field bound. More complex
     bounds are left to EverParse.
 
+    A [size] of [f - k], with [f] an unsigned field of at most 32 bits and [k] a
+    nonnegative constant, needs no constraint on [f]: decoding rejects [f < k],
+    and the 3D projection states [f >= k] on [f], so EverParse proves the
+    subtraction. The same holds for {!byte_slice}.
+
     Raises [Invalid_argument] on a literal [size] that is negative or more than
     a buffer can hold. *)
 
@@ -927,9 +931,10 @@ val nested : size:int expr -> 'a typ -> 'a typ
     encoding raises [Invalid_argument] unless the value's encoded size is
     exactly [size]. It projects to 3D as
     [t f[:byte-size-single-element-array size]], a different construct from the
-    byte-budgeted list {!array} and {!Field.repeat} project to. Raises
-    [Invalid_argument] on a literal [size] that is negative or more than a
-    buffer can hold. *)
+    byte-budgeted list {!array} and {!Field.repeat} project to. Over a single
+    scalar it projects to a struct of that scalar which requires [size] to be
+    the scalar's width, under {!Field.optional} too. Raises [Invalid_argument]
+    on a literal [size] that is negative or more than a buffer can hold. *)
 
 val nested_at_most : size:int expr -> 'a typ -> 'a typ
 (** [nested_at_most ~size t] is like {!nested}, but treats [size] as an upper
@@ -938,9 +943,10 @@ val nested_at_most : size:int expr -> 'a typ -> 'a typ
     This is for length-prefixed regions where the one logical element may
     consume fewer bytes than the available space. Encoding zero-pads the unused
     region; a value larger than [size] raises [Invalid_argument]. It projects to
-    3D as [t f[:byte-size-single-element-array-at-most size]]. Raises
-    [Invalid_argument] on a literal [size] that is negative or more than a
-    buffer can hold. *)
+    3D as [t f[:byte-size-single-element-array-at-most size]]; over a single
+    scalar, to a struct of that scalar and the rest of the region, which
+    requires [size] to be at least the scalar's width. Raises [Invalid_argument]
+    on a literal [size] that is negative or more than a buffer can hold. *)
 
 val enum : string -> (string * int) list -> 'a typ -> 'a typ
 (** [enum name cases base] validates that the decoded integer is one of the

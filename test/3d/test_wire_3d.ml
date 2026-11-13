@@ -712,6 +712,104 @@ let test_doc_differential_region_cardinality () =
       Wire_3d.pack diff_nested_exact_codec;
     ]
 
+(* A byte span sized [Length - 7] with no constraint on [Length], and an
+   optional [nested] and [nested_at_most] region over one scalar: Codec and
+   the EverParse validator must accept the same inputs. *)
+let diff_span_sub_codec =
+  let open Wire in
+  let len = Field.v "Length" uint16be in
+  Codec.v "SpanSub"
+    (fun len data -> (len, data))
+    Codec.
+      [
+        len $ fst;
+        Field.v "Data" (byte_array ~size:Expr.(Field.ref len - int 7)) $ snd;
+      ]
+
+let diff_opt_region_codec name region =
+  let open Wire in
+  let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+  Codec.v name
+    (fun t s v -> (t, s, v))
+    Codec.
+      [
+        (tag $ fun (t, _, _) -> t);
+        (size $ fun (_, s, _) -> s);
+        ( Field.optional "value"
+            ~present:Expr.(Field.ref tag = int 1)
+            (region ~size:(Field.ref size) uint16be)
+        $ fun (_, _, v) -> v );
+      ]
+
+let diff_opt_exact_codec =
+  diff_opt_region_codec "OptRegionExact" (fun ~size t -> Wire.nested ~size t)
+
+let diff_opt_at_most_codec =
+  diff_opt_region_codec "OptRegionAtMost" (fun ~size t ->
+      Wire.nested_at_most ~size t)
+
+(* A corpus line for [hex], after checking that the codec gives [accepted]:
+   the record decodes and spans the whole input. *)
+let corpus_line name c hex accepted =
+  let buf =
+    Bytes.init
+      (String.length hex / 2)
+      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
+  in
+  let codec_accepts =
+    match Codec.decode c buf 0 with
+    | Error _ -> false
+    | Ok _ -> Codec.wire_size_at c buf 0 = Bytes.length buf
+  in
+  Alcotest.(check bool) (name ^ " " ^ hex) accepted codec_accepts;
+  Fmt.str "%s - %s %d" name hex (Bool.to_int accepted)
+
+let test_doc_differential_span_and_scalar_regions () =
+  needs_3d_exe ();
+  let lines name c cases =
+    List.map (fun (hex, ok) -> corpus_line name c hex ok) cases
+  in
+  let codecs =
+    [
+      Wire_3d.pack diff_span_sub_codec;
+      Wire_3d.pack diff_opt_exact_codec;
+      Wire_3d.pack diff_opt_at_most_codec;
+    ]
+  in
+  let fuzzed = Fmt.str "%a" (Wire_3d.generate_corpus ~count:128) codecs in
+  differential_ok ~name:"regionspec" ~package:"region-doc"
+    ~corpus:
+      (`Lines
+         (lines "SpanSub" diff_span_sub_codec
+            [
+              ("0007", true);
+              ("0009aabb", true);
+              ("0006", false);
+              ("0000", false);
+              ("0009aa", false);
+              ("0007aa", false);
+            ]
+         @ lines "OptRegionExact" diff_opt_exact_codec
+             [
+               ("0102aabb", true);
+               ("0005", true);
+               ("0101aa", false);
+               ("0103aabbcc", false);
+               ("0104aabbccdd", false);
+               ("0002aabb", false);
+             ]
+         @ lines "OptRegionAtMost" diff_opt_at_most_codec
+             [
+               ("0102aabb", true);
+               ("0103aabbcc", true);
+               ("0104aabbccdd", true);
+               ("0000", true);
+               ("0101aa", false);
+               ("0103aabb", false);
+             ]
+         @ String.split_on_char '\n' (String.trim fuzzed)))
+    codecs
+
 (* The installed standalone archive must export only the checked
    [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
    whose EverParse-emitted preamble underflows on [StartPosition > InputLength].
@@ -1029,23 +1127,39 @@ let e2e_mixed_codec =
   let fh = Field.v "h" uint8 in
   Codec.v "EP_Header" (fun h -> h) [ Codec.( $ ) fh (fun h -> h) ]
 
-(* Proximity1-style: variable-length data whose size is expressed as
-   [length - header]. EverParse's SMT needs a constraint on [length]
-   to prove the subtraction doesn't underflow, or verification of the
-   generated .fst fails. [?self_constraint] on the length field emits
-   that constraint inline. *)
+(* The decoder rejects a length below the header size. The 3D projection
+   states the same bound on [Length], so this codec needs no explicit length
+   refinement to verify. *)
 let e2e_underflow_codec =
   let open Wire in
   let header_size = 7 in
-  let f_len =
-    Field.v "Length" uint16be ~self_constraint:(fun self ->
-        Expr.(self >= int header_size))
-  in
+  let f_len = Field.v "Length" uint16be in
   let f_data =
     Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int header_size))
   in
   let open Codec in
   v "UnderflowCheck" (fun len data -> (len, data)) [ f_len $ fst; f_data $ snd ]
+
+(* The same span after a field 3D cannot refine: the guard belongs on
+   [Length], not on the byte array before [Data]. *)
+let e2e_underflow_padded_codec =
+  let open Wire in
+  let f_len =
+    Field.v "Length" uint16be ~self_constraint:(fun self ->
+        Expr.(self >= int 7))
+  in
+  let f_pad = Field.v "Pad" (byte_array ~size:(int 2)) in
+  let f_data =
+    Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int 7))
+  in
+  let open Codec in
+  v "UnderflowPadded"
+    (fun len pad data -> (len, pad, data))
+    [
+      (f_len $ fun (l, _, _) -> l);
+      (f_pad $ fun (_, p, _) -> p);
+      (f_data $ fun (_, _, d) -> d);
+    ]
 
 (* [Wire.casetype] in a codec field. The Everparse projection auto-emits
    a [casetype_decl] dispatch + wrapper typedef per unique int-tagged
@@ -1347,8 +1461,11 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
   compile_and_run ~name:"Exts" e2e_repeat_var_elem;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
-  compile_and_run ~name:"EP_Header" e2e_mixed_codec;
-  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
+  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+
+let test_byte_span_subtraction () =
+  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec;
+  compile_and_run ~name:"UnderflowPadded" e2e_underflow_padded_codec
 
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -1592,6 +1709,9 @@ let suite =
         `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential Msb_first sub-codec (needs 3d.exe)"
         `Quick test_doc_differential_msb_sub_codec;
+      Alcotest.test_case
+        "doc differential span and scalar regions (needs 3d.exe)" `Quick
+        test_doc_differential_span_and_scalar_regions;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
       Alcotest.test_case "doc differential union (needs 3d.exe)" `Quick
@@ -1619,4 +1739,6 @@ let suite =
         test_wrapper_hardening_refuses_unknown_shape;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
+      Alcotest.test_case "e2e: byte-span subtraction guard" `Slow
+        test_byte_span_subtraction;
     ] )

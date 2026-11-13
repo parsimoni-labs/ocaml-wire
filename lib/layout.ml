@@ -155,16 +155,6 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
   | Qualified_ref _ -> 0
 
 let rec field_wire_size : type a. a typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | Uint32 _ -> Some 4
-  | Uint64 _ -> Some 8
-  | Int8 -> Some 1
-  | Int16 _ -> Some 2
-  | Int32 _ -> Some 4
-  | Int64 _ -> Some 8
-  | Float32 _ -> Some 4
-  | Float64 _ -> Some 8
   | Uint_var { size = Int n; _ } -> Some n
   | Uint_var _ -> None
   | Bits { base; _ } -> (
@@ -190,7 +180,7 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Repeat _ -> None
   | Array { len = Int n; elem; _ } -> (
       match field_wire_size elem with Some k -> Some (n * k) | None -> None)
-  | _ -> None
+  | t -> Lower_3d.primitive_width t
 
 (* An array of a literal count of fixed-width elements is a byte count too. *)
 let array_len ~combinator len elem =

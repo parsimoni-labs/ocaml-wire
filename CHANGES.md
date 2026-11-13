@@ -92,6 +92,12 @@
   and C keyword a field can spell is escaped (#434, #438, @samoht)
 
 - 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
+
+- A byte span sized `len - k` verifies in EverParse without a hand-written
+  `len >= k` constraint, and a `nested` region over a single scalar keeps its
+  exact size in 3D. Codec and the generated C disagreed on both (#444,
+  @samoht)
+
 ## 1.3.0
 
 ### Added
