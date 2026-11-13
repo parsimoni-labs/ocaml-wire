@@ -34,7 +34,10 @@
   g_refined.ml
   g_refined_wire.ml
   g_overflow.ml
-  g_overflow_wire.ml)
+  g_overflow_wire.ml
+  s_sized.ml
+  s_overflow.ml
+  s_skipped.ml)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
@@ -63,7 +66,10 @@
   g_refined.ml
   g_refined_wire.ml
   g_overflow.ml
-  g_overflow_wire.ml)
+  g_overflow_wire.ml
+  s_sized.ml
+  s_overflow.ml
+  s_skipped.ml)
  (action
   (run ../ocaml/gen.exe)))
 
@@ -122,8 +128,22 @@
   g_refined
   g_refined_wire
   g_overflow
-  g_overflow_wire)
- (libraries schemas wire wire.runtime wire.ocaml fmt alcotest))
+  g_overflow_wire
+  s_sized
+  s_overflow
+  s_skipped)
+ (libraries
+  schemas
+  wire
+  wire.runtime
+  wire.ocaml
+  diff_codecs
+  diff_driver
+  diff_ocaml
+  ocaml_index_ox
+  bytesrw
+  fmt
+  alcotest))
 
 (executable
  (name test)

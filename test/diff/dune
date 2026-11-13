@@ -75,7 +75,7 @@
 (executable
  (name gen_ocaml)
  (modules gen_ocaml)
- (libraries diff_ocaml fuzz_gen wire wire.ocaml fmt))
+ (libraries diff_ocaml diff_codecs fuzz_gen wire wire.ocaml fmt))
 
 ; Generate the Rust backend's modules, one per sampled codec, with Wire_rust,
 ; and the library that exposes them to OCaml. Run by fuzz/diff/rust/.

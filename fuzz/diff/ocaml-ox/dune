@@ -61,7 +61,7 @@
 (executable
  (name fuzz)
  (modules fuzz)
- (libraries fuzz_gen diff_driver diff_ocaml ocaml_index_ox))
+ (libraries fuzz_gen diff_codecs diff_driver diff_ocaml ocaml_index_ox))
 
 (rule
  (alias runtest)

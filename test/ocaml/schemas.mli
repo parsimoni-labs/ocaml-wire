@@ -175,6 +175,14 @@ val sized : sized Codec.t
 (** [sized] has an optional slice whose condition and size overflow the native
     int for a large [n]. *)
 
+type skipped = UInt32.t * UInt8.t * UInt8.t option * UInt8.t option
+
+val skipped : skipped Codec.t
+(** [skipped] has two optional fields whose conditions exclude each other,
+    [x = 4] and [n * n > 0 && x = 3]: when the first holds, the second is false,
+    but the codec still evaluates [n * n], which overflows the native int for a
+    large [n]. *)
+
 val gated : int -> unit Codec.t
 (** [gated n] has [n] optional fields, each present when the tag before it is 1.
 *)

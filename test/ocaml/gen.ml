@@ -26,6 +26,12 @@ let () =
   g "g_signed.ml" ~make:"Schemas.signed_make" "signed" Schemas.signed;
   g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
   g "g_overflow.ml" ~make:"Schemas.overflow_make" "overflow" Schemas.overflow;
+  write "s_sized.ml"
+    (Wire_ocaml.scanner ~target ~codec:"Schemas.sized" Schemas.sized);
+  write "s_overflow.ml"
+    (Wire_ocaml.scanner ~target ~codec:"Schemas.overflow" Schemas.overflow);
+  write "s_skipped.ml"
+    (Wire_ocaml.scanner ~target ~codec:"Schemas.skipped" Schemas.skipped);
   g "g_mapped.ml" ~make:"Schemas.mapped_make"
     ~maps:
       Wire_ocaml.

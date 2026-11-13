@@ -78,3 +78,29 @@
     --
     ./fuzz.exe
     @@))))
+
+; The EverParse validators of the structured cases (Diff_codecs.scan_cases),
+; which the scanner lanes compare with: acceptance, and the bytes consumed.
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (targets
+  (dir scan_schemas)
+  scan_ffi.c
+  scan_oracle_index.ml
+  libscanvalidators.a)
+ (action
+  (run %{dep:../../test/diff/gen_diff.exe} --scanners scan_schemas)))
+
+(library
+ (name diff_scan_c)
+ (modules scan_oracle_index)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (foreign_archives scanvalidators)
+ (foreign_stubs
+  (language c)
+  (names scan_ffi)
+  (extra_deps scan_schemas)
+  (flags :standard -I scan_schemas)))

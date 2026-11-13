@@ -40,6 +40,28 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
+  # The code wire.ocaml writes for OxCaml, its [@zero_alloc] checks
+  # enforced, in the release profile and again in the paranoid one, where
+  # every unchecked load it makes, the unboxed scanners' included, is checked
+  # on its full index (make test-oxcaml).
+  oxcaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: oxcaml-compiler.5.4.0-ox9
+          opam-repositories: |
+            ox: git+https://github.com/oxcaml/opam-repository.git#b66db7ae4ad21debd1b078635cc92e88d73610f8
+            default: https://opam.ocaml.org
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- make test-oxcaml
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
   # The paranoid profile swaps the unchecked reads the fast paths make for
   # checked ones (lib/dune), so a read past the frame raises in the tests and
   # the fuzz properties instead of returning whatever the buffer holds next.
@@ -359,6 +381,6 @@ jobs:
         run: |
           opam exec -- dune build \
             @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
-            @test/bench/runtest
+            @test/bench/runtest @test/ocaml/runtest @fuzz/diff/ocaml/runtest
         env:
           BUILD_EVERPARSE: 1

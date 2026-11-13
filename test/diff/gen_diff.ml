@@ -77,9 +77,6 @@ let job_count () =
 let schema_of (_, Fuzz_gen.Pack g) =
   Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)
 
-let base_of item =
-  Filename.remove_extension (Wire.Everparse.filename (schema_of item))
-
 let read_log path =
   try In_channel.with_open_text path In_channel.input_all
   with Sys_error _ -> ""
@@ -87,7 +84,7 @@ let read_log path =
 (* Generate every included codec's EverParse C. The first runs serially into
    [schema_dir] to seed the shared headers; the rest run in the fork pool, each
    in a private directory. Returns the codecs EverParse rejected. *)
-let generate_all schema_dir included =
+let generate_schemas schema_dir included =
   let included = Array.of_list included in
   let n = Array.length included in
   if n = 0 then []
@@ -96,7 +93,7 @@ let generate_all schema_dir included =
     Fmt.epr "diff-gen: generating %d validators, up to %d in parallel\n%!" n
       max_jobs;
     let seed_fail =
-      match Wire_3d.run ~outdir:schema_dir [ schema_of included.(0) ] with
+      match Wire_3d.run ~outdir:schema_dir [ snd included.(0) ] with
       | () -> []
       | exception (Failure msg | Invalid_argument msg) ->
           [ (fst included.(0), msg) ]
@@ -104,7 +101,10 @@ let generate_all schema_dir included =
     let jobs =
       Array.init (n - 1) (fun k ->
           let item = included.(k + 1) in
-          let schema = schema_of item and base = base_of item in
+          let schema = snd item in
+          let base =
+            Filename.remove_extension (Wire.Everparse.filename schema)
+          in
           fun () -> gen_isolated ~schema_dir ~base schema)
     in
     let rest_fail =
@@ -114,7 +114,11 @@ let generate_all schema_dir included =
           if ok then None
           else
             let item = included.(k + 1) in
-            let log = Filename.concat schema_dir (base_of item ^ ".faillog") in
+            let log =
+              Filename.concat schema_dir
+                (Filename.remove_extension (Wire.Everparse.filename (snd item))
+                ^ ".faillog")
+            in
             Some (fst item, read_log log))
       |> List.filter_map Fun.id
     in
@@ -168,12 +172,12 @@ let value_reader (label, (Fuzz_gen.Pack g as p)) ppf =
       Fmt.(list ~sep:(any "; ") binding)
       (List.filter (fun (_, name, _) -> is_compared name) kinds)
 
-let () =
-  let schema_dir =
-    if Array.length Sys.argv > 1 then Sys.argv.(1) else "schemas"
-  in
+let fixed schema_dir =
   Fmt.epr "diff-gen: %s\n" Diff_codecs.summary;
-  let failures = generate_all schema_dir Diff_codecs.included in
+  let failures =
+    generate_schemas schema_dir
+      (List.map (fun item -> (fst item, schema_of item)) Diff_codecs.included)
+  in
   (match failures with
   | [] -> ()
   | _ :: _ ->
@@ -221,3 +225,76 @@ let () =
   pr "  |]\n";
   Format.pp_print_flush ppf ();
   close_out oc
+
+let scanners schema_dir =
+  let cases =
+    List.map
+      (fun (Diff_codecs.Scan c) ->
+        (c.label, Wire.Everparse.project ~mode:`Standalone c.codec))
+      Diff_codecs.scan_cases
+  in
+  let failures = generate_schemas schema_dir cases in
+  List.iter
+    (fun (label, message) -> Fmt.epr "diff-gen: FATAL %s: %s@." label message)
+    failures;
+  if failures <> [] then
+    failwith "EverParse rejected a required structured oracle";
+  Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a";
+  let b = Buffer.create 2048 in
+  let ppf = Format.formatter_of_buffer b in
+  Fmt.pf ppf "#include <stdint.h>\n#include <caml/mlvalues.h>\n";
+  List.iter
+    (fun (_, (schema : Wire.Everparse.t)) ->
+      Fmt.pf ppf "#include \"%s.h\"\n" schema.Wire.Everparse.name)
+    cases;
+  Fmt.pf ppf
+    {|
+static void scan_error(const char *s, const char *f, const char *r, uint64_t k,
+                       uint8_t *ctx, uint8_t *input, uint64_t pos) {
+  (void)s; (void)f; (void)r; (void)k; (void)ctx; (void)input; (void)pos;
+}
+typedef uint64_t (*scan_validator)(uint8_t *, EVERPARSE_ERROR_HANDLER, uint8_t *, uint64_t, uint64_t);
+static value scan_validate(scan_validator validate, value buffer, value offset, value length) {
+  intnat off = Long_val(offset), len = Long_val(length);
+  mlsize_t available = caml_string_length(buffer);
+  if (off < 0 || len < 0 || (uintnat)off > available ||
+      (uintnat)len > available - (uintnat)off || (uintnat)len > UINT32_MAX)
+    return Val_long(-1);
+  uint64_t end = validate(NULL, scan_error, (uint8_t *)Bytes_val(buffer) + off, (uint64_t)len, 0);
+  if (!EverParseIsSuccess(end) || end > (uint64_t)len || end > (uint64_t)Max_long)
+    return Val_long(-1);
+  return Val_long((intnat)end);
+}
+|};
+  List.iteri
+    (fun i (_, (schema : Wire.Everparse.t)) ->
+      Fmt.pf ppf
+        "CAMLprim value wire_diff_scan_%d(value b, value o, value n) { return \
+         scan_validate(%s, b, o, n); }\n"
+        i
+        (Wire_stubs.validator_name schema.Wire.Everparse.name))
+    cases;
+  Format.pp_print_flush ppf ();
+  Out_channel.with_open_text "scan_ffi.c" (fun oc ->
+      output_string oc (Buffer.contents b));
+  Out_channel.with_open_text "scan_oracle_index.ml" (fun oc ->
+      let ppf = Format.formatter_of_out_channel oc in
+      List.iteri
+        (fun i _ ->
+          Fmt.pf ppf
+            "external accepted_%d : bytes -> int -> int -> int = \
+             \"wire_diff_scan_%d\" [@@@@noalloc]\n"
+            i i)
+        cases;
+      Fmt.pf ppf "let covered = [\n";
+      List.iteri
+        (fun i (label, _) -> Fmt.pf ppf "(%S, accepted_%d);\n" label i)
+        cases;
+      Fmt.pf ppf "]@.";
+      Format.pp_print_flush ppf ())
+
+let () =
+  match Array.to_list Sys.argv with
+  | [ _; "--scanners"; schema_dir ] -> scanners schema_dir
+  | [ _; schema_dir ] -> fixed schema_dir
+  | _ -> fixed "schemas"

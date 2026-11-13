@@ -9,3 +9,11 @@ val run : string -> (string * (bytes -> unit)) list -> unit
     one input against it. A normal run gives each codec its own case on random
     bytes; under AFL ({!Fuzz_gen.afl_mode}) the framed input picks one codec. A
     check fails through {!Alcobar.failf}. *)
+
+val oracle : string -> (bytes -> int -> int -> int) option
+(** [oracle label] is {!C_oracle.accepted_end} for the structured case [label]
+    when the validators are built. *)
+
+val report_oracle : string -> unit
+(** [report_oracle name] says whether the C validators are compared, and fails
+    when [BUILD_EVERPARSE=1] but they are not built. *)

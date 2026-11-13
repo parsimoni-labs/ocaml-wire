@@ -54,3 +54,21 @@ val compared_fields : Fuzz_gen.packed -> compared_field list
 val summary : string
 (** One-line tally: total candidates, included count, and excluded count broken
     down by reason. *)
+
+(** A structured codec the scanners are compared on: its label, the codec,
+    [project], the scanner outputs a decoded value gives (an absent optional
+    field's are left out, and read as 0), [inputs], the buffers a fuzzed input
+    is tried as, and [corpus], its boundary cases. *)
+type scan_case =
+  | Scan : {
+      label : string;
+      codec : 'a Wire.Codec.t;
+      project : 'a -> (string * int) list;
+      inputs : bytes -> bytes list;
+      corpus : unit -> bytes list;
+    }
+      -> scan_case
+
+val scan_cases : scan_case list
+(** The structured cases: regions, optional fields, tags, bitfield tests and the
+    {!Packet_stack} codec. *)

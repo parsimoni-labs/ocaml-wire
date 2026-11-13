@@ -1,3 +1,18 @@
 (library
  (name diff_driver)
- (libraries fmt fuzz_gen diff_codecs alcobar))
+ (modules diff_driver c_oracle)
+ (libraries
+  fmt
+  fuzz_gen
+  diff_codecs
+  alcobar
+  (select
+   c_oracle.ml
+   from
+   (diff_scan_c -> c_oracle.enabled.ml)
+   (-> c_oracle.disabled.ml))
+  (select
+   c_oracle.mli
+   from
+   (diff_scan_c -> c_oracle.enabled.mli)
+   (-> c_oracle.disabled.mli))))

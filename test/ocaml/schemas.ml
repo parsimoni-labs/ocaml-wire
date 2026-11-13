@@ -263,6 +263,25 @@ let sized =
         (Field.v "tail" uint8 $ fun (_, _, t) -> t);
       ]
 
+type skipped = UInt32.t * UInt8.t * UInt8.t option * UInt8.t option
+
+let skipped =
+  let n = Field.v "n" uint32be and x = Field.v "x" uint8 in
+  Codec.v "Skipped"
+    (fun n x a b -> (n, x, a, b))
+    Codec.
+      [
+        (n $ fun (n, _, _, _) -> n);
+        (x $ fun (_, x, _, _) -> x);
+        ( Field.optional "a" ~present:Expr.(Field.ref x = int 4) uint8
+        $ fun (_, _, a, _) -> a );
+        ( Field.optional "b"
+            ~present:
+              Expr.(Field.ref n * Field.ref n > int 0 && Field.ref x = int 3)
+            uint8
+        $ fun (_, _, _, b) -> b );
+      ]
+
 let rec gated n =
   let tag = Field.v "tag" uint8 in
   let value =

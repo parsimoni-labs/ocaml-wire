@@ -143,6 +143,143 @@ let pp_case ppf (label, c, src) =
            "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
     fields
 
+(* {1 Scanners}
+
+   Each scanner is handed to [Diff_ocaml] as its [decode] and [fold_frames],
+   on OxCaml also as their unboxed forms. A structured case gets the scanner
+   of every output, one of every other output, one of none, and on OxCaml one
+   for the default target too; a sampled shape the first two. *)
+
+let snapshot ppf ~unboxed ~var fields =
+  Fmt.pf ppf "[";
+  List.iter
+    (fun (n, is_bool) ->
+      let v = var n in
+      Fmt.pf ppf "(%S, %s);" n
+        (if is_bool then "(if " ^ v ^ " then 1 else 0)"
+         else if unboxed then "(Wire_runtime.Target.Int64_u.to_int " ^ v ^ ")"
+         else v))
+    fields;
+  Fmt.pf ppf "]"
+
+let pp_backend ppf ~m ~unboxed fields =
+  let args =
+    if fields = [] then "()"
+    else
+      String.concat " "
+        (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
+  in
+  let values ppf () =
+    snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields
+  in
+  let batch ppf () =
+    if unboxed then
+      Fmt.pf ppf
+        "Some (fun b o n stride -> let results = ref [] in try let _ = \
+         %s.fold_frames_unboxed b o n ~stride ~init:#0L ~invalid:(fun acc -> \
+         results := None :: !results; acc) ~valid:(fun acc %s -> results := \
+         Some %a :: !results; acc) in Some (List.rev !results) with \
+         Invalid_argument _ -> None)"
+        m args values ()
+    else
+      Fmt.pf ppf
+        "Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
+         ~stride ~init:[] ~invalid:(fun acc -> None :: acc) ~valid:(fun acc %s \
+         -> Some %a :: acc))) with Invalid_argument _ -> None)"
+        m args values ()
+  in
+  Fmt.pf ppf
+    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> let \
+     v = %s.%s b o n in if v.%sok then Some %a else None); scan_batch = %a };@\n"
+    (m ^ if unboxed then " unboxed" else "")
+    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+    fields m
+    (if unboxed then "decode_unboxed" else "decode")
+    (if unboxed then "#" else "")
+    (fun ppf () ->
+      snapshot ppf ~unboxed
+        ~var:(fun n -> "v." ^ (if unboxed then "#" else "") ^ n)
+        fields)
+    () batch ()
+
+(* The backends over [c]: each module [(name, target, selected)], generated
+   inside the function. *)
+let pp_scanners ppf ~label c modules =
+  let fields = Wire_ocaml.scanner_fields c in
+  List.iter
+    (fun (m, t, selected) ->
+      Fmt.pf ppf "let module %s = struct@\n%s@\nend in@\n" m
+        (Wire_ocaml.scanner ~target:t ?fields:selected ~codec:label c))
+    modules;
+  Fmt.pf ppf "[@\n";
+  List.iter
+    (fun (m, t, selected) ->
+      let fields =
+        match selected with
+        | None -> fields
+        | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
+      in
+      pp_backend ppf ~m ~unboxed:false fields;
+      if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields)
+    modules;
+  Fmt.pf ppf "]@\n"
+
+let every_other c =
+  List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.scanner_fields c)
+  |> List.map fst
+
+let pp_scan_cases ppf =
+  List.iteri
+    (fun i (Diff_codecs.Scan c) ->
+      Fmt.pf ppf "let scan_case_%d () : Diff_ocaml.scan_ops list =@\n" i;
+      pp_scanners ppf ~label:c.label c.codec
+        ([
+           ("Full", target, None);
+           ("Selected", target, Some (every_other c.codec));
+           ("Checks", target, Some []);
+         ]
+        @ if target = `OxCaml then [ ("Stock", `OCaml, None) ] else []);
+      Fmt.pf ppf "@\n")
+    Diff_codecs.scan_cases;
+  Fmt.pf ppf "let scanners = [@\n";
+  List.iteri
+    (fun i (Diff_codecs.Scan c) ->
+      Fmt.pf ppf "  (%S, scan_case_%d);@\n" c.label i)
+    Diff_codecs.scan_cases;
+  Fmt.pf ppf "]@\n@\n"
+
+let pp_sampled_scanners ppf =
+  let accepted, refused =
+    List.partition_map
+      (fun (label, (Fuzz_gen.Pack g as p)) ->
+        let c = Fuzz_gen.codec g in
+        match Wire_ocaml.scanner_fields c with
+        | _ -> Left (label, p)
+        | exception Invalid_argument msg -> Right (label, msg))
+      Diff_ocaml.scan_codecs
+  in
+  List.iteri
+    (fun i (_, Fuzz_gen.Pack g) ->
+      let c = Fuzz_gen.codec g in
+      Fmt.pf ppf
+        "let sampled_%d : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = \
+         function@\n\
+        \  | Fuzz_gen.Pack _ ->@\n"
+        i;
+      pp_scanners ppf ~label:"codec" c
+        [ ("Full", target, None); ("Selected", target, Some (every_other c)) ];
+      Fmt.pf ppf "@\n")
+    accepted;
+  Fmt.pf ppf
+    "let sampled_scanners : (string * (Fuzz_gen.packed -> Diff_ocaml.scan_ops \
+     list)) list = [@\n";
+  List.iteri
+    (fun i (label, _) -> Fmt.pf ppf "  (%S, sampled_%d);@\n" label i)
+    accepted;
+  Fmt.pf ppf "]@\n@\nlet scan_refused : (string * string) list = [@\n";
+  List.iter (fun (label, msg) -> Fmt.pf ppf "  (%S, %S);@\n" label msg) refused;
+  Fmt.pf ppf "]@."
+
 let () =
   let ppf = Format.std_formatter in
   let accepted, refused =
@@ -173,4 +310,6 @@ let () =
   List.iter
     (fun (label, msg) -> Fmt.pf ppf "    (%S, %S);@\n" label msg)
     refused;
-  Fmt.pf ppf "  ]@."
+  Fmt.pf ppf "  ]@\n@\n";
+  pp_scan_cases ppf;
+  pp_sampled_scanners ppf

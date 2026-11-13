@@ -387,3 +387,353 @@ let report name refused =
         name label msg)
     unexpected;
   unexpected = []
+
+(* {1 Scanners}
+
+   A scanner hands out scalars from a bounded frame rather than a record from
+   an offset, so it is compared on snapshots: the outputs the reference can
+   state, or [None] for a frame the codec rejects. *)
+
+type scan_ops = {
+  scan_name : string;
+  scan_fields : string list;
+  scan : bytes -> int -> int -> (string * int) list option;
+  scan_batch :
+    (bytes -> int -> int -> int -> (string * int) list option list option)
+    option;
+}
+
+type reference =
+  | Reference : {
+      label : string;
+      codec : 'a Wire.Codec.t;
+      known : string list option;
+      project : bytes -> 'a -> (string * int) list;
+      inputs : bytes -> bytes list;
+    }
+      -> reference
+
+let of_scan_case (Diff_codecs.Scan c) =
+  Reference
+    {
+      label = c.label;
+      codec = c.codec;
+      known = None;
+      project = (fun _ v -> c.project v);
+      inputs = c.inputs;
+    }
+
+(* A sampled codec's reference: its top-level integer fields, each read by
+   the reader [Codec.get] stages. *)
+let rec is_int : type a. a T.typ -> bool = function
+  | T.Uint8 | T.Int8 | T.Uint16 _ | T.Int16 _ | T.Uint32 _ | T.Int32 _
+  | T.Bits _ ->
+      true
+  | T.Where { inner; _ } -> is_int inner
+  | T.Enum { base; _ } -> is_int base
+  | _ -> false
+
+let of_sampled label (Fuzz_gen.Pack g) =
+  let c = Fuzz_gen.codec g in
+  let fields =
+    List.filter_map
+      (fun (T.Field f) ->
+        Option.bind f.field_name (fun name ->
+            Option.join
+              (Gen.with_field_reader c name
+                 {
+                   k =
+                     (fun typ read ->
+                       if is_int typ then
+                         Some
+                           ( Names.ocaml_label name,
+                             fun b -> Eval.int_of_exn typ (read b 0) )
+                       else None);
+                 })))
+      (Gen.to_struct c).fields
+  in
+  Reference
+    {
+      label;
+      codec = c;
+      known = Some (List.map fst fields);
+      project = (fun b _ -> List.map (fun (n, read) -> (n, read b)) fields);
+      inputs = (fun b -> [ b ]);
+    }
+
+let scan_frame buf off len =
+  let n = Bytes.length buf in
+  if off < 0 || len < 0 || off > n || len > n - off then None
+  else Some (Bytes.sub buf off len)
+
+let scan_same label what show a b =
+  if a <> b then
+    Alcobar.failf "%s: %s: Wire.Codec %s, but the generated code %s" label what
+      (show a) (show b)
+
+let show_snapshot =
+  Fmt.(
+    str "%a"
+      (option ~none:(any "rejects")
+         (list ~sep:comma (pair ~sep:(any "=") string int))))
+
+let expected (Reference r) b =
+  match Wire.Codec.decode r.codec b 0 with
+  | Error _ -> None
+  | Ok v -> Some (r.project b v)
+
+(* The outputs of [fields] a reference states, absent ones as 0. *)
+let snapshot (Reference r) fields =
+  let fields =
+    match r.known with
+    | None -> fields
+    | Some known -> List.filter (fun n -> List.mem n known) fields
+  in
+  Option.map (fun pairs ->
+      List.map
+        (fun n -> (n, Option.value ~default:0 (List.assoc_opt n pairs)))
+        fields)
+
+let restrict (Reference r) fields got =
+  match r.known with
+  | None -> got
+  | Some known ->
+      Option.map
+        (List.filter (fun (n, _) -> List.mem n known && List.mem n fields))
+        got
+
+let scan_oracle (Reference r) oracle bounded accepted buf off len =
+  Option.iter
+    (fun accepted_end ->
+      let consumed =
+        match (bounded, accepted) with
+        | Some b, true -> Wire.Codec.wire_size_at r.codec b 0
+        | _ -> -1
+      in
+      scan_same r.label "EverParse C acceptance and consumed prefix"
+        string_of_int consumed (accepted_end buf off len))
+    oracle
+
+let scan_batches ?strides (Reference r as ref_) oracle backends buf off len =
+  let bounded = scan_frame buf off len in
+  let strides =
+    match (strides, bounded) with
+    | Some strides, _ -> strides
+    | None, None -> [ 1 ]
+    | None, Some _ ->
+        List.sort_uniq compare
+          [ 0; -1; max_int; max 1 len; max 1 (len / 2); len + 1 ]
+  in
+  List.iter
+    (fun stride ->
+      let frames =
+        if stride <= 0 then None
+        else
+          Option.map
+            (fun b ->
+              List.init
+                (Bytes.length b / stride)
+                (fun i ->
+                  let frame = Bytes.sub b (i * stride) stride in
+                  let value = expected ref_ frame in
+                  scan_oracle ref_ oracle (Some frame) (Option.is_some value)
+                    buf
+                    (off + (i * stride))
+                    stride;
+                  value))
+            bounded
+      in
+      List.iter
+        (fun backend ->
+          Option.iter
+            (fun batch ->
+              let want =
+                Option.map (List.map (snapshot ref_ backend.scan_fields)) frames
+              in
+              let got =
+                Option.map
+                  (List.map (restrict ref_ backend.scan_fields))
+                  (batch buf off len stride)
+              in
+              if want <> got then
+                Alcobar.failf "%s: %s fold_frames with stride %d diverged"
+                  r.label backend.scan_name stride)
+            backend.scan_batch)
+        backends)
+    strides
+
+(* The codec's answer on a frame through its general path, and through
+   [validate], which must agree with [decode]. *)
+let codec_agrees (Reference r) ~general bounded value =
+  let slow = Option.bind bounded general in
+  scan_same r.label "the general decoder" show_snapshot value slow;
+  let validated =
+    Option.fold ~none:false
+      ~some:(fun b ->
+        match Wire.Codec.validate r.codec b 0 with
+        | () -> true
+        | exception Wire.Parse_error _ -> false)
+      bounded
+  in
+  scan_same r.label "Codec.validate" string_of_bool (Option.is_some value)
+    validated
+
+let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
+    =
+  let general =
+    let c = Testing.general r.codec in
+    fun b ->
+      match Wire.Codec.decode c b 0 with
+      | Error _ -> None
+      | Ok v -> Some (r.project b v)
+  in
+  let at buf off len =
+    let original = Bytes.copy buf in
+    let bounded = scan_frame buf off len in
+    let value = Option.bind bounded (expected ref_) in
+    codec_agrees ref_ ~general bounded value;
+    scan_oracle ref_ oracle bounded (Option.is_some value) buf off len;
+    List.iter
+      (fun backend ->
+        scan_same r.label backend.scan_name show_snapshot
+          (snapshot ref_ backend.scan_fields value)
+          (restrict ref_ backend.scan_fields (backend.scan buf off len)))
+      backends;
+    scan_batches ?strides ref_ oracle backends buf off len;
+    if not (Bytes.equal original buf) then
+      Alcobar.failf "%s: a read changed the input" r.label
+  in
+  fun raw ->
+    List.iter
+      (fun b ->
+        let n = Bytes.length b in
+        at b 0 n;
+        let padded =
+          Bytes.cat (Bytes.make 7 '\255') (Bytes.cat b (Bytes.make 5 '\165'))
+        in
+        at padded 7 n;
+        at b (-1) n;
+        at b 0 (-1);
+        at b max_int 1;
+        at b 1 max_int;
+        at b 0 (n + 1);
+        if n > 0 then at b 1 (n - 1))
+      (if expand then r.inputs raw else [ raw ])
+
+let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
+  let ref_ = of_scan_case case in
+  let check = check_scan ?oracle ~expand:false ref_ backends in
+  let corpus = c.corpus () in
+  List.iter check corpus;
+  (* Good, bad and good frames of one length, then a partial one, through
+     the batch fold: recovery after a rejected frame, and the order of the
+     accumulator. *)
+  let frames = Hashtbl.create 16 in
+  List.iter
+    (fun b ->
+      let n = Bytes.length b in
+      if n > 0 then
+        let good, bad =
+          Option.value ~default:(None, None) (Hashtbl.find_opt frames n)
+        in
+        let accepted = Option.is_some (expected ref_ b) in
+        Hashtbl.replace frames n
+          (if accepted then (Some b, bad) else (good, Some b)))
+    corpus;
+  Hashtbl.iter
+    (fun n (good, bad) ->
+      Option.iter
+        (fun good ->
+          let bad = Option.value ~default:good bad in
+          let joined =
+            Bytes.concat Bytes.empty
+              [ good; bad; good; Bytes.sub good 0 (n / 2) ]
+          in
+          check_scan ?oracle ~strides:[ n ] ~expand:false ref_ backends joined)
+        good)
+    frames
+
+(* {2 Sampled shapes}
+
+   Every sampled codec, fixed or not, goes through the scanner as well. *)
+
+(* Written from the scanner's documentation: integers up to 32 bits (on a
+   64-bit host), bitfields, byte arrays and slices of any size, nested codecs,
+   optional fields and sized regions, with no parameter and no action, whose
+   expressions read the integer fields before them in their own record. *)
+let rec scan_typ_ok : type a. string list -> a T.typ -> bool =
+ fun scope t ->
+  let e : type b. b T.expr -> bool =
+   fun x ->
+    expr_ok x && List.for_all (fun r -> List.mem r scope) (T.collect_refs x)
+  in
+  match t with
+  | T.Uint8 | T.Int8 | T.Uint16 _ | T.Int16 _ | T.Bits _ -> true
+  | T.Uint32 _ | T.Int32 _ -> wide
+  | T.Byte_array { size } -> e size
+  | T.Byte_slice { size } -> e size
+  | T.Where { cond; inner } -> e cond && scan_typ_ok scope inner
+  | T.Enum { base; _ } -> scan_typ_ok scope base
+  | T.Codec { codec_struct; _ } -> struct_ok codec_struct
+  | T.Single_elem { size; elem; _ } -> e size && scan_typ_ok scope elem
+  | T.Optional { present; inner } -> e present && scan_typ_ok scope inner
+  | T.Unit -> true
+  | _ -> false
+
+and struct_ok (s : T.struct_) =
+  let rec fields scope = function
+    | [] ->
+        Option.fold ~none:true
+          ~some:(fun w ->
+            expr_ok w
+            && List.for_all (fun r -> List.mem r scope) (T.collect_refs w))
+          s.where
+    | T.Field f :: rest ->
+        let self = Option.to_list f.field_name in
+        let leaf = is_int f.field_typ in
+        let own = if leaf then self @ scope else scope in
+        Option.is_none f.action
+        && Option.fold ~none:true
+             ~some:(fun c ->
+               expr_ok c
+               && List.for_all (fun r -> List.mem r own) (T.collect_refs c))
+             f.constraint_
+        && (leaf || Option.is_none f.constraint_)
+        && scan_typ_ok own f.field_typ
+        && fields own rest
+  in
+  s.params = [] && fields [] s.fields
+
+let scannable c = struct_ok (Gen.to_struct c)
+
+let scan_codecs =
+  let sampled =
+    List.filter
+      (fun (_, p) ->
+        match Diff_codecs.scope_exclusion p with
+        | Some Parameterised -> false
+        | _ -> true
+        | exception Invalid_argument _ -> false)
+      Diff_codecs.candidates
+  in
+  sampled
+  @ List.filter (fun (label, _) -> not (List.mem_assoc label sampled)) codecs
+
+let scan_report name refused =
+  let total = List.length scan_codecs and n = List.length refused in
+  Fmt.epr "%s: %d of the %d sampled shapes scanned, %d refused@." name
+    (total - n) total n;
+  let unexpected =
+    List.filter
+      (fun (_, Fuzz_gen.Pack g, msg) ->
+        scannable (Fuzz_gen.codec g) && Option.is_none (find "ambiguous" msg))
+      refused
+  in
+  List.iter
+    (fun (label, _, msg) ->
+      Fmt.epr
+        "%s: FATAL %s is in the scanner's documented scope but was refused: \
+         %s@."
+        name label msg)
+    unexpected;
+  unexpected = []
