@@ -271,7 +271,8 @@ let compile_bits : type r.
         };
     int_reader = raw_reader;
     nested_readers = [];
-    validator_off = static_off;
+    (* Errors name the word, which a later field's cursor is past. *)
+    validator_off = base_off;
     populate = build_populate fld.typ ctx.n_fields raw_reader;
   }
 

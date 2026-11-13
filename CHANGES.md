@@ -21,6 +21,9 @@
   `wire.runtime`, and also builds for js_of_ocaml, wasm_of_ocaml and OxCaml
   (#436, @samoht)
 
+- `wire.rust` (`Wire_rust`): generate safe, `no_std` Rust from a fixed-size
+  codec (#439, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
@@ -71,8 +74,8 @@
 - `decode` checks a record before reading it, so it reports the same first
   failure as `validate` (#435, @samoht)
 
-- Errors name the right place: a renamed codec's new name, a wide enum's own
-  offset (#435, @samoht)
+- Errors name the right place: a renamed codec's new name, a wide
+  enum's own offset, a bitfield's word (#435, #439, @samoht)
 
 - A negative offset raises `Invalid_argument`; one near `max_int` is a parse
   error (#435, @samoht)
@@ -86,7 +89,6 @@
   and C keyword a field can spell is escaped (#434, #438, @samoht)
 
 - 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
-
 ## 1.3.0
 
 ### Added

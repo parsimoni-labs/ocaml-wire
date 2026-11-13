@@ -23,6 +23,10 @@ val is_identifier : string -> bool
     the identifiers 3D, C and OCaml share. Nothing escapes any other name into
     all three. *)
 
+val rust_keywords : string list
+(** Rust's strict keywords and the words reserved for future use, up to the 2024
+    edition ([async], [dyn], [gen], [try], ...). *)
+
 val escape : string list -> string -> string
 (** [escape keywords name] is [name ^ "_"] when [name] is one of [keywords], and
     [name] otherwise. *)
@@ -33,6 +37,12 @@ val ocaml_label : ?oxcaml:bool -> string -> string
     prefixed with [f_] when it would start with a digit, and escaped when a
     keyword. [oxcaml] (default [true]) escapes OxCaml's keywords too, so the
     name is valid on either compiler. *)
+
+val rust_ident : string -> string
+(** [rust_ident name] is the Rust field or function name for [name]:
+    lower-cased, with any character outside a Rust identifier replaced by [_],
+    prefixed with [f_] when it would start with a digit or be the lone [_]
+    pattern, and escaped when a keyword. *)
 
 val clash : ('a * string) list -> ('a * 'a * string) option
 (** [clash idents] is [Some (a, b, id)] for the first identifier [id] that two

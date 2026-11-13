@@ -1,16 +1,14 @@
 open Wire.Private
+open Layout
 module T = Types
 
 exception Unsupported of string
 
 let fail_unsupported fmt = Fmt.kstr (fun s -> raise (Unsupported s)) fmt
 
-(* How a field is stored. Integers up to 16 bits and bitfields are handled as
-   an [int], 32-bit integers as an [int32], byte arrays as a [string]. *)
-type store =
-  | Int of { width : int; endian : T.endian; signed : bool }
-  | Bits of { base : T.bitfield_base; shift : int; width : int }
-  | Bytes of int
+(* How a field is stored is a [Layout.store]. Integers up to 16 bits and
+   bitfields are handled as an [int], 32-bit integers as an [int32], byte
+   arrays as a [string]. *)
 
 (* What a failed test raises, as the codec does: a violated constraint
    (carrying the field's value), a value no case of a closed enum has, or an
@@ -26,15 +24,13 @@ type test = { fast : string; slow : string option }
    field derive from, the variable that holds its plain value, where it sits,
    how it is stored, the OCaml tests its value must pass in the order the codec
    runs them, each with what its failure raises, and the closed enum the
-   encoder checks it against. [at] is the offset the codec names when one of
-   its checks fails: the field's own, except for a bitfield after the first of
-   its word, which the codec reports past the word it has read. *)
+   encoder checks it against. A failed check names [off], as the codec does:
+   for a bitfield, the offset of its word. *)
 type field = {
   name : string;
   label : string;
   var : string;
   off : int;
-  at : int;
   store : store;
   checks : (test * kind) list;
   enum : (string * int list) option;
@@ -167,15 +163,7 @@ let rec classify : type a.
     a T.typ -> store * (string -> (bool T.expr * kind) list) =
  fun typ ->
   let none _ = [] in
-  let int width endian signed = (Int { width; endian; signed }, none) in
   match typ with
-  | T.Uint8 -> int 8 T.Big false
-  | T.Int8 -> int 8 T.Big true
-  | T.Uint16 e -> int 16 e false
-  | T.Int16 e -> int 16 e true
-  | T.Uint32 e -> int 32 e false
-  | T.Int32 e -> int 32 e true
-  | T.Byte_array { size = T.Int n } when n >= 0 -> (Bytes n, none)
   | T.Where { cond; inner } ->
       let s, t = classify inner in
       (s, fun self -> (cond, Constraint) :: t self)
@@ -193,43 +181,16 @@ let rec classify : type a.
       (s, fun self -> (member self, Enum valid) :: t self)
   | T.Enum { base; closed = false; _ } -> classify base
   | T.Map _ -> fail_unsupported "a map inside its type"
-  | _ -> fail_unsupported "its type, %a" T.pp_typ typ
+  | typ -> (
+      match leaf typ with
+      | Some s -> (s, none)
+      | None -> fail_unsupported "its type, %a" T.pp_typ typ)
 
 let rec enum_of : type a. a T.typ -> (string * int list) option = function
   | T.Enum { name; cases; closed = true; _ } -> Some (name, List.map snd cases)
   | T.Where { inner; _ } -> enum_of inner
   | T.Map { inner; _ } -> enum_of inner
   | _ -> None
-
-let width_bytes = function
-  | Int { width; _ } -> width / 8
-  | Bits { base; _ } -> Bitfield.byte_size base
-  | Bytes n -> n
-
-(* The bitfield word being filled: its base, bit order, offset and the bits
-   taken so far. *)
-type word = {
-  base : T.bitfield_base;
-  order : T.bit_order;
-  at : int;
-  used : int;
-}
-
-(* A bitfield goes into the current word when it has the same base and bit
-   order and still fits, as the codec packs it; else it opens a new word. *)
-let place_bits ~off ~word ~base ~order ~width =
-  let total = Bitfield.total_bits base in
-  let w =
-    match word with
-    | Some w
-      when Bitfield.equal w.base base && w.order = order
-           && w.used + width <= total ->
-        w
-    | _ -> { base; order; at = off; used = 0 }
-  in
-  let shift = Bitfield.shift ~bit_order:order ~total ~bits_used:w.used ~width in
-  let next = if w.used = 0 then off + Bitfield.byte_size base else off in
-  (w, shift, next)
 
 (* One field laid out at [off], its value under [map] when it has one. *)
 (* [extra] are the checks between the type's and the field's own: a map's
@@ -255,8 +216,7 @@ let field_of : type b.
       in
       let store = Bits { base; shift; width } in
       let checks = extra @ own in
-      let at = if w.used = 0 then w.at else w.at + Bitfield.byte_size base in
-      ( { name; label; var = v; off = w.at; at; store; checks; enum = None; map },
+      ( { name; label; var = v; off = w.at; store; checks; enum = None; map },
         Some { w with used = w.used + width },
         next )
   | typ ->
@@ -266,17 +226,7 @@ let field_of : type b.
       (match (store, checks) with
       | Bytes _, _ :: _ -> fail_unsupported "a constraint on a byte array"
       | _ -> ());
-      ( {
-          name;
-          label;
-          var = v;
-          off;
-          at = off;
-          store;
-          checks;
-          enum = enum_of typ;
-          map;
-        },
+      ( { name; label; var = v; off; store; checks; enum = enum_of typ; map },
         None,
         off + width_bytes store )
 
@@ -886,7 +836,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~fields ~where =
    codec runs them, then the where clause. [fail] runs only once a fast test
    failed, so it always finds an error; [too_short] is the encoder's. *)
 let raise_check (f : field) (_, kind) =
-  let at = Fmt.str "(off + %d)" f.at in
+  let at = Fmt.str "(off + %d)" f.off in
   match kind with
   | Constraint ->
       Fmt.str "%s.field_constraint ~at:%s ~field:%S %s" errors at f.name f.var
@@ -925,7 +875,7 @@ let pp_cold ~src ppf ~target ~fields ~where =
     (fun (f : field) ->
       List.iter
         (fun ((test, _) as c) ->
-          let at = Fmt.str "(off + %d)" f.at in
+          let at = Fmt.str "(off + %d)" f.off in
           Fmt.pf ppf "    if not %s then %s;@\n"
             (slow_test ~at ~field:[ f.name ] test)
             (raise_check f c))

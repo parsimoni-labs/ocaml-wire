@@ -1,5 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
-       fuzz-nightly 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+       fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
+       bench-clcw bench-rust \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -50,12 +51,20 @@ fuzz-paranoid:
 
 # AFL campaigns, WIRE_AFL_SECONDS each (default 60); fuzz-afl-diff needs
 # EverParse. A crash is replayed with _build/default/<dir>/fuzz.exe <file>,
-# which prints the divergence.
+# which prints the divergence. The Rust lane's campaign needs rustc:
+# BUILD_RUST=1 dune build --profile afl @fuzz/diff/rust/fuzz.
+FUZZ_AFL_DIFF = @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
+
 fuzz-afl:
 	dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
 
 fuzz-afl-diff:
-	BUILD_EVERPARSE=1 dune build --profile afl @fuzz/diff/fuzz
+	BUILD_EVERPARSE=1 dune build --profile afl $(FUZZ_AFL_DIFF)
+
+# The sampled codecs against the Rust Wire_rust generates from them (needs
+# rustc).
+fuzz-rust:
+	BUILD_RUST=1 dune build @fuzz/diff/rust/runtest
 
 # What the nightly workflow runs: long property runs, then long campaigns.
 fuzz-nightly:
@@ -81,6 +90,33 @@ bench-gateway:
 
 bench-clcw:
 	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
+
+# Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml (and on
+# OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse
+# and smoltcp. cargo fetches the two crates the first time. Results land in
+# _build/bench-rust/.
+OXCAML_SWITCH ?= 5.4.0-ox9
+BENCH_RUST_PACKETS ?= 200000
+BENCH_RUST_RUNS ?= 21
+BENCH_RUST = _build/bench-rust
+bench-rust:
+	@mkdir -p $(BENCH_RUST) bench/rust/cargo/src/gen
+	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
+	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
+	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST)/corpus.bin \
+	  $(BENCH_RUST_PACKETS)
+	cargo run --quiet --release --manifest-path bench/rust/cargo/Cargo.toml \
+	  -- $(BENCH_RUST)/corpus.bin 64 $(BENCH_RUST_RUNS) > $(BENCH_RUST)/rust.txt
+	_build/default/bench/rust/bench.exe run $(BENCH_RUST)/corpus.bin \
+	  $(BENCH_RUST_RUNS) > $(BENCH_RUST)/ocaml.txt
+	@if opam switch list --short 2>/dev/null | grep -qx '$(OXCAML_SWITCH)'; then \
+	  opam exec --switch $(OXCAML_SWITCH) -- dune build --profile=release \
+	    --build-dir $(CURDIR)/_build/oxcaml bench/rust/bench.exe && \
+	  _build/oxcaml/default/bench/rust/bench.exe run $(BENCH_RUST)/corpus.bin \
+	    $(BENCH_RUST_RUNS) > $(BENCH_RUST)/oxcaml.txt; \
+	else rm -f $(BENCH_RUST)/oxcaml.txt; \
+	  echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 PROF_EXE ?= bench/clcw/bench.exe
 
