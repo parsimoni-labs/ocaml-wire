@@ -12,7 +12,10 @@ open Leaves
    value is one cell per column. *)
 
 type cell =
-  | Int of int  (** Any integer column, an unsigned 32-bit one included. *)
+  | Int of int  (** An integer column narrower than 32 bits. *)
+  | Word of int32
+      (** An unsigned 32-bit column, as its bit pattern: the native [int] of
+          js_of_ocaml and wasm_of_ocaml does not hold every value. *)
   | Str of string  (** A byte array or a byte slice. *)
   | Flap of flap
       (** A cell whose getter answers differently from call to call. *)
@@ -138,25 +141,28 @@ let i16be_group =
   scalar_group "i16" Wire.int16be ~of_int:Wire.SInt16.v
     ~to_int:Wire.SInt16.to_int ~lo:(-0x8000) ~n:0x10000
 
-let u32_cells =
-  Alcobar.map
-    Alcobar.[ Alcobar.int ]
-    (fun n -> [ Int (n land Wire.Private.UInt32.mask32) ])
+let u32_cells = Alcobar.map Alcobar.[ Alcobar.int32 ] (fun n -> [ Word n ])
+
+let u32_column name typ =
+  Column
+    {
+      name;
+      field = Wire.Field.v name typ;
+      inj = (fun v -> Word (Wire.UInt32.to_int32 v));
+      prj =
+        (fun c ->
+          match answer_of c with
+          | Word n -> Wire.UInt32.of_int32 n
+          | _ -> not_an_int ());
+      equal = Wire.UInt32.equal;
+    }
 
 let u32_group glabel typ =
   {
     glabel;
     mk =
       (fun p ->
-        {
-          columns =
-            [
-              int_column p typ ~of_int:Wire.UInt32.of_int
-                ~to_int:Wire.UInt32.to_int;
-            ];
-          cells = u32_cells;
-          hostile = None;
-        });
+        { columns = [ u32_column p typ ]; cells = u32_cells; hostile = None });
   }
 
 let u32be_group = u32_group "u32" Wire.uint32be

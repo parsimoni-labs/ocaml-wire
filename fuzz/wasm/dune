@@ -1,0 +1,64 @@
+; The wire fuzz properties again, compiled with js_of_ocaml (32-bit int) and
+; wasm_of_ocaml (31-bit int) and run under node: a short smoke of the same
+; registry and nested compositions, where the codec's narrow-int paths run.
+; The modes only build when their compiler is installed (the CI wasm job,
+; through make test-wasm).
+
+(copy_files#
+ (files ../fuzz*.{ml,mli}))
+
+; As in test/wasm: verbose keeps alcotest off its output-capture primitives,
+; which only native and js_of_ocaml provide.
+
+(env
+ (_
+  (env-vars
+   (ALCOTEST_VERBOSE 1)
+   (ALCOTEST_COLUMNS 80))))
+
+(executable
+ (name fuzz)
+ (modes js wasm)
+ (libraries wire alcobar fuzz_gen)
+ (js_of_ocaml
+  (enabled_if %{bin-available:js_of_ocaml}))
+ (wasm_of_ocaml
+  (enabled_if %{bin-available:wasm_of_ocaml})))
+
+; [--timeout 0]: alcobar's per-test timeout is a Unix alarm, which neither
+; runtime implements. A short repeat and budget keep this a smoke run; the
+; native suite (fuzz/dune) is the search.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and %{bin-available:node} %{bin-available:js_of_ocaml}))
+ (action
+  (run
+   node
+   %{dep:fuzz.bc.js}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   100
+   --budget
+   0.2
+   --timeout
+   0)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and %{bin-available:node} %{bin-available:wasm_of_ocaml}))
+ (action
+  (run
+   node
+   %{dep:fuzz.bc.wasm.js}
+   -s
+   %{env:WIRE_FUZZ_SEED=42}
+   -r
+   100
+   --budget
+   0.2
+   --timeout
+   0)))

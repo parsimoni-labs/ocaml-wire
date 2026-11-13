@@ -62,9 +62,6 @@
 - 3D: a bit group in a non-native order is laid out the same in a sub-codec,
   an array or a casetype as at top level (#434, @samoht)
 
-- 3D: two different declarations under one name are refused, and every F*, 3D
-  and C keyword a field can spell is escaped (#434, @samoht)
-
 - 3D: a field name that is not an identifier (`a-b`) is refused, and so are
   two codecs whose names differ only in case (#434, @samoht)
 
@@ -84,6 +81,11 @@
   codec rejects on overflow (#436, @samoht)
 
 - `wire` builds on OxCaml (#436, @samoht)
+
+- 3D: two different declarations under one name are refused, and every F*, 3D
+  and C keyword a field can spell is escaped (#434, #438, @samoht)
+
+- 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
 
 ## 1.3.0
 

@@ -795,17 +795,33 @@ let decl_name = function
   | Typedef { struct_ = { name; _ }; _ } -> Some name
   | _ -> None
 
-let absorb_candidate (acc_rev, seen) e =
+(* [enums] holds the shape of every enum the module declares, so two enums
+   that differ are refused under one name wherever they sit: in the record, in
+   a sub-codec, or among the declarations the caller gave. *)
+let absorb_candidate enums (acc_rev, seen) e =
+  (match e with
+  | Enum_decl { name; cases; base = Pack_typ base } ->
+      ignore (claim_name enums ~kind:"enums" name (enum_shape base cases))
+  | _ -> ());
   match decl_name e with
   | None -> (acc_rev, seen)
   | Some n when List.mem n seen -> (acc_rev, seen)
   | Some n -> (e :: acc_rev, n :: seen)
 
-let absorb_typedef_dependencies acc d =
+(* A typedef needs the enums its fields name, and so does every sub-codec
+   struct it brings in: an enum used only inside a nested record was otherwise
+   never declared, and EverParse refused the reference. *)
+let absorb_typedef_dependencies enums acc d =
   match d with
   | Typedef { struct_; _ } ->
-      let candidates = enum_decls struct_ @ casetype_decls_of_struct struct_ in
-      List.fold_left absorb_candidate acc candidates
+      let nested = casetype_decls_of_struct struct_ in
+      let nested_enums =
+        List.concat_map
+          (function Typedef { struct_ = s; _ } -> enum_decls s | _ -> [])
+          nested
+      in
+      let candidates = enum_decls struct_ @ nested_enums @ nested in
+      List.fold_left (absorb_candidate enums) acc candidates
   | _ -> acc
 
 let module_ ?doc decls =
@@ -827,9 +843,17 @@ let module_ ?doc decls =
         | d -> d)
       decls
   in
+  let enums = Hashtbl.create 4 in
+  List.iter
+    (function
+      | Enum_decl { name; cases; base = Pack_typ base } ->
+          ignore (claim_name enums ~kind:"enums" name (enum_shape base cases))
+      | _ -> ())
+    decls;
   let extra_rev, _ =
-    List.fold_left absorb_typedef_dependencies ([], already_declared)
-      split_decls
+    List.fold_left
+      (absorb_typedef_dependencies enums)
+      ([], already_declared) split_decls
   in
   { doc; decls = List.rev extra_rev @ split_decls }
 

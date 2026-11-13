@@ -65,12 +65,14 @@ let u8_boundaries = List.map Wire.UInt8.v [ 0; 1; 0x7F; 0x80; 0xFE; 0xFF ]
 let u16_boundaries =
   List.map Wire.UInt16.v [ 0; 1; 0x7F; 0x80; 0x7FFF; 0x8000; 0xFFFE; 0xFFFF ]
 
+(* [Int32] literals: [0x8000_0000] and above do not fit the [int] of
+   js_of_ocaml or wasm_of_ocaml. *)
 let u32_boundaries =
-  List.map Wire.UInt32.of_int
-    [ 0; 1; 0xFFFF; 0x7FFF_FFFF; 0x8000_0000; 0xFFFF_FFFE; 0xFFFF_FFFF ]
+  List.map Wire.UInt32.of_int32
+    [ 0l; 1l; 0xFFFFl; 0x7FFF_FFFFl; 0x8000_0000l; 0xFFFF_FFFEl; 0xFFFF_FFFFl ]
 
 let u64_boundaries_i64 =
-  Int64.[ zero; one; of_int 0xFFFF_FFFF; max_int; min_int; -1L; sub max_int 1L ]
+  Int64.[ zero; one; 0xFFFF_FFFFL; max_int; min_int; -1L; sub max_int 1L ]
 
 let s8_boundaries = List.map Wire.SInt8.v [ -128; -1; 0; 1; 127 ]
 let s16_boundaries = List.map Wire.SInt16.v [ -0x8000; -1; 0; 1; 0x7FFF ]
@@ -566,16 +568,20 @@ let uint32_endian_edges =
   exact_optint Wire.uint32
     [
       (Wire.UInt32.of_int 0x01234567, bytes_of_octets [ 0x67; 0x45; 0x23; 0x01 ]);
-      (Wire.UInt32.of_int 0x80000000, bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ]);
-      (Wire.UInt32.of_int 0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+      ( Wire.UInt32.of_int32 0x8000_0000l,
+        bytes_of_octets [ 0x00; 0x00; 0x00; 0x80 ] );
+      ( Wire.UInt32.of_int32 0xFFFF_FFFFl,
+        bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ] );
     ]
 
 let uint32be_endian_edges =
   exact_optint Wire.uint32be
     [
       (Wire.UInt32.of_int 0x01234567, bytes_of_octets [ 0x01; 0x23; 0x45; 0x67 ]);
-      (Wire.UInt32.of_int 0x80000000, bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ]);
-      (Wire.UInt32.of_int 0xFFFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ]);
+      ( Wire.UInt32.of_int32 0x8000_0000l,
+        bytes_of_octets [ 0x80; 0x00; 0x00; 0x00 ] );
+      ( Wire.UInt32.of_int32 0xFFFF_FFFFl,
+        bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF ] );
     ]
 
 let u64 = Wire.UInt64.of_int64
@@ -667,40 +673,40 @@ let int64be_endian_edges =
     ]
 
 let uint_var_endian_edges ~endian size cases =
-  let cases = List.map (fun (v, bs) -> (Optint.Int63.of_int v, bs)) cases in
+  let cases = List.map (fun (v, bs) -> (Optint.Int63.of_int64 v, bs)) cases in
   exact_cases ~typ:(Wire.uint ~endian size) ~equal:( = ) cases
 
 let uint_var3_little_edges =
   uint_var_endian_edges ~endian:Wire.Little 3
     [
-      (0x000001, bytes_of_octets [ 0x01; 0x00; 0x00 ]);
-      (0x123456, bytes_of_octets [ 0x56; 0x34; 0x12 ]);
-      (0xFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
+      (0x000001L, bytes_of_octets [ 0x01; 0x00; 0x00 ]);
+      (0x123456L, bytes_of_octets [ 0x56; 0x34; 0x12 ]);
+      (0xFFFFFFL, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
     ]
 
 let uint_var3_big_edges =
   uint_var_endian_edges ~endian:Wire.Big 3
     [
-      (0x000001, bytes_of_octets [ 0x00; 0x00; 0x01 ]);
-      (0x123456, bytes_of_octets [ 0x12; 0x34; 0x56 ]);
-      (0xFFFFFF, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
+      (0x000001L, bytes_of_octets [ 0x00; 0x00; 0x01 ]);
+      (0x123456L, bytes_of_octets [ 0x12; 0x34; 0x56 ]);
+      (0xFFFFFFL, bytes_of_octets [ 0xFF; 0xFF; 0xFF ]);
     ]
 
 let uint_var7_little_edges =
   uint_var_endian_edges ~endian:Wire.Little 7
     [
-      ( 0x0123456789ABCD,
+      ( 0x0123456789ABCDL,
         bytes_of_octets [ 0xCD; 0xAB; 0x89; 0x67; 0x45; 0x23; 0x01 ] );
-      ( 0x7FFFFFFFFFFFFF,
+      ( 0x7FFFFFFFFFFFFFL,
         bytes_of_octets [ 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0x7F ] );
     ]
 
 let uint_var7_big_edges =
   uint_var_endian_edges ~endian:Wire.Big 7
     [
-      ( 0x0123456789ABCD,
+      ( 0x0123456789ABCDL,
         bytes_of_octets [ 0x01; 0x23; 0x45; 0x67; 0x89; 0xAB; 0xCD ] );
-      ( 0x7FFFFFFFFFFFFF,
+      ( 0x7FFFFFFFFFFFFFL,
         bytes_of_octets [ 0x7F; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF; 0xFF ] );
     ]
 
@@ -1183,8 +1189,8 @@ let bounded_u16be =
 let bounded_u32be =
   bounded_int ~inner_typ:Wire.uint32be ~size:4
     ~set:(fun b o n -> Bytes.set_int32_be b o (Int32.of_int n))
-    ~max_val:0x7FFF_FFFF ~min:1000 ~max:1_000_000 ~of_int:Wire.UInt32.of_int
-    ~equal:Wire.UInt32.equal
+    ~max_val:(Int64.to_int (Int64.min 0xFFFF_FFFFL (Int64.of_int max_int)))
+    ~min:1000 ~max:1_000_000 ~of_int:Wire.UInt32.of_int ~equal:Wire.UInt32.equal
 
 (* Two-uint8 record with [Codec.v ~where:(a < b)]. Positives keep a < b;
    adversarials sit at the boundary (a = b, a = b+1) so the where clause

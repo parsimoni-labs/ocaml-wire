@@ -46,13 +46,16 @@ let bitfield_total = function
   | U16 | U16be -> 16
   | U32 | U32be -> 32
 
+(* A bitfield word is packed in an [Int64]: a U32 word with its top bit set
+   does not fit the 31-bit [int] of wasm_of_ocaml. *)
 let word_bytes base word =
+  let o k = Int64.to_int (Int64.shift_right_logical word k) land 0xFF in
   match base with
-  | Wire.U8 -> bytes_of_octets [ word ]
-  | U16 -> bytes_of_octets [ word; word lsr 8 ]
-  | U16be -> bytes_of_octets [ word lsr 8; word ]
-  | U32 -> bytes_of_octets [ word; word lsr 8; word lsr 16; word lsr 24 ]
-  | U32be -> bytes_of_octets [ word lsr 24; word lsr 16; word lsr 8; word ]
+  | Wire.U8 -> bytes_of_octets [ o 0 ]
+  | U16 -> bytes_of_octets [ o 0; o 8 ]
+  | U16be -> bytes_of_octets [ o 8; o 0 ]
+  | U32 -> bytes_of_octets [ o 0; o 8; o 16; o 24 ]
+  | U32be -> bytes_of_octets [ o 24; o 16; o 8; o 0 ]
 
 let bit_mask width = (1 lsl width) - 1
 
@@ -65,8 +68,9 @@ let pack_bits ~bit_order ~total fields =
           | Wire.Lsb_first -> used
           | Msb_first -> total - used - width
         in
-        (used + width, acc lor ((value land bit_mask width) lsl shift)))
-      (0, 0) fields
+        let v = Int64.of_int (value land bit_mask width) in
+        (used + width, Int64.logor acc (Int64.shift_left v shift)))
+      (0, 0L) fields
   in
   word
 

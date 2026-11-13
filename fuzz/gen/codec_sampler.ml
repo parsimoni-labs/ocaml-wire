@@ -103,7 +103,36 @@ let sampler_refined_leaves : any list =
     Any { g = field_constraint; size = Some 2; label = "fconstraint" };
   ]
 
-let sampler_adversarial_leaves = sampler_weird_leaves @ sampler_refined_leaves
+(* Enum names 3D declares beside the module's types. Keywords, escaped and
+   accepted by every lane; two cases that escape onto each other, and a
+   case [enum] (and [enum_open]) also declares, both refused by the
+   EverParse lane alone, the second only where the two meet in one record.
+   The OCaml lane reads enums by value and compares all three. *)
+let sampler_enum_name_leaves : any list =
+  [
+    Any
+      {
+        g = enum "end" [ ("in", 1); ("typeof", 2); ("int", 3) ];
+        size = Some 1;
+        label = "enum_kw";
+      };
+    Any
+      {
+        g = enum "Esc" [ ("end", 1); ("end_", 2) ];
+        size = Some 1;
+        label = "enum_esc";
+      };
+    Any
+      {
+        g = enum "E2" [ ("A", 4); ("D", 5) ];
+        size = Some 1;
+        label = "enum_dup";
+      };
+  ]
+
+let sampler_adversarial_leaves =
+  sampler_weird_leaves @ sampler_enum_name_leaves @ sampler_refined_leaves
+
 let sampler_leaves = sampler_regular_leaves @ sampler_adversarial_leaves
 
 (* Geometric arity in [1, max_arity]: keep adding a field with probability
@@ -230,6 +259,10 @@ let sampler_name_groups =
     [ "done"; "done_" ];
     [ "end"; "end_" ];
     [ "restrict"; "restrict_" ];
+    (* The name 3D gives the padding of a bit group reversed into its base's
+       native order ([bits3] needs one): the padding takes the next free name,
+       so every lane accepts it. *)
+    [ "_anon_0"; "_anon_1" ];
   |]
 
 (* The names of a record's [k] fields: half the time an adversarial group in

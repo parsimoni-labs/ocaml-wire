@@ -224,6 +224,137 @@ let test_3d_names_are_identifiers () =
     "identifiers project" true
     (contains ~sub:"UINT8 _a1;" out && contains ~sub:"UINT8 A_b;" out)
 
+(* EverParse's C names a field's local after its 3D name less any trailing
+   underscore, so [typeof], or [typeof_], escaped the 3D way still reached C as
+   GNU C's [typeof] keyword. Both are spelt [typeof_3d], and so clash. *)
+let test_3d_typeof_reaches_c_escaped () =
+  let module_of s = module_ [ typedef ~entrypoint:true s ] in
+  let f = field "typeof" uint8 in
+  let s =
+    struct_ "T" [ f; field "y" ~constraint_:Expr.(field_ref f <= int 3) uint8 ]
+  in
+  let out = to_3d (module_of s) in
+  Alcotest.(check bool)
+    "typeof escaped" true
+    (contains ~sub:"UINT8 typeof_3d;" out);
+  Alcotest.(check bool)
+    "escape read" true
+    (contains ~sub:"(typeof_3d <= 3)" out);
+  invalid_arg_mentions "typeof and typeof_" [ "\"typeof\""; "\"typeof_\"" ]
+    (fun () ->
+      to_3d
+        (module_of
+           (struct_ "T" [ field "typeof" uint8; field "typeof_" uint8 ])))
+
+(* The 3D a codec projects to, with its enums declared as types, as the
+   EverParse pipeline writes it. *)
+let codec_3d c =
+  to_3d ~enum_as_type:true (Everparse.project c).Everparse.module_
+
+let one_field_codec name typ =
+  let f = Field.v "k" typ in
+  Codec.v name Fun.id Codec.[ f $ Fun.id ]
+
+(* An enum's type and case names are 3D declarations like any other: a keyword
+   among them is escaped the way a field's is, wherever it is written. *)
+let test_3d_enum_keyword_names () =
+  let out =
+    codec_3d (one_field_codec "Kw" (enum "end" [ ("in", 1); ("of", 2) ] uint8))
+  in
+  Alcotest.(check bool) "type escaped" true (contains ~sub:"enum end_ {" out);
+  Alcotest.(check bool)
+    "cases escaped" true
+    (contains ~sub:"in_ = 1" out && contains ~sub:"of_ = 2" out);
+  Alcotest.(check bool)
+    "field typed as escape" true
+    (contains ~sub:"end_ k;" out);
+  let kw = enum "end" [ ("in", 1) ] uint8 in
+  let out = codec_3d (one_field_codec "Arr" (array ~len:(int 2) kw)) in
+  Alcotest.(check bool)
+    "array names the escape" true
+    (contains ~sub:"end_ k[" out)
+
+(* Enum cases live in the module's namespace, beside its types: two cases that
+   escape onto each other, or two enums of one codec naming the same case, are
+   one 3D declaration twice, which EverParse rejects. *)
+let test_3d_enum_case_clash () =
+  invalid_arg_mentions "end and end_" [ "\"end\""; "\"end_\"" ] (fun () ->
+      codec_3d
+        (one_field_codec "Cl" (enum "E" [ ("end", 1); ("end_", 2) ] uint8)));
+  let a = Field.v "a" (enum "Color" [ ("Red", 1) ] uint8) in
+  let b = Field.v "b" (enum "Fruit" [ ("Red", 3) ] uint8) in
+  invalid_arg_mentions "Red in two enums" [ "\"Color\""; "\"Fruit\""; "Red" ]
+    (fun () ->
+      codec_3d (Codec.v "Two" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]));
+  invalid_arg_mentions "case named as the struct" [ "\"Two\"" ] (fun () ->
+      codec_3d (one_field_codec "Two" (enum "Kind" [ ("Two", 1) ] uint8)));
+  invalid_arg_mentions "case named as its enum" [ "\"end\"" ] (fun () ->
+      codec_3d (one_field_codec "Kw" (enum "end" [ ("end", 1) ] uint8)))
+
+(* An enum used only inside a sub-codec is declared like one the entrypoint
+   names; the 3D otherwise referred to a type it never declared. Its cases share
+   the module's namespace with the entrypoint's. *)
+let test_3d_nested_enum_declared () =
+  let inner = one_field_codec "Inner" (enum "Color" [ ("Red", 1) ] uint8) in
+  let f = Field.v "i" (codec inner) in
+  let out = codec_3d (Codec.v "Outer" Fun.id Codec.[ f $ Fun.id ]) in
+  Alcotest.(check bool) "enum declared" true (contains ~sub:"enum Color {" out);
+  let a = Field.v "a" (enum "Color" [ ("Red", 1) ] uint8) in
+  let other = one_field_codec "Other" (enum "Fruit" [ ("Red", 3) ] uint8) in
+  let b = Field.v "b" (codec other) in
+  invalid_arg_mentions "Red in an enum and a sub-codec's enum"
+    [ "\"Color\""; "\"Fruit\"" ] (fun () ->
+      codec_3d (Codec.v "Mix" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]));
+  (* An enum over a [where]-refined base declares its bare base: 3D has no
+     refined enum base, and [UINT8 { e } enum E] is a syntax error. The
+     refinement stays on the field. *)
+  let kind = enum "Kind" [ ("A", 1) ] (where Expr.(int 0 = int 0) uint8) in
+  let inner = one_field_codec "InnerW" kind in
+  let f = Field.v "i" (codec inner) in
+  let out = codec_3d (Codec.v "OuterW" Fun.id Codec.[ f $ Fun.id ]) in
+  Alcotest.(check bool)
+    "bare base declared" true
+    (contains ~sub:"UINT8 enum Kind {" out);
+  Alcotest.(check bool) "where on the field" true (contains ~sub:"(0 == 0)" out)
+
+(* Two enums that differ, in cases or in base, cannot share a name across a
+   record and its sub-codecs: one declaration would check both fields. The same
+   enum used twice is declared once. *)
+let test_3d_nested_enum_mismatch () =
+  let sub name e = Field.v name (codec (one_field_codec ("In_" ^ name) e)) in
+  let pair name a b =
+    Codec.v name (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ]
+  in
+  let red = enum "Color" [ ("Red", 1) ] uint8 in
+  let refused what other =
+    invalid_arg_mentions what [ "two different enums"; "\"Color\"" ] (fun () ->
+        codec_3d (pair "Mix" (Field.v "a" red) (sub "b" other)));
+    invalid_arg_mentions (what ^ ", both in sub-codecs")
+      [ "two different enums"; "\"Color\"" ] (fun () ->
+        codec_3d (pair "Subs" (sub "a" red) (sub "b" other)))
+  in
+  refused "other cases" (enum "Color" [ ("Green", 2) ] uint8);
+  refused "another value" (enum "Color" [ ("Red", 2) ] uint8);
+  refused "another base" (enum "Color" [ ("Red", 1) ] uint16);
+  let out = codec_3d (pair "Same" (Field.v "a" red) (sub "b" red)) in
+  Alcotest.(check int)
+    "declared once" 1
+    (List.length (Re.all (Re.compile (Re.str "enum Color {")) out))
+
+(* Reversing a bit group into its base's native order pads the word with an
+   anonymous field, which 3D needs a name for. The name it gets must not be a
+   field's. *)
+let test_3d_padding_name_is_fresh () =
+  let a = Field.v "_anon_0" uint8 in
+  let b = Field.v "b" (bits ~width:3 U8) in
+  let out =
+    codec_3d (Codec.v "Pad" (fun a b -> (a, b)) Codec.[ a $ fst; b $ snd ])
+  in
+  Alcotest.(check bool) "field kept" true (contains ~sub:"UINT8 _anon_0;" out);
+  Alcotest.(check bool)
+    "padding named apart" false
+    (contains ~sub:"_anon_0 :" out)
+
 let suite =
   ( "everparse_names",
     [
@@ -239,4 +370,16 @@ let suite =
         test_3d_escaped_names_clash;
       Alcotest.test_case "3d: names are identifiers" `Quick
         test_3d_names_are_identifiers;
+      Alcotest.test_case "3d: typeof reaches C escaped" `Quick
+        test_3d_typeof_reaches_c_escaped;
+      Alcotest.test_case "3d: enum keywords are escaped" `Quick
+        test_3d_enum_keyword_names;
+      Alcotest.test_case "3d: enum cases that clash" `Quick
+        test_3d_enum_case_clash;
+      Alcotest.test_case "3d: padding takes a fresh name" `Quick
+        test_3d_padding_name_is_fresh;
+      Alcotest.test_case "3d: an enum in a sub-codec is declared" `Quick
+        test_3d_nested_enum_declared;
+      Alcotest.test_case "3d: enums that differ cannot share a name" `Quick
+        test_3d_nested_enum_mismatch;
     ] )

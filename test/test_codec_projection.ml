@@ -636,6 +636,26 @@ let test_bits_width_bounds () =
     "8-bit field over U8 accepted" false
     (raises_invalid (fun () -> bits ~width:8 U8))
 
+(* The value of a bitfield is a native [int], so a field must leave the sign
+   bit free: every width of a U32 word on a 64-bit host, at most 31 bits under
+   js_of_ocaml (32-bit [int]) and 30 under wasm_of_ocaml (31-bit). A wider one
+   is refused when built, naming the limit, not read wrong later. *)
+let test_bits_width_platform () =
+  List.iter
+    (fun width ->
+      let fits = width <= Sys.int_size - 1 in
+      match bits ~width U32be with
+      | _ when fits -> ()
+      | _ ->
+          Alcotest.failf "%d-bit field built on a %d-bit int" width Sys.int_size
+      | exception Invalid_argument msg ->
+          if fits then Alcotest.failf "%d-bit field refused: %s" width msg;
+          let sub = Fmt.str "this platform's %d-bit int" Sys.int_size in
+          Alcotest.(check bool)
+            (Fmt.str "%d-bit refusal names the limit" width)
+            true (contains ~sub msg))
+    [ 29; 30; 31; 32 ]
+
 (* A [casetype] [case] carries an explicit discriminator; omitting [~index] is
    refused at construction (only [default] is index-free). *)
 let test_casetype_case_requires_index () =
@@ -735,6 +755,8 @@ let suite =
         test_uint_size_bounds;
       Alcotest.test_case "bits rejects out-of-range width" `Quick
         test_bits_width_bounds;
+      Alcotest.test_case "bits width fits the native int" `Quick
+        test_bits_width_platform;
       Alcotest.test_case "casetype case requires ~index" `Quick
         test_casetype_case_requires_index;
       Alcotest.test_case "casetype rejects unprojectable tag" `Quick

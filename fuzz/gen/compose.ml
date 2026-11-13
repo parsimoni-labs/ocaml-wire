@@ -29,19 +29,19 @@ let enum_abc = enum8_group [ ("A", 1); ("B", 2); ("C", 3) ]
 
 (* Cycled to build a record of any arity whose every field has a staged
    write. *)
+(* Where the native [int] is narrower than 32 bits (js_of_ocaml, wasm_of_ocaml)
+   a 32-bit scalar has no plain slot, so a record holding one never takes the
+   staged encode: the wide records leave them out there, and still reach every
+   arity. *)
 let wide_cycle =
-  [|
-    u8_group;
-    u16be_group;
-    i8_group;
-    u16le_group;
-    u32be_group;
-    i16be_group;
-    range8_group ~lo:0 ~hi:200;
-    u32le_group;
-    bits_group Wire.U8 [ 3 ];
-    bits_group Wire.U16be [ 7 ];
-  |]
+  let u32 = if Sys.int_size > 32 then [ u32be_group ] else [] in
+  let u32le = if Sys.int_size > 32 then [ u32le_group ] else [] in
+  Array.of_list
+    ([ u8_group; u16be_group; i8_group; u16le_group ]
+    @ u32
+    @ [ i16be_group; range8_group ~lo:0 ~hi:200 ]
+    @ u32le
+    @ [ bits_group Wire.U8 [ 3 ]; bits_group Wire.U16be [ 7 ] ])
 
 let wide k =
   flat_any (Fmt.str "Wide%d" k)

@@ -753,7 +753,12 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ
     when mirroring MSVC-style C bit-fields.
 
     Encoding a value with bits above [width] raises [Invalid_argument] rather
-    than masking it, for the same reason as {!uint}. *)
+    than masking it, for the same reason as {!uint}.
+
+    Raises [Invalid_argument] when [width] does not fit [base], and when the
+    value does not fit the native [int] with its sign bit free: on js_of_ocaml
+    (32-bit [int]) a field holds at most 31 bits, on wasm_of_ocaml (31-bit) at
+    most 30. Read a whole 32-bit word there with {!uint32}. *)
 
 val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
