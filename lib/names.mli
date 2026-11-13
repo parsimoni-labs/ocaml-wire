@@ -2,10 +2,12 @@
 
     Each code generator spells a field's name into the identifiers of its
     target: 3D and the F* EverParse writes from it, the C of a plug, the OCaml
-    of a stub. Escaping a keyword with a trailing underscore, or folding case,
-    can spell two fields' names as one identifier, so a generator computes the
-    identifiers it emits for each namespace and refuses with {!clash} what would
-    still collide. *)
+    of a stub. Escaping is injective: a keyword gets a trailing underscore, and
+    so does every name that is a keyword followed by underscores, so [end],
+    [end_] and [end__] stay three names ([end_], [end__], [end___]) in every
+    target. Folding case or replacing characters a target cannot spell can still
+    give two names one identifier, so a generator computes the identifiers it
+    emits for each namespace and refuses with {!clash} what collides. *)
 
 val ocaml_keywords : string list
 (** OCaml's keywords, including [effect] and the infix operators spelled as
@@ -27,22 +29,29 @@ val rust_keywords : string list
 (** Rust's strict keywords and the words reserved for future use, up to the 2024
     edition ([async], [dyn], [gen], [try], ...). *)
 
-val escape : string list -> string -> string
-(** [escape keywords name] is [name ^ "_"] when [name] is one of [keywords], and
-    [name] otherwise. *)
+val escapes : ?suffix:string -> string list -> string -> bool
+(** [escapes ?suffix keywords name] is [true] when {!escape} changes [name]. *)
+
+val escape : ?suffix:string -> string list -> string -> string
+(** [escape ?suffix keywords name] is [name ^ suffix] when [name] is one of
+    [keywords] followed by any number of [suffix]es and underscores, and [name]
+    otherwise. [suffix] defaults to ["_"]. The map is injective, and its result
+    is a keyword only if [keywords] holds a keyword followed by [suffix] (none
+    of the lists here does): [escape ["end"]] maps [end] to [end_] and [end_] to
+    [end__], and leaves [ending] alone. *)
 
 val ocaml_label : ?oxcaml:bool -> string -> string
 (** [ocaml_label name] is the OCaml record label or value name for [name]:
     lower-cased, with any character outside an OCaml identifier replaced by [_],
-    prefixed with [f_] when it would start with a digit, and escaped when a
-    keyword. [oxcaml] (default [true]) escapes OxCaml's keywords too, so the
-    name is valid on either compiler. *)
+    prefixed with [f_] when it would start with a digit, and {!escape}d against
+    the keywords. [oxcaml] (default [true]) escapes OxCaml's keywords too, so
+    the name is valid on either compiler. *)
 
 val rust_ident : string -> string
 (** [rust_ident name] is the Rust field or function name for [name]:
     lower-cased, with any character outside a Rust identifier replaced by [_],
     prefixed with [f_] when it would start with a digit or be the lone [_]
-    pattern, and escaped when a keyword. *)
+    pattern, and {!escape}d against the keywords. *)
 
 val clash : ('a * string) list -> ('a * 'a * string) option
 (** [clash idents] is [Some (a, b, id)] for the first identifier [id] that two

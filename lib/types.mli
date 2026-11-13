@@ -1095,7 +1095,11 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
     {!to_3d} for [enum_as_type]. *)
 
 val escape_3d : string -> string
-(** [escape_3d name] appends [_] if [name] is a 3D or C reserved word. *)
+(** [escape_3d name] is [name] as a 3D identifier: a word 3D or F* reserves,
+    followed by any underscores, takes one more ([end_], [end__] for [end_]);
+    [typeof], followed by underscores and [3d]s, takes [3d], since KaRaMeL drops
+    trailing underscores and C reads [typeof] as a keyword. The map is
+    injective. *)
 
 (** {1:parse-errors Parse Errors}
 

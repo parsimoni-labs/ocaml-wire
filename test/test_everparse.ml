@@ -98,7 +98,8 @@ let test_casetype () =
 
 let test_casetype_enum_tag_labels () =
   (* Switching on an enum tag, EverParse requires each case label to be the enum
-     constant name, not the raw integer: [case InteriorIndex:], not [case 2:]. *)
+     constant name, not the raw integer: [case PageKind_InteriorIndex:], not
+     [case 2:]. *)
   let kind = enum "PageKind" [ ("LeafIndex", 0); ("InteriorIndex", 2) ] uint8 in
   let d =
     casetype_decl "_PageBody"
@@ -118,10 +119,10 @@ let test_casetype_enum_tag_labels () =
   let output = to_3d ~enum_as_type:true m in
   Alcotest.(check bool)
     "low case uses the enum constant name" true
-    (contains ~sub:"case LeafIndex:" output);
+    (contains ~sub:"case PageKind_LeafIndex:" output);
   Alcotest.(check bool)
     "high case uses the enum constant name" true
-    (contains ~sub:"case InteriorIndex:" output);
+    (contains ~sub:"case PageKind_InteriorIndex:" output);
   Alcotest.(check bool)
     "no raw-integer case label" false
     (contains ~sub:"case 2:" output);
@@ -483,7 +484,7 @@ let test_3d_casetype_tag_int_carriers () =
   (* Go through [write], not the projected module on its own: the merge is where
      a synthesised wrapper's own dependencies -- here the tag's enum
      declaration -- are absorbed, so this is the spec a consumer actually gets. *)
-  let projects what c =
+  let projects what ~enum c =
     let name = "wire_casetype_tag_" ^ String.lowercase_ascii what in
     Everparse.write ~mode:`Standalone ~outdir:dir ~name
       [ Everparse.project ~mode:`Standalone c ];
@@ -493,17 +494,17 @@ let test_3d_casetype_tag_int_carriers () =
     Alcotest.(check bool)
       (what ^ ": switch names the enum constant")
       true
-      (contains ~sub:"case A:" out);
+      (contains ~sub:("case " ^ enum ^ "_A:") out);
     Alcotest.(check bool)
       (what ^ ": the tag's enum is declared")
       true
       (contains ~sub:"enum E" out)
   in
-  projects "lookup"
+  projects "lookup" ~enum:"EMap"
     (dispatch "Map" (enum "EMap" [ ("A", 0) ] (lookup [ 0; 1 ] uint8)) 0);
-  projects "uint64"
+  projects "uint64" ~enum:"EU64"
     (dispatch "U64" (enum "EU64" [ ("A", 0) ] uint64) (UInt64.of_int 0));
-  projects "where"
+  projects "where" ~enum:"EWhere"
     (dispatch "Where"
        (enum "EWhere" [ ("A", 0) ] (where Expr.(int 0 = int 0) uint8))
        (UInt8.v 0))

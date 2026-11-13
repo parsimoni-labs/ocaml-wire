@@ -204,9 +204,9 @@ let build_codec_archive ?(cflags = []) ~schema_dir ~archive () =
    compile on either compiler. *)
 let ml_field_name name = Wire.Private.Names.ocaml_label name
 
-(* Lower-casing and escaping are both many-to-one: [X] and [x] are one label,
-   and so are [done] and [done_]. Refuse naming both fields rather than emit
-   a record that declares a label twice. *)
+(* Lower-casing is many-to-one: [X] and [x] are one label; escaping is not,
+   [done] and [done_] are [done_] and [done__]. Refuse naming both fields
+   rather than emit a record that declares a label twice. *)
 let check_labels (s : Wire.Everparse.Raw.struct_) kinds =
   match
     Wire.Private.Names.clash

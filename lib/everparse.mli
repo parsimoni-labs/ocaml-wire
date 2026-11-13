@@ -101,8 +101,9 @@ type plug_field = {
 
 val plug_member : string -> string
 (** [plug_member name] is the plug struct member a field named [name] takes:
-    [name], with a trailing underscore when it is a C keyword or a macro of the
-    headers the plug includes ([int_], [NULL_]). *)
+    [name] escaped against C's keywords and the macros of the headers the plug
+    includes ([int_], [NULL_], and [int__] for [int_]), so distinct names stay
+    distinct members. *)
 
 val plug_fields : t -> plug_field list
 (** [plug_fields s] enumerates the plug's members in index order: the named

@@ -416,18 +416,15 @@ let test_clash () =
   refused "a bitfield x and x_word"
     (pair "x" (bits ~width:3 U8) "x_word" uint8)
     [ "\"x\""; "\"x_word\"" ];
-  refused "end and end_"
-    (pair "end" uint8 "end_" uint8)
-    [ "\"end\""; "\"end_\"" ];
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
   refused "a-b and a_b" (pair "a-b" uint8 "a_b" uint8) [ "\"a-b\""; "\"a_b\"" ];
   refused "1 and f_1" (pair "1" uint8 "f_1" uint8) [ "\"1\""; "\"f_1\"" ];
-  refused "local_ and local__"
-    (pair "local_" uint8 "local__" uint8)
-    [ "\"local_\""; "\"local__\"" ];
-  refused "local_ and local__ under OxCaml" ~target:`OxCaml
-    (pair "local_" uint8 "local__" uint8)
-    [ "\"local_\""; "\"local__\"" ];
+  (* The keyword escape is injective: a keyword next to its escape is two
+     labels. *)
+  let ml = Wire_ocaml.ml ~codec:"c" (pair "end" uint8 "end_" uint8) in
+  Alcotest.(check bool)
+    "end and end_ apart" true
+    (contains ml "  end_ :" && contains ml "  end__ :");
   refused "failed"
     (Codec.v "C" Fun.id Codec.[ Field.v "failed" uint8 $ Fun.id ])
     [ "\"failed\""; "get_failed" ];
