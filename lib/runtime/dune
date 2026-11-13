@@ -1,13 +1,26 @@
 ; What the code Wire_ocaml generates links instead of [wire]: the integer
 ; carriers, the reads and writes with no bounds check, and the parse errors.
 ; [wire] is built on it, so a generated module and a codec share one type for
-; each and raise the very same exceptions. It depends on optint alone, so
-; embedding generated code pulls in nothing else.
+; each and raise the very same exceptions. OxCaml additionally uses its bundled
+; unboxed integer library; ordinary OCaml needs only optint, so embedding
+; generated code pulls in nothing else.
 
 (library
  (name wire_runtime)
  (public_name wire.runtime)
- (libraries optint))
+ (private_modules loads)
+ (libraries
+  optint
+  (select
+   loads.ml
+   from
+   (stdlib_upstream_compatible -> loads.ox.ml)
+   (-> loads.std.ml))
+  (select
+   loads.mli
+   from
+   (stdlib_upstream_compatible -> loads.ox.mli)
+   (-> loads.std.mli))))
 
 ; The paranoid profile checks every read [Unchecked] makes, so the tests and
 ; the fuzzers catch a read outside the frame (docs/execution.md). The afl
