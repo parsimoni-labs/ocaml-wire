@@ -23,7 +23,11 @@ a prefix of them.
    field with a literal or another field is tested directly. Any other field
    runs its general validator, so the choice is made field by field.
 3. **Read.** Build the value. A field at a fixed offset inside `min_size` is
-   read with no bounds check; any other field is read with one.
+   read with no bounds check; any other field is read with one. A size that
+   reads an output parameter gets the value the check pass left, which is the
+   one the check used when every field that assigns an output parameter comes
+   before every field that reads one. In any other order the read keeps the
+   caller's values and each sub-codec checks itself where it is read.
 
 `validate` runs the frame and the checks. `get` frames one field and reads
 it. `encode` writes the fields and, when the codec has constraints, runs the

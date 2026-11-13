@@ -1014,6 +1014,92 @@ let test_decode_allocates_one_copy () =
   report_span_failures "decode allocates more than the value it returns"
     failures
 
+(* A decode checks the whole record once, sub-codecs included, and then builds
+   it; the build checks nothing again. A sub-codec read that re-ran its own
+   check would check a record at depth [d] once per enclosing level, so the
+   cost of one more level would grow with the depth. The check of a fixed-size
+   optional sub-codec builds the record it checks, so every check shows in the
+   words a decode allocates: one more level must cost the same at any depth. *)
+type chain = {
+  more : UInt8.t;
+  room : UInt8.t;
+  tag : (UInt8.t * UInt8.t) option;
+  child : chain option;
+}
+
+let chain_tag =
+  Codec.v "ChainTag"
+    (fun a b -> (a, b))
+    Codec.
+      [
+        Field.v "a" uint8 ~self_constraint:(fun x -> Expr.(x <= int 9)) $ fst;
+        Field.v "b" uint8 $ snd;
+      ]
+
+(* Each level is a 4-byte header, then a region of [room] bytes holding the
+   next level, present while [more] is 1. *)
+let rec chain_codec depth =
+  let more = Field.v "more" uint8 and room = Field.v "room" uint8 in
+  let tag =
+    Field.optional "tag"
+      ~present:Expr.(Field.ref more <= int 1)
+      (codec chain_tag)
+  in
+  let name = Fmt.str "Chain%d" depth in
+  if depth = 0 then
+    Codec.v name
+      (fun more room tag -> { more; room; tag; child = None })
+      Codec.
+        [
+          (more $ fun r -> r.more);
+          (room $ fun r -> r.room);
+          (tag $ fun r -> r.tag);
+        ]
+  else
+    Codec.v name
+      (fun more room tag child -> { more; room; tag; child })
+      Codec.
+        [
+          (more $ fun r -> r.more);
+          (room $ fun r -> r.room);
+          (tag $ fun r -> r.tag);
+          ( Field.optional "child"
+              ~present:Expr.(Field.ref more = int 1)
+              (nested_at_most ~size:(Field.ref room)
+                 (codec (chain_codec (depth - 1))))
+          $ fun r -> r.child );
+        ]
+
+let chain_buf depth =
+  let n = 4 * (depth + 1) in
+  let buf = Bytes.make n '\001' in
+  for i = 0 to depth do
+    Bytes.set_uint8 buf (4 * i) (if i = depth then 0 else 1);
+    Bytes.set_uint8 buf ((4 * i) + 1) (n - (4 * i) - 4)
+  done;
+  buf
+
+let rec chain_depth r =
+  match r.child with None -> 0 | Some c -> 1 + chain_depth c
+
+let chain_words depth =
+  let c = chain_codec depth and buf = chain_buf depth in
+  match Codec.decode c buf 0 with
+  | Error e -> Alcotest.failf "depth %d: %a" depth pp_parse_error e
+  | Ok r when chain_depth r <> depth ->
+      Alcotest.failf "depth %d decoded %d levels" depth (chain_depth r)
+  | Ok _ -> words_per_call ~iters:200 (fun () -> Codec.decode c buf 0)
+
+let test_decode_nested_cost_is_linear () =
+  skip_unless_gc_counters ();
+  let shallow = chain_words 2 - chain_words 1 in
+  let deep = chain_words 17 - chain_words 16 in
+  if deep <> shallow then
+    Alcotest.failf
+      "one more level costs %d words at depth 2 but %d at depth 17: the read \
+       checks sub-codecs the check pass has checked"
+      shallow deep
+
 let suite =
   ( "codec_alloc",
     [
@@ -1043,4 +1129,6 @@ let suite =
         test_validate_checked_no_param_no_alloc;
       Alcotest.test_case "decode: allocates at most one copy of the span" `Quick
         test_decode_allocates_one_copy;
+      Alcotest.test_case "decode: a nesting level costs the same at any depth"
+        `Quick test_decode_nested_cost_is_linear;
     ] )

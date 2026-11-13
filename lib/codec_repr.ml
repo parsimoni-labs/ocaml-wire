@@ -8,9 +8,21 @@ type runtime = Types.eval_ctx
 
 let alloc_slots n = { ints = Array.make n 0; int64s = Array.make n 0L }
 
-let clear_slots s n =
-  Array.fill s.ints 0 n 0;
-  Array.fill s.int64s 0 n 0L
+(* A loop rather than [Array.fill]: a scratch holds a slot per field, and for
+   that few the C call costs more than the stores. The [int64s] half is
+   written only by a field with a full-width slot ([Types.has_int64_slot]), so
+   a record without one has nothing there to clear. *)
+let clear_ints s n =
+  for i = 0 to n - 1 do
+    s.ints.(i) <- 0
+  done
+
+let clear_slots ?(int64s = true) s n =
+  clear_ints s n;
+  if int64s then
+    for i = 0 to n - 1 do
+      s.int64s.(i) <- 0L
+    done
 
 (* Grow [table] until it has a cell for domain index [i]. The new array reuses
    the existing [Atomic.t] cells rather than their contents, so a domain writing
@@ -244,6 +256,10 @@ type bf_info = {
 }
 
 let no_runtime = Types.unbound_eval_ctx
+
+(* The context of a read after the check pass: a sub-codec read through it
+   builds its record and leaves the checks to the pass that ran them. *)
+let checked_runtime = Types.checked_eval_ctx no_runtime
 
 let runtime ?env () =
   match env with
@@ -932,6 +948,9 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  read : runtime -> Input_end.t -> bytes -> int -> 'r;
+      (* [decode] without its bounds check: the read phase, for bytes whose
+         frame has been checked. *)
   plain_decode : (bytes -> int -> 'r) option;
       (* [decode] for a codec with no parameters and nothing to check after the
          reads: [Codec.decode] has only the bounds to check. *)
@@ -955,6 +974,10 @@ type 'r compiled = {
          caller's context rather than a [Param.env]. This is what a use site of
          the codec runs, so a sub-codec's checks are enforced wherever it
          appears. *)
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+      (* [validate_ctx] of a record whose end, the last argument, the caller
+         has just measured over the same bytes: the frame checks that end
+         rather than measuring it again. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
       (* Zeroes the scratch before [validate_arr], when a slot can be read
@@ -975,12 +998,15 @@ type 'r compiled = {
       (* The fast paths [seal] selected, by name: read by [Testing.paths]. *)
 }
 
+type param_use = Stable | Settled | Unsettled
+
 type 'r t = {
   id : int;
   name : string;
   struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
+  param_use : param_use;
   where : bool expr option;
   doc : string option;
       (** Free-text note (e.g. an RFC citation) projected as a [/*++ ... --*/]

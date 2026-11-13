@@ -17,8 +17,9 @@ type slots = { ints : int array; int64s : int64 array }
 type runtime = Types.eval_ctx
 (** The evaluation context an operation threads through its readers. *)
 
-val clear_slots : slots -> int -> unit
-(** [clear_slots s n] zeroes the first [n] slots of [s]. *)
+val clear_slots : ?int64s:bool -> slots -> int -> unit
+(** [clear_slots ?int64s s n] zeroes the first [n] slots of [s]; their [int64]
+    half only when [int64s], which defaults to [true]. *)
 
 val domain_local_slots : int -> unit -> slots
 (** [domain_local_slots n ()] is this domain's scratch of [n] slots. *)
@@ -322,6 +323,7 @@ type 'r compiled = {
   field_readers : field_reader list;
   field_actions : (string * compiled_action) list;
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
+  read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
@@ -331,6 +333,7 @@ type 'r compiled = {
   fixed_frame : int;
   plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
@@ -342,12 +345,20 @@ type 'r compiled = {
 }
 (** What {!Codec_seal.seal} builds from a field list; built on first use. *)
 
+type param_use =
+  | Stable  (** No expression reads an output parameter. *)
+  | Settled
+      (** Every field that assigns an output parameter comes before every field
+          that reads one. *)
+  | Unsettled  (** A field reads an output parameter a later action assigns. *)
+
 type 'r t = {
   id : int;
   name : string;
   struct_fields : Types.field list;
   n_params : int;
   param_handles : Param.packed list;
+  param_use : param_use;
   where : bool Types.expr option;
   doc : string option;
   compiled : 'r compiled option Atomic.t;
@@ -414,3 +425,12 @@ val alloc_slots : int -> slots
 val bits_too_wide : mask:int -> int -> unit
 (** [bits_too_wide ~mask v] raises [Invalid_argument] when [v] does not fit the
     bitfield of mask [mask]. *)
+
+val checked_runtime : Types.eval_ctx
+(** [checked_runtime] is the context of a read after the check pass, without
+    parameters: a sub-codec read through it builds its record and leaves the
+    checks to the pass that ran them. *)
+
+val clear_ints : slots -> int -> unit
+(** [clear_ints s n] zeroes the first [n] integer slots of [s], and leaves its
+    [int64] half alone. *)

@@ -64,6 +64,27 @@ let rec compile_int : type c1 c2 c3 c4.
   | Sizeof t -> l.sizeof_typ (Pack_typ t)
   | Sizeof_this -> l.sizeof_this
   | Field_pos -> l.field_pos
+  (* An operation with a literal operand, the common shape of a size
+     ([ihl * 4 - 20], [len - 8]), applies the literal directly rather than
+     calling a closure that returns it: one call per node instead of three. *)
+  | Add (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> checked_add (fa c1 c2 c3 c4) k
+  | Sub (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> checked_sub (fa c1 c2 c3 c4) k
+  | Mul (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> checked_mul (fa c1 c2 c3 c4) k
+  | Land (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 land k
+  | Lsl (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 lsl k
+  | Lsr (a, Int k) ->
+      let fa = rec_ a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 lsr k
   | Add (a, b) ->
       let fa = rec_ a and fb = rec_ b in
       fun c1 c2 c3 c4 -> checked_add (fa c1 c2 c3 c4) (fb c1 c2 c3 c4)
@@ -161,6 +182,26 @@ and compile_bool : type c1 c2 c3 c4.
   let bool_rec = compile_bool l in
   match e with
   | Bool b -> fun _ _ _ _ -> b
+  (* A comparison with a literal, as in a gate ([protocol = 6]) or a
+     constraint ([ihl >= 5]), compares with the literal directly. *)
+  | Eq (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 = k
+  | Ne (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 <> k
+  | Lt (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 < k
+  | Le (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 <= k
+  | Gt (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 > k
+  | Ge (a, Int k) ->
+      let fa = compile_int l a in
+      fun c1 c2 c3 c4 -> fa c1 c2 c3 c4 >= k
   | Eq (a, b) -> (
       match
         ( try_int l a,

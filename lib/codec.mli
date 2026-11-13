@@ -300,7 +300,10 @@ val embed_decode : 'r t -> bytes -> int -> 'r
 
 val embed_decode_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> 'r
-(** Context-threaded embedded decode. Internal use. *)
+(** Context-threaded embedded decode. Under a context made by
+    {!Types.checked_eval_ctx} it only builds the record, the enclosing check
+    pass having checked it; otherwise it checks the record too, as
+    {!embed_decode} does. Internal use. *)
 
 val embed_validate_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> unit
@@ -310,6 +313,13 @@ val embed_validate_ctx :
     field actions of the sub-codec at [off]. This is what an embedded codec's
     use site runs, mirroring the call to the nested struct's validator the
     generated C makes. Internal use. *)
+
+val embed_validate_sized_ctx :
+  'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> int -> unit
+(** [embed_validate_sized_ctx c ctx input_end buf off end_off] is
+    {!embed_validate_ctx} for a sub-codec whose end [end_off] the caller has
+    just measured over the same bytes: the bounds check takes that end instead
+    of measuring the record again. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)

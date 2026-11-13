@@ -63,6 +63,10 @@ val iter_param_refs_fields :
 (** [iter_param_refs_fields f fields where] calls [f] on every parameter the
     fields and [where] refer to, including those of embedded codecs. *)
 
+val param_use : Types.field list -> Codec_repr.param_use
+(** [param_use fields] is how the expressions of [fields], and of the codecs
+    they embed, read the output parameters their actions assign. *)
+
 val tag_byte_size : 'a Types.typ -> int
 (** [tag_byte_size t] is the width of the casetype tag [t]. *)
 

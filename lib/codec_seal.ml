@@ -142,18 +142,6 @@ let guarded_dynamic_reader : type a r.
             reader runtime input_end buf base)
   | Fixed _ | Bitfield _ | Variable _ | Variable_dynamic _ -> reader
 
-(* Size, offset, presence and [where] expressions read earlier fields through
-   these readers. *)
-let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
- fun cf typ ->
-  let reader = cf.int_reader in
-  match read_guard cf typ with
-  | None -> reader
-  | Some guard ->
-      fun runtime input_end buf base ->
-        guard runtime input_end buf base;
-        reader runtime input_end buf base
-
 (* [Codec.validate] reaches a field's bytes only through its populate: unlike
    decode, it never walks the record field by field, so a field pushed past the
    end by an overlong variable-size predecessor is read at its computed offset
@@ -310,6 +298,44 @@ let check_view ~min_wire_size access typ ~act =
         | Some s -> Some (Ps s, sets)
         | None -> None)
     | None -> None
+
+let scalar_at : type a. a scalar -> int = function
+  | Byte off | U16le off | U16be off | U32le off | U32be off -> off
+  | Sbyte off | I16le off | I16be off | I32le off | I32be off -> off
+  | Bits8 { off; _ } | Bits16le { off; _ } | Bits16be { off; _ } -> off
+
+let scalar_width : type a. a scalar -> int = function
+  | Byte _ | Sbyte _ | Bits8 _ -> 1
+  | U16le _ | U16be _ | I16le _ | I16be _ | Bits16le _ | Bits16be _ -> 2
+  | U32le _ | U32be _ | I32le _ | I32be _ -> 4
+
+(* Size, offset, presence and [where] expressions read earlier fields through
+   these readers. A scalar an int holds is read in place behind the bounds
+   check its general reader has, rather than through that reader and the
+   conversion of its value to an int: the same answer and the same error,
+   with one call instead of four. *)
+let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
+ fun cf typ ->
+  let scalar =
+    match typ_view typ with
+    | Some (Base (b, _)) -> (
+        match field_scalar ~min_wire_size:max_int cf.field_access b with
+        | Some s when slot_scalar s -> Some (Ps s)
+        | Some _ | None -> None)
+    | None -> None
+  in
+  match (scalar, read_guard cf typ) with
+  | Some (Ps s), Some _ ->
+      let at = scalar_at s and width = scalar_width s in
+      fun _runtime input_end buf base ->
+        check_read_bounds input_end ~at:(base + at) ~width;
+        read_slot s buf base
+  | _, None -> cf.int_reader
+  | None, Some guard ->
+      let reader = cf.int_reader in
+      fun runtime input_end buf base ->
+        guard runtime input_end buf base;
+        reader runtime input_end buf base
 
 (* The check-pass steps of a field, last first. *)
 let field_steps ~used ~name ~slot ~voff ~conds ~span view check full =
@@ -747,7 +773,7 @@ let used_steps used steps =
 
 (* Every slot is written before it is read when each step fills its own slot
    and nothing else lives in the array, so there is nothing to clear. *)
-let scratch_clear steps n_total =
+let scratch_clear ~int64s steps n_total =
   let own_slot = function
     | Slot _ | Range _ -> true
     | Check _ | Full _ | Covered _ -> false
@@ -755,7 +781,8 @@ let scratch_clear steps n_total =
   let n_own = List.length (List.filter own_slot steps) in
   let general = List.exists (function Full _ -> true | _ -> false) steps in
   if (not general) && n_own = n_total then fun _ -> ()
-  else fun arr -> clear_slots arr n_total
+  else if int64s then fun arr -> clear_slots arr n_total
+  else fun arr -> clear_ints arr n_total
 
 (* The check pass: the steps, then the [where] clause. *)
 let run_pass steps where arr runtime input_end buf off =
@@ -769,7 +796,12 @@ let build_validators ?used validators_rev checkers_rev compiled_where
     struct_fields param_slots n_total =
   let all_steps = List.map snd validators_rev in
   let steps = Array.of_list (used_steps used all_steps) in
-  let clear = scratch_clear all_steps n_total in
+  let int64s =
+    List.exists
+      (fun (Types.Field f) -> Types.has_int64_slot f.field_typ)
+      struct_fields
+  in
+  let clear = scratch_clear ~int64s all_steps n_total in
   let uses_arr = function
     | Range { store; _ } -> store
     | Slot _ | Check _ | Full _ | Covered _ -> true
@@ -1167,7 +1199,7 @@ let build_plain_decode ~layout make fwd wire_size_info min_size pass =
         let input_end = Input_end.of_bytes buf in
         if off < 0 || off > Input_end.to_int input_end - min_size then
           min_bounds_error min_size buf off
-        else apply_fwd make fwd no_runtime input_end buf off
+        else apply_fwd make fwd checked_runtime input_end buf off
   | Fixed _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
@@ -1175,14 +1207,14 @@ let build_plain_decode ~layout make fwd wire_size_info min_size pass =
           min_bounds_error min_size buf off
         else begin
           run_plain_pass pass input_end buf off;
-          apply_fwd make fwd no_runtime input_end buf off
+          apply_fwd make fwd checked_runtime input_end buf off
         end
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
         variable_frame ~layout wire_size_info min_size input_end buf off;
         if Option.is_none layout then run_plain_pass pass input_end buf off;
-        apply_fwd make fwd no_runtime input_end buf off
+        apply_fwd make fwd checked_runtime input_end buf off
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
@@ -1307,10 +1339,11 @@ let build_record_encoder name writers size_of_value ~check =
 let build_decoders ~layout make readers checked_readers wire_size_info min_size
     ~plain ~check =
   let fwd = to_fwd readers and checked = to_fwd checked_readers in
-  let raw_decode runtime input_end buf off =
+  let read runtime input_end buf off =
     apply_fwd make checked runtime input_end buf off
   in
-  ( build_checked_decode raw_decode wire_size_info min_size,
+  ( build_checked_decode read wire_size_info min_size,
+    read,
     if plain then
       Some (build_plain_decode ~layout make fwd wire_size_info min_size check)
     else None )
@@ -1571,11 +1604,21 @@ let record_encoder name writers wire_size_info size_of_value check =
   in
   build_record_encoder name writers size_of_value ~check
 
-let validate_ctx wire_size_info min_size ~scratch ~clear ~param_base
-    ~param_handles validate_arr runtime input_end buf off =
+(* [run] is the record's check pass with its params bound from the caller's
+   context ([validate_runtime_of]). *)
+let validate_ctx wire_size_info min_size run runtime input_end buf off =
   check_decode_bounds wire_size_info min_size runtime input_end buf off;
-  validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
-    runtime input_end buf off
+  run runtime input_end buf off
+
+(* [validate_ctx] with the record's end already measured: [check_decode_bounds]
+   on that end. *)
+let validate_sized wire_size_info min_size run runtime input_end buf off end_off
+    =
+  check_min_bounds min_size buf off;
+  (match wire_size_info with
+  | Fixed _ -> ()
+  | Variable _ -> check_end_bounds min_size buf off end_off);
+  run runtime input_end buf off
 
 (* The check pass of a record without parameters and, for a variable-size
    one, its layout pass with the check pass it leaves; the full check pass is
@@ -1668,6 +1711,9 @@ let seal : type r.
       compiled_where struct_fields r.param_slots n_total
   in
   let scratch = domain_local_slots n_total in
+  let run =
+    validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
+  in
   let encode_check =
     if not (has_encode_checks struct_fields r.where) then None
     else
@@ -1675,7 +1721,6 @@ let seal : type r.
         (encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
            ~compiled_where)
   in
-  let field_actions = List.rev r.field_actions_rev in
   let size_of_value =
     build_size_of_value (Array.of_list (List.rev r.size_of_value_rev))
   in
@@ -1685,7 +1730,7 @@ let seal : type r.
       ~where:compiled_where ~steps ~needs_arr (fun steps needs_arr ->
         plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where)
   in
-  let decode, plain_decode =
+  let decode, read, plain_decode =
     build_decoders ~layout r.make r.readers r.checked_readers wire_size_info
       min_size ~plain:(n_params = 0) ~check
   in
@@ -1693,8 +1738,9 @@ let seal : type r.
     size_of_value;
     field_access;
     field_readers = List.rev r.field_readers;
-    field_actions;
+    field_actions = List.rev r.field_actions_rev;
     decode;
+    read;
     plain_decode;
     encode =
       record_encoder r.name writers wire_size_info size_of_value encode_check;
@@ -1708,9 +1754,8 @@ let seal : type r.
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
-    validate_ctx =
-      validate_ctx wire_size_info min_size ~scratch ~clear ~param_base
-        ~param_handles validate_arr;
+    validate_ctx = validate_ctx wire_size_info min_size run;
+    validate_sized = validate_sized wire_size_info min_size run;
     validate_arr;
     clear_scratch = clear;
     populate;

@@ -24,6 +24,15 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
+val checked_eval_ctx : eval_ctx -> eval_ctx
+(** [checked_eval_ctx ctx] is [ctx] for reading bytes a check pass has already
+    accepted: a sub-codec read through it builds its record without checking it
+    again. Allocates nothing for a context without bindings. Internal use. *)
+
+val is_checked : eval_ctx -> bool
+(** [is_checked ctx] is [true] on a context made by {!checked_eval_ctx}.
+    Internal use. *)
+
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 
@@ -314,6 +323,11 @@ and _ typ =
           (** Everything [codec_decode] checks, none of what it builds. Run at
               every use site of the sub-codec, as the generated C runs the
               nested struct's validator. *)
+      codec_validate_sized :
+        eval_ctx -> Input_end.t -> bytes -> int -> int -> unit;
+          (** [codec_validate] of a record whose end, the last argument, the
+              caller has just measured with [codec_size_of] over the same bytes:
+              the frame checks that end instead of measuring again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;
@@ -669,6 +683,12 @@ val relocate_at : at:int -> (unit -> 'a) -> 'a
 val int_view_is_total : 'a typ -> bool
 (** [int_view_is_total typ] is [true] when every value of [typ] fits the native
     int, so taking its integer view cannot fail and needs no relocation. *)
+
+val has_int64_slot : 'a typ -> bool
+(** [has_int64_slot typ] is [true] when a field of [typ] fills a full-width
+    int64 validation slot, which [Field.int64] references read: a 64-bit integer
+    or float, alone or under a where, map, enum or optional wrapper. Internal
+    use. *)
 
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the

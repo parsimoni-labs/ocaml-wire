@@ -18,27 +18,8 @@ let combine a b =
   | None, c | c, None -> c
   | Some a, Some b -> Some (Types.And (a, b))
 
-let rec has_int64_slot : type a. a Types.typ -> bool =
- fun typ ->
-  let open Types in
-  match typ with
-  | Uint64 _ | Int64 _ -> true
-  (* A float64's IEEE bit pattern is 64 bits wide; its predicates (is_finite,
-     is_nan) read it from the int64 slot so they stay exact on a narrow-int
-     platform. *)
-  | Float64 _ -> true
-  | Where { inner; _ } -> has_int64_slot inner
-  | Optional { inner; _ } -> has_int64_slot inner
-  | Optional_or { inner; _ } -> has_int64_slot inner
-  (* [build_populate] fills the int64 slot with the raw pre-map wire value
-     (via [encode]) and recurses [Enum] through its base, so a constraint over
-     the raw uint64 of a [map]-decoded or enum field is well defined. *)
-  | Map { inner; _ } -> has_int64_slot inner
-  | Enum { base; _ } -> has_int64_slot base
-  | _ -> false
-
 let reject_no_int64_slot ~combinator name typ =
-  if not (has_int64_slot typ) then
+  if not (Types.has_int64_slot typ) then
     Fmt.invalid_arg
       "Wire.Field.%s: field %S does not have a full-width int64 validation slot"
       combinator name

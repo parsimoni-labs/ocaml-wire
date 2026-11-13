@@ -849,11 +849,13 @@ let var_bytes_reader : type a.
       let first = base + fo in
       (* The region hands its value [sz] bytes and no more, so the walk that
          sizes it stops there: a length field the data puts past the region is
-         missing, not read from whatever follows. *)
-      let region_end = Input_end.narrow input_end (first + sz) in
-      let consumed = elem_size_of elem runtime region_end buf first in
-      if consumed > sz || ((not at_most) && consumed <> sz) then
-        raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+         missing, not read from whatever follows. Bytes a check pass accepted
+         had that walk there ([container_populate]), so their read skips it. *)
+      (if not (Types.is_checked runtime) then
+         let region_end = Input_end.narrow input_end (first + sz) in
+         let consumed = elem_size_of elem runtime region_end buf first in
+         if consumed > sz || ((not at_most) && consumed <> sz) then
+           raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed);
       read_elem elem runtime input_end buf first
   | _ -> assert false
 
@@ -918,6 +920,16 @@ let span_populate : type a.
    decode fails; what is left out is the sequence, the nested region's value
    and the case body's record. [None] leaves the field to the generic
    [build_populate]. *)
+(* The check of a region's element the region walk has just measured: a
+   sub-codec takes the end the walk found rather than measuring itself again,
+   which costs as much as the walk. *)
+let sized_check : type a.
+    a typ -> runtime -> Input_end.t -> bytes -> int -> int -> unit = function
+  | Codec { codec_validate_sized; _ } -> codec_validate_sized
+  | typ ->
+      let check = elem_check typ in
+      fun runtime input_end buf off _end_off -> check runtime input_end buf off
+
 let container_populate : type a.
     a typ ->
     off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
@@ -933,7 +945,7 @@ let container_populate : type a.
           check_span_bounds buf ~first ~sz:(size_fn runtime input_end buf base);
           check runtime input_end buf first)
   | Single_elem { elem; at_most; _ } ->
-      let check = elem_check elem in
+      let check = sized_check elem in
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
@@ -947,7 +959,7 @@ let container_populate : type a.
           let consumed = elem_size_of elem runtime region_end buf first in
           if consumed > sz || ((not at_most) && consumed <> sz) then
             raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-          check runtime input_end buf first)
+          check runtime input_end buf first (first + consumed))
   | _ -> None
 
 (* What a field's validate runs in place of its reader: a span's scan, or a
