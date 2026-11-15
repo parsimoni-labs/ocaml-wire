@@ -25,11 +25,21 @@ let rec to_int : type a. a Types.typ -> a -> int =
   | Uint16 _ -> UInt16.to_int v
   | Uint_var _ -> optint_to_int UInt63.to_int v
   | Uint32 _ -> optint_to_int UInt32.to_int v
-  | Uint64 _ -> UInt64.to_int_opt v |> Option.value ~default:max_int
+  | Uint64 _ -> (
+      match UInt64.to_int_opt v with
+      | Some value -> value
+      | None -> raise Unfittable_native_int)
   | Int8 -> SInt8.to_int v
   | Int16 _ -> SInt16.to_int v
-  | Int32 _ -> SInt32.to_int v
-  | Int64 _ -> Int64.to_int v
+  | Int32 _ -> (
+      match SInt32.to_int_opt v with
+      | Some value -> value
+      | None -> raise Unfittable_native_int)
+  | Int64 _ ->
+      let value = Int64.to_int v in
+      if not (Int64.equal (Int64.of_int value) v) then
+        raise Unfittable_native_int;
+      value
   | Float32 _ -> invalid_arg "Param: floats are not integer-representable"
   | Float64 _ -> invalid_arg "Param: floats are not integer-representable"
   | Bits _ -> v

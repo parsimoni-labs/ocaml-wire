@@ -125,6 +125,11 @@
   JavaScript, whose 32-bit native integers were misread by conversions
   assuming a 31-bit native integer (#467, @samoht)
 
+- `Param.bind` rejects `uint64`, `int64`, and `int32` values that do not fit
+  the native integer used by parameter environments, instead of saturating or
+  truncating them. Accepted bindings preserve their original values (#464,
+  @samoht)
+
 ## 1.3.0
 
 ### Added
