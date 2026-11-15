@@ -3,6 +3,12 @@
 Experimental. Target-device timing is not measured yet, and local correctness
 tests do not establish production readiness or the 250 MHz target.
 
+Target acceptance uses the complete registered-boundary Vivado flow described
+in [TIMING.md](TIMING.md). The ECP5 figures below are historical core-only
+diagnostics; they are not the basis for further micro-tuning or a SOTA claim.
+The current three-cycle latency is a measured configuration, not a requirement
+for future target-driven pipeline changes.
+
 This metadata-only AXI4-Stream profile retains the shared checked scanner plan.
 The reference top `wire_stack_stream_64` accepts 512-bit beats, stores a
 128-byte prefix, and counts frames through 65,549 bytes (14-byte Ethernet
@@ -136,3 +142,6 @@ with transport, framing overhead, payload forwarding and sink bandwidth
 included. ECP5 out-of-context timing excludes physical I/O and global clock
 integration; simulation runtime is not FPGA speed. Cloud synthesis and board
 runs require separate validation and authorization before billable work.
+
+For the pinned F2 build, packed metadata ABI, and emitted-RTL capture checks,
+see [cloud validation](../../docs/hardcaml-production.md).

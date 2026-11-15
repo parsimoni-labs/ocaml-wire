@@ -1,5 +1,38 @@
 # Hardcaml optimization audit
 
+## Measurement protocol replaces core-only tuning
+
+The ECP5 results below are historical diagnostics, not the target acceptance
+metric. No further ECP5 micro-tuning is planned before measuring the registered
+core on the pinned F2 part under Vivado. That OOC measurement needs an x86
+Vivado host, not an FPGA instance. This arm64 workspace has no Vivado host
+configured, so no target timing result is reported yet.
+
+The default OOC top now registers every non-clock input and every output. This
+makes result-bank selection, rejection masks and length saturation part of
+register-to-register timing. The SDE adapter remains a separate OOC configuration
+with explicit external delays. The fixture is timing-only; it is not an elastic
+transport adapter and is never substituted into the HDK deployment.
+
+Reports after synthesis, placement and routing identify each endpoint class,
+its worst path, logic levels, slack and worst-path fanout. Missing anchors are
+reported as incomplete coverage, not zero-depth successes. The shared selectors,
+4 ns planning allocations, local XCUP structural results and pinned published
+profile are in [TIMING.md](../bench/hardcaml-stream/TIMING.md). Those local mapped
+depths are conservative structural counts, not Vivado delays or Fmax.
+
+Three-cycle latency describes the current implementation, not an architectural
+requirement. Once target timing is available, validation may be split by actual
+dependencies and individual failure bits registered before acceptance reduction.
+Buffering will be reassessed with complete target timing and area data.
+
+The oracle is frozen independently of RTL: corpus, native reference executable,
+case, maximum and framing format determine its cache key. Replay verifies the
+receipt and record digest and does not run or rebuild EverParse. Broad campaigns
+belong after timing selection; they are not part of each timing iteration.
+
+## Historical ECP5 experiments
+
 The original 102.88 MHz ECP5 result is a measured design point. It does not establish an
 architectural limit or an exhaustive search of current techniques. The target
 remains 250 MHz, and a comparable state-of-the-art result has not been shown.
