@@ -138,6 +138,11 @@
   `byte_array_where` fields and leaves the buffer untouched on rejection.
   Previously it only checked the byte count (#466, @samoht)
 
+- Compound 64-bit expression comparisons use unsigned ordering in direct
+  decoding and encoding, matching codec constraints. Bitwise AND and logical
+  shifts previously compared values with bit 63 set as negative (#468,
+  @samoht)
+
 ## 1.3.0
 
 ### Added

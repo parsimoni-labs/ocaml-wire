@@ -91,6 +91,8 @@ and compare_expr : type a. ctx -> a expr -> a expr -> int =
   match a with
   | Int64 _ -> (compare_int64_expr ctx a b : int)
   | Ref (I64, _) -> (compare_int64_expr ctx a b : int)
+  | Land64 _ -> (compare_int64_expr ctx a b : int)
+  | Lsr64 _ -> (compare_int64_expr ctx a b : int)
   | _ -> Stdlib.compare (expr ctx a) (expr ctx b)
 
 and compare_int64_expr : ctx -> int64 expr -> int64 expr -> int =

@@ -94,8 +94,6 @@ let test_expr_const () =
     "lt" true
     (Eval.expr ctx (Types.Lt (Types.Int 1, Types.Int 2)))
 
-(* A cross-field reference with no record to read it from is a programmer
-   error, which the entry points document as [Invalid_argument]. *)
 let test_compound_int64_ordering () =
   let open Types in
   let operands =
@@ -121,6 +119,8 @@ let test_compound_int64_ordering () =
         ])
     operands
 
+(* A cross-field reference with no record to read it from is a programmer
+   error, which the entry points document as [Invalid_argument]. *)
 let test_expr_ref_fails () =
   Alcotest.check_raises "Ref at top level should fail"
     (Invalid_argument
