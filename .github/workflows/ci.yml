@@ -103,7 +103,7 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
 
   # Hardcaml is an optional dependency: its lanes build only with
-  # BUILD_HARDCAML=1.
+  # BUILD_HARDCAML=1, and the proofs need Yosys.
   hardcaml:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -121,6 +121,7 @@ jobs:
           ocaml-compiler: '5.4'
       - run: opam install . --deps-only --with-test
       - run: opam install hardcaml.v0.17.1
+      - run: sudo apt-get update && sudo apt-get install -y yosys
       - name: Install EverParse
         run: |
           source .github/ci-dependencies.env
@@ -134,6 +135,37 @@ jobs:
           opam exec -- dune build --profile release \
             @test/hardcaml/runtest @fuzz/diff/hardcaml/runtest \
             @fuzz/diff/hardcaml-stream/runtest
+      - name: Prove mask equivalence and streaming control
+        run: |
+          mkdir -p _build/hardcaml-proofs
+          for mode in proof proof-contiguous keep-proof; do
+            opam exec -- dune exec --profile release bench/hardcaml-stream/gen.exe -- \
+              "--$mode" "_build/hardcaml-proofs/$mode.v"
+            hw_property=control
+            if [ "$mode" = keep-proof ]; then hw_property=keep; fi
+            HW_PROPERTY="$hw_property" \
+              HW_MITER="$PWD/_build/hardcaml-proofs/$mode.v" \
+              HW_OUT="$PWD/_build/hardcaml-proofs/$mode" \
+              bench/hardcaml-stream/prove.sh
+          done
+      - name: Prove bounded padding and pipeline equivalence
+        run: |
+          opam exec -- dune exec --profile release bench/hardcaml/gen.exe -- \
+            --padding _build/hardcaml-proofs/padding.v
+          HW_MITER="$PWD/_build/hardcaml-proofs/padding.v" \
+            HW_OUT="$PWD/_build/hardcaml-proofs/padding" \
+            bench/hardcaml/prove-padding.sh
+          opam exec -- dune exec --profile release bench/hardcaml/gen.exe -- \
+            --pipeline-proof _build/hardcaml-proofs/pipeline.v
+          HW_MITER="$PWD/_build/hardcaml-proofs/pipeline.v" \
+            HW_OUT="$PWD/_build/hardcaml-proofs/pipeline" \
+            bench/hardcaml/prove-pipeline.sh
+      - name: Retain hardware proof logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hardcaml-proofs
+          path: _build/hardcaml-proofs
 
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
