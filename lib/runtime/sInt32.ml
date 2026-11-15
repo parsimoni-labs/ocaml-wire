@@ -65,7 +65,11 @@ let set_be buf off v =
   Bytes.set_uint16_be buf off (high16 v);
   Bytes.set_uint16_be buf (off + 2) (low16 v)
 
-let to_int = Optint.to_int
+(* Optint's emulated conversions assume 31-bit ints. JavaScript has 32-bit
+   ints, so use the exact Int32 conversion there instead of losing the sign. *)
+let to_int =
+  if Sys.int_size = 32 then fun v -> Int32.to_int (to_int32 v)
+  else Optint.to_int
 
 (* [Int32.to_int] truncates where the native [int] is narrower than 32 bits, so
    round-trip through it to tell a value it held from one it dropped bits of. *)
@@ -74,13 +78,15 @@ let to_int_opt v =
   let i = Int32.to_int w in
   if Int32.equal (Int32.of_int i) w then Some i else None
 
-let of_int n =
-  let v = Optint.of_int n in
-  if compare v min_int < 0 || compare v max_int > 0 then
-    invalid_arg
-      ("Wire.SInt32.of_int: " ^ string_of_int n
-     ^ " is not a signed 32-bit value");
-  v
+let of_int =
+  if Sys.int_size <= 32 then fun n -> of_int32 (Int32.of_int n)
+  else fun n ->
+    let v = Optint.of_int n in
+    if compare v min_int < 0 || compare v max_int > 0 then
+      invalid_arg
+        ("Wire.SInt32.of_int: " ^ string_of_int n
+       ^ " is not a signed 32-bit value");
+    v
 
 let unsafe_le buf off : t =
   match Optint.is_immediate with

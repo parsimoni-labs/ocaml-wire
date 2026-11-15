@@ -121,6 +121,10 @@
   exact size in 3D. Codec and the generated C disagreed on both (#444,
   @samoht)
 
+- `SInt32.of_int` and `SInt32.to_int` preserve negative values under
+  JavaScript, whose 32-bit native integers were misread by conversions
+  assuming a 31-bit native integer (#467, @samoht)
+
 ## 1.3.0
 
 ### Added
