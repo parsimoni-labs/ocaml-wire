@@ -1,0 +1,26 @@
+(library
+ (name hw_bench)
+ (modules hw_bench)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries net wire wire.ocaml wire_hardcaml hardcaml))
+
+(executable
+ (name gen)
+ (modules gen padding properties validation_miter)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries hw_bench hardcaml net wire wire.ocaml wire_hardcaml))
+
+(rule
+ (copy ../rust/g_stack.ml g_stack.ml))
+
+(rule
+ (copy ../rust/stack_read.ml stack_read.ml))
+
+(executable
+ (name test)
+ (modules test g_stack stack_read)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries hw_bench hardcaml wire wire.runtime net hardware_test_io fmt))
