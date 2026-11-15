@@ -75,9 +75,39 @@ let test_generate_test_runner () =
     ~generate:(fun ~outdir s -> Wire_diff_gen.generate_test_runner ~outdir s)
     ~filename:"diff_test.ml"
 
+let test_runner_reports_sampling () =
+  let outdir = Filename.temp_dir "diff_gen_sampling" "" in
+  Fun.protect
+    ~finally:(fun () ->
+      Array.iter
+        (fun name -> Sys.remove (Filename.concat outdir name))
+        (Sys.readdir outdir);
+      Unix.rmdir outdir)
+    (fun () ->
+      Wire_diff_gen.generate_test_runner ~outdir ~num_values:3
+        [ schema_for "TestDiffGen" ];
+      Out_channel.with_open_text (Filename.concat outdir "stubs.ml") (fun oc ->
+          output_string oc "let testdiffgen_check _ = false\n");
+      let command =
+        "cd " ^ Filename.quote outdir
+        ^ " && ocamlc -o runner stubs.ml diff_test.ml && ./runner"
+      in
+      let ic = Unix.open_process_in command in
+      let output = In_channel.input_all ic in
+      (match Unix.close_process_in ic with
+      | Unix.WEXITED 0 -> ()
+      | _ -> Alcotest.fail "generated sampling runner failed");
+      Alcotest.(check string)
+        "reports samples without claiming differential tests passed"
+        "TestDiffGen: 0 valid, 3 invalid (of 3)\n\
+         Sampled 3 values across 1 schemas\n"
+        output)
+
 let suite =
   ( "wire_diff_gen",
     [
+      Alcotest.test_case "runner reports sampling" `Quick
+        test_runner_reports_sampling;
       Alcotest.test_case "schema creation" `Quick test_schema_creation;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "generate_c_stubs" `Quick test_generate_c_stubs;
