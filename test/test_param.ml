@@ -68,6 +68,80 @@ let test_wide_input_binding_error () =
           "names the parameter" true
           (contains ~sub:"wide_limit" msg)
 
+let test_int64_input_binding_range () =
+  let check typ values =
+    let p = Param.input "wide_limit" typ in
+    let field = Field.v "value" uint8 in
+    let codec =
+      Codec.v "WideLimit"
+        ~where:Expr.(Param.expr p >= int 0)
+        Fun.id
+        Codec.[ field $ Fun.id ]
+    in
+    List.iter
+      (fun (value, expected) ->
+        match expected with
+        | true ->
+            let env = Codec.env codec |> Param.bind p value in
+            Alcotest.(check bool)
+              "parameter roundtrip" true
+              (Param.get env p = value)
+        | false -> (
+            match Param.bind p value (Codec.env codec) with
+            | _ -> Alcotest.fail "accepted an unfittable parameter"
+            | exception Invalid_argument message ->
+                Alcotest.(check bool)
+                  "names the parameter" true
+                  (contains ~sub:"wide_limit" message)))
+      values
+  in
+  let too_large = Int64.succ (Int64.of_int max_int) in
+  check uint64be
+    (List.map
+       (fun (value, expected) -> (UInt64.of_int64 value, expected))
+       [
+         (0L, true);
+         (Int64.of_int max_int, true);
+         (too_large, false);
+         (-1L, false);
+         (Int64.min_int, false);
+       ]);
+  check int64be
+    [
+      (0L, true);
+      (-1L, true);
+      (Int64.of_int min_int, true);
+      (Int64.of_int max_int, true);
+      (too_large, false);
+      (Int64.pred (Int64.of_int min_int), false);
+    ]
+
+let test_signed32_input_binding_range () =
+  let p = Param.input "signed_limit" int32be in
+  let field = Field.v "value" uint8 in
+  let codec =
+    Codec.v "SignedLimit"
+      ~where:Expr.(Param.expr p >= int 0)
+      Fun.id
+      Codec.[ field $ Fun.id ]
+  in
+  List.iter
+    (fun value ->
+      if Sys.int_size >= 32 || SInt32.equal value SInt32.zero then begin
+        let env = Codec.env codec |> Param.bind p value in
+        Alcotest.(check bool)
+          "parameter roundtrip" true
+          (SInt32.equal (Param.get env p) value)
+      end
+      else
+        match Param.bind p value (Codec.env codec) with
+        | _ -> Alcotest.fail "accepted an unfittable signed parameter"
+        | exception Invalid_argument message ->
+            Alcotest.(check bool)
+              "names the parameter" true
+              (contains ~sub:"signed_limit" message))
+    SInt32.[ min_int; max_int; zero ]
+
 let test_output_binding () =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
@@ -617,6 +691,10 @@ let suite =
       Alcotest.test_case "input binding" `Quick test_input_binding;
       Alcotest.test_case "wide input binding error" `Quick
         test_wide_input_binding_error;
+      Alcotest.test_case "int64 input binding range" `Quick
+        test_int64_input_binding_range;
+      Alcotest.test_case "signed32 input binding range" `Quick
+        test_signed32_input_binding_range;
       Alcotest.test_case "output binding" `Quick test_output_binding;
       (* runtime: input params *)
       Alcotest.test_case "input param constraint" `Quick
