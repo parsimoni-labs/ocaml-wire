@@ -2,42 +2,35 @@
 
 ### Added
 
-- Add `Wire.Field.union`: a field holding one of several cases, selected by an
+- `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
-
-- `wire.3d` and the fuzz suites run on Windows (#443, @samoht)
-
-- `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
-  field names against the FFI pipeline before writing anything (#434, @samoht)
 
 - `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
   its fields with no further bounds check (#435, @samoht)
 
-- A `paranoid` dune profile that bounds-checks every read, for tests (#435,
-  @samoht)
+- `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
+  field names against the FFI pipeline before writing anything (#434, @samoht)
 
 - `wire.ocaml` (`Wire_ocaml`): generate plain OCaml from a fixed-size codec,
-  with every offset a constant. The generated code needs only the new
-  `wire.runtime`, and also builds for js_of_ocaml, wasm_of_ocaml and OxCaml
-  (#436, @samoht)
-
-- `wire.rust` (`Wire_rust`): generate safe, `no_std` Rust from a fixed-size
-  codec (#439, @samoht)
+  with every offset a constant, needing only the new `wire.runtime`. It builds
+  for js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, @samoht)
 
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)
 
 - `Wire_ocaml.scanner`: generate a scanner for codecs with nested records,
-  optional fields, sized regions and byte spans. `~fields` selects the outputs
-  (#447, @samoht)
+  optional fields, sized regions and byte spans; `~fields` selects the outputs.
+  `Wire_ocaml.Plan` is the checked plan it prints, for other backends (#447,
+  @samoht)
 
-- `Wire_rust.scanner`: the same scanners as `Wire_ocaml.scanner`, in Rust
-  (#448, @samoht)
+- `wire.rust` (`Wire_rust`): generate safe, `no_std` Rust from a fixed-size
+  codec, and `Wire_rust.scanner`, the same scanners in Rust (#439, #448,
+  @samoht)
 
-- `Wire_ocaml.Plan`: the checked plan the generators print, for backends in
-  other languages (#447, @samoht)
+- `wire` builds on OxCaml, and `wire.3d` and the fuzz suites run on Windows
+  (#436, #443, @samoht)
 
-- `wire.runtime` has `Target`, loads at `int64_u` offsets for OxCaml (#459,
+- A `paranoid` dune profile that bounds-checks every read, for tests (#435,
   @samoht)
 
 - `examples/net` has `Packet_stack`: Ethernet with IPv4 and TCP or UDP (#460,
@@ -45,20 +38,20 @@
 
 ### Changed
 
-- `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a
-  16-bit length used to get lines of up to 64 KiB, megabytes of corpus to
-  write and replay (#455, @samoht)
-
-- **Breaking:** `Wire_stubs` record labels escape every OCaml and OxCaml
-  keyword (`effect_`), and two fields that give one label are refused (#434,
-  @samoht)
-
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs (#435, @samoht)
+  fixed-size codecs, and `decode` no longer slows with nesting depth (#435,
+  #445, @samoht)
 
-- **Breaking:** `Wire.Codec.v` no longer compiles the codec; the first
-  operation does. A mistake only compilation finds now raises
-  `Invalid_argument` there (#435, @samoht)
+- `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
+  used to give lines of up to 64 KiB (#455, @samoht)
+
+- **Breaking:** `Wire.Codec` gains `valid` and `read`, which shadow local
+  values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
+  Rename the local or qualify it (#435, @samoht)
+
+- **Breaking:** `Wire.Codec.v` no longer compiles the codec. A malformed codec
+  raises `Invalid_argument` at its first `decode`, `encode` or `validate`, not
+  at `v` (#435, @samoht)
 
 - **Breaking:** a literal size that is negative or too large raises
   `Invalid_argument` where the type is built, not at decode (#435, @samoht)
@@ -66,85 +59,76 @@
 - **Breaking:** a constraint on a field under `map` applies to the wire value,
   as in 3D, and a `map` decoder must be total (#435, @samoht)
 
-- `Wire.Codec.decode` checks a nested codec once, not once per level of
-  nesting (#445, @samoht)
+- **Breaking:** `Codec.slice_offset` and `slice_length` take `?env`, required
+  for codecs with input parameters, whose inputs they read as zero (#465,
+  @samoht)
+
+- **Breaking:** generated names escape every keyword of the target language
+  (`effect` is `effect_`). Update code naming a generated label or plug member
+  (#434, #438, @samoht)
+
+- **Breaking:** the projection refuses two fields that give one `Wire_stubs`
+  label, a field name that is not an identifier (`a-b`) and two codecs whose
+  names differ only in case. Rename them (#434, @samoht)
 
 - **Breaking:** the default plug (`<Name>Fields`) has one member per scalar of
   a nested codec, named by its path (`ipv4_tcp_src_port`). Member indices
   shift: rebuild custom plugs (#446, @samoht)
 
-- **Breaking:** `Codec.slice_offset` and `slice_length` take `?env`, required
-  for codecs with input parameters. They previously read those inputs as zero
-  and silently returned incorrect offsets and lengths (#465, @samoht)
-
 ### Fixed
-
-- The 3D projection of a codec holding an array of `lookup` indices in a
-  sub-codec is accepted by EverParse; it named an undeclared type (#478,
-  @samoht)
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
   as in 3D. The codec and the generated C could read different bytes (#453,
   @samoht)
 
-- A codec named with a capital after a digit (`Foo2Bar`) gets the C names
-  EverParse emits, so its FFI stubs link (#441, @samoht)
-
 - `decode` reads a record of more than eight fields in field order (#434,
   @samoht)
-
-- `validate` refuses a negative span size and checks every field whose size
-  the data decides, as `decode` does (#434, @samoht)
-
-- 3D: a bit group in a non-native order is laid out the same in a sub-codec,
-  an array or a casetype as at top level (#434, @samoht)
-
-- 3D: a field name that is not an identifier (`a-b`) is refused, and so are
-  two codecs whose names differ only in case (#434, @samoht)
-
-- `Wire_stubs`: a codec named for an OCaml keyword (`Type`) gives stubs that
-  compile (#434, @samoht)
 
 - `decode` checks a record before reading it, so it reports the same first
   failure as `validate` (#435, @samoht)
 
-- Errors name the right place: a renamed codec's new name, a wide
-  enum's own offset, a bitfield's word (#435, #439, @samoht)
+- `validate` refuses a negative span size and checks every field whose size
+  the data decides, as `decode` does (#434, @samoht)
+
+- `Codec.set` enforces per-byte refinements on variable-length
+  `byte_array_where` fields and leaves the buffer untouched on rejection
+  (#466, @samoht)
+
+- A constraint comparing a `uint64` expression built with `land` or a shift
+  treats values at or above 2^63 as unsigned, not negative (#468, @samoht)
+
+- `Param.bind` rejects `uint64`, `int64` and `int32` values that do not fit
+  the native integer of parameter environments, instead of truncating them
+  (#464, @samoht)
+
+- `SInt32.of_int` and `SInt32.to_int` preserve negative values under
+  js_of_ocaml (#467, @samoht)
 
 - A negative offset raises `Invalid_argument`; one near `max_int` is a parse
   error (#435, @samoht)
 
-- Generated OCaml checks arithmetic as the codec does, so it rejects what the
-  codec rejects on overflow (#436, @samoht)
+- Errors name the right place: a renamed codec's new name, a wide enum's own
+  offset, a bitfield's word (#435, #439, @samoht)
 
-- `wire` builds on OxCaml (#436, @samoht)
+- A codec named with a capital after a digit (`Foo2Bar`) gets the C names
+  EverParse emits, so its FFI stubs link (#441, @samoht)
 
-- 3D: two different declarations under one name are refused, and every F*, 3D
-  and C keyword a field can spell is escaped (#434, #438, @samoht)
+- `Wire_stubs`: a codec named for an OCaml keyword (`Type`) gives stubs that
+  compile (#434, @samoht)
 
-- 3D: an enum used only inside a sub-codec is declared (#438, @samoht)
+- 3D: a bit group in a non-native order is laid out the same in a sub-codec,
+  an array or a casetype as at top level (#434, @samoht)
+
+- 3D: two different declarations under one name are refused (#434, #438,
+  @samoht)
+
+- 3D: an enum used only inside a sub-codec, and an array of `lookup` indices
+  in a sub-codec, are declared, so EverParse accepts the module (#438, #478,
+  @samoht)
 
 - A byte span sized `len - k` verifies in EverParse without a hand-written
   `len >= k` constraint, and a `nested` region over a single scalar keeps its
   exact size in 3D. Codec and the generated C disagreed on both (#444,
-  @samoht)
-
-- `SInt32.of_int` and `SInt32.to_int` preserve negative values under
-  JavaScript, whose 32-bit native integers were misread by conversions
-  assuming a 31-bit native integer (#467, @samoht)
-
-- `Param.bind` rejects `uint64`, `int64`, and `int32` values that do not fit
-  the native integer used by parameter environments, instead of saturating or
-  truncating them. Accepted bindings preserve their original values (#464,
-  @samoht)
-
-- `Codec.set` enforces per-byte refinements on variable-length
-  `byte_array_where` fields and leaves the buffer untouched on rejection.
-  Previously it only checked the byte count (#466, @samoht)
-
-- Compound 64-bit expression comparisons use unsigned ordering in direct
-  decoding and encoding, matching codec constraints. Bitwise AND and logical
-  shifts previously compared values with bit 63 set as negative (#468,
   @samoht)
 
 ## 1.3.0
