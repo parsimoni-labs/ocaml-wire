@@ -26,6 +26,7 @@ let () =
       Test_everparse_doc.suite;
       Test_everparse_bitorder.suite;
       Test_everparse_names.suite;
+      Test_lower_3d.suite;
       Test_param.suite;
       Test_ascii.suite;
       Test_staged.suite;
