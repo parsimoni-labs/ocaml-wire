@@ -679,11 +679,29 @@ let test_multi_domain_decode () =
   Alcotest.(check bool) "first domain" true (Domain.join first);
   Alcotest.(check bool) "second domain" true (Domain.join second)
 
+let test_slice_navigation_requires_parameters () =
+  let size = Param.input "size" uint8 in
+  let field =
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
+  in
+  let codec = Codec.v "ParamSlice" Fun.id [ field ] in
+  List.iter
+    (fun stage ->
+      match stage () with
+      | _ -> Alcotest.fail "staged slice navigation without its input parameter"
+      | exception Invalid_argument _ -> ())
+    [
+      (fun () -> Codec.slice_offset codec field);
+      (fun () -> Codec.slice_length codec field);
+    ]
+
 (* -- Suite -- *)
 
 let suite =
   ( "param",
     [
+      Alcotest.test_case "slice navigation requires parameters" `Quick
+        test_slice_navigation_requires_parameters;
       (* construction *)
       Alcotest.test_case "input spec" `Quick test_input_spec;
       Alcotest.test_case "output spec" `Quick test_output_spec;
