@@ -1,0 +1,20 @@
+(executable
+ (name test)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries
+  wire
+  wire.ocaml
+  wire_hardcaml
+  hardcaml
+  hardware_stream_io
+  diff_codecs
+  diff_driver
+  alcotest))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (action
+  (run %{exe:test.exe})))
