@@ -73,6 +73,10 @@
   a nested codec, named by its path (`ipv4_tcp_src_port`). Member indices
   shift: rebuild custom plugs (#446, @samoht)
 
+- **Breaking:** `Codec.slice_offset` and `slice_length` take `?env`, required
+  for codecs with input parameters. They previously read those inputs as zero
+  and silently returned incorrect offsets and lengths (#465, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,

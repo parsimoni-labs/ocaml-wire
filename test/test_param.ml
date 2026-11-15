@@ -695,6 +695,43 @@ let test_slice_navigation_requires_parameters () =
       (fun () -> Codec.slice_length codec field);
     ]
 
+let test_slice_navigation_with_parameters () =
+  let size = Param.input "size" uint8 in
+  let prefix = Field.v "prefix" (byte_array ~size:(Param.expr size)) in
+  let body =
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ snd)
+  in
+  let codec =
+    Codec.v "ParamSliceBody"
+      (fun prefix body -> (prefix, body))
+      Codec.[ prefix $ fst; body ]
+  in
+  let buf = Bytes.of_string "_abcDEF" in
+  let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
+  let offset = Staged.unstage (Codec.slice_offset ~env codec body) in
+  let length = Staged.unstage (Codec.slice_length ~env codec body) in
+  let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
+  Alcotest.(check int)
+    "absolute offset"
+    (Bytesrw.Bytes.Slice.first slice)
+    (offset buf 1);
+  Alcotest.(check int)
+    "length"
+    (Bytesrw.Bytes.Slice.length slice)
+    (length buf 1);
+  List.iter
+    (fun env ->
+      List.iter
+        (fun stage ->
+          match stage env with
+          | _ -> Alcotest.fail "accepted an invalid slice environment"
+          | exception Invalid_argument _ -> ())
+        [
+          (fun env -> Codec.slice_offset ~env codec body);
+          (fun env -> Codec.slice_length ~env codec body);
+        ])
+    [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]
+
 (* -- Suite -- *)
 
 let suite =
@@ -702,6 +739,8 @@ let suite =
     [
       Alcotest.test_case "slice navigation requires parameters" `Quick
         test_slice_navigation_requires_parameters;
+      Alcotest.test_case "slice navigation with parameters" `Quick
+        test_slice_navigation_with_parameters;
       (* construction *)
       Alcotest.test_case "input spec" `Quick test_input_spec;
       Alcotest.test_case "output spec" `Quick test_output_spec;

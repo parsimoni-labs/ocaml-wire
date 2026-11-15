@@ -1432,22 +1432,30 @@ module Codec : sig
       skips the make and returns the int directly. *)
 
   val slice_offset :
-    'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
-  (** [slice_offset c f] is a staged reader returning the absolute byte offset
-      of slice field [f] within the buffer. Stage once with
+    ?env:Param.env ->
+    'r t ->
+    (Bytesrw.Bytes.Slice.t, 'r) field ->
+    (bytes -> int -> int) Staged.t
+  (** [slice_offset ?env c f] is a staged reader returning the absolute byte
+      offset of slice field [f] within the buffer. Stage once with
       [Codec.slice_offset c f |> Staged.unstage], then call the resulting
       [buf -> base -> int] reader on the hot path -- 0 allocations versus
-      [Slice.first (Codec.get c f buf base)]'s 4 words.
+      [Slice.first (Codec.get c f buf base)]'s 4 words. [env] supplies input
+      parameters with the same ownership and binding requirements as {!get}.
 
       Type-restricted to [Slice.t] fields, so passing a non-slice field is a
       compile-time error. Raises [Invalid_argument] if [f] was not bound from
       the source {!Field.t} used in [c]. *)
 
   val slice_length :
-    'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
-  (** [slice_length c f] is a staged reader returning the byte length of slice
-      field [f]. Raises [Invalid_argument] if [f] was not bound from the source
-      {!Field.t} used in [c]. *)
+    ?env:Param.env ->
+    'r t ->
+    (Bytesrw.Bytes.Slice.t, 'r) field ->
+    (bytes -> int -> int) Staged.t
+  (** [slice_length ?env c f] is a staged reader returning the byte length of
+      slice field [f]. [env] supplies input parameters with the same ownership
+      and binding requirements as {!get}. Raises [Invalid_argument] if [f] was
+      not bound from the source {!Field.t} used in [c]. *)
 
   (** {2 Bitfield batch access}
 

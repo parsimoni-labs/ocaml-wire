@@ -1196,23 +1196,27 @@ let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
    - [Variable { off; _ }]: byte_slice with variable size, statically
      positioned -- offset is [base + off].
    - [Variable_dynamic { off_fn; _ }]: variable size, dynamic position. *)
-let[@inline] slice_offset (type r) (codec : r t) (f : (Slice.t, r) field) :
+let[@inline] slice_offset (type r) ?env (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
+  require_env ~op:"slice_offset" codec env;
+  let rt = runtime ?env () in
   match field_access ~op:"Codec.slice_offset" codec f with
   | Fixed off -> Staged.stage (fun _buf base -> base + off)
   | Dynamic fn ->
       Staged.stage (fun buf base ->
-          base + fn no_runtime (Input_end.of_bytes buf) buf base)
+          base + fn rt (Input_end.of_bytes buf) buf base)
   | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
   | Variable_dynamic { off_fn; _ } ->
       Staged.stage (fun buf base ->
-          base + off_fn no_runtime (Input_end.of_bytes buf) buf base)
+          base + off_fn rt (Input_end.of_bytes buf) buf base)
   | Bitfield _ ->
       Fmt.invalid_arg
         "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
 
-let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
+let[@inline] slice_length (type r) ?env (codec : r t) (f : (Slice.t, r) field) :
     (bytes -> int -> int) Staged.t =
+  require_env ~op:"slice_length" codec env;
+  let rt = runtime ?env () in
   match (f.typ, field_access ~op:"Codec.slice_length" codec f) with
   | Byte_slice { size }, Fixed _ | Byte_slice { size }, Dynamic _ -> (
       (* Static-size byte_slice: size is a constant expression. *)
@@ -1225,7 +1229,7 @@ let[@inline] slice_length (type r) (codec : r t) (f : (Slice.t, r) field) :
             f.name)
   | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
       Staged.stage (fun buf base ->
-          size_fn no_runtime (Input_end.of_bytes buf) buf base)
+          size_fn rt (Input_end.of_bytes buf) buf base)
   | _, (Fixed _ | Dynamic _) ->
       Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
   | _, Bitfield _ ->

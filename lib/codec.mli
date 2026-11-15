@@ -360,7 +360,10 @@ val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
 val slice_offset :
-  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  ?env:Param.env ->
+  'r t ->
+  (Bytesrw.Bytes.Slice.t, 'r) field ->
+  (bytes -> int -> int) Staged.t
 (** [slice_offset c f] is a staged reader that returns the absolute byte offset
     of slice field [f] within the buffer (i.e. [base + relative_off]).
 
@@ -370,15 +373,22 @@ val slice_offset :
     once with [Codec.slice_offset c f |> Staged.unstage], then call the
     resulting [buf -> base -> int] reader on the hot path.
 
+    [env] supplies input parameters, with the same ownership and binding
+    requirements as {!get}.
+
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a
     compile-time error. Raises [Invalid_argument] if [f] was not bound from the
     source {!Field.t} used in [c]. *)
 
 val slice_length :
-  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  ?env:Param.env ->
+  'r t ->
+  (Bytesrw.Bytes.Slice.t, 'r) field ->
+  (bytes -> int -> int) Staged.t
 (** [slice_length c f] is a staged reader returning the byte length of slice
-    field [f]. Raises [Invalid_argument] if [f] was not bound from the source
-    {!Field.t} used in [c]. *)
+    field [f]. [env] supplies input parameters, with the same ownership and
+    binding requirements as {!get}. Raises [Invalid_argument] if [f] was not
+    bound from the source {!Field.t} used in [c]. *)
 
 type validator
 (** A struct validator without a constructor. The same int-array validation
