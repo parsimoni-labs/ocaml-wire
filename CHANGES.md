@@ -79,6 +79,10 @@
 
 ### Fixed
 
+- The 3D projection of a codec holding an array of `lookup` indices in a
+  sub-codec is accepted by EverParse; it named an undeclared type (#478,
+  @samoht)
+
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
   as in 3D. The codec and the generated C could read different bytes (#453,
   @samoht)

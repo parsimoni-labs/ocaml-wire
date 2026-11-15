@@ -120,6 +120,18 @@ val primitive_width : 'a typ -> int option
 (** [primitive_width t] is the width in bytes of [t] when it is a primitive
     scalar, whose sized region lowers to a guarded scalar plus padding. *)
 
+val inner_wire_size : 'a typ -> int option
+(** [inner_wire_size t] is the fixed byte width of a scalar, bitfield base, unit
+    or fixed sub-codec, seen through [map], [enum] and [where]. *)
+
+val index_bound_of : 'a typ -> int option
+(** [index_bound_of t] is the index bound a lookup carries, seen through the
+    transparent wrappers. *)
+
+val index_bound_elt : 'a typ -> (string * bool expr) option
+(** [index_bound_elt elem] is [Some (elt_var, cond)] when [elem] is a 1-byte
+    element carrying a lookup's index bound: it projects as a refined byte. *)
+
 val optional_region : 'a typ -> bool
 (** [optional_region t] is [true] when [t] is a single-element region, which
     under an optional stays behind a gate and a named wrapper rather than

@@ -589,6 +589,42 @@ let primitive_width : type a. a typ -> int option = function
   | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | _ -> None
 
+let rec inner_wire_size : type a. a typ -> int option = function
+  | Bits { base = U8; _ } -> Some 1
+  | Bits { base = U16 _; _ } -> Some 2
+  | Bits { base = U32 _; _ } -> Some 4
+  | Unit -> Some 0
+  | Map { inner; _ } -> inner_wire_size inner
+  | Enum { base; _ } -> inner_wire_size base
+  | Where { inner; _ } -> inner_wire_size inner
+  | Codec { codec_fixed_size = Some n; _ } -> Some n
+  | t -> primitive_width t
+
+(* The index bound a [cases] / lookup typ carries, seen through the transparent
+   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
+   valid index only when [< n], which the projection emits as a refinement so
+   the generated C validator rejects the same out-of-range inputs the OCaml
+   decoder does. *)
+let rec index_bound_of : type a. a typ -> int option = function
+  | Map { index_bound = Some _ as b; _ } -> b
+  | Map { inner; index_bound = None; _ } -> index_bound_of inner
+  | Where { inner; _ } -> index_bound_of inner
+  | Apply { typ; _ } -> index_bound_of typ
+  | _ -> None
+
+(* A 1-byte array / repeat element that carries an index bound (a lookup index
+   into an [n]-entry table) projects like a [byte_array_where]: every byte is
+   refined to [< n] through a synthesised element struct. Returns the element
+   variable and its constraint, keyed on the bound so equal bounds share a
+   single synthesised typedef. *)
+let index_bound_elt : type a. a typ -> (string * bool expr) option =
+ fun elem ->
+  match (inner_wire_size elem, index_bound_of elem) with
+  | Some 1, Some bound ->
+      let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
+      Some (elt_var, Lt (Ref (I, elt_var), Int bound))
+  | _ -> None
+
 let primitive_region : type a.
     a typ -> (int expr * packed_typ * int * bool) option = function
   | Single_elem { size; elem; at_most } ->
@@ -696,6 +732,14 @@ let emit_refined_byte seen acc elt_var cond =
     acc :=
       typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ]) :: !acc
 
+(* A 1-byte array or repeat element carrying a lookup's index bound renders
+   as a refined byte, [_RefByte_lk<n>]. [refined_byte_typedefs] declares it
+   for the entrypoint's own fields only, so a sub-codec's is declared here. *)
+let emit_index_bound seen acc elem =
+  Option.iter
+    (fun (elt_var, cond) -> emit_refined_byte seen acc elt_var cond)
+    (index_bound_elt elem)
+
 (* A structural key for a sub-codec's struct: its name, its fields' names, and
    each field's shape as [wrap_tag] renders it. Pure, so it can be compared
    where the declaration itself cannot. *)
@@ -753,6 +797,12 @@ let emit_single_elem seen acc typ elem =
       Option.iter
         (fun n -> emit_wrapper seen acc n elem)
         (single_elem_struct elem)
+
+(* The synthesised structs a repeat element renders through: a lookup's
+   refined byte and a closed enum's refined element. *)
+let emit_repeat_elem seen acc elem =
+  emit_index_bound seen acc elem;
+  emit_enum_elem_struct seen acc elem
 
 let rec collect_casetype_decls : type a.
     (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
@@ -817,12 +867,13 @@ let rec collect_casetype_decls : type a.
   | Apply { typ; _ } -> extract typ
   | Repeat { elem; _ } ->
       extract elem;
-      emit_enum_elem_struct seen acc elem;
+      emit_repeat_elem seen acc elem;
       Option.iter
         (fun n -> emit_wrapper seen acc n elem)
         (repeat_elem_struct elem)
   | Array { elem; _ } ->
       extract elem;
+      emit_index_bound seen acc elem;
       (* A 1-byte little-endian closed-enum array element renders as the named
          enum type (declared by [enum_decls]); a wider or big-endian one renders
          through the synthesised refined-element struct, declared here. *)

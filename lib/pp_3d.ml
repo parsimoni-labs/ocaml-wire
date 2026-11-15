@@ -1,6 +1,9 @@
 open Dsl
 open Lower_3d
 
+let inner_wire_size = inner_wire_size
+let index_bound_elt = index_bound_elt
+
 (* The names a field or parameter cannot take in 3D, in the F* EverParse
    writes from it, or in the C KaRaMeL writes from that. The 3D parser rejects
    its own keywords and type names outright; an F* keyword passes 3D but
@@ -284,17 +287,6 @@ type field_suffix =
   | Zeroterm
   | Zeroterm_at_most of int expr
 
-let rec inner_wire_size : type a. a typ -> int option = function
-  | Bits { base = U8; _ } -> Some 1
-  | Bits { base = U16 _; _ } -> Some 2
-  | Bits { base = U32 _; _ } -> Some 4
-  | Unit -> Some 0
-  | Map { inner; _ } -> inner_wire_size inner
-  | Enum { base; _ } -> inner_wire_size base
-  | Where { inner; _ } -> inner_wire_size inner
-  | Codec { codec_fixed_size = Some n; _ } -> Some n
-  | t -> primitive_width t
-
 (* Like [inner_wire_size] but as an [int expr], so explicitly-sized
    types ([byte_array], [byte_slice], [single_elem], etc.) can drive
    the [byte-size] suffix of an enclosing [optional]/[array]. Returns
@@ -360,18 +352,6 @@ end = struct
   let pp t = t
 end
 
-(* The index bound a [cases] / lookup typ carries, seen through the transparent
-   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
-   valid index only when [< n], which the projection emits as a refinement so
-   the generated C validator rejects the same out-of-range inputs the OCaml
-   decoder does. *)
-let rec index_bound_of : type a. a typ -> int option = function
-  | Map { index_bound = Some _ as b; _ } -> b
-  | Map { inner; index_bound = None; _ } -> index_bound_of inner
-  | Where { inner; _ } -> index_bound_of inner
-  | Apply { typ; _ } -> index_bound_of typ
-  | _ -> None
-
 (* Bit width of a typ's wire representation, seen through the same transparent
    wrappers as [index_bound_of] -- used only to decide whether a lookup's
    index bound is exhaustive (see [lookup_is_exhaustive], used by [pp_field]).
@@ -414,19 +394,6 @@ let rec enum_cases_of : type a. a typ -> int list option = function
   | Map { inner; _ } -> enum_cases_of inner
   | Where { inner; _ } -> enum_cases_of inner
   | Apply { typ; _ } -> enum_cases_of typ
-  | _ -> None
-
-(* A 1-byte array / repeat element that carries an index bound (a lookup index
-   into an [n]-entry table) projects like a [byte_array_where]: every byte is
-   refined to [< n] through a synthesised element struct. Returns the element
-   variable and its constraint, keyed on the bound so equal bounds share a
-   single synthesised typedef. *)
-let index_bound_elt : type a. a typ -> (string * bool expr) option =
- fun elem ->
-  match (inner_wire_size elem, index_bound_of elem) with
-  | Some 1, Some bound ->
-      let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
-      Some (elt_var, Lt (Ref (I, elt_var), Int bound))
   | _ -> None
 
 (* The bare base an open enum renders as when it is a fixed-size array element.
