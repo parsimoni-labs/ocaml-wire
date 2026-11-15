@@ -1360,9 +1360,52 @@ let test_bitfield_error_offset () =
       ("\x00\x00\x00\xff\x00", "d", 3);
     ]
 
+let test_set_dependent_byte_refinement () =
+  let check codec field initial expected =
+    let set = Staged.unstage (Codec.set codec field) in
+    let buf = Bytes.of_string initial in
+    (match set buf 0 "A\xff" with
+    | () -> Alcotest.fail "set accepted a byte the field refinement rejects"
+    | exception Invalid_argument _ -> ());
+    Alcotest.(check bytes)
+      "rejected set leaves the buffer untouched" (Bytes.of_string initial) buf;
+    set buf 0 "XY";
+    Alcotest.(check bytes)
+      "valid set writes its own field" (Bytes.of_string expected) buf;
+    Codec.validate codec buf 0
+  in
+  let len = Field.v "len" uint8 in
+  let data =
+    Field.v "data"
+      (byte_array_where ~size:(Field.ref len) ~per_byte:(fun b ->
+           Expr.(b >= int 32 && b <= int 126)))
+  in
+  let static_data = Codec.(data $ snd) in
+  let static_codec =
+    Codec.v "RefinedStatic"
+      (fun len data -> (len, data))
+      Codec.[ len $ fst; static_data ]
+  in
+  check static_codec static_data "\x02AB" "\x02XY";
+  let prefix = Field.v "prefix" (byte_array ~size:(Field.ref len)) in
+  let dynamic_data = Codec.(data $ fun (_, _, data) -> data) in
+  let dynamic_codec =
+    Codec.v "RefinedDynamic"
+      (fun len prefix data -> (len, prefix, data))
+      Codec.
+        [
+          (len $ fun (len, _, _) -> len);
+          (prefix $ fun (_, prefix, _) -> prefix);
+          dynamic_data;
+        ]
+  in
+  check dynamic_codec dynamic_data "\x02abAB" "\x02abXY"
+
 let suite =
   ( "codec",
     [
+      Alcotest.test_case "set: dependent byte refinement" `Quick
+        test_set_dependent_byte_refinement;
       Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
       Alcotest.test_case "rename: roundtrip unchanged" `Quick
         test_rename_roundtrip;
