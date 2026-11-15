@@ -134,6 +134,10 @@
   truncating them. Accepted bindings preserve their original values (#464,
   @samoht)
 
+- `Codec.set` enforces per-byte refinements on variable-length
+  `byte_array_where` fields and leaves the buffer untouched on rejection.
+  Previously it only checked the byte count (#466, @samoht)
+
 ## 1.3.0
 
 ### Added

@@ -903,11 +903,12 @@ let rec build_staged_writer : type a.
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
         Bytes.blit_string s 0 buf (base + off) len
-  | Byte_array_where _, Variable { off; size_fn } ->
+  | Byte_array_where { elt_var; cond; _ }, Variable { off; size_fn } ->
       fun runtime buf base value ->
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
+        Eval.check_byte_refinement ~elt_var ~cond s;
         Bytes.blit_string s 0 buf (base + off) len
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base value ->
@@ -923,12 +924,14 @@ let rec build_staged_writer : type a.
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
         Bytes.blit_string s 0 buf (base + fo) len
-  | Byte_array_where _, Variable_dynamic { off_fn; size_fn } ->
+  | Byte_array_where { elt_var; cond; _ }, Variable_dynamic { off_fn; size_fn }
+    ->
       fun runtime buf base value ->
         let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
+        Eval.check_byte_refinement ~elt_var ~cond s;
         Bytes.blit_string s 0 buf (base + fo) len
   | Where { inner; _ }, _ -> build_staged_writer inner access
   | Enum { base; _ }, _ -> build_staged_writer base access
