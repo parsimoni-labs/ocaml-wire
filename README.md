@@ -338,9 +338,11 @@ dune build
 dune runtest
 ```
 
-The benchmarks compare the OCaml codec against the EverParse-generated C and
-the FFI bridge, so they need `3d.exe` on the `PATH`. The `Makefile` has the
-individual `make bench-*` targets.
+The field-level benchmark compares OCaml field access with EverParse-generated
+C validation and extraction, directly and through FFI. The application
+benchmarks compare OCaml loops with C loops using the generated validators.
+All benchmark targets need EverParse; see [bench/README.md](bench/README.md)
+for the workloads and how to interpret their timing ratios.
 
 ## References
 

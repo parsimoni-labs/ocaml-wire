@@ -4,13 +4,18 @@ All benchmarks derive from the same Wire DSL definition. The field-level
 demo benchmark (`bench/demo/`) compares three tiers:
 
 1. **Pure OCaml** -- `Wire.Codec.get/set` (zero-copy field access)
-2. **EverParse C** -- EverParse-generated verified C validator in a tight C loop
+2. **EverParse C** -- EverParse-generated verified C validator with field extraction in a tight C loop
 3. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
 
 The application benchmarks (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 compare two tiers: Pure OCaml vs EverParse C.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
+
+The C validator checks the schema as it extracts fields. A staged OCaml
+`Codec.get` reads the requested field and does not validate the whole record;
+call `Codec.validate` separately when that is required. The timing ratio
+therefore includes different amounts of validation work.
 
 ## Rules
 
@@ -27,12 +32,12 @@ Per-field read/write performance across all Wire DSL constructs:
 
 - Integer types: uint8, uint16be, uint32be, uint64be
 - Bitfields: bf_uint8, bf_uint16be, bf_uint32be
-- Type combinators: `bool`, `map`, `cases`, `enum`, `where`
+- Type combinators: `bit`, `map`, `lookup`, `enum`, `where`
 - Nested protocols: 3-layer Ethernet->IPv4->TCP traversal
 - Real protocols: CLCW (CCSDS), TCP/IP
 
 ```
-make bench                # requires EverParse (3d.exe in PATH)
+make bench-demo           # requires EverParse (3d.exe in PATH)
 ```
 
 ## Application benchmarks
