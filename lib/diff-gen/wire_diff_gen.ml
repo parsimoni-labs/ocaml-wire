@@ -1,7 +1,7 @@
 (** Code generation for EverParse differential testing.
 
     Thin layer on top of {!Wire_3d}: generates .3d files, runs EverParse,
-    produces C/OCaml stubs, and adds a differential test runner. *)
+    produces C/OCaml stubs, and adds a validator sampling runner. *)
 
 type schema = Wire.Everparse.t = {
   name : string;
@@ -77,7 +77,7 @@ let generate_ml_stubs ~outdir schemas =
 let generate_test_runner ~outdir ?(num_values = 1000) schemas =
   with_out_file ~outdir "diff_test.ml" @@ fun ppf ->
   let pr fmt = Fmt.pf ppf fmt in
-  pr "(* Auto-generated differential test runner *)\n\n";
+  pr "(* Auto-generated validator sampling runner *)\n\n";
   pr "let num_values = %d\n\n" num_values;
   pr "type schema = {\n";
   pr "  name : string;\n";
@@ -96,8 +96,7 @@ let generate_test_runner ~outdir ?(num_values = 1000) schemas =
   pr "let () =\n";
   pr "  let seed = 42 in\n";
   pr "  let rng = Random.State.make [| seed |] in\n";
-  pr "  let total_tests = ref 0 in\n";
-  pr "  let passed = ref 0 in\n";
+  pr "  let total_samples = ref 0 in\n";
   pr "  List.iter (fun schema ->\n";
   pr "    let valid = ref 0 in\n";
   pr "    let invalid = ref 0 in\n";
@@ -107,18 +106,16 @@ let generate_test_runner ~outdir ?(num_values = 1000) schemas =
   pr "        Bytes.set buf i (Char.chr (Random.State.int rng 256))\n";
   pr "      done;\n";
   pr "      let c_ok = schema.c_check buf in\n";
-  pr "      incr total_tests;\n";
-  pr "      if c_ok then incr valid else incr invalid;\n";
-  pr "      incr passed\n";
+  pr "      incr total_samples;\n";
+  pr "      if c_ok then incr valid else incr invalid\n";
   pr "    done;\n";
   pr
     "    Printf.printf \"%%s: %%d valid, %%d invalid (of %%d)\\n\" schema.name \
      !valid !invalid num_values\n";
   pr "  ) schemas;\n";
   pr
-    "  Printf.printf \"Tested %%d values across %%d schemas\\n\" !total_tests \
-     (List.length schemas);\n";
-  pr "  Printf.printf \"All %%d tests passed\\n\" !passed\n"
+    "  Printf.printf \"Sampled %%d values across %%d schemas\\n\" \
+     !total_samples (List.length schemas)\n"
 
 (** {1 Full Pipeline} *)
 

@@ -1,8 +1,10 @@
 (** Code generation for EverParse differential testing.
 
     Generates .3d files from Wire schemas, invokes EverParse, and produces C
-    stubs, OCaml externals, and a test runner for comparing OCaml codecs against
-    EverParse-generated C parsers.
+    stubs, OCaml externals, and a runner that samples acceptance by
+    EverParse-generated C parsers. The runner does not compare against an OCaml
+    oracle; use [Wire_diff] or {!Wire_3d.generate_standalone} for differential
+    testing.
 
     {b Typical usage} ([gen_c.ml]):
     {[
@@ -52,5 +54,6 @@ val generate_ml_stubs : outdir:string -> schema list -> unit
 
 val generate_test_runner :
   outdir:string -> ?num_values:int -> schema list -> unit
-(** [generate_test_runner ~outdir schemas] generates [diff_test.ml] test runner.
-*)
+(** [generate_test_runner ~outdir schemas] generates [diff_test.ml], which
+    reports how many random inputs each C validator accepts and rejects. These
+    are sampling counts, not differential test verdicts. *)
