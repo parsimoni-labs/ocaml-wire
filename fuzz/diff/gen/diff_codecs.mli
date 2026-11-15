@@ -73,6 +73,11 @@ val scan_cases : scan_case list
 (** The structured cases: regions, optional fields, tags, bitfield tests and the
     {!Packet_stack} codec. *)
 
+val packet_payload_corpus : unit -> bytes list
+(** [packet_payload_corpus ()] is long TCP and UDP packets, with options and
+    fragments, of Ethernet frame lengths 1500, 9000, 65535 and 65549 bytes, each
+    with its truncation by one byte. *)
+
 type c_oracle = {
   fields : (string * int) list;
       (** The scalar members of the case's default plug, named by path as

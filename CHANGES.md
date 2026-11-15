@@ -43,6 +43,11 @@
 - `examples/net` has `Packet_stack`: Ethernet with IPv4 and TCP or UDP (#460,
   @samoht)
 
+- `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
+  `BUILD_HARDCAML=1`: lower a `Wire_ocaml.Plan` to a Hardcaml decoder of a
+  bounded frame, or of an AXI4-Stream that keeps only the header prefix the
+  plan reads (#477, @samoht)
+
 ### Changed
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB. A codec with a

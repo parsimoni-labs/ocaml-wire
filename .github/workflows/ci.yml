@@ -102,6 +102,39 @@ jobs:
           BUILD_RUST: 1
           WIRE_FUZZ_SEED: ${{ github.run_id }}
 
+  # Hardcaml is an optional dependency: its lanes build only with
+  # BUILD_HARDCAML=1.
+  hardcaml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BUILD_HARDCAML: 1
+      BUILD_EVERPARSE: 1
+      WIRE_FUZZ_SEED: ${{ github.run_id }}
+      WIRE_FUZZ_REPEAT: 1000
+      WIRE_FUZZ_BUDGET: 0
+      WIRE_DIFF_JOBS: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+      - run: opam install . --deps-only --with-test
+      - run: opam install hardcaml.v0.17.1
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+      - name: Compare hardware with Codec, generated OCaml and EverParse C
+        run: |
+          opam exec -- dune build --profile release \
+            @test/hardcaml/runtest @fuzz/diff/hardcaml/runtest \
+            @fuzz/diff/hardcaml-stream/runtest
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
