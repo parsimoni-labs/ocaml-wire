@@ -31,4 +31,7 @@
   (alcobar :with-test)
   (re (>= 1.11))
   (mdx :with-test)
-  (odoc :with-doc)))
+  (odoc :with-doc))
+ (depopts
+  (hardcaml (= v0.17.1))
+  base))

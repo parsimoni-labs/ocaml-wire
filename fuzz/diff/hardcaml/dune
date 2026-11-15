@@ -1,0 +1,87 @@
+(library
+ (name hardware_stream_io)
+ (modules stream_io)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries base wire.ocaml wire_hardcaml hardcaml hardware_test_io))
+
+(library
+ (name hardware_test_io)
+ (modules hardware_test_io)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries hardcaml))
+
+(executable
+ (name fuzz)
+ (modules fuzz)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries
+  base
+  wire
+  wire_hardcaml
+  wire.ocaml
+  hardcaml
+  diff_codecs
+  diff_ocaml
+  diff_driver
+  fuzz_gen
+  ocaml_index
+  hardware_test_io
+  fmt))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_HARDCAML=} "1")
+   (<> %{profile} afl)))
+ (action
+  (setenv
+   WIRE_HARDCAML_CAPACITY
+   %{env:WIRE_HARDCAML_CAPACITY=64}
+   (setenv
+    WIRE_HARDCAML_CASE
+    %{env:WIRE_HARDCAML_CASE=all}
+    (run
+     %{exe:fuzz.exe}
+     -s
+     %{env:WIRE_FUZZ_SEED=42}
+     -r
+     %{env:WIRE_FUZZ_REPEAT=1000}
+     --budget
+     %{env:WIRE_FUZZ_BUDGET=0})))))
+
+; As in fuzz/diff/rust, the alias gates on the profile alone, so naming it
+; without BUILD_HARDCAML=1 fails rather than skipping the campaign silently.
+
+(rule
+ (alias fuzz)
+ (enabled_if
+  (= %{profile} afl))
+ (deps fuzz.exe ../../afl.dict)
+ (action
+  (setenv
+   WIRE_HARDCAML_CAPACITY
+   %{env:WIRE_HARDCAML_CAPACITY=64}
+   (setenv
+    WIRE_HARDCAML_CASE
+    %{env:WIRE_HARDCAML_CASE=all}
+    (progn
+     (run %{exe:fuzz.exe} --gen-corpus corpus)
+     (run
+      afl-fuzz
+      -V
+      %{env:WIRE_AFL_SECONDS=60}
+      -t
+      8000
+      -x
+      ../../afl.dict
+      -i
+      corpus
+      -o
+      _fuzz
+      --
+      ./fuzz.exe
+      @@))))))
