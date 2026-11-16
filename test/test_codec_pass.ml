@@ -872,6 +872,77 @@ let test_v_rejects_bad_description_eagerly () =
               ] );
     ]
 
+(* A fixed-size record's frame check bounds its byte spans, so a bitfield
+   compared with a literal between two spans still takes the interval scan,
+   and agrees with the general path on every comparison, at and around the
+   bound, and on a buffer too short for the frame. *)
+let test_fixed_spans_keep_intervals () =
+  let outcome c buf =
+    match Codec.validate_exn c buf 0 with
+    | () -> "ok"
+    | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let comparisons =
+    Expr.
+      [
+        (">=", fun v -> v >= int 5);
+        (">", fun v -> v > int 5);
+        ("<=", fun v -> v <= int 5);
+        ("<", fun v -> v < int 5);
+        ("=", fun v -> v = int 5);
+        ("<>", fun v -> v <> int 5);
+      ]
+  in
+  (* Each nibble at either end of either byte runs through values at and
+     around the bound, whichever end the bitfield sits at. *)
+  let bytes =
+    [ 0x00; 0x04; 0x05; 0x06; 0x0f; 0x40; 0x50; 0x60; 0xf0; 0x45; 0x54; 0xff ]
+  in
+  List.iter
+    (fun (base_name, base) ->
+      List.iter
+        (fun (op, cmp) ->
+          let c =
+            Codec.v "Spans"
+              (fun head v rest tail -> (head, v, rest, tail))
+              Codec.
+                [
+                  ( Field.v "head" (byte_array ~size:(int 12))
+                  $ fun (h, _, _, _) -> h );
+                  ( Field.v "v" ~self_constraint:cmp (bits ~width:4 base)
+                  $ fun (_, v, _, _) -> v );
+                  ( Field.v "rest"
+                      (bits ~width:(if base = U8 then 4 else 12) base)
+                  $ fun (_, _, r, _) -> r );
+                  ( Field.v "tail" (byte_array ~size:(int 6))
+                  $ fun (_, _, _, t) -> t );
+                ]
+          in
+          let name = Fmt.str "%s %s 5" base_name op in
+          Alcotest.(check bool)
+            (name ^ ": interval scan") true
+            (List.mem "pass.interval" (Private.Testing.paths c));
+          let general = Private.Testing.general c in
+          let size = if base = U8 then 19 else 20 in
+          List.iter
+            (fun hi ->
+              List.iter
+                (fun lo ->
+                  let buf = Bytes.make size '\000' in
+                  Bytes.set_uint8 buf 12 hi;
+                  if size = 20 then Bytes.set_uint8 buf 13 lo;
+                  let at = Fmt.str "%s: bytes %02x %02x" name hi lo in
+                  Alcotest.(check string)
+                    at (outcome general buf) (outcome c buf);
+                  let short = Bytes.sub buf 0 (size - 1) in
+                  Alcotest.(check string)
+                    (at ^ ", short buffer") (outcome general short)
+                    (outcome c short))
+                bytes)
+            bytes)
+        comparisons)
+    [ ("U8", U8); ("U16be", U16be); ("U16", U16) ]
+
 let suite =
   ( "codec_pass",
     [
@@ -885,6 +956,8 @@ let suite =
         test_decode_scalars_agree_with_get;
       Alcotest.test_case "decode: offset out of range" `Quick
         test_decode_offset_out_of_range;
+      Alcotest.test_case "check: fixed spans keep the interval scan" `Quick
+        test_fixed_spans_keep_intervals;
       Alcotest.test_case "check: constraint intervals" `Quick
         test_constraint_intervals;
       Alcotest.test_case "check: a failure reports this frame's value" `Quick
