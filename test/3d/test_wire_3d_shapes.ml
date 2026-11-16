@@ -7,13 +7,9 @@ open Wire.Everparse.Raw
    [Test_wire_3d]. *)
 let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
 
-let read_file path =
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+(* Binary mode: on Windows a text channel drops each CR, so it yields fewer
+   bytes than [in_channel_length] counts. *)
+let read_file path = In_channel.with_open_bin path In_channel.input_all
 
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 
