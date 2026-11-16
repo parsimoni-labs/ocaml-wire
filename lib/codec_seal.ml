@@ -1146,8 +1146,8 @@ let step_uses_arr = function
   | Range { store; _ } -> store
   | Slot _ | Check _ | Full _ | Covered _ -> true
 
-(* The steps the plain check pass runs: a layout pass covers the plain spans'
-   bounds checks. *)
+(* The steps the plain check pass runs: a layout pass, or a fixed-size frame
+   check, covers the plain spans' bounds checks. *)
 let plain_steps ~where steps =
   let steps =
     Array.of_list
@@ -1622,10 +1622,18 @@ let validate_sized wire_size_info min_size run runtime input_end buf off end_off
 
 (* The check pass of a record without parameters and, for a variable-size
    one, its layout pass with the check pass it leaves; the full check pass is
-   what the layout pass falls back on. *)
+   what the layout pass falls back on. A fixed-size record's frame check
+   bounds every span in it, as a layout pass does, so its check pass leaves
+   the spans' bounds checks out too. *)
 let plain_passes ~wire_size_info ~n_params ~min_size prefix layout ~where ~steps
     ~needs_arr pass =
-  let check = pass steps needs_arr in
+  let check =
+    match wire_size_info with
+    | Fixed _ ->
+        let steps, needs_arr = plain_steps ~where steps in
+        pass steps needs_arr
+    | Variable _ -> pass steps needs_arr
+  in
   let layout =
     match wire_size_info with
     | Variable _ when n_params = 0 ->
