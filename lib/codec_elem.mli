@@ -63,6 +63,10 @@ val iter_param_refs_fields :
 (** [iter_param_refs_fields f fields where] calls [f] on every parameter the
     fields and [where] refer to, including those of embedded codecs. *)
 
+val param_use : Types.field list -> Codec_repr.param_use
+(** [param_use fields] is how the expressions of [fields], and of the codecs
+    they embed, read the output parameters their actions assign. *)
+
 val tag_byte_size : 'a Types.typ -> int
 (** [tag_byte_size t] is the width of the casetype tag [t]. *)
 
@@ -80,3 +84,26 @@ val elem_size_of :
   'a Types.typ -> Codec_repr.runtime -> Input_end.t -> bytes -> int -> int
 (** [elem_size_of t runtime input_end buf off] is the wire size of the element
     of type [t] at [off]. *)
+
+val unbound_where_ref : string -> 'a
+(** [unbound_where_ref name] raises [Invalid_argument]: a [where] clause refers
+    to [name], which no field or parameter binds. *)
+
+val iter_refs :
+  param:(Param.packed -> unit) ->
+  field:(string -> unit) ->
+  'a Types.expr ->
+  unit
+(** [iter_refs ~param ~field e] calls [param] on every parameter and [field] on
+    every field name [e] reads. *)
+
+val unbound_check_ref : string -> 'a
+(** [unbound_check_ref name] raises [Invalid_argument]: a field constraint or
+    action refers to [name], which no field binds. *)
+
+val used_idx : ('a, unit) Hashtbl.t -> ('b -> 'a) -> 'b -> 'a
+(** [used_idx used idx name] is [idx name], after noting the slot in [used]. *)
+
+val mask32 : int
+(** [mask32] is the low 32 bits set, built from an [int64] literal so a 31-bit
+    [int] build does not truncate it. *)

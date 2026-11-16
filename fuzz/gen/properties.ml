@@ -268,9 +268,9 @@ let check_encode_safety label ?env g value =
       | Ok back ->
           if not (g.equal back value) then
             Alcobar.failf
-              "%s encode safety: encode wrote bytes that decode to a different \
+              "%s encode safety: encode wrote %a, which decodes to a different \
                value"
-              label
+              label pp_hex (string_of_bytes buf)
       | Error e ->
           Alcobar.failf
             "%s encode safety: encode wrote bytes its own decoder rejects (%a)"
@@ -392,6 +392,9 @@ type 'r addressed = {
   acodec : 'r Wire.Codec.t;
   achecks : 'r field_check list;
   anames : string list;
+  ggeneral : 'r Wire.Codec.t;
+      (* The gen's codec, and [acodec], with every fast path off. *)
+  ageneral : 'r Wire.Codec.t;
 }
 
 (* [g.typ] is the whole schema for a [Codec.v] gen ([Wire.codec] of its own
@@ -401,19 +404,24 @@ type 'r addressed = {
    either. *)
 let addressed g =
   let anames = leaf_slot_name :: typ_field_names g.typ in
+  let ggeneral = Wire.Private.Testing.general g.codec in
   match g.fields with
   | [] ->
       let field = leaf_field g.typ in
+      let acodec = Wire.Codec.v leaf_codec_name Fun.id [ field ] in
       {
-        acodec = Wire.Codec.v leaf_codec_name Fun.id [ field ];
+        acodec;
         achecks =
           [
             Field_check
               { name = leaf_slot_name; field; proj = Fun.id; equal = g.equal };
           ];
         anames;
+        ggeneral;
+        ageneral = Wire.Private.Testing.general acodec;
       }
-  | fs -> { acodec = g.codec; achecks = fs; anames }
+  | fs ->
+      { acodec = g.codec; achecks = fs; anames; ggeneral; ageneral = ggeneral }
 
 (* Staging refuses on a field whose access shape has no staged accessor, which
    is a documented gap in the accessor API rather than a failure: skip. *)
@@ -1057,3 +1065,210 @@ let check_frame_isolation label kind ?env a g bs interloper =
            reader has been used on another frame"
           label name)
     snaps
+
+(* {1 Fast paths against the general path}
+
+   [Codec] compiles a codec on first use and picks fast paths from its shape:
+   a plain decode and validate over a fixed frame, interval tests and byte
+   tables, a layout pass over byte spans, a staged encode, [Codec.valid] and
+   [Codec.read]. Each must answer exactly what the general path answers: the
+   same value, the same error at the same offset for the same field, the same
+   bytes, the same [Invalid_argument]. {!Wire.Private.Testing.general} is the
+   same codec with every fast path off, the oracle for a performance rewrite.
+
+   The first call on a codec compiles it and runs a different entry point
+   from the later calls, so a codec not yet compiled
+   ({!Wire.Private.Testing.fresh}) must answer like a warm one too. *)
+
+module Testing = Wire.Private.Testing
+
+(* One entry point's whole answer. Any other exception is a crash, which the
+   property reports as it is. *)
+type 'a answer = Value of 'a | Parse of Wire.parse_error | Invalid of string
+
+let answer f =
+  match f () with
+  | v -> Value v
+  | exception Wire.Parse_error e -> Parse e
+  | exception Invalid_argument m -> Invalid m
+
+let map_answer f = function
+  | Value v -> Value (f v)
+  | (Parse _ | Invalid _) as a -> a
+
+let same_answer equal a b =
+  match (a, b) with
+  | Value x, Value y -> equal x y
+  | Parse x, Parse y ->
+      Wire.equal_error_kind x.Wire.kind y.Wire.kind
+      && x.Wire.at = y.Wire.at
+      && List.equal String.equal x.Wire.field y.Wire.field
+  | Invalid x, Invalid y -> String.equal x y
+  | (Value _ | Parse _ | Invalid _), _ -> false
+
+let pp_answer pp_value ppf = function
+  | Value v -> pp_value ppf v
+  | Parse e ->
+      Fmt.pf ppf "Parse_error (%a, field [%s])" Wire.pp_parse_error e
+        (String.concat "." e.Wire.field)
+  | Invalid m -> Fmt.pf ppf "Invalid_argument %S" m
+
+let pp_some ppf _ = Fmt.string ppf "a value"
+
+let check_answer label what ?(pp = pp_some) ~equal (na, a) (nb, b) =
+  if not (same_answer equal a b) then
+    Alcobar.failf "%s: %s: %s gives %a but %s gives %a" label what na
+      (pp_answer pp) a nb (pp_answer pp) b
+
+(* A codec compiled before the call under test, so the call takes the path a
+   warm codec takes. *)
+let warm c = ignore (Wire.Codec.min_wire_size c)
+
+let decode_answer ?env c bs =
+  answer (fun () -> Wire.Codec.decode_exn ?env c bs 0)
+
+let validate_answer ?env c bs =
+  answer (fun () -> Wire.Codec.validate ?env c bs 0)
+
+let valid_answer ?env c bs = answer (fun () -> Wire.Codec.valid ?env c bs 0)
+let unit_equal () () = true
+
+let check_core label ?env ~equal ~names:((nf, fast), (ng, general)) bs =
+  check_answer label "Codec.decode" ~equal
+    (nf, decode_answer ?env fast bs)
+    (ng, decode_answer ?env general bs);
+  check_answer label "Codec.validate" ~equal:unit_equal
+    (nf, validate_answer ?env fast bs)
+    (ng, validate_answer ?env general bs)
+
+(* [decode] and [validate] of a warm codec against the general path. Cheap,
+   and for a composition drawn per sample the general codec is drawn with it. *)
+let check_fast_general_core label kind ?env g general bs =
+  warm g.codec;
+  check_core
+    (Fmt.str "%s %s" label kind)
+    ?env ~equal:g.equal
+    ~names:(("the fast path", g.codec), ("the general path", general))
+    bs
+
+let field_get ?env c f bs =
+  answer (fun () -> Wire.Staged.unstage (Wire.Codec.get ?env c f) bs 0)
+
+(* [valid] then [read] of each field, against [validate] then [get] of the
+   general codec, and [get] of each field on both. *)
+let check_accessors label ?env ~fast ~general checks bs =
+  let fast_valid = valid_answer ?env fast bs in
+  check_answer label "Codec.valid" ~equal:unit_equal
+    ("the fast path", map_answer ignore fast_valid)
+    ("the general path", map_answer ignore (valid_answer ?env general bs));
+  List.iter
+    (fun (Field_check f) ->
+      let reference = field_get ?env general f.field bs in
+      check_answer label
+        ("Codec.get of field " ^ f.name)
+        ~equal:f.equal
+        ("the fast path", field_get ?env fast f.field bs)
+        ("the general path", reference);
+      match fast_valid with
+      | Value v ->
+          check_answer label
+            ("Codec.read of field " ^ f.name)
+            ~equal:f.equal
+            ( "Codec.read",
+              answer (fun () ->
+                  Wire.Staged.unstage (Wire.Codec.read ?env fast f.field) v) )
+            ("Codec.get on the general path", reference)
+      | Parse _ | Invalid _ -> ())
+    checks
+
+let check_fast_general label kind ?env a g bs =
+  check_fast_general_core label kind ?env g a.ggeneral bs;
+  warm a.acodec;
+  check_accessors
+    (Fmt.str "%s %s" label kind)
+    ?env ~fast:a.acodec ~general:a.ageneral a.achecks bs
+
+(* Every entry point once on a codec not yet compiled, against the same entry
+   point on the warm one. *)
+let check_cold_warm label kind ?env a g bs =
+  let label = Fmt.str "%s %s" label kind in
+  warm g.codec;
+  warm a.acodec;
+  let names = ("the first call", "a later call") in
+  let cold_vs_warm what ~equal f =
+    check_answer label what ~equal
+      (fst names, f (Testing.fresh g.codec))
+      (snd names, f g.codec)
+  in
+  cold_vs_warm "Codec.decode" ~equal:g.equal (fun c -> decode_answer ?env c bs);
+  cold_vs_warm "Codec.validate" ~equal:unit_equal (fun c ->
+      validate_answer ?env c bs);
+  check_answer label "Codec.valid" ~equal:unit_equal
+    ( fst names,
+      map_answer ignore (valid_answer ?env (Testing.fresh a.acodec) bs) )
+    (snd names, map_answer ignore (valid_answer ?env a.acodec bs));
+  match a.achecks with
+  | Field_check f :: _ ->
+      check_answer label
+        ("Codec.get of field " ^ f.name)
+        ~equal:f.equal
+        (fst names, field_get ?env (Testing.fresh a.acodec) f.field bs)
+        (snd names, field_get ?env a.acodec f.field bs)
+  | [] -> ()
+
+(* A value whose getters answer the same on successive calls. A flapping one
+   has no single encoding to compare byte for byte; [check_encode_safety]
+   holds its encoding to one of the answers instead. *)
+let pure_value g v =
+  List.for_all (fun (Field_check f) -> f.equal (f.proj v) (f.proj v)) g.fields
+
+let encode_answer ?env c v ~len ~off =
+  let buf = Bytes.make len '\xa5' in
+  map_answer
+    (fun () -> Bytes.to_string buf)
+    (answer (fun () -> Wire.Codec.encode ?env c v buf off))
+
+(* [encode] into a buffer of exactly the value's size, one short of it, and
+   one behind a prefix, on the fast, the general and a cold codec. *)
+let check_encode_paths label kind ?env a g value =
+  if pure_value g value then
+    match Wire.Codec.size_of_value ?env g.codec value with
+    | exception Invalid_argument _ -> ()
+    | n ->
+        warm g.codec;
+        let label = Fmt.str "%s %s" label kind in
+        List.iter
+          (fun (len, off) ->
+            if len >= 0 then begin
+              let what = Fmt.str "Codec.encode (%d bytes at %d)" len off in
+              let fast = encode_answer ?env g.codec value ~len ~off in
+              check_answer label what ~pp:pp_hex ~equal:String.equal
+                ("the fast path", fast)
+                ( "the general path",
+                  encode_answer ?env a.ggeneral value ~len ~off );
+              check_answer label what ~pp:pp_hex ~equal:String.equal
+                ("a later call", fast)
+                ( "the first call",
+                  encode_answer ?env (Testing.fresh g.codec) value ~len ~off )
+            end)
+          [ (n, 0); (n - 1, 0); (n + 3, 3) ]
+
+(* [set] of each field on the fast and the general codec, from the same
+   buffer. *)
+let check_set_paths label a value bs =
+  List.iter
+    (fun (Field_check f) ->
+      let set c =
+        let buf = Bytes.copy bs in
+        map_answer
+          (fun () -> Bytes.to_string buf)
+          (answer (fun () ->
+               Wire.Staged.unstage (Wire.Codec.set c f.field) buf 0
+                 (f.proj value)))
+      in
+      check_answer label
+        ("Codec.set of field " ^ f.name)
+        ~pp:pp_hex ~equal:String.equal
+        ("the fast path", set a.acodec)
+        ("the general path", set a.ageneral))
+    a.achecks

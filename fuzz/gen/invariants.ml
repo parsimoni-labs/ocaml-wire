@@ -89,34 +89,6 @@ let expected_registry_labels =
     "zeroterm";
     "zeroterm_at_most(1)";
     "zeroterm_at_most(8)";
-    "bits(1,U8)";
-    "bits(1,U8,Lsb)";
-    "bits(3,U8)";
-    "bits(3,U8,Lsb)";
-    "bits(7,U8)";
-    "bits(7,U8,Lsb)";
-    "bits(8,U8)";
-    "bits(8,U8,Lsb)";
-    "bits(1,U16)";
-    "bits(15,U16)";
-    "bits(16,U16)";
-    "bits(16,U16,Lsb)";
-    "bits(1,U16be)";
-    "bits(10,U16be)";
-    "bits(4,U16be)";
-    "bits(15,U16be,Lsb)";
-    "bits(16,U16be)";
-    "bits(16,U16be,Lsb)";
-    "bits(1,U32)";
-    "bits(17,U32)";
-    "bits(17,U32,Lsb)";
-    "bits(32,U32,Lsb)";
-    "bits(1,U32be)";
-    "bits(31,U32be)";
-    "bits(31,U32be,Lsb)";
-    "bits(32,U32be)";
-    "bits(32,U32be,Lsb)";
-    "bits(4,U32,Lsb)";
     "bitpack_u8_msb(1,2,5)";
     "bitpack_u8_lsb(1,2,5)";
     "bitpack_u8_spill(5,5)";
@@ -195,6 +167,13 @@ let expected_registry_labels =
     "nan_float64";
   ]
 
+(* The [bits] shapes this platform's [int] holds (see [bits_shapes]). *)
+let expected_bits_labels =
+  List.filter_map
+    (fun ((width, _, _) as shape) ->
+      if int_holds_width width then Some (bits_label shape) else None)
+    bits_shapes
+
 let expected_fixed_labels =
   [
     "u8";
@@ -271,11 +250,13 @@ let expected_sampler_labels =
     "twhere";
     "fconstraint";
   ]
+  @ any_labels [ flat_check_order; flat_table; flat_fixed_steps; wide 6 ]
 
 let check_registry_invariants () =
   let labels = List.map fst registry in
   assert_no_duplicates "registry" labels;
-  assert_contains "registry" labels expected_registry_labels
+  assert_contains "registry" labels
+    (expected_registry_labels @ expected_bits_labels)
 
 let check_vocabulary_group (group, labels) =
   if labels = [] then Alcobar.failf "%s is empty" group;
@@ -481,8 +462,54 @@ let check_field_reach () =
        registry entries out of %d"
       readable writable multi (List.length registry)
 
+(* Every fast path [Codec] can select must be selected by some codec the
+   fuzzer draws -- a registry entry, a composition leaf or a fixed-seed sample
+   -- or the oracles comparing fast and general paths never run it. Computed
+   once: the sample builds its codecs afresh. *)
+let missing_paths =
+  lazy
+    (let paths g = Wire.Private.Testing.paths g.codec in
+     let reached =
+       List.concat_map (fun (_, Pack g) -> paths g) registry
+       @ List.concat_map
+           (fun (Any a) -> paths a.g)
+           (fixed_leaves @ var_leaves @ env_leaves @ flat_leaves)
+       @ List.concat_map
+           (fun (_, Pack g) -> paths g)
+           (sample ~seed:42 ~count:64)
+     in
+     List.filter
+       (fun p -> not (List.mem p reached))
+       Wire.Private.Testing.all_paths)
+
+let check_path_coverage () =
+  match Lazy.force missing_paths with
+  | [] -> ()
+  | missing ->
+      Alcobar.failf "no codec the fuzzer draws selects the fast paths: %s"
+        (String.concat ", " missing)
+
+(* A check with no random input. Alcobar runs a case's body on every
+   iteration, each under its per-iteration timeout, so such a check only
+   repeated itself, and a slow one could cross the timeout on a slow runner:
+   the sampler checks build hundreds of codecs. Run it once, when the suite is
+   built, and let the case report that outcome. AFL runs keep the plain body. *)
 let const_case name check =
-  Alcobar.test_case name Alcobar.[ Alcobar.const () ] (fun () -> check ())
+  let outcome =
+    if afl_mode () then None
+    else
+      Some
+        (match check () with
+        | () -> Ok ()
+        | exception e -> Error (e, Printexc.get_raw_backtrace ()))
+  in
+  Alcobar.test_case name
+    Alcobar.[ Alcobar.const () ]
+    (fun () ->
+      match outcome with
+      | None -> check ()
+      | Some (Ok ()) -> ()
+      | Some (Error (e, bt)) -> Printexc.raise_with_backtrace e bt)
 
 let invariant_cases label =
   [
@@ -496,4 +523,5 @@ let invariant_cases label =
     const_case (label ^ " sampler distribution") check_sampler_distribution;
     const_case (label ^ " sampler nesting") check_sampler_nesting;
     const_case (label ^ " field access reach") check_field_reach;
+    const_case (label ^ " fast path coverage") check_path_coverage;
   ]

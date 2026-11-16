@@ -54,12 +54,20 @@ let test_everparse_name () =
     "rpmsg_endpoint_info -> RpmsgEndpointInfo" "RpmsgEndpointInfo"
     (Wire_3d.everparse_name "rpmsg_endpoint_info");
   (* Empty string *)
-  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "")
+  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "");
+  (* A capital after a digit is lowercased, as EverParse does. *)
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string) name expected (Wire_3d.everparse_name name))
+    [
+      ("Foo2Bar", "Foo2bar");
+      ("TPM2B", "Tpm2b");
+      ("ScanBitGuardsU16BEMsb", "ScanBitGuardsU16bemsb");
+    ]
 
 (* [pascal_case] mirrors EverParse's wrapper-symbol mangling. EverParse builds a
    wrapper as [pascal_case (module ^ "_check_" ^ codec)]; these expectations were
-   read straight off EverParse's generated [<Module>Wrapper.h]. The digit cases
-   are the ones [everparse_name] gets wrong (it keeps the post-digit capital). *)
+   read straight off EverParse's generated [<Module>Wrapper.h]. *)
 let test_pascal_case () =
   let check input expected =
     Alcotest.(check string)
@@ -221,6 +229,12 @@ let test_name_collision () =
   rejects "same C identifier (plug)"
     (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
+  rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
+    [ "Foo2bar" ];
+  (* [FooBar.3d] and [Foobar.3d] are one file where the file system folds
+     case. *)
+  rejects "files differing in case" generate_3d [ "FooBar"; "Foobar" ]
+    [ "\"FooBar\""; "\"Foobar\""; "Foobar.3d" ];
   (* Distinct names still generate. *)
   generate_3d [ schema_named "Alpha"; schema_named "Beta" ];
   Alcotest.(check bool)
@@ -551,28 +565,45 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
-let differential_ok ~name ~package ~corpus codecs =
+(* Build the package's validator and [agree] once, then pass [f] a function that
+   runs [agree] on a corpus and returns its exit status and output. *)
+let with_agree ~name ~package codecs f =
   let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
-  Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
-  let oc = open_out (Filename.concat tmpdir "corpus") in
-  (match corpus with
-  | `Fuzz count ->
-      let ppf = Format.formatter_of_out_channel oc in
-      Wire_3d.generate_corpus ~count ppf codecs
-  | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
-  close_out oc;
-  let base = String.capitalize_ascii name in
-  let cmd =
-    Fmt.str
-      "cd %s && cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o \
-       && cc %s %s agree.c lib.a -o agree && ./agree corpus 2>&1"
-      tmpdir Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base
-      base base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+  Fun.protect
+    ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir))
+    (fun () ->
+      Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
+      let sh cmd =
+        let ic = Fmt.kstr Unix.open_process_in "cd %s && %s 2>&1" tmpdir cmd in
+        let output = In_channel.input_all ic in
+        (Unix.close_process_in ic, output)
+      in
+      let base = String.capitalize_ascii name in
+      let run corpus =
+        let oc = open_out (Filename.concat tmpdir "corpus") in
+        (match corpus with
+        | `Fuzz count ->
+            let ppf = Format.formatter_of_out_channel oc in
+            Wire_3d.generate_corpus ~count ppf codecs
+        | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
+        close_out oc;
+        sh "./agree corpus"
+      in
+      match
+        Fmt.kstr sh
+          "cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o && cc \
+           %s %s agree.c lib.a -o agree"
+          Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base base
+          base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+      with
+      | Unix.WEXITED 0, _ -> f run
+      | _, output ->
+          Alcotest.failf "agree for %s does not build:\n%s" name output)
+
+let differential_ok ~name ~package ~corpus codecs =
+  let status, output =
+    with_agree ~name ~package codecs (fun run -> run corpus)
   in
-  let ic = Unix.open_process_in cmd in
-  let output = In_channel.input_all ic in
-  let status = Unix.close_process_in ic in
-  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   match status with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED n ->
@@ -613,6 +644,53 @@ let test_doc_differential_nested_regions () =
       Wire_3d.pack diff_nested_at_most_codec;
     ]
 
+(* A constrained Msb_first group in a sub-codec, embedded as a field and as an
+   array element: the C validator must read the same bits the codec does, so
+   the byte the differential fuzzer found ([0xab]: [a = 5], [b = 11] from the
+   top of the byte, [3] and [21] from the bottom) is accepted on both sides. *)
+let diff_msb_inner base name =
+  let open Wire in
+  Codec.v name
+    (fun a b -> (a, b))
+    Codec.
+      [
+        Field.v "a"
+          ~self_constraint:(fun r -> Expr.(r <= int 5))
+          (bits ~width:3 base)
+        $ fst;
+        Field.v "b"
+          ~self_constraint:(fun r -> Expr.(r <= int 20))
+          (bits ~width:5 base)
+        $ snd;
+      ]
+
+let diff_msb_field_codec =
+  let open Wire in
+  let inner = diff_msb_inner U8 "MsbInner" in
+  Codec.v "MsbField"
+    (fun g x -> (g, x))
+    Codec.[ Field.v "g" (codec inner) $ fst; Field.v "x" uint8 $ snd ]
+
+let diff_msb_array_codec =
+  let open Wire in
+  let inner = diff_msb_inner U16 "MsbInner16" in
+  Codec.v "MsbArray" Fun.id
+    Codec.[ Field.v "items" (array ~len:(int 2) (codec inner)) $ Fun.id ]
+
+let test_doc_differential_msb_sub_codec () =
+  needs_3d_exe ();
+  differential_ok ~name:"msbspec" ~package:"msb-doc"
+    ~corpus:
+      (`Lines
+         [
+           "MsbField - ab00 1";
+           "MsbField - c000 0";
+           "MsbField - 1500 0";
+           "MsbArray - 00ab00ab 1";
+           "MsbArray - 0015a000 0";
+         ])
+    [ Wire_3d.pack diff_msb_field_codec; Wire_3d.pack diff_msb_array_codec ]
+
 let test_doc_differential_region_cardinality () =
   needs_3d_exe ();
   differential_ok ~name:"invariantspec" ~package:"invariant-doc"
@@ -633,6 +711,104 @@ let test_doc_differential_region_cardinality () =
       Wire_3d.pack diff_repeat_exact_codec;
       Wire_3d.pack diff_nested_exact_codec;
     ]
+
+(* A byte span sized [Length - 7] with no constraint on [Length], and an
+   optional [nested] and [nested_at_most] region over one scalar: Codec and
+   the EverParse validator must accept the same inputs. *)
+let diff_span_sub_codec =
+  let open Wire in
+  let len = Field.v "Length" uint16be in
+  Codec.v "SpanSub"
+    (fun len data -> (len, data))
+    Codec.
+      [
+        len $ fst;
+        Field.v "Data" (byte_array ~size:Expr.(Field.ref len - int 7)) $ snd;
+      ]
+
+let diff_opt_region_codec name region =
+  let open Wire in
+  let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+  Codec.v name
+    (fun t s v -> (t, s, v))
+    Codec.
+      [
+        (tag $ fun (t, _, _) -> t);
+        (size $ fun (_, s, _) -> s);
+        ( Field.optional "value"
+            ~present:Expr.(Field.ref tag = int 1)
+            (region ~size:(Field.ref size) uint16be)
+        $ fun (_, _, v) -> v );
+      ]
+
+let diff_opt_exact_codec =
+  diff_opt_region_codec "OptRegionExact" (fun ~size t -> Wire.nested ~size t)
+
+let diff_opt_at_most_codec =
+  diff_opt_region_codec "OptRegionAtMost" (fun ~size t ->
+      Wire.nested_at_most ~size t)
+
+(* A corpus line for [hex], after checking that the codec gives [accepted]:
+   the record decodes and spans the whole input. *)
+let corpus_line name c hex accepted =
+  let buf =
+    Bytes.init
+      (String.length hex / 2)
+      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
+  in
+  let codec_accepts =
+    match Codec.decode c buf 0 with
+    | Error _ -> false
+    | Ok _ -> Codec.wire_size_at c buf 0 = Bytes.length buf
+  in
+  Alcotest.(check bool) (name ^ " " ^ hex) accepted codec_accepts;
+  Fmt.str "%s - %s %d" name hex (Bool.to_int accepted)
+
+let test_doc_differential_span_and_scalar_regions () =
+  needs_3d_exe ();
+  let lines name c cases =
+    List.map (fun (hex, ok) -> corpus_line name c hex ok) cases
+  in
+  let codecs =
+    [
+      Wire_3d.pack diff_span_sub_codec;
+      Wire_3d.pack diff_opt_exact_codec;
+      Wire_3d.pack diff_opt_at_most_codec;
+    ]
+  in
+  let fuzzed = Fmt.str "%a" (Wire_3d.generate_corpus ~count:128) codecs in
+  differential_ok ~name:"regionspec" ~package:"region-doc"
+    ~corpus:
+      (`Lines
+         (lines "SpanSub" diff_span_sub_codec
+            [
+              ("0007", true);
+              ("0009aabb", true);
+              ("0006", false);
+              ("0000", false);
+              ("0009aa", false);
+              ("0007aa", false);
+            ]
+         @ lines "OptRegionExact" diff_opt_exact_codec
+             [
+               ("0102aabb", true);
+               ("0005", true);
+               ("0101aa", false);
+               ("0103aabbcc", false);
+               ("0104aabbccdd", false);
+               ("0002aabb", false);
+             ]
+         @ lines "OptRegionAtMost" diff_opt_at_most_codec
+             [
+               ("0102aabb", true);
+               ("0103aabbcc", true);
+               ("0104aabbccdd", true);
+               ("0000", true);
+               ("0101aa", false);
+               ("0103aabb", false);
+             ]
+         @ String.split_on_char '\n' (String.trim fuzzed)))
+    codecs
 
 (* The installed standalone archive must export only the checked
    [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
@@ -713,6 +889,60 @@ let test_doc_differential_signed () =
   differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
     [ Wire_3d.pack diff_signed_codec ]
 
+(* A union switches on an earlier field in both validators: a byte tag with a
+   default branch and fields either side of the union, and a bitfield tag with
+   none, where an unclaimed tag is a rejection the two have to agree on. *)
+let diff_union_codec =
+  let open Wire in
+  let f_kind = Field.v "kind" uint8 in
+  let body =
+    Field.union "body" ~on:f_kind ~casetype:"UnionBody"
+      [
+        case ~index:(UInt8.v 1) uint16be
+          ~inject:(fun v -> `Short v)
+          ~project:(function `Short v -> Some v | _ -> None);
+        case ~index:(UInt8.v 2) uint32be
+          ~inject:(fun v -> `Long v)
+          ~project:(function `Long v -> Some v | _ -> None);
+        default uint8
+          ~inject:(fun tag v -> `Other (tag, v))
+          ~project:(function `Other (tag, v) -> Some (tag, v) | _ -> None);
+      ]
+  in
+  Codec.v "UnionMsg"
+    (fun kind sum body tail -> (kind, sum, body, tail))
+    Codec.
+      [
+        (f_kind $ fun (k, _, _, _) -> k);
+        (Field.v "sum" uint32be $ fun (_, s, _, _) -> s);
+        (body $ fun (_, _, b, _) -> b);
+        (Field.v "tail" uint8 $ fun (_, _, _, t) -> t);
+      ]
+
+let diff_union_bits_codec =
+  let open Wire in
+  let f_kind = Field.v "kind" (bits ~width:4 U8) in
+  Codec.v "UnionBits"
+    (fun kind flags body -> (kind, flags, body))
+    Codec.
+      [
+        (f_kind $ fun (k, _, _) -> k);
+        (Field.v "flags" (bits ~width:4 U8) $ fun (_, f, _) -> f);
+        ( Field.union "body" ~on:f_kind ~casetype:"UnionBitsBody"
+            [
+              case ~index:3 uint16be ~inject:Either.left
+                ~project:Either.find_left;
+              case ~index:5 uint8 ~inject:Either.right
+                ~project:Either.find_right;
+            ]
+        $ fun (_, _, b) -> b );
+      ]
+
+let test_doc_differential_union () =
+  needs_3d_exe ();
+  differential_ok ~name:"unionspec" ~package:"union-doc" ~corpus:(`Fuzz 400)
+    [ Wire_3d.pack diff_union_codec; Wire_3d.pack diff_union_bits_codec ]
+
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
    reader's hex buffer must hold the line, or it truncates and the verdict
    misparses into a false mismatch. *)
@@ -753,6 +983,39 @@ let test_doc_differential_trailing_bytes () =
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
+
+(* agree.c decodes the corpus hex itself. Both cases of a digit decode alike:
+   RangeMsg accepts n < 100, so a mis-decoded [A] or [F] in the first byte flips
+   the verdict. A non-hex character or an odd digit count refuses the corpus
+   with exit 2 instead of feeding a wrong byte to the validator. *)
+let test_doc_differential_hex () =
+  needs_3d_exe ();
+  with_agree ~name:"hexspec" ~package:"hex-doc"
+    [ Wire_3d.pack diff_range_codec ]
+    (fun run ->
+      (match
+         run
+           (`Lines
+              [
+                "RangeMsg - 5f00 1";
+                "RangeMsg - 5F00 1";
+                "RangeMsg - 6a00 0";
+                "RangeMsg - 6A00 0";
+                "RangeMsg - 63fF 1";
+                "RangeMsg - 64Ab 0";
+              ])
+       with
+      | Unix.WEXITED 0, _ -> ()
+      | _, output -> Alcotest.failf "mixed-case hex disagrees:\n%s" output);
+      List.iter
+        (fun hex ->
+          match run (`Lines [ "RangeMsg - " ^ hex ^ " 1" ]) with
+          | Unix.WEXITED 2, output
+            when Re.execp (Re.compile (Re.str "bad hex")) output ->
+              ()
+          | _, output ->
+              Alcotest.failf "agree did not refuse hex %S:\n%s" hex output)
+        [ "0g01"; "G001"; "010"; "+101" ])
 
 (* EverParse renamed the wrapper's status local between releases ([result] up
    to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
@@ -864,23 +1127,39 @@ let e2e_mixed_codec =
   let fh = Field.v "h" uint8 in
   Codec.v "EP_Header" (fun h -> h) [ Codec.( $ ) fh (fun h -> h) ]
 
-(* Proximity1-style: variable-length data whose size is expressed as
-   [length - header]. EverParse's SMT needs a constraint on [length]
-   to prove the subtraction doesn't underflow, or verification of the
-   generated .fst fails. [?self_constraint] on the length field emits
-   that constraint inline. *)
+(* The decoder rejects a length below the header size. The 3D projection
+   states the same bound on [Length], so this codec needs no explicit length
+   refinement to verify. *)
 let e2e_underflow_codec =
   let open Wire in
   let header_size = 7 in
-  let f_len =
-    Field.v "Length" uint16be ~self_constraint:(fun self ->
-        Expr.(self >= int header_size))
-  in
+  let f_len = Field.v "Length" uint16be in
   let f_data =
     Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int header_size))
   in
   let open Codec in
   v "UnderflowCheck" (fun len data -> (len, data)) [ f_len $ fst; f_data $ snd ]
+
+(* The same span after a field 3D cannot refine: the guard belongs on
+   [Length], not on the byte array before [Data]. *)
+let e2e_underflow_padded_codec =
+  let open Wire in
+  let f_len =
+    Field.v "Length" uint16be ~self_constraint:(fun self ->
+        Expr.(self >= int 7))
+  in
+  let f_pad = Field.v "Pad" (byte_array ~size:(int 2)) in
+  let f_data =
+    Field.v "Data" (byte_array ~size:Expr.(Field.ref f_len - int 7))
+  in
+  let open Codec in
+  v "UnderflowPadded"
+    (fun len pad data -> (len, pad, data))
+    [
+      (f_len $ fun (l, _, _) -> l);
+      (f_pad $ fun (_, p, _) -> p);
+      (f_data $ fun (_, _, d) -> d);
+    ]
 
 (* [Wire.casetype] in a codec field. The Everparse projection auto-emits
    a [casetype_decl] dispatch + wrapper typedef per unique int-tagged
@@ -1182,8 +1461,11 @@ let test_e2e_compile_run () =
   compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
   compile_and_run ~name:"Exts" e2e_repeat_var_elem;
   compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
-  compile_and_run ~name:"EP_Header" e2e_mixed_codec;
-  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec
+  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+
+let test_byte_span_subtraction () =
+  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec;
+  compile_and_run ~name:"UnderflowPadded" e2e_underflow_padded_codec
 
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -1392,363 +1674,6 @@ let test_projection_filenames () =
     "stale provenance is not promotable" false
     (contains_exact "Rpmsg_endpoint_info.provenance.gen")
 
-(* -- Adversarial projection tests for 3D-shape transformations -- *)
-
-let to_3d_string s =
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  Wire.Everparse.Raw.to_3d m
-
-let contains s sub =
-  let lsub = String.length sub in
-  let n = String.length s - lsub in
-  let rec go i = i <= n && (String.sub s i lsub = sub || go (i + 1)) in
-  lsub = 0 || go 0
-
-(* [Action.var name e] must not project to [var name = e;] -- 3D's [var]
-   binds an atomic action, not a pure expression. The DSL combinator [Var]
-   has to be lowered by inlining the bound expression at every use site. *)
-let test_var_inlines () =
-  let f_a = field "Tag" uint8 in
-  let f_b = field "Value" uint16be in
-  let f_x = field "x" uint16be in
-  let s =
-    let out = Param.output "out" uint32be in
-    param_struct "VarTest"
-      [ Param.decl out ]
-      [
-        field "Tag" uint8;
-        field "Value"
-          ~action:
-            (Action.on_act
-               [
-                 Action.var "x" Expr.(field_ref f_a + field_ref f_b);
-                 Action.assign out Expr.(field_ref f_x + int 1);
-               ])
-          uint16be;
-      ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool)
-    "no [var x = ...] in 3D output" false (contains out "var x");
-  Alcotest.(check bool)
-    "x usage replaced by inlined expression" true
-    (contains out "(Tag + Value) + 1")
-
-(* Var bindings inside if-branches must not leak between sibling branches. *)
-let test_var_scoping_in_if () =
-  let f_a = field "Tag" uint8 in
-  let f_x = field "x" uint16be in
-  let s =
-    let out = Param.output "out" uint32be in
-    param_struct "VarIf"
-      [ Param.decl out ]
-      [
-        field "Tag" uint8;
-        field "Value"
-          ~action:
-            (Action.on_act
-               [
-                 Action.var "x" Expr.(field_ref f_a + int 7);
-                 Action.if_
-                   Expr.(field_ref f_x > int 100)
-                   [ Action.assign out (field_ref f_x) ]
-                   (Some [ Action.assign out (int 0) ]);
-               ])
-          uint8;
-      ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool) "no var leak" false (contains out "var x");
-  Alcotest.(check bool)
-    "inlined inside then-branch" true
-    (contains out "*out = (Tag + 7);");
-  Alcotest.(check bool)
-    "inlined inside cond" true
-    (contains out "(Tag + 7) > 100")
-
-(* Struct-level [where] referencing fields must lower to a constraint on
-   the latest referenced field, not stay at struct level. 3D's [where]
-   only sees parameters. *)
-let test_where_lowers_to_field () =
-  let f_len = field "Length" uint16be in
-  let f_max = field "max" uint16be in
-  let s =
-    param_struct "WhereTest"
-      [ param "max" uint16be ]
-      ~where:Expr.(field_ref f_len <= field_ref f_max)
-      [ field "Length" uint16be ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool) "no top-level where" false (contains out "where (");
-  Alcotest.(check bool)
-    "constraint moved onto the field" true
-    (contains out "Length <= max")
-
-(* A param-only [where] must remain at the struct level. *)
-let test_where_param_only_stays () =
-  let s =
-    let max_ = Param.input "max" uint16be in
-    let lim = Param.input "lim" uint16be in
-    param_struct "WhereParam"
-      [ Param.decl max_; Param.decl lim ]
-      ~where:Expr.(Param.expr max_ <= Param.expr lim)
-      [ field "Length" uint16be ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool)
-    "where stays at struct level" true (contains out "where (")
-
-(* The [where] must combine with any pre-existing field constraint via AND. *)
-let test_where_combines_field_constraint () =
-  let f_self = field "Length" uint16be in
-  let f_len =
-    field "Length" ~constraint_:Expr.(field_ref f_self > int 0) uint16be
-  in
-  let s =
-    param_struct "WhereAnd" []
-      ~where:Expr.(field_ref f_len < int 1024)
-      [ f_len ]
-  in
-  let out = to_3d_string s in
-  (* Both clauses must end up next to the field. *)
-  Alcotest.(check bool) "left clause present" true (contains out "Length > 0");
-  Alcotest.(check bool)
-    "right clause present" true
-    (contains out "Length < 1024")
-
-(* Param/field names that collide with 3D or F* keywords must be escaped
-   in the projected 3D output (not rejected at the API). The user keeps
-   writing [Param.input "total" ...], the 3D output reads [total_]. *)
-let test_keyword_param_escaped () =
-  let p = Param.input "total" uint32be in
-  let f = field "data" (byte_array ~size:(Param.expr p)) in
-  let s = param_struct "Esc" [ Param.decl p ] [ f ] in
-  let out = to_3d_string s in
-  Alcotest.(check bool)
-    "param decl uses escaped name" true
-    (contains out "UINT32BE total_");
-  Alcotest.(check bool)
-    "param ref uses escaped name" true
-    (contains out "byte-size total_");
-  Alcotest.(check bool)
-    "raw [total] keyword does not appear" false
-    (Re.execp (Re.compile (Re.seq [ Re.bow; Re.str "total"; Re.eow ])) out)
-
-let expect_invalid_arg ~combinator f =
-  match
-    try
-      let _ = f () in
-      Ok ()
-    with Invalid_argument msg -> Error msg
-  with
-  | Ok () ->
-      Alcotest.failf "%s should have rejected the construction" combinator
-  | Error _ -> ()
-
-(* [array ~len:N (byte_array ~size:M)] is valid -- it projects to
-   [UINT8 name[:byte-size (N * M)]]. The smart constructor only refuses
-   element types that have no derivable wire size expression at all. *)
-let test_array_accepts_sized_elem () =
-  let s =
-    struct_ "ArrSized"
-      [ field "Items" (array ~len:(int 3) (byte_array ~size:(int 5))) ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool)
-    "byte-size suffix uses len * elem_size" true (contains out "byte-size")
-
-let test_array_rejects_unsized_elem () =
-  expect_invalid_arg ~combinator:"array (all_bytes)" (fun () ->
-      array ~len:(int 4) all_bytes)
-
-(* [Field.optional] accepts any element with a derivable size -- plain
-   scalars, fixed bitfields, AND already-sized payloads like
-   [byte_array {size}]. The projection emits a [byte-size if(cond, N, 0)]
-   suffix that uses the inner's size expression. *)
-let test_field_optional_byte_array () =
-  let f_present = Field.v "present" uint8 in
-  let cond = Expr.(Field.ref f_present <> int 0) in
-  let codec =
-    Codec.v "OptByteArr"
-      (fun present body -> (present, body))
-      Codec.
-        [
-          f_present $ fst;
-          Field.optional "Body" ~present:cond (byte_array ~size:(int 8)) $ snd;
-        ]
-  in
-  let s = Everparse.Raw.struct_of_codec codec in
-  let out = to_3d_string s in
-  Alcotest.(check bool)
-    "byte-size suffix uses inner size" true (contains out "8")
-
-(* A gate-selected sub-codec may contain a group-local length followed by a
-   repeat and still leave later fields in the parent. Run the full EverParse
-   extraction here: rendering alone would not catch an invalid casetype or
-   dependent repeat in the generated F*. *)
-let test_optional_length_prefixed_group_projects () =
-  needs_3d_exe ();
-  begin
-    let f_ext_len = Field.v "ext_items_len" uint8 in
-    let extensions =
-      Codec.v "ProjectedTransferExtensions"
-        (fun len items -> (len, items))
-        Codec.
-          [
-            f_ext_len $ fst;
-            Field.repeat "ext_items" ~size:(Field.ref f_ext_len) uint8 $ snd;
-          ]
-    in
-    let f_start = Field.v "start" uint8 in
-    let f_data_len = Field.v "data_len" uint8 in
-    let codec =
-      Codec.v "ProjectedTransferSegment"
-        (fun start ext data_len data -> (start, ext, data_len, data))
-        Codec.
-          [
-            (f_start $ fun (start, _, _, _) -> start);
-            ( Field.optional "extensions"
-                ~present:Expr.(Field.ref f_start <> int 0)
-                (codec extensions)
-            $ fun (_, ext, _, _) -> ext );
-            (f_data_len $ fun (_, _, data_len, _) -> data_len);
-            ( Field.v "data" (byte_array ~size:(Field.ref f_data_len))
-            $ fun (_, _, _, data) -> data );
-          ]
-    in
-    let dir = Filename.temp_dir "wire_3d_optional_group" "" in
-    let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.generate_c ~outdir:dir [ schema ];
-    Alcotest.(check bool)
-      "C generated for conditional group" true
-      (Sys.file_exists (Filename.concat dir "ProjectedTransferSegment.c"))
-  end
-
-(* A bare UINT64 field was once reported as failing EverParse extraction.
-   [generate_c] runs the whole pipeline (F* verification, then C extraction)
-   and raises if EverParse rejects the module, so this pins the shape rather
-   than only its rendering. *)
-let test_bare_uint64_projects () =
-  needs_3d_exe ();
-  begin
-    let codec =
-      Codec.v "BareUint64"
-        (fun value -> value)
-        Codec.[ Field.v "value" uint64 $ Fun.id ]
-    in
-    let dir = Filename.temp_dir "wire_3d_bare_uint64" "" in
-    let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.generate_c ~outdir:dir [ schema ];
-    Alcotest.(check bool)
-      "C generated for bare uint64" true
-      (Sys.file_exists (Filename.concat dir "BareUint64.c"))
-  end
-
-(* A [nested ~size] / [nested_at_most] field projects through EverParse:
-   byte-span and enum inners go through a synthesised wrapper struct, and scalar
-   and sub-record inners render inline (rather than as an extern setter param
-   typed [UINT8[:byte-size-single-element-array]], which is invalid 3D).
-   [generate_c] runs [3d.exe] and raises if the .3d is rejected, so this is the
-   regression guard. *)
-let test_nested_field_projects () =
-  needs_3d_exe ();
-  begin
-    let inner =
-      Codec.v "NInner"
-        (fun a b -> (a, b))
-        Codec.[ Field.v "a" uint8 $ fst; Field.v "b" uint16be $ snd ]
-    in
-    let codec =
-      Codec.v "NestedProj"
-        (fun scalar bytes sub -> (scalar, bytes, sub))
-        Codec.
-          [
-            (Field.v "scalar" (nested ~size:(int 4) uint8) $ fun (s, _, _) -> s);
-            ( Field.v "bytes" (nested ~size:(int 4) (byte_array ~size:(int 3)))
-            $ fun (_, b, _) -> b );
-            ( Field.v "sub" (nested ~size:(int 8) (codec inner))
-            $ fun (_, _, s) -> s );
-          ]
-    in
-    let dir = Filename.temp_dir "wire_3d_nested" "" in
-    let s = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ s ];
-    (* Runs 3d.exe; raises if EverParse rejects the generated .3d. *)
-    Wire_3d.generate_c ~outdir:dir [ s ];
-    Alcotest.(check bool)
-      "C generated for nested fields" true
-      (Sys.file_exists (Filename.concat dir "NestedProj.c"))
-  end
-
-let test_keyword_field_escaped () =
-  let s =
-    struct_ "Esc2"
-      [ field "let" uint8; field "match" uint8; field "type" uint16be ]
-  in
-  let out = to_3d_string s in
-  Alcotest.(check bool) "let_ field" true (contains out "let_");
-  Alcotest.(check bool) "match_ field" true (contains out "match_");
-  Alcotest.(check bool) "type_ field" true (contains out "type_")
-
-(* KaRaMeL pretty-prints an extern declaration to a column budget, so a schema
-   name long enough to push the declaration past it lands [extern void] on one
-   line and the symbol it introduces on the next. Both layouts have to read, and
-   a header holding no declaration at all has to say so by name: pairing the
-   symbols off against the schema's setters is what fails otherwise, from a call
-   site that cannot tell which file came up short. Fabricate the header rather
-   than shell out, so this runs in the lanes with no EverParse. *)
-let test_extern_names_wrapped () =
-  let base = "Smp27bits15u16belsbbits15u16belsbbits15u16belsbbits15u1" in
-  let schema =
-    Wire.Everparse.Raw.project_struct ~mode:`Ffi
-      (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
-  in
-  let setters = Wire.Everparse.plug_setters schema in
-  let symbol i = Fmt.str "%sSetter%d" base i in
-  let wrapped =
-    String.concat ""
-      (List.mapi
-         (fun i (_, c_type) ->
-           Fmt.str
-             "extern void\n\
-              %s(\n\
-             \  WIRECTX *ctx,\n\
-             \  uint32_t idx,\n\
-             \  %s v\n\
-              );\n\n"
-             (symbol i) c_type)
-         setters)
-  in
-  let fields_impl header =
-    let dir = Filename.temp_dir "wire_3d_extern" "" in
-    Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
-      (fun () ->
-        Out_channel.with_open_bin
-          (Filename.concat dir (base ^ "_ExternalAPI.h"))
-          (fun oc -> Out_channel.output_string oc header);
-        Wire_3d.write_fields ~outdir:dir [ schema ];
-        read_file (Filename.concat dir (base ^ "_Fields.c")))
-  in
-  Alcotest.(check bool)
-    "the schema declares setters to pair" true (setters <> []);
-  let impl = fields_impl wrapped in
-  List.iteri
-    (fun i _ ->
-      Alcotest.(check bool)
-        (Fmt.str "setter %d read across the wrap" i)
-        true
-        (contains impl (Fmt.str "void %s(WIRECTX *ctx," (symbol i))))
-    setters;
-  match fields_impl "/* nothing to read here */\n" with
-  | impl -> Alcotest.failf "a header with no declaration produced %S" impl
-  | exception Invalid_argument msg ->
-      Alcotest.(check bool)
-        "the failure names the header it could not read" true
-        (contains msg (base ^ "_ExternalAPI.h"))
-
 let suite =
   ( "wire_3d",
     [
@@ -1782,16 +1707,23 @@ let suite =
         test_doc_differential_nested_regions;
       Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
         `Quick test_doc_differential_region_cardinality;
+      Alcotest.test_case "doc differential Msb_first sub-codec (needs 3d.exe)"
+        `Quick test_doc_differential_msb_sub_codec;
+      Alcotest.test_case
+        "doc differential span and scalar regions (needs 3d.exe)" `Quick
+        test_doc_differential_span_and_scalar_regions;
       Alcotest.test_case "doc differential signed (needs 3d.exe)" `Quick
         test_doc_differential_signed;
+      Alcotest.test_case "doc differential union (needs 3d.exe)" `Quick
+        test_doc_differential_union;
       Alcotest.test_case "doc differential large payload (needs 3d.exe)" `Quick
         test_doc_differential_large_payload;
       Alcotest.test_case "doc differential caps name (needs 3d.exe)" `Quick
         test_doc_differential_caps_name;
       Alcotest.test_case "doc differential trailing bytes (needs 3d.exe)" `Quick
         test_doc_differential_trailing_bytes;
-      Alcotest.test_case "extern names across a wrapped declaration" `Quick
-        test_extern_names_wrapped;
+      Alcotest.test_case "doc differential hex decode (needs 3d.exe)" `Quick
+        test_doc_differential_hex;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
@@ -1799,31 +1731,6 @@ let suite =
         test_projection_sizes;
       Alcotest.test_case "projection: filenames match EverParse output" `Quick
         test_projection_filenames;
-      Alcotest.test_case "projection: var inlines into uses" `Quick
-        test_var_inlines;
-      Alcotest.test_case "projection: var scoping inside if" `Quick
-        test_var_scoping_in_if;
-      Alcotest.test_case "projection: where lowers to field constraint" `Quick
-        test_where_lowers_to_field;
-      Alcotest.test_case "projection: param-only where stays at struct" `Quick
-        test_where_param_only_stays;
-      Alcotest.test_case "projection: where ANDs with field constraint" `Quick
-        test_where_combines_field_constraint;
-      Alcotest.test_case "projection: F*-keyword param escaped" `Quick
-        test_keyword_param_escaped;
-      Alcotest.test_case "projection: F*-keyword field escaped" `Quick
-        test_keyword_field_escaped;
-      Alcotest.test_case "ctor: array accepts sized variable elem" `Quick
-        test_array_accepts_sized_elem;
-      Alcotest.test_case "ctor: array rejects unsized elem" `Quick
-        test_array_rejects_unsized_elem;
-      Alcotest.test_case "Field.optional: byte_array inner projects" `Quick
-        test_field_optional_byte_array;
-      Alcotest.test_case "optional length-prefixed group projects" `Slow
-        test_optional_length_prefixed_group_projects;
-      Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
-      Alcotest.test_case "nested field projects through EverParse" `Slow
-        test_nested_field_projects;
       Alcotest.test_case "wrapper hardening names the status var" `Quick
         test_wrapper_hardening_names_the_status_var;
       Alcotest.test_case "wrapper hardening is idempotent" `Quick
@@ -1832,4 +1739,6 @@ let suite =
         test_wrapper_hardening_refuses_unknown_shape;
       Alcotest.test_case "e2e: compile + run across naming conventions" `Slow
         test_e2e_compile_run;
+      Alcotest.test_case "e2e: byte-span subtraction guard" `Slow
+        test_byte_span_subtraction;
     ] )

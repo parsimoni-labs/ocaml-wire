@@ -27,6 +27,10 @@ val afl_mode : unit -> bool
     seeds come from the same tests AFL runs. Alcobar starts each seed with the
     index of the test it was made for. *)
 
+val failf : ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [failf fmt] is {!Alcobar.failf}, which on an AFL file input also prints the
+    failure, since Alcobar's AFL runner raises without printing it. *)
+
 val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 (** [test_cases label g] batches [g]'s four streams into one Alcobar case:
     positives check codec round-trip plus validation, random/adversarial bytes
@@ -82,7 +86,17 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     Finally, every read path must leave the buffer byte-identical, and running
     one frame through all of them must not change the answer a later read of a
     different frame gives, which is what the shared per-domain decode scratch
-    makes possible. [validate] defaults to [true]. *)
+    makes possible.
+
+    Every stream is also run through the codec with its fast paths off
+    ({!Wire.Private.Testing.general}) and through one not yet compiled
+    ({!Wire.Private.Testing.fresh}): [decode], [validate], [valid] then [read],
+    [get], [set] and [encode] must answer exactly as the warm codec does, the
+    same value or bytes, or the same error at the same offset for the same
+    field, or the same [Invalid_argument]. A hostile value whose getters answer
+    differently on successive calls is exempt from the byte comparisons and is
+    held instead to an encoding of one of its answers. [validate] defaults to
+    [true]. *)
 
 val afl_cases : ?max_len:int -> string -> Alcobar.test_case list
 (** [afl_cases label] is the fast file-input AFL smoke suite. It reuses a
@@ -124,8 +138,10 @@ val invariant_cases : string -> Alcobar.test_case list
     asserts registry labels are unique, the registry still mirrors the Wire API
     families, recursive composition leaves include the expected weird /
     adversarial terms, the deterministic differential sampler remains
-    reproducible and unique, and the per-field accessor properties still reach
-    most of the registry rather than skipping it. *)
+    reproducible and unique, the per-field accessor properties still reach most
+    of the registry rather than skipping it, and every fast path {!Wire.Codec}
+    can select is selected by a registry codec, a composition leaf or a
+    fixed-seed sample, failing with the names of those that are not. *)
 
 val semantic_invariant_cases : string -> Alcobar.test_case list
 (** [semantic_invariant_cases label] checks high-level API invariants over exact
@@ -184,6 +200,11 @@ val sample : seed:int -> count:int -> (string * packed) list
     {!val-invariant_cases} asserts the resulting spread across the grammar. The
     same [seed] yields the same set, so a code generator and its consumer can
     agree on the shapes. *)
+
+val flat_records : seed:int -> count:int -> (string * packed) list
+(** [flat_records ~seed ~count] is the codecs of [sample ~seed ~count] whose
+    shape is a record of leaves, in sample order. They are rare in a sample, and
+    they are the shape a field-by-field code generator handles whole. *)
 
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
@@ -345,13 +366,15 @@ val bit : int t -> bool t
 val uint_var : endian:Wire.endian -> int -> Optint.Int63.t t
 (** [uint_var ~endian size] generates for [Wire.uint ~endian size]. *)
 
-val optional : ?present:bool -> 'a t -> 'a option t
+val optional : ?name:string -> ?present:bool -> 'a t -> 'a option t
 (** [optional ~present inner] generates for a [Field.optional]-wrapped record
-    with a static [~present] gate. *)
+    with a static [~present] gate. [name] is the record's name, ["_opt"] by
+    default; two different records embedded in one codec need two names. *)
 
-val optional_or : ?present:bool -> default:'a -> 'a t -> 'a t
+val optional_or : ?name:string -> ?present:bool -> default:'a -> 'a t -> 'a t
 (** [optional_or ~present ~default inner] generates for a
-    [Field.optional_or]-wrapped record with a static [~present] gate. *)
+    [Field.optional_or]-wrapped record with a static [~present] gate. [name] is
+    as for {!optional}, ["_opt_or"] by default. *)
 
 val repeat : ?name:string -> bytes:int -> 'a t -> 'a list t
 (** [repeat ~bytes inner] generates for a [Field.repeat] whose byte-budget is

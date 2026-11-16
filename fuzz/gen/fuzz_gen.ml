@@ -5,6 +5,7 @@ include Gen
 include Leaves
 include Wrappers
 include Record
+include Columns
 include Compose
 include Properties
 include Cases

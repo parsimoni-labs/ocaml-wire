@@ -42,12 +42,12 @@
     the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
-(** [everparse_name name] returns the C identifier EverParse derives from a
-    struct name: underscores are stripped and the [_]-separated segments are
-    joined in CamelCase. Each segment is capitalized and any internal run of two
-    or more consecutive uppercase letters collapses to a single one. E.g.
-    [Grpc_message] becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW]
-    becomes [Clcw], and [TMFrame] becomes [Tmframe]. *)
+(** [everparse_name name] is the C identifier EverParse derives from a struct
+    name, by {!pascal_case}: underscores are stripped, each [_]-separated
+    segment is capitalized, and every letter that follows an uppercase letter or
+    a digit is lowercased until the next lower-case one. E.g. [Grpc_message]
+    becomes [GrpcMessage], [EP_Header] becomes [EpHeader], [CLCW] becomes
+    [Clcw], [TMFrame] becomes [Tmframe] and [Foo2Bar] becomes [Foo2bar]. *)
 
 val pascal_case : string -> string
 (** [pascal_case s] is EverParse's own identifier mangling, transcribed from
@@ -156,6 +156,13 @@ val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
     [<Name>_ExternalTypedefs.h] for each schema that uses the WireCtx contract,
     declaring [WIRECTX] as a forward reference to the matching [<Name>Fields]
     plug struct. *)
+
+val check_plug_names : Wire.Everparse.t -> unit
+(** [check_plug_names s] raises [Invalid_argument] naming both fields when two
+    of [s]'s fields would define one [_IDX_] macro or one struct member of its
+    default plug: the macro upper-cases the field name, and the member escapes
+    C's keywords ({!Wire.Everparse.plug_member}). It also refuses a field whose
+    name is not an identifier. {!write_fields} runs it first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}] plug
@@ -301,10 +308,12 @@ val generate_agree :
 (** [generate_agree ?name ~outdir ~package codecs] writes [agree.c] into
     [outdir]: a C program that replays a {!generate_corpus} corpus through the
     EverParse-generated validators and exits nonzero on any input where the
-    validator's accept/reject decision differs from the recorded verdict. It
-    reads the [<Name>CheckWire<Codec>] helper names from the generated
-    [<Name>Wrapper.h], so {!generate_standalone} (or [3d.exe]) must have run
-    first. *)
+    validator's accept/reject decision differs from the recorded verdict. A
+    [<hex>] that is not an even number of hex digits, in either case, stops it
+    with ["bad hex"] and exit code 2. It names each [<Name>CheckWire<Codec>]
+    helper the way EverParse does and includes the generated [<Name>Wrapper.h],
+    so {!generate_standalone} (or [3d.exe]) must have run before [agree.c] is
+    compiled. *)
 
 val main :
   ?name:string ->

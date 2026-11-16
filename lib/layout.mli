@@ -9,6 +9,12 @@ open Dsl
 val field_wire_size : 'a typ -> int option
 (** Fixed wire size of a field type, if determinable. *)
 
+val array : len:int expr -> 'a typ -> 'a list typ
+(** Fixed-count array of elements. *)
+
+val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ
+(** Fixed-count array with custom builder. *)
+
 val size_of_typ_value : eval_ctx -> 'a typ -> 'a -> int
 (** [size_of_typ_value ctx typ v] is the encoded byte size of [v] under [typ],
     computed from the value rather than from a buffer. A size that names an

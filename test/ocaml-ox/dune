@@ -1,0 +1,166 @@
+; The generator's tests again, on the code it writes for OxCaml. The modules
+; are a library so the compiler checks each [@zero_alloc] they carry. On any
+; other compiler they hold the code for the default target instead, and [dune
+; runtest] says the tests were skipped rather than repeat test/ocaml.
+
+(copy_files
+ (files ../ocaml/test_wire_ocaml.{ml,mli}))
+
+(rule
+ (copy ../ocaml/test.ml test.ml))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (targets
+  g_ipv4.ml
+  g_ipv4_wire.ml
+  g_ipv4_record.ml
+  g_ipv4_record_wire.ml
+  g_checked.ml
+  g_checked_wire.ml
+  g_mixed.ml
+  g_mixed_wire.ml
+  g_small.ml
+  g_small_wire.ml
+  g_eth.ml
+  g_eth_wire.ml
+  g_wide.ml
+  g_wide_wire.ml
+  g_mapped.ml
+  g_mapped_wire.ml
+  g_signed.ml
+  g_signed_wire.ml
+  g_refined.ml
+  g_refined_wire.ml
+  g_overflow.ml
+  g_overflow_wire.ml
+  s_sized.ml
+  s_overflow.ml
+  s_skipped.ml)
+ (action
+  (run ../ocaml/gen.exe --oxcaml)))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (targets
+  g_ipv4.ml
+  g_ipv4_wire.ml
+  g_ipv4_record.ml
+  g_ipv4_record_wire.ml
+  g_checked.ml
+  g_checked_wire.ml
+  g_mixed.ml
+  g_mixed_wire.ml
+  g_small.ml
+  g_small_wire.ml
+  g_eth.ml
+  g_eth_wire.ml
+  g_wide.ml
+  g_wide_wire.ml
+  g_mapped.ml
+  g_mapped_wire.ml
+  g_signed.ml
+  g_signed_wire.ml
+  g_refined.ml
+  g_refined_wire.ml
+  g_overflow.ml
+  g_overflow_wire.ml
+  s_sized.ml
+  s_overflow.ml
+  s_skipped.ml)
+ (action
+  (run ../ocaml/gen.exe)))
+
+; Dune's dev profile compiles libraries -opaque, which hides from the
+; zero_alloc checker what a function of another library allocates, so every
+; call out of the module looks like it may. The checks run in any other
+; profile (make test-oxcaml uses release) and are off in dev, where they
+; cannot pass.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (= %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "(-zero-alloc-check none)"))))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (<> %{profile} dev)))
+ (action
+  (with-stdout-to
+   zero_alloc.sexp
+   (echo "()"))))
+
+(library
+ (name gens_ox)
+ (ocamlopt_flags
+  (:standard
+   (:include zero_alloc.sexp)))
+ (wrapped false)
+ (modules
+  test_wire_ocaml
+  g_ipv4
+  g_ipv4_wire
+  g_ipv4_record
+  g_ipv4_record_wire
+  g_checked
+  g_checked_wire
+  g_mixed
+  g_mixed_wire
+  g_small
+  g_small_wire
+  g_eth
+  g_eth_wire
+  g_wide
+  g_wide_wire
+  g_mapped
+  g_mapped_wire
+  g_signed
+  g_signed_wire
+  g_refined
+  g_refined_wire
+  g_overflow
+  g_overflow_wire
+  s_sized
+  s_overflow
+  s_skipped)
+ (libraries
+  schemas
+  wire
+  wire.runtime
+  wire.ocaml
+  diff_codecs
+  diff_driver
+  diff_ocaml
+  ocaml_index_ox
+  bytesrw
+  fmt
+  alcotest))
+
+(executable
+ (name test)
+ (modules test)
+ (libraries gens_ox alcotest))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (run ./test.exe)))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (echo
+   "test/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))

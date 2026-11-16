@@ -1,0 +1,43 @@
+(** The scanner generated for a structured codec.
+
+    A function that checks a record in place and hands its named scalars to a
+    consumer, without building a value. Internal to {!Wire_ocaml}. *)
+
+open Planner
+
+val codec_plan : 'a Wire.Codec.t -> plan
+(** [codec_plan c] is the plan of [c], with no check of the OCaml names its
+    outputs take. Raises {!Planner.Unsupported} on a shape the generator does
+    not handle. *)
+
+val scan_plan : 'a Wire.Codec.t -> plan
+(** [scan_plan c] is the plan a scanner of [c] follows. Raises
+    {!Planner.Unsupported} on a shape the generator does not handle. *)
+
+val scanner_fields : 'a Wire.Codec.t -> (string * bool) list
+(** [scanner_fields c] is the scalars a scanner of [c] hands out; see
+    {!Wire_ocaml.scanner_fields}. *)
+
+type scan = {
+  plan : plan;
+  selected : output list;
+  num : Emitter.num;
+  ppf : Format.formatter;
+}
+(** What a scanner is written from: the plan, the outputs it hands out, how it
+    holds integers and where it writes. *)
+
+val scanner :
+  ?target:[> `OCaml | `OxCaml ] ->
+  ?fields:string list ->
+  ?step:string ->
+  codec:string ->
+  'a Wire.Codec.t ->
+  string
+(** [scanner ?target ?fields ?step ~codec c] is the scanner generated for [c];
+    see {!Wire_ocaml.scanner}. *)
+
+val selected : plan -> string list option -> output list
+(** [selected plan names] is the outputs of [plan] named in [names], all of them
+    when [names] is [None]. Raises {!Planner.Unsupported} on a name [plan] does
+    not hand out. *)

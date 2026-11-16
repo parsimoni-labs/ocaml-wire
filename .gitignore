@@ -23,3 +23,7 @@ AGENTS.md
 .claude/
 _opam/
 todo/
+
+# Rust code bench/rust generates, and its cargo build
+bench/rust/cargo/src/gen/
+bench/rust/cargo/target/

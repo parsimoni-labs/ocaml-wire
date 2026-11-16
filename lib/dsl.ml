@@ -30,17 +30,33 @@ type bindings = { param : string -> int; set_param : string -> int -> unit }
 (* The buffer travels as its own argument rather than inside the context, so
    the parameter-free hot path is the constant constructor [Unbound]. Being a
    constant, it is an immediate: an encode or decode without parameters builds
-   no context block and allocates nothing. *)
-type eval_ctx = Unbound | Bound of bindings
+   no context block and allocates nothing. [Checked] carries the same bindings
+   over bytes a check pass has accepted; [checked_unbound] is a static block,
+   so a parameter-free read through it allocates nothing either. *)
+type eval_ctx = Unbound | Bound of bindings | Checked of eval_ctx
 
 let unbound_eval_ctx = Unbound
 let eval_ctx ?(set_param = fun _ _ -> ()) param = Bound { param; set_param }
+let checked_unbound = Checked Unbound
 
-let eval_param ctx name =
-  match ctx with Unbound -> 0 | Bound b -> b.param name
+let checked_eval_ctx = function
+  | Unbound -> checked_unbound
+  | Checked _ as ctx -> ctx
+  | Bound _ as ctx -> Checked ctx
 
-let eval_set_param ctx name value =
-  match ctx with Unbound -> () | Bound b -> b.set_param name value
+let is_checked = function Checked _ -> true | Unbound | Bound _ -> false
+
+let rec eval_param ctx name =
+  match ctx with
+  | Unbound -> 0
+  | Bound b -> b.param name
+  | Checked ctx -> eval_param ctx name
+
+let rec eval_set_param ctx name value =
+  match ctx with
+  | Unbound -> ()
+  | Bound b -> b.set_param name value
+  | Checked ctx -> eval_set_param ctx name value
 
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the
@@ -51,10 +67,10 @@ let eval_set_param ctx name value =
    or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
-type predicate = Where | Field | Action | Per_byte
+type predicate = Errors.predicate = Where | Field | Action | Per_byte
 type consumption = [ `Prefix | `All ]
 
-type error_kind =
+type error_kind = Errors.error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -68,9 +84,13 @@ type error_kind =
 (* [at] is the absolute byte offset of the failing field in the input; [field]
    is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
    empty at a top-level or anonymous position. *)
-type parse_error = { at : int; field : string list; kind : error_kind }
+type parse_error = Errors.parse_error = {
+  at : int;
+  field : string list;
+  kind : error_kind;
+}
 
-exception Parse_error of parse_error
+exception Parse_error = Errors.Parse_error
 
 let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
 
@@ -243,6 +263,17 @@ and _ typ =
       cases : ('a, 'k) case_branch list;
     }
       -> 'a typ
+  | Union : {
+      name : string;
+      tag : 'k typ;
+          (* The type of the field [on] reads: what the case indices are
+             written in, and the parameter type of the 3D casetype. *)
+      on : int expr;
+      cases : ('a, 'k) case_branch list;
+    }
+      -> 'a typ
+    (* A casetype whose tag is not its own first bytes but an earlier field
+         of the enclosing struct. The union occupies the selected body only. *)
   | Struct : struct_ -> unit typ
   | Type_ref : string -> 'a typ
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
@@ -251,6 +282,9 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
+          (* Each map value its own: a generated module names the map it calls
+             and checks the codec still holds that very one. *)
           (* When [Some n] the raw [inner] value is a valid index only when
              [< n] (set by {!cases} / lookup). [decode] enforces this on the
              OCaml side; the 3D projection emits it as a field refinement so the
@@ -267,6 +301,11 @@ and _ typ =
              EverParse generates for a sub-struct field: a use site runs the
              sub-codec's constraints, [where], enum membership, span refinements
              and actions without materialising the record. *)
+      codec_validate_sized :
+        eval_ctx -> Input_end.t -> bytes -> int -> int -> unit;
+          (* [codec_validate] of a record whose end, the last argument, the
+             caller has just measured with [codec_size_of] over the same
+             bytes: the frame checks that end instead of measuring again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;
@@ -426,52 +465,22 @@ end
 
 (* Native-int arithmetic that reports overflow instead of wrapping: a constant
    folded to a value its expression does not denote would be worse than leaving
-   the expression symbolic. *)
-let[@inline] add_overflows a b sum = a lxor sum land (b lxor sum) < 0
-
-let[@inline] sub_overflows a b difference =
-  a lxor b land (a lxor difference) < 0
-
-let[@inline] mul_overflows a b product =
-  a <> 0 && ((a = -1 && b = min_int) || product / a <> b)
-
+   the expression symbolic. Generated code shares these with the codec. *)
 let const_add a b =
   let s = a + b in
-  if add_overflows a b s then None else Some s
+  if Arith.add_overflows a b s then None else Some s
 
 let const_sub a b =
   let d = a - b in
-  if sub_overflows a b d then None else Some d
+  if Arith.sub_overflows a b d then None else Some d
 
 let const_mul a b =
   let p = a * b in
-  if mul_overflows a b p then None else Some p
+  if Arith.mul_overflows a b p then None else Some p
 
-(* [Value_out_of_range] carries an [int64], but a product may overflow that as
-   well as the native int. The first value on the overflowing side is enough
-   to report the failed range check without wrapping its diagnostic too. *)
-let arithmetic_overflow ~positive =
-  let value =
-    if positive then Int64.succ (Int64.of_int max_int)
-    else Int64.pred (Int64.of_int min_int)
-  in
-  raise_out_of_range ~at:0 value
-
-let[@inline] checked_add a b =
-  let sum = a + b in
-  if add_overflows a b sum then arithmetic_overflow ~positive:(a >= 0) else sum
-
-let[@inline] checked_sub a b =
-  let difference = a - b in
-  if sub_overflows a b difference then arithmetic_overflow ~positive:(a >= 0)
-  else difference
-
-let[@inline] checked_mul a b =
-  let product = a * b in
-  if mul_overflows a b product then
-    arithmetic_overflow ~positive:(Bool.equal (a < 0) (b < 0))
-  else product
-
+let checked_add = Arith.checked_add
+let checked_sub = Arith.checked_sub
+let checked_mul = Arith.checked_mul
 let[@inline] checked_div a b = if b = 0 then raise_zero_divisor ~at:0 else a / b
 
 let[@inline] checked_mod a b =
@@ -534,9 +543,10 @@ let const_int_expr e = int_expr_with (fun _ -> None) e
 (* A size expression resolved as far as the encode-side context allows. A bound
    input parameter answers; a reference to a sibling field or to a position does
    not, because a value on its own does not carry the record around it. *)
-let size_in_ctx ctx e =
+let rec size_in_ctx ctx e =
   match ctx with
   | Unbound -> None
+  | Checked ctx -> size_in_ctx ctx e
   | Bound _ ->
       int_expr_with
         (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)
@@ -546,6 +556,15 @@ let size_in_ctx ctx e =
    Every smart constructor taking a size or length expression runs its argument
    through it. *)
 let fold_size e = match const_int_expr e with Some n -> Int n | None -> e
+
+(* A literal size is a count of bytes in the buffer: never negative, and never
+   more than a buffer can hold. *)
+let literal_size ~combinator e =
+  match fold_size e with
+  | Int n when n < 0 || n > Sys.max_string_length ->
+      Fmt.invalid_arg "Wire.%s: size %d is not a byte count a buffer can hold"
+        combinator n
+  | e -> e
 
 (* Type constructors *)
 let uint8 = Uint8
@@ -589,6 +608,18 @@ let bitfield_base_bits : bitfield_base -> int = function
   | U8 -> 8
   | U16 _ -> 16
   | U32 _ -> 32
+
+let equal_bitfield_base a b =
+  match (a, b) with
+  | U8, U8 -> true
+  | U16 e1, U16 e2 | U32 e1, U32 e2 -> equal_endian e1 e2
+  | (U8 | U16 _ | U32 _), _ -> false
+
+(* EverParse's own bit order for a base: LSB-first for the little-endian
+   ones (MSVC C bit-field packing), MSB-first for the big-endian ones. *)
+let native_bit_order = function
+  | U8 | U16 Little | U32 Little -> Lsb_first
+  | U16 Big | U32 Big -> Msb_first
 
 let bits ?(bit_order = Msb_first) ~width base =
   (* A bitfield must fit its base word: a [width] above the base size, or below
@@ -647,9 +678,9 @@ let rec int_of : type a. a typ -> a -> int option =
   | Apply { typ; _ } -> int_of typ v
   | Map { inner; encode; _ } -> int_of inner (encode v)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       None
 
 (* Whether every value of a carrier fits the native int, so its integer view
@@ -665,6 +696,22 @@ let rec int_view_is_total : type a. a typ -> bool = function
   | Single_elem { elem; _ } -> int_view_is_total elem
   | Apply { typ; _ } -> int_view_is_total typ
   | Map { inner; _ } -> int_view_is_total inner
+  | _ -> false
+
+let rec has_int64_slot : type a. a typ -> bool = function
+  | Uint64 _ | Int64 _ -> true
+  (* A float64's IEEE bit pattern is 64 bits wide; its predicates (is_finite,
+     is_nan) read it from the int64 slot so they stay exact on a narrow-int
+     platform. *)
+  | Float64 _ -> true
+  | Where { inner; _ } -> has_int64_slot inner
+  | Optional { inner; _ } -> has_int64_slot inner
+  | Optional_or { inner; _ } -> has_int64_slot inner
+  (* [build_populate] fills the int64 slot with the raw pre-map wire value
+     (via [encode]) and recurses [Enum] through its base, so a constraint over
+     the raw uint64 of a [map]-decoded or enum field is well defined. *)
+  | Map { inner; _ } -> has_int64_slot inner
+  | Enum { base; _ } -> has_int64_slot base
   | _ -> false
 
 (* Hot-path variant of [int_of] for the cross-field size/offset/present
@@ -721,9 +768,9 @@ let rec int_of_exn : type a. a typ -> a -> int =
   | Apply { typ; _ } -> int_of_exn typ v
   | Map { inner; encode; _ } -> int_of_exn inner (encode v)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       not_an_integer ()
 
 (* The other direction: the value a type carries for a given integer. The
@@ -751,9 +798,9 @@ let rec of_int : type a. a typ -> int -> a =
   | Apply { typ; _ } -> of_int typ n
   | Map { inner; decode; _ } -> decode (of_int inner n)
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
-  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Codec _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
+  | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
+  | Optional_or _ | Repeat _ ->
       not_an_integer ()
 
 (* The types [int_of_exn] and [of_int] have a conversion for. Checked at
@@ -781,7 +828,7 @@ let reject_non_integer ~combinator typ =
    construction at the user's call site so the error points at the
    wrapping combinator rather than surfacing later inside [pp_typ]. *)
 let rec is_field_decoration : type a. a typ -> bool = function
-  | Optional _ | Optional_or _ | Repeat _ -> true
+  | Optional _ | Optional_or _ | Repeat _ | Union _ -> true
   | Map { inner; _ } -> is_field_decoration inner
   | Where { inner; _ } -> is_field_decoration inner
   | Apply { typ; _ } -> is_field_decoration typ
@@ -790,14 +837,17 @@ let rec is_field_decoration : type a. a typ -> bool = function
 let reject_decoration ~combinator t =
   if is_field_decoration t then
     Fmt.invalid_arg
-      "Wire.%s: [optional]/[optional_or]/[repeat] are field decorations and \
-       cannot appear nested inside [%s] -- attach them as the field type \
-       directly via [Field.v]."
+      "Wire.%s: [optional]/[optional_or]/[repeat]/[union] are field \
+       decorations and cannot appear nested inside [%s] -- attach them as the \
+       field type directly via [Field.v]."
       combinator combinator
+
+let map_ids = Atomic.make 0
+let fresh_map_id () = Atomic.fetch_and_add map_ids 1
 
 let map decode encode inner =
   reject_decoration ~combinator:"map" inner;
-  Map { inner; decode; encode; index_bound = None }
+  Map { inner; decode; encode; index_bound = None; map_id = fresh_map_id () }
 
 let bool inner =
   reject_non_integer ~combinator:"bit" inner;
@@ -808,6 +858,7 @@ let bool inner =
       decode = (fun v -> is_set (to_int v));
       encode = (fun b -> of_int (bit b));
       index_bound = None;
+      map_id = fresh_map_id ();
     }
 
 (* Top-level so [variants_lookup] does not allocate a closure per call.
@@ -833,13 +884,16 @@ let cases variants inner =
     let i = variants_lookup arr v 0 in
     if i < 0 then invalid_arg "Wire.lookup: unknown variant" else of_int i
   in
-  Map { inner; decode; encode; index_bound = Some len }
+  Map
+    { inner; decode; encode; index_bound = Some len; map_id = fresh_map_id () }
 
 let unit = Unit
 let all_bytes = All_bytes
 let all_zeros = All_zeros
 let zeroterm = Zeroterm
-let zeroterm_at_most ~size = Zeroterm_at_most { size = fold_size size }
+
+let zeroterm_at_most ~size =
+  Zeroterm_at_most { size = literal_size ~combinator:"zeroterm_at_most" size }
 
 let where cond inner =
   reject_decoration ~combinator:"where" inner;
@@ -886,11 +940,7 @@ let exact_repeat_elements seq ~expected ~size_of values =
    short one would make the bytes on the wire differ from the value the caller
    signed, hashed or length-prefixed, with nothing to signal it. *)
 let check_byte_field_size ~expected ~actual =
-  if actual <> expected then
-    Fmt.invalid_arg
-      "Wire.encode: byte field expected %d bytes, got %d (a fixed-size byte \
-       field is exact; use zeroterm_at_most for a shorter value)"
-      expected actual
+  if actual <> expected then Errors.byte_length ~expected ~actual
 
 let check_nested_size ~at_most ~expected ~actual =
   if actual > expected then
@@ -958,6 +1008,8 @@ let rec nz : type a. a typ -> bool = function
   | Casetype { tag; cases; _ } ->
       nz tag
       || List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
+  | Union { cases; _ } ->
+      List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
   | Type_ref _ | Qualified_ref _ -> false (* opaque ref: be conservative *)
 
 and struct_nz (s : struct_) =
@@ -1091,19 +1143,9 @@ and struct_ends_greedy (s : struct_) =
   | Field f :: _ -> ends_greedy f.field_typ
   | [] -> false
 
-let array ~len elem =
-  reject_decoration ~combinator:"array" elem;
-  reject_bitfield_element ~combinator:"array" elem;
-  reject_non_array_element ~combinator:"array" elem;
-  Array { len = fold_size len; elem; seq = seq_list }
+let byte_array ~size =
+  Byte_array { size = literal_size ~combinator:"byte_array" size }
 
-let array_seq seq ~len elem =
-  reject_decoration ~combinator:"array_seq" elem;
-  reject_bitfield_element ~combinator:"array_seq" elem;
-  reject_non_array_element ~combinator:"array_seq" elem;
-  Array { len = fold_size len; elem; seq }
-
-let byte_array ~size = Byte_array { size = fold_size size }
 let byte_array_where_counter = Atomic.make 0
 let elt_var_prefix = "__elt_"
 
@@ -1111,7 +1153,8 @@ let byte_array_where ~size ~per_byte =
   let n = Atomic.fetch_and_add byte_array_where_counter 1 in
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
-  Byte_array_where { size = fold_size size; elt_var; cond }
+  Byte_array_where
+    { size = literal_size ~combinator:"byte_array_where" size; elt_var; cond }
 
 (* The 3D synthesized typedef name derived from an elt_var. The element
    field inside the synthesized struct keeps the elt_var as its name so the
@@ -1123,7 +1166,8 @@ let synth_name_of_elt_var ev =
     "_RefByte_" ^ String.sub ev plen (String.length ev - plen)
   else "_RefByte_" ^ ev
 
-let byte_slice ~size = Byte_slice { size = fold_size size }
+let byte_slice ~size =
+  Byte_slice { size = literal_size ~combinator:"byte_slice" size }
 
 let optional present inner =
   reject_bitfield_element ~combinator:"optional" inner;
@@ -1143,20 +1187,26 @@ let optional_or present ~default inner =
 let repeat ~size elem =
   reject_decoration ~combinator:"repeat" elem;
   reject_bitfield_element ~combinator:"repeat" elem;
-  Repeat { size = fold_size size; elem; seq = seq_list }
+  Repeat { size = literal_size ~combinator:"repeat" size; elem; seq = seq_list }
 
 let repeat_seq seq ~size elem =
   reject_decoration ~combinator:"repeat_seq" elem;
   reject_bitfield_element ~combinator:"repeat_seq" elem;
-  Repeat { size = fold_size size; elem; seq }
+  Repeat { size = literal_size ~combinator:"repeat_seq" size; elem; seq }
 
 let nested ~size elem =
   reject_bitfield_element ~combinator:"nested" elem;
-  Single_elem { size = fold_size size; elem; at_most = false }
+  Single_elem
+    { size = literal_size ~combinator:"nested" size; elem; at_most = false }
 
 let nested_at_most ~size elem =
   reject_bitfield_element ~combinator:"nested_at_most" elem;
-  Single_elem { size = fold_size size; elem; at_most = true }
+  Single_elem
+    {
+      size = literal_size ~combinator:"nested_at_most" size;
+      elem;
+      at_most = true;
+    }
 
 let enum name cases base =
   reject_non_integer ~combinator:"enum" base;
@@ -1244,42 +1294,54 @@ let rec reject_unprojectable_casetype_tag : type k. k typ -> unit = function
   | Where { inner; _ } -> reject_unprojectable_casetype_tag inner
   | _ -> ()
 
+let resolve_case : type a k.
+    combinator:string -> (a, k) case_def -> (a, k) case_branch =
+ fun ~combinator -> function
+  | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
+      reject_decoration ~combinator cd_inner;
+      reject_greedy_case_body cd_inner;
+      let tag_val =
+        match cd_index with
+        | Some k -> k
+        | None ->
+            Fmt.invalid_arg
+              "Wire.%s: every case must supply an explicit [~index]" combinator
+      in
+      Case_branch
+        {
+          cb_tag = Some tag_val;
+          (* [case] knows its tag from [~index], so its [inject] takes only the
+             body and its [project] yields only the body; pair the fixed tag
+             back on for the unified tag-aware branch. *)
+          cb_inner = cd_inner;
+          cb_inject = (fun _matched body -> cd_inject body);
+          cb_project =
+            (fun a -> Option.map (fun w -> (tag_val, w)) (cd_project a));
+        }
+  | Default_def { dd_inner; dd_inject; dd_project } ->
+      reject_decoration ~combinator dd_inner;
+      reject_greedy_case_body dd_inner;
+      Case_branch
+        {
+          cb_tag = None;
+          cb_inner = dd_inner;
+          cb_inject = dd_inject;
+          cb_project = dd_project;
+        }
+
 let casetype name tag defs =
   reject_unprojectable_casetype_tag tag;
-  let resolve = function
-    | Case_def { cd_index; cd_inner; cd_inject; cd_project } ->
-        reject_decoration ~combinator:"casetype" cd_inner;
-        reject_greedy_case_body cd_inner;
-        let tag_val =
-          match cd_index with
-          | Some k -> k
-          | None ->
-              invalid_arg
-                "Wire.casetype: every case must supply an explicit [~index]"
-        in
-        Case_branch
-          {
-            cb_tag = Some tag_val;
-            (* [case] knows its tag from [~index], so its [inject] takes only the
-               body and its [project] yields only the body; pair the fixed tag
-               back on for the unified tag-aware branch. *)
-            cb_inner = cd_inner;
-            cb_inject = (fun _matched body -> cd_inject body);
-            cb_project =
-              (fun a -> Option.map (fun w -> (tag_val, w)) (cd_project a));
-          }
-    | Default_def { dd_inner; dd_inject; dd_project } ->
-        reject_decoration ~combinator:"casetype" dd_inner;
-        reject_greedy_case_body dd_inner;
-        Case_branch
-          {
-            cb_tag = None;
-            cb_inner = dd_inner;
-            cb_inject = dd_inject;
-            cb_project = dd_project;
-          }
-  in
-  Casetype { name; tag; cases = List.map resolve defs }
+  Casetype
+    { name; tag; cases = List.map (resolve_case ~combinator:"casetype") defs }
+
+(* A union switches on the integer its tag field holds, in OCaml and in 3D
+   alike, so a tag with no integer view has nothing to dispatch on. *)
+let union name ~tag ~on defs =
+  if not (is_int_representable tag) then
+    invalid_arg "Wire.Field.union: the tag field must be integer-valued";
+  reject_unprojectable_casetype_tag tag;
+  Union
+    { name; tag; on; cases = List.map (resolve_case ~combinator:"union") defs }
 
 (* Struct fields *)
 let field name ?constraint_ ?action ?doc typ =
@@ -1429,37 +1491,8 @@ let casetype_decl name params tag cases =
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
 
-let pp_predicate ppf (p : predicate) =
-  match p with
-  | Where -> Fmt.string ppf "where clause"
-  | Field -> Fmt.string ppf "field constraint"
-  | Action -> Fmt.string ppf "field action"
-  | Per_byte -> Fmt.string ppf "per-byte refinement"
-
-let pp_error_kind ppf = function
-  | Unexpected_eof { expected; got } ->
-      Fmt.pf ppf "unexpected EOF: expected %d bytes, got %d" expected got
-  | Trailing_bytes n ->
-      Fmt.pf ppf "%d trailing byte%s" n (if n = 1 then "" else "s")
-  | Invalid_enum { value; valid } ->
-      Fmt.pf ppf "invalid enum value %d, valid: [%a]" value
-        Fmt.(list ~sep:comma int)
-        valid
-  | Invalid_tag tag -> Fmt.pf ppf "invalid tag: %d" tag
-  | Missing_terminator -> Fmt.string ppf "missing NUL terminator"
-  | Non_zero_padding -> Fmt.string ppf "non-zero padding byte"
-  | Value_out_of_range { value } -> Fmt.pf ppf "value out of range: %Ld" value
-  | Zero_divisor -> Fmt.string ppf "zero divisor in expression"
-  | Constraint_failed { which; value } -> (
-      match value with
-      | Some v -> Fmt.pf ppf "%a violated (value %Ld)" pp_predicate which v
-      | None -> Fmt.pf ppf "%a violated" pp_predicate which)
-
-let pp_parse_error ppf { at; field; kind } =
-  (match field with
-  | [] -> ()
-  | _ -> Fmt.(list ~sep:(any ".") string) ppf field);
-  Fmt.pf ppf "@%d: %a" at pp_error_kind kind
+let pp_error_kind = Errors.pp_error_kind
+let pp_parse_error = Errors.pp_parse_error
 
 let predicate_rank (p : predicate) =
   match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3

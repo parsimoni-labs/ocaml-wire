@@ -499,6 +499,143 @@ let test_validate_where_only () =
   | () -> Alcotest.fail "expected where failure"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
+(* -- an output param that sizes a later field -- *)
+
+let sized_out = Param.output "sized_out" uint8
+let sized_slot = Param.input "sized_slot" uint8
+let sized_limit = 9
+
+let sized_sub =
+  let f_v = Field.v "v" uint8 in
+  Codec.v "SizedSub"
+    ~where:Expr.(Field.ref f_v <= int sized_limit)
+    Fun.id
+    Codec.[ f_v $ Fun.id ]
+
+let sized_n =
+  let f_n = Field.v "n" uint8 in
+  Codec.(
+    Field.v "n"
+      ~action:(Action.on_success [ Action.assign sized_out (Field.ref f_n) ])
+      uint8
+    $ fun (n, _, _) -> n)
+
+let sized_pad =
+  Codec.(
+    Field.v "pad" (byte_array ~size:(Param.expr sized_out)) $ fun (_, p, _) -> p)
+
+let sized_last typ = Codec.(Field.v "s" typ $ fun (_, _, s) -> s)
+
+(* [n] sets the param, [pad] is sized by it, then a sub-codec with a [where]. *)
+let sized_then_sub =
+  Codec.v "SizedThenSub"
+    (fun n p s -> (n, p, s))
+    [ sized_n; sized_pad; sized_last (codec sized_sub) ]
+
+(* The same with a constrained field of the record itself. *)
+let sized_then_own =
+  let f_s = Field.v "s" uint8 in
+  let own =
+    Codec.(
+      Field.v "s" ~constraint_:Expr.(Field.ref f_s <= int sized_limit) uint8
+      $ fun (_, _, s) -> s)
+  in
+  Codec.v "SizedThenOwn" (fun n p s -> (n, p, s)) [ sized_n; sized_pad; own ]
+
+(* [pad] reads the param before [n] sets it. *)
+let sized_before_set =
+  Codec.v "SizedBeforeSet"
+    (fun p n s -> (n, p, s))
+    [ sized_pad; sized_n; sized_last (codec sized_sub) ]
+
+let sized_show (n, p, s) =
+  Fmt.str "%d %S %d" (UInt8.to_int n) p (UInt8.to_int s)
+
+(* Each decode entry point of [c] with the validate that checks the same
+   bytes: at offset 0 with and without an env, at offset 2, as a field of
+   another codec, and in a fixed and a param-sized region. *)
+let sized_entries name c =
+  let field typ = Codec.v (name ^ typ) Fun.id in
+  let frame = field "Frame" Codec.[ Field.v "r" (codec c) $ Fun.id ] in
+  let region size =
+    Codec.[ Field.v "r" (nested_at_most ~size (codec c)) $ Fun.id ]
+  in
+  let fixed = field "Region" (region (int 4)) in
+  let sized = field "ParamRegion" (region (Param.expr sized_slot)) in
+  let slot () = Codec.env sized |> Param.bind sized_slot (UInt8.v 4) in
+  fun input ->
+    let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
+    [
+      ( "plain",
+        (fun () -> Codec.validate c input 0),
+        fun () -> Codec.decode_exn c input 0 );
+      ( "env",
+        (fun () -> Codec.validate ~env:(Codec.env c) c input 0),
+        fun () -> Codec.decode_exn ~env:(Codec.env c) c input 0 );
+      ( "shifted",
+        (fun () -> Codec.validate c shifted 2),
+        fun () -> Codec.decode_exn c shifted 2 );
+      ( "field",
+        (fun () -> Codec.validate frame input 0),
+        fun () -> Codec.decode_exn frame input 0 );
+      ( "field, env",
+        (fun () -> Codec.validate ~env:(Codec.env frame) frame input 0),
+        fun () -> Codec.decode_exn ~env:(Codec.env frame) frame input 0 );
+      ( "region",
+        (fun () -> Codec.validate fixed input 0),
+        fun () -> Codec.decode_exn fixed input 0 );
+      ( "param region",
+        (fun () -> Codec.validate ~env:(slot ()) sized input 0),
+        fun () -> Codec.decode_exn ~env:(slot ()) sized input 0 );
+    ]
+
+let sized_inputs =
+  let bytes = [ 0; 1; 2; 5; 0xff ] in
+  let ( let* ) l f = List.concat_map f l in
+  let* a = bytes in
+  let* b = bytes in
+  let* c = bytes in
+  let* d = bytes in
+  [ Bytes.of_string (String.init 4 (fun i -> Char.chr [| a; b; c; d |].(i))) ]
+
+let sized_result f =
+  match f () with v -> Ok v | exception Parse_error e -> Error e
+
+(* No entry point returns a record that breaks a check, and with [exact] each
+   accepts exactly what its validate accepts. *)
+let check_sized ~exact name c =
+  let entries = sized_entries name c in
+  List.iter
+    (fun input ->
+      List.iter
+        (fun (entry, validate, decode) ->
+          let where = Fmt.str "%s, %s, %S" name entry (Bytes.to_string input) in
+          match (sized_result validate, sized_result decode) with
+          | _, Ok ((_, _, s) as v) when UInt8.to_int s > sized_limit ->
+              Alcotest.failf "%s: decode returned %s" where (sized_show v)
+          | Ok (), Error e when exact ->
+              Alcotest.failf "%s: validate accepts, decode fails with %a" where
+                pp_parse_error e
+          | Error e, Ok v when exact ->
+              Alcotest.failf "%s: decode returned %s, validate fails with %a"
+                where (sized_show v) pp_parse_error e
+          | _ -> ())
+        (entries input))
+    sized_inputs
+
+let test_output_sizes_later_field () =
+  let env = Codec.env sized_then_sub in
+  let v =
+    decode_ok
+      (Codec.decode ~env sized_then_sub (Bytes.of_string "\x01\xff\x05") 0)
+  in
+  Alcotest.(check string)
+    "read where it was checked" {|1 "\255" 5|} (sized_show v);
+  Alcotest.(check int) "output" 1 (UInt8.to_int (Param.get env sized_out));
+  check_sized ~exact:true "SizedThenSub" sized_then_sub;
+  check_sized ~exact:true "SizedThenOwn" sized_then_own;
+  check_sized ~exact:false "SizedBeforeSet" sized_before_set
+
 let test_get_twostaged_same_field () =
   (* Two staged getters from the same codec+field with different envs *)
   let out = Param.output "out_two" uint8 in
@@ -758,6 +895,8 @@ let suite =
       Alcotest.test_case "validate: constraint only" `Quick
         test_validate_constraint_only;
       Alcotest.test_case "validate: where only" `Quick test_validate_where_only;
+      Alcotest.test_case "action: output param sizes a later field" `Quick
+        test_output_sizes_later_field;
       Alcotest.test_case "action: two staged same field" `Quick
         test_get_twostaged_same_field;
       Alcotest.test_case "shared: encode bitfield" `Quick

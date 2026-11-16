@@ -45,6 +45,9 @@ type layout_ctx = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
+  field_at : string -> (runtime -> Input_end.t -> bytes -> int -> int) option;
+      (* Where an earlier field's bytes start, by name: what a field that
+         rejects another field's value reports as the place of the failure. *)
   n_fields : int;
 }
 
@@ -55,6 +58,11 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
     fixed_prefix = r.fixed_prefix;
     bf = r.r_bf;
     field_readers = r.field_readers;
+    field_at =
+      (fun name ->
+        Option.map
+          (fun (_id, access) -> access_at access)
+          (List.assoc_opt name r.field_access_rev));
     n_fields = r.n_fields;
   }
 
@@ -263,7 +271,8 @@ let compile_bits : type r.
         };
     int_reader = raw_reader;
     nested_readers = [];
-    validator_off = static_off;
+    (* Errors name the word, which a later field's cursor is past. *)
+    validator_off = base_off;
     populate = build_populate fld.typ ctx.n_fields raw_reader;
   }
 
@@ -645,7 +654,7 @@ let rec elem_strategy : type a. a typ -> a elem_strategy = function
   | Unit | All_bytes | All_zeros | Zeroterm_at_most _ | Where _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Enum _ | Struct _
   | Type_ref _ | Qualified_ref _ | Map _ | Apply _ | Optional _ | Optional_or _
-  | Repeat _ ->
+  | Repeat _ | Union _ ->
       By_reading
 
 (* The element check the walk runs. Skipping a value-only reader keeps the span
@@ -812,15 +821,15 @@ let var_bytes_reader : type a.
   let first = base + fo in
   (match typ with
   | Byte_slice _ ->
-      (* A byte_slice reading at or past the end yields an eod slice (an oversize
-         length is caught by the top-level bounds check), but a negative size or
-         offset, from a [Sub] or an overrun length field, would crash
-         [make_or_eod] with a raw [Invalid_argument] that escapes the decode
-         result. Fail cleanly instead. *)
+      (* An empty byte_slice at or past the end is an eod slice. A negative size
+         or offset, or a length past the end, would make [make_or_eod] raise a
+         raw [Invalid_argument]: the record's bounds check does not catch the
+         last, since a later span that takes the rest can take the bytes back. *)
       if sz < 0 || first < 0 then
         raise_eof ~at:first
           ~expected:(missing_before ~first ~sz ~len:(Bytes.length buf))
           ~got:(bytes_from (Input_end.of_bytes buf) first)
+      else if sz > 0 then check_span_bounds buf ~first ~sz
   | _ -> check_span_bounds buf ~first ~sz);
   match typ with
   | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
@@ -840,11 +849,13 @@ let var_bytes_reader : type a.
       let first = base + fo in
       (* The region hands its value [sz] bytes and no more, so the walk that
          sizes it stops there: a length field the data puts past the region is
-         missing, not read from whatever follows. *)
-      let region_end = Input_end.narrow input_end (first + sz) in
-      let consumed = elem_size_of elem runtime region_end buf first in
-      if consumed > sz || ((not at_most) && consumed <> sz) then
-        raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+         missing, not read from whatever follows. Bytes a check pass accepted
+         had that walk there ([container_populate]), so their read skips it. *)
+      (if not (Types.is_checked runtime) then
+         let region_end = Input_end.narrow input_end (first + sz) in
+         let consumed = elem_size_of elem runtime region_end buf first in
+         if consumed > sz || ((not at_most) && consumed <> sz) then
+           raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed);
       read_elem elem runtime input_end buf first
   | _ -> assert false
 
@@ -909,6 +920,16 @@ let span_populate : type a.
    decode fails; what is left out is the sequence, the nested region's value
    and the case body's record. [None] leaves the field to the generic
    [build_populate]. *)
+(* The check of a region's element the region walk has just measured: a
+   sub-codec takes the end the walk found rather than measuring itself again,
+   which costs as much as the walk. *)
+let sized_check : type a.
+    a typ -> runtime -> Input_end.t -> bytes -> int -> int -> unit = function
+  | Codec { codec_validate_sized; _ } -> codec_validate_sized
+  | typ ->
+      let check = elem_check typ in
+      fun runtime input_end buf off _end_off -> check runtime input_end buf off
+
 let container_populate : type a.
     a typ ->
     off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
@@ -924,7 +945,7 @@ let container_populate : type a.
           check_span_bounds buf ~first ~sz:(size_fn runtime input_end buf base);
           check runtime input_end buf first)
   | Single_elem { elem; at_most; _ } ->
-      let check = elem_check elem in
+      let check = sized_check elem in
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
@@ -938,7 +959,7 @@ let container_populate : type a.
           let consumed = elem_size_of elem runtime region_end buf first in
           if consumed > sz || ((not at_most) && consumed <> sz) then
             raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-          check runtime input_end buf first)
+          check runtime input_end buf first (first + consumed))
   | _ -> None
 
 (* What a field's validate runs in place of its reader: a span's scan, or a
@@ -1180,6 +1201,207 @@ let compile_var_bytes : type a r.
     populate;
   }
 
+(* {2 Unions}
+
+   A union is a casetype whose tag is an earlier field: the tag comes from that
+   field's reader as an integer and the union's bytes are the selected body
+   alone. Everything a case needs is staged when the codec is built, so
+   decoding one is an integer lookup and a call. *)
+
+type 'a union_case = {
+  read : int -> runtime -> Input_end.t -> bytes -> int -> 'a;
+      (* Takes the tag too: a default branch hands it to its [inject]. *)
+  size : runtime -> Input_end.t -> bytes -> int -> int;
+  check : runtime -> Input_end.t -> bytes -> int -> unit;
+  write : int -> runtime -> bytes -> int -> 'a -> int;
+      (* [-1] when the value is not this case's; otherwise the offset after the
+         body, having checked the value's tag against the one on the wire. *)
+}
+
+(* How a tag selects its case. Small non-negative tags, the common shape of a
+   type or version field, index a table; anything else is compared in turn. *)
+type union_select =
+  | Table of { index : int array; default : int }
+  | Scan of { tags : int array; default : int }
+
+let union_table_limit = 256
+
+let union_select tags ~default =
+  let fits t = t >= 0 && t < union_table_limit in
+  if Array.for_all fits tags then begin
+    let size = Array.fold_left (fun m t -> max m (t + 1)) 0 tags in
+    let index = Array.make size default in
+    (* Last to first, so the first case to claim a tag keeps it. *)
+    for i = Array.length tags - 1 downto 0 do
+      index.(tags.(i)) <- i
+    done;
+    Table { index; default }
+  end
+  else Scan { tags; default }
+
+let rec scan_tags tags n i =
+  if i = Array.length tags then -1
+  else if tags.(i) = n then i
+  else scan_tags tags n (i + 1)
+
+(* The index of the case a tag selects, or [-1]. *)
+let select_case select n =
+  match select with
+  | Table { index; default } ->
+      if n >= 0 && n < Array.length index then Array.unsafe_get index n
+      else default
+  | Scan { tags; default } ->
+      let i = scan_tags tags n 0 in
+      if i < 0 then default else i
+
+let union_tag_mismatch ~value ~field =
+  Fmt.invalid_arg
+    "Codec.encode: union value belongs to case %d but its tag field holds %d"
+    value field
+
+(* The default branch writes whatever tag its value carries. One an explicit
+   case claims would decode as that case, with the default's body read as the
+   other's, so the value is refused. *)
+let union_default_claimed tag =
+  Fmt.invalid_arg
+    "Codec.encode: union value takes the default branch with tag %d, which a \
+     case claims"
+    tag
+
+let union_case : type a k.
+    k typ -> claimed:int array -> (a, k) case_branch -> a union_case =
+ fun tag ~claimed (Case_branch { cb_tag; cb_inner; cb_inject; cb_project }) ->
+  let encode = build_field_encoder_ctx cb_inner in
+  let is_default = Option.is_none cb_tag in
+  {
+    read =
+      (match cb_tag with
+      | Some t ->
+          fun _n runtime input_end buf off ->
+            cb_inject t (read_elem cb_inner runtime input_end buf off)
+      | None ->
+          fun n runtime input_end buf off ->
+            cb_inject (Types.of_int tag n)
+              (read_elem cb_inner runtime input_end buf off));
+    size = elem_size_of cb_inner;
+    check = elem_check cb_inner;
+    write =
+      (fun expected runtime buf off v ->
+        match cb_project v with
+        | None -> -1
+        | Some (t, body) ->
+            let value = int_of_typ_value tag t in
+            if value <> expected then union_tag_mismatch ~value ~field:expected;
+            if is_default && Array.mem value claimed then
+              union_default_claimed value;
+            encode runtime buf off body);
+  }
+
+let rec write_union_case cases i expected runtime buf off v =
+  if i = Array.length cases then Types.raise_no_matching_case ()
+  else
+    let off' = (Array.unsafe_get cases i).write expected runtime buf off v in
+    if off' < 0 then write_union_case cases (i + 1) expected runtime buf off v
+    else off'
+
+(* A union's cases as an array and the selector into it: the explicit cases
+   first, then the default if there is one, so a case's position is its tag's
+   position among the tags. *)
+let union_dispatch : type a k.
+    k typ -> (a, k) case_branch list -> a union_case array * union_select =
+ fun tag branches ->
+  let explicit, defaults =
+    List.partition
+      (fun (Case_branch { cb_tag; _ }) -> Option.is_some cb_tag)
+      branches
+  in
+  let tags =
+    Array.of_list
+      (List.filter_map
+         (fun (Case_branch { cb_tag; _ }) ->
+           Option.map (int_of_typ_value tag) cb_tag)
+         explicit)
+  in
+  let default, last =
+    match defaults with d :: _ -> (Array.length tags, [ d ]) | [] -> (-1, [])
+  in
+  let cases =
+    Array.of_list (List.map (union_case tag ~claimed:tags) (explicit @ last))
+  in
+  (cases, union_select tags ~default)
+
+let compile_union : type a k r.
+    layout_ctx ->
+    (a, r) field ->
+    k typ ->
+    int expr ->
+    (a, k) case_branch list ->
+    (a, r) compiled_field =
+ fun ctx fld tag on branches ->
+  let off_fn = off_fn_of ctx in
+  let tag_fn = compile_expr ctx.field_readers on in
+  let cases, select = union_dispatch tag branches in
+  let off_abs runtime input_end buf base =
+    base + off_fn runtime input_end buf base
+  in
+  (* An unclaimed tag is reported where the tag is, as a casetype reports its
+     own: those are the bytes to change for the record to be accepted. *)
+  let tag_at =
+    match on with
+    | Ref (_, name) -> (
+        match ctx.field_at name with Some at -> at | None -> off_abs)
+    | _ -> off_abs
+  in
+  let case_at n runtime input_end buf base =
+    let i = select_case select n in
+    if i < 0 then
+      Types.raise_invalid_tag ~at:(tag_at runtime input_end buf base) n
+    else Array.unsafe_get cases i
+  in
+  let size_fn runtime input_end buf base =
+    let first = base + off_fn runtime input_end buf base in
+    let n = tag_fn runtime input_end buf base in
+    (case_at n runtime input_end buf base).size runtime input_end buf first
+  in
+  let size_fn = prepend_field fld.name size_fn in
+  let raw_reader runtime input_end buf base =
+    let first = base + off_fn runtime input_end buf base in
+    let n = tag_fn runtime input_end buf base in
+    (case_at n runtime input_end buf base).read n runtime input_end buf first
+  in
+  let get = fld.get in
+  let raw_writer v runtime buf base write_off =
+    let expected = tag_fn runtime (Input_end.of_bytes buf) buf base in
+    write_union_case cases 0 expected runtime buf write_off (get v)
+  in
+  let populate _slots runtime input_end buf base =
+    let first = base + off_fn runtime input_end buf base in
+    let n = tag_fn runtime input_end buf base in
+    let case = case_at n runtime input_end buf base in
+    check_span_bounds buf ~first ~sz:(case.size runtime input_end buf first);
+    case.check runtime input_end buf first
+  in
+  {
+    raw_reader;
+    raw_writer;
+    extra_writers = [];
+    field_access =
+      (match ctx.next_off with
+      | Static n -> Variable { off = n; size_fn }
+      | Dynamic _ -> Variable_dynamic { off_fn; size_fn });
+    size_delta = 0;
+    next_off =
+      Dynamic
+        (fun runtime input_end buf base ->
+          let fo = off_fn runtime input_end buf base in
+          base + fo + size_fn runtime input_end buf base);
+    bf_after = None;
+    int_reader = null_int_reader;
+    nested_readers = [];
+    validator_off = validator_off_of ctx;
+    populate;
+  }
+
 let compile_scalar_or_var : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1191,9 +1413,7 @@ let compile_scalar_or_var : type a r.
       let field_off = match field_off_static with Some n -> n | None -> -1 in
       let raw_reader =
         match field_off_static with
-        | Some _ ->
-            let reader = build_field_reader_ctx typ field_off in
-            fun runtime input_end buf base -> reader runtime input_end buf base
+        | Some _ -> build_field_reader_ctx typ field_off
         | None ->
             let reader_at_0 = build_field_reader_ctx typ 0 in
             fun runtime input_end buf base ->
@@ -1201,28 +1421,21 @@ let compile_scalar_or_var : type a r.
               reader_at_0 runtime input_end buf (base + off)
       in
       let get = fld.get in
+      (* The encoder is applied in two steps throughout this module: called
+         across a module boundary that dune's dev profile makes opaque, one
+         over-saturated application allocates a curried closure per extra
+         argument. *)
+      let encode = build_field_encoder_ctx typ in
       let raw_writer : r -> runtime -> bytes -> int -> int -> int =
-       fun v runtime buf _base write_off ->
-        let value = get v in
-        (* The encoder is applied in two steps throughout this module: called
-           across a module boundary that dune's dev profile makes opaque, one
-           over-saturated application allocates a curried closure per extra
-           argument. *)
-        let encode = build_field_encoder_ctx typ in
-        encode runtime buf write_off value
+       fun v runtime buf _base write_off -> encode runtime buf write_off (get v)
       in
       let int_reader runtime input_end buf base =
         int_of_typ_value typ (raw_reader runtime input_end buf base)
       in
       let populate =
-        (* A negative literal width never reaches a scan: the reader refuses it
-           on sight ([const_span_reader]) and allocates nothing doing so, and
-           validate has to refuse it the same way decode does. *)
         match
-          if fsize < 0 then None
-          else
-            check_populate typ ~off_fn:field_off_fn
-              ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
+          check_populate typ ~off_fn:field_off_fn
+            ~size_fn:(fun _runtime _input_end _buf _base -> fsize)
         with
         | Some p -> p
         | None -> build_populate typ ctx.n_fields raw_reader
@@ -1282,11 +1495,27 @@ let absent_optional_or : type a r.
     ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
     ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
+(* An enum's populate: the base's, then membership on the slot's int. A wide
+   carrier's value can be refused by the conversion to that int, which reports
+   byte 0, so name the field instead, as the reader does. *)
+let enum_populate ~base cf int_check =
+  if Types.int_view_is_total base then (fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    ignore
+      (int_check
+         ~at:(at_of base cf.validator_off)
+         (cf.int_reader runtime input_end buf base)))
+  else fun arr runtime input_end buf base ->
+    cf.populate arr runtime input_end buf base;
+    let at = at_of base cf.validator_off in
+    Types.relocate_at ~at (fun () ->
+        ignore (int_check ~at (cf.int_reader runtime input_end buf base)))
+
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
   match fld.typ with
-  | Map { inner; decode; encode; index_bound } ->
+  | Map { inner; decode; encode; index_bound; _ } ->
       compile_map ctx fld inner decode encode ~index_bound
   | Enum { name; base; cases; closed } ->
       (* Compile as the base integer, then validate the decoded value is one of
@@ -1314,13 +1543,7 @@ let rec compile_field : type a r.
           (fun v runtime buf base write_off ->
             encode_check (get v);
             cf.raw_writer v runtime buf base write_off);
-        populate =
-          (fun arr runtime input_end buf base ->
-            cf.populate arr runtime input_end buf base;
-            ignore
-              (int_check
-                 ~at:(at_of base cf.validator_off)
-                 (cf.int_reader runtime input_end buf base)));
+        populate = enum_populate ~base cf int_check;
       }
   | Where { inner; _ } -> compile_field ctx { fld with typ = inner }
   | Bits { width; base; bit_order } -> compile_bits ctx fld width base bit_order
@@ -1340,6 +1563,7 @@ let rec compile_field : type a r.
   | Optional_or { present; inner; default } ->
       compile_optional_or ctx fld present inner default
   | Repeat { size; elem; seq } -> compile_repeat ctx fld size elem seq
+  | Union { tag; on; cases; _ } -> compile_union ctx fld tag on cases
   | _ -> compile_scalar_or_var ctx fld
 
 and compile_map : type a w r.

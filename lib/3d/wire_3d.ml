@@ -3,55 +3,11 @@
 open Wire.Everparse
 open Proc
 
-let is_upper c = Char.uppercase_ascii c = c && Char.lowercase_ascii c <> c
-
-(* Apply EverParse's normalization to a single identifier segment (no
-   underscores): every run of two or more consecutive uppercase letters keeps
-   its first letter and lowercases the rest, wherever it occurs in the segment
-   ([SSID -> Ssid], [TMFrame -> Tmframe], [SpaceOSFrame -> SpaceOsframe]); a lone
-   uppercase letter (a camelCase word boundary) is left alone. *)
-let normalize_segment seg =
-  let len = String.length seg in
-  let b = Buffer.create len in
-  let i = ref 0 in
-  while !i < len do
-    if is_upper seg.[!i] then begin
-      let j = ref !i in
-      while !j < len && is_upper seg.[!j] do
-        incr j
-      done;
-      Buffer.add_char b seg.[!i];
-      if !j - !i >= 2 then
-        for k = !i + 1 to !j - 1 do
-          Buffer.add_char b (Char.lowercase_ascii seg.[k])
-        done;
-      i := !j
-    end
-    else begin
-      Buffer.add_char b seg.[!i];
-      incr i
-    end
-  done;
-  Buffer.contents b
-
-(* EverParse strips underscores when generating a C identifier from a name and
-   joins the [_]-separated segments into CamelCase: each segment is capitalized
-   and any internal run of two or more uppercase letters collapses to one.
-   [Grpc_message -> GrpcMessage], [EP_Header -> EpHeader],
-   [MC_Status_Reply -> McStatusReply], [SSID -> Ssid]. wire writes the .3d file
-   and type with a capitalized name, so the leading segment is normally already
-   capitalized; capitalizing it here keeps the identifier matching EverParse even
-   for an otherwise lower-case name. *)
-let everparse_name name =
-  String.split_on_char '_' name
-  |> List.map (fun seg -> String.capitalize_ascii (normalize_segment seg))
-  |> String.concat ""
-
 (* EverParse's own identifier mangling, transcribed from [pascal_case] in
-   [src/3d/Target.fst]. It drops underscores and CamelCases, but unlike
-   {!everparse_name} it lowercases every character that follows an uppercase
-   letter *or a digit* until the next lower-case letter (a digit counts as
-   uppercase, since [uppercase '2' = '2']). So [TPM2B -> Tpm2b] and
+   [src/3d/Target.fst]. It drops underscores and CamelCases, lowercasing every
+   character that follows an uppercase letter *or a digit* until the next
+   lower-case letter (a digit counts as uppercase, since
+   [uppercase '2' = '2']). So [TPM2B -> Tpm2b] and
    [Foo2Bar -> Foo2bar], not [Tpm2B] / [Foo2Bar]. EverParse builds the wrapper
    symbol as [pascal_case (module ^ "_check_" ^ codec)], so this must match it
    exactly or the differential [agree.c] links against a symbol that does not
@@ -77,6 +33,11 @@ let pascal_case name =
     Buffer.contents b
   end
 
+(* EverParse mangles a declaration's name as one component of an
+   underscore-separated C identifier. The trailing [_] puts [pascal_case] in
+   that mode even for a name with no underscore of its own. *)
+let everparse_name name = pascal_case (String.capitalize_ascii name ^ "_")
+
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
    All filenames wire.3d emits or references must go through the same
@@ -94,8 +55,9 @@ let c_ident (s : t) = everparse_name s.name
 
 (* Both mangles are many-to-one, so two codecs with different names can land
    on one generated artifact and overwrite each other in silence. [file_base]
-   collides whenever the names differ only in the leading capital ([header]
-   and [Header] both write [Header.3d], and the second write wins: the
+   collides whenever the names differ only in case, since macOS and Windows
+   fold it in file names ([header] and [Header] both write [Header.3d],
+   [FooBar] and [Foobar] one file there, and the second write wins: the
    verified C, the plug and the provenance stamp then describe one codec while
    the OCaml side still parses with both, so the shadowed codec's FFI stubs
    validate against the other codec's spec). [c_ident] collides more widely,
@@ -105,37 +67,33 @@ let c_ident (s : t) = everparse_name s.name
    translation unit including both takes one schema's plug layout for the
    other's). The standalone pipeline already rejects a name collision in
    [Wire.Everparse.merge]; do the same for the per-schema pipeline, up front
-   and naming both codecs. Its remaining collapse, two codecs sharing one
-   [pascal_case] wrapper symbol ([TPM2B] and [Tpm2b]), is left to the C
-   compiler: the merged module puts both definitions in one translation unit,
-   so it fails loudly at build time rather than substituting one for the
-   other. *)
+   and naming both codecs. [c_ident] is [pascal_case], the mangling behind the
+   wrapper symbols too, so two codecs that would share one ([TPM2B] and
+   [Tpm2b]) are refused here as well. *)
 let check_name_collisions schemas =
-  let check what key =
+  let check what ?(fold = Fun.id) key =
     let seen = Hashtbl.create 16 in
     List.iter
       (fun (s : t) ->
         let k = key s in
-        match Hashtbl.find_opt seen k with
+        match Hashtbl.find_opt seen (fold k) with
         | Some first ->
             Fmt.invalid_arg
               "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
                them"
               first s.name what k
-        | None -> Hashtbl.add seen k s.name)
+        | None -> Hashtbl.add seen (fold k) s.name)
       schemas
   in
-  check "the file" (fun s -> file_base s ^ ".3d");
+  check "the file" ~fold:String.lowercase_ascii (fun s -> file_base s ^ ".3d");
   check "the C identifier" c_ident
 
 let extern_api_path ~outdir s =
   Filename.concat outdir (file_base s ^ "_ExternalAPI.h")
 
-(* EverParse normalizes extern callback names in ways that are awkward to
-   mirror exactly (runs of uppercase after a digit get lowercased, trailing
-   uppercase runs get lowercased, ...). Rather than re-implement EverParse's
-   rule and drift from it over time, we read the normalized names straight
-   out of the [_ExternalAPI.h] file EverParse has just generated.
+(* The extern callback names are read straight out of the [_ExternalAPI.h]
+   file EverParse has just generated rather than predicted with [pascal_case],
+   so the plug defines exactly what that header declares.
 
    KaRaMeL pretty-prints the declaration to a column budget, so a long enough
    schema name puts [extern void] and the name it introduces on separate lines.
@@ -422,6 +380,41 @@ let write_external_typedefs ~outdir schemas =
       end)
     schemas
 
+let plug_prefix s =
+  String.uppercase_ascii (c_ident s) |> fun p ->
+  String.map (fun c -> if c = '-' then '_' else c) p
+
+let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
+
+(* The plug names each field twice in C: the [_IDX_] macro upper-cases the
+   name, so [X] and [x] would define one macro twice, and the struct member
+   escapes C's keywords, so [restrict] and [restrict_] would be one member.
+   Refuse naming both fields before writing either file. *)
+let check_plug_names s =
+  let fields = Wire.Everparse.plug_fields s in
+  List.iter
+    (fun (f : Wire.Everparse.plug_field) ->
+      if not (Wire.Private.Names.is_identifier f.name) then
+        Fmt.invalid_arg
+          "Wire_3d: in %S, field %S is not an identifier \
+           ([A-Za-z_][A-Za-z0-9_]*) and cannot name a plug member; rename it"
+          s.name f.name)
+    fields;
+  let check what ident =
+    match
+      Wire.Private.Names.clash
+        (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)
+    with
+    | None -> ()
+    | Some (a, b, id) ->
+        Fmt.invalid_arg
+          "Wire_3d: in %S, fields %S and %S both define the plug's %s %S; \
+           rename one of them"
+          s.name a b what id
+  in
+  check "macro" (index_macro s);
+  check "struct member" Wire.Everparse.plug_member
+
 (* Typed-struct plug: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
@@ -436,27 +429,24 @@ let write_fields_header ~outdir s =
     String.uppercase_ascii ident ^ "_FIELDS_H" |> fun g ->
     String.map (fun c -> if c = '-' then '_' else c) g
   in
-  let prefix =
-    String.uppercase_ascii ident |> fun p ->
-    String.map (fun c -> if c = '-' then '_' else c) p
-  in
   pr "#ifndef %s@\n" guard;
   pr "#define %s@\n" guard;
   pr "#include <stdint.h>@\n@\n";
   pr "/* Field indices -- use with the schema's WireSet* callbacks in a@\n";
   pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
   List.iter
-    (fun f ->
-      pr "#define %s_IDX_%s %d@\n" prefix
-        (String.uppercase_ascii f.Wire.Everparse.name)
-        f.idx)
+    (fun f -> pr "#define %s %d@\n" (index_macro s f.Wire.Everparse.name) f.idx)
     fields;
   if fields <> [] then pr "@\n";
   pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
     ident;
   pr "typedef struct %sFields {@\n" ident;
-  List.iter (fun f -> pr "  %s %s;@\n" f.Wire.Everparse.c_type f.name) fields;
+  List.iter
+    (fun f ->
+      pr "  %s %s;@\n" f.Wire.Everparse.c_type
+        (Wire.Everparse.plug_member f.name))
+    fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
   pr "#endif@\n";
@@ -469,14 +459,15 @@ let write_fields_header ~outdir s =
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
+    let member = Wire.Everparse.plug_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
           "    case %d: { %s _x; memcpy(&_x, &v, sizeof _x); f->%s = _x; \
            break; }@\n"
-          f.idx f.c_type f.name
+          f.idx f.c_type member
     | _ ->
-        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx f.name
+        Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
 let write_fields_impl ~outdir s =
@@ -528,6 +519,7 @@ let write_fields_impl ~outdir s =
 
 let write_fields ~outdir schemas =
   check_name_collisions schemas;
+  List.iter check_plug_names schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -1053,11 +1045,15 @@ let standalone_base ?name ~package () =
    program that runs the validator on each and fails on any disagreement. -- *)
 
 let hex_of_bytes b =
-  let buf = Buffer.create (Bytes.length b * 2) in
-  let ppf = Fmt.with_buffer buf in
-  Bytes.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) b;
-  Format.pp_print_flush ppf ();
-  Buffer.contents buf
+  let digits = "0123456789abcdef" in
+  let out = Bytes.create (Bytes.length b * 2) in
+  Bytes.iteri
+    (fun i c ->
+      let n = Char.code c in
+      Bytes.set out (2 * i) digits.[n lsr 4];
+      Bytes.set out ((2 * i) + 1) digits.[n land 0xf])
+    b;
+  Bytes.unsafe_to_string out
 
 (* The accept/reject decision the validator must reproduce, and -- on rejection
    -- what the codec objected to, which makes an input repairable. The record
@@ -1445,8 +1441,53 @@ let emit_agree_run ppf triples =
   pr "  exit(3);";
   pr "}"
 
+let hex_nibble = function
+  | '0' .. '9' as c -> Char.code c - Char.code '0'
+  | 'a' .. 'f' as c -> Char.code c - Char.code 'a' + 10
+  | 'A' .. 'F' as c -> Char.code c - Char.code 'A' + 10
+  | _ -> -1
+
+(* The corpus carries each byte as two hex digits. [hex_nibble] maps every
+   character to its digit value, -1 for a non-hex one, so the decode is two
+   table reads a byte. *)
+let emit_agree_nibbles ppf =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "";
+  pr "static const signed char hex_nibble[256] = {";
+  for row = 0 to 15 do
+    List.init 16 (fun col ->
+        string_of_int (hex_nibble (Char.chr ((16 * row) + col))))
+    |> String.concat ", " |> pr "  %s,"
+  done;
+  pr "};"
+
+(* The body of the loop up to the validator call: [hex] decoded into [buf],
+   two table lookups a byte. *)
+let emit_agree_decode ppf =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  pr "    uint32_t len = 0;";
+  pr "    if (strcmp(hex, \"-\") != 0) {";
+  pr "      size_t hl = strlen(hex);";
+  pr
+    "      if (hl %% 2 != 0) { fprintf(stderr, \"bad hex\\n\"); fclose(fp); \
+     return 2; }";
+  pr "      len = (uint32_t) (hl / 2);";
+  pr
+    "      if (len > sizeof(buf)) { fprintf(stderr, \"input too long\\n\"); \
+     fclose(fp); return 2; }";
+  pr "      for (uint32_t i = 0; i < len; i++) {";
+  pr "        int hi = hex_nibble[(unsigned char) hex[2 * i]];";
+  pr "        int lo = hex_nibble[(unsigned char) hex[2 * i + 1]];";
+  pr
+    "        if (hi < 0 || lo < 0) { fprintf(stderr, \"bad hex\\n\"); \
+     fclose(fp); return 2; }";
+  pr "        buf[i] = (uint8_t) ((hi << 4) | lo);";
+  pr "      }";
+  pr "    }"
+
 let emit_agree_main ppf =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  emit_agree_nibbles ppf;
   pr "";
   pr "int main(int argc, char **argv) {";
   pr
@@ -1464,21 +1505,7 @@ let emit_agree_main ppf =
   pr
     "  while (fscanf(fp, \"%%255s %%4095s %%131072s %%ld\", name, params, hex, \
      &verdict) == 4) {";
-  pr "    uint32_t len = 0;";
-  pr "    if (strcmp(hex, \"-\") != 0) {";
-  pr "      size_t hl = strlen(hex);";
-  pr "      len = (uint32_t) (hl / 2);";
-  pr
-    "      if (len > sizeof(buf)) { fprintf(stderr, \"input too long\\n\"); \
-     fclose(fp); return 2; }";
-  pr "      for (uint32_t i = 0; i < len; i++) {";
-  pr "        unsigned b;";
-  pr
-    "        if (sscanf(hex + 2 * i, \"%%2x\", &b) != 1) { fprintf(stderr, \
-     \"bad hex\\n\"); fclose(fp); return 2; }";
-  pr "        buf[i] = (uint8_t) b;";
-  pr "      }";
-  pr "    }";
+  emit_agree_decode ppf;
   pr "    int accept = run(name, params, buf, len);";
   pr "    total++;";
   pr "    if (accept != (int) verdict) {";

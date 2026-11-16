@@ -1,0 +1,12 @@
+; The generated modules that need no int wider than 31 bits, run under
+; js_of_ocaml and wasm_of_ocaml when node is present.
+
+(test
+ (name test)
+ (modes js wasm)
+ (enabled_if %{bin-available:node})
+ (js_of_ocaml
+  (enabled_if %{bin-available:js_of_ocaml}))
+ (wasm_of_ocaml
+  (enabled_if %{bin-available:wasm_of_ocaml}))
+ (libraries standalone_checks))

@@ -13,8 +13,10 @@
   codec_elem
   codec_compile
   codec_seal)
- (libraries bytesrw fmt optint))
+ (flags
+  (:standard -open Wire_runtime))
+ (libraries bytesrw fmt optint wire.runtime))
 
 (mdx
  (files codec.mli field.mli wire.mli)
- (libraries wire bytesrw))
+ (libraries wire wire.runtime bytesrw))

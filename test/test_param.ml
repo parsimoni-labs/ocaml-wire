@@ -68,6 +68,80 @@ let test_wide_input_binding_error () =
           "names the parameter" true
           (contains ~sub:"wide_limit" msg)
 
+let test_int64_input_binding_range () =
+  let check typ values =
+    let p = Param.input "wide_limit" typ in
+    let field = Field.v "value" uint8 in
+    let codec =
+      Codec.v "WideLimit"
+        ~where:Expr.(Param.expr p >= int 0)
+        Fun.id
+        Codec.[ field $ Fun.id ]
+    in
+    List.iter
+      (fun (value, expected) ->
+        match expected with
+        | true ->
+            let env = Codec.env codec |> Param.bind p value in
+            Alcotest.(check bool)
+              "parameter roundtrip" true
+              (Param.get env p = value)
+        | false -> (
+            match Param.bind p value (Codec.env codec) with
+            | _ -> Alcotest.fail "accepted an unfittable parameter"
+            | exception Invalid_argument message ->
+                Alcotest.(check bool)
+                  "names the parameter" true
+                  (contains ~sub:"wide_limit" message)))
+      values
+  in
+  let too_large = Int64.succ (Int64.of_int max_int) in
+  check uint64be
+    (List.map
+       (fun (value, expected) -> (UInt64.of_int64 value, expected))
+       [
+         (0L, true);
+         (Int64.of_int max_int, true);
+         (too_large, false);
+         (-1L, false);
+         (Int64.min_int, false);
+       ]);
+  check int64be
+    [
+      (0L, true);
+      (-1L, true);
+      (Int64.of_int min_int, true);
+      (Int64.of_int max_int, true);
+      (too_large, false);
+      (Int64.pred (Int64.of_int min_int), false);
+    ]
+
+let test_signed32_input_binding_range () =
+  let p = Param.input "signed_limit" int32be in
+  let field = Field.v "value" uint8 in
+  let codec =
+    Codec.v "SignedLimit"
+      ~where:Expr.(Param.expr p >= int 0)
+      Fun.id
+      Codec.[ field $ Fun.id ]
+  in
+  List.iter
+    (fun value ->
+      if Sys.int_size >= 32 || SInt32.equal value SInt32.zero then begin
+        let env = Codec.env codec |> Param.bind p value in
+        Alcotest.(check bool)
+          "parameter roundtrip" true
+          (SInt32.equal (Param.get env p) value)
+      end
+      else
+        match Param.bind p value (Codec.env codec) with
+        | _ -> Alcotest.fail "accepted an unfittable signed parameter"
+        | exception Invalid_argument message ->
+            Alcotest.(check bool)
+              "names the parameter" true
+              (contains ~sub:"signed_limit" message))
+    SInt32.[ min_int; max_int; zero ]
+
 let test_output_binding () =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
@@ -605,11 +679,68 @@ let test_multi_domain_decode () =
   Alcotest.(check bool) "first domain" true (Domain.join first);
   Alcotest.(check bool) "second domain" true (Domain.join second)
 
+let test_slice_navigation_requires_parameters () =
+  let size = Param.input "size" uint8 in
+  let field =
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
+  in
+  let codec = Codec.v "ParamSlice" Fun.id [ field ] in
+  List.iter
+    (fun stage ->
+      match stage () with
+      | _ -> Alcotest.fail "staged slice navigation without its input parameter"
+      | exception Invalid_argument _ -> ())
+    [
+      (fun () -> Codec.slice_offset codec field);
+      (fun () -> Codec.slice_length codec field);
+    ]
+
+let test_slice_navigation_with_parameters () =
+  let size = Param.input "size" uint8 in
+  let prefix = Field.v "prefix" (byte_array ~size:(Param.expr size)) in
+  let body =
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ snd)
+  in
+  let codec =
+    Codec.v "ParamSliceBody"
+      (fun prefix body -> (prefix, body))
+      Codec.[ prefix $ fst; body ]
+  in
+  let buf = Bytes.of_string "_abcDEF" in
+  let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
+  let offset = Staged.unstage (Codec.slice_offset ~env codec body) in
+  let length = Staged.unstage (Codec.slice_length ~env codec body) in
+  let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
+  Alcotest.(check int)
+    "absolute offset"
+    (Bytesrw.Bytes.Slice.first slice)
+    (offset buf 1);
+  Alcotest.(check int)
+    "length"
+    (Bytesrw.Bytes.Slice.length slice)
+    (length buf 1);
+  List.iter
+    (fun env ->
+      List.iter
+        (fun stage ->
+          match stage env with
+          | _ -> Alcotest.fail "accepted an invalid slice environment"
+          | exception Invalid_argument _ -> ())
+        [
+          (fun env -> Codec.slice_offset ~env codec body);
+          (fun env -> Codec.slice_length ~env codec body);
+        ])
+    [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]
+
 (* -- Suite -- *)
 
 let suite =
   ( "param",
     [
+      Alcotest.test_case "slice navigation requires parameters" `Quick
+        test_slice_navigation_requires_parameters;
+      Alcotest.test_case "slice navigation with parameters" `Quick
+        test_slice_navigation_with_parameters;
       (* construction *)
       Alcotest.test_case "input spec" `Quick test_input_spec;
       Alcotest.test_case "output spec" `Quick test_output_spec;
@@ -617,6 +748,10 @@ let suite =
       Alcotest.test_case "input binding" `Quick test_input_binding;
       Alcotest.test_case "wide input binding error" `Quick
         test_wide_input_binding_error;
+      Alcotest.test_case "int64 input binding range" `Quick
+        test_int64_input_binding_range;
+      Alcotest.test_case "signed32 input binding range" `Quick
+        test_signed32_input_binding_range;
       Alcotest.test_case "output binding" `Quick test_output_binding;
       (* runtime: input params *)
       Alcotest.test_case "input param constraint" `Quick

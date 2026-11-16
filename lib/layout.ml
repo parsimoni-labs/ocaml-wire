@@ -140,21 +140,21 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
             | None -> find rest)
       in
       find cases
+  | Union { cases; _ } ->
+      (* The tag is another field's bytes: the union is its body alone. *)
+      let rec find = function
+        | [] -> Encode_guard.raise_no_matching_case ()
+        | Case_branch { cb_inner; cb_project; _ } :: rest -> (
+            match cb_project v with
+            | Some (_tag, body) -> size_of_typ_value ctx cb_inner body
+            | None -> find rest)
+      in
+      find cases
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
 
 let rec field_wire_size : type a. a typ -> int option = function
-  | Uint8 -> Some 1
-  | Uint16 _ -> Some 2
-  | Uint32 _ -> Some 4
-  | Uint64 _ -> Some 8
-  | Int8 -> Some 1
-  | Int16 _ -> Some 2
-  | Int32 _ -> Some 4
-  | Int64 _ -> Some 8
-  | Float32 _ -> Some 4
-  | Float64 _ -> Some 8
   | Uint_var { size = Int n; _ } -> Some n
   | Uint_var _ -> None
   | Bits { base; _ } -> (
@@ -180,7 +180,30 @@ let rec field_wire_size : type a. a typ -> int option = function
   | Repeat _ -> None
   | Array { len = Int n; elem; _ } -> (
       match field_wire_size elem with Some k -> Some (n * k) | None -> None)
-  | _ -> None
+  | t -> Lower_3d.primitive_width t
+
+(* An array of a literal count of fixed-width elements is a byte count too. *)
+let array_len ~combinator len elem =
+  match (literal_size ~combinator len, field_wire_size elem) with
+  | Int n, Some k when k > 0 && n > Sys.max_string_length / k ->
+      Fmt.invalid_arg
+        "Wire.%s: %d elements of %d bytes are more than a buffer can hold"
+        combinator n k
+  | len, _ -> len
+
+let array ~len elem =
+  reject_decoration ~combinator:"array" elem;
+  reject_bitfield_element ~combinator:"array" elem;
+  reject_non_array_element ~combinator:"array" elem;
+  (Array { len = array_len ~combinator:"array" len elem; elem; seq = seq_list }
+    : _ typ)
+
+let array_seq seq ~len elem =
+  reject_decoration ~combinator:"array_seq" elem;
+  reject_bitfield_element ~combinator:"array_seq" elem;
+  reject_non_array_element ~combinator:"array_seq" elem;
+  (Array { len = array_len ~combinator:"array_seq" len elem; elem; seq }
+    : _ typ)
 
 let c_type_of : type a. a typ -> string = function
   | Uint8 | Bits { base = U8; _ } -> "uint8_t"

@@ -622,6 +622,42 @@ let test_codec_field_pos () =
   (* field_pos at c = 2 (third field, zero-indexed) *)
   Alcotest.(check int) "field_pos at c" 2 (UInt8.to_int (Param.get env out))
 
+(* A size that names a mapped field reads the field's wire value, not the
+   mapped one: what the check pass and the 3D projection read. *)
+let test_size_names_mapped_field () =
+  let sized typ =
+    let f_len = Field.v "len" typ in
+    Codec.v "Sized"
+      (fun k s -> (k, s))
+      Codec.
+        [
+          f_len $ fst; Field.v "data" (byte_array ~size:(Field.ref f_len)) $ snd;
+        ]
+  in
+  let lossy =
+    sized (map ~decode:(fun v -> UInt8.to_int v land 3) ~encode:UInt8.v uint8)
+  in
+  (match Codec.decode lossy (Bytes.of_string "\x07abcdefg") 0 with
+  | Ok (k, s) ->
+      Alcotest.(check int) "mapped value" 3 k;
+      Alcotest.(check string) "sized by the wire value" "abcdefg" s
+  | Error e -> Alcotest.failf "lossy: %a" pp_parse_error e);
+  (match Codec.decode lossy (Bytes.of_string "\x07abcd") 0 with
+  | Ok _ -> Alcotest.fail "lossy: a short record decoded"
+  | Error _ -> ());
+  let refusing = sized (lookup [ 1; 2 ] uint8) in
+  (match Codec.decode refusing (Bytes.of_string "\x01abcde") 0 with
+  | Ok (k, s) ->
+      Alcotest.(check int) "looked up" 2 k;
+      Alcotest.(check string) "sized by the index" "a" s
+  | Error e -> Alcotest.failf "lookup: %a" pp_parse_error e);
+  match Codec.decode refusing (Bytes.of_string "\x05abcde") 0 with
+  | Ok _ -> Alcotest.fail "lookup: a refused index decoded"
+  | Error e ->
+      Alcotest.(check string)
+        "the refusal names the field" "len@0: invalid tag: 5"
+        (Fmt.str "%a" pp_parse_error e)
+
 let suite =
   ( "codec_dependent",
     [
@@ -682,4 +718,6 @@ let suite =
         test_int64_mask_constraint_over_map;
       Alcotest.test_case "constraint: int-ref bound on uint64 enforced" `Quick
         test_uint64_int_ref_constraint_enforced;
+      Alcotest.test_case "size: names a mapped field" `Quick
+        test_size_names_mapped_field;
     ] )

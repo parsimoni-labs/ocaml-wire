@@ -94,6 +94,31 @@ let test_expr_const () =
     "lt" true
     (Eval.expr ctx (Types.Lt (Types.Int 1, Types.Int 2)))
 
+let test_compound_int64_ordering () =
+  let open Types in
+  let operands =
+    [
+      ("and", Land64 (Int64 (-1L), Int64 (-1L)));
+      ("shift", Lsr64 (Int64 (-1L), Int 0));
+    ]
+  in
+  List.iter
+    (fun (name, high) ->
+      List.iter
+        (fun (op, expression, expected) ->
+          Alcotest.(check bool)
+            (name ^ " " ^ op)
+            expected
+            (Eval.expr Eval.empty expression))
+        [
+          ("<", Lt (high, Int64 0L), false);
+          ("<=", Le (high, Int64 0L), false);
+          (">", Gt (high, Int64 0L), true);
+          (">=", Ge (high, Int64 0L), true);
+          ("reversed", Lt (Int64 0L, high), true);
+        ])
+    operands
+
 (* A cross-field reference with no record to read it from is a programmer
    error, which the entry points document as [Invalid_argument]. *)
 let test_expr_ref_fails () =
@@ -155,6 +180,8 @@ let suite =
       Alcotest.test_case "int_of_exn non-integer raises" `Quick
         test_int_of_exn_non_integer;
       Alcotest.test_case "expr constants" `Quick test_expr_const;
+      Alcotest.test_case "compound int64 ordering" `Quick
+        test_compound_int64_ordering;
       Alcotest.test_case "expr arithmetic overflow" `Quick
         test_expr_arithmetic_overflow;
       Alcotest.test_case "expr zero divisor" `Quick test_expr_zero_divisor;

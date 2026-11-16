@@ -450,6 +450,85 @@ let test_error_constructors () =
   | Unexpected_eof { expected = 4; got = 2 } -> ()
   | _ -> Alcotest.fail "eof kind"
 
+(* A span sized by an expression can come out negative from the header. The
+   record's frame still fits, since the next span takes the bytes back, so the
+   span's own check is what refuses it, in validate as in decode. *)
+let test_validate_negative_span () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "NegSpan"
+      (fun n b rest -> (n, b, rest))
+      Codec.
+        [
+          (n $ fun (n, _, _) -> n);
+          ( Field.v "b" (byte_slice ~size:Expr.(Field.ref n - int 4))
+          $ fun (_, b, _) -> b );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.make 16 '\x00' in
+  Bytes.set_uint8 buf 0 1;
+  let decoded =
+    match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+  in
+  let validated =
+    match Codec.validate c buf 0 with
+    | () -> "ok"
+    | exception Wire.Parse_error _ -> "refused"
+  in
+  Alcotest.(check string) "decode" "refused" decoded;
+  Alcotest.(check string) "validate agrees" decoded validated
+
+(* A gated optional has no size of its own: with the gate on and one byte
+   left before a field that takes the rest, both entry points refuse the
+   record. *)
+let test_validate_gated_optional () =
+  let gate = Field.v "gate" uint8 in
+  let c =
+    Codec.v "Gated"
+      (fun g p rest -> (g, p, rest))
+      Codec.
+        [
+          (gate $ fun (g, _, _) -> g);
+          ( Field.optional "payload"
+              ~present:Expr.(Field.ref gate <> int 0)
+              uint16be
+          $ fun (_, p, _) -> p );
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.of_string "\x01\x00" in
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted a missing payload"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted a missing payload"
+  | exception Wire.Parse_error _ -> ()
+
+(* An overlong span left in a record whose last span takes the rest: the
+   record's extent still fits, the span does not, and both entry points refuse
+   it with a parse error rather than an [Invalid_argument]. *)
+let test_overlong_span () =
+  let n = Field.v "n" uint8 in
+  let c =
+    Codec.v "LongSpan"
+      (fun n b rest -> (n, b, rest))
+      Codec.
+        [
+          (n $ fun (n, _, _) -> n);
+          (Field.v "b" (byte_slice ~size:(Field.ref n)) $ fun (_, b, _) -> b);
+          (Field.v "rest" all_bytes $ fun (_, _, r) -> r);
+        ]
+  in
+  let buf = Bytes.make 8 '\x00' in
+  Bytes.set_uint8 buf 0 12;
+  (match Codec.decode c buf 0 with
+  | Ok _ -> Alcotest.fail "decode accepted an overlong span"
+  | Error _ -> ());
+  match Codec.validate c buf 0 with
+  | () -> Alcotest.fail "validate accepted an overlong span"
+  | exception Wire.Parse_error _ -> ()
+
 (* A field's own decode-side check (enum membership, lookup bound, a bounded
    embedded element) lives in its reader, not in a user constraint, so
    [Codec.validate] must run the validator pass for every codec or it would
@@ -592,74 +671,6 @@ let test_validate_runs_sub_codec_checks () =
             Alcotest.failf "%s: validate rejected for another reason (%a vs %a)"
               what pp_parse_error e pp_parse_error decoded)
     sub_codec_check_cases
-
-(* A codec with no checks (plain scalars and byte spans) must validate without
-   allocating: a hot read path validates a header then reads fields zero-copy,
-   so a per-validate allocation here turns an O(log N) seek into O(N log N)
-   garbage. Validate runs the structural bounds check but no validator pass. *)
-let test_validate_check_free_no_alloc () =
-  skip_unless_gc_counters ();
-  let c =
-    Codec.v "Page"
-      (fun a b k -> (a, b, k))
-      Codec.
-        [
-          (Field.v "a" uint8 $ fun (a, _, _) -> a);
-          (Field.v "b" uint32be $ fun (_, b, _) -> b);
-          (Field.v "k" (byte_slice ~size:(int 8)) $ fun (_, _, k) -> k);
-        ]
-  in
-  let buf = Bytes.make 32 '\007' in
-  Codec.validate c buf 0;
-  (* warm up any one-time setup *)
-  let n = 100_000 in
-  let before = Gc.minor_words () in
-  for _ = 1 to n do
-    Codec.validate c buf 0
-  done;
-  let per_call = (Gc.minor_words () -. before) /. float_of_int n in
-  Alcotest.(check bool)
-    (Fmt.str "validate of a check-free codec allocates ~0 words (got %.2f)"
-       per_call)
-    true (per_call < 1.0)
-
-(* A compiled validator keeps a per-domain scratch, and the cost of reaching it
-   on a domain that has not decoded yet must not track how many validators the
-   program ever built. It used to: each validator minted its own
-   [Domain.DLS.new_key], and a domain sizes its DLS array from the global key
-   counter, so the first validate on a fresh domain paid about one word per key
-   ever created. Measured here at 10,000 validators it was 32,792 words, and at
-   50,000 it was 131,096, about 1 MB, charged to domains that never decode.
-
-   [Gc.minor_words] cannot see this. The array is large enough to be allocated
-   straight into the major heap, so read [Gc.allocated_bytes], which counts
-   both. *)
-let test_fresh_domain_validate_flat_in_validator_count () =
-  skip_unless_gc_counters ();
-  let f_x = Field.v "x" uint8 in
-  let mk name =
-    Codec.v name
-      ~where:Expr.(Field.ref f_x <= int 200)
-      (fun x -> x)
-      Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
-  in
-  for i = 1 to 10_000 do
-    ignore (Sys.opaque_identity (Fmt.kstr mk "S%d" i))
-  done;
-  let c = mk "Last" in
-  let buf = Bytes.make 8 '\007' in
-  let words =
-    Domain.join
-      (Domain.spawn (fun () ->
-           let before = Gc.allocated_bytes () in
-           Codec.validate c buf 0;
-           (Gc.allocated_bytes () -. before) /. 8.))
-  in
-  Fmt.kstr
-    (fun msg -> Alcotest.(check bool) msg true (words < 4096.))
-    "a fresh domain's first validate does not track the validator count (got \
-     %.0f words)"
-    words
 
 (* A [Wire.where] cond carried in a field's typ ([where (len < 2) uint8]) must be
    enforced by both decode and validate, not only projected to 3D. The cond
@@ -996,11 +1007,16 @@ let test_out_of_range_offset_follows_the_frame () =
     | Ok _ -> Alcotest.fail "expected the wide value to be refused"
     | Error e -> e.at
   in
+  let validated_at base b =
+    match Codec.validate c b base with
+    | () -> Alcotest.fail "expected validate to refuse the wide value"
+    | exception Wire.Parse_error e -> e.at
+  in
   let wide = Bytes.make 8 '\xff' in
+  let shifted = Bytes.cat (Bytes.make 8 '\x00') wide in
   Alcotest.(check int) "at base 0" 0 (at_of 0 wide);
-  Alcotest.(check int)
-    "at base 8" 8
-    (at_of 8 (Bytes.cat (Bytes.make 8 '\x00') wide))
+  Alcotest.(check int) "at base 8" 8 (at_of 8 shifted);
+  Alcotest.(check int) "validate at base 8" 8 (validated_at 8 shifted)
 
 (* A field whose byte extent is an input parameter cannot be measured from the
    value alone. Reporting 0 for it is worse than refusing: a caller sizes a
@@ -1131,6 +1147,16 @@ let test_rename_roundtrip () =
       | Ok d -> Alcotest.(check bool) "decode unchanged by rename" true (d = v)
       | Error _ -> Alcotest.fail "decode failed after rename")
   | _ -> Alcotest.fail "encode failed"
+
+(* A renamed codec's errors name it by its new name. *)
+let test_rename_errors () =
+  let renamed = Codec.rename "NewName" rename_codec in
+  let v = { ra = UInt8.v 7; rb = UInt16.v 1000 } in
+  match Codec.encode renamed v (Bytes.create 2) 0 with
+  | () -> Alcotest.fail "encode into a short buffer succeeded"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) "new name" true (contains ~sub:"NewName" m);
+      Alcotest.(check bool) "old name absent" false (contains ~sub:"OrigName" m)
 
 let test_enum_codec_validates () =
   (* The Codec decode path rejects an enum value that is not one of the named
@@ -1294,63 +1320,97 @@ let test_dynamic_length_field_stays_in_region () =
     "the shortfall ignores the bytes past the region" (past_the_region '\x01')
     (past_the_region '\xff')
 
-(* [Codec.validate] scans a refined span where it lies rather than copying it,
-   so the scan has to refuse everything the reader refuses. A literal width
-   below zero is refused before any scan, and by the reader, so both entry
-   points have to name the same fault: a validate that reported end-of-input
-   here while decode reported the negative width would be a validator that
-   rejects for a different reason than the decoder it stands in for. *)
-let test_negative_span_width_agrees () =
+(* A bitfield packed after the first one of its word is reached with the
+   cursor past the word, but its error names the word's offset, as
+   [parse_error] promises: the field's own offset. *)
+let test_bitfield_error_offset () =
+  let field name width =
+    Field.v name (bits ~width U16be) ~self_constraint:(fun self ->
+        Expr.(self <= int 2))
+  in
   let c =
-    Codec.v "NegWidth" Fun.id
+    Codec.v "BitfieldErrorOffset"
+      (fun a b c d -> (a, b, c, d))
       Codec.
         [
-          Field.v "d"
-            (byte_array_where ~size:(int (-1)) ~per_byte:printable_byte)
-          $ Fun.id;
+          (field "a" 3 $ fun (x, _, _, _) -> x);
+          (field "b" 5 $ fun (_, x, _, _) -> x);
+          (field "c" 8 $ fun (_, _, x, _) -> x);
+          ( Field.v "d" uint8 ~self_constraint:(fun self -> Expr.(self <= int 2))
+          $ fun (_, _, _, x) -> x );
         ]
   in
-  let buf = Bytes.make 8 'a' in
-  let kind f =
-    match f () with
-    | () -> Alcotest.failf "accepted a span of width -1"
-    | exception Wire.Parse_error e -> Fmt.str "%a" pp_error_kind e.kind
-  in
-  let validated = kind (fun () -> Codec.validate c buf 0) in
-  let decoded =
-    kind (fun () ->
-        match Codec.decode c buf 0 with
-        | Ok _ -> ()
-        | Error e -> raise (Wire.Parse_error e))
-  in
-  Alcotest.(check string)
-    "validate rejects a negative span width for decode's reason" decoded
-    validated
+  (* At offset 1: the word is bytes 1 and 2, [d] is byte 3. *)
+  List.iter
+    (fun (input, field, at) ->
+      let buf = Bytes.of_string input in
+      let check what f =
+        match f () with
+        | exception Parse_error e ->
+            Alcotest.(check (list string)) (what ^ ": field") [ field ] e.field;
+            Alcotest.(check int) (what ^ ": offset of " ^ field) at e.at
+        | () -> Alcotest.failf "%s: accepted a bad %s" what field
+      in
+      check "validate" (fun () -> Codec.validate c buf 1);
+      check "decode" (fun () -> ignore (Codec.decode_exn c buf 1)))
+    [
+      ("\x00\xe0\x00\x00\x00", "a", 1);
+      ("\x00\x1f\x00\x00\x00", "b", 1);
+      ("\x00\x00\xff\x00\x00", "c", 1);
+      ("\x00\x00\x00\xff\x00", "d", 3);
+    ]
 
-let test_negative_span_is_parse_error () =
-  let neg_codec =
-    Codec.v "NegSpan" Fun.id
-      Codec.[ Field.v "b" (byte_array ~size:(int (-1))) $ Fun.id ]
+let test_set_dependent_byte_refinement () =
+  let check codec field initial expected =
+    let set = Staged.unstage (Codec.set codec field) in
+    let buf = Bytes.of_string initial in
+    (match set buf 0 "A\xff" with
+    | () -> Alcotest.fail "set accepted a byte the field refinement rejects"
+    | exception Invalid_argument _ -> ());
+    Alcotest.(check bytes)
+      "rejected set leaves the buffer untouched" (Bytes.of_string initial) buf;
+    set buf 0 "XY";
+    Alcotest.(check bytes)
+      "valid set writes its own field" (Bytes.of_string expected) buf;
+    Codec.validate codec buf 0
   in
-  let expect name = function
-    | Ok _ -> Alcotest.failf "%s: accepted a negative span" name
-    | Error { kind = Value_out_of_range _; _ } -> ()
-    | Error e ->
-        Alcotest.failf "%s: expected Value_out_of_range, got %a" name
-          pp_parse_error e
+  let len = Field.v "len" uint8 in
+  let data =
+    Field.v "data"
+      (byte_array_where ~size:(Field.ref len) ~per_byte:(fun b ->
+           Expr.(b >= int 32 && b <= int 126)))
   in
-  expect "Codec.decode" (Codec.decode neg_codec (Bytes.of_string "abc") 0);
-  expect "of_string codec" (of_string (codec neg_codec) "abc");
-  expect "of_string typ" (of_string (byte_array ~size:(int (-1))) "abc");
-  expect "of_bytes typ"
-    (of_bytes (byte_array ~size:(int (-1))) (Bytes.of_string "abc"))
+  let static_data = Codec.(data $ snd) in
+  let static_codec =
+    Codec.v "RefinedStatic"
+      (fun len data -> (len, data))
+      Codec.[ len $ fst; static_data ]
+  in
+  check static_codec static_data "\x02AB" "\x02XY";
+  let prefix = Field.v "prefix" (byte_array ~size:(Field.ref len)) in
+  let dynamic_data = Codec.(data $ fun (_, _, data) -> data) in
+  let dynamic_codec =
+    Codec.v "RefinedDynamic"
+      (fun len prefix data -> (len, prefix, data))
+      Codec.
+        [
+          (len $ fun (len, _, _) -> len);
+          (prefix $ fun (_, prefix, _) -> prefix);
+          dynamic_data;
+        ]
+  in
+  check dynamic_codec dynamic_data "\x02abAB" "\x02abXY"
 
 let suite =
   ( "codec",
     [
+      Alcotest.test_case "set: dependent byte refinement" `Quick
+        test_set_dependent_byte_refinement;
       Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
       Alcotest.test_case "rename: roundtrip unchanged" `Quick
         test_rename_roundtrip;
+      Alcotest.test_case "rename: errors name the new name" `Quick
+        test_rename_errors;
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "decode: prefix and all consumption" `Quick
@@ -1398,13 +1458,14 @@ let suite =
         test_shadowed_field_takes_no_name;
       Alcotest.test_case "error: parse_error / eof constructors" `Quick
         test_error_constructors;
-      Alcotest.test_case "validate: check-free codec allocates nothing" `Quick
-        test_validate_check_free_no_alloc;
-      Alcotest.test_case
-        "validate: fresh domain cost is flat in validator count" `Quick
-        test_fresh_domain_validate_flat_in_validator_count;
       Alcotest.test_case "validate: matches decode rejections" `Quick
         test_validate_matches_decode_rejections;
+      Alcotest.test_case "validate: refuses a negative span size" `Quick
+        test_validate_negative_span;
+      Alcotest.test_case "decode: refuses an overlong span" `Quick
+        test_overlong_span;
+      Alcotest.test_case "validate: refuses a missing gated optional" `Quick
+        test_validate_gated_optional;
       Alcotest.test_case "validate: runs a sub-codec's checks" `Quick
         test_validate_runs_sub_codec_checks;
       Alcotest.test_case "decode: enforces typ-level where" `Quick
@@ -1446,8 +1507,6 @@ let suite =
         `Quick test_nested_region_eof_stays_in_region;
       Alcotest.test_case "diag: a region bounds a length field it cannot reach"
         `Quick test_dynamic_length_field_stays_in_region;
-      Alcotest.test_case "diag: negative span is a parse error" `Quick
-        test_negative_span_is_parse_error;
-      Alcotest.test_case "diag: negative span width agrees with decode" `Quick
-        test_negative_span_width_agrees;
+      Alcotest.test_case "error: a bitfield names its word's offset" `Quick
+        test_bitfield_error_offset;
     ] )

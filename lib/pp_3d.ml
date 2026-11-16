@@ -1,7 +1,16 @@
 open Dsl
 open Lower_3d
 
-(* 3D and C reserved words that cannot be used as field/param names. *)
+let inner_wire_size = inner_wire_size
+let index_bound_elt = index_bound_elt
+
+(* The names a field or parameter cannot take in 3D, in the F* EverParse
+   writes from it, or in the C KaRaMeL writes from that. The 3D parser rejects
+   its own keywords and type names outright; an F* keyword passes 3D but
+   reaches the F* as a binder once a constraint reads the field or a sub-codec
+   types it, and fails there with a syntax error ([end], [in], [of], ...).
+   KaRaMeL renames a C keyword it knows, but not [typeof], which GNU C and C23
+   read as a keyword. Checked against 3d.exe for each name. *)
 module Reserved_3d = Set.Make (String)
 
 let reserved_3d =
@@ -20,15 +29,33 @@ let reserved_3d =
         new new_effect noeq noextract opaque_to_smt open polymonadic_bind \
         polymonadic_subcomp private range_of rec reflectable reifiable reify \
         requires restart_solver returns set_range_of sub_effect synth then tot \
-        total try unfold unopteq val when with")
+        total try unfold unopteq val when with end in of opaque quote \
+        unfoldable aligned all_bytes all_zeros field_pos field_ptr \
+        field_ptr_after is_range_okay pointer probe refining specialize string \
+        UINT8BE typeof")
 
 (* Append a trailing underscore to names that 3D or F* reserves so the
    projection always produces a parseable identifier even when the user
    picks something like [total]. The same escaping is applied wherever a
    user-chosen name reaches 3D output: param decls, [Param_ref], [Ref],
    field names. The OCaml-side name is unchanged. *)
+(* KaRaMeL, which writes EverParse's C, drops an identifier's trailing
+   underscores and renames a C keyword it knows ([int] becomes [int0]), but not
+   GNU C's [typeof]: a field spelt [typeof_] in 3D was a C local named
+   [typeof], which the C compiler refused. A name that would reach C so is
+   spelt [typeof_3d], which reaches it as [typeof3d]. *)
+let rec strip_underscores s =
+  let n = String.length s in
+  if n > 0 && s.[n - 1] = '_' then strip_underscores (String.sub s 0 (n - 1))
+  else s
+
+let c_unsafe = [ "typeof" ]
+
 let escape_3d name =
-  if Reserved_3d.mem name reserved_3d then name ^ "_" else name
+  let base = strip_underscores name in
+  if List.mem base c_unsafe then base ^ "_3d"
+  else if Reserved_3d.mem name reserved_3d then name ^ "_"
+  else name
 
 let struct_tag_name (s : struct_) = "Wire" ^ escape_3d s.name
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
@@ -142,7 +169,7 @@ and pp_typ : type a. a typ Fmt.t =
   | Single_elem { size; elem; at_most = true } ->
       Fmt.pf ppf "%a[:byte-size-single-element-array-at-most %a]" pp_typ elem
         pp_expr size
-  | Enum { name; _ } -> Fmt.string ppf name
+  | Enum { name; _ } -> Fmt.string ppf (escape_3d name)
   | Casetype { name; _ } -> Fmt.string ppf name
   | Struct { name; _ } -> Fmt.string ppf name
   | Type_ref name -> Fmt.string ppf name
@@ -150,6 +177,8 @@ and pp_typ : type a. a typ Fmt.t =
   | Apply { typ; args } ->
       Fmt.pf ppf "%a(%a)" pp_typ typ Fmt.(list ~sep:comma pp_packed_expr) args
   | Map { inner; _ } -> pp_typ ppf inner
+  (* The dispatch declaration takes the tag as its parameter. *)
+  | Union { name; on; _ } -> Fmt.pf ppf "%s(%a)" name pp_expr on
   (* A parametric sub-codec is emitted as a typedef with formals (see
      [extract]), so the use site must apply them: [Sub(p1, p2)]. The outer
      codec surfaces the same-named params, so each formal resolves to the
@@ -258,21 +287,6 @@ type field_suffix =
   | Zeroterm
   | Zeroterm_at_most of int expr
 
-let rec inner_wire_size : type a. a typ -> int option = function
-  | Uint8 | Int8 -> Some 1
-  | Uint16 _ | Int16 _ -> Some 2
-  | Uint32 _ | Int32 _ | Float32 _ -> Some 4
-  | Uint64 _ | Int64 _ | Float64 _ -> Some 8
-  | Bits { base = U8; _ } -> Some 1
-  | Bits { base = U16 _; _ } -> Some 2
-  | Bits { base = U32 _; _ } -> Some 4
-  | Unit -> Some 0
-  | Map { inner; _ } -> inner_wire_size inner
-  | Enum { base; _ } -> inner_wire_size base
-  | Where { inner; _ } -> inner_wire_size inner
-  | Codec { codec_fixed_size = Some n; _ } -> Some n
-  | _ -> None
-
 (* Like [inner_wire_size] but as an [int expr], so explicitly-sized
    types ([byte_array], [byte_slice], [single_elem], etc.) can drive
    the [byte-size] suffix of an enclosing [optional]/[array]. Returns
@@ -338,18 +352,6 @@ end = struct
   let pp t = t
 end
 
-(* The index bound a [cases] / lookup typ carries, seen through the transparent
-   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
-   valid index only when [< n], which the projection emits as a refinement so
-   the generated C validator rejects the same out-of-range inputs the OCaml
-   decoder does. *)
-let rec index_bound_of : type a. a typ -> int option = function
-  | Map { index_bound = Some _ as b; _ } -> b
-  | Map { inner; index_bound = None; _ } -> index_bound_of inner
-  | Where { inner; _ } -> index_bound_of inner
-  | Apply { typ; _ } -> index_bound_of typ
-  | _ -> None
-
 (* Bit width of a typ's wire representation, seen through the same transparent
    wrappers as [index_bound_of] -- used only to decide whether a lookup's
    index bound is exhaustive (see [lookup_is_exhaustive], used by [pp_field]).
@@ -394,19 +396,6 @@ let rec enum_cases_of : type a. a typ -> int list option = function
   | Apply { typ; _ } -> enum_cases_of typ
   | _ -> None
 
-(* A 1-byte array / repeat element that carries an index bound (a lookup index
-   into an [n]-entry table) projects like a [byte_array_where]: every byte is
-   refined to [< n] through a synthesised element struct. Returns the element
-   variable and its constraint, keyed on the bound so equal bounds share a
-   single synthesised typedef. *)
-let index_bound_elt : type a. a typ -> (string * bool expr) option =
- fun elem ->
-  match (inner_wire_size elem, index_bound_of elem) with
-  | Some 1, Some bound ->
-      let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
-      Some (elt_var, Lt (Ref (I, elt_var), Int bound))
-  | _ -> None
-
 (* The bare base an open enum renders as when it is a fixed-size array element.
    A closed enum admits only its named codes, so it projects to a 3D enum type
    that EverParse enforces per element, mirroring the OCaml decoder. An open enum
@@ -425,7 +414,7 @@ let rec open_enum_elem_base : type a. a typ -> (Format.formatter -> unit) option
 let rec optional_suffix : type a.
     bool expr -> a typ -> field_suffix * (Format.formatter -> unit) =
  fun present inner ->
-  match inner_wire_size_expr inner with
+  match if optional_region inner then None else inner_wire_size_expr inner with
   | Some s ->
       (* Project the optional as a conditional byte region: [present ? s : 0]
          bytes. The base printer comes from [field_suffix] so the inner's
@@ -466,6 +455,15 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
   | Byte_array_where { size; elt_var; _ } ->
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
+  | Single_elem { size; _ } when Option.is_some (primitive_region typ) ->
+      ( No_suffix,
+        fun ppf ->
+          pp_typ ppf
+            (Apply
+               {
+                 typ = Type_ref (primitive_region_name typ);
+                 args = [ Pack_expr size ];
+               }) )
   | Single_elem { size; elem; at_most } ->
       (* A wrapper-needing element goes through its synthesised struct, applied
          to the formals that struct lifted out of the enclosing scope; a bare
@@ -712,19 +710,28 @@ let render_typ_at : type a.
   let suffix, pp_base = field_suffix typ in
   let pp_base =
     match doc_enum with
-    | Some n -> fun ppf -> Fmt.string ppf n
+    | Some n -> fun ppf -> Fmt.string ppf (escape_3d n)
     | None -> pp_base
   in
   (pp_base, suffix, constraint_)
+
+(* The 3D names of a struct's named fields, which an anonymous field's name
+   must avoid. Set by [pp_struct] for the struct it prints. *)
+let named_fields_3d : string list ref = Stdlib.ref []
+
+(* 3D needs a name for an anonymous field too: the first [_anon_<n>] no named
+   field of the struct already takes. *)
+let rec fresh_anon_name () =
+  let s = Fmt.str "_anon_%d" !anon_counter in
+  incr anon_counter;
+  if List.mem s !named_fields_3d then fresh_anon_name () else s
 
 let pp_field widenable ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
     | None ->
-        let n = !anon_counter in
-        incr anon_counter;
-        let s = Fmt.str "_anon_%d" n in
+        let s = fresh_anon_name () in
         (s, s)
   in
   let pp_base, suffix, constraint_ =
@@ -775,11 +782,228 @@ let pp_params ?(as_enum = false) ppf params =
   if not (List.is_empty params) then
     Fmt.pf ppf "(%a)" Fmt.(list ~sep:comma (pp_param ~as_enum)) params
 
+(* Conjoin a list of constraint expressions, skipping [None]s. *)
+let conjoin_constraints constraints =
+  List.fold_left
+    (fun acc c ->
+      match (acc, c) with
+      | acc, None -> acc
+      | None, Some c -> Some c
+      | Some a, Some b -> Some (And (a, b)))
+    None constraints
+
+(* Collapse all constraints in a reversed bit group onto the last field,
+   where every referenced field has already been parsed. Backward
+   references to other fields in the group would otherwise break under
+   reversal, because the reversed field is parsed before its referents.
+
+   The combined constraint is semantically equivalent for validation
+   (accept/reject) -- EverParse's per-field constraints are pure boolean
+   predicates, so moving them later in the parse still produces the same
+   overall verdict. Bitfield actions use 3D's [:act] form, which fires
+   regardless of validation outcome, so moving constraints does not
+   affect callback behaviour. *)
+let collapse_constraints_into_last group =
+  let constraints = List.map (fun (Field f) -> f.constraint_) group in
+  let combined = conjoin_constraints constraints in
+  let rec walk = function
+    | [] -> []
+    | [ Field f ] -> [ Field { f with constraint_ = combined } ]
+    | Field f :: rest -> Field { f with constraint_ = None } :: walk rest
+  in
+  walk group
+
+(* Reorder consecutive bitfield groups so every pairing of [bitfield_base] and
+   [bit_order] projects to a valid EverParse 3D struct while keeping the same
+   byte layout. EverParse couples bit order to the base's byte order
+   (LE -> LSB-first, BE -> MSB-first). When the user's [bit_order] differs
+   from that native choice, we reverse the group's declaration order and
+   prepend [total_bits - used_bits] of anonymous padding; in EverParse's
+   native packing this produces the identical bit layout. Fields outside
+   bit groups are left untouched. [pp_struct] applies it to every struct it
+   prints, so a sub-codec, a wrapper or a casetype body gets the same layout
+   as an entrypoint. Extern-call indices embedded in actions are stamped
+   before printing, so WireSet callbacks still write into the original
+   (wire-declaration) slots -- the stub generator never sees the reordered
+   struct. *)
+(* Extract bitfield info through any number of [Map]/[Enum]/[Where] wrappers.
+   [bit (bits ~width:1 U8)] is [Map { inner = Bits _ }] at the outer level;
+   without unwrapping, grouping logic would treat it as a non-bitfield and
+   break apart consecutive bit groups, producing wrong .3d layouts. *)
+let rec unwrap_bits : type a. a typ -> (bitfield_base * bit_order * int) option
+    = function
+  | Bits { base; bit_order; width } -> Some (base, bit_order, width)
+  | Map { inner; _ } -> unwrap_bits inner
+  | Enum { base; _ } -> unwrap_bits base
+  | Where { inner; _ } -> unwrap_bits inner
+  | _ -> None
+
+let is_same_bit_group base bit_order (Field f) =
+  match unwrap_bits f.field_typ with
+  | Some (b2, bo2, _) ->
+      equal_bitfield_base b2 base && equal_bit_order bo2 bit_order
+  | None -> false
+
+let bit_width (Field f) =
+  match unwrap_bits f.field_typ with Some (_, _, w) -> w | None -> 0
+
+(* Greedy: collect consecutive Bits with the same (base, bit_order)
+   that still fit in one base word. *)
+let collect_bit_group base bit_order total f0 rest =
+  let rec collect used group = function
+    | f :: rest' when is_same_bit_group base bit_order f ->
+        let w = bit_width f in
+        if used + w <= total then collect (used + w) (f :: group) rest'
+        else (used, List.rev group, f :: rest')
+    | rest' -> (used, List.rev group, rest')
+  in
+  collect (bit_width f0) [ f0 ] rest
+
+let pad_reversed_group total used base native reversed =
+  let padding = total - used in
+  if padding > 0 then
+    let pad_typ = Bits { width = padding; base; bit_order = native } in
+    Field
+      {
+        field_name = None;
+        field_typ = pad_typ;
+        constraint_ = None;
+        action = None;
+        field_doc = None;
+      }
+    :: reversed
+  else reversed
+
+let reorder_bit_group base bit_order f0 rest =
+  let total = bitfield_base_bits base in
+  let native = native_bit_order base in
+  let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  let emitted =
+    if equal_bit_order bit_order native then group
+    else
+      (* Backward references in reversed order would break: fields now
+         come before the values their constraints read. Collapse all
+         constraints onto the last reversed field. *)
+      let reversed = collapse_constraints_into_last (List.rev group) in
+      pad_reversed_group total used base native reversed
+  in
+  (emitted, rest')
+
+let reorder_bit_groups_for_3d fields =
+  let rec go acc = function
+    | [] -> List.rev acc
+    | (Field f as f0) :: rest -> (
+        match unwrap_bits f.field_typ with
+        | Some (base, bit_order, _) ->
+            let emitted, rest' = reorder_bit_group base bit_order f0 rest in
+            go (List.rev_append emitted acc) rest'
+        | None -> go (f0 :: acc) rest)
+  in
+  go [] fields
+
+(* A struct's parameters and fields share one 3D scope, and the escape of a
+   keyword can spell another name in it: [end] and [end_] would both be
+   [end_], and a field [ctx] would shadow the FFI projection's [ctx]
+   parameter, which 3D rejects. Refuse naming both rather than hand 3d.exe a
+   declaration it fails on, or one it reads as another. A name that is not an
+   identifier, [a-b], has no 3D spelling at all. *)
+let check_3d_names (s : struct_) =
+  let params =
+    List.map
+      (fun p -> (Fmt.str "parameter %S" p.param_name, escape_3d p.param_name))
+      s.params
+  in
+  let fields =
+    List.filter_map
+      (fun (Field f) ->
+        Option.map (fun n -> (Fmt.str "field %S" n, escape_3d n)) f.field_name)
+      s.fields
+  in
+  List.iter
+    (fun (what, id) ->
+      if not (Names.is_identifier id) then
+        Fmt.invalid_arg
+          "Everparse: in %S, %s is not an identifier ([A-Za-z_][A-Za-z0-9_]*) \
+           and has no 3D name; rename it"
+          s.name what)
+    (params @ fields);
+  match Names.clash (params @ fields) with
+  | None -> ()
+  | Some (a, b, id) ->
+      Fmt.invalid_arg
+        "Everparse: in %S, %s and %s both project to the 3D name %S" s.name a b
+        id
+
+(* Conjoin [g] to a field's constraint. The constraint can already state it
+   ([length >= 8] on a UDP length sizing [length - 8]), and two spans can need
+   the same guard: a conjunct already there is not added again. *)
+let add_guard g (Field f as field) =
+  let rec states = function
+    | And (a, b) -> states a || states b
+    | c -> String.equal (Fmt.str "%a" pp_expr c) (Fmt.str "%a" pp_expr g)
+  in
+  match f.constraint_ with
+  | Some c when states c -> field
+  | None -> Field { f with constraint_ = Some g }
+  | Some c -> Field { f with constraint_ = Some (And (c, g)) }
+
+(* A byte span sized [a - b] rejects negative lengths in Codec; 3D must prove
+   the subtraction does not underflow. A span sized [f - k], with [f] an
+   unsigned field of at most 32 bits and [k] a nonnegative constant, puts
+   [f >= k] on [f] itself, a scalar EverParse can refine. A span sized
+   [a - sizeof(this)] puts [a >= sizeof(this)] on the field just before it.
+   Other arithmetic keeps the usual projection checks. *)
+let guard_subtraction_sizes fields =
+  let unsigned name =
+    List.exists
+      (fun (Field f) ->
+        f.field_name = Some name && widenable_unsigned f.field_typ)
+      fields
+  in
+  let size_guard : type a. a typ -> (string * bool expr) option = function
+    | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ }
+      -> (
+        match size with
+        | Sub ((Ref (I, name) as a), (Int n as b)) when n >= 0 && unsigned name
+          ->
+            Some (name, Ge (a, b))
+        | _ -> None)
+    | _ -> None
+  in
+  let guard_of : type a. a typ -> bool expr option = function
+    | Byte_array { size = Sub (a, Sizeof_this) } -> Some (Ge (a, Sizeof_this))
+    | _ -> None
+  in
+  let named =
+    List.filter_map (fun (Field f) -> size_guard f.field_typ) fields
+  in
+  let rec go = function
+    | f :: (Field nf :: _ as rest) ->
+        let f =
+          match guard_of nf.field_typ with Some g -> add_guard g f | None -> f
+        in
+        f :: go rest
+    | fs -> fs
+  in
+  let on_size_field (Field f as field) =
+    List.fold_left
+      (fun field (name, g) ->
+        if f.field_name = Some name then add_guard g field else field)
+      field named
+  in
+  go (List.map on_size_field fields)
+
 let pp_struct ppf (s : struct_) =
+  check_3d_names s;
   anon_counter := 0;
+  named_fields_3d :=
+    List.filter_map
+      (fun (Field f) -> Option.map escape_3d f.field_name)
+      s.fields;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
-  let where, fields = lower_where_to_field_constraint s.where s.fields in
+  let fields = reorder_bit_groups_for_3d s.fields in
+  let where, fields = lower_where_to_field_constraint s.where fields in
   let fields = guard_subtraction_sizes fields in
   let widenable =
     List.filter_map
@@ -795,11 +1019,19 @@ let pp_struct ppf (s : struct_) =
   List.iter (pp_field widenable ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
+(* The integer type an enum declaration names. A [where] on the enum's base is
+   a constraint on the field, which the field carries; 3D has no refined base
+   for an [enum], and [UINT8 { e } enum E] is a syntax error. *)
+let rec pp_enum_base : type a. Format.formatter -> a typ -> unit =
+ fun ppf -> function
+  | Where { inner; _ } -> pp_enum_base ppf inner
+  | t -> pp_typ ppf t
+
 let pp_enum_cases ppf cases =
   List.iteri
     (fun i (cname, value) ->
       if not (Int.equal i 0) then Fmt.string ppf ",";
-      Fmt.pf ppf "@,%s = %d" cname value)
+      Fmt.pf ppf "@,%s = %d" (escape_3d cname) value)
     cases
 
 let pp_casetype_cases : type k.
@@ -883,7 +1115,7 @@ let pp_decl ppf = function
       if init then Fmt.pf ppf "extern probe (INIT) %s@,@," name
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
-      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_typ base name;
+      Fmt.pf ppf "%a enum %s {@[<v 2>" pp_enum_base base (escape_3d name);
       pp_enum_cases ppf cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ tag; cases } ->
@@ -936,12 +1168,46 @@ let check_unique_decl_names decls =
                   n))
     decls
 
+(* Every top-level declaration of a module names a 3D identifier, and so does
+   every enum case: 3D declares them all in one namespace, beside the types.
+   Escaping a keyword, or two enums of one codec naming the same case, can spell
+   two declarations alike, which EverParse rejects as a clash. A declaration
+   repeated verbatim is one source and no clash. *)
+let module_idents decls =
+  List.concat_map
+    (function
+      | Typedef { struct_ = st; _ } ->
+          let src = Fmt.str "struct %S" st.name in
+          [ (src, escape_3d st.name); (src, struct_tag_name st) ]
+      | Define { name; _ } -> [ (Fmt.str "constant %S" name, name) ]
+      | Extern_fn { name; _ } -> [ (Fmt.str "extern %S" name, name) ]
+      | Extern_probe { name; _ } -> [ (Fmt.str "probe %S" name, name) ]
+      | Enum_decl { name; cases; _ } ->
+          (Fmt.str "enum %S" name, escape_3d name)
+          :: List.map
+               (fun (c, _) ->
+                 (Fmt.str "case %S of enum %S" c name, escape_3d c))
+               cases
+      | Casetype_decl { name; _ } ->
+          let src = Fmt.str "casetype %S" name in
+          if String.length name > 0 && name.[0] = '_' then
+            [ (src, name); (src, String.sub name 1 (String.length name - 1)) ]
+          else [ (src, "_" ^ name); (src, name) ])
+    decls
+
+let check_module_names decls =
+  match Names.clash (module_idents decls) with
+  | None -> ()
+  | Some (a, b, id) ->
+      Fmt.invalid_arg "Everparse: %s and %s both declare the 3D name %S" a b id
+
 let to_3d ?(enum_as_type = false) m =
   render_enum_as_type := enum_as_type;
   Fun.protect
     ~finally:(fun () -> render_enum_as_type := false)
     (fun () ->
       check_unique_decl_names m.decls;
+      check_module_names m.decls;
       Fmt.str "@[<v>%a@]" pp_module m)
 
 let to_3d_file ?(enum_as_type = false) path m =

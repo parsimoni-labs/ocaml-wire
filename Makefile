@@ -1,4 +1,6 @@
-.PHONY: build test test-wasm 3d bench bench-demo bench-routing bench-gateway bench-clcw \
+.PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
+       fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
+       bench-clcw bench-rust \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -8,8 +10,10 @@ build:
 test:
 	dune runtest
 
-# Runs test/wasm under node with wasm_of_ocaml (31-bit ints), then fails on
-# any integer-overflow truncation warning from wire's own code. optint's two
+# Runs test/wasm and a short smoke of the fuzz properties (fuzz/wasm) under
+# node, built with wasm_of_ocaml (31-bit ints) and js_of_ocaml (32-bit), then
+# fails on any integer-overflow truncation warning from wire's own code or the
+# fuzz generators. optint's two
 # known literals (0x7fffffff, 0x40000000) are filtered: its 32-bit emulation
 # modules truncate to the bit patterns they intend on a 31-bit target, and
 # the runtime checks prove the values survive. Warnings only surface for
@@ -20,12 +24,59 @@ test-wasm:
 	  { echo "wasm_of_ocaml not found: opam install wasm_of_ocaml-compiler"; exit 1; }
 	@command -v node >/dev/null || { echo "node not found"; exit 1; }
 	@mkdir -p _build
-	dune build @test/wasm/runtest 2> _build/wasm-build.log; \
+	dune build @test/wasm/runtest @fuzz/wasm/runtest 2> _build/wasm-build.log; \
 	status=$$?; cat _build/wasm-build.log >&2; \
 	test $$status -eq 0 || exit $$status; \
 	! grep "integer-overflow" _build/wasm-build.log \
 	  | grep -v -e 0x7fffffff -e 0x40000000 | grep -q . \
 	  || { echo "error: wasm_of_ocaml truncated an integer literal"; exit 1; }
+
+# The wire.ocaml tests and its differential lane on the code it writes for
+# OxCaml, with every [@zero_alloc] checked: run from an OxCaml switch that has
+# the test dependencies (alcobar included). The release profile, because the
+# dev one compiles libraries -opaque and the checks cannot pass there, then the
+# paranoid one, which checks every unchecked load as well.
+OXCAML_LANES = @test/ocaml-ox/runtest @fuzz/diff/ocaml-ox/runtest \
+  @test/runtime-ox/runtest
+test-oxcaml:
+	@test "$$(ocamlopt -config-var ox)" = true || \
+	  { echo "not an OxCaml compiler"; exit 1; }
+	dune build --profile release $(OXCAML_LANES)
+	dune build --profile paranoid $(OXCAML_LANES)
+
+# The wire fuzz properties alone; WIRE_FUZZ_SEED, WIRE_FUZZ_REPEAT and
+# WIRE_FUZZ_BUDGET widen the search (fuzz/dune).
+fuzz:
+	dune build @@fuzz/runtest
+
+# Every test and property with the unchecked reads checked (lib/dune).
+fuzz-paranoid:
+	dune runtest --profile paranoid
+
+# AFL campaigns, WIRE_AFL_SECONDS each (default 60); fuzz-afl-diff needs
+# EverParse. A crash is replayed with _build/default/<dir>/fuzz.exe <file>,
+# which prints the divergence. The Rust lane's campaign needs rustc:
+# BUILD_RUST=1 dune build --profile afl @fuzz/diff/rust/fuzz.
+FUZZ_AFL_DIFF = @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
+
+fuzz-afl:
+	dune build --profile afl @@fuzz/fuzz @@fuzz/3d/fuzz
+
+fuzz-afl-diff:
+	BUILD_EVERPARSE=1 dune build --profile afl $(FUZZ_AFL_DIFF)
+
+# The sampled codecs against the Rust Wire_rust generates from them (needs
+# rustc).
+fuzz-rust:
+	BUILD_RUST=1 dune build @fuzz/diff/rust/runtest
+
+# What the nightly workflow runs: long property runs, then long campaigns.
+fuzz-nightly:
+	WIRE_FUZZ_REPEAT=1000000 WIRE_FUZZ_BUDGET=20 dune build @@fuzz/runtest
+	WIRE_FUZZ_REPEAT=1000000 WIRE_FUZZ_BUDGET=20 \
+	  dune build @@fuzz/runtest --profile paranoid
+	WIRE_AFL_SECONDS=3600 $(MAKE) fuzz-afl
+	WIRE_AFL_SECONDS=7200 $(MAKE) fuzz-afl-diff
 
 3d:
 	dune exec examples/validate_3d.exe
@@ -43,6 +94,45 @@ bench-gateway:
 
 bench-clcw:
 	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
+
+# Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml (and on
+# OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse,
+# smoltcp and pnet_packet, on each corpus of BENCH_RUST_CORPORA (name:stride,
+# written by bench.exe corpus), and with BUILD_EVERPARSE=1 the EverParse C
+# validator of the same codec. cargo fetches the crates the first time.
+# Results land in _build/bench-rust/.
+OXCAML_SWITCH ?= 5.4.0-ox9
+BENCH_RUST_PACKETS ?= 200000
+BENCH_RUST_RUNS ?= 21
+BENCH_RUST_CORPORA ?= fixed64-random:64 fixed64-sorted:64 \
+                      mix128-random:128 mix128-sorted:128
+BENCH_RUST = _build/bench-rust
+# $(1) CORPUS STRIDE RUNS, for each corpus, appended to $(BENCH_RUST)/$(2).txt.
+bench_rust_each = for c in $(BENCH_RUST_CORPORA); do \
+	  $(1) $(BENCH_RUST)/$${c%:*}.bin $${c\#*:} $(BENCH_RUST_RUNS) \
+	    >> $(BENCH_RUST)/$(2).txt || exit 1; done
+bench-rust:
+	@mkdir -p $(BENCH_RUST) bench/rust/cargo/src/gen
+	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
+	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
+	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST) \
+	  $(BENCH_RUST_PACKETS)
+	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
+	rm -f $(BENCH_RUST)/*.txt
+	$(call bench_rust_each,cargo run --quiet --release \
+	  --manifest-path bench/rust/cargo/Cargo.toml --,rust)
+	$(call bench_rust_each,_build/default/bench/rust/bench.exe run,ocaml)
+	@if opam switch list --short 2>/dev/null | grep -qx '$(OXCAML_SWITCH)'; then \
+	  opam exec --switch $(OXCAML_SWITCH) -- dune build --profile=release \
+	    --build-dir $(CURDIR)/_build/oxcaml bench/rust/bench.exe && \
+	  $(call bench_rust_each,_build/oxcaml/default/bench/rust/bench.exe run,oxcaml); \
+	else echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
+	  BUILD_EVERPARSE=1 dune build --profile=release \
+	    bench/rust/everparse/everparse.exe && \
+	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 PROF_EXE ?= bench/clcw/bench.exe
 

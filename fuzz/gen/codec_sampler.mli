@@ -48,3 +48,8 @@ val sampled : seed:int -> count:int -> (string * packed * sample_meta) list
 val sample : seed:int -> count:int -> (string * packed) list
 (** [sample ~seed ~count] is a deterministic sample of [count] codecs, each
     renamed to a unique struct name. *)
+
+val flat_records : seed:int -> count:int -> (string * packed) list
+(** [flat_records ~seed ~count] is the codecs of [sample ~seed ~count] whose
+    shape is a record of leaves, in sample order. They are rare in a sample, and
+    they are the shape a field-by-field code generator handles whole. *)

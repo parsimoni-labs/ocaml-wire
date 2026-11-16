@@ -90,6 +90,14 @@ val roundtrip : string -> 'a typ -> 'a Alcotest.testable -> 'a -> unit
 val contains : sub:string -> string -> bool
 (** [contains ~sub s] is [true] iff [sub] occurs in [s]. *)
 
+val flatten : string -> string
+(** [flatten s] is [s] with every run of whitespace replaced by one space, to
+    compare against 3D output wrapped over several lines. *)
+
+val index_of : sub:string -> string -> int
+(** [index_of ~sub s] is the byte offset of the first occurrence of [sub] in
+    [s], or [-1]. *)
+
 val render_3d : 'r Codec.t -> string
 (** [render_3d codec] is the 3D rendering of [codec], for substring assertions.
 *)

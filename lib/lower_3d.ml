@@ -12,23 +12,62 @@ open Dsl
    value accepted) while still documenting the known codes through the
    declaration.
 
-   A second enum under the same name is dropped as a repeat of the first, so
-   two different ones would leave both fields validated against whichever was
-   reached first. *)
-let record_enum seen decls name cases base =
-  let shape =
-    String.concat "," (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
-  in
+   A second enum under the same name is a repeat of the first (see
+   [claim_name]). *)
+
+(* One name, one declaration. A declaration collected under [name] is emitted
+   the first time ([true]) and skipped when the same [shape] claims it again
+   ([false]): two references to one type project once. A different [shape]
+   under the same name is refused, since every 3D reference to the name would
+   resolve to whichever was emitted first. [shape] is a pure structural key,
+   as a [decl] holds closures and cannot be compared itself. *)
+let claim_name seen ~kind name shape =
   match Hashtbl.find_opt seen name with
-  | Some first when not (String.equal first shape) ->
-      Fmt.invalid_arg
-        "Wire: two different enums are named %S; every field typed by it would \
-         be validated against one of them, so rename one"
-        name
-  | Some _ -> ()
   | None ->
       Hashtbl.add seen name shape;
-      decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
+      true
+  | Some first when String.equal first shape -> false
+  | Some _ ->
+      Fmt.invalid_arg
+        "Wire: two different %s are named %S; every reference to it resolves \
+         to one of them, so rename one"
+        kind name
+
+(* The integer an enum is carried by, as part of its shape: two enums with
+   the same cases over different bases declare different 3D types. *)
+let rec int_base_tag : type a. a typ -> string = function
+  | Uint8 -> "u8"
+  | Int8 -> "i8"
+  | Uint16 Little -> "u16"
+  | Uint16 Big -> "u16be"
+  | Int16 Little -> "i16"
+  | Int16 Big -> "i16be"
+  | Uint32 Little -> "u32"
+  | Uint32 Big -> "u32be"
+  | Int32 Little -> "i32"
+  | Int32 Big -> "i32be"
+  | Uint64 Little -> "u64"
+  | Uint64 Big -> "u64be"
+  | Int64 Little -> "i64"
+  | Int64 Big -> "i64be"
+  | Uint_var { endian = Little; _ } -> "uv"
+  | Uint_var { endian = Big; _ } -> "uvbe"
+  | Bits { width; base = U8; _ } -> "bits8_" ^ string_of_int width
+  | Bits { width; base = U16 _; _ } -> "bits16_" ^ string_of_int width
+  | Bits { width; base = U32 _; _ } -> "bits32_" ^ string_of_int width
+  | Map { inner; _ } -> int_base_tag inner
+  | Where { inner; _ } -> int_base_tag inner
+  | Apply { typ; _ } -> int_base_tag typ
+  | Enum { base; _ } -> int_base_tag base
+  | _ -> invalid_arg "Wire: an enum over a non-integer base"
+
+let enum_shape base cases =
+  int_base_tag base ^ "|"
+  ^ String.concat "," (List.map (fun (n, v) -> n ^ "=" ^ string_of_int v) cases)
+
+let record_enum seen decls name cases base =
+  if claim_name seen ~kind:"enums" name (enum_shape base cases) then
+    decls := Enum_decl { name; cases; base = Pack_typ base } :: !decls
 
 let enum_decls (s : struct_) : decl list =
   let seen : (string, string) Hashtbl.t = Hashtbl.create 4 in
@@ -124,12 +163,15 @@ let emit_enum_elem_struct seen acc elem =
   match closed_enum_elem elem with
   | Some (name, base, (_ :: _ as cases)) ->
       let sname = enum_elem_struct_name name in
-      if not (Hashtbl.mem seen sname) then begin
-        Hashtbl.add seen sname sname;
+      let (Pack_typ b) = base in
+      if
+        claim_name seen ~kind:"enum element structs" sname
+          (int_base_tag b ^ "|"
+          ^ String.concat "," (List.map string_of_int cases))
+      then
         Option.iter
           (fun d -> acc := d :: !acc)
           (enum_elem_struct_decl name base cases)
-      end
   | _ -> ()
 
 (* The base printer for a byte-budget list element ([array] / [repeat]): a closed
@@ -233,8 +275,8 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Apply { typ; _ } -> case_index_to_expr typ k
   | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
   | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
-  | Byte_slice _ | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _
-  | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Byte_slice _ | Casetype _ | Union _ | Struct _ | Type_ref _
+  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
       invalid_arg
         "Wire.casetype: this tag type carries no integer case index; use a \
          fixed-width integer, bitfield, or enum tag."
@@ -260,20 +302,24 @@ let decl_case_of_branch : type a k. k typ -> (a, k) case_branch -> decl_case =
   in
   (tag_expr, Pack_typ cb_inner)
 
+(* The dispatch table of a casetype or a union: a 3D casetype parameterised on
+   the tag value. *)
+let casetype_dispatch : type a k.
+    string -> k typ -> (a, k) case_branch list -> decl =
+ fun name tag cases ->
+  Casetype_decl
+    {
+      name;
+      params = [ param "tag" tag ];
+      tag = Pack_typ tag;
+      cases = List.map (decl_case_of_branch tag) cases;
+    }
+
 let casetype_pair : type a k.
     string -> k typ -> (a, k) case_branch list -> decl * decl =
  fun name tag cases ->
   let body_name = name ^ "_Body" in
-  let decl_cases = List.map (decl_case_of_branch tag) cases in
-  let dispatch =
-    Casetype_decl
-      {
-        name = body_name;
-        params = [ param "tag" tag ];
-        tag = Pack_typ tag;
-        cases = decl_cases;
-      }
-  in
+  let dispatch = casetype_dispatch body_name tag cases in
   let tag_field = field "tag" tag in
   let body_field =
     field "body"
@@ -340,8 +386,8 @@ let is_elt_var name = String.starts_with ~prefix:elt_var_prefix name
    expression (it widens a narrower argument to it, and refuses a wider one
    rather than truncating); a bound parameter comes back as its own declared
    type. The use site passes each one on by name. A sub-codec or a casetype
-   keeps a scope of its own and applies its own arguments, so nothing is lifted
-   through one.
+   keeps a scope of its own; a sub-codec is applied to its formals by name
+   ([Sub(p1, ...)]), so those come back too, as declared.
 
    Pure, so it can be compared where the declaration itself cannot. *)
 let rec wrap_shape : type a. a typ -> string * param list =
@@ -403,6 +449,9 @@ let rec wrap_shape : type a. a typ -> string * param list =
       (Fmt.str "optd%s_%s" ptag itag, pformals @ iformals)
   | Enum { name; _ } -> plain ("e" ^ name)
   | Casetype { name; _ } -> plain name
+  | Union { name; on; _ } ->
+      let otag, oformals = expr_shape on in
+      (Fmt.str "%s_%s" name otag, oformals)
   | Struct { name; _ } -> plain name
   | Type_ref name -> plain name
   | Qualified_ref { module_; name } -> plain (module_ ^ "_" ^ name)
@@ -413,7 +462,7 @@ let rec wrap_shape : type a. a typ -> string * param list =
         List.split (List.map (fun (Pack_expr e) -> expr_shape e) args)
       in
       (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
-  | Codec { codec_name; _ } -> plain codec_name
+  | Codec { codec_name; codec_struct; _ } -> (codec_name, codec_struct.params)
 
 and expr_shape : type a. a expr -> string * param list =
  fun e ->
@@ -519,6 +568,93 @@ let rec single_elem_struct : type a. a typ -> string option = function
   | Enum { name; _ } -> Some ("Se_" ^ name)
   | other -> Some ("Se_" ^ wrap_tag other)
 
+(* A single-element region cannot become a byte-budget list when wrapped
+   in an optional: the list would parse the element repeatedly and lose the
+   exact/at-most contract. Keep it behind a gate and a named wrapper. *)
+let rec optional_region : type a. a typ -> bool = function
+  | Single_elem _ -> true
+  | Map { inner; _ } -> optional_region inner
+  | Where { inner; _ } -> optional_region inner
+  | _ -> false
+
+let optional_region_name inner = "OptRegion_" ^ wrap_tag inner
+
+(* Primitive scalars have a fixed extent. Lower their sized regions to a
+   guarded scalar plus padding instead of retaining a generic exact-parser
+   combinator, whose erased parser-kind metadata can leak into C extraction. *)
+let primitive_width : type a. a typ -> int option = function
+  | Uint8 | Int8 -> Some 1
+  | Uint16 _ | Int16 _ -> Some 2
+  | Uint32 _ | Int32 _ | Float32 _ -> Some 4
+  | Uint64 _ | Int64 _ | Float64 _ -> Some 8
+  | _ -> None
+
+let rec inner_wire_size : type a. a typ -> int option = function
+  | Bits { base = U8; _ } -> Some 1
+  | Bits { base = U16 _; _ } -> Some 2
+  | Bits { base = U32 _; _ } -> Some 4
+  | Unit -> Some 0
+  | Map { inner; _ } -> inner_wire_size inner
+  | Enum { base; _ } -> inner_wire_size base
+  | Where { inner; _ } -> inner_wire_size inner
+  | Codec { codec_fixed_size = Some n; _ } -> Some n
+  | t -> primitive_width t
+
+(* The index bound a [cases] / lookup typ carries, seen through the transparent
+   [Map] / [Where] / [Apply] wrappers. [Some n] means the decoded raw value is a
+   valid index only when [< n], which the projection emits as a refinement so
+   the generated C validator rejects the same out-of-range inputs the OCaml
+   decoder does. *)
+let rec index_bound_of : type a. a typ -> int option = function
+  | Map { index_bound = Some _ as b; _ } -> b
+  | Map { inner; index_bound = None; _ } -> index_bound_of inner
+  | Where { inner; _ } -> index_bound_of inner
+  | Apply { typ; _ } -> index_bound_of typ
+  | _ -> None
+
+(* A 1-byte array / repeat element that carries an index bound (a lookup index
+   into an [n]-entry table) projects like a [byte_array_where]: every byte is
+   refined to [< n] through a synthesised element struct. Returns the element
+   variable and its constraint, keyed on the bound so equal bounds share a
+   single synthesised typedef. *)
+let index_bound_elt : type a. a typ -> (string * bool expr) option =
+ fun elem ->
+  match (inner_wire_size elem, index_bound_of elem) with
+  | Some 1, Some bound ->
+      let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
+      Some (elt_var, Lt (Ref (I, elt_var), Int bound))
+  | _ -> None
+
+let primitive_region : type a.
+    a typ -> (int expr * packed_typ * int * bool) option = function
+  | Single_elem { size; elem; at_most } ->
+      Option.map
+        (fun n -> (size, Pack_typ elem, n, at_most))
+        (primitive_width elem)
+  | _ -> None
+
+let primitive_region_name : type a. a typ -> string = function
+  | Single_elem { elem; at_most; _ } ->
+      (if at_most then "ScalarRegionAtMost_" else "ScalarRegionExact_")
+      ^ wrap_tag elem
+  | _ -> invalid_arg "Types.primitive_region_name"
+
+let primitive_region_decl typ (_, Pack_typ elem, width, at_most) =
+  let size = Ref (I, "_region_size") in
+  let where = if at_most then Ge (size, Int width) else Eq (size, Int width) in
+  let fields = [ field "_value" elem ] in
+  let fields =
+    if at_most then
+      fields
+      @ [ field "_padding" (Byte_array { size = Sub (size, Int width) }) ]
+    else fields
+  in
+  typedef
+    (param_struct
+       (primitive_region_name typ)
+       [ param "_region_size" (Uint32 Little) ]
+       ~where fields)
+
 (* The synthesised gate-dispatch casetype name for an [optional] whose inner is
    self-delimiting (no wire-size expression). Derived from the inner so two
    optionals over the same inner share one declaration. *)
@@ -532,7 +668,7 @@ let optional_casetype_name : type a. a typ -> string =
     | Apply { typ; _ } -> base typ
     | _ -> "Inner"
   in
-  "Opt_" ^ base inner
+  if optional_region inner then "Opt_" ^ wrap_tag inner else "Opt_" ^ base inner
 
 (* The formals the gate casetype has to declare on top of the gate itself. The
    casetype is a 3D scope of its own, and its default case applies the inner: a
@@ -542,6 +678,7 @@ let optional_casetype_name : type a. a typ -> string =
    [optional_casetype_name] does, so a name and its formals describe the same
    inner; an [apply] carries its own arguments and lifts nothing. *)
 let rec optional_casetype_formals : type a. a typ -> param list = function
+  | inner when optional_region inner -> wrap_formals inner
   | Codec { codec_struct; _ } -> codec_struct.params
   | Map { inner; _ } -> optional_casetype_formals inner
   | Where { inner; _ } -> optional_casetype_formals inner
@@ -566,7 +703,11 @@ let optional_casetype_decl : type a. string -> a typ -> decl =
       cases =
         [
           (Some (Pack_expr (Int 0)), Pack_typ (Byte_array { size = Int 0 }));
-          (None, Pack_typ inner);
+          ( None,
+            if optional_region inner then
+              Pack_typ
+                (synth_ref (optional_region_name inner) (wrap_formals inner))
+            else Pack_typ inner );
         ];
     }
 
@@ -587,11 +728,17 @@ let rec wrapper_refined_byte : type a. a typ -> (string * bool expr) option =
    other source of a declaration. *)
 let emit_refined_byte seen acc elt_var cond =
   let synth = synth_name_of_elt_var elt_var in
-  if not (Hashtbl.mem seen synth) then begin
-    Hashtbl.add seen synth synth;
+  if claim_name seen ~kind:"refined bytes" synth (fst (expr_shape cond)) then
     acc :=
       typedef (struct_ synth [ field elt_var ~constraint_:cond uint8 ]) :: !acc
-  end
+
+(* A 1-byte array or repeat element carrying a lookup's index bound renders
+   as a refined byte, [_RefByte_lk<n>]. [refined_byte_typedefs] declares it
+   for the entrypoint's own fields only, so a sub-codec's is declared here. *)
+let emit_index_bound seen acc elem =
+  Option.iter
+    (fun (elt_var, cond) -> emit_refined_byte seen acc elt_var cond)
+    (index_bound_elt elem)
 
 (* A structural key for a sub-codec's struct: its name, its fields' names, and
    each field's shape as [wrap_tag] renders it. Pure, so it can be compared
@@ -610,23 +757,52 @@ let codec_shape name (st : struct_) =
    A name already standing for another shape is refused: sharing it would drop
    one of the two elements and validate its field as the other. *)
 let emit_wrapper seen acc name elem =
-  let shape = wrap_tag elem in
-  match Hashtbl.find_opt seen name with
-  | Some first when not (String.equal first shape) ->
-      Fmt.invalid_arg
-        "Wire: two elements of different shapes both project to the \
-         synthesised type %S, so one would be validated as the other; give one \
-         of them a sub-codec of its own"
-        name
-  | Some _ -> ()
+  if claim_name seen ~kind:"element wrappers" name (wrap_tag elem) then begin
+    (match wrapper_refined_byte elem with
+    | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
+    | None -> ());
+    acc :=
+      (let where =
+         match elem with
+         | Single_elem { size = Sub (a, b); _ } -> Some (Ge (a, b))
+         | _ -> None
+       in
+       typedef (param_struct name (wrap_formals elem) ?where [ field "v" elem ]))
+      :: !acc
+  end
+
+(* A structural key for an int-tagged casetype: its tag and, per case, the
+   case tag and the body's shape. *)
+let casetype_shape tag cases =
+  wrap_tag tag ^ "|"
+  ^ String.concat ","
+      (List.map
+         (fun branch ->
+           let tag_opt, Pack_typ body = decl_case_of_branch tag branch in
+           (match tag_opt with
+             | None -> "default"
+             | Some (Pack_expr e) -> fst (expr_shape e))
+           ^ ":" ^ wrap_tag body)
+         cases)
+
+(* A sized field holding one element: a scalar region, or the wrapper struct
+   of an element that needs one. *)
+let emit_single_elem seen acc typ elem =
+  match primitive_region typ with
+  | Some info ->
+      let name = primitive_region_name typ in
+      if claim_name seen ~kind:"scalar regions" name name then
+        acc := primitive_region_decl typ info :: !acc
   | None ->
-      Hashtbl.add seen name shape;
-      (match wrapper_refined_byte elem with
-      | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
-      | None -> ());
-      acc :=
-        typedef (param_struct name (wrap_formals elem) [ field "v" elem ])
-        :: !acc
+      Option.iter
+        (fun n -> emit_wrapper seen acc n elem)
+        (single_elem_struct elem)
+
+(* The synthesised structs a repeat element renders through: a lookup's
+   refined byte and a closed enum's refined element. *)
+let emit_repeat_elem seen acc elem =
+  emit_index_bound seen acc elem;
+  emit_enum_elem_struct seen acc elem
 
 let rec collect_casetype_decls : type a.
     (string, string) Hashtbl.t -> decl list Stdlib.ref -> a typ -> unit =
@@ -635,50 +811,55 @@ let rec collect_casetype_decls : type a.
    fun t -> collect_casetype_decls seen acc t
   in
   match typ with
-  | Casetype { name; tag; cases }
-    when is_int_dispatch_typ tag && not (Hashtbl.mem seen name) ->
-      Hashtbl.add seen name name;
-      (* Visit case inners first so any sub-codecs / nested casetypes they
-         reference are declared before the dispatch that names them. *)
-      List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
-      let dispatch, wrapper = casetype_pair name tag cases in
-      acc := wrapper :: dispatch :: !acc
+  | Casetype { name; tag; cases } when is_int_dispatch_typ tag ->
+      if claim_name seen ~kind:"casetypes" name (casetype_shape tag cases) then begin
+        (* Visit case inners first so any sub-codecs / nested casetypes they
+           reference are declared before the dispatch that names them. *)
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
+        let dispatch, wrapper = casetype_pair name tag cases in
+        acc := wrapper :: dispatch :: !acc
+      end
+  | Union { name; tag; cases; _ } ->
+      (* The tag is a field of the enclosing struct, so there is no wrapper to
+         hold it: the dispatch is declared alone and the field applies it to
+         the tag. *)
+      if
+        claim_name seen ~kind:"casetypes" name
+          ("union|" ^ casetype_shape tag cases)
+      then begin
+        List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases;
+        acc := casetype_dispatch name tag cases :: !acc
+      end
   | Casetype { cases; _ } ->
       (* String-tagged casetype: handled by [split_string_casetype_fields].
          Still walk inner case typs for nested int-tagged casetypes. *)
       List.iter (fun (Case_branch { cb_inner; _ }) -> extract cb_inner) cases
-  | Codec { codec_name; codec_struct; _ } -> (
-      (* Embedded sub-codec: emit its struct alongside the parent so 3D
+  | Codec { codec_name; codec_struct; _ } ->
+      if
+        (* Embedded sub-codec: emit its struct alongside the parent so 3D
          references to [codec_name] resolve, and only after visiting its own
-         fields, so whatever they name is declared ahead of it. A second
-         sub-codec under the same name is dropped as a repeat of the first, so
-         two different ones would leave every reference resolving to whichever
-         was reached first, and a validator reading a different number of bytes
-         than the codec. Compared by shape rather than by equality, which a
-         [decl] cannot support: it holds the codec's closures. *)
-      let shape = codec_shape codec_name codec_struct in
-      match Hashtbl.find_opt seen codec_name with
-      | Some first when not (String.equal first shape) ->
-          Fmt.invalid_arg
-            "Wire: two different sub-codecs are named %S; every reference to \
-             it resolves to one of them, so rename one"
-            codec_name
-      | Some _ -> ()
-      | None ->
-          Hashtbl.add seen codec_name shape;
-          List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
-          acc := typedef codec_struct :: !acc)
+         fields, so whatever they name is declared ahead of it. Two different
+         sub-codecs under one name are refused ([claim_name]): every reference
+         would resolve to the first, and a validator read a different number of
+         bytes than the codec. *)
+        claim_name seen ~kind:"sub-codecs" codec_name
+          (codec_shape codec_name codec_struct)
+      then begin
+        List.iter (fun (Field f) -> extract f.field_typ) codec_struct.fields;
+        acc := typedef codec_struct :: !acc
+      end
   | Map { inner; _ } -> extract inner
   | Where { inner; _ } -> extract inner
-  | Optional { inner; _ } when not (has_wire_size_expr inner) ->
+  | Optional { inner; _ }
+    when optional_region inner || not (has_wire_size_expr inner) ->
       (* Self-delimiting inner: declare its dependencies, then the
          gate-dispatch casetype that references them. *)
       extract inner;
+      if optional_region inner then
+        emit_wrapper seen acc (optional_region_name inner) inner;
       let opt_name = optional_casetype_name inner in
-      if not (Hashtbl.mem seen opt_name) then begin
-        Hashtbl.add seen opt_name opt_name;
-        acc := optional_casetype_decl opt_name inner :: !acc
-      end
+      if claim_name seen ~kind:"optional casetypes" opt_name (wrap_tag inner)
+      then acc := optional_casetype_decl opt_name inner :: !acc
   | Optional { inner; _ } ->
       extract inner;
       emit_enum_elem_struct seen acc inner
@@ -686,21 +867,20 @@ let rec collect_casetype_decls : type a.
   | Apply { typ; _ } -> extract typ
   | Repeat { elem; _ } ->
       extract elem;
-      emit_enum_elem_struct seen acc elem;
+      emit_repeat_elem seen acc elem;
       Option.iter
         (fun n -> emit_wrapper seen acc n elem)
         (repeat_elem_struct elem)
   | Array { elem; _ } ->
       extract elem;
+      emit_index_bound seen acc elem;
       (* A 1-byte little-endian closed-enum array element renders as the named
          enum type (declared by [enum_decls]); a wider or big-endian one renders
          through the synthesised refined-element struct, declared here. *)
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
-  | Single_elem { elem; _ } ->
+  | Single_elem { elem; _ } as typ ->
       extract elem;
-      Option.iter
-        (fun n -> emit_wrapper seen acc n elem)
-        (single_elem_struct elem)
+      emit_single_elem seen acc typ elem
   | Byte_array_where { elt_var; cond; _ } ->
       emit_refined_byte seen acc elt_var cond
   | _ -> ()
@@ -742,17 +922,33 @@ let decl_name = function
   | Typedef { struct_ = { name; _ }; _ } -> Some name
   | _ -> None
 
-let absorb_candidate (acc_rev, seen) e =
+(* [enums] holds the shape of every enum the module declares, so two enums
+   that differ are refused under one name wherever they sit: in the record, in
+   a sub-codec, or among the declarations the caller gave. *)
+let absorb_candidate enums (acc_rev, seen) e =
+  (match e with
+  | Enum_decl { name; cases; base = Pack_typ base } ->
+      ignore (claim_name enums ~kind:"enums" name (enum_shape base cases))
+  | _ -> ());
   match decl_name e with
   | None -> (acc_rev, seen)
   | Some n when List.mem n seen -> (acc_rev, seen)
   | Some n -> (e :: acc_rev, n :: seen)
 
-let absorb_typedef_dependencies acc d =
+(* A typedef needs the enums its fields name, and so does every sub-codec
+   struct it brings in: an enum used only inside a nested record was otherwise
+   never declared, and EverParse refused the reference. *)
+let absorb_typedef_dependencies enums acc d =
   match d with
   | Typedef { struct_; _ } ->
-      let candidates = enum_decls struct_ @ casetype_decls_of_struct struct_ in
-      List.fold_left absorb_candidate acc candidates
+      let nested = casetype_decls_of_struct struct_ in
+      let nested_enums =
+        List.concat_map
+          (function Typedef { struct_ = s; _ } -> enum_decls s | _ -> [])
+          nested
+      in
+      let candidates = enum_decls struct_ @ nested_enums @ nested in
+      List.fold_left (absorb_candidate enums) acc candidates
   | _ -> acc
 
 let module_ ?doc decls =
@@ -774,9 +970,17 @@ let module_ ?doc decls =
         | d -> d)
       decls
   in
+  let enums = Hashtbl.create 4 in
+  List.iter
+    (function
+      | Enum_decl { name; cases; base = Pack_typ base } ->
+          ignore (claim_name enums ~kind:"enums" name (enum_shape base cases))
+      | _ -> ())
+    decls;
   let extra_rev, _ =
-    List.fold_left absorb_typedef_dependencies ([], already_declared)
-      split_decls
+    List.fold_left
+      (absorb_typedef_dependencies enums)
+      ([], already_declared) split_decls
   in
   { doc; decls = List.rev extra_rev @ split_decls }
 
@@ -1204,35 +1408,3 @@ let lower_where_to_field_constraint where fields =
           | None -> List.hd (List.rev referenced)
         in
         (None, attach_where_to_target w target fields)
-
-(* EverParse cannot prove that a byte span sized [a - sizeof(this)] (as produced
-   by [rest_bytes]) does not underflow the u32 subtraction. Emit the guard
-   [a >= sizeof(this)] as a refinement on the immediately preceding field;
-   EverParse uses it to discharge the subtraction (a non-scalar field cannot be
-   refined, so this relies on the span following a scalar field, the usual
-   header). This is a 3D-projection concern only: the OCaml decoder already
-   knows [a]. *)
-let guard_subtraction_sizes fields =
-  let guard_of : type a. a typ -> bool expr option = function
-    | Byte_array { size = Sub (a, Sizeof_this) } -> Some (Ge (a, Sizeof_this))
-    | _ -> None
-  in
-  let add_guard g (Field f) =
-    Field
-      {
-        f with
-        constraint_ =
-          (match f.constraint_ with
-          | None -> Some g
-          | Some c -> Some (And (c, g)));
-      }
-  in
-  let rec go = function
-    | f :: (Field nf :: _ as rest) ->
-        let f =
-          match guard_of nf.field_typ with Some g -> add_guard g f | None -> f
-        in
-        f :: go rest
-    | fs -> fs
-  in
-  go fields

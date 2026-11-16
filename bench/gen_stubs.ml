@@ -15,6 +15,10 @@ let structs =
   Demo_bench_cases.projection_structs
   @ [ Space.clcw_struct; Space.packet_struct; Space.tm_frame_struct ]
 
+(* Variable-size schemas whose validator and default plug only C benchmark
+   loops use (bench/rust/everparse): archived with the others, no OCaml stub. *)
+let c_only_structs = [ Wire.Everparse.Raw.struct_of_codec Packet_stack.codec ]
+
 let struct_size s =
   match Wire.Everparse.Raw.struct_size s with
   | Some n -> n
@@ -167,7 +171,9 @@ let () =
   if ml_only then generate_ml stdout
   else begin
     let schemas =
-      List.map (Wire.Everparse.Raw.project_struct ~mode:`Ffi) structs
+      List.map
+        (Wire.Everparse.Raw.project_struct ~mode:`Ffi)
+        (structs @ c_only_structs)
     in
 
     (* 1. Generate .3d *)
@@ -186,8 +192,11 @@ let () =
 
     (* 4. Archive the per-codec validators so c_stubs.c (headers only) and the
        per-bench app C link against them as separate translation units. *)
-    Wire_stubs.build_codec_archive ~schema_dir ~archive:"libbenchcodecs.a";
+    (* With the optimisation the C stubs get, not [cc]'s default [-O0]: these
+       are the validators the benchmarks time. *)
+    Wire_stubs.build_codec_archive ~cflags:[ "-O2" ] ~schema_dir
+      ~archive:"libbenchcodecs.a" ();
 
-    Fmt.pr "Generated %d schemas in %s/@." (List.length structs) schema_dir;
+    Fmt.pr "Generated %d schemas in %s/@." (List.length schemas) schema_dir;
     Fmt.pr "Generated c_stubs.c and libbenchcodecs.a@."
   end

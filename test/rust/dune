@@ -1,0 +1,34 @@
+(executable
+ (name gen)
+ (modules gen)
+ (libraries schemas diff_codecs wire.rust fmt))
+
+(test
+ (name test)
+ (modules test test_wire_rust)
+ (libraries schemas net wire wire.rust fmt alcotest))
+
+; The modules generated from the schemas, and the scanners of the structured
+; cases and the scanned schemas, compile as one no_std crate, with every
+; warning an error. Needs rustc, so it runs with BUILD_RUST=1, as the
+; Rust lane of the differential fuzzer does.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_RUST=} "1"))
+ (action
+  (progn
+   (run ./gen.exe rs)
+   (run
+    rustc
+    --edition
+    2021
+    --crate-type
+    rlib
+    -O
+    -D
+    warnings
+    -o
+    rs/libschemas.rlib
+    rs/lib.rs))))

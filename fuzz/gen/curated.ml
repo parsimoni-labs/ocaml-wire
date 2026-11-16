@@ -2,6 +2,8 @@ open Gen
 open Leaves
 open Wrappers
 open Record
+open Columns
+open Compose
 
 (* {1 Canonical registry and EverParse drivers}
 
@@ -155,6 +157,13 @@ let registry_casetype_u64_tag =
     (Wire.enum "RegU64TagKind" [ ("A", 1); ("B", 2) ] Wire.uint64)
     Wire.UInt64.of_int tagged_cases
 
+(* A casetype dispatching on an enum whose type and case names are 3D and F*
+   keywords: each case label is the escaped enum constant. *)
+let registry_casetype_keyword_tag =
+  casetype_tagged "RegKeywordTag"
+    (Wire.enum "end" [ ("in", 1); ("of", 2) ] Wire.uint8)
+    Wire.UInt8.v tagged_cases
+
 let unsigned_scalar_gens =
   [
     ("uint8", Pack uint8);
@@ -241,44 +250,63 @@ let byte_gens =
     ("zeroterm_at_most(8)", Pack (zeroterm_at_most 8));
   ]
 
-let bits_gens =
+(* Every [bits] shape the registry draws. On js_of_ocaml (32-bit [int]) and
+   wasm_of_ocaml (31-bit) [Wire.bits] refuses a width the native int cannot hold
+   without its sign bit, so those shapes are left out there rather than
+   aborting the registry at startup. *)
+let bits_shapes =
   [
-    ("bits(1,U8)", Pack (bits ~width:1 Wire.U8));
-    ("bits(1,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:1 Wire.U8));
-    ("bits(3,U8)", Pack (bits ~width:3 Wire.U8));
-    ("bits(3,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:3 Wire.U8));
-    ("bits(7,U8)", Pack (bits ~width:7 Wire.U8));
-    ("bits(7,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:7 Wire.U8));
-    ("bits(8,U8)", Pack (bits ~width:8 Wire.U8));
-    ("bits(8,U8,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:8 Wire.U8));
-    ("bits(1,U16)", Pack (bits ~width:1 Wire.U16));
-    ("bits(15,U16)", Pack (bits ~width:15 Wire.U16));
-    ("bits(16,U16)", Pack (bits ~width:16 Wire.U16));
-    ( "bits(16,U16,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16) );
-    ("bits(1,U16be)", Pack (bits ~width:1 Wire.U16be));
-    ("bits(10,U16be)", Pack (bits ~width:10 Wire.U16be));
-    ("bits(4,U16be)", Pack (bits ~width:4 Wire.U16be));
-    ( "bits(15,U16be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:15 Wire.U16be) );
-    ("bits(16,U16be)", Pack (bits ~width:16 Wire.U16be));
-    ( "bits(16,U16be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:16 Wire.U16be) );
-    ("bits(1,U32)", Pack (bits ~width:1 Wire.U32));
-    ("bits(17,U32)", Pack (bits ~width:17 Wire.U32));
-    ( "bits(17,U32,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:17 Wire.U32) );
-    ( "bits(32,U32,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32) );
-    ("bits(1,U32be)", Pack (bits ~width:1 Wire.U32be));
-    ("bits(31,U32be)", Pack (bits ~width:31 Wire.U32be));
-    ( "bits(31,U32be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:31 Wire.U32be) );
-    ("bits(32,U32be)", Pack (bits ~width:32 Wire.U32be));
-    ( "bits(32,U32be,Lsb)",
-      Pack (bits ~bit_order:Wire.Lsb_first ~width:32 Wire.U32be) );
-    ("bits(4,U32,Lsb)", Pack (bits ~bit_order:Wire.Lsb_first ~width:4 Wire.U32));
+    (1, Wire.U8, Wire.Msb_first);
+    (1, Wire.U8, Wire.Lsb_first);
+    (3, Wire.U8, Wire.Msb_first);
+    (3, Wire.U8, Wire.Lsb_first);
+    (7, Wire.U8, Wire.Msb_first);
+    (7, Wire.U8, Wire.Lsb_first);
+    (8, Wire.U8, Wire.Msb_first);
+    (8, Wire.U8, Wire.Lsb_first);
+    (1, Wire.U16, Wire.Msb_first);
+    (15, Wire.U16, Wire.Msb_first);
+    (16, Wire.U16, Wire.Msb_first);
+    (16, Wire.U16, Wire.Lsb_first);
+    (1, Wire.U16be, Wire.Msb_first);
+    (10, Wire.U16be, Wire.Msb_first);
+    (4, Wire.U16be, Wire.Msb_first);
+    (15, Wire.U16be, Wire.Lsb_first);
+    (16, Wire.U16be, Wire.Msb_first);
+    (16, Wire.U16be, Wire.Lsb_first);
+    (1, Wire.U32, Wire.Msb_first);
+    (17, Wire.U32, Wire.Msb_first);
+    (17, Wire.U32, Wire.Lsb_first);
+    (32, Wire.U32, Wire.Lsb_first);
+    (1, Wire.U32be, Wire.Msb_first);
+    (31, Wire.U32be, Wire.Msb_first);
+    (31, Wire.U32be, Wire.Lsb_first);
+    (32, Wire.U32be, Wire.Msb_first);
+    (32, Wire.U32be, Wire.Lsb_first);
+    (4, Wire.U32, Wire.Lsb_first);
   ]
+
+let bits_label (width, base, bit_order) =
+  let base =
+    match base with
+    | Wire.U8 -> "U8"
+    | U16 -> "U16"
+    | U16be -> "U16be"
+    | U32 -> "U32"
+    | U32be -> "U32be"
+  in
+  let lsb = match bit_order with Wire.Lsb_first -> ",Lsb" | Msb_first -> "" in
+  Fmt.str "bits(%d,%s%s)" width base lsb
+
+let int_holds_width width = width <= Sys.int_size - 1
+
+let bits_gens =
+  List.filter_map
+    (fun ((width, base, bit_order) as shape) ->
+      if int_holds_width width then
+        Some (bits_label shape, Pack (bits ~bit_order ~width base))
+      else None)
+    bits_shapes
 
 let bitpack_gens =
   [
@@ -324,6 +352,7 @@ let wrapper_gens =
     ("optional_dynamic", Pack optional_dynamic);
     ("optional_or_dynamic", Pack optional_or_dynamic);
     ("optional_dyn_after_span", Pack optional_dyn_after_span);
+    ("union_after_span", Pack union_after_span);
     ("nested(0,empty)", Pack (nested 0 empty));
     ("nested(2,uint16be)", Pack (nested 2 uint16be));
     ("nested(4,byte_array4)", Pack (nested 4 (byte_array 4)));
@@ -379,6 +408,7 @@ let composite_gens =
     ("casetype_lookup_tag", Pack registry_casetype_lookup_tag);
     ("casetype_where_tag", Pack registry_casetype_where_tag);
     ("casetype_u64_tag", Pack registry_casetype_u64_tag);
+    ("casetype_keyword_tag", Pack registry_casetype_keyword_tag);
     ("field_anon", Pack field_anon);
   ]
 
@@ -399,6 +429,31 @@ let param_action_gens =
     ("if_then_else", Pack if_then_else);
     ("finite_float64", Pack finite_float64);
     ("nan_float64", Pack nan_float64);
+  ]
+
+(* Flat records shaped for a fast path each: a fixed span after the last
+   data-sized one, a range check before an enum check, a byte table, the widest
+   staged encode, and getters that answer differently on each call. *)
+let flat_gens =
+  let gen mks = Pack (snd (flat_of "Flat" mks)) in
+  let wide16 = match wide 16 with Any a -> Pack a.g in
+  [
+    ( "flat_span_tail",
+      gen [ span_group len_u8; fixed_bytes_group ~slice:false 4 ] );
+    ( "flat_check_order",
+      gen [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ] );
+    ( "flat_table",
+      gen [ bits_group ~limits:[ 5; 20 ] Wire.U8 [ 3; 5 ]; u8_group ] );
+    ("flat_wide16", wide16);
+    ( "flat_impure",
+      Pack
+        (snd
+           (flat_of ~impure:true "Flat"
+              [
+                bits_group Wire.U8 [ 3 ];
+                fixed_bytes_group ~slice:false 4;
+                u8_group;
+              ])) );
   ]
 
 (* A registry label rendered as a unique EverParse struct name: the
@@ -438,4 +493,4 @@ let registry : (string * packed) list =
   List.map
     (fun (label, p) -> (label, rename_case label p))
     (scalar_gens @ byte_gens @ bits_gens @ bitpack_gens @ wrapper_gens
-   @ composite_gens @ param_action_gens)
+   @ composite_gens @ param_action_gens @ flat_gens)

@@ -301,9 +301,114 @@ let test_name_single () =
     (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
 
 let test_validator_name () =
-  Alcotest.(check string)
-    "Wire-prefixed validator" "ClcwValidateWireClcw"
-    (Wire_stubs.validator_name "CLCW")
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string) name expected (Wire_stubs.validator_name name))
+    [
+      ("CLCW", "ClcwValidateWireClcw");
+      ("Foo2Bar", "Foo2barValidateWireFoo2bar");
+      ("myField", "MyFieldValidateWiremyField");
+      ("type", "TypeValidateWiretype");
+      ( "ScanBitGuardsU16BEMsb",
+        "ScanBitGuardsU16bemsbValidateWireScanBitGuardsU16bemsb" );
+    ]
+
+(* -- Field names -- *)
+
+let rejects what subs f =
+  match f () with
+  | _ -> Alcotest.failf "%s: accepted" what
+  | exception Invalid_argument msg ->
+      List.iter
+        (fun sub ->
+          if not (contains ~sub msg) then
+            Alcotest.failf "%s: %S does not mention %S" what msg sub)
+        subs
+
+(* The record labels fold case and escape OCaml's keywords with a trailing
+   underscore, so two field names can become one label: [X] and [x] are both
+   [x], [done] and [done_] both [done_]. *)
+let test_ml_labels_clash () =
+  let both a b =
+    let s = struct_ "Clash" [ field a uint8; field b uint8 ] in
+    let subs = [ Fmt.str "%S" a; Fmt.str "%S" b ] in
+    rejects (a ^ " and " ^ b) subs (fun () -> Wire_stubs.to_ml_stubs [ s ]);
+    rejects
+      (a ^ " and " ^ b ^ " (single)")
+      subs
+      (fun () -> Wire_stubs.to_ml_stub s)
+  in
+  both "X" "x";
+  both "done" "done_";
+  both "local_" "local__"
+
+(* [check_names] answers up front whether generating would refuse a struct's
+   field names, for each namespace the names reach. *)
+let test_check_names () =
+  let s fields = struct_ "Names" (List.map (fun n -> field n uint8) fields) in
+  let refused what names =
+    rejects what
+      (List.map (Fmt.str "%S") names)
+      (fun () -> Wire_stubs.check_names (s names))
+  in
+  refused "one 3D name" [ "end"; "end_" ];
+  refused "one plug member" [ "restrict"; "restrict_" ];
+  refused "one plug macro and label" [ "X"; "x" ];
+  refused "one record label" [ "local_"; "local__" ];
+  refused "not an identifier" [ "a-b" ];
+  Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ])
+
+(* A label that is a keyword of OCaml, or of OxCaml, is escaped, so the stub
+   compiles on either compiler; the C side reads the plug member, which escapes
+   C's keywords on its own. *)
+let test_keyword_fields () =
+  let s =
+    struct_ "Kw"
+      [
+        field "done" uint8;
+        field "effect" uint8;
+        field "local_" uint8;
+        field "int" uint8;
+        field "typeof" uint8;
+      ]
+  in
+  check_struct s;
+  let ml = Wire_stubs.to_ml_stubs [ s ] in
+  List.iter
+    (fun l ->
+      Alcotest.(check bool) ("label " ^ l) true (contains ~sub:(l ^ " :") ml))
+    [ "done_"; "effect_"; "local__"; "int"; "typeof" ];
+  let c = Wire_stubs.to_c_stubs [ s ] in
+  List.iter
+    (fun m ->
+      Alcotest.(check bool)
+        ("reads member " ^ m) true
+        (contains ~sub:("fields." ^ m ^ ")") c))
+    [ "done"; "effect"; "local_"; "int_"; "typeof_" ]
+
+(* A codec's name gives the record type of its stubs, lower-cased: [Type]
+   would declare [type type]. It is escaped as a label is. *)
+let test_keyword_codec_name () =
+  let s = struct_ "Type" [ field "x" uint8 ] in
+  check_struct s;
+  Alcotest.(check bool)
+    "type name escaped" true
+    (contains ~sub:"type type_ = {" (Wire_stubs.to_ml_stubs [ s ]))
+
+(* Two codecs whose names fold to one are one record type and one C stub. *)
+let test_codec_names_clash () =
+  let both a b =
+    let structs = List.map (fun n -> struct_ n [ field "x" uint8 ]) [ a; b ] in
+    let subs = [ Fmt.str "%S" a; Fmt.str "%S" b ] in
+    rejects (a ^ " and " ^ b) subs (fun () -> Wire_stubs.to_ml_stubs structs);
+    rejects
+      (a ^ " and " ^ b ^ " (C)")
+      subs
+      (fun () -> Wire_stubs.to_c_stubs structs)
+  in
+  both "foo" "FOO";
+  both "FooBar" "Foobar";
+  both "Type" "Type_"
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
@@ -378,28 +483,35 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
     Fmt.kstr run "%s %s" run_env (Filename.concat dir "test_e2e")
   end
 
+(* [Foo2Bar] and [myField] check the C names the stubs call against the ones
+   EverParse emits: a capital after a digit, and a lower-case first letter. *)
 let test_e2e_no_params () =
-  let f_version = Wire.Field.v "version" uint8 in
-  let f_length = Wire.Field.v "length" uint16be in
-  let codec =
-    let open Wire.Codec in
-    v "TestHeader"
-      (fun version length -> (version, length))
-      [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"TestHeader" ~structs:[ s ] ~module_:schema.module_
-    ~test_ml:
-      {|let () =
+  List.iter
+    (fun name ->
+      let f_version = Wire.Field.v "version" uint8 in
+      let f_length = Wire.Field.v "length" uint16be in
+      let codec =
+        let open Wire.Codec in
+        v name
+          (fun version length -> (version, length))
+          [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
+      in
+      let schema = Wire.Everparse.project ~mode:`Ffi codec in
+      let s = Wire.Everparse.Raw.struct_of_codec codec in
+      e2e ~name ~structs:[ s ] ~module_:schema.module_
+        ~test_ml:
+          (Fmt.str
+             {|let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  let r = Stubs.testheader_parse buf 0 in
+  let r = Stubs.%s_parse buf 0 in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
-    ()
+             (String.lowercase_ascii name))
+        ())
+    [ "TestHeader"; "Foo2Bar"; "myField" ]
 
 let test_e2e_offset_bounds () =
   let f_version = Wire.Field.v "version" uint8 in
@@ -879,6 +991,71 @@ int main(void) {
     run (Filename.concat dir "stack_test")
   end
 
+(* A 64-bit integer under [map] in an embedded codec reaches the default plug
+   whole: the member the verified validator fills is compared with what the
+   codec decodes, on a value with bits above the 32nd. *)
+let test_e2e_nested_wide () =
+  if not has_3d then ()
+  else begin
+    let wide = map ~decode:Fun.id ~encode:Fun.id uint64be in
+    let inner =
+      Codec.v "WideIn"
+        (fun w g -> (w, g))
+        Codec.[ Field.v "w" wide $ fst; Field.v "g" uint8 $ snd ]
+    in
+    let codec =
+      Codec.v "WideTop"
+        (fun t i -> (t, i))
+        Codec.[ Field.v "t" uint8 $ fst; Field.v "i" (codec inner) $ snd ]
+    in
+    let frame = Bytes.of_string "\001\x81\x23\x45\x67\x89\xab\xcd\xef\007" in
+    let expected =
+      match Codec.decode codec frame 0 with
+      | Ok (_, (w, _)) -> Fmt.str "%Lx" (UInt64.to_int64 w)
+      | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+    in
+    let dir = Filename.temp_dir "wire_e2e_wide" "" in
+    let schema = Everparse.project ~mode:`Ffi codec in
+    Wire_3d.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.run_everparse ~outdir:dir [ schema ];
+    Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
+    Wire_3d.write_fields ~outdir:dir [ schema ];
+    let driver =
+      Fmt.str
+        {c|#include "WideTop.h"
+#include "WideTop_Fields.h"
+#include <inttypes.h>
+#include <string.h>
+#include <stdio.h>
+
+static void eh(EVERPARSE_STRING t, EVERPARSE_STRING f, EVERPARSE_STRING r,
+               uint64_t c, uint8_t *ct, uint8_t *in, uint64_t p) {
+  (void)t; (void)f; (void)r; (void)c; (void)ct; (void)in; (void)p;
+}
+
+int main(void) {
+  uint8_t frame[] = {%a};
+  %s f; memset(&f, 0, sizeof f);
+  if (!EverParseIsSuccess(%s((WIRECTX *) &f, NULL, eh, frame, sizeof frame, 0)))
+    return 1;
+  printf("%%" PRIx64 "\n", (uint64_t) f.i_w);
+  return 0;
+}
+|c}
+        Fmt.(list ~sep:comma int)
+        (List.init (Bytes.length frame) (Bytes.get_uint8 frame))
+        (Wire_3d.everparse_name "WideTop" ^ "Fields")
+        (Wire_stubs.validator_name "WideTop")
+    in
+    write_file (Filename.concat dir "wide.c") driver;
+    Fmt.kstr run
+      "cd %s && cc %s -I . $(ls *.c | grep -v Wrapper) -o wide_test 2>&1" dir
+      Wire_3d.strict_cc_flags;
+    Alcotest.(check (option string))
+      "i_w, as the codec decodes it" (Some expected)
+      (capture (Filename.concat dir "wide_test"))
+  end
+
 (* -- Suite -- *)
 
 let suite =
@@ -923,6 +1100,12 @@ let suite =
       Alcotest.test_case "name: single word" `Quick test_name_single;
       Alcotest.test_case "name: validator entry point" `Quick
         test_validator_name;
+      Alcotest.test_case "field names: labels that clash" `Quick
+        test_ml_labels_clash;
+      Alcotest.test_case "field names: keywords" `Quick test_keyword_fields;
+      Alcotest.test_case "field names: check_names" `Quick test_check_names;
+      Alcotest.test_case "codec name: keyword" `Quick test_keyword_codec_name;
+      Alcotest.test_case "codec names: clash" `Quick test_codec_names_clash;
       (* end-to-end: generate -> EverParse -> compile -> call *)
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: offset bounds" `Slow test_e2e_offset_bounds;
@@ -931,6 +1114,8 @@ let suite =
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
         test_e2e_full_stack;
+      Alcotest.test_case "e2e: a nested 64-bit member (plug vs codec)" `Slow
+        test_e2e_nested_wide;
       Alcotest.test_case "e2e: GC stress under the debug runtime" `Slow
         test_e2e_gc_stress;
       (* output pattern invariants *)

@@ -13,14 +13,20 @@ let check_positive_stream ~validate label a g (sample, (other, other_bs))
   let value, bs = sample in
   check_positive label g sample;
   if validate then check_validate_positive label g bs;
-  check_fields label a g sample other hostile;
+  (* The per-field write checks compare one read of the value with another. *)
+  check_fields label a g sample other
+    (match hostile with Some v when pure_value g v -> hostile | _ -> None);
   let env = positive_env g in
   check_offset_invariance (label ^ " positive") ?env a g noise bs;
   check_offset_encode (label ^ " positive") ?env g value bs noise;
   check_frame_extent label "positive" ?env g noise bs;
   check_short_prefix label "positive" ?env g bs;
   check_read_purity label "positive" ?env a g bs;
-  check_frame_isolation label "positive" ?env a g bs other_bs
+  check_frame_isolation label "positive" ?env a g bs other_bs;
+  check_fast_general label "positive" ?env a g bs;
+  check_cold_warm label "positive" ?env a g bs;
+  check_encode_paths label "positive" ?env a g value;
+  if Option.is_none g.env then check_set_paths label a other bs
 
 (* Every component of a rejection's root-to-leaf field path must name a field
    the codec declares somewhere in its schema. An empty path is valid for a
@@ -48,17 +54,21 @@ let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_short_prefix label kind ?env g bs;
   check_read_purity label kind ?env a g bs;
   check_frame_isolation label kind ?env a g bs interloper;
+  check_fast_general label kind ?env a g bs;
+  check_cold_warm label kind ?env a g bs;
   if validate then begin
     check_validate_safety label kind ?env g bs;
     check_decode_validate_agree label kind ?env g bs;
     check_field_reads label kind ?env a g bs
   end
 
-let check_hostile_stream label g ?env = function
+let check_hostile_stream label a g ?env = function
   | None -> ()
   | Some value ->
-      check_direct_codec_encode_agree label "hostile" g value;
-      check_encode_safety label ?env g value
+      if pure_value g value then
+        check_direct_codec_encode_agree label "hostile" g value;
+      check_encode_safety label ?env g value;
+      check_encode_paths label "hostile" ?env a g value
 
 (* The stream layout for a codec that binds no [Param.env]: one case, five
    generator slots, three streams plus the noise every metamorphic check
@@ -68,7 +78,7 @@ let check_hostile_stream label g ?env = function
 let env_free_case ~validate label a g =
   let positive_stream = check_positive_stream ~validate label a g in
   let safety_stream = check_safety_stream ~validate label a g in
-  let hostile_stream = check_hostile_stream label g in
+  let hostile_stream = check_hostile_stream label a g in
   Alcobar.test_case (label ^ " all")
     Alcobar.
       [
@@ -88,7 +98,7 @@ let env_free_case ~validate label a g =
 let env_bound_case ~validate label a g (s : env_strategy) =
   let positive_stream = check_positive_stream ~validate label a g in
   let safety_stream = check_safety_stream ~validate label a g in
-  let hostile_stream = check_hostile_stream label g in
+  let hostile_stream = check_hostile_stream label a g in
   Alcobar.test_case (label ^ " all")
     Alcobar.
       [
@@ -233,7 +243,11 @@ let check_nested_positive label noise
     check_offset_invariance (label ^ " positive") ?env a g noise bs;
     check_offset_encode (label ^ " positive") ?env g value bs noise;
     check_frame_extent label "positive" ?env g noise bs;
-    check_read_purity label "positive" ?env a g bs
+    check_read_purity label "positive" ?env a g bs;
+    check_fast_general label "positive" ?env a g bs;
+    check_cold_warm label "positive" ?env a g bs;
+    check_encode_paths label "positive" ?env a g value;
+    if Option.is_none g.env then check_set_paths label a other bs
   with Failure m -> Alcobar.failf "%s raised: %s" label m
 
 let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
@@ -246,7 +260,9 @@ let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
   check_field_reads label kind ?env a g bs;
   check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
   check_frame_extent label kind ?env g noise bs;
-  check_read_purity label kind ?env a g bs
+  check_read_purity label kind ?env a g bs;
+  check_fast_general label kind ?env a g bs;
+  check_cold_warm label kind ?env a g bs
 
 (* An arbitrary nested codec paired with one buffer to read it at: the
    adversarial stream sits on the codec's own boundaries, the random one is
@@ -288,7 +304,11 @@ let nested_cases label depth =
 let validate_agrees_cases label depth =
   let check kind (NB (g, comp, bs, mk)) =
     let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
-    check_decode_validate_agree (Fmt.str "%s [%s]" label comp) kind ?env g bs
+    let label = Fmt.str "%s [%s]" label comp in
+    check_decode_validate_agree label kind ?env g bs;
+    check_fast_general_core label kind ?env g
+      (Wire.Private.Testing.general g.codec)
+      bs
   in
   [
     Alcobar.test_case

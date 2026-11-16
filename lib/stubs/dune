@@ -5,4 +5,4 @@
 
 (mdx
  (files wire_stubs.mli)
- (libraries wire wire.stubs))
+ (libraries wire wire.runtime wire.stubs))

@@ -215,6 +215,7 @@ is one construct, the OCaml that describes it, and the 3D it generates:
 | Actions | `Action.assign`, `abort`, `if_` | [`{:on-success ... }`][3d-act] |
 | Parameters | `Param.input` / `Param.output` | [`typedef struct _T (UINT32 bound)`][3d-param] |
 | Tagged unions | `casetype` | [`casetype`][3d-case] |
+| Unions on an earlier field | `Field.union ~on:f_kind` | [`Body(Kind) Payload;`][3d-case] |
 | Dependent sizes | `Field.ref f_len` | field references |
 | Custom mappings | `map ~decode ~encode` | -- |
 
@@ -337,9 +338,11 @@ dune build
 dune runtest
 ```
 
-The benchmarks compare the OCaml codec against the EverParse-generated C and
-the FFI bridge, so they need `3d.exe` on the `PATH`. The `Makefile` has the
-individual `make bench-*` targets.
+The field-level benchmark compares OCaml field access with EverParse-generated
+C validation and extraction, directly and through FFI. The application
+benchmarks compare OCaml loops with C loops using the generated validators.
+All benchmark targets need EverParse; see [bench/README.md](bench/README.md)
+for the workloads and how to interpret their timing ratios.
 
 ## References
 

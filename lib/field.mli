@@ -29,23 +29,22 @@ val v :
     comment on the field in the generated 3D.
 
     [?self_constraint] receives a reference to the field being declared and
-    returns a constraint over it; the typical use is to prove a later
-    size-expression safe, e.g.:
+    returns a constraint over it, e.g.:
 
     {[
     open Wire
 
     let f_len =
       Field.v "Length" uint16be ~self_constraint:(fun self ->
-          Expr.(self >= int 7))
+          Expr.(self <= int 1500))
     ]}
 
-    projects to [UINT16BE Length {{ Length >= 7 }}], which EverParse's SMT can
-    then use to discharge [byte-size (Length - 7)] on a later field.
-    [?self_int64] is the same convenience for full-width 64-bit field
-    constraints, using {!Expr.int64} literals and {!int64} references. If
-    [?constraint_] and a self constraint are both given, the constraints are
-    combined with [And].
+    projects to [UINT16BE Length {{ Length <= 1500 }}]. A later span sized
+    [Length - 7] needs no constraint here: the projection states [Length >= 7]
+    on [Length] itself. [?self_int64] is the same convenience for full-width
+    64-bit field constraints, using {!Expr.int64} literals and {!int64}
+    references. If [?constraint_] and a self constraint are both given, the
+    constraints are combined with [And].
 
     For optional / repeating payloads use {!optional} / {!optional_or} /
     {!repeat} -- those decorations only have a 3D projection at the top of a
@@ -100,6 +99,30 @@ val repeat_seq :
   'a Types.typ ->
   'seq t
 (** Repeat with a custom sequence builder and the same exact byte budget. *)
+
+val union :
+  string ->
+  ?action:Types.action ->
+  ?doc:string ->
+  on:'k t ->
+  casetype:string ->
+  ('a, 'k) Types.case_def list ->
+  'a t
+(** [union name ~on ~casetype cases] is a field holding one of [cases], selected
+    by the value of the earlier field [on]. Unlike {!Types.casetype}, whose tag
+    is the first bytes of the value itself, the tag here is a field of its own,
+    so other fields may sit between it and the union, and several unions may
+    switch on the same tag. The union occupies the bytes of the selected case
+    only.
+
+    [on] must be integer-valued (an integer, a bitfield, an enum or a
+    [variants]) and declared before the union; every {!Types.case} gives its
+    [~index] in [on]'s type. Decoding a tag no case claims fails with
+    [Invalid_tag] unless a {!Types.default} branch catches it. Encoding raises
+    [Invalid_argument] when the value's case is not the one the tag field holds.
+
+    Projects to a 3D [casetype] named [casetype], taking the tag as its
+    parameter, and to a field [casetype(on) name]. *)
 
 val anon : 'a Types.typ -> 'a anon
 (** [anon typ] creates an anonymous (padding) field. *)

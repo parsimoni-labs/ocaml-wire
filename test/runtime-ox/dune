@@ -1,0 +1,7 @@
+(test
+ (name test)
+ (build_if
+  (= %{ocaml-config:ox} true))
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (libraries wire.runtime alcotest fmt))

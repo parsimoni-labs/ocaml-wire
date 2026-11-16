@@ -36,6 +36,12 @@ let lookup = Types.cases
    decode closure, so record once, when constructing their typ, whether their
    structural form can retain a slice. A legacy [Struct] produces [unit], hence
    its fields do not escape through the direct decoder. *)
+(* A union reads its tag from a field of the record it belongs to; a bare typ
+   has no record. *)
+let union_outside_codec () =
+  invalid_arg
+    "Wire.Field.union: a union is only read and written as a codec field"
+
 let rec typ_returns_slice : type a. a typ -> bool = function
   | Byte_slice _ -> true
   | Where { inner; _ } -> typ_returns_slice inner
@@ -52,6 +58,10 @@ let rec typ_returns_slice : type a. a typ -> bool = function
       || List.exists
            (fun (Case_branch { cb_inner; _ }) -> typ_returns_slice cb_inner)
            cases
+  | Union { cases; _ } ->
+      List.exists
+        (fun (Case_branch { cb_inner; _ }) -> typ_returns_slice cb_inner)
+        cases
   | Codec { codec_returns_slice; _ } -> codec_returns_slice
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros
@@ -101,6 +111,7 @@ let is_nan (f : float Field.t) : bool Types.expr =
 let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.embed_decode_ctx c in
   let codec_validate = Codec.embed_validate_ctx c in
+  let codec_validate_sized = Codec.embed_validate_sized_ctx c in
   let codec_encode = Codec.embed_encode_ctx c in
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
@@ -114,6 +125,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_name = Codec.name c;
           codec_decode;
           codec_validate;
+          codec_validate_sized;
           codec_encode;
           codec_fixed_size = Some n;
           codec_min_size;
@@ -129,6 +141,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_name = Codec.name c;
           codec_decode;
           codec_validate;
+          codec_validate_sized;
           codec_encode;
           codec_fixed_size = None;
           codec_min_size;
@@ -403,6 +416,7 @@ let rec parse_direct : type a.
   | Struct s -> parse_struct_typ s buf off len
   | Casetype { cases; tag; _ } ->
       parse_casetype ~copy_slices tag cases buf off len
+  | Union _ -> union_outside_codec ()
   | Optional { present; inner } ->
       if Eval.expr Eval.empty present then
         let v, off' = parse_direct ~copy_slices inner buf off len in
@@ -961,6 +975,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
         v
       |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
   | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
+  | Union _ -> union_outside_codec ()
   | Struct _ -> invalid_arg "Wire.struct_: encoding a struct goes through Codec"
   | Type_ref _ -> invalid_arg "Wire.type_ref: encoding needs a type registry"
   | Qualified_ref _ ->
@@ -1126,6 +1141,7 @@ module Ascii = Ascii
 
 module Private = struct
   module UInt32 = UInt32
+  module Unchecked = Unchecked
   module UInt63 = UInt63
   module Input_end = Input_end
   module Types = Types
@@ -1134,6 +1150,10 @@ module Private = struct
   module Bitfield = Bitfield
   module Uint_var = Uint_var
   module Shape = Shape
+  module Gen = Codec.Gen
+  module Testing = Codec.Testing
+  module Names = Names
+  module Layout = Record_layout
 
   let param_name = param_name
   let param_is_mutable = param_is_mutable

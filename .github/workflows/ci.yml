@@ -40,6 +40,68 @@ jobs:
           WIRE_FUZZ_SEED: ${{ github.run_id }}
           WIRE_FUZZ_REPEAT: 20000
 
+  # The code wire.ocaml writes for OxCaml, its [@zero_alloc] checks
+  # enforced, in the release profile and again in the paranoid one, where
+  # every unchecked load it makes, the unboxed scanners' included, is checked
+  # on its full index (make test-oxcaml).
+  oxcaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: oxcaml-compiler.5.4.0-ox9
+          opam-repositories: |
+            ox: git+https://github.com/oxcaml/opam-repository.git#b66db7ae4ad21debd1b078635cc92e88d73610f8
+            default: https://opam.ocaml.org
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- make test-oxcaml
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
+  # The paranoid profile swaps the unchecked reads the fast paths make for
+  # checked ones (lib/dune), so a read past the frame raises in the tests and
+  # the fuzz properties instead of returning whatever the buffer holds next.
+  paranoid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- dune runtest --profile paranoid
+        env:
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
+  # The Rust Wire_rust generates, compiled without std and compared with the
+  # codecs it comes from on the differential fuzzer's sample. Needs rustc only:
+  # the generated code depends on nothing but core.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      # The runner image ships a stable Rust toolchain.
+      - run: rustc --version
+
+      - run: opam install . --deps-only --with-test
+
+      - run: opam exec -- dune build @test/rust/runtest @fuzz/diff/rust/runtest
+        env:
+          BUILD_RUST: 1
+          WIRE_FUZZ_SEED: ${{ github.run_id }}
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.
@@ -125,7 +187,9 @@ jobs:
   # native code with AFL coverage, and a dir's [fuzz] alias seeds its corpus and
   # runs afl-fuzz for a fixed wall-clock budget. The job names those two aliases
   # non-recursively, as fuzz/diff/ belongs to fuzz-afl-diff below. The job then
-  # fails if afl-fuzz found any crashing input in either fuzzer.
+  # fails if afl-fuzz found any crashing input in either fuzzer, replaying each
+  # one so the log names the codec and both answers. The afl profile also
+  # checks every unchecked read (lib/dune).
   fuzz-afl:
     runs-on: ubuntu-latest
     steps:
@@ -208,7 +272,9 @@ jobs:
         run: |
           sudo sh -c 'echo core > /proc/sys/kernel/core_pattern'
           export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1
-          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl @fuzz/diff/fuzz
+          # Not fuzz/diff/rust, whose campaign needs rustc (BUILD_RUST=1).
+          BUILD_EVERPARSE=1 opam exec -- dune build --profile afl \
+            @@fuzz/diff/fuzz @@fuzz/diff/ocaml/fuzz @@fuzz/diff/ocaml-ox/fuzz
 
       - name: Fail on crashes
         run: |
@@ -235,8 +301,9 @@ jobs:
           name: afl-diff-findings
           path: afl-diff-findings.tar.gz
 
-  # Build the pure-OCaml core with wasm_of_ocaml and run test/wasm under
-  # node (31-bit ints, boxed-int32 optint path). make test-wasm also fails
+  # Build the pure-OCaml core with wasm_of_ocaml and run test/wasm and the
+  # fuzz smoke (fuzz/wasm) under node (31-bit ints, boxed-int32 optint
+  # path). make test-wasm also fails
   # if wasm_of_ocaml truncates an out-of-range integer literal from wire's
   # code, which is how a 64-bit-only constant first surfaces downstream.
   # Meaningful only on a cold build, which CI always is.
@@ -279,8 +346,8 @@ jobs:
   # past the plain build job, which only string-checks the projection.
   #
   # The job also runs the suites gated on BUILD_EVERPARSE=1, which nothing else
-  # reaches: fuzz-afl-diff sets the variable but builds only @fuzz/diff/fuzz
-  # under --profile afl, and those rules require a non-afl profile.
+  # reaches: fuzz-afl-diff sets the variable but builds only the fuzz/diff
+  # campaigns under --profile afl, and those rules require a non-afl profile.
   everparse-3d:
     runs-on: ubuntu-latest
     steps:
@@ -314,6 +381,6 @@ jobs:
         run: |
           opam exec -- dune build \
             @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
-            @test/bench/runtest
+            @test/bench/runtest @test/ocaml/runtest @fuzz/diff/ocaml/runtest
         env:
           BUILD_EVERPARSE: 1

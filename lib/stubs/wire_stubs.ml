@@ -4,8 +4,10 @@ let ml_type_of = Wire.Private.ml_type_of
 let everparse_name = Wire_3d.everparse_name
 
 let validator_name name =
-  let ep = everparse_name name in
-  Fmt.str "%sValidateWire%s" ep ep
+  Wire_3d.pascal_case
+    (String.capitalize_ascii name
+    ^ "_validate_Wire"
+    ^ Wire.Private.Types.escape_3d name)
 
 let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
@@ -37,7 +39,10 @@ let pp_c_stub_bounds ppf ~lower =
   Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + off;@\n";
   Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - (mlsize_t) off);@\n"
 
+(* The C side reads each field from the default plug, whose member escapes C's
+   keywords ([Wire.Everparse.plug_member]). *)
 let pp_field_value ppf (fname, kind) =
+  let fname = Wire.Everparse.plug_member fname in
   match kind with
   | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
@@ -94,6 +99,26 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
     Fmt.pf ppf "}@\n@\n"
   end
 
+(* A codec's name, lower-cased, is the record type and the C symbol of its
+   stubs: [Type] is escaped as a label is, and [foo] and [FOO] would define
+   both twice. *)
+let ml_type_name s =
+  Wire.Private.Names.ocaml_label (Wire.Everparse.Raw.struct_name s)
+
+let check_codec_names structs =
+  match
+    Wire.Private.Names.clash
+      (List.map
+         (fun s -> (Wire.Everparse.Raw.struct_name s, ml_type_name s))
+         structs)
+  with
+  | None -> ()
+  | Some (a, b, name) ->
+      Fmt.invalid_arg
+        "Wire_stubs: codecs %S and %S both become the stub name %S; rename one \
+         of them"
+        a b name
+
 let pp_c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
@@ -103,6 +128,7 @@ let pp_c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   pp_c_stub_output ppf ~lower ~ep ~validator s
 
 let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
+  check_codec_names structs;
   let buf = Buffer.create 4096 in
   let ppf = Format.formatter_of_buffer buf in
   Fmt.pf ppf
@@ -124,10 +150,10 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "/* EverParse headers + default <Name>_Fields plug */@\n";
   List.iteri
     (fun i (s : Wire.Everparse.Raw.struct_) ->
-      let name = Wire.Everparse.Raw.struct_name s in
+      let base = String.capitalize_ascii (Wire.Everparse.Raw.struct_name s) in
       if i = 0 then Fmt.pf ppf "#include \"EverParse.h\"@\n";
-      Fmt.pf ppf "#include \"%s_Fields.h\"@\n" name;
-      Fmt.pf ppf "#include \"%s.h\"@\n" name)
+      Fmt.pf ppf "#include \"%s_Fields.h\"@\n" base;
+      Fmt.pf ppf "#include \"%s.h\"@\n" base)
     structs;
   Fmt.pf ppf "@\n/* Stubs */@\n";
   List.iter (fun s -> pp_c_stub ppf s) structs;
@@ -144,7 +170,7 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
    shells out to [3d.exe], keeping the build rule free of inline shell.
    [test.c] (it has a [main]) and [<Name>Wrapper.c] (it needs a user-supplied
    [<Name>EverParseError] the FFI path never provides) are skipped. *)
-let build_codec_archive ~schema_dir ~archive =
+let build_codec_archive ?(cflags = []) ~schema_dir ~archive () =
   let is_codec_unit f =
     Filename.check_suffix f ".c"
     && f <> "test.c"
@@ -157,7 +183,8 @@ let build_codec_archive ~schema_dir ~archive =
   let object_of c =
     let obj = Filename.remove_extension c ^ ".codec.o" in
     let cmd =
-      Fmt.str "cc -c -D_DEFAULT_SOURCE -I %s %s -o %s"
+      Fmt.str "cc -c -D_DEFAULT_SOURCE%s -I %s %s -o %s"
+        (String.concat "" (List.map (fun f -> " " ^ Filename.quote f) cflags))
         (Filename.quote schema_dir)
         (Filename.quote (Filename.concat schema_dir c))
         (Filename.quote obj)
@@ -173,18 +200,25 @@ let build_codec_archive ~schema_dir ~archive =
   if Sys.command cmd <> 0 then failwith "wire_stubs: ar failed";
   List.iter (fun o -> try Sys.remove o with Sys_error _ -> ()) objects
 
-let ml_field_name name =
-  let lower = String.lowercase_ascii name in
-  match lower with
-  | "and" | "as" | "assert" | "begin" | "class" | "constraint" | "do" | "done"
-  | "downto" | "else" | "end" | "exception" | "external" | "false" | "for"
-  | "fun" | "function" | "functor" | "if" | "in" | "include" | "inherit"
-  | "initializer" | "lazy" | "let" | "match" | "method" | "module" | "mutable"
-  | "new" | "nonrec" | "object" | "of" | "open" | "or" | "private" | "rec"
-  | "sig" | "struct" | "then" | "to" | "true" | "try" | "type" | "val"
-  | "virtual" | "when" | "while" | "with" ->
-      lower ^ "_"
-  | _ -> lower
+(* A record label escapes the keywords of OCaml and of OxCaml, so the stubs
+   compile on either compiler. *)
+let ml_field_name name = Wire.Private.Names.ocaml_label name
+
+(* Lower-casing and escaping are both many-to-one: [X] and [x] are one label,
+   and so are [done] and [done_]. Refuse naming both fields rather than emit
+   a record that declares a label twice. *)
+let check_labels (s : Wire.Everparse.Raw.struct_) kinds =
+  match
+    Wire.Private.Names.clash
+      (List.map (fun (name, _) -> (name, ml_field_name name)) kinds)
+  with
+  | None -> ()
+  | Some (a, b, label) ->
+      Fmt.invalid_arg
+        "Wire_stubs: in %S, fields %S and %S both become the record label %S; \
+         rename one of them"
+        (Wire.Everparse.Raw.struct_name s)
+        a b label
 
 let ml_kind_string = function
   | Wire.Everparse.Raw.Int -> "int"
@@ -227,13 +261,15 @@ let pp_ml_record_constructor ppf kinds =
 let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 256 in
   let ppf = Format.formatter_of_buffer buf in
+  check_codec_names structs;
   Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
   List.iter
     (fun (s : Wire.Everparse.Raw.struct_) ->
       let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
       let kinds = Wire.Everparse.Raw.field_kinds s in
+      check_labels s kinds;
       if kinds <> [] then begin
-        gen_ml_record ppf ~type_name:lower kinds;
+        gen_ml_record ppf ~type_name:(ml_type_name s) kinds;
         (* Single external: the CPS variant. *)
         Fmt.pf ppf "external %s_parse_k : %a -> bytes -> int -> 'r@\n" lower
           (fun ppf () -> pp_ml_k_type ppf kinds)
@@ -269,6 +305,7 @@ let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
   let ppf = Format.formatter_of_buffer buf in
   let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
   let kinds = Wire.Everparse.Raw.field_kinds s in
+  check_labels s kinds;
   Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
   if kinds <> [] then begin
     gen_ml_record ppf ~type_name:"t" kinds;
@@ -301,6 +338,12 @@ let of_structs ~schema_dir ~outdir structs =
   Wire_3d.write_fields ~outdir:schema_dir schemas;
   write_file (Filename.concat outdir "wire_ffi.c") (to_c_stubs structs);
   write_file (Filename.concat outdir "stubs.ml") (to_ml_stubs structs)
+
+let check_names s =
+  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
+  ignore (Wire.Everparse.Raw.to_3d schema.module_ : string);
+  Wire_3d.check_plug_names schema;
+  check_labels s (Wire.Everparse.Raw.field_kinds s)
 
 let generate ~schema_dir ~outdir codecs =
   let structs =

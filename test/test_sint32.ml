@@ -131,9 +131,30 @@ let test_to_int_opt () =
     "zero fits" (Some 0)
     (SInt32.to_int_opt SInt32.zero)
 
+let native_int_boundaries f =
+  let ends =
+    if Sys.int_size >= 32 then Int32.[ min_int; max_int ]
+    else List.map Int32.of_int [ min_int; max_int ]
+  in
+  List.iter f ends
+
+let test_of_int_boundary () =
+  native_int_boundaries (fun bits ->
+      Alcotest.(check int32)
+        "of_int preserves the signed boundary" bits
+        (SInt32.to_int32 (SInt32.of_int (Int32.to_int bits))))
+
+let test_to_int_boundary () =
+  native_int_boundaries (fun bits ->
+      Alcotest.(check int)
+        "to_int preserves the signed boundary" (Int32.to_int bits)
+        (SInt32.to_int (SInt32.of_int32 bits)))
+
 let suite =
   ( "sint32",
     [
+      Alcotest.test_case "of_int boundaries" `Quick test_of_int_boundary;
+      Alcotest.test_case "to_int boundaries" `Quick test_to_int_boundary;
       Alcotest.test_case "roundtrip le" `Quick test_roundtrip_le;
       Alcotest.test_case "roundtrip be" `Quick test_roundtrip_be;
       Alcotest.test_case "byte layout" `Quick test_byte_layout;

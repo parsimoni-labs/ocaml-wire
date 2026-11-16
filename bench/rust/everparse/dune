@@ -1,0 +1,25 @@
+; The EverParse C row of the packet-stack benchmark: the verified validator of
+; Packet_stack.codec in a C loop, reading the fields through the default
+; EthernetStack_Fields plug. Built only with EverParse (BUILD_EVERPARSE=1), and
+; linked against the validators bench/gen_stubs.exe archives, as the
+; application benchmarks are.
+
+(library
+ (name stack_everparse_c)
+ (modules)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries c_stubs_c)
+ (foreign_stubs
+  (language c)
+  (names stack_c)
+  (extra_deps
+   (glob_files ../../schemas/*.h))
+  (flags :standard -I ../.. -I ../../schemas)))
+
+(executable
+ (name everparse)
+ (modules everparse)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (libraries stack_everparse_c fmt))

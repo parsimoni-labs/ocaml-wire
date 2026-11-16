@@ -49,8 +49,26 @@ val v :
     renders as a [/*++ ... --*/] comment on the codec's 3D typedef; see
     {!Everparse.project}.
 
-    Raises [Invalid_argument] if two fields have the same name, or if distinct
-    parameter handles referenced by the codec have the same name. *)
+    [v] checks the description and compiles nothing. The layout, readers,
+    writers and validators are compiled by the first operation that needs them,
+    on whichever domain calls it first: every function of this module that takes
+    a codec except {!name}, {!rename}, {!doc}, {!pp}, {!to_struct} and {!env}.
+    Embedding a codec with {!Wire.codec} compiles it. Domains that use a new
+    codec at the same time may each compile it: the compile is pure, and one
+    result is kept.
+
+    Raises [Invalid_argument] if two fields have the same name, if distinct
+    parameter handles referenced by the codec have the same name, if the field
+    list has a shape EverParse 3D cannot validate (such as a field that consumes
+    the rest of the buffer followed by more fields), or if a field constraint, a
+    field action or [?where] refers to a field it cannot see: a constraint or an
+    action sees the fields before it and its own, and [?where] sees them all.
+
+    The first operation on the codec raises [Invalid_argument] for what only the
+    compile finds, and raises it again on every later call: a size expression
+    that refers to a field it cannot see, a bitfield after a variable-size
+    field, a field type the codec has no reader or writer for, or fixed fields
+    that add up to more than a buffer can hold. *)
 
 val wire_size_opt : 'r t -> int option
 (** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
@@ -106,11 +124,12 @@ val decode :
     If [?env] is supplied, input params are read from it and output params are
     written back to it after decoding.
 
-    Raises [Invalid_argument] when [?env] was created for a different codec,
-    when the codec has input params and no env is supplied, or when the env left
-    any input param unbound (the error names the offending param). An unbound
-    input param would resolve a parametric field size to 0 and silently truncate
-    the field, so it is rejected up front the same way {!encode} does. *)
+    Raises [Invalid_argument] when [off] is negative, when [?env] was created
+    for a different codec, when the codec has input params and no env is
+    supplied, or when the env left any input param unbound (the error names the
+    offending param). An unbound input param would resolve a parametric field
+    size to 0 and silently truncate the field, so it is rejected up front the
+    same way {!encode} does. *)
 
 val decode_exn :
   ?consume:Types.consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
@@ -193,9 +212,9 @@ val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
     to [?env]. [?env] supplies bindings for any [Param.input] referenced in
     those clauses.
 
-    Raises [Invalid_argument] if [?env] belongs to another codec or leaves an
-    input parameter unbound, and {!Types.Parse_error} on constraint/where-clause
-    failure. *)
+    Raises [Invalid_argument] if [off] is negative or if [?env] belongs to
+    another codec or leaves an input parameter unbound, and {!Types.Parse_error}
+    on constraint/where-clause failure. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
@@ -209,6 +228,22 @@ val get :
     of the field, while a same-named lookalike could interpret those bytes with
     a different wire type. Does not check record-level where-clauses or other
     fields' constraints -- call {!validate} first on untrusted input. *)
+
+type 'r valid
+(** A buffer and offset where {!valid} has accepted a ['r]. Only {!valid} makes
+    one, and a buffer's length never changes, so a field read through {!read}
+    stays inside the buffer whatever the bytes become later. *)
+
+val valid : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
+(** [valid ?env c buf off] runs {!validate} and returns the proof that it
+    passed. Raises what {!validate} raises. *)
+
+val read : ?env:Param.env -> 'r t -> ('a, 'r) field -> ('r valid -> 'a) Staged.t
+(** [read ?env c f] is a staged reader of field [f] from a value {!valid} has
+    accepted. A scalar at a fixed offset is one load with no bounds check; any
+    other field reads as {!get} does. Raises [Invalid_argument] on the same
+    terms as {!get}, and when the staged reader is given a value validated by
+    another codec. *)
 
 val set :
   ?env:Param.env ->
@@ -265,7 +300,10 @@ val embed_decode : 'r t -> bytes -> int -> 'r
 
 val embed_decode_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> 'r
-(** Context-threaded embedded decode. Internal use. *)
+(** Context-threaded embedded decode. Under a context made by
+    {!Types.checked_eval_ctx} it only builds the record, the enclosing check
+    pass having checked it; otherwise it checks the record too, as
+    {!embed_decode} does. Internal use. *)
 
 val embed_validate_ctx :
   'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> unit
@@ -275,6 +313,13 @@ val embed_validate_ctx :
     field actions of the sub-codec at [off]. This is what an embedded codec's
     use site runs, mirroring the call to the nested struct's validator the
     generated C makes. Internal use. *)
+
+val embed_validate_sized_ctx :
+  'r t -> Types.eval_ctx -> Input_end.t -> bytes -> int -> int -> unit
+(** [embed_validate_sized_ctx c ctx input_end buf off end_off] is
+    {!embed_validate_ctx} for a sub-codec whose end [end_off] the caller has
+    just measured over the same bytes: the bounds check takes that end instead
+    of measuring the record again. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
@@ -315,7 +360,10 @@ val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
 
 val slice_offset :
-  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  ?env:Param.env ->
+  'r t ->
+  (Bytesrw.Bytes.Slice.t, 'r) field ->
+  (bytes -> int -> int) Staged.t
 (** [slice_offset c f] is a staged reader that returns the absolute byte offset
     of slice field [f] within the buffer (i.e. [base + relative_off]).
 
@@ -325,15 +373,22 @@ val slice_offset :
     once with [Codec.slice_offset c f |> Staged.unstage], then call the
     resulting [buf -> base -> int] reader on the hot path.
 
+    [env] supplies input parameters, with the same ownership and binding
+    requirements as {!get}.
+
     Type-restricted to [Slice.t] fields, so passing a non-slice field is a
     compile-time error. Raises [Invalid_argument] if [f] was not bound from the
     source {!Field.t} used in [c]. *)
 
 val slice_length :
-  'r t -> (Bytesrw.Bytes.Slice.t, 'r) field -> (bytes -> int -> int) Staged.t
+  ?env:Param.env ->
+  'r t ->
+  (Bytesrw.Bytes.Slice.t, 'r) field ->
+  (bytes -> int -> int) Staged.t
 (** [slice_length c f] is a staged reader returning the byte length of slice
-    field [f]. Raises [Invalid_argument] if [f] was not bound from the source
-    {!Field.t} used in [c]. *)
+    field [f]. [env] supplies input parameters, with the same ownership and
+    binding requirements as {!get}. Raises [Invalid_argument] if [f] was not
+    bound from the source {!Field.t} used in [c]. *)
 
 type validator
 (** A struct validator without a constructor. The same int-array validation
@@ -391,3 +446,66 @@ val blit_slice_exact : int -> bytes -> int -> Bytesrw.Bytes.Slice.t -> int
 (** [blit_slice_exact n buf off src] is like {!blit_string_exact} but copies
     from a {!Bytesrw.Bytes.Slice.t}. Top-level [encode_direct] uses it for
     [byte_slice] fields. *)
+
+(**/**)
+
+(** Support for code generated from a codec. *)
+module Gen : sig
+  val to_struct : 'r t -> Types.struct_
+  (** [to_struct t] is the description [t] is built from. *)
+
+  val digest : 'r t -> string
+  (** [digest t] names the shape of [t]: its fields, their types and
+      constraints, every expression in full, and the version of what generated
+      code assumes of it. *)
+
+  val check : 'r t -> string -> unit
+  (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
+
+  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+  (** A use of a field's reader, whatever the field's type. *)
+
+  val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
+  (** [with_field_reader t name k] is [k.k typ reader], where [reader] is the
+      reader {!get} stages for the field [name] of [t] and [typ] its type, or
+      [None] when [t] has no field [name]. *)
+
+  (** {2 Maps} *)
+
+  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+  (** A map's decoder and encoder over its raw wire value. *)
+
+  val map_int : 'a Types.typ -> (int, 'a) map
+  (** [map_int t] is the map [t] over an integer up to 16 bits wide or a
+      bitfield, read as an [int]. Raises [Invalid_argument] for any other [t].
+  *)
+
+  val map_int32 : 'a Types.typ -> (int32, 'a) map
+  (** [map_int32 t] is the map [t] over a 32-bit integer. *)
+
+  val map_id : 'a Types.typ -> int option
+  (** [map_id t] identifies the map [t] among every map built, [None] when [t]
+      is not a map. *)
+
+  val check_map : 'r t -> string -> 'a Types.typ -> unit
+  (** [check_map c name t] raises [Invalid_argument] unless the field [name] of
+      [c] is the very value [t]. *)
+end
+
+(** Test-only views of how a codec is compiled. *)
+module Testing : sig
+  val general : 'r t -> 'r t
+  (** [general t] is [t] compiled with every fast path off: {!val-decode},
+      {!val-validate}, {!val-valid} and {!val-encode} take their general path,
+      which a fast path must agree with. *)
+
+  val fresh : 'r t -> 'r t
+  (** [fresh t] is [t] not yet compiled, so its next operation is its first. *)
+
+  val paths : 'r t -> string list
+  (** [paths t] names the fast paths compiling [t] selected, from {!all_paths}.
+  *)
+
+  val all_paths : string list
+  (** Every name {!paths} can return. *)
+end

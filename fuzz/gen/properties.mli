@@ -55,9 +55,11 @@ val hostile_value_stream : 'a t -> 'a option Alcobar.gen
     shape with nothing to violate. *)
 
 type 'r addressed = {
-  acodec : 'r Wire.Codec.t;  (** The codec the fields are addressed in. *)
-  achecks : 'r field_check list;  (** Its addressable fields. *)
-  anames : string list;  (** Every field name the schema declares. *)
+  acodec : 'r Wire.Codec.t;
+  achecks : 'r field_check list;
+  anames : string list;
+  ggeneral : 'r Wire.Codec.t;
+  ageneral : 'r Wire.Codec.t;
 }
 (** A gen's codec with the fields {!Wire.Codec.get} and {!Wire.Codec.set} can
     address. *)
@@ -148,3 +150,52 @@ val check_frame_isolation :
   unit
 (** [check_frame_isolation label kind ?env a g bs interloper] requires reading
     [interloper] through every path not to change any answer about [bs]. *)
+
+val pure_value : 'a t -> 'a -> bool
+(** [pure_value g v] is [true] when the getters of [v] answer the same on
+    successive calls, so [v] has one encoding to compare byte for byte. *)
+
+val check_fast_general :
+  string ->
+  string ->
+  ?env:Wire.Param.env ->
+  'a addressed ->
+  'a t ->
+  bytes ->
+  unit
+(** [check_fast_general label what ?env c g buf] checks that every entry point
+    of the codec answers on [buf] what its general path answers. *)
+
+val check_cold_warm :
+  string ->
+  string ->
+  ?env:Wire.Param.env ->
+  'a addressed ->
+  'b t ->
+  bytes ->
+  unit
+(** [check_cold_warm label what ?env c g buf] runs every entry point once on a
+    codec not yet compiled and checks it against the same entry point on the
+    warm one. *)
+
+val check_encode_paths :
+  string -> string -> ?env:Wire.Param.env -> 'a addressed -> 'a t -> 'a -> unit
+(** [check_encode_paths label what ?env c g v] encodes [v] into a buffer of
+    exactly its size, one short of it, and one behind a prefix, on the fast, the
+    general and a cold codec, and checks they agree. *)
+
+val check_set_paths : string -> 'a addressed -> 'a -> bytes -> unit
+(** [check_set_paths label c v buf] sets each field on the fast and the general
+    codec, from the same buffer, and checks they agree. *)
+
+val check_fast_general_core :
+  string ->
+  string ->
+  ?env:Wire.Param.env ->
+  'a t ->
+  'a Wire.Codec.t ->
+  bytes ->
+  unit
+(** [check_fast_general_core label what ?env g general buf] checks [decode] and
+    [validate] of the warm codec of [g] on [buf] against the codec [general],
+    whose fast paths are off. *)

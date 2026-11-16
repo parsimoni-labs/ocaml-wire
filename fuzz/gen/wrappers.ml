@@ -46,13 +46,16 @@ let bitfield_total = function
   | U16 | U16be -> 16
   | U32 | U32be -> 32
 
+(* A bitfield word is packed in an [Int64]: a U32 word with its top bit set
+   does not fit the 31-bit [int] of wasm_of_ocaml. *)
 let word_bytes base word =
+  let o k = Int64.to_int (Int64.shift_right_logical word k) land 0xFF in
   match base with
-  | Wire.U8 -> bytes_of_octets [ word ]
-  | U16 -> bytes_of_octets [ word; word lsr 8 ]
-  | U16be -> bytes_of_octets [ word lsr 8; word ]
-  | U32 -> bytes_of_octets [ word; word lsr 8; word lsr 16; word lsr 24 ]
-  | U32be -> bytes_of_octets [ word lsr 24; word lsr 16; word lsr 8; word ]
+  | Wire.U8 -> bytes_of_octets [ o 0 ]
+  | U16 -> bytes_of_octets [ o 0; o 8 ]
+  | U16be -> bytes_of_octets [ o 8; o 0 ]
+  | U32 -> bytes_of_octets [ o 0; o 8; o 16; o 24 ]
+  | U32be -> bytes_of_octets [ o 24; o 16; o 8; o 0 ]
 
 let bit_mask width = (1 lsl width) - 1
 
@@ -65,8 +68,9 @@ let pack_bits ~bit_order ~total fields =
           | Wire.Lsb_first -> used
           | Msb_first -> total - used - width
         in
-        (used + width, acc lor ((value land bit_mask width) lsl shift)))
-      (0, 0) fields
+        let v = Int64.of_int (value land bit_mask width) in
+        (used + width, Int64.logor acc (Int64.shift_left v shift)))
+      (0, 0L) fields
   in
   word
 
@@ -890,6 +894,106 @@ let optional_dyn_after_span =
     equal = ( = );
     env = None;
     fields;
+    adversarial_value = None;
+  }
+
+(* {1 Union} *)
+
+type union_body =
+  | Short of Wire.UInt16.t
+  | Long of Wire.UInt32.t
+  | Unknown of Wire.UInt8.t * Wire.UInt8.t
+
+let union_body_field f_kind =
+  Wire.Field.union "body" ~on:f_kind ~casetype:"_union_body"
+    [
+      Wire.case ~index:(Wire.UInt8.v 1) Wire.uint16be
+        ~inject:(fun v -> Short v)
+        ~project:(function Short v -> Some v | _ -> None);
+      Wire.case ~index:(Wire.UInt8.v 2) Wire.uint32be
+        ~inject:(fun v -> Long v)
+        ~project:(function Long v -> Some v | _ -> None);
+      Wire.default Wire.uint8
+        ~inject:(fun tag v -> Unknown (tag, v))
+        ~project:(function Unknown (tag, v) -> Some (tag, v) | _ -> None);
+    ]
+
+(* One of the three branches, a span of the drawn length and a tail byte,
+   encoded through the codec so the tag and the length byte stay consistent with
+   the value. The default's tag is drawn from the ones no case claims. *)
+let union_span_positive codec =
+  Alcobar.map
+    Alcobar.
+      [
+        Alcobar.range ~min:0 3;
+        Alcobar.uint16;
+        Alcobar.range ~min:3 253;
+        Alcobar.range ~min:0 8;
+        Alcobar.uint8;
+      ]
+    (fun case v tag span_len tail ->
+      let body =
+        match case with
+        | 0 -> Short (Wire.UInt16.v v)
+        | 1 -> Long (Wire.UInt32.of_int (v * 0x10001))
+        | _ -> Unknown (Wire.UInt8.v tag, Wire.UInt8.v (v land 0xff))
+      in
+      let value = (String.make span_len 'x', body, Wire.UInt8.v tail) in
+      let buf = Bytes.create (Wire.Codec.size_of_value codec value) in
+      Wire.Codec.encode codec value buf 0;
+      (value, buf))
+
+(* A union switching on a tag that is not next to it: a length-prefixed span
+   sits between the two, so the union's offset comes from the [len] byte, and a
+   fixed field follows it, so the union's own size places that one. The default
+   branch takes every tag the two cases leave, which makes each buffer long
+   enough a record. *)
+let union_after_span =
+  let f_kind = Wire.Field.v "kind" Wire.uint8 in
+  let f_len = Wire.Field.v "len" Wire.uint8 in
+  let f_span =
+    Wire.Field.v "span" (Wire.byte_array ~size:(Wire.Field.ref f_len))
+  in
+  let f_body = union_body_field f_kind in
+  let f_tail = Wire.Field.v "tail" Wire.uint8 in
+  let kind_of (_, body, _) =
+    match body with
+    | Short _ -> Wire.UInt8.v 1
+    | Long _ -> Wire.UInt8.v 2
+    | Unknown (tag, _) -> tag
+  in
+  let len_of (span, _, _) = Wire.UInt8.v (String.length span) in
+  let span_of (span, _, _) = span in
+  let body_of (_, body, _) = body in
+  let tail_of (_, _, tail) = tail in
+  let codec =
+    Wire.Codec.v "_union_span"
+      (fun _kind _len span body tail -> (span, body, tail))
+      Wire.Codec.
+        [
+          f_kind $ kind_of;
+          f_len $ len_of;
+          f_span $ span_of;
+          f_body $ body_of;
+          f_tail $ tail_of;
+        ]
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive = union_span_positive codec;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+    fields =
+      [
+        slot "kind" f_kind kind_of;
+        slot "len" f_len len_of;
+        slot "span" f_span span_of;
+        slot "body" f_body body_of;
+        slot "tail" f_tail tail_of;
+      ];
     adversarial_value = None;
   }
 

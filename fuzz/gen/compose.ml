@@ -2,6 +2,7 @@ open Gen
 open Leaves
 open Wrappers
 open Record
+open Columns
 
 (* {1 Recursive nested composition}
 
@@ -17,6 +18,140 @@ open Record
 type any = Any : { g : 'a t; size : int option; label : string } -> any
 
 let fixed_size g = Wire.Codec.wire_size_opt g.codec
+
+(* Flat records as composition leaves: one per fast-path shape, so each
+   shape is drawn whole rather than hoped for. *)
+let flat_any ?impure name mks =
+  let label, g = flat_of ?impure name mks in
+  Any { g; size = fixed_size g; label = "flat:" ^ label }
+
+let enum_abc = enum8_group [ ("A", 1); ("B", 2); ("C", 3) ]
+
+(* Cycled to build a record of any arity whose every field has a staged
+   write. *)
+(* Where the native [int] is narrower than 32 bits (js_of_ocaml, wasm_of_ocaml)
+   a 32-bit scalar has no plain slot, so a record holding one never takes the
+   staged encode: the wide records leave them out there, and still reach every
+   arity. *)
+let wide_cycle =
+  let u32 = if Sys.int_size > 32 then [ u32be_group ] else [] in
+  let u32le = if Sys.int_size > 32 then [ u32le_group ] else [] in
+  Array.of_list
+    ([ u8_group; u16be_group; i8_group; u16le_group ]
+    @ u32
+    @ [ i16be_group; range8_group ~lo:0 ~hi:200 ]
+    @ u32le
+    @ [ bits_group Wire.U8 [ 3 ]; bits_group Wire.U16be [ 7 ] ])
+
+let wide k =
+  flat_any (Fmt.str "Wide%d" k)
+    (List.init k (fun i -> wide_cycle.(i mod Array.length wide_cycle)))
+
+(* Up to one past the widest staged encode, so the general one is reached
+   too. *)
+let flat_wide_leaves = List.init 17 (fun i -> wide (i + 1))
+
+let flat_check_order =
+  flat_any "CheckOrder" [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ]
+
+let flat_table =
+  flat_any "Table" [ bits_group ~limits:[ 5; 20 ] Wire.U8 [ 3; 5 ]; u8_group ]
+
+let flat_fixed_steps = flat_any "FixedSteps" [ even8_group; u16be_group ]
+
+let flat_shape_leaves =
+  [
+    flat_any "SpanTail" [ span_group len_u8; fixed_bytes_group ~slice:false 4 ];
+    flat_any "SpanScalar" [ span_group len_u16be; u8_group; i16be_group ];
+    flat_any "Span32"
+      [ u8_group; span_group len_u32be; fixed_bytes_group ~slice:false 2 ];
+    flat_any "SpanSlice" [ span_group ~slice:true len_u8; u16le_group ];
+    flat_any "SpanExpr"
+      [
+        span_group ~size:(Plus 1) len_u8;
+        span_group ~size:(Times 2) len_u16le;
+        u8_group;
+      ];
+    flat_any "SpanRest" [ span_group len_u8; rest_group ];
+    flat_check_order;
+    flat_table;
+    flat_any "Views" [ enum_abc; where8_group; map8_group; u8_group ];
+    flat_any "Blit"
+      [
+        fixed_bytes_group ~slice:false 4;
+        u8_group;
+        fixed_bytes_group ~slice:true 2;
+        fixed_bytes_group ~slice:false 0;
+      ];
+    flat_any ~impure:true "Impure"
+      [ bits_group Wire.U8 [ 3 ]; fixed_bytes_group ~slice:false 4; u8_group ];
+    flat_any "LayoutTable"
+      [
+        bits_group ~limits:[ 9; 9 ] Wire.U8 [ 4; 4 ];
+        span_group len_u8;
+        fixed_bytes_group ~slice:false 1;
+      ];
+    flat_any "LayoutRange"
+      [
+        range8_group ~lo:1 ~hi:100;
+        span_group len_u8;
+        fixed_bytes_group ~slice:false 2;
+      ];
+    flat_any "LayoutSteps" [ even8_group; span_group len_u8 ];
+    flat_fixed_steps;
+  ]
+
+let flat_leaves = flat_wide_leaves @ flat_shape_leaves
+
+let fixed_flat_leaves =
+  List.filter (fun (Any a) -> Option.is_some a.size) flat_leaves
+
+(* The columns a random flat record draws from. *)
+let flat_vocabulary =
+  [|
+    u8_group;
+    i8_group;
+    u16be_group;
+    u16le_group;
+    i16be_group;
+    u32be_group;
+    u32le_group;
+    range8_group ~lo:10 ~hi:100;
+    even8_group;
+    enum_abc;
+    where8_group;
+    map8_group;
+    bits_group Wire.U8 [ 3; 5 ];
+    bits_group ~limits:[ 2; 3 ] Wire.U8 [ 2; 2 ];
+    bits_group Wire.U16be [ 5; 11 ];
+    fixed_bytes_group ~slice:false 3;
+    fixed_bytes_group ~slice:false 0;
+    fixed_bytes_group ~slice:true 2;
+    span_group len_u8;
+    span_group len_u16be;
+    span_group len_u32be;
+    span_group ~slice:true len_u8;
+    span_group ~size:(Plus 2) len_u8;
+    span_group len_map8;
+  |]
+
+(* A flat record of up to 18 columns drawn from [flat_vocabulary], ending
+   with the rest of the input or not. *)
+let gen_flat : any Alcobar.gen =
+  Alcobar.map
+    Alcobar.[ Alcobar.list1 Alcobar.uint8; Alcobar.bool; Alcobar.bool ]
+    (fun picks rest impure ->
+      let picks = List.filteri (fun i _ -> i < 18) picks in
+      let mks =
+        List.map
+          (fun i -> flat_vocabulary.(i mod Array.length flat_vocabulary))
+          picks
+      in
+      let mks = if rest then mks @ [ rest_group ] else mks in
+      let label = String.concat "," (List.map (fun m -> m.glabel) mks) in
+      (* Wire refuses a bitfield after a variable-size field. *)
+      try flat_any ~impure ("Flat" ^ shape_tag label) mks
+      with Invalid_argument _ -> wide 2)
 
 (* Fixed-width leaves: usable as [array] / [nested] elements. *)
 let printable_byte b = Wire.Expr.(b >= Wire.int 0x20 && b <= Wire.int 0x7e)
@@ -138,6 +273,7 @@ let var_leaves : any list =
     Any { g = optional_dynamic; size = None; label = "optdyn" };
     Any { g = optional_or_dynamic; size = None; label = "optordyn" };
     Any { g = optional_dyn_after_span; size = None; label = "optdynspan" };
+    Any { g = union_after_span; size = None; label = "unionspan" };
     Any { g = if_then_else; size = None; label = "ite" };
   ]
 
@@ -181,7 +317,8 @@ let array_of = array_like "arr" { mk = array }
 let array_seq_of = array_like "arrs" { mk = array_seq }
 
 let optional_of (Any a) =
-  Any { g = optional a.g; size = None; label = "opt:" ^ a.label }
+  let label = "opt:" ^ a.label in
+  Any { g = optional ~name:("_opt" ^ shape_tag label) a.g; size = None; label }
 
 let repeat_of (Any a) =
   let label = "rep:" ^ a.label in
@@ -228,12 +365,12 @@ let where_of (Any a) =
    projection keys its typedefs by name: two records that share a name collapse
    onto whichever body projects first, so a composition holding more than one of
    them has to name each apart. *)
-let pair_of name (Any a) (Any b) =
+let pair_of ?(names = []) name (Any a) (Any b) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1) (x2, y2) -> a.g.equal x1 x2 && b.g.equal y1 y2)
       (fun x y -> (x, y))
-      Codec.[ a.g $ fst; b.g $ snd ]
+      (Codec.with_names names Codec.[ a.g $ fst; b.g $ snd ])
   in
   Any
     {
@@ -247,18 +384,19 @@ let pair_of name (Any a) (Any b) =
 (* Records of arity 3 and 4: like [pair_of] but for more fields, so the
    Boltzmann sampler can emit records wider than a pair. Each unpacks its [Any]
    elements and seals one [Codec.v]. *)
-let rec3_of name (Any a) (Any b) (Any c) =
+let rec3_of ?(names = []) name (Any a) (Any b) (Any c) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1, z1) (x2, y2, z2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2)
       (fun x y z -> (x, y, z))
-      Codec.
-        [
-          (a.g $ fun (x, _, _) -> x);
-          (b.g $ fun (_, y, _) -> y);
-          (c.g $ fun (_, _, z) -> z);
-        ]
+      (Codec.with_names names
+         Codec.
+           [
+             (a.g $ fun (x, _, _) -> x);
+             (b.g $ fun (_, y, _) -> y);
+             (c.g $ fun (_, _, z) -> z);
+           ])
   in
   Any
     {
@@ -267,19 +405,20 @@ let rec3_of name (Any a) (Any b) (Any c) =
       label = Fmt.str "(%s,%s,%s)" a.label b.label c.label;
     }
 
-let rec4_of name (Any a) (Any b) (Any c) (Any d) =
+let rec4_of ?(names = []) name (Any a) (Any b) (Any c) (Any d) =
   let g =
     Codec.v name
       ~equal:(fun (x1, y1, z1, w1) (x2, y2, z2, w2) ->
         a.g.equal x1 x2 && b.g.equal y1 y2 && c.g.equal z1 z2 && d.g.equal w1 w2)
       (fun x y z w -> (x, y, z, w))
-      Codec.
-        [
-          (a.g $ fun (x, _, _, _) -> x);
-          (b.g $ fun (_, y, _, _) -> y);
-          (c.g $ fun (_, _, z, _) -> z);
-          (d.g $ fun (_, _, _, w) -> w);
-        ]
+      (Codec.with_names names
+         Codec.
+           [
+             (a.g $ fun (x, _, _, _) -> x);
+             (b.g $ fun (_, y, _, _) -> y);
+             (c.g $ fun (_, _, z, _) -> z);
+             (d.g $ fun (_, _, _, w) -> w);
+           ])
   in
   Any
     {
@@ -290,7 +429,8 @@ let rec4_of name (Any a) (Any b) (Any c) (Any d) =
 
 let casetype_of (Any a) (Any b) =
   let g =
-    casetype_u8 "CT2"
+    casetype_u8
+      ("CT2" ^ shape_tag (a.label ^ "|" ^ b.label))
       [
         case ~index:1 a.g
           ~inject:(fun v -> `A v)
@@ -391,10 +531,14 @@ let rec4_uniq (Any a as x) (Any b as y) (Any c as z) (Any d as w) =
     ("R4" ^ shape_tag (a.label ^ "," ^ b.label ^ "," ^ c.label ^ "," ^ d.label))
     x y z w
 
-let fixed_leaf_gens = List.map Alcobar.const fixed_leaves
+let fixed_leaf_gens =
+  Alcobar.choose (List.map Alcobar.const fixed_flat_leaves)
+  :: List.map Alcobar.const fixed_leaves
 
 let any_leaf_gens =
-  List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
+  Alcobar.choose (List.map Alcobar.const flat_leaves)
+  :: gen_flat
+  :: List.map Alcobar.const (fixed_leaves @ var_leaves @ env_leaves)
 
 (* One level over the fixed-size generator [fixed] for the level below. *)
 let fixed_level fixed =

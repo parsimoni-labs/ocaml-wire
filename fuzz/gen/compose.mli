@@ -22,15 +22,36 @@ val env_leaves : any list
 val array_of : int -> any -> any option
 (** [array_of k a] is an array of [k] [a]s, or [None] when [a] is not fixed. *)
 
-val pair_of : string -> any -> any -> any
-(** [pair_of name a b] is the two-field record [name] over [a] and [b]. *)
+val pair_of : ?names:string list -> string -> any -> any -> any
+(** [pair_of ?names name a b] is the two-field record [name] over [a] and [b],
+    its fields named after [names] when given. *)
 
-val rec3_of : string -> any -> any -> any -> any
+val rec3_of : ?names:string list -> string -> any -> any -> any -> any
 (** [rec3_of name a b c] is {!pair_of} for three fields. *)
 
-val rec4_of : string -> any -> any -> any -> any -> any
+val rec4_of : ?names:string list -> string -> any -> any -> any -> any -> any
 (** [rec4_of name a b c d] is {!pair_of} for four fields. *)
 
 val gen_any : int -> any Alcobar.gen
 (** [gen_any depth] generates a codec nesting combinators up to [depth] levels
     over the leaves. *)
+
+val flat_check_order : any
+(** [flat_check_order] is a flat record whose checks run in field order: a range
+    test, then an enum. *)
+
+val wide : int -> any
+(** [wide k] is a flat record of [k] columns whose every field has a staged
+    write. *)
+
+val flat_table : any
+(** [flat_table] is a flat record whose checks share one byte, which the check
+    pass folds into a byte table. *)
+
+val flat_fixed_steps : any
+(** [flat_fixed_steps] is a fixed flat record with a check no interval states,
+    so its check pass runs as steps. *)
+
+val flat_leaves : any list
+(** [flat_leaves] is the flat records used as composition leaves, one per fast-
+    path shape. *)

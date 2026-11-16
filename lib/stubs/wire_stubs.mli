@@ -39,25 +39,44 @@ val of_structs :
   schema_dir:string -> outdir:string -> Wire.Everparse.Raw.struct_ list -> unit
 (** Same as {!generate} but takes raw structs directly. *)
 
+val check_names : Wire.Everparse.Raw.struct_ -> unit
+(** [check_names s] raises [Invalid_argument] naming both fields when
+    {!of_structs} would refuse [s] because two of its fields spell one
+    identifier: one 3D name in its FFI projection, one macro or member of its
+    plug ({!Wire_3d.check_plug_names}), or one record label of its stubs. It
+    writes nothing. *)
+
 (** {1 Individual generators}
 
     These are the building blocks used by {!generate}. Most users should not
     need them directly. *)
 
 val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
-(** Generate C stubs that call the EverParse validators directly. *)
+(** Generate C stubs that call the EverParse validators directly.
 
-val build_codec_archive : schema_dir:string -> archive:string -> unit
-(** [build_codec_archive ~schema_dir ~archive] compiles each generated validator
-    and [_Fields] plug in [schema_dir] as its own translation unit and archives
-    them into [archive] (pass [lib<name>.a] to consume it from a dune
+    @raise Invalid_argument
+      naming both codecs when two names fold to one stub name, as [foo] and
+      [FOO] do. *)
+
+val build_codec_archive :
+  ?cflags:string list -> schema_dir:string -> archive:string -> unit -> unit
+(** [build_codec_archive ~schema_dir ~archive ()] compiles each generated
+    validator and [_Fields] plug in [schema_dir] as its own translation unit and
+    archives them into [archive] (pass [lib<name>.a] to consume it from a dune
     [(foreign_archives <name>)]). The [wire_ffi.c] from {!to_c_stubs} includes
     only the headers and calls the validators across this link, so per-codec
     shared types stay translation-unit-local and any set of codecs links.
-    [test.c] and [<Name>Wrapper.c] are skipped. Requires [cc] and [ar]. *)
+    [cflags] (default none, so [cc]'s own optimisation level) are passed to
+    every compilation. [test.c] and [<Name>Wrapper.c] are skipped. Requires [cc]
+    and [ar]. *)
 
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
-(** Generate OCaml external declarations and record types for all structs. *)
+(** Generate OCaml external declarations and record types for all structs. A
+    struct's record type is its name lower-cased, escaped when a keyword ([Type]
+    gives [type_]).
+
+    @raise Invalid_argument
+      naming both codecs when two names give one type, as [foo] and [FOO] do. *)
 
 val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
 (** Generate a standalone OCaml module with parse and parse_k for one struct. *)

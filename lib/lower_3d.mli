@@ -9,6 +9,14 @@
 
 open Dsl
 
+val claim_name :
+  (string, string) Hashtbl.t -> kind:string -> string -> string -> bool
+(** [claim_name seen ~kind name shape] records that a declaration of [shape] is
+    emitted under [name]: [true] the first time, [false] when the same [shape]
+    claims [name] again. Raises [Invalid_argument] when a different [shape]
+    does, since every 3D reference to [name] would resolve to the first. [kind]
+    names the declarations in the message. *)
+
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!Dsl.constructor-Casetype}
     field of [s] whose tag is not an int-shaped typ into two adjacent byte
@@ -105,7 +113,35 @@ val lower_where_to_field_constraint :
     that references fields onto the last field it references, since 3D's [where]
     sees only parameters. *)
 
-val guard_subtraction_sizes : field list -> field list
-(** [guard_subtraction_sizes fields] adds [a >= sizeof(this)] to the field
-    before each span sized [a - sizeof(this)], so EverParse can discharge the
-    subtraction. *)
+val collect_refs : 'a expr -> string list
+(** Field-reference names occurring in an expression, including nested terms. *)
+
+val primitive_width : 'a typ -> int option
+(** [primitive_width t] is the width in bytes of [t] when it is a primitive
+    scalar, whose sized region lowers to a guarded scalar plus padding. *)
+
+val inner_wire_size : 'a typ -> int option
+(** [inner_wire_size t] is the fixed byte width of a scalar, bitfield base, unit
+    or fixed sub-codec, seen through [map], [enum] and [where]. *)
+
+val index_bound_of : 'a typ -> int option
+(** [index_bound_of t] is the index bound a lookup carries, seen through the
+    transparent wrappers. *)
+
+val index_bound_elt : 'a typ -> (string * bool expr) option
+(** [index_bound_elt elem] is [Some (elt_var, cond)] when [elem] is a 1-byte
+    element carrying a lookup's index bound: it projects as a refined byte. *)
+
+val optional_region : 'a typ -> bool
+(** [optional_region t] is [true] when [t] is a single-element region, which
+    under an optional stays behind a gate and a named wrapper rather than
+    becoming a byte-budget list. *)
+
+val primitive_region : 'a typ -> (int expr * packed_typ * int * bool) option
+(** [primitive_region t] is the size, element, element width and at-most flag of
+    [t] when it is a region over one primitive scalar. *)
+
+val primitive_region_name : 'a typ -> string
+(** [primitive_region_name t] is the name of the wrapper struct of the scalar
+    region [t]. Raises [Invalid_argument] when [t] is not a single-element
+    region. *)

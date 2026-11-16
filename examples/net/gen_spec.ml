@@ -10,6 +10,7 @@ let () =
         project ~mode:`Standalone Net.ipv4_codec;
         project ~mode:`Standalone Net.tcp_codec;
         project ~mode:`Standalone Net.udp_codec;
+        project ~mode:`Standalone Packet_stack.codec;
       ];
   let path = Filename.concat dir "Net.3d" in
   print_string (In_channel.with_open_text path In_channel.input_all)

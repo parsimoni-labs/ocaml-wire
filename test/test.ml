@@ -4,6 +4,8 @@ let () =
       Test_wire.suite;
       Test_action.suite;
       Test_codec.suite;
+      Test_codec_pass.suite;
+      Test_codec_stack.suite;
       Test_codec_variable.suite;
       Test_codec_projection.suite;
       Test_codec_bitfield.suite;
@@ -16,15 +18,20 @@ let () =
       Test_codec_optional.suite;
       Test_codec_repeat.suite;
       Test_codec_casetype.suite;
+      Test_codec_union.suite;
       Test_codec_multi_var.suite;
       Test_codec_zeroterm.suite;
       Test_codec_alloc.suite;
       Test_everparse.suite;
       Test_everparse_doc.suite;
+      Test_everparse_bitorder.suite;
+      Test_everparse_names.suite;
+      Test_lower_3d.suite;
       Test_param.suite;
       Test_ascii.suite;
       Test_staged.suite;
       Test_uint32.suite;
+      Test_unchecked.suite;
       Test_uint64.suite;
       Test_sint32.suite;
       Test_sint8.suite;
@@ -40,4 +47,6 @@ let () =
       Test_field.suite;
       Test_uint_var.suite;
       Test_shape.suite;
+      Test_names.suite;
+      Test_layout.suite;
     ]

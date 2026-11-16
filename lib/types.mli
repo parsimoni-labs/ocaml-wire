@@ -18,6 +18,15 @@ val unbound_eval_ctx : eval_ctx
 val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
 (** A context with explicit parameter lookup. Internal use. *)
 
+val checked_eval_ctx : eval_ctx -> eval_ctx
+(** [checked_eval_ctx ctx] is [ctx] for reading bytes a check pass has already
+    accepted: a sub-codec read through it builds its record without checking it
+    again. Allocates nothing for a context without bindings. Internal use. *)
+
+val is_checked : eval_ctx -> bool
+(** [is_checked ctx] is [true] on a context made by {!checked_eval_ctx}.
+    Internal use. *)
+
 val eval_param : eval_ctx -> string -> int
 (** Look up a parameter, returning 0 in an unbound context. Internal use. *)
 
@@ -31,7 +40,7 @@ val eval_set_param : eval_ctx -> string -> int -> unit
    context. See {!section:parse-errors} for the exception and helpers. *)
 
 (** Which predicate a {!Constraint_failed} came from. *)
-type predicate = Where | Field | Action | Per_byte
+type predicate = Errors.predicate = Where | Field | Action | Per_byte
 
 type consumption = [ `Prefix | `All ]
 (** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
@@ -44,7 +53,7 @@ type consumption = [ `Prefix | `All ]
     read at. For {!constructor-Constraint_failed}, [value] is the offending
     field's value for a single-field self-constraint and [None] for a
     cross-field or where predicate. *)
-type error_kind =
+type error_kind = Errors.error_kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -55,7 +64,11 @@ type error_kind =
   | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
-type parse_error = { at : int; field : string list; kind : error_kind }
+type parse_error = Errors.parse_error = {
+  at : int;
+  field : string list;
+  kind : error_kind;
+}
 (** [at] is the absolute byte offset of the failing field. Alongside it the
     parse error records the path of field names leading to that field (root to
     leaf, empty at a top-level or anonymous position) and the failure kind. *)
@@ -334,6 +347,13 @@ and _ typ =
       cases : ('a, 'k) case_branch list;
     }
       -> 'a typ  (** Tag-dispatched union. *)
+  | Union : {
+      name : string;
+      tag : 'k typ;
+      on : int expr;
+      cases : ('a, 'k) case_branch list;
+    }
+      -> 'a typ  (** Union dispatched on an earlier field; see {!union}. *)
   | Struct : struct_ -> unit typ  (** Nested struct. *)
   | Type_ref : string -> 'a typ  (** Forward reference by name. *)
   | Qualified_ref : { module_ : string; name : string } -> 'a typ
@@ -343,6 +363,7 @@ and _ typ =
       decode : 'w -> 'a;
       encode : 'a -> 'w;
       index_bound : int option;
+      map_id : int;
           (** When [Some n] the raw [inner] value is a valid index only when
               [< n] (set by {!cases}). [decode] enforces it on the OCaml side;
               the 3D projection emits it as a field refinement. *)
@@ -357,6 +378,11 @@ and _ typ =
           (** Everything [codec_decode] checks, none of what it builds. Run at
               every use site of the sub-codec, as the generated C runs the
               nested struct's validator. *)
+      codec_validate_sized :
+        eval_ctx -> Input_end.t -> bytes -> int -> int -> unit;
+          (** [codec_validate] of a record whose end, the last argument, the
+              caller has just measured with [codec_size_of] over the same bytes:
+              the frame checks that end instead of measuring again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;
@@ -676,6 +702,19 @@ val bits : ?bit_order:bit_order -> width:int -> bitfield_base -> int typ
 (** [bits ~width base] extracts [width] bits from a bitfield base. The bit order
     defaults to {!Msb_first}. *)
 
+val equal_bitfield_base : bitfield_base -> bitfield_base -> bool
+(** [equal_bitfield_base a b] is [true] when [a] and [b] are the same width and
+    byte order. *)
+
+val native_bit_order : bitfield_base -> bit_order
+(** [native_bit_order base] is the bit order EverParse packs [base] in:
+    {!constructor-Lsb_first} for the little-endian bases,
+    {!constructor-Msb_first} for the big-endian ones. *)
+
+val unwrap_bits : 'a typ -> (bitfield_base * bit_order * int) option
+(** [unwrap_bits t] is the base, bit order and width of the bitfield [t] is,
+    through any {!val-map}, {!val-enum} or [where]; [None] for any other [t]. *)
+
 val map : ('w -> 'a) -> ('a -> 'w) -> 'w typ -> 'a typ
 (** Map a wire type to a different OCaml type. *)
 
@@ -700,6 +739,12 @@ val relocate_at : at:int -> (unit -> 'a) -> 'a
 val int_view_is_total : 'a typ -> bool
 (** [int_view_is_total typ] is [true] when every value of [typ] fits the native
     int, so taking its integer view cannot fail and needs no relocation. *)
+
+val has_int64_slot : 'a typ -> bool
+(** [has_int64_slot typ] is [true] when a field of [typ] fills a full-width
+    int64 validation slot, which [Field.int64] references read: a 64-bit integer
+    or float, alone or under a where, map, enum or optional wrapper. Internal
+    use. *)
 
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
@@ -777,6 +822,14 @@ val byte_array_where :
     encode raises [Invalid_argument]. Encoding otherwise follows {!byte_array}:
     the value's length must equal [size]. *)
 
+val claim_name :
+  (string, string) Hashtbl.t -> kind:string -> string -> string -> bool
+(** [claim_name seen ~kind name shape] records that a declaration of [shape] is
+    emitted under [name]: [true] the first time, [false] when the same [shape]
+    claims [name] again. Raises [Invalid_argument] when a different [shape]
+    does, since every 3D reference to [name] would resolve to the first. [kind]
+    names the declarations in the message. *)
+
 val synth_name_of_elt_var : string -> string
 (** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
     name derived from a {!byte_array_where} element variable. Internal: used by
@@ -852,6 +905,13 @@ val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 (** [casetype name tag defs] is a tag-dispatched union. Every case must supply
     an explicit [~index]; the discriminator type ['k] can be an integer, a
     string, or any other typ with decidable equality. *)
+
+val union :
+  string -> tag:'k typ -> on:int expr -> ('a, 'k) case_def list -> 'a typ
+(** [union name ~tag ~on defs] is a casetype whose tag is the integer [on]
+    evaluates to, an earlier field of type [tag], rather than its own first
+    bytes. It is a field decoration, made through {!Field.union}. Raises
+    [Invalid_argument] when [tag] has no integer view. *)
 
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field
@@ -1178,3 +1238,9 @@ val field_seeds : struct_ -> field_seed list
     codec to learn the verdict. It exists so a generated corpus can reach the
     accepting side of a constraint that drawing bytes never would -- a magic
     number leaves one accepting value in [2^32]. *)
+
+val collect_refs : 'a expr -> string list
+(** Field-reference names occurring in an expression, including nested terms. *)
+
+val subst_expr : (string * int expr) list -> 'a expr -> 'a expr
+(** Substitute integer references without evaluating the expression. *)
