@@ -1401,6 +1401,127 @@ let test_set_dependent_byte_refinement () =
   in
   check dynamic_codec dynamic_data "\x02abAB" "\x02abXY"
 
+(* -- Records read as words -- *)
+
+(* A record whose every field a decode reads as bits of one big-endian word:
+   signed and unsigned fields of 8, 16 and 32 bits, bitfields in a byte and in
+   a 16-bit word, and a field among the last bytes, whose word ends with the
+   record. *)
+type wide = {
+  wa : int;
+  wb : int;
+  wc : int;
+  wd : int;
+  we : int;
+  wf : int;
+  wg : int;
+  wh : int;
+  wi : int32;
+  wj : int32;
+  wk : int;
+}
+
+let wide_a = Codec.(Field.v "A" uint8 $ fun r -> UInt8.v r.wa)
+let wide_b = Codec.(Field.v "B" int8 $ fun r -> SInt8.v r.wb)
+let wide_c = Codec.(Field.v "C" uint16be $ fun r -> UInt16.v r.wc)
+let wide_d = Codec.(Field.v "D" int16be $ fun r -> SInt16.v r.wd)
+let wide_e = Codec.(Field.v "E" (bits ~width:3 U8) $ fun r -> r.we)
+let wide_f = Codec.(Field.v "F" (bits ~width:5 U8) $ fun r -> r.wf)
+let wide_g = Codec.(Field.v "G" (bits ~width:11 U16be) $ fun r -> r.wg)
+let wide_h = Codec.(Field.v "H" (bits ~width:5 U16be) $ fun r -> r.wh)
+let wide_i = Codec.(Field.v "I" uint32be $ fun r -> UInt32.of_int32 r.wi)
+let wide_j = Codec.(Field.v "J" int32be $ fun r -> SInt32.of_int32 r.wj)
+let wide_k = Codec.(Field.v "K" int16be $ fun r -> SInt16.v r.wk)
+
+let wide_codec =
+  Codec.v "Wide"
+    (fun a b c d e f g h i j k ->
+      {
+        wa = UInt8.to_int a;
+        wb = SInt8.to_int b;
+        wc = UInt16.to_int c;
+        wd = SInt16.to_int d;
+        we = e;
+        wf = f;
+        wg = g;
+        wh = h;
+        wi = UInt32.to_int32 i;
+        wj = SInt32.to_int32 j;
+        wk = SInt16.to_int k;
+      })
+    [
+      wide_a;
+      wide_b;
+      wide_c;
+      wide_d;
+      wide_e;
+      wide_f;
+      wide_g;
+      wide_h;
+      wide_i;
+      wide_j;
+      wide_k;
+    ]
+
+let eight_p =
+  Codec.(Field.v "P" int32be $ fun (p, _, _, _) -> SInt32.of_int32 p)
+
+let eight_q = Codec.(Field.v "Q" uint16be $ fun (_, q, _, _) -> UInt16.v q)
+let eight_r = Codec.(Field.v "R" int8 $ fun (_, _, r, _) -> SInt8.v r)
+let eight_s = Codec.(Field.v "S" uint8 $ fun (_, _, _, s) -> UInt8.v s)
+
+let eight_codec =
+  Codec.v "Eight"
+    (fun p q r s ->
+      (SInt32.to_int32 p, UInt16.to_int q, SInt8.to_int r, UInt8.to_int s))
+    [ eight_p; eight_q; eight_r; eight_s ]
+
+let random_frame rand codec =
+  let size = Codec.min_wire_size codec in
+  let off = Random.State.int rand 4 in
+  let buf =
+    Bytes.init
+      (off + size + Random.State.int rand 4)
+      (fun _ -> Char.chr (Random.State.int rand 256))
+  in
+  (buf, off)
+
+(* Each field a decode returns is what [get] reads of it. *)
+let test_decode_words () =
+  let rand = Random.State.make [| 42 |] in
+  let get f = Staged.unstage (Codec.get wide_codec f) in
+  let a = get wide_a and b = get wide_b and c = get wide_c in
+  let d = get wide_d and e = get wide_e and f = get wide_f in
+  let g = get wide_g and h = get wide_h and i = get wide_i in
+  let j = get wide_j and k = get wide_k in
+  for _ = 1 to 1000 do
+    let buf, off = random_frame rand wide_codec in
+    let r = Codec.decode_exn wide_codec buf off in
+    let check name want got = Alcotest.(check int) name want got in
+    check "A" (UInt8.to_int (a buf off)) r.wa;
+    check "B" (SInt8.to_int (b buf off)) r.wb;
+    check "C" (UInt16.to_int (c buf off)) r.wc;
+    check "D" (SInt16.to_int (d buf off)) r.wd;
+    check "E" (e buf off) r.we;
+    check "F" (f buf off) r.wf;
+    check "G" (g buf off) r.wg;
+    check "H" (h buf off) r.wh;
+    Alcotest.(check int32) "I" (UInt32.to_int32 (i buf off)) r.wi;
+    Alcotest.(check int32) "J" (SInt32.to_int32 (j buf off)) r.wj;
+    check "K" (SInt16.to_int (k buf off)) r.wk
+  done;
+  let get f = Staged.unstage (Codec.get eight_codec f) in
+  let p = get eight_p and q = get eight_q and r = get eight_r in
+  let s = get eight_s in
+  for _ = 1 to 1000 do
+    let buf, off = random_frame rand eight_codec in
+    let p', q', r', s' = Codec.decode_exn eight_codec buf off in
+    Alcotest.(check int32) "P" (SInt32.to_int32 (p buf off)) p';
+    Alcotest.(check int) "Q" (UInt16.to_int (q buf off)) q';
+    Alcotest.(check int) "R" (SInt8.to_int (r buf off)) r';
+    Alcotest.(check int) "S" (UInt8.to_int (s buf off)) s'
+  done
+
 let suite =
   ( "codec",
     [
@@ -1413,6 +1534,7 @@ let suite =
         test_rename_errors;
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
+      Alcotest.test_case "decode: fields read as words" `Quick test_decode_words;
       Alcotest.test_case "decode: prefix and all consumption" `Quick
         test_codec_decode_consumption_modes;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
