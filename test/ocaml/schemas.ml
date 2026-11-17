@@ -192,6 +192,41 @@ let signed =
         $ snd;
       ]
 
+type packed = {
+  a : SInt8.t;
+  b : UInt8.t;
+  c : SInt16.t;
+  d : UInt16.t;
+  e : int;
+  f : SInt32.t;
+  g : SInt8.t;
+  h : UInt8.t;
+  i : SInt16.t;
+  j : UInt16.t;
+  k : SInt8.t;
+  l : UInt8.t;
+}
+
+let packed_make a b c d e f g h i j k l = { a; b; c; d; e; f; g; h; i; j; k; l }
+
+let packed =
+  Codec.v "Packed" packed_make
+    Codec.
+      [
+        (Field.v "A" int8 $ fun r -> r.a);
+        (Field.v "B" uint8 $ fun r -> r.b);
+        (Field.v "C" int16 $ fun r -> r.c);
+        (Field.v "D" uint16 $ fun r -> r.d);
+        (Field.v "E" (bits ~width:9 U16) $ fun r -> r.e);
+        (Field.v "F" int32be $ fun r -> r.f);
+        (Field.v "G" int8 $ fun r -> r.g);
+        (Field.v "H" uint8 $ fun r -> r.h);
+        (Field.v "I" int16be $ fun r -> r.i);
+        (Field.v "J" uint16be $ fun r -> r.j);
+        (Field.v "K" int8 $ fun r -> r.k);
+        (Field.v "L" uint8 $ fun r -> r.l);
+      ]
+
 type refined = int * int * UInt8.t * UInt8.t
 
 let refined_make hi lo kind code = (hi, lo, kind, code)
