@@ -8,6 +8,9 @@
 - `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
   its fields with no further bounds check (#435, @samoht)
 
+- `Wire.Codec.decoder` and `Wire.Codec.encoder`: a codec's decode and encode,
+  staged, for a loop over many records (#489, @samoht)
+
 - `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
   field names against the FFI pipeline before writing anything (#434, @samoht)
 
@@ -44,7 +47,8 @@
 
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
   fixed-size codecs, `encode` into a buffer allocates nothing, and `decode` no
-  longer slows with nesting depth (#435, #445, #482, #485, #486, @samoht)
+  longer slows with nesting depth (#435, #445, #482, #485, #486, #489,
+  @samoht)
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
