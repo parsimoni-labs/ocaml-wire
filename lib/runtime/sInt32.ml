@@ -44,10 +44,10 @@ let check_encode v =
      ^ " does not fit a signed 32-bit field")
 
 (* Exact: every [t] holds a signed 32-bit value. *)
-let to_int32 (v : t) : int32 =
+let[@inline] to_int32 (v : t) : int32 =
   match Optint.is_immediate with True -> Int32.of_int v | False -> v
 
-let of_int32 (n : int32) : t =
+let[@inline] of_int32 (n : int32) : t =
   match Optint.is_immediate with True -> Int32.to_int n | False -> n
 
 (* Every encoder path (typ-level, compiled field, [Codec.set]) writes an int32
