@@ -1428,22 +1428,33 @@ let wput_of : type r. r put -> r wput option = function
       | Bits16be { off; shift; mask } -> w Type.Equal 6 off ~shift ~mask
       | Bits16le { off; shift; mask } -> w Type.Equal 7 off ~shift ~mask)
 
-(* One store, chosen in place. A bitfield value wider than its field sets
-   [bad] instead of raising, so the row makes no call but the getters. *)
+(* One store, chosen in place, and [bad] with the bits of a bitfield value
+   wider than its field: an int, not raised and not boxed, so the row makes no
+   call but the getters and allocates nothing. *)
 let[@inline] put_word buf off kind at shift mask x bad =
   let p = off + at in
-  if kind = 0 then Unchecked.set_u8 buf p x
-  else if kind = 1 then Unchecked.set_u16be buf p x
-  else if kind = 2 then Unchecked.set_u16le buf p x
-  else if kind = 3 then Unchecked.set_i32be buf p (Int32.of_int x)
-  else if kind = 4 then Unchecked.set_i32le buf p (Int32.of_int x)
+  if kind = 0 then (
+    Unchecked.set_u8 buf p x;
+    bad)
+  else if kind = 1 then (
+    Unchecked.set_u16be buf p x;
+    bad)
+  else if kind = 2 then (
+    Unchecked.set_u16le buf p x;
+    bad)
+  else if kind = 3 then (
+    Unchecked.set_i32be buf p (Int32.of_int x);
+    bad)
+  else if kind = 4 then (
+    Unchecked.set_i32le buf p (Int32.of_int x);
+    bad)
   else begin
-    bad := !bad lor (x land lnot mask);
     if kind = 5 then
       Unchecked.set_u8 buf p (Unchecked.u8 buf p lor (x lsl shift))
     else if kind = 6 then
       Unchecked.set_u16be buf p (Unchecked.u16be buf p lor (x lsl shift))
-    else Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (x lsl shift))
+    else Unchecked.set_u16le buf p (Unchecked.u16le buf p lor (x lsl shift));
+    bad lor (x land lnot mask)
   end
 
 (* The writes of a fixed record of int fields, staged four to a row. A row
@@ -1469,27 +1480,24 @@ let rec stage_rows : type r.
   | [ p1 ] ->
       let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
       fun v buf off bad ->
-        let bad = Stdlib.ref bad in
-        put_word buf off k1 a1 s1 m1 (g1 v) bad;
-        last v buf off !bad
+        let bad = put_word buf off k1 a1 s1 m1 (g1 v) bad in
+        last v buf off bad
   | [ p1; p2 ] ->
       let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
       let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
       fun v buf off bad ->
-        let bad = Stdlib.ref bad in
-        put_word buf off k1 a1 s1 m1 (g1 v) bad;
-        put_word buf off k2 a2 s2 m2 (g2 v) bad;
-        last v buf off !bad
+        let bad = put_word buf off k1 a1 s1 m1 (g1 v) bad in
+        let bad = put_word buf off k2 a2 s2 m2 (g2 v) bad in
+        last v buf off bad
   | [ p1; p2; p3 ] ->
       let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
       let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
       let { get = g3; kind = k3; at = a3; shift = s3; mask = m3 } = p3 in
       fun v buf off bad ->
-        let bad = Stdlib.ref bad in
-        put_word buf off k1 a1 s1 m1 (g1 v) bad;
-        put_word buf off k2 a2 s2 m2 (g2 v) bad;
-        put_word buf off k3 a3 s3 m3 (g3 v) bad;
-        last v buf off !bad
+        let bad = put_word buf off k1 a1 s1 m1 (g1 v) bad in
+        let bad = put_word buf off k2 a2 s2 m2 (g2 v) bad in
+        let bad = put_word buf off k3 a3 s3 m3 (g3 v) bad in
+        last v buf off bad
   | p1 :: p2 :: p3 :: p4 :: rest ->
       let { get = g1; kind = k1; at = a1; shift = s1; mask = m1 } = p1 in
       let { get = g2; kind = k2; at = a2; shift = s2; mask = m2 } = p2 in
@@ -1497,12 +1505,11 @@ let rec stage_rows : type r.
       let { get = g4; kind = k4; at = a4; shift = s4; mask = m4 } = p4 in
       let rest = stage_rows rest ~slow ~finish in
       fun v buf off bad ->
-        let bad = Stdlib.ref bad in
-        put_word buf off k1 a1 s1 m1 (g1 v) bad;
-        put_word buf off k2 a2 s2 m2 (g2 v) bad;
-        put_word buf off k3 a3 s3 m3 (g3 v) bad;
-        put_word buf off k4 a4 s4 m4 (g4 v) bad;
-        rest v buf off !bad
+        let bad = put_word buf off k1 a1 s1 m1 (g1 v) bad in
+        let bad = put_word buf off k2 a2 s2 m2 (g2 v) bad in
+        let bad = put_word buf off k3 a3 s3 m3 (g3 v) bad in
+        let bad = put_word buf off k4 a4 s4 m4 (g4 v) bad in
+        rest v buf off bad
 
 let zero_words words buf off =
   for i = 0 to Array.length words - 1 do
