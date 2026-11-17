@@ -928,6 +928,50 @@ let min_bounds_error min_size buf off =
   raise_eof ~at:off ~expected:min_size
     ~got:(bytes_from (Input_end.of_bytes buf) off)
 
+let word_of : type a.
+    size:int -> a fread -> (Codec_words.word * (a, int) Type.eq) option =
+ fun ~size r ->
+  let word = Codec_words.word and bit_width = Codec_words.bit_width in
+  let scalar o bytes signed = word ~size o ~bytes ~s:0 ~w:(8 * bytes) ~signed in
+  match r with
+  | Byte o -> Some (scalar o 1 false, UInt8.int_eq)
+  | Sbyte o -> Some (scalar o 1 true, SInt8.int_eq)
+  | U16be o -> Some (scalar o 2 false, UInt16.int_eq)
+  | I16be o -> Some (scalar o 2 true, SInt16.int_eq)
+  | U32be o -> Option.map (fun eq -> (scalar o 4 false, eq)) UInt32.int_eq
+  | I32be o -> Option.map (fun eq -> (scalar o 4 true, eq)) SInt32.int_eq
+  | Bits8 (o, s, m) ->
+      Some (word ~size o ~bytes:1 ~s ~w:(bit_width m) ~signed:false, Type.Equal)
+  | Bits16be (o, s, m) ->
+      Some (word ~size o ~bytes:2 ~s ~w:(bit_width m) ~signed:false, Type.Equal)
+  | U16le _ | U32le _ | I16le _ | I32le _ | Bits16le _ | Other _ -> None
+
+(* The words of a record of [size] bytes whose every field reads as one,
+   [None] if one does not. *)
+let rec words : type full result.
+    size:int ->
+    prev:int ->
+    (full, result) readers_fwd ->
+    (full, result) Codec_words.words option =
+ fun ~size ~prev fwd ->
+  match fwd with
+  | FNil -> Some Codec_words.WNil
+  | FCons (r, rest) -> (
+      match word_of ~size r with
+      | None -> None
+      | Some (w, eq) -> (
+          let w = { w with Codec_words.same = w.Codec_words.q = prev } in
+          match words ~size ~prev:w.q rest with
+          | Some ws -> Some (Codec_words.WCons (w, eq, ws))
+          | None -> None))
+
+let staged_words ~size f fwd =
+  if Sys.int_size < 63 || size < 8 then None
+  else
+    Option.bind
+      (words ~size ~prev:(-1) fwd)
+      (Codec_words.stage ~short:min_bounds_error ~size f)
+
 (* The structural bounds check decode runs before reading any field: the buffer
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked
@@ -1253,21 +1297,35 @@ let variable_frame ~layout wire_size_info min_size input_end buf off =
 
 let build_plain_decode ~layout make fwd wire_size_info min_size pass =
   match (wire_size_info, pass) with
-  | Fixed _, No_checks ->
-      fun buf off ->
-        let input_end = Input_end.of_bytes buf in
-        if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off
-        else apply_fwd make fwd checked_runtime input_end buf off
-  | Fixed _, pass ->
-      fun buf off ->
-        let input_end = Input_end.of_bytes buf in
-        if off < 0 || off > Input_end.to_int input_end - min_size then
-          min_bounds_error min_size buf off
-        else begin
-          run_plain_pass pass input_end buf off;
-          apply_fwd make fwd checked_runtime input_end buf off
-        end
+  | Fixed _, No_checks -> (
+      match staged_words ~size:min_size make fwd with
+      | Some read -> read
+      | None ->
+          fun buf off ->
+            let input_end = Input_end.of_bytes buf in
+            if off < 0 || off > Input_end.to_int input_end - min_size then
+              min_bounds_error min_size buf off
+            else apply_fwd make fwd checked_runtime input_end buf off)
+  | Fixed _, pass -> (
+      match staged_words ~size:min_size make fwd with
+      | Some read ->
+          fun buf off ->
+            let input_end = Input_end.of_bytes buf in
+            if off < 0 || off > Input_end.to_int input_end - min_size then
+              min_bounds_error min_size buf off
+            else begin
+              run_plain_pass pass input_end buf off;
+              read buf off
+            end
+      | None ->
+          fun buf off ->
+            let input_end = Input_end.of_bytes buf in
+            if off < 0 || off > Input_end.to_int input_end - min_size then
+              min_bounds_error min_size buf off
+            else begin
+              run_plain_pass pass input_end buf off;
+              apply_fwd make fwd checked_runtime input_end buf off
+            end)
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
