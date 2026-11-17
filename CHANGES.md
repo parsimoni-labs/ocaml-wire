@@ -43,8 +43,8 @@
 ### Changed
 
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, and `decode` no longer slows with nesting depth (#435,
-  #445, @samoht)
+  fixed-size codecs, `encode` into a buffer allocates nothing, and `decode` no
+  longer slows with nesting depth (#435, #445, @samoht)
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
