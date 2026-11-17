@@ -287,12 +287,14 @@ let bit_words ~src ppf fields =
             src.u (endian_suffix e) o value)
     words
 
-let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
-  let fields = all_fields plan in
-  pp_first_error ~src ppf ~target fields;
-  Fmt.pf ppf "let[@@inline]%s write_int buf off %a =@\n" (zero_alloc target)
-    pp_vars fields;
-  let bad = List.filter_map out_of_range fields in
+(* The checks and stores of a write, on the int values of [fields]; a field
+   [in_range] says holds a value in range skips its range check. *)
+let pp_stores ~src ppf ~plan ~in_range fields =
+  let bad =
+    List.filter_map
+      (fun f -> if in_range f then None else out_of_range f)
+      fields
+  in
   let guard =
     (match bad with
       | [] -> []
@@ -314,8 +316,14 @@ let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"
 
-(* [write] takes the codec's typed values, in range by construction, and
-   stores them through [write_int]. *)
+let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
+  let fields = all_fields plan in
+  pp_first_error ~src ppf ~target fields;
+  Fmt.pf ppf "let[@@inline]%s write_int buf off %a =@\n" (zero_alloc target)
+    pp_vars fields;
+  pp_stores ~src ppf ~plan ~in_range:(fun _ -> false) fields
+
+(* The int a field's typed value stores. *)
 let plain_value f =
   match (f.map, f.store) with
   | Some _, _ -> Fmt.str "(%s.enc %s)" (map_var f) f.id
@@ -328,16 +336,27 @@ let plain_value f =
       | Int _ -> Fmt.str "(%s : %s :> int)" f.id (type_of f)
       | Bits _ | Bytes _ -> f.id)
 
-(* A map's functions are the caller's code, so a write through one makes no
+(* [write] takes the codec's typed values. An integer field's type holds it in
+   range, so only the other fields are range-checked. A map's functions are the
+   caller's code, so its value is checked, and a write through one makes no
    promise about allocation. *)
-let pp_write ppf ~target fields =
+let typed_in_range f =
+  match (f.map, f.store) with
+  | None, Int _ -> true
+  | Some _, _ | None, (Bits _ | Bytes _) -> false
+
+let pp_write ?(src = bytes_src) ppf ~target ~plan =
+  let fields = all_fields plan in
   let target =
     if List.exists (fun f -> Option.is_some f.map) fields then `OCaml
     else target
   in
-  Fmt.pf ppf "let[@@inline]%s write buf off %a =@\n  write_int buf off %a@\n@\n"
-    (zero_alloc target) pp_vars fields pp_list
-    (List.map plain_value fields)
+  Fmt.pf ppf "let[@@inline]%s write buf off %a =@\n" (zero_alloc target) pp_vars
+    fields;
+  List.iter
+    (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value f))
+    fields;
+  pp_stores ~src ppf ~plan ~in_range:typed_in_range fields
 
 (* A module whose code holds a value only an [int] of 63 bits holds refuses to
    load on a target whose ints have 32 bits or fewer. *)
@@ -702,7 +721,7 @@ let pp_bigstring ppf ~target ~make ~record ~plan ~size =
   pp_decode ~src ppf ~plan ~size ~head:"let decode buf off" ~call:(fun args ->
       Fmt.str "%s %a" make pp_list args);
   pp_write_int ~src ppf ~target ~plan;
-  pp_write ppf ~target fields;
+  pp_write ~src ppf ~target ~plan;
   pp_getters ~src ppf ~target fields;
   pp_valid ~src ppf ~target ~plan;
   pp_view ~src ppf ~target ~plan ~size;
@@ -722,7 +741,7 @@ let pp_body ppf ~target ~make ~plan ~size =
       Fmt.str "%s %a" make pp_list args);
   if target = `OxCaml then pp_oxcaml ppf ~record ~plan ~size;
   pp_write_int ppf ~target ~plan;
-  pp_write ppf ~target fields;
+  pp_write ppf ~target ~plan;
   pp_getters ppf ~target fields;
   pp_valid ppf ~target ~plan;
   pp_view ppf ~target ~plan ~size;
