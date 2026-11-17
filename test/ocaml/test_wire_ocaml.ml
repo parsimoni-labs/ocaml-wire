@@ -321,6 +321,51 @@ let test_signed () =
     ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
     (decoded Schemas.signed 200)
 
+(* [packed]'s fields store as a few wide words: each value, a negative one
+   among them, lands in its own bytes, and a plain value out of its field's
+   range raises what converting it raises. *)
+let test_packed () =
+  let open Schemas in
+  reads packed ~decode:G_packed.decode ~validate:G_packed.validate;
+  writes packed
+    ~write:(fun r buf off ->
+      G_packed.write buf off r.a r.b r.c r.d r.e r.f r.g r.h r.i r.j r.k r.l)
+    (decoded packed 300);
+  let wild k = Random.State.int rand (k + 40) - 20 in
+  let size = Codec.min_wire_size packed in
+  for _ = 1 to 2000 do
+    let a = wild 256 - 128 and b = wild 256 and c = wild 0x10000 - 0x8000 in
+    let d = wild 0x10000 and e = wild 512 in
+    let f = Int32.sub (Random.State.int32 rand Int32.max_int) 0x40000000l in
+    let g = wild 256 - 128 and h = wild 256 and i = wild 0x10000 - 0x8000 in
+    let j = wild 0x10000 and k = wild 256 - 128 and l = wild 256 in
+    let len = size + Random.State.int rand 3 in
+    let off = Random.State.int rand (len + 2) - 1 in
+    let run fn =
+      outcome (fun () ->
+          let buf = Bytes.make len '\xaa' in
+          fn buf off;
+          Bytes.to_string buf)
+    in
+    let typed buf off =
+      let a = SInt8.v a in
+      let b = UInt8.v b in
+      let c = SInt16.v c in
+      let d = UInt16.v d in
+      let f = SInt32.of_int32 f in
+      let g = SInt8.v g in
+      let h = UInt8.v h in
+      let i = SInt16.v i in
+      let j = UInt16.v j in
+      let k = SInt8.v k in
+      let l = UInt8.v l in
+      Codec.encode packed (packed_make a b c d e f g h i j k l) buf off
+    in
+    Alcotest.(check string)
+      "packed" (run typed)
+      (run (fun buf off -> G_packed.write_int buf off a b c d e f g h i j k l))
+  done
+
 (* Values that make each check of [refined] pass or fail, often several at
    once, so the generated code must report the one the codec reports. *)
 let fix_refined buf off =
@@ -1262,6 +1307,7 @@ let suite =
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
       Alcotest.test_case "negative literals" `Quick test_signed;
+      Alcotest.test_case "adjacent fields" `Quick test_packed;
       Alcotest.test_case "errors in the codec's order" `Quick test_refined;
       Alcotest.test_case "overflowing arithmetic" `Quick test_overflow;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
