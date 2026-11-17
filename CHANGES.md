@@ -69,6 +69,9 @@
 - `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
   its fields with no further bounds check (#435, @samoht)
 
+- `Wire.Codec.decoder` and `Wire.Codec.encoder`: a codec's decode and encode,
+  staged, for a loop over many records (#496, @samoht)
+
 - `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
   field names against the FFI pipeline before writing anything (#434, @samoht)
 

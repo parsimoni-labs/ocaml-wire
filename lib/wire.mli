@@ -1322,6 +1322,12 @@ module Codec : sig
     ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
   (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
 
+  val decoder : 'r t -> (bytes -> int -> 'r) Staged.t
+  (** [decoder c] is [decode_exn c], staged: [c] is compiled when the stage is
+      built, and each call runs its decoder with no other dispatch. Unstage it
+      once and call the result per record. It raises what {!decode_exn} raises.
+  *)
+
   val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
   (** [encode ?env c r buf off] encodes one record value into a buffer at the
       given base offset.
@@ -1349,6 +1355,10 @@ module Codec : sig
       hold a partial record and must be treated as scrap. Use {!to_bytes} or
       {!to_string} when no destination buffer should escape on failure. Only the
       single-field {!set} rolls its write back. *)
+
+  val encoder : 'r t -> ('r -> bytes -> int -> unit) Staged.t
+  (** [encoder c] is [encode c], staged as {!decoder} is. It raises what
+      {!encode} raises. *)
 
   val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
   (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
