@@ -13,7 +13,7 @@
 
 - `wire.ocaml` (`Wire_ocaml`): generate plain OCaml from a fixed-size codec,
   with every offset a constant, needing only the new `wire.runtime`. It builds
-  for js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #487, @samoht)
+  for js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #487, #488, @samoht)
 
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)
