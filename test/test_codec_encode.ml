@@ -1039,6 +1039,40 @@ let test_uint_var_dynamic () =
   Alcotest.(check int) "n" 2 (UInt8.to_int n);
   Alcotest.check u63 "value" (UInt63.of_int 0x1234) value
 
+(* Encoding a fixed-size record of integers and bitfields into a buffer
+   allocates nothing, over more than one row of the staged writes. Only native
+   code is measured: bytecode and JavaScript box what native code does not. The
+   fields are 8 and 16 bits wide: a 32-bit store takes a boxed [int32] where the
+   build does not inline across libraries, as dune's dev profile does not. *)
+let test_fixed_encode_allocates_nothing () =
+  match Sys.backend_type with
+  | Sys.Bytecode | Sys.Other _ -> ()
+  | Sys.Native ->
+      let codec =
+        Codec.v "Ints"
+          (fun a b c d e f -> (a, b, c, d, e, f))
+          Codec.
+            [
+              (Field.v "A" uint8 $ fun (a, _, _, _, _, _) -> a);
+              (Field.v "B" uint16be $ fun (_, b, _, _, _, _) -> b);
+              (Field.v "C" uint16 $ fun (_, _, c, _, _, _) -> c);
+              (Field.v "D" uint16be $ fun (_, _, _, d, _, _) -> d);
+              (Field.v "E" (bits ~width:4 U8) $ fun (_, _, _, _, e, _) -> e);
+              (Field.v "F" (bits ~width:4 U8) $ fun (_, _, _, _, _, f) -> f);
+            ]
+      in
+      let buf = Bytes.of_string "\x01\x02\x03\x04\x05\x06\x07\x5a" in
+      let v = decode_ok (Codec.decode codec buf 0) in
+      Codec.encode codec v buf 0;
+      let n = 100 in
+      let before = Gc.minor_words () in
+      for _ = 1 to n do
+        Codec.encode codec v buf 0
+      done;
+      let words = Gc.minor_words () -. before in
+      if words >= float n then
+        Alcotest.failf "%d encodes allocated %.0f words" n words
+
 let suite =
   ( "codec_encode",
     [
@@ -1062,6 +1096,8 @@ let suite =
         test_encode_int64_carrier_has_no_range;
       Alcotest.test_case "8-byte unsigned fields preserve the wire" `Quick
         test_eight_byte_unsigned_preserves_wire;
+      Alcotest.test_case "fixed encode allocates nothing" `Quick
+        test_fixed_encode_allocates_nothing;
       Alcotest.test_case "4-byte signed fields preserve the wire" `Quick
         test_four_byte_signed_preserves_wire;
       Alcotest.test_case "exact width: SInt32.of_int range" `Quick
