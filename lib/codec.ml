@@ -665,7 +665,7 @@ let decode_first consume e t buf off =
   | None, `Prefix, Some decode -> decode buf off
   | _ -> decode_slow consume e t c buf off
 
-let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+let decode_general consume e t buf off =
   match Atomic.get t.compiled with
   | None -> decode_first consume e t buf off
   | Some c -> (
@@ -673,9 +673,22 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
       | None, `Prefix, Some decode -> decode buf off
       | _ -> decode_slow consume e t c buf off)
 
+(* The common call, no [consume] and no [env] on a compiled codec without
+   params, is one test before its decoder runs. *)
+let decode_exn ?consume ?env:e t buf off =
+  match (consume, e, Atomic.get t.compiled) with
+  | None, None, Some { plain_decode = Some decode; _ } -> decode buf off
+  | _ -> decode_general (Option.value consume ~default:`Prefix) e t buf off
+
 let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
   with Types.Parse_error e -> Error e
+
+let decoder t =
+  let c = compiled t in
+  match c.plain_decode with
+  | Some decode -> Staged.stage decode
+  | None -> Staged.stage (fun buf off -> decode_slow `Prefix None t c buf off)
 
 let encode_slow e t v buf off =
   if off < 0 then
@@ -703,6 +716,12 @@ let encode ?env:e t v buf off =
       | Some { plain_encode = Some f; _ } -> f v buf off
       | _ -> encode_slow e t v buf off)
   | _ -> encode_slow e t v buf off
+
+let encoder t =
+  let c = compiled t in
+  match c.plain_encode with
+  | Some f when t.n_params = 0 -> Staged.stage f
+  | _ -> Staged.stage (fun v buf off -> encode_slow None t v buf off)
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where

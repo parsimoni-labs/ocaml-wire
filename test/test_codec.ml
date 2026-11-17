@@ -1522,6 +1522,31 @@ let test_decode_words () =
     Alcotest.(check int) "S" (UInt8.to_int (s buf off)) s'
   done
 
+(* The staged decoder and encoder do what [decode_exn] and [encode] do, a
+   frame too short for the record included. *)
+let test_staged_decoder () =
+  let rand = Random.State.make [| 7 |] in
+  let decode = Staged.unstage (Codec.decoder wide_codec) in
+  let encode = Staged.unstage (Codec.encoder wide_codec) in
+  let outcome f =
+    match f () with v -> Ok v | exception Parse_error e -> Error e
+  in
+  for _ = 1 to 200 do
+    let buf, off = random_frame rand wide_codec in
+    let off = if Random.State.int rand 8 = 0 then Bytes.length buf else off in
+    let want = outcome (fun () -> Codec.decode_exn wide_codec buf off) in
+    let got = outcome (fun () -> decode buf off) in
+    Alcotest.(check bool) "decode" true (want = got);
+    match want with
+    | Error _ -> ()
+    | Ok v ->
+        let a = Bytes.make (Bytes.length buf) '\x00' in
+        let b = Bytes.make (Bytes.length buf) '\x00' in
+        Codec.encode wide_codec v a off;
+        encode v b off;
+        Alcotest.(check bytes) "encode" a b
+  done
+
 let suite =
   ( "codec",
     [
@@ -1535,6 +1560,8 @@ let suite =
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "decode: fields read as words" `Quick test_decode_words;
+      Alcotest.test_case "decode: staged decoder and encoder" `Quick
+        test_staged_decoder;
       Alcotest.test_case "decode: prefix and all consumption" `Quick
         test_codec_decode_consumption_modes;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;
