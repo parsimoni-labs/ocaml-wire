@@ -13,7 +13,7 @@ let[@inline never] out_of_range n =
   invalid_arg
     ("Wire.SInt8.v: " ^ string_of_int n ^ " is not a signed 8-bit value")
 
-let[@inline] v n = if n < min_int || n > max_int then out_of_range n else n
+let[@inline] v n = if (n + 128) lsr 8 <> 0 then out_of_range n else n
 let v_opt n = if n < min_int || n > max_int then None else Some n
 let to_int n = n
 let get buf off = Bytes.get_int8 buf off
