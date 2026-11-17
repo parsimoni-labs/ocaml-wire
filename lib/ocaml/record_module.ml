@@ -178,18 +178,39 @@ let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.id) fields)
 (* Writes take each value in its plain form: an [int] for a field up to 16 bits
    or a bitfield, an [int32] for a 32-bit field, a [string] for a byte array. *)
 
-(* The bits that put a plain value out of its field's range, or-ed with the
-   others' so one test, with no branch per field, finds any. *)
+(* The bits that put a plain value out of its field's range: the value, offset
+   to zero for a signed field, shifted right by the field's width. Or-ing the
+   values of one width before the shift makes one test, with no branch per
+   field, that finds any. *)
 let out_of_range f =
   let x = f.id in
   match f.store with
-  | Int { width = (8 | 16) as w; signed = false; _ } ->
-      Fmt.kstr Option.some "(%s lsr %d)" x w
+  | Int { width = (8 | 16) as w; signed = false; _ } -> Some (`Shift (w, x))
   | Int { width = (8 | 16) as w; signed = true; _ } ->
-      Fmt.kstr Option.some "((%s + %d) lsr %d)" x (1 lsl (w - 1)) w
+      Some (`Shift (w, Fmt.str "(%s + %d)" x (1 lsl (w - 1))))
   | Int _ -> None
-  | Bits { width; _ } -> Fmt.kstr Option.some "(%s lsr %d)" x width
-  | Bytes n -> Fmt.kstr Option.some "(String.length %s lxor %d)" x n
+  | Bits { width; _ } -> Some (`Shift (width, x))
+  | Bytes n -> Some (`Other (Fmt.str "(String.length %s lxor %d)" x n))
+
+let out_of_range_test bad =
+  let widths =
+    List.sort_uniq compare
+      (List.filter_map
+         (function `Shift (w, _) -> Some w | `Other _ -> None)
+         bad)
+  in
+  List.map
+    (fun w ->
+      let xs =
+        List.filter_map
+          (function `Shift (w', x) when w' = w -> Some x | _ -> None)
+          bad
+      in
+      match xs with
+      | [ x ] -> Fmt.str "(%s lsr %d)" x w
+      | _ -> Fmt.str "((%s) lsr %d)" (String.concat " lor " xs) w)
+    widths
+  @ List.filter_map (function `Other e -> Some e | `Shift _ -> None) bad
 
 let member f valid =
   Fmt.str "(%a)"
@@ -237,25 +258,53 @@ let pp_first_error ~src ppf ~target fields =
     fields;
   Fmt.pf ppf "  no_error ()@\n@\n"
 
-let store ~src ppf f =
-  let o = f.offset in
-  match f.store with
-  | Int { width = 8; _ } ->
-      Fmt.pf ppf "    %s.set_u8 buf (off + %d) %s;@\n" src.u o f.id
-  | Int { width = 16; endian; _ } ->
-      Fmt.pf ppf "    %s.set_u16%s buf (off + %d) %s;@\n" src.u
-        (endian_suffix endian) o f.id
-  | Int { endian; _ } ->
-      Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u
-        (endian_suffix endian) o f.id
-  | Bits _ -> ()
-  | Bytes n ->
-      Fmt.pf ppf "    %s.unsafe_blit_string %s 0 buf (off + %d) %d;@\n"
-        src.checked f.id o n
+(* A store of [size] bytes at [at]: an [int] whose low [size] bytes it writes,
+   or the [int32] of a 32-bit field. *)
+type part = {
+  at : int;
+  size : int;
+  endian : T.endian option;
+  value : [ `Int of string | `I32 of string ];
+}
 
-(* Each bitfield word, stored once: the values of its fields, each in range,
-   shifted into place and or-ed. *)
-let bit_words ~src ppf fields =
+(* A bitfield word's store: the values of its fields, each in range, shifted
+   into place and or-ed. *)
+let bit_word fields (o, base) =
+  let bits =
+    List.filter_map
+      (fun f ->
+        match f.store with
+        | Bits { shift; _ } when f.offset = o ->
+            Fmt.kstr Option.some "(%s lsl %d)" f.id shift
+        | _ -> None)
+      fields
+  in
+  let value = `Int (Fmt.str "(%s)" (String.concat " lor " bits)) in
+  match base with
+  | T.U8 -> { at = o; size = 1; endian = None; value }
+  | T.U16 e -> { at = o; size = 2; endian = Some e; value }
+  | T.U32 e -> { at = o; size = 4; endian = Some e; value }
+
+(* An integer field's store. A signed value is masked to its width, so its sign
+   does not reach the bytes beside it when stores merge. *)
+let int_part f =
+  let at = f.offset in
+  let masked w signed =
+    `Int
+      (if signed then Fmt.str "(%s land 0x%x)" f.id ((1 lsl w) - 1) else f.id)
+  in
+  match f.store with
+  | Int { width = 8; signed; _ } ->
+      Some { at; size = 1; endian = None; value = masked 8 signed }
+  | Int { width = 16; endian; signed } ->
+      Some { at; size = 2; endian = Some endian; value = masked 16 signed }
+  | Int { endian; _ } ->
+      Some { at; size = 4; endian = Some endian; value = `I32 f.id }
+  | Bits _ | Bytes _ -> None
+
+(* The stores of a write, in offset order: each integer field and each
+   bitfield word. *)
+let parts fields =
   let words =
     List.filter_map
       (fun f ->
@@ -265,27 +314,103 @@ let bit_words ~src ppf fields =
       fields
     |> List.sort_uniq compare
   in
-  List.iter
-    (fun (o, base) ->
-      let parts =
-        List.filter_map
-          (fun f ->
-            match f.store with
-            | Bits { shift; _ } when f.offset = o ->
-                Fmt.kstr Option.some "(%s lsl %d)" f.id shift
-            | _ -> None)
-          fields
+  List.map (bit_word fields) words @ List.filter_map int_part fields
+  |> List.sort (fun a b -> compare a.at b.at)
+
+(* The parts from the head of [ps] that fill exactly [n] bytes from its first,
+   all in one byte order, and the rest. *)
+let take n ps =
+  match ps with
+  | [] -> None
+  | p0 :: _ ->
+      let base = p0.at in
+      let rec go acc endian next ps =
+        if next = base + n then Some (List.rev acc, endian, ps)
+        else
+          match ps with
+          | p :: rest when p.at = next && p.at + p.size <= base + n -> (
+              match (endian, p.endian) with
+              | Some e, Some e' when e <> e' -> None
+              | None, e | e, None -> go (p :: acc) e (next + p.size) rest
+              | e, _ -> go (p :: acc) e (next + p.size) rest)
+          | _ -> None
       in
-      let value = String.concat " lor " parts in
-      match base with
-      | T.U8 -> Fmt.pf ppf "    %s.set_u8 buf (off + %d) (%s);@\n" src.u o value
-      | T.U16 e ->
-          Fmt.pf ppf "    %s.set_u16%s buf (off + %d) (%s);@\n" src.u
-            (endian_suffix e) o value
-      | T.U32 e ->
-          Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (Int32.of_int (%s));@\n"
-            src.u (endian_suffix e) o value)
-    words
+      go [] None base ps
+
+(* The position of a part's low bit in the [n]-byte word at [base]. *)
+let shift endian ~n base p =
+  let r = p.at - base in
+  match endian with T.Big -> (n - r - p.size) * 8 | T.Little -> r * 8
+
+(* A word as the or of its parts, each widened first: built in [int32] or
+   [int64], it needs no [int] wider than one field. *)
+let word ~m ~n endian base ps =
+  let part p =
+    let sh = shift endian ~n base p in
+    let v =
+      match p.value with
+      | `Int v -> Fmt.str "(%s.of_int %s)" m v
+      | `I32 x when n = 8 && sh + 32 < 64 ->
+          Fmt.str "(Int64.logand (Int64.of_int32 %s) 0xffffffffL)" x
+      | `I32 x -> Fmt.str "(%s.of_int32 %s)" m x
+    in
+    if sh = 0 then v else Fmt.str "(%s.shift_left %s %d)" m v sh
+  in
+  let rec ors = function
+    | [] -> assert false
+    | [ x ] -> x
+    | x :: xs -> Fmt.str "(%s.logor %s %s)" m x (ors xs)
+  in
+  ors (List.map part ps)
+
+(* Adjacent stores merge into one of 8 bytes, or of 4, so a record takes a few
+   wide stores instead of one per field. *)
+let stores ~src ppf fields =
+  let e = function Some e -> endian_suffix e | None -> "be" in
+  let one p =
+    match (p.size, p.value) with
+    | 1, `Int v -> Fmt.pf ppf "    %s.set_u8 buf (off + %d) %s;@\n" src.u p.at v
+    | 2, `Int v ->
+        Fmt.pf ppf "    %s.set_u16%s buf (off + %d) %s;@\n" src.u (e p.endian)
+          p.at v
+    | _, `Int v ->
+        Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (Int32.of_int %s);@\n" src.u
+          (e p.endian) p.at v
+    | _, `I32 v ->
+        Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u (e p.endian)
+          p.at v
+  in
+  let merged ~m ~n p ws endian =
+    let endian = Option.value endian ~default:T.Big in
+    Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
+      (endian_suffix endian) p.at
+      (word ~m ~n endian p.at ws)
+  in
+  let rec go = function
+    | [] -> ()
+    | p :: rest as ps -> (
+        match take 8 ps with
+        | Some (ws, endian, rest) ->
+            merged ~m:"Int64" ~n:8 p ws endian;
+            go rest
+        | None -> (
+            match take 4 ps with
+            | Some ((_ :: _ :: _ as ws), endian, rest) ->
+                merged ~m:"Int32" ~n:4 p ws endian;
+                go rest
+            | _ ->
+                one p;
+                go rest))
+  in
+  go (parts fields);
+  List.iter
+    (fun f ->
+      match f.store with
+      | Bytes n ->
+          Fmt.pf ppf "    %s.unsafe_blit_string %s 0 buf (off + %d) %d;@\n"
+            src.checked f.id f.offset n
+      | _ -> ())
+    fields
 
 (* The checks and stores of a write, on the int values of [fields]; a field
    [in_range] says holds a value in range skips its range check. *)
@@ -298,7 +423,10 @@ let pp_stores ~src ppf ~plan ~in_range fields =
   let guard =
     (match bad with
       | [] -> []
-      | _ -> [ Fmt.str "(%s) <> 0" (String.concat " lor " bad) ])
+      | _ ->
+          [
+            Fmt.str "(%s) <> 0" (String.concat " lor " (out_of_range_test bad));
+          ])
     @ List.filter_map
         (fun f -> Option.map (fun (_, v) -> "not " ^ member f v) f.enum)
         fields
@@ -310,8 +438,7 @@ let pp_stores ~src ppf ~plan ~in_range fields =
         (String.concat " || " guard)
         pp_vars fields);
   Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short";
-  bit_words ~src ppf fields;
-  List.iter (store ~src ppf) fields;
+  stores ~src ppf fields;
   if has_checks plan then Fmt.pf ppf "    validate_written buf off@\n"
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"

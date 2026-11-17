@@ -47,6 +47,12 @@ val set_i32le : bytes -> int -> int32 -> unit
 val set_i32be : bytes -> int -> int32 -> unit
 (** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)
 
+val set_i64le : bytes -> int -> int64 -> unit
+(** [set_i64le buf off v] writes [v] as a little-endian 64-bit value. *)
+
+val set_i64be : bytes -> int -> int64 -> unit
+(** [set_i64be buf off v] writes [v] as a big-endian 64-bit value. *)
+
 val blit_string : string -> bytes -> int -> unit
 (** [blit_string s buf off] copies [s] into [buf] at [off]. *)
 
@@ -91,6 +97,12 @@ module Bigstring : sig
 
   val set_i32be : t -> int -> int32 -> unit
   (** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)
+
+  val set_i64le : t -> int -> int64 -> unit
+  (** [set_i64le buf off v] writes [v] as a little-endian 64-bit value. *)
+
+  val set_i64be : t -> int -> int64 -> unit
+  (** [set_i64be buf off v] writes [v] as a big-endian 64-bit value. *)
 
   val get_uint8 : t -> int -> int
   (** [get_uint8 buf off] is {!u8} after a bounds check that raises

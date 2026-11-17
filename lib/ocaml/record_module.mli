@@ -15,9 +15,6 @@ val zero_alloc : [< `OCaml | `OxCaml ] -> string
 (** [zero_alloc target] is the attribute the OxCaml target adds to a hot path:
     an allocation check. *)
 
-val store : src:src -> Format.formatter -> field -> unit
-(** [store ~src ppf f] writes the unchecked write of the field [f]. *)
-
 val pp_wide : Format.formatter -> codec:string -> wide:bool -> unit
 (** [pp_wide ppf ~codec ~wide] writes, when [wide], the check that makes the
     module refuse to load on a target whose ints have 32 bits or fewer. *)
