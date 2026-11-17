@@ -73,6 +73,18 @@ let[@inline] i64be buf off =
   else if Sys.big_endian then get64 buf off
   else swap64 (get64 buf off)
 
+external set64 : bytes -> int -> int64 -> unit = "%caml_bytes_set64u"
+
+let[@inline] set_i64le buf off v =
+  if Paranoid.enabled then Bytes.set_int64_le buf off v
+  else if Sys.big_endian then set64 buf off (swap64 v)
+  else set64 buf off v
+
+let[@inline] set_i64be buf off v =
+  if Paranoid.enabled then Bytes.set_int64_be buf off v
+  else if Sys.big_endian then set64 buf off v
+  else set64 buf off (swap64 v)
+
 let[@inline] blit_string s buf off =
   let len = String.length s in
   if Paranoid.enabled then Bytes.blit_string s 0 buf off len
@@ -90,6 +102,7 @@ module Bigstring = struct
   external get64 : t -> int -> int64 = "%caml_bigstring_get64u"
   external set16 : t -> int -> int -> unit = "%caml_bigstring_set16u"
   external set32 : t -> int -> int32 -> unit = "%caml_bigstring_set32u"
+  external set64 : t -> int -> int64 -> unit = "%caml_bigstring_set64u"
 
   let[@inline never] out_of_bounds () = invalid_arg "index out of bounds"
 
@@ -139,6 +152,14 @@ module Bigstring = struct
   let[@inline] set_i32be buf off v =
     if Paranoid.enabled then check buf off 4;
     if Sys.big_endian then set32 buf off v else set32 buf off (swap32 v)
+
+  let[@inline] set_i64le buf off v =
+    if Paranoid.enabled then check buf off 8;
+    if Sys.big_endian then set64 buf off (swap64 v) else set64 buf off v
+
+  let[@inline] set_i64be buf off v =
+    if Paranoid.enabled then check buf off 8;
+    if Sys.big_endian then set64 buf off v else set64 buf off (swap64 v)
 
   (* The checked reads are the compiler's own: its bounds check jumps to a
      handler that raises [Invalid_argument "index out of bounds"], as [Bytes]'
