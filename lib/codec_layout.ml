@@ -133,6 +133,17 @@ let span_size prefix leaves (e : int expr) =
       | _ -> general ())
   | _ -> general ()
 
+(* The extent walk's items: the same fields, with sizes and gates as closures
+   of a cursor ([Codec_walk]), each a direct call. A region adds its size. *)
+type eitem =
+  | EFix of int
+  | ESpan of (cursor -> int)
+  | ERest
+  | EOpt of (cursor -> bool) * eitem
+  | ESub of sub
+
+type items = { walk : item list; extent : eitem list option }
+
 (* The layout items of a variable-size record without parameters whose
    variable fields are byte spans, gated fields and sub-codecs sized by earlier
    fixed-offset fields, in field order, adjacent widths merged; [None] when a
@@ -171,12 +182,33 @@ let layout_items prefix layout =
     | Fix a, Fix b :: rest -> Fix (a + b) :: rest
     | _ -> item :: items
   in
+  let rec extent_item = function
+    | Lfix k -> EFix k
+    | Lspan e | Lregion { size = e; _ } -> ESpan (Codec_walk.size prefix e)
+    | Lrest -> ERest
+    | Lopt (present, i) -> EOpt (Codec_walk.gate prefix present, extent_item i)
+    | Lsub sub -> ESub sub
+  in
+  let extent_items layout =
+    let merge item items =
+      match (item, items) with
+      | EFix a, EFix b :: rest -> EFix (a + b) :: rest
+      | _ -> item :: items
+    in
+    List.fold_left (fun items l -> merge (extent_item l) items) [] layout
+  in
   match layout with
   | None -> None
   | Some layout -> (
       match List.fold_left (fun items l -> merge (item l) items) [] layout with
       | exception Exit -> None
-      | items -> Some items)
+      | walk ->
+          let extent =
+            match extent_items layout with
+            | items -> Some items
+            | exception Exit -> None
+          in
+          Some { walk; extent })
 
 (* The layout pass: one walk that reads each length field once and checks each
    span against the end of input it is given, the buffer's or a nested
@@ -189,7 +221,7 @@ let build_layout ~min_size items =
       let len = Input_end.to_int input_end in
       if off < 0 || off > len - min_size then -1
       else
-        try layout_walk items input_end buf off len off
+        try layout_walk items.walk input_end buf off len off
         with Types.Parse_error _ | Exit -> -1)
     items
 
@@ -213,6 +245,28 @@ let rec layout_end items input_end buf off cur =
       layout_end rest input_end buf off
         (checked_add cur (sub.size_of no_runtime input_end buf cur))
 
+(* [layout_end] on the cursor's closures. *)
+let rec extent_end items c input_end buf cur =
+  match items with
+  | [] -> cur
+  | EFix k :: rest -> extent_end rest c input_end buf (cur + k)
+  | ESpan size :: rest ->
+      extent_end rest c input_end buf (checked_add cur (size c))
+  | ERest :: rest -> extent_end rest c input_end buf (Bytes.length buf)
+  | EOpt (present, item) :: rest ->
+      if present c then extent_end (item :: rest) c input_end buf cur
+      else extent_end rest c input_end buf cur
+  | ESub sub :: rest ->
+      extent_end rest c input_end buf
+        (checked_add cur (sub.size_of no_runtime input_end buf cur))
+
+let extent items input_end buf off =
+  match items.extent with
+  | None -> layout_end items.walk input_end buf off off
+  | Some e ->
+      let c = { wbuf = buf; wbase = off; wpos = off; wend = input_end } in
+      extent_end e c input_end buf off
+
 (* The record's extent through the extent walk, when its length fields are in
    the bytes and it answers; anything else is the general extent's to answer,
    value or error, so either way the answer is the one it always was. *)
@@ -221,11 +275,9 @@ let layout_extent ~min_size items compute runtime input_end buf off =
   if is_extent_fallback runtime || off < 0 || off > len - min_size then
     compute runtime input_end buf off
   else
-    match layout_end items input_end buf off off with
+    match extent items input_end buf off with
     | e -> e
     | exception (Types.Parse_error _ | Exit | Invalid_argument _) ->
         (* The walk has been tried: the general extent does not try the walks
            of the records under it again. *)
         compute extent_fallback_runtime input_end buf off
-
-type items = item list
