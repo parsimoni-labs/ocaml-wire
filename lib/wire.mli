@@ -1577,6 +1577,60 @@ module Codec : sig
   (** [extract bf word] extracts the field from a pre-loaded word. Pure
       shift+mask, no memory access. *)
 
+  type 'r word = private int
+  (** The bytes of a record of a ['r] codec, big-endian, in an [int]. *)
+
+  type 'r word_reader
+  (** A reader of the records of a ['r] codec as words. *)
+
+  val word_reader : 'r t -> 'r word_reader
+  (** [word_reader c] reads the records of [c] with {!read_word}: several fields
+      of a header are one read and a few shifts.
+
+      {[
+      open Wire
+
+      type hdr = { kind : int; len : UInt16.t }
+
+      let kind = Codec.(Field.v "kind" (bits ~width:8 U8) $ fun h -> h.kind)
+      let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
+
+      let codec =
+        Codec.v "Hdr" (fun kind len -> { kind; len }) Codec.[ kind; len ]
+
+      let reader = Codec.word_reader codec
+      let p_kind = Codec.word_part codec kind
+      let p_len = Codec.word_part codec len
+
+      let () =
+        let w = Codec.read_word reader (Bytes.of_string "\x05\x00\x0c") 0 in
+        assert (Codec.of_word p_kind w = 5);
+        assert (UInt16.to_int (Codec.of_word p_len w) = 12)
+      ]}
+
+      Raises [Invalid_argument] when [c] is not of a fixed size or has more
+      bytes than fit an [int] with a bit to spare (7 on a 64-bit host). *)
+
+  val read_word : 'r word_reader -> bytes -> int -> 'r word
+  (** [read_word r buf off] is the record at [off], read with one bounds check
+      and, where [buf] holds 8 bytes from [off] on, one load. It is a function
+      the caller's compiler knows, so the load is inlined into the caller's
+      loop. Raises [Invalid_argument] when [buf] does not hold the record at
+      [off], as {!get} does. *)
+
+  type ('a, 'r) part
+  (** A field of a record word. *)
+
+  val word_part : 'r t -> ('a, 'r) field -> ('a, 'r) part
+  (** [word_part c f] is field [f] of the words {!word_reader} reads. Raises
+      [Invalid_argument] as {!word_reader} does, and when [f] is not one of
+      [c]'s or is not a big-endian integer or a bitfield of a byte or a
+      big-endian 16- or 32-bit word. *)
+
+  val of_word : ('a, 'r) part -> 'r word -> 'a
+  (** [of_word p w] is the field [p] of [w]: two shifts and a mask, with no
+      memory access but the part's own. *)
+
   (** {2 Struct validator}
 
       For a [Types.struct_] (e.g. from EverParse 3D), build a validator directly
