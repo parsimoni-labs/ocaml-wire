@@ -188,175 +188,164 @@ let[@inline] write buf off f1_controlwordtype f2_clcwversion f3_statusfield
     ()
   end
 
-let[@inline never] get_failed at value valid =
+let[@inline never] enum_failed at value valid =
   Wire_runtime.Errors.invalid_enum ~at ~field:[] ~value ~valid
 
-let[@inline] get_controlwordtype buf off =
-  let f1_controlwordtype =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 31)
-    land 0x1
-  in
-  f1_controlwordtype
+module Get = struct
+  let[@inline] controlwordtype buf off =
+    let f1_controlwordtype =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 31)
+      land 0x1
+    in
+    f1_controlwordtype
 
-let[@inline] get_clcwversion buf off =
-  let f2_clcwversion =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 29)
-    land 0x3
-  in
-  f2_clcwversion
+  let[@inline] clcwversion buf off =
+    let f2_clcwversion =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 29)
+      land 0x3
+    in
+    f2_clcwversion
 
-let[@inline] get_statusfield buf off =
-  let f3_statusfield =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 26)
-    land 0x7
-  in
-  f3_statusfield
+  let[@inline] statusfield buf off =
+    let f3_statusfield =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 26)
+      land 0x7
+    in
+    f3_statusfield
 
-let[@inline] get_copineffect buf off =
-  let f4_copineffect =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 24)
-    land 0x3
-  in
-  f4_copineffect
+  let[@inline] copineffect buf off =
+    let f4_copineffect =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 24)
+      land 0x3
+    in
+    f4_copineffect
 
-let[@inline] get_vcid buf off =
-  let f5_vcid =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 18)
-    land 0x3f
-  in
-  f5_vcid
+  let[@inline] vcid buf off =
+    let f5_vcid =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 18)
+      land 0x3f
+    in
+    f5_vcid
 
-let[@inline] get_spare buf off =
-  let f6_spare =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 16)
-    land 0x3
-  in
-  f6_spare
+  let[@inline] spare buf off =
+    let f6_spare =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 16)
+      land 0x3
+    in
+    f6_spare
 
-let[@inline] get_norf buf off =
-  let f7_norf =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 15)
-    land 0x1
-  in
-  f7_norf
+  let[@inline] norf buf off =
+    let f7_norf =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 15)
+      land 0x1
+    in
+    f7_norf
 
-let[@inline] get_nobitlock buf off =
-  let f8_nobitlock =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 14)
-    land 0x1
-  in
-  f8_nobitlock
+  let[@inline] nobitlock buf off =
+    let f8_nobitlock =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 14)
+      land 0x1
+    in
+    f8_nobitlock
 
-let[@inline] get_lockout buf off =
-  let f9_lockout =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 13)
-    land 0x1
-  in
-  f9_lockout
+  let[@inline] lockout buf off =
+    let f9_lockout =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 13)
+      land 0x1
+    in
+    f9_lockout
 
-let[@inline] get_wait buf off =
-  let f10_wait =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 12)
-    land 0x1
-  in
-  f10_wait
+  let[@inline] wait buf off =
+    let f10_wait =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 12)
+      land 0x1
+    in
+    f10_wait
 
-let[@inline] get_retransmit buf off =
-  let f11_retransmit =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 11)
-    land 0x1
-  in
-  f11_retransmit
+  let[@inline] retransmit buf off =
+    let f11_retransmit =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 11)
+      land 0x1
+    in
+    f11_retransmit
 
-let[@inline] get_farmbcounter buf off =
-  let f12_farmbcounter =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 9)
-    land 0x3
-  in
-  f12_farmbcounter
+  let[@inline] farmbcounter buf off =
+    let f12_farmbcounter =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 9)
+      land 0x3
+    in
+    f12_farmbcounter
 
-let[@inline] get_spare2 buf off =
-  let f13_spare2 =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 8)
-    land 0x1
-  in
-  f13_spare2
+  let[@inline] spare2 buf off =
+    let f13_spare2 =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 8)
+      land 0x1
+    in
+    f13_spare2
 
-let[@inline] get_reportvalue buf off =
-  let f14_reportvalue =
-    ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 0)
-    land 0xff
-  in
-  f14_reportvalue
+  let[@inline] reportvalue buf off =
+    let f14_reportvalue =
+      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 0)
+      land 0xff
+    in
+    f14_reportvalue
 
-let[@inline] get_controlwordtype_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+  let[@inline] controlwordtype_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] clcwversion_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] statusfield_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] copineffect_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] vcid_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] spare_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] norf_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] nobitlock_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] lockout_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] wait_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] retransmit_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] farmbcounter_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] spare2_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+
+  let[@inline] reportvalue_word buf off =
+    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+end
 
 let[@inline] controlwordtype_of_word w = (w lsr 31) land 0x1
-
-let[@inline] get_clcwversion_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] clcwversion_of_word w = (w lsr 29) land 0x3
-
-let[@inline] get_statusfield_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] statusfield_of_word w = (w lsr 26) land 0x7
-
-let[@inline] get_copineffect_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] copineffect_of_word w = (w lsr 24) land 0x3
-
-let[@inline] get_vcid_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] vcid_of_word w = (w lsr 18) land 0x3f
-
-let[@inline] get_spare_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] spare_of_word w = (w lsr 16) land 0x3
-
-let[@inline] get_norf_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] norf_of_word w = (w lsr 15) land 0x1
-
-let[@inline] get_nobitlock_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] nobitlock_of_word w = (w lsr 14) land 0x1
-
-let[@inline] get_lockout_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] lockout_of_word w = (w lsr 13) land 0x1
-
-let[@inline] get_wait_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] wait_of_word w = (w lsr 12) land 0x1
-
-let[@inline] get_retransmit_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] retransmit_of_word w = (w lsr 11) land 0x1
-
-let[@inline] get_farmbcounter_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] farmbcounter_of_word w = (w lsr 9) land 0x3
-
-let[@inline] get_spare2_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] spare2_of_word w = (w lsr 8) land 0x1
-
-let[@inline] get_reportvalue_word buf off =
-  Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
-
 let[@inline] reportvalue_of_word w = (w lsr 0) land 0xff
 
 module Valid : sig
@@ -969,231 +958,220 @@ module Bigstring = struct
       ()
     end
 
-  let[@inline never] get_failed at value valid =
+  let[@inline never] enum_failed at value valid =
     Wire_runtime.Errors.invalid_enum ~at ~field:[] ~value ~valid
 
-  let[@inline] get_controlwordtype buf off =
-    let f1_controlwordtype =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 31
-      land 0x1
-    in
-    f1_controlwordtype
+  module Get = struct
+    let[@inline] controlwordtype buf off =
+      let f1_controlwordtype =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 31
+        land 0x1
+      in
+      f1_controlwordtype
 
-  let[@inline] get_clcwversion buf off =
-    let f2_clcwversion =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 29
-      land 0x3
-    in
-    f2_clcwversion
+    let[@inline] clcwversion buf off =
+      let f2_clcwversion =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 29
+        land 0x3
+      in
+      f2_clcwversion
 
-  let[@inline] get_statusfield buf off =
-    let f3_statusfield =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 26
-      land 0x7
-    in
-    f3_statusfield
+    let[@inline] statusfield buf off =
+      let f3_statusfield =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 26
+        land 0x7
+      in
+      f3_statusfield
 
-  let[@inline] get_copineffect buf off =
-    let f4_copineffect =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 24
-      land 0x3
-    in
-    f4_copineffect
+    let[@inline] copineffect buf off =
+      let f4_copineffect =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 24
+        land 0x3
+      in
+      f4_copineffect
 
-  let[@inline] get_vcid buf off =
-    let f5_vcid =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 18
-      land 0x3f
-    in
-    f5_vcid
+    let[@inline] vcid buf off =
+      let f5_vcid =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 18
+        land 0x3f
+      in
+      f5_vcid
 
-  let[@inline] get_spare buf off =
-    let f6_spare =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 16
-      land 0x3
-    in
-    f6_spare
+    let[@inline] spare buf off =
+      let f6_spare =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 16
+        land 0x3
+      in
+      f6_spare
 
-  let[@inline] get_norf buf off =
-    let f7_norf =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 15
-      land 0x1
-    in
-    f7_norf
+    let[@inline] norf buf off =
+      let f7_norf =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 15
+        land 0x1
+      in
+      f7_norf
 
-  let[@inline] get_nobitlock buf off =
-    let f8_nobitlock =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 14
-      land 0x1
-    in
-    f8_nobitlock
+    let[@inline] nobitlock buf off =
+      let f8_nobitlock =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 14
+        land 0x1
+      in
+      f8_nobitlock
 
-  let[@inline] get_lockout buf off =
-    let f9_lockout =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 13
-      land 0x1
-    in
-    f9_lockout
+    let[@inline] lockout buf off =
+      let f9_lockout =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 13
+        land 0x1
+      in
+      f9_lockout
 
-  let[@inline] get_wait buf off =
-    let f10_wait =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 12
-      land 0x1
-    in
-    f10_wait
+    let[@inline] wait buf off =
+      let f10_wait =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 12
+        land 0x1
+      in
+      f10_wait
 
-  let[@inline] get_retransmit buf off =
-    let f11_retransmit =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 11
-      land 0x1
-    in
-    f11_retransmit
+    let[@inline] retransmit buf off =
+      let f11_retransmit =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 11
+        land 0x1
+      in
+      f11_retransmit
 
-  let[@inline] get_farmbcounter buf off =
-    let f12_farmbcounter =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 9
-      land 0x3
-    in
-    f12_farmbcounter
+    let[@inline] farmbcounter buf off =
+      let f12_farmbcounter =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 9
+        land 0x3
+      in
+      f12_farmbcounter
 
-  let[@inline] get_spare2 buf off =
-    let f13_spare2 =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 8
-      land 0x1
-    in
-    f13_spare2
+    let[@inline] spare2 buf off =
+      let f13_spare2 =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 8
+        land 0x1
+      in
+      f13_spare2
 
-  let[@inline] get_reportvalue buf off =
-    let f14_reportvalue =
-      (Int32.to_int
-         (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32)
-      lsr 0
-      land 0xff
-    in
-    f14_reportvalue
+    let[@inline] reportvalue buf off =
+      let f14_reportvalue =
+        (Int32.to_int
+           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+        land mask32)
+        lsr 0
+        land 0xff
+      in
+      f14_reportvalue
 
-  let[@inline] get_controlwordtype_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
+    let[@inline] controlwordtype_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] clcwversion_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] statusfield_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] copineffect_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] vcid_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] spare_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] norf_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] nobitlock_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] lockout_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] wait_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] retransmit_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] farmbcounter_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] spare2_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+
+    let[@inline] reportvalue_word buf off =
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
+      land mask32
+  end
 
   let[@inline] controlwordtype_of_word w = (w lsr 31) land 0x1
-
-  let[@inline] get_clcwversion_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] clcwversion_of_word w = (w lsr 29) land 0x3
-
-  let[@inline] get_statusfield_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] statusfield_of_word w = (w lsr 26) land 0x7
-
-  let[@inline] get_copineffect_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] copineffect_of_word w = (w lsr 24) land 0x3
-
-  let[@inline] get_vcid_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] vcid_of_word w = (w lsr 18) land 0x3f
-
-  let[@inline] get_spare_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] spare_of_word w = (w lsr 16) land 0x3
-
-  let[@inline] get_norf_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] norf_of_word w = (w lsr 15) land 0x1
-
-  let[@inline] get_nobitlock_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] nobitlock_of_word w = (w lsr 14) land 0x1
-
-  let[@inline] get_lockout_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] lockout_of_word w = (w lsr 13) land 0x1
-
-  let[@inline] get_wait_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] wait_of_word w = (w lsr 12) land 0x1
-
-  let[@inline] get_retransmit_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] retransmit_of_word w = (w lsr 11) land 0x1
-
-  let[@inline] get_farmbcounter_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] farmbcounter_of_word w = (w lsr 9) land 0x3
-
-  let[@inline] get_spare2_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] spare2_of_word w = (w lsr 8) land 0x1
-
-  let[@inline] get_reportvalue_word buf off =
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-    land mask32
-
   let[@inline] reportvalue_of_word w = (w lsr 0) land 0xff
 
   module Valid : sig

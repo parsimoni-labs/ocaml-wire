@@ -554,7 +554,7 @@ let pp_encode ppf fields =
   Fmt.pf ppf "let encode t buf off = write buf off %a@\n" pp_list
     (List.map (fun f -> "t." ^ f.label) fields)
 
-(* [get_<field> buf off] reads one field as [Codec.get] does, with the same
+(* [Get.<field> buf off] reads one field as [Codec.get] does, with the same
    bounds-checked load: the compiler's check jumps to a handler that does not
    return, so nothing is kept live across it, and an offset out of range raises
    what [Codec.get] raises. A closed enum's value is then checked to be a case. *)
@@ -598,7 +598,7 @@ let read_attr target f =
 
 let pp_getter ~src ppf ~target f =
   let attr = read_attr target f in
-  Fmt.pf ppf "let%s get_%s buf off =@\n" attr f.label;
+  Fmt.pf ppf "let%s %s buf off =@\n" attr f.label;
   (match f.store with
   | Int { width = 32; _ } ->
       (* Its typed value is made from the [int32]; only an enum's test reads
@@ -609,7 +609,7 @@ let pp_getter ~src ppf ~target f =
   | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.id (checked_read ~src f));
   (match f.enum with
   | Some (_, valid) ->
-      Fmt.pf ppf "  if not %s then get_failed (off + %d) %s [%a] else@\n"
+      Fmt.pf ppf "  if not %s then enum_failed (off + %d) %s [%a] else@\n"
         (member f valid) f.offset f.id
         Fmt.(list ~sep:(any "; ") (using int_lit string))
         valid
@@ -619,22 +619,21 @@ let pp_getter ~src ppf ~target f =
   | Int { width = 32; _ } ->
       (* The [int] view of a 32-bit field, with no conversion through its
          typed form. *)
-      Fmt.pf ppf
-        "let%s get_%s_int buf off =@\n  let %s_raw = %s in@\n  %s@\n@\n" attr
-        f.label f.id (checked_read ~src f) (int_view f)
+      Fmt.pf ppf "let%s %s_int buf off =@\n  let %s_raw = %s in@\n  %s@\n@\n"
+        attr f.label f.id (checked_read ~src f) (int_view f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
-   [get_<field>_word] is the checked load of the word that holds the field, and
-   [<field>_of_word] takes the field out of it. *)
-let pp_word_getters ~src ppf ~target f =
+   [Get.<field>_word] is the checked load of the word that holds the field, and
+   [<field>_of_word], outside [Get] since a view's word goes through it too,
+   takes the field out of it. *)
+let word_attr = function
+  | `OxCaml -> "[@inline][@zero_alloc]"
+  | `OCaml -> "[@inline]"
+
+let pp_word_getter ~src ppf ~target f =
   match f.store with
-  | Bits { base; shift; width } ->
-      let attr =
-        match target with
-        | `OxCaml -> "[@inline][@zero_alloc]"
-        | `OCaml -> "[@inline]"
-      in
+  | Bits { base; _ } ->
       let bytes = Bitfield.byte_size base in
       let word =
         checked_load ~src ~off:f.offset ~bytes ~endian:(bit_endian base)
@@ -642,19 +641,30 @@ let pp_word_getters ~src ppf ~target f =
       let word =
         if bytes = 4 then Fmt.str "(Int32.to_int %s land mask32)" word else word
       in
-      Fmt.pf ppf "let%s get_%s_word buf off = %s@\n@\n" attr f.label word;
-      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land %s@\n@\n" attr f.label
-        shift (mask width)
+      Fmt.pf ppf "let%s %s_word buf off = %s@\n@\n" (word_attr target) f.label
+        word
   | _ -> ()
 
+let pp_of_word ppf ~target f =
+  match f.store with
+  | Bits { shift; width; _ } ->
+      Fmt.pf ppf "let%s %s_of_word w = (w lsr %d) land %s@\n@\n"
+        (word_attr target) f.label shift (mask width)
+  | _ -> ()
+
+(* The checked reads are in [Get], named after their fields, so a field's name
+   meets none of the module's own. *)
 let pp_getters ?(src = bytes_src) ppf ~target fields =
   Fmt.pf ppf
-    "let%s get_failed at value valid =@\n\
+    "let%s enum_failed at value valid =@\n\
     \  %s.invalid_enum ~at ~field:[] ~value ~valid@\n\
-     @\n"
+     @\n\
+     module Get = struct@\n"
     (cold_attr target) errors;
   List.iter (pp_getter ~src ppf ~target) fields;
-  List.iter (pp_word_getters ~src ppf ~target) fields
+  List.iter (pp_word_getter ~src ppf ~target) fields;
+  Fmt.pf ppf "end@\n@\n";
+  List.iter (pp_of_word ppf ~target) fields
 
 (* One field at [off] read with no check of its own, in a record of [size]
    bytes already checked to fit. A 32-bit field is bound as its [int32] only:
@@ -901,7 +911,8 @@ let own_names =
     "first_error";
     "write_int";
     "write";
-    "get_failed";
+    "enum_failed";
+    "Get";
     "v";
     "encode";
     "t";
@@ -911,17 +922,26 @@ let own_names =
     "mask32";
   ]
 
-(* The names a field's functions and record field take. *)
+(* The names inside [Get] that its reads call: a getter of one of these
+   names would shadow it for the getters after it. *)
+let getters_own fields =
+  "Get.cast" :: "Get.mask32" :: "Get.enum_failed"
+  :: List.filter_map
+       (fun f -> Option.map (fun _ -> "Get." ^ map_var f) f.map)
+       fields
+
+(* The names a field's functions and record field take, those in [Get]
+   qualified. *)
 let names_of f =
   let l = f.label in
   let derived =
     match f.store with
     | Int { width = 32; _ } ->
-        [ "get_" ^ l ^ "_int"; "read_" ^ l ^ "_int"; "view_" ^ l ^ "_int" ]
-    | Bits _ -> [ "get_" ^ l ^ "_word"; "view_" ^ l ^ "_word"; l ^ "_of_word" ]
+        [ "Get." ^ l ^ "_int"; "read_" ^ l ^ "_int"; "view_" ^ l ^ "_int" ]
+    | Bits _ -> [ "Get." ^ l ^ "_word"; "view_" ^ l ^ "_word"; l ^ "_of_word" ]
     | Int _ | Bytes _ -> []
   in
-  ("get_" ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
+  ("Get." ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
 
 (* Who defines a name: the generated module itself, or a field. *)
 type source = Own | Field of string
@@ -930,7 +950,7 @@ type source = Own | Field of string
    of one label also define one getter, so this covers the record's fields
    too. *)
 let check_names ~codec fields =
-  let own = List.map (fun n -> (Own, n)) own_names in
+  let own = List.map (fun n -> (Own, n)) (own_names @ getters_own fields) in
   let defined =
     List.concat_map
       (fun f -> List.map (fun n -> (Field f.name, n)) (names_of f))
