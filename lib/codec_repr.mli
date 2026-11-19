@@ -57,6 +57,23 @@ type bf_info = {
 val no_runtime : Types.eval_ctx
 (** The context with no parameter bindings. *)
 
+val fallback_runtime : Types.eval_ctx
+(** The context of the general passes a record without parameters falls back on
+    when its layout walk has not accepted it. It binds no parameter, and a
+    sub-codec checked with it goes straight to its own general passes. *)
+
+val is_fallback : Types.eval_ctx -> bool
+(** [is_fallback ctx] is [true] when [ctx] is {!fallback_runtime}. *)
+
+val extent_fallback_runtime : Types.eval_ctx
+(** The context of the general extent a record without parameters falls back on
+    when its extent walk has failed. It binds no parameter, and a sub-codec
+    measured with it goes straight to its own general extent. *)
+
+val is_extent_fallback : Types.eval_ctx -> bool
+(** [is_extent_fallback ctx] is [true] when [ctx] is {!extent_fallback_runtime}.
+*)
+
 val runtime : ?env:Types.param_env -> unit -> Types.eval_ctx
 (** [runtime ?env ()] resolves parameters through [env], or is {!no_runtime}. *)
 
@@ -236,6 +253,9 @@ type step =
       -> step
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
   | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  | Laid of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A gated field or a sub-codec, which a layout pass measures and checks
+          whole: the general validator, run unless that pass has accepted. *)
 
 (** How the encoder writes a field it has a descriptor for: the field's value,
     put at the descriptor's offset with no bounds check of its own. *)
@@ -244,8 +264,23 @@ type 'r put =
   | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
 
 (** How a field adds to the record's extent, for the layout pass: a fixed width,
-    a byte span whose size the data decides, or the rest of the buffer. *)
-type layout = Lfix of int | Lspan of int Types.expr | Lrest
+    a byte span whose size the data decides, the rest of the buffer, a field
+    gated by a condition, a sub-codec in a region of a given size ([at_most]
+    when it may end before the region does), or a sub-codec measuring itself. A
+    sub-codec is given by its size and its validate on a measured end. *)
+type layout =
+  | Lfix of int
+  | Lspan of int Types.expr
+  | Lrest
+  | Lopt of bool Types.expr * layout
+  | Lregion of { size : int Types.expr; at_most : bool; sub : sub }
+  | Lsub of sub
+
+and sub = {
+  size_of : runtime -> Input_end.t -> bytes -> int -> int;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
+}
 
 (** A scalar of any type. *)
 type packed_scalar = Ps : 'a scalar -> packed_scalar
@@ -334,6 +369,7 @@ type 'r compiled = {
   plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
