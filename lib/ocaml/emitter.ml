@@ -383,16 +383,20 @@ let load m ~o ~k ~bytes ~endian =
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
 
 (* The 64-bit words of a prefix of [size] bytes worth loading once: those
-   holding two or more of [fields] a shift takes out. *)
-let in_word f =
+   holding two or more of [fields] a shift takes out. An [int64_u] position
+   reads a byte by a 16-bit load that needs no swap, which a test or an
+   offset of the byte has sooner than a shift of a swapped word, so a byte is
+   not taken from a word. *)
+let in_word num f =
   match f.store with
-  | Int { width = 8; _ } | Int { width = 16 | 32; endian = T.Big; _ } -> true
-  | Bits { base = T.U8 | T.U16 T.Big | T.U32 T.Big; _ } -> true
+  | Int { width = 8; _ } | Bits { base = T.U8; _ } -> num = Tagged
+  | Int { width = 16 | 32; endian = T.Big; _ } -> true
+  | Bits { base = T.U16 T.Big | T.U32 T.Big; _ } -> true
   | _ -> false
 
 let covers a f = a <= f.offset && f.offset + width_bytes f.store <= a + 8
 
-let words ~size fields =
+let words num ~size fields =
   if size < 8 then []
   else
     List.init ((size + 7) / 8) (fun i -> min (8 * i) (size - 8))
@@ -400,7 +404,8 @@ let words ~size fields =
     |> List.filter (fun a ->
         let held =
           List.filter_map
-            (fun f -> if in_word f && covers a f then Some f.offset else None)
+            (fun f ->
+              if in_word num f && covers a f then Some f.offset else None)
             fields
         in
         List.length (List.sort_uniq Int.compare held) > 1)
@@ -459,7 +464,7 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       if a = k || raw then Fmt.str "(%s)" v
       else if bytes = 4 then mask32 v
       else Fmt.str "(%s land 0x%x)" v ((1 lsl (8 * bytes)) - 1)
-  | Unboxed, Some a when bytes = 1 || endian = T.Big ->
+  | Unboxed, Some a when bytes > 1 && endian = T.Big ->
       let shifted =
         Fmt.str "(U.shift_right_logical w%d %d)" a (8 * (a + 8 - k - bytes))
       in
@@ -474,6 +479,20 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
+  | Unboxed, _ when bytes = 1 ->
+      (* A byte from the 16-bit load that ends on it, or else the one that
+         starts on it, inside the prefix: no swap, and not at the address of
+         a word, which the compiler would share instead of putting the
+         distance in the load. *)
+      let le16 k =
+        Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
+      in
+      let starts = match size with Some s -> k + 2 <= s | None -> false in
+      let ends = Option.is_some size && k >= 1 in
+      if ends && not (starts && List.mem (k - 1) words) then
+        Fmt.str "(U.shift_right_logical %s 8)" (le16 (k - 1))
+      else if starts then Fmt.str "(U.logand %s #255L)" (le16 k)
+      else Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ when bytes = 4 && raw ->
       Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ when bytes = 4 ->
@@ -883,7 +902,7 @@ let load_words w ~o ~k ~size live =
         match f.store with Int { width = 32; _ } -> not m.raw32 | _ -> true)
       live
   in
-  let words = words ~size worded in
+  let words = words m.num ~size worded in
   let w =
     List.fold_left
       (fun w a ->
