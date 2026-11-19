@@ -103,7 +103,8 @@
   words, and its scanners and record views load at an `int64_u` offset
   through the new `Wire_runtime.Target.Local.i64be_at` and its siblings,
   which add a constant distance in the load itself. The application writes
-  take up to 11% fewer instructions, the stack scanner up to 15% (@samoht)
+  take up to 11% fewer instructions, the stack scanner up to 15% (#498,
+  @samoht)
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
