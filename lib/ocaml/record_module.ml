@@ -789,9 +789,9 @@ let checked_read ~src f =
       let word =
         checked_load ~src ~off:f.offset ~bytes ~endian:(bit_endian base)
       in
+      (* The mask takes the field from below bit 32: the word needs none. *)
       let word =
-        if bytes = 4 then Fmt.str "(%s.to_int %s land mask32)" (i32 src) word
-        else word
+        if bytes = 4 then Fmt.str "(%s.to_int %s)" (i32 src) word else word
       in
       Fmt.str "((%s lsr %d) land %s)" word shift (mask width)
   | Bytes n ->

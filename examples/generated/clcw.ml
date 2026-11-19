@@ -477,99 +477,85 @@ let[@inline never] enum_failed at value valid =
 module Get = struct
   let[@inline] controlwordtype buf off =
     let f1_controlwordtype =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 31)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 31) land 0x1
     in
     cast Value.controlwordtype_eq f1_controlwordtype
 
   let[@inline] clcwversion buf off =
     let f2_clcwversion =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 29)
-      land 0x3
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 29) land 0x3
     in
     cast Value.clcwversion_eq f2_clcwversion
 
   let[@inline] statusfield buf off =
     let f3_statusfield =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 26)
-      land 0x7
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 26) land 0x7
     in
     cast Value.statusfield_eq f3_statusfield
 
   let[@inline] copineffect buf off =
     let f4_copineffect =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 24)
-      land 0x3
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 24) land 0x3
     in
     cast Value.copineffect_eq f4_copineffect
 
   let[@inline] vcid buf off =
     let f5_vcid =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 18)
-      land 0x3f
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 18) land 0x3f
     in
     cast Value.vcid_eq f5_vcid
 
   let[@inline] spare buf off =
     let f6_spare =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 16)
-      land 0x3
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 16) land 0x3
     in
     cast Value.spare_eq f6_spare
 
   let[@inline] norf buf off =
     let f7_norf =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 15)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 15) land 0x1
     in
     cast Value.norf_eq f7_norf
 
   let[@inline] nobitlock buf off =
     let f8_nobitlock =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 14)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 14) land 0x1
     in
     cast Value.nobitlock_eq f8_nobitlock
 
   let[@inline] lockout buf off =
     let f9_lockout =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 13)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 13) land 0x1
     in
     cast Value.lockout_eq f9_lockout
 
   let[@inline] wait buf off =
     let f10_wait =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 12)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 12) land 0x1
     in
     cast Value.wait_eq f10_wait
 
   let[@inline] retransmit buf off =
     let f11_retransmit =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 11)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 11) land 0x1
     in
     cast Value.retransmit_eq f11_retransmit
 
   let[@inline] farmbcounter buf off =
     let f12_farmbcounter =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 9)
-      land 0x3
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 9) land 0x3
     in
     cast Value.farmbcounter_eq f12_farmbcounter
 
   let[@inline] spare2 buf off =
     let f13_spare2 =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 8)
-      land 0x1
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 8) land 0x1
     in
     cast Value.spare2_eq f13_spare2
 
   let[@inline] reportvalue buf off =
     let f14_reportvalue =
-      ((Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32) lsr 0)
-      land 0xff
+      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 0) land 0xff
     in
     cast Value.reportvalue_eq f14_reportvalue
 
@@ -655,103 +641,91 @@ let[@inline] read_controlwordtype (v : Valid.t) =
 let[@inline] read_clcwversion (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f2_clcwversion =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 29)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 29) land 0x3
   in
   cast Value.clcwversion_eq f2_clcwversion
 
 let[@inline] read_statusfield (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f3_statusfield =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 26)
-    land 0x7
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 26) land 0x7
   in
   cast Value.statusfield_eq f3_statusfield
 
 let[@inline] read_copineffect (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f4_copineffect =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 24)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 24) land 0x3
   in
   cast Value.copineffect_eq f4_copineffect
 
 let[@inline] read_vcid (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f5_vcid =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 18)
-    land 0x3f
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 18) land 0x3f
   in
   cast Value.vcid_eq f5_vcid
 
 let[@inline] read_spare (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f6_spare =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 16)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 16) land 0x3
   in
   cast Value.spare_eq f6_spare
 
 let[@inline] read_norf (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f7_norf =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 15)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 15) land 0x1
   in
   cast Value.norf_eq f7_norf
 
 let[@inline] read_nobitlock (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f8_nobitlock =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 14)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 14) land 0x1
   in
   cast Value.nobitlock_eq f8_nobitlock
 
 let[@inline] read_lockout (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f9_lockout =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 13)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 13) land 0x1
   in
   cast Value.lockout_eq f9_lockout
 
 let[@inline] read_wait (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f10_wait =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 12)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 12) land 0x1
   in
   cast Value.wait_eq f10_wait
 
 let[@inline] read_retransmit (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f11_retransmit =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 11)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 11) land 0x1
   in
   cast Value.retransmit_eq f11_retransmit
 
 let[@inline] read_farmbcounter (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f12_farmbcounter =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 9)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 9) land 0x3
   in
   cast Value.farmbcounter_eq f12_farmbcounter
 
 let[@inline] read_spare2 (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f13_spare2 =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 8)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 8) land 0x1
   in
   cast Value.spare2_eq f13_spare2
 
 let[@inline] read_reportvalue (v : Valid.t) =
   let buf = (v :> bytes) and off = 0 in
   let f14_reportvalue =
-    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 land 0xff
+    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land 0xff
   in
   cast Value.reportvalue_eq f14_reportvalue
 
@@ -813,8 +787,7 @@ let[@inline] view_clcwversion (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f2_clcwversion =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 29)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 29) land 0x3
   in
   cast Value.clcwversion_eq f2_clcwversion
 
@@ -827,8 +800,7 @@ let[@inline] view_statusfield (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f3_statusfield =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 26)
-    land 0x7
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 26) land 0x7
   in
   cast Value.statusfield_eq f3_statusfield
 
@@ -841,8 +813,7 @@ let[@inline] view_copineffect (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f4_copineffect =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 24)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 24) land 0x3
   in
   cast Value.copineffect_eq f4_copineffect
 
@@ -855,8 +826,7 @@ let[@inline] view_vcid (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f5_vcid =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 18)
-    land 0x3f
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 18) land 0x3f
   in
   cast Value.vcid_eq f5_vcid
 
@@ -869,8 +839,7 @@ let[@inline] view_spare (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f6_spare =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 16)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 16) land 0x3
   in
   cast Value.spare_eq f6_spare
 
@@ -883,8 +852,7 @@ let[@inline] view_norf (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f7_norf =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 15)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 15) land 0x1
   in
   cast Value.norf_eq f7_norf
 
@@ -897,8 +865,7 @@ let[@inline] view_nobitlock (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f8_nobitlock =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 14)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 14) land 0x1
   in
   cast Value.nobitlock_eq f8_nobitlock
 
@@ -911,8 +878,7 @@ let[@inline] view_lockout (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f9_lockout =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 13)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 13) land 0x1
   in
   cast Value.lockout_eq f9_lockout
 
@@ -925,8 +891,7 @@ let[@inline] view_wait (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f10_wait =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 12)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 12) land 0x1
   in
   cast Value.wait_eq f10_wait
 
@@ -939,8 +904,7 @@ let[@inline] view_retransmit (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f11_retransmit =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 11)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 11) land 0x1
   in
   cast Value.retransmit_eq f11_retransmit
 
@@ -953,8 +917,7 @@ let[@inline] view_farmbcounter (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f12_farmbcounter =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 9)
-    land 0x3
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 9) land 0x3
   in
   cast Value.farmbcounter_eq f12_farmbcounter
 
@@ -968,8 +931,7 @@ let[@inline] view_spare2 (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f13_spare2 =
-    ((Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 8)
-    land 0x1
+    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 8) land 0x1
   in
   cast Value.spare2_eq f13_spare2
 
@@ -982,7 +944,7 @@ let[@inline] view_reportvalue (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and off = (v : _ View.t :> int) in
   let f14_reportvalue =
-    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 land 0xff
+    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land 0xff
   in
   cast Value.reportvalue_eq f14_reportvalue
 
@@ -1293,9 +1255,8 @@ module Bigstring = struct
   module Get = struct
     let[@inline] controlwordtype buf off =
       let f1_controlwordtype =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 31
         land 0x1
       in
@@ -1303,9 +1264,8 @@ module Bigstring = struct
 
     let[@inline] clcwversion buf off =
       let f2_clcwversion =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 29
         land 0x3
       in
@@ -1313,9 +1273,8 @@ module Bigstring = struct
 
     let[@inline] statusfield buf off =
       let f3_statusfield =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 26
         land 0x7
       in
@@ -1323,9 +1282,8 @@ module Bigstring = struct
 
     let[@inline] copineffect buf off =
       let f4_copineffect =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 24
         land 0x3
       in
@@ -1333,9 +1291,8 @@ module Bigstring = struct
 
     let[@inline] vcid buf off =
       let f5_vcid =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 18
         land 0x3f
       in
@@ -1343,9 +1300,8 @@ module Bigstring = struct
 
     let[@inline] spare buf off =
       let f6_spare =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 16
         land 0x3
       in
@@ -1353,9 +1309,8 @@ module Bigstring = struct
 
     let[@inline] norf buf off =
       let f7_norf =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 15
         land 0x1
       in
@@ -1363,9 +1318,8 @@ module Bigstring = struct
 
     let[@inline] nobitlock buf off =
       let f8_nobitlock =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 14
         land 0x1
       in
@@ -1373,9 +1327,8 @@ module Bigstring = struct
 
     let[@inline] lockout buf off =
       let f9_lockout =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 13
         land 0x1
       in
@@ -1383,9 +1336,8 @@ module Bigstring = struct
 
     let[@inline] wait buf off =
       let f10_wait =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 12
         land 0x1
       in
@@ -1393,9 +1345,8 @@ module Bigstring = struct
 
     let[@inline] retransmit buf off =
       let f11_retransmit =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 11
         land 0x1
       in
@@ -1403,9 +1354,8 @@ module Bigstring = struct
 
     let[@inline] farmbcounter buf off =
       let f12_farmbcounter =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 9
         land 0x3
       in
@@ -1413,9 +1363,8 @@ module Bigstring = struct
 
     let[@inline] spare2 buf off =
       let f13_spare2 =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 8
         land 0x1
       in
@@ -1423,9 +1372,8 @@ module Bigstring = struct
 
     let[@inline] reportvalue buf off =
       let f14_reportvalue =
-        (Int32.to_int
-           (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        land mask32)
+        Int32.to_int
+          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
         lsr 0
         land 0xff
       in
@@ -1528,8 +1476,7 @@ module Bigstring = struct
   let[@inline] read_clcwversion (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f2_clcwversion =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 29
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 29)
       land 0x3
     in
     cast Value.clcwversion_eq f2_clcwversion
@@ -1537,8 +1484,7 @@ module Bigstring = struct
   let[@inline] read_statusfield (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f3_statusfield =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 26
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 26)
       land 0x7
     in
     cast Value.statusfield_eq f3_statusfield
@@ -1546,8 +1492,7 @@ module Bigstring = struct
   let[@inline] read_copineffect (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f4_copineffect =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 24
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 24)
       land 0x3
     in
     cast Value.copineffect_eq f4_copineffect
@@ -1555,8 +1500,7 @@ module Bigstring = struct
   let[@inline] read_vcid (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f5_vcid =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 18
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 18)
       land 0x3f
     in
     cast Value.vcid_eq f5_vcid
@@ -1564,8 +1508,7 @@ module Bigstring = struct
   let[@inline] read_spare (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f6_spare =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 16
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 16)
       land 0x3
     in
     cast Value.spare_eq f6_spare
@@ -1573,8 +1516,7 @@ module Bigstring = struct
   let[@inline] read_norf (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f7_norf =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 15
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 15)
       land 0x1
     in
     cast Value.norf_eq f7_norf
@@ -1582,8 +1524,7 @@ module Bigstring = struct
   let[@inline] read_nobitlock (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f8_nobitlock =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 14
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 14)
       land 0x1
     in
     cast Value.nobitlock_eq f8_nobitlock
@@ -1591,8 +1532,7 @@ module Bigstring = struct
   let[@inline] read_lockout (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f9_lockout =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 13
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 13)
       land 0x1
     in
     cast Value.lockout_eq f9_lockout
@@ -1600,8 +1540,7 @@ module Bigstring = struct
   let[@inline] read_wait (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f10_wait =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 12
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 12)
       land 0x1
     in
     cast Value.wait_eq f10_wait
@@ -1609,8 +1548,7 @@ module Bigstring = struct
   let[@inline] read_retransmit (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f11_retransmit =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 11
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 11)
       land 0x1
     in
     cast Value.retransmit_eq f11_retransmit
@@ -1618,8 +1556,7 @@ module Bigstring = struct
   let[@inline] read_farmbcounter (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f12_farmbcounter =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 9
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 9)
       land 0x3
     in
     cast Value.farmbcounter_eq f12_farmbcounter
@@ -1627,8 +1564,7 @@ module Bigstring = struct
   let[@inline] read_spare2 (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f13_spare2 =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 8
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 8)
       land 0x1
     in
     cast Value.spare2_eq f13_spare2
@@ -1636,8 +1572,7 @@ module Bigstring = struct
   let[@inline] read_reportvalue (v : Valid.t) =
     let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
     let f14_reportvalue =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off)
-      land mask32 land 0xff
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land 0xff
     in
     cast Value.reportvalue_eq f14_reportvalue
 
@@ -1718,8 +1653,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f2_clcwversion =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 29
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 29)
       land 0x3
     in
     cast Value.clcwversion_eq f2_clcwversion
@@ -1737,8 +1671,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f3_statusfield =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 26
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 26)
       land 0x7
     in
     cast Value.statusfield_eq f3_statusfield
@@ -1756,8 +1689,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f4_copineffect =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 24
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 24)
       land 0x3
     in
     cast Value.copineffect_eq f4_copineffect
@@ -1774,8 +1706,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f5_vcid =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 18
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 18)
       land 0x3f
     in
     cast Value.vcid_eq f5_vcid
@@ -1793,8 +1724,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f6_spare =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 16
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 16)
       land 0x3
     in
     cast Value.spare_eq f6_spare
@@ -1811,8 +1741,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f7_norf =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 15
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 15)
       land 0x1
     in
     cast Value.norf_eq f7_norf
@@ -1830,8 +1759,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f8_nobitlock =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 14
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 14)
       land 0x1
     in
     cast Value.nobitlock_eq f8_nobitlock
@@ -1849,8 +1777,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f9_lockout =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 13
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 13)
       land 0x1
     in
     cast Value.lockout_eq f9_lockout
@@ -1867,8 +1794,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f10_wait =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 12
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 12)
       land 0x1
     in
     cast Value.wait_eq f10_wait
@@ -1886,8 +1812,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f11_retransmit =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 11
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 11)
       land 0x1
     in
     cast Value.retransmit_eq f11_retransmit
@@ -1905,8 +1830,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f12_farmbcounter =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 9
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 9)
       land 0x3
     in
     cast Value.farmbcounter_eq f12_farmbcounter
@@ -1924,8 +1848,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f13_spare2 =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 8
+      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 8)
       land 0x1
     in
     cast Value.spare2_eq f13_spare2
@@ -1943,8 +1866,7 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and off = (v : _ View.t :> int) in
     let f14_reportvalue =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off)
-      land mask32 land 0xff
+      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land 0xff
     in
     cast Value.reportvalue_eq f14_reportvalue
 

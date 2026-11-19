@@ -384,13 +384,19 @@ let words ~size fields =
 
 (* A 16-bit field read through the 32-bit load that ends or starts on it, when
    that load stays in a prefix of [size] bytes: one load and one byte swap,
-   with none of the 16-bit sign and zero extensions a 16-bit swap costs. The
-   shift happens on the [int32], so a 31-bit [int] loses no bit. *)
-let u16_in_word m ~size ~o ~k ~endian =
+   with none of the 16-bit sign and zero extensions a 16-bit swap costs. Only
+   OxCaml, whose [int] has 63 bits, reads so. The high half of a [raw] read is
+   shifted on the [int], where the caller's mask makes the [int32]'s sign
+   irrelevant, so the word needs no zero extension first; otherwise the shift
+   is on the [int32], which zero-extends and needs no mask. *)
+let u16_in_word m ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
-  let low i = Fmt.str "(%s.to_int %s land 0xffff)" i32 i
+  let mask v = if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v in
+  let low i = Fmt.kstr mask "%s.to_int %s" i32 i
   and high i =
-    Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)" i32 i32 i
+    if raw then Fmt.str "(%s.to_int %s lsr 16)" i32 i
+    else
+      Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)" i32 i32 i
   in
   let at k = load m ~o ~k ~bytes:4 ~endian in
   match (m.ox, m.num, size, endian) with
@@ -402,19 +408,22 @@ let u16_in_word m ~size ~o ~k ~endian =
   | _ -> None
 
 (* An unsigned value of [bytes] bytes at [k] from [o], from a word when one
-   holds it; [size] bounds the bytes a wider load may read. *)
-let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
+   holds it; [size] bounds the bytes a wider load may read. With [raw], the
+   value may keep whatever its [int] holds above its [bytes], for a caller that
+   masks below them: that mask would cost an instruction the compiler does not
+   remove. *)
+let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
+  let mask32 v = if raw then v else Fmt.str "(%s land mask32)" v in
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
       let i64 = i64 m.src and shift = 8 * (a + 8 - k - bytes) in
-      if a = k then
-        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d))" i64 i64 a shift
-      else
-        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d) land %s)" i64 i64 a
-          shift
-          (if bytes = 4 then "mask32"
-           else Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
+      let v =
+        Fmt.str "%s.to_int (%s.shift_right_logical w%d %d)" i64 i64 a shift
+      in
+      if a = k || raw then Fmt.str "(%s)" v
+      else if bytes = 4 then mask32 v
+      else Fmt.str "(%s land 0x%x)" v ((1 lsl (8 * bytes)) - 1)
   | Unboxed, Some a when bytes = 1 || endian = T.Big ->
       let shifted =
         Fmt.str "(U.shift_right_logical w%d %d)" a (8 * (a + 8 - k - bytes))
@@ -424,13 +433,14 @@ let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
         Fmt.str "(U.logand %s #%LdL)" shifted
           (Int64.pred (Int64.shift_left 1L (8 * bytes)))
   | Tagged, _ when bytes = 4 ->
-      Fmt.str "(%s.to_int %s land mask32)" (i32 m.src)
-        (load m ~o ~k ~bytes ~endian)
+      Fmt.kstr mask32 "%s.to_int %s" (i32 m.src) (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
-      match u16_in_word m ~size ~o ~k ~endian with
+      match u16_in_word m ~size ~raw ~o ~k ~endian with
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
+  | Unboxed, _ when bytes = 4 && raw ->
+      Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ when bytes = 4 ->
       Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
         (load m ~o ~k ~bytes ~endian)
@@ -450,14 +460,14 @@ let value m ?size ?bitword ~o ~words ~k f =
   in
   match f.store with
   | Bits { base; shift; width } -> (
+      let whole = shift + width = 8 * Bitfield.byte_size base in
       let word =
         match bitword with
         | Some v -> v
         | None ->
-            unsigned m ?size ~o ~words ~k:(k + f.offset)
+            unsigned m ?size ~raw:(not whole) ~o ~words ~k:(k + f.offset)
               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ()
       in
-      let whole = shift + width = 8 * Bitfield.byte_size base in
       match m.num with
       | Tagged ->
           let v =
