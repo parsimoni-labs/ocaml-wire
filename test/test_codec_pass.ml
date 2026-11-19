@@ -298,7 +298,8 @@ let test_valid_read () =
   let make () = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
   let c = make () and other = make () in
   let buf = Bytes.of_string "\x07\xa0\x00xyz" in
-  let v = Codec.valid c buf 0 in
+  let v = Codec.check c buf 0 in
+  Alcotest.(check bool) "accepted" true (Codec.ok v);
   let read f = Staged.unstage (Codec.read c f) v in
   let get f = Staged.unstage (Codec.get c f) buf 0 in
   Alcotest.(check bool) "uint8" true (read a = get a);
@@ -310,12 +311,15 @@ let test_valid_read () =
   Alcotest.(check bool)
     "another codec's value" true
     (raises (fun () ->
-         Staged.unstage (Codec.read c a) (Codec.valid other buf 0)));
+         Staged.unstage (Codec.read c a) (Codec.check other buf 0)));
+  let short = Codec.check c (Bytes.make 3 '\x00') 0 in
+  Alcotest.(check bool) "short buffer" false (Codec.ok short);
   Alcotest.(check bool)
-    "short buffer" true
-    (match Codec.valid c (Bytes.make 3 '\x00') 0 with
-    | _ -> false
-    | exception Wire.Parse_error _ -> true)
+    "a read of a failed check" true
+    (raises (fun () -> Staged.unstage (Codec.read c a) short));
+  Alcotest.(check bool)
+    "negative offset" false
+    (Codec.ok (Codec.check c buf (-1)))
 
 (* Constraints on fields that share a byte are checked together, and a failure
    still names the first field, in declaration order, whose constraint fails. *)
@@ -619,10 +623,8 @@ let test_layout_size_overflow () =
   Alcotest.(check bool) "decode refuses" false decoded;
   Alcotest.(check bool) "validate agrees with decode" decoded validated;
   Alcotest.(check bool)
-    "no token for a record decode refuses" false
-    (match Codec.valid c buf 0 with
-    | _ -> true
-    | exception Wire.Parse_error _ -> false)
+    "no proof for a record decode refuses" false
+    (Codec.ok (Codec.check c buf 0))
 
 (* A negative offset is refused by name on every encode path, the general one
    included: a codec with a [where] clause does not take the plain one. *)

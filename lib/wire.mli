@@ -768,7 +768,7 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
 
     [decode] must be total over the wire values [t] and its constraints admit.
-    {!Codec.validate_exn} and {!Codec.valid} do not call it, so a [decode] that
+    {!Codec.validate_exn} and {!Codec.check} do not call it, so a [decode] that
     raises on such a value makes {!Codec.decode} raise on a buffer they accept.
     For a table indexed by the wire value use {!lookup}, whose bound they check.
 *)
@@ -1423,21 +1423,26 @@ module Codec : sig
       {!validate} first on untrusted input. *)
 
   type 'r valid
-  (** A buffer and offset where {!valid} has accepted a ['r]. Only {!valid}
-      makes one, and a buffer's length never changes, so a field read through
-      {!read} stays inside the buffer whatever the bytes become later. *)
+  (** The answer of {!check} on a buffer and offset: a proof that it accepted a
+      ['r] there, which {!ok} tells, or that it did not. A buffer's length never
+      changes, so a field read through {!read} from a proof {!ok} holds of stays
+      inside the buffer whatever the bytes become later. *)
 
-  val valid : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
-  (** [valid ?env c buf off] runs {!validate} and returns the proof that it
-      passed. Raises what {!validate} raises. *)
+  val check : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
+  (** [check ?env c buf off] checks the record at [off] as {!validate} does,
+      without raising on bytes it refuses or on an offset outside [buf]. Raises
+      [Invalid_argument] on the misuse {!validate} raises it on. *)
+
+  val ok : 'r valid -> bool
+  (** [ok v] is [true] when the {!check} that gave [v] accepted the record. *)
 
   val read :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> ('r valid -> 'a) Staged.t
-  (** [read ?env c f] is a staged reader of field [f] from a value {!valid} has
-      accepted. A scalar at a fixed offset is one load with no bounds check; any
-      other field reads as {!get} does. Raises [Invalid_argument] on the same
-      terms as {!get}, and when the staged reader is given a value validated by
-      another codec. *)
+  (** [read ?env c f] is a staged reader of field [f] from a proof {!ok} holds
+      of. A scalar at a fixed offset is one load with no bounds check; any other
+      field reads as {!get} does. Raises [Invalid_argument] on the same terms as
+      {!get}, and when the staged reader is given a proof of another codec or of
+      a check that failed. *)
 
   val set :
     ?env:Param.env ->

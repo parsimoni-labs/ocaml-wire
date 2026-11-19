@@ -53,8 +53,9 @@
   most 7 bytes is put together in an `int` and written after every check
   (#499, @samoht)
 
-- `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
-  its fields with no further bounds check (#435, @samoht)
+- `Wire.Codec.check`, `ok` and `read`: check a record once, without raising
+  on bytes it refuses, then read its fields with no further bounds check
+  (#435, @samoht)
 
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: a codec's decode and encode,
   staged, for a loop over many records (#496, @samoht)
@@ -116,7 +117,7 @@
   to stop doing so: build values only, and act on a record after `decode`
   returns `Ok` (@samoht)
 
-- A staged `Wire.Codec.read` and `Wire.Codec.valid` keep their error paths out
+- A staged `Wire.Codec.read` and `Wire.Codec.check` keep their error paths out
   of line, so a compiler that inlines more makes them faster, not slower
   (#499, @samoht)
 
@@ -142,8 +143,8 @@
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
 
-- **Breaking:** `Wire.Codec` gains `valid` and `read`, which shadow local
-  values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
+- **Breaking:** `Wire.Codec` gains `check`, `ok` and `read`, which shadow
+  local values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
   Rename the local or qualify it (#435, @samoht)
 
 - **Breaking:** `Wire.Codec.v` no longer compiles the codec. A malformed codec
