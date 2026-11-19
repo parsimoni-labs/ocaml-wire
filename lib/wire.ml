@@ -1,6 +1,9 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
 module Staged = Staged
+
+module type S = Wire_runtime.Record.S
+
 module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action

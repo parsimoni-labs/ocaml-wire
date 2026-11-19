@@ -331,4 +331,5 @@ module Portable = struct
   end
 
   module Buf = Buf
+  module Staged = Staged
 end

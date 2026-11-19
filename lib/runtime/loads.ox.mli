@@ -120,4 +120,5 @@ module Portable : sig
   end
 
   module Buf = Buf
+  module Staged = Staged
 end
