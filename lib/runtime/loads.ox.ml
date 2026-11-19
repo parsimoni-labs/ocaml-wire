@@ -82,6 +82,17 @@ module Local = struct
   let[@inline always] set_u16le b o v = s16 b o (le16 v)
   let[@inline always] set_i32be b o v = s32 b o (be32 (Int32_u.to_int32 v))
   let[@inline always] set_i32le b o v = s32 b o (le32 (Int32_u.to_int32 v))
+
+  (* The low 32 bits of an [int64_u], swapped as 64 bits: an [int32] swap
+     sign-extends its result, which the store then drops. *)
+  let[@inline always] w32 big v =
+    let v = Int64_u.to_int64 v in
+    Int64.to_int32
+      (if big = Sys.big_endian then v
+       else Int64.shift_right_logical (swap64 v) 32)
+
+  let[@inline always] set_u32be b o v = s32 b o (w32 true v)
+  let[@inline always] set_u32le b o v = s32 b o (w32 false v)
   (* OxCaml fences every 64-bit store to memory on arm64 and no narrower one,
      so a 64-bit value goes out as two 32-bit stores. *)
   let[@inline always] set_i64be b o v =
@@ -216,6 +227,14 @@ module Local = struct
     let[@inline always] set_i32le b o v =
       check b o 4;
       set32 b o (le32 (Int32_u.to_int32 v))
+
+    let[@inline always] set_u32be b o v =
+      check b o 4;
+      set32 b o (w32 true v)
+
+    let[@inline always] set_u32le b o v =
+      check b o 4;
+      set32 b o (w32 false v)
 
     let[@inline always] set_i64be b o v =
       let v = Int64_u.to_int64 v in

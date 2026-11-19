@@ -347,12 +347,13 @@ let pp_first_error ~src ppf ~target fields =
   Fmt.pf ppf "  no_error ()@\n@\n"
 
 (* A store of [size] bytes at [at]: an [int] whose low [size] bytes it writes,
-   or the [int32] of a 32-bit field. *)
+   the values of a bitfield word's fields with their shifts, or the [int32] of
+   a 32-bit field. *)
 type part = {
   at : int;
   size : int;
   endian : T.endian option;
-  value : [ `Int of string | `I32 of string ];
+  value : [ `Int of string | `Bits of (string * int) list | `I32 of string ];
 }
 
 (* A bitfield word's store: the values of its fields, each in range, shifted
@@ -362,12 +363,11 @@ let bit_word fields (o, base) =
     List.filter_map
       (fun f ->
         match f.store with
-        | Bits { shift; _ } when f.offset = o ->
-            Fmt.kstr Option.some "(%s lsl %d)" f.id shift
+        | Bits { shift; _ } when f.offset = o -> Some (f.id, shift)
         | _ -> None)
       fields
   in
-  let value = `Int (Fmt.str "(%s)" (String.concat " lor " bits)) in
+  let value = `Bits bits in
   match base with
   | T.U8 -> { at = o; size = 1; endian = None; value }
   | T.U16 e -> { at = o; size = 2; endian = Some e; value }
@@ -430,14 +430,38 @@ let shift endian ~n base p =
   let r = p.at - base in
   match endian with T.Big -> (n - r - p.size) * 8 | T.Little -> r * 8
 
+(* The [int] an int part stores. *)
+let int_value = function
+  | `Int v -> v
+  | `Bits bits ->
+      Fmt.str "(%s)"
+        (String.concat " lor "
+           (List.map (fun (x, sh) -> Fmt.str "(%s lsl %d)" x sh) bits))
+  | `I32 _ -> invalid_arg "int_value"
+
+let shifted ~m v sh =
+  if sh = 0 then v else Fmt.str "(%s.shift_left %s %d)" m v sh
+
+let rec ors ~m = function
+  | [] -> assert false
+  | [ x ] -> x
+  | x :: xs -> Fmt.str "(%s.logor %s %s)" m x (ors ~m xs)
+
 (* A word as the or of its parts, each widened first: built in [int32] or
-   [int64], it needs no [int] wider than one field. *)
-let word ~src ~m ~n endian base ps =
+   [int64], it needs no [int] wider than one field. With [split], each
+   bitfield is widened alone, so its untagging folds into its own shift. *)
+let word ?(split = false) ~src ~m ~n endian base ps =
   let part p =
     let sh = shift endian ~n base p in
     let v =
       match p.value with
-      | `Int v -> Fmt.str "(%s.of_int %s)" m v
+      | `Bits bits when split ->
+          ors ~m
+            (List.map
+               (fun (x, s) ->
+                 shifted ~m (Fmt.str "(%s.of_int %s)" m x) (sh + s))
+               bits)
+      | (`Int _ | `Bits _) as v -> Fmt.str "(%s.of_int %s)" m (int_value v)
       | `I32 x when n = 8 && sh + 32 < 64 && src.unboxed ->
           Fmt.str "(%s.logand (%s.of_int32_u %s) #0xffffffffL)" m m x
       | `I32 x when n = 8 && sh + 32 < 64 ->
@@ -446,41 +470,42 @@ let word ~src ~m ~n endian base ps =
       | `I32 x when src.unboxed -> Fmt.str "(%s.of_int32_u %s)" m x
       | `I32 x -> Fmt.str "(%s.of_int32 %s)" m x
     in
-    if sh = 0 then v else Fmt.str "(%s.shift_left %s %d)" m v sh
+    match p.value with `Bits _ when split -> v | _ -> shifted ~m v sh
   in
-  let rec ors = function
-    | [] -> assert false
-    | [ x ] -> x
-    | x :: xs -> Fmt.str "(%s.logor %s %s)" m x (ors xs)
-  in
-  ors (List.map part ps)
+  ors ~m (List.map part ps)
 
 (* The int parts of a word of [n] bytes, or'ed in place. *)
 let int_word ~n endian base ps =
   let part p =
-    let v = match p.value with `Int v -> v | `I32 _ -> assert false in
+    let v = int_value p.value in
     let sh = shift endian ~n base p in
     if sh = 0 then v else Fmt.str "(%s lsl %d)" v sh
   in
   Fmt.str "(%s)" (String.concat " lor " (List.map part ps))
 
-(* One store of the [n]-byte word the parts [ws] make. On OxCaml, whose ints
-   have 63 bits, a 4-byte word of ints is built in an int and converted once;
-   elsewhere an int may hold only 31 bits. *)
+(* One store of the [n]-byte word the parts [ws] make. On OxCaml a 4-byte word
+   of ints is built untagged in an [int64_u], where the untagging of each value
+   folds into the shift that computed it, and stored from there with no [int32]
+   in between to normalise; elsewhere an int may hold only 31 bits. *)
 let merged ~ox ~src ppf ~m ~n p ws endian =
   let endian = Option.value endian ~default:T.Big in
   let all_int =
     List.for_all
-      (fun p -> match p.value with `Int _ -> true | `I32 _ -> false)
+      (fun p -> match p.value with `Int _ | `Bits _ -> true | `I32 _ -> false)
       ws
   in
-  let w =
-    if ox && n = 4 && all_int then
-      Fmt.str "(%s.of_int %s)" (i32 src) (int_word ~n endian p.at ws)
-    else word ~src ~m ~n endian p.at ws
-  in
-  Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
-    (endian_suffix endian) p.at w
+  if ox && src.unboxed && n = 4 && all_int then
+    Fmt.pf ppf "    %s.set_u32%s buf (off + %d)@\n      %s;@\n" src.u
+      (endian_suffix endian) p.at
+      (word ~split:true ~src ~m:(i64 src) ~n endian p.at ws)
+  else
+    let w =
+      if ox && n = 4 && all_int then
+        Fmt.str "(%s.of_int %s)" (i32 src) (int_word ~n endian p.at ws)
+      else word ~src ~m ~n endian p.at ws
+    in
+    Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
+      (endian_suffix endian) p.at w
 
 (* Adjacent stores merge into one of 8 bytes, or of 4, so a record takes a few
    wide stores instead of one per field. *)
@@ -488,13 +513,17 @@ let stores ?(ox = false) ~src ppf fields =
   let e = function Some e -> endian_suffix e | None -> "be" in
   let one p =
     match (p.size, p.value) with
-    | 1, `Int v -> Fmt.pf ppf "    %s.set_u8 buf (off + %d) %s;@\n" src.u p.at v
-    | 2, `Int v ->
+    | 1, ((`Int _ | `Bits _) as v) ->
+        Fmt.pf ppf "    %s.set_u8 buf (off + %d) %s;@\n" src.u p.at
+          (int_value v)
+    | 2, ((`Int _ | `Bits _) as v) ->
         Fmt.pf ppf "    %s.set_u16%s buf (off + %d) %s;@\n" src.u (e p.endian)
-          p.at v
-    | _, `Int v ->
+          p.at (int_value v)
+    | _, (`Int _ | `Bits _) when ox && src.unboxed ->
+        merged ~ox ~src ppf ~m:(i64 src) ~n:4 p [ p ] p.endian
+    | _, ((`Int _ | `Bits _) as v) ->
         Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (%s.of_int %s);@\n" src.u
-          (e p.endian) p.at (i32 src) v
+          (e p.endian) p.at (i32 src) (int_value v)
     | _, `I32 v ->
         Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u (e p.endian)
           p.at v
