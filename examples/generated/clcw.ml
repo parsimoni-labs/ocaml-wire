@@ -736,6 +736,14 @@ module View : sig
 
   val ok : 'b check -> bool
   val get : 'b check -> 'b t
+
+  val with_ :
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    int ->
+    ok:('b t -> 'a) ->
+    fail:(unit -> 'a) ->
+    'a
 end = struct
   type 'b t = int
   type 'b check = int
@@ -743,6 +751,10 @@ end = struct
   let[@inline] check _b len off =
     let len = (len : _ Wire_runtime.Buf.length :> int) in
     if off > len - size then -1 else off
+
+  let[@inline] with_ _b len off ~ok ~fail =
+    let len = (len : _ Wire_runtime.Buf.length :> int) in
+    if off < 0 || off > len - size then fail () else ok off
 
   let[@inline] at b len off =
     let c = check b len off in
@@ -1615,6 +1627,14 @@ module Bigstring = struct
 
     val ok : 'b check -> bool
     val get : 'b check -> 'b t
+
+    val with_ :
+      'b Wire_runtime.Buf.Bigstring.t ->
+      'b Wire_runtime.Buf.Bigstring.length ->
+      int ->
+      ok:('b t -> 'a) ->
+      fail:(unit -> 'a) ->
+      'a
   end = struct
     type 'b t = int
     type 'b check = int
@@ -1622,6 +1642,10 @@ module Bigstring = struct
     let[@inline] check _b len off =
       let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
       if off > len - size then -1 else off
+
+    let[@inline] with_ _b len off ~ok ~fail =
+      let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
+      if off < 0 || off > len - size then fail () else ok off
 
     let[@inline] at b len off =
       let c = check b len off in

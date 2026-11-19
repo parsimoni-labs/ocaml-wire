@@ -780,7 +780,15 @@ let test_view () =
     if G_ipv4.View.ok c then
       Alcotest.(check string)
         "checked view" got
-        ("ok " ^ read (G_ipv4.View.get c))
+        ("ok " ^ read (G_ipv4.View.get c));
+    (* [View.with_] answers through [ok] exactly when [check] passes, with the
+       same view, and through [fail] otherwise. *)
+    Alcotest.(check string)
+      "with_"
+      (if G_ipv4.View.ok c then "ok " ^ read (G_ipv4.View.get c) else "fail")
+      (G_ipv4.View.with_ b len off
+         ~ok:(fun v -> "ok " ^ read v)
+         ~fail:(fun () -> "fail"))
   done;
   for _ = 1 to 2000 do
     let size = Codec.min_wire_size Schemas.checked in
