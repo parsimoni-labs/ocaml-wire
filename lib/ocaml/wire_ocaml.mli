@@ -57,7 +57,7 @@
     submodule has the same functions, [Valid] and [View] included, on a bigarray
     of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
     which stores field values in order. Without [~make] it also defines a record
-    [t] of the field values, [make] and [encode]. *)
+    [t] of the field values, its constructor [v] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]

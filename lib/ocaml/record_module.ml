@@ -543,7 +543,7 @@ let pp_maps ppf fields =
 let pp_record ppf fields =
   Fmt.pf ppf "type t = {@\n";
   List.iter (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (type_of f)) fields;
-  Fmt.pf ppf "}@\n@\nlet make %a = { %a }@\n@\n" pp_vars fields
+  Fmt.pf ppf "}@\n@\nlet v %a = { %a }@\n@\n" pp_vars fields
     Fmt.(list ~sep:(any "; ") string)
     (List.map (fun f -> Fmt.str "%s = %s" f.label f.id) fields)
 
@@ -863,7 +863,7 @@ let pp_body ppf ~target ~make ~plan ~size =
   pp_cold ~src:bytes_src ppf ~target ~plan ~size;
   pp_validate ~src:bytes_src ppf ~target ~plan ~size;
   pp_validate_written ppf ~target;
-  let make = Option.value ~default:"make" make in
+  let make = Option.value ~default:"v" make in
   pp_decode ppf ~plan ~size ~head:"let decode buf off" ~call:(fun args ->
       Fmt.str "%s %a" make pp_list args);
   if target = `OxCaml then pp_oxcaml ppf ~record ~plan ~size;
@@ -899,7 +899,7 @@ let own_names =
     "write_int";
     "write";
     "get_failed";
-    "make";
+    "v";
     "encode";
     "t";
     "Valid";
