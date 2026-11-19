@@ -84,4 +84,4 @@
   (:standard
    -O3
    (:include zero_alloc.sexp)))
- (libraries headers net wire wire.runtime unix fmt))
+ (libraries bench_lib headers net wire wire.runtime unix fmt))

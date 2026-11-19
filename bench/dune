@@ -2,8 +2,27 @@
 
 (library
  (name bench_lib)
- (modules bench_lib)
+ (modules bench_lib ox)
  (libraries unix fmt))
+
+; [Ox.v] tells the rows measured in their own process which compiler built
+; them.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ox.ml
+   (echo "let v = true\n"))))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ox.ml
+   (echo "let v = false\n"))))
 
 ; -- EverParse benchmark infrastructure --
 

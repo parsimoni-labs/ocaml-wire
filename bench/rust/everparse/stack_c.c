@@ -11,6 +11,7 @@
    wall time, after one warm-up pass that gives the checksum, and printed as
    the RESULT line [bench.exe report] reads, as the other harnesses do. */
 
+#include <caml/alloc.h>
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
 #include <stdint.h>
@@ -41,7 +42,8 @@
 #else
 #define CC_NAME "cc"
 #endif
-#define ROW_NAME "EverParse C, default plug (" CC_NAME ")"
+#define ROW "EverParse C, default plug"
+#define ROW_NAME ROW " (" CC_NAME ")"
 
 static uint64_t stack_fold(uint8_t *buf, size_t len, uint32_t stride) {
   uint64_t acc = 0;
@@ -97,11 +99,15 @@ static void quantiles(double *t, size_t n, double q[4]) {
   q[3] = t[(n - 1) * 90 / 100];
 }
 
+/* The name a filter selects the row by. */
+CAMLprim value ep_stack_row(value v_unit) {
+  CAMLparam1(v_unit);
+  CAMLreturn(caml_copy_string(ROW));
+}
+
 CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
-                            value v_runs, value v_filter) {
-  CAMLparam5(v_corpus, v_buf, v_stride, v_runs, v_filter);
-  if (strstr(ROW_NAME, String_val(v_filter)) == NULL)
-    CAMLreturn(Val_unit);
+                            value v_runs) {
+  CAMLparam4(v_corpus, v_buf, v_stride, v_runs);
   uint8_t *buf = (uint8_t *)Bytes_val(v_buf);
   size_t len = caml_string_length(v_buf);
   uint32_t stride = (uint32_t)Long_val(v_stride);

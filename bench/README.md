@@ -150,8 +150,9 @@ parsing work. The checksum is a sum, so both orders of a family give the
 same one, and the report fails unless every row on every corpus of a family
 agrees.
 
-Both harnesses do the same thing: one warm-up pass, which gives the
-checksum, then the timed passes. Each pass reads the wall clock and the
+Both harnesses do the same thing, each row in a process of its own
+(`bench/rows.sh`): one warm-up pass, which gives the checksum, then the
+timed passes. Each pass reads the wall clock and the
 process CPU time (user and system, `getrusage(RUSAGE_SELF)`: `Unix.times` in
 OCaml, `libc::getrusage` in Rust) around the call. The report prints one
 table per corpus, ranked by the best CPU time per packet, with its 10th
@@ -174,10 +175,11 @@ make bench-rust           # needs cargo; fetches the crates the first time
 `5.4.0-ox9`; skipped when absent), `BENCH_RUST_PACKETS` and
 `BENCH_RUST_RUNS` size the corpora and the number of timed passes, and
 `BENCH_RUST_CORPORA` lists the corpora to run as `name:stride`. Each harness
-also takes a filter, so one row can run alone: on macOS, `/usr/bin/time -l`
-then gives the instructions retired and the cycles of that row, as
-`bench.exe run FILE STRIDE RUNS wire.ocaml` or `wire-bench-rust FILE STRIDE
-RUNS smoltcp`.
+also takes a row's exact name last, so one row can run alone, and fails when
+no row has that name; `--list` in its place prints the row names. On macOS,
+`/usr/bin/time -l` then gives the instructions retired and the cycles of
+that row, as `bench.exe run FILE 64 RUNS 'wire.ocaml fused stack'` or
+`wire-bench-rust FILE 64 RUNS 'smoltcp 0.14'`.
 
 With `BUILD_EVERPARSE=1` (`make bench-rust BUILD_EVERPARSE=1`), the
 EverParse C row runs too: `bench/rust/everparse` links the validator and
