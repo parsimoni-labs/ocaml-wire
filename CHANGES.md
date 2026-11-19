@@ -120,6 +120,11 @@
   of line, so a compiler that inlines more makes them faster, not slower
   (#496, @samoht)
 
+- `Wire.Codec.get` and `Wire.Codec.set` of an integer or bitfield field run as
+  one closure that checks its bounds and calls nothing else: `set` writes a
+  space packet header field in a third of the instructions it took (#496,
+  @samoht)
+
 - The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
   every dune profile, the dev one included, where the runtime's interfaces
   state what allocates nothing (#493, @samoht)

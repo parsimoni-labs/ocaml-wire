@@ -1006,12 +1006,7 @@ let rec build_immediate_staged_writer : type a.
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
       Some (build_bf_accessor_writer base byte_off shift width)
-  | _, Fixed off -> (
-      match build_immediate_encoder typ with
-      | None -> None
-      | Some write ->
-          Some
-            (fun buf base value -> ignore (write buf (base + off) value : int)))
+  | _, Fixed off -> build_immediate_setter typ off
   | Where { inner; _ }, _ -> build_immediate_staged_writer inner access
   | Enum { base; _ }, _ -> build_immediate_staged_writer base access
   | Map { inner; encode; _ }, _ -> (
