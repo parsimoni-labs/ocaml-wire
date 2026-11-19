@@ -1278,13 +1278,23 @@ let build_plain_decode ~layout ~walk make fwd wire_size_info min_size pass =
               apply_fwd make fwd checked_runtime input_end buf off
             end)
   | Variable _, pass -> (
-      let general buf off =
-        let input_end = Input_end.of_bytes buf in
-        variable_frame ~layout wire_size_info min_size input_end buf off;
-        if Option.is_none layout then run_plain_pass pass input_end buf off;
-        apply_fwd make fwd checked_runtime input_end buf off
-      in
-      match walk with None -> general | Some w -> Codec_walk.decode w general)
+      match walk with
+      | None ->
+          fun buf off ->
+            let input_end = Input_end.of_bytes buf in
+            variable_frame ~layout wire_size_info min_size input_end buf off;
+            if Option.is_none layout then run_plain_pass pass input_end buf off;
+            apply_fwd make fwd checked_runtime input_end buf off
+      | Some w ->
+          (* The walk makes the checks the layout pass and the check pass it
+             leaves make, so a record it rejects goes straight to the general
+             checks, which the layout pass would have left it to. *)
+          Codec_walk.decode w (fun buf off ->
+              let input_end = Input_end.of_bytes buf in
+              check_decode_bounds wire_size_info min_size no_runtime input_end
+                buf off;
+              run_plain_pass ~runtime:fallback_runtime pass input_end buf off;
+              apply_fwd make fwd checked_runtime input_end buf off))
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
