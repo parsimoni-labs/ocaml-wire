@@ -267,9 +267,10 @@ let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.id) fields)
    or a bitfield, an [int32] for a 32-bit field, a [string] for a byte array. *)
 
 (* The bits that put a plain value out of its field's range: the value, offset
-   to zero for a signed field, shifted right by the field's width. Or-ing the
-   values of one width before the shift makes one test, with no branch per
-   field, that finds any. *)
+   to zero for a signed field, above the field's width. Or-ing the values of
+   one width before masking makes one test, with no branch per field, that
+   finds any. The mask clears the low bits where a shift would move them out:
+   on a tagged [int] the [land] keeps the tag and the shift must restore it. *)
 let out_of_range f =
   let x = f.id in
   match f.store with
@@ -295,8 +296,8 @@ let out_of_range_test bad =
           bad
       in
       match xs with
-      | [ x ] -> Fmt.str "(%s lsr %d)" x w
-      | _ -> Fmt.str "((%s) lsr %d)" (String.concat " lor " xs) w)
+      | [ x ] -> Fmt.str "(%s land lnot %s)" x (mask w)
+      | _ -> Fmt.str "((%s) land lnot %s)" (String.concat " lor " xs) (mask w))
     widths
   @ List.filter_map (function `Other e -> Some e | `Shift _ -> None) bad
 

@@ -341,12 +341,13 @@ let[@inline] write_int buf off f1_controlwordtype f2_clcwversion f3_statusfield
     f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
     f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue =
   if
-    (f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout lor f10_wait
-   lor f11_retransmit lor f13_spare2)
-    lsr 1
-    lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter)
-        lsr 2
-    lor (f3_statusfield lsr 3) lor (f5_vcid lsr 6) lor (f14_reportvalue lsr 8)
+    f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout lor f10_wait
+    lor f11_retransmit lor f13_spare2 land lnot 0x1
+    lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
+       land lnot 0x3)
+    lor (f3_statusfield land lnot 0x7)
+    lor (f5_vcid land lnot 0x3f)
+    lor (f14_reportvalue land lnot 0xff)
     <> 0
   then
     first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
@@ -407,12 +408,13 @@ let[@inline] write_int_at (b : 'b Wire_runtime.Buf.t)
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and len = (len : _ Wire_runtime.Buf.length :> int) in
   if
-    (f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout lor f10_wait
-   lor f11_retransmit lor f13_spare2)
-    lsr 1
-    lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter)
-        lsr 2
-    lor (f3_statusfield lsr 3) lor (f5_vcid lsr 6) lor (f14_reportvalue lsr 8)
+    f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout lor f10_wait
+    lor f11_retransmit lor f13_spare2 land lnot 0x1
+    lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
+       land lnot 0x3)
+    lor (f3_statusfield land lnot 0x7)
+    lor (f5_vcid land lnot 0x3f)
+    lor (f14_reportvalue land lnot 0xff)
     <> 0
   then
     first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
@@ -1153,12 +1155,13 @@ module Bigstring = struct
       f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
       f14_reportvalue =
     if
-      (f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
-     lor f10_wait lor f11_retransmit lor f13_spare2)
-      lsr 1
-      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter)
-          lsr 2
-      lor (f3_statusfield lsr 3) lor (f5_vcid lsr 6) lor (f14_reportvalue lsr 8)
+      f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
+      lor f10_wait lor f11_retransmit lor f13_spare2 land lnot 0x1
+      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
+         land lnot 0x3)
+      lor (f3_statusfield land lnot 0x7)
+      lor (f5_vcid land lnot 0x3f)
+      lor (f14_reportvalue land lnot 0xff)
       <> 0
     then
       first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
@@ -1222,12 +1225,13 @@ module Bigstring = struct
       (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
     and len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
     if
-      (f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
-     lor f10_wait lor f11_retransmit lor f13_spare2)
-      lsr 1
-      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter)
-          lsr 2
-      lor (f3_statusfield lsr 3) lor (f5_vcid lsr 6) lor (f14_reportvalue lsr 8)
+      f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
+      lor f10_wait lor f11_retransmit lor f13_spare2 land lnot 0x1
+      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
+         land lnot 0x3)
+      lor (f3_statusfield land lnot 0x7)
+      lor (f5_vcid land lnot 0x3f)
+      lor (f14_reportvalue land lnot 0xff)
       <> 0
     then
       first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
