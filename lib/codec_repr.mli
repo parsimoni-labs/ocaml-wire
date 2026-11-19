@@ -378,6 +378,8 @@ type pass =
       flat : int array;
       tables : string array;
       intervals : interval array;
+      words : (bytes -> int -> bool) option;
+          (** The tests as reads of the record's words, when they can be. *)
     }
   | Steps of {
       steps : step array;

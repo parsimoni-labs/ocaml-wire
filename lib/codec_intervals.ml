@@ -134,3 +134,67 @@ let flatten_intervals tests =
         | _ -> Some (flat_interval scalar set))
   in
   (Array.concat flat, Array.of_list (List.rev !tables))
+
+(* {1 Tests as words}
+
+   A record of at least 8 bytes whose every test is one interval of a
+   big-endian field or bitfield tests each field as bits of an 8-byte word of
+   the record, one load, shifts and two comparisons, in one closure per number
+   of tests: no dispatch and no call per test. *)
+
+let word : type a. size:int -> a scalar -> Codec_words.word option =
+ fun ~size s ->
+  let w o ~bytes ~s ~w ~signed =
+    Some (Codec_words.word ~size o ~bytes ~s ~w ~signed)
+  in
+  let bits = Codec_words.bit_width in
+  match s with
+  | Byte o -> w o ~bytes:1 ~s:0 ~w:8 ~signed:false
+  | Sbyte o -> w o ~bytes:1 ~s:0 ~w:8 ~signed:true
+  | U16be o -> w o ~bytes:2 ~s:0 ~w:16 ~signed:false
+  | I16be o -> w o ~bytes:2 ~s:0 ~w:16 ~signed:true
+  | U32be o -> w o ~bytes:4 ~s:0 ~w:32 ~signed:false
+  | I32be o -> w o ~bytes:4 ~s:0 ~w:32 ~signed:true
+  | Bits8 { off; shift; mask } ->
+      w off ~bytes:1 ~s:shift ~w:(bits mask) ~signed:false
+  | Bits16be { off; shift; mask } ->
+      w off ~bytes:2 ~s:shift ~w:(bits mask) ~signed:false
+  | U16le _ | U32le _ | I16le _ | I32le _ | Bits16le _ -> None
+
+let[@inline] within buf off q l r m lo hi =
+  let v = Codec_words.bits (Codec_words.load buf off q) l r m in
+  v >= lo && v <= hi
+
+let test ~size (Ps s, set) =
+  match (word ~size s, set) with
+  | Some { q; l; r; m; _ }, [| (lo, hi) |] -> Some (q, l, r, m, lo, hi)
+  | _ -> None
+
+let stage_tests tests =
+  match tests with
+  | [ t1 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1)
+  | [ t1; t2 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2)
+  | [ t1; t2; t3 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3)
+  | [ t1; t2; t3; t4 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4)
+  | [ t1; t2; t3; t4; t5 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5)
+  | [ t1; t2; t3; t4; t5; t6 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6)
+  | [ t1; t2; t3; t4; t5; t6; t7 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in let q7, l7, r7, m7, lo7, hi7 = t7 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6 && within buf off q7 l7 r7 m7 lo7 hi7)
+  | [ t1; t2; t3; t4; t5; t6; t7; t8 ] ->
+      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in let q7, l7, r7, m7, lo7, hi7 = t7 in let q8, l8, r8, m8, lo8, hi8 = t8 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6 && within buf off q7 l7 r7 m7 lo7 hi7 && within buf off q8 l8 r8 m8 lo8 hi8)
+  | _ -> None
+[@@ocamlformat "disable"]
+
+let staged ~size tests =
+  if Sys.int_size < 63 || size < 8 || Array.length tests = 0 then None
+  else
+    let tests = Array.to_list (Array.map (test ~size) tests) in
+    if List.for_all Option.is_some tests then
+      stage_tests (List.map Option.get tests)
+    else None
