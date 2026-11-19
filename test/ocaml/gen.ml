@@ -18,8 +18,8 @@ let summed ~target ~codec c =
   ^ "\nend\n\n"
   ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec c
 
-(* [--oxcaml] generates for the OxCaml target, and [--simd] adds the NEON
-   lanes of the records that have them (OxCaml on arm64). *)
+(* [--oxcaml] generates for the OxCaml target, and [--simd] adds the SIMD
+   lanes of the records that have them (OxCaml on arm64 or amd64). *)
 let () =
   let flag f = Array.exists (String.equal f) Sys.argv in
   let target = if flag "--oxcaml" then `OxCaml else `OCaml in

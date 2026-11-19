@@ -1183,8 +1183,8 @@ let lanes plan ~size =
     if List.length ls = List.length fields then Some (List.combine fields ls)
     else None
 
-(* [X4] reads and writes four records at once in a NEON register (OxCaml on
-   arm64). [with_] checks the 16 bytes they take and loads them, and each
+(* [X4] reads and writes four records at once in a SIMD register (OxCaml on
+   arm64 or amd64). [with_] checks the 16 bytes they take and loads them, and each
    [<field>] takes that field out of every lane. A [part] holds field bits at
    their place in each lane, every one in range: [<field>_bits] keeps the
    field's low bits of each lane, [<field>_of] checks they fit, [( ++ )] joins
