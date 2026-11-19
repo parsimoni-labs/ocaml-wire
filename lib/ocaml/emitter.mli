@@ -157,9 +157,10 @@ val load : mode -> o:string -> k:int -> bytes:int -> endian:T.endian -> string
 val covers : int -> field -> bool
 (** [covers a f] is [true] when the 8-byte word at [a] holds the field [f]. *)
 
-val words : size:int -> field list -> int list
-(** [words ~size fields] is the offsets of the 8-byte words worth loading once
-    to read [fields] from a prefix of [size] bytes. *)
+val words : num -> size:int -> field list -> int list
+(** [words num ~size fields] is the offsets of the 8-byte words worth loading
+    once to read [fields] from a prefix of [size] bytes, with integers held as
+    [num]. *)
 
 val unsigned :
   mode ->
