@@ -1682,11 +1682,16 @@ struct
   end
 
   module Field = struct
-    type 'a t = ('a, C.r) field
-
-    let get f = get C.codec f
-
-    let view f b v =
-      Staged.unstage (get f) (b : _ Wire_runtime.Buf.t :> bytes) (v : int)
+    type 'a t = {
+      get : bytes -> int -> 'a;
+      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+    }
   end
+
+  let field f =
+    let read = Staged.unstage (get C.codec f) in
+    {
+      Field.get = read;
+      view = (fun b v -> read (b : _ Wire_runtime.Buf.t :> bytes) (v : int));
+    }
 end

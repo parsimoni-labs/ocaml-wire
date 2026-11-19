@@ -945,85 +945,63 @@ let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
 module Field = struct
-  type _ t =
-    | Controlwordtype : Value.controlwordtype t
-    | Clcwversion : Value.clcwversion t
-    | Statusfield : Value.statusfield t
-    | Copineffect : Value.copineffect t
-    | Vcid : Value.vcid t
-    | Spare : Value.spare t
-    | Norf : Value.norf t
-    | Nobitlock : Value.nobitlock t
-    | Lockout : Value.lockout t
-    | Wait : Value.wait t
-    | Retransmit : Value.retransmit t
-    | Farmbcounter : Value.farmbcounter t
-    | Spare2 : Value.spare2 t
-    | Reportvalue : Value.reportvalue t
+  type 'a t = {
+    get : bytes -> int -> 'a;
+    view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+  }
 
-  let[@inline] get : type a. a t -> (bytes -> int -> a) Wire_runtime.Staged.t =
-    function
-    | Controlwordtype ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.controlwordtype buf off)
-    | Clcwversion ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.clcwversion buf off)
-    | Statusfield ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.statusfield buf off)
-    | Copineffect ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.copineffect buf off)
-    | Vcid -> Wire_runtime.Staged.stage (fun buf off -> Get.vcid buf off)
-    | Spare -> Wire_runtime.Staged.stage (fun buf off -> Get.spare buf off)
-    | Norf -> Wire_runtime.Staged.stage (fun buf off -> Get.norf buf off)
-    | Nobitlock ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.nobitlock buf off)
-    | Lockout -> Wire_runtime.Staged.stage (fun buf off -> Get.lockout buf off)
-    | Wait -> Wire_runtime.Staged.stage (fun buf off -> Get.wait buf off)
-    | Retransmit ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.retransmit buf off)
-    | Farmbcounter ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.farmbcounter buf off)
-    | Spare2 -> Wire_runtime.Staged.stage (fun buf off -> Get.spare2 buf off)
-    | Reportvalue ->
-        Wire_runtime.Staged.stage (fun buf off -> Get.reportvalue buf off)
+  let controlwordtype : Value.controlwordtype t =
+    { get = Get.controlwordtype; view = view_controlwordtype }
 
-  let[@inline] view : type a b. a t -> b Wire_runtime.Buf.t -> b View.t -> a =
-   fun f b v ->
-    match f with
-    | Controlwordtype -> view_controlwordtype b v
-    | Clcwversion -> view_clcwversion b v
-    | Statusfield -> view_statusfield b v
-    | Copineffect -> view_copineffect b v
-    | Vcid -> view_vcid b v
-    | Spare -> view_spare b v
-    | Norf -> view_norf b v
-    | Nobitlock -> view_nobitlock b v
-    | Lockout -> view_lockout b v
-    | Wait -> view_wait b v
-    | Retransmit -> view_retransmit b v
-    | Farmbcounter -> view_farmbcounter b v
-    | Spare2 -> view_spare2 b v
-    | Reportvalue -> view_reportvalue b v
+  let clcwversion : Value.clcwversion t =
+    { get = Get.clcwversion; view = view_clcwversion }
 
-  let controlwordtype = Controlwordtype
-  let clcwversion = Clcwversion
-  let statusfield = Statusfield
-  let copineffect = Copineffect
-  let vcid = Vcid
-  let spare = Spare
-  let norf = Norf
-  let nobitlock = Nobitlock
-  let lockout = Lockout
-  let wait = Wait
-  let retransmit = Retransmit
-  let farmbcounter = Farmbcounter
-  let spare2 = Spare2
-  let reportvalue = Reportvalue
+  let statusfield : Value.statusfield t =
+    { get = Get.statusfield; view = view_statusfield }
+
+  let copineffect : Value.copineffect t =
+    { get = Get.copineffect; view = view_copineffect }
+
+  let vcid : Value.vcid t = { get = Get.vcid; view = view_vcid }
+  let spare : Value.spare t = { get = Get.spare; view = view_spare }
+  let norf : Value.norf t = { get = Get.norf; view = view_norf }
+
+  let nobitlock : Value.nobitlock t =
+    { get = Get.nobitlock; view = view_nobitlock }
+
+  let lockout : Value.lockout t = { get = Get.lockout; view = view_lockout }
+  let wait : Value.wait t = { get = Get.wait; view = view_wait }
+
+  let retransmit : Value.retransmit t =
+    { get = Get.retransmit; view = view_retransmit }
+
+  let farmbcounter : Value.farmbcounter t =
+    { get = Get.farmbcounter; view = view_farmbcounter }
+
+  let spare2 : Value.spare2 t = { get = Get.spare2; view = view_spare2 }
+
+  let reportvalue : Value.reportvalue t =
+    { get = Get.reportvalue; view = view_reportvalue }
 end
 
 let encode t buf off =
   write buf off t.controlwordtype t.clcwversion t.statusfield t.copineffect
     t.vcid t.spare t.norf t.nobitlock t.lockout t.wait t.retransmit
     t.farmbcounter t.spare2 t.reportvalue
+
+module Global = struct
+  type nonrec t = t
+
+  let min_size = min_size
+  let decode = decode
+  let decode_exn = decode_exn
+  let encode = encode
+  let validate = validate
+  let is_valid = is_valid
+
+  module View = View
+  module Field = Field
+end
 
 module Bigstring = struct
   let[@inline never] fail buf off =

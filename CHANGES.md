@@ -21,8 +21,9 @@
 
 - `Wire.S`, the signature a codec of fixed-size records gives, and
   `Wire.Codec.Make`, the interpreted codec as one; a module `Wire_ocaml`
-  generates is one too, with typed field handles `Field.<f>`, so either runs
-  the same code by changing one line (#492, @samoht)
+  generates is one through its `Global` submodule, on OCaml and OxCaml, so
+  either runs the same code by changing one line. A field handle's `f.get`
+  reads as directly as `get_<f>` (#492, @samoht)
 
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)

@@ -3,6 +3,7 @@ type 'b length = int
 type any = Any : 'b t -> any [@@unboxed]
 
 let[@inline] v buf = Any buf
+let local = v
 let[@inline] length b = Bytes.length b
 
 let pp_length ppf n =
@@ -21,6 +22,7 @@ module Bigstring = struct
   type any = Any : 'b t -> any [@@unboxed]
 
   let[@inline] v buf = Any buf
+  let local = v
   let[@inline] length b = Bigarray.Array1.dim b
   let pp ppf b = pp_length ppf (Bigarray.Array1.dim b)
 end

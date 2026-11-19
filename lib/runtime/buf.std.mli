@@ -18,6 +18,9 @@ type any = Any : 'b t -> any [@@unboxed]
 val v : bytes -> any
 (** [v buf] is [buf] under a name of its own. *)
 
+val local : bytes -> any
+(** [local] is {!v}: on OxCaml it names a buffer the caller holds [local]. *)
+
 val length : 'b t -> 'b length
 (** [length b] is the length of [b]. *)
 
@@ -41,6 +44,9 @@ module Bigstring : sig
 
   val v : bigstring -> any
   (** [v buf] is [buf] under a name of its own. *)
+
+  val local : bigstring -> any
+  (** [local] is {!v}: on OxCaml it names a bigarray held [local]. *)
 
   val length : 'b t -> 'b length
   (** [length b] is the length of [b]. *)

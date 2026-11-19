@@ -1002,51 +1002,102 @@ let pp_decode_result ~src ppf =
    codec: [Field.get f] is [Get.<field>] and [Field.view f] [view_<field>]. A
    field under a map, whose type is the caller's, has none, nor has an
    anonymous one. *)
+let field_fields fields =
+  List.filter
+    (fun f ->
+      Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
+    fields
+
 let pp_field_module ~src ppf ~target fields =
-  let fields =
-    List.filter
-      (fun f ->
-        Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
-      fields
-  in
-  let tag f = String.capitalize_ascii f.label in
+  let fields = field_fields fields in
   let b =
     match target with
-    | `OxCaml -> Fmt.str "b %s.t @@ local" src.brand
-    | `OCaml -> Fmt.str "b %s.t" src.brand
+    | `OxCaml -> Fmt.str "'b %s.t @@ local" src.brand
+    | `OCaml -> Fmt.str "'b %s.t" src.brand
   in
-  Fmt.pf ppf "module Field = struct@\n  type _ t =@\n";
-  (* With no named field, [t] has no case, and each match only refutes. *)
-  if fields = [] then Fmt.pf ppf "    |@\n";
-  List.iter
-    (fun f -> Fmt.pf ppf "    | %s : %s t@\n" (tag f) (type_of f))
-    fields;
+  (* A handle is the field's functions, built once: [f.get buf off] of a known
+     handle is a call to a known function, which the compiler inlines where it
+     is written, on OCaml's Closure as on flambda2. *)
   Fmt.pf ppf
-    "@\n\
-    \  let[@inline] get : type a. a t -> (bytes -> int -> a) %s.Staged.t =@\n\
-    \    function@\n"
-    rt;
-  if fields = [] then Fmt.pf ppf "    | _ -> .@\n";
+    "module Field = struct@\n\
+    \  type 'a t = {@\n\
+    \    get : bytes -> int -> 'a;@\n\
+    \    view : 'b. %s -> 'b View.t -> 'a;@\n\
+    \  }@\n\
+     @\n"
+    b;
+  (* On OxCaml [Get.<field>] takes its buffer [local], a mode a handle's
+     [get] does not state, so it is eta-expanded there. *)
   List.iter
     (fun f ->
-      Fmt.pf ppf
-        "    | %s -> %s.Staged.stage (fun buf off -> Get.%s buf off)@\n" (tag f)
-        rt f.label)
+      let get =
+        match target with
+        | `OxCaml -> Fmt.str "(fun buf off -> Get.%s buf off)" f.label
+        | `OCaml -> "Get." ^ f.label
+      in
+      Fmt.pf ppf "  let %s : %s t = { get = %s; view = view_%s }@\n@\n" f.label
+        (type_of f) get f.label)
     fields;
-  Fmt.pf ppf
-    "@\n\
-    \  let[@inline] view : type a b. a t -> %s -> b View.t -> a =@\n\
-    \   fun f %s ->@\n\
-    \    match f with@\n"
-    b
-    (if fields = [] then "_ _" else "b v");
-  if fields = [] then Fmt.pf ppf "    | _ -> .@\n";
-  List.iter
-    (fun f -> Fmt.pf ppf "    | %s -> view_%s b v@\n" (tag f) f.label)
-    fields;
-  Fmt.pf ppf "@\n";
-  List.iter (fun f -> Fmt.pf ppf "  let %s = %s@\n" f.label (tag f)) fields;
   Fmt.pf ppf "end@\n@\n"
+
+(* [Global] is the module as a [Wire.S], for code that switches between it and
+   [Wire.Codec.Make] by one line. On OCaml it is the module's own functions; on
+   OxCaml, whose functions take their buffers [local], which an interpreted
+   codec cannot, it states them for buffers on the heap. *)
+let pp_global ~src ppf ~target fields =
+  let fields = field_fields fields in
+  Fmt.pf ppf
+    "module Global = struct@\n\
+    \  type nonrec t = t@\n\
+     @\n\
+    \  let min_size = min_size@\n";
+  match target with
+  | `OCaml ->
+      Fmt.pf ppf
+        "  let decode = decode@\n\
+        \  let decode_exn = decode_exn@\n\
+        \  let encode = encode@\n\
+        \  let validate = validate@\n\
+        \  let is_valid = is_valid@\n\
+        \  module View = View@\n\
+        \  module Field = Field@\n\
+         end@\n\
+         @\n"
+  | `OxCaml ->
+      Fmt.pf ppf
+        "  let decode buf off = decode buf off@\n\
+        \  let decode_exn buf off = decode_exn buf off@\n\
+        \  let encode t buf off = encode t buf off@\n\
+        \  let validate buf off = validate buf off@\n\
+        \  let is_valid buf off = is_valid buf off@\n\
+         @\n\
+        \  module View = struct@\n\
+        \    type 'b t = 'b View.t@\n\
+        \    type 'b check = 'b View.check@\n\
+         @\n\
+        \    let at b len off = View.at b len off@\n\
+        \    let check b len off = View.check b len off@\n\
+        \    let ok = View.ok@\n\
+        \    let get = View.get@\n\
+        \  end@\n\
+         @\n\
+        \  module Field = struct@\n\
+        \    type 'a t = {@\n\
+        \      get : bytes -> int -> 'a;@\n\
+        \      view : 'b. 'b %s.t -> 'b View.t -> 'a;@\n\
+        \    }@\n\
+         @\n"
+        src.brand;
+      List.iter
+        (fun f ->
+          Fmt.pf ppf
+            "    let %s : %s t =@\n\
+            \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) \
+             }@\n\
+             @\n"
+            f.label (type_of f) f.label f.label)
+        fields;
+      Fmt.pf ppf "  end@\nend@\n@\n"
 
 (* The same reads and writes on a bigarray of bytes, with the same errors. *)
 let pp_bigstring ppf ~target ~make ~record ~plan ~size =
@@ -1100,7 +1151,10 @@ let pp_body ppf ~target ~make ~plan ~size =
   pp_valid ~src ppf ~target ~plan;
   pp_view ~src ppf ~target ~plan ~size;
   pp_field_module ~src ppf ~target fields;
-  if record then pp_encode ~src ppf fields;
+  if record then begin
+    pp_encode ~src ppf fields;
+    pp_global ~src ppf ~target fields
+  end;
   pp_bigstring ppf ~target ~make ~record ~plan ~size
 
 let refuse ~codec reason =
@@ -1140,6 +1194,7 @@ let own_names =
     "View";
     "Value";
     "Field";
+    "Global";
     "Bigstring";
     "mask32";
   ]

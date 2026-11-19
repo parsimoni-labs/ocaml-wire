@@ -50,15 +50,17 @@ module type S = sig
         on one that failed. *)
   end
 
-  (** The fields of a record, as values. *)
+  (** The fields of a record, as values: a handle holds the field's reads, so
+      [f.get buf off] of a known handle [f] is the field's own read, inlined
+      where it is written, on OCaml's Closure as on flambda2. *)
   module Field : sig
-    type 'a t
+    type 'a t = private {
+      get : bytes -> int -> 'a;
+          (** [f.get buf off] reads the field of the record at [off], checking
+              its bounds. *)
+      view : 'b. 'b Buf.t -> 'b View.t -> 'a;
+          (** [f.view b v] reads the field of the record [v]. *)
+    }
     (** A field holding an ['a]. *)
-
-    val get : 'a t -> (bytes -> int -> 'a) Staged.t
-    (** [get f] reads [f] of the record at an offset, checking its bounds. *)
-
-    val view : 'a t -> 'b Buf.t -> 'b View.t -> 'a
-    (** [view f b v] reads [f] of the record [v]. *)
   end
 end

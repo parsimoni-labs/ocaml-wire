@@ -527,11 +527,15 @@ end
 
 (** [Make (C)] is [C.codec] as a {!Wire_runtime.Record.S}, so code written
     against that signature runs on the interpreted codec or on the module
-    [Wire_ocaml] generates from it, by changing one line. A field is the codec's
-    own field value. *)
+    [Wire_ocaml] generates from it, by changing one line. A handle is built once
+    from a codec field. *)
 module Make (C : sig
   type r
 
   val codec : r t
-end) :
-  Wire_runtime.Record.S with type t = C.r and type 'a Field.t = ('a, C.r) field
+end) : sig
+  include Wire_runtime.Record.S with type t = C.r
+
+  val field : ('a, C.r) field -> 'a Field.t
+  (** [field f] is the handle of [f], whose getter is staged once. *)
+end
