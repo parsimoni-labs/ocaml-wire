@@ -22,7 +22,7 @@ let comma ppf () =
   Format.pp_print_space ppf ()
 
 let dot ppf () = str ppf "."
-let pp_ints = Format.pp_print_list ~pp_sep:comma Format.pp_print_int
+let pp_ints ppf l = Format.pp_print_list ~pp_sep:comma Format.pp_print_int ppf l
 
 let pp_predicate ppf (p : predicate) =
   match p with
