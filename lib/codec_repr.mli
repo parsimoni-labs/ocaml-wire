@@ -285,6 +285,38 @@ and sub = {
 (** A scalar of any type. *)
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
+(** How the walk reads a field: in place at a fixed offset of the record, inside
+    the frame the walk has checked, or as the cursor moves over it. *)
+type _ walk_read =
+  | Scalar : 'a scalar -> 'a walk_read
+  | String : int * int -> string walk_read
+      (** A byte array of the given offset and length. *)
+  | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
+      (** A byte slice of the given offset and length. *)
+  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+
+(** The walk's readers in field order, as {!readers}. *)
+type (_, _) walk_readers =
+  | WNil : ('f, 'f) walk_readers
+  | WSnoc :
+      ('full, 'a -> 'rest) walk_readers * 'a walk_read
+      -> ('full, 'rest) walk_readers
+
+(** A check the walk makes before it reads: a field at a fixed offset within a
+    set of intervals, or a condition on such fields. *)
+type walk_check =
+  | Within of packed_scalar * (int * int) array
+  | Holds of (Types.cursor -> bool)
+
+type ('full, 'f) walk = {
+  wreaders : ('full, 'f) walk_readers;
+  wchecks_rev : walk_check list;
+  wstart : int option;
+}
+(** The walk of a record under construction: its readers, its checks, last
+    first, and where the first field the cursor moves over starts in the record,
+    once there is one. *)
+
 (** A record under construction: the fields added so far. *)
 type ('f, 'r) record =
   | Record : {
@@ -295,6 +327,7 @@ type ('f, 'r) record =
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
       layout_rev : layout list option;
+      walk : ('full, 'f) walk option;
       prefix : (string * packed_scalar) list;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
       min_wire_size : int;
@@ -360,6 +393,7 @@ type 'r compiled = {
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
+  walk : (Types.cursor -> 'r) option;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;

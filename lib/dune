@@ -13,7 +13,9 @@
   codec_repr
   codec_elem
   codec_compile
+  codec_intervals
   codec_layout
+  codec_walk
   codec_seal
   codec_words)
  (flags

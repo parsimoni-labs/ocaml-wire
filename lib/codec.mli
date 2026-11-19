@@ -364,6 +364,10 @@ val embed_check_end : 'r t -> Input_end.t -> bytes -> int -> int
     gives is the one the codec's extent measures, and
     {!embed_validate_sized_ctx} accepts the record with it. Internal use. *)
 
+val embed_walk : 'r t -> (Types.cursor -> 'r) option
+(** [embed_walk c] is the walk of [c], the decode that checks and reads each
+    field once, or [None] when [c] has none. Internal use. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 

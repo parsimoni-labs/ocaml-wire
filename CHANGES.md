@@ -127,6 +127,19 @@
   buffer allocates nothing, and `decode` no longer slows with nesting depth
   (#435, #445, #496, @samoht)
 
+- `Wire.Codec.decode` of a variable-size record without parameters walks it
+  once: each field is checked and read in order, each size and presence
+  condition evaluated once, and a sub-codec returns its value and its end
+  together. Decoding Ethernet, IPv4 and TCP or UDP takes less than half the
+  instructions it took (#496, @samoht)
+
+- `Wire.Codec.decode` can now call the constructor of a sub-codec, the
+  function given to `Wire.Codec.v`, on a sub-record whose enclosing record
+  then fails a check, and return `Error`. A constructor with side effects
+  (counting, logging, registering the record) sees such sub-records and has
+  to stop doing so: build values only, and act on a record after `decode`
+  returns `Ok` (#496, @samoht)
+
 - A staged `Wire.Codec.read` and `Wire.Codec.valid` keep their error paths out
   of line, so a compiler that inlines more makes them faster, not slower
   (#496, @samoht)
