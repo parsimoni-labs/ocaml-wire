@@ -125,6 +125,13 @@ type w = {
   views : (string * int T.expr) list;
       (* A bitfield as an expression over its word. *)
   words : (string * int) list; (* A bitfield word and its mask. *)
+  raws : (string * (string * int)) list;
+      (* A big-endian field as the variable holding its bytes read
+         little-endian, and its width in bits. *)
+  deferred : (string * (string * bool)) list ref;
+      (* A field bound where code first reads it, its value and whether that
+         loads from the buffer: a test of its raw bytes reads it in neither
+         branch, and the branch where it holds binds the constant. *)
   base : string; (* The offset in the buffer of the current window. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
@@ -167,13 +174,90 @@ let decisions s =
   in
   go 0 0
 
-let pf w fmt =
-  Fmt.kstr
-    (fun s ->
-      w.fn.chars <- w.fn.chars + String.length s;
-      w.fn.decisions <- w.fn.decisions + decisions s;
-      Format.pp_print_string w.ppf s)
-    fmt
+let is_variable x =
+  x <> ""
+  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
+  && String.for_all is_ident_char x
+
+(* The variable a line [let x = e in] binds. *)
+let binding line =
+  let is_let =
+    String.starts_with ~prefix:"let " line
+    && String.ends_with ~suffix:" in" line
+  in
+  match if is_let then String.index_from_opt line 4 ' ' else None with
+  | Some i when String.length line >= i + 3 ->
+      let x = String.sub line 4 (i - 4) in
+      if is_variable x && String.sub line i 3 = " = " then Some x else None
+  | _ -> None
+
+let local_prefix = "let[@local] "
+
+(* The occurrences of [x] in [line] as a word: none qualified by a module,
+   none as the name of a label. *)
+let occurrences x line =
+  let n = String.length line and k = String.length x in
+  let rec from i acc =
+    if i + k > n then List.rev acc
+    else
+      let word =
+        String.sub line i k = x
+        && (i = 0 || not (is_ident_char line.[i - 1] || line.[i - 1] = '.'))
+        && (i + k = n || not (is_ident_char line.[i + k]))
+      in
+      let label =
+        word && i > 0 && line.[i - 1] = '~' && i + k < n && line.[i + k] = ':'
+      in
+      from (i + 1) (if word && not label then i :: acc else acc)
+  in
+  from 0 []
+
+(* Whether [line] binds [x]: as a [let], or as a parameter of a local
+   function. *)
+let binds x line =
+  binding line = Some x
+  || (String.starts_with ~prefix:local_prefix line && occurrences x line <> [])
+
+(* Whether [line] reads [x], other than by binding it. *)
+let reads x line =
+  if String.starts_with ~prefix:local_prefix line then false
+  else
+    List.exists
+      (fun i -> not (i = 4 && binding line = Some x))
+      (occurrences x line)
+
+(* [s] written in the current function, after the binding of each deferred
+   field it reads. *)
+let rec write w s =
+  let lines = String.split_on_char '\n' s in
+  let read, kept =
+    List.partition (fun (x, _) -> List.exists (reads x) lines) !(w.deferred)
+  in
+  w.deferred := kept;
+  List.iter (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v)) read;
+  w.fn.chars <- w.fn.chars + String.length s;
+  w.fn.decisions <- w.fn.decisions + decisions s;
+  Format.pp_print_string w.ppf s
+
+let pf w fmt = Fmt.kstr (write w) fmt
+
+(* The deferred loads written here, before a local function that may read
+   them: one that loaded them itself would close over the buffer, which may be
+   [local], and could not be called in tail position. *)
+let flush w =
+  let loads, kept = List.partition (fun (_, (_, l)) -> l) !(w.deferred) in
+  w.deferred := kept;
+  List.iter
+    (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v))
+    (List.rev loads)
+
+(* [f ()] with the deferred bindings as they are now, which the code it writes
+   binds in a scope of its own; they are deferred again after it. *)
+let scoped w f =
+  let saved = !(w.deferred) in
+  let r = f () in
+  w.deferred := saved;
+  r
 
 (* {2 Slots}
 
@@ -607,58 +691,6 @@ let output_text w (o : output) =
    whose [x] no later line of its function reads is dropped, until none
    is. *)
 
-let is_variable x =
-  x <> ""
-  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
-  && String.for_all is_ident_char x
-
-(* The variable a line [let x = e in] binds. *)
-let binding line =
-  let is_let =
-    String.starts_with ~prefix:"let " line
-    && String.ends_with ~suffix:" in" line
-  in
-  match if is_let then String.index_from_opt line 4 ' ' else None with
-  | Some i when String.length line >= i + 3 ->
-      let x = String.sub line 4 (i - 4) in
-      if is_variable x && String.sub line i 3 = " = " then Some x else None
-  | _ -> None
-
-let local_prefix = "let[@local] "
-
-(* The occurrences of [x] in [line] as a word: none qualified by a module,
-   none as the name of a label. *)
-let occurrences x line =
-  let n = String.length line and k = String.length x in
-  let rec from i acc =
-    if i + k > n then List.rev acc
-    else
-      let word =
-        String.sub line i k = x
-        && (i = 0 || not (is_ident_char line.[i - 1] || line.[i - 1] = '.'))
-        && (i + k = n || not (is_ident_char line.[i + k]))
-      in
-      let label =
-        word && i > 0 && line.[i - 1] = '~' && i + k < n && line.[i + k] = ':'
-      in
-      from (i + 1) (if word && not label then i :: acc else acc)
-  in
-  from 0 []
-
-(* Whether [line] binds [x]: as a [let], or as a parameter of a local
-   function. *)
-let binds x line =
-  binding line = Some x
-  || (String.starts_with ~prefix:local_prefix line && occurrences x line <> [])
-
-(* Whether [line] reads [x], other than by binding it. *)
-let reads x line =
-  if String.starts_with ~prefix:local_prefix line then false
-  else
-    List.exists
-      (fun i -> not (i = 4 && binding line = Some x))
-      (occurrences x line)
-
 let is_function line = String.starts_with ~prefix:"let[@inline always]" line
 
 let rec prune lines =
@@ -744,7 +776,8 @@ let cut w ~label body =
   | Some c when can_cut w ->
       let b = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer b in
-      body { w with ppf; fn = { chars = 0; decisions = 0 }; depth = 0 };
+      scoped w (fun () ->
+          body { w with ppf; fn = { chars = 0; decisions = 0 }; depth = 0 });
       Format.pp_print_flush ppf ();
       let lines = prune (String.split_on_char '\n' (Buffer.contents b)) in
       let seen = Hashtbl.create 16 in
@@ -962,6 +995,28 @@ let field w ~o ~k ~size ~words ~bitwords f =
     | Bits { base; _ } ->
         let bitword = List.assoc (f.offset, base) bitwords in
         bind_field w (value m ~bitword ~o ~words ~k:0 shifted)
+    | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
+      when m.num = Unboxed ->
+        let v = value m ~size:(k + size) ~o ~words ~k:0 shifted in
+        let w =
+          if is_slot m f.id then bind_field w v
+          else begin
+            w.deferred := (f.id, (v, true)) :: !(w.deferred);
+            bind ?ty:typed w f.id
+          end
+        in
+        let raw = f.id ^ "_le" in
+        let v =
+          match width with
+          | 16 ->
+              Fmt.str "(U.of_int %s)"
+                (load m ~o ~k:shifted.offset ~bytes:2 ~endian:T.Little)
+          | _ ->
+              Fmt.str "(U.of_int32_u %s)"
+                (load m ~o ~k:shifted.offset ~bytes:4 ~endian:T.Little)
+        in
+        pf w "let %s = %s in@\n" raw v;
+        { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
     | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
   in
   let w =
@@ -1214,8 +1269,41 @@ let reach tree =
     (fun i -> Option.value ~default:0 (Hashtbl.find_opt cases i) > 1),
     leaves tree + Hashtbl.length cases )
 
+(* The atom [id = c] on an [int64_u] variable [id], which is [c] where it
+   holds; on a field held by its little-endian bytes too, the atom as a test of
+   those bytes against [c] swapped, which needs no swap of the load. *)
+let literal_test w atom =
+  let raw id c =
+    match List.assoc_opt id w.raws with
+    | Some (raw, width) when c >= 0 && c < 1 lsl width ->
+        let swapped =
+          List.fold_left
+            (fun acc i ->
+              acc lor (((c lsr (8 * i)) land 0xff) lsl (width - 8 - (8 * i))))
+            0
+            (List.init (width / 8) Fun.id)
+        in
+        (* A 32-bit load is sign-extended. *)
+        let swapped =
+          if width = 32 && swapped land 0x8000_0000 <> 0 then
+            swapped - (1 lsl 32)
+          else swapped
+        in
+        Some (relation w.m.num "=" raw (lit w.m.num swapped))
+    | _ -> None
+  in
+  match atom with
+  | (T.Eq (T.Ref (T.I, id), T.Int c) | T.Eq (T.Int c, T.Ref (T.I, id)))
+    when w.m.num = Unboxed && List.mem_assoc id w.scope
+         && (not (is_slot w.m id))
+         && not (List.mem_assoc id w.settled) ->
+      Some (id, c, raw id c)
+  | _ -> None
+
 (* [tree], each shared subtree written once in a local function after the
-   ones it reaches; [leaf] writes a leaf. An atom that may overflow rejects. *)
+   ones it reaches; [leaf] writes a leaf. An atom that may overflow rejects.
+   An atom on a field held by its bytes tests them, and the field is the
+   constant in the branch that holds. *)
 let pp_tree w ~j ~shared ~leaf tree =
   let rec emit w t =
     match t.node with
@@ -1223,10 +1311,14 @@ let pp_tree w ~j ~shared ~leaf tree =
     | Branch (atom, yes, no) ->
         let inner = { w with depth = w.depth + 1 } in
         let branch t =
-          if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t
+          scoped w (fun () ->
+              if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t)
         in
         let ov = ref false in
-        let s = expr w ov atom in
+        let literal = literal_test w atom in
+        let s =
+          match literal with Some (_, _, Some s) -> s | _ -> expr w ov atom
+        in
         if !ov then begin
           pf w "match %s with@\n| true -> (@\n" s;
           branch yes;
@@ -1236,7 +1328,14 @@ let pp_tree w ~j ~shared ~leaf tree =
         end
         else begin
           pf w "if %s then (@\n" s;
-          branch yes;
+          (match literal with
+          | Some (id, c, _) ->
+              scoped w (fun () ->
+                  w.deferred :=
+                    (id, (lit w.m.num c, false))
+                    :: List.remove_assoc id !(w.deferred);
+                  branch yes)
+          | _ -> branch yes);
           pf w ") else (@\n";
           branch no;
           pf w ")@\n"
@@ -1252,8 +1351,9 @@ let pp_tree w ~j ~shared ~leaf tree =
           define a;
           define b;
           if shared t then begin
+            flush w;
             pf w "let[@local] d%d_%s () =@\n" t.tid j;
-            emit { w with depth = w.depth + 1 } t;
+            scoped w (fun () -> emit { w with depth = w.depth + 1 } t);
             pf w "in@\n"
           end
     end
@@ -1295,6 +1395,7 @@ let opens = function Prefix _ | Span _ | Test _ | Region _ -> 1 | Gate _ -> 0
 let define_join w ~j ~exported indexed gates k =
   let e = w.fresh "e" in
   let outputs = joined ~exported gates in
+  flush w;
   pf w "let[@local] %s %a %s =@\n" j pp_list
     (List.map (fun (o : output) -> o.id) outputs)
     e;
@@ -1305,7 +1406,7 @@ let define_join w ~j ~exported indexed gates k =
       { w with known = 0; depth = w.depth + 1 }
       outputs
   in
-  k (bind_num inner e) { var = Some e; at = 0 };
+  scoped w (fun () -> k (bind_num inner e) { var = Some e; at = 0 });
   pf w "in@\n";
   fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
 
@@ -1403,8 +1504,9 @@ and dispatch w gates p ~copy k =
     List.iter
       (fun (i, _) ->
         if case_shared i then begin
+          flush w;
           pf w "let[@local] c%d_%s () =@\n" i j;
-          case { w with depth = w.depth + 1 } i;
+          scoped w (fun () -> case { w with depth = w.depth + 1 } i);
           pf w "in@\n"
         end)
       indexed;
@@ -1448,6 +1550,8 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       facts = no_facts;
       views = [];
       words = [];
+      raws = [];
+      deferred = ref [];
       base;
       limit;
       known;

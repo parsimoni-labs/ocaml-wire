@@ -99,6 +99,8 @@ type w = {
   facts : facts;
   views : (string * int T.expr) list;
   words : (string * int) list;
+  raws : (string * (string * int)) list;
+  deferred : (string * (string * bool)) list ref;
   base : string;
   limit : string;
   known : int;
