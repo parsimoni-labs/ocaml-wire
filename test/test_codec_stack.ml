@@ -419,9 +419,73 @@ let test_walk_trailer () =
     "value" "ok 2 \"ab\" \"XY\""
     (show (Codec.decode c (Bytes.of_string "\002abXY") 0))
 
+(* Gates that reuse an earlier gate's answer, in a record and in a sub-codec
+   walked between the gate and its reuse: the walk answers as the general
+   decode does on every input. *)
+let test_walk_shared_gates () =
+  let flag = Field.v "flag" uint8 in
+  let on = Expr.(Field.ref flag = int 1) in
+  let inner =
+    Codec.v "Inner"
+      (fun f a b -> (f, a, b))
+      Codec.
+        [
+          (flag $ fun (f, _, _) -> f);
+          ( Field.optional "a" ~present:on (byte_array ~size:(int 1))
+          $ fun (_, a, _) -> a );
+          ( Field.optional "b" ~present:Expr.(not on) (byte_array ~size:(int 2))
+          $ fun (_, _, b) -> b );
+        ]
+  in
+  let k = Field.v "k" uint8 in
+  let one = Expr.(Field.ref k = int 1) in
+  let c =
+    Codec.v "Outer"
+      (fun k x y -> (k, x, y))
+      Codec.
+        [
+          (k $ fun (k, _, _) -> k);
+          (Field.optional "x" ~present:one (codec inner) $ fun (_, x, _) -> x);
+          ( Field.optional "y" ~present:Expr.(not one) (byte_array ~size:(int 1))
+          $ fun (_, _, y) -> y );
+        ]
+  in
+  Alcotest.(check bool)
+    "walks" true
+    (List.mem "decode.walk" (Private.Testing.paths c));
+  let general = Private.Testing.general c in
+  let opt = Option.value ~default:"-" in
+  let show = function
+    | Ok (k, x, y) ->
+        Fmt.str "ok %d [%s] %s" (UInt8.to_int k)
+          (match x with
+          | None -> "-"
+          | Some (f, a, b) ->
+              Fmt.str "%d %s %s" (UInt8.to_int f) (opt a) (opt b))
+          (opt y)
+    | Error e -> Fmt.str "error %a" pp_parse_error e
+  in
+  List.iter
+    (fun k ->
+      List.iter
+        (fun f ->
+          for n = 0 to 4 do
+            let buf = Bytes.make (2 + n) 'z' in
+            Bytes.set_uint8 buf 0 k;
+            Bytes.set_uint8 buf 1 f;
+            Alcotest.(check string)
+              (Fmt.str "k=%d flag=%d +%d" k f n)
+              (show (Codec.decode general buf 0))
+              (show (Codec.decode c buf 0))
+          done)
+        [ 0; 1; 2 ])
+    [ 0; 1; 2 ]
+
 let suite =
   ( "codec_stack",
     [
+      Alcotest.test_case "walk: gates that reuse an earlier gate" `Quick
+        test_walk_shared_gates;
       Alcotest.test_case "walk: a fixed field after a span" `Quick
         test_walk_trailer;
       Alcotest.test_case "stack: decode walks each layer once" `Quick

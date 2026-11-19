@@ -51,6 +51,7 @@ type cursor = {
   mutable wbase : int;
   mutable wpos : int;
   mutable wend : Input_end.t;
+  mutable wgates : int;
 }
 
 exception Unwalked

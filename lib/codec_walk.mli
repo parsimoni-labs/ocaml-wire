@@ -18,9 +18,23 @@ val size :
     record at [c], as the layout pass evaluates a size. [size prefix e] raises
     [Exit] when [e] reads anything else. *)
 
+type gates = (bool Types.expr * int) list
+(** The gates of a record evaluated so far, in field order. *)
+
+val no_gates : gates
+(** [no_gates] is the gates of a record before its first. *)
+
 val gate :
-  (string * packed_scalar) list -> bool Types.expr -> Types.cursor -> bool
-(** [gate prefix e c] is {!size} for a presence condition. *)
+  gates:gates ->
+  (string * packed_scalar) list ->
+  bool Types.expr ->
+  (Types.cursor -> bool) * gates
+(** [gate ~gates prefix e] is [(g, gates')]: [g c] is {!size} for the presence
+    condition [e], reading the answer of each gate of [gates] it holds from the
+    cursor's {!Types.field-wgates} rather than evaluating it again, and
+    recording its own answer there; [gates'] is [gates] with [e]. Every gate of
+    a record is evaluated in field order, so a gate is evaluated before any
+    other reads its answer. *)
 
 val cond :
   (string * packed_scalar) list -> bool Types.expr -> Types.cursor -> bool
