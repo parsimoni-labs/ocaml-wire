@@ -46,6 +46,15 @@ let checked_eval_ctx = function
 
 let is_checked = function Checked _ -> true | Unbound | Bound _ -> false
 
+type cursor = {
+  wbuf : bytes;
+  mutable wbase : int;
+  mutable wpos : int;
+  mutable wend : Input_end.t;
+}
+
+exception Unwalked
+
 let rec eval_param ctx name =
   match ctx with
   | Unbound -> 0
@@ -312,6 +321,7 @@ and _ typ =
              measures, and [codec_validate_sized] accepts the record with it.
              A use site with a negative answer runs those two, and after [-1]
              does not try the fast checks of the records under it again. *)
+      codec_walk : (cursor -> 'r) option;
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;

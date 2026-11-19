@@ -3,6 +3,7 @@ open Codec_leaf
 open Codec_repr
 open Codec_elem
 open Codec_compile
+open Codec_intervals
 
 (* -- Apply a compiled plan to the record state -- *)
 
@@ -497,6 +498,89 @@ let field_put : type a r.
   | Some puts, Span (at, len) -> Some (Blit { get = fld.get; at; len } :: puts)
   | _ -> None
 
+(* {2 The walk of a field} *)
+
+(* A field the cursor moves over: a byte span, a sub-codec in a region, or one
+   measuring itself, each with a walk of its own. *)
+let moving : type a. (string * packed_scalar) list -> a typ -> Types.cursor -> a
+    =
+ fun prefix typ ->
+  match typ with
+  | Byte_slice { size } ->
+      Codec_walk.span Slice_span (Codec_walk.size prefix size)
+  | Byte_array { size } ->
+      Codec_walk.span String_span (Codec_walk.size prefix size)
+  | Single_elem { size; elem = Codec { codec_walk = Some w; _ }; at_most } ->
+      Codec_walk.region ~at_most (Codec_walk.size prefix size) w
+  | Codec { codec_walk = Some w; _ } -> Codec_walk.sub w
+  | _ -> raise Exit
+
+(* The checks of a field at a fixed offset, its value read from the buffer:
+   the set its constraint and type allow, or its conditions. The same checks as
+   [field_steps], on [prefix], the fields up to this one. *)
+let fixed_checks prefix ~min_wire_size (cf : (_, _) compiled_field)
+    (fld : (_, _) field) =
+  let conds = field_conds fld in
+  let conj = function
+    | [] -> None
+    | c :: cs -> Some (List.fold_left (fun a c -> And (a, c)) c cs)
+  in
+  let within ps = function
+    | [] -> []
+    | s :: ss -> (
+        match List.fold_left set_inter s ss with
+        | [ (lo, hi) ] when lo = min_int && hi = max_int -> []
+        | set -> [ Within (ps, Array.of_list set) ])
+  in
+  match check_view ~min_wire_size cf.field_access fld.typ ~act:None with
+  | Some ((Ps scalar as ps), typ_sets) when slot_scalar scalar -> (
+      match conj conds with
+      | None -> within ps typ_sets
+      | Some c -> (
+          match self_set fld.name c with
+          | Some cset -> within ps (cset :: typ_sets)
+          | None -> Holds (Codec_walk.cond prefix c) :: within ps typ_sets))
+  | Some _ | None ->
+      if conds = [] && not (field_reader_validates fld.typ) then []
+      else raise Exit
+
+(* How the walk reads [fld] and what it checks first, or [Exit] when it cannot
+   walk it: an action, a read that is neither in place nor a span or a
+   sub-codec with a walk, a fixed-size field after a variable-size one, or a
+   condition on a field the cursor moves over. *)
+let field_walk : type a f r.
+    (a -> f, r) record ->
+    (a, r) field ->
+    (a, r) compiled_field ->
+    a field_read ->
+    min_wire_size:int ->
+    a walk_read * walk_check list =
+ fun (Record r) fld cf read ~min_wire_size ->
+  if Option.is_some fld.action then raise Exit;
+  match (r.next_off, cf.next_off) with
+  | Static _, Static _ -> (
+      let prefix = field_prefix r.prefix ~min_wire_size cf fld in
+      match (read, cf.field_access, fld.typ) with
+      | Data s, _, _ -> (Scalar s, fixed_checks prefix ~min_wire_size cf fld)
+      | Span (off, n), _, _ ->
+          (String (off, n), fixed_checks prefix ~min_wire_size cf fld)
+      | Fn _, Fixed off, Byte_slice { size = Int n }
+        when off >= 0 && n >= 0 && off + n <= min_wire_size ->
+          (Slice (off, n), fixed_checks prefix ~min_wire_size cf fld)
+      | ( Fn _,
+          Fixed off,
+          Codec { codec_walk = Some w; codec_fixed_size = Some _; _ } )
+        when field_conds fld = [] ->
+          (Walk (Codec_walk.fixed_sub off w), [])
+      | _ -> raise Exit)
+  | _, Dynamic _ when field_conds fld = [] -> (
+      match fld.typ with
+      | Optional { present; inner } ->
+          let present = Codec_walk.gate r.prefix present in
+          (Walk (Codec_walk.gated present (moving r.prefix inner)), [])
+      | typ -> (Walk (moving r.prefix typ), []))
+  | _ -> raise Exit
+
 (* The variables [fld]'s action assigns, and the context its constraint and
    action compile in: the fields before it, itself and those variables. *)
 let field_check_ctx : type a f r.
@@ -548,6 +632,24 @@ let apply_compiled : type a f r.
   let read, checked_read =
     field_reads ~min_wire_size ~validates cf fld act raw_reader
   in
+  let layout_rev = field_layout r.layout_rev cf fld in
+  let walk =
+    match (r.walk, layout_rev) with
+    | Some w, Some _ -> (
+        match field_walk record fld cf read ~min_wire_size with
+        | wr, checks ->
+            Some
+              {
+                wreaders = WSnoc (w.wreaders, wr);
+                wchecks_rev = List.rev_append checks w.wchecks_rev;
+                wstart =
+                  (match (w.wstart, r.next_off, cf.next_off) with
+                  | None, Static n, Dynamic _ -> Some n
+                  | wstart, _, _ -> wstart);
+              }
+        | exception Exit -> None)
+    | _ -> None
+  in
   Record
     {
       name = r.name;
@@ -556,7 +658,8 @@ let apply_compiled : type a f r.
       checked_readers = Snoc (r.checked_readers, checked_read);
       writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev;
       puts_rev = field_put r.puts_rev fld checked_read;
-      layout_rev = field_layout r.layout_rev cf fld;
+      layout_rev;
+      walk;
       prefix = field_prefix r.prefix ~min_wire_size cf fld;
       size_of_value_rev = field_size_of_value fld cf :: r.size_of_value_rev;
       min_wire_size;
@@ -569,9 +672,7 @@ let apply_compiled : type a f r.
           (field_steps ~used:r.used_slots ~name:fld.name ~slot:field_idx
              ~voff:byte_off ~conds:(field_conds fld)
              ~span:(plain_span fld.typ && Option.is_none act)
-             ~laid:
-               (laid_field fld
-               && Option.is_some (field_layout r.layout_rev cf fld))
+             ~laid:(laid_field fld && Option.is_some layout_rev)
              (check_view ~min_wire_size cf.field_access fld.typ ~act)
              check full)
         @ r.validators_rev;
@@ -848,19 +949,6 @@ let check_cond ~name ~voff cond arr base =
       (Types.Parse_error
          { e with at = at_of base voff; field = name :: e.field })
 
-(* Top level, so a test allocates no closure. *)
-let rec in_set_from (set : (int * int) array) (v : int) i =
-  i < Array.length set
-  &&
-  let lo, hi = Array.unsafe_get set i in
-  (v >= lo && v <= hi) || in_set_from set v (i + 1)
-
-let in_set (set : (int * int) array) v =
-  if Array.length set = 1 then
-    let lo, hi = Array.unsafe_get set 0 in
-    v >= lo && v <= hi
-  else in_set_from set v 0
-
 (* A failed set test: the field's general validator raises the field's own
    error. It always does, as the set is what its checks accept; the constraint
    error after it only stands in if they ever disagree. *)
@@ -1072,77 +1160,6 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
 
 let no_slots = { ints = [||]; int64s = [||] }
 
-(* A set test as ints: the read's kind, its offset, the bitfield shift and mask
-   (0 and -1 for a whole scalar), the number of intervals, then their bounds. *)
-let flat_interval : type a. a scalar -> (int * int) array -> int array =
- fun scalar set ->
-  let kind, off, shift, mask =
-    match scalar with
-    | Byte off -> (0, off, 0, -1)
-    | U16le off -> (1, off, 0, -1)
-    | U16be off -> (2, off, 0, -1)
-    | Sbyte off -> (3, off, 0, -1)
-    | I16le off -> (4, off, 0, -1)
-    | I16be off -> (5, off, 0, -1)
-    | U32le off -> (6, off, 0, -1)
-    | U32be off -> (7, off, 0, -1)
-    | I32le off -> (8, off, 0, -1)
-    | I32be off -> (9, off, 0, -1)
-    | Bits8 { off; shift; mask } -> (0, off, shift, mask)
-    | Bits16le { off; shift; mask } -> (1, off, shift, mask)
-    | Bits16be { off; shift; mask } -> (2, off, shift, mask)
-  in
-  Array.concat
-    [
-      [| kind; off; shift; mask; Array.length set |];
-      Array.concat
-        (Array.to_list (Array.map (fun (lo, hi) -> [| lo; hi |]) set));
-    ]
-
-(* The index of the first failed test in [d], from [i], or -1. The read is
-   dispatched in place and nothing is called, so the loop keeps its state in
-   registers. The offsets lie inside the frame the caller has checked. *)
-let rec scan_intervals d tables buf off n i =
-  if i >= n then -1
-  else
-    let q = off + Array.unsafe_get d (i + 1) in
-    let v =
-      match Array.unsafe_get d i with
-      | 0 -> Unchecked.u8 buf q
-      | 1 -> Unchecked.u16le buf q
-      | 2 -> Unchecked.u16be buf q
-      | 3 -> SInt8.to_int (SInt8.unsafe_get buf q)
-      | 4 -> SInt16.to_int (SInt16.unsafe_le buf q)
-      | 5 -> SInt16.to_int (SInt16.unsafe_be buf q)
-      | 6 -> UInt32.to_int (UInt32.unsafe_le buf q)
-      | 7 -> UInt32.to_int (UInt32.unsafe_be buf q)
-      | 8 -> SInt32.to_int (SInt32.unsafe_le buf q)
-      | 9 -> SInt32.to_int (SInt32.unsafe_be buf q)
-      | k ->
-          (* A byte table: kind [10 + n] looks the byte up in table [n]. *)
-          Char.code
-            (String.unsafe_get
-               (Array.unsafe_get tables (k - 10))
-               (Unchecked.u8 buf q))
-    in
-    let v =
-      (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
-    in
-    let k = Array.unsafe_get d (i + 4) in
-    if k = 1 then
-      if v >= Array.unsafe_get d (i + 5) && v <= Array.unsafe_get d (i + 6) then
-        scan_intervals d tables buf off n (i + 7)
-      else i
-    else scan_set d tables buf off n i v (i + 5) (i + 5 + (2 * k))
-
-(* The rest of a test with several intervals. Every call in the scan is a tail
-   call, so the scan keeps its state in registers. *)
-and scan_set d tables buf off n i (v : int) j stop =
-  if j >= stop then i
-  else if v >= Array.unsafe_get d j && v <= Array.unsafe_get d (j + 1) then
-    scan_intervals d tables buf off n stop
-  else scan_set d tables buf off n i v (j + 2) stop
-
 (* The first test, in declaration order, the value fails. *)
 let first_failed intervals input_end buf off =
   let rec go i =
@@ -1172,54 +1189,6 @@ let run_plain_pass ?(runtime = no_runtime) pass input_end buf off =
       in
       run_pass steps where arr runtime input_end buf off
 
-(* The byte an interval reads, and the field value a byte [b] gives, for the
-   intervals that read a single byte. *)
-let byte_view : type a. a scalar -> (int * (int -> int)) option = function
-  | Byte off -> Some (off, Fun.id)
-  | Sbyte off ->
-      Some (off, fun b -> (b lsl (Sys.int_size - 8)) asr (Sys.int_size - 8))
-  | Bits8 { off; shift; mask } -> Some (off, fun b -> (b lsr shift) land mask)
-  | _ -> None
-
-(* Several intervals on one byte become one lookup in a table of the 256 byte
-   values, whatever the fields they test: [version = 4 && ihl >= 5] is one load
-   and one lookup. *)
-let flatten_intervals intervals =
-  let groups = Hashtbl.create 8 in
-  Array.iter
-    (fun (Interval { scalar; set; _ }) ->
-      match byte_view scalar with
-      | Some (off, value) ->
-          let prev = Option.value ~default:[] (Hashtbl.find_opt groups off) in
-          Hashtbl.replace groups off ((value, set) :: prev)
-      | None -> ())
-    intervals;
-  let tables = Stdlib.ref [] and n_tables = Stdlib.ref 0 in
-  let emitted = Hashtbl.create 8 in
-  let table off tests =
-    let accept b =
-      List.for_all (fun (value, set) -> in_set set (value b)) tests
-    in
-    let t = String.init 256 (fun b -> if accept b then '\001' else '\000') in
-    tables := t :: !tables;
-    let i = !n_tables in
-    incr n_tables;
-    [| 10 + i; off; 0; -1; 1; 1; 1 |]
-  in
-  let flat =
-    Array.to_list intervals
-    |> List.filter_map (fun (Interval { scalar; set; _ }) ->
-        match byte_view scalar with
-        | Some (off, _) when List.length (Hashtbl.find groups off) > 1 ->
-            if Hashtbl.mem emitted off then None
-            else begin
-              Hashtbl.replace emitted off ();
-              Some (table off (Hashtbl.find groups off))
-            end
-        | _ -> Some (flat_interval scalar set))
-  in
-  (Array.concat flat, Array.of_list (List.rev !tables))
-
 let step_uses_arr = function
   | Range { store; _ } -> store
   | Slot _ | Check _ | Full _ | Covered _ | Laid _ -> true
@@ -1245,7 +1214,12 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   if not has_checks then No_checks
   else if Option.is_none where && Array.for_all Option.is_some intervals then
     let intervals = Array.map Option.get intervals in
-    let flat, tables = flatten_intervals intervals in
+    let flat, tables =
+      flatten_intervals
+        (Array.map
+           (fun (Interval { scalar; set; _ }) -> (Ps scalar, set))
+           intervals)
+    in
     Intervals { flat; tables; intervals }
   else
     Steps
@@ -1272,7 +1246,7 @@ let variable_frame ~layout wire_size_info min_size input_end buf off =
           run_plain_pass ~runtime:fallback_runtime full input_end buf off
       | None -> ())
 
-let build_plain_decode ~layout make fwd wire_size_info min_size pass =
+let build_plain_decode ~layout ~walk make fwd wire_size_info min_size pass =
   match (wire_size_info, pass) with
   | Fixed _, No_checks -> (
       match staged_words ~size:min_size make fwd with
@@ -1303,12 +1277,14 @@ let build_plain_decode ~layout make fwd wire_size_info min_size pass =
               run_plain_pass pass input_end buf off;
               apply_fwd make fwd checked_runtime input_end buf off
             end)
-  | Variable _, pass ->
-      fun buf off ->
+  | Variable _, pass -> (
+      let general buf off =
         let input_end = Input_end.of_bytes buf in
         variable_frame ~layout wire_size_info min_size input_end buf off;
         if Option.is_none layout then run_plain_pass pass input_end buf off;
         apply_fwd make fwd checked_runtime input_end buf off
+      in
+      match walk with None -> general | Some w -> Codec_walk.decode w general)
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
@@ -1430,17 +1406,35 @@ let build_record_encoder name writers size_of_value ~check =
             name Types.pp_parse_error e));
     !write_off
 
-let build_decoders ~layout make readers checked_readers wire_size_info min_size
-    ~plain ~check =
-  let fwd = to_fwd readers and checked = to_fwd checked_readers in
+(* The decoders of a sealed record, and its walk. *)
+let build_decoders : type r.
+    layout:((Input_end.t -> bytes -> int -> int) * pass * pass) option ->
+    n_params:int ->
+    (r, r) record ->
+    wire_size_info ->
+    int ->
+    check:pass ->
+    (runtime -> Input_end.t -> bytes -> int -> r)
+    * (runtime -> Input_end.t -> bytes -> int -> r)
+    * (bytes -> int -> r) option
+    * (cursor -> r) option =
+ fun ~layout ~n_params (Record r) wire_size_info min_size ~check ->
+  let fwd = to_fwd r.readers and checked = to_fwd r.checked_readers in
   let read runtime input_end buf off =
-    apply_fwd make checked runtime input_end buf off
+    apply_fwd r.make checked runtime input_end buf off
+  in
+  let walk =
+    Codec_walk.record ~n_params ~min_size ~prefix:r.prefix ~where:r.where r.make
+      r.walk
   in
   ( build_checked_decode read wire_size_info min_size,
     read,
-    if plain then
-      Some (build_plain_decode ~layout make fwd wire_size_info min_size check)
-    else None )
+    (if n_params = 0 then
+       Some
+         (build_plain_decode ~layout ~walk r.make fwd wire_size_info min_size
+            check)
+     else None),
+    walk )
 
 (* The check pass [decode] runs between the frame and the reads. *)
 (* [validate] of a codec without parameters: the frame, then [check]. *)
@@ -1828,7 +1822,7 @@ let encode_paths puts =
     [ "encode.blit" ]
   else []
 
-let selected_paths wire_size_info n_params layout check puts =
+let selected_paths wire_size_info n_params layout ~walk check puts =
   if n_params > 0 then []
   else
     (match (wire_size_info, layout) with
@@ -1837,6 +1831,9 @@ let selected_paths wire_size_info n_params layout check puts =
           ("decode.layout" :: pass_paths "layout" fast)
           @ pass_paths "pass" check
       | Variable _, None -> "decode.variable" :: pass_paths "pass" check)
+    @ (match (wire_size_info, walk) with
+      | Variable _, Some _ -> [ "decode.walk" ]
+      | _ -> [])
     @
     match (wire_size_info, puts) with
     | Fixed _, Some puts -> encode_paths (List.rev puts)
@@ -1889,7 +1886,7 @@ let seal : type r.
     param_handles:Param.packed list ->
     (r, r) record ->
     r compiled =
- fun ~struct_fields ~param_handles (Record r) ->
+ fun ~struct_fields ~param_handles (Record r as record) ->
   let min_size = r.min_wire_size in
   let n_params = List.length param_handles in
   let items, wire_size_info =
@@ -1922,9 +1919,8 @@ let seal : type r.
       ~steps ~needs_arr (fun steps needs_arr ->
         plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where)
   in
-  let decode, read, plain_decode =
-    build_decoders ~layout r.make r.readers r.checked_readers wire_size_info
-      min_size ~plain:(n_params = 0) ~check
+  let decode, read, plain_decode, walk =
+    build_decoders ~layout ~n_params record wire_size_info min_size ~check
   in
   let validate_ctx, check_end, validate_sized =
     nested_checks ~n_params ~layout wire_size_info min_size check
@@ -1939,6 +1935,7 @@ let seal : type r.
     decode;
     read;
     plain_decode;
+    walk;
     encode =
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
@@ -1961,5 +1958,5 @@ let seal : type r.
     has_checks;
     decode_scratch = scratch;
     param_base;
-    paths = selected_paths wire_size_info n_params layout check r.puts_rev;
+    paths = selected_paths wire_size_info n_params layout ~walk check r.puts_rev;
   }

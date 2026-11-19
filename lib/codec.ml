@@ -529,6 +529,8 @@ let embed_validate_sized_ctx (t : 'r t) runtime input_end buf off end_off =
 let embed_check_end (t : 'r t) input_end buf off =
   (compiled t).check_end input_end buf off
 
+let embed_walk (t : 'r t) = (compiled t).walk
+
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> `Fixed n
@@ -1705,6 +1707,7 @@ module Testing = struct
       {
         c with
         plain_decode = None;
+        walk = None;
         plain_encode = None;
         fixed_frame = -1;
         plain_validate = (fun buf off -> c.validate buf off);
@@ -1740,7 +1743,7 @@ module Testing = struct
     c.paths @ if t.n_params = 0 then read_paths t c else []
 
   let all_paths : string list =
-    [ "decode.fixed"; "decode.variable"; "decode.layout" ]
+    [ "decode.fixed"; "decode.variable"; "decode.layout"; "decode.walk" ]
     @ List.concat_map
         (fun p ->
           [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ])
