@@ -29,6 +29,10 @@
   either runs the same code by changing one line. A field handle's `f.get`
   reads as directly as `get_<f>` (#492, @samoht)
 
+- Generated OCaml: `Value.<f>_low x`, the carrier of a bitfield's low bits,
+  for a loop whose values are in range by construction and would pay a
+  check in `Value.<f>` (#493, @samoht)
+
 - `Wire_ocaml.ml ~simd:true` on OxCaml for arm64 or amd64 gives a 4-byte
   record whose fields each sit in one byte an `X4` module: four records per
   SIMD register (NEON or SSE), read with one load and written with one store.

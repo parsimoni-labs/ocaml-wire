@@ -220,7 +220,10 @@ let pp_values ppf fields =
             \  val %s : %s -> %s@\n\
             \  val %s_eq : (%s, %s) Type.eq@\n"
             f.label (plain f) f.label (plain f) f.label f.label f.label
-            (plain f))
+            (plain f);
+          match f.store with
+          | Bits _ -> Fmt.pf ppf "  val %s_low : int -> %s@\n" f.label f.label
+          | Int _ | Bytes _ -> ())
         fields;
       Fmt.pf ppf "end = struct@\n";
       List.iter
@@ -240,6 +243,11 @@ let pp_values ppf fields =
                 \    else x@\n"
                 n errors n
           | Int _ -> Fmt.pf ppf "    x@\n");
+          (match f.store with
+          | Bits { width; _ } ->
+              Fmt.pf ppf "@\n  let[@inline] %s_low x = x land %s@\n" f.label
+                (mask width)
+          | Int _ | Bytes _ -> ());
           Fmt.pf ppf "@\n  let %s_eq = Type.Equal@\n@\n" f.label)
         fields;
       Fmt.pf ppf "end@\n@\n"
@@ -433,9 +441,36 @@ let word ~m ~n endian base ps =
   in
   ors (List.map part ps)
 
+(* The int parts of a word of [n] bytes, or'ed in place. *)
+let int_word ~n endian base ps =
+  let part p =
+    let v = match p.value with `Int v -> v | `I32 _ -> assert false in
+    let sh = shift endian ~n base p in
+    if sh = 0 then v else Fmt.str "(%s lsl %d)" v sh
+  in
+  Fmt.str "(%s)" (String.concat " lor " (List.map part ps))
+
+(* One store of the [n]-byte word the parts [ws] make. On OxCaml, whose ints
+   have 63 bits, a 4-byte word of ints is built in an int and converted once;
+   elsewhere an int may hold only 31 bits. *)
+let merged ~ox ~src ppf ~m ~n p ws endian =
+  let endian = Option.value endian ~default:T.Big in
+  let all_int =
+    List.for_all
+      (fun p -> match p.value with `Int _ -> true | `I32 _ -> false)
+      ws
+  in
+  let w =
+    if ox && n = 4 && all_int then
+      Fmt.str "(Int32.of_int %s)" (int_word ~n endian p.at ws)
+    else word ~m ~n endian p.at ws
+  in
+  Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
+    (endian_suffix endian) p.at w
+
 (* Adjacent stores merge into one of 8 bytes, or of 4, so a record takes a few
    wide stores instead of one per field. *)
-let stores ~src ppf fields =
+let stores ?(ox = false) ~src ppf fields =
   let e = function Some e -> endian_suffix e | None -> "be" in
   let one p =
     match (p.size, p.value) with
@@ -450,23 +485,17 @@ let stores ~src ppf fields =
         Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u (e p.endian)
           p.at v
   in
-  let merged ~m ~n p ws endian =
-    let endian = Option.value endian ~default:T.Big in
-    Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
-      (endian_suffix endian) p.at
-      (word ~m ~n endian p.at ws)
-  in
   let rec go = function
     | [] -> ()
     | p :: rest as ps -> (
         match take 8 ps with
         | Some (ws, endian, rest) ->
-            merged ~m:"Int64" ~n:8 p ws endian;
+            merged ~ox ~src ppf ~m:"Int64" ~n:8 p ws endian;
             go rest
         | None -> (
             match take 4 ps with
             | Some ((_ :: _ :: _ as ws), endian, rest) ->
-                merged ~m:"Int32" ~n:4 p ws endian;
+                merged ~ox ~src ppf ~m:"Int32" ~n:4 p ws endian;
                 go rest
             | _ ->
                 one p;
@@ -486,7 +515,7 @@ let stores ~src ppf fields =
    [in_range] says holds a value in range skips its range check. With [len],
    the frame is checked against that variable, a length the caller read once,
    rather than against the buffer's. *)
-let pp_stores ?len ~src ppf ~plan ~in_range fields =
+let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
   let bad =
     List.filter_map
       (fun f -> if in_range f then None else out_of_range f)
@@ -516,7 +545,7 @@ let pp_stores ?len ~src ppf ~plan ~in_range fields =
         "  if off < 0 || off > %s - size then too_short buf off@\n\
         \  else begin@\n"
         len);
-  stores ~src ppf fields;
+  stores ?ox ~src ppf fields;
   if has_checks plan then Fmt.pf ppf "    validate_written buf off@\n"
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"
@@ -526,7 +555,9 @@ let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
   pp_first_error ~src ppf ~target fields;
   Fmt.pf ppf "let[@@inline]%s write_int %s off %a =@\n" (zero_alloc target)
     src.buf pp_vars fields;
-  pp_stores ~src ppf ~plan ~in_range:(fun _ -> false) fields
+  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan
+    ~in_range:(fun _ -> false)
+    fields
 
 (* The int a field's typed value stores. *)
 let plain_value f =
@@ -562,7 +593,8 @@ let pp_write ?(src = bytes_src) ppf ~target ~plan =
   List.iter
     (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value f))
     fields;
-  pp_stores ~src ppf ~plan ~in_range:typed_in_range fields
+  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range:typed_in_range
+    fields
 
 (* [write_at b len off] is [write], and [write_int_at b len off] [write_int],
    into the buffer named ['b], whose length the caller read once: the frame is
@@ -589,12 +621,15 @@ let pp_write_at ?(src = bytes_src) ~ints ppf ~target ~plan =
     (if ints then "write_int_at" else "write_at")
     b src.brand pp_vars fields src.brand src.typ src.brand;
   if ints then
-    pp_stores ~len:"len" ~src ppf ~plan ~in_range:(fun _ -> false) fields
+    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
+      ~in_range:(fun _ -> false)
+      fields
   else begin
     List.iter
       (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value f))
       fields;
-    pp_stores ~len:"len" ~src ppf ~plan ~in_range:typed_in_range fields
+    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
+      ~in_range:typed_in_range fields
   end
 
 (* A module whose code holds a value only an [int] of 63 bits holds refuses to
