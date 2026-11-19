@@ -8,4 +8,6 @@ lib/runtime/prims.ox.mli
 lib/runtime/carrier.ox.mli
 lib/runtime/vec.neon.ml
 lib/runtime/vec.neon.mli
+lib/runtime/vec.sse.ml
+lib/runtime/vec.sse.mli
 test/ocaml-ox/test_modes.ox.ml

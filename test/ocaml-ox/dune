@@ -12,13 +12,15 @@
 (rule
  (copy ../ocaml/test.ml test.ml))
 
-; On arm64 the records that have NEON lanes get them ([--simd]).
+; On arm64 and amd64 the records that have SIMD lanes get them ([--simd]).
 
 (rule
  (enabled_if
   (and
    (= %{ocaml-config:ox} true)
-   (= %{architecture} arm64)))
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
  (targets
   g_ipv4.ml
   g_ipv4_wire.ml
@@ -57,7 +59,9 @@
  (enabled_if
   (and
    (= %{ocaml-config:ox} true)
-   (<> %{architecture} arm64)))
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
  (targets
   g_ipv4.ml
   g_ipv4_wire.ml
@@ -276,15 +280,18 @@
  (action
   (run ./test_modes_main.exe)))
 
-; The NEON lanes of the code for OxCaml on arm64 ([--simd]) against one record
-; at a time. test_simd.ml.ox is OxCaml syntax over arm64 builtins, so only an
-; OxCaml compiler for arm64 builds it; any other runs an empty suite.
+; The SIMD lanes of the code for OxCaml on arm64 and amd64 ([--simd]) against
+; one record at a time. test_simd.ml.ox is OxCaml syntax over NEON or SSE
+; builtins, so only an OxCaml compiler for those builds it; any other runs an
+; empty suite.
 
 (rule
  (enabled_if
   (and
    (= %{ocaml-config:ox} true)
-   (= %{architecture} arm64)))
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
  (action
   (copy test_simd.ml.ox test_simd.ml)))
 
@@ -292,7 +299,9 @@
  (enabled_if
   (or
    (<> %{ocaml-config:ox} true)
-   (<> %{architecture} arm64)))
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
  (action
   (with-stdout-to
    test_simd.ml

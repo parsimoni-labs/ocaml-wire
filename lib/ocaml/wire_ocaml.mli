@@ -101,13 +101,17 @@ val ml :
     map's functions by that path; {!bridge} checks that the field still holds
     that very map.
 
-    With [~simd:true] (default [false]), for the OxCaml target on arm64, a
-    4-byte record whose fields each sit in one byte, unsigned and with no check,
-    enum or map, also gets [X4]: [X4.with_] checks and loads four records into
-    the lanes of a NEON register, [X4.<field>] takes a field out of each lane,
-    and [X4.write_int_at] stores four records at once, raising what four
-    [write_int_at] would. The generated module then needs the runtime's [Vec],
-    which exists on OxCaml for arm64 only.
+    With [~simd:true] (default [false]), for the OxCaml target on arm64 or
+    amd64, a 4-byte record whose fields each sit in one byte, unsigned and with
+    no check, enum or map, also gets [X4], four records in the lanes of a SIMD
+    register. [X4.with_] checks and loads four records, and [X4.<field>] takes a
+    field out of each lane. A write builds an [X4.part] from each field's bits,
+    [X4.<field>_bits] (its low bits) or [X4.<field>_of] (checked), joined with
+    [X4.( ++ )]; since any such bits are a valid record, [X4.store] and
+    [X4.fill] check only that the records fit, and raise what [write_int_at]
+    would for the first that does not. The generated module then needs the
+    runtime's [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE)
+    only.
 
     Raises [Invalid_argument], naming the field and the reason, for a codec it
     cannot specialise: a variable size, parameters, actions, or a map [maps]

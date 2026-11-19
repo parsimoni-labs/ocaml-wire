@@ -158,9 +158,9 @@
    %{target}
    (echo "let enabled = false\n"))))
 
-; [Vec] holds the NEON operations of the code Wire_ocaml generates with
-; [~simd:true]. They are OxCaml builtins on arm64 and exist nowhere else, so
-; the module is empty on other compilers and architectures.
+; [Vec] holds the SIMD operations of the code Wire_ocaml generates with
+; [~simd:true]: OxCaml builtins, NEON on arm64 and SSE on amd64, which exist
+; nowhere else, so the module is empty on other compilers and architectures.
 
 (rule
  (enabled_if
@@ -175,9 +175,22 @@
 
 (rule
  (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (= %{architecture} amd64)))
+ (action
+  (progn
+   (copy vec.sse.ml vec.ml)
+   (copy vec.sse.mli vec.mli)
+   (copy vec_stubs.sse.c vec_stubs.c))))
+
+(rule
+ (enabled_if
   (or
    (<> %{ocaml-config:ox} true)
-   (<> %{architecture} arm64)))
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
  (action
   (progn
    (copy vec.none.ml vec.ml)
