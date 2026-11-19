@@ -20,13 +20,23 @@ let payload_size_of_apid apid =
   else if apid < 1536 then 64
   else 8
 
+(* [n - wrap] whole packets, then one whose data field runs past the end of
+   the buffer: a reader of [n] headers from offset 0 meets that truncated
+   tail, finds no room for a header after it and wraps to the first packet
+   for its last [wrap - 1] headers, so the wrap of every row runs. *)
 let generate_stream n =
+  let wrap = min n (max 1 (n / 64)) in
+  let whole = n - wrap in
   let total = ref 0 in
   let hdr = Wire.Codec.wire_size Space.packet_codec in
-  for i = 0 to n - 1 do
+  for i = 0 to whole - 1 do
     let apid = apid_of_index i in
     total := !total + hdr + payload_size_of_apid apid
   done;
+  let tail =
+    if n > 0 then payload_size_of_apid (apid_of_index whole) / 2 else 0
+  in
+  if n > 0 then total := !total + hdr + tail;
   let buf = Bytes.create !total in
   let off = ref 0 in
   let payload_total = ref 0 in
@@ -37,7 +47,7 @@ let generate_stream n =
   let set_dlen =
     Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
   in
-  for i = 0 to n - 1 do
+  for i = 0 to min n (whole + 1) - 1 do
     let apid = apid_of_index i in
     let plen = payload_size_of_apid apid in
     let o = !off in
@@ -45,7 +55,7 @@ let generate_stream n =
     set_seq buf o (i mod 16384);
     set_dlen buf o (Wire.UInt16.v (plen - 1));
     off := o + hdr + plen;
-    payload_total := !payload_total + plen
+    payload_total := !payload_total + if i < whole then plen else tail
   done;
   (buf, !total, !payload_total)
 

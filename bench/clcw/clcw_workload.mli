@@ -8,7 +8,9 @@ val word_size : int
 
 val generate_stream : int -> bytes
 (** [generate_stream n] is [n] CLCW words back to back, their report values
-    counting up modulo 256. *)
+    counting up modulo 256, with anomalies: wait set on every 61st word,
+    retransmit on every 97th, lockout on every 211th, and a report value that
+    skips one on every 127th. *)
 
 type state
 (** The words, a cursor over them and the anomaly count. *)

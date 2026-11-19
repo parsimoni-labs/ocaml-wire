@@ -3,9 +3,11 @@
     The OCaml rows of [bench/routing] and [bench/apps] run it. *)
 
 val generate_stream : int -> bytes * int * int
-(** [generate_stream n] is [(buf, total, payload)]: [n] space packets of
-    variable size back to back in [buf], [total] bytes in all, [payload] of them
-    in packet data fields. *)
+(** [generate_stream n] is [(buf, total, payload)]: space packets of variable
+    size back to back in [buf], [total] bytes in all, [payload] of them in
+    packet data fields. The last packet is truncated, its data field running
+    past the end of [buf], and comes after [n - max 1 (n / 64)] whole ones, so
+    that reading [n] headers from offset 0 wraps once. *)
 
 val hdr : int
 (** [hdr] is the size of a space packet primary header. *)

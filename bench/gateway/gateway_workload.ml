@@ -14,11 +14,15 @@ let cf_tf_first_hdr = Space.bf_tf_first_hdr
 let cf_sp_apid = Space.bf_sp_apid
 let cf_sp_seq_count = Space.bf_sp_seq_count
 let cf_sp_data_len = Space.bf_sp_data_len
-let checksum_init = Int64.of_string "0xcbf29ce484222325"
-let checksum_prime = 0x100000001B3L
 
-let hash_int state v =
-  Int64.mul (Int64.logxor state (Int64.of_int v)) checksum_prime
+(* FNV-1a in OCaml's 63-bit [int]: the 64-bit offset basis and prime taken
+   modulo 2^63, each product wrapping modulo 2^63 as [int] arithmetic does.
+   The Rust and C rows compute the same hash in a 64-bit word, masked to its
+   low 63 bits after each product. *)
+let checksum_init = 0x4bf29ce484222325
+let checksum_prime = 0x100000001B3
+let hash_int state v = state lxor v * checksum_prime
+let idle_fhp = 0x7FE
 
 let generate_frames n =
   let buf = Bytes.create (n * cadu_size) in
@@ -39,19 +43,29 @@ let generate_frames n =
     let base = frame * cadu_size in
     Wire.Codec.encode Space.tm_frame_codec Space.tm_frame_default buf base;
     set_vcid buf base (frame mod 8);
-    set_fhp buf base !carry;
-    let data_off = ref (base + hdr + !carry) in
-    while !data_off + pkt_size <= base + cadu_size do
-      let o = !data_off in
-      set_apid buf o (!total_pkts mod 2048);
-      set_seq buf o (!total_pkts mod 16384);
-      set_dlen buf o (Wire.UInt16.v (pkt_payload - 1));
-      data_off := o + pkt_size;
-      incr total_pkts
-    done;
-    let used = !data_off - (base + hdr) in
-    let trailing = data_field_size - used in
-    carry := if trailing = 0 then 0 else pkt_size - trailing
+    if frame mod 64 = 63 then begin
+      (* An idle frame: its first header pointer, 0x7FE, says that no packet
+         starts in it, so a reader walks no packet there. The packet spanning
+         into it is lost, and the next frame starts a packet at its first
+         byte. *)
+      set_fhp buf base idle_fhp;
+      carry := 0
+    end
+    else begin
+      set_fhp buf base !carry;
+      let data_off = ref (base + hdr + !carry) in
+      while !data_off + pkt_size <= base + cadu_size do
+        let o = !data_off in
+        set_apid buf o (!total_pkts mod 2048);
+        set_seq buf o (!total_pkts mod 16384);
+        set_dlen buf o (Wire.UInt16.v (pkt_payload - 1));
+        data_off := o + pkt_size;
+        incr total_pkts
+      done;
+      let used = !data_off - (base + hdr) in
+      let trailing = data_field_size - used in
+      carry := if trailing = 0 then 0 else pkt_size - trailing
+    end
   done;
   (buf, !total_pkts)
 
