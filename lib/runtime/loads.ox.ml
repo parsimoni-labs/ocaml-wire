@@ -317,25 +317,3 @@ module Local = struct
       done
   end
 end
-
-(* The runtime as the code for OxCaml sees it: every module of it is
-   [portable] on OxCaml, so this only gathers them. *)
-module Portable = struct
-  module Vec = Vec
-  module Errors = Errors
-  module Arith = Arith
-  module UInt8 = UInt8
-  module UInt16 = UInt16
-  module SInt8 = SInt8
-  module SInt16 = SInt16
-  module UInt32 = UInt32
-  module SInt32 = SInt32
-  module Unchecked = Unchecked
-
-  module Target = struct
-    module Local = Local
-  end
-
-  module Buf = Buf
-  module Staged = Staged
-end
