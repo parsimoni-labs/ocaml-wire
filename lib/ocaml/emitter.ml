@@ -389,26 +389,38 @@ let words ~size fields =
 (* A 16-bit field read through the 32-bit load that ends or starts on it, when
    that load stays in a prefix of [size] bytes: one load and one byte swap,
    with none of the 16-bit sign and zero extensions a 16-bit swap costs. Only
-   OxCaml, whose [int] has 63 bits, reads so. The high half of a [raw] read is
-   shifted on the [int], where the caller's mask makes the [int32]'s sign
-   irrelevant, so the word needs no zero extension first; otherwise the shift
-   is on the [int32], which zero-extends and needs no mask. *)
+   OxCaml reads so, into an [int] of 63 bits or an [int64_u]. The high half of
+   a [raw] [int] read is shifted on the [int], where the caller's mask makes
+   the [int32]'s sign irrelevant, so the word needs no zero extension first;
+   otherwise the shift is on the [int32], which zero-extends and needs no
+   mask. *)
 let u16_in_word m ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
-  let mask v = if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v in
-  let low i = Fmt.kstr mask "%s.to_int %s" i32 i
-  and high i =
-    if raw then Fmt.str "(%s.to_int %s lsr 16)" i32 i
-    else
-      Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)" i32 i32 i
+  let low, high =
+    match m.num with
+    | Tagged ->
+        let mask v =
+          if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v
+        in
+        ( (fun i -> Fmt.kstr mask "%s.to_int %s" i32 i),
+          fun i ->
+            if raw then Fmt.str "(%s.to_int %s lsr 16)" i32 i
+            else
+              Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)"
+                i32 i32 i )
+    | Unboxed ->
+        let mask v = if raw then v else Fmt.str "(U.logand %s #0xffffL)" v in
+        ( (fun i -> Fmt.kstr mask "(U.of_int32_u %s)" i),
+          fun i ->
+            Fmt.kstr mask "(U.shift_right_logical (U.of_int32_u %s) 16)" i )
   in
   let at k = load m ~o ~k ~bytes:4 ~endian in
-  match (m.ox, m.num, size, endian) with
-  | false, _, _, _ | _, Unboxed, _, _ | _, _, None, _ -> None
-  | _, _, Some _, T.Big when k >= 2 -> Some (low (at (k - 2)))
-  | _, _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
-  | _, _, Some size, T.Little when k + 4 <= size -> Some (low (at k))
-  | _, _, Some _, T.Little when k >= 2 -> Some (high (at (k - 2)))
+  match (m.ox || m.num = Unboxed, size, endian) with
+  | false, _, _ | _, None, _ -> None
+  | _, Some _, T.Big when k >= 2 -> Some (low (at (k - 2)))
+  | _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
+  | _, Some size, T.Little when k + 4 <= size -> Some (low (at k))
+  | _, Some _, T.Little when k >= 2 -> Some (high (at (k - 2)))
   | _ -> None
 
 (* An unsigned value of [bytes] bytes at [k] from [o], from a word when one
@@ -448,6 +460,10 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   | Unboxed, _ when bytes = 4 ->
       Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
         (load m ~o ~k ~bytes ~endian)
+  | Unboxed, _ when bytes = 2 -> (
+      match u16_in_word m ~size ~raw ~o ~k ~endian with
+      | Some v -> v
+      | None -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian))
   | Unboxed, _ -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
 
 (* A field's plain value, at [k] from [o]: from the variable [bitword] of a
