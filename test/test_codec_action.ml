@@ -60,7 +60,7 @@ let test_action_validate_does_not_writeback () =
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  Codec.validate ~env codec buf 0;
+  Codec.validate_exn ~env codec buf 0;
   Alcotest.(check int)
     "action output not written back by validate" 0
     (UInt8.to_int (Param.get env action_out2))
@@ -477,8 +477,8 @@ let test_validate_constraint_only () =
   let codec = Codec.v "ConstOnly" (fun v -> v) [ cf_x ] in
   let good = Bytes.of_string "\x05" in
   let bad = Bytes.of_string "\x0B" in
-  Codec.validate codec good 0;
-  match Codec.validate codec bad 0 with
+  Codec.validate_exn codec good 0;
+  match Codec.validate_exn codec bad 0 with
   | () -> Alcotest.fail "expected constraint failure"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
@@ -494,8 +494,8 @@ let test_validate_where_only () =
   in
   let good = Bytes.of_string "\x2A" in
   let bad = Bytes.of_string "\x00" in
-  Codec.validate codec good 0;
-  match Codec.validate codec bad 0 with
+  Codec.validate_exn codec good 0;
+  match Codec.validate_exn codec bad 0 with
   | () -> Alcotest.fail "expected where failure"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
@@ -567,25 +567,25 @@ let sized_entries name c =
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
     [
       ( "plain",
-        (fun () -> Codec.validate c input 0),
+        (fun () -> Codec.validate_exn c input 0),
         fun () -> Codec.decode_exn c input 0 );
       ( "env",
-        (fun () -> Codec.validate ~env:(Codec.env c) c input 0),
+        (fun () -> Codec.validate_exn ~env:(Codec.env c) c input 0),
         fun () -> Codec.decode_exn ~env:(Codec.env c) c input 0 );
       ( "shifted",
-        (fun () -> Codec.validate c shifted 2),
+        (fun () -> Codec.validate_exn c shifted 2),
         fun () -> Codec.decode_exn c shifted 2 );
       ( "field",
-        (fun () -> Codec.validate frame input 0),
+        (fun () -> Codec.validate_exn frame input 0),
         fun () -> Codec.decode_exn frame input 0 );
       ( "field, env",
-        (fun () -> Codec.validate ~env:(Codec.env frame) frame input 0),
+        (fun () -> Codec.validate_exn ~env:(Codec.env frame) frame input 0),
         fun () -> Codec.decode_exn ~env:(Codec.env frame) frame input 0 );
       ( "region",
-        (fun () -> Codec.validate fixed input 0),
+        (fun () -> Codec.validate_exn fixed input 0),
         fun () -> Codec.decode_exn fixed input 0 );
       ( "param region",
-        (fun () -> Codec.validate ~env:(slot ()) sized input 0),
+        (fun () -> Codec.validate_exn ~env:(slot ()) sized input 0),
         fun () -> Codec.decode_exn ~env:(slot ()) sized input 0 );
     ]
 

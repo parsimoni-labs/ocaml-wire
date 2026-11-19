@@ -100,7 +100,7 @@ let reads_at label c case refs buf off =
          quoted (Bytes.sub_string out 0 case.size)));
   same label (what "validate")
     (outcome (fun () ->
-         Wire.Codec.validate c buf off;
+         Wire.Codec.validate_exn c buf off;
          ""))
     (got case (rust case ~op:op_validate buf off out) (fun () -> ""));
   Array.iteri
@@ -158,7 +158,7 @@ let valid label c case refs buf off =
       same label
         (Fmt.str "Valid::at offset %d then read %s" off f.name)
         (outcome (fun () ->
-             Wire.Codec.validate c buf off;
+             Wire.Codec.validate_exn c buf off;
              refs.(i) buf off))
         (got case (rust case ~op:op_valid ~field:i buf off out) (fun () ->
              value case i out)))

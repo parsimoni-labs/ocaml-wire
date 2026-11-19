@@ -14,13 +14,13 @@ let checked () =
     [ 0x45; 0; 20; 64; 6 ];
   parse_error "checked: version" ~field:[ "Version" ] ~at:0
     (Constraint_failed { which = Field; value = Some 5L })
-    (fun () -> S_checked.validate (bytes_of [ 0x55; 0; 20; 64; 6 ]) 0);
+    (fun () -> S_checked.validate_exn (bytes_of [ 0x55; 0; 20; 64; 6 ]) 0);
   parse_error "checked: proto" ~field:[ "Proto" ] ~at:4
     (Invalid_enum { value = 7; valid = [ 1; 6; 17 ] })
-    (fun () -> S_checked.validate (bytes_of [ 0x45; 0; 20; 64; 7 ]) 0);
+    (fun () -> S_checked.validate_exn (bytes_of [ 0x45; 0; 20; 64; 7 ]) 0);
   parse_error "checked: where" ~at:0
     (Constraint_failed { which = Where; value = None })
-    (fun () -> S_checked.validate (bytes_of [ 0x45; 0; 3; 64; 6 ]) 0);
+    (fun () -> S_checked.validate_exn (bytes_of [ 0x45; 0; 3; 64; 6 ]) 0);
   let v = S_checked.Valid.v (bytes_of [ 0x45; 0; 20; 64; 17 ]) in
   check "checked: valid read"
     ((S_checked.read_proto v :> int) = 17 && (S_checked.read_ihl v :> int) = 5)
@@ -42,7 +42,7 @@ let signed () =
     [ 0xfe; 0x80; 0 ];
   parse_error "signed: S" ~field:[ "S" ] ~at:0
     (Constraint_failed { which = Field; value = Some (-6L) })
-    (fun () -> S_signed.validate (bytes_of [ 0xfa; 0; 0 ]) 0)
+    (fun () -> S_signed.validate_exn (bytes_of [ 0xfa; 0; 0 ]) 0)
 
 let refined () =
   round_trip "refined" ~size:S_refined.size
@@ -53,7 +53,7 @@ let refined () =
     [ 0x13; 2; 20 ];
   parse_error "refined: Lo at its word" ~field:[ "Lo" ] ~at:0
     (Constraint_failed { which = Field; value = Some 0L })
-    (fun () -> S_refined.validate (bytes_of [ 0x10; 2; 20 ]) 0)
+    (fun () -> S_refined.validate_exn (bytes_of [ 0x10; 2; 20 ]) 0)
 
 let run () =
   checked ();

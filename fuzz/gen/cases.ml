@@ -381,7 +381,7 @@ let streaming_cases label g =
     in
     [ pos_case ]
 
-(* Exercises {!Wire.Codec.validate}: validation-only path that should
+(* Exercises {!Wire.Codec.validate_exn}: validation-only path that should
    accept positives and reject (without crashing) random/adversarial.
    When the codec references [Param.input], positives pull the env from
    [g.env.positive] and the safety streams fuzz the env. *)

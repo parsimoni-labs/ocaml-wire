@@ -17,6 +17,10 @@
   the raising one is `decode_exn`. Rename calls to `decode_exn` to keep
   raising (#492, @samoht)
 
+- `Wire.Codec.validate` and a generated module's `validate` return a
+  `result`; the raising ones are `validate_exn`. Rename calls to
+  `validate_exn` to keep raising (#492, @samoht)
+
 ### Added
 
 - `Wire.S`, the signature a codec of fixed-size records gives, and

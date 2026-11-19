@@ -95,7 +95,7 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     \          let out = Bytes.create M.size in@\n\
     \          M.encode (%s.decode_exn (%s) o) out 0;@\n\
     \          Bytes.to_string out);@\n\
-    \      validate = (fun b o -> %s.validate (%s) o);@\n\
+    \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
     \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\

@@ -1484,17 +1484,17 @@ let test_of_string_truncated_variable_codec () =
             (String.length s))
     [ ""; "\x05"; "\xff\x00" ]
 
-(* [Codec.validate] on a buffer too short to hold the fields a check reads must
+(* [Codec.validate_exn] on a buffer too short to hold the fields a check reads must
    fail cleanly, not crash. A check (here a [where]) reads a field at an offset
    that depends on a length; [decode] bounds-checks before validating, but
-   [Codec.validate] runs the check kernel directly. *)
+   [Codec.validate_exn] runs the check kernel directly. *)
 let test_validate_short_buffer_no_crash () =
   let len = Field.v "Len" (where Expr.true_ uint8) in
   let data = Field.v "Data" (byte_array ~size:(Field.ref len)) in
   let c =
     Codec.v "VShort" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ]
   in
-  match Codec.validate c (Bytes.create 0) 0 with
+  match Codec.validate_exn c (Bytes.create 0) 0 with
   | () -> Alcotest.fail "validate accepted an empty buffer"
   | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
@@ -1509,7 +1509,7 @@ let test_validate_rejects_all_zeros_failure () =
   | Ok _ -> Alcotest.fail "decode accepted a non-zero all_zeros byte"
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed on non-zero all_zeros: %s" m);
-  match Codec.validate c bad 0 with
+  match Codec.validate_exn c bad 0 with
   | () -> Alcotest.fail "validate accepted a non-zero all_zeros byte"
   | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
@@ -1527,7 +1527,7 @@ let test_validate_rejects_negative_byte_slice () =
   | Ok _ -> Alcotest.fail "decode accepted a negative byte_slice size"
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed on a negative byte_slice size: %s" m);
-  match Codec.validate c bad 0 with
+  match Codec.validate_exn c bad 0 with
   | () -> Alcotest.fail "validate accepted a negative byte_slice size"
   | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->
@@ -1539,7 +1539,7 @@ let check_decode_and_validate_reject label c bad =
   | Ok _ -> Alcotest.failf "decode accepted %s" label
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed on %s: %s" label m);
-  match Codec.validate c bad 0 with
+  match Codec.validate_exn c bad 0 with
   | () -> Alcotest.failf "validate accepted %s" label
   | exception Wire.Parse_error _ -> ()
   | exception Invalid_argument m ->

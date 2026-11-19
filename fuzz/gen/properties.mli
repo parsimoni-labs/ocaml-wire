@@ -25,8 +25,8 @@ val check_positive : string -> 'a t -> 'a * bytes -> unit
 
 val validate_one :
   ?env:Wire.Param.env -> 'a t -> bytes -> [> `Crash | `Ok | `Reject ]
-(** [validate_one ?env g bs] is the verdict of {!Wire.Codec.validate} on [bs].
-*)
+(** [validate_one ?env g bs] is the verdict of {!Wire.Codec.validate_exn} on
+    [bs]. *)
 
 val check_validate_positive : string -> 'a t -> bytes -> unit
 (** [check_validate_positive label g bs] requires validate to accept [bs]. *)

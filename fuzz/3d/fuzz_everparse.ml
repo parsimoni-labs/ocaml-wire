@@ -408,7 +408,7 @@ let record_spans codec env b =
   | Error _ -> false
   | Ok _ -> (
       match
-        Wire.Codec.validate ?env codec b 0;
+        Wire.Codec.validate_exn ?env codec b 0;
         Wire.Codec.wire_size_at ?env codec b 0
       with
       | n -> Int.equal n (Bytes.length b)

@@ -47,7 +47,7 @@ let rec nul_scan buf ~at ~limit i =
 let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
 
 (* The refinement of a [byte_array_where] lives in its reader: every compiled
-   path that yields the span runs it, so [Codec.decode] and [Codec.validate]
+   path that yields the span runs it, so [Codec.decode] and [Codec.validate_exn]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
    built from the same schema. *)
 let refined_span_check ~elt_var ~cond buf ~first ~len =

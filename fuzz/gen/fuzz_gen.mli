@@ -120,8 +120,8 @@ val nested_cases : string -> int -> Alcobar.test_case list
     when combinators nest. *)
 
 val validate_agrees_cases : string -> int -> Alcobar.test_case list
-(** [validate_agrees_cases label depth] asserts {!Wire.Codec.validate} raises
-    exactly when {!Wire.Codec.decode} returns [Error], with the same
+(** [validate_agrees_cases label depth] asserts {!Wire.Codec.validate_exn}
+    raises exactly when {!Wire.Codec.decode} returns [Error], with the same
     [error_kind], over an arbitrary nested codec per sample (cf.
     {!nested_cases}). The gate a caller runs on untrusted input and the decoder
     it is standing in for must not disagree about which bytes are valid, and a
@@ -172,9 +172,10 @@ val streaming_cases : string -> 'a t -> Alcobar.test_case list
     {!direct_cases}. *)
 
 val validate_cases : string -> 'a t -> Alcobar.test_case list
-(** [validate_cases label g] exercises {!Wire.Codec.validate}: positives must
-    pass; random and adversarial inputs may pass or fail but must not crash.
-    Threads the env via {!Wire.Codec.validate}'s [?env] when [g] needs one. *)
+(** [validate_cases label g] exercises {!Wire.Codec.validate_exn}: positives
+    must pass; random and adversarial inputs may pass or fail but must not
+    crash. Threads the env via {!Wire.Codec.validate_exn}'s [?env] when [g]
+    needs one. *)
 
 (** A gen with its value type hidden, for uniform iteration over {!registry}. *)
 type packed = Pack : 'a t -> packed
@@ -209,7 +210,7 @@ val flat_records : seed:int -> count:int -> (string * packed) list
 val binds_env : packed -> bool
 (** [binds_env p] is [true] when [p]'s codec references a [Param.input] /
     [Param.output] and so needs a [Param.env] threaded into
-    {!Wire.Codec.validate}. Consumers that cannot supply an env (e.g. a C
+    {!Wire.Codec.validate_exn}. Consumers that cannot supply an env (e.g. a C
     validator called with no parameters) use this to skip such codecs. *)
 
 val registry : (string * packed) list

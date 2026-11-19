@@ -768,7 +768,7 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
 
     [decode] must be total over the wire values [t] and its constraints admit.
-    {!Codec.validate} and {!Codec.valid} do not call it, so a [decode] that
+    {!Codec.validate_exn} and {!Codec.valid} do not call it, so a [decode] that
     raises on such a value makes {!Codec.decode} raise on a buffer they accept.
     For a table indexed by the wire value use {!lookup}, whose bound they check.
 *)
@@ -1065,8 +1065,8 @@ type parse_error = Wire_runtime.Errors.parse_error = {
 
 exception Parse_error of parse_error
 (** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
-    {!of_reader_exn}), by {!Codec.decode_exn}, and by {!Codec.validate} on parse
-    or constraint failure. *)
+    {!of_reader_exn}), by {!Codec.decode_exn}, and by {!Codec.validate_exn} on
+    parse or constraint failure. *)
 
 val pp_parse_error : Format.formatter -> parse_error -> unit
 (** Pretty-printer for decode errors, including the offset and field path. *)
@@ -1362,12 +1362,17 @@ module Codec : sig
   (** String counterpart of {!to_bytes}. The result is backed by the fresh
       encoding buffer; no mutable alias to that buffer escapes. *)
 
-  val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
-  (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
-      without constructing a record. Field [~action]s do fire, so a rejecting
-      action fails validation, but assigned output parameters are not written
-      back to [?env]. [?env] supplies bindings for any {!val:Param.input}
-      referenced in those clauses.
+  val validate :
+    ?env:Param.env -> 'r t -> bytes -> int -> (unit, parse_error) result
+  (** [validate ?env c buf off] is {!validate_exn}, answering the record's error
+      as a value. *)
+
+  val validate_exn : ?env:Param.env -> 'r t -> bytes -> int -> unit
+  (** [validate_exn ?env c buf off] checks field [~constraint_] and [~where]
+      clauses without constructing a record. Field [~action]s do fire, so a
+      rejecting action fails validation, but assigned output parameters are not
+      written back to [?env]. [?env] supplies bindings for any
+      {!val:Param.input} referenced in those clauses.
 
       Raises [Invalid_argument] when [off] is negative or when [?env] belongs to
       another codec or leaves an input parameter unbound, and

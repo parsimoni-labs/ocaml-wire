@@ -20,9 +20,12 @@ module type S = sig
   (** [encode r buf off] writes [r] at [off]. Raises [Invalid_argument] where
       the codec does. *)
 
-  val validate : bytes -> int -> unit
-  (** [validate buf off] checks the record at [off]. Raises
-      {!Errors.Parse_error} with the codec's error. *)
+  val validate : bytes -> int -> (unit, Errors.parse_error) result
+  (** [validate buf off] checks the record at [off], answering the codec's error
+      as a value. *)
+
+  val validate_exn : bytes -> int -> unit
+  (** [validate_exn] is {!validate}, raising {!Errors.Parse_error}. *)
 
   val is_valid : bytes -> int -> bool
   (** [is_valid buf off] is [true] exactly when {!validate} accepts. *)
