@@ -20,37 +20,8 @@
    ocaml_index.ml
    (run %{dep:../../../test/diff/gen_ocaml.exe}))))
 
-; Dune's dev profile compiles libraries -opaque, which hides from the
-; zero_alloc checker what a function of another library allocates, so every
-; call out of the module looks like it may. The checks run in any other
-; profile (make test-oxcaml uses release) and are off in dev, where they
-; cannot pass.
-
-(rule
- (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (= %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "(-zero-alloc-check none)"))))
-
-(rule
- (enabled_if
-  (or
-   (<> %{ocaml-config:ox} true)
-   (<> %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "()"))))
-
 (library
  (name ocaml_index_ox)
- (ocamlopt_flags
-  (:standard
-   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules ocaml_index)
  (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
