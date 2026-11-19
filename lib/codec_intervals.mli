@@ -18,3 +18,13 @@ val flatten_intervals :
   int array * string array
 (** [flatten_intervals tests] is the flat array and the byte tables of the tests
     [tests], each a field and the intervals its value must lie in. *)
+
+val staged :
+  size:int ->
+  (Codec_repr.packed_scalar * (int * int) array) array ->
+  (bytes -> int -> bool) option
+(** [staged ~size tests] is [Some f] when the record of [size] bytes, at least
+    8, can run [tests] as reads of its 8-byte words: [f buf off] holds when the
+    record at [off] passes every test, read with no bounds check, the frame
+    being checked. [None] when a test is not one interval of a big-endian field
+    or bitfield, or past 8 tests. *)

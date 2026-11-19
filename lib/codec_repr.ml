@@ -987,6 +987,7 @@ type pass =
       flat : int array;
       tables : string array;
       intervals : interval array;
+      words : (bytes -> int -> bool) option;
     }
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names

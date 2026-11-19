@@ -1177,7 +1177,9 @@ let first_failed intervals input_end buf off =
 let run_plain_pass ?(runtime = no_runtime) pass input_end buf off =
   match pass with
   | No_checks -> ()
-  | Intervals { flat; tables; intervals } ->
+  | Intervals { words = Some f; intervals; _ } ->
+      if not (f buf off) then first_failed intervals input_end buf off
+  | Intervals { flat; tables; intervals; words = None } ->
       if scan_intervals flat tables buf off (Array.length flat) 0 >= 0 then
         first_failed intervals input_end buf off
   | Steps { steps; where; scratch; clear } ->
@@ -1206,7 +1208,7 @@ let plain_steps ?(laid = false) ~where steps =
   in
   (steps, Option.is_some where || Array.exists step_uses_arr steps)
 
-let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
+let plain_pass ~size ~has_checks ~needs_arr ~scratch ~clear steps where =
   let interval = function
     | Range { scalar; set; fail; name; voff; store = false; _ } ->
         Some (Interval { scalar; set; fail; name; voff })
@@ -1216,13 +1218,14 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   if not has_checks then No_checks
   else if Option.is_none where && Array.for_all Option.is_some intervals then
     let intervals = Array.map Option.get intervals in
-    let flat, tables =
-      flatten_intervals
-        (Array.map
-           (fun (Interval { scalar; set; _ }) -> (Ps scalar, set))
-           intervals)
+    let tests =
+      Array.map
+        (fun (Interval { scalar; set; _ }) -> (Ps scalar, set))
+        intervals
     in
-    Intervals { flat; tables; intervals }
+    let flat, tables = flatten_intervals tests in
+    Intervals
+      { flat; tables; intervals; words = Codec_intervals.staged ~size tests }
   else
     Steps
       {
@@ -1812,6 +1815,7 @@ let pass_paths prefix = function
   | No_checks -> [ prefix ^ ".none" ]
   | Steps _ -> [ prefix ^ ".steps" ]
   | Intervals { flat = [||]; _ } -> [ prefix ^ ".none" ]
+  | Intervals { words = Some _; _ } -> [ prefix ^ ".words" ]
   | Intervals { flat; tables; _ } ->
       let rec plain i =
         i < Array.length flat
@@ -1929,7 +1933,8 @@ let seal : type r.
   let check, layout =
     plain_passes ~wire_size_info ~n_params ~min_size items ~where:compiled_where
       ~steps ~needs_arr (fun steps needs_arr ->
-        plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where)
+        plain_pass ~size:min_size ~has_checks ~needs_arr ~scratch ~clear steps
+          compiled_where)
   in
   let decode, read, plain_decode, walk =
     build_decoders ~layout ~n_params record wire_size_info min_size ~check

@@ -16,6 +16,14 @@ type (_, _) words =
       word * ('a, int) Type.eq * ('rest, 'result) words
       -> ('a -> 'rest, 'result) words
 
+val load : bytes -> int -> int -> int64
+(** [load buf base q] is the big-endian 8-byte word at [base + q] of [buf], read
+    with no bounds check outside the [paranoid] profile. *)
+
+val bits : int64 -> int -> int -> int -> int
+(** [bits w l r m] is [w] shifted left by [l], then right by [r] keeping its
+    sign, then masked by [m]. *)
+
 val bit_width : int -> int
 (** [bit_width m] is the number of bits of the mask [m], a run of low ones. *)
 

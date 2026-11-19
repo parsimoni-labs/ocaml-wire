@@ -755,6 +755,7 @@ let validate_fixed min_size pass buf off =
   else
     match pass with
     | No_checks -> ()
+    | Intervals { words = Some f; _ } when f buf off -> ()
     | _ -> run_plain_pass pass input_end buf off
 
 let validate_exn ?env:e (t : _ t) buf off =
@@ -1746,7 +1747,9 @@ module Testing = struct
     [ "decode.fixed"; "decode.variable"; "decode.layout"; "decode.walk" ]
     @ List.concat_map
         (fun p ->
-          [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ])
+          [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ]
+          (* The tests read words where an int holds one. *)
+          @ if Sys.int_size >= 63 then [ p ^ ".words" ] else [])
         [ "pass"; "layout" ]
     @ List.init 4 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
     @ ([ "encode.staged.rows"; "encode.plain"; "encode.blit"; "read.scalar" ]

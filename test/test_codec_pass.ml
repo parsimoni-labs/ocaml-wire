@@ -919,9 +919,11 @@ let test_fixed_spans_keep_intervals () =
                 ]
           in
           let name = Fmt.str "%s %s 5" base_name op in
+          let paths = Private.Testing.paths c in
           Alcotest.(check bool)
-            (name ^ ": interval scan") true
-            (List.mem "pass.interval" (Private.Testing.paths c));
+            (name ^ ": interval tests")
+            true
+            (List.mem "pass.interval" paths || List.mem "pass.words" paths);
           let general = Private.Testing.general c in
           let size = if base = U8 then 19 else 20 in
           List.iter
