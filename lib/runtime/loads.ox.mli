@@ -105,6 +105,7 @@ end
     calls, each [portable] in its interface. The code binds [Wire_runtime] to
     this module. *)
 module Portable : sig
+  module Vec = Vec
   module Errors = Errors
   module Arith = Arith
   module UInt8 = UInt8
