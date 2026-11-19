@@ -72,6 +72,18 @@ type mode = {
 
 type pos = { var : string option; at : int }
 
+type cuts = {
+  prefix : string;
+  defs : Buffer.t;
+  taken : (string, unit) Hashtbl.t;
+  poly : string;
+  reserve : int;
+}
+
+(* The text written so far in the current function, on all its paths: what
+   merlint measures its length and its complexity by. *)
+type fn = { mutable chars : int; mutable decisions : int }
+
 type w = {
   m : mode;
   ppf : Format.formatter;
@@ -88,9 +100,48 @@ type w = {
       (* The code after the current walk is short and holds no optional
          field, so a dispatch may copy it into its branches. *)
   copies : int; (* How many copies of that code the path already makes. *)
+  cuts : cuts option;
+  fn : fn;
+  depth : int; (* The conditions open around the position in its function. *)
+  scope : (string * string option) list;
+  settled : (string * bool) list;
+      (* The outputs known here to be present, or absent. *)
+  pinned : bool;
+  section : string; (* The case being written, which names its functions. *)
 }
 
-let pf w fmt = Fmt.pf w.ppf fmt
+let is_ident_char = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+  | _ -> false
+
+(* The branches the code [s] opens, as merlint counts them: each [if], each
+   [&&] and [||], each handler of an exception. *)
+let decisions s =
+  let n = String.length s in
+  let word i k =
+    i + String.length k <= n
+    && String.sub s i (String.length k) = k
+    && (i = 0 || not (is_ident_char s.[i - 1]))
+    && (i + String.length k = n || not (is_ident_char s.[i + String.length k]))
+  in
+  let rec go i acc =
+    if i >= n then acc
+    else if word i "if" || word i "exception" then go (i + 2) (acc + 1)
+    else if
+      i + 1 < n
+      && ((s.[i] = '&' && s.[i + 1] = '&') || (s.[i] = '|' && s.[i + 1] = '|'))
+    then go (i + 2) (acc + 1)
+    else go (i + 1) acc
+  in
+  go 0 0
+
+let pf w fmt =
+  Fmt.kstr
+    (fun s ->
+      w.fn.chars <- w.fn.chars + String.length s;
+      w.fn.decisions <- w.fn.decisions + decisions s;
+      Format.pp_print_string w.ppf s)
+    fmt
 
 (* {2 Slots}
 
@@ -200,8 +251,10 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   match e with
   | T.Int n -> lit num n
   | T.Bool b -> string_of_bool b
-  | T.Ref (T.I, v) ->
-      if is_slot w.m v then slot_read num ~is_bool:false v else v
+  | T.Ref (T.I, v) -> (
+      match List.assoc_opt v w.settled with
+      | Some _ -> lit num 0
+      | None -> if is_slot w.m v then slot_read num ~is_bool:false v else v)
   | T.Add (a, b) -> arith_op T.checked_add "add" "+" a b
   | T.Sub (a, b) -> arith_op T.checked_sub "sub" "-" a b
   | T.Mul (a, b) -> arith_op T.checked_mul "mul" "*" a b
@@ -401,7 +454,7 @@ let pos_expr num p =
   | Some v -> if p.at = 0 then v else binop num "+" v (lit num p.at)
 
 (* A check that runs [fail] when [cond] is false; an overflow in [cond]
-   fails too. *)
+   fails too. The code after it is one condition deeper. *)
 let check w failure (cond : bool T.expr) =
   let ov = ref false in
   let s = expr w ov cond in
@@ -417,7 +470,200 @@ let check w failure (cond : bool T.expr) =
     pf w
       "if not (match %s with b -> b | exception %s.Overflow -> false) then %s \
        else@\n"
-      s arith (w.m.fail failure)
+      s arith (w.m.fail failure);
+  { w with depth = w.depth + 1 }
+
+(* {3 Scope}
+
+   The variables bound so far in the function being written, each with the
+   type a function cut out of it writes for it, when inference needs one. *)
+
+let num_type w = match w.m.num with Unboxed -> Some "int64_u" | Tagged -> None
+let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
+let bind_num w v = bind ?ty:(num_type w) w v
+
+(* The text of the value of [o]: its literal where it is settled. An integer
+   output is only ever settled absent. *)
+let output_text w (o : output) =
+  match List.assoc_opt o.id w.settled with
+  | Some present when o.is_bool -> string_of_bool present
+  | Some _ -> lit w.m.num 0
+  | None -> output_value w.m o
+
+(* {3 Dead bindings}
+
+   A walk binds an offset, an end or a field as it reaches it, before it
+   knows whether a later check, a call or the consumer reads it. Each binding
+   is one line [let x = e in] whose [e] only loads or computes, so a line
+   whose [x] no later line of its function reads is dropped, until none
+   is. *)
+
+let is_variable x =
+  x <> ""
+  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
+  && String.for_all is_ident_char x
+
+(* The variable a line [let x = e in] binds. *)
+let binding line =
+  let is_let =
+    String.starts_with ~prefix:"let " line
+    && String.ends_with ~suffix:" in" line
+  in
+  match if is_let then String.index_from_opt line 4 ' ' else None with
+  | Some i when String.length line >= i + 3 ->
+      let x = String.sub line 4 (i - 4) in
+      if is_variable x && String.sub line i 3 = " = " then Some x else None
+  | _ -> None
+
+let local_prefix = "let[@local] "
+
+(* The occurrences of [x] in [line] as a word: none qualified by a module,
+   none as the name of a label. *)
+let occurrences x line =
+  let n = String.length line and k = String.length x in
+  let rec from i acc =
+    if i + k > n then List.rev acc
+    else
+      let word =
+        String.sub line i k = x
+        && (i = 0 || not (is_ident_char line.[i - 1] || line.[i - 1] = '.'))
+        && (i + k = n || not (is_ident_char line.[i + k]))
+      in
+      let label =
+        word && i > 0 && line.[i - 1] = '~' && i + k < n && line.[i + k] = ':'
+      in
+      from (i + 1) (if word && not label then i :: acc else acc)
+  in
+  from 0 []
+
+(* Whether [line] binds [x]: as a [let], or as a parameter of a local
+   function. *)
+let binds x line =
+  binding line = Some x
+  || (String.starts_with ~prefix:local_prefix line && occurrences x line <> [])
+
+(* Whether [line] reads [x], other than by binding it. *)
+let reads x line =
+  if String.starts_with ~prefix:local_prefix line then false
+  else
+    List.exists
+      (fun i -> not (i = 4 && binding line = Some x))
+      (occurrences x line)
+
+let is_function line = String.starts_with ~prefix:"let[@inline always]" line
+
+let rec prune lines =
+  let lines = Array.of_list lines in
+  let n = Array.length lines in
+  let rec used x j =
+    j < n
+    && (not (is_function lines.(j)))
+    && (reads x lines.(j) || used x (j + 1))
+  in
+  let dead i =
+    match binding lines.(i) with
+    | Some x -> not (used x (i + 1))
+    | None -> false
+  in
+  let kept = List.filteri (fun i _ -> not (dead i)) (Array.to_list lines) in
+  if List.length kept = n then kept else prune kept
+
+(* Whether the code of [lines] reads [x] before it binds it. *)
+let rec free x = function
+  | [] -> false
+  | line :: rest -> reads x line || ((not (binds x line)) && free x rest)
+
+(* {3 Cuts}
+
+   A walk is written as small functions: where the function being written
+   holds as many conditions, branches or lines as merlint allows one, the
+   rest of the walk becomes a function of its own, defined before the
+   functions that call it, which takes the variables it reads as labelled
+   arguments. Each is [[@inline always]], so the compiled walk is the one
+   function it would be without the cuts. A cut is refused where the rest
+   jumps to a join outside it, which must stay in the function that defines
+   it, and in a walk with slots, which a function would capture. *)
+
+let max_depth = 4
+let max_decisions = 9
+
+(* The characters of walk a function holds before merlint finds it longer
+   than 50 lines: unformatted, a line of walk is some 35 characters. Each
+   function also keeps room for its parameters and for the call that ends a
+   walk, [reserve] characters long, whose lines ocamlformat fills more. *)
+let max_chars = 1600
+let room c = max_chars - 200 - (c.reserve * 4 / 5)
+
+let can_cut w =
+  Option.is_some w.cuts && (not w.pinned) && Sset.is_empty w.m.slots
+
+(* Whether the code from here, which opens [opens] conditions, belongs in a
+   function of its own. *)
+let over w opens =
+  match w.cuts with
+  | Some c when can_cut w ->
+      w.fn.chars > 0
+      && (w.depth + opens > max_depth
+         || w.fn.decisions + opens > max_decisions
+         || w.fn.chars > room c)
+  | _ -> false
+
+(* The name of a function cut out under [label]: no more than four
+   underscores, which merlint allows a name. *)
+let function_name c label =
+  let underscores s =
+    String.fold_left (fun n ch -> if ch = '_' then n + 1 else n) 0 s
+  in
+  let label =
+    if underscores c.prefix + 1 + underscores label <= 4 then label
+    else String.concat "" (String.split_on_char '_' label)
+  in
+  let base = c.prefix ^ "_" ^ label in
+  let rec go i =
+    let name = if i = 1 then base else Fmt.str "%s%d" base i in
+    if Hashtbl.mem c.taken name then go (i + 1)
+    else begin
+      Hashtbl.replace c.taken name ();
+      name
+    end
+  in
+  go 1
+
+(* [body] written as the function [label], and a call of it in its place. *)
+let cut w ~label body =
+  match w.cuts with
+  | Some c when can_cut w ->
+      let b = Buffer.create 4096 in
+      let ppf = Format.formatter_of_buffer b in
+      body { w with ppf; fn = { chars = 0; decisions = 0 }; depth = 0 };
+      Format.pp_print_flush ppf ();
+      let lines = prune (String.split_on_char '\n' (Buffer.contents b)) in
+      let seen = Hashtbl.create 16 in
+      let params =
+        List.filter
+          (fun (v, _) ->
+            (not (Hashtbl.mem seen v))
+            && begin
+              Hashtbl.replace seen v ();
+              free v lines
+            end)
+          w.scope
+        |> List.rev
+      in
+      let name = function_name c label in
+      let param (v, ty) =
+        match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
+      in
+      let formal, actual =
+        if params = [] then ("()", "()")
+        else
+          ( String.concat " " (List.map param params),
+            String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
+      in
+      Fmt.pf (Fmt.with_buffer c.defs) "let[@inline always] %s %s%s =\n%s\n\n%!"
+        name c.poly formal (String.concat "\n" lines);
+      pf w "%s %s@\n" name actual
+  | _ -> body w
 
 (* The ranges and facts passed checks establish, for the code after them. *)
 let refine w conditions =
@@ -437,18 +683,18 @@ let bound w p need =
     pf w "if %s then %s else@\n"
       (relation num "<" room (lit num (p.at + need)))
       (w.m.fail Bounds);
-    { w with known = need }
+    { w with known = need; depth = w.depth + 1 }
   end
 
 (* The offset in the buffer of the prefix at [p], as a variable and a
    constant to add. *)
 let address w p =
   match p.var with
-  | None -> (w.base, p.at)
+  | None -> (w, w.base, p.at)
   | Some v ->
       let o = w.fresh "o" in
       pf w "let %s = %s in@\n" o (binop w.m.num "+" w.base v);
-      (o, p.at)
+      (bind_num w o, o, p.at)
 
 (* Bitfields read through their word, by the variable holding it: a test of
    several bitfields of one word becomes one test of the word. *)
@@ -522,6 +768,19 @@ let lower w cond =
   let c = T.subst_expr w.views (simplify w.facts cond) in
   simplify w.facts (bit_predicate w.words c)
 
+(* The variable [v] holding the word of the bitfields at [base], whose range
+   and mask the views of those bitfields read. *)
+let bind_bitword w ((_, base), v) =
+  let w = bind_num w v in
+  let width = 8 * Bitfield.byte_size base in
+  if width < Sys.int_size then
+    {
+      w with
+      ranges = Smap.add v (0, (1 lsl width) - 1) w.ranges;
+      words = (v, (1 lsl width) - 1) :: w.words;
+    }
+  else w
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
    the bitfields' views read. *)
@@ -535,12 +794,16 @@ let load_words w ~o ~k ~size live =
       live
   in
   let words = words ~size worded in
-  List.iter
-    (fun a ->
-      let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
-      pf w "let w%d = %s in@\n" (k + a)
-        (match m.num with Tagged -> v | Unboxed -> "U.of_int64 " ^ v))
-    words;
+  let w =
+    List.fold_left
+      (fun w a ->
+        let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
+        let name = Fmt.str "w%d" (k + a) in
+        pf w "let %s = %s in@\n" name
+          (match m.num with Tagged -> v | Unboxed -> "U.of_int64 " ^ v);
+        bind_num w name)
+      w words
+  in
   let words = List.map (fun a -> k + a) words in
   let bitwords =
     List.filter_map
@@ -557,44 +820,45 @@ let load_words w ~o ~k ~size live =
              ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ());
         ((at, base), v))
   in
-  let w =
-    List.fold_left
-      (fun w ((_, base), v) ->
-        let width = 8 * Bitfield.byte_size base in
-        if width < Sys.int_size then
-          {
-            w with
-            ranges = Smap.add v (0, (1 lsl width) - 1) w.ranges;
-            words = (v, (1 lsl width) - 1) :: w.words;
-          }
-        else w)
-      w bitwords
-  in
-  (w, words, bitwords)
+  (List.fold_left bind_bitword w bitwords, words, bitwords)
 
 (* A field of a prefix at [o + k]: bound when live, then checked. *)
 let field w ~o ~k ~size ~words ~bitwords f =
   let m = w.m in
   let is_live = Sset.mem f.id m.live in
   let shifted = { f with offset = k + f.offset } in
-  let bind v =
-    if is_slot m f.id then
-      pf w "%s@\n" (slot_assign m.num ~is_bool:false f.id v)
-    else pf w "let %s = %s in@\n" f.id v
+  let typed = match f.store with Bytes _ -> None | _ -> num_type w in
+  let bind_field w v =
+    if is_slot m f.id then begin
+      pf w "%s@\n" (slot_assign m.num ~is_bool:false f.id v);
+      w
+    end
+    else begin
+      pf w "let %s = %s in@\n" f.id v;
+      bind ?ty:typed w f.id
+    end
   in
-  (match f.store with
-  | Int { width = 32; signed; endian } when m.raw32 ->
-      pf w "let %s_raw = %s in@\n" f.id
-        (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian);
-      if is_live then
-        pf w "let %s = (Int32.to_int %s_raw%s) in@\n" f.id f.id
-          (if signed then "" else " land mask32")
-  | _ when not is_live -> ()
-  | Bits { base; _ } ->
-      let bitword = List.assoc (f.offset, base) bitwords in
-      bind (value m ~bitword ~o ~words ~k:0 shifted)
-  | _ -> bind (value m ~size:(k + size) ~o ~words ~k:0 shifted));
-  List.iter (fun c -> check w (Check (f, c)) c.cond) f.checks;
+  let w =
+    match f.store with
+    | Int { width = 32; signed; endian } when m.raw32 ->
+        pf w "let %s_raw = %s in@\n" f.id
+          (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian);
+        let w = bind w (f.id ^ "_raw") in
+        if is_live then begin
+          pf w "let %s = (Int32.to_int %s_raw%s) in@\n" f.id f.id
+            (if signed then "" else " land mask32");
+          bind w f.id
+        end
+        else w
+    | _ when not is_live -> w
+    | Bits { base; _ } ->
+        let bitword = List.assoc (f.offset, base) bitwords in
+        bind_field w (value m ~bitword ~o ~words ~k:0 shifted)
+    | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
+  in
+  let w =
+    List.fold_left (fun w c -> check w (Check (f, c)) c.cond) w f.checks
+  in
   let w = refine w (List.map (fun c -> c.cond) f.checks) in
   match f.store with
   | Bits { base; shift; width }
@@ -607,13 +871,28 @@ let field w ~o ~k ~size ~words ~bitwords f =
       { w with views = (f.id, view) :: w.views }
   | _ -> w
 
-let prefix w fields size p ~need =
+(* The name of the function cut out before the field [f]: its own name. *)
+let field_label w f =
+  let own = if f.name = "" then f.label else label f.name in
+  if w.section = "" then own else w.section ^ "_" ^ own
+
+(* A prefix, then [k] with the state and position after it. The fields after
+   one that would make the function too deep or too long go in a function of
+   their own. *)
+let prefix w fields size p ~need k =
   let w = bound w p need in
-  let o, k = address w p in
+  let w, o, at = address w p in
   let live = List.filter (fun f -> Sset.mem f.id w.m.live) fields in
-  let w, words, bitwords = load_words w ~o ~k ~size live in
-  let w = List.fold_left (field ~o ~k ~size ~words ~bitwords) w fields in
-  ({ w with known = w.known - size }, { p with at = p.at + size })
+  let w, words, bitwords = load_words w ~o ~k:at ~size live in
+  let rec go w = function
+    | [] -> k { w with known = w.known - size } { p with at = p.at + size }
+    | f :: rest as fields ->
+        let next w = go (field w ~o ~k:at ~size ~words ~bitwords f) rest in
+        if over w (List.length f.checks) then
+          cut w ~label:(field_label w f) (fun w -> go w fields)
+        else next w
+  in
+  go w fields
 
 (* A span of [size] bytes at [p]: its size, bound to a variable, and where it
    ends. *)
@@ -638,7 +917,8 @@ let span w size p =
   pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
   let e = w.fresh "e" in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
-  ({ w with known = 0 }, n, { var = Some e; at = 0 })
+  let w = bind_num (bind_num w n) e in
+  ({ w with known = 0; depth = w.depth + 1 }, n, { var = Some e; at = 0 })
 
 (* The bytes a run of prefixes and tests from here needs, checked at once. *)
 let rec ahead = function
@@ -734,7 +1014,7 @@ let jump w ~j ~exported gates ~fired p =
           (fun (o : output) ->
             if not (exported o) then None
             else if Some i = fired then
-              Some (if o == present then "true" else o.id)
+              Some (if o == present then "true" else output_text w o)
             else if o.is_bool then Some "false"
             else Some (lit num 0))
           (present :: children))
@@ -743,29 +1023,35 @@ let jump w ~j ~exported gates ~fired p =
   pf w "%s %a %s@\n" j pp_list args (pos_expr num p)
 
 (* The outputs of [gates] a copied continuation reads: those of the case
-   [fired], or of none, are bound absent. *)
+   [fired], or of none, are absent. A walk cut into functions writes them as
+   literals, which no function then takes as arguments; any other binds
+   them. *)
 let bind_absent w ~exported gates ~fired =
-  List.iter
-    (fun (i, (_, (present : output), children, _)) ->
-      List.iter
-        (fun (o : output) ->
-          if exported o then
-            if Some i = fired then
-              begin if o == present then pf w "let %s = true in@\n" o.id
-              end
-            else
+  List.fold_left
+    (fun w (i, (_, (present : output), children, _)) ->
+      List.fold_left
+        (fun w (o : output) ->
+          let value =
+            if not (exported o) then None
+            else if Some i = fired then if o == present then Some true else None
+            else Some false
+          in
+          match value with
+          | None -> w
+          | Some v when Option.is_some w.cuts ->
+              { w with settled = (o.id, v) :: w.settled }
+          | Some v ->
               pf w "let %s = %s in@\n" o.id
-                (if o.is_bool then "false" else lit w.m.num 0))
-        (present :: children))
-    gates
+                (if o.is_bool then string_of_bool v else lit w.m.num 0);
+              w)
+        w (present :: children))
+    w gates
 
 (* The parameters of the join after [gates]: their outputs. *)
-let params ~exported gates =
+let joined ~exported gates =
   List.concat_map
     (fun (_, (present : output), children, _) ->
-      List.filter_map
-        (fun (o : output) -> if exported o then Some o.id else None)
-        (present :: children))
+      List.filter (fun (o : output) -> exported o) (present :: children))
     gates
 
 (* The nodes a continuation may be copied over: a few, none optional. *)
@@ -819,12 +1105,13 @@ let reach tree =
 (* [tree], each shared subtree written once in a local function after the
    ones it reaches; [leaf] writes a leaf. An atom that may overflow rejects. *)
 let pp_tree w ~j ~shared ~leaf tree =
-  let rec emit t =
+  let rec emit w t =
     match t.node with
-    | Leaf i -> leaf i
+    | Leaf i -> leaf w i
     | Branch (atom, yes, no) ->
+        let inner = { w with depth = w.depth + 1 } in
         let branch t =
-          if shared t then pf w "d%d_%s ()@\n" t.tid j else emit t
+          if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t
         in
         let ov = ref false in
         let s = expr w ov atom in
@@ -854,30 +1141,86 @@ let pp_tree w ~j ~shared ~leaf tree =
           define b;
           if shared t then begin
             pf w "let[@local] d%d_%s () =@\n" t.tid j;
-            emit t;
+            emit { w with depth = w.depth + 1 } t;
             pf w "in@\n"
           end
     end
   in
   define tree;
-  if shared tree then pf w "d%d_%s ()@\n" tree.tid j else emit tree
+  if shared tree then pf w "d%d_%s ()@\n" tree.tid j else emit w tree
+
+(* The conditions a path through [tree] opens, a shared subtree as one
+   call. *)
+let rec tree_depth shared t =
+  match t.node with
+  | Leaf _ -> 0
+  | Branch (_, a, b) ->
+      let sub t = if shared t then 0 else tree_depth shared t in
+      1 + max (sub a) (sub b)
+
+(* The name of the function a case of [o] is cut into: its presence
+   without the prefix that numbers it. *)
+let case_label (o : output) =
+  match String.index_opt o.id '_' with
+  | Some i when i > 1 && o.id.[0] = 'p' ->
+      String.sub o.id (i + 1) (String.length o.id - i - 1)
+  | _ -> label o.name
+
+let node_label w = function
+  | Prefix (f :: _, _) -> field_label w f
+  | Prefix ([], _) -> "prefix"
+  | Span _ -> "span"
+  | Test _ -> "where"
+  | Region _ -> "region"
+  | Gate (_, o, _, _) -> case_label o ^ "_cases"
+
+(* The conditions a node opens in the function that writes it; a dispatch
+   counts its own. *)
+let opens = function Prefix _ | Span _ | Test _ | Region _ -> 1 | Gate _ -> 0
+
+(* The join [j] after [gates], whose body is [k], and the jump to it from a
+   case that ran, or from none. *)
+let define_join w ~j ~exported indexed gates k =
+  let e = w.fresh "e" in
+  let outputs = joined ~exported gates in
+  pf w "let[@local] %s %a %s =@\n" j pp_list
+    (List.map (fun (o : output) -> o.id) outputs)
+    e;
+  let inner =
+    List.fold_left
+      (fun w (o : output) ->
+        if o.is_bool then bind ~ty:"bool" w o.id else bind_num w o.id)
+      { w with known = 0; depth = w.depth + 1 }
+      outputs
+  in
+  k (bind_num inner e) { var = Some e; at = 0 };
+  pf w "in@\n";
+  fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
 
 let rec walk w nodes p k =
   match nodes with
   | [] -> k w p
+  | node :: _ when over w (opens node) ->
+      cut w ~label:(node_label w node) (fun w -> step w nodes p k)
+  | _ -> step w nodes p k
+
+and step w nodes p k =
+  match nodes with
+  | [] -> k w p
   | Prefix (fields, size) :: rest ->
-      let w, p = prefix w fields size p ~need:(ahead nodes) in
-      walk w rest p k
+      prefix w fields size p ~need:(ahead nodes) (fun w p -> walk w rest p k)
   | Span size :: rest ->
       let w, _, p = span w size p in
       walk w rest p k
   | Test cond :: rest ->
-      check w Where cond;
+      let w = check w Where cond in
       walk (refine w [ cond ]) rest p k
   | Region (size, at_most, body) :: rest ->
       let w', n, stop = span w size p in
       let b = w.fresh "b" in
-      pf w "let %s = %s in@\n" b (binop w.m.num "+" w.base (pos_expr w.m.num p));
+      pf w' "let %s = %s in@\n" b
+        (binop w.m.num "+" w.base (pos_expr w.m.num p));
+      let w' = bind_num w' b in
       walk
         {
           w' with
@@ -888,10 +1231,15 @@ let rec walk w nodes p k =
         }
         body { var = None; at = 0 }
         (fun w'' cp ->
-          if not at_most then
-            pf w "if %s then %s else@\n"
-              (relation w.m.num "<>" (pos_expr w.m.num cp) n)
-              (w.m.fail Bounds);
+          let w'' =
+            if at_most then w''
+            else begin
+              pf w'' "if %s then %s else@\n"
+                (relation w.m.num "<>" (pos_expr w.m.num cp) n)
+                (w.m.fail Bounds);
+              { w'' with depth = w''.depth + 1 }
+            end
+          in
           walk
             {
               w'' with
@@ -912,7 +1260,8 @@ let rec walk w nodes p k =
    keeps what the branch established. The outputs that are not slots reach
    it as bindings or as the join's parameters; a case that runs assigns its
    presence when a slot, and the slots of the others keep their absent
-   value. *)
+   value. Each case a branch copies the code after the run into is a
+   function of its own. *)
 and dispatch w gates p ~copy k =
   let exported = immutable w.m in
   let indexed = List.mapi (fun i g -> (i, g)) gates in
@@ -920,50 +1269,65 @@ and dispatch w gates p ~copy k =
     decide w.facts (List.map (fun (i, (c, _, _, _)) -> (i, c)) indexed)
   in
   let shared, case_shared, leaves = reach tree in
-  let copy = copy && w.copies * leaves <= max_copies in
-  let j = w.fresh "j" in
-  let finish =
-    if copy then (fun ~fired w' p ->
-      bind_absent w' ~exported indexed ~fired;
-      k { w' with known = 0; tail = w.tail; copies = w.copies } p)
-    else begin
-      let e = w.fresh "e" in
-      pf w "let[@local] %s %a %s =@\n" j pp_list (params ~exported gates) e;
-      k { w with known = 0 } { var = Some e; at = 0 };
-      pf w "in@\n";
-      fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
-    end
-  in
-  let case i =
-    let cond, (present : output), _, body = List.nth gates i in
-    let copies = if copy then w.copies * leaves else 1 in
+  if over w (tree_depth shared tree) then
+    let _, (present : output), _, _ = List.hd gates in
+    cut w
+      ~label:(case_label present ^ "_cases")
+      (fun w -> dispatch w gates p ~copy k)
+  else
+    let copy = copy && w.copies * leaves <= max_copies in
+    let j = w.fresh "j" in
+    let finish =
+      if copy then fun ~fired w' p ->
+        let w' = bind_absent w' ~exported indexed ~fired in
+        k { w' with known = 0; tail = w.tail; copies = w.copies } p
+      else define_join w ~j ~exported indexed gates k
+    in
+    let case w i =
+      let copies = if copy then w.copies * leaves else 1 in
+      dispatch_case w ~copy ~copies (List.nth gates i) p
+        (finish ~fired:(Some i))
+    in
+    List.iter
+      (fun (i, _) ->
+        if case_shared i then begin
+          pf w "let[@local] c%d_%s () =@\n" i j;
+          case { w with depth = w.depth + 1 } i;
+          pf w "in@\n"
+        end)
+      indexed;
+    pp_tree w ~j ~shared tree ~leaf:(fun w -> function
+      | None -> finish ~fired:None w p
+      | Some i -> if case_shared i then pf w "c%d_%s ()@\n" i j else case w i)
+
+(* The case [gate] of a dispatch, then [finish]: a function of its own when
+   the branch copies the code after the dispatch. *)
+and dispatch_case w ~copy ~copies (cond, (present : output), _, body) p finish =
+  let go w =
     walk
-      { (refine w [ cond ]) with tail = true; copies }
+      {
+        (refine w [ cond ]) with
+        tail = true;
+        copies;
+        pinned = w.pinned || not copy;
+        section = case_label present;
+      }
       body p
       (fun w' p ->
         if is_slot w.m present.id then
           pf w' "%s@\n" (slot_assign w.m.num ~is_bool:true present.id "true");
-        finish ~fired:(Some i) w' p)
+        finish w' p)
   in
-  List.iter
-    (fun (i, _) ->
-      if case_shared i then begin
-        pf w "let[@local] c%d_%s () =@\n" i j;
-        case i;
-        pf w "in@\n"
-      end)
-    indexed;
-  pp_tree w ~j ~shared tree ~leaf:(function
-    | None -> finish ~fired:None w p
-    | Some i -> if case_shared i then pf w "c%d_%s ()@\n" i j else case i)
+  if copy then cut w ~label:(case_label present) go else go w
 
-let start ~m ~ppf ~ranges ~base ~limit ~known nodes k =
+let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
+    =
   let n = ref 0 in
   let fresh s =
     incr n;
     Fmt.str "%s%d" s !n
   in
-  walk
+  let w =
     {
       m;
       ppf;
@@ -977,8 +1341,19 @@ let start ~m ~ppf ~ranges ~base ~limit ~known nodes k =
       known;
       tail = true;
       copies = 1;
+      cuts;
+      fn = { chars = 0; decisions = 0 };
+      depth = 0;
+      scope;
+      settled = [];
+      pinned = false;
+      section = "";
     }
-    nodes { var = None; at = 0 } k
+  in
+  let p = { var = None; at = 0 } in
+  match first with
+  | Some label -> cut w ~label (fun w -> walk w nodes p k)
+  | None -> walk w nodes p k
 
 (* The variables a walk binds: those it reads, those it hands out and, for a
    cold walk, each checked field, whose value its error carries. *)

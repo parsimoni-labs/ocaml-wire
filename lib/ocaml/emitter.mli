@@ -56,6 +56,23 @@ type pos = { var : string option; at : int }
 (** A position in the record: a variable when the data decides it, plus a
     constant. *)
 
+type cuts = {
+  prefix : string;
+  defs : Buffer.t;
+  taken : (string, unit) Hashtbl.t;
+  poly : string;
+  reserve : int;
+}
+(** Where the functions a walk is cut into go: their names start with [prefix],
+    each distinct from those in [taken]; [defs] holds their definitions, each
+    before the functions that call it; [poly] is written before the parameters
+    of each, as [(type a : bits64) ]; and each keeps room for [reserve]
+    characters, the call that ends the walk. *)
+
+type fn = { mutable chars : int; mutable decisions : int }
+(** The text written so far in the function being written, on all its paths: its
+    length and the branches it opens. *)
+
 type w = {
   m : mode;
   ppf : Format.formatter;
@@ -69,10 +86,21 @@ type w = {
   known : int;
   tail : bool;
   copies : int;
+  cuts : cuts option;
+  fn : fn;
+  depth : int;
+  scope : (string * string option) list;
+  settled : (string * bool) list;
+  pinned : bool;
+  section : string;
 }
 (** The state of a walk: its mode and output, the ranges and facts known at its
-    position, the bitfield words it holds, and the window of the buffer it is
-    in. *)
+    position, the bitfield words it holds, the window of the buffer it is in;
+    and, for a walk cut into functions, where they go, the function being
+    written and the conditions open around the position in it, the variables it
+    binds with the type a function cut out of it gives each, the outputs known
+    present or absent, whether the code here jumps to a join outside it, and the
+    case being written, which names its functions. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)
@@ -83,6 +111,14 @@ val pp_slots : mode -> output list Fmt.t
 
 val output_value : mode -> output -> string
 (** [output_value m o] is the text of the value of [o] where a walk ends. *)
+
+val output_text : w -> output -> string
+(** [output_text w o] is the text of the value of [o] at the position of [w]:
+    its literal where it is known absent or present. *)
+
+val prune : string list -> string list
+(** [prune lines] is [lines] without each binding [let x = e in] that no later
+    line of its function reads. *)
 
 val lit : num -> int -> string
 (** [lit num n] is the literal [n] in the integers of [num]. *)
@@ -134,9 +170,10 @@ val value :
     the field [f] at [k] from [o], from the variable [bitword] of a bitfield's
     word when it has one. *)
 
-val check : w -> failure -> bool T.expr -> unit
+val check : w -> failure -> bool T.expr -> w
 (** [check w failure cond] writes a check that fails with [failure] when [cond]
-    is false; an overflow in [cond] fails too. *)
+    is false, and is [w] one condition deeper; an overflow in [cond] fails too.
+*)
 
 val bound : w -> pos -> int -> w
 (** [bound w p need] is [w] after checking that the window has [need] bytes from
@@ -166,6 +203,9 @@ val walk : w -> node list -> pos -> (w -> pos -> unit) -> unit
     calls [k] with the state and position after them. *)
 
 val start :
+  ?cuts:cuts ->
+  ?scope:(string * string option) list ->
+  ?first:string ->
   m:mode ->
   ppf:Format.formatter ->
   ranges:(int * int) Smap.t ->
@@ -175,9 +215,11 @@ val start :
   node list ->
   (w -> pos -> unit) ->
   unit
-(** [start ~m ~ppf ~ranges ~base ~limit ~known nodes k] is {!walk} over [nodes]
-    from the start of a record at [base], in a window that ends at [limit] and
-    is known to hold [known] bytes. *)
+(** [start ?cuts ?scope ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k] is
+    {!walk} over [nodes] from the start of a record at [base], in a window that
+    ends at [limit] and is known to hold [known] bytes. With [cuts] the walk is
+    written as small functions, which take the variables of [scope] they read;
+    with [first], the whole walk is one of them, named [first]. *)
 
 val live : ?cold:bool -> plan -> outputs:Sset.elt list -> Sset.t
 (** [live ?cold plan ~outputs] is the variables a walk binds: those it reads,
