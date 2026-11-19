@@ -92,6 +92,10 @@
   buffer allocates nothing, and `decode` no longer slows with nesting depth
   (#435, #445, #496, @samoht)
 
+- The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
+  every dune profile, the dev one included, where the runtime's interfaces
+  state what allocates nothing (#493, @samoht)
+
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
 

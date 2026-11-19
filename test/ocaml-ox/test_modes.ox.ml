@@ -132,8 +132,9 @@ let test_portable () =
     + Int32.to_int (Bytes.get_int32_be b 16))
     (portable_runtime b)
 
-(* With the code inlined, as a build other than dev inlines it, neither the
-   reads nor the decodes above allocate on the heap, 32-bit fields included. *)
+(* Neither the reads nor the decodes above allocate on the heap, 32-bit fields
+   included, in any profile: the dev one, which inlines nothing across
+   modules, too. *)
 let words f =
   let before = Gc.minor_words () in
   for _ = 1 to 1_000 do
@@ -142,11 +143,9 @@ let words f =
   Gc.minor_words () -. before
 
 let test_no_allocation () =
-  if not Profile.dev then begin
-    let base = words (fun () -> 0) in
-    Alcotest.(check (float 0.)) "reads" base (words stack_fields);
-    Alcotest.(check (float 0.)) "decodes" base (words stack_decode)
-  end
+  let base = words (fun () -> 0) in
+  Alcotest.(check (float 0.)) "reads" base (words stack_fields);
+  Alcotest.(check (float 0.)) "decodes" base (words stack_decode)
 
 let suite =
   ( "modes",
