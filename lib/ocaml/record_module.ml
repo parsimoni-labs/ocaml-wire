@@ -832,6 +832,20 @@ let pp_bind_len ~src ppf ~live =
     Fmt.pf ppf "    let buf = (b : _ %s.t :> %s)@\n    and " src.brand src.typ;
   Fmt.pf ppf "len = (len : _ %s.length :> int) in@\n" src.brand
 
+(* [View.with_] is [View.check]'s walk ending in [ok] or [fail] itself, so no
+   answer is built for [ok] and [get] to test again after the branches meet. *)
+let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
+  let k =
+    match target with
+    | `OxCaml -> "~(ok @ local) ~(fail @ local)"
+    | `OCaml -> "~ok ~fail"
+  in
+  Fmt.pf ppf "@\n  let[@inline] with_ %s len off %s =@\n" b k;
+  pp_bind_len ~src ppf ~live;
+  Fmt.pf ppf "    if off < 0 || off > len - size then fail ()@\n    else@\n";
+  let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"fail ()" () in
+  pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "ok off@\n")
+
 (* The body of [View.check]. A record with no check of its own loads nothing,
    so a negative [off] needs no test: it is the answer, which [View.ok]
    refuses. *)
@@ -877,13 +891,19 @@ let pp_view_module ~src ppf ~target ~plan ~size =
     \  val check : 'b %s.t%s -> 'b %s.length -> int -> 'b check@\n\
     \  val ok : 'b check -> bool@\n\
     \  val get : 'b check -> 'b t@\n\
+     @\n\
+    \  val with_ :@\n\
+    \    'b %s.t%s -> 'b %s.length -> int -> ok:('b t -> 'a)%s ->@\n\
+    \    fail:(unit -> 'a)%s -> 'a@\n\
      end = struct@\n\
     \  type 'b t = int@\n\
     \  type 'b check = int@\n\
      @\n\
     \  let%s check %s len off =@\n"
-    src.brand local src.brand src.brand local src.brand attr b_param;
+    src.brand local src.brand src.brand local src.brand src.brand local
+    src.brand local local attr b_param;
   pp_view_check ~src ppf ~target ~plan ~size ~live;
+  pp_view_with ~src ppf ~target ~plan ~size ~b:b_param ~live;
   Fmt.pf ppf
     "@\n\
     \  let%s at %s len off =@\n\

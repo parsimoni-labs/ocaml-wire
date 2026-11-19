@@ -53,11 +53,13 @@
     promise as [Valid]: each [view_<field> b v] (and [view_<field>_int],
     [view_<field>_word]) is one load with no bounds check, and only the buffer
     named ['b] is accepted. A view is an [int], so it allocates nothing.
-    [View.at] raises the codec's error where the check fails. A [Bigstring]
-    submodule has the same functions, [Valid] and [View] included, on a bigarray
-    of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
-    which stores field values in order. Without [~make] it also defines a record
-    [t] of the field values, its constructor [v] and [encode]. *)
+    [View.at] raises the codec's error where the check fails, and
+    [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. A
+    [Bigstring] submodule has the same functions, [Valid] and [View] included,
+    on a bigarray of bytes. It has [size], [decode], [validate] and
+    [write buf off v1 ... vn], which stores field values in order. Without
+    [~make] it also defines a record [t] of the field values, its constructor
+    [v] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
