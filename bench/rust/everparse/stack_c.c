@@ -45,6 +45,8 @@
 #define ROW "EverParse C, default plug"
 #define ROW_NAME ROW " (" CC_NAME ")"
 
+/* Called with the stride the command line gives, as the OCaml and Rust rows
+   take it. */
 static uint64_t stack_fold(uint8_t *buf, size_t len, uint32_t stride) {
   uint64_t acc = 0;
   size_t n = len / stride;
@@ -112,6 +114,10 @@ CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
   size_t len = caml_string_length(v_buf);
   uint32_t stride = (uint32_t)Long_val(v_stride);
   size_t runs = (size_t)Long_val(v_runs);
+  if (stride == 0) {
+    fprintf(stderr, "everparse.exe: a stride of 0 bytes\n");
+    exit(1);
+  }
   double packets = (double)(len / stride);
   double *cpu = malloc(runs * sizeof *cpu);
   double *wall = malloc(runs * sizeof *wall);
