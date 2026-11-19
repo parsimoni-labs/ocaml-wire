@@ -509,3 +509,14 @@ module Testing : sig
   val all_paths : string list
   (** Every name {!paths} can return. *)
 end
+
+(** [Make (C)] is [C.codec] as a {!Wire_runtime.Record.S}, so code written
+    against that signature runs on the interpreted codec or on the module
+    [Wire_ocaml] generates from it, by changing one line. A field is the codec's
+    own field value. *)
+module Make (C : sig
+  type r
+
+  val codec : r t
+end) :
+  Wire_runtime.Record.S with type t = C.r and type 'a Field.t = ('a, C.r) field

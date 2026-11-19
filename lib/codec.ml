@@ -1613,3 +1613,58 @@ module Testing = struct
     @ ([ "encode.staged.rows"; "encode.plain"; "encode.blit"; "read.scalar" ]
         : string list)
 end
+
+module Make (C : sig
+  type r
+
+  val codec : r t
+end) =
+struct
+  type t = C.r
+
+  let min_size = min_wire_size C.codec
+  let decode buf off = decode C.codec buf off
+  let decode_exn buf off = decode_exn C.codec buf off
+  let encode r buf off = encode C.codec r buf off
+  let validate buf off = validate C.codec buf off
+
+  (* A negative offset holds no record, as the generated [is_valid] says,
+     where [validate] raises [Invalid_argument]. *)
+  let is_valid buf off =
+    off >= 0
+    &&
+    match validate buf off with
+    | () -> true
+    | exception Types.Parse_error _ -> false
+
+  module View = struct
+    type 'b t = int
+    type 'b check = int
+
+    let check b len off =
+      let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+      if off < 0 || off > (len : _ Wire_runtime.Buf.length :> int) - min_size
+      then -1
+      else if is_valid buf off then off
+      else -1
+
+    let at b _ off =
+      validate (b : _ Wire_runtime.Buf.t :> bytes) off;
+      off
+
+    let ok c = c >= 0
+
+    let get c =
+      if c < 0 then invalid_arg (name C.codec ^ ".View.get: the check failed")
+      else c
+  end
+
+  module Field = struct
+    type 'a t = ('a, C.r) field
+
+    let get f = get C.codec f
+
+    let view f b v =
+      Staged.unstage (get f) (b : _ Wire_runtime.Buf.t :> bytes) (v : int)
+  end
+end
