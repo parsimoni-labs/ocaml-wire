@@ -1,0 +1,33 @@
+; clcw.ml is the module Wire_ocaml writes for Space.clcw_codec, committed so
+; it is read and reviewed like any other source. The generator prints it and
+; ocamlformat formats it under the project's .ocamlformat, so [dune fmt]
+; leaves it alone. The runtest diff fails when it drifts from the codec and
+; [dune promote] refreshes it. Without ocamlformat the check is skipped and
+; the committed copy builds as it is.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries space wire.ocaml))
+
+(rule
+ (target clcw.ml.gen)
+ (enabled_if %{bin-available:ocamlformat})
+ (deps %{project_root}/.ocamlformat)
+ (action
+  (with-stdout-to
+   clcw.ml.gen
+   (pipe-stdout
+    (run ./gen.exe)
+    (run ocamlformat --impl --name=clcw.ml -)))))
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:ocamlformat})
+ (action
+  (diff clcw.ml clcw.ml.gen)))
+
+(library
+ (name clcw)
+ (modules clcw)
+ (libraries wire.runtime))

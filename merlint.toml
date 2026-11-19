@@ -2,3 +2,10 @@
 [[rules]]
 files = "examples/net/net.ml"
 exclude = ["E350"]
+
+# The module Wire_ocaml generates, formatted by ocamlformat. Each rule listed
+# is a finding the generator still produces; drop it once the generator no
+# longer does, so a new finding fails here.
+[[rules]]
+files = "examples/generated/clcw.ml"
+exclude = ["E001", "E110", "E331", "E332", "E505"]

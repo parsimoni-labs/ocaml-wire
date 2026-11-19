@@ -24,7 +24,13 @@
     codec checks it: an overflow rejects the record with the codec's error.
 
     A generator executable, run by a dune rule, prints the module for a codec
-    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
+    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)]. The text
+    is not laid out as ocamlformat would; a project that commits the module
+    pipes it through [ocamlformat --impl --name=FILE -] in that rule, so the
+    committed copy is formatted under the project's own [.ocamlformat] and
+    [dune fmt] leaves it alone, and keeps it current with a runtest [diff] and
+    [dune promote] or with [(mode promote)]. [examples/generated] in the sources
+    does this.
 
     The generated module has [get_<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
