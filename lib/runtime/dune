@@ -32,6 +32,9 @@
     sInt16
     uInt32
     sInt32)))
+ (foreign_stubs
+  (language c)
+  (names vec_stubs))
  (libraries
   optint
   (select
@@ -82,6 +85,9 @@
   (<> %{ocaml-config:ox} true))
  (private_modules loads prims carrier)
  (modules_without_implementation record)
+ (foreign_stubs
+  (language c)
+  (names vec_stubs))
  (libraries
   optint
   (select
@@ -151,3 +157,29 @@
   (with-stdout-to
    %{target}
    (echo "let enabled = false\n"))))
+
+; [Vec] holds the NEON operations of the code Wire_ocaml generates with
+; [~simd:true]. They are OxCaml builtins on arm64 and exist nowhere else, so
+; the module is empty on other compilers and architectures.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (= %{architecture} arm64)))
+ (action
+  (progn
+   (copy vec.neon.ml vec.ml)
+   (copy vec.neon.mli vec.mli)
+   (copy vec_stubs.neon.c vec_stubs.c))))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (<> %{architecture} arm64)))
+ (action
+  (progn
+   (copy vec.none.ml vec.ml)
+   (copy vec.none.mli vec.mli)
+   (copy vec_stubs.none.c vec_stubs.c))))

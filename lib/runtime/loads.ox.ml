@@ -316,6 +316,7 @@ end
 (* The runtime as the code for OxCaml sees it: every module of it is
    [portable] on OxCaml, so this only gathers them. *)
 module Portable = struct
+  module Vec = Vec
   module Errors = Errors
   module Arith = Arith
   module UInt8 = UInt8
