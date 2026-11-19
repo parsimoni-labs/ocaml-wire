@@ -335,6 +335,12 @@ val embed_validate_sized_ctx :
     just measured over the same bytes: the bounds check takes that end instead
     of measuring the record again. Internal use. *)
 
+val embed_check_end : 'r t -> Input_end.t -> bytes -> int -> int
+(** [embed_check_end c input_end buf off] is where the record at [off] ends when
+    its fast checks accept it, else [-1], or [-2] when it has none: an end it
+    gives is the one the codec's extent measures, and
+    {!embed_validate_sized_ctx} accepts the record with it. Internal use. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 

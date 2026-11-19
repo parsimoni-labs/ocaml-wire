@@ -257,6 +257,19 @@ type bf_info = {
 
 let no_runtime = Types.unbound_eval_ctx
 
+(* The context of the general passes a record without parameters falls back
+   on when a layout walk has not accepted it: no parameter is read through it,
+   and a sub-codec checked with it goes straight to its own general passes, as
+   the walk that did not accept has already tried its walk. *)
+let fallback_runtime = Types.eval_ctx (fun _ -> 0)
+let is_fallback runtime = runtime == fallback_runtime
+
+(* The context of the general extent a record without parameters falls back on
+   when its extent walk has failed: a sub-codec measured with it goes straight
+   to its own general extent. *)
+let extent_fallback_runtime = Types.eval_ctx (fun _ -> 0)
+let is_extent_fallback runtime = runtime == extent_fallback_runtime
+
 (* The context of a read after the check pass: a sub-codec read through it
    builds its record and leaves the checks to the pass that ran them. *)
 let checked_runtime = Types.checked_eval_ctx no_runtime
@@ -839,11 +852,26 @@ type step =
   | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
       (** A plain byte span's bounds check: the general validator, which a
           layout pass that checks every span's bounds makes redundant. *)
+  | Laid of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A gated field or a sub-codec, which a layout pass measures and checks
+          whole: the general validator, run unless that pass has accepted. *)
 
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
 (* How a field adds to the record's extent, for the layout pass. *)
-type layout = Lfix of int | Lspan of int expr | Lrest
+type layout =
+  | Lfix of int
+  | Lspan of int expr
+  | Lrest
+  | Lopt of bool expr * layout
+  | Lregion of { size : int expr; at_most : bool; sub : sub }
+  | Lsub of sub
+
+and sub = {
+  size_of : runtime -> Input_end.t -> bytes -> int -> int;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
+}
 
 type ('f, 'r) record =
   | Record : {
@@ -978,6 +1006,9 @@ type 'r compiled = {
       (* [validate_ctx] of a record whose end, the last argument, the caller
          has just measured over the same bytes: the frame checks that end
          rather than measuring it again. *)
+  check_end : Input_end.t -> bytes -> int -> int;
+      (* Where the record ends when its layout walk and the checks it leaves
+         accept it, else [-1], or [-2] when it has no walk. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
       (* Zeroes the scratch before [validate_arr], when a slot can be read

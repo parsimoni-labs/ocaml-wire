@@ -12,6 +12,7 @@
   codec_repr
   codec_elem
   codec_compile
+  codec_layout
   codec_seal
   codec_words)
  (flags

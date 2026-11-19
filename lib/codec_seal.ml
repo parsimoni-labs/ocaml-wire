@@ -338,8 +338,9 @@ let expr_reader : type a r. (a, r) compiled_field -> a typ -> _ =
         reader runtime input_end buf base
 
 (* The check-pass steps of a field, last first. *)
-let field_steps ~used ~name ~slot ~voff ~conds ~span view check full =
+let field_steps ~used ~name ~slot ~voff ~conds ~span ~laid view check full =
   match view with
+  | None when laid -> [ Laid full ]
   | None when span && Option.is_none check -> [ Covered full ]
   | Some (Ps scalar, typ_sets) when slot_scalar scalar -> (
       let cset =
@@ -387,12 +388,57 @@ let plain_span : type a. a typ -> bool = function
   | Byte_array _ | Byte_slice _ | All_bytes -> true
   | _ -> false
 
+(* A sub-codec the layout pass measures and checks whole: in a region of a
+   size an expression gives, or measuring itself. A fixed-size one is a width,
+   and its check stays in the check pass. *)
+let sub_layout : type a. a typ -> layout option = function
+  | Single_elem
+      {
+        size;
+        elem = Codec { codec_size_of; codec_validate_sized; codec_check_end; _ };
+        at_most;
+      } ->
+      let sub =
+        {
+          size_of = codec_size_of;
+          validate_sized = codec_validate_sized;
+          check_end = codec_check_end;
+        }
+      in
+      Some (Lregion { size; at_most; sub })
+  | Codec
+      {
+        codec_fixed_size = None;
+        codec_size_of;
+        codec_validate_sized;
+        codec_check_end;
+        _;
+      } ->
+      Some
+        (Lsub
+           {
+             size_of = codec_size_of;
+             validate_sized = codec_validate_sized;
+             check_end = codec_check_end;
+           })
+  | _ -> None
+
+(* What a gated field holds, when the layout pass can measure it: a byte span
+   or a sub-codec it checks. *)
+let gated_layout : type a. a typ -> layout option = function
+  | Byte_array { size } | Byte_slice { size } -> Some (Lspan size)
+  | typ -> sub_layout typ
+
 let field_layout : type a r.
     layout list option ->
     (a, r) compiled_field ->
     (a, r) field ->
     layout list option =
  fun layout cf fld ->
+  let add = function
+    | Some item -> Option.map (List.cons item) layout
+    | None -> None
+  in
   match (layout, cf.field_access, fld.typ) with
   | None, _, _ -> None
   | Some l, Bitfield _, _ -> Some (Lfix cf.size_delta :: l)
@@ -404,7 +450,24 @@ let field_layout : type a r.
       (Byte_array { size } | Byte_slice { size }) ) ->
       Some (Lspan size :: l)
   | Some l, (Variable _ | Variable_dynamic _), All_bytes -> Some (Lrest :: l)
+  | Some _, (Variable _ | Variable_dynamic _), (Single_elem _ | Codec _) ->
+      add (sub_layout fld.typ)
+  | Some _, _, Optional { present; inner } ->
+      add (Option.map (fun item -> Lopt (present, item)) (gated_layout inner))
   | Some _, _, _ -> None
+
+(* Whether the layout pass checks the whole of what [fld]'s validator checks:
+   a gated field or a sub-codec it measures, with no constraint or action of
+   its own. *)
+let laid_field : type a r. (a, r) field -> bool =
+ fun fld ->
+  Option.is_none fld.constraint_
+  && Option.is_none fld.action
+  &&
+  match fld.typ with
+  | Optional { inner; _ } -> Option.is_some (gated_layout inner)
+  | Single_elem _ | Codec _ -> Option.is_some (sub_layout fld.typ)
+  | _ -> false
 
 (* The fields the layout pass reads a span's size from: those whose value an
    int holds exactly, as for the check pass's slots. *)
@@ -506,6 +569,9 @@ let apply_compiled : type a f r.
           (field_steps ~used:r.used_slots ~name:fld.name ~slot:field_idx
              ~voff:byte_off ~conds:(field_conds fld)
              ~span:(plain_span fld.typ && Option.is_none act)
+             ~laid:
+               (laid_field fld
+               && Option.is_some (field_layout r.layout_rev cf fld))
              (check_view ~min_wire_size cf.field_access fld.typ ~act)
              check full)
         @ r.validators_rev;
@@ -815,7 +881,7 @@ let run_steps steps arr runtime input_end buf off =
         if store then arr.ints.(slot) <- v;
         if not (in_set set v) then
           set_failed ~name ~voff ~fail v runtime input_end buf off
-    | Full f | Covered f -> f arr runtime input_end buf off
+    | Full f | Covered f | Laid f -> f arr runtime input_end buf off
   done
 
 (* The steps whose work is needed: a slot nothing reads is not filled. *)
@@ -827,7 +893,7 @@ let used_steps used steps =
     (function
       | Slot { slot; _ } as s -> if read slot then Some s else None
       | Range r -> Some (Range { r with store = read r.slot })
-      | (Check _ | Full _ | Covered _) as s -> Some s)
+      | (Check _ | Full _ | Covered _ | Laid _) as s -> Some s)
     steps
 
 (* Every slot is written before it is read when each step fills its own slot
@@ -835,10 +901,12 @@ let used_steps used steps =
 let scratch_clear ~int64s steps n_total =
   let own_slot = function
     | Slot _ | Range _ -> true
-    | Check _ | Full _ | Covered _ -> false
+    | Check _ | Full _ | Covered _ | Laid _ -> false
   in
   let n_own = List.length (List.filter own_slot steps) in
-  let general = List.exists (function Full _ -> true | _ -> false) steps in
+  let general =
+    List.exists (function Full _ | Laid _ -> true | _ -> false) steps
+  in
   if (not general) && n_own = n_total then fun _ -> ()
   else if int64s then fun arr -> clear_slots arr n_total
   else fun arr -> clear_ints arr n_total
@@ -863,7 +931,7 @@ let build_validators ?used validators_rev checkers_rev compiled_where
   let clear = scratch_clear ~int64s all_steps n_total in
   let uses_arr = function
     | Range { store; _ } -> store
-    | Slot _ | Check _ | Full _ | Covered _ -> true
+    | Slot _ | Check _ | Full _ | Covered _ | Laid _ -> true
   in
   let needs_arr =
     Option.is_some compiled_where || Array.exists uses_arr steps
@@ -1087,7 +1155,7 @@ let first_failed intervals input_end buf off =
   in
   go 0
 
-let run_plain_pass pass input_end buf off =
+let run_plain_pass ?(runtime = no_runtime) pass input_end buf off =
   match pass with
   | No_checks -> ()
   | Intervals { flat; tables; intervals } ->
@@ -1102,7 +1170,7 @@ let run_plain_pass pass input_end buf off =
             clear arr;
             arr
       in
-      run_pass steps where arr no_runtime input_end buf off
+      run_pass steps where arr runtime input_end buf off
 
 (* The byte an interval reads, and the field value a byte [b] gives, for the
    intervals that read a single byte. *)
@@ -1152,110 +1220,17 @@ let flatten_intervals intervals =
   in
   (Array.concat flat, Array.of_list (List.rev !tables))
 
-type layout_item =
-  | Fix of int
-  | Span of (bytes -> int -> unit -> unit -> int)
-  | Rest
-
-let rec layout_ok items buf off len cur =
-  match items with
-  | [] -> cur <= len
-  | Fix k :: rest -> layout_ok rest buf off len (cur + k)
-  | Span size :: rest ->
-      let sz = size buf off () () in
-      sz >= 0 && cur <= len - sz && layout_ok rest buf off len (cur + sz)
-  | Rest :: rest -> cur <= len && layout_ok rest buf off len len
-
-(* A span's size: a field, or a field times, plus or minus a literal, is one
-   closure that reads the field; any other expression goes through
-   [Expr_compiler]. The arithmetic is checked, as [decode]'s is: a product
-   that wraps on a 31-bit int is a size [decode] refuses. *)
-let span_size prefix leaves (e : int expr) =
-  let field name =
-    match List.assoc_opt name prefix with
-    | Some (Ps s) -> Some (fun buf off -> read_slot s buf off)
-    | None -> None
-  in
-  let general () = Expr_compiler.compile_int leaves e in
-  match e with
-  | Ref (I, a) -> (
-      match field a with
-      | Some r -> fun buf off () () -> r buf off
-      | None -> general ())
-  | Mul (Ref (I, a), Int k) | Mul (Int k, Ref (I, a)) -> (
-      match field a with
-      | Some r when k >= 0 && k <= 0xffff ->
-          fun buf off () () -> checked_mul (r buf off) k
-      | _ -> general ())
-  | Add (Ref (I, a), Int k) | Add (Int k, Ref (I, a)) -> (
-      match field a with
-      | Some r when abs k <= 0xffff ->
-          fun buf off () () -> checked_add (r buf off) k
-      | _ -> general ())
-  | Sub (Ref (I, a), Int k) -> (
-      match field a with
-      | Some r when abs k <= 0xffff ->
-          fun buf off () () -> checked_sub (r buf off) k
-      | _ -> general ())
-  | _ -> general ()
-
-(* The layout pass of a variable-size record without parameters whose
-   variable fields are plain byte spans sized by earlier fixed-offset fields:
-   one walk that reads each length field once and checks each span against the
-   buffer. It only ever accepts; anything it does not accept goes to the
-   general bounds check, which raises the error it always raised. *)
-let build_layout ~min_size prefix layout =
-  let unplanned _ = raise Exit in
-  let leaves : (bytes, int, unit, unit) Expr_compiler.leaves =
-    {
-      ref_ =
-        (fun name ->
-          match List.assoc_opt name prefix with
-          | Some (Ps s) -> fun buf off () () -> read_slot s buf off
-          | None -> raise Exit);
-      i64 = unplanned;
-      param_ref = unplanned;
-      sizeof_typ =
-        (fun (Pack_typ t) ->
-          let n = Option.value ~default:0 (field_wire_size t) in
-          fun _ _ () () -> n);
-      sizeof_this = (fun _ _ () () -> raise Exit);
-      field_pos = (fun _ _ () () -> raise Exit);
-    }
-  in
-  match layout with
-  | None -> None
-  | Some layout -> (
-      match
-        List.rev_map
-          (function
-            | Lfix k -> Fix k
-            | Lspan e -> Span (span_size prefix leaves e)
-            | Lrest -> Rest)
-          layout
-      with
-      | exception Exit -> None
-      | items ->
-          Some
-            (fun buf off ->
-              let len = Bytes.length buf in
-              off >= 0
-              && off <= len - min_size
-              &&
-                try layout_ok items buf off len off
-                with Types.Parse_error _ | Exit -> false))
-
 let step_uses_arr = function
   | Range { store; _ } -> store
-  | Slot _ | Check _ | Full _ | Covered _ -> true
+  | Slot _ | Check _ | Full _ | Covered _ | Laid _ -> true
 
 (* The steps the plain check pass runs: a layout pass, or a fixed-size frame
    check, covers the plain spans' bounds checks. *)
-let plain_steps ~where steps =
+let plain_steps ?(laid = false) ~where steps =
   let steps =
     Array.of_list
       (List.filter
-         (function Covered _ -> false | _ -> true)
+         (function Covered _ -> false | Laid _ -> not laid | _ -> true)
          (Array.to_list steps))
   in
   (steps, Option.is_some where || Array.exists step_uses_arr steps)
@@ -1264,7 +1239,7 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
   let interval = function
     | Range { scalar; set; fail; name; voff; store = false; _ } ->
         Some (Interval { scalar; set; fail; name; voff })
-    | Range _ | Slot _ | Check _ | Full _ | Covered _ -> None
+    | Range _ | Slot _ | Check _ | Full _ | Covered _ | Laid _ -> None
   in
   let intervals = Array.map interval steps in
   if not has_checks then No_checks
@@ -1288,11 +1263,13 @@ let plain_pass ~has_checks ~needs_arr ~scratch ~clear steps where =
    check, the span checks included. *)
 let variable_frame ~layout wire_size_info min_size input_end buf off =
   match layout with
-  | Some (ok, fast, _) when ok buf off -> run_plain_pass fast input_end buf off
+  | Some (walk, fast, _) when walk input_end buf off >= 0 ->
+      run_plain_pass fast input_end buf off
   | Some _ | None -> (
       check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
       match layout with
-      | Some (_, _, full) -> run_plain_pass full input_end buf off
+      | Some (_, _, full) ->
+          run_plain_pass ~runtime:fallback_runtime full input_end buf off
       | None -> ())
 
 let build_plain_decode ~layout make fwd wire_size_info min_size pass =
@@ -1734,6 +1711,28 @@ let validate_ctx wire_size_info min_size run runtime input_end buf off =
   check_decode_bounds wire_size_info min_size runtime input_end buf off;
   run runtime input_end buf off
 
+(* The check pass of a record without parameters, its own or its sub-codecs':
+   no parameter is read through the context, so a nested use runs the plain
+   pass a top-level [validate] runs, with the context it is given, which tells
+   its sub-codecs whether a walk has already been tried. *)
+let plain_run pass runtime input_end buf off =
+  run_plain_pass ~runtime pass input_end buf off
+
+(* [validate_ctx] of a record without parameters: the layout pass when it
+   accepts, else the bounds check and the plain check pass, as a top-level
+   [validate] runs them. *)
+let nested_validate ~layout wire_size_info min_size pass =
+  match layout with
+  | None -> validate_ctx wire_size_info min_size (plain_run pass)
+  | Some (walk, fast, _) ->
+      fun runtime input_end buf off ->
+        if (not (is_fallback runtime)) && walk input_end buf off >= 0 then
+          run_plain_pass fast input_end buf off
+        else begin
+          check_decode_bounds wire_size_info min_size runtime input_end buf off;
+          run_plain_pass ~runtime:fallback_runtime pass input_end buf off
+        end
+
 (* [validate_ctx] with the record's end already measured: [check_decode_bounds]
    on that end. *)
 let validate_sized wire_size_info min_size run runtime input_end buf off end_off
@@ -1744,12 +1743,42 @@ let validate_sized wire_size_info min_size run runtime input_end buf off end_off
   | Variable _ -> check_end_bounds min_size buf off end_off);
   run runtime input_end buf off
 
+(* Where a record without parameters ends when its layout walk and the checks
+   it leaves accept it, else [-1], or [-2] when it has no walk: an end it gives
+   is the extent the record measures to, and every check the record runs passes
+   on it. *)
+let check_end ~layout =
+  match layout with
+  | None -> fun _input_end _buf _off -> -2
+  | Some (walk, fast, _) -> (
+      fun input_end buf off ->
+        let e = walk input_end buf off in
+        if e < 0 then -1
+        else
+          match run_plain_pass fast input_end buf off with
+          | () -> e
+          | exception Types.Parse_error _ -> -1)
+
+(* [validate_sized] of a record without parameters: the same bounds checks on
+   the measured end, then the layout pass's checks when it accepts, else the
+   plain check pass. *)
+let nested_validate_sized ~layout wire_size_info min_size pass =
+  match layout with
+  | None -> validate_sized wire_size_info min_size (plain_run pass)
+  | Some (walk, fast, _) ->
+      fun runtime input_end buf off end_off ->
+        check_min_bounds min_size buf off;
+        check_end_bounds min_size buf off end_off;
+        if (not (is_fallback runtime)) && walk input_end buf off >= 0 then
+          run_plain_pass fast input_end buf off
+        else run_plain_pass ~runtime:fallback_runtime pass input_end buf off
+
 (* The check pass of a record without parameters and, for a variable-size
    one, its layout pass with the check pass it leaves; the full check pass is
    what the layout pass falls back on. A fixed-size record's frame check
    bounds every span in it, as a layout pass does, so its check pass leaves
    the spans' bounds checks out too. *)
-let plain_passes ~wire_size_info ~n_params ~min_size prefix layout ~where ~steps
+let plain_passes ~wire_size_info ~n_params ~min_size items ~where ~steps
     ~needs_arr pass =
   let check =
     match wire_size_info with
@@ -1763,9 +1792,9 @@ let plain_passes ~wire_size_info ~n_params ~min_size prefix layout ~where ~steps
     | Variable _ when n_params = 0 ->
         Option.map
           (fun ok ->
-            let steps, needs_arr = plain_steps ~where steps in
+            let steps, needs_arr = plain_steps ~laid:true ~where steps in
             (ok, pass steps needs_arr, check))
-          (build_layout ~min_size prefix layout)
+          (Codec_layout.build_layout ~min_size items)
     | _ -> None
   in
   (check, layout)
@@ -1813,6 +1842,46 @@ let selected_paths wire_size_info n_params layout check puts =
     | Fixed _, Some puts -> encode_paths (List.rev puts)
     | _ -> []
 
+(* The check an encoder runs on what it wrote, when the record has any. *)
+let encode_check_of ~scratch ~n_total ~param_base ~param_handles ~populate
+    ~compiled_where struct_fields where =
+  if not (has_encode_checks struct_fields where) then None
+  else
+    Some
+      (encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
+         ~compiled_where)
+
+(* The layout items of a record without parameters, and its size: measured
+   by their walk when it has some. *)
+let layout_and_size ~n_params ~min_size prefix layout_rev next_off =
+  let items =
+    if n_params = 0 then Codec_layout.layout_items prefix layout_rev else None
+  in
+  let wire_size_info =
+    match next_off with
+    | Static n -> Fixed n
+    | Dynamic f ->
+        let compute =
+          match items with
+          | Some items -> Codec_layout.layout_extent ~min_size items f
+          | None -> f
+        in
+        Variable { min_size; compute }
+  in
+  (items, wire_size_info)
+
+(* How a record is checked inside another: without parameters through its
+   plain pass and layout walk, else through its runtime checks [run]. *)
+let nested_checks ~n_params ~layout wire_size_info min_size check run =
+  if n_params = 0 then
+    ( nested_validate ~layout wire_size_info min_size check,
+      check_end ~layout,
+      nested_validate_sized ~layout wire_size_info min_size check )
+  else
+    ( validate_ctx wire_size_info min_size run,
+      (fun _ _ _ -> -2),
+      validate_sized wire_size_info min_size run )
+
 (* [struct_fields] and [param_handles] are the ones [view] derived and checked
    from the same field list. *)
 let seal : type r.
@@ -1821,17 +1890,14 @@ let seal : type r.
     (r, r) record ->
     r compiled =
  fun ~struct_fields ~param_handles (Record r) ->
-  let field_access = List.rev r.field_access_rev in
-  let wire_size_info =
-    match r.next_off with
-    | Static n -> Fixed n
-    | Dynamic f -> Variable { min_size = r.min_wire_size; compute = f }
-  in
   let min_size = r.min_wire_size in
+  let n_params = List.length param_handles in
+  let items, wire_size_info =
+    layout_and_size ~n_params ~min_size r.prefix r.layout_rev r.next_off
+  in
   let writers = Array.of_list (List.rev r.writers_rev) in
   let validators = List.rev r.validators_rev in
   let param_base = r.n_array_slots in
-  let n_params = List.length param_handles in
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
   let compiled_where =
@@ -1843,32 +1909,31 @@ let seal : type r.
       compiled_where struct_fields r.param_slots n_total
   in
   let scratch = domain_local_slots n_total in
-  let run =
-    validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
-  in
   let encode_check =
-    if not (has_encode_checks struct_fields r.where) then None
-    else
-      Some
-        (encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
-           ~compiled_where)
+    encode_check_of ~scratch ~n_total ~param_base ~param_handles ~populate
+      ~compiled_where struct_fields r.where
   in
   let size_of_value =
     build_size_of_value (Array.of_list (List.rev r.size_of_value_rev))
   in
   let has_checks = has_validation_checks compiled_where struct_fields in
   let check, layout =
-    plain_passes ~wire_size_info ~n_params ~min_size r.prefix r.layout_rev
-      ~where:compiled_where ~steps ~needs_arr (fun steps needs_arr ->
+    plain_passes ~wire_size_info ~n_params ~min_size items ~where:compiled_where
+      ~steps ~needs_arr (fun steps needs_arr ->
         plain_pass ~has_checks ~needs_arr ~scratch ~clear steps compiled_where)
   in
   let decode, read, plain_decode =
     build_decoders ~layout r.make r.readers r.checked_readers wire_size_info
       min_size ~plain:(n_params = 0) ~check
   in
+  let validate_ctx, check_end, validate_sized =
+    nested_checks ~n_params ~layout wire_size_info min_size check
+      (validate_runtime_of ~scratch ~clear ~param_base ~param_handles
+         ~validate_arr)
+  in
   {
     size_of_value;
-    field_access;
+    field_access = List.rev r.field_access_rev;
     field_readers = List.rev r.field_readers;
     field_actions = List.rev r.field_actions_rev;
     decode;
@@ -1886,8 +1951,9 @@ let seal : type r.
     validate =
       validate_with_bounds wire_size_info min_size r.param_slots param_base
         validate_checks;
-    validate_ctx = validate_ctx wire_size_info min_size run;
-    validate_sized = validate_sized wire_size_info min_size run;
+    validate_ctx;
+    check_end;
+    validate_sized;
     validate_arr;
     clear_scratch = clear;
     populate;

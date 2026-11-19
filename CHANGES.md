@@ -112,8 +112,9 @@
 ### Changed
 
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, `encode` into a buffer allocates nothing, and `decode` no
-  longer slows with nesting depth (#435, #445, @samoht)
+  fixed-size codecs and faster on nested variable-size ones, `encode` into a
+  buffer allocates nothing, and `decode` no longer slows with nesting depth
+  (#435, #445, #496, @samoht)
 
 - The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
   every dune profile, the dev one included, where the runtime's interfaces

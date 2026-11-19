@@ -520,6 +520,9 @@ let embed_validate_ctx (t : 'r t) runtime input_end buf off =
 let embed_validate_sized_ctx (t : 'r t) runtime input_end buf off end_off =
   (compiled t).validate_sized runtime input_end buf off end_off
 
+let embed_check_end (t : 'r t) input_end buf off =
+  (compiled t).check_end input_end buf off
+
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> `Fixed n

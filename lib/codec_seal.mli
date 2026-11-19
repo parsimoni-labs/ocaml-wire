@@ -117,10 +117,12 @@ val min_bounds_error : int -> bytes -> int -> 'a
 (** [min_bounds_error min_size buf off] raises the [Parse_error] of a record of
     [min_size] bytes that does not fit [buf] at [off]. *)
 
-val run_plain_pass : pass -> Input_end.t -> bytes -> int -> unit
-(** [run_plain_pass pass input_end buf off] runs the check pass of a codec
-    without parameters over the record at [off], whose frame the caller has
-    checked. Raises [Parse_error] when a check fails. *)
+val run_plain_pass :
+  ?runtime:Types.eval_ctx -> pass -> Input_end.t -> bytes -> int -> unit
+(** [run_plain_pass ?runtime pass input_end buf off] runs the check pass of a
+    codec without parameters over the record at [off], whose frame the caller
+    has checked, giving its sub-codecs [runtime] (default
+    {!Codec_repr.no_runtime}). Raises [Parse_error] when a check fails. *)
 
 val encode_too_short : string -> int -> bytes -> int -> 'a
 (** [encode_too_short name n buf off] raises the [Invalid_argument] of encoding
