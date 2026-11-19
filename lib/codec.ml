@@ -1171,21 +1171,51 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
 
 type 'r valid = { buf : bytes; off : int; codec : int }
 
-let[@inline never] valid_slow env (t : 'r t) buf off =
-  validate_exn ?env t buf off;
-  { buf; off; codec = t.id }
+(* The proof of a check that failed: no codec has its id, so every reader
+   refuses it. *)
+let failed = { buf = Bytes.empty; off = 0; codec = -1 }
 
-(* Small enough to inline: the frame check of a fixed-size codec, with its
-   error and every other codec out of line. *)
-let valid ?env (t : 'r t) buf off =
+(* A pass made of more than interval tests, answered without its error. *)
+let[@inline never] steps_pass pass input_end buf off =
+  match run_plain_pass pass input_end buf off with
+  | () -> true
+  | exception Types.Parse_error _ -> false
+
+let[@inline] passes pass input_end buf off =
+  match pass with
+  | No_checks -> true
+  | Intervals { words = Some f; _ } -> f buf off
+  | Intervals { flat; tables; words = None; _ } ->
+      Codec_intervals.scan_intervals flat tables buf off (Array.length flat) 0
+      < 0
+  | Steps _ -> steps_pass pass input_end buf off
+
+let[@inline never] accepts_slow env (t : 'r t) buf off =
+  off >= 0
+  &&
+  match validate_exn ?env t buf off with
+  | () -> true
+  | exception Types.Parse_error _ -> false
+
+(* Whether the record at [off] passes [validate], without its error. Small
+   enough to inline: the frame and the tests of a fixed-size codec, every
+   other codec out of line. *)
+let[@inline] accepts ?env (t : 'r t) buf off =
   match env with
   | None when t.n_params = 0 -> (
       match Atomic.get t.compiled with
       | Some c when c.fixed_frame >= 0 ->
-          validate_fixed c.fixed_frame c.plain_pass buf off;
-          { buf; off; codec = t.id }
-      | _ -> valid_slow env t buf off)
-  | _ -> valid_slow env t buf off
+          let input_end = Input_end.of_bytes buf in
+          off >= 0
+          && off <= Input_end.to_int input_end - c.fixed_frame
+          && passes c.plain_pass input_end buf off
+      | _ -> accepts_slow env t buf off)
+  | _ -> accepts_slow env t buf off
+
+let check ?env t buf off =
+  if accepts ?env t buf off then { buf; off; codec = t.id } else failed
+
+let ok v = v.codec >= 0
 
 let[@inline never] wrong_valid name =
   Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
@@ -1773,8 +1803,7 @@ struct
 
   (* A negative offset holds no record, as the generated [is_valid] says,
      where [validate] raises [Invalid_argument]. *)
-  let is_valid buf off =
-    off >= 0 && match validate buf off with Ok () -> true | Error _ -> false
+  let is_valid buf off = accepts C.codec buf off
 
   module View = struct
     type 'b t = int
