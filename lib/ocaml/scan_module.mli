@@ -23,9 +23,11 @@ type scan = {
   selected : output list;
   m : Emitter.mode;
   ppf : Format.formatter;
+  taken : (string, unit) Hashtbl.t;
 }
 (** What a scanner is written from: the plan, the outputs it hands out, the mode
-    of its walks and where it writes. *)
+    of its walks, where it writes and the names of the functions it has written.
+*)
 
 val slots : plan -> output list -> output list
 (** [slots plan outputs] is the outputs among [outputs] that are slots; see
