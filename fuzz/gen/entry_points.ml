@@ -98,7 +98,7 @@ let ep_validate label =
           let env = positive_env g in
           match
             try
-              Wire.Codec.validate ?env g.codec bs 0;
+              Wire.Codec.validate_exn ?env g.codec bs 0;
               `Ok
             with
             | Wire.Parse_error _ -> `Reject

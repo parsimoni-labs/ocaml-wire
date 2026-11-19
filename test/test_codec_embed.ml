@@ -404,12 +404,12 @@ let test_codec_embed_tail () =
     let b = Bytes.init n (fun i -> Char.chr (i + 1)) in
     [
       answer (fun () -> show (Codec.decode_exn framed_tail b 0));
-      answer (fun () -> Codec.validate framed_tail b 0 |> fun () -> "");
+      answer (fun () -> Codec.validate_exn framed_tail b 0 |> fun () -> "");
       answer (fun () ->
           match Codec.decode_exn gated_tail b 0 with
           | _, Some t -> show t
           | _, None -> "none");
-      answer (fun () -> Codec.validate gated_tail b 0 |> fun () -> "");
+      answer (fun () -> Codec.validate_exn gated_tail b 0 |> fun () -> "");
     ]
   in
   let check n want =

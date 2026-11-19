@@ -673,7 +673,7 @@ let optional_or_family name ~present typ =
    record types measure through one fold. *)
 let validate_case name mk payload n =
   let c = mk n and buf = gated_payload payload n in
-  (name, fun () -> Codec.validate c buf 0)
+  (name, fun () -> Codec.validate_exn c buf 0)
 
 let gated_span_cases n =
   List.concat_map
@@ -700,7 +700,7 @@ let report_span_failures what failures =
   if failures <> [] then
     Alcotest.failf "%s: %s" what (String.concat "; " (List.rev failures))
 
-(* [Codec.validate] returns unit, so everything it allocates it drops on the
+(* [Codec.validate_exn] returns unit, so everything it allocates it drops on the
    floor. What it turns over must therefore not depend on how long the sender
    made the frame. The two runs compared differ in nothing but a number the
    sender chose, which is what makes the growth between them attributable. A
@@ -713,7 +713,7 @@ let test_validate_allocation_is_bounded () =
     List.map
       (fun (name, mk, mkbuf) ->
         let c = mk n and buf = mkbuf n in
-        (name, fun () -> Codec.validate c buf 0))
+        (name, fun () -> Codec.validate_exn c buf 0))
       span_families
     @ gated_span_cases n
   in
@@ -736,7 +736,7 @@ let test_validate_allocation_is_bounded () =
 
 (* A [repeat]'s element count comes from its byte budget, which comes from a
    length field: the sender picks how many times the element loop runs.
-   [Codec.validate] wants those elements checked and does not want the
+   [Codec.validate_exn] wants those elements checked and does not want the
    sequence, so building one and dropping it handed an attacker a heap
    multiplier per packet. The byte spans and the 64-bit and floating-point
    scalars are here for the same reason one step in: their reader's only product
@@ -781,7 +781,7 @@ let repeat_budget_case ?(buf = repeat_budget_buf) name elem =
   ( name,
     fun n ->
       let buf = buf n in
-      fun () -> Codec.validate c buf 0 )
+      fun () -> Codec.validate_exn c buf 0 )
 
 (* Four bytes wide, so a 512- and a 4096-byte budget both divide into whole
    elements, and constrained, so the element has something to check. *)
@@ -836,7 +836,7 @@ let test_repeat_validate_allocation_is_bounded () =
    record never reaches the heap. Reaching the same sub-codec through a
    container -- an [array] of them, a [nested] region holding one, a casetype
    case body -- has to cost the same: a container has nothing of its own to
-   build, so whatever it turns over is the record [Codec.validate] exists not
+   build, so whatever it turns over is the record [Codec.validate_exn] exists not
    to build. Measured against the same sub-codec as a plain field rather than
    against a fixed number, so what is pinned is the shape and not this codec's
    own cost. *)
@@ -868,7 +868,7 @@ let container_case_typ =
 
 let container_words name typ buf =
   let c = Codec.v name Fun.id Codec.[ Field.v "x" typ $ Fun.id ] in
-  words_per_call ~iters:5000 (fun () -> Codec.validate c buf 0)
+  words_per_call ~iters:5000 (fun () -> Codec.validate_exn c buf 0)
 
 let test_container_subcodec_validate_no_alloc () =
   skip_unless_gc_counters ();
@@ -917,7 +917,7 @@ let enum_of_case_count n =
 let enum_budget_words ~cases ~budget =
   let c = repeat_budget_codec (enum_of_case_count cases) in
   let buf = repeat_budget_buf budget in
-  words_per_call ~iters:500 (fun () -> Codec.validate c buf 0)
+  words_per_call ~iters:500 (fun () -> Codec.validate_exn c buf 0)
 
 let test_enum_element_validate_allocation_is_bounded () =
   skip_unless_gc_counters ();
@@ -950,7 +950,7 @@ let test_enum_element_validate_allocation_is_bounded () =
 (* A check-free codec skips the validator pass, so it never builds an
    evaluation context. One with a constraint or a where clause does run the
    pass, and a parameter-free codec has nothing to put in the context it used to
-   build on the way in. [Codec.validate] is the entry point a server runs per
+   build on the way in. [Codec.validate_exn] is the entry point a server runs per
    packet, so what it costs must not depend on whether the codec checks
    anything. *)
 let checked_no_param_codecs =
@@ -978,7 +978,7 @@ let test_validate_checked_no_param_no_alloc () =
     List.fold_left
       (fun acc (name, c) ->
         let words =
-          words_per_call ~iters:5000 (fun () -> Codec.validate c buf 0)
+          words_per_call ~iters:5000 (fun () -> Codec.validate_exn c buf 0)
         in
         if words <> 0 then
           Fmt.str "a codec with a %s costs %d words a validate" name words

@@ -163,10 +163,15 @@ let pp_validate ~src ppf ~target ~plan ~size =
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "true@\n");
   Fmt.pf ppf
     "@\n\
-     let%s validate %s off =@\n\
+     let%s validate_exn %s off =@\n\
     \  if not (is_valid buf off) then fail buf off@\n\
+     @\n\
+     let validate %s off =@\n\
+    \  match validate_exn buf off with@\n\
+    \  | () -> Ok ()@\n\
+    \  | exception %s.Parse_error e -> Error e@\n\
      @\n"
-    attr src.buf
+    attr src.buf src.buf errors
 
 let pp_cold ~src ppf ~target ~plan ~size =
   Fmt.pf ppf
@@ -800,7 +805,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~plan =
     \    if %s buf < size then fail buf 0@\n\
     \    else begin@\n"
     src.typ src.typ src.typ src.len;
-  if has_checks plan then Fmt.pf ppf "      validate buf 0;@\n";
+  if has_checks plan then Fmt.pf ppf "      validate_exn buf 0;@\n";
   Fmt.pf ppf "      buf@\n    end@\nend@\n@\n";
   List.iter
     (fun f ->
@@ -941,7 +946,7 @@ let pp_validate_written ~src ppf ~target =
   | `OCaml ->
       Fmt.pf ppf
         "let[@inline never] validate_written %s off =@\n\
-        \  match validate buf off with@\n\
+        \  match validate_exn buf off with@\n\
         \  | () -> ()@\n\
         \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
          e@\n\
@@ -950,7 +955,7 @@ let pp_validate_written ~src ppf ~target =
   | `OxCaml ->
       Fmt.pf ppf
         "let%s rejected %s off =@\n\
-        \  match validate buf off with@\n\
+        \  match validate_exn buf off with@\n\
         \  | () -> no_error ()@\n\
         \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
          e@\n\
@@ -1040,6 +1045,17 @@ let pp_field_module ~src ppf ~target fields =
     fields;
   Fmt.pf ppf "end@\n@\n"
 
+(* On OxCaml, [Global]'s handles: the module's own, for a buffer on the heap. *)
+let pp_global_handles ppf fields =
+  List.iter
+    (fun f ->
+      Fmt.pf ppf
+        "    let %s : %s t =@\n\
+        \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) }@\n\
+         @\n"
+        f.label (type_of f) f.label f.label)
+    fields
+
 (* [Global] is the module as a [Wire.S], for code that switches between it and
    [Wire.Codec.Make] by one line. On OCaml it is the module's own functions; on
    OxCaml, whose functions take their buffers [local], which an interpreted
@@ -1058,6 +1074,7 @@ let pp_global ~src ppf ~target fields =
         \  let decode_exn = decode_exn@\n\
         \  let encode = encode@\n\
         \  let validate = validate@\n\
+        \  let validate_exn = validate_exn@\n\
         \  let is_valid = is_valid@\n\
         \  module View = View@\n\
         \  module Field = Field@\n\
@@ -1069,6 +1086,7 @@ let pp_global ~src ppf ~target fields =
         \  let decode_exn buf off = decode_exn buf off@\n\
         \  let encode t buf off = encode t buf off@\n\
         \  let validate buf off = validate buf off@\n\
+        \  let validate_exn buf off = validate_exn buf off@\n\
         \  let is_valid buf off = is_valid buf off@\n\
          @\n\
         \  module View = struct@\n\
@@ -1088,15 +1106,7 @@ let pp_global ~src ppf ~target fields =
         \    }@\n\
          @\n"
         src.brand;
-      List.iter
-        (fun f ->
-          Fmt.pf ppf
-            "    let %s : %s t =@\n\
-            \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) \
-             }@\n\
-             @\n"
-            f.label (type_of f) f.label f.label)
-        fields;
+      pp_global_handles ppf fields;
       Fmt.pf ppf "  end@\nend@\n@\n"
 
 (* The same reads and writes on a bigarray of bytes, with the same errors. *)
@@ -1173,6 +1183,7 @@ let own_names =
     "size";
     "is_valid";
     "validate";
+    "validate_exn";
     "validate_written";
     "rejected";
     "decode";

@@ -234,7 +234,7 @@ let rec build_populate : type a.
   | _ ->
       (* No int slot to populate, but the reader performs a real decode-side
          check (an embedded codec, an array or repeat element's constraints), so
-         run it for effect: [Codec.validate] then rejects exactly what [decode]
+         run it for effect: [Codec.validate_exn] then rejects exactly what [decode]
          does. The value is discarded. Span types whose reader scans the payload
          do not reach here: [span_populate] gives them the scan without the
          copy, since what a validator drops on the floor must not be sized by

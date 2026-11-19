@@ -20,12 +20,12 @@ let test_validate_check_free_no_alloc () =
         ]
   in
   let buf = Bytes.make 32 '\007' in
-  Codec.validate c buf 0;
+  Codec.validate_exn c buf 0;
   (* warm up any one-time setup *)
   let n = 100_000 in
   let before = Gc.minor_words () in
   for _ = 1 to n do
-    Codec.validate c buf 0
+    Codec.validate_exn c buf 0
   done;
   let per_call = (Gc.minor_words () -. before) /. float_of_int n in
   Alcotest.(check bool)
@@ -189,7 +189,7 @@ let test_constraint_intervals () =
     Bytes.set_uint8 buf 0 x;
     Bytes.set_uint8 buf 1 y;
     let validated =
-      match Codec.validate c buf 0 with
+      match Codec.validate_exn c buf 0 with
       | () -> "ok"
       | exception Wire.Parse_error e -> describe e
     in
@@ -218,7 +218,7 @@ let test_constraint_intervals () =
   in
   Alcotest.(check bool)
     "an empty interval refuses everything" true
-    (match Codec.validate never (Bytes.make 1 '\xff') 0 with
+    (match Codec.validate_exn never (Bytes.make 1 '\xff') 0 with
     | () -> false
     | exception Wire.Parse_error _ -> true)
 
@@ -336,7 +336,7 @@ let test_shared_byte_constraints () =
   let outcome byte =
     let buf = Bytes.make 1 (Char.chr byte) in
     let validated =
-      match Codec.validate c buf 0 with
+      match Codec.validate_exn c buf 0 with
       | () -> "ok"
       | exception Wire.Parse_error e -> String.concat "." e.field
     in
@@ -373,7 +373,7 @@ let test_shared_byte_constraints () =
   in
   let two_outcome b0 b1 =
     match
-      Codec.validate two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
+      Codec.validate_exn two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
     with
     | () -> "ok"
     | exception Wire.Parse_error e -> String.concat "." e.field
@@ -430,7 +430,7 @@ let test_mapped_and_disjunctive_checks () =
     Bytes.set_uint8 buf 2 k;
     Bytes.set_uint8 buf 3 b;
     let validated =
-      match Codec.validate c buf 0 with
+      match Codec.validate_exn c buf 0 with
       | () -> "ok"
       | exception Wire.Parse_error e -> describe e
     in
@@ -570,7 +570,7 @@ let test_layout_pass () =
   let fast, _ = page ~params:false and slow, env = page ~params:true in
   let outcome c env buf =
     let v =
-      match Codec.validate ?env c buf 0 with
+      match Codec.validate_exn ?env c buf 0 with
       | () -> "ok"
       | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
     in
@@ -612,7 +612,7 @@ let test_layout_size_overflow () =
   Bytes.set_uint16_be buf 0 0xffff;
   let decoded = Result.is_ok (Codec.decode c buf 0) in
   let validated =
-    match Codec.validate c buf 0 with
+    match Codec.validate_exn c buf 0 with
     | () -> true
     | exception Wire.Parse_error _ -> false
   in
@@ -696,7 +696,7 @@ let test_layout_gated_optional () =
   (match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "decode accepted a missing payload"
   | Error _ -> ());
-  match Codec.validate c buf 0 with
+  match Codec.validate_exn c buf 0 with
   | () -> Alcotest.fail "validate accepted a missing payload"
   | exception Wire.Parse_error _ -> ()
 
@@ -755,7 +755,7 @@ let test_fresh_domain_validate_flat_in_validator_count () =
     Domain.join
       (Domain.spawn (fun () ->
            let before = Gc.allocated_bytes () in
-           Codec.validate c buf 0;
+           Codec.validate_exn c buf 0;
            (Gc.allocated_bytes () -. before) /. 8.))
   in
   Fmt.kstr
@@ -878,7 +878,7 @@ let test_v_rejects_bad_description_eagerly () =
    bound, and on a buffer too short for the frame. *)
 let test_fixed_spans_keep_intervals () =
   let outcome c buf =
-    match Codec.validate c buf 0 with
+    match Codec.validate_exn c buf 0 with
     | () -> "ok"
     | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
   in

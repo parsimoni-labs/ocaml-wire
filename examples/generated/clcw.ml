@@ -236,10 +236,15 @@ let[@inline never] too_short buf off =
 let[@inline] is_valid buf off =
   if off < 0 || off > Bytes.length buf - size then false else true
 
-let[@inline] validate buf off = if not (is_valid buf off) then fail buf off
+let[@inline] validate_exn buf off = if not (is_valid buf off) then fail buf off
+
+let validate buf off =
+  match validate_exn buf off with
+  | () -> Ok ()
+  | exception Wire_runtime.Errors.Parse_error e -> Error e
 
 let[@inline never] validate_written buf off =
-  match validate buf off with
+  match validate_exn buf off with
   | () -> ()
   | exception Wire_runtime.Errors.Parse_error e ->
       Wire_runtime.Errors.encode_rejected ~name:codec_name e
@@ -997,6 +1002,7 @@ module Global = struct
   let decode_exn = decode_exn
   let encode = encode
   let validate = validate
+  let validate_exn = validate_exn
   let is_valid = is_valid
 
   module View = View
@@ -1021,10 +1027,16 @@ module Bigstring = struct
       false
     else true
 
-  let[@inline] validate buf off = if not (is_valid buf off) then fail buf off
+  let[@inline] validate_exn buf off =
+    if not (is_valid buf off) then fail buf off
+
+  let validate buf off =
+    match validate_exn buf off with
+    | () -> Ok ()
+    | exception Wire_runtime.Errors.Parse_error e -> Error e
 
   let[@inline never] validate_written buf off =
-    match validate buf off with
+    match validate_exn buf off with
     | () -> ()
     | exception Wire_runtime.Errors.Parse_error e ->
         Wire_runtime.Errors.encode_rejected ~name:codec_name e

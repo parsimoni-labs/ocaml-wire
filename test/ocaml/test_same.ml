@@ -70,19 +70,22 @@ module Same (A : Wire.S) (B : Wire.S) = struct
       same "is_valid"
         (fun () -> string_of_bool (A.is_valid buf off))
         (fun () -> string_of_bool (B.is_valid buf off));
-      same "validate"
-        (fun () ->
-          outcome (fun () ->
-              A.validate buf off;
-              ""))
-        (fun () ->
-          outcome (fun () ->
-              B.validate buf off;
-              ""));
       let result = function
         | Ok _ -> "ok"
         | Error e -> Fmt.str "%a" pp_parse_error e
       in
+      same "validate_exn"
+        (fun () ->
+          outcome (fun () ->
+              A.validate_exn buf off;
+              ""))
+        (fun () ->
+          outcome (fun () ->
+              B.validate_exn buf off;
+              ""));
+      same "validate"
+        (fun () -> outcome (fun () -> result (A.validate buf off)))
+        (fun () -> outcome (fun () -> result (B.validate buf off)));
       same "decode"
         (fun () -> outcome (fun () -> result (A.decode buf off)))
         (fun () -> outcome (fun () -> result (B.decode buf off)));

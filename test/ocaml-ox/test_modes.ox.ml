@@ -21,7 +21,7 @@ let[@inline] fields (b @ local) =
 let stack_fields () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
-  G_ipv4.validate b 0;
+  G_ipv4.validate_exn b 0;
   let r = fields b in
   r
 

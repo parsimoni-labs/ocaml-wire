@@ -342,7 +342,7 @@ let stack_answers =
   fun input ->
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
     let decode c b off () = Codec.decode_exn c b off in
-    let validate c b off () = Codec.validate c b off in
+    let validate c b off () = Codec.validate_exn c b off in
     [
       stack_answer show_stack (decode Packet_stack.codec input 0);
       stack_answer show_stack (decode Packet_stack.codec shifted 2);
@@ -353,7 +353,7 @@ let stack_answers =
       stack_answer show_stack (fun () ->
           Codec.decode_exn ~env:(env ()) param_frame input 0);
       stack_answer unit (fun () ->
-          Codec.validate ~env:(env ()) param_frame input 0);
+          Codec.validate_exn ~env:(env ()) param_frame input 0);
       stack_answer show_ipv4 (decode Packet_stack.ipv4 input 14);
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]

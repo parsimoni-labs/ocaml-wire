@@ -48,7 +48,7 @@ let reads ?(fix = fun _ _ -> ()) codec ~decode ~validate =
     Alcotest.(check string)
       "validate"
       (outcome (fun () ->
-           Codec.validate codec buf off;
+           Codec.validate_exn codec buf off;
            ""))
       (outcome (fun () ->
            validate buf off;
@@ -105,7 +105,7 @@ let fix_checked buf off =
     (List.nth [ 1; 6; 17 ] (Random.State.int rand 3))
 
 let test_ipv4 () =
-  reads Schemas.ipv4 ~decode:G_ipv4.decode_exn ~validate:G_ipv4.validate;
+  reads Schemas.ipv4 ~decode:G_ipv4.decode_exn ~validate:G_ipv4.validate_exn;
   writes Schemas.ipv4
     ~write:(fun (a, b, c, d, e, f, g, h, i, j) buf off ->
       G_ipv4.write buf off a b c d e f g h i j)
@@ -130,7 +130,7 @@ let test_ipv4_record () =
 
 let test_checked () =
   reads ~fix:fix_checked Schemas.checked ~decode:G_checked.decode_exn
-    ~validate:G_checked.validate;
+    ~validate:G_checked.validate_exn;
   let wild () =
     ( Random.State.int rand 20,
       Random.State.int rand 20,
@@ -146,7 +146,7 @@ let test_checked () =
     @ List.init 300 (fun _ -> wild ()))
 
 let test_mixed () =
-  reads Schemas.mixed ~decode:G_mixed.decode_exn ~validate:G_mixed.validate;
+  reads Schemas.mixed ~decode:G_mixed.decode_exn ~validate:G_mixed.validate_exn;
   let wild () =
     let a, b, c, d, e, f, _, _ =
       List.hd (decoded Schemas.mixed 1 @ decoded Schemas.mixed 5)
@@ -160,13 +160,13 @@ let test_mixed () =
     (decoded Schemas.mixed 200 @ List.init 200 (fun _ -> wild ()))
 
 let test_small () =
-  reads Schemas.small ~decode:G_small.decode_exn ~validate:G_small.validate;
+  reads Schemas.small ~decode:G_small.decode_exn ~validate:G_small.validate_exn;
   writes Schemas.small
     ~write:(fun (a, b) buf off -> G_small.write buf off a b)
     (decoded Schemas.small 100)
 
 let test_eth () =
-  reads Schemas.eth ~decode:G_eth.decode_exn ~validate:G_eth.validate;
+  reads Schemas.eth ~decode:G_eth.decode_exn ~validate:G_eth.validate_exn;
   let str n = String.init n (fun _ -> byte ()) in
   writes Schemas.eth
     ~write:(fun (a, b, c) ->
@@ -235,7 +235,7 @@ let test_write_int () =
   done
 
 let test_wide () =
-  reads Schemas.wide ~decode:G_wide.decode_exn ~validate:G_wide.validate;
+  reads Schemas.wide ~decode:G_wide.decode_exn ~validate:G_wide.validate_exn;
   let wild () =
     let w k = Random.State.full_int rand ((1 lsl k) + 4) in
     (w 1, w 8, w 23, w 3, w 29, w 31)
@@ -347,7 +347,8 @@ let test_digest () =
    generator specialises it. *)
 let test_signed () =
   ignore (Wire.Everparse.project Schemas.signed : Wire.Everparse.t);
-  reads Schemas.signed ~decode:G_signed.decode_exn ~validate:G_signed.validate;
+  reads Schemas.signed ~decode:G_signed.decode_exn
+    ~validate:G_signed.validate_exn;
   writes Schemas.signed
     ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
     (decoded Schemas.signed 200)
@@ -357,7 +358,7 @@ let test_signed () =
    range raises what converting it raises. *)
 let test_packed () =
   let open Schemas in
-  reads packed ~decode:G_packed.decode_exn ~validate:G_packed.validate;
+  reads packed ~decode:G_packed.decode_exn ~validate:G_packed.validate_exn;
   writes packed
     ~write:(fun r ->
       let e = G_packed.Value.e r.e in
@@ -409,7 +410,7 @@ let fix_refined buf off =
 
 let test_refined () =
   reads ~fix:fix_refined Schemas.refined ~decode:G_refined.decode_exn
-    ~validate:G_refined.validate;
+    ~validate:G_refined.validate_exn;
   let wild () =
     ( Random.State.int rand 18,
       Random.State.int rand 18,
@@ -435,7 +436,7 @@ let test_overflow () =
     if Random.State.bool rand then Bytes.set_uint16_be buf (off + 5) 0
   in
   reads ~fix Schemas.overflow ~decode:G_overflow.decode_exn
-    ~validate:G_overflow.validate;
+    ~validate:G_overflow.validate_exn;
   let u32 = UInt32.of_int32 in
   writes Schemas.overflow
     ~write:(fun (a, hi, lo, b, c) ->
@@ -611,7 +612,8 @@ let getter codec field ~get ~show =
 (* Every field under a map: over 16- and 32-bit integers, a lookup whose index
    bound validate checks, and a bitfield. *)
 let test_mapped () =
-  reads Schemas.mapped ~decode:G_mapped.decode_exn ~validate:G_mapped.validate;
+  reads Schemas.mapped ~decode:G_mapped.decode_exn
+    ~validate:G_mapped.validate_exn;
   writes Schemas.mapped
     ~write:(fun (a, b, c, d, e) ->
       let e = G_mapped.Value.rest e in
@@ -666,7 +668,7 @@ let test_getters () =
     ~get:(fun b o -> (G_eth.Get.src b o :> string))
     ~show:Fun.id
 
-(* [Valid.v] accepts a buffer exactly when [Codec.validate] does at offset 0,
+(* [Valid.v] accepts a buffer exactly when [Codec.validate_exn] does at offset 0,
    raising its error otherwise, and each [read_<field>] then reads what
    [Codec.get] reads. *)
 let viewed ?(fix = fun _ _ -> ()) codec ~valid ~reads =
@@ -677,7 +679,7 @@ let viewed ?(fix = fun _ _ -> ()) codec ~valid ~reads =
     if Random.State.bool rand && len >= size then fix buf 0;
     let expected =
       outcome (fun () ->
-          Codec.validate codec buf 0;
+          Codec.validate_exn codec buf 0;
           String.concat "," (List.map (fun (get, _) -> get buf) reads))
     in
     let got =
@@ -726,7 +728,7 @@ let test_valid () =
           fun v -> (G_eth.read_src v :> string) );
       ]
 
-(* [is_valid buf off] holds exactly when [Codec.validate] accepts the record at
+(* [is_valid buf off] holds exactly when [Codec.validate_exn] accepts the record at
    [off]. In the buffer named [b] of length [len], [View.check b len off]
    passes exactly then, and [View.at b len off] then reads through each
    [view_<field> b v] what [Codec.get] reads at [off], and raises the codec's
@@ -752,7 +754,7 @@ let test_view () =
     let off = Random.State.int rand (len - size + 3) - 1 in
     let codec_ok =
       outcome (fun () ->
-          Codec.validate Schemas.ipv4 buf off;
+          Codec.validate_exn Schemas.ipv4 buf off;
           "ok")
     in
     Alcotest.(check bool)
@@ -761,7 +763,7 @@ let test_view () =
       (G_ipv4.is_valid buf off);
     let expected =
       outcome (fun () ->
-          Codec.validate Schemas.ipv4 buf off;
+          Codec.validate_exn Schemas.ipv4 buf off;
           frag buf off ^ "," ^ src buf off)
     in
     let (Buf.Any b) = Buf.v buf in
@@ -789,7 +791,7 @@ let test_view () =
       fix_checked buf off;
     let codec_ok =
       outcome (fun () ->
-          Codec.validate Schemas.checked buf off;
+          Codec.validate_exn Schemas.checked buf off;
           "ok")
     in
     Alcotest.(check bool)
@@ -798,7 +800,7 @@ let test_view () =
       (G_checked.is_valid buf off);
     let expected =
       outcome (fun () ->
-          Codec.validate Schemas.checked buf off;
+          Codec.validate_exn Schemas.checked buf off;
           proto buf off)
     in
     let (Buf.Any b) = Buf.v buf in
@@ -825,7 +827,7 @@ let test_failed_views () =
   Alcotest.(check string)
     "at raises the codec's error"
     (outcome (fun () ->
-         Codec.validate Schemas.ipv4 short 0;
+         Codec.validate_exn Schemas.ipv4 short 0;
          ""))
     (outcome (fun () ->
          ignore (G_ipv4.View.at b (Buf.length b) 0);
@@ -894,10 +896,10 @@ let test_bigstring () =
     ~on_big:(fun b o -> enc Schemas.ipv4 (G_ipv4.Bigstring.decode_exn b o));
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b o ->
-      G_checked.validate b o;
+      G_checked.validate_exn b o;
       "")
     ~on_big:(fun b o ->
-      G_checked.Bigstring.validate b o;
+      G_checked.Bigstring.validate_exn b o;
       "");
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b o -> enc Schemas.checked (G_checked.decode_exn b o))

@@ -19,8 +19,8 @@ val nested_cases : string -> int -> Alcobar.test_case list
     arbitrary nested codec per sample, composed up to [depth] levels. *)
 
 val validate_agrees_cases : string -> int -> Alcobar.test_case list
-(** [validate_agrees_cases label depth] requires {!Wire.Codec.validate} to raise
-    exactly when {!Wire.Codec.decode} returns [Error], with the same
+(** [validate_agrees_cases label depth] requires {!Wire.Codec.validate_exn} to
+    raise exactly when {!Wire.Codec.decode} returns [Error], with the same
     [error_kind], over an arbitrary nested codec per sample. *)
 
 val direct_cases : string -> 'a t -> Alcobar.test_case list
