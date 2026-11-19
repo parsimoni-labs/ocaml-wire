@@ -101,6 +101,7 @@ type w = {
   words : (string * int) list;
   raws : (string * (string * int)) list;
   deferred : (string * (string * bool)) list ref;
+  bounded : (string * string) list;
   base : string;
   limit : string;
   known : int;
