@@ -105,7 +105,7 @@ let fix_checked buf off =
     (List.nth [ 1; 6; 17 ] (Random.State.int rand 3))
 
 let test_ipv4 () =
-  reads Schemas.ipv4 ~decode:G_ipv4.decode ~validate:G_ipv4.validate;
+  reads Schemas.ipv4 ~decode:G_ipv4.decode_exn ~validate:G_ipv4.validate;
   writes Schemas.ipv4
     ~write:(fun (a, b, c, d, e, f, g, h, i, j) buf off ->
       G_ipv4.write buf off a b c d e f g h i j)
@@ -116,7 +116,7 @@ let test_ipv4_record () =
   for _ = 1 to 1000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     let via_gen () =
-      let r = G_ipv4_record.decode buf off in
+      let r = G_ipv4_record.decode_exn buf off in
       let out = Bytes.create size in
       G_ipv4_record.encode r out 0;
       Bytes.to_string out
@@ -129,7 +129,7 @@ let test_ipv4_record () =
   done
 
 let test_checked () =
-  reads ~fix:fix_checked Schemas.checked ~decode:G_checked.decode
+  reads ~fix:fix_checked Schemas.checked ~decode:G_checked.decode_exn
     ~validate:G_checked.validate;
   let wild () =
     ( Random.State.int rand 20,
@@ -146,7 +146,7 @@ let test_checked () =
     @ List.init 300 (fun _ -> wild ()))
 
 let test_mixed () =
-  reads Schemas.mixed ~decode:G_mixed.decode ~validate:G_mixed.validate;
+  reads Schemas.mixed ~decode:G_mixed.decode_exn ~validate:G_mixed.validate;
   let wild () =
     let a, b, c, d, e, f, _, _ =
       List.hd (decoded Schemas.mixed 1 @ decoded Schemas.mixed 5)
@@ -160,13 +160,13 @@ let test_mixed () =
     (decoded Schemas.mixed 200 @ List.init 200 (fun _ -> wild ()))
 
 let test_small () =
-  reads Schemas.small ~decode:G_small.decode ~validate:G_small.validate;
+  reads Schemas.small ~decode:G_small.decode_exn ~validate:G_small.validate;
   writes Schemas.small
     ~write:(fun (a, b) buf off -> G_small.write buf off a b)
     (decoded Schemas.small 100)
 
 let test_eth () =
-  reads Schemas.eth ~decode:G_eth.decode ~validate:G_eth.validate;
+  reads Schemas.eth ~decode:G_eth.decode_exn ~validate:G_eth.validate;
   let str n = String.init n (fun _ -> byte ()) in
   writes Schemas.eth
     ~write:(fun (a, b, c) ->
@@ -235,7 +235,7 @@ let test_write_int () =
   done
 
 let test_wide () =
-  reads Schemas.wide ~decode:G_wide.decode ~validate:G_wide.validate;
+  reads Schemas.wide ~decode:G_wide.decode_exn ~validate:G_wide.validate;
   let wild () =
     let w k = Random.State.full_int rand ((1 lsl k) + 4) in
     (w 1, w 8, w 23, w 3, w 29, w 31)
@@ -347,7 +347,7 @@ let test_digest () =
    generator specialises it. *)
 let test_signed () =
   ignore (Wire.Everparse.project Schemas.signed : Wire.Everparse.t);
-  reads Schemas.signed ~decode:G_signed.decode ~validate:G_signed.validate;
+  reads Schemas.signed ~decode:G_signed.decode_exn ~validate:G_signed.validate;
   writes Schemas.signed
     ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
     (decoded Schemas.signed 200)
@@ -357,7 +357,7 @@ let test_signed () =
    range raises what converting it raises. *)
 let test_packed () =
   let open Schemas in
-  reads packed ~decode:G_packed.decode ~validate:G_packed.validate;
+  reads packed ~decode:G_packed.decode_exn ~validate:G_packed.validate;
   writes packed
     ~write:(fun r ->
       let e = G_packed.Value.e r.e in
@@ -408,7 +408,7 @@ let fix_refined buf off =
   Bytes.set_uint8 buf (off + 2) (pick [ 5; 10; 20; 30; 40 ])
 
 let test_refined () =
-  reads ~fix:fix_refined Schemas.refined ~decode:G_refined.decode
+  reads ~fix:fix_refined Schemas.refined ~decode:G_refined.decode_exn
     ~validate:G_refined.validate;
   let wild () =
     ( Random.State.int rand 18,
@@ -434,7 +434,7 @@ let test_overflow () =
     Bytes.set_uint8 buf (off + 4) (Random.State.int rand 8);
     if Random.State.bool rand then Bytes.set_uint16_be buf (off + 5) 0
   in
-  reads ~fix Schemas.overflow ~decode:G_overflow.decode
+  reads ~fix Schemas.overflow ~decode:G_overflow.decode_exn
     ~validate:G_overflow.validate;
   let u32 = UInt32.of_int32 in
   writes Schemas.overflow
@@ -452,7 +452,7 @@ let test_overflow () =
   in
   Alcotest.(check bool)
     "a wrapped product is rejected" true
-    (match G_overflow.decode wrapped 0 with
+    (match G_overflow.decode_exn wrapped 0 with
     | _ -> false
     | exception Parse_error { kind = Value_out_of_range _; _ } -> true)
 
@@ -611,7 +611,7 @@ let getter codec field ~get ~show =
 (* Every field under a map: over 16- and 32-bit integers, a lookup whose index
    bound validate checks, and a bitfield. *)
 let test_mapped () =
-  reads Schemas.mapped ~decode:G_mapped.decode ~validate:G_mapped.validate;
+  reads Schemas.mapped ~decode:G_mapped.decode_exn ~validate:G_mapped.validate;
   writes Schemas.mapped
     ~write:(fun (a, b, c, d, e) ->
       let e = G_mapped.Value.rest e in
@@ -890,8 +890,8 @@ let big_to_string b =
 let test_bigstring () =
   let enc c v = Codec.to_string c v in
   same_on_bigstring Schemas.ipv4
-    ~on_bytes:(fun b o -> enc Schemas.ipv4 (G_ipv4.decode b o))
-    ~on_big:(fun b o -> enc Schemas.ipv4 (G_ipv4.Bigstring.decode b o));
+    ~on_bytes:(fun b o -> enc Schemas.ipv4 (G_ipv4.decode_exn b o))
+    ~on_big:(fun b o -> enc Schemas.ipv4 (G_ipv4.Bigstring.decode_exn b o));
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b o ->
       G_checked.validate b o;
@@ -900,16 +900,17 @@ let test_bigstring () =
       G_checked.Bigstring.validate b o;
       "");
   same_on_bigstring ~fix:fix_checked Schemas.checked
-    ~on_bytes:(fun b o -> enc Schemas.checked (G_checked.decode b o))
-    ~on_big:(fun b o -> enc Schemas.checked (G_checked.Bigstring.decode b o));
+    ~on_bytes:(fun b o -> enc Schemas.checked (G_checked.decode_exn b o))
+    ~on_big:(fun b o ->
+      enc Schemas.checked (G_checked.Bigstring.decode_exn b o));
   same_on_bigstring Schemas.mixed
-    ~on_bytes:(fun b o -> enc Schemas.mixed (G_mixed.decode b o))
-    ~on_big:(fun b o -> enc Schemas.mixed (G_mixed.Bigstring.decode b o));
+    ~on_bytes:(fun b o -> enc Schemas.mixed (G_mixed.decode_exn b o))
+    ~on_big:(fun b o -> enc Schemas.mixed (G_mixed.Bigstring.decode_exn b o));
   same_on_bigstring Schemas.eth
     ~on_bytes:(fun b o ->
-      enc Schemas.eth (G_eth.decode b o) ^ (G_eth.Get.src b o :> string))
+      enc Schemas.eth (G_eth.decode_exn b o) ^ (G_eth.Get.src b o :> string))
     ~on_big:(fun b o ->
-      enc Schemas.eth (G_eth.Bigstring.decode b o)
+      enc Schemas.eth (G_eth.Bigstring.decode_exn b o)
       ^ (G_eth.Bigstring.Get.src b o :> string));
   same_on_bigstring Schemas.ipv4
     ~on_bytes:(fun b o ->

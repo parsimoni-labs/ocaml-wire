@@ -986,6 +986,68 @@ let pp_oxcaml ~src ppf ~record ~plan ~size =
           Fmt.(list ~sep:(any "; ") string)
           (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
 
+(* [decode] answers the codec's error as a value, as [Wire.Codec.decode]
+   does; [decode_exn] raises it. *)
+let pp_decode_result ~src ppf =
+  Fmt.pf ppf
+    "let decode %s off =@\n\
+    \  match decode_exn buf off with@\n\
+    \  | v -> Ok v@\n\
+    \  | exception %s.Parse_error e -> Error e@\n\
+     @\n"
+    src.buf errors
+
+(* [Field.<field>] names a field as a value, of the type its getter returns, so
+   code written against [Wire.S] reads it the same way from the interpreted
+   codec: [Field.get f] is [Get.<field>] and [Field.view f] [view_<field>]. A
+   field under a map, whose type is the caller's, has none, nor has an
+   anonymous one. *)
+let pp_field_module ~src ppf ~target fields =
+  let fields =
+    List.filter
+      (fun f ->
+        Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
+      fields
+  in
+  let tag f = String.capitalize_ascii f.label in
+  let b =
+    match target with
+    | `OxCaml -> Fmt.str "b %s.t @@ local" src.brand
+    | `OCaml -> Fmt.str "b %s.t" src.brand
+  in
+  Fmt.pf ppf "module Field = struct@\n  type _ t =@\n";
+  (* With no named field, [t] has no case, and each match only refutes. *)
+  if fields = [] then Fmt.pf ppf "    |@\n";
+  List.iter
+    (fun f -> Fmt.pf ppf "    | %s : %s t@\n" (tag f) (type_of f))
+    fields;
+  Fmt.pf ppf
+    "@\n\
+    \  let[@inline] get : type a. a t -> (bytes -> int -> a) %s.Staged.t =@\n\
+    \    function@\n"
+    rt;
+  if fields = [] then Fmt.pf ppf "    | _ -> .@\n";
+  List.iter
+    (fun f ->
+      Fmt.pf ppf
+        "    | %s -> %s.Staged.stage (fun buf off -> Get.%s buf off)@\n" (tag f)
+        rt f.label)
+    fields;
+  Fmt.pf ppf
+    "@\n\
+    \  let[@inline] view : type a b. a t -> %s -> b View.t -> a =@\n\
+    \   fun f %s ->@\n\
+    \    match f with@\n"
+    b
+    (if fields = [] then "_ _" else "b v");
+  if fields = [] then Fmt.pf ppf "    | _ -> .@\n";
+  List.iter
+    (fun f -> Fmt.pf ppf "    | %s -> view_%s b v@\n" (tag f) f.label)
+    fields;
+  Fmt.pf ppf "@\n";
+  List.iter (fun f -> Fmt.pf ppf "  let %s = %s@\n" f.label (tag f)) fields;
+  Fmt.pf ppf "end@\n@\n"
+
 (* The same reads and writes on a bigarray of bytes, with the same errors. *)
 let pp_bigstring ppf ~target ~make ~record ~plan ~size =
   let src =
@@ -998,8 +1060,9 @@ let pp_bigstring ppf ~target ~make ~record ~plan ~size =
   pp_validate_written ~src ppf ~target;
   let value = if record then typed_value else plain_typed_value in
   pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode %s off" src.buf) ~call:(fun args ->
+    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
       Fmt.str "%s %a" make pp_list args);
+  pp_decode_result ~src ppf;
   pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
   pp_write_at ~src ~ints:true ppf ~target ~plan;
@@ -1012,7 +1075,7 @@ let pp_bigstring ppf ~target ~make ~record ~plan ~size =
 
 let pp_body ppf ~target ~make ~plan ~size =
   let fields = all_fields plan in
-  Fmt.pf ppf "let size = %d@\n@\n" size;
+  Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
   pp_values ppf fields;
   let record = Option.is_none make in
   if record then pp_record ppf fields;
@@ -1025,8 +1088,9 @@ let pp_body ppf ~target ~make ~plan ~size =
   let make = Option.value ~default:"v" make in
   let value = if record then typed_value else plain_typed_value in
   pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode %s off" src.buf) ~call:(fun args ->
+    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
       Fmt.str "%s %a" make pp_list args);
+  pp_decode_result ~src ppf;
   if target = `OxCaml then pp_oxcaml ~src ppf ~record ~plan ~size;
   pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
@@ -1035,6 +1099,7 @@ let pp_body ppf ~target ~make ~plan ~size =
   pp_getters ~src ppf ~target fields;
   pp_valid ~src ppf ~target ~plan;
   pp_view ~src ppf ~target ~plan ~size;
+  pp_field_module ~src ppf ~target fields;
   if record then pp_encode ~src ppf fields;
   pp_bigstring ppf ~target ~make ~record ~plan ~size
 
@@ -1057,18 +1122,24 @@ let own_names =
     "validate_written";
     "rejected";
     "decode";
+    "decode_exn";
     "decode_with";
     "decode_local";
     "first_error";
     "write_int";
     "write";
+    "write_at";
+    "write_int_at";
     "enum_failed";
     "Get";
     "v";
     "encode";
+    "min_size";
     "t";
     "Valid";
     "View";
+    "Value";
+    "Field";
     "Bigstring";
     "mask32";
   ]

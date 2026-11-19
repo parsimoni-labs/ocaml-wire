@@ -52,7 +52,7 @@ let stack_decode () =
   with_ + record r
 
 let test_stack_decode () =
-  let r = G_ipv4_record.decode (Bytes.of_string packet) 0 in
+  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
   let want =
     1 + (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int) + record r
   in
@@ -61,7 +61,7 @@ let test_stack_decode () =
 (* A header written to a buffer on the stack decodes as the one it was
    decoded from. *)
 let stack_write () =
-  let r = G_ipv4_record.decode (Bytes.of_string packet) 0 in
+  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
   let b = Bytes.create__stack size in
   G_ipv4_record.encode r b 0;
   let back = record (G_ipv4_record.decode_local b 0) in

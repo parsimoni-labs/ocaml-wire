@@ -7,9 +7,9 @@ open Expect
 
 let checked () =
   round_trip "checked" ~size:S_checked.size
-    ~decode:(fun b o -> S_checked.decode b o)
+    ~decode:(fun b o -> S_checked.decode_exn b o)
     ~encode:(fun t b o -> S_checked.encode t b o)
-    ~big_decode:(fun b o -> S_checked.Bigstring.decode b o)
+    ~big_decode:(fun b o -> S_checked.Bigstring.decode_exn b o)
     ~big_encode:(fun t b o -> S_checked.Bigstring.encode t b o)
     [ 0x45; 0; 20; 64; 6 ];
   parse_error "checked: version" ~field:[ "Version" ] ~at:0
@@ -27,17 +27,17 @@ let checked () =
 
 let eth () =
   round_trip "eth" ~size:S_eth.size
-    ~decode:(fun b o -> S_eth.decode b o)
+    ~decode:(fun b o -> S_eth.decode_exn b o)
     ~encode:(fun t b o -> S_eth.encode t b o)
-    ~big_decode:(fun b o -> S_eth.Bigstring.decode b o)
+    ~big_decode:(fun b o -> S_eth.Bigstring.decode_exn b o)
     ~big_encode:(fun t b o -> S_eth.Bigstring.encode t b o)
     (List.init 14 (fun i -> i * 17))
 
 let signed () =
   round_trip "signed" ~size:S_signed.size
-    ~decode:(fun b o -> S_signed.decode b o)
+    ~decode:(fun b o -> S_signed.decode_exn b o)
     ~encode:(fun t b o -> S_signed.encode t b o)
-    ~big_decode:(fun b o -> S_signed.Bigstring.decode b o)
+    ~big_decode:(fun b o -> S_signed.Bigstring.decode_exn b o)
     ~big_encode:(fun t b o -> S_signed.Bigstring.encode t b o)
     [ 0xfe; 0x80; 0 ];
   parse_error "signed: S" ~field:[ "S" ] ~at:0
@@ -46,9 +46,9 @@ let signed () =
 
 let refined () =
   round_trip "refined" ~size:S_refined.size
-    ~decode:(fun b o -> S_refined.decode b o)
+    ~decode:(fun b o -> S_refined.decode_exn b o)
     ~encode:(fun t b o -> S_refined.encode t b o)
-    ~big_decode:(fun b o -> S_refined.Bigstring.decode b o)
+    ~big_decode:(fun b o -> S_refined.Bigstring.decode_exn b o)
     ~big_encode:(fun t b o -> S_refined.Bigstring.encode t b o)
     [ 0x13; 2; 20 ];
   parse_error "refined: Lo at its word" ~field:[ "Lo" ] ~at:0
