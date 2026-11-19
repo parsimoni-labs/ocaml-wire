@@ -30,6 +30,11 @@ type ('a, 'r) field
 type 'r t
 (** A sealed record codec for type ['r]. *)
 
+(** The fields a {!writer} takes, in the order of its arguments. *)
+type ('f, 'r) args =
+  | [] : (unit, 'r) args
+  | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
+
 type ('f, 'r) fields =
   | [] : ('r, 'r) fields
   | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
@@ -242,6 +247,24 @@ val get :
     of the field, while a same-named lookalike could interpret those bytes with
     a different wire type. Does not check record-level where-clauses or other
     fields' constraints -- call {!validate} first on untrusted input. *)
+
+val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
+(** [writer c template fields] is a staged writer of a record of [c]: called
+    with a buffer, an offset and one value per field of [fields], it writes
+    [template] at the offset with each of those fields set to its value, as
+    {!encode} of [template] then {!set} of each field would. A header that
+    differs from a template in a few fields is one call.
+
+    A record of at most 7 bytes whose fields in [fields] are big-endian integers
+    or bitfields of a byte or a big-endian 16- or 32-bit word is put together in
+    an [int] and written in a few stores, after every check.
+
+    Raises [Invalid_argument] when [c] is not of a fixed size or has input
+    params, when a field is not one of [c]'s or comes twice, or as {!encode}
+    raises on [template]. The writer raises [Invalid_argument] when the buffer
+    does not hold the record at the offset, and as {!set} raises on a value its
+    field cannot represent; the bytes from the offset on are then scrap, as
+    after a failed {!encode}. *)
 
 type 'r valid
 (** A buffer and offset where {!valid} has accepted a ['r]. Only {!valid} makes

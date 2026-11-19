@@ -82,7 +82,7 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: the encoded default header copied, then `Codec.set` per field that varies |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
@@ -181,11 +181,14 @@ Writing is where the generated OCaml is furthest from Rust. A
 where LLVM proves from the loop that `(p % 2048) as u16 >> 11` is 0 and drops
 the check; the OCaml assembles a 32-bit word on tagged integers, with an
 `int32` sign normalisation and a `sxtw` on each side of the `rev` that do
-nothing; and each packet polls for a safepoint. On gateway that is about 48
-instructions per packet on OxCaml against 14 in Rust. LLVM also vectorises
-the CLCW writer, 3.4 instructions per word. `Wire.Codec` writes a header by
-copying its encoded default and calling a staged `Codec.set` per field that
-varies, about 150 instructions per field. These headers are at most 6 bytes,
+nothing, where OxCaml builds it untagged; and each packet polls for a
+safepoint. On gateway that is 557 instructions per frame on OxCaml against
+354 in Rust. LLVM also vectorises the CLCW writer, 4.9 instructions per
+word. `Wire.Codec` writes a header with one call to a staged
+`Codec.writer`, which puts the default header and the fields that vary
+together in an `int` and stores it; the table above predates it, when the
+row copied the encoded default and called a staged `Codec.set` per field,
+about 150 instructions per field. These headers are at most 6 bytes,
 so no row stores a 64-bit word: the generated writes are `str w` and `strh`,
 and the only `dmb ishld` OxCaml puts in a write loop is the one before the
 per-route sequence count's `int array` store of `routing_write`. The OxCaml rows

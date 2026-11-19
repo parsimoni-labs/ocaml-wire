@@ -53,4 +53,4 @@ val frame : out:bytes -> int -> unit
     of each packet starting in its data field, packet [p] a telemetry packet
     with a secondary header, unsegmented, with APID [p mod 2048], sequence count
     [p mod 16384] and 64 bytes of data. Every header is written by Wire's staged
-    {!Wire.Codec.set} over its encoded default. *)
+    {!Wire.Codec.writer} of its default and the fields that vary. *)

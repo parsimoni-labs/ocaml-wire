@@ -1217,6 +1217,11 @@ module Codec : sig
       source field, but not a newly declared field that merely has the same
       name. One source field may still be shared by multiple codecs. *)
 
+  (** The fields a {!writer} takes, in the order of its arguments. *)
+  type ('f, 'r) args =
+    | [] : (unit, 'r) args
+    | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
+
   type ('f, 'r) fields =
     | [] : ('r, 'r) fields
     | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
@@ -1447,6 +1452,54 @@ module Codec : sig
 
       Does not check constraints or fire actions -- call {!validate} after a
       batch of writes to verify constraints still hold. *)
+
+  val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
+  (** [writer c template fields] is a staged writer of a record of [c]: called
+      with a buffer, an offset and one value per field of [fields], it writes
+      [template] at the offset with each of those fields set to its value, as
+      {!encode} of [template] then {!set} of each field would. A header that
+      differs from a template in a few fields is one call:
+
+      {[
+      open Wire
+
+      type hdr = { version : int; kind : int; len : UInt16.t }
+
+      let kind = Codec.(Field.v "kind" (bits ~width:4 U8) $ fun h -> h.kind)
+      let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
+
+      let codec =
+        Codec.v "Hdr"
+          (fun version kind len -> { version; kind; len })
+          Codec.
+            [
+              (Field.v "version" (bits ~width:4 U8) $ fun h -> h.version);
+              kind;
+              len;
+            ]
+
+      let stamp =
+        Staged.unstage
+          (Codec.writer codec
+             { version = 4; kind = 0; len = UInt16.v 0 }
+             [ kind; len ])
+
+      let () =
+        let buf = Bytes.create 3 in
+        stamp buf 0 5 (UInt16.v 12);
+        assert (Bytes.to_string buf = "\x45\x00\x0c")
+      ]}
+
+      A record of at most 7 bytes whose fields in [fields] are big-endian
+      integers or bitfields of a byte or a big-endian 16- or 32-bit word is put
+      together in an [int] and written in a few stores, after every check.
+
+      Raises [Invalid_argument] when [c] is not of a fixed size or has input
+      params, when a field is not one of [c]'s or comes twice, or as {!encode}
+      raises on [template]. The writer raises [Invalid_argument] when the buffer
+      does not hold the record at the offset, and as {!set} raises on a value
+      its field cannot represent; the bytes from the offset on are then scrap,
+      as after a failed {!encode}. *)
 
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
