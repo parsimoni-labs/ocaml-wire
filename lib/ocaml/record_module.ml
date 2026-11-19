@@ -1184,14 +1184,54 @@ let lanes plan ~size =
     else None
 
 (* [X4] reads and writes four records at once in a NEON register (OxCaml on
-   arm64): [with_] checks the 16 bytes they take and loads them, and each
-   [<field>] takes that field out of every lane. *)
-let pp_x4_reads ~src ppf fields =
+   arm64). [with_] checks the 16 bytes they take and loads them, and each
+   [<field>] takes that field out of every lane. A [part] holds field bits at
+   their place in each lane, every one in range: [<field>_bits] keeps the
+   field's low bits of each lane, [<field>_of] checks they fit, [( ++ )] joins
+   parts. Every field is unsigned with no check and the fields cover the
+   record, so any part is four valid records, and [store] tests only that they
+   fit. *)
+let pp_x4_sig ~src ppf fields =
+  let v = "Wire_runtime.Vec.t" in
   Fmt.pf ppf
-    "module X4 = struct@\n\
+    "module X4 : sig@\n\
+    \  type part@\n\
+     @\n\
+    \  val with_ :@\n\
+    \    'b %s.t @@ local -> 'b %s.length -> int -> ok:(%s -> 'a) @@ local ->@\n\
+    \    fail:(unit -> 'a) @@ local -> 'a@\n\
+     @\n"
+    src.brand src.brand v;
+  List.iter
+    (fun (f, _) ->
+      Fmt.pf ppf
+        "  val %s : %s -> %s@\n\
+        \  val %s_bits : %s -> part@\n\
+        \  val %s_of : %s -> part@\n"
+        f.label v v f.label v f.label v)
+    fields;
+  Fmt.pf ppf
+    "  val zero : part@\n\
+    \  val ( ++ ) : part -> part -> part@\n\
+    \  val store : 'b %s.t @@ local -> 'b %s.length -> int -> part -> unit@\n\
+     @\n\
+    \  val fill :@\n\
+    \    'b %s.t @@ local -> 'b %s.length -> int -> count:int ->@\n\
+    \    f:(int -> part) @@ local -> unit@\n\
+     @\n\
+    \  val write_int_at :@\n\
+    \    'b %s.t @@ local -> 'b %s.length -> int -> %s -> unit@\n\
+     end = struct@\n\
     \  module V = Wire_runtime.Vec@\n\
      @\n\
-    \  let[@inline] with_ ((b : 'b %s.t) @@ local) (len : 'b %s.length) off@\n\
+    \  type part = V.t@\n\
+     @\n"
+    src.brand src.brand src.brand src.brand src.brand src.brand
+    (String.concat " -> " (List.map (fun _ -> v) fields))
+
+let pp_x4_reads ~src ppf fields =
+  Fmt.pf ppf
+    "  let[@inline] with_ ((b : 'b %s.t) @@ local) (len : 'b %s.length) off@\n\
     \      ~(ok @@ local) ~(fail @@ local) =@\n\
     \    let buf = (b : _ %s.t :> %s) and len = (len : _ %s.length :> int) in@\n\
     \    if off < 0 || off > len - 16 then fail () else ok (V.load buf off)@\n\
@@ -1209,10 +1249,93 @@ let pp_x4_reads ~src ppf fields =
           (mask width))
     fields
 
-(* [X4.write_int_at] stores four records whose fields are lanes, after one
-   range test over the fields of each width, as [write_int_at] does. A write
-   that fails its checks is redone as four [write_int_at], which raise what one
-   record at a time raises. *)
+(* The parts: a field's low bits moved to its place (no mask for the field at
+   the top of the lane, whose higher bits the shift drops), the same after a
+   range check that raises what [write_int_at] raises for the first lane out
+   of range, and their union. *)
+let pp_x4_parts ppf fields =
+  Fmt.pf ppf
+    "  let[@inline never] too_wide ~bits v =@\n\
+    \    let rec first k =@\n\
+    \      if k = 3 || V.get v k lsr bits <> 0 then V.get v k else first (k + \
+     1)@\n\
+    \    in@\n\
+    \    Wire_runtime.Errors.unsigned_too_wide ~bits (first 0)@\n\
+     @\n\
+    \  let zero = V.v 0@\n\
+    \  let[@inline] ( ++ ) a b = V.logor a b@\n\
+     @\n";
+  List.iter
+    (fun (f, (shift, width)) ->
+      (* Two shifts keep the low bits and place them, where a mask would need
+         a constant built again at each call. *)
+      let bits =
+        if shift + width = 32 then Fmt.str "V.shift_left %d v" shift
+        else
+          Fmt.str "V.shift_right_logical %d (V.shift_left %d v)"
+            (32 - width - shift)
+            (32 - width)
+      in
+      Fmt.pf ppf
+        "  let[@inline] %s_bits v = %s@\n\
+         @\n\
+        \  let[@inline] %s_of v =@\n\
+        \    if V.is_all_zero (V.shift_right_logical %d v) then %s_bits v@\n\
+        \    else too_wide ~bits:%d v@\n\
+         @\n"
+        f.label bits f.label width f.label width)
+    fields
+
+(* [store] writes four records with one store once they fit; if they do not,
+   it writes them one at a time with [write_int_at], which writes the ones that
+   fit and raises for the first that does not, as one record at a time does.
+   [fill] checks the span of [count] registers once and stores two per turn,
+   or falls back to [store] for each. *)
+let pp_x4_store ~src ppf fields =
+  let of_word =
+    List.map
+      (fun (_, (shift, width)) ->
+        if shift + width = 32 then Fmt.str "(w lsr %d)" shift
+        else Fmt.str "((w lsr %d) land %s)" shift (mask width))
+      fields
+  in
+  Fmt.pf ppf
+    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) len off p =@\n\
+    \    for k = 0 to 3 do@\n\
+    \      let w = V.get p k in@\n\
+    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \    done@\n\
+     @\n\
+    \  let[@inline] store ((b : 'b %s.t) @@ local) (len : 'b %s.length) off p =@\n\
+    \    let buf = (b : _ %s.t :> %s) and n = (len : _ %s.length :> int) in@\n\
+    \    if off < 0 || off > n - 16 then one_by_one b len off p@\n\
+    \    else V.store buf off p@\n\
+     @\n\
+    \  let[@inline] fill ((b : 'b %s.t) @@ local) (len : 'b %s.length) off@\n\
+    \      ~count ~(f @@ local) =@\n\
+    \    let buf = (b : _ %s.t :> %s) and n = (len : _ %s.length :> int) in@\n\
+    \    if off < 0 || off > n || count > (n - off) / 16 then@\n\
+    \      for k = 0 to count - 1 do@\n\
+    \        store b len (off + (16 * k)) (f k)@\n\
+    \      done@\n\
+    \    else begin@\n\
+    \      let k = ref 0 in@\n\
+    \      while !k + 2 <= count do@\n\
+    \        V.store buf (off + (16 * !k)) (f !k);@\n\
+    \        V.store buf (off + (16 * (!k + 1))) (f (!k + 1));@\n\
+    \        k := !k + 2@\n\
+    \      done;@\n\
+    \      if !k < count then V.store buf (off + (16 * !k)) (f !k)@\n\
+    \    end@\n\
+     @\n"
+    src.brand
+    (String.concat " " of_word)
+    src.brand src.brand src.brand src.typ src.brand src.brand src.brand
+    src.brand src.typ src.brand
+
+(* [X4.write_int_at] takes plain lanes: one range test over the fields of each
+   width, then [store]; lanes out of range are written one record at a time,
+   which raises what [write_int_at] raises. *)
 let pp_x4_write ~src ppf fields =
   let ids = List.map (fun (f, _) -> f.id) fields in
   let widths =
@@ -1237,23 +1360,21 @@ let pp_x4_write ~src ppf fields =
       fields
   in
   Fmt.pf ppf
-    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) len off %s =@\n\
+    "  let[@inline never] lanes_one_by_one ((b : 'b %s.t) @@ local) len off %s \
+     =@\n\
     \    for k = 0 to 3 do@\n\
     \      write_int_at b len (off + (4 * k)) %s@\n\
     \    done@\n\
      @\n\
-    \  let[@inline] write_int_at ((b : 'b %s.t) @@ local) (len : 'b %s.length)@\n\
-    \      off %s =@\n\
-    \    let buf = (b : _ %s.t :> %s) and n = (len : _ %s.length :> int) in@\n\
+    \  let[@inline] write_int_at ((b : 'b %s.t) @@ local) len off %s =@\n\
     \    let over = %s in@\n\
-    \    if off < 0 || off > n - 16 || not (V.is_all_zero over) then@\n\
-    \      one_by_one b len off %s@\n\
-    \    else V.store buf off (%s)@\n\
+    \    if not (V.is_all_zero over) then lanes_one_by_one b len off %s@\n\
+    \    else store b len off (%s)@\n\
      end@\n\
      @\n"
     src.brand (String.concat " " ids)
     (String.concat " " (List.map (Fmt.str "(V.get %s k)") ids))
-    src.brand src.brand (String.concat " " ids) src.brand src.typ src.brand
+    src.brand (String.concat " " ids)
     (String.concat "\n      |> V.logor " over)
     (String.concat " " ids)
     (String.concat "\n      |> V.logor " word)
@@ -1262,7 +1383,10 @@ let pp_x4 ~src ppf ~plan ~size =
   match lanes plan ~size with
   | None -> ()
   | Some fields ->
+      pp_x4_sig ~src ppf fields;
       pp_x4_reads ~src ppf fields;
+      pp_x4_parts ppf fields;
+      pp_x4_store ~src ppf fields;
       pp_x4_write ~src ppf fields
 
 let pp_body ?(simd = false) ppf ~target ~make ~plan ~size =

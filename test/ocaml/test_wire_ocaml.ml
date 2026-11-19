@@ -1010,7 +1010,8 @@ let test_simd () =
   List.iter
     (fun s -> Alcotest.(check bool) s true (contains lanes s))
     [
-      "module X4 = struct";
+      "module X4 : sig";
+      "val ( ++ ) : part -> part -> part";
       "let[@inline] a w = V.logand (V.shift_right_logical 4 w)";
       "let[@inline] c w = V.logand (V.shift_right_logical 8 w)";
       "let[@inline] d w = V.logand (V.shift_right_logical 21 w)";
