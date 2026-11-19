@@ -214,6 +214,7 @@ let section label = Fmt.pr "\n  -- %s --\n" label
 
 (* -- Rows measured in their own process -- *)
 
+let oxcaml = Ox.v
 let compiler = (if Ox.v then "OxCaml " else "OCaml ") ^ Sys.ocaml_version
 
 let read_file file =

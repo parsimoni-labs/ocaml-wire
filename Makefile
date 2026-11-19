@@ -1,6 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
-       bench-clcw bench-rust \
+       bench-clcw bench-rust bench-apps-rust \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -136,6 +136,46 @@ bench-rust:
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
+
+# The application benchmarks (bench/routing, bench/gateway, bench/clcw) across
+# languages: each OCaml workload, and the same application logic over the
+# OCaml Wire_ocaml generates, on OCaml (and on OxCaml when the switch
+# OXCAML_SWITCH exists), against that logic over the Rust Wire_rust generates
+# from the same codecs, on the inputs their generators write. Each workload
+# runs reading, then writing. Their EverParse C rows stay in bench-routing,
+# bench-gateway and bench-clcw. Results land in _build/bench-apps/.
+BENCH_APPS_PACKETS ?= 10000000
+BENCH_APPS_FRAMES ?= 1000000
+BENCH_APPS_WORDS ?= 1000000
+BENCH_APPS_RUNS ?= 21
+BENCH_APPS = _build/bench-apps
+# $(1) FILE ITEMS RUNS ROW, for each workload and each row $(1) lists, each row
+# in a process of its own (bench/rows.sh), appended to $(BENCH_APPS)/$(2).txt.
+bench_apps_each = for w in routing:$(BENCH_APPS_PACKETS) \
+	  gateway:$(BENCH_APPS_FRAMES) clcw:$(BENCH_APPS_WORDS); do \
+	  sh bench/rows.sh $(1) $(BENCH_APPS)/$${w%:*}.bin $${w\#*:} \
+	    $(BENCH_APPS_RUNS) >> $(BENCH_APPS)/$(2).txt || exit 1; done
+BENCH_APPS_RUST = bench/apps/cargo/target/release/wire-bench-apps
+
+bench-apps-rust:
+	@mkdir -p $(BENCH_APPS) bench/apps/cargo/src/gen
+	dune build --profile=release bench/apps/bench.exe bench/apps/gen.exe
+	_build/default/bench/apps/gen.exe --rust bench/apps/cargo/src/gen
+	_build/default/bench/apps/bench.exe inputs $(BENCH_APPS) \
+	  $(BENCH_APPS_PACKETS) $(BENCH_APPS_FRAMES) $(BENCH_APPS_WORDS)
+	cargo build --quiet --release --manifest-path bench/apps/cargo/Cargo.toml
+	rm -f $(BENCH_APPS)/*.txt
+	$(call bench_apps_each,$(BENCH_APPS_RUST) run,rust)
+	$(call bench_apps_each,$(BENCH_APPS_RUST) write,rust)
+	$(call bench_apps_each,_build/default/bench/apps/bench.exe run,ocaml)
+	$(call bench_apps_each,_build/default/bench/apps/bench.exe write,ocaml)
+	@if opam switch list --short 2>/dev/null | grep -qx '$(OXCAML_SWITCH)'; then \
+	  opam exec --switch $(OXCAML_SWITCH) -- dune build --profile=release \
+	    --build-dir $(CURDIR)/_build/oxcaml bench/apps/bench.exe && \
+	  $(call bench_apps_each,_build/oxcaml/default/bench/apps/bench.exe run,oxcaml) && \
+	  $(call bench_apps_each,_build/oxcaml/default/bench/apps/bench.exe write,oxcaml); \
+	else echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	@_build/default/bench/apps/bench.exe report $(BENCH_APPS)/*.txt
 
 PROF_EXE ?= bench/clcw/bench.exe
 

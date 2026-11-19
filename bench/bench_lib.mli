@@ -96,6 +96,9 @@ val pack : bytes array -> size:int -> bytes * int
     [RESULT corpus name cpu-best cpu-p10 cpu-median cpu-p90 wall-best wall-p10
      wall-median wall-p90 result], times in nanoseconds per item. *)
 
+val oxcaml : bool
+(** [oxcaml] is [true] when this was built by an OxCaml compiler. *)
+
 val compiler : string
 (** [compiler] is ["OCaml <version>"], or ["OxCaml <version>"] when this was
     built by an OxCaml compiler. *)

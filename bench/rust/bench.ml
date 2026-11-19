@@ -257,15 +257,15 @@ let corpora dir n =
 
 (* {1 The fold} *)
 
-let[@inline] ip_fields acc ~src ~dst ~ttl ~proto ~len =
+let ip_fields acc ~src ~dst ~ttl ~proto ~len =
   acc + (src lxor dst) + (ttl + proto + len)
 
-let[@inline] tcp_fields acc ~sp ~dp ~seq ~ack ~win ~flags ~off =
+let tcp_fields acc ~sp ~dp ~seq ~ack ~win ~flags ~off =
   acc + ((sp lsl 16) lor dp) + (seq lxor ack) + (win + flags + off)
 
-let[@inline] udp_fields acc ~sp ~dp ~len = acc + ((sp lsl 16) lor dp) + len
+let udp_fields acc ~sp ~dp ~len = acc + ((sp lsl 16) lor dp) + len
 
-let[@inline] packet_fields acc (packet : Packet_stack.t) =
+let packet_fields acc (packet : Packet_stack.t) =
   let acc = acc + UInt16.to_int packet.ether_type in
   match packet.ipv4 with
   | None -> acc
@@ -320,7 +320,7 @@ let udp_sp = Staged.unstage (Codec.read H.udp H.udp_src_port)
 let udp_dp = Staged.unstage (Codec.read H.udp H.udp_dst_port)
 let udp_len = Staged.unstage (Codec.read H.udp H.udp_length)
 
-let[@inline] codec_tcp base acc buf o ~payload =
+let codec_tcp base acc buf o ~payload =
   match Codec.valid H.tcp buf o with
   | exception Parse_error _ -> base
   | t ->
@@ -335,7 +335,7 @@ let[@inline] codec_tcp base acc buf o ~payload =
           ~win:(UInt16.to_int (tcp_win t))
           ~flags:(tcp_flags t) ~off
 
-let[@inline] codec_udp base acc buf o ~payload =
+let codec_udp base acc buf o ~payload =
   match Codec.valid H.udp buf o with
   | exception Parse_error _ -> base
   | u ->
@@ -347,7 +347,7 @@ let[@inline] codec_udp base acc buf o ~payload =
           ~dp:(UInt16.to_int (udp_dp u))
           ~len
 
-let[@inline] codec_ipv4 base acc buf o ~avail =
+let codec_ipv4 base acc buf o ~avail =
   match Codec.valid H.ipv4 buf o with
   | exception Parse_error _ -> base
   | ip -> (
@@ -370,7 +370,7 @@ let[@inline] codec_ipv4 base acc buf o ~avail =
           | 17 -> codec_udp base acc buf (o + hlen) ~payload
           | _ -> acc)
 
-let[@inline] codec_packet ~avail acc buf o =
+let codec_packet ~avail acc buf o =
   match Codec.valid H.eth buf o with
   | exception Parse_error _ -> acc
   | e ->
@@ -386,7 +386,7 @@ let[@inline] codec_packet ~avail acc buf o =
    [Valid::at] does; each [view_<field> b v] is then one load with no bounds
    check, and the proof is an [int], so nothing is allocated. *)
 
-let[@inline] view_tcp base acc b len o ~payload =
+let view_tcp base acc b len o ~payload =
   let c = G_tcp.View.check b len o in
   if not (G_tcp.View.ok c) then base
   else
@@ -402,7 +402,7 @@ let[@inline] view_tcp base acc b len o ~payload =
         ~win:(UInt16.to_int (G_tcp.view_window b t))
         ~flags:(G_tcp.flags_of_word w) ~off
 
-let[@inline] view_udp base acc b len o ~payload =
+let view_udp base acc b len o ~payload =
   let c = G_udp.View.check b len o in
   if not (G_udp.View.ok c) then base
   else
@@ -415,7 +415,7 @@ let[@inline] view_udp base acc b len o ~payload =
         ~dp:(UInt16.to_int (G_udp.view_dst_port b u))
         ~len:ulen
 
-let[@inline] view_ipv4 base acc b len o ~avail =
+let view_ipv4 base acc b len o ~avail =
   let c = G_ipv4.View.check b len o in
   if not (G_ipv4.View.ok c) then base
   else
@@ -444,7 +444,7 @@ let[@inline] view_ipv4 base acc b len o ~avail =
         | 17 -> view_udp base acc b len (o + hlen) ~payload
         | _ -> acc
 
-let[@inline] view_packet ~avail acc b len o =
+let view_packet ~avail acc b len o =
   let c = G_eth.View.check b len o in
   if not (G_eth.View.ok c) then acc
   else
@@ -455,9 +455,10 @@ let[@inline] view_packet ~avail acc b len o =
 
 let oxcaml = Stack_read.oxcaml
 
-(* The rows for one stride. The stride is a literal at the application, so
-   that, inlined, it reaches the generated scanners as a constant frame length,
-   as a caller with fixed-size frames would pass it. *)
+(* The rows for one stride. The stride is a literal at the application, as a
+   caller with fixed-size frames would pass it; whether the loop sees it as a
+   constant is the compiler's choice, as the loops carry no inlining
+   attribute. *)
 module type STRIDE = sig
   val stride : int
 end
@@ -487,14 +488,14 @@ module Rows (S : STRIDE) = struct
     done;
     !acc
 
-  let[@inline always] frames f buf =
+  let frames f buf =
     let acc = ref 0 in
     for i = 0 to (Bytes.length buf / stride) - 1 do
       acc := f !acc buf (i * stride) stride
     done;
     !acc
 
-  let[@inline always] linked f buf =
+  let linked f buf =
     let acc = ref 0 in
     for i = 0 to (Bytes.length buf / stride) - 1 do
       acc := f ~avail:(stride - 14) !acc buf (i * stride)
@@ -556,7 +557,6 @@ module Rows (S : STRIDE) = struct
       ]
     else []
 end
-[@@inline always]
 
 module Rows64 = Rows (struct
   let stride = 64

@@ -1,0 +1,19 @@
+[package]
+name = "wire-bench-apps"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The application benchmarks of ocaml-wire over the Rust Wire_rust generates"
+
+[dependencies]
+# getrusage, for the process CPU time of each pass.
+libc = "0.2"
+
+# As bench/rust/cargo: the strongest settings that stay portable, no
+# target-cpu=native, as the OCaml compilers have no equivalent for the OCaml
+# rows.
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+panic = "abort"

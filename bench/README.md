@@ -8,7 +8,8 @@ demo benchmark (`bench/demo/`) compares three tiers:
 3. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
 
 The application benchmarks (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
-compare two tiers: Pure OCaml vs EverParse C.
+compare two tiers: Pure OCaml vs EverParse C. `bench/rust/` and `bench/apps/`
+compare the OCaml, OxCaml and Rust code generators across languages.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
@@ -25,6 +26,13 @@ therefore includes different amounts of validation work.
   read named struct members. No manual bitfield manipulation, no index
   arrays, no hand-rolled `WIRECTX`.
 - Both tiers must operate on the same data and produce the same results.
+- **Loops are what a user writes.** Every optimisation lives in the code
+  generator or the runtime, never in the harness: plain checked indexing,
+  no `unsafe_get`, masks, hand unboxing, inlining attributes or intrinsics,
+  and SIMD only through an API the generator emits. The rows of one
+  workload in one language share one loop shape and differ only in the API
+  they call; a crate row calls the crate as its documentation shows. A
+  harness trick is a defect: its win belongs in the generator.
 
 ## Field-level codec (`bench/demo/`)
 
@@ -50,7 +58,123 @@ work with `Codec.get`/`Codec.set`.
 |---|---|---|
 | `make bench-routing` | APID demux (10M variable-size packets) | Space Packet |
 | `make bench-gateway` | TM frame reassembly (1M frames) | TMFrame + Space Packet |
-| `make bench-clcw` | COP-1 CLCW polling (10M words) | CLCW |
+| `make bench-clcw` | COP-1 CLCW polling (1M words, polled 10M times) | CLCW |
+
+Each workload lives in `<app>_workload.ml` in its directory, with no C, so
+that the cross-language rows below run the same code.
+
+## Cross-language applications (`bench/apps/`)
+
+The same three workloads on OCaml, on OxCaml and in Rust, each
+pass over the whole input its generator writes. Each workload has a reading side, what a ground
+station does with the stream, and a writing side, what the spacecraft or a
+relay does to produce it:
+
+| Workload | Input | Work per item | Result |
+|---|---|---|---|
+| `routing` | 10M space packet headers of 14 to 262 bytes, the last packet in the buffer truncated so that the reader wraps to the first for its last 1 in 64 | read APID and data length, count the APID's route, skip the packet | the four route counts |
+| `routing_write` | the same packets | read APID and data length, then write the packet's header at the same offset of an output buffer with the next sequence count of its route: the forwarding rewrite of a router that re-numbers each route's packets | FNV-1a hash of the output |
+| `gateway` | 1M TM frames of 1115 bytes, 1 in 64 idle (first header pointer 0x7FE, no packet starts in it) | read the frame's VCID and first header pointer, then the APID and sequence count of each 70-byte packet starting in it; fold them into an FNV-1a hash | the hash |
+| `gateway_write` | none, 1M frames out | build each frame from a packet stream: write its primary header (VCID, master and virtual channel counts, first header pointer), then the header of each 70-byte packet starting in it, laid out as the `gateway` input without its idle frames | FNV-1a hash of the output |
+| `clcw` | 1M CLCW words, with wait, retransmit and lockout set on words of their own and a report value skipped now and then | load the word, take lockout, wait, retransmit and report value, count an anomaly | the anomaly count |
+| `clcw_write` | none, 1M words out | write the CLCW a FARM reports with each frame: report value, lockout, wait and retransmit from its state | FNV-1a hash of the output |
+
+| Row | Implementation | API |
+|---|---|---|
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: the encoded default header copied, then `Codec.set` per field that varies |
+| `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
+| `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
+
+The `Wire.Codec` rows run `Routing_workload.run_packets`,
+`Gateway_workload.checksum` and `Clcw_workload.run_all`, the code the
+EverParse comparisons time, and on the writing side
+`Routing_workload.restamp`, `Gateway_workload.frame` and
+`Clcw_workload.report`. The other rows run the same application logic,
+written as a user of each library writes it, with plain checked indexing,
+and every row gives the same result. `bench/apps/loops.ml` writes the loops
+over the generated OCaml, the same source for OCaml 5 and for OxCaml.
+`bench/apps/cargo/src/main.rs` writes them over the generated Rust, whose
+`Valid::at` checks a header once before its accessors read it.
+No EverParse row runs here: those stay in `make bench-routing`,
+`bench-gateway` and `bench-clcw`.
+
+Timing and reporting are those of `bench/rust`: one warm-up pass, which gives
+the result, then the timed passes, each reading the wall clock and the
+process CPU time (`getrusage`) around the call, in `Bench_lib.measure` on the
+OCaml side and in `bench/rust/cargo/src/timing.rs` on the Rust side; the
+report prints a table per workload and fails unless every row agrees. Each
+row runs in a process of its own (`bench/rows.sh`: the harness lists its
+rows with `--list`, then runs each by name), so no row starts on the heap,
+the caches or the gigabytes of address space the rows before it touched.
+The cargo project has the release profile of `bench/rust/cargo`.
+
+```
+make bench-apps-rust      # needs cargo
+```
+
+Each row on its own, with the inputs `make bench-apps-rust` writes, on an
+ARM64 macOS host under a load average near 100, so the times are
+indicative; OCaml 5.4.1 (no flambda), OxCaml 5.4.0+ox (switch `5.4.0-ox9`,
+`-O3` on the harness only), rustc 1.94.1. The time is the best CPU time per item of the timed
+passes. Best CPU ns per item (stale: measured on inputs without anomalies,
+before the `Wire.Codec` gateway row lost its closure per frame):
+
+| Row | routing | gateway | clcw | routing_write | gateway_write | clcw_write |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wire.rust | 4.39 | 49.7 | 1.06 | 6.40 | 26.0 | 0.55, vectorised |
+| wire.ocaml, OxCaml target | 6.37 | 57.9 | 3.16 | 9.37 | 59.1 | 4.52 |
+| wire.ocaml, OCaml | 6.71 | 69.7 | 4.29 | 9.96 | 79.0 | 5.69 |
+| Wire.Codec, OxCaml | 13.8 | 132 | 7.05 | 33.4 | 410 | 39.4 |
+| Wire.Codec, OCaml | 11.8 | 214 | 8.86 | 39.3 | 496 | 52.3 |
+
+The Rust `clcw_write` row is autovectorised: LLVM turns its loop into NEON
+code that builds several words per instruction, where every other cell runs
+one item at a time, so it does not compare loop for loop with the OCaml
+rows.
+
+Every row gave `(hk=4000000 sci=3500000 diag=2000000 idle=500000)` on
+routing, `16569803807358438373` on gateway and 0 on clcw, and wrote buffers
+hashing to `c2824049e5408e67` (routing), `42b48f14215237fe` (gateway) and
+`7fd27aeb79936a55` (clcw), on inputs that held no anomaly. The inputs now
+hold one of each kind the readers test for, so every row takes each branch:
+the routing stream ends in a truncated packet after which the reader wraps,
+one gateway frame in 64 is idle, and CLCW words carry wait, retransmit and
+lockout and skip report values; writing sets lockout, wait and retransmit
+too.
+
+Writing is where the generated OCaml is furthest from Rust. A
+`write_int` checks every field value against its width on every call,
+where LLVM proves from the loop that `(p % 2048) as u16 >> 11` is 0 and drops
+the check; the OCaml assembles a 32-bit word on tagged integers, with an
+`int32` sign normalisation and a `sxtw` on each side of the `rev` that do
+nothing; and each packet polls for a safepoint. On gateway that is about 48
+instructions per packet on OxCaml against 14 in Rust. LLVM also vectorises
+the CLCW writer, 3.4 instructions per word. `Wire.Codec` writes a header by
+copying its encoded default and calling a staged `Codec.set` per field that
+varies, about 150 instructions per field. These headers are at most 6 bytes,
+so no row stores a 64-bit word: the generated writes are `str w` and `strh`,
+and the only `dmb ishld` OxCaml puts in a write loop is the one before the
+per-route sequence count's `int array` store of `routing_write`. The OxCaml rows
+trail Rust on the latency chain each item carries: on routing the next
+offset is loaded from the packet, and OxCaml spends about eight dependent
+operations on it where Rust spends five (untagging, and the sign extension
+and mask `%bswap16` leaves after `rev16`), and every checked read compares
+a tagged offset.
+
+Every hash the workloads compute (the gateway checksum and the hash of a
+written buffer) is FNV-1a modulo 2^63: OCaml's native `int`, whose
+products wrap modulo 2^63, and in Rust and C a 64-bit word masked to its
+low 63 bits after each product, so every row agrees. A 64-bit hash would be
+an `int64` in OCaml, boxed wherever it crosses a call the compiler leaves
+out of line, which measures the language's `int64` rather than the codec.
+
+`BENCH_APPS_PACKETS`, `BENCH_APPS_FRAMES` and `BENCH_APPS_WORDS` size the
+inputs, `BENCH_APPS_RUNS` the number of timed passes, and `OXCAML_SWITCH`
+the OxCaml switch, as for `make bench-rust`. Each harness runs a
+workload's writing side with `write`, and runs only the row a last argument
+names exactly, failing when no row has that name, or prints its row names
+with `--list`: `bench.exe (run | write) FILE ITEMS RUNS [ROW | --list]` or
+`wire-bench-apps [run | write] FILE ITEMS RUNS [ROW | --list]`.
 
 ## Cross-language headers (`bench/rust/`)
 

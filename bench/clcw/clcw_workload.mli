@@ -30,3 +30,10 @@ val run_all : state -> int
 (** [run_all s] checks every word, counting an anomaly for a word with lockout,
     wait or retransmit set or a report value other than one past the previous
     word's, and returns the anomaly count of [s]. *)
+
+val report : out:bytes -> int -> unit
+(** [report ~out n] writes in [out] the [n] CLCW words a FARM reports, word [i]
+    {!Space.clcw_default} with report value [i mod 256], lockout when the 12 low
+    bits of [i] are all set, wait when its 6 low bits are, and retransmit bit 13
+    of [i], each field written by Wire's staged {!Wire.Codec.set} over the
+    encoded default. *)

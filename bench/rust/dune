@@ -19,9 +19,7 @@
  (enabled_if
   (<> %{ocaml-config:ox} true))
  (targets
-  g_stack.ml
   stack_read.ml
-  g_selected.ml
   selected_read.ml
   g_eth.ml
   g_ipv4.ml
@@ -34,9 +32,7 @@
  (enabled_if
   (= %{ocaml-config:ox} true))
  (targets
-  g_stack.ml
   stack_read.ml
-  g_selected.ml
   selected_read.ml
   g_eth.ml
   g_ipv4.ml
@@ -45,43 +41,9 @@
  (action
   (run ./gen.exe --oxcaml)))
 
-; The OxCaml code carries [@zero_alloc] checks, which cannot pass in the dev
-; profile (see test/ocaml-ox/dune); the benchmark builds in release.
-
-(rule
- (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (= %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "(-zero-alloc-check none)"))))
-
-(rule
- (enabled_if
-  (or
-   (<> %{ocaml-config:ox} true)
-   (<> %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "()"))))
-
 (executable
  (name bench)
- (modules
-  bench
-  g_stack
-  stack_read
-  g_selected
-  selected_read
-  g_eth
-  g_ipv4
-  g_tcp
-  g_udp)
+ (modules bench stack_read selected_read g_eth g_ipv4 g_tcp g_udp)
  (ocamlopt_flags
-  (:standard
-   -O3
-   (:include zero_alloc.sexp)))
+  (:standard -O3))
  (libraries bench_lib headers net wire wire.runtime unix fmt))
