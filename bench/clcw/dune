@@ -1,7 +1,12 @@
 (library
+ (name clcw_workload)
+ (modules clcw_workload)
+ (libraries space wire bench_lib))
+
+(library
  (name clcw_bench)
  (modules clcw_bench)
- (libraries space wire bench_lib memtrace unix fmt))
+ (libraries clcw_workload bench_lib memtrace unix fmt))
 
 (library
  (name clcw_bench_c)
