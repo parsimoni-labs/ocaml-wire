@@ -345,12 +345,16 @@ let addr num o k =
     | Tagged -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
 
-(* An [int64_u] position is narrowed to the [int] offset the loads take. *)
+(* An [int64_u] position is narrowed to the [int] offset the loads take, and
+   the field's distance added to that [int]: the compiler shares the narrowing
+   between the loads of a block and adds the distance in one instruction, where
+   narrowing each [int64_u] sum costs a tagging per load. *)
 let load m ~o ~k ~bytes ~endian =
   let at =
     match m.num with
     | Tagged -> addr m.num o k
-    | Unboxed -> Fmt.str "(B.offset %s)" (addr m.num o k)
+    | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
+    | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
   in
   let e = endian_suffix endian in
   match bytes with
