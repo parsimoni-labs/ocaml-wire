@@ -35,7 +35,7 @@ type t = {
   reportvalue : int;
 }
 
-let make f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
+let v f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
     f6_spare f7_norf f8_nobitlock f9_lockout f10_wait f11_retransmit
     f12_farmbcounter f13_spare2 f14_reportvalue =
   {
@@ -93,7 +93,7 @@ let decode buf off =
     let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
     let f13_spare2 = (bw1 lsr 8) land 0x1 in
     let f14_reportvalue = bw1 land 0xff in
-    make f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
+    v f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
       f6_spare f7_norf f8_nobitlock f9_lockout f10_wait f11_retransmit
       f12_farmbcounter f13_spare2 f14_reportvalue
 
@@ -884,8 +884,8 @@ module Bigstring = struct
       let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
       let f13_spare2 = (bw1 lsr 8) land 0x1 in
       let f14_reportvalue = bw1 land 0xff in
-      make f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect
-        f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait f11_retransmit
+      v f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
+        f6_spare f7_norf f8_nobitlock f9_lockout f10_wait f11_retransmit
         f12_farmbcounter f13_spare2 f14_reportvalue
 
   let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
