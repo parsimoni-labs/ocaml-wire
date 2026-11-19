@@ -311,9 +311,13 @@ then the best CPU time of every row on every corpus. CPU time leaves out the
 time the process waits descheduled, which on a loaded machine dominates the
 wall time of the slower rows; it does not remove the cache and branch
 predictor state other processes leave behind, so compare rows measured in
-the same conditions. The Rust side builds with `opt-level = 3`, `lto = true`,
-`codegen-units = 1` and `panic = "abort"`, and without `target-cpu=native`,
-which the OCaml compilers have no equivalent of. The OCaml side builds with
+the same conditions. Every row takes the slot's stride at run time, from
+the command line, as a reader of fixed-size frames that learns their size
+from its input does: the Rust rows read the corpus with
+`chunks_exact(slot)`, and no loop carries an inlining attribute. The Rust
+side builds with `opt-level = 3`, `lto = true`, `codegen-units = 1` and
+`panic = "abort"`, and without `target-cpu=native`, which the OCaml
+compilers have no equivalent of. The OCaml side builds with
 dune's `release` profile; on OxCaml, flambda2's `-O3` measured no faster than
 its default on these rows, so it is not set.
 

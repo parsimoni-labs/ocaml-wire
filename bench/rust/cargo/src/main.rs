@@ -11,8 +11,11 @@
 //! EtherType. Each reads the same fields and folds them the same way, so
 //! every implementation, OCaml ones included, must print the same checksum.
 //!
-//! Usage: `wire-bench-rust CORPUS SLOT RUNS [ROW | --list]`, reading CORPUS
-//! as SLOT-byte packets (`bench.exe corpus` writes the corpora) and printing
+//! Every row takes the slot size at run time, from the command line, as a
+//! reader of fixed-size frames that learns their size from its input does.
+//!
+//! Usage: `wire-bench-rust CORPUS SLOT RUNS [ROW | --list]`, reading CORPUS as
+//! SLOT-byte packets (`bench.exe corpus` writes the corpora) and printing
 //! one `RESULT <corpus> <name> <cpu best> <cpu p10> <cpu median> <cpu p90>
 //! <wall best> <wall p10> <wall median> <wall p90> <checksum>` line
 //! (ns/packet) per implementation, over RUNS timed passes; `<corpus>` is the
@@ -102,8 +105,8 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
 // The scanner of `Packet_stack.codec` makes every check the linked headers
 // make, so the harness only folds the fields of an accepted frame.
 macro_rules! stack_fold {
-    ($scanner:ident) => {
-        |corpus: &[u8], slot: usize| -> u64 {
+    ($name:ident, $scanner:ident) => {
+        fn $name(corpus: &[u8], slot: usize) -> u64 {
             let mut acc = 0u64;
             for p in corpus.chunks_exact(slot) {
                 let Some(f) = $scanner::scan(p) else { continue };
@@ -124,6 +127,9 @@ macro_rules! stack_fold {
         }
     };
 }
+
+stack_fold!(wire_rust_stack, stack);
+stack_fold!(wire_rust_selected, stack_selected);
 
 fn etherparse(corpus: &[u8], slot: usize) -> u64 {
     use etherparse::{LinkSlice, NetSlice, SlicedPacket, TransportSlice};
@@ -269,9 +275,10 @@ fn pnet(corpus: &[u8], slot: usize) -> u64 {
 }
 
 // Times `f` on the corpus of `slot`-byte packets with `timing::measure`,
-// which the OCaml harness's `Bench_lib.measure` mirrors.
+// which the OCaml harness's `Bench_lib.measure` mirrors. `f` is the row's
+// function itself, so each pass calls it directly.
 #[allow(clippy::too_many_arguments)]
-fn measure(corpus_name: &str, name: &str, filter: &timing::Filter, corpus: &[u8], slot: usize, runs: usize, f: fn(&[u8], usize) -> u64) {
+fn measure(corpus_name: &str, name: &str, filter: &timing::Filter, corpus: &[u8], slot: usize, runs: usize, f: impl Fn(&[u8], usize) -> u64) {
     timing::measure(corpus_name, name, filter, corpus.len() / slot, runs, || f(black_box(corpus), slot) & ((1 << 62) - 1));
 }
 
@@ -282,13 +289,14 @@ fn main() {
     let slot: usize = args[2].parse().expect("slot");
     let runs: usize = args[3].parse().expect("runs");
     let filter = timing::Filter::new(args.get(4).map(String::as_str));
-    assert!(corpus.len() % slot == 0, "the corpus is not a whole number of slots");
+    assert!(slot > 0 && corpus.len().is_multiple_of(slot), "the corpus is not a whole number of slots");
     let c = path.file_stem().and_then(|s| s.to_str()).expect("corpus name");
-    measure(c, "wire.rust, linked headers", &filter, &corpus, slot, runs, wire_rust);
-    measure(c, "wire.rust fused stack", &filter, &corpus, slot, runs, stack_fold!(stack));
-    measure(c, "wire.rust selected outputs", &filter, &corpus, slot, runs, stack_fold!(stack_selected));
-    measure(c, "etherparse 0.21", &filter, &corpus, slot, runs, etherparse);
-    measure(c, "smoltcp 0.14", &filter, &corpus, slot, runs, smoltcp);
-    measure(c, "pnet_packet 0.35", &filter, &corpus, slot, runs, pnet);
+    let f = &filter;
+    measure(c, "wire.rust, linked headers", f, &corpus, slot, runs, wire_rust);
+    measure(c, "wire.rust fused stack", f, &corpus, slot, runs, wire_rust_stack);
+    measure(c, "wire.rust selected outputs", f, &corpus, slot, runs, wire_rust_selected);
+    measure(c, "etherparse 0.21", f, &corpus, slot, runs, etherparse);
+    measure(c, "smoltcp 0.14", f, &corpus, slot, runs, smoltcp);
+    measure(c, "pnet_packet 0.35", f, &corpus, slot, runs, pnet);
     filter.finish();
 }

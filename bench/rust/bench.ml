@@ -455,116 +455,112 @@ let view_packet ~avail acc b len o =
 
 let oxcaml = Stack_read.oxcaml
 
-(* The rows for one stride. The stride is a literal at the application, as a
-   caller with fixed-size frames would pass it; whether the loop sees it as a
-   constant is the compiler's choice, as the loops carry no inlining
-   attribute. *)
-module type STRIDE = sig
-  val stride : int
-end
+(* The rows take the slot's stride at run time, as a reader of fixed-size
+   frames that learns their size from its input does. *)
 
-module Rows (S : STRIDE) = struct
-  let stride = S.stride
-
-  (* The frame size comes from the corpus's framing, while all protocol
-     dispatch, header lengths and parent-region bounds come from
-     Packet_stack. *)
-  let frame_codec =
-    Codec.v "BenchmarkFrame"
-      (fun p -> p)
-      Codec.
-        [
-          Field.v "packet"
-            (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
-          $ Fun.id;
-        ]
-
-  let codec buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      match Codec.decode frame_codec buf (i * stride) with
-      | Error _ -> ()
-      | Ok packet -> acc := packet_fields !acc packet
-    done;
-    !acc
-
-  let frames f buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      acc := f !acc buf (i * stride) stride
-    done;
-    !acc
-
-  let linked f buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      acc := f ~avail:(stride - 14) !acc buf (i * stride)
-    done;
-    !acc
-
-  let codec_linked buf = linked codec_packet buf
-
-  let view_linked buf =
-    match Wire_runtime.Buf.v buf with
-    | Wire_runtime.Buf.Any b ->
-        let len = Wire_runtime.Buf.length b in
-        let acc = ref 0 in
-        for i = 0 to (Bytes.length buf / stride) - 1 do
-          acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
-        done;
-        !acc
-
-  let generated buf = frames Stack_read.boxed buf
-  let generated_unboxed buf = frames Stack_read.unboxed buf
-  let generated_fold buf = frames Stack_read.fold buf
-  let generated_selected buf = frames Selected_read.fold buf
-  let generated_batch buf = Stack_read.batch ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_batch_unboxed buf =
-    Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_selected_batch buf =
-    Selected_read.batch ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_selected_batch_unboxed buf =
-    Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf)
-
-  (* dune generates for the OxCaml target on an OxCaml compiler. *)
-  let target = if oxcaml then ", OxCaml target" else ""
-
-  let all =
-    [
-      ("Wire.Codec stack decode", codec);
-      ("Wire.Codec valid/read, linked headers", codec_linked);
-      ("wire.ocaml View.check/view, linked headers" ^ target, view_linked);
-      ("wire.ocaml fused stack" ^ target, generated);
-      ("wire.ocaml fused stack, fold" ^ target, generated_fold);
-      ("wire.ocaml fused stack, batch" ^ target, generated_batch);
-    ]
-    @ (if oxcaml then
-         [ ("wire.ocaml fused stack, unboxed batch", generated_batch_unboxed) ]
-       else [])
-    @ [
-        ("wire.ocaml selected outputs, fold" ^ target, generated_selected);
-        ("wire.ocaml selected outputs, batch" ^ target, generated_selected_batch);
-      ]
-    @
-    if oxcaml then
+(* The frame size comes from the corpus's framing, while all protocol
+   dispatch, header lengths and parent-region bounds come from Packet_stack. *)
+let frame_codec stride =
+  Codec.v "BenchmarkFrame"
+    (fun p -> p)
+    Codec.
       [
-        ( "wire.ocaml selected outputs, unboxed batch",
-          generated_selected_batch_unboxed );
-        ("wire.ocaml fused stack, unboxed API", generated_unboxed);
+        Field.v "packet"
+          (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
+        $ Fun.id;
       ]
-    else []
-end
 
-module Rows64 = Rows (struct
-  let stride = 64
-end)
+let codec ~stride frame_codec buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    match Codec.decode frame_codec buf (i * stride) with
+    | Error _ -> ()
+    | Ok packet -> acc := packet_fields !acc packet
+  done;
+  !acc
 
-module Rows128 = Rows (struct
-  let stride = 128
-end)
+(* Each loop names the function it calls on every frame. *)
+
+let codec_linked ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := codec_packet ~avail:(stride - 14) !acc buf (i * stride)
+  done;
+  !acc
+
+let view_linked ~stride buf =
+  match Wire_runtime.Buf.v buf with
+  | Wire_runtime.Buf.Any b ->
+      let len = Wire_runtime.Buf.length b in
+      let acc = ref 0 in
+      for i = 0 to (Bytes.length buf / stride) - 1 do
+        acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
+      done;
+      !acc
+
+let generated ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.boxed !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_unboxed ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.unboxed !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_fold ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.fold !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_selected ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Selected_read.fold !acc buf (i * stride) stride
+  done;
+  !acc
+
+(* dune generates for the OxCaml target on an OxCaml compiler. *)
+let target = if oxcaml then ", OxCaml target" else ""
+
+let rows stride =
+  let frame_codec = frame_codec stride in
+  [
+    ("Wire.Codec stack decode", fun buf -> codec ~stride frame_codec buf);
+    ("Wire.Codec valid/read, linked headers", codec_linked ~stride);
+    ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
+    ("wire.ocaml fused stack" ^ target, generated ~stride);
+    ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);
+    ( "wire.ocaml fused stack, batch" ^ target,
+      fun buf -> Stack_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+  ]
+  @ (if oxcaml then
+       [
+         ( "wire.ocaml fused stack, unboxed batch",
+           fun buf ->
+             Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
+       ]
+     else [])
+  @ [
+      ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
+      ( "wire.ocaml selected outputs, batch" ^ target,
+        fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+    ]
+  @
+  if oxcaml then
+    [
+      ( "wire.ocaml selected outputs, unboxed batch",
+        fun buf ->
+          Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
+      ("wire.ocaml fused stack, unboxed API", generated_unboxed ~stride);
+    ]
+  else []
 
 (* {1 Timing}
 
@@ -577,14 +573,8 @@ end)
 let mask62 = (1 lsl 62) - 1
 
 let run file stride runs filter =
-  let rows =
-    match stride with
-    | 64 -> Rows64.all
-    | 128 -> Rows128.all
-    | _ -> Fmt.failwith "bench.exe: no rows for a stride of %d bytes" stride
-  in
   let buf = Bench_lib.read_file file in
-  if Bytes.length buf mod stride <> 0 then
+  if stride <= 0 || Bytes.length buf mod stride <> 0 then
     Fmt.failwith "bench.exe: %s is not a whole number of %d-byte slots" file
       stride;
   let corpus = Filename.remove_extension (Filename.basename file) in
@@ -594,7 +584,7 @@ let run file stride runs filter =
         ~items:(Bytes.length buf / stride)
         ~runs ~pp:Fmt.int
         (fun () -> f (Sys.opaque_identity buf) land mask62))
-    rows
+    (rows stride)
 
 let () =
   match Array.to_list Sys.argv with
