@@ -9,3 +9,9 @@ exclude = ["E350"]
 [[rules]]
 files = "examples/generated/clcw.ml"
 exclude = ["E505"]
+
+# The scanner Wire_ocaml generates, formatted by ocamlformat, under the same
+# rule as the record module above.
+[[rules]]
+files = "examples/generated/stack.ml"
+exclude = ["E001", "E005", "E010", "E505"]

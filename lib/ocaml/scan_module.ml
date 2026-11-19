@@ -223,6 +223,69 @@ let selected (plan : plan) = function
         wanted;
       List.filter (fun (o : output) -> List.mem o.name wanted) plan.outputs
 
+(* {2 Dead bindings}
+
+   The walk binds an offset, an end or a field as it reaches it, before it
+   knows whether a later check or the call of [valid] reads it: a lowered
+   condition may read a bitfield's word instead of the field. Each binding is
+   one line [let x = e in] whose [e] only loads or computes, so a line whose
+   [x] no later line of its function reads is dropped, until none is. *)
+
+let is_ident_char = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+  | _ -> false
+
+(* The variable a line [let x = e in] binds. *)
+let is_variable x =
+  x <> ""
+  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
+  && String.for_all is_ident_char x
+
+let bound line =
+  let is_let =
+    String.starts_with ~prefix:"let " line
+    && String.ends_with ~suffix:" in" line
+  in
+  match if is_let then String.index_from_opt line 4 ' ' else None with
+  | Some i when String.length line >= i + 3 ->
+      let x = String.sub line 4 (i - 4) in
+      if is_variable x && String.sub line i 3 = " = " then Some x else None
+  | _ -> None
+
+(* Whether [line] reads [x], other than by binding it. *)
+let reads x line =
+  let n = String.length line and k = String.length x in
+  let rec from i =
+    i + k <= n
+    &&
+    let word =
+      String.sub line i k = x
+      && (i = 0 || not (is_ident_char line.[i - 1]))
+      && (i + k = n || not (is_ident_char line.[i + k]))
+    in
+    (word && not (i = 4 && bound line = Some x)) || from (i + 1)
+  in
+  from 0
+
+let is_function line = String.starts_with ~prefix:"let[@inline always]" line
+
+let rec prune lines =
+  let lines = Array.of_list lines in
+  let n = Array.length lines in
+  let rec used x j =
+    j < n
+    && (not (is_function lines.(j)))
+    && (reads x lines.(j) || used x (j + 1))
+  in
+  let dead i =
+    match bound lines.(i) with Some x -> not (used x (i + 1)) | None -> false
+  in
+  let kept = List.filteri (fun i _ -> not (dead i)) (Array.to_list lines) in
+  if List.length kept = n then kept else prune kept
+
+let without_dead_bindings text =
+  String.concat "\n" (prune (String.split_on_char '\n' text))
+
 let scanner ?(target = `OCaml) ?fields ?step ~codec c =
   try
     let plan = scan_plan c in
@@ -232,9 +295,6 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
     let selected = selected plan fields in
     let s = { plan; selected; m = scan_mode plan ~num selected; ppf } in
     pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c);
-    (* The walk binds an offset, an end or a field as it goes, before it knows
-       whether a later check reads it. *)
-    Fmt.pf ppf "[@@@@@@warning \"-26\"]@\n@\n";
     pp_wide ppf ~codec ~wide:plan.wide;
     if num = Unboxed then
       Fmt.pf ppf
@@ -265,5 +325,5 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
       pp_box s
     end;
     Format.pp_print_flush ppf ();
-    Buffer.contents b
+    without_dead_bindings (Buffer.contents b)
   with Unsupported why -> refuse ~codec why
