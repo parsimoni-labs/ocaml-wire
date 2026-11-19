@@ -2,7 +2,7 @@
 
 let digest = "76f7855858dd52433e8b5cfabfbf489d"
 let codec_name = "EthernetStack"
-let[@inline] cast : type a. (a, int) Type.eq -> int -> a = fun Type.Equal v -> v
+let[@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun Type.Equal v -> v
 
 let[@inline never] no_error () =
   invalid_arg (codec_name ^ ": the generated code found no error to report")

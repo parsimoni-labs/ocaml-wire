@@ -23,7 +23,7 @@ let checked () =
     (fun () -> S_checked.validate (bytes_of [ 0x45; 0; 3; 64; 6 ]) 0);
   let v = S_checked.Valid.v (bytes_of [ 0x45; 0; 20; 64; 17 ]) in
   check "checked: valid read"
-    ((S_checked.read_proto v :> int) = 17 && S_checked.read_ihl v = 5)
+    ((S_checked.read_proto v :> int) = 17 && (S_checked.read_ihl v :> int) = 5)
 
 let eth () =
   round_trip "eth" ~size:S_eth.size

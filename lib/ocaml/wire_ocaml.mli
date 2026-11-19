@@ -46,14 +46,14 @@
 
     [is_valid buf off] checks the record at [off] without raising, loading only
     the fields its constraints read; [validate] raises the codec's error where
-    it is false. [View.at buf off] validates the record at any offset and stands
-    for it, with the same promise as [Valid]: each [view_<field>] (and
-    [view_<field>_int], [view_<field>_word]) is one load with no bounds check.
-    [View.check buf off] does the same without raising, and [View.ok] tells
-    whether the record passed. A view that failed holds no bytes: [View.buf] is
-    then an empty buffer and each read gives zero without loading, so failed
-    views share nothing a caller can write. On OxCaml a view is an unboxed
-    record, held in registers; on OCaml it is a small record. A [Bigstring]
+    it is false. A view reads a buffer named once with [Wire_runtime.Buf.v], as
+    ['b Buf.t], and whose length is read once: [View.check b len off] checks the
+    record at [off] without raising, [View.ok c] tells whether it passed and
+    [View.get c] turns an answer that passed into a ['b View.t], with the same
+    promise as [Valid]: each [view_<field> b v] (and [view_<field>_int],
+    [view_<field>_word]) is one load with no bounds check, and only the buffer
+    named ['b] is accepted. A view is an [int], so it allocates nothing.
+    [View.at] raises the codec's error where the check fails. A [Bigstring]
     submodule has the same functions, [Valid] and [View] included, on a bigarray
     of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
     which stores field values in order. Without [~make] it also defines a record
