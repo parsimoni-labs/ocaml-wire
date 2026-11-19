@@ -6,7 +6,7 @@
  (libraries unix fmt))
 
 ; [Ox.v] tells the rows measured in their own process which compiler built
-; them.
+; them, and [Ox.flambda] whether an OCaml compiler has flambda.
 
 (rule
  (enabled_if
@@ -14,7 +14,7 @@
  (action
   (with-stdout-to
    ox.ml
-   (echo "let v = true\n"))))
+   (echo "let v = true\nlet flambda = false\n"))))
 
 (rule
  (enabled_if
@@ -22,7 +22,7 @@
  (action
   (with-stdout-to
    ox.ml
-   (echo "let v = false\n"))))
+   (echo "let v = false\nlet flambda = %{ocaml-config:flambda}\n"))))
 
 ; -- EverParse benchmark infrastructure --
 

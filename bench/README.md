@@ -65,8 +65,8 @@ that the cross-language rows below run the same code.
 
 ## Cross-language applications (`bench/apps/`)
 
-The same three workloads on OCaml, on OxCaml, in Rust, and over released
-crates that read and write the same headers, each
+The same three workloads on OCaml, on OCaml with flambda, on OxCaml, in
+Rust, and over released crates that read and write the same headers, each
 pass over the whole input its generator writes. Each workload has a reading side, what a ground
 station does with the stream, and a writing side, what the spacecraft or a
 relay does to produce it:
@@ -137,21 +137,29 @@ Each row on its own, with the inputs `make bench-apps-rust` writes, on an
 ARM64 macOS host under a load average near 100, so the times are
 indicative; OCaml 5.4.1 (no flambda), OxCaml 5.4.0+ox (switch `5.4.0-ox9`,
 `-O3` on the harness only), rustc 1.94.1, with the crates
-`cargo/Cargo.lock` pins. The time is the best CPU time per item of the timed
-passes. Best CPU ns per item (stale: measured on inputs without anomalies,
-before the `Wire.Codec` gateway row lost its closure per frame):
+`cargo/Cargo.lock` pins. Instructions per item are what `make
+bench-apps-count` reports: `bench/count.sh` runs the row alone with 1 and
+with 21 timed passes, each after the warm-up pass, and divides the
+difference by 20 passes, which cancels starting the process, the input
+read, the output allocation and the warm-up pass; it fails unless both runs
+print the row's `RESULT` line with the same result and the counters read
+some instructions. The time is the best CPU time per item of the timed
+passes. Instructions / ns per item (stale: measured as the difference
+between 4 timed passes and 1, on inputs without anomalies, before the
+`Wire.Codec` gateway row lost its closure per frame,
+with `-O3` on the harness only):
 
 | Row | routing | gateway | clcw | routing_write | gateway_write | clcw_write |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| wire.rust | 4.39 | 49.7 | 1.06 | 6.40 | 26.0 | 0.55, vectorised |
-| spacepackets 0.19 | 5.46 | - | - | 5.93 | - | - |
-| ccsds_primary_header 0.15 | 5.65 | - | - | 5.63 | - | - |
-| gaia-ccsds-c2a 1.2 | 4.15 | - | 0.76 | 5.99 | - | 0.51, vectorised |
-| chronus-gateway 1.0.0-rc.1 + spacepackets 0.19 | - | 48.9 | - | - | 26.7 | - |
-| wire.ocaml, OxCaml target | 6.37 | 57.9 | 3.16 | 9.37 | 59.1 | 4.52 |
-| wire.ocaml, OCaml | 6.71 | 69.7 | 4.29 | 9.96 | 79.0 | 5.69 |
-| Wire.Codec, OxCaml | 13.8 | 132 | 7.05 | 33.4 | 410 | 39.4 |
-| Wire.Codec, OCaml | 11.8 | 214 | 8.86 | 39.3 | 496 | 52.3 |
+| wire.rust | 12 / 4.39 | 332 / 49.7 | 11 / 1.06 | 31 / 6.40 | 215 / 26.0 | 3.4 / 0.55, vectorised |
+| spacepackets 0.19 | 29 / 5.46 | - | - | 33 / 5.93 | - | - |
+| ccsds_primary_header 0.15 | 28 / 5.65 | - | - | 34 / 5.63 | - | - |
+| gaia-ccsds-c2a 1.2 | 25 / 4.15 | - | 12 / 0.76 | 51 / 5.99 | - | 3.6 / 0.51, vectorised |
+| chronus-gateway 1.0.0-rc.1 + spacepackets 0.19 | - | 378 / 48.9 | - | - | 222 / 26.7 | - |
+| wire.ocaml, OxCaml target | 41 / 6.37 | 727 / 57.9 | 40 / 3.16 | 78 / 9.37 | 811 / 59.1 | 64 / 4.52 |
+| wire.ocaml, OCaml | 63 / 6.71 | 864 / 69.7 | 55 / 4.29 | 124 / 9.96 | 1215 / 79.0 | 70 / 5.69 |
+| Wire.Codec, OxCaml | 135 / 13.8 | 2089 / 132 | 120 / 7.05 | 540 / 33.4 | 6867 / 410 | 619 / 39.4 |
+| Wire.Codec, OCaml | 164 / 11.8 | 3345 / 214 | 146 / 8.86 | 657 / 39.3 | 8510 / 496 | 859 / 52.3 |
 
 The two Rust `clcw_write` rows are autovectorised: LLVM turns their loops
 into NEON code that builds several words per instruction, where every other
@@ -195,12 +203,15 @@ an `int64` in OCaml, boxed wherever it crosses a call the compiler leaves
 out of line, which measures the language's `int64` rather than the codec.
 
 `BENCH_APPS_PACKETS`, `BENCH_APPS_FRAMES` and `BENCH_APPS_WORDS` size the
-inputs, `BENCH_APPS_RUNS` the number of timed passes, and `OXCAML_SWITCH`
-the OxCaml switch, as for `make bench-rust`. Each harness runs a
+inputs, `BENCH_APPS_RUNS` the number of timed passes, and `FLAMBDA_SWITCH`
+and `OXCAML_SWITCH` name the switches of OCaml with flambda and of OxCaml,
+as for `make bench-rust`. Each harness runs a
 workload's writing side with `write`, and runs only the row a last argument
 names exactly, failing when no row has that name, or prints its row names
 with `--list`: `bench.exe (run | write) FILE ITEMS RUNS [ROW | --list]` or
 `wire-bench-apps [run | write] FILE ITEMS RUNS [ROW | --list]`.
+`make bench-apps-count` runs `bench/count.sh` on each row the harnesses
+list, with the row's exact name.
 
 ## Cross-language headers (`bench/rust/`)
 
@@ -325,15 +336,19 @@ its default on these rows, so it is not set.
 make bench-rust           # needs cargo; fetches the crates the first time
 ```
 
-`OXCAML_SWITCH` names the opam switch the OxCaml run uses (default
-`5.4.0-ox9`; skipped when absent), `BENCH_RUST_PACKETS` and
+`FLAMBDA_SWITCH` and `OXCAML_SWITCH` name the opam switches the runs on
+OCaml with flambda and on OxCaml use (default `5.4.1-flambda` and
+`5.4.0-ox9`; each skipped when absent), `BENCH_RUST_PACKETS` and
 `BENCH_RUST_RUNS` size the corpora and the number of timed passes, and
 `BENCH_RUST_CORPORA` lists the corpora to run as `name:stride`. Each harness
 also takes a row's exact name last, so one row can run alone, and fails when
 no row has that name; `--list` in its place prints the row names. On macOS,
 `/usr/bin/time -l` then gives the instructions retired and the cycles of
 that row, as `bench.exe run FILE 64 RUNS 'wire.ocaml fused stack'` or
-`wire-bench-rust FILE 64 RUNS 'smoltcp 0.14'`.
+`wire-bench-rust FILE 64 RUNS 'smoltcp 0.14'`; `bench/count.sh` does the
+subtraction that leaves out the process's fixed costs, and `make
+bench-rust-count` runs it on every row of every harness and corpus, as
+`make bench-apps-count` does for the applications.
 
 With `BUILD_EVERPARSE=1` (`make bench-rust BUILD_EVERPARSE=1`), the
 EverParse C row runs too: `bench/rust/everparse` links the validator and

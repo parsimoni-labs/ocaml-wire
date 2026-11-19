@@ -215,7 +215,11 @@ let section label = Fmt.pr "\n  -- %s --\n" label
 (* -- Rows measured in their own process -- *)
 
 let oxcaml = Ox.v
-let compiler = (if Ox.v then "OxCaml " else "OCaml ") ^ Sys.ocaml_version
+
+let compiler =
+  (if Ox.v then "OxCaml " else "OCaml ")
+  ^ Sys.ocaml_version
+  ^ if Ox.flambda then " flambda" else ""
 
 let read_file file =
   Bytes.unsafe_of_string (In_channel.with_open_bin file In_channel.input_all)
