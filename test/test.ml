@@ -10,6 +10,7 @@ let () =
       Test_codec_projection.suite;
       Test_codec_bitfield.suite;
       Test_codec_encode.suite;
+      Test_codec_writer.suite;
       Test_codec_view.suite;
       Test_codec_action.suite;
       Test_codec_misuse.suite;

@@ -42,6 +42,11 @@
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
 
+- `Wire.Codec.writer`: a staged writer of a fixed-size record from a template
+  and the values of the fields that vary, one call per record. A record of at
+  most 7 bytes is put together in an `int` and written after every check
+  (@samoht)
+
 - `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
   its fields with no further bounds check (#435, @samoht)
 

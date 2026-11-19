@@ -112,22 +112,14 @@ let run_packets ~buf ~total_bytes state n_pkts =
   done;
   counts state
 
-let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid)
-let set_seq = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
-let set_dlen = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
+(* The header {!Space.packet_default} encodes, a telemetry packet with a
+   secondary header, unsegmented, with the three fields a router writes. *)
+let write_header =
+  Wire.Staged.unstage
+    (C.writer Space.packet_codec Space.packet_default
+       [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ])
 
-(* The header {!Space.packet_default} encodes: a telemetry packet with a
-   secondary header, unsegmented. *)
-let template =
-  let b = Bytes.create hdr in
-  C.encode Space.packet_codec Space.packet_default b 0;
-  b
-
-let stamp out o ~apid ~seq ~dlen =
-  Bytes.blit template 0 out o hdr;
-  set_apid out o apid;
-  set_seq out o seq;
-  set_dlen out o dlen
+let stamp out o ~apid ~seq ~dlen = write_header out o apid seq dlen
 
 let restamp ~buf ~total_bytes ~out n =
   let seqs = Array.make n_routes 0 in
