@@ -164,6 +164,7 @@ val words : size:int -> field list -> int list
 val unsigned :
   mode ->
   ?size:int ->
+  ?raw:bool ->
   o:string ->
   words:int list ->
   k:int ->
@@ -171,9 +172,11 @@ val unsigned :
   endian:T.endian ->
   unit ->
   string
-(** [unsigned m ?size ~o ~words ~k ~bytes ~endian ()] is the text of an unsigned
-    value of [bytes] bytes at [k] from [o], from a word when one holds it;
-    [size] bounds the bytes a wider load may read. *)
+(** [unsigned m ?size ?raw ~o ~words ~k ~bytes ~endian ()] is the text of an
+    unsigned value of [bytes] bytes at [k] from [o], from a word when one holds
+    it; [size] bounds the bytes a wider load may read. With [raw] (default
+    [false]), the value may hold any bits above its [bytes], for a caller that
+    masks it below them. *)
 
 val value :
   mode ->
