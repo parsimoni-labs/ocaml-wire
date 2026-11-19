@@ -250,20 +250,13 @@ let pp_first_error ~src ppf ~target fields =
     (fun f ->
       (match f.store with
       | Bits { width; _ } ->
-          Fmt.pf ppf
-            "  if %s lsr %d <> 0 then %s.unsigned_too_wide ~bits:%d %s;@\n" f.id
-            width errors width f.id
+          Fmt.pf ppf "  %s.check_unsigned ~bits:%d %s;@\n" errors width f.id
       | Bytes n ->
-          Fmt.pf ppf
-            "  if String.length %s <> %d then %s.byte_length ~expected:%d \
-             ~actual:(String.length %s);@\n"
-            f.id n errors n f.id
+          Fmt.pf ppf "  %s.check_length ~expected:%d %s;@\n" errors n f.id
       | Int _ -> ());
       match f.enum with
       | Some (name, valid) ->
-          Fmt.pf ppf
-            "  if not %s then %s.enum_encode ~name:%S ~valid:[%a] %s;@\n"
-            (member f valid) errors name
+          Fmt.pf ppf "  %s.check_enum ~name:%S ~valid:[%a] %s;@\n" errors name
             Fmt.(list ~sep:(any "; ") (using int_lit string))
             valid f.id
       | None -> ())
