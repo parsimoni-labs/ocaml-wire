@@ -6,13 +6,11 @@
 (copy_files
  (files ../ocaml/test_wire_ocaml.{ml,mli}))
 
-; Only the tests test_wire_ocaml holds: on OxCaml a generated module takes its
-; buffers local, so it is not a Wire.S, which test/ocaml's test_same checks.
+(copy_files
+ (files ../ocaml/test_same.{ml,mli}))
 
 (rule
- (with-stdout-to
-  test.ml
-  (echo "let () = Alcotest.run \"wire_ocaml\" [ Test_wire_ocaml.suite ]\n")))
+ (copy ../ocaml/test.ml test.ml))
 
 (rule
  (enabled_if
@@ -118,6 +116,7 @@
  (wrapped false)
  (modules
   test_wire_ocaml
+  test_same
   g_ipv4
   g_ipv4_wire
   g_ipv4_record

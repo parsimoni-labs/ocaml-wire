@@ -31,6 +31,25 @@ let test_stack_reads () =
     (fields (Bytes.of_string packet))
     (stack_fields ())
 
+(* A view of the header in a buffer on the stack, named [local] by
+   [Buf.local]: one check, then reads with none of their own. *)
+let stack_view () =
+  let b = Bytes.create__stack size in
+  Bytes.unsafe_blit_string packet 0 b 0 size;
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G_ipv4.View.check n (Wire_runtime.Buf.length n) 0 in
+  if G_ipv4.View.ok c then
+    let v = G_ipv4.View.get c in
+    (G_ipv4.view_ttl n v :> int) + G_ipv4.view_src_int n v
+  else -1
+
+let test_stack_view () =
+  Alcotest.(check int)
+    "same fields"
+    ((G_ipv4.Get.ttl (Bytes.of_string packet) 0 :> int)
+    + G_ipv4.Get.src_int (Bytes.of_string packet) 0)
+    (stack_view ())
+
 (* What a decoded header holds, folded into one [int]. *)
 let[@inline] record (r : G_ipv4_record.t @ local) =
   (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int)
@@ -134,6 +153,7 @@ let suite =
   ( "modes",
     [
       Alcotest.test_case "reads a buffer on the stack" `Quick test_stack_reads;
+      Alcotest.test_case "views a buffer on the stack" `Quick test_stack_view;
       Alcotest.test_case "decodes a buffer on the stack" `Quick
         test_stack_decode;
       Alcotest.test_case "writes a buffer on the stack" `Quick test_stack_write;

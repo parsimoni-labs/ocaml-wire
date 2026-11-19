@@ -15,8 +15,12 @@ type 'b length = private int
 
 type any = Any : 'b t -> any [@@unboxed]  (** A buffer under a fresh name. *)
 
-val v : bytes @ local -> any @ local @@ portable
+val v : bytes -> any @@ portable
 (** [v buf] is [buf] under a name of its own. *)
+
+val local : bytes @ local -> any @ local @@ portable
+(** [local buf] is {!v} for a buffer the caller holds [local]: the name is
+    [local] too. *)
 
 val[@zero_alloc] length : 'b t @ local -> 'b length @@ portable
 (** [length b] is the length of [b]. *)
@@ -38,8 +42,11 @@ module Bigstring : sig
 
   type any = Any : 'b t -> any [@@unboxed]  (** A bigarray under a fresh name. *)
 
-  val v : bigstring @ local -> any @ local @@ portable
+  val v : bigstring -> any @@ portable
   (** [v buf] is [buf] under a name of its own. *)
+
+  val local : bigstring @ local -> any @ local @@ portable
+  (** [local buf] is {!v} for a bigarray the caller holds [local]. *)
 
   val[@zero_alloc] length : 'b t @ local -> 'b length @@ portable
   (** [length b] is the length of [b]. *)
