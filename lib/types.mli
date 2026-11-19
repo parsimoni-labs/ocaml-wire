@@ -383,6 +383,13 @@ and _ typ =
           (** [codec_validate] of a record whose end, the last argument, the
               caller has just measured with [codec_size_of] over the same bytes:
               the frame checks that end instead of measuring again. *)
+      codec_check_end : Input_end.t -> bytes -> int -> int;
+          (** Where the record at the offset ends when its fast checks accept
+              it, else [-1], or [-2] when it has no fast checks: an end it gives
+              is the one [codec_size_of] measures, and [codec_validate_sized]
+              accepts the record with it. A use site with a negative answer runs
+              those two, and after [-1] does not try the fast checks of the
+              records under it again. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;
