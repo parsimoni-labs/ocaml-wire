@@ -132,16 +132,44 @@ let scope s names =
    slots: each rejection is the text [reject] and each acceptance what
    [accept] writes, in place, so a continuation the generator knows is never
    a closure. *)
-let pp_scan ?cuts ~scope s ~reject ~accept =
+let pp_scan ?cuts ?(known = 0) ~scope s ~reject ~accept =
   pp_slots s.m s.ppf s.selected;
   let m =
     { s.m with fail = (fun _ -> reject); overflowed = (fun _ _ -> reject) }
   in
   start ?cuts ~scope
     ?first:(Option.map (fun _ -> "record") cuts)
-    ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known:0
+    ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known
     s.plan.nodes
     (fun w _ -> accept w)
+
+(* [mentions x text] is [true] when the identifier [x] occurs in [text]. *)
+let mentions x text =
+  let n = String.length x and len = String.length text in
+  let ident c =
+    match c with
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+    | _ -> false
+  in
+  let rec from i =
+    match String.index_from_opt text i x.[0] with
+    | None -> false
+    | Some j ->
+        j + n <= len
+        && String.sub text j n = x
+        && (j = 0 || not (ident text.[j - 1]))
+        && (j + n = len || not (ident text.[j + n]))
+        || from (j + 1)
+  in
+  n > 0 && from 0
+
+(* The bytes a frame needs before its first variable offset: the leading
+   prefixes, then those of the first optional field. A batch whose stride is
+   at least that tests none of their bounds per frame. *)
+let rec fixed_need = function
+  | Prefix (_, n) :: rest -> n + fixed_need rest
+  | Gate (_, _, _, inner) :: _ -> fixed_need inner
+  | _ -> 0
 
 let pp_entry ?cuts ~scope s ~reject ~accept =
   Fmt.pf s.ppf
@@ -174,6 +202,57 @@ let frames_callbacks s ~unboxed =
     let invalid, valid = callback_types s in
     Fmt.str "~(invalid : %s) ~(valid : %s) : a" invalid valid
 
+(* The variables of a frame loop: how [acc] and [cursor] are read and
+   assigned, and the stride added to [cursor]. *)
+let frames_vars s =
+  if s.m.num = Unboxed then ("", "<-", "stride_word") else ("!", ":=", "stride")
+
+(* The loop of [fold_frames] over frames walked with [known] bytes of each
+   known to be there. A walk that knows all its bounds may not read [stop]. *)
+let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known =
+  let ppf = s.ppf and read, assign, stride = frames_vars s in
+  let body = Buffer.create 4096 in
+  let bppf = Format.formatter_of_buffer body in
+  pp_scan ?cuts ~known ~scope:(scope s names) { s with ppf = bppf }
+    ~reject:(invalid ^ " current")
+    ~accept:(call s ~unboxed (valid ^ " current"));
+  Format.pp_print_flush bppf ();
+  let body = Buffer.contents body in
+  Fmt.pf ppf
+    "for _ = 1 to len / stride do@\n\
+     let base = %scursor in@\n\
+     let current = %sacc in@\n\
+     let next = (@\n"
+    read read;
+  if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
+  Fmt.pf ppf "%s) in@\nacc %s next;@\ncursor %s %s@\ndone" body assign assign
+    (binop s.m.num "+" "base" stride)
+
+(* A batch of frames too short for the bounds a frame loop leaves out goes
+   through the walk of one frame, already written, rather than a second copy
+   of it. *)
+let pp_frames_short ?step s =
+  let read, assign, stride = frames_vars s in
+  let at = if s.m.num = Unboxed then "(U.to_int base)" else "base" in
+  let one =
+    match step with
+    | Some _ -> Fmt.str "fold_step buf %s stride ~init:current" at
+    | None ->
+        Fmt.str
+          "fold buf %s stride ~invalid:(fun () -> invalid current) \
+           ~valid:(valid current)"
+          at
+  in
+  Fmt.pf s.ppf
+    "for _ = 1 to len / stride do@\n\
+     let base = %scursor in@\n\
+     let current = %sacc in@\n\
+     acc %s %s;@\n\
+     cursor %s %s@\n\
+     done"
+    read read assign one assign
+    (binop s.m.num "+" "base" stride)
+
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
    [step]'s functions by name. The frame guard and a positive stride make
    [base + stride <= off + len] on every iteration, the last included. Each
@@ -181,8 +260,8 @@ let frames_callbacks s ~unboxed =
    next. *)
 let pp_frames ?step s ~unboxed =
   let native = s.m.num = Unboxed in
-  let binding, reference, read, assign =
-    if native then ("mutable ", "", "", "<-") else ("", "ref ", "!", ":=")
+  let binding, reference, read =
+    if native then ("mutable ", "", "") else ("", "ref ", "!")
   in
   let name, callbacks, invalid, valid =
     match step with
@@ -218,20 +297,21 @@ let pp_frames ?step s ~unboxed =
         reference binding
         (if native then "U.of_int " else "ref ");
       if native then Fmt.pf ppf "let stride_word = U.of_int stride in@\n";
-      Fmt.pf ppf
-        "for _ = 1 to len / stride do@\n\
-         let base = %scursor in@\n\
-         let current = %sacc in@\n\
-         let next = (@\n\
-         let stop = %s in@\n"
-        read read
-        (if native then "stride_word" else "stride");
-      pp_scan ?cuts ~scope:(scope s names) s ~reject:(invalid ^ " current")
-        ~accept:(call s ~unboxed (valid ^ " current"));
-      Fmt.pf ppf ") in@\nacc %s next;@\ncursor %s %s@\ndone;@\n%sacc@\n@\n"
-        assign assign
-        (binop s.m.num "+" "base" (if native then "stride_word" else "stride"))
-        read)
+      let need = fixed_need s.plan.nodes in
+      let loop known =
+        pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known
+      in
+      if need > 0 then begin
+        Fmt.pf ppf "if stride >= %d then (@\n" need;
+        loop need;
+        Fmt.pf ppf ")@\nelse (@\n";
+        (* [fold_unboxed] is not polymorphic in the layout of its answer, so
+           the unboxed loop keeps a walk of its own. *)
+        if unboxed then loop 0 else pp_frames_short ?step s;
+        Fmt.pf ppf ")"
+      end
+      else loop 0;
+      Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)
 let pp_fold s ~unboxed =
