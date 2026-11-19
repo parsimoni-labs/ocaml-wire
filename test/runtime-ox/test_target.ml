@@ -1,6 +1,16 @@
 open Wire_runtime
 module U = Target.Int64_u
 module I32 = Target.Int32_u
+module L = Target.Local
+
+(* The loads of the generated code, at an [int64_u] position. *)
+let u8 b i = L.u8 b (Target.offset i)
+let u16be b i = L.u16be b (Target.offset i)
+let u16le b i = L.u16le b (Target.offset i)
+let i32be b i = I32.to_int32 (L.i32be b (Target.offset i))
+let i32le b i = I32.to_int32 (L.i32le b (Target.offset i))
+let i64be b i = U.to_int64 (L.i64be b (Target.offset i))
+let i64le b i = U.to_int64 (L.i64le b (Target.offset i))
 
 let words () =
   List.iter
@@ -12,45 +22,44 @@ let words () =
         for off = 0 to len do
           let index = U.of_int off in
           if off < len then
-            Alcotest.(check int)
-              "byte" (Bytes.get_uint8 b off) (Target.u8 b index);
+            Alcotest.(check int) "byte" (Bytes.get_uint8 b off) (u8 b index);
           if len - off >= 2 then (
             Alcotest.(check int)
               "u16be"
               (Bytes.get_uint16_be b off)
-              (Target.u16be b index);
+              (u16be b index);
             Alcotest.(check int)
               "u16le"
               (Bytes.get_uint16_le b off)
-              (Target.u16le b index));
+              (u16le b index));
           if len - off >= 4 then (
             Alcotest.(check int32)
-              "i32be" (Bytes.get_int32_be b off)
-              (I32.to_int32 (Target.i32be b index));
+              "i32be" (Bytes.get_int32_be b off) (i32be b index);
             Alcotest.(check int32)
-              "i32le" (Bytes.get_int32_le b off)
-              (I32.to_int32 (Target.i32le b index)));
-          if len - off >= 8 then
+              "i32le" (Bytes.get_int32_le b off) (i32le b index));
+          if len - off >= 8 then (
             Alcotest.(check int64)
-              "i64be" (Bytes.get_int64_be b off)
-              (U.to_int64 (Target.i64be b index))
+              "i64be" (Bytes.get_int64_be b off) (i64be b index);
+            Alcotest.(check int64)
+              "i64le" (Bytes.get_int64_le b off) (i64le b index))
         done
       done)
     [ 0; 1; 127; 128; 255 ];
   let bytes = Bytes.init 256 Char.chr in
   for i = 0 to 255 do
-    Alcotest.(check int) "all bytes" i (Target.u8 bytes (U.of_int i))
+    Alcotest.(check int) "all bytes" i (u8 bytes (U.of_int i))
   done
 
 let bad_indices () =
   let readers =
     [
-      (1, fun b i -> ignore (Target.u8 b i));
-      (2, fun b i -> ignore (Target.u16be b i));
-      (2, fun b i -> ignore (Target.u16le b i));
-      (4, fun b i -> ignore (I32.to_int32 (Target.i32be b i)));
-      (4, fun b i -> ignore (I32.to_int32 (Target.i32le b i)));
-      (8, fun b i -> ignore (U.to_int64 (Target.i64be b i)));
+      (1, fun b i -> ignore (u8 b i));
+      (2, fun b i -> ignore (u16be b i));
+      (2, fun b i -> ignore (u16le b i));
+      (4, fun b i -> ignore (i32be b i));
+      (4, fun b i -> ignore (i32le b i));
+      (8, fun b i -> ignore (i64be b i));
+      (8, fun b i -> ignore (i64le b i));
     ]
   in
   List.iter

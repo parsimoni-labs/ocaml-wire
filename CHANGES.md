@@ -138,6 +138,11 @@
   boxes a value across a module boundary. Convert with
   `Target.Int32_u.to_int32` and `of_int32` (#493, @samoht)
 
+- **Breaking:** on OxCaml, `Wire_runtime.Target`'s loads at an `int64_u`
+  offset are removed, and the scanner `Wire_ocaml` writes reads through
+  `Target.Local`, so it takes its buffer `local`. Read at `Target.offset off`
+  with `Target.Local` (#493, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,

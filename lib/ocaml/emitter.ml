@@ -345,18 +345,19 @@ let addr num o k =
     | Tagged -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
 
+(* An [int64_u] position is narrowed to the [int] offset the loads take. *)
 let load m ~o ~k ~bytes ~endian =
-  let at = addr m.num o k in
+  let at =
+    match m.num with
+    | Tagged -> addr m.num o k
+    | Unboxed -> Fmt.str "(B.offset %s)" (addr m.num o k)
+  in
   let e = endian_suffix endian in
-  match (m.num, bytes) with
-  | Tagged, 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
-  | Tagged, 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
-  | Tagged, 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
-  | Tagged, _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at
-  | Unboxed, 1 -> Fmt.str "(B.u8 buf %s)" at
-  | Unboxed, 2 -> Fmt.str "(B.u16%s buf %s)" e at
-  | Unboxed, 4 -> Fmt.str "(B.i32%s buf %s)" e at
-  | Unboxed, _ -> Fmt.str "(B.i64be buf %s)" at
+  match bytes with
+  | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
+  | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
+  | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
+  | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at
 
 (* The 64-bit words of a prefix of [size] bytes worth loading once: those
    holding two or more of [fields] a shift takes out. *)
@@ -1059,7 +1060,11 @@ let jump w ~j ~exported gates ~fired p =
           (present :: children))
       gates
   in
-  pf w "%s %a %s@\n" j pp_list args (pos_expr num p)
+  (* On OxCaml the join closes over a buffer that may be [local], which only
+     a call that is not a tail call may apply: the compiler still makes the
+     join a jump. *)
+  pf w "%s %a %s%s@\n" j pp_list args (pos_expr num p)
+    (match num with Unboxed -> " [@nontail]" | Tagged -> "")
 
 (* The outputs of [gates] a copied continuation reads: those of the case
    [fired], or of none, are absent. A walk cut into functions writes them as
