@@ -66,6 +66,12 @@
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
 
+- `Wire.Codec.read_word`, `word_reader`, `word_part` and `of_word`: read a
+  record of at most 7 bytes once, as an `int` of its bytes, then take each
+  field from it with two shifts and a mask. The read is one bounds check and,
+  where the buffer has 8 bytes from the record on, one load, inlined into the
+  caller's loop (#496, @samoht)
+
 - `Wire.Codec.writer`: a staged writer of a fixed-size record from a template
   and the values of the fields that vary, one call per record. A record of at
   most 7 bytes is put together in an `int` and written after every check

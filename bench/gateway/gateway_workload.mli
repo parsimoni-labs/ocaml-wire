@@ -1,6 +1,7 @@
 (** TM frame reassembly: a downlink processor walking the space packets each TM
-    transfer frame carries, every field read by Wire's staged {!Wire.Codec.get}.
-    The OCaml rows of [bench/gateway] and [bench/apps] run it. *)
+    transfer frame carries, each header read by Wire's {!Wire.Codec.read_word}
+    and its fields taken with {!Wire.Codec.of_word}. The OCaml rows of
+    [bench/gateway] and [bench/apps] run it. *)
 
 val cadu_size : int
 (** [cadu_size] is the size of a frame, 1115 bytes. *)

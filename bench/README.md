@@ -52,7 +52,8 @@ make bench-demo           # requires EverParse (3d.exe in PATH)
 
 Throughput on realistic workloads. The C loop calls the EverParse validator for
 field extraction, then runs application logic. The OCaml loop does the same
-work with `Codec.get`/`Codec.set`.
+work with `Codec.read_word` and `Codec.of_word` (CLCW: `Codec.load_word`
+and `Codec.extract`), and writes with `Codec.writer`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -82,7 +83,7 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.read_word` per header, then `Codec.of_word` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |

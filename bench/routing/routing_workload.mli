@@ -1,6 +1,7 @@
 (** APID demux: a SpaceWire CCSDS Packet Transfer Protocol router counting the
-    packets of each route, every field read by Wire's staged {!Wire.Codec.get}.
-    The OCaml rows of [bench/routing] and [bench/apps] run it. *)
+    packets of each route, each header read by Wire's {!Wire.Codec.read_word}
+    and its fields taken with {!Wire.Codec.of_word}. The OCaml rows of
+    [bench/routing] and [bench/apps] run it. *)
 
 val generate_stream : int -> bytes * int * int
 (** [generate_stream n] is [(buf, total, payload)]: space packets of variable

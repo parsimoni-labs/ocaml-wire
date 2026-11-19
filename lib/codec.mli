@@ -479,6 +479,37 @@ val extract : bitfield -> Optint.t -> int
 (** [extract bf word] extracts the field from a pre-loaded word value. Pure
     shift+mask, no memory access. *)
 
+type 'r word = private int
+(** The bytes of a record of a ['r] codec, big-endian, in an [int]. *)
+
+type 'r word_reader
+(** A reader of the records of a ['r] codec as words. *)
+
+val word_reader : 'r t -> 'r word_reader
+(** [word_reader c] reads the records of [c] with {!read_word}. Raises
+    [Invalid_argument] when [c] is not of a fixed size or has more bytes than
+    fit an [int] with a bit to spare (7 on a 64-bit host). *)
+
+val read_word : 'r word_reader -> bytes -> int -> 'r word
+(** [read_word r buf off] is the record at [off], read with one bounds check
+    and, where [buf] holds 8 bytes from [off] on, one load. Read its fields with
+    {!of_word}. It is a function the caller's compiler knows, so the load is
+    inlined into the caller's loop. Raises [Invalid_argument] when [buf] does
+    not hold the record at [off], as {!get} does. *)
+
+type ('a, 'r) part
+(** A field of a record word. *)
+
+val word_part : 'r t -> ('a, 'r) field -> ('a, 'r) part
+(** [word_part c f] is field [f] of the words {!word_reader} reads. Raises
+    [Invalid_argument] as {!word_reader} does, and when [f] is not one of [c]'s
+    or is not a big-endian integer or a bitfield of a byte or a big-endian 16-
+    or 32-bit word. *)
+
+val of_word : ('a, 'r) part -> 'r word -> 'a
+(** [of_word p w] is the field [p] of [w]: two shifts and a mask, with no memory
+    access but the part's own. *)
+
 val blit_string_exact : int -> bytes -> int -> string -> int
 (** [blit_string_exact n buf off s] writes [s] into [buf] at [off] and returns
     [off + n]. Raises [Invalid_argument] unless [String.length s = n]: a

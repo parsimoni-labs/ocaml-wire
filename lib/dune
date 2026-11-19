@@ -9,6 +9,7 @@
   layout
   seed
   codec_leaf
+  codec_run
   codec_repr
   codec_elem
   codec_compile
