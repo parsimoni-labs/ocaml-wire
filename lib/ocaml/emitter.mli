@@ -14,12 +14,12 @@ type src = {
   u : string;
   len : string;
   checked : string;
-  empty : string;
+  brand : string;
   buf : string;
 }
 (** The buffer the generated code reads: its type, its unchecked accessors, its
-    length, the module of its bounds-checked loads and string copies, an
-    expression for a fresh buffer of [size] zero bytes, and the parameter that
+    length, the module of its bounds-checked loads and string copies, the
+    runtime module that names a buffer of that type, and the parameter that
     binds it. *)
 
 val rt : string

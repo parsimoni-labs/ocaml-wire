@@ -1,5 +1,18 @@
 ## unreleased
 
+### Breaking
+
+- Generated OCaml: a `View` is checked once in a buffer named by
+  `Wire_runtime.Buf.v` and read with that buffer (`view_<f> b v`), allocating
+  nothing; a bitfield or byte array is a `Value.<f>` carrier, checked when
+  built, so `write` checks no range. A `View.check` that fails answers a
+  negative `int`: test it with `View.ok`. Migrate with `match Buf.v buf with
+  Any b ->`, `View.check b (Buf.length b) off`, and `(x :> int)` (#492,
+  @samoht)
+
+- Generated OCaml: `write_at` and `write_int_at` write into a named buffer
+  whose length the caller read once (#492, @samoht)
+
 ### Added
 
 - `Wire.Field.union`: a field holding one of several cases, selected by an

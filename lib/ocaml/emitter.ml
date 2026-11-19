@@ -17,14 +17,14 @@ open Planner
 type num = Tagged | Unboxed
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
-   length, the module of its bounds-checked loads and string copies, an
-   expression for a buffer of no bytes, and the parameter that binds it. *)
+   length, the module of its bounds-checked loads and string copies, the
+   runtime module that names a buffer of that type, and the parameter that binds it. *)
 type src = {
   typ : string;
   u : string;
   len : string;
   checked : string;
-  empty : string;
+  brand : string;
   buf : string;
 }
 
@@ -38,7 +38,7 @@ let bytes_src =
     u = rt ^ ".Unchecked";
     len = "Bytes.length";
     checked = "Bytes";
-    empty = "Bytes.empty";
+    brand = rt ^ ".Buf";
     buf = "buf";
   }
 
@@ -48,7 +48,7 @@ let bigstring_src =
     u = rt ^ ".Unchecked.Bigstring";
     len = rt ^ ".Unchecked.Bigstring.length";
     checked = rt ^ ".Unchecked.Bigstring";
-    empty = "Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0";
+    brand = rt ^ ".Buf.Bigstring";
     buf = "buf";
   }
 
