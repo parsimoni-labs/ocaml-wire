@@ -15,10 +15,12 @@ type src = {
   len : string;
   checked : string;
   empty : string;
+  buf : string;
 }
 (** The buffer the generated code reads: its type, its unchecked accessors, its
-    length, the module of its bounds-checked loads and string copies, and an
-    expression for a fresh buffer of [size] zero bytes. *)
+    length, the module of its bounds-checked loads and string copies, an
+    expression for a fresh buffer of [size] zero bytes, and the parameter that
+    binds it. *)
 
 val rt : string
 (** [rt] is the name of the runtime library the generated code links. *)
@@ -31,6 +33,13 @@ val bytes_src : src
 
 val bigstring_src : src
 (** [bigstring_src] reads a bigarray of bytes. *)
+
+val local_bytes_src : src
+(** [local_bytes_src] reads [bytes] the caller may hold [local], on OxCaml. *)
+
+val local_bigstring_src : src
+(** [local_bigstring_src] reads a bigarray of bytes the caller may hold [local],
+    on OxCaml. *)
 
 (** Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where

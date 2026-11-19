@@ -884,8 +884,10 @@ let test_bigstring () =
   done
 
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
-   as raising, and adds a stack-allocated decode for the generated record. The
-   stock compiler cannot build it; the OxCaml tests do. *)
+   as raising, adds a stack-allocated decode for the generated record, takes
+   each buffer it does not keep and the constructor of [decode_with] [local],
+   and sees the runtime [portable]. The stock compiler cannot build it; the
+   OxCaml tests do. *)
 let test_oxcaml () =
   let src = Wire_ocaml.ml ~target:`OxCaml ~codec:"Schemas.ipv4" Schemas.ipv4 in
   List.iter
@@ -899,8 +901,17 @@ let test_oxcaml () =
       "[@zero_alloc assume error] fail";
       "let[@zero_alloc] decode_local";
       "exclave_ stack_ {";
-      "let[@inline] decode_with make";
+      "let[@inline] decode_with (make @ local) (buf @ local) off";
+      "let[@inline][@zero_alloc] src (buf @ local) off";
+      "let[@inline][@zero_alloc] write (buf @ local) off";
+      "module Wire_runtime = Wire_runtime.Target.Portable";
+      "let[@inline][@zero_alloc] validate_written (buf @ local) off";
     ];
+  (* Every allocation check runs: only a path that ends in a raise is assumed
+     to allocate nothing, so none is taken on trust. *)
+  Alcotest.(check bool)
+    "no unchecked zero_alloc" false
+    (contains src "[@zero_alloc assume]");
   let stock = Wire_ocaml.ml ~codec:"Schemas.ipv4" Schemas.ipv4 in
   Alcotest.(check bool)
     "stock has no OxCaml syntax" false

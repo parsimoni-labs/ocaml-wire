@@ -173,3 +173,52 @@
  (action
   (echo
    "test/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))
+
+; The modes of the code for OxCaml: buffers on the stack, local constructors
+; and portable callers. test_modes.ox.ml is OxCaml syntax, so only an OxCaml
+; compiler, which has its unboxed integer library, builds it; any other runs
+; an empty suite. [Profile.dev] is set in the dev profile, where nothing is
+; inlined across libraries and allocation is not checked.
+
+(rule
+ (with-stdout-to
+  test_modes.std.ml
+  (echo "let suite = (\"modes\", [])\n")))
+
+(rule
+ (enabled_if
+  (= %{profile} dev))
+ (action
+  (with-stdout-to
+   profile.ml
+   (echo "let dev = true\n"))))
+
+(rule
+ (enabled_if
+  (<> %{profile} dev))
+ (action
+  (with-stdout-to
+   profile.ml
+   (echo "let dev = false\n"))))
+
+(executable
+ (name test_modes_main)
+ (modules test_modes_main test_modes profile)
+ (ocamlopt_flags
+  (:standard
+   (:include zero_alloc.sexp)))
+ (libraries
+  gens_ox
+  alcotest
+  (select
+   test_modes.ml
+   from
+   (stdlib_upstream_compatible wire.runtime -> test_modes.ox.ml)
+   (-> test_modes.std.ml))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (run ./test_modes_main.exe)))
