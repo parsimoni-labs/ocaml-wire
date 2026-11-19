@@ -128,6 +128,11 @@
   always present has its own C type, not `uint32_t`, so a wrapped `uint64`
   keeps its high bits. Rebuild C plugs (#474, @frejsoya)
 
+- **Breaking:** on OxCaml, `Wire_runtime.Target`'s 32-bit and 64-bit loads
+  return, and `Target.Local`'s stores take, `int32_u` and `int64_u`, so none
+  boxes a value across a module boundary. Convert with
+  `Target.Int32_u.to_int32` and `of_int32` (#493, @samoht)
+
 ### Removed
 
 - **Breaking:** `wire.diff-gen` (`Wire_diff_gen`) is removed: its generated

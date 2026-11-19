@@ -26,8 +26,14 @@ type src = {
   checked : string;
   brand : string;
   buf : string;
+  unboxed : bool;
+      (* Its 32-bit and 64-bit loads give [int32_u] and [int64_u], as on
+         OxCaml, where a boxed one would allocate across a module boundary. *)
 }
 
+(* The modules of the 32-bit and 64-bit values [src] loads. *)
+let i32 src = if src.unboxed then "Int32_u" else "Int32"
+let i64 src = if src.unboxed then "Int64_u" else "Int64"
 let rt = "Wire_runtime"
 let errors = rt ^ ".Errors"
 let arith = rt ^ ".Arith"
@@ -40,6 +46,7 @@ let bytes_src =
     checked = "Bytes";
     brand = rt ^ ".Buf";
     buf = "buf";
+    unboxed = false;
   }
 
 let bigstring_src =
@@ -50,6 +57,7 @@ let bigstring_src =
     checked = rt ^ ".Unchecked.Bigstring";
     brand = rt ^ ".Buf.Bigstring";
     buf = "buf";
+    unboxed = false;
   }
 
 (* On OxCaml a function that reads or writes [buf] without keeping it takes it
@@ -60,6 +68,7 @@ let local_bytes_src =
     u = rt ^ ".Target.Local";
     checked = rt ^ ".Target.Local";
     buf = "(buf @ local)";
+    unboxed = true;
   }
 
 let local_bigstring_src =
@@ -69,6 +78,7 @@ let local_bigstring_src =
     len = rt ^ ".Target.Local.Bigstring.length";
     checked = rt ^ ".Target.Local.Bigstring";
     buf = "(buf @ local)";
+    unboxed = true;
   }
 
 (* Where a walk failed: a bound, a field's check, or a where clause. *)
@@ -376,9 +386,10 @@ let words ~size fields =
    with none of the 16-bit sign and zero extensions a 16-bit swap costs. The
    shift happens on the [int32], so a 31-bit [int] loses no bit. *)
 let u16_in_word m ~size ~o ~k ~endian =
-  let low i = Fmt.str "(Int32.to_int %s land 0xffff)" i
+  let i32 = i32 m.src in
+  let low i = Fmt.str "(%s.to_int %s land 0xffff)" i32 i
   and high i =
-    Fmt.str "(Int32.to_int (Int32.shift_right_logical %s 16) land 0xffff)" i
+    Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)" i32 i32 i
   in
   let at k = load m ~o ~k ~bytes:4 ~endian in
   match (m.ox, m.num, size, endian) with
@@ -395,11 +406,11 @@ let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
-      let shift = 8 * (a + 8 - k - bytes) in
+      let i64 = i64 m.src and shift = 8 * (a + 8 - k - bytes) in
       if a = k then
-        Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d))" a shift
+        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d))" i64 i64 a shift
       else
-        Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land %s)" a
+        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d) land %s)" i64 i64 a
           shift
           (if bytes = 4 then "mask32"
            else Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
@@ -412,14 +423,15 @@ let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
         Fmt.str "(U.logand %s #%LdL)" shifted
           (Int64.pred (Int64.shift_left 1L (8 * bytes)))
   | Tagged, _ when bytes = 4 ->
-      Fmt.str "(Int32.to_int %s land mask32)" (load m ~o ~k ~bytes ~endian)
+      Fmt.str "(%s.to_int %s land mask32)" (i32 m.src)
+        (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
       match u16_in_word m ~size ~o ~k ~endian with
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
   | Unboxed, _ when bytes = 4 ->
-      Fmt.str "(U.logand (U.of_int32 %s) #0xffffffffL)"
+      Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
         (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
 
@@ -461,7 +473,8 @@ let value m ?size ?bitword ~o ~words ~k f =
             Fmt.str "(U.logand %s #%LdL)" v
               (Int64.pred (Int64.shift_left 1L width)))
   | Int { width = 32; signed = true; endian } when m.num = Tagged ->
-      Fmt.str "(Int32.to_int %s)" (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian)
+      Fmt.str "(%s.to_int %s)" (i32 m.src)
+        (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian)
   | Int { width; signed; endian } ->
       let v =
         unsigned m ?size ~o ~words ~k:(k + f.offset) ~bytes:(width / 8) ~endian
@@ -826,8 +839,7 @@ let load_words w ~o ~k ~size live =
       (fun w a ->
         let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
         let name = Fmt.str "w%d" (k + a) in
-        pf w "let %s = %s in@\n" name
-          (match m.num with Tagged -> v | Unboxed -> "U.of_int64 " ^ v);
+        pf w "let %s = %s in@\n" name v;
         bind_num w name)
       w words
   in
@@ -872,7 +884,7 @@ let field w ~o ~k ~size ~words ~bitwords f =
           (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian);
         let w = bind w (f.id ^ "_raw") in
         if is_live then begin
-          pf w "let %s = (Int32.to_int %s_raw%s) in@\n" f.id f.id
+          pf w "let %s = (%s.to_int %s_raw%s) in@\n" f.id (i32 w.m.src) f.id
             (if signed then "" else " land mask32");
           bind w f.id
         end

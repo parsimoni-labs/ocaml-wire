@@ -1,5 +1,6 @@
 open Wire_runtime
 module U = Target.Int64_u
+module I32 = Target.Int32_u
 
 let words () =
   List.iter
@@ -24,12 +25,15 @@ let words () =
               (Target.u16le b index));
           if len - off >= 4 then (
             Alcotest.(check int32)
-              "i32be" (Bytes.get_int32_be b off) (Target.i32be b index);
+              "i32be" (Bytes.get_int32_be b off)
+              (I32.to_int32 (Target.i32be b index));
             Alcotest.(check int32)
-              "i32le" (Bytes.get_int32_le b off) (Target.i32le b index));
+              "i32le" (Bytes.get_int32_le b off)
+              (I32.to_int32 (Target.i32le b index)));
           if len - off >= 8 then
             Alcotest.(check int64)
-              "i64be" (Bytes.get_int64_be b off) (Target.i64be b index)
+              "i64be" (Bytes.get_int64_be b off)
+              (U.to_int64 (Target.i64be b index))
         done
       done)
     [ 0; 1; 127; 128; 255 ];
@@ -44,9 +48,9 @@ let bad_indices () =
       (1, fun b i -> ignore (Target.u8 b i));
       (2, fun b i -> ignore (Target.u16be b i));
       (2, fun b i -> ignore (Target.u16le b i));
-      (4, fun b i -> ignore (Target.i32be b i));
-      (4, fun b i -> ignore (Target.i32le b i));
-      (8, fun b i -> ignore (Target.i64be b i));
+      (4, fun b i -> ignore (I32.to_int32 (Target.i32be b i)));
+      (4, fun b i -> ignore (I32.to_int32 (Target.i32le b i)));
+      (8, fun b i -> ignore (U.to_int64 (Target.i64be b i)));
     ]
   in
   List.iter

@@ -969,8 +969,8 @@ let test_bigstring () =
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, adds a stack-allocated decode for the generated record, takes
    each buffer it does not keep and the constructor of [decode_with] [local],
-   and sees the runtime [portable]. The stock compiler cannot build it; the
-   OxCaml tests do. *)
+   and holds a 32-bit or 64-bit value unboxed. The stock compiler cannot build
+   it; the OxCaml tests do. *)
 let test_oxcaml () =
   let src = Wire_ocaml.ml ~target:`OxCaml ~codec:"Schemas.ipv4" Schemas.ipv4 in
   List.iter
@@ -988,7 +988,7 @@ let test_oxcaml () =
       "let[@inline] decode_with (make @ local) (buf @ local) off";
       "let[@inline][@zero_alloc] src (buf @ local) off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
-      "module Wire_runtime = Wire_runtime.Target.Portable";
+      "module Int32_u = Wire_runtime.Target.Int32_u";
       "let[@inline][@zero_alloc] validate_written (buf @ local) off";
     ];
   (* Every allocation check runs: only a path that ends in a raise is assumed
