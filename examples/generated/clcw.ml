@@ -100,34 +100,20 @@ let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
     f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
     f14_reportvalue =
   if off < 0 || off > Bytes.length buf - size then too_short buf off;
-  if f1_controlwordtype lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f1_controlwordtype;
-  if f2_clcwversion lsr 2 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:2 f2_clcwversion;
-  if f3_statusfield lsr 3 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:3 f3_statusfield;
-  if f4_copineffect lsr 2 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:2 f4_copineffect;
-  if f5_vcid lsr 6 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:6 f5_vcid;
-  if f6_spare lsr 2 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:2 f6_spare;
-  if f7_norf lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f7_norf;
-  if f8_nobitlock lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f8_nobitlock;
-  if f9_lockout lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f9_lockout;
-  if f10_wait lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f10_wait;
-  if f11_retransmit lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f11_retransmit;
-  if f12_farmbcounter lsr 2 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:2 f12_farmbcounter;
-  if f13_spare2 lsr 1 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:1 f13_spare2;
-  if f14_reportvalue lsr 8 <> 0 then
-    Wire_runtime.Errors.unsigned_too_wide ~bits:8 f14_reportvalue;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f1_controlwordtype;
+  Wire_runtime.Errors.check_unsigned ~bits:2 f2_clcwversion;
+  Wire_runtime.Errors.check_unsigned ~bits:3 f3_statusfield;
+  Wire_runtime.Errors.check_unsigned ~bits:2 f4_copineffect;
+  Wire_runtime.Errors.check_unsigned ~bits:6 f5_vcid;
+  Wire_runtime.Errors.check_unsigned ~bits:2 f6_spare;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f7_norf;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f8_nobitlock;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f9_lockout;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f10_wait;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f11_retransmit;
+  Wire_runtime.Errors.check_unsigned ~bits:2 f12_farmbcounter;
+  Wire_runtime.Errors.check_unsigned ~bits:1 f13_spare2;
+  Wire_runtime.Errors.check_unsigned ~bits:8 f14_reportvalue;
   no_error ()
 
 let[@inline] write_int buf off f1_controlwordtype f2_clcwversion f3_statusfield
@@ -892,34 +878,20 @@ module Bigstring = struct
       f14_reportvalue =
     if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
       too_short buf off;
-    if f1_controlwordtype lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f1_controlwordtype;
-    if f2_clcwversion lsr 2 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:2 f2_clcwversion;
-    if f3_statusfield lsr 3 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:3 f3_statusfield;
-    if f4_copineffect lsr 2 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:2 f4_copineffect;
-    if f5_vcid lsr 6 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:6 f5_vcid;
-    if f6_spare lsr 2 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:2 f6_spare;
-    if f7_norf lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f7_norf;
-    if f8_nobitlock lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f8_nobitlock;
-    if f9_lockout lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f9_lockout;
-    if f10_wait lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f10_wait;
-    if f11_retransmit lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f11_retransmit;
-    if f12_farmbcounter lsr 2 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:2 f12_farmbcounter;
-    if f13_spare2 lsr 1 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:1 f13_spare2;
-    if f14_reportvalue lsr 8 <> 0 then
-      Wire_runtime.Errors.unsigned_too_wide ~bits:8 f14_reportvalue;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f1_controlwordtype;
+    Wire_runtime.Errors.check_unsigned ~bits:2 f2_clcwversion;
+    Wire_runtime.Errors.check_unsigned ~bits:3 f3_statusfield;
+    Wire_runtime.Errors.check_unsigned ~bits:2 f4_copineffect;
+    Wire_runtime.Errors.check_unsigned ~bits:6 f5_vcid;
+    Wire_runtime.Errors.check_unsigned ~bits:2 f6_spare;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f7_norf;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f8_nobitlock;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f9_lockout;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f10_wait;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f11_retransmit;
+    Wire_runtime.Errors.check_unsigned ~bits:2 f12_farmbcounter;
+    Wire_runtime.Errors.check_unsigned ~bits:1 f13_spare2;
+    Wire_runtime.Errors.check_unsigned ~bits:8 f14_reportvalue;
     no_error ()
 
   let[@inline] write_int buf off f1_controlwordtype f2_clcwversion

@@ -18,9 +18,6 @@ let raise_no_matching_case () =
    codes without restricting the set, so it has no encode guard at all. *)
 let enum_values cases = List.map snd cases
 
-let rec enum_member valid (v : int) =
-  match valid with [] -> false | x :: rest -> x = v || enum_member rest v
-
 (* Decode-side membership scans the case list itself. The [valid] list an
    [Invalid_enum] carries is built on the failure path only: the scan runs once
    per decoded value, and a repeat's element count is the sender's choice
@@ -35,8 +32,7 @@ let check_enum_decode ~at ~cases v =
   if not (enum_case_member cases v) then
     raise_invalid_enum ~at ~value:v ~valid:(enum_values cases)
 
-let check_enum_encode ~name ~valid v =
-  if not (enum_member valid v) then Errors.enum_encode ~name ~valid v
+let check_enum_encode = Errors.check_enum
 
 (* [all_zeros] decodes only zero bytes, so a padding value carrying anything
    else round-trips to [Non_zero_padding]. *)
@@ -88,9 +84,7 @@ let check_zeroterm_region ~region ~len =
    {!SInt32.check_encode} and {!UInt63.check_encode} sit next to the
    representation that decides what fits; and [uint64] and [int64] need no guard
    at all, because an [int64] is exactly the eight bytes written. *)
-let check_unsigned_encode ~bits v =
-  let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
-  if out_of_range then Errors.unsigned_too_wide ~bits v
+let check_unsigned_encode = Errors.check_unsigned
 
 (* The signed 32-bit writers, under the names the encode paths use. Every
    fixed-width scalar writes through its own carrier, whose range is already the

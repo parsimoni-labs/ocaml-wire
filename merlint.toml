@@ -8,4 +8,4 @@ exclude = ["E350"]
 # longer does, so a new finding fails here.
 [[rules]]
 files = "examples/generated/clcw.ml"
-exclude = ["E001", "E331", "E505"]
+exclude = ["E331", "E505"]
