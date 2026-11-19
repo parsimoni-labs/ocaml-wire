@@ -1,9 +1,7 @@
-(** Loads at an [int64_u] offset, for the code [Wire_ocaml] writes for OxCaml.
-
-    Each load reads the bytes at [off] with no bounds check: the generated code
-    checks the frame first. The paranoid profile checks the full 64-bit [off]
-    before each load, so an offset that narrowing to an [int] would wrap raises
-    [Invalid_argument] instead. *)
+(** What the code [Wire_ocaml] writes for OxCaml reads a buffer with: {!Local}'s
+    loads and stores, at an [int] offset of a buffer the caller may hold
+    [local], and {!offset}, which narrows to such an offset a position the code
+    holds as an [int64_u]. *)
 
 module Int64_u = Stdlib_upstream_compatible.Int64_u
 module Int32_u = Stdlib_upstream_compatible.Int32_u
@@ -12,23 +10,10 @@ type cell = { mutable cell : int64_u }
 (** A mutable [int64_u], which no [ref] holds. The compiler unboxes one that is
     local and that only reads and assignments of [cell] use. *)
 
-val[@zero_alloc] u8 : bytes -> int64_u -> int
-(** [u8 buf off] is the byte at [off]. *)
-
-val[@zero_alloc] u16be : bytes -> int64_u -> int
-(** [u16be buf off] is the big-endian 16-bit value at [off]. *)
-
-val[@zero_alloc] u16le : bytes -> int64_u -> int
-(** [u16le buf off] is the little-endian 16-bit value at [off]. *)
-
-val[@zero_alloc] i32be : bytes -> int64_u -> int32_u
-(** [i32be buf off] is the big-endian 32-bit value at [off]. *)
-
-val[@zero_alloc] i32le : bytes -> int64_u -> int32_u
-(** [i32le buf off] is the little-endian 32-bit value at [off]. *)
-
-val[@zero_alloc] i64be : bytes -> int64_u -> int64_u
-(** [i64be buf off] is the big-endian 64-bit value at [off]. *)
+val[@zero_alloc] offset : int64_u -> int
+(** [offset off] is [off] as an [int]. The paranoid profile raises
+    [Invalid_argument] for an [off] that does not fit an [int], which narrowing
+    would wrap to another offset. *)
 
 (** Reads and writes at an [int] offset of a buffer the caller may hold
     [local], for the code [Wire_ocaml] writes for OxCaml: the same names as

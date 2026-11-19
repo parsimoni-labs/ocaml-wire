@@ -46,7 +46,12 @@ let scan_mode (plan : plan) ~num selected =
   let ids = List.map (fun (o : output) -> o.id) in
   {
     num;
-    src = bytes_src;
+    src =
+      (* On OxCaml it reads a buffer that may be [local] through [L], the
+         runtime's [Target.Local]. *)
+      (match num with
+      | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
+      | Tagged -> bytes_src);
     ox = false;
     cold = false;
     raw32 = false;
@@ -116,8 +121,12 @@ let with_cuts ?(poly = "") s name write =
    of it gives it, when inference needs one: [base] and [stop], then
    [names]. *)
 let scope s names =
-  let num = if s.m.num = Unboxed then Some "int64_u" else None in
-  List.rev ([ ("buf", None); ("base", num); ("stop", num) ] @ names)
+  let num, buf =
+    match s.m.num with
+    | Unboxed -> (Some "int64_u", Some "bytes @ local")
+    | Tagged -> (None, None)
+  in
+  List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
 
 (* The walk over the [stop] bytes at [base], which starts by binding its
    slots: each rejection is the text [reject] and each acceptance what
@@ -195,8 +204,9 @@ let pp_frames ?step s ~unboxed =
   in
   with_cuts ~poly s name (fun s cuts ->
       let ppf = s.ppf in
-      Fmt.pf ppf "let[@inline always] %s%s buf off len ~stride %s %s =@\n" name
+      Fmt.pf ppf "let[@inline always] %s%s %s off len ~stride %s %s =@\n" name
         (if unboxed then " (type a : bits64)" else "")
+        s.m.src.buf
         (if unboxed then "~(init : a)" else "~init")
         callbacks;
       Fmt.pf ppf
@@ -227,8 +237,8 @@ let pp_frames ?step s ~unboxed =
 let pp_fold s ~unboxed =
   let name = if unboxed then "fold_unboxed" else "fold" in
   with_cuts s name (fun s cuts ->
-      Fmt.pf s.ppf "let[@inline always] %s buf off len ~invalid ~valid =@\n"
-        name;
+      Fmt.pf s.ppf "let[@inline always] %s %s off len ~invalid ~valid =@\n" name
+        s.m.src.buf;
       pp_entry ?cuts
         ~scope:(scope s [ ("invalid", None); ("valid", None) ])
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
@@ -237,7 +247,8 @@ let pp_fold s ~unboxed =
 (* [fold_step], which calls the module [m]'s functions by name. *)
 let pp_fold_step s m =
   with_cuts s "fold_step" (fun s cuts ->
-      Fmt.pf s.ppf "let[@inline always] fold_step buf off len ~init =@\n";
+      Fmt.pf s.ppf "let[@inline always] fold_step %s off len ~init =@\n"
+        s.m.src.buf;
       pp_entry ?cuts
         ~scope:(scope s [ ("init", None) ])
         s ~reject:(m ^ ".invalid init")
@@ -275,10 +286,11 @@ let pp_decoder s =
     "let[@inline always] decode_accepted %a : t = {ok = true;%a}@\n@\n"
     (pp_args ~conv:output_id) s.selected (pp_fields s) output_id;
   Fmt.pf s.ppf
-    "let[@inline always] decode buf off len : t =@\n\
+    "let[@inline always] decode %s off len : t =@\n\
      fold buf off len ~invalid:(fun () -> decode_rejected) \
      ~valid:decode_accepted@\n\
      @\n"
+    s.m.src.buf
 
 (* [decode_unboxed], which returns an unboxed record. Its walk stays one
    function and builds the record with local functions: built in a function
@@ -289,7 +301,8 @@ let pp_unboxed_decoder s =
   let zero (o : output) = if o.is_bool then "false" else lit s.m.num 0 in
   Hashtbl.replace s.taken "decode_unboxed" ();
   Fmt.pf s.ppf
-    "let[@inline always][@zero_alloc] decode_unboxed buf off len : unboxed =@\n";
+    "let[@inline always][@zero_alloc] decode_unboxed %s off len : unboxed =@\n"
+    s.m.src.buf;
   Fmt.pf s.ppf "let invalid () = #{ok = false;%a} in@\n" (pp_fields s) zero;
   Fmt.pf s.ppf "let valid %a = #{ok = true;%a} in@\n" (pp_args ~conv:output_id)
     s.selected (pp_fields s) output_id;
@@ -341,6 +354,7 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
       Fmt.pf ppf
         "module U = Wire_runtime.Target.Int64_u@\n\
          module B = Wire_runtime.Target@\n\
+         module L = Wire_runtime.Target.Local@\n\
          @\n";
     pp_fold s ~unboxed:false;
     pp_frames s ~unboxed:false;
