@@ -3,11 +3,26 @@ name = "wire-bench-apps"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "The application benchmarks of ocaml-wire over the Rust Wire_rust generates"
+description = "The application benchmarks of ocaml-wire over the Rust Wire_rust generates and released crates"
 
 [dependencies]
+# The u11 and u14 spacepackets' header constructors take.
+arbitrary-int = "2"
+# The space packet primary header, for routing.
+ccsds_primary_header = "0.15.0"
+# The TM transfer frame primary header, for gateway. Its default feature set
+# is already empty; the crate is a gateway application, so its library still
+# pulls in its server's dependencies (tokio, axum, ...).
+chronus-gateway = "1.0.0-rc.1"
+# The space packet primary header, for routing, and the CLCW.
+gaia-ccsds-c2a = "1.2.0"
 # getrusage, for the process CPU time of each pass.
 libc = "0.2"
+# The space packet primary header, for routing and the packets of gateway; the
+# header needs none of its default std feature (chrono's clock).
+spacepackets = { version = "0.19.0", default-features = false }
+# The zero-copy view gaia-ccsds-c2a's own SpacePacket reads its header with.
+zerocopy = "0.6"
 
 # As bench/rust/cargo: the strongest settings that stay portable, no
 # target-cpu=native, as the OCaml compilers have no equivalent for the OCaml

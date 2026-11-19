@@ -1,9 +1,10 @@
 //! The application benchmarks of `bench/routing`, `bench/gateway` and
 //! `bench/clcw`, over the Rust that `Wire_rust` generates from the codecs
 //! they use (`Space.packet_codec`, `Space.tm_frame_codec`,
-//! `Space.clcw_codec`). Each workload runs the application logic of its
-//! OCaml workload on the same input, as a user of the library writes it: one
-//! safe loop per workload.
+//! `Space.clcw_codec`) and over released crates. Each workload runs the
+//! application logic of its OCaml workload on the same input, as a user of
+//! each library writes it: one safe loop per workload, the rows differing
+//! only in the header reader and writer they call.
 //!
 //! Reading: routing (`Routing_workload.run_packets`), gateway
 //! (`Gateway_workload.checksum`) and CLCW (`Clcw_workload.run_all`). The
@@ -17,6 +18,14 @@
 //! a FARM reports for every frame (`Clcw_workload.report`). Each row writes
 //! the same bytes into its own output buffer, and its result is the FNV-1a
 //! hash of that buffer.
+//!
+//! Released crates, each the way its docs show:
+//! - space packet headers: `spacepackets`, `ccsds_primary_header` and
+//!   `gaia-ccsds-c2a`'s `PrimaryHeader`, for routing and for the packets of
+//!   gateway;
+//! - TM transfer frame primary headers: `chronus-gateway`'s
+//!   `TmFrameHeader`, with `spacepackets` for the packets;
+//! - CLCW words: `gaia-ccsds-c2a`'s `CLCW`.
 //!
 //! Every row, OCaml ones included, must print the same result.
 //!
@@ -41,6 +50,8 @@ mod clcw;
 mod space_packet;
 #[path = "gen/tm_frame.rs"]
 mod tm_frame;
+
+use arbitrary_int::{u11, u14};
 
 // APID demux: as `Routing_workload`, `n` packets from offset 0, wrapping to 0
 // when a header does not fit, each counted on the route of its APID.
@@ -109,12 +120,69 @@ fn sp_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
     Some((v.apid(), v.datalength()))
 }
 
+fn sp_spacepackets(buf: &[u8], off: usize) -> Option<(u16, u16)> {
+    use spacepackets::{CcsdsPacket, SpHeader};
+    let (h, _) = SpHeader::from_be_bytes(&buf[off..]).ok()?;
+    Some((h.apid().value(), h.data_len()))
+}
+
+fn sp_ccsds_primary_header(buf: &[u8], off: usize) -> Option<(u16, u16)> {
+    use ccsds_primary_header::primary_header::PrimaryHeader;
+    let h = PrimaryHeader::from_slice(&buf[off..])?;
+    Some((h.control.apid(), h.length.length_field()))
+}
+
+fn sp_gaia(buf: &[u8], off: usize) -> Option<(u16, u16)> {
+    use gaia_ccsds_c2a::ccsds::space_packet::PrimaryHeader;
+    let (h, _) = zerocopy::LayoutVerified::<_, PrimaryHeader>::new_unaligned_from_prefix(&buf[off..])?;
+    Some((h.apid(), h.packet_data_length_raw()))
+}
+
 fn stamp_wire_rust(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
     space_packet::write(out, off, 0, 0, 1, apid, 3, seq, dlen).ok()
 }
 
+fn stamp_spacepackets(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
+    use spacepackets::{PacketType, SequenceFlags, SpHeader};
+    let h = SpHeader::new_from_fields(PacketType::Tm, true, u11::new(apid), SequenceFlags::Unsegmented, u14::new(seq), dlen);
+    h.write_to_slice(&mut out[off..]).ok()?;
+    Some(())
+}
+
+fn stamp_ccsds_primary_header(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
+    use ccsds_primary_header::primary_header::{PacketType, PrimaryHeader, SecondaryHeaderFlag, SeqFlag};
+    let mut h = PrimaryHeader::default();
+    h.control.set_version(0);
+    h.control.set_packet_type(PacketType::Data);
+    h.control.set_secondary_header_flag(SecondaryHeaderFlag::Present);
+    h.control.set_apid(apid);
+    h.sequence.set_sequence_type(SeqFlag::Unsegmented);
+    h.sequence.set_sequence_count(seq);
+    h.length.set_length_field(dlen);
+    let b = out.get_mut(off..off + 6)?;
+    b[0..2].copy_from_slice(&h.control.0);
+    b[2..4].copy_from_slice(&h.sequence.0);
+    b[4..6].copy_from_slice(&h.length.0);
+    Some(())
+}
+
+fn stamp_gaia(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
+    use gaia_ccsds_c2a::ccsds::space_packet::{PacketType, PrimaryHeader, SequenceFlag};
+    let h = PrimaryHeader::new()
+        .with_version_number(0)
+        .with_packet_type(PacketType::Telemetry)
+        .with_secondary_header_flag(true)
+        .with_apid(apid)
+        .with_sequence_flag(SequenceFlag::Unsegmented)
+        .with_sequence_count(seq)
+        .with_packet_data_length_raw(dlen);
+    out.get_mut(off..off + 6)?.copy_from_slice(&h.into_bytes());
+    Some(())
+}
+
 // {1 Routing}
 
+// Reads: every row shares this loop.
 fn routing(table: &[u8; 2048], buf: &[u8], n: usize, header: impl Fn(&[u8], usize) -> Option<(u16, u16)>) -> Counts {
     let hdr = space_packet::SIZE;
     let mut counts = [0u64; 4];
@@ -202,9 +270,20 @@ fn frame_wire_rust(buf: &[u8], base: usize) -> Option<(u8, u16)> {
     Some((f.vcid(), f.firsthdrptr()))
 }
 
+fn frame_chronus(buf: &[u8], base: usize) -> Option<(u8, u16)> {
+    let h = chronus_gateway::frames::TmFrameHeader::parse(&buf[base..])?;
+    Some((h.vcid, h.first_header_pointer))
+}
+
 fn packet_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
     let p = space_packet::Valid::at(buf, off).ok()?;
     Some((p.apid(), p.seqcount()))
+}
+
+fn packet_spacepackets(buf: &[u8], off: usize) -> Option<(u16, u16)> {
+    use spacepackets::{CcsdsPacket, SpHeader};
+    let (h, _) = SpHeader::from_be_bytes(&buf[off..]).ok()?;
+    Some((h.apid().value(), h.seq_count().value()))
 }
 
 // Writes: as `Gateway_workload.frame`, `frames` frames from a stream of
@@ -246,6 +325,29 @@ fn frame_header_wire_rust(out: &mut [u8], base: usize, vcid: u8, mc: u8, vc: u8,
     tm_frame::write(out, base, 0, 0x1FF, vcid, 1, mc, vc, 0, 0, 0, 3, fhp).ok()
 }
 
+// `TmFrameHeader` is `#[non_exhaustive]`: a header is parsed once from six
+// zero bytes, then its fields set for each frame. `to_bytes` writes the
+// packet order flag 0 and the segment length identifier 3, as this stream
+// has them.
+fn frame_header_chronus(template: chronus_gateway::frames::TmFrameHeader) -> impl Fn(&mut [u8], usize, u8, u8, u8, u16) -> Option<()> {
+    move |out, base, vcid, mc, vc, fhp| {
+        let mut h = template;
+        h.vcid = vcid;
+        h.mc_frame_count = mc;
+        h.vc_frame_count = vc;
+        h.first_header_pointer = fhp;
+        out.get_mut(base..base + 6)?.copy_from_slice(&h.to_bytes());
+        Some(())
+    }
+}
+
+fn chronus_template() -> chronus_gateway::frames::TmFrameHeader {
+    let mut h = chronus_gateway::frames::TmFrameHeader::parse(&[0; 6]).expect("six bytes");
+    h.spacecraft_id = 0x1FF;
+    h.ocf_present = true;
+    h
+}
+
 // {1 CLCW}
 
 // CLCW polling: as `Clcw_workload.run_all`, an anomaly for each word with
@@ -258,6 +360,22 @@ fn clcw(buf: &[u8]) -> u64 {
         let Ok(w) = clcw::get_lockout_word(buf, i * clcw::SIZE) else { break };
         let report = clcw::reportvalue_of_word(w) as u32;
         if clcw::lockout_of_word(w) != 0 || clcw::wait_of_word(w) != 0 || clcw::retransmit_of_word(w) != 0 || report != expected & 0xFF {
+            anomalies += 1;
+        }
+        expected = (report + 1) & 0xFF;
+    }
+    anomalies
+}
+
+// The same over `gaia-ccsds-c2a`'s `CLCW`, one word at a time.
+fn clcw_gaia(buf: &[u8]) -> u64 {
+    use gaia_ccsds_c2a::ccsds::tc::clcw::CLCW;
+    let mut anomalies = 0u64;
+    let mut expected = 0u32;
+    for c in buf.chunks_exact(4) {
+        let w = CLCW::from_bytes([c[0], c[1], c[2], c[3]]);
+        let report = w.report_value() as u32;
+        if w.lockout() != 0 || w.wait() != 0 || w.retransmit() != 0 || report != expected & 0xFF {
             anomalies += 1;
         }
         expected = (report + 1) & 0xFF;
@@ -285,19 +403,43 @@ fn report_wire_rust(out: &mut [u8]) {
     }
 }
 
+fn report_gaia(out: &mut [u8]) {
+    use gaia_ccsds_c2a::ccsds::tc::clcw::CLCW;
+    for (i, c) in out.chunks_exact_mut(4).enumerate() {
+        let (lockout, wait, retransmit, report) = farm(i);
+        let w = CLCW::new()
+            .with_cop_in_effect(1)
+            .with_virtual_channel_identification(7)
+            .with_lockout(lockout)
+            .with_wait(wait)
+            .with_retransmit(retransmit)
+            .with_report_value(report);
+        c.copy_from_slice(&w.into_bytes());
+    }
+}
+
 fn read(w: &str, buf: &[u8], items: usize, runs: usize, filter: &timing::Filter, file: &str) {
     match w {
         "routing" => {
             let table = routing_table();
-            timing::measure(w, "wire.rust", filter, items, runs, || routing(&table, black_box(buf), items, sp_wire_rust))
+            timing::measure(w, "wire.rust", filter, items, runs, || routing(&table, black_box(buf), items, sp_wire_rust));
+            timing::measure(w, "spacepackets 0.19", filter, items, runs, || routing(&table, black_box(buf), items, sp_spacepackets));
+            timing::measure(w, "ccsds_primary_header 0.15", filter, items, runs, || {
+                routing(&table, black_box(buf), items, sp_ccsds_primary_header)
+            });
+            timing::measure(w, "gaia-ccsds-c2a 1.2", filter, items, runs, || routing(&table, black_box(buf), items, sp_gaia))
         }
         "gateway" => {
             assert_eq!(buf.len() / CADU_SIZE, items, "{file} does not hold {items} frames");
-            timing::measure(w, "wire.rust", filter, items, runs, || gateway(black_box(buf), frame_wire_rust, packet_wire_rust))
+            timing::measure(w, "wire.rust", filter, items, runs, || gateway(black_box(buf), frame_wire_rust, packet_wire_rust));
+            timing::measure(w, "chronus-gateway 1.0.0-rc.1 + spacepackets 0.19", filter, items, runs, || {
+                gateway(black_box(buf), frame_chronus, packet_spacepackets)
+            })
         }
         "clcw" => {
             assert_eq!(buf.len() / clcw::SIZE, items, "{file} does not hold {items} words");
-            timing::measure(w, "wire.rust", filter, items, runs, || clcw(black_box(buf)))
+            timing::measure(w, "wire.rust", filter, items, runs, || clcw(black_box(buf)));
+            timing::measure(w, "gaia-ccsds-c2a 1.2", filter, items, runs, || clcw_gaia(black_box(buf)))
         }
         _ => panic!("no workload {w}"),
     }
@@ -317,19 +459,29 @@ fn write(w: &str, buf: &[u8], items: usize, runs: usize, filter: &timing::Filter
                     })
                 }};
             }
-            row!("wire.rust", sp_wire_rust, stamp_wire_rust)
+            row!("wire.rust", sp_wire_rust, stamp_wire_rust);
+            row!("spacepackets 0.19", sp_spacepackets, stamp_spacepackets);
+            row!("ccsds_primary_header 0.15", sp_ccsds_primary_header, stamp_ccsds_primary_header);
+            row!("gaia-ccsds-c2a 1.2", sp_gaia, stamp_gaia)
         }
         "gateway" => {
             assert_eq!(buf.len() / CADU_SIZE, items, "{file} does not hold {items} frames");
             let out = output(items * CADU_SIZE);
             timing::measure(c, "wire.rust", filter, items, runs, || {
                 written(&out, |o| frame(o, items, frame_header_wire_rust, stamp_wire_rust))
+            });
+            let out = output(items * CADU_SIZE);
+            let template = chronus_template();
+            timing::measure(c, "chronus-gateway 1.0.0-rc.1 + spacepackets 0.19", filter, items, runs, || {
+                written(&out, |o| frame(o, items, frame_header_chronus(template), stamp_spacepackets))
             })
         }
         "clcw" => {
             assert_eq!(buf.len() / clcw::SIZE, items, "{file} does not hold {items} words");
             let out = output(items * clcw::SIZE);
-            timing::measure(c, "wire.rust", filter, items, runs, || written(&out, report_wire_rust))
+            timing::measure(c, "wire.rust", filter, items, runs, || written(&out, report_wire_rust));
+            let out = output(items * clcw::SIZE);
+            timing::measure(c, "gaia-ccsds-c2a 1.2", filter, items, runs, || written(&out, report_gaia))
         }
         _ => panic!("no workload {w}"),
     }

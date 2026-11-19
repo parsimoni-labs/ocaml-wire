@@ -65,7 +65,8 @@ that the cross-language rows below run the same code.
 
 ## Cross-language applications (`bench/apps/`)
 
-The same three workloads on OCaml, on OxCaml and in Rust, each
+The same three workloads on OCaml, on OxCaml, in Rust, and over released
+crates that read and write the same headers, each
 pass over the whole input its generator writes. Each workload has a reading side, what a ground
 station does with the stream, and a writing side, what the spacecraft or a
 relay does to produce it:
@@ -84,6 +85,10 @@ relay does to produce it:
 | `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: the encoded default header copied, then `Codec.set` per field that varies |
 | `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
+| `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
+| `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
+| `gaia-ccsds-c2a` 1.2 (routing, CLCW) | `modular-bitfield` structs over zerocopy | `PrimaryHeader` through `LayoutVerified::new_unaligned_from_prefix`, as its `SpacePacket` reads it; `CLCW::from_bytes`. Writing: the `with_<field>` builders, then `into_bytes` |
+| `chronus-gateway` 1.0.0-rc.1 (gateway frames) | hand-written | `TmFrameHeader::parse`, with `spacepackets` for the packets. Writing: `TmFrameHeader::to_bytes`, the header parsed once and its fields set per frame, as the type is `#[non_exhaustive]` |
 
 The `Wire.Codec` rows run `Routing_workload.run_packets`,
 `Gateway_workload.checksum` and `Clcw_workload.run_all`, the code the
@@ -94,9 +99,24 @@ written as a user of each library writes it, with plain checked indexing,
 and every row gives the same result. `bench/apps/loops.ml` writes the loops
 over the generated OCaml, the same source for OCaml 5 and for OxCaml.
 `bench/apps/cargo/src/main.rs` writes them over the generated Rust, whose
-`Valid::at` checks a header once before its accessors read it.
+`Valid::at` checks a header once before its accessors read it, and over the
+crates; the Rust rows of a workload share one loop and differ only in the
+header reader and writer they call.
 No EverParse row runs here: those stay in `make bench-routing`,
 `bench-gateway` and `bench-clcw`.
+
+Crates: `spacepackets`, `ccsds_primary_header` and `gaia-ccsds-c2a` read
+and write the space packet primary header; `chronus-gateway` the CCSDS TM
+transfer frame primary header (CCSDS 132.0), with `spacepackets` for the
+packets it carries; `gaia-ccsds-c2a` the CLCW (CCSDS 232.0). Each crate row
+reads exactly the fields the other rows read, through the crate's own
+types. `chronus-gateway` is a gateway application whose library pulls in
+its server's dependencies (tokio, axum and more): it takes `cargo/Cargo.lock`
+from 27 packages to 188, of which 131 come from it and 27 from
+`gaia-ccsds-c2a`. Not used: `ccsds` 0.1.0-beta.25 decodes the AOS (CCSDS
+732.0) VCDU header, whose layout differs from a TM frame's, and
+`spacepackets` 0.19 decodes USLP frames and keeps the operational control
+field as a raw `u32`.
 
 Timing and reporting are those of `bench/rust`: one warm-up pass, which gives
 the result, then the timed passes, each reading the wall clock and the
@@ -106,31 +126,37 @@ report prints a table per workload and fails unless every row agrees. Each
 row runs in a process of its own (`bench/rows.sh`: the harness lists its
 rows with `--list`, then runs each by name), so no row starts on the heap,
 the caches or the gigabytes of address space the rows before it touched.
-The cargo project has the release profile of `bench/rust/cargo`.
+The cargo project has the release profile of `bench/rust/cargo`, and
+`cargo/Cargo.lock` pins the crates.
 
 ```
-make bench-apps-rust      # needs cargo
+make bench-apps-rust      # needs cargo; fetches the crates the first time
 ```
 
 Each row on its own, with the inputs `make bench-apps-rust` writes, on an
 ARM64 macOS host under a load average near 100, so the times are
 indicative; OCaml 5.4.1 (no flambda), OxCaml 5.4.0+ox (switch `5.4.0-ox9`,
-`-O3` on the harness only), rustc 1.94.1. The time is the best CPU time per item of the timed
+`-O3` on the harness only), rustc 1.94.1, with the crates
+`cargo/Cargo.lock` pins. The time is the best CPU time per item of the timed
 passes. Best CPU ns per item (stale: measured on inputs without anomalies,
 before the `Wire.Codec` gateway row lost its closure per frame):
 
 | Row | routing | gateway | clcw | routing_write | gateway_write | clcw_write |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | wire.rust | 4.39 | 49.7 | 1.06 | 6.40 | 26.0 | 0.55, vectorised |
+| spacepackets 0.19 | 5.46 | - | - | 5.93 | - | - |
+| ccsds_primary_header 0.15 | 5.65 | - | - | 5.63 | - | - |
+| gaia-ccsds-c2a 1.2 | 4.15 | - | 0.76 | 5.99 | - | 0.51, vectorised |
+| chronus-gateway 1.0.0-rc.1 + spacepackets 0.19 | - | 48.9 | - | - | 26.7 | - |
 | wire.ocaml, OxCaml target | 6.37 | 57.9 | 3.16 | 9.37 | 59.1 | 4.52 |
 | wire.ocaml, OCaml | 6.71 | 69.7 | 4.29 | 9.96 | 79.0 | 5.69 |
 | Wire.Codec, OxCaml | 13.8 | 132 | 7.05 | 33.4 | 410 | 39.4 |
 | Wire.Codec, OCaml | 11.8 | 214 | 8.86 | 39.3 | 496 | 52.3 |
 
-The Rust `clcw_write` row is autovectorised: LLVM turns its loop into NEON
-code that builds several words per instruction, where every other cell runs
-one item at a time, so it does not compare loop for loop with the OCaml
-rows.
+The two Rust `clcw_write` rows are autovectorised: LLVM turns their loops
+into NEON code that builds several words per instruction, where every other
+cell runs one item at a time, so they do not compare loop for loop with the
+OCaml rows.
 
 Every row gave `(hk=4000000 sci=3500000 diag=2000000 idle=500000)` on
 routing, `16569803807358438373` on gateway and 0 on clcw, and wrote buffers
@@ -140,7 +166,7 @@ hold one of each kind the readers test for, so every row takes each branch:
 the routing stream ends in a truncated packet after which the reader wraps,
 one gateway frame in 64 is idle, and CLCW words carry wait, retransmit and
 lockout and skip report values; writing sets lockout, wait and retransmit
-too.
+too, and the crate's CCSDS 232.0 words and the codec's hash the same.
 
 Writing is where the generated OCaml is furthest from Rust. A
 `write_int` checks every field value against its width on every call,

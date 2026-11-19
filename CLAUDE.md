@@ -42,7 +42,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
   - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
-  - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml and generated Rust
+  - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
   - `bench/gen_stubs.ml` -- generates C/OCaml stubs for EverParse comparison
   - `bench/bench_lib.ml` -- shared benchmark framework (timing, tables, comparison)
   - `bench/memtrace/` -- allocation profiling
@@ -183,8 +183,10 @@ workload has a reading side and a writing side (`bench.exe write`,
 Each row is the loop a user of its library writes
 (`bench/apps/loops.ml` for OCaml and OxCaml, `cargo/src/main.rs` for Rust),
 and every row must give the same result. A
-released crate gets a row only where one reads and writes the format; a
-hand-written Rust parser never stands in for one. Timing, the report and
+released crate gets a row only where one reads and writes the format
+(`spacepackets`, `ccsds_primary_header` and `gaia-ccsds-c2a` for the space
+packet header, `chronus-gateway` for the TM frame header, `gaia-ccsds-c2a`
+for the CLCW); a hand-written Rust parser never stands in for one. Timing, the report and
 the cargo layout are those of `bench/rust` (`Bench_lib.measure` and
 `bench/rust/cargo/src/timing.rs`, shared by both).
 
