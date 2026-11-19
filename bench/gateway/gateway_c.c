@@ -24,11 +24,15 @@ static const int TM_HDR = 6;       /* Wire.Codec.wire_size Space.tm_frame_codec 
 static const int PKT_SIZE = 70;    /* sp_hdr (6) + pkt_payload (64) */
 static const int DATA_FIELD_SIZE = 1115 - 6;  /* CADU_SIZE - TM_HDR */
 
-static const uint64_t CHECKSUM_INIT = 0xCBF29CE484222325ULL;
+/* FNV-1a modulo 2^63, as Gateway_workload.hash_int computes it in OCaml's
+   63-bit int: the 64-bit basis and prime reduced modulo 2^63, each product
+   masked to its low 63 bits. */
+static const uint64_t CHECKSUM_INIT = 0x4BF29CE484222325ULL;
 static const uint64_t CHECKSUM_PRIME = 0x100000001B3ULL;
+static const uint64_t MASK63 = (1ULL << 63) - 1;
 
 static inline uint64_t hash_int(uint64_t state, int value) {
-  return (state ^ (uint64_t)value) * CHECKSUM_PRIME;
+  return ((state ^ (uint64_t)value) * CHECKSUM_PRIME) & MASK63;
 }
 
 static void walk_frame(uint8_t *frame, int tm_hdr, int pkt_size,
@@ -87,5 +91,6 @@ CAMLprim value c_tm_reassemble_checksum(value v_buf, value v_off) {
     uint8_t *frame = buf + i * CADU_SIZE;
     walk_frame(frame, TM_HDR, PKT_SIZE, DATA_FIELD_SIZE, &checksum);
   }
-  CAMLreturn(caml_copy_int64((int64_t)checksum));
+  /* Below 2^63: the OCaml int with the same low 63 bits. */
+  CAMLreturn(Val_long((intnat)checksum));
 }

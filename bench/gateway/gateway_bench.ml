@@ -9,8 +9,10 @@ open Gateway_workload
 
 external c_tm_reassemble : bytes -> int -> int -> int = "c_tm_reassemble"
 
-external c_tm_reassemble_checksum : bytes -> int -> int64
+external c_tm_reassemble_checksum : bytes -> int -> int
   = "c_tm_reassemble_checksum"
+
+let pp_checksum ppf h = Fmt.pf ppf "%u" h
 
 let benchmark ~n_frames =
   let buf, total_pkts = generate_frames n_frames in
@@ -20,7 +22,7 @@ let benchmark ~n_frames =
   let t =
     v "Wire OCaml" ~size:cadu_size ~reset:(fun () -> reset st) (step st)
     |> with_c c_tm_reassemble buf
-    |> with_expect ~equal:Int64.equal ~pp:Fmt.int64 ~c:c_result ocaml_result
+    |> with_expect ~equal:Int.equal ~pp:pp_checksum ~c:c_result ocaml_result
   in
   (t, st, buf, total_pkts)
 
@@ -42,5 +44,5 @@ let main () =
   Memtrace.trace_if_requested ~context:"gateway" ();
   run_table ~prechecked:true ~title:"TM frame reassembly" ~n:n_frames
     ~unit:"frm" [ t ];
-  Fmt.pr "\n  OCaml checksum: 0x%Lx\n  C checksum:     0x%Lx\n" ocaml_checksum
+  Fmt.pr "\n  OCaml checksum: 0x%x\n  C checksum:     0x%x\n" ocaml_checksum
     c_checksum

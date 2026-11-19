@@ -9,13 +9,25 @@ let cf_lockout = Space.bf_cw_lockout
 let cf_wait = Space.bf_cw_wait
 let cf_retransmit = Space.bf_cw_retransmit
 
+(* The anomalies the check counts, each kind on words of its own: wait on
+   every 61st word, retransmit on every 97th, lockout on every 211th, and a
+   report value that skips one on every 127th, so that each test of the check
+   meets words that fail it. *)
 let generate_stream n =
   let buf = Bytes.create (n * word_size) in
-  let set_report = Wire.Staged.unstage (C.set Space.clcw_codec cf_report) in
+  let set f = Wire.Staged.unstage (C.set Space.clcw_codec f) in
+  let set_report = set cf_report and set_lockout = set cf_lockout in
+  let set_wait = set cf_wait and set_retransmit = set cf_retransmit in
+  let report = ref 0 in
   for i = 0 to n - 1 do
     let off = i * word_size in
     Wire.Codec.encode Space.clcw_codec Space.clcw_default buf off;
-    set_report buf off (i mod 256)
+    if i mod 61 = 60 then set_wait buf off 1;
+    if i mod 97 = 96 then set_retransmit buf off 1;
+    if i mod 211 = 210 then set_lockout buf off 1;
+    if i mod 127 = 126 then incr report;
+    set_report buf off (!report land 0xFF);
+    incr report
   done;
   buf
 
