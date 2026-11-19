@@ -118,4 +118,6 @@ module Portable : sig
   module Target : sig
     module Local = Local
   end
+
+  module Buf = Buf
 end

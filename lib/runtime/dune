@@ -62,7 +62,17 @@
    prims.mli
    from
    (stdlib_upstream_compatible -> prims.ox.mli)
-   (-> prims.std.mli))))
+   (-> prims.std.mli))
+  (select
+   buf.ml
+   from
+   (stdlib_upstream_compatible -> buf.ox.ml)
+   (-> buf.std.ml))
+  (select
+   buf.mli
+   from
+   (stdlib_upstream_compatible -> buf.ox.mli)
+   (-> buf.std.mli))))
 
 (library
  (name wire_runtime)
@@ -101,7 +111,17 @@
    prims.mli
    from
    (stdlib_upstream_compatible -> prims.ox.mli)
-   (-> prims.std.mli))))
+   (-> prims.std.mli))
+  (select
+   buf.ml
+   from
+   (stdlib_upstream_compatible -> buf.ox.ml)
+   (-> buf.std.ml))
+  (select
+   buf.mli
+   from
+   (stdlib_upstream_compatible -> buf.ox.mli)
+   (-> buf.std.mli))))
 
 ; The paranoid profile checks every read [Unchecked] makes, so the tests and
 ; the fuzzers catch a read outside the frame (docs/execution.md). The afl

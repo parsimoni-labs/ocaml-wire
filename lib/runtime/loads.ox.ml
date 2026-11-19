@@ -329,4 +329,6 @@ module Portable = struct
   module Target = struct
     module Local = Local
   end
+
+  module Buf = Buf
 end
