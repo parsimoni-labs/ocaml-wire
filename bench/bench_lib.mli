@@ -87,3 +87,55 @@ val section : string -> unit
 val pack : bytes array -> size:int -> bytes * int
 (** [pack arr ~size] packs an array of byte buffers into one contiguous buffer.
     Returns the buffer and the number of items. *)
+
+(** {1 Rows measured in their own process}
+
+    The cross-language benchmarks run each implementation in a process of its
+    own, OCaml, OxCaml and Rust, which prints one [RESULT] line per row;
+    {!report} reads them back. A line is tab-separated:
+    [RESULT corpus name cpu-best cpu-p10 cpu-median cpu-p90 wall-best wall-p10
+     wall-median wall-p90 result], times in nanoseconds per item. *)
+
+val compiler : string
+(** [compiler] is ["OCaml <version>"], or ["OxCaml <version>"] when this was
+    built by an OxCaml compiler. *)
+
+val read_file : string -> bytes
+(** [read_file file] is the contents of [file]. *)
+
+type filter
+(** The rows a harness runs, from its optional FILTER argument. *)
+
+val filter : string option -> filter
+(** [filter arg] runs every row when [arg] is [None] and only the row named
+    exactly [s] for [Some s]; [Some "--list"] runs no row and prints each row's
+    name instead, one per line, so that a caller can run each row in a process
+    of its own. *)
+
+val finish : filter -> unit
+(** [finish filter] exits with status 1, naming the row on stderr, when [filter]
+    names a row that no {!measure} call since {!filter} had. *)
+
+val measure :
+  corpus:string ->
+  filter:filter ->
+  name:string ->
+  items:int ->
+  runs:int ->
+  pp:'a Fmt.t ->
+  (unit -> 'a) ->
+  unit
+(** [measure ~corpus ~filter ~name ~items ~runs ~pp f] runs [f] once to warm up,
+    which gives the row's result, then [runs] timed passes of [f], [items] items
+    each, and prints the [RESULT] line of the row [name (compiler)] on [corpus],
+    with the best, 10th percentile, median and 90th percentile of the process
+    CPU time (user and system) and of the wall time per item, and the result
+    printed by [pp]. It does nothing unless [filter] selects [name]. *)
+
+val report : unit:(string -> string) -> string list -> unit
+(** [report ~unit files] prints the [RESULT] lines of [files]: a table per
+    corpus ranked by best CPU time per [unit corpus], then the best CPU time of
+    every row on every corpus. A corpus [<family>-<order>] belongs to
+    [<family>]; every row on a family must give the same result, or [report]
+    lists the results and exits with status 1. Raises [Failure] when [files]
+    hold no [RESULT] line. *)

@@ -2,12 +2,13 @@
 
    bench.exe corpus DIR N     writes the four corpora below, N packets each,
                               to DIR/<corpus>.bin
-   bench.exe run FILE STRIDE RUNS [FILTER]
-                              times the OCaml implementations whose name
-                              contains FILTER on the corpus FILE of STRIDE-byte
-                              slots, RUNS passes each, and prints the best,
-                              p10, median and p90 process CPU time and wall
-                              time per packet
+   bench.exe run FILE STRIDE RUNS [ROW | --list]
+                              times the OCaml implementations, or only the one
+                              named ROW, failing when there is none, on the
+                              corpus FILE of STRIDE-byte slots, RUNS passes
+                              each, and prints the best, p10, median and p90
+                              process CPU time and wall time per packet;
+                              --list prints the row names
    bench.exe report FILE...   prints the RESULT lines of each FILE as tables
 
    Every implementation does the same work on each packet, the work
@@ -253,9 +254,6 @@ let corpora dir n =
         order;
       write (Filename.concat dir (family ^ "-sorted.bin")) sorted)
     [ ("fixed64", 64, fixed64); ("mix128", 128, mix128) ]
-
-let read_file file =
-  Bytes.unsafe_of_string (In_channel.with_open_bin file In_channel.input_all)
 
 (* {1 The fold} *)
 
@@ -570,55 +568,13 @@ end)
 
 (* {1 Timing}
 
-   One warm-up pass, which also gives the checksum, then [runs] timed passes.
-   Each pass reads the wall clock and the process CPU time (user and system,
-   from [getrusage]) around the call; CPU time leaves out the time the process
-   spends descheduled, which on a loaded machine dominates the wall clock of
-   the slower rows. Only rows whose name contains [filter] run, so a process
-   can be measured whole for one row. cargo/src/main.rs does exactly the
-   same. *)
+   [Bench_lib.measure] times each row: one warm-up pass, which also gives the
+   checksum, then [runs] timed passes, each reading the wall clock and the
+   process CPU time around the call, as cargo/src/main.rs does. [filter]
+   can select one row by its name, so a process can be measured whole for one
+   row. *)
 
 let mask62 = (1 lsl 62) - 1
-
-let contains ~sub s =
-  let n = String.length sub and m = String.length s in
-  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
-  go 0
-
-let cpu_time () =
-  let t = Unix.times () in
-  t.tms_utime +. t.tms_stime
-
-(* Best, 10th percentile, median and 90th percentile, sorted in place. *)
-let quantiles times =
-  Array.sort Float.compare times;
-  let pct p = times.((Array.length times - 1) * p / 100) in
-  (times.(0), pct 10, pct 50, pct 90)
-
-let measure ~corpus ~filter ~stride buf runs (name, f) =
-  if contains ~sub:filter name then begin
-    let packets = float (Bytes.length buf / stride) in
-    let sum = f buf land mask62 in
-    let cpu = Array.make runs 0. and wall = Array.make runs 0. in
-    for r = 0 to runs - 1 do
-      let w0 = Unix.gettimeofday () in
-      let c0 = cpu_time () in
-      ignore (Sys.opaque_identity (f (Sys.opaque_identity buf)));
-      let c1 = cpu_time () in
-      let w1 = Unix.gettimeofday () in
-      cpu.(r) <- (c1 -. c0) *. 1e9 /. packets;
-      wall.(r) <- (w1 -. w0) *. 1e9 /. packets
-    done;
-    let compiler =
-      (if oxcaml then "OxCaml " else "OCaml ") ^ Sys.ocaml_version
-    in
-    let c_best, c10, c50, c90 = quantiles cpu in
-    let w_best, w10, w50, w90 = quantiles wall in
-    Fmt.pr
-      "RESULT\t%s\t%s \
-       (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d@."
-      corpus name compiler c_best c10 c50 c90 w_best w10 w50 w90 sum
-  end
 
 let run file stride runs filter =
   let rows =
@@ -627,143 +583,31 @@ let run file stride runs filter =
     | 128 -> Rows128.all
     | _ -> Fmt.failwith "bench.exe: no rows for a stride of %d bytes" stride
   in
-  let buf = read_file file in
+  let buf = Bench_lib.read_file file in
   if Bytes.length buf mod stride <> 0 then
     Fmt.failwith "bench.exe: %s is not a whole number of %d-byte slots" file
       stride;
   let corpus = Filename.remove_extension (Filename.basename file) in
-  List.iter (measure ~corpus ~filter ~stride buf runs) rows
-
-(* {1 The report} *)
-
-type result = {
-  corpus : string;
-  name : string;
-  cpu : float * float * float * float;
-  wall : float * float * float * float;
-  sum : string;
-}
-
-let results files =
-  List.concat_map
-    (fun file ->
-      In_channel.with_open_text file In_channel.input_lines
-      |> List.filter_map (fun l ->
-          match String.split_on_char '\t' l with
-          | [ "RESULT"; corpus; name; c0; c1; c2; c3; w0; w1; w2; w3; sum ] ->
-              let f = float_of_string in
-              Some
-                {
-                  corpus;
-                  name;
-                  cpu = (f c0, f c1, f c2, f c3);
-                  wall = (f w0, f w1, f w2, f w3);
-                  sum;
-                }
-          | _ -> None))
-    files
-
-let best r =
-  let b, _, _, _ = r.cpu in
-  b
-
-let uniq l =
-  List.rev (List.fold_left (fun a x -> if List.mem x a then a else x :: a) [] l)
-
-(* The corpus [<family>-<order>] belongs to [<family>]: both orders hold the
-   same packets, so they must give the same checksum. *)
-let family corpus =
-  match String.rindex_opt corpus '-' with
-  | Some i -> String.sub corpus 0 i
-  | None -> corpus
-
-let corpus_table rs corpus =
-  let rs = List.filter (fun r -> r.corpus = corpus) rs in
-  let rs = List.sort (fun a b -> Float.compare (best a) (best b)) rs in
-  let fastest = match rs with r :: _ -> best r | [] -> nan in
-  Fmt.pr "@.Corpus %s, ranked by best CPU time:@.@." corpus;
-  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@." "Implementation" "CPU" "CPU"
-    "CPU" "CPU" "wall" "wall" "vs best";
-  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@." "(ns/packet)" "best" "p10"
-    "median" "p90" "best" "median" "(CPU)";
-  Fmt.pr "%s@." (String.make 127 '-');
   List.iter
-    (fun r ->
-      let c0, c1, c2, c3 = r.cpu and w0, _, w2, _ = r.wall in
-      Fmt.pr "%-58s %8.2f %8.2f %8.2f %8.2f %9.2f %9.2f %7.2fx@." r.name c0 c1
-        c2 c3 w0 w2 (c0 /. fastest))
-    rs
-
-(* Best CPU time per corpus, one column each, ranked by the first corpus. *)
-let summary rs corpora =
-  let names = uniq (List.map (fun r -> r.name) rs) in
-  let cell name corpus =
-    List.find_opt (fun r -> r.name = name && r.corpus = corpus) rs
-  in
-  let first = List.hd corpora in
-  let key name =
-    match cell name first with Some r -> best r | None -> infinity
-  in
-  let names = List.sort (fun a b -> Float.compare (key a) (key b)) names in
-  Fmt.pr "@.Best CPU ns/packet, by corpus:@.@.";
-  Fmt.pr "%-58s" "Implementation";
-  List.iter (fun c -> Fmt.pr " %15s" c) corpora;
-  Fmt.pr "@.%s@." (String.make (58 + (16 * List.length corpora)) '-');
-  List.iter
-    (fun name ->
-      Fmt.pr "%-58s" name;
-      List.iter
-        (fun c ->
-          match cell name c with
-          | Some r -> Fmt.pr " %15.2f" (best r)
-          | None -> Fmt.pr " %15s" "-")
-        corpora;
-      Fmt.pr "@.")
-    names
-
-let checksums rs =
-  let families = uniq (List.map (fun r -> family r.corpus) rs) in
-  let agree =
-    List.map
-      (fun fam ->
-        let mine = List.filter (fun r -> family r.corpus = fam) rs in
-        match uniq (List.map (fun r -> r.sum) mine) with
-        | [ s ] ->
-            Fmt.pr
-              "@.Every implementation read the same fields on %s (checksum \
-               %s).@."
-              fam s;
-            true
-        | _ ->
-            Fmt.epr "The implementations disagree on the fields of %s:@." fam;
-            List.iter
-              (fun r -> Fmt.epr "  %s on %s: %s@." r.name r.corpus r.sum)
-              mine;
-            false)
-      families
-  in
-  if not (List.for_all Fun.id agree) then exit 1
-
-let report files =
-  let rs = results files in
-  if rs = [] then
-    Fmt.failwith "bench.exe: no RESULT lines in %a"
-      Fmt.(list ~sep:sp string)
-      files;
-  let corpora = uniq (List.map (fun r -> r.corpus) rs) in
-  List.iter (corpus_table rs) corpora;
-  summary rs corpora;
-  checksums rs
+    (fun (name, f) ->
+      Bench_lib.measure ~corpus ~filter ~name
+        ~items:(Bytes.length buf / stride)
+        ~runs ~pp:Fmt.int
+        (fun () -> f (Sys.opaque_identity buf) land mask62))
+    rows
 
 let () =
   match Array.to_list Sys.argv with
   | [ _; "corpus"; dir; n ] -> corpora dir (int_of_string n)
   | _ :: "run" :: file :: stride :: runs :: rest ->
-      let filter = match rest with [ f ] -> f | _ -> "" in
-      run file (int_of_string stride) (int_of_string runs) filter
-  | _ :: "report" :: files -> report files
+      let filter =
+        Bench_lib.filter (match rest with [ f ] -> Some f | _ -> None)
+      in
+      run file (int_of_string stride) (int_of_string runs) filter;
+      Bench_lib.finish filter
+  | _ :: "report" :: files -> Bench_lib.report ~unit:(fun _ -> "packet") files
   | _ ->
       prerr_endline
-        "usage: bench.exe (corpus DIR N | run FILE STRIDE RUNS [FILTER] | \
-         report FILE...)";
+        "usage: bench.exe (corpus DIR N | run FILE STRIDE RUNS [ROW | --list] \
+         | report FILE...)";
       exit 2
