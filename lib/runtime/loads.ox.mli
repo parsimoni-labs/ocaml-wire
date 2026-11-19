@@ -33,6 +33,13 @@ module Local : sig
   val[@zero_alloc] set_u16le : bytes @ local -> int -> int -> unit @@ portable
   val[@zero_alloc] set_i32be : bytes @ local -> int -> int32_u -> unit @@ portable
   val[@zero_alloc] set_i32le : bytes @ local -> int -> int32_u -> unit @@ portable
+
+  val[@zero_alloc] set_u32be : bytes @ local -> int -> int64_u -> unit @@ portable
+  (** [set_u32be b off v] writes the low 32 bits of [v] big-endian. *)
+
+  val[@zero_alloc] set_u32le : bytes @ local -> int -> int64_u -> unit @@ portable
+  (** [set_u32le b off v] writes the low 32 bits of [v] little-endian. *)
+
   val[@zero_alloc] set_i64be : bytes @ local -> int -> int64_u -> unit @@ portable
   val[@zero_alloc] set_i64le : bytes @ local -> int -> int64_u -> unit @@ portable
 
@@ -73,6 +80,8 @@ module Local : sig
     val[@zero_alloc] set_u16le : t @ local -> int -> int -> unit @@ portable
     val[@zero_alloc] set_i32be : t @ local -> int -> int32_u -> unit @@ portable
     val[@zero_alloc] set_i32le : t @ local -> int -> int32_u -> unit @@ portable
+    val[@zero_alloc] set_u32be : t @ local -> int -> int64_u -> unit @@ portable
+    val[@zero_alloc] set_u32le : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] set_i64be : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] set_i64le : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] get_uint8 : t @ local -> int -> int @@ portable

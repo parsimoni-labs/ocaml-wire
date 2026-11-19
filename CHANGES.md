@@ -96,6 +96,11 @@
   every dune profile, the dev one included, where the runtime's interfaces
   state what allocates nothing (#493, @samoht)
 
+- The code `Wire_ocaml` writes for OxCaml builds a 32-bit word of fields
+  untagged and stores it through `Wire_runtime.Target.Local.set_u32be` (or
+  `set_u32le`), new, which swaps it as 64 bits: no `int32` to normalise. The
+  application writes take up to 12% fewer instructions (@samoht)
+
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
 
