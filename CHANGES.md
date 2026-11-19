@@ -41,8 +41,9 @@
   the interface of each module `Wire_ocaml` generates, its public API
   documented from the codec (each field's place, width and constraints, each
   function's errors). For OxCaml it states the `local` buffers, the
-  `[@zero_alloc]` checks and the portability of the implementation
-  (#501, @samoht)
+  `[@zero_alloc]` checks and the portability of the implementation.
+  `examples/generated` commits `clcw.mli` and `stack.mli`, kept current as
+  the modules are (#501, @samoht)
 
 - Generated OCaml: `pp` prints a record, and a scan's outputs (#501, @samoht)
 
