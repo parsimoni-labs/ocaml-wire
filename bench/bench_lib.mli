@@ -100,7 +100,8 @@ val oxcaml : bool
 (** [oxcaml] is [true] when this was built by an OxCaml compiler. *)
 
 val compiler : string
-(** [compiler] is ["OCaml <version>"], or ["OxCaml <version>"] when this was
+(** [compiler] is ["OCaml <version>"], ["OCaml <version> flambda"] when this was
+    built by an OCaml compiler with flambda, or ["OxCaml <version>"] when it was
     built by an OxCaml compiler. *)
 
 val read_file : string -> bytes
