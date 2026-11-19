@@ -17,14 +17,15 @@ open Planner
 type num = Tagged | Unboxed
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
-   length, the module of its bounds-checked loads and string copies, and an
-   expression for a buffer of no bytes. *)
+   length, the module of its bounds-checked loads and string copies, an
+   expression for a buffer of no bytes, and the parameter that binds it. *)
 type src = {
   typ : string;
   u : string;
   len : string;
   checked : string;
   empty : string;
+  buf : string;
 }
 
 let rt = "Wire_runtime"
@@ -38,6 +39,7 @@ let bytes_src =
     len = "Bytes.length";
     checked = "Bytes";
     empty = "Bytes.empty";
+    buf = "buf";
   }
 
 let bigstring_src =
@@ -47,6 +49,26 @@ let bigstring_src =
     len = rt ^ ".Unchecked.Bigstring.length";
     checked = rt ^ ".Unchecked.Bigstring";
     empty = "Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0";
+    buf = "buf";
+  }
+
+(* On OxCaml a function that reads or writes [buf] without keeping it takes it
+   [local], so a caller may pass a buffer on its stack. *)
+let local_bytes_src =
+  {
+    bytes_src with
+    u = rt ^ ".Target.Local";
+    checked = rt ^ ".Target.Local";
+    buf = "(buf @ local)";
+  }
+
+let local_bigstring_src =
+  {
+    bigstring_src with
+    u = rt ^ ".Target.Local.Bigstring";
+    len = rt ^ ".Target.Local.Bigstring.length";
+    checked = rt ^ ".Target.Local.Bigstring";
+    buf = "(buf @ local)";
   }
 
 (* Where a walk failed: a bound, a field's check, or a where clause. *)

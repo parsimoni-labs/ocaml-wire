@@ -4,3 +4,4 @@ lib/runtime/loads.ox.mli
 lib/runtime/prims.ox.ml
 lib/runtime/prims.ox.mli
 lib/runtime/carrier.ox.mli
+test/ocaml-ox/test_modes.ox.ml
