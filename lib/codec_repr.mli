@@ -312,6 +312,7 @@ type ('full, 'f) walk = {
   wreaders : ('full, 'f) walk_readers;
   wchecks_rev : walk_check list;
   wstart : int option;
+  wgates : (bool Types.expr * int) list;
 }
 (** The walk of a record under construction: its readers, its checks, last
     first, and where the first field the cursor moves over starts in the record,

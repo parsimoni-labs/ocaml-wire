@@ -41,6 +41,9 @@ type cursor = {
       (** Where the next variable-size field starts; once a record is walked,
           where it ends. *)
   mutable wend : Input_end.t;  (** Where the bytes handed to the walk stop. *)
+  mutable wgates : int;
+      (** The answers of the gates the record being walked has evaluated, one
+          bit each. *)
 }
 (** The state of a walk, the one-pass decode of a record without parameters:
     each field is checked and read once, in order, and a sub-codec hands back

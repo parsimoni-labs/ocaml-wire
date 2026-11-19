@@ -144,6 +144,34 @@ type eitem =
 
 type items = { walk : item list; extent : eitem list option }
 
+(* The extent walk's items of a layout given in reverse field order, compiled
+   in field order, so a gate can reuse the answers of the gates before it. *)
+let extent_items prefix layout =
+  let rec extent_item gates = function
+    | Lfix k -> (EFix k, gates)
+    | Lspan e | Lregion { size = e; _ } ->
+        (ESpan (Codec_walk.size prefix e), gates)
+    | Lrest -> (ERest, gates)
+    | Lopt (present, i) ->
+        let present, gates = Codec_walk.gate ~gates prefix present in
+        let i, gates = extent_item gates i in
+        (EOpt (present, i), gates)
+    | Lsub sub -> (ESub sub, gates)
+  in
+  let items, _ =
+    List.fold_left
+      (fun (items, gates) l ->
+        let item, gates = extent_item gates l in
+        let items =
+          match (item, items) with
+          | EFix a, EFix b :: rest -> EFix (b + a) :: rest
+          | _ -> item :: items
+        in
+        (items, gates))
+      ([], Codec_walk.no_gates) (List.rev layout)
+  in
+  List.rev items
+
 (* The layout items of a variable-size record without parameters whose
    variable fields are byte spans, gated fields and sub-codecs sized by earlier
    fixed-offset fields, in field order, adjacent widths merged; [None] when a
@@ -182,21 +210,6 @@ let layout_items prefix layout =
     | Fix a, Fix b :: rest -> Fix (a + b) :: rest
     | _ -> item :: items
   in
-  let rec extent_item = function
-    | Lfix k -> EFix k
-    | Lspan e | Lregion { size = e; _ } -> ESpan (Codec_walk.size prefix e)
-    | Lrest -> ERest
-    | Lopt (present, i) -> EOpt (Codec_walk.gate prefix present, extent_item i)
-    | Lsub sub -> ESub sub
-  in
-  let extent_items layout =
-    let merge item items =
-      match (item, items) with
-      | EFix a, EFix b :: rest -> EFix (a + b) :: rest
-      | _ -> item :: items
-    in
-    List.fold_left (fun items l -> merge (extent_item l) items) [] layout
-  in
   match layout with
   | None -> None
   | Some layout -> (
@@ -204,7 +217,7 @@ let layout_items prefix layout =
       | exception Exit -> None
       | walk ->
           let extent =
-            match extent_items layout with
+            match extent_items prefix layout with
             | items -> Some items
             | exception Exit -> None
           in
@@ -264,7 +277,9 @@ let extent items input_end buf off =
   match items.extent with
   | None -> layout_end items.walk input_end buf off off
   | Some e ->
-      let c = { wbuf = buf; wbase = off; wpos = off; wend = input_end } in
+      let c =
+        { wbuf = buf; wbase = off; wpos = off; wend = input_end; wgates = 0 }
+      in
       extent_end e c input_end buf off
 
 (* The record's extent through the extent walk, when its length fields are in

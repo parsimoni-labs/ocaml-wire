@@ -554,31 +554,32 @@ let field_walk : type a f r.
     (a, r) compiled_field ->
     a field_read ->
     min_wire_size:int ->
-    a walk_read * walk_check list =
- fun (Record r) fld cf read ~min_wire_size ->
+    gates:Codec_walk.gates ->
+    a walk_read * walk_check list * Codec_walk.gates =
+ fun (Record r) fld cf read ~min_wire_size ~gates ->
   if Option.is_some fld.action then raise Exit;
   match (r.next_off, cf.next_off) with
   | Static _, Static _ -> (
       let prefix = field_prefix r.prefix ~min_wire_size cf fld in
+      let checks () = fixed_checks prefix ~min_wire_size cf fld in
       match (read, cf.field_access, fld.typ) with
-      | Data s, _, _ -> (Scalar s, fixed_checks prefix ~min_wire_size cf fld)
-      | Span (off, n), _, _ ->
-          (String (off, n), fixed_checks prefix ~min_wire_size cf fld)
+      | Data s, _, _ -> (Scalar s, checks (), gates)
+      | Span (off, n), _, _ -> (String (off, n), checks (), gates)
       | Fn _, Fixed off, Byte_slice { size = Int n }
         when off >= 0 && n >= 0 && off + n <= min_wire_size ->
-          (Slice (off, n), fixed_checks prefix ~min_wire_size cf fld)
+          (Slice (off, n), checks (), gates)
       | ( Fn _,
           Fixed off,
           Codec { codec_walk = Some w; codec_fixed_size = Some _; _ } )
         when field_conds fld = [] ->
-          (Walk (Codec_walk.fixed_sub off w), [])
+          (Walk (Codec_walk.fixed_sub off w), [], gates)
       | _ -> raise Exit)
   | _, Dynamic _ when field_conds fld = [] -> (
       match fld.typ with
       | Optional { present; inner } ->
-          let present = Codec_walk.gate r.prefix present in
-          (Walk (Codec_walk.gated present (moving r.prefix inner)), [])
-      | typ -> (Walk (moving r.prefix typ), []))
+          let present, gates = Codec_walk.gate ~gates r.prefix present in
+          (Walk (Codec_walk.gated present (moving r.prefix inner)), [], gates)
+      | typ -> (Walk (moving r.prefix typ), [], gates))
   | _ -> raise Exit
 
 (* The variables [fld]'s action assigns, and the context its constraint and
@@ -636,8 +637,8 @@ let apply_compiled : type a f r.
   let walk =
     match (r.walk, layout_rev) with
     | Some w, Some _ -> (
-        match field_walk record fld cf read ~min_wire_size with
-        | wr, checks ->
+        match field_walk record fld cf read ~min_wire_size ~gates:w.wgates with
+        | wr, checks, wgates ->
             Some
               {
                 wreaders = WSnoc (w.wreaders, wr);
@@ -646,6 +647,7 @@ let apply_compiled : type a f r.
                   (match (w.wstart, r.next_off, cf.next_off) with
                   | None, Static n, Dynamic _ -> Some n
                   | wstart, _, _ -> wstart);
+                wgates;
               }
         | exception Exit -> None)
     | _ -> None

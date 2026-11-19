@@ -899,6 +899,8 @@ type ('full, 'f) walk = {
   wchecks_rev : walk_check list;
   wstart : int option;
       (* Where the first field the cursor moves over starts in the record. *)
+  wgates : (bool expr * int) list;
+      (* The gates so far, each with its bit of the cursor's [wgates]. *)
 }
 
 type ('f, 'r) record =
@@ -1096,7 +1098,8 @@ let record_start ?where ?doc name make =
       writers_rev = [];
       puts_rev = Some [];
       layout_rev = Some [];
-      walk = Some { wreaders = WNil; wchecks_rev = []; wstart = None };
+      walk =
+        Some { wreaders = WNil; wchecks_rev = []; wstart = None; wgates = [] };
       prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;

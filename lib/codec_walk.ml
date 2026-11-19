@@ -28,7 +28,13 @@ let leaf : type a. a scalar -> cursor -> int = function
   | Bits16be { off; shift; mask } ->
       fun c -> (Unchecked.u16be c.wbuf (c.wbase + off) lsr shift) land mask
 
-type env = { prefix : (string * packed_scalar) list; sizeof : bool }
+type env = {
+  prefix : (string * packed_scalar) list;
+  sizeof : bool;
+  known : (bool expr * int) list;
+      (* The gates of the record evaluated before, each with its bit of
+         [wgates]. *)
+}
 
 let field env name =
   match List.assoc_opt name env.prefix with
@@ -159,6 +165,13 @@ and int_operands : type a. env -> a expr -> a expr -> _ =
   | _ -> raise Exit
 
 and bool_expr env (e : bool expr) : cursor -> bool =
+  match List.assq_opt e env.known with
+  | Some i ->
+      let bit = 1 lsl i in
+      fun c -> c.wgates land bit <> 0
+  | None -> bool_cases env e
+
+and bool_cases env (e : bool expr) : cursor -> bool =
   match e with
   | Bool b -> fun _ -> b
   | Eq (a, Int k) ->
@@ -214,9 +227,26 @@ and bool_expr env (e : bool expr) : cursor -> bool =
       fun c -> not (fa c)
   | Ref _ -> .
 
-let size prefix e = int_expr { prefix; sizeof = true } e
-let gate prefix e = bool_expr { prefix; sizeof = true } e
-let cond prefix e = bool_expr { prefix; sizeof = false } e
+let size prefix e = int_expr { prefix; sizeof = true; known = [] } e
+let cond prefix e = bool_expr { prefix; sizeof = false; known = [] } e
+
+(* The gates a record has evaluated so far, each the bit of [wgates] that holds
+   its answer, while there are bits. *)
+type gates = (bool expr * int) list
+
+let no_gates = []
+
+let gate ~gates prefix e =
+  let g = bool_expr { prefix; sizeof = true; known = gates } e in
+  let i = List.length gates in
+  if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then (g, gates)
+  else
+    let bit = 1 lsl i in
+    ( (fun c ->
+        let v = g c in
+        c.wgates <- (if v then c.wgates lor bit else c.wgates land lnot bit);
+        v),
+      (e, i) :: gates )
 
 (* {1 Fields the cursor moves over}
 
@@ -244,12 +274,14 @@ let gated present (item : cursor -> 'a) : cursor -> 'a option =
 let region ~at_most size (sub : cursor -> 'a) : cursor -> 'a =
  fun c ->
   let cur = c.wpos and sz = size c and stop = c.wend and base = c.wbase in
+  let gates = c.wgates in
   if sz < 0 || cur > Input_end.to_int stop - sz then unwalked ();
   c.wend <- Input_end.narrow stop (cur + sz);
   let v = sub c in
   let n = c.wpos - cur in
   if n > sz || ((not at_most) && n <> sz) then unwalked ();
   c.wbase <- base;
+  c.wgates <- gates;
   c.wend <- stop;
   c.wpos <- cur + sz;
   v
@@ -257,9 +289,10 @@ let region ~at_most size (sub : cursor -> 'a) : cursor -> 'a =
 (* A sub-codec measuring itself. *)
 let sub (sub : cursor -> 'a) : cursor -> 'a =
  fun c ->
-  let base = c.wbase in
+  let base = c.wbase and gates = c.wgates in
   let v = sub c in
   c.wbase <- base;
+  c.wgates <- gates;
   v
 
 (* A fixed-size sub-codec at offset [off] of the record: the cursor stays
@@ -458,7 +491,13 @@ let record ~n_params ~min_size ~prefix ~where make = function
 (* A decode through [walk], or [general] when the walk does not accept. *)
 let decode walk general buf off =
   let c =
-    { wbuf = buf; wbase = off; wpos = off; wend = Input_end.of_bytes buf }
+    {
+      wbuf = buf;
+      wbase = off;
+      wpos = off;
+      wend = Input_end.of_bytes buf;
+      wgates = 0;
+    }
   in
   match walk c with
   | v -> v
