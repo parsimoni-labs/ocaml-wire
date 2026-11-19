@@ -55,7 +55,7 @@
 
 - `Wire.Codec.check`, `ok` and `read`: check a record once, without raising
   on bytes it refuses, then read its fields with no further bounds check
-  (#435, @samoht)
+  (#435, #500, @samoht)
 
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: a codec's decode and encode,
   staged, for a loop over many records (#496, @samoht)
@@ -108,14 +108,14 @@
   once: each field is checked and read in order, each size and presence
   condition evaluated once, and a sub-codec returns its value and its end
   together. Decoding Ethernet, IPv4 and TCP or UDP takes less than half the
-  instructions it took (@samoht)
+  instructions it took (#500, @samoht)
 
 - `Wire.Codec.decode` can now call the constructor of a sub-codec, the
   function given to `Wire.Codec.v`, on a sub-record whose enclosing record
   then fails a check, and return `Error`. A constructor with side effects
   (counting, logging, registering the record) sees such sub-records and has
   to stop doing so: build values only, and act on a record after `decode`
-  returns `Ok` (@samoht)
+  returns `Ok` (#500, @samoht)
 
 - A staged `Wire.Codec.read` and `Wire.Codec.check` keep their error paths out
   of line, so a compiler that inlines more makes them faster, not slower
@@ -145,7 +145,7 @@
 
 - **Breaking:** `Wire.Codec` gains `check`, `ok` and `read`, which shadow
   local values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
-  Rename the local or qualify it (#435, @samoht)
+  Rename the local or qualify it (#435, #500, @samoht)
 
 - **Breaking:** `Wire.Codec.v` no longer compiles the codec. A malformed codec
   raises `Invalid_argument` at its first `decode`, `encode` or `validate`, not
