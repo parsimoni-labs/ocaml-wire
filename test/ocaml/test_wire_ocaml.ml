@@ -1208,7 +1208,9 @@ let words s =
 
 (* [n] optional fields nested inside each other that hand out every output.
    The OCaml target writes two walks ([fold] and [fold_frames]; [decode]
-   calls [fold]) and the OxCaml target five. Past the first four levels,
+   calls [fold]) and the OxCaml target six, [fold_frames_unboxed] two of them:
+   one for a stride that holds the fixed bytes of a frame, which tests none
+   of their bounds, and one for a shorter stride. Past the first four levels,
    whose outputs are immutable, a level costs a walk about 21 lines: its
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied
@@ -1217,7 +1219,7 @@ let words s =
 let nested_budget target n =
   match target with
   | `OCaml -> ((44 * n) + 60, (320 * n) + 200)
-  | `OxCaml -> ((110 * n) + 60, (1150 * n) + 200)
+  | `OxCaml -> ((132 * n) + 72, (1380 * n) + 240)
 
 let test_size () =
   List.iter
