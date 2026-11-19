@@ -397,12 +397,8 @@ A row's count is the median instructions per item of its three counts. A
 candidate is adopted over the flags already adopted when every row gives the
 same result, the geometric mean over the rows falls, and no row rises by more
 than 1%; `-O3` on stock OCaml, which ignores it, moves no row by more than
-0.4%. One row is exempt: `Wire.Codec valid/read, linked headers` rises by 4
-to 10% under every flag that makes a compiler inline more (`-inline` on
-OCaml, `-O2`, `-O3` and `-Oclassic` on flambda, `-O3` and `-O4` on OxCaml),
-and counting it would keep every compiler at its defaults. The mean is
-against the build without flags; the verdict names the rows that rise by more
-than 1%, besides that one, against the flags adopted before:
+0.4%. The mean is against the build without flags; the verdict names the
+rows that rise by more than 1% against the flags adopted before:
 
 | Compiler | Candidate | Mean | Verdict |
 | --- | --- | ---: | --- |

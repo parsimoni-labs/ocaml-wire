@@ -739,10 +739,11 @@ let to_struct t =
 
 let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 
+(* [valid] inlines this, so the error stays a call. *)
 let validate_fixed min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    min_bounds_error min_size buf off
+    (min_bounds_error [@inlined never]) min_size buf off
   else
     match pass with
     | No_checks -> ()
@@ -1099,10 +1100,12 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
 
 type 'r valid = { buf : bytes; off : int; codec : int }
 
-let valid_slow env (t : 'r t) buf off =
+let[@inline never] valid_slow env (t : 'r t) buf off =
   validate_exn ?env t buf off;
   { buf; off; codec = t.id }
 
+(* Small enough to inline: the frame check of a fixed-size codec, with its
+   error and every other codec out of line. *)
 let valid ?env (t : 'r t) buf off =
   match env with
   | None when t.n_params = 0 -> (
@@ -1113,11 +1116,12 @@ let valid ?env (t : 'r t) buf off =
       | _ -> valid_slow env t buf off)
   | _ -> valid_slow env t buf off
 
-let wrong_valid name =
+let[@inline never] wrong_valid name =
   Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
 
 (* One closure per kind, chosen when the reader is staged, so a read is the
-   codec check and one load. *)
+   codec check and one load. [wrong_valid] stays out of line: inlined, its
+   format call gives every reader a stack frame. *)
 let valid_reader : type a r. id:int -> name:string -> a scalar -> r valid -> a =
  fun ~id ~name s ->
   match s with
