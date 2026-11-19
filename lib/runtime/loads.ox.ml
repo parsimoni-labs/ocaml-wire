@@ -1,4 +1,5 @@
 module Int64_u = Stdlib_upstream_compatible.Int64_u
+module Int32_u = Stdlib_upstream_compatible.Int32_u
 
 type cell = { mutable cell : int64_u }
 
@@ -50,13 +51,13 @@ let[@inline always] u16le b o =
   if Sys.big_endian then swap16 (u16 b o) else u16 b o
 
 let[@inline always] i32be b o =
-  if Sys.big_endian then i32 b o else swap32 (i32 b o)
+  Int32_u.of_int32 (if Sys.big_endian then i32 b o else swap32 (i32 b o))
 
 let[@inline always] i32le b o =
-  if Sys.big_endian then swap32 (i32 b o) else i32 b o
+  Int32_u.of_int32 (if Sys.big_endian then swap32 (i32 b o) else i32 b o)
 
 let[@inline always] i64be b o =
-  if Sys.big_endian then i64 b o else swap64 (i64 b o)
+  Int64_u.of_int64 (if Sys.big_endian then i64 b o else swap64 (i64 b o))
 
 module Local = struct
   external get8 : bytes @ local -> int -> char @@ portable = "%bytes_unsafe_get"
@@ -112,10 +113,10 @@ module Local = struct
 
   let[@inline always] u16be b o = be16 (g16 b o)
   let[@inline always] u16le b o = le16 (g16 b o)
-  let[@inline always] i32be b o = be32 (g32 b o)
-  let[@inline always] i32le b o = le32 (g32 b o)
-  let[@inline always] i64be b o = be64 (g64 b o)
-  let[@inline always] i64le b o = le64 (g64 b o)
+  let[@inline always] i32be b o = Int32_u.of_int32 (be32 (g32 b o))
+  let[@inline always] i32le b o = Int32_u.of_int32 (le32 (g32 b o))
+  let[@inline always] i64be b o = Int64_u.of_int64 (be64 (g64 b o))
+  let[@inline always] i64le b o = Int64_u.of_int64 (le64 (g64 b o))
 
   let[@inline always] set_u8 b o v =
     let c = Char.unsafe_chr (v land 0xff) in
@@ -123,11 +124,12 @@ module Local = struct
 
   let[@inline always] set_u16be b o v = s16 b o (be16 v)
   let[@inline always] set_u16le b o v = s16 b o (le16 v)
-  let[@inline always] set_i32be b o v = s32 b o (be32 v)
-  let[@inline always] set_i32le b o v = s32 b o (le32 v)
+  let[@inline always] set_i32be b o v = s32 b o (be32 (Int32_u.to_int32 v))
+  let[@inline always] set_i32le b o v = s32 b o (le32 (Int32_u.to_int32 v))
   (* OxCaml fences every 64-bit store to memory on arm64 and no narrower one,
      so a 64-bit value goes out as two 32-bit stores. *)
   let[@inline always] set_i64be b o v =
+    let v = Int64_u.to_int64 v in
     if Sys.big_endian then s64 b o v
     else begin
       s32 b o (be32 (Int64.to_int32 (Int64.shift_right_logical v 32)));
@@ -135,6 +137,7 @@ module Local = struct
     end
 
   let[@inline always] set_i64le b o v =
+    let v = Int64_u.to_int64 v in
     if Sys.big_endian then s64 b o (swap64 v)
     else begin
       s32 b o (Int64.to_int32 v);
@@ -163,11 +166,11 @@ module Local = struct
 
   let[@inline always] get_int32_be b o =
     check b o 4;
-    be32 (get32 b o)
+    Int32_u.of_int32 (be32 (get32 b o))
 
   let[@inline always] get_int32_le b o =
     check b o 4;
-    le32 (get32 b o)
+    Int32_u.of_int32 (le32 (get32 b o))
 
   let sub_string b o n =
     if o < 0 || n < 0 || o > Bytes.length b - n then
@@ -224,19 +227,19 @@ module Local = struct
 
     let[@inline always] i32be b o =
       check b o 4;
-      be32 (get32 b o)
+      Int32_u.of_int32 (be32 (get32 b o))
 
     let[@inline always] i32le b o =
       check b o 4;
-      le32 (get32 b o)
+      Int32_u.of_int32 (le32 (get32 b o))
 
     let[@inline always] i64be b o =
       check b o 8;
-      be64 (get64 b o)
+      Int64_u.of_int64 (be64 (get64 b o))
 
     let[@inline always] i64le b o =
       check b o 8;
-      le64 (get64 b o)
+      Int64_u.of_int64 (le64 (get64 b o))
 
     let[@inline always] set_u8 b o v =
       check b o 1;
@@ -252,13 +255,14 @@ module Local = struct
 
     let[@inline always] set_i32be b o v =
       check b o 4;
-      set32 b o (be32 v)
+      set32 b o (be32 (Int32_u.to_int32 v))
 
     let[@inline always] set_i32le b o v =
       check b o 4;
-      set32 b o (le32 v)
+      set32 b o (le32 (Int32_u.to_int32 v))
 
     let[@inline always] set_i64be b o v =
+      let v = Int64_u.to_int64 v in
       check b o 8;
       if Sys.big_endian then set64 b o v
       else begin
@@ -267,6 +271,7 @@ module Local = struct
       end
 
     let[@inline always] set_i64le b o v =
+      let v = Int64_u.to_int64 v in
       check b o 8;
       if Sys.big_endian then set64 b o (swap64 v)
       else begin
@@ -291,11 +296,11 @@ module Local = struct
 
     let[@inline always] get_int32_be b o =
       bounds b o 4;
-      be32 (get32 b o)
+      Int32_u.of_int32 (be32 (get32 b o))
 
     let[@inline always] get_int32_le b o =
       bounds b o 4;
-      le32 (get32 b o)
+      Int32_u.of_int32 (le32 (get32 b o))
 
     let sub_string b o n =
       if o < 0 || n < 0 || o > length b - n then

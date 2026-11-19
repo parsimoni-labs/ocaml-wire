@@ -128,6 +128,11 @@
   a nested codec, named by its path (`ipv4_tcp_src_port`). Member indices
   shift: rebuild custom plugs (#446, @samoht)
 
+- **Breaking:** on OxCaml, `Wire_runtime.Target`'s 32-bit and 64-bit loads
+  return, and `Target.Local`'s stores take, `int32_u` and `int64_u`, so none
+  boxes a value across a module boundary. Convert with
+  `Target.Int32_u.to_int32` and `of_int32` (#493, @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,

@@ -74,10 +74,10 @@ let has_checks (plan : plan) =
   || List.exists (function Test _ -> true | _ -> false) plan.nodes
 
 (* The [int] a test sees of a 32-bit field, read as an [int32]. *)
-let int_view f =
+let int_view ~src f =
   match f.store with
   | Int { width = 32; signed; _ } ->
-      Fmt.str "(Int32.to_int %s_raw%s)" f.id
+      Fmt.str "(%s.to_int %s_raw%s)" (i32 src) f.id
         (if signed then "" else " land mask32")
   | _ -> f.id
 
@@ -93,8 +93,11 @@ let has_carrier f =
 
 (* The value handed to the constructor: through the field's map when it has
    one, the failure placed at the field. *)
-let typed_value f =
+let typed_value ~src f =
   match (f.map, f.store) with
+  | Some _, Int { width = 32; _ } when src.unboxed ->
+      Fmt.str "(%s.dec ~at:(off + %d) (Int32_u.to_int32 %s_raw))" (map_var f)
+        f.offset f.id
   | Some _, Int { width = 32; _ } ->
       Fmt.str "(%s.dec ~at:(off + %d) %s_raw)" (map_var f) f.offset f.id
   | Some _, _ -> Fmt.str "(%s.dec ~at:(off + %d) %s)" (map_var f) f.offset f.id
@@ -104,6 +107,11 @@ let typed_value f =
           Fmt.str "(cast %s.%sInt%d.int_eq %s)" rt
             (if signed then "S" else "U")
             w f.id
+      | Int { signed; _ } when src.unboxed ->
+          (* Through [int]: an [int32] would be boxed to cross the call. *)
+          Fmt.str "(%s.%s.of_int %s)" rt
+            (if signed then "SInt32" else "UInt32")
+            (int_view ~src f)
       | Int { signed; _ } ->
           Fmt.str "(%s.%s.of_int32 %s_raw)" rt
             (if signed then "SInt32" else "UInt32")
@@ -112,10 +120,10 @@ let typed_value f =
 
 (* The value handed to a constructor the caller wrote, which cannot name the
    module's carriers: a bitfield as its [int], a byte array as its [string]. *)
-let plain_typed_value f =
+let plain_typed_value ~src f =
   match (f.map, f.store) with
   | None, (Bits _ | Bytes _) -> f.id
-  | _ -> typed_value f
+  | _ -> typed_value ~src f
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
    and on a cold one the promise that it only raises. *)
@@ -130,6 +138,7 @@ let cold_attr = function
 let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
     ~size ~head ~call =
   let fields = all_fields plan in
+  let value = value ~src in
   Fmt.pf ppf "%s =@\n  if %a@\n  else@\n" head (pp_frame ~src) "fail";
   (* A 32-bit field is handed out as its [int32], bound whether live or not;
      its [int] is live only where a check reads it. *)
@@ -422,14 +431,18 @@ let shift endian ~n base p =
 
 (* A word as the or of its parts, each widened first: built in [int32] or
    [int64], it needs no [int] wider than one field. *)
-let word ~m ~n endian base ps =
+let word ~src ~m ~n endian base ps =
   let part p =
     let sh = shift endian ~n base p in
     let v =
       match p.value with
       | `Int v -> Fmt.str "(%s.of_int %s)" m v
+      | `I32 x when n = 8 && sh + 32 < 64 && src.unboxed ->
+          Fmt.str "(%s.logand (%s.of_int32_u %s) #0xffffffffL)" m m x
       | `I32 x when n = 8 && sh + 32 < 64 ->
           Fmt.str "(Int64.logand (Int64.of_int32 %s) 0xffffffffL)" x
+      | `I32 x when src.unboxed && n = 4 -> x
+      | `I32 x when src.unboxed -> Fmt.str "(%s.of_int32_u %s)" m x
       | `I32 x -> Fmt.str "(%s.of_int32 %s)" m x
     in
     if sh = 0 then v else Fmt.str "(%s.shift_left %s %d)" m v sh
@@ -462,8 +475,8 @@ let merged ~ox ~src ppf ~m ~n p ws endian =
   in
   let w =
     if ox && n = 4 && all_int then
-      Fmt.str "(Int32.of_int %s)" (int_word ~n endian p.at ws)
-    else word ~m ~n endian p.at ws
+      Fmt.str "(%s.of_int %s)" (i32 src) (int_word ~n endian p.at ws)
+    else word ~src ~m ~n endian p.at ws
   in
   Fmt.pf ppf "    %s.set_i%d%s buf (off + %d)@\n      %s;@\n" src.u (n * 8)
     (endian_suffix endian) p.at w
@@ -479,8 +492,8 @@ let stores ?(ox = false) ~src ppf fields =
         Fmt.pf ppf "    %s.set_u16%s buf (off + %d) %s;@\n" src.u (e p.endian)
           p.at v
     | _, `Int v ->
-        Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (Int32.of_int %s);@\n" src.u
-          (e p.endian) p.at v
+        Fmt.pf ppf "    %s.set_i32%s buf (off + %d) (%s.of_int %s);@\n" src.u
+          (e p.endian) p.at (i32 src) v
     | _, `I32 v ->
         Fmt.pf ppf "    %s.set_i32%s buf (off + %d) %s;@\n" src.u (e p.endian)
           p.at v
@@ -490,12 +503,12 @@ let stores ?(ox = false) ~src ppf fields =
     | p :: rest as ps -> (
         match take 8 ps with
         | Some (ws, endian, rest) ->
-            merged ~ox ~src ppf ~m:"Int64" ~n:8 p ws endian;
+            merged ~ox ~src ppf ~m:(i64 src) ~n:8 p ws endian;
             go rest
         | None -> (
             match take 4 ps with
             | Some ((_ :: _ :: _ as ws), endian, rest) ->
-                merged ~ox ~src ppf ~m:"Int32" ~n:4 p ws endian;
+                merged ~ox ~src ppf ~m:(i32 src) ~n:4 p ws endian;
                 go rest
             | _ ->
                 one p;
@@ -550,21 +563,40 @@ let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"
 
+(* A 32-bit field comes in as an [int32] on either target, and is stored
+   unboxed where the loads are. *)
+let unbox_int32s ~src ppf fields =
+  if src.unboxed then
+    List.iter
+      (fun f ->
+        match f.store with
+        | Int { width = 32; _ } ->
+            Fmt.pf ppf "  let %s = Int32_u.of_int32 %s in@\n" f.id f.id
+        | _ -> ())
+      fields
+
 let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
   let fields = all_fields plan in
   pp_first_error ~src ppf ~target fields;
   Fmt.pf ppf "let[@@inline]%s write_int %s off %a =@\n" (zero_alloc target)
     src.buf pp_vars fields;
+  unbox_int32s ~src ppf fields;
   pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan
     ~in_range:(fun _ -> false)
     fields
 
 (* The int a field's typed value stores. *)
-let plain_value f =
+let plain_value ~src f =
   match (f.map, f.store) with
+  | Some _, Int { width = 32; _ } when src.unboxed ->
+      Fmt.str "(Int32_u.of_int32 (%s.enc %s))" (map_var f) f.id
   | Some _, _ -> Fmt.str "(%s.enc %s)" (map_var f) f.id
   | None, _ -> (
       match f.store with
+      | Int { width = 32; signed; _ } when src.unboxed ->
+          Fmt.str "(Int32_u.of_int (%s.%s.to_int %s))" rt
+            (if signed then "SInt32" else "UInt32")
+            f.id
       | Int { width = 32; signed; _ } ->
           Fmt.str "(%s.%s.to_int32 %s)" rt
             (if signed then "SInt32" else "UInt32")
@@ -591,7 +623,7 @@ let pp_write ?(src = bytes_src) ppf ~target ~plan =
   Fmt.pf ppf "let[@@inline]%s write %s off %a =@\n" (zero_alloc target) src.buf
     pp_vars fields;
   List.iter
-    (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value f))
+    (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
     fields;
   pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range:typed_in_range
     fields
@@ -620,13 +652,15 @@ let pp_write_at ?(src = bytes_src) ~ints ppf ~target ~plan =
     (zero_alloc target)
     (if ints then "write_int_at" else "write_at")
     b src.brand pp_vars fields src.brand src.typ src.brand;
-  if ints then
+  if ints then begin
+    unbox_int32s ~src ppf fields;
     pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
       ~in_range:(fun _ -> false)
       fields
+  end
   else begin
     List.iter
-      (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value f))
+      (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
       fields;
     pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
       ~in_range:typed_in_range fields
@@ -726,7 +760,8 @@ let checked_read ~src f =
         checked_load ~src ~off:f.offset ~bytes ~endian:(bit_endian base)
       in
       let word =
-        if bytes = 4 then Fmt.str "(Int32.to_int %s land mask32)" word else word
+        if bytes = 4 then Fmt.str "(%s.to_int %s land mask32)" (i32 src) word
+        else word
       in
       Fmt.str "((%s lsr %d) land %s)" word shift (mask width)
   | Bytes n ->
@@ -747,7 +782,7 @@ let pp_getter ~src ppf ~target f =
          the [int]. *)
       Fmt.pf ppf "  let %s_raw = %s in@\n" f.id (checked_read ~src f);
       if Option.is_some f.enum then
-        Fmt.pf ppf "  let %s = %s in@\n" f.id (int_view f)
+        Fmt.pf ppf "  let %s = %s in@\n" f.id (int_view ~src f)
   | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.id (checked_read ~src f));
   (match f.enum with
   | Some (_, valid) ->
@@ -756,13 +791,13 @@ let pp_getter ~src ppf ~target f =
         Fmt.(list ~sep:(any "; ") (using int_lit string))
         valid
   | None -> ());
-  Fmt.pf ppf "  %s@\n@\n" (typed_value f);
+  Fmt.pf ppf "  %s@\n@\n" (typed_value ~src f);
   match f.store with
   | Int { width = 32; _ } ->
       (* The [int] view of a 32-bit field, with no conversion through its
          typed form. *)
       Fmt.pf ppf "let%s %s_int %s off =@\n  let %s_raw = %s in@\n  %s@\n@\n"
-        attr f.label src.buf f.id (checked_read ~src f) (int_view f)
+        attr f.label src.buf f.id (checked_read ~src f) (int_view ~src f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
@@ -781,7 +816,8 @@ let pp_word_getter ~src ppf ~target f =
         checked_load ~src ~off:f.offset ~bytes ~endian:(bit_endian base)
       in
       let word =
-        if bytes = 4 then Fmt.str "(Int32.to_int %s land mask32)" word else word
+        if bytes = 4 then Fmt.str "(%s.to_int %s land mask32)" (i32 src) word
+        else word
       in
       Fmt.pf ppf "let%s %s_word %s off = %s@\n@\n" (word_attr target) f.label
         src.buf word
@@ -853,9 +889,9 @@ let pp_valid ?(src = bytes_src) ppf ~target ~plan =
         pp_read ~src ~ox:false ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      read ~suffix:"" ~result:(typed_value f);
+      read ~suffix:"" ~result:(typed_value ~src f);
       match f.store with
-      | Int { width = 32; _ } -> read ~suffix:"_int" ~result:(int_view f)
+      | Int { width = 32; _ } -> read ~suffix:"_int" ~result:(int_view ~src f)
       | _ -> ())
     fields
 
@@ -978,9 +1014,9 @@ let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
         pp_read ~src ~ox ~size ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      view ~suffix:"" ~result:(typed_value f);
+      view ~suffix:"" ~result:(typed_value ~src f);
       match f.store with
-      | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view f)
+      | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
       | Bits { base; _ } ->
           (* The word that holds the field, for [<field>_of_word]: fields
              packed in one word share one load. *)
@@ -1598,10 +1634,12 @@ let pp ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec ppf c =
       let fields = all_fields plan in
       check_names ~codec fields;
       pp_header ppf ~codec ~name:plan.record ~digest;
-      (* On OxCaml the runtime's values are seen [portable], so a parallel
-         task may call any function of the module. *)
+      (* On OxCaml a 32-bit or 64-bit value is held unboxed. *)
       if target = `OxCaml then
-        Fmt.pf ppf "module Wire_runtime = Wire_runtime.Target.Portable@\n@\n";
+        Fmt.pf ppf
+          "module Int32_u = Wire_runtime.Target.Int32_u@\n\
+           module Int64_u = Wire_runtime.Target.Int64_u@\n\
+           @\n";
       pp_wide ppf ~codec ~wide:plan.wide;
       pp_maps ppf fields;
       pp_body ~simd ppf ~target ~make ~plan ~size
