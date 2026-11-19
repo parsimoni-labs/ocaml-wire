@@ -21,7 +21,9 @@ make clean              # dune clean
 ```
 
 `make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
-All bench/prof/memtrace targets use `--profile=release`.
+All bench/prof/memtrace targets use `--profile=bench`: the release profile
+with `-O3` on every unit, the libraries a benchmark links included
+(`dune-workspace`).
 The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 (`make test-wasm`) are in [docs/projection.md](docs/projection.md#narrow-int-targets).
 
@@ -32,7 +34,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
 - `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
-- `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
+- `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
