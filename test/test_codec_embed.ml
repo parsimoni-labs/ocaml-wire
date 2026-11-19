@@ -366,6 +366,71 @@ let test_codec_crossref_field_bitfield () =
   Alcotest.(check int) "flags" 0xA r.hdr.flags;
   Alcotest.(check string) "data" "XYZ" r.data
 
+(* A sub-codec whose last field is the rest of the buffer, in a region shorter
+   than the buffer and behind a gate: its extent runs to the end of the
+   buffer, not the region's, so the region refuses it once the buffer is
+   longer. *)
+let tail =
+  Codec.v "Tail"
+    (fun a b -> (a, b))
+    Codec.[ Field.v "a" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
+
+let framed_tail =
+  Codec.v "FramedTail" Fun.id
+    Codec.[ Field.v "t" (nested_at_most ~size:(int 4) (codec tail)) $ Fun.id ]
+
+let tail_gate = Field.v "k" uint8
+
+let gated_tail =
+  Codec.v "GatedTail"
+    (fun k t -> (k, t))
+    Codec.
+      [
+        tail_gate $ fst;
+        Field.optional "t"
+          ~present:Expr.(Field.ref tail_gate = int 1)
+          (codec tail)
+        $ snd;
+      ]
+
+let test_codec_embed_tail () =
+  let answer f =
+    match f () with
+    | v -> "ok " ^ v
+    | exception Parse_error e -> Fmt.str "error %a" pp_parse_error e
+  in
+  let show (a, r) = Fmt.str "%d %S" (UInt8.to_int a) r in
+  let answers n =
+    let b = Bytes.init n (fun i -> Char.chr (i + 1)) in
+    [
+      answer (fun () -> show (Codec.decode_exn framed_tail b 0));
+      answer (fun () -> Codec.validate framed_tail b 0 |> fun () -> "");
+      answer (fun () ->
+          match Codec.decode_exn gated_tail b 0 with
+          | _, Some t -> show t
+          | _, None -> "none");
+      answer (fun () -> Codec.validate gated_tail b 0 |> fun () -> "");
+    ]
+  in
+  let check n want =
+    Alcotest.(check (list string)) (Fmt.str "%d bytes" n) want (answers n)
+  in
+  check 3
+    [
+      "error @0: unexpected EOF: expected 4 bytes, got 3";
+      "error @0: unexpected EOF: expected 4 bytes, got 3";
+      "ok 2 \"\\003\"";
+      "ok ";
+    ];
+  check 4 [ "ok 1 \"\\002\\003\\004\""; "ok "; "ok 2 \"\\003\\004\""; "ok " ];
+  check 8
+    [
+      "error t@4: unexpected EOF: expected 4 bytes, got 8";
+      "error t@4: unexpected EOF: expected 4 bytes, got 8";
+      "ok 2 \"\\003\\004\\005\\006\\007\\b\"";
+      "ok ";
+    ]
+
 let suite =
   ( "codec_embed",
     [
@@ -393,4 +458,6 @@ let suite =
         test_codec_crossref_field_twolevels;
       Alcotest.test_case "embed: cross field ref bitfield" `Quick
         test_codec_crossref_field_bitfield;
+      Alcotest.test_case "embed: rest of the buffer in a region" `Quick
+        test_codec_embed_tail;
     ] )
