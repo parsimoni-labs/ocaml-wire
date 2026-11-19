@@ -82,17 +82,18 @@ type typ = Typ : 'a Wire.typ -> typ
 
 val ml :
   ?target:target ->
+  ?simd:bool ->
   ?make:string ->
   ?maps:(string * typ) list ->
   codec:string ->
   'r Wire.Codec.t ->
   string
-(** [ml ?target ?make ?maps ~codec c] is the source of a module specialised to
-    [c], for [target] (default [`OCaml]). [codec], the OCaml path of [c], names
-    it in the module's header; the module itself never refers to [c]. [make],
-    the path of a function taking the field values in order, builds the decoded
-    value; it defaults to a generated record, which a codec with a map field
-    cannot use.
+(** [ml ?target ?simd ?make ?maps ~codec c] is the source of a module
+    specialised to [c], for [target] (default [`OCaml]). [codec], the OCaml path
+    of [c], names it in the module's header; the module itself never refers to
+    [c]. [make], the path of a function taking the field values in order, builds
+    the decoded value; it defaults to a generated record, which a codec with a
+    map field cannot use.
 
     A field under a {!Wire.map} is specialised when [maps] names the map: a pair
     of its OCaml path and the map itself, as in
@@ -100,11 +101,20 @@ val ml :
     map's functions by that path; {!bridge} checks that the field still holds
     that very map.
 
+    With [~simd:true] (default [false]), for the OxCaml target on arm64, a
+    4-byte record whose fields each sit in one byte, unsigned and with no check,
+    enum or map, also gets [X4]: [X4.with_] checks and loads four records into
+    the lanes of a NEON register, [X4.<field>] takes a field out of each lane,
+    and [X4.write_int_at] stores four records at once, raising what four
+    [write_int_at] would. The generated module then needs the runtime's [Vec],
+    which exists on OxCaml for arm64 only.
+
     Raises [Invalid_argument], naming the field and the reason, for a codec it
     cannot specialise: a variable size, parameters, actions, or a map [maps]
-    does not name; and naming both fields when two of them would define the same
-    OCaml name ({!ident}), or one of them a getter that would shadow a name the
-    getters call, such as [Get.cast]. *)
+    does not name; for [~simd:true] with the [`OCaml] target; and naming both
+    fields when two of them would define the same OCaml name ({!ident}), or one
+    of them a getter that would shadow a name the getters call, such as
+    [Get.cast]. *)
 
 val bridge :
   ?maps:(string * typ) list ->
