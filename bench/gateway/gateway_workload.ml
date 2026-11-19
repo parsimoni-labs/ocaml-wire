@@ -108,6 +108,8 @@ let state buf =
 let reset state = state.reset_cycle ()
 let step state () = state.scan_once ()
 
+(* The packet loop of each frame, written out as the generated rows write
+   theirs, with the hash in a local. *)
 let checksum state =
   let buf = state.buf in
   let checksum = ref checksum_init in
@@ -115,7 +117,68 @@ let checksum state =
     let base = frame * cadu_size in
     let fhp = read_fhp buf base in
     checksum := hash_int (hash_int !checksum (read_vcid buf base)) fhp;
-    walk_packets buf base ~fhp (fun apid seq ->
-        checksum := hash_int (hash_int !checksum apid) seq)
+    let data_end = base + hdr + data_field_size in
+    let off = ref (base + hdr + fhp) in
+    while !off + pkt_size <= data_end do
+      let o = !off in
+      let apid = read_apid buf o in
+      let seq = read_seq buf o in
+      checksum := hash_int (hash_int !checksum apid) seq;
+      off := o + pkt_size
+    done
   done;
   !checksum
+
+let set_vcid = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_vcid)
+let set_fhp = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_first_hdr)
+
+let set_mc =
+  Wire.Staged.unstage (C.set Space.tm_frame_codec Space.bf_tf_mc_count)
+
+let set_vc =
+  Wire.Staged.unstage (C.set Space.tm_frame_codec Space.bf_tf_vc_count)
+
+(* The header {!Space.tm_frame_default} encodes: spacecraft 0x1FF, OCF flag
+   set, segment length identifier 3. *)
+let frame_template =
+  let b = Bytes.create hdr in
+  C.encode Space.tm_frame_codec Space.tm_frame_default b 0;
+  b
+
+let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid)
+let set_seq = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
+let set_dlen = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
+
+(* The header {!Space.packet_default} encodes: a telemetry packet with a
+   secondary header, unsegmented. *)
+let packet_template =
+  let b = Bytes.create sp_hdr in
+  C.encode Space.packet_codec Space.packet_default b 0;
+  b
+
+let pkt_dlen = Wire.UInt16.v (pkt_payload - 1)
+
+let stamp out o ~apid ~seq =
+  Bytes.blit packet_template 0 out o sp_hdr;
+  set_apid out o apid;
+  set_seq out o seq;
+  set_dlen out o pkt_dlen
+
+let frame ~out n =
+  let carry = ref 0 and p = ref 0 in
+  for f = 0 to n - 1 do
+    let base = f * cadu_size in
+    Bytes.blit frame_template 0 out base hdr;
+    set_vcid out base (f land 7);
+    set_mc out base (f land 0xFF);
+    set_vc out base ((f lsr 3) land 0xFF);
+    set_fhp out base !carry;
+    let off = ref (base + hdr + !carry) in
+    while !off + pkt_size <= base + cadu_size do
+      stamp out !off ~apid:(!p land 0x7FF) ~seq:(!p land 0x3FFF);
+      off := !off + pkt_size;
+      incr p
+    done;
+    let trailing = data_field_size - (!off - (base + hdr)) in
+    carry := if trailing = 0 then 0 else pkt_size - trailing
+  done

@@ -88,3 +88,25 @@ let run_all state =
     state.process_word state.buf off
   done;
   !(state.anomalies)
+
+let set_lockout = Wire.Staged.unstage (C.set Space.clcw_codec cf_lockout)
+let set_wait = Wire.Staged.unstage (C.set Space.clcw_codec cf_wait)
+let set_retransmit = Wire.Staged.unstage (C.set Space.clcw_codec cf_retransmit)
+let set_report = Wire.Staged.unstage (C.set Space.clcw_codec cf_report)
+
+(* The word {!Space.clcw_default} encodes: COP-1 in effect on virtual channel
+   7, every flag clear. *)
+let template =
+  let b = Bytes.create word_size in
+  C.encode Space.clcw_codec Space.clcw_default b 0;
+  b
+
+let report ~out n =
+  for i = 0 to n - 1 do
+    let off = i * word_size in
+    Bytes.blit template 0 out off word_size;
+    set_lockout out off (((i land 0xFFF) + 1) lsr 12);
+    set_wait out off (((i land 0x3F) + 1) lsr 6);
+    set_retransmit out off ((i lsr 13) land 1);
+    set_report out off (i land 0xFF)
+  done

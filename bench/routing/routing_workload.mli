@@ -9,6 +9,12 @@ val generate_stream : int -> bytes * int * int
     past the end of [buf], and comes after [n - max 1 (n / 64)] whole ones, so
     that reading [n] headers from offset 0 wraps once. *)
 
+val route_of_apid : int -> int
+(** [route_of_apid apid] is the route of [apid], 0 to 3: housekeeping, science,
+    diagnostics or idle.
+
+    @raise Invalid_argument if [apid] is not an 11-bit APID. *)
+
 val hdr : int
 (** [hdr] is the size of a space packet primary header. *)
 
@@ -30,6 +36,19 @@ val run_packets :
   buf:bytes -> total_bytes:int -> state -> int -> int * int * int * int
 (** [run_packets ~buf ~total_bytes s n] runs {!step} [n] times and returns the
     counts of the four routes: housekeeping, science, diagnostics, idle. *)
+
+val stamp : bytes -> int -> apid:int -> seq:int -> dlen:Wire.UInt16.t -> unit
+(** [stamp out o ~apid ~seq ~dlen] writes at [o] in [out] the header of a
+    telemetry packet with a secondary header, unsegmented, with APID [apid],
+    sequence count [seq] and data length [dlen], by Wire's staged
+    {!Wire.Codec.set} over the encoded {!Space.packet_default}. *)
+
+val restamp : buf:bytes -> total_bytes:int -> out:bytes -> int -> unit
+(** [restamp ~buf ~total_bytes ~out n] reads the headers of [n] packets as
+    {!run_packets} does and {!stamp}s each at the same offset in [out], with its
+    APID and data length and the next sequence count of its route, counting from
+    0 modulo 2{^ 14}: the forwarding rewrite of a router that re-numbers the
+    packets of each route. *)
 
 val pp_counts : (int * int * int * int) Fmt.t
 (** [pp_counts] prints the counts {!run_packets} returns. *)

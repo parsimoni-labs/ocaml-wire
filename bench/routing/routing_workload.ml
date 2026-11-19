@@ -77,7 +77,7 @@ let routing_table : int array =
 let pp_counts ppf (hk, sci, diag, idle) =
   Fmt.pf ppf "(hk=%d sci=%d diag=%d idle=%d)" hk sci diag idle
 
-let[@inline] route_of_apid apid = Array.unsafe_get routing_table apid
+let route_of_apid apid = routing_table.(apid)
 let hdr = Wire.Codec.wire_size Space.packet_codec
 let apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid)
 let dlen = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_data_len)
@@ -90,8 +90,7 @@ let step ~buf ~total_bytes state () =
   let apid = apid buf o in
   let dlen = dlen buf o in
   let route = route_of_apid apid in
-  Array.unsafe_set state.handler_counts route
-    (Array.unsafe_get state.handler_counts route + 1);
+  state.handler_counts.(route) <- state.handler_counts.(route) + 1;
   state.off := o + hdr + Wire.UInt16.to_int dlen + 1
 
 let state () = { off = ref 0; handler_counts = Array.make n_routes 0 }
@@ -112,3 +111,35 @@ let run_packets ~buf ~total_bytes state n_pkts =
     step ()
   done;
   counts state
+
+let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid)
+let set_seq = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
+let set_dlen = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
+
+(* The header {!Space.packet_default} encodes: a telemetry packet with a
+   secondary header, unsegmented. *)
+let template =
+  let b = Bytes.create hdr in
+  C.encode Space.packet_codec Space.packet_default b 0;
+  b
+
+let stamp out o ~apid ~seq ~dlen =
+  Bytes.blit template 0 out o hdr;
+  set_apid out o apid;
+  set_seq out o seq;
+  set_dlen out o dlen
+
+let restamp ~buf ~total_bytes ~out n =
+  let seqs = Array.make n_routes 0 in
+  let off = ref 0 in
+  for _ = 1 to n do
+    if !off + hdr > total_bytes then off := 0;
+    let o = !off in
+    let apid = apid buf o in
+    let dlen = dlen buf o in
+    let route = route_of_apid apid in
+    let seq = seqs.(route) in
+    seqs.(route) <- (seq + 1) land 0x3FFF;
+    stamp out o ~apid ~seq ~dlen;
+    off := o + hdr + Wire.UInt16.to_int dlen + 1
+  done

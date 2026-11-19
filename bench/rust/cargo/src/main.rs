@@ -40,21 +40,18 @@ const IPV4: u16 = 0x0800;
 
 // The fold every implementation applies to the fields it reads. Only `+` and
 // `^`, so its low 62 bits match OCaml's 63-bit `int`.
-#[inline(always)]
 fn ip_fields(acc: u64, src: u32, dst: u32, ttl: u8, proto: u8, len: u16) -> u64 {
     acc.wrapping_add((src ^ dst) as u64)
         .wrapping_add(ttl as u64 + proto as u64 + len as u64)
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
 fn tcp_fields(acc: u64, sp: u16, dp: u16, seq: u32, ack: u32, win: u16, flags: u16, off: u8) -> u64 {
     acc.wrapping_add(((sp as u64) << 16) | dp as u64)
         .wrapping_add((seq ^ ack) as u64)
         .wrapping_add(win as u64 + flags as u64 + off as u64)
 }
 
-#[inline(always)]
 fn udp_fields(acc: u64, sp: u16, dp: u16, len: u16) -> u64 {
     acc.wrapping_add(((sp as u64) << 16) | dp as u64).wrapping_add(len as u64)
 }
