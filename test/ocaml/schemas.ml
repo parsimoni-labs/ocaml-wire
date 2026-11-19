@@ -110,6 +110,23 @@ let small =
         (Field.v "local_" uint16be $ fun (_, x) -> x);
       ]
 
+type lanes = int * int * UInt8.t * int * int * int * int
+
+let lanes_make a b c d e f g = (a, b, c, d, e, f, g)
+
+let lanes =
+  Codec.v "Lanes" lanes_make
+    Codec.
+      [
+        (Field.v "A" (bits ~width:4 U8) $ fun (x, _, _, _, _, _, _) -> x);
+        (Field.v "B" (bits ~width:4 U8) $ fun (_, x, _, _, _, _, _) -> x);
+        (Field.v "C" uint8 $ fun (_, _, x, _, _, _, _) -> x);
+        (Field.v "D" (bits ~width:3 U16be) $ fun (_, _, _, x, _, _, _) -> x);
+        (Field.v "E" (bits ~width:5 U16be) $ fun (_, _, _, _, x, _, _) -> x);
+        (Field.v "F" (bits ~width:6 U16be) $ fun (_, _, _, _, _, x, _) -> x);
+        (Field.v "G" (bits ~width:2 U16be) $ fun (_, _, _, _, _, _, x) -> x);
+      ]
+
 let eth_make dst src ty = (dst, src, ty)
 
 let eth_src =

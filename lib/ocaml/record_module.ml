@@ -1156,7 +1156,118 @@ let pp_bigstring ppf ~target ~make ~record ~plan ~size =
   if record then pp_encode ~src ppf fields;
   Fmt.pf ppf "end@\n@\n"
 
-let pp_body ppf ~target ~make ~plan ~size =
+(* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
+   record's bytes in buffer order read as a little-endian word: [(shift,
+   width)] when the field sits in one byte, unsigned, with no check, enum or
+   map. Any other field keeps the record from having lanes. *)
+let lane f =
+  let in_byte ~byte ~bit ~width =
+    if bit + width <= 8 then Some ((8 * byte) + bit, width) else None
+  in
+  match f with
+  | { checks = _ :: _; _ } | { enum = Some _; _ } | { map = Some _; _ } -> None
+  | { store = Int { width = 8; signed = false; _ }; offset; _ } ->
+      Some (8 * offset, 8)
+  | { store = Bits { base; shift; width }; offset; _ } -> (
+      let n = Bitfield.byte_size base in
+      match bit_endian base with
+      | T.Big ->
+          in_byte ~byte:(offset + n - 1 - (shift / 8)) ~bit:(shift mod 8) ~width
+      | T.Little ->
+          in_byte ~byte:(offset + (shift / 8)) ~bit:(shift mod 8) ~width)
+  | _ -> None
+
+let lanes plan ~size =
+  let fields = all_fields plan in
+  if size <> 4 || not (Sset.is_empty (live plan ~outputs:[])) then None
+  else
+    let ls = List.filter_map lane fields in
+    if List.length ls = List.length fields then Some (List.combine fields ls)
+    else None
+
+(* [X4] reads and writes four records at once in a NEON register (OxCaml on
+   arm64): [with_] checks the 16 bytes they take and loads them, and each
+   [<field>] takes that field out of every lane. *)
+let pp_x4_reads ~src ppf fields =
+  Fmt.pf ppf
+    "module X4 = struct@\n\
+    \  module V = Wire_runtime.Vec@\n\
+     @\n\
+    \  let[@inline] with_ ((b : 'b %s.t) @@ local) (len : 'b %s.length) off@\n\
+    \      ~(ok @@ local) ~(fail @@ local) =@\n\
+    \    let buf = (b : _ %s.t :> %s) and len = (len : _ %s.length :> int) in@\n\
+    \    if off < 0 || off > len - 16 then fail () else ok (V.load buf off)@\n\
+     @\n"
+    src.brand src.brand src.brand src.typ src.brand;
+  List.iter
+    (fun (f, (shift, width)) ->
+      let v =
+        if shift = 0 then "w" else Fmt.str "(V.shift_right_logical %d w)" shift
+      in
+      if shift + width = 32 then
+        Fmt.pf ppf "  let[@inline] %s w = %s@\n@\n" f.label v
+      else
+        Fmt.pf ppf "  let[@inline] %s w = V.logand %s (V.v %s)@\n@\n" f.label v
+          (mask width))
+    fields
+
+(* [X4.write_int_at] stores four records whose fields are lanes, after one
+   range test over the fields of each width, as [write_int_at] does. A write
+   that fails its checks is redone as four [write_int_at], which raise what one
+   record at a time raises. *)
+let pp_x4_write ~src ppf fields =
+  let ids = List.map (fun (f, _) -> f.id) fields in
+  let widths =
+    List.sort_uniq compare (List.map (fun (_, (_, w)) -> w) fields)
+  in
+  let over =
+    List.map
+      (fun w ->
+        let same =
+          List.filter_map
+            (fun (f, (_, w')) -> if w = w' then Some f.id else None)
+            fields
+        in
+        Fmt.str "(V.shift_right_logical %d (%s))" w
+          (String.concat " |> V.logor " same))
+      widths
+  in
+  let word =
+    List.map
+      (fun (f, (shift, _)) ->
+        if shift = 0 then f.id else Fmt.str "(V.shift_left %d %s)" shift f.id)
+      fields
+  in
+  Fmt.pf ppf
+    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) len off %s =@\n\
+    \    for k = 0 to 3 do@\n\
+    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \    done@\n\
+     @\n\
+    \  let[@inline] write_int_at ((b : 'b %s.t) @@ local) (len : 'b %s.length)@\n\
+    \      off %s =@\n\
+    \    let buf = (b : _ %s.t :> %s) and n = (len : _ %s.length :> int) in@\n\
+    \    let over = %s in@\n\
+    \    if off < 0 || off > n - 16 || not (V.is_all_zero over) then@\n\
+    \      one_by_one b len off %s@\n\
+    \    else V.store buf off (%s)@\n\
+     end@\n\
+     @\n"
+    src.brand (String.concat " " ids)
+    (String.concat " " (List.map (Fmt.str "(V.get %s k)") ids))
+    src.brand src.brand (String.concat " " ids) src.brand src.typ src.brand
+    (String.concat "\n      |> V.logor " over)
+    (String.concat " " ids)
+    (String.concat "\n      |> V.logor " word)
+
+let pp_x4 ~src ppf ~plan ~size =
+  match lanes plan ~size with
+  | None -> ()
+  | Some fields ->
+      pp_x4_reads ~src ppf fields;
+      pp_x4_write ~src ppf fields
+
+let pp_body ?(simd = false) ppf ~target ~make ~plan ~size =
   let fields = all_fields plan in
   Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
   pp_values ppf fields;
@@ -1182,6 +1293,7 @@ let pp_body ppf ~target ~make ~plan ~size =
   pp_getters ~src ppf ~target fields;
   pp_valid ~src ppf ~target ~plan;
   pp_view ~src ppf ~target ~plan ~size;
+  if simd then pp_x4 ~src ppf ~plan ~size;
   pp_field_module ~src ppf ~target fields;
   if record then begin
     pp_encode ~src ppf fields;
@@ -1311,7 +1423,7 @@ let record_plan ~maps c =
   | [ Prefix (_, n) ] | [ Prefix (_, n); Test _ ] -> (plan, n)
   | _ -> fail_unsupported "its size is not fixed"
 
-let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
+let pp ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec ppf c =
   let digest = Gen.digest c in
   match record_plan ~maps c with
   | exception Unsupported reason -> refuse ~codec reason
@@ -1323,6 +1435,8 @@ let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
       refuse ~codec
         "a field is a map, and the generated record cannot name its type; pass \
          ~make"
+  | _ when simd && target <> `OxCaml ->
+      refuse ~codec "~simd needs the OxCaml target"
   | plan, size ->
       let fields = all_fields plan in
       check_names ~codec fields;
@@ -1333,12 +1447,12 @@ let pp ?(target = `OCaml) ?make ?(maps = []) ~codec ppf c =
         Fmt.pf ppf "module Wire_runtime = Wire_runtime.Target.Portable@\n@\n";
       pp_wide ppf ~codec ~wide:plan.wide;
       pp_maps ppf fields;
-      pp_body ppf ~target ~make ~plan ~size
+      pp_body ~simd ppf ~target ~make ~plan ~size
 
 let ident = label
 
-let ml ?target ?make ?maps ~codec c =
-  Fmt.str "%a" (pp ?target ?make ?maps ~codec) c
+let ml ?target ?simd ?make ?maps ~codec c =
+  Fmt.str "%a" (pp ?target ?simd ?make ?maps ~codec) c
 
 let pp_bridge ?(maps = []) ~codec ~core ppf c =
   let fields =

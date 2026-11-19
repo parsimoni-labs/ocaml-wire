@@ -66,6 +66,18 @@ val small : (UInt8.t * UInt16.t) Codec.t
     [local_], a keyword of OCaml and one of OxCaml, so the code written for the
     default target escapes both and compiles on either compiler. *)
 
+type lanes = int * int * UInt8.t * int * int * int * int
+(** A {!lanes} record. *)
+
+val lanes_make : int -> int -> UInt8.t -> int -> int -> int -> int -> lanes
+(** [lanes_make] builds a {!lanes} record. *)
+
+val lanes : lanes Codec.t
+(** [lanes] is 4 bytes whose fields each sit in one byte: two 4-bit fields of a
+    byte, a byte, and four bitfields of a big-endian 16-bit word. The OxCaml
+    target with [~simd:true] reads and writes four of them in one NEON register.
+*)
+
 val eth_make : string -> string -> UInt16.t -> string * string * UInt16.t
 (** [eth_make] builds an Ethernet header. *)
 

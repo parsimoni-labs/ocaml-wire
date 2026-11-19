@@ -29,6 +29,11 @@
   either runs the same code by changing one line. A field handle's `f.get`
   reads as directly as `get_<f>` (#492, @samoht)
 
+- `Wire_ocaml.ml ~simd:true` on OxCaml for arm64 gives a 4-byte record whose
+  fields each sit in one byte an `X4` module: four records per NEON register,
+  read with one load and written with one store, raising what four
+  `write_int_at` raise (#493, @samoht)
+
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
 

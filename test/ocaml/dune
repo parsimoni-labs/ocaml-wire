@@ -34,6 +34,8 @@
   g_refined_wire.ml
   g_overflow.ml
   g_overflow_wire.ml
+  g_lanes.ml
+  g_lanes_wire.ml
   s_sized.ml
   s_overflow.ml
   s_skipped.ml
@@ -71,6 +73,8 @@
   g_refined_wire
   g_overflow
   g_overflow_wire
+  g_lanes
+  g_lanes_wire
   s_sized
   s_overflow
   s_skipped
