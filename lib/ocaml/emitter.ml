@@ -395,9 +395,14 @@ let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
-      Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land %s)" a
-        (8 * (a + 8 - k - bytes))
-        (if bytes = 4 then "mask32" else Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
+      let shift = 8 * (a + 8 - k - bytes) in
+      if a = k then
+        Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d))" a shift
+      else
+        Fmt.str "(Int64.to_int (Int64.shift_right_logical w%d %d) land %s)" a
+          shift
+          (if bytes = 4 then "mask32"
+           else Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
   | Unboxed, Some a when bytes = 1 || endian = T.Big ->
       let shifted =
         Fmt.str "(U.shift_right_logical w%d %d)" a (8 * (a + 8 - k - bytes))
