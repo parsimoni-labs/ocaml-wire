@@ -29,7 +29,7 @@ let rest_end buf len cur =
   if cur <= e && e <= len then e else -1
 
 (* Whether a sub-codec of [n] bytes fits a region of [sz]. *)
-let fits ~sz ~at_most n = n <= sz && (at_most || n = sz)
+let fits ~sz ~at_most (n : int) = n <= sz && (at_most || n = sz)
 
 (* A sub-codec with no walk of its own, measured against the region [region]
    of [sz] bytes, and checked when it fits. *)
