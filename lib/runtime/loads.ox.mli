@@ -11,13 +11,13 @@ type cell = { mutable cell : int64_u }
 (** A mutable [int64_u], which no [ref] holds. The compiler unboxes one that is
     local and that only reads and assignments of [cell] use. *)
 
-val u8 : bytes -> int64_u -> int
+val[@zero_alloc] u8 : bytes -> int64_u -> int
 (** [u8 buf off] is the byte at [off]. *)
 
-val u16be : bytes -> int64_u -> int
+val[@zero_alloc] u16be : bytes -> int64_u -> int
 (** [u16be buf off] is the big-endian 16-bit value at [off]. *)
 
-val u16le : bytes -> int64_u -> int
+val[@zero_alloc] u16le : bytes -> int64_u -> int
 (** [u16le buf off] is the little-endian 16-bit value at [off]. *)
 
 val i32be : bytes -> int64_u -> int32
@@ -62,11 +62,11 @@ module Local : sig
   val sub_string : bytes @ local -> int -> int -> string @@ portable
   (** [sub_string b off n] is a copy of the [n] bytes at [off]. *)
 
-  val unsafe_blit_string : string -> int -> bytes @ local -> int -> int -> unit @@ portable
+  val[@zero_alloc] unsafe_blit_string : string -> int -> bytes @ local -> int -> int -> unit @@ portable
   (** [unsafe_blit_string s soff b off n] copies [n] bytes of [s] at [soff]
       to [b] at [off], with no bounds check. *)
 
-  val blit_string : string -> bytes @ local -> int -> unit @@ portable
+  val[@zero_alloc] blit_string : string -> bytes @ local -> int -> unit @@ portable
   (** [blit_string s b off] copies [s] to [b] at [off]. *)
 
   (** The same on a bigarray of bytes. *)
@@ -96,7 +96,7 @@ module Local : sig
     val get_int32_le : t @ local -> int -> int32 @@ portable
     val sub_string : t @ local -> int -> int -> string @@ portable
 
-    val unsafe_blit_string :
+    val[@zero_alloc] unsafe_blit_string :
       string -> int -> t @ local -> int -> int -> unit @@ portable
   end
 end

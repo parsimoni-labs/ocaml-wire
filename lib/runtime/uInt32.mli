@@ -48,12 +48,12 @@ val mask32 : int
     all-ones no-op mask where it is narrower. Computed at run time so the
     out-of-range constant never reaches a narrow-int bytecode target. *)
 
-val to_int : t -> int
+val [@zero_alloc] to_int : t -> int
 (** [to_int t] is the value as a native [int]. Exact on a 64-bit host; on a
     narrower one a value with bit 31 set does not fit and is truncated, so
     prefer {!to_int32} across such a boundary. *)
 
-val of_int : int -> t
+val [@zero_alloc] of_int : int -> t
 (** [of_int n] is [n] as an unsigned 32-bit value. Raises [Invalid_argument]
     when [n] is outside the range, rather than masking it to a legal value the
     caller did not mean. Use {!of_int32} to reinterpret a bit pattern. *)

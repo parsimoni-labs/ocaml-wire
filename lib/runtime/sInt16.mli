@@ -12,7 +12,7 @@
 
 type t = private int
 
-val v : int -> t
+val [@zero_alloc] v : int -> t
 (** [v n] is [n] as a signed 16-bit value. Raises [Invalid_argument] when [n] is
     outside [[-32768, 32767]], rather than masking it to a legal value the
     caller did not mean: 40000 masks to a perfectly good -25536 that no decoder
