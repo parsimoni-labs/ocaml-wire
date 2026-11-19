@@ -134,62 +134,62 @@ The cargo project has the release profile of `bench/rust/cargo`, and
 make bench-apps-rust      # needs cargo; fetches the crates the first time
 ```
 
-Each row on its own, with the inputs `make bench-apps-rust` writes, on an
-ARM64 macOS host under a load average near 100, so the times are
-indicative; OCaml 5.4.1 (no flambda), OxCaml 5.4.0+ox (switch `5.4.0-ox9`,
-`-O3` on the harness only), rustc 1.94.1, with the crates
-`cargo/Cargo.lock` pins. Instructions per item are what `make
-bench-apps-count` reports: `bench/count.sh` runs the row alone with 1 and
-with 21 timed passes, each after the warm-up pass, and divides the
-difference by 20 passes, which cancels starting the process, the input
-read, the output allocation and the warm-up pass; it fails unless both runs
-print the row's `RESULT` line with the same result and the counters read
-some instructions. The time is the best CPU time per item of the timed
-passes. Instructions / ns per item (stale: measured as the difference
-between 4 timed passes and 1, on inputs without anomalies, before the
-`Wire.Codec` gateway row lost its closure per frame,
-with `-O3` on the harness only):
+Instructions / cycles per item, as `make bench-apps-count` reports them with
+its defaults (inputs of 100,000 items), the median of five runs, measured
+at commit `86864e63` (the parent of the commit that adds these numbers,
+which changes only READMEs) on an ARM64 macOS host under a load average
+of 20 to 43: OCaml 5.4.1 with `-inline 50`, OCaml 5.4.1 with flambda (switch
+`5.4.1-flambda`, `-O2`), OxCaml 5.4.0+ox (switch `5.4.0-ox9`, `-O4`), each
+on every unit as [the sweep](#compiler-flags) picks them, and rustc 1.94.1
+with the crates `cargo/Cargo.lock` pins. `bench/count.sh` runs the row alone
+with 1 and with 21 timed passes, each after the warm-up pass, and divides the
+difference by 20 passes, which cancels starting the process, the input read,
+the output allocation and the warm-up pass; it fails unless both runs print
+the row's `RESULT` line with the same result and the counters read some
+instructions. The cycles move with the load and the core a row lands on, the
+instructions do not.
 
 | Row | routing | gateway | clcw | routing_write | gateway_write | clcw_write |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| wire.rust | 12 / 4.39 | 332 / 49.7 | 11 / 1.06 | 31 / 6.40 | 215 / 26.0 | 3.4 / 0.55, vectorised |
-| spacepackets 0.19 | 29 / 5.46 | - | - | 33 / 5.93 | - | - |
-| ccsds_primary_header 0.15 | 28 / 5.65 | - | - | 34 / 5.63 | - | - |
-| gaia-ccsds-c2a 1.2 | 25 / 4.15 | - | 12 / 0.76 | 51 / 5.99 | - | 3.6 / 0.51, vectorised |
-| chronus-gateway 1.0.0-rc.1 + spacepackets 0.19 | - | 378 / 48.9 | - | - | 222 / 26.7 | - |
-| wire.ocaml, OxCaml target | 41 / 6.37 | 727 / 57.9 | 40 / 3.16 | 78 / 9.37 | 811 / 59.1 | 64 / 4.52 |
-| wire.ocaml, OCaml | 63 / 6.71 | 864 / 69.7 | 55 / 4.29 | 124 / 9.96 | 1215 / 79.0 | 70 / 5.69 |
-| Wire.Codec, OxCaml | 135 / 13.8 | 2089 / 132 | 120 / 7.05 | 540 / 33.4 | 6867 / 410 | 619 / 39.4 |
-| Wire.Codec, OCaml | 164 / 11.8 | 3345 / 214 | 146 / 8.86 | 657 / 39.3 | 8510 / 496 | 859 / 52.3 |
+| wire.rust | 26.1 / 13.5 | 459 / 131 | 12.2 / 3.2 | 43.1 / 18.1 | 355 / 56.3 | 5.2 / 2.1, vectorised |
+| spacepackets 0.19 | 27.2 / 16.2 | - | - | 43.2 / 15.5 | - | - |
+| ccsds_primary_header 0.15 | 27.3 / 17.0 | - | - | 40.1 / 17.2 | - | - |
+| gaia-ccsds-c2a 1.2 | 24.1 / 13.5 | - | 12.2 / 2.9 | 43.5 / 17.1 | - | 4.3 / 1.3, vectorised |
+| chronus-gateway 1.0.0-rc.1 + spacepackets 0.19 | - | 356 / 131 | - | - | 354 / 67.6 | - |
+| wire.ocaml, OxCaml target | 44.1 / 13.3 | 656 / 193 | 42.1 / 9.1 | 72.7 / 20.3 | 556 / 91.4 | 51.2 / 11.1 |
+| NEON lanes, OxCaml | - | - | 10.7 / 1.7 | - | - | 6.9 / 0.90 |
+| wire.ocaml, OCaml flambda | 56.3 / 16.2 | 1009 / 197 | 46.8 / 10.6 | 105 / 20.7 | 890 / 123 | 66.0 / 11.3 |
+| wire.ocaml, OCaml | 56.2 / 15.7 | 793 / 199 | 47.1 / 8.8 | 105 / 22.5 | 890 / 137 | 66.2 / 7.8 |
+| Wire.Codec, OxCaml | 107 / 49.4 | 1206 / 224 | 119 / 20.4 | 197 / 36.8 | 1997 / 300 | 136 / 22.7 |
+| Wire.Codec, OCaml flambda | 103 / 53.4 | 1363 / 222 | 139 / 21.3 | 208 / 33.0 | 2169 / 264 | 142 / 16.5 |
+| Wire.Codec, OCaml | 100 / 55.6 | 1239 / 222 | 146 / 17.7 | 206 / 39.0 | 2194 / 295 | 142 / 17.7 |
 
 The two Rust `clcw_write` rows are autovectorised: LLVM turns their loops
 into NEON code that builds several words per instruction, where every other
-cell runs one item at a time, so they do not compare loop for loop with the
-OCaml rows.
+cell but the NEON lanes row runs one item at a time, so they do not compare
+loop for loop with the OCaml rows.
 
-Every row gave `(hk=4000000 sci=3500000 diag=2000000 idle=500000)` on
-routing, `16569803807358438373` on gateway and 0 on clcw, and wrote buffers
-hashing to `c2824049e5408e67` (routing), `42b48f14215237fe` (gateway) and
-`7fd27aeb79936a55` (clcw), on inputs that held no anomaly. The inputs now
-hold one of each kind the readers test for, so every row takes each branch:
-the routing stream ends in a truncated packet after which the reader wraps,
-one gateway frame in 64 is idle, and CLCW words carry wait, retransmit and
-lockout and skip report values; writing sets lockout, wait and retransmit
-too, and the crate's CCSDS 232.0 words and the codec's hash the same.
+Every row gave `(hk=40039 sci=34986 diag=19980 idle=4995)` on routing,
+`203423907276323163` on gateway and 3879 on clcw, and wrote buffers hashing
+to `34573b9d7391d744` (routing), `1228726ff2ca7adb` (gateway) and
+`3bd5c8be11c13745` (clcw). The inputs hold one of each kind of anomaly the
+readers test for, so every row takes each branch: the routing stream ends in
+a truncated packet after which the reader wraps, one gateway frame in 64 is
+idle, and CLCW words carry wait, retransmit and lockout and skip report
+values; writing sets lockout, wait and retransmit too, and the crate's CCSDS
+232.0 words and the codec's hash the same.
 
 Writing is where the generated OCaml is furthest from Rust. A
 `write_int` checks every field value against its width on every call,
 where LLVM proves from the loop that `(p % 2048) as u16 >> 11` is 0 and drops
-the check; the OCaml assembles a 32-bit word on tagged integers, with an
+the check; stock OCaml assembles a 32-bit word on tagged integers, with an
 `int32` sign normalisation and a `sxtw` on each side of the `rev` that do
 nothing, where OxCaml builds it untagged; and each packet polls for a
-safepoint. On gateway that is 557 instructions per frame on OxCaml against
-354 in Rust. LLVM also vectorises the CLCW writer, 4.9 instructions per
+safepoint. On gateway that is 556 instructions per frame on OxCaml against
+355 in Rust. LLVM also vectorises the CLCW writer, 5.2 instructions per
 word. `Wire.Codec` writes a header with one call to a staged
 `Codec.writer`, which puts the default header and the fields that vary
-together in an `int` and stores it; the table above predates it, when the
-row copied the encoded default and called a staged `Codec.set` per field,
-about 150 instructions per field. These headers are at most 6 bytes,
+together in an `int` and stores it. These headers are at most 6 bytes,
 so no row stores a 64-bit word: the generated writes are `str w` and `strh`,
 and the only `dmb ishld` OxCaml puts in a write loop is the one before the
 per-route sequence count's `int array` store of `routing_write`. The OxCaml rows
