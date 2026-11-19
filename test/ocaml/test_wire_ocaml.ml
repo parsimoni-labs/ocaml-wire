@@ -1037,6 +1037,20 @@ let test_simd () =
   | exception Invalid_argument m ->
       Alcotest.(check bool) m true (contains m "OxCaml")
 
+(* [Value.<f>_low x] is the carrier of [x]'s low bits, as [Value.<f>] of the
+   masked value is, for any [x]. *)
+let test_low () =
+  for _ = 1 to 1000 do
+    let x = Random.State.bits rand - (1 lsl 29) in
+    let check name width low checked =
+      Alcotest.(check int) name (checked (x land ((1 lsl width) - 1))) (low x)
+    in
+    let open G_lanes.Value in
+    check "a" 4 (fun x -> (a_low x :> int)) (fun x -> (a x :> int));
+    check "d" 3 (fun x -> (d_low x :> int)) (fun x -> (d x :> int));
+    check "f" 6 (fun x -> (f_low x :> int)) (fun x -> (f x :> int))
+  done
+
 (* A frame of [len] bytes holding [n], then [rest]. *)
 let frame n rest =
   let b = Bytes.create (4 + String.length rest) in
@@ -1453,6 +1467,7 @@ let suite =
         test_narrow_ints;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "NEON lanes" `Quick test_simd;
+      Alcotest.test_case "carriers from low bits" `Quick test_low;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;
       Alcotest.test_case "view at an offset" `Quick test_view;
