@@ -5,6 +5,13 @@
     bytes-only fast paths of {!Codec.get} and {!Codec.set}. Internal to
     {!Codec}. *)
 
+val out_of_bounds : unit -> 'a
+(** [out_of_bounds ()] raises what [Bytes.get_uint8] raises outside the buffer.
+*)
+
+val outside : bytes -> int -> int -> bool
+(** [outside buf p n] is [true] unless the [n] bytes at [p] lie in [buf]. *)
+
 val blit_string_exact : int -> bytes -> int -> string -> int
 (** [blit_string_exact n buf off s] writes [s] at [off] and returns [off + n].
     Raises [Invalid_argument] unless [String.length s = n]. *)
@@ -98,3 +105,9 @@ val build_immediate_reader : 'a Types.typ -> int -> (bytes -> int -> 'a) option
 val build_immediate_encoder : 'a Types.typ -> (bytes -> int -> 'a -> int) option
 (** [build_immediate_encoder t] is the writer twin of {!build_immediate_reader}.
 *)
+
+val build_immediate_setter :
+  'a Types.typ -> int -> (bytes -> int -> 'a -> unit) option
+(** [build_immediate_setter t off] writes a field of type [t] at [off] from a
+    record's offset, in one closure for a fixed-width integer; [None] where
+    {!build_immediate_encoder} is. *)
