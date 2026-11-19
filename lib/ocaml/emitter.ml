@@ -345,23 +345,42 @@ let addr num o k =
     | Tagged -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
 
-(* An [int64_u] position is narrowed to the [int] offset the loads take, and
-   the field's distance added to that [int]: the compiler shares the narrowing
-   between the loads of a block and adds the distance in one instruction, where
-   narrowing each [int64_u] sum costs a tagging per load. *)
+(* A load at [o + k]. An [int64_u] position is the offset of the wider loads
+   as it is: the address is the buffer plus the position, with the distance
+   [k] in the load itself, so a block's loads share one addition. A byte is
+   read at the position narrowed to an [int]. *)
 let load m ~o ~k ~bytes ~endian =
-  let at =
-    match m.num with
-    | Tagged -> addr m.num o k
-    | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
-    | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
-  in
   let e = endian_suffix endian in
-  match bytes with
-  | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
-  | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
-  | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
-  | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at
+  match (m.num, bytes) with
+  | Tagged, (2 | 4 | 8) when m.src.unboxed && m.src.typ = "bytes" -> (
+      (* An OxCaml record read untags its offset once and puts the field's
+         distance in the load, as the scanner's reads do. *)
+      let at =
+        if k = 0 then Fmt.str "(Int64_u.of_int %s)" o
+        else Fmt.str "(Int64_u.add (Int64_u.of_int %s) #%dL)" o k
+      in
+      match bytes with
+      | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
+  | Tagged, _ | Unboxed, 1 -> (
+      let at =
+        match m.num with
+        | Tagged -> addr m.num o k
+        | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
+        | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
+      in
+      match bytes with
+      | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
+      | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at)
+  | Unboxed, _ -> (
+      let at = addr m.num o k in
+      match bytes with
+      | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
 
 (* The 64-bit words of a prefix of [size] bytes worth loading once: those
    holding two or more of [fields] a shift takes out. *)

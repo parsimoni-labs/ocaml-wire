@@ -74,6 +74,41 @@ module Local = struct
   let[@inline always] i64be b o = Int64_u.of_int64 (be64 (g64 b o))
   let[@inline always] i64le b o = Int64_u.of_int64 (le64 (g64 b o))
 
+  (* The same reads at an [int64_u] offset: the address is the buffer plus the
+     offset, with no tagging, so the compiler adds a constant distance in the
+     load itself. The paranoid profile narrows the offset and checks the read
+     as the [int] reads do. *)
+  external get16_at : bytes @ local -> int64_u -> int @@ portable
+    = "%caml_bytes_get16u_indexed_by_int64#"
+
+  external get32_at : bytes @ local -> int64_u -> int32 @@ portable
+    = "%caml_bytes_get32u_indexed_by_int64#"
+
+  external get64_at : bytes @ local -> int64_u -> int64 @@ portable
+    = "%caml_bytes_get64u_indexed_by_int64#"
+
+  let[@inline always] u16be_at b o =
+    if Paranoid.enabled then u16be b (offset o) else be16 (get16_at b o)
+
+  let[@inline always] u16le_at b o =
+    if Paranoid.enabled then u16le b (offset o) else le16 (get16_at b o)
+
+  let[@inline always] i32be_at b o =
+    if Paranoid.enabled then i32be b (offset o)
+    else Int32_u.of_int32 (be32 (get32_at b o))
+
+  let[@inline always] i32le_at b o =
+    if Paranoid.enabled then i32le b (offset o)
+    else Int32_u.of_int32 (le32 (get32_at b o))
+
+  let[@inline always] i64be_at b o =
+    if Paranoid.enabled then i64be b (offset o)
+    else Int64_u.of_int64 (be64 (get64_at b o))
+
+  let[@inline always] i64le_at b o =
+    if Paranoid.enabled then i64le b (offset o)
+    else Int64_u.of_int64 (le64 (get64_at b o))
+
   let[@inline always] set_u8 b o v =
     let c = Char.unsafe_chr (v land 0xff) in
     if Paranoid.enabled then safe_set8 b o c else set8 b o c
