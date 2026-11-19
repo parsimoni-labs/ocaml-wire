@@ -92,6 +92,10 @@
   buffer allocates nothing, and `decode` no longer slows with nesting depth
   (#435, #445, #496, @samoht)
 
+- A staged `Wire.Codec.read` and `Wire.Codec.valid` keep their error paths out
+  of line, so a compiler that inlines more makes them faster, not slower
+  (@samoht)
+
 - The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
   every dune profile, the dev one included, where the runtime's interfaces
   state what allocates nothing (#493, @samoht)
