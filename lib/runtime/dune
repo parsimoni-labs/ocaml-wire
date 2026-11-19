@@ -8,7 +8,29 @@
 (library
  (name wire_runtime)
  (public_name wire.runtime)
- (private_modules loads)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (private_modules loads prims carrier)
+ ; On OxCaml every value of these modules is [portable]: they hold no state
+ ; and only compute, read the buffer they are given or raise, so any domain
+ ; may call them. Only OxCaml syntax can say so, so on OxCaml their shared
+ ; interface is read under that modality. The library is declared once per
+ ; compiler so that no other compiler preprocesses it: there each unit is
+ ; compiled from its own source.
+ (preprocess
+  (per_module
+   ((action
+     (system
+      "case %{input-file} in *.mli) printf '@@ portable ';; esac; cat %{input-file}"))
+    unchecked
+    errors
+    arith
+    uInt8
+    uInt16
+    sInt8
+    sInt16
+    uInt32
+    sInt32)))
  (libraries
   optint
   (select
@@ -20,7 +42,66 @@
    loads.mli
    from
    (stdlib_upstream_compatible -> loads.ox.mli)
-   (-> loads.std.mli))))
+   (-> loads.std.mli))
+  (select
+   carrier.ml
+   from
+   (stdlib_upstream_compatible -> carrier.ox.ml)
+   (-> carrier.std.ml))
+  (select
+   carrier.mli
+   from
+   (stdlib_upstream_compatible -> carrier.ox.mli)
+   (-> carrier.std.mli))
+  (select
+   prims.ml
+   from
+   (stdlib_upstream_compatible -> prims.ox.ml)
+   (-> prims.std.ml))
+  (select
+   prims.mli
+   from
+   (stdlib_upstream_compatible -> prims.ox.mli)
+   (-> prims.std.mli))))
+
+(library
+ (name wire_runtime)
+ (public_name wire.runtime)
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (private_modules loads prims carrier)
+ (libraries
+  optint
+  (select
+   loads.ml
+   from
+   (stdlib_upstream_compatible -> loads.ox.ml)
+   (-> loads.std.ml))
+  (select
+   loads.mli
+   from
+   (stdlib_upstream_compatible -> loads.ox.mli)
+   (-> loads.std.mli))
+  (select
+   carrier.ml
+   from
+   (stdlib_upstream_compatible -> carrier.ox.ml)
+   (-> carrier.std.ml))
+  (select
+   carrier.mli
+   from
+   (stdlib_upstream_compatible -> carrier.ox.mli)
+   (-> carrier.std.mli))
+  (select
+   prims.ml
+   from
+   (stdlib_upstream_compatible -> prims.ox.ml)
+   (-> prims.std.ml))
+  (select
+   prims.mli
+   from
+   (stdlib_upstream_compatible -> prims.ox.mli)
+   (-> prims.std.mli))))
 
 ; The paranoid profile checks every read [Unchecked] makes, so the tests and
 ; the fuzzers catch a read outside the frame (docs/execution.md). The afl
