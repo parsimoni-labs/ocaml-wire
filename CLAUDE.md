@@ -126,7 +126,7 @@ codecs share one library, is in [docs/projection.md](docs/projection.md#generate
 The **only** goal of benchmarks is to compare these three tiers -- all derived
 from the same Wire DSL definition:
 
-1. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec`'s staged reads and writes (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a C loop
 3. **OCaml->C FFI** -- OCaml calling the EverParse-generated C validator
 
@@ -153,7 +153,10 @@ measures the trick, not the library, and its win belongs in the generator.
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work with `Codec.get`/`Codec.set`.
+does the same work with the codec's read and write API, as a user would:
+`Codec.read_word` once per header and `Codec.of_word` per field
+(`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
+written, and `Codec.get`/`Codec.set` for a lone field.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against
