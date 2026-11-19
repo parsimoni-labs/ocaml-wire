@@ -46,12 +46,12 @@
   record of at most 7 bytes once, as an `int` of its bytes, then take each
   field from it with two shifts and a mask. The read is one bounds check and,
   where the buffer has 8 bytes from the record on, one load, inlined into the
-  caller's loop (@samoht)
+  caller's loop (#499, @samoht)
 
 - `Wire.Codec.writer`: a staged writer of a fixed-size record from a template
   and the values of the fields that vary, one call per record. A record of at
   most 7 bytes is put together in an `int` and written after every check
-  (@samoht)
+  (#499, @samoht)
 
 - `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
   its fields with no further bounds check (#435, @samoht)
@@ -105,11 +105,12 @@
 
 - A staged `Wire.Codec.read` and `Wire.Codec.valid` keep their error paths out
   of line, so a compiler that inlines more makes them faster, not slower
-  (@samoht)
+  (#499, @samoht)
 
 - `Wire.Codec.get` and `Wire.Codec.set` of an integer or bitfield field run as
   one closure that checks its bounds and calls nothing else: `set` writes a
-  space packet header field in a third of the instructions it took (@samoht)
+  space packet header field in a third of the instructions it took (#499,
+  @samoht)
 
 - The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
   every dune profile, the dev one included, where the runtime's interfaces
