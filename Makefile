@@ -141,9 +141,12 @@ bench-rust:
 # languages: each OCaml workload, and the same application logic over the
 # OCaml Wire_ocaml generates, on OCaml (and on OxCaml when the switch
 # OXCAML_SWITCH exists), against that logic over the Rust Wire_rust generates
-# from the same codecs, on the inputs their generators write. Each workload
-# runs reading, then writing. Their EverParse C rows stay in bench-routing,
-# bench-gateway and bench-clcw. Results land in _build/bench-apps/.
+# from the same codecs and over the released crates that read and write the
+# same headers (spacepackets, ccsds_primary_header, gaia-ccsds-c2a,
+# chronus-gateway), on the inputs their generators write; cargo fetches the
+# crates the first time. Each workload runs reading, then writing. Their
+# EverParse C rows stay in bench-routing, bench-gateway and bench-clcw.
+# Results land in _build/bench-apps/.
 BENCH_APPS_PACKETS ?= 10000000
 BENCH_APPS_FRAMES ?= 1000000
 BENCH_APPS_WORDS ?= 1000000
