@@ -846,17 +846,17 @@ let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
   let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"fail ()" () in
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "ok off@\n")
 
-(* The body of [View.check]. A record with no check of its own loads nothing,
-   so a negative [off] needs no test: it is the answer, which [View.ok]
-   refuses. *)
+(* The body of [View.check], which answers [refused] for a record it refuses.
+   A record with no check of its own loads nothing, so a negative [off] needs
+   no test: it is the answer, which [View.ok] refuses. *)
 let pp_view_check ~src ppf ~target ~plan ~size ~live =
   pp_bind_len ~src ppf ~live;
   if has_checks plan then begin
-    Fmt.pf ppf "    if off < 0 || off > len - size then -1@\n    else@\n";
-    let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"-1" () in
+    Fmt.pf ppf "    if off < 0 || off > len - size then refused@\n    else@\n";
+    let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"refused" () in
     pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "off@\n")
   end
-  else Fmt.pf ppf "    if off > len - size then -1 else off@\n"
+  else Fmt.pf ppf "    if off > len - size then refused else off@\n"
 
 (* A view is a record checked in a named buffer: [View.check b len off] runs
    the frame check against [len], the buffer's length read once by the caller,
@@ -898,6 +898,8 @@ let pp_view_module ~src ppf ~target ~plan ~size =
      end = struct@\n\
     \  type 'b t = int@\n\
     \  type 'b check = int@\n\
+     @\n\
+    \  let refused = -1@\n\
      @\n\
     \  let%s check %s len off =@\n"
     src.brand local src.brand src.brand local src.brand src.brand local

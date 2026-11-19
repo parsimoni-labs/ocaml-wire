@@ -748,9 +748,11 @@ end = struct
   type 'b t = int
   type 'b check = int
 
+  let refused = -1
+
   let[@inline] check _b len off =
     let len = (len : _ Wire_runtime.Buf.length :> int) in
-    if off > len - size then -1 else off
+    if off > len - size then refused else off
 
   let[@inline] with_ _b len off ~ok ~fail =
     let len = (len : _ Wire_runtime.Buf.length :> int) in
@@ -1639,9 +1641,11 @@ module Bigstring = struct
     type 'b t = int
     type 'b check = int
 
+    let refused = -1
+
     let[@inline] check _b len off =
       let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
-      if off > len - size then -1 else off
+      if off > len - size then refused else off
 
     let[@inline] with_ _b len off ~ok ~fail =
       let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
