@@ -13,13 +13,29 @@ open Scan_module
    module holds the interface. *)
 
 type target = [ `OCaml | `OxCaml ]
-type typ = Planner.typ = Typ : 'a Wire.typ -> typ
+type map = { path : string; ocaml : string; typ : Planner.typ }
 
+let map path ~typ m = { path; ocaml = typ; typ = Typ m }
 let ident = ident
-let ml = ml
-let bridge = bridge
+let typs = Option.map (List.map (fun m -> (m.path, m.typ)))
+let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
+
+let ml ?target ?simd ?make ?maps ~codec c =
+  ml ?target ?simd ?make:(Option.map fst make) ?maps:(typs maps) ~codec c
+
+let mli ?target ?simd ?make ?maps ~codec c =
+  Interface.record ?target ?simd ?make ?maps:(named maps) ~codec c
+
+let bridge ?maps ~codec ~core c = bridge ?maps:(typs maps) ~codec ~core c
+
+let bridge_mli ?(maps = []) ~codec ~core c =
+  (* The checks the bridge would refuse, refused here too. *)
+  ignore (bridge ~maps ~codec ~core c);
+  Interface.bridge ~maps:(maps <> []) ~codec ~core
+
 let scanner_fields = scanner_fields
 let scanner = scanner
+let scanner_mli = Interface.scanner
 
 (* {1 The plan, for other backends} *)
 

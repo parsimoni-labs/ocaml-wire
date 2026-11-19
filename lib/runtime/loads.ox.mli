@@ -10,7 +10,7 @@ type cell = { mutable cell : int64_u }
 (** A mutable [int64_u], which no [ref] holds. The compiler unboxes one that is
     local and that only reads and assignments of [cell] use. *)
 
-val[@zero_alloc] offset : int64_u -> int
+val[@zero_alloc] offset : int64_u -> int @@ portable
 (** [offset off] is [off] as an [int]. The paranoid profile raises
     [Invalid_argument] for an [off] that does not fit an [int], which narrowing
     would wrap to another offset. *)

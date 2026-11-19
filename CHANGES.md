@@ -2,6 +2,20 @@
 
 ### Breaking
 
+- `Wire_ocaml.ml ~make` takes the constructor's path and the path of the
+  type it returns, `~maps` takes `Wire_ocaml.map` values, which name the
+  OCaml type of a map's values (`Wire_ocaml.typ` is gone), and the `~step`
+  module of `Wire_ocaml.scanner` defines `t`, its accumulator: the interface
+  of the generated module names these types. Migrate `~make:"M.v"` to
+  `~make:("M.v", "M.t")`, `("P.m", Typ P.m)` to
+  `Wire_ocaml.map "P.m" ~typ:"int" P.m`, and add `type t = ...` to the step
+  module (#501, @samoht)
+
+- Generated OCaml defines the helpers only it calls (`cast`, `no_error`,
+  `codec_name`, `mask32`, `enum_failed`, `first_error`, `validate_written`)
+  only where it calls them, and its interface hides them and
+  `Value.<f>_eq`. Use the public API the interface states (#501, @samoht)
+
 - Generated OCaml: a `View` is checked once in a buffer named by
   `Wire_runtime.Buf.v` and read with that buffer (`view_<f> b v`), allocating
   nothing; a bitfield or byte array is a `Value.<f>` carrier, checked when
@@ -22,6 +36,15 @@
   `validate_exn` to keep raising (#492, @samoht)
 
 ### Added
+
+- `Wire_ocaml.mli`, `Wire_ocaml.scanner_mli` and `Wire_ocaml.bridge_mli`:
+  the interface of each module `Wire_ocaml` generates, its public API
+  documented from the codec (each field's place, width and constraints, each
+  function's errors). For OxCaml it states the `local` buffers, the
+  `[@zero_alloc]` checks and the portability of the implementation
+  (#501, @samoht)
+
+- Generated OCaml: `pp` prints a record, and a scan's outputs (#501, @samoht)
 
 - `Wire.S`, the signature a codec of fixed-size records gives, and
   `Wire.Codec.Make`, the interpreted codec as one; a module `Wire_ocaml`
@@ -160,6 +183,9 @@
   @samoht)
 
 ### Fixed
+
+- `Wire_runtime.Target.offset` is `portable` on OxCaml, as its
+  implementation is, so a generated scanner is too (#501, @samoht)
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,
   as in 3D. The codec and the generated C could read different bytes (#453,

@@ -24,13 +24,17 @@
     codec checks it: an overflow rejects the record with the codec's error.
 
     A generator executable, run by a dune rule, prints the module for a codec
-    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)]. The text
-    is not laid out as ocamlformat would; a project that commits the module
-    pipes it through [ocamlformat --impl --name=FILE -] in that rule, so the
-    committed copy is formatted under the project's own [.ocamlformat] and
-    [dune fmt] leaves it alone, and keeps it current with a runtest [diff] and
-    [dune promote] or with [(mode promote)]. [examples/generated] in the sources
-    does this.
+    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
+    interface with {!mli} and the same arguments. Each generator has such an
+    interface printer: the interface states the module's public API, each value
+    documented from the codec, and hides the rest; on OxCaml it states the modes
+    and the [[@zero_alloc]] checks of the implementation. The text is not laid
+    out as ocamlformat would; a project that commits the module pipes it through
+    [ocamlformat --impl --name=FILE -] (and [--intf] for the interface) in that
+    rule, so the committed copy is formatted under the project's own
+    [.ocamlformat] and [dune fmt] leaves it alone, and keeps it current with a
+    runtest [diff] and [dune promote] or with [(mode promote)].
+    [examples/generated] in the sources does this.
 
     The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
@@ -45,21 +49,21 @@
     the field out, so fields packed in one word share one load.
 
     [is_valid buf off] checks the record at [off] without raising, loading only
-    the fields its constraints read; [validate] raises the codec's error where
-    it is false. A view reads a buffer named once with [Wire_runtime.Buf.v], as
-    ['b Buf.t], and whose length is read once: [View.check b len off] checks the
-    record at [off] without raising, [View.ok c] tells whether it passed and
-    [View.get c] turns an answer that passed into a ['b View.t], with the same
-    promise as [Valid]: each [view_<field> b v] (and [view_<field>_int],
-    [view_<field>_word]) is one load with no bounds check, and only the buffer
-    named ['b] is accepted. A view is an [int], so it allocates nothing.
-    [View.at] raises the codec's error where the check fails, and
-    [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. A
-    [Bigstring] submodule has the same functions, [Valid] and [View] included,
-    on a bigarray of bytes. It has [size], [decode], [validate] and
-    [write buf off v1 ... vn], which stores field values in order. Without
+    the fields its constraints read; [validate] answers the codec's error where
+    it is false, and [validate_exn] raises it. A view reads a buffer named once
+    with [Wire_runtime.Buf.v], as ['b Buf.t], and whose length is read once:
+    [View.check b len off] checks the record at [off] without raising,
+    [View.ok c] tells whether it passed and [View.get c] turns an answer that
+    passed into a ['b View.t], with the same promise as [Valid]: each
+    [view_<field> b v] (and [view_<field>_int], [view_<field>_word]) is one load
+    with no bounds check, and only the buffer named ['b] is accepted. A view is
+    an [int], so it allocates nothing. [View.at] raises the codec's error where
+    the check fails, and [View.with_ b len off ~ok ~fail] hands the view to [ok]
+    or calls [fail]. A [Bigstring] submodule has the same functions, [Valid] and
+    [View] included, on a bigarray of bytes. It has [size], [decode], [validate]
+    and [write buf off v1 ... vn], which stores field values in order. Without
     [~make] it also defines a record [t] of the field values, its constructor
-    [v] and [encode]. *)
+    [v], its printer [pp] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
@@ -77,29 +81,33 @@ val ident : string -> string
     suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
     for the default target compiles on an OxCaml compiler too. *)
 
-(** A {!Wire.typ} of any value type. *)
-type typ = Typ : 'a Wire.typ -> typ
+type map
+(** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
+
+val map : string -> typ:string -> 'a Wire.typ -> map
+(** [map path ~typ m] is the map [m], at the OCaml path [path], whose values
+    have the OCaml type [typ], as in
+    [map "Page.u16be_int" ~typ:"int" Page.u16be_int]. *)
 
 val ml :
   ?target:target ->
   ?simd:bool ->
-  ?make:string ->
-  ?maps:(string * typ) list ->
+  ?make:string * string ->
+  ?maps:map list ->
   codec:string ->
   'r Wire.Codec.t ->
   string
 (** [ml ?target ?simd ?make ?maps ~codec c] is the source of a module
     specialised to [c], for [target] (default [`OCaml]). [codec], the OCaml path
     of [c], names it in the module's header; the module itself never refers to
-    [c]. [make], the path of a function taking the field values in order, builds
-    the decoded value; it defaults to a generated record, which a codec with a
-    map field cannot use.
+    [c]. [make] is [(f, t)]: [f] the path of a function taking the field values
+    in order, which builds the decoded value, and [t] the path of the type it
+    returns. It defaults to a generated record, which a codec with a map field
+    cannot use.
 
-    A field under a {!Wire.map} is specialised when [maps] names the map: a pair
-    of its OCaml path and the map itself, as in
-    [("Page.u16be_int", Typ Page.u16be_int)]. The generated module calls the
-    map's functions by that path; {!bridge} checks that the field still holds
-    that very map.
+    A field under a {!Wire.map} is specialised when [maps] names the map. The
+    generated module calls the map's functions by its path; {!bridge} checks
+    that the field still holds that very map.
 
     With [~simd:true] (default [false]), for the OxCaml target on arm64 or
     amd64, a 4-byte record whose fields each sit in one byte, unsigned and with
@@ -120,17 +128,34 @@ val ml :
     of them a getter that would shadow a name the getters call, such as
     [Get.cast]. *)
 
-val bridge :
-  ?maps:(string * typ) list ->
+val mli :
+  ?target:target ->
+  ?simd:bool ->
+  ?make:string * string ->
+  ?maps:map list ->
   codec:string ->
-  core:string ->
   'r Wire.Codec.t ->
   string
+(** [mli ?target ?simd ?make ?maps ~codec c] is the interface of
+    [ml ?target ?simd ?make ?maps ~codec c]: its types and values, each
+    documented, the fields of [c] with their place, width and constraints in the
+    preamble. The interface for [`OCaml] is OCaml, so js_of_ocaml and
+    wasm_of_ocaml read it too; the one for [`OxCaml] takes buffers [local] and
+    states the [[@zero_alloc]] checks and the portability of the implementation.
+    Raises [Invalid_argument] as {!ml} does. *)
+
+val bridge :
+  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
 (** [bridge ?maps ~codec ~core c] is the source of a module that checks, when it
     loads, that the codec [c] at the path [codec] still has the shape the module
     at the path [core] was generated from by {!ml}, and that each map [maps]
     names is still the very map of its field. It links [wire]; link it next to
     [core] wherever [wire] is linked anyway. *)
+
+val bridge_mli :
+  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
+(** [bridge_mli ?maps ~codec ~core c] is the interface of
+    [bridge ?maps ~codec ~core c], which defines nothing: its doc comment. *)
 
 (** {1 Scanning}
 
@@ -165,7 +190,7 @@ val scanner :
     [invalid ()] when the record or the bounds are bad. An absent field is 0.
     [fields] selects the outputs: the others are not read unless a check needs
     them, and every check still runs. [decode buf off len] returns the outputs
-    in a record with an [ok] flag.
+    in a record with an [ok] flag, which [pp] prints.
 
     [n] optional fields give code linear in [n], whether they follow each other
     or nest, and whatever outputs are handed out.
@@ -173,8 +198,9 @@ val scanner :
     [len / stride] frames of [stride] bytes, each checked on its own; it raises
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
 
-    [step], the path of a module with [valid acc ~f1 ... ~fn] and [invalid acc],
-    adds [fold_step buf off len ~init] and
+    [step], the path of a module with a type [t], the accumulator, and
+    [valid : t -> f1:int -> ... -> fn:int -> t] and [invalid : t -> t], adds
+    [fold_step buf off len ~init] and
     [fold_frames_step buf off len ~stride ~init], which are [fold] and
     [fold_frames] with [init] as the accumulator, calling that module's
     functions by name. OCaml without flambda never inlines a function passed as
@@ -186,6 +212,17 @@ val scanner :
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
     [decode_unboxed] hand them out unboxed; [box] makes the record of an unboxed
     one. *)
+
+val scanner_mli :
+  ?target:target ->
+  ?fields:string list ->
+  ?step:string ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  string
+(** [scanner_mli ?target ?fields ?step ~codec c] is the interface of
+    [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
+    [Invalid_argument] as {!scanner} does. *)
 
 (** {1 The plan}
 

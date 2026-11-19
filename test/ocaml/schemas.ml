@@ -100,6 +100,8 @@ let mixed =
         mixed_h;
       ]
 
+type small = UInt8.t * UInt16.t
+
 let small_make a b = (a, b)
 
 let small =
@@ -126,6 +128,8 @@ let lanes =
         (Field.v "F" (bits ~width:6 U16be) $ fun (_, _, _, _, _, x, _) -> x);
         (Field.v "G" (bits ~width:2 U16be) $ fun (_, _, _, _, _, _, x) -> x);
       ]
+
+type eth = string * string * UInt16.t
 
 let eth_make dst src ty = (dst, src, ty)
 

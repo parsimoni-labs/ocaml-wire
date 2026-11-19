@@ -58,10 +58,13 @@ val mixed_make :
 val mixed : mixed Codec.t
 (** [mixed] has little-endian and signed integers and 16-bit bitfields. *)
 
-val small_make : UInt8.t -> UInt16.t -> UInt8.t * UInt16.t
+type small = UInt8.t * UInt16.t
+(** A {!small} record. *)
+
+val small_make : UInt8.t -> UInt16.t -> small
 (** [small_make] builds a {!small} record. *)
 
-val small : (UInt8.t * UInt16.t) Codec.t
+val small : small Codec.t
 (** [small] is narrower than one 64-bit word. Its fields are named [Type] and
     [local_], a keyword of OCaml and one of OxCaml, so the code written for the
     default target escapes both and compiles on either compiler. *)
@@ -78,10 +81,13 @@ val lanes : lanes Codec.t
     target with [~simd:true] reads and writes four of them in one NEON register.
 *)
 
-val eth_make : string -> string -> UInt16.t -> string * string * UInt16.t
+type eth = string * string * UInt16.t
+(** An Ethernet header: destination, source and EtherType. *)
+
+val eth_make : string -> string -> UInt16.t -> eth
 (** [eth_make] builds an Ethernet header. *)
 
-val eth : (string * string * UInt16.t) Codec.t
+val eth : eth Codec.t
 (** [eth] has fixed byte arrays. *)
 
 val variable_make : UInt8.t -> string -> UInt8.t * string

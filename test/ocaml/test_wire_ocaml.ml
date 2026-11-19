@@ -459,7 +459,7 @@ let test_overflow () =
 
 let test_refused () =
   let refused ~maps name =
-    match Wire_ocaml.ml ~maps ~make:"m" ~codec:"c" Schemas.mapped with
+    match Wire_ocaml.ml ~maps ~make:("m", "t") ~codec:"c" Schemas.mapped with
     | _ -> Alcotest.failf "%s: generated" name
     | exception Invalid_argument m ->
         Alcotest.(check bool)
@@ -989,8 +989,16 @@ let test_oxcaml () =
       "let[@inline][@zero_alloc] src (buf @ local) off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
       "module Int32_u = Wire_runtime.Target.Int32_u";
-      "let[@inline][@zero_alloc] validate_written (buf @ local) off";
     ];
+  (* A write checks what it wrote only where the record has checks. *)
+  Alcotest.(check bool)
+    "no validate_written without checks" false
+    (contains src "validate_written");
+  Alcotest.(check bool)
+    "validate_written" true
+    (contains
+       (Wire_ocaml.ml ~target:`OxCaml ~codec:"Schemas.checked" Schemas.checked)
+       "let[@inline][@zero_alloc] validate_written (buf @ local) off");
   (* Every allocation check runs: only a path that ends in a raise is assumed
      to allocate nothing, so none is taken on trust. *)
   Alcotest.(check bool)
@@ -1215,11 +1223,12 @@ let words s =
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied
    into its branches; and about 150 words on OCaml, 215 on OxCaml, whose
-   arithmetic is spelled as calls. *)
+   arithmetic is spelled as calls. [pp] prints the three outputs of a level
+   on three lines. *)
 let nested_budget target n =
   match target with
-  | `OCaml -> ((44 * n) + 60, (320 * n) + 200)
-  | `OxCaml -> ((132 * n) + 72, (1380 * n) + 240)
+  | `OCaml -> ((47 * n) + 72, (340 * n) + 250)
+  | `OxCaml -> ((132 * n) + 72, (1380 * n) + 250)
 
 let test_size () =
   List.iter
@@ -1234,7 +1243,7 @@ let test_size () =
             Alcotest.failf
               "%s: 8, 16 and 32 optional fields: %d, %d and %d lines" name s8
               s16 s32;
-          if s32 > 150 * 32 then
+          if s32 > 160 * 32 then
             Alcotest.failf "%s: 32 optional fields: %d lines" name s32)
         [ `OCaml; `OxCaml ])
     [
@@ -1430,6 +1439,35 @@ let test_plan_signed_output () =
         (Result.is_ok (Codec.decode codec bytes 0)))
     [ -128; -1 ]
 
+(* The interface states the public API and hides the rest. The one for the
+   default target is OCaml that js_of_ocaml and wasm_of_ocaml read; the one
+   for OxCaml states the modes and the allocation checks. Compiling the
+   generated modules checks each against its implementation; this checks what
+   the text promises. *)
+let test_interfaces () =
+  let stock = Wire_ocaml.mli ~codec:"Schemas.checked" Schemas.checked
+  and ox =
+    Wire_ocaml.mli ~target:`OxCaml ~codec:"Schemas.checked" Schemas.checked
+  in
+  List.iter
+    (fun name ->
+      Alcotest.(check bool) ("hides " ^ name) false (contains stock name))
+    [ "first_error"; "no_error"; "cast"; "codec_name"; "validate_written" ];
+  Alcotest.(check bool) "stock: no mode" false (contains stock "@ local");
+  Alcotest.(check bool) "stock: no check" false (contains stock "zero_alloc");
+  List.iter
+    (fun s -> Alcotest.(check bool) s true (contains ox s))
+    [
+      "val[@zero_alloc] is_valid : bytes @ local -> int -> bool @@ portable";
+      "val pp : Format.formatter -> t -> unit @@ portable";
+      "decode_local : bytes @ local -> int -> t @ local";
+    ];
+  (* The constraints of the codec are documented with its fields. *)
+  Alcotest.(check bool) "constraint" true (contains stock "where [");
+  match Wire_ocaml.mli ~codec:"c" Schemas.mapped with
+  | _ -> Alcotest.fail "the interface of a refused codec was generated"
+  | exception Invalid_argument _ -> ()
+
 let suite =
   ( "wire_ocaml",
     [
@@ -1468,6 +1506,7 @@ let suite =
       Alcotest.test_case "no literal needs more than 31 bits" `Quick
         test_narrow_ints;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
+      Alcotest.test_case "interfaces" `Quick test_interfaces;
       Alcotest.test_case "NEON lanes" `Quick test_simd;
       Alcotest.test_case "carriers from low bits" `Quick test_low;
       Alcotest.test_case "getters" `Quick test_getters;
