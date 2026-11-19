@@ -356,8 +356,17 @@ let field_steps ~used ~name ~slot ~voff ~conds ~span ~laid view check full =
              field or the [where] clause that reads it marks it again. *)
           Hashtbl.remove used slot;
           let set = Array.of_list (List.fold_left set_inter cset typ_sets) in
-          let fail runtime input_end buf off =
-            full (alloc_slots (slot + 1)) runtime input_end buf off
+          (* With no set of its type, the field's own validator would fail
+             on its constraint, the error [set_failed] raises after [fail]:
+             nothing to run. Else it reads only the slot it fills first, so a
+             scratch of this domain's serves every failure. *)
+          let fail =
+            match typ_sets with
+            | [] -> fun _ _ _ _ -> ()
+            | _ :: _ ->
+                let scratch = domain_local_slots (slot + 1) in
+                fun runtime input_end buf off ->
+                  full (scratch ()) runtime input_end buf off
           in
           [ Range { name; slot; scalar; voff; set; fail; store = true } ]
       | Some cond, None, [] ->
