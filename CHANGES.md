@@ -13,7 +13,16 @@
 - Generated OCaml: `write_at` and `write_int_at` write into a named buffer
   whose length the caller read once (#492, @samoht)
 
+- Generated OCaml: `decode` returns a `result`, as `Wire.Codec.decode` does;
+  the raising one is `decode_exn`. Rename calls to `decode_exn` to keep
+  raising (#492, @samoht)
+
 ### Added
+
+- `Wire.S`, the signature a codec of fixed-size records gives, and
+  `Wire.Codec.Make`, the interpreted codec as one; a module `Wire_ocaml`
+  generates is one too, with typed field handles `Field.<f>`, so either runs
+  the same code by changing one line (#492, @samoht)
 
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)

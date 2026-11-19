@@ -15,6 +15,7 @@ let () =
 
 let mask32 = Int64.to_int 0xFFFF_FFFFL
 let size = 4
+let min_size = size
 
 module Value : sig
   type controlwordtype = private int
@@ -243,7 +244,7 @@ let[@inline never] validate_written buf off =
   | exception Wire_runtime.Errors.Parse_error e ->
       Wire_runtime.Errors.encode_rejected ~name:codec_name e
 
-let decode buf off =
+let decode_exn buf off =
   if off < 0 || off > Bytes.length buf - size then fail buf off
   else
     let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 in
@@ -276,6 +277,11 @@ let decode buf off =
       (cast Value.farmbcounter_eq f12_farmbcounter)
       (cast Value.spare2_eq f13_spare2)
       (cast Value.reportvalue_eq f14_reportvalue)
+
+let decode buf off =
+  match decode_exn buf off with
+  | v -> Ok v
+  | exception Wire_runtime.Errors.Parse_error e -> Error e
 
 let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
     f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
@@ -938,6 +944,82 @@ let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
   and off = (v : _ View.t :> int) in
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
+module Field = struct
+  type _ t =
+    | Controlwordtype : Value.controlwordtype t
+    | Clcwversion : Value.clcwversion t
+    | Statusfield : Value.statusfield t
+    | Copineffect : Value.copineffect t
+    | Vcid : Value.vcid t
+    | Spare : Value.spare t
+    | Norf : Value.norf t
+    | Nobitlock : Value.nobitlock t
+    | Lockout : Value.lockout t
+    | Wait : Value.wait t
+    | Retransmit : Value.retransmit t
+    | Farmbcounter : Value.farmbcounter t
+    | Spare2 : Value.spare2 t
+    | Reportvalue : Value.reportvalue t
+
+  let[@inline] get : type a. a t -> (bytes -> int -> a) Wire_runtime.Staged.t =
+    function
+    | Controlwordtype ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.controlwordtype buf off)
+    | Clcwversion ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.clcwversion buf off)
+    | Statusfield ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.statusfield buf off)
+    | Copineffect ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.copineffect buf off)
+    | Vcid -> Wire_runtime.Staged.stage (fun buf off -> Get.vcid buf off)
+    | Spare -> Wire_runtime.Staged.stage (fun buf off -> Get.spare buf off)
+    | Norf -> Wire_runtime.Staged.stage (fun buf off -> Get.norf buf off)
+    | Nobitlock ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.nobitlock buf off)
+    | Lockout -> Wire_runtime.Staged.stage (fun buf off -> Get.lockout buf off)
+    | Wait -> Wire_runtime.Staged.stage (fun buf off -> Get.wait buf off)
+    | Retransmit ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.retransmit buf off)
+    | Farmbcounter ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.farmbcounter buf off)
+    | Spare2 -> Wire_runtime.Staged.stage (fun buf off -> Get.spare2 buf off)
+    | Reportvalue ->
+        Wire_runtime.Staged.stage (fun buf off -> Get.reportvalue buf off)
+
+  let[@inline] view : type a b. a t -> b Wire_runtime.Buf.t -> b View.t -> a =
+   fun f b v ->
+    match f with
+    | Controlwordtype -> view_controlwordtype b v
+    | Clcwversion -> view_clcwversion b v
+    | Statusfield -> view_statusfield b v
+    | Copineffect -> view_copineffect b v
+    | Vcid -> view_vcid b v
+    | Spare -> view_spare b v
+    | Norf -> view_norf b v
+    | Nobitlock -> view_nobitlock b v
+    | Lockout -> view_lockout b v
+    | Wait -> view_wait b v
+    | Retransmit -> view_retransmit b v
+    | Farmbcounter -> view_farmbcounter b v
+    | Spare2 -> view_spare2 b v
+    | Reportvalue -> view_reportvalue b v
+
+  let controlwordtype = Controlwordtype
+  let clcwversion = Clcwversion
+  let statusfield = Statusfield
+  let copineffect = Copineffect
+  let vcid = Vcid
+  let spare = Spare
+  let norf = Norf
+  let nobitlock = Nobitlock
+  let lockout = Lockout
+  let wait = Wait
+  let retransmit = Retransmit
+  let farmbcounter = Farmbcounter
+  let spare2 = Spare2
+  let reportvalue = Reportvalue
+end
+
 let encode t buf off =
   write buf off t.controlwordtype t.clcwversion t.statusfield t.copineffect
     t.vcid t.spare t.norf t.nobitlock t.lockout t.wait t.retransmit
@@ -969,7 +1051,7 @@ module Bigstring = struct
     | exception Wire_runtime.Errors.Parse_error e ->
         Wire_runtime.Errors.encode_rejected ~name:codec_name e
 
-  let decode buf off =
+  let decode_exn buf off =
     if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
       fail buf off
     else
@@ -1006,6 +1088,11 @@ module Bigstring = struct
         (cast Value.farmbcounter_eq f12_farmbcounter)
         (cast Value.spare2_eq f13_spare2)
         (cast Value.reportvalue_eq f14_reportvalue)
+
+  let decode buf off =
+    match decode_exn buf off with
+    | v -> Ok v
+    | exception Wire_runtime.Errors.Parse_error e -> Error e
 
   let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
       f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock

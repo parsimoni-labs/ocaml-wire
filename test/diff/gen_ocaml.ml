@@ -93,12 +93,12 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
     \          let out = Bytes.create M.size in@\n\
-    \          M.encode (%s.decode (%s) o) out 0;@\n\
+    \          M.encode (%s.decode_exn (%s) o) out 0;@\n\
     \          Bytes.to_string out);@\n\
     \      validate = (fun b o -> %s.validate (%s) o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = M.decode (Bytes.of_string s) 0 in@\n\
+    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
     \          %a);@\n\
     \      gets = [@\n\
      %a      ];@\n\
