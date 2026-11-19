@@ -329,8 +329,11 @@ from its input does: the Rust rows read the corpus with
 side builds with `opt-level = 3`, `lto = true`, `codegen-units = 1` and
 `panic = "abort"`, and without `target-cpu=native`, which the OCaml
 compilers have no equivalent of. The OCaml side builds with
-dune's `release` profile; on OxCaml, flambda2's `-O3` measured no faster than
-its default on these rows, so it is not set.
+dune's `bench` profile (`dune-workspace`): the `release` profile with the
+flags [the sweep](#compiler-flags) picks for each compiler on every unit,
+the libraries the harness links (`wire`, `wire.runtime`, the workloads) as
+well as the harness, so the compiler optimises the code a row calls as it
+optimises the row.
 
 ```
 make bench-rust           # needs cargo; fetches the crates the first time
@@ -365,6 +368,67 @@ A real capture (length-prefixed frames) is not measured: it has frames of
 every length, which the batch consumers cannot take without a second,
 per-frame code path per row, and padding each frame to a fixed slot would
 change what the parsers accept.
+
+## Compiler flags
+
+The `bench` profile of `dune-workspace` adds the flags of
+`bench/flags.sexp` to every unit, the libraries a row calls as well as the
+row; `bench/dune` writes that file for the compiler that builds. The flags
+are measured with `bench/flags-sweep.sh`, which builds `bench/apps` and
+`bench/rust` once per candidate and counts every row of both, the six
+application workloads and the `fixed64-random` and `mix128-random` corpora,
+three times with `bench/count.sh`:
+
+```
+sh bench/flags-sweep.sh - '' -O3 -unboxed-types '-inline 25' '-inline 50' \
+  '-inline 100' '-inline 200'
+sh bench/flags-sweep.sh 5.4.1-flambda '' -O2 -O3 '-O3 -unbox-closures' \
+  '-O3 -inline 200' '-O3 -remove-unused-arguments' -Oclassic \
+  -unbox-closures -remove-unused-arguments
+sh bench/flags-sweep.sh 5.4.0-ox9 '' -O3 -O4 '-O3 -cfg-block-layout' \
+  '-O3 -regalloc irc' '-O3 -regalloc ls' '-O3 -regalloc gi' '-O3 -vectorize' \
+  '-O4 -cfg-block-layout' '-O4 -regalloc irc' \
+  '-O4 -cfg-block-layout -regalloc irc' \
+  '-O4 -cfg-block-layout -regalloc irc -vectorize'
+sh bench/flags-sweep.sh cargo '' '-C target-cpu=native'
+```
+
+A row's count is the median instructions per item of its three counts. A
+candidate is adopted over the flags already adopted when every row gives the
+same result, the geometric mean over the rows falls, and no row rises by more
+than 1%; `-O3` on stock OCaml, which ignores it, moves no row by more than
+0.4%. One row is exempt: `Wire.Codec valid/read, linked headers` rises by 4
+to 10% under every flag that makes a compiler inline more (`-inline` on
+OCaml, `-O2`, `-O3` and `-Oclassic` on flambda, `-O3` and `-O4` on OxCaml),
+and counting it would keep every compiler at its defaults. The mean is
+against the build without flags; the verdict names the rows that rise by more
+than 1%, besides that one, against the flags adopted before:
+
+| Compiler | Candidate | Mean | Verdict |
+| --- | --- | ---: | --- |
+| OCaml 5.4.1 | `-inline 50` | -2.1% | adopted |
+| | `-inline 25` | -1.9% | `Wire.Codec stack decode` +2% |
+| | `-inline 100`, `-inline 200` | -2.0% | the two `fold` rows +4% |
+| | `-unboxed-types` | | `wire` does not build |
+| OCaml 5.4.1 flambda | `-O2` | -1.7% | adopted |
+| | `-O3`, alone or with `-unbox-closures`, `-inline 200` or `-remove-unused-arguments` | -2.8% | routing `Wire.Codec` +2% |
+| | `-Oclassic` | -0.8% | four `Wire.Codec` rows, up to +6% |
+| | `-unbox-closures`, `-remove-unused-arguments` | +0.2% | mean rises |
+| OxCaml 5.4.0 | `-O3` | -12.1% | adopted, then replaced |
+| | `-O4` | -12.3% | adopted |
+| | `-O4 -regalloc irc` | -12.3% | mean unchanged |
+| | `-O4 -cfg-block-layout`, with or without `-regalloc irc` or `-vectorize` | -12.5% | gateway `wire.ocaml` +2% |
+| | `-O3 -vectorize` | -12.0% | mean rises |
+| | `-O3 -regalloc ls` | -7.6% | 16 rows, up to +26% |
+| | `-O3 -regalloc gi` | -4.0% | 24 rows, up to +49% |
+| Rust 1.94 | `-C target-cpu=native` | -0.0% | mean unchanged |
+
+The flags adopted are `-inline 50` on OCaml, `-O2` on OCaml with flambda
+and `-O4` on OxCaml, which over `-O3` spends 0.2% fewer instructions and
+2.4% fewer cycles with no row up by more than 0.7%. Rust keeps its release
+profile: `target-cpu=native` leaves the instructions unchanged and saves
+cycles only within noise, and the OCaml compilers have no such flag on
+arm64.
 
 ## Profiling
 

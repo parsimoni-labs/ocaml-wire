@@ -21,7 +21,9 @@ make clean              # dune clean
 ```
 
 `make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
-All bench/prof/memtrace targets use `--profile=release`.
+All bench/prof/memtrace targets use `--profile=bench`: the release profile
+with `-O3` on every unit, the libraries a benchmark links included
+(`dune-workspace`).
 The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 (`make test-wasm`) are in [docs/projection.md](docs/projection.md#narrow-int-targets).
 

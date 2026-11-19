@@ -44,6 +44,4 @@
 (executable
  (name bench)
  (modules bench stack_read selected_read g_eth g_ipv4 g_tcp g_udp)
- (ocamlopt_flags
-  (:standard -O3))
  (libraries bench_lib headers net wire wire.runtime unix fmt))

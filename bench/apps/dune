@@ -74,8 +74,6 @@
  (name bench)
  (modes native)
  (modules bench loops lanes g_space_packet g_tm_frame g_clcw)
- (ocamlopt_flags
-  (:standard -O3))
  (libraries
   bench_lib
   routing_workload

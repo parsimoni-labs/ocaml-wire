@@ -86,16 +86,16 @@ fuzz-nightly:
 bench: bench-demo bench-routing bench-gateway bench-clcw
 
 bench-demo:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/demo/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/demo/bench.exe
 
 bench-routing:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/routing/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/routing/bench.exe
 
 bench-gateway:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/gateway/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/gateway/bench.exe
 
 bench-clcw:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/clcw/bench.exe
 
 # The compilers the cross-language benchmarks run the OCaml rows on besides
 # the one on PATH, as name:switch: stock OCaml with flambda and OxCaml, each
@@ -108,7 +108,7 @@ BENCH_SWITCHES = flambda:$(FLAMBDA_SWITCH) oxcaml:$(OXCAML_SWITCH)
 # and $$h the harness.
 on_switches = for s in $(BENCH_SWITCHES); do n=$${s%%:*}; sw=$${s\#*:}; \
 	  if opam switch list --short 2>/dev/null | grep -qx "$$sw"; then \
-	    opam exec --switch "$$sw" -- dune build --profile=release \
+	    opam exec --switch "$$sw" -- dune build --profile=bench \
 	      --build-dir $(CURDIR)/_build/$$n $(1) || exit 1; \
 	    h=_build/$$n/default/$(1); $(2); \
 	  else echo "switch $$sw not found: skipping $$n"; fi; done
@@ -132,7 +132,7 @@ bench_rust_each = for c in $(BENCH_RUST_CORPORA); do \
 	    $(BENCH_RUST_RUNS) >> $(BENCH_RUST)/$(2).txt || exit 1; done
 bench-rust:
 	@mkdir -p $(BENCH_RUST) bench/rust/cargo/src/gen
-	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
+	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
 	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
 	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST) \
 	  $(BENCH_RUST_PACKETS)
@@ -142,7 +142,7 @@ bench-rust:
 	$(call bench_rust_each,_build/default/bench/rust/bench.exe run,ocaml)
 	@$(call on_switches,bench/rust/bench.exe,$(call bench_rust_each,$$h run,$$n))
 	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
-	  BUILD_EVERPARSE=1 dune build --profile=release \
+	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
@@ -169,7 +169,7 @@ BENCH_RUST_BIN = bench/rust/cargo/target/release/wire-bench-rust
 
 bench-rust-count:
 	@mkdir -p $(BENCH_RUST_COUNT_DIR) bench/rust/cargo/src/gen
-	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
+	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
 	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
 	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST_COUNT_DIR) \
 	  $(BENCH_RUST_PACKETS)
@@ -179,7 +179,7 @@ bench-rust-count:
 	@$(call bench_rust_count_rows,_build/default/bench/rust/bench.exe run,)
 	@$(call on_switches,bench/rust/bench.exe,$(call bench_rust_count_rows,$$h run,$$n ))
 	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
-	  BUILD_EVERPARSE=1 dune build --profile=release \
+	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_count_rows,_build/default/bench/rust/everparse/everparse.exe,); \
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
@@ -233,7 +233,7 @@ BENCH_APPS_RUST = bench/apps/cargo/target/release/wire-bench-apps
 
 bench-apps-count:
 	@mkdir -p $(BENCH_APPS_COUNT_DIR) bench/apps/cargo/src/gen
-	dune build --profile=release bench/apps/bench.exe bench/apps/gen.exe
+	dune build --profile=bench bench/apps/bench.exe bench/apps/gen.exe
 	_build/default/bench/apps/gen.exe --rust bench/apps/cargo/src/gen
 	_build/default/bench/apps/bench.exe inputs $(BENCH_APPS_COUNT_DIR) \
 	  $(BENCH_APPS_COUNT) $(BENCH_APPS_COUNT) $(BENCH_APPS_COUNT)
@@ -246,7 +246,7 @@ bench-apps-count:
 
 bench-apps-rust:
 	@mkdir -p $(BENCH_APPS) bench/apps/cargo/src/gen
-	dune build --profile=release bench/apps/bench.exe bench/apps/gen.exe
+	dune build --profile=bench bench/apps/bench.exe bench/apps/gen.exe
 	_build/default/bench/apps/gen.exe --rust bench/apps/cargo/src/gen
 	_build/default/bench/apps/bench.exe inputs $(BENCH_APPS) \
 	  $(BENCH_APPS_PACKETS) $(BENCH_APPS_FRAMES) $(BENCH_APPS_WORDS)
@@ -263,7 +263,7 @@ bench-apps-rust:
 PROF_EXE ?= bench/clcw/bench.exe
 
 prof:
-	BUILD_EVERPARSE=1 dune build --profile=release $(PROF_EXE)
+	BUILD_EVERPARSE=1 dune build --profile=bench $(PROF_EXE)
 	xctrace record --template 'Time Profiler' --output prof.trace \
 		--launch -- _build/default/$(PROF_EXE)
 	@echo "Profile written to prof.trace — open with: open prof.trace"
@@ -271,19 +271,19 @@ prof:
 memtrace: memtrace-routing memtrace-gateway memtrace-clcw
 
 memtrace-demo:
-	BUILD_EVERPARSE=1 MEMTRACE=demo.ctf dune exec --profile=release bench/demo/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=demo.ctf dune exec --profile=bench bench/demo/bench.exe
 	memtrace_hotspots demo.ctf
 
 memtrace-routing:
-	BUILD_EVERPARSE=1 MEMTRACE=routing.ctf dune exec --profile=release bench/routing/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=routing.ctf dune exec --profile=bench bench/routing/bench.exe
 	memtrace_hotspots routing.ctf
 
 memtrace-gateway:
-	BUILD_EVERPARSE=1 MEMTRACE=gateway.ctf dune exec --profile=release bench/gateway/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=gateway.ctf dune exec --profile=bench bench/gateway/bench.exe
 	memtrace_hotspots gateway.ctf
 
 memtrace-clcw:
-	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=release bench/clcw/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=bench bench/clcw/bench.exe
 	memtrace_hotspots clcw.ctf
 
 # Static analysis over the project's hand-written C: the benchmark application

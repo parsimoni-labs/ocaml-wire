@@ -5,7 +5,19 @@
 ; The [afl] profile instruments native code with AFL coverage so afl-fuzz gets
 ; feedback, without needing a +afl opam switch. Native only: ocamlc rejects
 ; -afl-instrument.
+;
+; The [bench] profile, which every benchmark target of the Makefile builds
+; with, is the release profile with the flags bench/flags.sexp holds for the
+; compiler that builds (bench/dune) on every unit: the libraries a benchmark
+; links (wire, wire.runtime, the workloads) get the optimisation its
+; executable gets, so that no row is built better than the code it calls. A
+; profile of its own keeps the flags out of release builds, which dune build -p
+; makes.
 (env
  (afl
   (ocamlopt_flags
-   (:standard -afl-instrument))))
+   (:standard -afl-instrument)))
+ (bench
+  (ocamlopt_flags
+   (:standard
+    (:include %{workspace_root}/bench/flags.sexp)))))
