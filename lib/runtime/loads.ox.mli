@@ -101,26 +101,3 @@ module Local : sig
       string -> int -> t @ local -> int -> int -> unit @@ portable
   end
 end
-
-(** The modules of the runtime that the code [Wire_ocaml] writes for OxCaml
-    calls, each [portable] in its interface. The code binds [Wire_runtime] to
-    this module. *)
-module Portable : sig
-  module Vec = Vec
-  module Errors = Errors
-  module Arith = Arith
-  module UInt8 = UInt8
-  module UInt16 = UInt16
-  module SInt8 = SInt8
-  module SInt16 = SInt16
-  module UInt32 = UInt32
-  module SInt32 = SInt32
-  module Unchecked = Unchecked
-
-  module Target : sig
-    module Local = Local
-  end
-
-  module Buf = Buf
-  module Staged = Staged
-end

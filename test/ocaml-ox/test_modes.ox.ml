@@ -106,8 +106,7 @@ let (portable_read @ portable) =
     G_ipv4.Get.src_int buf 0 + (G_ipv4.Get.ttl buf 0 :> int)
   else -1
 
-(* The runtime itself is portable: each module the generated code calls,
-   called directly rather than through [Target.Portable]. *)
+(* The runtime itself is portable: each module the generated code calls. *)
 let (portable_runtime @ portable) =
  fun buf ->
   let open Wire_runtime in

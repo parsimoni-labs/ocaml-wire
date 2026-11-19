@@ -54,7 +54,8 @@
 
 - `Wire_ocaml`'s OxCaml target takes each buffer it does not keep, and the
   constructor of `decode_with`, `local`, so a buffer may live on the caller's
-  stack, and its functions are `portable` (#492, @samoht)
+  stack, and its functions are `portable`, as is each module of
+  `wire.runtime` (#492, #493, @samoht)
 
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)
