@@ -129,7 +129,10 @@ type w = {
       (* A big-endian field as the variable holding its bytes read
          little-endian, and its width in bits. *)
   deferred : (string * (string * bool)) list ref;
-      (* A field bound where code first reads it, its value and whether that
+  bounded : (string * string) list;
+  (* The spans, by size and position, whose bound a check before a
+         dispatch established. *)
+  (* A field bound where code first reads it, its value and whether that
          loads from the buffer: a test of its raw bytes reads it in neither
          branch, and the branch where it holds binds the constant. *)
   base : string; (* The offset in the buffer of the current window. *)
@@ -1077,7 +1080,8 @@ let span w size p =
     if (not !ov) && nonnegative w size then upper
     else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
   in
-  pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
+  let bounded = List.mem (key size, pos_expr num p) w.bounded in
+  if not bounded then pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
   let e = w.fresh "e" in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
   let w = bind_num (bind_num w n) e in
@@ -1300,10 +1304,36 @@ let literal_test w atom =
       Some (id, c, raw id c)
   | _ -> None
 
+(* The test [atom], then [yes] where it holds and [no] where it does not. An
+   atom that may overflow rejects. An atom on a variable that it fixes makes
+   the variable that constant under [yes]. *)
+let pp_branch w atom ~yes ~no =
+  let ov = ref false in
+  let literal = literal_test w atom in
+  let s = match literal with Some (_, _, Some s) -> s | _ -> expr w ov atom in
+  if !ov then begin
+    pf w "match %s with@\n| true -> (@\n" s;
+    yes ();
+    pf w ")@\n| false -> (@\n";
+    no ();
+    pf w ")@\n| exception %s.Overflow -> %s@\n" arith (w.m.fail Bounds)
+  end
+  else begin
+    pf w "if %s then (@\n" s;
+    (match literal with
+    | Some (id, c, _) ->
+        scoped w (fun () ->
+            w.deferred :=
+              (id, (lit w.m.num c, false)) :: List.remove_assoc id !(w.deferred);
+            yes ())
+    | _ -> yes ());
+    pf w ") else (@\n";
+    no ();
+    pf w ")@\n"
+  end
+
 (* [tree], each shared subtree written once in a local function after the
-   ones it reaches; [leaf] writes a leaf. An atom that may overflow rejects.
-   An atom on a field held by its bytes tests them, and the field is the
-   constant in the branch that holds. *)
+   ones it reaches; [leaf] writes a leaf. *)
 let pp_tree w ~j ~shared ~leaf tree =
   let rec emit w t =
     match t.node with
@@ -1314,32 +1344,7 @@ let pp_tree w ~j ~shared ~leaf tree =
           scoped w (fun () ->
               if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t)
         in
-        let ov = ref false in
-        let literal = literal_test w atom in
-        let s =
-          match literal with Some (_, _, Some s) -> s | _ -> expr w ov atom
-        in
-        if !ov then begin
-          pf w "match %s with@\n| true -> (@\n" s;
-          branch yes;
-          pf w ")@\n| false -> (@\n";
-          branch no;
-          pf w ")@\n| exception %s.Overflow -> %s@\n" arith (w.m.fail Bounds)
-        end
-        else begin
-          pf w "if %s then (@\n" s;
-          (match literal with
-          | Some (id, c, _) ->
-              scoped w (fun () ->
-                  w.deferred :=
-                    (id, (lit w.m.num c, false))
-                    :: List.remove_assoc id !(w.deferred);
-                  branch yes)
-          | _ -> branch yes);
-          pf w ") else (@\n";
-          branch no;
-          pf w ")@\n"
-        end
+        pp_branch w atom ~yes:(fun () -> branch yes) ~no:(fun () -> branch no)
   in
   let defined = Hashtbl.create 16 in
   let rec define t =
@@ -1409,6 +1414,35 @@ let define_join w ~j ~exported indexed gates k =
   scoped w (fun () -> k (bind_num inner e) { var = Some e; at = 0 });
   pf w "in@\n";
   fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
+
+(* Whether some path through [tree] runs no case. *)
+let rec runs_none t =
+  match t.node with
+  | Leaf None -> true
+  | Leaf (Some _) -> false
+  | Branch (_, a, b) -> runs_none a || runs_none b
+
+(* The bound of the span every case of [gates] starts with, at [p], checked
+   once before the dispatch when a case always runs: the branch on the tag
+   then waits on no length, and the cases skip the check. *)
+let hoist_bound w gates tree p =
+  let first (_, _, _, body) =
+    match body with
+    | (Region (size, _, _) | Span size) :: _ -> Some size
+    | _ -> None
+  in
+  match List.map first gates with
+  | Some size :: rest
+    when List.for_all (( = ) (Some (key size))) (List.map (Option.map key) rest)
+         && (not (runs_none tree))
+         && not (List.mem (key size, pos_expr w.m.num p) w.bounded) ->
+      let w', _, _ = span w size p in
+      {
+        w with
+        depth = w'.depth;
+        bounded = (key size, pos_expr w.m.num p) :: w.bounded;
+      }
+  | _ -> w
 
 let rec walk w nodes p k =
   match nodes with
@@ -1481,6 +1515,7 @@ and dispatch w gates p ~copy k =
   let tree =
     decide w.facts (List.map (fun (i, (c, _, _, _)) -> (i, c)) indexed)
   in
+  let w = hoist_bound w gates tree p in
   let shared, case_shared, leaves = reach tree in
   if over w (tree_depth shared tree) then
     let _, (present : output), _, _ = List.hd gates in
@@ -1552,6 +1587,7 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       words = [];
       raws = [];
       deferred = ref [];
+      bounded = [];
       base;
       limit;
       known;
