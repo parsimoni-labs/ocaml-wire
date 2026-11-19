@@ -232,6 +232,9 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
     let selected = selected plan fields in
     let s = { plan; selected; m = scan_mode plan ~num selected; ppf } in
     pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c);
+    (* The walk binds an offset, an end or a field as it goes, before it knows
+       whether a later check reads it. *)
+    Fmt.pf ppf "[@@@@@@warning \"-26\"]@\n@\n";
     pp_wide ppf ~codec ~wide:plan.wide;
     if num = Unboxed then
       Fmt.pf ppf

@@ -527,7 +527,14 @@ let lower w cond =
    the bitfields' views read. *)
 let load_words w ~o ~k ~size live =
   let m = w.m in
-  let words = words ~size live in
+  (* A 32-bit field bound as its [int32] is one load of its own. *)
+  let worded =
+    List.filter
+      (fun f ->
+        match f.store with Int { width = 32; _ } -> not m.raw32 | _ -> true)
+      live
+  in
+  let words = words ~size worded in
   List.iter
     (fun a ->
       let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
@@ -575,17 +582,18 @@ let field w ~o ~k ~size ~words ~bitwords f =
       pf w "%s@\n" (slot_assign m.num ~is_bool:false f.id v)
     else pf w "let %s = %s in@\n" f.id v
   in
-  (if is_live then
-     match f.store with
-     | Int { width = 32; signed; endian } when m.raw32 ->
-         pf w "let %s_raw = %s in@\n" f.id
-           (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian);
-         pf w "let %s = (Int32.to_int %s_raw%s) in@\n" f.id f.id
-           (if signed then "" else " land mask32")
-     | Bits { base; _ } ->
-         let bitword = List.assoc (f.offset, base) bitwords in
-         bind (value m ~bitword ~o ~words ~k:0 shifted)
-     | _ -> bind (value m ~size:(k + size) ~o ~words ~k:0 shifted));
+  (match f.store with
+  | Int { width = 32; signed; endian } when m.raw32 ->
+      pf w "let %s_raw = %s in@\n" f.id
+        (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian);
+      if is_live then
+        pf w "let %s = (Int32.to_int %s_raw%s) in@\n" f.id f.id
+          (if signed then "" else " land mask32")
+  | _ when not is_live -> ()
+  | Bits { base; _ } ->
+      let bitword = List.assoc (f.offset, base) bitwords in
+      bind (value m ~bitword ~o ~words ~k:0 shifted)
+  | _ -> bind (value m ~size:(k + size) ~o ~words ~k:0 shifted));
   List.iter (fun c -> check w (Check (f, c)) c.cond) f.checks;
   let w = refine w (List.map (fun c -> c.cond) f.checks) in
   match f.store with
