@@ -233,10 +233,10 @@ let test_words () =
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     let fields =
       [
-        (G_wide.get_a, G_wide.get_a_word, G_wide.a_of_word);
-        (G_wide.get_c, G_wide.get_c_word, G_wide.c_of_word);
-        (G_wide.get_e, G_wide.get_e_word, G_wide.e_of_word);
-        (G_wide.get_f, G_wide.get_f_word, G_wide.f_of_word);
+        (G_wide.Get.a, G_wide.Get.a_word, G_wide.a_of_word);
+        (G_wide.Get.c, G_wide.Get.c_word, G_wide.c_of_word);
+        (G_wide.Get.e, G_wide.Get.e_word, G_wide.e_of_word);
+        (G_wide.Get.f, G_wide.Get.f_word, G_wide.f_of_word);
       ]
     in
     List.iter
@@ -250,13 +250,13 @@ let test_words () =
     let v = G_wide.View.check buf off in
     if G_wide.View.ok v then begin
       let check name get of_view = Alcotest.(check int) name get of_view in
-      check "view a" (G_wide.get_a buf off)
+      check "view a" (G_wide.Get.a buf off)
         (G_wide.a_of_word (G_wide.view_a_word v));
-      check "view c" (G_wide.get_c buf off)
+      check "view c" (G_wide.Get.c buf off)
         (G_wide.c_of_word (G_wide.view_c_word v));
-      check "view e" (G_wide.get_e buf off)
+      check "view e" (G_wide.Get.e buf off)
         (G_wide.e_of_word (G_wide.view_e_word v));
-      check "view f" (G_wide.get_f buf off)
+      check "view f" (G_wide.Get.f buf off)
         (G_wide.f_of_word (G_wide.view_f_word v))
     end
   done
@@ -470,9 +470,15 @@ let test_clash () =
   Alcotest.(check bool)
     "end and end_ apart" true
     (contains ml "  end_ :" && contains ml "  end__ :");
-  refused "failed"
-    (Codec.v "C" Fun.id Codec.[ Field.v "failed" uint8 $ Fun.id ])
-    [ "\"failed\""; "get_failed" ];
+  (* A getter in [Get] would shadow a helper the getters after it call. *)
+  refused "cast"
+    (Codec.v "C" Fun.id Codec.[ Field.v "cast" uint8 $ Fun.id ])
+    [ "\"cast\""; "Get.cast" ];
+  (* Outside [Get], a field may take a name the module uses for itself. *)
+  let c = Codec.v "C" Fun.id Codec.[ Field.v "size" uint8 $ Fun.id ] in
+  Alcotest.(check bool)
+    "size getter" true
+    (contains (Wire_ocaml.ml ~codec:"c" c) "let[@inline] size buf off");
   (* An OxCaml keyword is escaped for the default target too, so its code
      compiles on an OxCaml compiler. *)
   let c = Codec.v "C" Fun.id Codec.[ Field.v "local_" uint8 $ Fun.id ] in
@@ -573,7 +579,7 @@ let test_mapped () =
   writes Schemas.mapped
     ~write:(fun (a, b, c, d, e) buf off -> G_mapped.write buf off a b c d e)
     (decoded Schemas.mapped 300);
-  getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.get_len
+  getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.Get.len
     ~show:string_of_int;
   let lookalike = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
   Wire.Private.Gen.check_map Schemas.mapped "Len" Schemas.u16be_int;
@@ -596,27 +602,27 @@ let int_getter codec field ~get ~to_int =
 let test_getters () =
   let u8 v = string_of_int (UInt8.to_int v)
   and u16 v = string_of_int (UInt16.to_int v) in
-  getter Schemas.ipv4 Schemas.ipv4_frag ~get:G_ipv4.get_frag ~show:u16;
-  getter Schemas.ipv4 Schemas.ipv4_proto ~get:G_ipv4.get_proto ~show:u8;
-  getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.get_src ~show:(fun v ->
+  getter Schemas.ipv4 Schemas.ipv4_frag ~get:G_ipv4.Get.frag ~show:u16;
+  getter Schemas.ipv4 Schemas.ipv4_proto ~get:G_ipv4.Get.proto ~show:u8;
+  getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.Get.src ~show:(fun v ->
       string_of_int (SInt32.to_int v));
-  getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.get_dst ~show:(fun v ->
+  getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.Get.dst ~show:(fun v ->
       string_of_int (UInt32.to_int v));
-  int_getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.get_src_int
+  int_getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.Get.src_int
     ~to_int:SInt32.to_int;
-  int_getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.get_dst_int
+  int_getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.Get.dst_int
     ~to_int:UInt32.to_int;
-  int_getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.get_f_int
+  int_getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f_int
     ~to_int:SInt32.to_int;
-  getter Schemas.checked Schemas.checked_proto ~get:G_checked.get_proto ~show:u8;
-  getter Schemas.mixed Schemas.mixed_b ~get:G_mixed.get_b ~show:(fun v ->
+  getter Schemas.checked Schemas.checked_proto ~get:G_checked.Get.proto ~show:u8;
+  getter Schemas.mixed Schemas.mixed_b ~get:G_mixed.Get.b ~show:(fun v ->
       string_of_int (SInt16.to_int v));
-  getter Schemas.mixed Schemas.mixed_e ~get:G_mixed.get_e ~show:(fun v ->
+  getter Schemas.mixed Schemas.mixed_e ~get:G_mixed.Get.e ~show:(fun v ->
       string_of_int (UInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.get_f ~show:(fun v ->
+  getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f ~show:(fun v ->
       string_of_int (SInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.get_h ~show:string_of_int;
-  getter Schemas.eth Schemas.eth_src ~get:G_eth.get_src ~show:Fun.id
+  getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.Get.h ~show:string_of_int;
+  getter Schemas.eth Schemas.eth_src ~get:G_eth.Get.src ~show:Fun.id
 
 (* [Valid.v] accepts a buffer exactly when [Codec.validate] does at offset 0,
    raising its error otherwise, and each [read_<field>] then reads what
@@ -831,16 +837,16 @@ let test_bigstring () =
     ~on_big:(fun b o -> enc Schemas.mixed (G_mixed.Bigstring.decode b o));
   same_on_bigstring Schemas.eth
     ~on_bytes:(fun b o ->
-      enc Schemas.eth (G_eth.decode b o) ^ G_eth.get_src b o)
+      enc Schemas.eth (G_eth.decode b o) ^ G_eth.Get.src b o)
     ~on_big:(fun b o ->
-      enc Schemas.eth (G_eth.Bigstring.decode b o) ^ G_eth.Bigstring.get_src b o);
+      enc Schemas.eth (G_eth.Bigstring.decode b o) ^ G_eth.Bigstring.Get.src b o);
   same_on_bigstring Schemas.ipv4
     ~on_bytes:(fun b o ->
-      string_of_int (G_ipv4.get_src_int b o + (G_ipv4.get_proto b o :> int)))
+      string_of_int (G_ipv4.Get.src_int b o + (G_ipv4.Get.proto b o :> int)))
     ~on_big:(fun b o ->
       string_of_int
-        (G_ipv4.Bigstring.get_src_int b o
-        + (G_ipv4.Bigstring.get_proto b o :> int)));
+        (G_ipv4.Bigstring.Get.src_int b o
+        + (G_ipv4.Bigstring.Get.proto b o :> int)));
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b _ ->
       let v = G_checked.Valid.v b in
@@ -852,9 +858,9 @@ let test_bigstring () =
         + G_checked.Bigstring.read_ihl v));
   same_on_bigstring Schemas.wide
     ~on_bytes:(fun b o ->
-      string_of_int (G_wide.c_of_word (G_wide.get_c_word b o)))
+      string_of_int (G_wide.c_of_word (G_wide.Get.c_word b o)))
     ~on_big:(fun b o ->
-      string_of_int (G_wide.c_of_word (G_wide.Bigstring.get_c_word b o)));
+      string_of_int (G_wide.c_of_word (G_wide.Bigstring.Get.c_word b o)));
   let size = Codec.min_wire_size Schemas.checked in
   for _ = 1 to 2000 do
     let w k = Random.State.int rand (k + 40) - 20 in

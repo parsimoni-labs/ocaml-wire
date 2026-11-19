@@ -5,8 +5,8 @@
     glue written with each one hands them over as a {!t}, every value shown as a
     string. *)
 
-(** Which of a field's getters: [get_<f>], [get_<f>_int] for a 32-bit field, or
-    [<f>_of_word] on [get_<f>_word] for a bitfield. *)
+(** Which of a field's getters: [Get.<f>], [Get.<f>_int] for a 32-bit field, or
+    [<f>_of_word] on [Get.<f>_word] for a bitfield. *)
 type view = Get | Get_int | Of_word
 
 type ops = {

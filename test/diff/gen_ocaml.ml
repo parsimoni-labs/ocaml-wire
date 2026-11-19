@@ -45,11 +45,11 @@ let pp_gets ~m ~buf ppf f =
     (fun v ->
       let read =
         match v with
-        | Diff_ocaml.Get -> Fmt.str "%s (%s.get_%s (%s) o)" f.show m f.ident buf
+        | Diff_ocaml.Get -> Fmt.str "%s (%s.Get.%s (%s) o)" f.show m f.ident buf
         | Get_int ->
-            Fmt.str "string_of_int (%s.get_%s_int (%s) o)" m f.ident buf
+            Fmt.str "string_of_int (%s.Get.%s_int (%s) o)" m f.ident buf
         | Of_word ->
-            Fmt.str "string_of_int (%s.%s_of_word (%s.get_%s_word (%s) o))" m
+            Fmt.str "string_of_int (%s.%s_of_word (%s.Get.%s_word (%s) o))" m
               f.ident m f.ident buf
       in
       Fmt.pf ppf "        (%S, %s, fun b o -> %s);@\n" f.name (view v) read)

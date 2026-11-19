@@ -241,11 +241,11 @@ let sampler_name_groups =
     [ "x"; "x_word" ];
     [ "x_word"; "x" ];
     (* Keywords of OCaml and OxCaml, escaped by both lanes, and a name whose
-       getter [get_failed] the OCaml lane's module defines for itself, refused
-       by that lane alone. *)
+       getter [Get.cast] would shadow a helper the OCaml lane's getters call,
+       refused by that lane alone. *)
     [ "done" ];
     [ "method"; "local_"; "exclave_"; "stack_" ];
-    [ "failed" ];
+    [ "cast" ];
     (* Keywords of 3D, F* and C, escaped apart: accepted by both lanes. *)
     [ "end"; "typeof"; "int"; "string" ];
     (* Two names one case fold spells alike: refused by both lanes (the plug's
