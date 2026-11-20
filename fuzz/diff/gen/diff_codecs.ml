@@ -287,8 +287,28 @@ let packet_bounds =
   @ pair "UDP payload after IPv4 options" ~tcp:false ~ihl:6 ~words:18 ~total:42
       ~len:128 ~short:total_minus_one ()
 
+(* Fragments that differ only in the IPv4 version and header length byte, so
+   that byte alone decides whether the codec accepts them. *)
+let packet_versions =
+  List.map
+    (fun (byte, accepted) ->
+      let b = edge ~tcp:true ~ihl:15 ~words:5 ~fragment:0x2000 ~total:60 74 in
+      Bytes.set_uint8 b 14 byte;
+      (Fmt.str "IPv4 version and header length 0x%02x" byte, b, accepted))
+    [
+      (0x3f, false);
+      (0x44, false);
+      (0x45, true);
+      (0x4f, true);
+      (0x50, false);
+      (0x35, false);
+      (0x55, false);
+    ]
+
 let packet_corpus () =
-  let cases = ref (List.map (fun (_, b, _) -> b) packet_bounds) in
+  let cases =
+    ref (List.map (fun (_, b, _) -> b) (packet_bounds @ packet_versions))
+  in
   List.iter
     (fun tcp ->
       List.iter

@@ -1519,9 +1519,9 @@ let test_scanners () =
         ((List.assoc c.label Ocaml_index.scanners) ()))
     Diff_codecs.scan_cases
 
-(* At the edge of each bound of the packet stack, every scanner accepts and
-   rejects the frames the codec does, alone and in a frame fold. *)
-let test_packet_bounds () =
+(* The codec and every scanner, alone and in a frame fold, accept the frames
+   of [cases] marked accepted and reject the others. *)
+let check_packet cases =
   let label = "scan_packet" in
   let codec =
     match
@@ -1553,7 +1553,15 @@ let test_packet_bounds () =
                 (List.map Option.is_some frames))
             s.scan_batch)
         backends)
-    Diff_codecs.packet_bounds
+    cases
+
+(* A frame that exactly fits a bound is accepted, and one a byte over is
+   rejected. *)
+let test_packet_bounds () = check_packet Diff_codecs.packet_bounds
+
+(* The IPv4 version and header length byte is accepted exactly in
+   [0x45, 0x4f]. *)
+let test_packet_versions () = check_packet Diff_codecs.packet_versions
 
 (* A backend sizes its ports from the plan's outputs: a signed field keeps its
    width on the wire and says it is signed, so a negative value survives. *)
@@ -1629,6 +1637,7 @@ let suite =
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
       Alcotest.test_case "structured scanners" `Quick test_scanners;
       Alcotest.test_case "packet bounds" `Quick test_packet_bounds;
+      Alcotest.test_case "packet versions" `Quick test_packet_versions;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;
