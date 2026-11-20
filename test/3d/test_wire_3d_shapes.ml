@@ -325,7 +325,8 @@ let test_extern_names_wrapped () =
       (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
   in
   let setters = Wire.Everparse.plug_setters schema in
-  let symbol i = Fmt.str "%sSetter%d" base i in
+  (* EverParse changes the case of a setter's name, nothing else. *)
+  let symbol i = String.lowercase_ascii (fst (List.nth setters i)) in
   let wrapped =
     String.concat ""
       (List.mapi
@@ -367,6 +368,49 @@ let test_extern_names_wrapped () =
       Alcotest.(check bool)
         "the failure names the header it could not read" true
         (contains msg (base ^ "_ExternalAPI.h"))
+
+(* Since v2026.10, EverParse does not declare the extern setters in the order
+   the schema references them, and it CamelCases a snake-case schema name in
+   them. Each setter of the plug takes the declared name equal to its own up to
+   case and underscores, and with it its own value type. *)
+let test_extern_names_by_name () =
+  let schema =
+    Wire.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ "order_by_name" [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Everparse.plug_setters schema in
+  Alcotest.(check int) "two setters to pair" 2 (List.length setters);
+  let declared name =
+    String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
+  in
+  let header =
+    String.concat ""
+      (List.rev_map
+         (fun (name, c_type) ->
+           Fmt.str "extern void %s(WIRECTX *x0, uint32_t x1, %s x2);\n"
+             (declared name) c_type)
+         setters)
+  in
+  let dir = Filename.temp_dir "wire_3d_order" "" in
+  let impl =
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        Out_channel.with_open_bin
+          (Filename.concat dir "Order_by_name_ExternalAPI.h") (fun oc ->
+            Out_channel.output_string oc header);
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir "Order_by_name_Fields.c"))
+  in
+  List.iter
+    (fun (name, c_type) ->
+      Alcotest.(check bool)
+        (Fmt.str "%s takes %s" name c_type)
+        true
+        (contains impl
+           (Fmt.str "void %s(WIRECTX *ctx, uint32_t idx, %s v)" (declared name)
+              c_type)))
+    setters
 
 (* The default plug of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
@@ -489,6 +533,8 @@ let suite =
     [
       Alcotest.test_case "extern names across a wrapped declaration" `Quick
         test_extern_names_wrapped;
+      Alcotest.test_case "extern names paired by name, not order" `Quick
+        test_extern_names_by_name;
       Alcotest.test_case "projection: var inlines into uses" `Quick
         test_var_inlines;
       Alcotest.test_case "projection: var scoping inside if" `Quick

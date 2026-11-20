@@ -470,26 +470,40 @@ let emit_setter_case ppf logical f =
         Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
+(* EverParse renames some setter symbols when emitting [.c] (for example,
+   uppercase runs after a digit are lowercased, and a snake-case schema name is
+   CamelCased, as [everparse_name] does). Read the actual symbol names from the
+   just-generated [_ExternalAPI.h] rather than re-deriving them. EverParse
+   changes only their case and underscores, and since v2026.10 it does not keep
+   the declaration order, so each setter takes the name equal to its own up to
+   case and underscores; the suffixes that tell one schema's setters apart have
+   neither. A header this cannot read yields a setter with no name, and leaving
+   it out would emit a [_Fields.c] missing setters the validator calls; say
+   which file came up short instead. *)
+let setter_key name =
+  String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
+
+let physical_setter_names ~outdir s setters =
+  let declared = read_extern_names ~outdir s in
+  List.map
+    (fun (logical, _) ->
+      let key = setter_key logical in
+      match List.find_opt (fun p -> setter_key p = key) declared with
+      | Some p -> p
+      | None ->
+          Fmt.invalid_arg
+            "Wire_3d: codec %S declares the extern setter %s but %s does not; \
+             the generated header is not in a layout this understands"
+            s.name logical
+            (extern_api_path ~outdir s))
+    setters
+
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
   let setters = Wire.Everparse.plug_setters s in
   let base = file_base s in
   let ident = c_ident s in
-  (* EverParse renames some setter symbols when emitting [.c] (for example,
-     uppercase runs after a digit are lowercased). Read the actual symbol
-     names from the just-generated [_ExternalAPI.h] rather than re-deriving
-     them. Order matches the declaration order of the extern functions,
-     which matches [plug_setters]. A header this cannot read yields too few
-     names, and pairing them off silently would emit a [_Fields.c] missing
-     setters the validator calls; say which file came up short instead. *)
-  let physical_names = read_extern_names ~outdir s in
-  if List.compare_lengths setters physical_names <> 0 then
-    Fmt.invalid_arg
-      "Wire_3d: codec %S declares %d extern setter(s) but %d were read from \
-       %s; the generated header is not in a layout this understands"
-      s.name (List.length setters)
-      (List.length physical_names)
-      (extern_api_path ~outdir s);
+  let physical_names = physical_setter_names ~outdir s setters in
   let path = Filename.concat outdir (base ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
