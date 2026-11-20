@@ -410,19 +410,27 @@ let dynamic_subcodec_before_fixed =
         (Field.v "tail" all_zeros $ fun (_, _, tail) -> tail);
       ]
 
+(* The record holds at least 5 bytes, the gate and the value. A shorter buffer
+   fails the frame check at offset 0. A 5-byte one passes it and fails at the
+   value, which the payload has moved. *)
 let test_decode_dynamic_field_past_end () =
-  let buf = Bytes.of_string "\x01\x00\x00\x00" in
-  let decoded =
+  let decoding buf =
     match Codec.decode dynamic_subcodec_before_fixed buf 0 with
     | Ok _ -> Ok ()
     | Error e -> Error e
     | exception Invalid_argument m ->
         Alcotest.failf "decode crashed instead of failing cleanly: %s" m
   in
-  check_located_eof "decode" ~at:3 ~expected:4 ~got:1 decoded;
-  check_located_eof "validate" ~at:3 ~expected:4 ~got:1
-    (validating "validate" (fun () ->
-         Codec.validate_exn dynamic_subcodec_before_fixed buf 0))
+  let validate buf =
+    validating "validate" (fun () ->
+        Codec.validate_exn dynamic_subcodec_before_fixed buf 0)
+  in
+  let short = Bytes.of_string "\x01\x00\x00\x00" in
+  check_located_eof "decode, short" ~at:0 ~expected:5 ~got:4 (decoding short);
+  check_located_eof "validate, short" ~at:0 ~expected:5 ~got:4 (validate short);
+  let buf = Bytes.of_string "\x01\x00\x00\x00\x00" in
+  check_located_eof "decode" ~at:3 ~expected:4 ~got:2 (decoding buf);
+  check_located_eof "validate" ~at:3 ~expected:4 ~got:2 (validate buf)
 
 (* [Codec.validate_struct] runs the same populate-driven field pass as
    [Codec.validate_exn] and needs the same per-field bounds check. [Data] is sized

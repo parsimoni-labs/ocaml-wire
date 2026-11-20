@@ -283,11 +283,12 @@ let compile_codec_variable : type a r.
     codec_decode:(runtime -> Input_end.t -> bytes -> int -> a) ->
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
- fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_size_of
-     ~nested_readers ->
+ fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_min_size
+     ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
     match ctx.next_off with
     | Static n ->
@@ -323,7 +324,8 @@ let compile_codec_variable : type a r.
         codec_encode (get v) runtime buf write_off);
     extra_writers = [];
     field_access;
-    size_delta = 0;
+    (* The sub-codec always holds at least its own [min_size]. *)
+    size_delta = codec_min_size;
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
@@ -344,12 +346,13 @@ let compile_codec : type a r.
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     codec_field_readers:
       (string * (runtime -> Input_end.t -> bytes -> int -> int)) list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
-     ~codec_size_of ~codec_field_readers ->
+     ~codec_min_size ~codec_size_of ~codec_field_readers ->
   let nested_readers =
     build_nested_readers ctx
       (List.map (fun (n, r) -> (Some n, r)) codec_field_readers)
@@ -376,7 +379,7 @@ let compile_codec : type a r.
       }
   | None ->
       compile_codec_variable ctx ~get ~codec_decode ~codec_validate
-        ~codec_encode ~codec_size_of ~nested_readers
+        ~codec_encode ~codec_min_size ~codec_size_of ~nested_readers
 
 (* Variable-size sub-codec: dispatch on whether we sit at a static or a
    dynamic running offset. Mirrors [compile_var_bytes] -- both flavours
@@ -1570,12 +1573,13 @@ let rec compile_field : type a r.
         codec_validate;
         codec_encode;
         codec_fixed_size;
+        codec_min_size;
         codec_size_of;
         codec_field_readers;
         _;
       } ->
       compile_codec ctx fld ~codec_decode ~codec_validate ~codec_encode
-        ~codec_fixed_size ~codec_size_of ~codec_field_readers
+        ~codec_fixed_size ~codec_min_size ~codec_size_of ~codec_field_readers
   | Optional { present; inner } -> compile_optional ctx fld present inner
   | Optional_or { present; inner; default } ->
       compile_optional_or ctx fld present inner default
