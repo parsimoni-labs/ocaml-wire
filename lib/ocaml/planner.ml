@@ -479,9 +479,24 @@ and element : type a.
     [ Prefix ([ f ], next) ]
   else composite st path ~name env t
 
-(* Adjacent prefixes are one: one bound check covers both. *)
+(* {2 Extents}
+
+   An extent is a constant offset or size of the codec. Extents are added
+   with saturating arithmetic (Rust's [saturating_add]), capped at [beyond],
+   one past the longest [bytes]. Their sums never wrap, and a bound check
+   against [beyond] always fails. *)
+
+let beyond = Sys.max_string_length + 1
+
+let extent a b =
+  if a < 0 || b < 0 then invalid_arg "Planner.extent: a negative extent"
+  else if a >= beyond || b >= beyond || a > beyond - b then beyond
+  else a + b
+
+(* Adjacent prefixes are one, so one bound check covers both. They stay
+   separate when their sum would reach [beyond]. *)
 let rec fuse = function
-  | Prefix (a, n) :: Prefix (b, m) :: rest ->
+  | Prefix (a, n) :: Prefix (b, m) :: rest when extent n m < beyond ->
       let b = List.map (fun f -> { f with offset = f.offset + n }) b in
       fuse (Prefix (a @ b, n + m) :: rest)
   | Gate (c, p, o, body) :: rest -> Gate (c, p, o, fuse body) :: fuse rest

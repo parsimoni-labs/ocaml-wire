@@ -88,7 +88,10 @@ The invariants above hold for it as follows.
   so a region, which opens a new window, checks its own spans.
   Positions are relative to the window, so adding the window's offset to
   reach a byte cannot overflow, and a short frame in `fold_frames` cannot
-  borrow bytes from the next.
+  borrow bytes from the next. The generator adds the codec's constant
+  offsets and sizes with saturating arithmetic, capped at
+  `Sys.max_string_length + 1`. No buffer is that long, so a prefix that ends
+  there fails its bound check, and no sum wraps.
 - **Arithmetic agrees with the codec.** An addition, subtraction or product
   whose operands' ranges keep it inside the native int is written as plain
   arithmetic; any other is checked, and an overflow rejects the record, or

@@ -482,10 +482,22 @@ let in_word num f =
 
 let covers a f = a <= f.offset && f.offset + width_bytes f.store <= a + 8
 
+(* One 64-bit load serves every field it holds, as the load combining of Go's
+   [memcombine] pass turns adjacent narrow loads into a wide one. A word
+   starts at a multiple of 8, or ends with the prefix. Candidates are computed
+   from the fields, so the cost does not grow with [size]. *)
 let words num ~size fields =
   if size < 8 then []
   else
-    List.init ((size + 7) / 8) (fun i -> min (8 * i) (size - 8))
+    let last = size - 8 in
+    List.concat_map
+      (fun f ->
+        if not (in_word num f) then []
+        else
+          List.filter
+            (fun a -> covers a f)
+            [ min (f.offset / 8 * 8) last; last ])
+      fields
     |> List.sort_uniq Int.compare
     |> List.filter (fun a ->
         let held =
@@ -816,7 +828,8 @@ let refine w conditions =
 
 let nonnegative w e = nonnegative_in w.ranges w.facts e
 
-(* The window has [need] bytes from [p]. *)
+(* The window has [need] bytes from [p]. An end at [Planner.beyond] always
+   fails the check, so the code after it is unreachable and checks nothing. *)
 let bound w p need =
   if w.known >= need then w
   else begin
@@ -824,10 +837,12 @@ let bound w p need =
     let room =
       match p.var with None -> w.limit | Some v -> binop num "-" w.limit v
     in
+    let ends = extent p.at need in
     pf w "if %s then %s else@\n"
-      (relation num "<" room (lit num (p.at + need)))
+      (relation num "<" room (lit num ends))
       (w.m.fail Bounds);
-    { w with known = need; depth = w.depth + 1 }
+    let known = if ends >= beyond then beyond else need in
+    { w with known; depth = w.depth + 1 }
   end
 
 (* The offset in the buffer of the prefix at [p], as a variable and a
@@ -1050,7 +1065,14 @@ let prefix w fields size p ~need k =
   let live = List.filter (fun f -> Sset.mem f.id w.m.live) fields in
   let w, words, bitwords = load_words w ~o ~k:at ~size live in
   let rec go w = function
-    | [] -> k { w with known = w.known - size } { p with at = p.at + size }
+    | [] ->
+        k
+          {
+            w with
+            known =
+              (if w.known >= beyond then beyond else max 0 (w.known - size));
+          }
+          { p with at = extent p.at size }
     | f :: rest as fields ->
         let next w = go (field w ~o ~k:at ~size ~words ~bitwords f) rest in
         if over w (List.length f.checks) then
@@ -1093,7 +1115,7 @@ let span w size p =
 
 (* The bytes a run of prefixes and tests from here needs, checked at once. *)
 let rec ahead = function
-  | Prefix (_, n) :: rest -> n + ahead rest
+  | Prefix (_, n) :: rest -> extent n (ahead rest)
   | Test _ :: rest -> ahead rest
   | _ -> 0
 
