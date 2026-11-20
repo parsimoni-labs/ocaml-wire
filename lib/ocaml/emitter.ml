@@ -129,12 +129,11 @@ type w = {
       (* A big-endian field as the variable holding its bytes read
          little-endian, and its width in bits. *)
   deferred : (string * (string * bool)) list ref;
-  bounded : (string * string) list;
-  (* The spans, by size and position, whose bound a check before a
-         dispatch established. *)
-  (* A field bound where code first reads it, its value and whether that
+      (* A field bound where code first reads it, its value and whether that
          loads from the buffer: a test of its raw bytes reads it in neither
          branch, and the branch where it holds binds the constant. *)
+  bounded : (string * string * string * string) list;
+      (* The spans already checked before a dispatch, as [span_bound] keys. *)
   base : string; (* The offset in the buffer of the current window. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
@@ -1060,6 +1059,11 @@ let prefix w fields size p ~need k =
   in
   go w fields
 
+(* The key a checked span is remembered under. It names the window as well as
+   the size and position, because positions restart at 0 in a region: a
+   remembered bound is valid only in the window it was checked against. *)
+let span_bound w size p = (w.base, w.limit, key size, pos_expr w.m.num p)
+
 (* A span of [size] bytes at [p]: its size, bound to a variable, and where it
    ends. *)
 let span w size p =
@@ -1080,8 +1084,8 @@ let span w size p =
     if (not !ov) && nonnegative w size then upper
     else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
   in
-  let bounded = List.mem (key size, pos_expr num p) w.bounded in
-  if not bounded then pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
+  if not (List.mem (span_bound w size p) w.bounded) then
+    pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
   let e = w.fresh "e" in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
   let w = bind_num (bind_num w n) e in
@@ -1435,13 +1439,9 @@ let hoist_bound w gates tree p =
   | Some size :: rest
     when List.for_all (( = ) (Some (key size))) (List.map (Option.map key) rest)
          && (not (runs_none tree))
-         && not (List.mem (key size, pos_expr w.m.num p) w.bounded) ->
+         && not (List.mem (span_bound w size p) w.bounded) ->
       let w', _, _ = span w size p in
-      {
-        w with
-        depth = w'.depth;
-        bounded = (key size, pos_expr w.m.num p) :: w.bounded;
-      }
+      { w with depth = w'.depth; bounded = span_bound w size p :: w.bounded }
   | _ -> w
 
 let rec walk w nodes p k =

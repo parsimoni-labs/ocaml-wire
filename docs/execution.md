@@ -83,6 +83,9 @@ The invariants above hold for it as follows.
   window a region gives its contents, whose size is itself checked to lie in
   the enclosing one. A span's size is checked against the window too, and
   checked not to be negative unless a range or a passed check proves it.
+  When every case of a dispatch starts with the same span, its size is
+  checked once before the dispatch. The check is remembered with its window,
+  so a region, which opens a new window, checks its own spans.
   Positions are relative to the window, so adding the window's offset to
   reach a byte cannot overflow, and a short frame in `fold_frames` cannot
   borrow bytes from the next.
