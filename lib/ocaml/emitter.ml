@@ -172,6 +172,9 @@ type w = {
       (* The outputs known here to be present, or absent. *)
   pinned : bool;
   section : string; (* The case being written, which names its functions. *)
+  held : int list;
+      (* With [Boxed], the words already loaded at constant offsets of the
+         window, by offset. Later prefixes at constant offsets read them. *)
 }
 
 let is_ident_char = function
@@ -1026,10 +1029,63 @@ let bind_bitword w ((_, base), v) =
     }
   else w
 
+(* The words a prefix loads with [Boxed], where a word costs one load and a
+   field a shift and a mask. A word is loaded when it holds two or more
+   fields that no word of [held] holds, counting the fields of the later
+   prefixes, [later]. It starts at the first such field, moved back to stay
+   between [lo] and [hi], the bytes known to be in the window. The fields are
+   sorted by offset and scanned once, so the cost is linear in their number. *)
+let shared_words ~held ~lo ~hi ~later live =
+  let worded = List.filter (in_word Boxed) in
+  let by_offset = List.sort (fun a b -> Int.compare a.offset b.offset) in
+  let live = by_offset (worded live) in
+  let candidates = Array.of_list (by_offset (live @ worded later)) in
+  let starts = Hashtbl.create 16 in
+  List.iter (fun a -> Hashtbl.replace starts a ()) held;
+  let unheld g =
+    let last = g.offset and first = g.offset + width_bytes g.store - 8 in
+    let rec free a =
+      a > last || ((not (Hashtbl.mem starts a)) && free (a + 1))
+    in
+    free (max 0 first)
+  in
+  let next = ref 0 in
+  List.fold_left
+    (fun chosen f ->
+      let a = max lo (min f.offset (hi - 8)) in
+      while !next < Array.length candidates && candidates.(!next).offset < a do
+        incr next
+      done;
+      let rec served i acc =
+        if i >= Array.length candidates || candidates.(i).offset >= a + 8 then
+          acc
+        else
+          let g = candidates.(i) in
+          served (i + 1)
+            (if covers a g && unheld g && not (List.mem g.offset acc) then
+               g.offset :: acc
+             else acc)
+      in
+      if
+        unheld f
+        && a + 8 <= hi
+        && covers a f
+        && List.compare_length_with (served !next []) 1 > 0
+      then begin
+        Hashtbl.replace starts a ();
+        a :: chosen
+      end
+      else chosen)
+    [] live
+  |> List.rev
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
-   the bitfields' views read. *)
-let load_words w ~o ~k ~size live =
+   the bitfields' views read. With [Boxed], the words are [shared_words]
+   between [lo] and [hi]. A prefix at a constant offset of the window
+   ([constant]) reads the words loaded before it and keeps its own for the
+   prefixes after it. *)
+let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
   let m = w.m in
   (* A 32-bit field bound as its [int32] is one load of its own. *)
   let worded =
@@ -1038,17 +1094,25 @@ let load_words w ~o ~k ~size live =
         match f.store with Int { width = 32; _ } -> not m.raw32 | _ -> true)
       live
   in
-  let words = words m.num ~size worded in
+  let held = if constant then w.held else [] in
+  let fresh =
+    match m.num with
+    | Boxed ->
+        let at f = { f with offset = extent k f.offset } in
+        shared_words ~held ~lo ~hi ~later (List.map at worded)
+    | Tagged | Unboxed -> List.map (fun a -> k + a) (words m.num ~size worded)
+  in
   let w =
     List.fold_left
       (fun w a ->
-        let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
-        let name = Fmt.str "w%d" (k + a) in
+        let v = load m ~o ~k:a ~bytes:8 ~endian:T.Big in
+        let name = Fmt.str "w%d" a in
         pf w "let %s = %s in@\n" name v;
         bind_num w name)
-      w words
+      w fresh
   in
-  let words = List.map (fun a -> k + a) words in
+  let words = held @ fresh in
+  let w = if constant && m.num = Boxed then { w with held = words } else w in
   let bitwords =
     List.filter_map
       (fun f ->
@@ -1154,14 +1218,50 @@ let word_range w bitwords f g =
     Option.bind (Planner.word_range f g) (fun (at, lo, hi) ->
         Option.map (fun word -> (word, lo, hi)) (List.assoc_opt at bitwords))
 
-(* A prefix, then [k] with the state and position after it. The fields after
-   one that would make the function too deep or too long go in a function of
-   their own. *)
-let prefix w fields size p ~need k =
+(* The live fields that start before [until] in the prefixes of [nodes], at
+   constant offsets from [at]. The prefix that starts each optional field of
+   a following run counts too. *)
+let rec following live ~until at nodes =
+  if at >= until then []
+  else
+    match nodes with
+    | Prefix (fields, n) :: rest ->
+        List.filter_map
+          (fun f ->
+            let offset = extent at f.offset in
+            if Sset.mem f.id live && offset < until then Some { f with offset }
+            else None)
+          fields
+        @ following live ~until (extent at n) rest
+    | Test _ :: rest -> following live ~until at rest
+    | Gate _ :: _ as gates -> starts live ~until at gates
+    | (Span _ | Region _) :: _ | [] -> []
+
+and starts live ~until at = function
+  | Gate (_, _, _, body) :: rest ->
+      following live ~until at body @ starts live ~until at rest
+  | _ -> []
+
+(* A prefix, then [k] with the state and position after it, [after] the
+   nodes that follow it. The fields after one that would make the function
+   too deep or too long go in a function of their own. *)
+let prefix w fields size p ~need ~after k =
   let w = bound w p need in
   let w, o, at = address w p in
   let live = List.filter (fun f -> Sset.mem f.id w.m.live) fields in
-  let w, words, bitwords = load_words w ~o ~k:at ~size live in
+  (* The bytes known to be in the window start at 0 for a prefix at a
+     constant offset, and at the prefix otherwise. *)
+  let constant = Option.is_none p.var in
+  let lo = if constant then 0 else at and hi = extent at w.known in
+  (* A word that holds a field of this prefix ends within 8 bytes of it. *)
+  let ends = extent at size in
+  let later =
+    if constant then following w.m.live ~until:(extent ends 8) ends after
+    else []
+  in
+  let w, words, bitwords =
+    load_words w ~o ~k:at ~size ~constant ~lo ~hi ~later live
+  in
   let field ?checked w f = field ?checked w ~o ~k:at ~size ~words ~bitwords f in
   let rec go w = function
     | [] ->
@@ -1723,7 +1823,8 @@ and step w nodes p k =
   match nodes with
   | [] -> k w p
   | Prefix (fields, size) :: rest ->
-      prefix w fields size p ~need:(ahead nodes) (fun w p -> walk w rest p k)
+      prefix w fields size p ~need:(ahead nodes) ~after:rest (fun w p ->
+          walk w rest p k)
   | Span size :: rest ->
       let w, _, p = span ~implied:(checks_next w rest) w size p in
       walk w rest p k
@@ -1743,6 +1844,7 @@ and step w nodes p k =
           limit = n;
           known = 0;
           tail = w.tail && copyable rest;
+          held = [];
         }
         body { var = None; at = 0 }
         (fun w'' cp ->
@@ -1765,6 +1867,7 @@ and step w nodes p k =
               limit = w.limit;
               known = 0;
               tail = w.tail;
+              held = w.held;
             }
             rest stop k)
   | Gate _ :: _ ->
@@ -1870,6 +1973,7 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       settled = [];
       pinned = false;
       section = "";
+      held = [];
     }
   in
   let p = { var = None; at = 0 } in

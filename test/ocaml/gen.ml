@@ -76,9 +76,9 @@ let () =
   s "s_sized.ml" "sized" Schemas.sized;
   s "s_overflow.ml" "overflow" Schemas.overflow;
   s "s_skipped.ml" "skipped" Schemas.skipped;
-  s "s_deep.ml" "deep 32 (Sys.max_string_length - 1)"
+  s "s_deep.ml" ~step:true "deep 32 (Sys.max_string_length - 1)"
     (Schemas.deep 32 (Sys.max_string_length - 1));
-  s "s_huge.ml" "huge" Schemas.huge;
+  s "s_huge.ml" ~step:true "huge" Schemas.huge;
   s "s_bigspan.ml" "bigspan" Schemas.bigspan;
   s "s_nested.ml" ~step:true "nested 12" (Schemas.nested 12);
   g "g_mapped.ml" "mapped" Schemas.mapped

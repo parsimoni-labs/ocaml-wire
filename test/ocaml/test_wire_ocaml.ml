@@ -1222,9 +1222,14 @@ let test_huge_prefix () =
     scan_ops "S_huge" [ "flag"; "tail" ] (fun b o n ->
         let v = S_huge.decode b o n in
         if v.ok then Some [ ("flag", v.flag); ("tail", v.tail) ] else None)
+  and step =
+    scan_ops "S_huge step" [] (fun b o n ->
+        if Int.compare (S_huge.fold_step b o n ~init:0) 0 >= 0 then Some []
+        else None)
   in
   List.iter
-    (fun s -> Diff_ocaml.check_scan huge_reference [ huge ] (Bytes.of_string s))
+    (fun s ->
+      Diff_ocaml.check_scan huge_reference [ huge; step ] (Bytes.of_string s))
     [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
 
 let deep_reference =
@@ -1256,9 +1261,14 @@ let test_scan_deep () =
     scan_ops "S_deep" [ "tail" ] (fun b o n ->
         let v = S_deep.decode b o n in
         if v.ok then Some [ ("tail", v.tail) ] else None)
+  and step =
+    scan_ops "S_deep step" [] (fun b o n ->
+        if Int.compare (S_deep.fold_step b o n ~init:0) 0 >= 0 then Some []
+        else None)
   in
   List.iter
-    (fun s -> Diff_ocaml.check_scan deep_reference [ deep ] (Bytes.of_string s))
+    (fun s ->
+      Diff_ocaml.check_scan deep_reference [ deep; step ] (Bytes.of_string s))
     [ ""; "\000"; "\000\042"; "\001\042\042"; String.make 64 '\000' ]
 
 let bigspan_reference =
@@ -1511,6 +1521,77 @@ let test_portable () =
     "u16 scanner" true
     (guarded (Wire_ocaml.scanner ~codec:"c" (one uint16be)))
 
+(* An Ethernet, IPv4 and TCP header of [Packet_stack.codec] in 64 bytes,
+   which [edit] changes. *)
+let stack_frame edit =
+  let b = Bytes.make 64 '\000' in
+  Bytes.set_uint16_be b 12 0x0800;
+  Bytes.set_uint8 b 14 0x45;
+  Bytes.set_uint16_be b 16 50;
+  Bytes.set_uint8 b 22 64;
+  Bytes.set_uint8 b 23 6;
+  Bytes.set_int32_be b 26 0xc0a80001l;
+  Bytes.set_int32_be b 30 0xc0a80002l;
+  Bytes.set_uint16_be b 34 443;
+  Bytes.set_uint16_be b 36 51000;
+  Bytes.set_uint8 b 46 0x50;
+  edit b;
+  b
+
+(* On OCaml the step functions read the Ethernet type from the word that also
+   holds the start of the IPv4 header, loaded before the dispatch on the type.
+   They give the codec's answers on records each check rejects and on frames
+   cut around the bounds that word straddles. *)
+let test_shared_words () =
+  let src = Wire_ocaml.scanner ~step:"Step" ~codec:"c" Packet_stack.codec in
+  Alcotest.(check bool)
+    "the Ethernet type from the word at 12" true
+    (contains src "(Int64.shift_right_logical w12 48)");
+  let case =
+    List.find
+      (fun (Diff_codecs.Scan c) -> c.label = "scan_packet")
+      Diff_codecs.scan_cases
+  in
+  let reference = Diff_ocaml.of_scan_case case
+  and backends = (List.assoc "scan_packet" Ocaml_index.scanners) () in
+  let records =
+    [
+      ("TCP", true, ignore);
+      ("not IPv4", true, fun b -> Bytes.set_uint16_be b 12 0x86dd);
+      ("version", false, fun b -> Bytes.set_uint8 b 14 0x65);
+      ("header length", false, fun b -> Bytes.set_uint8 b 14 0x44);
+      ("total length", false, fun b -> Bytes.set_uint16_be b 16 16);
+      ("total past the frame", false, fun b -> Bytes.set_uint16_be b 16 51);
+      ("fragment", true, fun b -> Bytes.set_uint16_be b 20 1);
+      ( "UDP length",
+        false,
+        fun b ->
+          Bytes.set_uint8 b 23 17;
+          Bytes.set_uint16_be b 38 7 );
+      ("data offset", false, fun b -> Bytes.set_uint8 b 46 0x40);
+    ]
+  in
+  let frames =
+    List.map
+      (fun (what, ok, edit) ->
+        let b = stack_frame edit in
+        Alcotest.(check bool)
+          (what ^ " accepted") ok
+          (Result.is_ok (Codec.decode Packet_stack.codec b 0));
+        b)
+      records
+  in
+  Diff_ocaml.check_scan ~strides:[ 64 ] ~expand:false reference backends
+    (Bytes.concat Bytes.empty frames);
+  let ip = stack_frame ignore
+  and other = stack_frame (fun b -> Bytes.set_uint16_be b 12 0x86dd) in
+  List.iter
+    (fun n ->
+      let cut b = Bytes.sub b 0 n in
+      Diff_ocaml.check_scan ~strides:[ n ] ~expand:false reference backends
+        (Bytes.concat Bytes.empty [ cut ip; cut other; cut ip ]))
+    [ 13; 14; 19; 20; 21; 33; 34; 35 ]
+
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
@@ -1640,6 +1721,8 @@ let suite =
       Alcotest.test_case "structured scanners" `Quick test_scanners;
       Alcotest.test_case "packet bounds" `Quick test_packet_bounds;
       Alcotest.test_case "packet versions" `Quick test_packet_versions;
+      Alcotest.test_case "a word shared across prefixes" `Quick
+        test_shared_words;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

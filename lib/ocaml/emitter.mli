@@ -125,6 +125,7 @@ type w = {
   settled : (string * bool) list;
   pinned : bool;
   section : string;
+  held : int list;
 }
 (** The state of a walk: its mode and output, the ranges and facts known at its
     position, the bitfield words it holds, the spans whose bound is checked and
@@ -134,7 +135,8 @@ type w = {
     position in it, the variables it binds with the type a function cut out of
     it gives each, the outputs known present or absent, whether the code here
     jumps to a join outside it, and the case being written, which names its
-    functions. *)
+    functions; and, as [int64], the 64-bit words loaded at constant offsets of
+    the window, by offset. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)
