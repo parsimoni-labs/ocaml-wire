@@ -25,5 +25,5 @@ let refused () : Lemma (not (wf (start lim).sc plan)) = assert_norm (not (wf (st
 (* Every plan [wf] accepts is read inside its window. *)
 let scanner_safe (o:opts) (len:nat) (rd:reader) (en:env) (l:list node)
   : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
-          (ensures ~ (Fault? (exec o len lim rd (start lim) en l)))
+          (ensures ~ (Fault? (exec o rd (top len lim) (start lim) en l)))
   = scanner_correct o len lim rd en l

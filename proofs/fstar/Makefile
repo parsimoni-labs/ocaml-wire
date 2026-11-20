@@ -28,7 +28,7 @@ DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 # the module its "# fails:" line names then fails to verify.
 MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   frames-quad-overlap frames-quad-guard word-lor-overlap word-mask-dropped \
-  prefix-run-unbounded
+  prefix-run-unbounded region-bounded-leak region-unchecked region-inexact
 
 .PHONY: verify defects clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
@@ -59,6 +59,10 @@ $(MUTANTS:%=mutant-%): mutant-%:
 	  if cmp -s $$f $$d/$$f; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
 	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $$c 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the mutant verifies"; exit 1; fi; \
+	  t=$$(sed -n 's/^# witness: //p' $$s); \
+	  if [ -n "$$t" ]; then cp defects/$$t $$d/; \
+	    wout=$$(cd $$d && $(FSTAR) $(FLAGS) $$t 2>&1) || \
+	      { echo "$$wout"; echo "FAIL $*: the witness does not hold of the mutant"; exit 1; }; fi; \
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | sed "s|$$d/||" | tr -s ' \n' ' ')"
 
 clean:

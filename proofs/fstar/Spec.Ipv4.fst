@@ -97,7 +97,7 @@ let p3d_is (s:LowParse.Bytes.bytes)
 (* The codec's walk of the plan accepts on the same condition. *)
 let spec_is (s:LowParse.Bytes.bytes) (en:env)
   : Lemma (requires Seq.length s <= max_int)
-          (ensures accepted (spec (Seq.length s) (reader_of s) en 0 plan) <==>
+          (ensures accepted (spec (reader_of s) 0 (Seq.length s) [] en 0 plan) <==>
                    (Seq.length s >= 4 /\
                     (let b = E.be_to_n (Seq.slice s 0 1) in
                      let tl = E.be_to_n (Seq.slice s 2 4) in
@@ -127,7 +127,7 @@ let spec_is (s:LowParse.Bytes.bytes) (en:env)
       assert (E.be_to_n (Seq.slice s 2 4) == tl);
       assert (rd 2 2 == tl);
       assert (en' vihl == b /\ en' total_length == tl);
-      assert_norm (spec len rd en 0 plan ==
+      assert_norm (spec rd 0 len [] en 0 plan ==
                    (if 0 + 4 > len then Reject
                     else match holds (read_fields rd en 0 fs) c1 with
                       | Some true ->
@@ -148,14 +148,14 @@ let spec_is (s:LowParse.Bytes.bytes) (en:env)
 
 let spec_iff (s:LowParse.Bytes.bytes) (en:env)
   : Lemma (requires Seq.length s <= max_int)
-          (ensures accepted (spec (Seq.length s) (reader_of s) en 0 plan) <==> Some? (parse p3d s))
+          (ensures accepted (spec (reader_of s) 0 (Seq.length s) [] en 0 plan) <==> Some? (parse p3d s))
   = p3d_is s; spec_is s en
 
 (* The code the emitter writes for this plan, with or without O1, accepts
    exactly the bytes the 3D parser accepts. *)
 let scanner_is_3d (o:opts) (s:LowParse.Bytes.bytes) (en:env)
   : Lemma (requires Seq.length s <= max_string_length /\ en lim == Seq.length s)
-          (ensures accepted (exec o (Seq.length s) lim (reader_of s) (start lim) en plan) <==>
+          (ensures accepted (exec o (reader_of s) (top (Seq.length s) lim) (start lim) en plan) <==>
                    Some? (parse p3d s))
   = plan_wf ();
     scanner_correct o (Seq.length s) lim (reader_of s) en plan;

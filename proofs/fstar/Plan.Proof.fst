@@ -126,20 +126,66 @@ let rec bind_fields_ok (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (p:int) (
       let w1 = bind_field w f in
       bind_fields_ok len lim rd w1 (upd en f.id x) p r size
 
-let rec reads_ok (len:nat) (rd:reader) (en:env) (p:int) (fs:list field) (sc:scope) (size:nat)
+let rec reads_ok (wb:int) (len:nat) (rd:reader) (en:env) (p:int) (fs:list field) (sc:scope) (size:nat)
   : Lemma (requires fields_ok sc fs size /\ 0 <= p /\ p + size <= len)
-          (ensures reads len rd en p fs == Some (read_fields rd en p fs))
+          (ensures reads wb len rd en p fs == Some (read_fields rd en (wb + p) fs))
           (decreases fs)
-  = match fs with [] -> () | f :: r -> reads_ok len rd (upd en f.id (rd (p + f.off) f.width)) p r (extend sc f.id) size
+  = match fs with
+    | [] -> ()
+    | f :: r -> reads_ok wb len rd (upd en f.id (rd (wb + p + f.off) f.width)) p r (extend sc f.id) size
 
-let rec ahead_reject (len:nat) (rd:reader) (en:env) (p:int) (l:list node)
+let rec ahead_reject (rd:reader) (wb:int) (len:int) (fr:list (int & int & int)) (en:env) (p:int) (l:list node)
   : Lemma (requires p <= len /\ p + ahead l > len)
-          (ensures spec len rd en p l == Reject)
+          (ensures spec rd wb len fr en p l == Reject)
           (decreases l)
   = match l with
-    | Prefix fs size :: r -> if p + size > len then () else ahead_reject len rd (read_fields rd en p fs) (p + size) r
-    | Test c :: r -> (match holds en c with Some true -> ahead_reject len rd en p r | _ -> ())
+    | Prefix fs size :: r ->
+      if p + size > len then () else ahead_reject rd wb len fr (read_fields rd en (wb + p) fs) (p + size) r
+    | Test c :: r -> (match holds en c with Some true -> ahead_reject rd wb len fr en p r | _ -> ())
     | _ -> ()
+
+(* {1 The windows around the current one} *)
+
+let rec frames_ok (sc:scope) (en:env) (wb len:int) (fs:list frame) : Tot prop (decreases fs) =
+  match fs with
+  | [] -> True
+  | f :: r ->
+    sc f.flim /\ en f.flim == f.flen /\ 0 <= f.flen /\ f.flen <= max_string_length /\
+    pos_closed sc f.fp /\ f.fp.at == 0 /\ Some? f.fp.pv /\
+    (match f.fp.pv with Some v -> 0 <= en v /\ en v <= max_int | None -> True) /\
+    (* The current window lies in this one and ends where the code after
+       the region resumes: a region cannot borrow bytes from beyond it. *)
+    0 <= posval en f.fp - len /\ posval en f.fp <= f.flen /\
+    wb == f.fwb + (posval en f.fp - len) /\
+    bounded_ok sc f.flen en f.fbounded /\
+    frames_ok sc en f.fwb f.flen r
+
+(* What the codec's walk keeps of the windows around. *)
+let rec spec_frames (en:env) (fs:list frame) : Tot (list (int & int & int)) (decreases fs) =
+  match fs with [] -> [] | f :: r -> (f.fwb, f.flen, posval en f.fp) :: spec_frames en r
+
+let agrees (sc sc':scope) (en en':env) : prop =
+  (forall (v:var). sc v ==> sc' v) /\ (forall (v:var). sc v ==> en' v == en v)
+
+let rec bounded_agree (sc sc':scope) (len:int) (en en':env) (bs:list (expr & pos))
+  : Lemma (requires bounded_ok sc len en bs /\ agrees sc sc' en en')
+          (ensures bounded_ok sc' len en' bs)
+          (decreases bs)
+  = match bs with
+    | [] -> ()
+    | (s, q) :: r -> ev_agree sc en en' s; closed_mono sc sc' s; bounded_agree sc sc' len en en' r
+
+(* Binding variables the windows around do not read keeps them. *)
+let rec frames_agree (sc sc':scope) (en en':env) (wb len:int) (fs:list frame)
+  : Lemma (requires frames_ok sc en wb len fs /\ agrees sc sc' en en')
+          (ensures frames_ok sc' en' wb len fs /\ spec_frames en' fs == spec_frames en fs)
+          (decreases fs)
+  = match fs with
+    | [] -> ()
+    | f :: r ->
+      bounded_agree sc sc' f.flen en en' f.fbounded;
+      (match f.fp.pv with Some v -> assert (en' v == en v) | None -> ());
+      frames_agree sc sc' en en' f.fwb f.flen r
 
 (* {1 Spans} *)
 
@@ -363,13 +409,45 @@ let rec all_first_pick (s:expr) (t:int) (cs:list (int & list node))
           (ensures (match pick t cs with Some b -> first_span b == Some s | None -> True))
   = match cs with [] -> () | (k, _) :: r -> if k = t then () else all_first_pick s t r
 
-#push-options "--z3rlimit 200 --fuel 2 --ifuel 2"
-let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pending:bool) (l:list node)
-  : Lemma (requires inv len lim w en pending /\ wf w.sc l /\ (pending ==> checks_next l))
-          (ensures exec o len lim rd w en l ==
-                   (if posval en w.p > len then Reject else spec len rd en (posval en w.p) l))
+(* The position as the code computes it, plain. *)
+#push-options "--fuel 3"
+let pos_expr_ev (len:nat) (lim:var) (w:st) (en:env)
+  : Lemma (requires inv len lim w en false)
+          (ensures ev en (pos_expr w.p) == Some (posval en w.p))
+  = max_string_length_small ()
+#pop-options
+
+(* The window a region opens: the contents start at its offset 0, with
+   nothing known and no bound checked in it. *)
+let region_inv (len:nat) (lim:var) (w1:st) (en1:env) (k:nat) (n:var)
+  : Lemma (requires inv len lim w1 en1 false /\ w1.sc n /\ en1 n == k /\ k <= len)
+          (ensures inv k n ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] }) en1 false)
+  = ()
+
+(* The window around once the contents are read: the code resumes after the
+   region, with the bounds checked in that window. *)
+let close_inv (len:nat) (lim:var) (w:st) (en:env) (f:frame) (fs:list frame) (wb:int)
+  : Lemma (requires inv len lim w en false /\ frames_ok w.sc en wb len (f :: fs))
+          (ensures inv f.flen f.flim ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en false /\
+                   frames_ok w.sc en f.fwb f.flen fs)
+  = max_string_length_small ()
+
+let pos_bound (len:nat) (lim:var) (w:st) (en:env) (pending:bool)
+  : Lemma (requires inv len lim w en pending) (ensures 0 <= w.p.at /\ (not pending ==> w.p.at <= len))
+  = match w.p.pv with Some v -> assert (0 <= en v) | None -> ()
+
+#push-options "--z3rlimit 200 --fuel 2 --ifuel 2 --split_queries always"
+let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l:list node)
+  : Lemma (requires 0 <= x.len /\ inv x.len x.lim w en pending /\ frames_ok w.sc en x.wb x.len x.frames /\
+                    wf w.sc l /\ (pending ==> checks_next l))
+          (ensures exec o rd x w en l ==
+                   (if posval en w.p > x.len then Reject
+                    else spec rd x.wb x.len (spec_frames en x.frames) en (posval en w.p) l))
           (decreases lsize l)
   = let pv = posval en w.p in
+    let len : nat = x.len in
+    let lim = x.lim in
+    let fr = spec_frames en x.frames in
     match l with
     | [] -> ()
     | Prefix fs size :: r ->
@@ -378,28 +456,22 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
       (* The constant the emitter adds does not wrap: the position's offset
          lies in the window, the run's bytes in a record. *)
       max_string_length_small ();
+      pos_bound len lim w en pending;
       assert (w.p.at <= len /\ need <= max_string_length);
       wrap_id (w.p.at + need);
-      if w.known >= need then begin
-        reads_ok len rd en pv fs w.sc size;
-        bind_fields_ok len lim rd w en pv fs size;
-        let w' = bind_fields w fs in
-        let w2 = { w' with known = w.known - size; p = { w.p with at = w.p.at + size } } in
-        let en' = read_fields rd en pv fs in
-        assert (posval en' w2.p == pv + size);
-        exec_spec o len lim rd w2 en' false r
-      end
-      else if pv + need > len then begin
-        if pv <= len then ahead_reject len rd en pv l
+      if w.known < need && pv + need > len then begin
+        if pv <= len then ahead_reject rd x.wb len fr en pv l
       end
       else begin
-        reads_ok len rd en pv fs w.sc size;
-        bind_fields_ok len lim rd w en pv fs size;
+        let k = if w.known >= need then w.known else need in
+        reads_ok x.wb len rd en pv fs w.sc size;
+        bind_fields_ok len lim rd w en (x.wb + pv) fs size;
         let w' = bind_fields w fs in
-        let w2 = { w' with known = need - size; p = { w.p with at = w.p.at + size } } in
-        let en' = read_fields rd en pv fs in
+        let w2 = { w' with known = k - size; p = { w.p with at = w.p.at + size } } in
+        let en' = read_fields rd en (x.wb + pv) fs in
         assert (posval en' w2.p == pv + size);
-        exec_spec o len lim rd w2 en' false r
+        frames_agree w.sc w2.sc en en' x.wb len x.frames;
+        exec_spec o rd x w2 en' false r
       end
     | Span n e s :: r ->
       let ov = not (fits w.rg s) in
@@ -412,14 +484,18 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
         bounded_size len lim w en pending s;
         let k = Some?.v (ev en s) in
         bind_span_ok len lim w en pending implied n e s k;
-        exec_spec o len lim rd (bind_span w implied n e s ends) (upd (upd en n k) e (pv + k)) false r
+        let en1 = upd (upd en n k) e (pv + k) in
+        frames_agree w.sc (bind_span w implied n e s ends).sc en en1 x.wb len x.frames;
+        exec_spec o rd x (bind_span w implied n e s ends) en1 false r
       end
       else if implied then begin
         nonnegative_ok w en s;
         let k = eval en s in
         end_range_ok w en s k;
         bind_span_ok len lim w en pending implied n e s k;
-        exec_spec o len lim rd (bind_span w implied n e s ends) (upd (upd en n k) e (pv + k)) (pv + k > len) r
+        let en1 = upd (upd en n k) e (pv + k) in
+        frames_agree w.sc (bind_span w implied n e s ends).sc en en1 x.wb len x.frames;
+        exec_spec o rd x (bind_span w implied n e s ends) en1 (pv + k > len) r
       end
       else begin
         outside_ok o len lim w en pending s;
@@ -428,7 +504,9 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
           (match outside o w lim en s ov nonneg k with
            | Some false ->
              bind_span_ok len lim w en pending implied n e s k;
-             exec_spec o len lim rd (bind_span w implied n e s ends) (upd (upd en n k) e (pv + k)) false r
+             let en1 = upd (upd en n k) e (pv + k) in
+             frames_agree w.sc (bind_span w implied n e s ends).sc en en1 x.wb len x.frames;
+             exec_spec o rd x (bind_span w implied n e s ends) en1 false r
            | _ -> ())
         | None -> ()
       end
@@ -436,7 +514,7 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
       (match holds en c with
        | Some true ->
          refine_ok len lim w en c;
-         exec_spec o len lim rd (refine w c) en false r
+         exec_spec o rd x (refine w c) en false r
        | _ -> ())
     | Gate sel cs d :: r ->
       chosen_size en sel cs d r;
@@ -451,7 +529,7 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
          lsize_append b (Join :: r);
          if mem (s, w.p) w.bounded then begin
            bounded_size len lim w en pending s;
-           exec_spec o len lim rd w en false (b @ (Join :: r))
+           exec_spec o rd x w en false (b @ (Join :: r))
          end
          else begin
            outside_ok o len lim w en pending s;
@@ -463,36 +541,98 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
               | Some false ->
                 let w1 = { w with bounded = (s, w.p) :: w.bounded } in
                 assert (inv len lim w1 en false);
-                exec_spec o len lim rd w1 en false (b @ (Join :: r))
+                exec_spec o rd x w1 en false (b @ (Join :: r))
               | _ -> ())
            | None -> ()
          end
        | None ->
          (match chosen en sel cs d with
-          | Some b -> lsize_append b (Join :: r); exec_spec o len lim rd w en false (b @ (Join :: r))
-          | None -> exec_spec o len lim rd w en false (Join :: r)))
-    | Join :: r -> exec_spec o len lim rd w en false r
+          | Some b -> lsize_append b (Join :: r); exec_spec o rd x w en false (b @ (Join :: r))
+          | None -> exec_spec o rd x w en false (Join :: r)))
+    | Join :: r -> exec_spec o rd x w en false r
+    | Region n e s am b :: r ->
+      region_size b am r;
+      lsize_append b (Close am :: r);
+      let ov = not (fits w.rg s) in
+      let nonneg = not ov && nonnegative w s in
+      let ends = end_range w (size_range w s) w.p in
+      if fits w.rg s then fits_ev w.rg en s;
+      ev_eval en s;
+      let opened (k:int)
+        : Lemma (requires ev en s == Some k /\ k >= 0 /\ pv + k <= len /\ span_size w en s == Some k /\ pv >= 0)
+                (ensures (let w1 = bind_span w false n e s ends in
+                          let en1 = upd (upd en n k) e (pv + k) in
+                          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+                          let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
+                          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+                          exec o rd x' w' en1 (b @ (Close am :: r)) ==
+                          spec rd (x.wb + pv) k ((x.wb, len, pv + k) :: fr) en1 0 (b @ (Close am :: r))))
+        = let w1 = bind_span w false n e s ends in
+          let en1 = upd (upd en n k) e (pv + k) in
+          bind_span_ok len lim w en pending false n e s k;
+          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+          let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
+          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+          region_inv len lim w1 en1 k n;
+          frames_agree w.sc w1.sc en en1 x.wb len x.frames;
+          assert (frames_ok w'.sc en1 x'.wb k x'.frames);
+          exec_spec o rd x' w' en1 false (b @ (Close am :: r))
+      in
+      if mem (s, w.p) w.bounded then begin
+        bounded_size len lim w en pending s;
+        let k = Some?.v (ev en s) in
+        opened k
+      end
+      else begin
+        outside_ok o len lim w en pending s;
+        match span_size w en s with
+        | Some k ->
+          (match outside o w lim en s ov nonneg k with
+           | Some false -> opened k
+           | _ -> ())
+        | None -> ()
+      end
+    | Close am :: r ->
+      (match x.frames with
+       | [] -> ()
+       | f :: fs ->
+         if not am then pos_expr_ev len lim w en;
+         close_inv len lim w en f fs x.wb;
+         exec_spec o rd ({ wb = f.fwb; len = f.flen; lim = f.flim; frames = fs })
+           ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en false r)
 #pop-options
 
-(* {1 Corollaries for a walk from the start of a window} *)
+(* {1 Corollaries for a walk from the start of a buffer} *)
 
 #push-options "--fuel 2 --ifuel 2"
-let rec spec_no_fault (len:nat) (rd:reader) (en:env) (p:int) (l:list node)
-  : Lemma (ensures ~ (Fault? (spec len rd en p l))) (decreases lsize l)
+let rec spec_no_fault (rd:reader) (wb len:int) (fr:list (int & int & int)) (en:env) (p:int) (l:list node)
+  : Lemma (ensures ~ (Fault? (spec rd wb len fr en p l))) (decreases lsize l)
   = match l with
     | [] -> ()
-    | Prefix fs size :: r -> if p + size > len then () else spec_no_fault len rd (read_fields rd en p fs) (p + size) r
+    | Prefix fs size :: r ->
+      if p + size > len then () else spec_no_fault rd wb len fr (read_fields rd en (wb + p) fs) (p + size) r
     | Span n e s :: r ->
       (match ev en s with
-       | Some k -> if k < 0 || p + k > len then () else spec_no_fault len rd (upd (upd en n k) e (p + k)) (p + k) r
+       | Some k -> if k < 0 || p + k > len then () else spec_no_fault rd wb len fr (upd (upd en n k) e (p + k)) (p + k) r
        | None -> ())
-    | Test c :: r -> spec_no_fault len rd en p r
+    | Test c :: r -> spec_no_fault rd wb len fr en p r
     | Gate sel cs d :: r ->
       chosen_size en sel cs d r;
       (match chosen en sel cs d with
-       | Some b -> spec_no_fault len rd en p (b @ (Join :: r))
-       | None -> spec_no_fault len rd en p (Join :: r))
-    | Join :: r -> spec_no_fault len rd en p r
+       | Some b -> spec_no_fault rd wb len fr en p (b @ (Join :: r))
+       | None -> spec_no_fault rd wb len fr en p (Join :: r))
+    | Join :: r -> spec_no_fault rd wb len fr en p r
+    | Region n e s am b :: r ->
+      region_size b am r;
+      (match ev en s with
+       | Some k ->
+         if k < 0 || p + k > len then ()
+         else spec_no_fault rd (wb + p) k ((wb, len, p + k) :: fr) (upd (upd en n k) e (p + k)) 0 (b @ (Close am :: r))
+       | None -> ())
+    | Close am :: r ->
+      (match fr with
+       | [] -> ()
+       | (wb', len', p') :: fr' -> if not am && p <> len then () else spec_no_fault rd wb' len' fr' en p' r)
 #pop-options
 
 (* The walk at the start of a window whose length [lim] holds (Emitter.start). *)
@@ -506,21 +646,25 @@ let start (lim:var) : st = {
   p = { pv = None; at = 0 };
 }
 
-(* M1 and M2: the generated code accepts exactly what the codec accepts,
-   binding the same values, with or without the O1 rewrites, and never reads
-   outside the window nor wraps an operation. *)
+(* The buffer's window: [len] bytes at 0, none around it. *)
+let top (len:nat) (lim:var) : win = { wb = 0; len = len; lim = lim; frames = [] }
+
+(* M1, M2 and M3: the generated code accepts exactly what the codec accepts,
+   binding the same values, with or without the O1 rewrites. It never reads
+   outside the innermost window it is in, whose bytes lie in the windows
+   around it and so in the buffer, nor wraps an operation. *)
 let scanner_correct (o:opts) (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
   : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
-          (ensures exec o len lim rd (start lim) en l == spec len rd en 0 l /\
-                   ~ (Fault? (exec o len lim rd (start lim) en l)))
+          (ensures exec o rd (top len lim) (start lim) en l == spec rd 0 len [] en 0 l /\
+                   ~ (Fault? (exec o rd (top len lim) (start lim) en l)))
   = max_string_length_small ();
-    exec_spec o len lim rd (start lim) en false l;
-    spec_no_fault len rd en 0 l
+    exec_spec o rd (top len lim) (start lim) en false l;
+    spec_no_fault rd 0 len [] en 0 l
 
 (* The O1 rewrites change no answer. *)
 let o1_preserves (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
   : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
-          (ensures exec ({ cancel = true; drop = true }) len lim rd (start lim) en l ==
-                   exec ({ cancel = false; drop = false }) len lim rd (start lim) en l)
+          (ensures exec ({ cancel = true; drop = true }) rd (top len lim) (start lim) en l ==
+                   exec ({ cancel = false; drop = false }) rd (top len lim) (start lim) en l)
   = scanner_correct ({ cancel = true; drop = true }) len lim rd en l;
     scanner_correct ({ cancel = false; drop = false }) len lim rd en l

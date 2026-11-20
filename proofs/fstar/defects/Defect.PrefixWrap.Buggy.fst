@@ -33,10 +33,10 @@ let en : env = fun v -> if v = lim then 2 else 0
 let no_o1 : opts = { cancel = false; drop = false }
 
 (* The codec rejects; the walk the emitter writes reads outside the window. *)
-let _ = assert_norm (spec 2 rd en 0 plan == Reject)
-let _ = assert_norm (Fault? (exec no_o1 2 lim rd (start lim) en plan))
+let _ = assert_norm (spec rd 0 2 [] en 0 plan == Reject)
+let _ = assert_norm (Fault? (exec no_o1 rd (top 2 lim) (start lim) en plan))
 
 (* What the model proves for the planner's plans, applied to this one. *)
 let scanner_safe ()
-  : Lemma (~ (Fault? (exec no_o1 2 lim rd (start lim) en plan)))
+  : Lemma (~ (Fault? (exec no_o1 rd (top 2 lim) (start lim) en plan)))
   = ()

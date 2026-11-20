@@ -19,9 +19,15 @@ make -C proofs/fstar -j4 defects   # past defects and mutants are refused
 - `Plan.Proof.scanner_correct`: for a well-formed plan (`Plan.Scan.wf`:
   every variable bound once, read after it is bound), the walk `exec`
   returns what the codec's walk `spec` returns (`Reject`, or `Accept` with
-  the same bound values) and never returns `Fault` (a read outside
-  `[0, len)` or a plain operation that leaves the 63-bit native int). It
-  holds for every combination of the two rewrites (`opts`).
+  the same bound values) and never returns `Fault` (a read outside the
+  innermost window or a plain operation that leaves the 63-bit native int).
+  It holds for every combination of the two rewrites (`opts`).
+- Regions: a region's size is checked against the window around it, its
+  contents read in a window of exactly that size, and an exact region checks
+  its contents used all of it. `frames_ok` in the invariant keeps every
+  window inside the one around it and ending where the code after it
+  resumes, so contents cannot borrow bytes from beyond their region, as a
+  frame of `fold_frames` cannot from the next frame.
 - `Plan.Proof.o1_preserves`: with and without O1, the same answer.
 - `Plan.Proof.exec_spec`: the inductive statement behind both, for any
   walk state the invariant `inv` describes, including the state right after
@@ -50,8 +56,9 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 
 | Model | Code |
 | --- | --- |
-| `Plan.Scan.node`: `Prefix`, `Span`, `Test`, `Gate`, `Join` | `Planner` nodes `Prefix`, `Span`, `Test`, `Gate` runs; `Join` marks where `Emitter.dispatch` joins |
+| `Plan.Scan.node`: `Prefix`, `Span`, `Test`, `Gate`, `Region`, `Join`, `Close` | `Planner` nodes `Prefix`, `Span`, `Test`, `Gate` runs and `Region`; `Join` marks where `Emitter.dispatch` joins, `Close` where a region's contents end |
 | `exec` | `Emitter.walk` / `step` |
+| `win`, `frame` | the walk's `base` and `limit`, and those `step`'s `Region` case restores |
 | `ahead`, the `Prefix` guard, `known` | `Emitter.ahead`, `Emitter.bound`, the `known` field |
 | `span_size`, `outside`, `room_expr` | `Emitter.span`, `Emitter.outside` |
 | `cancelled`, `pos_sum` | `Emitter.cancelled`, `Emitter.pos_sum` |
@@ -74,12 +81,19 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   Then the constant the emitter adds at generation time, `p.at + need`,
   which the model computes with OCaml's wrapping `+`, does not wrap. The
   planner breaks the second premise at b1f6f756 (`Defect.PrefixWrap`).
-- A window lies in the buffer, so adding its base cannot overflow
-  (`Plan.Frames` proves it for `fold_frames`; regions are not modelled).
+- The top window lies in the buffer, so adding a window's base cannot
+  overflow (`Plan.Frames` proves it for `fold_frames`; a region's window
+  lies in the one around it).
+
+## Where the model departs from the code
+
+- On entering a region the model clears the bounds a dispatch checked
+  (`bounded`), and restores those of the window around on leaving it. The
+  emitter at b1f6f756 keeps them, which is the defect `region-bounded-leak`
+  replays; the model is the fix it proves.
 
 ## What is not covered
 
-- Regions (nested windows, `at_most`) and their contents' walk.
 - The join of a dispatch: the model continues each case into the code after
   it (the emitter's copy mode); the join's state forgets more, which only
   makes it decide less.
@@ -107,12 +121,16 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | 787089f1 | validate accepted a repeat's partial element | `Defect.RepeatBudget` | yes, outside the plan model |
 | bf2c2866 (O1 lane) | `Planner.sum_add` raises out of its handler | `Defect.SumConst` | yes |
 | b1f6f756 (open) | 33 nested variable-size codecs fuse into a prefix whose size wraps: no bound, a load far outside the buffer | `Defect.PrefixWrap`, `prefix-run-unbounded.sed` | yes |
+| b1f6f756 (open) | a dispatch's hoisted bound, keyed by size and position, skips the check of a region of the same size at the same offset inside a case's region: a load past the buffer | `region-bounded-leak.sed` with `Defect.RegionBound.Witness` | yes |
 
-The last two were found while writing the model. For `Defect.PrefixWrap`
+The last three were found while writing the model. For `Defect.PrefixWrap`
 the scanner Wire_ocaml writes for the codec accepts two bytes the codec
 rejects and loads its last field at `o3 + -4467570830351532362`; the
 replay checks the model's walk faults on the same plan, and the fix side
-shows `wf` refuses the plan.
+shows `wf` refuses the plan. For the region defect the scanner accepts six
+bytes the codec rejects and reads a 32-bit word whose last two bytes lie
+past the buffer; the witness checks the mutant's walk accepts the same
+plan where the codec's rejects.
 
 The plan model expresses the bound and arithmetic defects directly
 (4da4e8ad as a mutant of the emitter model itself). 6a0fce0b, 57535e21,

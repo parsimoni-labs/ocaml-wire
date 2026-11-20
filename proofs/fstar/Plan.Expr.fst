@@ -95,6 +95,23 @@ let rec eval_upd (sc:scope) (en:env) (v:var) (x:int) (e:expr)
     | Add a b | Sub a b | Mul a b -> eval_upd sc en v x a; eval_upd sc en v x b
     | Shl a _ -> eval_upd sc en v x a
 
+let rec closed_mono (sc sc':scope) (e:expr)
+  : Lemma (requires closed sc e /\ (forall (v:var). sc v ==> sc' v)) (ensures closed sc' e)
+  = match e with
+    | Lit _ | V _ -> ()
+    | Add a b | Sub a b | Mul a b -> closed_mono sc sc' a; closed_mono sc sc' b
+    | Shl a _ -> closed_mono sc sc' a
+
+(* Two environments that agree on the variables an expression reads give it
+   the same value. *)
+let rec ev_agree (sc:scope) (en en':env) (e:expr)
+  : Lemma (requires closed sc e /\ (forall (v:var). sc v ==> en' v == en v))
+          (ensures ev en' e == ev en e /\ eval en' e == eval en e)
+  = match e with
+    | Lit _ | V _ -> ()
+    | Add a b | Sub a b | Mul a b -> ev_agree sc en en' a; ev_agree sc en en' b
+    | Shl a _ -> ev_agree sc en en' a
+
 (* {1 Ranges} *)
 
 type ranges = var -> option (int & int)

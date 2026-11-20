@@ -37,10 +37,17 @@ type node =
   | Gate : sel:var -> cases:list (int & list node) -> dflt:option (list node) -> node
   (* Where the code after a run of optional fields starts. *)
   | Join : node
+  (* A window of [size] bytes at the position, its length bound to [n] and
+     its end to [e], whose contents [body] reads; with [at_most] they may
+     leave some of it unread. *)
+  | Region : n:var -> e:var -> size:expr -> at_most:bool -> body:list node -> node
+  (* Where a region's contents end. *)
+  | Close : at_most:bool -> node
 
 let rec nsize (x:node) : Tot Prims.pos (decreases x) =
   match x with
   | Gate _ cs d -> 2 + csize cs + osize d
+  | Region _ _ _ _ b -> 2 + lsize b
   | _ -> 1
 and lsize (l:list node) : Tot nat (decreases l) =
   match l with [] -> 0 | x :: r -> nsize x + lsize r
@@ -109,6 +116,10 @@ let rec wf (sc:scope) (l:list node) : Tot bool (decreases %[lsize l; 0; 0]) =
     (match d with None -> true | Some b -> (lsize_append b (Join :: r); wf sc (b @ (Join :: r)))) &&
     wf sc (Join :: r)
   | Join :: r -> wf sc r
+  | Region n e s am b :: r ->
+    closed sc s && not (sc n) && not (sc e) && n <> e &&
+    (lsize_append b (Close am :: r); wf (extend (extend sc n) e) (b @ (Close am :: r)))
+  | Close _ :: r -> wf sc r
 and wf_cases (sc:scope) (cs:list (int & list node)) (r:list node)
   : Tot bool (decreases %[(lsize r + csize cs + 1 <: nat); 1; cs]) =
   match cs with
@@ -127,37 +138,55 @@ noeq type outcome =
   | Accept : env -> outcome
   | Fault (* a read outside the window, or plain arithmetic that wraps *)
 
-(* The bytes of the window: a read of [w] bytes at an offset. *)
+(* The bytes of the buffer: a read of [w] bytes at an offset in it. *)
 type reader = int -> w:nat -> v:nat{v < pow2 (8 * w)}
 
-let rec read_fields (rd:reader) (en:env) (p:int) (fs:list field) : Tot env (decreases fs) =
-  match fs with [] -> en | f :: r -> read_fields rd (upd en f.id (rd (p + f.off) f.width)) p r
+(* The fields of a prefix whose first byte is at [a] in the buffer. *)
+let rec read_fields (rd:reader) (en:env) (a:int) (fs:list field) : Tot env (decreases fs) =
+  match fs with [] -> en | f :: r -> read_fields rd (upd en f.id (rd (a + f.off) f.width)) a r
 
 let holds (en:env) (c:cond) : option bool =
   match c with
   | Ge a b -> (match ev en a, ev en b with Some x, Some y -> Some (x >= y) | _ -> None)
   | Eq a b -> (match ev en a, ev en b with Some x, Some y -> Some (x = y) | _ -> None)
 
-(* The codec on [len] bytes, from offset [p]: a prefix needs its bytes, a
-   span a size that does not overflow, is not negative and fits, a check
-   must hold without overflow (Codec.decode since e4be2c6f). *)
-let rec spec (len:nat) (rd:reader) (en:env) (p:int) (l:list node)
+let region_size (b:list node) (am:bool) (r:list node)
+  : Lemma (forall n e s. lsize (b @ (Close am :: r)) < lsize (Region n e s am b :: r))
+  = lsize_append b (Close am :: r)
+
+(* The codec in a window of [len] bytes at [wb] in the buffer, from offset
+   [p]: a prefix needs its bytes, a span a size that does not overflow, is
+   not negative and fits, a check must hold without overflow (Codec.decode
+   since e4be2c6f). A region is a window of its own, [fr] the windows around
+   it, each with where the code after it resumes. *)
+let rec spec (rd:reader) (wb len:int) (fr:list (int & int & int)) (en:env) (p:int) (l:list node)
   : Tot outcome (decreases lsize l) =
   match l with
   | [] -> Accept en
   | Prefix fs size :: r ->
-    if p + size > len then Reject else spec len rd (read_fields rd en p fs) (p + size) r
+    if p + size > len then Reject else spec rd wb len fr (read_fields rd en (wb + p) fs) (p + size) r
   | Span n e s :: r ->
     (match ev en s with
      | None -> Reject
-     | Some k -> if k < 0 || p + k > len then Reject else spec len rd (upd (upd en n k) e (p + k)) (p + k) r)
-  | Test c :: r -> (match holds en c with Some true -> spec len rd en p r | _ -> Reject)
+     | Some k -> if k < 0 || p + k > len then Reject else spec rd wb len fr (upd (upd en n k) e (p + k)) (p + k) r)
+  | Test c :: r -> (match holds en c with Some true -> spec rd wb len fr en p r | _ -> Reject)
   | Gate sel cs d :: r ->
     chosen_size en sel cs d r;
     (match chosen en sel cs d with
-     | Some b -> spec len rd en p (b @ (Join :: r))
-     | None -> spec len rd en p (Join :: r))
-  | Join :: r -> spec len rd en p r
+     | Some b -> spec rd wb len fr en p (b @ (Join :: r))
+     | None -> spec rd wb len fr en p (Join :: r))
+  | Join :: r -> spec rd wb len fr en p r
+  | Region n e s am b :: r ->
+    region_size b am r;
+    (match ev en s with
+     | None -> Reject
+     | Some k ->
+       if k < 0 || p + k > len then Reject
+       else spec rd (wb + p) k ((wb, len, p + k) :: fr) (upd (upd en n k) e (p + k)) 0 (b @ (Close am :: r)))
+  | Close am :: r ->
+    (match fr with
+     | [] -> Reject
+     | (wb', len', p') :: fr' -> if not am && p <> len then Reject else spec rd wb' len' fr' en p' r)
 
 (* {1 What the generated code does} *)
 
@@ -179,7 +208,7 @@ let nonnegative (w:st) (e:expr) : bool =
   (match e with Sub a b -> mem (a, b) w.facts | _ -> false)
 
 let first_span (b:list node) : option expr =
-  match b with Span _ _ s :: _ -> Some s | _ -> None
+  match b with Span _ _ s :: _ | Region _ _ s _ _ :: _ -> Some s | _ -> None
 
 let rec all_first (s:expr) (cs:list (int & list node)) : bool =
   match cs with [] -> true | (_, b) :: r -> first_span b = Some s && all_first s r
@@ -195,7 +224,7 @@ let hoisted (cs:list (int & list node)) (d:option (list node)) : option expr =
 let checks_next (l:list node) : bool =
   match l with
   | Prefix _ _ :: _ -> ahead l > 0
-  | Span _ _ _ :: _ -> true
+  | Span _ _ _ :: _ | Region _ _ _ _ _ :: _ -> true
   | Gate _ cs d :: _ -> Some? (hoisted cs d)
   | _ -> false
 
@@ -246,6 +275,10 @@ let cancelled (w:st) (lim:var) (s:expr) (p:pos) : option (expr & expr) =
 let room_expr (lim:var) (p:pos) : expr =
   let r = match p.pv with None -> V lim | Some v -> Sub (V lim) (V v) in
   if p.at = 0 then r else Sub r (Lit p.at)
+
+(* Emitter.pos_expr *)
+let pos_expr (p:pos) : expr =
+  match p.pv with None -> Lit p.at | Some v -> if p.at = 0 then V v else Add (V v) (Lit p.at)
 
 (* Emitter.outside: [Some true] rejects, [None] is a wrapped operation. *)
 let outside (o:opts) (w:st) (lim:var) (en:env) (s:expr) (ov nonneg:bool) (n:int) : option bool =
@@ -304,18 +337,29 @@ let refine (w:st) (c:cond) : st =
     { w with rg = rg; facts = (a, b) :: w.facts }
   | Eq _ _ -> w
 
-(* The reads of a prefix: [Fault] outside the window. *)
-let rec reads (len:nat) (rd:reader) (en:env) (p:int) (fs:list field) : Tot (option env) (decreases fs) =
+(* The reads of a prefix at [p] in a window of [len] bytes at [wb]: [Fault]
+   outside the window, though the bytes may be in the buffer. *)
+let rec reads (wb len:int) (rd:reader) (en:env) (p:int) (fs:list field) : Tot (option env) (decreases fs) =
   match fs with
   | [] -> Some en
   | f :: r ->
     if p + f.off < 0 || p + f.off + f.width > len then None
-    else reads len rd (upd en f.id (rd (p + f.off) f.width)) p r
+    else reads wb len rd (upd en f.id (rd (wb + p + f.off) f.width)) p r
 
-(* One run of the code Emitter.walk writes, in a window of [len] bytes whose
-   length the variable [lim] holds. *)
-let rec exec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (l:list node)
+(* A window around the current one: its base and length, the variable that
+   holds its length, where the code after the region resumes, and the bounds
+   checked in it. *)
+noeq type frame = { fwb : int; flen : int; flim : var; fp : pos; fbounded : list (expr & pos) }
+
+(* The current window: [len] bytes at [wb] in the buffer, the length in
+   [lim] (Emitter's [base] and [limit]), and the windows around it. *)
+noeq type win = { wb : int; len : int; lim : var; frames : list frame }
+
+(* One run of the code Emitter.walk writes. *)
+let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
   : Tot outcome (decreases lsize l) =
+  let len = x.len in
+  let lim = x.lim in
   match l with
   | [] -> Accept en
   | Prefix fs size :: r ->
@@ -334,11 +378,11 @@ let rec exec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (l:list no
      | None -> Fault
      | Some None -> Reject
      | Some (Some k) ->
-       match reads len rd en (posval en w.p) fs with
+       match reads x.wb len rd en (posval en w.p) fs with
        | None -> Fault
        | Some en' ->
          let w' = bind_fields w fs in
-         exec o len lim rd ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) en' r)
+         exec o rd x ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) en' r)
   | Span n e s :: r ->
     (match span_size w en s with
      | None -> Fault
@@ -354,9 +398,9 @@ let rec exec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (l:list no
        | Some false ->
          match pos_plus en w.p k with
          | None -> Fault
-         | Some x -> exec o len lim rd (bind_span w implied n e s ends) (upd (upd en n k) e x) r)
+         | Some y -> exec o rd x (bind_span w implied n e s ends) (upd (upd en n k) e y) r)
   | Test c :: r ->
-    (match holds en c with Some true -> exec o len lim rd (refine w c) en r | _ -> Reject)
+    (match holds en c with Some true -> exec o rd x (refine w c) en r | _ -> Reject)
   | Gate sel cs d :: r ->
     let hoist : option (option st) =
       (* Emitter.hoist_bound: [None] a fault, [Some None] rejected. *)
@@ -383,6 +427,41 @@ let rec exec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (l:list no
      | Some None -> Reject
      | Some (Some w1) ->
        match chosen en sel cs d with
-       | Some b -> exec o len lim rd w1 en (b @ (Join :: r))
-       | None -> exec o len lim rd w1 en (Join :: r))
-  | Join :: r -> exec o len lim rd w en r
+       | Some b -> exec o rd x w1 en (b @ (Join :: r))
+       | None -> exec o rd x w1 en (Join :: r))
+  | Join :: r -> exec o rd x w en r
+  | Region n e s am b :: r ->
+    (* Emitter.step's [Region]: the bound of a span, never left to the next
+       check, then the contents in a window of their own. *)
+    region_size b am r;
+    (match span_size w en s with
+     | None -> Fault
+     | Some k ->
+       let ov = not (fits w.rg s) in
+       let nonneg = not ov && nonnegative w s in
+       let ends = end_range w (size_range w s) w.p in
+       match (if mem (s, w.p) w.bounded then Some false else outside o w lim en s ov nonneg k) with
+       | None -> Fault
+       | Some true -> Reject
+       | Some false ->
+         match pos_plus en w.p k with
+         | None -> Fault
+         | Some y ->
+           let w1 = bind_span w false n e s ends in
+           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+           let x' = { wb = x.wb + posval en w.p; len = k; lim = n; frames = f :: x.frames } in
+           (* The bounds checked in the window around do not hold in this one. *)
+           let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+           exec o rd x' w' (upd (upd en n k) e y) (b @ (Close am :: r)))
+  | Close am :: r ->
+    (match x.frames with
+     | [] -> Reject
+     | f :: fs ->
+       (* [if cp <> n then fail]: a region read exactly. *)
+       match (if am then Some false else
+              match ev en (pos_expr w.p) with Some c -> Some (c <> len) | None -> None) with
+       | None -> Fault
+       | Some true -> Reject
+       | Some false ->
+         exec o rd ({ wb = f.fwb; len = f.flen; lim = f.flim; frames = fs })
+           ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en r)
