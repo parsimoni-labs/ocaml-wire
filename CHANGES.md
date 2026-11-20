@@ -138,7 +138,8 @@
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
   fixed-size codecs. `decode` of an Ethernet, IPv4 and TCP or UDP packet takes
   less than half the instructions and does not slow down with nesting, and
-  `encode` into a buffer allocates nothing (#435, #445, #496, @samoht)
+  `encode` into a buffer allocates nothing. `check` of a TCP header takes 95
+  instructions, down from 118 (#435, #445, #496, #512, @samoht)
 
 - `Wire.Codec.get` and `set` of an integer or bitfield are faster: `set`
   writes a space packet header field in a third of the instructions (#496,

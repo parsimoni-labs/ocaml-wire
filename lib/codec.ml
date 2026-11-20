@@ -755,6 +755,9 @@ let validate_fixed min_size pass buf off =
   else
     match pass with
     | No_checks -> ()
+    | Word { q; l; r; m; lo; hi; _ }
+      when Codec_intervals.within buf off q l r m lo hi ->
+        ()
     | Intervals { words = Some f; _ } when f buf off -> ()
     | _ -> run_plain_pass pass input_end buf off
 
@@ -1184,6 +1187,8 @@ let[@inline never] steps_pass pass input_end buf off =
 let[@inline] passes pass input_end buf off =
   match pass with
   | No_checks -> true
+  | Word { q; l; r; m; lo; hi; _ } ->
+      Codec_intervals.within buf off q l r m lo hi
   | Intervals { words = Some f; _ } -> f buf off
   | Intervals { flat; tables; words = None; _ } ->
       Codec_intervals.scan_intervals flat tables buf off (Array.length flat) 0

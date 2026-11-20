@@ -170,6 +170,10 @@ let test ~size (Ps s, set) =
   | Some { q; l; r; m; _ }, [| (lo, hi) |] -> Some (q, l, r, m, lo, hi)
   | _ -> None
 
+let single ~size tests =
+  if Sys.int_size < 63 || size < 8 || Array.length tests <> 1 then None
+  else test ~size tests.(0)
+
 let stage_tests tests =
   match tests with
   | [ t1 ] ->
