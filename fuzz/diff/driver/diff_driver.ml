@@ -1,13 +1,22 @@
 let oracle label =
   if C_oracle.enabled then Some (C_oracle.oracle label) else None
 
+let sampled_oracle label =
+  if C_oracle.enabled then
+    match C_oracle.sampled label with
+    | o -> Some o
+    | exception Not_found ->
+        Fuzz_gen.failf "%s: a scanned shape has no EverParse C oracle" label
+  else None
+
 let report_oracle name =
   if Sys.getenv_opt "BUILD_EVERPARSE" = Some "1" && not C_oracle.enabled then
     Fuzz_gen.failf "%s: required EverParse C oracle is absent" name;
   Fmt.epr "%s: structured oracle: %s@." name
     (if C_oracle.enabled then
-       "EverParse C, verified .3d (acceptance and consumed prefix of the \
-        standalone and FFI projections, plug scalars)"
+       "EverParse C, verified .3d, on the structured cases and every sampled \
+        shape (acceptance and consumed prefix of the standalone and FFI \
+        projections, plug scalars)"
      else "C skipped (set BUILD_EVERPARSE=1)")
 
 open Fuzz_gen

@@ -12,7 +12,7 @@
 
     The scanners are compared on every sampled shape, fixed or not, and on the
     structured cases of {!Diff_codecs.scan_cases}, with the EverParse C
-    validator too when it is built. *)
+    validators too when they are built. *)
 
 let refused label = List.map (fun (l, msg) -> (l, List.assoc l label, msg))
 
@@ -28,7 +28,10 @@ let sampled =
     (fun (label, make) ->
       let p = List.assoc label Diff_ocaml.scan_codecs in
       ( "scan " ^ label,
-        Diff_ocaml.check_scan (Diff_ocaml.of_sampled label p) (make p) ))
+        Diff_ocaml.check_scan
+          ?oracle:(Diff_driver.sampled_oracle label)
+          (Diff_ocaml.of_sampled label p)
+          (make p) ))
     Ocaml_index.sampled_scanners
 
 let structured =

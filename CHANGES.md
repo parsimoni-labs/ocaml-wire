@@ -83,6 +83,12 @@
   always present has its own C type, not `uint32_t`, so a wrapped `uint64`
   keeps its high bits. Rebuild C plugs (#474, @frejsoya)
 
+### Removed
+
+- **Breaking:** `wire.diff-gen` (`Wire_diff_gen`) is removed: its generated
+  runner reported every input as passed. Use `Wire_diff.harness` (#472,
+  @samoht)
+
 ### Fixed
 
 - A codec's own field shadows a sub-codec's field of the same name everywhere,

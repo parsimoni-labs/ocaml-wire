@@ -67,7 +67,16 @@
 (executable
  (name gen_diff)
  (modules gen_diff)
- (libraries diff_codecs fuzz_gen wire wire.3d wire.stubs unix fmt))
+ (libraries
+  diff_codecs
+  diff_ocaml
+  fuzz_gen
+  wire
+  wire.3d
+  wire.ocaml
+  wire.stubs
+  unix
+  fmt))
 
 ; Generate the OCaml backend's modules, one per sampled codec, with Wire_ocaml
 ; Run by the code generation rule in fuzz/diff/ocaml/ and fuzz/diff/ocaml-ox/
