@@ -270,6 +270,29 @@ let packet_corpus () =
     [ false; true ];
   List.rev !cases
 
+(* Long frames reuse the packet fixture of the scalar lanes, with the IPv4 and
+   UDP lengths set to cover the payload. *)
+let packet_payload_corpus () =
+  List.concat_map
+    (fun length ->
+      List.concat_map
+        (fun (tcp, ihl, fragment) ->
+          let header =
+            packet ~tcp ~ihl ~words:(if tcp then 15 else 8) ~fragment
+          in
+          let frame =
+            Bytes.init length (fun i ->
+                if i < Bytes.length header then Bytes.get header i
+                else Char.chr (i land 255))
+          in
+          let total = length - 14 in
+          Bytes.set_uint16_be frame 16 total;
+          if not tcp then
+            Bytes.set_uint16_be frame (14 + (ihl * 4) + 4) (total - (ihl * 4));
+          [ frame; Bytes.sub frame 0 (length - 1) ])
+        [ (true, 5, 0); (true, 15, 0); (false, 15, 0); (true, 5, 0x2000) ])
+    [ 1500; 9000; 65535; 65549 ]
+
 let small_scan at_most =
   let open Wire in
   let size = Field.v "size" uint8 in

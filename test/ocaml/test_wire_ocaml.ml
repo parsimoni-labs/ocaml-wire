@@ -1208,6 +1208,30 @@ let test_scanners () =
         ((List.assoc c.label Ocaml_index.scanners) ()))
     Diff_codecs.scan_cases
 
+(* A backend sizes its ports from the plan's outputs: a signed field keeps its
+   width on the wire and says it is signed, so a negative value survives. *)
+let test_plan_signed_output () =
+  let open Wire in
+  let negative =
+    Field.v "negative" int8 ~self_constraint:(fun x -> Expr.(x < int 0))
+  in
+  let codec = Codec.v "NegativeOutput" Fun.id Codec.[ negative $ Fun.id ] in
+  let output =
+    match Wire_ocaml.Plan.outputs (Wire_ocaml.Plan.v codec) with
+    | [ output ] -> output
+    | outputs -> Alcotest.failf "%d outputs, expected 1" (List.length outputs)
+  in
+  Alcotest.(check int) "wire width" 8 output.wire_width;
+  Alcotest.(check bool) "signed" true output.signed;
+  List.iter
+    (fun value ->
+      let bytes = Bytes.make 1 (Char.chr (value land 255)) in
+      Alcotest.(check bool)
+        (Fmt.str "%d accepted" value)
+        true
+        (Result.is_ok (Codec.decode codec bytes 0)))
+    [ -128; -1 ]
+
 let suite =
   ( "wire_ocaml",
     [
@@ -1219,6 +1243,7 @@ let suite =
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;
       Alcotest.test_case "scanner refusals" `Quick test_scanner_refusals;
+      Alcotest.test_case "plan signed output" `Quick test_plan_signed_output;
       Alcotest.test_case "scanner outputs are label paths" `Quick
         test_scanner_outputs;
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;

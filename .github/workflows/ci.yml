@@ -102,6 +102,102 @@ jobs:
           BUILD_RUST: 1
           WIRE_FUZZ_SEED: ${{ github.run_id }}
 
+  # Hardcaml is an optional dependency: its lanes build only with
+  # BUILD_HARDCAML=1, and the proofs need Yosys.
+  hardcaml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BUILD_HARDCAML: 1
+      BUILD_EVERPARSE: 1
+      WIRE_FUZZ_SEED: ${{ github.run_id }}
+      WIRE_FUZZ_REPEAT: 1000
+      WIRE_FUZZ_BUDGET: 0
+      WIRE_DIFF_JOBS: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+      - run: opam install . --deps-only --with-test
+      - run: opam install hardcaml.v0.17.1
+      - run: sudo apt-get update && sudo apt-get install -y yosys
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+      - name: Compare hardware with Codec, generated OCaml and EverParse C
+        run: |
+          opam exec -- dune build --profile release \
+            @test/hardcaml/runtest @fuzz/diff/hardcaml/runtest \
+            @fuzz/diff/hardcaml-stream/runtest
+      - name: Prove mask equivalence and streaming control
+        run: |
+          mkdir -p _build/hardcaml-proofs
+          for mode in proof proof-contiguous keep-proof; do
+            opam exec -- dune exec --profile release bench/hardcaml-stream/gen.exe -- \
+              "--$mode" "_build/hardcaml-proofs/$mode.v"
+            hw_property=control
+            if [ "$mode" = keep-proof ]; then hw_property=keep; fi
+            HW_PROPERTY="$hw_property" \
+              HW_MITER="$PWD/_build/hardcaml-proofs/$mode.v" \
+              HW_OUT="$PWD/_build/hardcaml-proofs/$mode" \
+              bench/hardcaml-stream/prove.sh
+          done
+      - name: Prove bounded padding and pipeline equivalence
+        run: |
+          opam exec -- dune exec --profile release bench/hardcaml/gen.exe -- \
+            --padding _build/hardcaml-proofs/padding.v
+          HW_MITER="$PWD/_build/hardcaml-proofs/padding.v" \
+            HW_OUT="$PWD/_build/hardcaml-proofs/padding" \
+            bench/hardcaml/prove-padding.sh
+          opam exec -- dune exec --profile release bench/hardcaml/gen.exe -- \
+            --pipeline-proof _build/hardcaml-proofs/pipeline.v
+          HW_MITER="$PWD/_build/hardcaml-proofs/pipeline.v" \
+            HW_OUT="$PWD/_build/hardcaml-proofs/pipeline" \
+            bench/hardcaml/prove-pipeline.sh
+      - name: Validate packaging and replay emitted RTL against EverParse C
+        run: |
+          sudo apt-get update && sudo apt-get install -y verilator
+          verilator --version
+          opam exec -- dune build --profile release @bench/hardcaml-cloud/runtest
+          python3 -m pip wheel --no-deps --wheel-dir _build/hardcaml-wheels ./bench/hardcaml-cloud
+          python3 -m venv _build/hardcaml-tools-env
+          _build/hardcaml-tools-env/bin/python -m pip install --no-index \
+            --find-links _build/hardcaml-wheels wire-hardcaml-tools
+          mkdir -p _build/hardcaml-replay
+          opam exec -- dune exec --profile release bench/hardcaml-stream/gen.exe -- \
+            _build/hardcaml-replay/core.v _build/hardcaml-replay/core.json
+          opam exec -- dune exec --profile release bench/hardcaml-stream/corpus.exe -- \
+            --all _build/hardcaml-replay/frames.bin
+          opam exec -- dune build --profile release bench/hardcaml-cloud/reference.exe
+          oracle_entry=$(_build/hardcaml-tools-env/bin/wire-hardcaml-tools oracle-cache \
+            _build/default/bench/hardcaml-cloud/reference.exe \
+            _build/hardcaml-replay/frames.bin _build/hardcaml-replay/oracle-cache)
+          _build/hardcaml-tools-env/bin/wire-hardcaml-tools bundle \
+            _build/hardcaml-replay/core.json _build/hardcaml-replay/core.v _build/hardcaml-replay/component
+          _build/hardcaml-tools-env/bin/wire-hardcaml-tools prepare ooc \
+            _build/hardcaml-replay/component _build/hardcaml-replay/vivado-ooc
+          _build/hardcaml-tools-env/bin/wire-hardcaml-tools rtl-test _build/hardcaml-replay/component \
+            _build/hardcaml-replay/frames.bin "$oracle_entry/expected.jsonl" _build/hardcaml-replay/rtl \
+            --oracle-receipt "$oracle_entry/receipt.json"
+      - name: Retain RTL replay and captured records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hardcaml-rtl-replay
+          path: _build/hardcaml-replay
+      - name: Retain hardware proof logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hardcaml-proofs
+          path: _build/hardcaml-proofs
+
   # OCaml's TSan runtime does not currently build on the macOS/arm64 runner
   # (runtime/weak.c), so keep this race-detection lane on Linux. The core test
   # suite includes a synchronized multi-domain decode of one shared codec.

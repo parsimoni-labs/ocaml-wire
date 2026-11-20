@@ -27,6 +27,10 @@
   codec, and `Wire_rust.scanner`, the same scanners in Rust (#439, #448,
   @samoht)
 
+- `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
+  `BUILD_HARDCAML=1`: lower a `Wire_ocaml.Plan` to a Hardcaml decoder of a
+  bounded frame or of an AXI4-Stream (#477, @samoht)
+
 - `wire` builds on OxCaml, and `wire.3d` and the fuzz suites run on Windows
   (#436, #443, @samoht)
 
