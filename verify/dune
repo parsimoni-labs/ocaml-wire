@@ -12,7 +12,7 @@
 
 (executable
  (name main)
- (modules main check spec symex smt z3)
+ (modules main check linear spec symex smt z3)
  (libraries compiler-libs.common fmt unix))
 
 (rule
@@ -97,7 +97,8 @@
 ; check of fold_ipv4 removed (reads past the frame), the payload check off by
 ; one (rejects a frame whose payload ends the window, which the
 ; specification accepts), and fold_frames taking the
-; walk without frame checks for strides too short for it.
+; walk without frame checks for strides too short for it, which hands
+; frames_record a frame shorter than its precondition.
 
 (rule
  (enabled_if
@@ -168,7 +169,7 @@
     --only
     fold_frames
     --expect-refuted
-    "inside the buffer"
+    "frames_record meets its precondition"
     .
     stride_threshold.mutant:scanner/34:Stack.WireEthernetStack:64))))
 

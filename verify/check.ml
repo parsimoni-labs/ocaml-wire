@@ -130,9 +130,22 @@ type job = {
       (* the query on the bytes, when [scripts] abstract the loads *)
   bound : int;
   witness : bool; (* the job shows the goal satisfiable, not unsat *)
+  linear : (string * string) option;
+      (* the query in linear integer arithmetic, and its side conditions on
+         bit-vectors, tried when [scripts] give no answer (see [Linear]) *)
 }
 
-let bounds_job q ?(witness = false) ~property ?(extra = []) goal =
+let bounds_job q ?(witness = false) ?linear ~property ?(extra = []) goal =
+  let linear =
+    Option.bind linear (fun (pc, cond) ->
+        Option.map
+          (fun (ints, sides) ->
+            ( ints,
+              script q ~abstract:true
+                (Smt.and_ [ pc; Smt.not_ sides ])
+                ~extra:[] ))
+          (Linear.query ~defs:(Symex.defs q.ctx) ~pc ~cond))
+  in
   {
     property;
     scripts = [ script q ~abstract:true goal ~extra ];
@@ -140,6 +153,7 @@ let bounds_job q ?(witness = false) ~property ?(extra = []) goal =
     confirm = Some (script q goal ~extra);
     bound = q.entry.bound;
     witness;
+    linear;
   }
 
 let spec_job q ~property ~extra goals =
@@ -150,6 +164,7 @@ let spec_job q ~property ~extra goals =
     confirm = None;
     bound = q.entry.bound;
     witness = false;
+    linear = None;
   }
 
 let verdict j (answer, file, _, _) =
@@ -161,6 +176,39 @@ let verdict j (answer, file, _, _) =
   | Z3.Unknown out when String.equal file "" -> Unknown out
   | Z3.Unknown out ->
       Fmt.kstr (fun s -> Unknown s) "%s (script %s)" (String.trim out) file
+
+(* A query with no answer is tried again in linear arithmetic: proved when
+   the integer query and its side conditions are both unsat. *)
+let retry_linear check verdicts =
+  let retry =
+    List.filter_map
+      (fun (j, (r : result)) ->
+        match (r.verdict, j.linear) with
+        | Unknown _, Some (ints, sides) -> Some (j, ints, sides)
+        | _ -> None)
+      verdicts
+  in
+  let answers =
+    check
+      (List.concat_map (fun (_, ints, sides) -> [ [ ints ]; [ sides ] ]) retry)
+  in
+  let rec pair = function
+    | (j, _, _) :: rest, (a, _, s1, _) :: (b, _, s2, _) :: answers ->
+        (j, (a, b, s1 +. s2)) :: pair (rest, answers)
+    | _ -> []
+  in
+  let linear = pair (retry, answers) in
+  List.map
+    (fun (j, (r : result)) ->
+      match List.assq_opt j linear with
+      | Some (Z3.Unsat, Z3.Unsat, s) ->
+          {
+            property = r.property ^ ", in linear arithmetic";
+            verdict = Proved;
+            seconds = r.seconds +. s;
+          }
+      | _ -> r)
+    verdicts
 
 (* A refutation found with abstract loads is searched again on the bytes,
    which gives coherent bytes to show, or says that it needs two loads of
@@ -186,23 +234,26 @@ let solve_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep js =
   let confirmed =
     List.combine (List.map fst again) (check (List.map snd again))
   in
-  List.map2
-    (fun j ((answer, _, seconds, alt) as a) ->
-      let verdict =
-        match List.assq_opt j confirmed with
-        | Some (Z3.Unsat, _, _, _) ->
-            Unknown "refuted only where two loads of one byte disagree"
-        | Some c -> verdict j c
-        | None -> verdict j a
-      in
-      let property =
-        match (answer, List.nth_opt j.names alt) with
-        | (Z3.Sat _ | Z3.Unsat), Some name when List.length j.names > 1 ->
-            Fmt.str "%s, on %s" j.property name
-        | _ -> j.property
-      in
-      { property; verdict; seconds })
-    js first
+  let verdicts =
+    List.map2
+      (fun j ((answer, _, seconds, alt) as a) ->
+        let verdict =
+          match List.assq_opt j confirmed with
+          | Some (Z3.Unsat, _, _, _) ->
+              Unknown "refuted only where two loads of one byte disagree"
+          | Some c -> verdict j c
+          | None -> verdict j a
+        in
+        let property =
+          match (answer, List.nth_opt j.names alt) with
+          | (Z3.Sat _ | Z3.Unsat), Some name when List.length j.names > 1 ->
+              Fmt.str "%s, on %s" j.property name
+          | _ -> j.property
+        in
+        (j, { property; verdict; seconds }))
+      js first
+  in
+  retry_linear check verdicts
 
 (* {1 Properties} *)
 
@@ -303,7 +354,7 @@ let bounds_jobs q obligations raised =
   let reads =
     List.map
       (fun (o : Symex.obligation) ->
-        bounds_job q
+        bounds_job q ~linear:(o.pc, o.cond)
           ~property:
             (Fmt.str "%s (%a)" (Symex.describe_kind o.kind) Symex.pp_loc o.loc)
           ~extra:
@@ -401,6 +452,7 @@ let same_answers ?stop ~z3 ~timeout ~jobs ctx (entry : entry) id =
           confirm = None;
           bound = q.entry.bound;
           witness = false;
+          linear = None;
         })
       modified
   in
@@ -473,5 +525,6 @@ let same_as ~z3 ~timeout ~jobs ctx (entry : entry) reference =
            confirm = None;
            bound = q.entry.bound;
            witness = false;
+           linear = None;
          })
        mine)

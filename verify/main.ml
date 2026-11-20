@@ -49,6 +49,10 @@ open Symex
 let buf = Buffer_input "buf"
 let b = Buffer_input "b"
 
+let entry ?(pre = "true") ?spec ?(misuse = false) ?(contracts = []) ~bound
+    ~inputs ~window name expr =
+  { Check.name; inputs; pre; expr; window; spec; bound; misuse; contracts }
+
 (* A record module: [is_valid buf off], [View.check b len off] and every
    [view_*] accessor behind a check. *)
 let record ~spec ~bound ctx =
@@ -61,48 +65,21 @@ let record ~spec ~bound ctx =
       ctx.globals []
     |> List.sort String.compare
   in
-  [
-    {
-      Check.name = "is_valid";
-      inputs = [ buf; Int_input "off" ];
-      pre = "true";
-      expr = "is_valid buf off";
-      window = ("off", "Bytes.length buf - off");
-      spec = Some spec;
-      bound;
-      misuse = false;
-      contracts = [];
-    };
-    {
-      Check.name = "View.check";
-      inputs = [ b; Int_input "len"; Int_input "off" ];
-      pre = "len = Bytes.length b";
-      expr = "View.ok (View.check b len off)";
-      window = ("off", "len - off");
-      spec = Some spec;
-      bound;
-      misuse = false;
-      contracts = [];
-    };
-  ]
-  @ List.map
-      (fun v ->
-        {
-          Check.name = v ^ " after View.check";
-          inputs = [ b; Int_input "len"; Int_input "off" ];
-          pre = "len = Bytes.length b";
-          expr =
-            Fmt.str
+  let viewed = [ b; Int_input "len"; Int_input "off" ] in
+  let pre = "len = Bytes.length b" and window = ("off", "len - off") in
+  entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
+    ~window:("off", "Bytes.length buf - off")
+    "is_valid" "is_valid buf off"
+  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "View.check"
+       "View.ok (View.check b len off)"
+  :: List.map
+       (fun v ->
+         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after View.check")
+           (Fmt.str
               "let c = View.check b len off in if View.ok c then %s b \
                (View.get c) else 0"
-              v;
-          window = ("off", "len - off");
-          spec = None;
-          bound;
-          misuse = false;
-          contracts = [];
-        })
-      view_names
+              v))
+       view_names
 
 (* What fold_frames must establish of each frame it hands frames_record,
    which is proved as an entry of its own from it. *)
@@ -110,134 +87,58 @@ let frame_pre min_stride =
   Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
     min_stride
 
-(* A scanner: [fold] over one frame; [frames_record], the body of the
-   [fold_frames] loop for a stride the loop walks without frame checks,
-   which is what the loop establishes; and, on the OCaml target,
-   [fold_frames] itself, its loop included. *)
-let scanner ~ox ~spec ~bound ~min_stride _ctx =
-  let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
-  let frames =
-    if ox then
-      (* [let mutable] has no Parsetree in OCaml's compiler-libs. *)
-      []
-    else
-      [
-        {
-          Check.name = "fold_frames";
-          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
-          pre =
-            "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && \
-             len <= Bytes.length buf - off";
-          expr = "fold_frames buf off len ~stride ~init:0 ~invalid ~valid";
-          window = ("off", "len");
-          spec = None;
-          bound;
-          misuse = false;
-          contracts = [ ("frames_record", frame_pre min_stride) ];
-        };
-        {
-          Check.name = "fold_frames, any arguments";
-          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
-          pre = "true";
-          expr = "fold_frames buf off len ~stride ~init:0 ~invalid ~valid";
-          window = ("off", "len");
-          spec = None;
-          bound;
-          misuse = true;
-          contracts = [ ("frames_record", frame_pre min_stride) ];
-        };
-      ]
-  in
-  frames
-  @ [
-      {
-        Check.name = "fold";
-        inputs = [ buf; Int_input "off"; Int_input "len" ];
-        pre = "true";
-        expr = "fold buf off len ~invalid ~valid";
-        window = ("off", "len");
-        spec = Some spec;
-        bound;
-        misuse = false;
-        contracts = [];
-      };
-      {
-        Check.name = "frames_record";
-        inputs =
-          [ buf; Int_input "base"; Int_input "stop"; Int_input "current" ];
-        pre = frame_pre min_stride;
-        expr =
-          Fmt.str "frames_record ~buf %s %s ~current ~invalid ~valid"
-            (at "base") (at "stop");
-        window = ("base", "stop");
-        spec = Some spec;
-        bound;
-        misuse = false;
-        contracts = [];
-      };
-    ]
+let valid_arguments =
+  "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
+   Bytes.length buf - off"
 
-(* The step scanner: [fold_step] and [frames_step_record] answer through
-   [Step.valid] and [Step.invalid]; on OCaml, [fold_frames_step] too. *)
-let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
+(* A scanner: its one-frame entry, the body of its frame loop for a stride
+   the loop walks without frame checks, from what the loop establishes,
+   and, on the OCaml target ([let mutable] has no Parsetree in OCaml's
+   compiler-libs), the frame loop itself with valid and with any
+   arguments, its calls to the body checked against that. [step] names the
+   step scanner's entries, which answer through [Step.valid] and
+   [Step.invalid]. *)
+let scanner ~step ~ox ~spec ~bound ~min_stride _ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
-  let frames =
+  let fold, fold_expr, record, record_args, frames, frames_expr =
+    if step then
+      ( "fold_step",
+        "fold_step buf off len ~init:0",
+        "frames_step_record",
+        "~current",
+        "fold_frames_step",
+        "fold_frames_step buf off len ~stride ~init:0" )
+    else
+      ( "fold",
+        "fold buf off len ~invalid ~valid",
+        "frames_record",
+        "~current ~invalid ~valid",
+        "fold_frames",
+        "fold_frames buf off len ~stride ~init:0 ~invalid ~valid" )
+  in
+  let contracts = [ (record, frame_pre min_stride) ] in
+  let framed = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ] in
+  let loops =
     if ox then []
     else
       [
-        {
-          Check.name = "fold_frames_step";
-          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
-          pre =
-            "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && \
-             len <= Bytes.length buf - off";
-          expr = "fold_frames_step buf off len ~stride ~init:0";
-          window = ("off", "len");
-          spec = None;
-          bound;
-          misuse = false;
-          contracts = [ ("frames_step_record", frame_pre min_stride) ];
-        };
-        {
-          Check.name = "fold_frames_step, any arguments";
-          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
-          pre = "true";
-          expr = "fold_frames_step buf off len ~stride ~init:0";
-          window = ("off", "len");
-          spec = None;
-          bound;
-          misuse = true;
-          contracts = [ ("frames_step_record", frame_pre min_stride) ];
-        };
+        entry ~pre:valid_arguments ~contracts ~bound ~inputs:framed
+          ~window:("off", "len") frames frames_expr;
+        entry ~misuse:true ~contracts ~bound ~inputs:framed
+          ~window:("off", "len")
+          (frames ^ ", any arguments")
+          frames_expr;
       ]
   in
-  frames
+  loops
   @ [
-      {
-        Check.name = "fold_step";
-        inputs = [ buf; Int_input "off"; Int_input "len" ];
-        pre = "true";
-        expr = "fold_step buf off len ~init:0";
-        window = ("off", "len");
-        spec = Some spec;
-        bound;
-        misuse = false;
-        contracts = [];
-      };
-      {
-        Check.name = "frames_step_record";
-        inputs =
-          [ buf; Int_input "base"; Int_input "stop"; Int_input "current" ];
-        pre = frame_pre min_stride;
-        expr =
-          Fmt.str "frames_step_record ~buf %s %s ~current" (at "base")
-            (at "stop");
-        window = ("base", "stop");
-        spec = Some spec;
-        bound;
-        misuse = false;
-        contracts = [];
-      };
+      entry ~spec ~bound
+        ~inputs:[ buf; Int_input "off"; Int_input "len" ]
+        ~window:("off", "len") fold fold_expr;
+      entry ~pre:(frame_pre min_stride) ~spec ~bound
+        ~inputs:[ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
+        ~window:("base", "stop") record
+        (Fmt.str "%s ~buf %s %s %s" record (at "base") (at "stop") record_args);
     ]
 
 type target = {
@@ -415,11 +316,8 @@ let target_of_arg arg =
           let min_stride = int_of_string stride in
           let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
           let bound = int_of_string bound in
-          let entries =
-            if String.starts_with ~prefix:"step" k then
-              step_scanner ~ox ~spec ~bound ~min_stride
-            else scanner ~ox ~spec ~bound ~min_stride
-          in
+          let step = String.starts_with ~prefix:"step" k in
+          let entries = scanner ~step ~ox ~spec ~bound ~min_stride in
           { file; three_d; entries }
       | _ -> Fmt.invalid_arg "bad target %S" arg)
   | _ -> Fmt.invalid_arg "bad target %S" arg
