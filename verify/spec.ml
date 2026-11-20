@@ -294,11 +294,33 @@ type encoding = {
       (* byte [index] of the window is the 8-bit [byte] *)
 }
 
+(* EverParse 2026's encoding of a field whose type is a struct of one field
+   applies [after-state] to that struct's parser, which already returns a
+   state, so Z3 refuses the script. The commands are read with that
+   [after-state] dropped, which is what the encoding of any other struct
+   reference does. *)
+let repair commands =
+  let states =
+    List.filter_map
+      (function
+        | List [ Atom "define-fun"; Atom f; _; Atom "State"; _ ] -> Some f
+        | _ -> None)
+      commands
+  in
+  let rec fix = function
+    | List [ Atom "after-state"; (List (Atom f :: _) as call) ]
+      when List.mem f states ->
+        fix call
+    | List l -> List (List.map fix l)
+    | a -> a
+  in
+  List.map fix commands
+
 let bitvectors text =
   width := max 66 ((2 * widest text) + 2);
   let w = !width in
   let prelude =
-    parse_sexps text |> List.filter_map command
+    parse_sexps text |> repair |> List.filter_map command
     |> List.map (Fmt.str "%a" pp_sexp)
     |> String.concat "\n"
   in
@@ -344,7 +366,7 @@ let pow2_table () =
 
 let integers text =
   let commands =
-    parse_sexps text
+    parse_sexps text |> repair
     |> List.filter_map (function
       | List (Atom "set-option" :: _) -> None
       | List [ Atom "assert"; List (Atom "forall" :: _) ] -> None

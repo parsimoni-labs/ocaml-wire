@@ -525,11 +525,25 @@ let prims =
 
 (* {1 Names} *)
 
-let rec expand ctx = function
+(* A module alias is looked up from the innermost module of [scope] out. *)
+let rec expand ctx scope = function
   | [] -> []
   | h :: rest as p -> (
-      match Hashtbl.find_opt ctx.aliases h with
-      | Some target -> expand ctx (target @ rest)
+      let rec find = function
+        | [] -> None
+        | prefix :: more -> (
+            match
+              Hashtbl.find_opt ctx.aliases (String.concat "." (prefix @ [ h ]))
+            with
+            | Some t -> Some t
+            | None -> find more)
+      in
+      let rec prefixes = function
+        | [] -> [ [] ]
+        | l -> l :: prefixes (List.rev (List.tl (List.rev l)))
+      in
+      match find (prefixes scope) with
+      | Some target -> expand ctx scope (target @ rest)
       | None -> p)
 
 let strip_stdlib = function "Stdlib" :: (_ :: _ as p) -> p | p -> p
@@ -809,7 +823,7 @@ and lookup ctx env loc lid =
   match path with
   | [ x ] when SMap.mem x env.locals -> SMap.find x env.locals
   | _ -> (
-      let path = strip_stdlib (expand ctx path) in
+      let path = strip_stdlib (expand ctx env.scope path) in
       let global =
         List.find_map
           (fun prefix ->
@@ -1367,6 +1381,11 @@ let v ?disabled ~file src =
   in
   load_structure ctx [] (parse_implementation ctx ~file src);
   ctx
+
+(* [load_reference ctx ~file src] adds the module [src] as [Ref], to compare
+   an entry with the same entry of another module. *)
+let load_reference ctx ~file src =
+  load_structure ctx [ "Ref" ] (parse_implementation ctx ~file src)
 
 (* {1 Entries} *)
 

@@ -444,3 +444,30 @@ let classify ~z3 ~timeout ~jobs ~walk (entry : entry) id =
           | Some (p, cex), _ -> Semantics (p, cex)
           | None, Some why -> Undecided why
           | None, None -> Redundant))
+
+(* Whether [entry] answers as [reference], an expression over the same
+   inputs, on every input: one query per path of [entry], against the whole
+   answer of [reference]. Both read the window only, so the answer holds for
+   every length. *)
+let same_as ~z3 ~timeout ~jobs ctx (entry : entry) reference =
+  let q, _, mine = walk ctx entry in
+  let _, _, theirs = walk ctx { entry with expr = reference } in
+  let before = accepts_of entry theirs in
+  solve_all ~z3 ~timeout ~jobs ~keep:false
+    (List.mapi
+       (fun i (pc, o) ->
+         let after = answer_of entry o in
+         {
+           property = Fmt.str "path %d answers as the reference" i;
+           scripts =
+             [
+               script q
+                 (Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ])
+                 ~extra:[ ("reference", before); ("this", after) ];
+             ];
+           names = [];
+           confirm = None;
+           bound = q.entry.bound;
+           witness = false;
+         })
+       mine)

@@ -255,6 +255,7 @@ type options = {
   classify : bool;
   check : string option;
   expect : string option;
+  against : string option;
   expect_refuted : string option;
 }
 
@@ -353,6 +354,39 @@ let classify_target ~z3 o t =
     (fun e -> if selected o e then classify e else [])
     (t.entries (Symex.v ~file:t.file src))
 
+module Astring_free = struct
+  let find sub s =
+    let n = String.length sub in
+    let rec go i =
+      if i + n > String.length s then None
+      else if String.equal (String.sub s i n) sub then Some i
+      else go (i + 1)
+    in
+    go 0
+end
+
+(* The entry's expression on the reference module: its first function
+   [Ref.]-qualified, and a step entry read as the plain one. *)
+let reference_expr (e : Check.entry) =
+  let replace ~sub ~by s =
+    match Astring_free.find sub s with
+    | None -> s
+    | Some i ->
+        String.sub s 0 i ^ by
+        ^ String.sub s
+            (i + String.length sub)
+            (String.length s - i - String.length sub)
+  in
+  let plain =
+    match e.name with
+    | "fold_step" -> "fold buf off len ~invalid ~valid"
+    | "frames_step_record" ->
+        replace ~sub:"frames_step_record" ~by:"frames_record" e.expr
+        ^ " ~invalid ~valid"
+    | _ -> e.expr
+  in
+  "Ref." ^ plain
+
 let target_of_arg arg =
   (* FILE:KIND:SPEC:BOUND, KIND being record, or scanner/MIN_STRIDE or
      scanner-ox/MIN_STRIDE for the OxCaml target. *)
@@ -411,6 +445,7 @@ let () =
     | "--classify-checks" :: rest -> opts { o with classify = true } rest
     | "--check" :: id :: rest -> opts { o with check = Some id } rest
     | "--expect" :: c :: rest -> opts { o with expect = Some c } rest
+    | "--against" :: f :: rest -> opts { o with against = Some f } rest
     | "--expect-refuted" :: p :: rest ->
         opts { o with expect_refuted = Some p } rest
     | rest -> (o, rest)
@@ -427,6 +462,7 @@ let () =
         classify = false;
         check = None;
         expect = None;
+        against = None;
         expect_refuted = None;
       }
       (List.tl (Array.to_list Sys.argv))
@@ -442,6 +478,37 @@ let () =
     | None -> failwith "3d.exe is neither in PATH nor in ~/.local/everparse/bin"
   in
   match args with
+  | _ :: (_ :: _ as targets) when Option.is_some o.against ->
+      let reference = Option.get o.against in
+      let targets = List.map target_of_arg targets in
+      let ok =
+        List.for_all
+          (fun t ->
+            List.for_all
+              (fun (e : Check.entry) ->
+                (not (selected o e))
+                || Option.is_none e.spec
+                ||
+                let ctx = Symex.v ~file:t.file (read t.file) in
+                Symex.load_reference ctx ~file:reference (read reference);
+                let rexpr = reference_expr e in
+                Fmt.pr "%s: %s against %s@." (Filename.basename t.file) e.name
+                  reference;
+                let results =
+                  Check.same_as ~z3 ~timeout:o.timeout ~jobs:o.jobs ctx e rexpr
+                in
+                List.iter
+                  (fun (r : Check.result) ->
+                    Fmt.pr "  %-72s %a (%.2fs)@." r.property pp_verdict
+                      r.verdict r.seconds)
+                  results;
+                List.for_all
+                  (fun (r : Check.result) -> r.verdict = Check.Proved)
+                  results)
+              (t.entries (Symex.v ~file:t.file (read t.file))))
+          targets
+      in
+      if not ok then exit 1
   | _ :: (_ :: _ as targets) when o.classify ->
       (* Every target is read before any runs: a misplaced option fails at
          once. *)
